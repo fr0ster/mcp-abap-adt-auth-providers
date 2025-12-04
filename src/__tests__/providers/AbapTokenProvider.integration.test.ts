@@ -7,7 +7,7 @@
 
 import { BtpTokenProvider } from '../../providers/BtpTokenProvider';
 import { AbapServiceKeyStore, AbapSessionStore } from '@mcp-abap-adt/auth-stores';
-import type { IAuthorizationConfig } from '@mcp-abap-adt/auth-broker';
+import type { IAuthorizationConfig } from '@mcp-abap-adt/interfaces';
 import { defaultLogger } from '@mcp-abap-adt/logger';
 import {
   loadTestConfig,

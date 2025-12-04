@@ -6,25 +6,24 @@
  */
 
 import { BtpTokenProvider } from '../../providers/BtpTokenProvider';
-import { BtpServiceKeyStore, BtpSessionStore } from '@mcp-abap-adt/auth-stores';
-import type { IAuthorizationConfig } from '@mcp-abap-adt/auth-broker';
+import { AbapServiceKeyStore, BtpSessionStore } from '@mcp-abap-adt/auth-stores';
+import type { IAuthorizationConfig } from '@mcp-abap-adt/interfaces';
 import { defaultLogger } from '@mcp-abap-adt/logger';
 import {
   loadTestConfig,
   hasRealConfig,
-  getXsuaaDestinations,
+  getAbapDestination,
   getServiceKeysDir,
   getSessionsDir,
 } from '../helpers/configHelpers';
 
 describe('BtpTokenProvider Integration', () => {
   const config = loadTestConfig();
-  const xsuaaDestinations = getXsuaaDestinations(config);
-  const btpDestination = xsuaaDestinations.btp_destination; // BTP uses XSUAA destination
+  const btpDestination = getAbapDestination(config); // BTP uses ABAP destination (same as ABAP)
   const serviceKeysDir = getServiceKeysDir(config);
   const sessionsDir = getSessionsDir(config);
 
-  const hasRealBtpConfig = hasRealConfig(config, 'xsuaa'); // BTP uses XSUAA config
+  const hasRealBtpConfig = hasRealConfig(config, 'abap'); // BTP uses ABAP config (same as ABAP)
 
   describe('Browser authentication', () => {
     it('should authenticate via browser and get tokens', async () => {
@@ -39,8 +38,8 @@ describe('BtpTokenProvider Integration', () => {
       }
 
       // Create stores with real paths
-      // BTP uses BtpServiceKeyStore (XSUAA format) and BtpSessionStore (without sapUrl)
-      const serviceKeyStore = new BtpServiceKeyStore(serviceKeysDir);
+      // BTP uses AbapServiceKeyStore (same format as ABAP) and BtpSessionStore (without sapUrl)
+      const serviceKeyStore = new AbapServiceKeyStore(serviceKeysDir);
       const sessionStore = new BtpSessionStore(sessionsDir);
       const tokenProvider = new BtpTokenProvider();
 
@@ -111,8 +110,8 @@ describe('BtpTokenProvider Integration', () => {
         return;
       }
 
-      // BTP uses BtpServiceKeyStore (XSUAA format) and BtpSessionStore (without sapUrl)
-      const serviceKeyStore = new BtpServiceKeyStore(serviceKeysDir);
+      // BTP uses AbapServiceKeyStore (same format as ABAP) and BtpSessionStore (without sapUrl)
+      const serviceKeyStore = new AbapServiceKeyStore(serviceKeysDir);
       const sessionStore = new BtpSessionStore(sessionsDir || serviceKeysDir);
       const tokenProvider = new BtpTokenProvider();
 

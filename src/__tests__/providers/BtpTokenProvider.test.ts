@@ -5,7 +5,7 @@
  */
 
 import { BtpTokenProvider } from '../../providers/BtpTokenProvider';
-import type { IAuthorizationConfig } from '@mcp-abap-adt/auth-broker';
+import type { IAuthorizationConfig } from '@mcp-abap-adt/interfaces';
 import { defaultLogger } from '@mcp-abap-adt/logger';
 import axios from 'axios';
 import { jest } from '@jest/globals';

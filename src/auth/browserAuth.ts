@@ -6,8 +6,7 @@ import * as http from 'http';
 import * as child_process from 'child_process';
 import express from 'express';
 import axios from 'axios';
-import type { IAuthorizationConfig } from '@mcp-abap-adt/auth-broker';
-import type { Logger } from '@mcp-abap-adt/logger';
+import type { IAuthorizationConfig, ILogger } from '@mcp-abap-adt/interfaces';
 
 const BROWSER_MAP: Record<string, string | undefined> = {
   chrome: 'chrome',
@@ -99,14 +98,14 @@ const defaultLogger: SimpleLogger = {
 export async function startBrowserAuth(
   authConfig: IAuthorizationConfig,
   browser: string = 'system',
-  logger?: Logger
+  logger?: ILogger
 ): Promise<{ accessToken: string; refreshToken?: string }> {
   const log: SimpleLogger = logger ? {
     info: (msg) => logger.info(msg),
     debug: (msg) => logger.debug(msg),
     error: (msg) => logger.error(msg),
-    browserUrl: (url) => logger.browserUrl(url),
-    browserOpening: () => logger.browserOpening(),
+    browserUrl: (url) => logger.info(`🔗 Open in browser: ${url}`),
+    browserOpening: () => logger.debug('🌐 Opening browser for authentication...'),
   } : defaultLogger;
   
   return new Promise((originalResolve, originalReject) => {

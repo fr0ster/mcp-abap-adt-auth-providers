@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.1] - 2024-12-04
+
+### Added
+- **Interfaces Package Integration**: Migrated to use `@mcp-abap-adt/interfaces` package for all interface definitions
+  - All interfaces now imported from shared package
+  - Dependency on `@mcp-abap-adt/interfaces@^0.1.1` added
+  - Updated `@mcp-abap-adt/connection` dependency to `^0.1.14`
+  - Updated `@mcp-abap-adt/auth-stores` dependency to `^0.1.3`
+
+### Changed
+- **Interface Renaming**: Interfaces renamed to follow `I` prefix convention:
+  - `TokenProviderResult` → `ITokenProviderResult` (type alias for backward compatibility)
+  - `TokenProviderOptions` → `ITokenProviderOptions` (type alias for backward compatibility)
+  - Old names still work via type aliases for backward compatibility
+- **Logger Interface**: Updated to use `ILogger` from `@mcp-abap-adt/interfaces` instead of `Logger` from `@mcp-abap-adt/logger`
+  - `browserAuth.ts` now uses `ILogger` interface with basic methods (info, error, warn, debug)
+  - Browser-specific logging methods (browserUrl, browserOpening) now use basic `info` and `debug` methods
+
+### Fixed
+- **BtpTokenProvider Integration Tests**: Fixed to use ABAP destination and `AbapServiceKeyStore` instead of XSUAA
+  - BTP and ABAP use the same authentication flow and service key format
+  - Tests now correctly use `getAbapDestination` and `hasRealConfig(config, 'abap')`
+  - Tests now use `AbapServiceKeyStore` instead of `BtpServiceKeyStore` for loading service keys
+
 ## [0.1.0] - 2024-12-04
 
 ### Added
@@ -23,10 +47,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - YAML-based test configuration (`tests/test-config.yaml.template`)
   - Tests for service key to session conversion
   - Tests for token validation
-  - BTP tests use `BtpServiceKeyStore` and `BtpSessionStore` (without `sapUrl`)
+  - BTP tests use `AbapServiceKeyStore` (same format as ABAP) and `BtpSessionStore` (without `sapUrl`)
   - ABAP tests use `AbapServiceKeyStore` and `AbapSessionStore` (with `sapUrl`)
-  - BTP tests use `xsuaa.btp_destination` from config
-  - ABAP tests use `abap.destination` from config
+  - Both BTP and ABAP tests use `abap.destination` from config (same authentication flow)
 
 ### Fixed
 - **Integration Tests**: Corrected BTP and ABAP test separation

@@ -5,8 +5,7 @@
  * For ABAP and full-scope BTP connections.
  */
 
-import type { ITokenProvider, TokenProviderOptions, TokenProviderResult } from '@mcp-abap-adt/auth-broker';
-import type { IAuthorizationConfig } from '@mcp-abap-adt/auth-broker';
+import type { ITokenProvider, ITokenProviderOptions, ITokenProviderResult, IAuthorizationConfig } from '@mcp-abap-adt/interfaces';
 import { startBrowserAuth } from '../auth/browserAuth';
 import { refreshJwtToken } from '../auth/tokenRefresher';
 import axios from 'axios';
@@ -19,8 +18,8 @@ import axios from 'axios';
 export class BtpTokenProvider implements ITokenProvider {
   async getConnectionConfig(
     authConfig: IAuthorizationConfig,
-    options?: TokenProviderOptions
-  ): Promise<TokenProviderResult> {
+    options?: ITokenProviderOptions
+  ): Promise<ITokenProviderResult> {
     const logger = options?.logger;
     const browser = options?.browser || 'system';
     
