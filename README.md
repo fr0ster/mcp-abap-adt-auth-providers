@@ -17,6 +17,58 @@ This package implements the `ITokenProvider` interface from `@mcp-abap-adt/auth-
 - **XsuaaTokenProvider** - Uses `client_credentials` grant type (no browser required)
 - **BtpTokenProvider** - Uses browser-based OAuth2 or refresh token flow
 
+## Responsibilities and Design Principles
+
+### Core Development Principle
+
+**Interface-Only Communication**: This package follows a fundamental development principle: **all interactions with external dependencies happen ONLY through interfaces**. The code knows **NOTHING beyond what is defined in the interfaces**.
+
+This means:
+- Does not know about concrete implementation classes from other packages
+- Does not know about internal data structures or methods not defined in interfaces
+- Does not make assumptions about implementation behavior beyond interface contracts
+- Does not access properties or methods not explicitly defined in interfaces
+
+This principle ensures:
+- **Loose coupling**: Providers are decoupled from concrete implementations in other packages
+- **Flexibility**: New implementations can be added without modifying providers
+- **Testability**: Easy to mock dependencies for testing
+- **Maintainability**: Changes to implementations don't affect providers
+
+### Package Responsibilities
+
+This package is responsible for:
+
+1. **Implementing token provider interface**: Provides concrete implementations of `ITokenProvider` interface defined in `@mcp-abap-adt/auth-broker`
+2. **Token acquisition**: Handles OAuth2 flows (browser-based, refresh token, client credentials) to obtain JWT tokens
+3. **Token validation**: Validates tokens by making HTTP requests to service endpoints
+4. **OAuth2 flows**: Manages browser-based OAuth2 authorization code flow and refresh token flow
+
+#### What This Package Does
+
+- **Implements ITokenProvider**: Provides concrete implementations (`XsuaaTokenProvider`, `BtpTokenProvider`)
+- **Handles OAuth2 flows**: Browser-based OAuth2, refresh token, and client credentials grant types
+- **Obtains tokens**: Makes HTTP requests to UAA endpoints to obtain JWT tokens
+- **Validates tokens**: Tests token validity by making requests to service endpoints
+- **Returns connection config**: Returns `IConnectionConfig` with `authorizationToken` and optionally `serviceUrl` (if known)
+
+#### What This Package Does NOT Do
+
+- **Does NOT store tokens**: Token storage is handled by `@mcp-abap-adt/auth-stores`
+- **Does NOT orchestrate authentication**: Token lifecycle management is handled by `@mcp-abap-adt/auth-broker`
+- **Does NOT know about service keys**: Service key loading is handled by stores
+- **Does NOT manage sessions**: Session management is handled by stores
+- **Does NOT return `serviceUrl` if unknown**: Providers may not return `serviceUrl` because they only handle token acquisition, not connection configuration
+
+### External Dependencies
+
+This package interacts with external packages **ONLY through interfaces**:
+
+- **`@mcp-abap-adt/auth-broker`**: Uses interfaces (`ITokenProvider`, `IAuthorizationConfig`, `IConnectionConfig`) - does not know about `AuthBroker` implementation
+- **`@mcp-abap-adt/logger`**: Uses `Logger` interface for logging - does not know about concrete logger implementation
+- **`@mcp-abap-adt/connection`**: Uses connection utilities for token validation - interacts through well-defined functions
+- **No direct dependencies on stores**: All interactions with stores happen through interfaces passed by consumers
+
 ## Usage
 
 ### Basic Usage
