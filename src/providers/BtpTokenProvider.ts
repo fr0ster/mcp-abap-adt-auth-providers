@@ -9,6 +9,7 @@ import type { ITokenProvider, TokenProviderOptions, TokenProviderResult } from '
 import type { IAuthorizationConfig } from '@mcp-abap-adt/auth-broker';
 import { startBrowserAuth } from '../auth/browserAuth';
 import { refreshJwtToken } from '../auth/tokenRefresher';
+import axios from 'axios';
 
 /**
  * BTP/ABAP token provider implementation
@@ -52,6 +53,49 @@ export class BtpTokenProvider implements ITokenProvider {
       },
       refreshToken: result.refreshToken,
     };
+  }
+
+  async validateToken(token: string, serviceUrl?: string): Promise<boolean> {
+    if (!token || !serviceUrl) {
+      return false;
+    }
+
+    try {
+      // Test connection to SAP ADT discovery endpoint
+      const response = await axios.get(`${serviceUrl}/sap/bc/adt/discovery`, {
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+        timeout: 5000,
+        validateStatus: (status) => {
+          // 200-299: valid token
+          // 401/403: expired/invalid token
+          // Other: network/connection error (treat as invalid)
+          return status < 500;
+        },
+      });
+
+      // 200-299: token is valid
+      if (response.status >= 200 && response.status < 300) {
+        return true;
+      }
+
+      // 401/403: token is expired or invalid
+      if (response.status === 401 || response.status === 403) {
+        return false;
+      }
+
+      // Other status codes: treat as invalid
+      return false;
+    } catch (error: any) {
+      // Network errors, timeouts, etc. - treat as invalid
+      if (error.code === 'ECONNREFUSED' || error.code === 'ETIMEDOUT' || error.code === 'ENOTFOUND') {
+        // Connection errors - can't validate, assume invalid
+        return false;
+      }
+      // Other errors - assume invalid
+      return false;
+    }
   }
 }
 

@@ -7,7 +7,7 @@ import * as child_process from 'child_process';
 import express from 'express';
 import axios from 'axios';
 import type { IAuthorizationConfig } from '@mcp-abap-adt/auth-broker';
-import type { Logger } from '@mcp-abap-adt/auth-broker';
+import type { Logger } from '@mcp-abap-adt/logger';
 
 const BROWSER_MAP: Record<string, string | undefined> = {
   chrome: 'chrome',
