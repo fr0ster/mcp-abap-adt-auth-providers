@@ -7,7 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.1.1] - 2024-12-04
+## [0.1.2] - 2025-12-05
+
+### Changed
+- **Dependency Injection**: Moved `@mcp-abap-adt/auth-stores` and `@mcp-abap-adt/logger` from `dependencies` to `devDependencies`
+  - These packages are only used in tests, not in production code
+  - Logger is injected via `ITokenProviderOptions.logger?: ILogger` interface in production code
+  - Auth stores are not used in production code (consumers inject their own store implementations)
+
+### Removed
+- **Unused Dependencies**: Removed `@mcp-abap-adt/connection` dependency (not used in production code)
+
+## [0.1.1] - 2025-12-04
 
 ### Added
 - **Interfaces Package Integration**: Migrated to use `@mcp-abap-adt/interfaces` package for all interface definitions
@@ -31,7 +42,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Tests now correctly use `getAbapDestination` and `hasRealConfig(config, 'abap')`
   - Tests now use `AbapServiceKeyStore` instead of `BtpServiceKeyStore` for loading service keys
 
-## [0.1.0] - 2024-12-04
+## [0.1.0] - 2025-12-04
 
 ### Added
 - Initial release
