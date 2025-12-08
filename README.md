@@ -244,6 +244,32 @@ Integration tests will skip if `test-config.yaml` is not configured or contains 
 - ABAP integration tests use `abap.destination` and require `AbapServiceKeyStore`/`AbapSessionStore` (with `sapUrl`)
 - BTP/ABAP integration tests may open a browser for authentication if no refresh token is available. This is expected behavior.
 
+### Debug Logging
+
+To enable detailed logging during tests or runtime, set environment variables:
+
+```bash
+# Enable logging for auth providers
+DEBUG_AUTH_PROVIDERS=true npm test
+
+# Or enable browser auth specific logging
+DEBUG_BROWSER_AUTH=true npm test
+
+# Set log level (debug, info, warn, error)
+LOG_LEVEL=debug npm test
+```
+
+Logging shows:
+- Token exchange stages (what we send, what we receive)
+- Token information (lengths, previews)
+- Errors with details
+
+Example output:
+```
+[INTEGRATION] Exchanging code for token: https://.../oauth/token
+[INTEGRATION] Tokens received: accessToken(2263 chars), refreshToken(34 chars)
+```
+
 ## Dependencies
 
 - `@mcp-abap-adt/auth-broker` (^0.1.6) - Interface definitions

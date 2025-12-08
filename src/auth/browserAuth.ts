@@ -33,8 +33,14 @@ function getJwtAuthorizationUrl(authConfig: IAuthorizationConfig, port: number =
 
 /**
  * Exchange authorization code for tokens
+ * @internal - Exported for testing
  */
-async function exchangeCodeForToken(authConfig: IAuthorizationConfig, code: string, port: number = 3001): Promise<{ accessToken: string; refreshToken?: string }> {
+export async function exchangeCodeForToken(
+  authConfig: IAuthorizationConfig, 
+  code: string, 
+  port: number = 3001,
+  log?: ILogger | null
+): Promise<{ accessToken: string; refreshToken?: string }> {
   const { uaaUrl: url, uaaClientId: clientid, uaaClientSecret: clientsecret } = authConfig;
   const tokenUrl = `${url}/oauth/token`;
   const redirectUri = `http://localhost:${port}/callback`;
@@ -45,7 +51,9 @@ async function exchangeCodeForToken(authConfig: IAuthorizationConfig, code: stri
   params.append('redirect_uri', redirectUri);
 
   const authString = Buffer.from(`${clientid}:${clientsecret}`).toString('base64');
-
+  
+  log?.info(`Exchanging code for token: ${tokenUrl}`);
+  
   const response = await axios({
     method: 'post',
     url: tokenUrl,
@@ -57,36 +65,31 @@ async function exchangeCodeForToken(authConfig: IAuthorizationConfig, code: stri
   });
 
   if (response.data && response.data.access_token) {
+    const accessToken = response.data.access_token;
+    const refreshToken = response.data.refresh_token;
+    
+    log?.info(`Tokens received: accessToken(${accessToken.length} chars), refreshToken(${refreshToken?.length || 0} chars)`);
+    
     return {
-      accessToken: response.data.access_token,
-      refreshToken: response.data.refresh_token,
+      accessToken,
+      refreshToken,
     };
   } else {
+    log?.error(`Token exchange failed: status ${response.status}, error: ${response.data?.error || 'unknown'}`);
     throw new Error('Response does not contain access_token');
   }
 }
 
 /**
- * Simple logger interface for browser auth
+ * Check if debug logging is enabled for auth providers
  */
-interface SimpleLogger {
-  info(message: string): void;
-  debug(message: string): void;
-  error(message: string): void;
-  browserUrl(url: string): void;
-  browserOpening(): void;
+function isDebugEnabled(): boolean {
+  return process.env.DEBUG_AUTH_PROVIDERS === 'true' || 
+         process.env.DEBUG_BROWSER_AUTH === 'true' ||
+         process.env.DEBUG === 'true' ||
+         process.env.DEBUG?.includes('auth-providers') === true ||
+         process.env.DEBUG?.includes('browser-auth') === true;
 }
-
-/**
- * Default logger implementation
- */
-const defaultLogger: SimpleLogger = {
-  info: (msg: string) => console.info(msg),
-  debug: (msg: string) => console.debug(`[DEBUG] ${msg}`),
-  error: (msg: string) => console.error(msg),
-  browserUrl: (url: string) => console.info(`🔗 Open in browser: ${url}`),
-  browserOpening: () => console.debug(`🌐 Opening browser for authentication...`),
-};
 
 /**
  * Start browser authentication flow
@@ -103,13 +106,8 @@ export async function startBrowserAuth(
   logger?: ILogger,
   port: number = 3001
 ): Promise<{ accessToken: string; refreshToken?: string }> {
-  const log: SimpleLogger = logger ? {
-    info: (msg) => logger.info(msg),
-    debug: (msg) => logger.debug(msg),
-    error: (msg) => logger.error(msg),
-    browserUrl: (url) => logger.info(`🔗 Open in browser: ${url}`),
-    browserOpening: () => logger.debug('🌐 Opening browser for authentication...'),
-  } : defaultLogger;
+  // Use logger if provided, otherwise null (no logging)
+  const log: ILogger | null = logger || null;
   
   return new Promise((originalResolve, originalReject) => {
     let timeoutId: NodeJS.Timeout | null = null;
@@ -133,9 +131,13 @@ export async function startBrowserAuth(
     // OAuth2 callback handler
     app.get('/callback', async (req: express.Request, res: express.Response) => {
       try {
+        log?.info(`Callback received: ${req.url}`);
+        log?.debug(`Callback query: ${JSON.stringify(req.query)}`);
+        
         // Check for OAuth2 error parameters
         const { error, error_description, error_uri } = req.query;
         if (error) {
+          log?.error(`Callback error: ${error}${error_description ? ` - ${error_description}` : ''}`);
           const errorMsg = error_description 
             ? `${error}: ${error_description}`
             : String(error);
@@ -207,11 +209,16 @@ export async function startBrowserAuth(
         }
 
         const { code } = req.query;
+        log?.debug(`Callback code received: ${code ? 'yes' : 'no'}`);
+        
         if (!code || typeof code !== 'string') {
+          log?.error(`Callback code missing`);
           res.status(400).send('Error: Authorization code missing');
           return reject(new Error('Authorization code missing'));
         }
 
+        log?.debug(`Exchanging code for token`);
+        
         // Send success page
         const html = `<!DOCTYPE html>
 <html lang="en">
@@ -276,7 +283,8 @@ export async function startBrowserAuth(
         
         // Exchange code for tokens and close server
         try {
-          const tokens = await exchangeCodeForToken(authConfig, code, PORT);
+          const tokens = await exchangeCodeForToken(authConfig, code, PORT, log);
+          log?.info(`Tokens received: accessToken(${tokens.accessToken?.length || 0} chars), refreshToken(${tokens.refreshToken?.length || 0} chars)`);
           // Close all connections and server immediately after getting tokens
           if (typeof server.closeAllConnections === 'function') {
             server.closeAllConnections();
@@ -306,7 +314,7 @@ export async function startBrowserAuth(
     serverInstance = server.listen(PORT, async () => {
       const browserApp = BROWSER_MAP[browser];
       if (!browser || browser === 'none' || browserApp === null) {
-        log.browserUrl(authorizationUrl);
+        log?.info(`🔗 Open in browser: ${authorizationUrl}`, { url: authorizationUrl });
         // For 'none' browser, don't wait for callback - throw error immediately
         // User must open browser manually and we can't wait for callback in automated tests
         if (serverInstance) {
@@ -317,7 +325,7 @@ export async function startBrowserAuth(
         reject(new Error(`Browser authentication required. Please open this URL manually: ${authorizationUrl}`));
         return;
       } else {
-        log.browserOpening();
+        log?.debug('🌐 Opening browser for authentication...');
         try {
           // Try dynamic import first (for ES modules)
           let open: typeof import('open').default;
@@ -360,7 +368,7 @@ export async function startBrowserAuth(
             // Use child_process as fallback (non-blocking)
             child_process.exec(`${command} "${authorizationUrl}"`, (error) => {
               if (error) {
-                log.error(`❌ Failed to open browser: ${error.message}. Please open manually: ${authorizationUrl}`);
+                log?.error(`❌ Failed to open browser: ${error.message}. Please open manually: ${authorizationUrl}`, { error: error.message, url: authorizationUrl });
               }
             });
             return; // Exit early since we're using child_process (non-blocking)
@@ -374,8 +382,8 @@ export async function startBrowserAuth(
           }
         } catch (error: any) {
           // If browser cannot be opened, show URL and throw error for consumer to catch
-          log.error(`❌ Failed to open browser: ${error?.message || String(error)}. Please open manually: ${authorizationUrl}`);
-          log.browserUrl(authorizationUrl);
+          log?.error(`❌ Failed to open browser: ${error?.message || String(error)}. Please open manually: ${authorizationUrl}`, { error: error?.message || String(error), url: authorizationUrl });
+          log?.info(`🔗 Open in browser: ${authorizationUrl}`, { url: authorizationUrl });
           // Throw error so consumer can distinguish this from "service key missing" error
           reject(new Error(`Browser opening failed for destination authentication. Please open manually: ${authorizationUrl}`));
         }

@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.4] - 2025-12-08
+
+### Added
+- **Integration Tests for browserAuth**: Added real integration test that uses actual service keys and OAuth flow
+  - Test verifies token retrieval with real credentials from service keys
+  - Shows all authentication stages with logging when `DEBUG_AUTH_PROVIDERS=true` is set
+  - Tests both access token and refresh token retrieval
+- **Test Logger Helper**: Added `createTestLogger` helper for tests with environment variable control
+  - Supports log levels (debug, info, warn, error) via `LOG_LEVEL` environment variable
+  - Only outputs logs when `DEBUG_AUTH_PROVIDERS=true` or `DEBUG_BROWSER_AUTH=true` is set
+  - Provides clean, controlled logging for test scenarios
+
+### Changed
+- **Improved Logging in browserAuth**: Made logging more concise and informative
+  - All log messages are now single-line strings without verbose objects
+  - Logs show key information: what we send, what we receive, token lengths
+  - Example: `Tokens received: accessToken(2263 chars), refreshToken(34 chars)`
+  - Logging only works when logger is provided (no default console output)
+- **exchangeCodeForToken Function**: Exported for testing purposes
+  - Function is marked as `@internal` but exported to enable unit testing
+  - Allows testing token exchange logic without full browser auth flow
+
+### Fixed
+- **Test Error Logging**: Fixed error test to use mock logger without console output
+  - Error test no longer pollutes console with error messages
+  - Still verifies that error logging occurs via spy
+
 ## [0.1.3] - 2025-12-07
 
 ### Added
