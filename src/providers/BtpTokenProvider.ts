@@ -5,10 +5,12 @@
  * For ABAP and full-scope BTP connections.
  */
 
-import type { ITokenProvider, ITokenProviderOptions, ITokenProviderResult, IAuthorizationConfig } from '@mcp-abap-adt/interfaces';
+import type { ITokenProvider, ITokenProviderOptions, ITokenProviderResult, IAuthorizationConfig, ILogger } from '@mcp-abap-adt/interfaces';
+import axios from 'axios';
+
+// Import internal functions (not exported)
 import { startBrowserAuth } from '../auth/browserAuth';
 import { refreshJwtToken } from '../auth/tokenRefresher';
-import axios from 'axios';
 
 /**
  * BTP/ABAP token provider implementation
@@ -16,6 +18,37 @@ import axios from 'axios';
  * Uses browser-based OAuth2 (if no refresh token) or refresh token flow.
  */
 export class BtpTokenProvider implements ITokenProvider {
+  private readonly browserAuthPort: number;
+
+  constructor(browserAuthPort?: number) {
+    // Default to 3001 if not specified
+    this.browserAuthPort = browserAuthPort ?? 3001;
+  }
+
+  /**
+   * Private method wrapper for browser authentication
+   * Proxies port from constructor to internal function
+   */
+  private async startBrowserAuth(
+    authConfig: IAuthorizationConfig,
+    browser: string,
+    logger?: ILogger
+  ): Promise<{ accessToken: string; refreshToken?: string }> {
+    return startBrowserAuth(authConfig, browser, logger, this.browserAuthPort);
+  }
+
+  /**
+   * Private method wrapper for token refresh
+   */
+  private async refreshJwtToken(
+    refreshToken: string,
+    uaaUrl: string,
+    clientId: string,
+    clientSecret: string
+  ): Promise<{ accessToken: string; refreshToken?: string }> {
+    return refreshJwtToken(refreshToken, uaaUrl, clientId, clientSecret);
+  }
+
   async getConnectionConfig(
     authConfig: IAuthorizationConfig,
     options?: ITokenProviderOptions
@@ -30,13 +63,13 @@ export class BtpTokenProvider implements ITokenProvider {
       if (logger) {
         logger.debug('No refresh token found. Starting browser authentication...');
       }
-      result = await startBrowserAuth(authConfig, browser, logger);
+      result = await this.startBrowserAuth(authConfig, browser, logger);
     } else {
       // Use refresh token to get new access token
       if (logger) {
         logger.debug('Refreshing token using refresh token...');
       }
-      result = await refreshJwtToken(
+      result = await this.refreshJwtToken(
         authConfig.refreshToken,
         authConfig.uaaUrl,
         authConfig.uaaClientId,

@@ -14,14 +14,8 @@ import { jest } from '@jest/globals';
 jest.mock('axios');
 const mockedAxios = axios as jest.Mocked<typeof axios>;
 
-// Mock clientCredentialsAuth
-jest.mock('../../auth/clientCredentialsAuth', () => ({
-  getTokenWithClientCredentials: jest.fn(),
-}));
-
 describe('XsuaaTokenProvider', () => {
   let provider: XsuaaTokenProvider;
-  const mockGetTokenWithClientCredentials = require('../../auth/clientCredentialsAuth').getTokenWithClientCredentials;
 
   beforeEach(() => {
     provider = new XsuaaTokenProvider();
@@ -36,7 +30,8 @@ describe('XsuaaTokenProvider', () => {
         uaaClientSecret: 'test-client-secret',
       };
 
-      mockGetTokenWithClientCredentials.mockResolvedValue({
+      // Mock private method using jest.spyOn
+      const getTokenSpy = jest.spyOn(provider as any, 'getTokenWithClientCredentials').mockResolvedValue({
         accessToken: 'test-access-token',
       });
 
@@ -46,11 +41,13 @@ describe('XsuaaTokenProvider', () => {
 
       expect(result.connectionConfig).toBeDefined();
       expect(result.connectionConfig.authorizationToken).toBe('test-access-token');
-      expect(mockGetTokenWithClientCredentials).toHaveBeenCalledWith(
+      expect(getTokenSpy).toHaveBeenCalledWith(
         authConfig.uaaUrl,
         authConfig.uaaClientId,
         authConfig.uaaClientSecret
       );
+
+      getTokenSpy.mockRestore();
     });
   });
 

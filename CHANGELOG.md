@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.3] - 2025-12-07
+
+### Added
+- **Configurable Browser Auth Port**: Added optional `browserAuthPort` parameter to `BtpTokenProvider` constructor
+  - Allows configuring the OAuth callback server port (default: 3001)
+  - Prevents port conflicts when proxy server runs on the same port
+  - Port is passed through to `startBrowserAuth` and `exchangeCodeForToken` functions
+  - Enables proxy to configure browser auth port via CLI parameter or YAML config
+
+### Changed
+- **BtpTokenProvider Constructor**: Now accepts optional `browserAuthPort?: number` parameter
+  - Defaults to 3001 if not specified (maintains backward compatibility)
+- **startBrowserAuth Function**: Added optional `port: number = 3001` parameter
+  - Port is used for OAuth callback server and redirect URI
+- **exchangeCodeForToken Function**: Added optional `port: number = 3001` parameter
+  - Port is used in redirect URI when exchanging authorization code for tokens
+- **Implementation Isolation**: Internal authentication functions are no longer exported from package
+  - `startBrowserAuth`, `refreshJwtToken`, and `getTokenWithClientCredentials` are now internal functions
+  - Providers use private method wrappers to call these functions
+  - Constructor parameters (like `browserAuthPort`) are passed through private methods to internal functions
+  - This ensures proper encapsulation and prevents direct usage of internal implementation details
+- **Test Improvements**: Unit tests now use provider methods instead of direct internal function imports
+  - Tests use `jest.spyOn` to mock private provider methods instead of mocking internal functions
+  - Tests now properly test the public API of providers, ensuring better isolation
+  - This aligns with encapsulation principles and makes tests more maintainable
+
 ## [0.1.2] - 2025-12-05
 
 ### Changed

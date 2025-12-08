@@ -34,10 +34,10 @@ function getJwtAuthorizationUrl(authConfig: IAuthorizationConfig, port: number =
 /**
  * Exchange authorization code for tokens
  */
-async function exchangeCodeForToken(authConfig: IAuthorizationConfig, code: string): Promise<{ accessToken: string; refreshToken?: string }> {
+async function exchangeCodeForToken(authConfig: IAuthorizationConfig, code: string, port: number = 3001): Promise<{ accessToken: string; refreshToken?: string }> {
   const { uaaUrl: url, uaaClientId: clientid, uaaClientSecret: clientsecret } = authConfig;
   const tokenUrl = `${url}/oauth/token`;
-  const redirectUri = 'http://localhost:3001/callback';
+  const redirectUri = `http://localhost:${port}/callback`;
 
   const params = new URLSearchParams();
   params.append('grant_type', 'authorization_code');
@@ -93,12 +93,15 @@ const defaultLogger: SimpleLogger = {
  * @param authConfig Authorization configuration with UAA credentials
  * @param browser Browser name (chrome, edge, firefox, system, none)
  * @param logger Optional logger instance. If not provided, uses default logger.
+ * @param port Port for OAuth callback server (default: 3001)
  * @returns Promise that resolves to tokens
+ * @internal - Internal function, not exported from package
  */
 export async function startBrowserAuth(
   authConfig: IAuthorizationConfig,
   browser: string = 'system',
-  logger?: ILogger
+  logger?: ILogger,
+  port: number = 3001
 ): Promise<{ accessToken: string; refreshToken?: string }> {
   const log: SimpleLogger = logger ? {
     info: (msg) => logger.info(msg),
@@ -122,7 +125,7 @@ export async function startBrowserAuth(
     };
     const app = express();
     const server = http.createServer(app);
-    const PORT = 3001;
+    const PORT = port;
     let serverInstance: http.Server | null = null;
 
     const authorizationUrl = getJwtAuthorizationUrl(authConfig, PORT);
@@ -273,7 +276,7 @@ export async function startBrowserAuth(
         
         // Exchange code for tokens and close server
         try {
-          const tokens = await exchangeCodeForToken(authConfig, code);
+          const tokens = await exchangeCodeForToken(authConfig, code, PORT);
           // Close all connections and server immediately after getting tokens
           if (typeof server.closeAllConnections === 'function') {
             server.closeAllConnections();

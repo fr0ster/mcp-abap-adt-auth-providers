@@ -130,10 +130,11 @@ const btpBroker = new AuthBroker({
 const abapServiceKeyStore = new AbapServiceKeyStore('/path/to/service-keys');
 const abapSessionStore = new AbapSessionStore('/path/to/sessions');
 
+// Use custom port if running alongside other services (e.g., proxy on port 3001)
 const abapBroker = new AuthBroker({
   serviceKeyStore: abapServiceKeyStore,
   sessionStore: abapSessionStore,
-  tokenProvider: new BtpTokenProvider(), // BtpTokenProvider works for ABAP too
+  tokenProvider: new BtpTokenProvider(4001), // Custom port to avoid conflicts
 });
 ```
 
@@ -171,7 +172,11 @@ Uses browser-based OAuth2 flow or refresh token:
 import { BtpTokenProvider } from '@mcp-abap-adt/auth-providers';
 import type { IAuthorizationConfig } from '@mcp-abap-adt/auth-broker';
 
+// Create provider with default port (3001)
 const provider = new BtpTokenProvider();
+
+// Or specify custom port for OAuth callback server (useful to avoid port conflicts)
+const providerWithCustomPort = new BtpTokenProvider(4001);
 
 const authConfig: IAuthorizationConfig = {
   uaaUrl: 'https://...authentication...hana.ondemand.com',
@@ -190,6 +195,8 @@ const result = await provider.getConnectionConfig(authConfig, {
 // result.connectionConfig.authorizationToken contains the JWT token
 // result.refreshToken contains refresh token (if browser flow was used)
 ```
+
+**Note**: The `browserAuthPort` parameter (default: 3001) configures the OAuth callback server port. This is useful when running the provider in environments where port 3001 is already in use (e.g., when running alongside a proxy server).
 
 ### Token Validation
 

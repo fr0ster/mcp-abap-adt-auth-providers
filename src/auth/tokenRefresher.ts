@@ -16,6 +16,7 @@ export interface TokenRefreshResult {
  * @param clientId UAA client ID
  * @param clientSecret UAA client secret
  * @returns Promise that resolves to new tokens
+ * @internal - Internal function, not exported from package
  */
 export async function refreshJwtToken(
   refreshToken: string,

@@ -18,6 +18,7 @@ export interface ClientCredentialsResult {
  * @param clientId UAA client ID
  * @param clientSecret UAA client secret
  * @returns Promise that resolves to access token
+ * @internal - Internal function, not exported from package
  */
 export async function getTokenWithClientCredentials(
   uaaUrl: string,

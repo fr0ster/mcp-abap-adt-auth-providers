@@ -6,8 +6,10 @@
  */
 
 import type { ITokenProvider, ITokenProviderOptions, ITokenProviderResult, IAuthorizationConfig } from '@mcp-abap-adt/interfaces';
-import { getTokenWithClientCredentials } from '../auth/clientCredentialsAuth';
 import axios from 'axios';
+
+// Import internal function (not exported)
+import { getTokenWithClientCredentials } from '../auth/clientCredentialsAuth';
 
 /**
  * XSUAA token provider implementation
@@ -15,6 +17,17 @@ import axios from 'axios';
  * Uses client_credentials grant type - no browser, no refresh token needed.
  */
 export class XsuaaTokenProvider implements ITokenProvider {
+  /**
+   * Private method wrapper for client credentials authentication
+   */
+  private async getTokenWithClientCredentials(
+    uaaUrl: string,
+    clientId: string,
+    clientSecret: string
+  ): Promise<{ accessToken: string; expiresIn?: number }> {
+    return getTokenWithClientCredentials(uaaUrl, clientId, clientSecret);
+  }
+
   async getConnectionConfig(
     authConfig: IAuthorizationConfig,
     options?: ITokenProviderOptions
@@ -26,7 +39,7 @@ export class XsuaaTokenProvider implements ITokenProvider {
     }
 
     // XSUAA uses client_credentials - no refresh token needed
-    const result = await getTokenWithClientCredentials(
+    const result = await this.getTokenWithClientCredentials(
       authConfig.uaaUrl,
       authConfig.uaaClientId,
       authConfig.uaaClientSecret

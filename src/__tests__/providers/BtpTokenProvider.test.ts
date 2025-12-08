@@ -14,19 +14,8 @@ import { jest } from '@jest/globals';
 jest.mock('axios');
 const mockedAxios = axios as jest.Mocked<typeof axios>;
 
-// Mock tokenRefresher and browserAuth
-jest.mock('../../auth/tokenRefresher', () => ({
-  refreshJwtToken: jest.fn(),
-}));
-
-jest.mock('../../auth/browserAuth', () => ({
-  startBrowserAuth: jest.fn(),
-}));
-
 describe('BtpTokenProvider', () => {
   let provider: BtpTokenProvider;
-  const mockRefreshJwtToken = require('../../auth/tokenRefresher').refreshJwtToken;
-  const mockStartBrowserAuth = require('../../auth/browserAuth').startBrowserAuth;
 
   beforeEach(() => {
     provider = new BtpTokenProvider();
@@ -42,7 +31,8 @@ describe('BtpTokenProvider', () => {
         refreshToken: 'test-refresh-token',
       };
 
-      mockRefreshJwtToken.mockResolvedValue({
+      // Mock private method using jest.spyOn
+      const refreshSpy = jest.spyOn(provider as any, 'refreshJwtToken').mockResolvedValue({
         accessToken: 'test-access-token',
         refreshToken: 'new-refresh-token',
       });
@@ -54,12 +44,14 @@ describe('BtpTokenProvider', () => {
       expect(result.connectionConfig).toBeDefined();
       expect(result.connectionConfig.authorizationToken).toBe('test-access-token');
       expect(result.refreshToken).toBe('new-refresh-token');
-      expect(mockRefreshJwtToken).toHaveBeenCalledWith(
+      expect(refreshSpy).toHaveBeenCalledWith(
         authConfig.refreshToken,
         authConfig.uaaUrl,
         authConfig.uaaClientId,
         authConfig.uaaClientSecret
       );
+
+      refreshSpy.mockRestore();
     });
 
     it('should start browser auth if no refresh token', async () => {
@@ -69,7 +61,8 @@ describe('BtpTokenProvider', () => {
         uaaClientSecret: 'test-client-secret',
       };
 
-      mockStartBrowserAuth.mockResolvedValue({
+      // Mock private method using jest.spyOn
+      const browserAuthSpy = jest.spyOn(provider as any, 'startBrowserAuth').mockResolvedValue({
         accessToken: 'test-access-token',
         refreshToken: 'new-refresh-token',
       });
@@ -82,11 +75,48 @@ describe('BtpTokenProvider', () => {
       expect(result.connectionConfig).toBeDefined();
       expect(result.connectionConfig.authorizationToken).toBe('test-access-token');
       expect(result.refreshToken).toBe('new-refresh-token');
-      expect(mockStartBrowserAuth).toHaveBeenCalledWith(
+      expect(browserAuthSpy).toHaveBeenCalledWith(
         authConfig,
         'system',
         defaultLogger
       );
+
+      browserAuthSpy.mockRestore();
+    });
+
+    it('should use custom port when specified in constructor', async () => {
+      const customPort = 4001;
+      const customProvider = new BtpTokenProvider(customPort);
+      const authConfig: IAuthorizationConfig = {
+        uaaUrl: 'https://test.authentication.sap.hana.ondemand.com',
+        uaaClientId: 'test-client-id',
+        uaaClientSecret: 'test-client-secret',
+      };
+
+      // Mock private method using jest.spyOn
+      const browserAuthSpy = jest.spyOn(customProvider as any, 'startBrowserAuth').mockResolvedValue({
+        accessToken: 'test-access-token',
+        refreshToken: 'new-refresh-token',
+      });
+
+      const result = await customProvider.getConnectionConfig(authConfig, {
+        logger: defaultLogger,
+        browser: 'system',
+      });
+
+      expect(result.connectionConfig).toBeDefined();
+      expect(result.connectionConfig.authorizationToken).toBe('test-access-token');
+      expect(result.refreshToken).toBe('new-refresh-token');
+      expect(browserAuthSpy).toHaveBeenCalledWith(
+        authConfig,
+        'system',
+        defaultLogger
+      );
+      // Verify that the provider uses the custom port by checking internal function call
+      // The port is passed through the private method to the internal function
+      expect(customProvider['browserAuthPort']).toBe(customPort);
+
+      browserAuthSpy.mockRestore();
     });
   });
 
