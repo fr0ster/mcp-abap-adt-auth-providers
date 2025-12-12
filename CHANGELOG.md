@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.5] - 2025-12-13
+
+### Changed
+- Dependency bump: `@mcp-abap-adt/interfaces` to `^0.1.16` to align with latest interfaces release
+
 ## [0.1.4] - 2025-12-08
 
 ### Added
@@ -134,4 +139,3 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `@mcp-abap-adt/auth-stores` ^0.1.2 - Store implementations
 - `@mcp-abap-adt/connection` ^0.1.13 - Connection utilities
 - `@mcp-abap-adt/logger` ^0.1.0 - Logging utilities
-
