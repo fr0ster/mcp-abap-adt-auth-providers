@@ -1,6 +1,6 @@
 {
   "name": "@mcp-abap-adt/auth-providers",
-  "version": "0.1.5",
+  "version": "0.2.0",
   "description": "Token providers for MCP ABAP ADT auth-broker - XSUAA and BTP token providers",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
