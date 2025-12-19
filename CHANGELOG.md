@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2025-12-19
+
+### Added
+- **Typed Error Classes**: Added specialized error classes for better error handling and debugging
+  - `TokenProviderError` - Base class for all token provider errors with error code
+  - `ValidationError` - Thrown when authConfig validation fails (includes `missingFields: string[]` array)
+  - `RefreshError` - Thrown when token refresh operation fails (includes `cause?: Error` with original error)
+  - `SessionDataError` - Thrown when session data is invalid or incomplete (includes `missingFields` array)
+  - `ServiceKeyError` - Thrown when service key data is invalid or incomplete (includes `missingFields` array)
+  - `BrowserAuthError` - Thrown when browser authentication fails or is cancelled (includes `cause` error)
+  - All error codes use constants from `@mcp-abap-adt/interfaces` package (`TOKEN_PROVIDER_ERROR_CODES`)
+  - Errors are exported from package root for easy import
+
+### Changed
+- **Enhanced Validation Error Messages**: Validation errors now list specific missing field names instead of generic messages
+  - Example: `XSUAA refreshTokenFromSession: authConfig missing required fields: uaaUrl, uaaClientId`
+  - `ValidationError` includes `missingFields: string[]` property for programmatic access to missing fields
+  - Each missing field is checked individually and added to the list
+- **Improved Error Handling in Refresh Methods**: All refresh operations now wrap errors with typed error classes
+  - `refreshTokenFromSession` throws `RefreshError` when client_credentials or browser auth fails
+  - `refreshTokenFromServiceKey` throws `RefreshError` when browser authentication fails
+  - Original error is preserved in `RefreshError.cause` property for debugging
+  - Error messages include provider type (XSUAA/BTP) and operation name for clarity
+- **Dependency Update**: Updated `@mcp-abap-adt/interfaces` to `^0.2.2` for `TOKEN_PROVIDER_ERROR_CODES` constants
+- **Test Coverage**: Added tests for error handling edge cases
+  - Tests verify `RefreshError` is thrown when authentication fails
+  - Tests verify `ValidationError` includes correct missing field names
+  - Tests verify error messages contain expected substrings
+
 ## [0.1.5] - 2025-12-13
 
 ### Changed

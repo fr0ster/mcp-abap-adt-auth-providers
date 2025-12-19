@@ -77,7 +77,7 @@ describe('AbapTokenProvider Integration', () => {
 
       expect(result.connectionConfig).toBeDefined();
       expect(result.connectionConfig.authorizationToken).toBeDefined();
-      expect(result.connectionConfig.authorizationToken.length).toBeGreaterThan(0);
+      expect(result.connectionConfig.authorizationToken!.length).toBeGreaterThan(0);
 
       // Save session with refresh token if available
       // AbapSessionStore accepts IConfig format (serviceUrl, authorizationToken)
@@ -147,7 +147,7 @@ describe('AbapTokenProvider Integration', () => {
       expect(token).toBeDefined();
 
       // Validate token
-      const isValid = await tokenProvider.validateToken(token, serviceKey.serviceUrl);
+      const isValid = await tokenProvider.validateToken(token!, serviceKey.serviceUrl);
       expect(isValid).toBe(true);
     }, 300000);
   });

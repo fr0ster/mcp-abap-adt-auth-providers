@@ -9,3 +9,13 @@
 export { XsuaaTokenProvider } from './providers/XsuaaTokenProvider';
 export { BtpTokenProvider } from './providers/BtpTokenProvider';
 
+// Errors
+export {
+  TokenProviderError,
+  ValidationError,
+  RefreshError,
+  SessionDataError,
+  ServiceKeyError,
+  BrowserAuthError,
+} from './errors/TokenProviderErrors';
+

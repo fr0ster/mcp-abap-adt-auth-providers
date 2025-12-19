@@ -98,6 +98,152 @@ describe('XsuaaTokenProvider', () => {
       const result = await provider.validateToken('invalid-token', 'https://test.service.com');
       expect(result).toBe(false);
     });
+  });
+
+  describe('refreshTokenFromSession', () => {
+    it('should refresh token using client_credentials from session', async () => {
+      const authConfig: IAuthorizationConfig = {
+        uaaUrl: 'https://test.authentication.sap.hana.ondemand.com',
+        uaaClientId: 'test-client-id',
+        uaaClientSecret: 'test-client-secret',
+      };
+
+      const getTokenSpy = jest.spyOn(provider as any, 'getTokenWithClientCredentials').mockResolvedValue({
+        accessToken: 'refreshed-token-from-session',
+      });
+
+      const result = await provider.refreshTokenFromSession(authConfig, {
+        logger: defaultLogger,
+      });
+
+      expect(result.connectionConfig.authorizationToken).toBe('refreshed-token-from-session');
+      expect(getTokenSpy).toHaveBeenCalledWith(
+        authConfig.uaaUrl,
+        authConfig.uaaClientId,
+        authConfig.uaaClientSecret
+      );
+
+      getTokenSpy.mockRestore();
+    });
+
+    it('should throw RefreshError if client_credentials fails', async () => {
+      const authConfig: IAuthorizationConfig = {
+        uaaUrl: 'https://test.authentication.sap.hana.ondemand.com',
+        uaaClientId: 'test-client-id',
+        uaaClientSecret: 'test-client-secret',
+      };
+
+      // Mock getTokenWithClientCredentials to throw error
+      const getTokenSpy = jest.spyOn(provider as any, 'getTokenWithClientCredentials').mockRejectedValue(
+        new Error('UAA server returned 401 Unauthorized')
+      );
+
+      const { RefreshError } = await import('../../errors/TokenProviderErrors');
+      
+      await expect(provider.refreshTokenFromSession(authConfig, {
+        logger: defaultLogger,
+      })).rejects.toThrow(RefreshError);
+
+      await expect(provider.refreshTokenFromSession(authConfig)).rejects.toThrow(
+        'XSUAA refreshTokenFromSession failed'
+      );
+
+      getTokenSpy.mockRestore();
+    });
+
+    it('should throw error if uaaUrl is missing', async () => {
+      const authConfig: IAuthorizationConfig = {
+        uaaUrl: '',
+        uaaClientId: 'test-client-id',
+        uaaClientSecret: 'test-client-secret',
+      };
+
+      await expect(provider.refreshTokenFromSession(authConfig)).rejects.toThrow(
+        'XSUAA refreshTokenFromSession: authConfig missing required fields: uaaUrl'
+      );
+    });
+
+    it('should throw error if uaaClientId is missing', async () => {
+      const authConfig: IAuthorizationConfig = {
+        uaaUrl: 'https://test.authentication.sap.hana.ondemand.com',
+        uaaClientId: '',
+        uaaClientSecret: 'test-client-secret',
+      };
+
+      await expect(provider.refreshTokenFromSession(authConfig)).rejects.toThrow(
+        'XSUAA refreshTokenFromSession: authConfig missing required fields: uaaClientId'
+      );
+    });
+
+    it('should throw error if uaaClientSecret is missing', async () => {
+      const authConfig: IAuthorizationConfig = {
+        uaaUrl: 'https://test.authentication.sap.hana.ondemand.com',
+        uaaClientId: 'test-client-id',
+        uaaClientSecret: '',
+      };
+
+      await expect(provider.refreshTokenFromSession(authConfig)).rejects.toThrow(
+        'XSUAA refreshTokenFromSession: authConfig missing required fields: uaaClientSecret'
+      );
+    });
+  });
+
+  describe('refreshTokenFromServiceKey', () => {
+    it('should refresh token using browser authentication from service key', async () => {
+      const authConfig: IAuthorizationConfig = {
+        uaaUrl: 'https://test.authentication.sap.hana.ondemand.com',
+        uaaClientId: 'test-client-id',
+        uaaClientSecret: 'test-client-secret',
+      };
+
+      // Import browserAuth module
+      const browserAuthModule = await import('../../auth/browserAuth');
+      
+      // Mock startBrowserAuth function
+      const browserAuthSpy = jest.spyOn(browserAuthModule, 'startBrowserAuth').mockResolvedValue({
+        accessToken: 'refreshed-token-from-servicekey',
+        refreshToken: 'new-refresh-token',
+      });
+
+      const result = await provider.refreshTokenFromServiceKey(authConfig, {
+        browser: 'none',
+        logger: defaultLogger,
+      });
+
+      expect(result.connectionConfig.authorizationToken).toBe('refreshed-token-from-servicekey');
+      expect(result.refreshToken).toBe('new-refresh-token');
+
+      browserAuthSpy.mockRestore();
+    });
+
+    it('should throw RefreshError if browser authentication fails', async () => {
+      const authConfig: IAuthorizationConfig = {
+        uaaUrl: 'https://test.authentication.sap.hana.ondemand.com',
+        uaaClientId: 'test-client-id',
+        uaaClientSecret: 'test-client-secret',
+      };
+
+      // Import browserAuth module
+      const browserAuthModule = await import('../../auth/browserAuth');
+      
+      // Mock startBrowserAuth to throw error
+      const browserAuthSpy = jest.spyOn(browserAuthModule, 'startBrowserAuth').mockRejectedValue(
+        new Error('Browser authentication cancelled by user')
+      );
+
+      const { RefreshError } = await import('../../errors/TokenProviderErrors');
+      
+      await expect(provider.refreshTokenFromServiceKey(authConfig, {
+        browser: 'none',
+        logger: defaultLogger,
+      })).rejects.toThrow(RefreshError);
+
+      await expect(provider.refreshTokenFromServiceKey(authConfig)).rejects.toThrow(
+        'XSUAA refreshTokenFromServiceKey failed'
+      );
+
+      browserAuthSpy.mockRestore();
+    });
 
     it('should return true on connection errors (ECONNREFUSED)', async () => {
       mockedAxios.get.mockRejectedValue({

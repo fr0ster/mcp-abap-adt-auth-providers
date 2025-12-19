@@ -6,6 +6,7 @@
  */
 
 import type { ITokenProvider, ITokenProviderOptions, ITokenProviderResult, IAuthorizationConfig, ILogger } from '@mcp-abap-adt/interfaces';
+import { ValidationError, RefreshError } from '../errors/TokenProviderErrors';
 import axios from 'axios';
 
 // Import internal functions (not exported)
@@ -85,6 +86,90 @@ export class BtpTokenProvider implements ITokenProvider {
       },
       refreshToken: result.refreshToken,
     };
+  }
+
+  async refreshTokenFromSession(
+    authConfig: IAuthorizationConfig,
+    options?: ITokenProviderOptions
+  ): Promise<ITokenProviderResult> {
+    const logger = options?.logger;
+    const browser = options?.browser || 'system';
+
+    // Validate authConfig
+    const missingFields: string[] = [];
+    if (!authConfig.uaaUrl) missingFields.push('uaaUrl');
+    if (!authConfig.uaaClientId) missingFields.push('uaaClientId');
+    if (!authConfig.uaaClientSecret) missingFields.push('uaaClientSecret');
+    
+    if (missingFields.length > 0) {
+      throw new ValidationError(
+        `BTP refreshTokenFromSession: authConfig missing required fields: ${missingFields.join(', ')}`,
+        missingFields
+      );
+    }
+
+    if (logger) {
+      logger.debug('BTP: Refreshing token from session using browser authentication (UAA_URL)...');
+    }
+
+    // BTP refresh from session uses browser authentication through UAA_URL
+    try {
+      const result = await this.startBrowserAuth(authConfig, browser, logger);
+
+      return {
+        connectionConfig: {
+          authorizationToken: result.accessToken,
+        },
+        refreshToken: result.refreshToken,
+      };
+    } catch (error: any) {
+      throw new RefreshError(
+        `BTP refreshTokenFromSession failed: ${error.message}`,
+        error
+      );
+    }
+  }
+
+  async refreshTokenFromServiceKey(
+    authConfig: IAuthorizationConfig,
+    options?: ITokenProviderOptions
+  ): Promise<ITokenProviderResult> {
+    const logger = options?.logger;
+    const browser = options?.browser || 'system';
+
+    // Validate authConfig
+    const missingFields: string[] = [];
+    if (!authConfig.uaaUrl) missingFields.push('uaaUrl');
+    if (!authConfig.uaaClientId) missingFields.push('uaaClientId');
+    if (!authConfig.uaaClientSecret) missingFields.push('uaaClientSecret');
+    
+    if (missingFields.length > 0) {
+      throw new ValidationError(
+        `BTP refreshTokenFromServiceKey: authConfig missing required fields: ${missingFields.join(', ')}`,
+        missingFields
+      );
+    }
+
+    if (logger) {
+      logger.debug('BTP: Refreshing token from service key using browser authentication...');
+    }
+
+    // BTP refresh from service key uses browser authentication
+    try {
+      const result = await this.startBrowserAuth(authConfig, browser, logger);
+
+      return {
+        connectionConfig: {
+          authorizationToken: result.accessToken,
+        },
+        refreshToken: result.refreshToken,
+      };
+    } catch (error: any) {
+      throw new RefreshError(
+        `BTP refreshTokenFromServiceKey failed: ${error.message}`,
+        error
+      );
+    }
   }
 
   async validateToken(token: string, serviceUrl?: string): Promise<boolean> {

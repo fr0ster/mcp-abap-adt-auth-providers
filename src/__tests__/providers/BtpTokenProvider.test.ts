@@ -195,5 +195,154 @@ describe('BtpTokenProvider', () => {
       expect(result).toBe(false);
     });
   });
+
+  describe('refreshTokenFromSession', () => {
+    it('should refresh token using browser authentication from session', async () => {
+      const authConfig: IAuthorizationConfig = {
+        uaaUrl: 'https://test.authentication.sap.hana.ondemand.com',
+        uaaClientId: 'test-client-id',
+        uaaClientSecret: 'test-client-secret',
+      };
+
+      const browserAuthSpy = jest.spyOn(provider as any, 'startBrowserAuth').mockResolvedValue({
+        accessToken: 'refreshed-token-from-session',
+        refreshToken: 'new-refresh-token',
+      });
+
+      const result = await provider.refreshTokenFromSession(authConfig, {
+        browser: 'none',
+        logger: defaultLogger,
+      });
+
+      expect(result.connectionConfig.authorizationToken).toBe('refreshed-token-from-session');
+      expect(result.refreshToken).toBe('new-refresh-token');
+      expect(browserAuthSpy).toHaveBeenCalledWith(authConfig, 'none', defaultLogger);
+
+      browserAuthSpy.mockRestore();
+    });
+
+    it('should throw error if uaaUrl is missing', async () => {
+      const authConfig: IAuthorizationConfig = {
+        uaaUrl: '',
+        uaaClientId: 'test-client-id',
+        uaaClientSecret: 'test-client-secret',
+      };
+
+      await expect(provider.refreshTokenFromSession(authConfig)).rejects.toThrow(
+        'BTP refreshTokenFromSession: authConfig missing required fields: uaaUrl'
+      );
+    });
+
+    it('should throw error if uaaClientId is missing', async () => {
+      const authConfig: IAuthorizationConfig = {
+        uaaUrl: 'https://test.authentication.sap.hana.ondemand.com',
+        uaaClientId: '',
+        uaaClientSecret: 'test-client-secret',
+      };
+
+      await expect(provider.refreshTokenFromSession(authConfig)).rejects.toThrow(
+        'BTP refreshTokenFromSession: authConfig missing required fields: uaaClientId'
+      );
+    });
+
+    it('should throw error if uaaClientSecret is missing', async () => {
+      const authConfig: IAuthorizationConfig = {
+        uaaUrl: 'https://test.authentication.sap.hana.ondemand.com',
+        uaaClientId: 'test-client-id',
+        uaaClientSecret: '',
+      };
+
+      await expect(provider.refreshTokenFromSession(authConfig)).rejects.toThrow(
+        'BTP refreshTokenFromSession: authConfig missing required fields: uaaClientSecret'
+      );
+    });
+  });
+
+  describe('refreshTokenFromServiceKey', () => {
+    it('should refresh token using browser authentication from service key', async () => {
+      const authConfig: IAuthorizationConfig = {
+        uaaUrl: 'https://test.authentication.sap.hana.ondemand.com',
+        uaaClientId: 'test-client-id',
+        uaaClientSecret: 'test-client-secret',
+      };
+
+      const browserAuthSpy = jest.spyOn(provider as any, 'startBrowserAuth').mockResolvedValue({
+        accessToken: 'refreshed-token-from-servicekey',
+        refreshToken: 'new-refresh-token',
+      });
+
+      const result = await provider.refreshTokenFromServiceKey(authConfig, {
+        browser: 'none',
+        logger: defaultLogger,
+      });
+
+      expect(result.connectionConfig.authorizationToken).toBe('refreshed-token-from-servicekey');
+      expect(result.refreshToken).toBe('new-refresh-token');
+      expect(browserAuthSpy).toHaveBeenCalledWith(authConfig, 'none', defaultLogger);
+
+      browserAuthSpy.mockRestore();
+    });
+
+    it('should throw RefreshError if browser authentication fails', async () => {
+      const authConfig: IAuthorizationConfig = {
+        uaaUrl: 'https://test.authentication.sap.hana.ondemand.com',
+        uaaClientId: 'test-client-id',
+        uaaClientSecret: 'test-client-secret',
+      };
+
+      const browserAuthSpy = jest.spyOn(provider as any, 'startBrowserAuth').mockRejectedValue(
+        new Error('Browser authentication timeout')
+      );
+
+      const { RefreshError } = await import('../../errors/TokenProviderErrors');
+      
+      await expect(provider.refreshTokenFromServiceKey(authConfig, {
+        browser: 'none',
+        logger: defaultLogger,
+      })).rejects.toThrow(RefreshError);
+
+      await expect(provider.refreshTokenFromServiceKey(authConfig)).rejects.toThrow(
+        'BTP refreshTokenFromServiceKey failed'
+      );
+
+      browserAuthSpy.mockRestore();
+    });
+
+    it('should throw error if uaaUrl is missing', async () => {
+      const authConfig: IAuthorizationConfig = {
+        uaaUrl: '',
+        uaaClientId: 'test-client-id',
+        uaaClientSecret: 'test-client-secret',
+      };
+
+      await expect(provider.refreshTokenFromServiceKey(authConfig)).rejects.toThrow(
+        'BTP refreshTokenFromServiceKey: authConfig missing required fields: uaaUrl'
+      );
+    });
+
+    it('should throw error if uaaClientId is missing', async () => {
+      const authConfig: IAuthorizationConfig = {
+        uaaUrl: 'https://test.authentication.sap.hana.ondemand.com',
+        uaaClientId: '',
+        uaaClientSecret: 'test-client-secret',
+      };
+
+      await expect(provider.refreshTokenFromServiceKey(authConfig)).rejects.toThrow(
+        'BTP refreshTokenFromServiceKey: authConfig missing required fields: uaaClientId'
+      );
+    });
+
+    it('should throw error if uaaClientSecret is missing', async () => {
+      const authConfig: IAuthorizationConfig = {
+        uaaUrl: 'https://test.authentication.sap.hana.ondemand.com',
+        uaaClientId: 'test-client-id',
+        uaaClientSecret: '',
+      };
+
+      await expect(provider.refreshTokenFromServiceKey(authConfig)).rejects.toThrow(
+        'BTP refreshTokenFromServiceKey: authConfig missing required fields: uaaClientSecret'
+      );
+    });
+  });
 });
 

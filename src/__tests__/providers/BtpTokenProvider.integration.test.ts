@@ -78,7 +78,7 @@ describe('BtpTokenProvider Integration', () => {
 
       expect(result.connectionConfig).toBeDefined();
       expect(result.connectionConfig.authorizationToken).toBeDefined();
-      expect(result.connectionConfig.authorizationToken.length).toBeGreaterThan(0);
+      expect(result.connectionConfig.authorizationToken!.length).toBeGreaterThan(0);
 
       // Save session using IConfig format
       // BTP doesn't have sapUrl, so don't pass serviceUrl
@@ -146,7 +146,7 @@ describe('BtpTokenProvider Integration', () => {
 
       // Validate token (BTP may not have serviceUrl, skip validation if not available)
       const isValid = serviceKey.serviceUrl 
-        ? await tokenProvider.validateToken(token, serviceKey.serviceUrl)
+        ? await tokenProvider.validateToken(token!, serviceKey.serviceUrl)
         : true; // Skip validation if no serviceUrl (base BTP)
       expect(isValid).toBe(true);
     }, 300000);

@@ -71,7 +71,7 @@ describe('XsuaaTokenProvider Integration', () => {
 
       expect(result.connectionConfig).toBeDefined();
       expect(result.connectionConfig.authorizationToken).toBeDefined();
-      expect(result.connectionConfig.authorizationToken.length).toBeGreaterThan(0);
+      expect(result.connectionConfig.authorizationToken!.length).toBeGreaterThan(0);
 
       // Save session
       await sessionStore.saveSession(xsuaaConfig.btp_destination, {
@@ -123,7 +123,7 @@ describe('XsuaaTokenProvider Integration', () => {
       expect(token).toBeDefined();
 
       // Validate token
-      const isValid = await tokenProvider.validateToken(token, xsuaaConfig.mcp_url);
+      const isValid = await tokenProvider.validateToken(token!, xsuaaConfig.mcp_url);
       expect(isValid).toBe(true);
     }, 60000);
   });

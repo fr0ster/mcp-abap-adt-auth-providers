@@ -207,6 +207,104 @@ const isValid = await provider.validateToken(token, serviceUrl);
 // Returns true if token is valid (200-299 status), false otherwise
 ```
 
+### Token Refresh Methods
+
+Both providers implement two refresh methods from `ITokenProvider` interface:
+
+#### refreshTokenFromSession
+
+Refreshes token using existing session data (with refreshToken):
+
+```typescript
+import { XsuaaTokenProvider } from '@mcp-abap-adt/auth-providers';
+import { ValidationError, RefreshError } from '@mcp-abap-adt/auth-providers';
+
+const provider = new XsuaaTokenProvider();
+
+const authConfig: IAuthorizationConfig = {
+  uaaUrl: 'https://...authentication...hana.ondemand.com',
+  uaaClientId: '...',
+  uaaClientSecret: '...',
+  refreshToken: '...', // From existing session
+};
+
+try {
+  const result = await provider.refreshTokenFromSession(authConfig);
+  // XSUAA uses client_credentials - no refresh token in response
+  // BTP uses browser auth - returns new refresh token
+} catch (error) {
+  if (error instanceof ValidationError) {
+    // authConfig missing required fields
+    console.error('Missing fields:', error.missingFields); // ['uaaUrl', 'uaaClientId', ...]
+  } else if (error instanceof RefreshError) {
+    // Token refresh failed
+    console.error('Refresh failed:', error.message);
+    console.error('Original error:', error.cause);
+  }
+}
+```
+
+#### refreshTokenFromServiceKey
+
+Refreshes token using service key credentials (without refreshToken):
+
+```typescript
+try {
+  const result = await provider.refreshTokenFromServiceKey(authConfig);
+  // Both XSUAA and BTP use browser authentication for service key refresh
+  // Returns new access token and refresh token
+} catch (error) {
+  if (error instanceof ValidationError) {
+    console.error('Missing fields:', error.missingFields);
+  } else if (error instanceof RefreshError) {
+    console.error('Browser auth failed:', error.cause);
+  }
+}
+```
+
+### Error Handling
+
+The package provides typed error classes for better error handling:
+
+```typescript
+import {
+  TokenProviderError,
+  ValidationError,
+  RefreshError,
+  SessionDataError,
+  ServiceKeyError,
+  BrowserAuthError,
+} from '@mcp-abap-adt/auth-providers';
+
+try {
+  const result = await provider.refreshTokenFromSession(authConfig);
+} catch (error) {
+  if (error instanceof ValidationError) {
+    // authConfig validation failed
+    console.error('Missing required fields:', error.missingFields);
+    console.error('Error code:', error.code); // 'VALIDATION_ERROR'
+  } else if (error instanceof RefreshError) {
+    // Token refresh operation failed
+    console.error('Refresh failed:', error.message);
+    console.error('Original error:', error.cause);
+    console.error('Error code:', error.code); // 'REFRESH_ERROR'
+  } else if (error instanceof BrowserAuthError) {
+    // Browser authentication failed
+    console.error('Browser auth failed:', error.cause);
+  }
+}
+```
+
+**Error Types**:
+- `TokenProviderError` - Base class with `code: string` property
+- `ValidationError` - authConfig validation failed, includes `missingFields: string[]`
+- `RefreshError` - Token refresh failed, includes `cause?: Error`
+- `SessionDataError` - Session data invalid, includes `missingFields: string[]`
+- `ServiceKeyError` - Service key data invalid, includes `missingFields: string[]`
+- `BrowserAuthError` - Browser auth failed, includes `cause?: Error`
+
+All error codes are defined in `@mcp-abap-adt/interfaces` package as `TOKEN_PROVIDER_ERROR_CODES`.
+
 ## Testing
 
 The package includes both unit tests (with mocks) and integration tests (with real files and services).
@@ -272,10 +370,7 @@ Example output:
 
 ## Dependencies
 
-- `@mcp-abap-adt/auth-broker` (^0.1.6) - Interface definitions
-- `@mcp-abap-adt/auth-stores` (^0.1.2) - Store implementations
-- `@mcp-abap-adt/connection` (^0.1.13) - Connection utilities
-- `@mcp-abap-adt/logger` (^0.1.0) - Logging utilities
+- `@mcp-abap-adt/interfaces` (^0.2.2) - Interface definitions and error code constants
 - `axios` - HTTP client
 - `express` - OAuth2 callback server
 - `open` - Browser opening utility
