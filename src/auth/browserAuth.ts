@@ -151,16 +151,8 @@ export async function startBrowserAuth(
   
   return new Promise((originalResolve, originalReject) => {
     let timeoutId: NodeJS.Timeout | null = null;
+    let cleanupDone = false;
     
-    const resolve = (value: any) => {
-      if (timeoutId) clearTimeout(timeoutId);
-      originalResolve(value);
-    };
-    
-    const reject = (reason: any) => {
-      if (timeoutId) clearTimeout(timeoutId);
-      originalReject(reason);
-    };
     const app = express();
     const server = http.createServer(app);
     // Disable keep-alive to ensure connections close immediately
@@ -168,6 +160,56 @@ export async function startBrowserAuth(
     server.headersTimeout = 0;
     const PORT = actualPort;
     let serverInstance: http.Server | null = null;
+
+    // Cleanup function to ensure server is closed on process termination
+    const cleanup = () => {
+      if (cleanupDone) return;
+      cleanupDone = true;
+      log?.debug(`Cleaning up OAuth callback server on port ${PORT}`);
+      if (timeoutId) {
+        clearTimeout(timeoutId);
+        timeoutId = null;
+      }
+      if (server) {
+        try {
+          if (typeof server.closeAllConnections === 'function') {
+            server.closeAllConnections();
+          }
+          server.close(() => {
+            log?.debug(`OAuth server closed during cleanup, port ${PORT} freed`);
+          });
+        } catch (e) {
+          // Ignore errors during cleanup
+        }
+      }
+    };
+
+    // Remove cleanup listeners to prevent memory leaks
+    const removeCleanupListeners = () => {
+      process.removeListener('exit', cleanup);
+      process.removeListener('SIGTERM', cleanup);
+      process.removeListener('SIGINT', cleanup);
+      process.removeListener('SIGHUP', cleanup);
+    };
+    
+    const resolve = (value: any) => {
+      if (timeoutId) clearTimeout(timeoutId);
+      removeCleanupListeners();
+      originalResolve(value);
+    };
+    
+    const reject = (reason: any) => {
+      if (timeoutId) clearTimeout(timeoutId);
+      removeCleanupListeners();
+      originalReject(reason);
+    };
+
+    // Register cleanup handlers for process termination
+    // This ensures port is freed when Cline or other clients kill the process
+    process.once('exit', cleanup);
+    process.once('SIGTERM', cleanup);
+    process.once('SIGINT', cleanup);
+    process.once('SIGHUP', cleanup);
 
     const authorizationUrl = getJwtAuthorizationUrl(authConfig, PORT);
 

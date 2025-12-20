@@ -198,7 +198,9 @@ const result = await provider.getConnectionConfig(authConfig, {
 // result.refreshToken contains refresh token (if browser flow was used)
 ```
 
-**Note**: The `browserAuthPort` parameter (default: 3001) configures the OAuth callback server port. The provider automatically finds an available port if the requested port is in use, preventing `EADDRINUSE` errors when multiple instances run simultaneously. The server properly closes all connections and frees the port after authentication completes, ensuring no lingering port occupation. This is useful when running the provider in environments where ports may be occupied (e.g., when running alongside a proxy server or multiple stdio servers).
+**Note**: The `browserAuthPort` parameter (default: 3001) configures the OAuth callback server port. The provider automatically finds an available port if the requested port is in use, preventing `EADDRINUSE` errors when multiple instances run simultaneously. The server properly closes all connections and frees the port after authentication completes, ensuring no lingering port occupation. 
+
+**Process Termination Handling**: The OAuth callback server registers cleanup handlers for `SIGTERM`, `SIGINT`, `SIGHUP`, and `exit` signals. This ensures ports are properly freed even when MCP clients (like Cline) terminate the process before authentication completes. This is especially important for stdio servers where the client may kill the process at any time.
 
 ### Token Validation
 

@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.2] - 2025-12-20
+
+### Fixed
+- **Process Termination Cleanup**: OAuth callback server now properly cleans up when process is terminated
+  - Added `process.on('exit', 'SIGTERM', 'SIGINT', 'SIGHUP')` handlers to ensure server closes on process termination
+  - This fixes port leaks when MCP clients (like Cline) kill the stdio server before authentication completes
+  - Cleanup handlers are automatically removed after authentication completes to prevent memory leaks
+  - Ports are now properly freed even when process is forcefully terminated
+
 ## [0.2.1] - 2025-01-XX
 
 ### Added
