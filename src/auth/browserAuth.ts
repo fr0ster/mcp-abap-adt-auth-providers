@@ -3,6 +3,7 @@
  */
 
 import * as http from 'http';
+import * as net from 'net';
 import * as child_process from 'child_process';
 import express from 'express';
 import axios from 'axios';
@@ -92,6 +93,34 @@ function isDebugEnabled(): boolean {
 }
 
 /**
+ * Check if a port is available
+ */
+function isPortAvailable(port: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    const server = net.createServer();
+    server.listen(port, () => {
+      server.once('close', () => resolve(true));
+      server.close();
+    });
+    server.on('error', () => resolve(false));
+  });
+}
+
+/**
+ * Find an available port starting from the given port
+ * Tries ports in range [startPort, startPort + maxAttempts)
+ */
+async function findAvailablePort(startPort: number, maxAttempts: number = 10): Promise<number> {
+  for (let i = 0; i < maxAttempts; i++) {
+    const port = startPort + i;
+    if (await isPortAvailable(port)) {
+      return port;
+    }
+  }
+  throw new Error(`No available port found in range ${startPort}-${startPort + maxAttempts - 1}`);
+}
+
+/**
  * Start browser authentication flow
  * @param authConfig Authorization configuration with UAA credentials
  * @param browser Browser name (chrome, edge, firefox, system, none)
@@ -109,6 +138,17 @@ export async function startBrowserAuth(
   // Use logger if provided, otherwise null (no logging)
   const log: ILogger | null = logger || null;
   
+  // Find available port (try starting from requested port, then try next ports)
+  let actualPort: number;
+  try {
+    actualPort = await findAvailablePort(port, 10);
+    if (actualPort !== port) {
+      log?.debug(`Port ${port} is in use, using port ${actualPort} instead`);
+    }
+  } catch (error) {
+    throw new Error(`Failed to find available port starting from ${port}: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  
   return new Promise((originalResolve, originalReject) => {
     let timeoutId: NodeJS.Timeout | null = null;
     
@@ -123,7 +163,10 @@ export async function startBrowserAuth(
     };
     const app = express();
     const server = http.createServer(app);
-    const PORT = port;
+    // Disable keep-alive to ensure connections close immediately
+    server.keepAliveTimeout = 0;
+    server.headersTimeout = 0;
+    const PORT = actualPort;
     let serverInstance: http.Server | null = null;
 
     const authorizationUrl = getJwtAuthorizationUrl(authConfig, PORT);
@@ -278,35 +321,78 @@ export async function startBrowserAuth(
 </body>
 </html>`;
 
-        // Send success page first
+        // Send success page first and ensure response is finished
         res.send(html);
+        
+        // Wait for response to finish before closing server
+        res.on('finish', () => {
+          // Response finished, now we can safely close server
+        });
         
         // Exchange code for tokens and close server
         try {
           const tokens = await exchangeCodeForToken(authConfig, code, PORT, log);
           log?.info(`Tokens received: accessToken(${tokens.accessToken?.length || 0} chars), refreshToken(${tokens.refreshToken?.length || 0} chars)`);
-          // Close all connections and server immediately after getting tokens
+          
+          // Close all connections first to ensure port is freed
           if (typeof server.closeAllConnections === 'function') {
             server.closeAllConnections();
           }
-          server.close(() => {
-            // Server closed
-          });
+          
+          // Close server after response is finished
+          // This ensures the response connection is closed before server.close()
+          const closeServer = () => {
+            server.close(() => {
+              // Server closed - port should be freed
+              log?.debug(`Server closed, port ${PORT} should be freed`);
+            });
+          };
+          
+          if (res.finished) {
+            // Response already finished, close immediately
+            closeServer();
+          } else {
+            // Wait for response to finish
+            res.once('finish', closeServer);
+          }
+          
           resolve(tokens);
         } catch (error) {
           if (typeof server.closeAllConnections === 'function') {
             server.closeAllConnections();
           }
-          server.close(() => {
-            // Server closed on error
-          });
+          // Use setTimeout to ensure connections are closed before server.close()
+          setTimeout(() => {
+            server.close(() => {
+              // Server closed on error - port should be freed
+              log?.debug(`Server closed on error, port ${PORT} should be freed`);
+            });
+          }, 100);
           reject(error);
         }
       } catch (error) {
         res.status(500).send('Error processing authentication');
-        server.close(() => {
-          // Server closed on error
-        });
+        if (typeof server.closeAllConnections === 'function') {
+          server.closeAllConnections();
+        }
+        // Use setTimeout to ensure connections are closed before server.close()
+        setTimeout(() => {
+          server.close(() => {
+            // Server closed on error - port should be freed
+            log?.debug(`Server closed on error, port ${PORT} should be freed`);
+          });
+        }, 100);
+        reject(error);
+      }
+    });
+
+    // Handle server errors (e.g., EADDRINUSE)
+    server.on('error', (error: NodeJS.ErrnoException) => {
+      if (error.code === 'EADDRINUSE') {
+        log?.error(`Port ${PORT} is already in use. This should not happen after port check.`);
+        reject(new Error(`Port ${PORT} is already in use. Please try again or specify a different port.`));
+      } else {
+        log?.error(`Server error: ${error.message}`);
         reject(error);
       }
     });
@@ -318,9 +404,16 @@ export async function startBrowserAuth(
         // For 'none' browser, don't wait for callback - throw error immediately
         // User must open browser manually and we can't wait for callback in automated tests
         if (serverInstance) {
-          server.close(() => {
-            // Server closed
-          });
+          if (typeof server.closeAllConnections === 'function') {
+            server.closeAllConnections();
+          }
+          // Use setTimeout to ensure connections are closed before server.close()
+          setTimeout(() => {
+            server.close(() => {
+              // Server closed - port should be freed
+              log?.debug(`Server closed (browser=none), port ${PORT} should be freed`);
+            });
+          }, 100);
         }
         reject(new Error(`Browser authentication required. Please open this URL manually: ${authorizationUrl}`));
         return;
@@ -381,7 +474,17 @@ export async function startBrowserAuth(
             await open(authorizationUrl);
           }
         } catch (error: any) {
-          // If browser cannot be opened, show URL and throw error for consumer to catch
+          // If browser cannot be opened, close server and show URL
+          if (typeof server.closeAllConnections === 'function') {
+            server.closeAllConnections();
+          }
+          // Use setTimeout to ensure connections are closed before server.close()
+          setTimeout(() => {
+            server.close(() => {
+              // Server closed on browser open error - port should be freed
+              log?.debug(`Server closed on browser open error, port ${PORT} should be freed`);
+            });
+          }, 100);
           log?.error(`❌ Failed to open browser: ${error?.message || String(error)}. Please open manually: ${authorizationUrl}`, { error: error?.message || String(error), url: authorizationUrl });
           log?.info(`🔗 Open in browser: ${authorizationUrl}`, { url: authorizationUrl });
           // Throw error so consumer can distinguish this from "service key missing" error
@@ -393,9 +496,16 @@ export async function startBrowserAuth(
     // Timeout after 5 minutes
     timeoutId = setTimeout(() => {
       if (serverInstance) {
-        server.close(() => {
-          // Server closed on timeout
-        });
+        if (typeof server.closeAllConnections === 'function') {
+          server.closeAllConnections();
+        }
+        // Use setTimeout to ensure connections are closed before server.close()
+        setTimeout(() => {
+          server.close(() => {
+            // Server closed on timeout - port should be freed
+            log?.debug(`Server closed on timeout, port ${PORT} should be freed`);
+          });
+        }, 100);
         reject(new Error('Authentication timeout. Process aborted.'));
       }
     }, 5 * 60 * 1000);

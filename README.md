@@ -173,10 +173,12 @@ import { BtpTokenProvider } from '@mcp-abap-adt/auth-providers';
 import type { IAuthorizationConfig } from '@mcp-abap-adt/auth-broker';
 
 // Create provider with default port (3001)
+// The provider will automatically find an available port if 3001 is busy
 const provider = new BtpTokenProvider();
 
-// Or specify custom port for OAuth callback server (useful to avoid port conflicts)
-const providerWithCustomPort = new BtpTokenProvider(4001);
+// Or specify custom port for OAuth callback server
+// If the port is busy, the provider will automatically try the next ports
+const providerWithCustomPort = new BtpTokenProvider(4002);
 
 const authConfig: IAuthorizationConfig = {
   uaaUrl: 'https://...authentication...hana.ondemand.com',
@@ -196,7 +198,7 @@ const result = await provider.getConnectionConfig(authConfig, {
 // result.refreshToken contains refresh token (if browser flow was used)
 ```
 
-**Note**: The `browserAuthPort` parameter (default: 3001) configures the OAuth callback server port. This is useful when running the provider in environments where port 3001 is already in use (e.g., when running alongside a proxy server).
+**Note**: The `browserAuthPort` parameter (default: 3001) configures the OAuth callback server port. The provider automatically finds an available port if the requested port is in use, preventing `EADDRINUSE` errors when multiple instances run simultaneously. The server properly closes all connections and frees the port after authentication completes, ensuring no lingering port occupation. This is useful when running the provider in environments where ports may be occupied (e.g., when running alongside a proxy server or multiple stdio servers).
 
 ### Token Validation
 

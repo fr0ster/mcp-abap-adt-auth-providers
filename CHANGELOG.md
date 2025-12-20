@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.1] - 2025-01-XX
+
+### Added
+- **Automatic Port Selection**: Browser auth server now automatically finds an available port if the requested port is in use
+  - When `startBrowserAuth()` is called with a port, it checks if the port is available
+  - If the port is busy, it automatically tries the next ports (up to 10 attempts)
+  - This prevents `EADDRINUSE` errors when multiple stdio servers run simultaneously
+  - Port selection happens before server startup, ensuring no conflicts
+
+### Fixed
+- **Server Port Cleanup**: Improved server shutdown to ensure ports are properly freed after authentication completes
+  - Added `keepAliveTimeout = 0` and `headersTimeout = 0` to prevent connections from staying open
+  - Added `closeAllConnections()` calls before `server.close()` to ensure all connections are closed
+  - Server now waits for HTTP response to finish before closing to prevent connection leaks
+  - Added proper error handling for browser open failures to ensure server is closed
+  - Server now properly closes in all error scenarios (timeout, browser open failure, callback errors)
+  - This prevents ports from remaining occupied after authentication completes or server shutdown
+
+### Changed
+- **Port Selection Logic**: `startBrowserAuth()` now uses `findAvailablePort()` to automatically select a free port
+  - Default behavior: tries requested port first, then tries next ports if busy
+  - Port range: tries up to 10 consecutive ports starting from the requested port
+  - Logs when a different port is used (for debugging)
+
 ## [0.2.0] - 2025-12-19
 
 ### Added
