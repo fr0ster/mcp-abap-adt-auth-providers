@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.4] - 2025-12-21
+
+### Changed
+- **Local JWT Validation**: Both `BtpTokenProvider.validateToken()` and `XsuaaTokenProvider.validateToken()` now validate JWT locally by checking `exp` claim instead of making HTTP requests
+  - No HTTP calls to SAP server for validation
+  - Prevents unnecessary browser authentication when server is unreachable (ECONNREFUSED, timeout)
+  - 60-second buffer before expiration to account for clock skew
+  - HTTP validation (401/403) is handled by retry mechanism in `makeAdtRequest` wrapper
+  - Consistent validation behavior across all token providers
+
+### Fixed
+- **Browser Auth on Network Error**: Fixed issue where network errors during token validation would trigger browser authentication
+  - Previously, network errors could return `false` → triggered refresh → opened browser
+  - Now, validation is purely local - network issues are handled at request time
+
 ## [0.2.3] - 2025-12-21
 
 ### Added

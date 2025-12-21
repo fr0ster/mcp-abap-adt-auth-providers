@@ -7,7 +7,6 @@
 
 import type { ITokenProvider, ITokenProviderOptions, ITokenProviderResult, IAuthorizationConfig } from '@mcp-abap-adt/interfaces';
 import { ValidationError, RefreshError } from '../errors/TokenProviderErrors';
-import axios from 'axios';
 
 // Import internal function (not exported)
 import { getTokenWithClientCredentials } from '../auth/clientCredentialsAuth';
@@ -146,52 +145,62 @@ export class XsuaaTokenProvider implements ITokenProvider {
     }
   }
 
-  async validateToken(token: string, serviceUrl?: string): Promise<boolean> {
-    // XSUAA tokens are validated by the service itself when making requests
-    // If serviceUrl is provided, we can test the connection
+  /**
+   * Validate JWT token locally by checking exp claim.
+   * Does NOT make HTTP requests - validation is purely local.
+   * 
+   * HTTP validation (401/403) is handled by retry mechanism in makeAdtRequest wrapper.
+   * This approach is consistent with BtpTokenProvider and prevents unnecessary token refresh.
+   * 
+   * @param token JWT token to validate
+   * @param _serviceUrl Service URL (unused - kept for interface compatibility)
+   * @returns true if token is not expired, false otherwise
+   */
+  async validateToken(token: string, _serviceUrl?: string): Promise<boolean> {
     if (!token) {
       return false;
     }
 
-    // If no serviceUrl, we can't validate - assume valid (service will reject if invalid)
-    if (!serviceUrl) {
-      return true;
-    }
-
     try {
-      // Test connection to service endpoint
-      const response = await axios.get(serviceUrl, {
-        headers: {
-          Authorization: `Bearer ${token}`,
-        },
-        timeout: 5000,
-        validateStatus: (status) => {
-          // Any response means service is reachable
-          return status < 500;
-        },
-      });
-
-      // 200-299: token is valid
-      if (response.status >= 200 && response.status < 300) {
-        return true;
-      }
-
-      // 401/403: token is expired or invalid
-      if (response.status === 401 || response.status === 403) {
+      // JWT structure: header.payload.signature
+      const parts = token.split('.');
+      if (parts.length !== 3) {
+        // Not a valid JWT format
         return false;
       }
 
-      // Other status codes: service is reachable, token might be valid
-      return true;
-    } catch (error: any) {
-      // Network errors, timeouts, etc. - can't validate, assume valid
-      // (service will reject if token is actually invalid)
-      if (error.code === 'ECONNREFUSED' || error.code === 'ETIMEDOUT' || error.code === 'ENOTFOUND') {
-        // Connection errors - can't validate, assume valid (service will reject if invalid)
+      // Decode payload (base64url)
+      const payload = parts[1];
+      // Convert base64url to base64
+      const base64 = payload.replace(/-/g, '+').replace(/_/g, '/');
+      // Add padding if needed
+      const padded = base64 + '=='.substring(0, (4 - base64.length % 4) % 4);
+      
+      const decoded = Buffer.from(padded, 'base64').toString('utf8');
+      const claims = JSON.parse(decoded);
+
+      // Check exp claim
+      if (!claims.exp) {
+        // No expiration - assume valid
         return true;
       }
-      // Other errors - assume valid (service will reject if invalid)
+
+      const expirationTime = claims.exp * 1000; // Convert to milliseconds
+      const now = Date.now();
+      
+      // Add 60 second buffer to account for clock skew and network latency
+      const bufferMs = 60 * 1000;
+      
+      if (now >= expirationTime - bufferMs) {
+        // Token is expired or about to expire
+        return false;
+      }
+
+      // Token is valid
       return true;
+    } catch {
+      // Failed to parse JWT - assume invalid
+      return false;
     }
   }
 }

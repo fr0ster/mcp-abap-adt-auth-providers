@@ -41,7 +41,7 @@ This package is responsible for:
 
 1. **Implementing token provider interface**: Provides concrete implementations of `ITokenProvider` interface defined in `@mcp-abap-adt/auth-broker`
 2. **Token acquisition**: Handles OAuth2 flows (browser-based, refresh token, client credentials) to obtain JWT tokens
-3. **Token validation**: Validates tokens by making HTTP requests to service endpoints
+3. **Token validation**: Validates JWT locally by checking exp claim (no HTTP requests)
 4. **OAuth2 flows**: Manages browser-based OAuth2 authorization code flow and refresh token flow
 
 #### What This Package Does
@@ -49,7 +49,7 @@ This package is responsible for:
 - **Implements ITokenProvider**: Provides concrete implementations (`XsuaaTokenProvider`, `BtpTokenProvider`)
 - **Handles OAuth2 flows**: Browser-based OAuth2, refresh token, and client credentials grant types
 - **Obtains tokens**: Makes HTTP requests to UAA endpoints to obtain JWT tokens
-- **Validates tokens**: Tests token validity by making requests to service endpoints
+- **Validates tokens**: Validates JWT locally by checking exp claim (no HTTP requests)
 - **Returns connection config**: Returns `IConnectionConfig` with `authorizationToken` and optionally `serviceUrl` (if known)
 
 #### What This Package Does NOT Do
@@ -226,12 +226,29 @@ In headless mode, the authentication URL is logged and the server waits for the 
 
 ### Token Validation
 
-Both providers support token validation:
+Both providers perform **local JWT validation** by checking the `exp` (expiration) claim:
 
 ```typescript
 const isValid = await provider.validateToken(token, serviceUrl);
-// Returns true if token is valid (200-299 status), false otherwise
 ```
+
+- No HTTP requests are made to the SAP server
+- Returns `true` if token has valid JWT format and `exp` is in the future (with 60s buffer)
+- Returns `false` if token is expired, invalid format, or will expire within 60 seconds
+- Network issues (ECONNREFUSED, timeout) do NOT trigger token refresh
+- HTTP errors (401/403) are handled by retry mechanism in `makeAdtRequest` wrapper
+
+```typescript
+// Both providers - local validation (no HTTP)
+const provider = new BtpTokenProvider(); // or new XsuaaTokenProvider()
+const isValid = await provider.validateToken(token);  // serviceUrl optional
+// Checks JWT exp claim locally, no network request
+```
+
+This approach prevents unnecessary token refresh and browser authentication when:
+- Server is unreachable (ECONNREFUSED, timeout)
+- Network is slow or unstable
+- Running in offline/disconnected mode
 
 ### Token Refresh Methods
 

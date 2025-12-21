@@ -121,77 +121,79 @@ describe('BtpTokenProvider', () => {
   });
 
   describe('validateToken', () => {
+    // Helper to create a JWT token with given exp claim
+    const createJwtWithExp = (expSeconds: number): string => {
+      const header = Buffer.from(JSON.stringify({ alg: 'RS256', typ: 'JWT' })).toString('base64url');
+      const payload = Buffer.from(JSON.stringify({ exp: expSeconds, sub: 'test-user' })).toString('base64url');
+      const signature = 'fake-signature';
+      return `${header}.${payload}.${signature}`;
+    };
+
     it('should return false if token is empty', async () => {
       const result = await provider.validateToken('');
       expect(result).toBe(false);
     });
 
-    it('should return false if serviceUrl is not provided', async () => {
-      const result = await provider.validateToken('test-token');
+    it('should return false if token is not a valid JWT format', async () => {
+      const result = await provider.validateToken('not-a-jwt-token');
       expect(result).toBe(false);
     });
 
-    it('should return true if token is valid (200-299 status)', async () => {
-      mockedAxios.get.mockResolvedValue({
-        status: 200,
-        data: {},
-      });
+    it('should return false if token has only 2 parts', async () => {
+      const result = await provider.validateToken('header.payload');
+      expect(result).toBe(false);
+    });
 
-      const result = await provider.validateToken('test-token', 'https://test.service.com');
+    it('should return true if token is valid (exp in future)', async () => {
+      // Exp 1 hour in future
+      const futureExp = Math.floor(Date.now() / 1000) + 3600;
+      const token = createJwtWithExp(futureExp);
+
+      const result = await provider.validateToken(token, 'https://test.service.com');
       expect(result).toBe(true);
-      expect(mockedAxios.get).toHaveBeenCalledWith('https://test.service.com/sap/bc/adt/discovery', {
-        headers: {
-          Authorization: 'Bearer test-token',
-        },
-        timeout: 5000,
-        validateStatus: expect.any(Function),
-      });
     });
 
-    it('should return false if token is invalid (401 status)', async () => {
-      mockedAxios.get.mockResolvedValue({
-        status: 401,
-        data: {},
-      });
+    it('should return true if serviceUrl is not provided (local validation only)', async () => {
+      const futureExp = Math.floor(Date.now() / 1000) + 3600;
+      const token = createJwtWithExp(futureExp);
 
-      const result = await provider.validateToken('invalid-token', 'https://test.service.com');
+      const result = await provider.validateToken(token);
+      expect(result).toBe(true);
+    });
+
+    it('should return false if token is expired', async () => {
+      // Exp 1 hour in past
+      const pastExp = Math.floor(Date.now() / 1000) - 3600;
+      const token = createJwtWithExp(pastExp);
+
+      const result = await provider.validateToken(token);
       expect(result).toBe(false);
     });
 
-    it('should return false if token is invalid (403 status)', async () => {
-      mockedAxios.get.mockResolvedValue({
-        status: 403,
-        data: {},
-      });
+    it('should return false if token expires within 60 second buffer', async () => {
+      // Exp 30 seconds in future (within 60s buffer)
+      const soonExp = Math.floor(Date.now() / 1000) + 30;
+      const token = createJwtWithExp(soonExp);
 
-      const result = await provider.validateToken('invalid-token', 'https://test.service.com');
+      const result = await provider.validateToken(token);
       expect(result).toBe(false);
     });
 
-    it('should return false on connection errors (ECONNREFUSED)', async () => {
-      mockedAxios.get.mockRejectedValue({
-        code: 'ECONNREFUSED',
-      });
+    it('should return true if token has no exp claim', async () => {
+      const header = Buffer.from(JSON.stringify({ alg: 'RS256', typ: 'JWT' })).toString('base64url');
+      const payload = Buffer.from(JSON.stringify({ sub: 'test-user' })).toString('base64url');
+      const token = `${header}.${payload}.fake-signature`;
 
-      const result = await provider.validateToken('test-token', 'https://test.service.com');
-      expect(result).toBe(false);
+      const result = await provider.validateToken(token);
+      expect(result).toBe(true);
     });
 
-    it('should return false on timeout errors (ETIMEDOUT)', async () => {
-      mockedAxios.get.mockRejectedValue({
-        code: 'ETIMEDOUT',
-      });
+    it('should return false if payload is not valid JSON', async () => {
+      const header = Buffer.from(JSON.stringify({ alg: 'RS256' })).toString('base64url');
+      const invalidPayload = Buffer.from('not-json').toString('base64url');
+      const token = `${header}.${invalidPayload}.signature`;
 
-      const result = await provider.validateToken('test-token', 'https://test.service.com');
-      expect(result).toBe(false);
-    });
-
-    it('should return false on DNS errors (ENOTFOUND)', async () => {
-      mockedAxios.get.mockRejectedValue({
-        code: 'ENOTFOUND',
-      });
-
-      const result = await provider.validateToken('test-token', 'https://test.service.com');
+      const result = await provider.validateToken(token);
       expect(result).toBe(false);
     });
   });
