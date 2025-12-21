@@ -9,12 +9,13 @@ import express from 'express';
 import axios from 'axios';
 import type { IAuthorizationConfig, ILogger } from '@mcp-abap-adt/interfaces';
 
-const BROWSER_MAP: Record<string, string | undefined> = {
+const BROWSER_MAP: Record<string, string | undefined | null> = {
   chrome: 'chrome',
   edge: 'msedge',
   firefox: 'firefox',
   system: undefined, // system default
-  none: null as any, // no browser, manual URL copy
+  headless: null, // no browser, log URL and wait for callback (SSH/remote)
+  none: null, // no browser, reject immediately (automated tests)
 };
 
 /**
@@ -190,6 +191,9 @@ export async function startBrowserAuth(
       process.removeListener('SIGTERM', cleanup);
       process.removeListener('SIGINT', cleanup);
       process.removeListener('SIGHUP', cleanup);
+      if (process.platform === 'win32') {
+        process.removeListener('SIGBREAK', cleanup);
+      }
     };
     
     const resolve = (value: any) => {
@@ -210,6 +214,10 @@ export async function startBrowserAuth(
     process.once('SIGTERM', cleanup);
     process.once('SIGINT', cleanup);
     process.once('SIGHUP', cleanup);
+    // SIGBREAK is Windows-specific (Ctrl+Break)
+    if (process.platform === 'win32') {
+      process.once('SIGBREAK', cleanup);
+    }
 
     const authorizationUrl = getJwtAuthorizationUrl(authConfig, PORT);
 
@@ -441,26 +449,44 @@ export async function startBrowserAuth(
 
     serverInstance = server.listen(PORT, async () => {
       const browserApp = BROWSER_MAP[browser];
-      if (!browser || browser === 'none' || browserApp === null) {
-        log?.info(`🔗 Open in browser: ${authorizationUrl}`, { url: authorizationUrl });
-        // For 'none' browser, don't wait for callback - throw error immediately
-        // User must open browser manually and we can't wait for callback in automated tests
+
+      // Handle 'none' mode - reject immediately (for automated tests)
+      if (browser === 'none') {
+        log?.info(`🔗 Browser authentication URL: ${authorizationUrl}`, { url: authorizationUrl });
         if (serverInstance) {
           if (typeof server.closeAllConnections === 'function') {
             server.closeAllConnections();
           }
-          // Use setTimeout to ensure connections are closed before server.close()
           setTimeout(() => {
             server.close(() => {
-              // Server closed - port should be freed
               log?.debug(`Server closed (browser=none), port ${PORT} should be freed`);
             });
           }, 100);
         }
         reject(new Error(`Browser authentication required. Please open this URL manually: ${authorizationUrl}`));
         return;
-      } else {
+      }
+
+      // Handle 'headless' mode - log URL and wait for callback (for SSH/remote sessions)
+      if (browser === 'headless') {
+        log?.info(`🔗 Headless mode: Open this URL in your browser to authenticate:`);
+        log?.info(`   ${authorizationUrl}`);
+        log?.info(`   Waiting for callback on http://localhost:${PORT}/callback ...`);
+        // Don't open browser, don't reject - just wait for the callback
+        return;
+      }
+
+      // Handle browser opening (system, chrome, edge, firefox)
+      if (browser && browserApp !== null) {
         log?.debug('🌐 Opening browser for authentication...');
+
+        // On Linux, ensure DISPLAY is set for X11 applications
+        // This helps when running from terminals that don't set DISPLAY automatically
+        if (process.platform === 'linux' && !process.env.DISPLAY && !process.env.WAYLAND_DISPLAY) {
+          process.env.DISPLAY = ':0';
+          log?.debug('DISPLAY not set, using fallback DISPLAY=:0');
+        }
+
         try {
           // Try dynamic import first (for ES modules)
           let open: typeof import('open').default;
@@ -474,29 +500,29 @@ export async function startBrowserAuth(
             let command: string;
             
             if (browserApp === 'chrome') {
-              command = platform === 'win32' 
-                ? 'start chrome' 
-                : platform === 'darwin' 
-                  ? 'open -a "Google Chrome"' 
-                  : 'google-chrome';
+              command = platform === 'win32'
+                ? 'cmd /c start "" "chrome"'
+                : platform === 'darwin'
+                  ? 'open -a "Google Chrome"'
+                  : 'google-chrome || google-chrome-stable || chromium || chromium-browser';
             } else if (browserApp === 'edge') {
-              command = platform === 'win32' 
-                ? 'start msedge' 
-                : platform === 'darwin' 
-                  ? 'open -a "Microsoft Edge"' 
-                  : 'microsoft-edge';
+              command = platform === 'win32'
+                ? 'cmd /c start "" "msedge"'
+                : platform === 'darwin'
+                  ? 'open -a "Microsoft Edge"'
+                  : 'microsoft-edge || microsoft-edge-stable';
             } else if (browserApp === 'firefox') {
-              command = platform === 'win32' 
-                ? 'start firefox' 
-                : platform === 'darwin' 
-                  ? 'open -a Firefox' 
-                  : 'firefox';
+              command = platform === 'win32'
+                ? 'cmd /c start "" "firefox"'
+                : platform === 'darwin'
+                  ? 'open -a Firefox'
+                  : 'firefox || firefox-esr';
             } else {
               // System default
-              command = platform === 'win32' 
-                ? 'start' 
-                : platform === 'darwin' 
-                  ? 'open' 
+              command = platform === 'win32'
+                ? 'cmd /c start ""'
+                : platform === 'darwin'
+                  ? 'open'
                   : 'xdg-open';
             }
             

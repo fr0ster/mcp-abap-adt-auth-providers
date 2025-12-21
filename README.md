@@ -191,7 +191,7 @@ const authConfig: IAuthorizationConfig = {
 // Otherwise, opens browser for OAuth2 authorization
 const result = await provider.getConnectionConfig(authConfig, {
   logger: defaultLogger,
-  browser: 'system', // 'system', 'none', or undefined
+  browser: 'system', // 'system', 'headless', 'none', 'chrome', 'edge', 'firefox'
 });
 
 // result.connectionConfig.authorizationToken contains the JWT token
@@ -200,7 +200,29 @@ const result = await provider.getConnectionConfig(authConfig, {
 
 **Note**: The `browserAuthPort` parameter (default: 3001) configures the OAuth callback server port. The provider automatically finds an available port if the requested port is in use, preventing `EADDRINUSE` errors when multiple instances run simultaneously. The server properly closes all connections and frees the port after authentication completes, ensuring no lingering port occupation. 
 
-**Process Termination Handling**: The OAuth callback server registers cleanup handlers for `SIGTERM`, `SIGINT`, `SIGHUP`, and `exit` signals. This ensures ports are properly freed even when MCP clients (like Cline) terminate the process before authentication completes. This is especially important for stdio servers where the client may kill the process at any time.
+**Process Termination Handling**: The OAuth callback server registers cleanup handlers for `SIGTERM`, `SIGINT`, `SIGHUP`, and `exit` signals. This ensures ports are properly freed even when MCP clients (like Cline) terminate the process before authentication completes. This is especially important for stdio servers where the client may kill the process at any time. On Windows, the `SIGBREAK` signal (Ctrl+Break) is also handled.
+
+**Cross-Platform Browser Support**: The browser authentication works across Linux, macOS, and Windows:
+- **Linux**: Automatically sets `DISPLAY=:0` if neither `DISPLAY` nor `WAYLAND_DISPLAY` environment variables are set. Supports multiple browser executable names (`google-chrome`, `google-chrome-stable`, `chromium`, `chromium-browser` for Chrome; `firefox`, `firefox-esr` for Firefox).
+- **Windows**: Uses proper `cmd /c start ""` syntax for reliable browser opening.
+- **macOS**: Uses native `open -a` command.
+
+**Headless Mode (SSH/Remote)**: For environments without a display (SSH sessions, Docker, CI/CD), use `browser: 'headless'`:
+
+```typescript
+const result = await provider.getConnectionConfig(authConfig, {
+  logger: defaultLogger,
+  browser: 'headless', // Logs URL and waits for manual callback
+});
+```
+
+In headless mode, the authentication URL is logged and the server waits for the user to complete authentication manually. The user can open the URL on any machine and the callback will be received by the server.
+
+**Browser Options**:
+- `'system'` (default): Opens system default browser
+- `'headless'`: Logs URL, waits for manual callback (SSH/remote)
+- `'none'`: Logs URL, immediately rejects (automated tests)
+- `'chrome'`, `'edge'`, `'firefox'`: Opens specific browser
 
 ### Token Validation
 

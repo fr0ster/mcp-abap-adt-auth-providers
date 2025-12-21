@@ -7,6 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.3] - 2025-12-21
+
+### Added
+- **Headless Browser Mode**: Added `browser: 'headless'` option for SSH and remote sessions
+  - Logs authentication URL and waits for manual callback
+  - Server keeps running until user completes authentication in their browser
+  - Ideal for environments without display (SSH, Docker, CI/CD)
+  - Differs from `'none'` which immediately rejects (for automated tests)
+- **Cross-Platform Browser Support**: Improved browser opening reliability across all platforms
+  - **Linux**: Added `DISPLAY=:0` fallback when `DISPLAY` and `WAYLAND_DISPLAY` environment variables are not set
+    - Helps when running from terminals that don't set DISPLAY automatically
+    - Logs when fallback is used for debugging
+  - **Linux**: Added alternative browser executable names for better compatibility
+    - Chrome: `google-chrome`, `google-chrome-stable`, `chromium`, `chromium-browser`
+    - Edge: `microsoft-edge`, `microsoft-edge-stable`
+    - Firefox: `firefox`, `firefox-esr`
+  - **Windows**: Added `SIGBREAK` signal handler for cleanup (Ctrl+Break)
+    - Ensures proper port cleanup on Windows-specific termination signals
+
+### Fixed
+- **Windows Browser Opening**: Fixed fallback browser commands for Windows
+  - Changed from `start chrome` to `cmd /c start "" "chrome"` syntax
+  - Fixed system default browser opening with proper empty title parameter
+  - Prevents "command not found" errors when using fallback mechanism
+
+### Changed
+- **Dependency Update**: Updated `@mcp-abap-adt/interfaces` to `^0.2.4` for headless browser mode support
+- **Test Coverage**: Added unit tests for browser modes (`none` and `headless`)
+  - Tests verify `none` mode rejects immediately with URL in error message
+  - Tests verify `headless` mode logs URL and waits for callback
+
 ## [0.2.2] - 2025-12-20
 
 ### Fixed
