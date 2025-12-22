@@ -1,14 +1,18 @@
 /**
  * Integration tests for browserAuth
- * 
+ *
  * Real tests using service keys and actual OAuth flow
  */
 
-import { startBrowserAuth } from '../../auth/browserAuth';
-import { createTestLogger } from '../helpers/testLogger';
-import { loadTestConfig, getAbapDestination, getServiceKeysDir } from '../helpers/configHelpers';
 import { AbapServiceKeyStore } from '@mcp-abap-adt/auth-stores';
 import type { IAuthorizationConfig } from '@mcp-abap-adt/interfaces';
+import { startBrowserAuth } from '../../auth/browserAuth';
+import {
+  getAbapDestination,
+  getServiceKeysDir,
+  loadTestConfig,
+} from '../helpers/configHelpers';
+import { createTestLogger } from '../helpers/testLogger';
 
 describe('browserAuth Integration', () => {
   const config = loadTestConfig();
@@ -23,8 +27,12 @@ describe('browserAuth Integration', () => {
 
     const serviceKeyStore = new AbapServiceKeyStore(serviceKeysDir);
     const serviceKey = await serviceKeyStore.getServiceKey(destination);
-    
-    if (!serviceKey?.uaaUrl || !serviceKey?.uaaClientId || !serviceKey?.uaaClientSecret) {
+
+    if (
+      !serviceKey?.uaaUrl ||
+      !serviceKey?.uaaClientId ||
+      !serviceKey?.uaaClientSecret
+    ) {
       console.warn('⚠️  Skipping integration test - no service key');
       return;
     }
@@ -44,14 +52,16 @@ describe('browserAuth Integration', () => {
       authConfig,
       'system', // Use system default browser
       logger,
-      3101 // Use port from config if available
+      3101, // Use port from config if available
     );
 
     expect(result).toBeDefined();
     expect(result.accessToken).toBeDefined();
     expect(result.accessToken.length).toBeGreaterThan(0);
 
-    logger.info(`Authentication successful: accessToken(${result.accessToken.length} chars), refreshToken(${result.refreshToken?.length || 0} chars)`);
+    logger.info(
+      `Authentication successful: accessToken(${result.accessToken.length} chars), refreshToken(${result.refreshToken?.length || 0} chars)`,
+    );
 
     if (result.refreshToken) {
       expect(result.refreshToken.length).toBeGreaterThan(0);

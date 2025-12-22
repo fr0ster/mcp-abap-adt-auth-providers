@@ -20,9 +20,10 @@ function shouldLog(level: LogLevel): boolean {
 
 export function createTestLogger(prefix: string = 'TEST'): ILogger {
   const level = getLogLevel();
-  const enabled = process.env.DEBUG_AUTH_PROVIDERS === 'true' || 
-                 process.env.DEBUG_BROWSER_AUTH === 'true' ||
-                 process.env.DEBUG === 'true';
+  const enabled =
+    process.env.DEBUG_AUTH_PROVIDERS === 'true' ||
+    process.env.DEBUG_BROWSER_AUTH === 'true' ||
+    process.env.DEBUG === 'true';
 
   return {
     debug: (message: string, meta?: any) => {

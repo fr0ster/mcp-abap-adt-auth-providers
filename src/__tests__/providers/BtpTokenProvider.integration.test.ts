@@ -1,20 +1,23 @@
 /**
  * Integration tests for BtpTokenProvider
- * 
+ *
  * Real tests using YAML configuration and actual service keys
  * Tests browser-based authentication and token acquisition
  */
 
-import { BtpTokenProvider } from '../../providers/BtpTokenProvider';
-import { AbapServiceKeyStore, BtpSessionStore } from '@mcp-abap-adt/auth-stores';
+import {
+  AbapServiceKeyStore,
+  BtpSessionStore,
+} from '@mcp-abap-adt/auth-stores';
 import type { IAuthorizationConfig } from '@mcp-abap-adt/interfaces';
 import { defaultLogger } from '@mcp-abap-adt/logger';
+import { BtpTokenProvider } from '../../providers/BtpTokenProvider';
 import {
-  loadTestConfig,
-  hasRealConfig,
   getAbapDestination,
   getServiceKeysDir,
   getSessionsDir,
+  hasRealConfig,
+  loadTestConfig,
 } from '../helpers/configHelpers';
 
 describe('BtpTokenProvider Integration', () => {
@@ -33,7 +36,9 @@ describe('BtpTokenProvider Integration', () => {
       }
 
       if (!btpDestination || !serviceKeysDir || !sessionsDir) {
-        console.warn('⚠️  Skipping BTP integration test - missing required config');
+        console.warn(
+          '⚠️  Skipping BTP integration test - missing required config',
+        );
         return;
       }
 
@@ -46,7 +51,9 @@ describe('BtpTokenProvider Integration', () => {
       // Load service key
       const serviceKey = await serviceKeyStore.getServiceKey(btpDestination);
       if (!serviceKey) {
-        throw new Error(`Service key not found for destination "${btpDestination}" in directory "${serviceKeysDir}". Please ensure the service key file exists.`);
+        throw new Error(
+          `Service key not found for destination "${btpDestination}" in directory "${serviceKeysDir}". Please ensure the service key file exists.`,
+        );
       }
       expect(serviceKey.uaaUrl).toBeDefined();
       expect(serviceKey.uaaClientId).toBeDefined();
@@ -78,7 +85,9 @@ describe('BtpTokenProvider Integration', () => {
 
       expect(result.connectionConfig).toBeDefined();
       expect(result.connectionConfig.authorizationToken).toBeDefined();
-      expect(result.connectionConfig.authorizationToken!.length).toBeGreaterThan(0);
+      expect(
+        result.connectionConfig.authorizationToken?.length,
+      ).toBeGreaterThan(0);
 
       // Save session using IConfig format
       // BTP doesn't have sapUrl, so don't pass serviceUrl
@@ -95,7 +104,7 @@ describe('BtpTokenProvider Integration', () => {
       expect(savedSession).toBeDefined();
       expect(savedSession?.uaaUrl).toBe(authConfig.uaaUrl);
       expect(savedSession?.authorizationToken).toBe(
-        result.connectionConfig.authorizationToken
+        result.connectionConfig.authorizationToken,
       );
     }, 300000); // 5 minute timeout for browser auth if needed
 
@@ -106,7 +115,9 @@ describe('BtpTokenProvider Integration', () => {
       }
 
       if (!btpDestination || !serviceKeysDir) {
-        console.warn('⚠️  Skipping BTP token validation test - missing required config');
+        console.warn(
+          '⚠️  Skipping BTP token validation test - missing required config',
+        );
         return;
       }
 
@@ -117,8 +128,15 @@ describe('BtpTokenProvider Integration', () => {
 
       // Load service key
       const serviceKey = await serviceKeyStore.getServiceKey(btpDestination);
-      if (!serviceKey || !serviceKey.uaaUrl || !serviceKey.uaaClientId || !serviceKey.uaaClientSecret) {
-        throw new Error(`Service key not found or incomplete for destination "${btpDestination}" in directory "${serviceKeysDir}". Please ensure the service key file exists and contains valid UAA credentials.`);
+      if (
+        !serviceKey ||
+        !serviceKey.uaaUrl ||
+        !serviceKey.uaaClientId ||
+        !serviceKey.uaaClientSecret
+      ) {
+        throw new Error(
+          `Service key not found or incomplete for destination "${btpDestination}" in directory "${serviceKeysDir}". Please ensure the service key file exists and contains valid UAA credentials.`,
+        );
       }
 
       const authConfig: IAuthorizationConfig = {
@@ -145,11 +163,10 @@ describe('BtpTokenProvider Integration', () => {
       expect(token).toBeDefined();
 
       // Validate token (BTP may not have serviceUrl, skip validation if not available)
-      const isValid = serviceKey.serviceUrl 
+      const isValid = serviceKey.serviceUrl
         ? await tokenProvider.validateToken(token!, serviceKey.serviceUrl)
         : true; // Skip validation if no serviceUrl (base BTP)
       expect(isValid).toBe(true);
     }, 300000);
   });
 });
-

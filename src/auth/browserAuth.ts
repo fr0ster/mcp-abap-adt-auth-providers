@@ -2,12 +2,12 @@
  * Browser authentication - OAuth2 flow for obtaining tokens
  */
 
-import * as http from 'http';
-import * as net from 'net';
-import * as child_process from 'child_process';
-import express from 'express';
-import axios from 'axios';
+import * as child_process from 'node:child_process';
+import * as http from 'node:http';
+import * as net from 'node:net';
 import type { IAuthorizationConfig, ILogger } from '@mcp-abap-adt/interfaces';
+import axios from 'axios';
+import express from 'express';
 
 const BROWSER_MAP: Record<string, string | undefined | null> = {
   chrome: 'chrome',
@@ -21,15 +21,18 @@ const BROWSER_MAP: Record<string, string | undefined | null> = {
 /**
  * Get OAuth2 authorization URL
  */
-function getJwtAuthorizationUrl(authConfig: IAuthorizationConfig, port: number = 3001): string {
+function getJwtAuthorizationUrl(
+  authConfig: IAuthorizationConfig,
+  port: number = 3001,
+): string {
   const oauthUrl = authConfig.uaaUrl;
   const clientid = authConfig.uaaClientId;
   const redirectUri = `http://localhost:${port}/callback`;
-  
+
   if (!oauthUrl || !clientid) {
     throw new Error('Authorization config missing UAA URL or client ID');
   }
-  
+
   return `${oauthUrl}/oauth/authorize?client_id=${encodeURIComponent(clientid)}&redirect_uri=${encodeURIComponent(redirectUri)}&response_type=code`;
 }
 
@@ -38,12 +41,16 @@ function getJwtAuthorizationUrl(authConfig: IAuthorizationConfig, port: number =
  * @internal - Exported for testing
  */
 export async function exchangeCodeForToken(
-  authConfig: IAuthorizationConfig, 
-  code: string, 
+  authConfig: IAuthorizationConfig,
+  code: string,
   port: number = 3001,
-  log?: ILogger | null
+  log?: ILogger | null,
 ): Promise<{ accessToken: string; refreshToken?: string }> {
-  const { uaaUrl: url, uaaClientId: clientid, uaaClientSecret: clientsecret } = authConfig;
+  const {
+    uaaUrl: url,
+    uaaClientId: clientid,
+    uaaClientSecret: clientsecret,
+  } = authConfig;
   const tokenUrl = `${url}/oauth/token`;
   const redirectUri = `http://localhost:${port}/callback`;
 
@@ -52,10 +59,12 @@ export async function exchangeCodeForToken(
   params.append('code', code);
   params.append('redirect_uri', redirectUri);
 
-  const authString = Buffer.from(`${clientid}:${clientsecret}`).toString('base64');
-  
+  const authString = Buffer.from(`${clientid}:${clientsecret}`).toString(
+    'base64',
+  );
+
   log?.info(`Exchanging code for token: ${tokenUrl}`);
-  
+
   const response = await axios({
     method: 'post',
     url: tokenUrl,
@@ -66,18 +75,22 @@ export async function exchangeCodeForToken(
     data: params.toString(),
   });
 
-  if (response.data && response.data.access_token) {
+  if (response.data?.access_token) {
     const accessToken = response.data.access_token;
     const refreshToken = response.data.refresh_token;
-    
-    log?.info(`Tokens received: accessToken(${accessToken.length} chars), refreshToken(${refreshToken?.length || 0} chars)`);
-    
+
+    log?.info(
+      `Tokens received: accessToken(${accessToken.length} chars), refreshToken(${refreshToken?.length || 0} chars)`,
+    );
+
     return {
       accessToken,
       refreshToken,
     };
   } else {
-    log?.error(`Token exchange failed: status ${response.status}, error: ${response.data?.error || 'unknown'}`);
+    log?.error(
+      `Token exchange failed: status ${response.status}, error: ${response.data?.error || 'unknown'}`,
+    );
     throw new Error('Response does not contain access_token');
   }
 }
@@ -85,12 +98,14 @@ export async function exchangeCodeForToken(
 /**
  * Check if debug logging is enabled for auth providers
  */
-function isDebugEnabled(): boolean {
-  return process.env.DEBUG_AUTH_PROVIDERS === 'true' || 
-         process.env.DEBUG_BROWSER_AUTH === 'true' ||
-         process.env.DEBUG === 'true' ||
-         process.env.DEBUG?.includes('auth-providers') === true ||
-         process.env.DEBUG?.includes('browser-auth') === true;
+function _isDebugEnabled(): boolean {
+  return (
+    process.env.DEBUG_AUTH_PROVIDERS === 'true' ||
+    process.env.DEBUG_BROWSER_AUTH === 'true' ||
+    process.env.DEBUG === 'true' ||
+    process.env.DEBUG?.includes('auth-providers') === true ||
+    process.env.DEBUG?.includes('browser-auth') === true
+  );
 }
 
 /**
@@ -111,14 +126,19 @@ function isPortAvailable(port: number): Promise<boolean> {
  * Find an available port starting from the given port
  * Tries ports in range [startPort, startPort + maxAttempts)
  */
-async function findAvailablePort(startPort: number, maxAttempts: number = 10): Promise<number> {
+async function findAvailablePort(
+  startPort: number,
+  maxAttempts: number = 10,
+): Promise<number> {
   for (let i = 0; i < maxAttempts; i++) {
     const port = startPort + i;
     if (await isPortAvailable(port)) {
       return port;
     }
   }
-  throw new Error(`No available port found in range ${startPort}-${startPort + maxAttempts - 1}`);
+  throw new Error(
+    `No available port found in range ${startPort}-${startPort + maxAttempts - 1}`,
+  );
 }
 
 /**
@@ -134,11 +154,11 @@ export async function startBrowserAuth(
   authConfig: IAuthorizationConfig,
   browser: string = 'system',
   logger?: ILogger,
-  port: number = 3001
+  port: number = 3001,
 ): Promise<{ accessToken: string; refreshToken?: string }> {
   // Use logger if provided, otherwise null (no logging)
   const log: ILogger | null = logger || null;
-  
+
   // Find available port (try starting from requested port, then try next ports)
   let actualPort: number;
   try {
@@ -147,13 +167,15 @@ export async function startBrowserAuth(
       log?.debug(`Port ${port} is in use, using port ${actualPort} instead`);
     }
   } catch (error) {
-    throw new Error(`Failed to find available port starting from ${port}: ${error instanceof Error ? error.message : String(error)}`);
+    throw new Error(
+      `Failed to find available port starting from ${port}: ${error instanceof Error ? error.message : String(error)}`,
+    );
   }
-  
+
   return new Promise((originalResolve, originalReject) => {
     let timeoutId: NodeJS.Timeout | null = null;
     let cleanupDone = false;
-    
+
     const app = express();
     const server = http.createServer(app);
     // Disable keep-alive to ensure connections close immediately
@@ -177,9 +199,11 @@ export async function startBrowserAuth(
             server.closeAllConnections();
           }
           server.close(() => {
-            log?.debug(`OAuth server closed during cleanup, port ${PORT} freed`);
+            log?.debug(
+              `OAuth server closed during cleanup, port ${PORT} freed`,
+            );
           });
-        } catch (e) {
+        } catch (_e) {
           // Ignore errors during cleanup
         }
       }
@@ -195,14 +219,14 @@ export async function startBrowserAuth(
         process.removeListener('SIGBREAK', cleanup);
       }
     };
-    
-    const resolve = (value: any) => {
+
+    const resolve = (value: { accessToken: string; refreshToken?: string }) => {
       if (timeoutId) clearTimeout(timeoutId);
       removeCleanupListeners();
       originalResolve(value);
     };
-    
-    const reject = (reason: any) => {
+
+    const reject = (reason: unknown) => {
       if (timeoutId) clearTimeout(timeoutId);
       removeCleanupListeners();
       originalReject(reason);
@@ -222,19 +246,23 @@ export async function startBrowserAuth(
     const authorizationUrl = getJwtAuthorizationUrl(authConfig, PORT);
 
     // OAuth2 callback handler
-    app.get('/callback', async (req: express.Request, res: express.Response) => {
-      try {
-        log?.info(`Callback received: ${req.url}`);
-        log?.debug(`Callback query: ${JSON.stringify(req.query)}`);
-        
-        // Check for OAuth2 error parameters
-        const { error, error_description, error_uri } = req.query;
-        if (error) {
-          log?.error(`Callback error: ${error}${error_description ? ` - ${error_description}` : ''}`);
-          const errorMsg = error_description 
-            ? `${error}: ${error_description}`
-            : String(error);
-          const errorHtml = `<!DOCTYPE html>
+    app.get(
+      '/callback',
+      async (req: express.Request, res: express.Response) => {
+        try {
+          log?.info(`Callback received: ${req.url}`);
+          log?.debug(`Callback query: ${JSON.stringify(req.query)}`);
+
+          // Check for OAuth2 error parameters
+          const { error, error_description, error_uri } = req.query;
+          if (error) {
+            log?.error(
+              `Callback error: ${error}${error_description ? ` - ${error_description}` : ''}`,
+            );
+            const errorMsg = error_description
+              ? `${error}: ${error_description}`
+              : String(error);
+            const errorHtml = `<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
@@ -291,29 +319,33 @@ export async function startBrowserAuth(
     </div>
 </body>
 </html>`;
-          res.status(400).send(errorHtml);
-          if (typeof server.closeAllConnections === 'function') {
-            server.closeAllConnections();
+            res.status(400).send(errorHtml);
+            if (typeof server.closeAllConnections === 'function') {
+              server.closeAllConnections();
+            }
+            server.close(() => {
+              // Server closed on error
+            });
+            return reject(
+              new Error(
+                `OAuth2 authentication failed: ${errorMsg}${error_uri ? ` (${error_uri})` : ''}`,
+              ),
+            );
           }
-          server.close(() => {
-            // Server closed on error
-          });
-          return reject(new Error(`OAuth2 authentication failed: ${errorMsg}${error_uri ? ` (${error_uri})` : ''}`));
-        }
 
-        const { code } = req.query;
-        log?.debug(`Callback code received: ${code ? 'yes' : 'no'}`);
-        
-        if (!code || typeof code !== 'string') {
-          log?.error(`Callback code missing`);
-          res.status(400).send('Error: Authorization code missing');
-          return reject(new Error('Authorization code missing'));
-        }
+          const { code } = req.query;
+          log?.debug(`Callback code received: ${code ? 'yes' : 'no'}`);
 
-        log?.debug(`Exchanging code for token`);
-        
-        // Send success page
-        const html = `<!DOCTYPE html>
+          if (!code || typeof code !== 'string') {
+            log?.error(`Callback code missing`);
+            res.status(400).send('Error: Authorization code missing');
+            return reject(new Error('Authorization code missing'));
+          }
+
+          log?.debug(`Exchanging code for token`);
+
+          // Send success page
+          const html = `<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
@@ -371,43 +403,66 @@ export async function startBrowserAuth(
 </body>
 </html>`;
 
-        // Send success page first and ensure response is finished
-        res.send(html);
-        
-        // Wait for response to finish before closing server
-        res.on('finish', () => {
-          // Response finished, now we can safely close server
-        });
-        
-        // Exchange code for tokens and close server
-        try {
-          const tokens = await exchangeCodeForToken(authConfig, code, PORT, log);
-          log?.info(`Tokens received: accessToken(${tokens.accessToken?.length || 0} chars), refreshToken(${tokens.refreshToken?.length || 0} chars)`);
-          
-          // Close all connections first to ensure port is freed
-          if (typeof server.closeAllConnections === 'function') {
-            server.closeAllConnections();
+          // Send success page first and ensure response is finished
+          res.send(html);
+
+          // Wait for response to finish before closing server
+          res.on('finish', () => {
+            // Response finished, now we can safely close server
+          });
+
+          // Exchange code for tokens and close server
+          try {
+            const tokens = await exchangeCodeForToken(
+              authConfig,
+              code,
+              PORT,
+              log,
+            );
+            log?.info(
+              `Tokens received: accessToken(${tokens.accessToken?.length || 0} chars), refreshToken(${tokens.refreshToken?.length || 0} chars)`,
+            );
+
+            // Close all connections first to ensure port is freed
+            if (typeof server.closeAllConnections === 'function') {
+              server.closeAllConnections();
+            }
+
+            // Close server after response is finished
+            // This ensures the response connection is closed before server.close()
+            const closeServer = () => {
+              server.close(() => {
+                // Server closed - port should be freed
+                log?.debug(`Server closed, port ${PORT} should be freed`);
+              });
+            };
+
+            if (res.finished) {
+              // Response already finished, close immediately
+              closeServer();
+            } else {
+              // Wait for response to finish
+              res.once('finish', closeServer);
+            }
+
+            resolve(tokens);
+          } catch (error) {
+            if (typeof server.closeAllConnections === 'function') {
+              server.closeAllConnections();
+            }
+            // Use setTimeout to ensure connections are closed before server.close()
+            setTimeout(() => {
+              server.close(() => {
+                // Server closed on error - port should be freed
+                log?.debug(
+                  `Server closed on error, port ${PORT} should be freed`,
+                );
+              });
+            }, 100);
+            reject(error);
           }
-          
-          // Close server after response is finished
-          // This ensures the response connection is closed before server.close()
-          const closeServer = () => {
-            server.close(() => {
-              // Server closed - port should be freed
-              log?.debug(`Server closed, port ${PORT} should be freed`);
-            });
-          };
-          
-          if (res.finished) {
-            // Response already finished, close immediately
-            closeServer();
-          } else {
-            // Wait for response to finish
-            res.once('finish', closeServer);
-          }
-          
-          resolve(tokens);
         } catch (error) {
+          res.status(500).send('Error processing authentication');
           if (typeof server.closeAllConnections === 'function') {
             server.closeAllConnections();
           }
@@ -415,32 +470,27 @@ export async function startBrowserAuth(
           setTimeout(() => {
             server.close(() => {
               // Server closed on error - port should be freed
-              log?.debug(`Server closed on error, port ${PORT} should be freed`);
+              log?.debug(
+                `Server closed on error, port ${PORT} should be freed`,
+              );
             });
           }, 100);
           reject(error);
         }
-      } catch (error) {
-        res.status(500).send('Error processing authentication');
-        if (typeof server.closeAllConnections === 'function') {
-          server.closeAllConnections();
-        }
-        // Use setTimeout to ensure connections are closed before server.close()
-        setTimeout(() => {
-          server.close(() => {
-            // Server closed on error - port should be freed
-            log?.debug(`Server closed on error, port ${PORT} should be freed`);
-          });
-        }, 100);
-        reject(error);
-      }
-    });
+      },
+    );
 
     // Handle server errors (e.g., EADDRINUSE)
     server.on('error', (error: NodeJS.ErrnoException) => {
       if (error.code === 'EADDRINUSE') {
-        log?.error(`Port ${PORT} is already in use. This should not happen after port check.`);
-        reject(new Error(`Port ${PORT} is already in use. Please try again or specify a different port.`));
+        log?.error(
+          `Port ${PORT} is already in use. This should not happen after port check.`,
+        );
+        reject(
+          new Error(
+            `Port ${PORT} is already in use. Please try again or specify a different port.`,
+          ),
+        );
       } else {
         log?.error(`Server error: ${error.message}`);
         reject(error);
@@ -452,26 +502,38 @@ export async function startBrowserAuth(
 
       // Handle 'none' mode - reject immediately (for automated tests)
       if (browser === 'none') {
-        log?.info(`🔗 Browser authentication URL: ${authorizationUrl}`, { url: authorizationUrl });
+        log?.info(`🔗 Browser authentication URL: ${authorizationUrl}`, {
+          url: authorizationUrl,
+        });
         if (serverInstance) {
           if (typeof server.closeAllConnections === 'function') {
             server.closeAllConnections();
           }
           setTimeout(() => {
             server.close(() => {
-              log?.debug(`Server closed (browser=none), port ${PORT} should be freed`);
+              log?.debug(
+                `Server closed (browser=none), port ${PORT} should be freed`,
+              );
             });
           }, 100);
         }
-        reject(new Error(`Browser authentication required. Please open this URL manually: ${authorizationUrl}`));
+        reject(
+          new Error(
+            `Browser authentication required. Please open this URL manually: ${authorizationUrl}`,
+          ),
+        );
         return;
       }
 
       // Handle 'headless' mode - log URL and wait for callback (for SSH/remote sessions)
       if (browser === 'headless') {
-        log?.info(`🔗 Headless mode: Open this URL in your browser to authenticate:`);
+        log?.info(
+          `🔗 Headless mode: Open this URL in your browser to authenticate:`,
+        );
         log?.info(`   ${authorizationUrl}`);
-        log?.info(`   Waiting for callback on http://localhost:${PORT}/callback ...`);
+        log?.info(
+          `   Waiting for callback on http://localhost:${PORT}/callback ...`,
+        );
         // Don't open browser, don't reject - just wait for the callback
         return;
       }
@@ -482,7 +544,11 @@ export async function startBrowserAuth(
 
         // On Linux, ensure DISPLAY is set for X11 applications
         // This helps when running from terminals that don't set DISPLAY automatically
-        if (process.platform === 'linux' && !process.env.DISPLAY && !process.env.WAYLAND_DISPLAY) {
+        if (
+          process.platform === 'linux' &&
+          !process.env.DISPLAY &&
+          !process.env.WAYLAND_DISPLAY
+        ) {
           process.env.DISPLAY = ':0';
           log?.debug('DISPLAY not set, using fallback DISPLAY=:0');
         }
@@ -493,55 +559,62 @@ export async function startBrowserAuth(
           try {
             const openModule = await import('open');
             open = openModule.default;
-          } catch (importError: any) {
+          } catch (_importError: unknown) {
             // Fallback: use child_process to open browser if import fails
             // This works in both CommonJS and ES module environments (like Jest)
             const platform = process.platform;
             let command: string;
-            
+
             if (browserApp === 'chrome') {
-              command = platform === 'win32'
-                ? 'cmd /c start "" "chrome"'
-                : platform === 'darwin'
-                  ? 'open -a "Google Chrome"'
-                  : 'google-chrome || google-chrome-stable || chromium || chromium-browser';
+              command =
+                platform === 'win32'
+                  ? 'cmd /c start "" "chrome"'
+                  : platform === 'darwin'
+                    ? 'open -a "Google Chrome"'
+                    : 'google-chrome || google-chrome-stable || chromium || chromium-browser';
             } else if (browserApp === 'edge') {
-              command = platform === 'win32'
-                ? 'cmd /c start "" "msedge"'
-                : platform === 'darwin'
-                  ? 'open -a "Microsoft Edge"'
-                  : 'microsoft-edge || microsoft-edge-stable';
+              command =
+                platform === 'win32'
+                  ? 'cmd /c start "" "msedge"'
+                  : platform === 'darwin'
+                    ? 'open -a "Microsoft Edge"'
+                    : 'microsoft-edge || microsoft-edge-stable';
             } else if (browserApp === 'firefox') {
-              command = platform === 'win32'
-                ? 'cmd /c start "" "firefox"'
-                : platform === 'darwin'
-                  ? 'open -a Firefox'
-                  : 'firefox || firefox-esr';
+              command =
+                platform === 'win32'
+                  ? 'cmd /c start "" "firefox"'
+                  : platform === 'darwin'
+                    ? 'open -a Firefox'
+                    : 'firefox || firefox-esr';
             } else {
               // System default
-              command = platform === 'win32'
-                ? 'cmd /c start ""'
-                : platform === 'darwin'
-                  ? 'open'
-                  : 'xdg-open';
+              command =
+                platform === 'win32'
+                  ? 'cmd /c start ""'
+                  : platform === 'darwin'
+                    ? 'open'
+                    : 'xdg-open';
             }
-            
+
             // Use child_process as fallback (non-blocking)
             child_process.exec(`${command} "${authorizationUrl}"`, (error) => {
               if (error) {
-                log?.error(`❌ Failed to open browser: ${error.message}. Please open manually: ${authorizationUrl}`, { error: error.message, url: authorizationUrl });
+                log?.error(
+                  `❌ Failed to open browser: ${error.message}. Please open manually: ${authorizationUrl}`,
+                  { error: error.message, url: authorizationUrl },
+                );
               }
             });
             return; // Exit early since we're using child_process (non-blocking)
           }
-          
+
           // Use open module if import succeeded
-          if (browserApp) { 
+          if (browserApp) {
             await open(authorizationUrl, { app: { name: browserApp } });
           } else {
             await open(authorizationUrl);
           }
-        } catch (error: any) {
+        } catch (error: unknown) {
           // If browser cannot be opened, close server and show URL
           if (typeof server.closeAllConnections === 'function') {
             server.closeAllConnections();
@@ -550,33 +623,50 @@ export async function startBrowserAuth(
           setTimeout(() => {
             server.close(() => {
               // Server closed on browser open error - port should be freed
-              log?.debug(`Server closed on browser open error, port ${PORT} should be freed`);
+              log?.debug(
+                `Server closed on browser open error, port ${PORT} should be freed`,
+              );
             });
           }, 100);
-          log?.error(`❌ Failed to open browser: ${error?.message || String(error)}. Please open manually: ${authorizationUrl}`, { error: error?.message || String(error), url: authorizationUrl });
-          log?.info(`🔗 Open in browser: ${authorizationUrl}`, { url: authorizationUrl });
+          const errorMessage =
+            error instanceof Error ? error.message : String(error);
+          log?.error(
+            `❌ Failed to open browser: ${errorMessage}. Please open manually: ${authorizationUrl}`,
+            { error: errorMessage, url: authorizationUrl },
+          );
+          log?.info(`🔗 Open in browser: ${authorizationUrl}`, {
+            url: authorizationUrl,
+          });
           // Throw error so consumer can distinguish this from "service key missing" error
-          reject(new Error(`Browser opening failed for destination authentication. Please open manually: ${authorizationUrl}`));
+          reject(
+            new Error(
+              `Browser opening failed for destination authentication. Please open manually: ${authorizationUrl}`,
+            ),
+          );
         }
       }
     });
 
     // Timeout after 5 minutes
-    timeoutId = setTimeout(() => {
-      if (serverInstance) {
-        if (typeof server.closeAllConnections === 'function') {
-          server.closeAllConnections();
+    timeoutId = setTimeout(
+      () => {
+        if (serverInstance) {
+          if (typeof server.closeAllConnections === 'function') {
+            server.closeAllConnections();
+          }
+          // Use setTimeout to ensure connections are closed before server.close()
+          setTimeout(() => {
+            server.close(() => {
+              // Server closed on timeout - port should be freed
+              log?.debug(
+                `Server closed on timeout, port ${PORT} should be freed`,
+              );
+            });
+          }, 100);
+          reject(new Error('Authentication timeout. Process aborted.'));
         }
-        // Use setTimeout to ensure connections are closed before server.close()
-        setTimeout(() => {
-          server.close(() => {
-            // Server closed on timeout - port should be freed
-            log?.debug(`Server closed on timeout, port ${PORT} should be freed`);
-          });
-        }, 100);
-        reject(new Error('Authentication timeout. Process aborted.'));
-      }
-    }, 5 * 60 * 1000);
+      },
+      5 * 60 * 1000,
+    );
   });
 }
-

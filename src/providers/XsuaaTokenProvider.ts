@@ -1,19 +1,23 @@
 /**
  * XSUAA Token Provider
- * 
+ *
  * Uses client_credentials grant type to obtain tokens (no browser required).
  * For XSUAA service keys with reduced scope access.
  */
 
-import type { ITokenProvider, ITokenProviderOptions, ITokenProviderResult, IAuthorizationConfig } from '@mcp-abap-adt/interfaces';
-import { ValidationError, RefreshError } from '../errors/TokenProviderErrors';
-
+import type {
+  IAuthorizationConfig,
+  ITokenProvider,
+  ITokenProviderOptions,
+  ITokenProviderResult,
+} from '@mcp-abap-adt/interfaces';
 // Import internal function (not exported)
 import { getTokenWithClientCredentials } from '../auth/clientCredentialsAuth';
+import { RefreshError, ValidationError } from '../errors/TokenProviderErrors';
 
 /**
  * XSUAA token provider implementation
- * 
+ *
  * Uses client_credentials grant type - no browser, no refresh token needed.
  */
 export class XsuaaTokenProvider implements ITokenProvider {
@@ -23,17 +27,17 @@ export class XsuaaTokenProvider implements ITokenProvider {
   private async getTokenWithClientCredentials(
     uaaUrl: string,
     clientId: string,
-    clientSecret: string
+    clientSecret: string,
   ): Promise<{ accessToken: string; expiresIn?: number }> {
     return getTokenWithClientCredentials(uaaUrl, clientId, clientSecret);
   }
 
   async getConnectionConfig(
     authConfig: IAuthorizationConfig,
-    options?: ITokenProviderOptions
+    options?: ITokenProviderOptions,
   ): Promise<ITokenProviderResult> {
     const logger = options?.logger;
-    
+
     if (logger) {
       logger.debug('Using client_credentials grant type for XSUAA...');
     }
@@ -42,7 +46,7 @@ export class XsuaaTokenProvider implements ITokenProvider {
     const result = await this.getTokenWithClientCredentials(
       authConfig.uaaUrl,
       authConfig.uaaClientId,
-      authConfig.uaaClientSecret
+      authConfig.uaaClientSecret,
     );
 
     // XSUAA doesn't provide serviceUrl in authorization config
@@ -58,25 +62,27 @@ export class XsuaaTokenProvider implements ITokenProvider {
 
   async refreshTokenFromSession(
     authConfig: IAuthorizationConfig,
-    options?: ITokenProviderOptions
+    options?: ITokenProviderOptions,
   ): Promise<ITokenProviderResult> {
     const logger = options?.logger;
-    
+
     // Validate authConfig
     const missingFields: string[] = [];
     if (!authConfig.uaaUrl) missingFields.push('uaaUrl');
     if (!authConfig.uaaClientId) missingFields.push('uaaClientId');
     if (!authConfig.uaaClientSecret) missingFields.push('uaaClientSecret');
-    
+
     if (missingFields.length > 0) {
       throw new ValidationError(
         `XSUAA refreshTokenFromSession: authConfig missing required fields: ${missingFields.join(', ')}`,
-        missingFields
+        missingFields,
       );
     }
-    
+
     if (logger) {
-      logger.debug('XSUAA: Refreshing token from session using client_credentials...');
+      logger.debug(
+        'XSUAA: Refreshing token from session using client_credentials...',
+      );
     }
 
     // XSUAA refresh from session uses client_credentials (clientId/clientSecret)
@@ -84,7 +90,7 @@ export class XsuaaTokenProvider implements ITokenProvider {
       const result = await this.getTokenWithClientCredentials(
         authConfig.uaaUrl,
         authConfig.uaaClientId,
-        authConfig.uaaClientSecret
+        authConfig.uaaClientSecret,
       );
 
       return {
@@ -93,18 +99,19 @@ export class XsuaaTokenProvider implements ITokenProvider {
         },
         // XSUAA client_credentials doesn't provide refresh token
       };
-    } catch (error: any) {
+    } catch (error: unknown) {
+      const errorMessage =
+        error instanceof Error ? error.message : String(error);
       throw new RefreshError(
-        `XSUAA refreshTokenFromSession failed: ${error.message}`,
-        error
+        `XSUAA refreshTokenFromSession failed: ${errorMessage}`,
+        error instanceof Error ? error : undefined,
       );
     }
-
   }
 
   async refreshTokenFromServiceKey(
     authConfig: IAuthorizationConfig,
-    options?: ITokenProviderOptions
+    options?: ITokenProviderOptions,
   ): Promise<ITokenProviderResult> {
     const logger = options?.logger;
     const browser = options?.browser || 'system';
@@ -114,16 +121,18 @@ export class XsuaaTokenProvider implements ITokenProvider {
     if (!authConfig.uaaUrl) missingFields.push('uaaUrl');
     if (!authConfig.uaaClientId) missingFields.push('uaaClientId');
     if (!authConfig.uaaClientSecret) missingFields.push('uaaClientSecret');
-    
+
     if (missingFields.length > 0) {
       throw new ValidationError(
         `XSUAA refreshTokenFromServiceKey: authConfig missing required fields: ${missingFields.join(', ')}`,
-        missingFields
+        missingFields,
       );
     }
 
     if (logger) {
-      logger.debug('XSUAA: Refreshing token from service key using browser authentication...');
+      logger.debug(
+        'XSUAA: Refreshing token from service key using browser authentication...',
+      );
     }
 
     // XSUAA refresh from service key uses browser authentication
@@ -137,10 +146,12 @@ export class XsuaaTokenProvider implements ITokenProvider {
         },
         refreshToken: result.refreshToken,
       };
-    } catch (error: any) {
+    } catch (error: unknown) {
+      const errorMessage =
+        error instanceof Error ? error.message : String(error);
       throw new RefreshError(
-        `XSUAA refreshTokenFromServiceKey failed: ${error.message}`,
-        error
+        `XSUAA refreshTokenFromServiceKey failed: ${errorMessage}`,
+        error instanceof Error ? error : undefined,
       );
     }
   }
@@ -148,10 +159,10 @@ export class XsuaaTokenProvider implements ITokenProvider {
   /**
    * Validate JWT token locally by checking exp claim.
    * Does NOT make HTTP requests - validation is purely local.
-   * 
+   *
    * HTTP validation (401/403) is handled by retry mechanism in makeAdtRequest wrapper.
    * This approach is consistent with BtpTokenProvider and prevents unnecessary token refresh.
-   * 
+   *
    * @param token JWT token to validate
    * @param _serviceUrl Service URL (unused - kept for interface compatibility)
    * @returns true if token is not expired, false otherwise
@@ -174,8 +185,8 @@ export class XsuaaTokenProvider implements ITokenProvider {
       // Convert base64url to base64
       const base64 = payload.replace(/-/g, '+').replace(/_/g, '/');
       // Add padding if needed
-      const padded = base64 + '=='.substring(0, (4 - base64.length % 4) % 4);
-      
+      const padded = base64 + '=='.substring(0, (4 - (base64.length % 4)) % 4);
+
       const decoded = Buffer.from(padded, 'base64').toString('utf8');
       const claims = JSON.parse(decoded);
 
@@ -187,10 +198,10 @@ export class XsuaaTokenProvider implements ITokenProvider {
 
       const expirationTime = claims.exp * 1000; // Convert to milliseconds
       const now = Date.now();
-      
+
       // Add 60 second buffer to account for clock skew and network latency
       const bufferMs = 60 * 1000;
-      
+
       if (now >= expirationTime - bufferMs) {
         // Token is expired or about to expire
         return false;

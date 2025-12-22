@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.5] - 2025-12-22
+
+### Changed
+- **Migrated to Biome**: Replaced ESLint/Prettier with Biome for linting and formatting
+  - Added `@biomejs/biome` as dev dependency (^2.3.10)
+  - Added `biome.json` configuration file with recommended rules
+  - Added npm scripts: `lint`, `lint:check`, `format`
+  - Updated `build` script to include Biome check before TypeScript compilation
+  - All code now follows Biome formatting and linting rules
+
+### Fixed
+- **Type Safety Improvements**: Replaced `any` types with proper types for better type safety
+  - All catch blocks: Changed from `any` to `unknown` with proper type guards
+  - Promise resolve/reject handlers: Added proper types instead of `any`
+  - Error handling: Improved error message extraction with proper type checking
+  - `RefreshError` constructor: Fixed type compatibility when passing error causes
+- **Code Quality**: Improved code style
+  - Replaced optional chaining where appropriate
+  - Fixed assignment in expression (moved to separate statement)
+  - Added Biome override for test files to allow non-null assertions in tests
+
 ## [0.2.4] - 2025-12-21
 
 ### Changed

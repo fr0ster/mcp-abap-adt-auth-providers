@@ -1,20 +1,23 @@
 /**
  * Integration tests for ABAP token provider (using BtpTokenProvider)
- * 
+ *
  * Real tests using YAML configuration and actual service keys
  * Tests conversion of ABAP service key to session via token provider
  */
 
-import { BtpTokenProvider } from '../../providers/BtpTokenProvider';
-import { AbapServiceKeyStore, AbapSessionStore } from '@mcp-abap-adt/auth-stores';
+import {
+  AbapServiceKeyStore,
+  AbapSessionStore,
+} from '@mcp-abap-adt/auth-stores';
 import type { IAuthorizationConfig } from '@mcp-abap-adt/interfaces';
 import { defaultLogger } from '@mcp-abap-adt/logger';
+import { BtpTokenProvider } from '../../providers/BtpTokenProvider';
 import {
-  loadTestConfig,
-  hasRealConfig,
   getAbapDestination,
   getServiceKeysDir,
   getSessionsDir,
+  hasRealConfig,
+  loadTestConfig,
 } from '../helpers/configHelpers';
 
 describe('AbapTokenProvider Integration', () => {
@@ -33,7 +36,9 @@ describe('AbapTokenProvider Integration', () => {
       }
 
       if (!abapDestination || !serviceKeysDir || !sessionsDir) {
-        console.warn('⚠️  Skipping ABAP integration test - missing required config');
+        console.warn(
+          '⚠️  Skipping ABAP integration test - missing required config',
+        );
         return;
       }
 
@@ -45,7 +50,9 @@ describe('AbapTokenProvider Integration', () => {
       // Load service key
       const serviceKey = await serviceKeyStore.getServiceKey(abapDestination);
       if (!serviceKey) {
-        throw new Error(`Service key not found for destination "${abapDestination}" in directory "${serviceKeysDir}". Please ensure the service key file exists.`);
+        throw new Error(
+          `Service key not found for destination "${abapDestination}" in directory "${serviceKeysDir}". Please ensure the service key file exists.`,
+        );
       }
       expect(serviceKey.uaaUrl).toBeDefined();
       expect(serviceKey.uaaClientId).toBeDefined();
@@ -77,7 +84,9 @@ describe('AbapTokenProvider Integration', () => {
 
       expect(result.connectionConfig).toBeDefined();
       expect(result.connectionConfig.authorizationToken).toBeDefined();
-      expect(result.connectionConfig.authorizationToken!.length).toBeGreaterThan(0);
+      expect(
+        result.connectionConfig.authorizationToken?.length,
+      ).toBeGreaterThan(0);
 
       // Save session with refresh token if available
       // AbapSessionStore accepts IConfig format (serviceUrl, authorizationToken)
@@ -98,7 +107,7 @@ describe('AbapTokenProvider Integration', () => {
       expect(savedSession).toBeDefined();
       expect(savedSession?.uaaUrl).toBe(authConfig.uaaUrl);
       expect(savedSession?.authorizationToken).toBe(
-        result.connectionConfig.authorizationToken
+        result.connectionConfig.authorizationToken,
       );
     }, 300000); // 5 minute timeout for browser auth if needed
 
@@ -109,7 +118,9 @@ describe('AbapTokenProvider Integration', () => {
       }
 
       if (!abapDestination || !serviceKeysDir) {
-        console.warn('⚠️  Skipping ABAP token validation test - missing required config');
+        console.warn(
+          '⚠️  Skipping ABAP token validation test - missing required config',
+        );
         return;
       }
 
@@ -119,8 +130,16 @@ describe('AbapTokenProvider Integration', () => {
 
       // Load service key
       const serviceKey = await serviceKeyStore.getServiceKey(abapDestination);
-      if (!serviceKey || !serviceKey.uaaUrl || !serviceKey.uaaClientId || !serviceKey.uaaClientSecret || !serviceKey.serviceUrl) {
-        throw new Error(`Service key not found or incomplete for destination "${abapDestination}" in directory "${serviceKeysDir}". Please ensure the service key file exists and contains valid UAA credentials and service URL.`);
+      if (
+        !serviceKey ||
+        !serviceKey.uaaUrl ||
+        !serviceKey.uaaClientId ||
+        !serviceKey.uaaClientSecret ||
+        !serviceKey.serviceUrl
+      ) {
+        throw new Error(
+          `Service key not found or incomplete for destination "${abapDestination}" in directory "${serviceKeysDir}". Please ensure the service key file exists and contains valid UAA credentials and service URL.`,
+        );
       }
 
       const authConfig: IAuthorizationConfig = {
@@ -147,9 +166,11 @@ describe('AbapTokenProvider Integration', () => {
       expect(token).toBeDefined();
 
       // Validate token
-      const isValid = await tokenProvider.validateToken(token!, serviceKey.serviceUrl);
+      const isValid = await tokenProvider.validateToken(
+        token!,
+        serviceKey.serviceUrl,
+      );
       expect(isValid).toBe(true);
     }, 300000);
   });
 });
-

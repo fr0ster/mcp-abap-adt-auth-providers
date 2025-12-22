@@ -1,13 +1,13 @@
 /**
  * Tests for XsuaaTokenProvider
- * 
+ *
  * Real tests (not mocks) - tests actual token provider behavior
  */
 
-import { XsuaaTokenProvider } from '../../providers/XsuaaTokenProvider';
+import { jest } from '@jest/globals';
 import type { IAuthorizationConfig } from '@mcp-abap-adt/interfaces';
 import { defaultLogger } from '@mcp-abap-adt/logger';
-import { jest } from '@jest/globals';
+import { XsuaaTokenProvider } from '../../providers/XsuaaTokenProvider';
 
 describe('XsuaaTokenProvider', () => {
   let provider: XsuaaTokenProvider;
@@ -26,20 +26,24 @@ describe('XsuaaTokenProvider', () => {
       };
 
       // Mock private method using jest.spyOn
-      const getTokenSpy = jest.spyOn(provider as any, 'getTokenWithClientCredentials').mockResolvedValue({
-        accessToken: 'test-access-token',
-      });
+      const getTokenSpy = jest
+        .spyOn(provider as any, 'getTokenWithClientCredentials')
+        .mockResolvedValue({
+          accessToken: 'test-access-token',
+        });
 
       const result = await provider.getConnectionConfig(authConfig, {
         logger: defaultLogger,
       });
 
       expect(result.connectionConfig).toBeDefined();
-      expect(result.connectionConfig.authorizationToken).toBe('test-access-token');
+      expect(result.connectionConfig.authorizationToken).toBe(
+        'test-access-token',
+      );
       expect(getTokenSpy).toHaveBeenCalledWith(
         authConfig.uaaUrl,
         authConfig.uaaClientId,
-        authConfig.uaaClientSecret
+        authConfig.uaaClientSecret,
       );
 
       getTokenSpy.mockRestore();
@@ -49,8 +53,12 @@ describe('XsuaaTokenProvider', () => {
   describe('validateToken', () => {
     // Helper to create a JWT token with given exp claim
     const createJwtWithExp = (expSeconds: number): string => {
-      const header = Buffer.from(JSON.stringify({ alg: 'RS256', typ: 'JWT' })).toString('base64url');
-      const payload = Buffer.from(JSON.stringify({ exp: expSeconds, sub: 'test-user' })).toString('base64url');
+      const header = Buffer.from(
+        JSON.stringify({ alg: 'RS256', typ: 'JWT' }),
+      ).toString('base64url');
+      const payload = Buffer.from(
+        JSON.stringify({ exp: expSeconds, sub: 'test-user' }),
+      ).toString('base64url');
       const signature = 'fake-signature';
       return `${header}.${payload}.${signature}`;
     };
@@ -75,7 +83,10 @@ describe('XsuaaTokenProvider', () => {
       const futureExp = Math.floor(Date.now() / 1000) + 3600;
       const token = createJwtWithExp(futureExp);
 
-      const result = await provider.validateToken(token, 'https://test.service.com');
+      const result = await provider.validateToken(
+        token,
+        'https://test.service.com',
+      );
       expect(result).toBe(true);
     });
 
@@ -106,8 +117,12 @@ describe('XsuaaTokenProvider', () => {
     });
 
     it('should return true if token has no exp claim', async () => {
-      const header = Buffer.from(JSON.stringify({ alg: 'RS256', typ: 'JWT' })).toString('base64url');
-      const payload = Buffer.from(JSON.stringify({ sub: 'test-user' })).toString('base64url');
+      const header = Buffer.from(
+        JSON.stringify({ alg: 'RS256', typ: 'JWT' }),
+      ).toString('base64url');
+      const payload = Buffer.from(
+        JSON.stringify({ sub: 'test-user' }),
+      ).toString('base64url');
       const token = `${header}.${payload}.fake-signature`;
 
       const result = await provider.validateToken(token);
@@ -115,7 +130,9 @@ describe('XsuaaTokenProvider', () => {
     });
 
     it('should return false if payload is not valid JSON', async () => {
-      const header = Buffer.from(JSON.stringify({ alg: 'RS256' })).toString('base64url');
+      const header = Buffer.from(JSON.stringify({ alg: 'RS256' })).toString(
+        'base64url',
+      );
       const invalidPayload = Buffer.from('not-json').toString('base64url');
       const token = `${header}.${invalidPayload}.signature`;
 
@@ -132,19 +149,23 @@ describe('XsuaaTokenProvider', () => {
         uaaClientSecret: 'test-client-secret',
       };
 
-      const getTokenSpy = jest.spyOn(provider as any, 'getTokenWithClientCredentials').mockResolvedValue({
-        accessToken: 'refreshed-token-from-session',
-      });
+      const getTokenSpy = jest
+        .spyOn(provider as any, 'getTokenWithClientCredentials')
+        .mockResolvedValue({
+          accessToken: 'refreshed-token-from-session',
+        });
 
       const result = await provider.refreshTokenFromSession(authConfig, {
         logger: defaultLogger,
       });
 
-      expect(result.connectionConfig.authorizationToken).toBe('refreshed-token-from-session');
+      expect(result.connectionConfig.authorizationToken).toBe(
+        'refreshed-token-from-session',
+      );
       expect(getTokenSpy).toHaveBeenCalledWith(
         authConfig.uaaUrl,
         authConfig.uaaClientId,
-        authConfig.uaaClientSecret
+        authConfig.uaaClientSecret,
       );
 
       getTokenSpy.mockRestore();
@@ -158,19 +179,21 @@ describe('XsuaaTokenProvider', () => {
       };
 
       // Mock getTokenWithClientCredentials to throw error
-      const getTokenSpy = jest.spyOn(provider as any, 'getTokenWithClientCredentials').mockRejectedValue(
-        new Error('UAA server returned 401 Unauthorized')
-      );
+      const getTokenSpy = jest
+        .spyOn(provider as any, 'getTokenWithClientCredentials')
+        .mockRejectedValue(new Error('UAA server returned 401 Unauthorized'));
 
       const { RefreshError } = await import('../../errors/TokenProviderErrors');
-      
-      await expect(provider.refreshTokenFromSession(authConfig, {
-        logger: defaultLogger,
-      })).rejects.toThrow(RefreshError);
 
-      await expect(provider.refreshTokenFromSession(authConfig)).rejects.toThrow(
-        'XSUAA refreshTokenFromSession failed'
-      );
+      await expect(
+        provider.refreshTokenFromSession(authConfig, {
+          logger: defaultLogger,
+        }),
+      ).rejects.toThrow(RefreshError);
+
+      await expect(
+        provider.refreshTokenFromSession(authConfig),
+      ).rejects.toThrow('XSUAA refreshTokenFromSession failed');
 
       getTokenSpy.mockRestore();
     });
@@ -182,8 +205,10 @@ describe('XsuaaTokenProvider', () => {
         uaaClientSecret: 'test-client-secret',
       };
 
-      await expect(provider.refreshTokenFromSession(authConfig)).rejects.toThrow(
-        'XSUAA refreshTokenFromSession: authConfig missing required fields: uaaUrl'
+      await expect(
+        provider.refreshTokenFromSession(authConfig),
+      ).rejects.toThrow(
+        'XSUAA refreshTokenFromSession: authConfig missing required fields: uaaUrl',
       );
     });
 
@@ -194,8 +219,10 @@ describe('XsuaaTokenProvider', () => {
         uaaClientSecret: 'test-client-secret',
       };
 
-      await expect(provider.refreshTokenFromSession(authConfig)).rejects.toThrow(
-        'XSUAA refreshTokenFromSession: authConfig missing required fields: uaaClientId'
+      await expect(
+        provider.refreshTokenFromSession(authConfig),
+      ).rejects.toThrow(
+        'XSUAA refreshTokenFromSession: authConfig missing required fields: uaaClientId',
       );
     });
 
@@ -206,8 +233,10 @@ describe('XsuaaTokenProvider', () => {
         uaaClientSecret: '',
       };
 
-      await expect(provider.refreshTokenFromSession(authConfig)).rejects.toThrow(
-        'XSUAA refreshTokenFromSession: authConfig missing required fields: uaaClientSecret'
+      await expect(
+        provider.refreshTokenFromSession(authConfig),
+      ).rejects.toThrow(
+        'XSUAA refreshTokenFromSession: authConfig missing required fields: uaaClientSecret',
       );
     });
   });
@@ -222,19 +251,23 @@ describe('XsuaaTokenProvider', () => {
 
       // Import browserAuth module
       const browserAuthModule = await import('../../auth/browserAuth');
-      
+
       // Mock startBrowserAuth function
-      const browserAuthSpy = jest.spyOn(browserAuthModule, 'startBrowserAuth').mockResolvedValue({
-        accessToken: 'refreshed-token-from-servicekey',
-        refreshToken: 'new-refresh-token',
-      });
+      const browserAuthSpy = jest
+        .spyOn(browserAuthModule, 'startBrowserAuth')
+        .mockResolvedValue({
+          accessToken: 'refreshed-token-from-servicekey',
+          refreshToken: 'new-refresh-token',
+        });
 
       const result = await provider.refreshTokenFromServiceKey(authConfig, {
         browser: 'none',
         logger: defaultLogger,
       });
 
-      expect(result.connectionConfig.authorizationToken).toBe('refreshed-token-from-servicekey');
+      expect(result.connectionConfig.authorizationToken).toBe(
+        'refreshed-token-from-servicekey',
+      );
       expect(result.refreshToken).toBe('new-refresh-token');
 
       browserAuthSpy.mockRestore();
@@ -249,25 +282,28 @@ describe('XsuaaTokenProvider', () => {
 
       // Import browserAuth module
       const browserAuthModule = await import('../../auth/browserAuth');
-      
+
       // Mock startBrowserAuth to throw error
-      const browserAuthSpy = jest.spyOn(browserAuthModule, 'startBrowserAuth').mockRejectedValue(
-        new Error('Browser authentication cancelled by user')
-      );
+      const browserAuthSpy = jest
+        .spyOn(browserAuthModule, 'startBrowserAuth')
+        .mockRejectedValue(
+          new Error('Browser authentication cancelled by user'),
+        );
 
       const { RefreshError } = await import('../../errors/TokenProviderErrors');
-      
-      await expect(provider.refreshTokenFromServiceKey(authConfig, {
-        browser: 'none',
-        logger: defaultLogger,
-      })).rejects.toThrow(RefreshError);
 
-      await expect(provider.refreshTokenFromServiceKey(authConfig)).rejects.toThrow(
-        'XSUAA refreshTokenFromServiceKey failed'
-      );
+      await expect(
+        provider.refreshTokenFromServiceKey(authConfig, {
+          browser: 'none',
+          logger: defaultLogger,
+        }),
+      ).rejects.toThrow(RefreshError);
+
+      await expect(
+        provider.refreshTokenFromServiceKey(authConfig),
+      ).rejects.toThrow('XSUAA refreshTokenFromServiceKey failed');
 
       browserAuthSpy.mockRestore();
     });
   });
 });
-

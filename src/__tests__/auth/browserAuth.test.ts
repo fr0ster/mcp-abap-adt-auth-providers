@@ -2,12 +2,12 @@
  * Tests for browserAuth token retrieval
  */
 
+import http from 'node:http';
 import { jest } from '@jest/globals';
-import type { ILogger, IAuthorizationConfig } from '@mcp-abap-adt/interfaces';
-import { createTestLogger } from '../helpers/testLogger';
-import { exchangeCodeForToken, startBrowserAuth } from '../../auth/browserAuth';
+import type { IAuthorizationConfig, ILogger } from '@mcp-abap-adt/interfaces';
 import axios from 'axios';
-import http from 'http';
+import { exchangeCodeForToken, startBrowserAuth } from '../../auth/browserAuth';
+import { createTestLogger } from '../helpers/testLogger';
 
 jest.mock('axios');
 jest.mock('open', () => ({
@@ -50,7 +50,7 @@ describe('browserAuth token exchange', () => {
         authConfig,
         'test-auth-code',
         3101,
-        logger
+        logger,
       );
 
       expect(result.accessToken).toBe(mockTokens.access_token);
@@ -63,7 +63,7 @@ describe('browserAuth token exchange', () => {
             'Content-Type': 'application/x-www-form-urlencoded',
             Authorization: expect.stringContaining('Basic'),
           }),
-        })
+        }),
       );
     });
 
@@ -82,7 +82,7 @@ describe('browserAuth token exchange', () => {
         authConfig,
         'test-code',
         3102,
-        logger
+        logger,
       );
 
       expect(result.accessToken).toBe(mockTokens.access_token);
@@ -104,12 +104,12 @@ describe('browserAuth token exchange', () => {
       };
 
       await expect(
-        exchangeCodeForToken(authConfig, 'invalid-code', 3103, logger)
+        exchangeCodeForToken(authConfig, 'invalid-code', 3103, logger),
       ).rejects.toThrow('Response does not contain access_token');
 
       // Verify error was logged (but not to console)
       expect(logger.error).toHaveBeenCalledWith(
-        'Token exchange failed: status 200, error: invalid_grant'
+        'Token exchange failed: status 200, error: invalid_grant',
       );
     });
 
@@ -128,7 +128,7 @@ describe('browserAuth token exchange', () => {
 
       const axiosCall = mockedAxios.mock.calls[0]?.[0] as any;
       const expectedAuth = Buffer.from(
-        `${authConfig.uaaClientId}:${authConfig.uaaClientSecret}`
+        `${authConfig.uaaClientId}:${authConfig.uaaClientSecret}`,
       ).toString('base64');
 
       expect(axiosCall.headers.Authorization).toBe(`Basic ${expectedAuth}`);
@@ -155,13 +155,13 @@ describe('browserAuth browser modes', () => {
       const port = 3201;
 
       await expect(
-        startBrowserAuth(authConfig, 'none', logger, port)
+        startBrowserAuth(authConfig, 'none', logger, port),
       ).rejects.toThrow('Browser authentication required');
 
       // Should log the URL before rejecting
       expect(logger.info).toHaveBeenCalledWith(
         expect.stringContaining('Browser authentication URL'),
-        expect.any(Object)
+        expect.any(Object),
       );
     });
 
@@ -171,9 +171,11 @@ describe('browserAuth browser modes', () => {
       try {
         await startBrowserAuth(authConfig, 'none', undefined, port);
         fail('Should have thrown an error');
-      } catch (error: any) {
-        expect(error.message).toContain('oauth/authorize');
-        expect(error.message).toContain(authConfig.uaaClientId);
+      } catch (error: unknown) {
+        const errorMessage =
+          error instanceof Error ? error.message : String(error);
+        expect(errorMessage).toContain('oauth/authorize');
+        expect(errorMessage).toContain(authConfig.uaaClientId);
       }
     });
   });
@@ -199,17 +201,22 @@ describe('browserAuth browser modes', () => {
       });
 
       // Start headless auth (should not reject immediately)
-      const authPromise = startBrowserAuth(authConfig, 'headless', logger, port);
+      const authPromise = startBrowserAuth(
+        authConfig,
+        'headless',
+        logger,
+        port,
+      );
 
       // Wait for server to start
-      await new Promise(resolve => setTimeout(resolve, 100));
+      await new Promise((resolve) => setTimeout(resolve, 100));
 
       // Verify headless mode logs were called
       expect(logger.info).toHaveBeenCalledWith(
-        expect.stringContaining('Headless mode')
+        expect.stringContaining('Headless mode'),
       );
       expect(logger.info).toHaveBeenCalledWith(
-        expect.stringContaining('Waiting for callback')
+        expect.stringContaining('Waiting for callback'),
       );
 
       // Simulate callback from browser
@@ -218,7 +225,9 @@ describe('browserAuth browser modes', () => {
       await new Promise<void>((resolve, reject) => {
         const req = http.get(callbackUrl, (res) => {
           let data = '';
-          res.on('data', chunk => data += chunk);
+          res.on('data', (chunk) => {
+            data += chunk;
+          });
           res.on('end', () => resolve());
         });
         req.on('error', reject);
@@ -235,19 +244,24 @@ describe('browserAuth browser modes', () => {
       const port = 3204;
 
       // Start headless auth
-      const authPromise = startBrowserAuth(authConfig, 'headless', undefined, port);
+      const authPromise = startBrowserAuth(
+        authConfig,
+        'headless',
+        undefined,
+        port,
+      );
 
       // Wait briefly - should still be pending (not rejected)
-      await new Promise(resolve => setTimeout(resolve, 100));
+      await new Promise((resolve) => setTimeout(resolve, 100));
 
       // Check that promise is still pending by racing with a timeout
-      const timeoutPromise = new Promise<string>(resolve =>
-        setTimeout(() => resolve('timeout'), 50)
+      const timeoutPromise = new Promise<string>((resolve) =>
+        setTimeout(() => resolve('timeout'), 50),
       );
 
       const raceResult = await Promise.race([
         authPromise.then(() => 'completed').catch(() => 'rejected'),
-        timeoutPromise
+        timeoutPromise,
       ]);
 
       // Should timeout because headless mode waits for callback
@@ -258,7 +272,10 @@ describe('browserAuth browser modes', () => {
       mockedAxios.mockResolvedValue({ status: 200, data: mockTokens });
 
       await new Promise<void>((resolve) => {
-        const req = http.get(`http://localhost:${port}/callback?code=cleanup`, () => resolve());
+        const req = http.get(
+          `http://localhost:${port}/callback?code=cleanup`,
+          () => resolve(),
+        );
         req.on('error', () => resolve()); // Ignore errors during cleanup
       });
 
