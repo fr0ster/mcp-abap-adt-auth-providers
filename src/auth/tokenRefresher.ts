@@ -7,6 +7,7 @@ import axios from 'axios';
 export interface TokenRefreshResult {
   accessToken: string;
   refreshToken?: string;
+  expiresIn?: number;
 }
 
 /**
@@ -49,6 +50,7 @@ export async function refreshJwtToken(
       return {
         accessToken: response.data.access_token,
         refreshToken: response.data.refresh_token || refreshToken, // Use new refresh token if provided, otherwise keep old one
+        expiresIn: response.data.expires_in,
       };
     } else {
       throw new Error('Response does not contain access_token');

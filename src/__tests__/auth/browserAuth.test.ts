@@ -144,7 +144,7 @@ describe('browserAuth browser modes', () => {
   };
 
   describe('none mode', () => {
-    it('should reject immediately with URL in error message', async () => {
+    it('should log URL and wait for callback (same as headless)', async () => {
       const logger: ILogger = {
         info: jest.fn(),
         debug: jest.fn(),
@@ -153,30 +153,86 @@ describe('browserAuth browser modes', () => {
       };
 
       const port = 3201;
+      const mockTokens = {
+        access_token: 'none-mode-access-token',
+        refresh_token: 'none-mode-refresh-token',
+      };
 
-      await expect(
-        startBrowserAuth(authConfig, 'none', logger, port),
-      ).rejects.toThrow('Browser authentication required');
+      mockedAxios.mockResolvedValue({
+        status: 200,
+        data: mockTokens,
+      });
 
-      // Should log the URL before rejecting
+      // Start auth with 'none' mode - should not reject immediately
+      const authPromise = startBrowserAuth(authConfig, 'none', logger, port);
+
+      // Wait for server to start
+      await new Promise((resolve) => setTimeout(resolve, 100));
+
+      // Verify URL was logged
       expect(logger.info).toHaveBeenCalledWith(
-        expect.stringContaining('Browser authentication URL'),
-        expect.any(Object),
+        expect.stringContaining('Open this URL'),
       );
+
+      // Simulate callback from browser
+      await new Promise<void>((resolve, reject) => {
+        const req = http.get(
+          `http://localhost:${port}/callback?code=test-auth-code`,
+          (res) => {
+            res.on('data', () => {});
+            res.on('end', () => resolve());
+          },
+        );
+        req.on('error', reject);
+      });
+
+      // Wait for auth to complete
+      const result = await authPromise;
+      expect(result.accessToken).toBe(mockTokens.access_token);
     });
 
-    it('should include authorization URL in error message', async () => {
-      const port = 3202;
+    it('should include authorization URL in log message', async () => {
+      const logger: ILogger = {
+        info: jest.fn(),
+        debug: jest.fn(),
+        warn: jest.fn(),
+        error: jest.fn(),
+      };
 
-      try {
-        await startBrowserAuth(authConfig, 'none', undefined, port);
-        fail('Should have thrown an error');
-      } catch (error: unknown) {
-        const errorMessage =
-          error instanceof Error ? error.message : String(error);
-        expect(errorMessage).toContain('oauth/authorize');
-        expect(errorMessage).toContain(authConfig.uaaClientId);
+      const port = 3202;
+      const mockTokens = { access_token: 'test-token' };
+
+      mockedAxios.mockResolvedValue({
+        status: 200,
+        data: mockTokens,
+      });
+
+      const authPromise = startBrowserAuth(authConfig, 'none', logger, port);
+
+      // Wait for server to start
+      await new Promise((resolve) => setTimeout(resolve, 100));
+
+      // Verify URL contains oauth/authorize and clientId
+      const infoCalls = (logger.info as jest.Mock).mock.calls;
+      const urlLogCall = infoCalls.find(
+        (call) =>
+          typeof call[0] === 'string' && call[0].includes('oauth/authorize'),
+      );
+      expect(urlLogCall).toBeDefined();
+      if (urlLogCall) {
+        expect(urlLogCall[0]).toContain(authConfig.uaaClientId);
       }
+
+      // Cleanup: simulate callback
+      await new Promise<void>((resolve) => {
+        const req = http.get(
+          `http://localhost:${port}/callback?code=cleanup`,
+          () => resolve(),
+        );
+        req.on('error', () => resolve());
+      });
+
+      await authPromise.catch(() => {});
     });
   });
 
@@ -211,9 +267,9 @@ describe('browserAuth browser modes', () => {
       // Wait for server to start
       await new Promise((resolve) => setTimeout(resolve, 100));
 
-      // Verify headless mode logs were called
+      // Verify URL and waiting message were logged
       expect(logger.info).toHaveBeenCalledWith(
-        expect.stringContaining('Headless mode'),
+        expect.stringContaining('Open this URL'),
       );
       expect(logger.info).toHaveBeenCalledWith(
         expect.stringContaining('Waiting for callback'),

@@ -44,7 +44,7 @@ describe('XsuaaTokenProvider Integration', () => {
 
       // Create stores with real paths
       const serviceKeyStore = new XsuaaServiceKeyStore(serviceKeysDir);
-      const sessionStore = new XsuaaSessionStore(sessionsDir);
+      const sessionStore = new XsuaaSessionStore(sessionsDir, '');
       const tokenProvider = new XsuaaTokenProvider();
 
       // Load service key

@@ -1,0 +1,18 @@
+{
+  "tenantmode": "shared",
+  "sburl": "https://internal-xsuaa.authentication.eu10.hana.ondemand.com",
+  "subaccountid": "ba2d42f9-029a-4c75-af1e-beb7f26cd1be",
+  "credential-type": "binding-secret",
+  "clientid": "sb-cloud-llm-hub-cd2b472b-4164-44df-8640-e3937402e9be!t274860",
+  "xsappname": "cloud-llm-hub-cd2b472b-4164-44df-8640-e3937402e9be!t274860",
+  "clientsecret": "4e392fe3-95e0-4c01-9308-d44fc2c636fa$xezL8HgeKcLOsbam4SF9dH3BTbt0R9hhQ9avaReaC4Q=",
+  "serviceInstanceId": "5d289c1f-d483-43e9-bf21-00a06da51dfd",
+  "url": "https://ai-applications-6efrmk2a.authentication.eu10.hana.ondemand.com",
+  "uaadomain": "authentication.eu10.hana.ondemand.com",
+  "verificationkey": "-----BEGIN PUBLIC KEY-----\nMIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAtXlrq62aY28bJ6ff11po\n70TkwXJ0MK5Ua/wpRs5ltFYalZnMIXporvlls1z2WkC5MOh5suhnTSJZhfypdKPC\n2y/r0CvV4sB/UNlu//1VkcxnLW7biQUrRrhe2+spf4jRcYxLtY8PrXa2KlltBsdQ\nfeEH0lrvXQCs5tlcnMXAyo9T11sxprD+GAsecNCEJ69ruH844oTbm90XPWSQj616\n/5liMB6it07C4tSkMhD1ALg9V2wjY+e/WOvs62+3YNjB3aP1s7Y3o2/l0k56yLRA\nr0vkk0TbibYLWoG3zn9Z1ioCjv23vuZwJ8Stnzg7+2EF5CB/z2zFQXIxbiW83bND\ncQIDAQAB\n-----END PUBLIC KEY-----",
+  "apiurl": "https://api.authentication.eu10.hana.ondemand.com",
+  "identityzone": "ai-applications-6efrmk2a",
+  "identityzoneid": "ba2d42f9-029a-4c75-af1e-beb7f26cd1be",
+  "tenantid": "ba2d42f9-029a-4c75-af1e-beb7f26cd1be",
+  "zoneid": "ba2d42f9-029a-4c75-af1e-beb7f26cd1be"
+}

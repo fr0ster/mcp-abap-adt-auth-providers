@@ -45,7 +45,7 @@ describe('BtpTokenProvider Integration', () => {
       // Create stores with real paths
       // BTP uses AbapServiceKeyStore (same format as ABAP) and BtpSessionStore (without sapUrl)
       const serviceKeyStore = new AbapServiceKeyStore(serviceKeysDir);
-      const sessionStore = new BtpSessionStore(sessionsDir);
+      const sessionStore = new BtpSessionStore(sessionsDir, '');
       const tokenProvider = new BtpTokenProvider();
 
       // Load service key
@@ -123,7 +123,10 @@ describe('BtpTokenProvider Integration', () => {
 
       // BTP uses AbapServiceKeyStore (same format as ABAP) and BtpSessionStore (without sapUrl)
       const serviceKeyStore = new AbapServiceKeyStore(serviceKeysDir);
-      const sessionStore = new BtpSessionStore(sessionsDir || serviceKeysDir);
+      const sessionStore = new BtpSessionStore(
+        sessionsDir || serviceKeysDir,
+        '',
+      );
       const tokenProvider = new BtpTokenProvider();
 
       // Load service key

@@ -9,13 +9,18 @@ import type { IAuthorizationConfig, ILogger } from '@mcp-abap-adt/interfaces';
 import axios from 'axios';
 import express from 'express';
 
+type BrowserAuthConfig = IAuthorizationConfig & {
+  authorizationUrl?: string;
+};
+
 const BROWSER_MAP: Record<string, string | undefined | null> = {
   chrome: 'chrome',
   edge: 'msedge',
   firefox: 'firefox',
   system: undefined, // system default
+  auto: undefined, // try to open browser, fallback to showing URL (like cf login)
   headless: null, // no browser, log URL and wait for callback (SSH/remote)
-  none: null, // no browser, reject immediately (automated tests)
+  none: null, // no browser, log URL and wait for callback (same as headless)
 };
 
 /**
@@ -123,25 +128,6 @@ function isPortAvailable(port: number): Promise<boolean> {
 }
 
 /**
- * Find an available port starting from the given port
- * Tries ports in range [startPort, startPort + maxAttempts)
- */
-async function findAvailablePort(
-  startPort: number,
-  maxAttempts: number = 10,
-): Promise<number> {
-  for (let i = 0; i < maxAttempts; i++) {
-    const port = startPort + i;
-    if (await isPortAvailable(port)) {
-      return port;
-    }
-  }
-  throw new Error(
-    `No available port found in range ${startPort}-${startPort + maxAttempts - 1}`,
-  );
-}
-
-/**
  * Start browser authentication flow
  * @param authConfig Authorization configuration with UAA credentials
  * @param browser Browser name (chrome, edge, firefox, system, none)
@@ -151,7 +137,7 @@ async function findAvailablePort(
  * @internal - Internal function, not exported from package
  */
 export async function startBrowserAuth(
-  authConfig: IAuthorizationConfig,
+  authConfig: BrowserAuthConfig,
   browser: string = 'system',
   logger?: ILogger,
   port: number = 3001,
@@ -159,16 +145,11 @@ export async function startBrowserAuth(
   // Use logger if provided, otherwise null (no logging)
   const log: ILogger | null = logger || null;
 
-  // Find available port (try starting from requested port, then try next ports)
-  let actualPort: number;
-  try {
-    actualPort = await findAvailablePort(port, 10);
-    if (actualPort !== port) {
-      log?.debug(`Port ${port} is in use, using port ${actualPort} instead`);
-    }
-  } catch (error) {
+  // Check if requested port is available, throw error if not
+  const portAvailable = await isPortAvailable(port);
+  if (!portAvailable) {
     throw new Error(
-      `Failed to find available port starting from ${port}: ${error instanceof Error ? error.message : String(error)}`,
+      `Port ${port} is already in use. Please specify a different port or free the port.`,
     );
   }
 
@@ -181,7 +162,7 @@ export async function startBrowserAuth(
     // Disable keep-alive to ensure connections close immediately
     server.keepAliveTimeout = 0;
     server.headersTimeout = 0;
-    const PORT = actualPort;
+    const PORT = port;
     let serverInstance: http.Server | null = null;
 
     // Cleanup function to ensure server is closed on process termination
@@ -243,7 +224,9 @@ export async function startBrowserAuth(
       process.once('SIGBREAK', cleanup);
     }
 
-    const authorizationUrl = getJwtAuthorizationUrl(authConfig, PORT);
+    // Use provided authorization URL or build from authConfig
+    const authorizationUrl =
+      authConfig.authorizationUrl ?? getJwtAuthorizationUrl(authConfig, PORT);
 
     // OAuth2 callback handler
     app.get(
@@ -500,42 +483,42 @@ export async function startBrowserAuth(
     serverInstance = server.listen(PORT, async () => {
       const browserApp = BROWSER_MAP[browser];
 
-      // Handle 'none' mode - reject immediately (for automated tests)
-      if (browser === 'none') {
-        log?.info(`🔗 Browser authentication URL: ${authorizationUrl}`, {
-          url: authorizationUrl,
-        });
-        if (serverInstance) {
-          if (typeof server.closeAllConnections === 'function') {
-            server.closeAllConnections();
-          }
-          setTimeout(() => {
-            server.close(() => {
-              log?.debug(
-                `Server closed (browser=none), port ${PORT} should be freed`,
-              );
-            });
-          }, 100);
-        }
-        reject(
-          new Error(
-            `Browser authentication required. Please open this URL manually: ${authorizationUrl}`,
-          ),
-        );
-        return;
-      }
-
-      // Handle 'headless' mode - log URL and wait for callback (for SSH/remote sessions)
-      if (browser === 'headless') {
-        log?.info(
-          `🔗 Headless mode: Open this URL in your browser to authenticate:`,
-        );
+      // Handle 'none' and 'headless' modes - log URL and wait for callback
+      // (for SSH/remote sessions or when browser should not be opened)
+      if (browser === 'none' || browser === 'headless') {
+        log?.info(`🔗 Open this URL in your browser to authenticate:`);
         log?.info(`   ${authorizationUrl}`);
         log?.info(
           `   Waiting for callback on http://localhost:${PORT}/callback ...`,
         );
         // Don't open browser, don't reject - just wait for the callback
         return;
+      }
+
+      // Handle 'auto' mode - try to open browser, fallback to showing URL (like cf login)
+      if (browser === 'auto') {
+        log?.info('🌐 Attempting to open browser for authentication...');
+        try {
+          const openModule = await import('open');
+          const open = openModule.default;
+          await open(authorizationUrl);
+          log?.info(
+            '✅ Browser opened successfully. Waiting for authentication...',
+          );
+          return;
+        } catch (error: unknown) {
+          // If browser cannot be opened, show URL and wait (like cf login)
+          const errorMessage =
+            error instanceof Error ? error.message : String(error);
+          log?.warn(`⚠️  Could not open browser automatically: ${errorMessage}`);
+          log?.info(`🔗 Please open this URL in your browser to authenticate:`);
+          log?.info(`   ${authorizationUrl}`);
+          log?.info(
+            `   Waiting for callback on http://localhost:${PORT}/callback ...`,
+          );
+          // Don't reject - wait for callback
+          return;
+        }
       }
 
       // Handle browser opening (system, chrome, edge, firefox)

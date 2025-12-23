@@ -173,11 +173,11 @@ import { BtpTokenProvider } from '@mcp-abap-adt/auth-providers';
 import type { IAuthorizationConfig } from '@mcp-abap-adt/auth-broker';
 
 // Create provider with default port (3001)
-// The provider will automatically find an available port if 3001 is busy
+// If the port is busy, an error will be thrown
 const provider = new BtpTokenProvider();
 
 // Or specify custom port for OAuth callback server
-// If the port is busy, the provider will automatically try the next ports
+// If the port is busy, an error will be thrown
 const providerWithCustomPort = new BtpTokenProvider(4002);
 
 const authConfig: IAuthorizationConfig = {
@@ -198,7 +198,7 @@ const result = await provider.getConnectionConfig(authConfig, {
 // result.refreshToken contains refresh token (if browser flow was used)
 ```
 
-**Note**: The `browserAuthPort` parameter (default: 3001) configures the OAuth callback server port. The provider automatically finds an available port if the requested port is in use, preventing `EADDRINUSE` errors when multiple instances run simultaneously. The server properly closes all connections and frees the port after authentication completes, ensuring no lingering port occupation. 
+**Note**: The `browserAuthPort` parameter (default: 3001) configures the OAuth callback server port. If the requested port is already in use, an error will be thrown. You must specify a different port or free the port before starting authentication. The server properly closes all connections and frees the port after authentication completes, ensuring no lingering port occupation. 
 
 **Process Termination Handling**: The OAuth callback server registers cleanup handlers for `SIGTERM`, `SIGINT`, `SIGHUP`, and `exit` signals. This ensures ports are properly freed even when MCP clients (like Cline) terminate the process before authentication completes. This is especially important for stdio servers where the client may kill the process at any time. On Windows, the `SIGBREAK` signal (Ctrl+Break) is also handled.
 
