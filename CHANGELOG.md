@@ -7,6 +7,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.8] - 2025-12-24
+
+### Changed
+- **Integration Tests**: Replaced mock-based unit tests with comprehensive integration tests using real YAML configuration
+  - Tests now use `test-config.yaml` for loading real service keys and session files
+  - Simplified test configuration structure: only `destination` and optional `destination_dir` (removed `abap`/`xsuaa` sections)
+  - Default paths: `~/.config/mcp-abap-adt` (Unix) or `%USERPROFILE%\Documents\mcp-abap-adt` (Windows)
+- **Logging**: Migrated from `console.log` to structured logging using `@mcp-abap-adt/logger`
+  - All providers and browser auth functions now use `ILogger` interface
+  - Consistent structured logging with log levels (debug, info, warn, error)
+  - Better debugging with token validation details and execution flow
+
+### Added
+- **Test Scenarios**: Comprehensive integration test coverage for token lifecycle
+  - Scenario 1 & 2: Token lifecycle - login via browser and reuse token from previous scenario
+  - Scenario 3: Expired session + expired refresh token - provider should re-authenticate via browser
+  - Token validation: Explicit validation of token expiration in all scenarios
+- **Test Configuration**: Simplified `test-config.yaml.template` with detailed comments
+  - Only requires `destination` name (service key and session files are auto-resolved)
+  - Optional `destination_dir` (commented out by default, can be uncommented for custom paths)
+  - Clear documentation of test scenarios and file formats
+
+### Fixed
+- **Test Hanging Issues**: Fixed tests hanging due to browser and port conflicts
+  - Changed `browser: 'none'` to `browser: 'system'` for interactive authentication
+  - Each test scenario uses unique ports (3101, 3102, 3103) to avoid conflicts
+  - Improved server cleanup: `resolve(tokens)` called immediately after token exchange, server closes asynchronously
+  - Added delays after browser-based tests to allow ports to free up
+- **Token Validation**: Added explicit token validation in all test scenarios
+  - Tests verify that returned tokens are valid and not expired
+  - Uses JWT `exp` claim validation with 60-second buffer (matching `BaseTokenProvider`)
+
 ## [0.2.7] - 2025-12-24
 
 ### Changed

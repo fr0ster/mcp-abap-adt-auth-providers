@@ -7,6 +7,7 @@
 
 import type {
   IAuthorizationConfig,
+  ILogger,
   ITokenResult,
   OAuth2GrantType,
 } from '@mcp-abap-adt/interfaces';
@@ -31,6 +32,9 @@ export interface AuthorizationCodeProviderConfig {
   // Optional: existing tokens (for refresh scenario)
   accessToken?: string;
   refreshToken?: string;
+
+  // Optional: logger for debugging
+  logger?: ILogger;
 }
 
 /**
@@ -45,6 +49,15 @@ export class AuthorizationCodeProvider extends BaseTokenProvider {
   constructor(config: AuthorizationCodeProviderConfig) {
     super();
     this.config = config;
+    this.logger = config.logger;
+    this.logger?.info('[AuthorizationCodeProvider] Provider created', {
+      uaaUrl: config.uaaUrl,
+      clientId: config.clientId,
+      hasAccessToken: !!config.accessToken,
+      hasRefreshToken: !!config.refreshToken,
+      browser: config.browser || 'none',
+      redirectPort: config.redirectPort || 3001,
+    });
 
     const missingFields: string[] = [];
     if (!config.uaaUrl) {
@@ -70,9 +83,21 @@ export class AuthorizationCodeProvider extends BaseTokenProvider {
       this.authorizationToken = config.accessToken;
       // Parse expiration from JWT
       this.expiresAt = this.parseExpirationFromJWT(config.accessToken);
+      this.logger?.info(
+        '[AuthorizationCodeProvider] Initialized with access token',
+        {
+          hasExpiresAt: !!this.expiresAt,
+          expiresAt: this.expiresAt
+            ? new Date(this.expiresAt).toISOString()
+            : undefined,
+        },
+      );
     }
     if (config.refreshToken) {
       this.refreshToken = config.refreshToken;
+      this.logger?.info(
+        '[AuthorizationCodeProvider] Initialized with refresh token',
+      );
     }
   }
 
@@ -85,6 +110,13 @@ export class AuthorizationCodeProvider extends BaseTokenProvider {
   }
 
   protected async performLogin(): Promise<ITokenResult> {
+    this.logger?.info(
+      '[AuthorizationCodeProvider] Performing login via browser',
+      {
+        redirectPort: this.config.redirectPort || 3001,
+        browser: this.config.browser || 'none',
+      },
+    );
     // Build authorization config
     // If authorizationUrl is provided, use it; otherwise startBrowserAuth will build it from uaaUrl + clientId
     const authConfig: IAuthorizationConfig & { authorizationUrl?: string } = {
@@ -104,9 +136,14 @@ export class AuthorizationCodeProvider extends BaseTokenProvider {
     const result = await startBrowserAuth(
       authConfig,
       browser,
-      undefined, // logger
+      this.logger || undefined, // Pass logger to browserAuth
       this.config.redirectPort || 3001,
     );
+    this.logger?.info('[AuthorizationCodeProvider] Login completed', {
+      hasAccessToken: !!result.accessToken,
+      hasRefreshToken: !!result.refreshToken,
+      accessTokenLength: result.accessToken?.length || 0,
+    });
 
     // Parse expiration from JWT
     const expiresIn = this.calculateExpiresIn(result.accessToken);
@@ -124,6 +161,7 @@ export class AuthorizationCodeProvider extends BaseTokenProvider {
       throw new Error('Refresh token is required for refresh');
     }
 
+    this.logger?.info('[AuthorizationCodeProvider] Refreshing token');
     // Try refresh first
     try {
       const result = await refreshJwtToken(
@@ -132,6 +170,10 @@ export class AuthorizationCodeProvider extends BaseTokenProvider {
         this.config.clientId,
         this.config.clientSecret,
       );
+      this.logger?.info('[AuthorizationCodeProvider] Token refresh completed', {
+        hasAccessToken: !!result.accessToken,
+        hasRefreshToken: !!result.refreshToken,
+      });
 
       const expiresIn = this.calculateExpiresIn(result.accessToken);
 
@@ -141,7 +183,13 @@ export class AuthorizationCodeProvider extends BaseTokenProvider {
         authType: AUTH_TYPE_AUTHORIZATION_CODE,
         expiresIn,
       };
-    } catch (_error) {
+    } catch (error) {
+      this.logger?.warn(
+        '[AuthorizationCodeProvider] Token refresh failed, falling back to login',
+        {
+          error: error instanceof Error ? error.message : String(error),
+        },
+      );
       // Refresh failed - try login (will use uaaUrl + clientId to build URL)
       return await this.performLogin();
     }

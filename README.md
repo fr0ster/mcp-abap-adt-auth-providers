@@ -335,27 +335,33 @@ npm test
 Integration tests work with real files from `tests/test-config.yaml`:
 
 1. Copy `tests/test-config.yaml.template` to `tests/test-config.yaml`
-2. Fill in real paths, destinations, and URLs
+2. Fill in real destination name
 3. Run tests - integration tests will use real services if configured
 
 ```yaml
-auth_broker:
-  paths:
-    service_keys_dir: ~/.config/mcp-abap-adt/service-keys/
-    sessions_dir: ~/.config/mcp-abap-adt/sessions/
-  abap:
-    destination: "TRIAL"  # For ABAP tests (uses AbapServiceKeyStore, AbapSessionStore)
-  xsuaa:
-    btp_destination: "mcp"  # For BTP tests (uses BtpServiceKeyStore, BtpSessionStore)
-    mcp_url: "https://..."
+# Destination name (used for service key file: <destination>.json and session file: <destination>.env)
+destination: "trial"  # Example: "trial" -> looks for trial.json and trial.env
+
+# Optional: Destination directory (base directory for service keys and sessions)
+# If not specified, uses default platform paths:
+#   Unix: ~/.config/mcp-abap-adt
+#   Windows: %USERPROFILE%\Documents\mcp-abap-adt
+# Uncomment and set if you need a custom path:
+# destination_dir: ~/.config/mcp-abap-adt
 ```
 
 Integration tests will skip if `test-config.yaml` is not configured or contains placeholder values.
 
+**Test Scenarios**:
+- **Scenario 1 & 2**: Token lifecycle - login via browser and reuse token from previous scenario
+- **Scenario 3**: Expired session + expired refresh token - provider should re-authenticate via browser
+- **Token validation**: Explicit validation of token expiration in all scenarios
+
 **Note**: 
-- BTP integration tests use `xsuaa.btp_destination` and require `BtpServiceKeyStore`/`BtpSessionStore` (without `sapUrl`)
-- ABAP integration tests use `abap.destination` and require `AbapServiceKeyStore`/`AbapSessionStore` (with `sapUrl`)
-- BTP/ABAP integration tests may open a browser for authentication if no refresh token is available. This is expected behavior.
+- Integration tests use `AbapServiceKeyStore` and `AbapSessionStore` for loading service keys and sessions
+- Tests may open a browser for authentication if no refresh token is available. This is expected behavior.
+- Each test scenario uses a unique port (3101, 3102, 3103) to avoid port conflicts
+- Tests use `browser: 'system'` for interactive authentication (not `'none'`)
 
 ### Debug Logging
 
@@ -363,24 +369,23 @@ To enable detailed logging during tests or runtime, set environment variables:
 
 ```bash
 # Enable logging for auth providers
-DEBUG_AUTH_PROVIDERS=true npm test
-
-# Or enable browser auth specific logging
-DEBUG_BROWSER_AUTH=true npm test
+DEBUG_PROVIDER=true npm test
 
 # Set log level (debug, info, warn, error)
 LOG_LEVEL=debug npm test
 ```
 
-Logging shows:
+Logging uses `@mcp-abap-adt/logger` package with structured logging:
 - Token exchange stages (what we send, what we receive)
-- Token information (lengths, previews)
+- Token information (lengths, previews, expiration)
+- Token validation checks (expiration, validity)
 - Errors with details
 
 Example output:
 ```
-[INTEGRATION] Exchanging code for token: https://.../oauth/token
-[INTEGRATION] Tokens received: accessToken(2263 chars), refreshToken(34 chars)
+[INFO] ℹ️ [browserAuth] Exchanging code for token...
+[INFO] ℹ️ Tokens received: accessToken(2263 chars), refreshToken(34 chars)
+[DEBUG] 🐛 [BaseTokenProvider] Token validation check {"expiresAt":"2025-12-25T11:08:15.000Z","isValid":true}
 ```
 
 ## Dependencies

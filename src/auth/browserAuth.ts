@@ -228,12 +228,34 @@ export async function startBrowserAuth(
     const authorizationUrl =
       authConfig.authorizationUrl ?? getJwtAuthorizationUrl(authConfig, PORT);
 
+    log?.info(`[browserAuth] Authorization URL: ${authorizationUrl}`);
+    log?.info(`[browserAuth] Server listening on port: ${PORT}`);
+
+    // Verify port in redirect_uri matches server port
+    const redirectUriMatch = authorizationUrl.match(/redirect_uri=([^&]+)/);
+    if (redirectUriMatch) {
+      const redirectUri = decodeURIComponent(redirectUriMatch[1]);
+      const urlPortMatch = redirectUri.match(/localhost:(\d+)/);
+      if (urlPortMatch) {
+        const urlPort = parseInt(urlPortMatch[1], 10);
+        if (urlPort !== PORT) {
+          log?.warn(
+            `[browserAuth] WARNING: Port mismatch! URL has port ${urlPort}, but server listens on ${PORT}`,
+          );
+        } else {
+          log?.info(
+            `[browserAuth] Port match: URL and server both use port ${PORT}`,
+          );
+        }
+      }
+    }
+
     // OAuth2 callback handler
     app.get(
       '/callback',
       async (req: express.Request, res: express.Response) => {
         try {
-          log?.info(`Callback received: ${req.url}`);
+          log?.info(`[browserAuth] Callback received: ${req.url}`);
           log?.debug(`Callback query: ${JSON.stringify(req.query)}`);
 
           // Check for OAuth2 error parameters
@@ -317,15 +339,18 @@ export async function startBrowserAuth(
           }
 
           const { code } = req.query;
+          log?.info(
+            `[browserAuth] Callback code received: ${code ? 'yes' : 'no'}`,
+          );
           log?.debug(`Callback code received: ${code ? 'yes' : 'no'}`);
 
           if (!code || typeof code !== 'string') {
-            log?.error(`Callback code missing`);
+            log?.error(`[browserAuth] Callback code missing`);
             res.status(400).send('Error: Authorization code missing');
             return reject(new Error('Authorization code missing'));
           }
 
-          log?.debug(`Exchanging code for token`);
+          log?.info(`[browserAuth] Exchanging code for token...`);
 
           // Send success page
           const html = `<!DOCTYPE html>
@@ -386,16 +411,9 @@ export async function startBrowserAuth(
 </body>
 </html>`;
 
-          // Send success page first and ensure response is finished
-          res.send(html);
-
-          // Wait for response to finish before closing server
-          res.on('finish', () => {
-            // Response finished, now we can safely close server
-          });
-
-          // Exchange code for tokens and close server
+          // Exchange code for tokens first
           try {
+            log?.info(`[browserAuth] Starting token exchange...`);
             const tokens = await exchangeCodeForToken(
               authConfig,
               code,
@@ -403,32 +421,31 @@ export async function startBrowserAuth(
               log,
             );
             log?.info(
-              `Tokens received: accessToken(${tokens.accessToken?.length || 0} chars), refreshToken(${tokens.refreshToken?.length || 0} chars)`,
+              `[browserAuth] Tokens received: accessToken(${tokens.accessToken?.length || 0} chars), refreshToken(${tokens.refreshToken?.length || 0} chars)`,
             );
 
-            // Close all connections first to ensure port is freed
-            if (typeof server.closeAllConnections === 'function') {
-              server.closeAllConnections();
-            }
+            // Resolve promise FIRST - this allows test to continue immediately
+            log?.info(`[browserAuth] Resolving promise with tokens...`);
+            resolve(tokens);
+            log?.info(`[browserAuth] Promise resolved, sending response...`);
 
-            // Close server after response is finished
-            // This ensures the response connection is closed before server.close()
-            const closeServer = () => {
+            // Send success page (non-blocking, doesn't affect promise)
+            res.send(html);
+            log?.info(`[browserAuth] Response sent, waiting for finish...`);
+
+            // Close all connections and server after response is sent
+            res.once('finish', () => {
+              log?.info(`[browserAuth] Response finished, closing server...`);
+              if (typeof server.closeAllConnections === 'function') {
+                server.closeAllConnections();
+              }
               server.close(() => {
                 // Server closed - port should be freed
-                log?.debug(`Server closed, port ${PORT} should be freed`);
+                log?.info(
+                  `[browserAuth] Server closed, port ${PORT} should be freed`,
+                );
               });
-            };
-
-            if (res.finished) {
-              // Response already finished, close immediately
-              closeServer();
-            } else {
-              // Wait for response to finish
-              res.once('finish', closeServer);
-            }
-
-            resolve(tokens);
+            });
           } catch (error) {
             if (typeof server.closeAllConnections === 'function') {
               server.closeAllConnections();
@@ -481,6 +498,7 @@ export async function startBrowserAuth(
     });
 
     serverInstance = server.listen(PORT, async () => {
+      log?.info(`[browserAuth] Server started on port ${PORT}`);
       const browserApp = BROWSER_MAP[browser];
 
       // Handle 'none' and 'headless' modes - log URL and wait for callback

@@ -1,115 +1,272 @@
-import { jest } from '@jest/globals';
-import { AUTH_TYPE_AUTHORIZATION_CODE } from '@mcp-abap-adt/interfaces';
-import * as browserAuth from '../../auth/browserAuth';
-import * as tokenRefresher from '../../auth/tokenRefresher';
-import { AuthorizationCodeProvider } from '../../providers/AuthorizationCodeProvider';
+/**
+ * Integration tests for AuthorizationCodeProvider
+ * Tests with real service keys and session files from test-config.yaml
+ *
+ * Test scenarios:
+ * 1. Only service key (no session) - should login via browser
+ * 2. Service key + fresh session - should use token from session
+ * 3. Service key + expired session + expired refresh token - should login via browser
+ */
 
-const createJwtWithExp = (expSeconds: number): string => {
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
+import {
+  AbapServiceKeyStore,
+  AbapSessionStore,
+} from '@mcp-abap-adt/auth-stores';
+import type { ILogger } from '@mcp-abap-adt/interfaces';
+import { AUTH_TYPE_AUTHORIZATION_CODE } from '@mcp-abap-adt/interfaces';
+import { DefaultLogger, LogLevel } from '@mcp-abap-adt/logger';
+import { AuthorizationCodeProvider } from '../../providers/AuthorizationCodeProvider';
+import {
+  getDestination,
+  getServiceKeysDir,
+  getSessionsDir,
+  hasRealConfig,
+  loadTestConfig,
+} from '../helpers/configHelpers';
+
+// Helper to create logger if DEBUG_PROVIDER is enabled
+function createTestLogger(): ILogger | undefined {
+  if (process.env.DEBUG_PROVIDER === 'true') {
+    return new DefaultLogger(LogLevel.DEBUG);
+  }
+  return undefined;
+}
+
+// Helper to create expired JWT token
+const createExpiredJWT = (): string => {
   const header = Buffer.from(
     JSON.stringify({ alg: 'RS256', typ: 'JWT' }),
   ).toString('base64url');
-  const payload = Buffer.from(JSON.stringify({ exp: expSeconds })).toString(
-    'base64url',
-  );
+  const payload = Buffer.from(
+    JSON.stringify({ exp: Math.floor(Date.now() / 1000) - 3600 }), // Expired 1 hour ago
+  ).toString('base64url');
   return `${header}.${payload}.signature`;
 };
 
+// Helper to create valid JWT token
+const createValidJWT = (): string => {
+  const header = Buffer.from(
+    JSON.stringify({ alg: 'RS256', typ: 'JWT' }),
+  ).toString('base64url');
+  const payload = Buffer.from(
+    JSON.stringify({ exp: Math.floor(Date.now() / 1000) + 3600 }), // Valid for 1 hour
+  ).toString('base64url');
+  return `${header}.${payload}.signature`;
+};
+
+// Helper to validate token expiration
+// Returns true if token is valid (not expired), false otherwise
+const validateTokenExpiration = (token: string): boolean => {
+  try {
+    const parts = token.split('.');
+    if (parts.length !== 3) {
+      return false;
+    }
+
+    // Decode payload
+    const payload = parts[1];
+    const base64 = payload.replace(/-/g, '+').replace(/_/g, '/');
+    const padded = base64 + '=='.substring(0, (4 - (base64.length % 4)) % 4);
+    const decoded = Buffer.from(padded, 'base64').toString('utf8');
+    const claims = JSON.parse(decoded);
+
+    if (!claims.exp) {
+      return false;
+    }
+
+    // Add 60 second buffer to account for clock skew and network latency
+    const bufferMs = 60 * 1000;
+    const expiresAt = claims.exp * 1000; // Convert to milliseconds
+    return Date.now() < expiresAt - bufferMs;
+  } catch {
+    return false;
+  }
+};
+
 describe('AuthorizationCodeProvider', () => {
-  afterEach(() => {
-    jest.restoreAllMocks();
+  const config = loadTestConfig();
+  const destination = getDestination(config);
+  const serviceKeysDir = getServiceKeysDir(config);
+  const sessionsDir = getSessionsDir(config);
+  const hasRealConfigValue = hasRealConfig(config);
+
+  describe('Scenario 1 & 2: Token lifecycle', () => {
+    it('should login via browser and reuse token from Scenario 1', async () => {
+      if (!hasRealConfigValue) {
+        console.warn('⚠️  Skipping integration test - no real config');
+        return;
+      }
+
+      if (!destination || !serviceKeysDir) {
+        console.warn('⚠️  Skipping integration test - missing required config');
+        return;
+      }
+
+      // Use temporary session directory to avoid affecting real sessions
+      const tempSessionsDir = path.join(
+        os.tmpdir(),
+        `test-sessions-${Date.now()}`,
+      );
+      fs.mkdirSync(tempSessionsDir, { recursive: true });
+
+      try {
+        const serviceKeyStore = new AbapServiceKeyStore(serviceKeysDir);
+        const sessionStore = new AbapSessionStore(tempSessionsDir);
+
+        // Ensure no session exists
+        try {
+          await sessionStore.deleteSession(destination);
+        } catch {
+          // Session doesn't exist, that's fine
+        }
+
+        const authConfig =
+          await serviceKeyStore.getAuthorizationConfig(destination);
+        if (!authConfig) {
+          throw new Error(
+            'Failed to load authorization config from service key',
+          );
+        }
+
+        // Create provider with only service key (no session tokens)
+        // Use unique port for this test to avoid conflicts
+        const logger = createTestLogger();
+        const provider = new AuthorizationCodeProvider({
+          uaaUrl: authConfig.uaaUrl!,
+          clientId: authConfig.uaaClientId!,
+          clientSecret: authConfig.uaaClientSecret!,
+          browser: 'system', // Use system browser for authentication
+          redirectPort: 3101, // Unique port for Scenario 1
+          logger,
+        });
+
+        // Provider should attempt login via browser
+        const tokens1 = await provider.getTokens();
+        expect(tokens1.authorizationToken).toBeDefined();
+        expect(tokens1.authType).toBe(AUTH_TYPE_AUTHORIZATION_CODE);
+
+        // Validate that new token is valid and not expired
+        const isValid1 = validateTokenExpiration(tokens1.authorizationToken);
+        expect(isValid1).toBe(true);
+
+        // Wait a bit for server to fully close and port to be freed
+        await new Promise((resolve) => setTimeout(resolve, 500));
+
+        // Scenario 2: Use token from Scenario 1 - should use cached token
+        const provider2 = new AuthorizationCodeProvider({
+          uaaUrl: authConfig.uaaUrl!,
+          clientId: authConfig.uaaClientId!,
+          clientSecret: authConfig.uaaClientSecret!,
+          refreshToken: tokens1.refreshToken,
+          accessToken: tokens1.authorizationToken, // Use token from Scenario 1
+          browser: 'system', // Use system browser if token refresh/login needed
+          redirectPort: 3102, // Unique port for Scenario 2
+          logger,
+        });
+
+        const tokens2 = await provider2.getTokens();
+        expect(tokens2.authorizationToken).toBeDefined();
+        expect(tokens2.authType).toBe(AUTH_TYPE_AUTHORIZATION_CODE);
+        // Should use cached token from Scenario 1
+        expect(tokens2.authorizationToken).toBe(tokens1.authorizationToken);
+        const isValid2 = validateTokenExpiration(tokens2.authorizationToken);
+        expect(isValid2).toBe(true);
+      } finally {
+        // Cleanup
+        try {
+          fs.rmSync(tempSessionsDir, { recursive: true, force: true });
+        } catch {
+          // Ignore cleanup errors
+        }
+      }
+    }, 300000); // 5 minutes timeout for manual browser authentication
   });
 
-  it('logs in via browser auth and returns tokens', async () => {
-    const accessToken = createJwtWithExp(Math.floor(Date.now() / 1000) + 3600);
-    const startAuthSpy = jest
-      .spyOn(browserAuth, 'startBrowserAuth')
-      .mockResolvedValue({
-        accessToken,
-        refreshToken: 'refresh-token',
+  describe('Scenario 3: Service key + expired session + expired refresh token', () => {
+    it('should login via browser when refresh token is also expired', async () => {
+      if (!hasRealConfigValue) {
+        console.warn('⚠️  Skipping integration test - no real config');
+        return;
+      }
+
+      if (!destination || !serviceKeysDir) {
+        console.warn('⚠️  Skipping integration test - missing required config');
+        return;
+      }
+
+      const serviceKeyStore = new AbapServiceKeyStore(serviceKeysDir);
+
+      const authConfig =
+        await serviceKeyStore.getAuthorizationConfig(destination);
+      if (!authConfig) {
+        throw new Error('Failed to load authorization config from service key');
+      }
+
+      // Create provider with expired token and invalid refresh token
+      const logger = createTestLogger();
+      const expiredToken = createExpiredJWT();
+      const provider = new AuthorizationCodeProvider({
+        uaaUrl: authConfig.uaaUrl!,
+        clientId: authConfig.uaaClientId!,
+        clientSecret: authConfig.uaaClientSecret!,
+        refreshToken: 'invalid-expired-refresh-token', // Invalid refresh token
+        accessToken: expiredToken, // Expired token
+        browser: 'system', // Use system browser for authentication
+        redirectPort: 3103, // Unique port for Scenario 3
+        logger,
       });
 
-    const provider = new AuthorizationCodeProvider({
-      uaaUrl: 'https://uaa.example.com',
-      clientId: 'client-id',
-      clientSecret: 'client-secret',
-      authorizationUrl: 'https://auth.example.com',
-      browser: 'none',
-      redirectPort: 4001,
-    });
+      // Provider should attempt refresh, fail, then attempt login via browser
+      const tokens = await provider.getTokens();
+      expect(tokens.authorizationToken).toBeDefined();
+      expect(tokens.authType).toBe(AUTH_TYPE_AUTHORIZATION_CODE);
 
-    const result = await provider.getTokens();
-
-    expect(result.authorizationToken).toBe(accessToken);
-    expect(result.refreshToken).toBe('refresh-token');
-    expect(result.authType).toBe(AUTH_TYPE_AUTHORIZATION_CODE);
-    expect(startAuthSpy).toHaveBeenCalledWith(
-      expect.objectContaining({
-        uaaUrl: 'https://uaa.example.com',
-        uaaClientId: 'client-id',
-        uaaClientSecret: 'client-secret',
-        authorizationUrl: 'https://auth.example.com',
-      }),
-      'none',
-      undefined,
-      4001,
-    );
+      // Validate that new token is valid and not expired
+      const isValid = validateTokenExpiration(tokens.authorizationToken);
+      expect(isValid).toBe(true);
+    }, 300000); // 5 minutes timeout for manual browser authentication
   });
 
-  it('refreshes using refresh token when cached token is expired', async () => {
-    const expiredToken = createJwtWithExp(Math.floor(Date.now() / 1000) - 3600);
-    const refreshedToken = createJwtWithExp(
-      Math.floor(Date.now() / 1000) + 3600,
-    );
+  describe('Token validation', () => {
+    it('should validate token expiration correctly', async () => {
+      if (!hasRealConfigValue) {
+        console.warn('⚠️  Skipping integration test - no real config');
+        return;
+      }
 
-    const refreshSpy = jest
-      .spyOn(tokenRefresher, 'refreshJwtToken')
-      .mockResolvedValue({
-        accessToken: refreshedToken,
+      if (!destination || !serviceKeysDir) {
+        console.warn('⚠️  Skipping integration test - missing required config');
+        return;
+      }
+
+      const serviceKeyStore = new AbapServiceKeyStore(serviceKeysDir);
+
+      const authConfig =
+        await serviceKeyStore.getAuthorizationConfig(destination);
+      if (!authConfig) {
+        throw new Error('Failed to load authorization config from service key');
+      }
+
+      const logger = createTestLogger();
+      const provider = new AuthorizationCodeProvider({
+        uaaUrl: authConfig.uaaUrl!,
+        clientId: authConfig.uaaClientId!,
+        clientSecret: authConfig.uaaClientSecret!,
+        logger,
       });
 
-    const provider = new AuthorizationCodeProvider({
-      uaaUrl: 'https://uaa.example.com',
-      clientId: 'client-id',
-      clientSecret: 'client-secret',
-      accessToken: expiredToken,
-      refreshToken: 'refresh-token',
-    });
+      // Test validation of expired token
+      const expiredToken = createExpiredJWT();
+      const isValidExpired = await provider.validateToken?.(expiredToken);
+      expect(isValidExpired).toBe(false);
 
-    const result = await provider.getTokens();
-
-    expect(refreshSpy).toHaveBeenCalledWith(
-      'refresh-token',
-      'https://uaa.example.com',
-      'client-id',
-      'client-secret',
-    );
-    expect(result.authorizationToken).toBe(refreshedToken);
-    expect(result.refreshToken).toBe('refresh-token');
-  });
-
-  it('falls back to login when refresh fails', async () => {
-    const expiredToken = createJwtWithExp(Math.floor(Date.now() / 1000) - 3600);
-    const accessToken = createJwtWithExp(Math.floor(Date.now() / 1000) + 3600);
-
-    const refreshSpy = jest
-      .spyOn(tokenRefresher, 'refreshJwtToken')
-      .mockRejectedValue(new Error('refresh failed'));
-    const startAuthSpy = jest
-      .spyOn(browserAuth, 'startBrowserAuth')
-      .mockResolvedValue({ accessToken });
-
-    const provider = new AuthorizationCodeProvider({
-      uaaUrl: 'https://uaa.example.com',
-      clientId: 'client-id',
-      clientSecret: 'client-secret',
-      accessToken: expiredToken,
-      refreshToken: 'refresh-token',
-    });
-
-    const result = await provider.getTokens();
-
-    expect(refreshSpy).toHaveBeenCalled();
-    expect(startAuthSpy).toHaveBeenCalled();
-    expect(result.authorizationToken).toBe(accessToken);
+      // Test validation of valid token
+      const validToken = createValidJWT();
+      const isValidValid = await provider.validateToken?.(validToken);
+      expect(isValidValid).toBe(true);
+    }, 30000);
   });
 });

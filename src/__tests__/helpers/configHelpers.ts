@@ -1,6 +1,6 @@
 /**
  * Configuration helpers for auth-providers tests
- * Loads test configuration from test-config.yaml (same format as auth-broker)
+ * Loads test configuration from test-config.yaml
  */
 
 import * as fs from 'node:fs';
@@ -10,20 +10,10 @@ import * as yaml from 'js-yaml';
 let cachedConfig: any = null;
 
 export interface TestConfig {
-  auth_broker?: {
-    paths?: {
-      service_keys_dir?: string;
-      sessions_dir?: string;
-    };
-    abap?: {
-      destination?: string;
-    };
-    xsuaa?: {
-      btp_destination?: string;
-      mcp_destination?: string;
-      mcp_url?: string;
-    };
-  };
+  destination?: string;
+  destination_dir?: string; // Base directory for service-keys and sessions subdirectories
+  service_key_path?: string; // Relative path to specific service key file (alternative to destination_dir)
+  session_path?: string; // Relative path to specific session file (alternative to destination_dir)
 }
 
 /**
@@ -108,90 +98,138 @@ export function loadTestConfig(): TestConfig {
 /**
  * Check if test config has real values (not placeholders)
  */
-export function hasRealConfig(
-  config: TestConfig,
-  section: 'abap' | 'xsuaa',
-): boolean {
-  if (!config.auth_broker) {
+export function hasRealConfigValue(config?: TestConfig): boolean {
+  const cfg = config || loadTestConfig();
+  if (!cfg.destination) {
     return false;
   }
-
-  if (section === 'abap') {
-    const abap = config.auth_broker.abap;
-    if (!abap?.destination) {
-      return false;
-    }
-    // Check if destination is not a placeholder
-    return !abap.destination.includes('<') && !abap.destination.includes('>');
-  }
-
-  if (section === 'xsuaa') {
-    const xsuaa = config.auth_broker.xsuaa;
-    if (!xsuaa?.btp_destination) {
-      return false;
-    }
-    // Check if values are not placeholders
-    return !xsuaa.btp_destination.includes('<');
-  }
-
-  return false;
+  // Check if destination is not a placeholder
+  return !cfg.destination.includes('<') && !cfg.destination.includes('>');
 }
 
 /**
- * Get ABAP destination from config
+ * Get destination from config
  */
-export function getAbapDestination(config?: TestConfig): string | null {
+export function getDestination(config?: TestConfig): string | null {
   const cfg = config || loadTestConfig();
-  return cfg.auth_broker?.abap?.destination || null;
+  return cfg.destination || null;
 }
 
 /**
- * Get XSUAA destinations from config
+ * Get default destination directory based on platform
  */
-export function getXsuaaDestinations(config?: TestConfig): {
-  btp_destination: string | null;
-  mcp_url: string | null;
-} {
+function getDefaultDestinationDir(): string {
+  const homeDir = process.env.HOME || process.env.USERPROFILE || '';
+  if (process.platform === 'win32') {
+    return path.join(homeDir, 'Documents', 'mcp-abap-adt');
+  }
+  return path.join(homeDir, '.config', 'mcp-abap-adt');
+}
+
+/**
+ * Get destination directory from config or use default
+ */
+function getDestinationDir(config?: TestConfig): string {
   const cfg = config || loadTestConfig();
-  const xsuaa = cfg.auth_broker?.xsuaa;
-  return {
-    btp_destination: xsuaa?.btp_destination || null,
-    mcp_url: xsuaa?.mcp_url || null,
-  };
+
+  if (cfg.destination_dir) {
+    // Expand ~ to home directory
+    if (cfg.destination_dir.startsWith('~')) {
+      const homeDir = process.env.HOME || process.env.USERPROFILE || '';
+      return cfg.destination_dir.replace('~', homeDir);
+    }
+    return cfg.destination_dir;
+  }
+
+  return getDefaultDestinationDir();
 }
 
 /**
  * Get service keys directory from config
- * Expands ~ to home directory
+ * Uses base_dir/service-keys or default platform path
  */
-export function getServiceKeysDir(config?: TestConfig): string | null {
+export function getServiceKeysDir(config?: TestConfig): string {
   const cfg = config || loadTestConfig();
-  const dir = cfg.auth_broker?.paths?.service_keys_dir;
-  if (!dir) return null;
 
-  // Expand ~ to home directory
-  if (dir.startsWith('~')) {
-    const homeDir = process.env.HOME || process.env.USERPROFILE || '';
-    return dir.replace('~', homeDir);
+  // If service_key_path is specified, return its directory
+  if (cfg.service_key_path) {
+    const projectRoot = findProjectRoot();
+    const fullPath = path.resolve(projectRoot, cfg.service_key_path);
+    return path.dirname(fullPath);
   }
 
-  return dir;
+  // Use destination_dir/service-keys
+  const destinationDir = getDestinationDir(cfg);
+  return path.join(destinationDir, 'service-keys');
 }
 
 /**
  * Get sessions directory from config
- * Expands ~ to home directory
+ * Uses base_dir/sessions or default platform path
  */
-export function getSessionsDir(config?: TestConfig): string | null {
+export function getSessionsDir(config?: TestConfig): string {
   const cfg = config || loadTestConfig();
-  const dir = cfg.auth_broker?.paths?.sessions_dir;
-  if (!dir) return null;
 
-  // Expand ~ to home directory
-  if (dir.startsWith('~')) {
-    const homeDir = process.env.HOME || process.env.USERPROFILE || '';
-    return dir.replace('~', homeDir);
+  // If session_path is specified, return its directory
+  if (cfg.session_path) {
+    const projectRoot = findProjectRoot();
+    const fullPath = path.resolve(projectRoot, cfg.session_path);
+    return path.dirname(fullPath);
   }
 
-  return dir;
+  // Use destination_dir/sessions
+  const destinationDir = getDestinationDir(cfg);
+  return path.join(destinationDir, 'sessions');
+}
+
+/**
+ * Get service key file path
+ * Returns full path to service key file
+ */
+export function getServiceKeyPath(config?: TestConfig): string | null {
+  const cfg = config || loadTestConfig();
+  const destination = cfg.destination;
+  if (!destination) return null;
+
+  // If service_key_path is specified, use it
+  if (cfg.service_key_path) {
+    const projectRoot = findProjectRoot();
+    return path.resolve(projectRoot, cfg.service_key_path);
+  }
+
+  // Construct from directory + destination
+  const serviceKeysDir = getServiceKeysDir(cfg);
+  return path.join(serviceKeysDir, `${destination}.json`);
+}
+
+/**
+ * Get session file path
+ * Returns full path to session file
+ */
+export function getSessionPath(config?: TestConfig): string | null {
+  const cfg = config || loadTestConfig();
+  const destination = cfg.destination;
+  if (!destination) return null;
+
+  // If session_path is specified, use it
+  if (cfg.session_path) {
+    const projectRoot = findProjectRoot();
+    return path.resolve(projectRoot, cfg.session_path);
+  }
+
+  // Construct from directory + destination
+  const sessionsDir = getSessionsDir(cfg);
+  return path.join(sessionsDir, `${destination}.env`);
+}
+
+// Legacy functions for backward compatibility
+export function getAbapDestination(config?: TestConfig): string | null {
+  return getDestination(config);
+}
+
+export function hasRealConfig(
+  config?: TestConfig,
+  _section?: 'abap' | 'xsuaa',
+): boolean {
+  return hasRealConfigValue(config);
 }

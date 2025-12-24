@@ -1,33 +1,24 @@
 # Test configuration template for auth-providers integration tests
 # Copy this file to test-config.yaml and fill in real values
 # test-config.yaml is in .gitignore and should not be committed
+#
+# Integration tests use this config to:
+# - Load service keys and session files
+# - Test all provider scenarios (AuthorizationCodeProvider, DeviceFlowProvider, ClientCredentialsProvider)
+#
+# Test scenarios covered:
+# 1. Only service key (no session) - provider should login/authenticate
+# 2. Service key + fresh session - provider should use token from session
+# 3. Service key + expired session - provider should refresh token
+# 4. Service key + expired session + expired refresh token - provider should re-authenticate
 
-auth_broker:
-  # Paths configuration (applies to both ABAP and XSUAA)
-  paths:
-    # Directory where service key JSON files are stored
-    # Service key files: <destination>.json (e.g., TRIAL.json, mcp.json)
-    # If not specified, uses default: ~/.config/mcp-abap-adt/service-keys/ (Unix) or %USERPROFILE%\Documents\mcp-abap-adt\service-keys\ (Windows)
-    service_keys_dir: <SERVICE_KEYS_DIR>
-    
-    # Directory where session ENV files are stored
-    # Session files: <destination>.env (e.g., TRIAL.env, mcp.env)
-    # If not specified, uses default: ~/.config/mcp-abap-adt/sessions/ (Unix) or %USERPROFILE%\Documents\mcp-abap-adt\sessions\ (Windows)
-    sessions_dir: <SESSIONS_DIR>
+# Destination name (used for service key file: <destination>.json and session file: <destination>.env)
+# Example: "trial" -> looks for trial.json and trial.env
+destination: <TEST_DESTINATION>  # ⚠️ UPDATE: Replace with your destination name (e.g., "trial", "mcp")
 
-  # ABAP destination configuration (for on-premise or cloud ABAP systems)
-  abap:
-    # ABAP destination name (used for service key file: <destination>.json and session file: <destination>.env)
-    # Example: "TRIAL" -> looks for TRIAL.json in service-keys directory and TRIAL.env in sessions directory
-    destination: <TEST_ABAP_DESTINATION>
-
-  # XSUAA destination configuration (for XSUAA service connections with reduced scope)
-  xsuaa:
-    # XSUAA destination name (used for service key file: <btp_destination>.json)
-    # Example: "mcp" -> looks for mcp.json in service-keys directory
-    btp_destination: <TEST_BTP_DESTINATION>
-    
-    # MCP server URL (optional - can be provided via session, parameter, or request header)
-    # For XSUAA, service key only contains UAA credentials, MCP URL is provided separately
-    mcp_url: <TEST_MCP_URL>
-
+# Optional: Destination directory (base directory for service keys and sessions)
+# If not specified, uses default platform paths:
+#   Unix: ~/.config/mcp-abap-adt
+#   Windows: %USERPROFILE%\Documents\mcp-abap-adt
+# Uncomment and set if you need a custom path:
+# destination_dir: ~/.config/mcp-abap-adt
