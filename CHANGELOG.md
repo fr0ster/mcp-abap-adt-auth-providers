@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.7] - 2025-12-24
+
+### Changed
+- **AuthorizationCodeProvider**: configured via constructor; `getTokens()` has no parameters
+- **ClientCredentialsProvider**: configured via constructor; `getTokens()` has no parameters
+- **BaseTokenProvider**: `getTokens()` signature matches the stateful interface (no parameters)
+
+### Fixed
+- **Tests**: updated jest dependencies and typings for `@jest/globals`
+
 ## [0.2.6] - 2025-12-24
 
 ### Changed
