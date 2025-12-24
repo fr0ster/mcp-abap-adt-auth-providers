@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.6] - 2025-12-24
+
+### Changed
+- **AuthorizationCodeProvider**: implements the new stateful `ITokenProvider.getTokens(authConfig, options)` flow
+- **ClientCredentialsProvider**: implements the new stateful `ITokenProvider.getTokens(authConfig, options)` flow
+- **BaseTokenProvider**: updated to accept `authConfig` and `options` parameters
+
+### Removed
+- **BtpTokenProvider**: removed in favor of `AuthorizationCodeProvider`
+- **XsuaaTokenProvider**: removed in favor of `AuthorizationCodeProvider` and `ClientCredentialsProvider`
+
 ## [0.2.5] - 2025-12-22
 
 ### Changed

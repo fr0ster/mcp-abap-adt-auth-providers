@@ -46,6 +46,25 @@ export class AuthorizationCodeProvider extends BaseTokenProvider {
     super();
     this.config = config;
 
+    const missingFields: string[] = [];
+    if (!config.uaaUrl) {
+      missingFields.push('uaaUrl');
+    }
+    if (!config.clientId) {
+      missingFields.push('clientId');
+    }
+    if (!config.clientSecret) {
+      missingFields.push('clientSecret');
+    }
+    if (missingFields.length > 0) {
+      const error = new Error(
+        `Missing required fields: ${missingFields.join(', ')}`,
+      ) as Error & { code: string; missingFields: string[] };
+      error.code = 'VALIDATION_ERROR';
+      error.missingFields = missingFields;
+      throw error;
+    }
+
     // Initialize from provided tokens if available
     if (config.accessToken) {
       this.authorizationToken = config.accessToken;
@@ -55,6 +74,10 @@ export class AuthorizationCodeProvider extends BaseTokenProvider {
     if (config.refreshToken) {
       this.refreshToken = config.refreshToken;
     }
+  }
+
+  async getTokens(): Promise<ITokenResult> {
+    return super.getTokens();
   }
 
   protected getAuthType(): OAuth2GrantType {

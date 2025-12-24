@@ -28,6 +28,28 @@ export class ClientCredentialsProvider extends BaseTokenProvider {
   constructor(config: ClientCredentialsProviderConfig) {
     super();
     this.config = config;
+    const missingFields: string[] = [];
+    if (!config.uaaUrl) {
+      missingFields.push('uaaUrl');
+    }
+    if (!config.clientId) {
+      missingFields.push('clientId');
+    }
+    if (!config.clientSecret) {
+      missingFields.push('clientSecret');
+    }
+    if (missingFields.length > 0) {
+      const error = new Error(
+        `Missing required fields: ${missingFields.join(', ')}`,
+      ) as Error & { code: string; missingFields: string[] };
+      error.code = 'VALIDATION_ERROR';
+      error.missingFields = missingFields;
+      throw error;
+    }
+  }
+
+  async getTokens(): Promise<ITokenResult> {
+    return super.getTokens();
   }
 
   protected getAuthType(): OAuth2GrantType {

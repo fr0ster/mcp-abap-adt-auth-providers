@@ -2,7 +2,7 @@
  * @mcp-abap-adt/auth-providers
  * Token providers for MCP ABAP ADT auth-broker
  *
- * Provides XSUAA and BTP token providers
+ * Provides token providers
  */
 
 // Errors
@@ -26,6 +26,3 @@ export {
   ClientCredentialsProvider,
   DeviceFlowProvider,
 } from './providers';
-export { BtpTokenProvider } from './providers/BtpTokenProvider';
-// Token providers
-export { XsuaaTokenProvider } from './providers/XsuaaTokenProvider';

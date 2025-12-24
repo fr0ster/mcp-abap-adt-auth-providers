@@ -1,6 +1,6 @@
 # @mcp-abap-adt/auth-providers
 
-Token providers for MCP ABAP ADT auth-broker - XSUAA and BTP token providers.
+Token providers for MCP ABAP ADT auth-broker.
 
 This package provides token provider implementations for the `@mcp-abap-adt/auth-broker` package.
 
@@ -12,10 +12,12 @@ npm install @mcp-abap-adt/auth-providers
 
 ## Overview
 
-This package implements the `ITokenProvider` interface from `@mcp-abap-adt/auth-broker`:
+This package implements the `ITokenProvider` interface from `@mcp-abap-adt/interfaces`:
 
-- **XsuaaTokenProvider** - Uses `client_credentials` grant type (no browser required)
-- **BtpTokenProvider** - Uses browser-based OAuth2 or refresh token flow
+- **AuthorizationCodeProvider** - Uses browser-based OAuth2 authorization code flow (user token)
+- **ClientCredentialsProvider** - Uses `client_credentials` grant type (no browser required)
+
+Providers are configured via constructor; `getTokens()` takes no parameters and handles refresh/login internally.
 
 ## Responsibilities and Design Principles
 
@@ -39,18 +41,18 @@ This principle ensures:
 
 This package is responsible for:
 
-1. **Implementing token provider interface**: Provides concrete implementations of `ITokenProvider` interface defined in `@mcp-abap-adt/auth-broker`
+1. **Implementing token provider interface**: Provides concrete implementations of `ITokenProvider` interface defined in `@mcp-abap-adt/interfaces`
 2. **Token acquisition**: Handles OAuth2 flows (browser-based, refresh token, client credentials) to obtain JWT tokens
 3. **Token validation**: Validates JWT locally by checking exp claim (no HTTP requests)
 4. **OAuth2 flows**: Manages browser-based OAuth2 authorization code flow and refresh token flow
 
 #### What This Package Does
 
-- **Implements ITokenProvider**: Provides concrete implementations (`XsuaaTokenProvider`, `BtpTokenProvider`)
+- **Implements ITokenProvider**: Provides concrete implementations (`AuthorizationCodeProvider`, `ClientCredentialsProvider`)
 - **Handles OAuth2 flows**: Browser-based OAuth2, refresh token, and client credentials grant types
 - **Obtains tokens**: Makes HTTP requests to UAA endpoints to obtain JWT tokens
 - **Validates tokens**: Validates JWT locally by checking exp claim (no HTTP requests)
-- **Returns connection config**: Returns `IConnectionConfig` with `authorizationToken` and optionally `serviceUrl` (if known)
+- **Returns tokens**: Returns `ITokenResult` with `authorizationToken` and optional `refreshToken`
 
 #### What This Package Does NOT Do
 
@@ -64,7 +66,7 @@ This package is responsible for:
 
 This package interacts with external packages **ONLY through interfaces**:
 
-- **`@mcp-abap-adt/auth-broker`**: Uses interfaces (`ITokenProvider`, `IAuthorizationConfig`, `IConnectionConfig`) - does not know about `AuthBroker` implementation
+- **`@mcp-abap-adt/auth-broker`**: Uses interfaces (`ITokenProvider`, `IAuthorizationConfig`) - does not know about `AuthBroker` implementation
 - **`@mcp-abap-adt/logger`**: Uses `Logger` interface for logging - does not know about concrete logger implementation
 - **`@mcp-abap-adt/connection`**: Uses connection utilities for token validation - interacts through well-defined functions
 - **No direct dependencies on stores**: All interactions with stores happen through interfaces passed by consumers
@@ -75,17 +77,26 @@ This package interacts with external packages **ONLY through interfaces**:
 
 ```typescript
 import { AuthBroker } from '@mcp-abap-adt/auth-broker';
-import { XsuaaTokenProvider, BtpTokenProvider } from '@mcp-abap-adt/auth-providers';
+import { AuthorizationCodeProvider, ClientCredentialsProvider } from '@mcp-abap-adt/auth-providers';
 
-// Use XSUAA provider (client_credentials)
-const xsuaaBroker = new AuthBroker({
-  tokenProvider: new XsuaaTokenProvider(),
-}, 'none'); // Browser not needed
-
-// Use BTP provider (browser OAuth2 or refresh token)
-const btpBroker = new AuthBroker({
-  tokenProvider: new BtpTokenProvider(),
+// User token via authorization_code (browser flow)
+const authCodeBroker = new AuthBroker({
+  tokenProvider: new AuthorizationCodeProvider({
+    uaaUrl: 'https://...',
+    clientId: '...',
+    clientSecret: '...',
+    browser: 'system',
+  }),
 });
+
+// Service token via client_credentials (no browser)
+const clientCredsBroker = new AuthBroker({
+  tokenProvider: new ClientCredentialsProvider({
+    uaaUrl: 'https://...',
+    clientId: '...',
+    clientSecret: '...',
+  }),
+}, 'none');
 ```
 
 ### With Stores
@@ -96,7 +107,7 @@ const btpBroker = new AuthBroker({
 
 ```typescript
 import { AuthBroker } from '@mcp-abap-adt/auth-broker';
-import { XsuaaTokenProvider, BtpTokenProvider } from '@mcp-abap-adt/auth-providers';
+import { AuthorizationCodeProvider, ClientCredentialsProvider } from '@mcp-abap-adt/auth-providers';
 import { 
   XsuaaServiceKeyStore, 
   XsuaaSessionStore,
@@ -106,14 +117,18 @@ import {
   AbapSessionStore 
 } from '@mcp-abap-adt/auth-stores';
 
-// XSUAA provider with stores
+// XSUAA provider with stores (client_credentials or auth code)
 const xsuaaServiceKeyStore = new XsuaaServiceKeyStore('/path/to/service-keys');
 const xsuaaSessionStore = new XsuaaSessionStore('/path/to/sessions');
 
 const xsuaaBroker = new AuthBroker({
   serviceKeyStore: xsuaaServiceKeyStore,
   sessionStore: xsuaaSessionStore,
-  tokenProvider: new XsuaaTokenProvider(),
+  tokenProvider: new ClientCredentialsProvider({
+    uaaUrl: 'https://...',
+    clientId: '...',
+    clientSecret: '...',
+  }),
 }, 'none');
 
 // BTP provider with stores (base BTP, without sapUrl)
@@ -123,7 +138,12 @@ const btpSessionStore = new BtpSessionStore('/path/to/sessions');
 const btpBroker = new AuthBroker({
   serviceKeyStore: btpServiceKeyStore,
   sessionStore: btpSessionStore,
-  tokenProvider: new BtpTokenProvider(),
+  tokenProvider: new AuthorizationCodeProvider({
+    uaaUrl: 'https://...',
+    clientId: '...',
+    clientSecret: '...',
+    browser: 'system',
+  }),
 });
 
 // ABAP provider with stores (with sapUrl)
@@ -134,68 +154,57 @@ const abapSessionStore = new AbapSessionStore('/path/to/sessions');
 const abapBroker = new AuthBroker({
   serviceKeyStore: abapServiceKeyStore,
   sessionStore: abapSessionStore,
-  tokenProvider: new BtpTokenProvider(4001), // Custom port to avoid conflicts
+  tokenProvider: new AuthorizationCodeProvider({
+    uaaUrl: 'https://...',
+    clientId: '...',
+    clientSecret: '...',
+    browser: 'system',
+    redirectPort: 4001,
+  }), // Custom port to avoid conflicts
 });
 ```
 
 ### Token Providers
 
-#### XsuaaTokenProvider
-
-Uses `client_credentials` grant type - no browser interaction required:
-
-```typescript
-import { XsuaaTokenProvider } from '@mcp-abap-adt/auth-providers';
-import type { IAuthorizationConfig } from '@mcp-abap-adt/auth-broker';
-
-const provider = new XsuaaTokenProvider();
-
-const authConfig: IAuthorizationConfig = {
-  uaaUrl: 'https://...authentication...hana.ondemand.com',
-  uaaClientId: '...',
-  uaaClientSecret: '...',
-};
-
-const result = await provider.getConnectionConfig(authConfig, {
-  logger: defaultLogger,
-});
-
-// result.connectionConfig.authorizationToken contains the JWT token
-// result.refreshToken is undefined (client_credentials doesn't provide refresh tokens)
-```
-
-#### BtpTokenProvider
+#### AuthorizationCodeProvider
 
 Uses browser-based OAuth2 flow or refresh token:
 
 ```typescript
-import { BtpTokenProvider } from '@mcp-abap-adt/auth-providers';
-import type { IAuthorizationConfig } from '@mcp-abap-adt/auth-broker';
+import { AuthorizationCodeProvider } from '@mcp-abap-adt/auth-providers';
 
-// Create provider with default port (3001)
-// If the port is busy, an error will be thrown
-const provider = new BtpTokenProvider();
-
-// Or specify custom port for OAuth callback server
-// If the port is busy, an error will be thrown
-const providerWithCustomPort = new BtpTokenProvider(4002);
-
-const authConfig: IAuthorizationConfig = {
+const provider = new AuthorizationCodeProvider({
   uaaUrl: 'https://...authentication...hana.ondemand.com',
-  uaaClientId: '...',
-  uaaClientSecret: '...',
-  refreshToken: '...', // Optional - if provided, uses refresh flow instead of browser
-};
-
-// If refreshToken is provided, uses refresh flow (no browser)
-// Otherwise, opens browser for OAuth2 authorization
-const result = await provider.getConnectionConfig(authConfig, {
-  logger: defaultLogger,
-  browser: 'system', // 'system', 'headless', 'none', 'chrome', 'edge', 'firefox'
+  clientId: '...',
+  clientSecret: '...',
+  browser: 'system',
 });
 
-// result.connectionConfig.authorizationToken contains the JWT token
+// If refreshToken is provided here, uses refresh flow (no browser)
+// Otherwise, opens browser for OAuth2 authorization
+const result = await provider.getTokens();
+
+// result.authorizationToken contains the JWT token
 // result.refreshToken contains refresh token (if browser flow was used)
+```
+
+#### ClientCredentialsProvider
+
+Uses `client_credentials` grant type - no browser interaction required:
+
+```typescript
+import { ClientCredentialsProvider } from '@mcp-abap-adt/auth-providers';
+
+const provider = new ClientCredentialsProvider({
+  uaaUrl: 'https://...authentication...hana.ondemand.com',
+  clientId: '...',
+  clientSecret: '...',
+});
+
+const result = await provider.getTokens();
+
+// result.authorizationToken contains the JWT token
+// result.refreshToken is undefined (client_credentials doesn't provide refresh tokens)
 ```
 
 **Note**: The `browserAuthPort` parameter (default: 3001) configures the OAuth callback server port. If the requested port is already in use, an error will be thrown. You must specify a different port or free the port before starting authentication. The server properly closes all connections and frees the port after authentication completes, ensuring no lingering port occupation. 
@@ -210,10 +219,7 @@ const result = await provider.getConnectionConfig(authConfig, {
 **Headless Mode (SSH/Remote)**: For environments without a display (SSH sessions, Docker, CI/CD), use `browser: 'headless'`:
 
 ```typescript
-const result = await provider.getConnectionConfig(authConfig, {
-  logger: defaultLogger,
-  browser: 'headless', // Logs URL and waits for manual callback
-});
+const result = await provider.getTokens();
 ```
 
 In headless mode, the authentication URL is logged and the server waits for the user to complete authentication manually. The user can open the URL on any machine and the callback will be received by the server.
@@ -226,7 +232,7 @@ In headless mode, the authentication URL is logged and the server waits for the 
 
 ### Token Validation
 
-Both providers perform **local JWT validation** by checking the `exp` (expiration) claim:
+Providers can perform **local JWT validation** by checking the `exp` (expiration) claim:
 
 ```typescript
 const isValid = await provider.validateToken(token, serviceUrl);
@@ -239,8 +245,12 @@ const isValid = await provider.validateToken(token, serviceUrl);
 - HTTP errors (401/403) are handled by retry mechanism in `makeAdtRequest` wrapper
 
 ```typescript
-// Both providers - local validation (no HTTP)
-const provider = new BtpTokenProvider(); // or new XsuaaTokenProvider()
+// Local validation (no HTTP)
+const provider = new AuthorizationCodeProvider({
+  uaaUrl: 'https://...authentication...hana.ondemand.com',
+  clientId: '...',
+  clientSecret: '...',
+});
 const isValid = await provider.validateToken(token);  // serviceUrl optional
 // Checks JWT exp claim locally, no network request
 ```
@@ -250,52 +260,14 @@ This approach prevents unnecessary token refresh and browser authentication when
 - Network is slow or unstable
 - Running in offline/disconnected mode
 
-### Token Refresh Methods
+### Token Refresh
 
-Both providers implement two refresh methods from `ITokenProvider` interface:
-
-#### refreshTokenFromSession
-
-Refreshes token using existing session data (with refreshToken):
-
-```typescript
-import { XsuaaTokenProvider } from '@mcp-abap-adt/auth-providers';
-import { ValidationError, RefreshError } from '@mcp-abap-adt/auth-providers';
-
-const provider = new XsuaaTokenProvider();
-
-const authConfig: IAuthorizationConfig = {
-  uaaUrl: 'https://...authentication...hana.ondemand.com',
-  uaaClientId: '...',
-  uaaClientSecret: '...',
-  refreshToken: '...', // From existing session
-};
-
-try {
-  const result = await provider.refreshTokenFromSession(authConfig);
-  // XSUAA uses client_credentials - no refresh token in response
-  // BTP uses browser auth - returns new refresh token
-} catch (error) {
-  if (error instanceof ValidationError) {
-    // authConfig missing required fields
-    console.error('Missing fields:', error.missingFields); // ['uaaUrl', 'uaaClientId', ...]
-  } else if (error instanceof RefreshError) {
-    // Token refresh failed
-    console.error('Refresh failed:', error.message);
-    console.error('Original error:', error.cause);
-  }
-}
-```
-
-#### refreshTokenFromServiceKey
-
-Refreshes token using service key credentials (without refreshToken):
+Providers handle refresh automatically inside `getTokens()`. No separate refresh methods are needed.
 
 ```typescript
 try {
-  const result = await provider.refreshTokenFromServiceKey(authConfig);
-  // Both XSUAA and BTP use browser authentication for service key refresh
-  // Returns new access token and refresh token
+  const result = await provider.getTokens();
+  // Returns new access token and refresh token (if available)
 } catch (error) {
   if (error instanceof ValidationError) {
     console.error('Missing fields:', error.missingFields);
@@ -320,10 +292,10 @@ import {
 } from '@mcp-abap-adt/auth-providers';
 
 try {
-  const result = await provider.refreshTokenFromSession(authConfig);
+  const result = await provider.getTokens();
 } catch (error) {
   if (error instanceof ValidationError) {
-    // authConfig validation failed
+    // provider config validation failed
     console.error('Missing required fields:', error.missingFields);
     console.error('Error code:', error.code); // 'VALIDATION_ERROR'
   } else if (error instanceof RefreshError) {
@@ -340,7 +312,7 @@ try {
 
 **Error Types**:
 - `TokenProviderError` - Base class with `code: string` property
-- `ValidationError` - authConfig validation failed, includes `missingFields: string[]`
+- `ValidationError` - provider config validation failed, includes `missingFields: string[]`
 - `RefreshError` - Token refresh failed, includes `cause?: Error`
 - `SessionDataError` - Session data invalid, includes `missingFields: string[]`
 - `ServiceKeyError` - Service key data invalid, includes `missingFields: string[]`

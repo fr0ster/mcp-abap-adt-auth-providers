@@ -105,6 +105,15 @@ export abstract class BaseTokenProvider implements ITokenProvider {
     return result;
   }
 
+  async validateToken(_token: string, _serviceUrl?: string): Promise<boolean> {
+    const expiresAt = this.parseExpirationFromJWT(_token);
+    if (!expiresAt) {
+      return false;
+    }
+    const bufferMs = 60 * 1000;
+    return Date.now() < expiresAt - bufferMs;
+  }
+
   /**
    * Update internal token cache from result
    * @param result Token result to cache

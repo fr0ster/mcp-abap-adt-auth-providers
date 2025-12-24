@@ -215,7 +215,7 @@ describe('browserAuth browser modes', () => {
       // Verify URL contains oauth/authorize and clientId
       const infoCalls = (logger.info as jest.Mock).mock.calls;
       const urlLogCall = infoCalls.find(
-        (call) =>
+        (call: unknown[]) =>
           typeof call[0] === 'string' && call[0].includes('oauth/authorize'),
       );
       expect(urlLogCall).toBeDefined();
