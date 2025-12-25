@@ -25,5 +25,6 @@ module.exports = {
   verbose: true,
   maxWorkers: 1,
   maxConcurrency: 1,
+  forceExit: true, // Force Jest to exit after tests complete (prevents hanging on open handles)
 };
 

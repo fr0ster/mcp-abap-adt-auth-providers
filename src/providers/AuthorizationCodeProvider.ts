@@ -50,11 +50,14 @@ export class AuthorizationCodeProvider extends BaseTokenProvider {
     super();
     this.config = config;
     this.logger = config.logger;
+
     this.logger?.info('[AuthorizationCodeProvider] Provider created', {
       uaaUrl: config.uaaUrl,
       clientId: config.clientId,
       hasAccessToken: !!config.accessToken,
       hasRefreshToken: !!config.refreshToken,
+      accessToken: this.formatToken(config.accessToken),
+      refreshToken: this.formatToken(config.refreshToken),
       browser: config.browser || 'none',
       redirectPort: config.redirectPort || 3001,
     });
@@ -86,9 +89,10 @@ export class AuthorizationCodeProvider extends BaseTokenProvider {
       this.logger?.info(
         '[AuthorizationCodeProvider] Initialized with access token',
         {
+          accessToken: this.formatToken(config.accessToken),
           hasExpiresAt: !!this.expiresAt,
           expiresAt: this.expiresAt
-            ? new Date(this.expiresAt).toISOString()
+            ? this.formatExpirationDate(this.expiresAt)
             : undefined,
         },
       );
@@ -97,6 +101,9 @@ export class AuthorizationCodeProvider extends BaseTokenProvider {
       this.refreshToken = config.refreshToken;
       this.logger?.info(
         '[AuthorizationCodeProvider] Initialized with refresh token',
+        {
+          refreshToken: this.formatToken(config.refreshToken),
+        },
       );
     }
   }
@@ -110,13 +117,6 @@ export class AuthorizationCodeProvider extends BaseTokenProvider {
   }
 
   protected async performLogin(): Promise<ITokenResult> {
-    this.logger?.info(
-      '[AuthorizationCodeProvider] Performing login via browser',
-      {
-        redirectPort: this.config.redirectPort || 3001,
-        browser: this.config.browser || 'none',
-      },
-    );
     // Build authorization config
     // If authorizationUrl is provided, use it; otherwise startBrowserAuth will build it from uaaUrl + clientId
     const authConfig: IAuthorizationConfig & { authorizationUrl?: string } = {
@@ -132,16 +132,51 @@ export class AuthorizationCodeProvider extends BaseTokenProvider {
 
     // Use provided browser or default to 'none' (prints URL to console)
     const browser = this.config.browser || 'none';
+    const redirectPort = this.config.redirectPort || 3001;
 
-    const result = await startBrowserAuth(
-      authConfig,
-      browser,
-      this.logger || undefined, // Pass logger to browserAuth
-      this.config.redirectPort || 3001,
+    // Build authorization URL for logging (same logic as in startBrowserAuth)
+    const authorizationUrl =
+      authConfig.authorizationUrl ??
+      `${authConfig.uaaUrl}/oauth/authorize?client_id=${encodeURIComponent(authConfig.uaaClientId)}&redirect_uri=${encodeURIComponent(`http://localhost:${redirectPort}/callback`)}&response_type=code`;
+
+    this.logger?.info(
+      '[AuthorizationCodeProvider] Performing login via browser',
+      {
+        browser,
+        redirectPort,
+        authorizationUrl,
+        uaaUrl: authConfig.uaaUrl,
+        clientId: authConfig.uaaClientId,
+      },
     );
+
+    // Wrap startBrowserAuth with timeout
+    const timeoutMs = 30 * 1000; // 30 seconds
+    const timeoutPromise = new Promise<never>((_, reject) => {
+      setTimeout(() => {
+        reject(
+          new Error(
+            `Authentication timeout after ${timeoutMs / 1000} seconds. Please try again.`,
+          ),
+        );
+      }, timeoutMs);
+    });
+
+    const result = await Promise.race([
+      startBrowserAuth(
+        authConfig,
+        browser,
+        this.logger || undefined, // Pass logger to browserAuth
+        redirectPort,
+      ),
+      timeoutPromise,
+    ]);
+
     this.logger?.info('[AuthorizationCodeProvider] Login completed', {
       hasAccessToken: !!result.accessToken,
       hasRefreshToken: !!result.refreshToken,
+      accessToken: this.formatToken(result.accessToken),
+      refreshToken: this.formatToken(result.refreshToken),
       accessTokenLength: result.accessToken?.length || 0,
     });
 
@@ -170,9 +205,13 @@ export class AuthorizationCodeProvider extends BaseTokenProvider {
         this.config.clientId,
         this.config.clientSecret,
       );
+
       this.logger?.info('[AuthorizationCodeProvider] Token refresh completed', {
         hasAccessToken: !!result.accessToken,
         hasRefreshToken: !!result.refreshToken,
+        newAccessToken: this.formatToken(result.accessToken),
+        newRefreshToken: this.formatToken(result.refreshToken),
+        oldRefreshToken: this.formatToken(this.refreshToken),
       });
 
       const expiresIn = this.calculateExpiresIn(result.accessToken);

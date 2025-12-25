@@ -207,7 +207,9 @@ const result = await provider.getTokens();
 // result.refreshToken is undefined (client_credentials doesn't provide refresh tokens)
 ```
 
-**Note**: The `browserAuthPort` parameter (default: 3001) configures the OAuth callback server port. If the requested port is already in use, an error will be thrown. You must specify a different port or free the port before starting authentication. The server properly closes all connections and frees the port after authentication completes, ensuring no lingering port occupation. 
+**Note**: The `browserAuthPort` parameter (default: 3001) configures the OAuth callback server port. If the requested port is already in use, an error will be thrown. You must specify a different port or free the port before starting authentication. The server properly closes all connections and frees the port after authentication completes, ensuring no lingering port occupation.
+
+**Timeout**: Browser authentication has a 30-second timeout to prevent blocking the consumer. If authentication is not completed within 30 seconds, the operation will fail with a timeout error. This prevents the provider from hanging indefinitely when the user doesn't complete authentication. 
 
 **Process Termination Handling**: The OAuth callback server registers cleanup handlers for `SIGTERM`, `SIGINT`, `SIGHUP`, and `exit` signals. This ensures ports are properly freed even when MCP clients (like Cline) terminate the process before authentication completes. This is especially important for stdio servers where the client may kill the process at any time. On Windows, the `SIGBREAK` signal (Ctrl+Break) is also handled.
 
@@ -385,8 +387,16 @@ Example output:
 ```
 [INFO] ℹ️ [browserAuth] Exchanging code for token...
 [INFO] ℹ️ Tokens received: accessToken(2263 chars), refreshToken(34 chars)
-[DEBUG] 🐛 [BaseTokenProvider] Token validation check {"expiresAt":"2025-12-25T11:08:15.000Z","isValid":true}
+[DEBUG] 🐛 [BaseTokenProvider] Token validation check {"expiresAt":"2025-12-25 11:08:15 UTC","isValid":true}
+[INFO] ℹ️ [browserAuth] Authorization URL: https://.../oauth/authorize?...
+[INFO] ℹ️ [browserAuth] Browser: system
 ```
+
+**Logging Features**:
+- **Token Formatting**: Tokens are logged in truncated format (start...end) for security
+- **Date Formatting**: Expiration dates are displayed in readable format (YYYY-MM-DD HH:MM:SS UTC) instead of ISO format
+- **Browser Information**: Logs browser type and authorization URL for debugging
+- **Token Lifecycle**: Detailed logging of token acquisition, validation, and refresh operations
 
 ## Dependencies
 

@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.9] - 2025-12-25
+
+### Changed
+- **Logging Improvements**: Enhanced logging for better debugging and readability
+  - **Date Formatting**: Expiration dates now displayed in readable format (`YYYY-MM-DD HH:MM:SS UTC`) instead of ISO format (`2025-12-25T11:08:15.000Z`)
+  - **Token Formatting**: Tokens are logged in truncated format (start...end) for security and readability
+  - **Browser Information**: Added logging of browser type and authorization URL before starting browser authentication
+  - **Token Lifecycle**: Improved logging of token acquisition, validation, and refresh operations with formatted dates
+
+### Added
+- **Browser Auth Timeout**: Added 30-second timeout for browser-based authentication
+  - Prevents provider from blocking consumer indefinitely when user doesn't complete authentication
+  - Timeout error is thrown if authentication is not completed within 30 seconds
+  - Helps prevent hanging in automated tests and CI/CD environments
+
+### Fixed
+- **Test Hanging Issues**: Fixed Jest tests hanging after completion
+  - Added `forceExit: true` to Jest configuration to force exit after tests complete
+  - Improved cleanup of HTTP server and timers to prevent open handles
+  - Added protection against double execution of server close handlers
+  - Proper cleanup of `finishTimeoutId` timer in all scenarios (success, error, timeout)
+  - Server now resolves promise only after fully closing to ensure Jest can exit cleanly
+
 ## [0.2.8] - 2025-12-24
 
 ### Changed

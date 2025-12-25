@@ -31,6 +31,31 @@ export abstract class BaseTokenProvider implements ITokenProvider {
   protected logger?: ILogger;
 
   /**
+   * Format timestamp to readable date/time string
+   * @param timestamp Timestamp in milliseconds
+   * @returns Formatted date string (e.g., "2025-12-25 19:21:27 UTC")
+   */
+  protected formatExpirationDate(timestamp: number): string {
+    const date = new Date(timestamp);
+    const year = date.getUTCFullYear();
+    const month = String(date.getUTCMonth() + 1).padStart(2, '0');
+    const day = String(date.getUTCDate()).padStart(2, '0');
+    const hours = String(date.getUTCHours()).padStart(2, '0');
+    const minutes = String(date.getUTCMinutes()).padStart(2, '0');
+    const seconds = String(date.getUTCSeconds()).padStart(2, '0');
+    return `${year}-${month}-${day} ${hours}:${minutes}:${seconds} UTC`;
+  }
+
+  /**
+   * Format token for logging (start...end)
+   */
+  protected formatToken(token?: string): string | undefined {
+    if (!token) return undefined;
+    if (token.length <= 50) return token;
+    return `${token.substring(0, 25)}...${token.substring(token.length - 25)}`;
+  }
+
+  /**
    * Check if current token is valid (not expired)
    * @returns true if token exists and is not expired, false otherwise
    */
@@ -50,8 +75,8 @@ export abstract class BaseTokenProvider implements ITokenProvider {
     const now = Date.now();
     const isValid = now < this.expiresAt - bufferMs;
     this.logger?.debug('[BaseTokenProvider] Token validation check', {
-      now: new Date(now).toISOString(),
-      expiresAt: new Date(this.expiresAt).toISOString(),
+      now: this.formatExpirationDate(now),
+      expiresAt: this.formatExpirationDate(this.expiresAt),
       expiresIn: Math.floor((this.expiresAt - now) / 1000),
       isValid,
       bufferMs,
@@ -91,6 +116,7 @@ export abstract class BaseTokenProvider implements ITokenProvider {
       hasToken: !!this.authorizationToken,
       hasExpiresAt: !!this.expiresAt,
       hasRefreshToken: !!this.refreshToken,
+      currentToken: this.formatToken(this.authorizationToken),
     });
     // If token is valid, return cached
     const isValid = this.isTokenValid();
@@ -100,6 +126,7 @@ export abstract class BaseTokenProvider implements ITokenProvider {
         throw new Error('Authorization token is missing.');
       }
       this.logger?.info('[BaseTokenProvider] Returning cached valid token', {
+        token: this.formatToken(authorizationToken),
         expiresIn: this.expiresAt
           ? Math.floor((this.expiresAt - Date.now()) / 1000)
           : undefined,
@@ -118,11 +145,18 @@ export abstract class BaseTokenProvider implements ITokenProvider {
     if (this.refreshToken) {
       this.logger?.info(
         '[BaseTokenProvider] Token invalid, attempting refresh',
+        {
+          oldToken: this.formatToken(this.authorizationToken),
+          refreshToken: this.formatToken(this.refreshToken),
+        },
       );
       try {
         const result = await this.performRefresh();
         this.updateTokens(result);
-        this.logger?.info('[BaseTokenProvider] Token refreshed successfully');
+        this.logger?.info('[BaseTokenProvider] Token refreshed successfully', {
+          newToken: this.formatToken(result.authorizationToken),
+          newRefreshToken: this.formatToken(result.refreshToken),
+        });
         return result;
       } catch (error) {
         this.logger?.warn('[BaseTokenProvider] Refresh failed', {
@@ -141,7 +175,10 @@ export abstract class BaseTokenProvider implements ITokenProvider {
     );
     const result = await this.performLogin();
     this.updateTokens(result);
-    this.logger?.info('[BaseTokenProvider] Login completed');
+    this.logger?.info('[BaseTokenProvider] Login completed', {
+      newToken: this.formatToken(result.authorizationToken),
+      newRefreshToken: this.formatToken(result.refreshToken),
+    });
     return result;
   }
 
@@ -158,7 +195,7 @@ export abstract class BaseTokenProvider implements ITokenProvider {
     const isValid = Date.now() < expiresAt - bufferMs;
     this.logger?.info('[BaseTokenProvider] Token validation result', {
       isValid,
-      expiresAt: new Date(expiresAt).toISOString(),
+      expiresAt: this.formatExpirationDate(expiresAt),
       expiresIn: Math.floor((expiresAt - Date.now()) / 1000),
     });
     return isValid;
@@ -169,6 +206,7 @@ export abstract class BaseTokenProvider implements ITokenProvider {
    * @param result Token result to cache
    */
   protected updateTokens(result: ITokenResult): void {
+    const oldToken = this.formatToken(this.authorizationToken);
     this.authorizationToken = result.authorizationToken;
     this.refreshToken = result.refreshToken;
     if (result.expiresIn) {
@@ -177,6 +215,14 @@ export abstract class BaseTokenProvider implements ITokenProvider {
       // Try to parse expiration from JWT if expiresIn not provided
       this.expiresAt = this.parseExpirationFromJWT(result.authorizationToken);
     }
+    this.logger?.info('[BaseTokenProvider] Tokens updated', {
+      oldToken,
+      newToken: this.formatToken(result.authorizationToken),
+      newRefreshToken: this.formatToken(result.refreshToken),
+      expiresAt: this.expiresAt
+        ? this.formatExpirationDate(this.expiresAt)
+        : undefined,
+    });
   }
 
   /**

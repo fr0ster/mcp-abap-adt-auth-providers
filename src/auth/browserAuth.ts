@@ -155,7 +155,9 @@ export async function startBrowserAuth(
 
   return new Promise((originalResolve, originalReject) => {
     let timeoutId: NodeJS.Timeout | null = null;
+    let finishTimeoutId: NodeJS.Timeout | null = null;
     let cleanupDone = false;
+    let resolved = false;
 
     const app = express();
     const server = http.createServer(app);
@@ -173,6 +175,10 @@ export async function startBrowserAuth(
       if (timeoutId) {
         clearTimeout(timeoutId);
         timeoutId = null;
+      }
+      if (finishTimeoutId) {
+        clearTimeout(finishTimeoutId);
+        finishTimeoutId = null;
       }
       if (server) {
         try {
@@ -202,7 +208,16 @@ export async function startBrowserAuth(
     };
 
     const resolve = (value: { accessToken: string; refreshToken?: string }) => {
-      if (timeoutId) clearTimeout(timeoutId);
+      if (resolved) return; // Prevent double resolution
+      resolved = true;
+      if (timeoutId) {
+        clearTimeout(timeoutId);
+        timeoutId = null;
+      }
+      if (finishTimeoutId) {
+        clearTimeout(finishTimeoutId);
+        finishTimeoutId = null;
+      }
       removeCleanupListeners();
       originalResolve(value);
     };
@@ -424,28 +439,45 @@ export async function startBrowserAuth(
               `[browserAuth] Tokens received: accessToken(${tokens.accessToken?.length || 0} chars), refreshToken(${tokens.refreshToken?.length || 0} chars)`,
             );
 
-            // Resolve promise FIRST - this allows test to continue immediately
-            log?.info(`[browserAuth] Resolving promise with tokens...`);
-            resolve(tokens);
-            log?.info(`[browserAuth] Promise resolved, sending response...`);
-
             // Send success page (non-blocking, doesn't affect promise)
             res.send(html);
             log?.info(`[browserAuth] Response sent, waiting for finish...`);
 
             // Close all connections and server after response is sent
-            res.once('finish', () => {
+            // Resolve promise AFTER server is closed to prevent Jest from hanging
+            let serverClosing = false;
+            const closeServerAndResolve = () => {
+              if (serverClosing) return; // Prevent double execution
+              serverClosing = true;
+
+              if (finishTimeoutId) {
+                clearTimeout(finishTimeoutId);
+                finishTimeoutId = null;
+              }
+
               log?.info(`[browserAuth] Response finished, closing server...`);
               if (typeof server.closeAllConnections === 'function') {
                 server.closeAllConnections();
               }
+              // Wait for server to close before resolving to prevent Jest from hanging
               server.close(() => {
                 // Server closed - port should be freed
                 log?.info(
                   `[browserAuth] Server closed, port ${PORT} should be freed`,
                 );
+                // Resolve after server is fully closed
+                log?.info(`[browserAuth] Resolving promise with tokens...`);
+                resolve({
+                  accessToken: tokens.accessToken,
+                  refreshToken: tokens.refreshToken,
+                });
               });
-            });
+            };
+
+            // Wait for response to finish, but add timeout to prevent hanging
+            res.once('finish', closeServerAndResolve);
+            // Fallback: if finish event doesn't fire within 1 second, close anyway
+            finishTimeoutId = setTimeout(closeServerAndResolve, 1000);
           } catch (error) {
             if (typeof server.closeAllConnections === 'function') {
               server.closeAllConnections();
@@ -648,7 +680,7 @@ export async function startBrowserAuth(
       }
     });
 
-    // Timeout after 5 minutes
+    // Timeout after 30 seconds to prevent blocking consumer
     timeoutId = setTimeout(
       () => {
         if (serverInstance) {
@@ -664,10 +696,14 @@ export async function startBrowserAuth(
               );
             });
           }, 100);
-          reject(new Error('Authentication timeout. Process aborted.'));
+          reject(
+            new Error(
+              'Authentication timeout after 30 seconds. Please try again.',
+            ),
+          );
         }
       },
-      5 * 60 * 1000,
+      30 * 1000, // 30 seconds
     );
   });
 }
