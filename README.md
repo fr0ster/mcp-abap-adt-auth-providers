@@ -370,8 +370,19 @@ Integration tests will skip if `test-config.yaml` is not configured or contains 
 To enable detailed logging during tests or runtime, set environment variables:
 
 ```bash
-# Enable logging for auth providers
+# Enable logging for auth providers (short name)
 DEBUG_PROVIDER=true npm test
+
+# Or use long name (backward compatibility)
+DEBUG_AUTH_PROVIDERS=true npm test
+
+# Or enable via general DEBUG variable
+DEBUG=true npm test
+
+# Or include in DEBUG list
+DEBUG=provider npm test
+# Or
+DEBUG=auth-providers npm test
 
 # Set log level (debug, info, warn, error)
 LOG_LEVEL=debug npm test
