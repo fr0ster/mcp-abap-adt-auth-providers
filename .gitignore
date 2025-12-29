@@ -38,5 +38,3 @@ temp/
 
 # Test configuration (contains sensitive data)
 tests/test-config.yaml
-
-CLAUDE.md
