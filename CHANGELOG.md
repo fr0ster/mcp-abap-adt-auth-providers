@@ -15,6 +15,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - SAML2 flows: browser/manual/assertion input, bearer exchange, and pure SAML (cookie-based) output.
 - `BaseTokenProvider` now supports `tokenType` and `expiresAt` from `ITokenResult`.
 
+## [1.0.1] - 2026-02-10
+
+### Added
+- GitHub Actions CI workflow (build + test on push/PR).
+
 ## [0.2.10] - 2025-12-25
 
 ### Changed
