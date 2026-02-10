@@ -7,6 +7,7 @@ import { jest } from '@jest/globals';
 import type { IAuthorizationConfig, ILogger } from '@mcp-abap-adt/interfaces';
 import axios from 'axios';
 import { exchangeCodeForToken, startBrowserAuth } from '../../auth/browserAuth';
+import { canListenOnLocalhost, getAvailablePort } from '../helpers/netHelpers';
 import { createTestLogger } from '../helpers/testLogger';
 
 jest.mock('axios');
@@ -145,6 +146,10 @@ describe('browserAuth browser modes', () => {
 
   describe('none mode', () => {
     it('should log URL and wait for callback (same as headless)', async () => {
+      if (!(await canListenOnLocalhost())) {
+        console.warn('⚠️  Skipping browserAuth test - cannot bind to localhost');
+        return;
+      }
       const logger: ILogger = {
         info: jest.fn(),
         debug: jest.fn(),
@@ -152,7 +157,7 @@ describe('browserAuth browser modes', () => {
         error: jest.fn(),
       };
 
-      const port = 3201;
+      const port = await getAvailablePort();
       const mockTokens = {
         access_token: 'none-mode-access-token',
         refresh_token: 'none-mode-refresh-token',
@@ -192,6 +197,10 @@ describe('browserAuth browser modes', () => {
     });
 
     it('should include authorization URL in log message', async () => {
+      if (!(await canListenOnLocalhost())) {
+        console.warn('⚠️  Skipping browserAuth test - cannot bind to localhost');
+        return;
+      }
       const logger: ILogger = {
         info: jest.fn(),
         debug: jest.fn(),
@@ -199,7 +208,7 @@ describe('browserAuth browser modes', () => {
         error: jest.fn(),
       };
 
-      const port = 3202;
+      const port = await getAvailablePort();
       const mockTokens = { access_token: 'test-token' };
 
       mockedAxios.mockResolvedValue({
@@ -238,6 +247,10 @@ describe('browserAuth browser modes', () => {
 
   describe('headless mode', () => {
     it('should log URL and wait for callback', async () => {
+      if (!(await canListenOnLocalhost())) {
+        console.warn('⚠️  Skipping browserAuth test - cannot bind to localhost');
+        return;
+      }
       const logger: ILogger = {
         info: jest.fn(),
         debug: jest.fn(),
@@ -245,7 +258,7 @@ describe('browserAuth browser modes', () => {
         error: jest.fn(),
       };
 
-      const port = 3203;
+      const port = await getAvailablePort();
       const mockTokens = {
         access_token: 'headless-access-token',
         refresh_token: 'headless-refresh-token',
@@ -297,7 +310,11 @@ describe('browserAuth browser modes', () => {
     });
 
     it('should not reject before callback is received', async () => {
-      const port = 3204;
+      if (!(await canListenOnLocalhost())) {
+        console.warn('⚠️  Skipping browserAuth test - cannot bind to localhost');
+        return;
+      }
+      const port = await getAvailablePort();
 
       // Start headless auth
       const authPromise = startBrowserAuth(

@@ -150,6 +150,44 @@ const provider = new Saml2BearerProvider({
 const broker = new AuthBroker({ tokenProvider: provider }, 'none');
 ```
 
+SAML bearer example (headless, assertion provider):
+
+```typescript
+import { AuthBroker } from '@mcp-abap-adt/auth-broker';
+import { Saml2BearerProvider } from '@mcp-abap-adt/auth-providers';
+
+const provider = new Saml2BearerProvider({
+  assertionFlow: 'assertion',
+  assertionProvider: async () => {
+    return getSamlResponseFromSsoProxy();
+  },
+  uaaUrl: 'https://uaa.example.com',
+  clientId: '...',
+  clientSecret: '...',
+});
+
+const broker = new AuthBroker({ tokenProvider: provider }, 'none');
+```
+
+Pure SAML example (cookie-based):
+
+```typescript
+import { AuthBroker } from '@mcp-abap-adt/auth-broker';
+import { Saml2PureProvider } from '@mcp-abap-adt/auth-providers';
+
+const provider = new Saml2PureProvider({
+  assertionFlow: 'manual',
+  idpSsoUrl: 'https://idp.example.com/sso',
+  spEntityId: 'my-sp-entity',
+  // Convert SAMLResponse to session cookies for SAP (implementation-specific)
+  cookieProvider: async (samlResponse) => {
+    return exchangeSamlForCookies(samlResponse);
+  },
+});
+
+const broker = new AuthBroker({ tokenProvider: provider }, 'none');
+```
+
 ### With Stores
 
 **Important**: BTP and ABAP are different entities:

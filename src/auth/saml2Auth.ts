@@ -2,9 +2,9 @@
  * SAML 2.0 auth helpers
  */
 
+import { randomUUID } from 'node:crypto';
 import * as http from 'node:http';
 import * as net from 'node:net';
-import { randomUUID } from 'node:crypto';
 import { deflateRawSync } from 'node:zlib';
 import type { ILogger } from '@mcp-abap-adt/interfaces';
 import express from 'express';
@@ -44,10 +44,7 @@ function base64Encode(input: string | Buffer): string {
     : Buffer.from(input, 'utf8').toString('base64');
 }
 
-function buildAuthnRequestXml(
-  spEntityId: string,
-  acsUrl: string,
-): string {
+function buildAuthnRequestXml(spEntityId: string, acsUrl: string): string {
   const issueInstant = new Date().toISOString();
   const id = `_${randomUUID()}`;
   return [
@@ -64,9 +61,7 @@ function buildAuthnRequestXml(
   ].join('');
 }
 
-export function buildSamlAuthorizationUrl(
-  config: Saml2AuthConfig,
-): string {
+export function buildSamlAuthorizationUrl(config: Saml2AuthConfig): string {
   if (config.authorizationUrl) {
     return config.authorizationUrl;
   }
@@ -171,7 +166,9 @@ export async function startSamlBrowserAuth(
       res
         .status(200)
         .send('SAML authentication complete. You can close this window.');
-      handleResponse(typeof samlResponse === 'string' ? samlResponse : undefined);
+      handleResponse(
+        typeof samlResponse === 'string' ? samlResponse : undefined,
+      );
     });
 
     app.get('/callback', (req, res) => {

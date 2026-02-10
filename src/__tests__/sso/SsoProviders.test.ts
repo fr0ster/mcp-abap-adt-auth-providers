@@ -1,10 +1,27 @@
-import { AUTH_TYPE_AUTHORIZATION_CODE_PKCE, AUTH_TYPE_PASSWORD, AUTH_TYPE_USER_TOKEN, AUTH_TYPE_SAML2_BEARER } from '@mcp-abap-adt/interfaces';
+import {
+  AUTH_TYPE_AUTHORIZATION_CODE_PKCE,
+  AUTH_TYPE_PASSWORD,
+  AUTH_TYPE_SAML2_BEARER,
+  AUTH_TYPE_USER_TOKEN,
+} from '@mcp-abap-adt/interfaces';
+import { startOidcBrowserAuth } from '../../auth/oidcBrowserAuth';
+import { discoverOidc } from '../../auth/oidcDiscovery';
+import {
+  exchangeAuthorizationCode,
+  initiateDeviceAuthorization,
+  passwordGrant,
+  pollDeviceTokens,
+  refreshOidcToken,
+  tokenExchange,
+} from '../../auth/oidcToken';
+import { exchangeSamlAssertion } from '../../auth/saml2TokenExchange';
 import { OidcBrowserProvider } from '../../providers/OidcBrowserProvider';
 import { OidcDeviceFlowProvider } from '../../providers/OidcDeviceFlowProvider';
 import { OidcPasswordProvider } from '../../providers/OidcPasswordProvider';
 import { OidcTokenExchangeProvider } from '../../providers/OidcTokenExchangeProvider';
 import { Saml2BearerProvider } from '../../providers/Saml2BearerProvider';
 import { Saml2PureProvider } from '../../providers/Saml2PureProvider';
+import { getSamlAssertion } from '../../providers/saml2Utils';
 import { SsoProviderFactory } from '../../sso/SsoProviderFactory';
 
 jest.mock('../../auth/oidcDiscovery', () => ({
@@ -31,19 +48,6 @@ jest.mock('../../providers/saml2Utils', () => {
     getSamlAssertion: jest.fn(),
   };
 });
-
-import { discoverOidc } from '../../auth/oidcDiscovery';
-import { startOidcBrowserAuth } from '../../auth/oidcBrowserAuth';
-import {
-  exchangeAuthorizationCode,
-  refreshOidcToken,
-  initiateDeviceAuthorization,
-  pollDeviceTokens,
-  passwordGrant,
-  tokenExchange,
-} from '../../auth/oidcToken';
-import { exchangeSamlAssertion } from '../../auth/saml2TokenExchange';
-import { getSamlAssertion } from '../../providers/saml2Utils';
 
 const mockDiscoverOidc = discoverOidc as jest.Mock;
 const mockStartBrowser = startOidcBrowserAuth as jest.Mock;
@@ -184,19 +188,21 @@ describe('SSO Providers', () => {
   });
 
   it('Saml2PureProvider should return saml response with expiresAt', async () => {
-    const samlXml = '<Assertion NotOnOrAfter="2030-01-01T00:00:00Z"></Assertion>';
+    const samlXml =
+      '<Assertion NotOnOrAfter="2030-01-01T00:00:00Z"></Assertion>';
     const samlResponse = Buffer.from(samlXml, 'utf8').toString('base64');
     mockGetSamlAssertion.mockResolvedValue(samlResponse);
 
     const provider = new Saml2PureProvider({
       assertionFlow: 'assertion',
       assertionProvider: async () => samlResponse,
+      cookieProvider: async () => 'SAP_SESSION=abc123',
       idpSsoUrl: 'https://idp/sso',
       spEntityId: 'sp-entity',
     });
 
     const tokens = await provider.getTokens();
-    expect(tokens.authorizationToken).toBe(samlResponse);
+    expect(tokens.authorizationToken).toBe('SAP_SESSION=abc123');
     expect(tokens.tokenType).toBe('saml');
     expect(tokens.expiresAt).toBeDefined();
   });

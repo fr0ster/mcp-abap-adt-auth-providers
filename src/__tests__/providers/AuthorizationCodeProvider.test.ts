@@ -8,6 +8,7 @@
  * 3. Service key + expired session + expired refresh token - should login via browser
  */
 
+import * as dns from 'node:dns/promises';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
@@ -26,6 +27,7 @@ import {
   hasRealConfig,
   loadTestConfig,
 } from '../helpers/configHelpers';
+import { canListenOnLocalhost, getAvailablePort } from '../helpers/netHelpers';
 
 // Helper to create logger if DEBUG_PROVIDER is enabled
 function createTestLogger(): ILogger | undefined {
@@ -86,6 +88,16 @@ const validateTokenExpiration = (token: string): boolean => {
   }
 };
 
+const canResolveHost = async (url: string): Promise<boolean> => {
+  try {
+    const hostname = new URL(url).hostname;
+    await dns.lookup(hostname);
+    return true;
+  } catch {
+    return false;
+  }
+};
+
 describe('AuthorizationCodeProvider', () => {
   const config = loadTestConfig();
   const destination = getDestination(config);
@@ -130,16 +142,30 @@ describe('AuthorizationCodeProvider', () => {
             'Failed to load authorization config from service key',
           );
         }
+        if (!(await canResolveHost(authConfig.uaaUrl!))) {
+          console.warn(
+            '⚠️  Skipping integration test - UAA host not resolvable',
+          );
+          return;
+        }
+        if (!(await canListenOnLocalhost())) {
+          console.warn(
+            '⚠️  Skipping integration test - cannot bind to localhost',
+          );
+          return;
+        }
 
         // Create provider with only service key (no session tokens)
         // Use unique port for this test to avoid conflicts
         const logger = createTestLogger();
+        const port1 = await getAvailablePort();
+        const port2 = await getAvailablePort();
         const provider = new AuthorizationCodeProvider({
           uaaUrl: authConfig.uaaUrl!,
           clientId: authConfig.uaaClientId!,
           clientSecret: authConfig.uaaClientSecret!,
           browser: 'system', // Use system browser for authentication
-          redirectPort: 3101, // Unique port for Scenario 1
+          redirectPort: port1,
           logger,
         });
 
@@ -163,7 +189,7 @@ describe('AuthorizationCodeProvider', () => {
           refreshToken: tokens1.refreshToken,
           accessToken: tokens1.authorizationToken, // Use token from Scenario 1
           browser: 'system', // Use system browser if token refresh/login needed
-          redirectPort: 3102, // Unique port for Scenario 2
+          redirectPort: port2,
           logger,
         });
 
@@ -204,10 +230,19 @@ describe('AuthorizationCodeProvider', () => {
       if (!authConfig) {
         throw new Error('Failed to load authorization config from service key');
       }
+      if (!(await canResolveHost(authConfig.uaaUrl!))) {
+        console.warn('⚠️  Skipping integration test - UAA host not resolvable');
+        return;
+      }
+      if (!(await canListenOnLocalhost())) {
+        console.warn('⚠️  Skipping integration test - cannot bind to localhost');
+        return;
+      }
 
       // Create provider with expired token and invalid refresh token
       const logger = createTestLogger();
       const expiredToken = createExpiredJWT();
+      const redirectPort = await getAvailablePort();
       const provider = new AuthorizationCodeProvider({
         uaaUrl: authConfig.uaaUrl!,
         clientId: authConfig.uaaClientId!,
@@ -215,7 +250,7 @@ describe('AuthorizationCodeProvider', () => {
         refreshToken: 'invalid-expired-refresh-token', // Invalid refresh token
         accessToken: expiredToken, // Expired token
         browser: 'system', // Use system browser for authentication
-        redirectPort: 3103, // Unique port for Scenario 3
+        redirectPort,
         logger,
       });
 

@@ -24,10 +24,7 @@ export async function exchangeSamlAssertion(
   logger?: ILogger,
 ): Promise<Saml2TokenExchangeResponse> {
   const params = new URLSearchParams();
-  params.append(
-    'grant_type',
-    'urn:ietf:params:oauth:grant-type:saml2-bearer',
-  );
+  params.append('grant_type', 'urn:ietf:params:oauth:grant-type:saml2-bearer');
   params.append('assertion', samlResponse);
   if (clientId) {
     params.append('client_id', clientId);

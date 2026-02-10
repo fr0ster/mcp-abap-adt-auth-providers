@@ -17,6 +17,7 @@ import { getSamlAssertion } from './saml2Utils';
 
 export interface Saml2PureProviderConfig extends Saml2AssertionConfig {
   logger?: ILogger;
+  cookieProvider: (samlResponse: string) => Promise<string>;
 }
 
 export class Saml2PureProvider extends BaseTokenProvider {
@@ -36,9 +37,10 @@ export class Saml2PureProvider extends BaseTokenProvider {
   protected async performLogin(): Promise<ITokenResult> {
     const samlResponse = await getSamlAssertion(this.config);
     const expiresAt = parseSamlNotOnOrAfter(samlResponse);
+    const sessionCookies = await this.config.cookieProvider(samlResponse);
 
     return {
-      authorizationToken: samlResponse,
+      authorizationToken: sessionCookies,
       authType: AUTH_TYPE_USER_TOKEN,
       tokenType: 'saml',
       expiresAt,

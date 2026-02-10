@@ -8,6 +8,7 @@
  * 3. Service key + expired cached token - should get new token via client_credentials
  */
 
+import * as dns from 'node:dns/promises';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
@@ -20,6 +21,16 @@ import {
   hasRealConfig,
   loadTestConfig,
 } from '../helpers/configHelpers';
+
+const canResolveHost = async (url: string): Promise<boolean> => {
+  try {
+    const hostname = new URL(url).hostname;
+    await dns.lookup(hostname);
+    return true;
+  } catch {
+    return false;
+  }
+};
 
 // Helper to create expired JWT token
 const createExpiredJWT = (): string => {
@@ -68,6 +79,14 @@ describe('ClientCredentialsProvider', () => {
       if (!authConfig) {
         throw new Error('Failed to load authorization config from service key');
       }
+      if (!(await canResolveHost(authConfig.uaaUrl!))) {
+        console.warn('⚠️  Skipping integration test - UAA host not resolvable');
+        return;
+      }
+      if (!(await canResolveHost(authConfig.uaaUrl!))) {
+        console.warn('⚠️  Skipping integration test - UAA host not resolvable');
+        return;
+      }
 
       // Create provider with only service key (no cached token)
       const provider = new ClientCredentialsProvider({
@@ -102,6 +121,10 @@ describe('ClientCredentialsProvider', () => {
         await serviceKeyStore.getAuthorizationConfig(destination);
       if (!authConfig) {
         throw new Error('Failed to load authorization config from service key');
+      }
+      if (!(await canResolveHost(authConfig.uaaUrl!))) {
+        console.warn('⚠️  Skipping integration test - UAA host not resolvable');
+        return;
       }
 
       // Create provider with valid cached token
@@ -141,6 +164,10 @@ describe('ClientCredentialsProvider', () => {
         await serviceKeyStore.getAuthorizationConfig(destination);
       if (!authConfig) {
         throw new Error('Failed to load authorization config from service key');
+      }
+      if (!(await canResolveHost(authConfig.uaaUrl!))) {
+        console.warn('⚠️  Skipping integration test - UAA host not resolvable');
+        return;
       }
 
       // Create provider with expired cached token
@@ -182,6 +209,10 @@ describe('ClientCredentialsProvider', () => {
         await serviceKeyStore.getAuthorizationConfig(destination);
       if (!authConfig) {
         throw new Error('Failed to load authorization config from service key');
+      }
+      if (!(await canResolveHost(authConfig.uaaUrl!))) {
+        console.warn('⚠️  Skipping integration test - UAA host not resolvable');
+        return;
       }
 
       const provider = new ClientCredentialsProvider({

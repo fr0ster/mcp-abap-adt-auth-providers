@@ -109,7 +109,9 @@ export async function startOidcBrowserAuth(
         reject(new Error('Missing authorization code'));
         return;
       }
-      res.status(200).send('Authentication complete. You can close this window.');
+      res
+        .status(200)
+        .send('Authentication complete. You can close this window.');
       cleanup();
       resolve({ code, state: typeof state === 'string' ? state : undefined });
     });

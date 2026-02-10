@@ -11,10 +11,7 @@ import { AUTH_TYPE_AUTHORIZATION_CODE_PKCE } from '@mcp-abap-adt/interfaces';
 import { startOidcBrowserAuth } from '../auth/oidcBrowserAuth';
 import { discoverOidc } from '../auth/oidcDiscovery';
 import { generatePkceChallenge, generatePkceVerifier } from '../auth/oidcPkce';
-import {
-  exchangeAuthorizationCode,
-  refreshOidcToken,
-} from '../auth/oidcToken';
+import { exchangeAuthorizationCode, refreshOidcToken } from '../auth/oidcToken';
 import { BaseTokenProvider } from './BaseTokenProvider';
 
 export interface OidcBrowserProviderConfig {
@@ -58,9 +55,10 @@ export class OidcBrowserProvider extends BaseTokenProvider {
 
     const redirectPort = this.config.redirectPort || 3001;
     const redirectUri = `http://localhost:${redirectPort}/callback`;
-    const scope = (this.config.scopes && this.config.scopes.length > 0
-      ? this.config.scopes
-      : ['openid', 'profile', 'email']
+    const scope = (
+      this.config.scopes && this.config.scopes.length > 0
+        ? this.config.scopes
+        : ['openid', 'profile', 'email']
     ).join(' ');
 
     const verifier = generatePkceVerifier();

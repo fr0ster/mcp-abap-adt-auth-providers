@@ -161,7 +161,10 @@ export async function pollDeviceTokens(
     } catch (error: any) {
       const status = error?.response?.status;
       const errorCode = error?.response?.data?.error;
-      if (status === 400 && (errorCode === 'authorization_pending' || errorCode === 'slow_down')) {
+      if (
+        status === 400 &&
+        (errorCode === 'authorization_pending' || errorCode === 'slow_down')
+      ) {
         const wait = errorCode === 'slow_down' ? interval + 5 : interval;
         logger?.debug('[OIDC] Device authorization pending', { wait });
         await new Promise((resolve) => setTimeout(resolve, wait * 1000));
@@ -215,7 +218,10 @@ export async function tokenExchange(
   logger?: ILogger,
 ): Promise<OidcTokenResponse> {
   const params = new URLSearchParams();
-  params.append('grant_type', 'urn:ietf:params:oauth:grant-type:token-exchange');
+  params.append(
+    'grant_type',
+    'urn:ietf:params:oauth:grant-type:token-exchange',
+  );
   params.append('subject_token', subjectToken);
   params.append('subject_token_type', subjectTokenType);
   params.append('client_id', clientId);
