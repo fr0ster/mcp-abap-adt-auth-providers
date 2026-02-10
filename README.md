@@ -99,6 +99,57 @@ const clientCredsBroker = new AuthBroker({
 }, 'none');
 ```
 
+### SSO Providers
+
+This package also includes SSO providers for OIDC and SAML2, plus a small factory for DI-friendly creation.
+
+Available providers:
+- `OidcBrowserProvider` (authorization code + PKCE)
+- `OidcDeviceFlowProvider`
+- `OidcPasswordProvider`
+- `OidcTokenExchangeProvider`
+- `Saml2BearerProvider` (SAML assertion exchange)
+- `Saml2PureProvider` (returns SAMLResponse as token)
+
+Factory example:
+
+```typescript
+import { AuthBroker } from '@mcp-abap-adt/auth-broker';
+import { SsoProviderFactory } from '@mcp-abap-adt/auth-providers';
+
+const tokenProvider = SsoProviderFactory.create({
+  protocol: 'oidc',
+  flow: 'browser',
+  config: {
+    issuerUrl: 'https://example-idp/.well-known/openid-configuration',
+    clientId: '...',
+    clientSecret: '...',
+    scopes: ['openid', 'profile', 'email'],
+    browser: 'system',
+  },
+});
+
+const broker = new AuthBroker({ tokenProvider }, 'none');
+```
+
+SAML bearer example (manual flow):
+
+```typescript
+import { AuthBroker } from '@mcp-abap-adt/auth-broker';
+import { Saml2BearerProvider } from '@mcp-abap-adt/auth-providers';
+
+const provider = new Saml2BearerProvider({
+  assertionFlow: 'manual',
+  idpSsoUrl: 'https://idp.example.com/sso',
+  spEntityId: 'my-sp-entity',
+  uaaUrl: 'https://uaa.example.com',
+  clientId: '...',
+  clientSecret: '...',
+});
+
+const broker = new AuthBroker({ tokenProvider: provider }, 'none');
+```
+
 ### With Stores
 
 **Important**: BTP and ABAP are different entities:

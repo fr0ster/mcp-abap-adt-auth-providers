@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- SSO providers for OIDC and SAML2, plus `SsoProviderFactory` for DI-friendly creation.
+- OIDC flows: browser (PKCE), device flow, password grant, token exchange.
+- SAML2 flows: browser/manual/assertion input, bearer exchange, and pure SAML output.
+- `BaseTokenProvider` now supports `tokenType` and `expiresAt` from `ITokenResult`.
+
 ## [0.2.10] - 2025-12-25
 
 ### Changed

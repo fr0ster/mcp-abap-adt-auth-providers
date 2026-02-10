@@ -28,6 +28,7 @@ export abstract class BaseTokenProvider implements ITokenProvider {
   protected authorizationToken?: string;
   protected refreshToken?: string;
   protected expiresAt?: number; // timestamp in milliseconds
+  protected tokenType?: 'jwt' | 'saml' | 'opaque';
   protected logger?: ILogger;
 
   /**
@@ -135,6 +136,8 @@ export abstract class BaseTokenProvider implements ITokenProvider {
         authorizationToken,
         refreshToken: this.refreshToken,
         authType: this.getAuthType(),
+        tokenType: this.tokenType ?? 'jwt',
+        expiresAt: this.expiresAt,
         expiresIn: this.expiresAt
           ? Math.floor((this.expiresAt - Date.now()) / 1000)
           : undefined,
@@ -184,6 +187,23 @@ export abstract class BaseTokenProvider implements ITokenProvider {
 
   async validateToken(_token: string, _serviceUrl?: string): Promise<boolean> {
     this.logger?.debug('[BaseTokenProvider] Validating token');
+    if (this.tokenType && this.tokenType !== 'jwt') {
+      if (!this.expiresAt) {
+        this.logger?.warn(
+          '[BaseTokenProvider] Token validation failed: missing expiresAt for non-JWT token',
+        );
+        return false;
+      }
+      const bufferMs = 60 * 1000;
+      const isValid = Date.now() < this.expiresAt - bufferMs;
+      this.logger?.info('[BaseTokenProvider] Token validation result', {
+        isValid,
+        tokenType: this.tokenType,
+        expiresAt: this.formatExpirationDate(this.expiresAt),
+        expiresIn: Math.floor((this.expiresAt - Date.now()) / 1000),
+      });
+      return isValid;
+    }
     const expiresAt = this.parseExpirationFromJWT(_token);
     if (!expiresAt) {
       this.logger?.warn(
@@ -209,16 +229,22 @@ export abstract class BaseTokenProvider implements ITokenProvider {
     const oldToken = this.formatToken(this.authorizationToken);
     this.authorizationToken = result.authorizationToken;
     this.refreshToken = result.refreshToken;
-    if (result.expiresIn) {
+    this.tokenType = result.tokenType ?? 'jwt';
+    if (result.expiresAt) {
+      this.expiresAt = result.expiresAt;
+    } else if (result.expiresIn) {
       this.expiresAt = Date.now() + result.expiresIn * 1000;
-    } else {
+    } else if (this.tokenType === 'jwt') {
       // Try to parse expiration from JWT if expiresIn not provided
       this.expiresAt = this.parseExpirationFromJWT(result.authorizationToken);
+    } else {
+      this.expiresAt = undefined;
     }
     this.logger?.info('[BaseTokenProvider] Tokens updated', {
       oldToken,
       newToken: this.formatToken(result.authorizationToken),
       newRefreshToken: this.formatToken(result.refreshToken),
+      tokenType: this.tokenType,
       expiresAt: this.expiresAt
         ? this.formatExpirationDate(this.expiresAt)
         : undefined,
