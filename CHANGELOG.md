@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.2] - 2026-02-11
+
 ### Added
 - OIDC providers now support explicit endpoints (`authorizationEndpoint`, `tokenEndpoint`, `deviceAuthorizationEndpoint`) without discovery.
 - OIDC browser flow supports manual authorization code input via `authorizationCode` / `authorizationCodeProvider`.
@@ -14,6 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 - OIDC provider configs accept optional `issuerUrl` when explicit endpoints are provided.
+- Dependency updates: `axios` ^1.13.5, `@biomejs/biome` ^2.3.14, `@mcp-abap-adt/auth-stores` ^1.0.1, `@types/node` ^25.2.3, `pino` ^10.3.1.
 
 ## [1.0.0] - 2026-02-10
 
