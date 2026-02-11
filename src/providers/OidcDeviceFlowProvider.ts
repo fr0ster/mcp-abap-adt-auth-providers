@@ -17,10 +17,12 @@ import {
 import { BaseTokenProvider } from './BaseTokenProvider';
 
 export interface OidcDeviceFlowProviderConfig {
-  issuerUrl: string;
+  issuerUrl?: string;
   clientId: string;
   clientSecret?: string;
   scopes?: string[];
+  deviceAuthorizationEndpoint?: string;
+  tokenEndpoint?: string;
   accessToken?: string;
   refreshToken?: string;
   logger?: ILogger;
@@ -48,14 +50,43 @@ export class OidcDeviceFlowProvider extends BaseTokenProvider {
   }
 
   protected async performLogin(): Promise<ITokenResult> {
-    const discovery = await discoverOidc(this.config.issuerUrl, this.logger);
-    if (!discovery.device_authorization_endpoint) {
-      throw new Error('OIDC discovery missing device_authorization_endpoint');
+    if (
+      !this.config.deviceAuthorizationEndpoint &&
+      !this.config.tokenEndpoint &&
+      !this.config.issuerUrl
+    ) {
+      throw new Error('OIDC issuerUrl is required when discovery is used');
+    }
+    let discovery: Awaited<ReturnType<typeof discoverOidc>> | null = null;
+    if (
+      !this.config.deviceAuthorizationEndpoint &&
+      !this.config.tokenEndpoint
+    ) {
+      if (!this.config.issuerUrl) {
+        throw new Error('OIDC issuerUrl is required when discovery is used');
+      }
+      discovery = await discoverOidc(this.config.issuerUrl, this.logger);
+    }
+    const deviceAuthorizationEndpoint =
+      this.config.deviceAuthorizationEndpoint ||
+      discovery?.device_authorization_endpoint;
+    const tokenEndpoint =
+      this.config.tokenEndpoint || discovery?.token_endpoint;
+
+    if (!deviceAuthorizationEndpoint) {
+      throw new Error(
+        'OIDC device authorization endpoint is required (deviceAuthorizationEndpoint or discovery)',
+      );
+    }
+    if (!tokenEndpoint) {
+      throw new Error(
+        'OIDC token endpoint is required (tokenEndpoint or discovery)',
+      );
     }
 
     const scope = this.config.scopes?.join(' ');
     const deviceFlow = await initiateDeviceAuthorization(
-      discovery.device_authorization_endpoint,
+      deviceAuthorizationEndpoint,
       this.config.clientId,
       scope,
       this.logger,
@@ -72,7 +103,7 @@ export class OidcDeviceFlowProvider extends BaseTokenProvider {
     console.log('');
 
     const tokens = await pollDeviceTokens(
-      discovery.token_endpoint,
+      tokenEndpoint,
       this.config.clientId,
       this.config.clientSecret,
       deviceFlow.deviceCode,
@@ -93,9 +124,25 @@ export class OidcDeviceFlowProvider extends BaseTokenProvider {
     if (!this.refreshToken) {
       return this.performLogin();
     }
-    const discovery = await discoverOidc(this.config.issuerUrl, this.logger);
+    if (!this.config.tokenEndpoint && !this.config.issuerUrl) {
+      throw new Error('OIDC issuerUrl is required when discovery is used');
+    }
+    let discovery: Awaited<ReturnType<typeof discoverOidc>> | null = null;
+    if (this.config.tokenEndpoint === undefined) {
+      if (!this.config.issuerUrl) {
+        throw new Error('OIDC issuerUrl is required when discovery is used');
+      }
+      discovery = await discoverOidc(this.config.issuerUrl, this.logger);
+    }
+    const tokenEndpoint =
+      this.config.tokenEndpoint || discovery?.token_endpoint;
+    if (!tokenEndpoint) {
+      throw new Error(
+        'OIDC token endpoint is required (tokenEndpoint or discovery)',
+      );
+    }
     const tokens = await refreshOidcToken(
-      discovery.token_endpoint,
+      tokenEndpoint,
       this.config.clientId,
       this.config.clientSecret,
       this.refreshToken,

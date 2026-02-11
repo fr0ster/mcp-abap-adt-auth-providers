@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- OIDC providers now support explicit endpoints (`authorizationEndpoint`, `tokenEndpoint`, `deviceAuthorizationEndpoint`) without discovery.
+- OIDC browser flow supports manual authorization code input via `authorizationCode` / `authorizationCodeProvider`.
+- OIDC browser flow supports custom `redirectUri` (required for manual code / OOB flows).
+
+### Changed
+- OIDC provider configs accept optional `issuerUrl` when explicit endpoints are provided.
+
 ## [1.0.0] - 2026-02-10
 
 ### Added

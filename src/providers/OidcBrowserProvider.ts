@@ -15,12 +15,17 @@ import { exchangeAuthorizationCode, refreshOidcToken } from '../auth/oidcToken';
 import { BaseTokenProvider } from './BaseTokenProvider';
 
 export interface OidcBrowserProviderConfig {
-  issuerUrl: string;
+  issuerUrl?: string;
   clientId: string;
   clientSecret?: string;
   scopes?: string[];
   browser?: string;
   redirectPort?: number;
+  redirectUri?: string;
+  authorizationCode?: string;
+  authorizationCodeProvider?: () => Promise<string>;
+  authorizationEndpoint?: string;
+  tokenEndpoint?: string;
   accessToken?: string;
   refreshToken?: string;
   logger?: ILogger;
@@ -48,13 +53,46 @@ export class OidcBrowserProvider extends BaseTokenProvider {
   }
 
   protected async performLogin(): Promise<ITokenResult> {
-    const discovery = await discoverOidc(this.config.issuerUrl, this.logger);
-    if (!discovery.authorization_endpoint) {
-      throw new Error('OIDC discovery missing authorization_endpoint');
+    const needsAuthorizationEndpoint =
+      !this.config.authorizationCode && !this.config.authorizationCodeProvider;
+
+    const requiresDiscovery =
+      (needsAuthorizationEndpoint && !this.config.authorizationEndpoint) ||
+      !this.config.tokenEndpoint;
+    let discovery: Awaited<ReturnType<typeof discoverOidc>> | null = null;
+    if (requiresDiscovery) {
+      if (!this.config.issuerUrl) {
+        throw new Error('OIDC issuerUrl is required when discovery is used');
+      }
+      discovery = await discoverOidc(this.config.issuerUrl, this.logger);
+    }
+    const authorizationEndpoint = needsAuthorizationEndpoint
+      ? this.config.authorizationEndpoint || discovery?.authorization_endpoint
+      : undefined;
+    const tokenEndpoint =
+      this.config.tokenEndpoint || discovery?.token_endpoint;
+
+    if (needsAuthorizationEndpoint && !authorizationEndpoint) {
+      throw new Error(
+        'OIDC authorization endpoint is required (authorizationEndpoint or discovery)',
+      );
+    }
+    if (!tokenEndpoint) {
+      throw new Error(
+        'OIDC token endpoint is required (tokenEndpoint or discovery)',
+      );
     }
 
     const redirectPort = this.config.redirectPort || 3001;
-    const redirectUri = `http://localhost:${redirectPort}/callback`;
+    const redirectUri =
+      this.config.redirectUri || `http://localhost:${redirectPort}/callback`;
+    if (needsAuthorizationEndpoint && this.config.redirectUri) {
+      if (!redirectUri.startsWith('http://localhost:')) {
+        throw new Error(
+          'OIDC redirectUri must be localhost for browser callback flow',
+        );
+      }
+    }
     const scope = (
       this.config.scopes && this.config.scopes.length > 0
         ? this.config.scopes
@@ -72,18 +110,17 @@ export class OidcBrowserProvider extends BaseTokenProvider {
     params.append('code_challenge', challenge);
     params.append('code_challenge_method', 'S256');
 
-    const authorizationUrl = `${discovery.authorization_endpoint}?${params.toString()}`;
+    const authorizationUrl = needsAuthorizationEndpoint
+      ? `${authorizationEndpoint}?${params.toString()}`
+      : undefined;
 
-    const browser = this.config.browser || 'auto';
-    const { code } = await startOidcBrowserAuth(
+    const code = await this.resolveAuthorizationCode(
       authorizationUrl,
-      browser,
-      this.logger,
       redirectPort,
     );
 
     const tokens = await exchangeAuthorizationCode(
-      discovery.token_endpoint,
+      tokenEndpoint,
       this.config.clientId,
       this.config.clientSecret,
       code,
@@ -106,9 +143,22 @@ export class OidcBrowserProvider extends BaseTokenProvider {
       return this.performLogin();
     }
 
-    const discovery = await discoverOidc(this.config.issuerUrl, this.logger);
+    let discovery: Awaited<ReturnType<typeof discoverOidc>> | null = null;
+    if (this.config.tokenEndpoint === undefined) {
+      if (!this.config.issuerUrl) {
+        throw new Error('OIDC issuerUrl is required when discovery is used');
+      }
+      discovery = await discoverOidc(this.config.issuerUrl, this.logger);
+    }
+    const tokenEndpoint =
+      this.config.tokenEndpoint || discovery?.token_endpoint;
+    if (!tokenEndpoint) {
+      throw new Error(
+        'OIDC token endpoint is required (tokenEndpoint or discovery)',
+      );
+    }
     const tokens = await refreshOidcToken(
-      discovery.token_endpoint,
+      tokenEndpoint,
       this.config.clientId,
       this.config.clientSecret,
       this.refreshToken,
@@ -122,5 +172,36 @@ export class OidcBrowserProvider extends BaseTokenProvider {
       expiresIn: tokens.expiresIn,
       tokenType: 'jwt',
     };
+  }
+
+  private async resolveAuthorizationCode(
+    authorizationUrl: string | undefined,
+    redirectPort: number,
+  ): Promise<string> {
+    if (this.config.authorizationCode) {
+      return this.config.authorizationCode;
+    }
+    if (this.config.authorizationCodeProvider) {
+      const code = await this.config.authorizationCodeProvider();
+      if (!code) {
+        throw new Error('Authorization code provider returned empty value');
+      }
+      return code;
+    }
+
+    if (!authorizationUrl) {
+      throw new Error(
+        'OIDC authorization URL is required when using browser flow',
+      );
+    }
+
+    const browser = this.config.browser || 'auto';
+    const { code } = await startOidcBrowserAuth(
+      authorizationUrl,
+      browser,
+      this.logger,
+      redirectPort,
+    );
+    return code;
   }
 }

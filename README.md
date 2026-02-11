@@ -108,6 +108,7 @@ Available providers:
 - `OidcDeviceFlowProvider`
 - `OidcPasswordProvider`
 - `OidcTokenExchangeProvider`
+- `CfPasscodeProvider` (Cloud Foundry SSO passcode)
 - `Saml2BearerProvider` (SAML assertion exchange)
 - `Saml2PureProvider` (returns SAMLResponse as token)
 
@@ -130,6 +131,32 @@ const tokenProvider = SsoProviderFactory.create({
 });
 
 const broker = new AuthBroker({ tokenProvider }, 'none');
+```
+
+OIDC browser example (manual code + explicit endpoints):
+
+```typescript
+import { OidcBrowserProvider } from '@mcp-abap-adt/auth-providers';
+
+const provider = new OidcBrowserProvider({
+  clientId: '...',
+  tokenEndpoint: 'https://issuer/oauth/token',
+  authorizationEndpoint: 'https://issuer/oauth/authorize',
+  authorizationCode: '<paste-code-here>',
+  redirectUri: 'urn:ietf:wg:oauth:2.0:oob',
+});
+```
+
+Cloud Foundry passcode example:
+
+```typescript
+import { CfPasscodeProvider } from '@mcp-abap-adt/auth-providers';
+
+const provider = new CfPasscodeProvider({
+  uaaUrl: 'https://uaa.cf.example.com',
+  clientId: 'cf',
+  passcode: '<paste-passcode-here>',
+});
 ```
 
 SAML bearer example (manual flow):

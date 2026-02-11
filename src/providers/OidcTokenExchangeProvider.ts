@@ -13,7 +13,7 @@ import { tokenExchange } from '../auth/oidcToken';
 import { BaseTokenProvider } from './BaseTokenProvider';
 
 export interface OidcTokenExchangeProviderConfig {
-  issuerUrl: string;
+  issuerUrl?: string;
   clientId: string;
   clientSecret?: string;
   subjectToken: string;
@@ -22,6 +22,7 @@ export interface OidcTokenExchangeProviderConfig {
   audience?: string;
   actorToken?: string;
   actorTokenType?: string;
+  tokenEndpoint?: string;
   accessToken?: string;
   refreshToken?: string;
   logger?: ILogger;
@@ -49,9 +50,25 @@ export class OidcTokenExchangeProvider extends BaseTokenProvider {
   }
 
   protected async performLogin(): Promise<ITokenResult> {
-    const discovery = await discoverOidc(this.config.issuerUrl, this.logger);
+    if (!this.config.tokenEndpoint && !this.config.issuerUrl) {
+      throw new Error('OIDC issuerUrl is required when discovery is used');
+    }
+    let discovery: Awaited<ReturnType<typeof discoverOidc>> | null = null;
+    if (this.config.tokenEndpoint === undefined) {
+      if (!this.config.issuerUrl) {
+        throw new Error('OIDC issuerUrl is required when discovery is used');
+      }
+      discovery = await discoverOidc(this.config.issuerUrl, this.logger);
+    }
+    const tokenEndpoint =
+      this.config.tokenEndpoint || discovery?.token_endpoint;
+    if (!tokenEndpoint) {
+      throw new Error(
+        'OIDC token endpoint is required (tokenEndpoint or discovery)',
+      );
+    }
     const tokens = await tokenExchange(
-      discovery.token_endpoint,
+      tokenEndpoint,
       this.config.clientId,
       this.config.clientSecret,
       this.config.subjectToken,
