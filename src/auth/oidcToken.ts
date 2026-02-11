@@ -21,7 +21,7 @@ function buildAuthHeaders(
   clientId: string,
   clientSecret?: string,
 ): Record<string, string> {
-  if (clientSecret) {
+  if (clientSecret !== undefined) {
     return { Authorization: `Basic ${toBasicAuth(clientId, clientSecret)}` };
   }
   return {};
