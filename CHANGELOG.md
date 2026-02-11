@@ -7,10 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.4] - 2026-02-11
+
+### Changed
+- Remove Cloud Foundry passcode provider and related docs/tests.
+
+### Fixed
+- Always send Basic auth header for OIDC password grant, even with empty client secret.
+
+
 ## [1.0.3] - 2026-02-11
 
 ### Fixed
-- Always send Basic auth header for OIDC password grant, even with empty client secret (CF passcode).
+- Always send Basic auth header for OIDC password grant, even with empty client secret.
 
 
 ## [1.0.2] - 2026-02-11

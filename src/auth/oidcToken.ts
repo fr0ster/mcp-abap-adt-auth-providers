@@ -195,14 +195,23 @@ export async function passwordGrant(
 
   logger?.info('[OIDC] Performing password grant', { tokenEndpoint });
 
-  const response = await axios.post(tokenEndpoint, params.toString(), {
-    headers: {
-      'Content-Type': 'application/x-www-form-urlencoded',
-      ...buildAuthHeaders(clientId, clientSecret),
-    },
-  });
-
-  return mapTokenResponse(response.data);
+  try {
+    const response = await axios.post(tokenEndpoint, params.toString(), {
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        ...buildAuthHeaders(clientId, clientSecret),
+      },
+    });
+    return mapTokenResponse(response.data);
+  } catch (error: any) {
+    const status = error?.response?.status;
+    const data = error?.response?.data;
+    const errorCode = data?.error;
+    const errorDesc = data?.error_description;
+    throw new Error(
+      `OIDC password grant failed (${status || 'unknown'}): ${errorCode || 'unknown'}${errorDesc ? ` - ${errorDesc}` : ''}`,
+    );
+  }
 }
 
 export async function tokenExchange(

@@ -18,7 +18,7 @@ const BROWSER_MAP: Record<string, string | undefined | null> = {
   edge: 'msedge',
   firefox: 'firefox',
   system: undefined, // system default
-  auto: undefined, // try to open browser, fallback to showing URL (like cf login)
+  auto: undefined, // try to open browser, fallback to showing URL
   headless: null, // no browser, log URL and wait for callback (SSH/remote)
   none: null, // no browser, log URL and wait for callback (same as headless)
 };
@@ -545,7 +545,7 @@ export async function startBrowserAuth(
         return;
       }
 
-      // Handle 'auto' mode - try to open browser, fallback to showing URL (like cf login)
+      // Handle 'auto' mode - try to open browser, fallback to showing URL
       if (browser === 'auto') {
         log?.info('🌐 Attempting to open browser for authentication...');
         try {
@@ -557,7 +557,7 @@ export async function startBrowserAuth(
           );
           return;
         } catch (error: unknown) {
-          // If browser cannot be opened, show URL and wait (like cf login)
+          // If browser cannot be opened, show URL and wait
           const errorMessage =
             error instanceof Error ? error.message : String(error);
           log?.warn(`⚠️  Could not open browser automatically: ${errorMessage}`);

@@ -16,7 +16,6 @@ export {
 } from './errors/TokenProviderErrors';
 export type {
   AuthorizationCodeProviderConfig,
-  CfPasscodeProviderConfig,
   ClientCredentialsProviderConfig,
   DeviceFlowProviderConfig,
   OidcBrowserProviderConfig,
@@ -30,7 +29,6 @@ export type {
 export {
   AuthorizationCodeProvider,
   BaseTokenProvider,
-  CfPasscodeProvider,
   ClientCredentialsProvider,
   DeviceFlowProvider,
   OidcBrowserProvider,
