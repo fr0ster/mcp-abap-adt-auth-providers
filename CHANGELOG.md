@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.5] - 2026-02-12
+
+### Fixed
+- Log SAML bearer token exchange HTTP errors with response details for troubleshooting.
+
 ## [1.0.4] - 2026-02-11
 
 ### Changed
