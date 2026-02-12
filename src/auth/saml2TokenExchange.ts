@@ -3,7 +3,7 @@
  */
 
 import type { ILogger } from '@mcp-abap-adt/interfaces';
-import axios from 'axios';
+import axios, { type AxiosResponse } from 'axios';
 
 export interface Saml2TokenExchangeResponse {
   accessToken: string;
@@ -39,7 +39,18 @@ export async function exchangeSamlAssertion(
     headers.Authorization = `Basic ${toBasicAuth(clientId, clientSecret)}`;
   }
 
-  const response = await axios.post(tokenUrl, params.toString(), { headers });
+  let response: AxiosResponse;
+  try {
+    response = await axios.post(tokenUrl, params.toString(), { headers });
+  } catch (error) {
+    if (axios.isAxiosError(error)) {
+      logger?.error('[SAML] Token exchange failed', {
+        status: error.response?.status,
+        data: error.response?.data,
+      });
+    }
+    throw error;
+  }
   const data = response.data;
   if (!data?.access_token) {
     throw new Error('Token response missing access_token');
