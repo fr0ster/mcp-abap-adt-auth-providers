@@ -1,4 +1,5 @@
 # @mcp-abap-adt/auth-providers
+[![Stand With Ukraine](https://raw.githubusercontent.com/vshymanskyy/StandWithUkraine/main/badges/StandWithUkraine.svg)](https://stand-with-ukraine.pp.ua)
 
 Token providers for MCP ABAP ADT auth-broker.
 
