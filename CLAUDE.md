@@ -92,3 +92,7 @@ All errors extend `TokenProviderError` with error codes from `@mcp-abap-adt/inte
 - `ValidationError` - includes `missingFields[]`
 - `RefreshError` - includes `cause?: Error`
 - `SessionDataError`, `ServiceKeyError`, `BrowserAuthError`
+
+## Plans and Specs
+
+After a plan under `docs/superpowers/plans/` or spec under `docs/superpowers/specs/` has been fully implemented, delete the file. Keep only active (not yet implemented) plans and specs in the tree — implementation history lives in git, not in these directories.
