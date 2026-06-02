@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-06-02
+
+### Added
+- `extractCode(input)` helper: pulls an OAuth2 authorization code out of a bare
+  code, a `code=...` string, or a full redirected URL.
+- Manual paste authentication for `none`/`headless` browser modes, so login can
+  complete when the automatic `localhost` callback can't reach the process
+  (browser on another machine / container / SSH). Three racing channels, first
+  one wins:
+  - the existing automatic `GET /callback?code=...` redirect;
+  - an HTML paste form on the same callback server (`GET /` + `GET /submit`);
+  - stdin paste, only when `process.stdin.isTTY` (never consumed under stdio
+    RPC transports).
+
+### Fixed
+- `none`/`headless` mode now prints the authorization URL even when no logger is
+  supplied. The prompt previously rode on `log?.info(...)` and was silently
+  dropped without a logger; it now falls back to `stderr` (never stdout, to keep
+  stdio RPC transports uncorrupted).
+
 ## [1.0.5] - 2026-02-12
 
 ### Fixed

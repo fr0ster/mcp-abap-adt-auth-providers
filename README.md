@@ -100,6 +100,36 @@ const clientCredsBroker = new AuthBroker({
 }, 'none');
 ```
 
+### Browser modes (`AuthorizationCodeProvider`)
+
+The `browser` option controls how the authorization URL is opened:
+
+| Mode | Behaviour |
+|------|-----------|
+| `system` (default) | Open the OS default browser |
+| `chrome` / `edge` / `firefox` | Open a specific browser |
+| `auto` | Try to open a browser; on failure, print the URL and wait |
+| `none` / `headless` | Do **not** open a browser — print the URL and wait for the code (SSH / remote / containers) |
+
+In `none`/`headless` mode the authorization URL is always shown, **even when no
+logger is supplied** (it falls back to `stderr`, never stdout, so stdio-based
+RPC transports are not corrupted).
+
+#### Manual paste (none / headless)
+
+Login can complete through any of three channels — whichever finishes first wins:
+
+1. **Automatic callback** — `GET /callback?code=...` on `http://localhost:<redirectPort>`.
+   Works when the browser is on the same machine as the process.
+2. **Paste form** — open `http://<host>:<redirectPort>/` and paste the code (or
+   the whole redirected URL). Works when the browser is on a *different* machine,
+   since the callback server listens on all interfaces.
+3. **Terminal paste** — paste the code on stdin and press Enter. Only active when
+   `process.stdin.isTTY` (stdin is never consumed under a stdio RPC transport).
+
+The exported `extractCode(input)` helper accepts a bare code, `code=...`, or a
+full redirected URL.
+
 ### SSO Providers
 
 This package also includes SSO providers for OIDC and SAML2, plus a small factory for DI-friendly creation.
