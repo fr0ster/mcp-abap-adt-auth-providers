@@ -6,7 +6,11 @@ import http from 'node:http';
 import { jest } from '@jest/globals';
 import type { IAuthorizationConfig, ILogger } from '@mcp-abap-adt/interfaces';
 import axios from 'axios';
-import { exchangeCodeForToken, startBrowserAuth } from '../../auth/browserAuth';
+import {
+  exchangeCodeForToken,
+  extractCode,
+  startBrowserAuth,
+} from '../../auth/browserAuth';
 import { canListenOnLocalhost, getAvailablePort } from '../helpers/netHelpers';
 import { createTestLogger } from '../helpers/testLogger';
 
@@ -355,5 +359,170 @@ describe('browserAuth browser modes', () => {
       // Wait for cleanup
       await authPromise.catch(() => {});
     });
+  });
+});
+
+describe('extractCode', () => {
+  it('returns a bare code as-is', () => {
+    expect(extractCode('abc123')).toBe('abc123');
+  });
+
+  it('parses `code=XYZ`', () => {
+    expect(extractCode('code=abc123')).toBe('abc123');
+  });
+
+  it('parses a code from a full redirected URL', () => {
+    expect(
+      extractCode('http://localhost:7779/callback?code=abc123&state=s'),
+    ).toBe('abc123');
+  });
+
+  it('parses a code from a remote-host redirected URL', () => {
+    expect(
+      extractCode('http://10.0.0.5:7779/callback?state=s&code=abc%2D123'),
+    ).toBe('abc-123');
+  });
+
+  it('trims surrounding whitespace', () => {
+    expect(extractCode('   abc123  ')).toBe('abc123');
+  });
+
+  it('returns null for empty / whitespace-only input', () => {
+    expect(extractCode('')).toBeNull();
+    expect(extractCode('   ')).toBeNull();
+  });
+
+  it('returns null when the input is clearly not a single code', () => {
+    expect(extractCode('hello world this is not a code')).toBeNull();
+  });
+});
+
+describe('browserAuth manual paste (none mode)', () => {
+  const authConfig: IAuthorizationConfig = {
+    uaaUrl: 'https://test.authentication.sap.hana.ondemand.com',
+    uaaClientId: 'test-client-id',
+    uaaClientSecret: 'test-client-secret',
+  };
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
+
+  const httpGet = (url: string): Promise<{ status: number; body: string }> =>
+    new Promise((resolve, reject) => {
+      const req = http.get(url, (res) => {
+        let body = '';
+        res.on('data', (chunk) => {
+          body += chunk;
+        });
+        res.on('end', () => resolve({ status: res.statusCode ?? 0, body }));
+      });
+      req.on('error', reject);
+    });
+
+  it('serves a paste form at GET /', async () => {
+    if (!(await canListenOnLocalhost())) return;
+    const logger: ILogger = createTestLogger('AUTH');
+    const port = await getAvailablePort();
+
+    const authPromise = startBrowserAuth(authConfig, 'none', logger, port);
+    await new Promise((r) => setTimeout(r, 100));
+
+    const { status, body } = await httpGet(`http://localhost:${port}/`);
+    expect(status).toBe(200);
+    expect(body).toContain('<form');
+    expect(body).toContain('/submit');
+
+    // Cleanup via callback
+    mockedAxios.mockResolvedValue({
+      status: 200,
+      data: { access_token: 'cleanup' },
+    });
+    await httpGet(`http://localhost:${port}/callback?code=cleanup`).catch(
+      () => {},
+    );
+    await authPromise.catch(() => {});
+  });
+
+  it('completes the flow when a code is pasted via GET /submit', async () => {
+    if (!(await canListenOnLocalhost())) return;
+    const logger: ILogger = createTestLogger('AUTH');
+    const port = await getAvailablePort();
+
+    mockedAxios.mockResolvedValue({
+      status: 200,
+      data: { access_token: 'pasted-token', refresh_token: 'pasted-refresh' },
+    });
+
+    const authPromise = startBrowserAuth(authConfig, 'none', logger, port);
+    await new Promise((r) => setTimeout(r, 100));
+
+    // Paste a full redirected URL; the code should be extracted and exchanged.
+    await httpGet(
+      `http://localhost:${port}/submit?input=${encodeURIComponent(
+        `http://localhost:${port}/callback?code=pasted-code`,
+      )}`,
+    );
+
+    const result = await authPromise;
+    expect(result.accessToken).toBe('pasted-token');
+    expect(result.refreshToken).toBe('pasted-refresh');
+  });
+
+  it('re-renders the form (HTTP 400) on an unusable paste, without ending the flow', async () => {
+    if (!(await canListenOnLocalhost())) return;
+    const logger: ILogger = createTestLogger('AUTH');
+    const port = await getAvailablePort();
+
+    const authPromise = startBrowserAuth(authConfig, 'none', logger, port);
+    await new Promise((r) => setTimeout(r, 100));
+
+    const { status, body } = await httpGet(
+      `http://localhost:${port}/submit?input=${encodeURIComponent('not a code')}`,
+    );
+    expect(status).toBe(400);
+    expect(body).toContain('<form');
+
+    // Flow is still pending — finish it via callback.
+    mockedAxios.mockResolvedValue({
+      status: 200,
+      data: { access_token: 'cleanup' },
+    });
+    await httpGet(`http://localhost:${port}/callback?code=cleanup`).catch(
+      () => {},
+    );
+    await authPromise.catch(() => {});
+  });
+
+  it('prints the authorization URL to stderr even without a logger', async () => {
+    if (!(await canListenOnLocalhost())) return;
+    const port = await getAvailablePort();
+
+    const writes: string[] = [];
+    const spy = jest
+      .spyOn(process.stderr, 'write')
+      .mockImplementation((chunk: unknown) => {
+        writes.push(String(chunk));
+        return true;
+      });
+
+    // No logger passed — the URL must still be announced via stderr.
+    const authPromise = startBrowserAuth(authConfig, 'none', undefined, port);
+    await new Promise((r) => setTimeout(r, 100));
+
+    spy.mockRestore();
+    const all = writes.join('');
+    expect(all).toContain('Open this URL');
+    expect(all).toContain('oauth/authorize');
+
+    // Cleanup
+    mockedAxios.mockResolvedValue({
+      status: 200,
+      data: { access_token: 'cleanup' },
+    });
+    await httpGet(`http://localhost:${port}/callback?code=cleanup`).catch(
+      () => {},
+    );
+    await authPromise.catch(() => {});
   });
 });
