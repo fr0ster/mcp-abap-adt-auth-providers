@@ -1,0 +1,435 @@
+# Callback server contract
+
+Date: 2026-07-28
+Status: approved, not yet implemented
+Issue: https://github.com/fr0ster/mcp-abap-adt-auth-providers/issues/11
+
+## Problem
+
+This package contains three OAuth/SAML callback servers, written independently, each of
+which can hold its port after it is no longer needed:
+
+| file | lines | what it does | how it hangs |
+|---|---|---|---|
+| `src/auth/browserAuth.ts` | 790 | `/callback`, paste form (`/`, `/submit`), stdin reader, browser launch | a callback carrying neither `code` nor `error` rejects through a `reject` that closes nothing; the socket is held for the lifetime of the process |
+| `src/auth/oidcBrowserAuth.ts` | 124 | `/callback` with `code` + `state` | **no timeout at all** — an abandoned login never settles, and the port is held forever |
+| `src/auth/saml2Auth.ts` | 205 | `POST`/`GET /callback` with `SAMLResponse` | same: no timeout, no release |
+
+Measured, by binding the socket rather than reading log output:
+
+```
+browserAuth, callback with neither code nor error:
+  promise: rejected — Authorization code missing
+  +5s / +20s / +35s / +45s — port still bound
+```
+
+The 30-second timer that would otherwise have released it is cleared inside `reject`
+(`browserAuth.ts:274-278`), which also removes the `exit`/`SIGTERM`/`SIGINT`/`SIGHUP`
+cleanup listeners. Five other exit paths do close, but asynchronously *after* the promise
+has already settled, so for ~100 ms a rejected login reports a port that is not yet free.
+
+`AuthorizationCodeProvider.ts:153-172` adds a second 30-second timer racing the first via
+`Promise.race`. Which fires is down to scheduling; when the outer one wins the provider
+rejects while the socket is still bound. That timer is never cleared — `clearTimeout`
+appears nowhere in the file — so a login that succeeds in a second leaves it armed for the
+remaining 29.
+
+The symptom is visible in this package's own suite:
+
+```
+src/__tests__/providers/AuthorizationCodeProvider.test.ts alone:  3/3 pass, 3.2 s
+the same file in the full suite:                                  2 fail, 61 s
+```
+
+61 seconds is two 30-second timeouts.
+
+An earlier draft of this spec also cited Jest's `Force exiting Jest: ... async
+operations that kept running` as evidence of lingering handles. It is not: this repo
+sets `forceExit: true` in `jest.config.js`, and has done since before this work, so
+the message is printed on every run regardless. Running with `--detectOpenHandles`
+reports no open handles at all. The failure counts and the 61 seconds stand; that one
+line never meant what it was quoted for.
+
+## The root shape
+
+All three bind the release of the socket to a promise settling. When the promise does not
+settle, nothing is released; when it settles on a path that forgot to close, nothing is
+released either. And a bare promise offers no way for a caller to say *"I no longer need
+this"* — there is no cancellation anywhere in the three files.
+
+So the contract must not make release a consequence of success. Release has to be an
+always-available action that does not depend on how, or whether, the wait ended.
+
+## Design
+
+A factory-scoped contract. The server handle is borrowed for the duration of a callback,
+and the factory releases the port on the first terminal outcome — the callback returning or
+throwing, an explicit failure, the timeout, or an abort.
+
+New file in `@mcp-abap-adt/interfaces`, `src/auth/ICallbackServer.ts`:
+
+```ts
+export interface ICallbackServerOptions {
+  /**
+   * Port for the local listener. Must be an integer in 1..65535 —
+   * `Number.isInteger(port)` included, since `3001.5` satisfies the range.
+   *
+   * `0` is rejected rather than treated as "pick one for me": the OIDC and SAML
+   * flows build their authorization URL before the server binds, so an
+   * ephemeral port would be advertised to the IdP as `:0`.
+   */
+  readonly port: number;
+  /**
+   * Mandatory. Must satisfy
+   * `Number.isFinite(timeoutMs) && timeoutMs > 0 && timeoutMs <= 2_147_483_647`.
+   *
+   * `Infinity` is rejected rather than honoured — "wait forever" is the defect
+   * this contract exists to remove, and it must not be reachable through the
+   * option that was added to prevent it. `0`, negatives and `NaN` are rejected
+   * too.
+   *
+   * The upper bound is Node's, not ours. `setTimeout` takes a 32-bit signed
+   * delay; measured, `2_147_483_648` and `5_000_000_000` both fire after **1 ms**
+   * with a `TimeoutOverflowWarning`, while `2_147_483_647` is accepted. So a
+   * generous-looking timeout would silently end the login almost instantly —
+   * the worst possible failure, since it looks like a configuration that grants
+   * more time. Rejected rather than clamped: clamping would hide the mistake.
+   */
+  readonly timeoutMs: number;
+  /** External cancellation: "no longer needed". */
+  readonly signal?: AbortSignal;
+}
+
+/**
+ * Borrowed handle. Valid until the scope reaches its first terminal outcome —
+ * which may be before `use` has finished, since a timeout or abort ends the
+ * scope without stopping it.
+ */
+export interface ICallbackServerHandle<TResult> {
+  readonly port: number;
+  readonly redirectUri: string;
+  waitForResult(): Promise<TResult>;
+  fail(error: Error): void;
+}
+
+/**
+ * The only way to obtain a server.
+ *
+ * The type parameter is on the alias, not on the call signature: a factory for
+ * a given flow always produces that flow's result. Were it generic per call,
+ * `withBrowserCallbackServer<number>(...)` would type-check against a handler
+ * that can only ever yield a string.
+ */
+export type CallbackServerFactory<TResult> = (
+  options: ICallbackServerOptions,
+  use: (server: ICallbackServerHandle<TResult>) => Promise<TResult>,
+) => Promise<TResult>;
+```
+
+`close()` is deliberately absent from the handle. Closing belongs to the factory, so it
+cannot be forgotten — nobody calls it by hand.
+
+### Rules
+
+Each of these closes one of the observed failures:
+
+1. **Two settlements, not one — and only one of them ends the scope.**
+
+   There are two places a value can come from, and conflating them is what made the
+   previous draft ambiguous:
+
+   | event | settles `waitForResult()` | ends the scope |
+   |---|---|---|
+   | the HTTP handler receives a valid callback | yes, with the payload | **no** |
+   | `use` fulfils | — | yes: the factory resolves with **`use`'s** value |
+   | `use` throws | — | yes: the factory rejects with that error |
+   | `fail(err)` | yes, rejects with `err` | yes |
+   | timeout elapsed | yes, rejects | yes |
+   | `signal` aborted | yes, rejects | yes |
+
+   So a callback arriving is *not* a terminal outcome. It hands the payload to whoever is
+   awaiting `waitForResult()`, and the scope ends when `use` decides it has. That is what
+   makes the ordinary shape work:
+
+   ```ts
+   factory(options, async (srv) => transform(await srv.waitForResult()));
+   // the factory resolves with transform(payload), not with the raw payload
+   ```
+
+   The only successful terminal outcome is `use` fulfilling. Failures — `fail`, timeout,
+   abort — end the scope on their own, without waiting for `use`.
+
+2. **On a failure outcome the factory does not wait for `use`.** An arbitrary `async`
+   function cannot be force-terminated, so `factory(opts, () => new Promise(() => {}))`
+   would otherwise make "the timeout releases the port" unsatisfiable. The timeout ends the
+   scope, the port comes back, and the abandoned body is left running until whatever it
+   awaits resolves — or forever, which is the caller's doing.
+
+3. **A losing `use` is swallowed.** Once a failure has ended the scope, a later settlement
+   from `use` — value or rejection — is discarded, so an abandoned body cannot surface as
+   an unhandled rejection long after the login failed.
+
+4. **The factory settles only after the socket is released**, per the shutdown algorithm
+   below. An error always means the port is already free, which removes the ~100 ms window
+   in which the current code lies.
+
+5. **Exactly one outcome.** The first terminal event wins; everything later is a no-op — no
+   second settlement, no double close.
+
+6. **A pending `waitForResult()` is rejected when the scope ends**, so a `use` body that
+   returns without awaiting leaves nothing dangling.
+
+   That rejection must not become the very thing this contract is trying to eliminate. A
+   body may create the promise and walk away:
+
+   ```ts
+   async (srv) => {
+     void srv.waitForResult();   // created, never awaited
+     return 'done';
+   }
+   ```
+
+   With no handler attached, rejecting it at scope end raises `unhandledRejection` on the
+   process. So the implementation attaches a no-op handler to the internal promise **when it
+   is created** — `void internal.catch(() => undefined)` — which marks it handled without
+   altering what a real awaiter observes.
+
+   `waitForResult()` returns that same promise on every call. One shared promise, safe to
+   call repeatedly, and the safety handler is attached exactly once.
+
+7. **`timeoutMs` is required.** Its absence is exactly what holds the port forever in the
+   OIDC and SAML flows.
+
+8. **The handle is dead after the scope ends, but its members do not all behave alike.**
+   A still-running `use` will keep touching it, and what it gets has to be safe:
+
+   | member | after the scope has ended |
+   |---|---|
+   | `fail(err)` | **silent no-op.** Never throws |
+   | `waitForResult()` | returns a **rejected** promise — never throws synchronously |
+   | `port`, `redirectUri` | still readable; they are values, not operations |
+
+   `fail` must not throw because of how it is meant to be used:
+
+   ```ts
+   launchBrowser(url).catch((e) => srv.fail(e));
+   ```
+
+   A launcher that rejects after the timeout would otherwise throw inside that `.catch()`
+   and produce a fresh unhandled rejection — precisely what rules 3 and 6 exist to prevent.
+   A fire-and-forget failure reporter has to stay safe to call at any time.
+
+### Startup
+
+Nothing above applies until the server is listening, so startup has its own rules:
+
+1. **Validate first.** `port` outside 1..65535 — `0` included — is rejected before anything
+   is bound. The contract is types-only, so the check lives in the factory; the JSDoc states
+   the constraint and the implementation enforces it.
+2. **An already-aborted `signal` binds nothing.** If `options.signal?.aborted` is true on
+   entry, the factory rejects immediately without opening a socket and without calling `use`.
+
+3. **An abort during the bind is not lost.** The `signal` listener is registered *before*
+   `listen` is called, not from the `listen` callback — otherwise an abort arriving in that
+   window would be dropped. If it fires while the bind is in flight: `use` is never called,
+   the listener and any timer are removed, and the server is torn down whether or not it
+   reached `listening`. Once the factory has rejected, the port is free.
+4. **`use` runs only once the server is listening.** It is called from the `listen`
+   callback, never before — otherwise a body that immediately awaits `waitForResult()` could
+   race the bind.
+5. **A failed bind is a clean failure.** On `listen` error — `EADDRINUSE` being the one that
+   actually happens — the factory rejects with that error, `use` is never called, the
+   timeout timer is never armed or is cleared, and the `signal` listener is removed. Nothing
+   is left registered and nothing is left bound.
+6. **The timeout starts when the server is listening**, not when the factory is entered, so
+   a slow bind does not eat into the login window.
+
+### Shutdown algorithm
+
+"Release the socket" has to be specified, not left to `server.close()`. Node's behaviour
+here is version-dependent: since Node 19 `close()` also ends idle connections, on 18.x it
+does not, and `closeAllConnections()` only exists from 18.2. Measured on Node 25 with an
+idle keep-alive socket held open, `close()` completed in 0-3 ms at `keepAliveTimeout` of 0,
+5000 and 72000 alike — which says nothing about 18.x, and is why the sequence is pinned
+here rather than inferred. Both `closeIdleConnections()` and `closeAllConnections()` arrived
+in 18.2, which is what sets the engines floor:
+
+1. `server.close()`, and nothing else. It stops accepting, and from Node 19 it also ends
+   idle connections — gracefully, so a client still reads what was already written.
+2. Wait for the `close` event, bounded by a 500 ms grace.
+3. If the grace expires, force it: `closeIdleConnections()`, `closeAllConnections()`, and
+   destroy the sockets tracked from the `connection` event.
+4. Resolve. Shutdown is bounded, so a timeout can never itself hang on cleanup.
+
+**Neither `closeIdleConnections()` nor `closeAllConnections()` may run eagerly.** Both
+*destroy* sockets rather than ending them, and a connection that has just delivered the
+success page is idle by then — so destroying idle connections at once cuts off exactly the
+response the previous rule works to protect. An earlier draft of this spec put
+`closeIdleConnections()` in the first step for that very purpose; implementing it showed the
+mistake. They belong only in the grace-expiry path, where the alternative is hanging.
+
+This is not theoretical either: in the consuming proxy's test suite a client fetching
+`/callback` intermittently received `ECONNRESET` instead of the success page, because the
+existing code destroys the socket as soon as the response emits `finish`.
+
+Which is the other half of the rule: **a route may only report its outcome once its response
+has actually been flushed.** `res.send()` returning does not mean the bytes have left; bind
+the settlement to the response's `finish` event.
+
+The flag to test is **`writableFinished`, never `writableEnded`**. The latter is true as soon
+as `end()` has been called and says nothing about the data having gone. Measured on Node 25
+with a client that does not read: an 800-byte body reports both flags true at once, but a
+20 MB body reports `writableEnded` true and `writableFinished` false, with `finish` arriving
+456 ms later. An implementation that short-circuits on `writableEnded` therefore skips the
+wait entirely on exactly the responses the wait exists for — and the first implementation of
+this spec did, until a test with a large body and a paused client caught it.
+
+`engines.node` rises to `>=18.2.0` for `closeAllConnections()`. Writing a socket-tracking
+fallback for 18.0 and 18.1 — two patch releases of a major that is already end-of-life —
+buys nothing.
+
+Do not carry over `server.keepAliveTimeout = 0`. Its comment claims it makes connections
+close immediately; per the Node documentation `0` *disables* the keep-alive timeout, and
+the measurement above shows it changes nothing either way. It is noise, not protection.
+
+### Usage
+
+```ts
+const code = await withBrowserCallbackServer(
+  { port, timeoutMs, signal },
+  async (srv) => {
+    const waiting = srv.waitForResult();          // Promise<string> — fixed by the factory's type
+    launchBrowser(buildAuthUrl(srv.redirectUri)).catch((e) => srv.fail(e));
+    return await waiting;
+  },
+);
+// reached only once the port is free — whatever the outcome
+```
+
+No type argument at the call site: each flow's factory has its result type baked in.
+
+```ts
+const withBrowserCallbackServer: CallbackServerFactory<string>;
+const withOidcCallbackServer: CallbackServerFactory<{ code: string; state?: string }>;
+const withSamlCallbackServer: CallbackServerFactory<string>;
+```
+
+The browser launch is deliberately not awaited on the critical path: a launcher that hangs
+must not delay the timeout or the release, and one that fails routes into `fail`, which is
+just another way for the scope to end.
+
+### Implementations
+
+Three factories in `auth-providers`, one per existing flow, each keeping the payload type
+it already produces:
+
+| factory | `TResult` | replaces |
+|---|---|---|
+| `withBrowserCallbackServer` | `string` — the authorization code | the server inside `startBrowserAuth` |
+| `withOidcCallbackServer` | `{ code: string; state?: string }` | the server inside `startOidcBrowserAuth` |
+| `withSamlCallbackServer` | `string` — the `SAMLResponse` | the server inside `startSamlBrowserAuth` |
+
+Each stays internal to the package for now — the seam exists so the code has one shape and
+one release point, not because a consumer is expected to plug into it today. Exporting them
+is part of moving reception to the consumer, which is issue #11 and out of scope here.
+
+The contract is typed per flow rather than transport-only. A transport-only server that
+knew nothing of OAuth would need a three-state predicate to distinguish "this is the
+result", "this is an error" and "ignore this" — otherwise `?error=access_denied` degrades
+into a timeout. That cost is not worth paying while no consumer writes its own
+implementation; if one ever does, a transport-level interface can be introduced below this
+one without breaking it.
+
+### What changes in the provider
+
+`AuthorizationCodeProvider` loses the `Promise.race` wrapper and its timer. The login
+timeout travels into `ICallbackServerOptions.timeoutMs`, so there is one timer, owned by
+the party that owns the socket.
+
+Nothing else in the provider changes. `browser` and `redirectPort` keep their meaning and
+their defaults; they now configure the default factory instead of a hardwired server.
+
+## Public API
+
+A backward-compatible additive change. Nothing existing moves: `AuthorizationCodeProviderConfig`
+keeps `browser?: string` and `redirectPort?: number` with the existing default of 3001, and no
+exported signature changes. Both releases are minor:
+
+- `@mcp-abap-adt/interfaces` — three new exported types. Additive, but still a public API
+  change, so it earns its own minor version rather than riding along as a patch.
+- `@mcp-abap-adt/auth-providers` — internal restructuring, the dependency bump, and
+  `engines.node` rising from `>=18.0.0` to `>=18.2.0` for `closeAllConnections()`. That floor
+  move is not covered by semver; the changelog states it plainly.
+
+The dependency bump is from `^2.3.0` to the new interfaces release. Measured against
+`11.3.0`: zero type errors (`tsc --noEmit`), and the test suite produces the same result as
+on `2.3.0` — the same two pre-existing failures described above, no new ones.
+
+## Testing
+
+Assertions about a port must bind the socket. The current code logs `port ${PORT} freed` on
+a path that never calls `close()`, so log output proves nothing.
+
+For each factory:
+
+- the port is bound while `use` runs, and free once the factory settles — for success,
+  `fail`, timeout, abort, and a `use` body that throws;
+- a `use` that never settles (`() => new Promise(() => {})`) still loses to the timeout: the
+  factory rejects, the port is free, and the abandoned body produces no unhandled rejection
+  when it is later discarded;
+- shutdown is bounded with a real keep-alive client holding an idle connection — not a bare
+  `fetch`, which does not exercise the case the algorithm exists for;
+- startup failures are clean: with the port already held by another listener the factory
+  rejects, `use` is never called, and no timer or `signal` listener survives; the same for an
+  `AbortSignal` that is already aborted on entry, which must not bind a socket at all;
+- a port outside 1..65535, `0` and non-integers included, is rejected before anything binds,
+  as is a `timeoutMs` outside `0 < t <= 2_147_483_647`. Assert the boundary explicitly:
+  `2_147_483_647` is accepted, `2_147_483_648` is rejected. `Infinity` especially, since
+  honouring it would reinstate the defect the option exists to remove;
+- an abort that arrives *during* the bind is honoured: `use` never runs, nothing stays
+  registered, and the port is free once the factory rejects;
+- `fail()` called after the scope has ended is a silent no-op — asserted by rejecting a
+  launcher promise after the timeout has already fired and checking that no unhandled
+  rejection results;
+- an abandoned login is released by the timeout rather than held (the OIDC and SAML
+  regression);
+- a `use` body that returns without awaiting `waitForResult()` leaves no pending promise, and
+  — asserted with a `process.on('unhandledRejection')` listener — abandoning it entirely
+  raises nothing on the process;
+- repeated `waitForResult()` calls return the same promise and the same outcome;
+- the dead handle behaves per member, not uniformly: `fail()` is a silent no-op that does
+  not throw, `waitForResult()` returns a rejected promise rather than throwing synchronously,
+  and `port` and `redirectUri` are still readable;
+- first-terminal-outcome-wins, in both directions, since a delivered callback is not itself
+  terminal:
+  - a `fail` that arrives after the callback was delivered but **before** `use` fulfils ends
+    the scope with that failure — the payload does not save it;
+  - a `fail` after `use` has already fulfilled is a no-op, and the factory still resolves
+    with `use`'s value.
+
+For the provider:
+
+- a login driven past `timeoutMs` leaves the port bindable at the moment the provider's
+  promise rejects. With the `Promise.race` still in place this fails about half the time,
+  which is why it is asserted rather than reasoned about.
+
+The two `AuthorizationCodeProvider` tests that already fail in the full suite are expected
+to go green once the timers stop competing and the sockets are released; if they do not,
+that is a finding, not a flake to work around.
+
+## Out of scope
+
+- **Moving callback reception to the consumer.** Issue #11 records that the transport does
+  not belong in an authorization library. This spec fixes the hangs and introduces the seam;
+  it does not move the code between packages.
+- **Ephemeral ports.** `port: 0` is **not supported** by these flows and must not be
+  passed. The browser flow could take it — it builds its authorization URL inside the scope
+  from `srv.redirectUri`, which reports the bound port — but the OIDC and SAML flows receive
+  a URL built by the provider *before* the server binds, so the redirect would carry `:0`.
+  Making it work means restructuring those flows to build the URL after binding, which is
+  its own change. The earlier claim that `port: 0` "must work if passed" was wrong and is
+  withdrawn.
+- **Making a code-less callback non-terminal.** Today such a request ends the login with an
+  error; that behaviour is preserved. The defect being fixed is the leaked socket, not the
+  termination. Letting a stray request be ignored instead is a cheap follow-up, deliberately
+  not bundled.
