@@ -3,11 +3,16 @@
  */
 
 import { randomUUID } from 'node:crypto';
-import * as http from 'node:http';
 import * as net from 'node:net';
 import { deflateRawSync } from 'node:zlib';
-import type { ILogger } from '@mcp-abap-adt/interfaces';
+import type {
+  CallbackServerFactory,
+  ICallbackServerHandle,
+  ICallbackServerOptions,
+  ILogger,
+} from '@mcp-abap-adt/interfaces';
 import express from 'express';
+import { runCallbackScope } from './callbackServer';
 
 export interface Saml2AuthConfig {
   idpSsoUrl: string;
@@ -121,12 +126,53 @@ async function openBrowserUrl(
   }
 }
 
+const withSamlCallbackServer: CallbackServerFactory<string> = <TReturn>(
+  options: ICallbackServerOptions,
+  use: (server: ICallbackServerHandle<string>) => Promise<TReturn>,
+): Promise<TReturn> =>
+  runCallbackScope<string, TReturn>(
+    options,
+    (app, settle) => {
+      app.use(express.urlencoded({ extended: false, limit: '5mb' }));
+
+      const handle = (samlResponse: unknown, res: express.Response): void => {
+        res
+          .status(200)
+          .send('SAML authentication complete. You can close this window.');
+        if (typeof samlResponse === 'string' && samlResponse) {
+          settle.ok(samlResponse, res);
+        } else {
+          settle.err(new Error('Missing SAMLResponse'), res);
+        }
+      };
+
+      app.post('/callback', (req, res) => {
+        handle(req.body?.SAMLResponse, res);
+      });
+
+      app.get('/callback', (req, res) => {
+        handle(req.query.SAMLResponse, res);
+      });
+    },
+    use,
+  );
+
+/**
+ * SAML browser login.
+ *
+ * The callback socket belongs to the scope: it is released when the scope ends,
+ * whatever ends it. Before this, the flow had no timeout at all — an abandoned
+ * login never settled and the port was held for the life of the process.
+ */
 export async function startSamlBrowserAuth(
   config: Saml2AuthConfig,
   browser: string,
   logger?: ILogger,
   port: number = 3001,
+  timeoutMs: number = 30 * 1000,
 ): Promise<string> {
+  // Pre-check kept for its message: AuthBroker matches /already in use/i to
+  // distinguish a busy port from other failures.
   const portAvailable = await isPortAvailable(port);
   if (!portAvailable) {
     throw new Error(
@@ -136,55 +182,20 @@ export async function startSamlBrowserAuth(
 
   const authorizationUrl = buildSamlAuthorizationUrl(config);
 
-  return new Promise((resolve, reject) => {
-    const app = express();
-    app.use(express.urlencoded({ extended: false, limit: '5mb' }));
-    const server = http.createServer(app);
-    server.keepAliveTimeout = 0;
-    server.headersTimeout = 0;
-    const PORT = port;
-
-    let resolved = false;
-    const cleanup = () => {
-      if (resolved) return;
-      resolved = true;
-      server.close();
-    };
-
-    const handleResponse = (samlResponse?: string) => {
-      if (!samlResponse) {
-        cleanup();
-        reject(new Error('Missing SAMLResponse'));
-        return;
-      }
-      cleanup();
-      resolve(samlResponse);
-    };
-
-    app.post('/callback', (req, res) => {
-      const samlResponse = req.body?.SAMLResponse;
-      res
-        .status(200)
-        .send('SAML authentication complete. You can close this window.');
-      handleResponse(
-        typeof samlResponse === 'string' ? samlResponse : undefined,
-      );
-    });
-
-    app.get('/callback', (req, res) => {
-      const samlResponse = req.query.SAMLResponse;
-      res
-        .status(200)
-        .send('SAML authentication complete. You can close this window.');
-      handleResponse(
-        typeof samlResponse === 'string' ? samlResponse : undefined,
-      );
-    });
-
-    server.listen(PORT, async () => {
-      logger?.info('[SAML] Callback server listening', { port: PORT });
-      await openBrowserUrl(authorizationUrl, browser, logger);
-    });
+  return await withSamlCallbackServer({ port, timeoutMs }, async (server) => {
+    logger?.info('[SAML] Callback server listening', { port: server.port });
+    const waiting = server.waitForResult();
+    // Not awaited: a launcher that hangs must not delay the timeout or the
+    // release of the port.
+    void openBrowserUrl(authorizationUrl, browser, logger).catch(
+      (error: unknown) => {
+        logger?.warn('[SAML] Failed to open browser', {
+          error: error instanceof Error ? error.message : String(error),
+        });
+        logger?.info('[SAML] Open URL manually', { authorizationUrl });
+      },
+    );
+    return await waiting;
   });
 }
 

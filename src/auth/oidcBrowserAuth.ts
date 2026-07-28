@@ -2,10 +2,14 @@
  * OIDC browser authorization code flow (capture code)
  */
 
-import * as http from 'node:http';
 import * as net from 'node:net';
-import type { ILogger } from '@mcp-abap-adt/interfaces';
-import express from 'express';
+import type {
+  CallbackServerFactory,
+  ICallbackServerHandle,
+  ICallbackServerOptions,
+  ILogger,
+} from '@mcp-abap-adt/interfaces';
+import { runCallbackScope } from './callbackServer';
 
 const BROWSER_MAP: Record<string, string | undefined | null> = {
   chrome: 'chrome',
@@ -73,12 +77,56 @@ async function openBrowserUrl(
   }
 }
 
+export interface OidcCallbackResult {
+  code: string;
+  state?: string;
+}
+
+const withOidcCallbackServer: CallbackServerFactory<OidcCallbackResult> = <
+  TReturn,
+>(
+  options: ICallbackServerOptions,
+  use: (server: ICallbackServerHandle<OidcCallbackResult>) => Promise<TReturn>,
+): Promise<TReturn> =>
+  runCallbackScope<OidcCallbackResult, TReturn>(
+    options,
+    (app, settle) => {
+      app.get('/callback', (req, res) => {
+        const code = req.query.code;
+        const state = req.query.state;
+        if (!code || typeof code !== 'string') {
+          res.status(400).send('Missing authorization code');
+          settle.err(new Error('Missing authorization code'), res);
+          return;
+        }
+        res
+          .status(200)
+          .send('Authentication complete. You can close this window.');
+        settle.ok(
+          { code, state: typeof state === 'string' ? state : undefined },
+          res,
+        );
+      });
+    },
+    use,
+  );
+
+/**
+ * OIDC browser login.
+ *
+ * The callback socket belongs to the scope: it is released when the scope ends,
+ * whatever ends it. Before this, the flow had no timeout at all — an abandoned
+ * login never settled and the port was held for the life of the process.
+ */
 export async function startOidcBrowserAuth(
   authorizationUrl: string,
   browser: string,
   logger?: ILogger,
   port: number = 3001,
-): Promise<{ code: string; state?: string }> {
+  timeoutMs: number = 30 * 1000,
+): Promise<OidcCallbackResult> {
+  // Pre-check kept for its message: AuthBroker matches /already in use/i to
+  // distinguish a busy port from other failures.
   const portAvailable = await isPortAvailable(port);
   if (!portAvailable) {
     throw new Error(
@@ -86,39 +134,19 @@ export async function startOidcBrowserAuth(
     );
   }
 
-  return new Promise((resolve, reject) => {
-    const app = express();
-    const server = http.createServer(app);
-    server.keepAliveTimeout = 0;
-    server.headersTimeout = 0;
-    const PORT = port;
-
-    let resolved = false;
-    const cleanup = () => {
-      if (resolved) return;
-      resolved = true;
-      server.close();
-    };
-
-    app.get('/callback', (req, res) => {
-      const code = req.query.code;
-      const state = req.query.state;
-      if (!code || typeof code !== 'string') {
-        res.status(400).send('Missing authorization code');
-        cleanup();
-        reject(new Error('Missing authorization code'));
-        return;
-      }
-      res
-        .status(200)
-        .send('Authentication complete. You can close this window.');
-      cleanup();
-      resolve({ code, state: typeof state === 'string' ? state : undefined });
-    });
-
-    server.listen(PORT, async () => {
-      logger?.info('[OIDC] Callback server listening', { port: PORT });
-      await openBrowserUrl(authorizationUrl, browser, logger);
-    });
+  return await withOidcCallbackServer({ port, timeoutMs }, async (server) => {
+    logger?.info('[OIDC] Callback server listening', { port: server.port });
+    const waiting = server.waitForResult();
+    // Not awaited: a launcher that hangs must not delay the timeout or the
+    // release of the port.
+    void openBrowserUrl(authorizationUrl, browser, logger).catch(
+      (error: unknown) => {
+        logger?.warn('[OIDC] Failed to open browser', {
+          error: error instanceof Error ? error.message : String(error),
+        });
+        logger?.info('[OIDC] Open URL manually', { authorizationUrl });
+      },
+    );
+    return await waiting;
   });
 }
