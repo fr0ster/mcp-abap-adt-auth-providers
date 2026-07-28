@@ -173,6 +173,24 @@ Each of these closes one of the observed failures:
 6. **A pending `waitForResult()` is rejected when the scope ends**, so a `use` body that
    returns without awaiting leaves nothing dangling.
 
+   That rejection must not become the very thing this contract is trying to eliminate. A
+   body may create the promise and walk away:
+
+   ```ts
+   async (srv) => {
+     void srv.waitForResult();   // created, never awaited
+     return 'done';
+   }
+   ```
+
+   With no handler attached, rejecting it at scope end raises `unhandledRejection` on the
+   process. So the implementation attaches a no-op handler to the internal promise **when it
+   is created** — `void internal.catch(() => undefined)` — which marks it handled without
+   altering what a real awaiter observes.
+
+   `waitForResult()` returns that same promise on every call. One shared promise, safe to
+   call repeatedly, and the safety handler is attached exactly once.
+
 7. **`timeoutMs` is required.** Its absence is exactly what holds the port forever in the
    OIDC and SAML flows.
 
@@ -358,7 +376,10 @@ For each factory:
   rejection results;
 - an abandoned login is released by the timeout rather than held (the OIDC and SAML
   regression);
-- a `use` body that returns without awaiting `waitForResult()` leaves no pending promise;
+- a `use` body that returns without awaiting `waitForResult()` leaves no pending promise, and
+  — asserted with a `process.on('unhandledRejection')` listener — abandoning it entirely
+  raises nothing on the process;
+- repeated `waitForResult()` calls return the same promise and the same outcome;
 - the dead handle behaves per member, not uniformly: `fail()` is a silent no-op that does
   not throw, `waitForResult()` returns a rejected promise rather than throwing synchronously,
   and `port` and `redirectUri` are still readable;

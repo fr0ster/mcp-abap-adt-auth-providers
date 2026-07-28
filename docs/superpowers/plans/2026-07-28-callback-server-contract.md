@@ -275,7 +275,43 @@ describe('withBrowserCallbackServer', () => {
     ).rejects.toThrow('browser launch failed');
   });
 
-  // Rule 4: a body that returns without awaiting must leave nothing dangling.
+  // Rejecting the abandoned promise must not become the unhandled rejection the
+  // contract exists to prevent.
+  it('raises no unhandledRejection when the body abandons the wait', async () => {
+    const seen: unknown[] = [];
+    const onUnhandled = (reason: unknown) => seen.push(reason);
+    process.on('unhandledRejection', onUnhandled);
+    try {
+      const result = await withBrowserCallbackServer(
+        { port: PORT, timeoutMs: 5000 },
+        async (srv) => {
+          void srv.waitForResult();   // created and walked away from
+          return 'done';
+        },
+      );
+      expect(result).toBe('done');
+      await new Promise((r) => setTimeout(r, 100));
+      expect(seen).toEqual([]);
+    } finally {
+      process.off('unhandledRejection', onUnhandled);
+    }
+  });
+
+  it('returns the same promise from repeated waitForResult calls', async () => {
+    const code = await withBrowserCallbackServer(
+      { port: PORT, timeoutMs: 5000 },
+      async (srv) => {
+        const a = srv.waitForResult();
+        const b = srv.waitForResult();
+        expect(a).toBe(b);
+        void deliver('?code=shared');
+        return await a;
+      },
+    );
+    expect(code).toBe('shared');
+  });
+
+  // Rule 6: a body that returns without awaiting must leave nothing dangling.
   it('rejects a pending wait when the scope ends', async () => {
     let dangling: Promise<string> | undefined;
     await withBrowserCallbackServer(
@@ -540,7 +576,8 @@ Requirements, each mapped to a test above:
    5. resolve. Shutdown is bounded, so a timeout can never hang on its own cleanup.
 9. Do not set `server.keepAliveTimeout = 0`. Per the Node documentation `0` *disables* the keep-alive timeout, the opposite of what the current comment claims, and measurement on Node 25 shows `close()` completing in 0-3 ms whether it is 0, 5000 or 72000. It is noise.
 10. Mark the handle dead when the scope ends; its members throw afterwards. A `use` that lost the race and keeps running hits this.
-11. Settle any still-pending `waitForResult()` with an error as part of shutdown.
+11. Settle any still-pending `waitForResult()` with an error as part of shutdown — and attach `void internal.catch(() => undefined)` to that promise **at creation**, so a body which creates it and walks away cannot raise `unhandledRejection` on the process when it is rejected. The no-op handler marks it handled without changing what a real awaiter sees.
+12. `waitForResult()` returns the same promise on every call: one shared promise, safe to call repeatedly, with the safety handler attached exactly once.
 
 Then the browser flow, moving the routes across from `browserAuth.ts` unchanged — `/callback`, the paste form `/` and `/submit`, and the success/error/paste HTML:
 
