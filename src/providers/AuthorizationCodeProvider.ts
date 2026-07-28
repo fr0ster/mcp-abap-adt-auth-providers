@@ -16,6 +16,9 @@ import { startBrowserAuth } from '../auth/browserAuth';
 import { refreshJwtToken } from '../auth/tokenRefresher';
 import { BaseTokenProvider } from './BaseTokenProvider';
 
+/** How long an interactive login may wait for its callback. */
+const LOGIN_TIMEOUT_MS = 30 * 1000;
+
 export interface AuthorizationCodeProviderConfig {
   // Required for building authorization URL and token exchange
   uaaUrl: string;
@@ -150,27 +153,20 @@ export class AuthorizationCodeProvider extends BaseTokenProvider {
       },
     );
 
-    // Wrap startBrowserAuth with timeout
-    const timeoutMs = 30 * 1000; // 30 seconds
-    const timeoutPromise = new Promise<never>((_, reject) => {
-      setTimeout(() => {
-        reject(
-          new Error(
-            `Authentication timeout after ${timeoutMs / 1000} seconds. Please try again.`,
-          ),
-        );
-      }, timeoutMs);
-    });
-
-    const result = await Promise.race([
-      startBrowserAuth(
-        authConfig,
-        browser,
-        this.logger || undefined, // Pass logger to browserAuth
-        redirectPort,
-      ),
-      timeoutPromise,
-    ]);
+    // One timeout, owned by whoever owns the socket.
+    //
+    // This used to race startBrowserAuth against a second timer of the same
+    // 30 seconds, so which fired was down to scheduling — and when the outer
+    // one won, the provider rejected while the callback port was still bound.
+    // That timer was never cleared either, keeping the event loop alive for the
+    // rest of the window after a login that succeeded in a second.
+    const result = await startBrowserAuth(
+      authConfig,
+      browser,
+      this.logger || undefined, // Pass logger to browserAuth
+      redirectPort,
+      LOGIN_TIMEOUT_MS,
+    );
 
     this.logger?.info('[AuthorizationCodeProvider] Login completed', {
       hasAccessToken: !!result.accessToken,

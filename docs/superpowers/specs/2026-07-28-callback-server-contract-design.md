@@ -39,10 +39,16 @@ The symptom is visible in this package's own suite:
 ```
 src/__tests__/providers/AuthorizationCodeProvider.test.ts alone:  3/3 pass, 3.2 s
 the same file in the full suite:                                  2 fail, 61 s
-Jest: "Force exiting Jest: ... async operations that kept running"
 ```
 
 61 seconds is two 30-second timeouts.
+
+An earlier draft of this spec also cited Jest's `Force exiting Jest: ... async
+operations that kept running` as evidence of lingering handles. It is not: this repo
+sets `forceExit: true` in `jest.config.js`, and has done since before this work, so
+the message is printed on every run regardless. Running with `--detectOpenHandles`
+reports no open handles at all. The failure counts and the 61 seconds stand; that one
+line never meant what it was quoted for.
 
 ## The root shape
 

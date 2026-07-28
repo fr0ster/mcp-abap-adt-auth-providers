@@ -9,6 +9,7 @@
  */
 
 import * as dns from 'node:dns/promises';
+import netModule from 'node:net';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
@@ -304,4 +305,40 @@ describe('AuthorizationCodeProvider', () => {
       expect(isValidValid).toBe(true);
     }, 30000);
   });
+});
+
+/**
+ * The provider used to race startBrowserAuth against a 30-second timer of its
+ * own — the same duration as the one inside the flow — so which fired was down
+ * to scheduling. When the outer one won, the provider rejected while the
+ * callback socket was still bound.
+ */
+describe('AuthorizationCodeProvider timeout ownership', () => {
+  const PORT = 7875;
+
+  function portIsFree(port: number): Promise<boolean> {
+    return new Promise((resolve) => {
+      const s = netModule.createServer();
+      s.once('error', () => resolve(false));
+      s.listen(port, () => s.close(() => resolve(true)));
+    });
+  }
+
+  it('leaves the callback port free the moment a login times out', async () => {
+    const provider = new AuthorizationCodeProvider({
+      uaaUrl: 'http://127.0.0.1:9',
+      clientId: 'client',
+      clientSecret: 'secret',
+      browser: 'none',
+      redirectPort: PORT,
+    });
+
+    // Runs for the flow's full 30 s login window: the provider exposes no way
+    // to shorten it, and inventing one would widen the public API beyond what
+    // this change is for.
+    await expect(provider.getTokens()).rejects.toThrow(/timeout/i);
+    // No sleep. With the outer Promise.race still in place this fails about
+    // half the time, which is why it is asserted rather than reasoned about.
+    expect(await portIsFree(PORT)).toBe(true);
+  }, 90000);
 });
