@@ -8,7 +8,7 @@
 
 **Tech Stack:** TypeScript, Express + `node:http`, Jest (`NODE_OPTIONS=--experimental-vm-modules`), Biome. Two repositories.
 
-**Requirements source:** `docs/superpowers/specs/2026-07-28-callback-server-contract-design.md`, and issue https://github.com/fr0ster/mcp-abap-adt-auth-providers/issues/11. Read the spec before Task 1 — it carries the measured failures, the seven contract rules and the shutdown algorithm this plan implements.
+**Requirements source:** `docs/superpowers/specs/2026-07-28-callback-server-contract-design.md`, and issue https://github.com/fr0ster/mcp-abap-adt-auth-providers/issues/11. Read the spec before Task 1 — it carries the measured failures, the eight contract rules and the shutdown algorithm this plan implements.
 
 ## Global Constraints
 
@@ -16,7 +16,7 @@
 - The three factories stay **internal** to `auth-providers`. Exporting them is part of moving reception to the consumer (issue #11) and is out of scope.
 - Assertions about a port must **bind the socket**. `browserAuth.ts` logs `port ${PORT} freed` on a path that never calls `close()`, so log output proves nothing.
 - Do not change the shape of what `startBrowserAuth`, `startOidcBrowserAuth` or `startSamlBrowserAuth` resolve to. `@mcp-abap-adt/auth-broker` depends on all three.
-- `port: 0` must work if passed, but nothing passes it. Ephemeral ports are out of scope.
+- `port: 0` is **not supported** and must not be passed. The browser flow could take it, since it builds its URL inside the scope from `srv.redirectUri`; OIDC and SAML receive a URL built before the bind, so the redirect would carry `:0`. Restructuring those flows is a separate change.
 - A callback carrying neither `code` nor `error` keeps ending the login with an error. Only the leaked socket is being fixed here, not the termination.
 - Two tests in `src/__tests__/providers/AuthorizationCodeProvider.test.ts` already fail in a full-suite run on `master` (they pass in isolation). They are expected to go green in Task 5. Until then, judge a suite run by comparing against that baseline, not against zero failures.
 
@@ -339,6 +339,21 @@ describe('withBrowserCallbackServer', () => {
     agent.destroy();
   }, 30000);
 
+  // The success page must survive shutdown: settle only after the response has
+  // flushed, and do not destroy active connections in the first shutdown step.
+  it('delivers the success page in full before releasing the port', async () => {
+    const body = await withBrowserCallbackServer({ port: PORT, timeoutMs: 5000 }, async (srv) => {
+      const waiting = srv.waitForResult();
+      const page = await fetch(`http://127.0.0.1:${PORT}/callback?code=flushed`).then((r) =>
+        r.text(),
+      );
+      expect(page.length).toBeGreaterThan(0);
+      await waiting;
+      return page;
+    });
+    expect(body).toContain('<');
+  }, 30000);
+
   it('reports an OAuth error immediately rather than timing out', async () => {
     const started = Date.now();
     await expect(
@@ -387,15 +402,16 @@ async function runCallbackScope<TResult>(
 Requirements, each mapped to a test above:
 
 1. Register routes and create the internal promise **before** `listen` resolves, so a callback arriving immediately is not lost.
-2. `settle` produces the outcome exactly once; later calls are no-ops.
+2. `settle` produces the outcome exactly once; later calls are no-ops. A route may only settle **after its response has flushed** — bind it to the response's `finish` event or the `res.end()` callback. `res.send()` returning does not mean the bytes have left, and settling earlier races the shutdown against the success page.
+3. A delivered callback settles `waitForResult()` only — it does **not** end the scope. The scope ends when `use` fulfils (the factory resolves with `use`'s value, so `transform(await waitForResult())` works), when `use` throws, or on `fail`/timeout/abort. Failures end it without waiting for `use`.
 3. Arm the timeout from `timeoutMs` when the scope starts, not when `waitForResult()` is called.
 4. Subscribe to `options.signal`; on abort, settle with an error. Remove the listener when the scope ends.
 5. Race `use` against the terminal outcomes. Whichever settles first decides; a later settlement from the losing `use` — value or rejection — is discarded, so an abandoned body cannot surface as an unhandled rejection. Do **not** attempt to cancel `use`: it cannot be done, and pretending otherwise is what made the first draft of this contract self-contradictory.
 6. Shut down on that outcome, in this order, and resolve only when it is finished:
    1. `server.close()` to stop accepting;
-   2. let an in-flight response finish — the success page must reach the browser;
-   3. `closeAllConnections()` to end idle connections;
-   4. if `close` has not fired within 500 ms, destroy the sockets tracked from the `connection` event and stop waiting;
+   2. `closeIdleConnections()` — **idle only**. `closeAllConnections()` must not run here: it destroys active connections too, and the one delivering the success page is active. In the consuming proxy's suite a client fetching `/callback` intermittently got `ECONNRESET` instead of the page for exactly this reason;
+   3. wait for `close`, bounded by a 500 ms grace;
+   4. on grace expiry, destroy what remains — `closeAllConnections()` plus the sockets tracked from the `connection` event — and stop waiting;
    5. resolve. Shutdown is bounded, so a timeout can never hang on its own cleanup.
 7. Do not set `server.keepAliveTimeout = 0`. Per the Node documentation `0` *disables* the keep-alive timeout, the opposite of what the current comment claims, and measurement on Node 25 shows `close()` completing in 0-3 ms whether it is 0, 5000 or 72000. It is noise.
 8. Mark the handle dead when the scope ends; its members throw afterwards. A `use` that lost the race and keeps running hits this.

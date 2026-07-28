@@ -72,7 +72,11 @@ export interface ICallbackServerOptions {
   readonly signal?: AbortSignal;
 }
 
-/** Borrowed handle. Valid only while `use` is running. */
+/**
+ * Borrowed handle. Valid until the scope reaches its first terminal outcome —
+ * which may be before `use` has finished, since a timeout or abort ends the
+ * scope without stopping it.
+ */
 export interface ICallbackServerHandle<TResult> {
   readonly port: number;
   readonly redirectUri: string;
@@ -101,35 +105,56 @@ cannot be forgotten — nobody calls it by hand.
 
 Each of these closes one of the observed failures:
 
-1. **The scope is a structured race.** The factory settles on the first terminal outcome —
-   `use` returning, `use` throwing, `fail`, the timeout, or an abort — and shuts the socket
-   down at that moment.
+1. **Two settlements, not one — and only one of them ends the scope.**
 
-   It does **not** promise to stop `use`. An arbitrary `async` function cannot be
-   force-terminated, so `factory(opts, () => new Promise(() => {}))` would otherwise make
-   "released when `use` returns" and "the timeout releases the port" mutually
-   unsatisfiable. The timeout wins the race, the port comes back, and the abandoned `use`
-   is left running until whatever it awaits resolves — or forever, which is the caller's
-   doing, not the server's.
+   There are two places a value can come from, and conflating them is what made the
+   previous draft ambiguous:
 
-2. **A losing `use` is swallowed.** Once the race is decided, a later settlement from `use`
-   — value or rejection — is discarded, so an abandoned body cannot produce an unhandled
-   rejection long after the login failed.
+   | event | settles `waitForResult()` | ends the scope |
+   |---|---|---|
+   | the HTTP handler receives a valid callback | yes, with the payload | **no** |
+   | `use` fulfils | — | yes: the factory resolves with **`use`'s** value |
+   | `use` throws | — | yes: the factory rejects with that error |
+   | `fail(err)` | yes, rejects with `err` | yes |
+   | timeout elapsed | yes, rejects | yes |
+   | `signal` aborted | yes, rejects | yes |
 
-3. **The factory settles only after the socket is released**, per the shutdown algorithm
+   So a callback arriving is *not* a terminal outcome. It hands the payload to whoever is
+   awaiting `waitForResult()`, and the scope ends when `use` decides it has. That is what
+   makes the ordinary shape work:
+
+   ```ts
+   factory(options, async (srv) => transform(await srv.waitForResult()));
+   // the factory resolves with transform(payload), not with the raw payload
+   ```
+
+   The only successful terminal outcome is `use` fulfilling. Failures — `fail`, timeout,
+   abort — end the scope on their own, without waiting for `use`.
+
+2. **On a failure outcome the factory does not wait for `use`.** An arbitrary `async`
+   function cannot be force-terminated, so `factory(opts, () => new Promise(() => {}))`
+   would otherwise make "the timeout releases the port" unsatisfiable. The timeout ends the
+   scope, the port comes back, and the abandoned body is left running until whatever it
+   awaits resolves — or forever, which is the caller's doing.
+
+3. **A losing `use` is swallowed.** Once a failure has ended the scope, a later settlement
+   from `use` — value or rejection — is discarded, so an abandoned body cannot surface as
+   an unhandled rejection long after the login failed.
+
+4. **The factory settles only after the socket is released**, per the shutdown algorithm
    below. An error always means the port is already free, which removes the ~100 ms window
    in which the current code lies.
 
-4. **Exactly one outcome.** The first of {result, `fail`, timeout, abort} wins; everything
-   later is a no-op — no second settlement, no double close.
+5. **Exactly one outcome.** The first terminal event wins; everything later is a no-op — no
+   second settlement, no double close.
 
-5. **A pending `waitForResult()` is rejected when the scope ends**, so a `use` body that
+6. **A pending `waitForResult()` is rejected when the scope ends**, so a `use` body that
    returns without awaiting leaves nothing dangling.
 
-6. **`timeoutMs` is required.** Its absence is exactly what holds the port forever in the
+7. **`timeoutMs` is required.** Its absence is exactly what holds the port forever in the
    OIDC and SAML flows.
 
-7. **The handle is dead after the scope ends** — calling it throws rather than silently
+8. **The handle is dead after the scope ends** — calling it throws rather than silently
    operating on a closed socket. This is what a still-running `use` hits if it keeps going
    after losing the race.
 
@@ -140,18 +165,27 @@ here is version-dependent: since Node 19 `close()` also ends idle connections, o
 does not, and `closeAllConnections()` only exists from 18.2. Measured on Node 25 with an
 idle keep-alive socket held open, `close()` completed in 0-3 ms at `keepAliveTimeout` of 0,
 5000 and 72000 alike — which says nothing about 18.x, and is why the sequence is pinned
-here rather than inferred:
+here rather than inferred. Both `closeIdleConnections()` and `closeAllConnections()` arrived
+in 18.2, which is what sets the engines floor:
 
 1. Stop accepting new connections (`server.close()` begins).
-2. Let an in-flight response finish — the success page must reach the browser.
-3. End idle connections explicitly with `closeAllConnections()`.
-4. If the `close` event has not fired within a short grace (500 ms), destroy the sockets
-   tracked since `listen` and stop waiting on them.
-5. Resolve only after `close` has fired or the grace has expired. Shutdown is bounded, so
-   a timeout can never itself hang on cleanup.
+2. End **idle** connections only, with `closeIdleConnections()`. Active ones are left
+   alone at this stage.
+3. Wait for the `close` event, bounded by a 500 ms grace.
+4. If the grace expires, destroy what is left — `closeAllConnections()`, plus the sockets
+   tracked from the `connection` event — and stop waiting.
+5. Resolve. Shutdown is bounded, so a timeout can never itself hang on cleanup.
 
-Sockets are tracked from the server's `connection` event for step 4; `closeAllConnections`
-covers the normal case and the tracking is the bound.
+**`closeAllConnections()` must not run in step 2.** It destroys active connections as well
+as idle ones, and the connection delivering the success page is active. This is not
+theoretical: in the consuming proxy's test suite, a client fetching `/callback` intermittently
+received `ECONNRESET` instead of the success page, because the existing code destroys the
+socket as soon as the response emits `finish`.
+
+Which is the other half of the rule: **a route may only report its outcome once its response
+has actually been flushed.** `res.send()` returning does not mean the bytes have left; bind
+the settlement to the response's `finish` event or to the `res.end()` callback. Settling
+earlier is what puts the shutdown and the success page in a race.
 
 `engines.node` rises to `>=18.2.0` for `closeAllConnections()`. Writing a socket-tracking
 fallback for 18.0 and 18.1 — two patch releases of a major that is already end-of-life —
@@ -269,7 +303,13 @@ that is a finding, not a flake to work around.
 - **Moving callback reception to the consumer.** Issue #11 records that the transport does
   not belong in an authorization library. This spec fixes the hangs and introduces the seam;
   it does not move the code between packages.
-- **Ephemeral ports.** `port: 0` must work if passed, but nothing passes it here.
+- **Ephemeral ports.** `port: 0` is **not supported** by these flows and must not be
+  passed. The browser flow could take it — it builds its authorization URL inside the scope
+  from `srv.redirectUri`, which reports the bound port — but the OIDC and SAML flows receive
+  a URL built by the provider *before* the server binds, so the redirect would carry `:0`.
+  Making it work means restructuring those flows to build the URL after binding, which is
+  its own change. The earlier claim that `port: 0` "must work if passed" was wrong and is
+  withdrawn.
 - **Making a code-less callback non-terminal.** Today such a request ends the login with an
   error; that behaviour is preserved. The defect being fixed is the leaked socket, not the
   termination. Letting a stray request be ignored instead is a cheap follow-up, deliberately
