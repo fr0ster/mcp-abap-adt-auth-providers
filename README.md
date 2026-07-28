@@ -341,11 +341,15 @@ const result = await provider.getTokens();
 // result.refreshToken is undefined (client_credentials doesn't provide refresh tokens)
 ```
 
-**Note**: The `browserAuthPort` parameter (default: 3001) configures the OAuth callback server port. If the requested port is already in use, an error will be thrown. You must specify a different port or free the port before starting authentication. The server properly closes all connections and frees the port after authentication completes, ensuring no lingering port occupation.
+**Note**: The `redirectPort` parameter (default: 3001) configures the OAuth callback server port. If the requested port is already in use, an error is thrown; specify a different port or free it before starting authentication.
 
-**Timeout**: Browser authentication has a 30-second timeout to prevent blocking the consumer. If authentication is not completed within 30 seconds, the operation will fail with a timeout error. This prevents the provider from hanging indefinitely when the user doesn't complete authentication. 
+**Port lifetime**: the callback port is held for the login and nothing longer. It is bound when the login window opens and released when the login ends — by success, by failure, by timeout, or by cancellation — and the returned promise settles only after the socket is actually free. An error therefore always means the port is already available, and the port is released *before* the authorization code is exchanged for a token, so a slow identity provider cannot hold it either.
 
-**Process Termination Handling**: The OAuth callback server registers cleanup handlers for `SIGTERM`, `SIGINT`, `SIGHUP`, and `exit` signals. This ensures ports are properly freed even when MCP clients (like Cline) terminate the process before authentication completes. This is especially important for stdio servers where the client may kill the process at any time. On Windows, the `SIGBREAK` signal (Ctrl+Break) is also handled.
+**Timeout**: an interactive login waits 30 seconds for its callback. This applies to the browser, OIDC and SAML flows alike; before 1.2.0 the OIDC and SAML flows had no timeout at all, so an abandoned login held its port for the life of the process.
+
+**Cancellation**: `ICallbackServerOptions.signal` accepts an `AbortSignal`, honoured before the bind, during it, and while waiting.
+
+**Process termination**: the callback server no longer installs its own `SIGTERM` / `SIGINT` / `SIGHUP` / `exit` handlers. A terminating process releases its listening sockets to the operating system anyway — measured at 0-1 ms after the process disappears — and the handlers were part of the cleanup tangle this release removes. If a client kills the process mid-login, the port comes back with the process.
 
 **Cross-Platform Browser Support**: The browser authentication works across Linux, macOS, and Windows:
 - **Linux**: Automatically sets `DISPLAY=:0` if neither `DISPLAY` nor `WAYLAND_DISPLAY` environment variables are set. Supports multiple browser executable names (`google-chrome`, `google-chrome-stable`, `chromium`, `chromium-browser` for Chrome; `firefox`, `firefox-esr` for Firefox).

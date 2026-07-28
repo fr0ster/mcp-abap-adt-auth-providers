@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-07-28
+
+### Fixed
+- **A callback server could hold its port after the login it was opened for had ended.** Three flows, three shapes of one defect: `browserAuth` leaked the socket when a callback carried neither `code` nor `error` — measured still bound at +5 s, +20 s, +35 s and +45 s, i.e. for the life of the process — while `oidcBrowserAuth` and `saml2Auth` had no timeout at all, so an abandoned login never settled and never released anything. (#11)
+- **A rejected login could report a port that was not yet free.** Five exit paths closed the socket asynchronously *after* the promise had settled, leaving a window in which "already in use" was untrue.
+- **`AuthorizationCodeProvider` raced `startBrowserAuth` against a second 30-second timer** of its own, so which fired was down to scheduling; when the outer one won it rejected while the socket was still bound. That timer was never cleared, keeping a login that succeeded in a second armed for the remaining 29.
+- **A hung browser launcher could delay the timeout and the release.** The launch is no longer awaited on the critical path.
+
+### Changed
+- All three flows now run inside a factory scope implementing `CallbackServerFactory` from `@mcp-abap-adt/interfaces`. The port is released when the scope ends — by success, error, timeout, cancellation, or a body that throws — instead of when a promise happens to settle, and the scope settles only once the socket is free. `timeoutMs` is mandatory and an `AbortSignal` is honoured before, during and after the bind.
+- Shutdown is bounded: stop accepting, wait up to 500 ms for `close`, then force. A timeout can no longer hang on its own cleanup.
+- Requires `@mcp-abap-adt/interfaces` `^11.4.0` (was `^2.3.0`).
+- **`engines.node` is now `>=18.2.0`** (was `>=18.0.0`), for `server.closeAllConnections()`.
+- `browserAuth.ts` is 395 lines, down from 790: the HTTP server, six separate close sites, two timers and the process-signal handlers are gone from it.
+
+### Removed
+- **The callback server no longer installs `SIGTERM` / `SIGINT` / `SIGHUP` / `exit` handlers.** A terminating process releases its listening sockets to the OS regardless — measured at 0-1 ms after the process disappears — and these were part of the cleanup tangle being removed. A client that kills the process mid-login still gets its port back.
+- **The manual paste channel no longer retries a bad code.** It used to re-render the form when the exchange failed; the code is now exchanged after the scope closes, so a wrong or expired paste ends the attempt. That retry loop was the only reason the socket outlived the code.
+
+### Notes
+- Public API is unchanged: `AuthorizationCodeProviderConfig` keeps `browser` and `redirectPort`, still defaulting to 3001.
+- The three factories stay internal. Exposing them so a consumer can supply its own callback receiver is issue #11 and is not part of this release.
+- A callback carrying neither `code` nor `error` still ends the login with an error. Only the leaked socket was fixed, not the termination.
+
 ## [1.1.0] - 2026-06-02
 
 ### Added

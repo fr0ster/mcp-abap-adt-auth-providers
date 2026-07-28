@@ -9,8 +9,8 @@
  */
 
 import * as dns from 'node:dns/promises';
-import netModule from 'node:net';
 import * as fs from 'node:fs';
+import netModule from 'node:net';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import {
