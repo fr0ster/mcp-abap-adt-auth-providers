@@ -65,14 +65,22 @@ New file in `@mcp-abap-adt/interfaces`, `src/auth/ICallbackServer.ts`:
 ```ts
 export interface ICallbackServerOptions {
   /**
-   * Port for the local listener. Must be in 1..65535.
+   * Port for the local listener. Must be an integer in 1..65535 —
+   * `Number.isInteger(port)` included, since `3001.5` satisfies the range.
    *
    * `0` is rejected rather than treated as "pick one for me": the OIDC and SAML
    * flows build their authorization URL before the server binds, so an
    * ephemeral port would be advertised to the IdP as `:0`.
    */
   readonly port: number;
-  /** Mandatory. There is no such thing as waiting forever. */
+  /**
+   * Mandatory. Must satisfy `Number.isFinite(timeoutMs) && timeoutMs > 0`.
+   *
+   * `Infinity` is rejected rather than honoured — "wait forever" is the defect
+   * this contract exists to remove, and it must not be reachable through the
+   * option that was added to prevent it. `0`, negatives and `NaN` are rejected
+   * too.
+   */
   readonly timeoutMs: number;
   /** External cancellation: "no longer needed". */
   readonly signal?: AbortSignal;
@@ -160,9 +168,24 @@ Each of these closes one of the observed failures:
 7. **`timeoutMs` is required.** Its absence is exactly what holds the port forever in the
    OIDC and SAML flows.
 
-8. **The handle is dead after the scope ends** — calling it throws rather than silently
-   operating on a closed socket. This is what a still-running `use` hits if it keeps going
-   after losing the race.
+8. **The handle is dead after the scope ends, but its members do not all behave alike.**
+   A still-running `use` will keep touching it, and what it gets has to be safe:
+
+   | member | after the scope has ended |
+   |---|---|
+   | `fail(err)` | **silent no-op.** Never throws |
+   | `waitForResult()` | returns a **rejected** promise — never throws synchronously |
+   | `port`, `redirectUri` | still readable; they are values, not operations |
+
+   `fail` must not throw because of how it is meant to be used:
+
+   ```ts
+   launchBrowser(url).catch((e) => srv.fail(e));
+   ```
+
+   A launcher that rejects after the timeout would otherwise throw inside that `.catch()`
+   and produce a fresh unhandled rejection — precisely what rules 3 and 6 exist to prevent.
+   A fire-and-forget failure reporter has to stay safe to call at any time.
 
 ### Startup
 
@@ -173,14 +196,20 @@ Nothing above applies until the server is listening, so startup has its own rule
    the constraint and the implementation enforces it.
 2. **An already-aborted `signal` binds nothing.** If `options.signal?.aborted` is true on
    entry, the factory rejects immediately without opening a socket and without calling `use`.
-3. **`use` runs only once the server is listening.** It is called from the `listen`
+
+3. **An abort during the bind is not lost.** The `signal` listener is registered *before*
+   `listen` is called, not from the `listen` callback — otherwise an abort arriving in that
+   window would be dropped. If it fires while the bind is in flight: `use` is never called,
+   the listener and any timer are removed, and the server is torn down whether or not it
+   reached `listening`. Once the factory has rejected, the port is free.
+4. **`use` runs only once the server is listening.** It is called from the `listen`
    callback, never before — otherwise a body that immediately awaits `waitForResult()` could
    race the bind.
-4. **A failed bind is a clean failure.** On `listen` error — `EADDRINUSE` being the one that
+5. **A failed bind is a clean failure.** On `listen` error — `EADDRINUSE` being the one that
    actually happens — the factory rejects with that error, `use` is never called, the
    timeout timer is never armed or is cleared, and the `signal` listener is removed. Nothing
    is left registered and nothing is left bound.
-5. **The timeout starts when the server is listening**, not when the factory is entered, so
+6. **The timeout starts when the server is listening**, not when the factory is entered, so
    a slow bind does not eat into the login window.
 
 ### Shutdown algorithm
@@ -310,7 +339,14 @@ For each factory:
 - startup failures are clean: with the port already held by another listener the factory
   rejects, `use` is never called, and no timer or `signal` listener survives; the same for an
   `AbortSignal` that is already aborted on entry, which must not bind a socket at all;
-- a port outside 1..65535, `0` included, is rejected before anything binds;
+- a port outside 1..65535, `0` and non-integers included, is rejected before anything binds,
+  as is a `timeoutMs` that is not finite and positive — `Infinity` especially, since honouring
+  it would reinstate the defect the option exists to remove;
+- an abort that arrives *during* the bind is honoured: `use` never runs, nothing stays
+  registered, and the port is free once the factory rejects;
+- `fail()` called after the scope has ended is a silent no-op — asserted by rejecting a
+  launcher promise after the timeout has already fired and checking that no unhandled
+  rejection results;
 - an abandoned login is released by the timeout rather than held (the OIDC and SAML
   regression);
 - a `use` body that returns without awaiting `waitForResult()` leaves no pending promise;
