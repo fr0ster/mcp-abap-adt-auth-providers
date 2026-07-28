@@ -413,18 +413,29 @@ describe('withBrowserCallbackServer', () => {
       { port: BIG_PORT, timeoutMs: 10000 },
       (app, settle) => {
         app.get('/big', (_req, res) => {
-          res.writeHead(200, { 'Content-Type': 'text/plain' });
-          res.end('x'.repeat(size));
+          // Subscribed before end(), so the timestamp cannot be missed.
           res.once('finish', () => {
             finishedAt = Date.now();
           });
+          res.writeHead(200, { 'Content-Type': 'text/plain' });
+          res.end('x'.repeat(size));
           settle.ok('delivered', res);
         });
       },
       async (server) => await server.waitForResult(),
     );
 
-    const received = await new Promise<number>((resolve, reject) => {
+    // Stamp the settlement the moment it happens, not after the read. Recording
+    // it afterwards would date an early settle later than the response finished
+    // and let the assertion pass against the defect it exists for.
+    const settled = scope.then((value) => {
+      settledAt = Date.now();
+      return value;
+    });
+
+    // Resolves with however many bytes arrived, including none: a destroyed
+    // connection must produce a failed assertion, not a hung test.
+    const received = await new Promise<number>((resolve) => {
       const req = http.get(
         { host: '127.0.0.1', port: BIG_PORT, path: '/big', agent: false },
         (res) => {
@@ -436,14 +447,15 @@ describe('withBrowserCallbackServer', () => {
               bytes += chunk.length;
             });
             res.on('end', () => resolve(bytes));
+            res.on('close', () => resolve(bytes));
+            res.on('error', () => resolve(bytes));
           }, 300);
         },
       );
-      req.on('error', reject);
+      req.on('error', () => resolve(0));
     });
 
-    const value = await scope;
-    settledAt = Date.now();
+    const value = await settled;
 
     expect(value).toBe('delivered');
     expect(received).toBe(size);
