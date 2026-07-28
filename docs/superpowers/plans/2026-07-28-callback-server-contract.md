@@ -51,7 +51,13 @@ Create `src/auth/ICallbackServer.ts`. Follow the file style of `src/connection/I
  */
 
 export interface ICallbackServerOptions {
-  /** Port for the local listener. `0` binds an ephemeral port. */
+  /**
+   * Port for the local listener. Must be in 1..65535.
+   *
+   * `0` is rejected rather than treated as "pick one for me": the OIDC and SAML
+   * flows build their authorization URL before the server binds, so an
+   * ephemeral port would be advertised to the IdP as `:0`.
+   */
   readonly port: number;
   /** Mandatory: how long to wait for the callback. There is no infinite wait. */
   readonly timeoutMs: number;
@@ -286,19 +292,70 @@ describe('withBrowserCallbackServer', () => {
     await expect(escaped.waitForResult()).rejects.toThrow();
   });
 
-  // Rule 3: first outcome wins.
-  it('keeps the first outcome', async () => {
+  // A delivered callback is not itself terminal, so fail() still wins if it
+  // lands before `use` fulfils.
+  it('lets a fail before the body returns beat a delivered callback', async () => {
+    await expect(
+      withBrowserCallbackServer({ port: PORT, timeoutMs: 5000 }, async (srv) => {
+        const waiting = srv.waitForResult();
+        void deliver('?code=first');
+        const value = await waiting;
+        srv.fail(new Error('too late for the payload'));
+        await new Promise((r) => setTimeout(r, 50));
+        return value;
+      }),
+    ).rejects.toThrow('too late for the payload');
+  });
+
+  it('ignores a fail once the body has already returned', async () => {
+    let escaped!: { fail: (e: Error) => void };
     const code = await withBrowserCallbackServer(
       { port: PORT, timeoutMs: 5000 },
       async (srv) => {
+        escaped = srv;
         const waiting = srv.waitForResult();
         void deliver('?code=first');
-        const result = await waiting;
-        srv.fail(new Error('too late'));
-        return result;
+        return await waiting;
       },
     );
     expect(code).toBe('first');
+    expect(() => escaped.fail(new Error('way too late'))).toThrow();
+  });
+
+  it('rejects a port outside 1..65535 without binding', async () => {
+    await expect(
+      withBrowserCallbackServer({ port: 0, timeoutMs: 5000 }, async () => 'unreachable'),
+    ).rejects.toThrow();
+  });
+
+  it('rejects a pre-aborted signal without binding and without running the body', async () => {
+    const ac = new AbortController();
+    ac.abort();
+    let ran = false;
+    await expect(
+      withBrowserCallbackServer({ port: PORT, timeoutMs: 5000, signal: ac.signal }, async () => {
+        ran = true;
+        return 'unreachable';
+      }),
+    ).rejects.toThrow();
+    expect(ran).toBe(false);
+  });
+
+  it('fails cleanly when the port is already held', async () => {
+    const squatter = net.createServer();
+    await new Promise<void>((r) => squatter.listen(PORT, () => r()));
+    let ran = false;
+    try {
+      await expect(
+        withBrowserCallbackServer({ port: PORT, timeoutMs: 5000 }, async () => {
+          ran = true;
+          return 'unreachable';
+        }),
+      ).rejects.toThrow();
+      expect(ran).toBe(false);
+    } finally {
+      await new Promise<void>((r) => squatter.close(() => r()));
+    }
   });
 
   // The browserAuth leak, at the level of the new unit.
@@ -401,21 +458,22 @@ async function runCallbackScope<TResult>(
 
 Requirements, each mapped to a test above:
 
-1. Register routes and create the internal promise **before** `listen` resolves, so a callback arriving immediately is not lost.
-2. `settle` produces the outcome exactly once; later calls are no-ops. A route may only settle **after its response has flushed** — bind it to the response's `finish` event or the `res.end()` callback. `res.send()` returning does not mean the bytes have left, and settling earlier races the shutdown against the success page.
-3. A delivered callback settles `waitForResult()` only — it does **not** end the scope. The scope ends when `use` fulfils (the factory resolves with `use`'s value, so `transform(await waitForResult())` works), when `use` throws, or on `fail`/timeout/abort. Failures end it without waiting for `use`.
-3. Arm the timeout from `timeoutMs` when the scope starts, not when `waitForResult()` is called.
-4. Subscribe to `options.signal`; on abort, settle with an error. Remove the listener when the scope ends.
-5. Race `use` against the terminal outcomes. Whichever settles first decides; a later settlement from the losing `use` — value or rejection — is discarded, so an abandoned body cannot surface as an unhandled rejection. Do **not** attempt to cancel `use`: it cannot be done, and pretending otherwise is what made the first draft of this contract self-contradictory.
-6. Shut down on that outcome, in this order, and resolve only when it is finished:
+1. Validate `options.port` against 1..65535 — `0` included — and reject before binding. Reject immediately, without binding and without calling `use`, when `options.signal?.aborted` is already true. On a `listen` error such as `EADDRINUSE`, reject with that error, leave `use` uncalled, and make sure no timer and no `signal` listener survives. Call `use` from the `listen` callback and arm the timeout there, so a slow bind does not eat the login window.
+2. Register routes and create the internal promise **before** `listen` resolves, so a callback arriving immediately is not lost.
+3. `settle` produces the outcome exactly once; later calls are no-ops. A route may only settle **after its response has flushed** — bind it to the response's `finish` event or the `res.end()` callback. `res.send()` returning does not mean the bytes have left, and settling earlier races the shutdown against the success page.
+4. A delivered callback settles `waitForResult()` only — it does **not** end the scope. The scope ends when `use` fulfils (the factory resolves with `use`'s value, so `transform(await waitForResult())` works), when `use` throws, or on `fail`/timeout/abort. Failures end it without waiting for `use`.
+5. Arm the timeout from `timeoutMs` when the scope starts, not when `waitForResult()` is called.
+6. Subscribe to `options.signal`; on abort, settle with an error. Remove the listener when the scope ends.
+7. Race `use` against the terminal outcomes. Whichever settles first decides; a later settlement from the losing `use` — value or rejection — is discarded, so an abandoned body cannot surface as an unhandled rejection. Do **not** attempt to cancel `use`: it cannot be done, and pretending otherwise is what made the first draft of this contract self-contradictory.
+8. Shut down on that outcome, in this order, and resolve only when it is finished:
    1. `server.close()` to stop accepting;
    2. `closeIdleConnections()` — **idle only**. `closeAllConnections()` must not run here: it destroys active connections too, and the one delivering the success page is active. In the consuming proxy's suite a client fetching `/callback` intermittently got `ECONNRESET` instead of the page for exactly this reason;
    3. wait for `close`, bounded by a 500 ms grace;
    4. on grace expiry, destroy what remains — `closeAllConnections()` plus the sockets tracked from the `connection` event — and stop waiting;
    5. resolve. Shutdown is bounded, so a timeout can never hang on its own cleanup.
-7. Do not set `server.keepAliveTimeout = 0`. Per the Node documentation `0` *disables* the keep-alive timeout, the opposite of what the current comment claims, and measurement on Node 25 shows `close()` completing in 0-3 ms whether it is 0, 5000 or 72000. It is noise.
-8. Mark the handle dead when the scope ends; its members throw afterwards. A `use` that lost the race and keeps running hits this.
-9. Settle any still-pending `waitForResult()` with an error as part of shutdown.
+9. Do not set `server.keepAliveTimeout = 0`. Per the Node documentation `0` *disables* the keep-alive timeout, the opposite of what the current comment claims, and measurement on Node 25 shows `close()` completing in 0-3 ms whether it is 0, 5000 or 72000. It is noise.
+10. Mark the handle dead when the scope ends; its members throw afterwards. A `use` that lost the race and keeps running hits this.
+11. Settle any still-pending `waitForResult()` with an error as part of shutdown.
 
 Then the browser flow, moving the routes across from `browserAuth.ts` unchanged — `/callback`, the paste form `/` and `/submit`, and the success/error/paste HTML:
 

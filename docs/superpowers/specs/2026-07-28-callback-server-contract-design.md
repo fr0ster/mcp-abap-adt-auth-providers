@@ -64,7 +64,13 @@ New file in `@mcp-abap-adt/interfaces`, `src/auth/ICallbackServer.ts`:
 
 ```ts
 export interface ICallbackServerOptions {
-  /** Port for the local listener. */
+  /**
+   * Port for the local listener. Must be in 1..65535.
+   *
+   * `0` is rejected rather than treated as "pick one for me": the OIDC and SAML
+   * flows build their authorization URL before the server binds, so an
+   * ephemeral port would be advertised to the IdP as `:0`.
+   */
   readonly port: number;
   /** Mandatory. There is no such thing as waiting forever. */
   readonly timeoutMs: number;
@@ -157,6 +163,25 @@ Each of these closes one of the observed failures:
 8. **The handle is dead after the scope ends** — calling it throws rather than silently
    operating on a closed socket. This is what a still-running `use` hits if it keeps going
    after losing the race.
+
+### Startup
+
+Nothing above applies until the server is listening, so startup has its own rules:
+
+1. **Validate first.** `port` outside 1..65535 — `0` included — is rejected before anything
+   is bound. The contract is types-only, so the check lives in the factory; the JSDoc states
+   the constraint and the implementation enforces it.
+2. **An already-aborted `signal` binds nothing.** If `options.signal?.aborted` is true on
+   entry, the factory rejects immediately without opening a socket and without calling `use`.
+3. **`use` runs only once the server is listening.** It is called from the `listen`
+   callback, never before — otherwise a body that immediately awaits `waitForResult()` could
+   race the bind.
+4. **A failed bind is a clean failure.** On `listen` error — `EADDRINUSE` being the one that
+   actually happens — the factory rejects with that error, `use` is never called, the
+   timeout timer is never armed or is cleared, and the `signal` listener is removed. Nothing
+   is left registered and nothing is left bound.
+5. **The timeout starts when the server is listening**, not when the factory is entered, so
+   a slow bind does not eat into the login window.
 
 ### Shutdown algorithm
 
@@ -282,11 +307,20 @@ For each factory:
   when it is later discarded;
 - shutdown is bounded with a real keep-alive client holding an idle connection — not a bare
   `fetch`, which does not exercise the case the algorithm exists for;
+- startup failures are clean: with the port already held by another listener the factory
+  rejects, `use` is never called, and no timer or `signal` listener survives; the same for an
+  `AbortSignal` that is already aborted on entry, which must not bind a socket at all;
+- a port outside 1..65535, `0` included, is rejected before anything binds;
 - an abandoned login is released by the timeout rather than held (the OIDC and SAML
   regression);
 - a `use` body that returns without awaiting `waitForResult()` leaves no pending promise;
 - the handle throws after the scope ends;
-- first-outcome-wins: a result followed by `fail` still yields the result.
+- first-terminal-outcome-wins, in both directions, since a delivered callback is not itself
+  terminal:
+  - a `fail` that arrives after the callback was delivered but **before** `use` fulfils ends
+    the scope with that failure — the payload does not save it;
+  - a `fail` after `use` has already fulfilled is a no-op, and the factory still resolves
+    with `use`'s value.
 
 For the provider:
 
