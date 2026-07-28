@@ -248,19 +248,23 @@ idle keep-alive socket held open, `close()` completed in 0-3 ms at `keepAliveTim
 here rather than inferred. Both `closeIdleConnections()` and `closeAllConnections()` arrived
 in 18.2, which is what sets the engines floor:
 
-1. Stop accepting new connections (`server.close()` begins).
-2. End **idle** connections only, with `closeIdleConnections()`. Active ones are left
-   alone at this stage.
-3. Wait for the `close` event, bounded by a 500 ms grace.
-4. If the grace expires, destroy what is left — `closeAllConnections()`, plus the sockets
-   tracked from the `connection` event — and stop waiting.
-5. Resolve. Shutdown is bounded, so a timeout can never itself hang on cleanup.
+1. `server.close()`, and nothing else. It stops accepting, and from Node 19 it also ends
+   idle connections — gracefully, so a client still reads what was already written.
+2. Wait for the `close` event, bounded by a 500 ms grace.
+3. If the grace expires, force it: `closeIdleConnections()`, `closeAllConnections()`, and
+   destroy the sockets tracked from the `connection` event.
+4. Resolve. Shutdown is bounded, so a timeout can never itself hang on cleanup.
 
-**`closeAllConnections()` must not run in step 2.** It destroys active connections as well
-as idle ones, and the connection delivering the success page is active. This is not
-theoretical: in the consuming proxy's test suite, a client fetching `/callback` intermittently
-received `ECONNRESET` instead of the success page, because the existing code destroys the
-socket as soon as the response emits `finish`.
+**Neither `closeIdleConnections()` nor `closeAllConnections()` may run eagerly.** Both
+*destroy* sockets rather than ending them, and a connection that has just delivered the
+success page is idle by then — so destroying idle connections at once cuts off exactly the
+response the previous rule works to protect. An earlier draft of this spec put
+`closeIdleConnections()` in the first step for that very purpose; implementing it showed the
+mistake. They belong only in the grace-expiry path, where the alternative is hanging.
+
+This is not theoretical either: in the consuming proxy's test suite a client fetching
+`/callback` intermittently received `ECONNRESET` instead of the success page, because the
+existing code destroys the socket as soon as the response emits `finish`.
 
 Which is the other half of the rule: **a route may only report its outcome once its response
 has actually been flushed.** `res.send()` returning does not mean the bytes have left; bind
