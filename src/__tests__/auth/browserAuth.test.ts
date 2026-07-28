@@ -3,6 +3,7 @@
  */
 
 import http from 'node:http';
+import netModule from 'node:net';
 import { jest } from '@jest/globals';
 import type { IAuthorizationConfig, ILogger } from '@mcp-abap-adt/interfaces';
 import axios from 'axios';
@@ -525,4 +526,52 @@ describe('browserAuth manual paste (none mode)', () => {
     );
     await authPromise.catch(() => {});
   });
+});
+
+/**
+ * The defect from issue #11, at the level of the public function: a callback
+ * carrying neither `code` nor `error` used to reject through a path that never
+ * closed the socket, so the port stayed bound for the life of the process.
+ */
+describe('startBrowserAuth port lifetime', () => {
+  const PORT = 7872;
+
+  function portIsFree(port: number): Promise<boolean> {
+    return new Promise((resolve) => {
+      const s = netModule.createServer();
+      s.once('error', () => resolve(false));
+      s.listen(port, () => s.close(() => resolve(true)));
+    });
+  }
+
+  function get(path: string): Promise<void> {
+    return new Promise((resolve) => {
+      const req = http.get(
+        { host: '127.0.0.1', port: PORT, path, agent: false },
+        (res) => {
+          res.resume();
+          res.on('end', () => resolve());
+        },
+      );
+      req.on('error', () => resolve());
+    });
+  }
+
+  it('releases the port when a callback carries no code', async () => {
+    const authConfig = {
+      uaaUrl: 'http://127.0.0.1:9',
+      uaaClientId: 'client',
+      uaaClientSecret: 'secret',
+    };
+    const login = startBrowserAuth(authConfig, 'none', undefined, PORT);
+    // Attach the expectation before delivering: the rejection lands as soon as
+    // the callback arrives, and an unattached promise would be reported as an
+    // unhandled rejection instead of a passing assertion.
+    const rejected = expect(login).rejects.toThrow(/code missing/i);
+    await new Promise((r) => setTimeout(r, 300));
+    await get('/callback');
+    await rejected;
+    // No sleep: a settled promise must mean a free port.
+    expect(await portIsFree(PORT)).toBe(true);
+  }, 30000);
 });
