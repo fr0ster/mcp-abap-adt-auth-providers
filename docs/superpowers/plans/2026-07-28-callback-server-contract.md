@@ -1,0 +1,694 @@
+# Callback Server Contract Implementation Plan
+
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+
+**Goal:** Make it impossible for a callback server in this package to hold its port after it is no longer needed, by giving every flow one factory-scoped lifetime with a mandatory timeout and cancellation.
+
+**Architecture:** Three independently written callback servers each tie the release of their socket to a promise settling. A new contract in `@mcp-abap-adt/interfaces` inverts that: the server handle lives only inside a factory callback, and the factory releases the port when that callback returns by any means. Each existing flow becomes one factory.
+
+**Tech Stack:** TypeScript, Express + `node:http`, Jest (`NODE_OPTIONS=--experimental-vm-modules`), Biome. Two repositories.
+
+**Requirements source:** `docs/superpowers/specs/2026-07-28-callback-server-contract-design.md`, and issue https://github.com/fr0ster/mcp-abap-adt-auth-providers/issues/11. Read the spec before Task 1 — it carries the measured failures and the six contract rules this plan implements.
+
+## Global Constraints
+
+- **Public API of `auth-providers` does not change.** `AuthorizationCodeProviderConfig` keeps `browser?: string` and `redirectPort?: number` with the existing default of `3001`. Both releases are minor.
+- The three factories stay **internal** to `auth-providers`. Exporting them is part of moving reception to the consumer (issue #11) and is out of scope.
+- Assertions about a port must **bind the socket**. `browserAuth.ts` logs `port ${PORT} freed` on a path that never calls `close()`, so log output proves nothing.
+- Do not change the shape of what `startBrowserAuth`, `startOidcBrowserAuth` or `startSamlBrowserAuth` resolve to. `@mcp-abap-adt/auth-broker` depends on all three.
+- `port: 0` must work if passed, but nothing passes it. Ephemeral ports are out of scope.
+- A callback carrying neither `code` nor `error` keeps ending the login with an error. Only the leaked socket is being fixed here, not the termination.
+- Two tests in `src/__tests__/providers/AuthorizationCodeProvider.test.ts` already fail in a full-suite run on `master` (they pass in isolation). They are expected to go green in Task 5. Until then, judge a suite run by comparing against that baseline, not against zero failures.
+
+---
+
+### Task 1: Add the contract to `@mcp-abap-adt/interfaces`
+
+**Repository:** `/home/okyslytsia/prj/mcp-abap-adt-interfaces` (branch from `master`)
+
+**Files:**
+- Create: `src/auth/ICallbackServer.ts`
+- Modify: `src/index.ts`
+- Modify: `CHANGELOG.md`, `package.json`
+
+**Interfaces:**
+- Consumes: nothing.
+- Produces: `ICallbackServerOptions`, `ICallbackServerHandle<TResult>`, `CallbackServerFactory` — every later task depends on these exact names.
+
+- [ ] **Step 1: Write the contract**
+
+Create `src/auth/ICallbackServer.ts`. Follow the file style of `src/connection/IWebSocketTransport.ts`: a file-level comment stating the contract is domain-agnostic, and JSDoc on every member.
+
+```ts
+/**
+ * Local callback server used by interactive authorization flows.
+ *
+ * The handle is borrowed: it exists only for the duration of the factory's
+ * callback, and the port is released when that callback returns — by success,
+ * error, timeout or cancellation. Release is therefore never a consequence of
+ * a promise settling, which is what allows an abandoned login to hold a port.
+ */
+
+export interface ICallbackServerOptions {
+  /** Port for the local listener. `0` binds an ephemeral port. */
+  readonly port: number;
+  /** Mandatory: how long to wait for the callback. There is no infinite wait. */
+  readonly timeoutMs: number;
+  /** External cancellation — "this login is no longer needed". */
+  readonly signal?: AbortSignal;
+}
+
+/**
+ * Borrowed handle. Valid only while the factory's `use` callback is running;
+ * every member throws once the scope has ended.
+ */
+export interface ICallbackServerHandle<TResult> {
+  /** The port actually bound. */
+  readonly port: number;
+  /** Redirect URI the authorization request must use. */
+  readonly redirectUri: string;
+  /**
+   * Resolves with the callback's result. Rejects on timeout, on cancellation,
+   * on `fail`, or when the scope ends while it is still pending.
+   */
+  waitForResult(): Promise<TResult>;
+  /** End the wait with an error — e.g. the browser could not be launched. */
+  fail(error: Error): void;
+}
+
+/**
+ * The only way to obtain a callback server. There is deliberately no `close`
+ * on the handle: closing belongs to the factory, so it cannot be forgotten.
+ *
+ * Resolves or rejects only after the listening socket has been released, so a
+ * settled result always means the port is free.
+ */
+export type CallbackServerFactory = <TResult>(
+  options: ICallbackServerOptions,
+  use: (server: ICallbackServerHandle<TResult>) => Promise<TResult>,
+) => Promise<TResult>;
+```
+
+- [ ] **Step 2: Export it**
+
+In `src/index.ts`, next to the other `./auth/...` exports (around line 304-312), add in alphabetical position:
+
+```ts
+export type {
+  CallbackServerFactory,
+  ICallbackServerHandle,
+  ICallbackServerOptions,
+} from './auth/ICallbackServer';
+```
+
+- [ ] **Step 3: Verify it compiles and is reachable**
+
+```bash
+npm run build && npx tsc --noEmit
+node -e "const t=require('./dist/index.js'); console.log('build ok')"
+grep -c "ICallbackServerOptions" dist/index.d.ts
+```
+Expected: build passes, and the grep returns at least 1. This is a types-only addition, so there is nothing to assert at runtime beyond the module loading.
+
+- [ ] **Step 4: Changelog and version**
+
+Bump `version` to `11.4.0` in `package.json` (additive → minor). Add to `CHANGELOG.md` above the previous entry:
+
+```markdown
+## [11.4.0] - YYYY-MM-DD
+
+### Added
+- `ICallbackServerOptions`, `ICallbackServerHandle<TResult>` and `CallbackServerFactory` — a contract for the local callback server used by interactive authorization flows. The handle is borrowed for the duration of a factory callback and the port is released when that callback returns, so releasing a socket is never a consequence of a promise settling. `timeoutMs` is mandatory and cancellation is supported through an `AbortSignal`.
+```
+
+Use the date of the release commit in place of `YYYY-MM-DD`.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add src/auth/ICallbackServer.ts src/index.ts package.json CHANGELOG.md
+git commit -m "feat(11.4.0): add the callback server contract
+
+A borrowed handle inside a factory scope, with a mandatory timeout and an
+AbortSignal. Releasing the socket stops being a consequence of the wait
+settling, which is what lets an abandoned login hold a port."
+```
+
+- [ ] **Step 6: PR, merge, tag**
+
+Open a PR against `master`, merge it squashed, sync `master`, then `git tag -a v11.4.0` and push the tag.
+
+---
+
+### GATE: the maintainer publishes `@mcp-abap-adt/interfaces@11.4.0`
+
+**Do not run `npm publish`.** Report that Task 1 is merged and tagged, and wait for confirmation that the package is on npm. Nothing in Task 2 onwards compiles until it is — `auth-providers` cannot import a type that has not shipped.
+
+After confirmation, in `auth-providers`:
+
+```bash
+rm -rf node_modules/@mcp-abap-adt/interfaces
+npm install @mcp-abap-adt/interfaces@^11.4.0 --save
+cat node_modules/@mcp-abap-adt/interfaces/package.json | grep '"version"'
+```
+
+Check the installed copy directly — `npm view` reports the registry, not what landed on disk. The jump from `^2.3.0` has been measured against `11.3.0`: zero type errors and no change in test results.
+
+---
+
+### Task 2: Browser callback factory
+
+**Repository:** `/home/okyslytsia/prj/mcp-abap-adt-auth-providers` (branch `feat/callback-server-contract`)
+
+**Files:**
+- Create: `src/auth/callbackServer.ts`
+- Create: `src/__tests__/auth/callbackServer.test.ts`
+
+**Interfaces:**
+- Consumes: `CallbackServerFactory`, `ICallbackServerHandle`, `ICallbackServerOptions` from Task 1.
+- Produces: `withBrowserCallbackServer` and the shared internal helper `runCallbackScope`, both used by Tasks 3 and 4.
+
+- [ ] **Step 1: Write the failing tests**
+
+Create `src/__tests__/auth/callbackServer.test.ts`:
+
+```ts
+import { describe, it, expect, afterEach } from '@jest/globals';
+import * as net from 'node:net';
+import { withBrowserCallbackServer } from '../../auth/callbackServer';
+
+const PORT = 7871;
+
+// Bind to check. The property under test is that a later login can take the
+// port back, and only an actual bind proves that.
+function portIsFree(port: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    const s = net.createServer();
+    s.once('error', () => resolve(false));
+    s.listen(port, () => s.close(() => resolve(true)));
+  });
+}
+
+const deliver = (query: string) =>
+  fetch(`http://127.0.0.1:${PORT}/callback${query}`).catch(() => undefined);
+
+afterEach(async () => {
+  expect(await portIsFree(PORT)).toBe(true);
+});
+
+describe('withBrowserCallbackServer', () => {
+  it('binds while the scope runs and yields the code', async () => {
+    const code = await withBrowserCallbackServer<string>(
+      { port: PORT, timeoutMs: 5000 },
+      async (srv) => {
+        expect(srv.port).toBe(PORT);
+        expect(srv.redirectUri).toBe(`http://localhost:${PORT}/callback`);
+        expect(await portIsFree(PORT)).toBe(false);
+        const waiting = srv.waitForResult();
+        void deliver('?code=abc123');
+        return await waiting;
+      },
+    );
+    expect(code).toBe('abc123');
+  });
+
+  // The OIDC/SAML regression: an abandoned login must not hold the port.
+  it('releases the port when the login is abandoned', async () => {
+    await expect(
+      withBrowserCallbackServer<string>(
+        { port: PORT, timeoutMs: 300 },
+        async (srv) => await srv.waitForResult(),
+      ),
+    ).rejects.toThrow(/timeout/i);
+  });
+
+  it('releases the port when cancelled', async () => {
+    const ac = new AbortController();
+    const scope = withBrowserCallbackServer<string>(
+      { port: PORT, timeoutMs: 30000, signal: ac.signal },
+      async (srv) => await srv.waitForResult(),
+    );
+    setTimeout(() => ac.abort(), 100);
+    await expect(scope).rejects.toThrow();
+  });
+
+  it('releases the port when the body throws', async () => {
+    await expect(
+      withBrowserCallbackServer<string>({ port: PORT, timeoutMs: 5000 }, async () => {
+        throw new Error('boom');
+      }),
+    ).rejects.toThrow('boom');
+  });
+
+  it('releases the port when fail() ends the wait', async () => {
+    await expect(
+      withBrowserCallbackServer<string>({ port: PORT, timeoutMs: 5000 }, async (srv) => {
+        const waiting = srv.waitForResult();
+        srv.fail(new Error('browser launch failed'));
+        return await waiting;
+      }),
+    ).rejects.toThrow('browser launch failed');
+  });
+
+  // Rule 4: a body that returns without awaiting must leave nothing dangling.
+  it('rejects a pending wait when the scope ends', async () => {
+    let dangling: Promise<string> | undefined;
+    await withBrowserCallbackServer<string>(
+      { port: PORT, timeoutMs: 5000 },
+      async (srv) => {
+        dangling = srv.waitForResult();
+        return 'returned without awaiting';
+      },
+    );
+    await expect(dangling).rejects.toThrow();
+  });
+
+  // Rule 6: the handle is dead afterwards.
+  it('throws when the handle is used after the scope', async () => {
+    let escaped!: { waitForResult: () => Promise<string>; fail: (e: Error) => void };
+    await withBrowserCallbackServer<string>(
+      { port: PORT, timeoutMs: 5000 },
+      async (srv) => {
+        escaped = srv;
+        return 'done';
+      },
+    );
+    expect(() => escaped.fail(new Error('late'))).toThrow();
+    await expect(escaped.waitForResult()).rejects.toThrow();
+  });
+
+  // Rule 3: first outcome wins.
+  it('keeps the first outcome', async () => {
+    const code = await withBrowserCallbackServer<string>(
+      { port: PORT, timeoutMs: 5000 },
+      async (srv) => {
+        const waiting = srv.waitForResult();
+        void deliver('?code=first');
+        const result = await waiting;
+        srv.fail(new Error('too late'));
+        return result;
+      },
+    );
+    expect(code).toBe('first');
+  });
+
+  // The browserAuth leak, at the level of the new unit.
+  it('ends the login and releases the port on a callback with no code', async () => {
+    await expect(
+      withBrowserCallbackServer<string>({ port: PORT, timeoutMs: 5000 }, async (srv) => {
+        const waiting = srv.waitForResult();
+        void deliver('');
+        return await waiting;
+      }),
+    ).rejects.toThrow(/code/i);
+  });
+
+  it('reports an OAuth error immediately rather than timing out', async () => {
+    const started = Date.now();
+    await expect(
+      withBrowserCallbackServer<string>({ port: PORT, timeoutMs: 30000 }, async (srv) => {
+        const waiting = srv.waitForResult();
+        void deliver('?error=access_denied&error_description=User%20said%20no');
+        return await waiting;
+      }),
+    ).rejects.toThrow(/access_denied/);
+    expect(Date.now() - started).toBeLessThan(5000);
+  });
+});
+```
+
+The `afterEach` asserting the port is free runs after **every** test, so any path that leaks fails the suite without needing its own case.
+
+- [ ] **Step 2: Run them to verify they fail**
+
+Run: `npm test -- src/__tests__/auth/callbackServer.test.ts`
+Expected: FAIL — `Cannot find module '../../auth/callbackServer'`.
+
+- [ ] **Step 3: Implement `src/auth/callbackServer.ts`**
+
+Write one internal helper that owns the lifetime, and a thin per-flow factory on top:
+
+```ts
+import express, { type Express } from 'express';
+import * as http from 'node:http';
+import type {
+  CallbackServerFactory,
+  ICallbackServerHandle,
+  ICallbackServerOptions,
+} from '@mcp-abap-adt/interfaces';
+
+/**
+ * Owns the socket for the duration of `use`. Every route registered by a flow
+ * settles through `settle`, which is the only place an outcome is produced.
+ */
+async function runCallbackScope<TResult>(
+  options: ICallbackServerOptions,
+  routes: (app: Express, settle: Settle<TResult>) => void,
+  use: (server: ICallbackServerHandle<TResult>) => Promise<TResult>,
+): Promise<TResult>;
+```
+
+Requirements, each mapped to a test above:
+
+1. Register routes and create the internal promise **before** `listen` resolves, so a callback arriving immediately is not lost.
+2. `settle` produces the outcome exactly once; later calls are no-ops.
+3. Arm the timeout from `timeoutMs` when the scope starts, not when `waitForResult()` is called.
+4. Subscribe to `options.signal`; on abort, settle with an error. Remove the listener when the scope ends.
+5. In a `finally`: mark the handle dead, settle any pending wait with an error, then `server.close()` **followed by** `closeAllConnections()`, and resolve only once the listening socket is released. That order matters — destroying connections first leaves a window in which a new one is accepted and then keeps `close()` waiting.
+6. Do not set `server.keepAliveTimeout = 0`. Measured on Node ≥ 19: `server.close()` closes idle connections itself and completes in 0-3 ms at `keepAliveTimeout` of 0, 5000 or 72000 alike. The line is a no-op, not a protection.
+7. The handle's members throw once the scope has ended.
+
+Then the browser flow, moving the routes across from `browserAuth.ts` unchanged — `/callback`, the paste form `/` and `/submit`, and the success/error/paste HTML:
+
+```ts
+export const withBrowserCallbackServer: CallbackServerFactory = (options, use) =>
+  runCallbackScope(options, (app, settle) => {
+    app.get('/callback', (req, res) => { /* code → settle.ok, error → settle.err, neither → 400 + settle.err */ });
+    app.get('/', (_req, res) => res.send(pasteFormHtml()));
+    app.get('/submit', (req, res) => { /* extractCode → settle.ok, else re-render */ });
+  }, use);
+```
+
+- [ ] **Step 4: Run them to verify they pass**
+
+Run: `npm test -- src/__tests__/auth/callbackServer.test.ts`
+Expected: PASS, all ten, including every `afterEach` port check.
+
+- [ ] **Step 5: Lint, build, full suite**
+
+Run: `npm run lint:check && npm run build && npm test`
+Expected: build and lint clean. The suite still shows the two pre-existing `AuthorizationCodeProvider` failures and no others — `browserAuth.ts` is untouched so far.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add src/auth/callbackServer.ts src/__tests__/auth/callbackServer.test.ts
+git commit -m "feat: browser callback factory with a scoped socket lifetime
+
+The port is released when the scope ends — success, error, timeout, abort or a
+throwing body — instead of when a promise happens to settle. Not wired up yet."
+```
+
+---
+
+### Task 3: Rewire `startBrowserAuth` onto the factory
+
+**Files:**
+- Modify: `src/auth/browserAuth.ts:170-790`
+- Modify: `src/__tests__/auth/browserAuth.test.ts`
+
+**Interfaces:**
+- Consumes: `withBrowserCallbackServer` from Task 2.
+- Produces: `startBrowserAuth` with its existing signature and resolved shape, minus the `port = 3001` parameter default.
+
+- [ ] **Step 1: Write the failing test**
+
+Add to `src/__tests__/auth/browserAuth.test.ts`, with the same bind-based `portIsFree` helper:
+
+```ts
+describe('startBrowserAuth port lifetime', () => {
+  const PORT = 7872;
+
+  it('releases the port when a callback carries no code', async () => {
+    const cfg = { uaaUrl: 'http://127.0.0.1:9', uaaClientId: 'c', uaaClientSecret: 's' };
+    const login = startBrowserAuth(cfg as never, 'none', null, PORT);
+    await new Promise((r) => setTimeout(r, 300));
+    await fetch(`http://127.0.0.1:${PORT}/callback`).catch(() => undefined);
+
+    await expect(login).rejects.toThrow();
+    // No sleep: a settled promise must mean a free port.
+    expect(await portIsFree(PORT)).toBe(true);
+  }, 30000);
+});
+```
+
+- [ ] **Step 2: Run it to verify it fails**
+
+Run: `npm test -- src/__tests__/auth/browserAuth.test.ts`
+Expected: FAIL on `expect(await portIsFree(PORT)).toBe(true)` — the socket is still bound, which is the defect from issue #11.
+
+- [ ] **Step 3: Rewrite the body**
+
+Replace the promise executor after the `isPortAvailable` guard with the factory call:
+
+```ts
+const code = await withBrowserCallbackServer<string>(
+  { port, timeoutMs },
+  async (srv) => {
+    const authorizationUrl =
+      authConfig.authorizationUrl ?? getJwtAuthorizationUrl(authConfig, srv.port);
+    const waiting = srv.waitForResult();
+    launchBrowser(authorizationUrl, browser, announce, log).catch((e) =>
+      srv.fail(
+        new Error(
+          `Browser opening failed for destination authentication. Please open manually: ${authorizationUrl}`,
+          { cause: e },
+        ),
+      ),
+    );
+    return await waiting;
+  },
+);
+return await exchangeCodeForToken(authConfig, code, port, log);
+```
+
+Extract the browser-opening block — `BROWSER_MAP`, the `open` import with its `child_process` fallback, the `none`/`headless` announce path, the Linux `DISPLAY` default — into `launchBrowser` in the same file. It must not be awaited on the critical path: a launcher that hangs must not delay the timeout or the release, and one that fails routes into `fail`.
+
+The stdin paste reader moves into the same scope, registered for `none`/`headless` when `process.stdin.isTTY`, and torn down by the scope like everything else.
+
+Two signature changes, both additive:
+
+- Add a `timeoutMs` parameter with a default of `30_000`, so existing callers keep
+  compiling and keep today's behaviour. Task 5 makes the provider pass it explicitly; the
+  same parameter is what lets the provider stop running a timer of its own.
+- Drop the `port = 3001` parameter default. Task 5 makes the provider always pass a
+  resolved value, and two different defaults for one thing is how they drift apart.
+
+```ts
+export async function startBrowserAuth(
+  authConfig: IAuthorizationConfig,
+  browser: string = 'system',
+  logger?: ILogger,
+  port: number,              // no default — the caller resolves it
+  timeoutMs: number = 30_000,
+): Promise<{ accessToken: string; refreshToken?: string }>
+```
+
+TypeScript does not allow a required parameter after an optional one, so `browser` and
+`logger` keep their defaults only if `port` moves ahead of them or they become explicitly
+`| undefined`. Keep the existing order and mark the earlier ones `?: T | undefined` rather
+than reordering — `@mcp-abap-adt/auth-broker` calls this positionally.
+
+- [ ] **Step 4: Run the browserAuth tests**
+
+Run: `npm test -- src/__tests__/auth/browserAuth.test.ts`
+Expected: PASS, including the existing browser-mode and `extractCode` cases. If a test asserted on an internal timer or on log text that no longer exists, update it to the new contract — do not `it.skip` it.
+
+- [ ] **Step 5: Lint, build, full suite**
+
+Run: `npm run lint:check && npm run build && npm test`
+Expected: clean apart from the two known `AuthorizationCodeProvider` failures.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add src/auth/browserAuth.ts src/__tests__/auth/browserAuth.test.ts
+git commit -m "fix: release the browser callback port on every exit path
+
+A callback carrying neither code nor error left the socket bound for the life
+of the process. The scope now owns the port, so it comes back whatever ends
+the login, and the promise settles only once it has."
+```
+
+---
+
+### Task 4: OIDC and SAML factories
+
+**Files:**
+- Modify: `src/auth/oidcBrowserAuth.ts`, `src/auth/saml2Auth.ts`
+- Create: `src/__tests__/auth/ssoCallbackLifetime.test.ts`
+
+**Interfaces:**
+- Consumes: `runCallbackScope` from Task 2.
+- Produces: `withOidcCallbackServer`, `withSamlCallbackServer`; `startOidcBrowserAuth` and `startSamlBrowserAuth` keep their signatures and resolved shapes.
+
+- [ ] **Step 1: Write the failing tests**
+
+Create `src/__tests__/auth/ssoCallbackLifetime.test.ts` with the bind-based `portIsFree`:
+
+```ts
+// Neither flow has a timeout today: an abandoned login holds the port forever.
+// These are the regressions.
+describe('SSO callback lifetime', () => {
+  it('releases the OIDC port when the login is abandoned', async () => {
+    const PORT = 7873;
+    await expect(
+      startOidcBrowserAuth('http://127.0.0.1:9/authorize', 'none', null, PORT, 300),
+    ).rejects.toThrow(/timeout/i);
+    expect(await portIsFree(PORT)).toBe(true);
+  }, 30000);
+
+  it('releases the SAML port when the login is abandoned', async () => {
+    const PORT = 7874;
+    await expect(
+      startSamlBrowserAuth('http://127.0.0.1:9/sso', 'none', null, PORT, 300),
+    ).rejects.toThrow(/timeout/i);
+    expect(await portIsFree(PORT)).toBe(true);
+  }, 30000);
+});
+```
+
+Both functions gain a `timeoutMs` parameter. Give it a default of `30_000` so existing callers keep compiling and behave as documented, and check the current call sites in `src/providers/OidcBrowserProvider.ts` and `src/providers/saml2Utils.ts` for whether they should pass it explicitly.
+
+- [ ] **Step 2: Run them to verify they fail**
+
+Run: `npm test -- src/__tests__/auth/ssoCallbackLifetime.test.ts`
+Expected: FAIL — each test hits Jest's own timeout because the promise never settles. That is precisely the defect.
+
+- [ ] **Step 3: Move both onto the scope**
+
+Replace each hand-rolled `new Promise` + `cleanup()` with `runCallbackScope`, keeping each flow's routes and payload:
+
+- OIDC: `GET /callback` → `{ code, state }`; missing code ends the login with an error, as today.
+- SAML: `POST` and `GET /callback` → the `SAMLResponse` string; missing response ends the login with an error, as today.
+
+Delete the `let resolved` / `cleanup()` pairs and the `server.keepAliveTimeout = 0` lines; the scope owns all of it now.
+
+- [ ] **Step 4: Run them to verify they pass**
+
+Run: `npm test -- src/__tests__/auth/ssoCallbackLifetime.test.ts`
+Expected: PASS, both, in well under the 30 s test timeout.
+
+- [ ] **Step 5: Lint, build, full suite**
+
+Run: `npm run lint:check && npm run build && npm test`
+Expected: clean apart from the two known `AuthorizationCodeProvider` failures.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add src/auth/oidcBrowserAuth.ts src/auth/saml2Auth.ts src/__tests__/auth/ssoCallbackLifetime.test.ts
+git commit -m "fix: give the OIDC and SAML callback servers a lifetime
+
+Neither had a timeout, so an abandoned login never settled and the port was
+held for the life of the process. Both now run inside the same scope as the
+browser flow."
+```
+
+---
+
+### Task 5: One timeout, owned by the scope
+
+**Files:**
+- Modify: `src/providers/AuthorizationCodeProvider.ts:153-172`
+- Modify: `src/__tests__/providers/AuthorizationCodeProvider.test.ts`
+
+**Interfaces:**
+- Consumes: `startBrowserAuth` from Task 3.
+- Produces: no signature change. `redirectPort` stays optional with its 3001 default.
+
+- [ ] **Step 1: Write the failing test**
+
+Add to `src/__tests__/providers/AuthorizationCodeProvider.test.ts`, with the bind-based `portIsFree`:
+
+```ts
+it('leaves the callback port free the moment a login times out', async () => {
+  const provider = new AuthorizationCodeProvider({
+    uaaUrl: 'http://127.0.0.1:9',
+    clientId: 'client',
+    clientSecret: 'secret',
+    browser: 'none',
+    redirectPort: 7875,
+  });
+
+  await expect(provider.getTokens()).rejects.toThrow(/timeout/i);
+  // No sleep. With the outer Promise.race still in place this fails about half
+  // the time, which is why it is asserted rather than reasoned about.
+  expect(await portIsFree(7875)).toBe(true);
+}, 60000);
+```
+
+- [ ] **Step 2: Run it to verify it fails**
+
+Run: `npm test -- src/__tests__/providers/AuthorizationCodeProvider.test.ts`
+Expected: FAIL, intermittently but demonstrably — when the outer timer wins the race the provider rejects while the socket is still bound. Run it several times; a single green run proves nothing here.
+
+- [ ] **Step 3: Delete the competing timer**
+
+Remove `timeoutMs`, `timeoutPromise` and the `Promise.race` wrapper. Await `startBrowserAuth` directly and pass the login timeout down to it, so the only timer lives in the scope that owns the socket.
+
+- [ ] **Step 4: Run it to verify it passes**
+
+Run: `npm test -- src/__tests__/providers/AuthorizationCodeProvider.test.ts` — several times.
+Expected: PASS consistently.
+
+- [ ] **Step 5: The full suite must now be green**
+
+Run: `npm run lint:check && npm run build && npm test`
+Expected: **zero failures.** The two `AuthorizationCodeProvider` tests that fail on `master` in a full run should now pass: they were losing 30 s each to competing timers and contending sockets. Jest should also stop printing `Force exiting Jest: ... async operations that kept running` — the uncleared timer is gone.
+
+If either symptom survives, stop and investigate rather than adjusting the test. It would mean something still outlives its scope.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add src/providers/AuthorizationCodeProvider.ts src/__tests__/providers/AuthorizationCodeProvider.test.ts
+git commit -m "fix: single login timeout, owned by the callback scope
+
+The provider raced startBrowserAuth against its own 30s timer — the same
+duration as the internal one — so which fired was down to scheduling, and when
+the outer one won the provider rejected while the socket was still bound. The
+timer was also never cleared, keeping the event loop alive after a fast login."
+```
+
+---
+
+### Task 6: Release 1.2.0
+
+**Files:**
+- Modify: `package.json`, `CHANGELOG.md`
+
+- [ ] **Step 1: Version and changelog**
+
+Set `"version": "1.2.0"`. Minor: no exported signature changes, and `AuthorizationCodeProviderConfig` is untouched. Add above `## [1.1.0]`, using the release commit's date:
+
+```markdown
+## [1.2.0] - YYYY-MM-DD
+
+### Fixed
+- **A callback server could hold its port after the login it was opened for had ended.** Three flows, three shapes of the same defect: `browserAuth` leaked the socket when a callback carried neither `code` nor `error`, and neither `oidcBrowserAuth` nor `saml2Auth` had any timeout, so an abandoned login never settled and the port was never released. (#11)
+- **A rejected login could report a port that was not yet free.** Five exit paths closed the socket asynchronously *after* the promise had settled, leaving a ~100 ms window in which "already in use" was untrue.
+- **`AuthorizationCodeProvider` raced `startBrowserAuth` against a second 30-second timer** of its own, so when the outer one won it rejected while the socket was still bound. That timer was never cleared, keeping the event loop alive for the rest of the 30 seconds after a fast login.
+- A hung browser launcher could delay the timeout and the release; the launch is no longer awaited on the critical path.
+
+### Changed
+- All three flows now run inside a factory scope implementing `CallbackServerFactory` from `@mcp-abap-adt/interfaces`. The port is released when the scope ends — by success, error, timeout, cancellation or a throwing body — instead of when a promise happens to settle. `timeoutMs` is mandatory and cancellation is available through an `AbortSignal`.
+- Requires `@mcp-abap-adt/interfaces` `^11.4.0` (was `^2.3.0`).
+
+### Notes
+- Public API unchanged: `AuthorizationCodeProviderConfig` keeps `browser` and `redirectPort`, still defaulting to 3001.
+- The factories stay internal. Exposing them so a consumer can supply its own callback receiver is issue #11 and is not part of this release.
+- A callback carrying neither `code` nor `error` still ends the login with an error. Only the leaked socket was fixed, not the termination.
+```
+
+- [ ] **Step 2: Verify the release commit**
+
+Run: `npm run lint:check && npm run build && npm test`
+Expected: zero failures, and `ls dist/auth/callbackServer.js` exists.
+
+- [ ] **Step 3: Commit**
+
+```bash
+git add package.json CHANGELOG.md
+git commit -m "release(1.2.0): scoped callback server lifetime"
+```
+
+---
+
+## After this plan
+
+1. Open a PR against `master` referencing `Closes #11` — or, if issue #11's boundary question is still open, referencing it without closing, since this plan fixes the hangs and introduces the seam but does not move reception to the consumer.
+2. Merge, sync `master`, tag `v1.2.0`, push the tag.
+3. **The maintainer publishes to npm.** Do not run `npm publish`.
+4. `@mcp-abap-adt/auth-broker` and `@mcp-abap-adt/proxy` need no code change — the public API did not move — but both should be re-tested against the published build before their next release.
+5. Delete this plan and the spec. Per `CLAUDE.md`, those directories hold only work in progress.
