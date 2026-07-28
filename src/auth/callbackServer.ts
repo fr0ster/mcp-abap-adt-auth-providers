@@ -172,16 +172,23 @@ export async function runCallbackScope<TResult, TReturn>(
     });
   }
 
-  /** Settle only once the response has flushed, so shutdown cannot cut it off. */
+  /**
+   * Settle only once the response has actually flushed, so shutdown cannot cut
+   * it off.
+   *
+   * The check is `writableFinished`, not `writableEnded`: the latter is true as
+   * soon as `end()` has been called and says nothing about the data having
+   * left. Measured on Node 25 with a paused client — an 800-byte body reports
+   * both flags true at once, but a 20 MB body reports `writableEnded` true and
+   * `writableFinished` false, with `finish` arriving 456 ms later. Keying off
+   * `writableEnded` therefore made this deferral a no-op on the very path it
+   * exists for.
+   */
   const afterFlush = (
     res: express.Response | undefined,
     then: () => void,
   ): void => {
-    if (!res) {
-      then();
-      return;
-    }
-    if (res.writableEnded) {
+    if (!res || res.writableFinished) {
       then();
       return;
     }

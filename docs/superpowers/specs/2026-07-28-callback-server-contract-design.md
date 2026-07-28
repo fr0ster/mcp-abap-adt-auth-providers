@@ -274,8 +274,15 @@ existing code destroys the socket as soon as the response emits `finish`.
 
 Which is the other half of the rule: **a route may only report its outcome once its response
 has actually been flushed.** `res.send()` returning does not mean the bytes have left; bind
-the settlement to the response's `finish` event or to the `res.end()` callback. Settling
-earlier is what puts the shutdown and the success page in a race.
+the settlement to the response's `finish` event.
+
+The flag to test is **`writableFinished`, never `writableEnded`**. The latter is true as soon
+as `end()` has been called and says nothing about the data having gone. Measured on Node 25
+with a client that does not read: an 800-byte body reports both flags true at once, but a
+20 MB body reports `writableEnded` true and `writableFinished` false, with `finish` arriving
+456 ms later. An implementation that short-circuits on `writableEnded` therefore skips the
+wait entirely on exactly the responses the wait exists for — and the first implementation of
+this spec did, until a test with a large body and a paused client caught it.
 
 `engines.node` rises to `>=18.2.0` for `closeAllConnections()`. Writing a socket-tracking
 fallback for 18.0 and 18.1 — two patch releases of a major that is already end-of-life —

@@ -9,7 +9,10 @@
 import http from 'node:http';
 import net from 'node:net';
 import { afterEach, describe, expect, it } from '@jest/globals';
-import { withBrowserCallbackServer } from '../../auth/callbackServer';
+import {
+  runCallbackScope,
+  withBrowserCallbackServer,
+} from '../../auth/callbackServer';
 
 const PORT = 7871;
 
@@ -389,4 +392,63 @@ describe('withBrowserCallbackServer', () => {
       });
     }
   }, 30000);
+
+  /**
+   * The guarantee is "settle only once the response has flushed", and the
+   * existing tests cannot see it break: they read the whole body inside the
+   * body of the scope, so the response is long gone before the scope ends.
+   *
+   * This one uses a payload too large for the socket buffer and a client that
+   * does not read until later, which is the only state in which `writableEnded`
+   * and `writableFinished` disagree. With the check keyed off `writableEnded`
+   * the scope settles while the body is still going out.
+   */
+  it('does not settle until a large response has actually flushed', async () => {
+    const BIG_PORT = 7876;
+    const size = 20_000_000;
+    let finishedAt = 0;
+    let settledAt = 0;
+
+    const scope = runCallbackScope<string, string>(
+      { port: BIG_PORT, timeoutMs: 10000 },
+      (app, settle) => {
+        app.get('/big', (_req, res) => {
+          res.writeHead(200, { 'Content-Type': 'text/plain' });
+          res.end('x'.repeat(size));
+          res.once('finish', () => {
+            finishedAt = Date.now();
+          });
+          settle.ok('delivered', res);
+        });
+      },
+      async (server) => await server.waitForResult(),
+    );
+
+    const received = await new Promise<number>((resolve, reject) => {
+      const req = http.get(
+        { host: '127.0.0.1', port: BIG_PORT, path: '/big', agent: false },
+        (res) => {
+          let bytes = 0;
+          res.pause();
+          setTimeout(() => {
+            res.resume();
+            res.on('data', (chunk: Buffer) => {
+              bytes += chunk.length;
+            });
+            res.on('end', () => resolve(bytes));
+          }, 300);
+        },
+      );
+      req.on('error', reject);
+    });
+
+    const value = await scope;
+    settledAt = Date.now();
+
+    expect(value).toBe('delivered');
+    expect(received).toBe(size);
+    expect(finishedAt).toBeGreaterThan(0);
+    // The scope must not have settled before the response finished writing.
+    expect(settledAt).toBeGreaterThanOrEqual(finishedAt);
+  }, 60000);
 });
