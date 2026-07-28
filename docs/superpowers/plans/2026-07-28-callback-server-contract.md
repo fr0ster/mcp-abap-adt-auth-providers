@@ -62,8 +62,13 @@ export interface ICallbackServerOptions {
   readonly port: number;
   /**
    * Mandatory: how long to wait for the callback. Must satisfy
-   * `Number.isFinite(timeoutMs) && timeoutMs > 0`. `Infinity` is rejected —
-   * "wait forever" is the defect this option exists to remove.
+   * `Number.isFinite(timeoutMs) && timeoutMs > 0 && timeoutMs <= 2_147_483_647`.
+   *
+   * `Infinity` is rejected — "wait forever" is the defect this option exists to
+   * remove. The upper bound is Node's: `setTimeout` takes a 32-bit signed delay,
+   * and measured, `2_147_483_648` fires after 1 ms with a
+   * `TimeoutOverflowWarning`. A generous-looking timeout would otherwise end the
+   * login almost instantly. Rejected rather than clamped — clamping hides it.
    */
   readonly timeoutMs: number;
   /** External cancellation — "this login is no longer needed". */
@@ -284,8 +289,13 @@ describe('withBrowserCallbackServer', () => {
   });
 
   // Rule 6: the handle is dead afterwards.
-  it('throws when the handle is used after the scope', async () => {
-    let escaped!: { waitForResult: () => Promise<string>; fail: (e: Error) => void };
+  it('gives a dead handle per-member behaviour, not a uniform throw', async () => {
+    let escaped!: {
+      port: number;
+      redirectUri: string;
+      waitForResult: () => Promise<string>;
+      fail: (e: Error) => void;
+    };
     await withBrowserCallbackServer(
       { port: PORT, timeoutMs: 5000 },
       async (srv) => {
@@ -293,8 +303,10 @@ describe('withBrowserCallbackServer', () => {
         return 'done';
       },
     );
-    expect(() => escaped.fail(new Error('late'))).toThrow();
-    await expect(escaped.waitForResult()).rejects.toThrow();
+    expect(() => escaped.fail(new Error('late'))).not.toThrow();   // silent no-op
+    await expect(escaped.waitForResult()).rejects.toThrow();       // rejects, never throws
+    expect(escaped.port).toBe(PORT);                               // values stay readable
+    expect(escaped.redirectUri).toContain(String(PORT));
   });
 
   // A delivered callback is not itself terminal, so fail() still wins if it
@@ -359,12 +371,20 @@ describe('withBrowserCallbackServer', () => {
     expect(ran).toBe(false);
   });
 
-  it('rejects a timeoutMs that is not finite and positive', async () => {
-    for (const bad of [0, -1, Number.NaN, Number.POSITIVE_INFINITY]) {
+  it('rejects a timeoutMs outside 0 < t <= 2_147_483_647', async () => {
+    for (const bad of [0, -1, Number.NaN, Number.POSITIVE_INFINITY, 2_147_483_648]) {
       await expect(
         withBrowserCallbackServer({ port: PORT, timeoutMs: bad }, async () => 'unreachable'),
       ).rejects.toThrow();
     }
+    // The boundary itself is valid: accepted, and the scope still ends on its
+    // own terms rather than on a timer that would overflow.
+    await expect(
+      withBrowserCallbackServer(
+        { port: PORT, timeoutMs: 2_147_483_647 },
+        async () => 'accepted',
+      ),
+    ).resolves.toBe('accepted');
   });
 
   it('rejects a port that is not an integer in 1..65535, without binding', async () => {
@@ -505,7 +525,7 @@ async function runCallbackScope<TResult>(
 
 Requirements, each mapped to a test above:
 
-1. Validate before binding: `Number.isInteger(options.port)` and `1 <= port <= 65535`, and `Number.isFinite(options.timeoutMs) && options.timeoutMs > 0`. Reject immediately, without binding and without calling `use`, when `options.signal?.aborted` is already true. Register the `signal` listener **before** calling `listen`, so an abort arriving during the bind is not dropped; if it fires then, tear the server down whether or not it reached `listening`, remove the listener and any timer, and reject without calling `use`. On a `listen` error such as `EADDRINUSE`, reject with that error and leave nothing registered. Call `use` from the `listen` callback and arm the timeout there, so a slow bind does not eat the login window.
+1. Validate before binding: `Number.isInteger(options.port)` and `1 <= port <= 65535`, and `Number.isFinite(options.timeoutMs) && options.timeoutMs > 0 && options.timeoutMs <= 2_147_483_647` — above that Node's `setTimeout` overflows its 32-bit delay and fires after 1 ms, so a large timeout would end the login instantly. Reject immediately, without binding and without calling `use`, when `options.signal?.aborted` is already true. Register the `signal` listener **before** calling `listen`, so an abort arriving during the bind is not dropped; if it fires then, tear the server down whether or not it reached `listening`, remove the listener and any timer, and reject without calling `use`. On a `listen` error such as `EADDRINUSE`, reject with that error and leave nothing registered. Call `use` from the `listen` callback and arm the timeout there, so a slow bind does not eat the login window.
 2. Register routes and create the internal promise **before** `listen` resolves, so a callback arriving immediately is not lost.
 3. `settle` produces the outcome exactly once; later calls are no-ops. A route may only settle **after its response has flushed** — bind it to the response's `finish` event or the `res.end()` callback. `res.send()` returning does not mean the bytes have left, and settling earlier races the shutdown against the success page.
 4. A delivered callback settles `waitForResult()` only — it does **not** end the scope. The scope ends when `use` fulfils (the factory resolves with `use`'s value, so `transform(await waitForResult())` works), when `use` throws, or on `fail`/timeout/abort. Failures end it without waiting for `use`.

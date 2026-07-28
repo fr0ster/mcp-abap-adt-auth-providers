@@ -74,12 +74,20 @@ export interface ICallbackServerOptions {
    */
   readonly port: number;
   /**
-   * Mandatory. Must satisfy `Number.isFinite(timeoutMs) && timeoutMs > 0`.
+   * Mandatory. Must satisfy
+   * `Number.isFinite(timeoutMs) && timeoutMs > 0 && timeoutMs <= 2_147_483_647`.
    *
    * `Infinity` is rejected rather than honoured — "wait forever" is the defect
    * this contract exists to remove, and it must not be reachable through the
    * option that was added to prevent it. `0`, negatives and `NaN` are rejected
    * too.
+   *
+   * The upper bound is Node's, not ours. `setTimeout` takes a 32-bit signed
+   * delay; measured, `2_147_483_648` and `5_000_000_000` both fire after **1 ms**
+   * with a `TimeoutOverflowWarning`, while `2_147_483_647` is accepted. So a
+   * generous-looking timeout would silently end the login almost instantly —
+   * the worst possible failure, since it looks like a configuration that grants
+   * more time. Rejected rather than clamped: clamping would hide the mistake.
    */
   readonly timeoutMs: number;
   /** External cancellation: "no longer needed". */
@@ -340,8 +348,9 @@ For each factory:
   rejects, `use` is never called, and no timer or `signal` listener survives; the same for an
   `AbortSignal` that is already aborted on entry, which must not bind a socket at all;
 - a port outside 1..65535, `0` and non-integers included, is rejected before anything binds,
-  as is a `timeoutMs` that is not finite and positive — `Infinity` especially, since honouring
-  it would reinstate the defect the option exists to remove;
+  as is a `timeoutMs` outside `0 < t <= 2_147_483_647`. Assert the boundary explicitly:
+  `2_147_483_647` is accepted, `2_147_483_648` is rejected. `Infinity` especially, since
+  honouring it would reinstate the defect the option exists to remove;
 - an abort that arrives *during* the bind is honoured: `use` never runs, nothing stays
   registered, and the port is free once the factory rejects;
 - `fail()` called after the scope has ended is a silent no-op — asserted by rejecting a
@@ -350,7 +359,9 @@ For each factory:
 - an abandoned login is released by the timeout rather than held (the OIDC and SAML
   regression);
 - a `use` body that returns without awaiting `waitForResult()` leaves no pending promise;
-- the handle throws after the scope ends;
+- the dead handle behaves per member, not uniformly: `fail()` is a silent no-op that does
+  not throw, `waitForResult()` returns a rejected promise rather than throwing synchronously,
+  and `port` and `redirectUri` are still readable;
 - first-terminal-outcome-wins, in both directions, since a delivered callback is not itself
   terminal:
   - a `fail` that arrives after the callback was delivered but **before** `use` fulfils ends
