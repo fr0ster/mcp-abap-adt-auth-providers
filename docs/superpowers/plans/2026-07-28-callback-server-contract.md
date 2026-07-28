@@ -4,11 +4,11 @@
 
 **Goal:** Make it impossible for a callback server in this package to hold its port after it is no longer needed, by giving every flow one factory-scoped lifetime with a mandatory timeout and cancellation.
 
-**Architecture:** Three independently written callback servers each tie the release of their socket to a promise settling. A new contract in `@mcp-abap-adt/interfaces` inverts that: the server handle lives only inside a factory callback, and the factory releases the port when that callback returns by any means. Each existing flow becomes one factory.
+**Architecture:** Three independently written callback servers each tie the release of their socket to a promise settling. A new contract in `@mcp-abap-adt/interfaces` inverts that: the server handle is borrowed inside a factory callback, and the factory releases the port on the first terminal outcome — the callback returning or throwing, an explicit failure, the timeout, or an abort. Each existing flow becomes one factory.
 
 **Tech Stack:** TypeScript, Express + `node:http`, Jest (`NODE_OPTIONS=--experimental-vm-modules`), Biome. Two repositories.
 
-**Requirements source:** `docs/superpowers/specs/2026-07-28-callback-server-contract-design.md`, and issue https://github.com/fr0ster/mcp-abap-adt-auth-providers/issues/11. Read the spec before Task 1 — it carries the measured failures and the six contract rules this plan implements.
+**Requirements source:** `docs/superpowers/specs/2026-07-28-callback-server-contract-design.md`, and issue https://github.com/fr0ster/mcp-abap-adt-auth-providers/issues/11. Read the spec before Task 1 — it carries the measured failures, the seven contract rules and the shutdown algorithm this plan implements.
 
 ## Global Constraints
 
@@ -33,7 +33,7 @@
 
 **Interfaces:**
 - Consumes: nothing.
-- Produces: `ICallbackServerOptions`, `ICallbackServerHandle<TResult>`, `CallbackServerFactory` — every later task depends on these exact names.
+- Produces: `ICallbackServerOptions`, `ICallbackServerHandle<TResult>`, `CallbackServerFactory<TResult>` — every later task depends on these exact names.
 
 - [ ] **Step 1: Write the contract**
 
@@ -44,9 +44,10 @@ Create `src/auth/ICallbackServer.ts`. Follow the file style of `src/connection/I
  * Local callback server used by interactive authorization flows.
  *
  * The handle is borrowed: it exists only for the duration of the factory's
- * callback, and the port is released when that callback returns — by success,
- * error, timeout or cancellation. Release is therefore never a consequence of
- * a promise settling, which is what allows an abandoned login to hold a port.
+ * callback, and the port is released on the first terminal outcome — that
+ * callback returning or throwing, an explicit failure, the timeout, or an
+ * abort. Release is therefore never a consequence of a wait settling, which is
+ * what lets an abandoned login hold a port.
  */
 
 export interface ICallbackServerOptions {
@@ -80,10 +81,17 @@ export interface ICallbackServerHandle<TResult> {
  * The only way to obtain a callback server. There is deliberately no `close`
  * on the handle: closing belongs to the factory, so it cannot be forgotten.
  *
- * Resolves or rejects only after the listening socket has been released, so a
- * settled result always means the port is free.
+ * Settles on the first terminal outcome — `use` returning or throwing, `fail`,
+ * the timeout, or an abort — and only after the listening socket has been
+ * released, so a settled result always means the port is free. It does not
+ * promise to stop `use`; an arbitrary async function cannot be force-terminated.
+ *
+ * The type parameter is on the alias rather than the call signature: a factory
+ * for a given flow always produces that flow's result. Were it generic per call,
+ * `withBrowserCallbackServer<number>(...)` would type-check against a handler
+ * that can only ever yield a string.
  */
-export type CallbackServerFactory = <TResult>(
+export type CallbackServerFactory<TResult> = (
   options: ICallbackServerOptions,
   use: (server: ICallbackServerHandle<TResult>) => Promise<TResult>,
 ) => Promise<TResult>;
@@ -118,7 +126,7 @@ Bump `version` to `11.4.0` in `package.json` (additive → minor). Add to `CHANG
 ## [11.4.0] - YYYY-MM-DD
 
 ### Added
-- `ICallbackServerOptions`, `ICallbackServerHandle<TResult>` and `CallbackServerFactory` — a contract for the local callback server used by interactive authorization flows. The handle is borrowed for the duration of a factory callback and the port is released when that callback returns, so releasing a socket is never a consequence of a promise settling. `timeoutMs` is mandatory and cancellation is supported through an `AbortSignal`.
+- `ICallbackServerOptions`, `ICallbackServerHandle<TResult>` and `CallbackServerFactory` — a contract for the local callback server used by interactive authorization flows. The handle is borrowed for the duration of a factory callback and the port is released on the first terminal outcome, so releasing a socket is never a consequence of a wait settling. `timeoutMs` is mandatory and cancellation is supported through an `AbortSignal`.
 ```
 
 Use the date of the release commit in place of `YYYY-MM-DD`.
@@ -174,6 +182,7 @@ Create `src/__tests__/auth/callbackServer.test.ts`:
 
 ```ts
 import { describe, it, expect, afterEach } from '@jest/globals';
+import * as http from 'node:http';
 import * as net from 'node:net';
 import { withBrowserCallbackServer } from '../../auth/callbackServer';
 
@@ -198,7 +207,7 @@ afterEach(async () => {
 
 describe('withBrowserCallbackServer', () => {
   it('binds while the scope runs and yields the code', async () => {
-    const code = await withBrowserCallbackServer<string>(
+    const code = await withBrowserCallbackServer(
       { port: PORT, timeoutMs: 5000 },
       async (srv) => {
         expect(srv.port).toBe(PORT);
@@ -215,7 +224,7 @@ describe('withBrowserCallbackServer', () => {
   // The OIDC/SAML regression: an abandoned login must not hold the port.
   it('releases the port when the login is abandoned', async () => {
     await expect(
-      withBrowserCallbackServer<string>(
+      withBrowserCallbackServer(
         { port: PORT, timeoutMs: 300 },
         async (srv) => await srv.waitForResult(),
       ),
@@ -224,7 +233,7 @@ describe('withBrowserCallbackServer', () => {
 
   it('releases the port when cancelled', async () => {
     const ac = new AbortController();
-    const scope = withBrowserCallbackServer<string>(
+    const scope = withBrowserCallbackServer(
       { port: PORT, timeoutMs: 30000, signal: ac.signal },
       async (srv) => await srv.waitForResult(),
     );
@@ -234,7 +243,7 @@ describe('withBrowserCallbackServer', () => {
 
   it('releases the port when the body throws', async () => {
     await expect(
-      withBrowserCallbackServer<string>({ port: PORT, timeoutMs: 5000 }, async () => {
+      withBrowserCallbackServer({ port: PORT, timeoutMs: 5000 }, async () => {
         throw new Error('boom');
       }),
     ).rejects.toThrow('boom');
@@ -242,7 +251,7 @@ describe('withBrowserCallbackServer', () => {
 
   it('releases the port when fail() ends the wait', async () => {
     await expect(
-      withBrowserCallbackServer<string>({ port: PORT, timeoutMs: 5000 }, async (srv) => {
+      withBrowserCallbackServer({ port: PORT, timeoutMs: 5000 }, async (srv) => {
         const waiting = srv.waitForResult();
         srv.fail(new Error('browser launch failed'));
         return await waiting;
@@ -253,7 +262,7 @@ describe('withBrowserCallbackServer', () => {
   // Rule 4: a body that returns without awaiting must leave nothing dangling.
   it('rejects a pending wait when the scope ends', async () => {
     let dangling: Promise<string> | undefined;
-    await withBrowserCallbackServer<string>(
+    await withBrowserCallbackServer(
       { port: PORT, timeoutMs: 5000 },
       async (srv) => {
         dangling = srv.waitForResult();
@@ -266,7 +275,7 @@ describe('withBrowserCallbackServer', () => {
   // Rule 6: the handle is dead afterwards.
   it('throws when the handle is used after the scope', async () => {
     let escaped!: { waitForResult: () => Promise<string>; fail: (e: Error) => void };
-    await withBrowserCallbackServer<string>(
+    await withBrowserCallbackServer(
       { port: PORT, timeoutMs: 5000 },
       async (srv) => {
         escaped = srv;
@@ -279,7 +288,7 @@ describe('withBrowserCallbackServer', () => {
 
   // Rule 3: first outcome wins.
   it('keeps the first outcome', async () => {
-    const code = await withBrowserCallbackServer<string>(
+    const code = await withBrowserCallbackServer(
       { port: PORT, timeoutMs: 5000 },
       async (srv) => {
         const waiting = srv.waitForResult();
@@ -295,7 +304,7 @@ describe('withBrowserCallbackServer', () => {
   // The browserAuth leak, at the level of the new unit.
   it('ends the login and releases the port on a callback with no code', async () => {
     await expect(
-      withBrowserCallbackServer<string>({ port: PORT, timeoutMs: 5000 }, async (srv) => {
+      withBrowserCallbackServer({ port: PORT, timeoutMs: 5000 }, async (srv) => {
         const waiting = srv.waitForResult();
         void deliver('');
         return await waiting;
@@ -303,10 +312,37 @@ describe('withBrowserCallbackServer', () => {
     ).rejects.toThrow(/code/i);
   });
 
+  // The contradiction the contract had to resolve: an arbitrary `use` cannot be
+  // cancelled, so the timeout must win the race and free the port anyway.
+  it('releases the port when the body never settles', async () => {
+    await expect(
+      withBrowserCallbackServer({ port: PORT, timeoutMs: 300 }, () => new Promise<string>(() => {})),
+    ).rejects.toThrow(/timeout/i);
+  });
+
+  // Shutdown must be bounded even with a client holding an idle connection.
+  // A bare fetch does not exercise this.
+  it('releases the port with an idle keep-alive client attached', async () => {
+    const agent = new http.Agent({ keepAlive: true });
+    await new Promise<void>((resolve) => {
+      const scope = withBrowserCallbackServer({ port: PORT, timeoutMs: 2000 }, async (srv) => {
+        await new Promise<void>((ready) => {
+          http.get({ host: '127.0.0.1', port: PORT, path: '/', agent }, (r) => {
+            r.resume();
+            r.on('end', () => ready());
+          });
+        });
+        return await srv.waitForResult();
+      });
+      void scope.catch(() => undefined).then(() => resolve());
+    });
+    agent.destroy();
+  }, 30000);
+
   it('reports an OAuth error immediately rather than timing out', async () => {
     const started = Date.now();
     await expect(
-      withBrowserCallbackServer<string>({ port: PORT, timeoutMs: 30000 }, async (srv) => {
+      withBrowserCallbackServer({ port: PORT, timeoutMs: 30000 }, async (srv) => {
         const waiting = srv.waitForResult();
         void deliver('?error=access_denied&error_description=User%20said%20no');
         return await waiting;
@@ -354,9 +390,16 @@ Requirements, each mapped to a test above:
 2. `settle` produces the outcome exactly once; later calls are no-ops.
 3. Arm the timeout from `timeoutMs` when the scope starts, not when `waitForResult()` is called.
 4. Subscribe to `options.signal`; on abort, settle with an error. Remove the listener when the scope ends.
-5. In a `finally`: mark the handle dead, settle any pending wait with an error, then `server.close()` **followed by** `closeAllConnections()`, and resolve only once the listening socket is released. That order matters — destroying connections first leaves a window in which a new one is accepted and then keeps `close()` waiting.
-6. Do not set `server.keepAliveTimeout = 0`. Measured on Node ≥ 19: `server.close()` closes idle connections itself and completes in 0-3 ms at `keepAliveTimeout` of 0, 5000 or 72000 alike. The line is a no-op, not a protection.
-7. The handle's members throw once the scope has ended.
+5. Race `use` against the terminal outcomes. Whichever settles first decides; a later settlement from the losing `use` — value or rejection — is discarded, so an abandoned body cannot surface as an unhandled rejection. Do **not** attempt to cancel `use`: it cannot be done, and pretending otherwise is what made the first draft of this contract self-contradictory.
+6. Shut down on that outcome, in this order, and resolve only when it is finished:
+   1. `server.close()` to stop accepting;
+   2. let an in-flight response finish — the success page must reach the browser;
+   3. `closeAllConnections()` to end idle connections;
+   4. if `close` has not fired within 500 ms, destroy the sockets tracked from the `connection` event and stop waiting;
+   5. resolve. Shutdown is bounded, so a timeout can never hang on its own cleanup.
+7. Do not set `server.keepAliveTimeout = 0`. Per the Node documentation `0` *disables* the keep-alive timeout, the opposite of what the current comment claims, and measurement on Node 25 shows `close()` completing in 0-3 ms whether it is 0, 5000 or 72000. It is noise.
+8. Mark the handle dead when the scope ends; its members throw afterwards. A `use` that lost the race and keeps running hits this.
+9. Settle any still-pending `waitForResult()` with an error as part of shutdown.
 
 Then the browser flow, moving the routes across from `browserAuth.ts` unchanged — `/callback`, the paste form `/` and `/submit`, and the success/error/paste HTML:
 
@@ -432,7 +475,7 @@ Expected: FAIL on `expect(await portIsFree(PORT)).toBe(true)` — the socket is 
 Replace the promise executor after the `isPortAvailable` guard with the factory call:
 
 ```ts
-const code = await withBrowserCallbackServer<string>(
+const code = await withBrowserCallbackServer(
   { port, timeoutMs },
   async (srv) => {
     const authorizationUrl =
@@ -648,9 +691,9 @@ timer was also never cleared, keeping the event loop alive after a fast login."
 **Files:**
 - Modify: `package.json`, `CHANGELOG.md`
 
-- [ ] **Step 1: Version and changelog**
+- [ ] **Step 1: Version, engines and changelog**
 
-Set `"version": "1.2.0"`. Minor: no exported signature changes, and `AuthorizationCodeProviderConfig` is untouched. Add above `## [1.1.0]`, using the release commit's date:
+Set `"version": "1.2.0"` and `"engines": { "node": ">=18.2.0" }` (was `>=18.0.0`) — `closeAllConnections()` landed in 18.2.0 and the shutdown algorithm calls it unconditionally. Minor: no exported signature changes, and `AuthorizationCodeProviderConfig` is untouched. Add above `## [1.1.0]`, using the release commit's date:
 
 ```markdown
 ## [1.2.0] - YYYY-MM-DD
@@ -664,6 +707,7 @@ Set `"version": "1.2.0"`. Minor: no exported signature changes, and `Authorizati
 ### Changed
 - All three flows now run inside a factory scope implementing `CallbackServerFactory` from `@mcp-abap-adt/interfaces`. The port is released when the scope ends — by success, error, timeout, cancellation or a throwing body — instead of when a promise happens to settle. `timeoutMs` is mandatory and cancellation is available through an `AbortSignal`.
 - Requires `@mcp-abap-adt/interfaces` `^11.4.0` (was `^2.3.0`).
+- **`engines.node` is now `>=18.2.0`** (was `>=18.0.0`), for `server.closeAllConnections()`.
 
 ### Notes
 - Public API unchanged: `AuthorizationCodeProviderConfig` keeps `browser` and `redirectPort`, still defaulting to 3001.
