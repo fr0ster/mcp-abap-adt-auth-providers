@@ -278,7 +278,10 @@ The algorithm, stated so the implementation does not decide it by accident:
    not given explicitly — so a login that needed both makes one discovery
    request, not two.
 4. `issuerUrl` is required only when the promise is actually awaited. The
-   `{ tokenEndpoint, authorizationCode }` configuration keeps working untouched.
+   1.x `{ tokenEndpoint, authorizationCode }` configuration keeps working across
+   the migration, in its 2.0 spelling:
+   `{ tokenEndpoint, authorization: asOidcResult(staticCodeStrategy({ redirectUri, payload })) }`,
+   still with no `issuerUrl`.
 
 Explicitly out of scope: OIDC `state`. The provider does not send it today
 (`OidcBrowserProvider.ts:105-111`) even though `OidcCallbackResult` carries it.
@@ -364,8 +367,9 @@ many, not which.
 This is the diagnosis that buys back what ignoring costs. Ignoring a stray
 request means a genuinely misconfigured IdP — one that redirects without a
 `code` and without an `error` — no longer fails fast with a precise message; it
-hangs until the timeout. The reason does not disappear, it moves from the moment
-of failure to the summary.
+hangs until the timeout. Nothing is lost, but the diagnosis arrives in two
+pieces rather than one: the immediate log retains the reason, the timeout
+summary retains the tally.
 
 To give `ignore` somewhere to write, `ICallbackServerOptions` gains
 `logger?: ILogger` — transport level, the same level that already carries the
@@ -404,9 +408,12 @@ waiting for the timeout*, with `openUrl` never called and the callback port free
 once the error surfaces. Asserting only the error message would pass equally
 well against the late check this design rejected.
 
-Discovery gets two: `{ tokenEndpoint, authorizationCode }` with no `issuerUrl`
-performs no discovery request and does not throw; a login that needs both the
-authorization and the token endpoint performs exactly one.
+Discovery gets two. A provider configured with `tokenEndpoint` and
+`authorization: asOidcResult(staticCodeStrategy({ redirectUri, payload }))`, and
+no `issuerUrl`, performs no discovery request and does not throw — the 2.0
+spelling of the 1.x `{ tokenEndpoint, authorizationCode }` config, so the test is
+written against the API that will exist. A login that needs both the
+authorization and the token endpoint performs exactly one request.
 
 Side benefit: `AuthorizationCodeProvider timeout ownership` waits the full 30 s
 today and says so — "the provider exposes no way to shorten it"
