@@ -134,10 +134,13 @@ samlCallbackStrategy(opts?)    : IAuthorizationStrategy<string>              // 
 Two more replace today's hand-rolled fields:
 
 ```ts
-manualPasteStrategy(opts?)          : IAuthorizationStrategy<string>  // OAuth/OIDC code
+manualPasteStrategy(opts?)          : IAuthorizationStrategy<string>  // OAuth code
 manualSamlResponseStrategy(opts?)   : IAuthorizationStrategy<string>  // SAMLResponse
-externalCodeStrategy({ redirectUri, provide })  // provide(authorizationUrl) → payload
+externalCodeStrategy({ redirectUri, provide })  // provide(authorizationUrl) → string
 staticCodeStrategy({ redirectUri, payload })    // already held; builder never called
+
+// adapts any code-producing strategy to the OIDC provider's payload type
+asOidcResult(s: IAuthorizationStrategy<string>): IAuthorizationStrategy<OidcCallbackResult>
 
 // manual* opts: { redirectUri = 'http://localhost:61001/callback', read? }
 ```
@@ -170,6 +173,16 @@ consuming bytes that belong to the protocol.
 `externalCodeStrategy` is the repaired `authorizationCodeProvider`: it
 **receives the assembled URL**, so the code a consumer brings back is bound to
 the same PKCE verifier.
+
+Everything a human or a consumer hands back is a **string** — a code, an
+assertion. Only `oidcCallbackStrategy` yields `OidcCallbackResult`, because only
+a real callback carries `state` alongside the code. `OidcBrowserProvider`
+therefore takes `IAuthorizationStrategy<OidcCallbackResult>`, and the three
+string-producing strategies do not fit it directly. `asOidcResult` is the one
+adapter that closes the gap — it wraps `code` into `{ code }` with no `state`,
+which is exactly right for a value that never travelled through a redirect and
+so has no `state` to check. One adapter rather than an OIDC twin of every
+strategy: the mismatch is in one place, so the fix is too.
 
 `staticCodeStrategy` exists because those two cases are not one. A consumer that
 drives its own interactive flow needs the URL; a consumer that already holds a
@@ -209,8 +222,9 @@ would therefore fire only after the full timeout, or never. The builder, by
 contrast, receives the actual redirect URI as its argument and rejects before
 the browser is opened; the rejection propagates out of the callback scope, which
 releases the socket on its way. A second check before the exchange stays as a
-net for strategies that never call the builder — `externalCodeStrategy` passes
-the first one by not participating in it.
+net for the one strategy that never calls the builder — `staticCodeStrategy`,
+which holds a payload already and so never participates in the first check.
+`externalCodeStrategy` does call the builder, and is covered by it.
 
 What the guard compares differs by flow, because what the redirect is embedded
 *in* differs:
@@ -300,6 +314,23 @@ Routes that change: `GET /callback` with neither `code` nor `error`
 `settle.ignore`. An explicit `error=` from the IdP still ends the login at once,
 as it should.
 
+The OIDC route needs the same treatment, and it needs something first. Its
+handler has exactly one failure branch — missing `code`
+(`oidcBrowserAuth.ts:97-101`) — and **no `error=` branch at all**: an IdP that
+declines with `?error=access_denied` and no code is handled today as "missing
+authorization code". Swapping that branch to `ignore` without adding the missing
+one would turn an explicit refusal into a silent wait until timeout, which is
+worse than the behaviour being fixed. So the OIDC route gains both, in order:
+
+- `error=` present → `400`, then `settle.err` at once, carrying
+  `error_description` and `error_uri` when the IdP sent them, as the UAA route
+  already does (`callbackServer.ts:316-330`);
+- neither `code` nor `error` → `400`, then `settle.ignore`.
+
+Both branches get tests. The refusal branch is the one that matters: without it,
+item 3 would be fixed for two of the three flows and quietly regressed in the
+third.
+
 The SAML route needs one change beyond swapping the settle call. It answers
 `200 "SAML authentication complete"` **before** it looks at the payload
 (`saml2Auth.ts:138-147`), so a request without `SAMLResponse` is shown a success
@@ -386,13 +417,22 @@ This package's `README.md` shows `browser:` and `redirectPort:` in seven places
 (lines 89, 159, 279, 295-296, 314, 344, 359); every example is rewritten in
 terms of strategies, and the section on browser modes becomes a section on
 choosing a strategy. A 1.x → 2.0 migration section is added: a "field was →
-strategy is" table, a separate note that `authorizationCodeProvider` is replaced
-by `externalCodeStrategy` while a static `authorizationCode` becomes
-`staticCodeStrategy`, that `assertionFlow` maps by value —
+strategy is" table, worked OIDC examples showing the adapter, since the obvious
+one-line migration does not type-check without it —
+
+```ts
+// was: authorizationCode: 'abc'
+authorization: asOidcResult(staticCodeStrategy({ redirectUri, payload: 'abc' })),
+
+// was: authorizationCodeProvider: () => Promise<string>
+authorization: asOidcResult(externalCodeStrategy({ redirectUri, provide: myFlow })),
+```
+
+— a note that `assertionFlow` maps by value —
 `'browser'` → `samlCallbackStrategy`, `'manual'` → `manualSamlResponseStrategy`,
-`'assertion'` → `externalCodeStrategy` — and that the default port changed. `docs/REFACTORING_PROPOSAL.md` is checked for currency — it
-describes an `ITokenProvider` refactor that has already shipped — and updated or
-deleted. In the proxy, the description of `--browser-auth-port` is updated if it
+`'assertion'` → `externalCodeStrategy` — and that the default port changed.
+`docs/REFACTORING_PROPOSAL.md` is checked for currency — it describes an
+`ITokenProvider` refactor that has already shipped — and updated or deleted. In the proxy, the description of `--browser-auth-port` is updated if it
 describes internal mechanics.
 
 ## Risks, stated plainly
