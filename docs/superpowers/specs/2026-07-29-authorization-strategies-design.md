@@ -184,6 +184,16 @@ which is exactly right for a value that never travelled through a redirect and
 so has no `state` to check. One adapter rather than an OIDC twin of every
 strategy: the mismatch is in one place, so the fix is too.
 
+The adapter transforms the payload and **nothing else**. It passes the
+`AuthorizationRequest` through untouched, returns the wrapped strategy's
+`redirectUri` unchanged, and **delegates `dispose`** together with every
+guarantee attached to it. Delegation is not a nicety: the consumer holds only
+the adapter, so an undelegated `dispose` would strand whatever the wrapped
+strategy owns — a socket, a subscription — with no way left to reach it. When
+the wrapped strategy has no `dispose`, the adapter has none either, so the
+optionality survives the wrapping rather than being papered over with a no-op.
+A small test covers delegation and its idempotence.
+
 `staticCodeStrategy` exists because those two cases are not one. A consumer that
 drives its own interactive flow needs the URL; a consumer that already holds a
 code does not, and asking for one on its behalf would drag in OIDC discovery it
@@ -342,8 +352,14 @@ authenticated when nothing arrived.
 The timeout message carries the tally:
 
 > `Authentication timeout after 30 seconds. Please try again.` plus, when the
-> counter is non-zero, `3 request(s) reached /callback without an authorization
-> code and were ignored.`
+> counter is non-zero, `3 incomplete request(s) reached /callback and were
+> ignored.`
+
+The wording is transport-neutral deliberately. The same scope serves SAML, where
+what was missing is a `SAMLResponse`, not an authorization code; a message
+naming the code would be wrong on one flow in three. The specific reason is
+logged at the moment it happens, where it is accurate; the summary reports how
+many, not which.
 
 This is the diagnosis that buys back what ignoring costs. Ignoring a stray
 request means a genuinely misconfigured IdP — one that redirects without a
