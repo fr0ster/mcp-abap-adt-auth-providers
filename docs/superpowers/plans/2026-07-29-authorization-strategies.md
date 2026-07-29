@@ -1235,13 +1235,25 @@ function fakeFactory(opts: {
       waitForResult: () => result,
       fail: (e) => fail(e),
     };
-    options.signal?.addEventListener('abort', () =>
-      fail(new Error('Callback server aborted')),
-    );
+    // An abort ends the scope without waiting for the body — an arbitrary async
+    // function cannot be force-terminated, so the real `runCallbackScope`
+    // abandons it. A fake that awaits `use` instead would hang any test whose
+    // body never settles, which is exactly the dispose case below.
+    const aborted = new Promise<never>((_, rej) => {
+      options.signal?.addEventListener(
+        'abort',
+        () => {
+          fail(new Error('Callback server aborted'));
+          rej(new Error('Callback server aborted'));
+        },
+        { once: true },
+      );
+    });
+    void aborted.catch(() => undefined);
     opts.deliver?.({ ...handle, fail: (e) => fail(e) });
     setTimeout(() => settle('code-from-fake'), 0);
     try {
-      return await use(handle);
+      return await Promise.race([use(handle), aborted]);
     } finally {
       released = true;
     }
@@ -1418,18 +1430,25 @@ export const DEFAULT_CALLBACK_PORT = 61001;
 /** How long an interactive login may wait for its callback. */
 export const DEFAULT_LOGIN_TIMEOUT_MS = 30_000;
 
-export interface CallbackStrategyOptions {
+export interface CallbackStrategyOptions<TResult = string> {
   /** `0` binds an ephemeral port. Unusable where the IdP has a registered URI. */
   port?: number;
   timeoutMs?: number;
   /** 'none' | 'headless' print the URL; 'auto' | 'system' | 'chrome' | … open it. */
   browser?: string;
+  /**
+   * The transport. Omitted means the one this package ships for the flow; a
+   * consumer that already runs an HTTP server passes its own here and keeps
+   * everything else — which is the point of the ready constructors existing at
+   * all rather than forcing everyone through the class.
+   */
+  callbackServer?: CallbackServerFactory<TResult>;
   openUrl?: (url: string, browser: string) => Promise<void>;
   signal?: AbortSignal;
 }
 
 export interface BrowserCallbackStrategyOptions<TResult>
-  extends CallbackStrategyOptions {
+  extends CallbackStrategyOptions<TResult> {
   callbackServer: CallbackServerFactory<TResult>;
 }
 
@@ -1490,7 +1509,6 @@ export class BrowserCallbackStrategy<TResult>
     }
 
     const port = this.options.port ?? DEFAULT_CALLBACK_PORT;
-    await assertPortAvailable(port);
 
     const controller = new AbortController();
     this.controller = controller;
@@ -1504,7 +1522,17 @@ export class BrowserCallbackStrategy<TResult>
       ((url: string, which: string) =>
         launchBrowser(url, which, 0, announce, request.logger ?? null));
 
-    const run = this.options.callbackServer(
+    // Wrapped in an immediately-invoked async function, and assigned to
+    // `inFlight` in the same synchronous turn as the controller. The port probe
+    // awaits, and a `dispose` landing in that window used to find both fields
+    // still null: it resolved, reporting everything released, and the login
+    // then went on to bind a socket behind it.
+    const run = (async (): Promise<AuthorizationOutcome<TResult>> => {
+      await assertPortAvailable(port);
+      if (controller.signal.aborted) {
+        throw new Error('Authorization aborted before the callback server bound');
+      }
+      return await this.options.callbackServer(
       {
         port,
         timeoutMs: this.options.timeoutMs ?? DEFAULT_LOGIN_TIMEOUT_MS,
@@ -1533,7 +1561,8 @@ export class BrowserCallbackStrategy<TResult>
           redirectUri: server.redirectUri,
         } satisfies AuthorizationOutcome<TResult>;
       },
-    );
+      );
+    })();
 
     this.inFlight = run;
     try {
@@ -1557,30 +1586,33 @@ export class BrowserCallbackStrategy<TResult>
   }
 }
 
+// Each ready constructor defaults the transport rather than dictating it: a
+// supplied `callbackServer` wins, which is what makes substitution reachable
+// without dropping to the class.
 export function browserCallbackStrategy(
-  options: CallbackStrategyOptions = {},
+  options: CallbackStrategyOptions<string> = {},
 ): IAuthorizationStrategy<string> {
   return new BrowserCallbackStrategy<string>({
     ...options,
-    callbackServer: withBrowserCallbackServer,
+    callbackServer: options.callbackServer ?? withBrowserCallbackServer,
   });
 }
 
 export function oidcCallbackStrategy(
-  options: CallbackStrategyOptions = {},
+  options: CallbackStrategyOptions<OidcCallbackResult> = {},
 ): IAuthorizationStrategy<OidcCallbackResult> {
   return new BrowserCallbackStrategy<OidcCallbackResult>({
     ...options,
-    callbackServer: withOidcCallbackServer,
+    callbackServer: options.callbackServer ?? withOidcCallbackServer,
   });
 }
 
 export function samlCallbackStrategy(
-  options: CallbackStrategyOptions = {},
+  options: CallbackStrategyOptions<string> = {},
 ): IAuthorizationStrategy<string> {
   return new BrowserCallbackStrategy<string>({
     ...options,
-    callbackServer: withSamlCallbackServer,
+    callbackServer: options.callbackServer ?? withSamlCallbackServer,
   });
 }
 ```
@@ -2165,10 +2197,31 @@ describe('AuthorizationCodeProvider with strategies', () => {
     expect(openUrl).not.toHaveBeenCalled();
     expect(await portIsFree(PORT)).toBe(true);
   }, 30000);
+
+  it('catches the mismatch even from a strategy that never builds a URL', async () => {
+    const provider = new AuthorizationCodeProvider({
+      uaaUrl: 'http://127.0.0.1:9',
+      clientId: 'client',
+      clientSecret: 'secret',
+      authorizationUrl:
+        'https://uaa.example/oauth/authorize?client_id=c&redirect_uri=http%3A%2F%2Flocalhost%3A3001%2Fcallback&response_type=code',
+      // Holds its code already, so the builder — and the check inside it —
+      // never runs. Without the second net this would reach the exchange and
+      // come back as an opaque `invalid_grant`.
+      authorization: staticCodeStrategy({
+        redirectUri: 'http://localhost:61001/callback',
+        payload: 'held-code',
+      }),
+    });
+
+    await expect(provider.getTokens()).rejects.toThrow(
+      /redirect_uri.*but the authorization strategy used/i,
+    );
+  }, 30000);
 });
 ```
 
-Add to the file's imports: `import { jest } from '@jest/globals';` (if absent) and `import { browserCallbackStrategy } from '../../strategies';`.
+Add to the file's imports: `import { jest } from '@jest/globals';` (if absent) and `import { browserCallbackStrategy, staticCodeStrategy } from '../../strategies';`.
 
 - [ ] **Step 2: Run the tests to verify they fail**
 
@@ -2235,6 +2288,14 @@ Replace the whole of `performLogin` and drop the `LOGIN_TIMEOUT_MS` constant:
     };
 
     const prebuilt = this.config.authorizationUrl;
+    const declaredRedirect = prebuilt
+      ? new URL(prebuilt).searchParams.get('redirect_uri')
+      : null;
+
+    const mismatch = (redirectUri: string): string =>
+      `Pre-built authorizationUrl declares redirect_uri ${declaredRedirect}, ` +
+      `but the authorization strategy used ${redirectUri}. ` +
+      'They must match; an ephemeral port cannot be used with a pre-built URL.';
 
     // The provider owns the URL; the strategy owns where it is answered. The
     // guard lives here rather than after the fact because a mismatched redirect
@@ -2244,13 +2305,8 @@ Replace the whole of `performLogin` and drop the `LOGIN_TIMEOUT_MS` constant:
       logger: this.logger,
       buildAuthorizationUrl: async (redirectUri: string): Promise<string> => {
         if (prebuilt) {
-          const declared = new URL(prebuilt).searchParams.get('redirect_uri');
-          if (declared && declared !== redirectUri) {
-            throw new Error(
-              `Pre-built authorizationUrl declares redirect_uri ${declared}, ` +
-                `but the authorization strategy is listening on ${redirectUri}. ` +
-                'They must match; an ephemeral port cannot be used with a pre-built URL.',
-            );
+          if (declaredRedirect && declaredRedirect !== redirectUri) {
+            throw new Error(mismatch(redirectUri));
           }
           return prebuilt;
         }
@@ -2274,6 +2330,14 @@ Replace the whole of `performLogin` and drop the `LOGIN_TIMEOUT_MS` constant:
           });
         });
       }
+    }
+
+    // The second net. A strategy that never called the builder — `staticCodeStrategy`
+    // holds its payload already — passed the first check by not participating in
+    // it, and would otherwise reach the exchange with a redirect_uri the
+    // pre-built URL never advertised, earning an opaque `invalid_grant`.
+    if (declaredRedirect && declaredRedirect !== outcome.redirectUri) {
+      throw new Error(mismatch(outcome.redirectUri));
     }
 
     this.logger?.info('[AuthorizationCodeProvider] Code received', {
@@ -2591,6 +2655,24 @@ Add to `src/__tests__/sso/SsoProviders.test.ts`:
     expect(seen).toEqual(['PHNhbWw+']);
     expect(tokens.authorizationToken).toBe('PHNhbWw+');
   });
+
+  it('Saml2PureProvider rejects an assertion delivered to the wrong ACS', async () => {
+    const provider = new Saml2PureProvider({
+      idpSsoUrl: 'https://idp.example/sso',
+      spEntityId: 'sp',
+      acsUrl: 'http://localhost:61001/callback',
+      // Never calls the builder, so the check inside it never runs — this is
+      // what the second net exists for.
+      authorization: staticCodeStrategy({
+        redirectUri: 'http://localhost:5555/callback',
+        payload: 'PHNhbWw+',
+      }),
+      cookieProvider: async (saml) => saml,
+    });
+    await expect(provider.getTokens()).rejects.toThrow(
+      /acsUrl is http:\/\/localhost:61001\/callback, but the authorization strategy used/i,
+    );
+  });
 ```
 
 - [ ] **Step 2: Run the tests to verify they fail**
@@ -2691,6 +2773,14 @@ export async function getSamlAssertion(
   const strategy = supplied ?? samlCallbackStrategy();
   try {
     const outcome = await strategy.authorize(request);
+    // The second net, for a strategy that never called the builder and so
+    // never met the check inside it.
+    if (declaredAcs && declaredAcs !== outcome.redirectUri) {
+      throw new Error(
+        `SAML acsUrl is ${declaredAcs}, but the authorization strategy used ` +
+          `${outcome.redirectUri}. They must match.`,
+      );
+    }
     return outcome.payload;
   } finally {
     if (!supplied) {
