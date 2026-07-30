@@ -35,6 +35,12 @@ export interface Settle<TResult> {
   ok(value: TResult, res?: express.Response): void;
   /** The callback reported a failure. Ends the scope. */
   err(error: Error, res?: express.Response): void;
+  /**
+   * This was not our redirect — a reloaded tab, a prefetch, a port scanner.
+   * Answered and counted; the login keeps waiting, bounded as ever by the
+   * timeout. Ends nothing.
+   */
+  ignore(reason: string, res?: express.Response): void;
 }
 
 export type RouteSetup<TResult> = (
@@ -107,6 +113,7 @@ export async function runCallbackScope<TResult, TReturn>(
 
   let timer: NodeJS.Timeout | null = null;
   let alive = false;
+  let ignored = 0;
 
   const settleResult = (
     outcome: { value: TResult } | { error: Error },
@@ -206,6 +213,13 @@ export async function runCallbackScope<TResult, TReturn>(
         endScope({ error });
       });
     },
+    ignore(reason) {
+      ignored += 1;
+      options.logger?.warn(
+        '[callbackServer] ignored an incomplete callback request',
+        { reason, ignored },
+      );
+    },
   };
 
   routes(app, settle);
@@ -224,9 +238,13 @@ export async function runCallbackScope<TResult, TReturn>(
     }
     alive = true;
     timer = setTimeout(() => {
+      const tally =
+        ignored > 0
+          ? ` ${ignored} incomplete request(s) reached /callback and were ignored.`
+          : '';
       endScope({
         error: new Error(
-          `Authentication timeout after ${options.timeoutMs / 1000} seconds. Please try again.`,
+          `Authentication timeout after ${options.timeoutMs / 1000} seconds. Please try again.${tally}`,
         ),
       });
     }, options.timeoutMs);
@@ -333,8 +351,8 @@ export const withBrowserCallbackServer: CallbackServerFactory<string> = (
 
         const { code } = req.query;
         if (!code || typeof code !== 'string') {
-          res.status(400).send('Error: Authorization code missing');
-          settle.err(new Error('Authorization code missing'), res);
+          res.status(400).send('Error: not an authorization callback');
+          settle.ignore('no code and no error in query', res);
           return;
         }
 

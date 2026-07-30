@@ -263,17 +263,17 @@ describe('withBrowserCallbackServer', () => {
     ).rejects.toThrow('too late for the payload');
   }, 30000);
 
-  it('ends the login and releases the port on a callback with no code', async () => {
+  it('ignores an incomplete callback and times out', async () => {
     await expect(
       withBrowserCallbackServer(
-        { port: PORT, timeoutMs: 5000 },
+        { port: PORT, timeoutMs: 1500 },
         async (srv) => {
           const waiting = srv.waitForResult();
           void deliver('');
           return await waiting;
         },
       ),
-    ).rejects.toThrow(/code/i);
+    ).rejects.toThrow(/incomplete request\(s\)/);
   }, 30000);
 
   it('reports an OAuth error immediately rather than timing out', async () => {
@@ -488,6 +488,44 @@ describe('withBrowserCallbackServer', () => {
       );
       expect(code).toBe('eph');
       expect(await portIsFree(observed)).toBe(true);
+    }, 30000);
+  });
+
+  describe('incomplete callbacks', () => {
+    it('answers 400 and keeps waiting when neither code nor error arrived', async () => {
+      const code = await withBrowserCallbackServer(
+        { port: PORT, timeoutMs: 5000 },
+        async (srv) => {
+          const waiting = srv.waitForResult();
+          const stray = await httpGet('/callback');
+          expect(stray.status).toBe(400);
+          // The scope survived the stray request and still accepts a real one.
+          void deliver('?code=after-stray');
+          return await waiting;
+        },
+      );
+      expect(code).toBe('after-stray');
+    }, 30000);
+
+    it('counts ignored requests in the timeout message', async () => {
+      const attempt = withBrowserCallbackServer(
+        { port: PORT, timeoutMs: 1500 },
+        async (srv) => await srv.waitForResult(),
+      );
+      await httpGet('/callback');
+      await httpGet('/callback');
+      await expect(attempt).rejects.toThrow(
+        /2 incomplete request\(s\) reached \/callback and were ignored/,
+      );
+    }, 30000);
+
+    it('still ends the login at once on an explicit IdP error', async () => {
+      const attempt = withBrowserCallbackServer(
+        { port: PORT, timeoutMs: 30000 },
+        async (srv) => await srv.waitForResult(),
+      );
+      void deliver('?error=access_denied&error_description=User%20said%20no');
+      await expect(attempt).rejects.toThrow(/access_denied: User said no/);
     }, 30000);
   });
 });

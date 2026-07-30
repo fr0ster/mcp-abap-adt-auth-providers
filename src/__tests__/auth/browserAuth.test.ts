@@ -563,11 +563,11 @@ describe('startBrowserAuth port lifetime', () => {
       uaaClientId: 'client',
       uaaClientSecret: 'secret',
     };
-    const login = startBrowserAuth(authConfig, 'none', undefined, PORT);
+    const login = startBrowserAuth(authConfig, 'none', undefined, PORT, 2000);
     // Attach the expectation before delivering: the rejection lands as soon as
-    // the callback arrives, and an unattached promise would be reported as an
+    // the timeout expires, and an unattached promise would be reported as an
     // unhandled rejection instead of a passing assertion.
-    const rejected = expect(login).rejects.toThrow(/code missing/i);
+    const rejected = expect(login).rejects.toThrow(/incomplete request/i);
     await new Promise((r) => setTimeout(r, 300));
     await get('/callback');
     await rejected;
