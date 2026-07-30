@@ -18,7 +18,8 @@
 - Default callback port is `61001` — above Linux `ip_local_port_range` (32768–60999) and clear of the 3001/3333 range the proxy uses. Default login timeout is `30_000` ms.
 - Nothing may write to `process.stdout`. User-facing prompts go to the logger, or to `process.stderr` when no logger exists — stdout carries MCP/LSP protocol traffic.
 - `npm run lint:check` and `npm run build` must pass before every commit; `npm test` before every push.
-- Repos live side by side under `/home/okyslytsia/prj/`: `mcp-abap-adt-interfaces`, `mcp-abap-adt-auth-providers`, `mcp-abap-adt-proxy`, `mcp-abap-adt-auth-broker`.
+- **All work happens in worktrees, never in the main checkouts.** Each of the four repos under `/home/okyslytsia/prj/` has one at `<repo>/.worktrees/authorization-strategies`, on branch `feat/authorization-strategies`; every absolute path in this plan already points there. The main checkouts stay on their default branches so unrelated work cannot collide with this arc. `node_modules` is not shared between a repo and its worktree — run `npm install` in the worktree before its first build.
+- Default branches differ: `interfaces` and `auth-providers` use `master`, `proxy` and `auth-broker` use `main`.
 
 ## File Structure
 
@@ -53,9 +54,9 @@ Strategies get their own directory rather than joining `src/auth/`: they are the
 ### Task 1: Add the authorization strategy contract
 
 **Files:**
-- Create: `/home/okyslytsia/prj/mcp-abap-adt-interfaces/src/auth/IAuthorizationStrategy.ts`
-- Modify: `/home/okyslytsia/prj/mcp-abap-adt-interfaces/src/index.ts`
-- Test: `/home/okyslytsia/prj/mcp-abap-adt-interfaces/src/__typechecks__/authorizationStrategy.ts`
+- Create: `/home/okyslytsia/prj/mcp-abap-adt-interfaces/.worktrees/authorization-strategies/src/auth/IAuthorizationStrategy.ts`
+- Modify: `/home/okyslytsia/prj/mcp-abap-adt-interfaces/.worktrees/authorization-strategies/src/index.ts`
+- Test: `/home/okyslytsia/prj/mcp-abap-adt-interfaces/.worktrees/authorization-strategies/src/__typechecks__/authorizationStrategy.ts`
 
 **Interfaces:**
 - Consumes: `ILogger` from `../logging/ILogger`.
@@ -108,7 +109,7 @@ void _samlOutcome;
 - [ ] **Step 2: Run the typecheck to verify it fails**
 
 ```bash
-cd /home/okyslytsia/prj/mcp-abap-adt-interfaces && npm run test:check
+cd /home/okyslytsia/prj/mcp-abap-adt-interfaces/.worktrees/authorization-strategies && npm run test:check
 ```
 
 Expected: FAIL — `Cannot find module '../auth/IAuthorizationStrategy'`.
@@ -201,7 +202,7 @@ export type {
 - [ ] **Step 5: Run the typecheck to verify it passes**
 
 ```bash
-cd /home/okyslytsia/prj/mcp-abap-adt-interfaces && npm run test:check && npm run lint:check && npm run build
+cd /home/okyslytsia/prj/mcp-abap-adt-interfaces/.worktrees/authorization-strategies && npm run test:check && npm run lint:check && npm run build
 ```
 
 Expected: all three succeed.
@@ -209,7 +210,7 @@ Expected: all three succeed.
 - [ ] **Step 6: Commit**
 
 ```bash
-cd /home/okyslytsia/prj/mcp-abap-adt-interfaces
+cd /home/okyslytsia/prj/mcp-abap-adt-interfaces/.worktrees/authorization-strategies
 git add src/auth/IAuthorizationStrategy.ts src/index.ts src/__typechecks__/authorizationStrategy.ts
 git commit -m "feat: add IAuthorizationStrategy contract"
 ```
@@ -219,8 +220,8 @@ git commit -m "feat: add IAuthorizationStrategy contract"
 ### Task 2: Allow an ephemeral callback port and a transport logger
 
 **Files:**
-- Modify: `/home/okyslytsia/prj/mcp-abap-adt-interfaces/src/auth/ICallbackServer.ts:15-45`
-- Test: `/home/okyslytsia/prj/mcp-abap-adt-interfaces/src/__typechecks__/authorizationStrategy.ts`
+- Modify: `/home/okyslytsia/prj/mcp-abap-adt-interfaces/.worktrees/authorization-strategies/src/auth/ICallbackServer.ts:15-45`
+- Test: `/home/okyslytsia/prj/mcp-abap-adt-interfaces/.worktrees/authorization-strategies/src/__typechecks__/authorizationStrategy.ts`
 
 **Interfaces:**
 - Produces: `ICallbackServerOptions` gains `logger?: ILogger`; `port` accepts `0`.
@@ -252,7 +253,7 @@ void _ephemeral;
 - [ ] **Step 2: Run the typecheck to verify it fails**
 
 ```bash
-cd /home/okyslytsia/prj/mcp-abap-adt-interfaces && npm run test:check
+cd /home/okyslytsia/prj/mcp-abap-adt-interfaces/.worktrees/authorization-strategies && npm run test:check
 ```
 
 Expected: FAIL — `Object literal may only specify known properties, and 'logger' does not exist in type 'ICallbackServerOptions'`.
@@ -292,7 +293,7 @@ import type { ILogger } from '../logging/ILogger';
 - [ ] **Step 4: Run the typecheck to verify it passes**
 
 ```bash
-cd /home/okyslytsia/prj/mcp-abap-adt-interfaces && npm run test:check && npm run lint:check && npm run build
+cd /home/okyslytsia/prj/mcp-abap-adt-interfaces/.worktrees/authorization-strategies && npm run test:check && npm run lint:check && npm run build
 ```
 
 Expected: all three succeed.
@@ -300,7 +301,7 @@ Expected: all three succeed.
 - [ ] **Step 5: Commit**
 
 ```bash
-cd /home/okyslytsia/prj/mcp-abap-adt-interfaces
+cd /home/okyslytsia/prj/mcp-abap-adt-interfaces/.worktrees/authorization-strategies
 git add src/auth/ICallbackServer.ts src/__typechecks__/authorizationStrategy.ts
 git commit -m "feat: allow an ephemeral callback port and a transport logger"
 ```
@@ -310,13 +311,13 @@ git commit -m "feat: allow an ephemeral callback port and a transport logger"
 ### Task 3: Release `interfaces@11.6.0`
 
 **Files:**
-- Modify: `/home/okyslytsia/prj/mcp-abap-adt-interfaces/package.json` (version)
-- Modify: `/home/okyslytsia/prj/mcp-abap-adt-interfaces/CHANGELOG.md`
+- Modify: `/home/okyslytsia/prj/mcp-abap-adt-interfaces/.worktrees/authorization-strategies/package.json` (version)
+- Modify: `/home/okyslytsia/prj/mcp-abap-adt-interfaces/.worktrees/authorization-strategies/CHANGELOG.md`
 
 - [ ] **Step 1: Open the tracking issue**
 
 ```bash
-cd /home/okyslytsia/prj/mcp-abap-adt-interfaces
+cd /home/okyslytsia/prj/mcp-abap-adt-interfaces/.worktrees/authorization-strategies
 gh issue create --title "Add IAuthorizationStrategy and allow an ephemeral callback port" \
   --body "Needed by mcp-abap-adt-auth-providers#11. Adds \`IAuthorizationStrategy\`/\`AuthorizationRequest\`/\`AuthorizationOutcome\`, allows \`ICallbackServerOptions.port === 0\`, and adds \`ICallbackServerOptions.logger\`. Purely additive: no existing consumer changes behaviour. Consumer impact: auth-providers@2.0.0."
 ```
@@ -361,7 +362,7 @@ Prepend to `CHANGELOG.md` beneath the title, matching the file's existing headin
 - [ ] **Step 4: Verify, commit, push the branch and open the PR**
 
 ```bash
-cd /home/okyslytsia/prj/mcp-abap-adt-interfaces
+cd /home/okyslytsia/prj/mcp-abap-adt-interfaces/.worktrees/authorization-strategies
 npm run lint:check && npm run test:check && npm run build
 git add package.json CHANGELOG.md
 git commit -m "release(11.6.0): authorization strategy contract"
@@ -388,7 +389,7 @@ Consumer impact: auth-providers@2.0.0 depends on this."
 - [ ] **Step 5: Merge and tag**
 
 ```bash
-cd /home/okyslytsia/prj/mcp-abap-adt-interfaces
+cd /home/okyslytsia/prj/mcp-abap-adt-interfaces/.worktrees/authorization-strategies
 gh pr merge --squash --delete-branch
 git checkout master && git pull --ff-only
 git tag -a v11.6.0 -m "Authorization strategy contract, ephemeral callback port"
@@ -401,7 +402,7 @@ If the default branch is `main` rather than `master`, use that — check with `g
 
 Stop here and tell the user:
 
-> `interfaces@11.6.0` is tagged and pushed. Next step is yours: `cd /home/okyslytsia/prj/mcp-abap-adt-interfaces && npm publish`. Tell me when it is on the registry.
+> `interfaces@11.6.0` is tagged and pushed. Next step is yours: `cd /home/okyslytsia/prj/mcp-abap-adt-interfaces/.worktrees/authorization-strategies && npm publish`. Tell me when it is on the registry.
 
 Do not proceed to Phase B until the user confirms.
 
@@ -412,12 +413,12 @@ Do not proceed to Phase B until the user confirms.
 ### Task 4: Consume the new interfaces build
 
 **Files:**
-- Modify: `/home/okyslytsia/prj/mcp-abap-adt-auth-providers/package.json:61`
+- Modify: `/home/okyslytsia/prj/mcp-abap-adt-auth-providers/.worktrees/authorization-strategies/package.json:61`
 
 - [ ] **Step 1: Create the branch and bump the dependency**
 
 ```bash
-cd /home/okyslytsia/prj/mcp-abap-adt-auth-providers
+cd /home/okyslytsia/prj/mcp-abap-adt-auth-providers/.worktrees/authorization-strategies
 git checkout -b feat/authorization-strategies
 ```
 
@@ -428,7 +429,7 @@ In `package.json`, change `"@mcp-abap-adt/interfaces": "^11.4.0"` to `"^11.6.0"`
 npm keeps stale `.d.ts` files after a range bump, which produces type errors that have nothing to do with your code.
 
 ```bash
-cd /home/okyslytsia/prj/mcp-abap-adt-auth-providers
+cd /home/okyslytsia/prj/mcp-abap-adt-auth-providers/.worktrees/authorization-strategies
 rm -rf node_modules/@mcp-abap-adt/interfaces
 npm install @mcp-abap-adt/interfaces@11.6.0 --save
 ```
@@ -525,7 +526,7 @@ function httpGet(path: string): Promise<{ status: number; body: string }> {
 - [ ] **Step 2: Run the test to verify it fails**
 
 ```bash
-cd /home/okyslytsia/prj/mcp-abap-adt-auth-providers
+cd /home/okyslytsia/prj/mcp-abap-adt-auth-providers/.worktrees/authorization-strategies
 npm test -- src/__tests__/auth/callbackServer.test.ts -t "reports the bound port"
 ```
 
@@ -3330,7 +3331,7 @@ git push --tags
 
 Then tell the user:
 
-> `auth-providers@2.0.0` is tagged and pushed. Next step is yours: `cd /home/okyslytsia/prj/mcp-abap-adt-auth-providers && npm publish`. Tell me when it is on the registry.
+> `auth-providers@2.0.0` is tagged and pushed. Next step is yours: `cd /home/okyslytsia/prj/mcp-abap-adt-auth-providers/.worktrees/authorization-strategies && npm publish`. Tell me when it is on the registry.
 
 Wait for confirmation before Phase C.
 
@@ -3341,7 +3342,7 @@ Wait for confirmation before Phase C.
 ### Task 18: Realign the proxy
 
 **Files:**
-- Modify: `/home/okyslytsia/prj/mcp-abap-adt-proxy/src/proxy/btpProxy.ts:295-298`, `package.json`, `CHANGELOG.md`
+- Modify: `/home/okyslytsia/prj/mcp-abap-adt-proxy/.worktrees/authorization-strategies/src/proxy/btpProxy.ts:295-298`, `package.json`, `CHANGELOG.md`
 
 **Interfaces:**
 - Consumes: `browserCallbackStrategy` from `@mcp-abap-adt/auth-providers@2.0.0`.
@@ -3349,7 +3350,7 @@ Wait for confirmation before Phase C.
 - [ ] **Step 1: Branch, bump, force-refresh**
 
 ```bash
-cd /home/okyslytsia/prj/mcp-abap-adt-proxy
+cd /home/okyslytsia/prj/mcp-abap-adt-proxy/.worktrees/authorization-strategies
 git checkout -b feat/authorization-strategies
 rm -rf node_modules/@mcp-abap-adt/auth-providers
 npm install @mcp-abap-adt/auth-providers@2.0.0 --save
@@ -3438,14 +3439,14 @@ Then hand the publish to the user, as before.
 ### Task 19: Update the broker's integration tests
 
 **Files:**
-- Modify: `/home/okyslytsia/prj/mcp-abap-adt-auth-broker/src/__tests__/broker/AuthBroker.integration.test.ts:175,235,381,664,771`, `package.json`, `CHANGELOG.md`
+- Modify: `/home/okyslytsia/prj/mcp-abap-adt-auth-broker/.worktrees/authorization-strategies/src/__tests__/broker/AuthBroker.integration.test.ts:175,235,381,664,771`, `package.json`, `CHANGELOG.md`
 
 The broker has no functional dependency on auth-providers — only its integration tests construct `AuthorizationCodeProvider` directly.
 
 - [ ] **Step 1: Branch, bump, force-refresh**
 
 ```bash
-cd /home/okyslytsia/prj/mcp-abap-adt-auth-broker
+cd /home/okyslytsia/prj/mcp-abap-adt-auth-broker/.worktrees/authorization-strategies
 git checkout -b feat/authorization-strategies
 rm -rf node_modules/@mcp-abap-adt/auth-providers
 npm install @mcp-abap-adt/auth-providers@2.0.0 --save-dev
@@ -3486,7 +3487,7 @@ Integration tests skip without `tests/test-config.yaml`; that is expected and fi
 Bump to `1.0.9`, add a CHANGELOG entry noting that only test wiring changed, then PR → merge → tag → hand the publish to the user. `auth-broker`'s default branch is **`main`**:
 
 ```bash
-cd /home/okyslytsia/prj/mcp-abap-adt-auth-broker
+cd /home/okyslytsia/prj/mcp-abap-adt-auth-broker/.worktrees/authorization-strategies
 git add -A && git commit -m "release(1.0.9): realign tests with auth-providers@2.0.0"
 git push -u origin feat/authorization-strategies
 gh pr create --title "release(1.0.9): realign tests with auth-providers@2.0.0" \
@@ -3504,7 +3505,7 @@ git push --tags
 - [ ] **Step 1: Close the issue**
 
 ```bash
-cd /home/okyslytsia/prj/mcp-abap-adt-auth-providers
+cd /home/okyslytsia/prj/mcp-abap-adt-auth-providers/.worktrees/authorization-strategies
 gh issue close 11 --comment "Closed by auth-providers@2.0.0. All three deferred items are done: callback reception is behind \`IAuthorizationStrategy\` with the transport factories exported, ephemeral ports work where the IdP allows a loopback redirect on any port, and a code-less callback is answered, counted and reported rather than ending the login. Realigned: interfaces@11.6.0, proxy@1.7.0, auth-broker@1.0.9."
 ```
 
