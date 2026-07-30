@@ -12,7 +12,7 @@
 
 ## Global Constraints
 
-- Release order is strict: `interfaces@11.5.0` → `auth-providers@2.0.0` → `proxy@1.7.0` → `auth-broker@1.0.9`. A consumer is never bumped before its dependency is published.
+- Release order is strict: `interfaces@11.6.0` → `auth-providers@2.0.0` → `proxy@1.7.0` → `auth-broker@1.0.9`. A consumer is never bumped before its dependency is published.
 - **The agent never runs `npm publish`.** Tag, push the tag, then tell the user to publish and wait for confirmation.
 - Every package: branch (`feat/authorization-strategies`), PR referencing the issue, squash merge, tag `vX.Y.Z`, push tag.
 - Default callback port is `61001` — above Linux `ip_local_port_range` (32768–60999) and clear of the 3001/3333 range the proxy uses. Default login timeout is `30_000` ms.
@@ -48,7 +48,7 @@ Strategies get their own directory rather than joining `src/auth/`: they are the
 
 ---
 
-# Phase A — `interfaces@11.5.0`
+# Phase A — `interfaces@11.6.0`
 
 ### Task 1: Add the authorization strategy contract
 
@@ -307,7 +307,7 @@ git commit -m "feat: allow an ephemeral callback port and a transport logger"
 
 ---
 
-### Task 3: Release `interfaces@11.5.0`
+### Task 3: Release `interfaces@11.6.0`
 
 **Files:**
 - Modify: `/home/okyslytsia/prj/mcp-abap-adt-interfaces/package.json` (version)
@@ -325,14 +325,24 @@ Note the issue number it prints; call it `$IFACE_ISSUE`.
 
 - [ ] **Step 2: Bump the version**
 
-In `package.json`, set `"version": "11.5.0"`.
+In `package.json`, set `"version": "11.6.0"`.
+
+`11.5.0` is taken: it shipped the connection capability atoms (PRs #24-#26) after this plan was written, and its published tarball carries `ICallbackServer` but no `IAuthorizationStrategy`. This repo releases on its own cadence, so confirm the number is still free before committing it rather than trusting this line:
+
+```bash
+npm view @mcp-abap-adt/interfaces versions --json | tail -3
+grep '"version"' package.json   # what HEAD already claims
+git describe --tags --exact-match HEAD
+```
+
+If `HEAD` is already tagged at the version in `package.json`, that version is released — take the next minor above the highest on the registry.
 
 - [ ] **Step 3: Write the changelog entry**
 
 Prepend to `CHANGELOG.md` beneath the title, matching the file's existing heading style:
 
 ```markdown
-## 11.5.0
+## 11.6.0
 
 ### Added
 
@@ -354,7 +364,7 @@ Prepend to `CHANGELOG.md` beneath the title, matching the file's existing headin
 cd /home/okyslytsia/prj/mcp-abap-adt-interfaces
 npm run lint:check && npm run test:check && npm run build
 git add package.json CHANGELOG.md
-git commit -m "release(11.5.0): authorization strategy contract"
+git commit -m "release(11.6.0): authorization strategy contract"
 git push -u origin feat/authorization-strategies
 gh pr create --title "feat: authorization strategy contract + ephemeral callback port" \
   --body "Closes #$IFACE_ISSUE
@@ -381,7 +391,7 @@ Consumer impact: auth-providers@2.0.0 depends on this."
 cd /home/okyslytsia/prj/mcp-abap-adt-interfaces
 gh pr merge --squash --delete-branch
 git checkout master && git pull --ff-only
-git tag -a v11.5.0 -m "Authorization strategy contract, ephemeral callback port"
+git tag -a v11.6.0 -m "Authorization strategy contract, ephemeral callback port"
 git push --tags
 ```
 
@@ -391,7 +401,7 @@ If the default branch is `main` rather than `master`, use that — check with `g
 
 Stop here and tell the user:
 
-> `interfaces@11.5.0` is tagged and pushed. Next step is yours: `cd /home/okyslytsia/prj/mcp-abap-adt-interfaces && npm publish`. Tell me when it is on the registry.
+> `interfaces@11.6.0` is tagged and pushed. Next step is yours: `cd /home/okyslytsia/prj/mcp-abap-adt-interfaces && npm publish`. Tell me when it is on the registry.
 
 Do not proceed to Phase B until the user confirms.
 
@@ -411,7 +421,7 @@ cd /home/okyslytsia/prj/mcp-abap-adt-auth-providers
 git checkout -b feat/authorization-strategies
 ```
 
-In `package.json`, change `"@mcp-abap-adt/interfaces": "^11.4.0"` to `"^11.5.0"`.
+In `package.json`, change `"@mcp-abap-adt/interfaces": "^11.4.0"` to `"^11.6.0"`.
 
 - [ ] **Step 2: Force-refresh the installed copy**
 
@@ -420,7 +430,7 @@ npm keeps stale `.d.ts` files after a range bump, which produces type errors tha
 ```bash
 cd /home/okyslytsia/prj/mcp-abap-adt-auth-providers
 rm -rf node_modules/@mcp-abap-adt/interfaces
-npm install @mcp-abap-adt/interfaces@11.5.0 --save
+npm install @mcp-abap-adt/interfaces@11.6.0 --save
 ```
 
 - [ ] **Step 3: Verify the installed version — not the registry's**
@@ -430,7 +440,7 @@ grep '"version"' node_modules/@mcp-abap-adt/interfaces/package.json
 grep -c "IAuthorizationStrategy" node_modules/@mcp-abap-adt/interfaces/dist/index.d.ts
 ```
 
-Expected: `11.5.0`, and a count of at least 1. `npm view` reports the registry, not what is on disk — do not use it here.
+Expected: `11.6.0`, and a count of at least 1. `npm view` reports the registry, not what is on disk — do not use it here.
 
 - [ ] **Step 4: Confirm the tree still builds**
 
@@ -444,7 +454,7 @@ Expected: green. Nothing consumes the new types yet.
 
 ```bash
 git add package.json package-lock.json
-git commit -m "chore: depend on interfaces@11.5.0"
+git commit -m "chore: depend on interfaces@11.6.0"
 ```
 
 ---
@@ -3495,7 +3505,7 @@ git push --tags
 
 ```bash
 cd /home/okyslytsia/prj/mcp-abap-adt-auth-providers
-gh issue close 11 --comment "Closed by auth-providers@2.0.0. All three deferred items are done: callback reception is behind \`IAuthorizationStrategy\` with the transport factories exported, ephemeral ports work where the IdP allows a loopback redirect on any port, and a code-less callback is answered, counted and reported rather than ending the login. Realigned: interfaces@11.5.0, proxy@1.7.0, auth-broker@1.0.9."
+gh issue close 11 --comment "Closed by auth-providers@2.0.0. All three deferred items are done: callback reception is behind \`IAuthorizationStrategy\` with the transport factories exported, ephemeral ports work where the IdP allows a loopback redirect on any port, and a code-less callback is answered, counted and reported rather than ending the login. Realigned: interfaces@11.6.0, proxy@1.7.0, auth-broker@1.0.9."
 ```
 
 - [ ] **Step 2: Delete the implemented spec and plan**
