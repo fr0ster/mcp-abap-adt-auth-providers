@@ -1192,7 +1192,7 @@ git commit -m "refactor: build and exchange around a redirect URI rather than a 
   - `oidcCallbackStrategy(opts?): IAuthorizationStrategy<OidcCallbackResult>`
   - `samlCallbackStrategy(opts?): IAuthorizationStrategy<string>`
   - `interface CallbackStrategyOptions<TResult = string> { port?: number; timeoutMs?: number; browser?: string; callbackServer?: CallbackServerFactory<TResult>; openUrl?: (url: string, browser: string, redirectUri: string) => Promise<void>; signal?: AbortSignal }` — `callbackServer` is what makes the transport replaceable without dropping to the class; each ready constructor defaults it rather than overwriting it.
-  - `BrowserCallbackStrategyOptions<TResult>` adds `callbackServer` (required) and `remoteHint?: (redirectUri: string) => string`, supplied only by `browserCallbackStrategy` — the UAA transport is the only one with a paste form.
+  - `remoteHint?: (redirectUri: string) => string` is part of `CallbackStrategyOptions`, because it describes a route and therefore belongs to whoever supplied the transport. `browserCallbackStrategy` defaults it only when it also supplied the transport; `BrowserCallbackStrategyOptions<TResult>` merely makes `callbackServer` required.
   - `launchBrowser(authorizationUrl, browser, callbackUri: string, announce, log, remoteHint?)` — takes the bound URI rather than a port.
 
 - [ ] **Step 1: Write the failing tests**
@@ -1212,8 +1212,10 @@ import netModule from 'node:net';
 import { describe, expect, it, jest } from '@jest/globals';
 import type {
   CallbackServerFactory,
+  IAuthorizationStrategy,
   ICallbackServerHandle,
 } from '@mcp-abap-adt/interfaces';
+import { withBrowserCallbackServer } from '../../auth/callbackServer';
 import {
   BrowserCallbackStrategy,
   browserCallbackStrategy,
@@ -1457,66 +1459,74 @@ describe('BrowserCallbackStrategy', () => {
     expect(text).not.toContain(':0/');
   });
 
-  it('offers the paste form only for the flow whose transport has one', async () => {
-    const capture = () => {
+  it('offers the paste form only when it supplied the transport that has one', async () => {
+    // Real transports here, not fakes: the claim under test is whether a `/`
+    // route exists, which a fake cannot answer either way. Each binds an
+    // ephemeral port and waits; a short timeout is what ends it.
+    const announcedBy = async (
+      strategy: IAuthorizationStrategy<unknown>,
+    ): Promise<string> => {
       const infos: string[] = [];
-      return {
-        infos,
-        logger: {
-          debug: () => undefined,
-          info: (msg: string) => {
-            infos.push(msg);
-          },
-          warn: () => undefined,
-          error: () => undefined,
+      const logger = {
+        debug: () => undefined,
+        info: (msg: string) => {
+          infos.push(msg);
         },
+        warn: () => undefined,
+        error: () => undefined,
       };
+      await expect(
+        strategy.authorize({
+          buildAuthorizationUrl: async () => 'https://idp.example/authorize',
+          logger,
+        }),
+      ).rejects.toThrow(/timeout/i);
+      return infos.join('\n');
     };
 
-    const uaa = capture();
-    await browserCallbackStrategy({
-      port: 0,
-      browser: 'none',
-      callbackServer: fakeFactory({ boundPort: 49996 }).factory,
-    }).authorize({
-      buildAuthorizationUrl: async () => 'https://uaa.example/authorize',
-      logger: uaa.logger,
-    });
-    expect(uaa.infos.join('\n')).toContain(
-      'paste it at http://localhost:49996/',
+    const shared = { port: 0, browser: 'none', timeoutMs: 300 } as const;
+
+    // Ours, and it really serves a paste form.
+    expect(await announcedBy(browserCallbackStrategy({ ...shared }))).toMatch(
+      /paste it at http:\/\/localhost:\d+\//,
     );
 
-    // OIDC and SAML callback servers have no `/` route, so promising a paste
-    // form there would send the user to a 404. The stdin invitation is gone
-    // too — that is `manualPasteStrategy`'s job now.
-    for (const build of [
-      () =>
-        oidcCallbackStrategy({
-          port: 0,
-          browser: 'none',
-          callbackServer: fakeFactory<{ code: string }>({
-            boundPort: 49995,
-            payload: { code: 'c' },
-          }).factory,
+    // The same transport — but supplied by the caller. The rule is about who
+    // supplied it, not what it is: once a receiver is injected, the package no
+    // longer knows which routes it serves, and a consumer that does can say so
+    // through `remoteHint`.
+    expect(
+      await announcedBy(
+        browserCallbackStrategy({
+          ...shared,
+          callbackServer: withBrowserCallbackServer,
         }),
-      () =>
-        samlCallbackStrategy({
-          port: 0,
-          browser: 'none',
-          callbackServer: fakeFactory({ boundPort: 49994 }).factory,
+      ),
+    ).not.toMatch(/paste it at/i);
+
+    // An injected transport that does serve a form can still say so.
+    expect(
+      await announcedBy(
+        browserCallbackStrategy({
+          ...shared,
+          callbackServer: withBrowserCallbackServer,
+          remoteHint: () => '   paste it at http://elsewhere.example/',
         }),
+      ),
+    ).toContain('paste it at http://elsewhere.example/');
+
+    // The OIDC and SAML transports have no `/` route at all, and the stdin
+    // invitation is gone — that is `manualPasteStrategy`'s job now.
+    for (const strategy of [
+      oidcCallbackStrategy({ ...shared }),
+      samlCallbackStrategy({ ...shared }),
     ]) {
-      const seen = capture();
-      await build().authorize({
-        buildAuthorizationUrl: async () => 'https://idp.example/authorize',
-        logger: seen.logger,
-      });
-      const text = seen.infos.join('\n');
+      const text = await announcedBy(strategy);
       expect(text).not.toMatch(/paste it at/i);
       expect(text).not.toMatch(/press Enter/i);
-      expect(text).toMatch(/Waiting for callback on http:\/\/localhost:499/);
+      expect(text).toMatch(/Waiting for callback on http:\/\/localhost:\d+\//);
     }
-  });
+  }, 30000);
 
   it('honours a signal that was already aborted', async () => {
     const { factory, released } = fakeFactory({});
@@ -1656,19 +1666,22 @@ export interface CallbackStrategyOptions<TResult = string> {
     browser: string,
     redirectUri: string,
   ) => Promise<void>;
+  /**
+   * Extra guidance for 'none'/'headless', built from the URI actually bound —
+   * "if your browser is elsewhere, do this instead".
+   *
+   * It describes a *route*, so it belongs to whoever supplied the transport. A
+   * consumer injecting its own `callbackServer` states its own hint here; the
+   * package supplies one only for the transport it ships, and never guesses on
+   * behalf of an injected one.
+   */
+  remoteHint?: (redirectUri: string) => string;
   signal?: AbortSignal;
 }
 
 export interface BrowserCallbackStrategyOptions<TResult>
   extends CallbackStrategyOptions<TResult> {
   callbackServer: CallbackServerFactory<TResult>;
-  /**
-   * Extra guidance for 'none'/'headless', built from the URI actually bound.
-   * Supplied only by a flow whose transport offers a way in besides the
-   * redirect — the UAA paste form. Absent for OIDC and SAML, whose callback
-   * servers have no such route.
-   */
-  remoteHint?: (redirectUri: string) => string;
 }
 
 /**
@@ -1821,17 +1834,24 @@ export class BrowserCallbackStrategy<TResult>
 // Each ready constructor defaults the transport rather than dictating it: a
 // supplied `callbackServer` wins, which is what makes substitution reachable
 // without dropping to the class.
+/** The paste form `withBrowserCallbackServer` serves on `/` — and nothing else does. */
+const uaaPasteHint = (redirectUri: string): string =>
+  '   If your browser is on another machine, copy the `code` from the ' +
+  `address bar after login and paste it at ${new URL(redirectUri).origin}/`;
+
 export function browserCallbackStrategy(
   options: CallbackStrategyOptions<string> = {},
 ): IAuthorizationStrategy<string> {
   return new BrowserCallbackStrategy<string>({
     ...options,
     callbackServer: options.callbackServer ?? withBrowserCallbackServer,
-    // Only this flow's transport has a paste form on `/`. Derived from the URI
-    // that was bound, so an ephemeral port names the port it actually got.
-    remoteHint: (redirectUri) =>
-      '   If your browser is on another machine, copy the `code` from the ' +
-      `address bar after login and paste it at ${new URL(redirectUri).origin}/`,
+    // An explicit hint always wins. Otherwise the default applies only when we
+    // supplied the transport: an injected receiver may have no `/` route, and
+    // the replaceable receiver is the whole point of this design, so assuming
+    // one would advertise a 404 to exactly the consumers the design is for.
+    remoteHint:
+      options.remoteHint ??
+      (options.callbackServer ? undefined : uaaPasteHint),
   });
 }
 
