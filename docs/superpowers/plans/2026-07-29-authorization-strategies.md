@@ -1191,7 +1191,9 @@ git commit -m "refactor: build and exchange around a redirect URI rather than a 
   - `browserCallbackStrategy(opts?): IAuthorizationStrategy<string>`
   - `oidcCallbackStrategy(opts?): IAuthorizationStrategy<OidcCallbackResult>`
   - `samlCallbackStrategy(opts?): IAuthorizationStrategy<string>`
-  - `interface CallbackStrategyOptions<TResult = string> { port?: number; timeoutMs?: number; browser?: string; callbackServer?: CallbackServerFactory<TResult>; openUrl?: (url: string, browser: string) => Promise<void>; signal?: AbortSignal }` — `callbackServer` is what makes the transport replaceable without dropping to the class; each ready constructor defaults it rather than overwriting it.
+  - `interface CallbackStrategyOptions<TResult = string> { port?: number; timeoutMs?: number; browser?: string; callbackServer?: CallbackServerFactory<TResult>; openUrl?: (url: string, browser: string, redirectUri: string) => Promise<void>; signal?: AbortSignal }` — `callbackServer` is what makes the transport replaceable without dropping to the class; each ready constructor defaults it rather than overwriting it.
+  - `BrowserCallbackStrategyOptions<TResult>` adds `callbackServer` (required) and `remoteHint?: (redirectUri: string) => string`, supplied only by `browserCallbackStrategy` — the UAA transport is the only one with a paste form.
+  - `launchBrowser(authorizationUrl, browser, callbackUri: string, announce, log, remoteHint?)` — takes the bound URI rather than a port.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -1212,24 +1214,33 @@ import type {
   CallbackServerFactory,
   ICallbackServerHandle,
 } from '@mcp-abap-adt/interfaces';
-import { BrowserCallbackStrategy } from '../../strategies/BrowserCallbackStrategy';
+import {
+  BrowserCallbackStrategy,
+  browserCallbackStrategy,
+  oidcCallbackStrategy,
+  samlCallbackStrategy,
+} from '../../strategies/BrowserCallbackStrategy';
 
 /** A factory that hands over a handle whose result the test controls. */
-function fakeFactory(opts: {
+function fakeFactory<T = string>(opts: {
   boundPort?: number;
-  deliver?: (handle: ICallbackServerHandle<string>) => void;
-}): { factory: CallbackServerFactory<string>; released: () => boolean } {
+  /** What the callback "delivers". Defaults to a string code. */
+  payload?: T;
+  deliver?: (handle: ICallbackServerHandle<T>) => void;
+}): { factory: CallbackServerFactory<T>; released: () => boolean } {
   let released = false;
-  const factory: CallbackServerFactory<string> = async (options, use) => {
-    const port = opts.boundPort ?? options.port ?? 61001;
-    let settle!: (v: string) => void;
+  const factory: CallbackServerFactory<T> = async (options, use) => {
+    // `options.port` of 0 is what the caller asked for; `boundPort` is what the
+    // OS would have handed back.
+    const port = opts.boundPort ?? (options.port || 61001);
+    let settle!: (v: T) => void;
     let fail!: (e: Error) => void;
-    const result = new Promise<string>((res, rej) => {
+    const result = new Promise<T>((res, rej) => {
       settle = res;
       fail = rej;
     });
     void result.catch(() => undefined);
-    const handle: ICallbackServerHandle<string> = {
+    const handle: ICallbackServerHandle<T> = {
       port,
       redirectUri: `http://localhost:${port}/callback`,
       waitForResult: () => result,
@@ -1251,7 +1262,10 @@ function fakeFactory(opts: {
     });
     void aborted.catch(() => undefined);
     opts.deliver?.({ ...handle, fail: (e) => fail(e) });
-    setTimeout(() => settle('code-from-fake'), 0);
+    setTimeout(
+      () => settle(opts.payload ?? ('code-from-fake' as unknown as T)),
+      0,
+    );
     try {
       return await Promise.race([use(handle), aborted]);
     } finally {
@@ -1414,6 +1428,96 @@ describe('BrowserCallbackStrategy', () => {
     expect(released()).toBe(true);
   });
 
+  it('announces the URI it actually bound, never port 0', async () => {
+    const infos: string[] = [];
+    const logger = {
+      debug: () => undefined,
+      info: (msg: string) => {
+        infos.push(msg);
+      },
+      warn: () => undefined,
+      error: () => undefined,
+    };
+    const { factory } = fakeFactory({ boundPort: 49997 });
+    // No `openUrl`: this exercises the real launcher, which for 'none' prints
+    // and returns without opening anything.
+    const strategy = browserCallbackStrategy({
+      port: 0,
+      browser: 'none',
+      callbackServer: factory,
+    });
+
+    await strategy.authorize({
+      buildAuthorizationUrl: async () => 'https://idp.example/authorize',
+      logger,
+    });
+
+    const text = infos.join('\n');
+    expect(text).toContain('http://localhost:49997/callback');
+    expect(text).not.toContain(':0/');
+  });
+
+  it('offers the paste form only for the flow whose transport has one', async () => {
+    const capture = () => {
+      const infos: string[] = [];
+      return {
+        infos,
+        logger: {
+          debug: () => undefined,
+          info: (msg: string) => {
+            infos.push(msg);
+          },
+          warn: () => undefined,
+          error: () => undefined,
+        },
+      };
+    };
+
+    const uaa = capture();
+    await browserCallbackStrategy({
+      port: 0,
+      browser: 'none',
+      callbackServer: fakeFactory({ boundPort: 49996 }).factory,
+    }).authorize({
+      buildAuthorizationUrl: async () => 'https://uaa.example/authorize',
+      logger: uaa.logger,
+    });
+    expect(uaa.infos.join('\n')).toContain(
+      'paste it at http://localhost:49996/',
+    );
+
+    // OIDC and SAML callback servers have no `/` route, so promising a paste
+    // form there would send the user to a 404. The stdin invitation is gone
+    // too — that is `manualPasteStrategy`'s job now.
+    for (const build of [
+      () =>
+        oidcCallbackStrategy({
+          port: 0,
+          browser: 'none',
+          callbackServer: fakeFactory<{ code: string }>({
+            boundPort: 49995,
+            payload: { code: 'c' },
+          }).factory,
+        }),
+      () =>
+        samlCallbackStrategy({
+          port: 0,
+          browser: 'none',
+          callbackServer: fakeFactory({ boundPort: 49994 }).factory,
+        }),
+    ]) {
+      const seen = capture();
+      await build().authorize({
+        buildAuthorizationUrl: async () => 'https://idp.example/authorize',
+        logger: seen.logger,
+      });
+      const text = seen.infos.join('\n');
+      expect(text).not.toMatch(/paste it at/i);
+      expect(text).not.toMatch(/press Enter/i);
+      expect(text).toMatch(/Waiting for callback on http:\/\/localhost:499/);
+    }
+  });
+
   it('honours a signal that was already aborted', async () => {
     const { factory, released } = fakeFactory({});
     const strategy = new BrowserCallbackStrategy<string>({
@@ -1441,9 +1545,60 @@ npm test -- src/__tests__/strategies/BrowserCallbackStrategy.test.ts
 
 Expected: FAIL — `Cannot find module '../../strategies/BrowserCallbackStrategy'`.
 
-- [ ] **Step 3: Export the browser launcher**
+- [ ] **Step 3: Make the launcher flow-neutral and export it**
 
-In `src/auth/browserAuth.ts`, add `export` to `async function launchBrowser(` at line 177. Its signature is `(authorizationUrl: string, browser: string, port: number, announce: (msg: string) => void, log: ILogger | null)`; keep it unchanged — the strategy adapts to it.
+`launchBrowser` (`src/auth/browserAuth.ts:177`) takes a **port** and spends it on three messages (`:191`, `:196`, `:215`). Two of those messages are also UAA-specific in a way that is now wrong for two flows out of three: the paste form on `/` exists only in `withBrowserCallbackServer`, and "paste it here and press Enter" describes the stdin reader that Task 13 deletes. Left as it is, the default launcher would print `localhost:0` for an ephemeral port and advertise two ways in that do not exist for OIDC or SAML.
+
+Add `export`, take the callback URI rather than a port, and move the flow-specific guidance out into a caller-supplied line:
+
+```ts
+export async function launchBrowser(
+  authorizationUrl: string,
+  browser: string,
+  callbackUri: string,
+  announce: (msg: string) => void,
+  log: ILogger | null,
+  /**
+   * Extra guidance for 'none'/'headless', supplied only by a flow whose
+   * transport really offers another way in. The UAA callback server has a paste
+   * form on `/`; the OIDC and SAML ones do not, and promising one there sends
+   * the user to a 404.
+   */
+  remoteHint?: string,
+): Promise<void> {
+  const browserApp = BROWSER_MAP[browser];
+
+  // 'none' / 'headless': show the URL and wait. For SSH and remote sessions.
+  if (browser === 'none' || browser === 'headless') {
+    announce('🔗 Open this URL in your browser to authenticate:');
+    announce(`   ${authorizationUrl}`);
+    announce(`   Waiting for callback on ${callbackUri} ...`);
+    if (remoteHint) announce(remoteHint);
+    return;
+  }
+
+  if (browser === 'auto') {
+    log?.info('🌐 Attempting to open browser for authentication...');
+    try {
+      const openModule = await import('open');
+      await openModule.default(authorizationUrl);
+      log?.info(
+        '✅ Browser opened successfully. Waiting for authentication...',
+      );
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : String(error);
+      log?.warn(`⚠️  Could not open browser automatically: ${message}`);
+      announce('🔗 Please open this URL in your browser to authenticate:');
+      announce(`   ${authorizationUrl}`);
+      announce(`   Waiting for callback on ${callbackUri} ...`);
+    }
+    return;
+  }
+```
+
+Leave the rest of the function (the `browserApp === null` early return, the Linux `DISPLAY` fallback, the `open` import) untouched.
+
+`startBrowserAuth` still calls this with a port and is not deleted until Task 13, so keep the build green by passing `http://localhost:${port}/callback` at that one call site — the same holding pattern Task 9 used.
 
 - [ ] **Step 4: Write the strategy**
 
@@ -1495,13 +1650,25 @@ export interface CallbackStrategyOptions<TResult = string> {
    * all rather than forcing everyone through the class.
    */
   callbackServer?: CallbackServerFactory<TResult>;
-  openUrl?: (url: string, browser: string) => Promise<void>;
+  /** Receives the bound redirect URI too, since with `port: 0` nobody knew it earlier. */
+  openUrl?: (
+    url: string,
+    browser: string,
+    redirectUri: string,
+  ) => Promise<void>;
   signal?: AbortSignal;
 }
 
 export interface BrowserCallbackStrategyOptions<TResult>
   extends CallbackStrategyOptions<TResult> {
   callbackServer: CallbackServerFactory<TResult>;
+  /**
+   * Extra guidance for 'none'/'headless', built from the URI actually bound.
+   * Supplied only by a flow whose transport offers a way in besides the
+   * redirect — the UAA paste form. Absent for OIDC and SAML, whose callback
+   * servers have no such route.
+   */
+  remoteHint?: (redirectUri: string) => string;
 }
 
 /**
@@ -1573,10 +1740,6 @@ export class BrowserCallbackStrategy<TResult>
 
     const announce = announcer(request.logger);
     const browser = this.options.browser ?? 'none';
-    const open =
-      this.options.openUrl ??
-      ((url: string, which: string) =>
-        launchBrowser(url, which, 0, announce, request.logger ?? null));
 
     // Wrapped in an immediately-invoked async function, and assigned to
     // `inFlight` in the same synchronous turn as the controller. The port probe
@@ -1600,9 +1763,22 @@ export class BrowserCallbackStrategy<TResult>
         // honour must fail here, not as a callback that never arrives.
         const url = await request.buildAuthorizationUrl(server.redirectUri);
         const waiting = server.waitForResult();
+        // Built here, not earlier: the launcher's messages name the URI that is
+        // actually bound, which with `port: 0` nothing knew until now.
+        const open =
+          this.options.openUrl ??
+          ((u: string, which: string, redirectUri: string) =>
+            launchBrowser(
+              u,
+              which,
+              redirectUri,
+              announce,
+              request.logger ?? null,
+              this.options.remoteHint?.(redirectUri),
+            ));
         // Not awaited: a launcher that hangs must not delay the timeout or the
         // release, and one that fails ends the scope through `fail`.
-        void open(url, browser).catch((error: unknown) => {
+        void open(url, browser, server.redirectUri).catch((error: unknown) => {
           const message = error instanceof Error ? error.message : String(error);
           request.logger?.error(
             `Failed to open browser: ${message}. Open manually: ${url}`,
@@ -1651,6 +1827,11 @@ export function browserCallbackStrategy(
   return new BrowserCallbackStrategy<string>({
     ...options,
     callbackServer: options.callbackServer ?? withBrowserCallbackServer,
+    // Only this flow's transport has a paste form on `/`. Derived from the URI
+    // that was bound, so an ephemeral port names the port it actually got.
+    remoteHint: (redirectUri) =>
+      '   If your browser is on another machine, copy the `code` from the ' +
+      `address bar after login and paste it at ${new URL(redirectUri).origin}/`,
   });
 }
 
