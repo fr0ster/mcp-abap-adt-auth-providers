@@ -32,10 +32,13 @@ function portIsFree(port: number): Promise<boolean> {
  * and fail with `other side closed`, which says nothing about the server. A
  * browser opens its own connection; so does this.
  */
-function httpGet(path: string): Promise<{ status: number; body: string }> {
+function httpGetOn(
+  port: number,
+  path: string,
+): Promise<{ status: number; body: string }> {
   return new Promise((resolve, reject) => {
     const req = http.get(
-      { host: '127.0.0.1', port: PORT, path, agent: false },
+      { host: '127.0.0.1', port, path, agent: false },
       (res) => {
         let body = '';
         res.setEncoding('utf8');
@@ -47,6 +50,10 @@ function httpGet(path: string): Promise<{ status: number; body: string }> {
     );
     req.on('error', reject);
   });
+}
+
+function httpGet(path: string): Promise<{ status: number; body: string }> {
+  return httpGetOn(PORT, path);
 }
 
 const deliver = (query: string): Promise<unknown> =>
@@ -328,8 +335,8 @@ describe('withBrowserCallbackServer', () => {
     }
   }, 30000);
 
-  it('rejects a port that is not an integer in 1..65535, without binding', async () => {
-    for (const bad of [0, -1, 65536, 3001.5]) {
+  it('rejects a port that is not an integer in 0..65535, without binding', async () => {
+    for (const bad of [-1, 65536, 3001.5]) {
       await expect(
         withBrowserCallbackServer(
           { port: bad, timeoutMs: 5000 },
@@ -463,4 +470,24 @@ describe('withBrowserCallbackServer', () => {
     // The scope must not have settled before the response finished writing.
     expect(settledAt).toBeGreaterThanOrEqual(finishedAt);
   }, 60000);
+
+  describe('ephemeral port', () => {
+    it('reports the bound port and frees it when the scope ends', async () => {
+      let observed = 0;
+      const code = await withBrowserCallbackServer(
+        { port: 0, timeoutMs: 5000 },
+        async (srv) => {
+          observed = srv.port;
+          expect(observed).toBeGreaterThan(0);
+          expect(srv.redirectUri).toBe(`http://localhost:${observed}/callback`);
+          expect(await portIsFree(observed)).toBe(false);
+          const waiting = srv.waitForResult();
+          void httpGetOn(observed, '/callback?code=eph').catch(() => undefined);
+          return await waiting;
+        },
+      );
+      expect(code).toBe('eph');
+      expect(await portIsFree(observed)).toBe(true);
+    }, 30000);
+  });
 });
