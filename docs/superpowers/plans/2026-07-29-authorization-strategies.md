@@ -1191,7 +1191,7 @@ git commit -m "refactor: build and exchange around a redirect URI rather than a 
   - `browserCallbackStrategy(opts?): IAuthorizationStrategy<string>`
   - `oidcCallbackStrategy(opts?): IAuthorizationStrategy<OidcCallbackResult>`
   - `samlCallbackStrategy(opts?): IAuthorizationStrategy<string>`
-  - `interface CallbackStrategyOptions { port?: number; timeoutMs?: number; browser?: string; openUrl?: (url: string, browser: string) => Promise<void>; signal?: AbortSignal }`
+  - `interface CallbackStrategyOptions<TResult = string> { port?: number; timeoutMs?: number; browser?: string; callbackServer?: CallbackServerFactory<TResult>; openUrl?: (url: string, browser: string) => Promise<void>; signal?: AbortSignal }` — `callbackServer` is what makes the transport replaceable without dropping to the class; each ready constructor defaults it rather than overwriting it.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -1359,24 +1359,76 @@ describe('BrowserCallbackStrategy', () => {
     expect(outcome.redirectUri).toBe('http://localhost:49998/callback');
   });
 
-  it('disposes idempotently and ends an authorize in flight', async () => {
+  // Two windows, two tests. `dispose` can land before the transport is entered
+  // or after, and the fix for the race between them is only meaningful if both
+  // are pinned.
+  it('disposes idempotently and aborts before the transport is entered', async () => {
     const { factory, released } = fakeFactory({});
     const strategy = new BrowserCallbackStrategy<string>({
       callbackServer: factory,
+      port: 0,
       openUrl: async () => undefined,
     });
 
     const inFlight = strategy.authorize({
-      buildAuthorizationUrl: async () =>
-        await new Promise<string>(() => undefined), // never resolves
+      buildAuthorizationUrl: async () => 'https://idp.example/a',
     });
     const settled = inFlight.catch((e: Error) => e.message);
 
+    // Synchronous inside dispose, so it lands while `authorize` is still
+    // awaiting the port probe. If `inFlight` were assigned after that await
+    // rather than before it, this would resolve against nulls and the login
+    // would go on to bind behind it.
     await strategy.dispose();
     await strategy.dispose(); // idempotent
 
     expect(await settled).toMatch(/abort/i);
+    // Never entered: no socket was bound, so there was nothing to release.
+    expect(released()).toBe(false);
+  });
+
+  it('ends an authorize already inside the transport', async () => {
+    let entered!: () => void;
+    const hasEntered = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    const { factory, released } = fakeFactory({ deliver: () => entered() });
+    const strategy = new BrowserCallbackStrategy<string>({
+      callbackServer: factory,
+      port: 0,
+      openUrl: async () => undefined,
+    });
+
+    const inFlight = strategy.authorize({
+      // Never settles, so the scope is still open when dispose lands.
+      buildAuthorizationUrl: () => new Promise<string>(() => undefined),
+    });
+    const settled = inFlight.catch((e: Error) => e.message);
+    await hasEntered;
+
+    await strategy.dispose();
+
+    expect(await settled).toMatch(/abort/i);
+    // Entered and left: dispose resolves only once the transport has settled,
+    // which it does after releasing.
     expect(released()).toBe(true);
+  });
+
+  it('honours a signal that was already aborted', async () => {
+    const { factory, released } = fakeFactory({});
+    const strategy = new BrowserCallbackStrategy<string>({
+      callbackServer: factory,
+      port: 0,
+      openUrl: async () => undefined,
+      signal: AbortSignal.abort(),
+    });
+
+    await expect(
+      strategy.authorize({
+        buildAuthorizationUrl: async () => 'https://idp.example/a',
+      }),
+    ).rejects.toThrow(/abort/i);
+    expect(released()).toBe(false);
   });
 });
 ```
@@ -1514,6 +1566,10 @@ export class BrowserCallbackStrategy<TResult>
     this.controller = controller;
     const relay = () => controller.abort();
     this.options.signal?.addEventListener('abort', relay, { once: true });
+    // A signal that was already aborted fires no event, so registering a
+    // listener for it is not enough — the login would proceed as if nobody had
+    // cancelled it.
+    if (this.options.signal?.aborted) controller.abort();
 
     const announce = announcer(request.logger);
     const browser = this.options.browser ?? 'none';
