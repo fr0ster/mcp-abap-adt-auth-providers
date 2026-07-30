@@ -3411,7 +3411,10 @@ git commit -m "release(1.7.0): realign with auth-providers@2.0.0 — callback po
 git push -u origin feat/authorization-strategies
 gh pr create --title "release(1.7.0): realign with auth-providers@2.0.0" --body "auth-providers 2.0.0 replaces \`browser\`/\`redirectPort\` with an \`authorization\` strategy. \`--browser-auth-port\` keeps its meaning and its 3333 default."
 gh pr merge --squash --delete-branch
-git checkout master && git pull --ff-only
+# proxy's default branch is `main`, not `master` — unlike interfaces and
+# auth-providers. Verify with `git symbolic-ref --short refs/remotes/origin/HEAD`
+# if in doubt.
+git checkout main && git pull --ff-only
 git tag -a v1.7.0 -m "Realign with auth-providers@2.0.0"
 git push --tags
 ```
@@ -3470,7 +3473,19 @@ Integration tests skip without `tests/test-config.yaml`; that is expected and fi
 
 - [ ] **Step 5: Release**
 
-Bump to `1.0.9`, add a CHANGELOG entry noting that only test wiring changed, then branch → PR → merge → tag → hand the publish to the user.
+Bump to `1.0.9`, add a CHANGELOG entry noting that only test wiring changed, then PR → merge → tag → hand the publish to the user. `auth-broker`'s default branch is **`main`**:
+
+```bash
+cd /home/okyslytsia/prj/mcp-abap-adt-auth-broker
+git add -A && git commit -m "release(1.0.9): realign tests with auth-providers@2.0.0"
+git push -u origin feat/authorization-strategies
+gh pr create --title "release(1.0.9): realign tests with auth-providers@2.0.0" \
+  --body "auth-providers 2.0.0 replaces \`redirectPort\` with an \`authorization\` strategy. Test wiring only; no functional change."
+gh pr merge --squash --delete-branch
+git checkout main && git pull --ff-only
+git tag -a v1.0.9 -m "Realign tests with auth-providers@2.0.0"
+git push --tags
+```
 
 ---
 
