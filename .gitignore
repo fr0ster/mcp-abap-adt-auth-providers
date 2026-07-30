@@ -38,3 +38,9 @@ temp/
 
 # Test configuration (contains sensitive data)
 tests/test-config.yaml
+
+# Git worktrees
+.worktrees/
+
+# Superpowers scratch (ledger, briefs, review packages)
+.superpowers/
