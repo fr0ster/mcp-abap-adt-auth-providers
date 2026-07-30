@@ -14,7 +14,8 @@
 
 - Release order is strict: `interfaces@11.6.0` → `auth-providers@2.0.0` → `proxy@1.7.0` → `auth-broker@1.0.9`. A consumer is never bumped before its dependency is published.
 - **The agent never runs `npm publish`.** Tag, push the tag, then tell the user to publish and wait for confirmation.
-- Every package: branch (`feat/authorization-strategies`), PR referencing the issue, squash merge, tag `vX.Y.Z`, push tag.
+- Every package: branch (`feat/authorization-strategies`), PR referencing the issue, then **stop** — every PR is reviewed before it merges, and the agent never merges its own. Tag `vX.Y.Z` and push the tag only after the merge has happened. Three gates per release, therefore: PR review, then merge, then publish; the last two are the user's.
+- **A release updates every document the change touches, not only `CHANGELOG.md`.** Before tagging any package, sweep its `README.md` and everything under `docs/` for prose the change has made untrue — interface inventories, usage examples, and any guide describing the behaviour that changed. A changelog tells someone already watching what moved; the README is what everyone else believes. This bit Task 3: `interfaces/README.md` inventories the `auth/` domain and had to be corrected after the tag was already pushed.
 - Default callback port is `61001` — above Linux `ip_local_port_range` (32768–60999) and clear of the 3001/3333 range the proxy uses. Default login timeout is `30_000` ms.
 - Nothing may write to `process.stdout`. User-facing prompts go to the logger, or to `process.stderr` when no logger exists — stdout carries MCP/LSP protocol traffic.
 - `npm run lint:check` and `npm run build` must pass before every commit; `npm test` before every push.
@@ -390,7 +391,9 @@ Consumer impact: auth-providers@2.0.0 depends on this."
 
 ```bash
 cd /home/okyslytsia/prj/mcp-abap-adt-interfaces/.worktrees/authorization-strategies
-gh pr merge --squash --delete-branch
+# STOP HERE. The PR is reviewed before it merges — do not merge it yourself.
+# Report the PR URL and wait. The steps below run only after the review
+# has passed and the merge has happened.
 git checkout master && git pull --ff-only
 git tag -a v11.6.0 -m "Authorization strategy contract, ephemeral callback port"
 git push --tags
@@ -3323,7 +3326,9 @@ Consumer impact: proxy@1.7.0, auth-broker@1.0.9."
 - [ ] **Step 6: Merge, tag, hand off the publish**
 
 ```bash
-gh pr merge --squash --delete-branch
+# STOP HERE. The PR is reviewed before it merges — do not merge it yourself.
+# Report the PR URL and wait. The steps below run only after the review
+# has passed and the merge has happened.
 git checkout master && git pull --ff-only
 git tag -a v2.0.0 -m "Authorization strategies"
 git push --tags
@@ -3421,7 +3426,9 @@ git add -A
 git commit -m "release(1.7.0): realign with auth-providers@2.0.0 — callback port moves into a strategy"
 git push -u origin feat/authorization-strategies
 gh pr create --title "release(1.7.0): realign with auth-providers@2.0.0" --body "auth-providers 2.0.0 replaces \`browser\`/\`redirectPort\` with an \`authorization\` strategy. \`--browser-auth-port\` keeps its meaning and its 3333 default."
-gh pr merge --squash --delete-branch
+# STOP HERE. The PR is reviewed before it merges — do not merge it yourself.
+# Report the PR URL and wait. The steps below run only after the review
+# has passed and the merge has happened.
 # proxy's default branch is `main`, not `master` — unlike interfaces and
 # auth-providers. Verify with `git symbolic-ref --short refs/remotes/origin/HEAD`
 # if in doubt.
@@ -3492,7 +3499,9 @@ git add -A && git commit -m "release(1.0.9): realign tests with auth-providers@2
 git push -u origin feat/authorization-strategies
 gh pr create --title "release(1.0.9): realign tests with auth-providers@2.0.0" \
   --body "auth-providers 2.0.0 replaces \`redirectPort\` with an \`authorization\` strategy. Test wiring only; no functional change."
-gh pr merge --squash --delete-branch
+# STOP HERE. The PR is reviewed before it merges — do not merge it yourself.
+# Report the PR URL and wait. The steps below run only after the review
+# has passed and the merge has happened.
 git checkout main && git pull --ff-only
 git tag -a v1.0.9 -m "Realign tests with auth-providers@2.0.0"
 git push --tags
