@@ -15,6 +15,14 @@
 - Release order is strict: `interfaces@11.6.0` → `auth-providers@2.0.0` → `proxy@1.7.0` → `auth-broker@1.0.9`. A consumer is never bumped before its dependency is published.
 - **The agent never runs `npm publish`.** Tag, push the tag, then tell the user to publish and wait for confirmation.
 - Every package: branch (`feat/authorization-strategies`), PR referencing the issue, then **stop** — every PR is reviewed before it merges, and the agent never merges its own. Tag `vX.Y.Z` and push the tag only after the merge has happened. Three gates per release, therefore: PR review, then merge, then publish; the last two are the user's.
+- **A version bump resyncs the lockfile.** `package-lock.json` carries the version twice — at the top level and in the root `packages[""]` entry — and neither follows `package.json` on its own. Run `npm install --package-lock-only` after the bump and confirm both:
+
+  ```bash
+  grep -m1 '"version"' package.json
+  sed -n '1,10p' package-lock.json | grep '"version"'   # expect the same value twice
+  ```
+
+  Left stale, the next `npm install` rewrites the lockfile and hands someone an unexplained diff, while the release's own metadata disagrees with itself. This was missed on `interfaces@11.6.0` because the brief said only "set the version in package.json" — so a review against that brief would have passed it.
 - **A release updates every document the change touches, not only `CHANGELOG.md`.** Before tagging any package, sweep its `README.md` and everything under `docs/` for prose the change has made untrue — interface inventories, usage examples, and any guide describing the behaviour that changed. A changelog tells someone already watching what moved; the README is what everyone else believes. This bit Task 3: `interfaces/README.md` inventories the `auth/` domain and had to be corrected after the tag was already pushed.
 - Default callback port is `61001` — above Linux `ip_local_port_range` (32768–60999) and clear of the 3001/3333 range the proxy uses. Default login timeout is `30_000` ms.
 - Nothing may write to `process.stdout`. User-facing prompts go to the logger, or to `process.stderr` when no logger exists — stdout carries MCP/LSP protocol traffic.
