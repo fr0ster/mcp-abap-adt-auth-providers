@@ -835,11 +835,19 @@ describe('withOidcCallbackServer', () => {
       { port: PORT, timeoutMs: 30000 },
       async (srv) => await srv.waitForResult(),
     );
+    // Attach the expectation BEFORE delivering. The rejection lands as soon as
+    // the callback arrives, and awaiting the request first leaves `attempt`
+    // unhandled at that moment — Jest then reports an unhandled rejection
+    // instead of a passing assertion. `browserAuth.test.ts` documents the same
+    // trap on the same shape of test.
+    const rejected = expect(attempt).rejects.toThrow(
+      /access_denied: User said no/,
+    );
     const res = await httpGet(
       '/callback?error=access_denied&error_description=User%20said%20no',
     );
     expect(res.status).toBe(400);
-    await expect(attempt).rejects.toThrow(/access_denied: User said no/);
+    await rejected;
   }, 30000);
 
   it('answers 400 and keeps waiting for a request carrying neither', async () => {
