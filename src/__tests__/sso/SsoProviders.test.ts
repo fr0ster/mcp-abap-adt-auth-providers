@@ -8,6 +8,7 @@ import {
 } from '@mcp-abap-adt/interfaces';
 import type { OidcCallbackResult } from '../../auth/oidcBrowserAuth';
 import { discoverOidc } from '../../auth/oidcDiscovery';
+import { generatePkceChallenge } from '../../auth/oidcPkce';
 import {
   exchangeAuthorizationCode,
   initiateDeviceAuthorization,
@@ -187,8 +188,9 @@ describe('SSO Providers', () => {
     const tokens = await provider.getTokens();
     expect(tokens.authorizationToken).toBe('AT2');
     expect(discovery).toHaveBeenCalledTimes(1);
-    // The verifier the provider kept must reach the exchange beside the code the
-    // strategy returned, at the redirect the strategy actually used.
+    // The code the strategy returned reaches the exchange at the redirect the
+    // strategy actually used, against the endpoint discovery supplied. The
+    // verifier is only shape-checked here; the test below pins what it must be.
     expect(mockExchangeCode).toHaveBeenCalledWith(
       'https://idp.example/token',
       'cid',
@@ -198,6 +200,42 @@ describe('SSO Providers', () => {
       expect.any(String),
       undefined,
     );
+  });
+
+  it('OidcBrowserProvider exchanges the verifier the challenge in the URL was derived from', async () => {
+    mockExchangeCode.mockResolvedValue({
+      accessToken: 'AT3',
+      expiresIn: 3600,
+    });
+
+    let authorizationUrl = '';
+    const provider = new OidcBrowserProvider({
+      clientId: 'cid',
+      authorizationEndpoint: 'https://idp.example/authorize',
+      tokenEndpoint: 'https://idp.example/token',
+      authorization: asOidcResult(
+        externalCodeStrategy({
+          redirectUri: 'http://localhost:61001/callback',
+          provide: async (url) => {
+            authorizationUrl = url;
+            return 'paired-code';
+          },
+        }),
+      ),
+    });
+
+    await provider.getTokens();
+
+    const verifier = mockExchangeCode.mock.calls[0][5] as string;
+    expect(verifier).toBeTruthy();
+    // The pairing, not merely the presence, is the property. An implementation
+    // that regenerated the verifier before the exchange would satisfy
+    // `expect.any(String)` just as well — and that is precisely the defect the
+    // old `authorizationCodeProvider` had, since it never saw the URL and so
+    // could return a code minted against a challenge nobody could redeem.
+    const params = new URL(authorizationUrl).searchParams;
+    expect(params.get('code_challenge')).toBe(generatePkceChallenge(verifier));
+    expect(params.get('code_challenge_method')).toBe('S256');
   });
 
   it('OidcDeviceFlowProvider should poll device tokens', async () => {
@@ -337,9 +375,17 @@ describe('SSO Providers', () => {
   it('OidcBrowserProvider should throw when endpoints are missing', async () => {
     mockDiscoverOidc.mockResolvedValue({});
 
+    // A strategy that needs the URL but binds no socket: the assertion here is
+    // about the message, and the default strategy would have made it depend on
+    // 61001 being free — a machine already holding it fails this for a reason
+    // that has nothing to do with endpoints. The default's own port behaviour is
+    // covered in the lifecycle block below, which tolerates that failure.
     const provider = new OidcBrowserProvider({
       issuerUrl: 'https://issuer',
       clientId: 'client',
+      authorization: asOidcResult(
+        externalCodeStrategy({ provide: async () => 'unreachable' }),
+      ),
     });
 
     await expect(provider.getTokens()).rejects.toThrow(

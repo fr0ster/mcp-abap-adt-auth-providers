@@ -152,8 +152,11 @@ export class OidcBrowserProvider extends BaseTokenProvider {
       }
       discovery = await discoverOidc(this.config.issuerUrl, this.logger);
     }
+    // `??`, matching the `=== undefined` gate above and the login path: `||`
+    // treated a configured-but-empty endpoint as absent while the gate had
+    // already decided it was present, so the two disagreed about the same value.
     const tokenEndpoint =
-      this.config.tokenEndpoint || discovery?.token_endpoint;
+      this.config.tokenEndpoint ?? discovery?.token_endpoint;
     if (!tokenEndpoint) {
       throw new Error(
         'OIDC token endpoint is required (tokenEndpoint or discovery)',
