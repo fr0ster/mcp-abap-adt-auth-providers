@@ -3,15 +3,17 @@
  */
 
 import type {
+  IAuthorizationStrategy,
   ILogger,
   ITokenResult,
   OAuth2GrantType,
 } from '@mcp-abap-adt/interfaces';
 import { AUTH_TYPE_AUTHORIZATION_CODE_PKCE } from '@mcp-abap-adt/interfaces';
-import { startOidcBrowserAuth } from '../auth/oidcBrowserAuth';
+import type { OidcCallbackResult } from '../auth/oidcBrowserAuth';
 import { discoverOidc } from '../auth/oidcDiscovery';
 import { generatePkceChallenge, generatePkceVerifier } from '../auth/oidcPkce';
 import { exchangeAuthorizationCode, refreshOidcToken } from '../auth/oidcToken';
+import { oidcCallbackStrategy } from '../strategies';
 import { BaseTokenProvider } from './BaseTokenProvider';
 
 export interface OidcBrowserProviderConfig {
@@ -19,13 +21,10 @@ export interface OidcBrowserProviderConfig {
   clientId: string;
   clientSecret?: string;
   scopes?: string[];
-  browser?: string;
-  redirectPort?: number;
-  redirectUri?: string;
-  authorizationCode?: string;
-  authorizationCodeProvider?: () => Promise<string>;
   authorizationEndpoint?: string;
   tokenEndpoint?: string;
+  /** How the login is conducted. Omitted means a browser callback on the default port. */
+  authorization?: IAuthorizationStrategy<OidcCallbackResult>;
   accessToken?: string;
   refreshToken?: string;
   logger?: ILogger;
@@ -53,78 +52,81 @@ export class OidcBrowserProvider extends BaseTokenProvider {
   }
 
   protected async performLogin(): Promise<ITokenResult> {
-    const needsAuthorizationEndpoint =
-      !this.config.authorizationCode && !this.config.authorizationCodeProvider;
-
-    const requiresDiscovery =
-      (needsAuthorizationEndpoint && !this.config.authorizationEndpoint) ||
-      !this.config.tokenEndpoint;
-    let discovery: Awaited<ReturnType<typeof discoverOidc>> | null = null;
-    if (requiresDiscovery) {
-      if (!this.config.issuerUrl) {
-        throw new Error('OIDC issuerUrl is required when discovery is used');
+    // One memoised discovery per login, started on first use rather than up
+    // front: a strategy that already holds a code must not drag in a request —
+    // nor the `issuerUrl` requirement that comes with it.
+    let discovery: Promise<Awaited<ReturnType<typeof discoverOidc>>> | null =
+      null;
+    const discover = () => {
+      if (!discovery) {
+        if (!this.config.issuerUrl) {
+          throw new Error('OIDC issuerUrl is required when discovery is used');
+        }
+        discovery = discoverOidc(this.config.issuerUrl, this.logger);
       }
-      discovery = await discoverOidc(this.config.issuerUrl, this.logger);
-    }
-    const authorizationEndpoint = needsAuthorizationEndpoint
-      ? this.config.authorizationEndpoint || discovery?.authorization_endpoint
-      : undefined;
-    const tokenEndpoint =
-      this.config.tokenEndpoint || discovery?.token_endpoint;
+      return discovery;
+    };
 
-    if (needsAuthorizationEndpoint && !authorizationEndpoint) {
-      throw new Error(
-        'OIDC authorization endpoint is required (authorizationEndpoint or discovery)',
-      );
-    }
-    if (!tokenEndpoint) {
-      throw new Error(
-        'OIDC token endpoint is required (tokenEndpoint or discovery)',
-      );
-    }
-
-    const redirectPort = this.config.redirectPort || 3001;
-    const redirectUri =
-      this.config.redirectUri || `http://localhost:${redirectPort}/callback`;
-    if (needsAuthorizationEndpoint && this.config.redirectUri) {
-      if (!redirectUri.startsWith('http://localhost:')) {
-        throw new Error(
-          'OIDC redirectUri must be localhost for browser callback flow',
-        );
-      }
-    }
+    const verifier = generatePkceVerifier();
+    const challenge = generatePkceChallenge(verifier);
     const scope = (
       this.config.scopes && this.config.scopes.length > 0
         ? this.config.scopes
         : ['openid', 'profile', 'email']
     ).join(' ');
 
-    const verifier = generatePkceVerifier();
-    const challenge = generatePkceChallenge(verifier);
+    const request = {
+      logger: this.logger,
+      buildAuthorizationUrl: async (redirectUri: string): Promise<string> => {
+        const endpoint =
+          this.config.authorizationEndpoint ??
+          (await discover()).authorization_endpoint;
+        if (!endpoint) {
+          throw new Error(
+            'OIDC authorization endpoint is required (authorizationEndpoint or discovery)',
+          );
+        }
+        const params = new URLSearchParams();
+        params.append('response_type', 'code');
+        params.append('client_id', this.config.clientId);
+        params.append('redirect_uri', redirectUri);
+        params.append('scope', scope);
+        params.append('code_challenge', challenge);
+        params.append('code_challenge_method', 'S256');
+        return `${endpoint}?${params.toString()}`;
+      },
+    };
 
-    const params = new URLSearchParams();
-    params.append('response_type', 'code');
-    params.append('client_id', this.config.clientId);
-    params.append('redirect_uri', redirectUri);
-    params.append('scope', scope);
-    params.append('code_challenge', challenge);
-    params.append('code_challenge_method', 'S256');
+    const supplied = this.config.authorization;
+    const strategy = supplied ?? oidcCallbackStrategy();
 
-    const authorizationUrl = needsAuthorizationEndpoint
-      ? `${authorizationEndpoint}?${params.toString()}`
-      : undefined;
+    let outcome: { payload: OidcCallbackResult; redirectUri: string };
+    try {
+      outcome = await strategy.authorize(request);
+    } finally {
+      if (!supplied) {
+        await strategy.dispose?.().catch((error: unknown) => {
+          this.logger?.warn('[OidcBrowserProvider] dispose failed', {
+            error: error instanceof Error ? error.message : String(error),
+          });
+        });
+      }
+    }
 
-    const code = await this.resolveAuthorizationCode(
-      authorizationUrl,
-      redirectPort,
-    );
+    const tokenEndpoint =
+      this.config.tokenEndpoint ?? (await discover()).token_endpoint;
+    if (!tokenEndpoint) {
+      throw new Error(
+        'OIDC token endpoint is required (tokenEndpoint or discovery)',
+      );
+    }
 
     const tokens = await exchangeAuthorizationCode(
       tokenEndpoint,
       this.config.clientId,
       this.config.clientSecret,
-      code,
-      redirectUri,
+      outcome.payload.code,
+      outcome.redirectUri,
       verifier,
       this.logger,
     );
@@ -172,36 +174,5 @@ export class OidcBrowserProvider extends BaseTokenProvider {
       expiresIn: tokens.expiresIn,
       tokenType: 'jwt',
     };
-  }
-
-  private async resolveAuthorizationCode(
-    authorizationUrl: string | undefined,
-    redirectPort: number,
-  ): Promise<string> {
-    if (this.config.authorizationCode) {
-      return this.config.authorizationCode;
-    }
-    if (this.config.authorizationCodeProvider) {
-      const code = await this.config.authorizationCodeProvider();
-      if (!code) {
-        throw new Error('Authorization code provider returned empty value');
-      }
-      return code;
-    }
-
-    if (!authorizationUrl) {
-      throw new Error(
-        'OIDC authorization URL is required when using browser flow',
-      );
-    }
-
-    const browser = this.config.browser || 'auto';
-    const { code } = await startOidcBrowserAuth(
-      authorizationUrl,
-      browser,
-      this.logger,
-      redirectPort,
-    );
-    return code;
   }
 }
