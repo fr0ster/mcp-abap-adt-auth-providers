@@ -323,16 +323,19 @@ export async function startBrowserAuth(
   }
 
   let stdinReader: readline.Interface | null = null;
+  // Captured inside the scope below and reused after it ends, so the
+  // authorization request and the token exchange always agree on the same
+  // redirect URI — the one the callback server actually bound, not a string
+  // rebuilt from a port that could in principle be 0 (OS-assigned).
+  let redirectUri = '';
 
   const code = await withBrowserCallbackServer(
     { port, timeoutMs },
     async (server) => {
+      redirectUri = server.redirectUri;
       const authorizationUrl =
         authConfig.authorizationUrl ??
-        getJwtAuthorizationUrl(
-          authConfig,
-          `http://localhost:${server.port}/callback`,
-        );
+        getJwtAuthorizationUrl(authConfig, redirectUri);
 
       log?.info(`[browserAuth] Authorization URL: ${authorizationUrl}`);
       log?.info(`[browserAuth] Server listening on port: ${server.port}`);
@@ -395,10 +398,5 @@ export async function startBrowserAuth(
   });
 
   log?.info('[browserAuth] Exchanging code for token...');
-  return await exchangeCodeForToken(
-    authConfig,
-    code,
-    `http://localhost:${port}/callback`,
-    log,
-  );
+  return await exchangeCodeForToken(authConfig, code, redirectUri, log);
 }
