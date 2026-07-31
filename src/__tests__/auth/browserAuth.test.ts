@@ -10,6 +10,7 @@ import axios from 'axios';
 import {
   exchangeCodeForToken,
   extractCode,
+  getJwtAuthorizationUrl,
   startBrowserAuth,
 } from '../../auth/browserAuth';
 import { canListenOnLocalhost, getAvailablePort } from '../helpers/netHelpers';
@@ -55,7 +56,7 @@ describe('browserAuth token exchange', () => {
       const result = await exchangeCodeForToken(
         authConfig,
         'test-auth-code',
-        3101,
+        'http://localhost:3101/callback',
         logger,
       );
 
@@ -87,7 +88,7 @@ describe('browserAuth token exchange', () => {
       const result = await exchangeCodeForToken(
         authConfig,
         'test-code',
-        3102,
+        'http://localhost:3102/callback',
         logger,
       );
 
@@ -110,7 +111,12 @@ describe('browserAuth token exchange', () => {
       };
 
       await expect(
-        exchangeCodeForToken(authConfig, 'invalid-code', 3103, logger),
+        exchangeCodeForToken(
+          authConfig,
+          'invalid-code',
+          'http://localhost:3103/callback',
+          logger,
+        ),
       ).rejects.toThrow('Response does not contain access_token');
 
       // Verify error was logged (but not to console)
@@ -130,7 +136,12 @@ describe('browserAuth token exchange', () => {
         data: mockTokens,
       });
 
-      await exchangeCodeForToken(authConfig, 'auth-code', 3104, undefined);
+      await exchangeCodeForToken(
+        authConfig,
+        'auth-code',
+        'http://localhost:3104/callback',
+        undefined,
+      );
 
       const axiosCall = mockedAxios.mock.calls[0]?.[0] as any;
       const expectedAuth = Buffer.from(
@@ -574,4 +585,20 @@ describe('startBrowserAuth port lifetime', () => {
     // No sleep: a settled promise must mean a free port.
     expect(await portIsFree(PORT)).toBe(true);
   }, 30000);
+});
+
+describe('redirect URI plumbing', () => {
+  it('builds the authorization URL around the URI it is given', () => {
+    const url = getJwtAuthorizationUrl(
+      {
+        uaaUrl: 'https://uaa.example',
+        uaaClientId: 'cid',
+        uaaClientSecret: 's',
+      },
+      'http://localhost:54321/callback',
+    );
+    expect(url).toContain(
+      `redirect_uri=${encodeURIComponent('http://localhost:54321/callback')}`,
+    );
+  });
 });

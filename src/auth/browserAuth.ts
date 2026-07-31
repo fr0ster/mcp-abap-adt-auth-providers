@@ -55,15 +55,17 @@ export function extractCode(input: string): string | null {
 }
 
 /**
- * Get OAuth2 authorization URL
+ * Build the OAuth2 authorization URL for a redirect URI that is already known.
+ *
+ * The URI is a parameter rather than a port because the port may have been
+ * chosen by the OS moments earlier — see `ICallbackServerOptions.port`.
  */
-function getJwtAuthorizationUrl(
+export function getJwtAuthorizationUrl(
   authConfig: IAuthorizationConfig,
-  port: number = 3001,
+  redirectUri: string,
 ): string {
   const oauthUrl = authConfig.uaaUrl;
   const clientid = authConfig.uaaClientId;
-  const redirectUri = `http://localhost:${port}/callback`;
 
   if (!oauthUrl || !clientid) {
     throw new Error('Authorization config missing UAA URL or client ID');
@@ -79,7 +81,7 @@ function getJwtAuthorizationUrl(
 export async function exchangeCodeForToken(
   authConfig: IAuthorizationConfig,
   code: string,
-  port: number = 3001,
+  redirectUri: string,
   log?: ILogger | null,
 ): Promise<{ accessToken: string; refreshToken?: string }> {
   const {
@@ -88,7 +90,6 @@ export async function exchangeCodeForToken(
     uaaClientSecret: clientsecret,
   } = authConfig;
   const tokenUrl = `${url}/oauth/token`;
-  const redirectUri = `http://localhost:${port}/callback`;
 
   const params = new URLSearchParams();
   params.append('grant_type', 'authorization_code');
@@ -328,7 +329,10 @@ export async function startBrowserAuth(
     async (server) => {
       const authorizationUrl =
         authConfig.authorizationUrl ??
-        getJwtAuthorizationUrl(authConfig, server.port);
+        getJwtAuthorizationUrl(
+          authConfig,
+          `http://localhost:${server.port}/callback`,
+        );
 
       log?.info(`[browserAuth] Authorization URL: ${authorizationUrl}`);
       log?.info(`[browserAuth] Server listening on port: ${server.port}`);
@@ -391,5 +395,10 @@ export async function startBrowserAuth(
   });
 
   log?.info('[browserAuth] Exchanging code for token...');
-  return await exchangeCodeForToken(authConfig, code, port, log);
+  return await exchangeCodeForToken(
+    authConfig,
+    code,
+    `http://localhost:${port}/callback`,
+    log,
+  );
 }
