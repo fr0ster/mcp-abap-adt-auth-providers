@@ -93,4 +93,16 @@ describe('withSamlCallbackServer', () => {
     );
     expect(assertion).toBe('PHNhbWw+');
   }, 30000);
+
+  it('releases the port when the login is abandoned', async () => {
+    const scope = withSamlCallbackServer(
+      { port: PORT, timeoutMs: 300 },
+      async (srv) => await srv.waitForResult(),
+    );
+    // Attached before anything can settle it — awaiting the timeout first
+    // would leave this rejection unhandled at the moment it lands.
+    const rejected = expect(scope).rejects.toThrow(/timeout/i);
+    await rejected;
+    expect(await portIsFree(PORT)).toBe(true);
+  }, 30000);
 });
