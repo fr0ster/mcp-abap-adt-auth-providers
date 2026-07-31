@@ -5,6 +5,11 @@
  * Provides token providers
  */
 
+// Callback server factories — "take the transport this package gives".
+export { withBrowserCallbackServer } from './auth/callbackServer';
+export type { OidcCallbackResult } from './auth/oidcBrowserAuth';
+export { withOidcCallbackServer } from './auth/oidcBrowserAuth';
+export { withSamlCallbackServer } from './auth/saml2Auth';
 // Errors
 export {
   BrowserAuthError,
@@ -38,7 +43,27 @@ export {
   Saml2BearerProvider,
   Saml2PureProvider,
 } from './providers';
-
 // SSO factory
 export { SsoProviderFactory } from './sso/SsoProviderFactory';
 export type { SsoProviderConfig, SsoProviderInstance } from './sso/types';
+export type {
+  BrowserCallbackStrategyOptions,
+  CallbackStrategyOptions,
+  ExternalCodeStrategyOptions,
+  ManualStrategyOptions,
+  StaticCodeStrategyOptions,
+} from './strategies';
+// Authorization strategies — or bring your own IAuthorizationStrategy.
+export {
+  asOidcResult,
+  BrowserCallbackStrategy,
+  browserCallbackStrategy,
+  DEFAULT_CALLBACK_PORT,
+  DEFAULT_LOGIN_TIMEOUT_MS,
+  externalCodeStrategy,
+  manualPasteStrategy,
+  manualSamlResponseStrategy,
+  oidcCallbackStrategy,
+  samlCallbackStrategy,
+  staticCodeStrategy,
+} from './strategies';
