@@ -13,13 +13,17 @@ import { AUTH_TYPE_SAML2_BEARER } from '@mcp-abap-adt/interfaces';
 import { exchangeSamlAssertion } from '../auth/saml2TokenExchange';
 import { BaseTokenProvider } from './BaseTokenProvider';
 import type {
-  Saml2AssertionConfig,
   Saml2BearerExchangeConfig,
+  Saml2CommonConfig,
 } from './saml2Utils';
-import { getSamlAssertion, resolveTokenUrl } from './saml2Utils';
+import {
+  getSamlAssertion,
+  resolveTokenUrl,
+  validateSamlConfig,
+} from './saml2Utils';
 
 export interface Saml2BearerProviderConfig
-  extends Saml2AssertionConfig,
+  extends Saml2CommonConfig,
     Saml2BearerExchangeConfig {
   logger?: ILogger;
   accessToken?: string;
@@ -31,6 +35,9 @@ export class Saml2BearerProvider extends BaseTokenProvider {
 
   constructor(config: Saml2BearerProviderConfig) {
     super();
+    // A pre-built URL with no declared ACS cannot be verified against whatever
+    // the strategy binds, so it is refused here rather than at login time.
+    validateSamlConfig(config);
     this.config = config;
     this.logger = config.logger;
 

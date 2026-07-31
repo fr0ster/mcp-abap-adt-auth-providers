@@ -12,10 +12,10 @@ import type {
 import { AUTH_TYPE_USER_TOKEN } from '@mcp-abap-adt/interfaces';
 import { parseSamlNotOnOrAfter } from '../auth/saml2Auth';
 import { BaseTokenProvider } from './BaseTokenProvider';
-import type { Saml2AssertionConfig } from './saml2Utils';
-import { getSamlAssertion } from './saml2Utils';
+import type { Saml2CommonConfig } from './saml2Utils';
+import { getSamlAssertion, validateSamlConfig } from './saml2Utils';
 
-export interface Saml2PureProviderConfig extends Saml2AssertionConfig {
+export interface Saml2PureProviderConfig extends Saml2CommonConfig {
   logger?: ILogger;
   cookieProvider: (samlResponse: string) => Promise<string>;
 }
@@ -25,6 +25,9 @@ export class Saml2PureProvider extends BaseTokenProvider {
 
   constructor(config: Saml2PureProviderConfig) {
     super();
+    // A pre-built URL with no declared ACS cannot be verified against whatever
+    // the strategy binds, so it is refused here rather than at login time.
+    validateSamlConfig(config);
     this.config = config;
     this.logger = config.logger;
     this.tokenType = 'saml';

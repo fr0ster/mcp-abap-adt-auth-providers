@@ -24,7 +24,6 @@ import { OidcPasswordProvider } from '../../providers/OidcPasswordProvider';
 import { OidcTokenExchangeProvider } from '../../providers/OidcTokenExchangeProvider';
 import { Saml2BearerProvider } from '../../providers/Saml2BearerProvider';
 import { Saml2PureProvider } from '../../providers/Saml2PureProvider';
-import { getSamlAssertion } from '../../providers/saml2Utils';
 import { SsoProviderFactory } from '../../sso/SsoProviderFactory';
 import {
   asOidcResult,
@@ -51,13 +50,8 @@ jest.mock('../../auth/oidcToken', () => ({
 jest.mock('../../auth/saml2TokenExchange', () => ({
   exchangeSamlAssertion: jest.fn(),
 }));
-jest.mock('../../providers/saml2Utils', () => {
-  const actual = jest.requireActual('../../providers/saml2Utils');
-  return {
-    ...actual,
-    getSamlAssertion: jest.fn(),
-  };
-});
+// `saml2Utils` is deliberately NOT mocked: `getSamlAssertion` is the code that
+// drives the strategy, so stubbing it would stub away everything under test.
 
 const mockDiscoverOidc = discoverOidc as jest.Mock;
 const mockExchangeCode = exchangeAuthorizationCode as jest.Mock;
@@ -66,7 +60,6 @@ const mockInitiateDevice = initiateDeviceAuthorization as jest.Mock;
 const mockPollDevice = pollDeviceTokens as jest.Mock;
 const mockPasswordGrant = passwordGrant as jest.Mock;
 const mockTokenExchange = tokenExchange as jest.Mock;
-const mockGetSamlAssertion = getSamlAssertion as jest.Mock;
 const mockExchangeSaml = exchangeSamlAssertion as jest.Mock;
 
 describe('SSO Providers', () => {
@@ -394,7 +387,6 @@ describe('SSO Providers', () => {
   });
 
   it('Saml2BearerProvider should exchange assertion for token', async () => {
-    mockGetSamlAssertion.mockResolvedValue('saml-response');
     mockExchangeSaml.mockResolvedValue({
       accessToken: 'jwt.saml.token',
       refreshToken: 'refresh',
@@ -402,36 +394,121 @@ describe('SSO Providers', () => {
     });
 
     const provider = new Saml2BearerProvider({
-      assertionFlow: 'assertion',
-      assertionProvider: async () => 'saml-response',
       idpSsoUrl: 'https://idp/sso',
       spEntityId: 'sp-entity',
       uaaUrl: 'https://uaa',
+      authorization: staticCodeStrategy({ payload: 'saml-response' }),
     });
 
     const tokens = await provider.getTokens();
     expect(tokens.authorizationToken).toBe('jwt.saml.token');
     expect(tokens.authType).toBe(AUTH_TYPE_SAML2_BEARER);
+    expect(mockExchangeSaml).toHaveBeenCalledWith(
+      'saml-response',
+      'https://uaa/oauth/token',
+      undefined,
+      undefined,
+      undefined,
+    );
   });
 
   it('Saml2PureProvider should return saml response with expiresAt', async () => {
     const samlXml =
       '<Assertion NotOnOrAfter="2030-01-01T00:00:00Z"></Assertion>';
     const samlResponse = Buffer.from(samlXml, 'utf8').toString('base64');
-    mockGetSamlAssertion.mockResolvedValue(samlResponse);
 
     const provider = new Saml2PureProvider({
-      assertionFlow: 'assertion',
-      assertionProvider: async () => samlResponse,
       cookieProvider: async () => 'SAP_SESSION=abc123',
       idpSsoUrl: 'https://idp/sso',
       spEntityId: 'sp-entity',
+      authorization: staticCodeStrategy({ payload: samlResponse }),
     });
 
     const tokens = await provider.getTokens();
     expect(tokens.authorizationToken).toBe('SAP_SESSION=abc123');
     expect(tokens.tokenType).toBe('saml');
     expect(tokens.expiresAt).toBeDefined();
+  });
+
+  it('Saml2PureProvider rejects a pre-built URL without a declared acsUrl', () => {
+    expect(
+      () =>
+        new Saml2PureProvider({
+          idpSsoUrl: 'https://idp.example/sso',
+          spEntityId: 'sp',
+          authorizationUrl: 'https://idp.example/sso?SAMLRequest=abc',
+          cookieProvider: async (saml) => saml,
+        }),
+    ).toThrow(/acsUrl is required/i);
+  });
+
+  it('Saml2PureProvider takes an assertion from a strategy', async () => {
+    const seen: string[] = [];
+    const provider = new Saml2PureProvider({
+      idpSsoUrl: 'https://idp.example/sso',
+      spEntityId: 'sp',
+      acsUrl: 'http://localhost:61001/callback',
+      authorization: staticCodeStrategy({
+        redirectUri: 'http://localhost:61001/callback',
+        payload: 'PHNhbWw+',
+      }),
+      // The pure provider exchanges the assertion for session cookies; echo it
+      // so the assertion under test is the one the strategy delivered.
+      cookieProvider: async (saml) => {
+        seen.push(saml);
+        return saml;
+      },
+    });
+    const tokens = await provider.getTokens();
+    expect(seen).toEqual(['PHNhbWw+']);
+    expect(tokens.authorizationToken).toBe('PHNhbWw+');
+  });
+
+  it('Saml2PureProvider rejects an assertion delivered to the wrong ACS', async () => {
+    const provider = new Saml2PureProvider({
+      idpSsoUrl: 'https://idp.example/sso',
+      spEntityId: 'sp',
+      acsUrl: 'http://localhost:61001/callback',
+      // Never calls the builder, so the check inside it never runs — this is
+      // what the second net exists for.
+      authorization: staticCodeStrategy({
+        redirectUri: 'http://localhost:5555/callback',
+        payload: 'PHNhbWw+',
+      }),
+      cookieProvider: async (saml) => saml,
+    });
+    await expect(provider.getTokens()).rejects.toThrow(
+      /acsUrl is http:\/\/localhost:61001\/callback, but the authorization strategy used/i,
+    );
+  });
+
+  it('Saml2BearerProvider rejects a pre-built URL without a declared acsUrl', () => {
+    expect(
+      () =>
+        new Saml2BearerProvider({
+          idpSsoUrl: 'https://idp.example/sso',
+          spEntityId: 'sp',
+          authorizationUrl: 'https://idp.example/sso?SAMLRequest=abc',
+          uaaUrl: 'https://uaa',
+        }),
+    ).toThrow(/acsUrl is required/i);
+  });
+
+  it('Saml2PureProvider refuses to open a browser at an ACS the IdP was never told about', async () => {
+    const provider = new Saml2PureProvider({
+      idpSsoUrl: 'https://idp.example/sso',
+      spEntityId: 'sp',
+      acsUrl: 'https://sp.example/acs',
+      // Calls the builder, so the guard inside it runs before anything opens.
+      authorization: externalCodeStrategy({
+        redirectUri: 'http://localhost:61001/callback',
+        provide: async () => 'unreachable',
+      }),
+      cookieProvider: async (saml) => saml,
+    });
+    await expect(provider.getTokens()).rejects.toThrow(
+      /acsUrl is https:\/\/sp\.example\/acs, but the authorization strategy is listening on http:\/\/localhost:61001\/callback/i,
+    );
   });
 
   it('SsoProviderFactory should create configured providers', () => {
@@ -596,6 +673,170 @@ describe('OidcBrowserProvider strategy lifecycle', () => {
     const provider = new OidcBrowserProvider({
       issuerUrl: 'https://issuer',
       clientId: 'client',
+      logger,
+    });
+
+    try {
+      const error = await reasonFor(provider.getTokens());
+      // The reason the login failed survives; the cleanup failure is logged.
+      expect(error?.message).toMatch(DEFAULT_LOGIN_FAILURE);
+      expect(error?.message).not.toContain('dispose exploded');
+      expect(defaultDispose).toHaveBeenCalledTimes(1);
+      expect(JSON.stringify(warn.mock.calls)).toContain('dispose exploded');
+    } finally {
+      defaultDispose.mockRestore();
+    }
+  }, 30000);
+});
+
+/**
+ * Whoever constructs, disposes — the SAML half.
+ *
+ * `getSamlAssertion` is shared by both SAML providers, so the rule is written
+ * once and would be reversed once; asserting it through `Saml2PureProvider`
+ * covers the helper, and the pure provider needs no token endpoint to reach it.
+ */
+describe('SAML strategy lifecycle', () => {
+  function portIsFree(port: number): Promise<boolean> {
+    return new Promise((resolve) => {
+      const s = netModule.createServer();
+      s.once('error', () => resolve(false));
+      s.listen(port, () => s.close(() => resolve(true)));
+    });
+  }
+
+  const reasonFor = (p: Promise<unknown>): Promise<Error | null> =>
+    p.then(
+      () => null,
+      (error: Error) => error,
+    );
+
+  /**
+   * The failure a default login produces here — a declared ACS the default
+   * callback cannot be listening on, so the URL builder throws inside the
+   * callback scope in milliseconds rather than after the 30 s timeout — or, if
+   * this machine happens to hold 61001, the one the port probe produces first.
+   * Either ends the login through the same `finally`, which is the subject.
+   */
+  const DEFAULT_LOGIN_FAILURE = /they must match|already in use/i;
+
+  /** Registered with the IdP, and nothing on this machine can bind it. */
+  const MISMATCHED_ACS = 'https://sp.example/acs';
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
+
+  it('never disposes a strategy the consumer supplied', async () => {
+    // Nothing here should construct a default at all; the class-level spy says
+    // so without needing to mock the module the provider imports.
+    const defaultDispose = jest.spyOn(
+      BrowserCallbackStrategy.prototype,
+      'dispose',
+    );
+    const dispose = jest.fn(async () => undefined);
+    const redirectUri = 'http://localhost:61001/callback';
+    const supplied: IAuthorizationStrategy<string> = {
+      authorize: async (request) => {
+        await request.buildAuthorizationUrl(redirectUri);
+        return { payload: 'PHNhbWw+', redirectUri };
+      },
+      dispose,
+    };
+
+    try {
+      const provider = new Saml2PureProvider({
+        idpSsoUrl: 'https://idp.example/sso',
+        spEntityId: 'sp',
+        acsUrl: redirectUri,
+        authorization: supplied,
+        cookieProvider: async (saml) => saml,
+      });
+
+      const tokens = await provider.getTokens();
+      expect(tokens.authorizationToken).toBe('PHNhbWw+');
+      // A receiver the consumer owns must survive the login it served.
+      expect(dispose).not.toHaveBeenCalled();
+      expect(defaultDispose).not.toHaveBeenCalled();
+    } finally {
+      defaultDispose.mockRestore();
+    }
+  }, 30000);
+
+  it('leaves a supplied strategy alone when the login fails too', async () => {
+    const dispose = jest.fn(async () => undefined);
+    const supplied: IAuthorizationStrategy<string> = {
+      authorize: async () => {
+        throw new Error('consumer flow cancelled');
+      },
+      dispose,
+    };
+    const provider = new Saml2PureProvider({
+      idpSsoUrl: 'https://idp.example/sso',
+      spEntityId: 'sp',
+      authorization: supplied,
+      cookieProvider: async (saml) => saml,
+    });
+
+    await expect(provider.getTokens()).rejects.toThrow(
+      /consumer flow cancelled/,
+    );
+    expect(dispose).not.toHaveBeenCalled();
+  }, 30000);
+
+  it('disposes the default it constructed, per login, leaving the port free', async () => {
+    const defaultDispose = jest.spyOn(
+      BrowserCallbackStrategy.prototype,
+      'dispose',
+    );
+    // No `authorization`: the provider builds a SAML browser callback on
+    // DEFAULT_CALLBACK_PORT. The declared ACS is elsewhere, so the guard ends
+    // the login in milliseconds rather than after the default 30 s.
+    const provider = new Saml2PureProvider({
+      idpSsoUrl: 'https://idp.example/sso',
+      spEntityId: 'sp',
+      acsUrl: MISMATCHED_ACS,
+      cookieProvider: async (saml) => saml,
+    });
+
+    try {
+      const first = await reasonFor(provider.getTokens());
+      expect(first?.message).toMatch(DEFAULT_LOGIN_FAILURE);
+      expect(defaultDispose).toHaveBeenCalledTimes(1);
+      // The claim that matters is about the socket, not the mock: a settled
+      // promise must mean the callback port is genuinely released.
+      expect(await portIsFree(DEFAULT_CALLBACK_PORT)).toBe(true);
+
+      // `dispose` disables an instance permanently, so a provider holding one
+      // default would fail the second login with "has been disposed".
+      const second = await reasonFor(provider.getTokens());
+      expect(second?.message).toMatch(DEFAULT_LOGIN_FAILURE);
+      expect(second?.message).not.toMatch(/disposed/i);
+      expect(defaultDispose).toHaveBeenCalledTimes(2);
+      expect(await portIsFree(DEFAULT_CALLBACK_PORT)).toBe(true);
+    } finally {
+      defaultDispose.mockRestore();
+    }
+  }, 30000);
+
+  it('reports the login failure, not the cleanup failure, when dispose throws', async () => {
+    const warn = jest.fn();
+    const logger = {
+      debug: jest.fn(),
+      info: jest.fn(),
+      warn,
+      error: jest.fn(),
+    } as unknown as ILogger;
+    const defaultDispose = jest
+      .spyOn(BrowserCallbackStrategy.prototype, 'dispose')
+      .mockImplementation(async () => {
+        throw new Error('dispose exploded');
+      });
+    const provider = new Saml2PureProvider({
+      idpSsoUrl: 'https://idp.example/sso',
+      spEntityId: 'sp',
+      acsUrl: MISMATCHED_ACS,
+      cookieProvider: async (saml) => saml,
       logger,
     });
 
