@@ -3215,6 +3215,16 @@ git commit -m "feat: export strategies and remove the orchestration they replace
 
 ---
 
+### Task 16b: Device flow prompts stop writing to stdout
+
+Added during execution, after the Task 16 review found that `DeviceFlowProvider.ts:66-76` and `OidcDeviceFlowProvider.ts:96-103` write thirteen `console.log` calls to stdout while both classes are exported from `index.ts`. Pre-existing, but 2.0.0 would ship stdout writers from a package that now declares stdout cleanliness and deleted `manualInput.ts` for exactly that reason.
+
+The device code and verification URI are prompts, not log lines — a user who cannot see them cannot complete the flow — so they follow the rule the rest of the package uses: the logger when there is one, `process.stderr` otherwise, never stdout. The logger is `ILogger` from `@mcp-abap-adt/interfaces`, not a local invention.
+
+`BrowserCallbackStrategy`'s private `announcer` is extracted to `src/auth/announce.ts` and shared, so this removes a duplicate rather than adding one. `DeviceFlowProvider` also gains the `logger?: ILogger` it never had — it was passing `undefined` to helpers that accept one.
+
+Full steps: `.superpowers/sdd/2026-07-29-authorization-strategies/task-16b-brief.md`.
+
 ### Task 17: Documentation and the 2.0.0 release
 
 **Files:**
