@@ -175,12 +175,19 @@ function isPortAvailable(port: number): Promise<boolean> {
  * is reported through the scope's `fail`, which is just another way for the
  * scope to end.
  */
-async function launchBrowser(
+export async function launchBrowser(
   authorizationUrl: string,
   browser: string,
-  port: number,
+  callbackUri: string,
   announce: (msg: string) => void,
   log: ILogger | null,
+  /**
+   * Extra guidance for 'none'/'headless', supplied only by a flow whose
+   * transport really offers another way in. The UAA callback server has a paste
+   * form on `/`; the OIDC and SAML ones do not, and promising one there sends
+   * the user to a 404.
+   */
+  remoteHint?: string,
 ): Promise<void> {
   const browserApp = BROWSER_MAP[browser];
 
@@ -188,14 +195,8 @@ async function launchBrowser(
   if (browser === 'none' || browser === 'headless') {
     announce('🔗 Open this URL in your browser to authenticate:');
     announce(`   ${authorizationUrl}`);
-    announce(
-      `   Waiting for callback on http://localhost:${port}/callback ...`,
-    );
-    announce(
-      '   If your browser is on another machine, after login copy the ' +
-        '`code` from the address bar and paste it at ' +
-        `http://<this-host>:${port}/ — or paste it here and press Enter.`,
-    );
+    announce(`   Waiting for callback on ${callbackUri} ...`);
+    if (remoteHint) announce(remoteHint);
     return;
   }
 
@@ -212,9 +213,7 @@ async function launchBrowser(
       log?.warn(`⚠️  Could not open browser automatically: ${message}`);
       announce('🔗 Please open this URL in your browser to authenticate:');
       announce(`   ${authorizationUrl}`);
-      announce(
-        `   Waiting for callback on http://localhost:${port}/callback ...`,
-      );
+      announce(`   Waiting for callback on ${callbackUri} ...`);
     }
     return;
   }
@@ -347,9 +346,12 @@ export async function startBrowserAuth(
       void launchBrowser(
         authorizationUrl,
         browser,
-        server.port,
+        redirectUri,
         announce,
         log,
+        '   If your browser is on another machine, after login copy the ' +
+          '`code` from the address bar and paste it at ' +
+          `http://<this-host>:${server.port}/ — or paste it here and press Enter.`,
       ).catch((error: unknown) => {
         const message = error instanceof Error ? error.message : String(error);
         log?.error(
