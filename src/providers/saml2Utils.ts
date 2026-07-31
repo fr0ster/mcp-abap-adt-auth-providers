@@ -3,7 +3,6 @@
  */
 
 import type { ILogger } from '@mcp-abap-adt/interfaces';
-import { readManualInput } from '../auth/manualInput';
 import {
   buildSamlAuthorizationUrl,
   startSamlBrowserAuth,
@@ -74,8 +73,18 @@ export async function getSamlAssertion(
     config.logger?.info('[SAML] Open URL to authenticate', {
       authorizationUrl,
     });
-    const input = config.manualInput || readManualInput;
-    return await input('Paste SAMLResponse: ');
+    // The stdin/stdout default this used to fall back to (`readManualInput`)
+    // wrote its prompt to stdout, which corrupts an MCP stdio transport — it
+    // was removed rather than kept as a trap. Task 13 replaces this whole
+    // module with the `manualSamlResponseStrategy` from
+    // `../strategies/manualStrategies`; until then, callers of the 'manual'
+    // flow must supply `manualInput` themselves.
+    if (!config.manualInput) {
+      throw new Error(
+        "assertionFlow: 'manual' requires a `manualInput` callback; there is no default reader",
+      );
+    }
+    return await config.manualInput();
   }
 
   const browser = config.browser || 'auto';
