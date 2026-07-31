@@ -528,4 +528,61 @@ describe('withBrowserCallbackServer', () => {
       await expect(attempt).rejects.toThrow(/access_denied: User said no/);
     }, 30000);
   });
+
+  /**
+   * The way in when the browser is on another machine. These assertions used to
+   * reach the routes through `startBrowserAuth`, which no longer exists; the
+   * routes belong to this transport, so they are pinned here.
+   */
+  describe('paste form', () => {
+    it('serves a form at GET /', async () => {
+      const code = await withBrowserCallbackServer(
+        { port: PORT, timeoutMs: 5000 },
+        async (srv) => {
+          const waiting = srv.waitForResult();
+          const { status, body } = await httpGet('/');
+          expect(status).toBe(200);
+          expect(body).toContain('<form');
+          expect(body).toContain('/submit');
+          void deliver('?code=after-form');
+          return await waiting;
+        },
+      );
+      expect(code).toBe('after-form');
+    }, 30000);
+
+    it('completes the login from a full redirected URL pasted at /submit', async () => {
+      const code = await withBrowserCallbackServer(
+        { port: PORT, timeoutMs: 5000 },
+        async (srv) => {
+          const waiting = srv.waitForResult();
+          void httpGet(
+            `/submit?input=${encodeURIComponent(
+              `http://localhost:${PORT}/callback?code=pasted-code`,
+            )}`,
+          ).catch(() => undefined);
+          return await waiting;
+        },
+      );
+      expect(code).toBe('pasted-code');
+    }, 30000);
+
+    it('re-renders the form (HTTP 400) on an unusable paste, without ending the login', async () => {
+      const code = await withBrowserCallbackServer(
+        { port: PORT, timeoutMs: 5000 },
+        async (srv) => {
+          const waiting = srv.waitForResult();
+          const { status, body } = await httpGet(
+            `/submit?input=${encodeURIComponent('not a code')}`,
+          );
+          expect(status).toBe(400);
+          expect(body).toContain('<form');
+          // Still pending — a real code afterwards still lands.
+          void deliver('?code=after-bad-paste');
+          return await waiting;
+        },
+      );
+      expect(code).toBe('after-bad-paste');
+    }, 30000);
+  });
 });

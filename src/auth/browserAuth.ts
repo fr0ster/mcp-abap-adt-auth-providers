@@ -3,16 +3,8 @@
  */
 
 import * as child_process from 'node:child_process';
-import * as http from 'node:http';
-import * as net from 'node:net';
-import * as readline from 'node:readline';
 import type { IAuthorizationConfig, ILogger } from '@mcp-abap-adt/interfaces';
 import axios from 'axios';
-import { withBrowserCallbackServer } from './callbackServer';
-
-type BrowserAuthConfig = IAuthorizationConfig & {
-  authorizationUrl?: string;
-};
 
 const BROWSER_MAP: Record<string, string | undefined | null> = {
   chrome: 'chrome',
@@ -146,28 +138,6 @@ function _isDebugEnabled(): boolean {
 }
 
 /**
- * Check if a port is available
- */
-function isPortAvailable(port: number): Promise<boolean> {
-  return new Promise((resolve) => {
-    const server = net.createServer();
-    server.listen(port, () => {
-      server.once('close', () => resolve(true));
-      server.close();
-    });
-    server.on('error', () => resolve(false));
-  });
-}
-
-/**
- * Start browser authentication flow
- * @param authConfig Authorization configuration with UAA credentials
- * @param browser Browser name (chrome, edge, firefox, system, none)
- * @param logger Optional logger instance. If not provided, uses default logger.
- * @param port Port for OAuth callback server (default: 3001)
- * @returns Promise that resolves to tokens
- * @internal - Internal function, not exported from package
- *//**
  * Open the authorization URL, or tell the user how to do it.
  *
  * Never awaited on the critical path by the caller: a launcher that hangs must
@@ -285,120 +255,4 @@ export async function launchBrowser(
 
   if (browserApp) await open(authorizationUrl, { app: { name: browserApp } });
   else await open(authorizationUrl);
-}
-
-/**
- * Interactive browser login for the UAA authorization-code flow.
- *
- * The callback socket is owned by `withBrowserCallbackServer`: it is released
- * when the scope ends, whatever ends it, and before the code is exchanged — so
- * a slow UAA cannot hold the port, and a settled promise always means the port
- * is free.
- */
-export async function startBrowserAuth(
-  authConfig: BrowserAuthConfig,
-  browser: string = 'system',
-  logger?: ILogger,
-  port: number = 3001,
-  timeoutMs: number = 30 * 1000,
-): Promise<{ accessToken: string; refreshToken?: string }> {
-  const log: ILogger | null = logger || null;
-
-  // Essential, user-facing prompts (the auth URL, paste instructions) must be
-  // visible even when no logger is supplied. Fall back to stderr — never stdout,
-  // so stdio-based RPC transports (MCP/LSP) are not corrupted.
-  const announce = (msg: string) => {
-    if (log) log.info(msg);
-    else process.stderr.write(`${msg}\n`);
-  };
-
-  // Pre-check kept for its message: AuthBroker matches /already in use/i to
-  // distinguish a busy port from other failures.
-  const portAvailable = await isPortAvailable(port);
-  if (!portAvailable) {
-    throw new Error(
-      `Port ${port} is already in use. Please specify a different port or free the port.`,
-    );
-  }
-
-  let stdinReader: readline.Interface | null = null;
-  // Captured inside the scope below and reused after it ends, so the
-  // authorization request and the token exchange always agree on the same
-  // redirect URI — the one the callback server actually bound, not a string
-  // rebuilt from a port that could in principle be 0 (OS-assigned).
-  let redirectUri = '';
-
-  const code = await withBrowserCallbackServer(
-    { port, timeoutMs },
-    async (server) => {
-      redirectUri = server.redirectUri;
-      const authorizationUrl =
-        authConfig.authorizationUrl ??
-        getJwtAuthorizationUrl(authConfig, redirectUri);
-
-      log?.info(`[browserAuth] Authorization URL: ${authorizationUrl}`);
-      log?.info(`[browserAuth] Server listening on port: ${server.port}`);
-
-      const waiting = server.waitForResult();
-
-      // Not awaited: a launcher that hangs must not delay the timeout or the
-      // release, and one that fails ends the scope through `fail`.
-      void launchBrowser(
-        authorizationUrl,
-        browser,
-        redirectUri,
-        announce,
-        log,
-        '   If your browser is on another machine, after login copy the ' +
-          '`code` from the address bar and paste it at ' +
-          `http://<this-host>:${server.port}/ — or paste it here and press Enter.`,
-      ).catch((error: unknown) => {
-        const message = error instanceof Error ? error.message : String(error);
-        log?.error(
-          `❌ Failed to open browser: ${message}. Please open manually: ${authorizationUrl}`,
-          { error: message, url: authorizationUrl },
-        );
-        server.fail(
-          new Error(
-            `Browser opening failed for destination authentication. Please open manually: ${authorizationUrl}`,
-          ),
-        );
-      });
-
-      // Manual stdin paste — only when attached to an interactive terminal.
-      // Under a stdio RPC transport stdin carries the protocol, so we must never
-      // consume it; isTTY guards that. A pasted line is handed to the same
-      // `/submit` route the paste form uses, so there is one way in, not two.
-      if (
-        (browser === 'none' || browser === 'headless') &&
-        process.stdin.isTTY
-      ) {
-        stdinReader = readline.createInterface({ input: process.stdin });
-        stdinReader.on('line', (line: string) => {
-          const pasted = extractCode(line);
-          if (!pasted) {
-            process.stderr.write(
-              'Could not read an authorization code from that input. Try again.\n',
-            );
-            return;
-          }
-          const req = http.get({
-            host: '127.0.0.1',
-            port: server.port,
-            path: `/submit?input=${encodeURIComponent(pasted)}`,
-            agent: false,
-          });
-          req.on('error', () => undefined);
-        });
-      }
-
-      return await waiting;
-    },
-  ).finally(() => {
-    stdinReader?.close();
-    stdinReader = null;
-  });
-
-  log?.info('[browserAuth] Exchanging code for token...');
-  return await exchangeCodeForToken(authConfig, code, redirectUri, log);
 }

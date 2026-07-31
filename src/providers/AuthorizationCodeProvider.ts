@@ -7,36 +7,39 @@
 
 import type {
   IAuthorizationConfig,
+  IAuthorizationStrategy,
   ILogger,
   ITokenResult,
   OAuth2GrantType,
 } from '@mcp-abap-adt/interfaces';
 import { AUTH_TYPE_AUTHORIZATION_CODE } from '@mcp-abap-adt/interfaces';
-import { startBrowserAuth } from '../auth/browserAuth';
+import {
+  exchangeCodeForToken,
+  getJwtAuthorizationUrl,
+} from '../auth/browserAuth';
 import { refreshJwtToken } from '../auth/tokenRefresher';
+import { browserCallbackStrategy } from '../strategies';
 import { BaseTokenProvider } from './BaseTokenProvider';
 
-/** How long an interactive login may wait for its callback. */
-const LOGIN_TIMEOUT_MS = 30 * 1000;
-
 export interface AuthorizationCodeProviderConfig {
-  // Required for building authorization URL and token exchange
+  // Required for building the authorization URL and for the token exchange
   uaaUrl: string;
   clientId: string;
   clientSecret: string;
 
-  // Optional: pre-built authorization URL (if not provided, will be built from uaaUrl + clientId)
+  /** Pre-built authorization URL. Carries its own redirect; see the guard below. */
   authorizationUrl?: string;
-  // Optional: browser type ('auto', 'system', 'chrome', 'none', etc.)
-  // If not provided, defaults to 'none' (prints URL to console)
-  browser?: string;
-  redirectPort?: number; // default: 3001
 
-  // Optional: existing tokens (for refresh scenario)
+  /**
+   * How the login is conducted. Omitted means a browser callback on the default
+   * port — the package's own transport, which a consumer may replace wholesale.
+   */
+  authorization?: IAuthorizationStrategy<string>;
+
+  // Optional: existing tokens (for the refresh scenario)
   accessToken?: string;
   refreshToken?: string;
 
-  // Optional: logger for debugging
   logger?: ILogger;
 }
 
@@ -61,8 +64,6 @@ export class AuthorizationCodeProvider extends BaseTokenProvider {
       hasRefreshToken: !!config.refreshToken,
       accessToken: this.formatToken(config.accessToken),
       refreshToken: this.formatToken(config.refreshToken),
-      browser: config.browser || 'none',
-      redirectPort: config.redirectPort || 3001,
     });
 
     const missingFields: string[] = [];
@@ -120,70 +121,81 @@ export class AuthorizationCodeProvider extends BaseTokenProvider {
   }
 
   protected async performLogin(): Promise<ITokenResult> {
-    // Build authorization config
-    // If authorizationUrl is provided, use it; otherwise startBrowserAuth will build it from uaaUrl + clientId
-    const authConfig: IAuthorizationConfig & { authorizationUrl?: string } = {
+    const authConfig: IAuthorizationConfig = {
       uaaUrl: this.config.uaaUrl,
       uaaClientId: this.config.clientId,
       uaaClientSecret: this.config.clientSecret,
     };
 
-    // If pre-built URL provided, use it
-    if (this.config.authorizationUrl) {
-      authConfig.authorizationUrl = this.config.authorizationUrl;
+    const prebuilt = this.config.authorizationUrl;
+    const declaredRedirect = prebuilt
+      ? new URL(prebuilt).searchParams.get('redirect_uri')
+      : null;
+
+    const mismatch = (redirectUri: string): string =>
+      `Pre-built authorizationUrl declares redirect_uri ${declaredRedirect}, ` +
+      `but the authorization strategy used ${redirectUri}, which does not match. ` +
+      'An ephemeral port cannot be used with a pre-built URL.';
+
+    // The provider owns the URL; the strategy owns where it is answered. The
+    // guard lives here rather than after the fact because a mismatched redirect
+    // produces no callback at all — checking the outcome would mean waiting for
+    // a timeout that explains nothing.
+    const request = {
+      logger: this.logger,
+      buildAuthorizationUrl: async (redirectUri: string): Promise<string> => {
+        if (prebuilt) {
+          if (declaredRedirect && declaredRedirect !== redirectUri) {
+            throw new Error(mismatch(redirectUri));
+          }
+          return prebuilt;
+        }
+        return getJwtAuthorizationUrl(authConfig, redirectUri);
+      },
+    };
+
+    // Constructed here means disposed here: whoever constructs, disposes.
+    const supplied = this.config.authorization;
+    const strategy = supplied ?? browserCallbackStrategy();
+
+    let outcome: { payload: string; redirectUri: string };
+    try {
+      outcome = await strategy.authorize(request);
+    } finally {
+      if (!supplied) {
+        // A cleanup failure must not replace the reason the login failed.
+        await strategy.dispose?.().catch((error: unknown) => {
+          this.logger?.warn('[AuthorizationCodeProvider] dispose failed', {
+            error: error instanceof Error ? error.message : String(error),
+          });
+        });
+      }
     }
 
-    // Use provided browser or default to 'none' (prints URL to console)
-    const browser = this.config.browser || 'none';
-    const redirectPort = this.config.redirectPort || 3001;
+    // The second net. A strategy that never called the builder — `staticCodeStrategy`
+    // holds its payload already — passed the first check by not participating in
+    // it, and would otherwise reach the exchange with a redirect_uri the
+    // pre-built URL never advertised, earning an opaque `invalid_grant`.
+    if (declaredRedirect && declaredRedirect !== outcome.redirectUri) {
+      throw new Error(mismatch(outcome.redirectUri));
+    }
 
-    // Build authorization URL for logging (same logic as in startBrowserAuth)
-    const authorizationUrl =
-      authConfig.authorizationUrl ??
-      `${authConfig.uaaUrl}/oauth/authorize?client_id=${encodeURIComponent(authConfig.uaaClientId)}&redirect_uri=${encodeURIComponent(`http://localhost:${redirectPort}/callback`)}&response_type=code`;
-
-    this.logger?.info(
-      '[AuthorizationCodeProvider] Performing login via browser',
-      {
-        browser,
-        redirectPort,
-        authorizationUrl,
-        uaaUrl: authConfig.uaaUrl,
-        clientId: authConfig.uaaClientId,
-      },
-    );
-
-    // One timeout, owned by whoever owns the socket.
-    //
-    // This used to race startBrowserAuth against a second timer of the same
-    // 30 seconds, so which fired was down to scheduling — and when the outer
-    // one won, the provider rejected while the callback port was still bound.
-    // That timer was never cleared either, keeping the event loop alive for the
-    // rest of the window after a login that succeeded in a second.
-    const result = await startBrowserAuth(
-      authConfig,
-      browser,
-      this.logger || undefined, // Pass logger to browserAuth
-      redirectPort,
-      LOGIN_TIMEOUT_MS,
-    );
-
-    this.logger?.info('[AuthorizationCodeProvider] Login completed', {
-      hasAccessToken: !!result.accessToken,
-      hasRefreshToken: !!result.refreshToken,
-      accessToken: this.formatToken(result.accessToken),
-      refreshToken: this.formatToken(result.refreshToken),
-      accessTokenLength: result.accessToken?.length || 0,
+    this.logger?.info('[AuthorizationCodeProvider] Code received', {
+      redirectUri: outcome.redirectUri,
     });
 
-    // Parse expiration from JWT
-    const expiresIn = this.calculateExpiresIn(result.accessToken);
+    const result = await exchangeCodeForToken(
+      authConfig,
+      outcome.payload,
+      outcome.redirectUri,
+      this.logger,
+    );
 
     return {
       authorizationToken: result.accessToken,
       refreshToken: result.refreshToken,
       authType: AUTH_TYPE_AUTHORIZATION_CODE,
-      expiresIn,
+      expiresIn: this.calculateExpiresIn(result.accessToken),
     };
   }
 

@@ -321,6 +321,41 @@ describe('BrowserCallbackStrategy', () => {
     }
   }, 30000);
 
+  /**
+   * Without a logger the prompt still has to reach a human — on stderr, never
+   * stdout, which a stdio RPC transport uses for protocol traffic. Asserted
+   * through `startBrowserAuth` before it was deleted.
+   */
+  it('announces on stderr when no logger is supplied', async () => {
+    const writes: string[] = [];
+    const spy = jest
+      .spyOn(process.stderr, 'write')
+      .mockImplementation((chunk: unknown) => {
+        writes.push(String(chunk));
+        return true;
+      });
+    const { factory } = fakeFactory({ boundPort: 49998 });
+    const strategy = browserCallbackStrategy({
+      port: 0,
+      browser: 'none',
+      callbackServer: factory,
+    });
+
+    try {
+      await strategy.authorize({
+        buildAuthorizationUrl: async () =>
+          'https://idp.example/oauth/authorize?client_id=c',
+      });
+    } finally {
+      spy.mockRestore();
+    }
+
+    const all = writes.join('');
+    expect(all).toContain('Open this URL');
+    expect(all).toContain('oauth/authorize');
+    expect(all).toContain('http://localhost:49998/callback');
+  });
+
   it('honours a signal that was already aborted', async () => {
     const { factory, released } = fakeFactory({});
     const strategy = new BrowserCallbackStrategy<string>({

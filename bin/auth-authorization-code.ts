@@ -10,6 +10,7 @@ import {
   ABAP_CONNECTION_VARS,
 } from '@mcp-abap-adt/auth-stores';
 import { AuthorizationCodeProvider } from '../src/providers/AuthorizationCodeProvider';
+import { browserCallbackStrategy } from '../src/strategies';
 import {
   getUaaCredentials,
   parseEnvFile,
@@ -89,14 +90,15 @@ Example:
       authorizationUrl = `${uaaUrl}/oauth/authorize?client_id=${encodeURIComponent(clientId)}&redirect_uri=${encodeURIComponent(redirectUri)}&response_type=code`;
     }
 
-    // Create provider
+    // Create provider. `--port` now reaches the strategy that binds the socket;
+    // it must stay the port baked into the authorization URL above, or the
+    // provider rejects the mismatch before opening anything.
     const provider = new AuthorizationCodeProvider({
       authorizationUrl,
       uaaUrl,
       clientId,
       clientSecret,
-      browser,
-      redirectPort: port,
+      authorization: browserCallbackStrategy({ browser, port }),
       refreshToken: existingRefreshToken,
     });
 

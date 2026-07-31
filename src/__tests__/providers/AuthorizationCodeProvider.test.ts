@@ -13,6 +13,7 @@ import * as fs from 'node:fs';
 import netModule from 'node:net';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { jest } from '@jest/globals';
 import {
   AbapServiceKeyStore,
   AbapSessionStore,
@@ -21,6 +22,7 @@ import type { ILogger } from '@mcp-abap-adt/interfaces';
 import { AUTH_TYPE_AUTHORIZATION_CODE } from '@mcp-abap-adt/interfaces';
 import { DefaultLogger, LogLevel } from '@mcp-abap-adt/logger';
 import { AuthorizationCodeProvider } from '../../providers/AuthorizationCodeProvider';
+import { browserCallbackStrategy, staticCodeStrategy } from '../../strategies';
 import {
   getDestination,
   getServiceKeysDir,
@@ -165,8 +167,11 @@ describe('AuthorizationCodeProvider', () => {
           uaaUrl: authConfig.uaaUrl!,
           clientId: authConfig.uaaClientId!,
           clientSecret: authConfig.uaaClientSecret!,
-          browser: 'system', // Use system browser for authentication
-          redirectPort: port1,
+          // Use the system browser for authentication
+          authorization: browserCallbackStrategy({
+            browser: 'system',
+            port: port1,
+          }),
           logger,
         });
 
@@ -189,8 +194,11 @@ describe('AuthorizationCodeProvider', () => {
           clientSecret: authConfig.uaaClientSecret!,
           refreshToken: tokens1.refreshToken,
           accessToken: tokens1.authorizationToken, // Use token from Scenario 1
-          browser: 'system', // Use system browser if token refresh/login needed
-          redirectPort: port2,
+          // Use the system browser if token refresh/login is needed
+          authorization: browserCallbackStrategy({
+            browser: 'system',
+            port: port2,
+          }),
           logger,
         });
 
@@ -250,8 +258,11 @@ describe('AuthorizationCodeProvider', () => {
         clientSecret: authConfig.uaaClientSecret!,
         refreshToken: 'invalid-expired-refresh-token', // Invalid refresh token
         accessToken: expiredToken, // Expired token
-        browser: 'system', // Use system browser for authentication
-        redirectPort,
+        // Use the system browser for authentication
+        authorization: browserCallbackStrategy({
+          browser: 'system',
+          port: redirectPort,
+        }),
         logger,
       });
 
@@ -308,12 +319,12 @@ describe('AuthorizationCodeProvider', () => {
 });
 
 /**
- * The provider used to race startBrowserAuth against a 30-second timer of its
- * own — the same duration as the one inside the flow — so which fired was down
- * to scheduling. When the outer one won, the provider rejected while the
- * callback socket was still bound.
+ * The provider no longer owns a socket, a browser or a timeout — it owns a URL
+ * builder and an exchange. These pin the two consequences that are easy to
+ * regress: the guard must fire before anything is opened, and the port must be
+ * free the moment the failure surfaces.
  */
-describe('AuthorizationCodeProvider timeout ownership', () => {
+describe('AuthorizationCodeProvider with strategies', () => {
   const PORT = 7875;
 
   function portIsFree(port: number): Promise<boolean> {
@@ -329,16 +340,61 @@ describe('AuthorizationCodeProvider timeout ownership', () => {
       uaaUrl: 'http://127.0.0.1:9',
       clientId: 'client',
       clientSecret: 'secret',
-      browser: 'none',
-      redirectPort: PORT,
+      authorization: browserCallbackStrategy({
+        port: PORT,
+        timeoutMs: 1000,
+        openUrl: async () => undefined,
+      }),
     });
 
-    // Runs for the flow's full 30 s login window: the provider exposes no way
-    // to shorten it, and inventing one would widen the public API beyond what
-    // this change is for.
     await expect(provider.getTokens()).rejects.toThrow(/timeout/i);
-    // No sleep. With the outer Promise.race still in place this fails about
-    // half the time, which is why it is asserted rather than reasoned about.
     expect(await portIsFree(PORT)).toBe(true);
-  }, 90000);
+  }, 30000);
+
+  it('rejects a pre-built URL whose redirect does not match, before opening a browser', async () => {
+    const openUrl = jest.fn(async () => undefined);
+    const provider = new AuthorizationCodeProvider({
+      uaaUrl: 'http://127.0.0.1:9',
+      clientId: 'client',
+      clientSecret: 'secret',
+      authorizationUrl:
+        'https://uaa.example/oauth/authorize?client_id=c&redirect_uri=http%3A%2F%2Flocalhost%3A3001%2Fcallback&response_type=code',
+      authorization: browserCallbackStrategy({
+        port: PORT,
+        timeoutMs: 30000,
+        openUrl,
+      }),
+    });
+
+    const started = Date.now();
+    await expect(provider.getTokens()).rejects.toThrow(
+      /redirect_uri.*does not match/i,
+    );
+    // Not "eventually" — the point of building-time validation is that it does
+    // not wait for a callback that can never arrive.
+    expect(Date.now() - started).toBeLessThan(5000);
+    expect(openUrl).not.toHaveBeenCalled();
+    expect(await portIsFree(PORT)).toBe(true);
+  }, 30000);
+
+  it('catches the mismatch even from a strategy that never builds a URL', async () => {
+    const provider = new AuthorizationCodeProvider({
+      uaaUrl: 'http://127.0.0.1:9',
+      clientId: 'client',
+      clientSecret: 'secret',
+      authorizationUrl:
+        'https://uaa.example/oauth/authorize?client_id=c&redirect_uri=http%3A%2F%2Flocalhost%3A3001%2Fcallback&response_type=code',
+      // Holds its code already, so the builder — and the check inside it —
+      // never runs. Without the second net this would reach the exchange and
+      // come back as an opaque `invalid_grant`.
+      authorization: staticCodeStrategy({
+        redirectUri: 'http://localhost:61001/callback',
+        payload: 'held-code',
+      }),
+    });
+
+    await expect(provider.getTokens()).rejects.toThrow(
+      /redirect_uri.*but the authorization strategy used/i,
+    );
+  }, 30000);
 });
