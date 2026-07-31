@@ -126,7 +126,7 @@ async function openBrowserUrl(
   }
 }
 
-const withSamlCallbackServer: CallbackServerFactory<string> = <TReturn>(
+export const withSamlCallbackServer: CallbackServerFactory<string> = <TReturn>(
   options: ICallbackServerOptions,
   use: (server: ICallbackServerHandle<string>) => Promise<TReturn>,
 ): Promise<TReturn> =>
@@ -136,14 +136,17 @@ const withSamlCallbackServer: CallbackServerFactory<string> = <TReturn>(
       app.use(express.urlencoded({ extended: false, limit: '5mb' }));
 
       const handle = (samlResponse: unknown, res: express.Response): void => {
-        res
-          .status(200)
-          .send('SAML authentication complete. You can close this window.');
+        // The response is decided after the payload is examined. Answering 200
+        // first told a request that carried nothing that it had authenticated.
         if (typeof samlResponse === 'string' && samlResponse) {
+          res
+            .status(200)
+            .send('SAML authentication complete. You can close this window.');
           settle.ok(samlResponse, res);
-        } else {
-          settle.err(new Error('Missing SAMLResponse'), res);
+          return;
         }
+        res.status(400).send('Error: not a SAML assertion callback');
+        settle.ignore('no SAMLResponse in the request', res);
       };
 
       app.post('/callback', (req, res) => {
