@@ -33,6 +33,15 @@ provider keeps only what it can compute, the URL and the token exchange. (#11)
   pre-built, deflated `SAMLRequest` cannot be read, so it cannot be checked
   against what the strategy binds; 1.x accepted the combination and quietly used
   a default ACS that was usually not where the IdP posted.
+- **The terminal-paste channel is gone from the browser callback strategy.** In
+  1.x a `none` / `headless` login could also be completed by pasting the code on
+  stdin, and that worked without the consumer choosing anything; it is the
+  channel headless and SSH users reached for most. `browserCallbackStrategy`
+  reads no stdin at all — under an MCP or LSP stdio transport that stream
+  carries the protocol, so an authorization library must not consume it. The
+  capability moved to `manualPasteStrategy({ redirectUri, read })`, which is now
+  an explicit choice; the paste form served on `/` remains the other fallback
+  for a browser on a different machine.
 - **Device flow prompts no longer go to stdout.** `DeviceFlowProviderConfig`
   accepts `logger?: ILogger`; the verification URI and user code go to that
   logger, or to stderr when none is supplied. `OidcDeviceFlowProvider` likewise.
@@ -81,6 +90,10 @@ provider keeps only what it can compute, the URL and the token exchange. (#11)
 - The PKCE challenge is pinned to the verifier that reaches the exchange.
 - A strategy disposed while its port probe was still awaiting used to report
   everything released and then bind a socket behind it.
+- The remote paste hint named `http://localhost:<port>/` — an address that
+  cannot work for the one reader it addresses, someone whose browser is on
+  another machine. It now names `http://<this-host>:<port>/`, keeping the real
+  port and leaving the host to the reader, as the 1.x wording did.
 
 ### Docs
 

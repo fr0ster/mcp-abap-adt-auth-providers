@@ -211,10 +211,25 @@ export class BrowserCallbackStrategy<TResult>
 // Each ready constructor defaults the transport rather than dictating it: a
 // supplied `callbackServer` wins, which is what makes substitution reachable
 // without dropping to the class.
-/** The paste form `withBrowserCallbackServer` serves on `/` — and nothing else does. */
-const uaaPasteHint = (redirectUri: string): string =>
-  '   If your browser is on another machine, copy the `code` from the ' +
-  `address bar after login and paste it at ${new URL(redirectUri).origin}/`;
+/**
+ * The paste form `withBrowserCallbackServer` serves on `/` — and nothing else
+ * does. Since the terminal-paste channel left with `startBrowserAuth`, this
+ * form is the only remaining way in for a browser on another machine, so the
+ * address it names has to be one that machine can actually reach.
+ *
+ * Which is why the host is left as a placeholder rather than taken from
+ * `redirectUri`. That URI is bound for *this* process, so its origin is
+ * `http://localhost:<port>` — precisely the address that does not work from
+ * anywhere else, addressed to the one reader who is not here. The port is real
+ * and is kept; the host is the reader's to fill in.
+ */
+const uaaPasteHint = (redirectUri: string): string => {
+  const { protocol, port } = new URL(redirectUri);
+  return (
+    '   If your browser is on another machine, copy the `code` from the ' +
+    `address bar after login and paste it at ${protocol}//<this-host>:${port}/`
+  );
+};
 
 export function browserCallbackStrategy(
   options: CallbackStrategyOptions<string> = {},

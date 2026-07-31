@@ -32,6 +32,7 @@ import {
   externalCodeStrategy,
   staticCodeStrategy,
 } from '../../strategies';
+import { canOwnPort } from '../helpers/netHelpers';
 
 jest.mock('../../auth/oidcDiscovery', () => ({
   discoverOidc: jest.fn(),
@@ -734,13 +735,21 @@ describe('OidcBrowserProvider strategy lifecycle', () => {
       clientId: 'client',
     });
 
+    // Probed before the first login: if an unrelated process holds 61001, this
+    // login never binds it and cannot release it, so the socket assertions
+    // below would be about that process rather than about this code.
+    const ownsPort = await canOwnPort(
+      DEFAULT_CALLBACK_PORT,
+      'OidcBrowserProvider disposes the default it constructed',
+    );
+
     try {
       const first = await reasonFor(provider.getTokens());
       expect(first?.message).toMatch(DEFAULT_LOGIN_FAILURE);
       expect(defaultDispose).toHaveBeenCalledTimes(1);
       // The claim that matters is about the socket, not the mock: a settled
       // promise must mean the callback port is genuinely released.
-      expect(await portIsFree(DEFAULT_CALLBACK_PORT)).toBe(true);
+      if (ownsPort) expect(await portIsFree(DEFAULT_CALLBACK_PORT)).toBe(true);
 
       // `dispose` disables an instance permanently, so a provider holding one
       // default would fail the second login with "has been disposed".
@@ -748,7 +757,7 @@ describe('OidcBrowserProvider strategy lifecycle', () => {
       expect(second?.message).toMatch(DEFAULT_LOGIN_FAILURE);
       expect(second?.message).not.toMatch(/disposed/i);
       expect(defaultDispose).toHaveBeenCalledTimes(2);
-      expect(await portIsFree(DEFAULT_CALLBACK_PORT)).toBe(true);
+      if (ownsPort) expect(await portIsFree(DEFAULT_CALLBACK_PORT)).toBe(true);
     } finally {
       defaultDispose.mockRestore();
     }
@@ -896,13 +905,21 @@ describe('SAML strategy lifecycle', () => {
       cookieProvider: async (saml) => saml,
     });
 
+    // Probed before the first login: if an unrelated process holds 61001, this
+    // login never binds it and cannot release it, so the socket assertions
+    // below would be about that process rather than about this code.
+    const ownsPort = await canOwnPort(
+      DEFAULT_CALLBACK_PORT,
+      'Saml2PureProvider disposes the default it constructed',
+    );
+
     try {
       const first = await reasonFor(provider.getTokens());
       expect(first?.message).toMatch(DEFAULT_LOGIN_FAILURE);
       expect(defaultDispose).toHaveBeenCalledTimes(1);
       // The claim that matters is about the socket, not the mock: a settled
       // promise must mean the callback port is genuinely released.
-      expect(await portIsFree(DEFAULT_CALLBACK_PORT)).toBe(true);
+      if (ownsPort) expect(await portIsFree(DEFAULT_CALLBACK_PORT)).toBe(true);
 
       // `dispose` disables an instance permanently, so a provider holding one
       // default would fail the second login with "has been disposed".
@@ -910,7 +927,7 @@ describe('SAML strategy lifecycle', () => {
       expect(second?.message).toMatch(DEFAULT_LOGIN_FAILURE);
       expect(second?.message).not.toMatch(/disposed/i);
       expect(defaultDispose).toHaveBeenCalledTimes(2);
-      expect(await portIsFree(DEFAULT_CALLBACK_PORT)).toBe(true);
+      if (ownsPort) expect(await portIsFree(DEFAULT_CALLBACK_PORT)).toBe(true);
     } finally {
       defaultDispose.mockRestore();
     }

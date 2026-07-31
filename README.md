@@ -176,20 +176,58 @@ disposed by the provider.
 
 #### Manual paste over a callback server
 
-With `browserCallbackStrategy` (the UAA transport), login can still complete
-through any of three channels — whichever finishes first wins:
+With `browserCallbackStrategy` (the UAA transport), login can complete through
+either of **two** channels — whichever finishes first wins:
 
 1. **Automatic callback** — `GET /callback?code=...` on the bound redirect URI.
    Works when the browser is on the same machine as the process.
-2. **Paste form** — open `http://<host>:<port>/` and paste the code (or the
+2. **Paste form** — open `http://<this-host>:<port>/` and paste the code (or the
    whole redirected URL). Works when the browser is on a *different* machine,
-   since the callback server listens on all interfaces.
-3. **Terminal paste** — paste the code on stdin and press Enter. Only active when
-   `process.stdin.isTTY` (stdin is never consumed under a stdio RPC transport).
+   since the callback server listens on all interfaces. In `'none'` /
+   `'headless'` mode the strategy prints this address for you — with the real
+   port and the host left for you to fill in, because the process cannot know
+   which of its addresses you can reach.
 
-`manualPasteStrategy` is the alternative that binds no socket at all. Both it
-and the paste form accept a bare code, `code=...`, or a full redirected URL —
-whichever you paste, the code is extracted from it.
+**The terminal-paste channel is gone.** In 1.x a third channel read the code
+from stdin when `process.stdin.isTTY`; `browserCallbackStrategy` has no such
+reader, and this is deliberate rather than an oversight — under an MCP or LSP
+stdio transport stdin carries the protocol, and an authorization library has no
+business consuming it. Reading a pasted code is now a strategy of its own:
+
+```typescript
+import {
+  AuthorizationCodeProvider,
+  manualPasteStrategy,
+} from '@mcp-abap-adt/auth-providers';
+
+const provider = new AuthorizationCodeProvider({
+  uaaUrl, clientId, clientSecret,
+  // Binds no socket at all: prints the URL, then reads one line.
+  // Defaults to stdin when it is a TTY — pass `read` to source it anywhere else.
+  authorization: manualPasteStrategy({
+    redirectUri: 'http://localhost:61001/callback',
+  }),
+});
+```
+
+`manualPasteStrategy` reads from stdin only when `process.stdin.isTTY`, and
+throws a clear error otherwise rather than consuming a protocol stream. Supply
+`read` to take the value from somewhere else entirely — a TUI prompt, an HTTP
+request, a file:
+
+```typescript
+authorization: manualPasteStrategy({
+  redirectUri: 'http://localhost:61001/callback',
+  read: async (prompt) => askInOurUi(prompt),
+})
+```
+
+The `redirectUri` you give it must be the one the identity provider will
+redirect to; it is also the one sent to the token endpoint. It defaults to
+`http://localhost:61001/callback`.
+
+Both the paste form and `manualPasteStrategy` accept a bare code, `code=...`,
+or a full redirected URL — whichever you paste, the code is extracted from it.
 
 > The `extractCode(input)` helper behind that leniency is internal; it is not
 > part of the package's exports, contrary to what the 1.1.0–1.2.0 README said.
@@ -696,8 +734,16 @@ combination and silently defaulted the ACS to `http://localhost:3001/callback`;
 since the real ACS is buried in a deflated `SAMLRequest` this package did not
 build, it cannot be inferred and must be declared.
 
-Two more changes that are not fields:
+Three more changes that are not fields:
 
+- **The terminal-paste channel is gone from the browser strategy.** In 1.x a
+  `none` / `headless` login also accepted the code on stdin, without the
+  consumer choosing anything. `browserCallbackStrategy` no longer reads stdin at
+  all — under a stdio RPC transport that stream carries the protocol. If your
+  users pasted codes into the terminal, switch that flow to
+  `manualPasteStrategy({ redirectUri, read })`, which is the same capability as
+  an explicit choice; otherwise the paste form on `/` is the remaining fallback
+  for a browser on another machine.
 - **Device flow prompts no longer go to stdout.** `DeviceFlowProviderConfig`
   accepts `logger?: ILogger`; the verification URI and user code go to that
   logger, or to stderr when there is none. Anything that captured stdout to read

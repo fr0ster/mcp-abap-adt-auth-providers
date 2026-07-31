@@ -279,10 +279,13 @@ describe('BrowserCallbackStrategy', () => {
 
     const shared = { port: 0, browser: 'none', timeoutMs: 300 } as const;
 
-    // Ours, and it really serves a paste form.
-    expect(await announcedBy(browserCallbackStrategy({ ...shared }))).toMatch(
-      /paste it at http:\/\/localhost:\d+\//,
-    );
+    // Ours, and it really serves a paste form. The address it names must be
+    // reachable by the reader it addresses — someone on another machine — so
+    // the host stays a placeholder and only the port is asserted. `localhost`
+    // here would be an instruction that cannot work for its own audience.
+    const ourHint = await announcedBy(browserCallbackStrategy({ ...shared }));
+    expect(ourHint).toMatch(/paste it at http:\/\/<this-host>:\d+\//);
+    expect(ourHint).not.toMatch(/paste it at http:\/\/localhost/);
 
     // The same transport — but supplied by the caller. The rule is about who
     // supplied it, not what it is: once a receiver is injected, the package no
