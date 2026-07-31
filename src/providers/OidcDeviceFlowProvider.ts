@@ -8,6 +8,7 @@ import type {
   OAuth2GrantType,
 } from '@mcp-abap-adt/interfaces';
 import { AUTH_TYPE_AUTHORIZATION_CODE } from '@mcp-abap-adt/interfaces';
+import { announcer } from '../auth/announce';
 import { discoverOidc } from '../auth/oidcDiscovery';
 import {
   initiateDeviceAuthorization,
@@ -92,15 +93,16 @@ export class OidcDeviceFlowProvider extends BaseTokenProvider {
       this.logger,
     );
 
-    // Manual user guidance
-    console.log('');
-    console.log('OIDC device authorization');
-    console.log('Go to:', deviceFlow.verificationUri);
+    // Manual user guidance. This is a prompt the user must see to complete
+    // the flow, not a log line — it goes to the logger when there is one and
+    // to stderr otherwise, never to stdout.
+    const announce = announcer(this.logger);
+    announce('OIDC device authorization');
+    announce(`Go to: ${deviceFlow.verificationUri}`);
     if (deviceFlow.verificationUriComplete) {
-      console.log('Or use:', deviceFlow.verificationUriComplete);
+      announce(`Or use: ${deviceFlow.verificationUriComplete}`);
     }
-    console.log('Enter code:', deviceFlow.userCode);
-    console.log('');
+    announce(`Enter code: ${deviceFlow.userCode}`);
 
     const tokens = await pollDeviceTokens(
       tokenEndpoint,

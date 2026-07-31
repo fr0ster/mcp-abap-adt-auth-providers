@@ -13,8 +13,8 @@ import type {
   AuthorizationRequest,
   CallbackServerFactory,
   IAuthorizationStrategy,
-  ILogger,
 } from '@mcp-abap-adt/interfaces';
+import { announcer } from '../auth/announce';
 import { launchBrowser } from '../auth/browserAuth';
 import { withBrowserCallbackServer } from '../auth/callbackServer';
 import type { OidcCallbackResult } from '../auth/oidcBrowserAuth';
@@ -65,17 +65,6 @@ export interface CallbackStrategyOptions<TResult = string> {
 export interface BrowserCallbackStrategyOptions<TResult>
   extends CallbackStrategyOptions<TResult> {
   callbackServer: CallbackServerFactory<TResult>;
-}
-
-/**
- * Essential prompts must be visible without a logger, and must never go to
- * stdout: a stdio RPC transport carries protocol traffic there.
- */
-function announcer(logger?: ILogger): (msg: string) => void {
-  return (msg: string) => {
-    if (logger) logger.info(msg);
-    else process.stderr.write(`${msg}\n`);
-  };
 }
 
 /**

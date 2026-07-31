@@ -5,8 +5,13 @@
  * User authorizes on another device by entering a code.
  */
 
-import type { ITokenResult, OAuth2GrantType } from '@mcp-abap-adt/interfaces';
+import type {
+  ILogger,
+  ITokenResult,
+  OAuth2GrantType,
+} from '@mcp-abap-adt/interfaces';
 import { AUTH_TYPE_AUTHORIZATION_CODE } from '@mcp-abap-adt/interfaces';
+import { announcer } from '../auth/announce';
 import {
   initiateDeviceFlow,
   pollForDeviceTokens,
@@ -22,6 +27,7 @@ export interface DeviceFlowProviderConfig {
   // Optional: existing token
   accessToken?: string;
   refreshToken?: string;
+  logger?: ILogger;
 }
 
 /**
@@ -36,6 +42,7 @@ export class DeviceFlowProvider extends BaseTokenProvider {
   constructor(config: DeviceFlowProviderConfig) {
     super();
     this.config = config;
+    this.logger = config.logger;
 
     if (config.accessToken) {
       this.authorizationToken = config.accessToken;
@@ -59,21 +66,20 @@ export class DeviceFlowProvider extends BaseTokenProvider {
       this.config.uaaUrl,
       this.config.clientId,
       this.config.scope,
-      undefined, // logger
+      this.logger,
     );
 
-    // Display user code and verification URI
-    console.log('\n🔐 Device Flow Authorization');
-    console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-    console.log(`📱 Go to: ${deviceFlow.verificationUri}`);
+    // Display user code and verification URI. This is a prompt the user must
+    // see to complete the flow, not a log line — it goes to the logger when
+    // there is one and to stderr otherwise, never to stdout.
+    const announce = announcer(this.logger);
+    announce('Device Flow Authorization');
+    announce(`Go to: ${deviceFlow.verificationUri}`);
     if (deviceFlow.verificationUriComplete) {
-      console.log(
-        `   Or use complete URL: ${deviceFlow.verificationUriComplete}`,
-      );
+      announce(`Or use complete URL: ${deviceFlow.verificationUriComplete}`);
     }
-    console.log(`🔑 Enter code: ${deviceFlow.userCode}`);
-    console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-    console.log('⏳ Waiting for authorization...\n');
+    announce(`Enter code: ${deviceFlow.userCode}`);
+    announce('Waiting for authorization...');
 
     // Poll for tokens
     const result = await pollForDeviceTokens(
@@ -82,7 +88,7 @@ export class DeviceFlowProvider extends BaseTokenProvider {
       this.config.clientSecret,
       deviceFlow.deviceCode,
       deviceFlow.interval,
-      undefined, // logger
+      this.logger,
     );
 
     const expiresIn = this.calculateExpiresIn(result.accessToken);

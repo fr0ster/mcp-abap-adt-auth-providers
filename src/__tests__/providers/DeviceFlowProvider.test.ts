@@ -16,7 +16,12 @@ import {
   AbapServiceKeyStore,
   AbapSessionStore,
 } from '@mcp-abap-adt/auth-stores';
+import type { ILogger } from '@mcp-abap-adt/interfaces';
 import { AUTH_TYPE_AUTHORIZATION_CODE } from '@mcp-abap-adt/interfaces';
+import {
+  initiateDeviceFlow,
+  pollForDeviceTokens,
+} from '../../auth/deviceFlowAuth';
 import { DeviceFlowProvider } from '../../providers/DeviceFlowProvider';
 import {
   getAbapDestination,
@@ -25,6 +30,101 @@ import {
   hasRealConfig,
   loadTestConfig,
 } from '../helpers/configHelpers';
+
+jest.mock('../../auth/deviceFlowAuth', () => ({
+  initiateDeviceFlow: jest.fn(),
+  pollForDeviceTokens: jest.fn(),
+}));
+
+const mockInitiateDeviceFlow = initiateDeviceFlow as jest.Mock;
+const mockPollForDeviceTokens = pollForDeviceTokens as jest.Mock;
+
+/**
+ * The device code and verification URI are prompts, not log lines — a user
+ * who cannot see them cannot complete the flow. They must reach the logger
+ * when one is supplied and stderr otherwise, and never stdout, which carries
+ * protocol traffic under an MCP or LSP stdio transport.
+ */
+describe('DeviceFlowProvider prompt destination', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockInitiateDeviceFlow.mockResolvedValue({
+      deviceCode: 'device-code-fixture',
+      userCode: 'USER-CODE-FIXTURE',
+      verificationUri: 'https://verify.example',
+      interval: 0,
+    });
+    mockPollForDeviceTokens.mockResolvedValue({
+      accessToken: 'jwt.access.token',
+      refreshToken: 'refresh-fixture',
+      expiresIn: 3600,
+    });
+  });
+
+  it('prompts on stderr and writes nothing to stdout', async () => {
+    const out: string[] = [];
+    const err: string[] = [];
+    const outSpy = jest
+      .spyOn(process.stdout, 'write')
+      .mockImplementation((chunk: unknown) => {
+        out.push(String(chunk));
+        return true;
+      });
+    const errSpy = jest
+      .spyOn(process.stderr, 'write')
+      .mockImplementation((chunk: unknown) => {
+        err.push(String(chunk));
+        return true;
+      });
+    try {
+      const provider = new DeviceFlowProvider({
+        uaaUrl: 'https://uaa.example',
+        clientId: 'client-id',
+      });
+      await provider.getTokens();
+    } finally {
+      outSpy.mockRestore();
+      errSpy.mockRestore();
+    }
+    expect(out).toEqual([]);
+    // The prompt must still be reachable — a user who cannot see the code cannot log in.
+    expect(err.join('')).toContain('USER-CODE-FIXTURE');
+    expect(err.join('')).toContain('https://verify.example');
+  });
+
+  it('sends the prompt to the logger, and nothing to stderr, when one is supplied', async () => {
+    const infos: string[] = [];
+    const logger: ILogger = {
+      debug: () => undefined,
+      info: (msg: string) => {
+        infos.push(msg);
+      },
+      warn: () => undefined,
+      error: () => undefined,
+    };
+    const err: string[] = [];
+    const errSpy = jest
+      .spyOn(process.stderr, 'write')
+      .mockImplementation((chunk: unknown) => {
+        err.push(String(chunk));
+        return true;
+      });
+    try {
+      const provider = new DeviceFlowProvider({
+        uaaUrl: 'https://uaa.example',
+        clientId: 'client-id',
+        logger,
+      });
+      await provider.getTokens();
+    } finally {
+      errSpy.mockRestore();
+    }
+    expect(err).toEqual([]);
+    const text = infos.join('\n');
+    expect(text).toContain('USER-CODE-FIXTURE');
+    expect(text).toContain('https://verify.example');
+  });
+});
 
 // Helper to create expired JWT token
 const createExpiredJWT = (): string => {

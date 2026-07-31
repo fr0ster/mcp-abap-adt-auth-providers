@@ -283,6 +283,103 @@ describe('SSO Providers', () => {
     expect(mockDiscoverOidc).not.toHaveBeenCalled();
   });
 
+  /**
+   * The device code and verification URI are prompts, not log lines — a user
+   * who cannot see them cannot complete the flow. They must reach the logger
+   * when one is supplied and stderr otherwise, and never stdout, which
+   * carries protocol traffic under an MCP or LSP stdio transport.
+   */
+  it('OidcDeviceFlowProvider prompts on stderr and writes nothing to stdout', async () => {
+    mockInitiateDevice.mockResolvedValue({
+      deviceCode: 'dev-code',
+      userCode: 'USER-CODE-FIXTURE',
+      verificationUri: 'https://verify.example',
+      interval: 0,
+    });
+    mockPollDevice.mockResolvedValue({
+      accessToken: 'jwt.device.token',
+      refreshToken: 'refresh',
+      expiresIn: 1200,
+    });
+
+    const out: string[] = [];
+    const err: string[] = [];
+    const outSpy = jest
+      .spyOn(process.stdout, 'write')
+      .mockImplementation((chunk: unknown) => {
+        out.push(String(chunk));
+        return true;
+      });
+    const errSpy = jest
+      .spyOn(process.stderr, 'write')
+      .mockImplementation((chunk: unknown) => {
+        err.push(String(chunk));
+        return true;
+      });
+    try {
+      const provider = new OidcDeviceFlowProvider({
+        issuerUrl: 'https://issuer',
+        clientId: 'client',
+        deviceAuthorizationEndpoint: 'https://issuer/device',
+        tokenEndpoint: 'https://issuer/token',
+      });
+      await provider.getTokens();
+    } finally {
+      outSpy.mockRestore();
+      errSpy.mockRestore();
+    }
+    expect(out).toEqual([]);
+    expect(err.join('')).toContain('USER-CODE-FIXTURE');
+    expect(err.join('')).toContain('https://verify.example');
+  });
+
+  it('OidcDeviceFlowProvider sends the prompt to the logger, and nothing to stderr, when one is supplied', async () => {
+    mockInitiateDevice.mockResolvedValue({
+      deviceCode: 'dev-code',
+      userCode: 'USER-CODE-FIXTURE',
+      verificationUri: 'https://verify.example',
+      interval: 0,
+    });
+    mockPollDevice.mockResolvedValue({
+      accessToken: 'jwt.device.token',
+      refreshToken: 'refresh',
+      expiresIn: 1200,
+    });
+
+    const infos: string[] = [];
+    const logger: ILogger = {
+      debug: () => undefined,
+      info: (msg: string) => {
+        infos.push(msg);
+      },
+      warn: () => undefined,
+      error: () => undefined,
+    };
+    const err: string[] = [];
+    const errSpy = jest
+      .spyOn(process.stderr, 'write')
+      .mockImplementation((chunk: unknown) => {
+        err.push(String(chunk));
+        return true;
+      });
+    try {
+      const provider = new OidcDeviceFlowProvider({
+        issuerUrl: 'https://issuer',
+        clientId: 'client',
+        deviceAuthorizationEndpoint: 'https://issuer/device',
+        tokenEndpoint: 'https://issuer/token',
+        logger,
+      });
+      await provider.getTokens();
+    } finally {
+      errSpy.mockRestore();
+    }
+    expect(err).toEqual([]);
+    const text = infos.join('\n');
+    expect(text).toContain('USER-CODE-FIXTURE');
+    expect(text).toContain('https://verify.example');
+  });
+
   it('OidcPasswordProvider should use password grant', async () => {
     mockDiscoverOidc.mockResolvedValue({
       token_endpoint: 'https://issuer/token',
