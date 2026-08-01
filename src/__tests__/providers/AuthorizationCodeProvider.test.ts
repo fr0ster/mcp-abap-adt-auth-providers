@@ -177,10 +177,13 @@ describe('AuthorizationCodeProvider', () => {
           uaaUrl: authConfig.uaaUrl!,
           clientId: authConfig.uaaClientId!,
           clientSecret: authConfig.uaaClientSecret!,
-          // Use the system browser for authentication
+          // Use the system browser for authentication. A person needs
+          // minutes to complete SSO with a second factor, so this budgets
+          // close to the Jest timeout below rather than the 30 s default.
           authorization: browserCallbackStrategy({
             browser: 'system',
             port: port1,
+            timeoutMs: 290000,
           }),
           logger,
         });
@@ -208,6 +211,7 @@ describe('AuthorizationCodeProvider', () => {
           authorization: browserCallbackStrategy({
             browser: 'system',
             port: port2,
+            timeoutMs: 290000,
           }),
           logger,
         });
@@ -268,10 +272,13 @@ describe('AuthorizationCodeProvider', () => {
         clientSecret: authConfig.uaaClientSecret!,
         refreshToken: 'invalid-expired-refresh-token', // Invalid refresh token
         accessToken: expiredToken, // Expired token
-        // Use the system browser for authentication
+        // Use the system browser for authentication. A person needs minutes
+        // to complete SSO with a second factor, so this budgets close to the
+        // Jest timeout below rather than the 30 s default.
         authorization: browserCallbackStrategy({
           browser: 'system',
           port: redirectPort,
+          timeoutMs: 290000,
         }),
         logger,
       });
