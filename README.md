@@ -154,6 +154,23 @@ The three `CallbackServerFactory` implementations are exported too —
 — so a consumer can keep the transport and replace everything around it, or the
 reverse.
 
+For the three shipped flows, passing `callbackServer` to a ready constructor is
+the way to substitute a transport. The `BrowserCallbackStrategy` class behind
+them is exported as well, for the case the constructors cannot express: a
+receiver whose payload is none of the three shapes those flows deliver. Its
+options are the same, except `callbackServer` is required — there is no default
+transport to fall back on when the payload type is your own.
+
+```typescript
+import { BrowserCallbackStrategy } from '@mcp-abap-adt/auth-providers';
+
+const strategy = new BrowserCallbackStrategy<MyPayload>({
+  callbackServer: withMyOwnCallbackServer, // CallbackServerFactory<MyPayload>
+  port: 61001,
+  timeoutMs: 30000,
+});
+```
+
 #### Bringing your own
 
 ```typescript
