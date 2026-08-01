@@ -27,6 +27,7 @@ import {
   BrowserCallbackStrategy,
   browserCallbackStrategy,
   DEFAULT_CALLBACK_PORT,
+  DEFAULT_LOGIN_TIMEOUT_MS,
   staticCodeStrategy,
 } from '../../strategies';
 import {
@@ -118,35 +119,167 @@ describe('AuthorizationCodeProvider', () => {
   const sessionsDir = getSessionsDir(config);
   const hasRealConfigValue = hasRealConfig(config);
 
+  /**
+   * Both interactive cases below build a strategy for a login a *person*
+   * completes — typing a username, a password and a second factor — and five
+   * minutes is the number chosen for that, not up for negotiation downward.
+   *
+   * `INTERACTIVE_JEST_TIMEOUT_MS` is derived from it rather than written as
+   * its own magic number, so the invariant this is protecting stays visible
+   * instead of depending on two constants that happen to agree today: the
+   * strategy's own clock must expire strictly before Jest's. If Jest's
+   * timeout fired first, the case would fail with "Exceeded timeout of
+   * Xms" — which says nothing about authentication — instead of the
+   * strategy's own, legible "Authentication timeout after N seconds". The
+   * margin on top covers everything a login itself does not: loading the
+   * service key, DNS, Scenario 3's deliberately-failed refresh, launching the
+   * browser, the token exchange, assertions and cleanup.
+   */
+  const HUMAN_LOGIN_TIMEOUT_MS = 5 * 60 * 1000;
+  const INTERACTIVE_JEST_MARGIN_MS = 60 * 1000;
+  const INTERACTIVE_JEST_TIMEOUT_MS =
+    HUMAN_LOGIN_TIMEOUT_MS + INTERACTIVE_JEST_MARGIN_MS;
+
   describe('Scenario 1 & 2: Token lifecycle', () => {
-    it('should login via browser and reuse token from Scenario 1', async () => {
-      if (!hasRealConfigValue) {
-        console.warn('⚠️  Skipping integration test - no real config');
-        return;
-      }
-
-      if (!destination || !serviceKeysDir) {
-        console.warn('⚠️  Skipping integration test - missing required config');
-        return;
-      }
-
-      // Use temporary session directory to avoid affecting real sessions
-      const tempSessionsDir = path.join(
-        os.tmpdir(),
-        `test-sessions-${Date.now()}`,
-      );
-      fs.mkdirSync(tempSessionsDir, { recursive: true });
-
-      try {
-        const serviceKeyStore = new AbapServiceKeyStore(serviceKeysDir);
-        const sessionStore = new AbapSessionStore(tempSessionsDir);
-
-        // Ensure no session exists
-        try {
-          await sessionStore.deleteSession(destination);
-        } catch {
-          // Session doesn't exist, that's fine
+    it(
+      'should login via browser and reuse token from Scenario 1',
+      async () => {
+        if (!hasRealConfigValue) {
+          console.warn('⚠️  Skipping integration test - no real config');
+          return;
         }
+
+        if (!destination || !serviceKeysDir) {
+          console.warn(
+            '⚠️  Skipping integration test - missing required config',
+          );
+          return;
+        }
+
+        // Use temporary session directory to avoid affecting real sessions
+        const tempSessionsDir = path.join(
+          os.tmpdir(),
+          `test-sessions-${Date.now()}`,
+        );
+        fs.mkdirSync(tempSessionsDir, { recursive: true });
+
+        try {
+          const serviceKeyStore = new AbapServiceKeyStore(serviceKeysDir);
+          const sessionStore = new AbapSessionStore(tempSessionsDir);
+
+          // Ensure no session exists
+          try {
+            await sessionStore.deleteSession(destination);
+          } catch {
+            // Session doesn't exist, that's fine
+          }
+
+          const authConfig =
+            await serviceKeyStore.getAuthorizationConfig(destination);
+          if (!authConfig) {
+            throw new Error(
+              'Failed to load authorization config from service key',
+            );
+          }
+          if (!(await canResolveHost(authConfig.uaaUrl!))) {
+            console.warn(
+              '⚠️  Skipping integration test - UAA host not resolvable',
+            );
+            return;
+          }
+          if (!(await canListenOnLocalhost())) {
+            console.warn(
+              '⚠️  Skipping integration test - cannot bind to localhost',
+            );
+            return;
+          }
+
+          // Create provider with only service key (no session tokens)
+          // Use unique port for this test to avoid conflicts
+          const logger = createTestLogger();
+          const port1 = await getAvailablePort();
+          const port2 = await getAvailablePort();
+          const provider = new AuthorizationCodeProvider({
+            uaaUrl: authConfig.uaaUrl!,
+            clientId: authConfig.uaaClientId!,
+            clientSecret: authConfig.uaaClientSecret!,
+            // Use the system browser for authentication.
+            authorization: browserCallbackStrategy({
+              browser: 'system',
+              port: port1,
+              timeoutMs: HUMAN_LOGIN_TIMEOUT_MS,
+            }),
+            logger,
+          });
+
+          // Provider should attempt login via browser
+          const tokens1 = await provider.getTokens();
+          expect(tokens1.authorizationToken).toBeDefined();
+          expect(tokens1.authType).toBe(AUTH_TYPE_AUTHORIZATION_CODE);
+
+          // Validate that new token is valid and not expired
+          const isValid1 = validateTokenExpiration(tokens1.authorizationToken);
+          expect(isValid1).toBe(true);
+
+          // Wait a bit for server to fully close and port to be freed
+          await new Promise((resolve) => setTimeout(resolve, 500));
+
+          // Scenario 2: Use token from Scenario 1 - should use cached token
+          const provider2 = new AuthorizationCodeProvider({
+            uaaUrl: authConfig.uaaUrl!,
+            clientId: authConfig.uaaClientId!,
+            clientSecret: authConfig.uaaClientSecret!,
+            refreshToken: tokens1.refreshToken,
+            accessToken: tokens1.authorizationToken, // Use token from Scenario 1
+            // This provider exists to prove the Scenario 1 token is reused from
+            // cache — it must never need to log in. `DEFAULT_LOGIN_TIMEOUT_MS`
+            // (not the human budget) turns "it tried to open a browser anyway"
+            // into a fast, enforced failure instead of a five-minute wait.
+            authorization: browserCallbackStrategy({
+              browser: 'system',
+              port: port2,
+              timeoutMs: DEFAULT_LOGIN_TIMEOUT_MS,
+            }),
+            logger,
+          });
+
+          const tokens2 = await provider2.getTokens();
+          expect(tokens2.authorizationToken).toBeDefined();
+          expect(tokens2.authType).toBe(AUTH_TYPE_AUTHORIZATION_CODE);
+          // Should use cached token from Scenario 1
+          expect(tokens2.authorizationToken).toBe(tokens1.authorizationToken);
+          const isValid2 = validateTokenExpiration(tokens2.authorizationToken);
+          expect(isValid2).toBe(true);
+        } finally {
+          // Cleanup
+          try {
+            fs.rmSync(tempSessionsDir, { recursive: true, force: true });
+          } catch {
+            // Ignore cleanup errors
+          }
+        }
+      },
+      INTERACTIVE_JEST_TIMEOUT_MS,
+    );
+  });
+
+  describe('Scenario 3: Service key + expired session + expired refresh token', () => {
+    it(
+      'should login via browser when refresh token is also expired',
+      async () => {
+        if (!hasRealConfigValue) {
+          console.warn('⚠️  Skipping integration test - no real config');
+          return;
+        }
+
+        if (!destination || !serviceKeysDir) {
+          console.warn(
+            '⚠️  Skipping integration test - missing required config',
+          );
+          return;
+        }
+
+        const serviceKeyStore = new AbapServiceKeyStore(serviceKeysDir);
 
         const authConfig =
           await serviceKeyStore.getAuthorizationConfig(destination);
@@ -168,123 +301,36 @@ describe('AuthorizationCodeProvider', () => {
           return;
         }
 
-        // Create provider with only service key (no session tokens)
-        // Use unique port for this test to avoid conflicts
+        // Create provider with expired token and invalid refresh token
         const logger = createTestLogger();
-        const port1 = await getAvailablePort();
-        const port2 = await getAvailablePort();
+        const expiredToken = createExpiredJWT();
+        const redirectPort = await getAvailablePort();
         const provider = new AuthorizationCodeProvider({
           uaaUrl: authConfig.uaaUrl!,
           clientId: authConfig.uaaClientId!,
           clientSecret: authConfig.uaaClientSecret!,
-          // Use the system browser for authentication
+          refreshToken: 'invalid-expired-refresh-token', // Invalid refresh token
+          accessToken: expiredToken, // Expired token
+          // Use the system browser for authentication.
           authorization: browserCallbackStrategy({
             browser: 'system',
-            port: port1,
+            port: redirectPort,
+            timeoutMs: HUMAN_LOGIN_TIMEOUT_MS,
           }),
           logger,
         });
 
-        // Provider should attempt login via browser
-        const tokens1 = await provider.getTokens();
-        expect(tokens1.authorizationToken).toBeDefined();
-        expect(tokens1.authType).toBe(AUTH_TYPE_AUTHORIZATION_CODE);
+        // Provider should attempt refresh, fail, then attempt login via browser
+        const tokens = await provider.getTokens();
+        expect(tokens.authorizationToken).toBeDefined();
+        expect(tokens.authType).toBe(AUTH_TYPE_AUTHORIZATION_CODE);
 
         // Validate that new token is valid and not expired
-        const isValid1 = validateTokenExpiration(tokens1.authorizationToken);
-        expect(isValid1).toBe(true);
-
-        // Wait a bit for server to fully close and port to be freed
-        await new Promise((resolve) => setTimeout(resolve, 500));
-
-        // Scenario 2: Use token from Scenario 1 - should use cached token
-        const provider2 = new AuthorizationCodeProvider({
-          uaaUrl: authConfig.uaaUrl!,
-          clientId: authConfig.uaaClientId!,
-          clientSecret: authConfig.uaaClientSecret!,
-          refreshToken: tokens1.refreshToken,
-          accessToken: tokens1.authorizationToken, // Use token from Scenario 1
-          // Use the system browser if token refresh/login is needed
-          authorization: browserCallbackStrategy({
-            browser: 'system',
-            port: port2,
-          }),
-          logger,
-        });
-
-        const tokens2 = await provider2.getTokens();
-        expect(tokens2.authorizationToken).toBeDefined();
-        expect(tokens2.authType).toBe(AUTH_TYPE_AUTHORIZATION_CODE);
-        // Should use cached token from Scenario 1
-        expect(tokens2.authorizationToken).toBe(tokens1.authorizationToken);
-        const isValid2 = validateTokenExpiration(tokens2.authorizationToken);
-        expect(isValid2).toBe(true);
-      } finally {
-        // Cleanup
-        try {
-          fs.rmSync(tempSessionsDir, { recursive: true, force: true });
-        } catch {
-          // Ignore cleanup errors
-        }
-      }
-    }, 300000); // 5 minutes timeout for manual browser authentication
-  });
-
-  describe('Scenario 3: Service key + expired session + expired refresh token', () => {
-    it('should login via browser when refresh token is also expired', async () => {
-      if (!hasRealConfigValue) {
-        console.warn('⚠️  Skipping integration test - no real config');
-        return;
-      }
-
-      if (!destination || !serviceKeysDir) {
-        console.warn('⚠️  Skipping integration test - missing required config');
-        return;
-      }
-
-      const serviceKeyStore = new AbapServiceKeyStore(serviceKeysDir);
-
-      const authConfig =
-        await serviceKeyStore.getAuthorizationConfig(destination);
-      if (!authConfig) {
-        throw new Error('Failed to load authorization config from service key');
-      }
-      if (!(await canResolveHost(authConfig.uaaUrl!))) {
-        console.warn('⚠️  Skipping integration test - UAA host not resolvable');
-        return;
-      }
-      if (!(await canListenOnLocalhost())) {
-        console.warn('⚠️  Skipping integration test - cannot bind to localhost');
-        return;
-      }
-
-      // Create provider with expired token and invalid refresh token
-      const logger = createTestLogger();
-      const expiredToken = createExpiredJWT();
-      const redirectPort = await getAvailablePort();
-      const provider = new AuthorizationCodeProvider({
-        uaaUrl: authConfig.uaaUrl!,
-        clientId: authConfig.uaaClientId!,
-        clientSecret: authConfig.uaaClientSecret!,
-        refreshToken: 'invalid-expired-refresh-token', // Invalid refresh token
-        accessToken: expiredToken, // Expired token
-        // Use the system browser for authentication
-        authorization: browserCallbackStrategy({
-          browser: 'system',
-          port: redirectPort,
-        }),
-        logger,
-      });
-
-      // Provider should attempt refresh, fail, then attempt login via browser
-      const tokens = await provider.getTokens();
-      expect(tokens.authorizationToken).toBeDefined();
-      expect(tokens.authType).toBe(AUTH_TYPE_AUTHORIZATION_CODE);
-
-      // Validate that new token is valid and not expired
-      const isValid = validateTokenExpiration(tokens.authorizationToken);
-      expect(isValid).toBe(true);
-    }, 300000); // 5 minutes timeout for manual browser authentication
+        const isValid = validateTokenExpiration(tokens.authorizationToken);
+        expect(isValid).toBe(true);
+      },
+      INTERACTIVE_JEST_TIMEOUT_MS,
+    );
   });
 
   describe('Token validation', () => {
