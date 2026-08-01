@@ -10,7 +10,7 @@
  */
 
 import * as http from 'node:http';
-import type { Socket } from 'node:net';
+import type { AddressInfo, Socket } from 'node:net';
 import type {
   CallbackServerFactory,
   ICallbackServerHandle,
@@ -35,6 +35,12 @@ export interface Settle<TResult> {
   ok(value: TResult, res?: express.Response): void;
   /** The callback reported a failure. Ends the scope. */
   err(error: Error, res?: express.Response): void;
+  /**
+   * This was not our redirect — a reloaded tab, a prefetch, a port scanner.
+   * Answered and counted; the login keeps waiting, bounded as ever by the
+   * timeout. Ends nothing.
+   */
+  ignore(reason: string, res?: express.Response): void;
 }
 
 export type RouteSetup<TResult> = (
@@ -44,9 +50,9 @@ export type RouteSetup<TResult> = (
 
 function validate(options: ICallbackServerOptions): void {
   const { port, timeoutMs } = options;
-  if (!Number.isInteger(port) || port < 1 || port > 65535) {
+  if (!Number.isInteger(port) || port < 0 || port > 65535) {
     throw new Error(
-      `Invalid callback server port: ${String(port)}. Must be an integer in 1..65535.`,
+      `Invalid callback server port: ${String(port)}. Must be an integer in 0..65535.`,
     );
   }
   if (
@@ -107,6 +113,7 @@ export async function runCallbackScope<TResult, TReturn>(
 
   let timer: NodeJS.Timeout | null = null;
   let alive = false;
+  let ignored = 0;
 
   const settleResult = (
     outcome: { value: TResult } | { error: Error },
@@ -206,28 +213,18 @@ export async function runCallbackScope<TResult, TReturn>(
         endScope({ error });
       });
     },
+    ignore(reason) {
+      ignored += 1;
+      options.logger?.warn(
+        '[callbackServer] ignored an incomplete callback request',
+        { reason, ignored },
+      );
+    },
   };
 
   routes(app, settle);
 
   options.signal?.addEventListener('abort', onAbort, { once: true });
-
-  const handle: ICallbackServerHandle<TResult> = {
-    port: options.port,
-    redirectUri: `http://localhost:${options.port}/callback`,
-    waitForResult: () =>
-      alive
-        ? resultPromise
-        : Promise.reject(new Error('Callback server scope has ended')),
-    // Silent no-op once the scope has ended: this is called fire-and-forget
-    // from a browser launcher's .catch(), and a late rejection must not become
-    // a fresh unhandled rejection.
-    fail: (error: Error) => {
-      if (!alive) return;
-      settleResult({ error });
-      endScope({ error });
-    },
-  };
 
   server.once('error', (error: Error) => {
     endScope({ error });
@@ -241,12 +238,35 @@ export async function runCallbackScope<TResult, TReturn>(
     }
     alive = true;
     timer = setTimeout(() => {
+      const tally =
+        ignored > 0
+          ? ` ${ignored} incomplete request(s) reached /callback and were ignored.`
+          : '';
       endScope({
         error: new Error(
-          `Authentication timeout after ${options.timeoutMs / 1000} seconds. Please try again.`,
+          `Authentication timeout after ${options.timeoutMs / 1000} seconds. Please try again.${tally}`,
         ),
       });
     }, options.timeoutMs);
+
+    // The requested port may be 0, in which case only the OS knows the answer.
+    const bound = (server.address() as AddressInfo).port;
+    const handle: ICallbackServerHandle<TResult> = {
+      port: bound,
+      redirectUri: `http://localhost:${bound}/callback`,
+      waitForResult: () =>
+        alive
+          ? resultPromise
+          : Promise.reject(new Error('Callback server scope has ended')),
+      // Silent no-op once the scope has ended: this is called fire-and-forget
+      // from a browser launcher's .catch(), and a late rejection must not become
+      // a fresh unhandled rejection.
+      fail: (error: Error) => {
+        if (!alive) return;
+        settleResult({ error });
+        endScope({ error });
+      },
+    };
 
     void use(handle).then(
       (value) => endScope({ value }),
@@ -331,8 +351,8 @@ export const withBrowserCallbackServer: CallbackServerFactory<string> = (
 
         const { code } = req.query;
         if (!code || typeof code !== 'string') {
-          res.status(400).send('Error: Authorization code missing');
-          settle.err(new Error('Authorization code missing'), res);
+          res.status(400).send('Error: not an authorization callback');
+          settle.ignore('no code and no error in query', res);
           return;
         }
 

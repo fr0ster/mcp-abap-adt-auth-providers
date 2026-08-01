@@ -32,10 +32,13 @@ function portIsFree(port: number): Promise<boolean> {
  * and fail with `other side closed`, which says nothing about the server. A
  * browser opens its own connection; so does this.
  */
-function httpGet(path: string): Promise<{ status: number; body: string }> {
+function httpGetOn(
+  port: number,
+  path: string,
+): Promise<{ status: number; body: string }> {
   return new Promise((resolve, reject) => {
     const req = http.get(
-      { host: '127.0.0.1', port: PORT, path, agent: false },
+      { host: '127.0.0.1', port, path, agent: false },
       (res) => {
         let body = '';
         res.setEncoding('utf8');
@@ -47,6 +50,10 @@ function httpGet(path: string): Promise<{ status: number; body: string }> {
     );
     req.on('error', reject);
   });
+}
+
+function httpGet(path: string): Promise<{ status: number; body: string }> {
+  return httpGetOn(PORT, path);
 }
 
 const deliver = (query: string): Promise<unknown> =>
@@ -256,17 +263,17 @@ describe('withBrowserCallbackServer', () => {
     ).rejects.toThrow('too late for the payload');
   }, 30000);
 
-  it('ends the login and releases the port on a callback with no code', async () => {
+  it('ignores an incomplete callback and times out', async () => {
     await expect(
       withBrowserCallbackServer(
-        { port: PORT, timeoutMs: 5000 },
+        { port: PORT, timeoutMs: 1500 },
         async (srv) => {
           const waiting = srv.waitForResult();
           void deliver('');
           return await waiting;
         },
       ),
-    ).rejects.toThrow(/code/i);
+    ).rejects.toThrow(/incomplete request\(s\)/);
   }, 30000);
 
   it('reports an OAuth error immediately rather than timing out', async () => {
@@ -328,8 +335,8 @@ describe('withBrowserCallbackServer', () => {
     }
   }, 30000);
 
-  it('rejects a port that is not an integer in 1..65535, without binding', async () => {
-    for (const bad of [0, -1, 65536, 3001.5]) {
+  it('rejects a port that is not an integer in 0..65535, without binding', async () => {
+    for (const bad of [-1, 65536, 3001.5]) {
       await expect(
         withBrowserCallbackServer(
           { port: bad, timeoutMs: 5000 },
@@ -463,4 +470,119 @@ describe('withBrowserCallbackServer', () => {
     // The scope must not have settled before the response finished writing.
     expect(settledAt).toBeGreaterThanOrEqual(finishedAt);
   }, 60000);
+
+  describe('ephemeral port', () => {
+    it('reports the bound port and frees it when the scope ends', async () => {
+      let observed = 0;
+      const code = await withBrowserCallbackServer(
+        { port: 0, timeoutMs: 5000 },
+        async (srv) => {
+          observed = srv.port;
+          expect(observed).toBeGreaterThan(0);
+          expect(srv.redirectUri).toBe(`http://localhost:${observed}/callback`);
+          expect(await portIsFree(observed)).toBe(false);
+          const waiting = srv.waitForResult();
+          void httpGetOn(observed, '/callback?code=eph').catch(() => undefined);
+          return await waiting;
+        },
+      );
+      expect(code).toBe('eph');
+      expect(await portIsFree(observed)).toBe(true);
+    }, 30000);
+  });
+
+  describe('incomplete callbacks', () => {
+    it('answers 400 and keeps waiting when neither code nor error arrived', async () => {
+      const code = await withBrowserCallbackServer(
+        { port: PORT, timeoutMs: 5000 },
+        async (srv) => {
+          const waiting = srv.waitForResult();
+          const stray = await httpGet('/callback');
+          expect(stray.status).toBe(400);
+          // The scope survived the stray request and still accepts a real one.
+          void deliver('?code=after-stray');
+          return await waiting;
+        },
+      );
+      expect(code).toBe('after-stray');
+    }, 30000);
+
+    it('counts ignored requests in the timeout message', async () => {
+      const attempt = withBrowserCallbackServer(
+        { port: PORT, timeoutMs: 1500 },
+        async (srv) => await srv.waitForResult(),
+      );
+      await httpGet('/callback');
+      await httpGet('/callback');
+      await expect(attempt).rejects.toThrow(
+        /2 incomplete request\(s\) reached \/callback and were ignored/,
+      );
+    }, 30000);
+
+    it('still ends the login at once on an explicit IdP error', async () => {
+      const attempt = withBrowserCallbackServer(
+        { port: PORT, timeoutMs: 30000 },
+        async (srv) => await srv.waitForResult(),
+      );
+      void deliver('?error=access_denied&error_description=User%20said%20no');
+      await expect(attempt).rejects.toThrow(/access_denied: User said no/);
+    }, 30000);
+  });
+
+  /**
+   * The way in when the browser is on another machine. These assertions used to
+   * reach the routes through `startBrowserAuth`, which no longer exists; the
+   * routes belong to this transport, so they are pinned here.
+   */
+  describe('paste form', () => {
+    it('serves a form at GET /', async () => {
+      const code = await withBrowserCallbackServer(
+        { port: PORT, timeoutMs: 5000 },
+        async (srv) => {
+          const waiting = srv.waitForResult();
+          const { status, body } = await httpGet('/');
+          expect(status).toBe(200);
+          expect(body).toContain('<form');
+          expect(body).toContain('/submit');
+          void deliver('?code=after-form');
+          return await waiting;
+        },
+      );
+      expect(code).toBe('after-form');
+    }, 30000);
+
+    it('completes the login from a full redirected URL pasted at /submit', async () => {
+      const code = await withBrowserCallbackServer(
+        { port: PORT, timeoutMs: 5000 },
+        async (srv) => {
+          const waiting = srv.waitForResult();
+          void httpGet(
+            `/submit?input=${encodeURIComponent(
+              `http://localhost:${PORT}/callback?code=pasted-code`,
+            )}`,
+          ).catch(() => undefined);
+          return await waiting;
+        },
+      );
+      expect(code).toBe('pasted-code');
+    }, 30000);
+
+    it('re-renders the form (HTTP 400) on an unusable paste, without ending the login', async () => {
+      const code = await withBrowserCallbackServer(
+        { port: PORT, timeoutMs: 5000 },
+        async (srv) => {
+          const waiting = srv.waitForResult();
+          const { status, body } = await httpGet(
+            `/submit?input=${encodeURIComponent('not a code')}`,
+          );
+          expect(status).toBe(400);
+          expect(body).toContain('<form');
+          // Still pending — a real code afterwards still lands.
+          void deliver('?code=after-bad-paste');
+          return await waiting;
+        },
+      );
+      expect(code).toBe('after-bad-paste');
+    }, 30000);
+  });
 });

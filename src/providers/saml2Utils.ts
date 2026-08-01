@@ -1,31 +1,25 @@
 /**
- * SAML2 provider shared helpers
+ * SAML2 provider shared helpers.
  */
 
-import type { ILogger } from '@mcp-abap-adt/interfaces';
-import { readManualInput } from '../auth/manualInput';
-import {
-  buildSamlAuthorizationUrl,
-  startSamlBrowserAuth,
-} from '../auth/saml2Auth';
-
-export type Saml2AssertionFlow = 'browser' | 'manual' | 'assertion';
+import type { IAuthorizationStrategy, ILogger } from '@mcp-abap-adt/interfaces';
+import { buildSamlAuthorizationUrl } from '../auth/saml2Auth';
+import { samlCallbackStrategy } from '../strategies';
 
 export interface Saml2CommonConfig {
   idpSsoUrl: string;
   spEntityId: string;
+  /**
+   * Where the assertion is delivered. Required when `authorizationUrl` is set:
+   * the ACS is then buried in a deflated `SAMLRequest` this package did not
+   * build and cannot read, so it must be declared rather than inferred.
+   */
   acsUrl?: string;
   relayState?: string;
   authorizationUrl?: string;
-  browser?: string;
-  redirectPort?: number;
+  /** How the login is conducted. Omitted means a browser callback. */
+  authorization?: IAuthorizationStrategy<string>;
   logger?: ILogger;
-}
-
-export interface Saml2AssertionConfig extends Saml2CommonConfig {
-  assertionFlow: Saml2AssertionFlow;
-  assertionProvider?: () => Promise<string>;
-  manualInput?: () => Promise<string>;
 }
 
 export interface Saml2BearerExchangeConfig {
@@ -35,9 +29,14 @@ export interface Saml2BearerExchangeConfig {
   clientSecret?: string;
 }
 
-export function resolveAcsUrl(config: Saml2CommonConfig): string {
-  const port = config.redirectPort || 3001;
-  return config.acsUrl || `http://localhost:${port}/callback`;
+/** Throw at construction rather than half-verify at runtime. */
+export function validateSamlConfig(config: Saml2CommonConfig): void {
+  if (config.authorizationUrl && !config.acsUrl) {
+    throw new Error(
+      'acsUrl is required when authorizationUrl is set: the ACS inside a ' +
+        'pre-built SAML request cannot be read, so it must be declared.',
+    );
+  }
 }
 
 export function resolveTokenUrl(config: Saml2BearerExchangeConfig): string {
@@ -51,38 +50,52 @@ export function resolveTokenUrl(config: Saml2BearerExchangeConfig): string {
 }
 
 export async function getSamlAssertion(
-  config: Saml2AssertionConfig,
+  config: Saml2CommonConfig,
 ): Promise<string> {
-  const acsUrl = resolveAcsUrl(config);
-  const authConfig = {
-    idpSsoUrl: config.idpSsoUrl,
-    spEntityId: config.spEntityId,
-    acsUrl,
-    relayState: config.relayState,
-    authorizationUrl: config.authorizationUrl,
+  const declaredAcs = config.acsUrl;
+
+  const request = {
+    logger: config.logger,
+    buildAuthorizationUrl: async (redirectUri: string): Promise<string> => {
+      // A declared ACS is registered with the IdP; the strategy must be
+      // listening exactly there, and an ephemeral port cannot be.
+      const acsUrl = declaredAcs ?? redirectUri;
+      if (declaredAcs && declaredAcs !== redirectUri) {
+        throw new Error(
+          `SAML acsUrl is ${declaredAcs}, but the authorization strategy is ` +
+            `listening on ${redirectUri}. They must match.`,
+        );
+      }
+      return buildSamlAuthorizationUrl({
+        idpSsoUrl: config.idpSsoUrl,
+        spEntityId: config.spEntityId,
+        acsUrl,
+        relayState: config.relayState,
+        authorizationUrl: config.authorizationUrl,
+      });
+    },
   };
 
-  if (config.assertionFlow === 'assertion') {
-    if (!config.assertionProvider) {
-      throw new Error('assertionProvider is required for assertion flow');
+  const supplied = config.authorization;
+  const strategy = supplied ?? samlCallbackStrategy();
+  try {
+    const outcome = await strategy.authorize(request);
+    // The second net, for a strategy that never called the builder and so
+    // never met the check inside it.
+    if (declaredAcs && declaredAcs !== outcome.redirectUri) {
+      throw new Error(
+        `SAML acsUrl is ${declaredAcs}, but the authorization strategy used ` +
+          `${outcome.redirectUri}. They must match.`,
+      );
     }
-    return await config.assertionProvider();
+    return outcome.payload;
+  } finally {
+    if (!supplied) {
+      await strategy.dispose?.().catch((error: unknown) => {
+        config.logger?.warn('[SAML] dispose failed', {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      });
+    }
   }
-
-  if (config.assertionFlow === 'manual') {
-    const authorizationUrl = buildSamlAuthorizationUrl(authConfig);
-    config.logger?.info('[SAML] Open URL to authenticate', {
-      authorizationUrl,
-    });
-    const input = config.manualInput || readManualInput;
-    return await input('Paste SAMLResponse: ');
-  }
-
-  const browser = config.browser || 'auto';
-  return await startSamlBrowserAuth(
-    authConfig,
-    browser,
-    config.logger,
-    config.redirectPort || 3001,
-  );
 }

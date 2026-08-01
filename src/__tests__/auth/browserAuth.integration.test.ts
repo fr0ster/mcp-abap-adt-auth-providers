@@ -7,7 +7,11 @@
 import * as dns from 'node:dns/promises';
 import { AbapServiceKeyStore } from '@mcp-abap-adt/auth-stores';
 import type { IAuthorizationConfig } from '@mcp-abap-adt/interfaces';
-import { startBrowserAuth } from '../../auth/browserAuth';
+import {
+  exchangeCodeForToken,
+  getJwtAuthorizationUrl,
+} from '../../auth/browserAuth';
+import { browserCallbackStrategy } from '../../strategies';
 import {
   getAbapDestination,
   getServiceKeysDir,
@@ -69,11 +73,23 @@ describe('browserAuth Integration', () => {
 
     logger.info(`Starting browser authentication: ${authConfig.uaaUrl}`);
 
-    const result = await startBrowserAuth(
-      authConfig,
-      'system', // Use system default browser
-      logger,
+    // The strategy owns the socket, the browser and the timeout; the exchange
+    // stays with the caller — the same split `AuthorizationCodeProvider` uses.
+    const strategy = browserCallbackStrategy({
+      browser: 'system', // Use the system default browser
       port,
+      timeoutMs: 290000,
+    });
+    const outcome = await strategy.authorize({
+      logger,
+      buildAuthorizationUrl: async (redirectUri) =>
+        getJwtAuthorizationUrl(authConfig, redirectUri),
+    });
+    const result = await exchangeCodeForToken(
+      authConfig,
+      outcome.payload,
+      outcome.redirectUri,
+      logger,
     );
 
     expect(result).toBeDefined();

@@ -7,6 +7,103 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.0.0] - 2026-07-31
+
+Callback reception leaves the providers. How an interactive login is conducted —
+reaching the authorization URL, receiving what comes back, the port, the timeout
+— is now an `IAuthorizationStrategy` the consumer may replace wholesale; the
+provider keeps only what it can compute, the URL and the token exchange. (#11)
+
+### Breaking
+
+- **`browser` and `redirectPort` are removed from every provider config**, along
+  with `redirectUri`, `authorizationCode` and `authorizationCodeProvider`
+  (OIDC) and `assertionFlow`, `assertionProvider` and `manualInput` (SAML).
+  All are replaced by a single `authorization` strategy. See the migration
+  table in the README.
+- **The default callback port is now 61001, was 3001** — for the UAA flow and
+  for SAML alike, the latter because `resolveAcsUrl` (which defaulted the ACS to
+  `http://localhost:3001/callback`) is gone and the ACS now comes from the
+  strategy. If you relied on the default and registered
+  `http://localhost:3001/callback` with your identity provider, the **IdP**
+  rejects the redirect and the error you see comes from it, not from this
+  package. Pass `port: 3001` explicitly to keep the old behaviour.
+- **`acsUrl` is required when `authorizationUrl` is set** on `Saml2BearerProvider`
+  and `Saml2PureProvider`, and is rejected at construction. The ACS inside a
+  pre-built, deflated `SAMLRequest` cannot be read, so it cannot be checked
+  against what the strategy binds; 1.x accepted the combination and quietly used
+  a default ACS that was usually not where the IdP posted.
+- **The terminal-paste channel is gone from the browser callback strategy.** In
+  1.x a `none` / `headless` login could also be completed by pasting the code on
+  stdin, and that worked without the consumer choosing anything; it is the
+  channel headless and SSH users reached for most. `browserCallbackStrategy`
+  reads no stdin at all — under an MCP or LSP stdio transport that stream
+  carries the protocol, so an authorization library must not consume it. The
+  capability moved to `manualPasteStrategy({ redirectUri, read })`, which is now
+  an explicit choice; the paste form served on `/` remains the other fallback
+  for a browser on a different machine.
+- **Device flow prompts no longer go to stdout.** `DeviceFlowProviderConfig`
+  accepts `logger?: ILogger`; the verification URI and user code go to that
+  logger, or to stderr when none is supplied. `OidcDeviceFlowProvider` likewise.
+  Anything capturing stdout to read the device code must now read stderr or
+  supply a logger. stdout carries protocol traffic under an MCP or LSP stdio
+  transport.
+- `Saml2AssertionConfig` and `Saml2AssertionFlow` are removed from the types, and
+  `src/auth/manualInput.ts` is gone; `manualPasteStrategy` and
+  `manualSamlResponseStrategy` replace them.
+- Requires `@mcp-abap-adt/interfaces` `^11.6.0` (was `^11.4.0`).
+
+### Added
+
+- `IAuthorizationStrategy` support in all four interactive providers
+  (`AuthorizationCodeProvider`, `OidcBrowserProvider`, `Saml2BearerProvider`,
+  `Saml2PureProvider`), with shipped strategies: `browserCallbackStrategy`,
+  `oidcCallbackStrategy`, `samlCallbackStrategy`, `manualPasteStrategy`,
+  `manualSamlResponseStrategy`, `externalCodeStrategy`, `staticCodeStrategy`,
+  and the `asOidcResult` adapter. `BrowserCallbackStrategy`,
+  `DEFAULT_CALLBACK_PORT` and `DEFAULT_LOGIN_TIMEOUT_MS` are exported too.
+- `asOidcResult` bridges the code-producing strategies, which yield a `string`,
+  to `OidcBrowserProvider`, which takes `IAuthorizationStrategy<OidcCallbackResult>`.
+  It delegates `dispose`, so wrapping costs nothing in lifecycle terms.
+- The three `CallbackServerFactory` implementations are exported —
+  `withBrowserCallbackServer`, `withOidcCallbackServer`, `withSamlCallbackServer`
+  — so a consumer can reuse the transport while replacing everything around it,
+  or inject its own into a shipped strategy via `callbackServer`.
+- Ephemeral callback ports (`port: 0`), where the identity provider accepts a
+  loopback redirect on any port. The bound port is reported back, so the token
+  exchange can send the redirect URI that actually received the callback.
+- `OidcBrowserProvider` discovers lazily: a strategy that already holds a code
+  no longer drags in a discovery request, nor the `issuerUrl` requirement.
+
+### Fixed
+
+- A `/callback` carrying neither a code nor an error no longer ends the login;
+  it is answered, counted, and reported in the timeout message.
+- The OIDC callback route now distinguishes an IdP refusal from a stray
+  request — it previously had no `error=` branch at all.
+- The SAML callback route no longer shows a success page before checking
+  whether an assertion arrived; a request with no assertion is answered 400.
+- Manual input prompts go to stderr; they went to stdout, which corrupts an
+  MCP/LSP stdio transport.
+- The token exchange sends the redirect URI that actually received the
+  callback, rather than one rebuilt from an assumed port.
+- The PKCE challenge is pinned to the verifier that reaches the exchange.
+- A strategy disposed while its port probe was still awaiting used to report
+  everything released and then bind a socket behind it.
+- The remote paste hint named `http://localhost:<port>/` — an address that
+  cannot work for the one reader it addresses, someone whose browser is on
+  another machine. It now names `http://<this-host>:<port>/`, keeping the real
+  port and leaving the host to the reader, as the 1.x wording did.
+
+### Docs
+
+- `README.md` documents strategies throughout, adds *Choosing an authorization
+  strategy* and *Migrating from 1.x to 2.0*, and corrects two claims that were
+  already wrong in 1.x: the default `browser` mode is `'none'`, not `'system'`,
+  and `extractCode` is internal, not exported.
+- `docs/REFACTORING_PROPOSAL.md` is deleted; the `ITokenProvider` refactor it
+  proposed shipped in 1.0.0.
+
 ## [1.2.0] - 2026-07-28
 
 ### Fixed
