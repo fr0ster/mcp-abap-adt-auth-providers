@@ -2,7 +2,7 @@
 
 ## Project Structure & Module Organization
 
-- `src/` contains TypeScript source; key areas include `src/providers/` for token providers, `src/auth/` for OAuth flows, and `src/errors/` for typed errors.
+- `src/` contains TypeScript source; key areas include `src/providers/` for token providers, `src/strategies/` for the authorization strategies a consumer can replace, `src/auth/` for the OAuth/OIDC/SAML flow mechanics and the callback server, `src/sso/` for the provider factory, and `src/errors/` for typed errors.
 - `src/__tests__/` holds Jest unit tests (`*.test.ts`).
 - `bin/` contains CLI entry points such as `auth-client-credentials.ts`.
 - `tests/` holds integration configuration templates like `tests/test-config.yaml.template`.
@@ -27,9 +27,11 @@
 
 ## Testing Guidelines
 
-- Framework: Jest with `ts-jest` (`jest.config.js`).
+- Framework: Jest with `ts-jest` (`jest.config.js`). Run it through `npm test`, never `npx jest` — the script supplies `--experimental-vm-modules`, without which the suite fails to load.
 - Coverage reports go to `coverage/`; no explicit thresholds are enforced.
 - For integration tests, copy `tests/test-config.yaml.template` to `tests/test-config.yaml` and keep secrets out of git.
+- A test that asserts a socket was released must bind the port to prove it; log output proves nothing. A test that asserts on a port it does not own must skip when something else holds it — see `canOwnPort` in `src/__tests__/helpers/netHelpers.ts`.
+- Attach a rejection expectation before triggering the rejection, or Jest reports an unhandled rejection instead of a passing assertion.
 
 ## Commit & Pull Request Guidelines
 
