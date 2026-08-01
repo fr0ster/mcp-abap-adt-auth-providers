@@ -12,9 +12,10 @@
 
 ## Global Constraints
 
-- Release order is strict: `interfaces@11.6.0` → `auth-providers@2.0.0` → `proxy@1.7.0` → `auth-broker@1.0.9`. A consumer is never bumped before its dependency is published.
+- Release order is strict: `interfaces@11.6.0` → `auth-providers@2.0.0` → `proxy@2.0.0` → `auth-broker@1.0.9`. A consumer is never bumped before its dependency is published.
 - **The agent never runs `npm publish`.** Tag, push the tag, then tell the user to publish and wait for confirmation.
 - Every package: branch (`feat/authorization-strategies`), PR referencing the issue, then **stop** — every PR is reviewed before it merges, and the agent never merges its own. Tag `vX.Y.Z` and push the tag only after the merge has happened. Three gates per release, therefore: PR review, then merge, then publish; the last two are the user's.
+- **The version follows what the change does, not what the plan guessed.** Each release number here was written before its scope was known, and one was wrong: the proxy was planned as `1.7.0` while the change removes a supported CLI behaviour, which SemVer makes a major — and the commit was already marked `feat!`, contradicting its own version. Before bumping any package, re-read what the diff actually removes or changes for a consumer, and check the number against the registry rather than against this plan.
 - **A version bump resyncs the lockfile.** `package-lock.json` carries the version twice — at the top level and in the root `packages[""]` entry — and neither follows `package.json` on its own. Run `npm install --package-lock-only` after the bump and confirm both:
 
   ```bash
@@ -3346,7 +3347,7 @@ new AuthorizationCodeProvider({ uaaUrl, clientId, clientSecret,
   authorization: browserCallbackStrategy({ browser: 'system', port: 4001 }) })
 \`\`\`
 
-Consumer impact: proxy@1.7.0, auth-broker@1.0.9."
+Consumer impact: proxy@2.0.0, auth-broker@1.0.9."
 ```
 
 - [ ] **Step 6: Merge, tag, hand off the publish**
@@ -3368,7 +3369,7 @@ Wait for confirmation before Phase C.
 
 ---
 
-# Phase C — `proxy@1.7.0`
+# Phase C — `proxy@2.0.0`
 
 ### Task 18: Realign the proxy
 
@@ -3441,7 +3442,7 @@ npm run build && npm test
 
 - [ ] **Step 5: Update the docs and release**
 
-Bump `package.json` to `1.7.0`, add a CHANGELOG entry, and check whether the `--browser-auth-port` documentation describes internal mechanics that changed:
+Bump `package.json` to `2.0.0`, add a CHANGELOG entry, and check whether the `--browser-auth-port` documentation describes internal mechanics that changed:
 
 ```bash
 grep -rn "browser-auth-port" README.md docs 2>/dev/null
@@ -3449,9 +3450,9 @@ grep -rn "browser-auth-port" README.md docs 2>/dev/null
 
 ```bash
 git add -A
-git commit -m "release(1.7.0): realign with auth-providers@2.0.0 — callback port moves into a strategy"
+git commit -m "release(2.0.0): realign with auth-providers@2.0.0 — callback port moves into a strategy"
 git push -u origin feat/authorization-strategies
-gh pr create --title "release(1.7.0): realign with auth-providers@2.0.0" --body "auth-providers 2.0.0 replaces \`browser\`/\`redirectPort\` with an \`authorization\` strategy. \`--browser-auth-port\` keeps its meaning and its 3333 default."
+gh pr create --title "release(2.0.0): realign with auth-providers@2.0.0" --body "auth-providers 2.0.0 replaces \`browser\`/\`redirectPort\` with an \`authorization\` strategy. \`--browser-auth-port\` keeps its meaning and its 3333 default."
 # STOP HERE. The PR is reviewed before it merges — do not merge it yourself.
 # Report the PR URL and wait. The steps below run only after the review
 # has passed and the merge has happened.
@@ -3459,7 +3460,7 @@ gh pr create --title "release(1.7.0): realign with auth-providers@2.0.0" --body 
 # auth-providers. Verify with `git symbolic-ref --short refs/remotes/origin/HEAD`
 # if in doubt.
 git checkout main && git pull --ff-only
-git tag -a v1.7.0 -m "Realign with auth-providers@2.0.0"
+git tag -a v2.0.0 -m "Realign with auth-providers@2.0.0"
 git push --tags
 ```
 
@@ -3541,7 +3542,7 @@ git push --tags
 
 ```bash
 cd /home/okyslytsia/prj/mcp-abap-adt-auth-providers/.worktrees/authorization-strategies
-gh issue close 11 --comment "Closed by auth-providers@2.0.0. All three deferred items are done: callback reception is behind \`IAuthorizationStrategy\` with the transport factories exported, ephemeral ports work where the IdP allows a loopback redirect on any port, and a code-less callback is answered, counted and reported rather than ending the login. Realigned: interfaces@11.6.0, proxy@1.7.0, auth-broker@1.0.9."
+gh issue close 11 --comment "Closed by auth-providers@2.0.0. All three deferred items are done: callback reception is behind \`IAuthorizationStrategy\` with the transport factories exported, ephemeral ports work where the IdP allows a loopback redirect on any port, and a code-less callback is answered, counted and reported rather than ending the login. Realigned: interfaces@11.6.0, proxy@2.0.0, auth-broker@1.0.9."
 ```
 
 - [ ] **Step 2: Delete the implemented spec and plan**
