@@ -1,7 +1,7 @@
 # Mock authorization servers for deterministic testing
 
 **Date:** 2026-08-02
-**Status:** approved, not implemented
+**Status:** revised after review, awaiting re-approval
 **Follows:** the authorization-strategies arc (issue #11), released as `interfaces@11.6.0`, `auth-providers@2.0.0`, `proxy@2.0.0`, `auth-broker@2.0.0`
 **Unblocks:** issue #19 — SAML assertions are accepted without any validation
 
@@ -58,7 +58,7 @@ src/
 ├── server.ts      # ephemeral bind, graceful close, the request journal
 ├── uaa.ts         # /oauth/authorize, /oauth/token
 ├── oidc.ts        # /.well-known/openid-configuration, /authorize, /token
-├── saml.ts        # consumes an AuthnRequest, POSTs a SAMLResponse to the ACS
+├── saml.ts        # consumes an AuthnRequest, returns an auto-submitting form
 ├── signing.ts     # a self-signed certificate per instance, XML-DSig
 └── browser.ts     # visit(url) — an HTTP client that follows redirects
 ```
@@ -91,17 +91,81 @@ failure surfaces as the server's refusal rather than as our own assertion.
 - an authorization code is single-use; a second exchange fails
 - codes expire, after a lifetime the mock is configured with (short by default,
   so an expiry test does not have to wait)
-- `client_id` must match the authorize request; `client_secret` is checked when
-  the mock is configured to require it
 
-**OIDC additionally:** `code_challenge` is recorded at `/authorize`, and
+**Client authentication, stated exactly, because the two clients differ.** UAA's
+`exchangeCodeForToken` sends credentials only as HTTP Basic and puts no
+`client_id` in the body; OIDC's `exchangeAuthorizationCode` puts `client_id` in
+the body. A mock that assumed either shape would reject one of our own clients.
+
+So the mock accepts all three of:
+
+- `client_secret_basic` — credentials in the `Authorization: Basic` header
+- `client_secret_post` — `client_id` and `client_secret` in the form body
+- public client — `client_id` in the body, no secret, allowed only when the mock
+  is configured for it
+
+Whichever arrives, the `client_id` must match the one from `/authorize`. If both
+Basic and body credentials are present and disagree, that is
+`invalid_client` — a real server treats it as a malformed request rather than
+picking a winner, and so does this one.
+
+Errors follow RFC 6749 §5.2: HTTP 400 with a JSON body carrying `error` and
+`error_description`, except `invalid_client`, which is 401. Tests assert on
+those codes, so they are part of the contract rather than an implementation
+detail.
+
+**Refresh.** `/oauth/token` also serves `grant_type=refresh_token`:
+
+- a successful code exchange issues a refresh token alongside the access token,
+  and the mock remembers it
+- refreshing returns a new access token; whether it also rotates the refresh
+  token is configurable, because both behaviours exist in the wild and a client
+  must survive either
+- with rotation on, presenting a superseded refresh token fails with
+  `invalid_grant` — this is the reuse detection a real server performs
+- an unknown or explicitly revoked token fails with `invalid_grant`
+- client authentication applies exactly as above
+
+A test forces the refresh path rather than the cached-token path by constructing
+the provider with an expired access token and a valid refresh token — the shape
+`AuthorizationCodeProvider` already accepts. The mock can also be told to fail
+every refresh, which is how the refresh-then-login fallback gets exercised
+without hand-writing an invalid token.
+
+**OIDC additionally — PKCE:** `code_challenge` is recorded at `/authorize`, and
 `/token` recomputes `S256(code_verifier)` and compares. This moves PKCE pairing
 from a string comparison inside our test to a check by the server, which is how
 a real identity provider will check it.
 
+**OIDC additionally — `state`:** the mock **mirrors** `state` back on the
+callback and never judges it. Validating `state` is the client's duty, and a
+mock that checked it would be doing the client's job while hiding whether the
+client does it. Variants the mock can be asked for: `wrongState` (returns a
+different value) and `missingState` (returns none).
+
+This matters more than it looks. `OidcBrowserProvider` does not send `state` at
+all today — `src/providers/OidcBrowserProvider.ts:90-95` appends
+`response_type`, `client_id`, `redirect_uri`, `scope`, `code_challenge` and
+`code_challenge_method`, and nothing else — while `OidcCallbackResult` carries a
+`state` field that nothing populates a request with and nothing checks. A mock
+without `state` would enshrine that gap as normal. With it, the absence becomes
+a test someone can write, and the CSRF / callback-substitution exposure becomes
+visible rather than theoretical. Closing the gap in the provider is not this
+package's job; making it observable is.
+
 **The SAML IdP** parses the inflated `SAMLRequest`, reads its
-`AssertionConsumerServiceURL` and `ID`, and posts a response to that ACS. Valid
-and signed by default; on request, any single way of being wrong:
+`AssertionConsumerServiceURL`, `ID` and `RelayState`, and **responds with an
+HTML auto-submitting form** targeting that ACS — the same thing a real IdP
+returns to a browser under HTTP-POST binding. It does not deliver the assertion
+itself.
+
+Delivering it is `visit()`'s job, because that is what a browser does. If the
+IdP posted to the ACS server-side, `openUrl` would never be called and the seam
+this whole design turns on would go untested — the self-driving shape rejected
+below. `RelayState` is carried through the form and posted back unchanged.
+
+Assertions are valid and signed by default; on request, any single way of being
+wrong:
 
 | variant | what is broken |
 |---|---|
