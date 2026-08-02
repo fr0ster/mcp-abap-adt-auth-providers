@@ -1,0 +1,217 @@
+# Mock authorization servers for deterministic testing
+
+**Date:** 2026-08-02
+**Status:** approved, not implemented
+**Follows:** the authorization-strategies arc (issue #11), released as `interfaces@11.6.0`, `auth-providers@2.0.0`, `proxy@2.0.0`, `auth-broker@2.0.0`
+**Unblocks:** issue #19 — SAML assertions are accepted without any validation
+
+## Why
+
+Nothing in this family can exercise a full authorization round trip. The only
+stub that exists is in `proxy`'s `callbackPortLifecycle.test.ts`, and it serves
+`/oauth/token` alone — no `/oauth/authorize`, no OIDC discovery, no SAML IdP.
+
+The cost was visible throughout the arc that just shipped. Properties that a
+real server would have checked were instead guarded by hand and asserted
+against ourselves:
+
+- that the `redirect_uri` in the token exchange matches the one the
+  authorization request advertised — enforced by two guards we wrote, verified
+  by tests we wrote;
+- that the PKCE `code_challenge` in the URL derives from the verifier that
+  reaches the exchange — verified by recomputing the hash inside the test;
+- that an ephemeral port travels intact from bind to exchange — never verified
+  end to end at all.
+
+Live tests against BTP did not close the gap: they need a profile, they reuse a
+cached token when one exists, and the interactive cases need a human. The one
+live run in this arc completed in 1.7 s from cache, so the redirect path it was
+meant to prove was never taken.
+
+Mocks make that path deterministic. They do not replace live testing; they
+remove the load from it.
+
+## Scope
+
+**In, for the first version:**
+
+- UAA `authorization_code`, including refresh
+- OIDC authorization code with PKCE, including discovery
+- A SAML IdP that signs, and that can emit each way an assertion can be wrong
+
+**Out, for later:** UAA device flow, `client_credentials`, OIDC device /
+password / token-exchange. They are used by the packages, but the interactive
+redirect flows are what has never been testable, and the SAML IdP is what issue
+#19 depends on.
+
+**Out permanently:** any CLI. This is a library that tests start and stop.
+Manual clicking through a real browser stays a live-system activity.
+
+## The package
+
+`@mcp-abap-adt/auth-mocks`, a devDependency of `auth-providers`, `proxy` and
+`auth-broker`.
+
+```
+src/
+├── index.ts       # startMockUaa, startMockOidc, startMockSamlIdp, visit
+├── server.ts      # ephemeral bind, graceful close, the request journal
+├── uaa.ts         # /oauth/authorize, /oauth/token
+├── oidc.ts        # /.well-known/openid-configuration, /authorize, /token
+├── saml.ts        # consumes an AuthnRequest, POSTs a SAMLResponse to the ACS
+├── signing.ts     # a self-signed certificate per instance, XML-DSig
+└── browser.ts     # visit(url) — an HTTP client that follows redirects
+```
+
+A separate package rather than a subpath of `auth-providers` for one decisive
+reason: signing SAML assertions needs XML-DSig and certificate generation, and
+those belong nowhere near the authorization package's dependency tree — not
+even as devDependencies, because the boundary this arc built would start eroding
+from the test side.
+
+**The package does not import anything from `auth-providers`.** It speaks HTTP,
+OAuth2 and SAML. A mock that knows our types will eventually agree with our
+mistakes instead of catching them.
+
+Each mock binds an ephemeral port and returns a handle carrying `url`,
+`close()`, and a **journal of the requests it received**. The journal is not a
+convenience: without it a test can only assert the outcome, while with it the
+test asserts what the client *sent* — `redirect_uri`, `code_challenge`,
+`client_id`, `grant_type`. That is where every defect in the last arc lived.
+
+## What the mocks enforce
+
+Strict by default: the mock rejects what a real server would reject, so a
+failure surfaces as the server's refusal rather than as our own assertion.
+
+**UAA and OIDC, at `/oauth/token`:**
+
+- `redirect_uri` must match the one presented at `/authorize` exactly; otherwise
+  `invalid_grant`
+- an authorization code is single-use; a second exchange fails
+- codes expire, after a lifetime the mock is configured with (short by default,
+  so an expiry test does not have to wait)
+- `client_id` must match the authorize request; `client_secret` is checked when
+  the mock is configured to require it
+
+**OIDC additionally:** `code_challenge` is recorded at `/authorize`, and
+`/token` recomputes `S256(code_verifier)` and compares. This moves PKCE pairing
+from a string comparison inside our test to a check by the server, which is how
+a real identity provider will check it.
+
+**The SAML IdP** parses the inflated `SAMLRequest`, reads its
+`AssertionConsumerServiceURL` and `ID`, and posts a response to that ACS. Valid
+and signed by default; on request, any single way of being wrong:
+
+| variant | what is broken |
+|---|---|
+| `unsigned` | no signature at all |
+| `wrongKey` | signed with a different key |
+| `tamperedAfterSign` | signature valid, content altered after signing |
+| `statusFailure` | `samlp:Status` is not `Success` |
+| `expired` / `notYetValid` | `Conditions` outside its window |
+| `wrongAudience` | `AudienceRestriction` names someone else |
+| `wrongInResponseTo` | does not match the request's `ID` |
+
+That list is the precondition for issue #19: each rule the validation strategy
+will enforce has a scenario here that violates exactly that rule and nothing
+else.
+
+Signing keys are generated per mock instance at startup and live in memory. The
+test receives the public certificate to configure a validator with. No key
+material in the repository.
+
+## How a test drives it
+
+The "user" is an HTTP client, wired through the seam the strategies already
+expose:
+
+```ts
+const uaa = await startMockUaa();
+const provider = new AuthorizationCodeProvider({
+  uaaUrl: uaa.url, clientId: 'c', clientSecret: 's',
+  authorization: browserCallbackStrategy({ port: 0, timeoutMs: 5000, openUrl: visit }),
+});
+const tokens = await provider.getTokens();
+```
+
+`visit(url)` follows the authorize redirect and lands on the callback. For SAML
+it does what a browser does under HTTP-POST binding: takes the auto-submitting
+form and posts it to the ACS.
+
+**There is no login page and no credentials.** `/authorize` decides on the spot
+what to do with the request and redirects — it does not render a form, and the
+fake browser never types anything. Authenticating a user is not what these mocks
+are for; what they verify is the protocol around it. A test that wants a login
+to fail asks the mock to deny, rather than supplying a wrong password.
+
+Two alternatives were considered and rejected. A mock that drives itself —
+issuing the callback server-side — never calls `openUrl`, so the seam this arc
+was built around goes untested, and "the browser never opened" becomes
+indistinguishable from "the user never finished". A test that scripts each step
+by hand re-implements the flow, so it verifies itself rather than the provider —
+the trap this project has already fallen into twice, where a test stayed green
+while the rule it existed to protect could be deleted outright.
+
+The low-level handle stays available for cases that cannot be assembled any
+other way, but it is not the ordinary path.
+
+`port: 0` in the example is deliberate. The mock sees the real bound port in
+`redirect_uri` and answers `invalid_grant` if the chain diverges anywhere — so
+the ephemeral port is finally verified end to end rather than in pieces.
+
+**Failure scenarios are configured on the mock, not simulated in the test:**
+
+```ts
+const uaa = await startMockUaa({ authorize: 'deny' });   // error=access_denied
+```
+
+The login then fails the way it will in production — through a callback
+carrying `error=` — which is the branch added to the OIDC route during the last
+arc and never exercised along its real path.
+
+**What each package gets.** `auth-providers` covers its providers and
+strategies. `proxy` replaces its one-endpoint stub and can drive a login through
+the CLI end to end. `auth-broker` gains flow-level tests it has never had, for
+`mcp-auth` and `mcp-sso` including the `--config` path where a regression was
+caught by review rather than by tests.
+
+## Testing the mocks
+
+A mock that is wrong leniently produces a green suite and false confidence —
+worse than having none. So the package's own tests assert **refusals**, not
+successes: an exchange with a mismatched `redirect_uri` must fail, a second
+exchange of one code must fail, an `S256` derived from a different verifier must
+be rejected.
+
+For SAML, from both directions: an assertion this mock signs must be accepted by
+an independent verifier, and each corrupted variant must be rejected by it.
+Otherwise we risk writing a validator and a mock that agree with each other and
+are both wrong.
+
+The package's tests are written against the protocol, never against our
+providers.
+
+## Release
+
+`0.1.0`, published because three repositories consume it. The sequence is the
+one this family uses: branch, PR for review, merge, tag, and the user publishes.
+Consumers adopt it in separate PRs afterwards, one per repository, so each
+review stays readable.
+
+## Risks, stated plainly
+
+**Drift between the mock and reality.** A mock written from our understanding of
+a protocol enshrines that understanding. Live tests against BTP remain
+necessary; the mocks reduce the load on them rather than replacing them. This
+belongs in the package README, or in six months someone will conclude that live
+runs are obsolete.
+
+**The temptation to bend the mock.** When a test goes red, editing the mock is
+the easiest fix. The defences are that the mock's own tests come from the
+protocol and that the package cannot import our types.
+
+**SAML signing is not trivial.** XML canonicalisation must match what a real
+identity provider produces, or a validator written against this mock will reject
+a genuine assertion. Verification against an external tool belongs in the
+implementation, not against a verifier we also wrote.
