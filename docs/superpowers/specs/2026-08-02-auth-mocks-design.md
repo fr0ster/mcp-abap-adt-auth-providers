@@ -37,7 +37,7 @@ remove the load from it.
 
 - UAA `authorization_code`, including refresh
 - OIDC authorization code with PKCE, including discovery
-- A SAML IdP that signs, and that can emit each way an assertion can be wrong
+- A SAML IdP that signs, and that can violate each rule issue #19 will enforce — one rule at a time
 
 **Out, for later:** UAA device flow, `client_credentials`, OIDC device /
 password / token-exchange. They are used by the packages, but the interactive
@@ -110,9 +110,32 @@ Basic and body credentials are present and disagree, that is
 picking a winner, and so does this one.
 
 Errors follow RFC 6749 §5.2: HTTP 400 with a JSON body carrying `error` and
-`error_description`, except `invalid_client`, which is 401. Tests assert on
-those codes, so they are part of the contract rather than an implementation
-detail.
+`error_description`. `invalid_client` is the exception, and the rule is
+conditional rather than flat: **401 with a matching `WWW-Authenticate` header
+when the client attempted to authenticate through the `Authorization` header,
+400 otherwise.** A mock that always answered 401 would enshrine behaviour the
+specification does not require — precisely the drift a strict mock is supposed
+to prevent. Tests assert on these codes, so they are part of the contract.
+
+**Access tokens are JWTs, and that is a contract, not a detail.**
+`BaseTokenProvider.parseExpirationFromJWT` splits on `.`, requires exactly three
+parts, and reads `exp`; anything else yields `undefined`, and
+`calculateExpiresIn` then yields `undefined` too. A mock handing back an opaque
+string would leave the provider with no basis to consider a freshly issued token
+valid, so the next `getTokens()` would refresh or log in again — a loop caused
+entirely by the mock, and one that would look like a provider bug.
+
+So the mock issues syntactically valid JWTs: real header, base64url payload
+carrying at least `exp` and `iat`, and a signature segment. The signature is not
+verified by anything in this family — the provider only parses — so it need not
+be cryptographically meaningful, and the spec says so out loud rather than
+leaving an implementer to wonder whether to sign.
+
+Lifetimes are configurable per mock, and the handle exposes a way to mint a
+**consistent pair**: an access token already expired alongside a refresh token
+still valid. Without that, a test wanting the refresh path has to either
+hand-craft a JWT or run a full code flow first and then wait — the first is
+duplication, the second is a slow test.
 
 **Refresh.** `/oauth/token` also serves `grant_type=refresh_token`:
 
@@ -176,10 +199,24 @@ wrong:
 | `expired` / `notYetValid` | `Conditions` outside its window |
 | `wrongAudience` | `AudienceRestriction` names someone else |
 | `wrongInResponseTo` | does not match the request's `ID` |
+| `wrongDestination` | `Destination` names a different ACS |
+| `wrongRecipient` | `SubjectConfirmationData@Recipient` names a different ACS |
+| `wrongIssuer` | `Issuer` is not the IdP the SP trusts |
+| `replayedAssertionId` | a previously seen `ID`, re-delivered |
 
-That list is the precondition for issue #19: each rule the validation strategy
-will enforce has a scenario here that violates exactly that rule and nothing
-else.
+The last four were missing and matter more than their position suggests.
+`Destination` and `Recipient` are what stop a **validly signed** assertion being
+captured and replayed at a different ACS — the one attack signature verification
+alone does not address, because the signature stays perfectly valid. `Issuer`
+distinguishes a genuine assertion from one signed by some other IdP the SP has
+no relationship with. `replayedAssertionId` covers reuse within the validity
+window, which every other check passes by construction.
+
+Each rule the validation strategy in issue #19 enforces has a scenario here that
+violates exactly that rule and nothing else. The claim is deliberately that
+narrow: this list covers the rules #19 will define, not "every way a SAML
+assertion can be wrong" — SAML has more failure modes than any test package
+should pretend to enumerate.
 
 Signing keys are generated per mock instance at startup and live in memory. The
 test receives the public certificate to configure a validator with. No key
