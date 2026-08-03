@@ -836,7 +836,7 @@ export function readClientAuth(req: RecordedRequest): ClientAuth {
 npm test -- src/__tests__/jwt.test.ts src/__tests__/clientAuth.test.ts src/__tests__/oauthErrors.test.ts
 ```
 
-Expected: PASS, thirteen cases.
+Expected: PASS, twelve cases.
 
 - [ ] **Step 5: Commit**
 
