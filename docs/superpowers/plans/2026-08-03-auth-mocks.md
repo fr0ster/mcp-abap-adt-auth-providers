@@ -1166,6 +1166,53 @@ describe('mock UAA', () => {
     }
   });
 
+  it('refuses a code it never issued', async () => {
+    const uaa = await startMockUaa();
+    try {
+      const res = await fetch(`${uaa.url}/oauth/token`, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/x-www-form-urlencoded',
+          authorization: basic('mock-client', 'mock-secret'),
+        },
+        body: new URLSearchParams({
+          grant_type: 'authorization_code',
+          code: 'never-issued',
+          redirect_uri: 'http://localhost:61001/callback',
+        }).toString(),
+      });
+      expect(res.status).toBe(400);
+      expect((await res.json()).error).toBe('invalid_grant');
+    } finally {
+      await uaa.close();
+    }
+  });
+
+  // The wrong-secret case exercises only the secret comparison. This one
+  // exercises the other half: a client_id the registry has never heard of.
+  it('refuses an entirely unknown client at the token endpoint', async () => {
+    const uaa = await startMockUaa();
+    try {
+      const res = await fetch(`${uaa.url}/oauth/token`, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/x-www-form-urlencoded',
+          authorization: basic('nobody', 'whatever'),
+        },
+        body: new URLSearchParams({
+          grant_type: 'authorization_code',
+          code: 'irrelevant',
+          redirect_uri: 'http://localhost:61001/callback',
+        }).toString(),
+      });
+      expect(res.status).toBe(401);
+      expect(res.headers.get('www-authenticate')).toMatch(/^Basic/);
+      expect((await res.json()).error).toBe('invalid_client');
+    } finally {
+      await uaa.close();
+    }
+  });
+
   // A code belongs to the client it was issued to. A server that only checks
   // "is this a client I know" lets one client redeem another's consent.
   it('refuses a code issued to a different client', async () => {
@@ -1363,7 +1410,10 @@ export async function startMockUaa(options: UaaOptions = {}): Promise<MockUaa> {
       res.end(
         JSON.stringify({
           access_token: mintJwt({ expiresInSeconds: accessLifetime }),
-          refresh_token: issueRefreshToken(auth.clientId),
+          // client.clientId, not auth.clientId: the guard above narrowed
+          // `client` to non-undefined, and registry.find matched it on exactly
+          // that value. Same string, proven rather than asserted.
+          refresh_token: issueRefreshToken(client.clientId),
           token_type: 'bearer',
           expires_in: accessLifetime,
         }),
@@ -1388,7 +1438,7 @@ tests pass:
 npm test -- src/__tests__/uaa.test.ts
 ```
 
-Expected: PASS, ten cases.
+Expected: PASS, twelve cases.
 
 - [ ] **Step 5: Commit**
 
