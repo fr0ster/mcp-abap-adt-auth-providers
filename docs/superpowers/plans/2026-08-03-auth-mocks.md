@@ -1,0 +1,2541 @@
+# Auth Mocks Implementation Plan
+
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+
+**Goal:** Build `@mcp-abap-adt/auth-mocks` — protocol-faithful mock authorization servers (UAA/OAuth2, OIDC, SAML IdP) so the authorization flows of this package family can be tested deterministically, without a live system, a profile, or a human.
+
+**Architecture:** Three mocks over one shared `node:http` server core that binds an ephemeral port and journals every request. A fake browser (`visit`) follows redirects and submits SAML's auto-submitting form, wired into the provider through the `openUrl` seam that already exists. Mocks are strict by default: they refuse what a real server would refuse, so a failure surfaces as the server's answer rather than as our own assertion.
+
+**Tech Stack:** TypeScript, Node ≥18, `node:http`, Jest with ts-jest, Biome. `xml-crypto` for XML-DSig, `@xmldom/xmldom` for the DOM, `node-forge` for certificate generation, `@node-saml/node-saml` as an independent verifier in tests only.
+
+**Spec:** `docs/superpowers/specs/2026-08-02-auth-mocks-design.md` in `mcp-abap-adt-auth-providers`. Read it before Task 1 — every design decision below is justified there.
+
+## Global Constraints
+
+- **The package imports nothing from `@mcp-abap-adt/*`.** It speaks HTTP, OAuth2 and SAML. A mock that knows our types will eventually agree with our mistakes instead of catching them. This is checked by a test, not by discipline.
+- **Strict by default.** Every rule below is a refusal the mock performs, and every refusal gets its own test. A mock that is wrong leniently produces a green suite and false confidence — worse than having none.
+- **The mock's own tests are written from the protocol**, never from how our providers happen to behave.
+- Access tokens are syntactically valid JWTs — three dot-separated parts, base64url payload with `exp` and `iat`. `BaseTokenProvider.parseExpirationFromJWT` requires exactly that and yields `undefined` otherwise. The signature segment is not verified by anything in this family and need not be cryptographically meaningful.
+- OAuth errors follow RFC 6749 §5.2: HTTP 400 with JSON `{error, error_description}`; `invalid_client` is **401 with a matching `WWW-Authenticate` header when the client authenticated through the `Authorization` header, 400 otherwise**.
+- Node ≥18.2.0, `"type"` unset (CommonJS), `main: dist/index.js`, `types: dist/index.d.ts` — matching the sibling packages.
+- `npm run lint:check`, `npm run build` and `npm test` must pass before every commit.
+- The agent never runs `npm publish`, never merges a PR, and never creates a tag before a merge exists.
+- Repo: `/home/okyslytsia/prj/mcp-abap-adt-auth-mocks`, work on branch `feat/initial-implementation` inside a worktree at `.worktrees/initial`.
+
+## A limitation to record before starting
+
+The spec asks that a signed assertion be verified "against an external tool, not against a verifier we also wrote". That is only partly achievable here. `xmlsec1` is not installed on this machine, and `openssl` cannot verify XML-DSig. The verifier this plan uses, `@node-saml/node-saml`, is not ours and independently implements SAML profile validation — Conditions, Audience, InResponseTo, Destination, signature presence — but it shares `xml-crypto` underneath for the cryptography itself.
+
+So: profile validation is independently checked; the canonicalisation and signature maths are not. Whether our C14N matches a real identity provider stays a question only live testing answers. Task 8 states this in the package README so nobody later mistakes the test suite for proof.
+
+## File Structure
+
+```
+mcp-abap-adt-auth-mocks/
+├── package.json, tsconfig.json, jest.config.js, biome.json
+├── README.md, CHANGELOG.md, LICENSE
+└── src/
+    ├── index.ts        # the only public surface
+    ├── server.ts       # ephemeral bind, graceful close, request journal
+    ├── jwt.ts          # mint a syntactically valid JWT with given iat/exp
+    ├── oauthErrors.ts  # RFC 6749 §5.2 error responses, incl. the 401/400 rule
+    ├── clientAuth.ts   # client_secret_basic / client_secret_post / public
+    ├── uaa.ts          # /oauth/authorize, /oauth/token (code, refresh, bearer)
+    ├── oidc.ts         # discovery, /authorize (PKCE demanded), /token
+    ├── signing.ts      # per-instance self-signed cert, XML-DSig
+    ├── saml.ts         # AuthnRequest → auto-submitting form; corruption variants
+    └── browser.ts      # visit(url) — follows redirects, submits forms
+```
+
+`jwt.ts`, `oauthErrors.ts` and `clientAuth.ts` are separate because both `uaa.ts` and `oidc.ts` need them identically, and because each is a rule from the spec that deserves its own tests rather than being buried in a route handler.
+
+---
+
+### Task 1: Repository and skeleton
+
+**Files:**
+- Create: `package.json`, `tsconfig.json`, `jest.config.js`, `biome.json`, `.gitignore`, `README.md`, `CHANGELOG.md`, `LICENSE`
+- Test: `src/__tests__/skeleton.test.ts`
+
+**Interfaces:**
+- Produces: a repository where `npm run lint:check && npm run build && npm test` all pass.
+
+- [ ] **Step 1: Create the repository**
+
+The owner has approved a separate repository: this is purely a developer tool
+and does not belong inside a package it exists to test.
+
+```bash
+cd /home/okyslytsia/prj
+gh repo create fr0ster/mcp-abap-adt-auth-mocks --private --clone \
+  --description "Mock authorization servers (UAA/OAuth2, OIDC, SAML IdP) for testing @mcp-abap-adt packages"
+```
+
+If the repository already exists, clone it instead and skip creation.
+
+- [ ] **Step 2: Create the worktree**
+
+```bash
+cd /home/okyslytsia/prj/mcp-abap-adt-auth-mocks
+printf '\n# Git worktrees\n.worktrees/\n\n# Build output\ndist/\nnode_modules/\n' >> .gitignore
+git add .gitignore && git commit -m "chore: ignore worktrees, dist and node_modules"
+git worktree add .worktrees/initial -b feat/initial-implementation
+```
+
+All later work happens in `.worktrees/initial`.
+
+- [ ] **Step 3: Write `package.json`**
+
+```json
+{
+  "name": "@mcp-abap-adt/auth-mocks",
+  "version": "0.1.0",
+  "description": "Protocol-faithful mock authorization servers (UAA/OAuth2, OIDC, SAML IdP) for testing @mcp-abap-adt packages",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": ["dist", "README.md", "CHANGELOG.md", "LICENSE"],
+  "engines": { "node": ">=18.2.0" },
+  "scripts": {
+    "clean": "rm -rf dist tsconfig.tsbuildinfo",
+    "lint": "npx biome check --write src",
+    "lint:check": "npx biome check src",
+    "build": "npm run --silent clean && npx biome check src --diagnostic-level=error && npx tsc -p tsconfig.json",
+    "build:fast": "npx tsc -p tsconfig.json",
+    "test:check": "npx tsc --noEmit",
+    "test": "jest"
+  },
+  "dependencies": {
+    "@xmldom/xmldom": "^0.9.10",
+    "node-forge": "^1.4.0",
+    "xml-crypto": "^6.1.2"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^2.3.14",
+    "@jest/globals": "^30.2.0",
+    "@node-saml/node-saml": "^5.1.0",
+    "@types/jest": "^30.0.0",
+    "@types/node": "^25.2.3",
+    "@types/node-forge": "^1.3.11",
+    "jest": "^30.2.0",
+    "ts-jest": "^29.2.5",
+    "typescript": "^5.9.2"
+  },
+  "publishConfig": { "access": "public" },
+  "license": "MIT"
+}
+```
+
+Note `xml-crypto`, `@xmldom/xmldom` and `node-forge` are **dependencies**, not dev: consumers run this code in their tests. `@node-saml/node-saml` is a devDependency — it verifies our output in *our* tests and must not become a consumer's problem.
+
+- [ ] **Step 4: Write `tsconfig.json`, `jest.config.js`, `biome.json`**
+
+```json
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "commonjs",
+    "lib": ["ES2022"],
+    "declaration": true,
+    "outDir": "./dist",
+    "rootDir": "./src",
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "resolveJsonModule": true
+  },
+  "include": ["src/**/*"],
+  "exclude": ["node_modules", "dist", "src/__tests__"]
+}
+```
+
+```js
+module.exports = {
+  preset: 'ts-jest',
+  testEnvironment: 'node',
+  roots: ['<rootDir>/src'],
+  testMatch: ['**/__tests__/**/*.test.ts'],
+  moduleFileExtensions: ['ts', 'tsx', 'js', 'jsx', 'json'],
+  transform: {
+    '^.+\\.ts$': ['ts-jest', { tsconfig: { esModuleInterop: true } }],
+  },
+  maxWorkers: 1,
+  testTimeout: 15000,
+};
+```
+
+Copy `biome.json` from `/home/okyslytsia/prj/mcp-abap-adt-auth-providers/biome.json` unchanged, so formatting matches the family.
+
+- [ ] **Step 5: Write the failing test**
+
+`src/__tests__/skeleton.test.ts`:
+
+```ts
+import { describe, expect, it } from '@jest/globals';
+import * as mocks from '../index';
+
+describe('package skeleton', () => {
+  it('exports something', () => {
+    expect(Object.keys(mocks).length).toBeGreaterThan(0);
+  });
+
+  // The package must never depend on the packages it exists to test: a mock
+  // that knows our types will eventually agree with our mistakes.
+  it('depends on no @mcp-abap-adt package at runtime', () => {
+    const pkg = require('../../package.json');
+    const runtime = Object.keys(pkg.dependencies ?? {});
+    expect(runtime.filter((d) => d.startsWith('@mcp-abap-adt/'))).toEqual([]);
+  });
+});
+```
+
+- [ ] **Step 6: Run it to verify it fails**
+
+```bash
+cd /home/okyslytsia/prj/mcp-abap-adt-auth-mocks/.worktrees/initial
+npm install && npm test
+```
+
+Expected: FAIL — `Cannot find module '../index'`.
+
+- [ ] **Step 7: Create `src/index.ts` with a placeholder export**
+
+```ts
+/**
+ * Mock authorization servers for testing.
+ *
+ * Everything here starts and stops inside a test. Nothing in this package is
+ * meant to run in production, and nothing in it imports the packages it exists
+ * to test.
+ */
+
+/** Replaced as the mocks land; keeps the module non-empty until then. */
+export const AUTH_MOCKS_VERSION = '0.1.0';
+```
+
+- [ ] **Step 8: Verify and commit**
+
+```bash
+npm run lint:check && npm run build && npm test
+git add -A && git commit -m "chore: package skeleton"
+```
+
+Expected: all green, both tests pass.
+
+---
+
+### Task 2: The server core and its journal
+
+**Files:**
+- Create: `src/server.ts`
+- Test: `src/__tests__/server.test.ts`
+
+**Interfaces:**
+- Produces:
+  - `interface RecordedRequest { method: string; path: string; query: Record<string, string>; headers: Record<string, string>; body: Record<string, string>; raw: string }`
+  - `interface MockHandle { url: string; port: number; requests: RecordedRequest[]; close(): Promise<void> }`
+  - `startServer(routes: RouteTable): Promise<MockHandle>` where `type RouteTable = Record<string, (req: RecordedRequest, res: http.ServerResponse) => void>` keyed by `"GET /path"`.
+
+The journal is not a convenience. Without it a test can only assert the outcome; with it the test asserts what the client *sent* — which is where every defect in the previous arc lived.
+
+- [ ] **Step 1: Write the failing test**
+
+```ts
+import { describe, expect, it } from '@jest/globals';
+import { startServer } from '../server';
+
+describe('server core', () => {
+  it('binds an ephemeral port and reports its own url', async () => {
+    const s = await startServer({ 'GET /ping': (_req, res) => res.end('pong') });
+    try {
+      expect(s.port).toBeGreaterThan(0);
+      expect(s.url).toBe(`http://127.0.0.1:${s.port}`);
+      const body = await (await fetch(`${s.url}/ping`)).text();
+      expect(body).toBe('pong');
+    } finally {
+      await s.close();
+    }
+  });
+
+  it('journals query, headers and form body of every request', async () => {
+    const s = await startServer({ 'POST /echo': (_req, res) => res.end('ok') });
+    try {
+      await fetch(`${s.url}/echo?a=1`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/x-www-form-urlencoded' },
+        body: 'grant_type=authorization_code&code=xyz',
+      });
+      expect(s.requests).toHaveLength(1);
+      const r = s.requests[0];
+      expect(r.method).toBe('POST');
+      expect(r.path).toBe('/echo');
+      expect(r.query.a).toBe('1');
+      expect(r.body.grant_type).toBe('authorization_code');
+      expect(r.body.code).toBe('xyz');
+    } finally {
+      await s.close();
+    }
+  });
+
+  it('answers 404 for an unrouted path and still journals it', async () => {
+    const s = await startServer({});
+    try {
+      const res = await fetch(`${s.url}/nope`);
+      expect(res.status).toBe(404);
+      expect(s.requests[0].path).toBe('/nope');
+    } finally {
+      await s.close();
+    }
+  });
+
+  it('releases the port when closed', async () => {
+    const s = await startServer({});
+    const port = s.port;
+    await s.close();
+    // Binding the same port must now succeed.
+    const again = await startServer({}, port);
+    expect(again.port).toBe(port);
+    await again.close();
+  });
+});
+```
+
+- [ ] **Step 2: Run it to verify it fails**
+
+```bash
+npm test -- src/__tests__/server.test.ts
+```
+
+Expected: FAIL — `Cannot find module '../server'`.
+
+- [ ] **Step 3: Implement `src/server.ts`**
+
+```ts
+/**
+ * The shared core every mock is built on.
+ *
+ * Binds an ephemeral port, records every request it receives, and releases the
+ * socket when closed. Routes are keyed `"METHOD /path"`; anything unmatched is
+ * a journalled 404, because a test that mistypes a path should see that rather
+ * than a hang.
+ */
+
+import * as http from 'node:http';
+import type { AddressInfo } from 'node:net';
+
+export interface RecordedRequest {
+  method: string;
+  path: string;
+  query: Record<string, string>;
+  headers: Record<string, string>;
+  /** Parsed form body; empty for requests without one. */
+  body: Record<string, string>;
+  /** The body exactly as it arrived, for assertions parsing would lose. */
+  raw: string;
+}
+
+export type RouteHandler = (
+  req: RecordedRequest,
+  res: http.ServerResponse,
+) => void;
+
+export type RouteTable = Record<string, RouteHandler>;
+
+export interface MockHandle {
+  url: string;
+  port: number;
+  /** Every request this mock received, oldest first. */
+  requests: RecordedRequest[];
+  close(): Promise<void>;
+}
+
+function readBody(req: http.IncomingMessage): Promise<string> {
+  return new Promise((resolve, reject) => {
+    let data = '';
+    req.setEncoding('utf8');
+    req.on('data', (chunk: string) => {
+      data += chunk;
+    });
+    req.on('end', () => resolve(data));
+    req.on('error', reject);
+  });
+}
+
+export async function startServer(
+  routes: RouteTable,
+  port = 0,
+): Promise<MockHandle> {
+  const requests: RecordedRequest[] = [];
+  const sockets = new Set<import('node:net').Socket>();
+
+  const server = http.createServer((req, res) => {
+    void (async () => {
+      const raw = await readBody(req);
+      const url = new URL(req.url ?? '/', 'http://127.0.0.1');
+      const query: Record<string, string> = {};
+      url.searchParams.forEach((v, k) => {
+        query[k] = v;
+      });
+      const body: Record<string, string> = {};
+      if (raw && /application\/x-www-form-urlencoded/.test(req.headers['content-type'] ?? '')) {
+        new URLSearchParams(raw).forEach((v, k) => {
+          body[k] = v;
+        });
+      }
+      const headers: Record<string, string> = {};
+      for (const [k, v] of Object.entries(req.headers)) {
+        headers[k.toLowerCase()] = Array.isArray(v) ? v.join(', ') : (v ?? '');
+      }
+
+      const recorded: RecordedRequest = {
+        method: req.method ?? 'GET',
+        path: url.pathname,
+        query,
+        headers,
+        body,
+        raw,
+      };
+      requests.push(recorded);
+
+      const handler = routes[`${recorded.method} ${recorded.path}`];
+      if (!handler) {
+        res.statusCode = 404;
+        res.end('no such route');
+        return;
+      }
+      handler(recorded, res);
+    })();
+  });
+
+  server.on('connection', (socket) => {
+    sockets.add(socket);
+    socket.on('close', () => sockets.delete(socket));
+  });
+
+  await new Promise<void>((resolve) => server.listen(port, '127.0.0.1', resolve));
+  const bound = (server.address() as AddressInfo).port;
+
+  return {
+    url: `http://127.0.0.1:${bound}`,
+    port: bound,
+    requests,
+    close: () =>
+      new Promise<void>((resolve) => {
+        for (const socket of sockets) socket.destroy();
+        server.close(() => resolve());
+      }),
+  };
+}
+```
+
+- [ ] **Step 4: Run the tests to verify they pass**
+
+```bash
+npm test -- src/__tests__/server.test.ts
+```
+
+Expected: PASS, four cases.
+
+- [ ] **Step 5: Commit**
+
+```bash
+npm run lint:check && npm run build
+git add src/server.ts src/__tests__/server.test.ts
+git commit -m "feat: server core with an ephemeral port and a request journal"
+```
+
+---
+
+### Task 3: JWTs, OAuth errors and client authentication
+
+**Files:**
+- Create: `src/jwt.ts`, `src/oauthErrors.ts`, `src/clientAuth.ts`
+- Test: `src/__tests__/jwt.test.ts`, `src/__tests__/oauthErrors.test.ts`, `src/__tests__/clientAuth.test.ts`
+
+**Interfaces:**
+- Produces:
+  - `mintJwt(opts: { expiresInSeconds: number; claims?: Record<string, unknown> }): string`
+  - `sendOAuthError(res, error: string, description: string, opts?: { usedAuthorizationHeader?: boolean }): void`
+  - `readClientAuth(req: RecordedRequest): { clientId?: string; clientSecret?: string; usedAuthorizationHeader: boolean; conflict: boolean }`
+
+These three are separate files because `uaa.ts` and `oidc.ts` need them identically, and each encodes a rule from the spec that deserves its own tests rather than being buried in a route.
+
+- [ ] **Step 1: Write the failing tests**
+
+`src/__tests__/jwt.test.ts`:
+
+```ts
+import { describe, expect, it } from '@jest/globals';
+import { mintJwt } from '../jwt';
+
+describe('mintJwt', () => {
+  // BaseTokenProvider.parseExpirationFromJWT splits on '.', requires exactly
+  // three parts and reads `exp`. Anything else yields undefined expiry, and a
+  // provider handed such a token has no basis to consider it fresh.
+  it('produces three dot-separated parts', () => {
+    expect(mintJwt({ expiresInSeconds: 60 }).split('.')).toHaveLength(3);
+  });
+
+  it('carries exp and iat the way a provider reads them', () => {
+    const before = Math.floor(Date.now() / 1000);
+    const token = mintJwt({ expiresInSeconds: 3600 });
+    const claims = JSON.parse(
+      Buffer.from(token.split('.')[1], 'base64url').toString('utf8'),
+    );
+    expect(claims.iat).toBeGreaterThanOrEqual(before);
+    expect(claims.exp - claims.iat).toBe(3600);
+  });
+
+  it('can mint an already-expired token', () => {
+    const token = mintJwt({ expiresInSeconds: -1 });
+    const claims = JSON.parse(
+      Buffer.from(token.split('.')[1], 'base64url').toString('utf8'),
+    );
+    expect(claims.exp).toBeLessThan(Math.floor(Date.now() / 1000));
+  });
+
+  it('merges extra claims', () => {
+    const token = mintJwt({ expiresInSeconds: 60, claims: { sub: 'u1' } });
+    const claims = JSON.parse(
+      Buffer.from(token.split('.')[1], 'base64url').toString('utf8'),
+    );
+    expect(claims.sub).toBe('u1');
+  });
+});
+```
+
+`src/__tests__/clientAuth.test.ts`:
+
+```ts
+import { describe, expect, it } from '@jest/globals';
+import { readClientAuth } from '../clientAuth';
+import type { RecordedRequest } from '../server';
+
+const base: RecordedRequest = {
+  method: 'POST', path: '/oauth/token', query: {}, headers: {}, body: {}, raw: '',
+};
+
+describe('readClientAuth', () => {
+  // UAA sends credentials only as Basic and puts no client_id in the body;
+  // OIDC puts client_id in the body. A mock assuming either shape would
+  // reject one of the family's own clients.
+  it('reads client_secret_basic', () => {
+    const basic = Buffer.from('cid:secret').toString('base64');
+    const r = readClientAuth({ ...base, headers: { authorization: `Basic ${basic}` } });
+    expect(r).toMatchObject({ clientId: 'cid', clientSecret: 'secret', usedAuthorizationHeader: true, conflict: false });
+  });
+
+  it('reads client_secret_post', () => {
+    const r = readClientAuth({ ...base, body: { client_id: 'cid', client_secret: 'secret' } });
+    expect(r).toMatchObject({ clientId: 'cid', clientSecret: 'secret', usedAuthorizationHeader: false, conflict: false });
+  });
+
+  it('reads a public client — id in the body, no secret', () => {
+    const r = readClientAuth({ ...base, body: { client_id: 'cid' } });
+    expect(r).toMatchObject({ clientId: 'cid', clientSecret: undefined, conflict: false });
+  });
+
+  it('flags a conflict when Basic and body disagree', () => {
+    const basic = Buffer.from('cid:secret').toString('base64');
+    const r = readClientAuth({
+      ...base,
+      headers: { authorization: `Basic ${basic}` },
+      body: { client_id: 'other' },
+    });
+    expect(r.conflict).toBe(true);
+  });
+
+  it('does not flag a conflict when Basic and body agree', () => {
+    const basic = Buffer.from('cid:secret').toString('base64');
+    const r = readClientAuth({
+      ...base,
+      headers: { authorization: `Basic ${basic}` },
+      body: { client_id: 'cid' },
+    });
+    expect(r.conflict).toBe(false);
+  });
+});
+```
+
+`src/__tests__/oauthErrors.test.ts`:
+
+```ts
+import { describe, expect, it } from '@jest/globals';
+import { startServer } from '../server';
+import { sendOAuthError } from '../oauthErrors';
+
+describe('sendOAuthError', () => {
+  it('answers 400 with an RFC 6749 body', async () => {
+    const s = await startServer({
+      'GET /e': (_r, res) => sendOAuthError(res, 'invalid_grant', 'bad code'),
+    });
+    try {
+      const res = await fetch(`${s.url}/e`);
+      expect(res.status).toBe(400);
+      expect(await res.json()).toEqual({
+        error: 'invalid_grant',
+        error_description: 'bad code',
+      });
+    } finally {
+      await s.close();
+    }
+  });
+
+  // RFC 6749 §5.2: 401 with WWW-Authenticate only when the client tried to
+  // authenticate through the Authorization header; 400 otherwise. A mock that
+  // always answered 401 would enshrine behaviour the RFC does not require.
+  it('answers 401 with WWW-Authenticate for invalid_client via the header', async () => {
+    const s = await startServer({
+      'GET /e': (_r, res) =>
+        sendOAuthError(res, 'invalid_client', 'nope', { usedAuthorizationHeader: true }),
+    });
+    try {
+      const res = await fetch(`${s.url}/e`);
+      expect(res.status).toBe(401);
+      expect(res.headers.get('www-authenticate')).toMatch(/^Basic/);
+    } finally {
+      await s.close();
+    }
+  });
+
+  it('answers 400 for invalid_client sent in the body', async () => {
+    const s = await startServer({
+      'GET /e': (_r, res) =>
+        sendOAuthError(res, 'invalid_client', 'nope', { usedAuthorizationHeader: false }),
+    });
+    try {
+      expect((await fetch(`${s.url}/e`)).status).toBe(400);
+    } finally {
+      await s.close();
+    }
+  });
+});
+```
+
+- [ ] **Step 2: Run them to verify they fail**
+
+```bash
+npm test -- src/__tests__/jwt.test.ts src/__tests__/clientAuth.test.ts src/__tests__/oauthErrors.test.ts
+```
+
+Expected: FAIL — all three modules missing.
+
+- [ ] **Step 3: Implement the three modules**
+
+`src/jwt.ts`:
+
+```ts
+/**
+ * Mints syntactically valid JWTs.
+ *
+ * Nothing in the family verifies the signature — providers only parse the
+ * payload for `exp` — so the signature segment is deliberately not
+ * cryptographically meaningful. What matters is the shape: three parts, and a
+ * base64url payload carrying `exp` and `iat`.
+ */
+
+function b64url(value: object): string {
+  return Buffer.from(JSON.stringify(value), 'utf8').toString('base64url');
+}
+
+export function mintJwt(opts: {
+  expiresInSeconds: number;
+  claims?: Record<string, unknown>;
+}): string {
+  const iat = Math.floor(Date.now() / 1000);
+  const header = b64url({ alg: 'RS256', typ: 'JWT' });
+  const payload = b64url({
+    iat,
+    exp: iat + opts.expiresInSeconds,
+    ...opts.claims,
+  });
+  return `${header}.${payload}.mock-signature-not-verified`;
+}
+```
+
+`src/oauthErrors.ts`:
+
+```ts
+/**
+ * RFC 6749 §5.2 error responses.
+ *
+ * `invalid_client` is the one case with a conditional status: 401 with a
+ * matching `WWW-Authenticate` when the client authenticated through the
+ * `Authorization` header, 400 otherwise. Always answering 401 would enshrine
+ * behaviour the specification does not require.
+ */
+
+import type * as http from 'node:http';
+
+export function sendOAuthError(
+  res: http.ServerResponse,
+  error: string,
+  description: string,
+  opts: { usedAuthorizationHeader?: boolean } = {},
+): void {
+  const viaHeader = opts.usedAuthorizationHeader === true;
+  res.statusCode = error === 'invalid_client' && viaHeader ? 401 : 400;
+  if (res.statusCode === 401) {
+    res.setHeader('WWW-Authenticate', 'Basic realm="mock"');
+  }
+  res.setHeader('Content-Type', 'application/json');
+  res.end(JSON.stringify({ error, error_description: description }));
+}
+```
+
+`src/clientAuth.ts`:
+
+```ts
+/**
+ * The three client authentication methods a real token endpoint accepts.
+ *
+ * They are not interchangeable in practice: UAA sends only HTTP Basic and puts
+ * no `client_id` in the body, while OIDC puts `client_id` in the body. A mock
+ * that assumed one shape would reject a real client.
+ */
+
+import type { RecordedRequest } from './server';
+
+export interface ClientAuth {
+  clientId?: string;
+  clientSecret?: string;
+  /** True when credentials arrived in the Authorization header. */
+  usedAuthorizationHeader: boolean;
+  /** True when header and body both carry a client_id and they disagree. */
+  conflict: boolean;
+}
+
+export function readClientAuth(req: RecordedRequest): ClientAuth {
+  const header = req.headers.authorization ?? '';
+  let basicId: string | undefined;
+  let basicSecret: string | undefined;
+
+  if (header.startsWith('Basic ')) {
+    const decoded = Buffer.from(header.slice(6), 'base64').toString('utf8');
+    const sep = decoded.indexOf(':');
+    if (sep >= 0) {
+      basicId = decoded.slice(0, sep);
+      basicSecret = decoded.slice(sep + 1);
+    }
+  }
+
+  const bodyId = req.body.client_id;
+  const bodySecret = req.body.client_secret;
+
+  return {
+    clientId: basicId ?? bodyId,
+    clientSecret: basicSecret ?? bodySecret,
+    usedAuthorizationHeader: basicId !== undefined,
+    conflict: basicId !== undefined && bodyId !== undefined && basicId !== bodyId,
+  };
+}
+```
+
+- [ ] **Step 4: Run the tests to verify they pass**
+
+```bash
+npm test -- src/__tests__/jwt.test.ts src/__tests__/clientAuth.test.ts src/__tests__/oauthErrors.test.ts
+```
+
+Expected: PASS, thirteen cases.
+
+- [ ] **Step 5: Commit**
+
+```bash
+npm run lint:check && npm run build
+git add src/jwt.ts src/oauthErrors.ts src/clientAuth.ts src/__tests__/
+git commit -m "feat: JWT minting, RFC 6749 errors and client authentication"
+```
+
+---
+
+### Task 4: The UAA mock — authorization code
+
+**Files:**
+- Create: `src/uaa.ts`
+- Test: `src/__tests__/uaa.test.ts`
+
+**Interfaces:**
+- Consumes: `startServer`, `MockHandle`, `RecordedRequest` (Task 2); `mintJwt`, `sendOAuthError`, `readClientAuth` (Task 3).
+- Produces:
+  - `interface UaaOptions { clientId?: string; clientSecret?: string; codeLifetimeMs?: number; accessTokenLifetimeSeconds?: number; authorize?: 'allow' | 'deny'; requireClientSecret?: boolean }`
+  - `interface MockUaa extends MockHandle { }`
+  - `startMockUaa(options?: UaaOptions): Promise<MockUaa>`
+
+Defaults: `clientId: 'mock-client'`, `clientSecret: 'mock-secret'`, `codeLifetimeMs: 2000` (short, so an expiry test need not wait), `accessTokenLifetimeSeconds: 3600`, `authorize: 'allow'`, `requireClientSecret: true`.
+
+- [ ] **Step 1: Write the failing tests**
+
+```ts
+import { describe, expect, it } from '@jest/globals';
+import { startMockUaa } from '../uaa';
+
+const basic = (id: string, secret: string) =>
+  `Basic ${Buffer.from(`${id}:${secret}`).toString('base64')}`;
+
+/** Drives /authorize the way a browser would, returning the code it lands with. */
+async function getCode(url: string, redirectUri: string): Promise<string> {
+  const res = await fetch(
+    `${url}/oauth/authorize?client_id=mock-client&response_type=code&redirect_uri=${encodeURIComponent(redirectUri)}`,
+    { redirect: 'manual' },
+  );
+  const location = res.headers.get('location') ?? '';
+  return new URL(location).searchParams.get('code') ?? '';
+}
+
+describe('mock UAA', () => {
+  it('redirects to the redirect_uri with a code', async () => {
+    const uaa = await startMockUaa();
+    try {
+      const code = await getCode(uaa.url, 'http://localhost:61001/callback');
+      expect(code).toBeTruthy();
+    } finally {
+      await uaa.close();
+    }
+  });
+
+  it('exchanges the code for a JWT access token and a refresh token', async () => {
+    const uaa = await startMockUaa();
+    try {
+      const redirectUri = 'http://localhost:61001/callback';
+      const code = await getCode(uaa.url, redirectUri);
+      const res = await fetch(`${uaa.url}/oauth/token`, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/x-www-form-urlencoded',
+          authorization: basic('mock-client', 'mock-secret'),
+        },
+        body: new URLSearchParams({
+          grant_type: 'authorization_code',
+          code,
+          redirect_uri: redirectUri,
+        }).toString(),
+      });
+      expect(res.status).toBe(200);
+      const json = await res.json();
+      expect(json.access_token.split('.')).toHaveLength(3);
+      expect(json.refresh_token).toBeTruthy();
+    } finally {
+      await uaa.close();
+    }
+  });
+
+  // This is the refusal the previous arc had to guard by hand, twice.
+  it('refuses a redirect_uri that differs from the authorize request', async () => {
+    const uaa = await startMockUaa();
+    try {
+      const code = await getCode(uaa.url, 'http://localhost:61001/callback');
+      const res = await fetch(`${uaa.url}/oauth/token`, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/x-www-form-urlencoded',
+          authorization: basic('mock-client', 'mock-secret'),
+        },
+        body: new URLSearchParams({
+          grant_type: 'authorization_code',
+          code,
+          redirect_uri: 'http://localhost:3001/callback',
+        }).toString(),
+      });
+      expect(res.status).toBe(400);
+      expect((await res.json()).error).toBe('invalid_grant');
+    } finally {
+      await uaa.close();
+    }
+  });
+
+  it('refuses a code used twice', async () => {
+    const uaa = await startMockUaa();
+    try {
+      const redirectUri = 'http://localhost:61001/callback';
+      const code = await getCode(uaa.url, redirectUri);
+      const exchange = () =>
+        fetch(`${uaa.url}/oauth/token`, {
+          method: 'POST',
+          headers: {
+            'content-type': 'application/x-www-form-urlencoded',
+            authorization: basic('mock-client', 'mock-secret'),
+          },
+          body: new URLSearchParams({
+            grant_type: 'authorization_code',
+            code,
+            redirect_uri: redirectUri,
+          }).toString(),
+        });
+      expect((await exchange()).status).toBe(200);
+      const second = await exchange();
+      expect(second.status).toBe(400);
+      expect((await second.json()).error).toBe('invalid_grant');
+    } finally {
+      await uaa.close();
+    }
+  });
+
+  it('refuses an expired code', async () => {
+    const uaa = await startMockUaa({ codeLifetimeMs: 50 });
+    try {
+      const redirectUri = 'http://localhost:61001/callback';
+      const code = await getCode(uaa.url, redirectUri);
+      await new Promise((r) => setTimeout(r, 120));
+      const res = await fetch(`${uaa.url}/oauth/token`, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/x-www-form-urlencoded',
+          authorization: basic('mock-client', 'mock-secret'),
+        },
+        body: new URLSearchParams({
+          grant_type: 'authorization_code',
+          code,
+          redirect_uri: redirectUri,
+        }).toString(),
+      });
+      expect((await res.json()).error).toBe('invalid_grant');
+    } finally {
+      await uaa.close();
+    }
+  });
+
+  it('answers 401 with WWW-Authenticate when Basic credentials are wrong', async () => {
+    const uaa = await startMockUaa();
+    try {
+      const redirectUri = 'http://localhost:61001/callback';
+      const code = await getCode(uaa.url, redirectUri);
+      const res = await fetch(`${uaa.url}/oauth/token`, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/x-www-form-urlencoded',
+          authorization: basic('mock-client', 'wrong'),
+        },
+        body: new URLSearchParams({
+          grant_type: 'authorization_code',
+          code,
+          redirect_uri: redirectUri,
+        }).toString(),
+      });
+      expect(res.status).toBe(401);
+      expect(res.headers.get('www-authenticate')).toBeTruthy();
+      expect((await res.json()).error).toBe('invalid_client');
+    } finally {
+      await uaa.close();
+    }
+  });
+
+  it('redirects with error=access_denied when told to deny', async () => {
+    const uaa = await startMockUaa({ authorize: 'deny' });
+    try {
+      const res = await fetch(
+        `${uaa.url}/oauth/authorize?client_id=mock-client&response_type=code&redirect_uri=${encodeURIComponent('http://localhost:61001/callback')}`,
+        { redirect: 'manual' },
+      );
+      const location = new URL(res.headers.get('location') ?? '');
+      expect(location.searchParams.get('error')).toBe('access_denied');
+      expect(location.searchParams.get('code')).toBeNull();
+    } finally {
+      await uaa.close();
+    }
+  });
+
+  it('journals what the client sent', async () => {
+    const uaa = await startMockUaa();
+    try {
+      await getCode(uaa.url, 'http://localhost:49999/callback');
+      const authorize = uaa.requests.find((r) => r.path === '/oauth/authorize');
+      expect(authorize?.query.redirect_uri).toBe('http://localhost:49999/callback');
+    } finally {
+      await uaa.close();
+    }
+  });
+});
+```
+
+- [ ] **Step 2: Run them to verify they fail**
+
+```bash
+npm test -- src/__tests__/uaa.test.ts
+```
+
+Expected: FAIL — `Cannot find module '../uaa'`.
+
+- [ ] **Step 3: Implement `src/uaa.ts`**
+
+```ts
+/**
+ * A mock UAA authorization server.
+ *
+ * Strict by default: it refuses what a real server refuses, so a client's
+ * mistake surfaces as this server's answer rather than as an assertion written
+ * by the same person who wrote the mistake.
+ */
+
+import { randomUUID } from 'node:crypto';
+import { readClientAuth } from './clientAuth';
+import { mintJwt } from './jwt';
+import { sendOAuthError } from './oauthErrors';
+import { type MockHandle, startServer } from './server';
+
+export interface UaaOptions {
+  clientId?: string;
+  clientSecret?: string;
+  /** Short by default so an expiry test does not have to wait. */
+  codeLifetimeMs?: number;
+  accessTokenLifetimeSeconds?: number;
+  authorize?: 'allow' | 'deny';
+  requireClientSecret?: boolean;
+}
+
+export type MockUaa = MockHandle;
+
+interface IssuedCode {
+  redirectUri: string;
+  clientId: string;
+  issuedAt: number;
+  used: boolean;
+}
+
+export async function startMockUaa(options: UaaOptions = {}): Promise<MockUaa> {
+  const clientId = options.clientId ?? 'mock-client';
+  const clientSecret = options.clientSecret ?? 'mock-secret';
+  const codeLifetimeMs = options.codeLifetimeMs ?? 2000;
+  const accessLifetime = options.accessTokenLifetimeSeconds ?? 3600;
+  const requireSecret = options.requireClientSecret !== false;
+  const denies = options.authorize === 'deny';
+
+  const codes = new Map<string, IssuedCode>();
+
+  return startServer({
+    'GET /oauth/authorize': (req, res) => {
+      const redirectUri = req.query.redirect_uri;
+      if (!redirectUri) {
+        sendOAuthError(res, 'invalid_request', 'redirect_uri is required');
+        return;
+      }
+      const target = new URL(redirectUri);
+      if (denies) {
+        target.searchParams.set('error', 'access_denied');
+        target.searchParams.set('error_description', 'the mock was told to deny');
+      } else {
+        const code = randomUUID();
+        codes.set(code, {
+          redirectUri,
+          clientId: req.query.client_id ?? '',
+          issuedAt: Date.now(),
+          used: false,
+        });
+        target.searchParams.set('code', code);
+      }
+      if (req.query.state) target.searchParams.set('state', req.query.state);
+      res.statusCode = 302;
+      res.setHeader('Location', target.toString());
+      res.end();
+    },
+
+    'POST /oauth/token': (req, res) => {
+      const auth = readClientAuth(req);
+      if (auth.conflict) {
+        sendOAuthError(res, 'invalid_client', 'header and body disagree', {
+          usedAuthorizationHeader: auth.usedAuthorizationHeader,
+        });
+        return;
+      }
+      if (
+        auth.clientId !== clientId ||
+        (requireSecret && auth.clientSecret !== clientSecret)
+      ) {
+        sendOAuthError(res, 'invalid_client', 'unknown client', {
+          usedAuthorizationHeader: auth.usedAuthorizationHeader,
+        });
+        return;
+      }
+
+      if (req.body.grant_type !== 'authorization_code') {
+        sendOAuthError(res, 'unsupported_grant_type', String(req.body.grant_type));
+        return;
+      }
+
+      const issued = codes.get(req.body.code ?? '');
+      if (!issued) {
+        sendOAuthError(res, 'invalid_grant', 'unknown code');
+        return;
+      }
+      if (issued.used) {
+        sendOAuthError(res, 'invalid_grant', 'code already used');
+        return;
+      }
+      if (Date.now() - issued.issuedAt > codeLifetimeMs) {
+        sendOAuthError(res, 'invalid_grant', 'code expired');
+        return;
+      }
+      if (issued.redirectUri !== req.body.redirect_uri) {
+        sendOAuthError(
+          res,
+          'invalid_grant',
+          `redirect_uri does not match the authorization request (${issued.redirectUri})`,
+        );
+        return;
+      }
+
+      issued.used = true;
+      res.statusCode = 200;
+      res.setHeader('Content-Type', 'application/json');
+      res.end(
+        JSON.stringify({
+          access_token: mintJwt({ expiresInSeconds: accessLifetime }),
+          refresh_token: `refresh-${randomUUID()}`,
+          token_type: 'bearer',
+          expires_in: accessLifetime,
+        }),
+      );
+    },
+  });
+}
+```
+
+- [ ] **Step 4: Run the tests to verify they pass**
+
+```bash
+npm test -- src/__tests__/uaa.test.ts
+```
+
+Expected: PASS, eight cases.
+
+- [ ] **Step 5: Commit**
+
+```bash
+npm run lint:check && npm run build
+git add src/uaa.ts src/__tests__/uaa.test.ts
+git commit -m "feat: mock UAA authorization code flow, strict by default"
+```
+
+---
+
+### Task 5: Refresh and the SAML bearer grant
+
+**Files:**
+- Modify: `src/uaa.ts`
+- Test: `src/__tests__/uaaGrants.test.ts`
+
+**Interfaces:**
+- Produces: `UaaOptions` gains `rotateRefreshTokens?: boolean` (default `true`), `failRefresh?: boolean` (default `false`), `samlBearer?: 'strict' | 'lenient' | 'off'` (default `'strict'`). `MockUaa` gains `mintExpiredAccessWithValidRefresh(): { accessToken: string; refreshToken: string }`.
+
+The minting helper exists so a test wanting the refresh path neither hand-crafts a JWT nor runs a full code flow and waits.
+
+`samlBearer: 'strict'` enforces RFC 7522 §2.1 — the `assertion` parameter must be a base64url-encoded `Assertion`. `exchangeSamlAssertion` in `auth-providers` forwards the whole base64 `samlp:Response`, so strict mode will refuse it. **That is a finding about the client, not a defect in this mock**, and it belongs to issue #19's cycle. `'lenient'` accepts what the client currently sends so the discovery does not block anything.
+
+- [ ] **Step 1: Write the failing tests**
+
+```ts
+import { describe, expect, it } from '@jest/globals';
+import { startMockUaa } from '../uaa';
+
+const basic = (id: string, secret: string) =>
+  `Basic ${Buffer.from(`${id}:${secret}`).toString('base64')}`;
+
+const post = (url: string, body: Record<string, string>) =>
+  fetch(`${url}/oauth/token`, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/x-www-form-urlencoded',
+      authorization: basic('mock-client', 'mock-secret'),
+    },
+    body: new URLSearchParams(body).toString(),
+  });
+
+describe('refresh grant', () => {
+  it('mints a consistent expired-access + valid-refresh pair', async () => {
+    const uaa = await startMockUaa();
+    try {
+      const pair = uaa.mintExpiredAccessWithValidRefresh();
+      const claims = JSON.parse(
+        Buffer.from(pair.accessToken.split('.')[1], 'base64url').toString('utf8'),
+      );
+      expect(claims.exp).toBeLessThan(Math.floor(Date.now() / 1000));
+
+      const res = await post(uaa.url, {
+        grant_type: 'refresh_token',
+        refresh_token: pair.refreshToken,
+      });
+      expect(res.status).toBe(200);
+      expect((await res.json()).access_token.split('.')).toHaveLength(3);
+    } finally {
+      await uaa.close();
+    }
+  });
+
+  it('rotates the refresh token and refuses the superseded one', async () => {
+    const uaa = await startMockUaa({ rotateRefreshTokens: true });
+    try {
+      const pair = uaa.mintExpiredAccessWithValidRefresh();
+      const first = await (
+        await post(uaa.url, { grant_type: 'refresh_token', refresh_token: pair.refreshToken })
+      ).json();
+      expect(first.refresh_token).not.toBe(pair.refreshToken);
+
+      const reuse = await post(uaa.url, {
+        grant_type: 'refresh_token',
+        refresh_token: pair.refreshToken,
+      });
+      expect(reuse.status).toBe(400);
+      expect((await reuse.json()).error).toBe('invalid_grant');
+    } finally {
+      await uaa.close();
+    }
+  });
+
+  it('keeps the refresh token when rotation is off', async () => {
+    const uaa = await startMockUaa({ rotateRefreshTokens: false });
+    try {
+      const pair = uaa.mintExpiredAccessWithValidRefresh();
+      const body = await (
+        await post(uaa.url, { grant_type: 'refresh_token', refresh_token: pair.refreshToken })
+      ).json();
+      expect(body.refresh_token).toBe(pair.refreshToken);
+    } finally {
+      await uaa.close();
+    }
+  });
+
+  it('refuses an unknown refresh token', async () => {
+    const uaa = await startMockUaa();
+    try {
+      const res = await post(uaa.url, {
+        grant_type: 'refresh_token',
+        refresh_token: 'never-issued',
+      });
+      expect((await res.json()).error).toBe('invalid_grant');
+    } finally {
+      await uaa.close();
+    }
+  });
+
+  it('fails every refresh when told to', async () => {
+    const uaa = await startMockUaa({ failRefresh: true });
+    try {
+      const pair = uaa.mintExpiredAccessWithValidRefresh();
+      const res = await post(uaa.url, {
+        grant_type: 'refresh_token',
+        refresh_token: pair.refreshToken,
+      });
+      expect(res.status).toBe(400);
+    } finally {
+      await uaa.close();
+    }
+  });
+});
+
+describe('SAML bearer grant', () => {
+  const GRANT = 'urn:ietf:params:oauth:grant-type:saml2-bearer';
+  const assertionXml = '<saml:Assertion xmlns:saml="urn:oasis:names:tc:SAML:2.0:assertion"/>';
+  const responseXml = '<samlp:Response xmlns:samlp="urn:oasis:names:tc:SAML:2.0:protocol"/>';
+
+  it('accepts a base64url Assertion in strict mode', async () => {
+    const uaa = await startMockUaa({ samlBearer: 'strict' });
+    try {
+      const res = await post(uaa.url, {
+        grant_type: GRANT,
+        assertion: Buffer.from(assertionXml, 'utf8').toString('base64url'),
+      });
+      expect(res.status).toBe(200);
+      expect((await res.json()).access_token.split('.')).toHaveLength(3);
+    } finally {
+      await uaa.close();
+    }
+  });
+
+  // What auth-providers sends today: a whole base64 samlp:Response.
+  it('refuses a base64 samlp:Response in strict mode', async () => {
+    const uaa = await startMockUaa({ samlBearer: 'strict' });
+    try {
+      const res = await post(uaa.url, {
+        grant_type: GRANT,
+        assertion: Buffer.from(responseXml, 'utf8').toString('base64'),
+      });
+      expect(res.status).toBe(400);
+      expect((await res.json()).error).toBe('invalid_grant');
+    } finally {
+      await uaa.close();
+    }
+  });
+
+  it('accepts the same thing in lenient mode', async () => {
+    const uaa = await startMockUaa({ samlBearer: 'lenient' });
+    try {
+      const res = await post(uaa.url, {
+        grant_type: GRANT,
+        assertion: Buffer.from(responseXml, 'utf8').toString('base64'),
+      });
+      expect(res.status).toBe(200);
+    } finally {
+      await uaa.close();
+    }
+  });
+});
+```
+
+- [ ] **Step 2: Run them to verify they fail**
+
+```bash
+npm test -- src/__tests__/uaaGrants.test.ts
+```
+
+Expected: FAIL — the options and the helper do not exist.
+
+- [ ] **Step 3: Extend `src/uaa.ts`**
+
+Add to `UaaOptions`:
+
+```ts
+  /** Both behaviours exist in the wild; a client must survive either. */
+  rotateRefreshTokens?: boolean;
+  failRefresh?: boolean;
+  /** 'strict' enforces RFC 7522 §2.1: a base64url-encoded Assertion. */
+  samlBearer?: 'strict' | 'lenient' | 'off';
+```
+
+Extend the return type:
+
+```ts
+export interface MockUaa extends MockHandle {
+  /**
+   * An access token already expired alongside a refresh token still valid.
+   * Without this a refresh test must hand-craft a JWT or run a code flow and
+   * wait — the first is duplication, the second is slow.
+   */
+  mintExpiredAccessWithValidRefresh(): {
+    accessToken: string;
+    refreshToken: string;
+  };
+}
+```
+
+Inside `startMockUaa`, keep a `refreshTokens = new Set<string>()` and a `supersededRefreshTokens = new Set<string>()`. Register every refresh token the code exchange issues. Add these branches to `POST /oauth/token`, before the `unsupported_grant_type` fallback:
+
+```ts
+      if (req.body.grant_type === 'refresh_token') {
+        const presented = req.body.refresh_token ?? '';
+        if (failRefresh) {
+          sendOAuthError(res, 'invalid_grant', 'the mock was told to fail every refresh');
+          return;
+        }
+        if (supersededRefreshTokens.has(presented)) {
+          sendOAuthError(res, 'invalid_grant', 'refresh token already used (rotation)');
+          return;
+        }
+        if (!refreshTokens.has(presented)) {
+          sendOAuthError(res, 'invalid_grant', 'unknown refresh token');
+          return;
+        }
+        let next = presented;
+        if (rotate) {
+          refreshTokens.delete(presented);
+          supersededRefreshTokens.add(presented);
+          next = `refresh-${randomUUID()}`;
+          refreshTokens.add(next);
+        }
+        res.statusCode = 200;
+        res.setHeader('Content-Type', 'application/json');
+        res.end(
+          JSON.stringify({
+            access_token: mintJwt({ expiresInSeconds: accessLifetime }),
+            refresh_token: next,
+            token_type: 'bearer',
+            expires_in: accessLifetime,
+          }),
+        );
+        return;
+      }
+
+      if (req.body.grant_type === 'urn:ietf:params:oauth:grant-type:saml2-bearer') {
+        if (samlBearer === 'off') {
+          sendOAuthError(res, 'unsupported_grant_type', 'saml bearer disabled');
+          return;
+        }
+        const raw = req.body.assertion ?? '';
+        if (!raw) {
+          sendOAuthError(res, 'invalid_grant', 'assertion is required');
+          return;
+        }
+        if (samlBearer === 'strict') {
+          // RFC 7522 §2.1: base64url, and a single Assertion — not a Response.
+          const looksBase64Url = !/[+/]/.test(raw);
+          const decoded = Buffer.from(raw, 'base64url').toString('utf8');
+          if (!looksBase64Url || !/<(\w+:)?Assertion[\s>]/.test(decoded)) {
+            sendOAuthError(
+              res,
+              'invalid_grant',
+              'RFC 7522 requires a base64url-encoded Assertion, not a Response',
+            );
+            return;
+          }
+        }
+        res.statusCode = 200;
+        res.setHeader('Content-Type', 'application/json');
+        res.end(
+          JSON.stringify({
+            access_token: mintJwt({ expiresInSeconds: accessLifetime }),
+            token_type: 'bearer',
+            expires_in: accessLifetime,
+          }),
+        );
+        return;
+      }
+```
+
+Implement the helper by minting an expired JWT and registering a refresh token:
+
+```ts
+  const handle = await startServer({ /* routes above */ });
+  return {
+    ...handle,
+    mintExpiredAccessWithValidRefresh() {
+      const refreshToken = `refresh-${randomUUID()}`;
+      refreshTokens.add(refreshToken);
+      return {
+        accessToken: mintJwt({ expiresInSeconds: -60 }),
+        refreshToken,
+      };
+    },
+  };
+```
+
+- [ ] **Step 4: Run the whole suite to verify it passes**
+
+```bash
+npm test
+```
+
+Expected: PASS, including Task 4's cases unchanged.
+
+- [ ] **Step 5: Commit**
+
+```bash
+npm run lint:check && npm run build
+git add src/uaa.ts src/__tests__/uaaGrants.test.ts
+git commit -m "feat: refresh rotation, reuse detection and the SAML bearer grant"
+```
+
+---
+
+### Task 6: The fake browser
+
+**Files:**
+- Create: `src/browser.ts`
+- Test: `src/__tests__/browser.test.ts`
+
+**Interfaces:**
+- Consumes: nothing from earlier tasks — deliberately, so it stays a browser rather than a mock-aware helper.
+- Produces: `visit(url: string): Promise<{ finalUrl: string; status: number; body: string }>`
+
+`visit` is what makes the design work: it plugs into `browserCallbackStrategy({ openUrl: visit })`, so the provider's own orchestration runs exactly as in production and only the browser is HTTP instead of Chrome. It follows redirects, and when it receives an HTML form with `method="post"` it submits it — which is how a SAML assertion reaches the ACS.
+
+- [ ] **Step 1: Write the failing test**
+
+```ts
+import { describe, expect, it } from '@jest/globals';
+import { startServer } from '../server';
+import { visit } from '../browser';
+
+describe('visit', () => {
+  it('follows a redirect chain to its end', async () => {
+    const s = await startServer({
+      'GET /a': (_r, res) => {
+        res.statusCode = 302;
+        res.setHeader('Location', '/b');
+        res.end();
+      },
+      'GET /b': (_r, res) => res.end('arrived'),
+    });
+    try {
+      const result = await visit(`${s.url}/a`);
+      expect(result.body).toBe('arrived');
+      expect(result.finalUrl).toBe(`${s.url}/b`);
+    } finally {
+      await s.close();
+    }
+  });
+
+  it('submits an auto-submitting form, carrying every field', async () => {
+    let received: Record<string, string> = {};
+    const s = await startServer({
+      'GET /idp': (_r, res) => {
+        res.setHeader('Content-Type', 'text/html');
+        res.end(
+          `<html><body onload="document.forms[0].submit()">
+           <form method="post" action="/acs">
+             <input type="hidden" name="SAMLResponse" value="PHNhbWw+"/>
+             <input type="hidden" name="RelayState" value="rs-123"/>
+           </form></body></html>`,
+        );
+      },
+      'POST /acs': (req, res) => {
+        received = req.body;
+        res.end('consumed');
+      },
+    });
+    try {
+      const result = await visit(`${s.url}/idp`);
+      expect(received.SAMLResponse).toBe('PHNhbWw+');
+      expect(received.RelayState).toBe('rs-123');
+      expect(result.body).toBe('consumed');
+    } finally {
+      await s.close();
+    }
+  });
+
+  it('stops rather than looping forever on a redirect cycle', async () => {
+    const s = await startServer({
+      'GET /loop': (_r, res) => {
+        res.statusCode = 302;
+        res.setHeader('Location', '/loop');
+        res.end();
+      },
+    });
+    try {
+      await expect(visit(`${s.url}/loop`)).rejects.toThrow(/too many redirects/i);
+    } finally {
+      await s.close();
+    }
+  });
+});
+```
+
+- [ ] **Step 2: Run it to verify it fails**
+
+```bash
+npm test -- src/__tests__/browser.test.ts
+```
+
+Expected: FAIL — `Cannot find module '../browser'`.
+
+- [ ] **Step 3: Implement `src/browser.ts`**
+
+```ts
+/**
+ * A browser, reduced to what an authorization flow needs from one.
+ *
+ * It follows redirects and submits auto-submitting forms — the two things a
+ * real browser does during an OAuth redirect or a SAML HTTP-POST binding. It is
+ * wired in through `openUrl`, so the code under test runs its own orchestration
+ * and only the browser is replaced.
+ */
+
+const MAX_REDIRECTS = 10;
+
+export interface VisitResult {
+  finalUrl: string;
+  status: number;
+  body: string;
+}
+
+/** Extracts a form's action and its hidden inputs, if the page is one. */
+function parseForm(
+  html: string,
+  base: string,
+): { action: string; fields: Record<string, string> } | null {
+  const form = /<form[^>]*method=["']post["'][^>]*>([\s\S]*?)<\/form>/i.exec(html);
+  if (!form) return null;
+  const actionMatch = /action=["']([^"']+)["']/i.exec(form[0]);
+  const action = new URL(actionMatch?.[1] ?? '', base).toString();
+  const fields: Record<string, string> = {};
+  const input = /<input[^>]*>/gi;
+  let m: RegExpExecArray | null = input.exec(form[1]);
+  while (m) {
+    const name = /name=["']([^"']+)["']/i.exec(m[0])?.[1];
+    const value = /value=["']([^"']*)["']/i.exec(m[0])?.[1] ?? '';
+    if (name) fields[name] = value;
+    m = input.exec(form[1]);
+  }
+  return { action, fields };
+}
+
+export async function visit(url: string): Promise<VisitResult> {
+  let current = url;
+
+  for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
+    const res = await fetch(current, { redirect: 'manual' });
+
+    if (res.status >= 300 && res.status < 400) {
+      const location = res.headers.get('location');
+      if (!location) {
+        return { finalUrl: current, status: res.status, body: await res.text() };
+      }
+      current = new URL(location, current).toString();
+      continue;
+    }
+
+    const body = await res.text();
+    const form = parseForm(body, current);
+    if (form) {
+      const posted = await fetch(form.action, {
+        method: 'POST',
+        headers: { 'content-type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams(form.fields).toString(),
+      });
+      return {
+        finalUrl: form.action,
+        status: posted.status,
+        body: await posted.text(),
+      };
+    }
+
+    return { finalUrl: current, status: res.status, body };
+  }
+
+  throw new Error(`Too many redirects starting from ${url}`);
+}
+```
+
+- [ ] **Step 4: Run the tests to verify they pass**
+
+```bash
+npm test -- src/__tests__/browser.test.ts
+```
+
+Expected: PASS, three cases.
+
+- [ ] **Step 5: Commit**
+
+```bash
+npm run lint:check && npm run build
+git add src/browser.ts src/__tests__/browser.test.ts
+git commit -m "feat: a fake browser that follows redirects and submits forms"
+```
+
+---
+
+### Task 7: The OIDC mock
+
+**Files:**
+- Create: `src/oidc.ts`
+- Test: `src/__tests__/oidc.test.ts`
+
+**Interfaces:**
+- Consumes: `startServer`, `mintJwt`, `sendOAuthError`, `readClientAuth`.
+- Produces:
+  - `interface OidcOptions extends UaaOptions { state?: 'mirror' | 'wrongState' | 'missingState' }`
+  - `startMockOidc(options?: OidcOptions): Promise<MockHandle>` serving `/.well-known/openid-configuration`, `/authorize`, `/token`.
+
+Two rules distinguish it from the UAA mock:
+
+**PKCE is demanded at both ends.** `/authorize` refuses a request with no `code_challenge`, no `code_challenge_method`, or a method other than `S256`. Verifying a challenge only when one happens to arrive would let a non-PKCE request through while still satisfying the exchange rule — a strict mock that tolerates the weaker flow is not strict.
+
+**`state` is mirrored, never judged.** Validating `state` is the client's duty, and a mock that checked it would be doing the client's job while hiding whether the client does it. `OidcBrowserProvider` sends no `state` today, so a test written against this mock is what makes that visible.
+
+- [ ] **Step 1: Write the failing tests**
+
+```ts
+import { createHash, randomBytes } from 'node:crypto';
+import { describe, expect, it } from '@jest/globals';
+import { startMockOidc } from '../oidc';
+
+const basic = (id: string, secret: string) =>
+  `Basic ${Buffer.from(`${id}:${secret}`).toString('base64')}`;
+
+function pkce() {
+  const verifier = randomBytes(32).toString('base64url');
+  const challenge = createHash('sha256').update(verifier).digest('base64url');
+  return { verifier, challenge };
+}
+
+function authorizeUrl(base: string, params: Record<string, string>) {
+  return `${base}/authorize?${new URLSearchParams({
+    client_id: 'mock-client',
+    response_type: 'code',
+    redirect_uri: 'http://localhost:61001/callback',
+    ...params,
+  }).toString()}`;
+}
+
+describe('mock OIDC', () => {
+  it('serves a discovery document naming its own endpoints', async () => {
+    const oidc = await startMockOidc();
+    try {
+      const doc = await (
+        await fetch(`${oidc.url}/.well-known/openid-configuration`)
+      ).json();
+      expect(doc.authorization_endpoint).toBe(`${oidc.url}/authorize`);
+      expect(doc.token_endpoint).toBe(`${oidc.url}/token`);
+    } finally {
+      await oidc.close();
+    }
+  });
+
+  it('refuses an authorize request with no code_challenge', async () => {
+    const oidc = await startMockOidc();
+    try {
+      const res = await fetch(authorizeUrl(oidc.url, {}), { redirect: 'manual' });
+      expect(res.status).toBe(400);
+      expect((await res.json()).error).toBe('invalid_request');
+    } finally {
+      await oidc.close();
+    }
+  });
+
+  it('refuses a code_challenge_method other than S256', async () => {
+    const oidc = await startMockOidc();
+    try {
+      const { challenge } = pkce();
+      const res = await fetch(
+        authorizeUrl(oidc.url, {
+          code_challenge: challenge,
+          code_challenge_method: 'plain',
+        }),
+        { redirect: 'manual' },
+      );
+      expect(res.status).toBe(400);
+    } finally {
+      await oidc.close();
+    }
+  });
+
+  it('exchanges a code when the verifier matches the challenge', async () => {
+    const oidc = await startMockOidc();
+    try {
+      const { verifier, challenge } = pkce();
+      const redirected = await fetch(
+        authorizeUrl(oidc.url, {
+          code_challenge: challenge,
+          code_challenge_method: 'S256',
+        }),
+        { redirect: 'manual' },
+      );
+      const code = new URL(redirected.headers.get('location') ?? '').searchParams.get('code');
+      const res = await fetch(`${oidc.url}/token`, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/x-www-form-urlencoded',
+          authorization: basic('mock-client', 'mock-secret'),
+        },
+        body: new URLSearchParams({
+          grant_type: 'authorization_code',
+          code: code ?? '',
+          redirect_uri: 'http://localhost:61001/callback',
+          code_verifier: verifier,
+          client_id: 'mock-client',
+        }).toString(),
+      });
+      expect(res.status).toBe(200);
+    } finally {
+      await oidc.close();
+    }
+  });
+
+  it('refuses a verifier that does not derive the challenge', async () => {
+    const oidc = await startMockOidc();
+    try {
+      const { challenge } = pkce();
+      const other = pkce();
+      const redirected = await fetch(
+        authorizeUrl(oidc.url, {
+          code_challenge: challenge,
+          code_challenge_method: 'S256',
+        }),
+        { redirect: 'manual' },
+      );
+      const code = new URL(redirected.headers.get('location') ?? '').searchParams.get('code');
+      const res = await fetch(`${oidc.url}/token`, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/x-www-form-urlencoded',
+          authorization: basic('mock-client', 'mock-secret'),
+        },
+        body: new URLSearchParams({
+          grant_type: 'authorization_code',
+          code: code ?? '',
+          redirect_uri: 'http://localhost:61001/callback',
+          code_verifier: other.verifier,
+          client_id: 'mock-client',
+        }).toString(),
+      });
+      expect(res.status).toBe(400);
+      expect((await res.json()).error).toBe('invalid_grant');
+    } finally {
+      await oidc.close();
+    }
+  });
+
+  it('mirrors state back unchanged', async () => {
+    const oidc = await startMockOidc();
+    try {
+      const { challenge } = pkce();
+      const res = await fetch(
+        authorizeUrl(oidc.url, {
+          code_challenge: challenge,
+          code_challenge_method: 'S256',
+          state: 'st-42',
+        }),
+        { redirect: 'manual' },
+      );
+      const location = new URL(res.headers.get('location') ?? '');
+      expect(location.searchParams.get('state')).toBe('st-42');
+    } finally {
+      await oidc.close();
+    }
+  });
+
+  it('returns a different state when asked for wrongState', async () => {
+    const oidc = await startMockOidc({ state: 'wrongState' });
+    try {
+      const { challenge } = pkce();
+      const res = await fetch(
+        authorizeUrl(oidc.url, {
+          code_challenge: challenge,
+          code_challenge_method: 'S256',
+          state: 'st-42',
+        }),
+        { redirect: 'manual' },
+      );
+      const location = new URL(res.headers.get('location') ?? '');
+      expect(location.searchParams.get('state')).not.toBe('st-42');
+      expect(location.searchParams.get('state')).toBeTruthy();
+    } finally {
+      await oidc.close();
+    }
+  });
+
+  it('omits state entirely when asked for missingState', async () => {
+    const oidc = await startMockOidc({ state: 'missingState' });
+    try {
+      const { challenge } = pkce();
+      const res = await fetch(
+        authorizeUrl(oidc.url, {
+          code_challenge: challenge,
+          code_challenge_method: 'S256',
+          state: 'st-42',
+        }),
+        { redirect: 'manual' },
+      );
+      const location = new URL(res.headers.get('location') ?? '');
+      expect(location.searchParams.get('state')).toBeNull();
+    } finally {
+      await oidc.close();
+    }
+  });
+});
+```
+
+- [ ] **Step 2: Run them to verify they fail**
+
+```bash
+npm test -- src/__tests__/oidc.test.ts
+```
+
+Expected: FAIL — `Cannot find module '../oidc'`.
+
+- [ ] **Step 3: Implement `src/oidc.ts`**
+
+Model it on `src/uaa.ts`: same client authentication, same code store, same error helper. The differences are the three routes, the PKCE demand at `/authorize`, the `S256` comparison at `/token`, and the `state` handling:
+
+```ts
+import { createHash, randomUUID } from 'node:crypto';
+```
+
+At `/authorize`, before issuing a code:
+
+```ts
+      const challenge = req.query.code_challenge;
+      const method = req.query.code_challenge_method;
+      if (!challenge || !method) {
+        sendOAuthError(res, 'invalid_request', 'PKCE is required: code_challenge and code_challenge_method');
+        return;
+      }
+      if (method !== 'S256') {
+        sendOAuthError(res, 'invalid_request', `unsupported code_challenge_method: ${method}`);
+        return;
+      }
+```
+
+Store `challenge` alongside the code. At `/token`, after the redirect_uri check:
+
+```ts
+      const verifier = req.body.code_verifier ?? '';
+      const derived = createHash('sha256').update(verifier).digest('base64url');
+      if (derived !== issued.challenge) {
+        sendOAuthError(res, 'invalid_grant', 'code_verifier does not derive code_challenge');
+        return;
+      }
+```
+
+For `state`, on the redirect:
+
+```ts
+      // Mirrored, never judged: validating state is the client's duty, and a
+      // mock that checked it would hide whether the client does.
+      const incoming = req.query.state;
+      if (incoming !== undefined) {
+        if (stateMode === 'mirror') target.searchParams.set('state', incoming);
+        else if (stateMode === 'wrongState') target.searchParams.set('state', `not-${incoming}`);
+        // 'missingState' sets nothing
+      }
+```
+
+And the discovery document:
+
+```ts
+    'GET /.well-known/openid-configuration': (_req, res) => {
+      res.setHeader('Content-Type', 'application/json');
+      res.end(
+        JSON.stringify({
+          issuer: baseUrl,
+          authorization_endpoint: `${baseUrl}/authorize`,
+          token_endpoint: `${baseUrl}/token`,
+          code_challenge_methods_supported: ['S256'],
+          response_types_supported: ['code'],
+        }),
+      );
+    },
+```
+
+`baseUrl` is not known until the server binds, so start the server first with a mutable holder and fill it in from the returned handle before returning.
+
+- [ ] **Step 4: Run the tests to verify they pass**
+
+```bash
+npm test -- src/__tests__/oidc.test.ts
+```
+
+Expected: PASS, eight cases.
+
+- [ ] **Step 5: Commit**
+
+```bash
+npm run lint:check && npm run build
+git add src/oidc.ts src/__tests__/oidc.test.ts
+git commit -m "feat: mock OIDC provider demanding PKCE and mirroring state"
+```
+
+---
+
+### Task 8: Signing
+
+**Files:**
+- Create: `src/signing.ts`
+- Test: `src/__tests__/signing.test.ts`
+- Modify: `README.md`
+
+**Interfaces:**
+- Produces:
+  - `generateKeyMaterial(): { privateKeyPem: string; certificatePem: string }`
+  - `signXml(xml: string, key: { privateKeyPem: string; certificatePem: string }, opts?: { referenceXPath?: string }): string`
+
+- [ ] **Step 1: Write the failing test**
+
+```ts
+import { describe, expect, it } from '@jest/globals';
+import { SignedXml } from 'xml-crypto';
+import { DOMParser } from '@xmldom/xmldom';
+import { generateKeyMaterial, signXml } from '../signing';
+
+const ASSERTION = `<saml:Assertion xmlns:saml="urn:oasis:names:tc:SAML:2.0:assertion" ID="_a1"><saml:Issuer>mock-idp</saml:Issuer></saml:Assertion>`;
+
+describe('signing', () => {
+  it('generates a usable key pair and certificate', () => {
+    const key = generateKeyMaterial();
+    expect(key.privateKeyPem).toContain('BEGIN');
+    expect(key.certificatePem).toContain('BEGIN CERTIFICATE');
+  });
+
+  it('produces a signature that verifies against its own certificate', () => {
+    const key = generateKeyMaterial();
+    const signed = signXml(ASSERTION, key);
+    const doc = new DOMParser().parseFromString(signed, 'text/xml');
+    const signature = doc.getElementsByTagNameNS(
+      'http://www.w3.org/2000/09/xmldsig#',
+      'Signature',
+    )[0];
+
+    const verifier = new SignedXml({ publicCert: key.certificatePem });
+    verifier.loadSignature(signature as unknown as Node);
+    expect(verifier.checkSignature(signed)).toBe(true);
+  });
+
+  it('fails verification when the content is altered after signing', () => {
+    const key = generateKeyMaterial();
+    const signed = signXml(ASSERTION, key).replace('mock-idp', 'other-idp');
+    const doc = new DOMParser().parseFromString(signed, 'text/xml');
+    const signature = doc.getElementsByTagNameNS(
+      'http://www.w3.org/2000/09/xmldsig#',
+      'Signature',
+    )[0];
+
+    const verifier = new SignedXml({ publicCert: key.certificatePem });
+    verifier.loadSignature(signature as unknown as Node);
+    expect(verifier.checkSignature(signed)).toBe(false);
+  });
+
+  it('fails verification against a different certificate', () => {
+    const key = generateKeyMaterial();
+    const other = generateKeyMaterial();
+    const signed = signXml(ASSERTION, key);
+    const doc = new DOMParser().parseFromString(signed, 'text/xml');
+    const signature = doc.getElementsByTagNameNS(
+      'http://www.w3.org/2000/09/xmldsig#',
+      'Signature',
+    )[0];
+
+    const verifier = new SignedXml({ publicCert: other.certificatePem });
+    verifier.loadSignature(signature as unknown as Node);
+    expect(verifier.checkSignature(signed)).toBe(false);
+  });
+});
+```
+
+- [ ] **Step 2: Run it to verify it fails**
+
+```bash
+npm test -- src/__tests__/signing.test.ts
+```
+
+Expected: FAIL — `Cannot find module '../signing'`.
+
+- [ ] **Step 3: Implement `src/signing.ts`**
+
+```ts
+/**
+ * Key material and XML-DSig for the SAML IdP.
+ *
+ * A fresh self-signed certificate per mock instance, held in memory. No key
+ * material lives in the repository, and nothing here is meant to be secure —
+ * it exists so that a signature can be produced and then verified.
+ */
+
+import forge from 'node-forge';
+import { SignedXml } from 'xml-crypto';
+
+export interface KeyMaterial {
+  privateKeyPem: string;
+  certificatePem: string;
+}
+
+export function generateKeyMaterial(): KeyMaterial {
+  const keys = forge.pki.rsa.generateKeyPair(2048);
+  const cert = forge.pki.createCertificate();
+  cert.publicKey = keys.publicKey;
+  cert.serialNumber = '01';
+  cert.validity.notBefore = new Date(Date.now() - 60_000);
+  cert.validity.notAfter = new Date(Date.now() + 24 * 3600 * 1000);
+  const attrs = [{ name: 'commonName', value: 'mock-idp' }];
+  cert.setSubject(attrs);
+  cert.setIssuer(attrs);
+  cert.sign(keys.privateKey, forge.md.sha256.create());
+
+  return {
+    privateKeyPem: forge.pki.privateKeyToPem(keys.privateKey),
+    certificatePem: forge.pki.certificateToPem(cert),
+  };
+}
+
+export function signXml(
+  xml: string,
+  key: KeyMaterial,
+  opts: { referenceXPath?: string } = {},
+): string {
+  const sig = new SignedXml({
+    privateKey: key.privateKeyPem,
+    publicCert: key.certificatePem,
+    signatureAlgorithm: 'http://www.w3.org/2001/04/xmldsig-more#rsa-sha256',
+    canonicalizationAlgorithm: 'http://www.w3.org/2001/10/xml-exc-c14n#',
+  });
+  sig.addReference({
+    xpath: opts.referenceXPath ?? "//*[local-name(.)='Assertion']",
+    digestAlgorithm: 'http://www.w3.org/2001/04/xmlenc#sha256',
+    transforms: [
+      'http://www.w3.org/2000/09/xmldsig#enveloped-signature',
+      'http://www.w3.org/2001/10/xml-exc-c14n#',
+    ],
+  });
+  sig.computeSignature(xml);
+  return sig.getSignedXml();
+}
+```
+
+If `xml-crypto@6`'s constructor or `addReference` signature differs from the above, follow the version actually installed rather than this snippet — check `node_modules/xml-crypto/lib/*.d.ts` — and note the deviation in your report.
+
+- [ ] **Step 4: Run the tests to verify they pass**
+
+```bash
+npm test -- src/__tests__/signing.test.ts
+```
+
+Expected: PASS, four cases.
+
+- [ ] **Step 5: Record the verification limitation in the README**
+
+Add a section saying plainly: the package's own tests verify a signature with `xml-crypto`, the same library that produced it, and `@node-saml/node-saml` independently checks the SAML profile — Conditions, Audience, InResponseTo, Destination — but shares `xml-crypto` underneath for the cryptography. Canonicalisation matching a real identity provider is therefore **not** proven by this suite, and live testing remains necessary. Someone reading a green suite must not conclude otherwise.
+
+- [ ] **Step 6: Commit**
+
+```bash
+npm run lint:check && npm run build
+git add src/signing.ts src/__tests__/signing.test.ts README.md
+git commit -m "feat: per-instance key material and XML-DSig signing"
+```
+
+---
+
+### Task 9: The SAML IdP
+
+**Files:**
+- Create: `src/saml.ts`
+- Test: `src/__tests__/saml.test.ts`
+
+**Interfaces:**
+- Consumes: `startServer`, `generateKeyMaterial`, `signXml`, `visit`.
+- Produces:
+  - `type SamlVariant = 'valid' | 'unsigned' | 'wrongKey' | 'tamperedAfterSign' | 'statusFailure' | 'expired' | 'notYetValid' | 'wrongAudience' | 'wrongInResponseTo' | 'wrongDestination' | 'wrongRecipient' | 'wrongIssuer'`
+  - `interface SamlOptions { variant?: SamlVariant; audience?: string; issuer?: string }`
+  - `interface MockSamlIdp extends MockHandle { certificatePem: string; setVariant(v: SamlVariant): void; lastAssertionId(): string | undefined; repeatLastAssertion(): void }`
+  - `startMockSamlIdp(options?: SamlOptions): Promise<MockSamlIdp>`
+
+**Two things the implementation must get right, both settled during spec review:**
+
+The IdP **returns an HTML auto-submitting form** targeting the ACS; it does not POST there itself. `visit()` performs the POST. If the IdP posted server-side, `openUrl` would never be called and the seam this package exists to exercise would go untested.
+
+`RelayState` comes from the **HTTP query string**, not from inside the inflated `SAMLRequest` — under the Redirect binding it travels as its own parameter alongside `SAMLRequest`. It is carried through the form and posted back unchanged.
+
+**Replay is a sequence, not a variant.** A replayed assertion is, in isolation, perfectly valid — that is why replay is dangerous. `repeatLastAssertion()` makes the next response reuse the previous assertion's `ID`, so a test runs: deliver a valid assertion, see it accepted and its `ID` recorded, then deliver again and see the second rejected.
+
+- [ ] **Step 1: Write the failing tests**
+
+```ts
+import { deflateRawSync } from 'node:zlib';
+import { describe, expect, it } from '@jest/globals';
+import { startServer } from '../server';
+import { startMockSamlIdp } from '../saml';
+import { visit } from '../browser';
+
+function authnRequest(acsUrl: string, id = '_req1'): string {
+  const xml =
+    `<samlp:AuthnRequest xmlns:samlp="urn:oasis:names:tc:SAML:2.0:protocol" ` +
+    `ID="${id}" Version="2.0" AssertionConsumerServiceURL="${acsUrl}"/>`;
+  return deflateRawSync(Buffer.from(xml, 'utf8')).toString('base64');
+}
+
+/** An ACS that records what the browser posts to it. */
+async function startAcs() {
+  const received: Record<string, string>[] = [];
+  const server = await startServer({
+    'POST /callback': (req, res) => {
+      received.push(req.body);
+      res.end('ok');
+    },
+  });
+  return { ...server, received };
+}
+
+describe('mock SAML IdP', () => {
+  it('returns an auto-submitting form rather than posting to the ACS itself', async () => {
+    const acs = await startAcs();
+    const idp = await startMockSamlIdp();
+    try {
+      const url = `${idp.url}/sso?SAMLRequest=${encodeURIComponent(
+        authnRequest(`${acs.url}/callback`),
+      )}`;
+      const page = await (await fetch(url)).text();
+      expect(page).toMatch(/<form[^>]+method=["']post["']/i);
+      expect(page).toContain(`${acs.url}/callback`);
+      // Nothing reached the ACS: delivery is the browser's job.
+      expect(acs.received).toHaveLength(0);
+    } finally {
+      await idp.close();
+      await acs.close();
+    }
+  });
+
+  it('delivers the assertion when a browser submits the form', async () => {
+    const acs = await startAcs();
+    const idp = await startMockSamlIdp();
+    try {
+      await visit(
+        `${idp.url}/sso?SAMLRequest=${encodeURIComponent(authnRequest(`${acs.url}/callback`))}`,
+      );
+      expect(acs.received).toHaveLength(1);
+      expect(acs.received[0].SAMLResponse).toBeTruthy();
+    } finally {
+      await idp.close();
+      await acs.close();
+    }
+  });
+
+  it('carries RelayState from the query string through the form', async () => {
+    const acs = await startAcs();
+    const idp = await startMockSamlIdp();
+    try {
+      await visit(
+        `${idp.url}/sso?SAMLRequest=${encodeURIComponent(
+          authnRequest(`${acs.url}/callback`),
+        )}&RelayState=${encodeURIComponent('rs-abc')}`,
+      );
+      expect(acs.received[0].RelayState).toBe('rs-abc');
+    } finally {
+      await idp.close();
+      await acs.close();
+    }
+  });
+
+  it('signs the assertion by default and exposes its certificate', async () => {
+    const acs = await startAcs();
+    const idp = await startMockSamlIdp();
+    try {
+      expect(idp.certificatePem).toContain('BEGIN CERTIFICATE');
+      await visit(
+        `${idp.url}/sso?SAMLRequest=${encodeURIComponent(authnRequest(`${acs.url}/callback`))}`,
+      );
+      const xml = Buffer.from(acs.received[0].SAMLResponse, 'base64').toString('utf8');
+      expect(xml).toContain('Signature');
+    } finally {
+      await idp.close();
+      await acs.close();
+    }
+  });
+
+  it('omits the signature for the unsigned variant', async () => {
+    const acs = await startAcs();
+    const idp = await startMockSamlIdp({ variant: 'unsigned' });
+    try {
+      await visit(
+        `${idp.url}/sso?SAMLRequest=${encodeURIComponent(authnRequest(`${acs.url}/callback`))}`,
+      );
+      const xml = Buffer.from(acs.received[0].SAMLResponse, 'base64').toString('utf8');
+      expect(xml).not.toContain('Signature');
+    } finally {
+      await idp.close();
+      await acs.close();
+    }
+  });
+
+  it('names a different ACS for the wrongDestination variant', async () => {
+    const acs = await startAcs();
+    const idp = await startMockSamlIdp({ variant: 'wrongDestination' });
+    try {
+      await visit(
+        `${idp.url}/sso?SAMLRequest=${encodeURIComponent(authnRequest(`${acs.url}/callback`))}`,
+      );
+      const xml = Buffer.from(acs.received[0].SAMLResponse, 'base64').toString('utf8');
+      const destination = /Destination="([^"]+)"/.exec(xml)?.[1];
+      expect(destination).toBeTruthy();
+      expect(destination).not.toBe(`${acs.url}/callback`);
+    } finally {
+      await idp.close();
+      await acs.close();
+    }
+  });
+
+  it('echoes InResponseTo by default and breaks it on demand', async () => {
+    const acs = await startAcs();
+    const idp = await startMockSamlIdp();
+    try {
+      await visit(
+        `${idp.url}/sso?SAMLRequest=${encodeURIComponent(
+          authnRequest(`${acs.url}/callback`, '_req42'),
+        )}`,
+      );
+      let xml = Buffer.from(acs.received[0].SAMLResponse, 'base64').toString('utf8');
+      expect(xml).toContain('InResponseTo="_req42"');
+
+      idp.setVariant('wrongInResponseTo');
+      await visit(
+        `${idp.url}/sso?SAMLRequest=${encodeURIComponent(
+          authnRequest(`${acs.url}/callback`, '_req42'),
+        )}`,
+      );
+      xml = Buffer.from(acs.received[1].SAMLResponse, 'base64').toString('utf8');
+      expect(xml).not.toContain('InResponseTo="_req42"');
+    } finally {
+      await idp.close();
+      await acs.close();
+    }
+  });
+
+  // Replay is a sequence: the same assertion, delivered twice. In isolation the
+  // second delivery is valid, which is exactly why a verifier must remember.
+  it('repeats a previous assertion ID on demand', async () => {
+    const acs = await startAcs();
+    const idp = await startMockSamlIdp();
+    try {
+      const url = `${idp.url}/sso?SAMLRequest=${encodeURIComponent(
+        authnRequest(`${acs.url}/callback`),
+      )}`;
+      await visit(url);
+      const firstId = idp.lastAssertionId();
+      expect(firstId).toBeTruthy();
+
+      idp.repeatLastAssertion();
+      await visit(url);
+      const secondXml = Buffer.from(acs.received[1].SAMLResponse, 'base64').toString('utf8');
+      expect(secondXml).toContain(`ID="${firstId}"`);
+    } finally {
+      await idp.close();
+      await acs.close();
+    }
+  });
+});
+```
+
+- [ ] **Step 2: Run them to verify they fail**
+
+```bash
+npm test -- src/__tests__/saml.test.ts
+```
+
+Expected: FAIL — `Cannot find module '../saml'`.
+
+- [ ] **Step 3: Implement `src/saml.ts`**
+
+Structure:
+
+1. `GET /sso` reads `SAMLRequest` from the query, `inflateRawSync`s it, and pulls `AssertionConsumerServiceURL` and `ID` out with a regex — the request is one the family builds, so a full XML parse is not warranted. `RelayState` comes from `req.query.RelayState`.
+2. Build a `samlp:Response` containing a `saml:Assertion` with `ID`, `IssueInstant`, `Issuer`, a `samlp:Status`, `Conditions` with `NotBefore`/`NotOnOrAfter` and an `AudienceRestriction`, and a `SubjectConfirmationData` with `Recipient` and `InResponseTo`. `Destination` goes on the `Response`.
+3. Apply the variant by changing exactly one thing — every other field stays correct, so a verifier's rejection is attributable:
+
+| variant | change |
+|---|---|
+| `unsigned` | skip signing |
+| `wrongKey` | sign with a second, unrelated key pair |
+| `tamperedAfterSign` | sign, then alter a signed value |
+| `statusFailure` | `StatusCode` = `urn:oasis:names:tc:SAML:2.0:status:Responder` |
+| `expired` | `NotOnOrAfter` in the past |
+| `notYetValid` | `NotBefore` in the future |
+| `wrongAudience` | `Audience` = `urn:someone:else` |
+| `wrongInResponseTo` | `InResponseTo` = `_not-the-request` |
+| `wrongDestination` | `Destination` = `http://127.0.0.1:1/other` |
+| `wrongRecipient` | `Recipient` = `http://127.0.0.1:1/other` |
+| `wrongIssuer` | `Issuer` = `urn:other:idp` |
+
+4. Base64-encode the response and render the auto-submitting form:
+
+```ts
+function autoSubmitForm(acsUrl: string, samlResponse: string, relayState?: string): string {
+  const relay = relayState
+    ? `<input type="hidden" name="RelayState" value="${relayState}"/>`
+    : '';
+  return `<html><body onload="document.forms[0].submit()">
+<form method="post" action="${acsUrl}">
+<input type="hidden" name="SAMLResponse" value="${samlResponse}"/>
+${relay}
+</form></body></html>`;
+}
+```
+
+5. `repeatLastAssertion()` sets a flag that makes the next response reuse the stored `ID` instead of generating one; `lastAssertionId()` returns it.
+
+- [ ] **Step 4: Run the tests to verify they pass**
+
+```bash
+npm test -- src/__tests__/saml.test.ts
+```
+
+Expected: PASS, eight cases.
+
+- [ ] **Step 5: Commit**
+
+```bash
+npm run lint:check && npm run build
+git add src/saml.ts src/__tests__/saml.test.ts
+git commit -m "feat: SAML IdP returning an auto-submitting form, with corruption variants"
+```
+
+---
+
+### Task 10: Independent verification of the corruption variants
+
+**Files:**
+- Test: `src/__tests__/samlVerification.test.ts`
+
+**Interfaces:**
+- Consumes: everything from Task 9, plus `@node-saml/node-saml`.
+
+This is the task that decides whether the SAML mock is trustworthy. A mock that is wrong leniently produces a green suite and false confidence. So: a valid assertion must be **accepted** by a verifier we did not write, and each corrupted variant must be **rejected** by it.
+
+Note the limitation recorded in Task 8 — `node-saml` shares `xml-crypto` underneath, so this proves profile validation, not canonicalisation against a real identity provider.
+
+- [ ] **Step 1: Write the test**
+
+```ts
+import { deflateRawSync } from 'node:zlib';
+import { describe, expect, it } from '@jest/globals';
+import { SAML } from '@node-saml/node-saml';
+import { startServer } from '../server';
+import { startMockSamlIdp, type SamlVariant } from '../saml';
+import { visit } from '../browser';
+
+async function deliver(variant: SamlVariant | undefined, acsPath = '/callback') {
+  const received: Record<string, string>[] = [];
+  const acs = await startServer({
+    'POST /callback': (req, res) => {
+      received.push(req.body);
+      res.end('ok');
+    },
+  });
+  const idp = await startMockSamlIdp(variant ? { variant } : {});
+  const acsUrl = `${acs.url}${acsPath}`;
+  const xml =
+    `<samlp:AuthnRequest xmlns:samlp="urn:oasis:names:tc:SAML:2.0:protocol" ` +
+    `ID="_req1" Version="2.0" AssertionConsumerServiceURL="${acsUrl}"/>`;
+  const request = deflateRawSync(Buffer.from(xml, 'utf8')).toString('base64');
+  await visit(`${idp.url}/sso?SAMLRequest=${encodeURIComponent(request)}`);
+  const payload = received[0].SAMLResponse;
+  const cert = idp.certificatePem;
+  await idp.close();
+  await acs.close();
+  return { payload, cert, acsUrl };
+}
+
+function verifier(cert: string, acsUrl: string) {
+  return new SAML({
+    idpCert: cert,
+    issuer: 'mock-sp',
+    callbackUrl: acsUrl,
+    audience: 'mock-sp',
+    wantAssertionsSigned: true,
+  });
+}
+
+describe('the mock signs what an independent verifier accepts', () => {
+  it('accepts the valid assertion', async () => {
+    const { payload, cert, acsUrl } = await deliver(undefined);
+    await expect(
+      verifier(cert, acsUrl).validatePostResponseAsync({ SAMLResponse: payload }),
+    ).resolves.toBeDefined();
+  }, 20000);
+
+  const rejected: SamlVariant[] = [
+    'unsigned',
+    'wrongKey',
+    'tamperedAfterSign',
+    'statusFailure',
+    'expired',
+    'notYetValid',
+    'wrongAudience',
+    'wrongInResponseTo',
+    'wrongDestination',
+    'wrongRecipient',
+    'wrongIssuer',
+  ];
+
+  for (const variant of rejected) {
+    it(`rejects ${variant}`, async () => {
+      const { payload, cert, acsUrl } = await deliver(variant);
+      await expect(
+        verifier(cert, acsUrl).validatePostResponseAsync({ SAMLResponse: payload }),
+      ).rejects.toThrow();
+    }, 20000);
+  }
+});
+```
+
+- [ ] **Step 2: Run it**
+
+```bash
+npm test -- src/__tests__/samlVerification.test.ts
+```
+
+Expected: the valid case passes and every variant is rejected.
+
+**If a variant is accepted, that is the finding this task exists for.** Do not weaken the assertion. Establish which is wrong — the mock producing a corruption `node-saml` does not check, or our understanding of what the variant should break — and report it. Some variants may need verifier options set (for example `wrongIssuer` needs the verifier to be told which issuer it trusts, and `wrongInResponseTo` needs a tracked request ID); configuring the verifier correctly is part of this task, silently dropping a variant is not.
+
+- [ ] **Step 3: Commit**
+
+```bash
+npm run lint:check && npm run build && npm test
+git add src/__tests__/samlVerification.test.ts
+git commit -m "test: an independent verifier accepts the valid assertion and rejects each variant"
+```
+
+---
+
+### Task 11: Public surface, README, and the release PR
+
+**Files:**
+- Modify: `src/index.ts`, `README.md`, `CHANGELOG.md`
+
+**Interfaces:**
+- Produces: the package's entire public API.
+
+- [ ] **Step 1: Write `src/index.ts`**
+
+```ts
+/**
+ * Mock authorization servers for testing @mcp-abap-adt packages.
+ *
+ * Everything here starts and stops inside a test. Nothing imports the packages
+ * this exists to test: a mock that knows those types would eventually agree
+ * with their mistakes instead of catching them.
+ */
+
+export { visit } from './browser';
+export type { VisitResult } from './browser';
+export { startMockOidc } from './oidc';
+export type { OidcOptions } from './oidc';
+export { startMockSamlIdp } from './saml';
+export type { MockSamlIdp, SamlOptions, SamlVariant } from './saml';
+export type { MockHandle, RecordedRequest } from './server';
+export { generateKeyMaterial, signXml } from './signing';
+export type { KeyMaterial } from './signing';
+export { startMockUaa } from './uaa';
+export type { MockUaa, UaaOptions } from './uaa';
+```
+
+Remove `AUTH_MOCKS_VERSION` — the placeholder from Task 1 has served its purpose, and every exported name is a permanent obligation.
+
+- [ ] **Step 2: Write the README**
+
+Cover: what the package is for; the `visit` + `openUrl` wiring with the worked example from the spec; that mocks are strict by default and what each refuses; the SAML variants table; the two-step shape of replay; the `samlBearer: 'strict'` note about RFC 7522 and what a failure there means; and the verification limitation from Task 8. Keep the "these do not replace live testing" statement prominent — in six months someone will otherwise conclude that live runs are obsolete.
+
+- [ ] **Step 3: Write the CHANGELOG**
+
+```markdown
+# Changelog
+
+All notable changes to this project will be documented in this file.
+
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
+and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+## [0.1.0] - <date>
+
+### Added
+
+- `startMockUaa` — authorization code, refresh with configurable rotation and
+  reuse detection, and the SAML bearer grant with a strict RFC 7522 mode.
+- `startMockOidc` — discovery, PKCE demanded at `/authorize` and verified at
+  `/token`, and `state` mirrored rather than judged.
+- `startMockSamlIdp` — signs with a per-instance certificate, returns an
+  auto-submitting form for the browser to deliver, and can violate one rule at a
+  time across eleven variants.
+- `visit` — a fake browser that follows redirects and submits forms, wired into
+  a strategy through `openUrl`.
+```
+
+- [ ] **Step 4: Verify everything**
+
+```bash
+npm run lint:check && npm run build && npm test
+```
+
+Expected: green, every suite.
+
+- [ ] **Step 5: Commit, push, open the PR — then stop**
+
+```bash
+git add -A
+git commit -m "release(0.1.0): mock authorization servers"
+git push -u origin feat/initial-implementation
+gh pr create --title "release(0.1.0): mock authorization servers" --body "<summary>"
+```
+
+**Do not merge, do not tag, do not publish.** The PR is reviewed first; the merge, the tag and the publish belong to the repository owner.
+
+---
+
+## After the merge
+
+Consumers adopt the package in separate PRs, one per repository, so each review stays readable:
+
+- `auth-providers` — replace the hand-written guards' tests with flows through the mocks; add the ephemeral-port round trip that has never been tested.
+- `proxy` — delete the one-endpoint stub in `callbackPortLifecycle.test.ts` and drive a login through the CLI end to end.
+- `auth-broker` — flow-level tests for `mcp-auth` and `mcp-sso`, including the `--config` path.
+
+Two findings this package is expected to surface, both belonging to later cycles rather than this one:
+
+- `OidcBrowserProvider` sends no `state`, so a test written against the OIDC mock will show a CSRF exposure that is currently invisible.
+- `exchangeSamlAssertion` forwards a base64 `samlp:Response` where RFC 7522 wants a base64url `Assertion`; `samlBearer: 'strict'` will say so.
