@@ -10,6 +10,8 @@
 
 **Spec:** `docs/superpowers/specs/2026-08-02-auth-mocks-design.md` in `mcp-abap-adt-auth-providers`. Read it before Task 1 — every design decision below is justified there.
 
+**Status:** approved after three review rounds, not implemented.
+
 ## Global Constraints
 
 - **The package imports nothing from `@mcp-abap-adt/*`.** It speaks HTTP, OAuth2 and SAML. A mock that knows our types will eventually agree with our mistakes instead of catching them. This is checked by a test, not by discipline.
