@@ -233,15 +233,23 @@ wrong:
 | `wrongDestination` | `Destination` names a different ACS |
 | `wrongRecipient` | `SubjectConfirmationData@Recipient` names a different ACS |
 | `wrongIssuer` | `Issuer` is not the IdP the SP trusts |
-| `replayedAssertionId` | a previously seen `ID`, re-delivered |
+| `replayedAssertionId` | *a sequence, not a single response — see below* |
 
 The last four were missing and matter more than their position suggests.
 `Destination` and `Recipient` are what stop a **validly signed** assertion being
 captured and replayed at a different ACS — the one attack signature verification
 alone does not address, because the signature stays perfectly valid. `Issuer`
 distinguishes a genuine assertion from one signed by some other IdP the SP has
-no relationship with. `replayedAssertionId` covers reuse within the validity
-window, which every other check passes by construction.
+no relationship with.
+
+`replayedAssertionId` is different in kind and must be described as what it is:
+**a sequence, not a corrupted response.** Every other variant is one delivery a
+verifier rejects on its own merits. A replayed assertion, taken in isolation, is
+perfectly valid — that is precisely why replay is dangerous. The scenario runs:
+deliver a valid assertion, watch it be accepted and its `ID` recorded, then
+deliver one carrying that same `ID` and watch the second be rejected. Written as
+a single call it would prove nothing, so the mock's API must make the two-step
+shape obvious rather than offering replay as another row of corruption.
 
 Each rule the validation strategy in issue #19 enforces has a scenario here that
 violates exactly that rule and nothing else. The claim is deliberately that
@@ -317,7 +325,9 @@ exchange of one code must fail, an `S256` derived from a different verifier must
 be rejected.
 
 For SAML, from both directions: an assertion this mock signs must be accepted by
-an independent verifier, and each corrupted variant must be rejected by it.
+an independent verifier, and each corrupted variant must be rejected by it —
+with `replayedAssertionId` exercised as the two-step sequence above, since a
+single delivery of it is valid by design.
 Otherwise we risk writing a validator and a mock that agree with each other and
 are both wrong.
 
