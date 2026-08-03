@@ -155,8 +155,16 @@ the provider with an expired access token and a valid refresh token — the shap
 every refresh, which is how the refresh-then-login fallback gets exercised
 without hand-writing an invalid token.
 
-**OIDC additionally — PKCE:** `code_challenge` is recorded at `/authorize`, and
-`/token` recomputes `S256(code_verifier)` and compares. This moves PKCE pairing
+**OIDC additionally — PKCE, demanded at both ends.** `/authorize` **refuses** a
+request that omits `code_challenge`, that omits `code_challenge_method`, or
+whose method is anything other than `S256`. Verifying a challenge only if one
+happened to arrive would let a non-PKCE request through while still satisfying
+the letter of the exchange rule — a strict mock that quietly tolerates the
+weaker flow is not strict. Refusals here get their own tests, like every other
+refusal in this package.
+
+Then `code_challenge` is recorded, and `/token` recomputes `S256(code_verifier)`
+and compares. This moves PKCE pairing
 from a string comparison inside our test to a check by the server, which is how
 a real identity provider will check it.
 
@@ -176,9 +184,12 @@ a test someone can write, and the CSRF / callback-substitution exposure becomes
 visible rather than theoretical. Closing the gap in the provider is not this
 package's job; making it observable is.
 
-**The SAML IdP** parses the inflated `SAMLRequest`, reads its
-`AssertionConsumerServiceURL`, `ID` and `RelayState`, and **responds with an
-HTML auto-submitting form** targeting that ACS — the same thing a real IdP
+**The SAML IdP** inflates and parses `SAMLRequest` for its
+`AssertionConsumerServiceURL` and `ID`, and reads `RelayState` from the **HTTP
+query string**, where the Redirect binding puts it — alongside `SAMLRequest`,
+never inside the XML (`buildSamlAuthorizationUrl` appends it as its own
+parameter). It then **responds with an HTML auto-submitting form** targeting
+that ACS — the same thing a real IdP
 returns to a browser under HTTP-POST binding. It does not deliver the assertion
 itself.
 
@@ -194,7 +205,7 @@ wrong:
 |---|---|
 | `unsigned` | no signature at all |
 | `wrongKey` | signed with a different key |
-| `tamperedAfterSign` | signature valid, content altered after signing |
+| `tamperedAfterSign` | signature present, but verification fails — content altered after signing |
 | `statusFailure` | `samlp:Status` is not `Success` |
 | `expired` / `notYetValid` | `Conditions` outside its window |
 | `wrongAudience` | `AudienceRestriction` names someone else |
