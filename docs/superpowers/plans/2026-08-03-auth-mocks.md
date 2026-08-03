@@ -336,8 +336,40 @@ describe('server core', () => {
     expect(again.port).toBe(port);
     await again.close();
   });
+
+  // This package exists to be fed malformed protocol input, so a throw inside a
+  // handler is expected traffic. Uncaught it becomes an unhandled rejection and
+  // a client waiting for a response that never comes — a hanging test instead
+  // of a failing one, which is the worst thing a harness can do.
+  it('answers 500 when a route handler throws, rather than hanging', async () => {
+    const s = await startServer({
+      'GET /boom': () => {
+        throw new Error('handler exploded');
+      },
+      'GET /boom-async': async () => {
+        throw new Error('async handler exploded');
+      },
+    });
+    try {
+      const sync = await fetch(`${s.url}/boom`);
+      expect(sync.status).toBe(500);
+      expect((await sync.json()).error).toBe('mock_failure');
+
+      // The async case is the one that slips through a bare `void (async …)()`.
+      const asynchronous = await fetch(`${s.url}/boom-async`);
+      expect(asynchronous.status).toBe(500);
+    } finally {
+      await s.close();
+    }
+  }, 10000);
 });
 ```
+
+**Prove this one is load-bearing, carefully.** Drop the `await` before
+`handler(recorded, res)` and rerun: `/boom-async` must fail or time out while
+`/boom` stays green. That asymmetry is the whole point — the synchronous case
+passes under a broken implementation, so only the async case guards the rule.
+Restore the `await` afterwards.
 
 - [ ] **Step 2: Run it to verify it fails**
 
@@ -376,7 +408,7 @@ export interface RecordedRequest {
 export type RouteHandler = (
   req: RecordedRequest,
   res: http.ServerResponse,
-) => void;
+) => void | Promise<void>;
 
 export type RouteTable = Record<string, RouteHandler>;
 
@@ -442,8 +474,23 @@ export async function startServer(
         res.end('no such route');
         return;
       }
-      handler(recorded, res);
-    })();
+      // Awaited, not just called: an async handler's rejection is a separate
+      // promise, and discarding it would slip straight past the catch below.
+      await handler(recorded, res);
+    })().catch((error: unknown) => {
+      // This package exists to be fed malformed protocol input, so a throw
+      // anywhere above is expected traffic, not an impossible state. Left
+      // uncaught it becomes an unhandled rejection *and* a client that waits
+      // for a response that will never come — a test that hangs instead of
+      // failing, which is the worst outcome a test harness can produce.
+      if (!res.headersSent) {
+        res.statusCode = 500;
+        res.setHeader('Content-Type', 'application/json');
+      }
+      if (!res.writableEnded) {
+        res.end(JSON.stringify({ error: 'mock_failure', detail: String(error) }));
+      }
+    });
   });
 
   server.on('connection', (socket) => {
@@ -473,7 +520,7 @@ export async function startServer(
 npm test -- src/__tests__/server.test.ts
 ```
 
-Expected: PASS, four cases.
+Expected: PASS, five cases.
 
 - [ ] **Step 5: Commit**
 
@@ -1957,18 +2004,31 @@ describe('mock OIDC', () => {
     }
   });
 
-  it('refuses an authorize request with no code_challenge', async () => {
+  // RFC 6749 §4.1.2.1 draws the line at trust: once client_id and redirect_uri
+  // check out, the error belongs at the callback. That is the path the client
+  // actually walks, and reproducing it is most of why this mock exists — a
+  // direct 400 would leave the client's error handling untested.
+  it('reports a missing code_challenge at the callback, not in the response', async () => {
     const oidc = await startMockOidc();
     try {
-      const res = await fetch(authorizeUrl(oidc.url, {}), { redirect: 'manual' });
-      expect(res.status).toBe(400);
-      expect((await res.json()).error).toBe('invalid_request');
+      const res = await fetch(authorizeUrl(oidc.url, { state: 'st-42' }), {
+        redirect: 'manual',
+      });
+      expect(res.status).toBe(302);
+      const location = new URL(res.headers.get('location') ?? '');
+      expect(location.origin + location.pathname).toBe('http://localhost:61001/callback');
+      expect(location.searchParams.get('error')).toBe('invalid_request');
+      expect(location.searchParams.get('error_description')).toMatch(/code_challenge/);
+      // State is mirrored on the error path too — a client that validates it
+      // must be able to, or it cannot safely match the error to its request.
+      expect(location.searchParams.get('state')).toBe('st-42');
+      expect(location.searchParams.get('code')).toBeNull();
     } finally {
       await oidc.close();
     }
   });
 
-  it('refuses a code_challenge_method other than S256', async () => {
+  it('reports a code_challenge_method other than S256 at the callback', async () => {
     const oidc = await startMockOidc();
     try {
       const { challenge } = pkce();
@@ -1979,7 +2039,11 @@ describe('mock OIDC', () => {
         }),
         { redirect: 'manual' },
       );
-      expect(res.status).toBe(400);
+      expect(res.status).toBe(302);
+      const location = new URL(res.headers.get('location') ?? '');
+      expect(location.searchParams.get('error')).toBe('invalid_request');
+      expect(location.searchParams.get('error_description')).toMatch(/plain/);
+      expect(location.searchParams.get('code')).toBeNull();
     } finally {
       await oidc.close();
     }
@@ -2154,6 +2218,10 @@ describe('mock OIDC', () => {
     }
   });
 
+  // The other side of the same rule: an unregistered client means the
+  // redirect_uri it supplied cannot be trusted either, so this error must NOT
+  // travel to the callback — sending it there would hand an attacker a
+  // redirector. Contrast with the two PKCE cases above.
   it('refuses an unregistered client_id without redirecting to it', async () => {
     const oidc = await startMockOidc();
     try {
@@ -2168,6 +2236,7 @@ describe('mock OIDC', () => {
       );
       expect(res.status).toBe(400);
       expect(res.headers.get('location')).toBeNull();
+      expect((await res.json()).error).toBe('invalid_request');
     } finally {
       await oidc.close();
     }
@@ -2191,19 +2260,47 @@ Model it on `src/uaa.ts`: same client registry and `findClient` lookup, same cod
 import { createHash, randomUUID } from 'node:crypto';
 ```
 
-At `/authorize`, before issuing a code:
+**`/authorize` has two error paths, and which one applies is a question about
+trust, not about severity.** RFC 6749 §4.1.2.1: a missing or unregistered
+`client_id`, or a missing `redirect_uri`, means the redirect target itself
+cannot be trusted — those errors are answered directly and never redirected.
+Every error after that point is reported *at the callback*, because that is the
+path a real client walks, and reproducing it is most of why this mock exists.
+
+So the route runs the Task 4 client checks first, then defines a redirecting
+error helper, then demands PKCE through it:
 
 ```ts
+      const redirectUri = req.query.redirect_uri;
+      if (!redirectUri) {
+        sendOAuthError(res, 'invalid_request', 'redirect_uri is required');
+        return;
+      }
+      const requestedClientId = req.query.client_id;
+      if (!requestedClientId || !findClient(requestedClientId)) {
+        sendOAuthError(res, 'invalid_request', 'client_id is missing or not registered');
+        return;
+      }
+
+      const target = new URL(redirectUri);
+      // Past this line the redirect_uri is trusted, so errors go to it.
+      const redirectError = (description: string): void => {
+        target.searchParams.set('error', 'invalid_request');
+        target.searchParams.set('error_description', description);
+        applyState(target, req.query.state);
+        res.statusCode = 302;
+        res.setHeader('Location', target.toString());
+        res.end();
+      };
+
       const challenge = req.query.code_challenge;
       const method = req.query.code_challenge_method;
-      // The client checks from Task 4 come first — an unregistered client_id is
-      // refused here, before PKCE is even considered.
       if (!challenge || !method) {
-        sendOAuthError(res, 'invalid_request', 'PKCE is required: code_challenge and code_challenge_method');
+        redirectError('PKCE is required: code_challenge and code_challenge_method');
         return;
       }
       if (method !== 'S256') {
-        sendOAuthError(res, 'invalid_request', `unsupported code_challenge_method: ${method}`);
+        redirectError(`unsupported code_challenge_method: ${method}`);
         return;
       }
 ```
@@ -2219,17 +2316,22 @@ Store `challenge` alongside the code. At `/token`, after the redirect_uri check:
       }
 ```
 
-For `state`, on the redirect:
+`state` is handled by one helper used by **both** the success redirect and
+`redirectError`, so the error path is not a place where a rule quietly differs.
+Define it beside `findClient`:
 
 ```ts
-      // Mirrored, never judged: validating state is the client's duty, and a
-      // mock that checked it would hide whether the client does.
-      const incoming = req.query.state;
-      if (incoming !== undefined) {
-        if (stateMode === 'mirror') target.searchParams.set('state', incoming);
-        else if (stateMode === 'wrongState') target.searchParams.set('state', `not-${incoming}`);
-        // 'missingState' sets nothing
-      }
+  /**
+   * Mirrored, never judged: validating state is the client's duty, and a mock
+   * that checked it would hide whether the client does. The corruption modes
+   * exist to test that the client notices.
+   */
+  const applyState = (target: URL, incoming: string | undefined): void => {
+    if (incoming === undefined) return;
+    if (stateMode === 'mirror') target.searchParams.set('state', incoming);
+    else if (stateMode === 'wrongState') target.searchParams.set('state', `not-${incoming}`);
+    // 'missingState' sets nothing
+  };
 ```
 
 And the discovery document:
@@ -2468,7 +2570,7 @@ The IdP **returns an HTML auto-submitting form** targeting the ACS; it does not 
 
 `RelayState` comes from the **HTTP query string**, not from inside the inflated `SAMLRequest` — under the Redirect binding it travels as its own parameter alongside `SAMLRequest`. It is carried through the form and posted back unchanged.
 
-**Replay is a sequence, not a variant.** A replayed assertion is, in isolation, perfectly valid — that is why replay is dangerous. `repeatLastAssertion()` makes the next response reuse the previous assertion's `ID`, so a test runs: deliver a valid assertion, see it accepted and its `ID` recorded, then deliver again and see the second rejected.
+**Replay is a sequence, not a variant.** A replayed assertion is, in isolation, perfectly valid — that is why replay is dangerous, and why no off-the-shelf verifier rejects one. `repeatLastAssertion()` makes the next response reuse the previous assertion's `ID`, so Task 10 can show the sequence: two deliveries, one assertion ID, both individually acceptable. Detecting it needs a relying party that remembers, which is issue #19's work — this mock's duty is to produce the sequence, not to judge it.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -2784,7 +2886,9 @@ Note the limitation recorded in Task 8 — `node-saml` shares `xml-crypto` under
 | the request-ID cache is one-shot — a successful validation calls `removeAsync(inResponseTo)` | a second delivery of the same assertion is rejected, which is where replay gets its independent evidence |
 | `InMemoryCacheProvider` is not exported from the package index | supply your own `CacheProvider`; it is three async methods |
 
-**How replay is verified without writing the validator.** `node-saml` has no assertion-ID replay cache, and neither does anything else off the shelf — remembering assertions is the relying party's job, and building that memory is precisely what issue #19's validation strategy will do. What this task can establish without it is the property that makes replay dangerous: the second delivery is **individually valid**, and only a verifier that remembers rejects it. The test asserts both halves — a fresh verifier accepts the replayed assertion, the one that already saw it does not.
+**What this task can and cannot say about replay.** `node-saml` has no assertion-ID replay cache, and neither does anything else off the shelf — remembering assertions is the relying party's job, and building that memory is precisely what issue #19's validation strategy will do. So **no test here rejects a replay**, and none should pretend to. What is established instead is the pair of facts that make replay dangerous: both deliveries carry the same assertion ID, and each is *independently valid* — a verifier that has seen nothing accepts both. Nothing in the second message is malformed, which is exactly why only memory catches it.
+
+There is a trap next door. node-saml's request-ID cache is one-shot: validating a response consumes its `InResponseTo`, so a second response naming the same `AuthnRequest` is rejected — **whatever its assertion ID**. That rejection says nothing about replay, and a test that read it as replay detection would stay green with `repeatLastAssertion()` deleted. The property is real and worth pinning, so it gets its own test, delivering a *fresh* assertion to show the rejection has nothing to do with the assertion at all.
 
 - [ ] **Step 1: Write the test**
 
@@ -2956,38 +3060,76 @@ describe('an independent verifier judges the mock', () => {
     }, 20000);
   }
 
-  // Replay, end to end. The first delivery is accepted. The second carries the
-  // same assertion ID and is still individually valid — a verifier that has
-  // seen nothing accepts it — and is rejected only by the one that remembers.
-  // That asymmetry is the whole of issue #19 stated as a test.
-  it('replays an assertion that only a remembering verifier rejects', async () => {
+  // Replay, stated for exactly what can be proven here.
+  //
+  // No off-the-shelf verifier detects replay, because remembering assertions is
+  // the relying party's job — the job issue #19 will build. What this task can
+  // establish, without writing that validator, is the pair of facts that make
+  // replay dangerous:
+  //
+  //   1. both deliveries carry the same assertion ID (structural), and
+  //   2. each one is independently valid — a verifier that has seen nothing
+  //      accepts both.
+  //
+  // Nothing in the second message is malformed. Only a memory of the first can
+  // reject it, and there is nothing off the shelf that keeps one.
+  it('produces two individually valid deliveries sharing one assertion ID', async () => {
+    const s = await session();
+    try {
+      const first = await s.deliver();
+      const firstId = s.idp.lastAssertionId();
+      expect(firstId).toBeTruthy();
+
+      s.idp.repeatLastAssertion();
+      const second = await s.deliver();
+
+      const assertionIdOf = (payload: string): string | undefined =>
+        /<(?:\w+:)?Assertion[^>]*\bID="([^"]+)"/.exec(
+          Buffer.from(payload, 'base64').toString('utf8'),
+        )?.[1];
+
+      expect(assertionIdOf(first)).toBe(firstId);
+      expect(assertionIdOf(second)).toBe(firstId);
+
+      // Judged alone, each is beyond reproach — including the replay.
+      await expect(
+        freshVerifier(s.idp.certificatePem, s.acsUrl).validatePostResponseAsync({
+          SAMLResponse: first,
+        }),
+      ).resolves.toBeDefined();
+      await expect(
+        freshVerifier(s.idp.certificatePem, s.acsUrl).validatePostResponseAsync({
+          SAMLResponse: second,
+        }),
+      ).resolves.toBeDefined();
+    } finally {
+      await s.close();
+    }
+  }, 30000);
+
+  // A neighbouring property, easy to mistake for replay detection and not the
+  // same thing. node-saml's request-ID cache is one-shot: a successful
+  // validation consumes the InResponseTo, so any later response naming the same
+  // AuthnRequest is rejected — whatever its assertion ID. Pinned here precisely
+  // so nobody reads it as evidence about assertions. Note the second delivery
+  // is a *fresh* assertion, and is refused all the same.
+  it('consumes the request ID, rejecting a second response to one AuthnRequest', async () => {
     const s = await session();
     try {
       const cache = requestIdCache();
       cache.seed(REQUEST_ID);
       const remembers = verifier(s.idp.certificatePem, s.acsUrl, cache);
 
-      const first = await s.deliver();
+      await expect(
+        remembers.validatePostResponseAsync({ SAMLResponse: await s.deliver() }),
+      ).resolves.toBeDefined();
       const firstId = s.idp.lastAssertionId();
-      expect(firstId).toBeTruthy();
-      await expect(
-        remembers.validatePostResponseAsync({ SAMLResponse: first }),
-      ).resolves.toBeDefined();
 
-      s.idp.repeatLastAssertion();
-      const second = await s.deliver();
-      expect(Buffer.from(second, 'base64').toString('utf8')).toContain(`ID="${firstId}"`);
-
+      const another = await s.deliver();
+      expect(s.idp.lastAssertionId()).not.toBe(firstId);
       await expect(
-        remembers.validatePostResponseAsync({ SAMLResponse: second }),
+        remembers.validatePostResponseAsync({ SAMLResponse: another }),
       ).rejects.toThrow();
-
-      // The dangerous half: nothing is wrong with the replayed assertion.
-      await expect(
-        freshVerifier(s.idp.certificatePem, s.acsUrl).validatePostResponseAsync({
-          SAMLResponse: second,
-        }),
-      ).resolves.toBeDefined();
     } finally {
       await s.close();
     }
@@ -3001,7 +3143,13 @@ describe('an independent verifier judges the mock', () => {
 npm test -- src/__tests__/samlVerification.test.ts
 ```
 
-Expected: PASS — one valid case, nine rejections, two structural cases, and the replay sequence.
+Expected: PASS — one valid case, nine rejections, two structural cases, the replay pair, and the request-ID case.
+
+**Prove the replay pair is load-bearing.** Delete the `s.idp.repeatLastAssertion()`
+call and rerun: `expect(assertionIdOf(second)).toBe(firstId)` must go red. An
+earlier draft of this plan asserted replay through a verifier that was actually
+rejecting a consumed request ID — it passed with `repeatLastAssertion()` removed
+entirely, and claimed a property it never tested. Run the mutation.
 
 **A variant behaving unexpectedly is the finding this task exists for.** Do not weaken an assertion to make the suite green. If a variant in `rejected` is accepted, establish which side is wrong — the mock producing a corruption the verifier does not check, or our understanding of what the variant should break — and report it. Moving a variant from `rejected` into `unchecked` is a legitimate outcome **only** with the verifier's source cited for why the field is not examined; silently dropping one is not.
 
