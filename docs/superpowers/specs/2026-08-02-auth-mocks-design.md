@@ -1,7 +1,7 @@
 # Mock authorization servers for deterministic testing
 
 **Date:** 2026-08-02
-**Status:** revised after review, awaiting re-approval
+**Status:** approved, not implemented
 **Follows:** the authorization-strategies arc (issue #11), released as `interfaces@11.6.0`, `auth-providers@2.0.0`, `proxy@2.0.0`, `auth-broker@2.0.0`
 **Unblocks:** issue #19 — SAML assertions are accepted without any validation
 
