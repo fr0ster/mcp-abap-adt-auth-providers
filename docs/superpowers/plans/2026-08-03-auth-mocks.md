@@ -410,10 +410,16 @@ export interface RecordedRequest {
   raw: string;
 }
 
+// `void`, not `void | Promise<void>`: TypeScript's return-type exemption — the
+// one that lets `(_req, res) => res.end('pong')` satisfy a void-returning
+// signature — applies only when the target is exactly `void`. Against the union
+// that same handler fails with TS2322, because `ServerResponse` is assignable to
+// neither member. Plain `void` still admits an async handler, and the `await`
+// below still awaits it: the annotation is erased at runtime.
 export type RouteHandler = (
   req: RecordedRequest,
   res: http.ServerResponse,
-) => void | Promise<void>;
+) => void;
 
 export type RouteTable = Record<string, RouteHandler>;
 
@@ -481,6 +487,8 @@ export async function startServer(
       }
       // Awaited, not just called: an async handler's rejection is a separate
       // promise, and discarding it would slip straight past the catch below.
+      // The declared return type says `void`; the await still works, because
+      // it acts on the value returned at runtime, not on its annotation.
       await handler(recorded, res);
     })().catch((error: unknown) => {
       // This package exists to be fed malformed protocol input, so a throw
