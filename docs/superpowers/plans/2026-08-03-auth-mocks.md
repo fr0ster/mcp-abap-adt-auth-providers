@@ -15,6 +15,7 @@
 - **The package imports nothing from `@mcp-abap-adt/*`.** It speaks HTTP, OAuth2 and SAML. A mock that knows our types will eventually agree with our mistakes instead of catching them. This is checked by a test, not by discipline.
 - **Strict by default.** Every rule below is a refusal the mock performs, and every refusal gets its own test. A mock that is wrong leniently produces a green suite and false confidence — worse than having none.
 - **The mock's own tests are written from the protocol**, never from how our providers happen to behave.
+- **Every credential a mock issues is bound to the client it was issued to**, and the binding is checked when the credential is redeemed. Authenticating the caller answers "do I know you"; it does not answer "is this yours". Both mocks that issue codes and refresh tokens enforce this, and each has its own refusal test.
 - Access tokens are syntactically valid JWTs — three dot-separated parts, base64url payload with `exp` and `iat`. `BaseTokenProvider.parseExpirationFromJWT` requires exactly that and yields `undefined` otherwise. The signature segment is not verified by anything in this family and need not be cryptographically meaningful.
 - OAuth errors follow RFC 6749 §5.2: HTTP 400 with JSON `{error, error_description}`; `invalid_client` is **401 with a matching `WWW-Authenticate` header when the client authenticated through the `Authorization` header, 400 otherwise**.
 - Node ≥18.2.0, `"type"` unset (CommonJS), `main: dist/index.js`, `types: dist/index.d.ts` — matching the sibling packages.
@@ -24,9 +25,14 @@
 
 ## A limitation to record before starting
 
-The spec asks that a signed assertion be verified "against an external tool, not against a verifier we also wrote". That is only partly achievable here. `xmlsec1` is not installed on this machine, and `openssl` cannot verify XML-DSig. The verifier this plan uses, `@node-saml/node-saml`, is not ours and independently implements SAML profile validation — Conditions, Audience, InResponseTo, Destination, signature presence — but it shares `xml-crypto` underneath for the cryptography itself.
+The spec asks that a signed assertion be verified "against an external tool, not against a verifier we also wrote". That is only partly achievable here. `xmlsec1` is not installed on this machine, and `openssl` cannot verify XML-DSig. The verifier this plan uses, `@node-saml/node-saml`, is not ours and independently implements much of SAML profile validation — signature presence and validity, `Conditions` timestamps, `Audience`, `Issuer`, `InResponseTo` — but it shares `xml-crypto` underneath for the cryptography itself.
 
-So: profile validation is independently checked; the canonicalisation and signature maths are not. Whether our C14N matches a real identity provider stays a question only live testing answers. Task 8 states this in the package README so nobody later mistakes the test suite for proof.
+Two further gaps, both established by reading the library rather than by guessing:
+
+- It validates neither `Destination` nor `SubjectConfirmationData@Recipient`. Those two corruption variants therefore get no independent judgement; Task 10 asserts them structurally and says so.
+- It has no assertion-ID replay cache, because replay detection belongs to the relying party. Task 10 verifies the property that makes replay dangerous — the replayed assertion is individually valid — rather than pretending an off-the-shelf verifier catches it.
+
+So: most of profile validation is independently checked; the canonicalisation and signature maths are not, and two fields plus replay are ours to check. Whether our C14N matches a real identity provider stays a question only live testing answers. Task 8 states all of this in the package README so nobody later mistakes the test suite for proof.
 
 ## File Structure
 
@@ -171,8 +177,19 @@ Copy `biome.json` from `/home/okyslytsia/prj/mcp-abap-adt-auth-providers/biome.j
 `src/__tests__/skeleton.test.ts`:
 
 ```ts
+import { readFileSync, readdirSync } from 'node:fs';
+import { join } from 'node:path';
 import { describe, expect, it } from '@jest/globals';
 import * as mocks from '../index';
+
+/** Every .ts file under src, so the constraint is checked against the code. */
+function sourceFiles(dir: string): string[] {
+  return readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
+    const full = join(dir, entry.name);
+    if (entry.isDirectory()) return sourceFiles(full);
+    return entry.name.endsWith('.ts') ? [full] : [];
+  });
+}
 
 describe('package skeleton', () => {
   it('exports something', () => {
@@ -180,14 +197,36 @@ describe('package skeleton', () => {
   });
 
   // The package must never depend on the packages it exists to test: a mock
-  // that knows our types will eventually agree with our mistakes.
-  it('depends on no @mcp-abap-adt package at runtime', () => {
+  // that knows our types will eventually agree with our mistakes. Both groups
+  // are checked, not just runtime — a devDependency would let a test import our
+  // types just as effectively.
+  it('declares no @mcp-abap-adt dependency, in either group', () => {
     const pkg = require('../../package.json');
-    const runtime = Object.keys(pkg.dependencies ?? {});
-    expect(runtime.filter((d) => d.startsWith('@mcp-abap-adt/'))).toEqual([]);
+    const declared = [
+      ...Object.keys(pkg.dependencies ?? {}),
+      ...Object.keys(pkg.devDependencies ?? {}),
+    ];
+    expect(declared.filter((d) => d.startsWith('@mcp-abap-adt/'))).toEqual([]);
+  });
+
+  // package.json is the weaker half of the rule: a file can import a package
+  // that was never declared, and the constraint breaks while the manifest stays
+  // clean. So read the imports.
+  it('imports nothing from @mcp-abap-adt in any source file', () => {
+    const offenders = sourceFiles(join(__dirname, '..')).filter((file) =>
+      /from\s+['"]@mcp-abap-adt\/|require\(\s*['"]@mcp-abap-adt\//.test(
+        readFileSync(file, 'utf8'),
+      ),
+    );
+    expect(offenders).toEqual([]);
   });
 });
 ```
+
+**Prove the import test is load-bearing before moving on.** Add
+`import type { ILogger } from '@mcp-abap-adt/interfaces';` to `src/index.ts`,
+run the suite, watch *that* test go red while the manifest test stays green,
+then revert. A constraint test that cannot fail is decoration.
 
 - [ ] **Step 6: Run it to verify it fails**
 
@@ -758,11 +797,18 @@ git commit -m "feat: JWT minting, RFC 6749 errors and client authentication"
 **Interfaces:**
 - Consumes: `startServer`, `MockHandle`, `RecordedRequest` (Task 2); `mintJwt`, `sendOAuthError`, `readClientAuth` (Task 3).
 - Produces:
-  - `interface UaaOptions { clientId?: string; clientSecret?: string; codeLifetimeMs?: number; accessTokenLifetimeSeconds?: number; authorize?: 'allow' | 'deny'; requireClientSecret?: boolean }`
+  - `interface UaaClient { clientId: string; clientSecret: string }`
+  - `interface UaaOptions { clients?: UaaClient[]; clientId?: string; clientSecret?: string; codeLifetimeMs?: number; accessTokenLifetimeSeconds?: number; authorize?: 'allow' | 'deny'; requireClientSecret?: boolean }`
   - `interface MockUaa extends MockHandle { }`
   - `startMockUaa(options?: UaaOptions): Promise<MockUaa>`
 
-Defaults: `clientId: 'mock-client'`, `clientSecret: 'mock-secret'`, `codeLifetimeMs: 2000` (short, so an expiry test need not wait), `accessTokenLifetimeSeconds: 3600`, `authorize: 'allow'`, `requireClientSecret: true`.
+Defaults: one registered client `mock-client` / `mock-secret`, `codeLifetimeMs: 2000` (short, so an expiry test need not wait), `accessTokenLifetimeSeconds: 3600`, `authorize: 'allow'`, `requireClientSecret: true`.
+
+**Why a registry and not a single client.** An authorization code belongs to the
+client it was issued to; a server that forgets this lets any client it knows
+redeem any code it issued. Proving the refusal needs two registered clients, so
+the mock keeps a list. `clientId`/`clientSecret` remain as shorthand for the
+common single-client case and are ignored when `clients` is given.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -774,9 +820,14 @@ const basic = (id: string, secret: string) =>
   `Basic ${Buffer.from(`${id}:${secret}`).toString('base64')}`;
 
 /** Drives /authorize the way a browser would, returning the code it lands with. */
-async function getCode(url: string, redirectUri: string): Promise<string> {
+async function getCode(
+  url: string,
+  redirectUri: string,
+  clientId = 'mock-client',
+): Promise<string> {
   const res = await fetch(
-    `${url}/oauth/authorize?client_id=mock-client&response_type=code&redirect_uri=${encodeURIComponent(redirectUri)}`,
+    `${url}/oauth/authorize?client_id=${encodeURIComponent(clientId)}` +
+      `&response_type=code&redirect_uri=${encodeURIComponent(redirectUri)}`,
     { redirect: 'manual' },
   );
   const location = res.headers.get('location') ?? '';
@@ -945,8 +996,64 @@ describe('mock UAA', () => {
       await uaa.close();
     }
   });
+
+  // A code belongs to the client it was issued to. A server that only checks
+  // "is this a client I know" lets one client redeem another's consent.
+  it('refuses a code issued to a different client', async () => {
+    const uaa = await startMockUaa({
+      clients: [
+        { clientId: 'first-client', clientSecret: 'first-secret' },
+        { clientId: 'second-client', clientSecret: 'second-secret' },
+      ],
+    });
+    try {
+      const redirectUri = 'http://localhost:61001/callback';
+      const code = await getCode(uaa.url, redirectUri, 'first-client');
+      expect(code).toBeTruthy();
+
+      const res = await fetch(`${uaa.url}/oauth/token`, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/x-www-form-urlencoded',
+          authorization: basic('second-client', 'second-secret'),
+        },
+        body: new URLSearchParams({
+          grant_type: 'authorization_code',
+          code,
+          redirect_uri: redirectUri,
+        }).toString(),
+      });
+      expect(res.status).toBe(400);
+      const json = await res.json();
+      expect(json.error).toBe('invalid_grant');
+      expect(json.error_description).toMatch(/different client/i);
+    } finally {
+      await uaa.close();
+    }
+  });
+
+  it('refuses an unregistered client_id without redirecting to it', async () => {
+    const uaa = await startMockUaa();
+    try {
+      const res = await fetch(
+        `${uaa.url}/oauth/authorize?client_id=nobody&response_type=code` +
+          `&redirect_uri=${encodeURIComponent('http://localhost:61001/callback')}`,
+        { redirect: 'manual' },
+      );
+      expect(res.status).toBe(400);
+      expect(res.headers.get('location')).toBeNull();
+      expect((await res.json()).error).toBe('invalid_request');
+    } finally {
+      await uaa.close();
+    }
+  });
 });
 ```
+
+**Prove the binding test is load-bearing.** Delete the `issued.clientId !==
+auth.clientId` branch you are about to write, run the suite, and watch the
+first of these two go red. If it stays green the mock is not enforcing what the
+test claims — find out why before continuing.
 
 - [ ] **Step 2: Run them to verify they fail**
 
@@ -973,7 +1080,18 @@ import { mintJwt } from './jwt';
 import { sendOAuthError } from './oauthErrors';
 import { type MockHandle, startServer } from './server';
 
+export interface UaaClient {
+  clientId: string;
+  clientSecret: string;
+}
+
 export interface UaaOptions {
+  /**
+   * Registered clients. Defaults to one. A test proving that a code cannot
+   * cross a client boundary registers two.
+   */
+  clients?: UaaClient[];
+  /** Shorthand for a single registered client. Ignored when `clients` is given. */
   clientId?: string;
   clientSecret?: string;
   /** Short by default so an expiry test does not have to wait. */
@@ -993,8 +1111,14 @@ interface IssuedCode {
 }
 
 export async function startMockUaa(options: UaaOptions = {}): Promise<MockUaa> {
-  const clientId = options.clientId ?? 'mock-client';
-  const clientSecret = options.clientSecret ?? 'mock-secret';
+  const clients: UaaClient[] = options.clients ?? [
+    {
+      clientId: options.clientId ?? 'mock-client',
+      clientSecret: options.clientSecret ?? 'mock-secret',
+    },
+  ];
+  const findClient = (id: string | undefined): UaaClient | undefined =>
+    clients.find((c) => c.clientId === id);
   const codeLifetimeMs = options.codeLifetimeMs ?? 2000;
   const accessLifetime = options.accessTokenLifetimeSeconds ?? 3600;
   const requireSecret = options.requireClientSecret !== false;
@@ -1009,6 +1133,13 @@ export async function startMockUaa(options: UaaOptions = {}): Promise<MockUaa> {
         sendOAuthError(res, 'invalid_request', 'redirect_uri is required');
         return;
       }
+      // RFC 6749 §4.1.2.1: with an unregistered client the redirect_uri cannot
+      // be trusted either, so this error is shown here and never redirected.
+      const requestedClientId = req.query.client_id;
+      if (!requestedClientId || !findClient(requestedClientId)) {
+        sendOAuthError(res, 'invalid_request', 'client_id is missing or not registered');
+        return;
+      }
       const target = new URL(redirectUri);
       if (denies) {
         target.searchParams.set('error', 'access_denied');
@@ -1017,7 +1148,7 @@ export async function startMockUaa(options: UaaOptions = {}): Promise<MockUaa> {
         const code = randomUUID();
         codes.set(code, {
           redirectUri,
-          clientId: req.query.client_id ?? '',
+          clientId: requestedClientId,
           issuedAt: Date.now(),
           used: false,
         });
@@ -1037,10 +1168,8 @@ export async function startMockUaa(options: UaaOptions = {}): Promise<MockUaa> {
         });
         return;
       }
-      if (
-        auth.clientId !== clientId ||
-        (requireSecret && auth.clientSecret !== clientSecret)
-      ) {
+      const client = findClient(auth.clientId);
+      if (!client || (requireSecret && auth.clientSecret !== client.clientSecret)) {
         sendOAuthError(res, 'invalid_client', 'unknown client', {
           usedAuthorizationHeader: auth.usedAuthorizationHeader,
         });
@@ -1055,6 +1184,13 @@ export async function startMockUaa(options: UaaOptions = {}): Promise<MockUaa> {
       const issued = codes.get(req.body.code ?? '');
       if (!issued) {
         sendOAuthError(res, 'invalid_grant', 'unknown code');
+        return;
+      }
+      // The code belongs to the client it was issued to. Without this a server
+      // that knows two clients lets either redeem the other's code, and the
+      // authenticated identity in the token bears no relation to the consent.
+      if (issued.clientId !== auth.clientId) {
+        sendOAuthError(res, 'invalid_grant', 'the code was issued to a different client');
         return;
       }
       if (issued.used) {
@@ -1080,7 +1216,7 @@ export async function startMockUaa(options: UaaOptions = {}): Promise<MockUaa> {
       res.end(
         JSON.stringify({
           access_token: mintJwt({ expiresInSeconds: accessLifetime }),
-          refresh_token: `refresh-${randomUUID()}`,
+          refresh_token: issueRefreshToken(auth.clientId),
           token_type: 'bearer',
           expires_in: accessLifetime,
         }),
@@ -1090,13 +1226,22 @@ export async function startMockUaa(options: UaaOptions = {}): Promise<MockUaa> {
 }
 ```
 
+`issueRefreshToken` arrives in Task 5, which owns the refresh grant. Until then
+define it beside the code store as a one-liner so this task compiles and its
+tests pass:
+
+```ts
+  // Task 5 replaces this with one that registers the token against its client.
+  const issueRefreshToken = (_clientId: string): string => `refresh-${randomUUID()}`;
+```
+
 - [ ] **Step 4: Run the tests to verify they pass**
 
 ```bash
 npm test -- src/__tests__/uaa.test.ts
 ```
 
-Expected: PASS, eight cases.
+Expected: PASS, ten cases.
 
 - [ ] **Step 5: Commit**
 
@@ -1115,7 +1260,7 @@ git commit -m "feat: mock UAA authorization code flow, strict by default"
 - Test: `src/__tests__/uaaGrants.test.ts`
 
 **Interfaces:**
-- Produces: `UaaOptions` gains `rotateRefreshTokens?: boolean` (default `true`), `failRefresh?: boolean` (default `false`), `samlBearer?: 'strict' | 'lenient' | 'off'` (default `'strict'`). `MockUaa` gains `mintExpiredAccessWithValidRefresh(): { accessToken: string; refreshToken: string }`.
+- Produces: `UaaOptions` gains `rotateRefreshTokens?: boolean` (default `true`), `failRefresh?: boolean` (default `false`), `samlBearer?: 'strict' | 'lenient' | 'off'` (default `'strict'`). `MockUaa` gains `mintExpiredAccessWithValidRefresh(clientId?: string): { accessToken: string; refreshToken: string }`, defaulting to the first registered client. Refresh tokens are bound to their client exactly as codes are.
 
 The minting helper exists so a test wanting the refresh path neither hand-crafts a JWT nor runs a full code flow and waits.
 
@@ -1224,8 +1369,19 @@ describe('refresh grant', () => {
 
 describe('SAML bearer grant', () => {
   const GRANT = 'urn:ietf:params:oauth:grant-type:saml2-bearer';
-  const assertionXml = '<saml:Assertion xmlns:saml="urn:oasis:names:tc:SAML:2.0:assertion"/>';
-  const responseXml = '<samlp:Response xmlns:samlp="urn:oasis:names:tc:SAML:2.0:protocol"/>';
+  const assertionXml =
+    '<saml:Assertion xmlns:saml="urn:oasis:names:tc:SAML:2.0:assertion" ID="_a1">' +
+    '<saml:Issuer>mock-idp</saml:Issuer></saml:Assertion>';
+
+  // A realistic Response *contains* an Assertion. A check that merely looks for
+  // the substring "Assertion" anywhere passes this and proves nothing — which
+  // is why the fixture is not an empty element.
+  const responseXml =
+    '<samlp:Response xmlns:samlp="urn:oasis:names:tc:SAML:2.0:protocol" ' +
+    'xmlns:saml="urn:oasis:names:tc:SAML:2.0:assertion" ID="_r1">' +
+    '<samlp:Status><samlp:StatusCode Value="urn:oasis:names:tc:SAML:2.0:status:Success"/></samlp:Status>' +
+    '<saml:Assertion ID="_a1"><saml:Issuer>mock-idp</saml:Issuer></saml:Assertion>' +
+    '</samlp:Response>';
 
   it('accepts a base64url Assertion in strict mode', async () => {
     const uaa = await startMockUaa({ samlBearer: 'strict' });
@@ -1241,13 +1397,46 @@ describe('SAML bearer grant', () => {
     }
   });
 
-  // What auth-providers sends today: a whole base64 samlp:Response.
+  // What auth-providers sends today: a whole base64 samlp:Response, with an
+  // Assertion nested inside it.
   it('refuses a base64 samlp:Response in strict mode', async () => {
     const uaa = await startMockUaa({ samlBearer: 'strict' });
     try {
       const res = await post(uaa.url, {
         grant_type: GRANT,
         assertion: Buffer.from(responseXml, 'utf8').toString('base64'),
+      });
+      expect(res.status).toBe(400);
+      const json = await res.json();
+      expect(json.error).toBe('invalid_grant');
+      expect(json.error_description).toMatch(/Response/);
+    } finally {
+      await uaa.close();
+    }
+  });
+
+  // The encoding check alone cannot carry this. Here the encoding is beyond
+  // reproach — Node's base64url is unpadded and uses no + or / — so the refusal
+  // can only come from asking what the document element is.
+  it('refuses a Response that is correctly base64url-encoded', async () => {
+    const uaa = await startMockUaa({ samlBearer: 'strict' });
+    try {
+      const encoded = Buffer.from(responseXml, 'utf8').toString('base64url');
+      expect(encoded).toMatch(/^[A-Za-z0-9_-]+$/);
+      const res = await post(uaa.url, { grant_type: GRANT, assertion: encoded });
+      expect(res.status).toBe(400);
+      expect((await res.json()).error_description).toMatch(/Response/);
+    } finally {
+      await uaa.close();
+    }
+  });
+
+  it('refuses something that is not XML at all', async () => {
+    const uaa = await startMockUaa({ samlBearer: 'strict' });
+    try {
+      const res = await post(uaa.url, {
+        grant_type: GRANT,
+        assertion: Buffer.from('not xml', 'utf8').toString('base64url'),
       });
       expect(res.status).toBe(400);
       expect((await res.json()).error).toBe('invalid_grant');
@@ -1300,14 +1489,30 @@ export interface MockUaa extends MockHandle {
    * Without this a refresh test must hand-craft a JWT or run a code flow and
    * wait — the first is duplication, the second is slow.
    */
-  mintExpiredAccessWithValidRefresh(): {
+  mintExpiredAccessWithValidRefresh(clientId?: string): {
     accessToken: string;
     refreshToken: string;
   };
 }
 ```
 
-Inside `startMockUaa`, keep a `refreshTokens = new Set<string>()` and a `supersededRefreshTokens = new Set<string>()`. Register every refresh token the code exchange issues. Add these branches to `POST /oauth/token`, before the `unsupported_grant_type` fallback:
+Inside `startMockUaa`, replace Task 4's placeholder `issueRefreshToken` with one
+that remembers **which client** the token was issued to — a refresh token carries
+the same authorization a code did, so it crosses a client boundary just as badly:
+
+```ts
+  /** refresh token → the client it belongs to */
+  const refreshTokens = new Map<string, string>();
+  const supersededRefreshTokens = new Set<string>();
+
+  const issueRefreshToken = (clientId: string): string => {
+    const token = `refresh-${randomUUID()}`;
+    refreshTokens.set(token, clientId);
+    return token;
+  };
+```
+
+Add these branches to `POST /oauth/token`, before the `unsupported_grant_type` fallback:
 
 ```ts
       if (req.body.grant_type === 'refresh_token') {
@@ -1320,16 +1525,24 @@ Inside `startMockUaa`, keep a `refreshTokens = new Set<string>()` and a `superse
           sendOAuthError(res, 'invalid_grant', 'refresh token already used (rotation)');
           return;
         }
-        if (!refreshTokens.has(presented)) {
+        const owner = refreshTokens.get(presented);
+        if (owner === undefined) {
           sendOAuthError(res, 'invalid_grant', 'unknown refresh token');
+          return;
+        }
+        if (owner !== auth.clientId) {
+          sendOAuthError(
+            res,
+            'invalid_grant',
+            'the refresh token was issued to a different client',
+          );
           return;
         }
         let next = presented;
         if (rotate) {
           refreshTokens.delete(presented);
           supersededRefreshTokens.add(presented);
-          next = `refresh-${randomUUID()}`;
-          refreshTokens.add(next);
+          next = issueRefreshToken(owner);
         }
         res.statusCode = 200;
         res.setHeader('Content-Type', 'application/json');
@@ -1355,15 +1568,9 @@ Inside `startMockUaa`, keep a `refreshTokens = new Set<string>()` and a `superse
           return;
         }
         if (samlBearer === 'strict') {
-          // RFC 7522 §2.1: base64url, and a single Assertion — not a Response.
-          const looksBase64Url = !/[+/]/.test(raw);
-          const decoded = Buffer.from(raw, 'base64url').toString('utf8');
-          if (!looksBase64Url || !/<(\w+:)?Assertion[\s>]/.test(decoded)) {
-            sendOAuthError(
-              res,
-              'invalid_grant',
-              'RFC 7522 requires a base64url-encoded Assertion, not a Response',
-            );
+          const problem = rejectNonAssertion(raw);
+          if (problem) {
+            sendOAuthError(res, 'invalid_grant', problem);
             return;
           }
         }
@@ -1380,18 +1587,57 @@ Inside `startMockUaa`, keep a `refreshTokens = new Set<string>()` and a `superse
       }
 ```
 
-Implement the helper by minting an expired JWT and registering a refresh token:
+RFC 7522 §2.1 asks for two separate things, and each needs its own check.
+Put this above `startMockUaa`:
+
+```ts
+import { DOMParser } from '@xmldom/xmldom';
+
+const SAML_ASSERTION_NS = 'urn:oasis:names:tc:SAML:2.0:assertion';
+/** base64url: no + or /, and padding is not part of the alphabet. */
+const BASE64URL = /^[A-Za-z0-9_-]+$/;
+
+/**
+ * Returns a reason to refuse, or null to accept.
+ *
+ * The encoding check cannot stand alone — a base64 string may contain no `+`
+ * or `/` by chance — and the content check cannot stand alone either, because
+ * a `samlp:Response` contains an `Assertion`. So the content check asks what
+ * the *document element* is, not what appears somewhere inside it.
+ */
+function rejectNonAssertion(raw: string): string | null {
+  if (!BASE64URL.test(raw)) {
+    return 'RFC 7522 §2.1 requires base64url encoding without padding';
+  }
+
+  try {
+    const decoded = Buffer.from(raw, 'base64url').toString('utf8');
+    const root = new DOMParser().parseFromString(decoded, 'text/xml').documentElement;
+    if (!root) return 'the assertion parameter did not decode to XML';
+    if (root.localName === 'Assertion' && root.namespaceURI === SAML_ASSERTION_NS) {
+      return null;
+    }
+    return `RFC 7522 §2.1 requires a single Assertion as the document element, not a ${root.localName}`;
+  } catch {
+    return 'the assertion parameter did not decode to XML';
+  }
+}
+```
+
+`@xmldom/xmldom` is already a dependency for Task 8. On malformed input its
+parser reports through a warning handler and may still return a document, so the
+`root.localName` test — not the absence of a throw — is what decides.
+
+Implement the mint helper by minting an expired JWT and registering a refresh token:
 
 ```ts
   const handle = await startServer({ /* routes above */ });
   return {
     ...handle,
-    mintExpiredAccessWithValidRefresh() {
-      const refreshToken = `refresh-${randomUUID()}`;
-      refreshTokens.add(refreshToken);
+    mintExpiredAccessWithValidRefresh(clientId = clients[0].clientId) {
       return {
         accessToken: mintJwt({ expiresInSeconds: -60 }),
-        refreshToken,
+        refreshToken: issueRefreshToken(clientId),
       };
     },
   };
@@ -1481,6 +1727,38 @@ describe('visit', () => {
     }
   });
 
+  // A real browser decodes attribute entities before submitting. One that does
+  // not would hand the client a value no real flow could produce, and a bug in
+  // the client's handling of & or a quote would never be reached.
+  it('decodes HTML entities in form values and in the action', async () => {
+    let received: Record<string, string> = {};
+    let query: Record<string, string> = {};
+    const s = await startServer({
+      'GET /idp': (_r, res) => {
+        res.setHeader('Content-Type', 'text/html');
+        res.end(
+          `<html><body onload="document.forms[0].submit()">
+           <form method="post" action="/acs?a=1&amp;b=2">
+             <input type="hidden" name="RelayState" value="a&amp;b&quot;c&lt;d"/>
+           </form></body></html>`,
+        );
+      },
+      'POST /acs': (req, res) => {
+        received = req.body;
+        query = req.query;
+        res.end('ok');
+      },
+    });
+    try {
+      await visit(`${s.url}/idp`);
+      expect(received.RelayState).toBe('a&b"c<d');
+      // Decoded once, not twice: the action carried one & and still does.
+      expect(query).toEqual({ a: '1', b: '2' });
+    } finally {
+      await s.close();
+    }
+  });
+
   it('stops rather than looping forever on a redirect cycle', async () => {
     const s = await startServer({
       'GET /loop': (_r, res) => {
@@ -1526,6 +1804,24 @@ export interface VisitResult {
   body: string;
 }
 
+/**
+ * Reverses HTML attribute escaping.
+ *
+ * A real browser does this, so a browser that does not is not testing the
+ * client — it is testing a value the client would never have seen. `&amp;`
+ * must be last: decoding it first would turn `&amp;lt;` into `<`.
+ */
+function decodeEntities(value: string): string {
+  return value
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#0*39;|&#x0*27;/gi, "'")
+    .replace(/&#(\d+);/g, (_m, d) => String.fromCodePoint(Number(d)))
+    .replace(/&#x([0-9a-f]+);/gi, (_m, h) => String.fromCodePoint(Number.parseInt(h, 16)))
+    .replace(/&amp;/g, '&');
+}
+
 /** Extracts a form's action and its hidden inputs, if the page is one. */
 function parseForm(
   html: string,
@@ -1533,15 +1829,15 @@ function parseForm(
 ): { action: string; fields: Record<string, string> } | null {
   const form = /<form[^>]*method=["']post["'][^>]*>([\s\S]*?)<\/form>/i.exec(html);
   if (!form) return null;
-  const actionMatch = /action=["']([^"']+)["']/i.exec(form[0]);
-  const action = new URL(actionMatch?.[1] ?? '', base).toString();
+  const actionMatch = /action=["']([^"']*)["']/i.exec(form[0]);
+  const action = new URL(decodeEntities(actionMatch?.[1] ?? ''), base).toString();
   const fields: Record<string, string> = {};
   const input = /<input[^>]*>/gi;
   let m: RegExpExecArray | null = input.exec(form[1]);
   while (m) {
     const name = /name=["']([^"']+)["']/i.exec(m[0])?.[1];
     const value = /value=["']([^"']*)["']/i.exec(m[0])?.[1] ?? '';
-    if (name) fields[name] = value;
+    if (name) fields[name] = decodeEntities(value);
     m = input.exec(form[1]);
   }
   return { action, fields };
@@ -1590,7 +1886,7 @@ export async function visit(url: string): Promise<VisitResult> {
 npm test -- src/__tests__/browser.test.ts
 ```
 
-Expected: PASS, three cases.
+Expected: PASS, four cases.
 
 - [ ] **Step 5: Commit**
 
@@ -1619,6 +1915,8 @@ Two rules distinguish it from the UAA mock:
 **PKCE is demanded at both ends.** `/authorize` refuses a request with no `code_challenge`, no `code_challenge_method`, or a method other than `S256`. Verifying a challenge only when one happens to arrive would let a non-PKCE request through while still satisfying the exchange rule — a strict mock that tolerates the weaker flow is not strict.
 
 **`state` is mirrored, never judged.** Validating `state` is the client's duty, and a mock that checked it would be doing the client's job while hiding whether the client does it. `OidcBrowserProvider` sends no `state` today, so a test written against this mock is what makes that visible.
+
+**The code is bound to its client, exactly as in Task 4.** `OidcOptions extends UaaOptions`, so it inherits the client registry: `/authorize` refuses an unregistered `client_id` without redirecting, the issued code records which client asked, and `/token` refuses a code presented by a different one. This is spelled out rather than left to "model it on `uaa.ts`" because it is the single rule most easily lost in translation, and losing it silently reproduces the defect in both mocks at once.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -1810,6 +2108,70 @@ describe('mock OIDC', () => {
       await oidc.close();
     }
   });
+
+  // The same rule as Task 4, restated here because "model it on uaa.ts" is
+  // exactly the kind of instruction that loses a check in translation.
+  it('refuses a code issued to a different client', async () => {
+    const oidc = await startMockOidc({
+      clients: [
+        { clientId: 'first-client', clientSecret: 'first-secret' },
+        { clientId: 'second-client', clientSecret: 'second-secret' },
+      ],
+    });
+    try {
+      const { verifier, challenge } = pkce();
+      const redirectUri = 'http://localhost:61001/callback';
+      const res = await fetch(
+        `${oidc.url}/authorize?${new URLSearchParams({
+          client_id: 'first-client',
+          response_type: 'code',
+          redirect_uri: redirectUri,
+          code_challenge: challenge,
+          code_challenge_method: 'S256',
+        }).toString()}`,
+        { redirect: 'manual' },
+      );
+      const code = new URL(res.headers.get('location') ?? '').searchParams.get('code');
+      expect(code).toBeTruthy();
+
+      const exchange = await fetch(`${oidc.url}/token`, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/x-www-form-urlencoded',
+          authorization: basic('second-client', 'second-secret'),
+        },
+        body: new URLSearchParams({
+          grant_type: 'authorization_code',
+          code: code ?? '',
+          redirect_uri: redirectUri,
+          code_verifier: verifier,
+        }).toString(),
+      });
+      expect(exchange.status).toBe(400);
+      expect((await exchange.json()).error).toBe('invalid_grant');
+    } finally {
+      await oidc.close();
+    }
+  });
+
+  it('refuses an unregistered client_id without redirecting to it', async () => {
+    const oidc = await startMockOidc();
+    try {
+      const { challenge } = pkce();
+      const res = await fetch(
+        authorizeUrl(oidc.url, {
+          client_id: 'nobody',
+          code_challenge: challenge,
+          code_challenge_method: 'S256',
+        }),
+        { redirect: 'manual' },
+      );
+      expect(res.status).toBe(400);
+      expect(res.headers.get('location')).toBeNull();
+    } finally {
+      await oidc.close();
+    }
+  });
 });
 ```
 
@@ -1823,7 +2185,7 @@ Expected: FAIL — `Cannot find module '../oidc'`.
 
 - [ ] **Step 3: Implement `src/oidc.ts`**
 
-Model it on `src/uaa.ts`: same client authentication, same code store, same error helper. The differences are the three routes, the PKCE demand at `/authorize`, the `S256` comparison at `/token`, and the `state` handling:
+Model it on `src/uaa.ts`: same client registry and `findClient` lookup, same code store, same error helper, and the same two client checks — the unregistered-`client_id` refusal at `/authorize` and the `issued.clientId !== auth.clientId` refusal at `/token`. Copy both; neither is optional here. The differences are the three routes, the PKCE demand at `/authorize`, the `S256` comparison at `/token`, and the `state` handling:
 
 ```ts
 import { createHash, randomUUID } from 'node:crypto';
@@ -1834,6 +2196,8 @@ At `/authorize`, before issuing a code:
 ```ts
       const challenge = req.query.code_challenge;
       const method = req.query.code_challenge_method;
+      // The client checks from Task 4 come first — an unregistered client_id is
+      // refused here, before PKCE is even considered.
       if (!challenge || !method) {
         sendOAuthError(res, 'invalid_request', 'PKCE is required: code_challenge and code_challenge_method');
         return;
@@ -1893,7 +2257,7 @@ And the discovery document:
 npm test -- src/__tests__/oidc.test.ts
 ```
 
-Expected: PASS, eight cases.
+Expected: PASS, ten cases.
 
 - [ ] **Step 5: Commit**
 
@@ -2060,7 +2424,15 @@ Expected: PASS, four cases.
 
 - [ ] **Step 5: Record the verification limitation in the README**
 
-Add a section saying plainly: the package's own tests verify a signature with `xml-crypto`, the same library that produced it, and `@node-saml/node-saml` independently checks the SAML profile — Conditions, Audience, InResponseTo, Destination — but shares `xml-crypto` underneath for the cryptography. Canonicalisation matching a real identity provider is therefore **not** proven by this suite, and live testing remains necessary. Someone reading a green suite must not conclude otherwise.
+Add a section saying plainly what the suite does and does not establish:
+
+- The package's own tests verify a signature with `xml-crypto` — the same library that produced it.
+- `@node-saml/node-saml` independently checks signature validity, `Conditions` timestamps, `Audience`, `Issuer` and `InResponseTo`, but shares `xml-crypto` underneath for the cryptography.
+- It checks **neither `Destination` nor `SubjectConfirmationData@Recipient`**, so those two variants have no independent judge here.
+- It has no assertion-ID replay cache; replay detection belongs to the relying party.
+- Canonicalisation matching a real identity provider is therefore **not** proven by this suite, and live testing remains necessary.
+
+Someone reading a green suite must not conclude otherwise.
 
 - [ ] **Step 6: Commit**
 
@@ -2085,6 +2457,10 @@ git commit -m "feat: per-instance key material and XML-DSig signing"
   - `interface SamlOptions { variant?: SamlVariant; audience?: string; issuer?: string }`
   - `interface MockSamlIdp extends MockHandle { certificatePem: string; setVariant(v: SamlVariant): void; lastAssertionId(): string | undefined; repeatLastAssertion(): void }`
   - `startMockSamlIdp(options?: SamlOptions): Promise<MockSamlIdp>`
+
+Defaults: `variant: 'valid'`, `issuer: 'mock-idp'`, `audience: 'mock-sp'`. Task 10
+configures an independent verifier with exactly those two names, so changing
+either here means changing it there.
 
 **Two things the implementation must get right, both settled during spec review:**
 
@@ -2246,6 +2622,31 @@ describe('mock SAML IdP', () => {
     }
   });
 
+  // RelayState is opaque data the client chose, and an ACS URL routinely
+  // carries a query string. If either is dropped into the form unescaped, the
+  // value is corrupted or the markup is — and every test above would still be
+  // green, because none of them uses a character that matters.
+  it('carries reserved characters through the form unharmed', async () => {
+    const acs = await startAcs();
+    const idp = await startMockSamlIdp();
+    const relayState = 'a&b"c<d>e\'f';
+    try {
+      const acsUrl = `${acs.url}/callback?tenant=one&flow=saml`;
+      await visit(
+        `${idp.url}/sso?SAMLRequest=${encodeURIComponent(authnRequest(acsUrl))}` +
+          `&RelayState=${encodeURIComponent(relayState)}`,
+      );
+      expect(acs.received).toHaveLength(1);
+      expect(acs.received[0].RelayState).toBe(relayState);
+      // The response still decodes, so the SAMLResponse survived escaping too.
+      const xml = Buffer.from(acs.received[0].SAMLResponse, 'base64').toString('utf8');
+      expect(xml).toContain('Assertion');
+    } finally {
+      await idp.close();
+      await acs.close();
+    }
+  });
+
   // Replay is a sequence: the same assertion, delivered twice. In isolation the
   // second delivery is valid, which is exactly why a verifier must remember.
   it('repeats a previous assertion ID on demand', async () => {
@@ -2301,20 +2702,42 @@ Structure:
 | `wrongRecipient` | `Recipient` = `http://127.0.0.1:1/other` |
 | `wrongIssuer` | `Issuer` = `urn:other:idp` |
 
-4. Base64-encode the response and render the auto-submitting form:
+4. Base64-encode the response and render the auto-submitting form. Every value
+   that lands in an attribute is escaped: `RelayState` is opaque data chosen by
+   the client, and an ACS URL routinely carries a query string, so `&`, quotes
+   and angle brackets all arrive in practice. Unescaped, they either corrupt the
+   value or break the markup — and the browser in Task 6 would then parse
+   whatever wreckage came out.
 
 ```ts
+/** Escapes a value for an HTML attribute delimited by double quotes. */
+function escapeAttribute(value: string): string {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
 function autoSubmitForm(acsUrl: string, samlResponse: string, relayState?: string): string {
-  const relay = relayState
-    ? `<input type="hidden" name="RelayState" value="${relayState}"/>`
-    : '';
+  const relay =
+    relayState === undefined
+      ? ''
+      : `<input type="hidden" name="RelayState" value="${escapeAttribute(relayState)}"/>`;
   return `<html><body onload="document.forms[0].submit()">
-<form method="post" action="${acsUrl}">
-<input type="hidden" name="SAMLResponse" value="${samlResponse}"/>
+<form method="post" action="${escapeAttribute(acsUrl)}">
+<input type="hidden" name="SAMLResponse" value="${escapeAttribute(samlResponse)}"/>
 ${relay}
 </form></body></html>`;
 }
 ```
+
+   Escaping is also what keeps Task 6's attribute regexes sound: once no raw
+   quote can appear inside a value, `value="([^"]*)"` cannot terminate early.
+   Note the `undefined` check rather than a truthy one — an empty `RelayState`
+   is a value the client may legitimately have sent, and dropping it silently
+   would make the mock lie about what it received.
 
 5. `repeatLastAssertion()` sets a flag that makes the next response reuse the stored `ID` instead of generating one; `lastAssertionId()` returns it.
 
@@ -2324,7 +2747,7 @@ ${relay}
 npm test -- src/__tests__/saml.test.ts
 ```
 
-Expected: PASS, eight cases.
+Expected: PASS, nine cases.
 
 - [ ] **Step 5: Commit**
 
@@ -2344,21 +2767,71 @@ git commit -m "feat: SAML IdP returning an auto-submitting form, with corruption
 **Interfaces:**
 - Consumes: everything from Task 9, plus `@node-saml/node-saml`.
 
-This is the task that decides whether the SAML mock is trustworthy. A mock that is wrong leniently produces a green suite and false confidence. So: a valid assertion must be **accepted** by a verifier we did not write, and each corrupted variant must be **rejected** by it.
+This is the task that decides whether the SAML mock is trustworthy. A mock that is wrong leniently produces a green suite and false confidence. So: a valid assertion must be **accepted** by a verifier we did not write, and every corruption must be **detected** — by that verifier where it checks the field, and structurally where it does not.
 
 Note the limitation recorded in Task 8 — `node-saml` shares `xml-crypto` underneath, so this proves profile validation, not canonicalisation against a real identity provider.
+
+**What `@node-saml/node-saml@5.1` actually does.** Its typings and its response-validation path were read while this plan was written. Configure it deliberately from this table rather than discovering each fact through one failing case at a time:
+
+| Fact about the verifier | Consequence here |
+|---|---|
+| `wantAuthnResponseSigned` defaults to `true`, and Task 8 signs the **Assertion**, not the Response | set `wantAuthnResponseSigned: false` and keep `wantAssertionsSigned: true`, or every case fails alike and the suite proves nothing |
+| `validateInResponseTo` defaults to `never` | set `ValidateInResponseTo.always` and seed the request ID, or `wrongInResponseTo` is accepted |
+| `idpIssuer` is compared only when set | set it to `mock-idp`, or `wrongIssuer` is accepted |
+| `audience` defaults to `issuer` | set both explicitly, so `wrongAudience` fails for the stated reason |
+| `acceptedClockSkewMs` defaults to `0` | `expired` and `notYetValid` need no extra option |
+| **`Destination` and `SubjectConfirmationData@Recipient` are never validated** — neither appears in the validation path | `wrongDestination` and `wrongRecipient` cannot be proven by rejection; they are asserted structurally |
+| the request-ID cache is one-shot — a successful validation calls `removeAsync(inResponseTo)` | a second delivery of the same assertion is rejected, which is where replay gets its independent evidence |
+| `InMemoryCacheProvider` is not exported from the package index | supply your own `CacheProvider`; it is three async methods |
+
+**How replay is verified without writing the validator.** `node-saml` has no assertion-ID replay cache, and neither does anything else off the shelf — remembering assertions is the relying party's job, and building that memory is precisely what issue #19's validation strategy will do. What this task can establish without it is the property that makes replay dangerous: the second delivery is **individually valid**, and only a verifier that remembers rejects it. The test asserts both halves — a fresh verifier accepts the replayed assertion, the one that already saw it does not.
 
 - [ ] **Step 1: Write the test**
 
 ```ts
 import { deflateRawSync } from 'node:zlib';
 import { describe, expect, it } from '@jest/globals';
-import { SAML } from '@node-saml/node-saml';
-import { startServer } from '../server';
-import { startMockSamlIdp, type SamlVariant } from '../saml';
+import {
+  type CacheItem,
+  type CacheProvider,
+  SAML,
+  ValidateInResponseTo,
+} from '@node-saml/node-saml';
 import { visit } from '../browser';
+import { type SamlVariant, startMockSamlIdp } from '../saml';
+import { startServer } from '../server';
 
-async function deliver(variant: SamlVariant | undefined, acsPath = '/callback') {
+const REQUEST_ID = '_req1';
+
+/**
+ * The request-ID cache node-saml needs. `InMemoryCacheProvider` exists in the
+ * package but is not exported from its index, so this is the smallest thing
+ * satisfying the published interface — plus `seed`, because our AuthnRequest is
+ * built by hand and never passes through node-saml's own request generation.
+ */
+function requestIdCache(): CacheProvider & { seed(id: string): void } {
+  const keys = new Map<string, CacheItem>();
+  return {
+    seed(id) {
+      keys.set(id, { value: new Date().toISOString(), createdAt: Date.now() });
+    },
+    async saveAsync(key, value) {
+      const item = { value, createdAt: Date.now() };
+      keys.set(key, item);
+      return item;
+    },
+    async getAsync(key) {
+      return keys.get(key)?.value ?? null;
+    },
+    async removeAsync(key) {
+      if (key === null) return null;
+      return keys.delete(key) ? key : null;
+    },
+  };
+}
+
+/** An IdP and an ACS, wired together, able to deliver more than once. */
+async function session(variant?: SamlVariant) {
   const received: Record<string, string>[] = [];
   const acs = await startServer({
     'POST /callback': (req, res) => {
@@ -2367,35 +2840,62 @@ async function deliver(variant: SamlVariant | undefined, acsPath = '/callback') 
     },
   });
   const idp = await startMockSamlIdp(variant ? { variant } : {});
-  const acsUrl = `${acs.url}${acsPath}`;
+  const acsUrl = `${acs.url}/callback`;
   const xml =
     `<samlp:AuthnRequest xmlns:samlp="urn:oasis:names:tc:SAML:2.0:protocol" ` +
-    `ID="_req1" Version="2.0" AssertionConsumerServiceURL="${acsUrl}"/>`;
+    `ID="${REQUEST_ID}" Version="2.0" AssertionConsumerServiceURL="${acsUrl}"/>`;
   const request = deflateRawSync(Buffer.from(xml, 'utf8')).toString('base64');
-  await visit(`${idp.url}/sso?SAMLRequest=${encodeURIComponent(request)}`);
-  const payload = received[0].SAMLResponse;
-  const cert = idp.certificatePem;
-  await idp.close();
-  await acs.close();
-  return { payload, cert, acsUrl };
+
+  return {
+    idp,
+    acsUrl,
+    async deliver(): Promise<string> {
+      await visit(`${idp.url}/sso?SAMLRequest=${encodeURIComponent(request)}`);
+      return received[received.length - 1].SAMLResponse;
+    },
+    async close() {
+      await idp.close();
+      await acs.close();
+    },
+  };
 }
 
-function verifier(cert: string, acsUrl: string) {
+function verifier(cert: string, acsUrl: string, cacheProvider: CacheProvider): SAML {
   return new SAML({
     idpCert: cert,
+    idpIssuer: 'mock-idp',
     issuer: 'mock-sp',
-    callbackUrl: acsUrl,
     audience: 'mock-sp',
+    callbackUrl: acsUrl,
     wantAssertionsSigned: true,
+    // Task 8 signs the Assertion, as SAP identity providers do. Left at its
+    // default of true, this option would fail every case for the same reason.
+    wantAuthnResponseSigned: false,
+    validateInResponseTo: ValidateInResponseTo.always,
+    cacheProvider,
   });
 }
 
-describe('the mock signs what an independent verifier accepts', () => {
+/** A verifier that has seen nothing yet, with the request ID it expects. */
+function freshVerifier(cert: string, acsUrl: string): SAML {
+  const cache = requestIdCache();
+  cache.seed(REQUEST_ID);
+  return verifier(cert, acsUrl, cache);
+}
+
+describe('an independent verifier judges the mock', () => {
   it('accepts the valid assertion', async () => {
-    const { payload, cert, acsUrl } = await deliver(undefined);
-    await expect(
-      verifier(cert, acsUrl).validatePostResponseAsync({ SAMLResponse: payload }),
-    ).resolves.toBeDefined();
+    const s = await session();
+    try {
+      const payload = await s.deliver();
+      await expect(
+        freshVerifier(s.idp.certificatePem, s.acsUrl).validatePostResponseAsync({
+          SAMLResponse: payload,
+        }),
+      ).resolves.toBeDefined();
+    } finally {
+      await s.close();
+    }
   }, 20000);
 
   const rejected: SamlVariant[] = [
@@ -2407,19 +2907,91 @@ describe('the mock signs what an independent verifier accepts', () => {
     'notYetValid',
     'wrongAudience',
     'wrongInResponseTo',
-    'wrongDestination',
-    'wrongRecipient',
     'wrongIssuer',
   ];
 
   for (const variant of rejected) {
     it(`rejects ${variant}`, async () => {
-      const { payload, cert, acsUrl } = await deliver(variant);
-      await expect(
-        verifier(cert, acsUrl).validatePostResponseAsync({ SAMLResponse: payload }),
-      ).rejects.toThrow();
+      const s = await session(variant);
+      try {
+        const payload = await s.deliver();
+        await expect(
+          freshVerifier(s.idp.certificatePem, s.acsUrl).validatePostResponseAsync({
+            SAMLResponse: payload,
+          }),
+        ).rejects.toThrow();
+      } finally {
+        await s.close();
+      }
     }, 20000);
   }
+
+  // These two the verifier does not check at all. Asserting rejection would be
+  // asserting a check that does not exist; asserting the corruption is present
+  // keeps the variant honest and names the gap our own validator must close.
+  // If either of these ever fails, node-saml gained a check — move the variant
+  // into `rejected` above rather than relaxing the assertion.
+  const unchecked: Array<{ variant: SamlVariant; field: RegExp }> = [
+    { variant: 'wrongDestination', field: /Destination="([^"]*)"/ },
+    { variant: 'wrongRecipient', field: /Recipient="([^"]*)"/ },
+  ];
+
+  for (const { variant, field } of unchecked) {
+    it(`corrupts ${variant}, which this verifier does not examine`, async () => {
+      const s = await session(variant);
+      try {
+        const payload = await s.deliver();
+        const xml = Buffer.from(payload, 'base64').toString('utf8');
+        const value = field.exec(xml)?.[1];
+        expect(value).toBeTruthy();
+        expect(value).not.toBe(s.acsUrl);
+        await expect(
+          freshVerifier(s.idp.certificatePem, s.acsUrl).validatePostResponseAsync({
+            SAMLResponse: payload,
+          }),
+        ).resolves.toBeDefined();
+      } finally {
+        await s.close();
+      }
+    }, 20000);
+  }
+
+  // Replay, end to end. The first delivery is accepted. The second carries the
+  // same assertion ID and is still individually valid — a verifier that has
+  // seen nothing accepts it — and is rejected only by the one that remembers.
+  // That asymmetry is the whole of issue #19 stated as a test.
+  it('replays an assertion that only a remembering verifier rejects', async () => {
+    const s = await session();
+    try {
+      const cache = requestIdCache();
+      cache.seed(REQUEST_ID);
+      const remembers = verifier(s.idp.certificatePem, s.acsUrl, cache);
+
+      const first = await s.deliver();
+      const firstId = s.idp.lastAssertionId();
+      expect(firstId).toBeTruthy();
+      await expect(
+        remembers.validatePostResponseAsync({ SAMLResponse: first }),
+      ).resolves.toBeDefined();
+
+      s.idp.repeatLastAssertion();
+      const second = await s.deliver();
+      expect(Buffer.from(second, 'base64').toString('utf8')).toContain(`ID="${firstId}"`);
+
+      await expect(
+        remembers.validatePostResponseAsync({ SAMLResponse: second }),
+      ).rejects.toThrow();
+
+      // The dangerous half: nothing is wrong with the replayed assertion.
+      await expect(
+        freshVerifier(s.idp.certificatePem, s.acsUrl).validatePostResponseAsync({
+          SAMLResponse: second,
+        }),
+      ).resolves.toBeDefined();
+    } finally {
+      await s.close();
+    }
+  }, 30000);
 });
 ```
 
@@ -2429,9 +3001,9 @@ describe('the mock signs what an independent verifier accepts', () => {
 npm test -- src/__tests__/samlVerification.test.ts
 ```
 
-Expected: the valid case passes and every variant is rejected.
+Expected: PASS — one valid case, nine rejections, two structural cases, and the replay sequence.
 
-**If a variant is accepted, that is the finding this task exists for.** Do not weaken the assertion. Establish which is wrong — the mock producing a corruption `node-saml` does not check, or our understanding of what the variant should break — and report it. Some variants may need verifier options set (for example `wrongIssuer` needs the verifier to be told which issuer it trusts, and `wrongInResponseTo` needs a tracked request ID); configuring the verifier correctly is part of this task, silently dropping a variant is not.
+**A variant behaving unexpectedly is the finding this task exists for.** Do not weaken an assertion to make the suite green. If a variant in `rejected` is accepted, establish which side is wrong — the mock producing a corruption the verifier does not check, or our understanding of what the variant should break — and report it. Moving a variant from `rejected` into `unchecked` is a legitimate outcome **only** with the verifier's source cited for why the field is not examined; silently dropping one is not.
 
 - [ ] **Step 3: Commit**
 
@@ -2479,7 +3051,7 @@ Remove `AUTH_MOCKS_VERSION` — the placeholder from Task 1 has served its purpo
 
 - [ ] **Step 2: Write the README**
 
-Cover: what the package is for; the `visit` + `openUrl` wiring with the worked example from the spec; that mocks are strict by default and what each refuses; the SAML variants table; the two-step shape of replay; the `samlBearer: 'strict'` note about RFC 7522 and what a failure there means; and the verification limitation from Task 8. Keep the "these do not replace live testing" statement prominent — in six months someone will otherwise conclude that live runs are obsolete.
+Cover: what the package is for; the `visit` + `openUrl` wiring with the worked example from the spec; that mocks are strict by default and what each refuses — including that a code or refresh token is bound to the client it was issued to; the SAML variants table, marking the two no independent verifier judges; the two-step shape of replay and why an off-the-shelf verifier cannot catch it; the `samlBearer: 'strict'` note about RFC 7522 and what a failure there means; and the verification limitation from Task 8. Keep the "these do not replace live testing" statement prominent — in six months someone will otherwise conclude that live runs are obsolete.
 
 - [ ] **Step 3: Write the CHANGELOG**
 
