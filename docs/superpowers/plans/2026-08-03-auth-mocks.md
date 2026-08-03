@@ -48,6 +48,7 @@ mcp-abap-adt-auth-mocks/
     ├── jwt.ts          # mint a syntactically valid JWT with given iat/exp
     ├── oauthErrors.ts  # RFC 6749 §5.2 error responses, incl. the 401/400 rule
     ├── clientAuth.ts   # client_secret_basic / client_secret_post / public
+    ├── clients.ts      # the client registry and the two binding refusals
     ├── uaa.ts          # /oauth/authorize, /oauth/token (code, refresh, bearer)
     ├── oidc.ts         # discovery, /authorize (PKCE demanded), /token
     ├── signing.ts      # per-instance self-signed cert, XML-DSig
@@ -55,7 +56,9 @@ mcp-abap-adt-auth-mocks/
     └── browser.ts      # visit(url) — follows redirects, submits forms
 ```
 
-`jwt.ts`, `oauthErrors.ts` and `clientAuth.ts` are separate because both `uaa.ts` and `oidc.ts` need them identically, and because each is a rule from the spec that deserves its own tests rather than being buried in a route handler.
+`jwt.ts`, `oauthErrors.ts`, `clientAuth.ts` and `clients.ts` are separate because both `uaa.ts` and `oidc.ts` need them identically, and because each is a rule from the spec that deserves its own tests rather than being buried in a route handler.
+
+`clients.ts` in particular exists so the client-binding rule has exactly one implementation. An earlier draft told the OIDC mock to copy the registry and both refusals out of `uaa.ts`; the owner ruled against it. Two copies of a security check drift, and the check that "cannot be optional" is precisely the one that must not exist twice.
 
 ---
 
@@ -840,13 +843,19 @@ git commit -m "feat: JWT minting, RFC 6749 errors and client authentication"
 ### Task 4: The UAA mock — authorization code
 
 **Files:**
-- Create: `src/uaa.ts`
+- Create: `src/clients.ts`, `src/uaa.ts`
 - Test: `src/__tests__/uaa.test.ts`
 
 **Interfaces:**
 - Consumes: `startServer`, `MockHandle`, `RecordedRequest` (Task 2); `mintJwt`, `sendOAuthError`, `readClientAuth` (Task 3).
-- Produces:
+- Produces, from `src/clients.ts` — the single implementation of the binding rule, used by Task 7 too:
   - `interface UaaClient { clientId: string; clientSecret: string }`
+  - `interface ClientRegistryOptions { clients?: UaaClient[]; clientId?: string; clientSecret?: string }`
+  - `interface ClientRegistry { all: UaaClient[]; find(clientId: string | undefined): UaaClient | undefined }`
+  - `createClientRegistry(options?: ClientRegistryOptions): ClientRegistry`
+  - `refusedUnregisteredClient(res, registry, clientId): boolean`
+  - `refusedForeignCode(res, issuedTo, authenticatedAs): boolean`
+- Produces, from `src/uaa.ts`:
   - `interface UaaOptions { clients?: UaaClient[]; clientId?: string; clientSecret?: string; codeLifetimeMs?: number; accessTokenLifetimeSeconds?: number; authorize?: 'allow' | 'deny'; requireClientSecret?: boolean }`
   - `interface MockUaa extends MockHandle { }`
   - `startMockUaa(options?: UaaOptions): Promise<MockUaa>`
@@ -858,6 +867,90 @@ client it was issued to; a server that forgets this lets any client it knows
 redeem any code it issued. Proving the refusal needs two registered clients, so
 the mock keeps a list. `clientId`/`clientSecret` remain as shorthand for the
 common single-client case and are ignored when `clients` is given.
+
+**Why it lives in its own file.** Task 7's OIDC mock enforces the same rule. One
+implementation, imported twice — a security check that exists in two copies
+drifts, and this one is the check the plan calls non-optional.
+
+Write `src/clients.ts` first:
+
+```ts
+/**
+ * The client registry, and the two refusals that keep a credential with the
+ * client it was issued to.
+ *
+ * Both mocks import this. Authenticating a caller answers "do I know you";
+ * these answer "is this yours", which is a different question and the one a
+ * forgetful server gets wrong.
+ */
+
+import type * as http from 'node:http';
+import { sendOAuthError } from './oauthErrors';
+
+export interface UaaClient {
+  clientId: string;
+  clientSecret: string;
+}
+
+export interface ClientRegistryOptions {
+  /** Registered clients. A test proving a code cannot cross a boundary uses two. */
+  clients?: UaaClient[];
+  /** Shorthand for a single registered client. Ignored when `clients` is given. */
+  clientId?: string;
+  clientSecret?: string;
+}
+
+export interface ClientRegistry {
+  /** Registered clients, in declaration order. */
+  all: UaaClient[];
+  find(clientId: string | undefined): UaaClient | undefined;
+}
+
+export function createClientRegistry(options: ClientRegistryOptions = {}): ClientRegistry {
+  const all = options.clients ?? [
+    {
+      clientId: options.clientId ?? 'mock-client',
+      clientSecret: options.clientSecret ?? 'mock-secret',
+    },
+  ];
+  return {
+    all,
+    find: (clientId) => all.find((c) => c.clientId === clientId),
+  };
+}
+
+/**
+ * RFC 6749 §4.1.2.1: an unregistered client means the redirect_uri it supplied
+ * cannot be trusted either, so this error is answered directly and never
+ * redirected — redirecting it would hand an attacker a redirector.
+ *
+ * Returns true when it answered, meaning the caller must stop.
+ */
+export function refusedUnregisteredClient(
+  res: http.ServerResponse,
+  registry: ClientRegistry,
+  clientId: string | undefined,
+): boolean {
+  if (clientId && registry.find(clientId)) return false;
+  sendOAuthError(res, 'invalid_request', 'client_id is missing or not registered');
+  return true;
+}
+
+/**
+ * A code belongs to the client it was issued to.
+ *
+ * Returns true when it answered, meaning the caller must stop.
+ */
+export function refusedForeignCode(
+  res: http.ServerResponse,
+  issuedTo: string,
+  authenticatedAs: string | undefined,
+): boolean {
+  if (issuedTo === authenticatedAs) return false;
+  sendOAuthError(res, 'invalid_grant', 'the code was issued to a different client');
+  return true;
+}
+```
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -1125,24 +1218,17 @@ Expected: FAIL — `Cannot find module '../uaa'`.
 
 import { randomUUID } from 'node:crypto';
 import { readClientAuth } from './clientAuth';
+import {
+  type ClientRegistryOptions,
+  createClientRegistry,
+  refusedForeignCode,
+  refusedUnregisteredClient,
+} from './clients';
 import { mintJwt } from './jwt';
 import { sendOAuthError } from './oauthErrors';
 import { type MockHandle, startServer } from './server';
 
-export interface UaaClient {
-  clientId: string;
-  clientSecret: string;
-}
-
-export interface UaaOptions {
-  /**
-   * Registered clients. Defaults to one. A test proving that a code cannot
-   * cross a client boundary registers two.
-   */
-  clients?: UaaClient[];
-  /** Shorthand for a single registered client. Ignored when `clients` is given. */
-  clientId?: string;
-  clientSecret?: string;
+export interface UaaOptions extends ClientRegistryOptions {
   /** Short by default so an expiry test does not have to wait. */
   codeLifetimeMs?: number;
   accessTokenLifetimeSeconds?: number;
@@ -1160,14 +1246,7 @@ interface IssuedCode {
 }
 
 export async function startMockUaa(options: UaaOptions = {}): Promise<MockUaa> {
-  const clients: UaaClient[] = options.clients ?? [
-    {
-      clientId: options.clientId ?? 'mock-client',
-      clientSecret: options.clientSecret ?? 'mock-secret',
-    },
-  ];
-  const findClient = (id: string | undefined): UaaClient | undefined =>
-    clients.find((c) => c.clientId === id);
+  const registry = createClientRegistry(options);
   const codeLifetimeMs = options.codeLifetimeMs ?? 2000;
   const accessLifetime = options.accessTokenLifetimeSeconds ?? 3600;
   const requireSecret = options.requireClientSecret !== false;
@@ -1182,13 +1261,8 @@ export async function startMockUaa(options: UaaOptions = {}): Promise<MockUaa> {
         sendOAuthError(res, 'invalid_request', 'redirect_uri is required');
         return;
       }
-      // RFC 6749 §4.1.2.1: with an unregistered client the redirect_uri cannot
-      // be trusted either, so this error is shown here and never redirected.
       const requestedClientId = req.query.client_id;
-      if (!requestedClientId || !findClient(requestedClientId)) {
-        sendOAuthError(res, 'invalid_request', 'client_id is missing or not registered');
-        return;
-      }
+      if (refusedUnregisteredClient(res, registry, requestedClientId)) return;
       const target = new URL(redirectUri);
       if (denies) {
         target.searchParams.set('error', 'access_denied');
@@ -1197,7 +1271,8 @@ export async function startMockUaa(options: UaaOptions = {}): Promise<MockUaa> {
         const code = randomUUID();
         codes.set(code, {
           redirectUri,
-          clientId: requestedClientId,
+          // Non-null: refusedUnregisteredClient returned false, so it is set.
+          clientId: requestedClientId as string,
           issuedAt: Date.now(),
           used: false,
         });
@@ -1217,7 +1292,7 @@ export async function startMockUaa(options: UaaOptions = {}): Promise<MockUaa> {
         });
         return;
       }
-      const client = findClient(auth.clientId);
+      const client = registry.find(auth.clientId);
       if (!client || (requireSecret && auth.clientSecret !== client.clientSecret)) {
         sendOAuthError(res, 'invalid_client', 'unknown client', {
           usedAuthorizationHeader: auth.usedAuthorizationHeader,
@@ -1235,13 +1310,9 @@ export async function startMockUaa(options: UaaOptions = {}): Promise<MockUaa> {
         sendOAuthError(res, 'invalid_grant', 'unknown code');
         return;
       }
-      // The code belongs to the client it was issued to. Without this a server
-      // that knows two clients lets either redeem the other's code, and the
-      // authenticated identity in the token bears no relation to the consent.
-      if (issued.clientId !== auth.clientId) {
-        sendOAuthError(res, 'invalid_grant', 'the code was issued to a different client');
-        return;
-      }
+      // Without this, a server that knows two clients lets either redeem the
+      // other's code and the identity in the token bears no relation to consent.
+      if (refusedForeignCode(res, issued.clientId, auth.clientId)) return;
       if (issued.used) {
         sendOAuthError(res, 'invalid_grant', 'code already used');
         return;
@@ -1296,7 +1367,7 @@ Expected: PASS, ten cases.
 
 ```bash
 npm run lint:check && npm run build
-git add src/uaa.ts src/__tests__/uaa.test.ts
+git add src/clients.ts src/uaa.ts src/__tests__/uaa.test.ts
 git commit -m "feat: mock UAA authorization code flow, strict by default"
 ```
 
@@ -1683,7 +1754,7 @@ Implement the mint helper by minting an expired JWT and registering a refresh to
   const handle = await startServer({ /* routes above */ });
   return {
     ...handle,
-    mintExpiredAccessWithValidRefresh(clientId = clients[0].clientId) {
+    mintExpiredAccessWithValidRefresh(clientId = registry.all[0].clientId) {
       return {
         accessToken: mintJwt({ expiresInSeconds: -60 }),
         refreshToken: issueRefreshToken(clientId),
@@ -1954,7 +2025,7 @@ git commit -m "feat: a fake browser that follows redirects and submits forms"
 - Test: `src/__tests__/oidc.test.ts`
 
 **Interfaces:**
-- Consumes: `startServer`, `mintJwt`, `sendOAuthError`, `readClientAuth`.
+- Consumes: `startServer`, `mintJwt`, `sendOAuthError`, `readClientAuth`, and from `src/clients.ts` (Task 4): `createClientRegistry`, `refusedUnregisteredClient`, `refusedForeignCode`, `ClientRegistryOptions`.
 - Produces:
   - `interface OidcOptions extends UaaOptions { state?: 'mirror' | 'wrongState' | 'missingState' }`
   - `startMockOidc(options?: OidcOptions): Promise<MockHandle>` serving `/.well-known/openid-configuration`, `/authorize`, `/token`.
@@ -1965,7 +2036,7 @@ Two rules distinguish it from the UAA mock:
 
 **`state` is mirrored, never judged.** Validating `state` is the client's duty, and a mock that checked it would be doing the client's job while hiding whether the client does it. `OidcBrowserProvider` sends no `state` today, so a test written against this mock is what makes that visible.
 
-**The code is bound to its client, exactly as in Task 4.** `OidcOptions extends UaaOptions`, so it inherits the client registry: `/authorize` refuses an unregistered `client_id` without redirecting, the issued code records which client asked, and `/token` refuses a code presented by a different one. This is spelled out rather than left to "model it on `uaa.ts`" because it is the single rule most easily lost in translation, and losing it silently reproduces the defect in both mocks at once.
+**The code is bound to its client, by the same code as Task 4.** `OidcOptions extends UaaOptions`, so it inherits the registry options, and the enforcement is imported from `src/clients.ts` — `createClientRegistry`, `refusedUnregisteredClient`, `refusedForeignCode`. Do not reimplement any of the three. This rule is the one most easily lost in translation, and a second copy of a security check is how the two mocks come to disagree about it.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -2256,7 +2327,7 @@ Expected: FAIL — `Cannot find module '../oidc'`.
 
 - [ ] **Step 3: Implement `src/oidc.ts`**
 
-Model it on `src/uaa.ts`: same client registry and `findClient` lookup, same code store, same error helper, and the same two client checks — the unregistered-`client_id` refusal at `/authorize` and the `issued.clientId !== auth.clientId` refusal at `/token`. Copy both; neither is optional here. The differences are the three routes, the PKCE demand at `/authorize`, the `S256` comparison at `/token`, and the `state` handling:
+Model it on `src/uaa.ts`: same code store, same error helper, and the same two client checks — but **import** them from `src/clients.ts` rather than restating them. `createClientRegistry(options)` builds the registry, `refusedUnregisteredClient` guards `/authorize`, `refusedForeignCode` guards `/token`. Neither guard is optional here, and neither should exist twice. The differences are the three routes, the PKCE demand at `/authorize`, the `S256` comparison at `/token`, and the `state` handling:
 
 ```ts
 import { createHash, randomUUID } from 'node:crypto';
@@ -2279,10 +2350,7 @@ error helper, then demands PKCE through it:
         return;
       }
       const requestedClientId = req.query.client_id;
-      if (!requestedClientId || !findClient(requestedClientId)) {
-        sendOAuthError(res, 'invalid_request', 'client_id is missing or not registered');
-        return;
-      }
+      if (refusedUnregisteredClient(res, registry, requestedClientId)) return;
 
       const target = new URL(redirectUri);
       // Past this line the redirect_uri is trusted, so errors go to it.
@@ -2310,6 +2378,11 @@ error helper, then demands PKCE through it:
 Store `challenge` alongside the code. At `/token`, after the redirect_uri check:
 
 ```ts
+      // The binding check comes first, exactly as in uaa.ts, and by the same
+      // function — a code redeemed by the wrong client is refused before its
+      // verifier is even considered.
+      if (refusedForeignCode(res, issued.clientId, auth.clientId)) return;
+
       const verifier = req.body.code_verifier ?? '';
       const derived = createHash('sha256').update(verifier).digest('base64url');
       if (derived !== issued.challenge) {
@@ -2320,7 +2393,7 @@ Store `challenge` alongside the code. At `/token`, after the redirect_uri check:
 
 `state` is handled by one helper used by **both** the success redirect and
 `redirectError`, so the error path is not a place where a rule quietly differs.
-Define it beside `findClient`:
+Define it beside the registry:
 
 ```ts
   /**
