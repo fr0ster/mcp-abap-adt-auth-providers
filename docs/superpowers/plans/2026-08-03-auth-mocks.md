@@ -697,6 +697,25 @@ describe('sendOAuthError', () => {
     }
   });
 
+  // Without this case the rule is only half protected: drop the
+  // `error === 'invalid_client'` conjunct and every other test still passes,
+  // because none of them pairs a different error with the header.
+  it('answers 400 for another error that did arrive via the header', async () => {
+    const s = await startServer({
+      'GET /e': (_r, res) =>
+        sendOAuthError(res, 'invalid_grant', 'unknown code', {
+          usedAuthorizationHeader: true,
+        }),
+    });
+    try {
+      const res = await fetch(`${s.url}/e`);
+      expect(res.status).toBe(400);
+      expect(res.headers.get('www-authenticate')).toBeNull();
+    } finally {
+      await s.close();
+    }
+  });
+
   it('answers 400 for invalid_client sent in the body', async () => {
     const s = await startServer({
       'GET /e': (_r, res) =>
@@ -836,7 +855,7 @@ export function readClientAuth(req: RecordedRequest): ClientAuth {
 npm test -- src/__tests__/jwt.test.ts src/__tests__/clientAuth.test.ts src/__tests__/oauthErrors.test.ts
 ```
 
-Expected: PASS, twelve cases.
+Expected: PASS, thirteen cases.
 
 - [ ] **Step 5: Commit**
 
