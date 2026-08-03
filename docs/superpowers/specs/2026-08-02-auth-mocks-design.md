@@ -36,6 +36,8 @@ remove the load from it.
 **In, for the first version:**
 
 - UAA `authorization_code`, including refresh
+- the SAML bearer grant at the same token endpoint, so `Saml2BearerProvider` is
+  reachable end to end
 - OIDC authorization code with PKCE, including discovery
 - A SAML IdP that signs, and that can violate each rule issue #19 will enforce — one rule at a time
 
@@ -116,6 +118,24 @@ when the client attempted to authenticate through the `Authorization` header,
 400 otherwise.** A mock that always answered 401 would enshrine behaviour the
 specification does not require — precisely the drift a strict mock is supposed
 to prevent. Tests assert on these codes, so they are part of the contract.
+
+**The SAML bearer grant.** `/oauth/token` also serves
+`grant_type=urn:ietf:params:oauth:grant-type:saml2-bearer`, taking the assertion
+in the `assertion` parameter. Without it `Saml2BearerProvider` cannot be tested
+at flow level at all — it consumes the SAML IdP's output and immediately
+exchanges it, so an IdP mock without a matching token endpoint leaves half that
+provider unreachable.
+
+This one carries a deliberate trap, and it is the point rather than a hazard.
+RFC 7522 §2.1 requires the `assertion` parameter to be a base64url-encoded
+`Assertion`; `exchangeSamlAssertion` forwards the whole base64 `samlp:Response`
+exactly as the ACS received it. Strict mode enforces the RFC, so if our client
+is non-compliant the mock says so on the first run. **A failure there is a
+finding about the client, not a defect in the mock** — and one that belongs to
+issue #19's cycle, where the SAML path is being reworked anyway. A lenient mode
+accepts what we currently send, so this discovery does not block the rest of the
+package; which mode a test uses is explicit, never a default that hides the
+question.
 
 **Access tokens are JWTs, and that is a contract, not a detail.**
 `BaseTokenProvider.parseExpirationFromJWT` splits on `.`, requires exactly three
