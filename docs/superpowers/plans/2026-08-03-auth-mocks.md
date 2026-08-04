@@ -1517,7 +1517,46 @@ describe('refresh grant', () => {
         refresh_token: pair.refreshToken,
       });
       expect(reuse.status).toBe(400);
-      expect((await reuse.json()).error).toBe('invalid_grant');
+      const body = await reuse.json();
+      expect(body.error).toBe('invalid_grant');
+      // Reuse, not merely unknown. Without this assertion the superseded set
+      // could be deleted — the rotation already removes the old token, so the
+      // request would be refused as "unknown" and the test would stay green,
+      // losing the distinction a real server draws between a token that never
+      // existed and one that was rotated away.
+      expect(body.error_description).toMatch(/rotation/i);
+    } finally {
+      await uaa.close();
+    }
+  });
+
+  // A refresh token carries the same authorization a code does, so it crosses a
+  // client boundary just as badly. Without this case the binding check on the
+  // refresh path can be deleted and every other test stays green.
+  it('refuses a refresh token presented by a different client', async () => {
+    const uaa = await startMockUaa({
+      clients: [
+        { clientId: 'first-client', clientSecret: 'first-secret' },
+        { clientId: 'second-client', clientSecret: 'second-secret' },
+      ],
+    });
+    try {
+      const pair = uaa.mintExpiredAccessWithValidRefresh('first-client');
+      const res = await fetch(`${uaa.url}/oauth/token`, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/x-www-form-urlencoded',
+          authorization: basic('second-client', 'second-secret'),
+        },
+        body: new URLSearchParams({
+          grant_type: 'refresh_token',
+          refresh_token: pair.refreshToken,
+        }).toString(),
+      });
+      expect(res.status).toBe(400);
+      const json = await res.json();
+      expect(json.error).toBe('invalid_grant');
+      expect(json.error_description).toMatch(/different client/i);
     } finally {
       await uaa.close();
     }
@@ -1595,7 +1634,9 @@ describe('SAML bearer grant', () => {
   });
 
   // What auth-providers sends today: a whole base64 samlp:Response, with an
-  // Assertion nested inside it.
+  // Assertion nested inside it. Both of RFC 7522's requirements are violated at
+  // once, and the encoding check is the one that fires — plain base64 of this
+  // fixture carries `+` and padding. The next case isolates the other check.
   it('refuses a base64 samlp:Response in strict mode', async () => {
     const uaa = await startMockUaa({ samlBearer: 'strict' });
     try {
@@ -1606,7 +1647,24 @@ describe('SAML bearer grant', () => {
       expect(res.status).toBe(400);
       const json = await res.json();
       expect(json.error).toBe('invalid_grant');
-      expect(json.error_description).toMatch(/Response/);
+      expect(json.error_description).toMatch(/base64url/);
+    } finally {
+      await uaa.close();
+    }
+  });
+
+  // And the mirror image: the content is a perfectly good Assertion and only
+  // the encoding is wrong. Without this case the base64url check can be deleted
+  // and every other bearer test stays green, because the document-element check
+  // catches all of them.
+  it('refuses a well-formed Assertion that is base64 rather than base64url', async () => {
+    const uaa = await startMockUaa({ samlBearer: 'strict' });
+    try {
+      const encoded = Buffer.from(assertionXml, 'utf8').toString('base64');
+      expect(encoded).not.toMatch(/^[A-Za-z0-9_-]+$/);
+      const res = await post(uaa.url, { grant_type: GRANT, assertion: encoded });
+      expect(res.status).toBe(400);
+      expect((await res.json()).error_description).toMatch(/base64url/);
     } finally {
       await uaa.close();
     }
