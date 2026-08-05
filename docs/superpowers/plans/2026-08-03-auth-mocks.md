@@ -2049,6 +2049,80 @@ describe('visit', () => {
     }
   });
 
+  // Three rules the code performs that nothing above would notice losing.
+  it('decodes numeric character references, decimal and hex', async () => {
+    let received: Record<string, string> = {};
+    const s = await startServer({
+      'GET /idp': (_r, res) => {
+        res.setHeader('Content-Type', 'text/html');
+        res.end(
+          `<html><body onload="document.forms[0].submit()">
+           <form method="post" action="/acs">
+             <input type="hidden" name="RelayState" value="&#65;&#x42;&#39;&#x27;"/>
+           </form></body></html>`,
+        );
+      },
+      'POST /acs': (req, res) => {
+        received = req.body;
+        res.end('ok');
+      },
+    });
+    try {
+      await visit(`${s.url}/idp`);
+      expect(received.RelayState).toBe("AB''");
+    } finally {
+      await s.close();
+    }
+  });
+
+  it('stops at a 3xx that carries no Location', async () => {
+    const s = await startServer({
+      'GET /dead-end': (_r, res) => {
+        res.statusCode = 302;
+        res.end('nowhere to go');
+      },
+    });
+    try {
+      const result = await visit(`${s.url}/dead-end`);
+      expect(result.status).toBe(302);
+      expect(result.finalUrl).toBe(`${s.url}/dead-end`);
+      expect(result.body).toBe('nowhere to go');
+    } finally {
+      await s.close();
+    }
+  });
+
+  // An ACS commonly redirects once it has consumed the assertion. A browser
+  // follows; so must this one, and finalUrl must name where it ended up rather
+  // than the form's action.
+  it('keeps following after the form POST, and reports where it landed', async () => {
+    const s = await startServer({
+      'GET /idp': (_r, res) => {
+        res.setHeader('Content-Type', 'text/html');
+        res.end(
+          `<html><body onload="document.forms[0].submit()">
+           <form method="post" action="/acs">
+             <input type="hidden" name="SAMLResponse" value="PHNhbWw+"/>
+           </form></body></html>`,
+        );
+      },
+      'POST /acs': (_r, res) => {
+        res.statusCode = 303;
+        res.setHeader('Location', '/done');
+        res.end();
+      },
+      'GET /done': (_r, res) => res.end('landed'),
+    });
+    try {
+      const result = await visit(`${s.url}/idp`);
+      expect(result.body).toBe('landed');
+      expect(result.finalUrl).toBe(`${s.url}/done`);
+      expect(result.status).toBe(200);
+    } finally {
+      await s.close();
+    }
+  });
+
   it('stops rather than looping forever on a redirect cycle', async () => {
     const s = await startServer({
       'GET /loop': (_r, res) => {
@@ -2155,7 +2229,22 @@ export async function visit(url: string): Promise<VisitResult> {
         method: 'POST',
         headers: { 'content-type': 'application/x-www-form-urlencoded' },
         body: new URLSearchParams(form.fields).toString(),
+        // Manual, like every other fetch here. Left to its default the POST
+        // would follow a redirect on its own, outside the hop cap, and
+        // `finalUrl` below would still name the pre-redirect action.
+        redirect: 'manual',
       });
+      if (posted.status >= 300 && posted.status < 400) {
+        const location = posted.headers.get('location');
+        if (location) {
+          // A browser keeps going after the POST, and an ACS commonly
+          // redirects once it has consumed the assertion. Rejoin the loop so
+          // the hop cap and finalUrl stay honest — the next hop is a GET,
+          // which is what a browser issues after a 302 or 303.
+          current = new URL(location, form.action).toString();
+          continue;
+        }
+      }
       return {
         finalUrl: form.action,
         status: posted.status,
@@ -2176,7 +2265,7 @@ export async function visit(url: string): Promise<VisitResult> {
 npm test -- src/__tests__/browser.test.ts
 ```
 
-Expected: PASS, five cases.
+Expected: PASS, eight cases.
 
 - [ ] **Step 5: Commit**
 
