@@ -2019,6 +2019,36 @@ describe('visit', () => {
     }
   });
 
+  // The ordering inside decodeEntities is a rule, so it needs a case that
+  // breaks when the order changes. `&amp;lt;` is text the server chose to send:
+  // decoding `&amp;` first turns it into `<`, a string the server never sent.
+  // Nothing above distinguishes the two orders — none of those values is
+  // double-escaped.
+  it('decodes each entity once, so &amp;lt; stays literal text', async () => {
+    let received: Record<string, string> = {};
+    const s = await startServer({
+      'GET /idp': (_r, res) => {
+        res.setHeader('Content-Type', 'text/html');
+        res.end(
+          `<html><body onload="document.forms[0].submit()">
+           <form method="post" action="/acs">
+             <input type="hidden" name="RelayState" value="&amp;lt;tag&amp;gt;"/>
+           </form></body></html>`,
+        );
+      },
+      'POST /acs': (req, res) => {
+        received = req.body;
+        res.end('ok');
+      },
+    });
+    try {
+      await visit(`${s.url}/idp`);
+      expect(received.RelayState).toBe('&lt;tag&gt;');
+    } finally {
+      await s.close();
+    }
+  });
+
   it('stops rather than looping forever on a redirect cycle', async () => {
     const s = await startServer({
       'GET /loop': (_r, res) => {
@@ -2146,7 +2176,7 @@ export async function visit(url: string): Promise<VisitResult> {
 npm test -- src/__tests__/browser.test.ts
 ```
 
-Expected: PASS, four cases.
+Expected: PASS, five cases.
 
 - [ ] **Step 5: Commit**
 
