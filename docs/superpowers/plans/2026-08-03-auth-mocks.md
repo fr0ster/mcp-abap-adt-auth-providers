@@ -2350,7 +2350,10 @@ describe('mock OIDC', () => {
       const location = new URL(res.headers.get('location') ?? '');
       expect(location.origin + location.pathname).toBe('http://localhost:61001/callback');
       expect(location.searchParams.get('error')).toBe('invalid_request');
-      expect(location.searchParams.get('error_description')).toMatch(/code_challenge/);
+      // Not /code_challenge/: that substring also appears in the S256 branch's
+      // message ("unsupported code_challenge_method: undefined"), so the
+      // presence check could be deleted with this case still green.
+      expect(location.searchParams.get('error_description')).toMatch(/PKCE is required/);
       // State is mirrored on the error path too — a client that validates it
       // must be able to, or it cannot safely match the error to its request.
       expect(location.searchParams.get('state')).toBe('st-42');
