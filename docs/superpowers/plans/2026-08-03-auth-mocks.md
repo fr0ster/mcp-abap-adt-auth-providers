@@ -880,6 +880,7 @@ git commit -m "feat: JWT minting, RFC 6749 errors and client authentication"
   - `interface ClientRegistryOptions { clients?: UaaClient[]; clientId?: string; clientSecret?: string }`
   - `interface ClientRegistry { all: UaaClient[]; find(clientId: string | undefined): UaaClient | undefined }`
   - `createClientRegistry(options?: ClientRegistryOptions): ClientRegistry`
+  - `authenticateClient(req, res, registry, requireSecret): { auth, client } | null`
   - `refusedUnregisteredClient(res, registry, clientId): boolean`
   - `refusedForeignCredential(res, credential, issuedTo, authenticatedAs): boolean`
 - Produces, from `src/uaa.ts`:
@@ -912,7 +913,9 @@ Write `src/clients.ts` first:
  */
 
 import type * as http from 'node:http';
+import { type ClientAuth, readClientAuth } from './clientAuth';
 import { sendOAuthError } from './oauthErrors';
+import type { RecordedRequest } from './server';
 
 export interface UaaClient {
   clientId: string;
@@ -961,6 +964,42 @@ export function refusedUnregisteredClient(
   if (clientId && registry.find(clientId)) return false;
   sendOAuthError(res, 'invalid_request', 'client_id is missing or not registered');
   return true;
+}
+
+/**
+ * Authenticates the caller against the registry: reads the credentials, rejects
+ * a header/body disagreement, and checks the secret.
+ *
+ * Returns null when it has already answered, meaning the caller must stop.
+ * Otherwise returns both the registered client and the credentials as read —
+ * callers need the latter to ask the separate question `refusedForeignCredential`
+ * answers.
+ *
+ * This lives here for the same reason the refusals do: both mocks need it
+ * identically, and a security check kept in two copies drifts. Harden the secret
+ * comparison once and both mocks get it.
+ */
+export function authenticateClient(
+  req: RecordedRequest,
+  res: http.ServerResponse,
+  registry: ClientRegistry,
+  requireSecret: boolean,
+): { auth: ClientAuth; client: UaaClient } | null {
+  const auth = readClientAuth(req);
+  if (auth.conflict) {
+    sendOAuthError(res, 'invalid_client', 'header and body disagree', {
+      usedAuthorizationHeader: auth.usedAuthorizationHeader,
+    });
+    return null;
+  }
+  const client = registry.find(auth.clientId);
+  if (!client || (requireSecret && auth.clientSecret !== client.clientSecret)) {
+    sendOAuthError(res, 'invalid_client', 'unknown client', {
+      usedAuthorizationHeader: auth.usedAuthorizationHeader,
+    });
+    return null;
+  }
+  return { auth, client };
 }
 
 /**
@@ -1301,8 +1340,8 @@ Expected: FAIL — `Cannot find module '../uaa'`.
  */
 
 import { randomUUID } from 'node:crypto';
-import { readClientAuth } from './clientAuth';
 import {
+  authenticateClient,
   type ClientRegistryOptions,
   createClientRegistry,
   refusedForeignCredential,
@@ -1369,20 +1408,9 @@ export async function startMockUaa(options: UaaOptions = {}): Promise<MockUaa> {
     },
 
     'POST /oauth/token': (req, res) => {
-      const auth = readClientAuth(req);
-      if (auth.conflict) {
-        sendOAuthError(res, 'invalid_client', 'header and body disagree', {
-          usedAuthorizationHeader: auth.usedAuthorizationHeader,
-        });
-        return;
-      }
-      const client = registry.find(auth.clientId);
-      if (!client || (requireSecret && auth.clientSecret !== client.clientSecret)) {
-        sendOAuthError(res, 'invalid_client', 'unknown client', {
-          usedAuthorizationHeader: auth.usedAuthorizationHeader,
-        });
-        return;
-      }
+      const authenticated = authenticateClient(req, res, registry, requireSecret);
+      if (!authenticated) return;
+      const { auth, client } = authenticated;
 
       if (req.body.grant_type !== 'authorization_code') {
         sendOAuthError(res, 'unsupported_grant_type', String(req.body.grant_type));
@@ -2284,7 +2312,7 @@ git commit -m "feat: a fake browser that follows redirects and submits forms"
 - Test: `src/__tests__/oidc.test.ts`
 
 **Interfaces:**
-- Consumes: `startServer`, `mintJwt`, `sendOAuthError`, `readClientAuth`, and from `src/clients.ts` (Task 4): `createClientRegistry`, `refusedUnregisteredClient`, `refusedForeignCredential`, `ClientRegistryOptions`.
+- Consumes: `startServer`, `mintJwt`, `sendOAuthError`, `readClientAuth`, and from `src/clients.ts` (Task 4): `createClientRegistry`, `authenticateClient`, `refusedUnregisteredClient`, `refusedForeignCredential`, `ClientRegistryOptions`.
 - Produces:
   - `interface OidcOptions extends UaaOptions { state?: 'mirror' | 'wrongState' | 'missingState' }`
   - `startMockOidc(options?: OidcOptions): Promise<MockHandle>` serving `/.well-known/openid-configuration`, `/authorize`, `/token`.
@@ -2295,7 +2323,7 @@ Two rules distinguish it from the UAA mock:
 
 **`state` is mirrored, never judged.** Validating `state` is the client's duty, and a mock that checked it would be doing the client's job while hiding whether the client does it. `OidcBrowserProvider` sends no `state` today, so a test written against this mock is what makes that visible.
 
-**The code is bound to its client, by the same code as Task 4.** `OidcOptions extends UaaOptions`, so it inherits the registry options, and the enforcement is imported from `src/clients.ts` — `createClientRegistry`, `refusedUnregisteredClient`, `refusedForeignCredential`. Do not reimplement any of the three. This rule is the one most easily lost in translation, and a second copy of a security check is how the two mocks come to disagree about it.
+**The code is bound to its client, by the same code as Task 4.** `OidcOptions extends UaaOptions`, so it inherits the registry options, and the enforcement is imported from `src/clients.ts` — `createClientRegistry`, `authenticateClient`, `refusedUnregisteredClient`, `refusedForeignCredential`. Do not reimplement any of the four. This rule is the one most easily lost in translation, and a second copy of a security check is how the two mocks come to disagree about it.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -2553,6 +2581,29 @@ describe('mock OIDC', () => {
     }
   });
 
+  // The first trust-boundary refusal: with no redirect_uri there is nowhere to
+  // send an error to, so it can only be answered here.
+  it('refuses an authorize request with no redirect_uri at all', async () => {
+    const oidc = await startMockOidc();
+    try {
+      const { challenge } = pkce();
+      const res = await fetch(
+        `${oidc.url}/authorize?${new URLSearchParams({
+          client_id: 'mock-client',
+          response_type: 'code',
+          code_challenge: challenge,
+          code_challenge_method: 'S256',
+        }).toString()}`,
+        { redirect: 'manual' },
+      );
+      expect(res.status).toBe(400);
+      expect(res.headers.get('location')).toBeNull();
+      expect((await res.json()).error).toBe('invalid_request');
+    } finally {
+      await oidc.close();
+    }
+  });
+
   // The other side of the same rule: an unregistered client means the
   // redirect_uri it supplied cannot be trusted either, so this error must NOT
   // travel to the callback — sending it there would hand an attacker a
@@ -2589,7 +2640,7 @@ Expected: FAIL — `Cannot find module '../oidc'`.
 
 - [ ] **Step 3: Implement `src/oidc.ts`**
 
-Model it on `src/uaa.ts`: same code store, same error helper, and the same two client checks — but **import** them from `src/clients.ts` rather than restating them. `createClientRegistry(options)` builds the registry, `refusedUnregisteredClient` guards `/authorize`, `refusedForeignCredential` guards `/token`. Neither guard is optional here, and neither should exist twice. The differences are the three routes, the PKCE demand at `/authorize`, the `S256` comparison at `/token`, and the `state` handling:
+Model it on `src/uaa.ts`: same code store, same error helper — but **import** every client check from `src/clients.ts` rather than restating it. `createClientRegistry(options)` builds the registry, `refusedUnregisteredClient` guards `/authorize`, `authenticateClient` opens `/token`, and `refusedForeignCredential` guards the code it redeems. None of the four is optional here, and none should exist twice. Client authentication in particular reads as boilerplate worth copying; it is a security check, and a copied security check is one that will eventually disagree with its twin. The differences are the three routes, the PKCE demand at `/authorize`, the `S256` comparison at `/token`, and the `state` handling:
 
 ```ts
 import { createHash, randomUUID } from 'node:crypto';
@@ -2696,7 +2747,7 @@ And the discovery document:
 npm test -- src/__tests__/oidc.test.ts
 ```
 
-Expected: PASS, ten cases.
+Expected: PASS, eleven cases.
 
 - [ ] **Step 5: Commit**
 
