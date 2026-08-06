@@ -2857,6 +2857,35 @@ describe('signing', () => {
     verifier.loadSignature(signature as unknown as Node);
     expect(verifier.checkSignature(signed)).toBe(false);
   });
+
+  // `referenceXPath` is part of signXml's public signature but none of the
+  // cases above ever pass it, so a bug that silently ignored the option
+  // (always signing the default Assertion match) would go unnoticed. This
+  // proves the option actually narrows what gets signed: altering content
+  // outside the referenced element leaves the signature valid; altering the
+  // referenced element itself invalidates it.
+  it('signs only the element selected by a custom referenceXPath', () => {
+    const key = generateKeyMaterial();
+    const doc = `<Root xmlns="urn:test" ID="_root"><A ID="_a">alpha</A><B ID="_b">beta</B></Root>`;
+    const signed = signXml(doc, key, {
+      referenceXPath: "//*[local-name(.)='B']",
+    });
+
+    const verify = (xml: string): boolean => {
+      const parsed = new DOMParser().parseFromString(xml, 'text/xml');
+      const signature = parsed.getElementsByTagNameNS(
+        'http://www.w3.org/2000/09/xmldsig#',
+        'Signature',
+      )[0];
+      const verifier = new SignedXml({ publicCert: key.certificatePem });
+      verifier.loadSignature(signature as unknown as Node);
+      return verifier.checkSignature(xml);
+    };
+
+    expect(verify(signed)).toBe(true);
+    expect(verify(signed.replace('alpha', 'ALPHA-CHANGED'))).toBe(true);
+    expect(verify(signed.replace('beta', 'BETA-CHANGED'))).toBe(false);
+  });
 });
 ```
 
@@ -2931,13 +2960,15 @@ export function signXml(
 
 If `xml-crypto@6`'s constructor or `addReference` signature differs from the above, follow the version actually installed rather than this snippet — check `node_modules/xml-crypto/lib/*.d.ts` — and note the deviation in your report.
 
+Two such deviations are already known from implementing this task, so expect them: `Node` must be imported from `@xmldom/xmldom` rather than taken as a DOM global, because the project has no `dom` lib; and `xml-crypto@6.1.2`'s `checkSignature` **throws** rather than returning `false` when the signature value itself fails against an unrelated certificate — it returns `false` only for a reference-digest mismatch. The wrong-key case therefore asserts `expect(() => …).toThrow(/invalid signature/)`.
+
 - [ ] **Step 4: Run the tests to verify they pass**
 
 ```bash
 npm test -- src/__tests__/signing.test.ts
 ```
 
-Expected: PASS, four cases.
+Expected: PASS, five cases.
 
 - [ ] **Step 5: Record the verification limitation in the README**
 
