@@ -2934,6 +2934,8 @@ export function generateKeyMaterial(): KeyMaterial {
   };
 }
 
+const DEFAULT_REFERENCE = "//*[local-name(.)='Assertion']";
+
 export function signXml(
   xml: string,
   key: KeyMaterial,
@@ -2946,17 +2948,32 @@ export function signXml(
     canonicalizationAlgorithm: 'http://www.w3.org/2001/10/xml-exc-c14n#',
   });
   sig.addReference({
-    xpath: opts.referenceXPath ?? "//*[local-name(.)='Assertion']",
+    xpath: opts.referenceXPath ?? DEFAULT_REFERENCE,
     digestAlgorithm: 'http://www.w3.org/2001/04/xmlenc#sha256',
     transforms: [
       'http://www.w3.org/2000/09/xmldsig#enveloped-signature',
       'http://www.w3.org/2001/10/xml-exc-c14n#',
     ],
   });
-  sig.computeSignature(xml);
+  // The Signature must end up INSIDE the element it references. xml-crypto's
+  // default appends it to the document root instead, and node-saml rejects that
+  // outright: it requires signature.parentNode === referencedNode as an
+  // anti-signature-wrapping check, which every real identity provider satisfies.
+  // Without this option the mock produces a response no SAML library accepts —
+  // and, far worse, one that every corruption variant is then rejected *for*,
+  // so their own corruption logic goes untested. Task 10 found exactly that.
+  sig.computeSignature(xml, {
+    location: { reference: opts.referenceXPath ?? DEFAULT_REFERENCE, action: 'append' },
+  });
   return sig.getSignedXml();
 }
 ```
+
+A real identity provider places the `Signature` immediately after the
+`Assertion`'s `Issuer`, which is where the SAML schema wants it. If
+`{ reference: "//*[local-name(.)='Assertion']/*[local-name(.)='Issuer']", action: 'after' }`
+verifies, prefer it and say so; `append` is the fallback that satisfies the
+parent-node rule without matching schema order.
 
 If `xml-crypto@6`'s constructor or `addReference` signature differs from the above, follow the version actually installed rather than this snippet — check `node_modules/xml-crypto/lib/*.d.ts` — and note the deviation in your report.
 
@@ -3487,6 +3504,30 @@ describe('an independent verifier judges the mock', () => {
     'wrongIssuer',
   ];
 
+  /**
+   * Why each variant must be rejected — not merely that it was.
+   *
+   * `rejects.toThrow()` with no pattern is how this task nearly shipped a lie:
+   * a structural defect in the signature's placement caused seven of these nine
+   * to be refused for that one unrelated reason, so their corruption logic
+   * could have been deleted with every case still green. Pin the reason.
+   *
+   * Fill each pattern from the message node-saml actually produces — do not
+   * guess — and make each specific enough that another variant's message would
+   * not match it. Record the observed messages in your report.
+   */
+  const REASON: Record<string, RegExp> = {
+    unsigned: /…/,
+    wrongKey: /…/,
+    tamperedAfterSign: /…/,
+    statusFailure: /…/,
+    expired: /…/,
+    notYetValid: /…/,
+    wrongAudience: /…/,
+    wrongInResponseTo: /…/,
+    wrongIssuer: /…/,
+  };
+
   for (const variant of rejected) {
     it(`rejects ${variant}`, async () => {
       const s = await session(variant);
@@ -3496,7 +3537,7 @@ describe('an independent verifier judges the mock', () => {
           freshVerifier(s.idp.certificatePem, s.acsUrl).validatePostResponseAsync({
             SAMLResponse: payload,
           }),
-        ).rejects.toThrow();
+        ).rejects.toThrow(REASON[variant]);
       } finally {
         await s.close();
       }
