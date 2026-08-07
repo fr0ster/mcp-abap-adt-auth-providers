@@ -3195,6 +3195,27 @@ describe('mock SAML IdP', () => {
     }
   });
 
+  // Empty and absent are different messages. `RelayState=` is a value the
+  // client chose to send; omitting the parameter is not. Replace the
+  // `=== undefined` check with a truthy one and every other case stays green.
+  it('carries an empty RelayState, and omits the field when there was none', async () => {
+    const acs = await startAcs();
+    const idp = await startMockSamlIdp();
+    try {
+      const request = encodeURIComponent(authnRequest(`${acs.url}/callback`));
+
+      await visit(`${idp.url}/sso?SAMLRequest=${request}&RelayState=`);
+      expect(acs.received).toHaveLength(1);
+      expect(acs.received[0].RelayState).toBe('');
+
+      const without = await (await fetch(`${idp.url}/sso?SAMLRequest=${request}`)).text();
+      expect(without).not.toContain('name="RelayState"');
+    } finally {
+      await idp.close();
+      await acs.close();
+    }
+  });
+
   // Replay is a sequence: the same assertion, delivered twice. In isolation the
   // second delivery is valid, which is exactly why a verifier must remember.
   it('repeats a previous assertion ID on demand', async () => {
@@ -3295,7 +3316,13 @@ ${relay}
 npm test -- src/__tests__/saml.test.ts
 ```
 
-Expected: PASS, nine cases.
+Expected: PASS, ten cases from this file.
+
+Note what this file does **not** cover, and add it: only `wrongDestination` and
+`wrongInResponseTo` have a case above, while the variants table defines eleven.
+The strict-by-default rule wants one case per variant, asserting the named field
+changed **and** that the neighbouring fields did not — a variant that corrupts
+two things at once destroys Task 10's ability to attribute a rejection.
 
 - [ ] **Step 5: Commit**
 
