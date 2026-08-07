@@ -3528,7 +3528,11 @@ describe('an independent verifier judges the mock', () => {
     wrongIssuer: /…/,
   };
 
-  for (const variant of rejected) {
+  // Derived from REASON, not from a separate list. Typed `Record<string, …>`,
+  // a missing entry would compile and `rejects.toThrow(undefined)` degrades to
+  // "throws anything" — silently restoring the defect this table exists to
+  // eliminate. Deriving the loop makes the two inseparable.
+  for (const variant of Object.keys(REASON) as SamlVariant[]) {
     it(`rejects ${variant}`, async () => {
       const s = await session(variant);
       try {
@@ -3641,9 +3645,14 @@ describe('an independent verifier judges the mock', () => {
 
       const another = await s.deliver();
       expect(s.idp.lastAssertionId()).not.toBe(firstId);
+      // Pinned, like every other rejection here. A bare toThrow() would stay
+      // green if the signature placement regressed and this threw
+      // "Referenced node does not refer to it's parent element" instead — the
+      // test would keep claiming the request-ID cache is one-shot while
+      // proving nothing of the kind.
       await expect(
         remembers.validatePostResponseAsync({ SAMLResponse: another }),
-      ).rejects.toThrow();
+      ).rejects.toThrow(/^InResponseTo is not valid$/);
     } finally {
       await s.close();
     }
