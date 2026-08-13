@@ -14,7 +14,7 @@ then derives the session lifetime with a regular expression over the decoded,
 unverified XML:
 
 ```ts
-const decoded = Buffer.from(samlResponse, 'base64').toString('utf8');
+const decoded = Buffer.from(samlResponse, "base64").toString("utf8");
 const match = decoded.match(/NotOnOrAfter="([^"]+)"/);
 ```
 
@@ -115,7 +115,10 @@ export interface ValidatedAssertion {
  * check that failed.
  */
 export interface IAssertionValidator {
-  validate(samlResponse: string, context: AssertionContext): Promise<ValidatedAssertion>;
+  validate(
+    samlResponse: string,
+    context: AssertionContext,
+  ): Promise<ValidatedAssertion>;
 }
 
 /** Remembers assertion IDs so a replay is refused. */
@@ -136,19 +139,19 @@ Each step has its own refusal reason. No two share a message, so no test can
 pass for a neighbouring check's reason — a lesson the `auth-mocks` work paid
 for twice.
 
-| # | Check | Refused when |
-| --- | --- | --- |
-| 1 | Parses as XML, document element is `samlp:Response` | it is not |
-| 2 | Signature valid against `idpCertificates` | absent, wrong key, or content altered after signing |
-| 3 | Signed node is the node read | the reference points elsewhere |
-| 4 | `samlp:Status` | `StatusCode` is not `…:status:Success` |
-| 5 | `Issuer` | present and not `expectedIssuer`, when that is configured |
-| 6 | `Conditions/@NotBefore` | in the future, beyond `clockSkewMs` |
-| 7 | `Conditions/@NotOnOrAfter` | in the past, beyond `clockSkewMs` |
-| 8 | `AudienceRestriction/Audience` | does not contain `context.audience` |
-| 9 | `SubjectConfirmationData/@InResponseTo` | not `context.expectedInResponseTo` |
-| 10 | `SubjectConfirmationData/@Recipient`, `Response/@Destination` | present and not `context.acsUrl` |
-| 11 | Replay | the store has seen this `ID` |
+| #   | Check                                                         | Refused when                                              |
+| --- | ------------------------------------------------------------- | --------------------------------------------------------- |
+| 1   | Parses as XML, document element is `samlp:Response`           | it is not                                                 |
+| 2   | Signature valid against `idpCertificates`                     | absent, wrong key, or content altered after signing       |
+| 3   | Signed node is the node read                                  | the reference points elsewhere                            |
+| 4   | `samlp:Status`                                                | `StatusCode` is not `…:status:Success`                    |
+| 5   | `Issuer`                                                      | present and not `expectedIssuer`, when that is configured |
+| 6   | `Conditions/@NotBefore`                                       | in the future, beyond `clockSkewMs`                       |
+| 7   | `Conditions/@NotOnOrAfter`                                    | in the past, beyond `clockSkewMs`                         |
+| 8   | `AudienceRestriction/Audience`                                | does not contain `context.audience`                       |
+| 9   | `SubjectConfirmationData/@InResponseTo`                       | not `context.expectedInResponseTo`                        |
+| 10  | `SubjectConfirmationData/@Recipient`, `Response/@Destination` | present and not `context.acsUrl`                          |
+| 11  | Replay                                                        | the store has seen this `ID`                              |
 
 Steps 4, 5, 10 and 11 are precisely the four things `@node-saml/node-saml` does
 **not** judge on the SSO path, established by reading its source while building
