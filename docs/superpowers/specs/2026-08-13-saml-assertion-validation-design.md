@@ -127,14 +127,25 @@ export interface AssertionContext {
   readonly audience: string;
   /** The ACS the response arrived at; Recipient and Destination must match. */
   readonly acsUrl: string;
-  /** Trusted issuer; the assertion's Issuer must equal it when set. */
+  /**
+   * Trusted issuer; the assertion's `Issuer` must equal it.
+   *
+   * Optional on the interface because a custom validator may establish trust
+   * without it. The shipped default always receives it — `idpEntityId` is
+   * required configuration — so for that validator it is never absent.
+   */
   readonly expectedIssuer?: string;
   readonly logger?: ILogger;
 }
 
 /** What a validated assertion yields to the flow. */
 export interface ValidatedAssertion {
-  /** From the verified document, never from a regex over unverified XML. */
+  /**
+   * The earlier of `Conditions/@NotOnOrAfter` and the bearer
+   * `SubjectConfirmationData/@NotOnOrAfter` — never later than either, so a
+   * session cannot outlive a window the assertion itself closed. From the
+   * verified document, never from a regex over unverified XML.
+   */
   readonly expiresAt: Date;
   readonly assertionId: string;
   readonly nameId?: string;
@@ -190,7 +201,7 @@ for twice.
 | 2   | Signature valid against `idpCertificates`           | absent, wrong key, or content altered after signing                         |
 | 3   | Signed node is the node read                        | the reference points elsewhere                                              |
 | 4   | `samlp:Status`                                      | absent, or `StatusCode` is not `…:status:Success`                           |
-| 5   | `Assertion/Issuer`                                  | **absent**, or not `expectedIssuer` when that is configured                 |
+| 5   | `Assertion/Issuer`                                  | **absent**, or not `context.expectedIssuer`                                 |
 | 5b  | `Response/Issuer`                                   | present and disagreeing with `Assertion/Issuer`                             |
 | 6   | `Conditions`                                        | **absent**                                                                  |
 | 7   | `Conditions/@NotBefore`                             | present and in the future, beyond `clockSkewMs`                             |
@@ -245,6 +256,13 @@ Two of these deserve their citation, because "required" is a choice:
   is not signed. So requiring it costs nothing a conforming identity provider
   would notice.
 
+**Two windows, one expiry.** The assertion carries two `NotOnOrAfter` values
+and the result carries one date: `expiresAt` is the **earlier** of them. Taking
+either alone would let a session outlive a window the assertion itself closed —
+`Conditions` may run past the bearer window or the reverse, and only the minimum
+respects both. That same date is what the replay store is given, so an entry is
+pruned exactly when the assertion it guards could no longer be used anyway.
+
 **`NotOnOrAfter` is required**, because `ValidatedAssertion.expiresAt` is not
 optional: a flow that takes its session lifetime from the assertion cannot be
 handed an assertion with no stated lifetime. It must also parse as a valid
@@ -257,7 +275,8 @@ carries an `Issuer`, the two must agree — a response claiming one issuer while
 wrapping an assertion from another is refused as a mismatch rather than
 silently resolved in favour of either.
 
-Steps 4, 5, 11, 12 and 13 are precisely what `@node-saml/node-saml` does **not**
+Steps 4, 5, 11 and 12, and the `Recipient` half of step 10, are precisely what
+`@node-saml/node-saml` does **not**
 judge on the SSO path, established by reading its source while building
 `auth-mocks`. They are the clearest evidence that this validator is not a
 wrapper around somebody else's library.
@@ -273,7 +292,19 @@ New on the SAML config:
 - `idpCertificates: string[]` — required **when no `assertionValidator` is
   supplied**. Absent or empty is then a configuration error raised before any
   network call.
+- `idpEntityId: string` — required **when no `assertionValidator` is supplied**.
+  The `Issuer` the assertion must name, and the value behind
+  `AssertionContext.expectedIssuer`. Without it the default would establish only
+  that _an_ issuer is present and that the response and assertion agree on it —
+  so an assertion signed with a certificate that is on our rotation list, but
+  issued by somebody else, would pass. Required rather than optional for the
+  same reason the certificates are: this is a value the consumer already holds
+  from the identity provider's metadata, and making it optional would mean
+  shipping a default whose strictest configuration is not the one you get.
 - `spEntityId: string` — the `Audience` the assertion must name.
+- `assertionReplayStore?: IAssertionReplayStore` — a consumer's own, for a
+  deployment running more than one process. Its absence is what the shipped
+  default covers; see "Wiring" for the scope that default has.
 - `clockSkewMs?: number` — default `0`.
 - `authnRequestId?: string` — required whenever the package did not mint an ID
   itself: a pre-built `authorizationUrl`, or a strategy that never called the
@@ -291,6 +322,21 @@ refused. **`auth-providers` goes major; `interfaces` goes minor.**
 ## Wiring
 
 Both providers construct the default validator when the consumer supplies none.
+
+**The default replay store is process-wide, not per provider.** A store held
+per provider instance would be no defence at all: replaying an assertion would
+need only a second provider constructed in the same process, which is a step an
+attacker who can replay at all can certainly take. The shipped default is
+therefore a single module-level store, shared by every default validator in the
+process.
+
+`createInMemoryReplayStore()` is exported so a test — or a consumer wanting
+isolation — can construct its own and pass it as `assertionReplayStore`. The
+suite uses that rather than the shared one, so no test can be made to pass or
+fail by another test's assertions.
+
+The honest limit stays what it was: process-wide means nothing across
+processes, which is precisely why the interface exists.
 
 Unlike an authorization strategy, a validator owns no socket and no timer, so
 `IAssertionValidator` carries no `dispose()` and there is no lifecycle rule to
@@ -311,9 +357,13 @@ provider, and takes its session lifetime from the result.
 A new `AssertionValidationError extends TokenProviderError`, carrying the check
 that failed as a discriminable field, so a consumer can tell "your IdP declined"
 from "this response was not addressed to us" without parsing a message.
-Configuration faults — no certificates, no request ID with a pre-built URL —
-raise the existing `ValidationError` with `missingFields`, because they are the
-same kind of mistake it already reports.
+Configuration faults raise the existing `ValidationError` with `missingFields`,
+because they are the same kind of mistake it already reports: no
+`idpCertificates`, no `idpEntityId`, and no `authnRequestId` in either case that
+needs one — a pre-built `authorizationUrl`, **or** a strategy that returned a
+payload without calling the builder. The message names which of the two
+happened, since the remedy reads differently to a consumer who never configured
+a URL at all.
 
 ## Testing
 
