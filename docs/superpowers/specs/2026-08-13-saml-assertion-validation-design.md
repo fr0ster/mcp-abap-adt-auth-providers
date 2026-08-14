@@ -167,7 +167,22 @@ export interface IAssertionValidator {
   ): Promise<ValidatedAssertion>;
 }
 
-/** Remembers assertion IDs so a replay is refused. */
+/**
+ * What identifies an assertion for replay purposes.
+ *
+ * An assertion's `ID` is unique only within the identity provider that minted
+ * it, so a store shared by two providers — or one tenant's provider and
+ * another's — would reject a perfectly good second login as a replay the
+ * moment two issuers happened to mint the same `_id`. The key is therefore the
+ * pair, never the ID alone.
+ */
+export interface AssertionReplayKey {
+  /** The trusted issuer, as validated at step 5. */
+  readonly issuer: string;
+  readonly assertionId: string;
+}
+
+/** Remembers assertions so a replay is refused. */
 export interface IAssertionReplayStore {
   /**
    * Records this ID if it is not already recorded, and reports which happened:
@@ -179,8 +194,13 @@ export interface IAssertionReplayStore {
    * race, and it is precisely the race a replay exploits. The interface is
    * shaped as one call rather than `has` plus `record` so that an implementation
    * backed by a shared store can express it as a single conditional write.
+   *
+   * `retainUntil` is **not** `expiresAt`. It is the last instant at which this
+   * validator would still accept the assertion — `expiresAt + clockSkewMs` —
+   * because an entry dropped any earlier reopens exactly the window in which a
+   * replay would be accepted again. See "Two windows, one expiry".
    */
-  recordIfUnseen(assertionId: string, expiresAt: Date): Promise<boolean>;
+  recordIfUnseen(key: AssertionReplayKey, retainUntil: Date): Promise<boolean>;
 }
 ```
 
@@ -209,7 +229,7 @@ for twice.
 | 9   | `Conditions/AudienceRestriction`                    | absent, or **any one** restriction fails to name `context.audience`         |
 | 10  | One bearer `SubjectConfirmation`                    | no single confirmation satisfies every part of it — see below               |
 | 11  | `Response/@Destination`                             | **absent**, or not `context.acsUrl`                                         |
-| 12  | Replay                                              | the store has already recorded this `ID`                                    |
+| 12  | Replay                                              | the store has already recorded this `{issuer, ID}`                          |
 
 **Absent is refused, not skipped.** Every row above that names a field refuses
 when the field is missing, and this is deliberate: a rule phrased "present and
@@ -251,17 +271,29 @@ Two of these deserve their citation, because "required" is a choice:
   a bearer `SubjectConfirmationData` to carry a `Recipient` matching the service
   provider's assertion consumer service. There is no solicited Web Browser SSO
   assertion that legitimately omits it.
-- **`Response/@Destination`** — the HTTP POST binding (§3.5.5.2) requires
-  `Destination` on a **signed** message, and this validator accepts nothing that
-  is not signed. So requiring it costs nothing a conforming identity provider
-  would notice.
+- **`Response/@Destination`** — required always, and this one is a deliberate
+  local policy rather than a consequence of the specification, so it should be
+  read as such. The HTTP POST binding (§3.5.5.2) requires `Destination` on a
+  **signed** message, which covers the case where the `Response` is the signed
+  node. It does not cover the other placement this design allows: when only the
+  `Assertion` is signed, `Destination` is outside the signature entirely, an
+  attacker can set it to whatever we expect, and requiring it buys no security —
+  there it is a misconfiguration check, not a control. The addressing guarantee
+  in that case rests on `Recipient`, which sits inside the signed assertion and
+  is required by step 10. Requiring `Destination` unconditionally keeps one rule
+  instead of two, and costs a conforming identity provider nothing.
 
 **Two windows, one expiry.** The assertion carries two `NotOnOrAfter` values
 and the result carries one date: `expiresAt` is the **earlier** of them. Taking
 either alone would let a session outlive a window the assertion itself closed —
 `Conditions` may run past the bearer window or the reverse, and only the minimum
-respects both. That same date is what the replay store is given, so an entry is
-pruned exactly when the assertion it guards could no longer be used anyway.
+respects both. The replay store is **not** given that date. It is given
+`expiresAt + clockSkewMs`, the last instant this validator would still accept
+the assertion. Pruning at `expiresAt` would drop the entry while the skew
+window was still open, and inside that window the same assertion becomes
+"unseen" again — a replay hole cut by the very tolerance meant to absorb
+imprecise clocks. The two dates answer different questions: one bounds the
+session, the other bounds how long we must remember.
 
 **`NotOnOrAfter` is required**, because `ValidatedAssertion.expiresAt` is not
 optional: a flow that takes its session lifetime from the assertion cannot be
@@ -396,6 +428,19 @@ distinguishes the two windows.
 Step 9 needs the same treatment: an assertion with two `AudienceRestriction`
 elements, one naming us and one not, must be refused. Implemented as a search
 for our audience anywhere in the document, it would pass.
+
+Replay needs two cases beyond the mock's sequence, and neither is a corruption:
+
+- **Retention outlasts the skew window.** With `clockSkewMs` set, replay the
+  assertion at a moment past its `expiresAt` but inside the tolerance. The
+  validator still accepts such an assertion on temporal grounds, so the store
+  must still remember it; an entry pruned at `expiresAt` would report it unseen
+  and the replay would succeed. This test fails against a store given
+  `expiresAt` and passes only against one given `expiresAt + clockSkewMs`.
+- **Two issuers, one ID.** Two mock identity providers, each minting an
+  assertion with the same `ID`, validated against their own configurations.
+  Both must be accepted: a store keyed on the ID alone rejects the second as a
+  replay, which is a working login refused rather than an attack stopped.
 
 Three further cases have no variant for the same reason:
 
