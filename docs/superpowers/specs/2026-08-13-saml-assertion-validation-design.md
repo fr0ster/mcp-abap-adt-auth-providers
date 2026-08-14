@@ -141,10 +141,13 @@ export interface AssertionContext {
 /** What a validated assertion yields to the flow. */
 export interface ValidatedAssertion {
   /**
-   * The earlier of `Conditions/@NotOnOrAfter` and the bearer
-   * `SubjectConfirmationData/@NotOnOrAfter` — never later than either, so a
+   * The earlier of `Conditions/@NotOnOrAfter` and the `NotOnOrAfter` of the
+   * bearer confirmation that was accepted — never later than either, so a
    * session cannot outlive a window the assertion itself closed. From the
    * verified document, never from a regex over unverified XML.
+   *
+   * When several confirmations satisfy step 10, the one with the **earliest**
+   * `NotOnOrAfter` is the accepted one; see "Two windows, one expiry".
    */
   readonly expiresAt: Date;
   readonly assertionId: string;
@@ -218,9 +221,11 @@ for twice.
 | #   | Check                                               | Refused when                                                                |
 | --- | --------------------------------------------------- | --------------------------------------------------------------------------- |
 | 1   | Parses as XML, document element is `samlp:Response` | it is not                                                                   |
+| 1b  | Every `ID` attribute in the document is unique      | any value appears twice                                                     |
 | 2   | Signature valid against `idpCertificates`           | absent, wrong key, or content altered after signing                         |
 | 3   | Signed node is the node read                        | the reference points elsewhere                                              |
 | 4   | `samlp:Status`                                      | absent, or `StatusCode` is not `…:status:Success`                           |
+| 4b  | `Assertion/@ID`                                     | **absent** or empty                                                         |
 | 5   | `Assertion/Issuer`                                  | **absent**, or not `context.expectedIssuer`                                 |
 | 5b  | `Response/Issuer`                                   | present and disagreeing with `Assertion/Issuer`                             |
 | 6   | `Conditions`                                        | **absent**                                                                  |
@@ -237,6 +242,22 @@ not X" is one an attacker satisfies by deleting the field. An earlier draft of
 this table said exactly that for `Recipient`, `Destination` and `Issuer`, which
 would have let a forged response drop its addressing entirely and still pass a
 validator whose whole contract is that the assertion is addressed to us.
+
+**Step 1b is not bookkeeping, it is the wrapping defence again.** XML-DSig
+resolves its reference by `ID`, so a document containing two elements with the
+same `ID` makes "which element is signed" a question the parser answers rather
+than one the specification does. That ambiguity is the classic lever for
+signature wrapping, and step 3 cannot be trusted while it exists. Duplicate IDs
+are therefore refused before anything is read, wherever in the document they
+appear — not only on the two elements this validator happens to care about.
+
+**Step 4b exists because the ID can genuinely be missing.** `assertionId` is
+required on the result and forms half the replay key, yet nothing so far obliged
+the assertion to carry one. When the **`Response`** is the signed node, the
+XML-DSig reference names the response, so the assertion's own `ID` is not needed
+for the signature to verify and an assertion without one would sail through into
+a replay key built on `undefined`. A non-empty `Assertion/@ID` is required
+outright.
 
 **Step 10 is one element, not four fields.** A bearer assertion may carry
 several `SubjectConfirmation` elements, and the danger is reading each attribute
@@ -284,7 +305,17 @@ Two of these deserve their citation, because "required" is a choice:
   instead of two, and costs a conforming identity provider nothing.
 
 **Two windows, one expiry.** The assertion carries two `NotOnOrAfter` values
-and the result carries one date: `expiresAt` is the **earlier** of them. Taking
+and the result carries one date: `expiresAt` is the **earlier** of them.
+
+Step 10 is existential — it asks whether _some_ confirmation satisfies
+everything — so more than one may qualify, and then "the bearer window" is
+ambiguous. The rule is deterministic and conservative: **the qualifying
+confirmation with the earliest `NotOnOrAfter` is the accepted one**, and its
+window is the one that meets `Conditions` in the minimum above. A real identity
+provider does not emit two qualifying confirmations; picking the earliest means
+that if one ever does, the outcome is a session shorter than intended rather
+than one longer than some confirmation allowed. Replay retention is computed
+from that same chosen expiry, so the two can never disagree. Taking
 either alone would let a session outlive a window the assertion itself closed —
 `Conditions` may run past the bearer window or the reverse, and only the minimum
 respects both. The replay store is **not** given that date. It is given
@@ -337,7 +368,10 @@ New on the SAML config:
 - `assertionReplayStore?: IAssertionReplayStore` — a consumer's own, for a
   deployment running more than one process. Its absence is what the shipped
   default covers; see "Wiring" for the scope that default has.
-- `clockSkewMs?: number` — default `0`.
+- `clockSkewMs?: number` — default `0`. Must be a finite, non-negative integer;
+  `NaN`, `Infinity` and negative values are configuration errors, since each
+  would make both the temporal comparisons and `retainUntil` meaningless rather
+  than merely lenient.
 - `authnRequestId?: string` — required whenever the package did not mint an ID
   itself: a pre-built `authorizationUrl`, or a strategy that never called the
   builder. See "Where the expected request ID comes from".
@@ -428,6 +462,12 @@ distinguishes the two windows.
 Step 9 needs the same treatment: an assertion with two `AudienceRestriction`
 elements, one naming us and one not, must be refused. Implemented as a search
 for our audience anywhere in the document, it would pass.
+
+Steps 1b and 4b need cases the mock cannot produce either, since it always emits
+one well-formed assertion with a unique ID: an assertion with **no** `ID` — most
+sharply with the signature on the `Response`, where it verifies anyway — and a
+document carrying **two** elements with the same `ID`, which must be refused
+before any reference is resolved.
 
 Replay needs two cases beyond the mock's sequence, and neither is a corruption:
 
