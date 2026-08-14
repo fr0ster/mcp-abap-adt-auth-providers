@@ -46,9 +46,11 @@ were proposed here and accepted:
    or base64 DER. A list, because identity providers rotate keys and two are
    live during a rotation. The package performs no I/O and fetches no metadata:
    the consumer reads the file.
-4. **`InResponseTo` is required.** When the package builds the request it knows
-   the ID. When the consumer supplies a pre-built `authorizationUrl`, it must
-   supply the ID too, or the login fails as a configuration error.
+4. **`InResponseTo` is required, and the ID must come from somewhere real.**
+   There are exactly two sources, and no third: the package minted it while
+   building the request, or the consumer declared it. See "Where the expected
+   request ID comes from" — an earlier draft said "when `authorizationUrl` is
+   set", which was too narrow and missed a flow the package already supports.
 5. **Replay is detected**, through a store interface with an in-memory default.
 6. **`clockSkewMs` defaults to `0`.** Real deployments often need tolerance, but
    this package's rule is that a consumer owns its own leniency.
@@ -78,6 +80,39 @@ So the default resolves, in order:
 
 A document where the signed node and the read node differ is refused, whatever
 else is true of it.
+
+## Where the expected request ID comes from
+
+`InResponseTo` can only be checked against an `AuthnRequest` ID somebody can
+name, and the package does not always have one. Three flows, three answers:
+
+1. **The package built the request.** `buildSamlAuthorizationUrl` mints the ID,
+   and — with the change below — returns it. This is the ordinary browser flow
+   and needs nothing from the consumer.
+2. **The consumer supplied a pre-built `authorizationUrl`.** The builder returns
+   it untouched and mints nothing. The consumer must supply `authnRequestId`.
+3. **The strategy never called the builder at all.** This is not hypothetical:
+   `manualSamlResponseStrategy` and any strategy holding a payload already
+   return an outcome without ever asking for a URL, which is why
+   `src/providers/saml2Utils.ts:79` carries a "second net" for exactly that
+   case. Its comment says so in as many words. Here too the consumer must supply
+   `authnRequestId` — the assertion answers a request _someone_ made, and only
+   the consumer knows its ID.
+
+So the rule is not about `authorizationUrl`; it is about whether the package
+minted an ID. When it did not, `authnRequestId` is required, and its absence is
+a configuration error naming this rule rather than a validation failure blamed
+on the assertion.
+
+Whether the builder will run cannot be known before the strategy runs — a
+consumer's strategy may or may not call it — so this is checked when the
+validator is invoked. The message must therefore be explicit about the remedy,
+because it surfaces after a human may already have pasted an assertion.
+
+**Rejected alternative:** extending `AuthorizationOutcome` with a request ID.
+That changes a contract every strategy implements, for the benefit of the one
+kind that builds its own request, and would leave the same gap open for a
+strategy that simply holds a payload.
 
 ## Interfaces
 
@@ -123,8 +158,18 @@ export interface IAssertionValidator {
 
 /** Remembers assertion IDs so a replay is refused. */
 export interface IAssertionReplayStore {
-  /** True when this ID has been seen; records it otherwise. Expiry is the assertion's own. */
-  seen(assertionId: string, expiresAt: Date): Promise<boolean>;
+  /**
+   * Records this ID if it is not already recorded, and reports which happened:
+   * `true` when it was newly recorded, `false` when it was already there — a
+   * replay.
+   *
+   * **Must be atomic.** Two validations of the same assertion running at once
+   * must not both be told `true`; a check followed by a separate write is a
+   * race, and it is precisely the race a replay exploits. The interface is
+   * shaped as one call rather than `has` plus `record` so that an implementation
+   * backed by a shared store can express it as a single conditional write.
+   */
+  recordIfUnseen(assertionId: string, expiresAt: Date): Promise<boolean>;
 }
 ```
 
@@ -150,11 +195,10 @@ for twice.
 | 6   | `Conditions`                                        | **absent**                                                                  |
 | 7   | `Conditions/@NotBefore`                             | present and in the future, beyond `clockSkewMs`                             |
 | 8   | `Conditions/@NotOnOrAfter`                          | **absent**, not a valid `xsd:dateTime`, or in the past beyond `clockSkewMs` |
-| 9   | `AudienceRestriction/Audience`                      | absent, or does not contain `context.audience`                              |
-| 10  | `SubjectConfirmationData/@InResponseTo`             | **absent**, or not `context.expectedInResponseTo`                           |
-| 11  | `SubjectConfirmationData/@Recipient`                | **absent**, or not `context.acsUrl`                                         |
-| 12  | `Response/@Destination`                             | **absent**, or not `context.acsUrl`                                         |
-| 13  | Replay                                              | the store has seen this `ID`                                                |
+| 9   | `Conditions/AudienceRestriction`                    | absent, or **any one** restriction fails to name `context.audience`         |
+| 10  | One bearer `SubjectConfirmation`                    | no single confirmation satisfies every part of it — see below               |
+| 11  | `Response/@Destination`                             | **absent**, or not `context.acsUrl`                                         |
+| 12  | Replay                                              | the store has already recorded this `ID`                                    |
 
 **Absent is refused, not skipped.** Every row above that names a field refuses
 when the field is missing, and this is deliberate: a rule phrased "present and
@@ -162,6 +206,33 @@ not X" is one an attacker satisfies by deleting the field. An earlier draft of
 this table said exactly that for `Recipient`, `Destination` and `Issuer`, which
 would have let a forged response drop its addressing entirely and still pass a
 validator whose whole contract is that the assertion is addressed to us.
+
+**Step 10 is one element, not four fields.** A bearer assertion may carry
+several `SubjectConfirmation` elements, and the danger is reading each attribute
+from whichever one happens to have it. The rule is therefore: there must exist a
+**single** `SubjectConfirmation` whose `Method` is
+`urn:oasis:names:tc:SAML:2.0:cm:bearer` and whose own `SubjectConfirmationData`
+satisfies, together, all of
+
+- `@InResponseTo` equal to `context.expectedInResponseTo`,
+- `@Recipient` equal to `context.acsUrl`,
+- `@NotOnOrAfter` present, a valid `xsd:dateTime`, and not in the past beyond
+  `clockSkewMs`,
+- `@NotBefore`, if present, not in the future beyond `clockSkewMs`.
+
+If no one confirmation satisfies all of them, the assertion is refused, even
+when every value appears somewhere in the document. Note that this
+`NotOnOrAfter` is **not** the one in `Conditions`: SAML Profiles §4.1.4.2 makes
+the bearer confirmation's own window the one that governs when the assertion may
+be presented, and an assertion whose `Conditions` are still open while its
+bearer window has closed must be refused.
+
+**Step 9 is AND across restrictions, OR within one.** SAML Core §2.5.1.4 makes
+each `AudienceRestriction` an independent condition: _every_ restriction must
+name us, while the several `Audience` elements inside one restriction are
+alternatives. Implemented as "some `Audience` anywhere in the document equals
+ours", an assertion carrying one permitting restriction beside one that excludes
+us would pass. It must not.
 
 Two of these deserve their citation, because "required" is a choice:
 
@@ -204,8 +275,9 @@ New on the SAML config:
   network call.
 - `spEntityId: string` — the `Audience` the assertion must name.
 - `clockSkewMs?: number` — default `0`.
-- `authnRequestId?: string` — required **only** when `authorizationUrl` is set,
-  because then the package did not build the request.
+- `authnRequestId?: string` — required whenever the package did not mint an ID
+  itself: a pre-built `authorizationUrl`, or a strategy that never called the
+  builder. See "Where the expected request ID comes from".
 
 `buildSamlAuthorizationUrl` changes shape: it returns the URL **and** the
 request ID it minted, since the ID must survive to validation.
@@ -251,8 +323,8 @@ package it exists to serve finally uses it.
 Every corruption variant the mock ships maps onto exactly one check above:
 `unsigned`, `wrongKey` and `tamperedAfterSign` onto step 2; `statusFailure` onto
 4; `wrongIssuer` onto 5; `notYetValid` onto 7; `expired` onto 8; `wrongAudience`
-onto 9; `wrongInResponseTo` onto 10; `wrongRecipient` onto 11;
-`wrongDestination` onto 12. The mock's two-delivery replay sequence covers 13.
+onto 9; `wrongInResponseTo` and `wrongRecipient` each onto part of 10;
+`wrongDestination` onto 11. The mock's two-delivery replay sequence covers 12.
 
 **But the mock only corrupts values, never removes them**, and the gap this
 review found is exactly about removal. Every "absent" refusal — `Status`,
@@ -263,11 +335,27 @@ re-signing it with the mock's own key material (`generateKeyMaterial` and
 `signXml` are exported for this). A wrong-value test and a missing-value test
 protect different halves of the same rule, and only the pair proves it whole.
 
-Two further cases have no variant for the same reason:
+Step 10 needs cases the mock cannot express at all, because it emits one
+well-formed `SubjectConfirmation`. Build them here: an assertion carrying **two**
+confirmations, one holding the right `Recipient` and the other the right
+`InResponseTo`, must be refused — that is the whole point of requiring a single
+coherent element. A bearer confirmation whose own `NotOnOrAfter` has passed
+while `Conditions` are still open must be refused too, and that pair is what
+distinguishes the two windows.
+
+Step 9 needs the same treatment: an assertion with two `AudienceRestriction`
+elements, one naming us and one not, must be refused. Implemented as a search
+for our audience anywhere in the document, it would pass.
+
+Three further cases have no variant for the same reason:
 
 - **Signature wrapping**, step 3: take a validly signed assertion, wrap it in a
   response carrying a second, forged one, and require the validator to refuse
   rather than read the forged one.
+- **A missing request ID**, from the provenance rule: a strategy that never
+  calls the builder, with no `authnRequestId` configured, must fail as a
+  configuration error naming the remedy — not as a validation failure blamed on
+  the assertion, and not by validating against `undefined`.
 - **A malformed `NotOnOrAfter`**, step 8: `2026-02-30T00:00:00Z` is a real
   calendar trap — `Date.parse` normalises it into 2 March rather than rejecting
   it — and `2026-01-01T00:00:00+99:99` is an out-of-range offset. Both were
