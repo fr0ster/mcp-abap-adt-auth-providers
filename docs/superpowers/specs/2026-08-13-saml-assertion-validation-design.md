@@ -1,7 +1,7 @@
 # SAML assertion validation
 
 **Date:** 2026-08-13
-**Status:** awaiting review
+**Status:** approved, not implemented
 **Closes:** issue #19 — SAML assertions are accepted without any validation
 **Depends on:** `@mcp-abap-adt/auth-mocks@0.1.1`, published, which makes every
 rule below testable deterministically
@@ -349,9 +349,19 @@ wrapper around somebody else's library.
 New on the SAML config:
 
 - `assertionValidator?: IAssertionValidator` — a consumer's own. When supplied,
-  the package constructs no default and the two fields below are not consulted:
-  a custom validator may establish trust by any means it likes, and demanding
-  certificates it will never read would be a requirement with no purpose.
+  the package constructs no default, and the **default-validator-specific**
+  fields below stop being required: `idpCertificates`, `idpEntityId`,
+  `assertionReplayStore` and `clockSkewMs`. A custom validator may establish
+  trust by any means it likes, and demanding certificates it will never read
+  would be a requirement with no purpose.
+
+  Two distinctions worth keeping straight. `spEntityId` is **not** in that set:
+  it populates `AssertionContext.audience`, which the provider builds for
+  whichever validator is in play, so it stays required either way. And
+  `idpEntityId`, when it is supplied, still populates
+  `AssertionContext.expectedIssuer` for a custom validator — it stops being
+  _required_, not ignored.
+
 - `idpCertificates: string[]` — required **when no `assertionValidator` is
   supplied**. Absent or empty is then a configuration error raised before any
   network call.
