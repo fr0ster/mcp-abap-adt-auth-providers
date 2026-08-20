@@ -726,6 +726,33 @@ describe("resolveSignedElement", () => {
   // The attack this function exists for: a validly signed assertion beside a
   // forged one. Whatever is returned must be the signed element, and the
   // caller reads only that.
+  it("refuses a signature detached from the element it references", () => {
+    const key = generateKeyMaterial();
+    // Lift the Signature out of the Assertion and into the Response. The bytes
+    // it covers are unchanged, so it still verifies — only the parent check
+    // catches this.
+    const signed = signXml(ASSERTION(), key);
+    const signature =
+      /<[^>]*Signature[\s\S]*<\/[^>]*Signature>/.exec(signed)?.[0] ?? "";
+    const wrapped = RESPONSE(`${signed.replace(signature, "")}${signature}`);
+    expect(() =>
+      resolveSignedElement(wrapped, parse(wrapped), [key.certificatePem]),
+    ).toThrow(/does not envelope/i);
+  });
+
+  it("refuses a signature carrying more than one reference", () => {
+    const key = generateKeyMaterial();
+    const signed = signXml(ASSERTION(), key);
+    const reference =
+      /<[^>]*Reference[\s\S]*?<\/[^>]*Reference>/.exec(signed)?.[0] ?? "";
+    const wrapped = RESPONSE(
+      signed.replace(reference, `${reference}${reference}`),
+    );
+    expect(() =>
+      resolveSignedElement(wrapped, parse(wrapped), [key.certificatePem]),
+    ).toThrow(/exactly one is required/i);
+  });
+
   it("returns the signed assertion, not the forged sibling", () => {
     const key = generateKeyMaterial();
     const signed = signXml(ASSERTION("_real"), key);
@@ -806,13 +833,16 @@ export function resolveSignedElement(
     );
   }
 
-  // The signature is valid; now find what it actually covers. The reference
-  // URI is `#<ID>`, and an empty URI means the whole document.
-  const reference = signatureNode.getElementsByTagNameNS(
-    DSIG_NS,
-    "Reference",
-  )[0];
-  const uri = reference?.getAttribute("URI") ?? "";
+  // The signature is valid; now find what it actually covers. Exactly one
+  // reference: two would be two candidate answers to "what is signed", the
+  // ambiguity this module exists to remove.
+  const references = signatureNode.getElementsByTagNameNS(DSIG_NS, "Reference");
+  if (references.length !== 1) {
+    throw new Error(
+      `the signature carries ${references.length} references; exactly one is required`,
+    );
+  }
+  const uri = references[0].getAttribute("URI") ?? "";
   if (uri === "") {
     return doc.documentElement as unknown as Element;
   }
@@ -824,14 +854,32 @@ export function resolveSignedElement(
   const id = uri.slice(1);
 
   const elements = doc.getElementsByTagName("*");
+  let referenced: Element | null = null;
   for (let i = 0; i < elements.length; i++) {
     if (elements[i].getAttribute("ID") === id) {
-      return elements[i] as unknown as Element;
+      referenced = elements[i] as unknown as Element;
+      break;
     }
   }
-  throw new Error(
-    `the signature references ${uri}, which is not in the document`,
-  );
+  if (!referenced) {
+    throw new Error(
+      `the signature references ${uri}, which is not in the document`,
+    );
+  }
+
+  // The enveloped signature must sit inside the element it references. A
+  // signature moved elsewhere stays cryptographically valid over the bytes it
+  // covers, so the maths alone will not catch it — this comparison is what
+  // does. It is the check @node-saml/node-saml makes, and the one whose
+  // absence made every response @mcp-abap-adt/auth-mocks produced
+  // unacceptable to a real library until it was fixed there.
+  if ((signatureNode.parentNode as unknown as Element | null) !== referenced) {
+    throw new Error(
+      "the signature is not inside the element it references, so it does not envelope it",
+    );
+  }
+
+  return referenced;
 }
 ```
 
@@ -841,7 +889,13 @@ export function resolveSignedElement(
 npm test -- src/__tests__/validation/signedNode.test.ts
 ```
 
-Expected: PASS, six cases. RSA key generation makes this suite slower than the others; that is expected.
+Expected: PASS, eight cases. RSA key generation makes this suite slower than the others; that is expected.
+
+If the detached-signature fixture verifies where you expected refusal, or fails
+to verify at all because lifting the element changed the canonicalised bytes,
+**say so and reshape the fixture** rather than deleting the case. The rule it
+protects is the one the whole design rests on. Moving the `Signature` to a
+sibling position inside the same parent is the other shape worth trying.
 
 - [ ] **Step 5: Prove the rules**
 
@@ -850,6 +904,8 @@ Three mutations, one at a time:
 1. Return `doc.documentElement` unconditionally instead of resolving the reference — `returns the signed assertion, not the forged sibling` must go red.
 2. Delete the `if (signatures.length === 0)` guard — `refuses a document with no signature` must go red. Note what it becomes: a different error, or a crash. Either is red; say which you saw.
 3. Treat a thrown `checkSignature` as success — `refuses a signature made with a key we do not trust` must go red while `refuses content altered after signing` stays red for its own reason, the digest mismatch that returns `false`. Report both.
+4. Delete the `parentNode !== referenced` comparison — `refuses a signature detached from the element it references` must go red. If it stays green the fixture is not actually detached; say so rather than moving on.
+5. Change `references.length !== 1` to `references.length === 0` — `refuses a signature carrying more than one reference` must go red.
 
 - [ ] **Step 6: Commit**
 
@@ -1618,6 +1674,22 @@ describe("the default assertion validator", () => {
     expect(result.expiresAt.getTime()).toBeLessThan(Date.now() + 300_000);
   });
 
+  // The wrapping shape at the validator level: one genuinely signed assertion,
+  // one forged beside it. Reading only the signed one is not enough, because
+  // `raw` travels on to the cookie provider and to UAA.
+  it("refuses a response carrying a second, forged assertion", async () => {
+    const forged =
+      `<saml:Assertion xmlns:saml="urn:oasis:names:tc:SAML:2.0:assertion" ID="_forged">` +
+      `<saml:Issuer>urn:attacker</saml:Issuer></saml:Assertion>`;
+    const doctored = buildResponse().replace(
+      "</samlp:Response>",
+      `${forged}</samlp:Response>`,
+    );
+    await expect(
+      validator().validate(encode(doctored), context),
+    ).rejects.toMatchObject({ check: "signedNode" });
+  });
+
   it("refuses a document carrying two elements with the same ID", async () => {
     const doctored = buildResponse().replace('ID="_r1"', 'ID="_a1"');
     await expect(
@@ -1750,9 +1822,9 @@ export function createDefaultAssertionValidator(
       }
 
       // 4. Status — read from the Response, which is the element that carries it.
-      const statusCode = firstChildNS(root, PROTOCOL_NS, 'Status');
-      const codeValue = statusCode
-        ? firstChildNS(statusCode, PROTOCOL_NS, 'StatusCode')?.getAttribute('Value')
+      const status = directChild(root, PROTOCOL_NS, 'Status');
+      const codeValue = status
+        ? directChild(status, PROTOCOL_NS, 'StatusCode')?.getAttribute('Value')
         : null;
       if (!codeValue) return fail('status', 'the response carries no samlp:Status');
       if (codeValue !== SUCCESS) {
@@ -1764,12 +1836,12 @@ export function createDefaultAssertionValidator(
       if (!assertionId) return fail('assertionId', 'the assertion carries no ID');
 
       // 5 + 5b. Issuer.
-      const issuer = firstChildNS(assertion, SAML_NS, 'Issuer')?.textContent ?? '';
+      const issuer = directChild(assertion, SAML_NS, 'Issuer')?.textContent ?? '';
       if (!issuer) return fail('issuer', 'the assertion carries no Issuer');
       if (context.expectedIssuer && issuer !== context.expectedIssuer) {
         return fail('issuer', `the assertion was issued by ${issuer}, not the trusted issuer`);
       }
-      const responseIssuer = firstChildNS(root, SAML_NS, 'Issuer')?.textContent;
+      const responseIssuer = directChild(root, SAML_NS, 'Issuer')?.textContent;
       if (responseIssuer && responseIssuer !== issuer) {
         return fail(
           'issuer',
@@ -1778,7 +1850,7 @@ export function createDefaultAssertionValidator(
       }
 
       // 6, 7, 8. Conditions and their window.
-      const conditions = firstChildNS(assertion, SAML_NS, 'Conditions');
+      const conditions = directChild(assertion, SAML_NS, 'Conditions');
       if (!conditions) return fail('conditions', 'the assertion carries no Conditions');
 
       const notBeforeRaw = conditions.getAttribute('NotBefore');
@@ -1805,12 +1877,12 @@ export function createDefaultAssertionValidator(
 
       // 9. Every AudienceRestriction must name us; several Audience inside one
       // are alternatives.
-      const restrictions = childrenNS(conditions, SAML_NS, 'AudienceRestriction');
+      const restrictions = directChildren(conditions, SAML_NS, 'AudienceRestriction');
       if (restrictions.length === 0) {
         return fail('audience', 'the assertion restricts no audience');
       }
       for (const restriction of restrictions) {
-        const names = childrenNS(restriction, SAML_NS, 'Audience').map(
+        const names = directChildren(restriction, SAML_NS, 'Audience').map(
           (a) => a.textContent ?? '',
         );
         if (!names.includes(context.audience)) {
@@ -1858,11 +1930,14 @@ export function createDefaultAssertionValidator(
         expiresAt,
         assertionId,
         issuer,
-        nameId: firstChildNS(
-          firstChildNS(assertion, SAML_NS, 'Subject') ?? assertion,
-          SAML_NS,
-          'NameID',
-        )?.textContent ?? undefined,
+        nameId: (() => {
+          // Subject, then NameID — no `?? assertion` fallback, which would
+          // read a NameID from outside the Subject when the Subject is absent.
+          const subject = directChild(assertion, SAML_NS, 'Subject');
+          return subject
+            ? (directChild(subject, SAML_NS, 'NameID')?.textContent ?? undefined)
+            : undefined;
+        })(),
         raw: samlResponse,
       };
     },
@@ -1874,23 +1949,40 @@ function fail(check: AssertionCheck, message: string): never {
 }
 
 /**
- * The first descendant with this namespace and local name.
+ * Direct children with this namespace and local name — **not** descendants.
  *
- * Scoped to `parent`, never to the document: everything after the signature is
- * resolved must be read from inside the signed element, and searching the
- * document would quietly reintroduce the wrapping hole.
+ * `getElementsByTagNameNS` searches the whole subtree, and that is the wrong
+ * tool for a structural path. An assertion with no `Conditions` of its own but
+ * a `Conditions` buried somewhere inside it would answer the descendant search
+ * and satisfy a check it does not meet; the same trick works for `Issuer`,
+ * `Status` and `Subject`. Each segment of a SAML path is therefore walked
+ * explicitly, one level at a time.
  */
-function firstChildNS(parent: Element, ns: string, local: string): Element | null {
-  const found = parent.getElementsByTagNameNS(ns, local);
-  return found.length > 0 ? (found[0] as unknown as Element) : null;
+function directChildren(parent: Element, ns: string, local: string): Element[] {
+  const out: Element[] = [];
+  const nodes = parent.childNodes;
+  for (let i = 0; i < nodes.length; i++) {
+    const node = nodes[i] as unknown as Element;
+    // nodeType 1 is ELEMENT_NODE; the constant is unavailable without the dom
+    // lib, which this project deliberately does not use.
+    if (
+      node.nodeType === 1 &&
+      node.namespaceURI === ns &&
+      node.localName === local
+    ) {
+      out.push(node);
+    }
+  }
+  return out;
 }
 
-/** All descendants with this namespace and local name, as an array. */
-function childrenNS(parent: Element, ns: string, local: string): Element[] {
-  const found = parent.getElementsByTagNameNS(ns, local);
-  const out: Element[] = [];
-  for (let i = 0; i < found.length; i++) out.push(found[i] as unknown as Element);
-  return out;
+/** The single direct child with this name, or null when there is not exactly one. */
+function directChild(parent: Element, ns: string, local: string): Element | null {
+  const found = directChildren(parent, ns, local);
+  // Not "the first": two siblings sharing a name is an ambiguity, and
+  // resolving it silently in favour of the first is how a forged element comes
+  // to be read in preference to a real one.
+  return found.length === 1 ? found[0] : null;
 }
 
 /**
@@ -1907,7 +1999,7 @@ function assertionInside(signed: Element): Element | null {
   if (signed.localName !== 'Response' || signed.namespaceURI !== PROTOCOL_NS) {
     return null;
   }
-  const assertions = childrenNS(signed, SAML_NS, 'Assertion');
+  const assertions = directChildren(signed, SAML_NS, 'Assertion');
   return assertions.length === 1 ? assertions[0] : null;
 }
 
@@ -1928,10 +2020,13 @@ function chooseBearerConfirmation(
   const now = Date.now();
   let best: Date | null = null;
 
-  for (const confirmation of childrenNS(assertion, SAML_NS, 'SubjectConfirmation')) {
+  const subject = directChild(assertion, SAML_NS, 'Subject');
+  if (!subject) return null;
+
+  for (const confirmation of directChildren(subject, SAML_NS, 'SubjectConfirmation')) {
     if (confirmation.getAttribute('Method') !== BEARER) continue;
 
-    const data = firstChildNS(confirmation, SAML_NS, 'SubjectConfirmationData');
+    const data = directChild(confirmation, SAML_NS, 'SubjectConfirmationData');
     if (!data) continue;
     if (data.getAttribute('InResponseTo') !== context.expectedInResponseTo) continue;
     if (data.getAttribute('Recipient') !== context.acsUrl) continue;
@@ -1958,7 +2053,7 @@ function chooseBearerConfirmation(
 npm test -- src/__tests__/validation/assertionValidator.test.ts
 ````
 
-Expected: PASS, 28 cases.
+Expected: PASS, 29 cases.
 
 - [ ] **Step 5: Prove the rules that a wrong-value test alone would not**
 
@@ -1969,7 +2064,8 @@ Six mutations, one at a time, each reverted before the next. Report per case:
 3. Change the audience loop to "our audience appears in some restriction" — `refuses when a second restriction excludes us` must go red while `accepts our audience among alternatives inside one restriction` stays green. Both matter; report both.
 4. Take `expiresAt` from `conditionsExpiry` alone — `takes expiresAt from whichever window closes first` must go red.
 5. Pass `expiresAt` rather than `expiresAt + skew` as `retainUntil` — `refuses a replay inside the skew window` must go red.
-6. Return `signed` from `assertionInside` unconditionally — say what goes red. If nothing does, the wrapping case is not covered by this suite and you must say so; Task 11 covers it end to end, but a gap here is worth reporting.
+6. Delete the `assertions.length !== 1` guard from `assertionInside` — `refuses a response carrying a second, forged assertion` must go red. This is the wrapping refusal; if it stays green the fixture is not producing two direct `Assertion` children, and you must say so rather than moving on.
+7. Change `directChild` to return `found[0] ?? null` instead of requiring exactly one — nothing in this suite may go green that was red. If nothing changes at all, add a case with two `Conditions` siblings, because "resolve an ambiguity in favour of the first" is how a forged element gets preferred to a real one.
 
 - [ ] **Step 6: Commit**
 
@@ -2154,6 +2250,12 @@ git commit -m "feat!: the AuthnRequest ID survives to validation"
 For `Saml2PureProvider`, the change worth pinning is where the expiry comes from:
 
 ```ts
+it("refuses at construction when the identity provider is not configured", () => {
+  expect(
+    () => new Saml2PureProvider({ ...baseConfig, idpCertificates: undefined }),
+  ).toThrow(/idpCertificates/);
+});
+
 it("takes expiresAt from the validated assertion, not from a regex", async () => {
   // A stub validator, to prove the provider uses what validation returned.
   const expiresAt = new Date(Date.now() + 111_000);
@@ -2238,15 +2340,45 @@ export function resolveAssertionValidator(
 }
 ```
 
-- [ ] **Step 4: Wire `Saml2PureProvider.performLogin`**
+- [ ] **Step 4: Resolve the validator at construction, not at login**
+
+A missing `idpCertificates`, a missing `idpEntityId`, or a `clockSkewMs` that is
+not a finite non-negative integer are configuration faults — and a
+configuration fault must not surface **after** a human has opened a browser and
+completed a login. Both providers already call `validateSamlConfig(config)` in
+their constructors for exactly this reason; the comment there reads "throw at
+construction rather than half-verify at runtime".
+
+Resolve once, in the constructor, and keep it:
+
+```ts
+  private readonly validator: IAssertionValidator;
+
+  constructor(config: Saml2PureProviderConfig) {
+    super();
+    validateSamlConfig(config);
+    // Before anything reaches a browser or a network: a missing certificate is
+    // the consumer's mistake, and finding it after a completed login wastes
+    // theirs.
+    this.validator = resolveAssertionValidator(config);
+    this.config = config;
+    // … the rest unchanged
+  }
+```
+
+`Saml2BearerProvider` does the same.
+
+- [ ] **Step 5: Wire `Saml2PureProvider.performLogin`**
 
 ```ts
 protected async performLogin(): Promise<ITokenResult> {
-  const { payload, requestId } = await getSamlAssertion(this.config);
-  const validated = await resolveAssertionValidator(this.config).validate(payload, {
+  const { payload, requestId, acsUrl } = await getSamlAssertion(this.config);
+  // acsUrl is where the strategy actually listened — with an ephemeral port
+  // the configured value is usually absent and never authoritative.
+  const validated = await this.validator.validate(payload, {
     expectedInResponseTo: requestId,
     audience: this.config.spEntityId,
-    acsUrl: this.config.acsUrl as string,
+    acsUrl,
     expectedIssuer: this.config.idpEntityId,
     logger: this.logger,
   });
@@ -2261,11 +2393,11 @@ protected async performLogin(): Promise<ITokenResult> {
 }
 ```
 
-- [ ] **Step 5: Wire `Saml2BearerProvider`**
+- [ ] **Step 6: Wire `Saml2BearerProvider`**
 
 The same validation call, placed **before** `exchangeSamlAssertion`. The exchange still forwards `payload`, unchanged — validation establishes trust, it does not rewrite what UAA receives.
 
-- [ ] **Step 6: Run the whole suite**
+- [ ] **Step 7: Run the whole suite**
 
 ```bash
 npm test
@@ -2273,7 +2405,7 @@ npm test
 
 Expected: PASS. Existing provider tests will need `idpCertificates` and `idpEntityId` in their configs, or an `assertionValidator` stub — that is the breaking change working, not a test to weaken. If a test previously asserted an expiry derived from the regex, it now asserts the validated one.
 
-- [ ] **Step 7: Commit**
+- [ ] **Step 8: Commit**
 
 ```bash
 npm run lint:check && npm run build
