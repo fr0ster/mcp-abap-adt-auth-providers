@@ -1813,7 +1813,7 @@ export function createDefaultAssertionValidator(
 
       // The signed element must be the Assertion, or a Response holding exactly
       // one. Everything below is read from `assertion` and nowhere else.
-      const assertion = assertionInside(signed);
+      const assertion = assertionInside(signed, root);
       if (!assertion) {
         return fail(
           'signedNode',
@@ -1992,15 +1992,24 @@ function directChild(parent: Element, ns: string, local: string): Element | null
  * "Exactly one" matters: a signed Response wrapping two assertions leaves
  * "which did we verify" ambiguous, which is the wrapping question again.
  */
-function assertionInside(signed: Element): Element | null {
+function assertionInside(signed: Element, root: Element): Element | null {
+  // Whatever was signed, the response must carry exactly one assertion.
+  //
+  // Reading only from the signed element is not enough: `raw` — the whole
+  // response — travels on to the cookie provider and to UAA, and they read
+  // whatever is in it. A forged assertion placed beside the signed one must
+  // therefore end the login, not merely be ignored here.
+  const assertions = directChildren(root, SAML_NS, 'Assertion');
+  if (assertions.length !== 1) return null;
+  const only = assertions[0];
+
   if (signed.localName === 'Assertion' && signed.namespaceURI === SAML_NS) {
-    return signed;
+    return signed === only ? only : null;
   }
-  if (signed.localName !== 'Response' || signed.namespaceURI !== PROTOCOL_NS) {
-    return null;
+  if (signed.localName === 'Response' && signed.namespaceURI === PROTOCOL_NS) {
+    return signed === root ? only : null;
   }
-  const assertions = directChildren(signed, SAML_NS, 'Assertion');
-  return assertions.length === 1 ? assertions[0] : null;
+  return null;
 }
 
 /**
