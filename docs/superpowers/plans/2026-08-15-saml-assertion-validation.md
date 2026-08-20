@@ -2098,7 +2098,7 @@ git commit -m "feat: the shipped assertion validator, read only from the signed 
 
 - Produces:
   - `buildSamlAuthorizationUrl(config): { url: string; requestId?: string }` — `requestId` is present only when this function minted one, which it does not for a pre-built `authorizationUrl`.
-  - `getSamlAssertion(config): Promise<{ payload: string; requestId: string }>` — throws `ValidationError` when no ID can be established.
+  - `getSamlAssertion(config): Promise<{ payload: string; requestId: string; acsUrl: string }>` — throws `ValidationError` when no ID can be established. `acsUrl` is `outcome.redirectUri`: where the strategy actually listened.
   - `Saml2CommonConfig` gains `idpCertificates?: string[]`, `idpEntityId?: string`, `clockSkewMs?: number`, `authnRequestId?: string`, `assertionValidator?: IAssertionValidator`, `assertionReplayStore?: IAssertionReplayStore`. `spEntityId` is **already** there and already required (`src/providers/saml2Utils.ts:11`); it becomes the validator's `audience` and needs no change.
 
 **The rule, from the spec:** the ID must come from somewhere real. Either this package minted it, or the consumer declared it. When neither, that is a configuration error naming the remedy — not a validation failure blamed on the assertion.
@@ -2208,9 +2208,20 @@ export function buildSamlAuthorizationUrl(
 
 Remove the function and its tests. Expiry now comes from validation. Any call site is updated in Task 10.
 
-- [ ] **Step 6: Thread the ID through `getSamlAssertion`**
+- [ ] **Step 6: Thread the ID and the real ACS through `getSamlAssertion`**
 
-It returns `{ payload, requestId }`. The ID is whichever exists, in this order: the one `buildSamlAuthorizationUrl` minted during this login, then `config.authnRequestId`. When neither:
+It returns `{ payload, requestId, acsUrl }`.
+
+**`acsUrl` is `outcome.redirectUri`, never `config.acsUrl`.** The default
+strategy binds an ephemeral port, so the configured value is usually absent and
+is never authoritative — `outcome.redirectUri` exists precisely because the
+provider has no other way to learn where the strategy listened. Validation
+compares `Recipient` and `Destination` against it, so taking the configured
+value would compare against `undefined`, or against an address nothing was
+listening on. The "second net" already reads `outcome.redirectUri`; return it
+rather than reading it twice.
+
+The ID is whichever exists, in this order: the one `buildSamlAuthorizationUrl` minted during this login, then `config.authnRequestId`. When neither:
 
 ```ts
 throw new ValidationError(
