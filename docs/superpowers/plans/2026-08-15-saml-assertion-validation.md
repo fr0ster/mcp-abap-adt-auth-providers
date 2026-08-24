@@ -486,7 +486,7 @@ If a mutation turns more than the named test red, say so; if it turns none red, 
 - [ ] **Step 6: Commit**
 
 ```bash
-npm run lint:check && npm run build
+npm run lint:check && npm run build && npm run test:check && npm test
 git add src/validation/xsdDateTime.ts src/__tests__/validation/xsdDateTime.test.ts
 git commit -m "feat: parse xsd:dateTime strictly enough to trust it"
 ```
@@ -513,7 +513,7 @@ git commit -m "feat: parse xsd:dateTime strictly enough to trust it"
 `src/__tests__/validation/documentIds.test.ts`:
 
 ```ts
-import { DOMParser } from "@xmldom/xmldom";
+import { DOMParser, type Document, type Element } from "@xmldom/xmldom";
 import { describe, expect, it } from "@jest/globals";
 import { findDuplicateId, readRequiredId } from "../../validation/documentIds";
 
@@ -579,6 +579,8 @@ Expected: FAIL — module not found.
 - [ ] **Step 3: Implement `src/validation/documentIds.ts`**
 
 ```ts
+import type { Document, Element } from "@xmldom/xmldom";
+
 /**
  * The `ID` rules, which run before any signature reference is resolved.
  *
@@ -627,7 +629,7 @@ Two mutations, one at a time:
 - [ ] **Step 6: Commit**
 
 ```bash
-npm run lint:check && npm run build
+npm run lint:check && npm run build && npm run test:check && npm test
 git add src/validation/documentIds.ts src/__tests__/validation/documentIds.test.ts
 git commit -m "feat: refuse duplicate IDs before a reference is resolved"
 ```
@@ -658,7 +660,7 @@ git commit -m "feat: refuse duplicate IDs before a reference is resolved"
 `src/__tests__/validation/signedNode.test.ts`. It signs its fixtures with the mock's own key material, which is exactly what `auth-mocks` exports it for:
 
 ```ts
-import { DOMParser } from "@xmldom/xmldom";
+import { DOMParser, type Document, type Element } from "@xmldom/xmldom";
 import { describe, expect, it } from "@jest/globals";
 import { generateKeyMaterial, signXml } from "@mcp-abap-adt/auth-mocks";
 import { resolveSignedElement } from "../../validation/signedNode";
@@ -740,6 +742,20 @@ describe("resolveSignedElement", () => {
     ).toThrow(/does not envelope/i);
   });
 
+  it("refuses a detached signature whose reference URI is empty", () => {
+    const key = generateKeyMaterial();
+    // An empty URI signs the whole document; the enveloping rule must still
+    // apply, and an early return for that case is how it stops applying.
+    const signed = signXml(ASSERTION(), key);
+    const signature =
+      /<[^>]*Signature[\s\S]*<\/[^>]*Signature>/.exec(signed)?.[0] ?? "";
+    const emptyUri = signature.replace(/URI="[^"]*"/, 'URI=""');
+    const wrapped = RESPONSE(`${signed.replace(signature, "")}${emptyUri}`);
+    expect(() =>
+      resolveSignedElement(wrapped, parse(wrapped), [key.certificatePem]),
+    ).toThrow(/does not envelope/i);
+  });
+
   it("refuses a signature carrying more than one reference", () => {
     const key = generateKeyMaterial();
     const signed = signXml(ASSERTION(), key);
@@ -787,7 +803,7 @@ Expected: FAIL — module not found.
  */
 
 import { SignedXml } from "xml-crypto";
-import type { Node as XmlNode } from "@xmldom/xmldom";
+import type { Document, Element, Node as XmlNode } from "@xmldom/xmldom";
 
 const DSIG_NS = "http://www.w3.org/2000/09/xmldsig#";
 
@@ -843,24 +859,28 @@ export function resolveSignedElement(
     );
   }
   const uri = references[0].getAttribute("URI") ?? "";
+  let referenced: Element | null = null;
+
   if (uri === "") {
-    return doc.documentElement as unknown as Element;
-  }
-  if (!uri.startsWith("#")) {
+    // An empty URI signs the whole document. It must still satisfy the
+    // enveloping rule below — returning early here is exactly how a detached
+    // signature with an empty reference walks straight past that rule.
+    referenced = doc.documentElement as unknown as Element;
+  } else if (!uri.startsWith("#")) {
     throw new Error(
       `the signature reference is not a same-document URI: ${uri}`,
     );
-  }
-  const id = uri.slice(1);
-
-  const elements = doc.getElementsByTagName("*");
-  let referenced: Element | null = null;
-  for (let i = 0; i < elements.length; i++) {
-    if (elements[i].getAttribute("ID") === id) {
-      referenced = elements[i] as unknown as Element;
-      break;
+  } else {
+    const id = uri.slice(1);
+    const elements = doc.getElementsByTagName("*");
+    for (let i = 0; i < elements.length; i++) {
+      if (elements[i].getAttribute("ID") === id) {
+        referenced = elements[i] as unknown as Element;
+        break;
+      }
     }
   }
+
   if (!referenced) {
     throw new Error(
       `the signature references ${uri}, which is not in the document`,
@@ -889,7 +909,7 @@ export function resolveSignedElement(
 npm test -- src/__tests__/validation/signedNode.test.ts
 ```
 
-Expected: PASS, eight cases. RSA key generation makes this suite slower than the others; that is expected.
+Expected: PASS, nine cases. RSA key generation makes this suite slower than the others; that is expected.
 
 If the detached-signature fixture verifies where you expected refusal, or fails
 to verify at all because lifting the element changed the canonicalised bytes,
@@ -910,7 +930,7 @@ Three mutations, one at a time:
 - [ ] **Step 6: Commit**
 
 ```bash
-npm run lint:check && npm run build
+npm run lint:check && npm run build && npm run test:check && npm test
 git add src/validation/signedNode.ts src/__tests__/validation/signedNode.test.ts
 git commit -m "feat: resolve which element a valid signature covers"
 ```
@@ -1097,7 +1117,7 @@ Three mutations, one at a time:
 - [ ] **Step 6: Commit**
 
 ```bash
-npm run lint:check && npm run build
+npm run lint:check && npm run build && npm run test:check && npm test
 git add src/validation/inMemoryReplayStore.ts src/__tests__/validation/inMemoryReplayStore.test.ts
 git commit -m "feat: an in-memory replay store, atomic and namespaced by issuer"
 ```
@@ -1225,7 +1245,7 @@ Expected: PASS, three cases.
 - [ ] **Step 6: Commit**
 
 ```bash
-npm run lint:check && npm run build
+npm run lint:check && npm run build && npm run test:check && npm test
 git add src/errors/AssertionValidationError.ts src/__tests__/errors/AssertionValidationError.test.ts
 git commit -m "feat: an assertion refusal that names the check that failed"
 ```
@@ -1254,6 +1274,36 @@ export function createDefaultAssertionValidator(
   options: DefaultAssertionValidatorOptions,
 ): IAssertionValidator;
 ```
+
+**What the signature actually protects, and what it does not.**
+
+The spec allows the signature on the `Response` **or** on the `Assertion`, and
+those two placements do not protect the same fields. Three checks read from the
+`Response`: `Status`, `Response/Issuer` and `Destination`. When only the
+assertion is signed, all three sit outside the signature and an attacker who
+can deliver a response at all can set them to whatever we expect.
+
+Saying "everything is read from the signed element" would therefore be false,
+and the earlier draft of this task said it. The accurate statement:
+
+| Read from                                                                                                           | Signature on `Response` | Signature on `Assertion` only                               |
+| ------------------------------------------------------------------------------------------------------------------- | ----------------------- | ----------------------------------------------------------- |
+| Everything inside the assertion — `Issuer`, `Conditions`, `Audience`, the bearer confirmation, the assertion's `ID` | protected               | protected                                                   |
+| `Status`, `Response/Issuer`, `Destination`                                                                          | protected               | **not protected** — a misconfiguration check, not a control |
+
+The assertion-only flow is not thereby unsafe, and the reason is worth stating
+because it is not obvious: **a declined login carries no assertion.** An
+identity provider that refuses does not mint one, so an attacker who flips
+`Status` from a failure to `Success` still has no validly signed assertion to
+put underneath it, and signature resolution fails before `Status` is ever read.
+What establishes success in that flow is the signed assertion satisfying every
+assertion-level check — not the `Status` element.
+
+The three checks stay, because they cost nothing and catch a real
+misconfiguration, and because with a signed `Response` they are genuine
+controls. What changes is the claim made for them. A consumer who needs
+`Status`, `Destination` and the response issuer to be _protected_ must require
+their identity provider to sign the `Response`; the README says so in Task 12.
 
 **This is the largest file in the plan, and its shape is fixed by the spec's check table.** Implement the checks in the table's order, each throwing `AssertionValidationError` with its own `check` value and its own message. No two messages may share a distinguishing fragment: a test asserting `/Destination/` must not be satisfiable by the `Recipient` refusal.
 
@@ -1727,11 +1777,17 @@ The skeleton, with every rule's exact condition. Fill in the reading helpers; do
  * The shipped assertion validator: the spec's check table, in order.
  *
  * Two properties matter more than any individual check. First, the signature
- * is resolved to an element and everything is then read *from that element* —
- * a document holding a validly signed fragment beside a forged one is the
- * wrapping attack, and reading the wrong node is how it succeeds. Second, no
- * two refusals share a distinguishing phrase, so a test cannot pass for a
- * neighbouring check's reason.
+ * is resolved to an element and every assertion-level field is read *from that
+ * element* — a document holding a validly signed fragment beside a forged one
+ * is the wrapping attack, and reading the wrong node is how it succeeds.
+ * Second, no two refusals share a distinguishing phrase, so a test cannot pass
+ * for a neighbouring check's reason.
+ *
+ * Three fields are read from the Response rather than the assertion: Status,
+ * Response/Issuer and Destination. When only the assertion is signed they lie
+ * outside the signature, and they are then misconfiguration checks rather than
+ * controls. That is safe because a declined login carries no assertion at all,
+ * so flipping Status buys an attacker nothing they can sign.
  */
 
 import { DOMParser } from '@xmldom/xmldom';
@@ -2079,7 +2135,7 @@ Six mutations, one at a time, each reverted before the next. Report per case:
 - [ ] **Step 6: Commit**
 
 ```bash
-npm run lint:check && npm run build
+npm run lint:check && npm run build && npm run test:check && npm test
 git add src/validation/assertionValidator.ts src/__tests__/validation/assertionValidator.test.ts
 git commit -m "feat: the shipped assertion validator, read only from the signed element"
 ```
@@ -2246,7 +2302,7 @@ Expected: PASS. Existing callers of `buildSamlAuthorizationUrl` now destructure 
 - [ ] **Step 8: Commit**
 
 ```bash
-npm run lint:check && npm run build
+npm run lint:check && npm run build && npm run test:check && npm test
 git add -A
 git commit -m "feat!: the AuthnRequest ID survives to validation"
 ```
@@ -2428,7 +2484,7 @@ Expected: PASS. Existing provider tests will need `idpCertificates` and `idpEnti
 - [ ] **Step 8: Commit**
 
 ```bash
-npm run lint:check && npm run build
+npm run lint:check && npm run build && npm run test:check && npm test
 git add -A
 git commit -m "feat!: both SAML providers validate the assertion before trusting it"
 ```
@@ -2524,6 +2580,12 @@ From `src/index.ts`: `createDefaultAssertionValidator`, `DefaultAssertionValidat
 - that `parseSamlNotOnOrAfter` is gone and expiry now comes from the verified document;
 - the request-ID rule: when the package does not build the request, `authnRequestId` is required, with the two flows that trigger it;
 - that the default replay store is **process-wide**, what that does and does not protect, and how to replace it;
+- **which fields the signature protects under each placement**: with the
+  signature on the `Assertion` alone, `Status`, `Destination` and the response
+  issuer are outside it and are checked as misconfiguration rather than as
+  controls. A consumer who needs them protected must require their identity
+  provider to sign the `Response`. State plainly why the assertion-only flow is
+  still sound — a declined login carries no assertion to sign;
 - `clockSkewMs`, its default of `0`, and that retention outlasts it.
 
 Also update the "Package responsibilities" section — this package now validates assertions, which the current text says it does not.
