@@ -218,7 +218,7 @@ Expected: the `grep` prints at least 1. Types are erased at runtime, so the firs
 
 - [ ] **Step 6: Bump the version and write the changelog**
 
-`package.json` to `24.1.0` — or `<current major>.1.0` if master has moved again. Add a matching section to `CHANGELOG.md` describing the addition as what a consumer gains, not as a task number.
+`package.json` to `24.1.0` — or, if master has moved, `<current major>.<current minor + 1>.0`. Not `<major>.1.0`: that is only right when the current minor is 0, and it would silently reuse a published version otherwise. Add a matching section to `CHANGELOG.md` describing the addition as what a consumer gains, not as a task number.
 
 - [ ] **Step 7: Commit, push, open the PR — then stop**
 
@@ -287,7 +287,7 @@ Expected: identical to Step 1. Any change is a finding.
 - [ ] **Step 5: Commit**
 
 ```bash
-npm run lint:check
+npm run lint:check && npm run build && npm run test:check && npm test
 git add package.json package-lock.json
 git commit -m "chore: interfaces 24.1.0, and the XML libraries validation needs"
 ```
@@ -663,6 +663,7 @@ git commit -m "feat: refuse duplicate IDs before a reference is resolved"
 ```ts
 import { DOMParser, type Document, type Element } from "@xmldom/xmldom";
 import { describe, expect, it } from "@jest/globals";
+import { SignedXml } from "xml-crypto";
 import { generateKeyMaterial, signXml } from "@mcp-abap-adt/auth-mocks";
 import { resolveSignedElement } from "../../validation/signedNode";
 
@@ -743,15 +744,40 @@ describe("resolveSignedElement", () => {
     ).toThrow(/does not envelope/i);
   });
 
-  it("refuses a detached signature whose reference URI is empty", () => {
+  it("refuses a signature with an empty URI that sits below the root", () => {
     const key = generateKeyMaterial();
-    // An empty URI signs the whole document; the enveloping rule must still
-    // apply, and an early return for that case is how it stops applying.
-    const signed = signXml(ASSERTION(), key);
-    const signature =
-      /<[^>]*Signature[\s\S]*<\/[^>]*Signature>/.exec(signed)?.[0] ?? "";
-    const emptyUri = signature.replace(/URI="[^"]*"/, 'URI=""');
-    const wrapped = RESPONSE(`${signed.replace(signature, "")}${emptyUri}`);
+    // An empty URI signs the whole document, so the element it references is
+    // the root. Placing the Signature inside the Assertion still verifies —
+    // the enveloped-signature transform removes it before digesting, wherever
+    // it sits — but its parent is then the Assertion, not the root. Only the
+    // enveloping check catches that, and an early return for the empty-URI
+    // case is exactly how the check stops applying.
+    //
+    // Rewriting URI in an already-signed document would not do: URI lives
+    // inside SignedInfo, which is itself signed, so the edit breaks
+    // SignatureValue and the test would fail at "does not verify" instead —
+    // passing for the wrong reason, or rather failing for it.
+    const unsigned = RESPONSE(ASSERTION());
+    const sig = new SignedXml({
+      privateKey: key.privateKeyPem,
+      publicCert: key.certificatePem,
+      signatureAlgorithm: "http://www.w3.org/2001/04/xmldsig-more#rsa-sha256",
+      canonicalizationAlgorithm: "http://www.w3.org/2001/10/xml-exc-c14n#",
+    });
+    sig.addReference({
+      xpath: "/*",
+      uri: "",
+      digestAlgorithm: "http://www.w3.org/2001/04/xmlenc#sha256",
+      transforms: [
+        "http://www.w3.org/2000/09/xmldsig#enveloped-signature",
+        "http://www.w3.org/2001/10/xml-exc-c14n#",
+      ],
+    });
+    sig.computeSignature(unsigned, {
+      location: { reference: "//*[local-name(.)='Assertion']", action: "append" },
+    });
+    const wrapped = sig.getSignedXml();
+
     expect(() =>
       resolveSignedElement(wrapped, parse(wrapped), [key.certificatePem]),
     ).toThrow(/does not envelope/i);
@@ -1278,6 +1304,11 @@ export function createDefaultAssertionValidator(
 
 **What the signature actually protects, and what it does not.**
 
+This restates the spec's "What each placement actually protects" — a section
+added to the spec on 2026-08-30 precisely because this plan had adopted the
+reading without it. If that section has not been re-approved, stop: the plan is
+ahead of its spec, and that is the owner's gate to pass, not mine.
+
 The spec allows the signature on the `Response` **or** on the `Assertion`, and
 those two placements do not protect the same fields. Three checks read from the
 `Response`: `Status`, `Response/Issuer` and `Destination`. When only the
@@ -1791,7 +1822,7 @@ The skeleton, with every rule's exact condition. Fill in the reading helpers; do
  * so flipping Status buys an attacker nothing they can sign.
  */
 
-import { DOMParser } from '@xmldom/xmldom';
+import { DOMParser, type Document, type Element } from '@xmldom/xmldom';
 import type {
   AssertionContext,
   IAssertionReplayStore,
@@ -2551,7 +2582,7 @@ npm test -- src/__tests__/integration/samlValidation.test.ts
 - [ ] **Step 3: Commit**
 
 ```bash
-npm run lint:check && npm run build && npm test
+npm run lint:check && npm run build && npm run test:check && npm test
 git add src/__tests__/integration/samlValidation.test.ts
 git commit -m "test: every corruption variant is refused at its own check"
 ```

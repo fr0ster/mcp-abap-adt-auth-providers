@@ -1,7 +1,7 @@
 # SAML assertion validation
 
 **Date:** 2026-08-13
-**Status:** approved, not implemented
+**Status:** approved 2026-08-14; amended 2026-08-30 with "What each placement actually protects" — **awaiting re-approval of that section**, not implemented
 **Closes:** issue #19 — SAML assertions are accepted without any validation
 **Depends on:** `@mcp-abap-adt/auth-mocks@0.1.1`, published, which makes every
 rule below testable deterministically
@@ -80,6 +80,38 @@ So the default resolves, in order:
 
 A document where the signed node and the read node differ is refused, whatever
 else is true of it.
+
+### What each placement actually protects
+
+Decision 7 accepts a signature on the `Response` **or** on the `Assertion`, and
+those two do not protect the same fields. Three checks read from the
+`Response` — `Status`, `Response/Issuer` and `Destination` — and with an
+assertion-only signature all three sit outside the signature, where anyone able
+to deliver a response can set them to whatever we expect.
+
+| Read from                                                                                                           | Signature on `Response` | Signature on `Assertion` only                              |
+| ------------------------------------------------------------------------------------------------------------------- | ----------------------- | ---------------------------------------------------------- |
+| Everything inside the assertion — `Issuer`, `Conditions`, `Audience`, the bearer confirmation, the assertion's `ID` | protected               | protected                                                  |
+| `Status`, `Response/Issuer`, `Destination`                                                                          | protected               | **not protected**: a misconfiguration check, not a control |
+
+The assertion-only flow is not thereby unsafe, and the reason is worth stating
+because it is not obvious: **a declined login carries no assertion.** An
+identity provider that refuses does not mint one, so an attacker who flips
+`Status` from a failure to `Success` still has nothing validly signed to put
+beneath it, and signature resolution fails before `Status` is ever read. What
+establishes success in that flow is a signed assertion satisfying every
+assertion-level check — not the `Status` element.
+
+The three checks stay, because they cost nothing, they catch a real
+misconfiguration, and with a signed `Response` they are genuine controls. What
+this section fixes is the claim made for them: a consumer who needs `Status`,
+`Destination` and the response issuer to be _protected_ must require their
+identity provider to sign the `Response`, and the README must say so.
+
+This paragraph was added after the spec was first approved, because the
+implementation plan had quietly adopted this reading without it. Stating it
+here is what makes the plan an implementation of the spec rather than a
+departure from it.
 
 ## Where the expected request ID comes from
 
