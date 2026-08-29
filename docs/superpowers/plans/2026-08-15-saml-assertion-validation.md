@@ -28,8 +28,9 @@
 
 Do not re-derive these; do verify anything you depend on that is not listed.
 
-- `@mcp-abap-adt/interfaces` is at **17.0.0**, published and tagged `v17.0.0`. The new interfaces are a **minor** on top of it: 17.1.0.
-- `auth-providers` is at **2.0.0** and depends on `@mcp-abap-adt/interfaces@^11.6.0` — six majors behind. **All 13 names it imports still exist in 17.0.0**, and `IAuthorizationStrategy.d.ts` is byte-identical between 11.6.0 and 16.0.0. The bump is expected to be safe; Task 2 proves it by compiling rather than trusting this paragraph.
+- `@mcp-abap-adt/interfaces` is at **24.0.0**, published. The new interfaces are a **minor** on top of it: 24.1.0.
+- `auth-providers` is at **2.0.0** and depends on `@mcp-abap-adt/interfaces@^11.6.0` — **thirteen majors behind**, and there are thirteen breaking commits between the two. **All 13 names it imports still exist in 24.0.0**, and `IAuthorizationStrategy` still carries `buildAuthorizationUrl`, `AuthorizationOutcome`, `payload` and `redirectUri`. The bump is expected to be safe; Task 2 proves it by compiling rather than trusting this paragraph.
+- **Check the version before you start.** `interfaces` moved from 17.0.0 to 24.0.0 while this plan was being written, and every number here was rewritten once because of it. Run `npm view @mcp-abap-adt/interfaces version`; if it is past 24, the minor is `<current>.1.0` and Task 2's range follows, and the compatibility check in Task 2 matters more, not less.
 - `Saml2CommonConfig` lives in `auth-providers/src/providers/saml2Utils.ts:9`, **not** in `interfaces`. The new configuration fields go there.
 - `@mcp-abap-adt/auth-mocks@0.1.1` is published. `startMockSamlIdp` requires `acsUrls` — with none registered it refuses every `AuthnRequest`.
 - `xml-crypto@6`: `checkSignature` **throws** when the signature value fails, and returns `false` only for a reference-digest mismatch. Both outcomes mean "invalid".
@@ -75,7 +76,7 @@ The pure modules are separate because each is a rule with its own failure modes,
 
 - Produces: everything `auth-providers` imports in Tasks 3–11.
 
-**Before you start:** work on a branch off `master` (which is at 17.0.0). Do not branch off any feature branch you find. This is a **minor**: nothing existing changes.
+**Before you start:** work on a branch off `master` (at 24.0.0 when this was written — confirm). Do not branch off any feature branch you find. This is a **minor**: nothing existing changes.
 
 - [ ] **Step 1: Write `src/auth/IAssertionValidator.ts`**
 
@@ -217,7 +218,7 @@ Expected: the `grep` prints at least 1. Types are erased at runtime, so the firs
 
 - [ ] **Step 6: Bump the version and write the changelog**
 
-`package.json` to `17.1.0`. Add a `## [17.1.0]` section to `CHANGELOG.md` describing the addition as what a consumer gains, not as a task number.
+`package.json` to `24.1.0` — or `<current major>.1.0` if master has moved again. Add a matching section to `CHANGELOG.md` describing the addition as what a consumer gains, not as a task number.
 
 - [ ] **Step 7: Commit, push, open the PR — then stop**
 
@@ -242,9 +243,9 @@ Do not merge. Do not tag. Report the PR URL and stop; the owner reviews, merges 
 
 **Interfaces:**
 
-- Consumes: `@mcp-abap-adt/interfaces@17.1.0` from Task 1.
+- Consumes: `@mcp-abap-adt/interfaces@24.1.0` from Task 1 — or whatever minor Task 1 actually published.
 
-**This task exists because the bump is six majors wide.** The names were checked and all survive, but a compile is the only thing that proves it.
+**This task exists because the bump is thirteen majors wide.** The names were checked and all survive, but a compile is the only thing that proves it.
 
 - [ ] **Step 1: Record what passes now**
 
@@ -258,10 +259,10 @@ Write the numbers down; Step 4 compares against them.
 
 In `package.json`:
 
-- `dependencies`: `"@mcp-abap-adt/interfaces": "^17.1.0"` (from `^11.6.0`), and add `"@xmldom/xmldom": "^0.9.10"`, `"xml-crypto": "^6.1.2"`.
+- `dependencies`: `"@mcp-abap-adt/interfaces": "^24.1.0"` (from `^11.6.0`), and add `"@xmldom/xmldom": "^0.9.10"`, `"xml-crypto": "^6.1.2"`.
 - `devDependencies`: add `"@mcp-abap-adt/auth-mocks": "^0.1.1"`.
 
-If `@mcp-abap-adt/interfaces@17.1.0` is not yet published, Task 1's PR has not been merged and released. **Stop and say so** rather than installing 17.0.0 and working around the missing types.
+If that version is not yet published, Task 1's PR has not been merged and released. **Stop and say so** rather than installing the previous major and working around the missing types.
 
 ```bash
 npm install
@@ -288,7 +289,7 @@ Expected: identical to Step 1. Any change is a finding.
 ```bash
 npm run lint:check
 git add package.json package-lock.json
-git commit -m "chore: interfaces 17.1.0, and the XML libraries validation needs"
+git commit -m "chore: interfaces 24.1.0, and the XML libraries validation needs"
 ```
 
 ---
@@ -2615,4 +2616,4 @@ Do not merge, do not tag, do not publish. Report the PR URL and stop.
 
 ## Release order
 
-`interfaces@17.1.0` must be merged and published before Task 2 can install it. If it is not, Task 2 stops rather than working around it. `auth-providers@3.0.0` follows, and the owner publishes both.
+`interfaces@24.1.0` — or whatever minor Task 1 published — must be merged and published before Task 2 can install it. If it is not, Task 2 stops rather than working around it. `auth-providers@3.0.0` follows, and the owner publishes both.
