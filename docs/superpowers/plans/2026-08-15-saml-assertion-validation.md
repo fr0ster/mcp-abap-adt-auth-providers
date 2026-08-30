@@ -30,7 +30,7 @@ Do not re-derive these; do verify anything you depend on that is not listed.
 
 - `@mcp-abap-adt/interfaces` is at **24.0.0**, published. The new interfaces are a **minor** on top of it: 24.1.0.
 - `auth-providers` is at **2.0.0** and depends on `@mcp-abap-adt/interfaces@^11.6.0` — **thirteen majors behind**, and there are thirteen breaking commits between the two. **All 13 names it imports still exist in 24.0.0**, and `IAuthorizationStrategy` still carries `buildAuthorizationUrl`, `AuthorizationOutcome`, `payload` and `redirectUri`. The bump is expected to be safe; Task 2 proves it by compiling rather than trusting this paragraph.
-- **Check the version before you start.** `interfaces` moved from 17.0.0 to 24.0.0 while this plan was being written, and every number here was rewritten once because of it. Run `npm view @mcp-abap-adt/interfaces version`; if it is past 24, the minor is `<current>.1.0` and Task 2's range follows, and the compatibility check in Task 2 matters more, not less.
+- **Check the version before you start.** `interfaces` moved from 17.0.0 to 24.0.0 while this plan was being written, and every number here was rewritten once because of it. Run `npm view @mcp-abap-adt/interfaces version` first. The new version is `<current major>.<current minor + 1>.0`, and every version named after this point means **whatever Task 1 actually published** — the numbers below are what was current when this was written, not values to paste. The compatibility check in Task 2 then matters more, not less.
 - `Saml2CommonConfig` lives in `auth-providers/src/providers/saml2Utils.ts:9`, **not** in `interfaces`. The new configuration fields go there.
 - `@mcp-abap-adt/auth-mocks@0.1.1` is published. `startMockSamlIdp` requires `acsUrls` — with none registered it refuses every `AuthnRequest`.
 - `xml-crypto@6`: `checkSignature` **throws** when the signature value fails, and returns `false` only for a reference-digest mismatch. Both outcomes mean "invalid".
@@ -243,7 +243,7 @@ Do not merge. Do not tag. Report the PR URL and stop; the owner reviews, merges 
 
 **Interfaces:**
 
-- Consumes: `@mcp-abap-adt/interfaces@24.1.0` from Task 1 — or whatever minor Task 1 actually published.
+- Consumes: the interfaces minor Task 1 published — `24.1.0` if nothing moved.
 
 **This task exists because the bump is thirteen majors wide.** The names were checked and all survive, but a compile is the only thing that proves it.
 
@@ -259,7 +259,7 @@ Write the numbers down; Step 4 compares against them.
 
 In `package.json`:
 
-- `dependencies`: `"@mcp-abap-adt/interfaces": "^24.1.0"` (from `^11.6.0`), and add `"@xmldom/xmldom": "^0.9.10"`, `"xml-crypto": "^6.1.2"`.
+- `dependencies`: `"@mcp-abap-adt/interfaces"` set to `^` plus **the version Task 1 published** (`^24.1.0` if nothing moved), replacing `^11.6.0`, and add `"@xmldom/xmldom": "^0.9.10"`, `"xml-crypto": "^6.1.2"`.
 - `devDependencies`: add `"@mcp-abap-adt/auth-mocks": "^0.1.1"`.
 
 If that version is not yet published, Task 1's PR has not been merged and released. **Stop and say so** rather than installing the previous major and working around the missing types.
@@ -289,7 +289,7 @@ Expected: identical to Step 1. Any change is a finding.
 ```bash
 npm run lint:check && npm run build && npm run test:check && npm test
 git add package.json package-lock.json
-git commit -m "chore: interfaces 24.1.0, and the XML libraries validation needs"
+git commit -m "chore: interfaces <the version Task 1 published>, and the XML libraries validation needs"
 ```
 
 ---
@@ -767,6 +767,12 @@ describe("resolveSignedElement", () => {
     sig.addReference({
       xpath: "/*",
       uri: "",
+      // Without this, xml-crypto calls ensureHasId() on the referenced node
+      // and overwrites `uri` with "#<id>" — the fixture would be an ordinary
+      // reference and would test nothing about the empty-URI path. Verified
+      // against the installed xml-crypto, whose signed-xml.js branches on
+      // isEmptyUri at exactly that point.
+      isEmptyUri: true,
       digestAlgorithm: "http://www.w3.org/2001/04/xmlenc#sha256",
       transforms: [
         "http://www.w3.org/2000/09/xmldsig#enveloped-signature",
@@ -774,9 +780,17 @@ describe("resolveSignedElement", () => {
       ],
     });
     sig.computeSignature(unsigned, {
-      location: { reference: "//*[local-name(.)='Assertion']", action: "append" },
+      location: {
+        reference: "//*[local-name(.)='Assertion']",
+        action: "append",
+      },
     });
     const wrapped = sig.getSignedXml();
+
+    // The fixture must be what it claims before it can prove anything: a setup
+    // that silently produced a different document would pass or fail for a
+    // reason nobody chose.
+    expect(wrapped).toContain('URI=""');
 
     expect(() =>
       resolveSignedElement(wrapped, parse(wrapped), [key.certificatePem]),
@@ -2169,7 +2183,7 @@ Six mutations, one at a time, each reverted before the next. Report per case:
 ```bash
 npm run lint:check && npm run build && npm run test:check && npm test
 git add src/validation/assertionValidator.ts src/__tests__/validation/assertionValidator.test.ts
-git commit -m "feat: the shipped assertion validator, read only from the signed element"
+git commit -m "feat: the shipped assertion validator, assertion fields read only from the signed element"
 ```
 
 ---
@@ -2647,4 +2661,4 @@ Do not merge, do not tag, do not publish. Report the PR URL and stop.
 
 ## Release order
 
-`interfaces@24.1.0` — or whatever minor Task 1 published — must be merged and published before Task 2 can install it. If it is not, Task 2 stops rather than working around it. `auth-providers@3.0.0` follows, and the owner publishes both.
+The interfaces minor Task 1 published must be merged and published before Task 2 can install it. If it is not, Task 2 stops rather than working around it. `auth-providers@3.0.0` follows, and the owner publishes both.
