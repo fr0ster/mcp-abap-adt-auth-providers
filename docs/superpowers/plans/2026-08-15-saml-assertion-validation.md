@@ -250,7 +250,7 @@ Do not merge. Do not tag. Report the PR URL and stop; the owner reviews, merges 
 
 - Consumes: the interfaces minor Task 1 published.
 
-**This task exists because the bump is thirteen majors wide.** The names were checked and all survive, but a compile is the only thing that proves it.
+**This task exists because the bump is many majors wide** — six when the plan was drafted, fourteen by the time it was reviewed. The names were checked and all survive, but a compile is the only thing that proves it.
 
 - [ ] **Step 1: Record what passes now**
 
@@ -694,6 +694,30 @@ describe("resolveSignedElement", () => {
     expect(element.localName).toBe("Assertion");
   });
 
+  // The spec promises PEM or base64 DER, and metadata carries the latter.
+  // Measured: xml-crypto throws DECODER routines::unsupported on bare base64,
+  // and the same bytes armoured verify — so this is a real conversion, not a
+  // formatting preference.
+  it("accepts a certificate given as bare base64 DER", () => {
+    const key = generateKeyMaterial();
+    const der = key.certificatePem
+      .replace(/-----[^-]+-----/g, "")
+      .replace(/\s+/g, "");
+    const signed = signXml(ASSERTION(), key);
+    const wrapped = RESPONSE(signed);
+    const element = resolveSignedElement(wrapped, parse(wrapped), [der]);
+    expect(element.localName).toBe("Assertion");
+  });
+
+  it("refuses a certificate that is neither PEM nor base64", () => {
+    const key = generateKeyMaterial();
+    const signed = signXml(ASSERTION(), key);
+    const wrapped = RESPONSE(signed);
+    expect(() =>
+      resolveSignedElement(wrapped, parse(wrapped), ["not a certificate!"]),
+    ).toThrow(/neither PEM nor base64/i);
+  });
+
   it("accepts a certificate later in the rotation list", () => {
     const other = generateKeyMaterial();
     const key = generateKeyMaterial();
@@ -797,6 +821,21 @@ describe("resolveSignedElement", () => {
     // reason nobody chose.
     expect(wrapped).toContain('URI=""');
 
+    // And it must verify, or this tests the signature check rather than the
+    // enveloping one. Measured against the installed xml-crypto: an empty-URI
+    // signature nested inside the Assertion returns true here, because the
+    // enveloped-signature transform removes it wherever it sits. If a future
+    // version stops verifying it, this line fails with a clear reason instead
+    // of the case below passing for the wrong one.
+    const probe = new SignedXml({ publicCert: key.certificatePem });
+    probe.loadSignature(
+      parse(wrapped).getElementsByTagNameNS(
+        "http://www.w3.org/2000/09/xmldsig#",
+        "Signature",
+      )[0] as never,
+    );
+    expect(probe.checkSignature(wrapped)).toBe(true);
+
     expect(() =>
       resolveSignedElement(wrapped, parse(wrapped), [key.certificatePem]),
     ).toThrow(/does not envelope/i);
@@ -854,6 +893,30 @@ import type { Document, Element, Node as XmlNode } from "@xmldom/xmldom";
 const DSIG_NS = "http://www.w3.org/2000/09/xmldsig#";
 
 /**
+ * PEM in, PEM out; bare base64 DER gets its armour.
+ *
+ * The spec promises `idpCertificates` accepts either, and a consumer copying
+ * `<X509Certificate>` out of identity-provider metadata has bare base64 DER in
+ * their hand — the armour is not in the metadata. `xml-crypto` accepts only
+ * PEM or a Buffer: measured, a bare base64 certificate makes OpenSSL throw
+ * `DECODER routines::unsupported`, while the same bytes re-armoured verify.
+ *
+ * Left unnormalised that throw would be swallowed by the loop below and
+ * reported as "the signature does not verify against any configured
+ * certificate" — blaming the assertion for the consumer's formatting.
+ */
+function toPem(certificate: string): string {
+  const trimmed = certificate.trim();
+  if (trimmed.includes("-----BEGIN")) return trimmed;
+  const body = trimmed.replace(/\s+/g, "");
+  if (!/^[A-Za-z0-9+/]+={0,2}$/.test(body)) {
+    throw new Error("a configured certificate is neither PEM nor base64 DER");
+  }
+  const wrapped = body.replace(/(.{64})/g, "$1\n").trim();
+  return `-----BEGIN CERTIFICATE-----\n${wrapped}\n-----END CERTIFICATE-----\n`;
+}
+
+/**
  * Verifies the signature against the certificates and returns the element it
  * references. Throws when there is no signature, when none of the certificates
  * accepts it, or when the reference names nothing.
@@ -876,7 +939,7 @@ export function resolveSignedElement(
 
   let verified = false;
   for (const certificate of certificates) {
-    const verifier = new SignedXml({ publicCert: certificate });
+    const verifier = new SignedXml({ publicCert: toPem(certificate) });
     verifier.loadSignature(signatureNode as unknown as XmlNode);
     try {
       // Returns false for a digest mismatch and throws when the signature
@@ -955,7 +1018,7 @@ export function resolveSignedElement(
 npm test -- src/__tests__/validation/signedNode.test.ts
 ```
 
-Expected: PASS, nine cases. RSA key generation makes this suite slower than the others; that is expected.
+Expected: PASS, eleven cases. RSA key generation makes this suite slower than the others; that is expected.
 
 If the detached-signature fixture verifies where you expected refusal, or fails
 to verify at all because lifting the element changed the canonicalised bytes,
