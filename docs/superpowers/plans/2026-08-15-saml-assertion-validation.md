@@ -28,9 +28,14 @@
 
 Do not re-derive these; do verify anything you depend on that is not listed.
 
-- `@mcp-abap-adt/interfaces` is at **24.0.0**, published. The new interfaces are a **minor** on top of it: 24.1.0.
-- `auth-providers` is at **2.0.0** and depends on `@mcp-abap-adt/interfaces@^11.6.0` — **thirteen majors behind**, and there are thirteen breaking commits between the two. **All 13 names it imports still exist in 24.0.0**, and `IAuthorizationStrategy` still carries `buildAuthorizationUrl`, `AuthorizationOutcome`, `payload` and `redirectUri`. The bump is expected to be safe; Task 2 proves it by compiling rather than trusting this paragraph.
-- **Check the version before you start.** `interfaces` moved from 17.0.0 to 24.0.0 while this plan was being written, and every number here was rewritten once because of it. Run `npm view @mcp-abap-adt/interfaces version` first. The new version is `<current major>.<current minor + 1>.0`, and every version named after this point means **whatever Task 1 actually published** — the numbers below are what was current when this was written, not values to paste. The compatibility check in Task 2 then matters more, not less.
+- **This plan names no interfaces version, deliberately.** It went stale three
+  times while the plan was being written and reviewed — 17.0.0, then 24.0.0,
+  then 25.0.0, the last of those during a single reply. Every version below is
+  written as a rule, not a number: Task 1 publishes `<current major>.<current
+minor + 1>.0`, and every later reference means _the version Task 1 actually
+  published_.
+- `auth-providers` is at **2.0.0** and depends on `@mcp-abap-adt/interfaces@^11.6.0`. That gap was six majors when this plan was drafted and fourteen by the time it was reviewed; whatever it is when you start, it is wide. **All 13 names `auth-providers` imports still existed at every version checked — 16.0.0, 17.0.0, 24.0.0 and 25.0.0** — and `IAuthorizationStrategy` still carries `buildAuthorizationUrl`, `AuthorizationOutcome`, `payload` and `redirectUri`. That is four data points for "the bump is safe", not a guarantee; Task 2 proves it by compiling.
+- **Check the version before you start.** `interfaces` moved from 17.0.0 to 24.0.0 while this plan was being written, and every number here was rewritten once because of it. Run `npm view @mcp-abap-adt/interfaces version` first, and again before Task 2 installs it. The compatibility check in Task 2 matters more the wider the gap, not less.
 - `Saml2CommonConfig` lives in `auth-providers/src/providers/saml2Utils.ts:9`, **not** in `interfaces`. The new configuration fields go there.
 - `@mcp-abap-adt/auth-mocks@0.1.1` is published. `startMockSamlIdp` requires `acsUrls` — with none registered it refuses every `AuthnRequest`.
 - `xml-crypto@6`: `checkSignature` **throws** when the signature value fails, and returns `false` only for a reference-digest mismatch. Both outcomes mean "invalid".
@@ -218,7 +223,7 @@ Expected: the `grep` prints at least 1. Types are erased at runtime, so the firs
 
 - [ ] **Step 6: Bump the version and write the changelog**
 
-`package.json` to `24.1.0` — or, if master has moved, `<current major>.<current minor + 1>.0`. Not `<major>.1.0`: that is only right when the current minor is 0, and it would silently reuse a published version otherwise. Add a matching section to `CHANGELOG.md` describing the addition as what a consumer gains, not as a task number.
+`package.json` to `<current major>.<current minor + 1>.0` — read the current value from `master`'s `package.json`, do not assume the minor is 0. Record the number you chose; Task 2 needs exactly it. Add a matching section to `CHANGELOG.md` describing the addition as what a consumer gains, not as a task number.
 
 - [ ] **Step 7: Commit, push, open the PR — then stop**
 
@@ -243,7 +248,7 @@ Do not merge. Do not tag. Report the PR URL and stop; the owner reviews, merges 
 
 **Interfaces:**
 
-- Consumes: the interfaces minor Task 1 published — `24.1.0` if nothing moved.
+- Consumes: the interfaces minor Task 1 published.
 
 **This task exists because the bump is thirteen majors wide.** The names were checked and all survive, but a compile is the only thing that proves it.
 
@@ -259,7 +264,7 @@ Write the numbers down; Step 4 compares against them.
 
 In `package.json`:
 
-- `dependencies`: `"@mcp-abap-adt/interfaces"` set to `^` plus **the version Task 1 published** (`^24.1.0` if nothing moved), replacing `^11.6.0`, and add `"@xmldom/xmldom": "^0.9.10"`, `"xml-crypto": "^6.1.2"`.
+- `dependencies`: `"@mcp-abap-adt/interfaces"` set to `^` plus **the version Task 1 published**, replacing `^11.6.0`, and add `"@xmldom/xmldom": "^0.9.10"`, `"xml-crypto": "^6.1.2"`.
 - `devDependencies`: add `"@mcp-abap-adt/auth-mocks": "^0.1.1"`.
 
 If that version is not yet published, Task 1's PR has not been merged and released. **Stop and say so** rather than installing the previous major and working around the missing types.
