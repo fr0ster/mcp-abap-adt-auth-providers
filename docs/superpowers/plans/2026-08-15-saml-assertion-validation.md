@@ -35,7 +35,7 @@ Do not re-derive these; do verify anything you depend on that is not listed.
 minor + 1>.0`, and every later reference means _the version Task 1 actually
   published_.
 - `auth-providers` is at **2.0.0** and depends on `@mcp-abap-adt/interfaces@^11.6.0`. That gap was six majors when this plan was drafted and fourteen by the time it was reviewed; whatever it is when you start, it is wide. **All 13 names `auth-providers` imports still existed at every version checked — 16.0.0, 17.0.0, 24.0.0 and 25.0.0** — and `IAuthorizationStrategy` still carries `buildAuthorizationUrl`, `AuthorizationOutcome`, `payload` and `redirectUri`. That is four data points for "the bump is safe", not a guarantee; Task 2 proves it by compiling.
-- **Check the version before you start.** `interfaces` moved from 17.0.0 to 24.0.0 while this plan was being written, and every number here was rewritten once because of it. Run `npm view @mcp-abap-adt/interfaces version` first, and again before Task 2 installs it. The compatibility check in Task 2 matters more the wider the gap, not less.
+- **Check the version before you start.** Run `npm view @mcp-abap-adt/interfaces version` first, and again before Task 2 installs it. The compatibility check in Task 2 matters more the wider the gap, not less.
 - `Saml2CommonConfig` lives in `auth-providers/src/providers/saml2Utils.ts:9`, **not** in `interfaces`. The new configuration fields go there.
 - `@mcp-abap-adt/auth-mocks@0.1.1` is published. `startMockSamlIdp` requires `acsUrls` — with none registered it refuses every `AuthnRequest`.
 - `xml-crypto@6`: `checkSignature` **throws** when the signature value fails, and returns `false` only for a reference-digest mismatch. Both outcomes mean "invalid".
@@ -81,7 +81,7 @@ The pure modules are separate because each is a rule with its own failure modes,
 
 - Produces: everything `auth-providers` imports in Tasks 3–11.
 
-**Before you start:** work on a branch off `master` (at 24.0.0 when this was written — confirm). Do not branch off any feature branch you find. This is a **minor**: nothing existing changes.
+**Before you start:** work on a branch off `master`, whatever version it is at. Do not branch off any feature branch you find. This is a **minor**: nothing existing changes.
 
 - [ ] **Step 1: Write `src/auth/IAssertionValidator.ts`**
 
