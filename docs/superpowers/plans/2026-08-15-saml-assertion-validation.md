@@ -476,7 +476,7 @@ export function parseXsdDateTime(
 npm test -- src/__tests__/validation/xsdDateTime.test.ts
 ```
 
-Expected: PASS, eleven cases.
+Expected: PASS, twelve cases.
 
 - [ ] **Step 5: Prove each half is load-bearing, one at a time**
 
@@ -670,7 +670,7 @@ import { DOMParser, type Document, type Element } from "@xmldom/xmldom";
 import { describe, expect, it } from "@jest/globals";
 import { SignedXml } from "xml-crypto";
 import { generateKeyMaterial, signXml } from "@mcp-abap-adt/auth-mocks";
-import { resolveSignedElement } from "../../validation/signedNode";
+import { resolveSignedElement, toPem } from "../../validation/signedNode";
 
 const parse = (xml: string) =>
   new DOMParser().parseFromString(xml, "text/xml") as unknown as Document;
@@ -710,12 +710,17 @@ describe("resolveSignedElement", () => {
   });
 
   it("refuses a certificate that is neither PEM nor base64", () => {
-    const key = generateKeyMaterial();
-    const signed = signXml(ASSERTION(), key);
-    const wrapped = RESPONSE(signed);
-    expect(() =>
-      resolveSignedElement(wrapped, parse(wrapped), ["not a certificate!"]),
-    ).toThrow(/neither PEM nor base64/i);
+    expect(() => toPem("not a certificate!")).toThrow(
+      /neither PEM nor base64/i,
+    );
+  });
+
+  // Base64 syntax is not enough: this armours cleanly, and only OpenSSL knows
+  // it is not a certificate. Without the X509Certificate parse it would reach
+  // verification and be reported as a bad signature — the configuration
+  // blamed on the assertion again.
+  it("refuses base64 that is not a certificate", () => {
+    expect(() => toPem("AAAA")).toThrow(/not a valid X.509 certificate/i);
   });
 
   it("accepts a certificate later in the rotation list", () => {
@@ -887,13 +892,15 @@ Expected: FAIL — module not found.
  * other.
  */
 
-import { SignedXml } from "xml-crypto";
+import { X509Certificate } from "node:crypto";
 import type { Document, Element, Node as XmlNode } from "@xmldom/xmldom";
+import { SignedXml } from "xml-crypto";
 
 const DSIG_NS = "http://www.w3.org/2000/09/xmldsig#";
 
 /**
- * PEM in, PEM out; bare base64 DER gets its armour.
+ * PEM in, PEM out; bare base64 DER gets its armour — and the result is proved
+ * to be a certificate before anything uses it.
  *
  * The spec promises `idpCertificates` accepts either, and a consumer copying
  * `<X509Certificate>` out of identity-provider metadata has bare base64 DER in
@@ -901,19 +908,40 @@ const DSIG_NS = "http://www.w3.org/2000/09/xmldsig#";
  * PEM or a Buffer: measured, a bare base64 certificate makes OpenSSL throw
  * `DECODER routines::unsupported`, while the same bytes re-armoured verify.
  *
- * Left unnormalised that throw would be swallowed by the loop below and
+ * Left unnormalised that throw would be swallowed by the verification loop and
  * reported as "the signature does not verify against any configured
  * certificate" — blaming the assertion for the consumer's formatting.
+ *
+ * Base64 syntax alone does not make a string a certificate: `"AAAA"` passes
+ * the character class, armours cleanly, and fails only inside OpenSSL, which
+ * lands back at the same misleading message. So the armoured result is parsed
+ * with `node:crypto`'s `X509Certificate`, which rejects `"AAAA"` with
+ * `asn1 encoding routines::wrong tag` — measured, not assumed. Called once per
+ * certificate at construction, so the cost never falls on a login.
  */
-function toPem(certificate: string): string {
+export function toPem(certificate: string): string {
   const trimmed = certificate.trim();
-  if (trimmed.includes("-----BEGIN")) return trimmed;
-  const body = trimmed.replace(/\s+/g, "");
-  if (!/^[A-Za-z0-9+/]+={0,2}$/.test(body)) {
-    throw new Error("a configured certificate is neither PEM nor base64 DER");
+  const pem = trimmed.includes("-----BEGIN")
+    ? trimmed
+    : (() => {
+        const body = trimmed.replace(/\s+/g, "");
+        if (!/^[A-Za-z0-9+/]+={0,2}$/.test(body)) {
+          throw new Error(
+            "a configured certificate is neither PEM nor base64 DER",
+          );
+        }
+        const wrapped = body.replace(/(.{64})/g, "$1\n").trim();
+        return `-----BEGIN CERTIFICATE-----\n${wrapped}\n-----END CERTIFICATE-----\n`;
+      })();
+
+  try {
+    new X509Certificate(pem);
+  } catch (error) {
+    throw new Error(
+      `a configured certificate is not a valid X.509 certificate: ${(error as Error).message}`,
+    );
   }
-  const wrapped = body.replace(/(.{64})/g, "$1\n").trim();
-  return `-----BEGIN CERTIFICATE-----\n${wrapped}\n-----END CERTIFICATE-----\n`;
+  return pem;
 }
 
 /**
@@ -939,7 +967,9 @@ export function resolveSignedElement(
 
   let verified = false;
   for (const certificate of certificates) {
-    const verifier = new SignedXml({ publicCert: toPem(certificate) });
+    // Already normalised and proved at construction, so a throw here really
+    // is a bad signature rather than a formatting mistake.
+    const verifier = new SignedXml({ publicCert: certificate });
     verifier.loadSignature(signatureNode as unknown as XmlNode);
     try {
       // Returns false for a digest mismatch and throws when the signature
@@ -1018,7 +1048,7 @@ export function resolveSignedElement(
 npm test -- src/__tests__/validation/signedNode.test.ts
 ```
 
-Expected: PASS, eleven cases. RSA key generation makes this suite slower than the others; that is expected.
+Expected: PASS, twelve cases. RSA key generation makes this suite slower than the others; that is expected.
 
 If the detached-signature fixture verifies where you expected refusal, or fails
 to verify at all because lifting the element changed the canonicalised bytes,
@@ -1543,6 +1573,22 @@ const validator = (over: Partial<{ clockSkewMs: number }> = {}) =>
   });
 
 describe("the default assertion validator", () => {
+  it("refuses a malformed certificate at construction, not at login", () => {
+    expect(() =>
+      createDefaultAssertionValidator({ idpCertificates: ["AAAA"] }),
+    ).toThrow(/not a valid X.509 certificate/i);
+  });
+
+  // A bad entry must not hide a good one: normalising the whole list up front
+  // is what stops the rotation loop aborting on its first element.
+  it("refuses a list whose first entry is malformed, whatever follows", () => {
+    expect(() =>
+      createDefaultAssertionValidator({
+        idpCertificates: ["AAAA", KEY.certificatePem],
+      }),
+    ).toThrow(/not a valid X.509 certificate/i);
+  });
+
   it("accepts a well-formed assertion and reports what the flow needs", async () => {
     const result = await validator().validate(encode(buildResponse()), context);
     expect(result.assertionId).toBe("_a1");
@@ -1917,7 +1963,7 @@ import {
 } from '../errors/AssertionValidationError';
 import { findDuplicateId, readRequiredId } from './documentIds';
 import { defaultReplayStore } from './inMemoryReplayStore';
-import { resolveSignedElement } from './signedNode';
+import { resolveSignedElement, toPem } from './signedNode';
 import { parseXsdDateTime } from './xsdDateTime';
 
 const SAML_NS = 'urn:oasis:names:tc:SAML:2.0:assertion';
@@ -1941,8 +1987,17 @@ export function createDefaultAssertionValidator(
     );
   }
   if (options.idpCertificates.length === 0) {
-    throw new Error('idpCertificates must not be empty: nothing could be verified');
+    throw new Error(
+      'idpCertificates must not be empty: nothing could be verified',
+    );
   }
+  // Normalised and proved here, once, rather than inside verification. Three
+  // reasons, and the last bites hardest: a malformed entry standing first in
+  // the list would abort the rotation loop before a later valid certificate
+  // was tried; a constructor is where this package already refuses a bad
+  // configuration; and a login happens after a human has used a browser, so a
+  // formatting mistake found then wastes their work, not ours.
+  const certificates = options.idpCertificates.map(toPem);
   const store = options.replayStore ?? defaultReplayStore;
 
   return {
@@ -1976,7 +2031,7 @@ export function createDefaultAssertionValidator(
       // 2 + 3. Verify, and learn which element the signature covers.
       let signed: Element;
       try {
-        signed = resolveSignedElement(xml, doc, options.idpCertificates);
+        signed = resolveSignedElement(xml, doc, certificates);
       } catch (error) {
         return fail('signature', (error as Error).message);
       }
@@ -2232,7 +2287,7 @@ function chooseBearerConfirmation(
 npm test -- src/__tests__/validation/assertionValidator.test.ts
 ````
 
-Expected: PASS, 29 cases.
+Expected: PASS, 31 cases.
 
 - [ ] **Step 5: Prove the rules that a wrong-value test alone would not**
 
