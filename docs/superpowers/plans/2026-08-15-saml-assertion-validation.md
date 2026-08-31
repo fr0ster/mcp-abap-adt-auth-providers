@@ -476,7 +476,7 @@ export function parseXsdDateTime(
 npm test -- src/__tests__/validation/xsdDateTime.test.ts
 ```
 
-Expected: PASS, twelve cases.
+Expected: PASS, eleven cases.
 
 - [ ] **Step 5: Prove each half is load-bearing, one at a time**
 
@@ -1058,7 +1058,7 @@ sibling position inside the same parent is the other shape worth trying.
 
 - [ ] **Step 5: Prove the rules**
 
-Three mutations, one at a time:
+Five mutations, one at a time:
 
 1. Return `doc.documentElement` unconditionally instead of resolving the reference — `returns the signed assertion, not the forged sibling` must go red.
 2. Delete the `if (signatures.length === 0)` guard — `refuses a document with no signature` must go red. Note what it becomes: a different error, or a crash. Either is red; say which you saw.
@@ -2287,11 +2287,11 @@ function chooseBearerConfirmation(
 npm test -- src/__tests__/validation/assertionValidator.test.ts
 ````
 
-Expected: PASS, 31 cases.
+Expected: PASS, 32 cases.
 
 - [ ] **Step 5: Prove the rules that a wrong-value test alone would not**
 
-Six mutations, one at a time, each reverted before the next. Report per case:
+Seven mutations, one at a time, each reverted before the next. Report per case:
 
 1. In `chooseBearerConfirmation`, drop the `NotOnOrAfter` condition — `refuses a confirmation whose own window has closed, though Conditions are open` must go red.
 2. In `chooseBearerConfirmation`, gather each attribute across all confirmations instead of requiring one element to satisfy all — `refuses when the right values are spread across two confirmations` must go red.
