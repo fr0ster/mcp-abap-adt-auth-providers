@@ -3,8 +3,9 @@
 **Date:** 2026-08-13
 **Status:** approved 2026-08-14; amended 2026-09-01 with "Two validators, not one with a blind spot" — **awaiting re-approval of that section**, not implemented
 **Closes:** issue #19 — SAML assertions are accepted without any validation
-**Depends on:** `@mcp-abap-adt/auth-mocks@0.1.1`, published, which makes every
-rule below testable deterministically
+**Depends on:** `@mcp-abap-adt/auth-mocks`, published — and on a **minor
+addition to it**: `startMockSamlIdp` needs `signWhat?: 'assertion' | 'response'`
+before the signed-Response validator can be tested end to end. See "Testing".
 
 ## The problem, verified in the code
 
@@ -144,7 +145,12 @@ export interface AssertionContext {
   readonly expectedInResponseTo: string;
   /** Our entity ID, which the AudienceRestriction must name. */
   readonly audience: string;
-  /** The ACS the response arrived at; Recipient and Destination must match. */
+  /**
+   * The ACS the response arrived at. `SubjectConfirmationData/@Recipient` must
+   * match it in both validators; `Response/@Destination` is compared only by
+   * the signed-Response validator, since the assertion-only one does not read
+   * an unsigned field.
+   */
   readonly acsUrl: string;
   /**
    * Trusted issuer; the assertion's `Issuer` must equal it.
@@ -170,6 +176,12 @@ export interface ValidatedAssertion {
    */
   readonly expiresAt: Date;
   readonly assertionId: string;
+  /**
+   * The assertion's own `Issuer`. Not decoration: with `assertionId` it forms
+   * the replay key, and a store keyed on the ID alone rejects a legitimate
+   * second login the moment two identity providers mint the same `_id`.
+   */
+  readonly issuer: string;
   readonly nameId?: string;
   readonly sessionIndex?: string;
   readonly attributes?: Readonly<Record<string, readonly string[]>>;
@@ -316,17 +328,13 @@ Two of these deserve their citation, because "required" is a choice:
   a bearer `SubjectConfirmationData` to carry a `Recipient` matching the service
   provider's assertion consumer service. There is no solicited Web Browser SSO
   assertion that legitimately omits it.
-- **`Response/@Destination`** — required always, and this one is a deliberate
-  local policy rather than a consequence of the specification, so it should be
-  read as such. The HTTP POST binding (§3.5.5.2) requires `Destination` on a
-  **signed** message, which covers the case where the `Response` is the signed
-  node. It does not cover the other placement this design allows: when only the
-  `Assertion` is signed, `Destination` is outside the signature entirely, an
-  attacker can set it to whatever we expect, and requiring it buys no security —
-  there it is a misconfiguration check, not a control. The addressing guarantee
-  in that case rests on `Recipient`, which sits inside the signed assertion and
-  is required by step 10. Requiring `Destination` unconditionally keeps one rule
-  instead of two, and costs a conforming identity provider nothing.
+- **`Response/@Destination`** — required by the **signed-Response validator**,
+  which is exactly where the specification supports it: the HTTP POST binding
+  (§3.5.5.2) requires `Destination` on a signed message, and there the field is
+  inside the signature. The assertion-only validator does not read it at all,
+  because there it is outside the signature and an attacker sets it to whatever
+  we expect. Addressing in that flow rests on `Recipient`, inside the signed
+  assertion and required by step 10.
 
 **Two windows, one expiry.** The assertion carries two `NotOnOrAfter` values
 and the result carries one date: `expiresAt` is the **earlier** of them.
@@ -357,10 +365,15 @@ handed an assertion with no stated lifetime. It must also parse as a valid
 `2026-02-30` into 2 March, a trap `auth-mocks` already hit and fixed.
 
 **Which `Issuer`.** The `Assertion`'s, always: it is the assertion that is
-trusted, whichever element carries the signature. When the `Response` also
-carries an `Issuer`, the two must agree — a response claiming one issuer while
-wrapping an assertion from another is refused as a mismatch rather than
-silently resolved in favour of either.
+trusted, whichever element carries the signature. Both validators check it
+against `expectedIssuer`.
+
+The cross-check against `Response/Issuer` belongs to the **signed-Response
+validator** alone. There both are inside the signature, and a response claiming
+one issuer while wrapping an assertion from another is refused as a mismatch
+rather than silently resolved in favour of either. The assertion-only validator
+does not read `Response/Issuer`, for the same reason it does not read `Status`
+or `Destination`.
 
 Steps 4, 5, 11 and 12, and the `Recipient` half of step 10, are precisely what
 `@node-saml/node-saml` does **not**
@@ -480,15 +493,35 @@ Every corruption variant the mock ships maps onto exactly one check above:
 onto 9; `wrongInResponseTo` and `wrongRecipient` each onto part of 10;
 `wrongDestination` onto 11. The mock's two-delivery replay sequence covers 12.
 
-Which validator judges which variant follows from the split. `statusFailure`,
-`wrongIssuer` at the response level and `wrongDestination` are refused by
-**`createSignedResponseValidator`** and, by design, **accepted** by
-`createSignedAssertionValidator` — it does not read those fields. That
-acceptance needs its own cases, asserting the mock's IdP signs the assertion
-only: a validator silently dropping a check and a validator documented as not
-performing it look identical from the outside unless something pins the
-difference. Every other variant is refused by both, and each is run against
-both.
+Which validator judges which variant follows from the split — but two facts
+about the published mock make the naive matrix wrong, and both were found by
+reading its source rather than assuming:
+
+**`auth-mocks@0.1.1` signs the assertion, never the response.** `startMockSamlIdp`
+calls `signXml(xml, key)` with no `referenceXPath`, so the reference is always
+the `Assertion` and there is no option to change it. Against that mock,
+`createSignedResponseValidator` refuses _every_ response at step 3 — including
+the valid one — and no corruption variant ever reaches the check it was built
+for. **This is a prerequisite in another repository, not something to work
+around here:** `auth-mocks` needs a `signWhat?: 'assertion' | 'response'`
+option, defaulting to `'assertion'` so nothing existing changes, released as a
+minor. Until it exists, only the assertion-only validator can be exercised end
+to end, and the plan must say so rather than describe a matrix it cannot run.
+
+**`wrongIssuer` corrupts both issuers, not just the response's.** The mock
+builds one `issuerValue` and writes it into the `Response` _and_ the
+`Assertion`. The corrupted assertion issuer is inside the signature, so
+**both** validators refuse that variant at step 5 — the assertion-only one does
+not "accept `wrongIssuer`", and saying so would have been wrong. Proving that
+the response-level cross-check is absent needs a fixture corrupting
+`Response/Issuer` **alone**, built here rather than taken from a variant.
+
+With those two settled, the matrix is: `statusFailure` and `wrongDestination`
+are refused by the signed-Response validator and **accepted** by the
+assertion-only one, which does not read those fields. Every other variant is
+refused by both. The acceptances need their own cases — a validator silently
+dropping a check and a validator documented as not performing it look identical
+from the outside unless something pins the difference.
 
 **But the mock only corrupts values, never removes them**, and the gap this
 review found is exactly about removal. Every "absent" refusal — `Status`,
