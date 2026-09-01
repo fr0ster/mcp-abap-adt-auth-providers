@@ -1,7 +1,7 @@
 # SAML assertion validation
 
 **Date:** 2026-08-13
-**Status:** approved 2026-08-14; amended 2026-09-01 with "Two validators, not one with a blind spot" — **awaiting re-approval of that section**, not implemented
+**Status:** approved 2026-08-14; amended and re-approved 2026-09-01 with "Two validators, not one with a blind spot" — approved, not implemented
 **Closes:** issue #19 — SAML assertions are accepted without any validation
 **Depends on:** `@mcp-abap-adt/auth-mocks`, published — and on a **minor
 addition to it**: `startMockSamlIdp` needs `signWhat?: 'assertion' | 'response'`
