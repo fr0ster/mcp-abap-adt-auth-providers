@@ -114,6 +114,52 @@ common case.
 Both honour the same invariant, which is what makes them comprehensible: each
 reads only what its signature covers.
 
+They take the same options and return the same interface, so switching between
+them is one identifier and nothing else — a consumer who chooses wrongly should
+not also have to rewrite their configuration:
+
+```ts
+/** Shared by both shipped validators. */
+export interface ShippedValidatorOptions {
+  /**
+   * PEM or bare base64 DER — the form `<X509Certificate>` carries in identity
+   * provider metadata. A list, because providers rotate keys and two are live
+   * during a rotation. Normalised and parsed once, at construction, so a
+   * malformed entry is a configuration error rather than a login failure, and
+   * a bad first entry cannot hide a good second one.
+   */
+  readonly idpCertificates: readonly string[];
+  /** Finite, non-negative, integer. Defaults to 0. */
+  readonly clockSkewMs?: number;
+  /** Defaults to a process-wide in-memory store. */
+  readonly replayStore?: IAssertionReplayStore;
+}
+
+/**
+ * Requires the signature to cover the `Response`. All twelve checks are then
+ * controls. This is what a provider builds when the consumer configures no
+ * validator of their own.
+ */
+export function createSignedResponseValidator(
+  options: ShippedValidatorOptions,
+): IAssertionValidator;
+
+/**
+ * Accepts a signature covering the `Assertion`. Does not read `Status`,
+ * `Response/Issuer` or `Destination` — see above for why that is a smaller
+ * loss than it looks, and why performing those checks here would be worse
+ * than omitting them.
+ */
+export function createSignedAssertionValidator(
+  options: ShippedValidatorOptions,
+): IAssertionValidator;
+```
+
+Neither takes the signature placement as a parameter. That is deliberate: a
+`placement: 'response' | 'assertion'` option is the same validator-with-a-mode
+this section exists to remove, and it would put the choice somewhere a reader
+of the call site cannot see.
+
 Dropping those three from the assertion-only validator costs less than it
 looks:
 
@@ -185,8 +231,30 @@ export interface ValidatedAssertion {
   readonly nameId?: string;
   readonly sessionIndex?: string;
   readonly attributes?: Readonly<Record<string, readonly string[]>>;
-  /** The raw response, for a flow that must forward it verbatim. */
+  /**
+   * The response exactly as it arrived, for a flow that must forward it
+   * verbatim — `Saml2BearerProvider` sends it to the token endpoint,
+   * `Saml2PureProvider` hands it to the cookie provider.
+   *
+   * **This is the wire payload, not a validated artifact.** It is the whole
+   * `samlp:Response`, and with `createSignedAssertionValidator` that includes
+   * `Status`, `Response/Issuer` and `Destination`, which that validator never
+   * read and nothing has checked. Holding a `ValidatedAssertion` does not make
+   * every byte of `raw` trustworthy; it means the fields named above this one
+   * were established. Anything read out of `raw` is read at the reader's own
+   * risk — which is why the signed element is offered separately.
+   */
   readonly raw: string;
+  /**
+   * The signed element, serialised: the `Assertion`, or the `Response` when
+   * that is what the signature covered.
+   *
+   * Everything in here is inside the signature that verified. A consumer
+   * wanting attributes, or anything else this interface does not surface,
+   * should parse this rather than `raw` — the difference between the two is
+   * precisely the difference between "signed" and "arrived".
+   */
+  readonly signedXml: string;
 }
 
 /**
@@ -432,9 +500,18 @@ request ID it minted, since the ID must survive to validation.
 
 `parseSamlNotOnOrAfter` is removed. Expiry becomes `ValidatedAssertion.expiresAt`.
 
-`Saml2PureProvider`'s `expiresAt` therefore comes from a different source, and
-any consumer whose IdP returns non-`Success` responses will now see them
-refused. **`auth-providers` goes major; `interfaces` goes minor.**
+`Saml2PureProvider`'s `expiresAt` therefore comes from a different source.
+
+A consumer whose identity provider returns non-`Success` responses will see
+them refused **under the default validator** — `createSignedResponseValidator`,
+which reads `Status`. Under `createSignedAssertionValidator` they are not
+refused for that reason, because it does not read `Status`; they are refused,
+if at all, for want of a validly signed assertion, which a declining identity
+provider does not mint. Stating this without the qualifier, as an earlier draft
+did, would have promised behaviour one of the two shipped validators does not
+have.
+
+**`auth-providers` goes major; `interfaces` goes minor.**
 
 ## Wiring
 
@@ -529,7 +606,15 @@ review found is exactly about removal. Every "absent" refusal — `Status`,
 `Destination` — therefore has no variant behind it and needs a fixture built
 here, by taking the mock's valid response, stripping the one field, and
 re-signing it with the mock's own key material (`generateKeyMaterial` and
-`signXml` are exported for this). A wrong-value test and a missing-value test
+`signXml` are exported for this). Two of those removals belong to one validator only, and both halves must be
+pinned: a **missing `Status`** and a **missing `Destination`** are refusals of
+`createSignedResponseValidator` and are **accepted** by
+`createSignedAssertionValidator`, which does not read either field. Asserting
+only the refusal would leave the acceptance to chance, and asserting only the
+acceptance would let the refusal quietly disappear. The other six removals are
+refusals of both.
+
+A wrong-value test and a missing-value test
 protect different halves of the same rule, and only the pair proves it whole.
 
 Step 10 needs cases the mock cannot express at all, because it emits one
