@@ -1,7 +1,7 @@
 # SAML assertion validation
 
 **Date:** 2026-08-13
-**Status:** approved 2026-08-14; amended 2026-08-30 with "What each placement actually protects" — **awaiting re-approval of that section**, not implemented
+**Status:** approved 2026-08-14; amended 2026-09-01 with "Two validators, not one with a blind spot" — **awaiting re-approval of that section**, not implemented
 **Closes:** issue #19 — SAML assertions are accepted without any validation
 **Depends on:** `@mcp-abap-adt/auth-mocks@0.1.1`, published, which makes every
 rule below testable deterministically
@@ -70,18 +70,20 @@ second. `@node-saml/node-saml` guards this with `signature.parentNode ===
 referencedNode`; building `auth-mocks` produced a live demonstration, where an
 IdP whose signature sat outside the element it referenced was refused outright.
 
-So the default resolves, in order:
+So each shipped validator resolves, in order:
 
 1. which element the signature references, and that the signature is valid for
    the certificates configured;
-2. that the referenced element is the one it will read — the `Assertion`, or a
-   `Response` that directly contains exactly one `Assertion`;
-3. only then, the assertions themselves, read **from that element**.
+2. that the referenced element is the one it was told to require — the
+   `Response` for `createSignedResponseValidator`, the `Assertion` for
+   `createSignedAssertionValidator` — and that the response carries exactly one
+   `Assertion` either way;
+3. only then, the fields, read **from that element**.
 
 A document where the signed node and the read node differ is refused, whatever
 else is true of it.
 
-### What each placement actually protects
+### Two validators, not one with a blind spot
 
 Decision 7 accepts a signature on the `Response` **or** on the `Assertion`, and
 those two do not protect the same fields. Three checks read from the
@@ -89,62 +91,47 @@ those two do not protect the same fields. Three checks read from the
 assertion-only signature all three sit outside the signature, where anyone able
 to deliver a response can set them to whatever we expect.
 
-| Read from                                                                                                           | Signature on `Response` | Signature on `Assertion` only                              |
-| ------------------------------------------------------------------------------------------------------------------- | ----------------------- | ---------------------------------------------------------- |
-| Everything inside the assertion — `Issuer`, `Conditions`, `Audience`, the bearer confirmation, the assertion's `ID` | protected               | protected                                                  |
-| `Status`, `Response/Issuer`, `Destination`                                                                          | protected               | **not protected**: a misconfiguration check, not a control |
+An earlier draft kept one validator and documented those three as
+"misconfiguration checks rather than controls" in that mode. That is a
+validator whose contract changes underneath the caller, and it made the
+invariant above — everything is read from the signed element — false in the
+common case.
 
-The assertion-only flow is not thereby unsafe, and the reason is worth stating
-because it is not obvious: **a declined login carries no assertion.** An
-identity provider that refuses does not mint one, so an attacker who flips
-`Status` from a failure to `Success` still has nothing validly signed to put
-beneath it, and signature resolution fails before `Status` is ever read. What
-establishes success in that flow is a signed assertion satisfying every
-assertion-level check — not the `Status` element.
+**So the package ships two, and the consumer chooses.**
 
-The three checks stay, because they cost nothing, they catch a real
-misconfiguration, and with a signed `Response` they are genuine controls. What
-this section fixes is the claim made for them: a consumer who needs `Status`,
-`Destination` and the response issuer to be _protected_ must require their
-identity provider to sign the `Response`, and the README must say so.
+- **`createSignedResponseValidator`** requires the signature to cover the
+  `Response`. All twelve checks are then controls, because every field they
+  read is inside the signature. This is the default: it is the stronger
+  contract, and a package whose thesis is strictness should not make the weaker
+  one the thing you get by not deciding.
+- **`createSignedAssertionValidator`** accepts a signature covering the
+  `Assertion`. It does not check `Status`, `Response/Issuer` or `Destination`
+  **at all** — not "checks them weakly". Performing a check on a field an
+  attacker controls is worse than omitting it, because it reads in the code and
+  in the logs as though something was verified.
 
-This paragraph was added after the spec was first approved, because the
-implementation plan had quietly adopted this reading without it. Stating it
-here is what makes the plan an implementation of the spec rather than a
-departure from it.
+Both honour the same invariant, which is what makes them comprehensible: each
+reads only what its signature covers.
 
-## Where the expected request ID comes from
+Dropping those three from the assertion-only validator costs less than it
+looks:
 
-`InResponseTo` can only be checked against an `AuthnRequest` ID somebody can
-name, and the package does not always have one. Three flows, three answers:
+- **`Destination`** — addressing is already established by
+  `SubjectConfirmationData/@Recipient`, which is inside the signed assertion and
+  required by step 10.
+- **`Status`** — a declined login carries no assertion. An identity provider
+  that refuses does not mint one, so an attacker flipping `Status` to `Success`
+  still has nothing signed to put beneath it, and signature resolution fails
+  before `Status` would be read. Success is established by a signed assertion
+  passing every assertion-level check, not by the `Status` element.
+- **`Response/Issuer`** — the assertion's own `Issuer` is checked against
+  `expectedIssuer` inside the signature.
 
-1. **The package built the request.** `buildSamlAuthorizationUrl` mints the ID,
-   and — with the change below — returns it. This is the ordinary browser flow
-   and needs nothing from the consumer.
-2. **The consumer supplied a pre-built `authorizationUrl`.** The builder returns
-   it untouched and mints nothing. The consumer must supply `authnRequestId`.
-3. **The strategy never called the builder at all.** This is not hypothetical:
-   `manualSamlResponseStrategy` and any strategy holding a payload already
-   return an outcome without ever asking for a URL, which is why
-   `src/providers/saml2Utils.ts:79` carries a "second net" for exactly that
-   case. Its comment says so in as many words. Here too the consumer must supply
-   `authnRequestId` — the assertion answers a request _someone_ made, and only
-   the consumer knows its ID.
-
-So the rule is not about `authorizationUrl`; it is about whether the package
-minted an ID. When it did not, `authnRequestId` is required, and its absence is
-a configuration error naming this rule rather than a validation failure blamed
-on the assertion.
-
-Whether the builder will run cannot be known before the strategy runs — a
-consumer's strategy may or may not call it — so this is checked when the
-validator is invoked. The message must therefore be explicit about the remedy,
-because it surfaces after a human may already have pasted an assertion.
-
-**Rejected alternative:** extending `AuthorizationOutcome` with a request ID.
-That changes a contract every strategy implements, for the benefit of the one
-kind that builds its own request, and would leave the same gap open for a
-strategy that simply holds a payload.
+A consumer whose identity provider signs only assertions selects the second
+validator explicitly and can read, in one sentence, what they gave up. A
+consumer who selects nothing gets the strict one and a refusal naming the
+remedy — which is the outcome we want for somebody who has not thought about
+it yet.
 
 ## Interfaces
 
@@ -250,23 +237,28 @@ Each step has its own refusal reason. No two share a message, so no test can
 pass for a neighbouring check's reason — a lesson the `auth-mocks` work paid
 for twice.
 
-| #   | Check                                               | Refused when                                                                |
-| --- | --------------------------------------------------- | --------------------------------------------------------------------------- |
-| 1   | Parses as XML, document element is `samlp:Response` | it is not                                                                   |
-| 1b  | Every `ID` attribute in the document is unique      | any value appears twice                                                     |
-| 2   | Signature valid against `idpCertificates`           | absent, wrong key, or content altered after signing                         |
-| 3   | Signed node is the node read                        | the reference points elsewhere                                              |
-| 4   | `samlp:Status`                                      | absent, or `StatusCode` is not `…:status:Success`                           |
-| 4b  | `Assertion/@ID`                                     | **absent** or empty                                                         |
-| 5   | `Assertion/Issuer`                                  | **absent**, or not `context.expectedIssuer`                                 |
-| 5b  | `Response/Issuer`                                   | present and disagreeing with `Assertion/Issuer`                             |
-| 6   | `Conditions`                                        | **absent**                                                                  |
-| 7   | `Conditions/@NotBefore`                             | present and in the future, beyond `clockSkewMs`                             |
-| 8   | `Conditions/@NotOnOrAfter`                          | **absent**, not a valid `xsd:dateTime`, or in the past beyond `clockSkewMs` |
-| 9   | `Conditions/AudienceRestriction`                    | absent, or **any one** restriction fails to name `context.audience`         |
-| 10  | One bearer `SubjectConfirmation`                    | no single confirmation satisfies every part of it — see below               |
-| 11  | `Response/@Destination`                             | **absent**, or not `context.acsUrl`                                         |
-| 12  | Replay                                              | the store has already recorded this `{issuer, ID}`                          |
+Three rows are marked _signed-Response validator only_. The assertion-only
+validator does not perform them, because their fields lie outside the signature
+it accepts — see "Two validators, not one with a blind spot". Everything
+unmarked is performed by both.
+
+| #   | Check                                                      | Refused when                                                                |
+| --- | ---------------------------------------------------------- | --------------------------------------------------------------------------- |
+| 1   | Parses as XML, document element is `samlp:Response`        | it is not                                                                   |
+| 1b  | Every `ID` attribute in the document is unique             | any value appears twice                                                     |
+| 2   | Signature valid against `idpCertificates`                  | absent, wrong key, or content altered after signing                         |
+| 3   | Signed node is the node read                               | the reference points elsewhere                                              |
+| 4   | `samlp:Status` _(signed-Response validator only)_          | absent, or `StatusCode` is not `…:status:Success`                           |
+| 4b  | `Assertion/@ID`                                            | **absent** or empty                                                         |
+| 5   | `Assertion/Issuer`                                         | **absent**, or not `context.expectedIssuer`                                 |
+| 5b  | `Response/Issuer` _(signed-Response validator only)_       | present and disagreeing with `Assertion/Issuer`                             |
+| 6   | `Conditions`                                               | **absent**                                                                  |
+| 7   | `Conditions/@NotBefore`                                    | present and in the future, beyond `clockSkewMs`                             |
+| 8   | `Conditions/@NotOnOrAfter`                                 | **absent**, not a valid `xsd:dateTime`, or in the past beyond `clockSkewMs` |
+| 9   | `Conditions/AudienceRestriction`                           | absent, or **any one** restriction fails to name `context.audience`         |
+| 10  | One bearer `SubjectConfirmation`                           | no single confirmation satisfies every part of it — see below               |
+| 11  | `Response/@Destination` _(signed-Response validator only)_ | **absent**, or not `context.acsUrl`                                         |
+| 12  | Replay                                                     | the store has already recorded this `{issuer, ID}`                          |
 
 **Absent is refused, not skipped.** Every row above that names a field refuses
 when the field is missing, and this is deliberate: a rule phrased "present and
@@ -380,7 +372,11 @@ wrapper around somebody else's library.
 
 New on the SAML config:
 
-- `assertionValidator?: IAssertionValidator` — a consumer's own. When supplied,
+- `assertionValidator?: IAssertionValidator` — which validator to use, and the
+  place a consumer chooses between the two shipped ones:
+  `createSignedResponseValidator(...)` (the default when this is omitted) or
+  `createSignedAssertionValidator(...)`, or an implementation of their own.
+  When supplied,
   the package constructs no default, and the **default-validator-specific**
   fields below stop being required: `idpCertificates`, `idpEntityId`,
   `assertionReplayStore` and `clockSkewMs`. A custom validator may establish
@@ -483,6 +479,16 @@ Every corruption variant the mock ships maps onto exactly one check above:
 4; `wrongIssuer` onto 5; `notYetValid` onto 7; `expired` onto 8; `wrongAudience`
 onto 9; `wrongInResponseTo` and `wrongRecipient` each onto part of 10;
 `wrongDestination` onto 11. The mock's two-delivery replay sequence covers 12.
+
+Which validator judges which variant follows from the split. `statusFailure`,
+`wrongIssuer` at the response level and `wrongDestination` are refused by
+**`createSignedResponseValidator`** and, by design, **accepted** by
+`createSignedAssertionValidator` — it does not read those fields. That
+acceptance needs its own cases, asserting the mock's IdP signs the assertion
+only: a validator silently dropping a check and a validator documented as not
+performing it look identical from the outside unless something pins the
+difference. Every other variant is refused by both, and each is run against
+both.
 
 **But the mock only corrupts values, never removes them**, and the gap this
 review found is exactly about removal. Every "absent" refusal — `Status`,
