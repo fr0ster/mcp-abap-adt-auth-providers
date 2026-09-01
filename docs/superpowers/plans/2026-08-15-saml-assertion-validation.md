@@ -34,8 +34,8 @@ Do not re-derive these; do verify anything you depend on that is not listed.
   written as a rule, not a number: Task 1 publishes `<current major>.<current
 minor + 1>.0`, and every later reference means _the version Task 1 actually
   published_.
-- `auth-providers` is at **2.0.0** and depends on `@mcp-abap-adt/interfaces@^11.6.0`. That gap was six majors when this plan was drafted and fourteen by the time it was reviewed; whatever it is when you start, it is wide. **All 13 names `auth-providers` imports still existed at every version checked — 16.0.0, 17.0.0, 24.0.0 and 25.0.0** — and `IAuthorizationStrategy` still carries `buildAuthorizationUrl`, `AuthorizationOutcome`, `payload` and `redirectUri`. That is four data points for "the bump is safe", not a guarantee; Task 2 proves it by compiling.
-- **Check the version before you start.** Run `npm view @mcp-abap-adt/interfaces version` first, and again before Task 2 installs it. The compatibility check in Task 2 matters more the wider the gap, not less.
+- `auth-providers` is at **2.0.0** and depends on `@mcp-abap-adt/interfaces@^11.6.0`. That gap was six majors when this plan was drafted and fourteen by the time it was reviewed; whatever it is when you start, it is wide. **All 13 names `auth-providers` imports still existed at every version checked — 16.0.0, 17.0.0, 24.0.0 and 25.0.0** — and `IAuthorizationStrategy` still carries `buildAuthorizationUrl`, `AuthorizationOutcome`, `payload` and `redirectUri`. That is four data points for "the bump is safe", not a guarantee; Task 3 proves it by compiling.
+- **Check the version before you start.** Run `npm view @mcp-abap-adt/interfaces version` first, and again before Task 3 installs it. The compatibility check in Task 3 matters more the wider the gap, not less.
 - `Saml2CommonConfig` lives in `auth-providers/src/providers/saml2Utils.ts:9`, **not** in `interfaces`. The new configuration fields go there.
 - `@mcp-abap-adt/auth-mocks@0.1.1` is published. `startMockSamlIdp` requires `acsUrls` — with none registered it refuses every `AuthnRequest`.
 - `xml-crypto@6`: `checkSignature` **throws** when the signature value fails, and returns `false` only for a reference-digest mismatch. Both outcomes mean "invalid".
@@ -129,8 +129,27 @@ export interface ValidatedAssertion {
   readonly nameId?: string;
   readonly sessionIndex?: string;
   readonly attributes?: Readonly<Record<string, readonly string[]>>;
-  /** The response as it arrived, for a flow that must forward it verbatim. */
+  /**
+   * The response exactly as it arrived, for a flow that must forward it
+   * verbatim.
+   *
+   * **The wire payload, not a validated artifact.** It is the whole
+   * `samlp:Response`, and under `createSignedAssertionValidator` that includes
+   * `Status`, `Response/Issuer` and `Destination`, which nothing read and
+   * nothing checked. Holding a `ValidatedAssertion` does not make every byte
+   * of `raw` trustworthy.
+   */
   readonly raw: string;
+  /**
+   * The signed element, serialised: the `Assertion`, or the `Response` when
+   * that is what the signature covered.
+   *
+   * Everything here is inside the signature that verified. A consumer wanting
+   * anything this interface does not surface should parse this rather than
+   * `raw` — the difference between them is the difference between "signed"
+   * and "arrived".
+   */
+  readonly signedXml: string;
 }
 
 /**
@@ -223,7 +242,7 @@ Expected: the `grep` prints at least 1. Types are erased at runtime, so the firs
 
 - [ ] **Step 6: Bump the version and write the changelog**
 
-`package.json` to `<current major>.<current minor + 1>.0` — read the current value from `master`'s `package.json`, do not assume the minor is 0. Record the number you chose; Task 2 needs exactly it. Add a matching section to `CHANGELOG.md` describing the addition as what a consumer gains, not as a task number.
+`package.json` to `<current major>.<current minor + 1>.0` — read the current value from `master`'s `package.json`, do not assume the minor is 0. Record the number you chose; Task 3 needs exactly it. Add a matching section to `CHANGELOG.md` describing the addition as what a consumer gains, not as a task number.
 
 - [ ] **Step 7: Commit, push, open the PR — then stop**
 
@@ -238,7 +257,164 @@ Do not merge. Do not tag. Report the PR URL and stop; the owner reviews, merges 
 
 ---
 
-### Task 2: Dependencies, and proving the interfaces bump is safe
+### Task 2: `auth-mocks` gains a signed-Response mode
+
+**Repository:** `/home/okyslytsia/prj/mcp-abap-adt-auth-mocks` — a published
+package (0.1.1), so this is a **minor release** and nothing existing may change.
+
+**Files:**
+
+- Modify: `src/saml.ts` — `SamlOptions`, and the one `signXml` call
+- Test: `src/__tests__/saml.test.ts`
+- Modify: `README.md`, `CHANGELOG.md`, `package.json`
+
+**Interfaces:**
+
+- Produces: `SamlOptions` gains `signWhat?: 'assertion' | 'response'`, defaulting to `'assertion'`.
+
+**Why this is a task and not a note.** `startMockSamlIdp` calls
+`signXml(xml, signingKey)` with no `referenceXPath`, so the reference is always
+the `Assertion`. Against that mock `createSignedResponseValidator` refuses
+**every** response at the signed-node check — including the valid one — and no
+corruption variant reaches the check it was built for. Task 12's matrix cannot
+run until this exists. Establish it by reading `src/saml.ts` yourself before
+starting; do not take this paragraph's word for it.
+
+- [ ] **Step 1: Write the failing test**
+
+Add to `src/__tests__/saml.test.ts`:
+
+```ts
+it("signs the Response itself when asked to", async () => {
+  const acs = await startAcs();
+  const idp = await startMockSamlIdp({
+    acsUrls: [`${acs.url}/callback`],
+    signWhat: "response",
+  });
+  try {
+    await visit(
+      `${idp.url}/sso?SAMLRequest=${encodeURIComponent(authnRequest(`${acs.url}/callback`))}`,
+    );
+    const xml = Buffer.from(acs.received[0].SAMLResponse, "base64").toString(
+      "utf8",
+    );
+    // The reference names the Response's ID, and the Signature sits directly
+    // inside the Response rather than inside the Assertion. Asserting only
+    // "a Signature exists" would pass against the default mode too.
+    const responseId = /<samlp:Response[^>]*\sID="([^"]+)"/.exec(xml)?.[1];
+    expect(responseId).toBeTruthy();
+    expect(xml).toContain(`URI="#${responseId}"`);
+    expect(xml.indexOf("<Signature") < xml.indexOf("<saml:Assertion")).toBe(
+      true,
+    );
+  } finally {
+    await idp.close();
+    await acs.close();
+  }
+});
+
+it("still signs the Assertion when not asked", async () => {
+  const acs = await startAcs();
+  const idp = await startMockSamlIdp({ acsUrls: [`${acs.url}/callback`] });
+  try {
+    await visit(
+      `${idp.url}/sso?SAMLRequest=${encodeURIComponent(authnRequest(`${acs.url}/callback`))}`,
+    );
+    const xml = Buffer.from(acs.received[0].SAMLResponse, "base64").toString(
+      "utf8",
+    );
+    const assertionId = /<saml:Assertion[^>]*\sID="([^"]+)"/.exec(xml)?.[1];
+    expect(xml).toContain(`URI="#${assertionId}"`);
+  } finally {
+    await idp.close();
+    await acs.close();
+  }
+});
+```
+
+The second case is the one that protects everybody already using this package:
+the default must not move.
+
+- [ ] **Step 2: Run them to verify the first fails**
+
+```bash
+npm test -- src/__tests__/saml.test.ts
+```
+
+Expected: the `signWhat: "response"` case fails (the option does nothing yet);
+the default case passes.
+
+- [ ] **Step 3: Implement**
+
+`SamlOptions` gains the field, and `startMockSamlIdp` reads it:
+
+```ts
+  /**
+   * Which element the signature covers. Defaults to `'assertion'`, which is
+   * what every identity provider this package was built against does, and what
+   * every existing consumer already gets.
+   *
+   * `'response'` exists because a relying party may require it — a validator
+   * that treats `Status` and `Destination` as controls can only do so when
+   * they are inside the signature.
+   */
+  signWhat?: 'assertion' | 'response';
+```
+
+At the one signing call:
+
+```ts
+let signed =
+  signWhat === "response"
+    ? signXml(xml, signingKey, {
+        referenceXPath: "//*[local-name(.)='Response']",
+      })
+    : signXml(xml, signingKey);
+```
+
+`signXml` already takes `referenceXPath` and already places the signature
+inside the element it references — Task 6 of the `auth-mocks` plan established
+both, and its own suite covers them.
+
+- [ ] **Step 4: Run the tests to verify they pass**
+
+```bash
+npm test -- src/__tests__/saml.test.ts
+```
+
+- [ ] **Step 5: Prove the option is load-bearing**
+
+Ignore `signWhat` and always sign the assertion. The `signs the Response itself`
+case must go red while `still signs the Assertion` stays green. Report both.
+
+- [ ] **Step 6: The corruption variants must still work in the new mode**
+
+Run the existing variant suite with `signWhat: 'response'` for at least
+`tamperedAfterSign` and `wrongKey`, and report what happens. A variant that
+corrupts the assertion while the signature covers the response is a different
+document from the one the suite was written against, and if any variant stops
+being detectable in this mode, Task 12 needs to know before it depends on it.
+
+- [ ] **Step 7: Document, version and commit**
+
+`README.md` gains `signWhat` in its options table, saying what each value means
+and which relying-party behaviour the non-default one enables. `CHANGELOG.md`
+gets a `## [0.2.0]` section — a minor: an added option, no changed behaviour.
+`package.json` to `0.2.0`.
+
+```bash
+npm run lint:check && npm run build && npm run test:check && npm test
+git add -A
+git commit -m "feat: sign the Response instead of the Assertion on request"
+git push -u origin <branch>
+gh pr create --fill
+```
+
+Do not merge, do not tag, do not publish. Report the PR URL and stop.
+
+---
+
+### Task 3: Dependencies, and proving the interfaces bump is safe
 
 **Repository:** `/home/okyslytsia/prj/mcp-abap-adt-auth-providers` — and every task from here on.
 
@@ -299,7 +475,7 @@ git commit -m "chore: interfaces <the version Task 1 published>, and the XML lib
 
 ---
 
-### Task 3: Strict `xsd:dateTime`
+### Task 4: Strict `xsd:dateTime`
 
 **Files:**
 
@@ -499,7 +675,7 @@ git commit -m "feat: parse xsd:dateTime strictly enough to trust it"
 
 ---
 
-### Task 4: Document ID rules
+### Task 5: Document ID rules
 
 **Files:**
 
@@ -642,7 +818,7 @@ git commit -m "feat: refuse duplicate IDs before a reference is resolved"
 
 ---
 
-### Task 5: Which element the signature covers
+### Task 6: Which element the signature covers
 
 **Files:**
 
@@ -1076,7 +1252,7 @@ git commit -m "feat: resolve which element a valid signature covers"
 
 ---
 
-### Task 6: The replay store
+### Task 7: The replay store
 
 **Files:**
 
@@ -1263,7 +1439,7 @@ git commit -m "feat: an in-memory replay store, atomic and namespaced by issuer"
 
 ---
 
-### Task 7: The error
+### Task 8: The error
 
 **Files:**
 
@@ -1391,7 +1567,7 @@ git commit -m "feat: an assertion refusal that names the check that failed"
 
 ---
 
-### Task 8: The default validator
+### Task 9: The two shipped validators
 
 **Files:**
 
@@ -1400,19 +1576,40 @@ git commit -m "feat: an assertion refusal that names the check that failed"
 
 **Interfaces:**
 
-- Consumes: `parseXsdDateTime` (Task 3); `findDuplicateId`, `readRequiredId` (Task 4); `resolveSignedElement` (Task 5); `defaultReplayStore`, `createInMemoryReplayStore` (Task 6); `AssertionValidationError`, `AssertionCheck` (Task 7); `IAssertionValidator`, `AssertionContext`, `ValidatedAssertion`, `IAssertionReplayStore` (Task 1).
+- Consumes: `parseXsdDateTime` (Task 4); `findDuplicateId`, `readRequiredId` (Task 5); `resolveSignedElement` (Task 6); `defaultReplayStore`, `createInMemoryReplayStore` (Task 7); `AssertionValidationError`, `AssertionCheck` (Task 8); `IAssertionValidator`, `AssertionContext`, `ValidatedAssertion`, `IAssertionReplayStore` (Task 1).
 - Produces:
 
 ```ts
-export interface DefaultAssertionValidatorOptions {
+/** Shared by both shipped validators, so switching is one identifier. */
+export interface ShippedValidatorOptions {
   readonly idpCertificates: readonly string[];
   readonly clockSkewMs?: number;
   readonly replayStore?: IAssertionReplayStore;
 }
-export function createDefaultAssertionValidator(
-  options: DefaultAssertionValidatorOptions,
+
+/**
+ * Requires the signature to cover the `Response`. All checks are then
+ * controls, because every field they read is inside the signature. This is
+ * what a provider builds when the consumer configures no validator.
+ */
+export function createSignedResponseValidator(
+  options: ShippedValidatorOptions,
+): IAssertionValidator;
+
+/**
+ * Accepts a signature covering the `Assertion`. Does **not** read `Status`,
+ * `Response/Issuer` or `Destination` — not "reads them weakly". A check
+ * performed on a field an attacker controls reads, in the code and in the
+ * logs, as though something was verified.
+ */
+export function createSignedAssertionValidator(
+  options: ShippedValidatorOptions,
 ): IAssertionValidator;
 ```
+
+Neither takes the placement as a parameter: a `placement` option would be the
+validator-with-a-mode the spec's "Two validators" section exists to remove, and
+it would hide the choice from anyone reading the call site.
 
 **What the signature actually protects, and what it does not.**
 
@@ -1447,7 +1644,7 @@ The three checks stay, because they cost nothing and catch a real
 misconfiguration, and because with a signed `Response` they are genuine
 controls. What changes is the claim made for them. A consumer who needs
 `Status`, `Destination` and the response issuer to be _protected_ must require
-their identity provider to sign the `Response`; the README says so in Task 12.
+their identity provider to sign the `Response`; the README says so in Task 13.
 
 **This is the largest file in the plan, and its shape is fixed by the spec's check table.** Implement the checks in the table's order, each throwing `AssertionValidationError` with its own `check` value and its own message. No two messages may share a distinguishing fragment: a test asserting `/Destination/` must not be satisfiable by the `Recipient` refusal.
 
@@ -1461,7 +1658,10 @@ The structure below gives the skeleton and every rule with its exact condition. 
 import { describe, expect, it } from "@jest/globals";
 import { generateKeyMaterial, signXml } from "@mcp-abap-adt/auth-mocks";
 import { createInMemoryReplayStore } from "../../validation/inMemoryReplayStore";
-import { createDefaultAssertionValidator } from "../../validation/assertionValidator";
+import {
+  createSignedAssertionValidator,
+  createSignedResponseValidator,
+} from "../../validation/assertionValidator";
 
 const KEY = generateKeyMaterial();
 const ACS = "http://localhost:61001/acs";
@@ -1565,8 +1765,17 @@ const context = {
   expectedIssuer: ISSUER,
 };
 
+/** The default: requires the Response to be signed. */
 const validator = (over: Partial<{ clockSkewMs: number }> = {}) =>
-  createDefaultAssertionValidator({
+  createSignedResponseValidator({
+    idpCertificates: [KEY.certificatePem],
+    replayStore: createInMemoryReplayStore(),
+    ...over,
+  });
+
+/** The other one: accepts a signature over the Assertion. */
+const assertionValidator = (over: Partial<{ clockSkewMs: number }> = {}) =>
+  createSignedAssertionValidator({
     idpCertificates: [KEY.certificatePem],
     replayStore: createInMemoryReplayStore(),
     ...over,
@@ -1575,7 +1784,7 @@ const validator = (over: Partial<{ clockSkewMs: number }> = {}) =>
 describe("the default assertion validator", () => {
   it("refuses a malformed certificate at construction, not at login", () => {
     expect(() =>
-      createDefaultAssertionValidator({ idpCertificates: ["AAAA"] }),
+      createSignedResponseValidator({ idpCertificates: ["AAAA"] }),
     ).toThrow(/not a valid X.509 certificate/i);
   });
 
@@ -1583,7 +1792,7 @@ describe("the default assertion validator", () => {
   // is what stops the rotation loop aborting on its first element.
   it("refuses a list whose first entry is malformed, whatever follows", () => {
     expect(() =>
-      createDefaultAssertionValidator({
+      createSignedResponseValidator({
         idpCertificates: ["AAAA", KEY.certificatePem],
       }),
     ).toThrow(/not a valid X.509 certificate/i);
@@ -1603,6 +1812,78 @@ describe("the default assertion validator", () => {
       context,
     );
     expect(result.assertionId).toBe("_a1");
+  });
+
+  // Each validator refuses the placement it was not built for. This is the
+  // refusal that makes shipping two meaningful rather than decorative.
+  it("the signed-Response validator refuses an assertion-signed document", async () => {
+    await expect(
+      validator().validate(
+        encode(buildResponse({ signWhat: "assertion" })),
+        context,
+      ),
+    ).rejects.toMatchObject({ check: "signedNode" });
+  });
+
+  it("the assertion-only validator refuses a response-signed document", async () => {
+    await expect(
+      assertionValidator().validate(
+        encode(buildResponse({ signWhat: "response" })),
+        context,
+      ),
+    ).rejects.toMatchObject({ check: "signedNode" });
+  });
+
+  // The three fields it does not read. Each is a refusal for the default
+  // validator and an acceptance here, and both halves need pinning: a
+  // validator that silently dropped a check and one documented as not
+  // performing it look identical from outside.
+  it("the assertion-only validator accepts a failed Status", async () => {
+    const result = await assertionValidator().validate(
+      encode(
+        buildResponse({
+          signWhat: "assertion",
+          status: "urn:oasis:names:tc:SAML:2.0:status:Responder",
+        }),
+      ),
+      context,
+    );
+    expect(result.assertionId).toBe("_a1");
+  });
+
+  it("the assertion-only validator accepts a wrong Destination", async () => {
+    const result = await assertionValidator().validate(
+      encode(
+        buildResponse({
+          signWhat: "assertion",
+          destination: "http://elsewhere/acs",
+        }),
+      ),
+      context,
+    );
+    expect(result.assertionId).toBe("_a1");
+  });
+
+  it("the assertion-only validator accepts a missing Destination", async () => {
+    const result = await assertionValidator().validate(
+      encode(buildResponse({ signWhat: "assertion", destination: null })),
+      context,
+    );
+    expect(result.assertionId).toBe("_a1");
+  });
+
+  // signedXml is the signed element, not the response — the difference
+  // between "signed" and "arrived".
+  it("reports the signed element separately from what arrived", async () => {
+    const result = await assertionValidator().validate(
+      encode(buildResponse({ signWhat: "assertion" })),
+      context,
+    );
+    expect(result.signedXml).toContain("Assertion");
+    expect(result.signedXml).not.toContain("samlp:Status");
+    expect(Buffer.from(result.raw, "base64").toString("utf8")).toContain(
+      "samlp:Status",
+    );
   });
 
   it("refuses a Status that is not Success", async () => {
@@ -1855,7 +2136,7 @@ describe("the default assertion validator", () => {
   // Retention must outlast the skew window: inside it the assertion is still
   // acceptable, so the store must still remember it.
   it("refuses a replay inside the skew window", async () => {
-    const shared = createDefaultAssertionValidator({
+    const shared = createSignedResponseValidator({
       idpCertificates: [KEY.certificatePem],
       replayStore: createInMemoryReplayStore(),
       clockSkewMs: 60_000,
@@ -1950,7 +2231,12 @@ The skeleton, with every rule's exact condition. Fill in the reading helpers; do
  * so flipping Status buys an attacker nothing they can sign.
  */
 
-import { DOMParser, type Document, type Element } from '@xmldom/xmldom';
+import {
+  DOMParser,
+  XMLSerializer,
+  type Document,
+  type Element,
+} from '@xmldom/xmldom';
 import type {
   AssertionContext,
   IAssertionReplayStore,
@@ -1971,14 +2257,32 @@ const PROTOCOL_NS = 'urn:oasis:names:tc:SAML:2.0:protocol';
 const BEARER = 'urn:oasis:names:tc:SAML:2.0:cm:bearer';
 const SUCCESS = 'urn:oasis:names:tc:SAML:2.0:status:Success';
 
-export interface DefaultAssertionValidatorOptions {
+export interface ShippedValidatorOptions {
   readonly idpCertificates: readonly string[];
   readonly clockSkewMs?: number;
   readonly replayStore?: IAssertionReplayStore;
 }
 
-export function createDefaultAssertionValidator(
-  options: DefaultAssertionValidatorOptions,
+/**
+ * Which element this validator insists the signature covers.
+ *
+ * Internal. The public surface is two factories, so a reader of a call site
+ * sees the choice; making it a public parameter would put it back where nobody
+ * looks.
+ */
+type SignedElement = 'response' | 'assertion';
+
+export const createSignedResponseValidator = (
+  options: ShippedValidatorOptions,
+): IAssertionValidator => createValidator('response', options);
+
+export const createSignedAssertionValidator = (
+  options: ShippedValidatorOptions,
+): IAssertionValidator => createValidator('assertion', options);
+
+function createValidator(
+  require: SignedElement,
+  options: ShippedValidatorOptions,
 ): IAssertionValidator {
   const skew = options.clockSkewMs ?? 0;
   if (!Number.isInteger(skew) || skew < 0) {
@@ -2038,7 +2342,7 @@ export function createDefaultAssertionValidator(
 
       // The signed element must be the Assertion, or a Response holding exactly
       // one. Everything below is read from `assertion` and nowhere else.
-      const assertion = assertionInside(signed, root);
+      const assertion = assertionInside(signed, root, require);
       if (!assertion) {
         return fail(
           'signedNode',
@@ -2046,7 +2350,10 @@ export function createDefaultAssertionValidator(
         );
       }
 
-      // 4. Status — read from the Response, which is the element that carries it.
+      // 4. Status. Only when the Response is the signed element: otherwise it
+      // lies outside the signature, and checking a field an attacker sets is
+      // worse than not checking it — it reads like verification.
+      if (require === 'response') {
       const status = directChild(root, PROTOCOL_NS, 'Status');
       const codeValue = status
         ? directChild(status, PROTOCOL_NS, 'StatusCode')?.getAttribute('Value')
@@ -2056,22 +2363,30 @@ export function createDefaultAssertionValidator(
         return fail('status', `the identity provider declined the login: ${codeValue}`);
       }
 
+      }
+
       // 4b. The assertion's own ID.
       const assertionId = readRequiredId(assertion);
       if (!assertionId) return fail('assertionId', 'the assertion carries no ID');
 
-      // 5 + 5b. Issuer.
+      // 5. The assertion's Issuer — inside the signature either way, so both
+      // validators check it.
       const issuer = directChild(assertion, SAML_NS, 'Issuer')?.textContent ?? '';
       if (!issuer) return fail('issuer', 'the assertion carries no Issuer');
       if (context.expectedIssuer && issuer !== context.expectedIssuer) {
         return fail('issuer', `the assertion was issued by ${issuer}, not the trusted issuer`);
       }
-      const responseIssuer = directChild(root, SAML_NS, 'Issuer')?.textContent;
-      if (responseIssuer && responseIssuer !== issuer) {
-        return fail(
-          'issuer',
-          'the response and the assertion name different issuers',
-        );
+      // 5b. The cross-check against the Response's Issuer belongs to the
+      // signed-Response validator alone: only there are both inside the
+      // signature.
+      if (require === 'response') {
+        const responseIssuer = directChild(root, SAML_NS, 'Issuer')?.textContent;
+        if (responseIssuer && responseIssuer !== issuer) {
+          return fail(
+            'issuer',
+            'the response and the assertion name different issuers',
+          );
+        }
       }
 
       // 6, 7, 8. Conditions and their window.
@@ -2127,13 +2442,20 @@ export function createDefaultAssertionValidator(
         );
       }
 
-      // 11. Destination.
-      const destination = root.getAttribute('Destination');
-      if (!destination) {
-        return fail('destination', 'the response carries no Destination');
-      }
-      if (destination !== context.acsUrl) {
-        return fail('destination', `the response is addressed to ${destination}, not to us`);
+      // 11. Destination — the signed-Response validator only, for the same
+      // reason as Status. Addressing in the other flow rests on Recipient,
+      // which step 10 required and which sits inside the signed assertion.
+      if (require === 'response') {
+        const destination = root.getAttribute('Destination');
+        if (!destination) {
+          return fail('destination', 'the response carries no Destination');
+        }
+        if (destination !== context.acsUrl) {
+          return fail(
+            'destination',
+            `the response is addressed to ${destination}, not to us`,
+          );
+        }
       }
 
       // Expiry: the earlier of the two windows.
@@ -2164,6 +2486,9 @@ export function createDefaultAssertionValidator(
             : undefined;
         })(),
         raw: samlResponse,
+        // The signed element, not the response: this is what a consumer may
+        // parse without re-deriving what the signature covered.
+        signedXml: new XMLSerializer().serializeToString(signed),
       };
     },
   };
@@ -2217,7 +2542,21 @@ function directChild(parent: Element, ns: string, local: string): Element | null
  * "Exactly one" matters: a signed Response wrapping two assertions leaves
  * "which did we verify" ambiguous, which is the wrapping question again.
  */
-function assertionInside(signed: Element, root: Element): Element | null {
+function assertionInside(
+  signed: Element,
+  root: Element,
+  require: SignedElement,
+): Element | null {
+  // The signature must cover what this validator was built to require. A
+  // signed-Response validator handed an assertion-signed document refuses
+  // here, and vice versa — that refusal is the whole point of shipping two.
+  const signedIsResponse =
+    signed.localName === 'Response' && signed.namespaceURI === PROTOCOL_NS;
+  const signedIsAssertion =
+    signed.localName === 'Assertion' && signed.namespaceURI === SAML_NS;
+  if (require === 'response' && !signedIsResponse) return null;
+  if (require === 'assertion' && !signedIsAssertion) return null;
+
   // Whatever was signed, the response must carry exactly one assertion.
   //
   // Reading only from the signed element is not enough: `raw` — the whole
@@ -2287,7 +2626,7 @@ function chooseBearerConfirmation(
 npm test -- src/__tests__/validation/assertionValidator.test.ts
 ````
 
-Expected: PASS, 32 cases.
+Expected: PASS, 38 cases.
 
 - [ ] **Step 5: Prove the rules that a wrong-value test alone would not**
 
@@ -2311,7 +2650,7 @@ git commit -m "feat: the shipped assertion validator, assertion fields read only
 
 ---
 
-### Task 9: The request ID must survive
+### Task 10: The request ID must survive
 
 **Files:**
 
@@ -2431,7 +2770,7 @@ export function buildSamlAuthorizationUrl(
 
 - [ ] **Step 5: Delete `parseSamlNotOnOrAfter`**
 
-Remove the function and its tests. Expiry now comes from validation. Any call site is updated in Task 10.
+Remove the function and its tests. Expiry now comes from validation. Any call site is updated in Task 11.
 
 - [ ] **Step 6: Thread the ID and the real ACS through `getSamlAssertion`**
 
@@ -2478,7 +2817,7 @@ git commit -m "feat!: the AuthnRequest ID survives to validation"
 
 ---
 
-### Task 10: Wire both providers
+### Task 11: Wire both providers
 
 **Files:**
 
@@ -2577,7 +2916,7 @@ export function resolveAssertionValidator(
     );
   }
 
-  return createDefaultAssertionValidator({
+  return createSignedResponseValidator({
     idpCertificates: config.idpCertificates as string[],
     clockSkewMs: config.clockSkewMs,
     replayStore: config.assertionReplayStore,
@@ -2660,7 +2999,7 @@ git commit -m "feat!: both SAML providers validate the assertion before trusting
 
 ---
 
-### Task 11: End to end against the mocks
+### Task 12: End to end against the mocks
 
 **Files:**
 
@@ -2668,45 +3007,72 @@ git commit -m "feat!: both SAML providers validate the assertion before trusting
 
 **Interfaces:**
 
-- Consumes: `startMockSamlIdp`, `visit`, `generateKeyMaterial`, `signXml` from `@mcp-abap-adt/auth-mocks`; the provider from Task 10.
+- Consumes: `startMockSamlIdp`, `visit`, `generateKeyMaterial`, `signXml` from `@mcp-abap-adt/auth-mocks`; the provider from Task 11.
 
-**This is the task that decides whether the validator is right about real documents rather than about the fixtures its author wrote.** The mock's eleven corruption variants each target exactly one check, and four of them — `statusFailure`, `wrongIssuer`, `wrongDestination`, `wrongRecipient` — are precisely what `@node-saml/node-saml` does _not_ judge. Our validator must.
+**This is the task that decides whether the validators are right about real documents rather than about the fixtures their author wrote.** Both are exercised, because they refuse different things and a matrix that ran only one would leave the other's contract unproven.
+
+**Two facts about the mock shape this task, and both were established by reading its source rather than assuming.** Confirm them yourself before writing the matrix.
+
+- `startMockSamlIdp` signs the **assertion** by default. Task 2 adds `signWhat: 'response'`; without that release the signed-Response validator refuses every response the mock produces, including the valid one, and no variant reaches its check. If Task 2 is not merged and published, **stop** rather than testing only half of this.
+- `wrongIssuer` writes one `issuerValue` into **both** `Response/Issuer` and `Assertion/Issuer`. The corrupted assertion issuer is inside the signature, so **both** validators refuse it at `issuer`. It is not evidence that the response-level cross-check exists.
 
 - [ ] **Step 1: Write the test**
 
-Drive a real login through `Saml2PureProvider` with `browserCallbackStrategy({ openUrl: visit })` pointed at `startMockSamlIdp`, registering the ACS the strategy binds. Then, per variant:
+Drive a real login through `Saml2PureProvider` with `browserCallbackStrategy({ openUrl: visit })` pointed at `startMockSamlIdp`, registering the ACS the strategy binds, and run each variant against **both** validators.
 
 ```ts
-const REFUSED: Array<[SamlVariant, AssertionCheck]> = [
+// Refused by both, for the same check: everything here is inside the
+// assertion, or is the signature itself.
+const REFUSED_BY_BOTH: Array<[SamlVariant, AssertionCheck]> = [
   ["unsigned", "signature"],
   ["wrongKey", "signature"],
   ["tamperedAfterSign", "signature"],
-  ["statusFailure", "status"],
   ["wrongIssuer", "issuer"],
   ["notYetValid", "notBefore"],
   ["expired", "notOnOrAfter"],
   ["wrongAudience", "audience"],
   ["wrongInResponseTo", "bearerConfirmation"],
   ["wrongRecipient", "bearerConfirmation"],
+];
+
+// Refused by the signed-Response validator, accepted by the other, which does
+// not read these fields. Both halves are asserted: a check silently dropped
+// and a check documented as absent look identical from outside.
+const RESPONSE_LEVEL: Array<[SamlVariant, AssertionCheck]> = [
+  ["statusFailure", "status"],
   ["wrongDestination", "destination"],
 ];
 
-for (const [variant, check] of REFUSED) {
-  it(`refuses ${variant} at the ${check} check`, async () => {
-    // start the IdP with { variant, acsUrls: [acs], issuer, audience },
-    // run the login, and:
-    await expect(login()).rejects.toMatchObject({ check });
+for (const [variant, check] of REFUSED_BY_BOTH) {
+  it(`refuses ${variant} at ${check}, whichever validator`, async () => {
+    await expect(loginWith("response", variant)).rejects.toMatchObject({
+      check,
+    });
+    await expect(loginWith("assertion", variant)).rejects.toMatchObject({
+      check,
+    });
+  });
+}
+
+for (const [variant, check] of RESPONSE_LEVEL) {
+  it(`refuses ${variant} at ${check} only when the Response is signed`, async () => {
+    await expect(loginWith("response", variant)).rejects.toMatchObject({
+      check,
+    });
+    await expect(loginWith("assertion", variant)).resolves.toBeDefined();
   });
 }
 ```
 
-Asserting the **check**, not merely that it threw, is what stops a variant from being refused for an unrelated reason — the exact defect that took a whole round to find in `auth-mocks`, where seven of nine variants were rejected by one structural bug.
+`loginWith(signWhat, variant)` starts the IdP with `{ variant, signWhat, acsUrls: [acs], issuer, audience }` and the provider with the matching validator. Asserting the **check**, not merely that it threw, is what stops a variant being refused for an unrelated reason — the defect that took a whole round to find in `auth-mocks`, where seven of nine variants were rejected by one structural bug.
 
-Then the valid case, and the two the mock cannot express:
+Then the cases no variant expresses:
 
-- **A successful login**: `expiresAt` comes from the assertion, the session cookie is what `cookieProvider` returned.
+- **A successful login, in each mode**: `expiresAt` comes from the assertion, the session cookie is what `cookieProvider` returned, and `signedXml` is the element that was signed — the `Response` in one mode and the `Assertion` in the other. That last assertion is what proves the two modes are actually different documents rather than the same one twice.
+- **The wrong placement**: a response-signed document refused by the assertion-only validator at `signedNode`, and the reverse. Without these, a validator that ignored its requirement would pass everything above.
+- **A response-level cross-check that no variant can show**: corrupt `Response/Issuer` **alone**, leaving the assertion's issuer correct, and expect the signed-Response validator to refuse at `issuer` while the assertion-only one accepts. Build it by re-signing with `generateKeyMaterial`/`signXml`, since `wrongIssuer` corrupts both.
 - **Replay**: `idp.repeatLastAssertion()`, run the login twice, expect `check: 'replay'` the second time.
-- **Signature wrapping**: take the mock's signed response, insert a forged assertion beside the signed one, and expect refusal. Build this with `generateKeyMaterial`/`signXml` rather than a variant.
+- **Signature wrapping**: take the mock's signed response, insert a forged assertion beside the signed one, expect refusal.
 
 - [ ] **Step 2: Run it**
 
@@ -2726,7 +3092,7 @@ git commit -m "test: every corruption variant is refused at its own check"
 
 ---
 
-### Task 12: Public surface, documentation, and the release PR
+### Task 13: Public surface, documentation, and the release PR
 
 **Files:**
 
@@ -2738,7 +3104,7 @@ git commit -m "test: every corruption variant is refused at its own check"
 
 - [ ] **Step 1: Export**
 
-From `src/index.ts`: `createDefaultAssertionValidator`, `DefaultAssertionValidatorOptions`, `createInMemoryReplayStore`, `defaultReplayStore`, `AssertionValidationError`, `AssertionCheck`. Not the internal modules — `parseXsdDateTime`, `findDuplicateId`, `resolveSignedElement` are implementation.
+From `src/index.ts`: `createSignedResponseValidator`, `createSignedAssertionValidator`, `ShippedValidatorOptions`, `createInMemoryReplayStore`, `defaultReplayStore`, `AssertionValidationError`, `AssertionCheck`. Not the internal modules — `parseXsdDateTime`, `findDuplicateId`, `resolveSignedElement` are implementation.
 
 - [ ] **Step 2: Document**
 
@@ -2749,12 +3115,20 @@ From `src/index.ts`: `createDefaultAssertionValidator`, `DefaultAssertionValidat
 - that `parseSamlNotOnOrAfter` is gone and expiry now comes from the verified document;
 - the request-ID rule: when the package does not build the request, `authnRequestId` is required, with the two flows that trigger it;
 - that the default replay store is **process-wide**, what that does and does not protect, and how to replace it;
-- **which fields the signature protects under each placement**: with the
-  signature on the `Assertion` alone, `Status`, `Destination` and the response
-  issuer are outside it and are checked as misconfiguration rather than as
-  controls. A consumer who needs them protected must require their identity
-  provider to sign the `Response`. State plainly why the assertion-only flow is
-  still sound — a declined login carries no assertion to sign;
+- **the choice between the two validators**, which is the first thing a
+  consumer must make. `createSignedResponseValidator` is the default and
+  requires the identity provider to sign the `Response`;
+  `createSignedAssertionValidator` accepts a signature over the `Assertion` and
+  **does not read** `Status`, `Response/Issuer` or `Destination` at all. Say
+  which identity providers need the second — those that sign only assertions,
+  which is many — and say what is given up. Say plainly why it is still sound:
+  a declined login carries no assertion to sign, and addressing rests on
+  `Recipient`, inside the signature;
+- **`raw` versus `signedXml`**: `raw` is what arrived and is forwarded
+  verbatim; `signedXml` is what the signature covered. A consumer reading
+  anything this interface does not surface must parse the second. Do not let
+  the README imply that holding a `ValidatedAssertion` makes all of `raw`
+  trustworthy;
 - `clockSkewMs`, its default of `0`, and that retention outlasts it.
 
 Also update the "Package responsibilities" section — this package now validates assertions, which the current text says it does not.
@@ -2784,4 +3158,16 @@ Do not merge, do not tag, do not publish. Report the PR URL and stop.
 
 ## Release order
 
-The interfaces minor Task 1 published must be merged and published before Task 2 can install it. If it is not, Task 2 stops rather than working around it. `auth-providers@3.0.0` follows, and the owner publishes both.
+Three packages, in this order, each merged and published by the owner before
+the next depends on it:
+
+1. **`@mcp-abap-adt/interfaces`** — the minor from Task 1. Task 3 installs it
+   and stops if it is not there.
+2. **`@mcp-abap-adt/auth-mocks`** — the minor from Task 2, adding `signWhat`.
+   Only Task 12 needs it, but it needs it absolutely: without it the
+   signed-Response validator cannot be exercised end to end at all.
+3. **`@mcp-abap-adt/auth-providers@3.0.0`** — this repository, major.
+
+Tasks 1 and 2 are independent of each other and can run in either order. Task 2
+is easy to forget because nothing before Task 12 fails without it — which is
+exactly why it is a numbered task rather than a note.
