@@ -373,7 +373,14 @@ the default case passes.
   signWhat?: 'assertion' | 'response';
 ```
 
-At the one signing call:
+Read it where the other options are read, near the top of `startMockSamlIdp`
+beside `issuer`, `audience` and `acsUrls`:
+
+```ts
+const signWhat = options.signWhat ?? "assertion";
+```
+
+Then at the one signing call:
 
 ```ts
 let signed =
@@ -1653,11 +1660,16 @@ put underneath it, and signature resolution fails before `Status` is ever read.
 What establishes success in that flow is the signed assertion satisfying every
 assertion-level check — not the `Status` element.
 
-The three checks stay, because they cost nothing and catch a real
-misconfiguration, and because with a signed `Response` they are genuine
-controls. What changes is the claim made for them. A consumer who needs
-`Status`, `Destination` and the response issuer to be _protected_ must require
-their identity provider to sign the `Response`; the README says so in Task 13.
+The three checks belong to the signed-Response validator and to it alone. There
+they are controls, because the fields are inside the signature. The
+assertion-only validator does not perform them in any form — not as
+misconfiguration checks, not as warnings. A check run against a field an
+attacker sets reads, in the code and in the logs, as though something had been
+verified, and that is worse than an absence anyone can see.
+
+A consumer who needs `Status`, `Destination` and the response issuer verified
+must therefore require their identity provider to sign the `Response` and use
+the default validator; the README says so in Task 13.
 
 **This is the largest file in the plan, and its shape is fixed by the spec's check table.** Implement the checks in the table's order, each throwing `AssertionValidationError` with its own `check` value and its own message. No two messages may share a distinguishing fragment: a test asserting `/Destination/` must not be satisfiable by the `Recipient` refusal.
 
@@ -1820,6 +1832,12 @@ describe("the default assertion validator", () => {
   it("accepts a well-formed assertion and reports what the flow needs", async () => {
     const result = await validator().validate(encode(buildResponse()), context);
     expect(result.assertionId).toBe("_a1");
+    // signedXml is the element this validator required — the Response, which
+    // carries Status. Without this the assertion-only case below is the only
+    // one pinning signedXml, and an implementation that always returned the
+    // Assertion would satisfy the suite.
+    expect(result.signedXml).toContain("samlp:Response");
+    expect(result.signedXml).toContain("samlp:Status");
     expect(result.issuer).toBe(ISSUER);
     expect(result.nameId).toBe("mock-user");
     expect(result.expiresAt.getTime()).toBeGreaterThan(Date.now());
