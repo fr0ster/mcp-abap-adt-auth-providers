@@ -10,7 +10,7 @@
 
 **Spec:** `docs/superpowers/specs/2026-08-13-saml-assertion-validation-design.md`. Read it before Task 1 — every rule below is justified there, and the check table is the contract this plan implements.
 
-**Status:** written, awaiting review.
+**Status:** approved 2026-09-02 after review, in execution.
 
 ## Global Constraints
 
