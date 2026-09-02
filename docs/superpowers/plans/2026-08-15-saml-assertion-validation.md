@@ -284,6 +284,12 @@ starting; do not take this paragraph's word for it.
 
 Add to `src/__tests__/saml.test.ts`:
 
+The file already imports what it needs except the parser; add it if absent:
+
+```ts
+import { DOMParser } from "@xmldom/xmldom";
+```
+
 ```ts
 it("signs the Response itself when asked to", async () => {
   const acs = await startAcs();
@@ -298,15 +304,21 @@ it("signs the Response itself when asked to", async () => {
     const xml = Buffer.from(acs.received[0].SAMLResponse, "base64").toString(
       "utf8",
     );
-    // The reference names the Response's ID, and the Signature sits directly
-    // inside the Response rather than inside the Assertion. Asserting only
-    // "a Signature exists" would pass against the default mode too.
+    // Two properties, and neither is document order: `signXml` appends the
+    // Signature to the element it references, so in this mode it lands *after*
+    // the Assertion, and asserting otherwise would fail against a correct
+    // implementation. What matters is which element it references and whose
+    // child it is.
     const responseId = /<samlp:Response[^>]*\sID="([^"]+)"/.exec(xml)?.[1];
     expect(responseId).toBeTruthy();
     expect(xml).toContain(`URI="#${responseId}"`);
-    expect(xml.indexOf("<Signature") < xml.indexOf("<saml:Assertion")).toBe(
-      true,
-    );
+
+    const doc = new DOMParser().parseFromString(xml, "text/xml");
+    const signature = doc.getElementsByTagNameNS(
+      "http://www.w3.org/2000/09/xmldsig#",
+      "Signature",
+    )[0];
+    expect(signature.parentNode?.localName).toBe("Response");
   } finally {
     await idp.close();
     await acs.close();
@@ -441,7 +453,7 @@ Write the numbers down; Step 4 compares against them.
 In `package.json`:
 
 - `dependencies`: `"@mcp-abap-adt/interfaces"` set to `^` plus **the version Task 1 published**, replacing `^11.6.0`, and add `"@xmldom/xmldom": "^0.9.10"`, `"xml-crypto": "^6.1.2"`.
-- `devDependencies`: add `"@mcp-abap-adt/auth-mocks": "^0.1.1"`.
+- `devDependencies`: add `"@mcp-abap-adt/auth-mocks"` at **`^0.2.0`** — the version Task 2 publishes. Not `^0.1.1`: a caret on a `0.x` version pins the minor, so `^0.1.1` would resolve to `0.1.x` and Task 12 would never see `signWhat`.
 
 If that version is not yet published, Task 1's PR has not been merged and released. **Stop and say so** rather than installing the previous major and working around the missing types.
 
@@ -1624,13 +1636,14 @@ those two placements do not protect the same fields. Three checks read from the
 assertion is signed, all three sit outside the signature and an attacker who
 can deliver a response at all can set them to whatever we expect.
 
-Saying "everything is read from the signed element" would therefore be false,
-and the earlier draft of this task said it. The accurate statement:
+Each validator reads only what its own signature covers, which is what keeps
+"everything is read from the signed element" true for both. What differs is
+which fields each one reads at all:
 
-| Read from                                                                                                           | Signature on `Response` | Signature on `Assertion` only                               |
-| ------------------------------------------------------------------------------------------------------------------- | ----------------------- | ----------------------------------------------------------- |
-| Everything inside the assertion — `Issuer`, `Conditions`, `Audience`, the bearer confirmation, the assertion's `ID` | protected               | protected                                                   |
-| `Status`, `Response/Issuer`, `Destination`                                                                          | protected               | **not protected** — a misconfiguration check, not a control |
+| Read from                                                                                                           | Signature on `Response` | Signature on `Assertion` only |
+| ------------------------------------------------------------------------------------------------------------------- | ----------------------- | ----------------------------- |
+| Everything inside the assertion — `Issuer`, `Conditions`, `Audience`, the bearer confirmation, the assertion's `ID` | protected               | protected                     |
+| `Status`, `Response/Issuer`, `Destination`                                                                          | read, and controls      | **not read at all**           |
 
 The assertion-only flow is not thereby unsafe, and the reason is worth stating
 because it is not obvious: **a declined login carries no assertion.** An
@@ -1687,6 +1700,12 @@ function buildResponse(
     audiences?: string[][] | null;
     confirmations?: string[] | null;
     destination?: string | null;
+    /**
+     * Defaults to `"response"`, because the default validator requires it.
+     * A fixture signing the assertion while the test runs the signed-Response
+     * validator fails at `signedNode` before reaching the check it was written
+     * for — every negative case would then pass for the wrong reason.
+     */
     signWhat?: "assertion" | "response";
   } = {},
 ): string {
@@ -1737,7 +1756,7 @@ function buildResponse(
   const destination =
     o.destination === null ? "" : ` Destination="${o.destination ?? ACS}"`;
 
-  if ((o.signWhat ?? "assertion") === "assertion") {
+  if ((o.signWhat ?? "response") === "assertion") {
     const signed = signXml(assertion, KEY);
     return (
       `<samlp:Response xmlns:samlp="urn:oasis:names:tc:SAML:2.0:protocol" ` +
@@ -1806,9 +1825,9 @@ describe("the default assertion validator", () => {
     expect(result.expiresAt.getTime()).toBeGreaterThan(Date.now());
   });
 
-  it("accepts a response signed as a whole rather than per assertion", async () => {
-    const result = await validator().validate(
-      encode(buildResponse({ signWhat: "response" })),
+  it("accepts an assertion-signed document through the other validator", async () => {
+    const result = await assertionValidator().validate(
+      encode(buildResponse({ signWhat: "assertion" })),
       context,
     );
     expect(result.assertionId).toBe("_a1");
@@ -2224,11 +2243,12 @@ The skeleton, with every rule's exact condition. Fill in the reading helpers; do
  * Second, no two refusals share a distinguishing phrase, so a test cannot pass
  * for a neighbouring check's reason.
  *
- * Three fields are read from the Response rather than the assertion: Status,
- * Response/Issuer and Destination. When only the assertion is signed they lie
- * outside the signature, and they are then misconfiguration checks rather than
- * controls. That is safe because a declined login carries no assertion at all,
- * so flipping Status buys an attacker nothing they can sign.
+ * Three fields live on the Response rather than the assertion: Status,
+ * Response/Issuer and Destination. The signed-Response validator reads them,
+ * because there they are inside the signature. The assertion-only validator
+ * does not read them at all — not weakly. That is safe because a declined
+ * login carries no assertion, so flipping Status buys an attacker nothing they
+ * can sign, and addressing rests on Recipient inside the signed assertion.
  */
 
 import {
@@ -3068,7 +3088,7 @@ for (const [variant, check] of RESPONSE_LEVEL) {
 
 Then the cases no variant expresses:
 
-- **A successful login, in each mode**: `expiresAt` comes from the assertion, the session cookie is what `cookieProvider` returned, and `signedXml` is the element that was signed — the `Response` in one mode and the `Assertion` in the other. That last assertion is what proves the two modes are actually different documents rather than the same one twice.
+- **A successful login, in each mode**: `expiresAt` comes from the assertion and the session cookie is what `cookieProvider` returned. Do **not** try to assert `signedXml` here: the provider returns an `ITokenResult`, not the `ValidatedAssertion`, so the login's result cannot show which element was signed. That property is pinned in Task 9's unit tests, where the validator's return value is in hand. If you want it end to end, the honest way is a spy validator wrapping the real one — say so and write it, rather than asserting on a value this call does not expose.
 - **The wrong placement**: a response-signed document refused by the assertion-only validator at `signedNode`, and the reverse. Without these, a validator that ignored its requirement would pass everything above.
 - **A response-level cross-check that no variant can show**: corrupt `Response/Issuer` **alone**, leaving the assertion's issuer correct, and expect the signed-Response validator to refuse at `issuer` while the assertion-only one accepts. Build it by re-signing with `generateKeyMaterial`/`signXml`, since `wrongIssuer` corrupts both.
 - **Replay**: `idp.repeatLastAssertion()`, run the login twice, expect `check: 'replay'` the second time.
