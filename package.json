@@ -9,7 +9,8 @@
     "bin",
     "README.md",
     "CHANGELOG.md",
-    "LICENSE"
+    "LICENSE",
+    "COPYING"
   ],
   "keywords": [
     "abap",
@@ -25,7 +26,7 @@
     "abap-adt"
   ],
   "author": "Oleksii Kyslytsia <oleksij.kyslytsja@gmail.com>",
-  "license": "MIT",
+  "license": "LGPL-3.0-only",
   "homepage": "https://github.com/fr0ster/mcp-abap-adt-auth-providers#readme",
   "bugs": {
     "url": "https://github.com/fr0ster/mcp-abap-adt-auth-providers/issues"
