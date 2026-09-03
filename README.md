@@ -871,7 +871,7 @@ Requires Node.js `>=18.2.0`.
 Earlier published versions were MIT and stay MIT — a licence change is not
 retroactive.
 
-Copyright © 2025 Oleksii Kyslytsia
+Copyright © 2025–2026 Oleksii Kyslytsia
 
 This library is free software: you can redistribute it and/or modify it under the
 terms of the GNU Lesser General Public License as published by the Free Software
