@@ -41,7 +41,7 @@ were proposed here and accepted:
 
 1. **The shipped default verifies the signature.** A missing certificate is a
    configuration error that fails the login, never a silent skip.
-2. **`IAssertionValidator` lives in `@mcp-abap-adt/interfaces`**, like
+2. **`IAssertionValidator` lives in `@mcp-abap-adt/interfaces-auth`**, like
    `IAuthorizationStrategy`; the defaults ship in `auth-providers`.
 3. **Certificates come from configuration** — `idpCertificates: string[]`, PEM
    or base64 DER. A list, because identity providers rotate keys and two are
@@ -182,7 +182,7 @@ it yet.
 
 ## Interfaces
 
-In `@mcp-abap-adt/interfaces`:
+In `@mcp-abap-adt/interfaces-auth` (published in 1.2.0):
 
 ```ts
 /** What the provider knows about the login the assertion is answering. */

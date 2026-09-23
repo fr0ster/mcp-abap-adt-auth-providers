@@ -4,17 +4,19 @@
 
 **Goal:** Make `@mcp-abap-adt/auth-providers` establish that a SAML assertion is genuine, addressed to us, currently valid and not a replay — through a strategy with a shipped default — instead of accepting any non-empty string.
 
-**Architecture:** `IAssertionValidator` and `IAssertionReplayStore` join `@mcp-abap-adt/interfaces`; the shipped default lives in `auth-providers/src/validation/`, built from small pure modules (date parsing, document-ID rules, signature resolution, replay store) that an orchestrator composes. Both SAML providers run the validator and take their expiry from its result.
+**Architecture:** `IAssertionValidator` and `IAssertionReplayStore` come from `@mcp-abap-adt/interfaces-auth` (published in 1.2.0); the shipped default lives in `auth-providers/src/validation/`, built from small pure modules (date parsing, document-ID rules, signature resolution, replay store) that an orchestrator composes. Both SAML providers run the validator and take their expiry from its result.
 
 **Tech Stack:** TypeScript, `xml-crypto` for XML-DSig, `@xmldom/xmldom` for the DOM, Jest, Biome. `@mcp-abap-adt/auth-mocks` as a devDependency for the tests.
 
 **Spec:** `docs/superpowers/specs/2026-08-13-saml-assertion-validation-design.md`. Read it before Task 1 — every rule below is justified there, and the check table is the contract this plan implements.
 
-**Status:** approved 2026-09-02 after review, in execution.
+**Status:** approved 2026-09-02; revised 2026-09-24 after the interfaces split, and the revision needs its own approval before execution resumes. No task has been executed in this repository yet.
+
+**What the interfaces split changed.** The `@mcp-abap-adt/interfaces` facade is deleted. Task 1 is already done upstream — the five types and an error code are in `@mcp-abap-adt/interfaces-auth@1.2.0`, with one difference from what Task 1 described (see Task 1). Task 3's dependency migration was done by PR #29; what is left of Task 3 is adding the XML libraries and `auth-mocks`.
 
 ## Global Constraints
 
-- **Interface-only communication.** Anything crossing a package boundary is an interface from `@mcp-abap-adt/interfaces`. A logger is `ILogger`, never a local abstraction.
+- **Interface-only communication.** Anything crossing a package boundary is an interface from a contract package — `@mcp-abap-adt/interfaces-auth`, `-auth-sap` or `-utils`, never `interfaces-adt`. A logger is `ILogger`, never a local abstraction.
 - **Everything pluggable is a strategy**, shipped with a working default the consumer can replace.
 - **Nothing writes to `process.stdout`.** Under an MCP or LSP stdio transport a stray line corrupts the protocol.
 - **Absent is refused, not skipped.** A rule phrased "present and not X" is one an attacker satisfies by deleting the field. Every field the check table names refuses when it is missing.
@@ -28,16 +30,15 @@
 
 Do not re-derive these; do verify anything you depend on that is not listed.
 
-- **This plan names no interfaces version, deliberately.** It went stale three
-  times while the plan was being written and reviewed — 17.0.0, then 24.0.0,
-  then 25.0.0, the last of those during a single reply. Every version below is
-  written as a rule, not a number: Task 1 publishes `<current major>.<current
-minor + 1>.0`, and every later reference means _the version Task 1 actually
-  published_.
-- `auth-providers` is at **2.0.0** and depends on `@mcp-abap-adt/interfaces@^11.6.0`. That gap was six majors when this plan was drafted and fourteen by the time it was reviewed; whatever it is when you start, it is wide. **All 13 names `auth-providers` imports still existed at every version checked — 16.0.0, 17.0.0, 24.0.0 and 25.0.0** — and `IAuthorizationStrategy` still carries `buildAuthorizationUrl`, `AuthorizationOutcome`, `payload` and `redirectUri`. That is four data points for "the bump is safe", not a guarantee; Task 3 proves it by compiling.
-- **Check the version before you start.** Run `npm view @mcp-abap-adt/interfaces version` first, and again before Task 3 installs it. The compatibility check in Task 3 matters more the wider the gap, not less.
-- `Saml2CommonConfig` lives in `auth-providers/src/providers/saml2Utils.ts:9`, **not** in `interfaces`. The new configuration fields go there.
-- `@mcp-abap-adt/auth-mocks@0.1.1` is published. `startMockSamlIdp` requires `acsUrls` — with none registered it refuses every `AuthnRequest`.
+- **The contracts are in `@mcp-abap-adt/interfaces-auth@^1.2.0`.** Since PR #29
+  `auth-providers` depends on `interfaces-auth`, `interfaces-auth-sap` and
+  `interfaces-utils` instead of the deleted facade. `ILogger` comes from
+  `@mcp-abap-adt/interfaces-utils`.
+- **The error code is `ASSERTION_ERROR_CODES.VALIDATION_ERROR`**, a constant of
+  its own in `interfaces-auth`, not an entry in `TOKEN_PROVIDER_ERROR_CODES`. Its
+  value is the string `'ASSERTION_VALIDATION_ERROR'`, as this plan intended.
+- `Saml2CommonConfig` lives in `auth-providers/src/providers/saml2Utils.ts:9`, **not** in a contract package. The new configuration fields go there.
+- `@mcp-abap-adt/auth-mocks@0.1.1` is published; `0.2.0` (licence only) is tagged, and `signWhat` arrives in `0.3.0` (auth-mocks PR #2). `startMockSamlIdp` requires `acsUrls` — with none registered it refuses every `AuthnRequest`.
 - `xml-crypto@6`: `checkSignature` **throws** when the signature value fails, and returns `false` only for a reference-digest mismatch. Both outcomes mean "invalid".
 - `@xmldom/xmldom@0.9`: `getAttribute` decodes entities; `parseFromString` throws on input with no root element. `Node` must be imported from the package — this project has no `dom` lib.
 
@@ -45,10 +46,7 @@ minor + 1>.0`, and every later reference means _the version Task 1 actually
 
 ## File Structure
 
-**`@mcp-abap-adt/interfaces`** (separate repository, `/home/okyslytsia/prj/mcp-abap-adt-interfaces`)
-
-- Create `src/auth/IAssertionValidator.ts` — `AssertionContext`, `ValidatedAssertion`, `IAssertionValidator`, `AssertionReplayKey`, `IAssertionReplayStore`. One file: they are one contract, and a consumer implementing the validator needs all five in view.
-- Modify `src/index.ts` — export them.
+**`@mcp-abap-adt/interfaces-auth`** — nothing to create: `src/auth/IAssertionValidator.ts` and `src/auth/AssertionErrorCodes.ts` are published in 1.2.0.
 
 **`@mcp-abap-adt/auth-providers`**
 
@@ -67,197 +65,25 @@ The pure modules are separate because each is a rule with its own failure modes,
 
 ---
 
-### Task 1: The interfaces
+### Task 1: The interfaces — done upstream
 
-**Repository:** `/home/okyslytsia/prj/mcp-abap-adt-interfaces`
+`@mcp-abap-adt/interfaces-auth@1.2.0` publishes `AssertionContext`,
+`ValidatedAssertion`, `IAssertionValidator`, `AssertionReplayKey` and
+`IAssertionReplayStore` field for field as this task specified them, from
+`src/auth/IAssertionValidator.ts`.
 
-**Files:**
+One difference: the error code is not `TOKEN_PROVIDER_ERROR_CODES.ASSERTION_VALIDATION_ERROR`
+but `ASSERTION_ERROR_CODES.VALIDATION_ERROR` from `src/auth/AssertionErrorCodes.ts`,
+with the same string value. Task 8 uses it.
 
-- Create: `src/auth/IAssertionValidator.ts`
-- Modify: `src/index.ts`
-- Modify: `src/token/TokenProviderErrorCodes.ts` — add one code
-
-**Interfaces:**
-
-- Produces: everything `auth-providers` imports in Tasks 3–11.
-
-**Before you start:** work on a branch off `master`, whatever version it is at. Do not branch off any feature branch you find. This is a **minor**: nothing existing changes.
-
-- [ ] **Step 1: Write `src/auth/IAssertionValidator.ts`**
-
-```ts
-/**
- * Establishing that a SAML assertion may be trusted.
- *
- * Validation is a strategy for the same reason everything else here is: a
- * consumer may have a trust model this package cannot anticipate. The shipped
- * default verifies the signature and refuses anything it cannot place; a
- * consumer replacing it takes on that duty entirely.
- */
-
-import type { ILogger } from "../logging/ILogger";
-
-/** What the provider knows about the login the assertion is answering. */
-export interface AssertionContext {
-  /** The AuthnRequest ID this response must answer. */
-  readonly expectedInResponseTo: string;
-  /** Our entity ID, which the AudienceRestriction must name. */
-  readonly audience: string;
-  /** The ACS the response arrived at; Recipient and Destination must match. */
-  readonly acsUrl: string;
-  /**
-   * Trusted issuer; the assertion's `Issuer` must equal it.
-   *
-   * Optional on the interface because a custom validator may establish trust
-   * without it. The shipped default always receives it.
-   */
-  readonly expectedIssuer?: string;
-  /** For progress messages. Absent means silence — never stdout. */
-  readonly logger?: ILogger;
-}
-
-/** What a validated assertion yields to the flow. */
-export interface ValidatedAssertion {
-  /**
-   * The earlier of `Conditions/@NotOnOrAfter` and the `NotOnOrAfter` of the
-   * bearer confirmation that was accepted — never later than either, so a
-   * session cannot outlive a window the assertion itself closed.
-   */
-  readonly expiresAt: Date;
-  readonly assertionId: string;
-  readonly issuer: string;
-  readonly nameId?: string;
-  readonly sessionIndex?: string;
-  readonly attributes?: Readonly<Record<string, readonly string[]>>;
-  /**
-   * The response exactly as it arrived, for a flow that must forward it
-   * verbatim.
-   *
-   * **The wire payload, not a validated artifact.** It is the whole
-   * `samlp:Response`, and under `createSignedAssertionValidator` that includes
-   * `Status`, `Response/Issuer` and `Destination`, which nothing read and
-   * nothing checked. Holding a `ValidatedAssertion` does not make every byte
-   * of `raw` trustworthy.
-   */
-  readonly raw: string;
-  /**
-   * The signed element, serialised: the `Assertion`, or the `Response` when
-   * that is what the signature covered.
-   *
-   * Everything here is inside the signature that verified. A consumer wanting
-   * anything this interface does not surface should parse this rather than
-   * `raw` — the difference between them is the difference between "signed"
-   * and "arrived".
-   */
-  readonly signedXml: string;
-}
-
-/**
- * Establishes that an assertion is genuine, addressed to us, currently valid,
- * and answers a request we made. Rejects by throwing, with a reason naming the
- * check that failed.
- */
-export interface IAssertionValidator {
-  validate(
-    samlResponse: string,
-    context: AssertionContext,
-  ): Promise<ValidatedAssertion>;
-}
-
-/**
- * What identifies an assertion for replay purposes.
- *
- * An assertion's `ID` is unique only within the identity provider that minted
- * it, so a store shared by two providers would reject a perfectly good second
- * login the moment two issuers happened to mint the same `_id`. The key is the
- * pair, never the ID alone.
- */
-export interface AssertionReplayKey {
-  readonly issuer: string;
-  readonly assertionId: string;
-}
-
-/** Remembers assertions so a replay is refused. */
-export interface IAssertionReplayStore {
-  /**
-   * Records this key if it is not already recorded, and reports which
-   * happened: `true` when newly recorded, `false` when already present — a
-   * replay.
-   *
-   * **Must be atomic.** Two validations of the same assertion running at once
-   * must not both be told `true`; a check followed by a separate write is a
-   * race, and it is precisely the race a replay exploits.
-   *
-   * `retainUntil` is the last instant a validator would still accept the
-   * assertion — its expiry plus any clock skew allowed — not its expiry. An
-   * entry dropped earlier reopens the window in which a replay is accepted.
-   */
-  recordIfUnseen(key: AssertionReplayKey, retainUntil: Date): Promise<boolean>;
-}
-```
-
-- [ ] **Step 2: Add the error code**
-
-`auth-providers` needs a code for "the assertion was refused", and reusing
-`VALIDATION_ERROR` would give an assertion refusal the same code as a
-misconfiguration — the two a consumer most needs to tell apart. In
-`src/token/TokenProviderErrorCodes.ts`, beside the existing entries
-(`VALIDATION_ERROR`, `REFRESH_ERROR`, `SESSION_DATA_ERROR`,
-`SERVICE_KEY_ERROR`, `BROWSER_AUTH_ERROR`):
-
-```ts
-  ASSERTION_VALIDATION_ERROR: 'ASSERTION_VALIDATION_ERROR',
-```
-
-- [ ] **Step 3: Export from `src/index.ts`**
-
-Add beside the existing `IAuthorizationStrategy` export, following the file's own grouping and ordering:
-
-```ts
-export type {
-  AssertionContext,
-  AssertionReplayKey,
-  IAssertionReplayStore,
-  IAssertionValidator,
-  ValidatedAssertion,
-} from "./auth/IAssertionValidator";
-```
-
-- [ ] **Step 4: Verify**
-
-```bash
-npm run build && npm test
-```
-
-Expected: PASS. A type-only addition cannot break a test; if something fails, the export block is in the wrong place or the `ILogger` path is wrong.
-
-- [ ] **Step 5: Check the type surface is actually reachable**
-
-```bash
-node -e "const t=require('./dist/index.js'); console.log('runtime exports unchanged:', Object.keys(t).length)"
-grep -c "IAssertionValidator" dist/index.d.ts
-```
-
-Expected: the `grep` prints at least 1. Types are erased at runtime, so the first command only confirms nothing was added to the runtime surface by accident.
-
-- [ ] **Step 6: Bump the version and write the changelog**
-
-`package.json` to `<current major>.<current minor + 1>.0` — read the current value from `master`'s `package.json`, do not assume the minor is 0. Record the number you chose; Task 3 needs exactly it. Add a matching section to `CHANGELOG.md` describing the addition as what a consumer gains, not as a task number.
-
-- [ ] **Step 7: Commit, push, open the PR — then stop**
-
-```bash
-git add src/auth/IAssertionValidator.ts src/index.ts src/token/TokenProviderErrorCodes.ts package.json CHANGELOG.md
-git commit -m "feat: interfaces for validating a SAML assertion"
-git push -u origin <branch>
-gh pr create --fill
-```
-
-Do not merge. Do not tag. Report the PR URL and stop; the owner reviews, merges and publishes.
+Nothing to do in this task. Before Task 3, confirm the published package still
+exports all six names.
 
 ---
 
 ### Task 2: `auth-mocks` gains a signed-Response mode
+
+**State:** implemented as auth-mocks PR #2 (`feat/sign-the-response`, version 0.3.0), open and awaiting review. What is left is its merge and publish.
 
 **Repository:** `/home/okyslytsia/prj/mcp-abap-adt-auth-mocks` — a published
 package (0.1.1), so this is a **minor release** and nothing existing may change.
@@ -418,8 +244,8 @@ being detectable in this mode, Task 12 needs to know before it depends on it.
 
 `README.md` gains `signWhat` in its options table, saying what each value means
 and which relying-party behaviour the non-default one enables. `CHANGELOG.md`
-gets a `## [0.2.0]` section — a minor: an added option, no changed behaviour.
-`package.json` to `0.2.0`.
+gets a `## [0.3.0]` section — a minor: an added option, no changed behaviour.
+`package.json` to `0.3.0` — `0.2.0` is the licence release.
 
 ```bash
 npm run lint:check && npm run build && npm run test:check && npm test
@@ -433,7 +259,7 @@ Do not merge, do not tag, do not publish. Report the PR URL and stop.
 
 ---
 
-### Task 3: Dependencies, and proving the interfaces bump is safe
+### Task 3: The XML libraries and auth-mocks
 
 **Repository:** `/home/okyslytsia/prj/mcp-abap-adt-auth-providers` — and every task from here on.
 
@@ -443,9 +269,9 @@ Do not merge, do not tag, do not publish. Report the PR URL and stop.
 
 **Interfaces:**
 
-- Consumes: the interfaces minor Task 1 published.
+- Consumes: `@mcp-abap-adt/interfaces-auth@^1.2.0`, already a dependency since PR #29; `@mcp-abap-adt/auth-mocks@0.3.0` from Task 2.
 
-**This task exists because the bump is many majors wide** — six when the plan was drafted, fourteen by the time it was reviewed. The names were checked and all survive, but a compile is the only thing that proves it.
+The move off the facade is already done (PR #29). This task only adds what validation needs.
 
 - [ ] **Step 1: Record what passes now**
 
@@ -459,10 +285,10 @@ Write the numbers down; Step 4 compares against them.
 
 In `package.json`:
 
-- `dependencies`: `"@mcp-abap-adt/interfaces"` set to `^` plus **the version Task 1 published**, replacing `^11.6.0`, and add `"@xmldom/xmldom": "^0.9.10"`, `"xml-crypto": "^6.1.2"`.
-- `devDependencies`: add `"@mcp-abap-adt/auth-mocks"` at **`^0.2.0`** — the version Task 2 publishes. Not `^0.1.1`: a caret on a `0.x` version pins the minor, so `^0.1.1` would resolve to `0.1.x` and Task 12 would never see `signWhat`.
+- `dependencies`: add `"@xmldom/xmldom": "^0.9.10"`, `"xml-crypto": "^6.1.2"`.
+- `devDependencies`: add `"@mcp-abap-adt/auth-mocks"` at **`^0.3.0`** — the version Task 2 publishes. Not `^0.1.1` or `^0.2.0`: a caret on a `0.x` version pins the minor, so either would resolve to a version without `signWhat` and Task 12 would never see it.
 
-If that version is not yet published, Task 1's PR has not been merged and released. **Stop and say so** rather than installing the previous major and working around the missing types.
+If that version is not yet published, Task 2's PR has not been merged and released. **Stop and say so** rather than installing the previous major and working around the missing types.
 
 ```bash
 npm install
@@ -474,7 +300,7 @@ npm install
 npm run build && npm run test:check
 ```
 
-Expected: PASS. If a name has moved, this is where you find out — report exactly which, with the error, rather than adapting the code silently. That would be a finding about this plan's central assumption.
+Expected: PASS.
 
 - [ ] **Step 4: Run the suite**
 
@@ -489,7 +315,7 @@ Expected: identical to Step 1. Any change is a finding.
 ```bash
 npm run lint:check && npm run build && npm run test:check && npm test
 git add package.json package-lock.json
-git commit -m "chore: interfaces <the version Task 1 published>, and the XML libraries validation needs"
+git commit -m "chore: the XML libraries validation needs, and auth-mocks with signWhat"
 ```
 
 ---
@@ -1390,7 +1216,7 @@ Expected: FAIL — module not found.
 import type {
   AssertionReplayKey,
   IAssertionReplayStore,
-} from "@mcp-abap-adt/interfaces";
+} from "@mcp-abap-adt/interfaces-auth";
 
 const compositeKey = (key: AssertionReplayKey): string =>
   // The issuer is length-prefixed so that two different pairs cannot collide
@@ -1534,7 +1360,7 @@ Expected: FAIL — module not found.
  * addressed to us" should not be parsing prose to do it.
  */
 
-import { TOKEN_PROVIDER_ERROR_CODES } from "@mcp-abap-adt/interfaces";
+import { ASSERTION_ERROR_CODES } from "@mcp-abap-adt/interfaces-auth";
 import { TokenProviderError } from "./TokenProviderErrors";
 
 /** The checks the shipped validator performs, in the order it performs them. */
@@ -1558,7 +1384,7 @@ export class AssertionValidationError extends TokenProviderError {
   readonly check: AssertionCheck;
 
   constructor(check: AssertionCheck, message: string) {
-    super(message, TOKEN_PROVIDER_ERROR_CODES.ASSERTION_VALIDATION_ERROR);
+    super(message, ASSERTION_ERROR_CODES.VALIDATION_ERROR);
     this.name = "AssertionValidationError";
     this.check = check;
     // Every sibling in TokenProviderErrors.ts does this; without it
@@ -2280,7 +2106,7 @@ import type {
   IAssertionReplayStore,
   IAssertionValidator,
   ValidatedAssertion,
-} from '@mcp-abap-adt/interfaces';
+} from '@mcp-abap-adt/interfaces-auth';
 import {
   type AssertionCheck,
   AssertionValidationError,
@@ -3196,16 +3022,12 @@ Do not merge, do not tag, do not publish. Report the PR URL and stop.
 
 ## Release order
 
-Three packages, in this order, each merged and published by the owner before
-the next depends on it:
-
-1. **`@mcp-abap-adt/interfaces`** — the minor from Task 1. Task 3 installs it
-   and stops if it is not there.
-2. **`@mcp-abap-adt/auth-mocks`** — the minor from Task 2, adding `signWhat`.
-   Only Task 12 needs it, but it needs it absolutely: without it the
-   signed-Response validator cannot be exercised end to end at all.
+1. **`@mcp-abap-adt/interfaces-auth@1.2.0`** — published; nothing to wait for.
+2. **`@mcp-abap-adt/auth-mocks@0.3.0`** — Task 2, adding `signWhat` (auth-mocks
+   PR #2). Only Task 12 needs it, but it needs it absolutely: without it the
+   signed-Response validator cannot be exercised end to end at all. Task 3
+   installs it and stops if it is not there.
 3. **`@mcp-abap-adt/auth-providers@3.0.0`** — this repository, major.
 
-Tasks 1 and 2 are independent of each other and can run in either order. Task 2
-is easy to forget because nothing before Task 12 fails without it — which is
-exactly why it is a numbered task rather than a note.
+Task 2 is easy to forget because nothing before Task 12 fails without it — which
+is exactly why it is a numbered task rather than a note.
