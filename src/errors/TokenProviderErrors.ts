@@ -5,7 +5,7 @@
  * to enable better error handling and debugging.
  */
 
-import { TOKEN_PROVIDER_ERROR_CODES } from '@mcp-abap-adt/interfaces';
+import { TOKEN_PROVIDER_ERROR_CODES } from '@mcp-abap-adt/interfaces-auth';
 
 /**
  * Base class for all token provider errors

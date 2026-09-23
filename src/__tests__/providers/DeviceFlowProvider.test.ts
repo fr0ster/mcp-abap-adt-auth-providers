@@ -16,8 +16,8 @@ import {
   AbapServiceKeyStore,
   AbapSessionStore,
 } from '@mcp-abap-adt/auth-stores';
-import type { ILogger } from '@mcp-abap-adt/interfaces';
-import { AUTH_TYPE_AUTHORIZATION_CODE } from '@mcp-abap-adt/interfaces';
+import { AUTH_TYPE_AUTHORIZATION_CODE } from '@mcp-abap-adt/interfaces-auth';
+import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
 import {
   initiateDeviceFlow,
   pollForDeviceTokens,

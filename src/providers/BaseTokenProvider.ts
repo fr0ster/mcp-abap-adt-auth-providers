@@ -9,11 +9,11 @@
  */
 
 import type {
-  ILogger,
   ITokenProvider,
   ITokenResult,
   OAuth2GrantType,
-} from '@mcp-abap-adt/interfaces';
+} from '@mcp-abap-adt/interfaces-auth';
+import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
 
 /**
  * Abstract base class for token providers

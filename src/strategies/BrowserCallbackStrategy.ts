@@ -13,7 +13,7 @@ import type {
   AuthorizationRequest,
   CallbackServerFactory,
   IAuthorizationStrategy,
-} from '@mcp-abap-adt/interfaces';
+} from '@mcp-abap-adt/interfaces-auth';
 import { announcer } from '../auth/announce';
 import { launchBrowser } from '../auth/browserAuth';
 import { withBrowserCallbackServer } from '../auth/callbackServer';

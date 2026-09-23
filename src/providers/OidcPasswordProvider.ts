@@ -3,11 +3,11 @@
  */
 
 import type {
-  ILogger,
   ITokenResult,
   OAuth2GrantType,
-} from '@mcp-abap-adt/interfaces';
-import { AUTH_TYPE_PASSWORD } from '@mcp-abap-adt/interfaces';
+} from '@mcp-abap-adt/interfaces-auth';
+import { AUTH_TYPE_PASSWORD } from '@mcp-abap-adt/interfaces-auth';
+import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
 import { discoverOidc } from '../auth/oidcDiscovery';
 import { passwordGrant, refreshOidcToken } from '../auth/oidcToken';
 import { BaseTokenProvider } from './BaseTokenProvider';

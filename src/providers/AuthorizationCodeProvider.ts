@@ -6,13 +6,13 @@
  */
 
 import type {
-  IAuthorizationConfig,
   IAuthorizationStrategy,
-  ILogger,
   ITokenResult,
   OAuth2GrantType,
-} from '@mcp-abap-adt/interfaces';
-import { AUTH_TYPE_AUTHORIZATION_CODE } from '@mcp-abap-adt/interfaces';
+} from '@mcp-abap-adt/interfaces-auth';
+import { AUTH_TYPE_AUTHORIZATION_CODE } from '@mcp-abap-adt/interfaces-auth';
+import type { IAuthorizationConfig } from '@mcp-abap-adt/interfaces-auth-sap';
+import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
 import {
   exchangeCodeForToken,
   getJwtAuthorizationUrl,

@@ -5,7 +5,7 @@
  * User authorizes on another device by entering a code.
  */
 
-import type { ILogger } from '@mcp-abap-adt/interfaces';
+import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
 import axios from 'axios';
 
 export interface DeviceFlowResult {

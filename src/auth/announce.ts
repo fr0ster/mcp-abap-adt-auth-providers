@@ -7,7 +7,7 @@
  * under an MCP or LSP stdio transport.
  */
 
-import type { ILogger } from '@mcp-abap-adt/interfaces';
+import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
 
 export function announcer(logger?: ILogger): (msg: string) => void {
   return (msg: string) => {

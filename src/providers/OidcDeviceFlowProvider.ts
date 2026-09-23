@@ -3,11 +3,11 @@
  */
 
 import type {
-  ILogger,
   ITokenResult,
   OAuth2GrantType,
-} from '@mcp-abap-adt/interfaces';
-import { AUTH_TYPE_AUTHORIZATION_CODE } from '@mcp-abap-adt/interfaces';
+} from '@mcp-abap-adt/interfaces-auth';
+import { AUTH_TYPE_AUTHORIZATION_CODE } from '@mcp-abap-adt/interfaces-auth';
+import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
 import { announcer } from '../auth/announce';
 import { discoverOidc } from '../auth/oidcDiscovery';
 import {

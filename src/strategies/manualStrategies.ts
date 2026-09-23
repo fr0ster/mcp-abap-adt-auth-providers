@@ -12,7 +12,7 @@ import type {
   AuthorizationOutcome,
   AuthorizationRequest,
   IAuthorizationStrategy,
-} from '@mcp-abap-adt/interfaces';
+} from '@mcp-abap-adt/interfaces-auth';
 import { extractCode } from '../auth/browserAuth';
 import { DEFAULT_CALLBACK_PORT } from './BrowserCallbackStrategy';
 

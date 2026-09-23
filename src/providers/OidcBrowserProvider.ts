@@ -4,11 +4,11 @@
 
 import type {
   IAuthorizationStrategy,
-  ILogger,
   ITokenResult,
   OAuth2GrantType,
-} from '@mcp-abap-adt/interfaces';
-import { AUTH_TYPE_AUTHORIZATION_CODE_PKCE } from '@mcp-abap-adt/interfaces';
+} from '@mcp-abap-adt/interfaces-auth';
+import { AUTH_TYPE_AUTHORIZATION_CODE_PKCE } from '@mcp-abap-adt/interfaces-auth';
+import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
 import type { OidcCallbackResult } from '../auth/oidcBrowserAuth';
 import { discoverOidc } from '../auth/oidcDiscovery';
 import { generatePkceChallenge, generatePkceVerifier } from '../auth/oidcPkce';

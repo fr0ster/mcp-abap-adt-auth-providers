@@ -12,7 +12,7 @@ import type {
   CallbackServerFactory,
   IAuthorizationStrategy,
   ICallbackServerHandle,
-} from '@mcp-abap-adt/interfaces';
+} from '@mcp-abap-adt/interfaces-auth';
 import { withBrowserCallbackServer } from '../../auth/callbackServer';
 import {
   BrowserCallbackStrategy,
