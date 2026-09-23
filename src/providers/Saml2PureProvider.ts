@@ -5,11 +5,11 @@
  */
 
 import type {
-  ILogger,
   ITokenResult,
   OAuth2GrantType,
-} from '@mcp-abap-adt/interfaces';
-import { AUTH_TYPE_USER_TOKEN } from '@mcp-abap-adt/interfaces';
+} from '@mcp-abap-adt/interfaces-auth';
+import { AUTH_TYPE_USER_TOKEN } from '@mcp-abap-adt/interfaces-auth';
+import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
 import { parseSamlNotOnOrAfter } from '../auth/saml2Auth';
 import { BaseTokenProvider } from './BaseTokenProvider';
 import type { Saml2CommonConfig } from './saml2Utils';

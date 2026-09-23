@@ -1,4 +1,4 @@
-import type { ITokenProvider } from '@mcp-abap-adt/interfaces';
+import type { ITokenProvider } from '@mcp-abap-adt/interfaces-auth';
 import { OidcBrowserProvider } from '../providers/OidcBrowserProvider';
 import { OidcDeviceFlowProvider } from '../providers/OidcDeviceFlowProvider';
 import { OidcPasswordProvider } from '../providers/OidcPasswordProvider';

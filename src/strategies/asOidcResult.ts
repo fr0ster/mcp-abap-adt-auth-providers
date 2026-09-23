@@ -10,7 +10,7 @@ import type {
   AuthorizationOutcome,
   AuthorizationRequest,
   IAuthorizationStrategy,
-} from '@mcp-abap-adt/interfaces';
+} from '@mcp-abap-adt/interfaces-auth';
 import type { OidcCallbackResult } from '../auth/oidcBrowserAuth';
 
 export function asOidcResult(

@@ -6,7 +6,7 @@
 
 import * as dns from 'node:dns/promises';
 import { AbapServiceKeyStore } from '@mcp-abap-adt/auth-stores';
-import type { IAuthorizationConfig } from '@mcp-abap-adt/interfaces';
+import type { IAuthorizationConfig } from '@mcp-abap-adt/interfaces-auth-sap';
 import {
   exchangeCodeForToken,
   getJwtAuthorizationUrl,

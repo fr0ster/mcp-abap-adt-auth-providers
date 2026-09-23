@@ -1,5 +1,5 @@
 import { describe, expect, it, jest } from '@jest/globals';
-import type { IAuthorizationStrategy } from '@mcp-abap-adt/interfaces';
+import type { IAuthorizationStrategy } from '@mcp-abap-adt/interfaces-auth';
 import { asOidcResult } from '../../strategies/asOidcResult';
 
 describe('asOidcResult', () => {

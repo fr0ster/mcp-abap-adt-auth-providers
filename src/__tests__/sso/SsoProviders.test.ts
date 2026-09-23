@@ -1,11 +1,12 @@
 import netModule from 'node:net';
-import type { IAuthorizationStrategy, ILogger } from '@mcp-abap-adt/interfaces';
+import type { IAuthorizationStrategy } from '@mcp-abap-adt/interfaces-auth';
 import {
   AUTH_TYPE_AUTHORIZATION_CODE_PKCE,
   AUTH_TYPE_PASSWORD,
   AUTH_TYPE_SAML2_BEARER,
   AUTH_TYPE_USER_TOKEN,
-} from '@mcp-abap-adt/interfaces';
+} from '@mcp-abap-adt/interfaces-auth';
+import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
 import type { OidcCallbackResult } from '../../auth/oidcBrowserAuth';
 import { discoverOidc } from '../../auth/oidcDiscovery';
 import { generatePkceChallenge } from '../../auth/oidcPkce';

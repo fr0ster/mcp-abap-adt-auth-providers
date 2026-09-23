@@ -5,8 +5,11 @@
  * No browser required, no refresh token provided.
  */
 
-import type { ITokenResult, OAuth2GrantType } from '@mcp-abap-adt/interfaces';
-import { AUTH_TYPE_CLIENT_CREDENTIALS } from '@mcp-abap-adt/interfaces';
+import type {
+  ITokenResult,
+  OAuth2GrantType,
+} from '@mcp-abap-adt/interfaces-auth';
+import { AUTH_TYPE_CLIENT_CREDENTIALS } from '@mcp-abap-adt/interfaces-auth';
 import { getTokenWithClientCredentials } from '../auth/clientCredentialsAuth';
 import { BaseTokenProvider } from './BaseTokenProvider';
 

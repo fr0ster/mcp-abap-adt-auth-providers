@@ -13,7 +13,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { AbapServiceKeyStore } from '@mcp-abap-adt/auth-stores';
-import { AUTH_TYPE_CLIENT_CREDENTIALS } from '@mcp-abap-adt/interfaces';
+import { AUTH_TYPE_CLIENT_CREDENTIALS } from '@mcp-abap-adt/interfaces-auth';
 import { ClientCredentialsProvider } from '../../providers/ClientCredentialsProvider';
 import {
   getAbapDestination,

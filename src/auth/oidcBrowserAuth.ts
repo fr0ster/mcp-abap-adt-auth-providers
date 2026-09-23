@@ -6,7 +6,7 @@ import type {
   CallbackServerFactory,
   ICallbackServerHandle,
   ICallbackServerOptions,
-} from '@mcp-abap-adt/interfaces';
+} from '@mcp-abap-adt/interfaces-auth';
 import { runCallbackScope } from './callbackServer';
 
 export interface OidcCallbackResult {

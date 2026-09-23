@@ -8,7 +8,7 @@ import type {
   CallbackServerFactory,
   ICallbackServerHandle,
   ICallbackServerOptions,
-} from '@mcp-abap-adt/interfaces';
+} from '@mcp-abap-adt/interfaces-auth';
 import express from 'express';
 import { runCallbackScope } from './callbackServer';
 

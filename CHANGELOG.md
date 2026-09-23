@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Dependencies
+
+- **`@mcp-abap-adt/interfaces` is replaced by the contract packages this
+  package actually uses.** The facade is deleted upstream; 51.0.0 is its last
+  version. The contracts now come from:
+  - `@mcp-abap-adt/interfaces-auth` `^1.2.0` — `ITokenProvider`, `ITokenResult`,
+    `IAuthorizationStrategy`, the callback server types, `AUTH_TYPE_*` and
+    `TOKEN_PROVIDER_ERROR_CODES`;
+  - `@mcp-abap-adt/interfaces-auth-sap` `^1.0.0` — `IAuthorizationConfig`;
+  - `@mcp-abap-adt/interfaces-utils` `^1.1.0` — `ILogger`.
+
+  No export of this package changed. A consumer that imports these types itself
+  should import them from the same packages, not from the facade.
+- `@mcp-abap-adt/logger` (dev) `^0.4.0`, which is on `interfaces-utils` as well.
+
 ## [2.1.0] - 2026-09-03
 
 ### Licence

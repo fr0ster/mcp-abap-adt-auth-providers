@@ -13,7 +13,7 @@ npm install @mcp-abap-adt/auth-providers
 
 ## Overview
 
-This package implements the `ITokenProvider` interface from `@mcp-abap-adt/interfaces`:
+This package implements the `ITokenProvider` interface from `@mcp-abap-adt/interfaces-auth`:
 
 - **AuthorizationCodeProvider** - Uses browser-based OAuth2 authorization code flow (user token)
 - **ClientCredentialsProvider** - Uses `client_credentials` grant type (no browser required)
@@ -21,7 +21,7 @@ This package implements the `ITokenProvider` interface from `@mcp-abap-adt/inter
 Providers are configured via constructor; `getTokens()` takes no parameters and handles refresh/login internally.
 
 Since 2.0.0 an interactive login is conducted by an **authorization strategy**
-(`IAuthorizationStrategy` from `@mcp-abap-adt/interfaces`) passed as
+(`IAuthorizationStrategy` from `@mcp-abap-adt/interfaces-auth`) passed as
 `authorization`. The provider owns what it can compute — the authorization URL
 and the token exchange; everything between them (reaching the URL, receiving
 what comes back, the port, the timeout) belongs to the strategy, which a
@@ -51,7 +51,7 @@ This principle ensures:
 
 This package is responsible for:
 
-1. **Implementing token provider interface**: Provides concrete implementations of `ITokenProvider` interface defined in `@mcp-abap-adt/interfaces`
+1. **Implementing token provider interface**: Provides concrete implementations of `ITokenProvider` interface defined in `@mcp-abap-adt/interfaces-auth`
 2. **Token acquisition**: Handles OAuth2 flows (browser-based, refresh token, client credentials) to obtain JWT tokens
 3. **Token validation**: Validates JWT locally by checking exp claim (no HTTP requests)
 4. **OAuth2 flows**: Manages browser-based OAuth2 authorization code flow and refresh token flow
@@ -174,7 +174,7 @@ const strategy = new BrowserCallbackStrategy<MyPayload>({
 #### Bringing your own
 
 ```typescript
-import type { IAuthorizationStrategy } from '@mcp-abap-adt/interfaces';
+import type { IAuthorizationStrategy } from '@mcp-abap-adt/interfaces-auth';
 
 const fromOurPortal: IAuthorizationStrategy<string> = {
   async authorize(request) {
@@ -671,7 +671,7 @@ try {
 - `ServiceKeyError` - Service key data invalid, includes `missingFields: string[]`
 - `BrowserAuthError` - Browser auth failed, includes `cause?: Error`
 
-All error codes are defined in `@mcp-abap-adt/interfaces` package as `TOKEN_PROVIDER_ERROR_CODES`.
+All error codes are defined in `@mcp-abap-adt/interfaces-auth` package as `TOKEN_PROVIDER_ERROR_CODES`.
 
 ## Migrating from 1.x to 2.0
 
@@ -858,7 +858,9 @@ Example output:
 
 ## Dependencies
 
-- `@mcp-abap-adt/interfaces` (^11.6.0) - Interface definitions (`ITokenProvider`, `IAuthorizationStrategy`, `CallbackServerFactory`) and error code constants
+- `@mcp-abap-adt/interfaces-auth` (^1.2.0) - Token provider and authorization contracts (`ITokenProvider`, `IAuthorizationStrategy`, `CallbackServerFactory`) and error code constants
+- `@mcp-abap-adt/interfaces-auth-sap` (^1.0.0) - XSUAA authorization configuration (`IAuthorizationConfig`)
+- `@mcp-abap-adt/interfaces-utils` (^1.1.0) - `ILogger`
 - `axios` - HTTP client
 - `express` - OAuth2 callback server
 - `open` - Browser opening utility

@@ -2,7 +2,7 @@
  * OIDC discovery helper
  */
 
-import type { ILogger } from '@mcp-abap-adt/interfaces';
+import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
 import axios from 'axios';
 
 export interface OidcDiscoveryDocument {

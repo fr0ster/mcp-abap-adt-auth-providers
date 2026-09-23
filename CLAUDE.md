@@ -42,7 +42,7 @@ Debug logging: `DEBUG_AUTH_PROVIDERS=true` or `DEBUG_BROWSER_AUTH=true`.
 
 ### Core design principles
 
-**Interface-only communication.** All interaction with external dependencies happens through interfaces from `@mcp-abap-adt/interfaces`. The package does not know about concrete implementation classes from other packages. A logger is `ILogger`, never a local abstraction.
+**Interface-only communication.** All interaction with external dependencies happens through contract packages: `@mcp-abap-adt/interfaces-auth` (token providers, strategies, callback server, error codes), `@mcp-abap-adt/interfaces-auth-sap` (XSUAA configuration) and `@mcp-abap-adt/interfaces-utils` (`ILogger`). Depend on the contract package whose contracts are used, nothing wider — never `interfaces-adt`, which carries ADT contracts this package does not use. The package does not know about concrete implementation classes from other packages. A logger is `ILogger`, never a local abstraction.
 
 **Everything pluggable is a strategy.** Anything a consumer might reasonably want to do differently is expressed as a strategy behind an interface. The package ships a working default so nobody is forced to write one, and the consumer can always replace it. This is why an authorization library does not own a socket, a browser or stdin — a consumer may legitimately own them instead.
 
@@ -116,7 +116,7 @@ When a test is meant to protect a rule, prove it is load-bearing: break the rule
 
 ## Error classes
 
-All extend `TokenProviderError`, with codes from `@mcp-abap-adt/interfaces`:
+All extend `TokenProviderError`, with codes from `@mcp-abap-adt/interfaces-auth`:
 `ValidationError` (carries `missingFields[]`), `RefreshError` (carries `cause?`), `SessionDataError`, `ServiceKeyError`, `BrowserAuthError`.
 
 ## Plans and specs

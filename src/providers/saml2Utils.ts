@@ -2,7 +2,8 @@
  * SAML2 provider shared helpers.
  */
 
-import type { IAuthorizationStrategy, ILogger } from '@mcp-abap-adt/interfaces';
+import type { IAuthorizationStrategy } from '@mcp-abap-adt/interfaces-auth';
+import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
 import { buildSamlAuthorizationUrl } from '../auth/saml2Auth';
 import { samlCallbackStrategy } from '../strategies';
 

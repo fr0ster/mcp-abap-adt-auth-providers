@@ -10,7 +10,7 @@ import type {
   AuthorizationOutcome,
   AuthorizationRequest,
   IAuthorizationStrategy,
-} from '@mcp-abap-adt/interfaces';
+} from '@mcp-abap-adt/interfaces-auth';
 import { DEFAULT_CALLBACK_PORT } from './BrowserCallbackStrategy';
 
 const defaultRedirectUri = () =>

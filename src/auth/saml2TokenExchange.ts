@@ -2,7 +2,7 @@
  * SAML 2.0 bearer assertion exchange
  */
 
-import type { ILogger } from '@mcp-abap-adt/interfaces';
+import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
 import axios, { type AxiosResponse } from 'axios';
 
 export interface Saml2TokenExchangeResponse {

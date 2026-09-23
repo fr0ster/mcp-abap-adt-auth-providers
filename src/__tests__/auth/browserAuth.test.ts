@@ -3,7 +3,8 @@
  */
 
 import { jest } from '@jest/globals';
-import type { IAuthorizationConfig, ILogger } from '@mcp-abap-adt/interfaces';
+import type { IAuthorizationConfig } from '@mcp-abap-adt/interfaces-auth-sap';
+import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
 import axios from 'axios';
 import {
   exchangeCodeForToken,
