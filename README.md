@@ -378,6 +378,14 @@ const provider = new Saml2BearerProvider({
 const broker = new AuthBroker({ tokenProvider: provider }, 'none');
 ```
 
+**Refresh.** When the token endpoint returns a `refresh_token` with the SAML
+bearer exchange, `Saml2BearerProvider` spends it once the access token expires:
+a `refresh_token` grant to the same endpoint (`tokenUrl`, or `uaaUrl` +
+`/oauth/token`) with the same client credentials, and no assertion, strategy or
+browser involved. Pass a stored one back as `refreshToken` in the config and the
+next `getTokens()` uses it. If the grant is refused, or no refresh token was
+ever issued, the provider falls back to a full login through `authorization`.
+
 Pure SAML example (cookie-based):
 
 ```typescript

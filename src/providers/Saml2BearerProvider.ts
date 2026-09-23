@@ -10,7 +10,10 @@ import type {
 } from '@mcp-abap-adt/interfaces-auth';
 import { AUTH_TYPE_SAML2_BEARER } from '@mcp-abap-adt/interfaces-auth';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
-import { exchangeSamlAssertion } from '../auth/saml2TokenExchange';
+import {
+  exchangeSamlAssertion,
+  refreshSamlBearerToken,
+} from '../auth/saml2TokenExchange';
 import { BaseTokenProvider } from './BaseTokenProvider';
 import type {
   Saml2BearerExchangeConfig,
@@ -74,10 +77,30 @@ export class Saml2BearerProvider extends BaseTokenProvider {
     };
   }
 
+  /**
+   * Spends the refresh token at the endpoint that issued it. A failure is
+   * thrown rather than handled: `BaseTokenProvider.getTokens()` drops the
+   * refresh token and falls back to `performLogin()`.
+   */
   protected async performRefresh(): Promise<ITokenResult> {
     if (!this.refreshToken) {
-      return this.performLogin();
+      throw new Error('Refresh token is required for refresh');
     }
-    return this.performLogin();
+
+    const tokens = await refreshSamlBearerToken(
+      this.refreshToken,
+      resolveTokenUrl(this.config),
+      this.config.clientId,
+      this.config.clientSecret,
+      this.logger,
+    );
+
+    return {
+      authorizationToken: tokens.accessToken,
+      refreshToken: tokens.refreshToken || this.refreshToken,
+      authType: AUTH_TYPE_SAML2_BEARER,
+      expiresIn: tokens.expiresIn,
+      tokenType: 'jwt',
+    };
   }
 }

@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **`Saml2BearerProvider` spends its refresh token** (#23). `performRefresh()`
+  used to run a full interactive login on both of its branches, so a session
+  holding a valid refresh token still went through the IdP and a browser — and
+  a headless consumer got `BROWSER_AUTH_REQUIRED` from `auth-broker`. It now
+  sends a `refresh_token` grant to the same token endpoint and with the same
+  client credentials as the assertion exchange, keeps the refresh token it spent
+  when the response carries no new one, and falls back to a full login when the
+  grant is refused.
+
 ## [2.2.0] - 2026-09-24
 
 ### Dependencies

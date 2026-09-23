@@ -18,7 +18,10 @@ import {
   refreshOidcToken,
   tokenExchange,
 } from '../../auth/oidcToken';
-import { exchangeSamlAssertion } from '../../auth/saml2TokenExchange';
+import {
+  exchangeSamlAssertion,
+  refreshSamlBearerToken,
+} from '../../auth/saml2TokenExchange';
 import { OidcBrowserProvider } from '../../providers/OidcBrowserProvider';
 import { OidcDeviceFlowProvider } from '../../providers/OidcDeviceFlowProvider';
 import { OidcPasswordProvider } from '../../providers/OidcPasswordProvider';
@@ -51,6 +54,7 @@ jest.mock('../../auth/oidcToken', () => ({
 }));
 jest.mock('../../auth/saml2TokenExchange', () => ({
   exchangeSamlAssertion: jest.fn(),
+  refreshSamlBearerToken: jest.fn(),
 }));
 // `saml2Utils` is deliberately NOT mocked: `getSamlAssertion` is the code that
 // drives the strategy, so stubbing it would stub away everything under test.
@@ -63,6 +67,15 @@ const mockPollDevice = pollDeviceTokens as jest.Mock;
 const mockPasswordGrant = passwordGrant as jest.Mock;
 const mockTokenExchange = tokenExchange as jest.Mock;
 const mockExchangeSaml = exchangeSamlAssertion as jest.Mock;
+const mockRefreshSaml = refreshSamlBearerToken as jest.Mock;
+
+/** An unsigned JWT whose `exp` is `secondsFromNow` away. */
+const jwtExpiringIn = (secondsFromNow: number): string => {
+  const encode = (value: object) =>
+    Buffer.from(JSON.stringify(value)).toString('base64url');
+  const exp = Math.floor(Date.now() / 1000) + secondsFromNow;
+  return `${encode({ alg: 'none' })}.${encode({ exp })}.sig`;
+};
 
 describe('SSO Providers', () => {
   const consoleLogSpy = jest.spyOn(console, 'log').mockImplementation(() => {});
@@ -509,6 +522,95 @@ describe('SSO Providers', () => {
       undefined,
       undefined,
     );
+  });
+
+  describe('Saml2BearerProvider refresh', () => {
+    const seededConfig = () => {
+      const authorize = jest.fn(async () => ({
+        payload: 'fresh-saml-response',
+        redirectUri: 'http://localhost:61001/callback',
+      }));
+      const authorization: IAuthorizationStrategy<string> = { authorize };
+      return {
+        authorize,
+        config: {
+          idpSsoUrl: 'https://idp/sso',
+          spEntityId: 'sp-entity',
+          uaaUrl: 'https://uaa',
+          clientId: 'client',
+          clientSecret: 'secret',
+          accessToken: jwtExpiringIn(-3600),
+          refreshToken: 'seeded-refresh',
+          authorization,
+        },
+      };
+    };
+
+    it('spends the refresh token instead of running the authorization strategy', async () => {
+      const newAccess = jwtExpiringIn(3600);
+      mockRefreshSaml.mockResolvedValue({
+        accessToken: newAccess,
+        refreshToken: 'rotated-refresh',
+        expiresIn: 3600,
+      });
+      const { authorize, config } = seededConfig();
+
+      const tokens = await new Saml2BearerProvider(config).getTokens();
+
+      expect(authorize).not.toHaveBeenCalled();
+      expect(mockExchangeSaml).not.toHaveBeenCalled();
+      expect(mockRefreshSaml).toHaveBeenCalledWith(
+        'seeded-refresh',
+        'https://uaa/oauth/token',
+        'client',
+        'secret',
+        undefined,
+      );
+      expect(tokens.authorizationToken).toBe(newAccess);
+      expect(tokens.refreshToken).toBe('rotated-refresh');
+      expect(tokens.authType).toBe(AUTH_TYPE_SAML2_BEARER);
+    });
+
+    it('keeps the refresh token it spent when the grant returns none', async () => {
+      mockRefreshSaml.mockResolvedValue({ accessToken: jwtExpiringIn(3600) });
+      const { config } = seededConfig();
+
+      const tokens = await new Saml2BearerProvider(config).getTokens();
+
+      expect(tokens.refreshToken).toBe('seeded-refresh');
+    });
+
+    it('refreshes against an explicit tokenUrl, not one derived from uaaUrl', async () => {
+      mockRefreshSaml.mockResolvedValue({ accessToken: jwtExpiringIn(3600) });
+      const { config } = seededConfig();
+
+      await new Saml2BearerProvider({
+        ...config,
+        tokenUrl: 'https://tokens.example/custom/token',
+      }).getTokens();
+
+      expect(mockRefreshSaml.mock.calls[0][1]).toBe(
+        'https://tokens.example/custom/token',
+      );
+    });
+
+    it('falls back to a full login when the refresh grant is refused', async () => {
+      mockRefreshSaml.mockRejectedValue(new Error('invalid_grant'));
+      mockExchangeSaml.mockResolvedValue({
+        accessToken: 'jwt.after.login',
+        refreshToken: 'login-refresh',
+        expiresIn: 900,
+      });
+      const { authorize, config } = seededConfig();
+
+      const tokens = await new Saml2BearerProvider(config).getTokens();
+
+      expect(mockRefreshSaml).toHaveBeenCalledTimes(1);
+      expect(authorize).toHaveBeenCalledTimes(1);
+      expect(mockExchangeSaml.mock.calls[0][0]).toBe('fresh-saml-response');
+      expect(tokens.authorizationToken).toBe('jwt.after.login');
+      expect(tokens.refreshToken).toBe('login-refresh');
+    });
   });
 
   it('Saml2PureProvider should return saml response with expiresAt', async () => {
