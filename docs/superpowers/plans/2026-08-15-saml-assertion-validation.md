@@ -2555,14 +2555,15 @@ function chooseBearerConfirmation(
 
   return best ? { notOnOrAfter: best } : null;
 }
+````
 
 - [ ] **Step 4: Run the tests to verify they pass**
 
 ```bash
 npm test -- src/__tests__/validation/assertionValidator.test.ts
-````
+```
 
-Expected: PASS, 38 cases.
+Expected: PASS, 44 cases.
 
 - [ ] **Step 5: Prove the rules that a wrong-value test alone would not**
 
@@ -3160,7 +3161,7 @@ npm run lint:check && npm run build && npm run test:check && npm test
 
 ```bash
 git add -A
-git commit -m "docs: assertion validation, and what a 2.x consumer must change"
+git commit -m "docs: assertion validation, and what a 3.x consumer must change"
 git push -u origin <branch>
 gh pr create --fill
 ```
