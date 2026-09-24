@@ -17,6 +17,12 @@ fi
 
 stop() {
   status=$?
+  # On failure, print UAA's log before anything removes the container — after
+  # `down` there is nothing left to read, locally or in CI.
+  if [ "$status" -ne 0 ]; then
+    echo "--- UAA log (last 200 lines) ---" >&2
+    docker compose -f "$HERE/compose.yaml" logs --no-color --tail 200 >&2 || true
+  fi
   if [ "$already_running" = false ] && [ "${UAA_KEEP:-0}" != 1 ]; then
     "$HERE/down.sh" >/dev/null 2>&1 || echo "could not stop the UAA stand" >&2
   fi

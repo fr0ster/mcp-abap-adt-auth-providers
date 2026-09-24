@@ -30,7 +30,8 @@ jobs:
         run: npm test
 
   # Saml2BearerProvider against a real Cloud Foundry UAA, started in Docker by
-  # tests/uaa/run.sh and stopped again when the suite ends.
+  # tests/uaa/run.sh and stopped again when the suite ends. On failure the
+  # script prints UAA's log before removing the container.
   uaa-saml-bearer:
     runs-on: ubuntu-latest
 
@@ -49,7 +50,3 @@ jobs:
 
       - name: Test against UAA
         run: npm run test:uaa
-
-      - name: UAA logs on failure
-        if: failure()
-        run: docker compose -f tests/uaa/compose.yaml logs --tail 200

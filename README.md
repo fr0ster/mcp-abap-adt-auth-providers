@@ -834,7 +834,7 @@ npm run test:uaa    # start UAA in Docker, run the saml2-bearer suite, stop UAA
 `test:uaa` renders the configuration and keys into `tests/uaa/.generated/` on
 first run, starts the container with `docker compose`, waits for `/healthz`,
 runs the suite, and stops the container again — also when a test fails, with
-the suite's exit code. CI runs exactly this as its own job. To keep the stand
+the suite's exit code, after printing the last 200 lines of UAA's log. CI runs exactly this as its own job. To keep the stand
 up between runs, start it yourself; `test:uaa` then leaves it running:
 
 ```bash
