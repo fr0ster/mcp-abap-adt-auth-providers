@@ -820,6 +820,29 @@ Integration tests will skip if `test-config.yaml` is not configured or contains 
 - The interactive test asks the OS for a free port rather than pinning one, so it cannot collide with a running server
 - Tests use `browserCallbackStrategy({ browser: 'system' })` for interactive authentication (not `'none'`)
 
+### SAML bearer against Cloud Foundry UAA
+
+`Saml2BearerProvider` is also tested against a real [Cloud Foundry
+UAA](https://github.com/cloudfoundry/uaa), the open-source server XSUAA is
+built from, running locally in Docker from its official image
+(`cfidentity/uaa`). It needs `docker` and `openssl`, and no SAP system:
+
+```bash
+npm run uaa:up      # render config and keys into tests/uaa/.generated/, start UAA, wait for /healthz
+npm run test:uaa    # the saml2-bearer suite, with UAA_URL set
+npm run uaa:down    # stop it; the generated keys stay for the next run
+```
+
+The stand configures one SAML identity provider whose certificate the tests
+sign with, so UAA verifies each assertion's signature as it would a real
+IdP's, and two clients: one allowed the `refresh_token` grant and one not. The
+suite proves that UAA accepts what the provider sends, issues a refresh token
+with the saml2-bearer token exactly when the client may hold one, and that the
+provider then refreshes without running its authorization strategy.
+
+A plain `npm test` skips this suite; it runs only when `UAA_URL` is set.
+`UAA_PORT` moves the stand off 8080.
+
 ### Debug Logging
 
 To enable detailed logging during tests or runtime, set environment variables:

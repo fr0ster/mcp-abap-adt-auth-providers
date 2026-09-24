@@ -53,7 +53,10 @@
     "build:fast": "npx tsc -p tsconfig.json",
     "test": "NODE_OPTIONS=--experimental-vm-modules jest",
     "test:check": "npx tsc --noEmit",
-    "prepublishOnly": "npm run build"
+    "prepublishOnly": "npm run build",
+    "uaa:up": "tests/uaa/up.sh",
+    "uaa:down": "tests/uaa/down.sh",
+    "test:uaa": "UAA_URL=${UAA_URL:-http://localhost:${UAA_PORT:-8080}/uaa} npm test -- src/__tests__/integration/uaaSaml2Bearer.test.ts"
   },
   "engines": {
     "node": ">=18.2.0"
@@ -69,6 +72,7 @@
   "devDependencies": {
     "@biomejs/biome": "^2.3.14",
     "@jest/globals": "^30.2.0",
+    "@mcp-abap-adt/auth-mocks": "^0.3.0",
     "@mcp-abap-adt/auth-stores": "^1.0.1",
     "@mcp-abap-adt/logger": "^0.4.0",
     "@types/express": "^5.0.5",
