@@ -1,6 +1,6 @@
 {
   "name": "@mcp-abap-adt/auth-providers",
-  "version": "2.2.2",
+  "version": "3.0.0",
   "description": "Token providers for MCP ABAP ADT auth-broker",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",

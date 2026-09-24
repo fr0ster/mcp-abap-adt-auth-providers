@@ -15,8 +15,17 @@ npm install @mcp-abap-adt/auth-providers
 
 This package implements the `ITokenProvider` interface from `@mcp-abap-adt/interfaces-auth`:
 
-- **AuthorizationCodeProvider** - Uses browser-based OAuth2 authorization code flow (user token)
-- **ClientCredentialsProvider** - Uses `client_credentials` grant type (no browser required)
+- **ClientCredentialsProvider** — `client_credentials`, no user interaction
+- **AuthorizationCodeProvider** — UAA/XSUAA authorization code, through a browser
+- **UaaPasscodeProvider** — UAA/XSUAA one-time passcode from `/passcode`, the
+  login `cf login --sso` uses: SSO without a browser on this machine
+- **OidcBrowserProvider** — OIDC authorization code with PKCE
+- **OidcDeviceFlowProvider** — OAuth 2.0 device authorization grant (RFC 8628)
+- **OidcPasswordProvider**, **OidcTokenExchangeProvider** — password grant and
+  token exchange (RFC 8693)
+- **Saml2BearerProvider** — a SAML assertion exchanged for an OAuth2 token
+  (RFC 7522)
+- **Saml2PureProvider** — a SAML assertion exchanged for session cookies
 
 Providers are configured via constructor; `getTokens()` takes no parameters and handles refresh/login internally.
 
@@ -27,7 +36,8 @@ and the token exchange; everything between them (reaching the URL, receiving
 what comes back, the port, the timeout) belongs to the strategy, which a
 consumer may replace wholesale. See
 [Choosing an authorization strategy](#choosing-an-authorization-strategy) and,
-if you are on 1.x, [Migrating from 1.x to 2.0](#migrating-from-1x-to-20).
+if you are on an earlier major, [Migrating from 2.x to 3.0](#migrating-from-2x-to-30)
+and [Migrating from 1.x to 2.0](#migrating-from-1x-to-20).
 
 ## Responsibilities and Design Principles
 
@@ -729,6 +739,39 @@ try {
 
 All error codes are defined in `@mcp-abap-adt/interfaces-auth` package as `TOKEN_PROVIDER_ERROR_CODES`.
 
+## Migrating from 2.x to 3.0
+
+3.0.0 changes no provider's configuration, but it drops a provider, a command
+and the Node versions nothing supports any more.
+
+- **Node.js 22 or 24.** `engines` is `"^22 || ^24"`, following SAP BTP, Cloud
+  Foundry. Node 18 and 20 are past their end of life and SAP has removed 20;
+  23 and 25, odd releases, are too. Move the process to 22 or 24.
+- **`DeviceFlowProvider` is gone**, with `DeviceFlowProviderConfig` and the
+  `auth-device-flow` command. It sent the device grant to
+  `<uaaUrl>/oauth/device_authorization`, which no server we know of serves —
+  neither UAA nor XSUAA offers the device grant at all. Replace it with:
+
+  ```typescript
+  // A server that implements RFC 8628 (Keycloak, Spring Authorization Server, …):
+  new OidcDeviceFlowProvider({ issuerUrl, clientId, logger });
+
+  // UAA or XSUAA — a headless SSO login, the way `cf login --sso` does it:
+  new UaaPasscodeProvider({
+    uaaUrl, clientId, clientSecret,
+    authorization: manualPasscodeStrategy({ read: askTheUser }),
+  });
+  ```
+
+- **`Saml2BearerProvider` now sends one base64url Assertion** (RFC 7522),
+  taken out of the `SAMLResponse` a login delivers. Before, it forwarded the
+  whole response, which UAA and XSUAA refuse — so nothing that worked stops
+  working. Note what the live checks showed, though: both refuse an assertion
+  carrying `InResponseTo`, which an identity provider sets whenever it answers
+  an AuthnRequest. Against them, supply an IdP-initiated assertion — see
+  *Who starts the login matters* under `Saml2BearerProvider`.
+- `@xmldom/xmldom` is a new runtime dependency, for that conversion.
+
 ## Migrating from 1.x to 2.0
 
 Every field that described *how* an interactive login is conducted is gone from
@@ -1040,6 +1083,7 @@ Example output:
 - `@mcp-abap-adt/interfaces-auth` (^1.2.0) - Token provider and authorization contracts (`ITokenProvider`, `IAuthorizationStrategy`, `CallbackServerFactory`) and error code constants
 - `@mcp-abap-adt/interfaces-auth-sap` (^1.0.0) - XSUAA authorization configuration (`IAuthorizationConfig`)
 - `@mcp-abap-adt/interfaces-utils` (^1.1.0) - `ILogger`
+- `@xmldom/xmldom` - XML parsing, to take the Assertion out of a SAMLResponse for the saml2-bearer grant
 - `axios` - HTTP client
 - `express` - OAuth2 callback server
 - `open` - Browser opening utility
