@@ -10,8 +10,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Development
 
 - `Saml2BearerProvider` is tested against a real Cloud Foundry UAA — the
-  server XSUAA is built from — in Docker (`npm run uaa:up`, `npm run
-  test:uaa`). It confirms end to end what #23 was about: UAA issues a refresh
+  server XSUAA is built from — in Docker. `npm run test:uaa` starts it with
+  `docker compose`, runs the suite and stops it again, and CI runs the same as
+  its own job. It confirms end to end what #23 was about: UAA issues a refresh
   token with the saml2-bearer token when the client may hold one, and the
   provider spends it without running its authorization strategy.
   `@mcp-abap-adt/auth-mocks` becomes a devDependency, for signing the
