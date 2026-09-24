@@ -62,6 +62,12 @@ Do not re-derive these; do verify anything you depend on that is not listed.
   issues real, signed SAML assertions, IdP-initiated among them
   (`src/__tests__/integration/stand/keycloakSaml.test.ts`). The live XSUAA
   suite (`npm run test:xsuaa`) signs with a key generated per run.
+- The stand's Keycloak signs **both** the Response and the Assertion (its
+  realm clients set `saml.server.signature` and `saml.assertion.signature`).
+  Measured 2026-09-25: both signatures verify with `xml-crypto` against the
+  certificate in Keycloak's metadata, and each is enveloped by the element it
+  references. Task 6's every-signature rule accepts that; the earlier
+  one-signature rule refused it.
 - `Saml2CommonConfig` lives in `auth-providers/src/providers/saml2Utils.ts:10`, **not** in a contract package. The new configuration fields go there.
 - `@mcp-abap-adt/auth-mocks@0.3.0` is published: `signWhat?: 'assertion' | 'response'`, and `signXml(xml, key, { referenceXPath?, location? })`, where `location` (`SignatureLocation`) says where the `Signature` goes. Without `location`, a custom `referenceXPath` gets the `Signature` appended as the referenced element's last child — schema-invalid for a Response. `startMockSamlIdp` requires `acsUrls` — with none registered it refuses every `AuthnRequest`.
 - `xml-crypto@6`: `checkSignature` **throws** when the signature value fails, and returns `false` only for a reference-digest mismatch. Both outcomes mean "invalid".
@@ -565,7 +571,7 @@ git commit -m "feat: refuse duplicate IDs before a reference is resolved"
 **Interfaces:**
 
 - Consumes: nothing from earlier tasks.
-- Produces: `resolveSignedElement(xml: string, doc: Document, certificates: readonly string[]): Element` — the element the signature covers, having verified the signature against one of the certificates. Throws `Error` with a message naming the failure otherwise.
+- Produces: `resolveSignedElements(xml: string, doc: Document, certificates: readonly string[]): Element[]` — the elements the document's signatures cover, having verified **every** signature against one of the certificates. Throws `Error` with a message naming the failure otherwise. Several signatures are normal — identity providers often sign the Response and the Assertion both — and each is held to every rule (spec: "Several signatures are accepted, and every one of them is held to the rule").
 
 **This is the rule everything else rests on.** The question is not "does the document contain a valid signature" but "which element does the valid signature cover" — and the caller then reads only that element. A document holding a genuinely signed fragment beside an unsigned one is the signature wrapping attack, and this function is what refuses it.
 
@@ -583,7 +589,7 @@ import { DOMParser, type Document, type Element } from "@xmldom/xmldom";
 import { describe, expect, it } from "@jest/globals";
 import { SignedXml } from "xml-crypto";
 import { generateKeyMaterial, signXml } from "@mcp-abap-adt/auth-mocks";
-import { resolveSignedElement, toPem } from "../../validation/signedNode";
+import { resolveSignedElements, toPem } from "../../validation/signedNode";
 
 const parse = (xml: string) =>
   new DOMParser().parseFromString(xml, "text/xml") as unknown as Document;
@@ -596,12 +602,12 @@ const RESPONSE = (inner: string, id = "_r1") =>
   `<samlp:Response xmlns:samlp="urn:oasis:names:tc:SAML:2.0:protocol" ID="${id}">` +
   `${inner}</samlp:Response>`;
 
-describe("resolveSignedElement", () => {
+describe("resolveSignedElements", () => {
   it("returns the Assertion when the Assertion is signed", () => {
     const key = generateKeyMaterial();
     const signed = signXml(ASSERTION(), key);
     const wrapped = RESPONSE(signed);
-    const element = resolveSignedElement(wrapped, parse(wrapped), [
+    const [element] = resolveSignedElements(wrapped, parse(wrapped), [
       key.certificatePem,
     ]);
     expect(element.localName).toBe("Assertion");
@@ -618,7 +624,7 @@ describe("resolveSignedElement", () => {
       .replace(/\s+/g, "");
     const signed = signXml(ASSERTION(), key);
     const wrapped = RESPONSE(signed);
-    const element = resolveSignedElement(wrapped, parse(wrapped), [der]);
+    const [element] = resolveSignedElements(wrapped, parse(wrapped), [der]);
     expect(element.localName).toBe("Assertion");
   });
 
@@ -641,7 +647,7 @@ describe("resolveSignedElement", () => {
     const key = generateKeyMaterial();
     const signed = signXml(ASSERTION(), key);
     const wrapped = RESPONSE(signed);
-    const element = resolveSignedElement(wrapped, parse(wrapped), [
+    const [element] = resolveSignedElements(wrapped, parse(wrapped), [
       other.certificatePem,
       key.certificatePem,
     ]);
@@ -650,7 +656,7 @@ describe("resolveSignedElement", () => {
 
   it("refuses a document with no signature", () => {
     const wrapped = RESPONSE(ASSERTION());
-    expect(() => resolveSignedElement(wrapped, parse(wrapped), ["x"])).toThrow(
+    expect(() => resolveSignedElements(wrapped, parse(wrapped), ["x"])).toThrow(
       /no signature/i,
     );
   });
@@ -661,7 +667,7 @@ describe("resolveSignedElement", () => {
     const signed = signXml(ASSERTION(), key);
     const wrapped = RESPONSE(signed);
     expect(() =>
-      resolveSignedElement(wrapped, parse(wrapped), [other.certificatePem]),
+      resolveSignedElements(wrapped, parse(wrapped), [other.certificatePem]),
     ).toThrow(/signature does not verify/i);
   });
 
@@ -670,7 +676,7 @@ describe("resolveSignedElement", () => {
     const signed = signXml(ASSERTION(), key).replace("mock-idp", "other-idp");
     const wrapped = RESPONSE(signed);
     expect(() =>
-      resolveSignedElement(wrapped, parse(wrapped), [key.certificatePem]),
+      resolveSignedElements(wrapped, parse(wrapped), [key.certificatePem]),
     ).toThrow(/signature does not verify/i);
   });
 
@@ -687,7 +693,7 @@ describe("resolveSignedElement", () => {
       /<[^>]*Signature[\s\S]*<\/[^>]*Signature>/.exec(signed)?.[0] ?? "";
     const wrapped = RESPONSE(`${signed.replace(signature, "")}${signature}`);
     expect(() =>
-      resolveSignedElement(wrapped, parse(wrapped), [key.certificatePem]),
+      resolveSignedElements(wrapped, parse(wrapped), [key.certificatePem]),
     ).toThrow(/does not envelope/i);
   });
 
@@ -755,7 +761,7 @@ describe("resolveSignedElement", () => {
     expect(probe.checkSignature(wrapped)).toBe(true);
 
     expect(() =>
-      resolveSignedElement(wrapped, parse(wrapped), [key.certificatePem]),
+      resolveSignedElements(wrapped, parse(wrapped), [key.certificatePem]),
     ).toThrow(/does not envelope/i);
   });
 
@@ -768,7 +774,7 @@ describe("resolveSignedElement", () => {
       signed.replace(reference, `${reference}${reference}`),
     );
     expect(() =>
-      resolveSignedElement(wrapped, parse(wrapped), [key.certificatePem]),
+      resolveSignedElements(wrapped, parse(wrapped), [key.certificatePem]),
     ).toThrow(/exactly one is required/i);
   });
 
@@ -777,10 +783,44 @@ describe("resolveSignedElement", () => {
     const signed = signXml(ASSERTION("_real"), key);
     const forged = ASSERTION("_forged").replace("mock-idp", "attacker");
     const wrapped = RESPONSE(`${forged}${signed}`);
-    const element = resolveSignedElement(wrapped, parse(wrapped), [
+    const [element] = resolveSignedElements(wrapped, parse(wrapped), [
       key.certificatePem,
     ]);
     expect(element.getAttribute("ID")).toBe("_real");
+  });
+
+  // Identity providers often sign both levels — Keycloak does by default. The
+  // Assertion is signed first, then the Response around it, with the
+  // Response's Signature as its first child (this fixture has no Response
+  // Issuer; with one, the Signature goes right after it).
+  const doubleSigned = (
+    assertionKey: ReturnType<typeof generateKeyMaterial>,
+    responseKey = assertionKey,
+  ) =>
+    signXml(RESPONSE(signXml(ASSERTION(), assertionKey)), responseKey, {
+      referenceXPath: "//*[local-name(.)='Response']",
+      location: { reference: "//*[local-name(.)='Response']", action: "prepend" },
+    });
+
+  it("returns both elements when the Response and the Assertion are signed", () => {
+    const key = generateKeyMaterial();
+    const xml = doubleSigned(key);
+    const covered = resolveSignedElements(xml, parse(xml), [key.certificatePem]);
+    expect(covered.map((e) => e.localName).sort()).toEqual([
+      "Assertion",
+      "Response",
+    ]);
+  });
+
+  it("refuses the document when one of two signatures does not verify", () => {
+    const key = generateKeyMaterial();
+    const untrusted = generateKeyMaterial();
+    // The Assertion is signed by a trusted key, the Response by another: the
+    // Assertion alone would pass, and the document must still be refused.
+    const xml = doubleSigned(key, untrusted);
+    expect(() =>
+      resolveSignedElements(xml, parse(xml), [key.certificatePem]),
+    ).toThrow(/does not verify against any configured certificate/);
   });
 });
 ```
@@ -858,26 +898,42 @@ export function toPem(certificate: string): string {
 }
 
 /**
- * Verifies the signature against the certificates and returns the element it
- * references. Throws when there is no signature, when none of the certificates
- * accepts it, or when the reference names nothing.
+ * Verifies every signature in the document against the certificates and
+ * returns the elements they reference. Throws when there is no signature, or
+ * when any one of them fails a rule below.
+ *
+ * Several signatures are normal — identity providers often sign the Response
+ * and the Assertion both. Each is held to every rule on its own; the caller
+ * then takes the element it requires from the returned list.
  */
-export function resolveSignedElement(
+export function resolveSignedElements(
   xml: string,
   doc: Document,
   certificates: readonly string[],
-): Element {
+): Element[] {
   const signatures = doc.getElementsByTagNameNS(DSIG_NS, "Signature");
   if (signatures.length === 0) {
     throw new Error("the document carries no signature");
   }
-  if (signatures.length > 1) {
-    // More than one signature means more than one candidate for "the signed
-    // element", which is the ambiguity this module exists to remove.
-    throw new Error("the document carries more than one signature");
+  // Every signature is held to every rule: an extra signature that fails is
+  // something that should not be there, not noise to skip. Two verifying
+  // signatures over one element cannot occur — under the enveloped-signature
+  // transform the later one changes the bytes the earlier one's digest
+  // covered — so no separate rule guards against it.
+  const covered: Element[] = [];
+  for (let i = 0; i < signatures.length; i++) {
+    covered.push(resolveOne(xml, doc, signatures[i], certificates));
   }
-  const signatureNode = signatures[0];
+  return covered;
+}
 
+/** One signature: verified, exactly one reference, enveloped by its target. */
+function resolveOne(
+  xml: string,
+  doc: Document,
+  signatureNode: Element,
+  certificates: readonly string[],
+): Element {
   let verified = false;
   for (const certificate of certificates) {
     // Already normalised and proved at construction, so a throw here really
@@ -961,7 +1017,7 @@ export function resolveSignedElement(
 npm test -- src/__tests__/validation/signedNode.test.ts
 ```
 
-Expected: PASS, twelve cases. RSA key generation makes this suite slower than the others; that is expected.
+Expected: PASS, fourteen cases. RSA key generation makes this suite slower than the others; that is expected.
 
 If the detached-signature fixture verifies where you expected refusal, or fails
 to verify at all because lifting the element changed the canonicalised bytes,
@@ -971,7 +1027,16 @@ sibling position inside the same parent is the other shape worth trying.
 
 - [ ] **Step 5: Prove the rules**
 
-Five mutations, one at a time:
+If the double-signed fixture fails to verify, check which `Signature`
+`xml-crypto`'s enveloped-signature transform removes: an implementation that
+removes the first `Signature` it finds under the referenced element, rather
+than the one being checked, breaks on nested signatures. Measure it — against
+this fixture and against a double-signed response from the stand's Keycloak —
+and report; do not weaken the every-signature rule to get past it.
+
+Seven mutations, one at a time — the five below, and two for several
+signatures: resolve only `signatures[0]` (the one-of-two case must go red),
+and return only the first covered element (the both-levels case must go red):
 
 1. Return `doc.documentElement` unconditionally instead of resolving the reference — `returns the signed assertion, not the forged sibling` must go red.
 2. Delete the `if (signatures.length === 0)` guard — `refuses a document with no signature` must go red. Note what it becomes: a different error, or a crash. Either is red; say which you saw.
@@ -1313,7 +1378,7 @@ git commit -m "feat: an assertion refusal that names the check that failed"
 
 **Interfaces:**
 
-- Consumes: `parseXsdDateTime` (Task 4); `findDuplicateId`, `readRequiredId` (Task 5); `resolveSignedElement` (Task 6); `defaultReplayStore`, `createInMemoryReplayStore` (Task 7); `AssertionValidationError`, `AssertionCheck` (Task 8); `IAssertionValidator`, `AssertionContext`, `ValidatedAssertion`, `IAssertionReplayStore` (Task 1).
+- Consumes: `parseXsdDateTime` (Task 4); `findDuplicateId`, `readRequiredId` (Task 5); `resolveSignedElements` (Task 6); `defaultReplayStore`, `createInMemoryReplayStore` (Task 7); `AssertionValidationError`, `AssertionCheck` (Task 8); `IAssertionValidator`, `AssertionContext`, `ValidatedAssertion`, `IAssertionReplayStore` (Task 1).
 - Produces:
 
 ```ts
@@ -1500,15 +1565,19 @@ function buildResponse(
     `xmlns:saml="urn:oasis:names:tc:SAML:2.0:assertion" ID="_r1"${destination}>` +
     `${responseIssuer}<samlp:Status><samlp:StatusCode Value="${status}"/></samlp:Status>` +
     `${assertion}</samlp:Response>`;
-  // After the Response's own Issuer, as SAML Core's ResponseType requires and
-  // as the mock places it. Without `location` the Signature would be appended
-  // after the Assertion.
+  // Where SAML Core's ResponseType puts it: right after the Response's own
+  // Issuer when there is one, otherwise first — Issuer is optional and nothing
+  // else may precede the Signature. The default fixture has no Response
+  // Issuer, so a location naming it would find nothing and signXml would
+  // throw. Without any `location` the Signature would follow the Assertion.
   return signXml(response, KEY, {
     referenceXPath: "//*[local-name(.)='Response']",
-    location: {
-      reference: "//*[local-name(.)='Response']/*[local-name(.)='Issuer']",
-      action: "after",
-    },
+    location: responseIssuer
+      ? {
+          reference: "//*[local-name(.)='Response']/*[local-name(.)='Issuer']",
+          action: "after",
+        }
+      : { reference: "//*[local-name(.)='Response']", action: "prepend" },
   });
 }
 
@@ -1792,22 +1861,53 @@ describe("the default assertion validator", () => {
     ).rejects.toMatchObject({ check: "bearerConfirmation" });
   });
 
-  // Option B. Each case is load-bearing on its own half of the rule: drop the
-  // `hasAttribute` branch and the second goes green wrongly; drop the equality
-  // and the first of the pair below it does.
+  // Option B. Each case is load-bearing on its own half of the rule: without
+  // the `hasAttribute` branch the second goes green wrongly; without the
+  // equality the third does.
+  const unsolicitedConfirmation =
+    `<saml:SubjectConfirmation Method="urn:oasis:names:tc:SAML:2.0:cm:bearer">` +
+    `<saml:SubjectConfirmationData Recipient="${ACS}" ` +
+    `NotOnOrAfter="${iso(300_000)}"/></saml:SubjectConfirmation>`;
+  // The same context with no expected request ID — an IdP-initiated login.
+  const { expectedInResponseTo: _requestId, ...unsolicitedContext } = context;
+
   it("accepts an unsolicited assertion when no request ID is expected", async () => {
-    // Build the valid fixture without InResponseTo on its confirmation, and
-    // validate with a context whose expectedInResponseTo is absent: passes.
+    const result = await validator().validate(
+      encode(buildResponse({ confirmations: [unsolicitedConfirmation] })),
+      unsolicitedContext,
+    );
+    expect(result.assertionId).toBe("_a1");
   });
 
   it("refuses an InResponseTo when no request ID is expected", async () => {
-    // The ordinary valid fixture — which carries InResponseTo — validated with
-    // expectedInResponseTo absent: refused at bearerConfirmation.
+    // The ordinary valid fixture, whose confirmation answers REQUEST_ID.
+    await expect(
+      validator().validate(encode(buildResponse()), unsolicitedContext),
+    ).rejects.toMatchObject({ check: "bearerConfirmation" });
   });
 
   it("refuses a missing InResponseTo when one is expected", async () => {
-    // The unsolicited fixture validated with expectedInResponseTo set:
-    // refused at bearerConfirmation — absence never satisfies an expectation.
+    // Absence never satisfies an expectation.
+    await expect(
+      validator().validate(
+        encode(buildResponse({ confirmations: [unsolicitedConfirmation] })),
+        context,
+      ),
+    ).rejects.toMatchObject({ check: "bearerConfirmation" });
+  });
+
+  it("accepts a response signed at both levels, under either validator", async () => {
+    // Many identity providers sign the Response and the Assertion both: take
+    // the assertion-signed fixture and sign the Response around it, the
+    // Signature first since this fixture has no Response Issuer.
+    const both = signXml(buildResponse({ signWhat: "assertion" }), KEY, {
+      referenceXPath: "//*[local-name(.)='Response']",
+      location: { reference: "//*[local-name(.)='Response']", action: "prepend" },
+    });
+    expect((await validator().validate(encode(both), context)).assertionId).toBe("_a1");
+    expect(
+      (await assertionValidator().validate(encode(both), context)).assertionId,
+    ).toBe("_a1");
   });
 
   it("refuses a confirmation whose InResponseTo is not ours", async () => {
@@ -2030,7 +2130,7 @@ import {
 } from '../errors/AssertionValidationError';
 import { findDuplicateId, readRequiredId } from './documentIds';
 import { defaultReplayStore } from './inMemoryReplayStore';
-import { resolveSignedElement, toPem } from './signedNode';
+import { resolveSignedElements, toPem } from './signedNode';
 import { parseXsdDateTime } from './xsdDateTime';
 
 const SAML_NS = 'urn:oasis:names:tc:SAML:2.0:assertion';
@@ -2113,17 +2213,27 @@ function createValidator(
         );
       }
 
-      // 2 + 3. Verify, and learn which element the signature covers.
-      let signed: Element;
+      // 2 + 3. Verify every signature, then take the element this validator
+      // requires from among those they cover. A response signed at both
+      // levels — as many identity providers send — satisfies either validator.
+      let covered: Element[];
       try {
-        signed = resolveSignedElement(xml, doc, certificates);
+        covered = resolveSignedElements(xml, doc, certificates);
       } catch (error) {
         return fail('signature', (error as Error).message);
       }
+      const signed =
+        require === 'response'
+          ? covered.find((element) => element === root)
+          : covered.find(
+              (element) =>
+                element.localName === 'Assertion' &&
+                element.namespaceURI === SAML_NS,
+            );
 
       // The signed element must be the Assertion, or a Response holding exactly
       // one. Everything below is read from `assertion` and nowhere else.
-      const assertion = assertionInside(signed, root, require);
+      const assertion = signed ? assertionInside(signed, root, require) : null;
       if (!assertion) {
         return fail(
           'signedNode',
@@ -2947,7 +3057,7 @@ against real servers:
 
 - [ ] **Step 1: Export**
 
-From `src/index.ts`: `createSignedResponseValidator`, `createSignedAssertionValidator`, `ShippedValidatorOptions`, `createInMemoryReplayStore`, `defaultReplayStore`, `AssertionValidationError`, `AssertionCheck`. Not the internal modules — `parseXsdDateTime`, `findDuplicateId`, `resolveSignedElement` are implementation.
+From `src/index.ts`: `createSignedResponseValidator`, `createSignedAssertionValidator`, `ShippedValidatorOptions`, `createInMemoryReplayStore`, `defaultReplayStore`, `AssertionValidationError`, `AssertionCheck`. Not the internal modules — `parseXsdDateTime`, `findDuplicateId`, `resolveSignedElements` are implementation.
 
 - [ ] **Step 2: Document**
 

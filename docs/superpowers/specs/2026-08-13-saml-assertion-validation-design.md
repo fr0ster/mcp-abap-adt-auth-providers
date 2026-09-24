@@ -123,6 +123,29 @@ So each shipped validator resolves, in order:
 A document where the signed node and the read node differ is refused, whatever
 else is true of it.
 
+**Several signatures are accepted, and every one of them is held to the rule.**
+Identity providers commonly sign the `Response` and the `Assertion` both —
+Keycloak does by default — so refusing any document with more than one
+`Signature` would refuse ordinary responses. Instead:
+
+- **every** `Signature` in the document must carry exactly one same-document
+  reference, verify against the configured certificates, and sit inside the
+  element it references;
+- two verifying signatures over one element cannot occur: under the
+  enveloped-signature transform, a signature added to an element changes the
+  bytes the earlier one's digest covered, so the earlier one stops verifying.
+  "Every signature verifies" already excludes it; no separate rule is needed;
+- a document with no signature at all is refused;
+- the validator then takes the element **it** requires — the `Response` or the
+  `Assertion` — from among the covered ones, and refuses at step 3 when that
+  element is not covered.
+
+A signature that fails to verify refuses the whole document, even when another
+one covers the element read: an extra, unverifiable signature is not noise but
+something that should not be there. Step 1b's unique-ID rule and the
+enveloping rule apply to each signature, so a second signature adds no second
+answer to "what is signed".
+
 ### Two validators, not one with a blind spot
 
 Decision 7 accepts a signature on the `Response` **or** on the `Assertion`, and
