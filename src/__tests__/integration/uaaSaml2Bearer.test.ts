@@ -28,7 +28,7 @@ const GENERATED = join(__dirname, '../../../tests/uaa/.generated');
  * base64url-encoded. Issuer, Audience and Recipient are what tests/uaa
  * configures: the `test-idp` provider and the `uaa-sp` service provider.
  */
-function bearerAssertion(): string {
+function signedAssertionXml(): string {
   const key = {
     privateKeyPem: readFileSync(join(GENERATED, 'idp.key'), 'utf8'),
     certificatePem: readFileSync(join(GENERATED, 'idp.crt'), 'utf8'),
@@ -50,7 +50,32 @@ function bearerAssertion(): string {
     `<saml2:AuthnStatement AuthnInstant="${iso(now)}" SessionIndex="s1"><saml2:AuthnContext>` +
     '<saml2:AuthnContextClassRef>urn:oasis:names:tc:SAML:2.0:ac:classes:Password</saml2:AuthnContextClassRef>' +
     '</saml2:AuthnContext></saml2:AuthnStatement></saml2:Assertion>';
-  return Buffer.from(signXml(assertion, key), 'utf8').toString('base64url');
+  return signXml(assertion, key);
+}
+
+function bearerAssertion(): string {
+  return Buffer.from(signedAssertionXml(), 'utf8').toString('base64url');
+}
+
+/**
+ * What a browser or ACS login actually delivers: the IdP's whole
+ * `samlp:Response`, in standard base64. The `saml2` prefix is declared on the
+ * Response only, so the Assertion inside relies on an inherited namespace —
+ * the case that breaks a naive cut-out of the Assertion's text.
+ */
+function samlResponse(): string {
+  const assertion = signedAssertionXml().replace(
+    ' xmlns:saml2="urn:oasis:names:tc:SAML:2.0:assertion"',
+    '',
+  );
+  const response =
+    '<samlp:Response xmlns:samlp="urn:oasis:names:tc:SAML:2.0:protocol" ' +
+    'xmlns:saml2="urn:oasis:names:tc:SAML:2.0:assertion" ' +
+    `ID="_${randomUUID()}" Version="2.0" IssueInstant="${new Date().toISOString()}">` +
+    '<saml2:Issuer>test-idp</saml2:Issuer>' +
+    '<samlp:Status><samlp:StatusCode Value="urn:oasis:names:tc:SAML:2.0:status:Success"/></samlp:Status>' +
+    `${assertion}</samlp:Response>`;
+  return Buffer.from(response, 'utf8').toString('base64');
 }
 
 /** Unsigned, and never sent anywhere: only its `exp` is read, to force a refresh. */
@@ -105,6 +130,18 @@ describeUaa('Saml2BearerProvider against Cloud Foundry UAA', () => {
     );
     expect(refreshed.authorizationToken).not.toBe(first.authorizationToken);
     expect(refreshed.refreshToken).toEqual(expect.any(String));
+  });
+
+  // #37: RFC 7522 wants one base64url Assertion. UAA refuses a Response in
+  // either encoding, so the provider has to take the Assertion out of it.
+  it('exchanges the SAMLResponse an interactive login delivers', async () => {
+    const tokens = await new Saml2BearerProvider({
+      ...baseConfig('saml_rt'),
+      authorization: staticCodeStrategy({ payload: samlResponse() }),
+    }).getTokens();
+
+    expect(issuerOf(tokens.authorizationToken)).toBe(`${UAA_URL}/oauth/token`);
+    expect(tokens.refreshToken).toEqual(expect.any(String));
   });
 
   it('receives no refresh token when the client may not hold one', async () => {

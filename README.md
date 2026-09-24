@@ -378,6 +378,15 @@ const provider = new Saml2BearerProvider({
 const broker = new AuthBroker({ tokenProvider: provider }, 'none');
 ```
 
+**What is sent.** The saml2-bearer grant takes one SAML Assertion,
+base64url-encoded (RFC 7522 §2.1). A strategy may deliver either that or the
+whole `SAMLResponse` an identity provider posts, in standard base64 —
+`Saml2BearerProvider` takes the Assertion out of a Response and re-encodes it,
+declaring any namespace the Assertion only inherited. The Assertion must carry
+its own signature: one over the Response alone does not survive the cut, and
+the token endpoint refuses the Assertion. An `EncryptedAssertion` is refused
+before anything is sent.
+
 **Refresh.** When the token endpoint returns a `refresh_token` with the SAML
 bearer exchange, `Saml2BearerProvider` spends it once the access token expires:
 a `refresh_token` grant to the same endpoint (`tokenUrl`, or `uaaUrl` +
