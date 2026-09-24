@@ -1,7 +1,7 @@
 # SAML assertion validation
 
 **Date:** 2026-08-13
-**Status:** approved 2026-08-14; amended and re-approved 2026-09-01 with "Two validators, not one with a blind spot" — approved, not implemented. Facts brought up to date 2026-09-24 (contract package, `auth-mocks` 0.3.0, line references); no design decision changed.
+**Status:** approved 2026-08-14; amended and re-approved 2026-09-01 with "Two validators, not one with a blind spot"; facts brought up to date 2026-09-24. **Decision 4 revised 2026-09-24 (the owner chose option B) after live checks — this revision needs its own approval before implementation.** Not implemented.
 **Closes:** issue #19 — SAML assertions are accepted without any validation
 **Depends on:** `@mcp-abap-adt/auth-mocks@^0.3.0`, published — the release that
 added `signWhat?: 'assertion' | 'response'` to `startMockSamlIdp`, without which
@@ -47,11 +47,23 @@ were proposed here and accepted:
    or base64 DER. A list, because identity providers rotate keys and two are
    live during a rotation. The package performs no I/O and fetches no metadata:
    the consumer reads the file.
-4. **`InResponseTo` is required, and the ID must come from somewhere real.**
-   There are exactly two sources, and no third: the package minted it while
-   building the request, or the consumer declared it. See "Where the expected
-   request ID comes from" — an earlier draft said "when `authorizationUrl` is
-   set", which was too narrow and missed a flow the package already supports.
+4. **`InResponseTo` answers the request we sent — or, where no request was
+   sent by explicit choice, is absent.** The expected ID must come from
+   somewhere real: the package minted it while building the request, or the
+   consumer declared it; then `InResponseTo` must equal it. A login the
+   consumer declares IdP-initiated (`idpInitiated: true`) sent no request, and
+   then `InResponseTo` must be **absent**. There is no fourth case: no ID and no
+   declaration is a configuration error, as before. See "Where the expected
+   request ID comes from".
+
+   *Revised 2026-09-24, option B.* The original rule required `InResponseTo`
+   always. Measured since: Cloud Foundry UAA and SAP XSUAA both refuse, on the
+   saml2-bearer grant, any assertion that carries `InResponseTo` — UAA with
+   "did not match the valid value: null", XSUAA with "No subject confirmation
+   methods were met" — and accept one without it. An identity provider sets
+   `InResponseTo` whenever it answers an AuthnRequest. Under the original rule
+   `Saml2BearerProvider` could therefore pass validation only with assertions
+   its token endpoint then refuses.
 5. **Replay is detected**, through a store interface with an in-memory default.
 6. **`clockSkewMs` defaults to `0`.** Real deployments often need tolerance, but
    this package's rule is that a consumer owns its own leniency.
@@ -59,6 +71,33 @@ were proposed here and accepted:
    covers the element the assertions are read from — see below. Requiring it on
    the `Assertion` specifically would be stricter and would reject real
    identity providers that sign only the response.
+
+## Where the expected request ID comes from
+
+Three sources, decided before validation, never inferred from the assertion:
+
+| source | when | `AssertionContext.expectedInResponseTo` | step 10 requires |
+|---|---|---|---|
+| minted | the strategy called the builder, which minted the AuthnRequest `ID` | that `ID` | `InResponseTo` equal to it |
+| declared | `authnRequestId` configured — a pre-built `authorizationUrl`, or a strategy that obtained the response some other way after a request the consumer sent | `authnRequestId` | `InResponseTo` equal to it |
+| none, by declaration | `idpInitiated: true` configured, and no request was sent | absent | `InResponseTo` **absent** |
+
+Anything else is a configuration error raised before the assertion is read:
+no ID minted, none declared, and `idpInitiated` not set — "a strategy that
+never called the builder" stays an error, because a strategy that merely forgot
+to must not silently switch the provider into accepting unsolicited responses.
+`idpInitiated: true` together with a minted or declared ID is an error too: the
+two describe different logins.
+
+**Why IdP-initiated needs an explicit opt-in.** An unsolicited response is the
+lever of login CSRF: whoever can deliver a response of their own to the
+consumer's receiver logs the victim in as themselves. With a request ID that
+cannot happen — the response must answer the request just sent. Accepting
+unsolicited responses gives that defence up, which is sometimes exactly right
+(the saml2-bearer grant of UAA and XSUAA leaves no other choice), but it must be
+a decision the consumer makes and can see in its configuration, never a
+fallback. The other checks — signature, issuer, audience, recipient, time
+window, replay — apply unchanged.
 
 ## The rule everything else depends on
 
@@ -187,8 +226,16 @@ In `@mcp-abap-adt/interfaces-auth` (published in 1.2.0):
 ```ts
 /** What the provider knows about the login the assertion is answering. */
 export interface AssertionContext {
-  /** The AuthnRequest ID this response must answer. */
-  readonly expectedInResponseTo: string;
+  /**
+   * The AuthnRequest ID this response must answer. Absent for a login declared
+   * IdP-initiated: then no request was sent, and a validator must refuse an
+   * assertion that carries `InResponseTo` at all.
+   *
+   * Required in `interfaces-auth@1.2.0`. Making it optional is a breaking
+   * change for anyone implementing `IAssertionValidator` — their code reads a
+   * `string` that may now be `undefined` — so it is `interfaces-auth@2.0.0`.
+   */
+  readonly expectedInResponseTo?: string;
   /** Our entity ID, which the AudienceRestriction must name. */
   readonly audience: string;
   /**
@@ -370,7 +417,9 @@ from whichever one happens to have it. The rule is therefore: there must exist a
 `urn:oasis:names:tc:SAML:2.0:cm:bearer` and whose own `SubjectConfirmationData`
 satisfies, together, all of
 
-- `@InResponseTo` equal to `context.expectedInResponseTo`,
+- `@InResponseTo` equal to `context.expectedInResponseTo` when that is
+  given, and **absent** when it is not (an IdP-initiated login — see "Where the
+  expected request ID comes from"),
 - `@Recipient` equal to `context.acsUrl`,
 - `@NotOnOrAfter` present, a valid `xsd:dateTime`, and not in the past beyond
   `clockSkewMs`,
@@ -492,8 +541,14 @@ New on the SAML config:
   would make both the temporal comparisons and `retainUntil` meaningless rather
   than merely lenient.
 - `authnRequestId?: string` — required whenever the package did not mint an ID
-  itself: a pre-built `authorizationUrl`, or a strategy that never called the
-  builder. See "Where the expected request ID comes from".
+  itself and the login is not declared IdP-initiated: a pre-built
+  `authorizationUrl`, or a strategy that never called the builder. See "Where
+  the expected request ID comes from".
+- `idpInitiated?: boolean` — default `false`. `true` declares that no
+  AuthnRequest is sent: the assertion must carry no `InResponseTo`. Required
+  for `Saml2BearerProvider` against UAA and XSUAA, whose saml2-bearer grant
+  accepts nothing else. A strategy used with it should not call the builder;
+  if it does, or `authnRequestId` is also set, that is a configuration error.
 
 `buildSamlAuthorizationUrl` changes shape: it returns the URL **and** the
 request ID it minted, since the ID must survive to validation.
@@ -511,7 +566,12 @@ provider does not mint. Stating this without the qualifier, as an earlier draft
 did, would have promised behaviour one of the two shipped validators does not
 have.
 
-**`auth-providers` goes major; `interfaces` goes minor.**
+**`auth-providers` goes major (4.0.0 — 3.0.0 has shipped without this work);
+`interfaces-auth` goes major too (2.0.0),** for `expectedInResponseTo` becoming
+optional. The owner has accepted `interfaces-auth@2.0.0` (2026-09-25); it may
+carry other breaking contract changes as well, and this one waits for it rather
+than forcing a release of its own. It touches only implementers of
+`IAssertionValidator`, of which there are none outside this work yet.
 
 ## Wiring
 
@@ -555,7 +615,8 @@ Configuration faults raise the existing `ValidationError` with `missingFields`,
 because they are the same kind of mistake it already reports: no
 `idpCertificates`, no `idpEntityId`, and no `authnRequestId` in either case that
 needs one — a pre-built `authorizationUrl`, **or** a strategy that returned a
-payload without calling the builder. The message names which of the two
+payload without calling the builder — unless the login is declared
+`idpInitiated`; and `idpInitiated` combined with a minted or declared ID. The message names which of the two
 happened, since the remedy reads differently to a consumer who never configured
 a URL at all.
 
@@ -653,6 +714,14 @@ Three further cases have no variant for the same reason:
 - **Signature wrapping**, step 3: take a validly signed assertion, wrap it in a
   response carrying a second, forged one, and require the validator to refuse
   rather than read the forged one.
+- **IdP-initiated, both ways**: with `idpInitiated: true`, an assertion without
+  `InResponseTo` passes step 10 and one with it is refused; without the
+  declaration, the same assertion without `InResponseTo` is refused.
+- **Against real servers**, beyond the mocks: the provider stand's Keycloak
+  issues an IdP-initiated assertion that `Saml2BearerProvider`, declared
+  `idpInitiated`, validates and UAA exchanges; the live XSUAA checks do the
+  same against XSUAA. Both already show the refusal of `InResponseTo` that
+  this revision answers.
 - **A missing request ID**, from the provenance rule: a strategy that never
   calls the builder, with no `authnRequestId` configured, must fail as a
   configuration error naming the remedy — not as a validation failure blamed on
@@ -670,11 +739,11 @@ learn after a two-part check shipped with only one half load-bearing.
 
 Identity provider metadata fetching, encrypted assertions
 (`EncryptedAssertion`), single logout, and `AuthnContext` comparison. Each is a
-separate concern and none is needed to close #19. The two findings deferred from
-the #11 arc — `OidcBrowserProvider` sending no `state`, and
-`exchangeSamlAssertion` sending a base64 `samlp:Response` where RFC 7522 wants a
-base64url `Assertion` — remain deferred; the second is now demonstrable with
-`samlBearer: 'strict'`.
+separate concern and none is needed to close #19. Of the two findings deferred
+from the #11 arc, `OidcBrowserProvider` sending no `state` remains deferred; the
+other — `exchangeSamlAssertion` sending a base64 `samlp:Response` where RFC 7522
+wants a base64url `Assertion` — was fixed in 3.0.0 (#37, #40). After this work
+the exchange should send the Assertion the validator verified.
 
 ## Risks
 
@@ -684,7 +753,9 @@ two of their behaviours are documented there — `checkSignature` throws on a ba
 signature value while returning `false` only for a digest mismatch, and a
 signature must sit inside the element it references.
 
-Canonicalisation remains the honest limitation. Verifying with `xml-crypto` a
+Canonicalisation was the honest limitation: verifying with `xml-crypto` a
 signature that `auth-mocks` produced with `xml-crypto` proves the profile logic,
-not that our C14N matches a real identity provider's. Only live testing answers
-that, and the README must keep saying so.
+not that our C14N matches a real identity provider's. The provider stand now
+answers part of it — Keycloak, a real identity provider, signs the assertions
+there — and the validator must be run against those. What stays unproven is
+every other IdP's canonicalisation, and the README must keep saying so.

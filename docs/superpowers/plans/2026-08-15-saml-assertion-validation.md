@@ -10,9 +10,22 @@
 
 **Spec:** `docs/superpowers/specs/2026-08-13-saml-assertion-validation-design.md`. Read it before Task 1 — every rule below is justified there, and the check table is the contract this plan implements.
 
-**Status:** approved 2026-09-02; revised 2026-09-24 after the interfaces split, the `auth-mocks` 0.3.0 release and `auth-providers` 2.2.1. The revision needs its own approval before execution resumes. No task has been executed in this repository yet.
+**Status:** approved 2026-09-02; revised 2026-09-24 after the interfaces split, the `auth-mocks` 0.3.0 release and `auth-providers` 2.2.1; **revised again 2026-09-25 for option B of the spec's decision 4 and the 3.0.0 release.** The revision needs its own approval before execution resumes. No task has been executed in this repository yet.
 
 **What changed since approval.**
+
+- **Option B (2026-09-25).** UAA and XSUAA refuse, on the saml2-bearer grant,
+  any assertion carrying `InResponseTo` — measured on the provider stand and
+  on a live XSUAA. The spec's decision 4 now has three sources for the
+  expected request ID — minted, declared, or none by an explicit
+  `idpInitiated: true` — and step 10 requires `InResponseTo` **absent** in the
+  third. That reopens **Task 1** (`AssertionContext.expectedInResponseTo`
+  becomes optional, in `interfaces-auth@2.0.0`) and changes **Tasks 9, 10, 11
+  and 12**, each marked below.
+- **3.0.0 has shipped without this work** — Node 22/24, `UaaPasscodeProvider`,
+  `DeviceFlowProvider` removed, the RFC 7522 conversion (#40), the provider
+  stand and the live XSUAA checks. This work is now **4.0.0**, and several
+  things it planned to add are already there (Task 3).
 
 - The `@mcp-abap-adt/interfaces` facade is deleted. **Task 1 is done upstream** — the five types and an error code are in `@mcp-abap-adt/interfaces-auth@1.2.0`, with one difference from what Task 1 described (see Task 1). The move off the facade was PR #29.
 - **Task 2 is done upstream** — `@mcp-abap-adt/auth-mocks@0.3.0` is published with `signWhat`, and review added one thing the task did not describe: `signXml` takes a `location`, and the signed Response carries its `Signature` after its own `Issuer`, as SAML Core requires (see Task 2). Task 9's fixture uses the same placement.
@@ -42,6 +55,13 @@ Do not re-derive these; do verify anything you depend on that is not listed.
 - **The error code is `ASSERTION_ERROR_CODES.VALIDATION_ERROR`**, a constant of
   its own in `interfaces-auth`, not an entry in `TOKEN_PROVIDER_ERROR_CODES`. Its
   value is the string `'ASSERTION_VALIDATION_ERROR'`, as this plan intended.
+- `auth-providers` is at **3.0.0**. `@xmldom/xmldom` is already a runtime
+  dependency (#40, for `toBearerAssertion`), and `@mcp-abap-adt/auth-mocks`
+  `^0.3.0` already a devDependency (#38). `xml-crypto` is not yet.
+- The provider stand (`npm run test:stand`) runs UAA and Keycloak; Keycloak
+  issues real, signed SAML assertions, IdP-initiated among them
+  (`src/__tests__/integration/stand/keycloakSaml.test.ts`). The live XSUAA
+  suite (`npm run test:xsuaa`) signs with a key generated per run.
 - `Saml2CommonConfig` lives in `auth-providers/src/providers/saml2Utils.ts:10`, **not** in a contract package. The new configuration fields go there.
 - `@mcp-abap-adt/auth-mocks@0.3.0` is published: `signWhat?: 'assertion' | 'response'`, and `signXml(xml, key, { referenceXPath?, location? })`, where `location` (`SignatureLocation`) says where the `Signature` goes. Without `location`, a custom `referenceXPath` gets the `Signature` appended as the referenced element's last child — schema-invalid for a Response. `startMockSamlIdp` requires `acsUrls` — with none registered it refuses every `AuthnRequest`.
 - `xml-crypto@6`: `checkSignature` **throws** when the signature value fails, and returns `false` only for a reference-digest mismatch. Both outcomes mean "invalid".
@@ -70,19 +90,40 @@ The pure modules are separate because each is a rule with its own failure modes,
 
 ---
 
-### Task 1: The interfaces — done upstream
+### Task 1: The interfaces — reopened for `interfaces-auth@2.0.0`
+
+**Repository:** `/home/okyslytsia/prj/mcp-abap-adt-interfaces`, package
+`interfaces-auth`.
 
 `@mcp-abap-adt/interfaces-auth@1.2.0` publishes `AssertionContext`,
 `ValidatedAssertion`, `IAssertionValidator`, `AssertionReplayKey` and
-`IAssertionReplayStore` field for field as this task specified them, from
-`src/auth/IAssertionValidator.ts`.
+`IAssertionReplayStore` field for field as this task first specified them. One
+difference stays: the error code is `ASSERTION_ERROR_CODES.VALIDATION_ERROR`
+(same string value as the planned `TOKEN_PROVIDER_ERROR_CODES.ASSERTION_VALIDATION_ERROR`);
+Task 8 uses it.
 
-One difference: the error code is not `TOKEN_PROVIDER_ERROR_CODES.ASSERTION_VALIDATION_ERROR`
-but `ASSERTION_ERROR_CODES.VALIDATION_ERROR` from `src/auth/AssertionErrorCodes.ts`,
-with the same string value. Task 8 uses it.
+**What option B needs.** In `src/auth/IAssertionValidator.ts`:
 
-Nothing to do in this task. Before Task 3, confirm the published package still
-exports all six names.
+```ts
+  /**
+   * The AuthnRequest ID this response must answer. Absent for a login declared
+   * IdP-initiated: then no request was sent, and a validator must refuse an
+   * assertion that carries `InResponseTo` at all.
+   */
+  readonly expectedInResponseTo?: string;
+```
+
+Required → optional on an input context is breaking for implementers of
+`IAssertionValidator`: they read a `string` that may now be `undefined`. It
+ships in `interfaces-auth@2.0.0`, which the owner has accepted and may batch
+with other breaking contract changes. The changelog entry says what an
+implementer must now handle.
+
+- [ ] Make the field optional with the comment above; add the changelog entry.
+- [ ] `npm run check` in the interfaces repository.
+- [ ] Open the PR and stop. Version, tag and publish of 2.0.0 are the owner's.
+
+Task 3 installs `^2.0.0` and stops if it is not published.
 
 ---
 
@@ -120,7 +161,7 @@ Nothing to do in this task.
 
 **Interfaces:**
 
-- Consumes: `@mcp-abap-adt/interfaces-auth@^1.2.0`, already a dependency since PR #29; `@mcp-abap-adt/auth-mocks@^0.3.0`, published.
+- Consumes: `@mcp-abap-adt/interfaces-auth@^2.0.0` from Task 1; `@mcp-abap-adt/auth-mocks@^0.3.0` and `@xmldom/xmldom`, already dependencies.
 
 The move off the facade is already done (PR #29). This task only adds what validation needs.
 
@@ -136,8 +177,10 @@ Write the numbers down; Step 4 compares against them.
 
 In `package.json`:
 
-- `dependencies`: add `"@xmldom/xmldom": "^0.9.10"`, `"xml-crypto": "^6.1.2"`.
-- `devDependencies`: add `"@mcp-abap-adt/auth-mocks"` at **`^0.3.0`**, published. Not `^0.1.1` or `^0.2.0`: a caret on a `0.x` version pins the minor, so either would resolve to a version without `signWhat` and Task 12 would never see it.
+- `dependencies`: `"@mcp-abap-adt/interfaces-auth"` to `^2.0.0` (Task 1), and add `"xml-crypto": "^6.1.2"`. `@xmldom/xmldom` is already there (#40).
+- `devDependencies`: `@mcp-abap-adt/auth-mocks` `^0.3.0` is already there (#38). Keep the caret on `0.3`: `^0.1.1` or `^0.2.0` would resolve to a version without `signWhat`.
+
+If `interfaces-auth@2.0.0` is not published, **stop and say so**.
 
 ```bash
 npm install
@@ -1749,6 +1792,24 @@ describe("the default assertion validator", () => {
     ).rejects.toMatchObject({ check: "bearerConfirmation" });
   });
 
+  // Option B. Each case is load-bearing on its own half of the rule: drop the
+  // `hasAttribute` branch and the second goes green wrongly; drop the equality
+  // and the first of the pair below it does.
+  it("accepts an unsolicited assertion when no request ID is expected", async () => {
+    // Build the valid fixture without InResponseTo on its confirmation, and
+    // validate with a context whose expectedInResponseTo is absent: passes.
+  });
+
+  it("refuses an InResponseTo when no request ID is expected", async () => {
+    // The ordinary valid fixture — which carries InResponseTo — validated with
+    // expectedInResponseTo absent: refused at bearerConfirmation.
+  });
+
+  it("refuses a missing InResponseTo when one is expected", async () => {
+    // The unsolicited fixture validated with expectedInResponseTo set:
+    // refused at bearerConfirmation — absence never satisfies an expectation.
+  });
+
   it("refuses a confirmation whose InResponseTo is not ours", async () => {
     await expect(
       validator().validate(
@@ -2321,7 +2382,13 @@ function chooseBearerConfirmation(
 
     const data = directChild(confirmation, SAML_NS, 'SubjectConfirmationData');
     if (!data) continue;
-    if (data.getAttribute('InResponseTo') !== context.expectedInResponseTo) continue;
+    // Option B: an expected ID must be matched exactly; no expected ID — an
+    // IdP-initiated login — means the attribute must not be there at all.
+    if (context.expectedInResponseTo === undefined) {
+      if (data.hasAttribute('InResponseTo')) continue;
+    } else if (data.getAttribute('InResponseTo') !== context.expectedInResponseTo) {
+      continue;
+    }
     if (data.getAttribute('Recipient') !== context.acsUrl) continue;
 
     const notOnOrAfter = parseXsdDateTime(data.getAttribute('NotOnOrAfter'));
@@ -2505,19 +2572,38 @@ value would compare against `undefined`, or against an address nothing was
 listening on. The "second net" already reads `outcome.redirectUri`; return it
 rather than reading it twice.
 
+**Option B.** `Saml2CommonConfig` also gains `idpInitiated?: boolean`, and
+`getSamlAssertion` returns `requestId?: string` — `undefined` exactly when the
+login is declared IdP-initiated. The provenance, from the spec's "Where the
+expected request ID comes from":
+
+- `idpInitiated: true`, the builder never called, no `authnRequestId` → `requestId` undefined;
+- `idpInitiated: true` with the builder called **or** `authnRequestId` set →
+  `ValidationError` naming the conflict: an IdP-initiated login sends no
+  request, so an ID means the configuration describes two different logins;
+- otherwise, as before:
+
 The ID is whichever exists, in this order: the one `buildSamlAuthorizationUrl` minted during this login, then `config.authnRequestId`. When neither:
 
 ```ts
 throw new ValidationError(
   "Cannot validate InResponseTo: this login did not build its own AuthnRequest, " +
-    "so authnRequestId must be configured. This happens with a pre-built " +
-    "authorizationUrl, or an authorization strategy that supplies an assertion " +
-    "without asking for a URL.",
+    "so authnRequestId must be configured — or, if the identity provider " +
+    "starts this login itself, idpInitiated: true. This happens with a " +
+    "pre-built authorizationUrl, or an authorization strategy that supplies an " +
+    "assertion without asking for a URL.",
   ["authnRequestId"],
 );
 ```
 
 Match `ValidationError`'s actual constructor signature — check `src/errors/TokenProviderErrors.ts` rather than copying this call shape blindly.
+
+Tests to add for option B, each failing without its rule: `idpInitiated`
+with a strategy that never calls the builder yields `requestId` undefined;
+with a strategy that does call it, a `ValidationError` naming the conflict;
+with `authnRequestId` set, the same; and without `idpInitiated`, a strategy
+that never calls the builder still raises the `authnRequestId` error above —
+an unsolicited login is never inferred.
 
 - [ ] **Step 7: Run the whole suite**
 
@@ -2699,7 +2785,15 @@ protected async performLogin(): Promise<ITokenResult> {
 
 - [ ] **Step 6: Wire `Saml2BearerProvider`**
 
-The same validation call, placed **before** `exchangeSamlAssertion`. The exchange still forwards `payload`, unchanged — validation establishes trust, it does not rewrite what UAA receives.
+The same validation call, placed **before** `exchangeSamlAssertion`, with
+`expectedInResponseTo: requestId` — `undefined` for a login declared
+`idpInitiated`. The exchange then sends what 3.0.0 already sends:
+`toBearerAssertion(payload)`, the one Assertion out of the response,
+base64url (RFC 7522, #40). Validation establishes trust; it does not change
+what the token endpoint receives beyond that conversion. Note the consequence
+the spec states: if the identity provider signs only the Response, the
+extracted Assertion carries no signature of its own and the token endpoint
+refuses it even though the signed-Response validator accepted the response.
 
 `performRefresh()` stays as PR #31 left it: a `refresh_token` grant carries no
 assertion, so there is nothing to validate, and the validator must not be
@@ -2735,6 +2829,7 @@ git commit -m "feat!: both SAML providers validate the assertion before trusting
 **Interfaces:**
 
 - Consumes: `startMockSamlIdp`, `visit`, `generateKeyMaterial`, `signXml` from `@mcp-abap-adt/auth-mocks`; the provider from Task 11.
+- Also runs on real servers (option B): the stand's `keycloakSaml.test.ts` and the live `xsuaa.test.ts` — see "Real servers" below.
 
 **This is the task that decides whether the validators are right about real documents rather than about the fixtures their author wrote.** Both are exercised, because they refuse different things and a matrix that ran only one would leave the other's contract unproven.
 
@@ -2819,6 +2914,27 @@ git commit -m "test: every corruption variant is refused at its own check"
 
 ---
 
+**Real servers (option B).** After Task 11 the providers resolve a validator at
+construction, so the existing suites that build SAML providers without
+identity-provider configuration fail before they exchange anything. Update
+them rather than stub the validator away, since they are the only evidence
+against real servers:
+
+- `src/__tests__/integration/stand/uaaSaml2Bearer.test.ts` — `idpCertificates`
+  from `tests/stand/uaa/idp/idp.crt`, `idpEntityId: 'test-idp'`, and
+  `idpInitiated: true` (its assertions carry no `InResponseTo`).
+- `src/__tests__/integration/stand/keycloakSaml.test.ts` — the certificate
+  from Keycloak's published SAML metadata, `idpEntityId` the realm URL. The
+  IdP-initiated case sets `idpInitiated: true` and must pass validation **and**
+  UAA; the SP-initiated case keeps its minted ID, passes validation, and is
+  still refused by UAA — the pair is exactly option B's evidence.
+  `Saml2PureProvider`'s case validates the SP-initiated response with its
+  minted ID.
+- `src/__tests__/integration/xsuaa/xsuaa.test.ts` — the per-run certificate
+  from `.local/idp.crt`, `idpEntityId: 'auth-providers-test-idp'`,
+  `idpInitiated: true`; the InResponseTo case now fails at our validator
+  before XSUAA sees it, which it must assert.
+
 ### Task 13: Public surface, documentation, and the release PR
 
 **Files:**
@@ -2862,7 +2978,7 @@ Also update the "Package responsibilities" section — this package now validate
 
 - [ ] **Step 3: Changelog and version**
 
-`3.0.0`. Major: the configuration is required, `buildSamlAuthorizationUrl` changed shape, `parseSamlNotOnOrAfter` is gone, and an identity provider returning a non-`Success` status is now refused where it was previously accepted. Write a migration note saying exactly what a consumer on 2.x must add.
+`4.0.0` — 3.0.0 has shipped without this work. Major: the configuration is required, `buildSamlAuthorizationUrl` changed shape, `parseSamlNotOnOrAfter` is gone, `interfaces-auth` moves to `^2.0.0`, and an identity provider returning a non-`Success` status is now refused where it was previously accepted. Write a migration note saying exactly what a consumer on 3.x must add — including `idpInitiated: true` for `Saml2BearerProvider` against UAA or XSUAA.
 
 - [ ] **Step 4: Verify**
 
@@ -2885,9 +3001,9 @@ Do not merge, do not tag, do not publish. Report the PR URL and stop.
 
 ## Release order
 
-1. **`@mcp-abap-adt/interfaces-auth@1.2.0`** — published.
-2. **`@mcp-abap-adt/auth-mocks@0.3.0`** — published. Only Task 12 needs it, but
-   it needs it absolutely: without `signWhat` the signed-Response validator
-   cannot be exercised end to end at all.
-3. **`@mcp-abap-adt/auth-providers@3.0.0`** — this repository, major. The
-   current release is 2.2.2.
+1. **`@mcp-abap-adt/interfaces-auth@2.0.0`** — Task 1's change, possibly
+   batched with other breaking contract changes; the owner's release. Task 3
+   stops if it is not published.
+2. **`@mcp-abap-adt/auth-mocks@0.3.0`** — published.
+3. **`@mcp-abap-adt/auth-providers@4.0.0`** — this repository, major. The
+   current release is 3.0.0.
