@@ -107,7 +107,7 @@ Ship-default strategies: `browserCallbackStrategy`, `oidcCallbackStrategy`, `sam
 
 **Unit tests** mock axios or the module boundary. **Integration tests** need `tests/test-config.yaml` (copy `tests/test-config.yaml.template`) and skip without it.
 
-**The UAA stand** (`tests/uaa/`, `npm run uaa:up` → `npm run test:uaa` → `npm run uaa:down`) runs Cloud Foundry UAA in Docker for `Saml2BearerProvider`: a real token endpoint, a SAML identity provider whose key the tests sign with, and clients with and without the `refresh_token` grant. It needs no SAP system, so it is the place to prove anything about the saml2-bearer wire contract. The suite runs only when `UAA_URL` is set.
+**The UAA stand** (`tests/uaa/`; `npm run test:uaa` starts it, runs the suite and stops it, and CI runs the same as its own job) runs Cloud Foundry UAA in Docker for `Saml2BearerProvider`: a real token endpoint, a SAML identity provider whose key the tests sign with, and clients with and without the `refresh_token` grant. It needs no SAP system, so it is the place to prove anything about the saml2-bearer wire contract. The suite runs only when `UAA_URL` is set; `test:uaa` sets it. A stand already started with `npm run uaa:up` is left running — whoever starts it stops it.
 
 Two conventions worth knowing, each of which has cost a debugging round:
 

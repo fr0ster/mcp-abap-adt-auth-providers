@@ -828,10 +828,22 @@ built from, running locally in Docker from its official image
 (`cfidentity/uaa`). It needs `docker` and `openssl`, and no SAP system:
 
 ```bash
-npm run uaa:up      # render config and keys into tests/uaa/.generated/, start UAA, wait for /healthz
-npm run test:uaa    # the saml2-bearer suite, with UAA_URL set
-npm run uaa:down    # stop it; the generated keys stay for the next run
+npm run test:uaa    # start UAA in Docker, run the saml2-bearer suite, stop UAA
 ```
+
+`test:uaa` renders the configuration and keys into `tests/uaa/.generated/` on
+first run, starts the container with `docker compose`, waits for `/healthz`,
+runs the suite, and stops the container again — also when a test fails, with
+the suite's exit code. CI runs exactly this as its own job. To keep the stand
+up between runs, start it yourself; `test:uaa` then leaves it running:
+
+```bash
+npm run uaa:up      # start and keep running
+npm run test:uaa    # as often as needed
+npm run uaa:down    # stop; the generated keys stay for the next run
+```
+
+`UAA_KEEP=1 npm run test:uaa` keeps a stand the run started.
 
 The stand configures one SAML identity provider whose certificate the tests
 sign with, so UAA verifies each assertion's signature as it would a real
@@ -840,8 +852,8 @@ suite proves that UAA accepts what the provider sends, issues a refresh token
 with the saml2-bearer token exactly when the client may hold one, and that the
 provider then refreshes without running its authorization strategy.
 
-A plain `npm test` skips this suite; it runs only when `UAA_URL` is set.
-`UAA_PORT` moves the stand off 8080.
+A plain `npm test` skips this suite: it runs only with `UAA_URL` set, which
+`test:uaa` does. `UAA_PORT` moves the stand off 8080.
 
 ### Debug Logging
 

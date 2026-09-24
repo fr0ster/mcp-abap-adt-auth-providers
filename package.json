@@ -56,7 +56,7 @@
     "prepublishOnly": "npm run build",
     "uaa:up": "tests/uaa/up.sh",
     "uaa:down": "tests/uaa/down.sh",
-    "test:uaa": "UAA_URL=${UAA_URL:-http://localhost:${UAA_PORT:-8080}/uaa} npm test -- src/__tests__/integration/uaaSaml2Bearer.test.ts"
+    "test:uaa": "tests/uaa/run.sh"
   },
   "engines": {
     "node": ">=18.2.0"
