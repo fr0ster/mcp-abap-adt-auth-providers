@@ -961,9 +961,13 @@ a test fails. Two rules keep it from touching anything else:
   `XSUAA_CF_API`, `XSUAA_CF_ORG` and `XSUAA_CF_SPACE`. There are no defaults, so
   a `cf` left pointing at another org or space cannot receive anything.
 - **Ownership.** Everything setup creates is recorded in
-  `tests/xsuaa/.local/owned`, and teardown deletes only what is recorded there.
-  A service instance or trust with one of these names that is not recorded is
-  someone else's: setup refuses before creating anything.
+  `tests/xsuaa/.local/owned` with its immutable ID — the service instance's
+  GUID, the trust's id — and the record names the API, org and space it
+  belongs to. A resource is treated as ours only when its name and its current
+  ID both match a record, checked right before it is reused, refreshed or
+  deleted. A name held by anything else — never created here, or recreated
+  after ours was deleted — is refused by setup and left alone by teardown, and
+  a record from another target is refused outright.
 
 The run fails — non-zero — when the tests fail or the teardown does. A
 teardown that fails stops at once and keeps `tests/xsuaa/.local/`, keys and

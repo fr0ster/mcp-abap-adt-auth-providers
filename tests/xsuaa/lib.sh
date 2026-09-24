@@ -4,9 +4,16 @@
 # rules keep them from touching anything else:
 #   - they refuse to run unless `cf` targets exactly XSUAA_CF_API,
 #     XSUAA_CF_ORG and XSUAA_CF_SPACE — no defaults;
-#   - they delete only what they created: every resource setup.sh creates is
-#     recorded in $LOCAL/owned, a name that already exists without being
-#     recorded there is refused, and teardown.sh deletes only recorded ones.
+#   - they touch only what they created. Every resource setup.sh creates is
+#     recorded in $LEDGER with its immutable ID — the service instance GUID,
+#     the trust's id — and the ledger itself names the target it belongs to.
+#     A resource is ours only if its name AND its current ID match a record,
+#     checked right before it is reused, refreshed or deleted; a ledger from
+#     another target is refused outright.
+#
+# Ledger format:   target <api>|<org>|<space>
+#                  instance <name> <guid>
+#                  trust <origin> <id>
 
 INSTANCE=auth-providers-bearer-test
 API_INSTANCE=auth-providers-trust-test
@@ -31,26 +38,52 @@ guard_target() {
     echo "Run: cf login -a $XSUAA_CF_API --sso -o $XSUAA_CF_ORG -s $XSUAA_CF_SPACE" >&2
     exit 2
   fi
+  TARGET="$api|$org|$space"
 }
 
-owns() { # entry
-  [ -f "$LEDGER" ] && grep -qxF "$1" "$LEDGER"
-}
-
-own() { # entry
-  mkdir -p "$LOCAL"
-  owns "$1" || printf '%s\n' "$1" >> "$LEDGER"
-}
-
-disown() { # entry
+# A ledger written for another target must never be acted on here.
+guard_ledger() {
   if [ -f "$LEDGER" ]; then
-    grep -vxF "$1" "$LEDGER" > "$LEDGER.tmp" || true
+    recorded="$(sed -n '1s/^target //p' "$LEDGER")"
+    if [ "$recorded" != "$TARGET" ]; then
+      echo "Refusing: $LEDGER records resources of '$recorded', not '$TARGET'." >&2
+      echo "Switch cf back to that target to tear them down." >&2
+      exit 2
+    fi
+  fi
+}
+
+start_ledger() {
+  mkdir -p "$LOCAL"
+  chmod 700 "$LOCAL"
+  [ -f "$LEDGER" ] || printf 'target %s\n' "$TARGET" > "$LEDGER"
+}
+
+recorded_id() { # kind name
+  [ -f "$LEDGER" ] || return 0
+  awk -v k="$1" -v n="$2" '$1 == k && $2 == n { print $3 }' "$LEDGER"
+}
+
+own() { # kind name id
+  disown "$1" "$2"
+  printf '%s %s %s\n' "$1" "$2" "$3" >> "$LEDGER"
+}
+
+disown() { # kind name
+  if [ -f "$LEDGER" ]; then
+    awk -v k="$1" -v n="$2" '!($1 == k && $2 == n)' "$LEDGER" > "$LEDGER.tmp"
     mv "$LEDGER.tmp" "$LEDGER"
   fi
 }
 
-service_exists() { # name
-  cf service "$1" >/dev/null 2>&1
+# Records other than the target line.
+ledger_entries() {
+  [ -f "$LEDGER" ] && sed -n '2,$p' "$LEDGER" || true
+}
+
+# The instance's GUID, or nothing when there is no such instance.
+instance_guid() { # name
+  cf service "$1" --guid 2>/dev/null | grep -E '^[0-9a-f-]{36}$' || true
 }
 
 # `cf service-key` prints a header before the JSON.
