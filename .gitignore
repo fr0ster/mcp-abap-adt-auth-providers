@@ -45,5 +45,5 @@ tests/test-config.yaml
 # Superpowers scratch (ledger, briefs, review packages)
 .superpowers/
 
-# Local UAA stand: generated keys and configuration
-tests/uaa/.generated/
+# Local provider test stand: generated keys and configuration
+tests/stand/.generated/

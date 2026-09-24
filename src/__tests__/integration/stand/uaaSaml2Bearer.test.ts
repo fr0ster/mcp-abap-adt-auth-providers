@@ -1,8 +1,8 @@
 /**
  * Saml2BearerProvider against a real Cloud Foundry UAA — the open-source
- * server XSUAA is built from — started by tests/uaa/up.sh.
+ * server XSUAA is built from — started by tests/stand/up.sh.
  *
- * Runs only when UAA_URL is set (`npm run test:uaa`); a plain `npm test`
+ * Runs only when UAA_URL is set (`npm run test:stand`); a plain `npm test`
  * skips it. What it proves that no unit test can: that the token endpoint of
  * a real server accepts what the provider sends, issues a refresh token for
  * the saml2-bearer grant exactly when the client may hold one, and takes that
@@ -15,17 +15,17 @@ import { join } from 'node:path';
 import { describe, expect, it, jest } from '@jest/globals';
 import { signXml } from '@mcp-abap-adt/auth-mocks';
 import type { IAuthorizationStrategy } from '@mcp-abap-adt/interfaces-auth';
-import { Saml2BearerProvider } from '../../providers/Saml2BearerProvider';
-import { staticCodeStrategy } from '../../strategies';
+import { Saml2BearerProvider } from '../../../providers/Saml2BearerProvider';
+import { staticCodeStrategy } from '../../../strategies';
 
 const UAA_URL = process.env.UAA_URL?.replace(/\/+$/, '');
 const describeUaa = UAA_URL ? describe : describe.skip;
 
-const GENERATED = join(__dirname, '../../../tests/uaa/.generated');
+const GENERATED = join(__dirname, '../../../../tests/stand/.generated');
 
 /**
  * A bearer assertion as RFC 7522 §2.1 wants it: one signed Assertion,
- * base64url-encoded. Issuer, Audience and Recipient are what tests/uaa
+ * base64url-encoded. Issuer, Audience and Recipient are what tests/stand/uaa
  * configures: the `test-idp` provider and the `uaa-sp` service provider.
  */
 function signedAssertionXml(): string {

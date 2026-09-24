@@ -830,40 +830,55 @@ Integration tests will skip if `test-config.yaml` is not configured or contains 
 - The interactive test asks the OS for a free port rather than pinning one, so it cannot collide with a running server
 - Tests use `browserCallbackStrategy({ browser: 'system' })` for interactive authentication (not `'none'`)
 
-### SAML bearer against Cloud Foundry UAA
+### Providers against real authorization servers (UAA and Keycloak)
 
-`Saml2BearerProvider` is also tested against a real [Cloud Foundry
-UAA](https://github.com/cloudfoundry/uaa), the open-source server XSUAA is
-built from, running locally in Docker from its official image
-(`cfidentity/uaa`). It needs `docker` and `openssl`, and no SAP system:
-
-```bash
-npm run test:uaa    # start UAA in Docker, run the saml2-bearer suite, stop UAA
-```
-
-`test:uaa` renders the configuration and keys into `tests/uaa/.generated/` on
-first run, starts the container with `docker compose`, waits for `/healthz`,
-runs the suite, and stops the container again — also when a test fails, with
-the suite's exit code, after printing the last 200 lines of UAA's log. CI runs exactly this as its own job. To keep the stand
-up between runs, start it yourself; `test:uaa` then leaves it running:
+The providers are also tested against two real, widely used authorization
+servers running locally in Docker from their official images — [Cloud Foundry
+UAA](https://github.com/cloudfoundry/uaa) (`cfidentity/uaa`), the open-source
+server XSUAA is built from, and [Keycloak](https://www.keycloak.org/)
+(`quay.io/keycloak/keycloak`). It needs `docker` and `openssl`, and no SAP
+system:
 
 ```bash
-npm run uaa:up      # start and keep running
-npm run test:uaa    # as often as needed
-npm run uaa:down    # stop; the generated keys stay for the next run
+npm run test:stand    # start UAA and Keycloak, run the suites, stop both
 ```
 
-`UAA_KEEP=1 npm run test:uaa` keeps a stand the run started.
+`test:stand` renders UAA's configuration and keys into `tests/stand/.generated/`
+on first run, starts both containers with `docker compose`, waits until both
+answer, runs the suites, and stops the containers again — also when a test
+fails, with the suites' exit code, after printing the last 200 lines of each
+server's log. A full run takes well under a minute. CI runs exactly this as its
+own job, on Node 22 and 24. To keep the stand up between runs, start it
+yourself; `test:stand` then leaves it running:
 
-The stand configures one SAML identity provider whose certificate the tests
-sign with, so UAA verifies each assertion's signature as it would a real
-IdP's, and two clients: one allowed the `refresh_token` grant and one not. The
-suite proves that UAA accepts what the provider sends, issues a refresh token
-with the saml2-bearer token exactly when the client may hold one, and that the
-provider then refreshes without running its authorization strategy.
+```bash
+npm run stand:up      # start and keep running
+npm run test:stand    # as often as needed
+npm run stand:down    # stop; the generated keys stay for the next run
+```
 
-A plain `npm test` skips this suite: it runs only with `UAA_URL` set, which
-`test:uaa` does. `UAA_PORT` moves the stand off 8080.
+`STAND_KEEP=1 npm run test:stand` keeps a stand the run started. `UAA_PORT`
+(8080) and `KEYCLOAK_PORT` (8081) move the servers.
+
+| provider | server | what the suite proves |
+|---|---|---|
+| `Saml2BearerProvider` | UAA | a bearer assertion — and a whole `SAMLResponse` — is exchanged for a token; UAA issues a refresh token exactly when the client may hold one, and the provider refreshes without its authorization strategy |
+| `ClientCredentialsProvider` | UAA | a client token |
+| `AuthorizationCodeProvider` | UAA | a login through UAA's own form, and a refresh without logging in again |
+| `OidcPasswordProvider` | Keycloak | the password grant through discovery, and a refresh that works with a wrong password — so it is a refresh, not a second login |
+| `OidcBrowserProvider` | Keycloak | authorization code with S256 PKCE, which the client requires, through Keycloak's login page |
+| `OidcDeviceFlowProvider` | Keycloak | a token once the user logs in and grants access on Keycloak's device pages, read from the verification URI the provider announces |
+| `OidcTokenExchangeProvider` | Keycloak | RFC 8693: another client's access token exchanged for the requester's own |
+
+Interactive logins are played by `src/__tests__/integration/stand/formLogin.ts`,
+which submits each server's own login and consent forms over HTTP.
+
+Not covered: `DeviceFlowProvider`, which calls `/oauth/device_authorization` — a
+path neither server serves; and the cookie half of `Saml2PureProvider`, which
+belongs to the consumer's `cookieProvider` and needs a real SAP system.
+
+A plain `npm test` skips these suites: they run only with `UAA_URL` or
+`KEYCLOAK_URL` set, which `test:stand` does.
 
 ### Debug Logging
 

@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
-# Starts the UAA stand: renders config and keys on first run, starts the
-# container, and waits until /healthz answers. Needs docker and openssl.
+# Starts the provider test stand — UAA and Keycloak: renders UAA's config and
+# keys on first run, starts both containers, and waits until both answer.
+# Needs docker and openssl.
 set -euo pipefail
 cd "$(dirname "$0")"
 PORT="${UAA_PORT:-8080}"
+KC_PORT="${KEYCLOAK_PORT:-8081}"
 GEN=.generated
 
 if [ ! -f "$GEN/config/uaa.yml" ] || [ "$(cat "$GEN/port" 2>/dev/null)" != "$PORT" ]; then
@@ -29,7 +31,7 @@ const metadata =
   '<md:NameIDFormat>urn:oasis:names:tc:SAML:1.1:nameid-format:unspecified</md:NameIDFormat>' +
   '<md:SingleSignOnService Binding="urn:oasis:names:tc:SAML:2.0:bindings:HTTP-Redirect" Location="http://test-idp.invalid/sso"/>' +
   '</md:IDPSSODescriptor></md:EntityDescriptor>';
-const yml = fs.readFileSync('uaa.yml.template', 'utf8')
+const yml = fs.readFileSync('uaa/uaa.yml.template', 'utf8')
   .replace('@@PORT@@', PORT)
   .replace('@@JWT_KEY@@', indent('jwt.key', 12))
   .replace('@@SP_KEY@@', indent('sp.key', 10))
@@ -41,13 +43,18 @@ NODE
   chmod -R a+rX "$GEN/config" "$GEN/secrets"
 fi
 
-UAA_PORT="$PORT" docker compose up -d
-for _ in $(seq 1 60); do
-  if [ "$(curl -s -o /dev/null -w '%{http_code}' "http://localhost:$PORT/uaa/healthz")" = 200 ]; then
-    echo "UAA is up: http://localhost:$PORT/uaa"
-    exit 0
-  fi
-  sleep 2
-done
-echo "UAA did not become healthy; see: docker compose -f tests/uaa/compose.yaml logs" >&2
-exit 1
+UAA_PORT="$PORT" KEYCLOAK_PORT="$KC_PORT" docker compose up -d
+
+wait_for() { # name url
+  for _ in $(seq 1 90); do
+    if [ "$(curl -s -o /dev/null -w '%{http_code}' "$2")" = 200 ]; then
+      echo "$1 is up: $2"
+      return 0
+    fi
+    sleep 2
+  done
+  echo "$1 did not come up; see: docker compose -f tests/stand/compose.yaml logs" >&2
+  return 1
+}
+wait_for UAA "http://localhost:$PORT/uaa/healthz"
+wait_for Keycloak "http://localhost:$KC_PORT/realms/test/.well-known/openid-configuration"

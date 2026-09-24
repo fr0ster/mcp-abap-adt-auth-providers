@@ -37,10 +37,30 @@ login:
         showSamlLoginLink: false
         addShadowUserOnLogin: true
 
+scim:
+  users:
+    # For the interactive authorization-code login the tests perform.
+    - tester|tester|tester@example.com|Test|User|uaa.user
+
 oauth:
   user:
     authorities: [openid, uaa.user]
   clients:
+    # ClientCredentialsProvider.
+    cc_client:
+      id: cc_client
+      secret: secret
+      authorized-grant-types: client_credentials
+      authorities: uaa.resource
+    # AuthorizationCodeProvider: the tests log in through UAA's own form.
+    authcode:
+      id: authcode
+      secret: secret
+      authorized-grant-types: 'authorization_code,refresh_token'
+      scope: 'openid,uaa.user'
+      authorities: uaa.none
+      autoapprove: 'true'
+      redirect-uri: 'http://localhost/callback'
     # May spend refresh tokens: UAA issues one with the saml2-bearer token.
     saml_rt:
       id: saml_rt
