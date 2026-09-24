@@ -1,0 +1,113 @@
+// Creates, refreshes or deletes the SAML trust to the test identity provider,
+// through the Authorization and Trust Management API of the xsuaa/apiaccess
+// key setup.sh saved. `btp create security/trust` only trusts SAP Cloud
+// Identity Services tenants, so a custom SAML IdP goes through this API.
+//
+//   node trust.mjs id      <local-dir> <origin>        print the trust's id, or nothing
+//   node trust.mjs create  <local-dir> <origin>        print the new trust's id
+//   node trust.mjs refresh <local-dir> <origin> <id>   update it, only if <id> matches
+//   node trust.mjs delete  <local-dir> <origin> <id>   delete it, only if <id> matches
+//
+// Only the id goes to stdout; messages go to stderr. Whether a trust is ours
+// is setup.sh's and teardown.sh's decision, from the ledger: this script acts
+// on the exact id it is given and on nothing else.
+import fs from 'node:fs';
+import path from 'node:path';
+
+const [action, localDir, origin, expectedId] = process.argv.slice(2);
+const read = (file) => fs.readFileSync(path.join(localDir, file), 'utf8');
+const key = JSON.parse(read('api-key.json'));
+const c = key.credentials ?? key;
+
+const token = (
+  await (
+    await fetch(`${c.url}/oauth/token`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        Authorization: `Basic ${Buffer.from(`${c.clientid}:${c.clientsecret}`).toString('base64')}`,
+      },
+      body: 'grant_type=client_credentials',
+    })
+  ).json()
+).access_token;
+const headers = {
+  Authorization: `Bearer ${token}`,
+  'Content-Type': 'application/json',
+  Accept: 'application/json',
+};
+const api = `${c.apiurl}/sap/rest/identity-providers`;
+// Any failure to list — no token, no network, an API error — must stop the
+// caller, never read as "no such trust".
+const listed = await fetch(api, { headers });
+if (!listed.ok) {
+  throw new Error(`list trusts: ${listed.status} ${await listed.text()}`);
+}
+const existing = (await listed.json()).find((p) => p.originKey === origin);
+
+const metadata = () => {
+  const cert = read('idp.crt').trim().split('\n').slice(1, -1).join('');
+  return (
+    `<?xml version="1.0" encoding="UTF-8"?><md:EntityDescriptor xmlns:md="urn:oasis:names:tc:SAML:2.0:metadata" entityID="${origin}">` +
+    '<md:IDPSSODescriptor protocolSupportEnumeration="urn:oasis:names:tc:SAML:2.0:protocol">' +
+    '<md:KeyDescriptor use="signing"><ds:KeyInfo xmlns:ds="http://www.w3.org/2000/09/xmldsig#"><ds:X509Data>' +
+    `<ds:X509Certificate>${cert}</ds:X509Certificate></ds:X509Data></ds:KeyInfo></md:KeyDescriptor>` +
+    '<md:NameIDFormat>urn:oasis:names:tc:SAML:1.1:nameid-format:unspecified</md:NameIDFormat>' +
+    `<md:SingleSignOnService Binding="urn:oasis:names:tc:SAML:2.0:bindings:HTTP-Redirect" Location="https://${origin}.invalid/sso"/>` +
+    '</md:IDPSSODescriptor></md:EntityDescriptor>'
+  );
+};
+const body = () => ({
+  type: 'saml',
+  originKey: origin,
+  name: 'auth-providers test IdP (created by tests/xsuaa, removed by teardown.sh)',
+  active: true,
+  config: JSON.stringify({
+    metaDataLocation: metadata(),
+    idpEntityAlias: origin,
+    nameID: 'urn:oasis:names:tc:SAML:1.1:nameid-format:unspecified',
+    assertionConsumerIndex: 0,
+    metadataTrustCheck: false,
+    showSamlLink: false,
+    addShadowUserOnLogin: true,
+  }),
+});
+const requireId = () => {
+  if (!expectedId) throw new Error(`${action} needs the id to act on`);
+};
+
+if (action === 'id') {
+  if (existing) console.log(existing.id);
+} else if (action === 'create') {
+  if (existing) {
+    throw new Error(`trust ${origin} already exists (${existing.id}); refusing to create it`);
+  }
+  const r = await fetch(api, { method: 'POST', headers, body: JSON.stringify(body()) });
+  if (!r.ok) throw new Error(`create trust: ${r.status} ${await r.text()}`);
+  console.log((await r.json()).id);
+} else if (action === 'refresh') {
+  requireId();
+  if (!existing || existing.id !== expectedId) {
+    throw new Error(`trust ${origin} is not ${expectedId}; refusing to refresh it`);
+  }
+  const r = await fetch(`${api}/${expectedId}`, {
+    method: 'PUT',
+    headers,
+    body: JSON.stringify({ ...body(), id: expectedId }),
+  });
+  if (!r.ok) throw new Error(`refresh trust: ${r.status} ${await r.text()}`);
+  console.error(`trust ${origin}: refreshed (${expectedId})`);
+} else if (action === 'delete') {
+  requireId();
+  if (!existing) {
+    console.error(`trust ${origin}: already gone`);
+  } else if (existing.id !== expectedId) {
+    console.error(`trust ${origin}: now ${existing.id}, not ours (${expectedId}) — left alone`);
+  } else {
+    const r = await fetch(`${api}/${expectedId}`, { method: 'DELETE', headers });
+    if (!r.ok) throw new Error(`delete trust: ${r.status} ${await r.text()}`);
+    console.error(`trust ${origin}: deleted (${expectedId})`);
+  }
+} else {
+  throw new Error(`unknown action ${action}`);
+}
