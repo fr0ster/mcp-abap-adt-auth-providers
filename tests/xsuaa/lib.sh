@@ -81,9 +81,22 @@ ledger_entries() {
   [ -f "$LEDGER" ] && sed -n '2,$p' "$LEDGER" || true
 }
 
-# The instance's GUID, or nothing when there is no such instance.
+# Prints the instance's GUID, or nothing when cf confirms there is no such
+# instance. Any other outcome — no session, no network, an API error — fails:
+# `cf service` exits 1 for "not found" and for errors alike, so only its exact
+# not-found message counts as absence. Callers must stop on that failure
+# rather than read an empty result as "gone".
 instance_guid() { # name
-  cf service "$1" --guid 2>/dev/null | grep -E '^[0-9a-f-]{36}$' || true
+  if out="$(cf service "$1" --guid 2>&1)"; then
+    if printf '%s\n' "$out" | grep -qE '^[0-9a-f-]{36}$'; then
+      printf '%s\n' "$out" | grep -E '^[0-9a-f-]{36}$'
+      return 0
+    fi
+  elif printf '%s\n' "$out" | grep -qxF "Service instance '$1' not found"; then
+    return 0
+  fi
+  echo "could not look up service instance $1: $(printf '%s' "$out" | head -1)" >&2
+  return 3
 }
 
 # `cf service-key` prints a header before the JSON.

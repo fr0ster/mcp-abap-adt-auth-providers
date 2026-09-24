@@ -26,7 +26,7 @@ fail() {
 delete_instance() { # name
   recorded="$(recorded_id instance "$1")"
   [ -n "$recorded" ] || return 0
-  current="$(instance_guid "$1")"
+  current="$(instance_guid "$1")" || fail "could not look up $1"
   if [ -z "$current" ]; then
     echo "$1: already gone"
   elif [ "$current" != "$recorded" ]; then

@@ -23,7 +23,7 @@ refuse_foreign() { # description
 # Check every instance name before creating anything, so a collision leaves
 # nothing half-built behind.
 for instance in "$INSTANCE" "$API_INSTANCE"; do
-  guid="$(instance_guid "$instance")"
+  guid="$(instance_guid "$instance")" || exit 3
   if [ -n "$guid" ] && [ "$guid" != "$(recorded_id instance "$instance")" ]; then
     refuse_foreign "service instance $instance ($guid)"
   fi
@@ -37,7 +37,7 @@ if [ ! -f "$LOCAL/idp.key" ]; then
 fi
 
 ensure_instance() { # name plan [params-file]
-  guid="$(instance_guid "$1")"
+  guid="$(instance_guid "$1")" || exit 3
   if [ -n "$guid" ]; then
     [ "$guid" = "$(recorded_id instance "$1")" ] || refuse_foreign "service instance $1 ($guid)"
     echo "$1: reused (owned, $guid)"
@@ -47,8 +47,8 @@ ensure_instance() { # name plan [params-file]
     else
       cf create-service xsuaa "$2" "$1" --wait >/dev/null
     fi
-    guid="$(instance_guid "$1")"
-    [ -n "$guid" ] || { echo "$1: created, but no GUID could be read" >&2; exit 1; }
+    guid="$(instance_guid "$1")" || exit 3
+    [ -n "$guid" ] || { echo "$1: created, but cf reports it absent" >&2; exit 1; }
     own instance "$1" "$guid"
     echo "$1: created ($guid)"
   fi

@@ -971,7 +971,10 @@ a test fails. Two rules keep it from touching anything else:
 
 The run fails — non-zero — when the tests fail or the teardown does. A
 teardown that fails stops at once and keeps `tests/xsuaa/.local/`, keys and
-record included, so `tests/xsuaa/teardown.sh` can be run again to finish.
+record included, so `tests/xsuaa/teardown.sh` can be run again to finish. A
+lookup that fails — no session, no network, an API error — is a failure, never
+read as "already gone": `cf service` exits 1 for both, so only its exact
+not-found message counts as absence.
 `XSUAA_KEEP=1` keeps the environment for another run. A full run takes about a minute and
 a half. It is not part of CI.
 

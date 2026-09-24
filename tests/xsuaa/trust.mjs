@@ -37,9 +37,13 @@ const headers = {
   Accept: 'application/json',
 };
 const api = `${c.apiurl}/sap/rest/identity-providers`;
-const existing = (await (await fetch(api, { headers })).json()).find(
-  (p) => p.originKey === origin,
-);
+// Any failure to list — no token, no network, an API error — must stop the
+// caller, never read as "no such trust".
+const listed = await fetch(api, { headers });
+if (!listed.ok) {
+  throw new Error(`list trusts: ${listed.status} ${await listed.text()}`);
+}
+const existing = (await listed.json()).find((p) => p.originKey === origin);
 
 const metadata = () => {
   const cert = read('idp.crt').trim().split('\n').slice(1, -1).join('');
