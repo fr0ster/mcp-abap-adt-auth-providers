@@ -849,7 +849,9 @@ answer, runs the suites, and stops the containers again — also when a test
 fails, with the suites' exit code, after printing the last 200 lines of each
 server's log. A full run takes well under a minute. CI runs exactly this as its
 own job, on Node 22 and 24. To keep the stand up between runs, start it
-yourself; `test:stand` then leaves it running:
+yourself; `test:stand` then leaves it running. Ownership is per server: if only
+one of the two was running, the run starts the other and removes only that one
+afterwards:
 
 ```bash
 npm run stand:up      # start and keep running

@@ -2,9 +2,9 @@
 # One command for the provider stand suites: start UAA and Keycloak in Docker,
 # run the tests against them, and stop them again — the same locally and in CI.
 #
-# Whoever starts the stand stops it: a stand that was already running (from
-# `npm run stand:up`) is left running. STAND_KEEP=1 keeps one this script
-# started.
+# Whoever starts a server stops it, per service: one that was already running
+# (from `npm run stand:up`, or started by hand) is left running, and only the
+# ones this script started are removed. STAND_KEEP=1 keeps those too.
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$HERE/../.." && pwd)"
@@ -12,10 +12,13 @@ cd "$HERE"
 PORT="${UAA_PORT:-8080}"
 KC_PORT="${KEYCLOAK_PORT:-8081}"
 
-already_running=false
-if [ -n "$(docker compose ps -q --status running 2>/dev/null)" ]; then
-  already_running=true
-fi
+SERVICES=(uaa keycloak)
+started=()
+for service in "${SERVICES[@]}"; do
+  if [ -z "$(docker compose ps -q --status running "$service" 2>/dev/null)" ]; then
+    started+=("$service")
+  fi
+done
 
 stop() {
   status=$?
@@ -25,8 +28,13 @@ stop() {
     echo "--- stand logs (last 200 lines per service) ---" >&2
     docker compose -f "$HERE/compose.yaml" logs --no-color --tail 200 >&2 || true
   fi
-  if [ "$already_running" = false ] && [ "${STAND_KEEP:-0}" != 1 ]; then
-    "$HERE/down.sh" >/dev/null 2>&1 || echo "could not stop the stand" >&2
+  if [ "${#started[@]}" -gt 0 ] && [ "${STAND_KEEP:-0}" != 1 ]; then
+    if [ "${#started[@]}" -eq "${#SERVICES[@]}" ]; then
+      "$HERE/down.sh" >/dev/null 2>&1 || echo "could not stop the stand" >&2
+    else
+      docker compose -f "$HERE/compose.yaml" rm --stop --force "${started[@]}" \
+        >/dev/null 2>&1 || echo "could not stop: ${started[*]}" >&2
+    fi
   fi
   exit "$status"
 }
