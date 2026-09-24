@@ -22,6 +22,7 @@ import {
   exchangeSamlAssertion,
   refreshSamlBearerToken,
 } from '../../auth/saml2TokenExchange';
+import { toBearerAssertion } from '../../auth/samlBearerAssertion';
 import { OidcBrowserProvider } from '../../providers/OidcBrowserProvider';
 import { OidcDeviceFlowProvider } from '../../providers/OidcDeviceFlowProvider';
 import { OidcPasswordProvider } from '../../providers/OidcPasswordProvider';
@@ -498,14 +499,16 @@ describe('SSO Providers', () => {
     );
   });
 
-  /** A SAMLResponse as an IdP posts it: the whole Response, standard base64. */
+  /**
+   * A SAMLResponse as an IdP posts it — the whole Response, standard base64 —
+   * and what the provider must send for it. The conversion itself is pinned in
+   * samlBearerAssertion.test.ts; here the point is that the provider applies it.
+   */
   const samlResponseCarrying = (assertionId: string) => {
     const assertion = `<saml2:Assertion xmlns:saml2="urn:oasis:names:tc:SAML:2.0:assertion" ID="${assertionId}"><saml2:Issuer>idp</saml2:Issuer></saml2:Assertion>`;
     const response = `<samlp:Response xmlns:samlp="urn:oasis:names:tc:SAML:2.0:protocol" ID="_r"><samlp:Status><samlp:StatusCode Value="urn:oasis:names:tc:SAML:2.0:status:Success"/></samlp:Status>${assertion}</samlp:Response>`;
-    return {
-      payload: Buffer.from(response, 'utf8').toString('base64'),
-      bearer: Buffer.from(assertion, 'utf8').toString('base64url'),
-    };
+    const payload = Buffer.from(response, 'utf8').toString('base64');
+    return { payload, bearer: toBearerAssertion(payload) };
   };
 
   it('Saml2BearerProvider should exchange assertion for token', async () => {
