@@ -3,7 +3,12 @@
 // key setup.sh saved. `btp create security/trust` only trusts SAP Cloud
 // Identity Services tenants, so a custom SAML IdP goes through this API.
 //
-//   node trust.mjs create|delete <local-dir> <origin>
+//   node trust.mjs exists|create|refresh|delete <local-dir> <origin>
+//
+// exists exits 0 when a trust with that origin is present, 1 when not.
+// create refuses an origin that already exists; refresh refuses one that does
+// not. Whether an existing trust is ours is setup.sh's decision, from its
+// ownership record — this script only does what it is told.
 import fs from 'node:fs';
 import path from 'node:path';
 
@@ -34,7 +39,9 @@ const existing = (await (await fetch(api, { headers })).json()).find(
   (p) => p.originKey === origin,
 );
 
-if (action === 'delete') {
+if (action === 'exists') {
+  process.exit(existing ? 0 : 1);
+} else if (action === 'delete') {
   if (!existing) {
     console.log(`trust ${origin}: not present`);
   } else {
@@ -42,7 +49,13 @@ if (action === 'delete') {
     if (!r.ok) throw new Error(`delete trust: ${r.status} ${await r.text()}`);
     console.log(`trust ${origin}: deleted`);
   }
-} else if (action === 'create') {
+} else if (action === 'create' || action === 'refresh') {
+  if (action === 'create' && existing) {
+    throw new Error(`trust ${origin} already exists; refusing to create it`);
+  }
+  if (action === 'refresh' && !existing) {
+    throw new Error(`trust ${origin} does not exist; nothing to refresh`);
+  }
   const cert = read('idp.crt').trim().split('\n').slice(1, -1).join('');
   const metadata =
     `<?xml version="1.0" encoding="UTF-8"?><md:EntityDescriptor xmlns:md="urn:oasis:names:tc:SAML:2.0:metadata" entityID="${origin}">` +

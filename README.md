@@ -945,9 +945,9 @@ real XSUAA can answer is checked by `npm run test:xsuaa`, against a BTP
 subaccount you are logged in to — a trial one is enough:
 
 ```bash
-cf login -a https://api.cf.<region>.hana.ondemand.com --sso -o <org>
+cf login -a https://api.cf.<region>.hana.ondemand.com --sso -o <org> -s <space>
 XSUAA_CF_API=https://api.cf.<region>.hana.ondemand.com XSUAA_CF_ORG=<org> \
-  npm run test:xsuaa
+  XSUAA_CF_SPACE=<space> npm run test:xsuaa
 ```
 
 It creates, in the targeted space, an `xsuaa`/`application` instance whose
@@ -955,10 +955,20 @@ client may use saml2-bearer, refresh_token and password; an `xsuaa`/`apiaccess`
 instance, used only to manage trust; and a SAML trust to a test identity
 provider whose key is generated locally and never leaves the gitignored
 `tests/xsuaa/.local/`. Then it runs the suite and removes all of it — also when
-a test fails. The scripts refuse to run unless `cf` targets exactly
-`XSUAA_CF_API` and `XSUAA_CF_ORG`; there are no defaults, so a `cf` left pointing
-at another org cannot receive anything. `XSUAA_KEEP=1` keeps the environment;
-`tests/xsuaa/teardown.sh` removes it later. A full run takes about a minute and
+a test fails. Two rules keep it from touching anything else:
+
+- **Target.** The scripts refuse to run unless `cf` targets exactly
+  `XSUAA_CF_API`, `XSUAA_CF_ORG` and `XSUAA_CF_SPACE`. There are no defaults, so
+  a `cf` left pointing at another org or space cannot receive anything.
+- **Ownership.** Everything setup creates is recorded in
+  `tests/xsuaa/.local/owned`, and teardown deletes only what is recorded there.
+  A service instance or trust with one of these names that is not recorded is
+  someone else's: setup refuses before creating anything.
+
+The run fails — non-zero — when the tests fail or the teardown does. A
+teardown that fails stops at once and keeps `tests/xsuaa/.local/`, keys and
+record included, so `tests/xsuaa/teardown.sh` can be run again to finish.
+`XSUAA_KEEP=1` keeps the environment for another run. A full run takes about a minute and
 a half. It is not part of CI.
 
 | check | result on XSUAA |
