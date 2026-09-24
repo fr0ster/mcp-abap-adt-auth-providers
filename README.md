@@ -859,7 +859,10 @@ npm run stand:down    # stop
 ```
 
 `STAND_KEEP=1 npm run test:stand` keeps a stand the run started. `UAA_PORT`
-(8080) and `KEYCLOAK_PORT` (8081) move the servers.
+(8080) and `KEYCLOAK_PORT` (8081) move the servers. A server that is already
+running is never changed: if it is published on another port than the one
+asked for, `test:stand` refuses and says so, rather than let Compose recreate
+it.
 
 | provider | server | what the suite proves |
 |---|---|---|

@@ -20,6 +20,21 @@ for service in "${SERVICES[@]}"; do
   fi
 done
 
+# A server that is already running is not ours to change. `docker compose up`
+# would recreate it if the requested port differs from the one it is published
+# on, so refuse instead — before anything is started or trapped.
+declare -A WANTED=([uaa]="127.0.0.1:$PORT" [keycloak]="127.0.0.1:$KC_PORT")
+for service in "${SERVICES[@]}"; do
+  if [[ " ${started[*]} " != *" $service "* ]]; then
+    actual="$(docker compose port "$service" 8080 2>/dev/null || true)"
+    if [ "$actual" != "${WANTED[$service]}" ]; then
+      echo "$service is already running on $actual, not ${WANTED[$service]};" \
+        "stop it (npm run stand:down) or run with its port" >&2
+      exit 1
+    fi
+  fi
+done
+
 stop() {
   status=$?
   # On failure, print the servers' logs before anything removes the
