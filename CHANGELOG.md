@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.2.2] - 2026-09-24
+
+### Dependencies
+
+- The lockfile is refreshed within the declared ranges (#33), replacing
+  thirteen Dependabot bumps. `npm audit` on the development tree goes from 15
+  findings (1 critical, 8 high) to none. No dependency range in `package.json`
+  changed, and the lockfile is not part of the published package, so an
+  installation of 2.2.2 resolves exactly what one of 2.2.1 already could.
+
 ## [2.2.1] - 2026-09-24
 
 ### Fixed
