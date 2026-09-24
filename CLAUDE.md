@@ -13,6 +13,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - **`OidcDeviceFlowProvider`**, **`OidcPasswordProvider`**, **`OidcTokenExchangeProvider`**
 - **`Saml2BearerProvider`** — SAML assertion exchanged for an OAuth2 token
 - **`Saml2PureProvider`** — SAML assertion exchanged for session cookies
+- **`UaaPasscodeProvider`** — UAA/XSUAA one-time passcode from `/passcode` (`cf login --sso`), headless
 
 All extend `BaseTokenProvider`, which owns the token lifecycle (cache, expiry, refresh-then-login fallback).
 

@@ -548,6 +548,33 @@ const result = await provider.getTokens();
 // result.refreshToken is undefined (client_credentials doesn't provide refresh tokens)
 ```
 
+#### UaaPasscodeProvider
+
+The login `cf login --sso` uses, for UAA and XSUAA: a one-time **Temporary
+Authentication Code**. Nothing opens and nothing listens on this machine — the
+user opens `<uaaUrl>/passcode` in any browser, on any device, logs in however
+the identity zone asks (SSO through a corporate IdP, MFA), and copies the code
+shown there. The provider exchanges it for tokens and refreshes them, so the
+code is asked for again only when the refresh token is gone. It suits an MCP
+server on a remote machine, in a container, or behind SSH.
+
+```typescript
+import { UaaPasscodeProvider, manualPasscodeStrategy } from '@mcp-abap-adt/auth-providers';
+
+const provider = new UaaPasscodeProvider({
+  uaaUrl: 'https://<subdomain>.authentication.<region>.hana.ondemand.com',
+  clientId: '...', // a client allowed the `password` grant (and `refresh_token`)
+  clientSecret: '...', // omit for a public client
+  // The default: announce <uaaUrl>/passcode, read the code from the terminal.
+  // Supply `read` to take it from anywhere else — never from stdin under MCP.
+  authorization: manualPasscodeStrategy({ read: askTheUser }),
+});
+```
+
+The exchange is the password grant with `passcode` instead of a username and
+password — a UAA extension, not an RFC. A code is single-use; a mistyped or
+spent one fails with `Passcode exchange failed (401): Invalid passcode`.
+
 #### DeviceFlowProvider
 
 `DeviceFlowProviderConfig` now accepts `logger?: ILogger`. The verification URI
@@ -868,6 +895,7 @@ it.
 |---|---|---|
 | `Saml2BearerProvider` | UAA | a bearer assertion — and a whole `SAMLResponse` — is exchanged for a token; UAA issues a refresh token exactly when the client may hold one, and the provider refreshes without its authorization strategy |
 | `ClientCredentialsProvider` | UAA | a client token |
+| `UaaPasscodeProvider` | UAA | a code fetched from `/passcode` after logging in there, exchanged for tokens; a refresh that does not ask for another code; a spent code refused |
 | `AuthorizationCodeProvider` | UAA | a login through UAA's own form, and a refresh without logging in again |
 | `OidcPasswordProvider` | Keycloak | the password grant through discovery, and a refresh that works with a wrong password — so it is a refresh, not a second login |
 | `OidcBrowserProvider` | Keycloak | authorization code with S256 PKCE, which the client requires, through Keycloak's login page |

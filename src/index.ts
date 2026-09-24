@@ -29,6 +29,7 @@ export type {
   OidcTokenExchangeProviderConfig,
   Saml2BearerProviderConfig,
   Saml2PureProviderConfig,
+  UaaPasscodeProviderConfig,
 } from './providers';
 // Token Providers (stateful providers with automatic token lifecycle)
 export {
@@ -42,6 +43,7 @@ export {
   OidcTokenExchangeProvider,
   Saml2BearerProvider,
   Saml2PureProvider,
+  UaaPasscodeProvider,
 } from './providers';
 // SSO factory
 export { SsoProviderFactory } from './sso/SsoProviderFactory';
@@ -61,6 +63,7 @@ export {
   DEFAULT_CALLBACK_PORT,
   DEFAULT_LOGIN_TIMEOUT_MS,
   externalCodeStrategy,
+  manualPasscodeStrategy,
   manualPasteStrategy,
   manualSamlResponseStrategy,
   oidcCallbackStrategy,

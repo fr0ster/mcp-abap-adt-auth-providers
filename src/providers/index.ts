@@ -24,3 +24,5 @@ export type { Saml2BearerProviderConfig } from './Saml2BearerProvider';
 export { Saml2BearerProvider } from './Saml2BearerProvider';
 export type { Saml2PureProviderConfig } from './Saml2PureProvider';
 export { Saml2PureProvider } from './Saml2PureProvider';
+export type { UaaPasscodeProviderConfig } from './UaaPasscodeProvider';
+export { UaaPasscodeProvider } from './UaaPasscodeProvider';

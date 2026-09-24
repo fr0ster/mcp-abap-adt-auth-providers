@@ -99,3 +99,29 @@ export function manualSamlResponseStrategy(
     },
   };
 }
+
+/**
+ * The UAA passcode, typed in by the user: shows where to fetch it —
+ * `<uaa>/passcode`, opened in any browser, on any machine — and reads the
+ * code they copy from that page. The default for `UaaPasscodeProvider`, so a
+ * login works on a machine with no browser at all, as `cf login --sso` does.
+ */
+export function manualPasscodeStrategy(
+  options: ManualStrategyOptions = {},
+): IAuthorizationStrategy<string> {
+  const redirectUri = options.redirectUri ?? defaultRedirectUri();
+  const read = options.read ?? readFromTerminal;
+  return {
+    async authorize(
+      request: AuthorizationRequest,
+    ): Promise<AuthorizationOutcome<string>> {
+      const url = await request.buildAuthorizationUrl(redirectUri);
+      announce(request, url);
+      const code = (
+        await read('Paste the Temporary Authentication Code (passcode): ')
+      ).trim();
+      if (!code) throw new Error('No passcode was provided');
+      return { payload: code, redirectUri };
+    },
+  };
+}

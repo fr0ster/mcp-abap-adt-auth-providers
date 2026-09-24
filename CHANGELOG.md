@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`UaaPasscodeProvider`** and **`manualPasscodeStrategy`** — the one-time
+  passcode `cf login --sso` uses, for UAA and XSUAA. The user fetches a
+  Temporary Authentication Code from `<uaaUrl>/passcode` in any browser,
+  logging in however the identity zone asks, and the provider exchanges it
+  through the password grant and refreshes afterwards — a headless SSO login
+  that XSUAA supports, unlike the device authorization grant. A rejected code
+  reports UAA's reason (`Invalid passcode`). Tested on the UAA stand.
+
 ### Breaking
 
 - **Node.js 22 or 24** — `engines: "^22 || ^24"` (was `>=18.2.0`). The
