@@ -1,16 +1,16 @@
 # SAML assertion validation
 
 **Date:** 2026-08-13
-**Status:** approved 2026-08-14; amended and re-approved 2026-09-01 with "Two validators, not one with a blind spot" — approved, not implemented
+**Status:** approved 2026-08-14; amended and re-approved 2026-09-01 with "Two validators, not one with a blind spot" — approved, not implemented. Facts brought up to date 2026-09-24 (contract package, `auth-mocks` 0.3.0, line references); no design decision changed.
 **Closes:** issue #19 — SAML assertions are accepted without any validation
-**Depends on:** `@mcp-abap-adt/auth-mocks`, published — and on a **minor
-addition to it**: `startMockSamlIdp` needs `signWhat?: 'assertion' | 'response'`
-before the signed-Response validator can be tested end to end. See "Testing".
+**Depends on:** `@mcp-abap-adt/auth-mocks@^0.3.0`, published — the release that
+added `signWhat?: 'assertion' | 'response'` to `startMockSamlIdp`, without which
+the signed-Response validator cannot be tested end to end. See "Testing".
 
 ## The problem, verified in the code
 
-`src/auth/saml2Auth.ts:141` accepts whatever arrives at the ACS, provided the
-string is non-empty. That is the entire check. `src/auth/saml2Auth.ts:95-101`
+`src/auth/saml2Auth.ts:72` accepts whatever arrives at the ACS, provided the
+string is non-empty. That is the entire check. `src/auth/saml2Auth.ts:95-109`
 then derives the session lifetime with a regular expression over the decoded,
 unverified XML:
 
@@ -574,16 +574,16 @@ Which validator judges which variant follows from the split — but two facts
 about the published mock make the naive matrix wrong, and both were found by
 reading its source rather than assuming:
 
-**`auth-mocks@0.1.1` signs the assertion, never the response.** `startMockSamlIdp`
-calls `signXml(xml, key)` with no `referenceXPath`, so the reference is always
-the `Assertion` and there is no option to change it. Against that mock,
-`createSignedResponseValidator` refuses _every_ response at step 3 — including
-the valid one — and no corruption variant ever reaches the check it was built
-for. **This is a prerequisite in another repository, not something to work
-around here:** `auth-mocks` needs a `signWhat?: 'assertion' | 'response'`
-option, defaulting to `'assertion'` so nothing existing changes, released as a
-minor. Until it exists, only the assertion-only validator can be exercised end
-to end, and the plan must say so rather than describe a matrix it cannot run.
+**By default the mock signs the assertion, never the response.** Up to 0.2.0
+there was no other mode: `startMockSamlIdp` called `signXml(xml, key)` with no
+`referenceXPath`, and against it `createSignedResponseValidator` refused
+_every_ response at step 3 — including the valid one — so no corruption
+variant reached the check it was built for. **`auth-mocks@0.3.0` adds
+`signWhat?: 'assertion' | 'response'`**, defaulting to `'assertion'` so nothing
+existing changes. In `'response'` mode the `Signature` names the Response and
+sits right after the Response's `Issuer`, where SAML Core's `ResponseType`
+puts it. Every signed-Response case runs with it; the default mode serves the
+assertion-only validator.
 
 **`wrongIssuer` corrupts both issuers, not just the response's.** The mock
 builds one `issuerValue` and writes it into the `Response` _and_ the

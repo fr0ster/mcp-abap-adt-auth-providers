@@ -10,9 +10,14 @@
 
 **Spec:** `docs/superpowers/specs/2026-08-13-saml-assertion-validation-design.md`. Read it before Task 1 — every rule below is justified there, and the check table is the contract this plan implements.
 
-**Status:** approved 2026-09-02; revised 2026-09-24 after the interfaces split, and the revision needs its own approval before execution resumes. No task has been executed in this repository yet.
+**Status:** approved 2026-09-02; revised 2026-09-24 after the interfaces split, the `auth-mocks` 0.3.0 release and `auth-providers` 2.2.1. The revision needs its own approval before execution resumes. No task has been executed in this repository yet.
 
-**What the interfaces split changed.** The `@mcp-abap-adt/interfaces` facade is deleted. Task 1 is already done upstream — the five types and an error code are in `@mcp-abap-adt/interfaces-auth@1.2.0`, with one difference from what Task 1 described (see Task 1). Task 3's dependency migration was done by PR #29; what is left of Task 3 is adding the XML libraries and `auth-mocks`.
+**What changed since approval.**
+
+- The `@mcp-abap-adt/interfaces` facade is deleted. **Task 1 is done upstream** — the five types and an error code are in `@mcp-abap-adt/interfaces-auth@1.2.0`, with one difference from what Task 1 described (see Task 1). The move off the facade was PR #29.
+- **Task 2 is done upstream** — `@mcp-abap-adt/auth-mocks@0.3.0` is published with `signWhat`, and review added one thing the task did not describe: `signXml` takes a `location`, and the signed Response carries its `Signature` after its own `Issuer`, as SAML Core requires (see Task 2). Task 9's fixture uses the same placement.
+- What is left of **Task 3** is adding the XML libraries and `auth-mocks`.
+- `Saml2BearerProvider` now spends its refresh token (PR #31, `auth-providers` 2.2.1). A refresh carries no assertion, so there is nothing for the validator to run on; **Task 11** pins that, and updates the refresh tests that construct the provider without identity-provider configuration.
 
 ## Global Constraints
 
@@ -37,8 +42,8 @@ Do not re-derive these; do verify anything you depend on that is not listed.
 - **The error code is `ASSERTION_ERROR_CODES.VALIDATION_ERROR`**, a constant of
   its own in `interfaces-auth`, not an entry in `TOKEN_PROVIDER_ERROR_CODES`. Its
   value is the string `'ASSERTION_VALIDATION_ERROR'`, as this plan intended.
-- `Saml2CommonConfig` lives in `auth-providers/src/providers/saml2Utils.ts:9`, **not** in a contract package. The new configuration fields go there.
-- `@mcp-abap-adt/auth-mocks@0.1.1` is published; `0.2.0` (licence only) is tagged, and `signWhat` arrives in `0.3.0` (auth-mocks PR #2). `startMockSamlIdp` requires `acsUrls` — with none registered it refuses every `AuthnRequest`.
+- `Saml2CommonConfig` lives in `auth-providers/src/providers/saml2Utils.ts:10`, **not** in a contract package. The new configuration fields go there.
+- `@mcp-abap-adt/auth-mocks@0.3.0` is published: `signWhat?: 'assertion' | 'response'`, and `signXml(xml, key, { referenceXPath?, location? })`, where `location` (`SignatureLocation`) says where the `Signature` goes. Without `location`, a custom `referenceXPath` gets the `Signature` appended as the referenced element's last child — schema-invalid for a Response. `startMockSamlIdp` requires `acsUrls` — with none registered it refuses every `AuthnRequest`.
 - `xml-crypto@6`: `checkSignature` **throws** when the signature value fails, and returns `false` only for a reference-digest mismatch. Both outcomes mean "invalid".
 - `@xmldom/xmldom@0.9`: `getAttribute` decodes entities; `parseFromString` throws on input with no root element. `Node` must be imported from the package — this project has no `dom` lib.
 
@@ -81,181 +86,27 @@ exports all six names.
 
 ---
 
-### Task 2: `auth-mocks` gains a signed-Response mode
+### Task 2: `auth-mocks` gains a signed-Response mode — done upstream
 
-**State:** implemented as auth-mocks PR #2 (`feat/sign-the-response`, version 0.3.0), open and awaiting review. What is left is its merge and publish.
+`@mcp-abap-adt/auth-mocks@0.3.0` is published (auth-mocks PR #2, tag
+`v0.3.0`) with what this task specified:
 
-**Repository:** `/home/okyslytsia/prj/mcp-abap-adt-auth-mocks` — a published
-package (0.1.1), so this is a **minor release** and nothing existing may change.
+- `SamlOptions.signWhat?: 'assertion' | 'response'`, defaulting to
+  `'assertion'`, so every existing consumer gets what it got before;
+- `'response'` makes the `Reference` name the `samlp:Response`, and the
+  `wrongKey` and `tamperedAfterSign` variants stay detectable in that mode —
+  the mock's own suite checks both, after checking that a valid
+  response-signed document verifies.
 
-**Files:**
+One addition review required and this task had not foreseen: with only a
+`referenceXPath`, `signXml` appended the `Signature` as the Response's last
+child, after `Status` and the `Assertion`. SAML Core's `ResponseType` puts it
+right after `Issuer`. `signXml` now takes `location: { reference, action }`,
+and the response mode passes the Response's own `Issuer` with
+`action: 'after'`. Anything in this plan that signs a Response with `signXml`
+does the same — see Task 9's fixture.
 
-- Modify: `src/saml.ts` — `SamlOptions`, and the one `signXml` call
-- Test: `src/__tests__/saml.test.ts`
-- Modify: `README.md`, `CHANGELOG.md`, `package.json`
-
-**Interfaces:**
-
-- Produces: `SamlOptions` gains `signWhat?: 'assertion' | 'response'`, defaulting to `'assertion'`.
-
-**Why this is a task and not a note.** `startMockSamlIdp` calls
-`signXml(xml, signingKey)` with no `referenceXPath`, so the reference is always
-the `Assertion`. Against that mock `createSignedResponseValidator` refuses
-**every** response at the signed-node check — including the valid one — and no
-corruption variant reaches the check it was built for. Task 12's matrix cannot
-run until this exists. Establish it by reading `src/saml.ts` yourself before
-starting; do not take this paragraph's word for it.
-
-- [ ] **Step 1: Write the failing test**
-
-Add to `src/__tests__/saml.test.ts`:
-
-The file already imports what it needs except the parser; add it if absent:
-
-```ts
-import { DOMParser } from "@xmldom/xmldom";
-```
-
-```ts
-it("signs the Response itself when asked to", async () => {
-  const acs = await startAcs();
-  const idp = await startMockSamlIdp({
-    acsUrls: [`${acs.url}/callback`],
-    signWhat: "response",
-  });
-  try {
-    await visit(
-      `${idp.url}/sso?SAMLRequest=${encodeURIComponent(authnRequest(`${acs.url}/callback`))}`,
-    );
-    const xml = Buffer.from(acs.received[0].SAMLResponse, "base64").toString(
-      "utf8",
-    );
-    // Two properties, and neither is document order: `signXml` appends the
-    // Signature to the element it references, so in this mode it lands *after*
-    // the Assertion, and asserting otherwise would fail against a correct
-    // implementation. What matters is which element it references and whose
-    // child it is.
-    const responseId = /<samlp:Response[^>]*\sID="([^"]+)"/.exec(xml)?.[1];
-    expect(responseId).toBeTruthy();
-    expect(xml).toContain(`URI="#${responseId}"`);
-
-    const doc = new DOMParser().parseFromString(xml, "text/xml");
-    const signature = doc.getElementsByTagNameNS(
-      "http://www.w3.org/2000/09/xmldsig#",
-      "Signature",
-    )[0];
-    expect(signature.parentNode?.localName).toBe("Response");
-  } finally {
-    await idp.close();
-    await acs.close();
-  }
-});
-
-it("still signs the Assertion when not asked", async () => {
-  const acs = await startAcs();
-  const idp = await startMockSamlIdp({ acsUrls: [`${acs.url}/callback`] });
-  try {
-    await visit(
-      `${idp.url}/sso?SAMLRequest=${encodeURIComponent(authnRequest(`${acs.url}/callback`))}`,
-    );
-    const xml = Buffer.from(acs.received[0].SAMLResponse, "base64").toString(
-      "utf8",
-    );
-    const assertionId = /<saml:Assertion[^>]*\sID="([^"]+)"/.exec(xml)?.[1];
-    expect(xml).toContain(`URI="#${assertionId}"`);
-  } finally {
-    await idp.close();
-    await acs.close();
-  }
-});
-```
-
-The second case is the one that protects everybody already using this package:
-the default must not move.
-
-- [ ] **Step 2: Run them to verify the first fails**
-
-```bash
-npm test -- src/__tests__/saml.test.ts
-```
-
-Expected: the `signWhat: "response"` case fails (the option does nothing yet);
-the default case passes.
-
-- [ ] **Step 3: Implement**
-
-`SamlOptions` gains the field, and `startMockSamlIdp` reads it:
-
-```ts
-  /**
-   * Which element the signature covers. Defaults to `'assertion'`, which is
-   * what every identity provider this package was built against does, and what
-   * every existing consumer already gets.
-   *
-   * `'response'` exists because a relying party may require it — a validator
-   * that treats `Status` and `Destination` as controls can only do so when
-   * they are inside the signature.
-   */
-  signWhat?: 'assertion' | 'response';
-```
-
-Read it where the other options are read, near the top of `startMockSamlIdp`
-beside `issuer`, `audience` and `acsUrls`:
-
-```ts
-const signWhat = options.signWhat ?? "assertion";
-```
-
-Then at the one signing call:
-
-```ts
-let signed =
-  signWhat === "response"
-    ? signXml(xml, signingKey, {
-        referenceXPath: "//*[local-name(.)='Response']",
-      })
-    : signXml(xml, signingKey);
-```
-
-`signXml` already takes `referenceXPath` and already places the signature
-inside the element it references — Task 6 of the `auth-mocks` plan established
-both, and its own suite covers them.
-
-- [ ] **Step 4: Run the tests to verify they pass**
-
-```bash
-npm test -- src/__tests__/saml.test.ts
-```
-
-- [ ] **Step 5: Prove the option is load-bearing**
-
-Ignore `signWhat` and always sign the assertion. The `signs the Response itself`
-case must go red while `still signs the Assertion` stays green. Report both.
-
-- [ ] **Step 6: The corruption variants must still work in the new mode**
-
-Run the existing variant suite with `signWhat: 'response'` for at least
-`tamperedAfterSign` and `wrongKey`, and report what happens. A variant that
-corrupts the assertion while the signature covers the response is a different
-document from the one the suite was written against, and if any variant stops
-being detectable in this mode, Task 12 needs to know before it depends on it.
-
-- [ ] **Step 7: Document, version and commit**
-
-`README.md` gains `signWhat` in its options table, saying what each value means
-and which relying-party behaviour the non-default one enables. `CHANGELOG.md`
-gets a `## [0.3.0]` section — a minor: an added option, no changed behaviour.
-`package.json` to `0.3.0` — `0.2.0` is the licence release.
-
-```bash
-npm run lint:check && npm run build && npm run test:check && npm test
-git add -A
-git commit -m "feat: sign the Response instead of the Assertion on request"
-git push -u origin <branch>
-gh pr create --fill
-```
-
-Do not merge, do not tag, do not publish. Report the PR URL and stop.
+Nothing to do in this task.
 
 ---
 
@@ -269,7 +120,7 @@ Do not merge, do not tag, do not publish. Report the PR URL and stop.
 
 **Interfaces:**
 
-- Consumes: `@mcp-abap-adt/interfaces-auth@^1.2.0`, already a dependency since PR #29; `@mcp-abap-adt/auth-mocks@0.3.0` from Task 2.
+- Consumes: `@mcp-abap-adt/interfaces-auth@^1.2.0`, already a dependency since PR #29; `@mcp-abap-adt/auth-mocks@^0.3.0`, published.
 
 The move off the facade is already done (PR #29). This task only adds what validation needs.
 
@@ -286,9 +137,7 @@ Write the numbers down; Step 4 compares against them.
 In `package.json`:
 
 - `dependencies`: add `"@xmldom/xmldom": "^0.9.10"`, `"xml-crypto": "^6.1.2"`.
-- `devDependencies`: add `"@mcp-abap-adt/auth-mocks"` at **`^0.3.0`** — the version Task 2 publishes. Not `^0.1.1` or `^0.2.0`: a caret on a `0.x` version pins the minor, so either would resolve to a version without `signWhat` and Task 12 would never see it.
-
-If that version is not yet published, Task 2's PR has not been merged and released. **Stop and say so** rather than installing the previous major and working around the missing types.
+- `devDependencies`: add `"@mcp-abap-adt/auth-mocks"` at **`^0.3.0`**, published. Not `^0.1.1` or `^0.2.0`: a caret on a `0.x` version pins the minor, so either would resolve to a version without `signWhat` and Task 12 would never see it.
 
 ```bash
 npm install
@@ -1608,8 +1457,15 @@ function buildResponse(
     `xmlns:saml="urn:oasis:names:tc:SAML:2.0:assertion" ID="_r1"${destination}>` +
     `${responseIssuer}<samlp:Status><samlp:StatusCode Value="${status}"/></samlp:Status>` +
     `${assertion}</samlp:Response>`;
+  // After the Response's own Issuer, as SAML Core's ResponseType requires and
+  // as the mock places it. Without `location` the Signature would be appended
+  // after the Assertion.
   return signXml(response, KEY, {
     referenceXPath: "//*[local-name(.)='Response']",
+    location: {
+      reference: "//*[local-name(.)='Response']/*[local-name(.)='Issuer']",
+      action: "after",
+    },
   });
 }
 
@@ -2527,7 +2383,7 @@ git commit -m "feat: the shipped assertion validator, assertion fields read only
 - Produces:
   - `buildSamlAuthorizationUrl(config): { url: string; requestId?: string }` — `requestId` is present only when this function minted one, which it does not for a pre-built `authorizationUrl`.
   - `getSamlAssertion(config): Promise<{ payload: string; requestId: string; acsUrl: string }>` — throws `ValidationError` when no ID can be established. `acsUrl` is `outcome.redirectUri`: where the strategy actually listened.
-  - `Saml2CommonConfig` gains `idpCertificates?: string[]`, `idpEntityId?: string`, `clockSkewMs?: number`, `authnRequestId?: string`, `assertionValidator?: IAssertionValidator`, `assertionReplayStore?: IAssertionReplayStore`. `spEntityId` is **already** there and already required (`src/providers/saml2Utils.ts:11`); it becomes the validator's `audience` and needs no change.
+  - `Saml2CommonConfig` gains `idpCertificates?: string[]`, `idpEntityId?: string`, `clockSkewMs?: number`, `authnRequestId?: string`, `assertionValidator?: IAssertionValidator`, `assertionReplayStore?: IAssertionReplayStore`. `spEntityId` is **already** there and already required (`src/providers/saml2Utils.ts:12`); it becomes the validator's `audience` and needs no change.
 
 **The rule, from the spec:** the ID must come from somewhere real. Either this package minted it, or the consumer declared it. When neither, that is a configuration error naming the remedy — not a validation failure blamed on the assertion.
 
@@ -2686,7 +2542,7 @@ git commit -m "feat!: the AuthnRequest ID survives to validation"
 **Files:**
 
 - Modify: `src/providers/Saml2PureProvider.ts`, `src/providers/Saml2BearerProvider.ts`, `src/providers/saml2Utils.ts`
-- Test: `src/__tests__/providers/Saml2PureProvider.test.ts`, `src/__tests__/providers/Saml2BearerProvider.test.ts` (existing — update)
+- Test: `src/__tests__/sso/SsoProviders.test.ts` (existing — update). The SAML providers have no test file of their own; their cases, including the refresh cases from PR #31, live there.
 
 **Interfaces:**
 
@@ -2845,13 +2701,20 @@ protected async performLogin(): Promise<ITokenResult> {
 
 The same validation call, placed **before** `exchangeSamlAssertion`. The exchange still forwards `payload`, unchanged — validation establishes trust, it does not rewrite what UAA receives.
 
+`performRefresh()` stays as PR #31 left it: a `refresh_token` grant carries no
+assertion, so there is nothing to validate, and the validator must not be
+consulted there. Pin it — a provider seeded with a refresh token and an
+expired access token, whose `assertionValidator` is a stub that fails the test
+if called, refreshes without calling it. Without this, a later change routing
+refresh through `performLogin()` again would pass every other test.
+
 - [ ] **Step 7: Run the whole suite**
 
 ```bash
 npm test
 ```
 
-Expected: PASS. Existing provider tests will need `idpCertificates` and `idpEntityId` in their configs, or an `assertionValidator` stub — that is the breaking change working, not a test to weaken. If a test previously asserted an expiry derived from the regex, it now asserts the validated one.
+Expected: PASS. Existing provider tests will need `idpCertificates` and `idpEntityId` in their configs, or an `assertionValidator` stub — that is the breaking change working, not a test to weaken. That includes the four `Saml2BearerProvider refresh` cases from PR #31, whose `seededConfig()` builds a provider with no identity-provider configuration: the validator is now resolved at construction, so they fail there before reaching the refresh they test. Give `seededConfig()` a stub validator; do not weaken what they assert. If a test previously asserted an expiry derived from the regex, it now asserts the validated one.
 
 - [ ] **Step 8: Commit**
 
@@ -2877,7 +2740,7 @@ git commit -m "feat!: both SAML providers validate the assertion before trusting
 
 **Two facts about the mock shape this task, and both were established by reading its source rather than assuming.** Confirm them yourself before writing the matrix.
 
-- `startMockSamlIdp` signs the **assertion** by default. Task 2 adds `signWhat: 'response'`; without that release the signed-Response validator refuses every response the mock produces, including the valid one, and no variant reaches its check. If Task 2 is not merged and published, **stop** rather than testing only half of this.
+- `startMockSamlIdp` signs the **assertion** by default; `signWhat: 'response'` (published in 0.3.0) signs the Response, with the `Signature` after the Response's `Issuer`. Without it the signed-Response validator would refuse every response the mock produces, including the valid one, so run every signed-Response case with it.
 - `wrongIssuer` writes one `issuerValue` into **both** `Response/Issuer` and `Assertion/Issuer`. The corrupted assertion issuer is inside the signature, so **both** validators refuse it at `issuer`. It is not evidence that the response-level cross-check exists.
 
 - [ ] **Step 1: Write the test**
@@ -3022,12 +2885,9 @@ Do not merge, do not tag, do not publish. Report the PR URL and stop.
 
 ## Release order
 
-1. **`@mcp-abap-adt/interfaces-auth@1.2.0`** — published; nothing to wait for.
-2. **`@mcp-abap-adt/auth-mocks@0.3.0`** — Task 2, adding `signWhat` (auth-mocks
-   PR #2). Only Task 12 needs it, but it needs it absolutely: without it the
-   signed-Response validator cannot be exercised end to end at all. Task 3
-   installs it and stops if it is not there.
-3. **`@mcp-abap-adt/auth-providers@3.0.0`** — this repository, major.
-
-Task 2 is easy to forget because nothing before Task 12 fails without it — which
-is exactly why it is a numbered task rather than a note.
+1. **`@mcp-abap-adt/interfaces-auth@1.2.0`** — published.
+2. **`@mcp-abap-adt/auth-mocks@0.3.0`** — published. Only Task 12 needs it, but
+   it needs it absolutely: without `signWhat` the signed-Response validator
+   cannot be exercised end to end at all.
+3. **`@mcp-abap-adt/auth-providers@3.0.0`** — this repository, major. The
+   current release is 2.2.2.
