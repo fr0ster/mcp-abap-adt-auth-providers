@@ -242,6 +242,31 @@ consumer who selects nothing gets the strict one and a refusal naming the
 remedy — which is the outcome we want for somebody who has not thought about
 it yet.
 
+### A bare Assertion, and which validator each provider defaults to
+
+The saml2-bearer grant exchanges an Assertion, not a Response, and 3.0.0
+already accepts either as `Saml2BearerProvider`'s payload (#40): a consumer
+whose strategy obtains a signed Assertion by some other route hands it over
+bare. So the **assertion-only validator accepts a bare `saml:Assertion` as the
+document element**, with the same rules: its own signature must cover it, and
+nothing outside it is read — there is nothing outside it. The signed-Response
+validator refuses a bare Assertion at step 1; its whole contract is a signed
+Response.
+
+That also decides the defaults, which now differ by provider:
+
+- **`Saml2BearerProvider` defaults to `createSignedAssertionValidator`.** What
+  reaches the token endpoint is the Assertion alone, taken out of any Response
+  (#40), so the Assertion's own signature is what that endpoint verifies — UAA
+  and XSUAA do. A signature over the Response alone does not survive the
+  extraction: defaulting to the signed-Response validator would accept
+  responses the token endpoint then refuses.
+- **`Saml2PureProvider` keeps `createSignedResponseValidator`,** for the reasons
+  in "Two validators, not one with a blind spot": there the whole response is
+  handed on, and `Status` and `Destination` must be inside a signature.
+
+Either default is replaced by passing `assertionValidator`.
+
 ## Interfaces
 
 In `@mcp-abap-adt/interfaces-auth` (published in 1.2.0):
@@ -394,7 +419,7 @@ unmarked is performed by both.
 
 | #   | Check                                                      | Refused when                                                                |
 | --- | ---------------------------------------------------------- | --------------------------------------------------------------------------- |
-| 1   | Parses as XML, document element is `samlp:Response`        | it is not                                                                   |
+| 1   | Parses as XML, document element is `samlp:Response` — or, for the assertion-only validator, a bare `saml:Assertion` | it is not                                  |
 | 1b  | Every `ID` attribute in the document is unique             | any value appears twice                                                     |
 | 2   | Signature valid against `idpCertificates`                  | absent, wrong key, or content altered after signing                         |
 | 3   | Signed node is the node read                               | the reference points elsewhere                                              |
@@ -527,8 +552,11 @@ New on the SAML config:
 
 - `assertionValidator?: IAssertionValidator` — which validator to use, and the
   place a consumer chooses between the two shipped ones:
-  `createSignedResponseValidator(...)` (the default when this is omitted) or
-  `createSignedAssertionValidator(...)`, or an implementation of their own.
+  `createSignedResponseValidator(...)` or `createSignedAssertionValidator(...)`,
+  or an implementation of their own. When omitted, each provider uses its
+  default — the assertion-only validator for `Saml2BearerProvider`, the
+  signed-Response one for `Saml2PureProvider`; see "A bare Assertion, and which
+  validator each provider defaults to".
   When supplied,
   the package constructs no default, and the **default-validator-specific**
   fields below stop being required: `idpCertificates`, `idpEntityId`,
@@ -598,7 +626,9 @@ than forcing a release of its own. It touches only implementers of
 
 ## Wiring
 
-Both providers construct the default validator when the consumer supplies none.
+Both providers construct their default validator when the consumer supplies
+none — `Saml2BearerProvider` the assertion-only one, `Saml2PureProvider` the
+signed-Response one.
 
 **The default replay store is process-wide, not per provider.** A store held
 per provider instance would be no defence at all: replaying an assertion would

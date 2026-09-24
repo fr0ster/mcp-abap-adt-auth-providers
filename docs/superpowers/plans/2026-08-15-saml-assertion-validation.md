@@ -1910,6 +1910,26 @@ describe("the default assertion validator", () => {
     ).toBe("_a1");
   });
 
+  // The saml2-bearer grant exchanges an Assertion; 3.0.0 accepts one bare.
+  const bareAssertion = () =>
+    /<saml:Assertion[\s\S]*<\/saml:Assertion>/.exec(
+      buildResponse({ signWhat: "assertion" }),
+    )?.[0] ?? "";
+
+  it("the assertion-only validator accepts a bare signed Assertion", async () => {
+    const result = await assertionValidator().validate(
+      Buffer.from(bareAssertion()).toString("base64url"),
+      context,
+    );
+    expect(result.assertionId).toBe("_a1");
+  });
+
+  it("the signed-Response validator refuses a bare Assertion", async () => {
+    await expect(
+      validator().validate(encode(bareAssertion()), context),
+    ).rejects.toMatchObject({ check: "document" });
+  });
+
   it("refuses a confirmation whose InResponseTo is not ours", async () => {
     await expect(
       validator().validate(
@@ -2197,10 +2217,19 @@ function createValidator(
       }
       const root = doc.documentElement as unknown as Element | null;
       if (!root) return fail('document', 'the SAMLResponse did not parse as XML');
-      if (root.localName !== 'Response' || root.namespaceURI !== PROTOCOL_NS) {
+      const rootIsResponse =
+        root.localName === 'Response' && root.namespaceURI === PROTOCOL_NS;
+      const rootIsAssertion =
+        root.localName === 'Assertion' && root.namespaceURI === SAML_NS;
+      // A bare Assertion is a document only the assertion-only validator
+      // accepts: the saml2-bearer grant exchanges an Assertion, and 3.0.0
+      // already takes one as Saml2BearerProvider's payload.
+      if (!rootIsResponse && !(require === 'assertion' && rootIsAssertion)) {
         return fail(
           'document',
-          `expected the document element to be a samlp:Response, got ${root.localName}`,
+          require === 'assertion'
+            ? `expected a samlp:Response or a saml:Assertion, got ${root.localName}`
+            : `expected the document element to be a samlp:Response, got ${root.localName}`,
         );
       }
 
@@ -2448,6 +2477,12 @@ function assertionInside(
   if (require === 'response' && !signedIsResponse) return null;
   if (require === 'assertion' && !signedIsAssertion) return null;
 
+  // A bare Assertion is its own document: the only assertion there is, and
+  // it must be the element signed.
+  if (root.localName === 'Assertion' && root.namespaceURI === SAML_NS) {
+    return signed === root ? root : null;
+  }
+
   // Whatever was signed, the response must carry exactly one assertion.
   //
   // Reading only from the signed element is not enough: `raw` — the whole
@@ -2559,10 +2594,10 @@ git commit -m "feat: the shipped assertion validator, assertion fields read only
 
 - Produces:
   - `buildSamlAuthorizationUrl(config): { url: string; requestId?: string }` — `requestId` is present only when this function minted one, which it does not for a pre-built `authorizationUrl`.
-  - `getSamlAssertion(config): Promise<{ payload: string; requestId: string; acsUrl: string }>` — throws `ValidationError` when no ID can be established. `acsUrl` is `outcome.redirectUri`: where the strategy actually listened.
-  - `Saml2CommonConfig` gains `idpCertificates?: string[]`, `idpEntityId?: string`, `clockSkewMs?: number`, `authnRequestId?: string`, `assertionValidator?: IAssertionValidator`, `assertionReplayStore?: IAssertionReplayStore`. `spEntityId` is **already** there and already required (`src/providers/saml2Utils.ts:12`); it becomes the validator's `audience` and needs no change.
+  - `getSamlAssertion(config): Promise<{ payload: string; requestId?: string; acsUrl: string }>` — `requestId` is `undefined` exactly when the login is declared `idpInitiated` and none was minted or declared; it throws `ValidationError` when no ID can be established without that declaration, and when `idpInitiated` is combined with a minted or declared ID. `acsUrl` is `outcome.redirectUri`: where the strategy actually listened.
+  - `Saml2CommonConfig` gains `idpCertificates?: string[]`, `idpEntityId?: string`, `clockSkewMs?: number`, `authnRequestId?: string`, `idpInitiated?: boolean`, `assertionValidator?: IAssertionValidator`, `assertionReplayStore?: IAssertionReplayStore`. `spEntityId` is **already** there and already required (`src/providers/saml2Utils.ts:12`); it becomes the validator's `audience` and needs no change.
 
-**The rule, from the spec:** the ID must come from somewhere real. Either this package minted it, or the consumer declared it. When neither, that is a configuration error naming the remedy — not a validation failure blamed on the assertion.
+**The rule, from the spec:** the ID must come from somewhere real. Either this package minted it, or the consumer declared it — or, by declaring the login `idpInitiated`, the consumer says there is none, and then `InResponseTo` must be absent. With no ID and no declaration, that is a configuration error naming the remedy — not a validation failure blamed on the assertion.
 
 - [ ] **Step 1: Read what exists**
 
@@ -2743,7 +2778,7 @@ git commit -m "feat!: the AuthnRequest ID survives to validation"
 **Interfaces:**
 
 - Consumes: everything from Tasks 8 and 9.
-- Produces: `resolveAssertionValidator(config): IAssertionValidator` in `saml2Utils.ts` — the consumer's when supplied, otherwise a default built from `idpCertificates`, `clockSkewMs` and `assertionReplayStore`, raising `ValidationError` when `idpCertificates` or `idpEntityId` is missing.
+- Produces: `resolveAssertionValidator(config, provider: "bearer" | "pure"): IAssertionValidator` in `saml2Utils.ts` — the consumer's when supplied, otherwise the provider's default — `createSignedAssertionValidator` for `"bearer"`, `createSignedResponseValidator` for `"pure"` — built from `idpCertificates`, `clockSkewMs` and `assertionReplayStore`, raising `ValidationError` when `idpCertificates` or `idpEntityId` is missing. `Saml2BearerProvider` resolves with `"bearer"`, `Saml2PureProvider` with `"pure"`. A test pins each default: a response signed only at the Response level is accepted by `Saml2PureProvider`'s default and refused, at `signedNode`, by `Saml2BearerProvider`'s.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -2815,9 +2850,16 @@ Expected: FAIL — `assertionValidator` is not a config field yet.
 
 - [ ] **Step 3: Implement `resolveAssertionValidator` in `saml2Utils.ts`**
 
+Import both shipped validators, `createSignedAssertionValidator` and `createSignedResponseValidator`, from `../validation/assertionValidator`.
+
 ```ts
 export function resolveAssertionValidator(
   config: Saml2CommonConfig,
+  // Saml2BearerProvider's default is the assertion-only validator: the token
+  // endpoint receives the Assertion alone, so its own signature is what
+  // counts. Saml2PureProvider's is the signed-Response one. See the spec's
+  // "A bare Assertion, and which validator each provider defaults to".
+  provider: "bearer" | "pure",
 ): IAssertionValidator {
   if (config.assertionValidator) return config.assertionValidator;
 
@@ -2832,11 +2874,14 @@ export function resolveAssertionValidator(
     );
   }
 
-  return createSignedResponseValidator({
+  const options = {
     idpCertificates: config.idpCertificates as string[],
     clockSkewMs: config.clockSkewMs,
     replayStore: config.assertionReplayStore,
-  });
+  };
+  return provider === "bearer"
+    ? createSignedAssertionValidator(options)
+    : createSignedResponseValidator(options);
 }
 ```
 
@@ -2860,13 +2905,13 @@ Resolve once, in the constructor, and keep it:
     // Before anything reaches a browser or a network: a missing certificate is
     // the consumer's mistake, and finding it after a completed login wastes
     // theirs.
-    this.validator = resolveAssertionValidator(config);
+    this.validator = resolveAssertionValidator(config, "pure");
     this.config = config;
     // … the rest unchanged
   }
 ```
 
-`Saml2BearerProvider` does the same.
+`Saml2BearerProvider` does the same, with `resolveAssertionValidator(config, "bearer")`.
 
 - [ ] **Step 5: Wire `Saml2PureProvider.performLogin`**
 
@@ -3032,7 +3077,11 @@ against real servers:
 
 - `src/__tests__/integration/stand/uaaSaml2Bearer.test.ts` — `idpCertificates`
   from `tests/stand/uaa/idp/idp.crt`, `idpEntityId: 'test-idp'`, and
-  `idpInitiated: true` (its assertions carry no `InResponseTo`).
+  `idpInitiated: true` (its assertions carry no `InResponseTo`). Its payloads
+  are a bare, signed Assertion (base64url) and a Response wrapping one; both
+  pass `Saml2BearerProvider`'s default, the assertion-only validator, which
+  accepts a bare Assertion — so no scenario changes. It must still reach UAA
+  in every case it did before.
 - `src/__tests__/integration/stand/keycloakSaml.test.ts` — the certificate
   from Keycloak's published SAML metadata, `idpEntityId` the realm URL. The
   IdP-initiated case sets `idpInitiated: true` and must pass validation **and**
@@ -3042,8 +3091,9 @@ against real servers:
   minted ID.
 - `src/__tests__/integration/xsuaa/xsuaa.test.ts` — the per-run certificate
   from `.local/idp.crt`, `idpEntityId: 'auth-providers-test-idp'`,
-  `idpInitiated: true`; the InResponseTo case now fails at our validator
-  before XSUAA sees it, which it must assert.
+  `idpInitiated: true`. The bare-Assertion and wrapped-Response cases pass the
+  default validator and reach XSUAA as before; the InResponseTo case now fails
+  at our validator before XSUAA sees it, which it must assert.
 
 ### Task 13: Public surface, documentation, and the release PR
 
