@@ -128,6 +128,15 @@ oauth:
       secret: secret
       authorized-grant-types: client_credentials
       authorities: uaa.resource
+    # UaaPasscodeProvider: the user fetches a one-time code from /passcode in a
+    # browser; the provider exchanges it through the password grant.
+    passcode_client:
+      id: passcode_client
+      secret: secret
+      authorized-grant-types: 'password,refresh_token'
+      scope: 'openid,uaa.user'
+      authorities: uaa.none
+      autoapprove: 'true'
     # AuthorizationCodeProvider: the tests log in through UAA's own form.
     authcode:
       id: authcode

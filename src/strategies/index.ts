@@ -21,6 +21,7 @@ export {
 } from './codeStrategies';
 export type { ManualStrategyOptions } from './manualStrategies';
 export {
+  manualPasscodeStrategy,
   manualPasteStrategy,
   manualSamlResponseStrategy,
 } from './manualStrategies';
