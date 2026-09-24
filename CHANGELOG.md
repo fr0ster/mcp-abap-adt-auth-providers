@@ -82,6 +82,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     neither server serves, and `Saml2PureProvider`'s cookie exchange, which is
     the consumer's `cookieProvider`.
 
+- **Live checks against a real XSUAA** — `npm run test:xsuaa`, not in CI —
+  create an XSUAA instance and a SAML trust in a BTP subaccount, run, and
+  remove them. On a trial subaccount: `Saml2BearerProvider` gets a token and a
+  refresh token from an IdP-initiated assertion, converts a whole
+  `SAMLResponse`, refreshes without its strategy, and is refused an assertion
+  carrying `InResponseTo`, exactly as by UAA; `UaaPasscodeProvider` works,
+  including — checked by hand — with an ABAP environment's own service key,
+  whose token opens ADT.
   `@mcp-abap-adt/auth-mocks` becomes a devDependency, for signing assertions.
   The stand itself is not published.
 

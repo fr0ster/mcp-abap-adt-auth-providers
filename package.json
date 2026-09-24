@@ -55,7 +55,8 @@
     "prepublishOnly": "npm run build",
     "stand:up": "tests/stand/up.sh",
     "stand:down": "tests/stand/down.sh",
-    "test:stand": "tests/stand/run.sh"
+    "test:stand": "tests/stand/run.sh",
+    "test:xsuaa": "tests/xsuaa/run.sh"
   },
   "engines": {
     "node": "^22 || ^24"

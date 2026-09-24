@@ -938,6 +938,42 @@ consumer's `cookieProvider` and needs a real SAP system.
 A plain `npm test` skips these suites: they run only with `UAA_URL` or
 `KEYCLOAK_URL` set, which `test:stand` does.
 
+### Live checks against XSUAA (BTP subaccount)
+
+The stand proves the wire contracts against open-source servers. What only a
+real XSUAA can answer is checked by `npm run test:xsuaa`, against a BTP
+subaccount you are logged in to — a trial one is enough:
+
+```bash
+cf login -a https://api.cf.<region>.hana.ondemand.com --sso -o <org>
+XSUAA_CF_API=https://api.cf.<region>.hana.ondemand.com XSUAA_CF_ORG=<org> \
+  npm run test:xsuaa
+```
+
+It creates, in the targeted space, an `xsuaa`/`application` instance whose
+client may use saml2-bearer, refresh_token and password; an `xsuaa`/`apiaccess`
+instance, used only to manage trust; and a SAML trust to a test identity
+provider whose key is generated locally and never leaves the gitignored
+`tests/xsuaa/.local/`. Then it runs the suite and removes all of it — also when
+a test fails. The scripts refuse to run unless `cf` targets exactly
+`XSUAA_CF_API` and `XSUAA_CF_ORG`; there are no defaults, so a `cf` left pointing
+at another org cannot receive anything. `XSUAA_KEEP=1` keeps the environment;
+`tests/xsuaa/teardown.sh` removes it later. A full run takes about a minute and
+a half. It is not part of CI.
+
+| check | result on XSUAA |
+|---|---|
+| `Saml2BearerProvider`, assertion without `InResponseTo` (IdP-initiated) | token and refresh token |
+| `Saml2BearerProvider`, a whole `SAMLResponse` | converted by the provider, accepted |
+| `Saml2BearerProvider`, refresh | never reaches the strategy |
+| `Saml2BearerProvider`, assertion with `InResponseTo` | refused — as UAA does |
+| `UaaPasscodeProvider` (with `XSUAA_PASSCODE=<code from /passcode>`) | token, refresh |
+
+`UaaPasscodeProvider` was also checked by hand with an ABAP environment's own
+service key: its client accepts the passcode, and the token opens ADT. That
+depends on the user being known to the ABAP system — a user from an identity
+provider not propagated to it gets a token and a 401 from ADT.
+
 ### Debug Logging
 
 To enable detailed logging during tests or runtime, set environment variables:
