@@ -28,6 +28,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and 24 instead of 18.
 
   **Migrating:** run on Node 22 or 24. Nothing in the API changed.
+- **`DeviceFlowProvider` is removed**, with `DeviceFlowProviderConfig` and the
+  `auth-device-flow` command. It sent the device authorization grant to
+  `${uaaUrl}/oauth/device_authorization`, a path no server we could find
+  serves: Cloud Foundry UAA has no device grant, XSUAA answers that path with a
+  redirect to its login page and advertises no `device_authorization_endpoint`,
+  and servers that do implement RFC 8628 — Keycloak, Spring Authorization
+  Server, Ory Hydra, Zitadel, Dex — publish it elsewhere. Its live tests had
+  long been skipped.
+
+  **Migrating:** for a server that implements RFC 8628, use
+  `OidcDeviceFlowProvider` — it finds the endpoints through discovery
+  (`issuerUrl`) or takes them explicitly, and is tested against Keycloak. For a
+  headless login to UAA or XSUAA, use `UaaPasscodeProvider`: the user fetches
+  a one-time code from `<uaaUrl>/passcode` in any browser, as with
+  `cf login --sso`.
 
 ### Fixed
 

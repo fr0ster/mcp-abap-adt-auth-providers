@@ -40,8 +40,7 @@
   },
   "bin": {
     "auth-authorization-code": "./bin/auth-authorization-code.ts",
-    "auth-client-credentials": "./bin/auth-client-credentials.ts",
-    "auth-device-flow": "./bin/auth-device-flow.ts"
+    "auth-client-credentials": "./bin/auth-client-credentials.ts"
   },
   "scripts": {
     "chrono": "./tools/version-stats.sh",

@@ -22,7 +22,6 @@ export {
 export type {
   AuthorizationCodeProviderConfig,
   ClientCredentialsProviderConfig,
-  DeviceFlowProviderConfig,
   OidcBrowserProviderConfig,
   OidcDeviceFlowProviderConfig,
   OidcPasswordProviderConfig,
@@ -36,7 +35,6 @@ export {
   AuthorizationCodeProvider,
   BaseTokenProvider,
   ClientCredentialsProvider,
-  DeviceFlowProvider,
   OidcBrowserProvider,
   OidcDeviceFlowProvider,
   OidcPasswordProvider,
