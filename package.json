@@ -54,9 +54,9 @@
     "test": "NODE_OPTIONS=--experimental-vm-modules jest",
     "test:check": "npx tsc --noEmit",
     "prepublishOnly": "npm run build",
-    "uaa:up": "tests/uaa/up.sh",
-    "uaa:down": "tests/uaa/down.sh",
-    "test:uaa": "tests/uaa/run.sh"
+    "stand:up": "tests/stand/up.sh",
+    "stand:down": "tests/stand/down.sh",
+    "test:stand": "tests/stand/run.sh"
   },
   "engines": {
     "node": "^22 || ^24"

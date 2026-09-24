@@ -1,8 +1,8 @@
 /**
  * Saml2BearerProvider against a real Cloud Foundry UAA — the open-source
- * server XSUAA is built from — started by tests/uaa/up.sh.
+ * server XSUAA is built from — started by tests/stand/up.sh.
  *
- * Runs only when UAA_URL is set (`npm run test:uaa`); a plain `npm test`
+ * Runs only when UAA_URL is set (`npm run test:stand`); a plain `npm test`
  * skips it. What it proves that no unit test can: that the token endpoint of
  * a real server accepts what the provider sends, issues a refresh token for
  * the saml2-bearer grant exactly when the client may hold one, and takes that
@@ -12,38 +12,62 @@
 import { randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { describe, expect, it, jest } from '@jest/globals';
+import { beforeAll, describe, expect, it, jest } from '@jest/globals';
 import { signXml } from '@mcp-abap-adt/auth-mocks';
 import type { IAuthorizationStrategy } from '@mcp-abap-adt/interfaces-auth';
-import { Saml2BearerProvider } from '../../providers/Saml2BearerProvider';
-import { staticCodeStrategy } from '../../strategies';
+import { Saml2BearerProvider } from '../../../providers/Saml2BearerProvider';
+import { staticCodeStrategy } from '../../../strategies';
 
 const UAA_URL = process.env.UAA_URL?.replace(/\/+$/, '');
 const describeUaa = UAA_URL ? describe : describe.skip;
 
-const GENERATED = join(__dirname, '../../../tests/uaa/.generated');
+/**
+ * The issuer UAA puts in its tokens, as its own discovery document states it —
+ * not derived from UAA_URL, which may use another port than the committed
+ * configuration names.
+ */
+let uaaIssuer = '';
+/**
+ * Where UAA receives bearer assertions — the URI-binding assertion consumer
+ * service in its SAML metadata. An identity provider takes the Recipient from
+ * there, not from the address it happened to reach UAA on.
+ */
+let bearerAcs = '';
+beforeAll(async () => {
+  if (!UAA_URL) return;
+  const discovery = await fetch(`${UAA_URL}/.well-known/openid-configuration`);
+  uaaIssuer = ((await discovery.json()) as { issuer: string }).issuer;
+  const metadata = await (await fetch(`${UAA_URL}/saml/metadata`)).text();
+  bearerAcs =
+    /AssertionConsumerService[^>]*bindings:URI"[^>]*Location="([^"]+)"/.exec(
+      metadata,
+    )?.[1] ?? '';
+  expect(bearerAcs).toMatch(/\/oauth\/token\/alias\//);
+});
+
+// The test IdP's key: a committed fixture, trusted only by the stand's UAA.
+const IDP = join(__dirname, '../../../../tests/stand/uaa/idp');
 
 /**
  * A bearer assertion as RFC 7522 §2.1 wants it: one signed Assertion,
- * base64url-encoded. Issuer, Audience and Recipient are what tests/uaa
+ * base64url-encoded. Issuer, Audience and Recipient are what tests/stand/uaa
  * configures: the `test-idp` provider and the `uaa-sp` service provider.
  */
 function signedAssertionXml(): string {
   const key = {
-    privateKeyPem: readFileSync(join(GENERATED, 'idp.key'), 'utf8'),
-    certificatePem: readFileSync(join(GENERATED, 'idp.crt'), 'utf8'),
+    privateKeyPem: readFileSync(join(IDP, 'idp.key'), 'utf8'),
+    certificatePem: readFileSync(join(IDP, 'idp.crt'), 'utf8'),
   };
   const iso = (d: Date) => d.toISOString().replace(/\.\d+Z$/, 'Z');
   const now = new Date();
   const until = new Date(now.getTime() + 10 * 60_000);
   const notBefore = new Date(now.getTime() - 5_000);
-  const recipient = `${UAA_URL}/oauth/token/alias/uaa-sp`;
   const assertion =
     `<saml2:Assertion xmlns:saml2="urn:oasis:names:tc:SAML:2.0:assertion" xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" ID="_${randomUUID()}" IssueInstant="${iso(now)}" Version="2.0">` +
     '<saml2:Issuer>test-idp</saml2:Issuer>' +
     '<saml2:Subject><saml2:NameID Format="urn:oasis:names:tc:SAML:1.1:nameid-format:unspecified">bearer-user</saml2:NameID>' +
     '<saml2:SubjectConfirmation Method="urn:oasis:names:tc:SAML:2.0:cm:bearer">' +
-    `<saml2:SubjectConfirmationData NotOnOrAfter="${iso(until)}" Recipient="${recipient}"/>` +
+    `<saml2:SubjectConfirmationData NotOnOrAfter="${iso(until)}" Recipient="${bearerAcs}"/>` +
     '</saml2:SubjectConfirmation></saml2:Subject>' +
     `<saml2:Conditions NotBefore="${iso(notBefore)}" NotOnOrAfter="${iso(until)}">` +
     '<saml2:AudienceRestriction><saml2:Audience>uaa-sp</saml2:Audience></saml2:AudienceRestriction></saml2:Conditions>' +
@@ -116,7 +140,7 @@ describeUaa('Saml2BearerProvider against Cloud Foundry UAA', () => {
       authorization: staticCodeStrategy({ payload: bearerAssertion() }),
     }).getTokens();
 
-    expect(issuerOf(tokens.authorizationToken)).toBe(`${UAA_URL}/oauth/token`);
+    expect(issuerOf(tokens.authorizationToken)).toBe(uaaIssuer);
     expect(tokens.refreshToken).toEqual(expect.any(String));
   });
 
@@ -137,9 +161,7 @@ describeUaa('Saml2BearerProvider against Cloud Foundry UAA', () => {
     }).getTokens();
 
     expect(authorize).not.toHaveBeenCalled();
-    expect(issuerOf(refreshed.authorizationToken)).toBe(
-      `${UAA_URL}/oauth/token`,
-    );
+    expect(issuerOf(refreshed.authorizationToken)).toBe(uaaIssuer);
     expect(refreshed.authorizationToken).not.toBe(first.authorizationToken);
     expect(refreshed.refreshToken).toEqual(expect.any(String));
   });
@@ -152,7 +174,7 @@ describeUaa('Saml2BearerProvider against Cloud Foundry UAA', () => {
       authorization: staticCodeStrategy({ payload: samlResponse() }),
     }).getTokens();
 
-    expect(issuerOf(tokens.authorizationToken)).toBe(`${UAA_URL}/oauth/token`);
+    expect(issuerOf(tokens.authorizationToken)).toBe(uaaIssuer);
     expect(tokens.refreshToken).toEqual(expect.any(String));
   });
 
@@ -162,7 +184,7 @@ describeUaa('Saml2BearerProvider against Cloud Foundry UAA', () => {
       authorization: staticCodeStrategy({ payload: bearerAssertion() }),
     }).getTokens();
 
-    expect(issuerOf(tokens.authorizationToken)).toBe(`${UAA_URL}/oauth/token`);
+    expect(issuerOf(tokens.authorizationToken)).toBe(uaaIssuer);
     expect(tokens.refreshToken).toBeUndefined();
   });
 });

@@ -35,14 +35,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Development
 
-- `Saml2BearerProvider` is tested against a real Cloud Foundry UAA — the
-  server XSUAA is built from — in Docker. `npm run test:uaa` starts it with
-  `docker compose`, runs the suite and stops it again, and CI runs the same as
-  its own job. It confirms end to end what #23 was about: UAA issues a refresh
-  token with the saml2-bearer token when the client may hold one, and the
-  provider spends it without running its authorization strategy.
-  `@mcp-abap-adt/auth-mocks` becomes a devDependency, for signing the
-  assertions. The stand itself is not published.
+- **Every provider but two is tested against a real authorization server** in
+  Docker: Cloud Foundry UAA — the server XSUAA is built from — and Keycloak.
+  `npm run test:stand` starts both, runs the suites and stops them, and CI runs
+  the same as its own job on Node 22 and 24.
+  - UAA: `Saml2BearerProvider` (confirming end to end what #23 was about: a
+    refresh token is issued with the saml2-bearer token when the client may
+    hold one, and spent without running the authorization strategy),
+    `ClientCredentialsProvider`, `AuthorizationCodeProvider` with refresh.
+  - Keycloak: `OidcPasswordProvider` with refresh, `OidcBrowserProvider` with
+    S256 PKCE, `OidcDeviceFlowProvider`, `OidcTokenExchangeProvider`
+    (RFC 8693).
+  - Interactive logins go through each server's own login and consent pages,
+    submitted over HTTP by a test helper.
+  - Not covered: `DeviceFlowProvider`, whose `/oauth/device_authorization`
+    neither server serves, and `Saml2PureProvider`'s cookie exchange, which is
+    the consumer's `cookieProvider`.
+
+  `@mcp-abap-adt/auth-mocks` becomes a devDependency, for signing assertions.
+  The stand itself is not published.
 
 ## [2.2.2] - 2026-09-24
 
