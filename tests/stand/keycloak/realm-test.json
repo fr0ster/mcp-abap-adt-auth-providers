@@ -11,7 +11,13 @@
       "email": "tester@example.com",
       "firstName": "Test",
       "lastName": "User",
-      "credentials": [{ "type": "password", "value": "tester", "temporary": false }]
+      "credentials": [
+        {
+          "type": "password",
+          "value": "tester",
+          "temporary": false
+        }
+      ]
     }
   ],
   "clients": [
@@ -28,8 +34,12 @@
       "standardFlowEnabled": true,
       "directAccessGrantsEnabled": false,
       "consentRequired": false,
-      "redirectUris": ["http://localhost/callback"],
-      "attributes": { "pkce.code.challenge.method": "S256" }
+      "redirectUris": [
+        "http://localhost/callback"
+      ],
+      "attributes": {
+        "pkce.code.challenge.method": "S256"
+      }
     },
     {
       "clientId": "oidc-device",
@@ -37,7 +47,9 @@
       "standardFlowEnabled": false,
       "directAccessGrantsEnabled": false,
       "consentRequired": false,
-      "attributes": { "oauth2.device.authorization.grant.enabled": "true" }
+      "attributes": {
+        "oauth2.device.authorization.grant.enabled": "true"
+      }
     },
     {
       "clientId": "te-subject",
@@ -64,7 +76,47 @@
       "publicClient": false,
       "standardFlowEnabled": false,
       "directAccessGrantsEnabled": false,
-      "attributes": { "standard.token.exchange.enabled": "true" }
+      "attributes": {
+        "standard.token.exchange.enabled": "true"
+      }
+    },
+    {
+      "clientId": "uaa-sp",
+      "protocol": "saml",
+      "enabled": true,
+      "frontchannelLogout": false,
+      "redirectUris": [
+        "http://localhost*"
+      ],
+      "attributes": {
+        "saml.assertion.signature": "true",
+        "saml.server.signature": "true",
+        "saml.client.signature": "false",
+        "saml.force.post.binding": "true",
+        "saml.authnstatement": "true",
+        "saml_force_name_id_format": "true",
+        "saml_name_id_format": "username",
+        "saml.signature.algorithm": "RSA_SHA256"
+      }
+    },
+    {
+      "clientId": "sap-sp",
+      "protocol": "saml",
+      "enabled": true,
+      "frontchannelLogout": false,
+      "redirectUris": [
+        "http://localhost*"
+      ],
+      "attributes": {
+        "saml.assertion.signature": "true",
+        "saml.server.signature": "true",
+        "saml.client.signature": "false",
+        "saml.force.post.binding": "true",
+        "saml.authnstatement": "true",
+        "saml_force_name_id_format": "true",
+        "saml_name_id_format": "username",
+        "saml.signature.algorithm": "RSA_SHA256"
+      }
     }
   ]
 }
