@@ -22,6 +22,7 @@ import {
   exchangeSamlAssertion,
   refreshSamlBearerToken,
 } from '../../auth/saml2TokenExchange';
+import { toBearerAssertion } from '../../auth/samlBearerAssertion';
 import { OidcBrowserProvider } from '../../providers/OidcBrowserProvider';
 import { OidcDeviceFlowProvider } from '../../providers/OidcDeviceFlowProvider';
 import { OidcPasswordProvider } from '../../providers/OidcPasswordProvider';
@@ -498,6 +499,18 @@ describe('SSO Providers', () => {
     );
   });
 
+  /**
+   * A SAMLResponse as an IdP posts it — the whole Response, standard base64 —
+   * and what the provider must send for it. The conversion itself is pinned in
+   * samlBearerAssertion.test.ts; here the point is that the provider applies it.
+   */
+  const samlResponseCarrying = (assertionId: string) => {
+    const assertion = `<saml2:Assertion xmlns:saml2="urn:oasis:names:tc:SAML:2.0:assertion" ID="${assertionId}"><saml2:Issuer>idp</saml2:Issuer></saml2:Assertion>`;
+    const response = `<samlp:Response xmlns:samlp="urn:oasis:names:tc:SAML:2.0:protocol" ID="_r"><samlp:Status><samlp:StatusCode Value="urn:oasis:names:tc:SAML:2.0:status:Success"/></samlp:Status>${assertion}</samlp:Response>`;
+    const payload = Buffer.from(response, 'utf8').toString('base64');
+    return { payload, bearer: toBearerAssertion(payload) };
+  };
+
   it('Saml2BearerProvider should exchange assertion for token', async () => {
     mockExchangeSaml.mockResolvedValue({
       accessToken: 'jwt.saml.token',
@@ -505,18 +518,20 @@ describe('SSO Providers', () => {
       expiresIn: 900,
     });
 
+    const saml = samlResponseCarrying('_a1');
     const provider = new Saml2BearerProvider({
       idpSsoUrl: 'https://idp/sso',
       spEntityId: 'sp-entity',
       uaaUrl: 'https://uaa',
-      authorization: staticCodeStrategy({ payload: 'saml-response' }),
+      authorization: staticCodeStrategy({ payload: saml.payload }),
     });
 
     const tokens = await provider.getTokens();
     expect(tokens.authorizationToken).toBe('jwt.saml.token');
     expect(tokens.authType).toBe(AUTH_TYPE_SAML2_BEARER);
+    // RFC 7522: the Assertion alone, base64url — not the Response it arrived in.
     expect(mockExchangeSaml).toHaveBeenCalledWith(
-      'saml-response',
+      saml.bearer,
       'https://uaa/oauth/token',
       undefined,
       undefined,
@@ -527,7 +542,7 @@ describe('SSO Providers', () => {
   describe('Saml2BearerProvider refresh', () => {
     const seededConfig = () => {
       const authorize = jest.fn(async () => ({
-        payload: 'fresh-saml-response',
+        payload: samlResponseCarrying('_fresh').payload,
         redirectUri: 'http://localhost:61001/callback',
       }));
       const authorization: IAuthorizationStrategy<string> = { authorize };
@@ -607,7 +622,9 @@ describe('SSO Providers', () => {
 
       expect(mockRefreshSaml).toHaveBeenCalledTimes(1);
       expect(authorize).toHaveBeenCalledTimes(1);
-      expect(mockExchangeSaml.mock.calls[0][0]).toBe('fresh-saml-response');
+      expect(mockExchangeSaml.mock.calls[0][0]).toBe(
+        samlResponseCarrying('_fresh').bearer,
+      );
       expect(tokens.authorizationToken).toBe('jwt.after.login');
       expect(tokens.refreshToken).toBe('login-refresh');
     });

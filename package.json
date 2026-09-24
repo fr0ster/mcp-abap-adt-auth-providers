@@ -65,6 +65,7 @@
     "@mcp-abap-adt/interfaces-auth": "^1.2.0",
     "@mcp-abap-adt/interfaces-auth-sap": "^1.0.0",
     "@mcp-abap-adt/interfaces-utils": "^1.1.0",
+    "@xmldom/xmldom": "^0.9.12",
     "axios": "^1.13.5",
     "express": "^5.1.0",
     "open": "^11.0.0"

@@ -19,6 +19,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
   **Migrating:** run on Node 22 or 24. Nothing in the API changed.
 
+### Fixed
+
+- **`Saml2BearerProvider` sends what RFC 7522 accepts** (#37). It forwarded
+  the strategy's payload as is — after an interactive login, the whole
+  `SAMLResponse` in standard base64 — where §2.1 takes one Assertion,
+  base64url-encoded. Cloud Foundry UAA answers 401 to a Response in either
+  encoding, so the provider could not get a token through any interactive
+  strategy. It now takes the Assertion out of a Response (copying onto it
+  every namespace declaration it inherited, including one used only inside an
+  `xsi:type` value, and keeping its signature) and sends it
+  base64url-encoded; a bare Assertion in either encoding is re-encoded. A
+  Response with no Assertion, several, or only an `EncryptedAssertion` is
+  refused before anything is sent. `@xmldom/xmldom` becomes a dependency.
+
 ### Development
 
 - `Saml2BearerProvider` is tested against a real Cloud Foundry UAA — the
@@ -28,7 +42,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   token with the saml2-bearer token when the client may hold one, and the
   provider spends it without running its authorization strategy.
   `@mcp-abap-adt/auth-mocks` becomes a devDependency, for signing the
-  assertions. Nothing in the published package changes.
+  assertions. The stand itself is not published.
 
 ## [2.2.2] - 2026-09-24
 

@@ -78,6 +78,7 @@ src/
 │   ├── browserAuth.ts        # UAA URL building, code exchange, browser launch
 │   ├── oidcBrowserAuth.ts    # OIDC callback factory
 │   ├── saml2Auth.ts          # SAML callback factory, AuthnRequest building
+│   ├── samlBearerAssertion.ts  # SAMLResponse → one base64url Assertion (RFC 7522)
 │   └── …                     # oidcToken, oidcDiscovery, oidcPkce, deviceFlowAuth, …
 ├── sso/                      # SsoProviderFactory
 └── errors/TokenProviderErrors.ts

@@ -14,6 +14,7 @@ import {
   exchangeSamlAssertion,
   refreshSamlBearerToken,
 } from '../auth/saml2TokenExchange';
+import { toBearerAssertion } from '../auth/samlBearerAssertion';
 import { BaseTokenProvider } from './BaseTokenProvider';
 import type {
   Saml2BearerExchangeConfig,
@@ -60,8 +61,10 @@ export class Saml2BearerProvider extends BaseTokenProvider {
   protected async performLogin(): Promise<ITokenResult> {
     const samlResponse = await getSamlAssertion(this.config);
     const tokenUrl = resolveTokenUrl(this.config);
+    // RFC 7522 takes one base64url Assertion; a login delivers the whole
+    // Response in standard base64, which a conforming endpoint refuses.
     const tokens = await exchangeSamlAssertion(
-      samlResponse,
+      toBearerAssertion(samlResponse),
       tokenUrl,
       this.config.clientId,
       this.config.clientSecret,
