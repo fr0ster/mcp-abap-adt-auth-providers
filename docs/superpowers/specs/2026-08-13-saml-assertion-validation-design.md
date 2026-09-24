@@ -201,8 +201,9 @@ export interface ShippedValidatorOptions {
 
 /**
  * Requires the signature to cover the `Response`. All twelve checks are then
- * controls. This is what a provider builds when the consumer configures no
- * validator of their own.
+ * controls. `Saml2PureProvider`'s default: what it builds when the consumer
+ * configures no validator of their own. `Saml2BearerProvider` defaults to
+ * `createSignedAssertionValidator` instead.
  */
 export function createSignedResponseValidator(
   options: ShippedValidatorOptions,
@@ -238,11 +239,13 @@ looks:
 - **`Response/Issuer`** — the assertion's own `Issuer` is checked against
   `expectedIssuer` inside the signature.
 
-A consumer whose identity provider signs only assertions selects the second
-validator explicitly and can read, in one sentence, what they gave up. A
-consumer who selects nothing gets the strict one and a refusal naming the
-remedy — which is the outcome we want for somebody who has not thought about
-it yet.
+A consumer of `Saml2PureProvider` whose identity provider signs only
+assertions selects the second validator explicitly and can read, in one
+sentence, what they gave up. A `Saml2PureProvider` consumer who selects nothing
+gets the strict one and a refusal naming the remedy — which is the outcome we
+want for somebody who has not thought about it yet. `Saml2BearerProvider` is
+the exception: a consumer who selects nothing gets the assertion-only
+validator, for the reason given in the next section.
 
 ### A bare Assertion, and which validator each provider defaults to
 
@@ -408,7 +411,7 @@ an in-memory default is right for one long-lived process and useless across
 several, and a consumer running more than one replaces it with a shared store
 without rewriting validation.
 
-## What the default checks, and in what order
+## What the shipped validators check, and in what order
 
 Each step has its own refusal reason. No two share a message, so no test can
 pass for a neighbouring check's reason — a lesson the `auth-mocks` work paid

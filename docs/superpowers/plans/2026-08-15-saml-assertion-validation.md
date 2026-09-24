@@ -1392,7 +1392,8 @@ export interface ShippedValidatorOptions {
 /**
  * Requires the signature to cover the `Response`. All checks are then
  * controls, because every field they read is inside the signature. This is
- * what a provider builds when the consumer configures no validator.
+ * `Saml2PureProvider`'s default: what it builds when the consumer configures no
+ * validator. `Saml2BearerProvider` defaults to `createSignedAssertionValidator`.
  */
 export function createSignedResponseValidator(
   options: ShippedValidatorOptions,
@@ -1593,7 +1594,7 @@ const context = {
   expectedIssuer: ISSUER,
 };
 
-/** The default: requires the Response to be signed. */
+/** Saml2PureProvider's default: requires the Response to be signed. */
 const validator = (over: Partial<{ clockSkewMs: number }> = {}) =>
   createSignedResponseValidator({
     idpCertificates: [KEY.certificatePem],
@@ -1609,7 +1610,7 @@ const assertionValidator = (over: Partial<{ clockSkewMs: number }> = {}) =>
     ...over,
   });
 
-describe("the default assertion validator", () => {
+describe("the signed-Response validator (Saml2PureProvider's default)", () => {
   it("refuses a malformed certificate at construction, not at login", () => {
     expect(() =>
       createSignedResponseValidator({ idpCertificates: ["AAAA"] }),
@@ -1668,10 +1669,10 @@ describe("the default assertion validator", () => {
     ).rejects.toMatchObject({ check: "signedNode" });
   });
 
-  // The three fields it does not read. Each is a refusal for the default
-  // validator and an acceptance here, and both halves need pinning: a
-  // validator that silently dropped a check and one documented as not
-  // performing it look identical from outside.
+  // The three fields it does not read. Each is a refusal for the
+  // signed-Response validator and an acceptance here, and both halves need
+  // pinning: a validator that silently dropped a check and one documented as
+  // not performing it look identical from outside.
   it("the assertion-only validator accepts a failed Status", async () => {
     const result = await assertionValidator().validate(
       encode(
@@ -3147,7 +3148,7 @@ Also update the "Package responsibilities" section — this package now validate
 
 - [ ] **Step 3: Changelog and version**
 
-`4.0.0` — 3.0.0 has shipped without this work. Major: the configuration is required, `buildSamlAuthorizationUrl` changed shape, `parseSamlNotOnOrAfter` is gone, `interfaces-auth` moves to `^2.0.0`, and an identity provider returning a non-`Success` status is now refused where it was previously accepted. Write a migration note saying exactly what a consumer on 3.x must add — including `idpInitiated: true` for `Saml2BearerProvider` against UAA or XSUAA.
+`4.0.0` — 3.0.0 has shipped without this work. Major: the configuration is required, `buildSamlAuthorizationUrl` changed shape, `parseSamlNotOnOrAfter` is gone, `interfaces-auth` moves to `^2.0.0`, and, under `createSignedResponseValidator` — `Saml2PureProvider`'s default — an identity provider returning a non-`Success` status is now refused where it was previously accepted. `Saml2BearerProvider`'s default, `createSignedAssertionValidator`, does not read `Status`, so a bearer consumer sees no change there; say so, so nobody on the bearer path goes looking for it. Write a migration note saying exactly what a consumer on 3.x must add — including `idpInitiated: true` for `Saml2BearerProvider` against UAA or XSUAA.
 
 - [ ] **Step 4: Verify**
 
