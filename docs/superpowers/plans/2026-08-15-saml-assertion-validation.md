@@ -90,7 +90,7 @@ Do not re-derive these; do verify anything you depend on that is not listed.
 - Modify `src/auth/saml2Auth.ts` — `buildSamlAuthorizationUrl` returns the minted request ID; `parseSamlNotOnOrAfter` is deleted.
 - Modify `src/providers/saml2Utils.ts` — new config fields; `getSamlAssertion` yields the request ID alongside the payload.
 - Modify `src/providers/Saml2PureProvider.ts`, `src/providers/Saml2BearerProvider.ts` — run the validator.
-- Modify `src/index.ts` — export the default validator, the store factory and the error.
+- Modify `src/index.ts` — export both shipped validators, the store factory and the error.
 
 The pure modules are separate because each is a rule with its own failure modes, and because `assertionValidator.ts` would otherwise be a file nobody can hold in their head — the check table alone is twelve steps.
 
@@ -1452,7 +1452,9 @@ verified, and that is worse than an absence anyone can see.
 
 A consumer who needs `Status`, `Destination` and the response issuer verified
 must therefore require their identity provider to sign the `Response` and use
-the default validator; the README says so in Task 13.
+the signed-Response validator — `Saml2PureProvider`'s default; with
+`Saml2BearerProvider`, whose default is the assertion-only one, by passing it as
+`assertionValidator`. The README says so in Task 13.
 
 **This is the largest file in the plan, and its shape is fixed by the spec's check table.** Implement the checks in the table's order, each throwing `AssertionValidationError` with its own `check` value and its own message. No two messages may share a distinguishing fragment: a test asserting `/Destination/` must not be satisfiable by the `Recipient` refusal.
 
@@ -1496,7 +1498,8 @@ function buildResponse(
     confirmations?: string[] | null;
     destination?: string | null;
     /**
-     * Defaults to `"response"`, because the default validator requires it.
+     * Defaults to `"response"`, because the signed-Response validator — this
+     * suite's main subject, and `Saml2PureProvider`'s default — requires it.
      * A fixture signing the assertion while the test runs the signed-Response
      * validator fails at `signedNode` before reaching the check it was written
      * for — every negative case would then pass for the wrong reason.
@@ -3116,13 +3119,19 @@ From `src/index.ts`: `createSignedResponseValidator`, `createSignedAssertionVali
 - that SAML assertions are now validated, and that this is a **breaking change**: a consumer must supply `idpCertificates` and `idpEntityId`, or their own `assertionValidator`;
 - the twelve checks, as the spec's table;
 - that `parseSamlNotOnOrAfter` is gone and expiry now comes from the verified document;
-- the request-ID rule: when the package does not build the request, `authnRequestId` is required, with the two flows that trigger it;
+- the request-ID rule: when the package does not build the request, `authnRequestId` is required, with the two flows that trigger it — unless the login is declared `idpInitiated`, which Saml2BearerProvider against UAA or XSUAA needs, since both refuse an assertion carrying `InResponseTo`; say what `idpInitiated` gives up (the login-CSRF defence of a request ID) and that it must never be inferred;
 - that the default replay store is **process-wide**, what that does and does not protect, and how to replace it;
 - **the choice between the two validators**, which is the first thing a
-  consumer must make. `createSignedResponseValidator` is the default and
-  requires the identity provider to sign the `Response`;
-  `createSignedAssertionValidator` accepts a signature over the `Assertion` and
-  **does not read** `Status`, `Response/Issuer` or `Destination` at all. Say
+  consumer must make, and **the defaults differ by provider**:
+  `Saml2PureProvider` uses `createSignedResponseValidator`, which requires the
+  identity provider to sign the `Response`; `Saml2BearerProvider` uses
+  `createSignedAssertionValidator`, which accepts a signature over the
+  `Assertion` — bare or inside a Response — and **does not read** `Status`,
+  `Response/Issuer` or `Destination` at all. Say why the bearer default is
+  the assertion one: the token endpoint receives the Assertion alone, so its
+  own signature is what counts, and configuring the signed-Response validator
+  there would refuse a bare Assertion and accept responses the endpoint then
+  refuses. Say
   which identity providers need the second — those that sign only assertions,
   which is many — and say what is given up. Say plainly why it is still sound:
   a declined login carries no assertion to sign, and addressing rests on

@@ -164,9 +164,11 @@ common case.
 
 - **`createSignedResponseValidator`** requires the signature to cover the
   `Response`. All twelve checks are then controls, because every field they
-  read is inside the signature. This is the default: it is the stronger
-  contract, and a package whose thesis is strictness should not make the weaker
-  one the thing you get by not deciding.
+  read is inside the signature. It is `Saml2PureProvider`'s default: it is the
+  stronger contract, and a package whose thesis is strictness should not make
+  the weaker one the thing you get by not deciding. `Saml2BearerProvider`
+  defaults to the other one, for a reason of its own — see "A bare Assertion,
+  and which validator each provider defaults to".
 - **`createSignedAssertionValidator`** accepts a signature covering the
   `Assertion`. It does not check `Status`, `Response/Issuer` or `Destination`
   **at all** — not "checks them weakly". Performing a check on a field an
@@ -609,11 +611,11 @@ request ID it minted, since the ID must survive to validation.
 `Saml2PureProvider`'s `expiresAt` therefore comes from a different source.
 
 A consumer whose identity provider returns non-`Success` responses will see
-them refused **under the default validator** — `createSignedResponseValidator`,
-which reads `Status`. Under `createSignedAssertionValidator` they are not
-refused for that reason, because it does not read `Status`; they are refused,
-if at all, for want of a validly signed assertion, which a declining identity
-provider does not mint. Stating this without the qualifier, as an earlier draft
+them refused **under `createSignedResponseValidator`**, which reads `Status` —
+`Saml2PureProvider`'s default. Under `createSignedAssertionValidator` —
+`Saml2BearerProvider`'s default — they are not refused for that reason, because
+it does not read `Status`; they are refused, if at all, for want of a validly
+signed assertion, which a declining identity provider does not mint. Stating this without the qualifier, as an earlier draft
 did, would have promised behaviour one of the two shipped validators does not
 have.
 
