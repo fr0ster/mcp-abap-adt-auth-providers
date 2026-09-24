@@ -8,7 +8,6 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 - **`ClientCredentialsProvider`** — `client_credentials`, no user interaction
 - **`AuthorizationCodeProvider`** — UAA authorization code, interactive
-- **`DeviceFlowProvider`** — UAA device flow, interactive but headless
 - **`OidcBrowserProvider`** — OIDC authorization code with PKCE, interactive
 - **`OidcDeviceFlowProvider`**, **`OidcPasswordProvider`**, **`OidcTokenExchangeProvider`**
 - **`Saml2BearerProvider`** — SAML assertion exchanged for an OAuth2 token
@@ -80,7 +79,7 @@ src/
 │   ├── oidcBrowserAuth.ts    # OIDC callback factory
 │   ├── saml2Auth.ts          # SAML callback factory, AuthnRequest building
 │   ├── samlBearerAssertion.ts  # SAMLResponse → one base64url Assertion (RFC 7522)
-│   └── …                     # oidcToken, oidcDiscovery, oidcPkce, deviceFlowAuth, …
+│   └── …                     # oidcToken, oidcDiscovery, oidcPkce, passcodeAuth, …
 ├── sso/                      # SsoProviderFactory
 └── errors/TokenProviderErrors.ts
 ```
@@ -109,7 +108,7 @@ Ship-default strategies: `browserCallbackStrategy`, `oidcCallbackStrategy`, `sam
 
 **Unit tests** mock axios or the module boundary. **Integration tests** need `tests/test-config.yaml` (copy `tests/test-config.yaml.template`) and skip without it.
 
-**The provider stand** (`tests/stand/`; `npm run test:stand` starts it, runs the suites and stops it, and CI runs the same as its own job) runs Cloud Foundry UAA and Keycloak in Docker: real token endpoints for every provider but `DeviceFlowProvider` (whose `/oauth/device_authorization` neither serves) and `Saml2PureProvider`'s cookie half. UAA carries a SAML identity provider whose key the tests sign with; Keycloak imports the `test` realm from `tests/stand/keycloak/realm-test.json`. Both servers' configuration, and the test IdP's key, are committed fixtures — not secrets, trusted by nothing but the local stand — so a clone needs only Docker. The UAA suite takes the issuer from UAA's discovery and the bearer Recipient from its SAML metadata, never from `UAA_URL`, which is what keeps `UAA_PORT` working with a committed configuration. `src/__tests__/integration/stand/formLogin.ts` plays the user on each server's login and consent pages. It needs no SAP system, so it is the place to prove anything about a provider's wire contract. The suites run only when `UAA_URL` / `KEYCLOAK_URL` are set; `test:stand` sets both. A server already running — from `npm run stand:up` or started by hand — is left running; `run.sh` removes only the servers it started itself, per service.
+**The provider stand** (`tests/stand/`; `npm run test:stand` starts it, runs the suites and stops it, and CI runs the same as its own job) runs Cloud Foundry UAA and Keycloak in Docker: real token endpoints for every provider but `Saml2PureProvider`'s cookie half. UAA carries a SAML identity provider whose key the tests sign with; Keycloak imports the `test` realm from `tests/stand/keycloak/realm-test.json`. Both servers' configuration, and the test IdP's key, are committed fixtures — not secrets, trusted by nothing but the local stand — so a clone needs only Docker. The UAA suite takes the issuer from UAA's discovery and the bearer Recipient from its SAML metadata, never from `UAA_URL`, which is what keeps `UAA_PORT` working with a committed configuration. `src/__tests__/integration/stand/formLogin.ts` plays the user on each server's login and consent pages. It needs no SAP system, so it is the place to prove anything about a provider's wire contract. The suites run only when `UAA_URL` / `KEYCLOAK_URL` are set; `test:stand` sets both. A server already running — from `npm run stand:up` or started by hand — is left running; `run.sh` removes only the servers it started itself, per service.
 
 Two conventions worth knowing, each of which has cost a debugging round:
 

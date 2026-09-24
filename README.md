@@ -575,14 +575,12 @@ The exchange is the password grant with `passcode` instead of a username and
 password — a UAA extension, not an RFC. A code is single-use; a mistyped or
 spent one fails with `Passcode exchange failed (401): Invalid passcode`.
 
-#### DeviceFlowProvider
+#### Device flow prompts
 
-`DeviceFlowProviderConfig` now accepts `logger?: ILogger`. The verification URI
-and the user code are a prompt the user must see, not a log line: they go to the
-logger when one is supplied and to **stderr** otherwise. They no longer go to
-stdout — capturing stdout to read the device code will read nothing, and the
-change exists because stdout carries protocol traffic under an MCP or LSP stdio
-transport. `OidcDeviceFlowProvider` behaves the same way.
+`OidcDeviceFlowProvider` accepts `logger?: ILogger`. The verification URI and
+the user code are a prompt the user must see, not a log line: they go to the
+logger when one is supplied and to **stderr** otherwise — never to stdout,
+which carries protocol traffic under an MCP or LSP stdio transport.
 
 #### Callback port and lifetime
 
@@ -807,9 +805,11 @@ Three more changes that are not fields:
   an explicit choice; otherwise the paste form on `/` is the remaining fallback
   for a browser on another machine.
 - **Device flow prompts no longer go to stdout.** `DeviceFlowProviderConfig`
-  accepts `logger?: ILogger`; the verification URI and user code go to that
+  accepted `logger?: ILogger`; the verification URI and user code go to that
   logger, or to stderr when there is none. Anything that captured stdout to read
-  the device code must read stderr or supply a logger.
+  the device code must read stderr or supply a logger. (`DeviceFlowProvider`
+  itself was removed in 3.0.0 — see the changelog; `OidcDeviceFlowProvider`
+  behaves the same way.)
 - **A `/callback` carrying neither a code nor an error no longer ends the
   login.** It is answered and counted, and the tally appears in the timeout
   message if the login later expires.
@@ -911,9 +911,8 @@ that local stand; they are not secrets, and must not be reused.
 Interactive logins are played by `src/__tests__/integration/stand/formLogin.ts`,
 which submits each server's own login and consent forms over HTTP.
 
-Not covered: `DeviceFlowProvider`, which calls `/oauth/device_authorization` — a
-path neither server serves; and the cookie half of `Saml2PureProvider`, which
-belongs to the consumer's `cookieProvider` and needs a real SAP system.
+Not covered: the cookie half of `Saml2PureProvider`, which belongs to the
+consumer's `cookieProvider` and needs a real SAP system.
 
 A plain `npm test` skips these suites: they run only with `UAA_URL` or
 `KEYCLOAK_URL` set, which `test:stand` does.

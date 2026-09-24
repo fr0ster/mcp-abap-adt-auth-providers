@@ -10,8 +10,6 @@ export { AuthorizationCodeProvider } from './AuthorizationCodeProvider';
 export { BaseTokenProvider } from './BaseTokenProvider';
 export type { ClientCredentialsProviderConfig } from './ClientCredentialsProvider';
 export { ClientCredentialsProvider } from './ClientCredentialsProvider';
-export type { DeviceFlowProviderConfig } from './DeviceFlowProvider';
-export { DeviceFlowProvider } from './DeviceFlowProvider';
 export type { OidcBrowserProviderConfig } from './OidcBrowserProvider';
 export { OidcBrowserProvider } from './OidcBrowserProvider';
 export type { OidcDeviceFlowProviderConfig } from './OidcDeviceFlowProvider';

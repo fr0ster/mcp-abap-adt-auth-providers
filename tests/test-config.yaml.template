@@ -4,7 +4,7 @@
 #
 # Integration tests use this config to:
 # - Load service keys and session files
-# - Test all provider scenarios (AuthorizationCodeProvider, DeviceFlowProvider, ClientCredentialsProvider)
+# - Test all provider scenarios (AuthorizationCodeProvider, ClientCredentialsProvider)
 #
 # Test scenarios covered:
 # 1. Only service key (no session) - provider should login/authenticate
