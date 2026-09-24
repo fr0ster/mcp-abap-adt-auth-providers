@@ -169,8 +169,8 @@ export async function runCallbackScope<TResult, TReturn>(
       server.close(() => finish());
       setTimeout(() => {
         if (finished) return;
-        // Grace expired — on Node 18.x `close()` does not end idle connections,
-        // and an active one may simply be stuck. Force it, bounded.
+        // Grace expired — an active connection may simply be stuck. Force it,
+        // bounded.
         server.closeIdleConnections?.();
         server.closeAllConnections?.();
         for (const socket of sockets) socket.destroy();
