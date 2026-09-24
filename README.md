@@ -382,7 +382,8 @@ const broker = new AuthBroker({ tokenProvider: provider }, 'none');
 base64url-encoded (RFC 7522 §2.1). A strategy may deliver either that or the
 whole `SAMLResponse` an identity provider posts, in standard base64 —
 `Saml2BearerProvider` takes the Assertion out of a Response and re-encodes it,
-declaring any namespace the Assertion only inherited. The Assertion must carry
+copying onto it every namespace declaration it inherited — including one used
+only inside a value such as `xsi:type="xs:string"`. The Assertion must carry
 its own signature: one over the Response alone does not survive the cut, and
 the token endpoint refuses the Assertion. An `EncryptedAssertion` is refused
 before anything is sent.

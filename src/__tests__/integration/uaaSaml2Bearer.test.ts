@@ -39,7 +39,7 @@ function signedAssertionXml(): string {
   const notBefore = new Date(now.getTime() - 5_000);
   const recipient = `${UAA_URL}/oauth/token/alias/uaa-sp`;
   const assertion =
-    `<saml2:Assertion xmlns:saml2="urn:oasis:names:tc:SAML:2.0:assertion" ID="_${randomUUID()}" IssueInstant="${iso(now)}" Version="2.0">` +
+    `<saml2:Assertion xmlns:saml2="urn:oasis:names:tc:SAML:2.0:assertion" xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" ID="_${randomUUID()}" IssueInstant="${iso(now)}" Version="2.0">` +
     '<saml2:Issuer>test-idp</saml2:Issuer>' +
     '<saml2:Subject><saml2:NameID Format="urn:oasis:names:tc:SAML:1.1:nameid-format:unspecified">bearer-user</saml2:NameID>' +
     '<saml2:SubjectConfirmation Method="urn:oasis:names:tc:SAML:2.0:cm:bearer">' +
@@ -49,7 +49,11 @@ function signedAssertionXml(): string {
     '<saml2:AudienceRestriction><saml2:Audience>uaa-sp</saml2:Audience></saml2:AudienceRestriction></saml2:Conditions>' +
     `<saml2:AuthnStatement AuthnInstant="${iso(now)}" SessionIndex="s1"><saml2:AuthnContext>` +
     '<saml2:AuthnContextClassRef>urn:oasis:names:tc:SAML:2.0:ac:classes:Password</saml2:AuthnContextClassRef>' +
-    '</saml2:AuthnContext></saml2:AuthnStatement></saml2:Assertion>';
+    '</saml2:AuthnContext></saml2:AuthnStatement>' +
+    // `xs` appears only inside an attribute value, as IdPs typically write it.
+    '<saml2:AttributeStatement><saml2:Attribute Name="role">' +
+    '<saml2:AttributeValue xsi:type="xs:string">tester</saml2:AttributeValue>' +
+    '</saml2:Attribute></saml2:AttributeStatement></saml2:Assertion>';
   return signXml(assertion, key);
 }
 
@@ -60,17 +64,25 @@ function bearerAssertion(): string {
 /**
  * What a browser or ACS login actually delivers: the IdP's whole
  * `samlp:Response`, in standard base64. The `saml2` prefix is declared on the
- * Response only, so the Assertion inside relies on an inherited namespace —
- * the case that breaks a naive cut-out of the Assertion's text.
+ * Response only, so the Assertion inside relies on inherited namespaces —
+ * `saml2` and `xsi` used in names, and `xs` used only inside the value of
+ * `xsi:type`, which a serializer does not see as a namespace use.
  */
 function samlResponse(): string {
-  const assertion = signedAssertionXml().replace(
+  const declarations = [
     ' xmlns:saml2="urn:oasis:names:tc:SAML:2.0:assertion"',
-    '',
+    ' xmlns:xs="http://www.w3.org/2001/XMLSchema"',
+    ' xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"',
+  ];
+  // Signed first, then moved: exclusive canonicalisation does not depend on
+  // where a namespace is declared, so the signature still holds.
+  const assertion = declarations.reduce(
+    (xml, declaration) => xml.replace(declaration, ''),
+    signedAssertionXml(),
   );
   const response =
     '<samlp:Response xmlns:samlp="urn:oasis:names:tc:SAML:2.0:protocol" ' +
-    'xmlns:saml2="urn:oasis:names:tc:SAML:2.0:assertion" ' +
+    `${declarations.join('').trim()} ` +
     `ID="_${randomUUID()}" Version="2.0" IssueInstant="${new Date().toISOString()}">` +
     '<saml2:Issuer>test-idp</saml2:Issuer>' +
     '<samlp:Status><samlp:StatusCode Value="urn:oasis:names:tc:SAML:2.0:status:Success"/></samlp:Status>' +

@@ -26,8 +26,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `SAMLResponse` in standard base64 — where §2.1 takes one Assertion,
   base64url-encoded. Cloud Foundry UAA answers 401 to a Response in either
   encoding, so the provider could not get a token through any interactive
-  strategy. It now takes the Assertion out of a Response (declaring any
-  namespace it only inherited, and keeping its signature) and sends it
+  strategy. It now takes the Assertion out of a Response (copying onto it
+  every namespace declaration it inherited, including one used only inside an
+  `xsi:type` value, and keeping its signature) and sends it
   base64url-encoded; a bare Assertion in either encoding is re-encoded. A
   Response with no Assertion, several, or only an `EncryptedAssertion` is
   refused before anything is sent. `@xmldom/xmldom` becomes a dependency.

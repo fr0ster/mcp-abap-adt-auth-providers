@@ -59,6 +59,38 @@ describe('toBearerAssertion', () => {
     expect(root?.getElementsByTagNameNS(ASSERTION_NS, 'NameID').length).toBe(1);
   });
 
+  it('declares a namespace used only inside an attribute value (xsi:type QName)', () => {
+    const xml =
+      '<samlp:Response xmlns:samlp="urn:oasis:names:tc:SAML:2.0:protocol" ' +
+      `xmlns:saml2="${ASSERTION_NS}" ` +
+      'xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:types="urn:example:types">' +
+      '<saml2:Assertion ID="_a1"><saml2:AttributeStatement><saml2:Attribute Name="role">' +
+      '<saml2:AttributeValue xsi:type="types:Role">admin</saml2:AttributeValue>' +
+      '</saml2:Attribute></saml2:AttributeStatement></saml2:Assertion></samlp:Response>';
+
+    const root = decoded(toBearerAssertion(b64(xml)));
+
+    // A serializer carries prefixes used in names; `types` is used only in a
+    // value, so it has to be declared on purpose.
+    expect(root?.lookupNamespaceURI('types')).toBe('urn:example:types');
+    const value = root?.getElementsByTagNameNS(
+      ASSERTION_NS,
+      'AttributeValue',
+    )[0];
+    expect(value?.getAttribute('xsi:type')).toBe('types:Role');
+  });
+
+  it('keeps a declaration the Assertion makes itself over an ancestor’s', () => {
+    const xml =
+      '<samlp:Response xmlns:samlp="urn:oasis:names:tc:SAML:2.0:protocol" ' +
+      `xmlns:saml2="${ASSERTION_NS}" xmlns:t="urn:outer">` +
+      '<saml2:Assertion xmlns:t="urn:inner" ID="_a1"/></samlp:Response>';
+
+    const root = decoded(toBearerAssertion(b64(xml)));
+
+    expect(root?.lookupNamespaceURI('t')).toBe('urn:inner');
+  });
+
   it('re-encodes a bare Assertion sent in standard base64', () => {
     const xml = assertion();
     expect(toBearerAssertion(b64(xml))).toBe(b64url(xml));

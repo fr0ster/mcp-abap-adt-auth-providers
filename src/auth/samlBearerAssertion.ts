@@ -8,11 +8,15 @@
  * 401 to a Response in either encoding. So the Assertion is taken out of the
  * Response here and re-encoded.
  *
- * The Assertion is serialised as an element of its own. A namespace it only
- * inherited from the Response is declared on it, so it still parses — and its
- * signature, computed over exclusive canonical XML, still verifies, since
- * exclusive canonicalisation renders the namespaces an element uses no matter
- * where they were declared. A signature over the Response alone does not
+ * The Assertion is serialised as an element of its own, and every namespace
+ * declaration it inherited from the Response is copied onto it first. A
+ * serializer would add back only the prefixes used in element and attribute
+ * names; a prefix used only inside a value — `xsi:type="xs:string"` — would be
+ * lost, leaving a QName that no longer resolves. Copying all of them keeps the
+ * Assertion's in-scope namespaces exactly what they were. Its signature, over
+ * exclusive canonical XML, still verifies: canonicalisation renders a
+ * namespace where it is used, or where the signature's InclusiveNamespaces
+ * names it, not where it was declared. A signature over the Response alone does not
  * survive the cut; the token endpoint then refuses the Assertion, as it
  * would any unsigned one.
  */
@@ -69,7 +73,9 @@ export function toBearerAssertion(payload: string): string {
     );
   }
 
-  const serialized = new XMLSerializer().serializeToString(assertions[0]);
+  const assertion = assertions[0];
+  declareInheritedNamespaces(assertion);
+  const serialized = new XMLSerializer().serializeToString(assertion);
   return Buffer.from(serialized, 'utf8').toString('base64url');
 }
 
@@ -81,6 +87,42 @@ function isElement(
   return (
     !!node && node.namespaceURI === namespace && node.localName === localName
   );
+}
+
+const XMLNS_NS = 'http://www.w3.org/2000/xmlns/';
+
+const isNamespaceDeclaration = (name: string): boolean =>
+  name === 'xmlns' || name.startsWith('xmlns:');
+
+/**
+ * Copies onto `element` every namespace declaration in scope from its
+ * ancestors that it does not make itself. Ancestors are walked innermost
+ * first, so the nearest declaration of a prefix wins, as it did in place.
+ */
+function declareInheritedNamespaces(element: Element): void {
+  const declared = new Set<string>();
+  for (let i = 0; i < element.attributes.length; i++) {
+    const name = element.attributes.item(i)?.name;
+    if (name && isNamespaceDeclaration(name)) declared.add(name);
+  }
+  for (
+    let ancestor = element.parentNode;
+    ancestor && ancestor.nodeType === 1;
+    ancestor = ancestor.parentNode
+  ) {
+    const attributes = (ancestor as Element).attributes;
+    for (let i = 0; i < attributes.length; i++) {
+      const attribute = attributes.item(i);
+      if (
+        attribute &&
+        isNamespaceDeclaration(attribute.name) &&
+        !declared.has(attribute.name)
+      ) {
+        element.setAttributeNS(XMLNS_NS, attribute.name, attribute.value);
+        declared.add(attribute.name);
+      }
+    }
+  }
 }
 
 function childElements(parent: Element): Element[] {
