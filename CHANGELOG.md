@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Breaking
+
+- **Node.js `>=22`** (was `>=18.2.0`). The supported versions now follow SAP
+  BTP, Cloud Foundry, whose Node.js buildpack offers 22 and 24: Node 18 reached
+  its end of life on 30 April 2025 and Node 20 on 30 April 2026, and SAP has
+  removed 20 from Cloud Foundry. CI tests on 22 and 24 instead of 18.
+
+  **Migrating:** run on Node 22 or later. Nothing in the API changed.
+
 ### Development
 
 - `Saml2BearerProvider` is tested against a real Cloud Foundry UAA — the

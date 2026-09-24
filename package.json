@@ -59,7 +59,7 @@
     "test:uaa": "tests/uaa/run.sh"
   },
   "engines": {
-    "node": ">=18.2.0"
+    "node": ">=22"
   },
   "dependencies": {
     "@mcp-abap-adt/interfaces-auth": "^1.2.0",

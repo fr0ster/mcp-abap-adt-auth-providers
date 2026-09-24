@@ -22,7 +22,7 @@
 - **Absent is refused, not skipped.** A rule phrased "present and not X" is one an attacker satisfies by deleting the field. Every field the check table names refuses when it is missing.
 - **Every rule gets a test that fails when the rule is deleted.** For a conjunction, mutate **each half separately** — a whole-block mutation cannot tell you which half is load-bearing.
 - **Assert on a message fragment unique to the rule.** A shared prefix kept a test green after the rule it protected was deleted, twice, during the `auth-mocks` cycle.
-- Node ≥18, CommonJS, TypeScript `strict: true`.
+- Node ≥22, CommonJS, TypeScript `strict: true`.
 - `npm run lint:check`, `npm run build`, `npm run test:check` and `npm test` pass before every commit.
 - The agent never runs `npm publish`, never merges a PR, and never creates a tag before a merge exists.
 

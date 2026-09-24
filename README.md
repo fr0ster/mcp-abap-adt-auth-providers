@@ -908,7 +908,9 @@ Example output:
 - `express` - OAuth2 callback server
 - `open` - Browser opening utility
 
-Requires Node.js `>=18.2.0`.
+Requires Node.js `>=22`. The supported versions follow SAP BTP, Cloud Foundry,
+whose Node.js buildpack offers 22 and 24; CI tests both. Versions past their
+end of life are dropped.
 
 ## License
 
