@@ -122,6 +122,23 @@ oauth:
   user:
     authorities: [openid, uaa.user]
   clients:
+    # The UAA suite registers Keycloak as a SAML identity provider at run time,
+    # from the metadata Keycloak publishes — its keys are generated per start.
+    stand_admin:
+      id: stand_admin
+      secret: secret
+      authorized-grant-types: client_credentials
+      authorities: 'idps.read,idps.write'
+    # Saml2BearerProvider end to end: an assertion Keycloak issued after a real
+    # login, exchanged here.
+    saml_kc:
+      id: saml_kc
+      secret: secret
+      authorized-grant-types: 'urn:ietf:params:oauth:grant-type:saml2-bearer,refresh_token'
+      scope: 'openid,uaa.user'
+      authorities: uaa.none
+      autoapprove: 'true'
+      allowedproviders: [keycloak]
     # ClientCredentialsProvider.
     cc_client:
       id: cc_client

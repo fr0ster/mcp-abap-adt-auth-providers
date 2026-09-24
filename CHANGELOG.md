@@ -71,6 +71,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Keycloak: `OidcPasswordProvider` with refresh, `OidcBrowserProvider` with
     S256 PKCE, `OidcDeviceFlowProvider`, `OidcTokenExchangeProvider`
     (RFC 8693).
+  - Keycloak as the SAML identity provider: `Saml2BearerProvider` end to end
+    into UAA, with no assertion built by the tests, and the identity-provider
+    half of `Saml2PureProvider`. This showed that UAA's bearer grant refuses
+    the answer to an SP-initiated login for its `InResponseTo`, and accepts an
+    IdP-initiated one; the README says so under `Saml2BearerProvider`.
   - Interactive logins go through each server's own login and consent pages,
     submitted over HTTP by a test helper.
   - Not covered: `DeviceFlowProvider`, whose `/oauth/device_authorization`

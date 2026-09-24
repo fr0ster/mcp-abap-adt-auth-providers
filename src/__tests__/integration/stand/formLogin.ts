@@ -175,6 +175,32 @@ export async function approveDevice(
   await browser.acceptConsent(consent);
 }
 
+/**
+ * A SAML login at an identity provider: open the AuthnRequest URL, log in,
+ * and take the SAMLResponse from the auto-posting form the IdP answers with —
+ * what a browser would post to the assertion consumer service.
+ */
+export async function samlResponseByForm(
+  authnRequestUrl: string,
+  credentials: Credentials,
+): Promise<{ samlResponse: string; acsUrl: string }> {
+  const browser = new FormBrowser();
+  const page = await browser.submitLogin(
+    await browser.open(authnRequestUrl),
+    credentials,
+  );
+  const html = page.html ?? '';
+  const input = [...html.matchAll(/<input\b[^>]*>/gi)]
+    .map((m) => m[0])
+    .find((i) => attribute(i, 'name') === 'SAMLResponse');
+  const samlResponse = input ? attribute(input, 'value') : undefined;
+  const formTag = /<form\b[^>]*>/i.exec(html)?.[0] ?? '';
+  if (!samlResponse) {
+    throw new Error(`no SAMLResponse form on ${page.url}`);
+  }
+  return { samlResponse, acsUrl: attribute(formTag, 'action') ?? '' };
+}
+
 interface LoginForm {
   action: string;
   userField: string;

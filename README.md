@@ -378,6 +378,19 @@ const provider = new Saml2BearerProvider({
 const broker = new AuthBroker({ tokenProvider: provider }, 'none');
 ```
 
+**Who starts the login matters.** An identity provider answering an
+`AuthnRequest` — which is what the provider's own URL, and every shipped SAML
+strategy, sends — puts `InResponseTo` on the assertion's subject
+confirmation. UAA's saml2-bearer grant refuses any assertion that carries it:
+there is no request on its side to match it against, and UAA's
+`disableInResponseToCheck` applies to web SSO only. Measured against Cloud
+Foundry UAA with Keycloak as the identity provider, an SP-initiated login is
+refused with *"SubjectConfirmationData/@InResponseTo … did not match the valid
+value: null"*, and an IdP-initiated one — started at the IdP, answering no
+request — is accepted. Against UAA, supply the assertion from an IdP-initiated
+login, for instance through `externalCodeStrategy` whose `provide` ignores the
+URL it is handed. Whether XSUAA behaves the same has not been verified.
+
 **What is sent.** The saml2-bearer grant takes one SAML Assertion,
 base64url-encoded (RFC 7522 §2.1). A strategy may deliver either that or the
 whole `SAMLResponse` an identity provider posts, in standard base64 —
@@ -894,6 +907,8 @@ it.
 | provider | server | what the suite proves |
 |---|---|---|
 | `Saml2BearerProvider` | UAA | a bearer assertion — and a whole `SAMLResponse` — is exchanged for a token; UAA issues a refresh token exactly when the client may hold one, and the provider refreshes without its authorization strategy |
+| `Saml2BearerProvider` | Keycloak → UAA | end to end with no assertion built by the tests: an IdP-initiated Keycloak login becomes a UAA token; the answer to the provider's own AuthnRequest is refused for its `InResponseTo` |
+| `Saml2PureProvider` | Keycloak | the identity-provider half: Keycloak accepts the provider's AuthnRequest and posts a signed response for that service provider to the ACS it named, which reaches `cookieProvider` unchanged |
 | `ClientCredentialsProvider` | UAA | a client token |
 | `UaaPasscodeProvider` | UAA | a code fetched from `/passcode` after logging in there, exchanged for tokens; a refresh that does not ask for another code; a spent code refused |
 | `AuthorizationCodeProvider` | UAA | a login through UAA's own form, and a refresh without logging in again |
@@ -907,6 +922,12 @@ The servers' configuration is committed as test fixtures —
 test identity provider's key in `tests/stand/uaa/idp/` — so every machine and CI
 run the same stand. The keys and passwords in them are trusted by nothing but
 that local stand; they are not secrets, and must not be reused.
+
+For the Keycloak → UAA case the suite makes UAA trust Keycloak at run time —
+it registers Keycloak as a SAML identity provider through UAA's API, from the
+metadata Keycloak publishes — and configures Keycloak's IdP-initiated SSO to
+post to UAA's bearer ACS, since both depend on the ports and on keys Keycloak
+generates when it starts.
 
 Interactive logins are played by `src/__tests__/integration/stand/formLogin.ts`,
 which submits each server's own login and consent forms over HTTP.
