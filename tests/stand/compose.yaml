@@ -1,7 +1,7 @@
 # The provider test stand: Cloud Foundry UAA — the open-source server XSUAA is
-# built from — and Keycloak, each on the loopback address only. up.sh renders
-# UAA's configuration and keys into .generated/ first; start the stand through
-# that script, or through run.sh.
+# built from — and Keycloak, each on the loopback address only. Their
+# configuration is committed test fixtures: uaa/config and keycloak/. Start the
+# stand through up.sh or run.sh, which also wait until both servers answer.
 services:
   uaa:
     image: docker.io/cfidentity/uaa:v79.7.0
@@ -10,11 +10,9 @@ services:
       - "127.0.0.1:${UAA_PORT:-8080}:8080"
     environment:
       CLOUDFOUNDRY_CONFIG_PATH: /config
-      SECRETS_DIR: /secrets
       SERVER_SERVLET_CONTEXT_PATH: /uaa
     volumes:
-      - ./.generated/config:/config:ro
-      - ./.generated/secrets:/secrets:ro
+      - ./uaa/config:/config:ro
 
   keycloak:
     image: quay.io/keycloak/keycloak:26.7.4

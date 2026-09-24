@@ -6,7 +6,7 @@
  * login goes through UAA's own login form, played by formLogin.ts.
  */
 
-import { describe, expect, it, jest } from '@jest/globals';
+import { beforeAll, describe, expect, it, jest } from '@jest/globals';
 import type { IAuthorizationStrategy } from '@mcp-abap-adt/interfaces-auth';
 import { AuthorizationCodeProvider } from '../../../providers/AuthorizationCodeProvider';
 import { ClientCredentialsProvider } from '../../../providers/ClientCredentialsProvider';
@@ -15,6 +15,18 @@ import { authorizeByForm } from './formLogin';
 
 const UAA_URL = process.env.UAA_URL?.replace(/\/+$/, '');
 const describeUaa = UAA_URL ? describe : describe.skip;
+
+/**
+ * The issuer UAA puts in its tokens, as its own discovery document states it —
+ * not derived from UAA_URL, which may use another port than the committed
+ * configuration names.
+ */
+let uaaIssuer = '';
+beforeAll(async () => {
+  if (!UAA_URL) return;
+  const discovery = await fetch(`${UAA_URL}/.well-known/openid-configuration`);
+  uaaIssuer = ((await discovery.json()) as { issuer: string }).issuer;
+});
 
 const USER = { username: 'tester', password: 'tester' };
 const CALLBACK = 'http://localhost/callback';
@@ -38,7 +50,7 @@ describeUaa('UAA providers against Cloud Foundry UAA', () => {
     }).getTokens();
 
     const token = claims(tokens.authorizationToken);
-    expect(token.iss).toBe(`${UAA_URL}/oauth/token`);
+    expect(token.iss).toBe(uaaIssuer);
     expect(token.grant_type).toBe('client_credentials');
     expect(token.client_id).toBe('cc_client');
   });
@@ -62,7 +74,7 @@ describeUaa('UAA providers against Cloud Foundry UAA', () => {
       }).getTokens();
 
       const token = claims(tokens.authorizationToken);
-      expect(token.iss).toBe(`${UAA_URL}/oauth/token`);
+      expect(token.iss).toBe(uaaIssuer);
       expect(token.grant_type).toBe('authorization_code');
       expect(token.user_name).toBe('tester');
       expect(tokens.refreshToken).toEqual(expect.any(String));

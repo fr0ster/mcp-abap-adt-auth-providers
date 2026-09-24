@@ -836,15 +836,14 @@ The providers are also tested against two real, widely used authorization
 servers running locally in Docker from their official images — [Cloud Foundry
 UAA](https://github.com/cloudfoundry/uaa) (`cfidentity/uaa`), the open-source
 server XSUAA is built from, and [Keycloak](https://www.keycloak.org/)
-(`quay.io/keycloak/keycloak`). It needs `docker` and `openssl`, and no SAP
-system:
+(`quay.io/keycloak/keycloak`). It needs Docker and nothing else — no SAP
+system, no setup step:
 
 ```bash
 npm run test:stand    # start UAA and Keycloak, run the suites, stop both
 ```
 
-`test:stand` renders UAA's configuration and keys into `tests/stand/.generated/`
-on first run, starts both containers with `docker compose`, waits until both
+`test:stand` starts both containers with `docker compose`, waits until both
 answer, runs the suites, and stops the containers again — also when a test
 fails, with the suites' exit code, after printing the last 200 lines of each
 server's log. A full run takes well under a minute. CI runs exactly this as its
@@ -856,7 +855,7 @@ afterwards:
 ```bash
 npm run stand:up      # start and keep running
 npm run test:stand    # as often as needed
-npm run stand:down    # stop; the generated keys stay for the next run
+npm run stand:down    # stop
 ```
 
 `STAND_KEEP=1 npm run test:stand` keeps a stand the run started. `UAA_PORT`
@@ -871,6 +870,12 @@ npm run stand:down    # stop; the generated keys stay for the next run
 | `OidcBrowserProvider` | Keycloak | authorization code with S256 PKCE, which the client requires, through Keycloak's login page |
 | `OidcDeviceFlowProvider` | Keycloak | a token once the user logs in and grants access on Keycloak's device pages, read from the verification URI the provider announces |
 | `OidcTokenExchangeProvider` | Keycloak | RFC 8693: another client's access token exchanged for the requester's own |
+
+The servers' configuration is committed as test fixtures —
+`tests/stand/uaa/config/uaa.yml`, `tests/stand/keycloak/realm-test.json` and the
+test identity provider's key in `tests/stand/uaa/idp/` — so every machine and CI
+run the same stand. The keys and passwords in them are trusted by nothing but
+that local stand; they are not secrets, and must not be reused.
 
 Interactive logins are played by `src/__tests__/integration/stand/formLogin.ts`,
 which submits each server's own login and consent forms over HTTP.
