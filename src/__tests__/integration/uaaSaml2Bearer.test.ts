@@ -10,6 +10,7 @@
  */
 
 import { randomUUID } from 'node:crypto';
+import { setDefaultResultOrder } from 'node:dns';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it, jest } from '@jest/globals';
@@ -17,6 +18,10 @@ import { signXml } from '@mcp-abap-adt/auth-mocks';
 import type { IAuthorizationStrategy } from '@mcp-abap-adt/interfaces-auth';
 import { Saml2BearerProvider } from '../../providers/Saml2BearerProvider';
 import { staticCodeStrategy } from '../../strategies';
+
+// The stand publishes only on 127.0.0.1. Node 18 resolves `localhost` to ::1
+// first and does not fall back, so without this every request is refused.
+setDefaultResultOrder('ipv4first');
 
 const UAA_URL = process.env.UAA_URL?.replace(/\/+$/, '');
 const describeUaa = UAA_URL ? describe : describe.skip;
