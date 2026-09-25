@@ -332,11 +332,22 @@ function createValidator(
         Math.min(conditionsExpiry.getTime(), chosen.notOnOrAfter.getTime()),
       );
 
-      // 12. Replay — retained past the skew window, because inside it the
-      // assertion would still be accepted.
+      // 12. Replay. Retention is NOT expiresAt: it must last for as long as
+      // this validator could accept the assertion again. Conditions bound
+      // that, but so does the LATEST bearer confirmation that can qualify —
+      // with confirmations closing at +120 s and +600 s the session ends at
+      // +120 s, yet at +200 s the second one still qualifies, and an entry
+      // dropped at +120 s would let the same assertion in a second time. The
+      // skew is added on top, since inside it the assertion is still accepted.
+      const retainUntil = new Date(
+        Math.min(
+          conditionsExpiry.getTime(),
+          chosen.latestNotOnOrAfter.getTime(),
+        ) + skew,
+      );
       const fresh = await store.recordIfUnseen(
         { issuer, assertionId },
-        new Date(expiresAt.getTime() + skew),
+        retainUntil,
       );
       if (!fresh) {
         return fail('replay', 'this assertion has been presented before');
@@ -484,14 +495,21 @@ function assertionInside(
  * check nothing in it actually satisfies. When several qualify — which a real
  * identity provider does not produce — the earliest window wins, so the
  * outcome is a shorter session rather than a longer one.
+ *
+ * `latestNotOnOrAfter` answers a different question: until when could some
+ * confirmation let this assertion in? It is the latest `NotOnOrAfter` among
+ * the confirmations that satisfy every non-temporal part — including one whose
+ * `NotBefore` has not arrived yet, since it qualifies once it does. Replay
+ * retention needs that bound, not the session's; see the caller.
  */
 function chooseBearerConfirmation(
   assertion: Element,
   context: AssertionContext,
   skew: number,
-): { notOnOrAfter: Date } | null {
+): { notOnOrAfter: Date; latestNotOnOrAfter: Date } | null {
   const now = Date.now();
   let best: Date | null = null;
+  let latest: Date | null = null;
 
   const subject = directChild(assertion, SAML_NS, 'Subject');
   if (!subject) return null;
@@ -518,16 +536,25 @@ function chooseBearerConfirmation(
 
     const notOnOrAfter = parseXsdDateTime(data.getAttribute('NotOnOrAfter'));
     if (!notOnOrAfter) continue;
-    if (notOnOrAfter.getTime() + skew <= now) continue;
-
     const notBeforeRaw = data.getAttribute('NotBefore');
-    if (notBeforeRaw) {
-      const notBefore = parseXsdDateTime(notBeforeRaw);
-      if (!notBefore || notBefore.getTime() - skew > now) continue;
+    const notBefore = notBeforeRaw ? parseXsdDateTime(notBeforeRaw) : null;
+    if (notBeforeRaw && !notBefore) continue;
+
+    // Could qualify at some instant: counts towards how long to remember.
+    if (!latest || notOnOrAfter.getTime() > latest.getTime()) {
+      latest = notOnOrAfter;
     }
+
+    // Qualifies now: a candidate for the session's window.
+    if (notOnOrAfter.getTime() + skew <= now) continue;
+    if (notBefore && notBefore.getTime() - skew > now) continue;
 
     if (!best || notOnOrAfter.getTime() < best.getTime()) best = notOnOrAfter;
   }
 
-  return best ? { notOnOrAfter: best } : null;
+  // `latest` is set whenever `best` is: every qualifying confirmation was
+  // counted towards it first.
+  return best && latest
+    ? { notOnOrAfter: best, latestNotOnOrAfter: latest }
+    : null;
 }

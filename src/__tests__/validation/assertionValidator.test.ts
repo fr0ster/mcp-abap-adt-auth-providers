@@ -1,4 +1,4 @@
-import { describe, expect, it } from '@jest/globals';
+import { afterEach, describe, expect, it, jest } from '@jest/globals';
 import { generateKeyMaterial, signXml } from '@mcp-abap-adt/auth-mocks';
 import { DOMParser, type Document } from '@xmldom/xmldom';
 import {
@@ -985,6 +985,98 @@ describe("the signed-Response validator (Saml2PureProvider's default)", () => {
       context,
     );
     expect(result.expiresAt.toISOString()).toBe(early);
+  });
+
+  // Replay retention is bounded by the LATEST confirmation that can still let
+  // the assertion in, not by the session's (earliest) window. The reviewer's
+  // case: confirmations closing at +120 s and +600 s, Conditions at +900 s.
+  // At +200 s the first has closed but the second still qualifies, so the
+  // assertion is acceptable again — and the store must still remember it.
+  describe('replay retention across several qualifying confirmations', () => {
+    afterEach(() => {
+      jest.restoreAllMocks();
+    });
+
+    const bearer = (notOnOrAfter: string, notBefore?: string) =>
+      `<saml:SubjectConfirmation Method="urn:oasis:names:tc:SAML:2.0:cm:bearer">` +
+      `<saml:SubjectConfirmationData InResponseTo="${REQUEST_ID}" Recipient="${ACS}" ` +
+      `${notBefore ? `NotBefore="${notBefore}" ` : ''}` +
+      `NotOnOrAfter="${notOnOrAfter}"/></saml:SubjectConfirmation>`;
+
+    it('refuses a replay at +200 s when a later confirmation still qualifies', async () => {
+      const t0 = Date.now();
+      const payload = encode(
+        buildResponse({
+          notOnOrAfter: iso(900_000),
+          confirmations: [bearer(iso(120_000)), bearer(iso(600_000))],
+        }),
+      );
+      const shared = validator();
+
+      const first = await shared.validate(payload, context);
+      // The session still ends with the earliest window.
+      expect(first.expiresAt.getTime()).toBeLessThanOrEqual(t0 + 120_000);
+
+      jest.spyOn(Date, 'now').mockReturnValue(t0 + 200_000);
+      await expect(shared.validate(payload, context)).rejects.toMatchObject({
+        check: 'replay',
+        message: expect.stringMatching(/presented before/),
+      });
+    });
+
+    // A confirmation not open yet at the first presentation qualifies once
+    // its NotBefore arrives, so it bounds retention too.
+    it('refuses a replay once a confirmation that was not yet open qualifies', async () => {
+      const t0 = Date.now();
+      const payload = encode(
+        buildResponse({
+          notOnOrAfter: iso(900_000),
+          confirmations: [
+            bearer(iso(120_000)),
+            bearer(iso(600_000), iso(150_000)),
+          ],
+        }),
+      );
+      const shared = validator();
+
+      await shared.validate(payload, context);
+
+      jest.spyOn(Date, 'now').mockReturnValue(t0 + 200_000);
+      await expect(shared.validate(payload, context)).rejects.toMatchObject({
+        check: 'replay',
+        message: expect.stringMatching(/presented before/),
+      });
+    });
+
+    it('never retains past Conditions, plus skew', async () => {
+      const t0 = Date.now();
+      let retained: Date | undefined;
+      const spyStore = {
+        async recordIfUnseen(_key: unknown, retainUntil: Date) {
+          retained = retainUntil;
+          return true;
+        },
+      };
+      await createSignedResponseValidator({
+        idpCertificates: [KEY.certificatePem],
+        replayStore: spyStore,
+        clockSkewMs: 5_000,
+      }).validate(
+        encode(
+          buildResponse({
+            notOnOrAfter: new Date(t0 + 300_000).toISOString(),
+            confirmations: [
+              bearer(iso(120_000)),
+              bearer(new Date(t0 + 600_000).toISOString()),
+            ],
+          }),
+        ),
+        context,
+      );
+      expect(retained?.getTime()).toBe(
+        new Date(new Date(t0 + 300_000).toISOString()).getTime() + 5_000,
+      );
+    });
   });
 
   it('refuses a Conditions NotBefore that is not a valid xsd:dateTime', async () => {
