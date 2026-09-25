@@ -2071,7 +2071,7 @@ describe("the signed-Response validator (Saml2PureProvider's default)", () => {
 
   // The wrapping shape at the validator level: one genuinely signed assertion,
   // one forged beside it. Reading only the signed one is not enough, because
-  // `raw` travels on to the cookie provider and to UAA.
+  // Saml2PureProvider hands the whole payload to the cookie provider.
   it("refuses a response carrying a second, forged assertion", async () => {
     const forged =
       `<saml:Assertion xmlns:saml="urn:oasis:names:tc:SAML:2.0:assertion" ID="_forged">` +
@@ -2489,10 +2489,12 @@ function assertionInside(
 
   // Whatever was signed, the response must carry exactly one assertion.
   //
-  // Reading only from the signed element is not enough: `raw` — the whole
-  // response — travels on to the cookie provider and to UAA, and they read
-  // whatever is in it. A forged assertion placed beside the signed one must
-  // therefore end the login, not merely be ignored here.
+  // Reading only from the signed element is not enough: Saml2PureProvider
+  // hands the whole response to the cookie provider, which reads whatever is
+  // in it. (toBearerAssertion refuses a second assertion on the bearer path
+  // too, but the validator does not lean on its caller.) A forged assertion
+  // placed beside the signed one must therefore end the login, not merely be
+  // ignored here.
   const assertions = directChildren(root, SAML_NS, 'Assertion');
   if (assertions.length !== 1) return null;
   const only = assertions[0];
@@ -3138,8 +3140,10 @@ From `src/index.ts`: `createSignedResponseValidator`, `createSignedAssertionVali
   which is many — and say what is given up. Say plainly why it is still sound:
   a declined login carries no assertion to sign, and addressing rests on
   `Recipient`, inside the signature;
-- **`raw` versus `signedXml`**: `raw` is what arrived and is forwarded
-  verbatim; `signedXml` is what the signature covered. A consumer reading
+- **`raw` versus `signedXml`**: `raw` is the validator's input, unchanged —
+  a Response, or a bare Assertion where the validator accepts one — and makes
+  no promise about what a provider forwards (`Saml2BearerProvider` sends the
+  extracted Assertion, not `raw`); `signedXml` is what the signature covered. A consumer reading
   anything this interface does not surface must parse the second. Do not let
   the README imply that holding a `ValidatedAssertion` makes all of `raw`
   trustworthy;

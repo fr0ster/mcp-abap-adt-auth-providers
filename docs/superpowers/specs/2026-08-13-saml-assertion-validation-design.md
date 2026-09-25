@@ -332,14 +332,18 @@ export interface ValidatedAssertion {
   readonly sessionIndex?: string;
   readonly attributes?: Readonly<Record<string, readonly string[]>>;
   /**
-   * The response exactly as it arrived, for a flow that must forward it
-   * verbatim — `Saml2BearerProvider` sends it to the token endpoint,
-   * `Saml2PureProvider` hands it to the cookie provider.
+   * The validator's input, unchanged: the payload exactly as it was passed
+   * in — a whole `samlp:Response`, or a bare `saml:Assertion` where the
+   * validator accepts one. What a provider does with it next is the
+   * provider's business, not part of this contract: `Saml2PureProvider`
+   * hands the payload to the cookie provider as it is, while
+   * `Saml2BearerProvider` sends `toBearerAssertion(payload)` — the one
+   * Assertion, extracted and re-encoded base64url — to the token endpoint.
    *
-   * **This is the wire payload, not a validated artifact.** It is the whole
-   * `samlp:Response`, and with `createSignedAssertionValidator` that includes
-   * `Status`, `Response/Issuer` and `Destination`, which that validator never
-   * read and nothing has checked. Holding a `ValidatedAssertion` does not make
+   * **This is the wire payload, not a validated artifact.** When it is a
+   * `samlp:Response` validated by `createSignedAssertionValidator`, it
+   * includes `Status`, `Response/Issuer` and `Destination`, which that
+   * validator never read and nothing has checked. Holding a `ValidatedAssertion` does not make
    * every byte of `raw` trustworthy; it means the fields named above this one
    * were established. Anything read out of `raw` is read at the reader's own
    * risk — which is why the signed element is offered separately.
