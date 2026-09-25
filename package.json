@@ -1,6 +1,6 @@
 {
   "name": "@mcp-abap-adt/auth-providers",
-  "version": "3.0.0",
+  "version": "4.0.0",
   "description": "Token providers for MCP ABAP ADT auth-broker",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -62,13 +62,14 @@
     "node": "^22 || ^24"
   },
   "dependencies": {
-    "@mcp-abap-adt/interfaces-auth": "^1.2.0",
-    "@mcp-abap-adt/interfaces-auth-sap": "^1.0.0",
+    "@mcp-abap-adt/interfaces-auth": "^2.0.0",
+    "@mcp-abap-adt/interfaces-auth-sap": "^1.0.1",
     "@mcp-abap-adt/interfaces-utils": "^1.1.0",
     "@xmldom/xmldom": "^0.9.12",
     "axios": "^1.13.5",
     "express": "^5.1.0",
-    "open": "^11.0.0"
+    "open": "^11.0.0",
+    "xml-crypto": "^6.1.2"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.3.14",

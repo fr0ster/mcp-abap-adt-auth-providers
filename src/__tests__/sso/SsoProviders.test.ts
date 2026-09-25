@@ -1,5 +1,10 @@
 import netModule from 'node:net';
-import type { IAuthorizationStrategy } from '@mcp-abap-adt/interfaces-auth';
+import { inflateRawSync } from 'node:zlib';
+import { generateKeyMaterial, signXml } from '@mcp-abap-adt/auth-mocks';
+import type {
+  IAssertionValidator,
+  IAuthorizationStrategy,
+} from '@mcp-abap-adt/interfaces-auth';
 import {
   AUTH_TYPE_AUTHORIZATION_CODE_PKCE,
   AUTH_TYPE_PASSWORD,
@@ -23,6 +28,7 @@ import {
   refreshSamlBearerToken,
 } from '../../auth/saml2TokenExchange';
 import { toBearerAssertion } from '../../auth/samlBearerAssertion';
+import { AssertionValidationError } from '../../errors/AssertionValidationError';
 import { OidcBrowserProvider } from '../../providers/OidcBrowserProvider';
 import { OidcDeviceFlowProvider } from '../../providers/OidcDeviceFlowProvider';
 import { OidcPasswordProvider } from '../../providers/OidcPasswordProvider';
@@ -77,6 +83,53 @@ const jwtExpiringIn = (secondsFromNow: number): string => {
   const exp = Math.floor(Date.now() / 1000) + secondsFromNow;
   return `${encode({ alg: 'none' })}.${encode({ exp })}.sig`;
 };
+
+/**
+ * A consumer-supplied validator that accepts anything, for tests about
+ * wiring, ACS matching or strategy lifecycle rather than about validation
+ * itself. Real validation of the shipped defaults is pinned separately,
+ * below, against genuinely signed fixtures.
+ */
+const acceptingSamlValidator = (): IAssertionValidator => ({
+  async validate(payload) {
+    return {
+      expiresAt: new Date(Date.now() + 3600_000),
+      assertionId: '_stub',
+      issuer: 'urn:stub:idp',
+      raw: payload,
+      signedXml: payload,
+    };
+  },
+});
+
+/**
+ * The AuthnRequest ID a mint-and-authorize flow produced, read back out of
+ * the URL the way `saml2Utils.test.ts` does: inflate `SAMLRequest` and pull
+ * the `ID` attribute out of the AuthnRequest XML it decodes to.
+ */
+function mintedIdFrom(authorizationUrl: string): string {
+  const encoded =
+    new URL(authorizationUrl).searchParams.get('SAMLRequest') ?? '';
+  const xml = inflateRawSync(Buffer.from(encoded, 'base64')).toString('utf8');
+  const match = xml.match(/ID="([^"]+)"/);
+  if (!match) {
+    throw new Error('no ID attribute found in the inflated AuthnRequest XML');
+  }
+  return match[1];
+}
+
+/** Whatever `factory` throws, so its `message` and `missingFields` can be asserted on. */
+function constructionError(factory: () => unknown): {
+  message: string;
+  missingFields?: string[];
+} {
+  try {
+    factory();
+  } catch (error) {
+    return error as { message: string; missingFields?: string[] };
+  }
+  throw new Error('expected construction to throw, but it did not');
+}
 
 describe('SSO Providers', () => {
   const consoleLogSpy = jest.spyOn(console, 'log').mockImplementation(() => {});
@@ -523,7 +576,13 @@ describe('SSO Providers', () => {
       idpSsoUrl: 'https://idp/sso',
       spEntityId: 'sp-entity',
       uaaUrl: 'https://uaa',
+      // staticCodeStrategy never calls the builder; declaring idpInitiated
+      // says plainly that no request was sent for this assertion to answer.
+      idpInitiated: true,
       authorization: staticCodeStrategy({ payload: saml.payload }),
+      // This test is about the exchange call, not validation; the fixture
+      // above is not signed.
+      assertionValidator: acceptingSamlValidator(),
     });
 
     const tokens = await provider.getTokens();
@@ -556,7 +615,13 @@ describe('SSO Providers', () => {
           clientSecret: 'secret',
           accessToken: jwtExpiringIn(-3600),
           refreshToken: 'seeded-refresh',
+          // `authorize` above never calls the builder either.
+          idpInitiated: true,
           authorization,
+          // The validator is resolved at construction (Task 11); these cases
+          // are about the refresh path, not validation, and the fixture
+          // payload above is not signed.
+          assertionValidator: acceptingSamlValidator(),
         },
       };
     };
@@ -628,24 +693,62 @@ describe('SSO Providers', () => {
       expect(tokens.authorizationToken).toBe('jwt.after.login');
       expect(tokens.refreshToken).toBe('login-refresh');
     });
+
+    /**
+     * A `refresh_token` grant carries no assertion, so there is nothing to
+     * validate. Without this, a later change routing refresh through
+     * `performLogin()` again would pass every other test in this describe —
+     * they all use a validator that accepts anything.
+     */
+    it('does not consult the validator on refresh', async () => {
+      mockRefreshSaml.mockResolvedValue({ accessToken: jwtExpiringIn(3600) });
+      const { config } = seededConfig();
+      const validate = jest.fn();
+
+      await new Saml2BearerProvider({
+        ...config,
+        assertionValidator: { validate },
+      }).getTokens();
+
+      expect(validate).not.toHaveBeenCalled();
+    });
   });
 
-  it('Saml2PureProvider should return saml response with expiresAt', async () => {
+  it('Saml2PureProvider should return the saml response as the session', async () => {
     const samlXml =
       '<Assertion NotOnOrAfter="2030-01-01T00:00:00Z"></Assertion>';
     const samlResponse = Buffer.from(samlXml, 'utf8').toString('base64');
+    const validatedExpiresAt = new Date(Date.now() + 3600_000);
 
     const provider = new Saml2PureProvider({
       cookieProvider: async () => 'SAP_SESSION=abc123',
       idpSsoUrl: 'https://idp/sso',
       spEntityId: 'sp-entity',
+      // staticCodeStrategy never calls the builder; declaring idpInitiated
+      // says plainly that no request was sent for this assertion to answer.
+      idpInitiated: true,
       authorization: staticCodeStrategy({ payload: samlResponse }),
+      // This test is about wiring the cookie session, not validation; the
+      // fixture above is not signed.
+      assertionValidator: {
+        async validate() {
+          return {
+            expiresAt: validatedExpiresAt,
+            assertionId: '_a1',
+            issuer: 'urn:mock:idp',
+            raw: samlResponse,
+            signedXml: samlResponse,
+          };
+        },
+      },
     });
 
     const tokens = await provider.getTokens();
     expect(tokens.authorizationToken).toBe('SAP_SESSION=abc123');
     expect(tokens.tokenType).toBe('saml');
-    expect(tokens.expiresAt).toBeDefined();
+    // `parseSamlNotOnOrAfter` is gone (Task 9); `expiresAt` now comes from
+    // `ValidatedAssertion`, not an unverified regex (Task 11).
+    expect(tokens.expiresAt).toBe(validatedExpiresAt.getTime());
   });
 
   it('Saml2PureProvider rejects a pre-built URL without a declared acsUrl', () => {
@@ -666,6 +769,9 @@ describe('SSO Providers', () => {
       idpSsoUrl: 'https://idp.example/sso',
       spEntityId: 'sp',
       acsUrl: 'http://localhost:61001/callback',
+      // staticCodeStrategy never calls the builder; declaring idpInitiated
+      // says plainly that no request was sent for this assertion to answer.
+      idpInitiated: true,
       authorization: staticCodeStrategy({
         redirectUri: 'http://localhost:61001/callback',
         payload: 'PHNhbWw+',
@@ -676,6 +782,9 @@ describe('SSO Providers', () => {
         seen.push(saml);
         return saml;
       },
+      // This test is about which assertion reaches the cookie provider, not
+      // validation; the fixture above is not signed.
+      assertionValidator: acceptingSamlValidator(),
     });
     const tokens = await provider.getTokens();
     expect(seen).toEqual(['PHNhbWw+']);
@@ -694,6 +803,8 @@ describe('SSO Providers', () => {
         payload: 'PHNhbWw+',
       }),
       cookieProvider: async (saml) => saml,
+      // Never reached: the ACS mismatch is thrown before validate() would run.
+      assertionValidator: acceptingSamlValidator(),
     });
     await expect(provider.getTokens()).rejects.toThrow(
       /acsUrl is http:\/\/localhost:61001\/callback, but the authorization strategy used/i,
@@ -723,6 +834,8 @@ describe('SSO Providers', () => {
         provide: async () => 'unreachable',
       }),
       cookieProvider: async (saml) => saml,
+      // Never reached: the ACS mismatch is thrown before validate() would run.
+      assertionValidator: acceptingSamlValidator(),
     });
     await expect(provider.getTokens()).rejects.toThrow(
       /acsUrl is https:\/\/sp\.example\/acs, but the authorization strategy is listening on http:\/\/localhost:61001\/callback/i,
@@ -977,6 +1090,9 @@ describe('SAML strategy lifecycle', () => {
         acsUrl: redirectUri,
         authorization: supplied,
         cookieProvider: async (saml) => saml,
+        // This test is about the strategy lifecycle, not validation; the
+        // fixture above is not signed.
+        assertionValidator: acceptingSamlValidator(),
       });
 
       const tokens = await provider.getTokens();
@@ -1002,6 +1118,8 @@ describe('SAML strategy lifecycle', () => {
       spEntityId: 'sp',
       authorization: supplied,
       cookieProvider: async (saml) => saml,
+      // Never reached: `authorize` throws before validate() would run.
+      assertionValidator: acceptingSamlValidator(),
     });
 
     await expect(provider.getTokens()).rejects.toThrow(
@@ -1023,6 +1141,8 @@ describe('SAML strategy lifecycle', () => {
       spEntityId: 'sp',
       acsUrl: MISMATCHED_ACS,
       cookieProvider: async (saml) => saml,
+      // Never reached: the ACS mismatch is thrown before validate() would run.
+      assertionValidator: acceptingSamlValidator(),
     });
 
     // Probed before the first login: if an unrelated process holds 61001, this
@@ -1072,6 +1192,8 @@ describe('SAML strategy lifecycle', () => {
       acsUrl: MISMATCHED_ACS,
       cookieProvider: async (saml) => saml,
       logger,
+      // Never reached: the ACS mismatch is thrown before validate() would run.
+      assertionValidator: acceptingSamlValidator(),
     });
 
     try {
@@ -1085,4 +1207,421 @@ describe('SAML strategy lifecycle', () => {
       defaultDispose.mockRestore();
     }
   }, 30000);
+});
+
+/**
+ * Task 11: both providers resolve `assertionValidator` at construction and run
+ * it on every login. A missing `idpCertificates`/`idpEntityId` is a
+ * configuration fault, and must surface before a login is even attempted.
+ */
+describe('Saml2PureProvider assertion validation', () => {
+  const baseConfig = {
+    idpSsoUrl: 'https://idp/sso',
+    spEntityId: 'sp-entity',
+    acsUrl: 'http://localhost:61001/callback',
+    idpInitiated: true,
+    // A genuine certificate: this fixture is reused as-is by a test that
+    // keeps idpCertificates, so a placeholder string would throw ("neither
+    // PEM nor base64 DER") before that test's own assertion ever ran.
+    idpCertificates: [generateKeyMaterial().certificatePem],
+    idpEntityId: 'urn:mock:idp',
+    authorization: staticCodeStrategy({
+      redirectUri: 'http://localhost:61001/callback',
+      payload: Buffer.from('<Assertion/>', 'utf8').toString('base64'),
+    }),
+    cookieProvider: async () => 'cookie',
+  };
+
+  it('refuses at construction when the identity provider is not configured', () => {
+    expect(
+      () =>
+        new Saml2PureProvider({ ...baseConfig, idpCertificates: undefined }),
+    ).toThrow(/idpCertificates/);
+  });
+
+  it('takes expiresAt from the validated assertion, not from a regex', async () => {
+    // A stub validator, to prove the provider uses what validation returned.
+    const expiresAt = new Date(Date.now() + 111_000);
+    const provider = new Saml2PureProvider({
+      ...baseConfig,
+      assertionValidator: {
+        async validate() {
+          return {
+            expiresAt,
+            assertionId: '_a1',
+            issuer: 'urn:mock:idp',
+            raw: 'ignored',
+            signedXml: 'ignored',
+          };
+        },
+      },
+      cookieProvider: async () => 'cookie=1',
+    });
+    const result = await provider.getTokens();
+    // ITokenResult.expiresAt is an epoch-ms number, unlike
+    // ValidatedAssertion.expiresAt, which is a Date.
+    expect(result.expiresAt).toBe(expiresAt.getTime());
+  });
+
+  /**
+   * The pure counterpart of the bearer "does not reach the token endpoint"
+   * test: a refused assertion must never reach the cookie provider, which is
+   * this provider's equivalent of "the network call". Two mutants this must
+   * catch: swallowing the validator's rejection, and calling the cookie
+   * provider before validate() runs.
+   */
+  it('does not hand the assertion to the cookie provider when validation refuses it', async () => {
+    const cookieProvider = jest.fn(async (saml: string) => saml);
+    const provider = new Saml2PureProvider({
+      ...baseConfig,
+      assertionValidator: {
+        async validate() {
+          throw new AssertionValidationError('status', 'the IdP declined');
+        },
+      },
+      cookieProvider,
+    });
+
+    const tokensPromise = provider.getTokens();
+    const rejected = expect(tokensPromise).rejects.toMatchObject({
+      check: 'status',
+    });
+    await rejected;
+    expect(cookieProvider).not.toHaveBeenCalled();
+  });
+});
+
+describe('Saml2BearerProvider assertion validation', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
+
+  it('does not reach the token endpoint when the assertion is refused', async () => {
+    let exchanged = false;
+    mockExchangeSaml.mockImplementation(async () => {
+      exchanged = true;
+      return { accessToken: 'unreachable', expiresIn: 900 };
+    });
+
+    const provider = new Saml2BearerProvider({
+      idpSsoUrl: 'https://idp/sso',
+      spEntityId: 'sp-entity',
+      uaaUrl: 'https://uaa',
+      idpInitiated: true,
+      authorization: staticCodeStrategy({
+        payload: Buffer.from('<Assertion/>', 'utf8').toString('base64'),
+      }),
+      assertionValidator: {
+        async validate() {
+          throw new AssertionValidationError('status', 'the IdP declined');
+        },
+      },
+    });
+
+    const tokensPromise = provider.getTokens();
+    const rejected = expect(tokensPromise).rejects.toMatchObject({
+      check: 'status',
+    });
+    await rejected;
+    expect(exchanged).toBe(false);
+  });
+});
+
+/**
+ * Which shipped validator each provider defaults to is not a detail either
+ * provider is allowed to get backwards: the token endpoint receives the
+ * Assertion alone (RFC 7522, #40), so `Saml2BearerProvider` must default to
+ * the assertion-only validator, while `Saml2PureProvider` hands the whole
+ * response on and must default to the signed-Response one. A response signed
+ * only at the Response level — what most identity providers send — is the
+ * fixture that tells them apart.
+ */
+describe('Saml2 provider default validators', () => {
+  const KEY = generateKeyMaterial();
+  const ISSUER = 'urn:mock:idp';
+  const AUDIENCE = 'sp-entity';
+  const ACS = 'http://localhost:61001/callback';
+  const REQUEST_ID = '_req1';
+
+  const iso = (offsetMs: number) =>
+    new Date(Date.now() + offsetMs).toISOString();
+
+  /** A samlp:Response signed only at the Response level. */
+  function buildResponseSignedAtResponseLevel(): string {
+    const assertion =
+      `<saml:Assertion xmlns:saml="urn:oasis:names:tc:SAML:2.0:assertion" ID="_a1">` +
+      `<saml:Issuer>${ISSUER}</saml:Issuer>` +
+      `<saml:Subject><saml:NameID>mock-user</saml:NameID>` +
+      `<saml:SubjectConfirmation Method="urn:oasis:names:tc:SAML:2.0:cm:bearer">` +
+      `<saml:SubjectConfirmationData InResponseTo="${REQUEST_ID}" Recipient="${ACS}" NotOnOrAfter="${iso(300_000)}"/>` +
+      `</saml:SubjectConfirmation></saml:Subject>` +
+      `<saml:Conditions NotBefore="${iso(-60_000)}" NotOnOrAfter="${iso(300_000)}">` +
+      `<saml:AudienceRestriction><saml:Audience>${AUDIENCE}</saml:Audience></saml:AudienceRestriction>` +
+      `</saml:Conditions></saml:Assertion>`;
+    const response =
+      `<samlp:Response xmlns:samlp="urn:oasis:names:tc:SAML:2.0:protocol" ` +
+      `xmlns:saml="urn:oasis:names:tc:SAML:2.0:assertion" ID="_r1" Destination="${ACS}">` +
+      `<samlp:Status><samlp:StatusCode Value="urn:oasis:names:tc:SAML:2.0:status:Success"/></samlp:Status>` +
+      `${assertion}</samlp:Response>`;
+    return signXml(response, KEY, {
+      referenceXPath: "//*[local-name(.)='Response']",
+      location: {
+        reference: "//*[local-name(.)='Response']",
+        action: 'prepend',
+      },
+    });
+  }
+
+  const payload = () =>
+    Buffer.from(buildResponseSignedAtResponseLevel(), 'utf8').toString(
+      'base64',
+    );
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
+
+  it("Saml2PureProvider's default accepts a Response signed at the Response level", async () => {
+    const provider = new Saml2PureProvider({
+      idpSsoUrl: 'https://idp/sso',
+      spEntityId: AUDIENCE,
+      acsUrl: ACS,
+      authnRequestId: REQUEST_ID,
+      idpCertificates: [KEY.certificatePem],
+      idpEntityId: ISSUER,
+      authorization: staticCodeStrategy({
+        redirectUri: ACS,
+        payload: payload(),
+      }),
+      cookieProvider: async (saml) => saml,
+    });
+
+    const tokens = await provider.getTokens();
+    expect(tokens.authorizationToken).toBeDefined();
+    expect(tokens.expiresAt).toBeGreaterThan(Date.now());
+  });
+
+  it("Saml2BearerProvider's default refuses the same Response, at signedNode", async () => {
+    const provider = new Saml2BearerProvider({
+      idpSsoUrl: 'https://idp/sso',
+      spEntityId: AUDIENCE,
+      acsUrl: ACS,
+      authnRequestId: REQUEST_ID,
+      uaaUrl: 'https://uaa',
+      idpCertificates: [KEY.certificatePem],
+      idpEntityId: ISSUER,
+      authorization: staticCodeStrategy({
+        redirectUri: ACS,
+        payload: payload(),
+      }),
+    });
+
+    await expect(provider.getTokens()).rejects.toMatchObject({
+      check: 'signedNode',
+    });
+    expect(mockExchangeSaml).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * The exact `AssertionContext` each provider passes to `validate()`. Built
+ * with `toHaveBeenCalledWith` — not `toMatchObject` — so an extra or
+ * substituted field is caught, not just a missing one.
+ */
+describe('Saml2PureProvider validation context', () => {
+  it('passes exactly the context the spec requires', async () => {
+    const redirectUri = 'http://localhost:61001/callback';
+    const payload = Buffer.from('<Assertion/>', 'utf8').toString('base64');
+    const logger: ILogger = {
+      debug: jest.fn(),
+      info: jest.fn(),
+      warn: jest.fn(),
+      error: jest.fn(),
+    };
+    const validate = jest.fn(async () => ({
+      expiresAt: new Date(Date.now() + 3600_000),
+      assertionId: '_a1',
+      issuer: 'urn:mock:idp',
+      raw: payload,
+      signedXml: payload,
+    }));
+    let builtUrl = '';
+    // Calls the builder, so the package mints the AuthnRequest ID itself —
+    // the only way `expectedInResponseTo` can be pinned against a value
+    // this test did not just make up.
+    const authorization: IAuthorizationStrategy<string> = {
+      async authorize(request) {
+        builtUrl = await request.buildAuthorizationUrl(redirectUri);
+        return { payload, redirectUri };
+      },
+    };
+
+    const provider = new Saml2PureProvider({
+      idpSsoUrl: 'https://idp/sso',
+      spEntityId: 'sp-entity',
+      idpEntityId: 'urn:mock:idp',
+      // No acsUrl: outcome.redirectUri is the only candidate value for
+      // context.acsUrl, so a mutation reading it from config instead cannot
+      // coincidentally agree.
+      authorization,
+      assertionValidator: { validate },
+      cookieProvider: async () => 'cookie',
+      logger,
+    });
+
+    await provider.getTokens();
+
+    const mintedId = mintedIdFrom(builtUrl);
+    expect(validate).toHaveBeenCalledTimes(1);
+    expect(validate).toHaveBeenCalledWith(payload, {
+      expectedInResponseTo: mintedId,
+      audience: 'sp-entity',
+      acsUrl: redirectUri,
+      expectedIssuer: 'urn:mock:idp',
+      logger,
+    });
+  });
+});
+
+describe('Saml2BearerProvider validation context', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
+
+  it('passes exactly the context the spec requires', async () => {
+    mockExchangeSaml.mockResolvedValue({ accessToken: 'AT', expiresIn: 900 });
+
+    const redirectUri = 'http://localhost:61001/callback';
+    // A bare Assertion, so `toBearerAssertion` (called after validate()
+    // resolves) accepts it without needing a whole signed Response.
+    const payload = Buffer.from(
+      '<saml:Assertion xmlns:saml="urn:oasis:names:tc:SAML:2.0:assertion" ID="_a1"/>',
+      'utf8',
+    ).toString('base64');
+    const logger: ILogger = {
+      debug: jest.fn(),
+      info: jest.fn(),
+      warn: jest.fn(),
+      error: jest.fn(),
+    };
+    const validate = jest.fn(async () => ({
+      expiresAt: new Date(Date.now() + 3600_000),
+      assertionId: '_a1',
+      issuer: 'urn:mock:idp',
+      raw: payload,
+      signedXml: payload,
+    }));
+    let builtUrl = '';
+    const authorization: IAuthorizationStrategy<string> = {
+      async authorize(request) {
+        builtUrl = await request.buildAuthorizationUrl(redirectUri);
+        return { payload, redirectUri };
+      },
+    };
+
+    const provider = new Saml2BearerProvider({
+      idpSsoUrl: 'https://idp/sso',
+      spEntityId: 'sp-entity',
+      idpEntityId: 'urn:mock:idp',
+      uaaUrl: 'https://uaa',
+      authorization,
+      assertionValidator: { validate },
+      logger,
+    });
+
+    await provider.getTokens();
+
+    const mintedId = mintedIdFrom(builtUrl);
+    expect(validate).toHaveBeenCalledTimes(1);
+    expect(validate).toHaveBeenCalledWith(payload, {
+      expectedInResponseTo: mintedId,
+      audience: 'sp-entity',
+      acsUrl: redirectUri,
+      expectedIssuer: 'urn:mock:idp',
+      logger,
+    });
+  });
+});
+
+/**
+ * Construction-time faults: each must throw from `new ...Provider(...)`
+ * itself, before any login is attempted, and never be silently absorbed into
+ * "the default validator" being built anyway.
+ */
+describe('Saml2 provider construction faults', () => {
+  const CERT = generateKeyMaterial().certificatePem;
+
+  const validPureConfig = {
+    idpSsoUrl: 'https://idp/sso',
+    spEntityId: 'sp-entity',
+    idpCertificates: [CERT],
+    idpEntityId: 'urn:mock:idp',
+    cookieProvider: async (saml: string) => saml,
+  };
+
+  const validBearerConfig = {
+    idpSsoUrl: 'https://idp/sso',
+    spEntityId: 'sp-entity',
+    idpCertificates: [CERT],
+    idpEntityId: 'urn:mock:idp',
+    uaaUrl: 'https://uaa',
+  };
+
+  it('Saml2PureProvider refuses construction when idpEntityId is missing', () => {
+    const error = constructionError(
+      () =>
+        new Saml2PureProvider({ ...validPureConfig, idpEntityId: undefined }),
+    );
+    expect(error.message).toMatch(/idpEntityId/);
+    expect(error.missingFields).toContain('idpEntityId');
+  });
+
+  it('Saml2BearerProvider refuses construction when idpEntityId is missing', () => {
+    const error = constructionError(
+      () =>
+        new Saml2BearerProvider({
+          ...validBearerConfig,
+          idpEntityId: undefined,
+        }),
+    );
+    expect(error.message).toMatch(/idpEntityId/);
+    expect(error.missingFields).toContain('idpEntityId');
+  });
+
+  it('Saml2BearerProvider refuses construction when idpCertificates is missing', () => {
+    const error = constructionError(
+      () =>
+        new Saml2BearerProvider({
+          ...validBearerConfig,
+          idpCertificates: undefined,
+        }),
+    );
+    expect(error.message).toMatch(/idpCertificates/);
+    expect(error.missingFields).toContain('idpCertificates');
+  });
+
+  it('refuses construction when idpCertificates is an empty list', () => {
+    const error = constructionError(
+      () => new Saml2PureProvider({ ...validPureConfig, idpCertificates: [] }),
+    );
+    expect(error.message).toMatch(/idpCertificates/);
+  });
+
+  it('refuses construction when a certificate is malformed', () => {
+    const error = constructionError(
+      () =>
+        new Saml2PureProvider({
+          ...validPureConfig,
+          idpCertificates: ['not-a-cert'],
+        }),
+    );
+    expect(error.message).toMatch(/certificate/i);
+  });
+
+  it('refuses construction when clockSkewMs is negative', () => {
+    const error = constructionError(
+      () => new Saml2PureProvider({ ...validPureConfig, clockSkewMs: -1 }),
+    );
+    expect(error.message).toMatch(/clockSkewMs/);
+  });
 });

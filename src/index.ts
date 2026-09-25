@@ -12,6 +12,10 @@ export { withOidcCallbackServer } from './auth/oidcBrowserAuth';
 export { withSamlCallbackServer } from './auth/saml2Auth';
 // Errors
 export {
+  type AssertionCheck,
+  AssertionValidationError,
+} from './errors/AssertionValidationError';
+export {
   BrowserAuthError,
   RefreshError,
   ServiceKeyError,
@@ -68,3 +72,14 @@ export {
   samlCallbackStrategy,
   staticCodeStrategy,
 } from './strategies';
+// SAML assertion validation — the two shipped validators and the replay store,
+// or bring your own IAssertionValidator / IAssertionReplayStore.
+export {
+  createSignedAssertionValidator,
+  createSignedResponseValidator,
+  type ShippedValidatorOptions,
+} from './validation/assertionValidator';
+export {
+  createInMemoryReplayStore,
+  defaultReplayStore,
+} from './validation/inMemoryReplayStore';

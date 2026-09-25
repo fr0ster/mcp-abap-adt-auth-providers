@@ -21,7 +21,8 @@
  * would any unsigned one.
  */
 
-import { DOMParser, type Element, XMLSerializer } from '@xmldom/xmldom';
+import { type Element, XMLSerializer } from '@xmldom/xmldom';
+import { parseStrictXml } from './strictXml';
 
 const SAML_ASSERTION_NS = 'urn:oasis:names:tc:SAML:2.0:assertion';
 const SAML_PROTOCOL_NS = 'urn:oasis:names:tc:SAML:2.0:protocol';
@@ -35,7 +36,7 @@ export function toBearerAssertion(payload: string): string {
 
   let root: Element | null;
   try {
-    root = new DOMParser().parseFromString(xml, 'text/xml').documentElement;
+    root = parseStrictXml(xml).documentElement;
   } catch (error) {
     throw new Error(
       `SAML bearer payload is not well-formed XML: ${error instanceof Error ? error.message : String(error)}`,

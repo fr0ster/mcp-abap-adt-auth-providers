@@ -14,7 +14,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - **`Saml2PureProvider`** — SAML assertion exchanged for session cookies
 - **`UaaPasscodeProvider`** — UAA/XSUAA one-time passcode from `/passcode` (`cf login --sso`), headless
 
-All extend `BaseTokenProvider`, which owns the token lifecycle (cache, expiry, refresh-then-login fallback).
+All extend `BaseTokenProvider`, which owns the token lifecycle (cache, expiry, refresh-then-login fallback). Both SAML providers validate the assertion first, through an `IAssertionValidator` (see "SAML assertion validation").
 
 ## Build Commands
 
@@ -42,7 +42,7 @@ Debug logging: `DEBUG_AUTH_PROVIDERS=true` or `DEBUG_BROWSER_AUTH=true`.
 
 ### Core design principles
 
-**Interface-only communication.** All interaction with external dependencies happens through contract packages: `@mcp-abap-adt/interfaces-auth` (token providers, strategies, callback server, error codes), `@mcp-abap-adt/interfaces-auth-sap` (XSUAA configuration) and `@mcp-abap-adt/interfaces-utils` (`ILogger`). Depend on the contract package whose contracts are used, nothing wider — never `interfaces-adt`, which carries ADT contracts this package does not use. The package does not know about concrete implementation classes from other packages. A logger is `ILogger`, never a local abstraction.
+**Interface-only communication.** All interaction with external dependencies happens through contract packages: `@mcp-abap-adt/interfaces-auth` ^2.0.0 (token providers, strategies, callback server, assertion validator and replay store, error codes), `@mcp-abap-adt/interfaces-auth-sap` (XSUAA configuration) and `@mcp-abap-adt/interfaces-utils` (`ILogger`). Depend on the contract package whose contracts are used, nothing wider — never `interfaces-adt`, which carries ADT contracts this package does not use. The package does not know about concrete implementation classes from other packages. A logger is `ILogger`, never a local abstraction.
 
 **Everything pluggable is a strategy.** Anything a consumer might reasonably want to do differently is expressed as a strategy behind an interface. The package ships a working default so nobody is forced to write one, and the consumer can always replace it. This is why an authorization library does not own a socket, a browser or stdin — a consumer may legitimately own them instead.
 
@@ -54,18 +54,20 @@ This package ONLY:
 - implements `ITokenProvider`
 - builds authorization URLs and exchanges codes, assertions and refresh tokens for tokens
 - ships default strategies for conducting an interactive authorization
+- validates SAML assertions, with two shipped validators and an in-memory replay store, all replaceable
 
 This package does NOT:
 - store tokens (`@mcp-abap-adt/auth-stores`)
 - orchestrate authentication (`@mcp-abap-adt/auth-broker`)
 - load service keys or manage sessions
 - decide how a user reaches an authorization URL, or where the redirect is received — the consumer may replace both
+- fetch identity provider metadata — certificates and entity IDs come from configuration
 
 ### Module structure
 
 ```
 src/
-├── index.ts                  # public surface: providers, strategies, callback factories, errors
+├── index.ts                  # public surface: providers, strategies, callback factories, validators, errors
 ├── providers/                # one file per grant type, all extending BaseTokenProvider
 ├── strategies/
 │   ├── BrowserCallbackStrategy.ts  # class + browser/oidc/saml constructors
@@ -80,8 +82,16 @@ src/
 │   ├── saml2Auth.ts          # SAML callback factory, AuthnRequest building
 │   ├── samlBearerAssertion.ts  # SAMLResponse → one base64url Assertion (RFC 7522)
 │   └── …                     # oidcToken, oidcDiscovery, oidcPkce, passcodeAuth, …
+├── validation/
+│   ├── assertionValidator.ts   # createSignedResponseValidator / createSignedAssertionValidator: the check table
+│   ├── signedNode.ts           # verify every signature, resolve the element each covers
+│   ├── documentIds.ts          # duplicate-ID refusal, required IDs
+│   ├── xsdDateTime.ts          # strict xsd:dateTime parsing
+│   └── inMemoryReplayStore.ts  # createInMemoryReplayStore, the process-wide defaultReplayStore
 ├── sso/                      # SsoProviderFactory
-└── errors/TokenProviderErrors.ts
+└── errors/
+    ├── TokenProviderErrors.ts
+    └── AssertionValidationError.ts  # carries `check: AssertionCheck`
 ```
 
 ### How an interactive login works
@@ -96,6 +106,16 @@ Ship-default strategies: `browserCallbackStrategy`, `oidcCallbackStrategy`, `sam
 
 **Lifecycle: whoever constructs, disposes.** A consumer-supplied strategy is never disposed by a provider — the point of a long-lived receiver is to outlive one login. A default the provider constructed itself is disposed from a `finally`, and a `dispose` failure is logged rather than allowed to replace the error that made the login fail. `dispose()` disables a strategy permanently, which is why providers construct a fresh default per login.
 
+### SAML assertion validation
+
+A SAML provider validates the payload before anything else uses it — `Saml2BearerProvider` before the token exchange, `Saml2PureProvider` before `cookieProvider`, whose `expiresAt` comes from the result. The validator is built in the constructor: without `assertionValidator`, missing `idpCertificates` or `idpEntityId` is a `ValidationError` there — and so is a missing `idpEntityId` beside a shipped validator supplied as `assertionValidator`, recognised by a module-private, non-enumerable symbol both factories set. A custom validator needs no `idpEntityId`.
+
+- **Two validators, chosen by identifier, not by option.** `createSignedResponseValidator` requires the `Response` signed and runs all twelve checks — `Saml2PureProvider`'s default. `createSignedAssertionValidator` requires the `Assertion` signed, accepts a bare one, and does not read `Status`, `Response/Issuer` or `Destination` — `Saml2BearerProvider`'s default, since the token endpoint gets the Assertion alone.
+- **Everything is read from the signed element.** Every signature must verify and envelope its target; every SAML `Assertion`/`EncryptedAssertion` must be the signed one or inside it; IDs must be unique. The assertion-only validator reads the bare root `Assertion` or the Response's direct-child one, never merely the first covered. Every required field is refused when absent; of the fields the validators read, only `NotBefore` (Conditions and bearer confirmation), `Response/Issuer` and `NameID` may be missing. A `<!DOCTYPE` is refused before parsing; XML is parsed with `parseStrictXml` (`src/auth/strictXml.ts`), which throws on every parser fault and never writes to the console; `KeyInfo` certificates are never used; SHA-1 is accepted (xml-crypto defaults).
+- **The request ID is minted, declared (`authnRequestId`) or declared absent (`idpInitiated: true`)** — never inferred. Neither, or `idpInitiated` with a declared ID, is a `ValidationError` raised after the strategy returns; `idpInitiated` without `authorizationUrl` makes `buildAuthorizationUrl` throw before any URL exists. UAA and XSUAA refuse `InResponseTo` on the saml2-bearer grant, so bearer against them needs `idpInitiated`.
+- **Shipped validators fail closed without `expectedIssuer`.** Providers always pass `idpEntityId`.
+- **Replay store is process-wide** (`defaultReplayStore`), keyed `{issuer, assertionId}`, retained to min(`Conditions/@NotOnOrAfter`, the latest bearer `NotOnOrAfter` that answers the request and names the ACS, one not yet open included) + `clockSkewMs` — not `expiresAt`, which takes the earliest. `clockSkewMs` defaults to 0.
+
 ### Callback server
 
 `runCallbackScope` owns the socket for the duration of one scope. It is released on the first terminal outcome — the body returning or throwing, an explicit failure, the timeout, or an abort — and the factory settles only once the port is actually free, so a settled promise always means the socket is gone.
@@ -106,7 +126,7 @@ Ship-default strategies: `browserCallbackStrategy`, `oidcCallbackStrategy`, `sam
 
 ## Testing
 
-**Unit tests** mock axios or the module boundary. **Integration tests** need `tests/test-config.yaml` (copy `tests/test-config.yaml.template`) and skip without it.
+**Unit tests** mock axios or the module boundary. **Integration tests** need `tests/test-config.yaml` (copy `tests/test-config.yaml.template`) and skip without it. `src/__tests__/integration/samlValidation.test.ts` needs nothing: it runs both assertion validators end to end through `Saml2PureProvider` against `@mcp-abap-adt/auth-mocks`, inside `npm test`.
 
 **The provider stand** (`tests/stand/`; `npm run test:stand` starts it, runs the suites and stops it, and CI runs the same as its own job) runs Cloud Foundry UAA and Keycloak in Docker: real token endpoints for every provider but `Saml2PureProvider`'s cookie half. UAA carries a SAML identity provider whose key the tests sign with; Keycloak imports the `test` realm from `tests/stand/keycloak/realm-test.json`, and is also the SAML identity provider for both SAML providers: the Keycloak→UAA suite registers Keycloak in UAA and sets Keycloak's IdP-initiated SSO at run time. UAA's saml2-bearer grant refuses any assertion carrying `InResponseTo`, so only an IdP-initiated assertion gets through — an SP-initiated one never will, whatever the provider does. Both servers' configuration, and the test IdP's key, are committed fixtures — not secrets, trusted by nothing but the local stand — so a clone needs only Docker. The UAA suite takes the issuer from UAA's discovery and the bearer Recipient from its SAML metadata, never from `UAA_URL`, which is what keeps `UAA_PORT` working with a committed configuration. `src/__tests__/integration/stand/formLogin.ts` plays the user on each server's login and consent pages. It needs no SAP system, so it is the place to prove anything about a provider's wire contract. The suites run only when `UAA_URL` / `KEYCLOAK_URL` are set; `test:stand` sets both. A server already running — from `npm run stand:up` or started by hand — is left running; `run.sh` removes only the servers it started itself, per service.
 
@@ -122,7 +142,7 @@ When a test is meant to protect a rule, prove it is load-bearing: break the rule
 ## Error classes
 
 All extend `TokenProviderError`, with codes from `@mcp-abap-adt/interfaces-auth`:
-`ValidationError` (carries `missingFields[]`), `RefreshError` (carries `cause?`), `SessionDataError`, `ServiceKeyError`, `BrowserAuthError`.
+`ValidationError` (carries `missingFields[]`), `RefreshError` (carries `cause?`), `SessionDataError`, `ServiceKeyError`, `BrowserAuthError`, and `AssertionValidationError` (carries `check: AssertionCheck`, code `ASSERTION_VALIDATION_ERROR`).
 
 ## Plans and specs
 
