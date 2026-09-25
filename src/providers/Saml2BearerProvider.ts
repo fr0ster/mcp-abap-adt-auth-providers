@@ -5,6 +5,7 @@
  */
 
 import type {
+  IAssertionValidator,
   ITokenResult,
   OAuth2GrantType,
 } from '@mcp-abap-adt/interfaces-auth';
@@ -22,6 +23,7 @@ import type {
 } from './saml2Utils';
 import {
   getSamlAssertion,
+  resolveAssertionValidator,
   resolveTokenUrl,
   validateSamlConfig,
 } from './saml2Utils';
@@ -36,12 +38,17 @@ export interface Saml2BearerProviderConfig
 
 export class Saml2BearerProvider extends BaseTokenProvider {
   private config: Saml2BearerProviderConfig;
+  private readonly validator: IAssertionValidator;
 
   constructor(config: Saml2BearerProviderConfig) {
     super();
     // A pre-built URL with no declared ACS cannot be verified against whatever
     // the strategy binds, so it is refused here rather than at login time.
     validateSamlConfig(config);
+    // Before anything reaches a browser or a network: a missing certificate is
+    // the consumer's mistake, and finding it after a completed login wastes
+    // theirs.
+    this.validator = resolveAssertionValidator(config, 'bearer');
     this.config = config;
     this.logger = config.logger;
 
@@ -59,8 +66,17 @@ export class Saml2BearerProvider extends BaseTokenProvider {
   }
 
   protected async performLogin(): Promise<ITokenResult> {
-    // Task 10 threads the payload through; validation is wired in Task 11.
-    const { payload } = await getSamlAssertion(this.config);
+    const { payload, requestId, acsUrl } = await getSamlAssertion(this.config);
+    // Validation establishes trust before anything reaches the token
+    // endpoint; it does not change what is sent beyond toBearerAssertion's
+    // conversion below.
+    await this.validator.validate(payload, {
+      expectedInResponseTo: requestId,
+      audience: this.config.spEntityId,
+      acsUrl,
+      expectedIssuer: this.config.idpEntityId,
+      logger: this.logger,
+    });
     const tokenUrl = resolveTokenUrl(this.config);
     // RFC 7522 takes one base64url Assertion; a login delivers the whole
     // Response in standard base64, which a conforming endpoint refuses.

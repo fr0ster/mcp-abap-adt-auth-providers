@@ -11,6 +11,10 @@ import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
 import { buildSamlAuthorizationUrl } from '../auth/saml2Auth';
 import { ValidationError } from '../errors/TokenProviderErrors';
 import { samlCallbackStrategy } from '../strategies';
+import {
+  createSignedAssertionValidator,
+  createSignedResponseValidator,
+} from '../validation/assertionValidator';
 
 export interface Saml2CommonConfig {
   idpSsoUrl: string;
@@ -65,6 +69,43 @@ export function validateSamlConfig(config: Saml2CommonConfig): void {
         'pre-built SAML request cannot be read, so it must be declared.',
     );
   }
+}
+
+/**
+ * The consumer's validator when supplied, otherwise the provider's default —
+ * `createSignedAssertionValidator` for `"bearer"`, since the token endpoint
+ * receives the Assertion alone (#40) and its own signature is what that
+ * endpoint verifies; `createSignedResponseValidator` for `"pure"`, since the
+ * whole response is handed on and `Status`/`Destination` must be inside a
+ * signature. See the spec's "A bare Assertion, and which validator each
+ * provider defaults to".
+ */
+export function resolveAssertionValidator(
+  config: Saml2CommonConfig,
+  provider: 'bearer' | 'pure',
+): IAssertionValidator {
+  if (config.assertionValidator) return config.assertionValidator;
+
+  const missing: string[] = [];
+  if (!config.idpCertificates?.length) missing.push('idpCertificates');
+  if (!config.idpEntityId) missing.push('idpEntityId');
+  if (missing.length > 0) {
+    throw new ValidationError(
+      `The default assertion validator needs the identity provider it should ` +
+        `trust: missing ${missing.join(', ')}. Supply these, or supply an ` +
+        `assertionValidator of your own.`,
+      missing,
+    );
+  }
+
+  const options = {
+    idpCertificates: config.idpCertificates as string[],
+    clockSkewMs: config.clockSkewMs,
+    replayStore: config.assertionReplayStore,
+  };
+  return provider === 'bearer'
+    ? createSignedAssertionValidator(options)
+    : createSignedResponseValidator(options);
 }
 
 export function resolveTokenUrl(config: Saml2BearerExchangeConfig): string {
