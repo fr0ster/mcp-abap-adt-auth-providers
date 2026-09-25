@@ -358,8 +358,9 @@ import { Saml2BearerProvider } from '@mcp-abap-adt/auth-providers';
 const acsUrl = 'https://uaa.example.com/oauth/token/alias/uaa.example';
 
 // An IdP-initiated login answers no AuthnRequest, so this strategy never calls
-// request.buildAuthorizationUrl — calling it would mint a request ID, and
-// idpInitiated: true refuses one. It fetches a fresh assertion on every login;
+// request.buildAuthorizationUrl — with idpInitiated: true and no
+// authorizationUrl, the builder refuses before producing a URL, since the only
+// one it could build carries an AuthnRequest. It fetches a fresh assertion on every login;
 // the same assertion presented twice is refused as a replay.
 const fromSsoProxy: IAuthorizationStrategy<string> = {
   async authorize() {
@@ -402,9 +403,11 @@ supply an IdP-initiated assertion, declare `idpInitiated: true`, and use a
 strategy that does not call
 `buildAuthorizationUrl`: `staticCodeStrategy`, or your own as above.
 `samlCallbackStrategy`, `manualSamlResponseStrategy` and `externalCodeStrategy`
-all call it, so each mints a request ID, which `idpInitiated: true` refuses as a
-configuration error. (3.0's advice — `externalCodeStrategy` whose `provide`
-ignores the URL — no longer works for that reason.) See
+all call it, and with `idpInitiated: true` and no `authorizationUrl` the builder
+refuses: a `ValidationError` (`missingFields: ['authorizationUrl']`) thrown
+before any URL is produced, so before a browser opens. (3.0's advice —
+`externalCodeStrategy` whose `provide` ignores the URL — no longer works for
+that reason.) See
 [Where the expected request ID comes from](#where-the-expected-request-id-comes-from).
 
 The `redirectUri` your strategy reports is the ACS the assertion is checked
@@ -509,9 +512,9 @@ On both providers' configuration (`Saml2BearerProviderConfig`, `Saml2PureProvide
 | Field | Default | Meaning |
 |---|---|---|
 | `idpCertificates` | — | The identity provider's signing certificates, PEM or bare base64 DER — the form `<X509Certificate>` has in IdP metadata. A list, because providers rotate keys and two are live during a rotation. **Required unless `assertionValidator` is supplied.** Each entry is parsed at construction, so a malformed one fails there, not at login |
-| `idpEntityId` | — | The `Issuer` the assertion must name. **Required unless `assertionValidator` is supplied**; with one, it is still passed to it as `expectedIssuer` |
+| `idpEntityId` | — | The `Issuer` the assertion must name, passed to the validator as `expectedIssuer`. **Required unless the `assertionValidator` supplied is your own**: a shipped validator (`createSignedResponseValidator`, `createSignedAssertionValidator`) refuses every assertion without an expected issuer, so supplying one without `idpEntityId` fails at construction. A custom validator does not need it, and receives it when given |
 | `spEntityId` | — | Your entity ID. The assertion's `AudienceRestriction` must name it — whichever validator is in play |
-| `assertionValidator` | the provider's default | An `IAssertionValidator`: `createSignedResponseValidator(…)`, `createSignedAssertionValidator(…)`, or your own. When supplied, the provider builds no default, and `idpCertificates`, `clockSkewMs` and `assertionReplayStore` are not used — set the last two on the validator's own options |
+| `assertionValidator` | the provider's default | An `IAssertionValidator`: `createSignedResponseValidator(…)`, `createSignedAssertionValidator(…)`, or your own. When supplied, the provider builds no default, and `idpCertificates`, `clockSkewMs` and `assertionReplayStore` are not used — set them on the validator's own options. `idpEntityId` is still required with a shipped one |
 | `assertionReplayStore` | the process-wide in-memory store | An `IAssertionReplayStore` for the default validator — see [Replay](#replay) |
 | `clockSkewMs` | `0` | Tolerance for the default validator's time checks — see [Clock skew](#clock-skew) |
 | `authnRequestId` | — | The AuthnRequest ID this login answers, when the package did not build the request — see [Where the expected request ID comes from](#where-the-expected-request-id-comes-from) |
@@ -548,7 +551,8 @@ const provider = new Saml2PureProvider({
   idpSsoUrl: 'https://idp.example.com/sso',
   spEntityId: 'my-sp-entity',
   acsUrl: 'https://sp.example.com/saml/acs',
-  // Still required with a validator of your choosing: it becomes expectedIssuer.
+  // Still required with a shipped validator, which refuses every assertion
+  // without an expected issuer; construction fails without it.
   idpEntityId: 'https://idp.example.com/metadata',
   // Our identity provider signs only its assertions.
   assertionValidator: createSignedAssertionValidator({
@@ -603,10 +607,10 @@ names the row. Rows marked *(signed-Response only)* are not performed by
 
 | # | Check | Refused when | `check` |
 |---|---|---|---|
-| 1 | Parses as XML; the document element is `samlp:Response` — or, for the assertion-only validator, a bare `saml:Assertion` | it is not | `document` |
+| 1 | Parses as XML, with no `DOCTYPE`; the document element is `samlp:Response` — or, for the assertion-only validator, a bare `saml:Assertion` | it is not, or it carries a `<!DOCTYPE` declaration | `document` |
 | 1b | Every `ID` attribute in the document is unique | any value appears twice | `duplicateId` |
-| 2 | Every signature is valid against `idpCertificates` | none, wrong key, content altered after signing, more than one reference, a reference outside the document, or a signature not inside the element it references | `signature` |
-| 3 | The signed node is the node read | the signature does not cover the element this validator requires, the response does not hold exactly one `Assertion`, or any `saml:Assertion` / `saml:EncryptedAssertion` lies outside the signed assertion | `signedNode` |
+| 2 | Every signature is valid against `idpCertificates` — never against a certificate the document carries in its own `KeyInfo` | none, wrong key, content altered after signing, more than one reference, a reference outside the document, or a signature not inside the element it references | `signature` |
+| 3 | The signed node is the node read | the signature does not cover the element this validator requires — the `Response`, or the bare root `Assertion` or the Response's direct-child `Assertion` — the response does not hold exactly one `Assertion`, or any `saml:Assertion` / `saml:EncryptedAssertion` lies outside the signed assertion | `signedNode` |
 | 4 | `samlp:Status` *(signed-Response only)* | absent, or its `StatusCode` is not `…:status:Success` | `status` |
 | 4b | `Assertion/@ID` | absent or empty | `assertionId` |
 | 5 | `Assertion/Issuer` | absent, not the expected issuer, or no expected issuer was given | `issuer` |
@@ -626,8 +630,8 @@ What the table compresses:
   field. That covers `Status` and `Destination` (signed-Response only),
   `Assertion/@ID`, `Assertion/Issuer`, `Conditions`, `Conditions/@NotOnOrAfter`,
   the `AudienceRestriction`, and, in the bearer confirmation, `Recipient`,
-  `NotOnOrAfter` and — when a request ID is expected — `InResponseTo`. Four
-  fields are optional, each for a reason:
+  `NotOnOrAfter` and — when a request ID is expected — `InResponseTo`. Of the
+  fields the validators read, only these may be missing, each for a reason:
   - `Conditions/@NotBefore` and `SubjectConfirmationData/@NotBefore` — a
     missing `NotBefore` only means "valid from issue"; when present it is
     checked;
@@ -665,6 +669,17 @@ What the table compresses:
 - **Dates are parsed strictly.** An `xsd:dateTime` must have real calendar
   components — `2026-02-30T00:00:00Z`, which `Date.parse` quietly turns into
   2 March, is refused.
+- **No DTD.** A `<!DOCTYPE` anywhere in the payload is refused at `document`
+  before it is parsed: a SAML message has no use for one, and the document is
+  parsed twice — by `@xmldom/xmldom` 0.9 here and by the 0.8 inside
+  `xml-crypto` — where a DTD is exactly what parsers disagree about.
+- **SHA-1 is accepted.** RSA-SHA1 signatures and SHA-1 digests verify, as they
+  do under `xml-crypto`'s defaults, because identity providers still emit them
+  and refusing them would refuse genuine logins. To refuse them, supply an
+  `assertionValidator` of your own that rejects a `SignatureMethod` or
+  `DigestMethod` naming `…xmldsig#rsa-sha1` or `…xmldsig#sha1` before
+  delegating to a shipped validator — and keep `idpEntityId` configured, since
+  the shipped validator inside still refuses without an expected issuer.
 
 **Expiry comes from the verified document.** A validated assertion's
 `expiresAt` is the earlier of `Conditions/@NotOnOrAfter` and the `NotOnOrAfter`
@@ -719,10 +734,16 @@ be a decision visible in your configuration. **It is never inferred**: an
 assertion without `InResponseTo` does not make a login IdP-initiated; only
 `idpInitiated: true` does. The other checks apply unchanged.
 
-`idpInitiated: true` together with a minted or declared ID is a configuration
-error too (`ValidationError`, `missingFields: ['idpInitiated']`): the two
-describe different logins. Use a strategy that does not call
-`buildAuthorizationUrl`, and leave `authnRequestId` unset.
+`idpInitiated: true` together with a request ID is a configuration error too:
+the two describe different logins. With a declared `authnRequestId` it is a
+`ValidationError` (`missingFields: ['idpInitiated']`) after the strategy
+returns. A strategy that calls `buildAuthorizationUrl` with no
+`authorizationUrl` configured is refused inside the builder, before a URL — and
+so a request ID — exists: a `ValidationError` with `missingFields:
+['authorizationUrl']`. Use a strategy that does not call the builder, and leave
+`authnRequestId` unset; or configure the identity provider's IdP-initiated SSO
+URL as `authorizationUrl`, which the builder hands over without minting
+anything.
 
 #### Replay
 
@@ -748,10 +769,18 @@ import type { IAssertionReplayStore } from '@mcp-abap-adt/interfaces-auth';
 const sharedReplayStore: IAssertionReplayStore = {
   async recordIfUnseen({ issuer, assertionId }, retainUntil) {
     // e.g. Redis `SET key 1 NX PXAT <ms>`: true only when newly written.
-    return setIfAbsent(`saml-replay:${issuer}:${assertionId}`, retainUntil);
+    return setIfAbsent(
+      `saml-replay:${issuer.length}:${issuer}:${assertionId}`,
+      retainUntil,
+    );
   },
 };
 ```
+
+The issuer is length-prefixed, as in the in-memory store, because both parts
+may contain `:` — without the length, issuer `a:b` with ID `c` and issuer `a`
+with ID `b:c` would share one key, and one would be refused as the other's
+replay.
 
 `createInMemoryReplayStore()` returns a store of your own, for isolation — a
 test, or a component that must not share memory with the rest of the process.
@@ -764,8 +793,13 @@ needs no disposal.
 choose. It must be a finite, non-negative integer; anything else fails at
 construction. It widens the `NotBefore` and `NotOnOrAfter` checks of both
 `Conditions` and the bearer confirmation. A replay entry is retained until
-`expiresAt + clockSkewMs` — the last instant the assertion would still be
-accepted — so the tolerance cannot cut a hole in replay detection.
+the earlier of `Conditions/@NotOnOrAfter` and the **latest** `NotOnOrAfter` of
+a bearer confirmation that answers the request and names the ACS — one not
+open yet included — plus `clockSkewMs`: the last instant the assertion could
+still be accepted. That is not `expiresAt`, which takes the earliest
+confirmation; with confirmations closing at +120 s and +600 s the session ends
+at +120 s, but the second still admits the assertion at +200 s, so the entry
+must outlive it. Neither window nor tolerance cuts a hole in replay detection.
 
 #### What a validated assertion carries: `raw` and `signedXml`
 
@@ -830,7 +864,7 @@ assertion must answer it; absent, the assertion must carry no `InResponseTo`.
 | Error | When |
 |---|---|
 | `AssertionValidationError` | an assertion was refused. `check` (type `AssertionCheck`) names the row above — tell "your IdP declined" (`status`) from "not addressed to us" (`audience`, `bearerConfirmation`, `destination`) without parsing the message. `code` is `'ASSERTION_VALIDATION_ERROR'` (`ASSERTION_ERROR_CODES.VALIDATION_ERROR` from `@mcp-abap-adt/interfaces-auth`) |
-| `ValidationError` | configuration: `idpCertificates` or `idpEntityId` missing with no `assertionValidator` (at construction); `authnRequestId` missing, or `idpInitiated` combined with a request ID (at login, before the assertion is read). `missingFields` names the field |
+| `ValidationError` | configuration: `idpCertificates` or `idpEntityId` missing with no `assertionValidator`, or `idpEntityId` missing with a shipped validator supplied as `assertionValidator` (at construction); `idpInitiated` with no `authorizationUrl` and a strategy that calls `buildAuthorizationUrl` (inside the builder, before any URL is produced); `authnRequestId` missing, or `idpInitiated` combined with a declared `authnRequestId` (at login, after the strategy returns and before the assertion is read). `missingFields` names the field |
 | `Error` | a certificate that is neither PEM nor base64 DER, or not a valid X.509 certificate; a `clockSkewMs` that is not a finite non-negative integer; and, for a shipped validator called directly, an empty `idpCertificates` (*"must not be empty"*) — all at construction. Through a provider, an empty `idpCertificates` is a `ValidationError` instead |
 
 ### With Stores
@@ -1138,7 +1172,9 @@ What to add, on `Saml2BearerProvider` and `Saml2PureProvider` alike:
 - **Whom to trust: `idpCertificates` and `idpEntityId`, or an
   `assertionValidator`.** The certificates are the identity provider's signing
   certificates, PEM or the bare base64 of `<X509Certificate>` in its metadata;
-  `idpEntityId` is the `Issuer` its assertions carry — its `entityID`.
+  `idpEntityId` is the `Issuer` its assertions carry — its `entityID`. A
+  shipped validator supplied as `assertionValidator` still needs
+  `idpEntityId`; only a validator of your own does without.
 - **`spEntityId` must be your real entity ID.** It was already required, but in
   3.x it only named the issuer of the AuthnRequest, and a login that never built
   one never used it. It is now the `Audience` every `AudienceRestriction` must
@@ -1148,8 +1184,9 @@ What to add, on `Saml2BearerProvider` and `Saml2PureProvider` alike:
   saml2-bearer grant refuses an assertion carrying `InResponseTo`. With it, use
   a strategy that does not call `buildAuthorizationUrl` — `staticCodeStrategy`
   or your own. The 3.0 advice, `externalCodeStrategy` whose `provide` ignores
-  the URL, now fails: calling the builder mints a request ID, and
-  `idpInitiated: true` with a request ID is a configuration error.
+  the URL, now fails: with `idpInitiated: true` and no `authorizationUrl`, the
+  builder refuses before producing a URL, since the only one it could build
+  carries an AuthnRequest.
 - **`authnRequestId` when the package does not build the request**: with a
   pre-built `authorizationUrl`, or a strategy that returns a payload without
   calling `buildAuthorizationUrl` after a request you sent — unless the login is
@@ -1515,7 +1552,7 @@ not-found message counts as absence.
 a half. It is not part of CI.
 
 Results of the 4.0 suite on a BTP trial subaccount, 2026-09-25 — 4 passed,
-1 skipped. Every login is validated first, by `Saml2BearerProvider`'s default
+1 skipped. Every SAML login is validated first, by `Saml2BearerProvider`'s default
 assertion-only validator, against the per-run test identity provider's
 certificate, declared `idpInitiated`:
 

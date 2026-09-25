@@ -25,8 +25,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   **The configuration is required.** Supply `idpCertificates` (PEM or bare
   base64 DER, a list for key rotation) and `idpEntityId`, or an
   `assertionValidator` of your own; without them the provider's constructor
-  throws a `ValidationError` naming what is missing. `spEntityId` becomes the
-  `Audience` the assertion must name.
+  throws a `ValidationError` naming what is missing. A shipped validator
+  supplied as `assertionValidator` still needs `idpEntityId`, and its absence
+  fails at construction too; only a custom validator does without.
+  `spEntityId` becomes the `Audience` the assertion must name.
 
   **Request IDs.** `InResponseTo` must answer the AuthnRequest the package
   minted, or `authnRequestId` when the package did not build the request — a
@@ -36,7 +38,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   login-CSRF defence of a request ID, and is never inferred.
   `Saml2BearerProvider` against UAA or XSUAA needs it, since both refuse an
   assertion carrying `InResponseTo`. Neither an ID nor the declaration, or the
-  declaration together with an ID, is a `ValidationError`.
+  declaration together with an ID, is a `ValidationError`. With `idpInitiated`
+  and no `authorizationUrl`, a strategy that calls `buildAuthorizationUrl` is
+  refused inside the builder, before any URL is produced — so before a
+  browser opens.
 
   **Status, by validator.** Under `createSignedResponseValidator` —
   `Saml2PureProvider`'s default — an identity provider returning a
@@ -75,10 +80,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   either.
 - **Replay detection**: `defaultReplayStore`, a process-wide in-memory store
   shared by every default validator, keyed by `{issuer, assertionId}` and
-  retained until `expiresAt + clockSkewMs`; `createInMemoryReplayStore()` for
+  retained until the earlier of `Conditions/@NotOnOrAfter` and the latest
+  `NotOnOrAfter` of a bearer confirmation that answers the request and names
+  the ACS, plus `clockSkewMs` — as long as the assertion could still be
+  accepted, which can outlast `expiresAt`; `createInMemoryReplayStore()` for
   an isolated one; `assertionReplayStore` on the providers for a shared store
   across processes.
 - **`clockSkewMs`**, default `0`.
+- The validators refuse a payload carrying a `<!DOCTYPE` declaration, never
+  take a signing certificate from the document's own `KeyInfo`, and accept
+  RSA-SHA1 signatures and SHA-1 digests, as `xml-crypto` does by default; a
+  consumer wanting to refuse SHA-1 wraps a shipped validator in its own.
 - **`AssertionValidationError`**, with `check: AssertionCheck` naming the check
   that refused the assertion, and code `ASSERTION_VALIDATION_ERROR`.
 - `xml-crypto` becomes a runtime dependency, for signature verification.
