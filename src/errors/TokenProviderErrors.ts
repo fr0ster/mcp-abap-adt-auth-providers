@@ -90,3 +90,6 @@ export class BrowserAuthError extends TokenProviderError {
     Object.setPrototypeOf(this, BrowserAuthError.prototype);
   }
 }
+
+export type { AssertionCheck } from './AssertionValidationError';
+export { AssertionValidationError } from './AssertionValidationError';
