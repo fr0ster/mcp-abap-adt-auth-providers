@@ -384,14 +384,9 @@ function createValidator(
         }
       }
 
-      // 10. One bearer confirmation satisfying everything together.
+      // 10. One bearer confirmation satisfying everything together. It
+      // refuses by itself, naming why each candidate failed.
       const chosen = chooseBearerConfirmation(assertion, context, skew);
-      if (!chosen) {
-        return fail(
-          'bearerConfirmation',
-          'no single bearer SubjectConfirmation, under exactly one saml:Subject and with exactly one SubjectConfirmationData, answers our request, names our ACS and is still open',
-        );
-      }
 
       // 11. Destination — the signed-Response validator only, for the same
       // reason as Status. Addressing in the other flow rests on Recipient,
@@ -544,14 +539,25 @@ function everyAssertionWithin(doc: Document, assertion: Element): boolean {
   return true;
 }
 
+/** A candidate's first failed non-temporal sub-rule, or the window it states. */
+type Candidate =
+  | { readonly reason: string }
+  | { readonly notOnOrAfter: Date; readonly notBefore: Date | null };
+
+/** How many candidates a bearerConfirmation refusal names before "and N more". */
+const LISTED_CANDIDATES = 5;
+
 /**
- * The bearer confirmation this login may rely on.
+ * The bearer confirmation this login may rely on, or a refusal naming why
+ * each candidate failed.
  *
  * Every part must hold on the **same** element: gathering `InResponseTo` from
  * one confirmation and `Recipient` from another is how a document satisfies a
- * check nothing in it actually satisfies. When several qualify — which a real
- * identity provider does not produce — the earliest window wins, so the
- * outcome is a shorter session rather than a longer one.
+ * check nothing in it actually satisfies. It is existential: one candidate
+ * passing every sub-rule is enough, and every candidate is evaluated, so a
+ * failing one never hides a valid one after it. When several qualify — which
+ * a real identity provider does not produce — the earliest window wins, so
+ * the outcome is a shorter session rather than a longer one.
  *
  * `latestNotOnOrAfter` answers a different question: until when could some
  * confirmation let this assertion in? It is the latest `NotOnOrAfter` among
@@ -563,55 +569,135 @@ function chooseBearerConfirmation(
   assertion: Element,
   context: AssertionContext,
   skew: number,
-): { notOnOrAfter: Date; latestNotOnOrAfter: Date } | null {
+): { notOnOrAfter: Date; latestNotOnOrAfter: Date } {
+  const subject = requireOne(
+    assertion,
+    SAML_NS,
+    'Subject',
+    'bearerConfirmation',
+    'the assertion',
+    'saml:Subject',
+  );
+  const confirmations = directChildren(subject, SAML_NS, 'SubjectConfirmation');
+  if (confirmations.length === 0) {
+    return fail(
+      'bearerConfirmation',
+      'the saml:Subject holds no SubjectConfirmation',
+    );
+  }
+
   const now = Date.now();
   let best: Date | null = null;
   let latest: Date | null = null;
+  const reasons: string[] = [];
 
-  const subject = directChild(assertion, SAML_NS, 'Subject');
-  if (!subject) return null;
-
-  for (const confirmation of directChildren(
-    subject,
-    SAML_NS,
-    'SubjectConfirmation',
-  )) {
-    if (confirmation.getAttribute('Method') !== BEARER) continue;
-
-    const data = directChild(confirmation, SAML_NS, 'SubjectConfirmationData');
-    if (!data) continue;
-    // Option B: an expected ID must be matched exactly; no expected ID — an
-    // IdP-initiated login — means the attribute must not be there at all.
-    if (context.expectedInResponseTo === undefined) {
-      if (data.hasAttribute('InResponseTo')) continue;
-    } else if (
-      data.getAttribute('InResponseTo') !== context.expectedInResponseTo
-    ) {
+  for (const confirmation of confirmations) {
+    const candidate = readConfirmation(confirmation, context);
+    if ('reason' in candidate) {
+      reasons.push(candidate.reason);
       continue;
     }
-    if (data.getAttribute('Recipient') !== context.acsUrl) continue;
-
-    const notOnOrAfter = parseXsdDateTime(data.getAttribute('NotOnOrAfter'));
-    if (!notOnOrAfter) continue;
-    const notBeforeRaw = data.getAttribute('NotBefore');
-    const notBefore = notBeforeRaw ? parseXsdDateTime(notBeforeRaw) : null;
-    if (notBeforeRaw && !notBefore) continue;
+    const { notOnOrAfter, notBefore } = candidate;
 
     // Could qualify at some instant: counts towards how long to remember.
     if (!latest || notOnOrAfter.getTime() > latest.getTime()) {
       latest = notOnOrAfter;
     }
 
-    // Qualifies now: a candidate for the session's window.
-    if (notOnOrAfter.getTime() + skew <= now) continue;
-    if (notBefore && notBefore.getTime() - skew > now) continue;
+    // 7, 8. Qualifies now: a candidate for the session's window.
+    if (notOnOrAfter.getTime() + skew <= now) {
+      reasons.push('NotOnOrAfter has passed');
+      continue;
+    }
+    if (notBefore && notBefore.getTime() - skew > now) {
+      reasons.push('NotBefore has not arrived');
+      continue;
+    }
 
     if (!best || notOnOrAfter.getTime() < best.getTime()) best = notOnOrAfter;
   }
 
   // `latest` is set whenever `best` is: every qualifying confirmation was
-  // counted towards it first.
-  return best && latest
-    ? { notOnOrAfter: best, latestNotOnOrAfter: latest }
-    : null;
+  // counted towards it first. When nothing qualified, every candidate left
+  // exactly one reason, in document order.
+  if (best && latest) return { notOnOrAfter: best, latestNotOnOrAfter: latest };
+  return fail('bearerConfirmation', describeRefusals(reasons));
+}
+
+/**
+ * Sub-rules 1 to 6, in the spec's fixed order: the first one this candidate
+ * fails, or the window it states. The temporal sub-rules 7 and 8 are the
+ * caller's, since a candidate failing only those still bounds replay
+ * retention.
+ */
+function readConfirmation(
+  confirmation: Element,
+  context: AssertionContext,
+): Candidate {
+  // 1.
+  if (confirmation.getAttribute('Method') !== BEARER) {
+    return { reason: 'Method is not bearer' };
+  }
+  // 2.
+  const data = directChildren(confirmation, SAML_NS, 'SubjectConfirmationData');
+  if (data.length === 0) {
+    return { reason: 'carries no SubjectConfirmationData' };
+  }
+  if (data.length > 1) {
+    return {
+      reason: `carries ${data.length} SubjectConfirmationData; exactly one is allowed`,
+    };
+  }
+  const only = data[0];
+  // 3. Option B: an expected ID must be matched exactly; no expected ID — an
+  // IdP-initiated login — means the attribute must not be there at all.
+  if (context.expectedInResponseTo === undefined) {
+    if (only.hasAttribute('InResponseTo')) {
+      return {
+        reason: 'InResponseTo is present, but this login sent no request',
+      };
+    }
+  } else if (
+    only.getAttribute('InResponseTo') !== context.expectedInResponseTo
+  ) {
+    return { reason: 'InResponseTo does not answer our request' };
+  }
+  // 4.
+  if (only.getAttribute('Recipient') !== context.acsUrl) {
+    return { reason: 'Recipient is not the ACS' };
+  }
+  // 5.
+  const notOnOrAfterRaw = only.getAttribute('NotOnOrAfter');
+  if (!notOnOrAfterRaw) {
+    return { reason: 'SubjectConfirmationData has no NotOnOrAfter' };
+  }
+  const notOnOrAfter = parseXsdDateTime(notOnOrAfterRaw);
+  if (!notOnOrAfter) {
+    return {
+      reason:
+        'SubjectConfirmationData NotOnOrAfter is not a valid xsd:dateTime',
+    };
+  }
+  // 6.
+  const notBeforeRaw = only.getAttribute('NotBefore');
+  const notBefore = notBeforeRaw ? parseXsdDateTime(notBeforeRaw) : null;
+  if (notBeforeRaw && !notBefore) {
+    return {
+      reason: 'SubjectConfirmationData NotBefore is not a valid xsd:dateTime',
+    };
+  }
+  return { notOnOrAfter, notBefore };
+}
+
+/**
+ * `no bearer confirmation qualifies: #1 …; #2 …`, naming at most
+ * LISTED_CANDIDATES candidates so the message stays bounded however many the
+ * document carries.
+ */
+function describeRefusals(reasons: readonly string[]): string {
+  const listed = reasons
+    .slice(0, LISTED_CANDIDATES)
+    .map((reason, index) => `#${index + 1} ${reason}`);
+  const more = reasons.length - listed.length;
+  return `no bearer confirmation qualifies: ${listed.join('; ')}${more > 0 ? `; and ${more} more` : ''}`;
 }
