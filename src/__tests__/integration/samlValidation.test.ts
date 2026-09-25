@@ -22,7 +22,16 @@
  */
 
 import { randomUUID } from 'node:crypto';
-import { afterEach, describe, expect, it, jest } from '@jest/globals';
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  jest,
+} from '@jest/globals';
 import {
   generateKeyMaterial,
   type KeyMaterial,
@@ -33,6 +42,7 @@ import {
   visit,
 } from '@mcp-abap-adt/auth-mocks';
 import type {
+  IAssertionReplayStore,
   IAssertionValidator,
   ITokenResult,
   ValidatedAssertion,
@@ -45,6 +55,7 @@ import {
   createSignedAssertionValidator,
   createSignedResponseValidator,
 } from '../../validation/assertionValidator';
+import { createInMemoryReplayStore } from '../../validation/inMemoryReplayStore';
 import { getAvailablePort } from '../helpers/netHelpers';
 
 jest.setTimeout(30_000);
@@ -76,25 +87,49 @@ interface Stand {
 }
 
 /**
- * An IdP whose only registered ACS is the one the login will bind. The port
- * is chosen first because the mock takes its registrations at start, exactly
- * as a real IdP holds them in service-provider metadata.
+ * One IdP per signing mode, started once for the file: every start generates
+ * a 2048-bit RSA key, and a start per test made this the slowest suite in the
+ * package. Each IdP's only registered ACS is the one its logins bind — the
+ * port is chosen first because the mock takes its registrations at start,
+ * exactly as a real IdP holds them in service-provider metadata. A test sets
+ * the variant it needs through standFor and never inherits one.
  */
-async function startIdp(
-  signWhat: Signed,
-  variant: SamlVariant = 'valid',
-): Promise<Stand> {
-  const port = await getAvailablePort();
-  const idp = await startMockSamlIdp({
-    variant,
-    signWhat,
-    acsUrls: [`http://localhost:${port}/callback`],
-    issuer: ISSUER,
-    audience: AUDIENCE,
-  });
-  cleanups.push(() => idp.close());
-  return { idp, port };
+const stands = {} as Record<Signed, Stand>;
+
+beforeAll(async () => {
+  for (const signWhat of ['response', 'assertion'] as const) {
+    const port = await getAvailablePort();
+    const idp = await startMockSamlIdp({
+      variant: 'valid',
+      signWhat,
+      acsUrls: [`http://localhost:${port}/callback`],
+      issuer: ISSUER,
+      audience: AUDIENCE,
+    });
+    stands[signWhat] = { idp, port };
+  }
+});
+
+afterAll(async () => {
+  for (const stand of Object.values(stands)) await stand.idp.close();
+});
+
+/** The shared IdP for `signWhat`, switched to `variant`. */
+function standFor(signWhat: Signed, variant: SamlVariant = 'valid'): Stand {
+  const stand = stands[signWhat];
+  stand.idp.setVariant(variant);
+  return stand;
 }
+
+/**
+ * A replay store of this test's own. The mock mints a fresh assertion ID per
+ * delivery unless a test asks it to repeat one, so each test's assertions
+ * are its own as well.
+ */
+let replayStore: IAssertionReplayStore;
+beforeEach(() => {
+  replayStore = createInMemoryReplayStore();
+});
 
 interface LoginOptions {
   /** Stands in for the browser. Defaults to `visit`. */
@@ -135,14 +170,20 @@ async function login(
 
   let assertionValidator: IAssertionValidator | undefined =
     validator === 'assertion'
-      ? createSignedAssertionValidator({ idpCertificates: certificates })
+      ? createSignedAssertionValidator({
+          idpCertificates: certificates,
+          replayStore,
+        })
       : undefined;
   if (options.onValidated) {
     // A spy around the real validator: the provider returns an ITokenResult,
     // so this is the only honest way to see which element was signed.
     const real =
       assertionValidator ??
-      createSignedResponseValidator({ idpCertificates: certificates });
+      createSignedResponseValidator({
+        idpCertificates: certificates,
+        replayStore,
+      });
     const report = options.onValidated;
     assertionValidator = {
       async validate(samlResponse, context) {
@@ -160,6 +201,7 @@ async function login(
     idpEntityId: ISSUER,
     idpCertificates: certificates,
     assertionValidator,
+    assertionReplayStore: replayStore,
     authorization: strategy,
     cookieProvider: async (samlResponse) => {
       received.push(samlResponse);
@@ -174,7 +216,7 @@ async function loginWith(
   signWhat: Signed,
   variant: SamlVariant,
 ): Promise<LoginResult> {
-  return login(await startIdp(signWhat, variant), signWhat);
+  return login(standFor(signWhat, variant), signWhat);
 }
 
 /**
@@ -310,7 +352,7 @@ describe('SAML validation end to end against auth-mocks', () => {
   describe('a successful login', () => {
     for (const signWhat of ['response', 'assertion'] as const) {
       it(`takes expiresAt from the assertion and the cookie from cookieProvider (${signWhat} signed)`, async () => {
-        const stand = await startIdp(signWhat);
+        const stand = standFor(signWhat);
         const validated: ValidatedAssertion[] = [];
 
         const { tokens, received } = await login(stand, signWhat, {
@@ -347,7 +389,7 @@ describe('SAML validation end to end against auth-mocks', () => {
   describe('the signature on the wrong element', () => {
     it('refuses a response-signed document under the assertion-only validator', async () => {
       await expect(
-        login(await startIdp('response'), 'assertion'),
+        login(standFor('response'), 'assertion'),
       ).rejects.toMatchObject({
         check: 'signedNode',
         message: expect.stringContaining(
@@ -358,7 +400,7 @@ describe('SAML validation end to end against auth-mocks', () => {
 
     it('refuses an assertion-signed document under the signed-Response validator', async () => {
       await expect(
-        login(await startIdp('assertion'), 'response'),
+        login(standFor('assertion'), 'response'),
       ).rejects.toMatchObject({
         check: 'signedNode',
         message: expect.stringContaining(
@@ -375,7 +417,7 @@ describe('SAML validation end to end against auth-mocks', () => {
 
     it('accepts the re-signed document untouched, in both modes — so a refusal below is the corruption', async () => {
       for (const signWhat of ['response', 'assertion'] as const) {
-        const stand = await startIdp(signWhat, 'unsigned');
+        const stand = standFor(signWhat, 'unsigned');
         await expect(
           login(stand, signWhat, {
             certificates: [key.certificatePem],
@@ -387,7 +429,7 @@ describe('SAML validation end to end against auth-mocks', () => {
 
     it('refuses a Response/Issuer that differs from the assertion’s only when the Response is signed', async () => {
       const bySignedResponse = login(
-        await startIdp('response', 'unsigned'),
+        standFor('response', 'unsigned'),
         'response',
         {
           certificates: [key.certificatePem],
@@ -402,7 +444,7 @@ describe('SAML validation end to end against auth-mocks', () => {
       });
 
       const byAssertion = login(
-        await startIdp('assertion', 'unsigned'),
+        standFor('assertion', 'unsigned'),
         'assertion',
         {
           certificates: [key.certificatePem],
@@ -418,7 +460,7 @@ describe('SAML validation end to end against auth-mocks', () => {
   describe('replay', () => {
     for (const signWhat of ['response', 'assertion'] as const) {
       it(`refuses the same assertion the second time (${signWhat} signed)`, async () => {
-        const stand = await startIdp(signWhat);
+        const stand = standFor(signWhat);
         await login(stand, signWhat);
         const first = stand.idp.lastAssertionId();
 
@@ -443,7 +485,7 @@ describe('SAML validation end to end against auth-mocks', () => {
         return xml.replace(signed, `${forgedAssertionFrom(xml)}${signed}`);
       };
       await expect(
-        login(await startIdp('assertion'), 'assertion', {
+        login(standFor('assertion'), 'assertion', {
           browser: tamperingBrowser(wrap),
         }),
       ).rejects.toMatchObject({
@@ -473,7 +515,7 @@ describe('SAML validation end to end against auth-mocks', () => {
         );
       };
       await expect(
-        login(await startIdp('response'), 'response', {
+        login(standFor('response'), 'response', {
           browser: tamperingBrowser(wrap),
         }),
       ).rejects.toMatchObject({
@@ -482,6 +524,41 @@ describe('SAML validation end to end against auth-mocks', () => {
           'does not cover the samlp:Response this validator requires',
         ),
       });
+    });
+  });
+
+  describe('isolation between tests', () => {
+    // Each test's logins record into that test's own store — not the
+    // process-wide default — so no test can see another's assertions.
+    for (const signWhat of ['response', 'assertion'] as const) {
+      it(`records the assertion in this test's own replay store (${signWhat} signed)`, async () => {
+        const stand = standFor(signWhat);
+        await login(stand, signWhat);
+        const assertionId = stand.idp.lastAssertionId();
+        expect(assertionId).toBeDefined();
+        await expect(
+          replayStore.recordIfUnseen(
+            { issuer: ISSUER, assertionId: assertionId as string },
+            new Date(Date.now() + 60_000),
+          ),
+        ).resolves.toBe(false);
+      });
+    }
+
+    // Two tests in order: the first leaves a record behind, the second must
+    // not see it. Run alone, the second passes trivially — it is the pair
+    // that proves a store per test.
+    const probe = { issuer: 'urn:isolation', assertionId: '_probe' };
+    it('leaves a record behind (1 of 2)', async () => {
+      await expect(
+        replayStore.recordIfUnseen(probe, new Date(Date.now() + 60_000)),
+      ).resolves.toBe(true);
+    });
+
+    it('does not see the record the previous test left (2 of 2)', async () => {
+      await expect(
+        replayStore.recordIfUnseen(probe, new Date(Date.now() + 60_000)),
+      ).resolves.toBe(true);
     });
   });
 });
