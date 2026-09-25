@@ -22,12 +22,8 @@ import type {
   IAssertionValidator,
   ValidatedAssertion,
 } from '@mcp-abap-adt/interfaces-auth';
-import {
-  DOMParser,
-  type Document,
-  type Element,
-  XMLSerializer,
-} from '@xmldom/xmldom';
+import { type Document, type Element, XMLSerializer } from '@xmldom/xmldom';
+import { parseStrictXml } from '../auth/strictXml';
 import {
   type AssertionCheck,
   AssertionValidationError,
@@ -131,10 +127,7 @@ function createValidator(
       }
       let doc: Document;
       try {
-        doc = new DOMParser().parseFromString(
-          xml,
-          'text/xml',
-        ) as unknown as Document;
+        doc = parseStrictXml(xml) as unknown as Document;
       } catch {
         return fail('document', 'the SAMLResponse did not parse as XML');
       }

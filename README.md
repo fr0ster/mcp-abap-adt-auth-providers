@@ -673,6 +673,11 @@ What the table compresses:
   before it is parsed: a SAML message has no use for one, and the document is
   parsed twice — by `@xmldom/xmldom` 0.9 here and by the 0.8 inside
   `xml-crypto` — where a DTD is exactly what parsers disagree about.
+- **Any XML fault is a refusal, and nothing reaches the console.** The parser
+  is given an error handler that throws on every level, so a payload it would
+  have repaired — an undeclared entity, say — is refused at `document` rather
+  than validated in its repaired form, and a malformed callback never writes
+  to stderr past your `ILogger`. The same holds for the bearer conversion.
 - **SHA-1 is accepted.** RSA-SHA1 signatures and SHA-1 digests verify, as they
   do under `xml-crypto`'s defaults, because identity providers still emit them
   and refusing them would refuse genuine logins. To refuse them, supply an

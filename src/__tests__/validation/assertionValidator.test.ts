@@ -1220,4 +1220,33 @@ describe("the signed-Response validator (Saml2PureProvider's default)", () => {
       message: expect.stringMatching(/did not parse as XML/),
     });
   });
+
+  // @xmldom/xmldom reports to the console unless given onError, and recovers
+  // from an `error`-level fault (an undeclared entity) by returning a DOM.
+  // Either would let an unauthenticated caller write to the process's stderr,
+  // bypassing ILogger, or reach the later checks with a repaired document.
+  it('refuses XML the parser would recover from, and writes nothing to the console', async () => {
+    const spies = (['error', 'warn', 'log'] as const).map((level) =>
+      jest.spyOn(console, level).mockImplementation(() => undefined),
+    );
+    try {
+      for (const xml of [
+        `<samlp:Response xmlns:samlp="urn:oasis:names:tc:SAML:2.0:protocol" ID="_r">&bogus;</samlp:Response>`,
+        '<a><b></a>',
+      ]) {
+        await expect(
+          validator().validate(
+            Buffer.from(xml, 'utf8').toString('base64'),
+            context,
+          ),
+        ).rejects.toMatchObject({
+          check: 'document',
+          message: expect.stringMatching(/did not parse as XML/),
+        });
+      }
+      for (const spy of spies) expect(spy).not.toHaveBeenCalled();
+    } finally {
+      for (const spy of spies) spy.mockRestore();
+    }
+  });
 });

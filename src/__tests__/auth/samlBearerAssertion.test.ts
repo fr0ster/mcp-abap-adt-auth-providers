@@ -3,7 +3,7 @@
  * Assertion, base64url-encoded.
  */
 
-import { describe, expect, it } from '@jest/globals';
+import { describe, expect, it, jest } from '@jest/globals';
 import { DOMParser } from '@xmldom/xmldom';
 import { toBearerAssertion } from '../../auth/samlBearerAssertion';
 
@@ -136,5 +136,21 @@ describe('toBearerAssertion', () => {
     expect(() => toBearerAssertion('not-xml-at-all')).toThrow(
       'not base64-encoded XML',
     );
+  });
+  // Same parser rule as the validator: any XML fault is a refusal, and the
+  // parser never writes to the console on its own.
+  it('refuses XML the parser would recover from, and writes nothing to the console', () => {
+    const spies = (['error', 'warn', 'log'] as const).map((level) =>
+      jest.spyOn(console, level).mockImplementation(() => undefined),
+    );
+    try {
+      const recoverable = `<saml:Assertion xmlns:saml="${ASSERTION_NS}" ID="_a">&bogus;</saml:Assertion>`;
+      expect(() =>
+        toBearerAssertion(Buffer.from(recoverable, 'utf8').toString('base64')),
+      ).toThrow('not well-formed XML');
+      for (const spy of spies) expect(spy).not.toHaveBeenCalled();
+    } finally {
+      for (const spy of spies) spy.mockRestore();
+    }
   });
 });

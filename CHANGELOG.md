@@ -37,11 +37,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   was sent, so the assertion must carry no `InResponseTo`; it gives up the
   login-CSRF defence of a request ID, and is never inferred.
   `Saml2BearerProvider` against UAA or XSUAA needs it, since both refuse an
-  assertion carrying `InResponseTo`. Neither an ID nor the declaration, or the
-  declaration together with an ID, is a `ValidationError`. With `idpInitiated`
-  and no `authorizationUrl`, a strategy that calls `buildAuthorizationUrl` is
-  refused inside the builder, before any URL is produced — so before a
-  browser opens.
+  assertion carrying `InResponseTo`. Having neither an ID nor the declaration,
+  or combining the declaration with an ID, raises a `ValidationError`. With
+  `idpInitiated` and no `authorizationUrl`, a strategy that calls
+  `buildAuthorizationUrl` is refused inside the builder, before any URL is
+  produced — so before a browser opens.
 
   **Status, by validator.** Under `createSignedResponseValidator` —
   `Saml2PureProvider`'s default — an identity provider returning a
@@ -87,6 +87,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   an isolated one; `assertionReplayStore` on the providers for a shared store
   across processes.
 - **`clockSkewMs`**, default `0`.
+- Any XML parse fault — including one `@xmldom/xmldom` would otherwise repair,
+  such as an undeclared entity — is a refusal at `document`, and the parser
+  never writes to the console; the bearer conversion (`toBearerAssertion`)
+  parses the same way.
 - The validators refuse a payload carrying a `<!DOCTYPE` declaration, never
   take a signing certificate from the document's own `KeyInfo`, and accept
   RSA-SHA1 signatures and SHA-1 digests, as `xml-crypto` does by default; a
