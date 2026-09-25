@@ -157,6 +157,17 @@ function createValidator(
           'the signature does not cover the assertion this response carries',
         );
       }
+      // 3b. Nothing assertion-shaped outside the one read. Wherever the
+      // signature sits, the payload travels on whole — Saml2PureProvider hands
+      // it to the cookie provider — so an Assertion or EncryptedAssertion in
+      // an unsigned part of it (Extensions, a sibling, a wrapper) is something
+      // a later reader may take for the real one.
+      if (!everyAssertionWithin(doc, assertion)) {
+        return fail(
+          'signedNode',
+          'the document carries a saml:Assertion or saml:EncryptedAssertion outside the one the signature covers',
+        );
+      }
 
       // 4. Status. Only when the Response is the signed element: otherwise it
       // lies outside the signature, and checking a field an attacker sets is
@@ -196,7 +207,15 @@ function createValidator(
           'the assertion must carry exactly one non-empty saml:Issuer',
         );
       }
-      if (context.expectedIssuer && issuer !== context.expectedIssuer) {
+      // Fail closed: with nothing to compare against, any issuer whose key is
+      // configured would pass, which is not what this validator promises.
+      if (!context.expectedIssuer) {
+        return fail(
+          'issuer',
+          'no expectedIssuer was configured, so the assertion issuer cannot be trusted',
+        );
+      }
+      if (issuer !== context.expectedIssuer) {
         return fail(
           'issuer',
           `the assertion was issued by ${issuer}, not the trusted issuer`,
@@ -206,12 +225,19 @@ function createValidator(
       // signed-Response validator alone: only there are both inside the
       // signature.
       if (require === 'response') {
-        const responseIssuer = directChild(
-          root,
-          SAML_NS,
-          'Issuer',
-        )?.textContent;
-        if (responseIssuer && responseIssuer !== issuer) {
+        // Optional, so none is fine; but two are an ambiguity, and one that is
+        // present must agree — empty included, since empty is not absent.
+        const responseIssuers = directChildren(root, SAML_NS, 'Issuer');
+        if (responseIssuers.length > 1) {
+          return fail(
+            'issuer',
+            'the response must carry at most one saml:Issuer',
+          );
+        }
+        if (
+          responseIssuers.length === 1 &&
+          (responseIssuers[0].textContent ?? '') !== issuer
+        ) {
           return fail(
             'issuer',
             'the response and the assertion name different issuers',
@@ -381,6 +407,24 @@ function directChild(
   // resolving it silently in favour of the first is how a forged element comes
   // to be read in preference to a real one.
   return found.length === 1 ? found[0] : null;
+}
+
+/**
+ * Whether every `saml:Assertion` and `saml:EncryptedAssertion` in the
+ * document is `assertion` itself or lies inside it.
+ */
+function everyAssertionWithin(doc: Document, assertion: Element): boolean {
+  for (const local of ['Assertion', 'EncryptedAssertion']) {
+    const found = doc.getElementsByTagNameNS(SAML_NS, local);
+    for (let i = 0; i < found.length; i++) {
+      let node = found[i] as unknown as Element | null;
+      while (node && node !== assertion) {
+        node = node.parentNode as unknown as Element | null;
+      }
+      if (!node) return false;
+    }
+  }
+  return true;
 }
 
 /**
