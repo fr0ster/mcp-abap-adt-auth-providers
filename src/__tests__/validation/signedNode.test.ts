@@ -281,4 +281,38 @@ describe('resolveSignedElements', () => {
       resolveSignedElements(xml, parse(xml), [key.certificatePem]),
     ).toThrow(/does not verify against any configured certificate/);
   });
+
+  // A verifier that stops checking after the first signature is exactly the
+  // shape this attack needs: a legitimate signature placed first buys trust
+  // for the whole document, and a second, forged signature riding along
+  // behind it is never checked. doubleSigned's first argument signs the
+  // Assertion, which is nested inside the Response and so comes second in
+  // document order; its second argument signs the Response, prepended as the
+  // Response's first child and so comes first. `doubleSigned(untrusted, key)`
+  // therefore puts the trusted signature first and the untrusted one second —
+  // the reverse of the case above — and every signature must still be
+  // checked for the document to be refused.
+  it('refuses the document when the untrusted signature comes after a trusted one', () => {
+    const key = generateKeyMaterial();
+    const untrusted = generateKeyMaterial();
+    const xml = doubleSigned(untrusted, key);
+    expect(() =>
+      resolveSignedElements(xml, parse(xml), [key.certificatePem]),
+    ).toThrow(/does not verify against any configured certificate/);
+  });
+
+  // The same attack without any nesting to rely on: two Assertions as
+  // siblings, the first genuinely signed by a trusted key, the second by a
+  // key nobody configured. A verifier that only checks the first signature it
+  // finds would return both elements as "covered".
+  it('refuses the document when a trusted signature has an untrusted sibling', () => {
+    const key = generateKeyMaterial();
+    const untrusted = generateKeyMaterial();
+    const wrapped = RESPONSE(
+      `${signXml(ASSERTION('_a'), key)}${signXml(ASSERTION('_b'), untrusted)}`,
+    );
+    expect(() =>
+      resolveSignedElements(wrapped, parse(wrapped), [key.certificatePem]),
+    ).toThrow(/does not verify against any configured certificate/);
+  });
 });
