@@ -1,5 +1,9 @@
 import { describe, expect, it } from '@jest/globals';
-import { generateKeyMaterial, signXml } from '@mcp-abap-adt/auth-mocks';
+import {
+  generateKeyMaterial,
+  type KeyMaterial,
+  signXml,
+} from '@mcp-abap-adt/auth-mocks';
 import { DOMParser, type Document, type Element } from '@xmldom/xmldom';
 import { SignedXml } from 'xml-crypto';
 import { resolveSignedElements, toPem } from '../../validation/signedNode';
@@ -14,6 +18,61 @@ const ASSERTION = (id = '_a1') =>
 const RESPONSE = (inner: string, id = '_r1') =>
   `<samlp:Response xmlns:samlp="urn:oasis:names:tc:SAML:2.0:protocol" ID="${id}">` +
   `${inner}</samlp:Response>`;
+
+const DSIG_NS = 'http://www.w3.org/2000/09/xmldsig#';
+
+/**
+ * ASSERTION() signed by xml-crypto, with `patch` applied to the finished
+ * Reference before SignatureValue is computed — so the signature over the
+ * patched SignedInfo is genuine and only the rule under test can refuse it.
+ * Editing a Reference after signing would break SignatureValue instead, and
+ * the test would stop at "does not verify". `addAllReferences` is private in
+ * xml-crypto's types, hence the cast; it builds SignedInfo's References and
+ * runs before calculateSignatureValue in computeSignature (xml-crypto 6.3.2).
+ */
+function signWithPatchedReference(
+  key: KeyMaterial,
+  patch: (reference: Element, doc: Document) => void,
+): string {
+  const signer = new SignedXml({
+    privateKey: key.privateKeyPem,
+    canonicalizationAlgorithm: 'http://www.w3.org/2001/10/xml-exc-c14n#',
+    signatureAlgorithm: 'http://www.w3.org/2001/04/xmldsig-more#rsa-sha256',
+  });
+  signer.addReference({
+    xpath: "//*[local-name(.)='Assertion']",
+    transforms: [
+      'http://www.w3.org/2000/09/xmldsig#enveloped-signature',
+      'http://www.w3.org/2001/10/xml-exc-c14n#',
+    ],
+    digestAlgorithm: 'http://www.w3.org/2001/04/xmlenc#sha256',
+  });
+  const internals = signer as unknown as {
+    addAllReferences: (
+      doc: Document,
+      signature: Element,
+      ...rest: unknown[]
+    ) => void;
+  };
+  const original = internals.addAllReferences.bind(signer);
+  internals.addAllReferences = (doc, signature, ...rest) => {
+    original(doc, signature, ...rest);
+    patch(signature.getElementsByTagNameNS(DSIG_NS, 'Reference')[0], doc);
+  };
+  signer.computeSignature(ASSERTION(), {
+    location: { reference: "//*[local-name(.)='Issuer']", action: 'after' },
+  });
+  return RESPONSE(signer.getSignedXml());
+}
+
+/** Whether xml-crypto itself accepts the document's only signature. */
+function xmlCryptoVerifies(xml: string, key: KeyMaterial): boolean {
+  const probe = new SignedXml({ publicCert: key.certificatePem });
+  probe.loadSignature(
+    parse(xml).getElementsByTagNameNS(DSIG_NS, 'Signature')[0] as never,
+  );
+  return probe.checkSignature(xml);
+}
 
 describe('resolveSignedElements', () => {
   it('returns the Assertion when the Assertion is signed', () => {
@@ -272,7 +331,28 @@ describe('resolveSignedElements', () => {
 
     expect(() =>
       resolveSignedElements(wrapped, parse(wrapped), [key.certificatePem]),
-    ).toThrow(/exactly one is required/i);
+    ).toThrow(/the signature carries 2 ds:Reference; exactly one is allowed/);
+  });
+
+  // xml-crypto finds SignedInfo's References by local name in any namespace;
+  // this module counts only ds:Reference. A Reference moved to another
+  // namespace therefore verifies under xml-crypto and counts as none here —
+  // the only way a verified signature reaches the zero case, since with no
+  // Reference at all xml-crypto's loadSignature throws first.
+  it('refuses a signature carrying no ds:Reference', () => {
+    const key = generateKeyMaterial();
+    const wrapped = signWithPatchedReference(key, (reference, doc) => {
+      const moved = doc.createElementNS('urn:not-xmldsig', 'x:Reference');
+      moved.setAttribute('URI', reference.getAttribute('URI') ?? '');
+      while (reference.firstChild) moved.appendChild(reference.firstChild);
+      reference.parentNode?.replaceChild(moved, reference);
+    });
+    expect(wrapped).toContain('<x:Reference');
+    expect(xmlCryptoVerifies(wrapped, key)).toBe(true);
+
+    expect(() =>
+      resolveSignedElements(wrapped, parse(wrapped), [key.certificatePem]),
+    ).toThrow(/the signature carries no ds:Reference/);
   });
 
   it('returns the signed assertion, not the forged sibling', () => {

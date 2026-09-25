@@ -150,9 +150,12 @@ function resolveOne(
   // reference: two would be two candidate answers to "what is signed", the
   // ambiguity this module exists to remove.
   const references = signatureNode.getElementsByTagNameNS(DSIG_NS, 'Reference');
-  if (references.length !== 1) {
+  if (references.length === 0) {
+    throw new Error('the signature carries no ds:Reference');
+  }
+  if (references.length > 1) {
     throw new Error(
-      `the signature carries ${references.length} references; exactly one is required`,
+      `the signature carries ${references.length} ds:Reference; exactly one is allowed`,
     );
   }
   const uri = references[0].getAttribute('URI') ?? '';

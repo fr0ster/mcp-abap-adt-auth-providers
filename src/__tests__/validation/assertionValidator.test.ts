@@ -133,6 +133,24 @@ const signedElementsOf = (xml: string) =>
 const stripSignature = (xml: string) =>
   xml.replace(/<(\w+:)?Signature[\s>][\s\S]*?<\/(\w+:)?Signature>/, '');
 
+/**
+ * The default response-signed fixture, altered before it is signed, so the
+ * signature covers the alteration and only the rule under test can refuse
+ * it. The default fixture has no Response Issuer, so the Signature goes
+ * first.
+ */
+const alteredResponse = (
+  alter: (unsigned: string) => string,
+  o: Parameters<typeof buildResponse>[0] = {},
+) =>
+  signXml(alter(stripSignature(buildResponse(o))), KEY, {
+    referenceXPath: "//*[local-name(.)='Response']",
+    location: {
+      reference: "//*[local-name(.)='Response']",
+      action: 'prepend',
+    },
+  });
+
 const context = {
   expectedInResponseTo: REQUEST_ID,
   audience: AUDIENCE,
@@ -205,7 +223,9 @@ describe("the signed-Response validator (Saml2PureProvider's default)", () => {
       ),
     ).rejects.toMatchObject({
       check: 'signedNode',
-      message: expect.stringMatching(/does not cover the assertion/),
+      message: expect.stringMatching(
+        /does not cover the samlp:Response this validator requires/,
+      ),
     });
   });
 
@@ -217,7 +237,9 @@ describe("the signed-Response validator (Saml2PureProvider's default)", () => {
       ),
     ).rejects.toMatchObject({
       check: 'signedNode',
-      message: expect.stringMatching(/does not cover the assertion/),
+      message: expect.stringMatching(
+        /does not cover the saml:Assertion this validator requires/,
+      ),
     });
   });
 
@@ -303,7 +325,7 @@ describe("the signed-Response validator (Saml2PureProvider's default)", () => {
       validator().validate(encode(buildResponse({ issuer: null })), context),
     ).rejects.toMatchObject({
       check: 'issuer',
-      message: expect.stringMatching(/exactly one non-empty saml:Issuer/),
+      message: expect.stringMatching(/the assertion carries no saml:Issuer/),
     });
   });
 
@@ -339,7 +361,9 @@ describe("the signed-Response validator (Saml2PureProvider's default)", () => {
       ),
     ).rejects.toMatchObject({
       check: 'conditions',
-      message: expect.stringMatching(/exactly one saml:Conditions/),
+      message: expect.stringMatching(
+        /the assertion carries no saml:Conditions/,
+      ),
     });
   });
 
@@ -374,8 +398,207 @@ describe("the signed-Response validator (Saml2PureProvider's default)", () => {
       validator().validate(encode(signed), context),
     ).rejects.toMatchObject({
       check: 'conditions',
-      message: expect.stringMatching(/exactly one saml:Conditions/),
+      message: expect.stringMatching(
+        /the assertion carries 2 saml:Conditions; exactly one is allowed/,
+      ),
     });
+  });
+
+  // Cardinality: every exactly-once element says which way its count failed.
+  // Each fixture is signed after the alteration (alteredResponse), and the
+  // premise probe proves the Response is what the signature covers.
+  it('refuses a Response carrying no direct-child Assertion', async () => {
+    const xml = alteredResponse((u) =>
+      u.replace(/<saml:Assertion[\s\S]*<\/saml:Assertion>/, ''),
+    );
+    expect(signedElementsOf(xml)[0].localName).toBe('Response');
+    await expect(
+      validator().validate(encode(xml), context),
+    ).rejects.toMatchObject({
+      check: 'signedNode',
+      message: expect.stringMatching(
+        /the response carries no direct-child saml:Assertion/,
+      ),
+    });
+  });
+
+  it('refuses a Response carrying two direct-child Assertions', async () => {
+    const xml = alteredResponse((u) => {
+      const assertion =
+        /<saml:Assertion[\s\S]*<\/saml:Assertion>/.exec(u)?.[0] ?? '';
+      return u.replace(
+        assertion,
+        `${assertion}${assertion.replace('ID="_a1"', 'ID="_a2"')}`,
+      );
+    });
+    expect(signedElementsOf(xml)[0].localName).toBe('Response');
+    await expect(
+      validator().validate(encode(xml), context),
+    ).rejects.toMatchObject({
+      check: 'signedNode',
+      message: expect.stringMatching(
+        /the response carries 2 direct-child saml:Assertion; exactly one is allowed/,
+      ),
+    });
+  });
+
+  // The assertion-only validator meets the same rule: the signed Assertion
+  // moved into the unsigned Extensions still verifies, and the Response then
+  // has no direct-child Assertion at all.
+  it('refuses, under the assertion-only validator, an Assertion that sits only in Extensions', async () => {
+    const original = buildResponse({ signWhat: 'assertion' });
+    const assertion =
+      /<saml:Assertion[\s\S]*<\/saml:Assertion>/.exec(original)?.[0] ?? '';
+    const xml = original
+      .replace(assertion, '')
+      .replace(
+        '<samlp:Status>',
+        `<samlp:Extensions>${assertion}</samlp:Extensions><samlp:Status>`,
+      );
+    expect(signedElementsOf(xml)[0].getAttribute('ID')).toBe('_a1');
+    await expect(
+      assertionValidator().validate(encode(xml), context),
+    ).rejects.toMatchObject({
+      check: 'signedNode',
+      message: expect.stringMatching(
+        /the response carries no direct-child saml:Assertion/,
+      ),
+    });
+  });
+
+  it('refuses a Response with no Status', async () => {
+    const xml = alteredResponse((u) =>
+      u.replace(/<samlp:Status>[\s\S]*?<\/samlp:Status>/, ''),
+    );
+    expect(signedElementsOf(xml)[0].localName).toBe('Response');
+    await expect(
+      validator().validate(encode(xml), context),
+    ).rejects.toMatchObject({
+      check: 'status',
+      message: expect.stringMatching(/the response carries no samlp:Status/),
+    });
+  });
+
+  it('refuses a Response with two Status elements', async () => {
+    const xml = alteredResponse((u) =>
+      u.replace(
+        '</samlp:Status>',
+        '</samlp:Status><samlp:Status><samlp:StatusCode ' +
+          'Value="urn:oasis:names:tc:SAML:2.0:status:Success"/></samlp:Status>',
+      ),
+    );
+    expect(signedElementsOf(xml)[0].localName).toBe('Response');
+    await expect(
+      validator().validate(encode(xml), context),
+    ).rejects.toMatchObject({
+      check: 'status',
+      message: expect.stringMatching(
+        /the response carries 2 samlp:Status; exactly one is allowed/,
+      ),
+    });
+  });
+
+  it('refuses a Status with no StatusCode', async () => {
+    const xml = alteredResponse((u) =>
+      u.replace(/<samlp:StatusCode [^>]*\/>/, ''),
+    );
+    expect(signedElementsOf(xml)[0].localName).toBe('Response');
+    await expect(
+      validator().validate(encode(xml), context),
+    ).rejects.toMatchObject({
+      check: 'status',
+      message: expect.stringMatching(
+        /the samlp:Status carries no samlp:StatusCode/,
+      ),
+    });
+  });
+
+  it('refuses a Status with two StatusCode elements', async () => {
+    const xml = alteredResponse((u) =>
+      u.replace(/(<samlp:StatusCode [^>]*\/>)/, '$1$1'),
+    );
+    expect(signedElementsOf(xml)[0].localName).toBe('Response');
+    await expect(
+      validator().validate(encode(xml), context),
+    ).rejects.toMatchObject({
+      check: 'status',
+      message: expect.stringMatching(
+        /the samlp:Status carries 2 samlp:StatusCode; exactly one is allowed/,
+      ),
+    });
+  });
+
+  it('refuses a StatusCode with no Value', async () => {
+    const xml = alteredResponse((u) =>
+      u.replace(/<samlp:StatusCode [^>]*\/>/, '<samlp:StatusCode/>'),
+    );
+    expect(signedElementsOf(xml)[0].localName).toBe('Response');
+    await expect(
+      validator().validate(encode(xml), context),
+    ).rejects.toMatchObject({
+      check: 'status',
+      message: expect.stringMatching(/the samlp:StatusCode carries no Value/),
+    });
+  });
+
+  // The default fixture has no Response Issuer, so the first </saml:Issuer>
+  // is the assertion's.
+  it('refuses an assertion carrying two Issuers', async () => {
+    const xml = alteredResponse((u) =>
+      u.replace(
+        '</saml:Issuer>',
+        '</saml:Issuer><saml:Issuer>urn:someone:else</saml:Issuer>',
+      ),
+    );
+    expect(signedElementsOf(xml)[0].localName).toBe('Response');
+    await expect(
+      validator().validate(encode(xml), context),
+    ).rejects.toMatchObject({
+      check: 'issuer',
+      message: expect.stringMatching(
+        /the assertion carries 2 saml:Issuer; exactly one is allowed/,
+      ),
+    });
+  });
+
+  it('refuses an assertion whose Issuer is empty', async () => {
+    await expect(
+      validator().validate(encode(buildResponse({ issuer: '' })), context),
+    ).rejects.toMatchObject({
+      check: 'issuer',
+      message: expect.stringMatching(/the assertion's saml:Issuer is empty/),
+    });
+  });
+
+  it('refuses an AudienceRestriction naming no audience at all', async () => {
+    await expect(
+      validator().validate(encode(buildResponse({ audiences: [[]] })), context),
+    ).rejects.toMatchObject({
+      check: 'audience',
+      message: expect.stringMatching(
+        /an AudienceRestriction names no audience/,
+      ),
+    });
+  });
+
+  // NameID is surfaced, never refused: none, or more than one, is undefined.
+  it('reports no nameId when the Subject carries none', async () => {
+    const xml = alteredResponse((u) =>
+      u.replace('<saml:NameID>mock-user</saml:NameID>', ''),
+    );
+    const result = await validator().validate(encode(xml), context);
+    expect(result.nameId).toBeUndefined();
+  });
+
+  it('reports no nameId when the Subject carries two', async () => {
+    const xml = alteredResponse((u) =>
+      u.replace(
+        '<saml:NameID>mock-user</saml:NameID>',
+        '<saml:NameID>mock-user</saml:NameID><saml:NameID>other</saml:NameID>',
+      ),
+    );
+    const result = await validator().validate(encode(xml), context);
+    expect(result.nameId).toBeUndefined();
   });
 
   it('refuses an assertion with no NotOnOrAfter', async () => {
@@ -386,7 +609,7 @@ describe("the signed-Response validator (Saml2PureProvider's default)", () => {
       ),
     ).rejects.toMatchObject({
       check: 'notOnOrAfter',
-      message: expect.stringMatching(/no usable NotOnOrAfter/),
+      message: expect.stringMatching(/Conditions carries no NotOnOrAfter/),
     });
   });
 
@@ -398,7 +621,9 @@ describe("the signed-Response validator (Saml2PureProvider's default)", () => {
       ),
     ).rejects.toMatchObject({
       check: 'notOnOrAfter',
-      message: expect.stringMatching(/no usable NotOnOrAfter/),
+      message: expect.stringMatching(
+        /Conditions NotOnOrAfter is not a valid xsd:dateTime: "2026-02-30T00:00:00Z"/,
+      ),
     });
   });
 
@@ -766,7 +991,9 @@ describe("the signed-Response validator (Saml2PureProvider's default)", () => {
       assertionValidator().validate(encode(doctored), context),
     ).rejects.toMatchObject({
       check: 'signedNode',
-      message: expect.stringMatching(/does not cover the assertion/),
+      message: expect.stringMatching(
+        /carries 2 direct-child saml:Assertion; exactly one is allowed/,
+      ),
     });
   });
 
@@ -808,7 +1035,9 @@ describe("the signed-Response validator (Saml2PureProvider's default)", () => {
       assertionValidator().validate(encode(attack), context),
     ).rejects.toMatchObject({
       check: 'signedNode',
-      message: expect.stringMatching(/does not cover the assertion/),
+      message: expect.stringMatching(
+        /does not cover the saml:Assertion this validator requires/,
+      ),
     });
   });
 
@@ -826,7 +1055,72 @@ describe("the signed-Response validator (Saml2PureProvider's default)", () => {
       assertionValidator().validate(encode(attack), context),
     ).rejects.toMatchObject({
       check: 'signedNode',
-      message: expect.stringMatching(/does not cover the assertion/),
+      message: expect.stringMatching(
+        /does not cover the saml:Assertion this validator requires/,
+      ),
+    });
+  });
+
+  // An unrelated, genuinely signed assertion nested inside the unsigned
+  // direct-child Assertion. The signature is valid and covers only _inner, so
+  // only placement — the direct-child Assertion must be the element signed —
+  // can refuse it.
+  it('refuses a Response whose unsigned Assertion carries an unrelated signed one inside it', async () => {
+    const inner = signXml(
+      `<saml:Assertion xmlns:saml="urn:oasis:names:tc:SAML:2.0:assertion" ID="_inner">` +
+        `<saml:Issuer>${ISSUER}</saml:Issuer></saml:Assertion>`,
+      KEY,
+    );
+    const outer = stripSignature(bareAssertion()).replace(
+      '</saml:Conditions>',
+      `</saml:Conditions><saml:Advice>${inner}</saml:Advice>`,
+    );
+    const attack =
+      `<samlp:Response xmlns:samlp="urn:oasis:names:tc:SAML:2.0:protocol" ` +
+      `xmlns:saml="urn:oasis:names:tc:SAML:2.0:assertion" ID="_r1" Destination="${ACS}">` +
+      `<samlp:Status><samlp:StatusCode Value="urn:oasis:names:tc:SAML:2.0:status:Success"/></samlp:Status>` +
+      `${outer}</samlp:Response>`;
+    expect(signedElementsOf(attack).map((e) => e.getAttribute('ID'))).toEqual([
+      '_inner',
+    ]);
+
+    await expect(
+      assertionValidator().validate(encode(attack), context),
+    ).rejects.toMatchObject({
+      check: 'signedNode',
+      message: expect.stringMatching(
+        /does not cover the saml:Assertion this validator requires/,
+      ),
+    });
+  });
+
+  // The genuinely signed Response, intact inside the Extensions of a forged
+  // outer Response that carries a forged assertion. The signature verifies —
+  // over the inner Response, which is not the document element.
+  it('refuses a forged Response carrying the genuinely signed Response in its Extensions', async () => {
+    const genuine = buildResponse();
+    const forged = (
+      /<saml:Assertion[\s\S]*<\/saml:Assertion>/.exec(genuine)?.[0] ?? ''
+    ).replace('ID="_a1"', 'ID="_forged"');
+    const attack =
+      `<samlp:Response xmlns:samlp="urn:oasis:names:tc:SAML:2.0:protocol" ` +
+      `xmlns:saml="urn:oasis:names:tc:SAML:2.0:assertion" ID="_outer" Destination="${ACS}">` +
+      `<samlp:Extensions>${genuine}</samlp:Extensions>` +
+      `<samlp:Status><samlp:StatusCode Value="urn:oasis:names:tc:SAML:2.0:status:Success"/></samlp:Status>` +
+      `${forged}</samlp:Response>`;
+    expect(
+      signedElementsOf(attack).map(
+        (e) => `${e.localName}:${e.getAttribute('ID')}`,
+      ),
+    ).toEqual(['Response:_r1']);
+
+    await expect(
+      validator().validate(encode(attack), context),
+    ).rejects.toMatchObject({
+      check: 'signedNode',
+      message: expect.stringMatching(
+        /does not cover the samlp:Response this validator requires/,
+      ),
     });
   });
 
