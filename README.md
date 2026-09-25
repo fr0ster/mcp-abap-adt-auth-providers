@@ -393,9 +393,11 @@ XSUAA refuses any assertion that carries it: there is no request on their side
 to match it against, and UAA's `disableInResponseToCheck` applies to web SSO
 only. Measured: UAA, with Keycloak as the identity provider, refuses the answer
 to an SP-initiated login with *"SubjectConfirmationData/@InResponseTo … did not
-match the valid value: null"*, and XSUAA refuses an assertion carrying
-`InResponseTo` with *"No subject confirmation methods were met"*; both accept an
-IdP-initiated one — started at the IdP, answering no request. Against either,
+match the valid value: null"*, and XSUAA — measured with 3.x, which sent such an
+assertion on — refuses one carrying `InResponseTo` with *"No subject
+confirmation methods were met"*; both accept an IdP-initiated one — started at
+the IdP, answering no request. (4.0 refuses that case itself, at
+`bearerConfirmation`, before XSUAA sees it.) Against either,
 supply an IdP-initiated assertion, declare `idpInitiated: true`, and use a
 strategy that does not call
 `buildAuthorizationUrl`: `staticCodeStrategy`, or your own as above.
@@ -502,7 +504,7 @@ browser opens or any request is sent. Supply `idpCertificates` and
 
 #### Configuration
 
-On both providers' configuration (`Saml2CommonConfig`):
+On both providers' configuration (`Saml2BearerProviderConfig`, `Saml2PureProviderConfig`):
 
 | Field | Default | Meaning |
 |---|---|---|
@@ -608,9 +610,9 @@ names the row. Rows marked *(signed-Response only)* are not performed by
 | 4 | `samlp:Status` *(signed-Response only)* | absent, or its `StatusCode` is not `…:status:Success` | `status` |
 | 4b | `Assertion/@ID` | absent or empty | `assertionId` |
 | 5 | `Assertion/Issuer` | absent, not the expected issuer, or no expected issuer was given | `issuer` |
-| 5b | `Response/Issuer` *(signed-Response only)* | present and disagreeing with `Assertion/Issuer`, or present twice | `issuer` |
+| 5b | `Response/Issuer` *(signed-Response only; optional)* | present and disagreeing with `Assertion/Issuer`, or present twice — absent is accepted | `issuer` |
 | 6 | `Conditions` | absent | `conditions` |
-| 7 | `Conditions/@NotBefore` | not a valid `xsd:dateTime`, or in the future beyond `clockSkewMs` | `notBefore` |
+| 7 | `Conditions/@NotBefore` *(optional)* | present and not a valid `xsd:dateTime`, or in the future beyond `clockSkewMs` — absent is accepted | `notBefore` |
 | 8 | `Conditions/@NotOnOrAfter` | absent, not a valid `xsd:dateTime`, or in the past beyond `clockSkewMs` | `notOnOrAfter` |
 | 9 | `Conditions/AudienceRestriction` | absent, or **any one** restriction fails to name `spEntityId` | `audience` |
 | 10 | One bearer `SubjectConfirmation` | no single confirmation satisfies every part of it — see below | `bearerConfirmation` |
@@ -619,9 +621,19 @@ names the row. Rows marked *(signed-Response only)* are not performed by
 
 What the table compresses:
 
-- **Absent is refused, not skipped.** Every row naming a field refuses when the
-  field is missing. A rule phrased "present and not X" is one an attacker
-  satisfies by deleting the field.
+- **Every required field is refused when absent**, not skipped: a rule
+  phrased "present and not X" is one an attacker satisfies by deleting the
+  field. That covers `Status` and `Destination` (signed-Response only),
+  `Assertion/@ID`, `Assertion/Issuer`, `Conditions`, `Conditions/@NotOnOrAfter`,
+  the `AudienceRestriction`, and, in the bearer confirmation, `Recipient`,
+  `NotOnOrAfter` and — when a request ID is expected — `InResponseTo`. Four
+  fields are optional, each for a reason:
+  - `Conditions/@NotBefore` and `SubjectConfirmationData/@NotBefore` — a
+    missing `NotBefore` only means "valid from issue"; when present it is
+    checked;
+  - `Response/Issuer` — optional in SAML Core, and the assertion's own `Issuer`
+    is checked inside the signature; when present it must agree (5b);
+  - `NameID` — surfaced on the result, not trusted for anything.
 - **The signature must cover the element that is read.** A wrapping attack
   supplies a document holding a genuinely signed fragment beside a forged one;
   the validator resolves which element each signature covers and reads the
@@ -819,7 +831,7 @@ assertion must answer it; absent, the assertion must carry no `InResponseTo`.
 |---|---|
 | `AssertionValidationError` | an assertion was refused. `check` (type `AssertionCheck`) names the row above — tell "your IdP declined" (`status`) from "not addressed to us" (`audience`, `bearerConfirmation`, `destination`) without parsing the message. `code` is `'ASSERTION_VALIDATION_ERROR'` (`ASSERTION_ERROR_CODES.VALIDATION_ERROR` from `@mcp-abap-adt/interfaces-auth`) |
 | `ValidationError` | configuration: `idpCertificates` or `idpEntityId` missing with no `assertionValidator` (at construction); `authnRequestId` missing, or `idpInitiated` combined with a request ID (at login, before the assertion is read). `missingFields` names the field |
-| `Error` | a certificate that is neither PEM nor base64 DER, or not a valid X.509 certificate, and a `clockSkewMs` that is not a finite non-negative integer — at construction |
+| `Error` | a certificate that is neither PEM nor base64 DER, or not a valid X.509 certificate; a `clockSkewMs` that is not a finite non-negative integer; and, for a shipped validator called directly, an empty `idpCertificates` (*"must not be empty"*) — all at construction. Through a provider, an empty `idpCertificates` is a `ValidationError` instead |
 
 ### With Stores
 
@@ -1178,15 +1190,16 @@ new Saml2BearerProvider({
 - under `Saml2PureProvider`'s default, a response whose `Response` is not
   signed — an identity provider that signs only assertions. Select
   `createSignedAssertionValidator` for it (`signedNode`);
-- under `Saml2PureProvider`'s default, a response whose `Status` is not
-  `Success` (`status`). `Saml2BearerProvider`'s default,
+- under `Saml2PureProvider`'s default, a response whose `Status` is absent or
+  not `Success` (`status`), or whose `Destination` is absent or not the ACS it
+  arrived at (`destination`). `Saml2BearerProvider`'s default,
   `createSignedAssertionValidator`, does not read `Status`, so a bearer
   consumer sees no change there — a declining identity provider mints no
   signed assertion, and the login is refused for want of one;
 - an assertion from another issuer (`issuer`), for another audience
   (`audience`), expired or not yet valid (`notOnOrAfter`, `notBefore`,
-  `bearerConfirmation`), or addressed to another ACS (`bearerConfirmation`; and
-  `destination` under the signed-Response validator);
+  `bearerConfirmation`), or whose bearer confirmation names another ACS as
+  `Recipient`, or none (`bearerConfirmation`);
 - an `InResponseTo` that does not answer the request sent, one present on a
   login declared `idpInitiated`, or one missing from a login that sent a
   request (`bearerConfirmation`);
@@ -1201,9 +1214,11 @@ new Saml2BearerProvider({
   earlier of the `Conditions` and bearer-confirmation windows — not from the
   first `NotOnOrAfter` a regular expression found. It can be earlier than
   under 3.x.
-- `parseSamlNotOnOrAfter` is removed, and `buildSamlAuthorizationUrl` returns
-  `{ url, requestId? }` instead of a string. Neither was exported from the
-  package root; only a deep import of `dist/auth/saml2Auth` is affected.
+- `parseSamlNotOnOrAfter` is removed; `buildSamlAuthorizationUrl` returns
+  `{ url, requestId? }` instead of a string, and `getSamlAssertion` a
+  `SamlAssertionResult` instead of the payload string. None was exported from
+  the package root; only a deep import of `dist/auth/saml2Auth` or
+  `dist/providers/saml2Utils` is affected.
 - `@mcp-abap-adt/interfaces-auth` is `^2.0.0`, where
   `AssertionContext.expectedInResponseTo` is optional. That matters only to an
   implementer of `IAssertionValidator`, which must refuse an assertion carrying
@@ -1499,18 +1514,20 @@ not-found message counts as absence.
 `XSUAA_KEEP=1` keeps the environment for another run. A full run takes about a minute and
 a half. It is not part of CI.
 
+Results of the 4.0 suite on a BTP trial subaccount, 2026-09-25 — 4 passed,
+1 skipped. Every login is validated first, by `Saml2BearerProvider`'s default
+assertion-only validator, against the per-run test identity provider's
+certificate, declared `idpInitiated`:
+
 | check | result on XSUAA |
 |---|---|
-| `Saml2BearerProvider`, assertion without `InResponseTo` (IdP-initiated) | token and refresh token |
+| `Saml2BearerProvider`, assertion without `InResponseTo` (IdP-initiated) | passes validation; token and refresh token |
 | `Saml2BearerProvider`, a whole `SAMLResponse` | converted by the provider, accepted |
 | `Saml2BearerProvider`, refresh | never reaches the strategy |
-| `Saml2BearerProvider`, assertion with `InResponseTo` | refused — as UAA does |
-| `UaaPasscodeProvider` (with `XSUAA_PASSCODE=<code from /passcode>`) | token, refresh |
+| `Saml2BearerProvider`, assertion with `InResponseTo` | refused locally at `bearerConfirmation`, before any request reaches XSUAA |
+| `UaaPasscodeProvider` (with `XSUAA_PASSCODE=<code from /passcode>`) | skipped — no `XSUAA_PASSCODE` was set |
 
-Those results were measured before 4.0. Since then the suite validates every
-login first — against the per-run test identity provider's certificate,
-declared `idpInitiated` — so the assertion carrying `InResponseTo` is refused by
-the provider's own validator (`bearerConfirmation`) before XSUAA sees it.
+Teardown removed everything setup had created.
 
 `UaaPasscodeProvider` was also checked by hand with an ABAP environment's own
 service key: its client accepts the passcode, and the token opens ADT. That

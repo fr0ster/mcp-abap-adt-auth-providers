@@ -53,9 +53,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   now the validated assertion's expiry — the earlier of `Conditions/@NotOnOrAfter`
   and the accepted bearer confirmation's — read from the verified document.
 - **`buildSamlAuthorizationUrl` returns `{ url, requestId? }`**, since the
-  minted ID must survive to validation. Neither it nor `parseSamlNotOnOrAfter`
-  was exported from the package root; only a deep import of
-  `dist/auth/saml2Auth` is affected.
+  minted ID must survive to validation, and **`getSamlAssertion` returns
+  `Promise<SamlAssertionResult>`** (payload, request ID, ACS) instead of
+  `Promise<string>`. None of these, nor `parseSamlNotOnOrAfter`, was exported
+  from the package root; only a deep import of `dist/auth/saml2Auth` or
+  `dist/providers/saml2Utils` is affected.
 - **`@mcp-abap-adt/interfaces-auth` `^2.0.0`** (was `^1.2.0`), where
   `AssertionContext.expectedInResponseTo` is optional — a breaking change for
   implementers of `IAssertionValidator`, which must refuse an assertion
@@ -83,8 +85,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Development
 
-- `@mcp-abap-adt/auth-mocks` `^0.3.0`: both validators run end to end in
-  `npm test` against its responses. Every corruption variant is refused at the
+- Both validators run end to end in `npm test`, through `Saml2PureProvider`
+  and a real callback, against responses from `@mcp-abap-adt/auth-mocks` (the
+  devDependency and its range are unchanged). Every corruption variant is refused at the
   check it targets, except `statusFailure` and `wrongDestination`, which the
   assertion-only validator accepts — both halves asserted.
 - The provider stand's SAML suites run every login through the provider's
