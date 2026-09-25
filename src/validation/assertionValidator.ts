@@ -38,6 +38,18 @@ const PROTOCOL_NS = 'urn:oasis:names:tc:SAML:2.0:protocol';
 const BEARER = 'urn:oasis:names:tc:SAML:2.0:cm:bearer';
 const SUCCESS = 'urn:oasis:names:tc:SAML:2.0:status:Success';
 
+const SAML1_NS = 'urn:oasis:names:tc:SAML:1.0:assertion';
+
+/**
+ * Everything a later reader might take for the assertion: SAML 2.0's
+ * Assertion and EncryptedAssertion, and SAML 1.x's Assertion.
+ */
+const ASSERTION_SHAPED: ReadonlyArray<readonly [string, string]> = [
+  [SAML_NS, 'Assertion'],
+  [SAML_NS, 'EncryptedAssertion'],
+  [SAML1_NS, 'Assertion'],
+];
+
 export interface ShippedValidatorOptions {
   readonly idpCertificates: readonly string[];
   readonly clockSkewMs?: number;
@@ -224,7 +236,7 @@ function createValidator(
       if (!everyAssertionWithin(doc, assertion)) {
         return fail(
           'signedNode',
-          'the document carries a saml:Assertion or saml:EncryptedAssertion outside the one the signature covers',
+          'the document carries an Assertion or EncryptedAssertion, SAML 2.0 or 1.x, outside the one the signature covers',
         );
       }
 
@@ -255,7 +267,7 @@ function createValidator(
         if (codeValue !== SUCCESS) {
           return fail(
             'status',
-            `the identity provider declined the login: ${codeValue}`,
+            `the identity provider declined the login: ${quoteUntrusted(codeValue)}`,
           );
         }
       }
@@ -290,7 +302,7 @@ function createValidator(
       if (issuer !== context.expectedIssuer) {
         return fail(
           'issuer',
-          `the assertion was issued by ${issuer}, not the trusted issuer`,
+          `the assertion was issued by ${quoteUntrusted(issuer)}, not the trusted issuer`,
         );
       }
       // 5b. The cross-check against the Response's Issuer belongs to the
@@ -333,7 +345,7 @@ function createValidator(
         if (!notBefore) {
           return fail(
             'notBefore',
-            `Conditions NotBefore is not a valid xsd:dateTime: ${notBeforeRaw}`,
+            `Conditions NotBefore is not a valid xsd:dateTime: ${quoteUntrusted(notBeforeRaw)}`,
           );
         }
         if (notBefore.getTime() - skew > Date.now()) {
@@ -399,7 +411,7 @@ function createValidator(
         if (destination !== context.acsUrl) {
           return fail(
             'destination',
-            `the response is addressed to ${destination}, not to us`,
+            `the response is addressed to ${quoteUntrusted(destination)}, not to us`,
           );
         }
       }
@@ -522,12 +534,12 @@ function requireOne(
 }
 
 /**
- * Whether every `saml:Assertion` and `saml:EncryptedAssertion` in the
- * document is `assertion` itself or lies inside it.
+ * Whether every assertion-shaped element in the document — SAML 2.0 or 1.x —
+ * is `assertion` itself or lies inside it.
  */
 function everyAssertionWithin(doc: Document, assertion: Element): boolean {
-  for (const local of ['Assertion', 'EncryptedAssertion']) {
-    const found = doc.getElementsByTagNameNS(SAML_NS, local);
+  for (const [ns, local] of ASSERTION_SHAPED) {
+    const found = doc.getElementsByTagNameNS(ns, local);
     for (let i = 0; i < found.length; i++) {
       let node = found[i] as unknown as Element | null;
       while (node && node !== assertion) {

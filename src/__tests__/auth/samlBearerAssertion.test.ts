@@ -153,4 +153,25 @@ describe('toBearerAssertion', () => {
       for (const spy of spies) spy.mockRestore();
     }
   });
+
+  // The parser's message quotes the document — here an element name — so it
+  // is quoted and cut like every other document value in a message.
+  it('quotes and cuts the parser message for XML that is not well-formed', () => {
+    const name = 'x'.repeat(100);
+    let thrown: Error | undefined;
+    try {
+      toBearerAssertion(
+        Buffer.from(`<${name}><y></${name}>`, 'utf8').toString('base64'),
+      );
+    } catch (error) {
+      thrown = error as Error;
+    }
+    expect(
+      thrown?.message.startsWith(
+        'SAML bearer payload is not well-formed XML: "',
+      ),
+    ).toBe(true);
+    expect(thrown?.message).toContain('…"');
+    expect(thrown?.message).not.toContain(name);
+  });
 });

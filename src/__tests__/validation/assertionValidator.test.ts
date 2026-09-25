@@ -1210,6 +1210,31 @@ describe("the signed-Response validator (Saml2PureProvider's default)", () => {
     });
   });
 
+  // SAML 1.x is assertion-shaped too: a later reader may take it for the real
+  // one. The premise probe shows the signature is untouched, so only the
+  // stray-assertion rule can refuse it.
+  it('refuses a SAML 1.x Assertion hidden in the unsigned Extensions', async () => {
+    const doctored = buildResponse({ signWhat: 'assertion' }).replace(
+      '<samlp:Status>',
+      '<samlp:Extensions><saml1:Assertion ' +
+        'xmlns:saml1="urn:oasis:names:tc:SAML:1.0:assertion" ' +
+        'AssertionID="_forged1" Issuer="urn:attacker"/></samlp:Extensions>' +
+        '<samlp:Status>',
+    );
+    const covered = signedElementsOf(doctored);
+    expect(covered).toHaveLength(1);
+    expect(covered[0].getAttribute('ID')).toBe('_a1');
+
+    await expect(
+      assertionValidator().validate(encode(doctored), context),
+    ).rejects.toMatchObject({
+      check: 'signedNode',
+      message: expect.stringMatching(
+        /SAML 2\.0 or 1\.x, outside the one the signature covers/,
+      ),
+    });
+  });
+
   // Row 5b. Both are signed after the Issuers are in place, so the signature
   // covers them and only the rule can refuse.
   it('refuses a Response carrying two Issuers', async () => {
@@ -1703,6 +1728,80 @@ describe("the signed-Response validator (Saml2PureProvider's default)", () => {
     ).rejects.toMatchObject({
       check: 'duplicateId',
       message: expect.not.stringContaining(long),
+    });
+  });
+
+  // Values read after the signature are the identity provider's text, not
+  // ours: quoted, so a newline (&#10;) cannot forge a log line, and cut.
+  it('quotes the Status code the identity provider declined with', async () => {
+    await expect(
+      validator().validate(
+        encode(buildResponse({ status: 'urn:x&#10;forged' })),
+        context,
+      ),
+    ).rejects.toMatchObject({
+      check: 'status',
+      message: 'the identity provider declined the login: "urn:x\\nforged"',
+    });
+  });
+
+  it('quotes an untrusted issuer', async () => {
+    await expect(
+      validator().validate(
+        encode(buildResponse({ issuer: 'urn:x&#10;forged' })),
+        context,
+      ),
+    ).rejects.toMatchObject({
+      check: 'issuer',
+      message:
+        'the assertion was issued by "urn:x\\nforged", not the trusted issuer',
+    });
+  });
+
+  it('cuts a long issuer short', async () => {
+    const long = `urn:${'x'.repeat(200)}`;
+    await expect(
+      validator().validate(encode(buildResponse({ issuer: long })), context),
+    ).rejects.toMatchObject({
+      check: 'issuer',
+      message: `the assertion was issued by "${long.slice(0, 64)}…", not the trusted issuer`,
+    });
+  });
+
+  it('quotes a Destination naming somewhere else', async () => {
+    await expect(
+      validator().validate(
+        encode(buildResponse({ destination: 'http://x&#10;forged' })),
+        context,
+      ),
+    ).rejects.toMatchObject({
+      check: 'destination',
+      message: 'the response is addressed to "http://x\\nforged", not to us',
+    });
+  });
+
+  it('quotes an invalid Conditions NotBefore', async () => {
+    await expect(
+      validator().validate(
+        encode(buildResponse({ notBefore: 'x&#10;forged' })),
+        context,
+      ),
+    ).rejects.toMatchObject({
+      check: 'notBefore',
+      message: 'Conditions NotBefore is not a valid xsd:dateTime: "x\\nforged"',
+    });
+  });
+
+  it('quotes an invalid Conditions NotOnOrAfter', async () => {
+    await expect(
+      validator().validate(
+        encode(buildResponse({ notOnOrAfter: 'x&#10;forged' })),
+        context,
+      ),
+    ).rejects.toMatchObject({
+      check: 'notOnOrAfter',
+      message:
+        'Conditions NotOnOrAfter is not a valid xsd:dateTime: "x\\nforged"',
     });
   });
 

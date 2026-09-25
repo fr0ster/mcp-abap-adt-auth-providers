@@ -355,6 +355,30 @@ describe('resolveSignedElements', () => {
     ).toThrow(/the signature carries no ds:Reference/);
   });
 
+  // xml-crypto's loadSignature throws with document text in its message — a
+  // Reference without DigestMethod is serialised whole. That text is the
+  // sender's, so it is quoted and cut like any other.
+  it('quotes and cuts what xml-crypto says about a malformed signature', () => {
+    const key = generateKeyMaterial();
+    const wrapped = RESPONSE(signXml(ASSERTION(), key)).replace(
+      /<DigestMethod [^>]*\/>/,
+      '',
+    );
+    let thrown: Error | undefined;
+    try {
+      resolveSignedElements(wrapped, parse(wrapped), [key.certificatePem]);
+    } catch (error) {
+      thrown = error as Error;
+    }
+    expect(
+      thrown?.message.startsWith(
+        'the signature element is malformed: "could not find DigestMethod in reference',
+      ),
+    ).toBe(true);
+    expect(thrown?.message).toContain('…"');
+    expect(thrown?.message).not.toContain('<Transforms>');
+  });
+
   it('returns the signed assertion, not the forged sibling', () => {
     const key = generateKeyMaterial();
     const signed = signXml(ASSERTION('_real'), key);

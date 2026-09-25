@@ -128,7 +128,15 @@ function resolveOne(
       publicCert: certificate,
       getCertFromKeyInfo: () => null,
     });
-    verifier.loadSignature(signatureNode as unknown as XmlNode);
+    // loadSignature throws for a malformed Signature, and xml-crypto's
+    // message embeds the offending element: document text, so quoted.
+    try {
+      verifier.loadSignature(signatureNode as unknown as XmlNode);
+    } catch (error) {
+      throw new Error(
+        `the signature element is malformed: ${quoteUntrusted((error as Error).message)}`,
+      );
+    }
     try {
       // Returns false for a digest mismatch and throws when the signature
       // value itself fails. Both mean "not this certificate".

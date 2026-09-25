@@ -341,3 +341,55 @@ describe('resolveAssertionValidator — a shipped validator still needs idpEntit
     expect(Object.getOwnPropertySymbols({ ...validator })).toHaveLength(0);
   });
 });
+
+// Both declarations describe different logins. Found at construction, the
+// mistake costs nothing; found after authorize(), it costs a browser login.
+describe('idpInitiated with authnRequestId is refused at construction', () => {
+  const certificate = generateKeyMaterial().certificatePem;
+  const both = {
+    idpSsoUrl: 'https://idp.example/sso',
+    spEntityId: 'urn:sp',
+    idpEntityId: 'urn:idp',
+    idpCertificates: [certificate],
+    idpInitiated: true,
+    authnRequestId: '_declared-id',
+  };
+  const unreachable: IAuthorizationStrategy<string> = {
+    async authorize() {
+      throw new Error('the strategy must never be reached');
+    },
+  };
+  const construct = {
+    Saml2BearerProvider: () =>
+      new Saml2BearerProvider({
+        ...both,
+        uaaUrl: 'https://uaa.example',
+        authorization: unreachable,
+      }),
+    Saml2PureProvider: () =>
+      new Saml2PureProvider({
+        ...both,
+        cookieProvider: async () => 'cookie',
+        authorization: unreachable,
+      }),
+  };
+
+  it.each(Object.keys(construct) as (keyof typeof construct)[])(
+    'refuses %s',
+    (provider) => {
+      let thrown: unknown;
+      try {
+        construct[provider]();
+      } catch (error) {
+        thrown = error;
+      }
+      expect(thrown).toBeInstanceOf(ValidationError);
+      expect(thrown).toMatchObject({
+        missingFields: ['idpInitiated'],
+        message: expect.stringMatching(
+          /idpInitiated is true and authnRequestId is set/,
+        ),
+      });
+    },
+  );
+});
