@@ -523,6 +523,9 @@ describe('SSO Providers', () => {
       idpSsoUrl: 'https://idp/sso',
       spEntityId: 'sp-entity',
       uaaUrl: 'https://uaa',
+      // staticCodeStrategy never calls the builder; declaring idpInitiated
+      // says plainly that no request was sent for this assertion to answer.
+      idpInitiated: true,
       authorization: staticCodeStrategy({ payload: saml.payload }),
     });
 
@@ -556,6 +559,8 @@ describe('SSO Providers', () => {
           clientSecret: 'secret',
           accessToken: jwtExpiringIn(-3600),
           refreshToken: 'seeded-refresh',
+          // `authorize` above never calls the builder either.
+          idpInitiated: true,
           authorization,
         },
       };
@@ -630,7 +635,7 @@ describe('SSO Providers', () => {
     });
   });
 
-  it('Saml2PureProvider should return saml response with expiresAt', async () => {
+  it('Saml2PureProvider should return the saml response as the session', async () => {
     const samlXml =
       '<Assertion NotOnOrAfter="2030-01-01T00:00:00Z"></Assertion>';
     const samlResponse = Buffer.from(samlXml, 'utf8').toString('base64');
@@ -639,13 +644,18 @@ describe('SSO Providers', () => {
       cookieProvider: async () => 'SAP_SESSION=abc123',
       idpSsoUrl: 'https://idp/sso',
       spEntityId: 'sp-entity',
+      // staticCodeStrategy never calls the builder; declaring idpInitiated
+      // says plainly that no request was sent for this assertion to answer.
+      idpInitiated: true,
       authorization: staticCodeStrategy({ payload: samlResponse }),
     });
 
     const tokens = await provider.getTokens();
     expect(tokens.authorizationToken).toBe('SAP_SESSION=abc123');
     expect(tokens.tokenType).toBe('saml');
-    expect(tokens.expiresAt).toBeDefined();
+    // `parseSamlNotOnOrAfter` is gone; `expiresAt` now awaits Task 11, which
+    // takes it from `ValidatedAssertion` instead of an unverified regex.
+    expect(tokens.expiresAt).toBeUndefined();
   });
 
   it('Saml2PureProvider rejects a pre-built URL without a declared acsUrl', () => {
@@ -666,6 +676,9 @@ describe('SSO Providers', () => {
       idpSsoUrl: 'https://idp.example/sso',
       spEntityId: 'sp',
       acsUrl: 'http://localhost:61001/callback',
+      // staticCodeStrategy never calls the builder; declaring idpInitiated
+      // says plainly that no request was sent for this assertion to answer.
+      idpInitiated: true,
       authorization: staticCodeStrategy({
         redirectUri: 'http://localhost:61001/callback',
         payload: 'PHNhbWw+',

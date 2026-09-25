@@ -2,9 +2,14 @@
  * SAML2 provider shared helpers.
  */
 
-import type { IAuthorizationStrategy } from '@mcp-abap-adt/interfaces-auth';
+import type {
+  IAssertionReplayStore,
+  IAssertionValidator,
+  IAuthorizationStrategy,
+} from '@mcp-abap-adt/interfaces-auth';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
 import { buildSamlAuthorizationUrl } from '../auth/saml2Auth';
+import { ValidationError } from '../errors/TokenProviderErrors';
 import { samlCallbackStrategy } from '../strategies';
 
 export interface Saml2CommonConfig {
@@ -21,6 +26,28 @@ export interface Saml2CommonConfig {
   /** How the login is conducted. Omitted means a browser callback. */
   authorization?: IAuthorizationStrategy<string>;
   logger?: ILogger;
+  /** PEM or bare base64 DER. Required when no `assertionValidator` is supplied. */
+  idpCertificates?: string[];
+  /** The `Issuer` the assertion must name. Required when no `assertionValidator` is supplied. */
+  idpEntityId?: string;
+  /** Finite, non-negative, integer. Defaults to 0. */
+  clockSkewMs?: number;
+  /**
+   * The AuthnRequest ID this login answers, when this package did not mint one
+   * itself — a pre-built `authorizationUrl`, or a strategy that obtained the
+   * response some other way after a request the consumer sent.
+   */
+  authnRequestId?: string;
+  /**
+   * Declares that no AuthnRequest is sent: the assertion must carry no
+   * `InResponseTo`. Default `false`. Combining this with a minted or declared
+   * request ID is a configuration error: the two describe different logins.
+   */
+  idpInitiated?: boolean;
+  /** Which validator to use. Omitted means the provider's own default. */
+  assertionValidator?: IAssertionValidator;
+  /** A consumer's own replay store, for a deployment running more than one process. */
+  assertionReplayStore?: IAssertionReplayStore;
 }
 
 export interface Saml2BearerExchangeConfig {
@@ -50,10 +77,23 @@ export function resolveTokenUrl(config: Saml2BearerExchangeConfig): string {
   throw new Error('Missing tokenUrl or uaaUrl for SAML bearer exchange');
 }
 
+/** What `getSamlAssertion` hands back: the wire payload, plus what it knows about the login. */
+export interface SamlAssertionResult {
+  readonly payload: string;
+  /**
+   * `undefined` exactly when the login is declared `idpInitiated` and no ID
+   * was minted or declared for it.
+   */
+  readonly requestId?: string;
+  /** Where the strategy actually listened — `outcome.redirectUri`, never `config.acsUrl`. */
+  readonly acsUrl: string;
+}
+
 export async function getSamlAssertion(
   config: Saml2CommonConfig,
-): Promise<string> {
+): Promise<SamlAssertionResult> {
   const declaredAcs = config.acsUrl;
+  let mintedRequestId: string | undefined;
 
   const request = {
     logger: config.logger,
@@ -67,13 +107,15 @@ export async function getSamlAssertion(
             `listening on ${redirectUri}. They must match.`,
         );
       }
-      return buildSamlAuthorizationUrl({
+      const built = buildSamlAuthorizationUrl({
         idpSsoUrl: config.idpSsoUrl,
         spEntityId: config.spEntityId,
         acsUrl,
         relayState: config.relayState,
         authorizationUrl: config.authorizationUrl,
       });
+      mintedRequestId = built.requestId;
+      return built.url;
     },
   };
 
@@ -89,7 +131,14 @@ export async function getSamlAssertion(
           `${outcome.redirectUri}. They must match.`,
       );
     }
-    return outcome.payload;
+
+    const requestId = resolveExpectedRequestId(config, mintedRequestId);
+
+    return {
+      payload: outcome.payload,
+      requestId,
+      acsUrl: outcome.redirectUri,
+    };
   } finally {
     if (!supplied) {
       await strategy.dispose?.().catch((error: unknown) => {
@@ -99,4 +148,44 @@ export async function getSamlAssertion(
       });
     }
   }
+}
+
+/**
+ * The ID `InResponseTo` must answer, from the three sources the spec allows:
+ * minted, declared, or none by explicit `idpInitiated: true`. Anything else —
+ * no ID and no declaration, or `idpInitiated` combined with an ID from either
+ * of the other two sources — is a configuration error, not a validation
+ * failure blamed on the assertion.
+ */
+function resolveExpectedRequestId(
+  config: Saml2CommonConfig,
+  mintedRequestId: string | undefined,
+): string | undefined {
+  const declaredRequestId = config.authnRequestId;
+
+  if (config.idpInitiated) {
+    if (mintedRequestId || declaredRequestId) {
+      throw new ValidationError(
+        'SAML idpInitiated is true, but a request ID was also minted or ' +
+          'configured (an authorization strategy called buildAuthorizationUrl, ' +
+          'or authnRequestId is set). An IdP-initiated login sends no request, ' +
+          'so an ID means the configuration describes two different logins.',
+        ['idpInitiated'],
+      );
+    }
+    return undefined;
+  }
+
+  const requestId = mintedRequestId ?? declaredRequestId;
+  if (!requestId) {
+    throw new ValidationError(
+      'Cannot validate InResponseTo: this login did not build its own AuthnRequest, ' +
+        'so authnRequestId must be configured — or, if the identity provider ' +
+        'starts this login itself, idpInitiated: true. This happens with a ' +
+        'pre-built authorizationUrl, or an authorization strategy that supplies an ' +
+        'assertion without asking for a URL.',
+      ['authnRequestId'],
+    );
+  }
+  return requestId;
 }

@@ -10,7 +10,6 @@ import type {
 } from '@mcp-abap-adt/interfaces-auth';
 import { AUTH_TYPE_USER_TOKEN } from '@mcp-abap-adt/interfaces-auth';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
-import { parseSamlNotOnOrAfter } from '../auth/saml2Auth';
 import { BaseTokenProvider } from './BaseTokenProvider';
 import type { Saml2CommonConfig } from './saml2Utils';
 import { getSamlAssertion, validateSamlConfig } from './saml2Utils';
@@ -38,15 +37,16 @@ export class Saml2PureProvider extends BaseTokenProvider {
   }
 
   protected async performLogin(): Promise<ITokenResult> {
-    const samlResponse = await getSamlAssertion(this.config);
-    const expiresAt = parseSamlNotOnOrAfter(samlResponse);
-    const sessionCookies = await this.config.cookieProvider(samlResponse);
+    // Task 10 threads the payload through; the assertion is not yet
+    // validated and `expiresAt` is not yet derived from it — Task 11 wires
+    // both through the assertion validator.
+    const { payload } = await getSamlAssertion(this.config);
+    const sessionCookies = await this.config.cookieProvider(payload);
 
     return {
       authorizationToken: sessionCookies,
       authType: AUTH_TYPE_USER_TOKEN,
       tokenType: 'saml',
-      expiresAt,
     };
   }
 

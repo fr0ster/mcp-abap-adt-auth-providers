@@ -59,12 +59,13 @@ export class Saml2BearerProvider extends BaseTokenProvider {
   }
 
   protected async performLogin(): Promise<ITokenResult> {
-    const samlResponse = await getSamlAssertion(this.config);
+    // Task 10 threads the payload through; validation is wired in Task 11.
+    const { payload } = await getSamlAssertion(this.config);
     const tokenUrl = resolveTokenUrl(this.config);
     // RFC 7522 takes one base64url Assertion; a login delivers the whole
     // Response in standard base64, which a conforming endpoint refuses.
     const tokens = await exchangeSamlAssertion(
-      toBearerAssertion(samlResponse),
+      toBearerAssertion(payload),
       tokenUrl,
       this.config.clientId,
       this.config.clientSecret,

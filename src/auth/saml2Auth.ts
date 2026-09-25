@@ -26,9 +26,12 @@ function base64Encode(input: string | Buffer): string {
     : Buffer.from(input, 'utf8').toString('base64');
 }
 
-function buildAuthnRequestXml(spEntityId: string, acsUrl: string): string {
+function buildAuthnRequestXml(
+  id: string,
+  spEntityId: string,
+  acsUrl: string,
+): string {
   const issueInstant = new Date().toISOString();
-  const id = `_${randomUUID()}`;
   return [
     '<?xml version="1.0" encoding="UTF-8"?>',
     '<samlp:AuthnRequest xmlns:samlp="urn:oasis:names:tc:SAML:2.0:protocol"',
@@ -43,19 +46,32 @@ function buildAuthnRequestXml(spEntityId: string, acsUrl: string): string {
   ].join('');
 }
 
-export function buildSamlAuthorizationUrl(config: Saml2AuthConfig): string {
+export interface BuiltAuthorizationUrl {
+  readonly url: string;
+  /** Present only when this function minted the request. */
+  readonly requestId?: string;
+}
+
+export function buildSamlAuthorizationUrl(
+  config: Saml2AuthConfig,
+): BuiltAuthorizationUrl {
   if (config.authorizationUrl) {
-    return config.authorizationUrl;
+    // Somebody else built the request; its ID is not ours to know.
+    return { url: config.authorizationUrl };
   }
 
-  const xml = buildAuthnRequestXml(config.spEntityId, config.acsUrl);
+  const requestId = `_${randomUUID()}`;
+  const xml = buildAuthnRequestXml(requestId, config.spEntityId, config.acsUrl);
   const deflated = deflateRawSync(Buffer.from(xml, 'utf8'));
   const samlRequest = encodeURIComponent(base64Encode(deflated));
   const relayState = config.relayState
     ? `&RelayState=${encodeURIComponent(config.relayState)}`
     : '';
 
-  return `${config.idpSsoUrl}?SAMLRequest=${samlRequest}${relayState}`;
+  return {
+    url: `${config.idpSsoUrl}?SAMLRequest=${samlRequest}${relayState}`,
+    requestId,
+  };
 }
 
 export const withSamlCallbackServer: CallbackServerFactory<string> = <TReturn>(
@@ -91,19 +107,3 @@ export const withSamlCallbackServer: CallbackServerFactory<string> = <TReturn>(
     },
     use,
   );
-
-export function parseSamlNotOnOrAfter(
-  samlResponse: string,
-): number | undefined {
-  try {
-    const decoded = Buffer.from(samlResponse, 'base64').toString('utf8');
-    const match = decoded.match(/NotOnOrAfter="([^"]+)"/);
-    if (!match) {
-      return undefined;
-    }
-    const date = Date.parse(match[1]);
-    return Number.isNaN(date) ? undefined : date;
-  } catch {
-    return undefined;
-  }
-}
