@@ -34,9 +34,17 @@ describe('parseXsdDateTime', () => {
     expect(parseXsdDateTime('2026-08-15T08:30:00-02:00')?.toISOString()).toBe(
       '2026-08-15T10:30:00.000Z',
     );
-    // Offset with non-zero minutes (e.g., India Standard Time is +05:30)
+    // Offset with non-zero minutes: positive (India Standard Time +05:30)
     expect(parseXsdDateTime('2026-08-15T15:30:00+05:30')?.toISOString()).toBe(
       '2026-08-15T10:00:00.000Z',
+    );
+    // Offset with non-zero minutes: negative to catch sign-handling regressions
+    expect(parseXsdDateTime('2026-08-15T10:30:00-05:30')?.toISOString()).toBe(
+      '2026-08-15T16:00:00.000Z',
+    );
+    // Zero-hour negative offset with minutes
+    expect(parseXsdDateTime('2026-08-15T10:00:00-00:30')?.toISOString()).toBe(
+      '2026-08-15T10:30:00.000Z',
     );
   });
 
