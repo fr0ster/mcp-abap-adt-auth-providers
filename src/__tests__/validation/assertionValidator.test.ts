@@ -647,6 +647,23 @@ describe("the signed-Response validator (Saml2PureProvider's default)", () => {
     });
   });
 
+  // An empty NotOnOrAfter is not a value to parse — it is the attribute
+  // stating nothing, exactly as its absence does.
+  it('treats an empty Conditions NotOnOrAfter as absent', async () => {
+    const xml = alteredResponse((u) =>
+      u.replace(
+        /(<saml:Conditions[^>]*) NotOnOrAfter="[^"]*"/,
+        '$1 NotOnOrAfter=""',
+      ),
+    );
+    await expect(
+      validator().validate(encode(xml), context),
+    ).rejects.toMatchObject({
+      check: 'notOnOrAfter',
+      message: expect.stringMatching(/Conditions carries no NotOnOrAfter/),
+    });
+  });
+
   it('refuses a NotOnOrAfter that is not a valid xsd:dateTime', async () => {
     await expect(
       validator().validate(
@@ -1227,6 +1244,27 @@ describe("the signed-Response validator (Saml2PureProvider's default)", () => {
 
     await expect(
       assertionValidator().validate(encode(doctored), context),
+    ).rejects.toMatchObject({
+      check: 'signedNode',
+      message: expect.stringMatching(
+        /SAML 2\.0 or 1\.x, outside the one the signature covers/,
+      ),
+    });
+  });
+
+  // Same rule, proven under the signed-Response validator too: a SAML 1.x
+  // stray assertion is checked whichever element the signature covers.
+  it('refuses a SAML 1.x Assertion hidden in the unsigned Extensions, under the signed-Response validator', async () => {
+    const xml = alteredResponse((u) =>
+      u.replace(
+        '<samlp:Status>',
+        '<samlp:Extensions><saml1:Assertion ' +
+          'xmlns:saml1="urn:oasis:names:tc:SAML:1.0:assertion"/></samlp:Extensions>' +
+          '<samlp:Status>',
+      ),
+    );
+    await expect(
+      validator().validate(encode(xml), context),
     ).rejects.toMatchObject({
       check: 'signedNode',
       message: expect.stringMatching(

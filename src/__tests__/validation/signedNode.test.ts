@@ -1,4 +1,4 @@
-import { describe, expect, it } from '@jest/globals';
+import { describe, expect, it, jest } from '@jest/globals';
 import {
   generateKeyMaterial,
   type KeyMaterial,
@@ -407,6 +407,28 @@ describe('resolveSignedElements', () => {
     expect(() =>
       resolveSignedElements(wrapped, parse(wrapped), [key.certificatePem]),
     ).toThrow('the signature references "#_a1", which is not in the document');
+  });
+
+  // loadSignature's message is read from the caught value; a bare
+  // `(error as Error).message` cast would read `.message` off a non-Error
+  // throw and either produce "undefined" or a TypeError of its own, in place
+  // of a refusal quoting what was actually thrown.
+  it('refuses a malformed signature even when loadSignature throws something other than an Error', () => {
+    const key = generateKeyMaterial();
+    const signed = signXml(ASSERTION(), key);
+    const wrapped = RESPONSE(signed);
+    const spy = jest
+      .spyOn(SignedXml.prototype, 'loadSignature')
+      .mockImplementation(() => {
+        throw 'not an Error object';
+      });
+    try {
+      expect(() =>
+        resolveSignedElements(wrapped, parse(wrapped), [key.certificatePem]),
+      ).toThrow('the signature element is malformed: "not an Error object"');
+    } finally {
+      spy.mockRestore();
+    }
   });
 
   it('returns the signed assertion, not the forged sibling', () => {

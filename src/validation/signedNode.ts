@@ -60,8 +60,8 @@ export function toPem(certificate: string): string {
 }
 
 /**
- * A value taken from the document before any signature has been verified,
- * made safe to put in a message: JSON-quoted, so a newline smuggled in as
+ * Quotes a value from the document, or a message quoting one, before
+ * interpolating it into a refusal: JSON-quoted, so a newline smuggled in as
  * `&#10;` shows as `\n` rather than forging a line in a log, and cut to 64
  * characters, so an attacker cannot fill a log with it.
  */
@@ -133,8 +133,9 @@ function resolveOne(
     try {
       verifier.loadSignature(signatureNode as unknown as XmlNode);
     } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
       throw new Error(
-        `the signature element is malformed: ${quoteUntrusted((error as Error).message)}`,
+        `the signature element is malformed: ${quoteUntrusted(message)}`,
       );
     }
     try {
