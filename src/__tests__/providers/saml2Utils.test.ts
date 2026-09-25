@@ -171,7 +171,13 @@ describe('getSamlAssertion — where the expected request ID comes from', () => 
       authorization: callsBuilder('http://localhost:61001/callback'),
     };
 
-    await expect(getSamlAssertion(config)).rejects.toThrow(ValidationError);
+    // The fragment and missingFields must be the conflict rule's own — not
+    // the "no ID" refusal's — so a validator that confused the two would
+    // still be caught here.
+    await expect(getSamlAssertion(config)).rejects.toMatchObject({
+      message: expect.stringMatching(/two different logins/),
+      missingFields: ['idpInitiated'],
+    });
   });
 
   it('throws a ValidationError when idpInitiated is combined with a declared authnRequestId', async () => {
@@ -182,6 +188,9 @@ describe('getSamlAssertion — where the expected request ID comes from', () => 
       authorization: neverCallsBuilder('http://localhost:61001/callback'),
     };
 
-    await expect(getSamlAssertion(config)).rejects.toThrow(ValidationError);
+    await expect(getSamlAssertion(config)).rejects.toMatchObject({
+      message: expect.stringMatching(/two different logins/),
+      missingFields: ['idpInitiated'],
+    });
   });
 });
