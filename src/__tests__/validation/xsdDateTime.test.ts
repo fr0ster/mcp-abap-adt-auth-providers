@@ -8,9 +8,22 @@ describe('parseXsdDateTime', () => {
     );
   });
 
-  it('accepts fractional seconds', () => {
+  it('accepts fractional seconds and truncates to milliseconds', () => {
+    // Standard fraction case
     expect(parseXsdDateTime('2026-08-15T10:30:00.250Z')?.toISOString()).toBe(
       '2026-08-15T10:30:00.250Z',
+    );
+    // The float trap: 0.57 * 1000 = 569.99999…, so we parse as string digits
+    expect(parseXsdDateTime('2026-08-15T10:30:00.57Z')?.toISOString()).toBe(
+      '2026-08-15T10:30:00.570Z',
+    );
+    // Extra digits beyond milliseconds are truncated, not rounded
+    expect(parseXsdDateTime('2026-08-15T10:30:00.1239Z')?.toISOString()).toBe(
+      '2026-08-15T10:30:00.123Z',
+    );
+    // Single digit fraction
+    expect(parseXsdDateTime('2026-08-15T10:30:00.5Z')?.toISOString()).toBe(
+      '2026-08-15T10:30:00.500Z',
     );
   });
 
@@ -20,6 +33,10 @@ describe('parseXsdDateTime', () => {
     );
     expect(parseXsdDateTime('2026-08-15T08:30:00-02:00')?.toISOString()).toBe(
       '2026-08-15T10:30:00.000Z',
+    );
+    // Offset with non-zero minutes (e.g., India Standard Time is +05:30)
+    expect(parseXsdDateTime('2026-08-15T15:30:00+05:30')?.toISOString()).toBe(
+      '2026-08-15T10:00:00.000Z',
     );
   });
 
