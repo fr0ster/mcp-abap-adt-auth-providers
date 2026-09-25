@@ -7,6 +7,12 @@
  * a real server accepts what the provider sends, issues a refresh token for
  * the saml2-bearer grant exactly when the client may hold one, and takes that
  * refresh token back without an assertion.
+ *
+ * Every login is validated before it reaches UAA, by Saml2BearerProvider's
+ * default — the assertion-only validator — trusting the test IdP's committed
+ * certificate. The assertions here answer no AuthnRequest, so each provider
+ * declares `idpInitiated: true`, and its strategy reports UAA's bearer
+ * endpoint as the ACS, since that is the Recipient the assertion names.
  */
 
 import { randomUUID } from 'node:crypto';
@@ -131,13 +137,21 @@ const baseConfig = (clientId: string) => ({
   uaaUrl: UAA_URL as string,
   clientId,
   clientSecret: 'secret',
+  idpCertificates: [readFileSync(join(IDP, 'idp.crt'), 'utf8')],
+  idpEntityId: 'test-idp',
+  // No AuthnRequest is sent: the assertions carry no InResponseTo.
+  idpInitiated: true,
 });
+
+/** Delivers `payload` as if received at UAA's bearer endpoint, the Recipient it names. */
+const delivered = (payload: string) =>
+  staticCodeStrategy({ redirectUri: bearerAcs, payload });
 
 describeUaa('Saml2BearerProvider against Cloud Foundry UAA', () => {
   it('exchanges a bearer assertion and receives a refresh token when the client may hold one', async () => {
     const tokens = await new Saml2BearerProvider({
       ...baseConfig('saml_rt'),
-      authorization: staticCodeStrategy({ payload: bearerAssertion() }),
+      authorization: delivered(bearerAssertion()),
     }).getTokens();
 
     expect(issuerOf(tokens.authorizationToken)).toBe(uaaIssuer);
@@ -147,7 +161,7 @@ describeUaa('Saml2BearerProvider against Cloud Foundry UAA', () => {
   it('spends that refresh token without running the authorization strategy', async () => {
     const first = await new Saml2BearerProvider({
       ...baseConfig('saml_rt'),
-      authorization: staticCodeStrategy({ payload: bearerAssertion() }),
+      authorization: delivered(bearerAssertion()),
     }).getTokens();
 
     const authorize = jest.fn(async () => {
@@ -171,7 +185,7 @@ describeUaa('Saml2BearerProvider against Cloud Foundry UAA', () => {
   it('exchanges the SAMLResponse an interactive login delivers', async () => {
     const tokens = await new Saml2BearerProvider({
       ...baseConfig('saml_rt'),
-      authorization: staticCodeStrategy({ payload: samlResponse() }),
+      authorization: delivered(samlResponse()),
     }).getTokens();
 
     expect(issuerOf(tokens.authorizationToken)).toBe(uaaIssuer);
@@ -181,7 +195,7 @@ describeUaa('Saml2BearerProvider against Cloud Foundry UAA', () => {
   it('receives no refresh token when the client may not hold one', async () => {
     const tokens = await new Saml2BearerProvider({
       ...baseConfig('saml_nort'),
-      authorization: staticCodeStrategy({ payload: bearerAssertion() }),
+      authorization: delivered(bearerAssertion()),
     }).getTokens();
 
     expect(issuerOf(tokens.authorizationToken)).toBe(uaaIssuer);

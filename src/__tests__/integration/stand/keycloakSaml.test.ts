@@ -12,10 +12,20 @@
  *   AuthnRequest to match it against, and `disableInResponseToCheck` covers
  *   web SSO only — and an IdP answering the provider's own AuthnRequest always
  *   sets it. The suite pins both halves.
+ *
+ *   Both halves also pass the provider's own validation first — option B's
+ *   evidence. The IdP-initiated login declares `idpInitiated: true` and so
+ *   expects no InResponseTo; the SP-initiated one keeps the ID the provider
+ *   minted, which Keycloak answers. Validation accepts both; only UAA tells
+ *   them apart.
  * - Saml2PureProvider, the identity-provider half: Keycloak accepts the
  *   provider's AuthnRequest and answers with a signed SAMLResponse for that
- *   service provider. Turning it into session cookies is the consumer's
- *   cookieProvider and needs a real SAP system.
+ *   service provider, which the provider's default signed-Response validator
+ *   accepts against the ID it minted. Turning it into session cookies is the
+ *   consumer's cookieProvider and needs a real SAP system.
+ *
+ * Every provider trusts the signing certificate Keycloak publishes in its
+ * SAML metadata, and the realm URL as the issuer.
  *
  * Runs only with both UAA_URL and KEYCLOAK_URL set (`npm run test:stand`).
  */
@@ -24,7 +34,7 @@ import { beforeAll, describe, expect, it } from '@jest/globals';
 import { DOMParser } from '@xmldom/xmldom';
 import { Saml2BearerProvider } from '../../../providers/Saml2BearerProvider';
 import { Saml2PureProvider } from '../../../providers/Saml2PureProvider';
-import { externalCodeStrategy } from '../../../strategies';
+import { externalCodeStrategy, staticCodeStrategy } from '../../../strategies';
 import { FormBrowser, samlResponseByForm } from './formLogin';
 
 const UAA_URL = process.env.UAA_URL?.replace(/\/+$/, '');
@@ -100,6 +110,24 @@ async function trustKeycloakInUaa(): Promise<void> {
   }
 }
 
+/**
+ * The certificates Keycloak signs with, from the metadata it publishes —
+ * generated when it starts, so never a committed fixture.
+ */
+async function keycloakCertificates(): Promise<string[]> {
+  const metadata = await (
+    await fetch(`${KEYCLOAK_URL}/protocol/saml/descriptor`)
+  ).text();
+  const found = [
+    ...metadata.matchAll(
+      /<(?:\w+:)?X509Certificate>([^<]+)<\/(?:\w+:)?X509Certificate>/g,
+    ),
+  ].map((m) => m[1].replace(/\s+/g, ''));
+  if (found.length === 0)
+    throw new Error('no certificate in Keycloak metadata');
+  return [...new Set(found)];
+}
+
 /** Where UAA receives bearer assertions, from its own SAML metadata. */
 async function uaaBearerAcs(): Promise<string> {
   const metadata = await (await fetch(`${UAA_URL}/saml/metadata`)).text();
@@ -169,10 +197,18 @@ async function unsolicitedSamlResponse(url: string): Promise<string> {
 describeBoth('SAML providers with Keycloak as the identity provider', () => {
   let bearerAcs = '';
   let idpInitiatedUrl = '';
+  let idpCertificates: string[] = [];
   beforeAll(async () => {
     await trustKeycloakInUaa();
     bearerAcs = await uaaBearerAcs();
     idpInitiatedUrl = await idpInitiatedSsoTo(bearerAcs);
+    idpCertificates = await keycloakCertificates();
+  });
+
+  /** What every provider here trusts: Keycloak's key, and its realm as issuer. */
+  const trust = () => ({
+    idpCertificates,
+    idpEntityId: KEYCLOAK_URL as string,
   });
 
   const bearerConfig = () => ({
@@ -182,17 +218,18 @@ describeBoth('SAML providers with Keycloak as the identity provider', () => {
     uaaUrl: UAA_URL as string,
     clientId: 'saml_kc',
     clientSecret: 'secret',
+    ...trust(),
   });
 
   it('Saml2BearerProvider: an IdP-initiated Keycloak login becomes a UAA token', async () => {
+    // Taken before the provider runs, and handed over by a strategy that
+    // never asks for an authorization URL: an IdP-initiated login sends no
+    // AuthnRequest, so no ID is minted and none is expected.
+    const payload = await unsolicitedSamlResponse(idpInitiatedUrl);
     const tokens = await new Saml2BearerProvider({
       ...bearerConfig(),
-      // The provider's AuthnRequest URL is not used: the assertion comes from
-      // Keycloak's IdP-initiated SSO, which carries no InResponseTo.
-      authorization: externalCodeStrategy({
-        redirectUri: bearerAcs,
-        provide: async () => unsolicitedSamlResponse(idpInitiatedUrl),
-      }),
+      idpInitiated: true,
+      authorization: staticCodeStrategy({ redirectUri: bearerAcs, payload }),
     }).getTokens();
 
     const token = claims(tokens.authorizationToken);
@@ -204,6 +241,8 @@ describeBoth('SAML providers with Keycloak as the identity provider', () => {
     expect(tokens.refreshToken).toEqual(expect.any(String));
   });
 
+  // Validation passes here — the assertion answers the ID the provider minted
+  // — so the refusal below is UAA's, logged from its token endpoint.
   it('Saml2BearerProvider: UAA refuses the answer to the provider’s own AuthnRequest (InResponseTo)', async () => {
     const failures: unknown[] = [];
     const logger = {
@@ -238,6 +277,9 @@ describeBoth('SAML providers with Keycloak as the identity provider', () => {
       idpSsoUrl: `${KEYCLOAK_URL}/protocol/saml`,
       spEntityId: 'sap-sp',
       acsUrl,
+      // The default, signed-Response validator: Keycloak signs the Response
+      // as well as the assertion, and answers the ID the provider minted.
+      ...trust(),
       authorization: externalCodeStrategy({
         redirectUri: acsUrl,
         provide: async (url) => {
@@ -274,7 +316,16 @@ describeBoth('SAML providers with Keycloak as the identity provider', () => {
         'Signature',
       ).length,
     ).toBeGreaterThan(0);
-    // The lifetime comes from the response, as the provider promises.
-    expect(tokens.expiresAt).toEqual(expect.any(Number));
+    // The lifetime comes from the validated assertion: the earlier of its
+    // Conditions and its bearer confirmation.
+    const until = (name: string) =>
+      Date.parse(
+        doc
+          .getElementsByTagNameNS(SAML_NS, name)[0]
+          ?.getAttribute('NotOnOrAfter') ?? '',
+      );
+    expect(tokens.expiresAt).toBe(
+      Math.min(until('Conditions'), until('SubjectConfirmationData')),
+    );
   });
 });

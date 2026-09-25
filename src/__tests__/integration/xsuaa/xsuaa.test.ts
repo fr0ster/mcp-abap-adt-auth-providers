@@ -9,7 +9,10 @@
  * - Saml2BearerProvider: an IdP-initiated assertion (no InResponseTo) is
  *   exchanged and a refresh token issued; a whole SAMLResponse is converted
  *   by the provider; the refresh never reaches the strategy; an assertion
- *   carrying InResponseTo — the answer to an AuthnRequest — is refused.
+ *   carrying InResponseTo — the answer to an AuthnRequest — is refused by the
+ *   provider's own validator before XSUAA sees it. Every login is validated
+ *   against the per-run test IdP certificate, and declares `idpInitiated:
+ *   true`, since none of these assertions answers a request.
  * - UaaPasscodeProvider, only when XSUAA_PASSCODE holds a one-time code
  *   fetched from <xsuaa>/passcode: it is exchanged, and refreshed.
  */
@@ -20,6 +23,7 @@ import { join } from 'node:path';
 import { beforeAll, describe, expect, it, jest } from '@jest/globals';
 import { signXml } from '@mcp-abap-adt/auth-mocks';
 import type { IAuthorizationStrategy } from '@mcp-abap-adt/interfaces-auth';
+import { AssertionValidationError } from '../../../errors/AssertionValidationError';
 import { Saml2BearerProvider } from '../../../providers/Saml2BearerProvider';
 import { UaaPasscodeProvider } from '../../../providers/UaaPasscodeProvider';
 import { staticCodeStrategy } from '../../../strategies';
@@ -40,6 +44,24 @@ const expiredJwt = (): string => {
     Buffer.from(JSON.stringify(value)).toString('base64url');
   return `${encode({ alg: 'none' })}.${encode({ exp: Math.floor(Date.now() / 1000) - 3600 })}.sig`;
 };
+
+/** A logger recording every message, to tell whether a token exchange began. */
+const recordingLogger = () => {
+  const messages: string[] = [];
+  const failures: unknown[] = [];
+  const logger = {
+    info: (message: string) => messages.push(message),
+    warn: (message: string) => messages.push(message),
+    debug: (message: string) => messages.push(message),
+    error: (message: string, meta?: unknown) => {
+      messages.push(message);
+      failures.push(meta);
+    },
+  };
+  return { logger, messages, failures };
+};
+
+const EXCHANGE_STARTED = '[SAML] Exchanging assertion for token';
 
 const refuseStrategy = () => {
   const authorize = jest.fn(async () => {
@@ -107,13 +129,23 @@ describeXsuaa('Providers against a real XSUAA', () => {
       clientId: credentials.clientid,
       clientSecret: credentials.clientsecret,
       authorization: staticCodeStrategy({ redirectUri: bearerAcs, payload }),
+      // The per-run key setup.sh generated and registered as XSUAA's trust.
+      idpCertificates: [read('idp.crt')],
+      idpEntityId: ORIGIN,
+      // No AuthnRequest is sent: an assertion answering one must be refused.
+      idpInitiated: true,
       ...extra,
     });
 
   it('Saml2BearerProvider: an IdP-initiated assertion becomes a token with a refresh token', async () => {
+    const { logger, messages } = recordingLogger();
     const tokens = await bearer(
       Buffer.from(assertion()).toString('base64url'),
+      { logger },
     ).getTokens();
+
+    // The control for the InResponseTo case: an exchange that happens is seen.
+    expect(messages).toContain(EXCHANGE_STARTED);
 
     const token = claims(tokens.authorizationToken);
     expect(token.origin).toBe(ORIGIN);
@@ -153,26 +185,23 @@ describeXsuaa('Providers against a real XSUAA', () => {
     expect(refreshed.authorizationToken).not.toBe(first.authorizationToken);
   });
 
-  it('Saml2BearerProvider: XSUAA refuses an assertion carrying InResponseTo', async () => {
-    const failures: unknown[] = [];
-    const logger = {
-      info: () => {},
-      warn: () => {},
-      debug: () => {},
-      error: (_message: string, meta?: unknown) => failures.push(meta),
-    };
+  // Option B: with no request ID expected, an InResponseTo is refused by the
+  // provider's validator. XSUAA refused it too ("No subject confirmation
+  // methods were met"), but no longer gets the chance.
+  it('Saml2BearerProvider: an assertion carrying InResponseTo is refused before XSUAA sees it', async () => {
+    const { logger, messages, failures } = recordingLogger();
 
-    await expect(
+    const refused = expect(
       bearer(
         Buffer.from(assertion('_an-authn-request')).toString('base64url'),
-        {
-          logger,
-        },
+        { logger },
       ).getTokens(),
-    ).rejects.toThrow(/401/);
-    expect(JSON.stringify(failures)).toMatch(
-      /No subject confirmation methods were met/,
-    );
+    ).rejects;
+    await refused.toBeInstanceOf(AssertionValidationError);
+    await refused.toMatchObject({ check: 'bearerConfirmation' });
+
+    expect(messages).not.toContain(EXCHANGE_STARTED);
+    expect(failures).toEqual([]);
   });
 
   itWithPasscode(
