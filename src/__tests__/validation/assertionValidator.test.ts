@@ -1116,6 +1116,99 @@ describe("the signed-Response validator (Saml2PureProvider's default)", () => {
     expect(result.assertionId).toBe('_a1');
   });
 
+  // No DTD, whatever it holds: the document is parsed by two xmldom versions,
+  // and a DOCTYPE is where parsers diverge. The rest of the document is
+  // genuinely signed, so only the DOCTYPE rule can refuse it.
+  it('refuses a document carrying a DOCTYPE declaration', async () => {
+    const withDoctype = `<!DOCTYPE samlp:Response>${buildResponse()}`;
+    expect(signedElementsOf(withDoctype)[0].localName).toBe('Response');
+    await expect(
+      validator().validate(encode(withDoctype), context),
+    ).rejects.toMatchObject({
+      check: 'document',
+      message: expect.stringMatching(/carries a DOCTYPE declaration/),
+    });
+  });
+
+  // Read before any signature is verified, so attacker-chosen: a newline
+  // smuggled in as &#10; must not reach the message raw.
+  it('quotes a duplicated ID, so a newline in it cannot forge a log line', async () => {
+    const doctored =
+      `<samlp:Response xmlns:samlp="urn:oasis:names:tc:SAML:2.0:protocol" ` +
+      `xmlns:saml="urn:oasis:names:tc:SAML:2.0:assertion" ID="_x&#10;forged">` +
+      `<saml:Assertion ID="_x&#10;forged"/></samlp:Response>`;
+    const refusal = validator()
+      .validate(encode(doctored), context)
+      .then(
+        () => undefined,
+        (error: Error & { check?: string }) => error,
+      );
+    const error = await refusal;
+    expect(error?.check).toBe('duplicateId');
+    expect(error?.message).not.toContain('\n');
+    expect(error?.message).toContain('"_x\\nforged"');
+  });
+
+  it('cuts a long untrusted value short in the message', async () => {
+    const long = `_${'x'.repeat(200)}`;
+    const doctored =
+      `<samlp:Response xmlns:samlp="urn:oasis:names:tc:SAML:2.0:protocol" ` +
+      `xmlns:saml="urn:oasis:names:tc:SAML:2.0:assertion" ID="${long}">` +
+      `<saml:Assertion ID="${long}"/></samlp:Response>`;
+    await expect(
+      validator().validate(encode(doctored), context),
+    ).rejects.toMatchObject({
+      check: 'duplicateId',
+      message: expect.not.stringContaining(long),
+    });
+  });
+
+  // The assertion read is the Response's direct-child Assertion, not the
+  // first covered one. Here a genuinely signed assertion sits in the outer
+  // assertion's Advice, and the outer one's signature was moved to its end,
+  // so the Advice signature comes first in document order. Taking "the first
+  // covered Assertion" would pick the Advice one and refuse a sound document.
+  it('reads the direct-child Assertion when a signed Advice assertion comes first', async () => {
+    const inner = signXml(
+      `<saml:Assertion xmlns:saml="urn:oasis:names:tc:SAML:2.0:assertion" ID="_inner">` +
+        `<saml:Issuer>${ISSUER}</saml:Issuer></saml:Assertion>`,
+      KEY,
+    );
+    const outerUnsigned =
+      `<saml:Assertion xmlns:saml="urn:oasis:names:tc:SAML:2.0:assertion" ID="_a1">` +
+      `<saml:Issuer>${ISSUER}</saml:Issuer>` +
+      `<saml:Subject><saml:NameID>mock-user</saml:NameID>` +
+      `<saml:SubjectConfirmation Method="urn:oasis:names:tc:SAML:2.0:cm:bearer">` +
+      `<saml:SubjectConfirmationData InResponseTo="${REQUEST_ID}" Recipient="${ACS}" ` +
+      `NotOnOrAfter="${iso(300_000)}"/></saml:SubjectConfirmation></saml:Subject>` +
+      `<saml:Conditions NotBefore="${iso(-60_000)}" NotOnOrAfter="${iso(300_000)}">` +
+      `<saml:AudienceRestriction><saml:Audience>${AUDIENCE}</saml:Audience>` +
+      `</saml:AudienceRestriction></saml:Conditions>` +
+      `<saml:Advice>${inner}</saml:Advice></saml:Assertion>`;
+    const outer = signXml(outerUnsigned, KEY, {
+      referenceXPath: "/*[local-name(.)='Assertion']",
+      location: {
+        reference: "/*[local-name(.)='Assertion']",
+        action: 'append',
+      },
+    });
+    const response =
+      `<samlp:Response xmlns:samlp="urn:oasis:names:tc:SAML:2.0:protocol" ` +
+      `xmlns:saml="urn:oasis:names:tc:SAML:2.0:assertion" ID="_r1" Destination="${ACS}">` +
+      `<samlp:Status><samlp:StatusCode Value="urn:oasis:names:tc:SAML:2.0:status:Success"/></samlp:Status>` +
+      `${outer}</samlp:Response>`;
+
+    // The premise: both signatures verify, and the Advice one comes first.
+    const covered = signedElementsOf(response);
+    expect(covered.map((e) => e.getAttribute('ID'))).toEqual(['_inner', '_a1']);
+
+    const result = await assertionValidator().validate(
+      encode(response),
+      context,
+    );
+    expect(result.assertionId).toBe('_a1');
+  });
+
   it('refuses something that is not XML', async () => {
     await expect(
       validator().validate(

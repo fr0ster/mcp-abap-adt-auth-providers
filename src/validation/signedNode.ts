@@ -60,9 +60,27 @@ export function toPem(certificate: string): string {
 }
 
 /**
+ * A value taken from the document before any signature has been verified,
+ * made safe to put in a message: JSON-quoted, so a newline smuggled in as
+ * `&#10;` shows as `\n` rather than forging a line in a log, and cut to 64
+ * characters, so an attacker cannot fill a log with it.
+ */
+export function quoteUntrusted(value: string): string {
+  const limit = 64;
+  return JSON.stringify(
+    value.length > limit ? `${value.slice(0, limit)}…` : value,
+  );
+}
+
+/**
  * Verifies every signature in the document against the certificates and
  * returns the elements they reference. Throws when there is no signature, or
  * when any one of them fails a rule below.
+ *
+ * `doc` must be the parse of `xml`, and nothing else: signatures are found and
+ * their references resolved in `doc`, while `xml-crypto` verifies the digests
+ * over `xml`. Handed a `doc` from different bytes, the element returned would
+ * not be the one whose bytes were verified.
  *
  * Several signatures are normal — identity providers often sign the Response
  * and the Assertion both. Each is held to every rule on its own; the caller
@@ -100,7 +118,16 @@ function resolveOne(
   for (const certificate of certificates) {
     // Already normalised and proved at construction, so a throw here really
     // is a bad signature rather than a formatting mistake.
-    const verifier = new SignedXml({ publicCert: certificate });
+    // getCertFromKeyInfo is pinned to "none": a certificate the document
+    // carries in its own KeyInfo is the sender's claim about who signed it,
+    // and xml-crypto prefers it to publicCert when the hook returns one. It
+    // defaults to a no-op in 6.x; stating it keeps a future default from
+    // quietly letting an attacker's embedded certificate verify their own
+    // signature.
+    const verifier = new SignedXml({
+      publicCert: certificate,
+      getCertFromKeyInfo: () => null,
+    });
     verifier.loadSignature(signatureNode as unknown as XmlNode);
     try {
       // Returns false for a digest mismatch and throws when the signature
@@ -138,7 +165,7 @@ function resolveOne(
     referenced = doc.documentElement as unknown as Element;
   } else if (!uri.startsWith('#')) {
     throw new Error(
-      `the signature reference is not a same-document URI: ${uri}`,
+      `the signature reference is not a same-document URI: ${quoteUntrusted(uri)}`,
     );
   } else {
     const id = uri.slice(1);
@@ -153,7 +180,7 @@ function resolveOne(
 
   if (!referenced) {
     throw new Error(
-      `the signature references ${uri}, which is not in the document`,
+      `the signature references ${quoteUntrusted(uri)}, which is not in the document`,
     );
   }
 

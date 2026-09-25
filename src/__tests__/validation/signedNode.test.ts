@@ -95,6 +95,49 @@ describe('resolveSignedElements', () => {
     ).toThrow(/signature does not verify/i);
   });
 
+  // The attacker signs with their own key and puts their own certificate in
+  // KeyInfo. xml-crypto consults getCertFromKeyInfo before publicCert, so a
+  // verifier that honoured KeyInfo would check the attacker's signature
+  // against the attacker's certificate — and pass.
+  it('ignores a certificate the document carries in its own KeyInfo', () => {
+    const trusted = generateKeyMaterial();
+    const attacker = generateKeyMaterial();
+    const attackerBody = attacker.certificatePem
+      .replace(/-----[^-]+-----/g, '')
+      .replace(/\s+/g, '');
+    const sig = new SignedXml({
+      privateKey: attacker.privateKeyPem,
+      publicCert: attacker.certificatePem,
+      signatureAlgorithm: 'http://www.w3.org/2001/04/xmldsig-more#rsa-sha256',
+      canonicalizationAlgorithm: 'http://www.w3.org/2001/10/xml-exc-c14n#',
+      getKeyInfoContent: () =>
+        `<X509Data><X509Certificate>${attackerBody}</X509Certificate></X509Data>`,
+    });
+    sig.addReference({
+      xpath: "//*[local-name(.)='Assertion']",
+      digestAlgorithm: 'http://www.w3.org/2001/04/xmlenc#sha256',
+      transforms: [
+        'http://www.w3.org/2000/09/xmldsig#enveloped-signature',
+        'http://www.w3.org/2001/10/xml-exc-c14n#',
+      ],
+    });
+    sig.computeSignature(ASSERTION(), {
+      location: {
+        reference: "//*[local-name(.)='Issuer']",
+        action: 'after',
+      },
+    });
+    const wrapped = RESPONSE(sig.getSignedXml());
+    // The premise: the attacker's certificate really is in KeyInfo.
+    expect(wrapped).toContain(`<X509Certificate>${attackerBody}`);
+
+    expect(() =>
+      resolveSignedElements(wrapped, parse(wrapped), [
+        toPem(trusted.certificatePem),
+      ]),
+    ).toThrow(/does not verify/);
+  });
+
   it('refuses content altered after signing', () => {
     const key = generateKeyMaterial();
     const signed = signXml(ASSERTION(), key).replace('mock-idp', 'other-idp');

@@ -34,7 +34,7 @@ import {
 } from '../errors/AssertionValidationError';
 import { findDuplicateId, readRequiredId } from './documentIds';
 import { defaultReplayStore } from './inMemoryReplayStore';
-import { resolveSignedElements, toPem } from './signedNode';
+import { quoteUntrusted, resolveSignedElements, toPem } from './signedNode';
 import { parseXsdDateTime } from './xsdDateTime';
 
 const SAML_NS = 'urn:oasis:names:tc:SAML:2.0:assertion';
@@ -119,6 +119,16 @@ function createValidator(
     async validate(samlResponse, context): Promise<ValidatedAssertion> {
       // 1. Parses, and the document element is a samlp:Response.
       const xml = Buffer.from(samlResponse, 'base64').toString('utf8');
+      // No DTD, ever. A SAML message has no use for one, and a DOCTYPE is
+      // where parsers diverge — entity expansion, internal subsets — and this
+      // document is parsed twice: by @xmldom/xmldom 0.9 here and by the 0.8
+      // nested inside xml-crypto. Refused before either parse is trusted.
+      if (/<!DOCTYPE/i.test(xml)) {
+        return fail(
+          'document',
+          'the SAMLResponse carries a DOCTYPE declaration, which is never accepted',
+        );
+      }
       let doc: Document;
       try {
         doc = new DOMParser().parseFromString(
@@ -142,8 +152,8 @@ function createValidator(
         return fail(
           'document',
           require === 'assertion'
-            ? `expected a samlp:Response or a saml:Assertion, got ${root.localName}`
-            : `expected the document element to be a samlp:Response, got ${root.localName}`,
+            ? `expected a samlp:Response or a saml:Assertion, got ${quoteUntrusted(root.localName ?? '')}`
+            : `expected the document element to be a samlp:Response, got ${quoteUntrusted(root.localName ?? '')}`,
         );
       }
 
@@ -152,7 +162,7 @@ function createValidator(
       if (duplicate) {
         return fail(
           'duplicateId',
-          `the document uses the ID ${duplicate} more than once, so which element is signed is ambiguous`,
+          `the document uses the ID ${quoteUntrusted(duplicate)} more than once, so which element is signed is ambiguous`,
         );
       }
 
@@ -165,14 +175,24 @@ function createValidator(
       } catch (error) {
         return fail('signature', (error as Error).message);
       }
-      const signed =
+      // The element this validator reads is fixed by the document's shape,
+      // not by which signature happens to come first: the Response itself, or
+      // for the assertion-only validator the bare root Assertion or the
+      // Response's single direct-child Assertion. Taking "the first covered
+      // Assertion" instead would pick a signed assertion nested in Advice
+      // whenever its signature precedes the outer one's in document order.
+      const target =
         require === 'response'
-          ? covered.find((element) => element === root)
-          : covered.find(
-              (element) =>
-                element.localName === 'Assertion' &&
-                element.namespaceURI === SAML_NS,
-            );
+          ? root
+          : rootIsAssertion
+            ? root
+            : (() => {
+                const children = directChildren(root, SAML_NS, 'Assertion');
+                return children.length === 1 ? children[0] : null;
+              })();
+      const signed = target
+        ? covered.find((element) => element === target)
+        : undefined;
 
       // The signed element must be the Assertion, or a Response holding exactly
       // one. Everything below is read from `assertion` and nowhere else.
