@@ -35,9 +35,18 @@ Since 2.0.0 an interactive login is conducted by an **authorization strategy**
 and the token exchange; everything between them (reaching the URL, receiving
 what comes back, the port, the timeout) belongs to the strategy, which a
 consumer may replace wholesale. See
-[Choosing an authorization strategy](#choosing-an-authorization-strategy) and,
-if you are on an earlier major, [Migrating from 2.x to 3.0](#migrating-from-2x-to-30)
-and [Migrating from 1.x to 2.0](#migrating-from-1x-to-20).
+[Choosing an authorization strategy](#choosing-an-authorization-strategy).
+
+Since 4.0.0 both SAML providers **validate the assertion before trusting it** —
+its signature, issuer, audience, recipient, time window, the request it answers,
+and whether it has been seen before — and must therefore be told which identity
+provider to trust. This is a breaking change: a 3.x SAML configuration fails at
+construction. See [SAML assertion validation](#saml-assertion-validation).
+
+If you are on an earlier major, see
+[Migrating from 3.x to 4.0](#migrating-from-3x-to-40),
+[Migrating from 2.x to 3.0](#migrating-from-2x-to-30) and
+[Migrating from 1.x to 2.0](#migrating-from-1x-to-20).
 
 ## Responsibilities and Design Principles
 
@@ -65,6 +74,7 @@ This package is responsible for:
 2. **Token acquisition**: Handles OAuth2 flows (browser-based, refresh token, client credentials) to obtain JWT tokens
 3. **Token validation**: Validates JWT locally by checking exp claim (no HTTP requests)
 4. **OAuth2 flows**: Manages browser-based OAuth2 authorization code flow and refresh token flow
+5. **SAML assertion validation**: Verifies a SAML assertion — signature, issuer, audience, recipient, time window, request ID, replay — before either SAML provider uses it
 
 #### What This Package Does
 
@@ -73,6 +83,7 @@ This package is responsible for:
 - **Obtains tokens**: Makes HTTP requests to UAA endpoints to obtain JWT tokens
 - **Validates tokens**: Validates JWT locally by checking exp claim (no HTTP requests)
 - **Returns tokens**: Returns `ITokenResult` with `authorizationToken` and optional `refreshToken`
+- **Validates SAML assertions**: Ships two validators (`createSignedResponseValidator`, `createSignedAssertionValidator`) and an in-memory replay store; both SAML providers use one by default, and a consumer may supply its own `IAssertionValidator` or `IAssertionReplayStore`
 
 #### What This Package Does NOT Do
 
@@ -81,6 +92,7 @@ This package is responsible for:
 - **Does NOT know about service keys**: Service key loading is handled by stores
 - **Does NOT manage sessions**: Session management is handled by stores
 - **Does NOT return `serviceUrl` if unknown**: Providers may not return `serviceUrl` because they only handle token acquisition, not connection configuration
+- **Does NOT fetch identity provider metadata**: The certificates and entity ID a SAML assertion is checked against come from configuration; reading them from a file or a metadata URL is the consumer's job
 
 ### External Dependencies
 
@@ -328,88 +340,86 @@ The redirect URI is no longer a provider field: it belongs to the strategy,
 because with an ephemeral port nothing knows it until the socket is bound. The
 one the strategy reports is the one sent to the token endpoint.
 
-SAML bearer example (manual paste):
+Both SAML providers validate every assertion before using it, so every SAML
+example below says whom to trust: `idpCertificates` and `idpEntityId`. See
+[SAML assertion validation](#saml-assertion-validation) for what is checked and
+what else can be configured.
+
+SAML bearer example (UAA or XSUAA — an IdP-initiated assertion):
 
 ```typescript
+import { readFileSync } from 'node:fs';
 import { AuthBroker } from '@mcp-abap-adt/auth-broker';
-import {
-  Saml2BearerProvider,
-  manualSamlResponseStrategy,
-} from '@mcp-abap-adt/auth-providers';
+import type { IAuthorizationStrategy } from '@mcp-abap-adt/interfaces-auth';
+import { Saml2BearerProvider } from '@mcp-abap-adt/auth-providers';
 
-const acsUrl = 'https://sp.example.com/saml/acs';
+// The Recipient the assertion names: the URI-binding assertion consumer
+// service in the token endpoint's SAML metadata (UAA's is /oauth/token/alias/…).
+const acsUrl = 'https://uaa.example.com/oauth/token/alias/uaa.example';
+
+// An IdP-initiated login answers no AuthnRequest, so this strategy never calls
+// request.buildAuthorizationUrl — calling it would mint a request ID, and
+// idpInitiated: true refuses one. It fetches a fresh assertion on every login;
+// the same assertion presented twice is refused as a replay.
+const fromSsoProxy: IAuthorizationStrategy<string> = {
+  async authorize() {
+    return { payload: await getSamlResponseFromSsoProxy(), redirectUri: acsUrl };
+  },
+};
 
 const provider = new Saml2BearerProvider({
   idpSsoUrl: 'https://idp.example.com/sso',
-  spEntityId: 'my-sp-entity',
+  spEntityId: 'uaa.example', // the entityID in that metadata: the Audience
   acsUrl,
   uaaUrl: 'https://uaa.example.com',
   clientId: '...',
   clientSecret: '...',
-  // `redirectUri` must equal `acsUrl`, or the provider refuses the mismatch.
-  authorization: manualSamlResponseStrategy({ redirectUri: acsUrl, read: promptUser }),
-});
-
-const broker = new AuthBroker({ tokenProvider: provider }, 'none');
-```
-
-**Read that `redirectUri` twice.** A SAML strategy defaults its redirect URI to
-`http://localhost:61001/callback`, and the provider requires the assertion
-consumer service the IdP posts to be exactly the one the strategy names. If you
-declare a real `acsUrl` and leave `redirectUri` off, the login fails with
-*"SAML acsUrl is … but the authorization strategy is listening on …"* before
-anything is opened. Declare neither and the default is used for both, which is
-consistent — and only reachable when the IdP will post to your localhost.
-
-SAML bearer example (headless, assertion fetched elsewhere):
-
-```typescript
-import { AuthBroker } from '@mcp-abap-adt/auth-broker';
-import {
-  Saml2BearerProvider,
-  externalCodeStrategy,
-} from '@mcp-abap-adt/auth-providers';
-
-const acsUrl = 'https://sp.example.com/saml/acs';
-
-const provider = new Saml2BearerProvider({
-  idpSsoUrl: 'https://idp.example.com/sso',
-  spEntityId: 'my-sp-entity',
-  acsUrl,
-  uaaUrl: 'https://uaa.example.com',
-  clientId: '...',
-  clientSecret: '...',
-  authorization: externalCodeStrategy({
-    redirectUri: acsUrl,
-    provide: async (_authorizationUrl) => getSamlResponseFromSsoProxy(),
-  }),
+  // Whom to trust: the identity provider's signing certificate and entity ID.
+  idpCertificates: [readFileSync('idp-signing.pem', 'utf8')],
+  idpEntityId: 'https://idp.example.com/metadata',
+  // UAA and XSUAA refuse an assertion carrying InResponseTo.
+  idpInitiated: true,
+  authorization: fromSsoProxy,
 });
 
 const broker = new AuthBroker({ tokenProvider: provider }, 'none');
 ```
 
 **Who starts the login matters.** An identity provider answering an
-`AuthnRequest` — which is what the provider's own URL, and every shipped SAML
-strategy, sends — puts `InResponseTo` on the assertion's subject
-confirmation. UAA's saml2-bearer grant refuses any assertion that carries it:
-there is no request on its side to match it against, and UAA's
-`disableInResponseToCheck` applies to web SSO only. Measured against Cloud
-Foundry UAA with Keycloak as the identity provider, an SP-initiated login is
-refused with *"SubjectConfirmationData/@InResponseTo … did not match the valid
-value: null"*, and an IdP-initiated one — started at the IdP, answering no
-request — is accepted. Against UAA, supply the assertion from an IdP-initiated
-login, for instance through `externalCodeStrategy` whose `provide` ignores the
-URL it is handed. Whether XSUAA behaves the same has not been verified.
+`AuthnRequest` — which is what the provider's own URL carries, and so what every
+shipped strategy that opens or shows that URL sends — puts `InResponseTo` on
+the assertion's subject confirmation. The saml2-bearer grant of Cloud Foundry UAA and of SAP
+XSUAA refuses any assertion that carries it: there is no request on their side
+to match it against, and UAA's `disableInResponseToCheck` applies to web SSO
+only. Measured: UAA, with Keycloak as the identity provider, refuses the answer
+to an SP-initiated login with *"SubjectConfirmationData/@InResponseTo … did not
+match the valid value: null"*, and XSUAA refuses an assertion carrying
+`InResponseTo` with *"No subject confirmation methods were met"*; both accept an
+IdP-initiated one — started at the IdP, answering no request. Against either,
+supply an IdP-initiated assertion, declare `idpInitiated: true`, and use a
+strategy that does not call
+`buildAuthorizationUrl`: `staticCodeStrategy`, or your own as above.
+`samlCallbackStrategy`, `manualSamlResponseStrategy` and `externalCodeStrategy`
+all call it, so each mints a request ID, which `idpInitiated: true` refuses as a
+configuration error. (3.0's advice — `externalCodeStrategy` whose `provide`
+ignores the URL — no longer works for that reason.) See
+[Where the expected request ID comes from](#where-the-expected-request-id-comes-from).
+
+The `redirectUri` your strategy reports is the ACS the assertion is checked
+against — its `SubjectConfirmationData/@Recipient` must equal it — so for the
+bearer grant it is the token endpoint's bearer ACS, not a local callback.
 
 **What is sent.** The saml2-bearer grant takes one SAML Assertion,
 base64url-encoded (RFC 7522 §2.1). A strategy may deliver either that or the
 whole `SAMLResponse` an identity provider posts, in standard base64 —
-`Saml2BearerProvider` takes the Assertion out of a Response and re-encodes it,
-copying onto it every namespace declaration it inherited — including one used
-only inside a value such as `xsi:type="xs:string"`. The Assertion must carry
-its own signature: one over the Response alone does not survive the cut, and
-the token endpoint refuses the Assertion. An `EncryptedAssertion` is refused
-before anything is sent.
+`Saml2BearerProvider` validates what it received, then takes the Assertion out
+of a Response and re-encodes it, copying onto it every namespace declaration it
+inherited — including one used only inside a value such as
+`xsi:type="xs:string"`. The Assertion must carry its own signature: one over the
+Response alone does not survive the cut, and the token endpoint refuses the
+Assertion — which is why this provider's default validator is the one that
+requires the Assertion to be signed. An `EncryptedAssertion` is refused before
+anything is sent.
 
 **Refresh.** When the token endpoint returns a `refresh_token` with the SAML
 bearer exchange, `Saml2BearerProvider` spends it once the access token expires:
@@ -419,9 +429,10 @@ browser involved. Pass a stored one back as `refreshToken` in the config and the
 next `getTokens()` uses it. If the grant is refused, or no refresh token was
 ever issued, the provider falls back to a full login through `authorization`.
 
-Pure SAML example (cookie-based):
+Pure SAML example (cookie-based, SP-initiated):
 
 ```typescript
+import { readFileSync } from 'node:fs';
 import { AuthBroker } from '@mcp-abap-adt/auth-broker';
 import {
   Saml2PureProvider,
@@ -434,6 +445,10 @@ const provider = new Saml2PureProvider({
   idpSsoUrl: 'https://idp.example.com/sso',
   spEntityId: 'my-sp-entity',
   acsUrl,
+  idpCertificates: [readFileSync('idp-signing.pem', 'utf8')],
+  idpEntityId: 'https://idp.example.com/metadata',
+  // Shows the URL the provider builds — so the response must answer that
+  // request's ID — and reads the pasted SAMLResponse.
   authorization: manualSamlResponseStrategy({ redirectUri: acsUrl, read: promptUser }),
   // Convert SAMLResponse to session cookies for SAP (implementation-specific)
   cookieProvider: async (samlResponse) => {
@@ -443,6 +458,17 @@ const provider = new Saml2PureProvider({
 
 const broker = new AuthBroker({ tokenProvider: provider }, 'none');
 ```
+
+`cookieProvider` receives the payload unchanged, only after it has been
+validated, and the session's `expiresAt` is the validated assertion's expiry.
+
+**Read that `redirectUri` twice.** A SAML strategy defaults its redirect URI to
+`http://localhost:61001/callback`, and the provider requires the assertion
+consumer service the IdP posts to be exactly the one the strategy names. If you
+declare a real `acsUrl` and leave `redirectUri` off, the login fails with
+*"SAML acsUrl is … but the authorization strategy is listening on …"* before
+anything is opened. Declare neither and the default is used for both, which is
+consistent — and only reachable when the IdP will post to your localhost.
 
 Both SAML providers now reject at construction when `authorizationUrl` is set
 without `acsUrl`:
@@ -455,7 +481,345 @@ SAML request cannot be read, so it must be declared.
 The ACS is buried in a deflated `SAMLRequest` this package did not build and
 cannot read, so it cannot be verified against whatever the strategy binds. 1.x
 accepted the combination and defaulted the ACS to
-`http://localhost:3001/callback` — usually not where the IdP posted.
+`http://localhost:3001/callback` — usually not where the IdP posted. The same
+holds for the request ID: this package cannot read it out of a URL it did not
+build, so a pre-built `authorizationUrl` also needs `authnRequestId` — unless
+the login is declared `idpInitiated`.
+
+### SAML assertion validation
+
+Since 4.0.0, `Saml2BearerProvider` and `Saml2PureProvider` validate the
+assertion a login delivers before anything else happens to it — before the
+token exchange, before `cookieProvider`. Until 3.x nothing verified it: the
+callback checked only that the payload was non-empty, and `Saml2PureProvider`
+took its session lifetime from a regular expression over the unverified XML.
+
+**This is a breaking change.** Each provider constructs its validator in its
+constructor, and a configuration that does not say whom to trust fails there —
+a `ValidationError` whose `missingFields` names what is missing — before any
+browser opens or any request is sent. Supply `idpCertificates` and
+`idpEntityId`, or an `assertionValidator` of your own.
+
+#### Configuration
+
+On both providers' configuration (`Saml2CommonConfig`):
+
+| Field | Default | Meaning |
+|---|---|---|
+| `idpCertificates` | — | The identity provider's signing certificates, PEM or bare base64 DER — the form `<X509Certificate>` has in IdP metadata. A list, because providers rotate keys and two are live during a rotation. **Required unless `assertionValidator` is supplied.** Each entry is parsed at construction, so a malformed one fails there, not at login |
+| `idpEntityId` | — | The `Issuer` the assertion must name. **Required unless `assertionValidator` is supplied**; with one, it is still passed to it as `expectedIssuer` |
+| `spEntityId` | — | Your entity ID. The assertion's `AudienceRestriction` must name it — whichever validator is in play |
+| `assertionValidator` | the provider's default | An `IAssertionValidator`: `createSignedResponseValidator(…)`, `createSignedAssertionValidator(…)`, or your own. When supplied, the provider builds no default, and `idpCertificates`, `clockSkewMs` and `assertionReplayStore` are not used — set the last two on the validator's own options |
+| `assertionReplayStore` | the process-wide in-memory store | An `IAssertionReplayStore` for the default validator — see [Replay](#replay) |
+| `clockSkewMs` | `0` | Tolerance for the default validator's time checks — see [Clock skew](#clock-skew) |
+| `authnRequestId` | — | The AuthnRequest ID this login answers, when the package did not build the request — see [Where the expected request ID comes from](#where-the-expected-request-id-comes-from) |
+| `idpInitiated` | `false` | Declares that no AuthnRequest was sent, so the assertion must carry no `InResponseTo`. Required for `Saml2BearerProvider` against UAA or XSUAA |
+
+The package performs no I/O for any of these: it fetches no metadata and reads
+no file. Reading the certificate is the consumer's job.
+
+#### Choosing a validator
+
+This is the first decision to make, and **the default differs by provider**:
+
+| | `createSignedResponseValidator` | `createSignedAssertionValidator` |
+|---|---|---|
+| The signature must cover | the `Response` | the `Assertion` — bare, or inside a Response |
+| Default of | `Saml2PureProvider` | `Saml2BearerProvider` |
+| Reads `Status`, `Response/Issuer`, `Destination` | yes — inside the signature | **not at all** |
+| Accepts a bare `saml:Assertion` | no | yes |
+| Checks performed | all twelve below | all but rows 4, 5b and 11 |
+
+Both take the same options (`ShippedValidatorOptions`) and return the same
+interface, so switching is one identifier:
+
+```typescript
+import { readFileSync } from 'node:fs';
+import {
+  Saml2PureProvider,
+  createSignedAssertionValidator,
+} from '@mcp-abap-adt/auth-providers';
+
+const idpCertificates = [readFileSync('idp-signing.pem', 'utf8')];
+
+const provider = new Saml2PureProvider({
+  idpSsoUrl: 'https://idp.example.com/sso',
+  spEntityId: 'my-sp-entity',
+  acsUrl: 'https://sp.example.com/saml/acs',
+  // Still required with a validator of your choosing: it becomes expectedIssuer.
+  idpEntityId: 'https://idp.example.com/metadata',
+  // Our identity provider signs only its assertions.
+  assertionValidator: createSignedAssertionValidator({
+    idpCertificates,
+    clockSkewMs: 30_000,
+  }),
+  cookieProvider: exchangeSamlForCookies,
+});
+```
+
+**`createSignedResponseValidator`** requires the identity provider to sign the
+`Response`. Every field all twelve checks read is then inside the signature, so
+every check is a control. It is `Saml2PureProvider`'s default because there the
+whole response is handed on to `cookieProvider`, and `Status` and `Destination`
+must be inside a signature.
+
+**`createSignedAssertionValidator`** accepts a signature over the `Assertion`,
+and **does not read** `Status`, `Response/Issuer` or `Destination` at all — not
+weakly: with an assertion-only signature those fields sit outside it, where
+anyone able to deliver a response sets them to whatever is expected, and a check
+on a field an attacker controls reads in the code and the logs as if something
+had been verified. It is `Saml2BearerProvider`'s default because the token
+endpoint receives the Assertion alone, taken out of any Response, so the
+Assertion's own signature is what counts there. Configuring the signed-Response
+validator on the bearer path would refuse a bare Assertion, and accept responses
+signed only at the Response level, which the token endpoint then refuses.
+
+**Who needs the second one.** Identity providers that sign only assertions —
+which is many. A `Saml2PureProvider` consumer whose IdP does so gets a
+`signedNode` refusal from the default, and selects
+`createSignedAssertionValidator` explicitly. What that gives up is the three
+checks above. It is still sound:
+
+- **`Status`** — a declined login carries no assertion. An identity provider
+  that refuses does not mint one, so flipping `Status` to `Success` leaves an
+  attacker with nothing signed to put beneath it. Success is established by a
+  signed assertion passing every assertion-level check.
+- **`Destination`** — addressing rests on
+  `SubjectConfirmationData/@Recipient`, which is inside the signed assertion and
+  required by check 10.
+- **`Response/Issuer`** — the assertion's own `Issuer`, inside the signature, is
+  checked against `idpEntityId`.
+
+An identity provider that signs both the Response and the Assertion — Keycloak
+does by default — satisfies either validator.
+
+#### What the validators check
+
+In this order; each refusal is an `AssertionValidationError` whose `check`
+names the row. Rows marked *(signed-Response only)* are not performed by
+`createSignedAssertionValidator`.
+
+| # | Check | Refused when | `check` |
+|---|---|---|---|
+| 1 | Parses as XML; the document element is `samlp:Response` — or, for the assertion-only validator, a bare `saml:Assertion` | it is not | `document` |
+| 1b | Every `ID` attribute in the document is unique | any value appears twice | `duplicateId` |
+| 2 | Every signature is valid against `idpCertificates` | none, wrong key, content altered after signing, more than one reference, a reference outside the document, or a signature not inside the element it references | `signature` |
+| 3 | The signed node is the node read | the signature does not cover the element this validator requires, the response does not hold exactly one `Assertion`, or any `saml:Assertion` / `saml:EncryptedAssertion` lies outside the signed assertion | `signedNode` |
+| 4 | `samlp:Status` *(signed-Response only)* | absent, or its `StatusCode` is not `…:status:Success` | `status` |
+| 4b | `Assertion/@ID` | absent or empty | `assertionId` |
+| 5 | `Assertion/Issuer` | absent, not the expected issuer, or no expected issuer was given | `issuer` |
+| 5b | `Response/Issuer` *(signed-Response only)* | present and disagreeing with `Assertion/Issuer`, or present twice | `issuer` |
+| 6 | `Conditions` | absent | `conditions` |
+| 7 | `Conditions/@NotBefore` | not a valid `xsd:dateTime`, or in the future beyond `clockSkewMs` | `notBefore` |
+| 8 | `Conditions/@NotOnOrAfter` | absent, not a valid `xsd:dateTime`, or in the past beyond `clockSkewMs` | `notOnOrAfter` |
+| 9 | `Conditions/AudienceRestriction` | absent, or **any one** restriction fails to name `spEntityId` | `audience` |
+| 10 | One bearer `SubjectConfirmation` | no single confirmation satisfies every part of it — see below | `bearerConfirmation` |
+| 11 | `Response/@Destination` *(signed-Response only)* | absent, or not the ACS the response arrived at | `destination` |
+| 12 | Replay | the store has already recorded this `{issuer, ID}` | `replay` |
+
+What the table compresses:
+
+- **Absent is refused, not skipped.** Every row naming a field refuses when the
+  field is missing. A rule phrased "present and not X" is one an attacker
+  satisfies by deleting the field.
+- **The signature must cover the element that is read.** A wrapping attack
+  supplies a document holding a genuinely signed fragment beside a forged one;
+  the validator resolves which element each signature covers and reads the
+  assertion's fields from that element only. And since a payload travels on
+  whole — `Saml2PureProvider` hands it to `cookieProvider` — **every**
+  SAML-namespace `Assertion` or `EncryptedAssertion` anywhere in the document
+  must be the signed assertion or inside it, under both validators. An extra
+  assertion in `Extensions`, a sibling or a wrapper ends the login rather than
+  being ignored. Encrypted assertions are not supported.
+- **Several signatures are accepted** when every one verifies against
+  `idpCertificates`, carries exactly one same-document reference, and sits
+  directly inside the element it references. A signature that fails refuses the
+  whole document, even when another covers the element read. A document with no
+  signature is refused.
+- **Unique IDs (1b)** are the wrapping defence again: XML-DSig resolves its
+  reference by `ID`, so a duplicate makes "which element is signed" ambiguous.
+  They are refused wherever they appear, before any reference is resolved.
+- **Check 10 is one element, not four fields.** There must be a single
+  `SubjectConfirmation` with `Method="urn:oasis:names:tc:SAML:2.0:cm:bearer"`,
+  under exactly one `Subject`, whose own `SubjectConfirmationData` satisfies
+  all of: `InResponseTo` equal to the expected request ID — or **absent** for a
+  login declared `idpInitiated`; `Recipient` equal to the ACS the response
+  arrived at; `NotOnOrAfter` present, a valid `xsd:dateTime` and not past beyond
+  `clockSkewMs`; `NotBefore`, if present, not in the future beyond it. Values
+  scattered across several confirmations do not add up to one.
+- **Check 9 is AND across restrictions, OR within one**, as SAML Core §2.5.1.4
+  says: every `AudienceRestriction` must name you; the `Audience` elements
+  inside one are alternatives.
+- **Dates are parsed strictly.** An `xsd:dateTime` must have real calendar
+  components — `2026-02-30T00:00:00Z`, which `Date.parse` quietly turns into
+  2 March, is refused.
+
+**Expiry comes from the verified document.** A validated assertion's
+`expiresAt` is the earlier of `Conditions/@NotOnOrAfter` and the `NotOnOrAfter`
+of the bearer confirmation accepted — the earliest, if several qualify — so a
+session cannot outlive a window the assertion itself closed.
+`Saml2PureProvider` takes its session's `expiresAt` from it.
+`parseSamlNotOnOrAfter`, the regular expression over unverified XML it replaces,
+is gone.
+
+**What remains unproven.** The validators verify signatures with `xml-crypto`.
+They are tested against signatures `xml-crypto` itself produced (through
+`@mcp-abap-adt/auth-mocks`) and against Keycloak, a real identity provider, on
+the provider stand. Whether every other identity provider's canonicalisation
+matches is not proven; a refusal at `signature` from a genuine response is the
+symptom to report.
+
+#### Where the expected request ID comes from
+
+`InResponseTo` must answer the request that was sent — or, where none was sent
+by explicit choice, be absent. The expected ID is decided before validation,
+from one of three sources, and never inferred from the assertion:
+
+| Source | When | `InResponseTo` must be |
+|---|---|---|
+| minted | the strategy called `buildAuthorizationUrl`, and the package built the AuthnRequest — `samlCallbackStrategy`, `manualSamlResponseStrategy`, `externalCodeStrategy`, or the default | equal to the ID the package minted |
+| declared | `authnRequestId` is configured | equal to `authnRequestId` |
+| none, by declaration | `idpInitiated: true`, and no request was sent | **absent** |
+
+`authnRequestId` is **required** whenever the package did not build the request
+and the login is not declared IdP-initiated. Two flows trigger it:
+
+- a pre-built `authorizationUrl` — the package cannot read the ID out of a
+  request it did not build;
+- a strategy that returns a payload without calling `buildAuthorizationUrl` —
+  `staticCodeStrategy`, or your own — after a request you sent some other way.
+
+Without it, the login fails with a `ValidationError` (`missingFields:
+['authnRequestId']`) after the strategy returns and before the assertion is
+read — as a configuration fault, not a refusal blamed on the assertion. A
+strategy that merely forgot to call the builder must not silently switch the
+provider into accepting unsolicited responses.
+
+**`idpInitiated: true`** declares that the identity provider started the login
+and no AuthnRequest exists, so the assertion must carry no `InResponseTo`.
+`Saml2BearerProvider` against UAA or XSUAA needs it: both refuse an assertion
+carrying `InResponseTo` on the saml2-bearer grant. What it gives up is the
+**login-CSRF defence** of a request ID: with one, a response must answer the
+request just sent; without it, whoever can deliver a validly signed response
+of their own to your receiver can log your user in as themselves. That is
+sometimes the right trade — for UAA and XSUAA it is the only one — but it must
+be a decision visible in your configuration. **It is never inferred**: an
+assertion without `InResponseTo` does not make a login IdP-initiated; only
+`idpInitiated: true` does. The other checks apply unchanged.
+
+`idpInitiated: true` together with a minted or declared ID is a configuration
+error too (`ValidationError`, `missingFields: ['idpInitiated']`): the two
+describe different logins. Use a strategy that does not call
+`buildAuthorizationUrl`, and leave `authnRequestId` unset.
+
+#### Replay
+
+The default replay store is **process-wide**: one module-level in-memory store,
+`defaultReplayStore`, shared by every default validator in the process — both
+providers, every instance. An assertion accepted once is refused as a replay
+(`check: 'replay'`) for as long as it could still be accepted, however many
+providers are constructed; a store per provider would let a second provider
+accept what the first had seen. It is keyed by `{issuer, assertionId}`, since an
+ID is unique only within the identity provider that minted it. Only an assertion
+that passed every other check is recorded.
+
+What it does **not** protect: anything across processes. A second process, a
+restart, or a horizontally scaled deployment each start with an empty memory.
+For those, supply a shared store — `assertionReplayStore` on the provider, or
+`replayStore` on a shipped validator's options. Its `recordIfUnseen` must be
+atomic — a single conditional write, never a read followed by a write — because
+that race is exactly the one a replay exploits:
+
+```typescript
+import type { IAssertionReplayStore } from '@mcp-abap-adt/interfaces-auth';
+
+const sharedReplayStore: IAssertionReplayStore = {
+  async recordIfUnseen({ issuer, assertionId }, retainUntil) {
+    // e.g. Redis `SET key 1 NX PXAT <ms>`: true only when newly written.
+    return setIfAbsent(`saml-replay:${issuer}:${assertionId}`, retainUntil);
+  },
+};
+```
+
+`createInMemoryReplayStore()` returns a store of your own, for isolation — a
+test, or a component that must not share memory with the rest of the process.
+The in-memory store prunes lazily when consulted, so it holds no timer and
+needs no disposal.
+
+#### Clock skew
+
+`clockSkewMs` defaults to **`0`**: this package applies no leniency you did not
+choose. It must be a finite, non-negative integer; anything else fails at
+construction. It widens the `NotBefore` and `NotOnOrAfter` checks of both
+`Conditions` and the bearer confirmation. A replay entry is retained until
+`expiresAt + clockSkewMs` — the last instant the assertion would still be
+accepted — so the tolerance cannot cut a hole in replay detection.
+
+#### What a validated assertion carries: `raw` and `signedXml`
+
+You meet a `ValidatedAssertion` when you call a validator yourself or wrap one
+in an `IAssertionValidator` of your own. The shipped validators fill
+`expiresAt`, `assertionId`, `issuer`, `nameId` (when the `Subject` has one),
+`raw` and `signedXml`; they leave `sessionIndex` and `attributes` unset.
+
+- **`raw`** is the validator's input, unchanged — a `samlp:Response`, or a bare
+  `saml:Assertion` where the validator accepts one. It makes no promise about
+  what a provider forwards: `Saml2PureProvider` hands the payload to
+  `cookieProvider` as it is, while `Saml2BearerProvider` sends the extracted
+  Assertion, not `raw`. **Holding a `ValidatedAssertion` does not make all of
+  `raw` trustworthy**: a Response validated by `createSignedAssertionValidator`
+  carries `Status`, `Response/Issuer` and `Destination`, which nothing read and
+  nothing checked.
+- **`signedXml`** is what the signature covered, serialised: the `Assertion`,
+  or the `Response` when that is what was signed. Anything this interface does
+  not surface — attributes, a session index — must be parsed from `signedXml`,
+  never from `raw`. The difference between the two is the difference between
+  "signed" and "arrived".
+
+#### Using a shipped validator directly
+
+```typescript
+import { readFileSync } from 'node:fs';
+import {
+  AssertionValidationError,
+  createSignedResponseValidator,
+} from '@mcp-abap-adt/auth-providers';
+
+const validator = createSignedResponseValidator({
+  idpCertificates: [readFileSync('idp-signing.pem', 'utf8')],
+});
+
+try {
+  const validated = await validator.validate(samlResponseBase64, {
+    expectedInResponseTo: requestId, // omit only for an IdP-initiated login
+    audience: 'my-sp-entity',
+    acsUrl: 'https://sp.example.com/saml/acs',
+    expectedIssuer: 'https://idp.example.com/metadata', // required — see below
+  });
+  console.error(validated.nameId, validated.expiresAt);
+} catch (error) {
+  if (error instanceof AssertionValidationError) {
+    console.error(`refused at ${error.check}: ${error.message}`);
+  }
+  throw error;
+}
+```
+
+**Pass `expectedIssuer`.** It is optional on `AssertionContext`, for custom
+validators that establish trust some other way, but the shipped validators
+**fail closed** without it: every assertion is refused at `issuer`, since
+otherwise any issuer holding a key on your list would pass. The providers
+always pass `idpEntityId` there; a caller of a shipped validator must pass it
+itself. `expectedInResponseTo` follows the request-ID rule: given, the
+assertion must answer it; absent, the assertion must carry no `InResponseTo`.
+
+#### Errors
+
+| Error | When |
+|---|---|
+| `AssertionValidationError` | an assertion was refused. `check` (type `AssertionCheck`) names the row above — tell "your IdP declined" (`status`) from "not addressed to us" (`audience`, `bearerConfirmation`, `destination`) without parsing the message. `code` is `'ASSERTION_VALIDATION_ERROR'` (`ASSERTION_ERROR_CODES.VALIDATION_ERROR` from `@mcp-abap-adt/interfaces-auth`) |
+| `ValidationError` | configuration: `idpCertificates` or `idpEntityId` missing with no `assertionValidator` (at construction); `authnRequestId` missing, or `idpInitiated` combined with a request ID (at login, before the assertion is read). `missingFields` names the field |
+| `Error` | a certificate that is neither PEM nor base64 DER, or not a valid X.509 certificate, and a `clockSkewMs` that is not a finite non-negative integer — at construction |
 
 ### With Stores
 
@@ -708,12 +1072,17 @@ import {
   SessionDataError,
   ServiceKeyError,
   BrowserAuthError,
+  AssertionValidationError,
 } from '@mcp-abap-adt/auth-providers';
 
 try {
   const result = await provider.getTokens();
 } catch (error) {
-  if (error instanceof ValidationError) {
+  if (error instanceof AssertionValidationError) {
+    // A SAML provider refused the assertion; `check` says which check failed
+    console.error('Assertion refused at:', error.check); // e.g. 'audience'
+    console.error('Error code:', error.code); // 'ASSERTION_VALIDATION_ERROR'
+  } else if (error instanceof ValidationError) {
     // provider config validation failed
     console.error('Missing required fields:', error.missingFields);
     console.error('Error code:', error.code); // 'VALIDATION_ERROR'
@@ -736,8 +1105,110 @@ try {
 - `SessionDataError` - Session data invalid, includes `missingFields: string[]`
 - `ServiceKeyError` - Service key data invalid, includes `missingFields: string[]`
 - `BrowserAuthError` - Browser auth failed, includes `cause?: Error`
+- `AssertionValidationError` - a SAML assertion was refused, includes `check: AssertionCheck` naming the check that failed — see [SAML assertion validation](#errors)
 
-All error codes are defined in `@mcp-abap-adt/interfaces-auth` package as `TOKEN_PROVIDER_ERROR_CODES`.
+All error codes are defined in `@mcp-abap-adt/interfaces-auth` package as `TOKEN_PROVIDER_ERROR_CODES`, and `AssertionValidationError`'s as `ASSERTION_ERROR_CODES`.
+
+## Migrating from 3.x to 4.0
+
+4.0.0 changes nothing outside the two SAML providers. For those, it validates
+every assertion — see [SAML assertion validation](#saml-assertion-validation) —
+and a 3.x configuration no longer constructs:
+
+```
+The default assertion validator needs the identity provider it should trust:
+missing idpCertificates, idpEntityId. Supply these, or supply an
+assertionValidator of your own.
+```
+
+What to add, on `Saml2BearerProvider` and `Saml2PureProvider` alike:
+
+- **Whom to trust: `idpCertificates` and `idpEntityId`, or an
+  `assertionValidator`.** The certificates are the identity provider's signing
+  certificates, PEM or the bare base64 of `<X509Certificate>` in its metadata;
+  `idpEntityId` is the `Issuer` its assertions carry — its `entityID`.
+- **`spEntityId` must be your real entity ID.** It was already required, but in
+  3.x it only named the issuer of the AuthnRequest, and a login that never built
+  one never used it. It is now the `Audience` every `AudienceRestriction` must
+  name — for the bearer grant against UAA or XSUAA, the `entityID` in their SAML
+  metadata.
+- **`idpInitiated: true` for `Saml2BearerProvider` against UAA or XSUAA**, whose
+  saml2-bearer grant refuses an assertion carrying `InResponseTo`. With it, use
+  a strategy that does not call `buildAuthorizationUrl` — `staticCodeStrategy`
+  or your own. The 3.0 advice, `externalCodeStrategy` whose `provide` ignores
+  the URL, now fails: calling the builder mints a request ID, and
+  `idpInitiated: true` with a request ID is a configuration error.
+- **`authnRequestId` when the package does not build the request**: with a
+  pre-built `authorizationUrl`, or a strategy that returns a payload without
+  calling `buildAuthorizationUrl` after a request you sent — unless the login is
+  `idpInitiated`. Without either, the login fails before the assertion is read.
+- **The strategy's `redirectUri` must be the ACS the assertion names** in
+  `SubjectConfirmationData/@Recipient` — for the bearer grant, the token
+  endpoint's bearer ACS. `staticCodeStrategy` defaults it to
+  `http://localhost:61001/callback`, which such an assertion does not name.
+
+For the bearer grant against UAA or XSUAA, a 3.x configuration becomes:
+
+```typescript
+// 3.x
+new Saml2BearerProvider({
+  idpSsoUrl, spEntityId, uaaUrl, clientId, clientSecret,
+  authorization: externalCodeStrategy({ provide: async () => fetchAssertion() }),
+});
+
+// 4.0
+new Saml2BearerProvider({
+  idpSsoUrl, uaaUrl, clientId, clientSecret,
+  spEntityId: uaaEntityId,              // the entityID in UAA's SAML metadata
+  acsUrl: uaaBearerAcs,                 // its bearer ACS: the Recipient
+  idpCertificates: [idpSigningCertPem],
+  idpEntityId: 'https://idp.example.com/metadata',
+  idpInitiated: true,
+  authorization: {
+    // Never calls buildAuthorizationUrl; a fresh assertion per login.
+    authorize: async () => ({ payload: await fetchAssertion(), redirectUri: uaaBearerAcs }),
+  },
+});
+```
+
+**What now fails that used to pass:**
+
+- an unsigned assertion, one signed with a key not in `idpCertificates`, or one
+  altered after signing (`signature`);
+- under `Saml2PureProvider`'s default, a response whose `Response` is not
+  signed — an identity provider that signs only assertions. Select
+  `createSignedAssertionValidator` for it (`signedNode`);
+- under `Saml2PureProvider`'s default, a response whose `Status` is not
+  `Success` (`status`). `Saml2BearerProvider`'s default,
+  `createSignedAssertionValidator`, does not read `Status`, so a bearer
+  consumer sees no change there — a declining identity provider mints no
+  signed assertion, and the login is refused for want of one;
+- an assertion from another issuer (`issuer`), for another audience
+  (`audience`), expired or not yet valid (`notOnOrAfter`, `notBefore`,
+  `bearerConfirmation`), or addressed to another ACS (`bearerConfirmation`; and
+  `destination` under the signed-Response validator);
+- an `InResponseTo` that does not answer the request sent, one present on a
+  login declared `idpInitiated`, or one missing from a login that sent a
+  request (`bearerConfirmation`);
+- the same assertion presented twice while it is still valid (`replay`) — for
+  instance a `staticCodeStrategy` payload reused by a second login;
+- a document carrying a second assertion, or an `EncryptedAssertion`, outside
+  the signed one (`signedNode`), or a duplicated `ID` (`duplicateId`).
+
+**Also changed:**
+
+- `Saml2PureProvider`'s `expiresAt` comes from the validated assertion — the
+  earlier of the `Conditions` and bearer-confirmation windows — not from the
+  first `NotOnOrAfter` a regular expression found. It can be earlier than
+  under 3.x.
+- `parseSamlNotOnOrAfter` is removed, and `buildSamlAuthorizationUrl` returns
+  `{ url, requestId? }` instead of a string. Neither was exported from the
+  package root; only a deep import of `dist/auth/saml2Auth` is affected.
+- `@mcp-abap-adt/interfaces-auth` is `^2.0.0`, where
+  `AssertionContext.expectedInResponseTo` is optional. That matters only to an
+  implementer of `IAssertionValidator`, which must refuse an assertion carrying
+  `InResponseTo` when it is absent.
+- `xml-crypto` is a new runtime dependency, for signature verification.
 
 ## Migrating from 2.x to 3.0
 
@@ -880,6 +1351,13 @@ The package includes both unit tests (with mocks) and integration tests (with re
 npm test
 ```
 
+`npm test` also runs both shipped assertion validators end to end, through
+`Saml2PureProvider` and a real callback, against responses produced by a
+separately published mock identity provider, `@mcp-abap-adt/auth-mocks`. Every
+corruption variant it ships is refused at the check it targets — except
+`statusFailure` and `wrongDestination`, which the assertion-only validator,
+reading neither field, accepts; both halves are asserted.
+
 ### Integration Tests
 
 Integration tests work with real files from `tests/test-config.yaml`:
@@ -949,9 +1427,9 @@ it.
 
 | provider | server | what the suite proves |
 |---|---|---|
-| `Saml2BearerProvider` | UAA | a bearer assertion — and a whole `SAMLResponse` — is exchanged for a token; UAA issues a refresh token exactly when the client may hold one, and the provider refreshes without its authorization strategy |
-| `Saml2BearerProvider` | Keycloak → UAA | end to end with no assertion built by the tests: an IdP-initiated Keycloak login becomes a UAA token; the answer to the provider's own AuthnRequest is refused for its `InResponseTo` |
-| `Saml2PureProvider` | Keycloak | the identity-provider half: Keycloak accepts the provider's AuthnRequest and posts a signed response for that service provider to the ACS it named, which reaches `cookieProvider` unchanged |
+| `Saml2BearerProvider` | UAA | a bearer assertion — and a whole `SAMLResponse` — passes the default validator, declared `idpInitiated`, and is exchanged for a token; UAA issues a refresh token exactly when the client may hold one, and the provider refreshes without its authorization strategy |
+| `Saml2BearerProvider` | Keycloak → UAA | end to end with no assertion built by the tests: an IdP-initiated Keycloak login passes validation and becomes a UAA token; the answer to the provider's own AuthnRequest passes validation against the ID it minted, and UAA refuses it for its `InResponseTo` |
+| `Saml2PureProvider` | Keycloak | the identity-provider half: Keycloak accepts the provider's AuthnRequest and posts a response, signed at both levels, to the ACS it named; the default signed-Response validator accepts it against the ID the provider minted, and it reaches `cookieProvider` unchanged |
 | `ClientCredentialsProvider` | UAA | a client token |
 | `UaaPasscodeProvider` | UAA | a code fetched from `/passcode` after logging in there, exchanged for tokens; a refresh that does not ask for another code; a spent code refused |
 | `AuthorizationCodeProvider` | UAA | a login through UAA's own form, and a refresh without logging in again |
@@ -1029,6 +1507,11 @@ a half. It is not part of CI.
 | `Saml2BearerProvider`, assertion with `InResponseTo` | refused — as UAA does |
 | `UaaPasscodeProvider` (with `XSUAA_PASSCODE=<code from /passcode>`) | token, refresh |
 
+Those results were measured before 4.0. Since then the suite validates every
+login first — against the per-run test identity provider's certificate,
+declared `idpInitiated` — so the assertion carrying `InResponseTo` is refused by
+the provider's own validator (`bearerConfirmation`) before XSUAA sees it.
+
 `UaaPasscodeProvider` was also checked by hand with an ABAP environment's own
 service key: its client accepts the passcode, and the token opens ADT. That
 depends on the user being known to the ABAP system — a user from an identity
@@ -1080,10 +1563,11 @@ Example output:
 
 ## Dependencies
 
-- `@mcp-abap-adt/interfaces-auth` (^1.2.0) - Token provider and authorization contracts (`ITokenProvider`, `IAuthorizationStrategy`, `CallbackServerFactory`) and error code constants
-- `@mcp-abap-adt/interfaces-auth-sap` (^1.0.0) - XSUAA authorization configuration (`IAuthorizationConfig`)
+- `@mcp-abap-adt/interfaces-auth` (^2.0.0) - Token provider, authorization and assertion-validation contracts (`ITokenProvider`, `IAuthorizationStrategy`, `CallbackServerFactory`, `IAssertionValidator`, `IAssertionReplayStore`) and error code constants
+- `@mcp-abap-adt/interfaces-auth-sap` (^1.0.1) - XSUAA authorization configuration (`IAuthorizationConfig`)
 - `@mcp-abap-adt/interfaces-utils` (^1.1.0) - `ILogger`
-- `@xmldom/xmldom` - XML parsing, to take the Assertion out of a SAMLResponse for the saml2-bearer grant
+- `@xmldom/xmldom` - XML parsing: SAML assertion validation, and taking the Assertion out of a SAMLResponse for the saml2-bearer grant
+- `xml-crypto` - XML-DSig signature verification for SAML assertion validation
 - `axios` - HTTP client
 - `express` - OAuth2 callback server
 - `open` - Browser opening utility

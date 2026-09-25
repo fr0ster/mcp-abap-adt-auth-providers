@@ -2,7 +2,7 @@
 
 ## Project Structure & Module Organization
 
-- `src/` contains TypeScript source; key areas include `src/providers/` for token providers, `src/strategies/` for the authorization strategies a consumer can replace, `src/auth/` for the OAuth/OIDC/SAML flow mechanics and the callback server, `src/sso/` for the provider factory, and `src/errors/` for typed errors.
+- `src/` contains TypeScript source; key areas include `src/providers/` for token providers, `src/strategies/` for the authorization strategies a consumer can replace, `src/auth/` for the OAuth/OIDC/SAML flow mechanics and the callback server, `src/validation/` for SAML assertion validation (the two shipped validators and the replay store), `src/sso/` for the provider factory, and `src/errors/` for typed errors.
 - `src/__tests__/` holds Jest unit tests (`*.test.ts`).
 - `bin/` contains CLI entry points such as `auth-client-credentials.ts`.
 - `tests/` holds integration configuration templates like `tests/test-config.yaml.template`.
