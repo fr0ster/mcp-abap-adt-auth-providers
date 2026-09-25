@@ -14,6 +14,7 @@ import { samlCallbackStrategy } from '../strategies';
 import {
   createSignedAssertionValidator,
   createSignedResponseValidator,
+  isShippedValidator,
 } from '../validation/assertionValidator';
 
 export interface Saml2CommonConfig {
@@ -32,7 +33,11 @@ export interface Saml2CommonConfig {
   logger?: ILogger;
   /** PEM or bare base64 DER. Required when no `assertionValidator` is supplied. */
   idpCertificates?: string[];
-  /** The `Issuer` the assertion must name. Required when no `assertionValidator` is supplied. */
+  /**
+   * The `Issuer` the assertion must name. Required unless the supplied
+   * `assertionValidator` is a custom one: a shipped validator supplied there
+   * still needs it, since it fails closed without an expected issuer.
+   */
   idpEntityId?: string;
   /** Finite, non-negative, integer. Defaults to 0. */
   clockSkewMs?: number;
@@ -84,7 +89,22 @@ export function resolveAssertionValidator(
   config: Saml2CommonConfig,
   provider: 'bearer' | 'pure',
 ): IAssertionValidator {
-  if (config.assertionValidator) return config.assertionValidator;
+  if (config.assertionValidator) {
+    // A shipped validator fails closed without expectedIssuer, so supplying
+    // one without idpEntityId would construct fine and then refuse every
+    // login at `issuer` — after the browser step. A custom validator needs
+    // no idpEntityId: it may establish trust some other way.
+    if (isShippedValidator(config.assertionValidator) && !config.idpEntityId) {
+      throw new ValidationError(
+        'The supplied assertionValidator is a shipped one ' +
+          '(createSignedResponseValidator or createSignedAssertionValidator), ' +
+          'which refuses every assertion without an expected issuer: missing ' +
+          'idpEntityId.',
+        ['idpEntityId'],
+      );
+    }
+    return config.assertionValidator;
+  }
 
   const missing: string[] = [];
   if (!config.idpCertificates?.length) missing.push('idpCertificates');
@@ -139,6 +159,20 @@ export async function getSamlAssertion(
   const request = {
     logger: config.logger,
     buildAuthorizationUrl: async (redirectUri: string): Promise<string> => {
+      // An IdP-initiated login sends no AuthnRequest, and without a pre-built
+      // authorizationUrl the only URL this could produce is one carrying a
+      // freshly minted request. Refused here, before any URL exists, so the
+      // mistake surfaces before a browser opens rather than after a login.
+      if (config.idpInitiated && !config.authorizationUrl) {
+        throw new ValidationError(
+          'SAML idpInitiated is true and no authorizationUrl is configured, ' +
+            'but the authorization strategy asked for an authorization URL: ' +
+            'the only one this package can build carries an AuthnRequest. ' +
+            'Configure the IdP-initiated SSO URL as authorizationUrl, or use a ' +
+            'strategy that does not call buildAuthorizationUrl.',
+          ['authorizationUrl'],
+        );
+      }
       // A declared ACS is registered with the IdP; the strategy must be
       // listening exactly there, and an ephemeral port cannot be.
       const acsUrl = declaredAcs ?? redirectUri;

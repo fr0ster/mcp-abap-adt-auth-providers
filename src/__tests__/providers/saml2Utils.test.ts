@@ -8,17 +8,25 @@
  */
 
 import { describe, expect, it } from '@jest/globals';
+import { generateKeyMaterial } from '@mcp-abap-adt/auth-mocks';
 import type {
   AuthorizationOutcome,
   AuthorizationRequest,
+  IAssertionValidator,
   IAuthorizationStrategy,
 } from '@mcp-abap-adt/interfaces-auth';
 import { buildSamlAuthorizationUrl } from '../../auth/saml2Auth';
 import { ValidationError } from '../../errors/TokenProviderErrors';
+import { Saml2BearerProvider } from '../../providers/Saml2BearerProvider';
+import { Saml2PureProvider } from '../../providers/Saml2PureProvider';
 import {
   getSamlAssertion,
   type Saml2CommonConfig,
 } from '../../providers/saml2Utils';
+import {
+  createSignedAssertionValidator,
+  createSignedResponseValidator,
+} from '../../validation/assertionValidator';
 
 describe('buildSamlAuthorizationUrl', () => {
   it('mints a request ID and reports it', () => {
@@ -164,20 +172,56 @@ describe('getSamlAssertion — where the expected request ID comes from', () => 
     );
   });
 
-  it('throws a ValidationError when idpInitiated is combined with a minted ID', async () => {
+  // The builder refuses before any URL exists: an IdP-initiated login with no
+  // pre-built authorizationUrl could only get a URL carrying a freshly minted
+  // AuthnRequest. Found at the builder, the mistake surfaces before a browser
+  // opens rather than after the user has logged in.
+  it('refuses inside the builder when idpInitiated has no authorizationUrl', async () => {
+    const produced: string[] = [];
+    const strategy: IAuthorizationStrategy<string> = {
+      async authorize(request) {
+        produced.push(
+          await request.buildAuthorizationUrl(
+            'http://localhost:61001/callback',
+          ),
+        );
+        return {
+          payload: 'PHNhbWw+',
+          redirectUri: 'http://localhost:61001/callback',
+        };
+      },
+    };
     const config: Saml2CommonConfig = {
       ...baseConfig,
       idpInitiated: true,
+      authorization: strategy,
+    };
+
+    const rejected = expect(getSamlAssertion(config)).rejects.toMatchObject({
+      message: expect.stringMatching(
+        /asked for an authorization URL: the only one this package can build carries an AuthnRequest/,
+      ),
+      missingFields: ['authorizationUrl'],
+    });
+    await rejected;
+    await expect(getSamlAssertion(config)).rejects.toThrow(ValidationError);
+    expect(produced).toEqual([]);
+  });
+
+  // The other half: with a pre-built URL — the IdP-initiated SSO URL — the
+  // builder mints nothing and hands it over.
+  it('lets a strategy open a pre-built authorizationUrl when idpInitiated', async () => {
+    const config: Saml2CommonConfig = {
+      ...baseConfig,
+      idpInitiated: true,
+      acsUrl: 'http://localhost:61001/callback',
+      authorizationUrl: 'https://idp.example/idp-initiated',
       authorization: callsBuilder('http://localhost:61001/callback'),
     };
 
-    // The fragment and missingFields must be the conflict rule's own — not
-    // the "no ID" refusal's — so a validator that confused the two would
-    // still be caught here.
-    await expect(getSamlAssertion(config)).rejects.toMatchObject({
-      message: expect.stringMatching(/two different logins/),
-      missingFields: ['idpInitiated'],
-    });
+    const result = await getSamlAssertion(config);
+
+    expect(result.requestId).toBeUndefined();
   });
 
   it('throws a ValidationError when idpInitiated is combined with a declared authnRequestId', async () => {
@@ -192,5 +236,108 @@ describe('getSamlAssertion — where the expected request ID comes from', () => 
       message: expect.stringMatching(/two different logins/),
       missingFields: ['idpInitiated'],
     });
+  });
+});
+
+describe('resolveAssertionValidator — a shipped validator still needs idpEntityId', () => {
+  const certificate = generateKeyMaterial().certificatePem;
+  const common = {
+    idpSsoUrl: 'https://idp.example/sso',
+    spEntityId: 'urn:sp',
+    idpInitiated: true,
+  };
+  const shipped = {
+    createSignedResponseValidator,
+    createSignedAssertionValidator,
+  };
+
+  describe.each(Object.keys(shipped) as (keyof typeof shipped)[])(
+    '%s supplied as assertionValidator',
+    (factory) => {
+      const assertionValidator = () =>
+        shipped[factory]({ idpCertificates: [certificate] });
+
+      it('refuses Saml2BearerProvider at construction without idpEntityId', () => {
+        let thrown: unknown;
+        try {
+          new Saml2BearerProvider({
+            ...common,
+            uaaUrl: 'https://uaa.example',
+            assertionValidator: assertionValidator(),
+          });
+        } catch (error) {
+          thrown = error;
+        }
+        expect(thrown).toBeInstanceOf(ValidationError);
+        expect(thrown).toMatchObject({
+          missingFields: ['idpEntityId'],
+          message: expect.stringMatching(/assertionValidator is a shipped one/),
+        });
+      });
+
+      it('refuses Saml2PureProvider at construction without idpEntityId', () => {
+        let thrown: unknown;
+        try {
+          new Saml2PureProvider({
+            ...common,
+            cookieProvider: async () => 'cookie',
+            assertionValidator: assertionValidator(),
+          });
+        } catch (error) {
+          thrown = error;
+        }
+        expect(thrown).toBeInstanceOf(ValidationError);
+        expect(thrown).toMatchObject({
+          missingFields: ['idpEntityId'],
+          message: expect.stringMatching(/assertionValidator is a shipped one/),
+        });
+      });
+
+      it('constructs with idpEntityId', () => {
+        expect(
+          () =>
+            new Saml2PureProvider({
+              ...common,
+              idpEntityId: 'urn:idp',
+              cookieProvider: async () => 'cookie',
+              assertionValidator: assertionValidator(),
+            }),
+        ).not.toThrow();
+      });
+    },
+  );
+
+  it('constructs both providers with a custom validator and no idpEntityId', () => {
+    const custom: IAssertionValidator = {
+      async validate() {
+        throw new Error('never called');
+      },
+    };
+    expect(
+      () =>
+        new Saml2BearerProvider({
+          ...common,
+          uaaUrl: 'https://uaa.example',
+          assertionValidator: custom,
+        }),
+    ).not.toThrow();
+    expect(
+      () =>
+        new Saml2PureProvider({
+          ...common,
+          cookieProvider: async () => 'cookie',
+          assertionValidator: custom,
+        }),
+    ).not.toThrow();
+  });
+
+  // The brand is not part of what a consumer sees: not enumerable, so it
+  // does not show up in keys, spreads or serialisation.
+  it('hides the brand from enumeration', () => {
+    const validator = createSignedResponseValidator({
+      idpCertificates: [certificate],
+    });
+    expect(Object.keys(validator)).toEqual(['validate']);
+    expect(Object.getOwnPropertySymbols({ ...validator })).toHaveLength(0);
   });
 });

@@ -27,12 +27,14 @@ describe('public exports — SAML assertion validation', () => {
     expect(options.idpCertificates).toEqual([]);
   });
 
-  it.each(['parseXsdDateTime', 'findDuplicateId', 'resolveSignedElements'])(
-    'does not export the internal %s',
-    (name) => {
-      expect(name in surface).toBe(false);
-    },
-  );
+  it.each([
+    'parseXsdDateTime',
+    'findDuplicateId',
+    'resolveSignedElements',
+    'isShippedValidator',
+  ])('does not export the internal %s', (name) => {
+    expect(name in surface).toBe(false);
+  });
 
   it('no longer exports parseSamlNotOnOrAfter', () => {
     expect('parseSamlNotOnOrAfter' in surface).toBe(false);

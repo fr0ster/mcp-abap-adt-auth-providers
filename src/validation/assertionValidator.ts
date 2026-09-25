@@ -57,13 +57,39 @@ export interface ShippedValidatorOptions {
  */
 type SignedElement = 'response' | 'assertion';
 
+/**
+ * Marks a validator as one of the two shipped here. Module-private and
+ * non-enumerable, so it is neither part of the public surface nor visible to
+ * a consumer spreading or serialising the object.
+ *
+ * It exists for one reason: a shipped validator fails closed without
+ * `expectedIssuer`, so a provider handed one must insist on `idpEntityId` at
+ * construction — otherwise the mistake surfaces only as an `issuer` refusal
+ * after a human has finished a browser login. A custom validator carries no
+ * brand and may establish trust however it likes.
+ */
+const SHIPPED = Symbol('mcp-abap-adt.shippedAssertionValidator');
+
+function brand(validator: IAssertionValidator): IAssertionValidator {
+  Object.defineProperty(validator, SHIPPED, {
+    value: true,
+    enumerable: false,
+  });
+  return validator;
+}
+
+/** Whether this validator came from one of the two shipped factories. */
+export function isShippedValidator(validator: IAssertionValidator): boolean {
+  return (validator as unknown as Record<symbol, unknown>)[SHIPPED] === true;
+}
+
 export const createSignedResponseValidator = (
   options: ShippedValidatorOptions,
-): IAssertionValidator => createValidator('response', options);
+): IAssertionValidator => brand(createValidator('response', options));
 
 export const createSignedAssertionValidator = (
   options: ShippedValidatorOptions,
-): IAssertionValidator => createValidator('assertion', options);
+): IAssertionValidator => brand(createValidator('assertion', options));
 
 function createValidator(
   require: SignedElement,
