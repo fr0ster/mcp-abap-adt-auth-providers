@@ -379,6 +379,36 @@ describe('resolveSignedElements', () => {
     expect(thrown?.message).not.toContain('<Transforms>');
   });
 
+  // xml-crypto dereferences a URI without '#' by ID as well, so this signature
+  // verifies; only the same-document rule refuses it.
+  it('refuses a reference that is not a same-document URI, quoting it', () => {
+    const key = generateKeyMaterial();
+    const wrapped = signWithPatchedReference(key, (reference) => {
+      reference.setAttribute('URI', '_a1');
+    });
+    expect(wrapped).toContain('URI="_a1"');
+    expect(xmlCryptoVerifies(wrapped, key)).toBe(true);
+
+    expect(() =>
+      resolveSignedElements(wrapped, parse(wrapped), [key.certificatePem]),
+    ).toThrow('the signature reference is not a same-document URI: "_a1"');
+  });
+
+  // xml-crypto resolves a reference by Id, ID or id; this module only by
+  // ID. A signature over an element carrying Id verifies, and the lookup
+  // here finds nothing.
+  it('refuses a reference to an element it cannot find by ID, quoting the URI', () => {
+    const key = generateKeyMaterial();
+    const withIdAttribute = ASSERTION().replace(' ID="_a1"', ' Id="_a1"');
+    const wrapped = RESPONSE(signXml(withIdAttribute, key));
+    expect(wrapped).toContain('URI="#_a1"');
+    expect(xmlCryptoVerifies(wrapped, key)).toBe(true);
+
+    expect(() =>
+      resolveSignedElements(wrapped, parse(wrapped), [key.certificatePem]),
+    ).toThrow('the signature references "#_a1", which is not in the document');
+  });
+
   it('returns the signed assertion, not the forged sibling', () => {
     const key = generateKeyMaterial();
     const signed = signXml(ASSERTION('_real'), key);

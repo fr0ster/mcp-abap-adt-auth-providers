@@ -132,6 +132,21 @@ describe('getSamlAssertion — where the expected request ID comes from', () => 
     expect(result.requestId).toBe('_declared-id');
   });
 
+  // Minted beats declared: the ID the package just put in the request is
+  // the one the answer must carry, whatever the configuration also says.
+  it('prefers the ID it minted over a declared authnRequestId', async () => {
+    const config: Saml2CommonConfig = {
+      ...baseConfig,
+      authnRequestId: '_declared-id',
+      authorization: callsBuilder('http://localhost:61001/callback'),
+    };
+
+    const result = await getSamlAssertion(config);
+
+    expect(result.requestId).toMatch(/^_[0-9a-f-]{36}$/);
+    expect(result.requestId).not.toBe('_declared-id');
+  });
+
   it('yields requestId undefined when idpInitiated is declared and the builder was never called', async () => {
     const config: Saml2CommonConfig = {
       ...baseConfig,

@@ -50,4 +50,17 @@ describe('readRequiredId', () => {
       readRequiredId(doc.documentElement as unknown as Element),
     ).toBeNull();
   });
+
+  // The absent case exercised directly, not only through @xmldom/xmldom 0.9
+  // returning null. xml-crypto nests xmldom 0.8, whose getAttribute returns
+  // '' for an absent attribute; both must read as "no ID".
+  it('returns null for an absent attribute reported as null', () => {
+    const element = { getAttribute: () => null } as unknown as Element;
+    expect(readRequiredId(element)).toBeNull();
+  });
+
+  it("returns null for an absent attribute reported as ''", () => {
+    const element = { getAttribute: () => '' } as unknown as Element;
+    expect(readRequiredId(element)).toBeNull();
+  });
 });

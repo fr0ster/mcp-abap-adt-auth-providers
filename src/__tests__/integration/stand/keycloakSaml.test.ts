@@ -32,6 +32,7 @@
 
 import { beforeAll, describe, expect, it } from '@jest/globals';
 import { DOMParser } from '@xmldom/xmldom';
+import { parseStrictXml } from '../../../auth/strictXml';
 import { Saml2BearerProvider } from '../../../providers/Saml2BearerProvider';
 import { Saml2PureProvider } from '../../../providers/Saml2PureProvider';
 import { externalCodeStrategy, staticCodeStrategy } from '../../../strategies';
@@ -110,22 +111,49 @@ async function trustKeycloakInUaa(): Promise<void> {
   }
 }
 
+const MD_NS = 'urn:oasis:names:tc:SAML:2.0:metadata';
+const DSIG_NS = 'http://www.w3.org/2000/09/xmldsig#';
+
 /**
- * The certificates Keycloak signs with, from the metadata it publishes —
- * generated when it starts, so never a committed fixture.
+ * The certificates under every `KeyDescriptor use="signing"`, whitespace
+ * removed, each once, in document order. A KeyDescriptor for encryption, or
+ * one that does not state its use, is not a key to verify signatures with.
+ * Kept in this test file: a separate module under src/__tests__ would be
+ * compiled into dist/ and published.
+ */
+function signingCertificates(metadata: string): string[] {
+  const doc = parseStrictXml(metadata);
+  const found: string[] = [];
+  const descriptors = doc.getElementsByTagNameNS(MD_NS, 'KeyDescriptor');
+  for (let i = 0; i < descriptors.length; i++) {
+    const descriptor = descriptors[i];
+    if (descriptor.getAttribute('use') !== 'signing') continue;
+    const certificates = descriptor.getElementsByTagNameNS(
+      DSIG_NS,
+      'X509Certificate',
+    );
+    for (let j = 0; j < certificates.length; j++) {
+      const body = (certificates[j].textContent ?? '').replace(/\s+/g, '');
+      if (body) found.push(body);
+    }
+  }
+  return [...new Set(found)];
+}
+
+/**
+ * The certificates Keycloak signs with — those under `KeyDescriptor
+ * use="signing"` in the metadata it publishes, generated when it starts, so
+ * never a committed fixture.
  */
 async function keycloakCertificates(): Promise<string[]> {
   const metadata = await (
     await fetch(`${KEYCLOAK_URL}/protocol/saml/descriptor`)
   ).text();
-  const found = [
-    ...metadata.matchAll(
-      /<(?:\w+:)?X509Certificate>([^<]+)<\/(?:\w+:)?X509Certificate>/g,
-    ),
-  ].map((m) => m[1].replace(/\s+/g, ''));
-  if (found.length === 0)
-    throw new Error('no certificate in Keycloak metadata');
-  return [...new Set(found)];
+  const found = signingCertificates(metadata);
+  if (found.length === 0) {
+    throw new Error('no signing certificate in Keycloak metadata');
+  }
+  return found;
 }
 
 /** Where UAA receives bearer assertions, from its own SAML metadata. */
@@ -327,5 +355,45 @@ describeBoth('SAML providers with Keycloak as the identity provider', () => {
     expect(tokens.expiresAt).toBe(
       Math.min(until('Conditions'), until('SubjectConfirmationData')),
     );
+  });
+});
+
+// Ungated: the certificate filter needs no server, only metadata.
+describe('signingCertificates', () => {
+  const entity = (descriptors: string) =>
+    '<md:EntityDescriptor xmlns:md="urn:oasis:names:tc:SAML:2.0:metadata" ' +
+    'xmlns:ds="http://www.w3.org/2000/09/xmldsig#" entityID="urn:idp">' +
+    '<md:IDPSSODescriptor protocolSupportEnumeration="urn:oasis:names:tc:SAML:2.0:protocol">' +
+    `${descriptors}</md:IDPSSODescriptor></md:EntityDescriptor>`;
+
+  const key = (certificate: string, use?: string) =>
+    `<md:KeyDescriptor${use ? ` use="${use}"` : ''}><ds:KeyInfo><ds:X509Data>` +
+    `<ds:X509Certificate>${certificate}</ds:X509Certificate>` +
+    '</ds:X509Data></ds:KeyInfo></md:KeyDescriptor>';
+
+  it('ignores an encryption key', () => {
+    expect(
+      signingCertificates(
+        entity(key('U0lHTg==', 'signing') + key('RU5D', 'encryption')),
+      ),
+    ).toEqual(['U0lHTg==']);
+  });
+
+  // No use attribute means both uses in SAML metadata; only an explicit
+  // signing key is trusted to sign.
+  it('ignores a key that does not say it signs', () => {
+    expect(
+      signingCertificates(entity(key('U0lHTg==', 'signing') + key('Qk9USA=='))),
+    ).toEqual(['U0lHTg==']);
+  });
+
+  it('strips whitespace and lists each certificate once', () => {
+    expect(
+      signingCertificates(
+        entity(
+          key('\n  U0lH\n  Tg==\n', 'signing') + key('U0lHTg==', 'signing'),
+        ),
+      ),
+    ).toEqual(['U0lHTg==']);
   });
 });

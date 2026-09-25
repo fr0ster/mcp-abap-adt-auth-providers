@@ -1768,6 +1768,32 @@ describe("the signed-Response validator (Saml2PureProvider's default)", () => {
     });
   });
 
+  const ROOT_REFUSALS: Array<[string, typeof validator, string]> = [
+    [
+      'signed-Response',
+      validator,
+      'expected the document element to be a samlp:Response, got ',
+    ],
+    [
+      'assertion-only',
+      assertionValidator,
+      'expected a samlp:Response or a saml:Assertion, got ',
+    ],
+  ];
+
+  it.each(ROOT_REFUSALS)(
+    'quotes and cuts the root name in the %s validator refusal',
+    async (_name, make, prefix) => {
+      const name = `x${'y'.repeat(99)}`;
+      await expect(
+        make().validate(encode(`<${name}/>`), context),
+      ).rejects.toMatchObject({
+        check: 'document',
+        message: `${prefix}"${name.slice(0, 64)}…"`,
+      });
+    },
+  );
+
   it('quotes a Destination naming somewhere else', async () => {
     await expect(
       validator().validate(
