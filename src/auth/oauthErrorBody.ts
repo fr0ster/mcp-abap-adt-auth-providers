@@ -21,8 +21,9 @@ const JWT_SHAPE = /eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]*/g;
  * Removes what a server might echo back: every secret the request itself
  * sent (a refresh token, an assertion, a client secret), in each form it may
  * come back in, and any JWT.
- * Secrets shorter than 8 characters are ignored, so a stray short value
- * cannot blank out ordinary words.
+ * Every known secret is redacted, however short: nothing guarantees a client
+ * secret is long, and dropping a matching word from a diagnosis is the lesser
+ * harm.
  */
 function redact(
   text: string,
@@ -30,7 +31,7 @@ function redact(
 ): string {
   let out = text;
   for (const secret of secrets) {
-    if (!secret || secret.length < 8) continue;
+    if (!secret) continue;
     // As sent, as the request body encoded it (URLSearchParams: + / = become
     // %2B %2F %3D), and percent-encoded: a server may echo any of these.
     const forms = new Set([

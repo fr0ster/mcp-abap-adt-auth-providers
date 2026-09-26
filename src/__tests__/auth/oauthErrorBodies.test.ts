@@ -107,8 +107,8 @@ describe('OAuth error bodies stay out of logs and messages', () => {
       exchangeSamlAssertion(
         'assertion',
         'https://uaa/oauth/token',
-        'c',
-        's',
+        'client-id',
+        'client-secret-value',
         logger,
       ),
     );
@@ -119,7 +119,13 @@ describe('OAuth error bodies stay out of logs and messages', () => {
   it('refreshSamlBearerToken logs the error, not the body', async () => {
     const { logger, text } = recordingLogger();
     await messageOf(
-      refreshSamlBearerToken('rt', 'https://uaa/oauth/token', 'c', 's', logger),
+      refreshSamlBearerToken(
+        'rt-0123456789',
+        'https://uaa/oauth/token',
+        'client-id',
+        'client-secret-value',
+        logger,
+      ),
     );
     expectNoTokens(text());
     expect(text()).toContain('invalid_grant');
@@ -162,8 +168,8 @@ describe('OAuth error bodies stay out of logs and messages', () => {
         refreshSamlBearerToken(
           'rt',
           'https://uaa/oauth/token',
-          'c',
-          's',
+          'client-id',
+          'client-secret-value',
           logger,
         ),
       );
@@ -183,14 +189,25 @@ describe('OAuth error bodies stay out of logs and messages', () => {
         exchangeSamlAssertion(
           assertion,
           'https://uaa/oauth/token',
-          'c',
-          's',
+          'client-id',
+          'client-secret-value',
           logger,
         ),
       );
       expect(text()).not.toContain(encoded);
       expect(text()).not.toContain(assertion);
       expect(text()).toContain('could not parse assertion=');
+    });
+
+    // A known secret is redacted whatever its length: nothing checks that a
+    // client secret is long, and "secret" is six characters.
+    it('redacts a short client secret too', async () => {
+      failWithDescription('the client secret XyZ9ab is not valid for client');
+      const message = await messageOf(
+        getTokenWithClientCredentials('https://uaa', 'client', 'XyZ9ab'),
+      );
+      expect(message).not.toContain('XyZ9ab');
+      expect(message).toContain('is not valid for client');
     });
 
     it('redacts the client secret and the assertion it sent', async () => {
