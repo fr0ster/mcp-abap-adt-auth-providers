@@ -945,7 +945,7 @@ describe("the signed-Response validator (Saml2PureProvider's default)", () => {
     ).rejects.toMatchObject({
       check: 'bearerConfirmation',
       message: expect.stringMatching(
-        /qualifies: #1 Recipient is not the ACS; #2 InResponseTo does not answer our request$/,
+        /qualifies: #1 Recipient is not the ACS \| #2 InResponseTo does not answer our request$/,
       ),
     });
   });
@@ -1567,7 +1567,7 @@ describe("the signed-Response validator (Saml2PureProvider's default)", () => {
     ).rejects.toMatchObject({
       check: 'bearerConfirmation',
       message: expect.stringMatching(
-        /qualifies: #1 Recipient is not the ACS; #2 NotOnOrAfter has passed$/,
+        /qualifies: #1 Recipient is not the ACS \| #2 NotOnOrAfter has passed$/,
       ),
     });
   });
@@ -1598,9 +1598,9 @@ describe("the signed-Response validator (Saml2PureProvider's default)", () => {
     ).rejects.toMatchObject({
       check: 'bearerConfirmation',
       message:
-        'no bearer confirmation qualifies: #1 Method is not bearer; ' +
-        '#2 Method is not bearer; #3 Method is not bearer; ' +
-        '#4 Method is not bearer; #5 Method is not bearer; and 2 more',
+        'no bearer confirmation qualifies: #1 Method is not bearer | ' +
+        '#2 Method is not bearer | #3 Method is not bearer | ' +
+        '#4 Method is not bearer | #5 Method is not bearer | and 2 more',
     });
   });
 
