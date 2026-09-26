@@ -53,15 +53,21 @@ the owner has to be warned before any test run in the main checkout.
 
 **From now on:**
 
-- **The session file is configurable.** The test reads the session through
-  `getSessionPath(config)`. That is `session_path` from `test-config.yaml` if
-  set, otherwise `<destination_dir>/sessions/<destination>.env`.
-  `destination_dir` defaults per platform, as the helper already does:
-  - `~/.config/mcp-abap-adt` on Unix;
-  - `<home>/Documents/mcp-abap-adt` on Windows.
+- **The session file is configurable: any file, with a standard default.**
+  The test resolves one file, and the first rule that applies wins:
+  1. **`MCP_ABAP_ADT_SESSION_FILE`**, if set, for a single run.
+  2. **`session_path`** in `test-config.yaml`, if set. It may be absolute, may
+     start with `~` (expanded to the home directory), or may be relative to the
+     project root. Today the helper resolves it only relative to the project
+     root; this spec widens it.
+  3. **The standard folder the stores use**:
+     `<destination_dir>/sessions/<destination>.env`. `destination_dir` defaults
+     per platform, as the helper already does: `~/.config/mcp-abap-adt` on
+     Unix, `<home>/Documents/mcp-abap-adt` on Windows.
 
-  An environment variable, `MCP_ABAP_ADT_SESSION_FILE`, overrides both for a
-  single run.
+  The resolved file needs no particular name or folder. The test copies it
+  into its temporary sessions directory as `<destination>.env`, which is the
+  name `AbapSessionStore` reads.
 - **Token scenarios run from the file.** The test copies the chosen session
   into a temporary sessions directory, so the owner's file is never written or
   deleted. It then runs, without a browser:
@@ -93,6 +99,11 @@ the owner has to be warned before any test run in the main checkout.
   config exclusion, and the browser gate. The browser gate is proved by
   showing the browser case skips without the flag, with a unit-level check on
   the gate function.
+- The file-resolution order has its own unit test, one case per rule and one
+  per path form (absolute, `~`, relative), plus the Windows default. The rules
+  are the environment variable over `session_path` over the standard folder.
+  The resolver takes the platform and environment as arguments, so the Windows
+  case runs on Linux.
 - No secrets in output.
 
 ## Out of scope
