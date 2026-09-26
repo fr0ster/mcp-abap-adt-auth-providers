@@ -7,6 +7,77 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.1.0] - 2026-09-26
+
+Two refusals get stricter; no export, configuration field or error class
+changes. The README's *Upgrading from 4.0 to 4.1* lists what now fails.
+
+### Changed
+
+- **Every refusal names its rule.** No two rules under one `check` share a
+  message. An element that must appear exactly once says which way it failed
+  — absent, or more than one — for the Response's direct-child `Assertion`,
+  each signature's `ds:Reference`, `Status`, `StatusCode`, the assertion's
+  `Issuer`, `Conditions`, `Subject` and each bearer candidate's
+  `SubjectConfirmationData`. An empty `Issuer`, a `StatusCode` without a
+  `Value`, an `AudienceRestriction` naming no audience, and an absent versus
+  an invalid `Conditions/@NotOnOrAfter` each get their own message. The
+  signed-node refusal names the element the validator requires
+  (`samlp:Response` or `saml:Assertion`). `check` is unchanged for every
+  refusal, and every document 4.0.0 refused is still refused; code matching
+  on message text must match on `check`. The README lists every message.
+- **`bearerConfirmation` says why every candidate failed.** Still
+  existential: one confirmation passing every sub-rule is enough, and every
+  candidate is evaluated. A refusal lists each candidate in document order
+  with the first sub-rule it failed, in a fixed order, at most five, then
+  `and N more`. A `Subject` absent or repeated, and a `Subject` holding no
+  `SubjectConfirmation`, have messages of their own.
+- **Every document value a message interpolates is quoted and cut**
+  (`quoteUntrusted`: JSON-quoted, 64 characters at most), including the
+  post-signature `Status` code, issuer and `Destination`, the `Conditions`
+  dates, xml-crypto's own messages about a malformed `Signature`, which embed
+  the offending element, and the parser message in `Saml2BearerProvider`'s
+  bearer conversion.
+
+### Fixed
+
+- A SAML 1.x `Assertion` (`urn:oasis:names:tc:SAML:1.0:assertion`) outside
+  the signed assertion is refused at `signedNode`, as a SAML 2.0 one already
+  was. Before, one in `Extensions` passed either validator.
+- `idpInitiated: true` with `authnRequestId` is refused when the provider is
+  constructed — a `ValidationError` with `missingFields: ['idpInitiated']` —
+  not after `authorize()` returns, so before the user has been through the
+  browser.
+- A malformed `Signature` whose `loadSignature` throws something other than
+  an `Error` is refused at `signature` quoting what was thrown. Before, the
+  refusal carried an empty message, and a thrown `null` or `undefined`
+  escaped as a `TypeError` instead of an `AssertionValidationError`.
+
+### Removed
+
+- The `bin` commands `auth-authorization-code` and `auth-client-credentials`
+  (the `bin` field, and `bin` in `files`), and the devDependency `tsx`. They
+  never ran from an npm install: they were `.ts` files with a `tsx` shebang,
+  importing `src/`, which is not published. Not a breaking change for that
+  reason.
+
+### Documentation
+
+- `ValidatedAssertion.nameId` is `undefined` when the `Subject` carries no
+  `NameID` or more than one. `NameID` is surfaced, never refused.
+
+### Development
+
+- `@mcp-abap-adt/auth-stores` stays a devDependency: three test suites import
+  `AbapServiceKeyStore` from it.
+- The end-to-end SAML suite (`samlValidation.test.ts`) runs about 6× faster,
+  about 41 s down to about 7 s: it starts one mock identity provider per
+  signed element in `beforeAll` and switches variants, instead of one per
+  test, each generating an RSA key. Every test still gets its own replay
+  store.
+- The Keycloak suite trusts only the certificates under `KeyDescriptor
+  use="signing"` in Keycloak's metadata.
+
 ## [4.0.0] - 2026-09-25
 
 ### Breaking
