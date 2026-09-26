@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [4.1.1] - 2026-09-26
 
+### Changed
+
+- The `signedNode` refusal for an assertion inside a `ds:Signature` now reads
+  "…inside a ds:Signature, which is never accepted". The 4.1.0 wording, "where
+  no signature covers it", was untrue when a signed Response also covers that
+  signature. `check` and the fragment `inside a ds:Signature` are unchanged.
+
 ### Fixed
 
 - The tarball no longer ships `dist/__tests__/…`. Test helpers and stand
@@ -77,7 +84,9 @@ changes. The README's *Upgrading from 4.0 to 4.1* lists what now fails.
 - `idpInitiated: true` with `authnRequestId` is refused when the provider is
   constructed — a `ValidationError` with `missingFields: ['idpInitiated']` —
   not after `authorize()` returns, so before the user has been through the
-  browser.
+  browser. A `Saml2BearerProvider` seeded with a `refreshToken` did work in 4.0
+  until that token lapsed, since a refresh never reaches the strategy; it now
+  fails at construction.
 - A malformed `Signature` whose `loadSignature` throws something other than
   an `Error` is refused at `signature` quoting what was thrown. Before, the
   refusal carried an empty message, and a thrown `null` or `undefined`
