@@ -46,7 +46,7 @@ Debug logging: `DEBUG_AUTH_PROVIDERS=true` or `DEBUG_BROWSER_AUTH=true`.
 
 **Everything pluggable is a strategy.** Anything a consumer might reasonably want to do differently is expressed as a strategy behind an interface. The package ships a working default so nobody is forced to write one, and the consumer can always replace it. This is why an authorization library does not own a socket, a browser or stdin — a consumer may legitimately own them instead.
 
-**No token reaches a log line.** `BaseTokenProvider.formatToken` is the one way a token appears in a log, and it yields only `<redacted, N chars>`, never a character of the secret (`noTokensInLogs.test.ts`).
+**No token the provider holds reaches a log line.** `BaseTokenProvider.formatToken` is the one way a token appears in a log, and it yields only `<redacted, N chars>`, never a character of the secret (`noTokensInLogs.test.ts`). A token endpoint's error body contributes only `error` and `error_description`, through `describeOAuthErrorBody`. It redacts every secret the request sent and anything JWT-shaped (`oauthErrorBodies.test.ts`). A new opaque token that a server invents cannot be recognised there; that limit is documented, not hidden.
 
 **Nothing writes to `process.stdout`.** Under an MCP or LSP stdio transport, stdout carries protocol traffic, and a stray line corrupts it. Prompts go to the `ILogger` when there is one and to `process.stderr` when there is not — see `src/auth/announce.ts`. A prompt that vanishes without a logger is also a bug: a user who cannot see a device code cannot finish the flow.
 

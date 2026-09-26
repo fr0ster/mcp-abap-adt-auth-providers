@@ -1,5 +1,5 @@
 /**
- * No token reaches a log line, not even in part. formatToken used to return a
+ * No token the provider holds reaches a log line, not even in part. formatToken used to return a
  * token of 50 characters or fewer whole, and a longer one's first and last 25
  * characters. A UAA refresh token is about 34 characters, so it was logged
  * outright.

@@ -11,7 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
-- **No token reaches a log line.** Every provider logged tokens through
+- **No token the provider holds reaches a log line.** Every provider logged tokens through
   `BaseTokenProvider.formatToken`. That function returned a token of 50
   characters or fewer whole, and a longer one's first and last 25 characters.
   UAA and XSUAA refresh tokens are opaque and about 34 characters, so they were
@@ -29,8 +29,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `error` at 64 characters, and `error_description` at 512, so a server's
   diagnosis survives. Both are redacted first. Every secret the request itself
   sent (refresh token, assertion, client secret) and anything shaped like a JWT
-  becomes `<redacted>`. A server that echoes a token, in the body or in its
-  description, no longer leaks it.
+  becomes `<redacted>`. A server that echoes one of those, in the body or in
+  its description, no longer leaks it. **Limit:** an opaque token the request
+  did not send cannot be told from an ordinary identifier, so if a server writes
+  a new one into `error_description` it passes through, capped at 512
+  characters. Scrubbing every long string would also erase the IDs that make a
+  refusal diagnosable.
 
 ## [4.1.1] - 2026-09-26
 
