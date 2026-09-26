@@ -21,6 +21,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (decision 39 there). `getTokens()` is unchanged: it now calls
   `refreshTokens()` once the cache is not valid, which is the same path it
   took inline before.
+- **`SsoProviderFactory.create()` answers `IRefreshableTokenProvider`**, and
+  `SsoProviderInstance` is that type, so a provider from the factory can be
+  handed to anything requiring the refreshable contract without a cast. Every
+  provider it builds already was one.
 
 ### Changed
 

@@ -2,7 +2,7 @@
  * Token Providers
  *
  * Stateful token providers with automatic token lifecycle management.
- * All providers extend BaseTokenProvider and implement ITokenProvider.
+ * All providers extend BaseTokenProvider and implement IRefreshableTokenProvider.
  */
 
 export type { AuthorizationCodeProviderConfig } from './AuthorizationCodeProvider';

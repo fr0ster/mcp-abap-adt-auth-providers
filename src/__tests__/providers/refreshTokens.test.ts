@@ -12,6 +12,7 @@ import type {
   OAuth2GrantType,
 } from '@mcp-abap-adt/interfaces-auth';
 import { BaseTokenProvider } from '../../providers/BaseTokenProvider';
+import { SsoProviderFactory } from '../../sso/SsoProviderFactory';
 
 /** A JWT whose `exp` is `secondsFromNow` away: what `isTokenValid` reads. */
 function jwt(label: string, secondsFromNow: number): string {
@@ -138,5 +139,24 @@ describe('getTokens, unchanged', () => {
 
     await provider.getTokens();
     expect([provider.refreshes, provider.logins]).toEqual([1, 0]);
+  });
+});
+
+describe('SsoProviderFactory', () => {
+  // A consumer that takes its provider from the factory must be able to hand
+  // it to anything requiring the refreshable contract, without a cast. The
+  // assignment is the check; the call only proves the member is there.
+  it('answers a refreshable provider', () => {
+    const provider: IRefreshableTokenProvider = SsoProviderFactory.create({
+      protocol: 'oidc',
+      flow: 'password',
+      config: {
+        tokenEndpoint: 'https://issuer.example/token',
+        clientId: 'client',
+        username: 'user',
+        password: 'secret',
+      },
+    });
+    expect(typeof provider.refreshTokens).toBe('function');
   });
 });
