@@ -48,12 +48,13 @@ export abstract class BaseTokenProvider implements ITokenProvider {
   }
 
   /**
-   * Format token for logging (start...end)
+   * What a log line may say about a token: that it is there, and its length.
+   * Never any of its characters — a UAA refresh token is about 34 characters,
+   * so even "the first and last 25" is the whole secret.
    */
   protected formatToken(token?: string): string | undefined {
     if (!token) return undefined;
-    if (token.length <= 50) return token;
-    return `${token.substring(0, 25)}...${token.substring(token.length - 25)}`;
+    return `<redacted, ${token.length} chars>`;
   }
 
   /**

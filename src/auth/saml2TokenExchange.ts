@@ -4,6 +4,7 @@
 
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
 import axios, { type AxiosResponse } from 'axios';
+import { describeOAuthErrorBody } from './oauthErrorBody';
 
 export interface Saml2TokenExchangeResponse {
   accessToken: string;
@@ -46,7 +47,10 @@ export async function exchangeSamlAssertion(
     if (axios.isAxiosError(error)) {
       logger?.error('[SAML] Token exchange failed', {
         status: error.response?.status,
-        data: error.response?.data,
+        error: describeOAuthErrorBody(error.response?.data, [
+          samlResponse,
+          clientSecret,
+        ]),
       });
     }
     throw error;
@@ -101,7 +105,10 @@ export async function refreshSamlBearerToken(
     if (axios.isAxiosError(error)) {
       logger?.error('[SAML] Token refresh failed', {
         status: error.response?.status,
-        data: error.response?.data,
+        error: describeOAuthErrorBody(error.response?.data, [
+          refreshToken,
+          clientSecret,
+        ]),
       });
     }
     throw error;

@@ -3,6 +3,7 @@
  */
 
 import axios from 'axios';
+import { describeOAuthErrorBody } from './oauthErrorBody';
 
 export interface TokenRefreshResult {
   accessToken: string;
@@ -69,7 +70,7 @@ export async function refreshJwtToken(
         response: { status: number; data: unknown };
       };
       throw new Error(
-        `Token refresh failed (${axiosError.response.status}): ${JSON.stringify(axiosError.response.data)}`,
+        `Token refresh failed (${axiosError.response.status}): ${describeOAuthErrorBody(axiosError.response.data, [refreshToken, clientSecret])}`,
       );
     } else {
       const errorMessage =

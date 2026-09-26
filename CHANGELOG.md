@@ -7,6 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.1.2] - 2026-09-26
+
+### Security
+
+- **No token the provider holds reaches a log line.** Every provider logged tokens through
+  `BaseTokenProvider.formatToken`. That function returned a token of 50
+  characters or fewer whole, and a longer one's first and last 25 characters.
+  UAA and XSUAA refresh tokens are opaque and about 34 characters, so they were
+  logged in full, at `info`, by `AuthorizationCodeProvider` on creation, on
+  refresh (old and new) and by `BaseTokenProvider` on every token update. Access
+  tokens leaked 50 characters. A log line now carries only
+  `<redacted, N chars>`. Anyone who shipped logs from an earlier version at
+  `info` or `debug` should treat the refresh tokens in them as exposed, and
+  revoke them.
+- **No token endpoint's error body reaches a log line or an error message
+  whole.** The SAML exchange and SAML refresh logged the whole error body, and
+  `refreshJwtToken` and `getTokenWithClientCredentials` serialised it into the
+  thrown `Error`'s message, which `BaseTokenProvider` then logged. Only the
+  body's `error` and `error_description` are kept now, each quoted and capped:
+  `error` at 64 characters, and `error_description` at 512, so a server's
+  diagnosis survives. Both are redacted first. Every secret the request itself
+  sent (refresh token, assertion, client secret), however short, whether it
+  comes back as sent or form- or percent-encoded, and anything shaped like a JWT
+  becomes `<redacted>`. A server that echoes one of those, in the body or in
+  its description, no longer leaks it. **Limit:** an opaque token the request
+  did not send cannot be told from an ordinary identifier, so if a server writes
+  a new one into `error_description` it passes through, capped at 512
+  characters. Scrubbing every long string would also erase the IDs that make a
+  refusal diagnosable.
+
 ## [4.1.1] - 2026-09-26
 
 ### Changed
