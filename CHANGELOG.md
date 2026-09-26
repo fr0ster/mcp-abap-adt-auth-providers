@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Development
+
+- `@mcp-abap-adt/auth-stores` devDependency `^1.2.1`, which depends on
+  `@mcp-abap-adt/interfaces-auth` `^2.0.1`. The development tree now holds a
+  single `interfaces-auth` 2.0.1 instead of a second, nested 1.2.0. Nothing
+  published changes.
+
 ## [4.1.0] - 2026-09-26
 
 Three refusals get stricter; no export, configuration field or error class

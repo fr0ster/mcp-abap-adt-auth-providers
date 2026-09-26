@@ -70,7 +70,7 @@
     "@biomejs/biome": "^2.3.14",
     "@jest/globals": "^30.2.0",
     "@mcp-abap-adt/auth-mocks": "^0.3.0",
-    "@mcp-abap-adt/auth-stores": "^1.0.1",
+    "@mcp-abap-adt/auth-stores": "^1.2.1",
     "@mcp-abap-adt/logger": "^0.4.0",
     "@types/express": "^5.0.5",
     "@types/jest": "^30.0.0",
