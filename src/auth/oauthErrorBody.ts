@@ -14,16 +14,45 @@ const DESCRIPTION_CAP = 512;
 const quote = (value: string, cap: number): string =>
   JSON.stringify(value.length > cap ? `${value.slice(0, cap)}…` : value);
 
-export function describeOAuthErrorBody(data: unknown): string {
+/** Anything shaped like a JWT: three base64url segments, the first a header. */
+const JWT_SHAPE = /eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]*/g;
+
+/**
+ * Removes what a server might echo back: every secret the request itself
+ * sent (a refresh token, an assertion, a client secret), and any JWT.
+ * Secrets shorter than 8 characters are ignored, so a stray short value
+ * cannot blank out ordinary words.
+ */
+function redact(
+  text: string,
+  secrets: readonly (string | undefined)[],
+): string {
+  let out = text;
+  for (const secret of secrets) {
+    if (secret && secret.length >= 8)
+      out = out.split(secret).join('<redacted>');
+  }
+  return out.replace(JWT_SHAPE, '<redacted jwt>');
+}
+
+/**
+ * @param knownSecrets what the request sent that must never come back out:
+ *   the refresh token, the assertion, the client secret.
+ */
+export function describeOAuthErrorBody(
+  data: unknown,
+  knownSecrets: readonly (string | undefined)[] = [],
+): string {
   if (!data || typeof data !== 'object') return 'no error given';
   const { error, error_description } = data as {
     error?: unknown;
     error_description?: unknown;
   };
   const parts: string[] = [];
-  if (typeof error === 'string') parts.push(quote(error, ERROR_CAP));
+  if (typeof error === 'string')
+    parts.push(quote(redact(error, knownSecrets), ERROR_CAP));
   if (typeof error_description === 'string') {
-    parts.push(quote(error_description, DESCRIPTION_CAP));
+    parts.push(quote(redact(error_description, knownSecrets), DESCRIPTION_CAP));
   }
   return parts.length > 0 ? parts.join(': ') : 'no error given';
 }

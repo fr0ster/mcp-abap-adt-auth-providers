@@ -70,7 +70,7 @@ export async function refreshJwtToken(
         response: { status: number; data: unknown };
       };
       throw new Error(
-        `Token refresh failed (${axiosError.response.status}): ${describeOAuthErrorBody(axiosError.response.data)}`,
+        `Token refresh failed (${axiosError.response.status}): ${describeOAuthErrorBody(axiosError.response.data, [refreshToken, clientSecret])}`,
       );
     } else {
       const errorMessage =

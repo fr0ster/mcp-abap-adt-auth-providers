@@ -124,4 +124,69 @@ describe('OAuth error bodies stay out of logs and messages', () => {
     expectNoTokens(text());
     expect(text()).toContain('invalid_grant');
   });
+
+  // error_description is kept for diagnosis, so what it may carry is redacted:
+  // any secret the request itself sent, and anything shaped like a JWT.
+  describe('a secret inside error_description', () => {
+    const SENT_REFRESH = 'sent-refresh-token-0123456789abcdef';
+    const JWT = 'eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJ1c2VyIn0.c2lnbmF0dXJl';
+
+    const failWithDescription = (description: string) => {
+      const body = {
+        isAxiosError: true,
+        message: 'Request failed with status code 400',
+        response: {
+          status: 400,
+          data: { error: 'invalid_grant', error_description: description },
+        },
+      };
+      (
+        mockedAxios as unknown as jest.Mock<() => Promise<never>>
+      ).mockRejectedValue(body as never);
+      mockedAxios.post.mockRejectedValue(body as never);
+    };
+
+    it('redacts the refresh token the request sent, and keeps the rest', async () => {
+      failWithDescription(`Invalid refresh token (expired): ${SENT_REFRESH}`);
+      const message = await messageOf(
+        refreshJwtToken(SENT_REFRESH, 'https://uaa', 'client', 'secret'),
+      );
+      expect(message).not.toContain(SENT_REFRESH);
+      expect(message).toContain('Invalid refresh token (expired)');
+    });
+
+    it('redacts a JWT the server echoes', async () => {
+      failWithDescription(`token ${JWT} is not acceptable`);
+      const { logger, text } = recordingLogger();
+      await messageOf(
+        refreshSamlBearerToken(
+          'rt',
+          'https://uaa/oauth/token',
+          'c',
+          's',
+          logger,
+        ),
+      );
+      expect(text()).not.toContain(JWT);
+      expect(text()).toContain('is not acceptable');
+    });
+
+    it('redacts the client secret and the assertion it sent', async () => {
+      const assertion = 'PHNhbWw6QXNzZXJ0aW9uPg-assertion-payload';
+      failWithDescription(`bad client secret-value-xyz for ${assertion}`);
+      const { logger, text } = recordingLogger();
+      await messageOf(
+        exchangeSamlAssertion(
+          assertion,
+          'https://uaa/oauth/token',
+          'c',
+          'secret-value-xyz',
+          logger,
+        ),
+      );
+      expect(text()).not.toContain('secret-value-xyz');
+      expect(text()).not.toContain(assertion);
+      expect(text()).toContain('bad client');
+    });
+  });
 });

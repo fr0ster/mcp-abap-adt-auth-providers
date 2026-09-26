@@ -66,7 +66,7 @@ export async function getTokenWithClientCredentials(
         response: { status: number; data: unknown };
       };
       throw new Error(
-        `Client credentials authentication failed (${axiosError.response.status}): ${describeOAuthErrorBody(axiosError.response.data)}`,
+        `Client credentials authentication failed (${axiosError.response.status}): ${describeOAuthErrorBody(axiosError.response.data, [clientSecret])}`,
       );
     } else {
       const errorMessage =

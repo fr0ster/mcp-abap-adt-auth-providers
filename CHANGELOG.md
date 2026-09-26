@@ -25,8 +25,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   whole.** The SAML exchange and SAML refresh logged the whole error body, and
   `refreshJwtToken` and `getTokenWithClientCredentials` serialised it into the
   thrown `Error`'s message, which `BaseTokenProvider` then logged. Only the
-  body's `error` and `error_description` are kept now, each quoted and capped.
-  A server that puts tokens in an error body no longer leaks them.
+  body's `error` and `error_description` are kept now, each quoted and capped:
+  `error` at 64 characters, and `error_description` at 512, so a server's
+  diagnosis survives. Both are redacted first. Every secret the request itself
+  sent (refresh token, assertion, client secret) and anything shaped like a JWT
+  becomes `<redacted>`. A server that echoes a token, in the body or in its
+  description, no longer leaks it.
 
 ## [4.1.1] - 2026-09-26
 

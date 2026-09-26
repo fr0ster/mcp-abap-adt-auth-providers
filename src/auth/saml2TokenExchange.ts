@@ -47,7 +47,10 @@ export async function exchangeSamlAssertion(
     if (axios.isAxiosError(error)) {
       logger?.error('[SAML] Token exchange failed', {
         status: error.response?.status,
-        error: describeOAuthErrorBody(error.response?.data),
+        error: describeOAuthErrorBody(error.response?.data, [
+          samlResponse,
+          clientSecret,
+        ]),
       });
     }
     throw error;
@@ -102,7 +105,10 @@ export async function refreshSamlBearerToken(
     if (axios.isAxiosError(error)) {
       logger?.error('[SAML] Token refresh failed', {
         status: error.response?.status,
-        error: describeOAuthErrorBody(error.response?.data),
+        error: describeOAuthErrorBody(error.response?.data, [
+          refreshToken,
+          clientSecret,
+        ]),
       });
     }
     throw error;
