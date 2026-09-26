@@ -15,6 +15,7 @@ const manifest = JSON.parse(
   bin?: unknown;
   files?: string[];
   devDependencies?: Record<string, string>;
+  scripts?: Record<string, string>;
 };
 
 describe('the package manifest', () => {
@@ -37,5 +38,21 @@ describe('the package manifest', () => {
     expect(
       manifest.devDependencies?.['@mcp-abap-adt/auth-stores'],
     ).toBeDefined();
+  });
+
+  // tsconfig.json compiles every non-test file under src/, so helpers and
+  // stand fixtures in src/__tests__ were built into dist/__tests__ and
+  // published with 4.0.0 and 4.1.0. The build uses a config that leaves
+  // them out; type-checking still covers them through tsconfig.json.
+  it('builds through tsconfig.build.json, which leaves src/__tests__ out', () => {
+    expect(manifest.scripts?.build).toContain('-p tsconfig.build.json');
+    expect(manifest.scripts?.['build:fast']).toContain(
+      '-p tsconfig.build.json',
+    );
+    const buildConfig = JSON.parse(
+      readFileSync(join(ROOT, 'tsconfig.build.json'), 'utf8'),
+    ) as { extends?: string; exclude?: string[] };
+    expect(buildConfig.extends).toBe('./tsconfig.json');
+    expect(buildConfig.exclude).toContain('src/__tests__/**');
   });
 });
