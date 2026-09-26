@@ -1775,7 +1775,7 @@ Example output:
 
 ## Dependencies
 
-- `@mcp-abap-adt/interfaces-auth` (^2.0.0) - Token provider, authorization and assertion-validation contracts (`ITokenProvider`, `IAuthorizationStrategy`, `CallbackServerFactory`, `IAssertionValidator`, `IAssertionReplayStore`) and error code constants
+- `@mcp-abap-adt/interfaces-auth` (^2.0.1) - Token provider, authorization and assertion-validation contracts (`ITokenProvider`, `IAuthorizationStrategy`, `CallbackServerFactory`, `IAssertionValidator`, `IAssertionReplayStore`) and error code constants
 - `@mcp-abap-adt/interfaces-auth-sap` (^1.0.1) - XSUAA authorization configuration (`IAuthorizationConfig`)
 - `@mcp-abap-adt/interfaces-utils` (^1.1.0) - `ILogger`
 - `@xmldom/xmldom` - XML parsing: SAML assertion validation, and taking the Assertion out of a SAMLResponse for the saml2-bearer grant

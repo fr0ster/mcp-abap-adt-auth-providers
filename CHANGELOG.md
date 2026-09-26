@@ -75,6 +75,10 @@ changes. The README's *Upgrading from 4.0 to 4.1* lists what now fails.
 
 ### Development
 
+- `@mcp-abap-adt/interfaces-auth` `^2.0.1`, whose
+  `IAssertionReplayStore.recordIfUnseen` JSDoc now describes the retention this
+  package implements: until the last instant a validator would still accept
+  the assertion, not its expiry.
 - `@mcp-abap-adt/auth-stores` stays a devDependency: three test suites import
   `AbapServiceKeyStore` from it.
 - The end-to-end SAML suite (`samlValidation.test.ts`) runs about 6× faster,
