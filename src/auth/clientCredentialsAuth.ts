@@ -6,6 +6,7 @@
  */
 
 import axios from 'axios';
+import { describeOAuthErrorBody } from './oauthErrorBody';
 
 export interface ClientCredentialsResult {
   accessToken: string;
@@ -65,7 +66,7 @@ export async function getTokenWithClientCredentials(
         response: { status: number; data: unknown };
       };
       throw new Error(
-        `Client credentials authentication failed (${axiosError.response.status}): ${JSON.stringify(axiosError.response.data)}`,
+        `Client credentials authentication failed (${axiosError.response.status}): ${describeOAuthErrorBody(axiosError.response.data)}`,
       );
     } else {
       const errorMessage =

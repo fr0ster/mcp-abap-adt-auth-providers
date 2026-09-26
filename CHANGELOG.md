@@ -21,6 +21,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `<redacted, N chars>`. Anyone who shipped logs from an earlier version at
   `info` or `debug` should treat the refresh tokens in them as exposed, and
   revoke them.
+- **No token endpoint's error body reaches a log line or an error message
+  whole.** The SAML exchange and SAML refresh logged the whole error body, and
+  `refreshJwtToken` and `getTokenWithClientCredentials` serialised it into the
+  thrown `Error`'s message, which `BaseTokenProvider` then logged. Only the
+  body's `error` and `error_description` are kept now, each quoted and capped.
+  A server that puts tokens in an error body no longer leaks them.
 
 ## [4.1.1] - 2026-09-26
 
