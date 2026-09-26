@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.2.0] - 2026-09-26
+
+### Added
+
+- **`refreshTokens()`** on every provider, through `BaseTokenProvider`: a new
+  token, never the cached one — the refresh token when there is one, the login
+  flow when there is none or the refresh is refused — and it replaces the
+  cache. `getTokens()` answers the cache while the token looks valid, so a
+  caller holding a 401 had no way to ask for another; auth-broker's
+  `refreshToken()` got the refused token back. Every provider now implements
+  `IRefreshableTokenProvider` from `@mcp-abap-adt/interfaces-auth` 2.1.0
+  (decision 39 there). `getTokens()` is unchanged: it now calls
+  `refreshTokens()` once the cache is not valid, which is the same path it
+  took inline before.
+
+### Changed
+
+- `@mcp-abap-adt/interfaces-auth` `^2.1.0` (was `^2.0.1`), which declares
+  `IRefreshableTokenProvider`.
+
 ### Documentation
 
 - `docs/btp-setup.md`: what each provider needs on the SAP side — XSUAA

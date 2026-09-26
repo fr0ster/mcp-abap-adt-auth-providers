@@ -13,7 +13,7 @@ npm install @mcp-abap-adt/auth-providers
 
 ## Overview
 
-This package implements the `ITokenProvider` interface from `@mcp-abap-adt/interfaces-auth`:
+This package implements `IRefreshableTokenProvider` — `ITokenProvider` plus `refreshTokens()` — from `@mcp-abap-adt/interfaces-auth`:
 
 - **ClientCredentialsProvider** — `client_credentials`, no user interaction
 - **AuthorizationCodeProvider** — UAA/XSUAA authorization code, through a browser
@@ -27,7 +27,7 @@ This package implements the `ITokenProvider` interface from `@mcp-abap-adt/inter
   (RFC 7522)
 - **Saml2PureProvider** — a SAML assertion exchanged for session cookies
 
-Providers are configured via constructor; `getTokens()` takes no parameters and handles refresh/login internally.
+Providers are configured via constructor; `getTokens()` takes no parameters and handles refresh/login internally. `refreshTokens()` obtains a new token even while the cached one looks valid — what a caller holding a 401 needs.
 
 A token is only half of it: whether ADT accepts it depends on the XSUAA client,
 the trust and the user configured on the SAP side. What each provider needs
@@ -1209,7 +1209,22 @@ This approach prevents unnecessary token refresh and browser authentication when
 
 ### Token Refresh
 
-Providers handle refresh automatically inside `getTokens()`. No separate refresh methods are needed.
+Providers handle refresh automatically inside `getTokens()`: while the cached token is valid it
+is returned, once it expires the refresh token is used, and a login follows when there is none or
+the refresh is refused.
+
+The clock is not the only judge, though. When the server refuses a token the cache still
+considers valid — a 401 — ask for a new one with `refreshTokens()`. It skips the cache, takes the
+same refresh-then-login path, and replaces the cache with what it obtains:
+
+```typescript
+let { authorizationToken } = await provider.getTokens();
+let response = await call(authorizationToken);
+if (response.status === 401) {
+  ({ authorizationToken } = await provider.refreshTokens());
+  response = await call(authorizationToken);
+}
+```
 
 ```typescript
 try {
