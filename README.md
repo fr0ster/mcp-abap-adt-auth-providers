@@ -1768,7 +1768,7 @@ Example output:
 ```
 
 **Logging Features**:
-- **Token Formatting**: Tokens are logged in truncated format (start...end) for security
+- **No tokens in logs**: a log line never carries any part of a token, only `<redacted, N chars>` (since 4.1.2; earlier versions logged a short refresh token whole)
 - **Date Formatting**: Expiration dates are displayed in readable format (YYYY-MM-DD HH:MM:SS UTC) instead of ISO format
 - **Browser Information**: Logs browser type and authorization URL for debugging
 - **Token Lifecycle**: Detailed logging of token acquisition, validation, and refresh operations
