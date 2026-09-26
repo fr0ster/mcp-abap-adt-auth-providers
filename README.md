@@ -33,6 +33,9 @@ A token is only half of it: whether ADT accepts it depends on the XSUAA client,
 the trust and the user configured on the SAP side. What each provider needs
 there, and which are usable for ADT at all, is in
 [docs/btp-setup.md](docs/btp-setup.md).
+Logging on without a password — SAP GUI's SNC single sign-on and its HTTP
+equivalents, X.509 client certificates and SPNego — is in
+[docs/passwordless-sso.md](docs/passwordless-sso.md).
 
 Since 2.0.0 an interactive login is conducted by an **authorization strategy**
 (`IAuthorizationStrategy` from `@mcp-abap-adt/interfaces-auth`) passed as
