@@ -25,7 +25,8 @@ changes. The README's *Upgrading from 4.0 to 4.1* lists what now fails.
   signed-node refusal names the element the validator requires
   (`samlp:Response` or `saml:Assertion`). `check` is unchanged for every
   refusal, and every document 4.0.0 refused is still refused; code matching
-  on message text must match on `check`. The README lists every message.
+  on message text must match on `check`. The README lists every message
+  the shipped validators produce.
 - **`bearerConfirmation` says why every candidate failed.** Still
   existential: one confirmation passing every sub-rule is enough, and every
   candidate is evaluated. A refusal lists each candidate in document order

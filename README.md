@@ -775,15 +775,16 @@ sub-rule, in document order, joined by `; `; past five candidates it ends
 | 10 | `NotOnOrAfter has passed` |
 | 11 | `NotBefore has not arrived` |
 
-Two refusals come from outside a validator, with no `check`. A provider
-configured with both `idpInitiated: true` and `authnRequestId` throws a
-`ValidationError` (`missingFields: ['idpInitiated']`) at construction: `SAML
-idpInitiated is true and authnRequestId is set: an IdP-initiated login sends
-no request, so the two describe different logins. Remove one of them.`
-`Saml2BearerProvider`'s conversion of a validated payload into the bearer
-grant's Assertion throws a plain `Error` whose parser text is quoted the same
-way — reachable only when a custom validator accepted a payload that does not
-parse: `SAML bearer payload is not well-formed XML: "…"`.
+Two messages from outside a validator changed in 4.1.0 and carry no `check`.
+A provider configured with both `idpInitiated: true` and `authnRequestId`
+throws a `ValidationError` (`missingFields: ['idpInitiated']`) at
+construction: `SAML idpInitiated is true and authnRequestId is set: an
+IdP-initiated login sends no request, so the two describe different logins.
+Remove one of them.` And `Saml2BearerProvider`'s conversion of a validated
+payload into the bearer grant's Assertion throws a plain `Error` whose parser
+text is quoted the same way — reachable only when a custom validator accepted
+a payload that does not parse: `SAML bearer payload is not well-formed XML:
+"…"`.
 
 **Expiry comes from the verified document.** A validated assertion's
 `expiresAt` is the earlier of `Conditions/@NotOnOrAfter` and the `NotOnOrAfter`
@@ -1276,8 +1277,8 @@ the 4.0.0 reviews deferred, and two refusals get stricter.
 - a provider configured with both `idpInitiated: true` and `authnRequestId`.
   Its constructor now throws a `ValidationError` (`missingFields:
   ['idpInitiated']`); in 4.0 it constructed, and a `ValidationError` with the
-  same `missingFields` came only after the user had been through the browser. It could never log
-  in.
+  same `missingFields` came only after `authorize()` returned. It could never
+  log in.
 
 Nothing else 4.0 accepted is refused now, and no refusal moved to a different
 `check`. Every other count rule — one `ds:Reference` per signature, one
@@ -1293,8 +1294,9 @@ refused the same documents in 4.0; only its message is new.
 - `bearerConfirmation` refusals list why each candidate failed, in document
   order, at most five.
 - Values from the document are quoted and cut in every message, including
-  the `Status` code, the issuer, `Destination`, the `Conditions` dates, and
-  xml-crypto's own messages about a malformed signature.
+  the `Status` code, the issuer, `Destination`, the `Conditions` dates,
+  xml-crypto's own messages about a malformed signature, and the parser
+  message in `Saml2BearerProvider`'s bearer conversion.
 - The `bin` commands `auth-authorization-code` and `auth-client-credentials`
   are removed. They never ran from an npm install: they pointed at `.ts`
   files needing `tsx`, a devDependency, and imported `src/`, which is not
