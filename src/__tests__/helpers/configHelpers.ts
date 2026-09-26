@@ -13,7 +13,64 @@ export interface TestConfig {
   destination?: string;
   destination_dir?: string; // Base directory for service-keys and sessions subdirectories
   service_key_path?: string; // Relative path to specific service key file (alternative to destination_dir)
-  session_path?: string; // Relative path to specific session file (alternative to destination_dir)
+  session_path?: string; // Any session file: absolute, ~/..., or relative to the project root
+  interactive_login?: boolean; // Allow tests that open a browser (default: false)
+}
+
+/** What resolveSessionFile needs, passed in so every platform can be tested anywhere. */
+export interface SessionFileInputs {
+  env: Record<string, string | undefined>;
+  config: TestConfig;
+  platform: NodeJS.Platform;
+  homeDir: string;
+  projectRoot: string;
+}
+
+/**
+ * The session file the live tests read. First rule that applies wins:
+ * MCP_ABAP_ADT_SESSION_FILE, then `session_path`, then the folder the stores
+ * use — <destination_dir>/sessions/<destination>.env, where destination_dir
+ * defaults to ~/.config/mcp-abap-adt (Unix) or <home>/Documents/mcp-abap-adt
+ * (Windows). Any file works; it need not be named after the destination.
+ */
+export function resolveSessionFile(inputs: SessionFileInputs): string | null {
+  const { env, config, platform, homeDir, projectRoot } = inputs;
+  const p = platform === 'win32' ? path.win32 : path.posix;
+  const expand = (value: string): string =>
+    value === '~' || value.startsWith('~/') || value.startsWith('~\\')
+      ? p.join(homeDir, value.slice(1))
+      : value;
+  const explicit = (value: string): string => {
+    const expanded = expand(value);
+    return p.isAbsolute(expanded) ? expanded : p.resolve(projectRoot, expanded);
+  };
+
+  const fromEnv = env.MCP_ABAP_ADT_SESSION_FILE;
+  if (fromEnv) return explicit(fromEnv);
+  if (config.session_path) return explicit(config.session_path);
+  if (!config.destination) return null;
+
+  const base = config.destination_dir
+    ? expand(config.destination_dir)
+    : platform === 'win32'
+      ? p.join(homeDir, 'Documents', 'mcp-abap-adt')
+      : p.join(homeDir, '.config', 'mcp-abap-adt');
+  return p.join(base, 'sessions', `${config.destination}.env`);
+}
+
+/**
+ * Whether a test may open a browser for a person to log in. Off unless the
+ * config says `interactive_login: true` or MCP_ABAP_ADT_INTERACTIVE=1 is set:
+ * a default run must never wait for a human.
+ */
+export function interactiveLoginEnabled(inputs: {
+  env: Record<string, string | undefined>;
+  config: TestConfig;
+}): boolean {
+  return (
+    inputs.config.interactive_login === true ||
+    inputs.env.MCP_ABAP_ADT_INTERACTIVE === '1'
+  );
 }
 
 /**
@@ -207,19 +264,13 @@ export function getServiceKeyPath(config?: TestConfig): string | null {
  * Returns full path to session file
  */
 export function getSessionPath(config?: TestConfig): string | null {
-  const cfg = config || loadTestConfig();
-  const destination = cfg.destination;
-  if (!destination) return null;
-
-  // If session_path is specified, use it
-  if (cfg.session_path) {
-    const projectRoot = findProjectRoot();
-    return path.resolve(projectRoot, cfg.session_path);
-  }
-
-  // Construct from directory + destination
-  const sessionsDir = getSessionsDir(cfg);
-  return path.join(sessionsDir, `${destination}.env`);
+  return resolveSessionFile({
+    env: process.env,
+    config: config || loadTestConfig(),
+    platform: process.platform,
+    homeDir: process.env.HOME || process.env.USERPROFILE || '',
+    projectRoot: findProjectRoot(),
+  });
 }
 
 // Legacy functions for backward compatibility

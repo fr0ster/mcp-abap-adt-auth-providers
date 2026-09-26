@@ -7,6 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.1.1] - 2026-09-26
+
+### Changed
+
+- The `signedNode` refusal for an assertion inside a `ds:Signature` now reads
+  "…inside a ds:Signature, which is never accepted". The 4.1.0 wording, "where
+  no signature covers it", was untrue when a signed Response also covers that
+  signature. `check` and the fragment `inside a ds:Signature` are unchanged.
+
+### Fixed
+
+- The tarball no longer ships `dist/__tests__/…`. Test helpers and stand
+  fixtures were built into `dist` and published with 4.0.0 and 4.1.0. The build
+  now uses `tsconfig.build.json`, which leaves `src/__tests__` out, and the
+  tarball drops from 140 to 128 files. Nothing a consumer imports changes.
+
+### Development
+
+- `@mcp-abap-adt/auth-stores` devDependency `^1.2.1`, which depends on
+  `@mcp-abap-adt/interfaces-auth` `^2.0.1`. The development tree now holds a
+  single `interfaces-auth` 2.0.1 instead of a second, nested 1.2.0. Nothing
+  published changes.
+- The live authorization tests take tokens from any session file:
+  `MCP_ABAP_ADT_SESSION_FILE`, or `session_path` in `tests/test-config.yaml`,
+  or the stores' folder `<destination_dir>/sessions/<destination>.env`. The
+  folder defaults to `~/.config/mcp-abap-adt` on Unix and
+  `Documents/mcp-abap-adt` on Windows. Browser logins run only with
+  `interactive_login: true` or `MCP_ABAP_ADT_INTERACTIVE=1`, so a default
+  `npm test` never waits for one.
+
 ## [4.1.0] - 2026-09-26
 
 Three refusals get stricter; no export, configuration field or error class
@@ -54,7 +84,9 @@ changes. The README's *Upgrading from 4.0 to 4.1* lists what now fails.
 - `idpInitiated: true` with `authnRequestId` is refused when the provider is
   constructed — a `ValidationError` with `missingFields: ['idpInitiated']` —
   not after `authorize()` returns, so before the user has been through the
-  browser.
+  browser. A `Saml2BearerProvider` seeded with a `refreshToken` did work in 4.0
+  until that token lapsed, since a refresh never reaches the strategy; it now
+  fails at construction.
 - A malformed `Signature` whose `loadSignature` throws something other than
   an `Error` is refused at `signature` quoting what was thrown. Before, the
   refusal carried an empty message, and a thrown `null` or `undefined`

@@ -727,7 +727,7 @@ value.
 | `signedNode` | `the signature does not cover the samlp:Response this validator requires` |
 | `signedNode` | `the signature does not cover the saml:Assertion this validator requires` |
 | `signedNode` | `the document carries an Assertion or EncryptedAssertion, SAML 2.0 or 1.x, outside the one the signature covers` |
-| `signedNode` | `the document carries an Assertion or EncryptedAssertion inside a ds:Signature, where no signature covers it` |
+| `signedNode` | `the document carries an Assertion or EncryptedAssertion inside a ds:Signature, which is never accepted` |
 | `status` | `the response carries no samlp:Status` |
 | `status` | `the response carries <n> samlp:Status; exactly one is allowed` |
 | `status` | `the samlp:Status carries no samlp:StatusCode` |

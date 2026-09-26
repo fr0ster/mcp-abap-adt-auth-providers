@@ -1311,6 +1311,33 @@ describe("the signed-Response validator (Saml2PureProvider's default)", () => {
     },
   );
 
+  // Only the xmldsig namespace makes an element a signature. An element that
+  // merely has the local name Signature, in any other namespace, is ordinary
+  // content: an Advice assertion inside it is inside the signed assertion and
+  // is accepted.
+  it.each([
+    ['a private namespace', 'urn:x'],
+    ['xmldsig 1.1', 'http://www.w3.org/2009/xmldsig11#'],
+  ])(
+    'accepts an Advice assertion inside a Signature element from %s',
+    async (_label, ns) => {
+      const xml = alteredResponse((u) =>
+        u.replace(
+          '</saml:Conditions>',
+          `</saml:Conditions><saml:Advice><x:Signature xmlns:x="${ns}">` +
+            '<saml:Assertion ID="_advice"><saml:Issuer>x</saml:Issuer></saml:Assertion>' +
+            '</x:Signature></saml:Advice>',
+        ),
+      );
+      expect(signedElementsOf(xml).map((e) => e.localName)).toEqual([
+        'Response',
+      ]);
+      await expect(
+        validator().validate(encode(xml), context),
+      ).resolves.toBeDefined();
+    },
+  );
+
   it("refuses an Assertion inside the signed Response's own ds:Signature", async () => {
     const xml = intoFirstSignature(
       buildResponse({ signWhat: 'response' }),

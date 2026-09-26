@@ -239,7 +239,7 @@ function createValidator(
       if (place === 'inSignature') {
         return fail(
           'signedNode',
-          'the document carries an Assertion or EncryptedAssertion inside a ds:Signature, where no signature covers it',
+          'the document carries an Assertion or EncryptedAssertion inside a ds:Signature, which is never accepted',
         );
       }
       if (place === 'outside') {
