@@ -9,7 +9,7 @@
  */
 
 import type {
-  ITokenProvider,
+  IRefreshableTokenProvider,
   ITokenResult,
   OAuth2GrantType,
 } from '@mcp-abap-adt/interfaces-auth';
@@ -24,7 +24,7 @@ import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
  * - Automatically refreshes expired tokens
  * - Falls back to login if refresh fails
  */
-export abstract class BaseTokenProvider implements ITokenProvider {
+export abstract class BaseTokenProvider implements IRefreshableTokenProvider {
   protected authorizationToken?: string;
   protected refreshToken?: string;
   protected expiresAt?: number; // timestamp in milliseconds
@@ -145,10 +145,21 @@ export abstract class BaseTokenProvider implements ITokenProvider {
       };
     }
 
-    // Try refresh if we have refresh token
+    return this.refreshTokens();
+  }
+
+  /**
+   * A new token, never the cached one: the refresh token when there is one,
+   * the login flow when there is none or the refresh is refused.
+   *
+   * `getTokens()` answers the cache while the token looks valid, so a caller
+   * holding a 401 — the server refused a token the clock still accepts — has
+   * no other way to get a different one. What this obtains replaces the cache.
+   */
+  async refreshTokens(): Promise<ITokenResult> {
     if (this.refreshToken) {
       this.logger?.info(
-        '[BaseTokenProvider] Token invalid, attempting refresh',
+        '[BaseTokenProvider] Obtaining a new token by refresh',
         {
           oldToken: this.formatToken(this.authorizationToken),
           refreshToken: this.formatToken(this.refreshToken),
@@ -166,16 +177,13 @@ export abstract class BaseTokenProvider implements ITokenProvider {
         this.logger?.warn('[BaseTokenProvider] Refresh failed', {
           error: error instanceof Error ? error.message : String(error),
         });
-        // Refresh failed - need to login
-        // Clear refresh token as it's invalid
+        // The refresh token was refused: it is spent, so a login follows.
         this.refreshToken = undefined;
-        // Fall through to login
       }
     }
 
-    // Perform login
     this.logger?.info(
-      '[BaseTokenProvider] Token invalid and no refresh token, performing login',
+      '[BaseTokenProvider] No usable refresh token, performing login',
     );
     const result = await this.performLogin();
     this.updateTokens(result);

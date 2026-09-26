@@ -20,6 +20,10 @@ import { withBrowserCallbackServer } from '../auth/callbackServer';
 import type { OidcCallbackResult } from '../auth/oidcBrowserAuth';
 import { withOidcCallbackServer } from '../auth/oidcBrowserAuth';
 import { withSamlCallbackServer } from '../auth/saml2Auth';
+import {
+  BrowserAuthError,
+  TokenProviderError,
+} from '../errors/TokenProviderErrors';
 
 /**
  * Above Linux's `ip_local_port_range` (32768–60999), so an outbound connection
@@ -189,6 +193,17 @@ export class BrowserCallbackStrategy<TResult>
     this.inFlight = run;
     try {
       return await run;
+    } catch (error) {
+      // Everything that ends a browser login here — the timeout, the identity
+      // provider's own refusal, a port in use, a browser that would not open,
+      // an abort — is a browser authentication failure, and the one type a
+      // caller can catch for it. It was exported and thrown nowhere: each of
+      // these reached the caller as a plain Error. The text is kept, and the
+      // original is the cause. An error that already has a type (a
+      // ValidationError from building the URL) is not one of these.
+      if (error instanceof TokenProviderError) throw error;
+      const cause = error instanceof Error ? error : new Error(String(error));
+      throw new BrowserAuthError(cause.message, cause);
     } finally {
       this.options.signal?.removeEventListener('abort', relay);
       this.controller = null;

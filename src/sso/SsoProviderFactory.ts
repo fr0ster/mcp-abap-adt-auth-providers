@@ -1,4 +1,4 @@
-import type { ITokenProvider } from '@mcp-abap-adt/interfaces-auth';
+import type { IRefreshableTokenProvider } from '@mcp-abap-adt/interfaces-auth';
 import { OidcBrowserProvider } from '../providers/OidcBrowserProvider';
 import { OidcDeviceFlowProvider } from '../providers/OidcDeviceFlowProvider';
 import { OidcPasswordProvider } from '../providers/OidcPasswordProvider';
@@ -8,7 +8,7 @@ import { Saml2PureProvider } from '../providers/Saml2PureProvider';
 import type { SsoProviderConfig } from './types';
 
 export class SsoProviderFactory {
-  static create(config: SsoProviderConfig): ITokenProvider {
+  static create(config: SsoProviderConfig): IRefreshableTokenProvider {
     if (config.protocol === 'oidc') {
       if (config.flow === 'browser') {
         return new OidcBrowserProvider(config.config);

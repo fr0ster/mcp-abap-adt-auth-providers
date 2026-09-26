@@ -13,7 +13,7 @@ npm install @mcp-abap-adt/auth-providers
 
 ## Overview
 
-This package implements the `ITokenProvider` interface from `@mcp-abap-adt/interfaces-auth`:
+This package implements `IRefreshableTokenProvider` — `ITokenProvider` plus `refreshTokens()` — from `@mcp-abap-adt/interfaces-auth`:
 
 - **ClientCredentialsProvider** — `client_credentials`, no user interaction
 - **AuthorizationCodeProvider** — UAA/XSUAA authorization code, through a browser
@@ -27,7 +27,7 @@ This package implements the `ITokenProvider` interface from `@mcp-abap-adt/inter
   (RFC 7522)
 - **Saml2PureProvider** — a SAML assertion exchanged for session cookies
 
-Providers are configured via constructor; `getTokens()` takes no parameters and handles refresh/login internally.
+Providers are configured via constructor; `getTokens()` takes no parameters and handles refresh/login internally. `refreshTokens()` obtains a new token even while the cached one looks valid — what a caller holding a 401 needs.
 
 A token is only half of it: whether ADT accepts it depends on the XSUAA client,
 the trust and the user configured on the SAP side. What each provider needs
@@ -1212,7 +1212,22 @@ This approach prevents unnecessary token refresh and browser authentication when
 
 ### Token Refresh
 
-Providers handle refresh automatically inside `getTokens()`. No separate refresh methods are needed.
+Providers handle refresh automatically inside `getTokens()`: while the cached token is valid it
+is returned, once it expires the refresh token is used, and a login follows when there is none or
+the refresh is refused.
+
+The clock is not the only judge, though. When the server refuses a token the cache still
+considers valid — a 401 — ask for a new one with `refreshTokens()`. It skips the cache, takes the
+same refresh-then-login path, and replaces the cache with what it obtains:
+
+```typescript
+let { authorizationToken } = await provider.getTokens();
+let response = await call(authorizationToken);
+if (response.status === 401) {
+  ({ authorizationToken } = await provider.refreshTokens());
+  response = await call(authorizationToken);
+}
+```
 
 ```typescript
 try {
@@ -1221,8 +1236,9 @@ try {
 } catch (error) {
   if (error instanceof ValidationError) {
     console.error('Missing fields:', error.missingFields);
-  } else if (error instanceof RefreshError) {
-    console.error('Browser auth failed:', error.cause);
+  } else if (error instanceof BrowserAuthError) {
+    // the login timed out, the IdP refused, the port was taken, ...
+    console.error('Browser auth failed:', error.message, error.cause);
   }
 }
 ```
@@ -1253,14 +1269,12 @@ try {
     // provider config validation failed
     console.error('Missing required fields:', error.missingFields);
     console.error('Error code:', error.code); // 'VALIDATION_ERROR'
-  } else if (error instanceof RefreshError) {
-    // Token refresh operation failed
-    console.error('Refresh failed:', error.message);
-    console.error('Original error:', error.cause);
-    console.error('Error code:', error.code); // 'REFRESH_ERROR'
   } else if (error instanceof BrowserAuthError) {
-    // Browser authentication failed
-    console.error('Browser auth failed:', error.cause);
+    // A browser login failed: timeout, the IdP's refusal, a busy callback
+    // port, a browser that would not open, an abort. The message is the
+    // original's, and the original is `cause`.
+    console.error('Browser auth failed:', error.message);
+    console.error('Error code:', error.code); // 'BROWSER_AUTH_ERROR'
   }
 }
 ```
@@ -1268,10 +1282,8 @@ try {
 **Error Types**:
 - `TokenProviderError` - Base class with `code: string` property
 - `ValidationError` - provider config validation failed, includes `missingFields: string[]`
-- `RefreshError` - Token refresh failed, includes `cause?: Error`
-- `SessionDataError` - Session data invalid, includes `missingFields: string[]`
-- `ServiceKeyError` - Service key data invalid, includes `missingFields: string[]`
-- `BrowserAuthError` - Browser auth failed, includes `cause?: Error`
+- `BrowserAuthError` - a browser login failed (timeout, the identity provider's refusal, a busy callback port, a browser that would not open, an abort), includes `cause?: Error`; thrown by every browser strategy (`browserCallbackStrategy`, `oidcCallbackStrategy`, `samlCallbackStrategy`)
+- `RefreshError`, `SessionDataError`, `ServiceKeyError` - exported, but no provider throws them: a refused refresh falls back to a login inside `getTokens()`/`refreshTokens()`, and sessions and service keys are read by `@mcp-abap-adt/auth-stores`, not here
 - `AssertionValidationError` - a SAML assertion was refused, includes `check: AssertionCheck` naming the check that failed — see [SAML assertion validation](#errors)
 
 All error codes are defined in `@mcp-abap-adt/interfaces-auth` package as `TOKEN_PROVIDER_ERROR_CODES`, and `AssertionValidationError`'s as `ASSERTION_ERROR_CODES`.

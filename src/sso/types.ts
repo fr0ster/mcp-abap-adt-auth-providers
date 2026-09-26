@@ -1,4 +1,4 @@
-import type { ITokenProvider } from '@mcp-abap-adt/interfaces-auth';
+import type { IRefreshableTokenProvider } from '@mcp-abap-adt/interfaces-auth';
 import type { OidcBrowserProviderConfig } from '../providers/OidcBrowserProvider';
 import type { OidcDeviceFlowProviderConfig } from '../providers/OidcDeviceFlowProvider';
 import type { OidcPasswordProviderConfig } from '../providers/OidcPasswordProvider';
@@ -6,7 +6,7 @@ import type { OidcTokenExchangeProviderConfig } from '../providers/OidcTokenExch
 import type { Saml2BearerProviderConfig } from '../providers/Saml2BearerProvider';
 import type { Saml2PureProviderConfig } from '../providers/Saml2PureProvider';
 
-export type SsoProviderInstance = ITokenProvider;
+export type SsoProviderInstance = IRefreshableTokenProvider;
 
 export type SsoProviderConfig =
   | {
