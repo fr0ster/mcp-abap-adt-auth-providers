@@ -1457,6 +1457,9 @@ describe('Saml2 provider default validators', () => {
 
     await expect(provider.getTokens()).rejects.toMatchObject({
       check: 'signedNode',
+      message: expect.stringContaining(
+        'does not cover the saml:Assertion this validator requires',
+      ),
     });
     expect(mockExchangeSaml).not.toHaveBeenCalled();
   });

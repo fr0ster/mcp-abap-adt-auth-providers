@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [4.1.0] - 2026-09-26
 
-Two refusals get stricter; no export, configuration field or error class
+Three refusals get stricter; no export, configuration field or error class
 changes. The README's *Upgrading from 4.0 to 4.1* lists what now fails.
 
 ### Changed
@@ -45,6 +45,12 @@ changes. The README's *Upgrading from 4.0 to 4.1* lists what now fails.
 - A SAML 1.x `Assertion` (`urn:oasis:names:tc:SAML:1.0:assertion`) outside
   the signed assertion is refused at `signedNode`, as a SAML 2.0 one already
   was. Before, one in `Extensions` passed either validator.
+- An `Assertion` or `EncryptedAssertion` (SAML 2.0) or a SAML 1.x `Assertion`
+  inside a `ds:Signature` is refused at `signedNode`. An enveloped signature
+  leaves its own subtree out of the digest, so an element in `ds:Object`
+  there is unsigned however deep inside the signed assertion it sits; before,
+  such an element inside the signed assertion's own `ds:Signature` passed
+  either validator, `Saml2BearerProvider`'s default included.
 - `idpInitiated: true` with `authnRequestId` is refused when the provider is
   constructed — a `ValidationError` with `missingFields: ['idpInitiated']` —
   not after `authorize()` returns, so before the user has been through the

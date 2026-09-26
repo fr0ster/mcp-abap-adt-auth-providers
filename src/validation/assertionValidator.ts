@@ -39,6 +39,7 @@ const BEARER = 'urn:oasis:names:tc:SAML:2.0:cm:bearer';
 const SUCCESS = 'urn:oasis:names:tc:SAML:2.0:status:Success';
 
 const SAML1_NS = 'urn:oasis:names:tc:SAML:1.0:assertion';
+const DSIG_NS = 'http://www.w3.org/2000/09/xmldsig#';
 
 /**
  * Everything a later reader might take for the assertion: SAML 2.0's
@@ -232,8 +233,16 @@ function createValidator(
       // signature sits, the payload travels on whole — Saml2PureProvider hands
       // it to the cookie provider — so an Assertion or EncryptedAssertion in
       // an unsigned part of it (Extensions, a sibling, a wrapper) is something
-      // a later reader may take for the real one.
-      if (!everyAssertionWithin(doc, assertion)) {
+      // a later reader may take for the real one. Nor inside a ds:Signature,
+      // whose subtree an enveloped signature leaves unsigned.
+      const place = placeOfAssertions(doc, assertion);
+      if (place === 'inSignature') {
+        return fail(
+          'signedNode',
+          'the document carries an Assertion or EncryptedAssertion inside a ds:Signature, where no signature covers it',
+        );
+      }
+      if (place === 'outside') {
         return fail(
           'signedNode',
           'the document carries an Assertion or EncryptedAssertion, SAML 2.0 or 1.x, outside the one the signature covers',
@@ -533,22 +542,30 @@ function requireOne(
   return found[0];
 }
 
+/** Where the assertion-shaped elements of a document sit relative to the one read. */
+type AssertionPlace = 'within' | 'outside' | 'inSignature';
+
 /**
- * Whether every assertion-shaped element in the document — SAML 2.0 or 1.x —
- * is `assertion` itself or lies inside it.
+ * Walks up from every assertion-shaped element. Reaching the assertion that
+ * was read means it is inside it — unless a ds:Signature came first: an
+ * enveloped signature leaves its own subtree out of the digest, so anything
+ * there is unsigned, however deep inside the signed assertion it sits.
  */
-function everyAssertionWithin(doc: Document, assertion: Element): boolean {
+function placeOfAssertions(doc: Document, assertion: Element): AssertionPlace {
   for (const [ns, local] of ASSERTION_SHAPED) {
     const found = doc.getElementsByTagNameNS(ns, local);
     for (let i = 0; i < found.length; i++) {
       let node = found[i] as unknown as Element | null;
       while (node && node !== assertion) {
+        if (node.localName === 'Signature' && node.namespaceURI === DSIG_NS) {
+          return 'inSignature';
+        }
         node = node.parentNode as unknown as Element | null;
       }
-      if (!node) return false;
+      if (!node) return 'outside';
     }
   }
-  return true;
+  return 'within';
 }
 
 /** A candidate's first failed non-temporal sub-rule, or the window it states. */

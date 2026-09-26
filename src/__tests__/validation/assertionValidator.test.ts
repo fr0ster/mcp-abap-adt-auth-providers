@@ -1273,6 +1273,58 @@ describe("the signed-Response validator (Saml2PureProvider's default)", () => {
     });
   });
 
+  // An enveloped signature leaves its own ds:Signature out of the digest, so
+  // ds:Object inside it is unsigned. The walk up from an element placed there
+  // reaches the signed assertion, and would call it "inside" it.
+  const intoFirstSignature = (xml: string, what: string) =>
+    xml.replace(
+      /(<\/(\w+:)?Signature>)/,
+      `<ds:Object xmlns:ds="http://www.w3.org/2000/09/xmldsig#">${what}</ds:Object>$1`,
+    );
+  const HIDDEN = {
+    'a SAML 2.0 Assertion':
+      '<saml:Assertion xmlns:saml="urn:oasis:names:tc:SAML:2.0:assertion" ID="_hidden"><saml:Issuer>evil</saml:Issuer></saml:Assertion>',
+    'an EncryptedAssertion':
+      '<saml:EncryptedAssertion xmlns:saml="urn:oasis:names:tc:SAML:2.0:assertion"/>',
+    'a SAML 1.x Assertion':
+      '<s1:Assertion xmlns:s1="urn:oasis:names:tc:SAML:1.0:assertion" AssertionID="_hidden1"/>',
+  } as const;
+
+  it.each(Object.entries(HIDDEN))(
+    "refuses %s inside the signed assertion's own ds:Signature",
+    async (_label, hidden) => {
+      const xml = intoFirstSignature(
+        buildResponse({ signWhat: 'assertion' }),
+        hidden,
+      );
+      // Premise: the signature still verifies and covers the assertion, so
+      // only the stray rule can refuse this document.
+      expect(signedElementsOf(xml).map((e) => e.localName)).toEqual([
+        'Assertion',
+      ]);
+      await expect(
+        assertionValidator().validate(encode(xml), context),
+      ).rejects.toMatchObject({
+        check: 'signedNode',
+        message: expect.stringContaining('inside a ds:Signature'),
+      });
+    },
+  );
+
+  it("refuses an Assertion inside the signed Response's own ds:Signature", async () => {
+    const xml = intoFirstSignature(
+      buildResponse({ signWhat: 'response' }),
+      HIDDEN['a SAML 2.0 Assertion'],
+    );
+    expect(signedElementsOf(xml).map((e) => e.localName)).toEqual(['Response']);
+    await expect(
+      validator().validate(encode(xml), context),
+    ).rejects.toMatchObject({
+      check: 'signedNode',
+      message: expect.stringContaining('inside a ds:Signature'),
+    });
+  });
+
   // Row 5b. Both are signed after the Issuers are in place, so the signature
   // covers them and only the rule can refuse.
   it('refuses a Response carrying two Issuers', async () => {

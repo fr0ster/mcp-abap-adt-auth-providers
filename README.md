@@ -725,6 +725,7 @@ value.
 | `signedNode` | `the signature does not cover the samlp:Response this validator requires` |
 | `signedNode` | `the signature does not cover the saml:Assertion this validator requires` |
 | `signedNode` | `the document carries an Assertion or EncryptedAssertion, SAML 2.0 or 1.x, outside the one the signature covers` |
+| `signedNode` | `the document carries an Assertion or EncryptedAssertion inside a ds:Signature, where no signature covers it` |
 | `status` | `the response carries no samlp:Status` |
 | `status` | `the response carries <n> samlp:Status; exactly one is allowed` |
 | `status` | `the samlp:Status carries no samlp:StatusCode` |
@@ -1266,7 +1267,7 @@ All error codes are defined in `@mcp-abap-adt/interfaces-auth` package as `TOKEN
 ## Upgrading from 4.0 to 4.1
 
 4.1.0 changes no export, configuration field or error class. It closes what
-the 4.0.0 reviews deferred, and two refusals get stricter.
+the 4.0.0 reviews deferred, and three refusals get stricter.
 
 **What now fails that used to pass:**
 
@@ -1274,11 +1275,19 @@ the 4.0.0 reviews deferred, and two refusals get stricter.
   (`urn:oasis:names:tc:SAML:1.0:assertion`) outside the signed assertion — in
   an unsigned `Extensions`, say — under either validator (`signedNode`). 4.0
   refused a stray SAML 2.0 assertion but not a SAML 1.x one;
+- a document carrying an `Assertion` or `EncryptedAssertion` (SAML 2.0) or a
+  SAML 1.x `Assertion` inside a `ds:Signature` — in `ds:Object`, say — under
+  either validator (`signedNode`). An enveloped signature leaves its own
+  subtree unsigned, and 4.0's assertion-only validator accepted such an
+  element inside the signed assertion's signature, `Saml2BearerProvider`'s
+  default included;
 - a provider configured with both `idpInitiated: true` and `authnRequestId`.
   Its constructor now throws a `ValidationError` (`missingFields:
   ['idpInitiated']`); in 4.0 it constructed, and a `ValidationError` with the
   same `missingFields` came only after `authorize()` returned. It could never
-  log in.
+  log in. A `Saml2BearerProvider` seeded with a `refreshToken` did work in 4.0
+  until that token lapsed, since a refresh never reaches the strategy; it now
+  fails at construction.
 
 Nothing else 4.0 accepted is refused now, and no refusal moved to a different
 `check`. Every other count rule — one `ds:Reference` per signature, one
