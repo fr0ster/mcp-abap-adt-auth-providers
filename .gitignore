@@ -47,3 +47,7 @@ tests/test-config.yaml
 
 # XSUAA trial checks: service-key secrets and the locally generated IdP key
 tests/xsuaa/.local/
+
+# A service key once lived here; keep keys out of the repo
+mcp.json
+*service-key*.json

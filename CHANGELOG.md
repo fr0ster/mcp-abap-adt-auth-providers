@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.1.3] - 2026-09-26
+
+### Changed
+
+- A `bearerConfirmation` refusal naming several candidates joins them with
+  ` | ` instead of `; `, and ends ` | and N more`. The count reason
+  `carries N SubjectConfirmationData; exactly one is allowed` contains `; `
+  itself, so the old separator read ambiguously. `check` and every reason's
+  wording are unchanged.
+
+### Removed
+
+- `mcp.json`, an XSUAA service key with a client secret, committed to the
+  repository on 2025-12-23 with the since-removed `bin/` CLIs. It was never in
+  the npm package. It stays in the git history, so that binding should be
+  rotated or deleted. `.gitignore` now keeps `mcp.json` and
+  `*service-key*.json` out.
+
 ## [4.1.2] - 2026-09-26
 
 ### Security

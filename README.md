@@ -672,7 +672,7 @@ What the table compresses:
   `xsd:dateTime`; `NotOnOrAfter` has not passed beyond `clockSkewMs`;
   `NotBefore` has arrived within it. When none qualifies, the refusal names
   every candidate in document order with the first sub-rule it failed —
-  `no bearer confirmation qualifies: #1 Recipient is not the ACS; #2
+  `no bearer confirmation qualifies: #1 Recipient is not the ACS | #2
   NotOnOrAfter has passed` — listing at most five, then `and N more`.
 - **Check 9 is AND across restrictions, OR within one**, as SAML Core §2.5.1.4
   says: every `AudienceRestriction` must name you; the `Audience` elements
@@ -755,14 +755,16 @@ value.
 | `bearerConfirmation` | `the assertion carries no saml:Subject` |
 | `bearerConfirmation` | `the assertion carries <n> saml:Subject; exactly one is allowed` |
 | `bearerConfirmation` | `the saml:Subject holds no SubjectConfirmation` |
-| `bearerConfirmation` | `no bearer confirmation qualifies: #1 <reason>; #2 <reason>; …` |
+| `bearerConfirmation` | `no bearer confirmation qualifies: #1 <reason> \| #2 <reason> \| …` |
 | `destination` | `the response carries no Destination` |
 | `destination` | `the response is addressed to "…", not to us` |
 | `replay` | `this assertion has been presented before` |
 
 A `bearerConfirmation` refusal naming candidates lists each one's first failed
-sub-rule, in document order, joined by `; `; past five candidates it ends
-`; and N more`, N being how many were not listed. The eleven reasons:
+sub-rule, in document order, joined by ` | ` — not `; `, which a count reason
+such as `carries 2 SubjectConfirmationData; exactly one is allowed` contains
+itself; past five candidates it ends ` | and N more`, N being how many were
+not listed. The eleven reasons:
 
 | # | `<reason>`, in the order a candidate is tested |
 |---|---|

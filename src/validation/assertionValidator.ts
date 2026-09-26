@@ -719,7 +719,7 @@ function readConfirmation(
 }
 
 /**
- * `no bearer confirmation qualifies: #1 …; #2 …`, naming at most
+ * `no bearer confirmation qualifies: #1 … | #2 …`, naming at most
  * LISTED_CANDIDATES candidates so the message stays bounded however many the
  * document carries.
  */
@@ -728,5 +728,5 @@ function describeRefusals(reasons: readonly string[]): string {
     .slice(0, LISTED_CANDIDATES)
     .map((reason, index) => `#${index + 1} ${reason}`);
   const more = reasons.length - listed.length;
-  return `no bearer confirmation qualifies: ${listed.join('; ')}${more > 0 ? `; and ${more} more` : ''}`;
+  return `no bearer confirmation qualifies: ${listed.join(' | ')}${more > 0 ? ` | and ${more} more` : ''}`;
 }
