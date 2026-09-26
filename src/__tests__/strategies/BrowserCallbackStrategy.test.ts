@@ -8,12 +8,17 @@
 
 import netModule from 'node:net';
 import { describe, expect, it, jest } from '@jest/globals';
-import type {
-  CallbackServerFactory,
-  IAuthorizationStrategy,
-  ICallbackServerHandle,
+import {
+  type CallbackServerFactory,
+  type IAuthorizationStrategy,
+  type ICallbackServerHandle,
+  TOKEN_PROVIDER_ERROR_CODES,
 } from '@mcp-abap-adt/interfaces-auth';
 import { withBrowserCallbackServer } from '../../auth/callbackServer';
+import {
+  BrowserAuthError,
+  ValidationError,
+} from '../../errors/TokenProviderErrors';
 import {
   BrowserCallbackStrategy,
   browserCallbackStrategy,
@@ -374,5 +379,71 @@ describe('BrowserCallbackStrategy', () => {
       }),
     ).rejects.toThrow(/abort/i);
     expect(released()).toBe(false);
+  });
+});
+
+describe('the error a failed browser login is', () => {
+  // BrowserAuthError was exported and thrown nowhere: a timeout, a busy port
+  // or the IdP's refusal reached the caller as a plain Error, so the one type
+  // a caller could catch for "the browser login failed" never arrived.
+  it('is a BrowserAuthError on timeout, with the text and the cause kept', async () => {
+    const strategy = browserCallbackStrategy({
+      port: 0,
+      browser: 'none',
+      timeoutMs: 200,
+    });
+    const refusal = await strategy
+      .authorize({ buildAuthorizationUrl: async () => 'https://idp.example/a' })
+      .catch((error: unknown) => error);
+
+    expect(refusal).toBeInstanceOf(BrowserAuthError);
+    expect((refusal as BrowserAuthError).code).toBe(
+      TOKEN_PROVIDER_ERROR_CODES.BROWSER_AUTH_ERROR,
+    );
+    expect((refusal as Error).message).toMatch(/timeout/i);
+    expect((refusal as BrowserAuthError).cause).toBeInstanceOf(Error);
+  });
+
+  it('is a BrowserAuthError when the callback port is taken', async () => {
+    const squatter = netModule.createServer();
+    await new Promise<void>((resolve) => squatter.listen(7874, resolve));
+    try {
+      const { factory } = fakeFactory({});
+      const strategy = new BrowserCallbackStrategy<string>({
+        callbackServer: factory,
+        port: 7874,
+        openUrl: async () => undefined,
+      });
+      const refusal = await strategy
+        .authorize({
+          buildAuthorizationUrl: async () => 'https://idp.example/a',
+        })
+        .catch((error: unknown) => error);
+
+      expect(refusal).toBeInstanceOf(BrowserAuthError);
+      expect((refusal as Error).message).toMatch(/already in use/i);
+    } finally {
+      await new Promise<void>((resolve) => squatter.close(() => resolve()));
+    }
+  });
+
+  it('leaves an error that already has a type as it is', async () => {
+    const { factory } = fakeFactory({});
+    const strategy = new BrowserCallbackStrategy<string>({
+      callbackServer: factory,
+      openUrl: async () => undefined,
+    });
+    const invalid = new ValidationError('idp-initiated has no URL', [
+      'authorizationUrl',
+    ]);
+    const refusal = await strategy
+      .authorize({
+        buildAuthorizationUrl: async () => {
+          throw invalid;
+        },
+      })
+      .catch((error: unknown) => error);
+
+    expect(refusal).toBe(invalid);
   });
 });

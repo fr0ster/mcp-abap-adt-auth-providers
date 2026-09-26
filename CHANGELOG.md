@@ -26,6 +26,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   handed to anything requiring the refreshable contract without a cast. Every
   provider it builds already was one.
 
+### Fixed
+
+- **A failed browser login is a `BrowserAuthError`.** The class was exported
+  and documented as "browser auth failed", and thrown nowhere: a timeout, the
+  identity provider's refusal (`OAuth2 authentication failed: …`), a busy
+  callback port, a browser that would not open and an abort all reached the
+  caller as a plain `Error`, so the one type a caller could catch for them
+  never arrived. `BrowserCallbackStrategy` — and so `browserCallbackStrategy`,
+  `oidcCallbackStrategy` and `samlCallbackStrategy` — now throws it, with the
+  original message and the original error as `cause`; an error that already
+  has a type (a `ValidationError` from building the URL) passes unchanged.
+  Found by auth-broker, whose migration note had nothing to point at.
+- The README's error-handling example caught `RefreshError` as "browser auth
+  failed". No provider throws `RefreshError`, `SessionDataError` or
+  `ServiceKeyError`; the README now says so.
+
 ### Changed
 
 - `@mcp-abap-adt/interfaces-auth` `^2.1.0` (was `^2.0.1`), which declares

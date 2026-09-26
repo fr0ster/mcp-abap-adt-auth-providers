@@ -1233,8 +1233,9 @@ try {
 } catch (error) {
   if (error instanceof ValidationError) {
     console.error('Missing fields:', error.missingFields);
-  } else if (error instanceof RefreshError) {
-    console.error('Browser auth failed:', error.cause);
+  } else if (error instanceof BrowserAuthError) {
+    // the login timed out, the IdP refused, the port was taken, ...
+    console.error('Browser auth failed:', error.message, error.cause);
   }
 }
 ```
@@ -1265,14 +1266,12 @@ try {
     // provider config validation failed
     console.error('Missing required fields:', error.missingFields);
     console.error('Error code:', error.code); // 'VALIDATION_ERROR'
-  } else if (error instanceof RefreshError) {
-    // Token refresh operation failed
-    console.error('Refresh failed:', error.message);
-    console.error('Original error:', error.cause);
-    console.error('Error code:', error.code); // 'REFRESH_ERROR'
   } else if (error instanceof BrowserAuthError) {
-    // Browser authentication failed
-    console.error('Browser auth failed:', error.cause);
+    // A browser login failed: timeout, the IdP's refusal, a busy callback
+    // port, a browser that would not open, an abort. The message is the
+    // original's, and the original is `cause`.
+    console.error('Browser auth failed:', error.message);
+    console.error('Error code:', error.code); // 'BROWSER_AUTH_ERROR'
   }
 }
 ```
@@ -1280,10 +1279,8 @@ try {
 **Error Types**:
 - `TokenProviderError` - Base class with `code: string` property
 - `ValidationError` - provider config validation failed, includes `missingFields: string[]`
-- `RefreshError` - Token refresh failed, includes `cause?: Error`
-- `SessionDataError` - Session data invalid, includes `missingFields: string[]`
-- `ServiceKeyError` - Service key data invalid, includes `missingFields: string[]`
-- `BrowserAuthError` - Browser auth failed, includes `cause?: Error`
+- `BrowserAuthError` - a browser login failed (timeout, the identity provider's refusal, a busy callback port, a browser that would not open, an abort), includes `cause?: Error`; thrown by every browser strategy (`browserCallbackStrategy`, `oidcCallbackStrategy`, `samlCallbackStrategy`)
+- `RefreshError`, `SessionDataError`, `ServiceKeyError` - exported, but no provider throws them: a refused refresh falls back to a login inside `getTokens()`/`refreshTokens()`, and sessions and service keys are read by `@mcp-abap-adt/auth-stores`, not here
 - `AssertionValidationError` - a SAML assertion was refused, includes `check: AssertionCheck` naming the check that failed — see [SAML assertion validation](#errors)
 
 All error codes are defined in `@mcp-abap-adt/interfaces-auth` package as `TOKEN_PROVIDER_ERROR_CODES`, and `AssertionValidationError`'s as `ASSERTION_ERROR_CODES`.
