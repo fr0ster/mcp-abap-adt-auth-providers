@@ -7,12 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.1.1] - 2026-09-26
+
+### Fixed
+
+- The tarball no longer ships `dist/__tests__/…`. Test helpers and stand
+  fixtures were built into `dist` and published with 4.0.0 and 4.1.0. The build
+  now uses `tsconfig.build.json`, which leaves `src/__tests__` out, and the
+  tarball drops from 140 to 128 files. Nothing a consumer imports changes.
+
 ### Development
 
 - `@mcp-abap-adt/auth-stores` devDependency `^1.2.1`, which depends on
   `@mcp-abap-adt/interfaces-auth` `^2.0.1`. The development tree now holds a
   single `interfaces-auth` 2.0.1 instead of a second, nested 1.2.0. Nothing
   published changes.
+- The live authorization tests take tokens from any session file:
+  `MCP_ABAP_ADT_SESSION_FILE`, or `session_path` in `tests/test-config.yaml`,
+  or the stores' folder `<destination_dir>/sessions/<destination>.env`. The
+  folder defaults to `~/.config/mcp-abap-adt` on Unix and
+  `Documents/mcp-abap-adt` on Windows. Browser logins run only with
+  `interactive_login: true` or `MCP_ABAP_ADT_INTERACTIVE=1`, so a default
+  `npm test` never waits for one.
 
 ## [4.1.0] - 2026-09-26
 

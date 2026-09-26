@@ -22,3 +22,14 @@ destination: <TEST_DESTINATION>  # ⚠️ UPDATE: Replace with your destination 
 #   Windows: %USERPROFILE%\Documents\mcp-abap-adt
 # Uncomment and set if you need a custom path:
 # destination_dir: ~/.config/mcp-abap-adt
+
+# Optional: any session file for the live auth tests (absolute, ~/..., or
+# relative to the project root). It need not be named after the destination.
+# Order: MCP_ABAP_ADT_SESSION_FILE (env) > session_path > <destination_dir>/sessions/<destination>.env
+# The tests copy it to a temporary directory and never write to it.
+# session_path: ~/.config/mcp-abap-adt/sessions/mdd.env
+
+# Optional: allow tests that open a browser for a person to log in.
+# Off by default, so a plain `npm test` never waits for a login.
+# MCP_ABAP_ADT_INTERACTIVE=1 enables it for a single run.
+# interactive_login: true
