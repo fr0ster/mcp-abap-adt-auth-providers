@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Documentation
+
+- `docs/btp-setup.md`: what each provider needs on the SAP side — XSUAA
+  client, trust, user, ABAP mapping — and whether ADT accepts its token, with
+  every claim tagged by source (SAP, Community, Measured, Inference) and the
+  open questions still to be settled live.
+
 ## [4.1.3] - 2026-09-26
 
 ### Changed
