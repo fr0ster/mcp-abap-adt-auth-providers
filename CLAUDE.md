@@ -15,6 +15,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - **`UaaPasscodeProvider`** — UAA/XSUAA one-time passcode from `/passcode` (`cf login --sso`), headless
 
 `docs/btp-setup.md` maps each provider to what it needs on the SAP side (XSUAA client, trust, user, ABAP mapping) and whether ADT accepts its token; every claim is tagged SAP, Community, Measured or Inference. Keep the tags honest when changing it.
+`docs/passwordless-sso.md` does the same for passwordless logon (SNC, X.509 client certificates, SPNego, IAS); nothing in it is built yet.
 
 All extend `BaseTokenProvider`, which owns the token lifecycle (cache, expiry, refresh-then-login fallback). Both SAML providers validate the assertion first, through an `IAssertionValidator` (see "SAML assertion validation").
 

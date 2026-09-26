@@ -53,6 +53,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   client, trust, user, ABAP mapping — and whether ADT accepts its token, with
   every claim tagged by source (SAP, Community, Measured, Inference) and the
   open questions still to be settled live.
+- `docs/passwordless-sso.md`: SAP GUI's passwordless SNC login, why Eclipse
+  ADT's on-premise SSO runs over RFC, the HTTP equivalents (X.509 client
+  certificates, SPNego, IAS), what a Node.js client can reach, and options for
+  this package.
 
 ## [4.1.3] - 2026-09-26
 
