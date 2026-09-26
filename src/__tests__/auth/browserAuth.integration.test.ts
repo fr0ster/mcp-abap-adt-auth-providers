@@ -15,6 +15,7 @@ import { browserCallbackStrategy } from '../../strategies';
 import {
   getAbapDestination,
   getServiceKeysDir,
+  interactiveLoginEnabled,
   loadTestConfig,
 } from '../helpers/configHelpers';
 import { canListenOnLocalhost, getAvailablePort } from '../helpers/netHelpers';
@@ -36,6 +37,13 @@ describe('browserAuth Integration', () => {
   const serviceKeysDir = getServiceKeysDir(config);
 
   it('should exchange code for tokens with real OAuth flow', async () => {
+    // It opens the system browser for a person to log in: never by default.
+    if (!interactiveLoginEnabled({ env: process.env, config })) {
+      console.warn(
+        '⚠️  Skipping browser login - set interactive_login: true in tests/test-config.yaml, or MCP_ABAP_ADT_INTERACTIVE=1',
+      );
+      return;
+    }
     if (!destination || !serviceKeysDir) {
       console.warn('⚠️  Skipping integration test - missing config');
       return;

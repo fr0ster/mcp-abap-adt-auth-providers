@@ -34,8 +34,9 @@ import {
 import {
   getDestination,
   getServiceKeysDir,
-  getSessionsDir,
+  getSessionPath,
   hasRealConfig,
+  interactiveLoginEnabled,
   loadTestConfig,
 } from '../helpers/configHelpers';
 import {
@@ -117,8 +118,11 @@ describe('AuthorizationCodeProvider', () => {
   const config = loadTestConfig();
   const destination = getDestination(config);
   const serviceKeysDir = getServiceKeysDir(config);
-  const sessionsDir = getSessionsDir(config);
   const hasRealConfigValue = hasRealConfig(config);
+  // Browser logins wait for a person; a default run never starts one.
+  const interactive = interactiveLoginEnabled({ env: process.env, config });
+  // Any file: MCP_ABAP_ADT_SESSION_FILE, session_path, or the stores' folder.
+  const sessionFile = getSessionPath(config);
 
   /**
    * Both interactive cases below build a strategy for a login a *person*
@@ -147,6 +151,12 @@ describe('AuthorizationCodeProvider', () => {
       async () => {
         if (!hasRealConfigValue) {
           console.warn('⚠️  Skipping integration test - no real config');
+          return;
+        }
+        if (!interactive) {
+          console.warn(
+            '⚠️  Skipping browser login - set interactive_login: true in tests/test-config.yaml, or MCP_ABAP_ADT_INTERACTIVE=1',
+          );
           return;
         }
 
@@ -272,6 +282,12 @@ describe('AuthorizationCodeProvider', () => {
           console.warn('⚠️  Skipping integration test - no real config');
           return;
         }
+        if (!interactive) {
+          console.warn(
+            '⚠️  Skipping browser login - set interactive_login: true in tests/test-config.yaml, or MCP_ABAP_ADT_INTERACTIVE=1',
+          );
+          return;
+        }
 
         if (!destination || !serviceKeysDir) {
           console.warn(
@@ -332,6 +348,103 @@ describe('AuthorizationCodeProvider', () => {
       },
       INTERACTIVE_JEST_TIMEOUT_MS,
     );
+  });
+
+  /**
+   * Token scenarios from a session file, with no browser. The file is copied
+   * into a temporary sessions directory under the name AbapSessionStore reads,
+   * so the owner's file is never written or deleted. The strategy throws: any
+   * attempt to log in fails the case instead of opening a browser.
+   */
+  describe('From the session file, without a browser', () => {
+    const mustNotLogIn: IAuthorizationStrategy<string> = {
+      async authorize() {
+        throw new Error(
+          'this case must not log in; it runs from the session file',
+        );
+      },
+    };
+
+    /** The session's configs, read from a private copy; null when unusable. */
+    const loadSession = async () => {
+      if (!sessionFile || !fs.existsSync(sessionFile)) {
+        console.warn(
+          `⚠️  Skipping session-file test - no session file at ${sessionFile ?? '(none configured)'}`,
+        );
+        return null;
+      }
+      const name = destination || 'session';
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'auth-session-'));
+      fs.copyFileSync(sessionFile, path.join(dir, `${name}.env`));
+      try {
+        const store = new AbapSessionStore(dir);
+        const auth = await store.getAuthorizationConfig(name);
+        const connection = await store.getConnectionConfig(name);
+        if (!auth?.uaaUrl || !auth.uaaClientId || !auth.uaaClientSecret) {
+          console.warn(
+            `⚠️  Skipping session-file test - ${sessionFile} lacks the UAA URL, client ID or secret`,
+          );
+          return null;
+        }
+        if (!(await canResolveHost(auth.uaaUrl))) {
+          console.warn(
+            '⚠️  Skipping session-file test - UAA host not resolvable',
+          );
+          return null;
+        }
+        return { auth, connection };
+      } finally {
+        fs.rmSync(dir, { recursive: true, force: true });
+      }
+    };
+
+    it('reuses a still-valid token without logging in', async () => {
+      const session = await loadSession();
+      if (!session) return;
+      const token = session.connection?.authorizationToken;
+      if (!token || !validateTokenExpiration(token)) {
+        console.warn(
+          `⚠️  Skipping session-file test - ${sessionFile} holds no still-valid token`,
+        );
+        return;
+      }
+      const provider = new AuthorizationCodeProvider({
+        uaaUrl: session.auth.uaaUrl!,
+        clientId: session.auth.uaaClientId!,
+        clientSecret: session.auth.uaaClientSecret!,
+        accessToken: token,
+        refreshToken: session.auth.refreshToken,
+        authorization: mustNotLogIn,
+        logger: createTestLogger(),
+      });
+      const tokens = await provider.getTokens();
+      expect(tokens.authorizationToken).toBe(token);
+      expect(tokens.authType).toBe(AUTH_TYPE_AUTHORIZATION_CODE);
+    });
+
+    it('refreshes through the session refresh token without logging in', async () => {
+      const session = await loadSession();
+      if (!session) return;
+      if (!session.auth.refreshToken) {
+        console.warn(
+          `⚠️  Skipping session-file test - ${sessionFile} holds no refresh token`,
+        );
+        return;
+      }
+      const expired = createExpiredJWT();
+      const provider = new AuthorizationCodeProvider({
+        uaaUrl: session.auth.uaaUrl!,
+        clientId: session.auth.uaaClientId!,
+        clientSecret: session.auth.uaaClientSecret!,
+        accessToken: expired,
+        refreshToken: session.auth.refreshToken,
+        authorization: mustNotLogIn,
+        logger: createTestLogger(),
+      });
+      const tokens = await provider.getTokens();
+      expect(tokens.authorizationToken).not.toBe(expired);
+      expect(validateTokenExpiration(tokens.authorizationToken)).toBe(true);
+    });
   });
 
   describe('Token validation', () => {
