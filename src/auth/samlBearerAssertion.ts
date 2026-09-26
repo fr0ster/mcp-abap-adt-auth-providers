@@ -22,6 +22,7 @@
  */
 
 import { type Element, XMLSerializer } from '@xmldom/xmldom';
+import { quoteUntrusted } from '../validation/signedNode';
 import { parseStrictXml } from './strictXml';
 
 const SAML_ASSERTION_NS = 'urn:oasis:names:tc:SAML:2.0:assertion';
@@ -38,8 +39,10 @@ export function toBearerAssertion(payload: string): string {
   try {
     root = parseStrictXml(xml).documentElement;
   } catch (error) {
+    // The parser quotes the document (an element name, for one), so its
+    // message is quoted and cut like any other document value in a message.
     throw new Error(
-      `SAML bearer payload is not well-formed XML: ${error instanceof Error ? error.message : String(error)}`,
+      `SAML bearer payload is not well-formed XML: ${quoteUntrusted(error instanceof Error ? error.message : String(error))}`,
     );
   }
 

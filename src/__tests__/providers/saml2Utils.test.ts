@@ -132,6 +132,21 @@ describe('getSamlAssertion — where the expected request ID comes from', () => 
     expect(result.requestId).toBe('_declared-id');
   });
 
+  // Minted beats declared: the ID the package just put in the request is
+  // the one the answer must carry, whatever the configuration also says.
+  it('prefers the ID it minted over a declared authnRequestId', async () => {
+    const config: Saml2CommonConfig = {
+      ...baseConfig,
+      authnRequestId: '_declared-id',
+      authorization: callsBuilder('http://localhost:61001/callback'),
+    };
+
+    const result = await getSamlAssertion(config);
+
+    expect(result.requestId).toMatch(/^_[0-9a-f-]{36}$/);
+    expect(result.requestId).not.toBe('_declared-id');
+  });
+
   it('yields requestId undefined when idpInitiated is declared and the builder was never called', async () => {
     const config: Saml2CommonConfig = {
       ...baseConfig,
@@ -340,4 +355,56 @@ describe('resolveAssertionValidator — a shipped validator still needs idpEntit
     expect(Object.keys(validator)).toEqual(['validate']);
     expect(Object.getOwnPropertySymbols({ ...validator })).toHaveLength(0);
   });
+});
+
+// Both declarations describe different logins. Found at construction, the
+// mistake costs nothing; found after authorize(), it costs a browser login.
+describe('idpInitiated with authnRequestId is refused at construction', () => {
+  const certificate = generateKeyMaterial().certificatePem;
+  const both = {
+    idpSsoUrl: 'https://idp.example/sso',
+    spEntityId: 'urn:sp',
+    idpEntityId: 'urn:idp',
+    idpCertificates: [certificate],
+    idpInitiated: true,
+    authnRequestId: '_declared-id',
+  };
+  const unreachable: IAuthorizationStrategy<string> = {
+    async authorize() {
+      throw new Error('the strategy must never be reached');
+    },
+  };
+  const construct = {
+    Saml2BearerProvider: () =>
+      new Saml2BearerProvider({
+        ...both,
+        uaaUrl: 'https://uaa.example',
+        authorization: unreachable,
+      }),
+    Saml2PureProvider: () =>
+      new Saml2PureProvider({
+        ...both,
+        cookieProvider: async () => 'cookie',
+        authorization: unreachable,
+      }),
+  };
+
+  it.each(Object.keys(construct) as (keyof typeof construct)[])(
+    'refuses %s',
+    (provider) => {
+      let thrown: unknown;
+      try {
+        construct[provider]();
+      } catch (error) {
+        thrown = error;
+      }
+      expect(thrown).toBeInstanceOf(ValidationError);
+      expect(thrown).toMatchObject({
+        missingFields: ['idpInitiated'],
+        message: expect.stringMatching(
+          /idpInitiated is true and authnRequestId is set/,
+        ),
+      });
+    },
+  );
 });

@@ -1289,6 +1289,45 @@ describe('Saml2PureProvider assertion validation', () => {
     await rejected;
     expect(cookieProvider).not.toHaveBeenCalled();
   });
+
+  // performRefresh re-runs the whole login, validation included. The base
+  // class never calls it for this provider — it holds no refresh token — so
+  // it is called directly; a refresh that skipped validation would hand an
+  // unverified assertion to cookieProvider the day that changes.
+  it('validates again when refreshing', async () => {
+    const payload = Buffer.from('<Assertion/>', 'utf8').toString('base64');
+    const validate = jest.fn(async () => ({
+      expiresAt: new Date(Date.now() + 3600_000),
+      assertionId: '_a1',
+      issuer: 'urn:mock:idp',
+      raw: payload,
+      signedXml: payload,
+    }));
+    const cookieProvider = jest.fn(async () => 'cookie');
+    const provider = new Saml2PureProvider({
+      idpSsoUrl: 'https://idp/sso',
+      spEntityId: 'sp-entity',
+      idpEntityId: 'urn:mock:idp',
+      idpInitiated: true,
+      authorization: staticCodeStrategy({ payload }),
+      assertionValidator: { validate },
+      cookieProvider,
+    });
+
+    await (
+      provider as unknown as { performRefresh(): Promise<unknown> }
+    ).performRefresh();
+
+    expect(validate).toHaveBeenCalledTimes(1);
+    expect(validate).toHaveBeenCalledWith(
+      payload,
+      expect.objectContaining({
+        audience: 'sp-entity',
+        expectedIssuer: 'urn:mock:idp',
+      }),
+    );
+    expect(cookieProvider).toHaveBeenCalledWith(payload);
+  });
 });
 
 describe('Saml2BearerProvider assertion validation', () => {
@@ -1418,6 +1457,9 @@ describe('Saml2 provider default validators', () => {
 
     await expect(provider.getTokens()).rejects.toMatchObject({
       check: 'signedNode',
+      message: expect.stringContaining(
+        'does not cover the saml:Assertion this validator requires',
+      ),
     });
     expect(mockExchangeSaml).not.toHaveBeenCalled();
   });
@@ -1425,8 +1467,10 @@ describe('Saml2 provider default validators', () => {
 
 /**
  * The exact `AssertionContext` each provider passes to `validate()`. Built
- * with `toHaveBeenCalledWith` — not `toMatchObject` — so an extra or
- * substituted field is caught, not just a missing one.
+ * with `toHaveBeenCalledWith`, which catches a missing field, a substituted
+ * value and an extra field with a defined value — but treats a key whose
+ * value is `undefined` as absent, so an extra field set to `undefined` goes
+ * unnoticed. `toMatchObject` would miss extra fields altogether.
  */
 describe('Saml2PureProvider validation context', () => {
   it('passes exactly the context the spec requires', async () => {
@@ -1600,11 +1644,15 @@ describe('Saml2 provider construction faults', () => {
     expect(error.missingFields).toContain('idpCertificates');
   });
 
+  // The provider's own length check, not the shipped validator's guard:
+  // only the provider names the field. Without it the factory's plain Error
+  // ("must not be empty") would surface, with no missingFields.
   it('refuses construction when idpCertificates is an empty list', () => {
     const error = constructionError(
       () => new Saml2PureProvider({ ...validPureConfig, idpCertificates: [] }),
     );
-    expect(error.message).toMatch(/idpCertificates/);
+    expect(error.message).toMatch(/missing idpCertificates/);
+    expect(error.missingFields).toEqual(['idpCertificates']);
   });
 
   it('refuses construction when a certificate is malformed', () => {

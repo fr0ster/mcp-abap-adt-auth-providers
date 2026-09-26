@@ -49,8 +49,9 @@ export interface Saml2CommonConfig {
   authnRequestId?: string;
   /**
    * Declares that no AuthnRequest is sent: the assertion must carry no
-   * `InResponseTo`. Default `false`. Combining this with a minted or declared
-   * request ID is a configuration error: the two describe different logins.
+   * `InResponseTo`. Default `false`. Combining this with a request ID is a
+   * configuration error, since the two describe different logins: with
+   * `authnRequestId` a provider refuses at construction.
    */
   idpInitiated?: boolean;
   /** Which validator to use. Omitted means the provider's own default. */
@@ -72,6 +73,17 @@ export function validateSamlConfig(config: Saml2CommonConfig): void {
     throw new Error(
       'acsUrl is required when authorizationUrl is set: the ACS inside a ' +
         'pre-built SAML request cannot be read, so it must be declared.',
+    );
+  }
+  // The runtime check in resolveExpectedRequestId stays for a direct caller
+  // of getSamlAssertion; through a provider this refuses first, before any
+  // browser opens.
+  if (config.idpInitiated && config.authnRequestId) {
+    throw new ValidationError(
+      'SAML idpInitiated is true and authnRequestId is set: an IdP-initiated ' +
+        'login sends no request, so the two describe different logins. ' +
+        'Remove one of them.',
+      ['idpInitiated'],
     );
   }
 }

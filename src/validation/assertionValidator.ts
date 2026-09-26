@@ -38,6 +38,19 @@ const PROTOCOL_NS = 'urn:oasis:names:tc:SAML:2.0:protocol';
 const BEARER = 'urn:oasis:names:tc:SAML:2.0:cm:bearer';
 const SUCCESS = 'urn:oasis:names:tc:SAML:2.0:status:Success';
 
+const SAML1_NS = 'urn:oasis:names:tc:SAML:1.0:assertion';
+const DSIG_NS = 'http://www.w3.org/2000/09/xmldsig#';
+
+/**
+ * Everything a later reader might take for the assertion: SAML 2.0's
+ * Assertion and EncryptedAssertion, and SAML 1.x's Assertion.
+ */
+const ASSERTION_SHAPED: ReadonlyArray<readonly [string, string]> = [
+  [SAML_NS, 'Assertion'],
+  [SAML_NS, 'EncryptedAssertion'],
+  [SAML1_NS, 'Assertion'],
+];
+
 export interface ShippedValidatorOptions {
   readonly idpCertificates: readonly string[];
   readonly clockSkewMs?: number;
@@ -52,6 +65,12 @@ export interface ShippedValidatorOptions {
  * looks.
  */
 type SignedElement = 'response' | 'assertion';
+
+/** How a refusal names the element each validator requires to be signed. */
+const REQUIRED_LABEL: Record<SignedElement, string> = {
+  response: 'samlp:Response',
+  assertion: 'saml:Assertion',
+};
 
 /**
  * Marks a validator as one of the two shipped here. Module-private and
@@ -168,43 +187,65 @@ function createValidator(
       } catch (error) {
         return fail('signature', (error as Error).message);
       }
-      // The element this validator reads is fixed by the document's shape,
-      // not by which signature happens to come first: the Response itself, or
-      // for the assertion-only validator the bare root Assertion or the
-      // Response's single direct-child Assertion. Taking "the first covered
-      // Assertion" instead would pick a signed assertion nested in Advice
-      // whenever its signature precedes the outer one's in document order.
-      const target =
-        require === 'response'
-          ? root
-          : rootIsAssertion
-            ? root
-            : (() => {
-                const children = directChildren(root, SAML_NS, 'Assertion');
-                return children.length === 1 ? children[0] : null;
-              })();
-      const signed = target
-        ? covered.find((element) => element === target)
-        : undefined;
-
-      // The signed element must be the Assertion, or a Response holding exactly
-      // one. Everything below is read from `assertion` and nowhere else.
-      const assertion = signed ? assertionInside(signed, root, require) : null;
-      if (!signed || !assertion) {
+      // 3a. A Response carries exactly one direct-child Assertion, and a
+      // refusal says which way the count failed. Checked once, here, for both
+      // validators: the signed-Response validator reads that assertion, and
+      // the assertion-only validator requires it to be the element signed.
+      const direct = rootIsResponse
+        ? directChildren(root, SAML_NS, 'Assertion')
+        : [];
+      if (rootIsResponse && direct.length === 0) {
         return fail(
           'signedNode',
-          'the signature does not cover the assertion this response carries',
+          'the response carries no direct-child saml:Assertion',
         );
       }
-      // 3b. Nothing assertion-shaped outside the one read. Wherever the
+      if (direct.length > 1) {
+        return fail(
+          'signedNode',
+          `the response carries ${direct.length} direct-child saml:Assertion; exactly one is allowed`,
+        );
+      }
+
+      // 3b. The element this validator requires signed is fixed by the
+      // document's shape, not by which signature happens to come first: the
+      // Response itself, or for the assertion-only validator the bare root
+      // Assertion or the Response's single direct-child Assertion. Taking
+      // "the first covered Assertion" instead would pick a signed assertion
+      // nested in Advice whenever its signature precedes the outer one's —
+      // and a covered element anywhere but here is the wrapping attack.
+      const target =
+        require === 'response' || rootIsAssertion ? root : direct[0];
+      const signed = covered.find((element) => element === target);
+      if (!signed) {
+        return fail(
+          'signedNode',
+          `the signature does not cover the ${REQUIRED_LABEL[require]} this validator requires`,
+        );
+      }
+
+      // 3c. Everything below is read from `assertion` and nowhere else: the
+      // bare root Assertion, or the Response's single direct-child one —
+      // either the signed element itself or, when the Response is signed,
+      // inside it.
+      const assertion = rootIsAssertion ? root : direct[0];
+      // 3d. Nothing assertion-shaped outside the one read. Wherever the
       // signature sits, the payload travels on whole — Saml2PureProvider hands
       // it to the cookie provider — so an Assertion or EncryptedAssertion in
       // an unsigned part of it (Extensions, a sibling, a wrapper) is something
-      // a later reader may take for the real one.
-      if (!everyAssertionWithin(doc, assertion)) {
+      // a later reader may take for the real one. Nor inside a ds:Signature,
+      // whose subtree an enveloped signature leaves unsigned.
+      const place = placeOfAssertions(doc, assertion);
+      if (place === 'inSignature') {
         return fail(
           'signedNode',
-          'the document carries a saml:Assertion or saml:EncryptedAssertion outside the one the signature covers',
+          'the document carries an Assertion or EncryptedAssertion inside a ds:Signature, where no signature covers it',
+        );
+      }
+      if (place === 'outside') {
+        return fail(
+          'signedNode',
+          'the document carries an Assertion or EncryptedAssertion, SAML 2.0 or 1.x, outside the one the signature covers',
         );
       }
 
@@ -212,21 +253,30 @@ function createValidator(
       // lies outside the signature, and checking a field an attacker sets is
       // worse than not checking it — it reads like verification.
       if (require === 'response') {
-        const status = directChild(root, PROTOCOL_NS, 'Status');
-        const codeValue = status
-          ? directChild(status, PROTOCOL_NS, 'StatusCode')?.getAttribute(
-              'Value',
-            )
-          : null;
-        if (!codeValue)
-          return fail(
-            'status',
-            'the response must carry exactly one samlp:Status holding exactly one StatusCode with a Value',
-          );
+        const status = requireOne(
+          root,
+          PROTOCOL_NS,
+          'Status',
+          'status',
+          'the response',
+          'samlp:Status',
+        );
+        const code = requireOne(
+          status,
+          PROTOCOL_NS,
+          'StatusCode',
+          'status',
+          'the samlp:Status',
+          'samlp:StatusCode',
+        );
+        const codeValue = code.getAttribute('Value');
+        if (!codeValue) {
+          return fail('status', 'the samlp:StatusCode carries no Value');
+        }
         if (codeValue !== SUCCESS) {
           return fail(
             'status',
-            `the identity provider declined the login: ${codeValue}`,
+            `the identity provider declined the login: ${quoteUntrusted(codeValue)}`,
           );
         }
       }
@@ -239,12 +289,16 @@ function createValidator(
       // 5. The assertion's Issuer — inside the signature either way, so both
       // validators check it.
       const issuer =
-        directChild(assertion, SAML_NS, 'Issuer')?.textContent ?? '';
-      if (!issuer) {
-        return fail(
+        requireOne(
+          assertion,
+          SAML_NS,
+          'Issuer',
           'issuer',
-          'the assertion must carry exactly one non-empty saml:Issuer',
-        );
+          'the assertion',
+          'saml:Issuer',
+        ).textContent ?? '';
+      if (!issuer) {
+        return fail('issuer', "the assertion's saml:Issuer is empty");
       }
       // Fail closed: with nothing to compare against, any issuer whose key is
       // configured would pass, which is not what this validator promises.
@@ -257,7 +311,7 @@ function createValidator(
       if (issuer !== context.expectedIssuer) {
         return fail(
           'issuer',
-          `the assertion was issued by ${issuer}, not the trusted issuer`,
+          `the assertion was issued by ${quoteUntrusted(issuer)}, not the trusted issuer`,
         );
       }
       // 5b. The cross-check against the Response's Issuer belongs to the
@@ -285,12 +339,14 @@ function createValidator(
       }
 
       // 6, 7, 8. Conditions and their window.
-      const conditions = directChild(assertion, SAML_NS, 'Conditions');
-      if (!conditions)
-        return fail(
-          'conditions',
-          'the assertion must carry exactly one saml:Conditions',
-        );
+      const conditions = requireOne(
+        assertion,
+        SAML_NS,
+        'Conditions',
+        'conditions',
+        'the assertion',
+        'saml:Conditions',
+      );
 
       const notBeforeRaw = conditions.getAttribute('NotBefore');
       if (notBeforeRaw) {
@@ -298,7 +354,7 @@ function createValidator(
         if (!notBefore) {
           return fail(
             'notBefore',
-            `Conditions NotBefore is not a valid xsd:dateTime: ${notBeforeRaw}`,
+            `Conditions NotBefore is not a valid xsd:dateTime: ${quoteUntrusted(notBeforeRaw)}`,
           );
         }
         if (notBefore.getTime() - skew > Date.now()) {
@@ -306,13 +362,18 @@ function createValidator(
         }
       }
 
-      const conditionsExpiry = parseXsdDateTime(
-        conditions.getAttribute('NotOnOrAfter'),
-      );
+      const notOnOrAfterRaw = conditions.getAttribute('NotOnOrAfter');
+      if (!notOnOrAfterRaw) {
+        return fail(
+          'notOnOrAfter',
+          'Conditions carries no NotOnOrAfter, so the assertion states no lifetime',
+        );
+      }
+      const conditionsExpiry = parseXsdDateTime(notOnOrAfterRaw);
       if (!conditionsExpiry) {
         return fail(
           'notOnOrAfter',
-          'Conditions carries no usable NotOnOrAfter, so the assertion states no lifetime',
+          `Conditions NotOnOrAfter is not a valid xsd:dateTime: ${quoteUntrusted(notOnOrAfterRaw)}`,
         );
       }
       if (conditionsExpiry.getTime() + skew <= Date.now()) {
@@ -333,6 +394,9 @@ function createValidator(
         const names = directChildren(restriction, SAML_NS, 'Audience').map(
           (a) => a.textContent ?? '',
         );
+        if (names.length === 0) {
+          return fail('audience', 'an AudienceRestriction names no audience');
+        }
         if (!names.includes(context.audience)) {
           return fail(
             'audience',
@@ -341,14 +405,9 @@ function createValidator(
         }
       }
 
-      // 10. One bearer confirmation satisfying everything together.
+      // 10. One bearer confirmation satisfying everything together. It
+      // refuses by itself, naming why each candidate failed.
       const chosen = chooseBearerConfirmation(assertion, context, skew);
-      if (!chosen) {
-        return fail(
-          'bearerConfirmation',
-          'no single bearer SubjectConfirmation, under exactly one saml:Subject and with exactly one SubjectConfirmationData, answers our request, names our ACS and is still open',
-        );
-      }
 
       // 11. Destination — the signed-Response validator only, for the same
       // reason as Status. Addressing in the other flow rests on Recipient,
@@ -361,7 +420,7 @@ function createValidator(
         if (destination !== context.acsUrl) {
           return fail(
             'destination',
-            `the response is addressed to ${destination}, not to us`,
+            `the response is addressed to ${quoteUntrusted(destination)}, not to us`,
           );
         }
       }
@@ -460,80 +519,74 @@ function directChild(
 }
 
 /**
- * Whether every `saml:Assertion` and `saml:EncryptedAssertion` in the
- * document is `assertion` itself or lies inside it.
+ * The single direct child with this name, or a refusal that says which way
+ * the count failed: absent and more than one are different faults, and a
+ * message that cannot tell them apart sends the reader to the wrong one.
  */
-function everyAssertionWithin(doc: Document, assertion: Element): boolean {
-  for (const local of ['Assertion', 'EncryptedAssertion']) {
-    const found = doc.getElementsByTagNameNS(SAML_NS, local);
+function requireOne(
+  parent: Element,
+  ns: string,
+  local: string,
+  check: AssertionCheck,
+  holder: string,
+  label: string,
+): Element {
+  const found = directChildren(parent, ns, local);
+  if (found.length === 0) return fail(check, `${holder} carries no ${label}`);
+  if (found.length > 1) {
+    return fail(
+      check,
+      `${holder} carries ${found.length} ${label}; exactly one is allowed`,
+    );
+  }
+  return found[0];
+}
+
+/** Where the assertion-shaped elements of a document sit relative to the one read. */
+type AssertionPlace = 'within' | 'outside' | 'inSignature';
+
+/**
+ * Walks up from every assertion-shaped element. Reaching the assertion that
+ * was read means it is inside it — unless a ds:Signature came first: an
+ * enveloped signature leaves its own subtree out of the digest, so anything
+ * there is unsigned, however deep inside the signed assertion it sits.
+ */
+function placeOfAssertions(doc: Document, assertion: Element): AssertionPlace {
+  for (const [ns, local] of ASSERTION_SHAPED) {
+    const found = doc.getElementsByTagNameNS(ns, local);
     for (let i = 0; i < found.length; i++) {
       let node = found[i] as unknown as Element | null;
       while (node && node !== assertion) {
+        if (node.localName === 'Signature' && node.namespaceURI === DSIG_NS) {
+          return 'inSignature';
+        }
         node = node.parentNode as unknown as Element | null;
       }
-      if (!node) return false;
+      if (!node) return 'outside';
     }
   }
-  return true;
+  return 'within';
 }
 
-/**
- * The assertion the signature covers, or null when the signed element is not
- * one and does not contain exactly one.
- *
- * "Exactly one" matters: a signed Response wrapping two assertions leaves
- * "which did we verify" ambiguous, which is the wrapping question again.
- */
-function assertionInside(
-  signed: Element,
-  root: Element,
-  require: SignedElement,
-): Element | null {
-  // The signature must cover what this validator was built to require. A
-  // signed-Response validator handed an assertion-signed document refuses
-  // here, and vice versa — that refusal is the whole point of shipping two.
-  const signedIsResponse =
-    signed.localName === 'Response' && signed.namespaceURI === PROTOCOL_NS;
-  const signedIsAssertion =
-    signed.localName === 'Assertion' && signed.namespaceURI === SAML_NS;
-  if (require === 'response' && !signedIsResponse) return null;
-  if (require === 'assertion' && !signedIsAssertion) return null;
+/** A candidate's first failed non-temporal sub-rule, or the window it states. */
+type Candidate =
+  | { readonly reason: string }
+  | { readonly notOnOrAfter: Date; readonly notBefore: Date | null };
 
-  // A bare Assertion is its own document: the only assertion there is, and
-  // it must be the element signed.
-  if (root.localName === 'Assertion' && root.namespaceURI === SAML_NS) {
-    return signed === root ? root : null;
-  }
-
-  // Whatever was signed, the response must carry exactly one assertion.
-  //
-  // Reading only from the signed element is not enough: Saml2PureProvider
-  // hands the whole response to the cookie provider, which reads whatever is
-  // in it. (toBearerAssertion refuses a second assertion on the bearer path
-  // too, but the validator does not lean on its caller.) A forged assertion
-  // placed beside the signed one must therefore end the login, not merely be
-  // ignored here.
-  const assertions = directChildren(root, SAML_NS, 'Assertion');
-  if (assertions.length !== 1) return null;
-  const only = assertions[0];
-
-  if (signed.localName === 'Assertion' && signed.namespaceURI === SAML_NS) {
-    return signed === only ? only : null;
-  }
-  if (signed.localName === 'Response' && signed.namespaceURI === PROTOCOL_NS) {
-    return signed === root ? only : null;
-  }
-  return null;
-}
+/** How many candidates a bearerConfirmation refusal names before "and N more". */
+const LISTED_CANDIDATES = 5;
 
 /**
- * The bearer confirmation this login may rely on.
+ * The bearer confirmation this login may rely on, or a refusal naming why
+ * each candidate failed.
  *
  * Every part must hold on the **same** element: gathering `InResponseTo` from
  * one confirmation and `Recipient` from another is how a document satisfies a
- * check nothing in it actually satisfies. When several qualify — which a real
- * identity provider does not produce — the earliest window wins, so the
- * outcome is a shorter session rather than a longer one.
+ * check nothing in it actually satisfies. It is existential: one candidate
+ * passing every sub-rule is enough, and every candidate is evaluated, so a
+ * failing one never hides a valid one after it. When several qualify — which
+ * a real identity provider does not produce — the earliest window wins, so
+ * the outcome is a shorter session rather than a longer one.
  *
  * `latestNotOnOrAfter` answers a different question: until when could some
  * confirmation let this assertion in? It is the latest `NotOnOrAfter` among
@@ -545,55 +598,135 @@ function chooseBearerConfirmation(
   assertion: Element,
   context: AssertionContext,
   skew: number,
-): { notOnOrAfter: Date; latestNotOnOrAfter: Date } | null {
+): { notOnOrAfter: Date; latestNotOnOrAfter: Date } {
+  const subject = requireOne(
+    assertion,
+    SAML_NS,
+    'Subject',
+    'bearerConfirmation',
+    'the assertion',
+    'saml:Subject',
+  );
+  const confirmations = directChildren(subject, SAML_NS, 'SubjectConfirmation');
+  if (confirmations.length === 0) {
+    return fail(
+      'bearerConfirmation',
+      'the saml:Subject holds no SubjectConfirmation',
+    );
+  }
+
   const now = Date.now();
   let best: Date | null = null;
   let latest: Date | null = null;
+  const reasons: string[] = [];
 
-  const subject = directChild(assertion, SAML_NS, 'Subject');
-  if (!subject) return null;
-
-  for (const confirmation of directChildren(
-    subject,
-    SAML_NS,
-    'SubjectConfirmation',
-  )) {
-    if (confirmation.getAttribute('Method') !== BEARER) continue;
-
-    const data = directChild(confirmation, SAML_NS, 'SubjectConfirmationData');
-    if (!data) continue;
-    // Option B: an expected ID must be matched exactly; no expected ID — an
-    // IdP-initiated login — means the attribute must not be there at all.
-    if (context.expectedInResponseTo === undefined) {
-      if (data.hasAttribute('InResponseTo')) continue;
-    } else if (
-      data.getAttribute('InResponseTo') !== context.expectedInResponseTo
-    ) {
+  for (const confirmation of confirmations) {
+    const candidate = readConfirmation(confirmation, context);
+    if ('reason' in candidate) {
+      reasons.push(candidate.reason);
       continue;
     }
-    if (data.getAttribute('Recipient') !== context.acsUrl) continue;
-
-    const notOnOrAfter = parseXsdDateTime(data.getAttribute('NotOnOrAfter'));
-    if (!notOnOrAfter) continue;
-    const notBeforeRaw = data.getAttribute('NotBefore');
-    const notBefore = notBeforeRaw ? parseXsdDateTime(notBeforeRaw) : null;
-    if (notBeforeRaw && !notBefore) continue;
+    const { notOnOrAfter, notBefore } = candidate;
 
     // Could qualify at some instant: counts towards how long to remember.
     if (!latest || notOnOrAfter.getTime() > latest.getTime()) {
       latest = notOnOrAfter;
     }
 
-    // Qualifies now: a candidate for the session's window.
-    if (notOnOrAfter.getTime() + skew <= now) continue;
-    if (notBefore && notBefore.getTime() - skew > now) continue;
+    // 7, 8. Qualifies now: a candidate for the session's window.
+    if (notOnOrAfter.getTime() + skew <= now) {
+      reasons.push('NotOnOrAfter has passed');
+      continue;
+    }
+    if (notBefore && notBefore.getTime() - skew > now) {
+      reasons.push('NotBefore has not arrived');
+      continue;
+    }
 
     if (!best || notOnOrAfter.getTime() < best.getTime()) best = notOnOrAfter;
   }
 
   // `latest` is set whenever `best` is: every qualifying confirmation was
-  // counted towards it first.
-  return best && latest
-    ? { notOnOrAfter: best, latestNotOnOrAfter: latest }
-    : null;
+  // counted towards it first. When nothing qualified, every candidate left
+  // exactly one reason, in document order.
+  if (best && latest) return { notOnOrAfter: best, latestNotOnOrAfter: latest };
+  return fail('bearerConfirmation', describeRefusals(reasons));
+}
+
+/**
+ * Sub-rules 1 to 6, in the spec's fixed order: the first one this candidate
+ * fails, or the window it states. The temporal sub-rules 7 and 8 are the
+ * caller's, since a candidate failing only those still bounds replay
+ * retention.
+ */
+function readConfirmation(
+  confirmation: Element,
+  context: AssertionContext,
+): Candidate {
+  // 1.
+  if (confirmation.getAttribute('Method') !== BEARER) {
+    return { reason: 'Method is not bearer' };
+  }
+  // 2.
+  const data = directChildren(confirmation, SAML_NS, 'SubjectConfirmationData');
+  if (data.length === 0) {
+    return { reason: 'carries no SubjectConfirmationData' };
+  }
+  if (data.length > 1) {
+    return {
+      reason: `carries ${data.length} SubjectConfirmationData; exactly one is allowed`,
+    };
+  }
+  const only = data[0];
+  // 3. Option B: an expected ID must be matched exactly; no expected ID — an
+  // IdP-initiated login — means the attribute must not be there at all.
+  if (context.expectedInResponseTo === undefined) {
+    if (only.hasAttribute('InResponseTo')) {
+      return {
+        reason: 'InResponseTo is present, but this login sent no request',
+      };
+    }
+  } else if (
+    only.getAttribute('InResponseTo') !== context.expectedInResponseTo
+  ) {
+    return { reason: 'InResponseTo does not answer our request' };
+  }
+  // 4.
+  if (only.getAttribute('Recipient') !== context.acsUrl) {
+    return { reason: 'Recipient is not the ACS' };
+  }
+  // 5.
+  const notOnOrAfterRaw = only.getAttribute('NotOnOrAfter');
+  if (!notOnOrAfterRaw) {
+    return { reason: 'SubjectConfirmationData has no NotOnOrAfter' };
+  }
+  const notOnOrAfter = parseXsdDateTime(notOnOrAfterRaw);
+  if (!notOnOrAfter) {
+    return {
+      reason:
+        'SubjectConfirmationData NotOnOrAfter is not a valid xsd:dateTime',
+    };
+  }
+  // 6.
+  const notBeforeRaw = only.getAttribute('NotBefore');
+  const notBefore = notBeforeRaw ? parseXsdDateTime(notBeforeRaw) : null;
+  if (notBeforeRaw && !notBefore) {
+    return {
+      reason: 'SubjectConfirmationData NotBefore is not a valid xsd:dateTime',
+    };
+  }
+  return { notOnOrAfter, notBefore };
+}
+
+/**
+ * `no bearer confirmation qualifies: #1 …; #2 …`, naming at most
+ * LISTED_CANDIDATES candidates so the message stays bounded however many the
+ * document carries.
+ */
+function describeRefusals(reasons: readonly string[]): string {
+  const listed = reasons
+    .slice(0, LISTED_CANDIDATES)
+    .map((reason, index) => `#${index + 1} ${reason}`);
+  const more = reasons.length - listed.length;
+  return `no bearer confirmation qualifies: ${listed.join('; ')}${more > 0 ? `; and ${more} more` : ''}`;
 }

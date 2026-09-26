@@ -60,8 +60,8 @@ export function toPem(certificate: string): string {
 }
 
 /**
- * A value taken from the document before any signature has been verified,
- * made safe to put in a message: JSON-quoted, so a newline smuggled in as
+ * Quotes a value from the document, or a message quoting one, before
+ * interpolating it into a refusal: JSON-quoted, so a newline smuggled in as
  * `&#10;` shows as `\n` rather than forging a line in a log, and cut to 64
  * characters, so an attacker cannot fill a log with it.
  */
@@ -128,7 +128,16 @@ function resolveOne(
       publicCert: certificate,
       getCertFromKeyInfo: () => null,
     });
-    verifier.loadSignature(signatureNode as unknown as XmlNode);
+    // loadSignature throws for a malformed Signature, and xml-crypto's
+    // message embeds the offending element: document text, so quoted.
+    try {
+      verifier.loadSignature(signatureNode as unknown as XmlNode);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      throw new Error(
+        `the signature element is malformed: ${quoteUntrusted(message)}`,
+      );
+    }
     try {
       // Returns false for a digest mismatch and throws when the signature
       // value itself fails. Both mean "not this certificate".
@@ -150,9 +159,12 @@ function resolveOne(
   // reference: two would be two candidate answers to "what is signed", the
   // ambiguity this module exists to remove.
   const references = signatureNode.getElementsByTagNameNS(DSIG_NS, 'Reference');
-  if (references.length !== 1) {
+  if (references.length === 0) {
+    throw new Error('the signature carries no ds:Reference');
+  }
+  if (references.length > 1) {
     throw new Error(
-      `the signature carries ${references.length} references; exactly one is required`,
+      `the signature carries ${references.length} ds:Reference; exactly one is allowed`,
     );
   }
   const uri = references[0].getAttribute('URI') ?? '';
