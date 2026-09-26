@@ -19,7 +19,8 @@ const JWT_SHAPE = /eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]*/g;
 
 /**
  * Removes what a server might echo back: every secret the request itself
- * sent (a refresh token, an assertion, a client secret), and any JWT.
+ * sent (a refresh token, an assertion, a client secret), in each form it may
+ * come back in, and any JWT.
  * Secrets shorter than 8 characters are ignored, so a stray short value
  * cannot blank out ordinary words.
  */
@@ -29,8 +30,15 @@ function redact(
 ): string {
   let out = text;
   for (const secret of secrets) {
-    if (secret && secret.length >= 8)
-      out = out.split(secret).join('<redacted>');
+    if (!secret || secret.length < 8) continue;
+    // As sent, as the request body encoded it (URLSearchParams: + / = become
+    // %2B %2F %3D), and percent-encoded: a server may echo any of these.
+    const forms = new Set([
+      secret,
+      new URLSearchParams({ s: secret }).toString().slice(2),
+      encodeURIComponent(secret),
+    ]);
+    for (const form of forms) out = out.split(form).join('<redacted>');
   }
   return out.replace(JWT_SHAPE, '<redacted jwt>');
 }

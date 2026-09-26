@@ -171,6 +171,28 @@ describe('OAuth error bodies stay out of logs and messages', () => {
       expect(text()).toContain('is not acceptable');
     });
 
+    // The request sent the assertion form-urlencoded, so a server echoing its
+    // body back returns %2B, %2F and %3D, not + / =. Both forms are redacted.
+    it('redacts an assertion echoed back form-urlencoded', async () => {
+      const assertion = 'PHNhbWw+QXNzZXJ0aW9u/Pz8+Pw==';
+      const encoded = new URLSearchParams({ a: assertion }).toString().slice(2);
+      expect(encoded).not.toBe(assertion);
+      failWithDescription(`could not parse assertion=${encoded}`);
+      const { logger, text } = recordingLogger();
+      await messageOf(
+        exchangeSamlAssertion(
+          assertion,
+          'https://uaa/oauth/token',
+          'c',
+          's',
+          logger,
+        ),
+      );
+      expect(text()).not.toContain(encoded);
+      expect(text()).not.toContain(assertion);
+      expect(text()).toContain('could not parse assertion=');
+    });
+
     it('redacts the client secret and the assertion it sent', async () => {
       const assertion = 'PHNhbWw6QXNzZXJ0aW9uPg-assertion-payload';
       failWithDescription(`bad client secret-value-xyz for ${assertion}`);
