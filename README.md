@@ -611,7 +611,7 @@ names the row. Rows marked *(signed-Response only)* are not performed by
 | 1 | Parses as XML, with no `DOCTYPE`; the document element is `samlp:Response` — or, for the assertion-only validator, a bare `saml:Assertion` | it is not, or it carries a `<!DOCTYPE` declaration | `document` |
 | 1b | Every `ID` attribute in the document is unique | any value appears twice | `duplicateId` |
 | 2 | Every signature is valid against `idpCertificates` — never against a certificate the document carries in its own `KeyInfo` | none, wrong key, content altered after signing, a malformed `Signature` element, no `ds:Reference` or more than one, a reference that is not same-document or names no element by `ID`, or a signature not inside the element it references | `signature` |
-| 3 | The signed node is the node read | the Response carries no direct-child `Assertion`, or more than one; the signature does not cover the element this validator requires — the `Response`, or the bare root `Assertion` or the Response's direct-child `Assertion`; or any SAML 2.0 `Assertion` / `EncryptedAssertion`, or SAML 1.x `Assertion`, lies outside the signed assertion | `signedNode` |
+| 3 | The signed node is the node read | the Response carries no direct-child `Assertion`, or more than one; the signature does not cover the element this validator requires — the `Response`, or the bare root `Assertion` or the Response's direct-child `Assertion`; or any SAML 2.0 `Assertion` / `EncryptedAssertion`, or SAML 1.x `Assertion`, lies outside the signed assertion or inside a `ds:Signature` | `signedNode` |
 | 4 | `samlp:Status` *(signed-Response only)* | absent or more than one; its `StatusCode` absent or more than one; the `StatusCode` without a `Value`; or a `Value` other than `…:status:Success` | `status` |
 | 4b | `Assertion/@ID` | absent or empty | `assertionId` |
 | 5 | `Assertion/Issuer` | absent, more than one, empty, not the expected issuer, or no expected issuer was given | `issuer` |
@@ -646,9 +646,11 @@ What the table compresses:
   whole — `Saml2PureProvider` hands it to `cookieProvider` — **every**
   SAML 2.0 `Assertion` or `EncryptedAssertion`, and every SAML 1.x
   `Assertion` (`urn:oasis:names:tc:SAML:1.0:assertion`), anywhere in the
-  document must be the signed assertion or inside it, under both validators. An extra
-  assertion in `Extensions`, a sibling or a wrapper ends the login rather than
-  being ignored. Encrypted assertions are not supported.
+  document must be the signed assertion or inside it, under both validators,
+  but never inside a `ds:Signature`, whose subtree an enveloped signature
+  leaves unsigned. An extra assertion in `Extensions`, a sibling or a wrapper
+  ends the login rather than being ignored. Encrypted assertions are not
+  supported.
 - **Several signatures are accepted** when every one verifies against
   `idpCertificates`, carries exactly one same-document reference, and sits
   directly inside the element it references. A signature that fails refuses the
