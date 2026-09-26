@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.1.2] - 2026-09-26
+
+### Security
+
+- **No token reaches a log line.** Every provider logged tokens through
+  `BaseTokenProvider.formatToken`. That function returned a token of 50
+  characters or fewer whole, and a longer one's first and last 25 characters.
+  UAA and XSUAA refresh tokens are opaque and about 34 characters, so they were
+  logged in full, at `info`, by `AuthorizationCodeProvider` on creation, on
+  refresh (old and new) and by `BaseTokenProvider` on every token update. Access
+  tokens leaked 50 characters. A log line now carries only
+  `<redacted, N chars>`. Anyone who shipped logs from an earlier version at
+  `info` or `debug` should treat the refresh tokens in them as exposed, and
+  revoke them.
+
 ## [4.1.1] - 2026-09-26
 
 ### Changed
