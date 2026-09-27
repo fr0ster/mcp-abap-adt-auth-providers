@@ -1447,9 +1447,9 @@ new Saml2BearerProvider({
 3.0.0 changes no provider's configuration, but it drops a provider, a command
 and the Node versions nothing supports any more.
 
-- **Node.js 22 or 24.** `engines` is `"^22 || ^24"`, following SAP BTP, Cloud
-  Foundry. Node 18 and 20 are past their end of life and SAP has removed 20;
-  23 and 25, odd releases, are too. Move the process to 22 or 24.
+- **Node.js 22, 24 or 26.** `engines` is `"^22 || ^24 || ^26"` (26 since 4.2.1).
+  Node 18 and 20 are past their end of life and SAP has removed 20; 23 and 25,
+  odd releases, are too. Move the process to 22, 24 or 26.
 - **`DeviceFlowProvider` is gone**, with `DeviceFlowProviderConfig` and the
   `auth-device-flow` command. It sent the device grant to
   `<uaaUrl>/oauth/device_authorization`, which no server we know of serves —
@@ -1806,10 +1806,11 @@ Example output:
 - `express` - OAuth2 callback server
 - `open` - Browser opening utility
 
-Requires Node.js 22 or 24 (`engines: "^22 || ^24"`). The supported versions
-follow SAP BTP, Cloud Foundry, whose Node.js buildpack offers exactly these two;
-CI tests both. Odd-numbered releases are never supported — they reach end of
-life within months — and a new major joins only once SAP offers it.
+Requires Node.js 22, 24 or 26 (`engines: "^22 || ^24 || ^26"`). 22 and 24 are
+what SAP BTP, Cloud Foundry's Node.js buildpack offers; 26 is supported as well,
+because a machine that runs it otherwise gets an older release of this package
+from npm without a word. CI tests all three. Odd-numbered releases are never
+supported — they reach end of life within months.
 
 ## License
 
