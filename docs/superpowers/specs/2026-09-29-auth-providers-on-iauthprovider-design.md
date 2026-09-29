@@ -33,9 +33,12 @@ rejected(rejection: IAuthRejection): Promise<AuthOutcome>; // the system said no
 4. **A target's Oops is the provider's to judge.** A provider with no other way
    (SNC, certificate) returns the target's Oops as its own; one that has another
    (a password is also a header) goes on.
-5. **`rejected()` decides alone.** Ok means "I fixed it, try once more"; the
-   process retries once. A provider never answers Ok without having changed
-   what it will present.
+5. **`rejected()` decides alone; retrying is the consumer's.** Ok means "I
+   changed what I will present — trying again can succeed"; Oops means "it
+   cannot". Whether to try again, and how many times, is entirely the
+   consumer's decision. No provider retries anything itself — not a request,
+   not a refresh, not a login. A provider never answers Ok without having
+   changed what it will present.
 
 ## Token providers — `BaseTokenProvider` implements both contracts
 
@@ -106,15 +109,16 @@ New here on the contract; `connection` 10.0.0 removes its copies (step 3).
 | `TokenAuthProvider(source)` | Ok | — | `header('Authorization', 'Bearer …')` from the source | see below |
 
 - **`TokenAuthProvider`** is for a token that comes from outside this package.
-  Its source is one of three, and each is its own static constructor so the
+  Its source is one of two, and each is its own static constructor so the
   provider holds one known kind:
   - `TokenAuthProvider.fixed(token)` — `rejected()` → Oops "the token was
     refused", hint "obtain a new token";
   - `TokenAuthProvider.from(refresher: ITokenRefresher)` — `authorize` asks
-    `getToken()`, `rejected()` asks `refreshToken()` → Ok / Oops;
-  - `TokenAuthProvider.asking(fn: () => Promise<string>)` — asked per attempt;
-    `rejected()` → Ok once (the next attempt asks again), Oops if the retried
-    attempt is refused too.
+    `getToken()`, `rejected()` asks `refreshToken()` → Ok / Oops.
+
+  No function source: its only use would need a "refused twice" rule of the
+  provider's own, and nothing calls it (the server passes a string or a
+  refresher, `connectionFactory.ts:80, 193`).
 - **`FileCertificateMaterialLoader`** (PEM pair or PFX from files) moves with
   `CertificateAuthProvider`.
 
@@ -229,7 +233,8 @@ The provider depends on neither `@mcp-abap-adt/sap-rfc-lite` nor
 | Error class → reason / hint mapping | unit |
 | `BasicAuthProvider` writes both the header and the logon parameters, and goes on when the target refuses the parameters | unit |
 | `CertificateAuthProvider` returns the target's Oops; a loader failure is an Oops from `prepare` | unit |
-| `TokenAuthProvider.fixed` / `.from` / `.asking` — `rejected()` as specified | unit |
+| `TokenAuthProvider.fixed` / `.from` — `rejected()` as specified | unit |
+| No provider retries: a refusal inside `prepare` / `authorize` / `rejected` is answered once, with no second login, refresh or request | unit, counting collaborators |
 | SNC: library resolution (explicit fails, automatic skips; the measured x86-`SNC_LIB` / x64-registry mix; empty variables; absent registry; `FAT_MAGIC_64` accepted and rejected by architecture), the PE / Mach-O / ELF reader, the probe (scoped, case-insensitive paths, unreadable process list), QOP allowlist, the three error shapes in `rejected` | unit, fake `SncSystem` |
 | SNC end to end: prepare → establish's parameters into a real RFC conversation → discovery; profile logged out → `rejected` says "log on in the Secure Login Client" | live, manual, recorded in the PR |
 
@@ -239,9 +244,9 @@ Each rule gets a test that goes red when the rule is removed.
 
 1. ~~**Version: 4.3.0 or 5.0.0.**~~ **5.0.0** — a migration, not an update
    (see *Package*).
-2. **`kind` of the token providers** is the grant type (`authorization_code`,
-   `client_credentials`, …). Is that what a log line should say, or a shorter
-   family name (`token`)?
-3. **`TokenAuthProvider.asking`** — is the "Ok once, then Oops" rule for
-   `rejected()` right, or should a function source be allowed only through
-   `from(refresher)`?
+2. ~~**`kind` of the token providers.**~~ **The grant type**
+   (`authorization_code`, `client_credentials`, …) — a log line says which way
+   in ran.
+3. ~~**`TokenAuthProvider.asking`.**~~ **Dropped** — `fixed(token)` and
+   `from(refresher)` only.
+4. ~~**Retries.**~~ **The consumer's, all of them** — see rule 5.

@@ -18,7 +18,7 @@ passwordless SNC, anything later:
 prepare()                      once per connect
 establish(logon target)        every logon (HTTP session, RFC conversation)
 authorize(request target)      every request attempt
-rejected(rejection)            the system said no — Ok: try once more
+rejected(rejection)            the system said no — Ok: trying again can succeed (retrying is the consumer's)
 ```
 
 Each answers **Ok** or **Oops** with a refusal (`reason`, `hint?`). The
