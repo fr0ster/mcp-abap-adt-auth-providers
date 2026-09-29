@@ -493,7 +493,8 @@ describe('SSO Providers', () => {
     const present = jest.fn(async (_: DeviceCodePrompt) => {});
     const p = new OidcDeviceFlowProvider({
       clientId: 'c',
-      issuerUrl: 'https://idp',
+      deviceAuthorizationEndpoint: 'https://idp/device-auth',
+      tokenEndpoint: 'https://idp/token',
       presenter: { present },
     });
     await p.prepare();
@@ -523,7 +524,8 @@ describe('SSO Providers', () => {
       });
       const p = new OidcDeviceFlowProvider({
         clientId: 'c',
-        issuerUrl: 'https://idp',
+        deviceAuthorizationEndpoint: 'https://idp/device-auth',
+        tokenEndpoint: 'https://idp/token',
         presenter: {
           present: async () => {
             throw new Error('UI down SECRET-UI');
