@@ -256,7 +256,7 @@ LOCK/UNLOCK — all 200; each RFC conversation is its own SNC logon (~1–1.5 s)
 | Member | Behaviour |
 |---|---|
 | `kind` | `'snc'` |
-| `prepare()` | resolve the SNC library; when a product probe applies to it, run the probe → Ok / Oops |
+| `prepare()` | resolve the SNC library → Ok / Oops; note which product probe (if any) applies to it — the product is not checked |
 | `establish(logon)` | `return logon.logonParameters({ snc_mode: '1', snc_partnername, snc_qop, snc_lib, snc_myname? })` — no other way, so the target's Oops (an HTTP wire) is SNC's own |
 | `authorize()` | — |
 | `rejected(r)` | Oops with the GSS cause and what to do (below) |
@@ -285,22 +285,27 @@ qop?, sncLib?, myName? })`. A broker builds it from `IConnectionConfig`'s
   exists for: the installer sets the machine-wide `SNC_LIB` to its **x86**
   library, and a 64-bit Node needs the x64 one.
 
-**Product probe** (`ISncProductProbe { product; appliesTo(libraryPath); check() }`):
-the Secure Login Client probe applies only to a library inside the client's
+**Product probe** (`ISncProductProbe { product; appliesTo(libraryPath) }`):
+it only names the product behind the library, so that `rejected` can say what
+to do. The Secure Login Client probe applies to a library inside the client's
 installation (the registry's install paths on Windows, case-insensitive; the
-app bundle on macOS), and checks that `sbus.exe` (Windows) / the app (macOS)
-runs. Any other SNC library — `gsskrb5.dll`, another vendor's — is not probed.
-A process list that cannot be read is an Oops saying the check could not run
-(without the listing tool's own message, rule 2).
-It does not check that a profile is logged on: no documented interface says
-so, and a missing certificate surfaces at logon.
+app bundle on macOS). Any other SNC library — `gsskrb5.dll`, another vendor's
+— has no product named. Nothing about the product is checked before logon —
+not that it runs, not that a profile is logged on. Measured 2026-09-29
+(Windows, Secure Login Client 3.0.3): with the client exited, the RFC open
+through its `sapcrypto.dll` started the client, which logged on — silently
+through the identity provider's SSO, or through its logon window; closing that
+window failed the open with `A2200019`. A "the client is not running" refusal
+in `prepare()` would therefore stop logons that succeed, so the one place a
+missing credential is explained is `rejected`. What follows for the consumer:
+an RFC open can wait on the client's logon window until the user answers it.
 
 **Explaining a refused logon** (`rejected({ at: 'logon', error })`) — the error
 may be an `Error`, a string or the SDK's plain object:
 - `A2200019` → reason "the SNC library has no credential to present";
   hint "log on in the Secure Login Client, to the profile used for SAP
-  applications" when the Secure Login Client probe applied, otherwise "make
-  sure the SNC product behind <library> is logged on";
+  applications" when the Secure Login Client probe applies to the library,
+  otherwise "make sure the SNC product behind <library> is logged on";
 - `SNCERR_INIT` / `gssapi library invalid/missing` → reason "the RFC SDK could
   not initialise <library> (<arch>) as its SNC library";
 - anything else → reason "SNC logon refused", plus the SDK's error key when it
@@ -308,8 +313,8 @@ may be an `Error`, a string or the SDK's plain object:
   object (rule 2). The GSS codes above are matched inside the text but only
   the fixed wording reaches the refusal.
 
-**The machine seam.** Environment, file heads, the registry (`reg query …
-/reg:64`) and the process list (`tasklist` / `ps`) are behind one injectable
+**The machine seam.** Environment, file heads and the registry (`reg query …
+/reg:64`) are behind one injectable
 `SncSystem`; the shipped one is `nodeSncSystem()`, which the locator and the
 probe take in their constructors (no default). Every rule above is tested
 with a fake.
@@ -375,7 +380,7 @@ The provider depends on neither `@mcp-abap-adt/sap-rfc-lite` nor
 | `BasicAuthProvider` writes both the header and the logon parameters, and goes on when the target refuses the parameters | unit |
 | `CertificateAuthProvider` returns the target's Oops; a loader failure is an Oops from `prepare` | unit |
 | `TokenAuthProvider.fixed` / `.from` — `rejected()` as specified | unit |
-| SNC: library resolution (explicit fails, automatic skips; the measured x86-`SNC_LIB` / x64-registry mix; empty variables; absent registry; `FAT_MAGIC_64` accepted and rejected by architecture), the PE / Mach-O / ELF reader, the probe (scoped, case-insensitive paths, unreadable process list), QOP allowlist, the three error shapes in `rejected` | unit, fake `SncSystem` |
+| SNC: library resolution (explicit fails, automatic skips; the measured x86-`SNC_LIB` / x64-registry mix; empty variables; absent registry; `FAT_MAGIC_64` accepted and rejected by architecture), the PE / Mach-O / ELF reader, the probe (scoped, case-insensitive paths; `prepare()` Ok whether or not the client runs; the hint in `rejected` by whether it applies), QOP allowlist, the three error shapes in `rejected` | unit, fake `SncSystem` |
 | SNC end to end: prepare → establish's parameters into a real RFC conversation → discovery; profile logged out → `rejected` says "log on in the Secure Login Client" | live, manual, recorded in the PR |
 
 Each rule gets a test that goes red when the rule is removed.
