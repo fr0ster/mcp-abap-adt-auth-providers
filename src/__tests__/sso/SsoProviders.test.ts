@@ -1204,11 +1204,10 @@ describe('Saml2PureProvider assertion validation', () => {
     expect(cookieProvider).not.toHaveBeenCalled();
   });
 
-  // performRefresh re-runs the whole login, validation included. The base
-  // class never calls it for this provider — it holds no refresh token — so
-  // it is called directly; a refresh that skipped validation would hand an
-  // unverified assertion to cookieProvider the day that changes.
-  it('validates again when refreshing', async () => {
+  // This provider has no refresh grant: a renewal is the one login, and that
+  // login validates again — a renewal that skipped validation would hand an
+  // unverified assertion to cookieProvider.
+  it('validates again when renewing', async () => {
     const payload = Buffer.from('<Assertion/>', 'utf8').toString('base64');
     const validate = jest.fn(async () => ({
       expiresAt: new Date(Date.now() + 3600_000),
@@ -1228,9 +1227,7 @@ describe('Saml2PureProvider assertion validation', () => {
       cookieProvider,
     });
 
-    await (
-      provider as unknown as { performRefresh(): Promise<unknown> }
-    ).performRefresh();
+    await provider.refreshTokens();
 
     expect(validate).toHaveBeenCalledTimes(1);
     expect(validate).toHaveBeenCalledWith(

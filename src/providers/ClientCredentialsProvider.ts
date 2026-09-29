@@ -11,6 +11,7 @@ import type {
 } from '@mcp-abap-adt/interfaces-auth';
 import { AUTH_TYPE_CLIENT_CREDENTIALS } from '@mcp-abap-adt/interfaces-auth';
 import { getTokenWithClientCredentials } from '../auth/clientCredentialsAuth';
+import { RefreshError } from '../errors/TokenProviderErrors';
 import {
   BaseTokenProvider,
   type TokenProviderHooks,
@@ -77,8 +78,12 @@ export class ClientCredentialsProvider extends BaseTokenProvider {
     };
   }
 
+  /** No refresh grant: the base logs in once instead of refreshing. */
+  protected override hasRefreshGrant(): boolean {
+    return false;
+  }
+
   protected async performRefresh(): Promise<ITokenResult> {
-    // For client_credentials, refresh is same as login (no refresh token)
-    return await this.performLogin();
+    throw new RefreshError('client_credentials has no refresh grant');
   }
 }

@@ -12,6 +12,7 @@ import type {
 } from '@mcp-abap-adt/interfaces-auth';
 import { AUTH_TYPE_USER_TOKEN } from '@mcp-abap-adt/interfaces-auth';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
+import { RefreshError } from '../errors/TokenProviderErrors';
 import { samlCallbackStrategy } from '../strategies';
 import { createSignedResponseValidator } from '../validation/assertionValidator';
 import { defaultReplayStore } from '../validation/inMemoryReplayStore';
@@ -98,8 +99,13 @@ export class Saml2PureProvider extends BaseTokenProvider {
     };
   }
 
+  /** No refresh grant: the base logs in once instead of refreshing. */
+  protected override hasRefreshGrant(): boolean {
+    return false;
+  }
+
   protected async performRefresh(): Promise<ITokenResult> {
-    return this.performLogin();
+    throw new RefreshError('SAML2 pure has no refresh grant');
   }
 
   /** Its "token" is the SAML session's cookies (tokenType 'saml'). */

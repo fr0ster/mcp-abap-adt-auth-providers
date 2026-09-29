@@ -205,40 +205,29 @@ export class AuthorizationCodeProvider extends BaseTokenProvider {
     }
 
     this.logger?.info('[AuthorizationCodeProvider] Refreshing token');
-    // Try refresh first
-    try {
-      const result = await refreshJwtToken(
-        this.refreshToken,
-        this.config.uaaUrl,
-        this.config.clientId,
-        this.config.clientSecret,
-      );
+    // A failure throws: the base decides the one login (rule 5).
+    const result = await refreshJwtToken(
+      this.refreshToken,
+      this.config.uaaUrl,
+      this.config.clientId,
+      this.config.clientSecret,
+    );
 
-      this.logger?.info('[AuthorizationCodeProvider] Token refresh completed', {
-        hasAccessToken: !!result.accessToken,
-        hasRefreshToken: !!result.refreshToken,
-        newAccessToken: this.formatToken(result.accessToken),
-        newRefreshToken: this.formatToken(result.refreshToken),
-        oldRefreshToken: this.formatToken(this.refreshToken),
-      });
+    this.logger?.info('[AuthorizationCodeProvider] Token refresh completed', {
+      hasAccessToken: !!result.accessToken,
+      hasRefreshToken: !!result.refreshToken,
+      newAccessToken: this.formatToken(result.accessToken),
+      newRefreshToken: this.formatToken(result.refreshToken),
+      oldRefreshToken: this.formatToken(this.refreshToken),
+    });
 
-      const expiresIn = this.calculateExpiresIn(result.accessToken);
+    const expiresIn = this.calculateExpiresIn(result.accessToken);
 
-      return {
-        authorizationToken: result.accessToken,
-        refreshToken: result.refreshToken || this.refreshToken, // Keep old if new not provided
-        authType: AUTH_TYPE_AUTHORIZATION_CODE,
-        expiresIn,
-      };
-    } catch (error) {
-      this.logger?.warn(
-        '[AuthorizationCodeProvider] Token refresh failed, falling back to login',
-        {
-          error: error instanceof Error ? error.message : String(error),
-        },
-      );
-      // Refresh failed - try login (will use uaaUrl + clientId to build URL)
-      return await this.performLogin();
-    }
+    return {
+      authorizationToken: result.accessToken,
+      refreshToken: result.refreshToken || this.refreshToken, // Keep old if new not provided
+      authType: AUTH_TYPE_AUTHORIZATION_CODE,
+      expiresIn,
+    };
   }
 }

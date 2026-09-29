@@ -10,6 +10,7 @@ import { AUTH_TYPE_USER_TOKEN } from '@mcp-abap-adt/interfaces-auth';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
 import { discoverOidc } from '../auth/oidcDiscovery';
 import { tokenExchange } from '../auth/oidcToken';
+import { RefreshError } from '../errors/TokenProviderErrors';
 import {
   BaseTokenProvider,
   type TokenProviderHooks,
@@ -92,7 +93,12 @@ export class OidcTokenExchangeProvider extends BaseTokenProvider {
     };
   }
 
+  /** No refresh grant: the base logs in once instead of refreshing. */
+  protected override hasRefreshGrant(): boolean {
+    return false;
+  }
+
   protected async performRefresh(): Promise<ITokenResult> {
-    return this.performLogin();
+    throw new RefreshError('token exchange has no refresh grant');
   }
 }

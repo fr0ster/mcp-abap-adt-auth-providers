@@ -39,7 +39,9 @@ export interface TokenProviderHooks {
  * - Caches tokens internally
  * - Checks expiration before returning tokens
  * - Automatically refreshes expired tokens
- * - Falls back to login if refresh fails
+ * - Falls back to one login if refresh fails — the base decides it, never
+ *   a provider's own performRefresh
+ * - Shares one in-flight renewal among concurrent callers
  */
 export abstract class BaseTokenProvider
   implements IRefreshableTokenProvider, IAuthProvider
@@ -52,6 +54,8 @@ export abstract class BaseTokenProvider
   private readonly onTokens?: TokenProviderHooks['onTokens'];
   /** The token last put on a request, so rejected() can tell a renewal from a repeat. */
   private presented?: string;
+  /** The renewal in flight; concurrent callers share it (one refresh, at most one login). */
+  private renewal?: Promise<ITokenResult>;
 
   constructor(hooks: TokenProviderHooks = {}) {
     this.onTokens = hooks.onTokens;
@@ -120,9 +124,15 @@ export abstract class BaseTokenProvider
 
   /**
    * Abstract method to refresh token
-   * Must be implemented by concrete providers
+   * Must be implemented by concrete providers. It never logs in: a failed
+   * refresh throws, and the base runs the single login.
    */
   protected abstract performRefresh(): Promise<ITokenResult>;
+
+  /** False for a grant with no refresh: the base then skips performRefresh and logs in once. */
+  protected hasRefreshGrant(): boolean {
+    return true;
+  }
 
   /**
    * Abstract method to get authentication type
@@ -183,12 +193,23 @@ export abstract class BaseTokenProvider
    * no other way to get a different one. What this obtains replaces the cache.
    */
   async refreshTokens(): Promise<ITokenResult> {
-    if (this.refreshToken) {
+    if (!this.renewal) {
+      this.renewal = this.renew().finally(() => {
+        this.renewal = undefined;
+      });
+    }
+    return this.renewal;
+  }
+
+  /** One renewal: one refresh, then — only if it is refused or impossible — one login. */
+  private async renew(): Promise<ITokenResult> {
+    const spent = this.refreshToken;
+    if (spent && this.hasRefreshGrant()) {
       this.logger?.info(
         '[BaseTokenProvider] Obtaining a new token by refresh',
         {
           oldToken: this.formatToken(this.authorizationToken),
-          refreshToken: this.formatToken(this.refreshToken),
+          refreshToken: this.formatToken(spent),
         },
       );
       try {
@@ -205,7 +226,8 @@ export abstract class BaseTokenProvider
           error: error instanceof Error ? error.message : String(error),
         });
         // The refresh token was refused: it is spent, so a login follows.
-        this.refreshToken = undefined;
+        // Only that one — never a token something else stored meanwhile.
+        if (this.refreshToken === spent) this.refreshToken = undefined;
       }
     }
 
@@ -383,10 +405,22 @@ export abstract class BaseTokenProvider
     });
   }
 
-  /** A new token — refresh, else login. Ok only if it differs; retrying is the caller's. */
+  /**
+   * A new token — refresh, else login. Ok only if it differs; retrying is the
+   * caller's. A renewal in flight is joined; a presented token already
+   * superseded by a renewal answers Ok without renewing again.
+   */
   async rejected(_rejection: IAuthRejection): Promise<AuthOutcome> {
     return safely(this.obtaining, async () => {
       const refused = this.presented ?? this.authorizationToken;
+      if (
+        !this.renewal &&
+        refused !== undefined &&
+        this.authorizationToken !== undefined &&
+        this.authorizationToken !== refused
+      ) {
+        return OK;
+      }
       const result = await this.refreshTokens();
       if (refused !== undefined && result.authorizationToken === refused) {
         return oops(

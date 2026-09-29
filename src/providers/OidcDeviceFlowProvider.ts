@@ -19,6 +19,7 @@ import {
   DeviceCodePresentationError,
   type IDeviceCodePresenter,
 } from '../deviceCode/DeviceCodePresenter';
+import { RefreshError } from '../errors/TokenProviderErrors';
 import {
   BaseTokenProvider,
   type TokenProviderHooks,
@@ -150,7 +151,7 @@ export class OidcDeviceFlowProvider extends BaseTokenProvider {
 
   protected async performRefresh(): Promise<ITokenResult> {
     if (!this.refreshToken) {
-      return this.performLogin();
+      throw new RefreshError('Refresh token is required for refresh');
     }
     if (!this.config.tokenEndpoint && !this.config.issuerUrl) {
       throw new Error('OIDC issuerUrl is required when discovery is used');

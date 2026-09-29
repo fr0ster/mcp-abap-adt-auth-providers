@@ -40,6 +40,8 @@ const system = fakeSystem({
 // from BaseTokenProvider unmodified (exercised here via FailingTokenProvider,
 // a local stand-in, and via AuthorizationCodeProvider); Saml2PureProvider's
 // cookie-writing applyToken override is pinned in tokenProviderContract.test.ts.
+// The refresh path of a real provider (one refresh, one login) is pinned in
+// providers/oneRenewal.test.ts.
 const providers: [string, IAuthProvider][] = [
   ['basic', new surface.BasicAuthProvider('SECRET-USER', 'SECRET-PW')],
   ['saml cookies', new surface.SamlAuthProvider('MYSAPSSO2=SECRET-COOKIE')],

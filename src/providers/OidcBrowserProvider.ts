@@ -13,6 +13,7 @@ import type { OidcCallbackResult } from '../auth/oidcBrowserAuth';
 import { discoverOidc } from '../auth/oidcDiscovery';
 import { generatePkceChallenge, generatePkceVerifier } from '../auth/oidcPkce';
 import { exchangeAuthorizationCode, refreshOidcToken } from '../auth/oidcToken';
+import { RefreshError } from '../errors/TokenProviderErrors';
 import { oidcCallbackStrategy } from '../strategies';
 import {
   BaseTokenProvider,
@@ -147,7 +148,7 @@ export class OidcBrowserProvider extends BaseTokenProvider {
 
   protected async performRefresh(): Promise<ITokenResult> {
     if (!this.refreshToken) {
-      return this.performLogin();
+      throw new RefreshError('Refresh token is required for refresh');
     }
 
     let discovery: Awaited<ReturnType<typeof discoverOidc>> | null = null;
