@@ -29,7 +29,6 @@ import {
   AssertionValidationError,
 } from '../errors/AssertionValidationError';
 import { findDuplicateId, readRequiredId } from './documentIds';
-import { defaultReplayStore } from './inMemoryReplayStore';
 import { quoteUntrusted, resolveSignedElements, toPem } from './signedNode';
 import { parseXsdDateTime } from './xsdDateTime';
 
@@ -52,9 +51,20 @@ const ASSERTION_SHAPED: ReadonlyArray<readonly [string, string]> = [
 ];
 
 export interface ShippedValidatorOptions {
+  /**
+   * The identity provider's signing certificates, PEM or bare base64 DER — the
+   * form `<X509Certificate>` has in IdP metadata. A list, because keys rotate.
+   * Each is parsed when the validator is built; an empty list is refused there.
+   */
   readonly idpCertificates: readonly string[];
+  /** Tolerance for the time checks, in ms; default `0`. */
   readonly clockSkewMs?: number;
-  readonly replayStore?: IAssertionReplayStore;
+  /**
+   * Where accepted assertions are recorded so a second presentation is refused
+   * as a replay. Required: `defaultReplayStore` (process-wide, in memory) or a
+   * store of your own, whose `recordIfUnseen` must be atomic.
+   */
+  readonly replayStore: IAssertionReplayStore;
 }
 
 /**
@@ -128,7 +138,7 @@ function createValidator(
   // configuration; and a login happens after a human has used a browser, so a
   // formatting mistake found then wastes their work, not ours.
   const certificates = options.idpCertificates.map(toPem);
-  const store = options.replayStore ?? defaultReplayStore;
+  const store = options.replayStore;
 
   return {
     async validate(samlResponse, context): Promise<ValidatedAssertion> {

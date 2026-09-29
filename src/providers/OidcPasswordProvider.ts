@@ -10,9 +10,13 @@ import { AUTH_TYPE_PASSWORD } from '@mcp-abap-adt/interfaces-auth';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
 import { discoverOidc } from '../auth/oidcDiscovery';
 import { passwordGrant, refreshOidcToken } from '../auth/oidcToken';
-import { BaseTokenProvider } from './BaseTokenProvider';
+import { RefreshError } from '../errors/TokenProviderErrors';
+import {
+  BaseTokenProvider,
+  type TokenProviderHooks,
+} from './BaseTokenProvider';
 
-export interface OidcPasswordProviderConfig {
+export interface OidcPasswordProviderConfig extends TokenProviderHooks {
   issuerUrl?: string;
   clientId: string;
   clientSecret?: string;
@@ -29,7 +33,7 @@ export class OidcPasswordProvider extends BaseTokenProvider {
   private config: OidcPasswordProviderConfig;
 
   constructor(config: OidcPasswordProviderConfig) {
-    super();
+    super(config);
     this.config = config;
     this.logger = config.logger;
 
@@ -86,7 +90,7 @@ export class OidcPasswordProvider extends BaseTokenProvider {
 
   protected async performRefresh(): Promise<ITokenResult> {
     if (!this.refreshToken) {
-      return this.performLogin();
+      throw new RefreshError('Refresh token is required for refresh');
     }
 
     if (!this.config.tokenEndpoint && !this.config.issuerUrl) {

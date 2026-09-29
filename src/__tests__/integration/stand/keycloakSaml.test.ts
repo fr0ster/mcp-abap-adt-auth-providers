@@ -20,9 +20,10 @@
  *   them apart.
  * - Saml2PureProvider, the identity-provider half: Keycloak accepts the
  *   provider's AuthnRequest and answers with a signed SAMLResponse for that
- *   service provider, which the provider's default signed-Response validator
- *   accepts against the ID it minted. Turning it into session cookies is the
- *   consumer's cookieProvider and needs a real SAP system.
+ *   service provider, which the shipped signed-Response validator
+ *   (`createSignedResponseValidator`) accepts against the ID it minted.
+ *   Turning it into session cookies is the consumer's cookieProvider and
+ *   needs a real SAP system.
  *
  * Every provider trusts the signing certificate Keycloak publishes in its
  * SAML metadata, and the realm URL as the issuer.
@@ -36,6 +37,11 @@ import { parseStrictXml } from '../../../auth/strictXml';
 import { Saml2BearerProvider } from '../../../providers/Saml2BearerProvider';
 import { Saml2PureProvider } from '../../../providers/Saml2PureProvider';
 import { externalCodeStrategy, staticCodeStrategy } from '../../../strategies';
+import {
+  createSignedAssertionValidator,
+  createSignedResponseValidator,
+} from '../../../validation/assertionValidator';
+import { defaultReplayStore } from '../../../validation/inMemoryReplayStore';
 import { FormBrowser, samlResponseByForm } from './formLogin';
 
 const UAA_URL = process.env.UAA_URL?.replace(/\/+$/, '');
@@ -234,10 +240,7 @@ describeBoth('SAML providers with Keycloak as the identity provider', () => {
   });
 
   /** What every provider here trusts: Keycloak's key, and its realm as issuer. */
-  const trust = () => ({
-    idpCertificates,
-    idpEntityId: KEYCLOAK_URL as string,
-  });
+  const idpEntityId = () => KEYCLOAK_URL as string;
 
   const bearerConfig = () => ({
     idpSsoUrl: `${KEYCLOAK_URL}/protocol/saml`,
@@ -246,7 +249,11 @@ describeBoth('SAML providers with Keycloak as the identity provider', () => {
     uaaUrl: UAA_URL as string,
     clientId: 'saml_kc',
     clientSecret: 'secret',
-    ...trust(),
+    idpEntityId: idpEntityId(),
+    assertionValidator: createSignedAssertionValidator({
+      idpCertificates,
+      replayStore: defaultReplayStore,
+    }),
   });
 
   it('Saml2BearerProvider: an IdP-initiated Keycloak login becomes a UAA token', async () => {
@@ -305,9 +312,13 @@ describeBoth('SAML providers with Keycloak as the identity provider', () => {
       idpSsoUrl: `${KEYCLOAK_URL}/protocol/saml`,
       spEntityId: 'sap-sp',
       acsUrl,
-      // The default, signed-Response validator: Keycloak signs the Response
-      // as well as the assertion, and answers the ID the provider minted.
-      ...trust(),
+      idpEntityId: idpEntityId(),
+      // The signed-Response validator: Keycloak signs the Response as well as
+      // the assertion, and answers the ID the provider minted.
+      assertionValidator: createSignedResponseValidator({
+        idpCertificates,
+        replayStore: defaultReplayStore,
+      }),
       authorization: externalCodeStrategy({
         redirectUri: acsUrl,
         provide: async (url) => {

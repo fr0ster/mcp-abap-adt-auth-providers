@@ -7,6 +7,114 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [5.0.0] - 2026-09-29
+
+A migration, not an update: every provider this package ships now implements
+`IAuthProvider` (`@mcp-abap-adt/interfaces-auth` 3.0.0) and can be handed to a
+`@mcp-abap-adt/connection` 10.0.0 process with no wrapper and no check of what
+it is. See *Migrating to 5.0.0* in the README.
+
+### Breaking — a migration
+
+- **`IAuthProvider` on every provider.** `prepare()` / `establish(logon)` /
+  `authorize(request)` / `rejected(rejection)`, each answering
+  `{ ok: true }` or `{ ok: false, refusal: { reason, hint? } }`, with no
+  exception ever crossing the boundary — a provider's own work, a
+  collaborator, and a target's `header` / `cookies` / `logonParameters` /
+  `tlsMaterial` all become Oops instead.
+- **`BaseTokenProvider implements IRefreshableTokenProvider, IAuthProvider`.**
+  Every token provider — `AuthorizationCodeProvider`, `ClientCredentialsProvider`,
+  `OidcBrowserProvider`, `OidcDeviceFlowProvider`, `OidcPasswordProvider`,
+  `OidcTokenExchangeProvider`, `Saml2BearerProvider`, `Saml2PureProvider`,
+  `UaaPasscodeProvider` — **is** an `IAuthProvider` with no wrapper. The
+  broker's token API (`getTokens()` / `refreshTokens()`) is unchanged.
+- **`onTokens`.** Every token provider's config takes an optional
+  `onTokens?: (result: ITokenResult) => Promise<void>`, called after every
+  *new* token — a login or a refresh, never a cache hit — and awaited before
+  the provider answers. A store that used to persist after `getTokens()`
+  passes this instead. Best effort: a failing `onTokens` is logged by class
+  name only and does not fail the authentication.
+- **`Saml2PureProvider` presents cookies.** Its `applyToken` override calls
+  `request.cookies(...)` instead of writing an `Authorization` header — its
+  "token" is the SAML session's cookies.
+- **One renewal, no Ok on an unchanged credential.** `rejected()` is at most
+  one refresh, then — only if the refresh is refused or there is no refresh
+  token — one login through the injected strategy; no provider retries
+  anything itself. A renewal that returns the credential already presented is
+  Oops "the renewal returned the credential that was refused", for
+  `BaseTokenProvider` and `TokenAuthProvider.from` alike. A provider's own
+  refresh never logs in — a failed refresh throws and the base runs the one
+  login; a provider with no refresh grant (`ClientCredentialsProvider`,
+  `OidcTokenExchangeProvider`, `Saml2PureProvider`) goes straight to that one
+  login. Concurrent renewals share one in flight (one refresh, at most one
+  login), and a `rejected()` whose presented token a renewal has already
+  replaced answers Ok without renewing again.
+- **Refusals from fixed wording and allowlists, never an error's message.** A
+  refusal is built only from wording chosen per error class, plus metadata
+  only when its value is on an allowlist this package owns — config field
+  names (`KNOWN_CONFIG_FIELDS`), an `AssertionValidationError`'s `check`, a
+  fixed set of system error codes, a fixed set of RFC SDK keys (SNC), or a
+  class label by `instanceof`. No `message`, `cause` or body of any error
+  reaches a refusal, and a `name` property is never read.
+- **No implicit defaults — the consumer composes.** A constructor takes every
+  collaborator explicitly: the interactive strategy, the device-code
+  presenter, the SAML assertion validator, the SNC locator and probes.
+  Omitting one no longer compiles. Static factories assemble the named,
+  common recipe: `AuthorizationCodeProvider.inBrowser`,
+  `OidcBrowserProvider.inBrowser`, `Saml2PureProvider.inBrowser`,
+  `Saml2BearerProvider.inBrowser`, `UaaPasscodeProvider.fromTerminal`,
+  `OidcDeviceFlowProvider.toConsole`, `CertificateAuthProvider.fromFiles`,
+  `SncLogonProvider.forSecureLoginClient`.
+- **SAML configuration moved.** `idpCertificates`, `clockSkewMs` and
+  `assertionReplayStore` are no longer fields of `Saml2BearerProviderConfig` /
+  `Saml2PureProviderConfig`; both now take `assertionValidator:
+  IAssertionValidator` directly. `SamlTrust`
+  (`{ idpCertificates, clockSkewMs?, replayStore? }`) is what the `inBrowser`
+  recipes take instead. `ShippedValidatorOptions.replayStore` is now
+  required — a direct call to `createSignedResponseValidator` /
+  `createSignedAssertionValidator` must pass one (`defaultReplayStore`, or
+  your own).
+- **Manual strategies gain `timeoutMs` and `dispose()`.**
+  `manualPasteStrategy`, `manualSamlResponseStrategy` and
+  `manualPasscodeStrategy` accept `timeoutMs?: number`; on expiry, or when
+  `dispose()` is called, the pending read is abandoned with a
+  `BrowserAuthError` and the terminal `readline` it opened is closed. `read`
+  is now `(prompt: string, signal: AbortSignal) => Promise<string>`.
+- **`IDeviceCodePresenter`.** `OidcDeviceFlowProvider` no longer writes the
+  verification URI and user code to the logger or stderr itself; it hands a
+  `DeviceCodePrompt` to an injected `presenter: IDeviceCodePresenter`.
+  `consoleDeviceCodePresenter(logger?)` is today's behaviour as a named
+  choice, and `OidcDeviceFlowProvider.toConsole(config)` is the recipe. A
+  presenter that throws is an Oops "showing the device code failed" — the
+  device code itself never reaches a refusal.
+- **Moved in from `@mcp-abap-adt/connection`:** `BasicAuthProvider`,
+  `CertificateAuthProvider`, `SamlAuthProvider`, `TokenAuthProvider`,
+  `FileCertificateMaterialLoader` (`src/credentials/`); `connection` 10.0.0
+  removes its own copies. `TokenAuthProvider` is built only through
+  `TokenAuthProvider.fixed(token)` or `TokenAuthProvider.from(refresher)`.
+- **`SncLogonProvider`** — passwordless RFC logon through an installed SNC
+  product. Resolves the SNC library (explicit, or `SNC_LIB_64` / `SNC_LIB` /
+  the Windows registry / the macOS app bundle, in order), notes which product
+  probe applies to it, and hands `RfcTransport` the logon parameters; it
+  opens no connection and loads no SAP library itself. An unusable library is
+  an Oops naming each candidate tried — its source, path and a fixed reason
+  (`missing`, `not a library`, `wrong architecture`); an explicit `sncLib`
+  names that one. The product is **named, not checked**
+  (`ISncProductProbe { product; appliesTo(libraryPath) }`): `prepare()` is Ok
+  with the Secure Login Client not running, because the library starts the
+  client on demand — so an RFC open can wait on the client's logon window
+  until the user answers it. Only the shipped `SecureLoginClientProbe` yields
+  the Secure Login Client hint in `rejected()`. Measured 2026-09-29 against an
+  on-premise system (Windows, Secure Login Client 3.0.3): SNC logon,
+  discovery, reads and LOCK/UNLOCK, each RFC conversation its own SNC logon;
+  with the client logged out, closing its logon window failed the open with
+  `A2200019`, and `rejected()` answered "the SNC library has no credential to
+  present (A2200019)". See *Passwordless RFC logon (SNC)* in the README and
+  `docs/passwordless-sso.md`.
+- **Dependencies:** `@mcp-abap-adt/interfaces-auth` `^3.0.0` (was `^2.1.0`),
+  `@mcp-abap-adt/interfaces-auth-sap` `^1.1.0` (was `^1.0.1`). No new runtime
+  dependency.
+
 ## [4.2.1] - 2026-09-27
 
 ### Changed

@@ -22,7 +22,10 @@ describe('public exports — SAML assertion validation', () => {
     // Type-only exports vanish at runtime; this compiles only while they are
     // exported, since ts-jest type-checks the suite before running it.
     const check: AssertionCheck = 'replay';
-    const options: ShippedValidatorOptions = { idpCertificates: [] };
+    const options: ShippedValidatorOptions = {
+      idpCertificates: [],
+      replayStore: surface.defaultReplayStore,
+    };
     expect(check).toBe('replay');
     expect(options.idpCertificates).toEqual([]);
   });
@@ -38,5 +41,37 @@ describe('public exports — SAML assertion validation', () => {
 
   it('no longer exports parseSamlNotOnOrAfter', () => {
     expect('parseSamlNotOnOrAfter' in surface).toBe(false);
+  });
+});
+
+describe('public exports — 5.0.0', () => {
+  it.each([
+    'BasicAuthProvider',
+    'CertificateAuthProvider',
+    'FileCertificateMaterialLoader',
+    'SamlAuthProvider',
+    'TokenAuthProvider',
+    'SncLogonProvider',
+    'DefaultSncLibraryLocator',
+    'SecureLoginClientProbe',
+    'nodeSncSystem',
+    'consoleDeviceCodePresenter',
+  ])('exports %s', (name) => {
+    expect((surface as Record<string, unknown>)[name]).toBeDefined();
+  });
+  it.each([
+    'libraryArchitectures',
+    'sncRefusal',
+    'refusalFrom',
+    'oops',
+    'safely',
+    'ownLabel',
+    'DeviceCodePresentationError',
+    'KNOWN_CONFIG_FIELDS',
+    'KNOWN_RFC_KEYS',
+    'parseRegQuery',
+    'SncLibraryNotFoundError',
+  ])('does not export the internal %s', (name) => {
+    expect(name in surface).toBe(false);
   });
 });

@@ -18,9 +18,12 @@ import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
 import { exchangePasscode } from '../auth/passcodeAuth';
 import { refreshJwtToken } from '../auth/tokenRefresher';
 import { manualPasscodeStrategy } from '../strategies/manualStrategies';
-import { BaseTokenProvider } from './BaseTokenProvider';
+import {
+  BaseTokenProvider,
+  type TokenProviderHooks,
+} from './BaseTokenProvider';
 
-export interface UaaPasscodeProviderConfig {
+export interface UaaPasscodeProviderConfig extends TokenProviderHooks {
   /** UAA / XSUAA base URL, e.g. `https://<subdomain>.authentication.<region>.hana.ondemand.com`. */
   uaaUrl: string;
   /** A client allowed the `password` grant; add `refresh_token` to keep the session. */
@@ -30,10 +33,9 @@ export interface UaaPasscodeProviderConfig {
   /**
    * How the user's code reaches the provider. The strategy is handed
    * `<uaaUrl>/passcode` as the URL to send the user to, and returns the code.
-   * Defaults to `manualPasscodeStrategy()`: announce the URL, read the code
-   * from the terminal.
+   * Required — see the static factories for the usual choice.
    */
-  authorization?: IAuthorizationStrategy<string>;
+  authorization: IAuthorizationStrategy<string>;
   accessToken?: string;
   refreshToken?: string;
   logger?: ILogger;
@@ -43,7 +45,7 @@ export class UaaPasscodeProvider extends BaseTokenProvider {
   private readonly config: UaaPasscodeProviderConfig;
 
   constructor(config: UaaPasscodeProviderConfig) {
-    super();
+    super(config);
     this.config = config;
     this.logger = config.logger;
     if (config.accessToken) {
@@ -63,26 +65,27 @@ export class UaaPasscodeProvider extends BaseTokenProvider {
     return this.config.uaaUrl.replace(/\/+$/, '');
   }
 
+  /** The usual choice: a passcode typed in a terminal; five minutes to paste it by default. */
+  static fromTerminal(
+    config: Omit<UaaPasscodeProviderConfig, 'authorization'>,
+    options: { timeoutMs?: number } = {},
+  ): UaaPasscodeProvider {
+    return new UaaPasscodeProvider({
+      ...config,
+      authorization: manualPasscodeStrategy({
+        timeoutMs: options.timeoutMs ?? 300_000,
+      }),
+    });
+  }
+
   protected async performLogin(): Promise<ITokenResult> {
-    const supplied = this.config.authorization;
-    const strategy = supplied ?? manualPasscodeStrategy();
-    let passcode: string;
-    try {
-      // The passcode page takes no redirect: the code travels by hand.
-      const outcome = await strategy.authorize({
-        logger: this.logger,
-        buildAuthorizationUrl: async () => `${this.baseUrl}/passcode`,
-      });
-      passcode = outcome.payload;
-    } finally {
-      if (!supplied) {
-        await strategy.dispose?.().catch((error: unknown) => {
-          this.logger?.warn('[UaaPasscodeProvider] dispose failed', {
-            error: error instanceof Error ? error.message : String(error),
-          });
-        });
-      }
-    }
+    const strategy = this.config.authorization;
+    // The passcode page takes no redirect: the code travels by hand.
+    const outcome = await strategy.authorize({
+      logger: this.logger,
+      buildAuthorizationUrl: async () => `${this.baseUrl}/passcode`,
+    });
+    const passcode = outcome.payload;
 
     const tokens = await exchangePasscode(
       this.baseUrl,

@@ -211,7 +211,10 @@ const refusalFor = (confirmations: string[], ctx = context) =>
 describe("the signed-Response validator (Saml2PureProvider's default)", () => {
   it('refuses a malformed certificate at construction, not at login', () => {
     expect(() =>
-      createSignedResponseValidator({ idpCertificates: ['AAAA'] }),
+      createSignedResponseValidator({
+        idpCertificates: ['AAAA'],
+        replayStore: createInMemoryReplayStore(),
+      }),
     ).toThrow(/not a valid X.509 certificate/i);
   });
 
@@ -221,6 +224,7 @@ describe("the signed-Response validator (Saml2PureProvider's default)", () => {
     expect(() =>
       createSignedResponseValidator({
         idpCertificates: ['AAAA', KEY.certificatePem],
+        replayStore: createInMemoryReplayStore(),
       }),
     ).toThrow(/not a valid X.509 certificate/i);
   });

@@ -8,11 +8,11 @@
  * the saml2-bearer grant exactly when the client may hold one, and takes that
  * refresh token back without an assertion.
  *
- * Every login is validated before it reaches UAA, by Saml2BearerProvider's
- * default — the assertion-only validator — trusting the test IdP's committed
- * certificate. The assertions here answer no AuthnRequest, so each provider
- * declares `idpInitiated: true`, and its strategy reports UAA's bearer
- * endpoint as the ACS, since that is the Recipient the assertion names.
+ * Every login is validated before it reaches UAA, by the assertion-only
+ * shipped validator (`createSignedAssertionValidator`) trusting the test
+ * IdP's committed certificate. The assertions here answer no AuthnRequest, so
+ * each provider declares `idpInitiated: true`, and its strategy reports UAA's
+ * bearer endpoint as the ACS, since that is the Recipient the assertion names.
  */
 
 import { randomUUID } from 'node:crypto';
@@ -23,6 +23,8 @@ import { signXml } from '@mcp-abap-adt/auth-mocks';
 import type { IAuthorizationStrategy } from '@mcp-abap-adt/interfaces-auth';
 import { Saml2BearerProvider } from '../../../providers/Saml2BearerProvider';
 import { staticCodeStrategy } from '../../../strategies';
+import { createSignedAssertionValidator } from '../../../validation/assertionValidator';
+import { defaultReplayStore } from '../../../validation/inMemoryReplayStore';
 
 const UAA_URL = process.env.UAA_URL?.replace(/\/+$/, '');
 const describeUaa = UAA_URL ? describe : describe.skip;
@@ -137,8 +139,11 @@ const baseConfig = (clientId: string) => ({
   uaaUrl: UAA_URL as string,
   clientId,
   clientSecret: 'secret',
-  idpCertificates: [readFileSync(join(IDP, 'idp.crt'), 'utf8')],
   idpEntityId: 'test-idp',
+  assertionValidator: createSignedAssertionValidator({
+    idpCertificates: [readFileSync(join(IDP, 'idp.crt'), 'utf8')],
+    replayStore: defaultReplayStore,
+  }),
   // No AuthnRequest is sent: the assertions carry no InResponseTo.
   idpInitiated: true,
 });

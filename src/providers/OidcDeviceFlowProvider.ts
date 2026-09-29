@@ -8,16 +8,24 @@ import type {
 } from '@mcp-abap-adt/interfaces-auth';
 import { AUTH_TYPE_AUTHORIZATION_CODE } from '@mcp-abap-adt/interfaces-auth';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
-import { announcer } from '../auth/announce';
 import { discoverOidc } from '../auth/oidcDiscovery';
 import {
   initiateDeviceAuthorization,
   pollDeviceTokens,
   refreshOidcToken,
 } from '../auth/oidcToken';
-import { BaseTokenProvider } from './BaseTokenProvider';
+import {
+  consoleDeviceCodePresenter,
+  DeviceCodePresentationError,
+  type IDeviceCodePresenter,
+} from '../deviceCode/DeviceCodePresenter';
+import { RefreshError } from '../errors/TokenProviderErrors';
+import {
+  BaseTokenProvider,
+  type TokenProviderHooks,
+} from './BaseTokenProvider';
 
-export interface OidcDeviceFlowProviderConfig {
+export interface OidcDeviceFlowProviderConfig extends TokenProviderHooks {
   issuerUrl?: string;
   clientId: string;
   clientSecret?: string;
@@ -27,13 +35,18 @@ export interface OidcDeviceFlowProviderConfig {
   accessToken?: string;
   refreshToken?: string;
   logger?: ILogger;
+  /**
+   * How the user learns the verification URL and code. Required — see the
+   * static factories for the usual choice.
+   */
+  presenter: IDeviceCodePresenter;
 }
 
 export class OidcDeviceFlowProvider extends BaseTokenProvider {
   private config: OidcDeviceFlowProviderConfig;
 
   constructor(config: OidcDeviceFlowProviderConfig) {
-    super();
+    super(config);
     this.config = config;
     this.logger = config.logger;
 
@@ -44,6 +57,16 @@ export class OidcDeviceFlowProvider extends BaseTokenProvider {
     if (config.refreshToken) {
       this.refreshToken = config.refreshToken;
     }
+  }
+
+  /** The usual choice: print the prompt to the logger, or stderr. */
+  static toConsole(
+    config: Omit<OidcDeviceFlowProviderConfig, 'presenter'>,
+  ): OidcDeviceFlowProvider {
+    return new OidcDeviceFlowProvider({
+      ...config,
+      presenter: consoleDeviceCodePresenter(config.logger),
+    });
   }
 
   protected getAuthType(): OAuth2GrantType {
@@ -93,16 +116,20 @@ export class OidcDeviceFlowProvider extends BaseTokenProvider {
       this.logger,
     );
 
-    // Manual user guidance. This is a prompt the user must see to complete
-    // the flow, not a log line — it goes to the logger when there is one and
-    // to stderr otherwise, never to stdout.
-    const announce = announcer(this.logger);
-    announce('OIDC device authorization');
-    announce(`Go to: ${deviceFlow.verificationUri}`);
-    if (deviceFlow.verificationUriComplete) {
-      announce(`Or use: ${deviceFlow.verificationUriComplete}`);
+    try {
+      await this.config.presenter.present({
+        verificationUri: deviceFlow.verificationUri,
+        verificationUriComplete: deviceFlow.verificationUriComplete,
+        userCode: deviceFlow.userCode,
+        expiresInSeconds: deviceFlow.expiresIn,
+      });
+    } catch (error) {
+      // The presenter's text may hold the code; the log gets its class only.
+      this.logger?.warn('[OidcDeviceFlowProvider] presenter failed', {
+        error: error instanceof Error ? 'Error' : typeof error,
+      });
+      throw new DeviceCodePresentationError();
     }
-    announce(`Enter code: ${deviceFlow.userCode}`);
 
     const tokens = await pollDeviceTokens(
       tokenEndpoint,
@@ -124,7 +151,7 @@ export class OidcDeviceFlowProvider extends BaseTokenProvider {
 
   protected async performRefresh(): Promise<ITokenResult> {
     if (!this.refreshToken) {
-      return this.performLogin();
+      throw new RefreshError('Refresh token is required for refresh');
     }
     if (!this.config.tokenEndpoint && !this.config.issuerUrl) {
       throw new Error('OIDC issuerUrl is required when discovery is used');

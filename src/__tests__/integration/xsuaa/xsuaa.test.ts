@@ -27,6 +27,8 @@ import { AssertionValidationError } from '../../../errors/AssertionValidationErr
 import { Saml2BearerProvider } from '../../../providers/Saml2BearerProvider';
 import { UaaPasscodeProvider } from '../../../providers/UaaPasscodeProvider';
 import { staticCodeStrategy } from '../../../strategies';
+import { createSignedAssertionValidator } from '../../../validation/assertionValidator';
+import { defaultReplayStore } from '../../../validation/inMemoryReplayStore';
 
 const LOCAL = process.env.XSUAA_LOCAL;
 const PASSCODE = process.env.XSUAA_PASSCODE;
@@ -130,7 +132,10 @@ describeXsuaa('Providers against a real XSUAA', () => {
       clientSecret: credentials.clientsecret,
       authorization: staticCodeStrategy({ redirectUri: bearerAcs, payload }),
       // The per-run key setup.sh generated and registered as XSUAA's trust.
-      idpCertificates: [read('idp.crt')],
+      assertionValidator: createSignedAssertionValidator({
+        idpCertificates: [read('idp.crt')],
+        replayStore: defaultReplayStore,
+      }),
       idpEntityId: ORIGIN,
       // No AuthnRequest is sent: an assertion answering one must be refused.
       idpInitiated: true,

@@ -27,7 +27,6 @@ import { AuthorizationCodeProvider } from '../../providers/AuthorizationCodeProv
 import {
   BrowserCallbackStrategy,
   browserCallbackStrategy,
-  DEFAULT_CALLBACK_PORT,
   DEFAULT_LOGIN_TIMEOUT_MS,
   staticCodeStrategy,
 } from '../../strategies';
@@ -39,11 +38,7 @@ import {
   interactiveLoginEnabled,
   loadTestConfig,
 } from '../helpers/configHelpers';
-import {
-  canListenOnLocalhost,
-  canOwnPort,
-  getAvailablePort,
-} from '../helpers/netHelpers';
+import { canListenOnLocalhost, getAvailablePort } from '../helpers/netHelpers';
 
 // Helper to create logger if DEBUG_PROVIDER is enabled
 function createTestLogger(): ILogger | undefined {
@@ -472,6 +467,7 @@ describe('AuthorizationCodeProvider', () => {
         uaaUrl: authConfig.uaaUrl!,
         clientId: authConfig.uaaClientId!,
         clientSecret: authConfig.uaaClientSecret!,
+        authorization: browserCallbackStrategy(),
         logger,
       });
 
@@ -573,20 +569,12 @@ describe('AuthorizationCodeProvider with strategies', () => {
  * Whoever constructs, disposes.
  *
  * A consumer-supplied strategy may be a long-lived receiver that outlives many
- * logins, so the provider must never destroy it; a default the provider built
- * itself holds a callback port, so it must always be released. Both halves are
- * one `if (!supplied)` away from being silently reversed, which is why they are
- * asserted rather than reasoned about.
+ * logins, so the provider must never destroy it: the provider no longer
+ * constructs one of its own — `authorization` is a required constructor
+ * argument — so the strategy is always one the consumer supplied, and
+ * disposing it is the consumer's call, never the provider's.
  */
 describe('AuthorizationCodeProvider strategy lifecycle', () => {
-  function portIsFree(port: number): Promise<boolean> {
-    return new Promise((resolve) => {
-      const s = netModule.createServer();
-      s.once('error', () => resolve(false));
-      s.listen(port, () => s.close(() => resolve(true)));
-    });
-  }
-
   /**
    * A real UAA for the token exchange, so the success path is reached without
    * mocking a module: the exchange is a plain HTTP POST and this answers it.
@@ -614,23 +602,6 @@ describe('AuthorizationCodeProvider strategy lifecycle', () => {
       });
     });
   }
-
-  /** A pre-built URL naming a port the default strategy will not bind. */
-  const MISMATCHED_URL =
-    'https://uaa.example/oauth/authorize?client_id=c&redirect_uri=http%3A%2F%2Flocalhost%3A3001%2Fcallback&response_type=code';
-
-  /**
-   * The failure the mismatch guard produces — or, if this machine happens to
-   * hold 61001, the one the port probe produces first. Either ends the login
-   * through the same `finally`, which is what these tests are about.
-   */
-  const DEFAULT_LOGIN_FAILURE = /does not match|already in use/i;
-
-  const reasonFor = (p: Promise<unknown>): Promise<Error | null> =>
-    p.then(
-      () => null,
-      (error: Error) => error,
-    );
 
   it('never disposes a strategy the consumer supplied', async () => {
     const uaa = await startUaaStub({
@@ -691,81 +662,5 @@ describe('AuthorizationCodeProvider strategy lifecycle', () => {
       /consumer flow cancelled/,
     );
     expect(dispose).not.toHaveBeenCalled();
-  }, 30000);
-
-  it('disposes the default it constructed, per login, leaving the port free', async () => {
-    const defaultDispose = jest.spyOn(
-      BrowserCallbackStrategy.prototype,
-      'dispose',
-    );
-    // No `authorization`: the provider builds a browser callback on
-    // DEFAULT_CALLBACK_PORT. The pre-built URL names another port, so the guard
-    // ends the login in milliseconds rather than after the default 30 s.
-    const provider = new AuthorizationCodeProvider({
-      uaaUrl: 'http://127.0.0.1:9',
-      clientId: 'client',
-      clientSecret: 'secret',
-      authorizationUrl: MISMATCHED_URL,
-    });
-
-    // Probed before the first login: if an unrelated process holds 61001, this
-    // login never binds it and cannot release it, so the socket assertions
-    // below would be about that process rather than about this code.
-    const ownsPort = await canOwnPort(
-      DEFAULT_CALLBACK_PORT,
-      'AuthorizationCodeProvider disposes the default it constructed',
-    );
-
-    try {
-      const first = await reasonFor(provider.getTokens());
-      expect(first?.message).toMatch(DEFAULT_LOGIN_FAILURE);
-      expect(defaultDispose).toHaveBeenCalledTimes(1);
-      // The claim that matters is about the socket, not the mock: a settled
-      // promise must mean the callback port is genuinely released.
-      if (ownsPort) expect(await portIsFree(DEFAULT_CALLBACK_PORT)).toBe(true);
-
-      // `dispose` disables an instance permanently, so a provider holding one
-      // default would fail the second login with "has been disposed".
-      const second = await reasonFor(provider.getTokens());
-      expect(second?.message).toMatch(DEFAULT_LOGIN_FAILURE);
-      expect(second?.message).not.toMatch(/disposed/i);
-      expect(defaultDispose).toHaveBeenCalledTimes(2);
-      if (ownsPort) expect(await portIsFree(DEFAULT_CALLBACK_PORT)).toBe(true);
-    } finally {
-      defaultDispose.mockRestore();
-    }
-  }, 30000);
-
-  it('reports the login failure, not the cleanup failure, when dispose throws', async () => {
-    const warn = jest.fn();
-    const logger = {
-      debug: jest.fn(),
-      info: jest.fn(),
-      warn,
-      error: jest.fn(),
-    } as unknown as ILogger;
-    const defaultDispose = jest
-      .spyOn(BrowserCallbackStrategy.prototype, 'dispose')
-      .mockImplementation(async () => {
-        throw new Error('dispose exploded');
-      });
-    const provider = new AuthorizationCodeProvider({
-      uaaUrl: 'http://127.0.0.1:9',
-      clientId: 'client',
-      clientSecret: 'secret',
-      authorizationUrl: MISMATCHED_URL,
-      logger,
-    });
-
-    try {
-      const error = await reasonFor(provider.getTokens());
-      // The reason the login failed survives; the cleanup failure is logged.
-      expect(error?.message).toMatch(DEFAULT_LOGIN_FAILURE);
-      expect(error?.message).not.toContain('dispose exploded');
-      expect(defaultDispose).toHaveBeenCalledTimes(1);
-      expect(JSON.stringify(warn.mock.calls)).toContain('dispose exploded');
-    } finally {
-      defaultDispose.mockRestore();
-    }
   }, 30000);
 });

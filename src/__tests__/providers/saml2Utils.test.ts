@@ -27,6 +27,21 @@ import {
   createSignedAssertionValidator,
   createSignedResponseValidator,
 } from '../../validation/assertionValidator';
+import { createInMemoryReplayStore } from '../../validation/inMemoryReplayStore';
+
+/** Never used at runtime by these tests: only here to satisfy the required field. */
+const unusedValidator: IAssertionValidator = {
+  async validate() {
+    throw new Error('never called');
+  },
+};
+
+/** Never used at runtime by these tests: only here to satisfy the required field. */
+const unreachableAuthorization: IAuthorizationStrategy<string> = {
+  async authorize() {
+    throw new Error('the strategy must never be reached');
+  },
+};
 
 describe('buildSamlAuthorizationUrl', () => {
   it('mints a request ID and reports it', () => {
@@ -68,6 +83,7 @@ describe('getSamlAssertion — where the expected request ID comes from', () => 
   const baseConfig = {
     idpSsoUrl: 'https://idp.example/sso',
     spEntityId: 'urn:sp',
+    assertionValidator: unusedValidator,
   };
 
   /** Calls the builder — the strategy that asks for a URL, as a real browser flow does. */
@@ -254,7 +270,7 @@ describe('getSamlAssertion — where the expected request ID comes from', () => 
   });
 });
 
-describe('resolveAssertionValidator — a shipped validator still needs idpEntityId', () => {
+describe('checkAssertionValidator — a shipped validator still needs idpEntityId', () => {
   const certificate = generateKeyMaterial().certificatePem;
   const common = {
     idpSsoUrl: 'https://idp.example/sso',
@@ -270,7 +286,10 @@ describe('resolveAssertionValidator — a shipped validator still needs idpEntit
     '%s supplied as assertionValidator',
     (factory) => {
       const assertionValidator = () =>
-        shipped[factory]({ idpCertificates: [certificate] });
+        shipped[factory]({
+          idpCertificates: [certificate],
+          replayStore: createInMemoryReplayStore(),
+        });
 
       it('refuses Saml2BearerProvider at construction without idpEntityId', () => {
         let thrown: unknown;
@@ -278,6 +297,7 @@ describe('resolveAssertionValidator — a shipped validator still needs idpEntit
           new Saml2BearerProvider({
             ...common,
             uaaUrl: 'https://uaa.example',
+            authorization: unreachableAuthorization,
             assertionValidator: assertionValidator(),
           });
         } catch (error) {
@@ -296,6 +316,7 @@ describe('resolveAssertionValidator — a shipped validator still needs idpEntit
           new Saml2PureProvider({
             ...common,
             cookieProvider: async () => 'cookie',
+            authorization: unreachableAuthorization,
             assertionValidator: assertionValidator(),
           });
         } catch (error) {
@@ -315,6 +336,7 @@ describe('resolveAssertionValidator — a shipped validator still needs idpEntit
               ...common,
               idpEntityId: 'urn:idp',
               cookieProvider: async () => 'cookie',
+              authorization: unreachableAuthorization,
               assertionValidator: assertionValidator(),
             }),
         ).not.toThrow();
@@ -333,6 +355,7 @@ describe('resolveAssertionValidator — a shipped validator still needs idpEntit
         new Saml2BearerProvider({
           ...common,
           uaaUrl: 'https://uaa.example',
+          authorization: unreachableAuthorization,
           assertionValidator: custom,
         }),
     ).not.toThrow();
@@ -341,6 +364,7 @@ describe('resolveAssertionValidator — a shipped validator still needs idpEntit
         new Saml2PureProvider({
           ...common,
           cookieProvider: async () => 'cookie',
+          authorization: unreachableAuthorization,
           assertionValidator: custom,
         }),
     ).not.toThrow();
@@ -351,6 +375,7 @@ describe('resolveAssertionValidator — a shipped validator still needs idpEntit
   it('hides the brand from enumeration', () => {
     const validator = createSignedResponseValidator({
       idpCertificates: [certificate],
+      replayStore: createInMemoryReplayStore(),
     });
     expect(Object.keys(validator)).toEqual(['validate']);
     expect(Object.getOwnPropertySymbols({ ...validator })).toHaveLength(0);
@@ -360,12 +385,11 @@ describe('resolveAssertionValidator — a shipped validator still needs idpEntit
 // Both declarations describe different logins. Found at construction, the
 // mistake costs nothing; found after authorize(), it costs a browser login.
 describe('idpInitiated with authnRequestId is refused at construction', () => {
-  const certificate = generateKeyMaterial().certificatePem;
   const both = {
     idpSsoUrl: 'https://idp.example/sso',
     spEntityId: 'urn:sp',
     idpEntityId: 'urn:idp',
-    idpCertificates: [certificate],
+    assertionValidator: unusedValidator,
     idpInitiated: true,
     authnRequestId: '_declared-id',
   };

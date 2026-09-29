@@ -1,9 +1,192 @@
 # @mcp-abap-adt/auth-providers
 [![Stand With Ukraine](https://raw.githubusercontent.com/vshymanskyy/StandWithUkraine/main/badges/StandWithUkraine.svg)](https://stand-with-ukraine.pp.ua)
 
-Token providers for MCP ABAP ADT auth-broker.
+Every implementation of `IAuthProvider` for SAP ABAP ADT: the credential a
+process delegates to, and the token providers behind it.
 
-This package provides token provider implementations for the `@mcp-abap-adt/auth-broker` package.
+Token providers, the Basic/Certificate/SAML/Token credentials and passwordless
+SNC logon are each an `IAuthProvider` the process takes as it is — whether it
+is handed over directly to a connection, or through
+`@mcp-abap-adt/auth-broker` for the stateful token API
+(`getTokens()`/`refreshTokens()`).
+
+## Migrating to 5.0.0 — a migration, not an update
+
+5.0.0 is not an incremental release. Every provider here now implements
+`IAuthProvider` (`@mcp-abap-adt/interfaces-auth` 3.0.0) and can be handed to
+the process with no wrapper and no check of what it is — which is what a
+consumer **migrates** to, building its providers from this package and
+handing them to a `@mcp-abap-adt/connection` **10.0.0** process, rather than
+updating in place; 9.x speaks the old, narrower `IAuthProvider`.
+
+- **Credentials come from here, not from `@mcp-abap-adt/connection`.**
+  `BasicAuthProvider`, `CertificateAuthProvider`, `SamlAuthProvider`,
+  `TokenAuthProvider` and `FileCertificateMaterialLoader` moved into this
+  package (`src/credentials/`); `connection` 10.0.0 removes its own copies.
+  Import them from `@mcp-abap-adt/auth-providers` instead.
+- **A token provider is handed to the process as it is.**
+  `BaseTokenProvider implements IRefreshableTokenProvider, IAuthProvider`, so
+  every token provider — `AuthorizationCodeProvider`, `ClientCredentialsProvider`,
+  `OidcBrowserProvider`, `OidcDeviceFlowProvider`, `OidcPasswordProvider`,
+  `OidcTokenExchangeProvider`, `Saml2BearerProvider`, `Saml2PureProvider`,
+  `UaaPasscodeProvider` — **is** an `IAuthProvider`, with no `TokenAuthProvider`
+  wrapper around it. The broker's token API (`getTokens()` / `refreshTokens()`)
+  is unchanged.
+- **A store that persisted after `getTokens()` passes `onTokens` instead.**
+  Every token provider's config takes an optional
+  `onTokens?: (result: ITokenResult) => Promise<void>`, called after every
+  *new* token — a login or a refresh, never a cache hit — and awaited before
+  the provider answers. It is best effort: a failing `onTokens` is logged (its
+  class name only, since it holds the tokens) and does not fail the
+  authentication.
+- **Nothing is defaulted any more.** A provider that used to build its own
+  strategy, SAML validator, replay store or device-code output now takes it
+  explicitly in its constructor — or the consumer calls the named factory:
+  `AuthorizationCodeProvider.inBrowser`, `OidcBrowserProvider.inBrowser`,
+  `Saml2PureProvider.inBrowser`, `Saml2BearerProvider.inBrowser`,
+  `UaaPasscodeProvider.fromTerminal`, `OidcDeviceFlowProvider.toConsole`,
+  `CertificateAuthProvider.fromFiles`, `SncLogonProvider.forSecureLoginClient`.
+  Omitting `authorization` (or, for the SAML providers, `assertionValidator`)
+  no longer compiles.
+- **SAML trust configuration moved.** `idpCertificates`, `clockSkewMs` and
+  `assertionReplayStore` are no longer fields of `Saml2BearerProviderConfig` /
+  `Saml2PureProviderConfig`; both now take `assertionValidator:
+  IAssertionValidator` directly (still required, together with `idpEntityId`
+  for a shipped validator). Build one yourself with
+  `createSignedResponseValidator` / `createSignedAssertionValidator`, or call
+  `Saml2PureProvider.inBrowser(config, trust)` /
+  `Saml2BearerProvider.inBrowser(config, trust)` with a `SamlTrust`
+  (`{ idpCertificates, clockSkewMs?, replayStore? }`) — the recipe builds the
+  shipped validator and defaults `replayStore` to `defaultReplayStore`.
+- **`ShippedValidatorOptions.replayStore` is required.** A direct call to
+  `createSignedResponseValidator` / `createSignedAssertionValidator` must now
+  pass one — `defaultReplayStore`, or your own.
+- **Manual strategies take `timeoutMs` and can be disposed.**
+  `manualPasteStrategy`, `manualSamlResponseStrategy` and
+  `manualPasscodeStrategy` accept `timeoutMs?: number`; on expiry, or when
+  `dispose()` is called, the pending read is abandoned with a
+  `BrowserAuthError` and the terminal `readline` it opened is closed. `read`
+  is now `(prompt: string, signal: AbortSignal) => Promise<string>` — the
+  signal aborts on timeout or dispose, and a custom `read` that ignores it
+  still loses the race.
+- **Needs `@mcp-abap-adt/connection` 10.0.0.**
+
+## Passwordless RFC logon (SNC)
+
+`SncLogonProvider` logs an on-premise system on over `RfcTransport` with no
+password, through an installed SNC product — typically the SAP Secure Login
+Client, holding a certificate from SAP Secure Login Service or Kerberos.
+Measured 2026-09-29 against an on-premise system (Windows, Secure Login
+Client 3.0.3): the SNC logon, discovery, reads and LOCK/UNLOCK all succeeded
+over `RfcTransport`, each RFC conversation its own SNC logon at roughly
+1–1.5 s. See [docs/passwordless-sso.md](docs/passwordless-sso.md) for the
+HTTP alternatives, which remain undecided.
+
+**Prerequisites:** the SNC product is installed and can log on to the profile
+used for SAP applications (it need not be running beforehand — see the probe
+rule below); the ABAP system accepts SNC for RFC and maps the
+certificate's SNC name to a user; and, for the `RfcTransport` wire itself, the
+machine has the SAP NW RFC SDK and `@mcp-abap-adt/sap-rfc-lite` installed.
+This package itself depends on neither — it produces logon parameters and
+loads nothing.
+
+The usual choice:
+
+```typescript
+import { SncLogonProvider } from '@mcp-abap-adt/auth-providers';
+
+const provider = SncLogonProvider.forSecureLoginClient({
+  partnerName: 'p:CN=<system SNC name>', // the ABAP system's SNC name
+});
+```
+
+`forSecureLoginClient` assembles `nodeSncSystem()` (the machine seam),
+`DefaultSncLibraryLocator(system, sncLib)` and `[SecureLoginClientProbe(system)]`
+— "this machine, library discovery, the Secure Login Client probe". `qop`
+defaults to `'9'` (maximum, one of `'1' | '2' | '3' | '8' | '9'`), and
+`myName` is sent only when set.
+
+The explicit assembly, for a different SNC product, or a locator/probe of
+your own (no implicit defaults — a constructor takes every collaborator):
+
+```typescript
+import {
+  SncLogonProvider,
+  DefaultSncLibraryLocator,
+  SecureLoginClientProbe,
+  nodeSncSystem,
+} from '@mcp-abap-adt/auth-providers';
+
+const system = nodeSncSystem();
+const provider = new SncLogonProvider({
+  partnerName: 'p:CN=<system SNC name>',
+  locator: new DefaultSncLibraryLocator(system /*, sncLib */),
+  probes: [new SecureLoginClientProbe(system)], // [] to name no product
+});
+```
+
+**Discovery order and skip rule.** With no explicit `sncLib`,
+`DefaultSncLibraryLocator` tries, in order: the environment variable
+`SNC_LIB_64` (on a 64-bit process), `SNC_LIB`, the Windows registry
+`HKLM\Software\SAP\SecureLogin\InstallPath64` (`InstallPath32` on a 32-bit
+process) plus `lib\sapcrypto.dll`, then the macOS bundle `/Applications/Secure
+Login Client.app/Contents/MacOS/lib/libsapcrypto.dylib`. An unusable
+candidate — missing, not a recognised library, or built for the wrong
+architecture — is **skipped**, its reason kept, rather than failing the whole
+search; empty or whitespace environment variables count as unset. Nothing
+usable → `prepare()` is Oops listing every candidate tried, each as its source,
+its path and its reason, e.g. "no usable SNC library was found: SNC_LIB
+`<path>` (wrong architecture); registry `<path>` (missing)" — the source is one
+of `SNC_LIB_64`, `SNC_LIB`, `registry`, `macOS bundle`, and the reason one of
+`missing`, `not a library`, `wrong architecture`; no error message is ever
+part of it, and it needs no logger. An **explicit** `sncLib` is the only
+candidate: unusable, and the Oops names that one — "no usable SNC library was
+found: sncLib `<path>` (missing)" — with no fallback to automatic discovery.
+The hint is always "set sncLib to the SNC (GSS) library of your SNC product".
+Architecture comes from the
+file header — PE `Machine`; Mach-O thin and universal (`FAT_MAGIC` /
+`FAT_MAGIC_64`); ELF `e_machine` — because the trap this guards against is
+measured, not theoretical: the Secure Login Client installer sets the
+machine-wide `SNC_LIB` to its x86 library, and a 64-bit Node process needs the
+x64 one the registry points at.
+
+**The probe rule — the product is named, not checked.** A probe
+(`ISncProductProbe { product; appliesTo(libraryPath) }`) only says which
+product is behind the library, so that `rejected()` can say what to do.
+`SecureLoginClientProbe` applies to a library inside the Secure Login
+Client's own installation (the registry's install paths on Windows, matched
+case-insensitively; the app bundle on macOS); any other SNC library
+(`gsskrb5.dll`, another vendor's) has no product named. `prepare()` only
+resolves the library and notes which probe applies — nothing about the
+product is checked before logon, not that it runs, not that a profile is
+logged on. `prepare()` is therefore Ok with the client not running. Measured
+2026-09-29 (Windows, Secure Login Client 3.0.3): with the client exited, the
+RFC open through its `sapcrypto.dll` **started the client**, which logged on —
+silently through the identity provider's SSO, or through its logon window. A
+"not running" refusal would have stopped logons that succeed. What follows
+for a consumer: **an RFC open can wait on the client's logon window** until
+the user answers it. Only the shipped `SecureLoginClientProbe` (recognised by
+class) yields the Secure Login Client hint; a probe of your own names its
+product in the log, never in a refusal.
+
+**The two explained failures**, from `rejected()` — the RFC SDK reports both
+as a generic communication error, so the cause is found by searching the GSS
+error text (never returned; only fixed wording and an allowlisted key go out):
+
+- **`A2200019`** — reason "the SNC library has no credential to present
+  (A2200019)"; hint "log on in the Secure Login Client, to the profile used
+  for SAP applications" when the Secure Login Client probe applied, otherwise
+  "make sure the SNC product behind `<library>` is logged on". Measured
+  2026-09-29: with the client logged out, closing its logon window failed the
+  RFC open with `GSS-API(min): A2200019:Operation aborted by user or
+  application`, and `rejected()` answered with this reason.
+- **`SNCERR_INIT`** (or "gssapi library invalid/missing") — reason "the RFC
+  SDK could not initialise `<library>` as its SNC library (SNCERR_INIT)", no
+  hint — usually the architecture mismatch above, if a mismatched library
+  somehow reached this point.
+- anything else — reason "SNC logon refused", plus the SDK's error key in
+  parentheses when it is on the RFC-key allowlist (`RFC_LOGON_FAILURE`,
+  `RFC_COMMUNICATION_FAILURE`, …) — never the underlying message or object.
 
 ## Installation
 
@@ -13,7 +196,24 @@ npm install @mcp-abap-adt/auth-providers
 
 ## Overview
 
-This package implements `IRefreshableTokenProvider` — `ITokenProvider` plus `refreshTokens()` — from `@mcp-abap-adt/interfaces-auth`:
+Every provider here is an `IAuthProvider` (`@mcp-abap-adt/interfaces-auth`
+3.0.0) — `prepare()`, `establish()`, `authorize()`, `rejected()`, each answering
+an `AuthOutcome` and never throwing — handed to the process as it is:
+
+```typescript
+import { AuthorizationCodeProvider } from '@mcp-abap-adt/auth-providers';
+
+const provider = AuthorizationCodeProvider.inBrowser({
+  uaaUrl: 'https://...',
+  clientId: '...',
+  clientSecret: '...',
+});
+// A connection 10.0.0 process calls prepare() on connect, authorize() per
+// request, and rejected() on a 401: one renewal — a refresh, else one login.
+```
+
+The token providers also implement `IRefreshableTokenProvider` —
+`ITokenProvider` plus `refreshTokens()` — for the broker's token API:
 
 - **ClientCredentialsProvider** — `client_credentials`, no user interaction
 - **AuthorizationCodeProvider** — UAA/XSUAA authorization code, through a browser
@@ -92,7 +292,7 @@ This package is responsible for:
 - **Obtains tokens**: Makes HTTP requests to UAA endpoints to obtain JWT tokens
 - **Validates tokens**: Validates JWT locally by checking exp claim (no HTTP requests)
 - **Returns tokens**: Returns `ITokenResult` with `authorizationToken` and optional `refreshToken`
-- **Validates SAML assertions**: Ships two validators (`createSignedResponseValidator`, `createSignedAssertionValidator`) and an in-memory replay store; both SAML providers use one by default, and a consumer may supply its own `IAssertionValidator` or `IAssertionReplayStore`
+- **Validates SAML assertions**: Ships two validators (`createSignedResponseValidator`, `createSignedAssertionValidator`) and an in-memory replay store (`defaultReplayStore`); each SAML provider takes its validator as `assertionValidator` — built by the `inBrowser(config, trust)` factory, or supplied by the consumer, who may also supply its own `IAssertionValidator` or `IAssertionReplayStore`
 
 #### What This Package Does NOT Do
 
@@ -350,9 +550,12 @@ because with an ephemeral port nothing knows it until the socket is bound. The
 one the strategy reports is the one sent to the token endpoint.
 
 Both SAML providers validate every assertion before using it, so every SAML
-example below says whom to trust: `idpCertificates` and `idpEntityId`. See
-[SAML assertion validation](#saml-assertion-validation) for what is checked and
-what else can be configured.
+example below says whom to trust: an `assertionValidator` built from the
+identity provider's certificates, and `idpEntityId`. The recipe
+`inBrowser(config, trust)` builds the shipped validator from a `SamlTrust`
+(`{ idpCertificates, clockSkewMs?, replayStore? }`); a constructor takes one
+you built. See [SAML assertion validation](#saml-assertion-validation) for
+what is checked and what else can be configured.
 
 SAML bearer example (UAA or XSUAA — an IdP-initiated assertion):
 
@@ -360,7 +563,11 @@ SAML bearer example (UAA or XSUAA — an IdP-initiated assertion):
 import { readFileSync } from 'node:fs';
 import { AuthBroker } from '@mcp-abap-adt/auth-broker';
 import type { IAuthorizationStrategy } from '@mcp-abap-adt/interfaces-auth';
-import { Saml2BearerProvider } from '@mcp-abap-adt/auth-providers';
+import {
+  Saml2BearerProvider,
+  createSignedAssertionValidator,
+  defaultReplayStore,
+} from '@mcp-abap-adt/auth-providers';
 
 // The Recipient the assertion names: the URI-binding assertion consumer
 // service in the token endpoint's SAML metadata (UAA's is /oauth/token/alias/…).
@@ -384,8 +591,12 @@ const provider = new Saml2BearerProvider({
   uaaUrl: 'https://uaa.example.com',
   clientId: '...',
   clientSecret: '...',
-  // Whom to trust: the identity provider's signing certificate and entity ID.
-  idpCertificates: [readFileSync('idp-signing.pem', 'utf8')],
+  // Whom to trust: a validator holding the identity provider's signing
+  // certificate, and its entity ID.
+  assertionValidator: createSignedAssertionValidator({
+    idpCertificates: [readFileSync('idp-signing.pem', 'utf8')],
+    replayStore: defaultReplayStore,
+  }),
   idpEntityId: 'https://idp.example.com/metadata',
   // UAA and XSUAA refuse an assertion carrying InResponseTo.
   idpInitiated: true,
@@ -431,8 +642,8 @@ of a Response and re-encodes it, copying onto it every namespace declaration it
 inherited — including one used only inside a value such as
 `xsi:type="xs:string"`. The Assertion must carry its own signature: one over the
 Response alone does not survive the cut, and the token endpoint refuses the
-Assertion — which is why this provider's default validator is the one that
-requires the Assertion to be signed. An `EncryptedAssertion` is refused before
+Assertion — which is why the validator this provider's `inBrowser` recipe
+builds is the one that requires the Assertion to be signed. An `EncryptedAssertion` is refused before
 anything is sent.
 
 **Refresh.** When the token endpoint returns a `refresh_token` with the SAML
@@ -450,6 +661,8 @@ import { readFileSync } from 'node:fs';
 import { AuthBroker } from '@mcp-abap-adt/auth-broker';
 import {
   Saml2PureProvider,
+  createSignedResponseValidator,
+  defaultReplayStore,
   manualSamlResponseStrategy,
 } from '@mcp-abap-adt/auth-providers';
 
@@ -459,7 +672,10 @@ const provider = new Saml2PureProvider({
   idpSsoUrl: 'https://idp.example.com/sso',
   spEntityId: 'my-sp-entity',
   acsUrl,
-  idpCertificates: [readFileSync('idp-signing.pem', 'utf8')],
+  assertionValidator: createSignedResponseValidator({
+    idpCertificates: [readFileSync('idp-signing.pem', 'utf8')],
+    replayStore: defaultReplayStore,
+  }),
   idpEntityId: 'https://idp.example.com/metadata',
   // Shows the URL the provider builds — so the response must answer that
   // request's ID — and reads the pasted SAMLResponse.
@@ -508,11 +724,13 @@ token exchange, before `cookieProvider`. Until 3.x nothing verified it: the
 callback checked only that the payload was non-empty, and `Saml2PureProvider`
 took its session lifetime from a regular expression over the unverified XML.
 
-**This is a breaking change.** Each provider constructs its validator in its
-constructor, and a configuration that does not say whom to trust fails there —
-a `ValidationError` whose `missingFields` names what is missing — before any
-browser opens or any request is sent. Supply `idpCertificates` and
-`idpEntityId`, or an `assertionValidator` of your own.
+**Whom to trust is required.** Since 5.0.0 each provider takes its validator
+as `assertionValidator` — a shipped one built from the identity provider's
+certificates, or your own — and omitting it does not compile. A shipped
+validator supplied without `idpEntityId` fails at construction — a
+`ValidationError` whose `missingFields` names it — before any browser opens or
+any request is sent. `inBrowser(config, trust)` is the recipe that builds the
+shipped validator from a `SamlTrust`.
 
 #### Configuration
 
@@ -520,26 +738,35 @@ On both providers' configuration (`Saml2BearerProviderConfig`, `Saml2PureProvide
 
 | Field | Default | Meaning |
 |---|---|---|
-| `idpCertificates` | — | The identity provider's signing certificates, PEM or bare base64 DER — the form `<X509Certificate>` has in IdP metadata. A list, because providers rotate keys and two are live during a rotation. **Required unless `assertionValidator` is supplied.** Each entry is parsed at construction, so a malformed one fails there, not at login |
-| `idpEntityId` | — | The `Issuer` the assertion must name, passed to the validator as `expectedIssuer`. **Required unless the `assertionValidator` supplied is your own**: a shipped validator (`createSignedResponseValidator`, `createSignedAssertionValidator`) refuses every assertion without an expected issuer, so supplying one without `idpEntityId` fails at construction. A custom validator does not need it, and receives it when given |
+| `assertionValidator` | — | **Required.** An `IAssertionValidator`: `createSignedResponseValidator(…)`, `createSignedAssertionValidator(…)`, or your own. The provider builds none of its own |
+| `idpEntityId` | — | The `Issuer` the assertion must name, passed to the validator as `expectedIssuer`. **Required unless the `assertionValidator` supplied is your own**: a shipped validator refuses every assertion without an expected issuer, so supplying one without `idpEntityId` fails at construction. A custom validator does not need it, and receives it when given |
 | `spEntityId` | — | Your entity ID. The assertion's `AudienceRestriction` must name it — whichever validator is in play |
-| `assertionValidator` | the provider's default | An `IAssertionValidator`: `createSignedResponseValidator(…)`, `createSignedAssertionValidator(…)`, or your own. When supplied, the provider builds no default, and `idpCertificates`, `clockSkewMs` and `assertionReplayStore` are not used — set them on the validator's own options. `idpEntityId` is still required with a shipped one |
-| `assertionReplayStore` | the process-wide in-memory store | An `IAssertionReplayStore` for the default validator — see [Replay](#replay) |
-| `clockSkewMs` | `0` | Tolerance for the default validator's time checks — see [Clock skew](#clock-skew) |
 | `authnRequestId` | — | The AuthnRequest ID this login answers, when the package did not build the request — see [Where the expected request ID comes from](#where-the-expected-request-id-comes-from) |
 | `idpInitiated` | `false` | Declares that no AuthnRequest was sent, so the assertion must carry no `InResponseTo`. Required for `Saml2BearerProvider` against UAA or XSUAA |
+
+Trust itself — the certificates, the clock skew, the replay store — is not a
+provider field. It is on the shipped validator's options
+(`ShippedValidatorOptions`), or on the `SamlTrust` the `inBrowser` recipe
+takes:
+
+| Field | Default | Meaning |
+|---|---|---|
+| `idpCertificates` | — | The identity provider's signing certificates, PEM or bare base64 DER — the form `<X509Certificate>` has in IdP metadata. A list, because providers rotate keys and two are live during a rotation. Each entry is parsed when the validator is built, so a malformed one fails there, not at login |
+| `replayStore` | — on `ShippedValidatorOptions` (required); `defaultReplayStore` in the `inBrowser` recipe | An `IAssertionReplayStore` — see [Replay](#replay) |
+| `clockSkewMs` | `0` | Tolerance for the time checks — see [Clock skew](#clock-skew) |
 
 The package performs no I/O for any of these: it fetches no metadata and reads
 no file. Reading the certificate is the consumer's job.
 
 #### Choosing a validator
 
-This is the first decision to make, and **the default differs by provider**:
+This is the first decision to make, and **the `inBrowser` recipe chooses
+differently per provider**:
 
 | | `createSignedResponseValidator` | `createSignedAssertionValidator` |
 |---|---|---|
 | The signature must cover | the `Response` | the `Assertion` — bare, or inside a Response |
-| Default of | `Saml2PureProvider` | `Saml2BearerProvider` |
+| Built by `inBrowser` of | `Saml2PureProvider` | `Saml2BearerProvider` |
 | Reads `Status`, `Response/Issuer`, `Destination` | yes — inside the signature | **not at all** |
 | Accepts a bare `saml:Assertion` | no | yes |
 | Checks performed | all twelve below | all but rows 4, 5b and 11 |
@@ -552,6 +779,8 @@ import { readFileSync } from 'node:fs';
 import {
   Saml2PureProvider,
   createSignedAssertionValidator,
+  defaultReplayStore,
+  samlCallbackStrategy,
 } from '@mcp-abap-adt/auth-providers';
 
 const idpCertificates = [readFileSync('idp-signing.pem', 'utf8')];
@@ -567,14 +796,16 @@ const provider = new Saml2PureProvider({
   assertionValidator: createSignedAssertionValidator({
     idpCertificates,
     clockSkewMs: 30_000,
+    replayStore: defaultReplayStore,
   }),
+  authorization: samlCallbackStrategy(),
   cookieProvider: exchangeSamlForCookies,
 });
 ```
 
 **`createSignedResponseValidator`** requires the identity provider to sign the
 `Response`. Every field all twelve checks read is then inside the signature, so
-every check is a control. It is `Saml2PureProvider`'s default because there the
+every check is a control. It is what `Saml2PureProvider.inBrowser` builds because there the
 whole response is handed on to `cookieProvider`, and `Status` and `Destination`
 must be inside a signature.
 
@@ -583,7 +814,7 @@ and **does not read** `Status`, `Response/Issuer` or `Destination` at all — no
 weakly: with an assertion-only signature those fields sit outside it, where
 anyone able to deliver a response sets them to whatever is expected, and a check
 on a field an attacker controls reads in the code and the logs as if something
-had been verified. It is `Saml2BearerProvider`'s default because the token
+had been verified. It is what `Saml2BearerProvider.inBrowser` builds because the token
 endpoint receives the Assertion alone, taken out of any Response, so the
 Assertion's own signature is what counts there. Configuring the signed-Response
 validator on the bearer path would refuse a bare Assertion, and accept responses
@@ -591,7 +822,7 @@ signed only at the Response level, which the token endpoint then refuses.
 
 **Who needs the second one.** Identity providers that sign only assertions —
 which is many. A `Saml2PureProvider` consumer whose IdP does so gets a
-`signedNode` refusal from the default, and selects
+`signedNode` refusal from the recipe's validator, and selects
 `createSignedAssertionValidator` explicitly. What that gives up is the three
 checks above. It is still sound:
 
@@ -866,9 +1097,9 @@ anything.
 
 #### Replay
 
-The default replay store is **process-wide**: one module-level in-memory store,
-`defaultReplayStore`, shared by every default validator in the process — both
-providers, every instance. An assertion accepted once is refused as a replay
+The shipped replay store is **process-wide**: one module-level in-memory store,
+`defaultReplayStore`, shared by every validator given it in the process — both
+`inBrowser` recipes use it unless `SamlTrust.replayStore` says otherwise. An assertion accepted once is refused as a replay
 (`check: 'replay'`) for as long as it could still be accepted, however many
 providers are constructed; a store per provider would let a second provider
 accept what the first had seen. It is keyed by `{issuer, assertionId}`, since an
@@ -877,8 +1108,8 @@ that passed every other check is recorded.
 
 What it does **not** protect: anything across processes. A second process, a
 restart, or a horizontally scaled deployment each start with an empty memory.
-For those, supply a shared store — `assertionReplayStore` on the provider, or
-`replayStore` on a shipped validator's options. Its `recordIfUnseen` must be
+For those, supply a shared store — `replayStore` on a shipped validator's
+options, or on the `SamlTrust` given to `inBrowser`. Its `recordIfUnseen` must be
 atomic — a single conditional write, never a read followed by a write — because
 that race is exactly the one a replay exploits:
 
@@ -950,10 +1181,12 @@ import { readFileSync } from 'node:fs';
 import {
   AssertionValidationError,
   createSignedResponseValidator,
+  defaultReplayStore,
 } from '@mcp-abap-adt/auth-providers';
 
 const validator = createSignedResponseValidator({
   idpCertificates: [readFileSync('idp-signing.pem', 'utf8')],
+  replayStore: defaultReplayStore,
 });
 
 try {
@@ -985,8 +1218,8 @@ assertion must answer it; absent, the assertion must carry no `InResponseTo`.
 | Error | When |
 |---|---|
 | `AssertionValidationError` | an assertion was refused. `check` (type `AssertionCheck`) names the row above — tell "your IdP declined" (`status`) from "not addressed to us" (`audience`, `bearerConfirmation`, `destination`) without parsing the message. `code` is `'ASSERTION_VALIDATION_ERROR'` (`ASSERTION_ERROR_CODES.VALIDATION_ERROR` from `@mcp-abap-adt/interfaces-auth`) |
-| `ValidationError` | configuration: `idpCertificates` or `idpEntityId` missing with no `assertionValidator`, or `idpEntityId` missing with a shipped validator supplied as `assertionValidator` (at construction); `idpInitiated` with no `authorizationUrl` and a strategy that calls `buildAuthorizationUrl` (inside the builder, before any URL is produced); `idpInitiated` combined with a declared `authnRequestId` (at construction); `authnRequestId` missing (at login, after the strategy returns and before the assertion is read). `missingFields` names the field |
-| `Error` | a certificate that is neither PEM nor base64 DER, or not a valid X.509 certificate; a `clockSkewMs` that is not a finite non-negative integer; and, for a shipped validator called directly, an empty `idpCertificates` (*"must not be empty"*) — all at construction. Through a provider, an empty `idpCertificates` is a `ValidationError` instead |
+| `ValidationError` | configuration: `idpEntityId` missing with a shipped validator supplied as `assertionValidator` (at construction); `idpInitiated` with no `authorizationUrl` and a strategy that calls `buildAuthorizationUrl` (inside the builder, before any URL is produced); `idpInitiated` combined with a declared `authnRequestId` (at construction); `authnRequestId` missing (at login, after the strategy returns and before the assertion is read). `missingFields` names the field |
+| `Error` | a certificate that is neither PEM nor base64 DER, or not a valid X.509 certificate; a `clockSkewMs` that is not a finite non-negative integer; and an empty `idpCertificates` (*"must not be empty"*) — all when the validator is built, which for `inBrowser` is when the provider is |
 
 ### With Stores
 
@@ -1119,7 +1352,7 @@ const provider = new UaaPasscodeProvider({
   uaaUrl: 'https://<subdomain>.authentication.<region>.hana.ondemand.com',
   clientId: '...', // a client allowed the `password` grant (and `refresh_token`)
   clientSecret: '...', // omit for a public client
-  // The default: announce <uaaUrl>/passcode, read the code from the terminal.
+  // As fromTerminal(): announce <uaaUrl>/passcode, read the code from the terminal.
   // Supply `read` to take it from anywhere else — never from stdin under MCP.
   authorization: manualPasscodeStrategy({ read: askTheUser }),
 });
@@ -1131,10 +1364,59 @@ spent one fails with `Passcode exchange failed (401): Invalid passcode`.
 
 #### Device flow prompts
 
-`OidcDeviceFlowProvider` accepts `logger?: ILogger`. The verification URI and
-the user code are a prompt the user must see, not a log line: they go to the
-logger when one is supplied and to **stderr** otherwise — never to stdout,
-which carries protocol traffic under an MCP or LSP stdio transport.
+`OidcDeviceFlowProvider` must show the user where to go and what to enter. It
+does not choose where that goes: it takes a **presenter**, an injected
+collaborator like a strategy, and hands it structured data rather than text,
+so a consumer's UI — an MCP client, a chat, a terminal — renders it its own
+way:
+
+```typescript
+export interface DeviceCodePrompt {
+  verificationUri: string;
+  verificationUriComplete?: string;
+  userCode: string;
+  expiresInSeconds?: number;
+}
+export interface IDeviceCodePresenter {
+  /** Show the prompt; resolves once it has been shown. */
+  present(prompt: DeviceCodePrompt): Promise<void>;
+}
+```
+
+`presenter` is a required constructor field. The shipped one,
+`consoleDeviceCodePresenter(logger?)`, writes the prompt to the logger's
+`info`, or to **stderr** without one — never to stdout, which carries protocol
+traffic under an MCP or LSP stdio transport. `OidcDeviceFlowProvider.toConsole(config)`
+is the recipe that assembles it from `config.logger`:
+
+```typescript
+import {
+  OidcDeviceFlowProvider,
+  type IDeviceCodePresenter,
+} from '@mcp-abap-adt/auth-providers';
+
+// The usual choice: logger or stderr.
+const provider = OidcDeviceFlowProvider.toConsole({
+  issuerUrl: 'https://idp.example.com/realms/sap',
+  clientId: '...',
+});
+
+// Or your own UI.
+const presenter: IDeviceCodePresenter = {
+  async present({ verificationUri, userCode }) {
+    await showToTheUser(`Open ${verificationUri} and enter ${userCode}`);
+  },
+};
+const custom = new OidcDeviceFlowProvider({
+  issuerUrl: 'https://idp.example.com/realms/sap',
+  clientId: '...',
+  presenter,
+});
+```
+
+A presenter that throws makes `prepare()` / `rejected()` answer Oops with the
+fixed reason "showing the device code failed"; the device code is never part
+of a refusal.
 
 #### Callback port and lifetime
 
@@ -1200,6 +1482,7 @@ const provider = new AuthorizationCodeProvider({
   uaaUrl: 'https://...authentication...hana.ondemand.com',
   clientId: '...',
   clientSecret: '...',
+  authorization: browserCallbackStrategy({ browser: 'system' }),
 });
 const isValid = await provider.validateToken(token);  // serviceUrl optional
 // Checks JWT exp claim locally, no network request
@@ -1659,7 +1942,7 @@ it.
 
 | provider | server | what the suite proves |
 |---|---|---|
-| `Saml2BearerProvider` | UAA | a bearer assertion — and a whole `SAMLResponse` — passes the default validator, declared `idpInitiated`, and is exchanged for a token; UAA issues a refresh token exactly when the client may hold one, and the provider refreshes without its authorization strategy |
+| `Saml2BearerProvider` | UAA | a bearer assertion — and a whole `SAMLResponse` — passes the shipped signed-assertion validator, declared `idpInitiated`, and is exchanged for a token; UAA issues a refresh token exactly when the client may hold one, and the provider refreshes without its authorization strategy |
 | `Saml2BearerProvider` | Keycloak → UAA | end to end with no assertion built by the tests: an IdP-initiated Keycloak login passes validation and becomes a UAA token; the answer to the provider's own AuthnRequest passes validation against the ID it minted, and UAA refuses it for its `InResponseTo` |
 | `Saml2PureProvider` | Keycloak | the identity-provider half: Keycloak accepts the provider's AuthnRequest and posts a response, signed at both levels, to the ACS it named; the default signed-Response validator accepts it against the ID the provider minted, and it reaches `cookieProvider` unchanged |
 | `ClientCredentialsProvider` | UAA | a client token |
@@ -1797,8 +2080,8 @@ Example output:
 
 ## Dependencies
 
-- `@mcp-abap-adt/interfaces-auth` (^2.0.1) - Token provider, authorization and assertion-validation contracts (`ITokenProvider`, `IAuthorizationStrategy`, `CallbackServerFactory`, `IAssertionValidator`, `IAssertionReplayStore`) and error code constants
-- `@mcp-abap-adt/interfaces-auth-sap` (^1.0.1) - XSUAA authorization configuration (`IAuthorizationConfig`)
+- `@mcp-abap-adt/interfaces-auth` (^3.0.0) - `IAuthProvider`, token provider, authorization and assertion-validation contracts (`ITokenProvider`, `IAuthorizationStrategy`, `CallbackServerFactory`, `IAssertionValidator`, `IAssertionReplayStore`) and error code constants
+- `@mcp-abap-adt/interfaces-auth-sap` (^1.1.0) - XSUAA authorization configuration (`IAuthorizationConfig`) and `ICertificateMaterialLoader`
 - `@mcp-abap-adt/interfaces-utils` (^1.1.0) - `ILogger`
 - `@xmldom/xmldom` - XML parsing: SAML assertion validation, and taking the Assertion out of a SAMLResponse for the saml2-bearer grant
 - `xml-crypto` - XML-DSig signature verification for SAML assertion validation
