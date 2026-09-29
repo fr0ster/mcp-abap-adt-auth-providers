@@ -2,59 +2,52 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Release `@mcp-abap-adt/auth-providers` 5.0.0, where every provider — the token providers, Basic, Certificate, SAML cookies, Token and SNC — implements `IAuthProvider` from `@mcp-abap-adt/interfaces-auth` 3.0.0 and answers `prepare` / `establish` / `authorize` / `rejected` with an `AuthOutcome`.
+**Goal:** Release `@mcp-abap-adt/auth-providers` 5.0.0, where every provider implements `IAuthProvider` from `@mcp-abap-adt/interfaces-auth` 3.0.0, no provider builds a collaborator of its own, and named static factories assemble the common combinations.
 
-**Architecture:** `BaseTokenProvider` implements `IAuthProvider` beside `IRefreshableTokenProvider`, so every token provider is an `IAuthProvider` with no wrapper. The providers that lived in `@mcp-abap-adt/connection` are rewritten here on the new contract. `SncLogonProvider` finds the SNC library and hands logon parameters to the wire. One module turns thrown errors into secret-free refusals; no exception crosses the contract; no provider retries anything.
+**Architecture:** `BaseTokenProvider` implements `IAuthProvider` beside `IRefreshableTokenProvider`, so every token provider is an `IAuthProvider` with no wrapper. Constructors take every collaborator (strategy, SAML validator, device-code presenter, SNC locator/probes); static factories (`inBrowser`, `fromTerminal`, `toConsole`, `fromFiles`, `forSecureLoginClient`) are the recipes. One module turns thrown values into refusals built from fixed wording and package-owned allowlists only; every contract method runs inside `safely(…)`; no provider retries.
 
-**Tech Stack:** TypeScript (CommonJS, imports without `.js`), Jest via `npm test -- <path>` (never `npx jest`), Biome; `node:child_process`, `node:fs/promises`, `node:path` only.
+**Tech Stack:** TypeScript (CommonJS, imports without `.js`), Jest via `npm test -- <path>` (never `npx jest`), Biome; `node:child_process`, `node:fs/promises`, `node:path`, `node:readline` only.
 
-**Spec:** `docs/superpowers/specs/2026-09-29-auth-providers-on-iauthprovider-design.md`; goal and path: `docs/superpowers/2026-09-29-auth-providers-5-goal.md`.
+**Spec (approved):** `docs/superpowers/specs/2026-09-29-auth-providers-on-iauthprovider-design.md`. Goal and path: `docs/superpowers/2026-09-29-auth-providers-5-goal.md`.
 
 ## Global Constraints
 
 - Dependencies: `@mcp-abap-adt/interfaces-auth` `^3.0.0`, `@mcp-abap-adt/interfaces-auth-sap` `^1.1.0`. No new runtime dependency. `engines` stays `"^22 || ^24 || ^26"`.
-- **No exception crosses the contract.** Every body of `prepare`, `establish`, `authorize` and `rejected` runs inside `safely(what, work)`, which turns anything thrown — own work, a collaborator, or a **target** (`header`, `cookies`, `logonParameters`, `tlsMaterial`) — into Oops. Constructors may still throw `ValidationError` for bad configuration.
-- **A refusal carries no foreign text.** Only a `TokenProviderError` (this package's own family) lends its `message` to a refusal. Any other thrown value gives the fixed reason `"<what> failed"`, plus at most its class name when it matches `/^[A-Za-z]+Error$/` and a `code` when it matches `/^E[A-Z]+$/`. Never its message, fields, `response`, `config`, `cause` or body. Log lines follow the same rule.
-- **No Ok on an unchanged credential.** A provider remembers what it last presented; a renewal that yields the same token is Oops `"the renewal returned the credential that was refused"`.
-- **Persistence is best effort.** `onTokens` is awaited; its failure is logged by class name only and does not fail authentication.
-- **Nothing to add is Ok.** A provider with nothing for a moment writes to no target and answers `{ ok: true }`.
-- **A target's Oops is the provider's to judge.** SNC and Certificate return it as their own; Basic ignores it for logon parameters (the header carries a password).
-- **No provider retries.** `rejected()` answers Ok only when it changed what it will present; whether to try again is the consumer's. No second login, refresh or request inside a provider.
-- **`kind`** of a token provider is its grant type, `getAuthType()`; `BasicAuthProvider` `'basic'`, `CertificateAuthProvider` `'certificate'`, `SamlAuthProvider` `'saml'`, `TokenAuthProvider` `'token'`, `SncLogonProvider` `'snc'`.
-- **`TokenAuthProvider`** has exactly two constructors: `fixed(token)` and `from(refresher)`. No function source.
-- **`snc_qop`** default `'9'`; allowed exactly `'1'`, `'2'`, `'3'`, `'8'`, `'9'`.
-- Universal Mach-O: `FAT_MAGIC` `0xcafebabe` (20-byte records) and `FAT_MAGIC_64` `0xcafebabf` (32-byte records), `cputype` first in each.
-- Architecture names are Node's `process.arch`: `'ia32'`, `'x64'`, `'arm64'`.
-- Nothing writes to `process.stdout`; diagnostics go to the optional `ILogger`.
-- Version **5.0.0** — a migration, not an update.
+- **Rule 1 — no exception crosses the contract.** Every body of `prepare`, `establish`, `authorize`, `rejected` runs inside `safely(what, work)`: own work, collaborators and targets (`header`, `cookies`, `logonParameters`, `tlsMaterial`) that throw become Oops. Constructors may throw `ValidationError` for bad configuration.
+- **Rule 2 — a refusal never carries an error's message.** A refusal is fixed wording per error class plus metadata only from package-owned allowlists: field names in `KNOWN_CONFIG_FIELDS`; `AssertionCheck` values; system codes `ENOENT, EACCES, EPERM, ECONNREFUSED, ECONNRESET, ETIMEDOUT, ENOTFOUND, EAI_AGAIN, EPIPE`; RFC keys `RFC_COMMUNICATION_FAILURE, RFC_LOGON_FAILURE, RFC_ABAP_RUNTIME_FAILURE, RFC_ABAP_MESSAGE, RFC_EXTERNAL_FAILURE, RFC_INVALID_PARAMETER, RFC_CLOSED, RFC_TIMEOUT`; class labels by `instanceof` against the package's own constructors, else `unknown error`. A `name` property is never read. Messages go to the logger; `onTokens` failures log the class label only.
+- **Rule 3 — nothing to add is Ok.**
+- **Rule 4 — a target's Oops is the provider's to judge.** SNC and Certificate return it; Basic ignores it for logon parameters.
+- **Rule 5 — one renewal, no step twice.** `rejected()` is at most one refresh, then (refresh refused or no refresh token) one login through the injected strategy. A renewal yielding the credential last presented is Oops `"the renewal returned the credential that was refused"`. No provider retries.
+- **Rule 6 — no implicit defaults.** No `?? someDefault()` for a collaborator anywhere in a provider. Static factories are the recipes.
+- **Persistence is best effort:** `onTokens` is awaited; its failure is logged and does not fail authentication.
+- **`kind`:** token providers → `getAuthType()`; `'basic'`, `'certificate'`, `'saml'`, `'token'`, `'snc'`.
+- **`TokenAuthProvider`:** `fixed(token)` and `from(refresher)` only.
+- **`snc_qop`:** default `'9'`; allowed exactly `'1'`, `'2'`, `'3'`, `'8'`, `'9'`.
+- **Universal Mach-O:** `FAT_MAGIC` `0xcafebabe` (20-byte records) and `FAT_MAGIC_64` `0xcafebabf` (32-byte records).
+- Nothing writes to `process.stdout`.
+- Version **5.0.0**.
 
 ## Review Focus
 
-- A foreign error whose **message** contains a token (a refresher throwing `Error('token rejected: <token>')`), a thrown string with a secret, and an SDK-shaped object with a secret in a field — none may reach a refusal — tests in Tasks 1, 3, 8, 9.
-- A target whose `header` / `cookies` / `logonParameters` / `tlsMaterial` throws must give Oops, not a rejected promise — tests in Tasks 2, 3, 8, 9.
-- A renewal that returns the very token that was refused must be Oops — tests in Tasks 2 and 3.
-- `onTokens` that throws must not turn a successful login into an Oops, and must not be called on a cache hit — test in Task 2.
-- `authorize()` after the token expired must renew in that call (per attempt), not present the stale token — test in Task 2.
-- `SNC_LIB` / `SNC_LIB_64` set to an empty or whitespace string must count as unset — test in Task 6.
-- The RFC error reaching SNC's `rejected()` may be an `Error`, a string, or the SDK's plain object `{ name: 'RfcLibError', message: '…A2200019…' }` — all three recognised — test in Task 8.
+- A secret in **any** metadata slot — `missingFields`, `name`, `code`, `key`, `check` — or in a message, a thrown string, or foreign callback text wrapped in `BrowserAuthError`, must not reach a refusal — Tasks 1, 11, 12.
+- A target that throws must give Oops, not a rejected promise — Tasks 2, 6, 11, 12.
+- Refresh refused → exactly one login → Ok; login refused → Oops with no second login or refresh — Task 2.
+- A manual strategy whose reader never answers must settle with `BrowserAuthError` at `timeoutMs` and close its `readline`; `dispose()` does the same at once — Task 4.
+- Constructing a provider without its strategy / validator / presenter / locator / probes must not compile — Tasks 3, 5, 11.
 
 ## File Structure
 
 | File | Responsibility |
 |---|---|
-| `src/auth/refusal.ts` | `OK`, `oops(reason, hint?)`, `refusalFrom(error, what)`, `safely(what, work)` — the one place thrown values become refusals; own messages only |
-| `src/providers/BaseTokenProvider.ts` | + `IAuthProvider`, `TokenProviderHooks`/`onTokens`, `applyToken` |
-| `src/providers/Saml2PureProvider.ts` | `applyToken` → cookies |
-| `src/providers/*Provider.ts` (9) | configs extend `TokenProviderHooks`; `super(config)` |
-| `src/credentials/BasicAuthProvider.ts`, `SamlAuthProvider.ts`, `TokenAuthProvider.ts`, `CertificateAuthProvider.ts`, `FileCertificateMaterialLoader.ts` | the providers moved from `connection`, on the contract |
-| `src/snc/libraryArchitectures.ts` | file head → architectures (PE, Mach-O thin/fat/fat64, ELF) |
-| `src/snc/SncSystem.ts`, `src/snc/secureLoginClient.ts` | the machine seam and its parsers; SLC constants |
-| `src/snc/DefaultSncLibraryLocator.ts` | explicit or automatic library discovery |
-| `src/snc/SecureLoginClientProbe.ts` | the product probe, scoped to its own library |
-| `src/snc/sncRefusal.ts` | refused SNC logon → refusal with cause and hint |
-| `src/snc/SncLogonProvider.ts` | the SNC provider |
-| `src/__tests__/helpers/targets.ts` | recording `ILogonTarget` / `IRequestTarget` for tests |
-| `src/__tests__/snc/fakeSystem.ts` | fake `SncSystem` |
+| `src/auth/refusal.ts` | `OK`, `oops`, `refusalFrom(error, what)`, `safely(what, work)`, the allowlists |
+| `src/providers/BaseTokenProvider.ts` | + `IAuthProvider`, `TokenProviderHooks`/`onTokens`, `applyToken`, one renewal |
+| `src/providers/*Provider.ts`, `src/providers/saml2Utils.ts` | required collaborators, static factories |
+| `src/validation/assertionValidator.ts` | `replayStore` required in `ShippedValidatorOptions` |
+| `src/strategies/manualStrategies.ts` | `timeoutMs`, `dispose()`, cancellable terminal read |
+| `src/deviceCode/DeviceCodePresenter.ts` | `IDeviceCodePresenter`, `DeviceCodePrompt`, `consoleDeviceCodePresenter` |
+| `src/credentials/*.ts` | Basic, SAML, Token, Certificate, `FileCertificateMaterialLoader` |
+| `src/snc/*.ts` | architecture reader, machine seam, locator, probe, refusal, `SncLogonProvider` |
+| `src/__tests__/helpers/targets.ts`, `src/__tests__/snc/fakeSystem.ts` | test doubles |
 
 ---
 
@@ -66,20 +59,19 @@
 - Test: `src/__tests__/auth/refusal.test.ts`
 
 **Interfaces:**
-- Produces: `OK: AuthOutcome`; `oops(reason: string, hint?: string): AuthOutcome`; `refusalFrom(error: unknown, what: string): AuthOutcome`; `safely(what: string, work: () => AuthOutcome | Promise<AuthOutcome>): Promise<AuthOutcome>`; test helper `recordingTargets(options?: { acceptsLogonParameters?: boolean; acceptsTls?: boolean; throws?: boolean })` → `{ logonTarget: ILogonTarget; requestTarget: IRequestTarget; logon: { tls: ICertificateMaterial[]; params: Record<string, string>[] }; request: { headers: Record<string, string>; cookies: string[] } }`.
+- Produces: `OK: AuthOutcome`; `oops(reason: string, hint?: string): AuthOutcome`; `refusalFrom(error: unknown, what: string): AuthOutcome`; `safely(what: string, work: () => AuthOutcome | Promise<AuthOutcome>): Promise<AuthOutcome>`; `KNOWN_CONFIG_FIELDS: ReadonlySet<string>`; `KNOWN_RFC_KEYS: ReadonlySet<string>`; `ownLabel(error: unknown): string`; test helper `recordingTargets(options?: { acceptsLogonParameters?: boolean; acceptsTls?: boolean; throws?: boolean })` → `{ logonTarget; requestTarget; logon: { tls: ICertificateMaterial[]; params: Record<string, string>[] }; request: { headers: Record<string, string>; cookies: string[] } }`.
 
 - [ ] **Step 1: Branch and dependencies**
 
 ```bash
 git fetch origin && git checkout -b feat/auth-providers-5 origin/master
 npm install @mcp-abap-adt/interfaces-auth@^3.0.0 @mcp-abap-adt/interfaces-auth-sap@^1.1.0
+npm run test:check
 ```
 
-Expected: both ranges in `package.json`; `npm run test:check` PASS (nothing in `src` uses the removed `IAuthProvider` members or `IRenewableCredential`).
+Expected: both ranges in `package.json`; `test:check` PASS.
 
-- [ ] **Step 2: Test helper**
-
-`src/__tests__/helpers/targets.ts`:
+- [ ] **Step 2: Test helper** — `src/__tests__/helpers/targets.ts`:
 
 ```ts
 import type {
@@ -99,14 +91,8 @@ export interface RecordingTargetsOptions {
 }
 
 export function recordingTargets(options: RecordingTargetsOptions = {}) {
-  const logon = {
-    tls: [] as ICertificateMaterial[],
-    params: [] as Record<string, string>[],
-  };
-  const request = {
-    headers: {} as Record<string, string>,
-    cookies: [] as string[],
-  };
+  const logon = { tls: [] as ICertificateMaterial[], params: [] as Record<string, string>[] };
+  const request = { headers: {} as Record<string, string>, cookies: [] as string[] };
   const broken = () => {
     if (options.throws) throw new Error('target exploded: SECRET-IN-TARGET');
   };
@@ -123,9 +109,7 @@ export function recordingTargets(options: RecordingTargetsOptions = {}) {
     },
     logonParameters(parameters) {
       broken();
-      if (options.acceptsLogonParameters === false) {
-        return refuse('logon parameters');
-      }
+      if (options.acceptsLogonParameters === false) return refuse('logon parameters');
       logon.params.push({ ...parameters });
       return { ok: true };
     },
@@ -144,20 +128,22 @@ export function recordingTargets(options: RecordingTargetsOptions = {}) {
 }
 ```
 
-- [ ] **Step 3: Write the failing refusal test**
-
-`src/__tests__/auth/refusal.test.ts`:
+- [ ] **Step 3: Write the failing refusal test** — `src/__tests__/auth/refusal.test.ts`:
 
 ```ts
 import { describe, expect, it } from '@jest/globals';
 import { OK, oops, refusalFrom, safely } from '../../auth/refusal';
+import { AssertionValidationError } from '../../errors/AssertionValidationError';
 import {
   BrowserAuthError,
   RefreshError,
   ServiceKeyError,
   SessionDataError,
+  TokenProviderError,
   ValidationError,
 } from '../../errors/TokenProviderErrors';
+
+const text = (x: unknown) => JSON.stringify(x);
 
 describe('refusal', () => {
   it('OK and oops build the two outcomes', () => {
@@ -167,76 +153,85 @@ describe('refusal', () => {
   });
 
   it.each([
-    [new BrowserAuthError('login timed out'), /complete the login in the browser/],
-    [new RefreshError('refresh refused'), /log in again/],
-    [new ValidationError('bad config', ['clientId']), /check the provider configuration: clientId/],
-    [new ServiceKeyError('no url', ['url']), /check the service key or session data: url/],
-    [new SessionDataError('no token', ['token']), /check the service key or session data: token/],
-  ])('an own error %p keeps its message and gets its hint', (error, hint) => {
-    const outcome = refusalFrom(error, 'the provider');
-    expect(outcome).toMatchObject({ ok: false, refusal: { reason: (error as Error).message } });
-    if (!outcome.ok) expect(outcome.refusal.hint).toMatch(hint);
+    [new BrowserAuthError('SECRET-MSG'), 'the interactive login did not complete', "complete the login within the strategy's time"],
+    [new RefreshError('SECRET-MSG'), 'the refresh token was refused', 'log in again'],
+    [new ValidationError('SECRET-MSG', ['clientId']), 'the provider configuration is incomplete or invalid: clientId', 'check the provider configuration'],
+    [new ServiceKeyError('SECRET-MSG', ['uaaUrl']), 'the service key or session data is incomplete: uaaUrl', 'check the service key or session data'],
+    [new SessionDataError('SECRET-MSG', ['refreshToken']), 'the service key or session data is incomplete: refreshToken', 'check the service key or session data'],
+  ])('%p → fixed wording, never its message', (error, reason, hint) => {
+    expect(refusalFrom(error, 'it')).toEqual({ ok: false, refusal: { reason, hint } });
   });
 
-  it('a foreign error never lends its message — a secret inside it stays out', () => {
-    const outcome = refusalFrom(new Error('token rejected: SECRET-OPAQUE-TOKEN'), 'the refresher');
-    expect(outcome).toEqual({ ok: false, refusal: { reason: 'the refresher failed' } });
+  it('an assertion refusal names its check only when it is an AssertionCheck', () => {
+    expect(refusalFrom(new AssertionValidationError('issuer', 'SECRET'), 'it'))
+      .toEqual({ ok: false, refusal: { reason: 'the SAML assertion was refused (issuer)' } });
+    const forged = Object.assign(new AssertionValidationError('issuer', 'x'), { check: 'SECRET_CHECK' });
+    expect(text(refusalFrom(forged, 'it'))).not.toMatch(/SECRET/);
   });
 
-  it('a foreign error keeps only a safe class name and code', () => {
-    class AxiosError extends Error {}
-    const axios = Object.assign(new AxiosError('Request failed: Basic U0VDUkVU'), {
-      name: 'AxiosError',
-      code: 'ECONNREFUSED',
-      config: { headers: { Authorization: 'Basic U0VDUkVU' } },
-      response: { data: { access_token: 'SECRET-TOKEN' } },
+  it('foreign callback text wrapped in BrowserAuthError stays out', () => {
+    const wrapped = new BrowserAuthError('access_denied: SECRET-IDP-DESCRIPTION (https://idp/SECRET-URI)');
+    expect(text(refusalFrom(wrapped, 'it'))).not.toMatch(/SECRET/);
+  });
+
+  it('a field name not in KNOWN_CONFIG_FIELDS is dropped', () => {
+    expect(refusalFrom(new ValidationError('x', ['clientId', 'SECRET-FIELD']), 'it')).toEqual({
+      ok: false,
+      refusal: { reason: 'the provider configuration is incomplete or invalid: clientId', hint: 'check the provider configuration' },
     });
-    const text = JSON.stringify(refusalFrom(axios, 'the token endpoint'));
-    expect(text).toMatch(/the token endpoint failed \(AxiosError, ECONNREFUSED\)/);
-    expect(text).not.toMatch(/U0VDUkVU|SECRET-TOKEN/);
+    expect(refusalFrom(new ValidationError('x', ['SECRET-FIELD']), 'it')).toMatchObject({
+      refusal: { reason: 'the provider configuration is incomplete or invalid' },
+    });
   });
 
-  it('a name or code that is not plainly safe is dropped', () => {
-    const weird = Object.assign(new Error('x'), { name: 'SECRET name', code: 'secret-code' });
-    expect(refusalFrom(weird, 'it')).toEqual({ ok: false, refusal: { reason: 'it failed' } });
+  it('another own error: its class label, no message', () => {
+    expect(refusalFrom(new TokenProviderError('SECRET', 'CODE'), 'x token request'))
+      .toEqual({ ok: false, refusal: { reason: 'x token request failed (TokenProviderError)' } });
+  });
+
+  it('a foreign error: "unknown error", plus an allowlisted code only', () => {
+    const axios = Object.assign(new Error('Basic U0VDUkVU'), { name: 'AxiosError', code: 'ECONNREFUSED', response: { data: 'SECRET' } });
+    expect(refusalFrom(axios, 'the token endpoint'))
+      .toEqual({ ok: false, refusal: { reason: 'the token endpoint failed (unknown error, ECONNREFUSED)' } });
+    const forged = Object.assign(new Error('x'), { name: 'SECRETError', code: 'ESECRET' });
+    expect(refusalFrom(forged, 'it')).toEqual({ ok: false, refusal: { reason: 'it failed (unknown error)' } });
   });
 
   it('a thrown string or object lends nothing', () => {
-    expect(refusalFrom('SECRET-STRING', 'it')).toEqual({ ok: false, refusal: { reason: 'it failed' } });
-    expect(JSON.stringify(refusalFrom({ message: 'SECRET-FIELD' }, 'it'))).not.toMatch(/SECRET/);
+    expect(refusalFrom('SECRET-STRING', 'it')).toEqual({ ok: false, refusal: { reason: 'it failed (unknown error)' } });
+    expect(text(refusalFrom({ message: 'SECRET', key: 'SECRET_KEY', code: 'ENOENT' }, 'it')))
+      .toBe(text({ ok: false, refusal: { reason: 'it failed (unknown error, ENOENT)' } }));
   });
 
-  it('safely turns a sync throw, an async rejection and a returned outcome into outcomes', async () => {
-    await expect(safely('it', () => { throw new Error('SECRET'); })).resolves.toEqual({ ok: false, refusal: { reason: 'it failed' } });
-    await expect(safely('it', async () => { throw new RefreshError('refused'); })).resolves.toMatchObject({ ok: false, refusal: { reason: 'refused' } });
+  it('safely: sync throw, async rejection and a returned outcome', async () => {
+    await expect(safely('it', () => { throw new Error('SECRET'); })).resolves.toEqual({ ok: false, refusal: { reason: 'it failed (unknown error)' } });
+    await expect(safely('it', async () => { throw new RefreshError('SECRET'); })).resolves.toMatchObject({ ok: false, refusal: { reason: 'the refresh token was refused' } });
     await expect(safely('it', () => OK)).resolves.toEqual({ ok: true });
   });
 });
 ```
 
-- [ ] **Step 4: Run to see it fail**
+- [ ] **Step 4: Run to see it fail** — `npm test -- src/__tests__/auth/refusal.test.ts` → FAIL, module not found.
 
-Run: `npm test -- src/__tests__/auth/refusal.test.ts`
-Expected: FAIL — `Cannot find module '../../auth/refusal'`.
-
-- [ ] **Step 5: Implement**
-
-`src/auth/refusal.ts`:
+- [ ] **Step 5: Implement** — `src/auth/refusal.ts`:
 
 ```ts
 /**
  * How a provider in this package answers Oops — the one place thrown values
- * become refusals, so "a refusal carries no secret" is kept in one place.
+ * become refusals (spec rule 2).
  *
- * Only this package's own errors (the TokenProviderError family) lend their
- * message: those messages are written here and scrubbed by
- * describeOAuthErrorBody. Anything else is foreign text — a refresher's, a
- * loader's, axios', the RFC SDK's — and may carry exactly the secret it failed
- * on, so it gives a fixed reason with at most a plainly safe class name and
- * system code.
+ * A refusal never carries an error's message: the class of an error says
+ * nothing about what its message holds (BrowserAuthError is built from an IdP
+ * callback's text; a consumer can construct any exported class). It is fixed
+ * wording chosen per class, plus metadata only when the value is on an
+ * allowlist this package owns. A `name` property is never read.
  */
 
 import type { AuthOutcome } from '@mcp-abap-adt/interfaces-auth';
+import {
+  type AssertionCheck,
+  AssertionValidationError,
+} from '../errors/AssertionValidationError';
 import {
   BrowserAuthError,
   RefreshError,
@@ -254,45 +249,90 @@ export function oops(reason: string, hint?: string): AuthOutcome {
     : { ok: false, refusal: { reason, hint } };
 }
 
-function fields(missing: string[] | undefined): string {
-  return missing?.length ? `: ${missing.join(', ')}` : '';
+/** Every config property name this package's providers declare. */
+export const KNOWN_CONFIG_FIELDS: ReadonlySet<string> = new Set([
+  'accessToken', 'acsUrl', 'actorToken', 'actorTokenType', 'assertionValidator',
+  'audience', 'authnRequestId', 'authorization', 'authorizationEndpoint',
+  'authorizationUrl', 'certKeyPath', 'certPassphrase', 'certPath', 'certPfxPath',
+  'clientId', 'clientSecret', 'clockSkewMs', 'cookieProvider',
+  'deviceAuthorizationEndpoint', 'idpCertificates', 'idpEntityId', 'idpInitiated',
+  'idpSsoUrl', 'issuerUrl', 'locator', 'logger', 'myName', 'onTokens', 'partnerName',
+  'password', 'presenter', 'probes', 'qop', 'refreshToken', 'relayState', 'replayStore',
+  'scope', 'scopes', 'sncLib', 'spEntityId', 'subjectToken', 'subjectTokenType',
+  'tokenEndpoint', 'tokenUrl', 'uaaUrl', 'username',
+]);
+
+const ASSERTION_CHECKS: ReadonlySet<AssertionCheck> = new Set<AssertionCheck>([
+  'document', 'duplicateId', 'signature', 'signedNode', 'status', 'assertionId',
+  'issuer', 'conditions', 'notBefore', 'notOnOrAfter', 'audience',
+  'bearerConfirmation', 'destination', 'replay',
+]);
+
+const KNOWN_SYSTEM_CODES: ReadonlySet<string> = new Set([
+  'ENOENT', 'EACCES', 'EPERM', 'ECONNREFUSED', 'ECONNRESET', 'ETIMEDOUT',
+  'ENOTFOUND', 'EAI_AGAIN', 'EPIPE',
+]);
+
+export const KNOWN_RFC_KEYS: ReadonlySet<string> = new Set([
+  'RFC_COMMUNICATION_FAILURE', 'RFC_LOGON_FAILURE', 'RFC_ABAP_RUNTIME_FAILURE',
+  'RFC_ABAP_MESSAGE', 'RFC_EXTERNAL_FAILURE', 'RFC_INVALID_PARAMETER',
+  'RFC_CLOSED', 'RFC_TIMEOUT',
+]);
+
+/** Most specific first. */
+const OWN_CLASSES: ReadonlyArray<readonly [abstract new (...a: never[]) => unknown, string]> = [
+  [AssertionValidationError, 'AssertionValidationError'],
+  [BrowserAuthError, 'BrowserAuthError'],
+  [RefreshError, 'RefreshError'],
+  [ValidationError, 'ValidationError'],
+  [ServiceKeyError, 'ServiceKeyError'],
+  [SessionDataError, 'SessionDataError'],
+  [TokenProviderError, 'TokenProviderError'],
+];
+
+/** The label of one of this package's classes, by instanceof; else "unknown error". */
+export function ownLabel(error: unknown): string {
+  for (const [ctor, label] of OWN_CLASSES) {
+    if (error instanceof ctor) return label;
+  }
+  return 'unknown error';
 }
 
-/** Class name and system code, when they are plainly not a secret. */
-function safeLabels(error: unknown): string {
-  if (typeof error !== 'object' || error === null) return '';
-  const labels: string[] = [];
-  const name = (error as { name?: unknown }).name;
-  if (typeof name === 'string' && /^[A-Za-z]+Error$/.test(name)) labels.push(name);
-  const code = (error as { code?: unknown }).code;
-  if (typeof code === 'string' && /^E[A-Z]+$/.test(code)) labels.push(code);
-  return labels.length ? ` (${labels.join(', ')})` : '';
+function knownFields(missing: unknown): string {
+  if (!Array.isArray(missing)) return '';
+  const names = missing.filter((m): m is string => typeof m === 'string' && KNOWN_CONFIG_FIELDS.has(m));
+  return names.length ? `: ${names.join(', ')}` : '';
+}
+
+function systemCode(error: unknown): string {
+  const code = (error as { code?: unknown } | null)?.code;
+  return typeof code === 'string' && KNOWN_SYSTEM_CODES.has(code) ? `, ${code}` : '';
 }
 
 export function refusalFrom(error: unknown, what: string): AuthOutcome {
-  if (!(error instanceof TokenProviderError)) {
-    return oops(`${what} failed${safeLabels(error)}`);
+  if (error instanceof AssertionValidationError) {
+    const check = ASSERTION_CHECKS.has(error.check) ? ` (${error.check})` : '';
+    return oops(`the SAML assertion was refused${check}`);
   }
-  const reason = error.message;
   if (error instanceof BrowserAuthError) {
-    return oops(reason, 'complete the login in the browser within the timeout');
+    return oops('the interactive login did not complete', "complete the login within the strategy's time");
   }
   if (error instanceof RefreshError) {
-    return oops(reason, 'the refresh token was refused; log in again');
+    return oops('the refresh token was refused', 'log in again');
   }
   if (error instanceof ValidationError) {
-    return oops(reason, `check the provider configuration${fields(error.missingFields)}`);
+    return oops(`the provider configuration is incomplete or invalid${knownFields(error.missingFields)}`, 'check the provider configuration');
   }
   if (error instanceof ServiceKeyError || error instanceof SessionDataError) {
-    return oops(reason, `check the service key or session data${fields(error.missingFields)}`);
+    return oops(`the service key or session data is incomplete${knownFields(error.missingFields)}`, 'check the service key or session data');
   }
-  return oops(reason);
+  if (error instanceof TokenProviderError) {
+    return oops(`${what} failed (${ownLabel(error)})`);
+  }
+  return oops(`${what} failed (unknown error${systemCode(error)})`);
 }
 
-/**
- * The boundary every contract method runs inside: whatever the body throws —
- * own work, a collaborator, a target — comes back as an outcome.
- */
+/** The boundary every contract method runs inside (spec rule 1). */
 export async function safely(
   what: string,
   work: () => AuthOutcome | Promise<AuthOutcome>,
@@ -305,16 +345,15 @@ export async function safely(
 }
 ```
 
-- [ ] **Step 6: Run to see it pass**
+- [ ] **Step 6: Run to see it pass** — same command → PASS.
 
-Run: `npm test -- src/__tests__/auth/refusal.test.ts`
-Expected: PASS.
+- [ ] **Step 7: Load-bearing** — make `knownFields` return every string (drop the `has` filter) → "a field name not in KNOWN_CONFIG_FIELDS is dropped" FAILS. Revert.
 
-- [ ] **Step 7: Commit**
+- [ ] **Step 8: Commit**
 
 ```bash
 git add package.json package-lock.json src/auth/refusal.ts src/__tests__/helpers/targets.ts src/__tests__/auth/refusal.test.ts
-git commit -m "feat: refusals from errors — own messages only, foreign text never; interfaces-auth ^3.0.0"
+git commit -m "feat: refusals from fixed wording and package-owned allowlists; interfaces-auth ^3.0.0"
 ```
 
 ### Task 2: Token providers are `IAuthProvider`s
@@ -334,7 +373,7 @@ git commit -m "feat: refusals from errors — own messages only, foreign text ne
 ```ts
 import { describe, expect, it, jest } from '@jest/globals';
 import type { ITokenResult, OAuth2GrantType } from '@mcp-abap-adt/interfaces-auth';
-import { RefreshError } from '../../errors/TokenProviderErrors';
+import { BrowserAuthError, RefreshError } from '../../errors/TokenProviderErrors';
 import {
   BaseTokenProvider,
   type TokenProviderHooks,
@@ -421,6 +460,28 @@ describe('BaseTokenProvider as IAuthProvider', () => {
     });
   });
 
+  it('refresh refused → exactly one login → Ok', async () => {
+    const p = new TestProvider();
+    p.login.mockResolvedValueOnce(result('T1', 'R1')).mockResolvedValueOnce(result('T3', 'R3'));
+    p.refresh.mockRejectedValue(new RefreshError('refused'));
+    await p.authorize(recordingTargets().requestTarget); // login #1, presents T1
+    await expect(p.rejected(refused)).resolves.toEqual({ ok: true });
+    expect(p.refresh).toHaveBeenCalledTimes(1);
+    expect(p.login).toHaveBeenCalledTimes(2);
+  });
+
+  it('login refused → Oops, no second refresh or login', async () => {
+    const p = new TestProvider();
+    await p.authorize(recordingTargets().requestTarget); // login #1, presents T1
+    p.refresh.mockRejectedValue(new RefreshError('refused'));
+    p.login.mockRejectedValue(new BrowserAuthError('SECRET-IDP-TEXT'));
+    const outcome = await p.rejected(refused);
+    expect(outcome).toMatchObject({ ok: false, refusal: { reason: 'the interactive login did not complete' } });
+    expect(JSON.stringify(outcome)).not.toMatch(/SECRET/);
+    expect(p.refresh).toHaveBeenCalledTimes(1);
+    expect(p.login).toHaveBeenCalledTimes(2);
+  });
+
   it('a failure is an Oops, never a throw, and nothing is retried', async () => {
     const p = new TestProvider();
     p.login.mockRejectedValue(new RefreshError('refused'));
@@ -432,7 +493,7 @@ describe('BaseTokenProvider as IAuthProvider', () => {
     const p = new TestProvider();
     p.login.mockRejectedValue(new Error('invalid_grant for SECRET-CLIENT-SECRET'));
     const outcome = await p.prepare();
-    expect(outcome).toEqual({ ok: false, refusal: { reason: 'client_credentials token request failed' } });
+    expect(outcome).toEqual({ ok: false, refusal: { reason: 'client_credentials token request failed (unknown error)' } });
   });
 
   it('onTokens after a login and after a refresh, never on a cache hit', async () => {
@@ -486,7 +547,7 @@ import type {
   OAuth2GrantType,
 } from '@mcp-abap-adt/interfaces-auth';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
-import { OK, oops, safely } from '../auth/refusal';
+import { OK, oops, ownLabel, safely } from '../auth/refusal';
 
 /** What every token provider's config may carry beside its own fields. */
 export interface TokenProviderHooks {
@@ -530,7 +591,7 @@ In `refreshTokens()`, after each of the two `this.updateTokens(result);` lines a
     } catch (error) {
       // Class name only: the hook holds the tokens, its message is foreign text.
       this.logger?.warn('[BaseTokenProvider] onTokens failed; the token stands', {
-        error: error instanceof Error ? error.constructor.name : typeof error,
+        error: ownLabel(error),
       });
     }
   }
@@ -614,7 +675,7 @@ Add to the class (import the `IRequestTarget`, `ITokenResult` types):
 
 Run: `npm test -- src/__tests__/providers/tokenProviderContract.test.ts` → PASS. Then `npm run test:check && npm test` → PASS.
 
-- [ ] **Step 7: Prove three rules are load-bearing**
+- [ ] **Step 7: Prove three rules are load-bearing** (the one-renewal tests pin `refreshTokens()` as it is: one refresh, then one login)
 
 1. Remove the `await this.obtained(result)` after the refresh → "onTokens after a login and after a refresh" FAILS. Revert.
 2. Remove the `refused === result.authorizationToken` check → "Oops when the renewal returns the token that was refused" FAILS. Revert.
@@ -627,7 +688,477 @@ git add src/providers src/__tests__/providers/tokenProviderContract.test.ts
 git commit -m "feat!: every token provider is an IAuthProvider; onTokens; no Ok on an unchanged token"
 ```
 
-### Task 3: The providers moved in from `connection`
+### Task 3: Manual strategies are bounded — `timeoutMs` and `dispose()`
+
+**Files:**
+- Modify: `src/strategies/manualStrategies.ts`
+- Test: `src/__tests__/strategies/manualStrategiesTimeout.test.ts`
+
+**Interfaces:**
+- Produces: `ManualStrategyOptions` gains `timeoutMs?: number`; `read` becomes `(prompt: string, signal: AbortSignal) => Promise<string>`; `manualPasteStrategy`, `manualSamlResponseStrategy`, `manualPasscodeStrategy` return strategies with `dispose()`; on expiry or `dispose()` a pending `authorize` rejects with `BrowserAuthError` and the terminal `readline` is closed.
+
+- [ ] **Step 1: Write the failing test** — `src/__tests__/strategies/manualStrategiesTimeout.test.ts`:
+
+```ts
+import { describe, expect, it, jest } from '@jest/globals';
+import type { AuthorizationRequest } from '@mcp-abap-adt/interfaces-auth';
+import { BrowserAuthError } from '../../errors/TokenProviderErrors';
+import { manualPasscodeStrategy } from '../../strategies/manualStrategies';
+
+const request = {
+  buildAuthorizationUrl: async () => 'https://uaa/passcode',
+} as unknown as AuthorizationRequest;
+
+describe('manual strategies are bounded', () => {
+  it('a reader that never answers is abandoned at timeoutMs, and told so', async () => {
+    let seen: AbortSignal | undefined;
+    const strategy = manualPasscodeStrategy({
+      timeoutMs: 20,
+      read: (_prompt, signal) => { seen = signal; return new Promise<string>(() => {}); },
+    });
+    await expect(strategy.authorize(request)).rejects.toBeInstanceOf(BrowserAuthError);
+    expect(seen?.aborted).toBe(true);
+  });
+
+  it('dispose() ends a pending read at once', async () => {
+    const strategy = manualPasscodeStrategy({ read: () => new Promise<string>(() => {}) });
+    const pending = expect(strategy.authorize(request)).rejects.toBeInstanceOf(BrowserAuthError);
+    await strategy.dispose?.();
+    await pending;
+  });
+
+  it('a disposed strategy refuses the next authorize', async () => {
+    const strategy = manualPasscodeStrategy({ read: async () => 'code' });
+    await strategy.dispose?.();
+    await expect(strategy.authorize(request)).rejects.toBeInstanceOf(BrowserAuthError);
+  });
+
+  it('without timeoutMs there is no deadline — an answer still arrives', async () => {
+    const strategy = manualPasscodeStrategy({ read: async () => ' 123456 ' });
+    await expect(strategy.authorize(request)).resolves.toMatchObject({ payload: '123456' });
+  });
+
+  it('the terminal reader closes its readline when aborted', async () => {
+    const close = jest.fn();
+    jest.resetModules();
+    jest.doMock('node:readline', () => ({
+      createInterface: () => ({
+        close,
+        [Symbol.asyncIterator]: () => ({ next: () => new Promise(() => {}) }),
+      }),
+    }));
+    const tty = process.stdin.isTTY;
+    Object.defineProperty(process.stdin, 'isTTY', { value: true, configurable: true });
+    const write = jest.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    try {
+      const { manualPasscodeStrategy: fresh } = await import('../../strategies/manualStrategies');
+      const strategy = fresh({ timeoutMs: 20 });
+      await expect(strategy.authorize(request)).rejects.toThrow();
+      expect(close).toHaveBeenCalled();
+    } finally {
+      Object.defineProperty(process.stdin, 'isTTY', { value: tty, configurable: true });
+      write.mockRestore();
+      jest.dontMock('node:readline');
+    }
+  });
+});
+```
+
+- [ ] **Step 2: Run to see it fail** — `npm test -- src/__tests__/strategies/manualStrategiesTimeout.test.ts` → FAIL (no timeout; `dispose` undefined).
+
+- [ ] **Step 3: Implement** — in `src/strategies/manualStrategies.ts`:
+
+Options:
+
+```ts
+export interface ManualStrategyOptions {
+  /** Must match what the authorization request advertises and the exchange sends. */
+  redirectUri?: string;
+  /**
+   * Where the pasted value comes from. Defaults to an interactive stdin read.
+   * The signal aborts when the timeout expires or the strategy is disposed.
+   */
+  read?: (prompt: string, signal: AbortSignal) => Promise<string>;
+  /** Milliseconds before the read is abandoned. Absent: no deadline — the consumer's choice. */
+  timeoutMs?: number;
+}
+```
+
+The terminal reader takes the signal and closes its `readline` on abort:
+
+```ts
+async function readFromTerminal(prompt: string, signal: AbortSignal): Promise<string> {
+  if (!process.stdin.isTTY) {
+    throw new Error(
+      'Manual input needs an interactive terminal. Supply `read` to source the value elsewhere.',
+    );
+  }
+  process.stderr.write(prompt);
+  const rl = createInterface({ input: process.stdin });
+  const abort = () => rl.close();
+  signal.addEventListener('abort', abort, { once: true });
+  try {
+    for await (const line of rl) return line.trim();
+  } finally {
+    signal.removeEventListener('abort', abort);
+    rl.close();
+  }
+  throw new Error('No input received');
+}
+```
+
+One bounded wrapper shared by the three strategies (add `import { BrowserAuthError } from '../errors/TokenProviderErrors';`):
+
+```ts
+/**
+ * A manual strategy with a deadline and a dispose(): the read gets a signal,
+ * and the race settles even when a custom reader ignores it.
+ */
+function boundedManual(
+  options: ManualStrategyOptions,
+  run: (request: AuthorizationRequest, read: (prompt: string) => Promise<string>) => Promise<AuthorizationOutcome<string>>,
+): IAuthorizationStrategy<string> {
+  const read = options.read ?? readFromTerminal;
+  let disposed = false;
+  let current: AbortController | undefined;
+  return {
+    async authorize(request) {
+      if (disposed) throw new BrowserAuthError('the manual strategy was disposed');
+      const controller = new AbortController();
+      current = controller;
+      const timer =
+        options.timeoutMs === undefined
+          ? undefined
+          : setTimeout(() => controller.abort(), options.timeoutMs);
+      const abandoned = new Promise<never>((_, reject) => {
+        controller.signal.addEventListener(
+          'abort',
+          () => reject(new BrowserAuthError('the manual input did not arrive in time, or the strategy was disposed')),
+          { once: true },
+        );
+      });
+      const working = run(request, (prompt) => read(prompt, controller.signal));
+      working.catch(() => {}); // a loser of the race must not surface as unhandled
+      try {
+        return await Promise.race([working, abandoned]);
+      } finally {
+        if (timer) clearTimeout(timer);
+        if (current === controller) current = undefined;
+      }
+    },
+    async dispose() {
+      disposed = true;
+      current?.abort();
+    },
+  };
+}
+```
+
+Each of the three factories becomes `boundedManual(options, async (request, read) => { … })`, with its body unchanged except that it calls the `read` it is given: for `manualPasscodeStrategy`:
+
+```ts
+export function manualPasscodeStrategy(
+  options: ManualStrategyOptions = {},
+): IAuthorizationStrategy<string> {
+  const redirectUri = options.redirectUri ?? defaultRedirectUri();
+  return boundedManual(options, async (request, read) => {
+    const url = await request.buildAuthorizationUrl(redirectUri);
+    announce(request, url);
+    const code = (await read('Paste the Temporary Authentication Code (passcode): ')).trim();
+    if (!code) throw new Error('No passcode was provided');
+    return { payload: code, redirectUri };
+  });
+}
+```
+
+`manualPasteStrategy` and `manualSamlResponseStrategy` are rewritten the same way around their existing bodies (prompt text, `extractCode` / trim checks unchanged).
+
+- [ ] **Step 4: Run** — the new test → PASS; then `npm test -- src/__tests__/strategies` → PASS (existing manual-strategy tests that pass `read: async () => …` still compile: a one-parameter function is assignable to the two-parameter type).
+
+- [ ] **Step 5: Commit** — `git add src/strategies/manualStrategies.ts src/__tests__/strategies/manualStrategiesTimeout.test.ts && git commit -m "feat(strategies): manual strategies take timeoutMs and dispose(), closing their readline"`
+
+### Task 4: No implicit defaults — required collaborators and static factories
+
+**Files:**
+- Modify: `src/providers/AuthorizationCodeProvider.ts`, `OidcBrowserProvider.ts`, `UaaPasscodeProvider.ts`, `Saml2PureProvider.ts`, `Saml2BearerProvider.ts`, `saml2Utils.ts`; `src/validation/assertionValidator.ts`; every test file the type check flags (Step 5)
+- Test: `src/__tests__/providers/noDefaults.test.ts`
+
+**Interfaces:**
+- Consumes: Task 3's `timeoutMs` on manual strategies.
+- Produces:
+  - `authorization` required in `AuthorizationCodeProviderConfig`, `OidcBrowserProviderConfig`, `UaaPasscodeProviderConfig`, `Saml2CommonConfig`;
+  - `assertionValidator: IAssertionValidator` required in `Saml2CommonConfig`; `idpCertificates`, `clockSkewMs`, `assertionReplayStore` removed from it (they belong to building a validator); `idpEntityId` stays;
+  - `ShippedValidatorOptions.replayStore` required;
+  - `AuthorizationCodeProvider.inBrowser(config: Omit<AuthorizationCodeProviderConfig, 'authorization'>, options?: { timeoutMs?: number })`;
+  - `OidcBrowserProvider.inBrowser(config: Omit<OidcBrowserProviderConfig, 'authorization'>, options?: { timeoutMs?: number })`;
+  - `UaaPasscodeProvider.fromTerminal(config: Omit<UaaPasscodeProviderConfig, 'authorization'>, options?: { timeoutMs?: number })` — default `timeoutMs` 300 000;
+  - `Saml2PureProvider.inBrowser(config: Omit<Saml2PureProviderConfig, 'authorization' | 'assertionValidator'>, trust: SamlTrust, options?: { timeoutMs?: number })` and the same for `Saml2BearerProvider`, with `export interface SamlTrust { idpCertificates: string[]; clockSkewMs?: number; replayStore?: IAssertionReplayStore }` in `saml2Utils.ts` (`replayStore` defaults to `defaultReplayStore` in the recipe).
+
+- [ ] **Step 1: Write the failing test** — `src/__tests__/providers/noDefaults.test.ts`:
+
+```ts
+import { describe, expect, it } from '@jest/globals';
+import { AuthorizationCodeProvider } from '../../providers/AuthorizationCodeProvider';
+import { OidcBrowserProvider } from '../../providers/OidcBrowserProvider';
+import { Saml2BearerProvider } from '../../providers/Saml2BearerProvider';
+import { Saml2PureProvider } from '../../providers/Saml2PureProvider';
+import { UaaPasscodeProvider } from '../../providers/UaaPasscodeProvider';
+import { BrowserCallbackStrategy } from '../../strategies/BrowserCallbackStrategy';
+import { isShippedValidator } from '../../validation/assertionValidator';
+
+const configOf = (p: unknown) => (p as { config: Record<string, unknown> }).config;
+const uaa = { uaaUrl: 'https://uaa', clientId: 'c', clientSecret: 's' };
+const saml = {
+  idpSsoUrl: 'https://idp/sso',
+  spEntityId: 'sp',
+  idpEntityId: 'idp',
+  cookieProvider: async () => 'c=1',
+};
+const CERT = 'MIIB';
+
+describe('no implicit defaults', () => {
+  it('constructors require the collaborator (compile-time)', () => {
+    // @ts-expect-error authorization is required
+    expect(() => new AuthorizationCodeProvider({ ...uaa })).toBeDefined();
+    // @ts-expect-error authorization is required
+    expect(() => new OidcBrowserProvider({ clientId: 'c' })).toBeDefined();
+    // @ts-expect-error authorization is required
+    expect(() => new UaaPasscodeProvider({ uaaUrl: 'https://uaa', clientId: 'c' })).toBeDefined();
+    // @ts-expect-error authorization and assertionValidator are required
+    expect(() => new Saml2PureProvider({ ...saml })).toBeDefined();
+  });
+
+  it('inBrowser assembles a browser callback strategy', () => {
+    expect(configOf(AuthorizationCodeProvider.inBrowser(uaa)).authorization).toBeInstanceOf(BrowserCallbackStrategy);
+    expect(configOf(OidcBrowserProvider.inBrowser({ clientId: 'c' })).authorization).toBeInstanceOf(BrowserCallbackStrategy);
+  });
+
+  it('fromTerminal assembles a manual strategy with dispose()', () => {
+    const strategy = configOf(UaaPasscodeProvider.fromTerminal({ uaaUrl: 'https://uaa', clientId: 'c' })).authorization as { dispose?: unknown };
+    expect(typeof strategy.dispose).toBe('function');
+  });
+
+  it('the SAML recipes assemble a callback strategy and a shipped validator', () => {
+    for (const p of [
+      Saml2PureProvider.inBrowser(saml, { idpCertificates: [CERT] }),
+      Saml2BearerProvider.inBrowser({ ...saml, tokenUrl: 'https://uaa/oauth/token', clientId: 'c', clientSecret: 's' }, { idpCertificates: [CERT] }),
+    ]) {
+      expect(configOf(p).authorization).toBeInstanceOf(BrowserCallbackStrategy);
+      expect(isShippedValidator(configOf(p).assertionValidator as never)).toBe(true);
+    }
+  });
+});
+```
+
+- [ ] **Step 2: Run to see it fail** — `npm test -- src/__tests__/providers/noDefaults.test.ts` → FAIL (factories missing; the `@ts-expect-error` lines are unused).
+
+- [ ] **Step 3: Implement**
+
+1. In the four configs make `authorization` required (drop `?`); update their doc comments ("How the login is conducted. Required — see the static factories for the usual choice.").
+2. In `AuthorizationCodeProvider`, `OidcBrowserProvider`, `UaaPasscodeProvider` and `getSamlAssertion` (`saml2Utils.ts`): replace `const supplied = …; const strategy = supplied ?? xxxStrategy();` with `const strategy = this.config.authorization;` (or `config.authorization`), and delete the `finally { if (!supplied) { … dispose … } }` branch — the provider never disposes a strategy it was given. Remove the now-unused `browserCallbackStrategy` / `oidcCallbackStrategy` / `manualPasscodeStrategy` / `samlCallbackStrategy` imports.
+3. `saml2Utils.ts`: `assertionValidator: IAssertionValidator` required; delete `idpCertificates`, `clockSkewMs`, `assertionReplayStore` from `Saml2CommonConfig`; `resolveAssertionValidator(config, provider)` becomes `checkAssertionValidator(config): IAssertionValidator` — keeps the "shipped validator without `idpEntityId`" `ValidationError`, returns `config.assertionValidator`; the building branch goes. Add:
+
+```ts
+/** What a recipe needs to build a shipped validator. */
+export interface SamlTrust {
+  idpCertificates: string[];
+  clockSkewMs?: number;
+  /** Default in the recipe: the process-wide `defaultReplayStore`. */
+  replayStore?: IAssertionReplayStore;
+}
+```
+
+4. `assertionValidator.ts`: `readonly replayStore: IAssertionReplayStore;` (required) and `const store = options.replayStore;`.
+5. Static factories:
+
+```ts
+// AuthorizationCodeProvider
+  /** The usual choice: a browser login answered on a local callback. */
+  static inBrowser(
+    config: Omit<AuthorizationCodeProviderConfig, 'authorization'>,
+    options: { timeoutMs?: number } = {},
+  ): AuthorizationCodeProvider {
+    return new AuthorizationCodeProvider({
+      ...config,
+      authorization: browserCallbackStrategy({ timeoutMs: options.timeoutMs }),
+    });
+  }
+
+// OidcBrowserProvider
+  static inBrowser(
+    config: Omit<OidcBrowserProviderConfig, 'authorization'>,
+    options: { timeoutMs?: number } = {},
+  ): OidcBrowserProvider {
+    return new OidcBrowserProvider({
+      ...config,
+      authorization: oidcCallbackStrategy({ timeoutMs: options.timeoutMs }),
+    });
+  }
+
+// UaaPasscodeProvider
+  /** The passcode typed in a terminal; five minutes to paste it by default. */
+  static fromTerminal(
+    config: Omit<UaaPasscodeProviderConfig, 'authorization'>,
+    options: { timeoutMs?: number } = {},
+  ): UaaPasscodeProvider {
+    return new UaaPasscodeProvider({
+      ...config,
+      authorization: manualPasscodeStrategy({ timeoutMs: options.timeoutMs ?? 300_000 }),
+    });
+  }
+
+// Saml2PureProvider
+  static inBrowser(
+    config: Omit<Saml2PureProviderConfig, 'authorization' | 'assertionValidator'>,
+    trust: SamlTrust,
+    options: { timeoutMs?: number } = {},
+  ): Saml2PureProvider {
+    return new Saml2PureProvider({
+      ...config,
+      authorization: samlCallbackStrategy({ timeoutMs: options.timeoutMs }),
+      assertionValidator: createSignedResponseValidator({
+        idpCertificates: trust.idpCertificates,
+        clockSkewMs: trust.clockSkewMs,
+        replayStore: trust.replayStore ?? defaultReplayStore,
+      }),
+    });
+  }
+```
+
+`Saml2BearerProvider.inBrowser` is the same with `createSignedAssertionValidator`. Import the strategy factories from `../strategies`, the validators from `../validation/assertionValidator`, `defaultReplayStore` from `../validation/inMemoryReplayStore`.
+
+- [ ] **Step 4: Run the new test** — PASS.
+
+- [ ] **Step 5: Migrate the existing tests** — run `npm run test:check`; every error is a construction that relied on a removed default. Fix each by the table (no other edits):
+
+| Error at `new X({…})` | Add / change |
+|---|---|
+| `AuthorizationCodeProvider`: `authorization` missing | `authorization: browserCallbackStrategy()` — or call `AuthorizationCodeProvider.inBrowser({…})` |
+| `OidcBrowserProvider`: `authorization` missing | `authorization: oidcCallbackStrategy()` |
+| `UaaPasscodeProvider`: `authorization` missing | `authorization: manualPasscodeStrategy()` |
+| `Saml2PureProvider`: `authorization` / `assertionValidator` missing, or `idpCertificates` / `clockSkewMs` / `assertionReplayStore` unknown | `authorization: samlCallbackStrategy()` (unless the test supplies one), `assertionValidator: createSignedResponseValidator({ idpCertificates: <the test's certs>, clockSkewMs: <the test's value>, replayStore: <the test's store> ?? defaultReplayStore })`, and delete the three removed fields |
+| `Saml2BearerProvider`: same | same, with `createSignedAssertionValidator` |
+| `createSigned…Validator({…})`: `replayStore` missing | `replayStore: defaultReplayStore` (or the test's own store) |
+| an import of `resolveAssertionValidator` | `checkAssertionValidator(config)` for the "shipped validator without `idpEntityId`" cases; the cases that built a validator from `idpCertificates` move to `Saml2PureProvider.inBrowser` / `Saml2BearerProvider.inBrowser` with a `SamlTrust` |
+
+A test whose purpose was "the provider builds the default validator / refuses without `idpCertificates`" now asserts the same through the recipe (`Saml2PureProvider.inBrowser(config, { idpCertificates: [] })` → `ValidationError` from the shipped validator) — move the assertion, do not drop it. Then `npm test` → PASS.
+
+- [ ] **Step 6: Commit** — `git add src/providers src/validation src/__tests__ && git commit -m "feat!: no implicit defaults — strategies and SAML validators are constructor arguments; inBrowser / fromTerminal recipes"`
+
+### Task 5: The device-code presenter
+
+**Files:**
+- Create: `src/deviceCode/DeviceCodePresenter.ts`
+- Modify: `src/providers/OidcDeviceFlowProvider.ts`; its tests (add `presenter`)
+- Test: `src/__tests__/deviceCode/presenter.test.ts`
+
+**Interfaces:**
+- Produces: `interface DeviceCodePrompt { verificationUri: string; verificationUriComplete?: string; userCode: string; expiresInSeconds?: number }`; `interface IDeviceCodePresenter { present(prompt: DeviceCodePrompt): Promise<void> }`; `consoleDeviceCodePresenter(logger?: ILogger): IDeviceCodePresenter`; `OidcDeviceFlowProviderConfig.presenter: IDeviceCodePresenter` (required); `OidcDeviceFlowProvider.toConsole(config: Omit<OidcDeviceFlowProviderConfig, 'presenter'>)`.
+
+- [ ] **Step 1: Write the failing test** — `src/__tests__/deviceCode/presenter.test.ts`:
+
+```ts
+import { describe, expect, it, jest } from '@jest/globals';
+import { consoleDeviceCodePresenter } from '../../deviceCode/DeviceCodePresenter';
+import { OidcDeviceFlowProvider } from '../../providers/OidcDeviceFlowProvider';
+
+const prompt = { verificationUri: 'https://idp/device', verificationUriComplete: 'https://idp/device?c=AB', userCode: 'AB-CD', expiresInSeconds: 600 };
+
+describe('device-code presenter', () => {
+  it('console presenter: to the logger when there is one, never stdout', async () => {
+    const info = jest.fn();
+    const out = jest.spyOn(process.stdout, 'write');
+    await consoleDeviceCodePresenter({ info, debug: jest.fn(), warn: jest.fn(), error: jest.fn() } as never).present(prompt);
+    expect(info.mock.calls.flat().join('\n')).toMatch(/https:\/\/idp\/device[\s\S]*AB-CD/);
+    expect(out).not.toHaveBeenCalled();
+    out.mockRestore();
+  });
+
+  it('console presenter: to stderr without a logger', async () => {
+    const err = jest.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    await consoleDeviceCodePresenter().present(prompt);
+    expect(err.mock.calls.map((c) => String(c[0])).join('')).toMatch(/Enter code: AB-CD/);
+    err.mockRestore();
+  });
+
+  it('the provider requires a presenter and toConsole assembles one', () => {
+    // @ts-expect-error presenter is required
+    expect(() => new OidcDeviceFlowProvider({ clientId: 'c' })).toBeDefined();
+    const p = OidcDeviceFlowProvider.toConsole({ clientId: 'c' });
+    expect(typeof (p as unknown as { config: { presenter: { present: unknown } } }).config.presenter.present).toBe('function');
+  });
+});
+```
+
+Add to the provider's existing login test (where `initiateDeviceAuthorization` is mocked) a case that passes `presenter: { present: jest.fn(async () => {}) }` and asserts it was called with `{ verificationUri, verificationUriComplete, userCode, expiresInSeconds }` taken from the mocked response, and one where `present` throws → `prepare()` resolves to `{ ok: false, refusal: { reason: expect.stringMatching(/token request failed \(unknown error\)$/) } }` and no `userCode` in `JSON.stringify(outcome)`.
+
+- [ ] **Step 2: Run to see it fail** — `npm test -- src/__tests__/deviceCode/presenter.test.ts` → FAIL.
+
+- [ ] **Step 3: Implement** — `src/deviceCode/DeviceCodePresenter.ts`:
+
+```ts
+/**
+ * How the user learns where to go and what to enter in a device flow. Injected
+ * like a strategy: the provider hands over structured data, and the consumer's
+ * UI renders it its own way.
+ */
+
+import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
+import { announcer } from '../auth/announce';
+
+export interface DeviceCodePrompt {
+  verificationUri: string;
+  verificationUriComplete?: string;
+  userCode: string;
+  expiresInSeconds?: number;
+}
+
+export interface IDeviceCodePresenter {
+  /** Show the prompt; resolves once it has been shown. */
+  present(prompt: DeviceCodePrompt): Promise<void>;
+}
+
+/** The logger's info, or stderr without one — never stdout. */
+export function consoleDeviceCodePresenter(logger?: ILogger): IDeviceCodePresenter {
+  const announce = announcer(logger);
+  return {
+    async present(prompt) {
+      announce('OIDC device authorization');
+      announce(`Go to: ${prompt.verificationUri}`);
+      if (prompt.verificationUriComplete) announce(`Or use: ${prompt.verificationUriComplete}`);
+      announce(`Enter code: ${prompt.userCode}`);
+    },
+  };
+}
+```
+
+In `OidcDeviceFlowProvider`: add `presenter: IDeviceCodePresenter;` to the config; replace the `announcer(...)` block (the five `announce(...)` lines) with
+
+```ts
+    await this.config.presenter.present({
+      verificationUri: deviceFlow.verificationUri,
+      verificationUriComplete: deviceFlow.verificationUriComplete,
+      userCode: deviceFlow.userCode,
+      expiresInSeconds: deviceFlow.expiresIn,
+    });
+```
+
+and add
+
+```ts
+  /** The usual choice: print the prompt to the logger, or stderr. */
+  static toConsole(config: Omit<OidcDeviceFlowProviderConfig, 'presenter'>): OidcDeviceFlowProvider {
+    return new OidcDeviceFlowProvider({ ...config, presenter: consoleDeviceCodePresenter(config.logger) });
+  }
+```
+
+Remove the `announcer` import if unused. In the provider's existing tests add `presenter: consoleDeviceCodePresenter()` (or a `jest.fn` presenter) to each construction the type check flags.
+
+- [ ] **Step 4: Run** — the new test and `npm test -- src/__tests__/providers` → PASS.
+
+- [ ] **Step 5: Commit** — `git add src/deviceCode src/providers/OidcDeviceFlowProvider.ts src/__tests__ && git commit -m "feat!: the device-code prompt is an injected presenter; toConsole recipe"`
+
+### Task 6: The providers moved in from `connection`
 
 **Files:**
 - Create: `src/credentials/BasicAuthProvider.ts`, `src/credentials/SamlAuthProvider.ts`, `src/credentials/TokenAuthProvider.ts`, `src/credentials/CertificateAuthProvider.ts`, `src/credentials/FileCertificateMaterialLoader.ts`
@@ -635,7 +1166,7 @@ git commit -m "feat!: every token provider is an IAuthProvider; onTokens; no Ok 
 
 **Interfaces:**
 - Consumes: `OK`, `oops`, `safely`; `recordingTargets`.
-- Produces: `BasicAuthProvider(username: string, password: string)`; `SamlAuthProvider(sessionCookies: string)`; `TokenAuthProvider.fixed(token: string)`, `TokenAuthProvider.from(refresher: ITokenRefresher)`; `CertificateAuthProvider(loader: ICertificateMaterialLoader, config: ISapConfig)`; `FileCertificateMaterialLoader` implementing `ICertificateMaterialLoader`, throwing `ValidationError` for configuration errors.
+- Produces: `CertificateAuthProvider.fromFiles(config: ISapConfig)`; `BasicAuthProvider(username: string, password: string)`; `SamlAuthProvider(sessionCookies: string)`; `TokenAuthProvider.fixed(token: string)`, `TokenAuthProvider.from(refresher: ITokenRefresher)`; `CertificateAuthProvider(loader: ICertificateMaterialLoader, config: ISapConfig)`; `FileCertificateMaterialLoader` implementing `ICertificateMaterialLoader`, throwing `ValidationError` for configuration errors.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -740,7 +1271,7 @@ describe('TokenAuthProvider', () => {
       refreshToken: async () => { throw new Error('refresh failed for SECRET-REFRESH'); },
     });
     for (const outcome of [await p.authorize(recordingTargets().requestTarget), await p.rejected(refusal)]) {
-      expect(outcome).toMatchObject({ ok: false, refusal: { reason: 'the token source failed' } });
+      expect(outcome).toMatchObject({ ok: false, refusal: { reason: 'the token source failed (unknown error)' } });
       expect(JSON.stringify(outcome)).not.toMatch(/SECRET/);
     }
   });
@@ -757,13 +1288,16 @@ describe('CertificateAuthProvider', () => {
     expect(t.logon.tls).toEqual([{ cert: 'C', key: 'K' }]);
   });
 
-  it('an own loader error keeps its message; a foreign one gives the fixed reason with its code', async () => {
-    const own = new CertificateAuthProvider({ load: async () => { throw new ValidationError('provide PEM or PFX, not both'); } }, config);
-    await expect(own.prepare()).resolves.toMatchObject({ ok: false, refusal: { reason: 'provide PEM or PFX, not both' } });
+  it('a loader ValidationError gives the fixed wording with known field names; a foreign one gives its code only', async () => {
+    const own = new CertificateAuthProvider({ load: async () => { throw new ValidationError('SECRET-MSG', ['certPath', 'certPfxPath']); } }, config);
+    await expect(own.prepare()).resolves.toEqual({
+      ok: false,
+      refusal: { reason: 'the provider configuration is incomplete or invalid: certPath, certPfxPath', hint: 'check the provider configuration' },
+    });
     const fsError = Object.assign(new Error("ENOENT: no such file 'C:\\\\SECRET\\\\key.pem'"), { code: 'ENOENT' });
     const foreign = new CertificateAuthProvider({ load: async () => { throw fsError; } }, config);
     const outcome = await foreign.prepare();
-    expect(outcome).toEqual({ ok: false, refusal: { reason: 'loading the certificate failed (ENOENT)' } });
+    expect(outcome).toEqual({ ok: false, refusal: { reason: 'loading the certificate failed (unknown error, ENOENT)' } });
   });
 
   it('returns the target Oops when the wire has no TLS; a throwing target is an Oops', async () => {
@@ -779,6 +1313,13 @@ describe('CertificateAuthProvider', () => {
   it('establish before prepare is an Oops, not a throw', async () => {
     const p = new CertificateAuthProvider({ load: async () => ({}) }, config);
     await expect(p.establish(recordingTargets().logonTarget)).resolves.toMatchObject({ ok: false });
+  });
+});
+
+describe('CertificateAuthProvider.fromFiles', () => {
+  it('assembles a FileCertificateMaterialLoader', () => {
+    const p = CertificateAuthProvider.fromFiles({ url: 'https://h', authType: 'certificate' } as ISapConfig);
+    expect((p as unknown as { loader: unknown }).loader).toBeInstanceOf(FileCertificateMaterialLoader);
   });
 });
 
@@ -976,6 +1517,7 @@ import type {
 } from '@mcp-abap-adt/interfaces-auth';
 import type { ICertificateMaterialLoader, ISapConfig } from '@mcp-abap-adt/interfaces-auth-sap';
 import { OK, oops, safely } from '../auth/refusal';
+import { FileCertificateMaterialLoader } from './FileCertificateMaterialLoader';
 
 /** A client certificate, presented in the TLS handshake of each logon. */
 export class CertificateAuthProvider implements IAuthProvider {
@@ -1009,6 +1551,11 @@ export class CertificateAuthProvider implements IAuthProvider {
     });
   }
 
+  /** The usual choice: PEM or PFX files named in the config. */
+  static fromFiles(config: ISapConfig): CertificateAuthProvider {
+    return new CertificateAuthProvider(new FileCertificateMaterialLoader(), config);
+  }
+
   async authorize(_request: IRequestTarget): Promise<AuthOutcome> {
     return OK;
   }
@@ -1034,7 +1581,7 @@ git add src/credentials src/__tests__/credentials
 git commit -m "feat: Basic, SAML, Token and Certificate providers on the contract (moved from connection)"
 ```
 
-### Task 4: SNC — library architecture reader
+### Task 7: SNC — library architecture reader
 
 **Files:**
 - Create: `src/snc/libraryArchitectures.ts`
@@ -1181,7 +1728,7 @@ export function libraryArchitectures(head: Buffer): SncArch[] {
 
 - [ ] **Step 5: Commit** — `git add src/snc/libraryArchitectures.ts src/__tests__/snc/libraryArchitectures.test.ts && git commit -m "feat(snc): read a library's architectures from its header"`
 
-### Task 5: SNC — the machine seam
+### Task 8: SNC — the machine seam
 
 **Files:**
 - Create: `src/snc/SncSystem.ts`, `src/snc/secureLoginClient.ts`, `src/__tests__/snc/fakeSystem.ts`
@@ -1384,7 +1931,7 @@ export function peLibrary(arch: 'ia32' | 'x64'): Buffer {
 
 - [ ] **Step 5: Commit** — `git add src/snc/SncSystem.ts src/snc/secureLoginClient.ts src/__tests__/snc && git commit -m "feat(snc): the machine seam and its parsers"`
 
-### Task 6: SNC — library discovery
+### Task 9: SNC — library discovery
 
 **Files:**
 - Create: `src/snc/DefaultSncLibraryLocator.ts`
@@ -1580,7 +2127,7 @@ export class DefaultSncLibraryLocator implements ISncLibraryLocator {
 - [ ] **Step 5: Load-bearing** — replace `skipped.push(...)` with `throw new ValidationError(result.reason, ['sncLib']);` → "the measured mix" FAILS. Revert.
 - [ ] **Step 6: Commit** — `git add src/snc/DefaultSncLibraryLocator.ts src/__tests__/snc/DefaultSncLibraryLocator.test.ts && git commit -m "feat(snc): find the library — explicit fails loudly, discovery skips the unusable"`
 
-### Task 7: SNC — the Secure Login Client probe
+### Task 10: SNC — the Secure Login Client probe
 
 **Files:**
 - Create: `src/snc/SecureLoginClientProbe.ts`
@@ -1724,24 +2271,25 @@ export class SecureLoginClientProbe implements ISncProductProbe {
 - [ ] **Step 4: Run to see it pass** — same command → PASS.
 - [ ] **Step 5: Commit** — `git add src/snc/SecureLoginClientProbe.ts src/__tests__/snc/SecureLoginClientProbe.test.ts && git commit -m "feat(snc): probe the Secure Login Client, only for its own library"`
 
-### Task 8: `SncLogonProvider`
+### Task 11: `SncLogonProvider`
 
 **Files:**
 - Create: `src/snc/sncRefusal.ts`, `src/snc/SncLogonProvider.ts`
 - Test: `src/__tests__/snc/SncLogonProvider.test.ts`
 
 **Interfaces:**
-- Consumes: Tasks 1, 5–7.
-- Produces: `sncRefusal(error: unknown, context: { library?: SncLibrary; product?: string }): IAuthRefusal`; `interface SncLogonProviderConfig { partnerName: string; qop?: string; sncLib?: string; myName?: string; system?: SncSystem; locator?: ISncLibraryLocator; probes?: ISncProductProbe[]; logger?: ILogger }`; `class SncLogonProvider implements IAuthProvider`.
+- Consumes: Task 1 (`OK`, `oops`, `safely`, `KNOWN_RFC_KEYS`), Tasks 8–10.
+- Produces: `sncRefusal(error: unknown, context: { library?: SncLibrary; product?: string }): IAuthRefusal`; `interface SncLogonProviderConfig { partnerName: string; qop?: string; myName?: string; locator: ISncLibraryLocator; probes: ISncProductProbe[]; logger?: ILogger }`; `class SncLogonProvider implements IAuthProvider` with `static forSecureLoginClient(options: { partnerName: string; qop?: string; sncLib?: string; myName?: string; logger?: ILogger }): SncLogonProvider`.
 
-- [ ] **Step 1: Write the failing test**
-
-`src/__tests__/snc/SncLogonProvider.test.ts`:
+- [ ] **Step 1: Write the failing test** — `src/__tests__/snc/SncLogonProvider.test.ts`:
 
 ```ts
 import { describe, expect, it } from '@jest/globals';
 import { ValidationError } from '../../errors/TokenProviderErrors';
+import { DefaultSncLibraryLocator } from '../../snc/DefaultSncLibraryLocator';
+import { SecureLoginClientProbe } from '../../snc/SecureLoginClientProbe';
 import { SncLogonProvider } from '../../snc/SncLogonProvider';
+import type { SncSystem } from '../../snc/SncSystem';
 import { recordingTargets } from '../helpers/targets';
 import { fakeSystem, peLibrary } from './fakeSystem';
 
@@ -1750,26 +2298,46 @@ const KRB = 'C:\\Windows\\System32\\gsskrb5.dll';
 const REGISTRY = { 'HKLM\\Software\\SAP\\SecureLogin\\InstallPath64': 'C:\\Program Files\\SAP\\FrontEnd\\SecureLogin\\' };
 const machine = (processes: string[]) =>
   fakeSystem({ files: { [SLC]: peLibrary('x64'), [KRB]: peLibrary('x64') }, registry: REGISTRY, processes });
+/** What forSecureLoginClient assembles, on a fake machine. */
+const snc = (system: SncSystem, extra: { sncLib?: string; qop?: string; myName?: string } = {}) =>
+  new SncLogonProvider({
+    partnerName: 'p:CN=SID',
+    qop: extra.qop,
+    myName: extra.myName,
+    locator: new DefaultSncLibraryLocator(system, extra.sncLib),
+    probes: [new SecureLoginClientProbe(system)],
+  });
 const sdkError = {
   name: 'RfcLibError',
   message: '\nERROR       GSS-API(maj): Miscellaneous failure\n            GSS-API(min): A2200019:Operation aborted by user or\n',
 };
 
 describe('construction', () => {
+  const parts = (s: SncSystem) => ({ locator: new DefaultSncLibraryLocator(s), probes: [] });
   it('requires partnerName', () => {
-    expect(() => new SncLogonProvider({ partnerName: ' ', system: machine([]) })).toThrow(ValidationError);
+    expect(() => new SncLogonProvider({ partnerName: ' ', ...parts(machine([])) })).toThrow(ValidationError);
   });
   it.each(['0', '4', '5', '6', '7', '10', 'max', ''])('refuses qop %p', (qop) => {
-    expect(() => new SncLogonProvider({ partnerName: 'p:CN=SID', qop, system: machine([]) })).toThrow(/qop/);
+    expect(() => new SncLogonProvider({ partnerName: 'p:CN=SID', qop, ...parts(machine([])) })).toThrow(/qop/);
   });
   it.each(['1', '2', '3', '8', '9'])('accepts qop %p', (qop) => {
-    expect(() => new SncLogonProvider({ partnerName: 'p:CN=SID', qop, system: machine([]) })).not.toThrow();
+    expect(() => new SncLogonProvider({ partnerName: 'p:CN=SID', qop, ...parts(machine([])) })).not.toThrow();
+  });
+  it('locator and probes are required (compile-time)', () => {
+    // @ts-expect-error locator and probes are required
+    expect(() => new SncLogonProvider({ partnerName: 'p:CN=SID' })).toBeDefined();
+  });
+  it('forSecureLoginClient assembles the locator and the Secure Login Client probe', () => {
+    const p = SncLogonProvider.forSecureLoginClient({ partnerName: 'p:CN=SID' }) as unknown as { locator: unknown; probes: unknown[] };
+    expect(p.locator).toBeInstanceOf(DefaultSncLibraryLocator);
+    expect(p.probes).toHaveLength(1);
+    expect(p.probes[0]).toBeInstanceOf(SecureLoginClientProbe);
   });
 });
 
 describe('the four moments', () => {
   it('prepare → establish writes the SNC parameters, no user or passwd', async () => {
-    const p = new SncLogonProvider({ partnerName: 'p:CN=SID', system: machine(['sbus.exe']) });
+    const p = snc(machine(['sbus.exe']));
     await expect(p.prepare()).resolves.toEqual({ ok: true });
     const t = recordingTargets();
     await expect(p.establish(t.logonTarget)).resolves.toEqual({ ok: true });
@@ -1778,32 +2346,57 @@ describe('the four moments', () => {
     expect(t.request).toEqual({ headers: {}, cookies: [] });
   });
   it('snc_myname only when configured', async () => {
-    const p = new SncLogonProvider({ partnerName: 'p:CN=SID', myName: 'p:CN=ME', qop: '8', system: machine(['sbus.exe']) });
+    const p = snc(machine(['sbus.exe']), { myName: 'p:CN=ME', qop: '8' });
     await p.prepare();
     const t = recordingTargets();
     await p.establish(t.logonTarget);
     expect(t.logon.params[0]).toMatchObject({ snc_myname: 'p:CN=ME', snc_qop: '8' });
   });
   it('an HTTP wire: the target Oops is SNC’s own', async () => {
-    const p = new SncLogonProvider({ partnerName: 'p:CN=SID', system: machine(['sbus.exe']) });
+    const p = snc(machine(['sbus.exe']));
     await p.prepare();
     await expect(p.establish(recordingTargets({ acceptsLogonParameters: false }).logonTarget))
       .resolves.toMatchObject({ ok: false, refusal: { reason: 'this wire does not take logon parameters' } });
   });
+  it('a throwing target is an Oops', async () => {
+    const p = snc(machine(['sbus.exe']));
+    await p.prepare();
+    const outcome = await p.establish(recordingTargets({ throws: true }).logonTarget);
+    expect(outcome.ok).toBe(false);
+    expect(JSON.stringify(outcome)).not.toMatch(/SECRET-IN-TARGET/);
+  });
   it('establish before prepare is an Oops', async () => {
-    const p = new SncLogonProvider({ partnerName: 'p:CN=SID', system: machine(['sbus.exe']) });
-    await expect(p.establish(recordingTargets().logonTarget)).resolves.toMatchObject({ ok: false });
+    await expect(snc(machine(['sbus.exe'])).establish(recordingTargets().logonTarget)).resolves.toMatchObject({ ok: false });
   });
-  it('SLC library, client not running → prepare Oops with a hint', async () => {
-    const outcome = await new SncLogonProvider({ partnerName: 'p:CN=SID', system: machine([]) }).prepare();
-    expect(outcome).toMatchObject({ ok: false, refusal: { reason: expect.stringMatching(/not running/), hint: expect.stringMatching(/Start the SAP Secure Login Client/) } });
+  it('SLC library, client not running → fixed reason and hint', async () => {
+    await expect(snc(machine([])).prepare()).resolves.toEqual({
+      ok: false,
+      refusal: {
+        reason: 'the SAP Secure Login Client is not running or could not be checked',
+        hint: 'Start the SAP Secure Login Client and log on to the profile used for SAP applications',
+      },
+    });
   });
-  it('non-SLC library, no SLC process → prepare Ok, no probe', async () => {
-    await expect(new SncLogonProvider({ partnerName: 'p:CN=SID', sncLib: KRB, system: machine([]) }).prepare()).resolves.toEqual({ ok: true });
+  it('non-SLC library, no SLC process → Ok, no probe', async () => {
+    await expect(snc(machine([]), { sncLib: KRB }).prepare()).resolves.toEqual({ ok: true });
   });
-  it('no usable library → prepare Oops naming sncLib', async () => {
-    await expect(new SncLogonProvider({ partnerName: 'p:CN=SID', system: fakeSystem({ platform: 'linux' }) }).prepare())
-      .resolves.toMatchObject({ ok: false, refusal: { hint: expect.stringMatching(/sncLib/) } });
+  it('no usable library → fixed reason naming sncLib in the hint; the candidates go to the log only', async () => {
+    const outcome = await snc(fakeSystem({ platform: 'linux' })).prepare();
+    expect(outcome).toEqual({
+      ok: false,
+      refusal: {
+        reason: 'no usable SNC library was found',
+        hint: 'set sncLib to the SNC (GSS) library of your SNC product; the log lists every candidate tried',
+      },
+    });
+  });
+  it('a custom locator throwing a foreign error lends no message', async () => {
+    const p = new SncLogonProvider({
+      partnerName: 'p:CN=SID',
+      locator: { locate: async () => { throw new Error('vault said SECRET-VAULT'); } },
+      probes: [],
+    });
+    expect(JSON.stringify(await p.prepare())).not.toMatch(/SECRET/);
   });
 });
 
@@ -1813,7 +2406,7 @@ describe('rejected', () => {
     ['an Error', new Error(`Failed to open RFC connection: ${JSON.stringify(sdkError)}`)],
     ['a string', 'GSS-API(min): A2200019:Operation aborted'],
   ])('A2200019 in %s → log on in the Secure Login Client', async (_, error) => {
-    const p = new SncLogonProvider({ partnerName: 'p:CN=SID', system: machine(['sbus.exe']) });
+    const p = snc(machine(['sbus.exe']));
     await p.prepare();
     await expect(p.rejected({ at: 'logon', error })).resolves.toMatchObject({
       ok: false,
@@ -1821,75 +2414,50 @@ describe('rejected', () => {
     });
   });
   it('another library: names it, not the Secure Login Client', async () => {
-    const p = new SncLogonProvider({ partnerName: 'p:CN=SID', sncLib: KRB, system: machine([]) });
+    const p = snc(machine([]), { sncLib: KRB });
     await p.prepare();
-    const outcome = await p.rejected({ at: 'logon', error: sdkError });
-    expect(JSON.stringify(outcome)).toMatch(/gsskrb5\.dll/);
-    expect(JSON.stringify(outcome)).not.toMatch(/Secure Login Client/);
+    const outcome = JSON.stringify(await p.rejected({ at: 'logon', error: sdkError }));
+    expect(outcome).toMatch(/gsskrb5\.dll/);
+    expect(outcome).not.toMatch(/Secure Login Client/);
   });
   it('SNCERR_INIT names the library and its architecture', async () => {
-    const p = new SncLogonProvider({ partnerName: 'p:CN=SID', system: machine(['sbus.exe']) });
+    const p = snc(machine(['sbus.exe']));
     await p.prepare();
-    const outcome = await p.rejected({ at: 'logon', error: new Error('SNCERR_INIT, gssapi library invalid/missing') });
-    expect(outcome).toMatchObject({ ok: false, refusal: { reason: expect.stringMatching(/sapcrypto\.dll \(x64\)/) } });
+    await expect(p.rejected({ at: 'logon', error: new Error('SNCERR_INIT, gssapi library invalid/missing') }))
+      .resolves.toMatchObject({ ok: false, refusal: { reason: expect.stringMatching(/sapcrypto\.dll \(x64\)/) } });
   });
-  it('anything else: a fixed reason, the SDK key at most, never the message or fields', async () => {
-    const p = new SncLogonProvider({ partnerName: 'p:CN=SID', system: machine(['sbus.exe']) });
+  it('anything else: fixed reason, an allowlisted key only', async () => {
+    const p = snc(machine(['sbus.exe']));
     await p.prepare();
-    const outcome = await p.rejected({
-      at: 'logon',
-      error: { name: 'RfcLibError', key: 'RFC_LOGON_FAILURE', message: 'user SECRET-USER', detail: 'SECRET-FIELD' },
-    });
-    expect(outcome).toEqual({ ok: false, refusal: { reason: 'SNC logon refused (RFC_LOGON_FAILURE)' } });
+    await expect(p.rejected({ at: 'logon', error: { key: 'RFC_LOGON_FAILURE', message: 'SECRET-SDK', detail: 'SECRET' } }))
+      .resolves.toEqual({ ok: false, refusal: { reason: 'SNC logon refused (RFC_LOGON_FAILURE)' } });
+    await expect(p.rejected({ at: 'logon', error: { key: 'SECRET_TOKEN_KEY', message: 'x' } }))
+      .resolves.toEqual({ ok: false, refusal: { reason: 'SNC logon refused' } });
     await expect(p.rejected({ at: 'logon', error: new Error('SECRET-IN-MESSAGE') }))
       .resolves.toEqual({ ok: false, refusal: { reason: 'SNC logon refused' } });
-  });
-});
-
-describe('no exception, no foreign text', () => {
-  it('a throwing target is an Oops', async () => {
-    const p = new SncLogonProvider({ partnerName: 'p:CN=SID', system: machine(['sbus.exe']) });
-    await p.prepare();
-    const outcome = await p.establish(recordingTargets({ throws: true }).logonTarget);
-    expect(outcome).toMatchObject({ ok: false });
-    expect(JSON.stringify(outcome)).not.toMatch(/SECRET-IN-TARGET/);
-  });
-  it('a custom locator throwing a foreign error lends no message', async () => {
-    const p = new SncLogonProvider({
-      partnerName: 'p:CN=SID',
-      system: machine([]),
-      locator: { locate: async () => { throw new Error('vault said SECRET-VAULT'); } },
-    });
-    const outcome = await p.prepare();
-    expect(outcome).toMatchObject({ ok: false, refusal: { reason: 'finding the SNC library failed' } });
-    expect(JSON.stringify(outcome)).not.toMatch(/SECRET-VAULT/);
   });
 });
 ```
 
 - [ ] **Step 2: Run to see it fail** — `npm test -- src/__tests__/snc/SncLogonProvider.test.ts` → FAIL.
 
-- [ ] **Step 3: Implement**
-
-`src/snc/sncRefusal.ts`:
+- [ ] **Step 3: Implement** — `src/snc/sncRefusal.ts`:
 
 ```ts
 /**
  * What a refused SNC logon means. The RFC SDK reports both common failures as
  * a generic communication error; the cause is in the GSS text. Measured:
- * `A2200019` — the SNC library has no credential (profile not logged on, or
- * the certificate expired); `SNCERR_INIT` — the SDK could not load the library.
- *
- * The SDK's text is read to recognise those codes and never copied into the
- * refusal: it is foreign text. Only fixed wording, the library this provider
- * resolved itself, and the SDK's error key (`RFC_LOGON_FAILURE`) go out.
+ * `A2200019` — no credential to present; `SNCERR_INIT` — the library could not
+ * be loaded. The text is searched, never copied: only fixed wording, the
+ * library this provider resolved, and an allowlisted SDK key go out (rule 2).
  */
 
 import type { IAuthRefusal } from '@mcp-abap-adt/interfaces-auth';
+import { KNOWN_RFC_KEYS } from '../auth/refusal';
 import type { SncLibrary } from './DefaultSncLibraryLocator';
 import { SECURE_LOGIN_CLIENT } from './secureLoginClient';
 
-/** The text to search for GSS codes — never returned to anyone. */
+/** The text to search for GSS codes — never returned. */
 function searchable(error: unknown): string {
   if (error instanceof Error) return error.message;
   if (typeof error === 'string') return error;
@@ -1899,7 +2467,7 @@ function searchable(error: unknown): string {
 
 function sdkKey(error: unknown): string {
   const key = (error as { key?: unknown } | null)?.key;
-  return typeof key === 'string' && /^[A-Z_]+$/.test(key) ? ` (${key})` : '';
+  return typeof key === 'string' && KNOWN_RFC_KEYS.has(key) ? ` (${key})` : '';
 }
 
 export function sncRefusal(
@@ -1931,10 +2499,10 @@ export function sncRefusal(
 ```ts
 /**
  * Passwordless RFC logon through an installed SNC product. The SNC library
- * (for the SAP Secure Login Client, `sapcrypto`) authenticates during the RFC
- * logon itself; this provider finds it, checks the product when it can, and
- * hands the wire the logon parameters. It opens no connection and loads no
- * SAP library.
+ * authenticates during the RFC logon itself; this provider finds it (through
+ * the locator it is given), checks the product when a probe applies, and hands
+ * the wire the logon parameters. It opens no connection and loads no SAP
+ * library. No collaborator is defaulted: forSecureLoginClient is the recipe.
  */
 
 import type {
@@ -1945,11 +2513,11 @@ import type {
   IRequestTarget,
 } from '@mcp-abap-adt/interfaces-auth';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
-import { OK, oops, refusalFrom, safely } from '../auth/refusal';
+import { OK, oops, safely } from '../auth/refusal';
 import { ValidationError } from '../errors/TokenProviderErrors';
 import { DefaultSncLibraryLocator, type ISncLibraryLocator, type SncLibrary } from './DefaultSncLibraryLocator';
 import { type ISncProductProbe, SecureLoginClientProbe } from './SecureLoginClientProbe';
-import { nodeSncSystem, type SncSystem } from './SncSystem';
+import { nodeSncSystem } from './SncSystem';
 import { sncRefusal } from './sncRefusal';
 
 /** SAP's SNC_QOP values: 1 authentication, 2 integrity, 3 privacy, 8 default, 9 maximum. */
@@ -1960,22 +2528,16 @@ export interface SncLogonProviderConfig {
   partnerName: string;
   /** `'1' | '2' | '3' | '8' | '9'`; default `'9'` (maximum available). */
   qop?: string;
-  /** The SNC library. Only this one is tried when set. */
-  sncLib?: string;
   /** Sent as `snc_myname` only when set. */
   myName?: string;
-  system?: SncSystem;
-  locator?: ISncLibraryLocator;
-  /** Default: the Secure Login Client probe. `[]` for no product check. */
-  probes?: ISncProductProbe[];
+  /** Where the SNC library is. Required. */
+  locator: ISncLibraryLocator;
+  /** Product checks; `[]` for none. Required. */
+  probes: ISncProductProbe[];
   logger?: ILogger;
 }
 
-/** A refusal from a thrown value (own message or fixed reason), with this provider's hint. */
-function refusedWith(error: unknown, what: string, hint: string): AuthOutcome {
-  const outcome = refusalFrom(error, what);
-  return outcome.ok ? outcome : oops(outcome.refusal.reason, hint);
-}
+const detail = (error: unknown) => (error instanceof Error ? error.message : String(error));
 
 export class SncLogonProvider implements IAuthProvider {
   readonly kind = 'snc';
@@ -1995,18 +2557,33 @@ export class SncLogonProvider implements IAuthProvider {
     }
     const qop = config.qop ?? '9';
     if (!SNC_QOP_VALUES.includes(qop)) {
-      throw new ValidationError(
-        `SncLogonProvider: qop must be one of ${SNC_QOP_VALUES.join(', ')} (SAP's SNC_QOP values), got '${qop}'.`,
-        ['qop'],
-      );
+      throw new ValidationError(`SncLogonProvider: qop must be one of ${SNC_QOP_VALUES.join(', ')}, got '${qop}'.`, ['qop']);
     }
-    const system = config.system ?? nodeSncSystem();
     this.partnerName = partnerName;
     this.qop = qop;
     this.myName = config.myName?.trim() || undefined;
-    this.locator = config.locator ?? new DefaultSncLibraryLocator(system, config.sncLib);
-    this.probes = config.probes ?? [new SecureLoginClientProbe(system)];
+    this.locator = config.locator;
+    this.probes = config.probes;
     this.logger = config.logger;
+  }
+
+  /** The usual choice: this machine, library discovery, the Secure Login Client probe. */
+  static forSecureLoginClient(options: {
+    partnerName: string;
+    qop?: string;
+    sncLib?: string;
+    myName?: string;
+    logger?: ILogger;
+  }): SncLogonProvider {
+    const system = nodeSncSystem();
+    return new SncLogonProvider({
+      partnerName: options.partnerName,
+      qop: options.qop,
+      myName: options.myName,
+      logger: options.logger,
+      locator: new DefaultSncLibraryLocator(system, options.sncLib),
+      probes: [new SecureLoginClientProbe(system)],
+    });
   }
 
   async prepare(): Promise<AuthOutcome> {
@@ -2014,7 +2591,11 @@ export class SncLogonProvider implements IAuthProvider {
     try {
       library = await this.locator.locate();
     } catch (error) {
-      return refusedWith(error, 'finding the SNC library', 'set sncLib to the SNC (GSS) library of your SNC product');
+      this.logger?.warn(`SNC library not found: ${detail(error)}`);
+      return oops(
+        'no usable SNC library was found',
+        'set sncLib to the SNC (GSS) library of your SNC product; the log lists every candidate tried',
+      );
     }
     let product: string | undefined;
     for (const probe of this.probes) {
@@ -2024,27 +2605,23 @@ export class SncLogonProvider implements IAuthProvider {
         product = probe.product;
         break;
       } catch (error) {
-        return refusedWith(
-          error,
-          `checking the ${probe.product}`,
+        this.logger?.warn(`${probe.product} check failed: ${detail(error)}`);
+        return oops(
+          `the ${probe.product} is not running or could not be checked`,
           `Start the ${probe.product} and log on to the profile used for SAP applications`,
         );
       }
     }
     this.library = library;
     this.product = product;
-    this.logger?.debug(
-      `SNC library ${library.path} (${library.archs.join('/')})${product ? `, ${product} running` : ', no product check'}`,
-    );
+    this.logger?.debug(`SNC library ${library.path} (${library.archs.join('/')})${product ? `, ${product} running` : ', no product check'}`);
     return OK;
   }
 
   /** No other way in: the wire's answer is this provider's own. */
   async establish(logon: ILogonTarget): Promise<AuthOutcome> {
     const library = this.library;
-    if (!library) {
-      return oops('the SNC provider is not prepared', 'connect() prepares it first');
-    }
+    if (!library) return oops('the SNC provider is not prepared', 'connect() prepares it first');
     return safely('handing over the SNC logon parameters', () => {
       const params: Record<string, string> = {
         snc_mode: '1',
@@ -2071,41 +2648,42 @@ export class SncLogonProvider implements IAuthProvider {
 ```
 
 - [ ] **Step 4: Run to see it pass** — same command → PASS.
-- [ ] **Step 5: Load-bearing** — in `prepare()`, drop the `appliesTo` condition (always `check()`) → "non-SLC library, no SLC process" FAILS. Revert.
-- [ ] **Step 6: Commit** — `git add src/snc/sncRefusal.ts src/snc/SncLogonProvider.ts src/__tests__/snc/SncLogonProvider.test.ts && git commit -m "feat(snc): SncLogonProvider — SNC logon parameters, explained refusals"`
+- [ ] **Step 5: Load-bearing** — in `prepare()`, drop the `appliesTo` condition → "non-SLC library, no SLC process" FAILS. Revert. Make `sdkKey` accept any `/^[A-Z_]+$/` → the `SECRET_TOKEN_KEY` case FAILS. Revert.
+- [ ] **Step 6: Commit** — `git add src/snc/sncRefusal.ts src/snc/SncLogonProvider.ts src/__tests__/snc/SncLogonProvider.test.ts && git commit -m "feat(snc): SncLogonProvider — explicit locator and probes, forSecureLoginClient recipe, fixed refusals"`
 
-### Task 9: Public surface and the whole-package contract test
+### Task 12: Public surface and the whole-package contract test
 
 **Files:**
 - Modify: `src/index.ts`, `src/__tests__/exports.test.ts`
 - Test: `src/__tests__/contract.test.ts`
 
 **Interfaces:**
-- Consumes: every provider from Tasks 2, 3, 8.
-- Produces: the root exports listed in Global Constraints / spec "Package".
+- Consumes: every provider and part from Tasks 2–11.
 
-- [ ] **Step 1: Write the failing contract test**
-
-`src/__tests__/contract.test.ts` — one instance of each provider, every moment, every failure path:
+- [ ] **Step 1: Write the failing contract test** — `src/__tests__/contract.test.ts`:
 
 ```ts
 import { describe, expect, it } from '@jest/globals';
-import type { IAuthProvider, ITokenResult, OAuth2GrantType } from '@mcp-abap-adt/interfaces-auth';
+import type { IAuthProvider, IAuthorizationStrategy, ITokenResult, OAuth2GrantType } from '@mcp-abap-adt/interfaces-auth';
 import * as surface from '../index';
 import { recordingTargets } from './helpers/targets';
 import { fakeSystem, peLibrary } from './snc/fakeSystem';
 
-// Every secret below is named SECRET-…; no refusal may contain one.
+// Every secret below is named SECRET…; no outcome may contain one.
 class FailingTokenProvider extends surface.BaseTokenProvider {
   protected async performLogin(): Promise<ITokenResult> { throw new Error('login failed for SECRET-CLIENT'); }
   protected async performRefresh(): Promise<ITokenResult> { throw new Error('refresh failed for SECRET-REFRESH'); }
   protected getAuthType(): OAuth2GrantType { return 'client_credentials'; }
 }
-
+const throwingStrategy: IAuthorizationStrategy<string> = {
+  authorize: async () => { throw new surface.ValidationError('SECRET-MSG', ['SECRET-FIELD']); },
+};
 const SLC = 'C:\\Program Files\\SAP\\FrontEnd\\SecureLogin\\lib\\sapcrypto.dll';
+const system = fakeSystem({ files: { [SLC]: peLibrary('x64') }, registry: { 'HKLM\\Software\\SAP\\SecureLogin\\InstallPath64': 'C:\\Program Files\\SAP\\FrontEnd\\SecureLogin\\' }, processes: ['sbus.exe'] });
+
 const providers: [string, IAuthProvider][] = [
   ['basic', new surface.BasicAuthProvider('SECRET-USER', 'SECRET-PW')],
-  ['saml', new surface.SamlAuthProvider('MYSAPSSO2=SECRET-COOKIE')],
+  ['saml cookies', new surface.SamlAuthProvider('MYSAPSSO2=SECRET-COOKIE')],
   ['token fixed', surface.TokenAuthProvider.fixed('SECRET-TOKEN')],
   ['token from', surface.TokenAuthProvider.from({
     getToken: async () => { throw new Error('rejected SECRET-GET'); },
@@ -2113,9 +2691,11 @@ const providers: [string, IAuthProvider][] = [
   })],
   ['certificate', new surface.CertificateAuthProvider({ load: async () => ({ cert: 'C', key: 'K', passphrase: 'SECRET-PP' }) }, { url: 'https://h', authType: 'certificate' })],
   ['token provider (failing)', new FailingTokenProvider()],
+  ['authorization code, throwing strategy', new surface.AuthorizationCodeProvider({ uaaUrl: 'https://uaa', clientId: 'c', clientSecret: 'SECRET-CS', authorization: throwingStrategy })],
   ['snc', new surface.SncLogonProvider({
     partnerName: 'p:CN=SID',
-    system: fakeSystem({ files: { [SLC]: peLibrary('x64') }, registry: { 'HKLM\\Software\\SAP\\SecureLogin\\InstallPath64': 'C:\\Program Files\\SAP\\FrontEnd\\SecureLogin\\' }, processes: ['sbus.exe'] }),
+    locator: new surface.DefaultSncLibraryLocator(system),
+    probes: [new surface.SecureLoginClientProbe(system)],
   })],
 ];
 
@@ -2128,7 +2708,7 @@ describe.each(providers)('%s answers the whole contract', (_, provider) => {
     expect(typeof provider.kind).toBe('string');
     expect(provider.kind.length).toBeGreaterThan(0);
   });
-  it('every moment resolves to an AuthOutcome, never throws — with working and with throwing targets', async () => {
+  it('every moment resolves to an AuthOutcome with no secret — working and throwing targets', async () => {
     for (const t of [recordingTargets(), recordingTargets({ throws: true })]) {
       for (const answer of [
         await provider.prepare(),
@@ -2136,10 +2716,9 @@ describe.each(providers)('%s answers the whole contract', (_, provider) => {
         await provider.authorize(t.requestTarget),
         await provider.rejected({ at: 'request', status: 401, error: new Error('401 SECRET-HTTP') }),
         await provider.rejected({ at: 'logon', error: 'refused SECRET-STRING' }),
-        await provider.rejected({ at: 'logon', error: { key: 'RFC_LOGON_FAILURE', message: 'SECRET-SDK', detail: 'SECRET-FIELD' } }),
+        await provider.rejected({ at: 'logon', error: { key: 'SECRET_KEY', code: 'ESECRET', name: 'SECRETError', missingFields: ['SECRET'], message: 'SECRET-SDK' } }),
       ]) {
         expect(isOutcome(answer)).toBe(true);
-        // noSecretsInRefusals: nothing named SECRET-… ever reaches an outcome.
         expect(JSON.stringify(answer)).not.toMatch(/SECRET/);
       }
     }
@@ -2147,11 +2726,9 @@ describe.each(providers)('%s answers the whole contract', (_, provider) => {
 });
 ```
 
-- [ ] **Step 2: Run to see it fail** — `npm test -- src/__tests__/contract.test.ts` → FAIL: `surface.BasicAuthProvider` undefined.
+- [ ] **Step 2: Run to see it fail** — `npm test -- src/__tests__/contract.test.ts` → FAIL (exports missing).
 
-- [ ] **Step 3: Exports**
-
-In `src/index.ts` add:
+- [ ] **Step 3: Exports** — in `src/index.ts`:
 
 ```ts
 // Credentials the process delegates to — every one an IAuthProvider.
@@ -2160,7 +2737,13 @@ export { CertificateAuthProvider } from './credentials/CertificateAuthProvider';
 export { FileCertificateMaterialLoader } from './credentials/FileCertificateMaterialLoader';
 export { SamlAuthProvider } from './credentials/SamlAuthProvider';
 export { TokenAuthProvider } from './credentials/TokenAuthProvider';
-// SNC — passwordless RFC logon. The locator and probes are strategies.
+// Device flow: how the user is shown the code — injected like a strategy.
+export {
+  consoleDeviceCodePresenter,
+  type DeviceCodePrompt,
+  type IDeviceCodePresenter,
+} from './deviceCode/DeviceCodePresenter';
+// SNC — passwordless RFC logon.
 export {
   DefaultSncLibraryLocator,
   type ISncLibraryLocator,
@@ -2172,22 +2755,23 @@ export { SncLogonProvider, type SncLogonProviderConfig } from './snc/SncLogonPro
 export { nodeSncSystem, type SncSystem } from './snc/SncSystem';
 ```
 
-and add `type TokenProviderHooks` to the existing `export type { … } from './providers'` list. Run `npx biome check --write src` to sort.
+and add `type TokenProviderHooks` and `type SamlTrust` to the `export type { … }` lists (from `./providers` and `./providers/saml2Utils`). Run `npx biome check --write src`.
 
 Append to `src/__tests__/exports.test.ts`:
 
 ```ts
-describe('public exports — credentials and SNC', () => {
+describe('public exports — 5.0.0', () => {
   it.each([
     'BasicAuthProvider', 'CertificateAuthProvider', 'FileCertificateMaterialLoader',
     'SamlAuthProvider', 'TokenAuthProvider', 'SncLogonProvider',
     'DefaultSncLibraryLocator', 'SecureLoginClientProbe', 'nodeSncSystem',
+    'consoleDeviceCodePresenter',
   ])('exports %s', (name) => {
     expect((surface as Record<string, unknown>)[name]).toBeDefined();
   });
   it.each([
-    'libraryArchitectures', 'sncRefusal', 'refusalFrom', 'oops',
-    'parseRegQuery', 'parseTasklistCsv', 'parsePsComm',
+    'libraryArchitectures', 'sncRefusal', 'refusalFrom', 'oops', 'safely', 'ownLabel',
+    'KNOWN_CONFIG_FIELDS', 'KNOWN_RFC_KEYS', 'parseRegQuery', 'parseTasklistCsv', 'parsePsComm',
   ])('does not export the internal %s', (name) => {
     expect(name in surface).toBe(false);
   });
@@ -2195,28 +2779,27 @@ describe('public exports — credentials and SNC', () => {
 ```
 
 - [ ] **Step 4: Full suite** — `npm run lint:check && npm run test:check && npm test` → PASS.
+- [ ] **Step 5: Commit** — `git add src/index.ts src/__tests__/exports.test.ts src/__tests__/contract.test.ts && git commit -m "feat: export every IAuthProvider and its parts; one contract test over all of them"`
 
-- [ ] **Step 5: Commit** — `git add src/index.ts src/__tests__/exports.test.ts src/__tests__/contract.test.ts && git commit -m "feat: export every IAuthProvider; one contract test over all of them"`
-
-### Task 10: Documentation and version 5.0.0
+### Task 13: Documentation and version 5.0.0
 
 **Files:**
 - Modify: `CLAUDE.md`, `README.md`, `docs/passwordless-sso.md`, `CHANGELOG.md`, `package.json`, `package-lock.json`
 
-- [ ] **Step 1: `CLAUDE.md`** — "Project Overview": the package provides the credentials a process delegates to — every `IAuthProvider` (`interfaces-auth` 3.0.0: `prepare` / `establish` / `authorize` / `rejected`, each answering Ok or Oops) and the token providers behind them. Add the moved providers and `SncLogonProvider` to the list; `src/credentials/`, `src/snc/`, `src/auth/refusal.ts` to "Module structure". "Package responsibilities": "implements `ITokenProvider`" becomes "implements `IAuthProvider` (every provider) and `ITokenProvider` (the token providers)"; "does NOT" gains "retry — every retry is the consumer's" and "open connections or load SAP libraries". Add the four rules (no exception across the contract, no secret in a refusal, nothing to add is Ok, no provider retries) under "Core design principles".
+- [ ] **Step 1: `CLAUDE.md`** — describe the code as it now is: every provider implements `IAuthProvider` (`prepare` / `establish` / `authorize` / `rejected`, Ok or Oops); the six rules (no exception across the contract; refusals from fixed wording and allowlists only; nothing to add is Ok; a target's Oops is the provider's to judge; one renewal, no step twice; no implicit defaults — constructors take every collaborator, static factories are the recipes); the new directories `src/credentials/`, `src/deviceCode/`, `src/snc/`, `src/auth/refusal.ts`. Replace the sentence that the package "ships a working default so nobody is forced to write one" with: it ships the parts and named factories; the consumer composes.
 
-- [ ] **Step 2: `README.md`** — a "Migrating to 5.0.0" section, first under the title: this is a migration, not an update: credentials come from here, not `@mcp-abap-adt/connection`; a token provider is handed to the process as it is; persist with `onTokens`; needs `@mcp-abap-adt/connection` 10.0.0. Then a "Passwordless RFC logon (SNC)" section: prerequisites (NW RFC SDK and `@mcp-abap-adt/sap-rfc-lite` on the connection side; an SNC product such as the SAP Secure Login Client, installed and logged on), `SncLogonProviderConfig`, the discovery order and skip rule, the probe rule, the two explained failures.
+- [ ] **Step 2: `README.md`** — first section "Migrating to 5.0.0 — a migration, not an update": credentials come from here, not `@mcp-abap-adt/connection`; a token provider is handed to the process as it is; persist with `onTokens`; nothing is defaulted — pass the strategy / SAML validator / device-code presenter, or call the factory (`inBrowser`, `fromTerminal`, `toConsole`, `fromFiles`, `forSecureLoginClient`); SAML `idpCertificates` / `clockSkewMs` / `assertionReplayStore` moved from the provider config to `SamlTrust` / the validator; `ShippedValidatorOptions.replayStore` is required; manual strategies' `read(prompt, signal)` and `timeoutMs`; needs `@mcp-abap-adt/connection` 10.0.0. Then a "Passwordless RFC logon (SNC)" section: prerequisites, `SncLogonProvider.forSecureLoginClient`, the explicit assembly, discovery order and skip rule, the probe rule, the two explained failures.
 
-- [ ] **Step 3: `docs/passwordless-sso.md`** — SNC over RFC: Measured 2026-09-29 and Built (`SncLogonProvider`); replace "Rejected — an RFC/SNC transport"; `node-rfc` bullet → `@mcp-abap-adt/sap-rfc-lite`; open question 2 partly answered: the Secure Login Client enrols over `/api/v1/getProfiles`, `/api/v1/getCertificateTemplateStandardBrowser`, `/slc/v1/login` (Measured, from its profile registry; not used here).
+- [ ] **Step 3: `docs/passwordless-sso.md`** — SNC over RFC: Measured 2026-09-29 and Built (`SncLogonProvider`); replace "Rejected — an RFC/SNC transport"; `node-rfc` bullet → `@mcp-abap-adt/sap-rfc-lite`; open question 2 partly answered — the Secure Login Client enrols over `/api/v1/getProfiles`, `/api/v1/getCertificateTemplateStandardBrowser`, `/slc/v1/login` (Measured, from its profile registry; not used here).
 
-- [ ] **Step 4: `CHANGELOG.md`** — a `## [5.0.0] - <date>` entry under `## [Unreleased]`: **Breaking — a migration**: every provider implements `IAuthProvider` (`interfaces-auth` 3.0.0); `BaseTokenProvider` implements it beside `IRefreshableTokenProvider`; `onTokens`; `Saml2PureProvider` presents cookies; Basic / Certificate / SAML / Token / `FileCertificateMaterialLoader` moved in from `connection` (`TokenAuthProvider.fixed` / `.from` only); `SncLogonProvider`; the four rules; dependencies `interfaces-auth ^3.0.0`, `interfaces-auth-sap ^1.1.0`.
+- [ ] **Step 4: `CHANGELOG.md`** — `## [5.0.0] - <date>` under `## [Unreleased]`, **Breaking — a migration**, listing: `IAuthProvider` on every provider; `BaseTokenProvider` implements it beside `IRefreshableTokenProvider`; `onTokens`; `Saml2PureProvider` presents cookies; one renewal, no Ok on an unchanged credential; refusals from fixed wording and allowlists; no implicit defaults and the factories; SAML config fields moved and `replayStore` required; manual strategies `timeoutMs` / `dispose()` / `read(prompt, signal)`; `IDeviceCodePresenter`; Basic / Certificate / SAML / Token / `FileCertificateMaterialLoader` moved in (`TokenAuthProvider.fixed` / `.from` only); `SncLogonProvider`; dependencies `interfaces-auth ^3.0.0`, `interfaces-auth-sap ^1.1.0`.
 
 - [ ] **Step 5: Version** — `"version": "5.0.0"`; `npm install --package-lock-only`; `npm run build && npm run lint:check && npm run test:check && npm test` → PASS.
 
-- [ ] **Step 6: Commit** — `git add CLAUDE.md README.md docs/passwordless-sso.md CHANGELOG.md package.json package-lock.json && git commit -m "chore(release): 5.0.0 — every IAuthProvider on one contract; a migration, not an update"`. Push, open the PR, merge after review, publish through the repo's release flow. The spec and this plan are deleted in the PR that finishes step 5 of the goal (the server); the goal file goes with them.
+- [ ] **Step 6: Commit** — `git add CLAUDE.md README.md docs/passwordless-sso.md CHANGELOG.md package.json package-lock.json && git commit -m "chore(release): 5.0.0 — every IAuthProvider on one contract; a migration, not an update"`. Push, open the PR, merge after review, publish through the repo's release flow. The spec and this plan are deleted in the PR that finishes the goal's last step (the server); the goal file goes with them.
 
-### Task 11: Live SNC check (manual, not CI)
+### Task 14: Live SNC check (manual, not CI)
 
-- [ ] **Step 1:** On a machine with the NW RFC SDK, `@mcp-abap-adt/sap-rfc-lite` and the Secure Login Client logged on: `new SncLogonProvider({ partnerName: '<system SNC name>' })`, `await prepare()` → Ok; `establish()` into a recording target → the params, with the registry's x64 `sapcrypto.dll` even with the installer's x86 `SNC_LIB` set.
+- [ ] **Step 1:** On a machine with the NW RFC SDK, `@mcp-abap-adt/sap-rfc-lite` and the Secure Login Client logged on: `SncLogonProvider.forSecureLoginClient({ partnerName: '<system SNC name>' })`, `await prepare()` → Ok; `establish()` into a recording target → the params, with the registry's x64 `sapcrypto.dll` even with the installer's x86 `SNC_LIB` set.
 - [ ] **Step 2:** Feed those params into the private probe's hand-built RFC conversation factory in place of its own `snc_*`; discovery and LOCK/UNLOCK → 200.
 - [ ] **Step 3:** Log the Secure Login Client profile out; the RFC open fails; `rejected({ at: 'logon', error })` → hint "log on in the Secure Login Client". Record all three in the PR.
