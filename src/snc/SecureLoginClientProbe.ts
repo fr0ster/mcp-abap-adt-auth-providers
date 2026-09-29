@@ -1,13 +1,13 @@
 /**
- * Is the SNC product behind a library ready? A probe applies only to a library
- * it recognises — this one to a library inside the Secure Login Client's
- * installation — so another SNC product is never refused for lacking a
- * process it does not have. It checks that the client runs, not that a
- * profile is logged on: no documented interface says so.
+ * Which SNC product is behind a library — so that a refused logon can say what
+ * to do. A probe only names the product; it checks nothing. Measured: with the
+ * Secure Login Client exited, an RFC open through its library starts the
+ * client, which logs on (silently through SSO, or through its logon window),
+ * so a "not running" refusal before logon would stop logons that succeed.
+ * This one applies to a library inside the Secure Login Client's installation.
  */
 
 import { win32 } from 'node:path';
-import { ValidationError } from '../errors/TokenProviderErrors';
 import type { SncSystem } from './SncSystem';
 import {
   MACOS_SLC_APP,
@@ -16,10 +16,10 @@ import {
 } from './secureLoginClient';
 
 export interface ISncProductProbe {
+  /** The product's name — for logs; a refusal names only the shipped probe's. */
   readonly product: string;
+  /** Whether the library at this path belongs to the product. */
   appliesTo(libraryPath: string): Promise<boolean>;
-  /** Throws when the product is not usable. */
-  check(): Promise<void>;
 }
 
 function asDirectory(path: string): string {
@@ -51,26 +51,5 @@ export class SecureLoginClientProbe implements ISncProductProbe {
     if (system.platform === 'darwin')
       return libraryPath.startsWith(MACOS_SLC_APP);
     return false;
-  }
-
-  async check(): Promise<void> {
-    let names: string[];
-    try {
-      names = await this.system.listProcessNames();
-    } catch {
-      // The listing tool's own message is foreign text; it stays out.
-      throw new ValidationError(
-        `Could not check whether the ${SECURE_LOGIN_CLIENT} is running (the process list could not be read).`,
-      );
-    }
-    const windows = this.system.platform === 'win32';
-    const running = windows
-      ? names.some((name) => name.toLowerCase() === 'sbus.exe')
-      : names.some((name) => name.startsWith(MACOS_SLC_APP));
-    if (!running) {
-      throw new ValidationError(
-        `The ${SECURE_LOGIN_CLIENT} is not running (${windows ? 'sbus.exe' : 'Secure Login Client.app'} not found).`,
-      );
-    }
   }
 }

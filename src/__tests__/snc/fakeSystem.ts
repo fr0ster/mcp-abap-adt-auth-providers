@@ -8,8 +8,6 @@ export interface FakeSystemOptions {
   files?: Record<string, Buffer>;
   /** "<key>\\<name>" → value. */
   registry?: Record<string, string>;
-  /** The process list, or the error listing it throws. */
-  processes?: string[] | Error;
 }
 
 export function fakeSystem(options: FakeSystemOptions = {}): SncSystem {
@@ -22,10 +20,6 @@ export function fakeSystem(options: FakeSystemOptions = {}): SncSystem {
     },
     async readRegistryValue(key, name) {
       return options.registry?.[`${key}\\${name}`];
-    },
-    async listProcessNames() {
-      if (options.processes instanceof Error) throw options.processes;
-      return options.processes ?? [];
     },
   };
 }

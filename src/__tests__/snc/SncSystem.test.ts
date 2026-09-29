@@ -1,9 +1,23 @@
-import { describe, expect, it } from '@jest/globals';
-import {
-  parsePsComm,
-  parseRegQuery,
-  parseTasklistCsv,
-} from '../../snc/SncSystem';
+import { afterEach, describe, expect, it, jest } from '@jest/globals';
+
+jest.mock('node:child_process', () => ({
+  execFile: jest.fn(
+    (
+      _file: string,
+      _args: string[],
+      _options: object,
+      callback: (error: Error | null, result: { stdout: string }) => void,
+    ) => {
+      callback(null, {
+        stdout:
+          '\r\nHKEY_LOCAL_MACHINE\\Software\\SAP\\SecureLogin\r\n    InstallPath64    REG_SZ    C:\\SLC\\\r\n',
+      });
+    },
+  ),
+}));
+
+import { execFile } from 'node:child_process';
+import { nodeSncSystem, parseRegQuery } from '../../snc/SncSystem';
 
 describe('parseRegQuery', () => {
   const output = [
@@ -28,25 +42,52 @@ describe('parseRegQuery', () => {
   });
 });
 
-describe('parseTasklistCsv', () => {
-  it('takes the image name from each line', () => {
-    expect(
-      parseTasklistCsv(
-        '"System Idle Process","0","Services","0","8 K"\r\n"sbus.exe","4","Console","1","1 K"\r\n',
-      ),
-    ).toEqual(['System Idle Process', 'sbus.exe']);
+describe('nodeSncSystem reading the registry', () => {
+  const platform = Object.getOwnPropertyDescriptor(process, 'platform');
+  const systemRoot = process.env.SystemRoot;
+  const calls = () =>
+    (execFile as unknown as jest.Mock).mock.calls as unknown as [
+      string,
+      string[],
+      { timeout?: number },
+    ][];
+  afterEach(() => {
+    if (platform) Object.defineProperty(process, 'platform', platform);
+    if (systemRoot === undefined) delete process.env.SystemRoot;
+    else process.env.SystemRoot = systemRoot;
+    (execFile as unknown as jest.Mock).mockClear();
   });
-});
+  const asWindows = () =>
+    Object.defineProperty(process, 'platform', { value: 'win32' });
 
-describe('parsePsComm', () => {
-  it('drops the header and blank lines', () => {
-    expect(
-      parsePsComm(
-        'COMM\n/sbin/launchd\n/Applications/Secure Login Client.app/Contents/MacOS/Secure Login Client\n\n',
-      ),
-    ).toEqual([
-      '/sbin/launchd',
-      '/Applications/Secure Login Client.app/Contents/MacOS/Secure Login Client',
+  it('runs reg.exe by absolute path under SystemRoot, with a 5 s timeout', async () => {
+    asWindows();
+    process.env.SystemRoot = 'D:\\WinDir';
+    const value = await nodeSncSystem().readRegistryValue(
+      'HKLM\\Software\\SAP\\SecureLogin',
+      'InstallPath64',
+    );
+    expect(value).toBe('C:\\SLC\\');
+    const [file, args, options] = calls()[0];
+    expect(file).toBe('D:\\WinDir\\System32\\reg.exe');
+    expect(args).toEqual([
+      'query',
+      'HKLM\\Software\\SAP\\SecureLogin',
+      '/v',
+      'InstallPath64',
+      '/reg:64',
     ]);
+    expect(options.timeout).toBe(5000);
+  });
+
+  it('falls back to C:\\Windows without SystemRoot', async () => {
+    asWindows();
+    delete process.env.SystemRoot;
+    await nodeSncSystem().readRegistryValue('HKLM\\X', 'Y');
+    expect(calls()[0][0]).toBe('C:\\Windows\\System32\\reg.exe');
+  });
+
+  it('has no process listing', () => {
+    expect('listProcessNames' in nodeSncSystem()).toBe(false);
   });
 });

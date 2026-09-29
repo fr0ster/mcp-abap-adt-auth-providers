@@ -72,6 +72,7 @@ describe('public exports — 5.0.0', () => {
     'parseRegQuery',
     'parseTasklistCsv',
     'parsePsComm',
+    'SncLibraryNotFoundError',
   ])('does not export the internal %s', (name) => {
     expect(name in surface).toBe(false);
   });

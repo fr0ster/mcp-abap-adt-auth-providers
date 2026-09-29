@@ -1,9 +1,10 @@
 /**
  * Passwordless RFC logon through an installed SNC product. The SNC library
  * authenticates during the RFC logon itself; this provider finds it (through
- * the locator it is given), checks the product when a probe applies, and hands
- * the wire the logon parameters. It opens no connection and loads no SAP
- * library. No collaborator is defaulted: forSecureLoginClient is the recipe.
+ * the locator it is given), notes which product probe applies to it — the
+ * product is named, never checked — and hands the wire the logon parameters.
+ * It opens no connection and loads no SAP library. No collaborator is
+ * defaulted: forSecureLoginClient is the recipe.
  */
 
 import type {
@@ -14,7 +15,7 @@ import type {
   IRequestTarget,
 } from '@mcp-abap-adt/interfaces-auth';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
-import { OK, oops, safely } from '../auth/refusal';
+import { OK, oops } from '../auth/refusal';
 import { ValidationError } from '../errors/TokenProviderErrors';
 import {
   DefaultSncLibraryLocator,
@@ -26,7 +27,7 @@ import {
   SecureLoginClientProbe,
 } from './SecureLoginClientProbe';
 import { nodeSncSystem } from './SncSystem';
-import { sncRefusal } from './sncRefusal';
+import { locateRefusal, sncRefusal } from './sncRefusal';
 
 /** SAP's SNC_QOP values: 1 authentication, 2 integrity, 3 privacy, 8 default, 9 maximum. */
 const SNC_QOP_VALUES = ['1', '2', '3', '8', '9'];
@@ -40,13 +41,30 @@ export interface SncLogonProviderConfig {
   myName?: string;
   /** Where the SNC library is. Required. */
   locator: ISncLibraryLocator;
-  /** Product checks; `[]` for none. Required. */
+  /** Which product is behind the library, for the `rejected` hint; `[]` for none. Required. */
   probes: ISncProductProbe[];
   logger?: ILogger;
 }
 
 const detail = (error: unknown) =>
   error instanceof Error ? error.message : String(error);
+
+/**
+ * The outer boundary of every method (rule 1): the SNC wording inside stays,
+ * and anything that still escapes — a throwing logger, a malformed
+ * collaborator — is a fixed SNC Oops. Nothing is logged here: the logger may
+ * be what threw.
+ */
+async function bounded(
+  moment: string,
+  work: () => AuthOutcome | Promise<AuthOutcome>,
+): Promise<AuthOutcome> {
+  try {
+    return await work();
+  } catch {
+    return oops(`the SNC provider failed while ${moment} (unknown error)`);
+  }
+}
 
 export class SncLogonProvider implements IAuthProvider {
   readonly kind = 'snc';
@@ -57,7 +75,8 @@ export class SncLogonProvider implements IAuthProvider {
   private readonly probes: ISncProductProbe[];
   private readonly logger?: ILogger;
   private library?: SncLibrary;
-  private product?: string;
+  /** The shipped Secure Login Client probe applies — the one product a refusal may name. */
+  private secureLoginClient = false;
 
   constructor(config: SncLogonProviderConfig) {
     const partnerName = config.partnerName?.trim();
@@ -101,49 +120,61 @@ export class SncLogonProvider implements IAuthProvider {
     });
   }
 
+  /** Resolve the library; note which probe applies. The product is not checked. */
   async prepare(): Promise<AuthOutcome> {
-    let library: SncLibrary;
-    try {
-      library = await this.locator.locate();
-    } catch (error) {
-      this.logger?.warn(`SNC library not found: ${detail(error)}`);
-      return oops(
-        'no usable SNC library was found',
-        'set sncLib to the SNC (GSS) library of your SNC product; the log lists every candidate tried',
-      );
-    }
-    let product: string | undefined;
-    for (const probe of this.probes) {
+    return bounded('resolving the SNC library', async () => {
+      let found: SncLibrary;
       try {
-        if (!(await probe.appliesTo(library.path))) continue;
-        await probe.check();
-        product = probe.product;
-        break;
+        found = await this.locator.locate();
       } catch (error) {
-        this.logger?.warn(`${probe.product} check failed: ${detail(error)}`);
+        const refusal = locateRefusal(error);
+        this.log('warn', `SNC library not found: ${detail(error)}`);
+        return { ok: false, refusal };
+      }
+      const path = typeof found?.path === 'string' ? found.path.trim() : '';
+      if (!path) {
         return oops(
-          `the ${probe.product} is not running or could not be checked`,
-          `Start the ${probe.product} and log on to the profile used for SAP applications`,
+          'no usable SNC library was found: the locator returned no path',
+          'set sncLib to the SNC (GSS) library of your SNC product',
         );
       }
-    }
-    this.library = library;
-    this.product = product;
-    this.logger?.debug(
-      `SNC library ${library.path} (${library.archs.join('/')})${product ? `, ${product} running` : ', no product check'}`,
-    );
-    return OK;
+      const library: SncLibrary = {
+        path,
+        archs: Array.isArray(found.archs) ? found.archs : [],
+      };
+      let applying: ISncProductProbe | undefined;
+      for (const probe of this.probes) {
+        try {
+          if (await probe.appliesTo(library.path)) {
+            applying = probe;
+            break;
+          }
+        } catch (error) {
+          // A probe that cannot tell names nothing; the logon goes on.
+          this.log('warn', `an SNC product probe failed: ${detail(error)}`);
+        }
+      }
+      this.library = library;
+      this.secureLoginClient = applying instanceof SecureLoginClientProbe;
+      this.log(
+        'debug',
+        `SNC library ${library.path} (${library.archs.join('/') || 'architecture not given'})${
+          applying ? `, product: ${applying.product}` : ', no product named'
+        }`,
+      );
+      return OK;
+    });
   }
 
   /** No other way in: the wire's answer is this provider's own. */
   async establish(logon: ILogonTarget): Promise<AuthOutcome> {
-    const library = this.library;
-    if (!library)
-      return oops(
-        'the SNC provider is not prepared',
-        'connect() prepares it first',
-      );
-    return safely('handing over the SNC logon parameters', () => {
+    return bounded('handing over the SNC logon parameters', () => {
+      const library = this.library;
+      if (!library)
+        return oops(
+          'the SNC provider is not prepared',
+          'connect() prepares it first',
+        );
       const params: Record<string, string> = {
         snc_mode: '1',
         snc_partnername: this.partnerName,
@@ -156,16 +187,25 @@ export class SncLogonProvider implements IAuthProvider {
   }
 
   async authorize(_request: IRequestTarget): Promise<AuthOutcome> {
-    return OK;
+    return bounded('authorizing a request', () => OK);
   }
 
   async rejected(rejection: IAuthRejection): Promise<AuthOutcome> {
-    return safely('explaining the SNC refusal', () => ({
+    return bounded('explaining the SNC refusal', () => ({
       ok: false,
-      refusal: sncRefusal(rejection.error, {
+      refusal: sncRefusal(rejection?.error, {
         library: this.library,
-        product: this.product,
+        secureLoginClient: this.secureLoginClient,
       }),
     }));
+  }
+
+  /** A log line that cannot take the method down with it. */
+  private log(level: 'warn' | 'debug', message: string): void {
+    try {
+      this.logger?.[level](message);
+    } catch {
+      // The log sink is down; the answer does not depend on it.
+    }
   }
 }

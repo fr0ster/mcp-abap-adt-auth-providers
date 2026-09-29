@@ -23,7 +23,57 @@ export interface ISncLibraryLocator {
   locate(): Promise<SncLibrary>;
 }
 
+/** Where a candidate came from — a fixed set, so a refusal may name it. */
+export type SncCandidateSource =
+  | 'sncLib'
+  | 'SNC_LIB_64'
+  | 'SNC_LIB'
+  | 'registry'
+  | 'macOS bundle';
+
+/** Why a candidate is unusable — a fixed set, so a refusal may name it. */
+export type SncUnusableReason =
+  | 'missing'
+  | 'not a library'
+  | 'wrong architecture';
+
+export interface SncCandidateFailure {
+  source: SncCandidateSource;
+  /** The consumer's own config, an environment variable or the install path. */
+  path: string;
+  reason: SncUnusableReason;
+}
+
+export const SNC_CANDIDATE_SOURCES: ReadonlySet<string> = new Set([
+  'sncLib',
+  'SNC_LIB_64',
+  'SNC_LIB',
+  'registry',
+  'macOS bundle',
+]);
+export const SNC_UNUSABLE_REASONS: ReadonlySet<string> = new Set([
+  'missing',
+  'not a library',
+  'wrong architecture',
+]);
+
+/**
+ * No usable library: every candidate tried, as data. Internal — the provider
+ * builds its refusal from `tried`, never from the message (which the log gets).
+ */
+export class SncLibraryNotFoundError extends ValidationError {
+  constructor(
+    message: string,
+    readonly tried: readonly SncCandidateFailure[],
+  ) {
+    super(message, ['sncLib']);
+    Object.setPrototypeOf(this, SncLibraryNotFoundError.prototype);
+  }
+}
+
 const HEAD_BYTES = 4096;
+
+type Inspection = SncLibrary | { reason: SncUnusableReason; detail: string };
 
 export class DefaultSncLibraryLocator implements ISncLibraryLocator {
   constructor(
@@ -36,37 +86,42 @@ export class DefaultSncLibraryLocator implements ISncLibraryLocator {
     if (explicit) {
       const result = await this.inspect(explicit);
       if ('reason' in result) {
-        throw new ValidationError(`sncLib ${explicit}: ${result.reason}`, [
-          'sncLib',
-        ]);
+        throw new SncLibraryNotFoundError(
+          `sncLib ${explicit}: ${result.detail}`,
+          [{ source: 'sncLib', path: explicit, reason: result.reason }],
+        );
       }
       return result;
     }
+    const tried: SncCandidateFailure[] = [];
     const skipped: string[] = [];
     for (const candidate of await this.candidates()) {
       const result = await this.inspect(candidate.path);
       if (!('reason' in result)) return result;
-      skipped.push(`${candidate.source} ${candidate.path}: ${result.reason}`);
+      tried.push({ ...candidate, reason: result.reason });
+      skipped.push(`${candidate.source} ${candidate.path}: ${result.detail}`);
     }
     const detail = skipped.length
       ? ['Tried:', ...skipped.map((line) => `  - ${line}`)]
       : [
           'No candidate: SNC_LIB_64 and SNC_LIB are unset and no Secure Login Client installation was found.',
         ];
-    throw new ValidationError(
+    throw new SncLibraryNotFoundError(
       [
         'No usable SNC library found. Set sncLib to the SNC (GSS) library of your SNC product.',
         ...detail,
       ].join('\n'),
-      ['sncLib'],
+      tried,
     );
   }
 
-  private async candidates(): Promise<{ source: string; path: string }[]> {
+  private async candidates(): Promise<
+    { source: SncCandidateSource; path: string }[]
+  > {
     const { system } = this;
     const is64 = system.arch === 'x64' || system.arch === 'arm64';
     const variable = (name: string) => system.env[name]?.trim() || undefined;
-    const found: { source: string; path: string }[] = [];
+    const found: { source: SncCandidateSource; path: string }[] = [];
     const lib64 = variable('SNC_LIB_64');
     if (is64 && lib64) found.push({ source: 'SNC_LIB_64', path: lib64 });
     const lib = variable('SNC_LIB');
@@ -78,30 +133,30 @@ export class DefaultSncLibraryLocator implements ISncLibraryLocator {
       )?.trim();
       if (dir)
         found.push({
-          source: `registry ${name}`,
+          source: 'registry',
           path: win32.join(dir, 'lib', 'sapcrypto.dll'),
         });
     }
     if (system.platform === 'darwin') {
-      found.push({
-        source: 'Secure Login Client default',
-        path: MACOS_SLC_LIBRARY,
-      });
+      found.push({ source: 'macOS bundle', path: MACOS_SLC_LIBRARY });
     }
     return found;
   }
 
-  private async inspect(
-    path: string,
-  ): Promise<SncLibrary | { reason: string }> {
+  private async inspect(path: string): Promise<Inspection> {
     const head = await this.system.readHead(path, HEAD_BYTES);
-    if (!head) return { reason: 'not found or not readable' };
+    if (!head)
+      return { reason: 'missing', detail: 'not found or not readable' };
     const archs = libraryArchitectures(head);
     if (archs.length === 0)
-      return { reason: 'not a recognised library (PE, Mach-O or ELF)' };
+      return {
+        reason: 'not a library',
+        detail: 'not a recognised library (PE, Mach-O or ELF)',
+      };
     if (!archs.includes(this.system.arch as SncArch)) {
       return {
-        reason: `built for ${archs.join('/')}, this process is ${this.system.arch}`,
+        reason: 'wrong architecture',
+        detail: `built for ${archs.join('/')}, this process is ${this.system.arch}`,
       };
     }
     return { path, archs };

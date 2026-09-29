@@ -44,47 +44,10 @@ describe('appliesTo', () => {
   });
 });
 
-describe('check', () => {
-  it('passes when sbus.exe runs, any case', async () => {
-    await expect(
-      new SecureLoginClientProbe(
-        fakeSystem({ processes: ['SBUS.EXE'] }),
-      ).check(),
-    ).resolves.toBeUndefined();
-  });
-  it('fails when only sbusagent.exe runs', async () => {
-    await expect(
-      new SecureLoginClientProbe(
-        fakeSystem({ processes: ['sbusagent.exe'] }),
-      ).check(),
-    ).rejects.toThrow(/not running .*sbus\.exe/);
-  });
-  it('an unreadable process list says the check could not run, without the tool’s message', async () => {
-    const error = await new SecureLoginClientProbe(
-      fakeSystem({ processes: new Error('access denied SECRET-TOOL') }),
-    )
-      .check()
-      .catch((e: unknown) => e);
-    expect((error as Error).message).toMatch(
-      /Could not check whether the SAP Secure Login Client is running/,
-    );
-    expect((error as Error).message).not.toMatch(/SECRET-TOOL/);
-  });
-  it('macOS looks for the app bundle', async () => {
-    await expect(
-      new SecureLoginClientProbe(
-        fakeSystem({
-          platform: 'darwin',
-          processes: [
-            '/Applications/Secure Login Client.app/Contents/MacOS/Secure Login Client',
-          ],
-        }),
-      ).check(),
-    ).resolves.toBeUndefined();
-    await expect(
-      new SecureLoginClientProbe(
-        fakeSystem({ platform: 'darwin', processes: ['/sbin/launchd'] }),
-      ).check(),
-    ).rejects.toThrow(/not running/);
+describe('the probe names, it does not check', () => {
+  it('has no check()', () => {
+    const probe = new SecureLoginClientProbe(fakeSystem());
+    expect(probe.product).toBe('SAP Secure Login Client');
+    expect('check' in probe).toBe(false);
   });
 });

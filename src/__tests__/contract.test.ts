@@ -33,7 +33,6 @@ const system = fakeSystem({
     'HKLM\\Software\\SAP\\SecureLogin\\InstallPath64':
       'C:\\Program Files\\SAP\\FrontEnd\\SecureLogin\\',
   },
-  processes: ['sbus.exe'],
 });
 
 // The remaining token providers inherit prepare/establish/authorize/rejected

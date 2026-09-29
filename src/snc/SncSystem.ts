@@ -1,14 +1,18 @@
 /**
  * Everything SNC discovery asks of the machine, behind one seam, so the rules
- * — which library wins, when the Secure Login Client is checked — can be
- * tested with a fake. `nodeSncSystem()` is the real one.
+ * — which library wins, whether the Secure Login Client's installation holds
+ * it — can be tested with a fake. `nodeSncSystem()` is the real one.
  */
 
 import { execFile } from 'node:child_process';
 import { open } from 'node:fs/promises';
+import { win32 } from 'node:path';
 import { promisify } from 'node:util';
 
 const run = promisify(execFile);
+
+/** How long `reg query` may take before the value counts as absent. */
+const REG_TIMEOUT_MS = 5000;
 
 export interface SncSystem {
   readonly platform: NodeJS.Platform;
@@ -19,8 +23,6 @@ export interface SncSystem {
   readHead(path: string, bytes: number): Promise<Buffer | null>;
   /** A registry value (Windows), or `undefined` when absent or elsewhere. */
   readRegistryValue(key: string, name: string): Promise<string | undefined>;
-  /** Running processes' names or paths. Throws when they cannot be listed. */
-  listProcessNames(): Promise<string[]>;
 }
 
 export function parseRegQuery(
@@ -34,18 +36,13 @@ export function parseRegQuery(
   return undefined;
 }
 
-export function parseTasklistCsv(output: string): string[] {
-  return output
-    .split(/\r?\n/)
-    .map((line) => /^"([^"]*)"/.exec(line)?.[1])
-    .filter((name): name is string => Boolean(name));
-}
-
-export function parsePsComm(output: string): string[] {
-  return output
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter((line) => line && line !== 'COMM');
+/** The system's own reg.exe, never whatever PATH finds first. */
+function regExe(): string {
+  return win32.join(
+    process.env.SystemRoot?.trim() || 'C:\\Windows',
+    'System32',
+    'reg.exe',
+  );
 }
 
 export function nodeSncSystem(): SncSystem {
@@ -71,24 +68,14 @@ export function nodeSncSystem(): SncSystem {
       if (process.platform !== 'win32') return undefined;
       try {
         const { stdout } = await run(
-          'reg',
+          regExe(),
           ['query', key, '/v', name, '/reg:64'],
-          { windowsHide: true },
+          { windowsHide: true, timeout: REG_TIMEOUT_MS },
         );
         return parseRegQuery(stdout, name);
       } catch {
         return undefined;
       }
-    },
-    async listProcessNames() {
-      if (process.platform === 'win32') {
-        const { stdout } = await run('tasklist', ['/FO', 'CSV', '/NH'], {
-          windowsHide: true,
-        });
-        return parseTasklistCsv(stdout);
-      }
-      const { stdout } = await run('ps', ['-Ao', 'comm']);
-      return parsePsComm(stdout);
     },
   };
 }

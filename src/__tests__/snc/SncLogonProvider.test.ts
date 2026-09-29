@@ -13,12 +13,17 @@ const REGISTRY = {
   'HKLM\\Software\\SAP\\SecureLogin\\InstallPath64':
     'C:\\Program Files\\SAP\\FrontEnd\\SecureLogin\\',
 };
-const machine = (processes: string[]) =>
+const machine = () =>
   fakeSystem({
     files: { [SLC]: peLibrary('x64'), [KRB]: peLibrary('x64') },
     registry: REGISTRY,
-    processes,
   });
+const throwingLogger = () => {
+  const boom = () => {
+    throw new Error('log sink down SECRET-LOG');
+  };
+  return { debug: boom, info: boom, warn: boom, error: boom };
+};
 /** What forSecureLoginClient assembles, on a fake machine. */
 const snc = (
   system: SncSystem,
@@ -44,7 +49,7 @@ describe('construction', () => {
   });
   it('requires partnerName', () => {
     expect(
-      () => new SncLogonProvider({ partnerName: ' ', ...parts(machine([])) }),
+      () => new SncLogonProvider({ partnerName: ' ', ...parts(machine()) }),
     ).toThrow(ValidationError);
   });
   it.each(['0', '4', '5', '6', '7', '10', 'max', ''])(
@@ -55,7 +60,7 @@ describe('construction', () => {
           new SncLogonProvider({
             partnerName: 'p:CN=SID',
             qop,
-            ...parts(machine([])),
+            ...parts(machine()),
           }),
       ).toThrow(/qop/);
     },
@@ -66,7 +71,7 @@ describe('construction', () => {
         new SncLogonProvider({
           partnerName: 'p:CN=SID',
           qop,
-          ...parts(machine([])),
+          ...parts(machine()),
         }),
     ).not.toThrow();
   });
@@ -89,7 +94,7 @@ describe('construction', () => {
 
 describe('the four moments', () => {
   it('prepare → establish writes the SNC parameters, no user or passwd', async () => {
-    const p = snc(machine(['sbus.exe']));
+    const p = snc(machine());
     await expect(p.prepare()).resolves.toEqual({ ok: true });
     const t = recordingTargets();
     await expect(p.establish(t.logonTarget)).resolves.toEqual({ ok: true });
@@ -105,7 +110,7 @@ describe('the four moments', () => {
     expect(t.request).toEqual({ headers: {}, cookies: [] });
   });
   it('snc_myname only when configured', async () => {
-    const p = snc(machine(['sbus.exe']), { myName: 'p:CN=ME', qop: '8' });
+    const p = snc(machine(), { myName: 'p:CN=ME', qop: '8' });
     await p.prepare();
     const t = recordingTargets();
     await p.establish(t.logonTarget);
@@ -115,7 +120,7 @@ describe('the four moments', () => {
     });
   });
   it('an HTTP wire: the target Oops is SNC’s own', async () => {
-    const p = snc(machine(['sbus.exe']));
+    const p = snc(machine());
     await p.prepare();
     await expect(
       p.establish(
@@ -127,7 +132,7 @@ describe('the four moments', () => {
     });
   });
   it('a throwing target is an Oops', async () => {
-    const p = snc(machine(['sbus.exe']));
+    const p = snc(machine());
     await p.prepare();
     const outcome = await p.establish(
       recordingTargets({ throws: true }).logonTarget,
@@ -137,31 +142,56 @@ describe('the four moments', () => {
   });
   it('establish before prepare is an Oops', async () => {
     await expect(
-      snc(machine(['sbus.exe'])).establish(recordingTargets().logonTarget),
+      snc(machine()).establish(recordingTargets().logonTarget),
     ).resolves.toMatchObject({ ok: false });
   });
-  it('SLC library, client not running → fixed reason and hint', async () => {
-    await expect(snc(machine([])).prepare()).resolves.toEqual({
-      ok: false,
-      refusal: {
-        reason:
-          'the SAP Secure Login Client is not running or could not be checked',
-        hint: 'Start the SAP Secure Login Client and log on to the profile used for SAP applications',
-      },
-    });
+  it('SLC library → Ok: the product is named, not checked', async () => {
+    await expect(snc(machine()).prepare()).resolves.toEqual({ ok: true });
   });
-  it('non-SLC library, no SLC process → Ok, no probe', async () => {
-    await expect(snc(machine([]), { sncLib: KRB }).prepare()).resolves.toEqual({
+  it('non-SLC library → Ok, no product named', async () => {
+    await expect(snc(machine(), { sncLib: KRB }).prepare()).resolves.toEqual({
       ok: true,
     });
   });
-  it('no usable library → fixed reason naming sncLib in the hint; the candidates go to the log only', async () => {
+  it('no candidate at all → the refusal says so; the hint needs no logger', async () => {
     const outcome = await snc(fakeSystem({ platform: 'linux' })).prepare();
     expect(outcome).toEqual({
       ok: false,
       refusal: {
-        reason: 'no usable SNC library was found',
-        hint: 'set sncLib to the SNC (GSS) library of your SNC product; the log lists every candidate tried',
+        reason:
+          'no usable SNC library was found: no candidate (SNC_LIB_64 and SNC_LIB are unset and no Secure Login Client installation was found)',
+        hint: 'set sncLib to the SNC (GSS) library of your SNC product',
+      },
+    });
+  });
+  it('explicit sncLib unusable → that one path and its reason', async () => {
+    const outcome = await snc(machine(), {
+      sncLib: 'C:\\nope\\sapcrypto.dll',
+    }).prepare();
+    expect(outcome).toEqual({
+      ok: false,
+      refusal: {
+        reason:
+          'no usable SNC library was found: sncLib C:\\nope\\sapcrypto.dll (missing)',
+        hint: 'set sncLib to the SNC (GSS) library of your SNC product',
+      },
+    });
+  });
+  it('automatic → every candidate, each with its fixed reason', async () => {
+    const X86 =
+      'C:\\Program Files (x86)\\SAP\\FrontEnd\\SecureLogin\\lib\\sapcrypto.dll';
+    const TXT = 'D:\\readme.txt';
+    const outcome = await snc(
+      fakeSystem({
+        env: { SNC_LIB_64: TXT, SNC_LIB: X86 },
+        files: { [X86]: peLibrary('ia32'), [TXT]: Buffer.from('hello') },
+        registry: REGISTRY,
+      }),
+    ).prepare();
+    expect(outcome).toMatchObject({
+      ok: false,
+      refusal: {
+        reason: `no usable SNC library was found: SNC_LIB_64 ${TXT} (not a library); SNC_LIB ${X86} (wrong architecture); registry ${SLC} (missing)`,
       },
     });
   });
@@ -177,9 +207,117 @@ describe('the four moments', () => {
     });
     expect(JSON.stringify(await p.prepare())).not.toMatch(/SECRET/);
   });
+  it('a throwing logger never makes a method throw', async () => {
+    const make = (system: SncSystem, sncLib?: string) =>
+      new SncLogonProvider({
+        partnerName: 'p:CN=SID',
+        locator: new DefaultSncLibraryLocator(system, sncLib),
+        probes: [new SecureLoginClientProbe(system)],
+        logger: throwingLogger() as never,
+      });
+    for (const p of [
+      make(machine()),
+      make(machine(), 'C:\\nope.dll'),
+      make(fakeSystem({ platform: 'linux' })),
+    ]) {
+      const outcomes = [
+        await p.prepare(),
+        await p.establish(recordingTargets().logonTarget),
+        await p.authorize(recordingTargets().requestTarget),
+        await p.rejected({ at: 'logon', error: sdkError }),
+      ];
+      for (const outcome of outcomes) {
+        expect(outcome).toHaveProperty('ok');
+        expect(JSON.stringify(outcome)).not.toMatch(/SECRET/);
+      }
+    }
+    // A log sink that is down changes no answer.
+    const usable = make(machine());
+    await expect(usable.prepare()).resolves.toEqual({ ok: true });
+    await expect(
+      make(machine(), 'C:\\nope.dll').prepare(),
+    ).resolves.toMatchObject({
+      refusal: { reason: expect.stringMatching(/sncLib C:\\nope\.dll/) },
+    });
+  });
+  it('a custom locator returning a library without archs does not throw', async () => {
+    const p = new SncLogonProvider({
+      partnerName: 'p:CN=SID',
+      locator: { locate: async () => ({ path: KRB }) as never },
+      probes: [],
+      logger: { debug() {}, info() {}, warn() {}, error() {} },
+    });
+    await expect(p.prepare()).resolves.toEqual({ ok: true });
+    await expect(
+      p.rejected({ at: 'logon', error: 'SNCERR_INIT' }),
+    ).resolves.toMatchObject({
+      ok: false,
+      refusal: { reason: expect.stringMatching(/gsskrb5\.dll/) },
+    });
+  });
+  it('a probe that throws is skipped, not a refusal', async () => {
+    const p = new SncLogonProvider({
+      partnerName: 'p:CN=SID',
+      locator: new DefaultSncLibraryLocator(machine(), KRB),
+      probes: [
+        {
+          product: 'Broken',
+          appliesTo: async () => {
+            throw new Error('SECRET');
+          },
+        },
+      ],
+    });
+    await expect(p.prepare()).resolves.toEqual({ ok: true });
+  });
 });
 
 describe('rejected', () => {
+  it('A2200019 → the fixed reason, asserted', async () => {
+    const p = snc(machine());
+    await p.prepare();
+    await expect(p.rejected({ at: 'logon', error: sdkError })).resolves.toEqual(
+      {
+        ok: false,
+        refusal: {
+          reason: 'the SNC library has no credential to present (A2200019)',
+          hint: 'log on in the Secure Login Client, to the profile used for SAP applications',
+        },
+      },
+    );
+  });
+  it('before prepare(): the generic hint, no throw', async () => {
+    await expect(
+      snc(machine()).rejected({ at: 'logon', error: sdkError }),
+    ).resolves.toEqual({
+      ok: false,
+      refusal: {
+        reason: 'the SNC library has no credential to present (A2200019)',
+        hint: 'make sure the SNC product behind the SNC library is logged on',
+      },
+    });
+  });
+  it.each([
+    ['a free-text name', 'SECRET-PRODUCT'],
+    ['the shipped name, not the shipped probe', 'SAP Secure Login Client'],
+  ])('a consumer probe with %s → the generic hint', async (_, product) => {
+    const p = new SncLogonProvider({
+      partnerName: 'p:CN=SID',
+      locator: new DefaultSncLibraryLocator(machine(), SLC),
+      probes: [{ product, appliesTo: async () => true }],
+    });
+    await p.prepare();
+    const outcome = await p.rejected({ at: 'logon', error: sdkError });
+    expect(outcome).toMatchObject({
+      ok: false,
+      refusal: {
+        hint: expect.stringMatching(
+          /^make sure the SNC product behind .*sapcrypto\.dll/,
+        ),
+      },
+    });
+    expect(JSON.stringify(outcome)).not.toMatch(/SECRET|Secure Login Client/);
+  });
   it.each([
     ['the SDK object', sdkError],
     [
@@ -188,7 +326,7 @@ describe('rejected', () => {
     ],
     ['a string', 'GSS-API(min): A2200019:Operation aborted'],
   ])('A2200019 in %s → log on in the Secure Login Client', async (_, error) => {
-    const p = snc(machine(['sbus.exe']));
+    const p = snc(machine());
     await p.prepare();
     await expect(p.rejected({ at: 'logon', error })).resolves.toMatchObject({
       ok: false,
@@ -198,7 +336,7 @@ describe('rejected', () => {
     });
   });
   it('another library: names it, not the Secure Login Client', async () => {
-    const p = snc(machine([]), { sncLib: KRB });
+    const p = snc(machine(), { sncLib: KRB });
     await p.prepare();
     const outcome = JSON.stringify(
       await p.rejected({ at: 'logon', error: sdkError }),
@@ -207,7 +345,7 @@ describe('rejected', () => {
     expect(outcome).not.toMatch(/Secure Login Client/);
   });
   it('SNCERR_INIT names the library and its architecture', async () => {
-    const p = snc(machine(['sbus.exe']));
+    const p = snc(machine());
     await p.prepare();
     await expect(
       p.rejected({
@@ -220,7 +358,7 @@ describe('rejected', () => {
     });
   });
   it('anything else: fixed reason, an allowlisted key only', async () => {
-    const p = snc(machine(['sbus.exe']));
+    const p = snc(machine());
     await p.prepare();
     await expect(
       p.rejected({
