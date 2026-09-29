@@ -27,15 +27,21 @@ rejected(rejection: IAuthRejection): Promise<AuthOutcome>; // the system said no
    (`header`, `cookies`, `logonParameters`, `tlsMaterial` may throw) — and
    answers Oops. Every method body runs inside one `safely(…)` boundary; an
    exception out of one is a bug.
-2. **A refusal carries no secret — so it never carries foreign text.** Only
-   this package's own errors (the `TokenProviderError` family, whose messages
-   are written here and scrubbed by `describeOAuthErrorBody`) lend their
-   `message` to a refusal. Any other error — a refresher's, a loader's, axios',
-   the RFC SDK's — gives a fixed reason naming what failed, plus at most its
-   class name (`/^[A-Za-z]+Error$/`) or a system code (`/^E[A-Z]+$/`, e.g.
-   `ENOENT`); its message, fields and body never reach `reason` or `hint`.
-   A log line follows the same rule. Tested with secrets **inside** messages,
-   strings and SDK-shaped objects (`noSecretsInRefusals.test.ts`).
+2. **A refusal carries no secret — so it never carries an error's message.**
+   The class of an error is not evidence of what its message holds: this
+   package's own `BrowserAuthError` is built from an IdP callback's
+   `error_description` / `error_uri` (`oidcBrowserAuth` → `BrowserCallbackStrategy`),
+   and a consumer's strategy can construct any exported error class. So a
+   refusal is built only from **fixed wording chosen per error class**, plus
+   values that are names, not data: a `ValidationError`'s `missingFields`, an
+   `AssertionValidationError`'s `check`, a class name matching
+   `/^[A-Za-z]+Error$/`, a system code matching `/^E[A-Z]+$/` (`ENOENT`). No
+   `message`, field, `response`, `cause` or body of any error reaches `reason`
+   or `hint`. The message stays diagnostic: it goes to the logger under the
+   package's existing log rules, except where the thrower held tokens
+   (`onTokens`), which logs the class name only. Tested with secrets **inside**
+   messages, thrown strings, SDK-shaped objects, and foreign callback text
+   wrapped in a `BrowserAuthError` (`noSecretsInRefusals.test.ts`).
 3. **Nothing to add is Ok.** A provider with nothing for a moment writes to no
    target and answers Ok.
 4. **A target's Oops is the provider's to judge.** A provider with no other way
@@ -44,11 +50,27 @@ rejected(rejection: IAuthRejection): Promise<AuthOutcome>; // the system said no
 5. **`rejected()` decides alone; retrying is the consumer's.** Ok means "I
    changed what I will present — trying again can succeed"; Oops means "it
    cannot". Whether to try again, and how many times, is entirely the
-   consumer's decision. No provider retries anything itself — not a request,
-   not a refresh, not a login. A provider never answers Ok without having
-   changed what it will present: it remembers the credential it last
-   presented, and a renewal that yields the same one is Oops "the renewal
-   returned the credential that was refused".
+   consumer's decision. No provider retries anything itself: **no step runs
+   twice** — not a request, not a refresh, not a login. A renewal is not a
+   retry: calling `rejected()` is the consumer's decision to renew, and one
+   renewal is at most **one refresh, then — only if the refresh is refused or
+   there is no refresh token — one login** through the strategy the consumer
+   gave the provider. A provider never answers Ok without having changed what
+   it will present: it remembers the credential it last presented, and a
+   renewal that yields the same one is Oops "the renewal returned the
+   credential that was refused".
+6. **No implicit defaults — the consumer composes.** A constructor takes every
+   collaborator explicitly: the interactive strategy, the SAML assertion
+   validator and replay store, the SNC locator, probes and machine seam. No
+   provider builds one of its own when none is given. The package ships the
+   parts (strategies, validators, the replay store, the SNC locator / probe /
+   `nodeSncSystem()`), and **static factories** that assemble a named, common
+   combination — a recipe the consumer chooses by name, e.g.
+   `SncLogonProvider.forSecureLoginClient(…)`,
+   `AuthorizationCodeProvider.inBrowser(…)`. The consumer — or the broker, the
+   composition root for destinations — creates the instance, from a
+   constructor or a factory. Time, cancellation and interaction are therefore
+   the chosen strategy's, and the consumer's by choosing it.
 
 ## Token providers — `BaseTokenProvider` implements both contracts
 
@@ -66,23 +88,24 @@ token keep calling `getTokens()` / `refreshTokens()`.
 | `prepare()` | `getTokens()` — the cache, a refresh, or a login → Ok; failure → Oops |
 | `establish()` | nothing → Ok |
 | `authorize(request)` | `getTokens()` (renews on expiry, per attempt) → `applyToken(request, token)` → Ok; failure → Oops |
-| `rejected()` | `refreshTokens()` — refresh token, else login → Ok when the new token differs from the one last presented; the same token or a failure → Oops |
+| `rejected()` | one renewal (rule 5) through `refreshTokens()` — the refresh token, else one login through the injected strategy → Ok when the new token differs from the one last presented; the same token or a failure → Oops |
 
 - **`applyToken(request, result)`** is a protected hook, default
   `request.header('Authorization', `Bearer ${token}`)`. `Saml2PureProvider`
   overrides it with `request.cookies(token)` — its "token" is the SAML
   session's cookies (`tokenType: 'saml'`). The provider knows its own result;
   nothing outside asks.
-- **Failure → refusal.** The error classes map to a reason and a hint:
+- **Failure → refusal** (rule 2 — fixed wording per class, never a message):
 
   | Thrown | `reason` | `hint` |
   |---|---|---|
-  | `BrowserAuthError` | the error message | "complete the login in the browser within the timeout" |
-  | `RefreshError` | the error message | "the refresh token was refused; log in again" |
-  | `ValidationError` | the error message | "check the provider configuration: <missingFields>" |
-  | `ServiceKeyError` / `SessionDataError` | the error message | "check the service key / session data: <missingFields>" |
-  | any other `TokenProviderError` | the error message | — |
-  | anything else | "<kind> could not obtain a token" (+ class name / code, rule 2) | — |
+  | `BrowserAuthError` | "the interactive login did not complete" | "complete the login within the strategy's time" |
+  | `RefreshError` | "the refresh token was refused" | "log in again" |
+  | `ValidationError` | "the provider configuration is incomplete or invalid: <missingFields>" | "check the provider configuration" |
+  | `ServiceKeyError` / `SessionDataError` | "the service key or session data is incomplete: <missingFields>" | "check the service key or session data" |
+  | `AssertionValidationError` | "the SAML assertion was refused (<check>)" | — |
+  | any other `TokenProviderError` | "<kind> token request failed (<ClassName>)" | — |
+  | anything else | "<kind> token request failed" (+ class name / code, rule 2) | — |
 
 ### Where a renewed token goes — `onTokens`
 
@@ -100,13 +123,46 @@ because a store is down would take the connection down with it.
 The broker (step 4) injects its session store through it. A consumer without a
 broker omits it.
 
-### An interactive login inside `rejected()`
+### An interactive login inside `rejected()` — the strategy's time, the consumer's choice
 
-When the refresh token has also expired, `rejected()` falls back to the login
-flow, which may be a browser. Its time is bounded where it is today: the
-provider's strategy (`DEFAULT_LOGIN_TIMEOUT_MS`, 30 s, or the configured
-timeout). The process adds no deadline of its own; a timed-out login is an
-Oops with the `BrowserAuthError` hint.
+When there is no usable refresh token, the one renewal is a login through the
+strategy the consumer injected (rule 6). The provider promises no deadline of
+its own and adds no timer: time, cancellation and whether the login is
+interactive at all belong to that strategy, and so to the consumer who chose
+it. A consumer that must not block injects a strategy that does not — or one
+bounded as it needs.
+
+What this package guarantees is about the strategies it **ships**, not about
+the provider:
+- every shipped interactive strategy takes a `timeoutMs` and, when it expires
+  or when `dispose()` is called, releases what it holds and settles with a
+  `BrowserAuthError` (→ the fixed refusal above): the callback strategies
+  unbind their socket, as they do today (`DEFAULT_LOGIN_TIMEOUT_MS`, 30 s);
+  the manual strategies (`manualPasscodeStrategy`, `manualPasteStrategy`,
+  `manualSamlResponseStrategy`) gain it and close their pending `readline`;
+- a strategy the consumer writes is theirs: one that never settles makes
+  `prepare()` / `rejected()` wait, by the consumer's own choice.
+
+### Static factories — the named recipes
+
+Constructors take every collaborator (rule 6); these assemble the common ones,
+visibly:
+
+| Factory | Assembles |
+|---|---|
+| `AuthorizationCodeProvider.inBrowser(config, { timeoutMs? })` | `browserCallbackStrategy({ timeoutMs })` |
+| `OidcBrowserProvider.inBrowser(config, { timeoutMs? })` | `oidcCallbackStrategy({ timeoutMs })` |
+| `UaaPasscodeProvider.fromTerminal(config, { timeoutMs? })` | `manualPasscodeStrategy({ timeoutMs })` |
+| `Saml2PureProvider.inBrowser(config, { timeoutMs? })` | `samlCallbackStrategy({ timeoutMs })`, `createSignedResponseValidator` from `idpCertificates` / `idpEntityId`, `defaultReplayStore` |
+| `Saml2BearerProvider.inBrowser(config, { timeoutMs? })` | `samlCallbackStrategy({ timeoutMs })`, `createSignedAssertionValidator` from `idpCertificates` / `idpEntityId`, `defaultReplayStore` |
+| `CertificateAuthProvider.fromFiles(config)` | `new FileCertificateMaterialLoader()` |
+| `SncLogonProvider.forSecureLoginClient({ partnerName, qop?, sncLib?, myName? })` | `nodeSncSystem()`, `DefaultSncLibraryLocator(system, sncLib)`, `[SecureLoginClientProbe(system)]` |
+
+A factory's own parameters may have documented values (`timeoutMs` 30 s for a
+callback, 5 min for a terminal read); the recipe itself is chosen by name.
+Providers with no collaborator to choose (`ClientCredentialsProvider`,
+`OidcPasswordProvider`, `OidcTokenExchangeProvider`, `OidcDeviceFlowProvider`,
+`BasicAuthProvider`, `SamlAuthProvider`, `TokenAuthProvider`) need none.
 
 ## Moved in from `@mcp-abap-adt/connection`
 
@@ -156,12 +212,14 @@ LOCK/UNLOCK — all 200; each RFC conversation is its own SNC logon (~1–1.5 s)
 
 **Config:** `partnerName` (required — the system's SNC name), `qop` (one of
 `'1' | '2' | '3' | '8' | '9'`, default `'9'`; anything else refused at
-construction), `sncLib?`, `myName?` (sent only when set), and the strategies
-`locator?`, `probes?` (default: the Secure Login Client probe; `[]` for none),
-`system?`, `logger?`. A broker builds it from `IConnectionConfig`'s
+construction), `myName?` (sent only when set), `logger?`, and — required, no
+defaults (rule 6) — `locator: ISncLibraryLocator` and
+`probes: ISncProductProbe[]` (`[]` for no product check). The usual
+assembly is the factory `SncLogonProvider.forSecureLoginClient({ partnerName,
+qop?, sncLib?, myName? })`. A broker builds it from `IConnectionConfig`'s
 `sncPartnerName`, `sncQop`, `sncLib`, `sncMyName`.
 
-**Finding the library** (`ISncLibraryLocator`, default `DefaultSncLibraryLocator`):
+**Finding the library** (`ISncLibraryLocator`; shipped: `DefaultSncLibraryLocator(system, sncLib?)`):
 - **Explicit** `sncLib` is the only candidate; unusable (missing, not a
   library, wrong architecture) → Oops naming the path and reason.
 - **Automatic** candidates in order: `SNC_LIB_64` (64-bit process), `SNC_LIB`,
@@ -201,7 +259,8 @@ may be an `Error`, a string or the SDK's plain object:
 
 **The machine seam.** Environment, file heads, the registry (`reg query …
 /reg:64`) and the process list (`tasklist` / `ps`) are behind one injectable
-`SncSystem`; the default is `nodeSncSystem()`. Every rule above is tested
+`SncSystem`; the shipped one is `nodeSncSystem()`, which the locator and the
+probe take in their constructors (no default). Every rule above is tested
 with a fake.
 
 The provider depends on neither `@mcp-abap-adt/sap-rfc-lite` nor
@@ -216,9 +275,10 @@ The provider depends on neither `@mcp-abap-adt/sap-rfc-lite` nor
   `FileCertificateMaterialLoader`, `SamlAuthProvider`, `TokenAuthProvider`,
   `SncLogonProvider` (+ `SncLogonProviderConfig`), `DefaultSncLibraryLocator`,
   `SecureLoginClientProbe`, `nodeSncSystem`, and the types `ISncLibraryLocator`,
-  `ISncProductProbe`, `SncLibrary`, `SncSystem`, `SncArch`. Internal and not
-  exported: the architecture reader, the `reg` / `tasklist` / `ps` parsers,
-  the refusal mapping.
+  `ISncProductProbe`, `SncLibrary`, `SncSystem`, `SncArch`; the static
+  factories in *Static factories*; `timeoutMs` on the manual strategies.
+  Internal and not exported: the architecture reader, the `reg` / `tasklist` /
+  `ps` parsers, the refusal mapping.
 - **Scope in `CLAUDE.md` and the README:** "This package provides the
   credentials a process delegates to: every `IAuthProvider`, and the token
   providers behind them." It still stores nothing, orchestrates nothing and
@@ -239,6 +299,10 @@ The provider depends on neither `@mcp-abap-adt/sap-rfc-lite` nor
   - a token provider is handed to the process as it is — no
     `TokenAuthProvider` around it;
   - a store that persisted after `getTokens()` passes `onTokens` instead;
+  - nothing is defaulted any more: a provider that took a strategy, a SAML
+    validator or a replay store implicitly now takes it in its constructor —
+    or the consumer calls the named factory (`inBrowser`, `fromTerminal`,
+    `fromFiles`, `forSecureLoginClient`);
   - it needs `connection` 10.0.0; 9.x speaks the old `IAuthProvider`.
 
 ## Testing
@@ -247,7 +311,10 @@ The provider depends on neither `@mcp-abap-adt/sap-rfc-lite` nor
 |---|---|
 | Every exported provider satisfies `IAuthProvider` and answers each of the four moments with an `AuthOutcome` | a table-driven unit test over one instance of each, against recording targets |
 | No exception crosses the contract: each provider with its work made to throw, **and with targets whose `header` / `cookies` / `logonParameters` / `tlsMaterial` throw**, answers Oops | same table, failing collaborators and throwing targets |
-| No secret in a refusal: a secret placed **inside** a foreign error's message, a thrown string, or an SDK-shaped object's fields never appears in `reason` / `hint` | `noSecretsInRefusals.test.ts`, one case per provider |
+| No secret in a refusal: a secret placed **inside** an error's message — foreign or this package's own, including IdP callback text wrapped in a `BrowserAuthError` — a thrown string, or an SDK-shaped object's fields never appears in `reason` / `hint` | `noSecretsInRefusals.test.ts`, one case per provider |
+| One renewal, no step twice: refresh succeeds → Ok (token changed); refresh refused → exactly one login → Ok; login refused → Oops, with no second refresh or login | unit, counting collaborators |
+| No implicit defaults: constructing a provider without its strategy / validator / replay store / locator / probes does not compile; each factory assembles exactly the parts in its table row | typecheck (`@ts-expect-error`) and unit |
+| Shipped strategies are bounded: a manual strategy with `timeoutMs` settles with `BrowserAuthError` and closes its `readline` on expiry and on `dispose()`; a consumer strategy that never settles is waited on (documented, asserted with a fake timer) | unit |
 | No Ok on an unchanged credential: a renewal returning the refused token → Oops, for `BaseTokenProvider` and `TokenAuthProvider.from` | unit |
 | Token providers: `prepare` → `getTokens`; `authorize` writes `Bearer` per attempt and renews on expiry; `rejected` → `refreshTokens`; `Saml2PureProvider` writes cookies | unit, stubbed login / refresh |
 | `onTokens` is called after a login and after a refresh, never on a cache hit, awaited before the answer; its failure does not fail authentication | unit |
@@ -255,7 +322,6 @@ The provider depends on neither `@mcp-abap-adt/sap-rfc-lite` nor
 | `BasicAuthProvider` writes both the header and the logon parameters, and goes on when the target refuses the parameters | unit |
 | `CertificateAuthProvider` returns the target's Oops; a loader failure is an Oops from `prepare` | unit |
 | `TokenAuthProvider.fixed` / `.from` — `rejected()` as specified | unit |
-| No provider retries: a refusal inside `prepare` / `authorize` / `rejected` is answered once, with no second login, refresh or request | unit, counting collaborators |
 | SNC: library resolution (explicit fails, automatic skips; the measured x86-`SNC_LIB` / x64-registry mix; empty variables; absent registry; `FAT_MAGIC_64` accepted and rejected by architecture), the PE / Mach-O / ELF reader, the probe (scoped, case-insensitive paths, unreadable process list), QOP allowlist, the three error shapes in `rejected` | unit, fake `SncSystem` |
 | SNC end to end: prepare → establish's parameters into a real RFC conversation → discovery; profile logged out → `rejected` says "log on in the Secure Login Client" | live, manual, recorded in the PR |
 
@@ -270,4 +336,11 @@ Each rule gets a test that goes red when the rule is removed.
    in ran.
 3. ~~**`TokenAuthProvider.asking`.**~~ **Dropped** — `fixed(token)` and
    `from(refresher)` only.
-4. ~~**Retries.**~~ **The consumer's, all of them** — see rule 5.
+4. ~~**Retries.**~~ **The consumer's, all of them** — see rule 5; a renewal
+   (one refresh, then at most one login) is not a retry.
+5. ~~**Defaults.**~~ **None** — constructors take every collaborator; static
+   factories are the named recipes (rule 6).
+6. **`OidcDeviceFlowProvider`'s announcement.** It shows the user the
+   verification URL and code through the logger, or stderr when there is none
+   (`announce.ts`) — an implicit output channel. Keep it as the provider's own
+   behaviour, or make it an injected collaborator like the strategies?
