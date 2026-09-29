@@ -172,7 +172,7 @@ visibly:
 | `UaaPasscodeProvider.fromTerminal(config, { timeoutMs? })` | `manualPasscodeStrategy({ timeoutMs })` |
 | `Saml2PureProvider.inBrowser(config, { timeoutMs? })` | `samlCallbackStrategy({ timeoutMs })`, `createSignedResponseValidator` from `idpCertificates` / `idpEntityId`, `defaultReplayStore` |
 | `Saml2BearerProvider.inBrowser(config, { timeoutMs? })` | `samlCallbackStrategy({ timeoutMs })`, `createSignedAssertionValidator` from `idpCertificates` / `idpEntityId`, `defaultReplayStore` |
-| `OidcDeviceFlowProvider.toConsole(config, { logger? })` | `consoleDeviceCodePresenter(logger)` |
+| `OidcDeviceFlowProvider.toConsole(config)` | `consoleDeviceCodePresenter(config.logger)` |
 | `CertificateAuthProvider.fromFiles(config)` | `new FileCertificateMaterialLoader()` |
 | `SncLogonProvider.forSecureLoginClient({ partnerName, qop?, sncLib?, myName? })` | `nodeSncSystem()`, `DefaultSncLibraryLocator(system, sncLib)`, `[SecureLoginClientProbe(system)]` |
 
@@ -334,8 +334,7 @@ The provider depends on neither `@mcp-abap-adt/sap-rfc-lite` nor
   `ISncProductProbe`, `SncLibrary`, `SncSystem`, `SncArch`; the static
   factories in *Static factories*; `timeoutMs` on the manual strategies;
   `IDeviceCodePresenter`, `DeviceCodePrompt`, `consoleDeviceCodePresenter`.
-  Internal and not exported: the architecture reader, the `reg` / `tasklist` /
-  `ps` parsers, the refusal mapping.
+  Internal and not exported: the architecture reader, the `reg` parser, the refusal mapping.
 - **Scope in `CLAUDE.md` and the README:** "This package provides the
   credentials a process delegates to: every `IAuthProvider`, and the token
   providers behind them." It still stores nothing, orchestrates nothing and
