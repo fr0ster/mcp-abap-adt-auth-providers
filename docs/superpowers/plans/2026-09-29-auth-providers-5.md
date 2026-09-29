@@ -13,8 +13,10 @@
 ## Global Constraints
 
 - Dependencies: `@mcp-abap-adt/interfaces-auth` `^3.0.0`, `@mcp-abap-adt/interfaces-auth-sap` `^1.1.0`. No new runtime dependency. `engines` stays `"^22 || ^24 || ^26"`.
-- **No exception crosses the contract.** `prepare`, `establish`, `authorize` and `rejected` catch what their work throws and answer Oops. Constructors may still throw `ValidationError` for bad configuration.
-- **A refusal carries no secret.** `reason` and `hint` never contain a token, refresh token, password, passphrase, key material or cookie value. A refusal is built from an error's `message` only — never its `response`, `config`, `cause` or body.
+- **No exception crosses the contract.** Every body of `prepare`, `establish`, `authorize` and `rejected` runs inside `safely(what, work)`, which turns anything thrown — own work, a collaborator, or a **target** (`header`, `cookies`, `logonParameters`, `tlsMaterial`) — into Oops. Constructors may still throw `ValidationError` for bad configuration.
+- **A refusal carries no foreign text.** Only a `TokenProviderError` (this package's own family) lends its `message` to a refusal. Any other thrown value gives the fixed reason `"<what> failed"`, plus at most its class name when it matches `/^[A-Za-z]+Error$/` and a `code` when it matches `/^E[A-Z]+$/`. Never its message, fields, `response`, `config`, `cause` or body. Log lines follow the same rule.
+- **No Ok on an unchanged credential.** A provider remembers what it last presented; a renewal that yields the same token is Oops `"the renewal returned the credential that was refused"`.
+- **Persistence is best effort.** `onTokens` is awaited; its failure is logged by class name only and does not fail authentication.
 - **Nothing to add is Ok.** A provider with nothing for a moment writes to no target and answers `{ ok: true }`.
 - **A target's Oops is the provider's to judge.** SNC and Certificate return it as their own; Basic ignores it for logon parameters (the header carries a password).
 - **No provider retries.** `rejected()` answers Ok only when it changed what it will present; whether to try again is the consumer's. No second login, refresh or request inside a provider.
@@ -28,7 +30,9 @@
 
 ## Review Focus
 
-- An axios error carrying `config.headers.Authorization` and a `response.data` body with a token reaches `refusalFrom` — the refusal must not contain either — test in Task 1.
+- A foreign error whose **message** contains a token (a refresher throwing `Error('token rejected: <token>')`), a thrown string with a secret, and an SDK-shaped object with a secret in a field — none may reach a refusal — tests in Tasks 1, 3, 8, 9.
+- A target whose `header` / `cookies` / `logonParameters` / `tlsMaterial` throws must give Oops, not a rejected promise — tests in Tasks 2, 3, 8, 9.
+- A renewal that returns the very token that was refused must be Oops — tests in Tasks 2 and 3.
 - `onTokens` that throws must not turn a successful login into an Oops, and must not be called on a cache hit — test in Task 2.
 - `authorize()` after the token expired must renew in that call (per attempt), not present the stale token — test in Task 2.
 - `SNC_LIB` / `SNC_LIB_64` set to an empty or whitespace string must count as unset — test in Task 6.
@@ -38,7 +42,7 @@
 
 | File | Responsibility |
 |---|---|
-| `src/auth/refusal.ts` | `OK`, `oops(reason, hint?)`, `refusalFrom(error)` — the one place errors become refusals |
+| `src/auth/refusal.ts` | `OK`, `oops(reason, hint?)`, `refusalFrom(error, what)`, `safely(what, work)` — the one place thrown values become refusals; own messages only |
 | `src/providers/BaseTokenProvider.ts` | + `IAuthProvider`, `TokenProviderHooks`/`onTokens`, `applyToken` |
 | `src/providers/Saml2PureProvider.ts` | `applyToken` → cookies |
 | `src/providers/*Provider.ts` (9) | configs extend `TokenProviderHooks`; `super(config)` |
@@ -62,7 +66,7 @@
 - Test: `src/__tests__/auth/refusal.test.ts`
 
 **Interfaces:**
-- Produces: `OK: AuthOutcome`; `oops(reason: string, hint?: string): AuthOutcome`; `refusalFrom(error: unknown): AuthOutcome`; test helper `recordingTargets(options?: { acceptsLogonParameters?: boolean; acceptsTls?: boolean })` → `{ logonTarget: ILogonTarget; requestTarget: IRequestTarget; logon: { tls: ICertificateMaterial[]; params: Record<string, string>[] }; request: { headers: Record<string, string>; cookies: string[] } }`.
+- Produces: `OK: AuthOutcome`; `oops(reason: string, hint?: string): AuthOutcome`; `refusalFrom(error: unknown, what: string): AuthOutcome`; `safely(what: string, work: () => AuthOutcome | Promise<AuthOutcome>): Promise<AuthOutcome>`; test helper `recordingTargets(options?: { acceptsLogonParameters?: boolean; acceptsTls?: boolean; throws?: boolean })` → `{ logonTarget: ILogonTarget; requestTarget: IRequestTarget; logon: { tls: ICertificateMaterial[]; params: Record<string, string>[] }; request: { headers: Record<string, string>; cookies: string[] } }`.
 
 - [ ] **Step 1: Branch and dependencies**
 
@@ -71,7 +75,7 @@ git fetch origin && git checkout -b feat/auth-providers-5 origin/master
 npm install @mcp-abap-adt/interfaces-auth@^3.0.0 @mcp-abap-adt/interfaces-auth-sap@^1.1.0
 ```
 
-Expected: both ranges in `package.json`. Run `npm run test:check`; if anything imports `IRenewableCredential` or the removed `IAuthProvider` members, it fails here — nothing in `src` does today, so expect PASS.
+Expected: both ranges in `package.json`; `npm run test:check` PASS (nothing in `src` uses the removed `IAuthProvider` members or `IRenewableCredential`).
 
 - [ ] **Step 2: Test helper**
 
@@ -90,6 +94,8 @@ export interface RecordingTargetsOptions {
   acceptsLogonParameters?: boolean;
   /** false: the wire has no TLS (RFC). */
   acceptsTls?: boolean;
+  /** true: every target member throws — a broken wire. */
+  throws?: boolean;
 }
 
 export function recordingTargets(options: RecordingTargetsOptions = {}) {
@@ -101,17 +107,22 @@ export function recordingTargets(options: RecordingTargetsOptions = {}) {
     headers: {} as Record<string, string>,
     cookies: [] as string[],
   };
+  const broken = () => {
+    if (options.throws) throw new Error('target exploded: SECRET-IN-TARGET');
+  };
   const refuse = (what: string): AuthOutcome => ({
     ok: false,
     refusal: { reason: `this wire does not take ${what}` },
   });
   const logonTarget: ILogonTarget = {
     tlsMaterial(material) {
+      broken();
       if (options.acceptsTls === false) return refuse('TLS material');
       logon.tls.push(material);
       return { ok: true };
     },
     logonParameters(parameters) {
+      broken();
       if (options.acceptsLogonParameters === false) {
         return refuse('logon parameters');
       }
@@ -121,9 +132,11 @@ export function recordingTargets(options: RecordingTargetsOptions = {}) {
   };
   const requestTarget: IRequestTarget = {
     header(name, value) {
+      broken();
       request.headers[name] = value;
     },
     cookies(value) {
+      broken();
       request.cookies.push(value);
     },
   };
@@ -137,7 +150,7 @@ export function recordingTargets(options: RecordingTargetsOptions = {}) {
 
 ```ts
 import { describe, expect, it } from '@jest/globals';
-import { OK, oops, refusalFrom } from '../../auth/refusal';
+import { OK, oops, refusalFrom, safely } from '../../auth/refusal';
 import {
   BrowserAuthError,
   RefreshError,
@@ -159,29 +172,44 @@ describe('refusal', () => {
     [new ValidationError('bad config', ['clientId']), /check the provider configuration: clientId/],
     [new ServiceKeyError('no url', ['url']), /check the service key or session data: url/],
     [new SessionDataError('no token', ['token']), /check the service key or session data: token/],
-  ])('maps %p to its hint', (error, hint) => {
-    const outcome = refusalFrom(error);
-    expect(outcome.ok).toBe(false);
-    if (!outcome.ok) {
-      expect(outcome.refusal.reason).toBe((error as Error).message);
-      expect(outcome.refusal.hint).toMatch(hint);
-    }
+  ])('an own error %p keeps its message and gets its hint', (error, hint) => {
+    const outcome = refusalFrom(error, 'the provider');
+    expect(outcome).toMatchObject({ ok: false, refusal: { reason: (error as Error).message } });
+    if (!outcome.ok) expect(outcome.refusal.hint).toMatch(hint);
   });
 
-  it('an unknown error keeps its message and has no hint', () => {
-    expect(refusalFrom(new Error('boom'))).toEqual({ ok: false, refusal: { reason: 'boom' } });
-    expect(refusalFrom('plain')).toEqual({ ok: false, refusal: { reason: 'plain' } });
+  it('a foreign error never lends its message — a secret inside it stays out', () => {
+    const outcome = refusalFrom(new Error('token rejected: SECRET-OPAQUE-TOKEN'), 'the refresher');
+    expect(outcome).toEqual({ ok: false, refusal: { reason: 'the refresher failed' } });
   });
 
-  it('never carries what an axios error holds besides its message', () => {
-    const error = Object.assign(new Error('Request failed with status code 401'), {
-      config: { headers: { Authorization: 'Basic U0VDUkVULVBBU1M=' } },
-      response: { status: 401, data: { access_token: 'SECRET-TOKEN' } },
-      cause: new Error('SECRET-CAUSE'),
+  it('a foreign error keeps only a safe class name and code', () => {
+    class AxiosError extends Error {}
+    const axios = Object.assign(new AxiosError('Request failed: Basic U0VDUkVU'), {
+      name: 'AxiosError',
+      code: 'ECONNREFUSED',
+      config: { headers: { Authorization: 'Basic U0VDUkVU' } },
+      response: { data: { access_token: 'SECRET-TOKEN' } },
     });
-    const text = JSON.stringify(refusalFrom(error));
-    expect(text).not.toMatch(/U0VDUkVULVBBU1M=|SECRET-TOKEN|SECRET-CAUSE/);
-    expect(text).toMatch(/status code 401/);
+    const text = JSON.stringify(refusalFrom(axios, 'the token endpoint'));
+    expect(text).toMatch(/the token endpoint failed \(AxiosError, ECONNREFUSED\)/);
+    expect(text).not.toMatch(/U0VDUkVU|SECRET-TOKEN/);
+  });
+
+  it('a name or code that is not plainly safe is dropped', () => {
+    const weird = Object.assign(new Error('x'), { name: 'SECRET name', code: 'secret-code' });
+    expect(refusalFrom(weird, 'it')).toEqual({ ok: false, refusal: { reason: 'it failed' } });
+  });
+
+  it('a thrown string or object lends nothing', () => {
+    expect(refusalFrom('SECRET-STRING', 'it')).toEqual({ ok: false, refusal: { reason: 'it failed' } });
+    expect(JSON.stringify(refusalFrom({ message: 'SECRET-FIELD' }, 'it'))).not.toMatch(/SECRET/);
+  });
+
+  it('safely turns a sync throw, an async rejection and a returned outcome into outcomes', async () => {
+    await expect(safely('it', () => { throw new Error('SECRET'); })).resolves.toEqual({ ok: false, refusal: { reason: 'it failed' } });
+    await expect(safely('it', async () => { throw new RefreshError('refused'); })).resolves.toMatchObject({ ok: false, refusal: { reason: 'refused' } });
+    await expect(safely('it', () => OK)).resolves.toEqual({ ok: true });
   });
 });
 ```
@@ -197,12 +225,15 @@ Expected: FAIL — `Cannot find module '../../auth/refusal'`.
 
 ```ts
 /**
- * How a provider in this package answers Oops.
+ * How a provider in this package answers Oops — the one place thrown values
+ * become refusals, so "a refusal carries no secret" is kept in one place.
  *
- * The one place a thrown error becomes a refusal, so the rule that a refusal
- * carries no secret is kept in one place: only the error's `message` is read —
- * never its `response`, `config`, `cause` or body, where an axios error keeps
- * the request's Authorization header and the token endpoint's answer.
+ * Only this package's own errors (the TokenProviderError family) lend their
+ * message: those messages are written here and scrubbed by
+ * describeOAuthErrorBody. Anything else is foreign text — a refresher's, a
+ * loader's, axios', the RFC SDK's — and may carry exactly the secret it failed
+ * on, so it gives a fixed reason with at most a plainly safe class name and
+ * system code.
  */
 
 import type { AuthOutcome } from '@mcp-abap-adt/interfaces-auth';
@@ -211,6 +242,7 @@ import {
   RefreshError,
   ServiceKeyError,
   SessionDataError,
+  TokenProviderError,
   ValidationError,
 } from '../errors/TokenProviderErrors';
 
@@ -222,16 +254,26 @@ export function oops(reason: string, hint?: string): AuthOutcome {
     : { ok: false, refusal: { reason, hint } };
 }
 
-function messageOf(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
-
 function fields(missing: string[] | undefined): string {
   return missing?.length ? `: ${missing.join(', ')}` : '';
 }
 
-export function refusalFrom(error: unknown): AuthOutcome {
-  const reason = messageOf(error);
+/** Class name and system code, when they are plainly not a secret. */
+function safeLabels(error: unknown): string {
+  if (typeof error !== 'object' || error === null) return '';
+  const labels: string[] = [];
+  const name = (error as { name?: unknown }).name;
+  if (typeof name === 'string' && /^[A-Za-z]+Error$/.test(name)) labels.push(name);
+  const code = (error as { code?: unknown }).code;
+  if (typeof code === 'string' && /^E[A-Z]+$/.test(code)) labels.push(code);
+  return labels.length ? ` (${labels.join(', ')})` : '';
+}
+
+export function refusalFrom(error: unknown, what: string): AuthOutcome {
+  if (!(error instanceof TokenProviderError)) {
+    return oops(`${what} failed${safeLabels(error)}`);
+  }
+  const reason = error.message;
   if (error instanceof BrowserAuthError) {
     return oops(reason, 'complete the login in the browser within the timeout');
   }
@@ -246,6 +288,21 @@ export function refusalFrom(error: unknown): AuthOutcome {
   }
   return oops(reason);
 }
+
+/**
+ * The boundary every contract method runs inside: whatever the body throws —
+ * own work, a collaborator, a target — comes back as an outcome.
+ */
+export async function safely(
+  what: string,
+  work: () => AuthOutcome | Promise<AuthOutcome>,
+): Promise<AuthOutcome> {
+  try {
+    return await work();
+  } catch (error) {
+    return refusalFrom(error, what);
+  }
+}
 ```
 
 - [ ] **Step 6: Run to see it pass**
@@ -257,7 +314,7 @@ Expected: PASS.
 
 ```bash
 git add package.json package-lock.json src/auth/refusal.ts src/__tests__/helpers/targets.ts src/__tests__/auth/refusal.test.ts
-git commit -m "feat: refusals from errors, secret-free; interfaces-auth ^3.0.0"
+git commit -m "feat: refusals from errors — own messages only, foreign text never; interfaces-auth ^3.0.0"
 ```
 
 ### Task 2: Token providers are `IAuthProvider`s
@@ -267,7 +324,7 @@ git commit -m "feat: refusals from errors, secret-free; interfaces-auth ^3.0.0"
 - Test: `src/__tests__/providers/tokenProviderContract.test.ts`
 
 **Interfaces:**
-- Consumes: `OK`, `refusalFrom` (Task 1); `recordingTargets` (Task 1).
+- Consumes: `OK`, `oops`, `safely` (Task 1); `recordingTargets` (Task 1).
 - Produces: `interface TokenProviderHooks { onTokens?: (result: ITokenResult) => Promise<void> }` (exported); `BaseTokenProvider implements IRefreshableTokenProvider, IAuthProvider` with `get kind(): string`, `prepare()`, `establish()`, `authorize()`, `rejected()`, and `protected applyToken(request: IRequestTarget, result: ITokenResult): void`.
 
 - [ ] **Step 1: Write the failing test**
@@ -282,6 +339,7 @@ import {
   BaseTokenProvider,
   type TokenProviderHooks,
 } from '../../providers/BaseTokenProvider';
+import { Saml2PureProvider } from '../../providers/Saml2PureProvider';
 import { recordingTargets } from '../helpers/targets';
 
 const inAnHour = () => Date.now() + 3600_000;
@@ -304,6 +362,7 @@ class TestProvider extends BaseTokenProvider {
   protected getAuthType(): OAuth2GrantType { return 'client_credentials'; }
   expire() { this.expiresAt = Date.now() - 1; }
 }
+const refused = { at: 'request' as const, status: 401, error: {} };
 
 describe('BaseTokenProvider as IAuthProvider', () => {
   it('kind is the grant type', () => {
@@ -317,16 +376,14 @@ describe('BaseTokenProvider as IAuthProvider', () => {
   });
 
   it('establish writes nothing and answers Ok', async () => {
-    const p = new TestProvider();
     const t = recordingTargets();
-    await expect(p.establish(t.logonTarget)).resolves.toEqual({ ok: true });
+    await expect(new TestProvider().establish(t.logonTarget)).resolves.toEqual({ ok: true });
     expect(t.logon).toEqual({ tls: [], params: [] });
   });
 
   it('authorize writes the bearer header', async () => {
-    const p = new TestProvider();
     const t = recordingTargets();
-    await expect(p.authorize(t.requestTarget)).resolves.toEqual({ ok: true });
+    await expect(new TestProvider().authorize(t.requestTarget)).resolves.toEqual({ ok: true });
     expect(t.request.headers).toEqual({ Authorization: 'Bearer T1' });
   });
 
@@ -340,22 +397,42 @@ describe('BaseTokenProvider as IAuthProvider', () => {
     expect(p.refresh).toHaveBeenCalledTimes(1);
   });
 
-  it('rejected refreshes and answers Ok, once', async () => {
+  it('a throwing target is an Oops, not a rejected promise', async () => {
     const p = new TestProvider();
-    await p.prepare();
-    await expect(p.rejected({ at: 'request', status: 401, error: {} })).resolves.toEqual({ ok: true });
+    const outcome = await p.authorize(recordingTargets({ throws: true }).requestTarget);
+    expect(outcome).toMatchObject({ ok: false });
+    expect(JSON.stringify(outcome)).not.toMatch(/SECRET-IN-TARGET/);
+  });
+
+  it('rejected refreshes once and answers Ok when the token changed', async () => {
+    const p = new TestProvider();
+    await p.authorize(recordingTargets().requestTarget); // presents T1
+    await expect(p.rejected(refused)).resolves.toEqual({ ok: true });
     expect(p.refresh).toHaveBeenCalledTimes(1);
+  });
+
+  it('rejected is Oops when the renewal returns the token that was refused', async () => {
+    const p = new TestProvider();
+    p.refresh.mockResolvedValue(result('T1', 'R2'));
+    await p.authorize(recordingTargets().requestTarget); // presents T1
+    await expect(p.rejected(refused)).resolves.toMatchObject({
+      ok: false,
+      refusal: { reason: 'the renewal returned the credential that was refused' },
+    });
   });
 
   it('a failure is an Oops, never a throw, and nothing is retried', async () => {
     const p = new TestProvider();
     p.login.mockRejectedValue(new RefreshError('refused'));
-    const outcome = await p.prepare();
-    expect(outcome.ok).toBe(false);
+    await expect(p.prepare()).resolves.toMatchObject({ ok: false });
     expect(p.login).toHaveBeenCalledTimes(1);
-    const t = recordingTargets();
-    await expect(p.authorize(t.requestTarget)).resolves.toMatchObject({ ok: false });
-    await expect(p.rejected({ at: 'request', error: {} })).resolves.toMatchObject({ ok: false });
+  });
+
+  it('a foreign error from the login keeps its secret out of the refusal', async () => {
+    const p = new TestProvider();
+    p.login.mockRejectedValue(new Error('invalid_grant for SECRET-CLIENT-SECRET'));
+    const outcome = await p.prepare();
+    expect(outcome).toEqual({ ok: false, refusal: { reason: 'client_credentials token request failed' } });
   });
 
   it('onTokens after a login and after a refresh, never on a cache hit', async () => {
@@ -363,13 +440,27 @@ describe('BaseTokenProvider as IAuthProvider', () => {
     const p = new TestProvider({ onTokens });
     await p.prepare();
     await p.authorize(recordingTargets().requestTarget); // cache hit
-    await p.rejected({ at: 'request', error: {} });
+    await p.rejected(refused);
     expect(onTokens.mock.calls.map(([r]) => r.authorizationToken)).toEqual(['T1', 'T2']);
   });
 
-  it('a failing onTokens does not fail authentication', async () => {
-    const p = new TestProvider({ onTokens: async () => { throw new Error('store down'); } });
+  it('a failing onTokens does not fail authentication and logs no message', async () => {
+    const warn = jest.fn();
+    const p = new TestProvider({ onTokens: async () => { throw new Error('store down: SECRET-T1'); } });
+    (p as unknown as { logger: unknown }).logger = { warn, debug: jest.fn(), info: jest.fn(), error: jest.fn() };
     await expect(p.prepare()).resolves.toEqual({ ok: true });
+    expect(JSON.stringify(warn.mock.calls)).not.toMatch(/SECRET/);
+  });
+
+  it('Saml2PureProvider writes cookies, not a header', () => {
+    const p = Object.create(Saml2PureProvider.prototype) as Saml2PureProvider;
+    const t = recordingTargets();
+    (p as unknown as { applyToken: (r: unknown, x: ITokenResult) => void }).applyToken(
+      t.requestTarget,
+      result('SAP_SESSIONID=x'),
+    );
+    expect(t.request.cookies).toEqual(['SAP_SESSIONID=x']);
+    expect(t.request.headers).toEqual({});
   });
 });
 ```
@@ -395,14 +486,15 @@ import type {
   OAuth2GrantType,
 } from '@mcp-abap-adt/interfaces-auth';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
-import { OK, refusalFrom } from '../auth/refusal';
+import { OK, oops, safely } from '../auth/refusal';
 
 /** What every token provider's config may carry beside its own fields. */
 export interface TokenProviderHooks {
   /**
    * Called after every NEW token — a login or a refresh, never a cache hit —
    * and awaited before the provider answers. The broker persists through it.
-   * A failure here is logged and does not fail the authentication.
+   * Best effort: a failure is logged by class name and does not fail the
+   * authentication.
    */
   onTokens?: (result: ITokenResult) => Promise<void>;
 }
@@ -420,13 +512,15 @@ export abstract class BaseTokenProvider
   protected tokenType?: 'jwt' | 'saml' | 'opaque';
   protected logger?: ILogger;
   private readonly onTokens?: TokenProviderHooks['onTokens'];
+  /** The token last put on a request, so rejected() can tell a renewal from a repeat. */
+  private presented?: string;
 
   constructor(hooks: TokenProviderHooks = {}) {
     this.onTokens = hooks.onTokens;
   }
 ```
 
-In `refreshTokens()`, after each of the two `this.updateTokens(result);` lines add `await this.obtained(result);`. Add these members at the end of the class:
+In `refreshTokens()`, after each of the two `this.updateTokens(result);` lines add `await this.obtained(result);`. Add at the end of the class:
 
 ```ts
   private async obtained(result: ITokenResult): Promise<void> {
@@ -434,8 +528,9 @@ In `refreshTokens()`, after each of the two `this.updateTokens(result);` lines a
     try {
       await this.onTokens(result);
     } catch (error) {
+      // Class name only: the hook holds the tokens, its message is foreign text.
       this.logger?.warn('[BaseTokenProvider] onTokens failed; the token stands', {
-        error: error instanceof Error ? error.message : String(error),
+        error: error instanceof Error ? error.constructor.name : typeof error,
       });
     }
   }
@@ -447,13 +542,16 @@ In `refreshTokens()`, after each of the two `this.updateTokens(result);` lines a
     return this.getAuthType();
   }
 
+  /** The subject of a fixed refusal: "<grant type> token request failed". */
+  private get obtaining(): string {
+    return `${this.kind} token request`;
+  }
+
   async prepare(): Promise<AuthOutcome> {
-    try {
+    return safely(this.obtaining, async () => {
       await this.getTokens();
       return OK;
-    } catch (error) {
-      return refusalFrom(error);
-    }
+    });
   }
 
   /** A token is presented per request; a logon needs nothing from it. */
@@ -463,22 +561,27 @@ In `refreshTokens()`, after each of the two `this.updateTokens(result);` lines a
 
   /** Per attempt: getTokens() renews an expired token here. */
   async authorize(request: IRequestTarget): Promise<AuthOutcome> {
-    try {
-      this.applyToken(request, await this.getTokens());
+    return safely(this.obtaining, async () => {
+      const result = await this.getTokens();
+      this.applyToken(request, result);
+      this.presented = result.authorizationToken;
       return OK;
-    } catch (error) {
-      return refusalFrom(error);
-    }
+    });
   }
 
-  /** A new token — refresh, else login — and Ok; retrying is the caller's. */
+  /** A new token — refresh, else login. Ok only if it differs; retrying is the caller's. */
   async rejected(_rejection: IAuthRejection): Promise<AuthOutcome> {
-    try {
-      await this.refreshTokens();
+    return safely(this.obtaining, async () => {
+      const refused = this.presented ?? this.authorizationToken;
+      const result = await this.refreshTokens();
+      if (refused !== undefined && result.authorizationToken === refused) {
+        return oops(
+          'the renewal returned the credential that was refused',
+          'the token source must issue a new token; log in again',
+        );
+      }
       return OK;
-    } catch (error) {
-      return refusalFrom(error);
-    }
+    });
   }
 
   /** How this provider's token rides on a request. Bearer by default. */
@@ -490,7 +593,7 @@ In `refreshTokens()`, after each of the two `this.updateTokens(result);` lines a
 - [ ] **Step 4: Thread the hook through the nine providers**
 
 For each of `AuthorizationCodeProvider`, `ClientCredentialsProvider`, `OidcBrowserProvider`, `OidcDeviceFlowProvider`, `OidcPasswordProvider`, `OidcTokenExchangeProvider`, `Saml2BearerProvider`, `Saml2PureProvider`, `UaaPasscodeProvider`:
-- its `…Config` interface adds `TokenProviderHooks` to what it extends (`export interface XConfig extends TokenProviderHooks {` — or `extends Saml2CommonConfig, TokenProviderHooks` where it already extends);
+- its `…Config` interface adds `TokenProviderHooks` to what it extends (`export interface XConfig extends TokenProviderHooks {`, or `extends Saml2CommonConfig, TokenProviderHooks` where it already extends);
 - its constructor's `super();` becomes `super(config);`;
 - import `type TokenProviderHooks` from `./BaseTokenProvider`.
 
@@ -498,7 +601,7 @@ In `src/providers/index.ts` add `export type { TokenProviderHooks } from './Base
 
 - [ ] **Step 5: `Saml2PureProvider` presents cookies**
 
-Add to the class (import `IRequestTarget`, `ITokenResult` types):
+Add to the class (import the `IRequestTarget`, `ITokenResult` types):
 
 ```ts
   /** Its "token" is the SAML session's cookies (tokenType 'saml'). */
@@ -507,37 +610,21 @@ Add to the class (import `IRequestTarget`, `ITokenResult` types):
   }
 ```
 
-Add to the test file:
-
-```ts
-import { Saml2PureProvider } from '../../providers/Saml2PureProvider';
-
-it('Saml2PureProvider writes cookies, not a header', () => {
-  const p = Object.create(Saml2PureProvider.prototype) as Saml2PureProvider;
-  const t = recordingTargets();
-  (p as unknown as { applyToken: (r: unknown, x: ITokenResult) => void }).applyToken(
-    t.requestTarget,
-    result('SAP_SESSIONID=x'),
-  );
-  expect(t.request.cookies).toEqual(['SAP_SESSIONID=x']);
-  expect(t.request.headers).toEqual({});
-});
-```
-
 - [ ] **Step 6: Run the new test and the whole suite**
 
-Run: `npm test -- src/__tests__/providers/tokenProviderContract.test.ts` → PASS. Then `npm run test:check && npm test` → PASS (the existing token-provider tests are unaffected: `getTokens` / `refreshTokens` behave as before).
+Run: `npm test -- src/__tests__/providers/tokenProviderContract.test.ts` → PASS. Then `npm run test:check && npm test` → PASS.
 
-- [ ] **Step 7: Prove two rules are load-bearing**
+- [ ] **Step 7: Prove three rules are load-bearing**
 
-1. Replace `await this.obtained(result)` after the refresh with nothing → "onTokens after a login and after a refresh" FAILS. Revert.
-2. Make `authorize` return OK without calling `getTokens()` a second time (cache the first result in a field) → "authorize renews an expired token" FAILS. Revert.
+1. Remove the `await this.obtained(result)` after the refresh → "onTokens after a login and after a refresh" FAILS. Revert.
+2. Remove the `refused === result.authorizationToken` check → "Oops when the renewal returns the token that was refused" FAILS. Revert.
+3. Call `this.applyToken(...)` outside `safely` → "a throwing target is an Oops" FAILS. Revert.
 
 - [ ] **Step 8: Commit**
 
 ```bash
 git add src/providers src/__tests__/providers/tokenProviderContract.test.ts
-git commit -m "feat!: every token provider is an IAuthProvider; onTokens for persistence"
+git commit -m "feat!: every token provider is an IAuthProvider; onTokens; no Ok on an unchanged token"
 ```
 
 ### Task 3: The providers moved in from `connection`
@@ -547,8 +634,8 @@ git commit -m "feat!: every token provider is an IAuthProvider; onTokens for per
 - Test: `src/__tests__/credentials/credentials.test.ts`
 
 **Interfaces:**
-- Consumes: `OK`, `oops`, `refusalFrom`; `recordingTargets`.
-- Produces: `BasicAuthProvider(username: string, password: string)`; `SamlAuthProvider(sessionCookies: string)`; `TokenAuthProvider.fixed(token: string)`, `TokenAuthProvider.from(refresher: ITokenRefresher)`; `CertificateAuthProvider(loader: ICertificateMaterialLoader, config: ISapConfig)`; `FileCertificateMaterialLoader` implementing `ICertificateMaterialLoader`.
+- Consumes: `OK`, `oops`, `safely`; `recordingTargets`.
+- Produces: `BasicAuthProvider(username: string, password: string)`; `SamlAuthProvider(sessionCookies: string)`; `TokenAuthProvider.fixed(token: string)`, `TokenAuthProvider.from(refresher: ITokenRefresher)`; `CertificateAuthProvider(loader: ICertificateMaterialLoader, config: ISapConfig)`; `FileCertificateMaterialLoader` implementing `ICertificateMaterialLoader`, throwing `ValidationError` for configuration errors.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -560,11 +647,14 @@ import type { ITokenRefresher } from '@mcp-abap-adt/interfaces-auth';
 import type { ISapConfig } from '@mcp-abap-adt/interfaces-auth-sap';
 import { BasicAuthProvider } from '../../credentials/BasicAuthProvider';
 import { CertificateAuthProvider } from '../../credentials/CertificateAuthProvider';
+import { FileCertificateMaterialLoader } from '../../credentials/FileCertificateMaterialLoader';
 import { SamlAuthProvider } from '../../credentials/SamlAuthProvider';
 import { TokenAuthProvider } from '../../credentials/TokenAuthProvider';
+import { ValidationError } from '../../errors/TokenProviderErrors';
 import { recordingTargets } from '../helpers/targets';
 
 const refusal = { at: 'request' as const, status: 401, error: {} };
+const broken = () => recordingTargets({ throws: true });
 
 describe('BasicAuthProvider', () => {
   const p = new BasicAuthProvider('USER', 'S3CRET-PW');
@@ -574,20 +664,24 @@ describe('BasicAuthProvider', () => {
     await expect(p.establish(t.logonTarget)).resolves.toEqual({ ok: true });
     await expect(p.authorize(t.requestTarget)).resolves.toEqual({ ok: true });
     expect(t.logon.params).toEqual([{ user: 'USER', passwd: 'S3CRET-PW' }]);
-    expect(t.request.headers.Authorization).toBe(
-      `Basic ${Buffer.from('USER:S3CRET-PW').toString('base64')}`,
-    );
+    expect(t.request.headers.Authorization).toBe(`Basic ${Buffer.from('USER:S3CRET-PW').toString('base64')}`);
   });
 
   it('goes on when the wire takes no logon parameters (HTTP)', async () => {
-    const t = recordingTargets({ acceptsLogonParameters: false });
-    await expect(p.establish(t.logonTarget)).resolves.toEqual({ ok: true });
+    await expect(p.establish(recordingTargets({ acceptsLogonParameters: false }).logonTarget)).resolves.toEqual({ ok: true });
+  });
+
+  it('a throwing target is an Oops without the password', async () => {
+    for (const outcome of [await p.establish(broken().logonTarget), await p.authorize(broken().requestTarget)]) {
+      expect(outcome).toMatchObject({ ok: false });
+      expect(JSON.stringify(outcome)).not.toMatch(/S3CRET-PW|SECRET-IN-TARGET/);
+    }
   });
 
   it('rejected is an Oops without the password', async () => {
     const outcome = await p.rejected(refusal);
     expect(outcome).toMatchObject({ ok: false, refusal: { reason: 'the user or password was refused' } });
-    expect(JSON.stringify(outcome)).not.toMatch(/S3CRET-PW|USER:/);
+    expect(JSON.stringify(outcome)).not.toMatch(/S3CRET-PW/);
   });
 });
 
@@ -600,15 +694,16 @@ describe('SamlAuthProvider', () => {
     expect(t.request.cookies).toEqual(['MYSAPSSO2=SECRET-COOKIE']);
   });
 
-  it('rejected is an Oops without the cookie', async () => {
-    const outcome = await p.rejected(refusal);
-    expect(outcome.ok).toBe(false);
-    expect(JSON.stringify(outcome)).not.toMatch(/SECRET-COOKIE/);
+  it('a throwing target and rejected are Oops without the cookie', async () => {
+    for (const outcome of [await p.authorize(broken().requestTarget), await p.rejected(refusal)]) {
+      expect(outcome.ok).toBe(false);
+      expect(JSON.stringify(outcome)).not.toMatch(/SECRET-COOKIE/);
+    }
   });
 });
 
 describe('TokenAuthProvider', () => {
-  it('fixed: bearer, and rejected is an Oops', async () => {
+  it('fixed: bearer, and rejected is an Oops without the token', async () => {
     const p = TokenAuthProvider.fixed('SECRET-T');
     const t = recordingTargets();
     await p.authorize(t.requestTarget);
@@ -618,25 +713,36 @@ describe('TokenAuthProvider', () => {
     expect(JSON.stringify(outcome)).not.toMatch(/SECRET-T/);
   });
 
-  it('from(refresher): asks getToken per attempt, refreshToken once on rejected', async () => {
+  it('from(refresher): getToken per attempt, refreshToken once, Ok on a new token', async () => {
     const refresher: ITokenRefresher = {
       getToken: jest.fn(async () => 'A'),
       refreshToken: jest.fn(async () => 'B'),
     };
     const p = TokenAuthProvider.from(refresher);
-    const t = recordingTargets();
-    await p.authorize(t.requestTarget);
+    await p.authorize(recordingTargets().requestTarget);
     await expect(p.rejected(refusal)).resolves.toEqual({ ok: true });
     expect(refresher.getToken).toHaveBeenCalledTimes(1);
     expect(refresher.refreshToken).toHaveBeenCalledTimes(1);
   });
 
-  it('from(refresher): a refresh that throws is an Oops', async () => {
-    const p = TokenAuthProvider.from({
-      getToken: async () => 'A',
-      refreshToken: async () => { throw new Error('refresh refused'); },
+  it('from(refresher): a renewal returning the refused token is an Oops', async () => {
+    const p = TokenAuthProvider.from({ getToken: async () => 'unchanged', refreshToken: async () => 'unchanged' });
+    await p.authorize(recordingTargets().requestTarget);
+    await expect(p.rejected(refusal)).resolves.toMatchObject({
+      ok: false,
+      refusal: { reason: 'the renewal returned the credential that was refused' },
     });
-    await expect(p.rejected(refusal)).resolves.toMatchObject({ ok: false, refusal: { reason: 'refresh refused' } });
+  });
+
+  it('from(refresher): a refresher error with a secret in its message stays out', async () => {
+    const p = TokenAuthProvider.from({
+      getToken: async () => { throw new Error('token rejected: SECRET-OPAQUE'); },
+      refreshToken: async () => { throw new Error('refresh failed for SECRET-REFRESH'); },
+    });
+    for (const outcome of [await p.authorize(recordingTargets().requestTarget), await p.rejected(refusal)]) {
+      expect(outcome).toMatchObject({ ok: false, refusal: { reason: 'the token source failed' } });
+      expect(JSON.stringify(outcome)).not.toMatch(/SECRET/);
+    }
   });
 });
 
@@ -648,24 +754,41 @@ describe('CertificateAuthProvider', () => {
     await expect(p.prepare()).resolves.toEqual({ ok: true });
     const t = recordingTargets();
     await expect(p.establish(t.logonTarget)).resolves.toEqual({ ok: true });
-    expect(t.logon.tls).toEqual([{ cert: 'C', key: 'K', pfx: undefined, passphrase: undefined }]);
+    expect(t.logon.tls).toEqual([{ cert: 'C', key: 'K' }]);
   });
 
-  it('a loader failure is an Oops from prepare', async () => {
-    const p = new CertificateAuthProvider({ load: async () => { throw new Error('no file'); } }, config);
-    await expect(p.prepare()).resolves.toMatchObject({ ok: false, refusal: { reason: 'no file' } });
+  it('an own loader error keeps its message; a foreign one gives the fixed reason with its code', async () => {
+    const own = new CertificateAuthProvider({ load: async () => { throw new ValidationError('provide PEM or PFX, not both'); } }, config);
+    await expect(own.prepare()).resolves.toMatchObject({ ok: false, refusal: { reason: 'provide PEM or PFX, not both' } });
+    const fsError = Object.assign(new Error("ENOENT: no such file 'C:\\\\SECRET\\\\key.pem'"), { code: 'ENOENT' });
+    const foreign = new CertificateAuthProvider({ load: async () => { throw fsError; } }, config);
+    const outcome = await foreign.prepare();
+    expect(outcome).toEqual({ ok: false, refusal: { reason: 'loading the certificate failed (ENOENT)' } });
   });
 
-  it('returns the target Oops when the wire has no TLS', async () => {
+  it('returns the target Oops when the wire has no TLS; a throwing target is an Oops', async () => {
     const p = new CertificateAuthProvider({ load: async () => ({ pfx: Buffer.from('x'), passphrase: 'SECRET-PP' }) }, config);
     await p.prepare();
-    const outcome = await p.establish(recordingTargets({ acceptsTls: false }).logonTarget);
-    expect(outcome).toMatchObject({ ok: false, refusal: { reason: 'this wire does not take TLS material' } });
+    await expect(p.establish(recordingTargets({ acceptsTls: false }).logonTarget))
+      .resolves.toMatchObject({ ok: false, refusal: { reason: 'this wire does not take TLS material' } });
+    const outcome = await p.establish(broken().logonTarget);
+    expect(outcome.ok).toBe(false);
+    expect(JSON.stringify(outcome)).not.toMatch(/SECRET-PP/);
   });
 
   it('establish before prepare is an Oops, not a throw', async () => {
     const p = new CertificateAuthProvider({ load: async () => ({}) }, config);
     await expect(p.establish(recordingTargets().logonTarget)).resolves.toMatchObject({ ok: false });
+  });
+});
+
+describe('FileCertificateMaterialLoader', () => {
+  it('configuration errors are ValidationError', async () => {
+    const loader = new FileCertificateMaterialLoader();
+    await expect(loader.load({ url: 'h', authType: 'certificate', certPath: 'a', certPfxPath: 'b' } as ISapConfig))
+      .rejects.toBeInstanceOf(ValidationError);
+    await expect(loader.load({ url: 'h', authType: 'certificate' } as ISapConfig))
+      .rejects.toBeInstanceOf(ValidationError);
   });
 });
 ```
@@ -687,7 +810,7 @@ import type {
   ILogonTarget,
   IRequestTarget,
 } from '@mcp-abap-adt/interfaces-auth';
-import { OK, oops } from '../auth/refusal';
+import { OK, oops, safely } from '../auth/refusal';
 
 /** A user and a password: a header over HTTP, logon parameters over RFC. */
 export class BasicAuthProvider implements IAuthProvider {
@@ -704,16 +827,20 @@ export class BasicAuthProvider implements IAuthProvider {
 
   /** Offered; a wire without parameter logon says no, and the header carries it. */
   async establish(logon: ILogonTarget): Promise<AuthOutcome> {
-    logon.logonParameters({ user: this.username, passwd: this.password });
-    return OK;
+    return safely('offering the logon parameters', () => {
+      logon.logonParameters({ user: this.username, passwd: this.password });
+      return OK;
+    });
   }
 
   async authorize(request: IRequestTarget): Promise<AuthOutcome> {
-    request.header(
-      'Authorization',
-      `Basic ${Buffer.from(`${this.username}:${this.password}`).toString('base64')}`,
-    );
-    return OK;
+    return safely('writing the Authorization header', () => {
+      request.header(
+        'Authorization',
+        `Basic ${Buffer.from(`${this.username}:${this.password}`).toString('base64')}`,
+      );
+      return OK;
+    });
   }
 
   async rejected(_rejection: IAuthRejection): Promise<AuthOutcome> {
@@ -732,7 +859,7 @@ import type {
   ILogonTarget,
   IRequestTarget,
 } from '@mcp-abap-adt/interfaces-auth';
-import { OK, oops } from '../auth/refusal';
+import { OK, oops, safely } from '../auth/refusal';
 
 /** A SAML session negotiated elsewhere and handed over as cookies. */
 export class SamlAuthProvider implements IAuthProvider {
@@ -749,15 +876,14 @@ export class SamlAuthProvider implements IAuthProvider {
   }
 
   async authorize(request: IRequestTarget): Promise<AuthOutcome> {
-    request.cookies(this.sessionCookies);
-    return OK;
+    return safely('writing the session cookies', () => {
+      request.cookies(this.sessionCookies);
+      return OK;
+    });
   }
 
   async rejected(_rejection: IAuthRejection): Promise<AuthOutcome> {
-    return oops(
-      'the SAML session was refused or has expired',
-      'obtain a new SAML session',
-    );
+    return oops('the SAML session was refused or has expired', 'obtain a new SAML session');
   }
 }
 ```
@@ -773,7 +899,7 @@ import type {
   IRequestTarget,
   ITokenRefresher,
 } from '@mcp-abap-adt/interfaces-auth';
-import { OK, oops, refusalFrom } from '../auth/refusal';
+import { OK, oops, safely } from '../auth/refusal';
 
 /**
  * A token that comes from outside this package — a fixed string, or the
@@ -782,10 +908,12 @@ import { OK, oops, refusalFrom } from '../auth/refusal';
  */
 export class TokenAuthProvider implements IAuthProvider {
   readonly kind = 'token';
+  /** The token last put on a request, so rejected() can tell a renewal from a repeat. */
+  private presented?: string;
 
   private constructor(
     private readonly current: () => Promise<string>,
-    private readonly renew: (() => Promise<unknown>) | undefined,
+    private readonly renew: (() => Promise<string>) | undefined,
   ) {}
 
   static fixed(token: string): TokenAuthProvider {
@@ -808,27 +936,32 @@ export class TokenAuthProvider implements IAuthProvider {
   }
 
   async authorize(request: IRequestTarget): Promise<AuthOutcome> {
-    try {
-      request.header('Authorization', `Bearer ${await this.current()}`);
+    return safely('the token source', async () => {
+      const token = await this.current();
+      request.header('Authorization', `Bearer ${token}`);
+      this.presented = token;
       return OK;
-    } catch (error) {
-      return refusalFrom(error);
-    }
+    });
   }
 
   async rejected(_rejection: IAuthRejection): Promise<AuthOutcome> {
-    if (!this.renew) return oops('the token was refused', 'obtain a new token');
-    try {
-      await this.renew();
+    const renew = this.renew;
+    if (!renew) return oops('the token was refused', 'obtain a new token');
+    return safely('the token source', async () => {
+      const renewed = await renew();
+      if (this.presented !== undefined && renewed === this.presented) {
+        return oops(
+          'the renewal returned the credential that was refused',
+          'the token source must issue a new token',
+        );
+      }
       return OK;
-    } catch (error) {
-      return refusalFrom(error);
-    }
+    });
   }
 }
 ```
 
-`src/credentials/FileCertificateMaterialLoader.ts` — copy `@mcp-abap-adt/connection`'s `src/auth/FileCertificateMaterialLoader.ts` (origin/master) verbatim: PEM pair or PFX from files via `readFile`, `Error` on both or neither given. Its imports stay `ICertificateMaterial` from `@mcp-abap-adt/interfaces-auth` and `ICertificateMaterialLoader`, `ISapConfig` from `@mcp-abap-adt/interfaces-auth-sap`.
+`src/credentials/FileCertificateMaterialLoader.ts` — copy `@mcp-abap-adt/connection`'s `src/auth/FileCertificateMaterialLoader.ts` (origin/master) and change its two `throw new Error(…)` into `throw new ValidationError(…, [...])`, keeping the messages: `'Certificate auth: provide either PEM (certPath+certKeyPath) OR certPfxPath, not both.'` with `['certPath', 'certPfxPath']`, and `'Certificate auth requires certPfxPath OR (certPath AND certKeyPath).'` with `['certPfxPath', 'certPath', 'certKeyPath']`. Import `ValidationError` from `../errors/TokenProviderErrors`. `readFile` errors stay as they are (foreign: they reach a refusal only as the fixed reason with their `code`).
 
 `src/credentials/CertificateAuthProvider.ts`:
 
@@ -841,11 +974,8 @@ import type {
   ILogonTarget,
   IRequestTarget,
 } from '@mcp-abap-adt/interfaces-auth';
-import type {
-  ICertificateMaterialLoader,
-  ISapConfig,
-} from '@mcp-abap-adt/interfaces-auth-sap';
-import { OK, oops, refusalFrom } from '../auth/refusal';
+import type { ICertificateMaterialLoader, ISapConfig } from '@mcp-abap-adt/interfaces-auth-sap';
+import { OK, oops, safely } from '../auth/refusal';
 
 /** A client certificate, presented in the TLS handshake of each logon. */
 export class CertificateAuthProvider implements IAuthProvider {
@@ -858,21 +988,25 @@ export class CertificateAuthProvider implements IAuthProvider {
   ) {}
 
   async prepare(): Promise<AuthOutcome> {
-    try {
+    return safely('loading the certificate', async () => {
       this.material = await this.loader.load(this.config);
       return OK;
-    } catch (error) {
-      return refusalFrom(error);
-    }
+    });
   }
 
   /** No other way in: the wire's Oops is this provider's own. */
   async establish(logon: ILogonTarget): Promise<AuthOutcome> {
-    if (!this.material) {
-      return oops('the certificate is not loaded', 'connect() prepares it first');
-    }
-    const { cert, key, pfx, passphrase } = this.material;
-    return logon.tlsMaterial({ cert, key, pfx, passphrase });
+    const material = this.material;
+    if (!material) return oops('the certificate is not loaded', 'connect() prepares it first');
+    return safely('presenting the certificate', () => {
+      const { cert, key, pfx, passphrase } = material;
+      const presented: ICertificateMaterial = {};
+      if (cert !== undefined) presented.cert = cert;
+      if (key !== undefined) presented.key = key;
+      if (pfx !== undefined) presented.pfx = pfx;
+      if (passphrase !== undefined) presented.passphrase = passphrase;
+      return logon.tlsMaterial(presented);
+    });
   }
 
   async authorize(_request: IRequestTarget): Promise<AuthOutcome> {
@@ -1502,9 +1636,10 @@ describe('check', () => {
   it('fails when only sbusagent.exe runs', async () => {
     await expect(new SecureLoginClientProbe(fakeSystem({ processes: ['sbusagent.exe'] })).check()).rejects.toThrow(/not running .*sbus\.exe/);
   });
-  it('an unreadable process list says the check could not run', async () => {
-    await expect(new SecureLoginClientProbe(fakeSystem({ processes: new Error('access denied') })).check())
-      .rejects.toThrow(/Could not check whether the SAP Secure Login Client is running: access denied/);
+  it('an unreadable process list says the check could not run, without the tool’s message', async () => {
+    const error = await new SecureLoginClientProbe(fakeSystem({ processes: new Error('access denied SECRET-TOOL') })).check().catch((e: unknown) => e);
+    expect((error as Error).message).toMatch(/Could not check whether the SAP Secure Login Client is running/);
+    expect((error as Error).message).not.toMatch(/SECRET-TOOL/);
   });
   it('macOS looks for the app bundle', async () => {
     await expect(new SecureLoginClientProbe(fakeSystem({ platform: 'darwin', processes: ['/Applications/Secure Login Client.app/Contents/MacOS/Secure Login Client'] })).check()).resolves.toBeUndefined();
@@ -1557,7 +1692,7 @@ export class SecureLoginClientProbe implements ISncProductProbe {
         ['InstallPath64', 'InstallPath32'].map((name) => system.readRegistryValue(SLC_REGISTRY_KEY, name)),
       );
       const library = win32.normalize(libraryPath.trim()).toLowerCase();
-      return dirs.some((dir) => dir?.trim() !== undefined && dir.trim() !== '' && library.startsWith(asDirectory(dir)));
+      return dirs.some((dir) => typeof dir === 'string' && dir.trim() !== '' && library.startsWith(asDirectory(dir)));
     }
     if (system.platform === 'darwin') return libraryPath.startsWith(MACOS_SLC_APP);
     return false;
@@ -1567,9 +1702,10 @@ export class SecureLoginClientProbe implements ISncProductProbe {
     let names: string[];
     try {
       names = await this.system.listProcessNames();
-    } catch (error) {
+    } catch {
+      // The listing tool's own message is foreign text; it stays out.
       throw new ValidationError(
-        `Could not check whether the ${SECURE_LOGIN_CLIENT} is running: ${error instanceof Error ? error.message : String(error)}`,
+        `Could not check whether the ${SECURE_LOGIN_CLIENT} is running (the process list could not be read).`,
       );
     }
     const windows = this.system.platform === 'win32';
@@ -1697,13 +1833,36 @@ describe('rejected', () => {
     const outcome = await p.rejected({ at: 'logon', error: new Error('SNCERR_INIT, gssapi library invalid/missing') });
     expect(outcome).toMatchObject({ ok: false, refusal: { reason: expect.stringMatching(/sapcrypto\.dll \(x64\)/) } });
   });
-  it('anything else is still an Oops', async () => {
+  it('anything else: a fixed reason, the SDK key at most, never the message or fields', async () => {
     const p = new SncLogonProvider({ partnerName: 'p:CN=SID', system: machine(['sbus.exe']) });
     await p.prepare();
-    await expect(p.rejected({ at: 'logon', error: new Error('RFC_LOGON_FAILURE') })).resolves.toMatchObject({
-      ok: false,
-      refusal: { reason: expect.stringMatching(/SNC logon refused: RFC_LOGON_FAILURE/) },
+    const outcome = await p.rejected({
+      at: 'logon',
+      error: { name: 'RfcLibError', key: 'RFC_LOGON_FAILURE', message: 'user SECRET-USER', detail: 'SECRET-FIELD' },
     });
+    expect(outcome).toEqual({ ok: false, refusal: { reason: 'SNC logon refused (RFC_LOGON_FAILURE)' } });
+    await expect(p.rejected({ at: 'logon', error: new Error('SECRET-IN-MESSAGE') }))
+      .resolves.toEqual({ ok: false, refusal: { reason: 'SNC logon refused' } });
+  });
+});
+
+describe('no exception, no foreign text', () => {
+  it('a throwing target is an Oops', async () => {
+    const p = new SncLogonProvider({ partnerName: 'p:CN=SID', system: machine(['sbus.exe']) });
+    await p.prepare();
+    const outcome = await p.establish(recordingTargets({ throws: true }).logonTarget);
+    expect(outcome).toMatchObject({ ok: false });
+    expect(JSON.stringify(outcome)).not.toMatch(/SECRET-IN-TARGET/);
+  });
+  it('a custom locator throwing a foreign error lends no message', async () => {
+    const p = new SncLogonProvider({
+      partnerName: 'p:CN=SID',
+      system: machine([]),
+      locator: { locate: async () => { throw new Error('vault said SECRET-VAULT'); } },
+    });
+    const outcome = await p.prepare();
+    expect(outcome).toMatchObject({ ok: false, refusal: { reason: 'finding the SNC library failed' } });
+    expect(JSON.stringify(outcome)).not.toMatch(/SECRET-VAULT/);
   });
 });
 ```
@@ -1720,27 +1879,34 @@ describe('rejected', () => {
  * a generic communication error; the cause is in the GSS text. Measured:
  * `A2200019` — the SNC library has no credential (profile not logged on, or
  * the certificate expired); `SNCERR_INIT` — the SDK could not load the library.
+ *
+ * The SDK's text is read to recognise those codes and never copied into the
+ * refusal: it is foreign text. Only fixed wording, the library this provider
+ * resolved itself, and the SDK's error key (`RFC_LOGON_FAILURE`) go out.
  */
 
 import type { IAuthRefusal } from '@mcp-abap-adt/interfaces-auth';
 import type { SncLibrary } from './DefaultSncLibraryLocator';
 import { SECURE_LOGIN_CLIENT } from './secureLoginClient';
 
-function describe(error: unknown): string {
+/** The text to search for GSS codes — never returned to anyone. */
+function searchable(error: unknown): string {
   if (error instanceof Error) return error.message;
   if (typeof error === 'string') return error;
-  try {
-    return JSON.stringify(error) ?? String(error);
-  } catch {
-    return String(error);
-  }
+  const text = (error as { message?: unknown } | null)?.message;
+  return typeof text === 'string' ? text : '';
+}
+
+function sdkKey(error: unknown): string {
+  const key = (error as { key?: unknown } | null)?.key;
+  return typeof key === 'string' && /^[A-Z_]+$/.test(key) ? ` (${key})` : '';
 }
 
 export function sncRefusal(
   error: unknown,
   context: { library?: SncLibrary; product?: string },
 ): IAuthRefusal {
-  const text = describe(error);
+  const text = searchable(error);
   const library = context.library
     ? `${context.library.path} (${context.library.archs.join('/')})`
     : 'the SNC library';
@@ -1756,7 +1922,7 @@ export function sncRefusal(
   if (/SNCERR_INIT|gssapi library invalid\/missing/i.test(text)) {
     return { reason: `the RFC SDK could not initialise ${library} as its SNC library (SNCERR_INIT)` };
   }
-  return { reason: `SNC logon refused: ${text.trim()}` };
+  return { reason: `SNC logon refused${sdkKey(error)}` };
 }
 ```
 
@@ -1779,7 +1945,7 @@ import type {
   IRequestTarget,
 } from '@mcp-abap-adt/interfaces-auth';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
-import { OK, oops } from '../auth/refusal';
+import { OK, oops, refusalFrom, safely } from '../auth/refusal';
 import { ValidationError } from '../errors/TokenProviderErrors';
 import { DefaultSncLibraryLocator, type ISncLibraryLocator, type SncLibrary } from './DefaultSncLibraryLocator';
 import { type ISncProductProbe, SecureLoginClientProbe } from './SecureLoginClientProbe';
@@ -1805,7 +1971,11 @@ export interface SncLogonProviderConfig {
   logger?: ILogger;
 }
 
-const message = (error: unknown) => (error instanceof Error ? error.message : String(error));
+/** A refusal from a thrown value (own message or fixed reason), with this provider's hint. */
+function refusedWith(error: unknown, what: string, hint: string): AuthOutcome {
+  const outcome = refusalFrom(error, what);
+  return outcome.ok ? outcome : oops(outcome.refusal.reason, hint);
+}
 
 export class SncLogonProvider implements IAuthProvider {
   readonly kind = 'snc';
@@ -1844,7 +2014,7 @@ export class SncLogonProvider implements IAuthProvider {
     try {
       library = await this.locator.locate();
     } catch (error) {
-      return oops(message(error), 'set sncLib to the SNC (GSS) library of your SNC product');
+      return refusedWith(error, 'finding the SNC library', 'set sncLib to the SNC (GSS) library of your SNC product');
     }
     let product: string | undefined;
     for (const probe of this.probes) {
@@ -1854,7 +2024,11 @@ export class SncLogonProvider implements IAuthProvider {
         product = probe.product;
         break;
       } catch (error) {
-        return oops(message(error), `Start the ${probe.product} and log on to the profile used for SAP applications`);
+        return refusedWith(
+          error,
+          `checking the ${probe.product}`,
+          `Start the ${probe.product} and log on to the profile used for SAP applications`,
+        );
       }
     }
     this.library = library;
@@ -1867,17 +2041,20 @@ export class SncLogonProvider implements IAuthProvider {
 
   /** No other way in: the wire's answer is this provider's own. */
   async establish(logon: ILogonTarget): Promise<AuthOutcome> {
-    if (!this.library) {
+    const library = this.library;
+    if (!library) {
       return oops('the SNC provider is not prepared', 'connect() prepares it first');
     }
-    const params: Record<string, string> = {
-      snc_mode: '1',
-      snc_partnername: this.partnerName,
-      snc_qop: this.qop,
-      snc_lib: this.library.path,
-    };
-    if (this.myName) params.snc_myname = this.myName;
-    return logon.logonParameters(params);
+    return safely('handing over the SNC logon parameters', () => {
+      const params: Record<string, string> = {
+        snc_mode: '1',
+        snc_partnername: this.partnerName,
+        snc_qop: this.qop,
+        snc_lib: library.path,
+      };
+      if (this.myName) params.snc_myname = this.myName;
+      return logon.logonParameters(params);
+    });
   }
 
   async authorize(_request: IRequestTarget): Promise<AuthOutcome> {
@@ -1885,7 +2062,10 @@ export class SncLogonProvider implements IAuthProvider {
   }
 
   async rejected(rejection: IAuthRejection): Promise<AuthOutcome> {
-    return { ok: false, refusal: sncRefusal(rejection.error, { library: this.library, product: this.product }) };
+    return safely('explaining the SNC refusal', () => ({
+      ok: false,
+      refusal: sncRefusal(rejection.error, { library: this.library, product: this.product }),
+    }));
   }
 }
 ```
@@ -1915,19 +2095,23 @@ import * as surface from '../index';
 import { recordingTargets } from './helpers/targets';
 import { fakeSystem, peLibrary } from './snc/fakeSystem';
 
+// Every secret below is named SECRET-…; no refusal may contain one.
 class FailingTokenProvider extends surface.BaseTokenProvider {
-  protected async performLogin(): Promise<ITokenResult> { throw new Error('login failed'); }
-  protected async performRefresh(): Promise<ITokenResult> { throw new Error('refresh failed'); }
+  protected async performLogin(): Promise<ITokenResult> { throw new Error('login failed for SECRET-CLIENT'); }
+  protected async performRefresh(): Promise<ITokenResult> { throw new Error('refresh failed for SECRET-REFRESH'); }
   protected getAuthType(): OAuth2GrantType { return 'client_credentials'; }
 }
 
 const SLC = 'C:\\Program Files\\SAP\\FrontEnd\\SecureLogin\\lib\\sapcrypto.dll';
 const providers: [string, IAuthProvider][] = [
-  ['basic', new surface.BasicAuthProvider('u', 'p')],
-  ['saml', new surface.SamlAuthProvider('c=1')],
-  ['token fixed', surface.TokenAuthProvider.fixed('t')],
-  ['token from', surface.TokenAuthProvider.from({ getToken: async () => 't', refreshToken: async () => 't2' })],
-  ['certificate', new surface.CertificateAuthProvider({ load: async () => ({ cert: 'C', key: 'K' }) }, { url: 'https://h', authType: 'certificate' })],
+  ['basic', new surface.BasicAuthProvider('SECRET-USER', 'SECRET-PW')],
+  ['saml', new surface.SamlAuthProvider('MYSAPSSO2=SECRET-COOKIE')],
+  ['token fixed', surface.TokenAuthProvider.fixed('SECRET-TOKEN')],
+  ['token from', surface.TokenAuthProvider.from({
+    getToken: async () => { throw new Error('rejected SECRET-GET'); },
+    refreshToken: async () => { throw new Error('rejected SECRET-REFRESH'); },
+  })],
+  ['certificate', new surface.CertificateAuthProvider({ load: async () => ({ cert: 'C', key: 'K', passphrase: 'SECRET-PP' }) }, { url: 'https://h', authType: 'certificate' })],
   ['token provider (failing)', new FailingTokenProvider()],
   ['snc', new surface.SncLogonProvider({
     partnerName: 'p:CN=SID',
@@ -1944,16 +2128,20 @@ describe.each(providers)('%s answers the whole contract', (_, provider) => {
     expect(typeof provider.kind).toBe('string');
     expect(provider.kind.length).toBeGreaterThan(0);
   });
-  it('every moment resolves to an AuthOutcome, never throws', async () => {
-    const t = recordingTargets();
-    for (const answer of [
-      await provider.prepare(),
-      await provider.establish(t.logonTarget),
-      await provider.authorize(t.requestTarget),
-      await provider.rejected({ at: 'request', status: 401, error: new Error('401') }),
-      await provider.rejected({ at: 'logon', error: 'refused' }),
-    ]) {
-      expect(isOutcome(answer)).toBe(true);
+  it('every moment resolves to an AuthOutcome, never throws — with working and with throwing targets', async () => {
+    for (const t of [recordingTargets(), recordingTargets({ throws: true })]) {
+      for (const answer of [
+        await provider.prepare(),
+        await provider.establish(t.logonTarget),
+        await provider.authorize(t.requestTarget),
+        await provider.rejected({ at: 'request', status: 401, error: new Error('401 SECRET-HTTP') }),
+        await provider.rejected({ at: 'logon', error: 'refused SECRET-STRING' }),
+        await provider.rejected({ at: 'logon', error: { key: 'RFC_LOGON_FAILURE', message: 'SECRET-SDK', detail: 'SECRET-FIELD' } }),
+      ]) {
+        expect(isOutcome(answer)).toBe(true);
+        // noSecretsInRefusals: nothing named SECRET-… ever reaches an outcome.
+        expect(JSON.stringify(answer)).not.toMatch(/SECRET/);
+      }
     }
   });
 });

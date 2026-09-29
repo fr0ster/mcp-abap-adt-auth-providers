@@ -22,12 +22,20 @@ rejected(rejection: IAuthRejection): Promise<AuthOutcome>; // the system said no
 
 ## Rules every provider here follows
 
-1. **No exception crosses the contract.** Each of the four methods catches what
-   its own work throws and answers Oops. An exception out of one is a bug.
-2. **A refusal carries no secret.** `reason` and `hint` never contain a token,
-   a refresh token, a password, a passphrase, key material or a cookie value —
-   the rule `formatToken` and `describeOAuthErrorBody` already enforce for log
-   lines extends to refusals (`noSecretsInRefusals.test.ts`).
+1. **No exception crosses the contract.** Each of the four methods catches
+   everything its body throws — its own work, a collaborator, **and a target**
+   (`header`, `cookies`, `logonParameters`, `tlsMaterial` may throw) — and
+   answers Oops. Every method body runs inside one `safely(…)` boundary; an
+   exception out of one is a bug.
+2. **A refusal carries no secret — so it never carries foreign text.** Only
+   this package's own errors (the `TokenProviderError` family, whose messages
+   are written here and scrubbed by `describeOAuthErrorBody`) lend their
+   `message` to a refusal. Any other error — a refresher's, a loader's, axios',
+   the RFC SDK's — gives a fixed reason naming what failed, plus at most its
+   class name (`/^[A-Za-z]+Error$/`) or a system code (`/^E[A-Z]+$/`, e.g.
+   `ENOENT`); its message, fields and body never reach `reason` or `hint`.
+   A log line follows the same rule. Tested with secrets **inside** messages,
+   strings and SDK-shaped objects (`noSecretsInRefusals.test.ts`).
 3. **Nothing to add is Ok.** A provider with nothing for a moment writes to no
    target and answers Ok.
 4. **A target's Oops is the provider's to judge.** A provider with no other way
@@ -38,7 +46,9 @@ rejected(rejection: IAuthRejection): Promise<AuthOutcome>; // the system said no
    cannot". Whether to try again, and how many times, is entirely the
    consumer's decision. No provider retries anything itself — not a request,
    not a refresh, not a login. A provider never answers Ok without having
-   changed what it will present.
+   changed what it will present: it remembers the credential it last
+   presented, and a renewal that yields the same one is Oops "the renewal
+   returned the credential that was refused".
 
 ## Token providers — `BaseTokenProvider` implements both contracts
 
@@ -56,7 +66,7 @@ token keep calling `getTokens()` / `refreshTokens()`.
 | `prepare()` | `getTokens()` — the cache, a refresh, or a login → Ok; failure → Oops |
 | `establish()` | nothing → Ok |
 | `authorize(request)` | `getTokens()` (renews on expiry, per attempt) → `applyToken(request, token)` → Ok; failure → Oops |
-| `rejected()` | `refreshTokens()` — refresh token, else login → Ok; failure → Oops |
+| `rejected()` | `refreshTokens()` — refresh token, else login → Ok when the new token differs from the one last presented; the same token or a failure → Oops |
 
 - **`applyToken(request, result)`** is a protected hook, default
   `request.header('Authorization', `Bearer ${token}`)`. `Saml2PureProvider`
@@ -71,10 +81,8 @@ token keep calling `getTokens()` / `refreshTokens()`.
   | `RefreshError` | the error message | "the refresh token was refused; log in again" |
   | `ValidationError` | the error message | "check the provider configuration: <missingFields>" |
   | `ServiceKeyError` / `SessionDataError` | the error message | "check the service key / session data: <missingFields>" |
-  | anything else | the error message | — |
-
-  The messages are already secret-free (`describeOAuthErrorBody`); the
-  refusal test pins it.
+  | any other `TokenProviderError` | the error message | — |
+  | anything else | "<kind> could not obtain a token" (+ class name / code, rule 2) | — |
 
 ### Where a renewed token goes — `onTokens`
 
@@ -83,8 +91,11 @@ provider obtains tokens inside `prepare()`, `authorize()` and `rejected()`,
 where the broker is not the caller. So every token provider takes an optional
 **`onTokens?: (result: ITokenResult) => Promise<void>`** in its config: called
 after every *new* token (a login or a refresh — never a cache hit), and awaited
-before the method answers. A failing `onTokens` is logged and does not fail the
-authentication — the token is valid, only its persistence failed.
+before the method answers. **Persistence is best effort:** a failing
+`onTokens` is logged (its class name only — the hook holds the tokens, so its
+message is foreign text, rule 2) and does not fail the authentication — the
+token is valid, only its persistence failed, and refusing a working credential
+because a store is down would take the connection down with it.
 
 The broker (step 4) injects its session store through it. A consumer without a
 broker omits it.
@@ -114,13 +125,18 @@ New here on the contract; `connection` 10.0.0 removes its copies (step 3).
   - `TokenAuthProvider.fixed(token)` — `rejected()` → Oops "the token was
     refused", hint "obtain a new token";
   - `TokenAuthProvider.from(refresher: ITokenRefresher)` — `authorize` asks
-    `getToken()`, `rejected()` asks `refreshToken()` → Ok / Oops.
+    `getToken()` and remembers what it presented; `rejected()` asks
+    `refreshToken()` → Ok when it returns a different token, Oops when it
+    returns the refused one or throws (the refresher's message is foreign
+    text: fixed reason, rule 2).
 
   No function source: its only use would need a "refused twice" rule of the
   provider's own, and nothing calls it (the server passes a string or a
   refresher, `connectionFactory.ts:80, 193`).
 - **`FileCertificateMaterialLoader`** (PEM pair or PFX from files) moves with
-  `CertificateAuthProvider`.
+  `CertificateAuthProvider`. Its configuration errors become `ValidationError`
+  (this package's own), so "provide either PEM or PFX" reaches the refusal; a
+  file-system error gives the fixed reason with its code (`ENOENT`).
 
 ## `SncLogonProvider` — passwordless RFC logon
 
@@ -165,7 +181,8 @@ the Secure Login Client probe applies only to a library inside the client's
 installation (the registry's install paths on Windows, case-insensitive; the
 app bundle on macOS), and checks that `sbus.exe` (Windows) / the app (macOS)
 runs. Any other SNC library — `gsskrb5.dll`, another vendor's — is not probed.
-A process list that cannot be read is an Oops saying the check could not run.
+A process list that cannot be read is an Oops saying the check could not run
+(without the listing tool's own message, rule 2).
 It does not check that a profile is logged on: no documented interface says
 so, and a missing certificate surfaces at logon.
 
@@ -177,7 +194,10 @@ may be an `Error`, a string or the SDK's plain object:
   sure the SNC product behind <library> is logged on";
 - `SNCERR_INIT` / `gssapi library invalid/missing` → reason "the RFC SDK could
   not initialise <library> (<arch>) as its SNC library";
-- anything else → reason "SNC logon refused: <message>".
+- anything else → reason "SNC logon refused", plus the SDK's error key when it
+  is one (`/^[A-Z_]+$/`, e.g. `RFC_LOGON_FAILURE`) — never the message or the
+  object (rule 2). The GSS codes above are matched inside the text but only
+  the fixed wording reaches the refusal.
 
 **The machine seam.** Environment, file heads, the registry (`reg query …
 /reg:64`) and the process list (`tasklist` / `ps`) are behind one injectable
@@ -226,8 +246,9 @@ The provider depends on neither `@mcp-abap-adt/sap-rfc-lite` nor
 | What | How |
 |---|---|
 | Every exported provider satisfies `IAuthProvider` and answers each of the four moments with an `AuthOutcome` | a table-driven unit test over one instance of each, against recording targets |
-| No exception crosses the contract: each provider with its work made to throw answers Oops | same table, failing collaborators |
-| No secret in a refusal: tokens, refresh tokens, passwords, passphrases, cookies never appear in `reason` / `hint` | `noSecretsInRefusals.test.ts`, one case per provider |
+| No exception crosses the contract: each provider with its work made to throw, **and with targets whose `header` / `cookies` / `logonParameters` / `tlsMaterial` throw**, answers Oops | same table, failing collaborators and throwing targets |
+| No secret in a refusal: a secret placed **inside** a foreign error's message, a thrown string, or an SDK-shaped object's fields never appears in `reason` / `hint` | `noSecretsInRefusals.test.ts`, one case per provider |
+| No Ok on an unchanged credential: a renewal returning the refused token → Oops, for `BaseTokenProvider` and `TokenAuthProvider.from` | unit |
 | Token providers: `prepare` → `getTokens`; `authorize` writes `Bearer` per attempt and renews on expiry; `rejected` → `refreshTokens`; `Saml2PureProvider` writes cookies | unit, stubbed login / refresh |
 | `onTokens` is called after a login and after a refresh, never on a cache hit, awaited before the answer; its failure does not fail authentication | unit |
 | Error class → reason / hint mapping | unit |
