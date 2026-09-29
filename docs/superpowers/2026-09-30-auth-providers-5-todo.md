@@ -6,7 +6,7 @@ the goal's last step (the server).
 
 ## Where things stand (2026-09-30)
 
-Branch `feat/auth-providers-5` — all 14 plan tasks done, final whole-branch
+Branch `docs/snc-logon-provider-spec`, PR #55 — all 14 plan tasks done, final whole-branch
 review "ready to merge" after one fix wave; version is already `5.0.0` in
 `package.json` / `package-lock.json`.
 
@@ -33,12 +33,11 @@ Live SNC, 2026-09-29:
 
 ### 1. XSUAA trial — on the laptop (macOS)
 
-- [ ] `git fetch && git checkout feat/auth-providers-5` (needs step 2's push
-      first if the branch is not on origin yet)
+- [ ] `git fetch && git checkout docs/snc-logon-provider-spec` (PR #55)
 - [ ] `npm ci`
 - [ ] `cf login -a https://api.cf.us10-001.hana.ondemand.com --sso -o 0b0ef6f5trial -s dev`
 - [ ] `XSUAA_CF_API=https://api.cf.us10-001.hana.ondemand.com XSUAA_CF_ORG=0b0ef6f5trial XSUAA_CF_SPACE=dev npm run test:xsuaa`
-- [ ] Put the result into the PR description (the "XSUAA trial" line).
+- [ ] Put the result into #55's description (the "XSUAA trial" line).
 - [ ] If anything is left behind: `tests/xsuaa/teardown.sh` with the same
       variables; check `cf services` in `dev` for `auth-providers-bearer-test`
       / `auth-providers-trust-test`.
@@ -53,11 +52,9 @@ but two things to fix some day:
 
 ### 2. PR and merge
 
-- [ ] Push `feat/auth-providers-5` (from Windows: PowerShell, YubiKey touch).
-- [ ] Decide the order with PR #55 (goal + spec + plan, still open): merge
-      #55 first and then the implementation PR, or close #55 and take
-      everything in one PR (the branch already carries those documents).
-- [ ] Open the PR into `master`. Description — see "PR description" below.
+- [x] Pushed; one PR, #55, carries goal, spec, plan and the implementation on
+      branch `docs/snc-logon-provider-spec` (#56 closed as a duplicate).
+- [ ] Put the XSUAA result into #55's description.
 - [ ] Review → merge.
 
 ### 3. Release 5.0.0
