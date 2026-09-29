@@ -36,6 +36,10 @@ const system = fakeSystem({
   processes: ['sbus.exe'],
 });
 
+// The remaining token providers inherit prepare/establish/authorize/rejected
+// from BaseTokenProvider unmodified (exercised here via FailingTokenProvider,
+// a local stand-in, and via AuthorizationCodeProvider); Saml2PureProvider's
+// cookie-writing applyToken override is pinned in tokenProviderContract.test.ts.
 const providers: [string, IAuthProvider][] = [
   ['basic', new surface.BasicAuthProvider('SECRET-USER', 'SECRET-PW')],
   ['saml cookies', new surface.SamlAuthProvider('MYSAPSSO2=SECRET-COOKIE')],

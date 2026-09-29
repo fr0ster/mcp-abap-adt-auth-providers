@@ -4,20 +4,53 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-`@mcp-abap-adt/auth-providers` — a TypeScript npm package providing authentication token providers for SAP ABAP ADT via Model Context Protocol (MCP). Each provider implements `ITokenProvider` for one grant type or protocol:
+`@mcp-abap-adt/auth-providers` — a TypeScript npm package providing every implementation of `IAuthProvider` (from `@mcp-abap-adt/interfaces-auth` 3.0.0) for SAP ABAP ADT: the credential a process delegates to, and the token providers behind it. Any provider from this package can be handed to the process with no check of what it is; each answers all four moments of the contract:
 
+```ts
+prepare(): Promise<AuthOutcome>;                          // once per connect
+establish(logon: ILogonTarget): Promise<AuthOutcome>;      // every logon
+authorize(request: IRequestTarget): Promise<AuthOutcome>;  // every request attempt
+rejected(rejection: IAuthRejection): Promise<AuthOutcome>; // the system said no
+```
+
+`AuthOutcome` is `{ ok: true }` or `{ ok: false, refusal: { reason, hint? } }`.
+
+**Non-token credentials** — one way in, nothing to refresh:
+- **`BasicAuthProvider`** — a user and a password: a header over HTTP, logon parameters over RFC
+- **`CertificateAuthProvider`** — a client certificate presented in the TLS handshake of each logon
+- **`SamlAuthProvider`** — a SAML session negotiated elsewhere, handed over as cookies
+- **`TokenAuthProvider`** — a token from outside this package: `.fixed(token)` or `.from(refresher)`
+- **`SncLogonProvider`** — passwordless RFC logon through an installed SNC product (Secure Login Client); see `docs/passwordless-sso.md`
+
+**Token providers** — `BaseTokenProvider implements IRefreshableTokenProvider, IAuthProvider`, so each is both an `IAuthProvider` and the stateful token contract the broker's `getTokens()` / `refreshTokens()` still use, with no wrapper:
 - **`ClientCredentialsProvider`** — `client_credentials`, no user interaction
 - **`AuthorizationCodeProvider`** — UAA authorization code, interactive
 - **`OidcBrowserProvider`** — OIDC authorization code with PKCE, interactive
 - **`OidcDeviceFlowProvider`**, **`OidcPasswordProvider`**, **`OidcTokenExchangeProvider`**
 - **`Saml2BearerProvider`** — SAML assertion exchanged for an OAuth2 token
-- **`Saml2PureProvider`** — SAML assertion exchanged for session cookies
+- **`Saml2PureProvider`** — SAML assertion exchanged for session cookies (its `applyToken` override writes cookies, not a header)
 - **`UaaPasscodeProvider`** — UAA/XSUAA one-time passcode from `/passcode` (`cf login --sso`), headless
 
-`docs/btp-setup.md` maps each provider to what it needs on the SAP side (XSUAA client, trust, user, ABAP mapping) and whether ADT accepts its token; every claim is tagged SAP, Community, Measured or Inference. Keep the tags honest when changing it.
-`docs/passwordless-sso.md` does the same for passwordless logon (SNC, X.509 client certificates, SPNego, IAS); nothing in it is built yet.
+`docs/btp-setup.md` maps each token provider to what it needs on the SAP side (XSUAA client, trust, user, ABAP mapping) and whether ADT accepts its token; every claim is tagged SAP, Community, Measured or Inference. Keep the tags honest when changing it.
+`docs/passwordless-sso.md` covers passwordless logon: SNC over RFC — `SncLogonProvider`, built and measured against a live system — and the HTTP alternatives (X.509 client certificates, SPNego, IAS), still undecided.
 
-All extend `BaseTokenProvider`, which owns the token lifecycle (cache, expiry, refresh-then-login fallback). Both SAML providers validate the assertion first, through an `IAssertionValidator` (see "SAML assertion validation").
+Both SAML providers validate the assertion first, through an `IAssertionValidator` (see "SAML assertion validation").
+
+### Rules every provider follows
+
+1. **No exception crosses the contract.** Each of the four methods catches everything its body throws — its own work, a collaborator, and a target (`header`, `cookies`, `logonParameters`, `tlsMaterial` may throw) — and answers Oops. Every method body runs inside one `safely(…)` boundary (`src/auth/refusal.ts`).
+2. **A refusal carries no secret — so it never carries an error's message.** It is built only from fixed wording chosen per error class, plus metadata only when its value is on an allowlist this package owns: config field names (`KNOWN_CONFIG_FIELDS`), an `AssertionValidationError`'s `check` (`AssertionCheck` values only), a fixed set of system error codes, a fixed set of RFC SDK keys (SNC), or a class label decided by `instanceof` against this package's own constructors — else "unknown error". No `message`, `cause` or body of any error reaches a refusal, and a `name` property is never read.
+3. **Nothing to add is Ok.** A provider with nothing for a moment writes to no target and answers Ok.
+4. **A target's Oops is the provider's to judge.** A provider with no other way in (SNC, certificate) returns the target's Oops as its own; one that has another (a password is also a header) goes on.
+5. **`rejected()` decides alone; retrying is the consumer's.** One renewal is at most one refresh, then — only if the refresh is refused or there is no refresh token — one login through the strategy the consumer gave the provider. No step runs twice. A provider never answers Ok without having changed what it presents: a renewal that yields the same credential is Oops "the renewal returned the credential that was refused".
+6. **No implicit defaults — the consumer composes.** A constructor takes every collaborator explicitly (the interactive strategy, the device-code presenter, the SAML validator and replay store, the SNC locator and probes); no provider builds one of its own when none is given. Static factories (`inBrowser`, `fromTerminal`, `toConsole`, `fromFiles`, `forSecureLoginClient`) assemble a named, common recipe — the consumer, or the broker, still creates the instance from a constructor or a factory.
+
+### New directories
+
+- `src/credentials/` — `BasicAuthProvider`, `CertificateAuthProvider`, `FileCertificateMaterialLoader`, `SamlAuthProvider`, `TokenAuthProvider`
+- `src/deviceCode/` — `IDeviceCodePresenter`, `DeviceCodePrompt`, `consoleDeviceCodePresenter`: how `OidcDeviceFlowProvider` shows the user where to go and what to enter, injected like a strategy instead of writing to the logger itself
+- `src/snc/` — `SncLogonProvider` and its collaborators: `DefaultSncLibraryLocator`, `SecureLoginClientProbe`, `nodeSncSystem` (the machine seam — env, file heads, registry, process list, behind one injectable interface), the PE/Mach-O/ELF architecture reader, the refusal mapping (`sncRefusal`)
+- `src/auth/refusal.ts` — `OK`, `oops`, `refusalFrom`, `safely` — the one place a thrown value becomes a refusal (rules 1 and 2), and the allowlists
 
 ## Build Commands
 
@@ -47,7 +80,7 @@ Debug logging: `DEBUG_AUTH_PROVIDERS=true` or `DEBUG_BROWSER_AUTH=true`.
 
 **Interface-only communication.** All interaction with external dependencies happens through contract packages: `@mcp-abap-adt/interfaces-auth` ^2.0.1 (token providers, strategies, callback server, assertion validator and replay store, error codes), `@mcp-abap-adt/interfaces-auth-sap` (XSUAA configuration) and `@mcp-abap-adt/interfaces-utils` (`ILogger`). Depend on the contract package whose contracts are used, nothing wider — never `interfaces-adt`, which carries ADT contracts this package does not use. The package does not know about concrete implementation classes from other packages. A logger is `ILogger`, never a local abstraction.
 
-**Everything pluggable is a strategy.** Anything a consumer might reasonably want to do differently is expressed as a strategy behind an interface. The package ships a working default so nobody is forced to write one, and the consumer can always replace it. This is why an authorization library does not own a socket, a browser or stdin — a consumer may legitimately own them instead.
+**Everything pluggable is a strategy.** Anything a consumer might reasonably want to do differently is expressed as a strategy behind an interface. The package ships the parts and named factories; the consumer composes. This is why an authorization library does not own a socket, a browser or stdin — a consumer may legitimately own them instead.
 
 **No token the provider holds reaches a log line.** `BaseTokenProvider.formatToken` is the one way a token appears in a log, and it yields only `<redacted, N chars>`, never a character of the secret (`noTokensInLogs.test.ts`). A token endpoint's error body contributes only `error` and `error_description`, through `describeOAuthErrorBody`. It redacts every secret the request sent and anything JWT-shaped (`oauthErrorBodies.test.ts`). A new opaque token that a server invents cannot be recognised there; that limit is documented, not hidden.
 
@@ -56,10 +89,11 @@ Debug logging: `DEBUG_AUTH_PROVIDERS=true` or `DEBUG_BROWSER_AUTH=true`.
 ### Package responsibilities
 
 This package ONLY:
-- implements `ITokenProvider`
+- implements `IAuthProvider` — every credential a process delegates to — and, for the token providers, `IRefreshableTokenProvider` beside it
 - builds authorization URLs and exchanges codes, assertions and refresh tokens for tokens
-- ships default strategies for conducting an interactive authorization
+- ships strategies, validators and named static factories for conducting an interactive authorization or assembling a common recipe
 - validates SAML assertions, with two shipped validators and an in-memory replay store, all replaceable
+- resolves and checks the SNC library for a passwordless RFC logon (`SncLogonProvider`), producing logon parameters only
 
 This package does NOT:
 - store tokens (`@mcp-abap-adt/auth-stores`)
@@ -67,19 +101,36 @@ This package does NOT:
 - load service keys or manage sessions
 - decide how a user reaches an authorization URL, or where the redirect is received — the consumer may replace both
 - fetch identity provider metadata — certificates and entity IDs come from configuration
+- open a connection or speak RFC/HTTP itself — `SncLogonProvider` depends on neither `@mcp-abap-adt/sap-rfc-lite` nor `@mcp-abap-adt/connection`
 
 ### Module structure
 
 ```
 src/
-├── index.ts                  # public surface: providers, strategies, callback factories, validators, errors
-├── providers/                # one file per grant type, all extending BaseTokenProvider
+├── index.ts                  # public surface: providers, credentials, strategies, callback factories, validators, errors
+├── credentials/               # every non-token IAuthProvider
+│   ├── BasicAuthProvider.ts
+│   ├── CertificateAuthProvider.ts
+│   ├── FileCertificateMaterialLoader.ts  # PEM pair or PFX from files
+│   ├── SamlAuthProvider.ts
+│   └── TokenAuthProvider.ts   # .fixed(token) / .from(refresher)
+├── snc/                       # SncLogonProvider — passwordless RFC logon
+│   ├── SncLogonProvider.ts
+│   ├── DefaultSncLibraryLocator.ts   # explicit sncLib, or SNC_LIB_64/SNC_LIB/registry/app-bundle in order
+│   ├── SecureLoginClientProbe.ts     # is the Secure Login Client running, scoped to its own install path
+│   ├── SncSystem.ts           # the machine seam: env, file heads, registry, process list — nodeSncSystem()
+│   ├── libraryArchitectures.ts  # PE / Mach-O (thin + FAT/FAT_64) / ELF header reader
+│   └── sncRefusal.ts          # the three GSS error shapes → a fixed refusal
+├── deviceCode/
+│   └── DeviceCodePresenter.ts  # IDeviceCodePresenter, DeviceCodePrompt, consoleDeviceCodePresenter
+├── providers/                 # one file per grant type, all extending BaseTokenProvider
 ├── strategies/
 │   ├── BrowserCallbackStrategy.ts  # class + browser/oidc/saml constructors
-│   ├── manualStrategies.ts         # paste a code, paste a SAMLResponse
+│   ├── manualStrategies.ts         # paste a code, paste a SAMLResponse, paste a passcode — timeoutMs, dispose()
 │   ├── codeStrategies.ts           # external (needs the URL) and static (does not)
 │   └── asOidcResult.ts             # string payload → OidcCallbackResult
 ├── auth/
+│   ├── refusal.ts             # OK, oops, refusalFrom, safely — where every thrown value becomes a refusal
 │   ├── callbackServer.ts     # runCallbackScope: one owner, one release point
 │   ├── announce.ts           # logger-or-stderr, never stdout
 │   ├── browserAuth.ts        # UAA URL building, code exchange, browser launch

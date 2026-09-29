@@ -13,7 +13,9 @@ its source, with the same tags as [btp-setup.md](btp-setup.md):
 - **Community** — an SAP Community post, linked.
 - **Inference** — reasoning from the facts above; no source states it.
 
-Nothing on this page has been tried against a live system yet.
+**SNC over RFC is now Measured and Built** — `SncLogonProvider`, see
+[Options for this package](#options-for-this-package). Everything else on
+this page has not been tried against a live system.
 
 ## Contents
 
@@ -171,11 +173,15 @@ not a way to log on by itself (Inference).
   Windows and can produce the `Negotiate` token, given a ticket (a domain
   logon, or `kinit`) and a registered `HTTP/<fqdn>` service principal
   (Inference; untested).
-- **RFC with SNC**: `node-rfc` is deprecated — "No longer supported" on npm,
-  and SAP archived the repository on 2026-05-28 with no successor named
-  ([SAP/node-rfc#329](https://github.com/SAP/node-rfc/issues/329)). And an
-  RFC transport is not an authorization credential; it would belong in a
-  connection package, not here (Inference).
+- **RFC with SNC**: `@mcp-abap-adt/sap-rfc-lite` is what `@mcp-abap-adt/connection`'s
+  `RfcTransport` uses (`node-rfc`, the earlier option, was archived by SAP on
+  2026-05-28 with no successor named —
+  [SAP/node-rfc#329](https://github.com/SAP/node-rfc/issues/329) — and is not
+  used here). The transport itself stays in the connection package; this
+  package supplies the credential, `SncLogonProvider`, which hands
+  `RfcTransport` the SNC logon parameters (`snc_mode`, `snc_partnername`,
+  `snc_qop`, `snc_lib`, `snc_myname?`) and nothing else — see
+  [Options for this package](#options-for-this-package).
 
 The certificate or `Negotiate` header has to reach every request to
 `/sap/bc/adt`, or a provider logs on once and hands over the session cookies,
@@ -199,9 +205,20 @@ SAP does not describe these checks):
 
 ## Options for this package
 
-None is decided. Each follows the package's rule that anything pluggable is a
-strategy with a shipped default (Inference, design).
+SNC over RFC is decided and built (below). For the HTTP mechanisms, nothing
+is decided yet; each would follow the package's rule that anything pluggable
+is a strategy with a shipped default (Inference, design).
 
+- **Built — SNC over RFC: `SncLogonProvider`.** Measured 2026-09-29 against an
+  on-premise system (Windows, Secure Login Client 3.0.3): an SNC logon over
+  `RfcTransport` with no password, then discovery, reads and LOCK/UNLOCK —
+  all 200; each RFC conversation is its own SNC logon (roughly 1–1.5 s). It
+  resolves the SNC library (an explicit one, or `SNC_LIB_64` / `SNC_LIB` /
+  the Windows registry / the macOS app bundle, in that order), checks the
+  product when a probe applies to it, and hands `RfcTransport` the logon
+  parameters — it opens no connection itself and depends on neither
+  `@mcp-abap-adt/sap-rfc-lite` nor `@mcp-abap-adt/connection`. See
+  [the README](README.md#passwordless-rfc-logon-snc).
 - **A — documentation only.** Describe passwordless login through IAS for
   BTP and S/4HANA Cloud. No code, and it covers the cloud today.
 - **B — `SpnegoProvider`**, on-premise: sends `Authorization: Negotiate`,
@@ -215,8 +232,6 @@ strategy with a shipped default (Inference, design).
   strategy: PEM or PFX from a file by default, a PKCS#11 or system-store
   source supplied by the consumer. Never logs the key, the certificate or the
   passphrase. Holding the key is the hard part.
-- **Rejected — an RFC/SNC transport.** A different transport, not a
-  credential, and `node-rfc` is archived.
 
 Session cookies declare no lifetime, so B and C need an expiry policy — a
 configured TTL or a probe request; refreshing means logging on again, which
@@ -230,7 +245,11 @@ proposing one.
    system? [Checking a machine](#checking-a-machine) answers it for one system.
 2. Does the Secure Login Server or Secure Login Service offer an enrolment API
    through which a client other than Secure Login Client obtains a
-   certificate for its own key?
+   certificate for its own key? **Partly answered:** the Secure Login Client
+   itself enrols over `/api/v1/getProfiles`, `/api/v1/getCertificateTemplateStandardBrowser`
+   and `/slc/v1/login` (Measured, from its profile registry); this package
+   does not use these endpoints — `SncLogonProvider` relies on an SNC product
+   already being logged on, not on enrolling one.
 3. Are the keys Secure Login puts in the Windows store non-exportable?
 4. Does IAS offer a user-token grant authenticated by a user certificate,
    without a browser?

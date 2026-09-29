@@ -1,9 +1,168 @@
 # @mcp-abap-adt/auth-providers
 [![Stand With Ukraine](https://raw.githubusercontent.com/vshymanskyy/StandWithUkraine/main/badges/StandWithUkraine.svg)](https://stand-with-ukraine.pp.ua)
 
-Token providers for MCP ABAP ADT auth-broker.
+Every implementation of `IAuthProvider` for SAP ABAP ADT: the credential a
+process delegates to, and the token providers behind it.
 
 This package provides token provider implementations for the `@mcp-abap-adt/auth-broker` package.
+
+## Migrating to 5.0.0 — a migration, not an update
+
+5.0.0 is not an incremental release. Every provider here now implements
+`IAuthProvider` (`@mcp-abap-adt/interfaces-auth` 3.0.0) and can be handed to
+the process with no wrapper and no check of what it is — which is what a
+consumer **migrates** to, building its providers from this package and
+handing them to a `@mcp-abap-adt/connection` **10.0.0** process, rather than
+updating in place; 9.x speaks the old, narrower `IAuthProvider`.
+
+- **Credentials come from here, not from `@mcp-abap-adt/connection`.**
+  `BasicAuthProvider`, `CertificateAuthProvider`, `SamlAuthProvider`,
+  `TokenAuthProvider` and `FileCertificateMaterialLoader` moved into this
+  package (`src/credentials/`); `connection` 10.0.0 removes its own copies.
+  Import them from `@mcp-abap-adt/auth-providers` instead.
+- **A token provider is handed to the process as it is.**
+  `BaseTokenProvider implements IRefreshableTokenProvider, IAuthProvider`, so
+  every token provider — `AuthorizationCodeProvider`, `ClientCredentialsProvider`,
+  `OidcBrowserProvider`, `OidcDeviceFlowProvider`, `OidcPasswordProvider`,
+  `OidcTokenExchangeProvider`, `Saml2BearerProvider`, `Saml2PureProvider`,
+  `UaaPasscodeProvider` — **is** an `IAuthProvider`, with no `TokenAuthProvider`
+  wrapper around it. The broker's token API (`getTokens()` / `refreshTokens()`)
+  is unchanged.
+- **A store that persisted after `getTokens()` passes `onTokens` instead.**
+  Every token provider's config takes an optional
+  `onTokens?: (result: ITokenResult) => Promise<void>`, called after every
+  *new* token — a login or a refresh, never a cache hit — and awaited before
+  the provider answers. It is best effort: a failing `onTokens` is logged (its
+  class name only, since it holds the tokens) and does not fail the
+  authentication.
+- **Nothing is defaulted any more.** A provider that used to build its own
+  strategy, SAML validator, replay store or device-code output now takes it
+  explicitly in its constructor — or the consumer calls the named factory:
+  `AuthorizationCodeProvider.inBrowser`, `OidcBrowserProvider.inBrowser`,
+  `Saml2PureProvider.inBrowser`, `Saml2BearerProvider.inBrowser`,
+  `UaaPasscodeProvider.fromTerminal`, `OidcDeviceFlowProvider.toConsole`,
+  `CertificateAuthProvider.fromFiles`, `SncLogonProvider.forSecureLoginClient`.
+  Omitting `authorization` (or, for the SAML providers, `assertionValidator`)
+  no longer compiles.
+- **SAML trust configuration moved.** `idpCertificates`, `clockSkewMs` and
+  `assertionReplayStore` are no longer fields of `Saml2BearerProviderConfig` /
+  `Saml2PureProviderConfig`; both now take `assertionValidator:
+  IAssertionValidator` directly (still required, together with `idpEntityId`
+  for a shipped validator). Build one yourself with
+  `createSignedResponseValidator` / `createSignedAssertionValidator`, or call
+  `Saml2PureProvider.inBrowser(config, trust)` /
+  `Saml2BearerProvider.inBrowser(config, trust)` with a `SamlTrust`
+  (`{ idpCertificates, clockSkewMs?, replayStore? }`) — the recipe builds the
+  shipped validator and defaults `replayStore` to `defaultReplayStore`.
+- **`ShippedValidatorOptions.replayStore` is required.** A direct call to
+  `createSignedResponseValidator` / `createSignedAssertionValidator` must now
+  pass one — `defaultReplayStore`, or your own.
+- **Manual strategies take `timeoutMs` and can be disposed.**
+  `manualPasteStrategy`, `manualSamlResponseStrategy` and
+  `manualPasscodeStrategy` accept `timeoutMs?: number`; on expiry, or when
+  `dispose()` is called, the pending read is abandoned with a
+  `BrowserAuthError` and the terminal `readline` it opened is closed. `read`
+  is now `(prompt: string, signal: AbortSignal) => Promise<string>` — the
+  signal aborts on timeout or dispose, and a custom `read` that ignores it
+  still loses the race.
+- **Needs `@mcp-abap-adt/connection` 10.0.0.**
+
+## Passwordless RFC logon (SNC)
+
+`SncLogonProvider` logs an on-premise system on over `RfcTransport` with no
+password, through an installed SNC product — typically the SAP Secure Login
+Client, holding a certificate from SAP Secure Login Service or Kerberos.
+Measured 2026-09-29 against an on-premise system (Windows, Secure Login
+Client 3.0.3): the SNC logon, discovery, reads and LOCK/UNLOCK all succeeded
+over `RfcTransport`, each RFC conversation its own SNC logon at roughly
+1–1.5 s. See [docs/passwordless-sso.md](docs/passwordless-sso.md) for the
+HTTP alternatives, which remain undecided.
+
+**Prerequisites:** the SNC product is installed and logged on to the profile
+used for SAP applications; the ABAP system accepts SNC for RFC and maps the
+certificate's SNC name to a user; and, for the `RfcTransport` wire itself, the
+machine has the SAP NW RFC SDK and `@mcp-abap-adt/sap-rfc-lite` installed.
+This package itself depends on neither — it produces logon parameters and
+loads nothing.
+
+The usual choice:
+
+```typescript
+import { SncLogonProvider } from '@mcp-abap-adt/auth-providers';
+
+const provider = SncLogonProvider.forSecureLoginClient({
+  partnerName: 'p:CN=<system SNC name>', // the ABAP system's SNC name
+});
+```
+
+`forSecureLoginClient` assembles `nodeSncSystem()` (the machine seam),
+`DefaultSncLibraryLocator(system, sncLib)` and `[SecureLoginClientProbe(system)]`
+— "this machine, library discovery, the Secure Login Client probe". `qop`
+defaults to `'9'` (maximum, one of `'1' | '2' | '3' | '8' | '9'`), and
+`myName` is sent only when set.
+
+The explicit assembly, for a different SNC product, or a locator/probe of
+your own (no implicit defaults — a constructor takes every collaborator):
+
+```typescript
+import {
+  SncLogonProvider,
+  DefaultSncLibraryLocator,
+  SecureLoginClientProbe,
+  nodeSncSystem,
+} from '@mcp-abap-adt/auth-providers';
+
+const system = nodeSncSystem();
+const provider = new SncLogonProvider({
+  partnerName: 'p:CN=<system SNC name>',
+  locator: new DefaultSncLibraryLocator(system /*, sncLib */),
+  probes: [new SecureLoginClientProbe(system)], // [] for no product check
+});
+```
+
+**Discovery order and skip rule.** With no explicit `sncLib`,
+`DefaultSncLibraryLocator` tries, in order: the environment variable
+`SNC_LIB_64` (on a 64-bit process), `SNC_LIB`, the Windows registry
+`HKLM\Software\SAP\SecureLogin\InstallPath64` (`InstallPath32` on a 32-bit
+process) plus `lib\sapcrypto.dll`, then the macOS bundle `/Applications/Secure
+Login Client.app/Contents/MacOS/lib/libsapcrypto.dylib`. An unusable
+candidate — missing, not a recognised library, or built for the wrong
+architecture — is **skipped**, its reason kept, rather than failing the whole
+search; empty or whitespace environment variables count as unset. Nothing
+usable → Oops listing every candidate tried. An **explicit** `sncLib` is the
+only candidate: unusable, and the provider is Oops naming the path and the
+reason, with no fallback to automatic discovery. Architecture comes from the
+file header — PE `Machine`; Mach-O thin and universal (`FAT_MAGIC` /
+`FAT_MAGIC_64`); ELF `e_machine` — because the trap this guards against is
+measured, not theoretical: the Secure Login Client installer sets the
+machine-wide `SNC_LIB` to its x86 library, and a 64-bit Node process needs the
+x64 one the registry points at.
+
+**The probe rule.** `SecureLoginClientProbe` applies only to a library inside
+the Secure Login Client's own installation (the registry's install paths on
+Windows, matched case-insensitively; the app bundle on macOS) — any other SNC
+library (`gsskrb5.dll`, another vendor's) is never probed. Where it applies,
+it checks that the client's own process is running (`sbus.exe` on Windows,
+the app on macOS), not that a profile is logged on to it: no documented
+interface exposes that, and a missing certificate surfaces at logon instead.
+A process list that cannot be read is an Oops of its own, without the listing
+tool's own message.
+
+**The two explained failures**, from `rejected()` — the RFC SDK reports both
+as a generic communication error, so the cause is found by searching the GSS
+error text (never returned; only fixed wording and an allowlisted key go out):
+
+- **`A2200019`** — reason "the SNC library has no credential to present
+  (A2200019)"; hint "log on in the Secure Login Client, to the profile used
+  for SAP applications" when the Secure Login Client probe applied, otherwise
+  "make sure the SNC product behind `<library>` is logged on".
+- **`SNCERR_INIT`** (or "gssapi library invalid/missing") — reason "the RFC
+  SDK could not initialise `<library>` as its SNC library (SNCERR_INIT)", no
+  hint — usually the architecture mismatch above, if a mismatched library
+  somehow reached this point.
+- anything else — reason "SNC logon refused", plus the SDK's error key in
+  parentheses when it is on the RFC-key allowlist (`RFC_LOGON_FAILURE`,
+  `RFC_COMMUNICATION_FAILURE`, …) — never the underlying message or object.
 
 ## Installation
 
