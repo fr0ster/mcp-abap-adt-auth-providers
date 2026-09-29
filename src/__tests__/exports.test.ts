@@ -43,3 +43,36 @@ describe('public exports — SAML assertion validation', () => {
     expect('parseSamlNotOnOrAfter' in surface).toBe(false);
   });
 });
+
+describe('public exports — 5.0.0', () => {
+  it.each([
+    'BasicAuthProvider',
+    'CertificateAuthProvider',
+    'FileCertificateMaterialLoader',
+    'SamlAuthProvider',
+    'TokenAuthProvider',
+    'SncLogonProvider',
+    'DefaultSncLibraryLocator',
+    'SecureLoginClientProbe',
+    'nodeSncSystem',
+    'consoleDeviceCodePresenter',
+  ])('exports %s', (name) => {
+    expect((surface as Record<string, unknown>)[name]).toBeDefined();
+  });
+  it.each([
+    'libraryArchitectures',
+    'sncRefusal',
+    'refusalFrom',
+    'oops',
+    'safely',
+    'ownLabel',
+    'DeviceCodePresentationError',
+    'KNOWN_CONFIG_FIELDS',
+    'KNOWN_RFC_KEYS',
+    'parseRegQuery',
+    'parseTasklistCsv',
+    'parsePsComm',
+  ])('does not export the internal %s', (name) => {
+    expect(name in surface).toBe(false);
+  });
+});
