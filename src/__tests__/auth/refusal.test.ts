@@ -1,5 +1,6 @@
 import { describe, expect, it } from '@jest/globals';
 import { OK, oops, refusalFrom, safely } from '../../auth/refusal';
+import { DeviceCodePresentationError } from '../../deviceCode/DeviceCodePresenter';
 import { AssertionValidationError } from '../../errors/AssertionValidationError';
 import {
   BrowserAuthError,
@@ -143,6 +144,15 @@ describe('refusal', () => {
         refusal: { reason: 'it failed (unknown error, ENOENT)' },
       }),
     );
+  });
+
+  it('a presenter failure is the fixed device-code refusal', () => {
+    expect(
+      refusalFrom(new DeviceCodePresentationError(), 'x token request'),
+    ).toEqual({
+      ok: false,
+      refusal: { reason: 'showing the device code failed' },
+    });
   });
 
   it('safely: sync throw, async rejection and a returned outcome', async () => {

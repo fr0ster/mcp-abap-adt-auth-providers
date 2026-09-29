@@ -27,6 +27,10 @@ import {
   refreshSamlBearerToken,
 } from '../../auth/saml2TokenExchange';
 import { toBearerAssertion } from '../../auth/samlBearerAssertion';
+import {
+  consoleDeviceCodePresenter,
+  type DeviceCodePrompt,
+} from '../../deviceCode/DeviceCodePresenter';
 import { AssertionValidationError } from '../../errors/AssertionValidationError';
 import { OidcBrowserProvider } from '../../providers/OidcBrowserProvider';
 import { OidcDeviceFlowProvider } from '../../providers/OidcDeviceFlowProvider';
@@ -341,6 +345,7 @@ describe('SSO Providers', () => {
     const provider = new OidcDeviceFlowProvider({
       issuerUrl: 'https://issuer',
       clientId: 'client',
+      presenter: consoleDeviceCodePresenter(),
     });
 
     const tokens = await provider.getTokens();
@@ -366,6 +371,7 @@ describe('SSO Providers', () => {
       clientId: 'client',
       deviceAuthorizationEndpoint: 'https://issuer/device',
       tokenEndpoint: 'https://issuer/token',
+      presenter: consoleDeviceCodePresenter(),
     });
 
     const tokens = await provider.getTokens();
@@ -407,7 +413,7 @@ describe('SSO Providers', () => {
         return true;
       });
     try {
-      const provider = new OidcDeviceFlowProvider({
+      const provider = OidcDeviceFlowProvider.toConsole({
         issuerUrl: 'https://issuer',
         clientId: 'client',
         deviceAuthorizationEndpoint: 'https://issuer/device',
@@ -453,7 +459,7 @@ describe('SSO Providers', () => {
         return true;
       });
     try {
-      const provider = new OidcDeviceFlowProvider({
+      const provider = OidcDeviceFlowProvider.toConsole({
         issuerUrl: 'https://issuer',
         clientId: 'client',
         deviceAuthorizationEndpoint: 'https://issuer/device',
@@ -469,6 +475,72 @@ describe('SSO Providers', () => {
     expect(text).toContain('USER-CODE-FIXTURE');
     expect(text).toContain('https://verify.example');
   });
+
+  it('hands the presenter the structured prompt', async () => {
+    mockInitiateDevice.mockResolvedValue({
+      deviceCode: 'dc',
+      userCode: 'SECRET-UC',
+      verificationUri: 'https://idp/device',
+      verificationUriComplete: 'https://idp/device?c=SECRET-UC',
+      expiresIn: 600,
+      interval: 1,
+    });
+    mockPollDevice.mockResolvedValue({
+      accessToken: 'jwt.device.token',
+      refreshToken: 'refresh',
+      expiresIn: 1200,
+    });
+    const present = jest.fn(async (_: DeviceCodePrompt) => {});
+    const p = new OidcDeviceFlowProvider({
+      clientId: 'c',
+      issuerUrl: 'https://idp',
+      presenter: { present },
+    });
+    await p.prepare();
+    expect(present).toHaveBeenCalledWith({
+      verificationUri: 'https://idp/device',
+      verificationUriComplete: 'https://idp/device?c=SECRET-UC',
+      userCode: 'SECRET-UC',
+      expiresInSeconds: 600,
+    });
+  });
+
+  it.each(['prepare', 'rejected'] as const)(
+    'a throwing presenter in %s → the fixed refusal, no code, no message',
+    async (moment) => {
+      mockInitiateDevice.mockResolvedValue({
+        deviceCode: 'dc',
+        userCode: 'SECRET-UC',
+        verificationUri: 'https://idp/device',
+        verificationUriComplete: 'https://idp/device?c=SECRET-UC',
+        expiresIn: 600,
+        interval: 1,
+      });
+      mockPollDevice.mockResolvedValue({
+        accessToken: 'jwt.device.token',
+        refreshToken: 'refresh',
+        expiresIn: 1200,
+      });
+      const p = new OidcDeviceFlowProvider({
+        clientId: 'c',
+        issuerUrl: 'https://idp',
+        presenter: {
+          present: async () => {
+            throw new Error('UI down SECRET-UI');
+          },
+        },
+      });
+      const outcome =
+        moment === 'prepare'
+          ? await p.prepare()
+          : await p.rejected({ at: 'request', status: 401, error: {} }); // no refresh token → one login → the presenter
+      expect(outcome).toEqual({
+        ok: false,
+        refusal: { reason: 'showing the device code failed' },
+      });
+      expect(JSON.stringify(outcome)).not.toMatch(/SECRET/);
+    },
+  );
 
   it('OidcPasswordProvider should use password grant', async () => {
     mockDiscoverOidc.mockResolvedValue({

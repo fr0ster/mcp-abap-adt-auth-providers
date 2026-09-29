@@ -10,6 +10,7 @@
  */
 
 import type { AuthOutcome } from '@mcp-abap-adt/interfaces-auth';
+import { DeviceCodePresentationError } from '../deviceCode/DeviceCodePresenter';
 import {
   type AssertionCheck,
   AssertionValidationError,
@@ -131,6 +132,7 @@ const OWN_CLASSES: ReadonlyArray<
   [ValidationError, 'ValidationError'],
   [ServiceKeyError, 'ServiceKeyError'],
   [SessionDataError, 'SessionDataError'],
+  [DeviceCodePresentationError, 'DeviceCodePresentationError'],
   [TokenProviderError, 'TokenProviderError'],
 ];
 
@@ -158,6 +160,9 @@ function systemCode(error: unknown): string {
 }
 
 export function refusalFrom(error: unknown, what: string): AuthOutcome {
+  if (error instanceof DeviceCodePresentationError) {
+    return oops('showing the device code failed');
+  }
   if (error instanceof AssertionValidationError) {
     const check = ASSERTION_CHECKS.has(error.check) ? ` (${error.check})` : '';
     return oops(`the SAML assertion was refused${check}`);

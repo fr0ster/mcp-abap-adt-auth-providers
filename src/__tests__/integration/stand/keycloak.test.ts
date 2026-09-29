@@ -124,7 +124,7 @@ describeKeycloak('OIDC providers against Keycloak', () => {
         }
       });
 
-      const tokens = await new OidcDeviceFlowProvider({
+      const tokens = await OidcDeviceFlowProvider.toConsole({
         issuerUrl: KEYCLOAK_URL,
         clientId: 'oidc-device',
         scopes: ['openid'],
