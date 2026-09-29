@@ -207,18 +207,36 @@ SAP does not describe these checks):
 
 SNC over RFC is decided and built (below). For the HTTP mechanisms, nothing
 is decided yet; each would follow the package's rule that anything pluggable
-is a strategy with a shipped default (Inference, design).
+is a collaborator the consumer injects, with a named factory as the usual
+recipe and no implicit default (Inference, design).
 
 - **Built — SNC over RFC: `SncLogonProvider`.** Measured 2026-09-29 against an
   on-premise system (Windows, Secure Login Client 3.0.3): an SNC logon over
   `RfcTransport` with no password, then discovery, reads and LOCK/UNLOCK —
   all 200; each RFC conversation is its own SNC logon (roughly 1–1.5 s). It
   resolves the SNC library (an explicit one, or `SNC_LIB_64` / `SNC_LIB` /
-  the Windows registry / the macOS app bundle, in that order), checks the
-  product when a probe applies to it, and hands `RfcTransport` the logon
+  the Windows registry / the macOS app bundle, in that order), notes which
+  product probe applies to it, and hands `RfcTransport` the logon
   parameters — it opens no connection itself and depends on neither
-  `@mcp-abap-adt/sap-rfc-lite` nor `@mcp-abap-adt/connection`. See
+  `@mcp-abap-adt/sap-rfc-lite` nor `@mcp-abap-adt/connection`. An unusable
+  library is an Oops naming each candidate tried: its source, its path and
+  a fixed reason (missing, not a library, wrong architecture). See
   [the README](README.md#passwordless-rfc-logon-snc).
+
+  **The product is named, not checked** (Measured, 2026-09-29, Windows,
+  Secure Login Client 3.0.3). With the client exited, the RFC open through
+  its `sapcrypto.dll` started the client, which logged on — silently through
+  the identity provider's SSO, or through its logon window. A "the client is
+  not running" refusal before logon would therefore stop logons that
+  succeed, so `prepare()` is Ok with the client not running and only notes
+  which product is behind the library. What follows for a consumer: an RFC
+  open can wait on the client's logon window until the user answers it.
+  With the client logged out, closing that window failed the open with
+  `GSS-API(min): A2200019:Operation aborted by user or application`, and
+  `rejected()` answered "the SNC library has no credential to present
+  (A2200019)" — the one place a missing credential is explained. The macOS
+  side (the app bundle as a candidate and as what the probe recognises) is
+  built from the documented install path but has not been measured live.
 - **A — documentation only.** Describe passwordless login through IAS for
   BTP and S/4HANA Cloud. No code, and it covers the cloud today.
 - **B — `SpnegoProvider`**, on-premise: sends `Authorization: Negotiate`,

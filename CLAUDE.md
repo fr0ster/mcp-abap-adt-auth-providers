@@ -49,7 +49,7 @@ Both SAML providers validate the assertion first, through an `IAssertionValidato
 
 - `src/credentials/` — `BasicAuthProvider`, `CertificateAuthProvider`, `FileCertificateMaterialLoader`, `SamlAuthProvider`, `TokenAuthProvider`
 - `src/deviceCode/` — `IDeviceCodePresenter`, `DeviceCodePrompt`, `consoleDeviceCodePresenter`: how `OidcDeviceFlowProvider` shows the user where to go and what to enter, injected like a strategy instead of writing to the logger itself
-- `src/snc/` — `SncLogonProvider` and its collaborators: `DefaultSncLibraryLocator`, `SecureLoginClientProbe`, `nodeSncSystem` (the machine seam — env, file heads, registry, process list, behind one injectable interface), the PE/Mach-O/ELF architecture reader, the refusal mapping (`sncRefusal`)
+- `src/snc/` — `SncLogonProvider` and its collaborators: `DefaultSncLibraryLocator`, `SecureLoginClientProbe`, `nodeSncSystem` (the machine seam — env, file heads, registry, behind one injectable interface), the PE/Mach-O/ELF architecture reader, the refusal mapping (`sncRefusal`). A product probe only names the product behind the library, for the `rejected()` hint — it checks nothing, because the SNC library starts the Secure Login Client on demand (measured), so `prepare()` is Ok with the client not running. An unusable library is refused naming each candidate’s source, path and fixed reason
 - `src/auth/refusal.ts` — `OK`, `oops`, `refusalFrom`, `safely` — the one place a thrown value becomes a refusal (rules 1 and 2), and the allowlists
 
 ## Build Commands
@@ -93,7 +93,7 @@ This package ONLY:
 - builds authorization URLs and exchanges codes, assertions and refresh tokens for tokens
 - ships strategies, validators and named static factories for conducting an interactive authorization or assembling a common recipe
 - validates SAML assertions, with two shipped validators and an in-memory replay store, all replaceable
-- resolves and checks the SNC library for a passwordless RFC logon (`SncLogonProvider`), producing logon parameters only
+- resolves the SNC library for a passwordless RFC logon (`SncLogonProvider`), producing logon parameters only
 
 This package does NOT:
 - store tokens (`@mcp-abap-adt/auth-stores`)
@@ -117,10 +117,10 @@ src/
 ├── snc/                       # SncLogonProvider — passwordless RFC logon
 │   ├── SncLogonProvider.ts
 │   ├── DefaultSncLibraryLocator.ts   # explicit sncLib, or SNC_LIB_64/SNC_LIB/registry/app-bundle in order
-│   ├── SecureLoginClientProbe.ts     # is the Secure Login Client running, scoped to its own install path
-│   ├── SncSystem.ts           # the machine seam: env, file heads, registry, process list — nodeSncSystem()
+│   ├── SecureLoginClientProbe.ts     # names the Secure Login Client when the library is inside its install path; checks nothing
+│   ├── SncSystem.ts           # the machine seam: env, file heads, registry (reg.exe by absolute path, 5 s timeout) — nodeSncSystem()
 │   ├── libraryArchitectures.ts  # PE / Mach-O (thin + FAT/FAT_64) / ELF header reader
-│   └── sncRefusal.ts          # the three GSS error shapes → a fixed refusal
+│   └── sncRefusal.ts          # the three GSS error shapes, and an unusable library, → a fixed refusal
 ├── deviceCode/
 │   └── DeviceCodePresenter.ts  # IDeviceCodePresenter, DeviceCodePrompt, consoleDeviceCodePresenter
 ├── providers/                 # one file per grant type, all extending BaseTokenProvider

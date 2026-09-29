@@ -51,8 +51,19 @@ const ASSERTION_SHAPED: ReadonlyArray<readonly [string, string]> = [
 ];
 
 export interface ShippedValidatorOptions {
+  /**
+   * The identity provider's signing certificates, PEM or bare base64 DER — the
+   * form `<X509Certificate>` has in IdP metadata. A list, because keys rotate.
+   * Each is parsed when the validator is built; an empty list is refused there.
+   */
   readonly idpCertificates: readonly string[];
+  /** Tolerance for the time checks, in ms; default `0`. */
   readonly clockSkewMs?: number;
+  /**
+   * Where accepted assertions are recorded so a second presentation is refused
+   * as a replay. Required: `defaultReplayStore` (process-wide, in memory) or a
+   * store of your own, whose `recordIfUnseen` must be atomic.
+   */
   readonly replayStore: IAssertionReplayStore;
 }
 

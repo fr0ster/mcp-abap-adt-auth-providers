@@ -270,7 +270,7 @@ describe('getSamlAssertion — where the expected request ID comes from', () => 
   });
 });
 
-describe('resolveAssertionValidator — a shipped validator still needs idpEntityId', () => {
+describe('checkAssertionValidator — a shipped validator still needs idpEntityId', () => {
   const certificate = generateKeyMaterial().certificatePem;
   const common = {
     idpSsoUrl: 'https://idp.example/sso',

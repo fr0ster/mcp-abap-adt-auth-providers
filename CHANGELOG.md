@@ -42,7 +42,13 @@ it is. See *Migrating to 5.0.0* in the README.
   token — one login through the injected strategy; no provider retries
   anything itself. A renewal that returns the credential already presented is
   Oops "the renewal returned the credential that was refused", for
-  `BaseTokenProvider` and `TokenAuthProvider.from` alike.
+  `BaseTokenProvider` and `TokenAuthProvider.from` alike. A provider's own
+  refresh never logs in — a failed refresh throws and the base runs the one
+  login; a provider with no refresh grant (`ClientCredentialsProvider`,
+  `OidcTokenExchangeProvider`, `Saml2PureProvider`) goes straight to that one
+  login. Concurrent renewals share one in flight (one refresh, at most one
+  login), and a `rejected()` whose presented token a renewal has already
+  replaced answers Ok without renewing again.
 - **Refusals from fixed wording and allowlists, never an error's message.** A
   refusal is built only from wording chosen per error class, plus metadata
   only when its value is on an allowlist this package owns — config field
@@ -88,12 +94,22 @@ it is. See *Migrating to 5.0.0* in the README.
   `TokenAuthProvider.fixed(token)` or `TokenAuthProvider.from(refresher)`.
 - **`SncLogonProvider`** — passwordless RFC logon through an installed SNC
   product. Resolves the SNC library (explicit, or `SNC_LIB_64` / `SNC_LIB` /
-  the Windows registry / the macOS app bundle, in order), checks the product
-  when a probe applies, and hands `RfcTransport` the logon parameters; it
-  opens no connection and loads no SAP library itself. Measured 2026-09-29
-  against an on-premise system (Windows, Secure Login Client 3.0.3): SNC
-  logon, discovery, reads and LOCK/UNLOCK, each RFC conversation its own SNC
-  logon. See *Passwordless RFC logon (SNC)* in the README and
+  the Windows registry / the macOS app bundle, in order), notes which product
+  probe applies to it, and hands `RfcTransport` the logon parameters; it
+  opens no connection and loads no SAP library itself. An unusable library is
+  an Oops naming each candidate tried — its source, path and a fixed reason
+  (`missing`, `not a library`, `wrong architecture`); an explicit `sncLib`
+  names that one. The product is **named, not checked**
+  (`ISncProductProbe { product; appliesTo(libraryPath) }`): `prepare()` is Ok
+  with the Secure Login Client not running, because the library starts the
+  client on demand — so an RFC open can wait on the client's logon window
+  until the user answers it. Only the shipped `SecureLoginClientProbe` yields
+  the Secure Login Client hint in `rejected()`. Measured 2026-09-29 against an
+  on-premise system (Windows, Secure Login Client 3.0.3): SNC logon,
+  discovery, reads and LOCK/UNLOCK, each RFC conversation its own SNC logon;
+  with the client logged out, closing its logon window failed the open with
+  `A2200019`, and `rejected()` answered "the SNC library has no credential to
+  present (A2200019)". See *Passwordless RFC logon (SNC)* in the README and
   `docs/passwordless-sso.md`.
 - **Dependencies:** `@mcp-abap-adt/interfaces-auth` `^3.0.0` (was `^2.1.0`),
   `@mcp-abap-adt/interfaces-auth-sap` `^1.1.0` (was `^1.0.1`). No new runtime
