@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-`@mcp-abap-adt/auth-providers` — a TypeScript npm package providing every implementation of `IAuthProvider` (from `@mcp-abap-adt/interfaces-auth` 3.0.0) for SAP ABAP ADT: the credential a process delegates to, and the token providers behind it. Any provider from this package can be handed to the process with no check of what it is; each answers all four moments of the contract:
+`@mcp-abap-adt/auth-providers` — a TypeScript npm package providing every implementation of `IAuthProvider` (from `@mcp-abap-adt/interfaces-auth`) for SAP ABAP ADT: the credential a process delegates to, and the token providers behind it. Any provider from this package can be handed to the process with no check of what it is; each answers all four moments of the contract:
 
 ```ts
 prepare(): Promise<AuthOutcome>;                          // once per connect
@@ -78,7 +78,7 @@ Debug logging: `DEBUG_AUTH_PROVIDERS=true` or `DEBUG_BROWSER_AUTH=true`.
 
 ### Core design principles
 
-**Interface-only communication.** All interaction with external dependencies happens through contract packages: `@mcp-abap-adt/interfaces-auth` ^2.0.1 (token providers, strategies, callback server, assertion validator and replay store, error codes), `@mcp-abap-adt/interfaces-auth-sap` (XSUAA configuration) and `@mcp-abap-adt/interfaces-utils` (`ILogger`). Depend on the contract package whose contracts are used, nothing wider — never `interfaces-adt`, which carries ADT contracts this package does not use. The package does not know about concrete implementation classes from other packages. A logger is `ILogger`, never a local abstraction.
+**Interface-only communication.** All interaction with external dependencies happens through contract packages: `@mcp-abap-adt/interfaces-auth` (token providers, `IAuthProvider`, strategies, callback server, assertion validator and replay store, error codes), `@mcp-abap-adt/interfaces-auth-sap` (XSUAA configuration, `ICertificateMaterialLoader`) and `@mcp-abap-adt/interfaces-utils` (`ILogger`). Depend on the contract package whose contracts are used, nothing wider — never `interfaces-adt`, which carries ADT contracts this package does not use. The package does not know about concrete implementation classes from other packages. A logger is `ILogger`, never a local abstraction. This file does not track version numbers — they lag behind: see `package.json` for the versions in use, and `CHANGELOG.md` for when and why they changed.
 
 **Everything pluggable is a strategy.** Anything a consumer might reasonably want to do differently is expressed as a strategy behind an interface. The package ships the parts and named factories; the consumer composes. This is why an authorization library does not own a socket, a browser or stdin — a consumer may legitimately own them instead.
 

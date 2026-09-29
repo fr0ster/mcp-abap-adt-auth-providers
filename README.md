@@ -4,7 +4,11 @@
 Every implementation of `IAuthProvider` for SAP ABAP ADT: the credential a
 process delegates to, and the token providers behind it.
 
-This package provides token provider implementations for the `@mcp-abap-adt/auth-broker` package.
+Token providers, the Basic/Certificate/SAML/Token credentials and passwordless
+SNC logon are each an `IAuthProvider` the process takes as it is — whether it
+is handed over directly to a connection, or through
+`@mcp-abap-adt/auth-broker` for the stateful token API
+(`getTokens()`/`refreshTokens()`).
 
 ## Migrating to 5.0.0 — a migration, not an update
 
@@ -1956,8 +1960,8 @@ Example output:
 
 ## Dependencies
 
-- `@mcp-abap-adt/interfaces-auth` (^2.0.1) - Token provider, authorization and assertion-validation contracts (`ITokenProvider`, `IAuthorizationStrategy`, `CallbackServerFactory`, `IAssertionValidator`, `IAssertionReplayStore`) and error code constants
-- `@mcp-abap-adt/interfaces-auth-sap` (^1.0.1) - XSUAA authorization configuration (`IAuthorizationConfig`)
+- `@mcp-abap-adt/interfaces-auth` (^3.0.0) - `IAuthProvider`, token provider, authorization and assertion-validation contracts (`ITokenProvider`, `IAuthorizationStrategy`, `CallbackServerFactory`, `IAssertionValidator`, `IAssertionReplayStore`) and error code constants
+- `@mcp-abap-adt/interfaces-auth-sap` (^1.1.0) - XSUAA authorization configuration (`IAuthorizationConfig`) and `ICertificateMaterialLoader`
 - `@mcp-abap-adt/interfaces-utils` (^1.1.0) - `ILogger`
 - `@xmldom/xmldom` - XML parsing: SAML assertion validation, and taking the Assertion out of a SAMLResponse for the saml2-bearer grant
 - `xml-crypto` - XML-DSig signature verification for SAML assertion validation
