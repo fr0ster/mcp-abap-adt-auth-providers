@@ -1049,11 +1049,12 @@ A test whose purpose was "the provider builds the default validator / refuses wi
 
 **Files:**
 - Create: `src/deviceCode/DeviceCodePresenter.ts`
-- Modify: `src/providers/OidcDeviceFlowProvider.ts`; its tests (add `presenter`)
-- Test: `src/__tests__/deviceCode/presenter.test.ts`
+- Modify: `src/providers/OidcDeviceFlowProvider.ts`; its tests (add `presenter`); `src/auth/refusal.ts` (one mapping)
+- Test: `src/__tests__/deviceCode/presenter.test.ts`, `src/__tests__/auth/refusal.test.ts` (one case)
 
 **Interfaces:**
-- Produces: `interface DeviceCodePrompt { verificationUri: string; verificationUriComplete?: string; userCode: string; expiresInSeconds?: number }`; `interface IDeviceCodePresenter { present(prompt: DeviceCodePrompt): Promise<void> }`; `consoleDeviceCodePresenter(logger?: ILogger): IDeviceCodePresenter`; `OidcDeviceFlowProviderConfig.presenter: IDeviceCodePresenter` (required); `OidcDeviceFlowProvider.toConsole(config: Omit<OidcDeviceFlowProviderConfig, 'presenter'>)`.
+- Produces: `interface DeviceCodePrompt { verificationUri: string; verificationUriComplete?: string; userCode: string; expiresInSeconds?: number }`; `interface IDeviceCodePresenter { present(prompt: DeviceCodePrompt): Promise<void> }`; `consoleDeviceCodePresenter(logger?: ILogger): IDeviceCodePresenter`; internal `class DeviceCodePresentationError extends Error` (not exported from the package root); `OidcDeviceFlowProviderConfig.presenter: IDeviceCodePresenter` (required); `OidcDeviceFlowProvider.toConsole(config: Omit<OidcDeviceFlowProviderConfig, 'presenter'>)`.
+- Changes `refusalFrom`: a `DeviceCodePresentationError` → exactly `{ ok: false, refusal: { reason: 'showing the device code failed' } }` (spec, *The device-code presenter*).
 
 - [ ] **Step 1: Write the failing test** — `src/__tests__/deviceCode/presenter.test.ts`:
 
@@ -1090,7 +1091,48 @@ describe('device-code presenter', () => {
 });
 ```
 
-Add to the provider's existing login test (where `initiateDeviceAuthorization` is mocked) a case that passes `presenter: { present: jest.fn(async () => {}) }` and asserts it was called with `{ verificationUri, verificationUriComplete, userCode, expiresInSeconds }` taken from the mocked response, and one where `present` throws → `prepare()` resolves to `{ ok: false, refusal: { reason: expect.stringMatching(/token request failed \(unknown error\)$/) } }` and no `userCode` in `JSON.stringify(outcome)`.
+Add to the provider's existing login test file (where `initiateDeviceAuthorization` is mocked to return `{ deviceCode: 'dc', userCode: 'SECRET-UC', verificationUri: 'https://idp/device', verificationUriComplete: 'https://idp/device?c=SECRET-UC', expiresIn: 600, interval: 1 }`):
+
+```ts
+it('hands the presenter the structured prompt', async () => {
+  const present = jest.fn(async (_: DeviceCodePrompt) => {});
+  const p = new OidcDeviceFlowProvider({ clientId: 'c', issuerUrl: 'https://idp', presenter: { present } });
+  await p.prepare();
+  expect(present).toHaveBeenCalledWith({
+    verificationUri: 'https://idp/device',
+    verificationUriComplete: 'https://idp/device?c=SECRET-UC',
+    userCode: 'SECRET-UC',
+    expiresInSeconds: 600,
+  });
+});
+
+it.each(['prepare', 'rejected'] as const)('a throwing presenter in %s → the fixed refusal, no code, no message', async (moment) => {
+  const p = new OidcDeviceFlowProvider({
+    clientId: 'c',
+    issuerUrl: 'https://idp',
+    presenter: { present: async () => { throw new Error('UI down SECRET-UI'); } },
+  });
+  const outcome =
+    moment === 'prepare'
+      ? await p.prepare()
+      : await p.rejected({ at: 'request', status: 401, error: {} }); // no refresh token → one login → the presenter
+  expect(outcome).toEqual({ ok: false, refusal: { reason: 'showing the device code failed' } });
+  expect(JSON.stringify(outcome)).not.toMatch(/SECRET/);
+});
+```
+
+With `import type { DeviceCodePrompt } from '../../deviceCode/DeviceCodePresenter';` at the top. Use the existing file's mocking of `initiateDeviceAuthorization` / `pollDeviceTokens` and its config fields for the endpoint; the assertions above are what is new.
+
+And append to `src/__tests__/auth/refusal.test.ts`:
+
+```ts
+import { DeviceCodePresentationError } from '../../deviceCode/DeviceCodePresenter';
+
+it('a presenter failure is the fixed device-code refusal', () => {
+  expect(refusalFrom(new DeviceCodePresentationError(), 'x token request'))
+    .toEqual({ ok: false, refusal: { reason: 'showing the device code failed' } });
+});
+```
 
 - [ ] **Step 2: Run to see it fail** — `npm test -- src/__tests__/deviceCode/presenter.test.ts` → FAIL.
 
@@ -1118,6 +1160,18 @@ export interface IDeviceCodePresenter {
   present(prompt: DeviceCodePrompt): Promise<void>;
 }
 
+/**
+ * A presenter failed. Internal: carries no message and no cause on purpose,
+ * so neither the device code nor the presenter's own text can reach a refusal.
+ */
+export class DeviceCodePresentationError extends Error {
+  constructor() {
+    super('showing the device code failed');
+    this.name = 'DeviceCodePresentationError';
+    Object.setPrototypeOf(this, DeviceCodePresentationError.prototype);
+  }
+}
+
 /** The logger's info, or stderr without one — never stdout. */
 export function consoleDeviceCodePresenter(logger?: ILogger): IDeviceCodePresenter {
   const announce = announcer(logger);
@@ -1135,12 +1189,28 @@ export function consoleDeviceCodePresenter(logger?: ILogger): IDeviceCodePresent
 In `OidcDeviceFlowProvider`: add `presenter: IDeviceCodePresenter;` to the config; replace the `announcer(...)` block (the five `announce(...)` lines) with
 
 ```ts
-    await this.config.presenter.present({
-      verificationUri: deviceFlow.verificationUri,
-      verificationUriComplete: deviceFlow.verificationUriComplete,
-      userCode: deviceFlow.userCode,
-      expiresInSeconds: deviceFlow.expiresIn,
-    });
+    try {
+      await this.config.presenter.present({
+        verificationUri: deviceFlow.verificationUri,
+        verificationUriComplete: deviceFlow.verificationUriComplete,
+        userCode: deviceFlow.userCode,
+        expiresInSeconds: deviceFlow.expiresIn,
+      });
+    } catch (error) {
+      // The presenter's text may hold the code; the log gets its class only.
+      this.logger?.warn('[OidcDeviceFlowProvider] presenter failed', {
+        error: error instanceof Error ? 'Error' : typeof error,
+      });
+      throw new DeviceCodePresentationError();
+    }
+```
+
+In `src/auth/refusal.ts`, import `DeviceCodePresentationError` from `../deviceCode/DeviceCodePresenter`, add `[DeviceCodePresentationError, 'DeviceCodePresentationError']` to `OWN_CLASSES`, and as the first check in `refusalFrom`:
+
+```ts
+  if (error instanceof DeviceCodePresentationError) {
+    return oops('showing the device code failed');
+  }
 ```
 
 and add
@@ -1154,9 +1224,11 @@ and add
 
 Remove the `announcer` import if unused. In the provider's existing tests add `presenter: consoleDeviceCodePresenter()` (or a `jest.fn` presenter) to each construction the type check flags.
 
-- [ ] **Step 4: Run** — the new test and `npm test -- src/__tests__/providers` → PASS.
+- [ ] **Step 4: Run** — the new tests, `npm test -- src/__tests__/auth/refusal.test.ts` and `npm test -- src/__tests__/providers` → PASS.
 
-- [ ] **Step 5: Commit** — `git add src/deviceCode src/providers/OidcDeviceFlowProvider.ts src/__tests__ && git commit -m "feat!: the device-code prompt is an injected presenter; toConsole recipe"`
+- [ ] **Step 5: Load-bearing** — remove the `DeviceCodePresentationError` branch from `refusalFrom` → both "a throwing presenter" cases FAIL (they now read "… token request failed (unknown error)"). Revert.
+
+- [ ] **Step 6: Commit** — `git add src/deviceCode src/auth/refusal.ts src/providers/OidcDeviceFlowProvider.ts src/__tests__ && git commit -m "feat!: the device-code prompt is an injected presenter; toConsole recipe; fixed refusal when it fails"`
 
 ### Task 6: The providers moved in from `connection`
 
@@ -2770,7 +2842,7 @@ describe('public exports — 5.0.0', () => {
     expect((surface as Record<string, unknown>)[name]).toBeDefined();
   });
   it.each([
-    'libraryArchitectures', 'sncRefusal', 'refusalFrom', 'oops', 'safely', 'ownLabel',
+    'libraryArchitectures', 'sncRefusal', 'refusalFrom', 'oops', 'safely', 'ownLabel', 'DeviceCodePresentationError',
     'KNOWN_CONFIG_FIELDS', 'KNOWN_RFC_KEYS', 'parseRegQuery', 'parseTasklistCsv', 'parsePsComm',
   ])('does not export the internal %s', (name) => {
     expect(name in surface).toBe(false);
