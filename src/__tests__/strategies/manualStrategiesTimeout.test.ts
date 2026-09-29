@@ -23,15 +23,26 @@ describe('manual strategies are bounded', () => {
     expect(seen?.aborted).toBe(true);
   });
 
-  it('dispose() ends a pending read at once', async () => {
+  it('dispose() resolves only once the pending authorize has already settled', async () => {
+    let settled = false;
     const strategy = manualPasscodeStrategy({
       read: () => new Promise<string>(() => {}),
     });
-    const pending = expect(strategy.authorize(request)).rejects.toBeInstanceOf(
-      BrowserAuthError,
+    const authorizing = strategy.authorize(request);
+    authorizing.then(
+      () => {
+        settled = true;
+      },
+      () => {
+        settled = true;
+      },
     );
+    expect(settled).toBe(false);
+
     await strategy.dispose?.();
-    await pending;
+
+    expect(settled).toBe(true);
+    await expect(authorizing).rejects.toBeInstanceOf(BrowserAuthError);
   });
 
   it('a disposed strategy refuses the next authorize', async () => {

@@ -82,6 +82,7 @@ function boundedManual(
   const read = options.read ?? readFromTerminal;
   let disposed = false;
   let current: AbortController | undefined;
+  let pending: Promise<AuthorizationOutcome<string>> | undefined;
   return {
     async authorize(request) {
       if (disposed)
@@ -106,16 +107,24 @@ function boundedManual(
       });
       const working = run(request, (prompt) => read(prompt, controller.signal));
       working.catch(() => {}); // a loser of the race must not surface as unhandled
+      const race = Promise.race([working, abandoned]);
+      pending = race;
       try {
-        return await Promise.race([working, abandoned]);
+        return await race;
       } finally {
         if (timer) clearTimeout(timer);
         if (current === controller) current = undefined;
+        if (pending === race) pending = undefined;
       }
     },
+    // Idempotent; ends an authorization in flight and resolves only once that
+    // call's own finally — timer, controller, and whatever the reader holds
+    // open — has actually run.
     async dispose() {
       disposed = true;
+      const inFlight = pending;
       current?.abort();
+      if (inFlight) await inFlight.catch(() => undefined);
     },
   };
 }
