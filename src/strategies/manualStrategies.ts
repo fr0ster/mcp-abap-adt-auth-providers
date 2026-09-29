@@ -14,13 +14,19 @@ import type {
   IAuthorizationStrategy,
 } from '@mcp-abap-adt/interfaces-auth';
 import { extractCode } from '../auth/browserAuth';
+import { BrowserAuthError } from '../errors/TokenProviderErrors';
 import { DEFAULT_CALLBACK_PORT } from './BrowserCallbackStrategy';
 
 export interface ManualStrategyOptions {
   /** Must match what the authorization request advertises and the exchange sends. */
   redirectUri?: string;
-  /** Where the pasted value comes from. Defaults to an interactive stdin read. */
-  read?: (prompt: string) => Promise<string>;
+  /**
+   * Where the pasted value comes from. Defaults to an interactive stdin read.
+   * The signal aborts when the timeout expires or the strategy is disposed.
+   */
+  read?: (prompt: string, signal: AbortSignal) => Promise<string>;
+  /** Milliseconds before the read is abandoned. Absent: no deadline — the consumer's choice. */
+  timeoutMs?: number;
 }
 
 const defaultRedirectUri = () =>
@@ -31,8 +37,13 @@ const defaultRedirectUri = () =>
  *
  * The prompt goes to stderr, never stdout, and stdin is touched only when it is
  * a terminal: under a stdio RPC transport those streams carry the protocol.
+ * Closes its `readline` when the signal aborts, so a timeout or dispose() ends
+ * the wait at once instead of leaving stdin held open.
  */
-async function readFromTerminal(prompt: string): Promise<string> {
+async function readFromTerminal(
+  prompt: string,
+  signal: AbortSignal,
+): Promise<string> {
   if (!process.stdin.isTTY) {
     throw new Error(
       'Manual input needs an interactive terminal. Supply `read` to source the value elsewhere.',
@@ -40,9 +51,12 @@ async function readFromTerminal(prompt: string): Promise<string> {
   }
   process.stderr.write(prompt);
   const rl = createInterface({ input: process.stdin });
+  const abort = () => rl.close();
+  signal.addEventListener('abort', abort, { once: true });
   try {
     for await (const line of rl) return line.trim();
   } finally {
+    signal.removeEventListener('abort', abort);
     rl.close();
   }
   throw new Error('No input received');
@@ -54,28 +68,75 @@ function announce(request: AuthorizationRequest, url: string): void {
   else process.stderr.write(`${message}\n`);
 }
 
+/**
+ * A manual strategy with a deadline and a dispose(): the read gets a signal,
+ * and the race settles even when a custom reader ignores it.
+ */
+function boundedManual(
+  options: ManualStrategyOptions,
+  run: (
+    request: AuthorizationRequest,
+    read: (prompt: string) => Promise<string>,
+  ) => Promise<AuthorizationOutcome<string>>,
+): IAuthorizationStrategy<string> {
+  const read = options.read ?? readFromTerminal;
+  let disposed = false;
+  let current: AbortController | undefined;
+  return {
+    async authorize(request) {
+      if (disposed)
+        throw new BrowserAuthError('the manual strategy was disposed');
+      const controller = new AbortController();
+      current = controller;
+      const timer =
+        options.timeoutMs === undefined
+          ? undefined
+          : setTimeout(() => controller.abort(), options.timeoutMs);
+      const abandoned = new Promise<never>((_, reject) => {
+        controller.signal.addEventListener(
+          'abort',
+          () =>
+            reject(
+              new BrowserAuthError(
+                'the manual input did not arrive in time, or the strategy was disposed',
+              ),
+            ),
+          { once: true },
+        );
+      });
+      const working = run(request, (prompt) => read(prompt, controller.signal));
+      working.catch(() => {}); // a loser of the race must not surface as unhandled
+      try {
+        return await Promise.race([working, abandoned]);
+      } finally {
+        if (timer) clearTimeout(timer);
+        if (current === controller) current = undefined;
+      }
+    },
+    async dispose() {
+      disposed = true;
+      current?.abort();
+    },
+  };
+}
+
 /** The user copies the `code` out of the address bar after the redirect. */
 export function manualPasteStrategy(
   options: ManualStrategyOptions = {},
 ): IAuthorizationStrategy<string> {
   const redirectUri = options.redirectUri ?? defaultRedirectUri();
-  const read = options.read ?? readFromTerminal;
-  return {
-    async authorize(
-      request: AuthorizationRequest,
-    ): Promise<AuthorizationOutcome<string>> {
-      const url = await request.buildAuthorizationUrl(redirectUri);
-      announce(request, url);
-      const raw = await read(
-        'Paste the authorization code (or the whole redirected URL): ',
-      );
-      const code = extractCode(raw);
-      if (!code) {
-        throw new Error('Could not read an authorization code from that input');
-      }
-      return { payload: code, redirectUri };
-    },
-  };
+  return boundedManual(options, async (request, read) => {
+    const url = await request.buildAuthorizationUrl(redirectUri);
+    announce(request, url);
+    const raw = await read(
+      'Paste the authorization code (or the whole redirected URL): ',
+    );
+    const code = extractCode(raw);
+    if (!code) {
+      throw new Error('Could not read an authorization code from that input');
+    }
+    return { payload: code, redirectUri };
+  });
 }
 
 /** The user lifts `SAMLResponse` from the POST body — it never reaches the URL. */
@@ -83,21 +144,16 @@ export function manualSamlResponseStrategy(
   options: ManualStrategyOptions = {},
 ): IAuthorizationStrategy<string> {
   const redirectUri = options.redirectUri ?? defaultRedirectUri();
-  const read = options.read ?? readFromTerminal;
-  return {
-    async authorize(
-      request: AuthorizationRequest,
-    ): Promise<AuthorizationOutcome<string>> {
-      const url = await request.buildAuthorizationUrl(redirectUri);
-      announce(request, url);
-      const raw = await read(
-        'Paste the SAMLResponse (from the POST body — it is not in the address bar): ',
-      );
-      const assertion = raw.trim();
-      if (!assertion) throw new Error('No SAMLResponse was provided');
-      return { payload: assertion, redirectUri };
-    },
-  };
+  return boundedManual(options, async (request, read) => {
+    const url = await request.buildAuthorizationUrl(redirectUri);
+    announce(request, url);
+    const raw = await read(
+      'Paste the SAMLResponse (from the POST body — it is not in the address bar): ',
+    );
+    const assertion = raw.trim();
+    if (!assertion) throw new Error('No SAMLResponse was provided');
+    return { payload: assertion, redirectUri };
+  });
 }
 
 /**
@@ -110,18 +166,13 @@ export function manualPasscodeStrategy(
   options: ManualStrategyOptions = {},
 ): IAuthorizationStrategy<string> {
   const redirectUri = options.redirectUri ?? defaultRedirectUri();
-  const read = options.read ?? readFromTerminal;
-  return {
-    async authorize(
-      request: AuthorizationRequest,
-    ): Promise<AuthorizationOutcome<string>> {
-      const url = await request.buildAuthorizationUrl(redirectUri);
-      announce(request, url);
-      const code = (
-        await read('Paste the Temporary Authentication Code (passcode): ')
-      ).trim();
-      if (!code) throw new Error('No passcode was provided');
-      return { payload: code, redirectUri };
-    },
-  };
+  return boundedManual(options, async (request, read) => {
+    const url = await request.buildAuthorizationUrl(redirectUri);
+    announce(request, url);
+    const code = (
+      await read('Paste the Temporary Authentication Code (passcode): ')
+    ).trim();
+    if (!code) throw new Error('No passcode was provided');
+    return { payload: code, redirectUri };
+  });
 }
