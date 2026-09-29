@@ -30,10 +30,22 @@ for instance in "$INSTANCE" "$API_INSTANCE"; do
 done
 
 start_ledger
-if [ ! -f "$LOCAL/idp.key" ]; then
+# Key and certificate are made as a pair, under temporary names, and moved in
+# only when both exist: a failed openssl must not leave a key without its
+# certificate, which every later run would take as done.
+if [ ! -f "$LOCAL/idp.key" ] || [ ! -f "$LOCAL/idp.crt" ]; then
+  rm -f "$LOCAL/idp.key.new" "$LOCAL/idp.crt.new"
   openssl req -x509 -newkey rsa:2048 -nodes -days 30 \
-    -subj "/CN=$ORIGIN" -keyout "$LOCAL/idp.key" -out "$LOCAL/idp.crt" 2>/dev/null
-  chmod 600 "$LOCAL/idp.key"
+    -subj "/CN=$ORIGIN" -keyout "$LOCAL/idp.key.new" -out "$LOCAL/idp.crt.new" \
+    2>"$LOCAL/openssl.err" || {
+      cat "$LOCAL/openssl.err" >&2
+      rm -f "$LOCAL/idp.key.new" "$LOCAL/idp.crt.new" "$LOCAL/openssl.err"
+      exit 1
+    }
+  chmod 600 "$LOCAL/idp.key.new"
+  mv "$LOCAL/idp.key.new" "$LOCAL/idp.key"
+  mv "$LOCAL/idp.crt.new" "$LOCAL/idp.crt"
+  rm -f "$LOCAL/openssl.err"
 fi
 
 ensure_instance() { # name plan [params-file]

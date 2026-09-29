@@ -536,11 +536,11 @@ describe('SSO Providers', () => {
         moment === 'prepare'
           ? await p.prepare()
           : await p.rejected({ at: 'request', status: 401, error: {} }); // no refresh token → one login → the presenter
+      // The whole outcome, exactly: no hint, no code, no presenter message.
       expect(outcome).toEqual({
         ok: false,
         refusal: { reason: 'showing the device code failed' },
       });
-      expect(JSON.stringify(outcome)).not.toMatch(/SECRET/);
     },
   );
 

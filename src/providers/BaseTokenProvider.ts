@@ -414,6 +414,8 @@ export abstract class BaseTokenProvider
    */
   async rejected(_rejection: IAuthRejection): Promise<AuthOutcome> {
     return safely(this.obtaining, async () => {
+      // Nothing presented yet (a rejection before any authorize): the token
+      // held — from a login or from config — is the one taken as refused.
       const refused = this.presented ?? this.authorizationToken;
       if (
         !this.renewal &&

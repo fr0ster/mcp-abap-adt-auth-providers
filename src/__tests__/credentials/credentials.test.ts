@@ -25,6 +25,17 @@ describe('BasicAuthProvider', () => {
     );
   });
 
+  it('an untyped caller without user or password sends empty ones, never "undefined"', async () => {
+    const t = recordingTargets();
+    await new BasicAuthProvider(
+      undefined as never,
+      undefined as never,
+    ).authorize(t.requestTarget);
+    expect(t.request.headers.Authorization).toBe(
+      `Basic ${Buffer.from(':').toString('base64')}`,
+    );
+  });
+
   it('goes on when the wire takes no logon parameters (HTTP)', async () => {
     await expect(
       p.establish(

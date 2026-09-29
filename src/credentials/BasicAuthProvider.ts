@@ -32,7 +32,7 @@ export class BasicAuthProvider implements IAuthProvider {
     return safely('writing the Authorization header', () => {
       request.header(
         'Authorization',
-        `Basic ${Buffer.from(`${this.username}:${this.password}`).toString('base64')}`,
+        `Basic ${Buffer.from(`${this.username ?? ''}:${this.password ?? ''}`).toString('base64')}`,
       );
       return OK;
     });

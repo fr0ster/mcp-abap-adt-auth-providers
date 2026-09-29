@@ -109,6 +109,32 @@ describe('BaseTokenProvider as IAuthProvider', () => {
     });
   });
 
+  it('rejected before any authorize takes the held token as the refused one', async () => {
+    const p = new TestProvider();
+    p.refresh.mockResolvedValue(result('T1', 'R2'));
+    await p.prepare(); // holds T1, presents nothing
+    await expect(p.rejected(refused)).resolves.toMatchObject({
+      ok: false,
+      refusal: {
+        reason: 'the renewal returned the credential that was refused',
+      },
+    });
+    expect(p.refresh).toHaveBeenCalledTimes(1);
+  });
+
+  it('rejected before any authorize renews the held token → Ok', async () => {
+    const p = new TestProvider();
+    await p.prepare(); // holds T1, presents nothing
+    await expect(p.rejected(refused)).resolves.toEqual({ ok: true });
+    expect(p.refresh).toHaveBeenCalledTimes(1);
+  });
+
+  it('rejected with nothing held obtains a token → Ok', async () => {
+    const p = new TestProvider();
+    await expect(p.rejected(refused)).resolves.toEqual({ ok: true });
+    expect(p.login).toHaveBeenCalledTimes(1);
+  });
+
   it('refresh refused → exactly one login → Ok', async () => {
     const p = new TestProvider();
     p.login
