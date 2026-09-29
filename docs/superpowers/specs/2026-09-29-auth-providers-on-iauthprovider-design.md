@@ -203,10 +203,19 @@ The provider depends on neither `@mcp-abap-adt/sap-rfc-lite` nor
   (`SncLogonProvider`); "Rejected — an RFC/SNC transport" replaced; the
   `node-rfc` note points to `@mcp-abap-adt/sap-rfc-lite`; the Secure Login
   Client's enrolment endpoints recorded (Measured, from its profile registry).
-- **Version:** every change is additive for an existing consumer of the token
-  providers (new members, new classes, `ITokenProvider` untouched), so semver
-  allows a minor. The goal names 5.0.0 because the package's scope changes;
-  which one ships is the release's decision (open question 1).
+- **Version: 5.0.0** (decided 2026-09-29). The token-provider API alone would
+  allow a minor, but the release says what matters: the way credentials reach a
+  connection is replaced, not extended. A consumer **migrates** to it — builds
+  its providers from this package and hands them to a `connection` 10.0.0
+  process — rather than updating in place. The README and the CHANGELOG say so
+  under "Migrating to 5.0.0":
+  - credentials come from here, not from `@mcp-abap-adt/connection`
+    (`BasicAuthProvider`, `CertificateAuthProvider`, `SamlAuthProvider`,
+    `TokenAuthProvider`, `FileCertificateMaterialLoader` moved);
+  - a token provider is handed to the process as it is — no
+    `TokenAuthProvider` around it;
+  - a store that persisted after `getTokens()` passes `onTokens` instead;
+  - it needs `connection` 10.0.0; 9.x speaks the old `IAuthProvider`.
 
 ## Testing
 
@@ -228,8 +237,8 @@ Each rule gets a test that goes red when the rule is removed.
 
 ## Open questions
 
-1. **Version: 4.3.0 or 5.0.0.** Additive for existing users, so a minor is
-   honest by semver; a major marks the scope change. Decide at release.
+1. ~~**Version: 4.3.0 or 5.0.0.**~~ **5.0.0** — a migration, not an update
+   (see *Package*).
 2. **`kind` of the token providers** is the grant type (`authorization_code`,
    `client_credentials`, …). Is that what a log line should say, or a shorter
    family name (`token`)?
