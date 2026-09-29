@@ -165,7 +165,7 @@ In `packages/interfaces-auth-sap/src/sap/ISapConfig.ts`, after the Kerberos bloc
   // SNC over RFC — the SNC library of an installed product authenticates the
   // RFC logon; no username or password. See IRfcLogonCredential.
   sncPartnerName?: string; // the system's SNC name, e.g. "p:CN=SID, O=ACME"
-  sncQop?: string; // quality of protection "1".."9"; "9" = maximum available
+  sncQop?: string; // quality of protection: "1" auth, "2" integrity, "3" privacy, "8" default, "9" maximum available
   sncLib?: string; // path to the SNC (GSS) library; discovered when absent
   sncMyName?: string; // the user's SNC name; taken from the credential when absent
 ```

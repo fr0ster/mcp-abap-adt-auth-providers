@@ -16,7 +16,7 @@
 
 1. *Can the Secure Login Client report a logged-on profile?* No documented API. `prepare()` checks only that the client runs; a missing certificate surfaces at logon as `A2200019`, which `explainLogonFailure` turns into "log on in the Secure Login Client".
 2. *Certificate expiry mid-session.* Same path: a conversation opened after expiry fails with `A2200019` and gets the same explanation. Verified live in the server step, not here.
-3. *macOS architecture.* Read the Mach-O header; a universal ("fat") binary is usable when it contains the process's architecture. Linux ELF is read too, so the check is the same everywhere.
+3. *macOS architecture.* Read the Mach-O header; a universal ("fat") binary — `FAT_MAGIC` or `FAT_MAGIC_64` — is usable when it contains the process's architecture. Linux ELF is read too, so the check is the same everywhere.
 4. *`snc_qop` default.* `'9'` — SAP GUI's "Maximum available", measured working. `snc_myname` is sent only when configured.
 5. *Server on the broker 2.x API.* Out of this plan; it becomes its own PR before the server step.
 
@@ -29,7 +29,8 @@
 - An explicit `sncLib` is the only candidate and fails loudly; automatic candidates that are missing or of the wrong architecture are skipped with the reason kept.
 - The Secure Login Client probe runs only for a library inside the Secure Login Client's installation, decided from the path.
 - `rfcLogonParams()` never contains `user` or `passwd`.
-- `snc_qop` default `'9'`; valid values `'1'`–`'9'`.
+- `snc_qop` default `'9'`; valid values exactly `'1'`, `'2'`, `'3'`, `'8'`, `'9'` — SAP defines no other ([SNC parameters](https://help.sap.com/docs/SAP_NETWEAVER_MASTER_DATA_MANAGEMENT/691b78a1277346c995c240dd6ba34f6c/d59ac7ae5b62455393cddd519d9df55a.html)).
+- A universal Mach-O comes in two forms: `FAT_MAGIC` `0xcafebabe` with 20-byte `fat_arch` records and `FAT_MAGIC_64` `0xcafebabf` with 32-byte `fat_arch_64` records; both are read, `cputype` first in each record.
 - Architecture names are Node's `process.arch` values: `'ia32'`, `'x64'`, `'arm64'`.
 
 ## Review Focus
@@ -98,11 +99,13 @@ function machoThin(cputype: number): Buffer {
   return b;
 }
 
-function machoFat(cputypes: number[]): Buffer {
-  const b = Buffer.alloc(8 + cputypes.length * 20);
-  b.writeUInt32BE(0xcafebabe, 0);
+// FAT_MAGIC: 20-byte fat_arch records; FAT_MAGIC_64: 32-byte fat_arch_64.
+function machoFat(cputypes: number[], wide = false): Buffer {
+  const width = wide ? 32 : 20;
+  const b = Buffer.alloc(8 + cputypes.length * width);
+  b.writeUInt32BE(wide ? 0xcafebabf : 0xcafebabe, 0);
   b.writeUInt32BE(cputypes.length, 4);
-  cputypes.forEach((c, i) => b.writeUInt32BE(c, 8 + i * 20));
+  cputypes.forEach((c, i) => b.writeUInt32BE(c, 8 + i * width));
   return b;
 }
 
@@ -130,11 +133,21 @@ describe('libraryArchitectures', () => {
     expect(libraryArchitectures(machoThin(cpu))).toEqual([arch]);
   });
 
-  it('reads every architecture of a universal Mach-O', () => {
+  it('reads every architecture of a universal Mach-O (FAT_MAGIC)', () => {
     expect(libraryArchitectures(machoFat([0x01000007, 0x0100000c]))).toEqual([
       'x64',
       'arm64',
     ]);
+  });
+
+  it('reads every architecture of a 64-bit universal Mach-O (FAT_MAGIC_64)', () => {
+    expect(
+      libraryArchitectures(machoFat([0x01000007, 0x0100000c], true)),
+    ).toEqual(['x64', 'arm64']);
+  });
+
+  it('reads a FAT_MAGIC_64 that lacks the process architecture as what it is', () => {
+    expect(libraryArchitectures(machoFat([0x00000007], true))).toEqual(['ia32']);
   });
 
   it.each([
@@ -217,11 +230,15 @@ export function libraryArchitectures(head: Buffer): SncArch[] {
       const arch = MACHO_CPU[head.readUInt32LE(4)];
       return arch ? [arch] : [];
     }
-    if (head.readUInt32BE(0) === 0xcafebabe) {
+    const magicBe = head.readUInt32BE(0);
+    if (magicBe === 0xcafebabe || magicBe === 0xcafebabf) {
+      // FAT_MAGIC: fat_arch is 20 bytes; FAT_MAGIC_64: fat_arch_64 is 32.
+      // cputype is the first field of both.
+      const width = magicBe === 0xcafebabf ? 32 : 20;
       const count = head.readUInt32BE(4);
       const archs: SncArch[] = [];
-      for (let i = 0; i < count && 8 + i * 20 + 4 <= head.length; i++) {
-        const arch = MACHO_CPU[head.readUInt32BE(8 + i * 20)];
+      for (let i = 0; i < count && 8 + i * width + 4 <= head.length; i++) {
+        const arch = MACHO_CPU[head.readUInt32BE(8 + i * width)];
         if (arch && !archs.includes(arch)) archs.push(arch);
       }
       return archs;
@@ -617,6 +634,38 @@ describe('DefaultSncLibraryLocator — automatic discovery', () => {
       fakeSystem({ platform: 'darwin', arch: 'arm64', files: { [dylib]: macho } }),
     );
     await expect(locator.locate()).resolves.toEqual({ path: dylib, archs: ['arm64'] });
+  });
+
+  it('accepts a 64-bit universal Mach-O (FAT_MAGIC_64) holding the process architecture', async () => {
+    const dylib =
+      '/Applications/Secure Login Client.app/Contents/MacOS/lib/libsapcrypto.dylib';
+    const fat64 = Buffer.alloc(8 + 2 * 32);
+    fat64.writeUInt32BE(0xcafebabf, 0);
+    fat64.writeUInt32BE(2, 4);
+    fat64.writeUInt32BE(0x01000007, 8); // x64
+    fat64.writeUInt32BE(0x0100000c, 8 + 32); // arm64
+    const locator = new DefaultSncLibraryLocator(
+      fakeSystem({ platform: 'darwin', arch: 'arm64', files: { [dylib]: fat64 } }),
+    );
+    await expect(locator.locate()).resolves.toEqual({
+      path: dylib,
+      archs: ['x64', 'arm64'],
+    });
+  });
+
+  it('skips a FAT_MAGIC_64 library that lacks the process architecture, naming what it holds', async () => {
+    const dylib =
+      '/Applications/Secure Login Client.app/Contents/MacOS/lib/libsapcrypto.dylib';
+    const fat64 = Buffer.alloc(8 + 32);
+    fat64.writeUInt32BE(0xcafebabf, 0);
+    fat64.writeUInt32BE(1, 4);
+    fat64.writeUInt32BE(0x01000007, 8); // x64 only
+    const locator = new DefaultSncLibraryLocator(
+      fakeSystem({ platform: 'darwin', arch: 'arm64', files: { [dylib]: fat64 } }),
+    );
+    await expect(locator.locate()).rejects.toThrow(
+      /built for x64, this process is arm64/,
+    );
   });
 
   it('when nothing is usable, lists every candidate and why', async () => {
@@ -1151,7 +1200,7 @@ git commit -m "feat(snc): explain the measured SNC logon failures"
 ```ts
 export interface SncLogonProviderConfig {
   partnerName: string;      // the system's SNC name, e.g. 'p:CN=SID'
-  qop?: string;             // '1'..'9', default '9'
+  qop?: string;             // '1' | '2' | '3' | '8' | '9', default '9'
   sncLib?: string;          // explicit library; discovered when absent
   myName?: string;          // sent as snc_myname only when set
   system?: SncSystem;       // default nodeSncSystem()
@@ -1193,10 +1242,16 @@ describe('SncLogonProvider — construction', () => {
     expect(make).toThrow(/partnerName/);
   });
 
-  it.each(['0', '10', 'max', ''])('refuses qop %p', (qop) => {
+  it.each(['0', '4', '5', '6', '7', '10', 'max', ''])('refuses qop %p', (qop) => {
     expect(
       () => new SncLogonProvider({ partnerName: 'p:CN=SID', qop, system: slcMachine([]) }),
     ).toThrow(/qop/);
+  });
+
+  it.each(['1', '2', '3', '8', '9'])('accepts qop %p', (qop) => {
+    expect(
+      () => new SncLogonProvider({ partnerName: 'p:CN=SID', qop, system: slcMachine([]) }),
+    ).not.toThrow();
   });
 });
 
@@ -1321,10 +1376,17 @@ import {
 } from '../snc/SecureLoginClientProbe';
 import { nodeSncSystem, type SncSystem } from '../snc/SncSystem';
 
+/**
+ * SAP's SNC_QOP values: 1 authentication, 2 integrity, 3 privacy, 8 the
+ * profile's default, 9 maximum available. No other value is defined, so any
+ * other is refused here rather than at the native logon.
+ */
+const SNC_QOP_VALUES = ['1', '2', '3', '8', '9'];
+
 export interface SncLogonProviderConfig {
   /** The system's SNC name, e.g. `p:CN=SID, O=ACME`. */
   partnerName: string;
-  /** Quality of protection `'1'`–`'9'`; default `'9'` (maximum available). */
+  /** Quality of protection `'1' | '2' | '3' | '8' | '9'`; default `'9'` (maximum available). */
   qop?: string;
   /** The SNC library. Only this one is tried when set; discovered otherwise. */
   sncLib?: string;
@@ -1361,9 +1423,9 @@ export class SncLogonProvider implements IAuthProvider, IRfcLogonCredential {
       );
     }
     const qop = config.qop ?? '9';
-    if (!/^[1-9]$/.test(qop)) {
+    if (!SNC_QOP_VALUES.includes(qop)) {
       throw new ValidationError(
-        `SncLogonProvider: qop must be '1'..'9', got '${qop}'.`,
+        `SncLogonProvider: qop must be one of ${SNC_QOP_VALUES.join(', ')} (SAP's SNC_QOP values), got '${qop}'.`,
         ['qop'],
       );
     }
