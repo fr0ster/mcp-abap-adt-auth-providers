@@ -33,15 +33,31 @@ rejected(rejection: IAuthRejection): Promise<AuthOutcome>; // the system said no
    `error_description` / `error_uri` (`oidcBrowserAuth` → `BrowserCallbackStrategy`),
    and a consumer's strategy can construct any exported error class. So a
    refusal is built only from **fixed wording chosen per error class**, plus
-   values that are names, not data: a `ValidationError`'s `missingFields`, an
-   `AssertionValidationError`'s `check`, a class name matching
-   `/^[A-Za-z]+Error$/`, a system code matching `/^E[A-Z]+$/` (`ENOENT`). No
-   `message`, field, `response`, `cause` or body of any error reaches `reason`
-   or `hint`. The message stays diagnostic: it goes to the logger under the
-   package's existing log rules, except where the thrower held tokens
-   (`onTokens`), which logs the class name only. Tested with secrets **inside**
-   messages, thrown strings, SDK-shaped objects, and foreign callback text
-   wrapped in a `BrowserAuthError` (`noSecretsInRefusals.test.ts`).
+   metadata **only when its value is on an allowlist this package owns** —
+   never because it looks like an identifier:
+   - field names (`missingFields` of `ValidationError`, `ServiceKeyError`,
+     `SessionDataError`): only names in `KNOWN_CONFIG_FIELDS`, the fixed list
+     of this package's own config properties; an unknown name is dropped;
+   - an `AssertionValidationError`'s `check`: only a value of `AssertionCheck`;
+   - a system code: only one of `ENOENT`, `EACCES`, `EPERM`, `ECONNREFUSED`,
+     `ECONNRESET`, `ETIMEDOUT`, `ENOTFOUND`, `EAI_AGAIN`, `EPIPE`;
+   - an RFC SDK key (SNC): only one of `RFC_COMMUNICATION_FAILURE`,
+     `RFC_LOGON_FAILURE`, `RFC_ABAP_RUNTIME_FAILURE`, `RFC_ABAP_MESSAGE`,
+     `RFC_EXTERNAL_FAILURE`, `RFC_INVALID_PARAMETER`, `RFC_CLOSED`,
+     `RFC_TIMEOUT`;
+   - a class label: only for this package's own classes, decided by
+     `instanceof` against the known constructors (`BrowserAuthError`, …);
+     anything else is labelled "unknown error". A `name` property is never
+     read.
+
+   No `message`, other field, `response`, `cause` or body of any error reaches
+   `reason` or `hint`, and nothing outside those allowlists does. The message
+   stays diagnostic: it goes to the logger under the package's existing log
+   rules, except where the thrower held tokens (`onTokens`), which logs the
+   class label only. Tested with secrets **inside** messages, thrown strings,
+   SDK-shaped objects, foreign callback text wrapped in a `BrowserAuthError`,
+   and in every metadata slot — `missingFields`, `name`, `code`, `key`,
+   `check` (`noSecretsInRefusals.test.ts`).
 3. **Nothing to add is Ok.** A provider with nothing for a moment writes to no
    target and answers Ok.
 4. **A target's Oops is the provider's to judge.** A provider with no other way
@@ -102,11 +118,11 @@ token keep calling `getTokens()` / `refreshTokens()`.
   |---|---|---|
   | `BrowserAuthError` | "the interactive login did not complete" | "complete the login within the strategy's time" |
   | `RefreshError` | "the refresh token was refused" | "log in again" |
-  | `ValidationError` | "the provider configuration is incomplete or invalid: <missingFields>" | "check the provider configuration" |
-  | `ServiceKeyError` / `SessionDataError` | "the service key or session data is incomplete: <missingFields>" | "check the service key or session data" |
-  | `AssertionValidationError` | "the SAML assertion was refused (<check>)" | — |
-  | any other `TokenProviderError` | "<kind> token request failed (<ClassName>)" | — |
-  | anything else | "<kind> token request failed" (+ class name / code, rule 2) | — |
+  | `ValidationError` | "the provider configuration is incomplete or invalid" + `: <fields>` from `KNOWN_CONFIG_FIELDS` only | "check the provider configuration" |
+  | `ServiceKeyError` / `SessionDataError` | "the service key or session data is incomplete" + `: <fields>` from `KNOWN_CONFIG_FIELDS` only | "check the service key or session data" |
+  | `AssertionValidationError` | "the SAML assertion was refused" + ` (<check>)` when it is an `AssertionCheck` value | — |
+  | any other `TokenProviderError` | "<kind> token request failed (<own class label>)" | — |
+  | anything else | "<kind> token request failed (unknown error)" (+ an allowlisted system code, rule 2) | — |
 
 ### Where a renewed token goes — `onTokens`
 
@@ -288,7 +304,7 @@ may be an `Error`, a string or the SDK's plain object:
 - `SNCERR_INIT` / `gssapi library invalid/missing` → reason "the RFC SDK could
   not initialise <library> (<arch>) as its SNC library";
 - anything else → reason "SNC logon refused", plus the SDK's error key when it
-  is one (`/^[A-Z_]+$/`, e.g. `RFC_LOGON_FAILURE`) — never the message or the
+  is on the RFC-key allowlist (rule 2; e.g. `RFC_LOGON_FAILURE`) — never the message or the
   object (rule 2). The GSS codes above are matched inside the text but only
   the fixed wording reaches the refusal.
 
@@ -348,7 +364,7 @@ The provider depends on neither `@mcp-abap-adt/sap-rfc-lite` nor
 |---|---|
 | Every exported provider satisfies `IAuthProvider` and answers each of the four moments with an `AuthOutcome` | a table-driven unit test over one instance of each, against recording targets |
 | No exception crosses the contract: each provider with its work made to throw, **and with targets whose `header` / `cookies` / `logonParameters` / `tlsMaterial` throw**, answers Oops | same table, failing collaborators and throwing targets |
-| No secret in a refusal: a secret placed **inside** an error's message — foreign or this package's own, including IdP callback text wrapped in a `BrowserAuthError` — a thrown string, or an SDK-shaped object's fields never appears in `reason` / `hint` | `noSecretsInRefusals.test.ts`, one case per provider |
+| No secret in a refusal: a secret placed **inside** an error's message — foreign or this package's own, including IdP callback text wrapped in a `BrowserAuthError` — a thrown string, an SDK-shaped object's fields, **or any metadata slot** — `missingFields`, `name`, `code`, `key`, `check` set to a secret — never appears in `reason` / `hint`; unknown metadata is omitted | `noSecretsInRefusals.test.ts`, one case per provider |
 | One renewal, no step twice: refresh succeeds → Ok (token changed); refresh refused → exactly one login → Ok; login refused → Oops, with no second refresh or login | unit, counting collaborators |
 | No implicit defaults: constructing a provider without its strategy / presenter / validator / replay store / locator / probes does not compile; each factory assembles exactly the parts in its table row | typecheck (`@ts-expect-error`) and unit |
 | Shipped strategies are bounded: a manual strategy with `timeoutMs` settles with `BrowserAuthError` and closes its `readline` on expiry and on `dispose()`; a consumer strategy that never settles is waited on (documented, asserted with a fake timer) | unit |
