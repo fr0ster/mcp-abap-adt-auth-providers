@@ -5,8 +5,6 @@
  * promise a caller happens to be awaiting: it is released on the first terminal
  * outcome — the body returning or throwing, an explicit failure, the timeout, or
  * an abort — and the factory settles only once it is actually free.
- *
- * See `docs/superpowers/specs/2026-07-28-callback-server-contract-design.md`.
  */
 
 import * as http from 'node:http';
