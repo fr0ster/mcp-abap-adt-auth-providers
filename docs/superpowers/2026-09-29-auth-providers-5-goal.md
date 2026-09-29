@@ -59,6 +59,10 @@ token and nothing else.
 
 ## Open, for the spec
 
+Settled in [`specs/2026-09-29-auth-providers-on-iauthprovider-design.md`](specs/2026-09-29-auth-providers-on-iauthprovider-design.md):
+1 — `BaseTokenProvider` implements both (decided 2026-09-29); 2 — an injected
+`onTokens` on every token provider; 3 — the provider's strategy timeout.
+
 1. **How a token provider becomes an `IAuthProvider`.** Proposed:
    `BaseTokenProvider` implements both contracts, so every token provider *is*
    an `IAuthProvider` with no wrapper; `TokenAuthProvider` remains only for a
