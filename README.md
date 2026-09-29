@@ -65,7 +65,9 @@ updating in place; 9.x speaks the old, narrower `IAuthProvider`.
   `manualPasteStrategy`, `manualSamlResponseStrategy` and
   `manualPasscodeStrategy` accept `timeoutMs?: number`; on expiry, or when
   `dispose()` is called, the pending read is abandoned with a
-  `BrowserAuthError` and the terminal `readline` it opened is closed. `read`
+  `BrowserAuthError` and the terminal `readline` it opened is closed —
+  `dispose()` ends every concurrent `authorize()`, and resolves once all
+  have settled. `read`
   is now `(prompt: string, signal: AbortSignal) => Promise<string>` — the
   signal aborts on timeout or dispose, and a custom `read` that ignores it
   still loses the race.

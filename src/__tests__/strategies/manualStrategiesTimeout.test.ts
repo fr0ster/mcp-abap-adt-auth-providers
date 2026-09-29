@@ -45,6 +45,39 @@ describe('manual strategies are bounded', () => {
     await expect(authorizing).rejects.toBeInstanceOf(BrowserAuthError);
   });
 
+  it('dispose() ends every concurrent authorize, not only the last one', async () => {
+    const signals: AbortSignal[] = [];
+    const strategy = manualPasscodeStrategy({
+      read: (_prompt, signal) => {
+        signals.push(signal);
+        return new Promise<string>(() => {});
+      },
+    });
+    const settled = [false, false];
+    const calls = [0, 1].map((i) => {
+      const call = strategy.authorize(request);
+      call.then(
+        () => {
+          settled[i] = true;
+        },
+        () => {
+          settled[i] = true;
+        },
+      );
+      return call;
+    });
+    await new Promise((resolve) => setImmediate(resolve)); // both reads begin
+    expect(signals).toHaveLength(2);
+
+    await strategy.dispose?.();
+
+    expect(signals.map((s) => s.aborted)).toEqual([true, true]);
+    expect(settled).toEqual([true, true]);
+    for (const call of calls) {
+      await expect(call).rejects.toBeInstanceOf(BrowserAuthError);
+    }
+  });
+
   it('a disposed strategy refuses the next authorize', async () => {
     const strategy = manualPasscodeStrategy({ read: async () => 'code' });
     await strategy.dispose?.();
