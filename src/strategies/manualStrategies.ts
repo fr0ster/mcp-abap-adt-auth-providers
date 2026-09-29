@@ -44,6 +44,13 @@ async function readFromTerminal(
   prompt: string,
   signal: AbortSignal,
 ): Promise<string> {
+  // Aborted before the read began (the deadline passed while the URL was
+  // built): no readline, so stdin is never held for a line nobody awaits.
+  if (signal.aborted) {
+    throw new BrowserAuthError(
+      'the manual input was abandoned before it began',
+    );
+  }
   if (!process.stdin.isTTY) {
     throw new Error(
       'Manual input needs an interactive terminal. Supply `read` to source the value elsewhere.',

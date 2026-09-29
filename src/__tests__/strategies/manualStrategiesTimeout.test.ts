@@ -93,4 +93,46 @@ describe('manual strategies are bounded', () => {
       jest.dontMock('node:readline');
     }
   });
+
+  it('the terminal reader given an already-aborted signal opens no readline', async () => {
+    const createInterface = jest.fn(() => ({
+      close: () => {},
+      [Symbol.asyncIterator]: () => ({ next: () => new Promise(() => {}) }),
+    }));
+    jest.resetModules();
+    jest.doMock('node:readline', () => ({ createInterface }));
+    const tty = process.stdin.isTTY;
+    Object.defineProperty(process.stdin, 'isTTY', {
+      value: true,
+      configurable: true,
+    });
+    const write = jest
+      .spyOn(process.stderr, 'write')
+      .mockImplementation(() => true);
+    // The deadline passes while the URL is still being built.
+    let built: () => void = () => {};
+    const slow = {
+      buildAuthorizationUrl: () =>
+        new Promise<string>((resolve) => {
+          built = () => resolve('https://uaa/passcode');
+        }),
+    } as unknown as AuthorizationRequest;
+    try {
+      const { manualPasscodeStrategy: fresh } = await import(
+        '../../strategies/manualStrategies'
+      );
+      const strategy = fresh({ timeoutMs: 10 });
+      await expect(strategy.authorize(slow)).rejects.toBeInstanceOf(Error);
+      built();
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(createInterface).not.toHaveBeenCalled();
+    } finally {
+      Object.defineProperty(process.stdin, 'isTTY', {
+        value: tty,
+        configurable: true,
+      });
+      write.mockRestore();
+      jest.dontMock('node:readline');
+    }
+  });
 });
