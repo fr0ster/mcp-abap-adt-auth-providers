@@ -78,7 +78,9 @@ it is. See *Migrating to 5.0.0* in the README.
   `manualPasteStrategy`, `manualSamlResponseStrategy` and
   `manualPasscodeStrategy` accept `timeoutMs?: number`; on expiry, or when
   `dispose()` is called, the pending read is abandoned with a
-  `BrowserAuthError` and the terminal `readline` it opened is closed. `read`
+  `BrowserAuthError` and the terminal `readline` it opened is closed —
+  `dispose()` ends every concurrent `authorize()`, and resolves once all
+  have settled. `read`
   is now `(prompt: string, signal: AbortSignal) => Promise<string>`.
 - **`IDeviceCodePresenter`.** `OidcDeviceFlowProvider` no longer writes the
   verification URI and user code to the logger or stderr itself; it hands a

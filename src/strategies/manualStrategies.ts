@@ -88,14 +88,17 @@ function boundedManual(
 ): IAuthorizationStrategy<string> {
   const read = options.read ?? readFromTerminal;
   let disposed = false;
-  let current: AbortController | undefined;
-  let pending: Promise<AuthorizationOutcome<string>> | undefined;
+  // Every authorize in flight, not only the last: concurrent calls each hold a
+  // read, and dispose() must end and await all of them.
+  const inFlight = new Map<
+    AbortController,
+    Promise<AuthorizationOutcome<string>>
+  >();
   return {
     async authorize(request) {
       if (disposed)
         throw new BrowserAuthError('the manual strategy was disposed');
       const controller = new AbortController();
-      current = controller;
       const timer =
         options.timeoutMs === undefined
           ? undefined
@@ -115,23 +118,22 @@ function boundedManual(
       const working = run(request, (prompt) => read(prompt, controller.signal));
       working.catch(() => {}); // a loser of the race must not surface as unhandled
       const race = Promise.race([working, abandoned]);
-      pending = race;
+      inFlight.set(controller, race);
       try {
         return await race;
       } finally {
         if (timer) clearTimeout(timer);
-        if (current === controller) current = undefined;
-        if (pending === race) pending = undefined;
+        inFlight.delete(controller);
       }
     },
-    // Idempotent; ends an authorization in flight and resolves only once that
-    // call's own finally — timer, controller, and whatever the reader holds
-    // open — has actually run.
+    // Idempotent; ends every authorization in flight and resolves only once
+    // each call's own finally — timer, controller, and whatever the reader
+    // holds open — has actually run.
     async dispose() {
       disposed = true;
-      const inFlight = pending;
-      current?.abort();
-      if (inFlight) await inFlight.catch(() => undefined);
+      const calls = [...inFlight];
+      for (const [controller] of calls) controller.abort();
+      await Promise.all(calls.map(([, race]) => race.catch(() => undefined)));
     },
   };
 }
