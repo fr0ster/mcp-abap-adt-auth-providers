@@ -147,9 +147,9 @@ interface LoginResult {
 }
 
 /**
- * One real login through `Saml2PureProvider`. `validator` picks the shipped
- * validator: `'response'` is the provider's own default, left unconfigured
- * so the default itself is what runs; `'assertion'` is supplied explicitly.
+ * One real login through `Saml2PureProvider`. `validator` picks which shipped
+ * validator is built and supplied: `'response'` is `createSignedResponseValidator`,
+ * `'assertion'` is `createSignedAssertionValidator`.
  */
 async function login(
   stand: Stand,
@@ -168,22 +168,20 @@ async function login(
   // A supplied strategy is never disposed by the provider.
   cleanups.push(async () => strategy.dispose?.());
 
-  let assertionValidator: IAssertionValidator | undefined =
+  let assertionValidator: IAssertionValidator =
     validator === 'assertion'
       ? createSignedAssertionValidator({
           idpCertificates: certificates,
           replayStore,
         })
-      : undefined;
+      : createSignedResponseValidator({
+          idpCertificates: certificates,
+          replayStore,
+        });
   if (options.onValidated) {
     // A spy around the real validator: the provider returns an ITokenResult,
     // so this is the only honest way to see which element was signed.
-    const real =
-      assertionValidator ??
-      createSignedResponseValidator({
-        idpCertificates: certificates,
-        replayStore,
-      });
+    const real = assertionValidator;
     const report = options.onValidated;
     assertionValidator = {
       async validate(samlResponse, context) {
@@ -199,9 +197,7 @@ async function login(
     idpSsoUrl: `${stand.idp.url}/sso`,
     spEntityId: AUDIENCE,
     idpEntityId: ISSUER,
-    idpCertificates: certificates,
     assertionValidator,
-    assertionReplayStore: replayStore,
     authorization: strategy,
     cookieProvider: async (samlResponse) => {
       received.push(samlResponse);

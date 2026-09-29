@@ -29,7 +29,6 @@ import {
   AssertionValidationError,
 } from '../errors/AssertionValidationError';
 import { findDuplicateId, readRequiredId } from './documentIds';
-import { defaultReplayStore } from './inMemoryReplayStore';
 import { quoteUntrusted, resolveSignedElements, toPem } from './signedNode';
 import { parseXsdDateTime } from './xsdDateTime';
 
@@ -54,7 +53,7 @@ const ASSERTION_SHAPED: ReadonlyArray<readonly [string, string]> = [
 export interface ShippedValidatorOptions {
   readonly idpCertificates: readonly string[];
   readonly clockSkewMs?: number;
-  readonly replayStore?: IAssertionReplayStore;
+  readonly replayStore: IAssertionReplayStore;
 }
 
 /**
@@ -128,7 +127,7 @@ function createValidator(
   // configuration; and a login happens after a human has used a browser, so a
   // formatting mistake found then wastes their work, not ours.
   const certificates = options.idpCertificates.map(toPem);
-  const store = options.replayStore ?? defaultReplayStore;
+  const store = options.replayStore;
 
   return {
     async validate(samlResponse, context): Promise<ValidatedAssertion> {

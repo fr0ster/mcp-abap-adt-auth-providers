@@ -1,4 +1,3 @@
-import netModule from 'node:net';
 import { inflateRawSync } from 'node:zlib';
 import { generateKeyMaterial, signXml } from '@mcp-abap-adt/auth-mocks';
 import type {
@@ -39,11 +38,17 @@ import { SsoProviderFactory } from '../../sso/SsoProviderFactory';
 import {
   asOidcResult,
   BrowserCallbackStrategy,
-  DEFAULT_CALLBACK_PORT,
+  browserCallbackStrategy,
   externalCodeStrategy,
+  oidcCallbackStrategy,
+  samlCallbackStrategy,
   staticCodeStrategy,
 } from '../../strategies';
-import { canOwnPort } from '../helpers/netHelpers';
+import {
+  createSignedAssertionValidator,
+  createSignedResponseValidator,
+} from '../../validation/assertionValidator';
+import { createInMemoryReplayStore } from '../../validation/inMemoryReplayStore';
 
 jest.mock('../../auth/oidcDiscovery', () => ({
   discoverOidc: jest.fn(),
@@ -90,6 +95,22 @@ const jwtExpiringIn = (secondsFromNow: number): string => {
  * itself. Real validation of the shipped defaults is pinned separately,
  * below, against genuinely signed fixtures.
  */
+/**
+ * Placeholders for tests where `authorization` / `assertionValidator` must be
+ * present to satisfy the required field, but the flow under test throws
+ * before either is ever reached (a construction-time refusal).
+ */
+const unusedAuthorization: IAuthorizationStrategy<string> = {
+  async authorize() {
+    throw new Error('must not be reached');
+  },
+};
+const unusedValidator: IAssertionValidator = {
+  async validate() {
+    throw new Error('must not be reached');
+  },
+};
+
 const acceptingSamlValidator = (): IAssertionValidator => ({
   async validate(payload) {
     return {
@@ -759,6 +780,8 @@ describe('SSO Providers', () => {
           spEntityId: 'sp',
           authorizationUrl: 'https://idp.example/sso?SAMLRequest=abc',
           cookieProvider: async (saml) => saml,
+          authorization: unusedAuthorization,
+          assertionValidator: unusedValidator,
         }),
     ).toThrow(/acsUrl is required/i);
   });
@@ -819,6 +842,8 @@ describe('SSO Providers', () => {
           spEntityId: 'sp',
           authorizationUrl: 'https://idp.example/sso?SAMLRequest=abc',
           uaaUrl: 'https://uaa',
+          authorization: unusedAuthorization,
+          assertionValidator: unusedValidator,
         }),
     ).toThrow(/acsUrl is required/i);
   });
@@ -849,6 +874,7 @@ describe('SSO Providers', () => {
       config: {
         issuerUrl: 'https://issuer',
         clientId: 'client',
+        authorization: oidcCallbackStrategy(),
       },
     });
 
@@ -860,36 +886,12 @@ describe('SSO Providers', () => {
  * Whoever constructs, disposes.
  *
  * A consumer-supplied strategy may be a long-lived receiver that outlives many
- * logins, so the provider must never destroy it; a default the provider built
- * itself holds a callback port, so it must always be released. Both halves are
- * one `if (!supplied)` away from being silently reversed, which is why they are
- * asserted rather than reasoned about.
+ * logins, so the provider must never destroy it: the provider no longer
+ * constructs one of its own — `authorization` is a required constructor
+ * argument — so the strategy is always one the consumer supplied, and
+ * disposing it is the consumer's call, never the provider's.
  */
 describe('OidcBrowserProvider strategy lifecycle', () => {
-  function portIsFree(port: number): Promise<boolean> {
-    return new Promise((resolve) => {
-      const s = netModule.createServer();
-      s.once('error', () => resolve(false));
-      s.listen(port, () => s.close(() => resolve(true)));
-    });
-  }
-
-  const reasonFor = (p: Promise<unknown>): Promise<Error | null> =>
-    p.then(
-      () => null,
-      (error: Error) => error,
-    );
-
-  /**
-   * The failure a default login produces here — discovery answers with no
-   * endpoints, so the URL builder throws inside the callback scope, in
-   * milliseconds rather than after the 30 s timeout — or, if this machine
-   * happens to hold 61001, the one the port probe produces first. Either ends
-   * the login through the same `finally`, which is what these tests are about.
-   */
-  const DEFAULT_LOGIN_FAILURE =
-    /authorization endpoint is required|already in use/i;
-
   beforeEach(() => {
     jest.clearAllMocks();
     mockDiscoverOidc.mockResolvedValue({});
@@ -955,77 +957,6 @@ describe('OidcBrowserProvider strategy lifecycle', () => {
     );
     expect(dispose).not.toHaveBeenCalled();
   }, 30000);
-
-  it('disposes the default it constructed, per login, leaving the port free', async () => {
-    const defaultDispose = jest.spyOn(
-      BrowserCallbackStrategy.prototype,
-      'dispose',
-    );
-    // No `authorization`: the provider builds an OIDC browser callback on
-    // DEFAULT_CALLBACK_PORT.
-    const provider = new OidcBrowserProvider({
-      issuerUrl: 'https://issuer',
-      clientId: 'client',
-    });
-
-    // Probed before the first login: if an unrelated process holds 61001, this
-    // login never binds it and cannot release it, so the socket assertions
-    // below would be about that process rather than about this code.
-    const ownsPort = await canOwnPort(
-      DEFAULT_CALLBACK_PORT,
-      'OidcBrowserProvider disposes the default it constructed',
-    );
-
-    try {
-      const first = await reasonFor(provider.getTokens());
-      expect(first?.message).toMatch(DEFAULT_LOGIN_FAILURE);
-      expect(defaultDispose).toHaveBeenCalledTimes(1);
-      // The claim that matters is about the socket, not the mock: a settled
-      // promise must mean the callback port is genuinely released.
-      if (ownsPort) expect(await portIsFree(DEFAULT_CALLBACK_PORT)).toBe(true);
-
-      // `dispose` disables an instance permanently, so a provider holding one
-      // default would fail the second login with "has been disposed".
-      const second = await reasonFor(provider.getTokens());
-      expect(second?.message).toMatch(DEFAULT_LOGIN_FAILURE);
-      expect(second?.message).not.toMatch(/disposed/i);
-      expect(defaultDispose).toHaveBeenCalledTimes(2);
-      if (ownsPort) expect(await portIsFree(DEFAULT_CALLBACK_PORT)).toBe(true);
-    } finally {
-      defaultDispose.mockRestore();
-    }
-  }, 30000);
-
-  it('reports the login failure, not the cleanup failure, when dispose throws', async () => {
-    const warn = jest.fn();
-    const logger = {
-      debug: jest.fn(),
-      info: jest.fn(),
-      warn,
-      error: jest.fn(),
-    } as unknown as ILogger;
-    const defaultDispose = jest
-      .spyOn(BrowserCallbackStrategy.prototype, 'dispose')
-      .mockImplementation(async () => {
-        throw new Error('dispose exploded');
-      });
-    const provider = new OidcBrowserProvider({
-      issuerUrl: 'https://issuer',
-      clientId: 'client',
-      logger,
-    });
-
-    try {
-      const error = await reasonFor(provider.getTokens());
-      // The reason the login failed survives; the cleanup failure is logged.
-      expect(error?.message).toMatch(DEFAULT_LOGIN_FAILURE);
-      expect(error?.message).not.toContain('dispose exploded');
-      expect(defaultDispose).toHaveBeenCalledTimes(1);
-      expect(JSON.stringify(warn.mock.calls)).toContain('dispose exploded');
-    } finally {
-      defaultDispose.mockRestore();
-    }
-  }, 30000);
 });
 
 /**
@@ -1034,34 +965,11 @@ describe('OidcBrowserProvider strategy lifecycle', () => {
  * `getSamlAssertion` is shared by both SAML providers, so the rule is written
  * once and would be reversed once; asserting it through `Saml2PureProvider`
  * covers the helper, and the pure provider needs no token endpoint to reach it.
+ * The provider no longer constructs a default of its own — `authorization` is
+ * a required constructor argument — so the strategy under test is always one
+ * the consumer supplied, and disposing it is the consumer's call.
  */
 describe('SAML strategy lifecycle', () => {
-  function portIsFree(port: number): Promise<boolean> {
-    return new Promise((resolve) => {
-      const s = netModule.createServer();
-      s.once('error', () => resolve(false));
-      s.listen(port, () => s.close(() => resolve(true)));
-    });
-  }
-
-  const reasonFor = (p: Promise<unknown>): Promise<Error | null> =>
-    p.then(
-      () => null,
-      (error: Error) => error,
-    );
-
-  /**
-   * The failure a default login produces here — a declared ACS the default
-   * callback cannot be listening on, so the URL builder throws inside the
-   * callback scope in milliseconds rather than after the 30 s timeout — or, if
-   * this machine happens to hold 61001, the one the port probe produces first.
-   * Either ends the login through the same `finally`, which is the subject.
-   */
-  const DEFAULT_LOGIN_FAILURE = /they must match|already in use/i;
-
-  /** Registered with the IdP, and nothing on this machine can bind it. */
-  const MISMATCHED_ACS = 'https://sp.example/acs';
-
   beforeEach(() => {
     jest.clearAllMocks();
   });
@@ -1127,115 +1035,47 @@ describe('SAML strategy lifecycle', () => {
     );
     expect(dispose).not.toHaveBeenCalled();
   }, 30000);
-
-  it('disposes the default it constructed, per login, leaving the port free', async () => {
-    const defaultDispose = jest.spyOn(
-      BrowserCallbackStrategy.prototype,
-      'dispose',
-    );
-    // No `authorization`: the provider builds a SAML browser callback on
-    // DEFAULT_CALLBACK_PORT. The declared ACS is elsewhere, so the guard ends
-    // the login in milliseconds rather than after the default 30 s.
-    const provider = new Saml2PureProvider({
-      idpSsoUrl: 'https://idp.example/sso',
-      spEntityId: 'sp',
-      acsUrl: MISMATCHED_ACS,
-      cookieProvider: async (saml) => saml,
-      // Never reached: the ACS mismatch is thrown before validate() would run.
-      assertionValidator: acceptingSamlValidator(),
-    });
-
-    // Probed before the first login: if an unrelated process holds 61001, this
-    // login never binds it and cannot release it, so the socket assertions
-    // below would be about that process rather than about this code.
-    const ownsPort = await canOwnPort(
-      DEFAULT_CALLBACK_PORT,
-      'Saml2PureProvider disposes the default it constructed',
-    );
-
-    try {
-      const first = await reasonFor(provider.getTokens());
-      expect(first?.message).toMatch(DEFAULT_LOGIN_FAILURE);
-      expect(defaultDispose).toHaveBeenCalledTimes(1);
-      // The claim that matters is about the socket, not the mock: a settled
-      // promise must mean the callback port is genuinely released.
-      if (ownsPort) expect(await portIsFree(DEFAULT_CALLBACK_PORT)).toBe(true);
-
-      // `dispose` disables an instance permanently, so a provider holding one
-      // default would fail the second login with "has been disposed".
-      const second = await reasonFor(provider.getTokens());
-      expect(second?.message).toMatch(DEFAULT_LOGIN_FAILURE);
-      expect(second?.message).not.toMatch(/disposed/i);
-      expect(defaultDispose).toHaveBeenCalledTimes(2);
-      if (ownsPort) expect(await portIsFree(DEFAULT_CALLBACK_PORT)).toBe(true);
-    } finally {
-      defaultDispose.mockRestore();
-    }
-  }, 30000);
-
-  it('reports the login failure, not the cleanup failure, when dispose throws', async () => {
-    const warn = jest.fn();
-    const logger = {
-      debug: jest.fn(),
-      info: jest.fn(),
-      warn,
-      error: jest.fn(),
-    } as unknown as ILogger;
-    const defaultDispose = jest
-      .spyOn(BrowserCallbackStrategy.prototype, 'dispose')
-      .mockImplementation(async () => {
-        throw new Error('dispose exploded');
-      });
-    const provider = new Saml2PureProvider({
-      idpSsoUrl: 'https://idp.example/sso',
-      spEntityId: 'sp',
-      acsUrl: MISMATCHED_ACS,
-      cookieProvider: async (saml) => saml,
-      logger,
-      // Never reached: the ACS mismatch is thrown before validate() would run.
-      assertionValidator: acceptingSamlValidator(),
-    });
-
-    try {
-      const error = await reasonFor(provider.getTokens());
-      // The reason the login failed survives; the cleanup failure is logged.
-      expect(error?.message).toMatch(DEFAULT_LOGIN_FAILURE);
-      expect(error?.message).not.toContain('dispose exploded');
-      expect(defaultDispose).toHaveBeenCalledTimes(1);
-      expect(JSON.stringify(warn.mock.calls)).toContain('dispose exploded');
-    } finally {
-      defaultDispose.mockRestore();
-    }
-  }, 30000);
 });
 
 /**
- * Task 11: both providers resolve `assertionValidator` at construction and run
- * it on every login. A missing `idpCertificates`/`idpEntityId` is a
- * configuration fault, and must surface before a login is even attempted.
+ * Task 11: both providers run `assertionValidator` on every login. `idpCertificates`
+ * and `idpEntityId` no longer configure the provider directly — they belong to
+ * building a validator (`SamlTrust`), assembled by the static factories — so a
+ * missing one is now a fault at that assembly, surfacing before a provider is
+ * even constructed.
  */
 describe('Saml2PureProvider assertion validation', () => {
+  const CERT = generateKeyMaterial().certificatePem;
   const baseConfig = {
     idpSsoUrl: 'https://idp/sso',
     spEntityId: 'sp-entity',
     acsUrl: 'http://localhost:61001/callback',
     idpInitiated: true,
-    // A genuine certificate: this fixture is reused as-is by a test that
-    // keeps idpCertificates, so a placeholder string would throw ("neither
-    // PEM nor base64 DER") before that test's own assertion ever ran.
-    idpCertificates: [generateKeyMaterial().certificatePem],
     idpEntityId: 'urn:mock:idp',
     authorization: staticCodeStrategy({
       redirectUri: 'http://localhost:61001/callback',
       payload: Buffer.from('<Assertion/>', 'utf8').toString('base64'),
     }),
+    assertionValidator: createSignedResponseValidator({
+      idpCertificates: [CERT],
+      replayStore: createInMemoryReplayStore(),
+    }),
     cookieProvider: async () => 'cookie',
   };
 
-  it('refuses at construction when the identity provider is not configured', () => {
-    expect(
-      () =>
-        new Saml2PureProvider({ ...baseConfig, idpCertificates: undefined }),
+  it('refuses assembling the shipped validator without idpCertificates (Saml2PureProvider.inBrowser)', () => {
+    expect(() =>
+      Saml2PureProvider.inBrowser(
+        {
+          idpSsoUrl: baseConfig.idpSsoUrl,
+          spEntityId: baseConfig.spEntityId,
+          acsUrl: baseConfig.acsUrl,
+          idpInitiated: baseConfig.idpInitiated,
+          idpEntityId: baseConfig.idpEntityId,
+          cookieProvider: baseConfig.cookieProvider,
+        },
+        { idpCertificates: [] },
+      ),
     ).toThrow(/idpCertificates/);
   });
 
@@ -1426,11 +1266,14 @@ describe('Saml2 provider default validators', () => {
       spEntityId: AUDIENCE,
       acsUrl: ACS,
       authnRequestId: REQUEST_ID,
-      idpCertificates: [KEY.certificatePem],
       idpEntityId: ISSUER,
       authorization: staticCodeStrategy({
         redirectUri: ACS,
         payload: payload(),
+      }),
+      assertionValidator: createSignedResponseValidator({
+        idpCertificates: [KEY.certificatePem],
+        replayStore: createInMemoryReplayStore(),
       }),
       cookieProvider: async (saml) => saml,
     });
@@ -1447,11 +1290,14 @@ describe('Saml2 provider default validators', () => {
       acsUrl: ACS,
       authnRequestId: REQUEST_ID,
       uaaUrl: 'https://uaa',
-      idpCertificates: [KEY.certificatePem],
       idpEntityId: ISSUER,
       authorization: staticCodeStrategy({
         redirectUri: ACS,
         payload: payload(),
+      }),
+      assertionValidator: createSignedAssertionValidator({
+        idpCertificates: [KEY.certificatePem],
+        replayStore: createInMemoryReplayStore(),
       }),
     });
 
@@ -1592,13 +1438,21 @@ describe('Saml2BearerProvider validation context', () => {
  * itself, before any login is attempted, and never be silently absorbed into
  * "the default validator" being built anyway.
  */
+/**
+ * `idpCertificates`, `clockSkewMs` and `idpEntityId` no longer configure a
+ * provider directly: they describe the trust a static factory assembles into
+ * a shipped validator (`SamlTrust`). A bad one is now a fault at that
+ * assembly — `Saml2PureProvider.inBrowser` / `Saml2BearerProvider.inBrowser`
+ * — rather than at `new ...Provider(...)`, except `idpEntityId`, which the
+ * provider still checks itself once it has a shipped validator in hand
+ * (`checkAssertionValidator`).
+ */
 describe('Saml2 provider construction faults', () => {
   const CERT = generateKeyMaterial().certificatePem;
 
   const validPureConfig = {
     idpSsoUrl: 'https://idp/sso',
     spEntityId: 'sp-entity',
-    idpCertificates: [CERT],
     idpEntityId: 'urn:mock:idp',
     cookieProvider: async (saml: string) => saml,
   };
@@ -1606,70 +1460,65 @@ describe('Saml2 provider construction faults', () => {
   const validBearerConfig = {
     idpSsoUrl: 'https://idp/sso',
     spEntityId: 'sp-entity',
-    idpCertificates: [CERT],
     idpEntityId: 'urn:mock:idp',
     uaaUrl: 'https://uaa',
   };
 
   it('Saml2PureProvider refuses construction when idpEntityId is missing', () => {
-    const error = constructionError(
-      () =>
-        new Saml2PureProvider({ ...validPureConfig, idpEntityId: undefined }),
+    const error = constructionError(() =>
+      Saml2PureProvider.inBrowser(
+        { ...validPureConfig, idpEntityId: undefined },
+        { idpCertificates: [CERT] },
+      ),
     );
     expect(error.message).toMatch(/idpEntityId/);
     expect(error.missingFields).toContain('idpEntityId');
   });
 
   it('Saml2BearerProvider refuses construction when idpEntityId is missing', () => {
-    const error = constructionError(
-      () =>
-        new Saml2BearerProvider({
-          ...validBearerConfig,
-          idpEntityId: undefined,
-        }),
+    const error = constructionError(() =>
+      Saml2BearerProvider.inBrowser(
+        { ...validBearerConfig, idpEntityId: undefined },
+        { idpCertificates: [CERT] },
+      ),
     );
     expect(error.message).toMatch(/idpEntityId/);
     expect(error.missingFields).toContain('idpEntityId');
   });
 
-  it('Saml2BearerProvider refuses construction when idpCertificates is missing', () => {
-    const error = constructionError(
-      () =>
-        new Saml2BearerProvider({
-          ...validBearerConfig,
-          idpCertificates: undefined,
-        }),
-    );
-    expect(error.message).toMatch(/idpCertificates/);
-    expect(error.missingFields).toContain('idpCertificates');
+  // Previously a provider-level check naming the field in `missingFields`
+  // ("Saml2BearerProvider refuses construction when idpCertificates is
+  // missing"). `idpCertificates` is now a required array on `SamlTrust`, so
+  // "missing" is no longer reachable through typed code — only "empty" is,
+  // and it was always the same runtime check (`!idpCertificates?.length`).
+  // This is that assertion, moved: the factory's own plain Error, with no
+  // `missingFields`, since the provider no longer intercepts it.
+  it('refuses assembling the shipped validator when idpCertificates is an empty list (Saml2BearerProvider.inBrowser)', () => {
+    expect(() =>
+      Saml2BearerProvider.inBrowser(validBearerConfig, { idpCertificates: [] }),
+    ).toThrow(/idpCertificates must not be empty/);
   });
 
-  // The provider's own length check, not the shipped validator's guard:
-  // only the provider names the field. Without it the factory's plain Error
-  // ("must not be empty") would surface, with no missingFields.
-  it('refuses construction when idpCertificates is an empty list', () => {
-    const error = constructionError(
-      () => new Saml2PureProvider({ ...validPureConfig, idpCertificates: [] }),
-    );
-    expect(error.message).toMatch(/missing idpCertificates/);
-    expect(error.missingFields).toEqual(['idpCertificates']);
+  it('refuses assembling the shipped validator when idpCertificates is an empty list (Saml2PureProvider.inBrowser)', () => {
+    expect(() =>
+      Saml2PureProvider.inBrowser(validPureConfig, { idpCertificates: [] }),
+    ).toThrow(/idpCertificates must not be empty/);
   });
 
-  it('refuses construction when a certificate is malformed', () => {
-    const error = constructionError(
-      () =>
-        new Saml2PureProvider({
-          ...validPureConfig,
-          idpCertificates: ['not-a-cert'],
-        }),
-    );
-    expect(error.message).toMatch(/certificate/i);
+  it('refuses assembling the shipped validator when a certificate is malformed', () => {
+    expect(() =>
+      Saml2PureProvider.inBrowser(validPureConfig, {
+        idpCertificates: ['not-a-cert'],
+      }),
+    ).toThrow(/certificate/i);
   });
 
-  it('refuses construction when clockSkewMs is negative', () => {
-    const error = constructionError(
-      () => new Saml2PureProvider({ ...validPureConfig, clockSkewMs: -1 }),
-    );
-    expect(error.message).toMatch(/clockSkewMs/);
+  it('refuses assembling the shipped validator when clockSkewMs is negative', () => {
+    expect(() =>
+      Saml2PureProvider.inBrowser(validPureConfig, {
+        idpCertificates: [CERT],
+        clockSkewMs: -1,
+      }),
+    ).toThrow(/clockSkewMs/);
   });
 });

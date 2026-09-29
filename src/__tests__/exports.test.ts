@@ -22,7 +22,10 @@ describe('public exports — SAML assertion validation', () => {
     // Type-only exports vanish at runtime; this compiles only while they are
     // exported, since ts-jest type-checks the suite before running it.
     const check: AssertionCheck = 'replay';
-    const options: ShippedValidatorOptions = { idpCertificates: [] };
+    const options: ShippedValidatorOptions = {
+      idpCertificates: [],
+      replayStore: surface.defaultReplayStore,
+    };
     expect(check).toBe('replay');
     expect(options.idpCertificates).toEqual([]);
   });

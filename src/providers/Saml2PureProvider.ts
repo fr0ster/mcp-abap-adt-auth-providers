@@ -12,14 +12,17 @@ import type {
 } from '@mcp-abap-adt/interfaces-auth';
 import { AUTH_TYPE_USER_TOKEN } from '@mcp-abap-adt/interfaces-auth';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
+import { samlCallbackStrategy } from '../strategies';
+import { createSignedResponseValidator } from '../validation/assertionValidator';
+import { defaultReplayStore } from '../validation/inMemoryReplayStore';
 import {
   BaseTokenProvider,
   type TokenProviderHooks,
 } from './BaseTokenProvider';
-import type { Saml2CommonConfig } from './saml2Utils';
+import type { Saml2CommonConfig, SamlTrust } from './saml2Utils';
 import {
+  checkAssertionValidator,
   getSamlAssertion,
-  resolveAssertionValidator,
   validateSamlConfig,
 } from './saml2Utils';
 
@@ -42,10 +45,30 @@ export class Saml2PureProvider extends BaseTokenProvider {
     // Before anything reaches a browser or a network: a missing certificate is
     // the consumer's mistake, and finding it after a completed login wastes
     // theirs.
-    this.validator = resolveAssertionValidator(config, 'pure');
+    this.validator = checkAssertionValidator(config);
     this.config = config;
     this.logger = config.logger;
     this.tokenType = 'saml';
+  }
+
+  /** The usual choice: a browser login answered on a local callback. */
+  static inBrowser(
+    config: Omit<
+      Saml2PureProviderConfig,
+      'authorization' | 'assertionValidator'
+    >,
+    trust: SamlTrust,
+    options: { timeoutMs?: number } = {},
+  ): Saml2PureProvider {
+    return new Saml2PureProvider({
+      ...config,
+      authorization: samlCallbackStrategy({ timeoutMs: options.timeoutMs }),
+      assertionValidator: createSignedResponseValidator({
+        idpCertificates: trust.idpCertificates,
+        clockSkewMs: trust.clockSkewMs,
+        replayStore: trust.replayStore ?? defaultReplayStore,
+      }),
+    });
   }
 
   protected getAuthType(): OAuth2GrantType {

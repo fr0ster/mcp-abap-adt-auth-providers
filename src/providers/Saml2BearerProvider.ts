@@ -16,6 +16,9 @@ import {
   refreshSamlBearerToken,
 } from '../auth/saml2TokenExchange';
 import { toBearerAssertion } from '../auth/samlBearerAssertion';
+import { samlCallbackStrategy } from '../strategies';
+import { createSignedAssertionValidator } from '../validation/assertionValidator';
+import { defaultReplayStore } from '../validation/inMemoryReplayStore';
 import {
   BaseTokenProvider,
   type TokenProviderHooks,
@@ -23,10 +26,11 @@ import {
 import type {
   Saml2BearerExchangeConfig,
   Saml2CommonConfig,
+  SamlTrust,
 } from './saml2Utils';
 import {
+  checkAssertionValidator,
   getSamlAssertion,
-  resolveAssertionValidator,
   resolveTokenUrl,
   validateSamlConfig,
 } from './saml2Utils';
@@ -52,7 +56,7 @@ export class Saml2BearerProvider extends BaseTokenProvider {
     // Before anything reaches a browser or a network: a missing certificate is
     // the consumer's mistake, and finding it after a completed login wastes
     // theirs.
-    this.validator = resolveAssertionValidator(config, 'bearer');
+    this.validator = checkAssertionValidator(config);
     this.config = config;
     this.logger = config.logger;
 
@@ -63,6 +67,26 @@ export class Saml2BearerProvider extends BaseTokenProvider {
     if (config.refreshToken) {
       this.refreshToken = config.refreshToken;
     }
+  }
+
+  /** The usual choice: a browser login answered on a local callback. */
+  static inBrowser(
+    config: Omit<
+      Saml2BearerProviderConfig,
+      'authorization' | 'assertionValidator'
+    >,
+    trust: SamlTrust,
+    options: { timeoutMs?: number } = {},
+  ): Saml2BearerProvider {
+    return new Saml2BearerProvider({
+      ...config,
+      authorization: samlCallbackStrategy({ timeoutMs: options.timeoutMs }),
+      assertionValidator: createSignedAssertionValidator({
+        idpCertificates: trust.idpCertificates,
+        clockSkewMs: trust.clockSkewMs,
+        replayStore: trust.replayStore ?? defaultReplayStore,
+      }),
+    });
   }
 
   protected getAuthType(): OAuth2GrantType {

@@ -26,8 +26,11 @@ export interface OidcBrowserProviderConfig extends TokenProviderHooks {
   scopes?: string[];
   authorizationEndpoint?: string;
   tokenEndpoint?: string;
-  /** How the login is conducted. Omitted means a browser callback on the default port. */
-  authorization?: IAuthorizationStrategy<OidcCallbackResult>;
+  /**
+   * How the login is conducted. Required — see the static factories for the
+   * usual choice.
+   */
+  authorization: IAuthorizationStrategy<OidcCallbackResult>;
   accessToken?: string;
   refreshToken?: string;
   logger?: ILogger;
@@ -48,6 +51,17 @@ export class OidcBrowserProvider extends BaseTokenProvider {
     if (config.refreshToken) {
       this.refreshToken = config.refreshToken;
     }
+  }
+
+  /** The usual choice: a browser login answered on a local callback. */
+  static inBrowser(
+    config: Omit<OidcBrowserProviderConfig, 'authorization'>,
+    options: { timeoutMs?: number } = {},
+  ): OidcBrowserProvider {
+    return new OidcBrowserProvider({
+      ...config,
+      authorization: oidcCallbackStrategy({ timeoutMs: options.timeoutMs }),
+    });
   }
 
   protected getAuthType(): OAuth2GrantType {
@@ -100,21 +114,9 @@ export class OidcBrowserProvider extends BaseTokenProvider {
       },
     };
 
-    const supplied = this.config.authorization;
-    const strategy = supplied ?? oidcCallbackStrategy();
+    const strategy = this.config.authorization;
 
-    let outcome: { payload: OidcCallbackResult; redirectUri: string };
-    try {
-      outcome = await strategy.authorize(request);
-    } finally {
-      if (!supplied) {
-        await strategy.dispose?.().catch((error: unknown) => {
-          this.logger?.warn('[OidcBrowserProvider] dispose failed', {
-            error: error instanceof Error ? error.message : String(error),
-          });
-        });
-      }
-    }
+    const outcome = await strategy.authorize(request);
 
     const tokenEndpoint =
       this.config.tokenEndpoint ?? (await discover()).token_endpoint;

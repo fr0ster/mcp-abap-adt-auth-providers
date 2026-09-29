@@ -10,12 +10,7 @@ import type {
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
 import { buildSamlAuthorizationUrl } from '../auth/saml2Auth';
 import { ValidationError } from '../errors/TokenProviderErrors';
-import { samlCallbackStrategy } from '../strategies';
-import {
-  createSignedAssertionValidator,
-  createSignedResponseValidator,
-  isShippedValidator,
-} from '../validation/assertionValidator';
+import { isShippedValidator } from '../validation/assertionValidator';
 
 export interface Saml2CommonConfig {
   idpSsoUrl: string;
@@ -28,19 +23,18 @@ export interface Saml2CommonConfig {
   acsUrl?: string;
   relayState?: string;
   authorizationUrl?: string;
-  /** How the login is conducted. Omitted means a browser callback. */
-  authorization?: IAuthorizationStrategy<string>;
+  /**
+   * How the login is conducted. Required — see the static factories for the
+   * usual choice.
+   */
+  authorization: IAuthorizationStrategy<string>;
   logger?: ILogger;
-  /** PEM or bare base64 DER. Required when no `assertionValidator` is supplied. */
-  idpCertificates?: string[];
   /**
    * The `Issuer` the assertion must name. Required unless the supplied
    * `assertionValidator` is a custom one: a shipped validator supplied there
    * still needs it, since it fails closed without an expected issuer.
    */
   idpEntityId?: string;
-  /** Finite, non-negative, integer. Defaults to 0. */
-  clockSkewMs?: number;
   /**
    * The AuthnRequest ID this login answers, when this package did not mint one
    * itself — a pre-built `authorizationUrl`, or a strategy that obtained the
@@ -54,10 +48,11 @@ export interface Saml2CommonConfig {
    * `authnRequestId` a provider refuses at construction.
    */
   idpInitiated?: boolean;
-  /** Which validator to use. Omitted means the provider's own default. */
-  assertionValidator?: IAssertionValidator;
-  /** A consumer's own replay store, for a deployment running more than one process. */
-  assertionReplayStore?: IAssertionReplayStore;
+  /**
+   * Which validator to use. Required — see the static factories for the
+   * usual choice, which builds a shipped one from a `SamlTrust`.
+   */
+  assertionValidator: IAssertionValidator;
 }
 
 export interface Saml2BearerExchangeConfig {
@@ -88,56 +83,35 @@ export function validateSamlConfig(config: Saml2CommonConfig): void {
   }
 }
 
-/**
- * The consumer's validator when supplied, otherwise the provider's default —
- * `createSignedAssertionValidator` for `"bearer"`, since the token endpoint
- * receives the Assertion alone (#40) and its own signature is what that
- * endpoint verifies; `createSignedResponseValidator` for `"pure"`, since the
- * whole response is handed on and `Status`/`Destination` must be inside a
- * signature. See the spec's "A bare Assertion, and which validator each
- * provider defaults to".
- */
-export function resolveAssertionValidator(
-  config: Saml2CommonConfig,
-  provider: 'bearer' | 'pure',
-): IAssertionValidator {
-  if (config.assertionValidator) {
-    // A shipped validator fails closed without expectedIssuer, so supplying
-    // one without idpEntityId would construct fine and then refuse every
-    // login at `issuer` — after the browser step. A custom validator needs
-    // no idpEntityId: it may establish trust some other way.
-    if (isShippedValidator(config.assertionValidator) && !config.idpEntityId) {
-      throw new ValidationError(
-        'The supplied assertionValidator is a shipped one ' +
-          '(createSignedResponseValidator or createSignedAssertionValidator), ' +
-          'which refuses every assertion without an expected issuer: missing ' +
-          'idpEntityId.',
-        ['idpEntityId'],
-      );
-    }
-    return config.assertionValidator;
-  }
+/** What a recipe needs to build a shipped validator. */
+export interface SamlTrust {
+  idpCertificates: string[];
+  clockSkewMs?: number;
+  /** Default in the recipe: the process-wide `defaultReplayStore`. */
+  replayStore?: IAssertionReplayStore;
+}
 
-  const missing: string[] = [];
-  if (!config.idpCertificates?.length) missing.push('idpCertificates');
-  if (!config.idpEntityId) missing.push('idpEntityId');
-  if (missing.length > 0) {
+/**
+ * Confirms the supplied validator is usable, and hands it back.
+ *
+ * A shipped validator fails closed without `expectedIssuer`, so supplying one
+ * without `idpEntityId` would construct fine and then refuse every login at
+ * `issuer` — after the browser step. A custom validator needs no
+ * `idpEntityId`: it may establish trust some other way.
+ */
+export function checkAssertionValidator(
+  config: Saml2CommonConfig,
+): IAssertionValidator {
+  if (isShippedValidator(config.assertionValidator) && !config.idpEntityId) {
     throw new ValidationError(
-      `The default assertion validator needs the identity provider it should ` +
-        `trust: missing ${missing.join(', ')}. Supply these, or supply an ` +
-        `assertionValidator of your own.`,
-      missing,
+      'The supplied assertionValidator is a shipped one ' +
+        '(createSignedResponseValidator or createSignedAssertionValidator), ' +
+        'which refuses every assertion without an expected issuer: missing ' +
+        'idpEntityId.',
+      ['idpEntityId'],
     );
   }
-
-  const options = {
-    idpCertificates: config.idpCertificates as string[],
-    clockSkewMs: config.clockSkewMs,
-    replayStore: config.assertionReplayStore,
-  };
-  return provider === 'bearer'
-    ? createSignedAssertionValidator(options)
-    : createSignedResponseValidator(options);
+  return config.assertionValidator;
 }
 
 export function resolveTokenUrl(config: Saml2BearerExchangeConfig): string {
@@ -206,35 +180,24 @@ export async function getSamlAssertion(
     },
   };
 
-  const supplied = config.authorization;
-  const strategy = supplied ?? samlCallbackStrategy();
-  try {
-    const outcome = await strategy.authorize(request);
-    // The second net, for a strategy that never called the builder and so
-    // never met the check inside it.
-    if (declaredAcs && declaredAcs !== outcome.redirectUri) {
-      throw new Error(
-        `SAML acsUrl is ${declaredAcs}, but the authorization strategy used ` +
-          `${outcome.redirectUri}. They must match.`,
-      );
-    }
-
-    const requestId = resolveExpectedRequestId(config, mintedRequestId);
-
-    return {
-      payload: outcome.payload,
-      requestId,
-      acsUrl: outcome.redirectUri,
-    };
-  } finally {
-    if (!supplied) {
-      await strategy.dispose?.().catch((error: unknown) => {
-        config.logger?.warn('[SAML] dispose failed', {
-          error: error instanceof Error ? error.message : String(error),
-        });
-      });
-    }
+  const strategy = config.authorization;
+  const outcome = await strategy.authorize(request);
+  // The second net, for a strategy that never called the builder and so
+  // never met the check inside it.
+  if (declaredAcs && declaredAcs !== outcome.redirectUri) {
+    throw new Error(
+      `SAML acsUrl is ${declaredAcs}, but the authorization strategy used ` +
+        `${outcome.redirectUri}. They must match.`,
+    );
   }
+
+  const requestId = resolveExpectedRequestId(config, mintedRequestId);
+
+  return {
+    payload: outcome.payload,
+    requestId,
+    acsUrl: outcome.redirectUri,
+  };
 }
 
 /**

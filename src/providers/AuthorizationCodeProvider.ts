@@ -34,10 +34,10 @@ export interface AuthorizationCodeProviderConfig extends TokenProviderHooks {
   authorizationUrl?: string;
 
   /**
-   * How the login is conducted. Omitted means a browser callback on the default
-   * port — the package's own transport, which a consumer may replace wholesale.
+   * How the login is conducted. Required — see the static factories for the
+   * usual choice.
    */
-  authorization?: IAuthorizationStrategy<string>;
+  authorization: IAuthorizationStrategy<string>;
 
   // Optional: existing tokens (for the refresh scenario)
   accessToken?: string;
@@ -119,6 +119,17 @@ export class AuthorizationCodeProvider extends BaseTokenProvider {
     return super.getTokens();
   }
 
+  /** The usual choice: a browser login answered on a local callback. */
+  static inBrowser(
+    config: Omit<AuthorizationCodeProviderConfig, 'authorization'>,
+    options: { timeoutMs?: number } = {},
+  ): AuthorizationCodeProvider {
+    return new AuthorizationCodeProvider({
+      ...config,
+      authorization: browserCallbackStrategy({ timeoutMs: options.timeoutMs }),
+    });
+  }
+
   protected getAuthType(): OAuth2GrantType {
     return AUTH_TYPE_AUTHORIZATION_CODE;
   }
@@ -157,23 +168,9 @@ export class AuthorizationCodeProvider extends BaseTokenProvider {
       },
     };
 
-    // Constructed here means disposed here: whoever constructs, disposes.
-    const supplied = this.config.authorization;
-    const strategy = supplied ?? browserCallbackStrategy();
+    const strategy = this.config.authorization;
 
-    let outcome: { payload: string; redirectUri: string };
-    try {
-      outcome = await strategy.authorize(request);
-    } finally {
-      if (!supplied) {
-        // A cleanup failure must not replace the reason the login failed.
-        await strategy.dispose?.().catch((error: unknown) => {
-          this.logger?.warn('[AuthorizationCodeProvider] dispose failed', {
-            error: error instanceof Error ? error.message : String(error),
-          });
-        });
-      }
-    }
+    const outcome = await strategy.authorize(request);
 
     // The second net. A strategy that never called the builder — `staticCodeStrategy`
     // holds its payload already — passed the first check by not participating in
