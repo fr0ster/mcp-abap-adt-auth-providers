@@ -60,8 +60,9 @@ rejected(rejection: IAuthRejection): Promise<AuthOutcome>; // the system said no
    renewal that yields the same one is Oops "the renewal returned the
    credential that was refused".
 6. **No implicit defaults — the consumer composes.** A constructor takes every
-   collaborator explicitly: the interactive strategy, the SAML assertion
-   validator and replay store, the SNC locator, probes and machine seam. No
+   collaborator explicitly: the interactive strategy, the device-code
+   presenter, the SAML assertion validator and replay store, the SNC locator,
+   probes and machine seam. No
    provider builds one of its own when none is given. The package ships the
    parts (strategies, validators, the replay store, the SNC locator / probe /
    `nodeSncSystem()`), and **static factories** that assemble a named, common
@@ -155,14 +156,48 @@ visibly:
 | `UaaPasscodeProvider.fromTerminal(config, { timeoutMs? })` | `manualPasscodeStrategy({ timeoutMs })` |
 | `Saml2PureProvider.inBrowser(config, { timeoutMs? })` | `samlCallbackStrategy({ timeoutMs })`, `createSignedResponseValidator` from `idpCertificates` / `idpEntityId`, `defaultReplayStore` |
 | `Saml2BearerProvider.inBrowser(config, { timeoutMs? })` | `samlCallbackStrategy({ timeoutMs })`, `createSignedAssertionValidator` from `idpCertificates` / `idpEntityId`, `defaultReplayStore` |
+| `OidcDeviceFlowProvider.toConsole(config, { logger? })` | `consoleDeviceCodePresenter(logger)` |
 | `CertificateAuthProvider.fromFiles(config)` | `new FileCertificateMaterialLoader()` |
 | `SncLogonProvider.forSecureLoginClient({ partnerName, qop?, sncLib?, myName? })` | `nodeSncSystem()`, `DefaultSncLibraryLocator(system, sncLib)`, `[SecureLoginClientProbe(system)]` |
 
 A factory's own parameters may have documented values (`timeoutMs` 30 s for a
 callback, 5 min for a terminal read); the recipe itself is chosen by name.
 Providers with no collaborator to choose (`ClientCredentialsProvider`,
-`OidcPasswordProvider`, `OidcTokenExchangeProvider`, `OidcDeviceFlowProvider`,
-`BasicAuthProvider`, `SamlAuthProvider`, `TokenAuthProvider`) need none.
+`OidcPasswordProvider`, `OidcTokenExchangeProvider`, `BasicAuthProvider`,
+`SamlAuthProvider`, `TokenAuthProvider`) need none.
+
+### The device-code presenter
+
+`OidcDeviceFlowProvider` must show the user where to go and what to enter.
+Today it writes that itself — to the logger, or stderr without one
+(`announce.ts`) — an output channel nobody chose. It becomes an injected
+collaborator like a strategy:
+
+```ts
+export interface DeviceCodePrompt {
+  verificationUri: string;
+  verificationUriComplete?: string;
+  userCode: string;
+  expiresInSeconds?: number;
+}
+export interface IDeviceCodePresenter {
+  /** Show the prompt; resolves once it has been shown. */
+  present(prompt: DeviceCodePrompt): Promise<void>;
+}
+```
+
+- The provider hands the presenter **structured data**, not text, so a
+  consumer's UI (an MCP client, a chat, a terminal) renders it its own way.
+- Shipped: `consoleDeviceCodePresenter(logger?)` — today's behaviour, now a
+  named choice: the logger's `info`, or `process.stderr` without one, never
+  `process.stdout`.
+- `presenter` is a required constructor argument; `toConsole` is the recipe.
+- A presenter that throws is an Oops from `prepare()` / `rejected()` (rule 1),
+  with fixed wording "showing the device code failed" (rule 2); the device
+  code is never part of a refusal.
+- The shipped strategies keep announcing through their own `announcer` —
+  they are already injected, so what they print is part of the strategy the
+  consumer chose.
 
 ## Moved in from `@mcp-abap-adt/connection`
 
@@ -276,7 +311,8 @@ The provider depends on neither `@mcp-abap-adt/sap-rfc-lite` nor
   `SncLogonProvider` (+ `SncLogonProviderConfig`), `DefaultSncLibraryLocator`,
   `SecureLoginClientProbe`, `nodeSncSystem`, and the types `ISncLibraryLocator`,
   `ISncProductProbe`, `SncLibrary`, `SncSystem`, `SncArch`; the static
-  factories in *Static factories*; `timeoutMs` on the manual strategies.
+  factories in *Static factories*; `timeoutMs` on the manual strategies;
+  `IDeviceCodePresenter`, `DeviceCodePrompt`, `consoleDeviceCodePresenter`.
   Internal and not exported: the architecture reader, the `reg` / `tasklist` /
   `ps` parsers, the refusal mapping.
 - **Scope in `CLAUDE.md` and the README:** "This package provides the
@@ -300,9 +336,10 @@ The provider depends on neither `@mcp-abap-adt/sap-rfc-lite` nor
     `TokenAuthProvider` around it;
   - a store that persisted after `getTokens()` passes `onTokens` instead;
   - nothing is defaulted any more: a provider that took a strategy, a SAML
-    validator or a replay store implicitly now takes it in its constructor —
+    validator, a replay store or a device-code output implicitly now takes it
+    in its constructor —
     or the consumer calls the named factory (`inBrowser`, `fromTerminal`,
-    `fromFiles`, `forSecureLoginClient`);
+    `toConsole`, `fromFiles`, `forSecureLoginClient`);
   - it needs `connection` 10.0.0; 9.x speaks the old `IAuthProvider`.
 
 ## Testing
@@ -313,7 +350,7 @@ The provider depends on neither `@mcp-abap-adt/sap-rfc-lite` nor
 | No exception crosses the contract: each provider with its work made to throw, **and with targets whose `header` / `cookies` / `logonParameters` / `tlsMaterial` throw**, answers Oops | same table, failing collaborators and throwing targets |
 | No secret in a refusal: a secret placed **inside** an error's message — foreign or this package's own, including IdP callback text wrapped in a `BrowserAuthError` — a thrown string, or an SDK-shaped object's fields never appears in `reason` / `hint` | `noSecretsInRefusals.test.ts`, one case per provider |
 | One renewal, no step twice: refresh succeeds → Ok (token changed); refresh refused → exactly one login → Ok; login refused → Oops, with no second refresh or login | unit, counting collaborators |
-| No implicit defaults: constructing a provider without its strategy / validator / replay store / locator / probes does not compile; each factory assembles exactly the parts in its table row | typecheck (`@ts-expect-error`) and unit |
+| No implicit defaults: constructing a provider without its strategy / presenter / validator / replay store / locator / probes does not compile; each factory assembles exactly the parts in its table row | typecheck (`@ts-expect-error`) and unit |
 | Shipped strategies are bounded: a manual strategy with `timeoutMs` settles with `BrowserAuthError` and closes its `readline` on expiry and on `dispose()`; a consumer strategy that never settles is waited on (documented, asserted with a fake timer) | unit |
 | No Ok on an unchanged credential: a renewal returning the refused token → Oops, for `BaseTokenProvider` and `TokenAuthProvider.from` | unit |
 | Token providers: `prepare` → `getTokens`; `authorize` writes `Bearer` per attempt and renews on expiry; `rejected` → `refreshTokens`; `Saml2PureProvider` writes cookies | unit, stubbed login / refresh |
@@ -340,7 +377,6 @@ Each rule gets a test that goes red when the rule is removed.
    (one refresh, then at most one login) is not a retry.
 5. ~~**Defaults.**~~ **None** — constructors take every collaborator; static
    factories are the named recipes (rule 6).
-6. **`OidcDeviceFlowProvider`'s announcement.** It shows the user the
-   verification URL and code through the logger, or stderr when there is none
-   (`announce.ts`) — an implicit output channel. Keep it as the provider's own
-   behaviour, or make it an injected collaborator like the strategies?
+6. ~~**`OidcDeviceFlowProvider`'s announcement.**~~ **Injected** — an
+   `IDeviceCodePresenter` given structured data; `consoleDeviceCodePresenter`
+   is today's behaviour as a named choice (see *The device-code presenter*).
