@@ -59,13 +59,6 @@ token and nothing else.
 
 ## Open, for the spec
 
-Settled in [`specs/2026-09-29-auth-providers-on-iauthprovider-design.md`](specs/2026-09-29-auth-providers-on-iauthprovider-design.md):
-1 — `BaseTokenProvider` implements both (decided 2026-09-29); 2 — an injected
-`onTokens` on every token provider, **best effort**: awaited before the
-answer, but a failing store is logged and does not fail a valid credential
-(this replaces the "must reach the store before Ok" wording below); 3 — the
-provider's strategy timeout.
-
 1. **How a token provider becomes an `IAuthProvider`.** Proposed:
    `BaseTokenProvider` implements both contracts, so every token provider *is*
    an `IAuthProvider` with no wrapper; `TokenAuthProvider` remains only for a
@@ -74,8 +67,8 @@ provider's strategy timeout.
    consumer must know to wrap.
 2. **Where renewed tokens are persisted.** The broker persists today, after
    `getTokens()`. When a provider renews inside `prepare()` or `rejected()`,
-   the new token must reach the session store before the provider answers
-   Ok — an injected hook on the token providers, or the broker wrapping them.
+   the broker is not the caller — how the new token reaches the session store
+   is the spec's to decide.
 3. **`rejected()` that needs an interactive login** (refresh token expired):
    who bounds its time — the provider's strategy timeout, or the process.
 
