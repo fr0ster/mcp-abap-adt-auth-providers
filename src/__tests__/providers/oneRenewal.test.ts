@@ -167,6 +167,17 @@ describe('concurrent renewals share one flight', () => {
     expect(p.refreshes).toBe(2);
   });
 
+  it('an authorize() during a renewal waits for it and presents the new token', async () => {
+    const p = new RotatingProvider();
+    await p.authorize(recordingTargets().requestTarget); // presents T1
+    const renewing = p.rejected(refused);
+    const t = recordingTargets();
+    await p.authorize(t.requestTarget);
+    await renewing;
+    expect(t.request.headers.Authorization).toBe('Bearer T2');
+    expect(p.refreshes).toBe(1);
+  });
+
   it('concurrent expired authorize() calls share one refresh', async () => {
     const p = new RotatingProvider();
     (p as unknown as { expiresAt: number }).expiresAt = Date.now() - 1;

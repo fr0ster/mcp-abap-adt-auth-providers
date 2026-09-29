@@ -156,6 +156,8 @@ export abstract class BaseTokenProvider
       hasRefreshToken: !!this.refreshToken,
       currentToken: this.formatToken(this.authorizationToken),
     });
+    // A renewal in flight is replacing the cache: wait for it, not the old token
+    if (this.renewal) return this.renewal;
     // If token is valid, return cached
     const isValid = this.isTokenValid();
     if (isValid) {

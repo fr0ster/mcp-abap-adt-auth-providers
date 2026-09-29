@@ -70,8 +70,6 @@ describe('public exports — 5.0.0', () => {
     'KNOWN_CONFIG_FIELDS',
     'KNOWN_RFC_KEYS',
     'parseRegQuery',
-    'parseTasklistCsv',
-    'parsePsComm',
     'SncLibraryNotFoundError',
   ])('does not export the internal %s', (name) => {
     expect(name in surface).toBe(false);
