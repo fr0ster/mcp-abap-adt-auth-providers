@@ -15,9 +15,12 @@ import {
   pollDeviceTokens,
   refreshOidcToken,
 } from '../auth/oidcToken';
-import { BaseTokenProvider } from './BaseTokenProvider';
+import {
+  BaseTokenProvider,
+  type TokenProviderHooks,
+} from './BaseTokenProvider';
 
-export interface OidcDeviceFlowProviderConfig {
+export interface OidcDeviceFlowProviderConfig extends TokenProviderHooks {
   issuerUrl?: string;
   clientId: string;
   clientSecret?: string;
@@ -33,7 +36,7 @@ export class OidcDeviceFlowProvider extends BaseTokenProvider {
   private config: OidcDeviceFlowProviderConfig;
 
   constructor(config: OidcDeviceFlowProviderConfig) {
-    super();
+    super(config);
     this.config = config;
     this.logger = config.logger;
 

@@ -10,9 +10,12 @@ import { AUTH_TYPE_USER_TOKEN } from '@mcp-abap-adt/interfaces-auth';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
 import { discoverOidc } from '../auth/oidcDiscovery';
 import { tokenExchange } from '../auth/oidcToken';
-import { BaseTokenProvider } from './BaseTokenProvider';
+import {
+  BaseTokenProvider,
+  type TokenProviderHooks,
+} from './BaseTokenProvider';
 
-export interface OidcTokenExchangeProviderConfig {
+export interface OidcTokenExchangeProviderConfig extends TokenProviderHooks {
   issuerUrl?: string;
   clientId: string;
   clientSecret?: string;
@@ -32,7 +35,7 @@ export class OidcTokenExchangeProvider extends BaseTokenProvider {
   private config: OidcTokenExchangeProviderConfig;
 
   constructor(config: OidcTokenExchangeProviderConfig) {
-    super();
+    super(config);
     this.config = config;
     this.logger = config.logger;
 

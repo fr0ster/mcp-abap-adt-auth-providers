@@ -6,12 +6,16 @@
 
 import type {
   IAssertionValidator,
+  IRequestTarget,
   ITokenResult,
   OAuth2GrantType,
 } from '@mcp-abap-adt/interfaces-auth';
 import { AUTH_TYPE_USER_TOKEN } from '@mcp-abap-adt/interfaces-auth';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
-import { BaseTokenProvider } from './BaseTokenProvider';
+import {
+  BaseTokenProvider,
+  type TokenProviderHooks,
+} from './BaseTokenProvider';
 import type { Saml2CommonConfig } from './saml2Utils';
 import {
   getSamlAssertion,
@@ -19,7 +23,9 @@ import {
   validateSamlConfig,
 } from './saml2Utils';
 
-export interface Saml2PureProviderConfig extends Saml2CommonConfig {
+export interface Saml2PureProviderConfig
+  extends Saml2CommonConfig,
+    TokenProviderHooks {
   logger?: ILogger;
   cookieProvider: (samlResponse: string) => Promise<string>;
 }
@@ -29,7 +35,7 @@ export class Saml2PureProvider extends BaseTokenProvider {
   private readonly validator: IAssertionValidator;
 
   constructor(config: Saml2PureProviderConfig) {
-    super();
+    super(config);
     // A pre-built URL with no declared ACS cannot be verified against whatever
     // the strategy binds, so it is refused here rather than at login time.
     validateSamlConfig(config);
@@ -71,5 +77,13 @@ export class Saml2PureProvider extends BaseTokenProvider {
 
   protected async performRefresh(): Promise<ITokenResult> {
     return this.performLogin();
+  }
+
+  /** Its "token" is the SAML session's cookies (tokenType 'saml'). */
+  protected override applyToken(
+    request: IRequestTarget,
+    result: ITokenResult,
+  ): void {
+    request.cookies(result.authorizationToken);
   }
 }

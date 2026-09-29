@@ -16,7 +16,10 @@ import {
   refreshSamlBearerToken,
 } from '../auth/saml2TokenExchange';
 import { toBearerAssertion } from '../auth/samlBearerAssertion';
-import { BaseTokenProvider } from './BaseTokenProvider';
+import {
+  BaseTokenProvider,
+  type TokenProviderHooks,
+} from './BaseTokenProvider';
 import type {
   Saml2BearerExchangeConfig,
   Saml2CommonConfig,
@@ -30,7 +33,8 @@ import {
 
 export interface Saml2BearerProviderConfig
   extends Saml2CommonConfig,
-    Saml2BearerExchangeConfig {
+    Saml2BearerExchangeConfig,
+    TokenProviderHooks {
   logger?: ILogger;
   accessToken?: string;
   refreshToken?: string;
@@ -41,7 +45,7 @@ export class Saml2BearerProvider extends BaseTokenProvider {
   private readonly validator: IAssertionValidator;
 
   constructor(config: Saml2BearerProviderConfig) {
-    super();
+    super(config);
     // A pre-built URL with no declared ACS cannot be verified against whatever
     // the strategy binds, so it is refused here rather than at login time.
     validateSamlConfig(config);

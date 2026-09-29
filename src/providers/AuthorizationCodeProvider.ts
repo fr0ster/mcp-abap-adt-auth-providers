@@ -19,9 +19,12 @@ import {
 } from '../auth/browserAuth';
 import { refreshJwtToken } from '../auth/tokenRefresher';
 import { browserCallbackStrategy } from '../strategies';
-import { BaseTokenProvider } from './BaseTokenProvider';
+import {
+  BaseTokenProvider,
+  type TokenProviderHooks,
+} from './BaseTokenProvider';
 
-export interface AuthorizationCodeProviderConfig {
+export interface AuthorizationCodeProviderConfig extends TokenProviderHooks {
   // Required for building the authorization URL and for the token exchange
   uaaUrl: string;
   clientId: string;
@@ -53,7 +56,7 @@ export class AuthorizationCodeProvider extends BaseTokenProvider {
   private config: AuthorizationCodeProviderConfig;
 
   constructor(config: AuthorizationCodeProviderConfig) {
-    super();
+    super(config);
     this.config = config;
     this.logger = config.logger;
 

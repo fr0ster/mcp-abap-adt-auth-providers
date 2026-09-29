@@ -9,11 +9,28 @@
  */
 
 import type {
+  AuthOutcome,
+  IAuthProvider,
+  IAuthRejection,
+  ILogonTarget,
   IRefreshableTokenProvider,
+  IRequestTarget,
   ITokenResult,
   OAuth2GrantType,
 } from '@mcp-abap-adt/interfaces-auth';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
+import { OK, oops, ownLabel, safely } from '../auth/refusal';
+
+/** What every token provider's config may carry beside its own fields. */
+export interface TokenProviderHooks {
+  /**
+   * Called after every NEW token — a login or a refresh, never a cache hit —
+   * and awaited before the provider answers. The broker persists through it.
+   * Best effort: a failure is logged by class name and does not fail the
+   * authentication.
+   */
+  onTokens?: (result: ITokenResult) => Promise<void>;
+}
 
 /**
  * Abstract base class for token providers
@@ -24,12 +41,21 @@ import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
  * - Automatically refreshes expired tokens
  * - Falls back to login if refresh fails
  */
-export abstract class BaseTokenProvider implements IRefreshableTokenProvider {
+export abstract class BaseTokenProvider
+  implements IRefreshableTokenProvider, IAuthProvider
+{
   protected authorizationToken?: string;
   protected refreshToken?: string;
   protected expiresAt?: number; // timestamp in milliseconds
   protected tokenType?: 'jwt' | 'saml' | 'opaque';
   protected logger?: ILogger;
+  private readonly onTokens?: TokenProviderHooks['onTokens'];
+  /** The token last put on a request, so rejected() can tell a renewal from a repeat. */
+  private presented?: string;
+
+  constructor(hooks: TokenProviderHooks = {}) {
+    this.onTokens = hooks.onTokens;
+  }
 
   /**
    * Format timestamp to readable date/time string
@@ -168,6 +194,7 @@ export abstract class BaseTokenProvider implements IRefreshableTokenProvider {
       try {
         const result = await this.performRefresh();
         this.updateTokens(result);
+        await this.obtained(result);
         this.logger?.info('[BaseTokenProvider] Token refreshed successfully', {
           newToken: this.formatToken(result.authorizationToken),
           newRefreshToken: this.formatToken(result.refreshToken),
@@ -187,6 +214,7 @@ export abstract class BaseTokenProvider implements IRefreshableTokenProvider {
     );
     const result = await this.performLogin();
     this.updateTokens(result);
+    await this.obtained(result);
     this.logger?.info('[BaseTokenProvider] Login completed', {
       newToken: this.formatToken(result.authorizationToken),
       newRefreshToken: this.formatToken(result.refreshToken),
@@ -304,5 +332,74 @@ export abstract class BaseTokenProvider implements IRefreshableTokenProvider {
     const now = Date.now();
     const expiresIn = Math.floor((expiresAt - now) / 1000);
     return expiresIn > 0 ? expiresIn : undefined;
+  }
+
+  private async obtained(result: ITokenResult): Promise<void> {
+    if (!this.onTokens) return;
+    try {
+      await this.onTokens(result);
+    } catch (error) {
+      // Class name only: the hook holds the tokens, its message is foreign text.
+      this.logger?.warn(
+        '[BaseTokenProvider] onTokens failed; the token stands',
+        {
+          error: ownLabel(error),
+        },
+      );
+    }
+  }
+
+  // ---- IAuthProvider: the process calls these, the same for every provider.
+
+  /** The grant type, so a log line says which way in ran. */
+  get kind(): string {
+    return this.getAuthType();
+  }
+
+  /** The subject of a fixed refusal: "<grant type> token request failed". */
+  private get obtaining(): string {
+    return `${this.kind} token request`;
+  }
+
+  async prepare(): Promise<AuthOutcome> {
+    return safely(this.obtaining, async () => {
+      await this.getTokens();
+      return OK;
+    });
+  }
+
+  /** A token is presented per request; a logon needs nothing from it. */
+  async establish(_logon: ILogonTarget): Promise<AuthOutcome> {
+    return OK;
+  }
+
+  /** Per attempt: getTokens() renews an expired token here. */
+  async authorize(request: IRequestTarget): Promise<AuthOutcome> {
+    return safely(this.obtaining, async () => {
+      const result = await this.getTokens();
+      this.applyToken(request, result);
+      this.presented = result.authorizationToken;
+      return OK;
+    });
+  }
+
+  /** A new token — refresh, else login. Ok only if it differs; retrying is the caller's. */
+  async rejected(_rejection: IAuthRejection): Promise<AuthOutcome> {
+    return safely(this.obtaining, async () => {
+      const refused = this.presented ?? this.authorizationToken;
+      const result = await this.refreshTokens();
+      if (refused !== undefined && result.authorizationToken === refused) {
+        return oops(
+          'the renewal returned the credential that was refused',
+          'the token source must issue a new token; log in again',
+        );
+      }
+      return OK;
+    });
+  }
+
+  /** How this provider's token rides on a request. Bearer by default. */
+  protected applyToken(request: IRequestTarget, result: ITokenResult): void {
+    request.header('Authorization', `Bearer ${result.authorizationToken}`);
   }
 }

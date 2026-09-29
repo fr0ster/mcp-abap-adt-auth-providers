@@ -11,9 +11,12 @@ import type {
 } from '@mcp-abap-adt/interfaces-auth';
 import { AUTH_TYPE_CLIENT_CREDENTIALS } from '@mcp-abap-adt/interfaces-auth';
 import { getTokenWithClientCredentials } from '../auth/clientCredentialsAuth';
-import { BaseTokenProvider } from './BaseTokenProvider';
+import {
+  BaseTokenProvider,
+  type TokenProviderHooks,
+} from './BaseTokenProvider';
 
-export interface ClientCredentialsProviderConfig {
+export interface ClientCredentialsProviderConfig extends TokenProviderHooks {
   uaaUrl: string;
   clientId: string;
   clientSecret: string;
@@ -29,7 +32,7 @@ export class ClientCredentialsProvider extends BaseTokenProvider {
   private config: ClientCredentialsProviderConfig;
 
   constructor(config: ClientCredentialsProviderConfig) {
-    super();
+    super(config);
     this.config = config;
     const missingFields: string[] = [];
     if (!config.uaaUrl) {

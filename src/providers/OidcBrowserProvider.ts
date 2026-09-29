@@ -14,9 +14,12 @@ import { discoverOidc } from '../auth/oidcDiscovery';
 import { generatePkceChallenge, generatePkceVerifier } from '../auth/oidcPkce';
 import { exchangeAuthorizationCode, refreshOidcToken } from '../auth/oidcToken';
 import { oidcCallbackStrategy } from '../strategies';
-import { BaseTokenProvider } from './BaseTokenProvider';
+import {
+  BaseTokenProvider,
+  type TokenProviderHooks,
+} from './BaseTokenProvider';
 
-export interface OidcBrowserProviderConfig {
+export interface OidcBrowserProviderConfig extends TokenProviderHooks {
   issuerUrl?: string;
   clientId: string;
   clientSecret?: string;
@@ -34,7 +37,7 @@ export class OidcBrowserProvider extends BaseTokenProvider {
   private config: OidcBrowserProviderConfig;
 
   constructor(config: OidcBrowserProviderConfig) {
-    super();
+    super(config);
     this.config = config;
     this.logger = config.logger;
 

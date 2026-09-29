@@ -18,9 +18,12 @@ import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
 import { exchangePasscode } from '../auth/passcodeAuth';
 import { refreshJwtToken } from '../auth/tokenRefresher';
 import { manualPasscodeStrategy } from '../strategies/manualStrategies';
-import { BaseTokenProvider } from './BaseTokenProvider';
+import {
+  BaseTokenProvider,
+  type TokenProviderHooks,
+} from './BaseTokenProvider';
 
-export interface UaaPasscodeProviderConfig {
+export interface UaaPasscodeProviderConfig extends TokenProviderHooks {
   /** UAA / XSUAA base URL, e.g. `https://<subdomain>.authentication.<region>.hana.ondemand.com`. */
   uaaUrl: string;
   /** A client allowed the `password` grant; add `refresh_token` to keep the session. */
@@ -43,7 +46,7 @@ export class UaaPasscodeProvider extends BaseTokenProvider {
   private readonly config: UaaPasscodeProviderConfig;
 
   constructor(config: UaaPasscodeProviderConfig) {
-    super();
+    super(config);
     this.config = config;
     this.logger = config.logger;
     if (config.accessToken) {
