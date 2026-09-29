@@ -89,6 +89,21 @@ export function isRfcLogonCredential(c: unknown): c is IRfcLogonCredential;
 
 - `SapAuthType` gains `'snc'`.
 - `ISapConfig` gains `sncPartnerName?`, `sncQop?`, `sncLib?`, `sncMyName?`.
+- **The store → broker route, in this same release.** What the stores hand the
+  broker today cannot carry an SNC destination: `IAuthorizationConfig` is
+  UAA-only with `uaaUrl`, `uaaClientId`, `uaaClientSecret` required, and
+  `IConnectionConfig.authType` is `'basic' | 'jwt' | 'saml'`. SNC settings
+  describe how to reach the system, not an OAuth client, so they go on the
+  connection config, additively:
+  - `IConnectionConfig.authType` gains `'snc'`;
+  - `IConnectionConfig` gains `sncPartnerName?`, `sncQop?`, `sncLib?`,
+    `sncMyName?`.
+
+  `ISessionStore.getConnectionConfig` / `IServiceKeyStore.getConnectionConfig`
+  already return it, so no store method changes; a destination with
+  `authType: 'snc'` needs no authorization config (`getAuthorizationConfig`
+  may return `null`), no username and no password. Existing stores that ignore
+  the new fields keep working for every other destination.
 
 A separate interface rather than a field on `IAuthProvider`, as
 `IRenewableCredential` is: most credentials have no RFC logon, and
@@ -102,35 +117,57 @@ A separate interface rather than a field on `IAuthProvider`, as
 | Member | Behaviour |
 |---|---|
 | `kind` | `'snc'` |
-| `prepare()` | resolves `snc_lib` (below) and checks the SNC product is running; throws a `ValidationError` naming what is missing. Once per `connect()`. |
+| `prepare()` | resolves `snc_lib` (below) and, when the library belongs to a product with a probe, checks that product is running; throws a `ValidationError` naming what is missing. Once per `connect()`. |
 | `authorizationHeader()` | `null` — the RFC logon authenticates |
 | `cookies()` | `null` |
 | `transportMaterial()` | `{}` |
 | `rfcLogonParams()` | `{ snc_mode: '1', snc_partnername, snc_qop, snc_lib, snc_myname? }`; throws if called before `prepare()` |
-| `explainLogonFailure(e)` | `A2200019` → "the SNC product has no credential — log on in the Secure Login Client"; `SNCERR_INIT` / `gssapi library invalid/missing` → "`snc_lib` is not a loadable GSS library for this process (<path>, <arch>)"; otherwise `undefined` |
+| `explainLogonFailure(e)` | `A2200019` → "the SNC product has no credential" + "log on in the Secure Login Client" when the SLC probe applied; `SNCERR_INIT` / `gssapi library invalid/missing` → "`snc_lib` is not a loadable GSS library for this process (<path>, <arch>)"; otherwise `undefined` |
 
-**Resolving `snc_lib`** — the first that applies wins, and the result must
-exist and match the process's architecture:
+**Resolving `snc_lib`.** An explicit choice and automatic discovery are
+treated differently:
 
-1. the `sncLib` option;
-2. `SNC_LIB_64` when `process.arch` is 64-bit, then `SNC_LIB`;
-3. Windows: `HKLM\Software\SAP\SecureLogin\InstallPath64` (x64 process) or
-   `InstallPath32` + `lib\sapcrypto.dll`;
-4. macOS: `/Applications/Secure Login Client.app/Contents/MacOS/lib/libsapcrypto.dylib`.
+- **Explicit** — the `sncLib` option (from the destination's `sncLib`). It is
+  the only candidate: if it does not exist or does not match the process's
+  architecture, `prepare()` fails naming the path and the reason. Nothing is
+  tried behind the caller's back.
+- **Automatic** — without `sncLib`, candidates in this order:
+  1. `SNC_LIB_64` when `process.arch` is 64-bit, then `SNC_LIB`;
+  2. Windows: `HKLM\Software\SAP\SecureLogin\InstallPath64` (x64 process) or
+     `InstallPath32`, + `lib\sapcrypto.dll`;
+  3. macOS: `/Applications/Secure Login Client.app/Contents/MacOS/lib/libsapcrypto.dylib`.
+
+  A candidate that is missing or of the wrong architecture is **skipped**, with
+  the reason kept; the first usable one wins. Only when none is usable does
+  `prepare()` fail, listing every candidate and why it was skipped. So an
+  installer-set x86 `SNC_LIB` beside a valid x64 registry installation — the
+  measured case — resolves to the registry's x64 library.
 
 On Windows the architecture is read from the DLL's PE header (the `Machine`
-field), so the x86 library the installer puts in `SNC_LIB` is refused with a
-message naming `SNC_LIB_64` instead of failing later inside the SDK.
+field), before the SDK ever loads it.
 
 **Everything pluggable is a strategy**, per this package's rule:
 
 - `ISncLibraryLocator` — `locate(): Promise<{ path: string; arch: string }>`;
   default as above.
-- `ISncProductProbe` — `check(): Promise<void>`, throws when the product is
-  not usable; default: on Windows, `sbus.exe` among running processes; on
-  macOS, the Secure Login Client process. It does **not** check that a profile
-  is logged on — no documented API says so; that failure is caught at logon by
-  `explainLogonFailure`.
+- `ISncProductProbe` — `appliesTo(libraryPath): boolean` and
+  `check(): Promise<void>`, which throws when the product is not usable. The
+  probe runs **only for a library it applies to**; any other SNC library —
+  `gsskrb5.dll`, another vendor's GSS library — gets no product check, and a
+  failed logon is explained generically.
+  - Default: the Secure Login Client probe. It applies when the resolved
+    library lies inside the Secure Login Client's installation (the registry's
+    `InstallPath64`/`InstallPath32` on Windows, the app bundle on macOS), and
+    checks that `sbus.exe` (Windows) or the Secure Login Client process
+    (macOS) is running. It does **not** check that a profile is logged on — no
+    documented API says so; that failure is caught at logon by
+    `explainLogonFailure`.
+  - The rule is decided from the library path alone, so the broker-created
+    provider, which gets only a destination's settings, needs no extra switch:
+    a destination that names a non-SLC `sncLib` is simply not probed.
+  - A consumer can pass its own probes, or none.
+- `explainLogonFailure` mentions the Secure Login Client only when the SLC
+  probe applied; otherwise it names the SNC library and the GSS error.
 
 The provider never logs the certificate, and there is no secret to log: the
 parameters are names and paths.
@@ -181,9 +218,11 @@ back a string. So the broker gains a second kind of result — **an injectable
 credential** — beside the token:
 
 - **Stores:** a destination's SNC settings (`sncPartnerName`, `sncQop`,
-  `sncLib`, `sncMyName`) are read from the auth-config store the destination
-  already has. They are names and paths, not secrets; nothing is persisted
-  after a logon, since the SNC product owns the certificate and its lifetime.
+  `sncLib`, `sncMyName`) come from `getConnectionConfig(destination)`, whose
+  `authType: 'snc'` is what tells the broker this is an SNC destination (see
+  step 1). They are names and paths, not secrets; nothing is persisted after a
+  logon, since the SNC product owns the certificate and its lifetime. The
+  broker does not ask for an authorization config for such a destination.
 - **Provider factory:** for a destination whose auth type is `snc`, the
   broker's `TokenProviderFactory` counterpart builds a `SncLogonProvider` from
   those settings.
@@ -214,24 +253,30 @@ it only produces parameters.
 
 | What | How | Where |
 |---|---|---|
-| `snc_lib` resolution order, each source; missing file; wrong architecture refused naming `SNC_LIB_64` | unit, with a fake file system, environment and registry reader behind the locator | here, CI |
+| automatic `snc_lib` order, each source; a missing or wrong-architecture candidate is **skipped** and the next tried; none usable → one error listing every candidate and its reason | unit, with a fake file system, environment and registry reader behind the locator | here, CI |
+| the measured mix: x64 process, no `SNC_LIB_64`, x86 `SNC_LIB`, valid x64 registry installation → resolves to the registry's library | unit, same fakes | here, CI |
+| explicit `sncLib` missing or of the wrong architecture → fails, no fallback tried | unit | here, CI |
 | PE `Machine` reading | unit, on committed 64-byte PE header fixtures (x86, x64, not a PE) | here, CI |
-| `prepare()` fails when the product is not running | unit, fake probe | here, CI |
+| SLC library and no SLC process → `prepare()` fails; SLC library and process running → passes | unit, fake process list | here, CI |
+| non-SLC library (e.g. `gsskrb5.dll`, explicit `sncLib`) and no SLC process → `prepare()` passes, no probe run | unit | here, CI |
 | `rfcLogonParams()` before `prepare()` throws; after, no `user`/`passwd` key | unit | here, CI |
-| `explainLogonFailure` for `A2200019`, `SNCERR_INIT`, unknown | unit, on the error strings measured above | here, CI |
+| `explainLogonFailure` for `A2200019`, `SNCERR_INIT`, unknown; mentions the Secure Login Client only for an SLC library | unit, on the error strings measured above | here, CI |
 | `logon` thunk replaces `user`/`passwd` on **every** conversation (stateful, shared, own) and is read at open | unit, recording fake client | connection, CI |
 | without `logon`, behaviour unchanged (username/password still required) | unit | connection, CI |
-| a destination with auth type `snc` yields a `SncLogonProvider` built from the store's settings; token destinations unchanged | unit, in-memory stores | broker, CI |
+| store → broker: an **SNC-only destination** — connection config with `authType: 'snc'` and `snc*` fields, no UAA fields, no authorization config, no username or password — yields a `SncLogonProvider` built from those settings; token destinations unchanged | unit, in-memory stores | broker, CI |
 | SNC end to end | live, manual, on a machine with the Secure Login Client logged on; results recorded in the PR | server |
 
 Each rule gets a test that goes red when the rule is removed.
 
 ## Order
 
-1. `interfaces-auth-sap`: contract, `'snc'`, `snc*` fields — release.
+1. `interfaces-auth-sap`: `IRfcLogonCredential`, `'snc'` in `SapAuthType`
+   and `IConnectionConfig.authType`, `snc*` fields in `ISapConfig` and
+   `IConnectionConfig` — release. Everything the later steps need from the
+   contracts is in this one release.
 2. This package: `SncLogonProvider`, strategies, docs — release.
 3. `connection`: `logon` thunk, failure explanation — release.
-4. `auth-broker` (and stores): SNC settings from the auth-config store, the
+4. `auth-broker` (and stores): SNC settings from `getConnectionConfig`, the
    credential result — release.
 5. `mcp-abap-adt`: credential from the broker, routing — live check.
 
