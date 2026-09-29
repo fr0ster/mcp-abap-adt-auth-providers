@@ -203,4 +203,4 @@ All extend `TokenProviderError`, with codes from `@mcp-abap-adt/interfaces-auth`
 
 ## Plans and specs
 
-Plans under `docs/superpowers/plans/` and specs under `docs/superpowers/specs/` are kept in the tree only while active — not yet implemented and not cancelled. Once fully implemented OR cancelled, delete the file. History lives in git; these directories hold only work in progress.
+Everything under `docs/superpowers/` — specs, plans, goals, todo lists, any other working document — is kept in the tree only while active: not yet implemented and not cancelled. Once fully implemented OR cancelled, delete the file, at the latest before the release that ships the work. History lives in git; the directory holds only work in progress. What a deleted document still owes the future (next steps in other repositories, say) goes into the PR description first.
