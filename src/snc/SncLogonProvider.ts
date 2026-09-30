@@ -16,6 +16,7 @@ import type {
 } from '@mcp-abap-adt/interfaces-auth';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
 import { OK, oops } from '../auth/refusal';
+import { readRejection } from '../auth/rejection';
 import { ValidationError } from '../errors/TokenProviderErrors';
 import {
   DefaultSncLibraryLocator,
@@ -27,7 +28,7 @@ import {
   SecureLoginClientProbe,
 } from './SecureLoginClientProbe';
 import { nodeSncSystem } from './SncSystem';
-import { locateRefusal, sncRefusal } from './sncRefusal';
+import { locateRefusal, sncCause, sncRefusal } from './sncRefusal';
 
 /** SAP's SNC_QOP values: 1 authentication, 2 integrity, 3 privacy, 8 default, 9 maximum. */
 const SNC_QOP_VALUES = ['1', '2', '3', '8', '9'];
@@ -190,14 +191,25 @@ export class SncLogonProvider implements IAuthProvider {
     return bounded('authorizing a request', () => OK);
   }
 
+  /**
+   * A GSS code in the error is explained first — the SDK reports SNC logon
+   * failures as a communication failure. Without one, a status or an RFC key
+   * that is not about the credential gets the neutral words.
+   */
   async rejected(rejection: IAuthRejection): Promise<AuthOutcome> {
-    return bounded('explaining the SNC refusal', () => ({
-      ok: false,
-      refusal: sncRefusal(rejection?.error, {
+    return bounded('explaining the SNC refusal', () => {
+      const context = {
         library: this.library,
         secureLoginClient: this.secureLoginClient,
-      }),
-    }));
+      };
+      const cause = sncCause(rejection?.error, context);
+      if (cause) return { ok: false, refusal: cause };
+      const read = readRejection(rejection);
+      if (read.verdict === 'not-credential') {
+        return { ok: false, refusal: read.refusal };
+      }
+      return { ok: false, refusal: sncRefusal(rejection?.error, context) };
+    });
   }
 
   /** A log line that cannot take the method down with it. */

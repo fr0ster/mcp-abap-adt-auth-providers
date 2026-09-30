@@ -205,7 +205,7 @@ export class AuthorizationCodeProvider extends BaseTokenProvider {
     }
 
     this.logger?.info('[AuthorizationCodeProvider] Refreshing token');
-    // A failure throws: the base decides the one login (rule 5).
+    // A failure throws: the base decides the one login (rule 6).
     const result = await refreshJwtToken(
       this.refreshToken,
       this.config.uaaUrl,

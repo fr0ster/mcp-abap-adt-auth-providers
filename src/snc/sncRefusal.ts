@@ -34,10 +34,11 @@ function describeLibrary(library?: SncLibrary): string {
   return archs ? `${library.path} (${archs})` : library.path;
 }
 
-export function sncRefusal(
+/** The explanation of a GSS code in the error, when it carries one. */
+export function sncCause(
   error: unknown,
   context: { library?: SncLibrary; secureLoginClient: boolean },
-): IAuthRefusal {
+): IAuthRefusal | undefined {
   const text = searchable(error);
   const library = describeLibrary(context.library);
   if (/A2200019/.test(text)) {
@@ -53,7 +54,16 @@ export function sncRefusal(
       reason: `the RFC SDK could not initialise ${library} as its SNC library (SNCERR_INIT)`,
     };
   }
-  return { reason: `SNC logon refused${sdkKey(error)}` };
+  return undefined;
+}
+
+export function sncRefusal(
+  error: unknown,
+  context: { library?: SncLibrary; secureLoginClient: boolean },
+): IAuthRefusal {
+  return (
+    sncCause(error, context) ?? { reason: `SNC logon refused${sdkKey(error)}` }
+  );
 }
 
 const LOCATE_HINT = 'set sncLib to the SNC (GSS) library of your SNC product';
