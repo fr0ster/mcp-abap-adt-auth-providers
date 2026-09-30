@@ -42,8 +42,9 @@ Both SAML providers validate the assertion first, through an `IAssertionValidato
 2. **A refusal carries no secret — so it never carries an error's message.** It is built only from fixed wording chosen per error class, plus metadata only when its value is on an allowlist this package owns: config field names (`KNOWN_CONFIG_FIELDS`), an `AssertionValidationError`'s `check` (`AssertionCheck` values only), a fixed set of system error codes, a fixed set of RFC SDK keys (SNC), or a class label decided by `instanceof` against this package's own constructors — else "unknown error". No `message`, `cause` or body of any error reaches a refusal, and a `name` property is never read.
 3. **Nothing to add is Ok.** A provider with nothing for a moment writes to no target and answers Ok.
 4. **A target's Oops is the provider's to judge.** A provider with no other way in (SNC, certificate) returns the target's Oops as its own; one that has another (a password is also a header) goes on.
-5. **`rejected()` decides alone; retrying is the consumer's.** One renewal is at most one refresh, then — only if the refresh is refused or there is no refresh token — one login through the strategy the consumer gave the provider. No step runs twice. A provider never answers Ok without having changed what it presents: a renewal that yields the same credential is Oops "the renewal returned the credential that was refused".
-6. **No implicit defaults — the consumer composes.** A constructor takes every collaborator explicitly (the interactive strategy, the device-code presenter, the SAML validator and replay store, the SNC locator and probes); no provider builds one of its own when none is given. Static factories (`inBrowser`, `fromTerminal`, `toConsole`, `fromFiles`, `forSecureLoginClient`) assemble a named, common recipe — the consumer, or the broker, still creates the instance from a constructor or a factory.
+5. **`rejected()` blames the credential only when it was refused.** A `401` or `RFC_LOGON_FAILURE` is the credential; a `403`, a redirect, a `5xx`, any other status or RFC key gets the neutral words of `readRejection` (`src/auth/rejection.ts`) and no renewal; a rejection with neither is `unknown` — a renewer renews once, a fixed credential answers neutrally. SNC explains a GSS code in the error before any of that.
+6. **`rejected()` decides alone; retrying is the consumer's.** One renewal is at most one refresh, then — only if the refresh is refused or there is no refresh token — one login through the strategy the consumer gave the provider. No step runs twice. A provider never answers Ok without having changed what it presents: a renewal that yields the same credential is Oops "the renewal returned the credential that was refused".
+7. **No implicit defaults — the consumer composes.** A constructor takes every collaborator explicitly (the interactive strategy, the device-code presenter, the SAML validator and replay store, the SNC locator and probes); no provider builds one of its own when none is given. Static factories (`inBrowser`, `fromTerminal`, `toConsole`, `fromFiles`, `forSecureLoginClient`) assemble a named, common recipe — the consumer, or the broker, still creates the instance from a constructor or a factory.
 
 ### New directories
 
@@ -51,6 +52,7 @@ Both SAML providers validate the assertion first, through an `IAssertionValidato
 - `src/deviceCode/` — `IDeviceCodePresenter`, `DeviceCodePrompt`, `consoleDeviceCodePresenter`: how `OidcDeviceFlowProvider` shows the user where to go and what to enter, injected like a strategy instead of writing to the logger itself
 - `src/snc/` — `SncLogonProvider` and its collaborators: `DefaultSncLibraryLocator`, `SecureLoginClientProbe`, `nodeSncSystem` (the machine seam — env, file heads, registry, behind one injectable interface), the PE/Mach-O/ELF architecture reader, the refusal mapping (`sncRefusal`). A product probe only names the product behind the library, for the `rejected()` hint — it checks nothing, because the SNC library starts the Secure Login Client on demand (measured), so `prepare()` is Ok with the client not running. An unusable library is refused naming each candidate’s source, path and fixed reason
 - `src/auth/refusal.ts` — `OK`, `oops`, `refusalFrom`, `safely` — the one place a thrown value becomes a refusal (rules 1 and 2), and the allowlists
+- `src/auth/rejection.ts` — `readRejection`, `refuseFor`, `unknownRefusal` — what a rejection says about the credential (rule 5)
 
 ## Build Commands
 
@@ -131,6 +133,7 @@ src/
 │   └── asOidcResult.ts             # string payload → OidcCallbackResult
 ├── auth/
 │   ├── refusal.ts             # OK, oops, refusalFrom, safely — where every thrown value becomes a refusal
+│   ├── rejection.ts           # readRejection: is this rejection the credential's?
 │   ├── callbackServer.ts     # runCallbackScope: one owner, one release point
 │   ├── announce.ts           # logger-or-stderr, never stdout
 │   ├── browserAuth.ts        # UAA URL building, code exchange, browser launch

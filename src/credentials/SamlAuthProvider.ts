@@ -5,7 +5,8 @@ import type {
   ILogonTarget,
   IRequestTarget,
 } from '@mcp-abap-adt/interfaces-auth';
-import { OK, oops, safely } from '../auth/refusal';
+import { OK, safely } from '../auth/refusal';
+import { refuseFor } from '../auth/rejection';
 
 /** A SAML session negotiated elsewhere and handed over as cookies. */
 export class SamlAuthProvider implements IAuthProvider {
@@ -28,10 +29,13 @@ export class SamlAuthProvider implements IAuthProvider {
     });
   }
 
-  async rejected(_rejection: IAuthRejection): Promise<AuthOutcome> {
-    return oops(
-      'the SAML session was refused or has expired',
-      'obtain a new SAML session',
+  /** Blames the session only when the system refused the credential. */
+  async rejected(rejection: IAuthRejection): Promise<AuthOutcome> {
+    return safely('reading the rejection', () =>
+      refuseFor(rejection, {
+        reason: 'the SAML session was refused or has expired',
+        hint: 'obtain a new SAML session',
+      }),
     );
   }
 }

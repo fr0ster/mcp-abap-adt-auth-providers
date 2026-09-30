@@ -7,6 +7,7 @@ import type {
   ITokenRefresher,
 } from '@mcp-abap-adt/interfaces-auth';
 import { OK, oops, safely } from '../auth/refusal';
+import { readRejection, unknownRefusal } from '../auth/rejection';
 
 /**
  * A token that comes from outside this package — a fixed string, or the
@@ -51,10 +52,19 @@ export class TokenAuthProvider implements IAuthProvider {
     });
   }
 
-  async rejected(_rejection: IAuthRejection): Promise<AuthOutcome> {
-    const renew = this.renew;
-    if (!renew) return oops('the token was refused', 'obtain a new token');
+  /** Renews only a refused credential, or one the rejection cannot tell. */
+  async rejected(rejection: IAuthRejection): Promise<AuthOutcome> {
     return safely('the token source', async () => {
+      const read = readRejection(rejection);
+      if (read.verdict === 'not-credential') {
+        return { ok: false, refusal: read.refusal };
+      }
+      const renew = this.renew;
+      if (!renew) {
+        return read.verdict === 'credential'
+          ? oops('the token was refused', 'obtain a new token')
+          : { ok: false, refusal: unknownRefusal(rejection) };
+      }
       const renewed = await renew();
       if (this.presented !== undefined && renewed === this.presented) {
         return oops(

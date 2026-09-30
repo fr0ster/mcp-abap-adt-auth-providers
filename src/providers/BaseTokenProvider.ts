@@ -20,6 +20,7 @@ import type {
 } from '@mcp-abap-adt/interfaces-auth';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
 import { OK, oops, ownLabel, safely } from '../auth/refusal';
+import { readRejection } from '../auth/rejection';
 
 /** What every token provider's config may carry beside its own fields. */
 export interface TokenProviderHooks {
@@ -412,8 +413,13 @@ export abstract class BaseTokenProvider
    * caller's. A renewal in flight is joined; a presented token already
    * superseded by a renewal answers Ok without renewing again.
    */
-  async rejected(_rejection: IAuthRejection): Promise<AuthOutcome> {
+  async rejected(rejection: IAuthRejection): Promise<AuthOutcome> {
     return safely(this.obtaining, async () => {
+      // A 403, a redirect, a 5xx: a new token would be refused the same way.
+      const read = readRejection(rejection);
+      if (read.verdict === 'not-credential') {
+        return { ok: false, refusal: read.refusal };
+      }
       // Nothing presented yet (a rejection before any authorize): the token
       // held — from a login or from config — is the one taken as refused.
       const refused = this.presented ?? this.authorizationToken;

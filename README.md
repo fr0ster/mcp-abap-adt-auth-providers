@@ -214,6 +214,27 @@ const provider = AuthorizationCodeProvider.inBrowser({
 // request, and rejected() on a 401: one renewal — a refresh, else one login.
 ```
 
+### What `rejected()` answers
+
+A provider blames its credential — and a token provider renews — only when the
+rejection says the credential was refused: status `401`, or the RFC SDK's
+`RFC_LOGON_FAILURE`. Anything else is answered with a neutral refusal that
+names only the status or the SDK key, and nothing is renewed:
+
+| The rejection | Basic, certificate, SAML cookies, fixed token | Token providers, `TokenAuthProvider.from` |
+|---|---|---|
+| `401`, `RFC_LOGON_FAILURE` | their own refusal ("the user or password was refused", …) | one renewal; Ok only if the credential changed |
+| `403` | "the credential was accepted, but the user is not authorized (403)" | the same, no renewal |
+| `3xx` | "the system redirected instead of accepting the credential (3xx)" | the same, no renewal |
+| `5xx` | "the system failed (5xx), not the credential" | the same, no renewal |
+| any other status | "the system answered N, which is not a credential refusal" | the same, no renewal |
+| another RFC key | "the RFC logon failed (KEY), not as a credential refusal" | the same, no renewal |
+| neither a status nor a known key | "the logon failed (unknown error)" | one renewal — the rejection cannot tell |
+
+`SncLogonProvider` explains a GSS code in the error first (`A2200019`,
+`SNCERR_INIT`) — the SDK reports SNC logon failures as a communication
+failure — and otherwise answers the same way.
+
 The token providers also implement `IRefreshableTokenProvider` —
 `ITokenProvider` plus `refreshTokens()` — for the broker's token API:
 

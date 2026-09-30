@@ -5,7 +5,8 @@ import type {
   ILogonTarget,
   IRequestTarget,
 } from '@mcp-abap-adt/interfaces-auth';
-import { OK, oops, safely } from '../auth/refusal';
+import { OK, safely } from '../auth/refusal';
+import { refuseFor } from '../auth/rejection';
 
 /** A user and a password: a header over HTTP, logon parameters over RFC. */
 export class BasicAuthProvider implements IAuthProvider {
@@ -38,10 +39,13 @@ export class BasicAuthProvider implements IAuthProvider {
     });
   }
 
-  async rejected(_rejection: IAuthRejection): Promise<AuthOutcome> {
-    return oops(
-      'the user or password was refused',
-      'check the user and password',
+  /** Blames the password only when the system refused the credential. */
+  async rejected(rejection: IAuthRejection): Promise<AuthOutcome> {
+    return safely('reading the rejection', () =>
+      refuseFor(rejection, {
+        reason: 'the user or password was refused',
+        hint: 'check the user and password',
+      }),
     );
   }
 }

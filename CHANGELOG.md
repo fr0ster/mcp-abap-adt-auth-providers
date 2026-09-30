@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [5.0.1] - 2026-09-30
+
+### Fixed
+
+- **`rejected()` blames the credential only when the system refused it.**
+  A `401` or the RFC SDK's `RFC_LOGON_FAILURE` is the credential; a `403`, a
+  redirect, a `5xx`, any other status or RFC key is answered with a neutral
+  refusal naming only that status or key. Before, `BasicAuthProvider`,
+  `CertificateAuthProvider`, `SamlAuthProvider` and a fixed `TokenAuthProvider`
+  answered every rejection with their own refusal — a network failure on an
+  RFC logon read "the user or password was refused".
+- **Token providers renew only a refused credential.** `BaseTokenProvider`
+  and `TokenAuthProvider.from` no longer refresh or log in again on a `403`,
+  a redirect, a `5xx` or another RFC key: a new token would be refused the
+  same way, and the Ok it earned invited a retry that could not succeed. A
+  rejection that carries neither a status nor a known key still gets one
+  renewal.
+- **`SncLogonProvider`** explains a GSS code first, as before, and otherwise
+  answers a status or key that is not about the logon neutrally, instead of
+  "SNC logon refused".
+
+The rule lives in one place, `readRejection` (`src/auth/rejection.ts`); the
+README's *What `rejected()` answers* lists every answer.
+
 ## [5.0.0] - 2026-09-29
 
 A migration, not an update: every provider this package ships now implements

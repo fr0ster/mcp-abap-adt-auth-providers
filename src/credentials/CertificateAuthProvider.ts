@@ -11,6 +11,7 @@ import type {
   ISapConfig,
 } from '@mcp-abap-adt/interfaces-auth-sap';
 import { OK, oops, safely } from '../auth/refusal';
+import { refuseFor } from '../auth/rejection';
 import { FileCertificateMaterialLoader } from './FileCertificateMaterialLoader';
 
 /** A client certificate, presented in the TLS handshake of each logon. */
@@ -61,10 +62,13 @@ export class CertificateAuthProvider implements IAuthProvider {
     return OK;
   }
 
-  async rejected(_rejection: IAuthRejection): Promise<AuthOutcome> {
-    return oops(
-      'the client certificate was refused',
-      'check that it is mapped to a user (CERTRULE / USREXTID)',
+  /** Blames the certificate only when the system refused the credential. */
+  async rejected(rejection: IAuthRejection): Promise<AuthOutcome> {
+    return safely('reading the rejection', () =>
+      refuseFor(rejection, {
+        reason: 'the client certificate was refused',
+        hint: 'check that it is mapped to a user (CERTRULE / USREXTID)',
+      }),
     );
   }
 }
