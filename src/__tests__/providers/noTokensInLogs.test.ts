@@ -6,8 +6,10 @@
  */
 
 import { describe, expect, it } from '@jest/globals';
+import type { IAssertionValidator } from '@mcp-abap-adt/interfaces-auth';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
 import { AuthorizationCodeProvider } from '../../providers/AuthorizationCodeProvider';
+import { Saml2PureProvider } from '../../providers/Saml2PureProvider';
 import { staticCodeStrategy } from '../../strategies';
 
 const b64url = (value: object) =>
@@ -64,5 +66,45 @@ describe('no token in the logs', () => {
     }
     // What is logged instead says a token was there, and how long it was.
     expect(all).toContain(`<redacted, ${REFRESH_TOKEN.length} chars>`);
+  });
+
+  it('logs no part of seeded cookies, or of an opaque token seeded with expiresAt', async () => {
+    const COOKIES =
+      'SAP_SESSIONID_ABC_100=cookievaluethatissecret; sap-usercontext=c';
+    const OPAQUE = 'opaque-seeded-token-with-no-exp-claim';
+    const { logger, lines } = recordingLogger();
+    const expiresAt = Date.now() + 3600_000;
+    const saml = new Saml2PureProvider({
+      idpSsoUrl: 'https://idp/sso',
+      spEntityId: 'sp',
+      idpInitiated: true,
+      authorization: staticCodeStrategy({ payload: 'unused' }),
+      assertionValidator: {} as IAssertionValidator,
+      cookieProvider: async () => 'unused',
+      accessToken: COOKIES,
+      expiresAt,
+      logger,
+    });
+    await saml.getTokens();
+    const code = new AuthorizationCodeProvider({
+      uaaUrl: 'https://uaa.example',
+      clientId: 'client',
+      clientSecret: 'secret',
+      accessToken: OPAQUE,
+      expiresAt,
+      authorization: staticCodeStrategy({ payload: 'unused' }),
+      logger,
+    });
+    await code.getTokens();
+
+    const all = lines.join('\n');
+    // Both were answered from the seed, and said so.
+    expect(all).toContain(`<redacted, ${COOKIES.length} chars>`);
+    expect(all).toContain(`<redacted, ${OPAQUE.length} chars>`);
+    for (const secret of [COOKIES, OPAQUE]) {
+      for (const window of windows(secret)) {
+        expect(all).not.toContain(window);
+      }
+    }
   });
 });
