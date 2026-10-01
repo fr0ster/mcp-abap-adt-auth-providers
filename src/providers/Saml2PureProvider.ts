@@ -32,6 +32,18 @@ export interface Saml2PureProviderConfig
     TokenProviderHooks {
   logger?: ILogger;
   cookieProvider: (samlResponse: string) => Promise<string>;
+  /**
+   * Stored session cookies — what this provider answers as its token — to
+   * present instead of logging in while they last. No refresh token: SAML has
+   * none, so past `expiresAt` the provider logs in again.
+   */
+  accessToken?: string;
+  /**
+   * When `accessToken` stops being valid (epoch ms). Cookies carry no expiry
+   * of their own, so without this the stored cookies count as expired and the
+   * first getTokens() logs in.
+   */
+  expiresAt?: number;
 }
 
 export class Saml2PureProvider extends BaseTokenProvider {
@@ -50,6 +62,10 @@ export class Saml2PureProvider extends BaseTokenProvider {
     this.config = config;
     this.logger = config.logger;
     this.tokenType = 'saml';
+    if (config.accessToken) {
+      this.authorizationToken = config.accessToken;
+      this.expiresAt = config.expiresAt;
+    }
   }
 
   /** The usual choice: a browser login answered on a local callback. */

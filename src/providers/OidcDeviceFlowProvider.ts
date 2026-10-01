@@ -34,6 +34,11 @@ export interface OidcDeviceFlowProviderConfig extends TokenProviderHooks {
   tokenEndpoint?: string;
   accessToken?: string;
   refreshToken?: string;
+  /**
+   * When `accessToken` expires (epoch ms), for a token that carries no `exp`
+   * of its own. A JWT's `exp` wins; without either the seed counts as expired.
+   */
+  expiresAt?: number;
   logger?: ILogger;
   /**
    * How the user learns the verification URL and code. Required — see the
@@ -52,7 +57,7 @@ export class OidcDeviceFlowProvider extends BaseTokenProvider {
 
     if (config.accessToken) {
       this.authorizationToken = config.accessToken;
-      this.expiresAt = this.parseExpirationFromJWT(config.accessToken);
+      this.expiresAt = this.seededExpiry(config.accessToken, config.expiresAt);
     }
     if (config.refreshToken) {
       this.refreshToken = config.refreshToken;

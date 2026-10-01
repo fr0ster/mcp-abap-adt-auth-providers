@@ -42,6 +42,11 @@ export interface AuthorizationCodeProviderConfig extends TokenProviderHooks {
   // Optional: existing tokens (for the refresh scenario)
   accessToken?: string;
   refreshToken?: string;
+  /**
+   * When `accessToken` expires (epoch ms), for a token that carries no `exp`
+   * of its own. A JWT's `exp` wins; without either the seed counts as expired.
+   */
+  expiresAt?: number;
 
   logger?: ILogger;
 }
@@ -91,8 +96,8 @@ export class AuthorizationCodeProvider extends BaseTokenProvider {
     // Initialize from provided tokens if available
     if (config.accessToken) {
       this.authorizationToken = config.accessToken;
-      // Parse expiration from JWT
-      this.expiresAt = this.parseExpirationFromJWT(config.accessToken);
+      // The JWT's exp, else the stated expiresAt
+      this.expiresAt = this.seededExpiry(config.accessToken, config.expiresAt);
       this.logger?.info(
         '[AuthorizationCodeProvider] Initialized with access token',
         {

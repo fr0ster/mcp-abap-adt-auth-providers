@@ -345,6 +345,19 @@ export abstract class BaseTokenProvider
   }
 
   /**
+   * When a seeded token expires: the JWT's own `exp` when it carries one —
+   * the token's claim wins over anything stated beside it — else the
+   * `expiresAt` the consumer stored with it (an opaque token). Neither: the
+   * seed is taken as expired, and the first getTokens() renews it.
+   */
+  protected seededExpiry(
+    token: string,
+    expiresAt?: number,
+  ): number | undefined {
+    return this.parseExpirationFromJWT(token) ?? expiresAt;
+  }
+
+  /**
    * Calculate expiresIn from JWT token
    * @param token JWT token string
    * @returns Expiration time in seconds, or undefined if cannot parse
