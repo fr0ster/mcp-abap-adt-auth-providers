@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [5.1.0] - 2026-10-01
+
+A consumer that keeps a provider's credential between runs can now hand every
+interactive provider back what it stored, cookies included, and have it used
+until it expires.
+
+### Added
+
+- **`Saml2PureProvider` takes a stored session: `accessToken` (the cookies)
+  and `expiresAt` (epoch ms).** Until `expiresAt`, less the one-minute buffer,
+  `getTokens()` answers the cookies and `authorize()` presents them, with no
+  login. Past it, or without `expiresAt` — cookies carry no expiry of their
+  own — the provider logs in as before. No `refreshToken`: SAML has none.
+- **`expiresAt` beside a seeded `accessToken`** on `AuthorizationCodeProvider`,
+  `UaaPasscodeProvider`, `OidcBrowserProvider`, `OidcDeviceFlowProvider`,
+  `OidcPasswordProvider`, `OidcTokenExchangeProvider` and
+  `Saml2BearerProvider`. It is used only when the token carries no `exp` — an
+  opaque token; a JWT's own `exp` wins. Before, an opaque seed always counted
+  as expired. `ClientCredentialsProvider` still takes no seed.
+
+The README's *Seeding a stored credential* lists what each provider takes.
+
+### Changed
+
+- **`@mcp-abap-adt/interfaces-auth-sap` `^2.0.0`** (was `^1.1.0`). The three
+  types this package imports from it — `IAuthorizationConfig`, `ISapConfig`,
+  `ICertificateMaterialLoader` — are identical in 1.1.0 and 2.0.0; nothing a
+  consumer passes changes shape.
+
 ## [5.0.1] - 2026-09-30
 
 ### Fixed

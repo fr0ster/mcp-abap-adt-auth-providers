@@ -715,6 +715,15 @@ const broker = new AuthBroker({ tokenProvider: provider }, 'none');
 `cookieProvider` receives the payload unchanged, only after it has been
 validated, and the session's `expiresAt` is the validated assertion's expiry.
 
+**Stored cookies.** Pass cookies a previous login obtained as `accessToken`,
+with the `expiresAt` they were obtained with (epoch ms — `onTokens` and
+`getTokens()` report it). Until `expiresAt`, less a one-minute buffer, the
+provider presents them and runs no login: no strategy, no validator, no
+`cookieProvider`. Past it — or with no `expiresAt`, since cookies carry no
+expiry of their own — the first `getTokens()` or `authorize()` logs in as
+above. There is no `refreshToken`: SAML has none, so renewal is a new login.
+See [Seeding a stored credential](#seeding-a-stored-credential).
+
 **Read that `redirectUri` twice.** A SAML strategy defaults its redirect URI to
 `http://localhost:61001/callback`, and the provider requires the assertion
 consumer service the IdP posts to be exactly the one the strategy names. If you
@@ -1516,6 +1525,49 @@ This approach prevents unnecessary token refresh and browser authentication when
 - Network is slow or unstable
 - Running in offline/disconnected mode
 
+### Seeding a stored credential
+
+A token provider can start from a credential a previous run obtained — what
+`onTokens` reported, or what a session store kept — and use it until it
+expires instead of logging in. The seed is optional config; a provider without
+one logs in at the first `getTokens()`.
+
+| Provider | `accessToken` | `refreshToken` | `expiresAt` |
+|---|---|---|---|
+| `AuthorizationCodeProvider` | the token | yes | for a token with no `exp` |
+| `UaaPasscodeProvider` | the token | yes | for a token with no `exp` |
+| `OidcBrowserProvider` | the token | yes | for a token with no `exp` |
+| `OidcDeviceFlowProvider` | the token | yes | for a token with no `exp` |
+| `OidcPasswordProvider` | the token | yes | for a token with no `exp` |
+| `OidcTokenExchangeProvider` | the token | yes | for a token with no `exp` |
+| `Saml2BearerProvider` | the token | yes | for a token with no `exp` |
+| `Saml2PureProvider` | the session cookies | — (SAML has none) | always: cookies carry no expiry |
+| `ClientCredentialsProvider` | — | — | — |
+
+- **When a seed expires.** A JWT's own `exp` claim decides, and wins over an
+  `expiresAt` passed beside it. `expiresAt` (epoch ms) is used only when the
+  token has no `exp` — an opaque token, or `Saml2PureProvider`'s cookies.
+  With neither, the seed counts as expired.
+- **Until then** `getTokens()` and `authorize()` answer the seed, less the
+  usual one-minute buffer; no request is made and `onTokens` is not called —
+  it reports only new tokens.
+- **After** the provider renews as usual: the `refreshToken` when there is one
+  and the grant has a refresh, else one login through the configured
+  strategy. What it obtains replaces the seed and goes to `onTokens`, with its
+  `expiresAt`.
+- `ClientCredentialsProvider` takes no seed: a new token costs one request and
+  no user, so it obtains one.
+
+```typescript
+const provider = new Saml2PureProvider({
+  ...samlConfig,
+  accessToken: stored.sessionCookies,
+  expiresAt: stored.expiresAt,
+  onTokens: async ({ authorizationToken, expiresAt }) =>
+    save({ sessionCookies: authorizationToken, expiresAt }),
+});
+```
+
 ### Token Refresh
 
 Providers handle refresh automatically inside `getTokens()`: while the cached token is valid it
@@ -2104,7 +2156,7 @@ Example output:
 ## Dependencies
 
 - `@mcp-abap-adt/interfaces-auth` (^3.0.0) - `IAuthProvider`, token provider, authorization and assertion-validation contracts (`ITokenProvider`, `IAuthorizationStrategy`, `CallbackServerFactory`, `IAssertionValidator`, `IAssertionReplayStore`) and error code constants
-- `@mcp-abap-adt/interfaces-auth-sap` (^1.1.0) - XSUAA authorization configuration (`IAuthorizationConfig`) and `ICertificateMaterialLoader`
+- `@mcp-abap-adt/interfaces-auth-sap` (^2.0.0) - XSUAA authorization configuration (`IAuthorizationConfig`) and `ICertificateMaterialLoader`
 - `@mcp-abap-adt/interfaces-utils` (^1.1.0) - `ILogger`
 - `@xmldom/xmldom` - XML parsing: SAML assertion validation, and taking the Assertion out of a SAMLResponse for the saml2-bearer grant
 - `xml-crypto` - XML-DSig signature verification for SAML assertion validation
