@@ -18,6 +18,7 @@ import { createSignedResponseValidator } from '../validation/assertionValidator'
 import { defaultReplayStore } from '../validation/inMemoryReplayStore';
 import {
   BaseTokenProvider,
+  storedExpiry,
   type TokenProviderHooks,
 } from './BaseTokenProvider';
 import type { Saml2CommonConfig, SamlTrust } from './saml2Utils';
@@ -64,7 +65,7 @@ export class Saml2PureProvider extends BaseTokenProvider {
     this.tokenType = 'saml';
     if (config.accessToken) {
       this.authorizationToken = config.accessToken;
-      this.expiresAt = config.expiresAt;
+      this.expiresAt = storedExpiry(config.expiresAt);
     }
   }
 

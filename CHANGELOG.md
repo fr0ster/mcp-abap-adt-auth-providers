@@ -26,6 +26,14 @@ until it expires.
   `Saml2BearerProvider`. It is used only when the token carries no `exp` — an
   opaque token; a JWT's own `exp` wins. Before, an opaque seed always counted
   as expired. `ClientCredentialsProvider` still takes no seed.
+- A stored `expiresAt` counts only as a finite, non-negative number; anything
+  else (`Infinity`, `NaN`, a string) states no expiry, so the seed is renewed.
+
+### Fixed
+
+- **A JWT with `exp: 0` is expired by it.** The parser read `exp` as truthy,
+  so `0` stated no expiry; a numeric `exp` is now the token's own, `0`
+  included.
 
 The README's *Seeding a stored credential* lists what each provider takes.
 

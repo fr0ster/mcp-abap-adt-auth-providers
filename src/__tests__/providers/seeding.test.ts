@@ -8,6 +8,7 @@ import { describe, expect, it, jest } from '@jest/globals';
 import type {
   IAssertionValidator,
   IAuthorizationStrategy,
+  IAuthRejection,
   ITokenResult,
 } from '@mcp-abap-adt/interfaces-auth';
 import { AuthorizationCodeProvider } from '../../providers/AuthorizationCodeProvider';
@@ -37,7 +38,12 @@ const OPAQUE = 'opaque-access-token-without-any-expiry';
 const STORED_COOKIES = 'SAP_SESSIONID_ABC_100=stored; sap-usercontext=x';
 const NEW_COOKIES = 'SAP_SESSIONID_ABC_100=fresh';
 
-function samlPure(seed: { accessToken?: string; expiresAt?: number }) {
+const R401: IAuthRejection = { at: 'request', status: 401, error: {} };
+
+function samlPure(
+  seed: { accessToken?: string; expiresAt?: number },
+  loginCookies = NEW_COOKIES,
+) {
   const authorize = jest.fn<IAuthorizationStrategy<string>['authorize']>(
     async () => ({
       payload: 'PHNhbWxwOlJlc3BvbnNlLz4=',
@@ -48,7 +54,7 @@ function samlPure(seed: { accessToken?: string; expiresAt?: number }) {
   const validate = jest.fn(async () => ({
     expiresAt: new Date(loginExpiresAt),
   }));
-  const cookieProvider = jest.fn(async () => NEW_COOKIES);
+  const cookieProvider = jest.fn(async () => loginCookies);
   const onTokens = jest.fn(async (_result: ITokenResult) => {});
   const provider = new Saml2PureProvider({
     idpSsoUrl: 'https://idp/sso',
@@ -86,6 +92,50 @@ describe('Saml2PureProvider seeded with stored cookies', () => {
     expect(t.request.headers).toEqual({});
     expect(authorize).not.toHaveBeenCalled();
     expect(cookieProvider).not.toHaveBeenCalled();
+  });
+
+  it('a 401 on the stored cookies before expiresAt: rejected() logs in once and the new cookies are presented', async () => {
+    const { provider, authorize } = samlPure({
+      accessToken: STORED_COOKIES,
+      expiresAt: Date.now() + HOUR,
+    });
+    const first = recordingTargets();
+    await provider.authorize(first.requestTarget);
+    expect(first.request.cookies).toEqual([STORED_COOKIES]);
+
+    await expect(provider.rejected(R401)).resolves.toEqual({ ok: true });
+    expect(authorize).toHaveBeenCalledTimes(1);
+    const second = recordingTargets();
+    await provider.authorize(second.requestTarget);
+    expect(second.request.cookies).toEqual([NEW_COOKIES]);
+  });
+
+  it('a 401 on the stored cookies, and a login that yields them again: rejected() refuses', async () => {
+    const { provider } = samlPure(
+      { accessToken: STORED_COOKIES, expiresAt: Date.now() + HOUR },
+      STORED_COOKIES,
+    );
+    await provider.authorize(recordingTargets().requestTarget);
+    const outcome = await provider.rejected(R401);
+    expect(outcome.ok).toBe(false);
+    expect(outcome.ok === false && outcome.refusal.reason).toBe(
+      'the renewal returned the credential that was refused',
+    );
+  });
+
+  it.each([
+    ['Infinity', Number.POSITIVE_INFINITY],
+    ['NaN', Number.NaN],
+    ['a numeric string', '9999999999999' as unknown as number],
+  ])('expiresAt as %s is not an expiry: it logs in', async (_l, expiresAt) => {
+    const { provider, authorize } = samlPure({
+      accessToken: STORED_COOKIES,
+      expiresAt,
+    });
+    const t = recordingTargets();
+    await provider.authorize(t.requestTarget);
+    expect(authorize).toHaveBeenCalledTimes(1);
+    expect(t.request.cookies).toEqual([NEW_COOKIES]);
   });
 
   it('past expiresAt: logs in once through the strategy and presents the new cookies', async () => {
@@ -319,6 +369,29 @@ describe.each(jwtProviders)('%s seeded with a stored token', (_name, make) => {
     expect(tokens.expiresAt).toBe(Math.floor(exp / 1000) * 1000);
     expect(login).not.toHaveBeenCalled();
   });
+
+  it('a JWT whose exp is 0 is expired by it, whatever expiresAt says', async () => {
+    const { provider, login } = seeded(make, {
+      accessToken: jwt(0),
+      expiresAt: Date.now() + HOUR,
+    });
+    const tokens = await provider.getTokens();
+    expect(tokens.authorizationToken).toBe(RENEWED);
+    expect(login).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    ['Infinity', Number.POSITIVE_INFINITY],
+    ['NaN', Number.NaN],
+    ['a numeric string', '9999999999999' as unknown as number],
+  ])(
+    'expiresAt as %s is not an expiry: the opaque token is renewed',
+    async (_l, expiresAt) => {
+      const { provider } = seeded(make, { accessToken: OPAQUE, expiresAt });
+      const tokens = await provider.getTokens();
+      expect(tokens.authorizationToken).toBe(RENEWED);
+    },
+  );
 
   it('a token with neither exp nor expiresAt is renewed', async () => {
     const { provider, login } = seeded(make, { accessToken: OPAQUE });

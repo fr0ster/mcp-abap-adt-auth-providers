@@ -34,6 +34,19 @@ export interface TokenProviderHooks {
 }
 
 /**
+ * A stored `expiresAt` as an expiry: a finite, non-negative number of epoch
+ * milliseconds. Anything else — `Infinity`, `NaN`, a string from an unparsed
+ * file — states no expiry, so the stored credential is taken as expired.
+ */
+export function storedExpiry(expiresAt: unknown): number | undefined {
+  return typeof expiresAt === 'number' &&
+    Number.isFinite(expiresAt) &&
+    expiresAt >= 0
+    ? expiresAt
+    : undefined;
+}
+
+/**
  * Abstract base class for token providers
  *
  * Provides common functionality for token lifecycle management:
@@ -334,8 +347,9 @@ export abstract class BaseTokenProvider
       const decoded = Buffer.from(padded, 'base64').toString('utf8');
       const claims = JSON.parse(decoded);
 
-      if (claims.exp) {
-        // Convert to milliseconds
+      // A numeric exp is the token's own expiry, 0 included; anything else
+      // is no expiry stated.
+      if (typeof claims.exp === 'number' && Number.isFinite(claims.exp)) {
         return claims.exp * 1000;
       }
     } catch {
@@ -354,7 +368,7 @@ export abstract class BaseTokenProvider
     token: string,
     expiresAt?: number,
   ): number | undefined {
-    return this.parseExpirationFromJWT(token) ?? expiresAt;
+    return this.parseExpirationFromJWT(token) ?? storedExpiry(expiresAt);
   }
 
   /**

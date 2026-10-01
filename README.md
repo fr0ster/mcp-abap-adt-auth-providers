@@ -1546,8 +1546,13 @@ one logs in at the first `getTokens()`.
 
 - **When a seed expires.** A JWT's own `exp` claim decides, and wins over an
   `expiresAt` passed beside it. `expiresAt` (epoch ms) is used only when the
-  token has no `exp` — an opaque token, or `Saml2PureProvider`'s cookies.
-  With neither, the seed counts as expired.
+  token has no `exp` — an opaque token, or `Saml2PureProvider`'s cookies — and
+  only when it is a finite, non-negative number; `Infinity`, `NaN` or a string
+  from an unparsed file states no expiry. A numeric `exp`, `0` included, is
+  the token's own. With neither, the seed counts as expired.
+- **Revoked before it expires.** A `401` on the seed is the credential's
+  (`rejected()`): the provider renews once, and a renewal that yields the seed
+  again is refused — *the renewal returned the credential that was refused*.
 - **Until then** `getTokens()` and `authorize()` answer the seed, less the
   usual one-minute buffer; no request is made and `onTokens` is not called —
   it reports only new tokens.
