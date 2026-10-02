@@ -60,7 +60,8 @@ export class OidcPasswordProvider extends BaseTokenProvider {
       throw new Error('OIDC issuerUrl is required when discovery is used');
     }
     let discovery: Awaited<ReturnType<typeof discoverOidc>> | null = null;
-    if (this.config.tokenEndpoint === undefined) {
+    // A token endpoint not given ('' included) comes from discovery.
+    if (!this.config.tokenEndpoint) {
       if (!this.config.issuerUrl) {
         throw new Error('OIDC issuerUrl is required when discovery is used');
       }

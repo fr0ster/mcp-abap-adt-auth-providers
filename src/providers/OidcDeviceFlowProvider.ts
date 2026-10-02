@@ -79,16 +79,11 @@ export class OidcDeviceFlowProvider extends BaseTokenProvider {
   }
 
   protected async performLogin(): Promise<ITokenResult> {
-    if (
-      !this.config.deviceAuthorizationEndpoint &&
-      !this.config.tokenEndpoint &&
-      !this.config.issuerUrl
-    ) {
-      throw new Error('OIDC issuerUrl is required when discovery is used');
-    }
+    // Each endpoint not given ('' included) comes from discovery: one given
+    // beside one missing still needs the other.
     let discovery: Awaited<ReturnType<typeof discoverOidc>> | null = null;
     if (
-      !this.config.deviceAuthorizationEndpoint &&
+      !this.config.deviceAuthorizationEndpoint ||
       !this.config.tokenEndpoint
     ) {
       if (!this.config.issuerUrl) {
