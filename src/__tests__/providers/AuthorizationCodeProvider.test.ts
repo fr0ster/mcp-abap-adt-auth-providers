@@ -373,14 +373,20 @@ describe('AuthorizationCodeProvider', () => {
       const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'auth-session-'));
       fs.copyFileSync(sessionFile, path.join(dir, `${name}.env`));
       try {
-        // auth-stores 3: the file holds the means (client) and the secret
-        // (token) side by side; each store answers its own.
-        const auth = await new EnvDestinationStore(dir).getAuthorizationConfig(
-          name,
-        );
-        const connection = await new AbapSessionStore(dir).getConnectionConfig(
-          name,
-        );
+        // auth-stores 3: the file holds the means (the client) and the secret
+        // (token, refresh token) side by side; each store answers its own —
+        // the key store never the refresh token, the session store never the
+        // client.
+        const client = await new EnvDestinationStore(
+          dir,
+        ).getAuthorizationConfig(name);
+        const secret = await new AbapSessionStore(dir).loadSession(name);
+        const auth = client
+          ? { ...client, refreshToken: secret?.refreshToken }
+          : null;
+        const connection = {
+          authorizationToken: secret?.authorizationToken,
+        };
         if (!auth?.uaaUrl || !auth.uaaClientId || !auth.uaaClientSecret) {
           console.warn(
             `⚠️  Skipping session-file test - ${sessionFile} lacks the UAA URL, client ID or secret`,
