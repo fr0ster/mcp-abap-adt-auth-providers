@@ -10,6 +10,7 @@ import type {
   OAuth2GrantType,
 } from '@mcp-abap-adt/interfaces-auth';
 import { AUTH_TYPE_CLIENT_CREDENTIALS } from '@mcp-abap-adt/interfaces-auth';
+import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
 import { getTokenWithClientCredentials } from '../auth/clientCredentialsAuth';
 import { RefreshError } from '../errors/TokenProviderErrors';
 import {
@@ -21,6 +22,7 @@ export interface ClientCredentialsProviderConfig extends TokenProviderHooks {
   uaaUrl: string;
   clientId: string;
   clientSecret: string;
+  logger?: ILogger;
 }
 
 /**
@@ -35,6 +37,7 @@ export class ClientCredentialsProvider extends BaseTokenProvider {
   constructor(config: ClientCredentialsProviderConfig) {
     super(config);
     this.config = config;
+    this.logger = config.logger;
     const missingFields: string[] = [];
     if (!config.uaaUrl) {
       missingFields.push('uaaUrl');

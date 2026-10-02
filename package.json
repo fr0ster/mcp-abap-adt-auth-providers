@@ -1,6 +1,6 @@
 {
   "name": "@mcp-abap-adt/auth-providers",
-  "version": "5.1.0",
+  "version": "5.2.0",
   "description": "Every IAuthProvider for SAP ABAP ADT: the credentials a process delegates to, and the token providers behind them",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",

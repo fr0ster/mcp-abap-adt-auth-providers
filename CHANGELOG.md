@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [5.2.0] - 2026-10-02
+
+### Added
+
+- **`ClientCredentialsProvider` takes a `logger`**, as every other token
+  provider does. Its config had none, so the token lifecycle the base class
+  logs (a cached token answered, a new one obtained, a failed `onTokens`) went
+  nowhere — a consumer passing its logger, such as `@mcp-abap-adt/auth-broker`,
+  saw nothing for its `client_credentials` destinations.
+
 ## [5.1.0] - 2026-10-01
 
 A consumer that keeps a provider's credential between runs can now hand every
