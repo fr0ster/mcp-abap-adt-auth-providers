@@ -18,6 +18,7 @@ import { jest } from '@jest/globals';
 import {
   AbapServiceKeyStore,
   AbapSessionStore,
+  EnvDestinationStore,
 } from '@mcp-abap-adt/auth-stores';
 import type { IAuthorizationStrategy } from '@mcp-abap-adt/interfaces-auth';
 import { AUTH_TYPE_AUTHORIZATION_CODE } from '@mcp-abap-adt/interfaces-auth';
@@ -372,9 +373,14 @@ describe('AuthorizationCodeProvider', () => {
       const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'auth-session-'));
       fs.copyFileSync(sessionFile, path.join(dir, `${name}.env`));
       try {
-        const store = new AbapSessionStore(dir);
-        const auth = await store.getAuthorizationConfig(name);
-        const connection = await store.getConnectionConfig(name);
+        // auth-stores 3: the file holds the means (client) and the secret
+        // (token) side by side; each store answers its own.
+        const auth = await new EnvDestinationStore(dir).getAuthorizationConfig(
+          name,
+        );
+        const connection = await new AbapSessionStore(dir).getConnectionConfig(
+          name,
+        );
         if (!auth?.uaaUrl || !auth.uaaClientId || !auth.uaaClientSecret) {
           console.warn(
             `⚠️  Skipping session-file test - ${sessionFile} lacks the UAA URL, client ID or secret`,
