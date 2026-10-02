@@ -631,6 +631,96 @@ describe('SSO Providers', () => {
     expect(mockDiscoverOidc).not.toHaveBeenCalled();
   });
 
+  describe('an empty endpoint is none, at login and at refresh alike', () => {
+    const discovered = {
+      authorization_endpoint: 'https://issuer/authorize',
+      device_authorization_endpoint: 'https://issuer/device',
+      token_endpoint: 'https://issuer/token',
+    };
+    const renewed = { accessToken: 'jwt.renewed', expiresIn: 600 };
+
+    it('OidcPasswordProvider refreshes at the discovered endpoint', async () => {
+      mockDiscoverOidc.mockResolvedValue(discovered);
+      mockPasswordGrant.mockResolvedValue({
+        accessToken: 'jwt.password.token',
+        refreshToken: 'refresh',
+        expiresIn: 600,
+      });
+      mockRefresh.mockResolvedValue(renewed);
+      const provider = new OidcPasswordProvider({
+        issuerUrl: 'https://issuer',
+        clientId: 'client',
+        username: 'user',
+        password: 'pass',
+        tokenEndpoint: '',
+      });
+
+      await provider.getTokens();
+      await provider.refreshTokens();
+
+      expect(mockRefresh).toHaveBeenCalledTimes(1);
+      expect(mockRefresh.mock.calls[0][0]).toBe('https://issuer/token');
+      expect(mockPasswordGrant).toHaveBeenCalledTimes(1);
+    });
+
+    it('OidcDeviceFlowProvider refreshes at the discovered endpoint — no second device prompt', async () => {
+      mockDiscoverOidc.mockResolvedValue(discovered);
+      mockInitiateDevice.mockResolvedValue({
+        deviceCode: 'dev-code',
+        userCode: 'user-code',
+        verificationUri: 'https://issuer/verify',
+        interval: 1,
+      });
+      mockPollDevice.mockResolvedValue({
+        accessToken: 'jwt.device.token',
+        refreshToken: 'refresh',
+        expiresIn: 1200,
+      });
+      mockRefresh.mockResolvedValue(renewed);
+      const provider = new OidcDeviceFlowProvider({
+        issuerUrl: 'https://issuer',
+        clientId: 'client',
+        tokenEndpoint: '',
+        deviceAuthorizationEndpoint: '',
+        presenter: consoleDeviceCodePresenter(),
+      });
+
+      await provider.getTokens();
+      await provider.refreshTokens();
+
+      expect(mockRefresh).toHaveBeenCalledTimes(1);
+      expect(mockRefresh.mock.calls[0][0]).toBe('https://issuer/token');
+      expect(mockInitiateDevice).toHaveBeenCalledTimes(1);
+    });
+
+    it('OidcBrowserProvider logs in and refreshes at the discovered endpoints', async () => {
+      mockDiscoverOidc.mockResolvedValue(discovered);
+      mockExchangeCode.mockResolvedValue({
+        accessToken: 'jwt.access.token',
+        refreshToken: 'refresh',
+        expiresIn: 3600,
+      });
+      mockRefresh.mockResolvedValue(renewed);
+      const provider = new OidcBrowserProvider({
+        issuerUrl: 'https://issuer',
+        clientId: 'client',
+        clientSecret: 'secret',
+        authorizationEndpoint: '',
+        tokenEndpoint: '',
+        authorization: asOidcResult(
+          externalCodeStrategy({ provide: async () => 'auth-code' }),
+        ),
+      });
+
+      await provider.getTokens();
+      await provider.refreshTokens();
+
+      expect(mockExchangeCode.mock.calls[0][0]).toBe('https://issuer/token');
+      expect(mockRefresh).toHaveBeenCalledTimes(1);
+      expect(mockRefresh.mock.calls[0][0]).toBe('https://issuer/token');
+    });
+  });
+
   it("OidcPasswordProvider takes '' as no token endpoint and discovers it", async () => {
     mockDiscoverOidc.mockResolvedValue({
       token_endpoint: 'https://issuer/token',

@@ -16,8 +16,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   it skipped discovery and failed at login for want of the other; discovery
   ran only when both were missing. `OidcBrowserProvider` already worked this
   way.
-- **`OidcPasswordProvider` and `OidcTokenExchangeProvider` take an empty
-  `tokenEndpoint` as none** and discover it, instead of failing at login.
+- **An empty endpoint is none, at login and at refresh, in every OIDC
+  provider.** `OidcPasswordProvider` and `OidcTokenExchangeProvider` took
+  `tokenEndpoint: ''` as given and failed at login; `OidcPasswordProvider` and
+  `OidcDeviceFlowProvider` refreshed through a gate that still took it as
+  given, skipped discovery, dropped the refresh token and logged in again —
+  for the device flow, a second prompt to the user; `OidcBrowserProvider`
+  took `''` as given for both its endpoints. All of them now discover an
+  endpoint given as `''`, exactly as one not given.
 
 ### Changed
 

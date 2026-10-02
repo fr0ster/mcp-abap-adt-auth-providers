@@ -102,7 +102,7 @@ export class OidcBrowserProvider extends BaseTokenProvider {
       logger: this.logger,
       buildAuthorizationUrl: async (redirectUri: string): Promise<string> => {
         const endpoint =
-          this.config.authorizationEndpoint ??
+          this.config.authorizationEndpoint ||
           (await discover()).authorization_endpoint;
         if (!endpoint) {
           throw new Error(
@@ -125,7 +125,7 @@ export class OidcBrowserProvider extends BaseTokenProvider {
     const outcome = await strategy.authorize(request);
 
     const tokenEndpoint =
-      this.config.tokenEndpoint ?? (await discover()).token_endpoint;
+      this.config.tokenEndpoint || (await discover()).token_endpoint;
     if (!tokenEndpoint) {
       throw new Error(
         'OIDC token endpoint is required (tokenEndpoint or discovery)',
@@ -157,17 +157,17 @@ export class OidcBrowserProvider extends BaseTokenProvider {
     }
 
     let discovery: Awaited<ReturnType<typeof discoverOidc>> | null = null;
-    if (this.config.tokenEndpoint === undefined) {
+    if (!this.config.tokenEndpoint) {
       if (!this.config.issuerUrl) {
         throw new Error('OIDC issuerUrl is required when discovery is used');
       }
       discovery = await discoverOidc(this.config.issuerUrl, this.logger);
     }
-    // `??`, matching the `=== undefined` gate above and the login path: `||`
-    // treated a configured-but-empty endpoint as absent while the gate had
-    // already decided it was present, so the two disagreed about the same value.
+    // An endpoint not given ('' included) is discovered — the same rule as the
+    // login path above and as every OIDC provider, at login and at refresh, so
+    // no two paths disagree about the same value.
     const tokenEndpoint =
-      this.config.tokenEndpoint ?? discovery?.token_endpoint;
+      this.config.tokenEndpoint || discovery?.token_endpoint;
     if (!tokenEndpoint) {
       throw new Error(
         'OIDC token endpoint is required (tokenEndpoint or discovery)',
