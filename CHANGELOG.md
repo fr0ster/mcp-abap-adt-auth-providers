@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [5.2.1] - 2026-10-02
+
+### Fixed
+
+- **`OidcDeviceFlowProvider` discovers each endpoint it was not given.** With
+  `issuerUrl` and only one of `deviceAuthorizationEndpoint` / `tokenEndpoint`,
+  it skipped discovery and failed at login for want of the other; discovery
+  ran only when both were missing. `OidcBrowserProvider` already worked this
+  way.
+- **An empty endpoint is none, at login and at refresh, in every OIDC
+  provider.** `OidcPasswordProvider` and `OidcTokenExchangeProvider` took
+  `tokenEndpoint: ''` as given and failed at login; `OidcPasswordProvider` and
+  `OidcDeviceFlowProvider` refreshed through a gate that still took it as
+  given, skipped discovery, dropped the refresh token and logged in again —
+  for the device flow, a second prompt to the user; `OidcBrowserProvider`
+  took `''` as given for both its endpoints. All of them now discover an
+  endpoint given as `''`, exactly as one not given.
+
 ### Changed
 
 - **Dev dependency `@mcp-abap-adt/auth-stores` `^3.1.0`** (was `^1.2.1`), so
