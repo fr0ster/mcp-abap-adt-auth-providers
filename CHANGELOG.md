@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Dev dependency `@mcp-abap-adt/auth-stores` `^3.1.0`** (was `^1.2.1`), so
+  the dev tree holds one `interfaces-auth-sap`. The session-file integration
+  cases read a session file the 3.x way: the client through
+  `EnvDestinationStore`, the token through `AbapSessionStore` — a 3.x session
+  store answers the secret only. No change to the package.
+
 ## [5.2.0] - 2026-10-02
 
 ### Added
