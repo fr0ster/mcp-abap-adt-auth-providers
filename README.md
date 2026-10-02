@@ -1359,6 +1359,7 @@ const provider = new ClientCredentialsProvider({
   uaaUrl: 'https://...authentication...hana.ondemand.com',
   clientId: '...',
   clientSecret: '...',
+  logger, // optional ILogger, as every token provider takes (since 5.2.0)
 });
 
 const result = await provider.getTokens();
