@@ -10,10 +10,11 @@ import { ClientCredentialsProvider } from '../../providers/ClientCredentialsProv
 
 const recording = () => {
   const lines: string[] = [];
+  // Every argument is kept: the base class passes token details as meta.
   const at =
     (level: string) =>
-    (message: string): void => {
-      lines.push(`${level} ${message}`);
+    (message: string, meta?: unknown): void => {
+      lines.push(`${level} ${message} ${JSON.stringify(meta ?? null)}`);
     };
   const logger: ILogger = {
     debug: jest.fn(at('debug')),
