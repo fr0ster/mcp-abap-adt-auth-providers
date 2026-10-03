@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { describe, expect, it, jest } from '@jest/globals';
 import type { ITokenRefresher } from '@mcp-abap-adt/interfaces-auth';
 import type { ISapConfig } from '@mcp-abap-adt/interfaces-auth-sap';
@@ -10,6 +12,8 @@ import { ValidationError } from '../../errors/TokenProviderErrors';
 import { recordingTargets } from '../helpers/targets';
 
 const refusal = { at: 'request' as const, status: 401, error: {} };
+const fixture = (name: string) =>
+  readFileSync(join(__dirname, '..', 'fixtures', 'certificates', name));
 const broken = () => recordingTargets({ throws: true });
 
 describe('BasicAuthProvider', () => {
@@ -150,14 +154,16 @@ describe('CertificateAuthProvider', () => {
   const config = { url: 'https://h', authType: 'certificate' } as ISapConfig;
 
   it('prepare loads, establish hands the material to the logon', async () => {
+    const cert = fixture('client.crt');
+    const key = fixture('client.key');
     const p = new CertificateAuthProvider(
-      { load: async () => ({ cert: 'C', key: 'K' }) },
+      { load: async () => ({ cert, key }) },
       config,
     );
     await expect(p.prepare()).resolves.toEqual({ ok: true });
     const t = recordingTargets();
     await expect(p.establish(t.logonTarget)).resolves.toEqual({ ok: true });
-    expect(t.logon.tls).toEqual([{ cert: 'C', key: 'K' }]);
+    expect(t.logon.tls).toEqual([{ cert, key }]);
   });
 
   it('a loader ValidationError gives the fixed wording with known field names; a foreign one gives its code only', async () => {
@@ -201,7 +207,10 @@ describe('CertificateAuthProvider', () => {
   it('returns the target Oops when the wire has no TLS; a throwing target is an Oops', async () => {
     const p = new CertificateAuthProvider(
       {
-        load: async () => ({ pfx: Buffer.from('x'), passphrase: 'SECRET-PP' }),
+        load: async () => ({
+          pfx: fixture('client.pfx'),
+          passphrase: 'test-passphrase',
+        }),
       },
       config,
     );
@@ -214,7 +223,7 @@ describe('CertificateAuthProvider', () => {
     });
     const outcome = await p.establish(broken().logonTarget);
     expect(outcome.ok).toBe(false);
-    expect(JSON.stringify(outcome)).not.toMatch(/SECRET-PP/);
+    expect(JSON.stringify(outcome)).not.toMatch(/test-passphrase/);
   });
 
   it('establish before prepare is an Oops, not a throw', async () => {

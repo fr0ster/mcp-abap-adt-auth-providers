@@ -1,3 +1,4 @@
+import { createSecureContext } from 'node:tls';
 import type {
   AuthOutcome,
   IAuthProvider,
@@ -24,9 +25,25 @@ export class CertificateAuthProvider implements IAuthProvider {
     private readonly config: ISapConfig,
   ) {}
 
+  /**
+   * Loads the material and proves it usable here, not at the wire: a TLS
+   * context is built from it, so a wrong passphrase, a key that is not the
+   * certificate's, or a damaged file is refused now, in fixed words — the
+   * error's own text, which can name what it read, never reaches a refusal.
+   */
   async prepare(): Promise<AuthOutcome> {
     return safely('loading the certificate', async () => {
-      this.material = await this.loader.load(this.config);
+      this.material = null;
+      const material = await this.loader.load(this.config);
+      try {
+        createSecureContext(material);
+      } catch {
+        return oops(
+          'the client certificate could not be used',
+          'check the certificate and key files and the passphrase',
+        );
+      }
+      this.material = material;
       return OK;
     });
   }
