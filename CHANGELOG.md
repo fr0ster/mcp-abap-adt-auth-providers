@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [5.2.2] - 2026-10-03
+
 ### Fixed
 
 - **A named browser opens on every platform.** `browser: 'chrome'` (and
