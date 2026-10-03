@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **A named browser opens on every platform.** `browser: 'chrome'` (and
+  `'edge'`, `'firefox'`) reached `open` as a bare executable name; Chrome is no
+  `chrome` on Linux, so the launch failed with ENOENT and the login never
+  opened (measured 2026-10-03). The name now goes through `open`'s `apps`, the
+  per-platform names of each browser (`google-chrome`, `google-chrome-stable`,
+  `chromium`, … on Linux).
+
 ## [5.2.1] - 2026-10-02
 
 ### Fixed
