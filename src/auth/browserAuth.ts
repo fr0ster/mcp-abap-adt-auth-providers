@@ -203,9 +203,21 @@ export async function launchBrowser(
 
   type OpenFn = (url: string, opts?: unknown) => Promise<unknown>;
   let open: OpenFn | null = null;
+  // `open`'s per-platform names for each common browser. An `app.name` is an
+  // executable name, and Chrome is no `chrome` on Linux (`google-chrome`,
+  // `google-chrome-stable`, …): handing `open` the bare name failed with ENOENT.
+  let appNames: Record<string, string | readonly string[]> = {};
   try {
     const openModule = await import('open');
     open = openModule.default as unknown as OpenFn;
+    const apps = (openModule as { apps?: Record<string, string | string[]> })
+      .apps;
+    if (apps)
+      appNames = {
+        chrome: apps.chrome,
+        msedge: apps.edge,
+        firefox: apps.firefox,
+      };
   } catch {
     open = null;
   }
@@ -254,6 +266,9 @@ export async function launchBrowser(
     return;
   }
 
-  if (browserApp) await open(authorizationUrl, { app: { name: browserApp } });
+  if (browserApp)
+    await open(authorizationUrl, {
+      app: { name: appNames[browserApp] ?? browserApp },
+    });
   else await open(authorizationUrl);
 }
