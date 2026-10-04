@@ -43,6 +43,17 @@ export function oops(reason: string, hint?: string): AuthOutcome {
     : { ok: false, refusal: { reason, hint } };
 }
 
+/**
+ * The fixed words for a token bound to a certificate this provider does not
+ * present (spec §4) — none pinned, another one, or a binding it cannot read.
+ * No thumbprint appears in them.
+ */
+export const TOKEN_BOUND_ELSEWHERE = {
+  reason:
+    'the token is bound to a client certificate this provider does not present',
+  hint: 'configure the certificate the token was issued for, or obtain a new token',
+} as const;
+
 /** Every config property name this package's providers declare. */
 export const KNOWN_CONFIG_FIELDS: ReadonlySet<string> = new Set([
   'accessToken',

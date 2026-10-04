@@ -25,8 +25,15 @@ import {
   assertCertificateMaterial,
   certificateThumbprint,
 } from '../auth/certificateMaterial';
-import { OK, oops, ownLabel, safely } from '../auth/refusal';
+import {
+  OK,
+  oops,
+  ownLabel,
+  safely,
+  TOKEN_BOUND_ELSEWHERE,
+} from '../auth/refusal';
 import { readRejection } from '../auth/rejection';
+import { readBinding } from '../auth/tokenBinding';
 import type { TokenRequestAuth } from '../auth/tokenRequest';
 import { CertificateMaterialError } from '../errors/CertificateMaterialError';
 import { ValidationError } from '../errors/TokenProviderErrors';
@@ -546,19 +553,67 @@ export abstract class BaseTokenProvider
     });
   }
 
-  /** A token is presented per request; a logon needs nothing from it. */
-  async establish(_logon: ILogonTarget): Promise<AuthOutcome> {
-    return OK;
+  /**
+   * The token is presented per request; the logon carries the pinned
+   * certificate when the token may need it (spec §4's table). A token bound
+   * to a certificate this provider does not present is refused here, before
+   * any logon is made for it.
+   */
+  async establish(logon: ILogonTarget): Promise<AuthOutcome> {
+    return safely(this.obtaining, async () => {
+      const { result, pinned } = await this.tokenToPresent();
+      const binding = readBinding(result.authorizationToken);
+      if (!this.presents(binding, pinned)) return boundElsewhere();
+      if (!pinned) return OK;
+      const presented = await logon.tlsMaterial(pinned.material);
+      // Unbound: the Bearer carries the token, the certificate is a courtesy.
+      // Bound or unknown: the token is not sent on a connection without it.
+      return binding.state === 'unbound' ? OK : presented;
+    });
   }
 
   /** Per attempt: getTokens() renews an expired token here. */
   async authorize(request: IRequestTarget): Promise<AuthOutcome> {
     return safely(this.obtaining, async () => {
-      const result = await this.getTokens();
+      const { result, pinned } = await this.tokenToPresent();
+      if (!this.presents(readBinding(result.authorizationToken), pinned)) {
+        return boundElsewhere();
+      }
       this.applyToken(request, result);
       this.presented = result.authorizationToken;
       return OK;
     });
+  }
+
+  /**
+   * The token this provider would present, and the certificate pinned before
+   * it — pinned here too, so a token served from cache (seeded, restored)
+   * is checked against the certificate like an obtained one.
+   */
+  private async tokenToPresent(): Promise<{
+    result: ITokenResult;
+    pinned: PinnedCertificate | undefined;
+  }> {
+    const pinned = await this.pin();
+    const result = await this.getTokens();
+    return { result, pinned };
+  }
+
+  /**
+   * False only for a bound token whose thumbprint is not the pinned one —
+   * none pinned, another one, or a binding the token states unreadably.
+   * Unbound and unknown tokens may be presented (spec §4).
+   */
+  private presents(
+    binding: ReturnType<typeof readBinding>,
+    pinned: PinnedCertificate | undefined,
+  ): boolean {
+    if (binding.state !== 'bound') return true;
+    return (
+      pinned !== undefined &&
+      binding.thumbprint !== undefined &&
+      binding.thumbprint === pinned.thumbprint
+    );
   }
 
   /**
@@ -599,4 +654,9 @@ export abstract class BaseTokenProvider
   protected applyToken(request: IRequestTarget, result: ITokenResult): void {
     request.header('Authorization', `Bearer ${result.authorizationToken}`);
   }
+}
+
+/** The refusal for a token bound to a certificate this provider does not present. */
+function boundElsewhere(): AuthOutcome {
+  return oops(TOKEN_BOUND_ELSEWHERE.reason, TOKEN_BOUND_ELSEWHERE.hint);
 }
