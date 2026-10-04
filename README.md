@@ -650,9 +650,9 @@ const user = new OidcPasswordProvider({
   | Code | Reason (*… failed: …*) | Hint |
   |---|---|---|
   | `UNABLE_TO_VERIFY_LEAF_SIGNATURE`, `SELF_SIGNED_CERT_IN_CHAIN`, `DEPTH_ZERO_SELF_SIGNED_CERT`, `UNABLE_TO_GET_ISSUER_CERT_LOCALLY` | the server's certificate is not trusted (`<code>`) | if the server uses a private CA, name its certificate in NODE_EXTRA_CA_CERTS |
-  | `CERT_HAS_EXPIRED` | the server's certificate has expired (`<code>`) | the server must renew its certificate; check also this machine’s clock |
-  | `ERR_TLS_CERT_ALTNAME_INVALID` | the host name is not in the server's certificate (`<code>`) | use the host name the server’s certificate is issued for |
-  | `ERR_SSL_TLSV13_ALERT_CERTIFICATE_REQUIRED`, `ERR_SSL_TLSV1_ALERT_UNKNOWN_CA`, and `ERR_SSL_SSL/TLS_ALERT_…` / `ERR_SSL_SSLV3_ALERT_…` for `BAD_CERTIFICATE`, `CERTIFICATE_UNKNOWN`, `CERTIFICATE_EXPIRED`, `CERTIFICATE_REVOKED`, `UNSUPPORTED_CERTIFICATE` | the server refused the client certificate (`<code>`) | check that the server trusts the certificate’s issuer and that the certificate is valid and not revoked |
+  | `CERT_HAS_EXPIRED` | the server's certificate has expired (`<code>`) | the server must renew its certificate; check also this machine's clock |
+  | `ERR_TLS_CERT_ALTNAME_INVALID` | the host name is not in the server's certificate (`<code>`) | use the host name the server's certificate is issued for |
+  | `ERR_SSL_TLSV13_ALERT_CERTIFICATE_REQUIRED`, `ERR_SSL_TLSV1_ALERT_UNKNOWN_CA`, and `ERR_SSL_SSL/TLS_ALERT_…` / `ERR_SSL_SSLV3_ALERT_…` for `BAD_CERTIFICATE`, `CERTIFICATE_UNKNOWN`, `CERTIFICATE_EXPIRED`, `CERTIFICATE_REVOKED`, `UNSUPPORTED_CERTIFICATE` | the server refused the client certificate (`<code>`) | check that the server trusts the certificate's issuer and that the certificate is valid and not revoked |
 
   The last row is the alert a server sends when it refuses the client
   certificate in the handshake. Current OpenSSL — 3.5, bundled with Node 22
@@ -829,7 +829,7 @@ client is outside the ABAP system's `xsappname`. See
 | a strategy's result that cannot be sent | the client authentication returned a request that cannot be sent | check the client authentication strategy |
 | a bound token held, and no certificate pinned | the token is bound to a client certificate this provider does not present | give the provider a clientAuthentication that presents the certificate the token was issued for |
 | a token renewed because it was bound to another certificate, and the new one is bound elsewhere too | the new token is bound to a client certificate this provider does not present | the authorization server bound the new token to another certificate: check the certificate registered for this client |
-| the server refused the client certificate in the handshake | `<what>` failed: the server refused the client certificate (`<code>`) | check that the server trusts the certificate’s issuer and that the certificate is valid and not revoked |
+| the server refused the client certificate in the handshake | `<what>` failed: the server refused the client certificate (`<code>`) | check that the server trusts the certificate's issuer and that the certificate is valid and not revoked |
 
 ### SSO Providers
 

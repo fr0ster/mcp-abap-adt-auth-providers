@@ -434,7 +434,7 @@ describe('a TLS failure, by code', () => {
       refusal: {
         reason:
           "the token request failed: the server's certificate has expired (CERT_HAS_EXPIRED)",
-        hint: 'the server must renew its certificate; check also this machine’s clock',
+        hint: "the server must renew its certificate; check also this machine's clock",
       },
     });
   });
@@ -452,7 +452,7 @@ describe('a TLS failure, by code', () => {
       refusal: {
         reason:
           "the token request failed: the host name is not in the server's certificate (ERR_TLS_CERT_ALTNAME_INVALID)",
-        hint: 'use the host name the server’s certificate is issued for',
+        hint: "use the host name the server's certificate is issued for",
       },
     });
   });
@@ -485,7 +485,7 @@ describe('a TLS failure, by code', () => {
       ok: false,
       refusal: {
         reason: `the token request failed: the server refused the client certificate (${code})`,
-        hint: 'check that the server trusts the certificate’s issuer and that the certificate is valid and not revoked',
+        hint: "check that the server trusts the certificate's issuer and that the certificate is valid and not revoked",
       },
     });
   });
@@ -570,7 +570,7 @@ describe('a TLS failure, by code', () => {
         refusal: {
           reason:
             'x failed: the server refused the client certificate (ERR_SSL_TLSV1_ALERT_UNKNOWN_CA)',
-          hint: 'check that the server trusts the certificate’s issuer and that the certificate is valid and not revoked',
+          hint: "check that the server trusts the certificate's issuer and that the certificate is valid and not revoked",
         },
       });
     }

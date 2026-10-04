@@ -160,7 +160,7 @@ const UNTRUSTED_SERVER: TlsWords = {
  */
 const REFUSED_CLIENT_CERTIFICATE: TlsWords = {
   says: 'the server refused the client certificate',
-  hint: 'check that the server trusts the certificate’s issuer and that the certificate is valid and not revoked',
+  hint: "check that the server trusts the certificate's issuer and that the certificate is valid and not revoked",
 };
 
 const CLIENT_CERTIFICATE_ALERTS = [
@@ -187,14 +187,14 @@ const TLS_CODES: ReadonlyMap<string, TlsWords> = new Map<string, TlsWords>([
     'CERT_HAS_EXPIRED',
     {
       says: "the server's certificate has expired",
-      hint: 'the server must renew its certificate; check also this machine’s clock',
+      hint: "the server must renew its certificate; check also this machine's clock",
     },
   ],
   [
     'ERR_TLS_CERT_ALTNAME_INVALID',
     {
       says: "the host name is not in the server's certificate",
-      hint: 'use the host name the server’s certificate is issued for',
+      hint: "use the host name the server's certificate is issued for",
     },
   ],
   ['ERR_SSL_TLSV13_ALERT_CERTIFICATE_REQUIRED', REFUSED_CLIENT_CERTIFICATE],
