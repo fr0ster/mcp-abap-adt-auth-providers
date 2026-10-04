@@ -12,9 +12,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 A token provider's client can authenticate with a client certificate or a
 signed assertion instead of a secret, and a token bound to that certificate is
 presented only together with it. A consumer that passes no strategy sends the
-same requests as before; two things change for it too, listed under *Changed*
-(a seeded token carrying `cnf`, and a thrown token-request error that no
-longer carries the request).
+same requests as before; three things change for it too, listed under
+*Changed* (a seeded token carrying `cnf`, a token request that no longer
+follows a redirect, and a thrown token-request error that no longer carries
+the request).
 See *Client authentication* in the README.
 
 Requires `@mcp-abap-adt/interfaces-auth` `^3.1.0` (was `^3.0.0`), which adds
@@ -47,7 +48,7 @@ and the error codes `CERTIFICATE_MATERIAL_ERROR` and
   `clientSecret` was required, a strategy satisfies it. What a strategy
   returns is checked before anything is sent (strings only, no line break in
   a header, nothing replacing the request's own parameters or headers, an
-  absolute `https:` endpoint), and the strategy path follows no redirect.
+  absolute `https:` endpoint), and no token request follows a redirect.
 - **One certificate per provider, pinned.** A provider reads its strategy's
   `tlsMaterial()` once, before its first request or logon, checks it, takes
   the `x5t#S256` thumbprint of its leaf certificate, and keeps a copy for its
@@ -138,6 +139,11 @@ and the error codes `CERTIFICATE_MATERIAL_ERROR` and
   expired material) when the cached token is bound and the strategy presents
   a certificate: it pins the certificate to compare thumbprints, where it used
   to return the cached token.
+- **A token request without a strategy no longer follows a redirect**: a
+  `3xx` from the token or device endpoint fails the request (an `AxiosError`
+  with the `3xx` status) where axios used to follow it. An authorization
+  server reached through a redirecting URL must be configured with the URL it
+  redirects to. See *Security*.
 - **A thrown token-request error carries no request**, with or without a
   strategy: no form body, no `Authorization` header, no TLS agent with a key,
   PFX or passphrase. It is still an `AxiosError` — `instanceof AxiosError` and
@@ -166,10 +172,12 @@ and the error codes `CERTIFICATE_MATERIAL_ERROR` and
 - No key, passphrase, certificate content or client assertion reaches a
   refusal, a log line or a thrown error: the new error classes carry fixed
   words only, and `noTokensInLogs.test.ts` covers the strategies.
-- The strategy path follows no redirect: a redirect would re-send the secret
-  or the assertion, and present the certificate, to wherever it points. The
-  path without a strategy is unchanged, and still follows axios's default
-  redirects.
+- No token request follows a redirect, with a strategy or without
+  (`maxRedirects: 0` on every request of every site, device initiation and
+  poll included): a 307/308 would re-send the client secret, the refresh
+  token, the code, the passcode, the password or the assertion, and present
+  the certificate, to wherever it points. OIDC discovery, a GET for public
+  metadata that sends no secret, still follows redirects.
 - The TLS agent of a token request is built from exactly `cert`, `key`, `pfx`
   and `passphrase`; any other field the material carries at run time
   (`rejectUnauthorized`, `ca`) never reaches it.

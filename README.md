@@ -636,10 +636,14 @@ const user = new OidcPasswordProvider({
   expired*, with nothing sent — and a renewal refused that way keeps its
   refresh token. `CertificateAuthProvider` checks the same in `prepare()` and
   before each logon.
-- **No redirects are followed on the strategy path.** A redirect would re-send
-  the secret or the assertion, and present the certificate, to wherever it
-  points. Without a strategy a request is sent as before, with axios's default
-  handling of redirects.
+- **No token request follows a redirect**, with a strategy or without — the
+  first token, a refresh, the device authorization and its poll, a token
+  exchange. A `307`/`308` would re-send the client secret, the refresh token,
+  the code, the passcode, the password or the assertion, and present the
+  certificate, to wherever it points; a `3xx` fails the request instead.
+  Configure the URL the server answers on, not one that redirects to it. OIDC
+  discovery, a GET for public metadata that sends no secret, follows redirects
+  as before.
 - **The server's certificate is always verified, as Node verifies it.**
   `rejectUnauthorized` is never set and there is no `ca` option. A server
   behind a private CA is trusted the way Node offers, explicitly and
@@ -676,9 +680,13 @@ const user = new OidcPasswordProvider({
   refused throws one of this package's classes.
 - **Thrown errors carry no request.** A failed token request rethrows without
   the request it sent — no form body, no `Authorization` header, no TLS agent
-  with a key or a passphrase — on both paths, strategy or not; the server's
-  body is reduced to `error`, `error_description` and `error_uri`, with every
-  secret the request sent redacted.
+  with a key or a passphrase — on both paths, strategy or not. It is still an
+  `AxiosError` (`instanceof AxiosError` and `axios.isAxiosError()` hold), but
+  a new one built without `config`, `request` or `cause`, so its `toJSON()`
+  serialises no config: it keeps the message, `code` and `status`, and a
+  `response` of `status`, `statusText`, empty `headers` and the server's body
+  reduced to `error`, `error_description` and `error_uri`, with every secret
+  the request sent redacted.
 
 #### `privateKeyJwt`'s `audience`
 
