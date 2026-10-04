@@ -99,6 +99,9 @@ refresh, device authorization, device poll, token exchange — is built as:
 1. the grant's own parameters (`grant_type`, `code`, `refresh_token`, …);
 2. `authenticate(draft)`: its parameters and headers added; its `endpoint`, if
    any, replaces the URL;
+   that endpoint must be an absolute `https:` URL — or `http:` only when the
+   configured endpoint is itself `http:` and there is no TLS material (the
+   local stand's UAA); redirects are not followed on this path;
 3. when `tlsMaterial` exists, the request goes through an `https.Agent`
    built from that material — server verification left as Node does it
    (`rejectUnauthorized` never set; a private CA is
