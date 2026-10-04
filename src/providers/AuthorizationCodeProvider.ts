@@ -18,6 +18,7 @@ import {
   getJwtAuthorizationUrl,
 } from '../auth/browserAuth';
 import { refreshJwtToken } from '../auth/tokenRefresher';
+import { ValidationError } from '../errors/TokenProviderErrors';
 import { browserCallbackStrategy } from '../strategies';
 import {
   BaseTokenProvider,
@@ -171,7 +172,9 @@ export class AuthorizationCodeProvider extends BaseTokenProvider {
       buildAuthorizationUrl: async (redirectUri: string): Promise<string> => {
         if (prebuilt) {
           if (declaredRedirect && declaredRedirect !== redirectUri) {
-            throw new Error(mismatch(redirectUri));
+            throw new ValidationError(mismatch(redirectUri), [
+              'authorizationUrl',
+            ]);
           }
           return prebuilt;
         }
@@ -188,7 +191,9 @@ export class AuthorizationCodeProvider extends BaseTokenProvider {
     // it, and would otherwise reach the exchange with a redirect_uri the
     // pre-built URL never advertised, earning an opaque `invalid_grant`.
     if (declaredRedirect && declaredRedirect !== outcome.redirectUri) {
-      throw new Error(mismatch(outcome.redirectUri));
+      throw new ValidationError(mismatch(outcome.redirectUri), [
+        'authorizationUrl',
+      ]);
     }
 
     this.logger?.info('[AuthorizationCodeProvider] Code received', {

@@ -2,9 +2,9 @@
  * Token refresher - refreshes JWT tokens using refresh token
  */
 
-import axios from 'axios';
+import axios, { type AxiosResponse } from 'axios';
 import { describeOAuthErrorBody } from './oauthErrorBody';
-import { tlsFailureCode } from './refusal';
+import { loggedError, tlsFailureCode } from './refusal';
 import {
   grantSecrets,
   prepareTokenRequest,
@@ -72,21 +72,12 @@ export async function refreshJwtToken(
     });
   };
 
+  let response: AxiosResponse;
   try {
-    const response = await sendTokenRequest(prepared, sendAsToday, [
+    response = await sendTokenRequest(prepared, sendAsToday, [
       clientSecret,
       ...grantSecrets(params),
     ]);
-
-    if (response.data?.access_token) {
-      return {
-        accessToken: response.data.access_token,
-        refreshToken: response.data.refresh_token || refreshToken, // Use new refresh token if provided, otherwise keep old one
-        expiresIn: response.data.expires_in,
-      };
-    } else {
-      throw new Error('Response does not contain access_token');
-    }
   } catch (error: unknown) {
     if (
       error &&
@@ -107,9 +98,23 @@ export async function refreshJwtToken(
       // Unwrapped, so the refusal can name the TLS code and its fixed hint.
       throw error;
     } else {
-      const errorMessage =
-        error instanceof Error ? error.message : String(error);
-      throw new Error(`Token refresh failed: ${errorMessage}`);
+      // Fixed words only: what was thrown may hold a secret, and whoever
+      // catches this logs its message. The original stays the cause.
+      throw new Error(
+        `Token refresh failed: ${loggedError(error, 'the token request').error}`,
+        { cause: error },
+      );
     }
   }
+  // Outside the try: this package's own words, not a failure to wrap.
+  if (response.data?.access_token) {
+    return {
+      accessToken: response.data.access_token,
+      refreshToken: response.data.refresh_token || refreshToken, // Use new refresh token if provided, otherwise keep old one
+      expiresIn: response.data.expires_in,
+    };
+  }
+  throw new Error(
+    'Token refresh failed: Response does not contain access_token',
+  );
 }

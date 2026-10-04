@@ -16,6 +16,7 @@ import type {
 } from '@mcp-abap-adt/interfaces-auth';
 import { announcer } from '../auth/announce';
 import { launchBrowser } from '../auth/browserAuth';
+import { CallbackScopeError } from '../auth/callbackScopeError';
 import { withBrowserCallbackServer } from '../auth/callbackServer';
 import type { OidcCallbackResult } from '../auth/oidcBrowserAuth';
 import { withOidcCallbackServer } from '../auth/oidcBrowserAuth';
@@ -88,7 +89,7 @@ async function assertPortAvailable(port: number): Promise<void> {
     probe.listen(port, () => probe.close(() => resolve(true)));
   });
   if (!free) {
-    throw new Error(
+    throw new CallbackScopeError(
       `Port ${port} is already in use. Please specify a different port or free the port.`,
     );
   }
@@ -109,10 +110,10 @@ export class BrowserCallbackStrategy<TResult>
     request: AuthorizationRequest,
   ): Promise<AuthorizationOutcome<TResult>> {
     if (this.disposed) {
-      throw new Error('BrowserCallbackStrategy has been disposed');
+      throw new CallbackScopeError('BrowserCallbackStrategy has been disposed');
     }
     if (this.inFlight) {
-      throw new Error(
+      throw new CallbackScopeError(
         'BrowserCallbackStrategy is already authorizing; it holds a single port',
       );
     }
@@ -139,7 +140,7 @@ export class BrowserCallbackStrategy<TResult>
     const run = (async (): Promise<AuthorizationOutcome<TResult>> => {
       await assertPortAvailable(port);
       if (controller.signal.aborted) {
-        throw new Error(
+        throw new CallbackScopeError(
           'Authorization aborted before the callback server bound',
         );
       }
@@ -182,7 +183,9 @@ export class BrowserCallbackStrategy<TResult>
                 { error: words, url },
               );
               server.fail(
-                new Error(`Browser opening failed. Open manually: ${url}`),
+                new CallbackScopeError(
+                  `Browser opening failed. Open manually: ${url}`,
+                ),
               );
             },
           );
@@ -202,12 +205,20 @@ export class BrowserCallbackStrategy<TResult>
       // provider's own refusal, a port in use, a browser that would not open,
       // an abort — is a browser authentication failure, and the one type a
       // caller can catch for it. It was exported and thrown nowhere: each of
-      // these reached the caller as a plain Error. The text is kept, and the
-      // original is the cause. An error that already has a type (a
-      // ValidationError from building the URL) is not one of these.
+      // these reached the caller as a plain Error. Its message is fixed words
+      // (`loggedError`: an allowlisted code, else "unknown error") — the
+      // identity provider's text, or a consumer's transport, may hold a
+      // secret, and whoever catches this logs the message; the original is
+      // the cause. An error that already has a type (a ValidationError from
+      // building the URL) is not one of these.
       if (error instanceof TokenProviderError) throw error;
       const cause = error instanceof Error ? error : new Error(String(error));
-      throw new BrowserAuthError(cause.message, cause);
+      throw new BrowserAuthError(
+        error instanceof CallbackScopeError
+          ? error.message
+          : loggedError(error, 'the browser login').error,
+        cause,
+      );
     } finally {
       this.options.signal?.removeEventListener('abort', relay);
       this.controller = null;

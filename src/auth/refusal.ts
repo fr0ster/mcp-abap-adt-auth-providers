@@ -141,6 +141,7 @@ const KNOWN_SYSTEM_CODES: ReadonlySet<string> = new Set([
   'ENOTFOUND',
   'EAI_AGAIN',
   'EPIPE',
+  'EADDRINUSE',
 ]);
 
 /** The fixed words for one TLS failure: what it says, and what to do. */

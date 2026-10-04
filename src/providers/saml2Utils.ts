@@ -163,9 +163,10 @@ export async function getSamlAssertion(
       // listening exactly there, and an ephemeral port cannot be.
       const acsUrl = declaredAcs ?? redirectUri;
       if (declaredAcs && declaredAcs !== redirectUri) {
-        throw new Error(
+        throw new ValidationError(
           `SAML acsUrl is ${declaredAcs}, but the authorization strategy is ` +
             `listening on ${redirectUri}. They must match.`,
+          ['acsUrl'],
         );
       }
       const built = buildSamlAuthorizationUrl({
@@ -185,9 +186,10 @@ export async function getSamlAssertion(
   // The second net, for a strategy that never called the builder and so
   // never met the check inside it.
   if (declaredAcs && declaredAcs !== outcome.redirectUri) {
-    throw new Error(
+    throw new ValidationError(
       `SAML acsUrl is ${declaredAcs}, but the authorization strategy used ` +
         `${outcome.redirectUri}. They must match.`,
+      ['acsUrl'],
     );
   }
 

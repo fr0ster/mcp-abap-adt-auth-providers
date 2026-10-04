@@ -236,6 +236,19 @@ and `CLIENT_AUTHENTICATION_ERROR`.
   server answering `401 <secret>` put the secret in
   `error.response.statusText`, now always `''`; the message is rebuilt from
   the status (or the code), never copied.
+- **A thrown error's message carries no foreign text either** — whoever
+  catches it logs it. The UAA refresh and client-credentials sites, for a
+  failure without an HTTP response, throw `Token refresh failed: <fixed
+  words>` / `Client credentials authentication failed: <fixed words>` (the
+  refusal's words with an allowlisted code, e.g. `ECONNREFUSED`) with the
+  original as `cause` (were `…: <its message>`). A `BrowserAuthError` keeps
+  the message of this package's own callback failures (timeout, "already in
+  use", abort); for the identity provider's refusal or a custom transport's
+  or launcher's error its message is `the browser login failed (unknown
+  error)` and the original is `cause`. A redirect or ACS mismatch found while
+  building the authorization URL, and a missing OIDC authorization endpoint,
+  are now `ValidationError`s (same words), so they pass through unchanged.
+  `EADDRINUSE` joins the allowlisted system codes.
 
 ## [5.2.3] - 2026-10-04
 

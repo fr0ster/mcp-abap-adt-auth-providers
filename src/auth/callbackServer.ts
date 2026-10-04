@@ -16,6 +16,7 @@ import type {
 } from '@mcp-abap-adt/interfaces-auth';
 import express from 'express';
 import { extractCode } from './browserAuth';
+import { CallbackScopeError } from './callbackScopeError';
 
 /** Node's `setTimeout` takes a 32-bit signed delay; above this it fires in 1 ms. */
 const MAX_TIMEOUT_MS = 2_147_483_647;
@@ -49,7 +50,7 @@ export type RouteSetup<TResult> = (
 function validate(options: ICallbackServerOptions): void {
   const { port, timeoutMs } = options;
   if (!Number.isInteger(port) || port < 0 || port > 65535) {
-    throw new Error(
+    throw new CallbackScopeError(
       `Invalid callback server port: ${String(port)}. Must be an integer in 0..65535.`,
     );
   }
@@ -58,7 +59,7 @@ function validate(options: ICallbackServerOptions): void {
     timeoutMs <= 0 ||
     timeoutMs > MAX_TIMEOUT_MS
   ) {
-    throw new Error(
+    throw new CallbackScopeError(
       `Invalid callback server timeoutMs: ${String(timeoutMs)}. ` +
         `Must be finite and within 1..${MAX_TIMEOUT_MS}.`,
     );
@@ -79,7 +80,7 @@ export async function runCallbackScope<TResult, TReturn>(
 ): Promise<TReturn> {
   validate(options);
   if (options.signal?.aborted) {
-    throw new Error('Callback server aborted before it started');
+    throw new CallbackScopeError('Callback server aborted before it started');
   }
 
   const app = express();
@@ -133,7 +134,9 @@ export async function runCallbackScope<TResult, TReturn>(
     }
     options.signal?.removeEventListener('abort', onAbort);
     settleResult({
-      error: new Error('Callback server closed before a result arrived'),
+      error: new CallbackScopeError(
+        'Callback server closed before a result arrived',
+      ),
     });
     void shutdown().then(() => {
       if ('value' in outcome) resolveScope(outcome.value);
@@ -142,7 +145,7 @@ export async function runCallbackScope<TResult, TReturn>(
   };
 
   function onAbort(): void {
-    endScope({ error: new Error('Callback server aborted') });
+    endScope({ error: new CallbackScopeError('Callback server aborted') });
   }
 
   /**
@@ -241,7 +244,7 @@ export async function runCallbackScope<TResult, TReturn>(
           ? ` ${ignored} incomplete request(s) reached /callback and were ignored.`
           : '';
       endScope({
-        error: new Error(
+        error: new CallbackScopeError(
           `Authentication timeout after ${options.timeoutMs / 1000} seconds. Please try again.${tally}`,
         ),
       });
@@ -255,7 +258,9 @@ export async function runCallbackScope<TResult, TReturn>(
       waitForResult: () =>
         alive
           ? resultPromise
-          : Promise.reject(new Error('Callback server scope has ended')),
+          : Promise.reject(
+              new CallbackScopeError('Callback server scope has ended'),
+            ),
       // Silent no-op once the scope has ended: this is called fire-and-forget
       // from a browser launcher's .catch(), and a late rejection must not become
       // a fresh unhandled rejection.

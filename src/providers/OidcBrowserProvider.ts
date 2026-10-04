@@ -13,7 +13,7 @@ import type { OidcCallbackResult } from '../auth/oidcBrowserAuth';
 import { discoverOidc, mtlsAlias } from '../auth/oidcDiscovery';
 import { generatePkceChallenge, generatePkceVerifier } from '../auth/oidcPkce';
 import { exchangeAuthorizationCode, refreshOidcToken } from '../auth/oidcToken';
-import { RefreshError } from '../errors/TokenProviderErrors';
+import { RefreshError, ValidationError } from '../errors/TokenProviderErrors';
 import { oidcCallbackStrategy } from '../strategies';
 import {
   BaseTokenProvider,
@@ -108,8 +108,9 @@ export class OidcBrowserProvider extends BaseTokenProvider {
           this.config.authorizationEndpoint ||
           (await discover()).authorization_endpoint;
         if (!endpoint) {
-          throw new Error(
+          throw new ValidationError(
             'OIDC authorization endpoint is required (authorizationEndpoint or discovery)',
+            ['authorizationEndpoint'],
           );
         }
         const params = new URLSearchParams();
