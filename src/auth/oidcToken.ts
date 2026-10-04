@@ -5,7 +5,7 @@
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
 import axios, { type AxiosResponse } from 'axios';
 import { describeOAuthErrorBody } from './oauthErrorBody';
-import { tlsTrustCode } from './refusal';
+import { tlsFailureCode } from './refusal';
 import {
   grantSecrets,
   type PreparedTokenRequest,
@@ -209,8 +209,8 @@ export async function initiateDeviceAuthorization(
       grantSecrets(params),
     );
   } catch (error: unknown) {
-    // Unwrapped, so the refusal can name the code and NODE_EXTRA_CA_CERTS.
-    if (tlsTrustCode(error) !== undefined) throw error;
+    // Unwrapped, so the refusal can name the TLS code and its fixed hint.
+    if (tlsFailureCode(error) !== undefined) throw error;
     const response = (error as TokenRequestFailure | null)?.response;
     // Only `error` and `error_description`, with what the strategy sent
     // redacted: a server may echo it.
@@ -319,8 +319,8 @@ export async function passwordGrant(
     );
     return mapTokenResponse(response.data);
   } catch (error: any) {
-    // Unwrapped, so the refusal can name the code and NODE_EXTRA_CA_CERTS.
-    if (tlsTrustCode(error) !== undefined) throw error;
+    // Unwrapped, so the refusal can name the TLS code and its fixed hint.
+    if (tlsFailureCode(error) !== undefined) throw error;
     const status = error?.response?.status;
     // Only `error` and `error_description`, with the password, the secret
     // and what the strategy sent redacted: a server may echo them.

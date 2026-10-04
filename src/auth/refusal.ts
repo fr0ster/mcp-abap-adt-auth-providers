@@ -133,25 +133,78 @@ const KNOWN_SYSTEM_CODES: ReadonlySet<string> = new Set([
   'EPIPE',
 ]);
 
+/** The fixed words for one TLS failure: what it says, and what to do. */
+interface TlsWords {
+  readonly says: string;
+  readonly hint: string;
+}
+
+const UNTRUSTED_SERVER: TlsWords = {
+  says: "the server's certificate is not trusted",
+  hint: 'if the server uses a private CA, name its certificate in NODE_EXTRA_CA_CERTS',
+};
+
 /**
- * Node's codes for a server certificate this process does not trust. The code
- * is the only part of such an error a refusal names; its message never.
+ * The server asked for a client certificate and refused the one presented, or
+ * its absence: the alert it sent, as Node names it. Current OpenSSL (3.5 with
+ * Node 22 and 24, 3.6 — measured) spells the SSLv3-era alerts
+ * `SSL/TLS_ALERT_…`; older releases spelled them `SSLV3_ALERT_…` — both are
+ * listed.
  */
-const TLS_TRUST_CODES: ReadonlySet<string> = new Set([
-  'UNABLE_TO_VERIFY_LEAF_SIGNATURE',
-  'SELF_SIGNED_CERT_IN_CHAIN',
-  'DEPTH_ZERO_SELF_SIGNED_CERT',
-  'UNABLE_TO_GET_ISSUER_CERT_LOCALLY',
-  'CERT_HAS_EXPIRED',
-  'ERR_TLS_CERT_ALTNAME_INVALID',
+const REFUSED_CLIENT_CERTIFICATE: TlsWords = {
+  says: 'the server refused the client certificate',
+  hint: 'check that the server trusts the certificate’s issuer and that the certificate is valid and not revoked',
+};
+
+const CLIENT_CERTIFICATE_ALERTS = [
+  'BAD_CERTIFICATE',
+  'CERTIFICATE_UNKNOWN',
+  'CERTIFICATE_EXPIRED',
+  'CERTIFICATE_REVOKED',
+  'UNSUPPORTED_CERTIFICATE',
+].flatMap((alert) => [
+  `ERR_SSL_SSL/TLS_ALERT_${alert}`,
+  `ERR_SSL_SSLV3_ALERT_${alert}`,
 ]);
 
-/** The allowlisted code of a TLS trust failure, else undefined. */
-export function tlsTrustCode(error: unknown): string | undefined {
+/**
+ * Node's codes for a TLS failure, each with its fixed words. The code is the
+ * only part of such an error a refusal names; its message never.
+ */
+const TLS_CODES: ReadonlyMap<string, TlsWords> = new Map<string, TlsWords>([
+  ['UNABLE_TO_VERIFY_LEAF_SIGNATURE', UNTRUSTED_SERVER],
+  ['SELF_SIGNED_CERT_IN_CHAIN', UNTRUSTED_SERVER],
+  ['DEPTH_ZERO_SELF_SIGNED_CERT', UNTRUSTED_SERVER],
+  ['UNABLE_TO_GET_ISSUER_CERT_LOCALLY', UNTRUSTED_SERVER],
+  [
+    'CERT_HAS_EXPIRED',
+    {
+      says: "the server's certificate has expired",
+      hint: 'the server must renew its certificate; check also this machine’s clock',
+    },
+  ],
+  [
+    'ERR_TLS_CERT_ALTNAME_INVALID',
+    {
+      says: "the host name is not in the server's certificate",
+      hint: 'use the host name the server’s certificate is issued for',
+    },
+  ],
+  ['ERR_SSL_TLSV13_ALERT_CERTIFICATE_REQUIRED', REFUSED_CLIENT_CERTIFICATE],
+  ['ERR_SSL_TLSV1_ALERT_UNKNOWN_CA', REFUSED_CLIENT_CERTIFICATE],
+  ...CLIENT_CERTIFICATE_ALERTS.map(
+    (code) => [code, REFUSED_CLIENT_CERTIFICATE] as const,
+  ),
+]);
+
+/**
+ * The allowlisted code of a TLS failure — the server's certificate, or the
+ * server refusing the client's — else undefined. A site that wraps its errors
+ * lets these through unwrapped, so the refusal can name the code.
+ */
+export function tlsFailureCode(error: unknown): string | undefined {
   const code = (error as { code?: unknown } | null)?.code;
-  return typeof code === 'string' && TLS_TRUST_CODES.has(code)
-    ? code
-    : undefined;
+  return typeof code === 'string' && TLS_CODES.has(code) ? code : undefined;
 }
 
 export const KNOWN_RFC_KEYS: ReadonlySet<string> = new Set([
@@ -252,12 +305,10 @@ export function refusalFrom(error: unknown, what: string): AuthOutcome {
   if (error instanceof TokenProviderError) {
     return oops(`${what} failed (${ownLabel(error)})`);
   }
-  const trust = tlsTrustCode(error);
-  if (trust !== undefined) {
-    return oops(
-      `${what} failed: the server's certificate is not trusted (${trust})`,
-      'if the server uses a private CA, name its certificate in NODE_EXTRA_CA_CERTS',
-    );
+  const tls = tlsFailureCode(error);
+  const words = tls === undefined ? undefined : TLS_CODES.get(tls);
+  if (words !== undefined) {
+    return oops(`${what} failed: ${words.says} (${tls})`, words.hint);
   }
   return oops(`${what} failed (unknown error${systemCode(error)})`);
 }

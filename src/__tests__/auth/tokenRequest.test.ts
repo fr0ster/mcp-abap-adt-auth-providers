@@ -403,14 +403,12 @@ describe('client authentication per request', () => {
   });
 });
 
-describe('a TLS trust failure, by code', () => {
+describe('a TLS failure, by code', () => {
   it.each([
     'UNABLE_TO_VERIFY_LEAF_SIGNATURE',
     'SELF_SIGNED_CERT_IN_CHAIN',
     'DEPTH_ZERO_SELF_SIGNED_CERT',
     'UNABLE_TO_GET_ISSUER_CERT_LOCALLY',
-    'CERT_HAS_EXPIRED',
-    'ERR_TLS_CERT_ALTNAME_INVALID',
   ])('%s: fixed words, the hint naming NODE_EXTRA_CA_CERTS', (code) => {
     const refusal = refusalFrom(
       Object.assign(new Error('SECRET-TEXT'), { code }),
@@ -422,6 +420,87 @@ describe('a TLS trust failure, by code', () => {
         reason: `the token request failed: the server's certificate is not trusted (${code})`,
         hint: 'if the server uses a private CA, name its certificate in NODE_EXTRA_CA_CERTS',
       },
+    });
+  });
+
+  it('CERT_HAS_EXPIRED: the server certificate has expired — no NODE_EXTRA_CA_CERTS', () => {
+    expect(
+      refusalFrom(
+        Object.assign(new Error('SECRET-TEXT'), { code: 'CERT_HAS_EXPIRED' }),
+        'the token request',
+      ),
+    ).toEqual({
+      ok: false,
+      refusal: {
+        reason:
+          "the token request failed: the server's certificate has expired (CERT_HAS_EXPIRED)",
+        hint: 'the server must renew its certificate; check also this machine’s clock',
+      },
+    });
+  });
+
+  it('ERR_TLS_CERT_ALTNAME_INVALID: the host is not in the server certificate — no NODE_EXTRA_CA_CERTS', () => {
+    expect(
+      refusalFrom(
+        Object.assign(new Error('SECRET-TEXT'), {
+          code: 'ERR_TLS_CERT_ALTNAME_INVALID',
+        }),
+        'the token request',
+      ),
+    ).toEqual({
+      ok: false,
+      refusal: {
+        reason:
+          "the token request failed: the host name is not in the server's certificate (ERR_TLS_CERT_ALTNAME_INVALID)",
+        hint: 'use the host name the server’s certificate is issued for',
+      },
+    });
+  });
+
+  // Measured (Node 22, 24 with OpenSSL 3.5; Node 26 with 3.6): a server that
+  // requires a client certificate answers CERTIFICATE_REQUIRED (none sent),
+  // UNKNOWN_CA (an issuer it does not trust), SSL/TLS_ALERT_CERTIFICATE_EXPIRED.
+  // SSLV3_ is older OpenSSL's spelling of the same alerts; the rest follow
+  // OpenSSL's reason table (libssl 3.6 strings).
+  it.each([
+    'ERR_SSL_TLSV13_ALERT_CERTIFICATE_REQUIRED',
+    'ERR_SSL_TLSV1_ALERT_UNKNOWN_CA',
+    'ERR_SSL_SSL/TLS_ALERT_BAD_CERTIFICATE',
+    'ERR_SSL_SSL/TLS_ALERT_CERTIFICATE_UNKNOWN',
+    'ERR_SSL_SSL/TLS_ALERT_CERTIFICATE_EXPIRED',
+    'ERR_SSL_SSL/TLS_ALERT_CERTIFICATE_REVOKED',
+    'ERR_SSL_SSL/TLS_ALERT_UNSUPPORTED_CERTIFICATE',
+    'ERR_SSL_SSLV3_ALERT_BAD_CERTIFICATE',
+    'ERR_SSL_SSLV3_ALERT_CERTIFICATE_UNKNOWN',
+    'ERR_SSL_SSLV3_ALERT_CERTIFICATE_EXPIRED',
+    'ERR_SSL_SSLV3_ALERT_CERTIFICATE_REVOKED',
+    'ERR_SSL_SSLV3_ALERT_UNSUPPORTED_CERTIFICATE',
+  ])('%s: the server refused the client certificate', (code) => {
+    expect(
+      refusalFrom(
+        Object.assign(new Error('SECRET-TEXT'), { code }),
+        'the token request',
+      ),
+    ).toEqual({
+      ok: false,
+      refusal: {
+        reason: `the token request failed: the server refused the client certificate (${code})`,
+        hint: 'check that the server trusts the certificate’s issuer and that the certificate is valid and not revoked',
+      },
+    });
+  });
+
+  it('a handshake failure is not read as a refused certificate: it has other causes', () => {
+    expect(
+      refusalFrom(
+        Object.assign(new Error('SECRET-TEXT'), {
+          code: 'ERR_SSL_SSL/TLS_ALERT_HANDSHAKE_FAILURE',
+        }),
+        'the token request',
+      ),
+    ).toEqual({
+      ok: false,
+      refusal: { reason: 'the token request failed (unknown error)' },
     });
   });
 
@@ -452,6 +531,48 @@ describe('a TLS trust failure, by code', () => {
       expect(refusal.ok === false && refusal.refusal.hint).toContain(
         'NODE_EXTRA_CA_CERTS',
       );
+    }
+  });
+  it('with a strategy, every site that wraps its errors lets a refused client certificate through', async () => {
+    mockedAxios.mockRejectedValue(
+      Object.assign(new Error('SECRET-TLS'), {
+        code: 'ERR_SSL_TLSV1_ALERT_UNKNOWN_CA',
+        isAxiosError: true,
+      }),
+    );
+    const auth = { strategy: tlsClientCertificate({ material }), material };
+    for (const run of [
+      () =>
+        getTokenWithClientCredentials('https://uaa', 'cid', undefined, auth),
+      () => refreshJwtToken('rt', 'https://uaa', 'cid', undefined, auth),
+      () =>
+        passwordGrant(
+          'https://idp/token',
+          'cid',
+          undefined,
+          'u',
+          'p',
+          undefined,
+          undefined,
+          auth,
+        ),
+      () =>
+        initiateDeviceAuthorization(
+          'https://idp/device',
+          'cid',
+          undefined,
+          undefined,
+          auth,
+        ),
+    ]) {
+      expect(refusalFrom(await failureOf(run()), 'x')).toEqual({
+        ok: false,
+        refusal: {
+          reason:
+            'x failed: the server refused the client certificate (ERR_SSL_TLSV1_ALERT_UNKNOWN_CA)',
+          hint: 'check that the server trusts the certificate’s issuer and that the certificate is valid and not revoked',
+        },
+      });
     }
   });
 });

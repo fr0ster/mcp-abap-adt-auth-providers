@@ -4,7 +4,7 @@
 
 import axios from 'axios';
 import { describeOAuthErrorBody } from './oauthErrorBody';
-import { tlsTrustCode } from './refusal';
+import { tlsFailureCode } from './refusal';
 import {
   grantSecrets,
   prepareTokenRequest,
@@ -101,8 +101,8 @@ export async function refreshJwtToken(
       throw new Error(
         `Token refresh failed (${axiosError.response.status}): ${describeOAuthErrorBody(axiosError.response.data, secrets)}`,
       );
-    } else if (tlsTrustCode(error) !== undefined) {
-      // Unwrapped, so the refusal can name the code and NODE_EXTRA_CA_CERTS.
+    } else if (tlsFailureCode(error) !== undefined) {
+      // Unwrapped, so the refusal can name the TLS code and its fixed hint.
       throw error;
     } else {
       const errorMessage =
