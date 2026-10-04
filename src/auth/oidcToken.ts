@@ -7,6 +7,7 @@ import axios, { type AxiosResponse } from 'axios';
 import { describeOAuthErrorBody } from './oauthErrorBody';
 import { tlsTrustCode } from './refusal';
 import {
+  grantSecrets,
   type PreparedTokenRequest,
   prepareTokenRequest,
   sendTokenRequest,
@@ -81,8 +82,10 @@ async function send(
   const prepared = auth
     ? await prepareWith(auth, endpoint, clientId, grantType, params)
     : undefined;
-  return sendTokenRequest(prepared, () =>
-    sendAsToday(endpoint, params, clientId, clientSecret),
+  return sendTokenRequest(
+    prepared,
+    () => sendAsToday(endpoint, params, clientId, clientSecret),
+    [clientSecret, ...grantSecrets(params)],
   );
 }
 
@@ -194,10 +197,13 @@ export async function initiateDeviceAuthorization(
         params,
       )
     : undefined;
-  const response = await sendTokenRequest(prepared, () =>
-    axios.post(deviceEndpoint, params.toString(), {
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    }),
+  const response = await sendTokenRequest(
+    prepared,
+    () =>
+      axios.post(deviceEndpoint, params.toString(), {
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      }),
+    grantSecrets(params),
   );
 
   const data = response.data;
@@ -241,8 +247,10 @@ export async function pollDeviceTokens(
         )
       : undefined;
     try {
-      const response = await sendTokenRequest(prepared, () =>
-        sendAsToday(tokenEndpoint, params, clientId, clientSecret),
+      const response = await sendTokenRequest(
+        prepared,
+        () => sendAsToday(tokenEndpoint, params, clientId, clientSecret),
+        [clientSecret, ...grantSecrets(params)],
       );
       return mapTokenResponse(response.data);
     } catch (error: any) {
@@ -288,8 +296,10 @@ export async function passwordGrant(
     ? await prepareWith(auth, tokenEndpoint, clientId, 'password', params)
     : undefined;
   try {
-    const response = await sendTokenRequest(prepared, () =>
-      sendAsToday(tokenEndpoint, params, clientId, clientSecret),
+    const response = await sendTokenRequest(
+      prepared,
+      () => sendAsToday(tokenEndpoint, params, clientId, clientSecret),
+      [clientSecret, ...grantSecrets(params)],
     );
     return mapTokenResponse(response.data);
   } catch (error: any) {

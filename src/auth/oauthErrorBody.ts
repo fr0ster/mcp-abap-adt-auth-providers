@@ -76,3 +76,29 @@ export function describeOAuthErrorBody(
   }
   return parts.length > 0 ? parts.join(': ') : 'no error given';
 }
+
+/** RFC 6749 §5.2's fields of an error response, the only ones kept. */
+export interface OAuthErrorFields {
+  error?: string;
+  error_description?: string;
+  error_uri?: string;
+}
+
+/**
+ * An error body reduced to `error`, `error_description` and `error_uri` (each
+ * only when a string), every known secret and any JWT redacted — what may stay
+ * on a thrown error. Anything else a server put in the body (a token, an echo
+ * of the request) is dropped; a body that is not an object becomes undefined.
+ */
+export function oauthErrorFields(
+  data: unknown,
+  knownSecrets: readonly (string | undefined)[] = [],
+): OAuthErrorFields | undefined {
+  if (!data || typeof data !== 'object') return undefined;
+  const out: OAuthErrorFields = {};
+  for (const field of ['error', 'error_description', 'error_uri'] as const) {
+    const value = (data as Record<string, unknown>)[field];
+    if (typeof value === 'string') out[field] = redact(value, knownSecrets);
+  }
+  return out;
+}

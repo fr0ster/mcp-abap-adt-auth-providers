@@ -20,6 +20,7 @@ import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
 import axios, { type AxiosResponse } from 'axios';
 import { describeOAuthErrorBody } from './oauthErrorBody';
 import {
+  grantSecrets,
   prepareTokenRequest,
   sendTokenRequest,
   type TokenRequestAuth,
@@ -82,7 +83,10 @@ export async function exchangePasscode(
     expires_in?: number;
   }>;
   try {
-    response = await sendTokenRequest(prepared, sendAsToday);
+    response = await sendTokenRequest(prepared, sendAsToday, [
+      clientSecret,
+      ...grantSecrets(params),
+    ]);
   } catch (error) {
     // UAA says why in the body — "Invalid passcode" for a mistyped or
     // already spent code — which is what the user needs to read.

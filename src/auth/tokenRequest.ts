@@ -29,6 +29,7 @@ import type {
 } from '@mcp-abap-adt/interfaces-auth';
 import axios, { type AxiosRequestConfig, type AxiosResponse } from 'axios';
 import { ClientAuthenticationResultError } from '../errors/ClientAuthenticationError';
+import { type OAuthErrorFields, oauthErrorFields } from './oauthErrorBody';
 
 /** What a site is given to authenticate one request with a strategy. */
 export interface TokenRequestAuth {
@@ -205,12 +206,34 @@ export async function prepareTokenRequest(
   return { config, secrets };
 }
 
+/** Grant parameters whose values are secrets the request itself sends. */
+const SECRET_GRANT_PARAMETERS = [
+  'refresh_token',
+  'assertion',
+  'code',
+  'code_verifier',
+  'subject_token',
+  'actor_token',
+  'passcode',
+  'password',
+  'device_code',
+];
+
+/** The secret values among a request's grant parameters. */
+export function grantSecrets(params: URLSearchParams): string[] {
+  return SECRET_GRANT_PARAMETERS.flatMap((name) => params.getAll(name));
+}
+
 /** What of a failed request a site's own handling reads. */
 export interface TokenRequestFailure extends Error {
   isAxiosError?: true;
   code?: string;
   status?: number;
-  response?: { status?: unknown; statusText?: unknown; data?: unknown };
+  response?: {
+    status?: unknown;
+    statusText?: unknown;
+    data?: OAuthErrorFields;
+  };
 }
 
 /**
@@ -218,9 +241,14 @@ export interface TokenRequestFailure extends Error {
  * httpsAgent and its key, PFX and passphrase; the form body with an assertion,
  * a secret or a refresh token; the Authorization header) on itself, on
  * `request` and on `response.config`. What is kept is what the sites read —
- * `message`, `code`, `isAxiosError`, the response's `status` and `data`.
+ * `message`, `code`, `isAxiosError`, the response's `status`, and its `data`
+ * reduced to the OAuth error fields with every known secret redacted
+ * (`oauthErrorFields`): a server may echo the request, or put a token there.
  */
-function withoutRequest(error: unknown): unknown {
+function withoutRequest(
+  error: unknown,
+  secrets: readonly (string | undefined)[],
+): unknown {
   if (!error || typeof error !== 'object') return error;
   const raw = error as Record<string, unknown>;
   if (!('config' in raw) && !('request' in raw) && !('response' in raw)) {
@@ -237,7 +265,7 @@ function withoutRequest(error: unknown): unknown {
     failure.response = {
       status: response.status,
       statusText: response.statusText,
-      data: response.data,
+      data: oauthErrorFields(response.data, secrets),
     };
   }
   return failure;
@@ -247,14 +275,19 @@ function withoutRequest(error: unknown): unknown {
  * Sends one request — the prepared one when a strategy was given, else the
  * site's own `asToday` — and on failure throws it without the request
  * (`withoutRequest`). The request itself is not changed on either path.
+ *
+ * @param sent the secrets the site itself put in the request (a refresh
+ *   token, a code, an assertion, a client secret); with what the strategy
+ *   added, they are redacted from the error body that stays on the error.
  */
 export async function sendTokenRequest<T>(
   prepared: PreparedTokenRequest | undefined,
   asToday: () => Promise<AxiosResponse<T>>,
+  sent: readonly (string | undefined)[] = [],
 ): Promise<AxiosResponse<T>> {
   try {
     return prepared ? await axios<T>(prepared.config) : await asToday();
   } catch (error) {
-    throw withoutRequest(error);
+    throw withoutRequest(error, [...sent, ...(prepared?.secrets ?? [])]);
   }
 }

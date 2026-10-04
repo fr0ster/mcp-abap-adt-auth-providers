@@ -6,6 +6,7 @@ import axios from 'axios';
 import { describeOAuthErrorBody } from './oauthErrorBody';
 import { tlsTrustCode } from './refusal';
 import {
+  grantSecrets,
   prepareTokenRequest,
   sendTokenRequest,
   type TokenRequestAuth,
@@ -70,7 +71,10 @@ export async function refreshJwtToken(
   };
 
   try {
-    const response = await sendTokenRequest(prepared, sendAsToday);
+    const response = await sendTokenRequest(prepared, sendAsToday, [
+      clientSecret,
+      ...grantSecrets(params),
+    ]);
 
     if (response.data?.access_token) {
       return {

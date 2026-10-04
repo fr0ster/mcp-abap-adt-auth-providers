@@ -697,3 +697,105 @@ describe('the server never reads back the password or the passcode', () => {
     expect(message).not.toContain(CLIENT_SECRET);
   });
 });
+
+describe.each(SITES)('$name: the error body on the thrown object', (site) => {
+  const SECRET = 'client-secret-0123456789';
+  const ASSERTION = 'opaque-assertion-abcdefghijklmnop';
+  const LEAKED = 'LEAKED-ACCESS-TOKEN-0123456789';
+  const echoing = (echoed: string) => ({
+    isAxiosError: true,
+    message: 'Request failed with status code 400',
+    response: {
+      status: 400,
+      data: {
+        error: 'invalid_grant',
+        error_description: `refused ${echoed}`,
+        error_uri: 'https://docs.example/errors',
+        access_token: LEAKED,
+        extra: { nested: echoed },
+      },
+    },
+  });
+  const onlyOAuthFields = (thrown: unknown) => {
+    const data = (thrown as { response?: { data?: unknown } }).response?.data;
+    if (data !== undefined) {
+      expect(
+        Object.keys(data as object).every((k) =>
+          ['error', 'error_description', 'error_uri'].includes(k),
+        ),
+      ).toBe(true);
+    }
+  };
+
+  it('with a strategy: only the OAuth fields, nothing the strategy sent', async () => {
+    mockedAxios.mockRejectedValue(echoing(`${SECRET} ${ASSERTION}`));
+    const thrown = await failureOf(
+      site.run({
+        strategy: returning({
+          parameters: {
+            client_id: 'cid',
+            client_secret: SECRET,
+            client_assertion: ASSERTION,
+          },
+        }),
+      }),
+    );
+    onlyOAuthFields(thrown);
+    const text = `${serialized(thrown)}\n${String(thrown)}`;
+    expect(text).not.toContain(SECRET);
+    expect(text).not.toContain(ASSERTION);
+    expect(text).not.toContain(LEAKED);
+  });
+
+  it('without a strategy: only the OAuth fields, nothing the site sent', async () => {
+    // What this site itself sent that is a secret: those it must not return.
+    const secretKeys = [
+      'refresh_token',
+      'assertion',
+      'code',
+      'code_verifier',
+      'subject_token',
+      'passcode',
+      'password',
+      'device_code',
+    ];
+    const sentByToday = Object.entries(site.grant)
+      .filter(([key]) => secretKeys.includes(key))
+      .map(([, value]) => value);
+    mockedAxios.mockRejectedValue(echoing(sentByToday.join(' ')));
+    mockedAxios.post.mockRejectedValue(echoing(sentByToday.join(' ')));
+    const thrown = await failureOf(site.run());
+    onlyOAuthFields(thrown);
+    const text = `${serialized(thrown)}\n${String(thrown)}`;
+    expect(text).not.toContain(LEAKED);
+    for (const value of sentByToday.filter((v) => v.length >= 4)) {
+      expect(text).not.toContain(value);
+    }
+  });
+});
+
+describe('the device poll reads the reduced body', () => {
+  it.each([
+    ['as today', undefined],
+    ['with a strategy', { strategy: clientSecretPost('client-secret-xyz') }],
+  ])(
+    '%s: authorization_pending, beside extra fields, is still recognised',
+    async (_label, auth) => {
+      const pending = {
+        isAxiosError: true,
+        response: {
+          status: 400,
+          data: { error: 'authorization_pending', interval: 5, extra: 'x' },
+        },
+      };
+      mockedAxios.mockRejectedValueOnce(pending).mockResolvedValueOnce(reply);
+      mockedAxios.post
+        .mockRejectedValueOnce(pending)
+        .mockResolvedValueOnce(reply);
+      await pollDeviceTokens(OIDC, 'cid', undefined, 'dc', 0, undefined, auth);
+      expect(
+        mockedAxios.mock.calls.length + mockedAxios.post.mock.calls.length,
+      ).toBe(2);
+    },
+  );
+});

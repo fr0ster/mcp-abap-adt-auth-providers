@@ -7,6 +7,7 @@ import axios, { type AxiosResponse } from 'axios';
 import { ValidationError } from '../errors/TokenProviderErrors';
 import { describeOAuthErrorBody } from './oauthErrorBody';
 import {
+  grantSecrets,
   type PreparedTokenRequest,
   prepareTokenRequest,
   sendTokenRequest,
@@ -86,8 +87,10 @@ export async function exchangeSamlAssertion(
 
   let response: AxiosResponse;
   try {
-    response = await sendTokenRequest(prepared, () =>
-      sendAsToday(tokenUrl, grant, clientId, clientSecret),
+    response = await sendTokenRequest(
+      prepared,
+      () => sendAsToday(tokenUrl, grant, clientId, clientSecret),
+      [clientSecret, ...grantSecrets(grant)],
     );
   } catch (error) {
     if (axios.isAxiosError(error)) {
@@ -143,8 +146,10 @@ export async function refreshSamlBearerToken(
 
   let response: AxiosResponse;
   try {
-    response = await sendTokenRequest(prepared, () =>
-      sendAsToday(tokenUrl, grant, clientId, clientSecret),
+    response = await sendTokenRequest(
+      prepared,
+      () => sendAsToday(tokenUrl, grant, clientId, clientSecret),
+      [clientSecret, ...grantSecrets(grant)],
     );
   } catch (error) {
     if (axios.isAxiosError(error)) {

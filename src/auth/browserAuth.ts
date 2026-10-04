@@ -7,6 +7,7 @@ import type { IAuthorizationConfig } from '@mcp-abap-adt/interfaces-auth-sap';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
 import axios from 'axios';
 import {
+  grantSecrets,
   prepareTokenRequest,
   sendTokenRequest,
   type TokenRequestAuth,
@@ -125,7 +126,10 @@ export async function exchangeCodeForToken(
 
   log?.info(`Exchanging code for token: ${prepared?.config.url ?? tokenUrl}`);
 
-  const response = await sendTokenRequest(prepared, sendAsToday);
+  const response = await sendTokenRequest(prepared, sendAsToday, [
+    clientsecret,
+    ...grantSecrets(params),
+  ]);
 
   if (response.data?.access_token) {
     const accessToken = response.data.access_token;

@@ -70,7 +70,9 @@ export async function getTokenWithClientCredentials(
   };
 
   try {
-    const response = await sendTokenRequest(prepared, sendAsToday);
+    const response = await sendTokenRequest(prepared, sendAsToday, [
+      clientSecret,
+    ]);
 
     if (response.data?.access_token) {
       return {
