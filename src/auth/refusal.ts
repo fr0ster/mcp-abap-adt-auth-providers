@@ -40,14 +40,25 @@ export function oops(reason: string, hint?: string): AuthOutcome {
 }
 
 /**
- * The fixed words for a token bound to a certificate this provider does not
- * present (spec §4) — none pinned, another one, or a binding it cannot read.
- * No thumbprint appears in them.
+ * The fixed words for a token held bound to a client certificate while no
+ * certificate is pinned (spec §4) — none configured, or a binding it cannot
+ * read. No thumbprint appears in them.
  */
 export const TOKEN_BOUND_ELSEWHERE = {
   reason:
     'the token is bound to a client certificate this provider does not present',
-  hint: 'configure the certificate the token was issued for, or obtain a new token',
+  hint: 'give the provider a clientAuthentication that presents the certificate the token was issued for',
+} as const;
+
+/**
+ * The fixed words for a token renewed because the one held was bound to
+ * another certificate than the pinned one, when the new token is bound
+ * elsewhere too. No thumbprint appears in them.
+ */
+export const TOKEN_RENEWED_BOUND_ELSEWHERE = {
+  reason:
+    'the new token is bound to a client certificate this provider does not present',
+  hint: 'the authorization server bound the new token to another certificate: check the certificate registered for this client',
 } as const;
 
 /** Every config property name this package's providers declare. */

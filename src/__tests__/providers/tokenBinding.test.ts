@@ -17,7 +17,10 @@ import type {
 } from '@mcp-abap-adt/interfaces-auth';
 import axios from 'axios';
 import { certificateThumbprint } from '../../auth/certificateMaterial';
-import { TOKEN_BOUND_ELSEWHERE } from '../../auth/refusal';
+import {
+  TOKEN_BOUND_ELSEWHERE,
+  TOKEN_RENEWED_BOUND_ELSEWHERE,
+} from '../../auth/refusal';
 import { readBinding } from '../../auth/tokenBinding';
 import { OidcPasswordProvider } from '../../providers/OidcPasswordProvider';
 import { recordingTargets } from '../helpers/targets';
@@ -52,12 +55,23 @@ const boundTo = (thumbprint: string, seconds = 3600) =>
 /** Opaque: says nothing of its binding. Its expiry is stated beside it. */
 const OPAQUE = 'opaque-access-token';
 
+/** A held token bound to a certificate, and no certificate to present. */
 const REFUSAL = {
   ok: false,
   refusal: {
     reason:
       'the token is bound to a client certificate this provider does not present',
-    hint: 'configure the certificate the token was issued for, or obtain a new token',
+    hint: 'give the provider a clientAuthentication that presents the certificate the token was issued for',
+  },
+};
+
+/** A certificate pinned, renewed once, and the new token is bound elsewhere too. */
+const RENEWED_REFUSAL = {
+  ok: false,
+  refusal: {
+    reason:
+      'the new token is bound to a client certificate this provider does not present',
+    hint: 'the authorization server bound the new token to another certificate: check the certificate registered for this client',
   },
 };
 
@@ -105,8 +119,44 @@ function unseeded(material?: ICertificateMaterial) {
   return { provider };
 }
 
+/** What the token endpoint received, request by request. */
+let requests: Array<{ grant: string | null; cert: unknown }> = [];
+
+/** The token endpoint answers each request with the next token, the last one repeated. */
+function issuing(...tokens: string[]) {
+  let n = 0;
+  mockedAxios.mockImplementation(async (config: any) => {
+    requests.push({
+      grant: new URLSearchParams(config.data).get('grant_type'),
+      cert: config.httpsAgent?.options?.cert,
+    });
+    const token = tokens[Math.min(n, tokens.length - 1)];
+    n += 1;
+    return { data: { access_token: token, expires_in: 3600 } };
+  });
+}
+
+/**
+ * A provider pinned to A, holding a valid token bound to B — restored from a
+ * store after the certificate rotated, say.
+ */
+function rotating(options: { refreshToken?: string; token?: string } = {}) {
+  const { strategy, tlsCalls } = strategyWith(A);
+  const provider = new OidcPasswordProvider({
+    clientId: 'client',
+    username: 'user',
+    password: 'pw',
+    tokenEndpoint: 'https://idp.example/token',
+    accessToken: options.token ?? boundTo(THUMB_B),
+    ...(options.refreshToken ? { refreshToken: options.refreshToken } : {}),
+    clientAuthentication: strategy,
+  });
+  return { provider, tlsCalls };
+}
+
 beforeEach(() => {
   jest.clearAllMocks();
+  requests = [];
 });
 
 describe('readBinding', () => {
@@ -219,24 +269,8 @@ describe('the binding table (spec §4)', () => {
     expect(t.request.headers).toEqual({});
   });
 
-  it('bound, another thumbprint: Oops in both, nothing presented, no header written', async () => {
-    const { provider } = seeded(boundTo(THUMB_B), A);
-    const t = recordingTargets();
-    await expect(provider.establish(t.logonTarget)).resolves.toEqual(REFUSAL);
-    expect(t.logon.tls).toHaveLength(0);
-    await expect(provider.authorize(t.requestTarget)).resolves.toEqual(REFUSAL);
-    expect(t.request.headers).toEqual({});
-  });
-
   it('authorize alone refuses a seeded bound token without a strategy', async () => {
     const { provider } = seeded(boundTo(THUMB_A));
-    const t = recordingTargets();
-    await expect(provider.authorize(t.requestTarget)).resolves.toEqual(REFUSAL);
-    expect(t.request.headers).toEqual({});
-  });
-
-  it('authorize alone refuses a seeded token bound to another certificate', async () => {
-    const { provider } = seeded(boundTo(THUMB_B), A);
     const t = recordingTargets();
     await expect(provider.authorize(t.requestTarget)).resolves.toEqual(REFUSAL);
     expect(t.request.headers).toEqual({});
@@ -247,20 +281,16 @@ describe('the binding table (spec §4)', () => {
     ['cnf without x5t#S256', { jkt: 'dpop-key' }],
     ['x5t#S256 empty', { 'x5t#S256': '' }],
   ])(
-    'malformed cnf (%s): Oops in both, with or without material — fail closed',
+    'malformed cnf (%s), no material: Oops in both — fail closed',
     async (_label, cnf) => {
-      for (const material of [undefined, A]) {
-        const { provider } = seeded(jwt({ cnf }), material);
-        const t = recordingTargets();
-        await expect(provider.establish(t.logonTarget)).resolves.toEqual(
-          REFUSAL,
-        );
-        await expect(provider.authorize(t.requestTarget)).resolves.toEqual(
-          REFUSAL,
-        );
-        expect(t.logon.tls).toHaveLength(0);
-        expect(t.request.headers).toEqual({});
-      }
+      const { provider } = seeded(jwt({ cnf }));
+      const t = recordingTargets();
+      await expect(provider.establish(t.logonTarget)).resolves.toEqual(REFUSAL);
+      await expect(provider.authorize(t.requestTarget)).resolves.toEqual(
+        REFUSAL,
+      );
+      expect(t.logon.tls).toHaveLength(0);
+      expect(t.request.headers).toEqual({});
     },
   );
 
@@ -302,21 +332,21 @@ describe('the binding table (spec §4)', () => {
 });
 
 describe('around the table', () => {
-  it('the refusal names no thumbprint', async () => {
-    const { provider } = seeded(boundTo(THUMB_B), A);
+  it('the refusals name no thumbprint', async () => {
     const t = recordingTargets();
+    const held = seeded(boundTo(THUMB_B)).provider;
+    issuing(boundTo(THUMB_B));
+    const renewed = rotating({ refreshToken: 'R1' }).provider;
     const outcomes = [
-      await provider.establish(t.logonTarget),
-      await provider.authorize(t.requestTarget),
-    ];
-    for (const outcome of outcomes) {
+      [await held.establish(t.logonTarget), TOKEN_BOUND_ELSEWHERE],
+      [await held.authorize(t.requestTarget), TOKEN_BOUND_ELSEWHERE],
+      [await renewed.authorize(t.requestTarget), TOKEN_RENEWED_BOUND_ELSEWHERE],
+    ] as const;
+    for (const [outcome, words] of outcomes) {
       const text = JSON.stringify(outcome);
       expect(text).not.toContain(THUMB_A);
       expect(text).not.toContain(THUMB_B);
-      expect(outcome).toEqual({
-        ok: false,
-        refusal: { ...TOKEN_BOUND_ELSEWHERE },
-      });
+      expect(outcome).toEqual({ ok: false, refusal: { ...words } });
     }
   });
 
@@ -384,8 +414,12 @@ describe('around the table', () => {
       authorizationToken?: string;
     };
     expect(internals.presented).toBe(UNBOUND);
+    // Bound elsewhere: renewed once, and the renewal is bound elsewhere too.
+    issuing(boundTo(THUMB_B));
     internals.authorizationToken = boundTo(THUMB_B);
-    await expect(provider.authorize(t.requestTarget)).resolves.toEqual(REFUSAL);
+    await expect(provider.authorize(t.requestTarget)).resolves.toEqual(
+      RENEWED_REFUSAL,
+    );
     expect(internals.presented).toBe(UNBOUND);
   });
 });
@@ -461,6 +495,122 @@ describe('establish decides on the token held, never fetching one', () => {
       ok: true,
     });
     expect(certificateThumbprint(t.logon.tls[0])).toBe(THUMB_A);
+    expect(mockedAxios).not.toHaveBeenCalled();
+    expect(mockedAxios.post).not.toHaveBeenCalled();
+  });
+});
+
+describe('a held token bound to another certificate, one pinned: renewed like an expired one', () => {
+  it('authorize() refreshes once through the pinned material and sends the new token', async () => {
+    const renewed = boundTo(THUMB_A);
+    issuing(renewed);
+    const { provider } = rotating({ refreshToken: 'R1' });
+    const t = recordingTargets();
+    await expect(provider.authorize(t.requestTarget)).resolves.toEqual({
+      ok: true,
+    });
+    expect(t.request.headers.Authorization).toBe(`Bearer ${renewed}`);
+    expect(requests).toEqual([{ grant: 'refresh_token', cert: A.cert }]);
+  });
+
+  it('without a refresh token: one login through the pinned material', async () => {
+    const renewed = boundTo(THUMB_A);
+    issuing(renewed);
+    const { provider } = rotating();
+    const t = recordingTargets();
+    await expect(provider.authorize(t.requestTarget)).resolves.toEqual({
+      ok: true,
+    });
+    expect(t.request.headers.Authorization).toBe(`Bearer ${renewed}`);
+    expect(requests).toEqual([{ grant: 'password', cert: A.cert }]);
+  });
+
+  it('getTokens() renews it too, and returns the new token', async () => {
+    const renewed = boundTo(THUMB_A);
+    issuing(renewed);
+    const { provider } = rotating({ refreshToken: 'R1' });
+    await expect(provider.getTokens()).resolves.toMatchObject({
+      authorizationToken: renewed,
+    });
+    expect(requests).toHaveLength(1);
+  });
+
+  it('the renewal is bound elsewhere again: Oops, no header — a successful refresh is not followed by a login', async () => {
+    issuing(boundTo(THUMB_B));
+    const { provider } = rotating({ refreshToken: 'R1' });
+    const t = recordingTargets();
+    await expect(provider.authorize(t.requestTarget)).resolves.toEqual(
+      RENEWED_REFUSAL,
+    );
+    expect(t.request.headers).toEqual({});
+    expect(requests.map((r) => r.grant)).toEqual(['refresh_token']);
+  });
+
+  it('the refresh refused, the login bound elsewhere: Oops after one refresh and one login, no step twice', async () => {
+    let n = 0;
+    mockedAxios.mockImplementation(async (config: any) => {
+      requests.push({
+        grant: new URLSearchParams(config.data).get('grant_type'),
+        cert: config.httpsAgent?.options?.cert,
+      });
+      n += 1;
+      if (n === 1) {
+        throw Object.assign(new Error('refused'), {
+          isAxiosError: true,
+          response: { status: 400, data: { error: 'invalid_grant' } },
+        });
+      }
+      return { data: { access_token: boundTo(THUMB_B), expires_in: 3600 } };
+    });
+    const { provider } = rotating({ refreshToken: 'R1' });
+    const t = recordingTargets();
+    await expect(provider.authorize(t.requestTarget)).resolves.toEqual(
+      RENEWED_REFUSAL,
+    );
+    expect(t.request.headers).toEqual({});
+    expect(requests.map((r) => r.grant)).toEqual(['refresh_token', 'password']);
+  });
+
+  it.each([
+    ['cnf null', null],
+    ['cnf without x5t#S256', { jkt: 'dpop-key' }],
+    ['x5t#S256 empty', { 'x5t#S256': '' }],
+  ])(
+    'malformed cnf (%s): renewed the same way, and the new token is the one checked',
+    async (_label, cnf) => {
+      const renewed = boundTo(THUMB_A);
+      issuing(renewed);
+      const { provider } = rotating({ token: jwt({ cnf }) });
+      const t = recordingTargets();
+      await expect(provider.authorize(t.requestTarget)).resolves.toEqual({
+        ok: true,
+      });
+      expect(t.request.headers.Authorization).toBe(`Bearer ${renewed}`);
+      expect(requests).toHaveLength(1);
+    },
+  );
+
+  it('establish() reads it as unknown, never fetching: the pinned certificate is presented, Ok', async () => {
+    const { provider } = rotating({ refreshToken: 'R1' });
+    const t = recordingTargets();
+    await expect(provider.establish(t.logonTarget)).resolves.toEqual({
+      ok: true,
+    });
+    expect(certificateThumbprint(t.logon.tls[0])).toBe(THUMB_A);
+    expect(mockedAxios).not.toHaveBeenCalled();
+    expect(mockedAxios.post).not.toHaveBeenCalled();
+  });
+
+  it('no certificate pinned: unchanged — getTokens() returns the token, establish() and authorize() refuse it', async () => {
+    const token = boundTo(THUMB_B);
+    const { provider } = seeded(token);
+    await expect(provider.getTokens()).resolves.toMatchObject({
+      authorizationToken: token,
+    });
+    const t = recordingTargets();
+    await expect(provider.establish(t.logonTarget)).resolves.toEqual(REFUSAL);
+    await expect(provider.authorize(t.requestTarget)).resolves.toEqual(REFUSAL);
+    expect(t.request.headers).toEqual({});
     expect(mockedAxios).not.toHaveBeenCalled();
     expect(mockedAxios.post).not.toHaveBeenCalled();
   });

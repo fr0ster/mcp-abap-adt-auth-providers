@@ -34,6 +34,7 @@ import {
   refusalFrom,
   safely,
   TOKEN_BOUND_ELSEWHERE,
+  TOKEN_RENEWED_BOUND_ELSEWHERE,
 } from '../auth/refusal';
 import { readRejection } from '../auth/rejection';
 import { readBinding, type TokenBinding } from '../auth/tokenBinding';
@@ -222,6 +223,20 @@ export abstract class BaseTokenProvider
   }
 
   /**
+   * True for a held token this provider cannot present: bound — or binding
+   * unreadably — to another certificate than the pinned one. It is then
+   * renewed like an expired token, through the pinned material. Without a
+   * pinned certificate there is nothing to renew it for: false, and the
+   * binding check refuses it where it would be presented.
+   */
+  private async boundToAnother(token: string): Promise<boolean> {
+    const binding = readBinding(token);
+    if (binding.state !== 'bound') return false;
+    const pinned = await this.pin();
+    return pinned !== undefined && !this.presents(binding, pinned);
+  }
+
+  /**
    * Format timestamp to readable date/time string
    * @param timestamp Timestamp in milliseconds
    * @returns Formatted date string (e.g., "2025-12-25 19:21:27 UTC")
@@ -318,8 +333,13 @@ export abstract class BaseTokenProvider
     });
     // A renewal in flight is replacing the cache: wait for it, not the old token
     if (this.renewal) return this.renewal;
-    // If token is valid, return cached
-    const isValid = this.isTokenValid();
+    // If token is valid, return cached — unless it is bound to another
+    // certificate than the pinned one (a restored token after a rotation):
+    // that one is renewed like an expired one.
+    const isValid =
+      this.isTokenValid() &&
+      !(await this.boundToAnother(this.authorizationToken ?? ''));
+    if (this.renewal) return this.renewal;
     if (isValid) {
       const authorizationToken = this.authorizationToken;
       if (!authorizationToken) {
@@ -585,8 +605,14 @@ export abstract class BaseTokenProvider
         !this.renewal && this.isTokenValid()
           ? this.authorizationToken
           : undefined;
-      const binding: TokenBinding =
+      let binding: TokenBinding =
         held === undefined ? { state: 'unknown' } : readBinding(held);
+      // Bound to another certificate than the pinned one: authorize() renews
+      // it through the pinned material, as it would an expired one — so it
+      // reads as unknown here, like an expired token.
+      if (pinned && !this.presents(binding, pinned)) {
+        binding = { state: 'unknown' };
+      }
       if (!this.presents(binding, pinned)) return boundElsewhere();
       if (!pinned) return OK;
       // A copy: a target that changes what it is given never changes what
@@ -604,8 +630,9 @@ export abstract class BaseTokenProvider
   }
 
   /**
-   * Per attempt: getTokens() renews an expired token here, and the token
-   * actually sent is the one checked.
+   * Per attempt: getTokens() renews an expired token here — and one bound to
+   * another certificate than the pinned one — and the token actually sent is
+   * the one checked.
    */
   async authorize(request: IRequestTarget): Promise<AuthOutcome> {
     return safely(this.obtaining, async () => {
@@ -614,7 +641,9 @@ export abstract class BaseTokenProvider
       const pinned = await this.pin();
       const result = await this.getTokens();
       if (!this.presents(readBinding(result.authorizationToken), pinned)) {
-        return boundElsewhere();
+        // Pinned: getTokens() already renewed a token bound elsewhere, so
+        // this one is the renewal's.
+        return pinned ? renewedBoundElsewhere() : boundElsewhere();
       }
       const written = atTarget('presenting the token', () => {
         this.applyToken(request, result);
@@ -683,9 +712,17 @@ export abstract class BaseTokenProvider
   }
 }
 
-/** The refusal for a token bound to a certificate this provider does not present. */
+/** The refusal for a held token bound to a certificate while none is pinned. */
 function boundElsewhere(): AuthOutcome {
   return oops(TOKEN_BOUND_ELSEWHERE.reason, TOKEN_BOUND_ELSEWHERE.hint);
+}
+
+/** The refusal for a renewed token still bound to another certificate. */
+function renewedBoundElsewhere(): AuthOutcome {
+  return oops(
+    TOKEN_RENEWED_BOUND_ELSEWHERE.reason,
+    TOKEN_RENEWED_BOUND_ELSEWHERE.hint,
+  );
 }
 
 /**
