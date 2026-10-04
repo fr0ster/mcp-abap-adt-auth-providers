@@ -728,6 +728,45 @@ describe('the server never reads back the password or the passcode', () => {
       /^OIDC device authorization failed \(401\): .*unauthorized.*refused/,
     );
   });
+
+  it.each([
+    ['as today', undefined],
+    [
+      'with a strategy',
+      { strategy: tlsClientCertificate({ material }), material },
+    ],
+  ])(
+    'device authorization %s: a TLS trust failure keeps its code, and the refusal names NODE_EXTRA_CA_CERTS',
+    async (_label, auth) => {
+      const untrusted = () =>
+        Object.assign(new Error('self-signed certificate SECRET-TLS-TEXT'), {
+          code: 'SELF_SIGNED_CERT_IN_CHAIN',
+          isAxiosError: true,
+        });
+      mockedAxios.mockRejectedValue(untrusted());
+      mockedAxios.post.mockRejectedValue(untrusted());
+      const thrown = await failureOf(
+        initiateDeviceAuthorization(
+          'https://idp/device-auth',
+          'cid',
+          'openid',
+          undefined,
+          auth,
+        ),
+      );
+      expect((thrown as { code?: unknown }).code).toBe(
+        'SELF_SIGNED_CERT_IN_CHAIN',
+      );
+      expect(refusalFrom(thrown, 'the token request')).toEqual({
+        ok: false,
+        refusal: {
+          reason:
+            "the token request failed: the server's certificate is not trusted (SELF_SIGNED_CERT_IN_CHAIN)",
+          hint: 'if the server uses a private CA, name its certificate in NODE_EXTRA_CA_CERTS',
+        },
+      });
+    },
+  );
 });
 
 describe.each(SITES)('$name: the error body on the thrown object', (site) => {
