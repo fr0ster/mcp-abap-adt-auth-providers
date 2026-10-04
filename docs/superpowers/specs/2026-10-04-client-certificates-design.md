@@ -183,7 +183,7 @@ the resource answers `401` and `rejected()` handles it as any refused
 credential. This limit is documented in the README, not hidden: an opaque
 token bound to a certificate needs the certificate strategy configured.
 
-The refusal for the last row is fixed words: `'the token is bound to a
+The refusal for the row *bound — none, or another thumbprint* is fixed words: `'the token is bound to a
 client certificate this provider does not present'`, hint `'configure the
 certificate the token was issued for, or obtain a new token'`. No thumbprint
 appears in it. A renewal in `rejected()` goes through the same strategy and
