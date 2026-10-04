@@ -2420,9 +2420,15 @@ Teardown removed everything setup had created.
 
 The x509 case — `ClientCredentialsProvider` with `tlsClientCertificate` and
 the `x509-key`'s `certificate`, `key` and `certurl`, no secret anywhere
-(`src/__tests__/integration/xsuaa/x509.test.ts`) — is new in 5.3.0.
-**Pending the `test:xsuaa` run:** its result on a trial subaccount is not
-recorded yet.
+(`src/__tests__/integration/xsuaa/x509.test.ts`) — is new in 5.3.0. Results
+on a BTP trial subaccount, 2026-10-04 — 2 suites, 6 passed, 1 skipped (the
+passcode case, no `XSUAA_PASSCODE`): the `x509-key` holds `certificate`, `key`
+and `certurl` and no `clientsecret`, and the provider got a
+`client_credentials` token whose client id is the key's, with no secret
+configured. Only `client_credentials` was run — no user grant — and whether
+ADT accepts a token obtained this way stays unproven (see
+[docs/btp-setup.md](docs/btp-setup.md)). Teardown removed everything setup had
+created.
 
 `UaaPasscodeProvider` was also checked by hand with an ABAP environment's own
 service key: its client accepts the passcode, and the token opens ADT. That

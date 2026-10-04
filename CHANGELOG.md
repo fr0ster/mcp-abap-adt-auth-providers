@@ -83,7 +83,8 @@ and the error codes `CERTIFICATE_MATERIAL_ERROR` and
 - **XSUAA check** (`npm run test:xsuaa`, not in CI): the test instance allows
   the `x509` credential type, and an `x509-key` created afresh per run gets a
   client token through `ClientCredentialsProvider` and `tlsClientCertificate`
-  at its `certurl`, with no secret. Service keys are now recorded in the
+  at its `certurl`, with no secret — passed on a BTP trial on 2026-10-04
+  (`client_credentials` only; ADT accepting such a token is unproven). Service keys are now recorded in the
   ledger by GUID, like instances and trusts.
 
 ### Changed
