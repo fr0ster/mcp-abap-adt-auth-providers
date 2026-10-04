@@ -10,11 +10,12 @@
 
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { describe, expect, it, jest } from '@jest/globals';
+import { beforeEach, describe, expect, it, jest } from '@jest/globals';
 import type {
   ICertificateMaterial,
   IClientAuthentication,
 } from '@mcp-abap-adt/interfaces-auth';
+import axios from 'axios';
 import { certificateThumbprint } from '../../auth/certificateMaterial';
 import { TOKEN_BOUND_ELSEWHERE } from '../../auth/refusal';
 import { readBinding } from '../../auth/tokenBinding';
@@ -22,6 +23,8 @@ import { OidcPasswordProvider } from '../../providers/OidcPasswordProvider';
 import { recordingTargets } from '../helpers/targets';
 
 jest.mock('axios');
+type Mock = jest.Mock<(...args: any[]) => Promise<unknown>>;
+const mockedAxios = axios as unknown as Mock & { post: Mock; get: Mock };
 
 const dir = join(__dirname, '..', 'fixtures', 'certificates');
 const read = (name: string) => readFileSync(join(dir, name));
@@ -38,14 +41,14 @@ const THUMB_B = certificateThumbprint(B);
 
 const b64url = (value: unknown) =>
   Buffer.from(JSON.stringify(value)).toString('base64url');
-const exp = () => Math.floor(Date.now() / 1000) + 3600;
+const exp = (seconds = 3600) => Math.floor(Date.now() / 1000) + seconds;
 /** An unsigned JWT; `extra` is merged into its payload. */
-const jwt = (extra: Record<string, unknown> = {}) =>
-  `${b64url({ alg: 'none', typ: 'JWT' })}.${b64url({ exp: exp(), sub: 'u', ...extra })}.sig`;
+const jwt = (extra: Record<string, unknown> = {}, seconds = 3600) =>
+  `${b64url({ alg: 'none', typ: 'JWT' })}.${b64url({ exp: exp(seconds), sub: 'u', ...extra })}.sig`;
 
 const UNBOUND = jwt();
-const boundTo = (thumbprint: string) =>
-  jwt({ cnf: { 'x5t#S256': thumbprint } });
+const boundTo = (thumbprint: string, seconds = 3600) =>
+  jwt({ cnf: { 'x5t#S256': thumbprint } }, seconds);
 /** Opaque: says nothing of its binding. Its expiry is stated beside it. */
 const OPAQUE = 'opaque-access-token';
 
@@ -88,6 +91,23 @@ function seeded(token: string, material?: ICertificateMaterial) {
   });
   return { provider, tlsCalls };
 }
+
+/** A provider holding no token at all. */
+function unseeded(material?: ICertificateMaterial) {
+  const { strategy } = strategyWith(material);
+  const provider = new OidcPasswordProvider({
+    clientId: 'client',
+    username: 'user',
+    password: 'pw',
+    tokenEndpoint: 'https://idp.example/token',
+    ...(material ? { clientAuthentication: strategy } : {}),
+  });
+  return { provider };
+}
+
+beforeEach(() => {
+  jest.clearAllMocks();
+});
 
 describe('readBinding', () => {
   it('a JWT with cnf["x5t#S256"] is bound to that thumbprint', () => {
@@ -323,11 +343,93 @@ describe('around the table', () => {
     expect(tlsCalls()).toBe(1);
   });
 
-  it('a target that throws in establish is caught, carrying nothing of it', async () => {
+  it('a target that throws in establish is its own failure, carrying nothing of it', async () => {
     const { provider } = seeded(boundTo(THUMB_A), A);
     const t = recordingTargets({ throws: true });
     const outcome = await provider.establish(t.logonTarget);
-    expect(outcome.ok).toBe(false);
+    expect(outcome).toEqual({
+      ok: false,
+      refusal: { reason: 'presenting the certificate failed (unknown error)' },
+    });
     expect(JSON.stringify(outcome)).not.toContain('SECRET-IN-TARGET');
+  });
+
+  it('unbound, material, a target that throws: Oops — a throwing target is broken (rule 1), not a refusal to go on from', async () => {
+    const { provider } = seeded(UNBOUND, A);
+    const t = recordingTargets({ throws: true });
+    await expect(provider.establish(t.logonTarget)).resolves.toEqual({
+      ok: false,
+      refusal: { reason: 'presenting the certificate failed (unknown error)' },
+    });
+  });
+
+  it('a target that throws in authorize is its own failure, not a token request', async () => {
+    const { provider } = seeded(UNBOUND);
+    const t = recordingTargets({ throws: true });
+    const outcome = await provider.authorize(t.requestTarget);
+    expect(outcome).toEqual({
+      ok: false,
+      refusal: { reason: 'presenting the token failed (unknown error)' },
+    });
+    expect(JSON.stringify(outcome)).not.toContain('SECRET-IN-TARGET');
+  });
+
+  it('a refused authorize leaves the presented token as it was', async () => {
+    const { provider } = seeded(UNBOUND, A);
+    const t = recordingTargets();
+    await provider.authorize(t.requestTarget);
+    // The held token, replaced as a store would; `presented` read to prove it unchanged.
+    const internals = provider as unknown as {
+      presented?: string;
+      authorizationToken?: string;
+    };
+    expect(internals.presented).toBe(UNBOUND);
+    internals.authorizationToken = boundTo(THUMB_B);
+    await expect(provider.authorize(t.requestTarget)).resolves.toEqual(REFUSAL);
+    expect(internals.presented).toBe(UNBOUND);
+  });
+});
+
+describe('establish decides on the token held, never fetching one', () => {
+  it('no token, no material: Ok, nothing presented, no request', async () => {
+    const { provider } = unseeded();
+    const t = recordingTargets();
+    await expect(provider.establish(t.logonTarget)).resolves.toEqual({
+      ok: true,
+    });
+    expect(t.logon.tls).toHaveLength(0);
+    expect(mockedAxios).not.toHaveBeenCalled();
+    expect(mockedAxios.post).not.toHaveBeenCalled();
+  });
+
+  it('no token, material: presented — unknown, so the wire must carry it', async () => {
+    const { provider } = unseeded(A);
+    const t = recordingTargets();
+    await expect(provider.establish(t.logonTarget)).resolves.toEqual({
+      ok: true,
+    });
+    expect(certificateThumbprint(t.logon.tls[0])).toBe(THUMB_A);
+    expect(mockedAxios).not.toHaveBeenCalled();
+    expect(mockedAxios.post).not.toHaveBeenCalled();
+  });
+
+  it("no token, material, a wire refusing TLS material: the wire's Oops (fail closed)", async () => {
+    const { provider } = unseeded(A);
+    const t = recordingTargets({ acceptsTls: false });
+    await expect(provider.establish(t.logonTarget)).resolves.toEqual({
+      ok: false,
+      refusal: { reason: 'this wire does not take TLS material' },
+    });
+  });
+
+  it('an expired token bound to another certificate is not refused at logon: the renewal will be bound to the pinned one', async () => {
+    const { provider } = seeded(boundTo(THUMB_B, -3600), A);
+    const t = recordingTargets();
+    await expect(provider.establish(t.logonTarget)).resolves.toEqual({
+      ok: true,
+    });
+    expect(certificateThumbprint(t.logon.tls[0])).toBe(THUMB_A);
+    expect(mockedAxios).not.toHaveBeenCalled();
+    expect(mockedAxios.post).not.toHaveBeenCalled();
   });
 });

@@ -29,11 +29,12 @@ import {
   OK,
   oops,
   ownLabel,
+  refusalFrom,
   safely,
   TOKEN_BOUND_ELSEWHERE,
 } from '../auth/refusal';
 import { readRejection } from '../auth/rejection';
-import { readBinding } from '../auth/tokenBinding';
+import { readBinding, type TokenBinding } from '../auth/tokenBinding';
 import type { TokenRequestAuth } from '../auth/tokenRequest';
 import { CertificateMaterialError } from '../errors/CertificateMaterialError';
 import { ValidationError } from '../errors/TokenProviderErrors';
@@ -555,48 +556,56 @@ export abstract class BaseTokenProvider
 
   /**
    * The token is presented per request; the logon carries the pinned
-   * certificate when the token may need it (spec §4's table). A token bound
-   * to a certificate this provider does not present is refused here, before
-   * any logon is made for it.
+   * certificate when the token may need it (spec §4's table). Decided on the
+   * token this provider HOLDS — a logon never obtains, refreshes or logs in.
+   * No token, an expired one, or one being renewed reads as unknown: the
+   * token presented will be the one authorize() obtains through the same
+   * strategy and pinned material, and authorize() checks that one.
    */
   async establish(logon: ILogonTarget): Promise<AuthOutcome> {
     return safely(this.obtaining, async () => {
-      const { result, pinned } = await this.tokenToPresent();
-      const binding = readBinding(result.authorizationToken);
+      const pinned = await this.pin();
+      const held =
+        !this.renewal && this.isTokenValid()
+          ? this.authorizationToken
+          : undefined;
+      const binding: TokenBinding =
+        held === undefined ? { state: 'unknown' } : readBinding(held);
       if (!this.presents(binding, pinned)) return boundElsewhere();
       if (!pinned) return OK;
-      const presented = await logon.tlsMaterial(pinned.material);
-      // Unbound: the Bearer carries the token, the certificate is a courtesy.
+      const presented = atTarget('presenting the certificate', () =>
+        logon.tlsMaterial(pinned.material),
+      );
+      // Unbound: the Bearer carries the token, the certificate is a courtesy
+      // — but a target that throws is broken (rule 1), and that is an Oops.
       // Bound or unknown: the token is not sent on a connection without it.
-      return binding.state === 'unbound' ? OK : presented;
-    });
-  }
-
-  /** Per attempt: getTokens() renews an expired token here. */
-  async authorize(request: IRequestTarget): Promise<AuthOutcome> {
-    return safely(this.obtaining, async () => {
-      const { result, pinned } = await this.tokenToPresent();
-      if (!this.presents(readBinding(result.authorizationToken), pinned)) {
-        return boundElsewhere();
-      }
-      this.applyToken(request, result);
-      this.presented = result.authorizationToken;
-      return OK;
+      return binding.state === 'unbound' && !presented.thrown
+        ? OK
+        : presented.outcome;
     });
   }
 
   /**
-   * The token this provider would present, and the certificate pinned before
-   * it — pinned here too, so a token served from cache (seeded, restored)
-   * is checked against the certificate like an obtained one.
+   * Per attempt: getTokens() renews an expired token here, and the token
+   * actually sent is the one checked.
    */
-  private async tokenToPresent(): Promise<{
-    result: ITokenResult;
-    pinned: PinnedCertificate | undefined;
-  }> {
-    const pinned = await this.pin();
-    const result = await this.getTokens();
-    return { result, pinned };
+  async authorize(request: IRequestTarget): Promise<AuthOutcome> {
+    return safely(this.obtaining, async () => {
+      // Pinned here too, so a token served from cache (seeded, restored) is
+      // checked against the certificate like an obtained one.
+      const pinned = await this.pin();
+      const result = await this.getTokens();
+      if (!this.presents(readBinding(result.authorizationToken), pinned)) {
+        return boundElsewhere();
+      }
+      const written = atTarget('presenting the token', () => {
+        this.applyToken(request, result);
+        return OK;
+      });
+      if (written.thrown) return written.outcome;
+      this.presented = result.authorizationToken;
+      return OK;
+    });
   }
 
   /**
@@ -605,7 +614,7 @@ export abstract class BaseTokenProvider
    * Unbound and unknown tokens may be presented (spec §4).
    */
   private presents(
-    binding: ReturnType<typeof readBinding>,
+    binding: TokenBinding,
     pinned: PinnedCertificate | undefined,
   ): boolean {
     if (binding.state !== 'bound') return true;
@@ -659,4 +668,20 @@ export abstract class BaseTokenProvider
 /** The refusal for a token bound to a certificate this provider does not present. */
 function boundElsewhere(): AuthOutcome {
   return oops(TOKEN_BOUND_ELSEWHERE.reason, TOKEN_BOUND_ELSEWHERE.hint);
+}
+
+/**
+ * One write to a consumer's target. A target that throws is the target's
+ * failure, not the token request's: it is refused under `what`, through the
+ * same refusalFrom as every other thrown value (rule 2).
+ */
+function atTarget(
+  what: string,
+  write: () => AuthOutcome,
+): { outcome: AuthOutcome; thrown: boolean } {
+  try {
+    return { outcome: write(), thrown: false };
+  } catch (error) {
+    return { outcome: refusalFrom(error, what), thrown: true };
+  }
 }
