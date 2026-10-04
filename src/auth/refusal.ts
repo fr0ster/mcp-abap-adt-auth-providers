@@ -34,6 +34,13 @@ import {
   ValidationError,
 } from '../errors/TokenProviderErrors';
 import { AuthorizationRefusedError } from './callbackScopeError';
+import {
+  allowlistedCode,
+  integerStatus,
+  readSafely,
+  TLS_CODES,
+  tlsFailureCode,
+} from './knownCodes';
 import { registeredOAuthError } from './oauthErrorBody';
 
 export const OK: AuthOutcome = { ok: true };
@@ -134,96 +141,7 @@ const ASSERTION_CHECKS: ReadonlySet<AssertionCheck> = new Set<AssertionCheck>([
   'replay',
 ]);
 
-const KNOWN_SYSTEM_CODES: ReadonlySet<string> = new Set([
-  'ENOENT',
-  'EACCES',
-  'EPERM',
-  'ECONNREFUSED',
-  'ECONNRESET',
-  'ETIMEDOUT',
-  'ENOTFOUND',
-  'EAI_AGAIN',
-  'EPIPE',
-  'EADDRINUSE',
-  'ECONNABORTED',
-  'EPROTO',
-  // axios's own, for a request that got no response
-  'ERR_NETWORK',
-]);
-
-/** The fixed words for one TLS failure: what it says, and what to do. */
-interface TlsWords {
-  readonly says: string;
-  readonly hint: string;
-}
-
-const UNTRUSTED_SERVER: TlsWords = {
-  says: "the server's certificate is not trusted",
-  hint: 'if the server uses a private CA, name its certificate in NODE_EXTRA_CA_CERTS',
-};
-
-/**
- * The server asked for a client certificate and refused the one presented, or
- * its absence: the alert it sent, as Node names it. Current OpenSSL (3.5 with
- * Node 22 and 24, 3.6 — measured) spells the SSLv3-era alerts
- * `SSL/TLS_ALERT_…`; older releases spelled them `SSLV3_ALERT_…` — both are
- * listed.
- */
-const REFUSED_CLIENT_CERTIFICATE: TlsWords = {
-  says: 'the server refused the client certificate',
-  hint: "check that the server trusts the certificate's issuer and that the certificate is valid and not revoked",
-};
-
-const CLIENT_CERTIFICATE_ALERTS = [
-  'BAD_CERTIFICATE',
-  'CERTIFICATE_UNKNOWN',
-  'CERTIFICATE_EXPIRED',
-  'CERTIFICATE_REVOKED',
-  'UNSUPPORTED_CERTIFICATE',
-].flatMap((alert) => [
-  `ERR_SSL_SSL/TLS_ALERT_${alert}`,
-  `ERR_SSL_SSLV3_ALERT_${alert}`,
-]);
-
-/**
- * Node's codes for a TLS failure, each with its fixed words. The code is the
- * only part of such an error a refusal names; its message never.
- */
-const TLS_CODES: ReadonlyMap<string, TlsWords> = new Map<string, TlsWords>([
-  ['UNABLE_TO_VERIFY_LEAF_SIGNATURE', UNTRUSTED_SERVER],
-  ['SELF_SIGNED_CERT_IN_CHAIN', UNTRUSTED_SERVER],
-  ['DEPTH_ZERO_SELF_SIGNED_CERT', UNTRUSTED_SERVER],
-  ['UNABLE_TO_GET_ISSUER_CERT_LOCALLY', UNTRUSTED_SERVER],
-  [
-    'CERT_HAS_EXPIRED',
-    {
-      says: "the server's certificate has expired",
-      hint: "the server must renew its certificate; check also this machine's clock",
-    },
-  ],
-  [
-    'ERR_TLS_CERT_ALTNAME_INVALID',
-    {
-      says: "the host name is not in the server's certificate",
-      hint: "use the host name the server's certificate is issued for",
-    },
-  ],
-  ['ERR_SSL_TLSV13_ALERT_CERTIFICATE_REQUIRED', REFUSED_CLIENT_CERTIFICATE],
-  ['ERR_SSL_TLSV1_ALERT_UNKNOWN_CA', REFUSED_CLIENT_CERTIFICATE],
-  ...CLIENT_CERTIFICATE_ALERTS.map(
-    (code) => [code, REFUSED_CLIENT_CERTIFICATE] as const,
-  ),
-]);
-
-/**
- * The allowlisted code of a TLS failure — the server's certificate, or the
- * server refusing the client's — else undefined. A site that wraps its errors
- * lets these through unwrapped, so the refusal can name the code.
- */
-export function tlsFailureCode(error: unknown): string | undefined {
-  const code = (error as { code?: unknown } | null)?.code;
-  return typeof code === 'string' && TLS_CODES.has(code) ? code : undefined;
-}
+export { allowlistedCode, tlsFailureCode } from './knownCodes';
 
 export const KNOWN_RFC_KEYS: ReadonlySet<string> = new Set([
   'RFC_COMMUNICATION_FAILURE',
@@ -271,14 +189,6 @@ function knownFields(missing: unknown): string {
   return names.length ? `: ${names.join(', ')}` : '';
 }
 
-/** The code when it is an allowlisted system or TLS code, else undefined. */
-export function allowlistedCode(code: unknown): string | undefined {
-  return typeof code === 'string' &&
-    (KNOWN_SYSTEM_CODES.has(code) || TLS_CODES.has(code))
-    ? code
-    : undefined;
-}
-
 /**
  * What may be named of a thrown value besides its class: an integer HTTP
  * status (`status`, else `response.status`), a registered OAuth error code
@@ -286,28 +196,35 @@ export function allowlistedCode(code: unknown): string | undefined {
  * re-checked here, whoever built the error; nothing else is read.
  */
 function safeFacts(error: unknown): string[] {
-  const e = error as {
-    status?: unknown;
-    code?: unknown;
-    oauthError?: unknown;
-    response?: { status?: unknown; data?: { error?: unknown } | null };
-  } | null;
-  if (!e || typeof e !== 'object') return [];
   const facts: string[] = [];
-  const status = Number.isInteger(e.status) ? e.status : e.response?.status;
-  if (typeof status === 'number' && Number.isInteger(status)) {
-    facts.push(`HTTP ${status}`);
-  }
+  const response = readSafely(error, 'response');
+  const status =
+    integerStatus(readSafely(error, 'status')) ??
+    integerStatus(readSafely(response, 'status'));
+  if (status !== undefined) facts.push(`HTTP ${status}`);
   const oauth =
-    registeredOAuthError(e.oauthError) ??
-    registeredOAuthError(e.response?.data?.error);
+    registeredOAuthError(readSafely(error, 'oauthError')) ??
+    registeredOAuthError(readSafely(readSafely(response, 'data'), 'error'));
   if (oauth) facts.push(oauth);
-  const code = allowlistedCode(e.code);
+  const code = allowlistedCode(readSafely(error, 'code'));
   if (code) facts.push(code);
   return facts;
 }
 
+/**
+ * Total (rule 1): reading a foreign error — a getter, a Proxy, an `instanceof`
+ * whose prototype trap throws — never makes this throw; whatever does is
+ * "unknown error".
+ */
 export function refusalFrom(error: unknown, what: string): AuthOutcome {
+  try {
+    return refusalFromUnguarded(error, what);
+  } catch {
+    return oops(`${what} failed (unknown error)`);
+  }
+}
+
+function refusalFromUnguarded(error: unknown, what: string): AuthOutcome {
   if (error instanceof DeviceCodePresentationError) {
     return oops('showing the device code failed');
   }
@@ -334,8 +251,10 @@ export function refusalFrom(error: unknown, what: string): AuthOutcome {
   if (error instanceof BrowserAuthError) {
     const refused = error.cause;
     if (refused instanceof AuthorizationRefusedError) {
+      // Re-checked: `readonly` is TypeScript's, the instance can be mutated.
+      const code = registeredOAuthError(readSafely(refused, 'oauthError'));
       return oops(
-        `the identity provider refused the login${refused.oauthError ? ` (${refused.oauthError})` : ''}`,
+        `the identity provider refused the login${code ? ` (${code})` : ''}`,
         'check the identity provider: the user, the client and the scopes it allows',
       );
     }
@@ -374,6 +293,11 @@ export function refusalFrom(error: unknown, what: string): AuthOutcome {
     return oops(`${what} failed: ${words.says} (${tls})`, words.hint);
   }
   const facts = safeFacts(error);
+  // A server answered: its status (and code) say what happened, the same
+  // words as a TokenEndpointError's. Without one, "unknown error" leads.
+  if (facts.some((fact) => fact.startsWith('HTTP '))) {
+    return oops(`${what} failed (${facts.join(', ')})`);
+  }
   return oops(
     `${what} failed (unknown error${facts.length ? `, ${facts.join(', ')}` : ''})`,
   );
@@ -396,11 +320,11 @@ export function loggedError(
 ): { error: string; status?: number } {
   const outcome = refusalFrom(error, what);
   const words = outcome.ok ? `${what} failed` : outcome.refusal.reason;
-  const status = (error as { response?: { status?: unknown } } | null)?.response
-    ?.status;
-  return typeof status === 'number' && Number.isInteger(status)
-    ? { error: words, status }
-    : { error: words };
+  // Guarded reads: `status` (a TokenEndpointError's) or `response.status`.
+  const status =
+    integerStatus(readSafely(error, 'status')) ??
+    integerStatus(readSafely(readSafely(error, 'response'), 'status'));
+  return status === undefined ? { error: words } : { error: words, status };
 }
 
 /** The boundary every contract method runs inside (spec rule 1). */

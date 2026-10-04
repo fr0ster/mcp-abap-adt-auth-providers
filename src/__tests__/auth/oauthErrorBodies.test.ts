@@ -181,7 +181,10 @@ describe('OAuth error bodies stay out of logs and messages', () => {
         ),
       );
       expect(text()).not.toContain(JWT);
-      expect(text()).toContain('is not acceptable');
+      // The SAML log carries the safe facts only, never the description,
+      // redacted or not.
+      expect(text()).toContain('HTTP 400, invalid_grant');
+      expect(text()).not.toContain('is not acceptable');
     });
 
     // The request sent the assertion form-urlencoded, so a server echoing its
@@ -203,7 +206,10 @@ describe('OAuth error bodies stay out of logs and messages', () => {
       );
       expect(text()).not.toContain(encoded);
       expect(text()).not.toContain(assertion);
-      expect(text()).toContain('could not parse assertion=');
+      // The SAML log carries the safe facts only, never the description,
+      // redacted or not.
+      expect(text()).toContain('HTTP 400, invalid_grant');
+      expect(text()).not.toContain('could not parse assertion=');
     });
 
     // A known secret is redacted whatever its length: nothing checks that a
@@ -232,7 +238,10 @@ describe('OAuth error bodies stay out of logs and messages', () => {
       );
       expect(text()).not.toContain('secret-value-xyz');
       expect(text()).not.toContain(assertion);
-      expect(text()).toContain('bad client');
+      // The SAML log carries the safe facts only, never the description,
+      // redacted or not.
+      expect(text()).toContain('HTTP 400, invalid_grant');
+      expect(text()).not.toContain('bad client');
     });
   });
 });

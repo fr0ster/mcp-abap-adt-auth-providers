@@ -9,10 +9,15 @@
 
 import http from 'node:http';
 import { beforeEach, describe, expect, it, jest } from '@jest/globals';
-import axios from 'axios';
+import axios, { AxiosError } from 'axios';
+import { AuthorizationRefusedError } from '../../auth/callbackScopeError';
 import { getTokenWithClientCredentials } from '../../auth/clientCredentialsAuth';
 import { refreshOidcToken } from '../../auth/oidcToken';
 import { loggedError, refusalFrom } from '../../auth/refusal';
+import {
+  exchangeSamlAssertion,
+  refreshSamlBearerToken,
+} from '../../auth/saml2TokenExchange';
 import { refreshJwtToken } from '../../auth/tokenRefresher';
 import { TokenEndpointError } from '../../errors/TokenEndpointError';
 import {
@@ -345,5 +350,217 @@ describe('an IdP refusal on the browser callback', () => {
       }),
     );
     expect(error).toBe(mismatch);
+  });
+});
+
+/** A value whose every read throws: a getter or a Proxy a consumer threw. */
+const hostile = () =>
+  new Proxy(
+    {},
+    {
+      get() {
+        throw new Error(MARKER);
+      },
+      has() {
+        throw new Error(MARKER);
+      },
+      getPrototypeOf() {
+        throw new Error(MARKER);
+      },
+      ownKeys() {
+        throw new Error(MARKER);
+      },
+      getOwnPropertyDescriptor() {
+        throw new Error(MARKER);
+      },
+    },
+  );
+
+describe('refusalFrom and loggedError are total', () => {
+  beforeEach(() => {
+    jest.resetAllMocks();
+  });
+
+  it('a value whose every read throws is "unknown error", not an exception', () => {
+    expect(refusalFrom(hostile(), 'the step')).toEqual({
+      ok: false,
+      refusal: { reason: 'the step failed (unknown error)' },
+    });
+    expect(loggedError(hostile(), 'the step')).toEqual({
+      error: 'the step failed (unknown error)',
+    });
+  });
+
+  it('a provider answers Oops and logs a fixed line when a strategy throws one', async () => {
+    const lines: string[] = [];
+    const record = (level: string) => (m: string, meta?: unknown) =>
+      lines.push(`${level} ${m} ${JSON.stringify(meta ?? {})}`);
+    const logger = {
+      debug: record('debug'),
+      info: record('info'),
+      warn: record('warn'),
+      error: record('error'),
+    };
+    const strategy = {
+      authenticate: async () => {
+        throw hostile();
+      },
+    };
+    const credentials = new ClientCredentialsProvider({
+      uaaUrl: 'https://uaa',
+      clientId: 'cid',
+      clientAuthentication: strategy,
+      logger,
+    });
+    const prepared = await credentials.prepare();
+    expect(prepared.ok).toBe(false);
+    const code = new AuthorizationCodeProvider({
+      uaaUrl: 'https://uaa',
+      clientId: 'cid',
+      refreshToken: 'rt-0123456789',
+      clientAuthentication: strategy,
+      authorization: {
+        authorize: async () => ({
+          payload: 'c',
+          redirectUri: 'http://localhost:61001/callback',
+        }),
+      },
+      logger,
+    });
+    const rejected = await code.rejected({
+      at: 'request',
+      status: 401,
+      error: undefined,
+    });
+    expect(rejected.ok).toBe(false);
+    await code.getTokens().catch(() => undefined);
+    expect(lines.join('\n')).toContain('Refresh failed');
+    expect(lines.join('\n')).not.toContain(MARKER);
+  });
+});
+
+describe('the facts are re-checked wherever they are read', () => {
+  const FOREIGN = 'REVIEW_TEST_FOREIGN_CODE_19be';
+
+  it('a mutated refusal code never reaches the refusal', () => {
+    const refused = new AuthorizationRefusedError('consent_required');
+    (refused as unknown as { oauthError: string }).oauthError = FOREIGN;
+    const outcome = refusalFrom(
+      new BrowserAuthError(refused.message, refused),
+      'the login',
+    );
+    expect(JSON.stringify(outcome)).not.toContain(FOREIGN);
+    expect(JSON.stringify(outcome)).toContain('refused the login');
+  });
+
+  it('TokenEndpointError keeps only allowlisted facts', () => {
+    const forged = new TokenEndpointError('m', {
+      status: 401.5,
+      code: FOREIGN,
+      oauthError: FOREIGN,
+    });
+    expect(forged.status).toBeUndefined();
+    expect(forged.code).toBeUndefined();
+    expect(forged.oauthError).toBeUndefined();
+    expect(JSON.stringify(forged)).not.toContain(FOREIGN);
+    const kept = new TokenEndpointError('m', {
+      status: 401,
+      code: 'ECONNRESET',
+      oauthError: 'invalid_grant',
+    });
+    expect([kept.status, kept.code, kept.oauthError]).toEqual([
+      401,
+      'ECONNRESET',
+      'invalid_grant',
+    ]);
+  });
+
+  it("loggedError's status field comes from a TokenEndpointError too", () => {
+    expect(
+      loggedError(new TokenEndpointError('m', { status: 401 }), 'x').status,
+    ).toBe(401);
+  });
+
+  it('a reduced AxiosError reads like a TokenEndpointError', () => {
+    const facts = { status: 401, oauthError: 'invalid_grant' };
+    const axiosError = new AxiosError(
+      'Request failed with status code 401',
+      undefined,
+      undefined,
+      undefined,
+      {
+        status: 401,
+        statusText: '',
+        headers: {},
+        data: { error: 'invalid_grant' },
+      } as never,
+    );
+    const words = refusalFrom(axiosError, 'the refresh');
+    expect(words).toEqual(
+      refusalFrom(new TokenEndpointError('m', facts), 'the refresh'),
+    );
+    expect(words).toEqual({
+      ok: false,
+      refusal: { reason: 'the refresh failed (HTTP 401, invalid_grant)' },
+    });
+  });
+
+  it('the SAML bearer exchange logs the facts, not the description', async () => {
+    jest.resetAllMocks();
+    (
+      axios as unknown as { isAxiosError: (e: unknown) => boolean }
+    ).isAxiosError = (e) =>
+      !!(e as { isAxiosError?: boolean } | null)?.isAxiosError;
+    const failure = {
+      isAxiosError: true,
+      config: {},
+      message: 'Request failed with status code 400',
+      response: {
+        status: 400,
+        data: { error: 'invalid_grant', error_description: FOREIGN },
+      },
+    };
+    mockedAxios.mockRejectedValue(failure);
+    (axios as unknown as { post: Mock }).post = jest.fn(async () => {
+      throw failure;
+    }) as unknown as Mock;
+    const lines: string[] = [];
+    const record = (level: string) => (m: string, meta?: unknown) =>
+      lines.push(`${level} ${m} ${JSON.stringify(meta ?? {})}`);
+    const logger = {
+      debug: record('debug'),
+      info: record('info'),
+      warn: record('warn'),
+      error: record('error'),
+    };
+    for (const run of [
+      () =>
+        exchangeSamlAssertion(
+          'ASSERTION',
+          'https://uaa/oauth/token',
+          'cid',
+          'secret',
+          logger,
+        ),
+      () =>
+        refreshSamlBearerToken(
+          'rt',
+          'https://uaa/oauth/token',
+          'cid',
+          'secret',
+          logger,
+        ),
+    ]) {
+      await run().catch(() => undefined);
+    }
+    const failed = lines.filter(
+      (l) => l.includes('[SAML]') && l.startsWith('error'),
+    );
+    expect(failed).toHaveLength(2);
+    for (const line of failed) {
+      expect(line).toContain('HTTP 400');
+      expect(line).toContain('invalid_grant');
+      expect(line).not.toContain(FOREIGN);
+    }
   });
 });

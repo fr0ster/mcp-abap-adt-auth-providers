@@ -5,7 +5,7 @@
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
 import axios, { type AxiosResponse } from 'axios';
 import { ValidationError } from '../errors/TokenProviderErrors';
-import { describeOAuthErrorBody } from './oauthErrorBody';
+import { loggedError } from './refusal';
 import {
   grantSecrets,
   type PreparedTokenRequest,
@@ -96,14 +96,12 @@ export async function exchangeSamlAssertion(
     );
   } catch (error) {
     if (axios.isAxiosError(error)) {
-      logger?.error('[SAML] Token exchange failed', {
-        status: error.response?.status,
-        error: describeOAuthErrorBody(error.response?.data, [
-          samlResponse,
-          clientSecret,
-          ...(prepared?.secrets ?? []),
-        ]),
-      });
+      // The safe facts only (status, a registered code, an allowlisted
+      // system code): not even a redacted description reaches the log.
+      logger?.error(
+        '[SAML] Token exchange failed',
+        loggedError(error, 'the SAML token exchange'),
+      );
     }
     throw error;
   }
@@ -155,14 +153,12 @@ export async function refreshSamlBearerToken(
     );
   } catch (error) {
     if (axios.isAxiosError(error)) {
-      logger?.error('[SAML] Token refresh failed', {
-        status: error.response?.status,
-        error: describeOAuthErrorBody(error.response?.data, [
-          refreshToken,
-          clientSecret,
-          ...(prepared?.secrets ?? []),
-        ]),
-      });
+      // The safe facts only (status, a registered code, an allowlisted
+      // system code): not even a redacted description reaches the log.
+      logger?.error(
+        '[SAML] Token refresh failed',
+        loggedError(error, 'the SAML token refresh'),
+      );
     }
     throw error;
   }

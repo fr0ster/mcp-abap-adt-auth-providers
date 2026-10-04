@@ -38,13 +38,13 @@ import axios, {
 import { ClientAuthenticationResultError } from '../errors/ClientAuthenticationError';
 import { TokenEndpointError } from '../errors/TokenEndpointError';
 import { assertNotExpired } from './certificateMaterial';
+import { allowlistedCode, integerStatus, readSafely } from './knownCodes';
 import {
   describeOAuthErrorBody,
   type OAuthErrorFields,
   oauthErrorFields,
-  registeredOAuthError,
 } from './oauthErrorBody';
-import { allowlistedCode, loggedError } from './refusal';
+import { loggedError } from './refusal';
 
 /** What a site is given to authenticate one request with a strategy. */
 export interface TokenRequestAuth {
@@ -294,6 +294,18 @@ function withoutRequest(
   error: unknown,
   secrets: readonly (string | undefined)[],
 ): unknown {
+  try {
+    return reduce(error, secrets);
+  } catch {
+    // A value whose reading throws: nothing of it is kept.
+    return new AxiosError('the token request failed');
+  }
+}
+
+function reduce(
+  error: unknown,
+  secrets: readonly (string | undefined)[],
+): unknown {
   if (!error || typeof error !== 'object') return error;
   const raw = error as Record<string, unknown>;
   if (!('config' in raw) && !('request' in raw) && !('response' in raw)) {
@@ -363,16 +375,18 @@ export function tokenEndpointError(
   error: unknown,
   secrets: readonly (string | undefined)[],
 ): TokenEndpointError {
-  const response = (error as TokenRequestFailure | null)?.response;
-  const status = response?.status;
-  if (response && typeof status === 'number') {
+  // Guarded reads: a getter or a Proxy reads as absent.
+  const response = readSafely(error, 'response');
+  const status = integerStatus(readSafely(response, 'status'));
+  if (status !== undefined) {
+    const data = readSafely(response, 'data');
     return new TokenEndpointError(
-      `${label} (${status}): ${describeOAuthErrorBody(response.data, secrets)}`,
-      { status, oauthError: registeredOAuthError(response.data?.error) },
+      `${label} (${status}): ${describeOAuthErrorBody(data, secrets)}`,
+      { status, oauthError: readSafely(data, 'error') },
       { cause: error },
     );
   }
-  const code = allowlistedCode((error as { code?: unknown } | null)?.code);
+  const code = allowlistedCode(readSafely(error, 'code'));
   return new TokenEndpointError(
     `${label}: ${loggedError(error, 'the token request').error}`,
     { code },

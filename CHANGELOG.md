@@ -191,7 +191,9 @@ and `CLIENT_AUTHENTICATION_ERROR`.
   device initiation and password grant (were plain `Error`s). It carries the
   safe facts as properties: `status`, `oauthError` (a registered OAuth / OIDC
   code only; OIDC Core §3.1.2.6's codes joined the registered list) and
-  `code` (an allowlisted system or TLS code only); `cause` is the original.
+  `code` (an allowlisted system or TLS code only) — the constructor drops
+  any other value, so its properties and JSON can be trusted whoever built
+  it; `cause` is the original.
   The message keeps its form, `<label> (<status>): <redacted OAuth summary>`;
   without a response it is `<label>: <fixed words>` (was the transport's
   message), and the device initiation and password grant no longer say
@@ -271,8 +273,14 @@ and `CLIENT_AUTHENTICATION_ERROR`.
   `EPROTO` and `ERR_NETWORK` join the allowlisted system codes. Fixed words
   still name the safe facts: a refusal and a log line add an integer HTTP
   status, a registered OAuth / OIDC `error` code and an allowlisted system or
-  TLS code (e.g. `the refresh failed (HTTP 401, invalid_grant)`), never a
-  description. An identity provider's `?error=` on the browser callback
+  TLS code (e.g. `the refresh failed (HTTP 401, invalid_grant)` — the same
+  words for a `TokenEndpointError` and for a reduced `AxiosError`; "unknown
+  error" leads only when no server answered), never a description. Every
+  such property of a foreign error is read under a guard: a throwing getter
+  or a Proxy reads as absent, and `refusalFrom` / `loggedError` are total —
+  whatever still throws is `unknown error`, never an exception across the
+  contract. The SAML bearer exchange and refresh log the same safe facts
+  (they logged the redacted `error_description`). An identity provider's `?error=` on the browser callback
   names only its registered code — `BrowserAuthError("the identity provider
   refused the login (consent_required)")`, refused as such — and drops
   `error_description`, `error_uri` and an unregistered code (they reach only

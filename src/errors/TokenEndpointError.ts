@@ -6,10 +6,15 @@
  * properties; the message names only the status and the OAuth summary the
  * site already redacted (`describeOAuthErrorBody`), or fixed words.
  *
- * A consumer can construct one, so `refusal.ts` re-checks every fact against
- * its allowlists before naming it; the constructor keeps only well-typed
- * values.
+ * The constructor keeps a fact only when it passes its allowlist — an integer
+ * status, an allowlisted code, a registered OAuth / OIDC code — so the
+ * object's own properties and its JSON can be trusted, whoever built it;
+ * `refusal.ts` re-checks them anyway before naming them.
  */
+
+import { allowlistedCode, integerStatus } from '../auth/knownCodes';
+import { registeredOAuthError } from '../auth/oauthErrorBody';
+
 export class TokenEndpointError extends Error {
   readonly status?: number;
   readonly code?: string;
@@ -23,12 +28,11 @@ export class TokenEndpointError extends Error {
     super(message, options);
     this.name = 'TokenEndpointError';
     Object.setPrototypeOf(this, TokenEndpointError.prototype);
-    if (typeof facts.status === 'number' && Number.isInteger(facts.status)) {
-      this.status = facts.status;
-    }
-    if (typeof facts.code === 'string') this.code = facts.code;
-    if (typeof facts.oauthError === 'string') {
-      this.oauthError = facts.oauthError;
-    }
+    const status = integerStatus(facts.status);
+    if (status !== undefined) this.status = status;
+    const code = allowlistedCode(facts.code);
+    if (code) this.code = code;
+    const oauthError = registeredOAuthError(facts.oauthError);
+    if (oauthError) this.oauthError = oauthError;
   }
 }
