@@ -34,7 +34,13 @@ import { Saml2BearerProvider } from '../../providers/Saml2BearerProvider';
 import { UaaPasscodeProvider } from '../../providers/UaaPasscodeProvider';
 import { recordingTargets } from '../helpers/targets';
 
-jest.mock('axios');
+// Automocked, but with axios's own error class: the sites throw it.
+jest.mock('axios', () => {
+  const mocked = jest.createMockFromModule<Record<string, unknown>>('axios');
+  mocked.AxiosError =
+    jest.requireActual<Record<string, unknown>>('axios').AxiosError;
+  return mocked;
+});
 type Mock = jest.Mock<(...args: any[]) => Promise<unknown>>;
 const mockedAxios = axios as unknown as Mock & { post: Mock; get: Mock };
 

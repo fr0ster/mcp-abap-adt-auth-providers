@@ -27,7 +27,13 @@ import { Saml2PureProvider } from '../../providers/Saml2PureProvider';
 import { staticCodeStrategy } from '../../strategies';
 import { SITES, tokenReply } from '../helpers/tokenRequestSites';
 
-jest.mock('axios');
+// Automocked, but with axios's own error class: the sites throw it.
+jest.mock('axios', () => {
+  const mocked = jest.createMockFromModule<Record<string, unknown>>('axios');
+  mocked.AxiosError =
+    jest.requireActual<Record<string, unknown>>('axios').AxiosError;
+  return mocked;
+});
 type Mock = jest.Mock<(...args: any[]) => Promise<unknown>>;
 const mockedAxios = axios as unknown as Mock & {
   post: Mock;
@@ -239,14 +245,22 @@ describe('no secret of a client authentication in the logs', () => {
           };
         });
         let message = '';
+        let data = '';
         try {
           await site.run(auth, logger);
         } catch (error) {
           message = String((error as { message?: unknown }).message ?? error);
+          data = JSON.stringify(
+            (error as { response?: { data?: unknown } }).response?.data ?? '',
+          );
         }
 
         expect(sent.length > 0 || material !== undefined).toBe(true);
-        const all = `${lines.join('\n')}\n${message}`;
+        const all = `${lines.join('\n')}\n${message}\n${data}`;
+        // The failure is not vacuous: the server's OAuth summary reached the
+        // message, a log line or the reduced body — with what was sent redacted.
+        expect(all).toContain('invalid_client');
+        if (sent.length > before) expect(all).toContain('<redacted');
         for (const secret of [SECRET, PASSPHRASE, ...sent]) {
           for (const window of windows(secret)) {
             expect(all).not.toContain(window);
