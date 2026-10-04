@@ -56,6 +56,12 @@ import { createInMemoryReplayStore } from '../../validation/inMemoryReplayStore'
 
 jest.mock('../../auth/oidcDiscovery', () => ({
   discoverOidc: jest.fn(),
+  // A pure reader of the document: the real one.
+  mtlsAlias: (
+    jest.requireActual('../../auth/oidcDiscovery') as {
+      mtlsAlias: unknown;
+    }
+  ).mtlsAlias,
 }));
 // `oidcBrowserAuth` is deliberately NOT mocked: the provider's default strategy
 // takes its callback transport (`withOidcCallbackServer`) from that module, and
@@ -285,6 +291,8 @@ describe('SSO Providers', () => {
       'external-code',
       'http://localhost:61001/callback',
       expect.any(String),
+      undefined,
+      // No client authentication configured: none given to the site.
       undefined,
     );
   });
@@ -869,6 +877,8 @@ describe('SSO Providers', () => {
       undefined,
       undefined,
       undefined,
+      // No client authentication configured: none given to the site.
+      undefined,
     );
   });
 
@@ -918,6 +928,8 @@ describe('SSO Providers', () => {
         'https://uaa/oauth/token',
         'client',
         'secret',
+        undefined,
+        // No client authentication configured: none given to the site.
         undefined,
       );
       expect(tokens.authorizationToken).toBe(newAccess);

@@ -4,7 +4,15 @@
 
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
 import axios, { type AxiosResponse } from 'axios';
-import { describeOAuthErrorBody } from './oauthErrorBody';
+import { ValidationError } from '../errors/TokenProviderErrors';
+import { loggedError } from './refusal';
+import {
+  grantSecrets,
+  type PreparedTokenRequest,
+  prepareTokenRequest,
+  sendTokenRequest,
+  type TokenRequestAuth,
+} from './tokenRequest';
 
 export interface Saml2TokenExchangeResponse {
   accessToken: string;
@@ -17,41 +25,83 @@ function toBasicAuth(clientId: string, clientSecret: string): string {
   return Buffer.from(`${clientId}:${clientSecret}`).toString('base64');
 }
 
-export async function exchangeSamlAssertion(
-  samlResponse: string,
+/** With a strategy: the grant parameters alone, authenticated by it. */
+async function prepareWith(
+  auth: TokenRequestAuth,
   tokenUrl: string,
   clientId: string | undefined,
+  grantType: string,
+  grant: URLSearchParams,
+): Promise<PreparedTokenRequest> {
+  if (!clientId) {
+    throw new ValidationError(
+      'clientId is required with a client authentication',
+      ['clientId'],
+    );
+  }
+  return prepareTokenRequest(
+    { endpoint: tokenUrl, clientId, grantType, parameters: grant },
+    auth,
+  );
+}
+
+/** Today's request: `client_id` in the body when known, Basic when a secret is. */
+function sendAsToday(
+  tokenUrl: string,
+  grant: URLSearchParams,
+  clientId: string | undefined,
   clientSecret: string | undefined,
-  logger?: ILogger,
-): Promise<Saml2TokenExchangeResponse> {
-  const params = new URLSearchParams();
-  params.append('grant_type', 'urn:ietf:params:oauth:grant-type:saml2-bearer');
-  params.append('assertion', samlResponse);
+): Promise<AxiosResponse> {
+  const params = new URLSearchParams(grant);
   if (clientId) {
     params.append('client_id', clientId);
   }
-
-  logger?.info('[SAML] Exchanging assertion for token', { tokenUrl });
-
   const headers: Record<string, string> = {
     'Content-Type': 'application/x-www-form-urlencoded',
   };
   if (clientId && clientSecret) {
     headers.Authorization = `Basic ${toBasicAuth(clientId, clientSecret)}`;
   }
+  // A redirect would re-send the assertion or the refresh token, and the
+  // secret: never followed.
+  return axios.post(tokenUrl, params.toString(), { headers, maxRedirects: 0 });
+}
+
+export async function exchangeSamlAssertion(
+  samlResponse: string,
+  tokenUrl: string,
+  clientId: string | undefined,
+  clientSecret: string | undefined,
+  logger?: ILogger,
+  auth?: TokenRequestAuth,
+): Promise<Saml2TokenExchangeResponse> {
+  const grantType = 'urn:ietf:params:oauth:grant-type:saml2-bearer';
+  const grant = new URLSearchParams();
+  grant.append('grant_type', grantType);
+  grant.append('assertion', samlResponse);
+  const prepared = auth
+    ? await prepareWith(auth, tokenUrl, clientId, grantType, grant)
+    : undefined;
+
+  logger?.info('[SAML] Exchanging assertion for token', {
+    tokenUrl: prepared?.config.url ?? tokenUrl,
+  });
 
   let response: AxiosResponse;
   try {
-    response = await axios.post(tokenUrl, params.toString(), { headers });
+    response = await sendTokenRequest(
+      prepared,
+      () => sendAsToday(tokenUrl, grant, clientId, clientSecret),
+      [clientSecret, ...grantSecrets(grant)],
+    );
   } catch (error) {
     if (axios.isAxiosError(error)) {
-      logger?.error('[SAML] Token exchange failed', {
-        status: error.response?.status,
-        error: describeOAuthErrorBody(error.response?.data, [
-          samlResponse,
-          clientSecret,
-        ]),
-      });
+      // The safe facts only (status, a registered code, an allowlisted
+      // system code): not even a redacted description reaches the log.
+      logger?.error(
+        '[SAML] Token exchange failed',
+        loggedError(error, 'the SAML token exchange'),
+      );
     }
     throw error;
   }
@@ -81,35 +131,34 @@ export async function refreshSamlBearerToken(
   clientId: string | undefined,
   clientSecret?: string,
   logger?: ILogger,
+  auth?: TokenRequestAuth,
 ): Promise<Saml2TokenExchangeResponse> {
-  const params = new URLSearchParams();
-  params.append('grant_type', 'refresh_token');
-  params.append('refresh_token', refreshToken);
-  if (clientId) {
-    params.append('client_id', clientId);
-  }
+  const grant = new URLSearchParams();
+  grant.append('grant_type', 'refresh_token');
+  grant.append('refresh_token', refreshToken);
+  const prepared = auth
+    ? await prepareWith(auth, tokenUrl, clientId, 'refresh_token', grant)
+    : undefined;
 
-  logger?.info('[SAML] Refreshing token', { tokenUrl });
-
-  const headers: Record<string, string> = {
-    'Content-Type': 'application/x-www-form-urlencoded',
-  };
-  if (clientId && clientSecret) {
-    headers.Authorization = `Basic ${toBasicAuth(clientId, clientSecret)}`;
-  }
+  logger?.info('[SAML] Refreshing token', {
+    tokenUrl: prepared?.config.url ?? tokenUrl,
+  });
 
   let response: AxiosResponse;
   try {
-    response = await axios.post(tokenUrl, params.toString(), { headers });
+    response = await sendTokenRequest(
+      prepared,
+      () => sendAsToday(tokenUrl, grant, clientId, clientSecret),
+      [clientSecret, ...grantSecrets(grant)],
+    );
   } catch (error) {
     if (axios.isAxiosError(error)) {
-      logger?.error('[SAML] Token refresh failed', {
-        status: error.response?.status,
-        error: describeOAuthErrorBody(error.response?.data, [
-          refreshToken,
-          clientSecret,
-        ]),
-      });
+      // The safe facts only (status, a registered code, an allowlisted
+      // system code): not even a redacted description reaches the log.
+      logger?.error(
+        '[SAML] Token refresh failed',
+        loggedError(error, 'the SAML token refresh'),
+      );
     }
     throw error;
   }

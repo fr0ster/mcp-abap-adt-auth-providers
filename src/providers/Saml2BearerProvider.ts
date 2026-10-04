@@ -21,6 +21,7 @@ import { createSignedAssertionValidator } from '../validation/assertionValidator
 import { defaultReplayStore } from '../validation/inMemoryReplayStore';
 import {
   BaseTokenProvider,
+  type ClientAuthenticationConfig,
   type TokenProviderHooks,
 } from './BaseTokenProvider';
 import type {
@@ -38,7 +39,8 @@ import {
 export interface Saml2BearerProviderConfig
   extends Saml2CommonConfig,
     Saml2BearerExchangeConfig,
-    TokenProviderHooks {
+    TokenProviderHooks,
+    ClientAuthenticationConfig {
   logger?: ILogger;
   accessToken?: string;
   refreshToken?: string;
@@ -119,6 +121,7 @@ export class Saml2BearerProvider extends BaseTokenProvider {
       this.config.clientId,
       this.config.clientSecret,
       this.logger,
+      await this.requestAuth(),
     );
 
     return {
@@ -146,6 +149,7 @@ export class Saml2BearerProvider extends BaseTokenProvider {
       this.config.clientId,
       this.config.clientSecret,
       this.logger,
+      await this.requestAuth(),
     );
 
     return {

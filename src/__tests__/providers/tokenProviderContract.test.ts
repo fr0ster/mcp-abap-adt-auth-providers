@@ -55,12 +55,25 @@ describe('BaseTokenProvider as IAuthProvider', () => {
     expect(p.login).toHaveBeenCalledTimes(1);
   });
 
-  it('establish writes nothing and answers Ok', async () => {
+  it('establish writes nothing, answers Ok, and obtains no token', async () => {
     const t = recordingTargets();
-    await expect(new TestProvider().establish(t.logonTarget)).resolves.toEqual({
+    const p = new TestProvider();
+    await expect(p.establish(t.logonTarget)).resolves.toEqual({
       ok: true,
     });
     expect(t.logon).toEqual({ tls: [], params: [] });
+    expect(p.login).not.toHaveBeenCalled();
+  });
+
+  it('establish on an expired token neither refreshes nor logs in', async () => {
+    const p = new TestProvider();
+    await p.prepare();
+    p.expire();
+    await expect(p.establish(recordingTargets().logonTarget)).resolves.toEqual({
+      ok: true,
+    });
+    expect(p.login).toHaveBeenCalledTimes(1);
+    expect(p.refresh).not.toHaveBeenCalled();
   });
 
   it('authorize writes the bearer header', async () => {
@@ -86,7 +99,10 @@ describe('BaseTokenProvider as IAuthProvider', () => {
     const outcome = await p.authorize(
       recordingTargets({ throws: true }).requestTarget,
     );
-    expect(outcome).toMatchObject({ ok: false });
+    expect(outcome).toEqual({
+      ok: false,
+      refusal: { reason: 'presenting the token failed (unknown error)' },
+    });
     expect(JSON.stringify(outcome)).not.toMatch(/SECRET-IN-TARGET/);
   });
 

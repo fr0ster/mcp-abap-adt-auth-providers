@@ -51,3 +51,21 @@ tests/xsuaa/.local/
 # A service key once lived here; keep keys out of the repo
 mcp.json
 *service-key*.json
+
+# Private keys and certificate bundles stay out of the repository.
+*.key
+*.pfx
+*.p12
+# Exceptions, file by file: throwaway stand fixtures, trusted by nothing but
+# the local provider stand (see their READMEs). Never add a real key here.
+!tests/stand/uaa/idp/idp.key
+!tests/stand/keycloak/tls/server.key
+!tests/stand/keycloak/tls/client-a.key
+!tests/stand/keycloak/tls/client-b.key
+!tests/stand/keycloak/tls/jwt.key
+# Unit-test certificate fixtures: generated for the tests, trusted by nothing.
+!src/__tests__/fixtures/certificates/client.key
+!src/__tests__/fixtures/certificates/client-encrypted.key
+!src/__tests__/fixtures/certificates/other.key
+!src/__tests__/fixtures/certificates/client.pfx
+!src/__tests__/fixtures/certificates/client-chain.pfx

@@ -15,7 +15,7 @@ import type {
   IRequestTarget,
 } from '@mcp-abap-adt/interfaces-auth';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
-import { OK, oops } from '../auth/refusal';
+import { loggedError, OK, oops } from '../auth/refusal';
 import { readRejection } from '../auth/rejection';
 import { ValidationError } from '../errors/TokenProviderErrors';
 import {
@@ -46,9 +46,6 @@ export interface SncLogonProviderConfig {
   probes: ISncProductProbe[];
   logger?: ILogger;
 }
-
-const detail = (error: unknown) =>
-  error instanceof Error ? error.message : String(error);
 
 /**
  * The outer boundary of every method (rule 1): the SNC wording inside stays,
@@ -83,7 +80,7 @@ export class SncLogonProvider implements IAuthProvider {
     const partnerName = config.partnerName?.trim();
     if (!partnerName) {
       throw new ValidationError(
-        'SncLogonProvider needs partnerName — the system’s SNC name.',
+        "SncLogonProvider needs partnerName — the system's SNC name.",
         ['partnerName'],
       );
     }
@@ -129,7 +126,8 @@ export class SncLogonProvider implements IAuthProvider {
         found = await this.locator.locate();
       } catch (error) {
         const refusal = locateRefusal(error);
-        this.log('warn', `SNC library not found: ${detail(error)}`);
+        // The refusal's words: fixed, or allowlisted sources and paths.
+        this.log('warn', `SNC library not found: ${refusal.reason}`);
         return { ok: false, refusal };
       }
       const path = typeof found?.path === 'string' ? found.path.trim() : '';
@@ -152,7 +150,10 @@ export class SncLogonProvider implements IAuthProvider {
           }
         } catch (error) {
           // A probe that cannot tell names nothing; the logon goes on.
-          this.log('warn', `an SNC product probe failed: ${detail(error)}`);
+          this.log(
+            'warn',
+            `an SNC product probe failed: ${loggedError(error, 'the probe').error}`,
+          );
         }
       }
       this.library = library;

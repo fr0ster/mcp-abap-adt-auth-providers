@@ -6,6 +6,14 @@ import * as child_process from 'node:child_process';
 import type { IAuthorizationConfig } from '@mcp-abap-adt/interfaces-auth-sap';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
 import axios from 'axios';
+import { describeOAuthErrorBody } from './oauthErrorBody';
+import { loggedError } from './refusal';
+import {
+  grantSecrets,
+  prepareTokenRequest,
+  sendTokenRequest,
+  type TokenRequestAuth,
+} from './tokenRequest';
 
 const BROWSER_MAP: Record<string, string | undefined | null> = {
   chrome: 'chrome',
@@ -76,6 +84,7 @@ export async function exchangeCodeForToken(
   code: string,
   redirectUri: string,
   log?: ILogger | null,
+  auth?: TokenRequestAuth,
 ): Promise<{ accessToken: string; refreshToken?: string }> {
   const {
     uaaUrl: url,
@@ -89,21 +98,42 @@ export async function exchangeCodeForToken(
   params.append('code', code);
   params.append('redirect_uri', redirectUri);
 
-  const authString = Buffer.from(`${clientid}:${clientsecret}`).toString(
-    'base64',
-  );
+  const prepared = auth
+    ? await prepareTokenRequest(
+        {
+          endpoint: tokenUrl,
+          clientId: clientid,
+          grantType: 'authorization_code',
+          parameters: params,
+        },
+        auth,
+      )
+    : undefined;
 
-  log?.info(`Exchanging code for token: ${tokenUrl}`);
+  /** Today's request: Basic `id:secret`. */
+  const sendAsToday = () => {
+    const authString = Buffer.from(`${clientid}:${clientsecret}`).toString(
+      'base64',
+    );
+    return axios({
+      method: 'post',
+      url: tokenUrl,
+      headers: {
+        Authorization: `Basic ${authString}`,
+        'Content-Type': 'application/x-www-form-urlencoded',
+      },
+      data: params.toString(),
+      // A redirect would re-send the code and the secret: never followed.
+      maxRedirects: 0,
+    });
+  };
 
-  const response = await axios({
-    method: 'post',
-    url: tokenUrl,
-    headers: {
-      Authorization: `Basic ${authString}`,
-      'Content-Type': 'application/x-www-form-urlencoded',
-    },
-    data: params.toString(),
-  });
+  log?.info(`Exchanging code for token: ${prepared?.config.url ?? tokenUrl}`);
+
+  const response = await sendTokenRequest(prepared, sendAsToday, [
+    clientsecret,
+    ...grantSecrets(params),
+  ]);
 
   if (response.data?.access_token) {
     const accessToken = response.data.access_token;
@@ -118,8 +148,12 @@ export async function exchangeCodeForToken(
       refreshToken,
     };
   } else {
+    // The body is the server's: only its OAuth fields, every secret redacted.
     log?.error(
-      `Token exchange failed: status ${response.status}, error: ${response.data?.error || 'unknown'}`,
+      `Token exchange failed: status ${response.status}, error: ${describeOAuthErrorBody(
+        response.data,
+        [clientsecret, ...grantSecrets(params), ...(prepared?.secrets ?? [])],
+      )}`,
     );
     throw new Error('Response does not contain access_token');
   }
@@ -180,8 +214,10 @@ export async function launchBrowser(
         '✅ Browser opened successfully. Waiting for authentication...',
       );
     } catch (error: unknown) {
-      const message = error instanceof Error ? error.message : String(error);
-      log?.warn(`⚠️  Could not open browser automatically: ${message}`);
+      // Fixed words only: what `open` threw is not this package's text.
+      log?.warn(
+        `⚠️  Could not open browser automatically: ${loggedError(error, 'opening the browser').error}`,
+      );
       announce('🔗 Please open this URL in your browser to authenticate:');
       announce(`   ${authorizationUrl}`);
       announce(`   Waiting for callback on ${callbackUri} ...`);
@@ -257,9 +293,10 @@ export async function launchBrowser(
     }
     child_process.exec(`${command} "${authorizationUrl}"`, (error) => {
       if (error) {
+        const { error: words } = loggedError(error, 'opening the browser');
         log?.error(
-          `❌ Failed to open browser: ${error.message}. Please open manually: ${authorizationUrl}`,
-          { error: error.message, url: authorizationUrl },
+          `❌ Failed to open browser: ${words}. Please open manually: ${authorizationUrl}`,
+          { error: words, url: authorizationUrl },
         );
       }
     });

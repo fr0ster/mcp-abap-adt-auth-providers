@@ -6,7 +6,13 @@ import { jest } from '@jest/globals';
 import axios from 'axios';
 import { refreshSamlBearerToken } from '../../auth/saml2TokenExchange';
 
-jest.mock('axios');
+// Automocked, but with axios's own error class: the sites throw it.
+jest.mock('axios', () => {
+  const mocked = jest.createMockFromModule<Record<string, unknown>>('axios');
+  mocked.AxiosError =
+    jest.requireActual<Record<string, unknown>>('axios').AxiosError;
+  return mocked;
+});
 
 const mockedAxios = axios as jest.Mocked<typeof axios>;
 

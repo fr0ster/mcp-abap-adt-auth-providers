@@ -18,17 +18,22 @@ import {
   getJwtAuthorizationUrl,
 } from '../auth/browserAuth';
 import { refreshJwtToken } from '../auth/tokenRefresher';
+import { ValidationError } from '../errors/TokenProviderErrors';
 import { browserCallbackStrategy } from '../strategies';
 import {
   BaseTokenProvider,
+  type ClientAuthenticationConfig,
   type TokenProviderHooks,
 } from './BaseTokenProvider';
 
-export interface AuthorizationCodeProviderConfig extends TokenProviderHooks {
+export interface AuthorizationCodeProviderConfig
+  extends TokenProviderHooks,
+    ClientAuthenticationConfig {
   // Required for building the authorization URL and for the token exchange
   uaaUrl: string;
   clientId: string;
-  clientSecret: string;
+  /** Required, unless `clientAuthentication` is given — never both. */
+  clientSecret?: string;
 
   /** Pre-built authorization URL. Carries its own redirect; see the guard below. */
   authorizationUrl?: string;
@@ -81,7 +86,8 @@ export class AuthorizationCodeProvider extends BaseTokenProvider {
     if (!config.clientId) {
       missingFields.push('clientId');
     }
-    if (!config.clientSecret) {
+    // A strategy authenticates the client instead (never both: the base).
+    if (!config.clientSecret && !config.clientAuthentication) {
       missingFields.push('clientSecret');
     }
     if (missingFields.length > 0) {
@@ -143,7 +149,8 @@ export class AuthorizationCodeProvider extends BaseTokenProvider {
     const authConfig: IAuthorizationConfig = {
       uaaUrl: this.config.uaaUrl,
       uaaClientId: this.config.clientId,
-      uaaClientSecret: this.config.clientSecret,
+      // Required without a strategy (constructor); unused with one.
+      uaaClientSecret: this.config.clientSecret ?? '',
     };
 
     const prebuilt = this.config.authorizationUrl;
@@ -165,7 +172,9 @@ export class AuthorizationCodeProvider extends BaseTokenProvider {
       buildAuthorizationUrl: async (redirectUri: string): Promise<string> => {
         if (prebuilt) {
           if (declaredRedirect && declaredRedirect !== redirectUri) {
-            throw new Error(mismatch(redirectUri));
+            throw new ValidationError(mismatch(redirectUri), [
+              'authorizationUrl',
+            ]);
           }
           return prebuilt;
         }
@@ -182,7 +191,9 @@ export class AuthorizationCodeProvider extends BaseTokenProvider {
     // it, and would otherwise reach the exchange with a redirect_uri the
     // pre-built URL never advertised, earning an opaque `invalid_grant`.
     if (declaredRedirect && declaredRedirect !== outcome.redirectUri) {
-      throw new Error(mismatch(outcome.redirectUri));
+      throw new ValidationError(mismatch(outcome.redirectUri), [
+        'authorizationUrl',
+      ]);
     }
 
     this.logger?.info('[AuthorizationCodeProvider] Code received', {
@@ -194,6 +205,7 @@ export class AuthorizationCodeProvider extends BaseTokenProvider {
       outcome.payload,
       outcome.redirectUri,
       this.logger,
+      await this.requestAuth(),
     );
 
     return {
@@ -216,6 +228,7 @@ export class AuthorizationCodeProvider extends BaseTokenProvider {
       this.config.uaaUrl,
       this.config.clientId,
       this.config.clientSecret,
+      await this.requestAuth(),
     );
 
     this.logger?.info('[AuthorizationCodeProvider] Token refresh completed', {

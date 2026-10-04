@@ -36,8 +36,8 @@ updating in place; 9.x speaks the old, narrower `IAuthProvider`.
   Every token provider's config takes an optional
   `onTokens?: (result: ITokenResult) => Promise<void>`, called after every
   *new* token — a login or a refresh, never a cache hit — and awaited before
-  the provider answers. It is best effort: a failing `onTokens` is logged (its
-  class name only, since it holds the tokens) and does not fail the
+  the provider answers. It is best effort: a failing `onTokens` is logged (in
+  fixed words only, since it holds the tokens) and does not fail the
   authentication.
 - **Nothing is defaulted any more.** A provider that used to build its own
   strategy, SAML validator, replay store or device-code output now takes it
@@ -199,7 +199,7 @@ npm install @mcp-abap-adt/auth-providers
 ## Overview
 
 Every provider here is an `IAuthProvider` (`@mcp-abap-adt/interfaces-auth`
-3.0.0) — `prepare()`, `establish()`, `authorize()`, `rejected()`, each answering
+3.1.0) — `prepare()`, `establish()`, `authorize()`, `rejected()`, each answering
 an `AuthOutcome` and never throwing — handed to the process as it is:
 
 ```typescript
@@ -267,6 +267,11 @@ and the token exchange; everything between them (reaching the URL, receiving
 what comes back, the port, the timeout) belongs to the strategy, which a
 consumer may replace wholesale. See
 [Choosing an authorization strategy](#choosing-an-authorization-strategy).
+
+Since 5.3.0 a token provider's **client** may authenticate with a client
+certificate or a signed assertion instead of a secret — a strategy passed as
+`clientAuthentication` — and a token bound to that certificate is presented
+only together with it. See [Client authentication](#client-authentication).
 
 Since 4.0.0 both SAML providers **validate the assertion before trusting it** —
 its signature, issuer, audience, recipient, time window, the request it answers,
@@ -502,6 +507,402 @@ or a full redirected URL — whichever you paste, the code is extracted from it.
 
 > The `extractCode(input)` helper behind that leniency is internal; it is not
 > part of the package's exports, contrary to what the 1.1.0–1.2.0 README said.
+
+### Client authentication
+
+How the *client* proves itself to the authorization server — a secret, a
+client certificate, a signed assertion — is a strategy too:
+`IClientAuthentication` from `@mcp-abap-adt/interfaces-auth` (3.1.0), passed as
+`clientAuthentication`. Eight token providers take it:
+`ClientCredentialsProvider`, `AuthorizationCodeProvider`, `UaaPasscodeProvider`,
+`Saml2BearerProvider`, `OidcBrowserProvider`, `OidcDeviceFlowProvider`,
+`OidcPasswordProvider` and `OidcTokenExchangeProvider`. With one, every request
+the provider sends to the server — the first token, every refresh, the device
+authorization and each device poll, the token exchange — is authenticated by
+it. `Saml2PureProvider` sends no token request and takes none.
+
+**Without it nothing changes.** A provider given `clientSecret` sends exactly
+the request it sent before 5.3.0, and an OIDC provider with neither stays a
+public client that sends only `client_id`.
+
+#### The five strategies
+
+| Factory | What each request carries | Presents a certificate |
+|---|---|---|
+| `noClientAuthentication()` | `client_id` in the body | no |
+| `clientSecretBasic(secret, { encoding: 'raw' \| 'form' })` | `Authorization: Basic base64(clientId:secret)`, each component written as `encoding` says — see [`clientSecretBasic`'s `encoding`](#clientsecretbasics-encoding) | no |
+| `clientSecretPost(secret)` | `client_id` and `client_secret` in the body | no |
+| `tlsClientCertificate({ material, endpoint? })` | `client_id` in the body, over a TLS connection presenting the certificate; sent to `endpoint`, else the server's mTLS alias of the endpoint, else the configured endpoint | yes |
+| `privateKeyJwt({ key, algorithm, keyId?, audience? })` | `client_id`, `client_assertion_type` (`urn:ietf:params:oauth:client-assertion-type:jwt-bearer`) and `client_assertion`: a JWT signed with `key` | no |
+
+- **`tlsClientCertificate`** takes `material` as an `ICertificateMaterial`
+  (`cert` + `key`, or `pfx`, with an optional `passphrase`) or as a loader
+  `() => Promise<ICertificateMaterial>` you own. It is read and checked on
+  first use, as `CertificateAuthProvider.prepare()` checks its material:
+  material with neither a PFX nor both a certificate and its key is refused as
+  *the client certificate is incomplete*; material a TLS context cannot be
+  built from (a wrong passphrase, a key that is not the certificate's) as *the
+  client certificate could not be used*; a certificate past its `notAfter` as
+  *the client certificate has expired*. A failed load is not kept — the next
+  request loads again.
+- **`endpoint` replaces the URL of every request** the provider sends through
+  `tlsClientCertificate`, not only the token request. With
+  `OidcDeviceFlowProvider` that includes the device authorization, which would
+  then go to the token endpoint you named. For the device flow, leave
+  `endpoint` out and let discovery's `mtls_endpoint_aliases` route each
+  request to its own mTLS alias (give `issuerUrl`, not the endpoints, so there
+  is a discovery document to read them from).
+- **`privateKeyJwt`** signs with `node:crypto`; `algorithm` is `RS256` (an RSA
+  key) or `ES256` (a P-256 key). `key` is PEM text, PEM bytes or a
+  `KeyObject`. Claims: `iss` = `sub` = the client id, `aud` = `audience`, else
+  the draft's `tokenEndpoint` (the token endpoint, also for the device
+  authorization), else the endpoint the request goes to, a random `jti`, `iat` now, `exp` 60 seconds
+  later; a `kid` header when `keyId` is given. A key that is not a private key
+  of that algorithm is refused on first use as *the client signing key could
+  not be used*, and nothing of the key is in the refusal.
+- **Your own.** Anything implementing `IClientAuthentication` — a JWT signed
+  by an HSM, say. `authenticate(draft)` gets the endpoint, the server's mTLS
+  alias when there is one, the client id and the grant type (no secret, no
+  previous response) and returns `{ endpoint?, parameters?, headers? }`;
+  `tlsMaterial?()` returns the certificate it presents, if any. What it returns
+  is checked before anything is sent: only string values; no header with a
+  line break; no parameter or header replacing one of the request's own
+  (`grant_type`, `Content-Type`, …); an endpoint that is an absolute `https:`
+  URL — `http:` only when the configured endpoint is itself `http:` and no
+  certificate is presented. Anything else is a
+  `ClientAuthenticationResultError`, refused as *the client authentication
+  returned a request that cannot be sent*. Only `client_secret`,
+  `client_assertion` and a Basic credential are known to be secrets and
+  redacted from an error body. Every secret is redacted as sent, encoded and
+  form-decoded (the whole value: `&` and `=` are part of it, a malformed `%`
+  stays) — so with either `encoding`, and for a `clientSecret` sent without a
+  strategy, neither the original, the encoded secret nor what a decoding
+  server read survives its echo; a secret your strategy puts in any other
+  parameter or header is not recognised as one.
+
+```typescript
+import { readFile } from 'node:fs/promises';
+import {
+  ClientCredentialsProvider,
+  OidcPasswordProvider,
+  privateKeyJwt,
+  tlsClientCertificate,
+} from '@mcp-abap-adt/auth-providers';
+
+// A client certificate: the token request goes over mTLS, no secret anywhere.
+const service = new ClientCredentialsProvider({
+  uaaUrl: 'https://<idp>',
+  clientId: 'my-client',
+  clientAuthentication: tlsClientCertificate({
+    material: async () => ({
+      cert: await readFile('/etc/my-app/client.crt'),
+      key: await readFile('/etc/my-app/client.key'),
+    }),
+    endpoint: 'https://<idp>/oauth/token',
+  }),
+});
+
+// A signed client assertion instead of a secret.
+const user = new OidcPasswordProvider({
+  issuerUrl: 'https://<keycloak>/realms/<realm>',
+  clientId: 'my-client',
+  username: 'user',
+  password: 'secret',
+  clientAuthentication: privateKeyJwt({
+    key: await readFile('/etc/my-app/signing.key'),
+    algorithm: 'RS256',
+  }),
+});
+```
+
+#### Rules a provider keeps
+
+- **`clientSecret` and a strategy together are a `ValidationError`** naming
+  `clientSecret`, thrown by the constructor: two ways of authenticating one
+  client is a mistake, not a preference. The check is for presence, not value
+  — `clientSecret: ''` beside a strategy is refused too, so a consumer mapping
+  a service key without a secret must leave `clientSecret` out rather than set
+  it empty. Where `clientSecret` was required (`ClientCredentialsProvider`,
+  `AuthorizationCodeProvider`), a strategy satisfies the requirement instead.
+- **One certificate per provider, pinned.** The provider calls the strategy's
+  `tlsMaterial()` once — before its first request to the server or its first
+  logon, whichever comes first — checks the material, computes the
+  `x5t#S256` thumbprint of its leaf certificate, and keeps a copy of both for
+  its lifetime. Every later token request, refresh and logon uses that copy;
+  after a successful read `tlsMaterial()` is never called again (a failed read
+  pins nothing and refuses the moment that needed it). This holds whatever
+  the strategy, your own included. **A certificate that rotates means a new
+  provider instance** — the consumer, or the broker, constructs it, as for any
+  other change of credential. A token that new provider holds bound to the old
+  certificate is renewed, not refused (see below).
+- **An expired client certificate is refused before it is sent.** The leaf's
+  `notAfter` is checked when the material is pinned and again before every
+  token request and logon that presents it: *the client certificate has
+  expired*, with nothing sent — and a renewal refused that way keeps its
+  refresh token. `CertificateAuthProvider` checks the same in `prepare()` and
+  before each logon.
+- **No token request follows a redirect**, with a strategy or without — the
+  first token, a refresh, the device authorization and its poll, a token
+  exchange. A `307`/`308` would re-send the client secret, the refresh token,
+  the code, the passcode, the password or the assertion, and present the
+  certificate, to wherever it points; a `3xx` fails the request instead.
+  Configure the URL the server answers on, not one that redirects to it. OIDC
+  discovery, a GET for public metadata that sends no secret, follows redirects
+  as before.
+- **The server's certificate is always verified, as Node verifies it.**
+  `rejectUnauthorized` is never set and there is no `ca` option. A server
+  behind a private CA is trusted the way Node offers, explicitly and
+  process-wide: `NODE_EXTRA_CA_CERTS=/path/to/ca.pem`, read when Node starts,
+  which adds to Node's store rather than replacing it. A TLS failure is refused
+  naming its code, with fixed words per kind:
+
+  | Code | Reason (*… failed: …*) | Hint |
+  |---|---|---|
+  | `UNABLE_TO_VERIFY_LEAF_SIGNATURE`, `SELF_SIGNED_CERT_IN_CHAIN`, `DEPTH_ZERO_SELF_SIGNED_CERT`, `UNABLE_TO_GET_ISSUER_CERT_LOCALLY` | the server's certificate is not trusted (`<code>`) | if the server uses a private CA, name its certificate in NODE_EXTRA_CA_CERTS |
+  | `CERT_HAS_EXPIRED` | the server's certificate has expired (`<code>`) | the server must renew its certificate; check also this machine's clock |
+  | `ERR_TLS_CERT_ALTNAME_INVALID` | the host name is not in the server's certificate (`<code>`) | use the host name the server's certificate is issued for |
+  | `ERR_SSL_TLSV13_ALERT_CERTIFICATE_REQUIRED`, `ERR_SSL_TLSV1_ALERT_UNKNOWN_CA`, and `ERR_SSL_SSL/TLS_ALERT_…` / `ERR_SSL_SSLV3_ALERT_…` for `BAD_CERTIFICATE`, `CERTIFICATE_UNKNOWN`, `CERTIFICATE_EXPIRED`, `CERTIFICATE_REVOKED`, `UNSUPPORTED_CERTIFICATE` | the server refused the client certificate (`<code>`) | check that the server trusts the certificate's issuer and that the certificate is valid and not revoked |
+
+  The last row is the alert a server sends when it refuses the client
+  certificate in the handshake. Current OpenSSL — 3.5, bundled with Node 22
+  and 24, and 3.6, both measured — spells the SSLv3-era alerts
+  `SSL/TLS_ALERT_…`; older releases spelled them `SSLV3_ALERT_…`, so both are
+  listed. Measured 2026-10-04 against `openssl s_server -Verify`:
+  no certificate → `…CERTIFICATE_REQUIRED`, an issuer the server does not
+  trust → `…UNKNOWN_CA`, an expired certificate →
+  `ERR_SSL_SSL/TLS_ALERT_CERTIFICATE_EXPIRED`. Any other code is
+  *unknown error*.
+- **mTLS aliases (RFC 8705 §5).** An OIDC provider that discovers an endpoint
+  hands the strategy the server's `mtls_endpoint_aliases` entry for it
+  (`token_endpoint`, `device_authorization_endpoint`); `tlsClientCertificate`
+  sends there unless it was given `endpoint`. An endpoint given in the
+  configuration comes with no alias.
+- **A loader that fails with its own error** — a missing file, say — is
+  refused as *`<auth type>` token request failed (unknown error, ENOENT)*,
+  where `<auth type>` is the provider's `getAuthType()`. The refusal names the
+  error's code when it is on the package's allowlist, never its message.
+  That is by design (rule 2 of the contract); a loader that wants its own words
+  refused throws one of this package's classes.
+- **Thrown errors carry no request.** A failed token request rethrows without
+  the request it sent — no form body, no `Authorization` header, no TLS agent
+  with a key or a passphrase — on both paths, strategy or not. It is still an
+  `AxiosError` (`instanceof AxiosError` and `axios.isAxiosError()` hold), but
+  a new one built without `config`, `request` or `cause`, so its `toJSON()`
+  serialises no config: it keeps `code` and `status`, a rebuilt message
+  (`Request failed with status code N`, or `the token request failed (<code>)`
+  when no response came), and a `response` of `status`, an empty `statusText`
+  (the reason phrase is the server's free text), empty `headers` and the
+  server's body reduced to `error`, `error_description` and `error_uri`, with
+  every secret the request sent redacted.
+
+#### `clientSecretBasic`'s `encoding`
+
+Servers disagree on how the id and secret inside a Basic credential are
+written, so `encoding` is required and has no default — the provider does not
+guess:
+
+- `'raw'` — `base64(clientId + ':' + secret)`, as given.
+- `'form'` — each of the two first `application/x-www-form-urlencoded`
+  (RFC 6749 §2.3.1; a space becomes `+`), then joined and base64'd.
+
+Measured 2026-10-04, each row with the grant named:
+
+| Server | Grant | `raw` | `form` | Source |
+|---|---|---|---|---|
+| SAP XSUAA (trial) | `client_credentials` | accepted — an id holding `!` and `\|`, a secret holding `$`, `=` and `_` (two keys) | refused (`401`) for that id and secret, as was each component `encodeURIComponent`'d | Measured (trial, 2026-10-04, by hand; not in `test:xsuaa`) |
+| Cloud Foundry UAA (v79.7) | `client_credentials` (`ClientCredentialsProvider`) | refused (`401`) for the secret `se+cr%25et/x` | accepted for that secret, and for the id `basic:colon` | Measured (provider stand, `clientSecretBasic.test.ts`) |
+| Keycloak (26.7) | `password` (`OidcPasswordProvider`) | refused (`401`) for the secret `se+cr%25et/x` | accepted for that secret, and for the id `basic:colon` | Measured (provider stand, `clientSecretBasic.test.ts`) |
+
+What makes the stand's raw secret fail is its `+` and `%`, which UAA and
+Keycloak form-decode (RFC 6749 §2.3.1) into another secret; its `/` is left as
+it is by form-decoding. A client id or secret holding a space, or an id
+holding `+` or `%`, is not measured: that UAA and Keycloak refuse it raw is
+Inference from the same rule. So is how `'form'` fares where the server
+percent-decodes per RFC 3986 instead — it would read a space's `+` as a `+`.
+
+For the measured ids and secrets: use `'raw'` for XSUAA and `'form'` for UAA
+and Keycloak. An id and secret holding none of the characters form encoding
+changes (letters, digits, `*`, `-`, `.`, `_`) are the same in both encodings.
+Where neither fits, `clientSecretPost` sends both in the body. With `'raw'`, a client id
+containing `:` cannot be carried at all (RFC 7617 splits at the first colon):
+each request is refused before anything is sent, *the client id contains ':',
+which raw Basic cannot carry*, hint *use encoding: 'form' or
+clientSecretPost*. A missing or other `encoding` is a `ValidationError` naming
+`encoding`, thrown by `clientSecretBasic` itself. A `401` is reported as the
+server's `401`: nothing is inferred from the secret's characters.
+
+#### `privateKeyJwt`'s `audience`
+
+By default the assertion's `aud` is the authorization server's token endpoint
+— the draft's `tokenEndpoint`, which every request this package builds
+carries, the device authorization included (since 5.3.0); a custom site's
+draft without one falls back to the endpoint the request goes to. `audience`
+overrides both for every request of the provider. Measured 2026-10-04 on the
+provider stand:
+
+- **Cloud Foundry UAA** (v79.7) accepts its issuer, `…/uaa/oauth/token` —
+  which is also its token endpoint. Set `audience` to the issuer from its
+  discovery when the URL you reach UAA by may differ from the one it calls
+  itself.
+- **Keycloak** (26.7) accepts the token endpoint (measured with the password
+  grant and the whole device flow), but **not the device authorization
+  endpoint**: an assertion whose `aud` is that endpoint is refused
+  *"invalid_client": "Invalid token audience"*. `OidcDeviceFlowProvider` on
+  Keycloak therefore needs no `audience`: the default names the token endpoint
+  for the device authorization too. (The issuer,
+  `https://<keycloak>/realms/<realm>`, set as `audience` was also measured to
+  carry the whole device flow, on 2026-10-04 before this default; the stand
+  no longer runs that case.)
+
+#### A certificate-bound token, and its certificate
+
+A token obtained over mTLS may be bound to the certificate (RFC 8705 §3,
+`cnf.x5t#S256`): the resource then accepts it only on a connection presenting
+that same certificate. So before a token provider presents a token —
+`establish()` and `authorize()` — it reads what the token says about its
+binding, in one of three states:
+
+- **bound** — a JWT whose payload carries `cnf`; its `x5t#S256` is compared
+  with the pinned certificate's thumbprint. A `cnf` that names no
+  `x5t#S256` (another kind of binding, an empty one) is bound to a certificate
+  the provider cannot match.
+- **unbound** — a JWT whose payload carries no `cnf`.
+- **unknown** — anything else, an opaque token above all: its binding, if
+  any, lives on the server (introspection, RFC 8705 §3.2), and the token
+  cannot say.
+
+This applies to every token the provider holds: obtained, refreshed, seeded as
+`accessToken`, or restored by a store. `establish(logon)` obtains nothing: it
+decides on the token held, and no token, an expired one or one being renewed
+counts as unknown — the token presented will be the one `authorize()` obtains
+through the same strategy and pinned certificate, and `authorize()` checks
+that one.
+
+**After a rotation.** A held token bound to *another* certificate than the
+pinned one — restored from a store after the certificate was rotated, say —
+or whose `cnf` names no readable thumbprint, is unusable to this provider, and
+it treats it like an expired token: `getTokens()` and `authorize()` renew it
+once through the strategy and the pinned certificate — the refresh token when
+there is one, else (or when the refresh is refused) one login, no step twice —
+and the binding check then runs on the new token. Only when the new token is
+still bound elsewhere is it refused by `authorize()`, as *the new token is
+bound to a client certificate this provider does not present* — and
+remembered: later attempts do not renew it again, so a server that keeps
+binding to another certificate costs no token request (and no login) per
+request. `getTokens()` returns the remembered token; `authorize()` refuses it.
+A renewal that *fails* — the refresh and the login refused, the client
+certificate expired, the server unreachable — is remembered the same way, with
+its own refusal: later attempts answer those same words (*the client
+certificate has expired*, say), with no token request and no login (after a
+refused refresh every renewal is a login, interactive for a browser or device
+strategy), until the token changes. The words are always those of the latest
+renewal. Only a token held *bound elsewhere* is remembered: an expired token
+whose renewal fails is renewed again on the next attempt, as before. The next `prepare()` renews once more. `rejected()` renews once more when the
+refused token is the one held; a refused token that was already superseded is
+answered Ok without a renewal (rule 6, as before). `getTokens()` pins the
+certificate to compare thumbprints, so with a bound token held it may throw a
+`CertificateMaterialError` when the material is unusable or expired. `establish()` reads such a held
+token as unknown and presents the pinned certificate. With **no** certificate
+pinned there is nothing to renew it for: `getTokens()` returns the token, and
+`establish()` / `authorize()` refuse it.
+
+| Token | Certificate pinned | `establish(logon)` | `authorize(request)` |
+|---|---|---|---|
+| unbound | none | presents nothing, Ok | Bearer, Ok |
+| unbound | yes | presents it; Ok even when the logon takes no TLS material (the Bearer carries the token) — a logon target that throws is Oops | Bearer, Ok |
+| bound to the pinned one | yes | presents it; a logon that takes no TLS material (RFC) is that logon's Oops | Bearer, Ok |
+| bound to another, or `cnf` without a readable thumbprint | yes | read as **unknown**: presents the pinned one (a logon that takes no TLS material is that logon's Oops) | renewed once through the pinned one, the new token checked: Bearer, Ok — or, bound elsewhere again, Oops, no header written |
+| bound | none | Oops, nothing presented | Oops, no header written |
+| unknown | yes | **treated as bound**: presents it, and a logon that takes no TLS material is that logon's Oops | Bearer, Ok |
+| unknown | none | presents nothing, Ok | Bearer, Ok |
+
+The refusals are fixed words, with no thumbprint in them: a bound token and no
+certificate pinned is *the token is bound to a client certificate this provider
+does not present*, hint *give the provider a clientAuthentication that presents
+the certificate the token was issued for*; a renewal still bound elsewhere is
+*the new token is bound to a client certificate this provider does not
+present*, hint *the authorization server bound the new token to another
+certificate: check the certificate registered for this client*. A renewal in
+`rejected()` goes through the same strategy and the same pinned certificate,
+so a refreshed token is bound to the same certificate, and is checked like any
+other.
+
+> **The token API does not present the certificate.** Only the `IAuthProvider`
+> methods — `establish()` and `authorize()` — present the pinned certificate
+> and check a token's binding. `getTokens()` and `refreshTokens()` (the
+> `IRefreshableTokenProvider` side, which the broker's token API uses) return
+> the token itself, which may be bound to the certificate: a consumer that
+> takes the token from there and sends it on its own connection must present
+> the same certificate itself, or the resource refuses it — or use
+> `establish()` / `authorize()` instead. `getTokens()` does renew a token bound
+> to another certificate than the pinned one (above); it never checks the
+> token it returns against a connection it does not own.
+
+> **The opaque-token limit.** A provider learns a binding only from the token
+> itself; it does not introspect. An **opaque** token bound to a certificate
+> therefore needs the certificate strategy configured on the provider that
+> presents it — the certificate is then pinned and the unknown token travels
+> with it. Without the strategy the provider has no certificate to present and
+> no way to know the token is bound: it sends a plain Bearer, the resource
+> answers `401`, and `rejected()` treats that as any refused credential.
+
+#### XSUAA with an x509 service key
+
+An XSUAA instance whose `xs-security.json` allows the `x509` credential type
+(`"oauth2-configuration": { "credential-types": ["binding-secret", "x509"] }`)
+issues, for a key created with `{"credential-type": "x509"}`, a key that holds
+`certificate` (a PEM chain), `key` (its private key) and `certurl` (the mTLS
+host) — and no `clientsecret`. This package reads no service key: the consumer
+maps those fields.
+
+```typescript
+import {
+  ClientCredentialsProvider,
+  tlsClientCertificate,
+} from '@mcp-abap-adt/auth-providers';
+
+// `credentials` as `cf service-key <instance> <key>` prints them.
+declare const credentials: {
+  url: string;
+  clientid: string;
+  certificate: string;
+  key: string;
+  certurl: string;
+};
+
+const provider = new ClientCredentialsProvider({
+  uaaUrl: credentials.url,
+  clientId: credentials.clientid,
+  // no clientSecret: the certificate authenticates the client
+  clientAuthentication: tlsClientCertificate({
+    material: { cert: credentials.certificate, key: credentials.key },
+    endpoint: `${credentials.certurl}/oauth/token`,
+  }),
+});
+```
+
+`uaaUrl` is still required; the token request goes to `endpoint` instead of
+`<uaaUrl>/oauth/token`, which takes a secret. The key's certificate is
+short-lived, so a consumer that keeps a provider for long creates a new key —
+and a new provider — before it expires. `npm run test:xsuaa` runs this recipe
+against a real XSUAA (see [Testing](#live-checks-against-xsuaa-btp-subaccount)).
+ADT answered `401` to a `client_credentials` token obtained this way
+(measured on a trial); why is inference — the token carries no user, and its
+client is outside the ABAP system's `xsappname`. See
+[docs/btp-setup.md](docs/btp-setup.md).
+
+#### Refusals
+
+| When | Reason | Hint |
+|---|---|---|
+| material without a PFX or without both certificate and key | the client certificate is incomplete | give a PFX, or a certificate together with its key |
+| material no TLS context accepts | the client certificate could not be used | check the certificate, the key and the passphrase, and that a PFX uses current encryption (not legacy RC2) |
+| a client certificate past its `notAfter`, when pinned or before a request or logon presents it | the client certificate has expired | renew the certificate; a token provider pins its certificate for life, so give the renewed one to a new provider |
+| a signing key that is not a private key of the algorithm | the client signing key could not be used | check the private key and that it matches the algorithm |
+| a strategy's result that cannot be sent | the client authentication returned a request that cannot be sent | check the client authentication strategy |
+| a bound token held, and no certificate pinned | the token is bound to a client certificate this provider does not present | give the provider a clientAuthentication that presents the certificate the token was issued for |
+| a token renewed because it was bound to another certificate, and the new one is bound elsewhere too | the new token is bound to a client certificate this provider does not present | the authorization server bound the new token to another certificate: check the certificate registered for this client |
+| the server refused the client certificate in the handshake | `<what>` failed: the server refused the client certificate (`<code>`) | check that the server trusts the certificate's issuer and that the certificate is valid and not revoked |
 
 ### SSO Providers
 
@@ -1368,6 +1769,10 @@ const result = await provider.getTokens();
 // result.refreshToken is undefined (client_credentials doesn't provide refresh tokens)
 ```
 
+Instead of `clientSecret` it takes a `clientAuthentication` strategy — a client
+certificate (an XSUAA x509 key) or `privateKeyJwt`; never both. See
+[Client authentication](#client-authentication).
+
 #### UaaPasscodeProvider
 
 The login `cf login --sso` uses, for UAA and XSUAA: a one-time **Temporary
@@ -1393,7 +1798,10 @@ const provider = new UaaPasscodeProvider({
 
 The exchange is the password grant with `passcode` instead of a username and
 password — a UAA extension, not an RFC. A code is single-use; a mistyped or
-spent one fails with `Passcode exchange failed (401): Invalid passcode`.
+spent one fails with `Passcode exchange failed (401): "unauthorized": "Invalid passcode"`
+— the server's `error` and `error_description`, with the passcode, the client
+secret and what a client-authentication strategy sent redacted if the server
+echoes them.
 
 #### Device flow prompts
 
@@ -1620,6 +2028,9 @@ import {
   ServiceKeyError,
   BrowserAuthError,
   AssertionValidationError,
+  CertificateMaterialError,
+  ClientAuthenticationError,
+  ClientAuthenticationResultError,
 } from '@mcp-abap-adt/auth-providers';
 
 try {
@@ -1646,11 +2057,20 @@ try {
 **Error Types**:
 - `TokenProviderError` - Base class with `code: string` property
 - `ValidationError` - provider config validation failed, includes `missingFields: string[]`
-- `BrowserAuthError` - a browser login failed (timeout, the identity provider's refusal, a busy callback port, a browser that would not open, an abort), includes `cause?: Error`; thrown by every browser strategy (`browserCallbackStrategy`, `oidcCallbackStrategy`, `samlCallbackStrategy`)
+- `BrowserAuthError` - a browser login failed (timeout, the identity provider's refusal, a busy callback port, a browser that would not open, an abort), includes `cause?: Error`; thrown by every browser strategy (`browserCallbackStrategy`, `oidcCallbackStrategy`, `samlCallbackStrategy`). Its message keeps this package's own words (the timeout, "Port N is already in use", an abort); the identity provider's refusal names only its registered code (`the identity provider refused the login (consent_required)`), never `error_description`; for anything else — a custom transport's or launcher's error — it is fixed words (`the browser login failed (unknown error)`, with an allowlisted code when there is one) and the original is `cause`, since the foreign text may hold a secret and the message is what gets logged
+- `TokenEndpointError` - a token request failed at a site that wraps it (UAA refresh, client credentials, passcode, OIDC device initiation, password grant); a plain `Error`, not a `TokenProviderError`; carries `status`, `oauthError` (a registered OAuth / OIDC code only) and `code` (an allowlisted system or TLS code only), the original as `cause`
 - `RefreshError`, `SessionDataError`, `ServiceKeyError` - exported, but no provider throws them: a refused refresh falls back to a login inside `getTokens()`/`refreshTokens()`, and sessions and service keys are read by `@mcp-abap-adt/auth-stores`, not here
 - `AssertionValidationError` - a SAML assertion was refused, includes `check: AssertionCheck` naming the check that failed — see [SAML assertion validation](#errors)
+- `CertificateMaterialError` - client certificate material cannot be used, includes `incomplete: boolean` (no PFX and not both a certificate and its key, versus material no TLS context accepts); its message is fixed and carries nothing of the material. Thrown by `tlsClientCertificate` and by a provider pinning a strategy's certificate
+- `ClientAuthenticationError` - `privateKeyJwt`'s key is not a private key of its algorithm, or cannot sign; fixed message, nothing of the key
+- `ClientAuthenticationResultError` - what a client authentication strategy returned cannot be sent (a non-string value, a header with a line break, a parameter or header replacing the request's own, an endpoint that is not an absolute `https:` URL); thrown before anything is sent, fixed message
 
-All error codes are defined in `@mcp-abap-adt/interfaces-auth` package as `TOKEN_PROVIDER_ERROR_CODES`, and `AssertionValidationError`'s as `ASSERTION_ERROR_CODES`.
+A failed token request throws without the request it sent — no form body, no
+`Authorization` header, no TLS agent — and with the server's body reduced to
+`error`, `error_description` and `error_uri`, every secret the request sent
+redacted.
+
+All error codes are defined in `@mcp-abap-adt/interfaces-auth` package as `TOKEN_PROVIDER_ERROR_CODES` — `CertificateMaterialError`'s is `CERTIFICATE_MATERIAL_ERROR`; `ClientAuthenticationError` and `ClientAuthenticationResultError` share `CLIENT_AUTHENTICATION_ERROR` — and `AssertionValidationError`'s as `ASSERTION_ERROR_CODES`.
 
 ## Upgrading from 4.0 to 4.1
 
@@ -2016,10 +2436,23 @@ npm run stand:down    # stop
 ```
 
 `STAND_KEEP=1 npm run test:stand` keeps a stand the run started. `UAA_PORT`
-(8080) and `KEYCLOAK_PORT` (8081) move the servers. A server that is already
-running is never changed: if it is published on another port than the one
-asked for, `test:stand` refuses and says so, rather than let Compose recreate
-it.
+(8080), `KEYCLOAK_PORT` (8081) and `KEYCLOAK_HTTPS_PORT` (8444) move the
+servers. A server that is already running is never changed: if it is published
+on another port than the one asked for, `test:stand` refuses and says so,
+rather than let Compose recreate it. **A stand started before 5.3.0 must be
+stopped once** (`npm run stand:down`): its Keycloak has no HTTPS port, and
+`test:stand` refuses it for that reason.
+
+Keycloak also listens on HTTPS (`KEYCLOAK_HTTPS_PORT`, loopback only), asking
+for a client certificate without requiring one, so a request with none or with
+another reaches it and is refused by the rule under test rather than by the
+handshake. Its certificates are the throwaway fixtures in
+`tests/stand/keycloak/tls/` — a CA whose key was deleted after signing, the
+server certificate, client certificates `client-a` (mapped) and `client-b`
+(mapped to nothing), and a `private_key_jwt` signing pair — regenerated by
+`tests/stand/keycloak/tls/generate.sh`. `test:stand` sets
+`NODE_EXTRA_CA_CERTS` to that CA for the suites: no provider is given a `ca`.
+`npm run stand:up` prints the variables a run by hand needs.
 
 | provider | server | what the suite proves |
 |---|---|---|
@@ -2033,10 +2466,18 @@ it.
 | `OidcBrowserProvider` | Keycloak | authorization code with S256 PKCE, which the client requires, through Keycloak's login page |
 | `OidcDeviceFlowProvider` | Keycloak | a token once the user logs in and grants access on Keycloak's device pages, read from the verification URI the provider announces |
 | `OidcTokenExchangeProvider` | Keycloak | RFC 8693: another client's access token exchanged for the requester's own |
+| `ClientCredentialsProvider` + `tlsClientCertificate` | Keycloak HTTPS (client `mtls`) | a token bound to `client-a`'s certificate (`cnf.x5t#S256` equals its thumbprint); a token request presenting `client-b` refused in the fixed words |
+| the bound token at a resource | Keycloak HTTPS (userinfo) | the certificate `establish()` hands the logon target is `client-a`'s; userinfo answers 200 with it, 401 with none and 401 with `client-b` |
+| `OidcPasswordProvider` + `tlsClientCertificate` | Keycloak HTTPS (client `mtls`) | a refresh over mTLS, and the new token bound to the same certificate |
+| `OidcPasswordProvider` + `privateKeyJwt` | Keycloak HTTPS (client `jwt`) | a token with the default audience, the token endpoint |
+| `OidcDeviceFlowProvider` + `privateKeyJwt` | Keycloak HTTPS (client `jwt`) | the whole flow with the default audience, the token endpoint, and no `audience`; the device initiation refused with `audience` set to the device endpoint |
+| `CertificateAuthProvider` | Keycloak HTTPS (client `x509-login`) | the X.509 user logon, Keycloak's analogue of ABAP `CERTRULE`: the material the provider hands a logon logs on as the user `client-a`; `client-b` and no certificate refused |
+| `ClientCredentialsProvider` + `privateKeyJwt` | UAA (client `jwt_client`) | a client token with no secret, the assertion's audience UAA's issuer |
 
 The servers' configuration is committed as test fixtures —
-`tests/stand/uaa/config/uaa.yml`, `tests/stand/keycloak/realm-test.json` and the
-test identity provider's key in `tests/stand/uaa/idp/` — so every machine and CI
+`tests/stand/uaa/config/uaa.yml`, `tests/stand/keycloak/realm-test.json`, the
+test identity provider's key in `tests/stand/uaa/idp/` and the TLS fixtures in
+`tests/stand/keycloak/tls/` — so every machine and CI
 run the same stand. The keys and passwords in them are trusted by nothing but
 that local stand; they are not secrets, and must not be reused.
 
@@ -2052,8 +2493,11 @@ which submits each server's own login and consent forms over HTTP.
 Not covered: the cookie half of `Saml2PureProvider`, which belongs to the
 consumer's `cookieProvider` and needs a real SAP system.
 
-A plain `npm test` skips these suites: they run only with `UAA_URL` or
-`KEYCLOAK_URL` set, which `test:stand` does.
+Not covered either: an ABAP system's `CERTRULE` mapping a certificate to a
+user — the Keycloak X.509 logon is its analogue, not a proof.
+
+A plain `npm test` skips these suites: they run only with `UAA_URL`,
+`KEYCLOAK_URL` or `KEYCLOAK_HTTPS_URL` set, which `test:stand` does.
 
 ### Live checks against XSUAA (BTP subaccount)
 
@@ -2068,7 +2512,12 @@ XSUAA_CF_API=https://api.cf.<region>.hana.ondemand.com XSUAA_CF_ORG=<org> \
 ```
 
 It creates, in the targeted space, an `xsuaa`/`application` instance whose
-client may use saml2-bearer, refresh_token and password; an `xsuaa`/`apiaccess`
+client may use saml2-bearer, refresh_token, password and client_credentials,
+and authenticate with a secret or a client certificate (`credential-types:
+["binding-secret", "x509"]`), with two service keys — `key`, created with
+`{"credential-type": "binding-secret"}`, and `x509-key`, created with
+`{"credential-type": "x509"}` afresh on every run, since its certificate lives
+about seven days; an `xsuaa`/`apiaccess`
 instance, used only to manage trust; and a SAML trust to a test identity
 provider whose key is generated locally and never leaves the gitignored
 `tests/xsuaa/.local/`. Then it runs the suite and removes all of it — also when
@@ -2079,7 +2528,7 @@ a test fails. Two rules keep it from touching anything else:
   a `cf` left pointing at another org or space cannot receive anything.
 - **Ownership.** Everything setup creates is recorded in
   `tests/xsuaa/.local/owned` with its immutable ID — the service instance's
-  GUID, the trust's id — and the record names the API, org and space it
+  GUID, each service key's GUID, the trust's id — and the record names the API, org and space it
   belongs to. A resource is treated as ours only when its name and its current
   ID both match a record, checked right before it is reused, refreshed or
   deleted. A name held by anything else — never created here, or recreated
@@ -2109,6 +2558,18 @@ certificate, declared `idpInitiated`:
 | `UaaPasscodeProvider` (with `XSUAA_PASSCODE=<code from /passcode>`) | skipped — no `XSUAA_PASSCODE` was set |
 
 Teardown removed everything setup had created.
+
+The x509 case — `ClientCredentialsProvider` with `tlsClientCertificate` and
+the `x509-key`'s `certificate`, `key` and `certurl`, no secret anywhere
+(`src/__tests__/integration/xsuaa/x509.test.ts`) — is new in 5.3.0. Results
+on a BTP trial subaccount, 2026-10-04 — 2 suites, 6 passed, 1 skipped (the
+passcode case, no `XSUAA_PASSCODE`): the `x509-key` holds `certificate`, `key`
+and `certurl` and no `clientsecret`, and the provider got a
+`client_credentials` token whose client id is the key's, with no secret
+configured. Only `client_credentials` was run — no user grant — and whether
+ADT accepts a token obtained this way stays unproven (see
+[docs/btp-setup.md](docs/btp-setup.md)). Teardown removed everything setup had
+created.
 
 `UaaPasscodeProvider` was also checked by hand with an ABAP environment's own
 service key: its client accepts the passcode, and the token opens ADT. That
@@ -2142,7 +2603,7 @@ Logging uses `@mcp-abap-adt/logger` package with structured logging:
 - Token exchange stages (what we send, what we receive)
 - Token information (lengths, previews, expiration)
 - Token validation checks (expiration, validity)
-- Errors with details
+- Errors in fixed words (see below)
 
 Example output:
 ```
@@ -2154,14 +2615,15 @@ Example output:
 ```
 
 **Logging Features**:
-- **No tokens in logs**: a token the provider holds or sent is never logged, not even in part. A log line carries only `<redacted, N chars>` (since 4.1.2; earlier versions logged a short refresh token whole). A token endpoint's error body contributes only `error` and `error_description`, with the request's secrets and anything shaped like a JWT redacted. A new opaque token that a server writes into `error_description` cannot be recognised and passes through, capped at 512 characters.
+- **No tokens in logs**: a token the provider holds or sent is never logged, not even in part. A log line carries only `<redacted, N chars>` (since 4.1.2; earlier versions logged a short refresh token whole). A token endpoint's error body contributes only `error` and `error_description`, with the request's secrets and anything shaped like a JWT redacted. An `error` that is a registered OAuth error code (`invalid_grant`, `authorization_pending`, `slow_down`, …) is kept verbatim: it is a protocol word, and the device poll reads it. A new opaque token that a server writes into `error_description` cannot be recognised and passes through, capped at 512 characters.
+- **No error message in logs**: a log line about a thrown value — a refresh that failed, a strategy, loader, presenter, validator, `onTokens`, browser launcher or SNC locator/probe that threw — carries only the words its refusal would (fixed per error class, an allowlisted TLS or system code, else `unknown error`) and the HTTP status when there is one, never the error's message, `cause` or stack: a consumer's collaborator may throw text holding a key, a passphrase or a token. Diagnose a collaborator's failure where it throws, not from this package's log.
 - **Date Formatting**: Expiration dates are displayed in readable format (YYYY-MM-DD HH:MM:SS UTC) instead of ISO format
 - **Browser Information**: Logs browser type and authorization URL for debugging
 - **Token Lifecycle**: Detailed logging of token acquisition, validation, and refresh operations
 
 ## Dependencies
 
-- `@mcp-abap-adt/interfaces-auth` (^3.0.0) - `IAuthProvider`, token provider, authorization and assertion-validation contracts (`ITokenProvider`, `IAuthorizationStrategy`, `CallbackServerFactory`, `IAssertionValidator`, `IAssertionReplayStore`) and error code constants
+- `@mcp-abap-adt/interfaces-auth` (^3.1.0) - `IAuthProvider`, token provider, authorization, client-authentication and assertion-validation contracts (`ITokenProvider`, `IAuthorizationStrategy`, `IClientAuthentication`, `CallbackServerFactory`, `IAssertionValidator`, `IAssertionReplayStore`) and error code constants
 - `@mcp-abap-adt/interfaces-auth-sap` (^2.0.0) - XSUAA authorization configuration (`IAuthorizationConfig`) and `ICertificateMaterialLoader`
 - `@mcp-abap-adt/interfaces-utils` (^1.1.0) - `ILogger`
 - `@xmldom/xmldom` - XML parsing: SAML assertion validation, and taking the Assertion out of a SAMLResponse for the saml2-bearer grant

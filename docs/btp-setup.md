@@ -6,8 +6,8 @@ in the subaccount, and by the user the ABAP system maps it to. This page lists,
 per provider, what has to exist on the SAP side, and whether the result is
 usable for ADT at all.
 
-Researched 2026-09-26 against SAP Help and SAP Community. Every claim carries
-its source:
+Researched 2026-09-26 against SAP Help and SAP Community; client certificates
+and signed client assertions added 2026-10-04. Every claim carries its source:
 
 - **SAP** — SAP Help or other official SAP documentation, linked.
 - **Community** — an SAP Community blog or answer, linked. Useful, not
@@ -15,6 +15,8 @@ its source:
 - **Measured** — measured by this project, on the provider stand or a BTP
   trial (see [Testing](../README.md#testing)). SAP does not document it.
 - **Inference** — reasoning from the facts above; no source states it.
+- **Pending** — a check this project has written but not yet run against the
+  real system; it becomes Measured, or is corrected, once run.
 
 Where this page and a system you run disagree, the system wins. Please report
 it.
@@ -24,6 +26,7 @@ it.
 - [Summary](#summary)
 - [The three rules](#the-three-rules)
 - [Shared building blocks](#shared-building-blocks)
+- [Client certificates and signed assertions](#client-certificates-and-signed-assertions)
 - [Per provider](#per-provider)
 - [IAS and other OIDC issuers](#ias-and-other-oidc-issuers)
 - [Where the sources are weak](#where-the-sources-are-weak)
@@ -78,7 +81,8 @@ Every row above follows from three documented facts.
 | Editing its `xs-security.json` | The ABAP service broker creates this client; you cannot edit it as you edit your own `xsuaa` instance | Inference |
 | A separate `xsuaa`/`application` instance | Its tokens carry that application's audience and scopes. Whether ADT accepts them is unverified; expect a 401 | Inference — [open question 2](#open-questions) |
 | X.509 or secret | XSUAA supports `binding-secret` (the default) and `x509`. `instance-secret` is refused for new keys since 2026-01-19 | SAP ([xs-security.json](https://help.sap.com/docs/BTP/65de2977205c403bbc107264b8eccf4b/517895a9612241259d6941dbf9ad81cb.html), [token endpoint](https://help.sap.com/docs/BTP/65de2977205c403bbc107264b8eccf4b/fd5865e124ab411790cacc0e72df2852.html)) |
-| X.509 in this package | Not supported: every provider sends `client_id` and `client_secret`; there is no mTLS client certificate | This repository |
+| A secret in a Basic header | `clientSecretBasic` with `encoding: 'raw'`: XSUAA accepted the raw `id:secret` and refused it form-encoded or `encodeURIComponent`'d (`401`), for an id holding `!` and `\|` and a secret holding `$`, `=` and `_`, two keys, `client_credentials`. Other characters are not measured | Measured (trial, 2026-10-04, by hand; not in `test:xsuaa`) |
+| X.509 in this package | Since 5.3.0 a token provider's client authenticates with a certificate through `clientAuthentication: tlsClientCertificate(…)`, or with a signed assertion through `privateKeyJwt(…)`, instead of a secret; the consumer maps the service key's fields. See [Client certificates and signed assertions](#client-certificates-and-signed-assertions) | This repository |
 | GET on `/oauth/token` | Deprecated by XSUAA from 2026-06-30. The providers use POST | Community ([announcement](https://community.sap.com/t5/technology-blog-posts-by-sap/effective-from-june-30th-2026-xsuaa-deprecation-of-get-method-for-oauth/ba-p/14418281)) |
 
 ### `xs-security.json`, for an `xsuaa` instance you own
@@ -92,6 +96,7 @@ of your own.
 | `refresh-token-validity` | 60–31536000 s, default 604800 | SAP (same) |
 | `redirect-uris` | An allow-list, wildcards allowed. For `AuthorizationCodeProvider` it must cover `http://localhost:61001/callback`, the default | SAP for the syntax; the value is this package's default |
 | `credential-types` | `binding-secret`, `x509` | SAP (same) |
+| An instance allowing both | With `credential-types: ["x509", "binding-secret"]`, the key's own `{"credential-type": …}` parameter decides what each key holds | Measured (trial, 2026-10-04) |
 | `grant-types` | **Not on SAP's syntax page.** A community blog says an absent key allows every supported grant, so listing `urn:ietf:params:oauth:grant-type:saml2-bearer` matters only when the list is restricted. `tests/xsuaa/xs-security.json` lists it explicitly | Community ([grant types](https://community.sap.com/t5/technology-blog-posts-by-sap/how-grant-types-keep-your-application-secure/ba-p/13523970)) |
 | `allowedproviders` | Restricts which trust origins may log in through this client | SAP (same) |
 | Scopes, role templates | Meaningful for your own application only. ADT authorization lives in ABAP business roles, not XSUAA scopes | Inference |
@@ -130,6 +135,29 @@ the grants of its OAuth client, so only the pre-onboarded SAP ID user works
 reliably (Inference, consistent with what was measured: the `sap.default` user
 reaches ADT, an IAS user gets 401).
 
+## Client certificates and signed assertions
+
+What a token provider's client can authenticate with, instead of a secret, per
+authorization server. The strategies are this package's
+(`tlsClientCertificate`, `privateKeyJwt`; README, *Client authentication*);
+everything else is the server's.
+
+| Server | Client certificate (`tlsClientCertificate`) | Signed assertion (`privateKeyJwt`) | Source |
+|---|---|---|---|
+| XSUAA | An instance with `credential-types` including `x509`, and a key created with `{"credential-type": "x509"}`: the key holds `certificate`, `key` and `certurl`, and no `clientsecret`; its certificate is valid for about seven days. `client_credentials` sent over mTLS to `<certurl>/oauth/token` → 200 and a token | Not checked | Measured (trial, 2026-10-04, by hand in a spike — not through this package's providers) |
+| XSUAA, through this package | `ClientCredentialsProvider` with `tlsClientCertificate` — `material` the key's `certificate` and `key`, `endpoint` `<certurl>/oauth/token` — and no `clientSecret` gets a `client_credentials` token whose client id is the key's `clientid` (`npm run test:xsuaa`, `src/__tests__/integration/xsuaa/x509.test.ts`, which also confirms the key holds `certificate`, `key` and `certurl` and no `clientsecret`). Only `client_credentials` was run: no user grant | — | Measured (trial, 2026-10-04, `test:xsuaa`) |
+| XSUAA, other grants | The certificate authenticates the client at `certurl`'s token endpoint for any grant the client allows — `authorization_code`, `refresh_token`, `password`, `passcode`, `saml2-bearer` | — | Inference: only `client_credentials` was measured |
+| Cloud Foundry UAA (v79.7) | None: UAA has no `tls_client_auth` | Accepted with the public key as the client's `jwks` and the assertion's `aud` = UAA's issuer, `…/uaa/oauth/token` | Measured (provider stand) |
+| Keycloak (26.7) | `client-x509` client authentication over HTTPS; the token is bound to the certificate (`cnf.x5t#S256`); the token endpoint and userinfo refuse another certificate and none; `mtls_endpoint_aliases` published in discovery | Accepted with `aud` = the token endpoint — the default, the device flow included, so it needs no `audience`; the device authorization endpoint as `aud` is refused (`Invalid token audience`) | Measured (provider stand) |
+
+| Item | Facts | Source |
+|---|---|---|
+| ADT and a `client_credentials` token from an x509 key | ADT answered 401. Why: the token carries no user (rule 2), and its client is not the ABAP system's `xsappname` | Measured (trial, 2026-10-04: the 401); Inference (why) |
+| ADT and a user token from an x509 client | Whether ADT accepts a user token (`authorization_code`, `password`, `passcode`) obtained by an x509-authenticated client is unproven; rules 1–3 apply as for a secret, and a client of another `xsuaa` instance is [open question 2](#open-questions) | Inference |
+| The ABAP environment's own service key | On the trial, its keys are `binding-secret`; nothing found documents an `x509` key for the ABAP instance's client | Measured (trial, the keys); Inference (absence of documentation) |
+| A certificate-bound token at ADT | Whether ADT, or anything in front of it, enforces `cnf.x5t#S256` is unknown. The provider presents the pinned certificate on the logon for a bound token, and for an opaque one when it has a certificate, so a binding is not broken on its side | This repository; ADT is Inference |
+| ABAP `CERTRULE` (a certificate mapped to a user at logon) | `CertificateAuthProvider` presents the certificate in the logon's TLS handshake; that an ABAP system's `CERTRULE` maps it to a user is **unproven** — no system to test on. Its analogue, Keycloak's X.509 user logon, maps the certificate's CN to a user | Measured (Keycloak, provider stand); ABAP is Inference |
+
 ## Per provider
 
 ### `ClientCredentialsProvider`
@@ -140,6 +168,7 @@ reaches ADT, an IAS user gets 401).
 | Trust, user | None — and that is the problem: the token names no user | Community ([grant types](https://community.sap.com/t5/technology-blog-posts-by-sap/how-grant-types-keep-your-application-secure/ba-p/13523970)) |
 | ABAP | Nothing to map; ADT answered 401 on a trial | Community ([headless trial](https://community.sap.com/t5/abap-blog-posts/reading-abap-source-code-from-a-btp-abap-environment-trial-with-a-headless/ba-p/14475022), one author, trial only) |
 | Use it for | Non-ADT BTP APIs, and services of an ABAP communication scenario through the system's own token endpoint | Inference |
+| Without a secret | An x509 key: `tlsClientCertificate` with the key's `certificate`, `key` and `certurl` — see [Client certificates and signed assertions](#client-certificates-and-signed-assertions). The token is as client-only as one obtained with a secret: ADT answered 401 | Measured (trial, 2026-10-04: by hand, then through this package by `test:xsuaa`); ADT's 401 measured by hand |
 
 ### `AuthorizationCodeProvider`
 
@@ -282,3 +311,11 @@ To be settled against a live system, most important first.
    instance's client.
 10. **Redirect allow-list of the ABAP instance's client** on paid systems: is
     `http://localhost:61001/callback` accepted?
+11. **A user token from an x509 client at ADT**: obtain one with
+    `AuthorizationCodeProvider` or `UaaPasscodeProvider` and
+    `tlsClientCertificate` against a client ADT trusts, and call
+    `/sap/bc/adt/discovery`.
+12. **ABAP `CERTRULE`**: does `CertificateAuthProvider`'s certificate, mapped
+    by `CERTRULE`, log on to an on-premise system's ADT?
+13. **`private_key_jwt` at XSUAA**: does XSUAA accept a signed client
+    assertion, and with which `aud`?

@@ -8,13 +8,20 @@ import { beforeEach, describe, expect, it, jest } from '@jest/globals';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
 import axios from 'axios';
 import { getTokenWithClientCredentials } from '../../auth/clientCredentialsAuth';
+import { describeOAuthErrorBody } from '../../auth/oauthErrorBody';
 import {
   exchangeSamlAssertion,
   refreshSamlBearerToken,
 } from '../../auth/saml2TokenExchange';
 import { refreshJwtToken } from '../../auth/tokenRefresher';
 
-jest.mock('axios');
+// Automocked, but with axios's own error class: the sites throw it.
+jest.mock('axios', () => {
+  const mocked = jest.createMockFromModule<Record<string, unknown>>('axios');
+  mocked.AxiosError =
+    jest.requireActual<Record<string, unknown>>('axios').AxiosError;
+  return mocked;
+});
 const mockedAxios = axios as jest.Mocked<typeof axios>;
 
 const LEAKED_ACCESS = 'leaked-access-token-0123456789abcdef';
@@ -174,7 +181,10 @@ describe('OAuth error bodies stay out of logs and messages', () => {
         ),
       );
       expect(text()).not.toContain(JWT);
-      expect(text()).toContain('is not acceptable');
+      // The SAML log carries the safe facts only, never the description,
+      // redacted or not.
+      expect(text()).toContain('HTTP 400, invalid_grant');
+      expect(text()).not.toContain('is not acceptable');
     });
 
     // The request sent the assertion form-urlencoded, so a server echoing its
@@ -196,7 +206,10 @@ describe('OAuth error bodies stay out of logs and messages', () => {
       );
       expect(text()).not.toContain(encoded);
       expect(text()).not.toContain(assertion);
-      expect(text()).toContain('could not parse assertion=');
+      // The SAML log carries the safe facts only, never the description,
+      // redacted or not.
+      expect(text()).toContain('HTTP 400, invalid_grant');
+      expect(text()).not.toContain('could not parse assertion=');
     });
 
     // A known secret is redacted whatever its length: nothing checks that a
@@ -225,7 +238,58 @@ describe('OAuth error bodies stay out of logs and messages', () => {
       );
       expect(text()).not.toContain('secret-value-xyz');
       expect(text()).not.toContain(assertion);
-      expect(text()).toContain('bad client');
+      // The SAML log carries the safe facts only, never the description,
+      // redacted or not.
+      expect(text()).toContain('HTTP 400, invalid_grant');
+      expect(text()).not.toContain('bad client');
     });
+  });
+});
+
+describe('a short secret inside a longer one', () => {
+  it('redacts the longer one whole: secrets are redacted longest first', () => {
+    // An opaque assertion (not JWT-shaped) that contains the password.
+    const PASSWORD = 'pw';
+    const ASSERTION = 'opaque-pw-assertion-0123456789';
+    const text = describeOAuthErrorBody(
+      { error: 'invalid_grant', error_description: `refused ${ASSERTION}` },
+      [PASSWORD, ASSERTION],
+    );
+    expect(text).not.toContain('opaque-');
+    expect(text).not.toContain('-assertion-0123456789');
+    expect(text).toContain('refused <redacted>');
+  });
+});
+
+describe('every form is redacted in one pass', () => {
+  const MARKER = '<redacted>';
+  /** What is left once every whole marker is taken out: no piece of one. */
+  const outsideMarkers = (text: string): string => text.split(MARKER).join('');
+
+  it('a short form is never replaced inside a marker another form left', () => {
+    // `%65%64` form-decodes to `ed`, which every marker contains.
+    const text = describeOAuthErrorBody(
+      { error_description: 'bad secret %65%64 here' },
+      ['%65%64'],
+    );
+    expect(text).toBe(`"bad secret ${MARKER} here"`);
+  });
+
+  it('the output stays bounded: one marker per match in the original text', () => {
+    // Each decodes to one letter of the marker; replaced one after another,
+    // every pass would rewrite the markers of the one before.
+    const description = 'a d e r c t a d e r';
+    const text = describeOAuthErrorBody({ error_description: description }, [
+      '%61',
+      '%64',
+      '%65',
+      '%72',
+      '%63',
+      '%74',
+    ]);
+    expect(outsideMarkers(text)).toBe('"         "');
+    expect(text.length).toBeLessThanOrEqual(
+      description.length * MARKER.length + 2,
+    );
   });
 });

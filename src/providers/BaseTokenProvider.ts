@@ -12,6 +12,8 @@ import type {
   AuthOutcome,
   IAuthProvider,
   IAuthRejection,
+  ICertificateMaterial,
+  IClientAuthentication,
   ILogonTarget,
   IRefreshableTokenProvider,
   IRequestTarget,
@@ -19,8 +21,26 @@ import type {
   OAuth2GrantType,
 } from '@mcp-abap-adt/interfaces-auth';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
-import { OK, oops, ownLabel, safely } from '../auth/refusal';
+import {
+  assertCertificateMaterial,
+  assertNotExpired,
+  certificateNotAfter,
+  certificateThumbprint,
+} from '../auth/certificateMaterial';
+import {
+  loggedError,
+  OK,
+  oops,
+  refusalFrom,
+  safely,
+  TOKEN_BOUND_ELSEWHERE,
+  TOKEN_RENEWED_BOUND_ELSEWHERE,
+} from '../auth/refusal';
 import { readRejection } from '../auth/rejection';
+import { readBinding, type TokenBinding } from '../auth/tokenBinding';
+import type { TokenRequestAuth } from '../auth/tokenRequest';
+import { CertificateMaterialError } from '../errors/CertificateMaterialError';
+import { ValidationError } from '../errors/TokenProviderErrors';
 
 /** What every token provider's config may carry beside its own fields. */
 export interface TokenProviderHooks {
@@ -31,6 +51,47 @@ export interface TokenProviderHooks {
    * authentication.
    */
   onTokens?: (result: ITokenResult) => Promise<void>;
+}
+
+/**
+ * How the client authenticates to the authorization server (spec §3). Taken by
+ * every provider that sends a request to one; never beside a `clientSecret` —
+ * two ways of authenticating one client is a `ValidationError`.
+ */
+export interface ClientAuthenticationConfig {
+  clientAuthentication?: IClientAuthentication;
+}
+
+/** The certificate a provider presents for its lifetime, and its `x5t#S256`. */
+export interface PinnedCertificate {
+  readonly material: ICertificateMaterial;
+  readonly thumbprint: string;
+  /** The leaf's `notAfter`, epoch ms: checked before every request that presents it. */
+  readonly notAfter: number;
+}
+
+/** What the base constructor reads of a provider's configuration. */
+type BaseConfig = TokenProviderHooks &
+  ClientAuthenticationConfig & { clientSecret?: unknown };
+
+/**
+ * The four material fields, copied — each Buffer into a new one: an object or
+ * a Buffer the strategy still holds, and changes later, never changes what is
+ * pinned.
+ */
+function copyMaterial(material: ICertificateMaterial): ICertificateMaterial {
+  const own = <T>(value: T): T =>
+    (Buffer.isBuffer(value) ? Buffer.from(value) : value) as T;
+  const cert = own(material.cert);
+  const key = own(material.key);
+  const pfx = own(material.pfx);
+  const { passphrase } = material;
+  return {
+    ...(cert === undefined ? {} : { cert }),
+    ...(key === undefined ? {} : { key }),
+    ...(pfx === undefined ? {} : { pfx }),
+    ...(passphrase === undefined ? {} : { passphrase }),
+  };
 }
 
 /**
@@ -70,9 +131,148 @@ export abstract class BaseTokenProvider
   private presented?: string;
   /** The renewal in flight; concurrent callers share it (one refresh, at most one login). */
   private renewal?: Promise<ITokenResult>;
+  /** How the client authenticates to the authorization server, when configured. */
+  protected readonly clientAuthentication?: IClientAuthentication;
+  /**
+   * The strategy's TLS material and its thumbprint: set on first need, never
+   * replaced (spec §4). A certificate that rotates is a new provider.
+   */
+  protected pinned?: PinnedCertificate;
+  /** The pin attempt in flight; concurrent first needs share it. */
+  private pinning?: Promise<PinnedCertificate>;
+  /**
+   * A held token bound elsewhere than the pinned certificate that a renewal
+   * did not make usable, with the refusal that renewal produced: a renewal
+   * that obtained it still bound elsewhere ("the new token is bound to …"),
+   * or a renewal that threw while it was held (its own refusal — an expired
+   * client certificate, a refused login). It is not renewed again on its own
+   * — otherwise every request attempt would cost a token request, or a login,
+   * interactive for a browser or device strategy — and `authorize()` answers
+   * that same refusal, so the cause stays visible. Cleared whenever the token
+   * changes and by prepare(); rejected() renews regardless, once, and the
+   * latest renewal's refusal is the one kept.
+   */
+  private remembered?: { token: string; refusal: AuthOutcome };
 
-  constructor(hooks: TokenProviderHooks = {}) {
-    this.onTokens = hooks.onTokens;
+  constructor(config: BaseConfig = {}) {
+    this.onTokens = config.onTokens;
+    if (config.clientAuthentication && config.clientSecret !== undefined) {
+      // Two ways of authenticating one client is a mistake, not a preference.
+      throw new ValidationError(
+        'clientSecret cannot be given beside clientAuthentication',
+        ['clientSecret'],
+      );
+    }
+    this.clientAuthentication = config.clientAuthentication;
+  }
+
+  /**
+   * The certificate this provider presents, read from the strategy once.
+   * Undefined for no strategy, or one that presents none. A failed read pins
+   * nothing and throws — the moment that needed it is refused, and the next
+   * moment reads again. After a success `tlsMaterial()` is never called again.
+   */
+  protected async pin(): Promise<PinnedCertificate | undefined> {
+    if (this.pinned) return this.pinned;
+    const strategy = this.clientAuthentication;
+    if (!strategy?.tlsMaterial) return undefined;
+    if (!this.pinning) {
+      const attempt = (async () => {
+        const loaded = await strategy.tlsMaterial?.();
+        // Nothing, or not an object: no certificate to present at all.
+        if (!loaded || typeof loaded !== 'object') {
+          throw new CertificateMaterialError(true);
+        }
+        const material = copyMaterial(loaded);
+        assertCertificateMaterial(material);
+        const pinned = {
+          material,
+          thumbprint: certificateThumbprint(material),
+          notAfter: certificateNotAfter(material),
+        };
+        this.pinned = pinned;
+        return pinned;
+      })();
+      this.pinning = attempt;
+      attempt.then(
+        () => {
+          this.pinning = undefined;
+        },
+        () => {
+          this.pinning = undefined;
+        },
+      );
+    }
+    return this.pinning;
+  }
+
+  /**
+   * The pinned certificate, about to be presented: pinned if it is not yet,
+   * and refused — a CertificateMaterialError, "has expired" — once past its
+   * `notAfter`. Valid at pin time is not valid for life.
+   */
+  private async presentable(): Promise<PinnedCertificate | undefined> {
+    const pinned = await this.pin();
+    if (pinned) assertNotExpired(pinned.notAfter);
+    return pinned;
+  }
+
+  /**
+   * What a token-request site is given for one request: the strategy, the
+   * pinned material, the server's mTLS alias of that request's endpoint, and
+   * — for a request that goes elsewhere than the token endpoint (the device
+   * initiation) — the plain token endpoint. Undefined without a strategy —
+   * the site then sends today's request.
+   */
+  protected async requestAuth(
+    mtlsEndpoint?: string,
+    tokenEndpoint?: string,
+  ): Promise<TokenRequestAuth | undefined> {
+    const strategy = this.clientAuthentication;
+    if (!strategy) return undefined;
+    const pinned = await this.presentable();
+    return {
+      strategy,
+      ...(pinned
+        ? { material: pinned.material, notAfter: pinned.notAfter }
+        : {}),
+      ...(mtlsEndpoint === undefined ? {} : { mtlsEndpoint }),
+      ...(tokenEndpoint === undefined ? {} : { tokenEndpoint }),
+    };
+  }
+
+  /**
+   * True for a held token this provider cannot present: bound — or binding
+   * unreadably — to another certificate than the pinned one. It is then
+   * renewed like an expired token, through the pinned material. Without a
+   * pinned certificate there is nothing to renew it for: false, and the
+   * binding check refuses it where it would be presented.
+   */
+  private async boundToAnother(token: string): Promise<boolean> {
+    // A renewal already obtained this one, or already failed to replace it:
+    // renewing again on its own would not help.
+    if (token === this.remembered?.token) return false;
+    const binding = readBinding(token);
+    if (binding.state !== 'bound') return false;
+    const pinned = await this.pin();
+    return pinned !== undefined && !this.presents(binding, pinned);
+  }
+
+  /** True for a token bound — or binding unreadably — elsewhere than the pinned certificate. */
+  private elsewhereThanPinned(token: string): boolean {
+    const binding = readBinding(token);
+    return (
+      this.pinned !== undefined &&
+      binding.state === 'bound' &&
+      !this.presents(binding, this.pinned)
+    );
+  }
+
+  /** Remembers a renewed token bound elsewhere than the pinned certificate. */
+  private markIfElsewhere(token: string): void {
+    if (this.elsewhereThanPinned(token)) {
+      this.remembered = { token, refusal: renewedBoundElsewhere() };
+    }
   }
 
   /**
@@ -172,9 +372,16 @@ export abstract class BaseTokenProvider
     });
     // A renewal in flight is replacing the cache: wait for it, not the old token
     if (this.renewal) return this.renewal;
-    // If token is valid, return cached
-    const isValid = this.isTokenValid();
-    if (isValid) {
+    // If token is valid, return cached — unless it is bound to another
+    // certificate than the pinned one (a restored token after a rotation):
+    // that one is renewed like an expired one.
+    const valid = this.isTokenValid();
+    const elsewhere =
+      valid && (await this.boundToAnother(this.authorizationToken ?? ''));
+    if (this.renewal) return this.renewal;
+    // A failure is remembered by renew() itself.
+    if (elsewhere) return this.refreshTokens();
+    if (valid) {
       const authorizationToken = this.authorizationToken;
       if (!authorizationToken) {
         throw new Error('Authorization token is missing.');
@@ -217,8 +424,37 @@ export abstract class BaseTokenProvider
     return this.renewal;
   }
 
-  /** One renewal: one refresh, then — only if it is refused or impossible — one login. */
+  /**
+   * One renewal; when it throws while a token bound elsewhere than the pinned
+   * certificate is still held, that token is remembered with the renewal's
+   * refusal — the words the attempt that ran it got. An expired token bound
+   * to the pinned one (or unbound) is not: it is renewed again, as before.
+   */
   private async renew(): Promise<ITokenResult> {
+    const held = this.authorizationToken;
+    try {
+      return await this.renewOnce();
+    } catch (error) {
+      if (
+        held !== undefined &&
+        this.authorizationToken === held &&
+        this.elsewhereThanPinned(held)
+      ) {
+        this.remembered = {
+          token: held,
+          refusal: refusalFrom(error, this.obtaining),
+        };
+      }
+      throw error;
+    }
+  }
+
+  /** One refresh, then — only if it is refused or impossible — one login. */
+  private async renewOnce(): Promise<ITokenResult> {
+    // Before anything is sent or started: material that cannot be loaded, or
+    // has expired, refuses the renewal whole — the refresh token is neither
+    // sent nor dropped, and no login begins.
+    await this.presentable();
     const spent = this.refreshToken;
     if (spent && this.hasRefreshGrant()) {
       this.logger?.info(
@@ -231,6 +467,7 @@ export abstract class BaseTokenProvider
       try {
         const result = await this.performRefresh();
         this.updateTokens(result);
+        this.markIfElsewhere(result.authorizationToken);
         await this.obtained(result);
         this.logger?.info('[BaseTokenProvider] Token refreshed successfully', {
           newToken: this.formatToken(result.authorizationToken),
@@ -238,9 +475,10 @@ export abstract class BaseTokenProvider
         });
         return result;
       } catch (error) {
-        this.logger?.warn('[BaseTokenProvider] Refresh failed', {
-          error: error instanceof Error ? error.message : String(error),
-        });
+        this.logger?.warn(
+          '[BaseTokenProvider] Refresh failed',
+          loggedError(error, 'the refresh'),
+        );
         // The refresh token was refused: it is spent, so a login follows.
         // Only that one — never a token something else stored meanwhile.
         if (this.refreshToken === spent) this.refreshToken = undefined;
@@ -252,6 +490,7 @@ export abstract class BaseTokenProvider
     );
     const result = await this.performLogin();
     this.updateTokens(result);
+    this.markIfElsewhere(result.authorizationToken);
     await this.obtained(result);
     this.logger?.info('[BaseTokenProvider] Login completed', {
       newToken: this.formatToken(result.authorizationToken),
@@ -301,6 +540,7 @@ export abstract class BaseTokenProvider
    * @param result Token result to cache
    */
   protected updateTokens(result: ITokenResult): void {
+    this.remembered = undefined;
     const oldToken = this.formatToken(this.authorizationToken);
     this.authorizationToken = result.authorizationToken;
     this.refreshToken = result.refreshToken;
@@ -391,12 +631,10 @@ export abstract class BaseTokenProvider
     try {
       await this.onTokens(result);
     } catch (error) {
-      // Class name only: the hook holds the tokens, its message is foreign text.
+      // Fixed words only: the hook holds the tokens, its message is foreign text.
       this.logger?.warn(
         '[BaseTokenProvider] onTokens failed; the token stands',
-        {
-          error: ownLabel(error),
-        },
+        loggedError(error, 'onTokens'),
       );
     }
   }
@@ -415,24 +653,101 @@ export abstract class BaseTokenProvider
 
   async prepare(): Promise<AuthOutcome> {
     return safely(this.obtaining, async () => {
+      // Once per connect, a token renewed bound elsewhere — or whose renewal
+      // failed — gets one more try.
+      this.remembered = undefined;
       await this.getTokens();
       return OK;
     });
   }
 
-  /** A token is presented per request; a logon needs nothing from it. */
-  async establish(_logon: ILogonTarget): Promise<AuthOutcome> {
-    return OK;
+  /**
+   * The token is presented per request; the logon carries the pinned
+   * certificate when the token may need it (spec §4's table). Decided on the
+   * token this provider HOLDS — a logon never obtains, refreshes or logs in.
+   * No token, an expired one, or one being renewed reads as unknown: the
+   * token presented will be the one authorize() obtains through the same
+   * strategy and pinned material, and authorize() checks that one.
+   */
+  async establish(logon: ILogonTarget): Promise<AuthOutcome> {
+    return safely(this.obtaining, async () => {
+      const pinned = await this.presentable();
+      const held =
+        !this.renewal && this.isTokenValid()
+          ? this.authorizationToken
+          : undefined;
+      let binding: TokenBinding =
+        held === undefined ? { state: 'unknown' } : readBinding(held);
+      // Bound to another certificate than the pinned one: authorize() renews
+      // it through the pinned material, as it would an expired one — so it
+      // reads as unknown here, like an expired token.
+      if (pinned && !this.presents(binding, pinned)) {
+        binding = { state: 'unknown' };
+      }
+      if (!this.presents(binding, pinned)) return boundElsewhere();
+      if (!pinned) return OK;
+      // A copy: a target that changes what it is given never changes what
+      // later requests present.
+      const presented = atTarget('presenting the certificate', () =>
+        logon.tlsMaterial(copyMaterial(pinned.material)),
+      );
+      // Unbound: the Bearer carries the token, the certificate is a courtesy
+      // — but a target that throws is broken (rule 1), and that is an Oops.
+      // Bound or unknown: the token is not sent on a connection without it.
+      return binding.state === 'unbound' && !presented.thrown
+        ? OK
+        : presented.outcome;
+    });
   }
 
-  /** Per attempt: getTokens() renews an expired token here. */
+  /**
+   * Per attempt: getTokens() renews an expired token here — and one bound to
+   * another certificate than the pinned one — and the token actually sent is
+   * the one checked.
+   */
   async authorize(request: IRequestTarget): Promise<AuthOutcome> {
     return safely(this.obtaining, async () => {
+      // Pinned here too, so a token served from cache (seeded, restored) is
+      // checked against the certificate like an obtained one.
+      const pinned = await this.pin();
       const result = await this.getTokens();
-      this.applyToken(request, result);
+      if (!this.presents(readBinding(result.authorizationToken), pinned)) {
+        // Pinned: getTokens() already renewed a token bound elsewhere, and
+        // this one is remembered with what that renewal answered — still
+        // bound elsewhere, or its own refusal when it threw. A copy: a caller
+        // changing what it is given never changes the next answer.
+        if (!pinned) return boundElsewhere();
+        const remembered = this.remembered;
+        if (remembered && result.authorizationToken === remembered.token) {
+          return structuredClone(remembered.refusal);
+        }
+        return renewedBoundElsewhere();
+      }
+      const written = atTarget('presenting the token', () => {
+        this.applyToken(request, result);
+        return OK;
+      });
+      if (written.thrown) return written.outcome;
       this.presented = result.authorizationToken;
       return OK;
     });
+  }
+
+  /**
+   * False only for a bound token whose thumbprint is not the pinned one —
+   * none pinned, another one, or a binding the token states unreadably.
+   * Unbound and unknown tokens may be presented (spec §4).
+   */
+  private presents(
+    binding: TokenBinding,
+    pinned: PinnedCertificate | undefined,
+  ): boolean {
+    if (binding.state !== 'bound') return true;
+    return (
+      pinned !== undefined &&
+      binding.thumbprint !== undefined &&
+      binding.thumbprint === pinned.thumbprint
+    );
   }
 
   /**
@@ -472,5 +787,34 @@ export abstract class BaseTokenProvider
   /** How this provider's token rides on a request. Bearer by default. */
   protected applyToken(request: IRequestTarget, result: ITokenResult): void {
     request.header('Authorization', `Bearer ${result.authorizationToken}`);
+  }
+}
+
+/** The refusal for a held token bound to a certificate while none is pinned. */
+function boundElsewhere(): AuthOutcome {
+  return oops(TOKEN_BOUND_ELSEWHERE.reason, TOKEN_BOUND_ELSEWHERE.hint);
+}
+
+/** The refusal for a renewed token still bound to another certificate. */
+function renewedBoundElsewhere(): AuthOutcome {
+  return oops(
+    TOKEN_RENEWED_BOUND_ELSEWHERE.reason,
+    TOKEN_RENEWED_BOUND_ELSEWHERE.hint,
+  );
+}
+
+/**
+ * One write to a consumer's target. A target that throws is the target's
+ * failure, not the token request's: it is refused under `what`, through the
+ * same refusalFrom as every other thrown value (rule 2).
+ */
+function atTarget(
+  what: string,
+  write: () => AuthOutcome,
+): { outcome: AuthOutcome; thrown: boolean } {
+  try {
+    return { outcome: write(), thrown: false };
+  } catch (error) {
+    return { outcome: refusalFrom(error, what), thrown: true };
   }
 }

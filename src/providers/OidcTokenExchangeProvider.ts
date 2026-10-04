@@ -8,15 +8,18 @@ import type {
 } from '@mcp-abap-adt/interfaces-auth';
 import { AUTH_TYPE_USER_TOKEN } from '@mcp-abap-adt/interfaces-auth';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
-import { discoverOidc } from '../auth/oidcDiscovery';
+import { discoverOidc, mtlsAlias } from '../auth/oidcDiscovery';
 import { tokenExchange } from '../auth/oidcToken';
 import { RefreshError } from '../errors/TokenProviderErrors';
 import {
   BaseTokenProvider,
+  type ClientAuthenticationConfig,
   type TokenProviderHooks,
 } from './BaseTokenProvider';
 
-export interface OidcTokenExchangeProviderConfig extends TokenProviderHooks {
+export interface OidcTokenExchangeProviderConfig
+  extends TokenProviderHooks,
+    ClientAuthenticationConfig {
   issuerUrl?: string;
   clientId: string;
   clientSecret?: string;
@@ -88,6 +91,11 @@ export class OidcTokenExchangeProvider extends BaseTokenProvider {
       this.config.actorToken,
       this.config.actorTokenType,
       this.logger,
+      await this.requestAuth(
+        this.config.tokenEndpoint
+          ? undefined
+          : mtlsAlias(discovery, 'token_endpoint'),
+      ),
     );
 
     return {

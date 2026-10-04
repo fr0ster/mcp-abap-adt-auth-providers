@@ -13,7 +13,13 @@ import {
 } from '../../auth/browserAuth';
 import { createTestLogger } from '../helpers/testLogger';
 
-jest.mock('axios');
+// Automocked, but with axios's own error class: the sites throw it.
+jest.mock('axios', () => {
+  const mocked = jest.createMockFromModule<Record<string, unknown>>('axios');
+  mocked.AxiosError =
+    jest.requireActual<Record<string, unknown>>('axios').AxiosError;
+  return mocked;
+});
 jest.mock('open', () => ({
   __esModule: true,
   default: jest.fn(),
@@ -118,7 +124,7 @@ describe('browserAuth token exchange', () => {
 
       // Verify error was logged (but not to console)
       expect(logger.error).toHaveBeenCalledWith(
-        'Token exchange failed: status 200, error: invalid_grant',
+        'Token exchange failed: status 200, error: "invalid_grant"',
       );
     });
 

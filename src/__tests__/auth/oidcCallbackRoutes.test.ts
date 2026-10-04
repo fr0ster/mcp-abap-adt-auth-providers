@@ -53,8 +53,9 @@ describe('withOidcCallbackServer', () => {
     // unhandled at that moment — Jest then reports an unhandled rejection
     // instead of a passing assertion. `browserAuth.test.ts` documents the same
     // trap on the same shape of test.
+    // The registered code only; the description is anyone's text.
     const rejected = expect(attempt).rejects.toThrow(
-      /access_denied: User said no/,
+      'the identity provider refused the login (access_denied)',
     );
     const res = await httpGet(
       '/callback?error=access_denied&error_description=User%20said%20no',

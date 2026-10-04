@@ -7,7 +7,13 @@ import { beforeEach, describe, expect, it, jest } from '@jest/globals';
 import axios from 'axios';
 import { exchangePasscode } from '../../auth/passcodeAuth';
 
-jest.mock('axios');
+// Automocked, but with axios's own error class: the sites throw it.
+jest.mock('axios', () => {
+  const mocked = jest.createMockFromModule<Record<string, unknown>>('axios');
+  mocked.AxiosError =
+    jest.requireActual<Record<string, unknown>>('axios').AxiosError;
+  return mocked;
+});
 const mockedAxios = axios as jest.Mocked<typeof axios>;
 
 const call = () =>
@@ -77,9 +83,13 @@ describe('exchangePasscode', () => {
     mockedAxios.post.mockRejectedValue(refused);
     mockedAxios.isAxiosError.mockReturnValue(true);
 
+    // The reason goes through describeOAuthErrorBody: error and
+    // error_description, each quoted.
     await expect(
-      exchangePasscode('https://uaa', 'c', 's', 'SPENT'),
-    ).rejects.toThrow('Passcode exchange failed (401): Invalid passcode');
+      exchangePasscode('https://uaa', 'c', 'client-secret-value', 'SPENT'),
+    ).rejects.toThrow(
+      'Passcode exchange failed (401): "unauthorized": "Invalid passcode"',
+    );
   });
 
   it('refuses a response without an access token', async () => {

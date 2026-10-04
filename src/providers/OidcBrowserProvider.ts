@@ -10,17 +10,20 @@ import type {
 import { AUTH_TYPE_AUTHORIZATION_CODE_PKCE } from '@mcp-abap-adt/interfaces-auth';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
 import type { OidcCallbackResult } from '../auth/oidcBrowserAuth';
-import { discoverOidc } from '../auth/oidcDiscovery';
+import { discoverOidc, mtlsAlias } from '../auth/oidcDiscovery';
 import { generatePkceChallenge, generatePkceVerifier } from '../auth/oidcPkce';
 import { exchangeAuthorizationCode, refreshOidcToken } from '../auth/oidcToken';
-import { RefreshError } from '../errors/TokenProviderErrors';
+import { RefreshError, ValidationError } from '../errors/TokenProviderErrors';
 import { oidcCallbackStrategy } from '../strategies';
 import {
   BaseTokenProvider,
+  type ClientAuthenticationConfig,
   type TokenProviderHooks,
 } from './BaseTokenProvider';
 
-export interface OidcBrowserProviderConfig extends TokenProviderHooks {
+export interface OidcBrowserProviderConfig
+  extends TokenProviderHooks,
+    ClientAuthenticationConfig {
   issuerUrl?: string;
   clientId: string;
   clientSecret?: string;
@@ -105,8 +108,9 @@ export class OidcBrowserProvider extends BaseTokenProvider {
           this.config.authorizationEndpoint ||
           (await discover()).authorization_endpoint;
         if (!endpoint) {
-          throw new Error(
+          throw new ValidationError(
             'OIDC authorization endpoint is required (authorizationEndpoint or discovery)',
+            ['authorizationEndpoint'],
           );
         }
         const params = new URLSearchParams();
@@ -124,8 +128,9 @@ export class OidcBrowserProvider extends BaseTokenProvider {
 
     const outcome = await strategy.authorize(request);
 
+    const discovered = this.config.tokenEndpoint ? null : await discover();
     const tokenEndpoint =
-      this.config.tokenEndpoint || (await discover()).token_endpoint;
+      this.config.tokenEndpoint || discovered?.token_endpoint;
     if (!tokenEndpoint) {
       throw new Error(
         'OIDC token endpoint is required (tokenEndpoint or discovery)',
@@ -140,6 +145,8 @@ export class OidcBrowserProvider extends BaseTokenProvider {
       outcome.redirectUri,
       verifier,
       this.logger,
+      // The alias belongs to the discovered endpoint only.
+      await this.requestAuth(mtlsAlias(discovered, 'token_endpoint')),
     );
 
     return {
@@ -179,6 +186,12 @@ export class OidcBrowserProvider extends BaseTokenProvider {
       this.config.clientSecret,
       this.refreshToken,
       this.logger,
+      // The alias belongs to the discovered endpoint only.
+      await this.requestAuth(
+        this.config.tokenEndpoint
+          ? undefined
+          : mtlsAlias(discovery, 'token_endpoint'),
+      ),
     );
 
     return {

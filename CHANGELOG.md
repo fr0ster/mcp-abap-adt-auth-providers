@@ -7,6 +7,298 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [5.3.0] - 2026-10-04
+
+A token provider's client can authenticate with a client certificate or a
+signed assertion instead of a secret, and a token bound to that certificate is
+presented only together with it. A consumer that passes no strategy sends the
+same requests as before; three things change for it too, listed under
+*Changed* (a seeded token carrying `cnf`, a token request that no longer
+follows a redirect, and a thrown token-request error that no longer carries
+the request).
+See *Client authentication* in the README.
+
+Requires `@mcp-abap-adt/interfaces-auth` `^3.2.0` (was `^3.0.0`), which adds
+`IClientAuthentication`, `ITokenRequestDraft` (with its `tokenEndpoint`, the
+authorization server's token endpoint also for the device authorization),
+`ITokenRequestAuthentication` and the error codes `CERTIFICATE_MATERIAL_ERROR`
+and `CLIENT_AUTHENTICATION_ERROR`.
+
+### Added
+
+- **Five client-authentication strategies**, each a factory returning
+  `IClientAuthentication`: `noClientAuthentication()` (`client_id` in the
+  body), `clientSecretBasic(secret, { encoding })`, `clientSecretPost(secret)`,
+  `tlsClientCertificate({ material, endpoint? })` (`tls_client_auth`: the
+  request goes over mTLS to `endpoint`, else the server's mTLS alias, else the
+  configured endpoint; `material` is the certificate or a loader, read and
+  checked once, a failed load retried; `endpoint` replaces the URL of every
+  request, so the device flow should rely on discovery's
+  `mtls_endpoint_aliases` instead) and
+  `privateKeyJwt({ key, algorithm, keyId?, audience? })` (RS256 or ES256
+  through `node:crypto`; a 60-second assertion whose `aud` is `audience`, else
+  the draft's `tokenEndpoint`, else the endpoint the request goes to). A
+  consumer may write its own.
+- **`clientSecretBasic`'s `encoding` is required: `'raw'` or `'form'`**, with
+  no default, because servers disagree (measured 2026-10-04, for the
+  measured ids and secrets): XSUAA accepted only the raw `id:secret` (trial,
+  `client_credentials`, by hand); Cloud Foundry UAA (`client_credentials`) and
+  Keycloak (`password`) decode each component (RFC 6749 §2.3.1) and refused a
+  raw secret holding `+` and `%`, accepting it form-encoded. That an id
+  holding `+` or `%`, or an id or secret holding a space, needs `'form'` there
+  too is inference from the same rule, not measured. A missing or other value is a
+  `ValidationError` naming `encoding`. With `'raw'`, a client id containing
+  `:` is refused before anything is sent — a `BasicClientIdError`, *the
+  client id contains ':', which raw Basic cannot carry*. A provider without a
+  strategy still sends its `clientSecret` raw, as before. An error body is
+  redacted of every secret as sent, encoded and form-decoded — the whole
+  value, `&` and `=` included, a malformed `%` left as it is: with `'form'`
+  the original and the encoded secret, with `'raw'` and for a `clientSecret`
+  sent without a strategy the secret and what a decoding server read. The stand measures
+  both encodings on UAA and Keycloak (`clientSecretBasic.test.ts`, clients
+  `basic_reserved`, `basic-reserved` and `basic:colon`).
+- **Every draft names the token endpoint** (`ITokenRequestDraft.tokenEndpoint`):
+  a token request its own endpoint; the device authorization the provider's
+  plain token endpoint — configured or discovered, never its mTLS alias. So
+  `privateKeyJwt`'s default audience is the token endpoint for the device
+  flow too: Keycloak refuses an assertion whose `aud` is the device
+  authorization endpoint, and the device flow now completes there without
+  `audience`.
+- **`clientAuthentication` on eight token providers** —
+  `ClientCredentialsProvider`, `AuthorizationCodeProvider`,
+  `UaaPasscodeProvider`, `Saml2BearerProvider`, `OidcBrowserProvider`,
+  `OidcDeviceFlowProvider`, `OidcPasswordProvider`,
+  `OidcTokenExchangeProvider`: every request the provider sends to the server
+  (first token, refresh, device authorization and poll, token exchange) is
+  authenticated by it. `clientSecret` beside a strategy is a `ValidationError`
+  naming `clientSecret` — an empty `clientSecret: ''` included; where
+  `clientSecret` was required, a strategy satisfies it. What a strategy
+  returns is checked before anything is sent (strings only, no line break in
+  a header, nothing replacing the request's own parameters or headers, an
+  absolute `https:` endpoint), and no token request follows a redirect.
+- **One certificate per provider, pinned.** A provider reads its strategy's
+  `tlsMaterial()` once, before its first request or logon, checks it, takes
+  the `x5t#S256` thumbprint of its leaf certificate, and keeps a copy for its
+  lifetime; every token request, refresh and logon uses it — the logon target
+  gets a copy each time, so a target changing it changes nothing later. A
+  rotated certificate is a new provider instance. A certificate past its
+  `notAfter` is refused — when pinned, and before every token request and
+  logon that presents it — as "the client certificate has expired", nothing
+  sent and a refresh token kept; `CertificateAuthProvider` checks the same in
+  `prepare()` and before each logon.
+- **The binding check.** Before presenting a token, `establish()` and
+  `authorize()` read its binding: a JWT with `cnf` (bound) is presented only
+  with the pinned certificate of that thumbprint, else Oops "the token is
+  bound to a client certificate this provider does not present"; a JWT
+  without `cnf` (unbound) goes as a Bearer; anything else (unknown — an opaque
+  token) is treated as bound when a certificate is pinned. `establish()` hands
+  the logon target the pinned certificate when the token may need it, and
+  decides on the token held without obtaining one. Seeded and restored tokens
+  are checked like obtained ones. An opaque token bound to a certificate needs
+  the certificate strategy configured: without it the provider cannot know
+  the binding.
+- **A token bound to the previous certificate is renewed, not refused.** When
+  a certificate is pinned and the held token is bound to another thumbprint
+  (or its `cnf` names none readably) — a token restored after a rotation —
+  `getTokens()` and `authorize()` renew it once through the pinned certificate
+  (refresh, else one login), like an expired token, and check the new one;
+  only a new token still bound elsewhere is refused by `authorize()`, as "the
+  new token is bound to a client certificate this provider does not present"
+  — and remembered: later attempts do not renew it again (no token request, no
+  login per request); `getTokens()` returns it, `authorize()` refuses it. A
+  renewal that throws is remembered too, with its own refusal: later attempts
+  answer the same words (an expired client certificate stays "the client
+  certificate has expired"), without a token request or a login, until the
+  token changes; the latest renewal's words are the ones kept. An expired
+  token whose renewal fails is renewed again on the next attempt, as before. In both cases the
+  next `prepare()` renews once more; `rejected()` renews once more when the
+  refused token is the one held, and answers Ok without a renewal when the
+  refused token was already superseded (rule 6, as before). With no
+  certificate pinned, `getTokens()` returns a bound token as before and
+  `establish()` / `authorize()` refuse it.
+- **Only `establish()` and `authorize()` present the certificate.**
+  `getTokens()` and `refreshTokens()` — the token API the broker uses — return
+  a token that may be bound to the certificate; a consumer sending it on its
+  own connection must present the same certificate itself, or use the
+  `IAuthProvider` methods.
+- **mTLS endpoint aliases** (RFC 8705 §5): an OIDC provider that discovers an
+  endpoint hands the strategy the server's `mtls_endpoint_aliases` entry for it
+  (`token_endpoint`, `device_authorization_endpoint`).
+- **Error classes** `CertificateMaterialError` (carries `incomplete` and
+  `expired`),
+  `ClientAuthenticationError` (an unusable signing key) and
+  `ClientAuthenticationResultError` (a strategy result that cannot be sent),
+  each with a fixed message and fixed refusal words. `CertificateAuthProvider`
+  and `tlsClientCertificate` share one material check, and its refusals.
+- **A TLS failure is refused naming its code, in words fixed per kind.** A
+  server certificate Node does not trust (`SELF_SIGNED_CERT_IN_CHAIN`, …) gets
+  the hint `NODE_EXTRA_CA_CERTS` — how a private CA is trusted; there is no
+  `ca` option and `rejectUnauthorized` is never set. An expired server
+  certificate (`CERT_HAS_EXPIRED`) and a host name it does not name
+  (`ERR_TLS_CERT_ALTNAME_INVALID`) get their own words and hints. The alerts a
+  server sends when it refuses the client certificate
+  (`ERR_SSL_TLSV13_ALERT_CERTIFICATE_REQUIRED`,
+  `ERR_SSL_TLSV1_ALERT_UNKNOWN_CA`, `ERR_SSL_SSL/TLS_ALERT_…` and the older
+  `ERR_SSL_SSLV3_ALERT_…` for a bad, unknown, expired, revoked or unsupported
+  certificate) are refused as "the server refused the client certificate".
+- **Stand checks** (`npm run test:stand`): Keycloak gains HTTPS
+  (`KEYCLOAK_HTTPS_PORT`, default 8444, loopback) with throwaway TLS fixtures
+  in `tests/stand/keycloak/tls/`, trusted by the suites through
+  `NODE_EXTRA_CA_CERTS`; a token bound to the certificate and accepted by
+  userinfo only with it, a refresh that stays bound, `private_key_jwt` on
+  Keycloak and on UAA, the device flow with the default assertion audience
+  (and Keycloak's refusal of the device endpoint as `aud`), and the X.509
+  user logon (`CertificateAuthProvider`, the analogue of ABAP `CERTRULE`). A
+  stand started before this release must be stopped once
+  (`npm run stand:down`).
+- **XSUAA check** (`npm run test:xsuaa`, not in CI): the test instance allows
+  the `x509` credential type, and an `x509-key` created afresh per run gets a
+  client token through `ClientCredentialsProvider` and `tlsClientCertificate`
+  at its `certurl`, with no secret — passed on a BTP trial on 2026-10-04
+  (`client_credentials` only; ADT accepting such a token is unproven). Service keys are now recorded in the
+  ledger by GUID, like instances and trusts.
+
+### Changed
+
+- **A token provider without a strategy refuses a seeded or restored JWT that
+  carries `cnf`** ("the token is bound to a client certificate this provider
+  does not present") in `establish()` and `authorize()`; it used to send it as
+  a Bearer. `TokenAuthProvider.fixed()` still sends such a token unchecked.
+- **`getTokens()` may throw a `CertificateMaterialError`** (unusable or
+  expired material) when the cached token is bound and the strategy presents
+  a certificate: it pins the certificate to compare thumbprints, where it used
+  to return the cached token.
+- **A token request without a strategy no longer follows a redirect**: a
+  `3xx` from the token or device endpoint fails the request (an `AxiosError`
+  with the `3xx` status) where axios used to follow it. An authorization
+  server reached through a redirecting URL must be configured with the URL it
+  redirects to. See *Security*.
+- **A thrown token-request error carries no request**, with or without a
+  strategy: no form body, no `Authorization` header, no TLS agent with a key,
+  PFX or passphrase. It is still an `AxiosError` — `instanceof AxiosError` and
+  `axios.isAxiosError()` hold — but a new one, built without `config`,
+  `request` or `cause` (so its `toJSON()` serialises no config): it keeps
+  `code` and `status`, a rebuilt message — axios's `Request failed with
+  status code N`, or `the token request failed (<code>)` when no response
+  came — and a `response` of `status`, an empty `statusText`, empty `headers`
+  and the server's body reduced to `error`, `error_description` and
+  `error_uri`, every secret the request sent redacted. `response.headers`
+  (now empty), `response.statusText` (now `''`: the reason phrase is the
+  server's free text), `response.config` and the transport's own message for
+  a network failure are what a caller loses.
+- **A token request that failed is a `TokenEndpointError`** (new, exported)
+  at the sites that wrap it — UAA refresh, client credentials, passcode, OIDC
+  device initiation and password grant (were plain `Error`s). It carries the
+  safe facts as properties: `status`, `oauthError` (a registered OAuth / OIDC
+  code only; OIDC Core §3.1.2.6's codes joined the registered list) and
+  `code` (an allowlisted system or TLS code only) — the constructor drops
+  any other value, so its properties and JSON can be trusted whoever built
+  it; `cause` is the original.
+  The message keeps its form, `<label> (<status>): <redacted OAuth summary>`;
+  without a response it is `<label>: <fixed words>` (was the transport's
+  message), and the device initiation and password grant no longer say
+  `(unknown): no error given` for a network failure.
+- **A configuration mismatch found by the provider is a `ValidationError`**:
+  a pre-built `authorizationUrl` whose `redirect_uri` differs from the
+  strategy's, a SAML `acsUrl` the strategy is not listening on, and a missing
+  OIDC authorization endpoint (same words, `missingFields` `authorizationUrl`
+  / `acsUrl` / `authorizationEndpoint`). They were plain `Error`s — and,
+  raised while a browser strategy built the URL, reached the caller as a
+  `BrowserAuthError` carrying their text; they now pass through the
+  strategy unchanged, and their refusal names the field.
+- **An IdP refusal on the browser callback** rejects with
+  `the identity provider refused the login (<registered code>)` (was
+  `OAuth2 authentication failed: <error>: <error_description> (<error_uri>)`
+  or `OIDC authentication failed: …`).
+- **The passcode exchange and the OIDC password grant report the server's
+  error through `describeOAuthErrorBody`**, with the passcode (or the password),
+  the client secret and what a strategy sent redacted. The messages read
+  `Passcode exchange failed (401): "unauthorized": "Invalid passcode"` and
+  `OIDC password grant failed (401): "invalid_grant": "…"` (were
+  `… (401): Invalid passcode` and `… (401): invalid_grant - …`).
+- **A failed device authorization says what the server answered**:
+  `OIDC device authorization failed (<status>): "<error>": "<description>"`,
+  instead of the transport's `Request failed with status code 400`.
+- **Known secrets are redacted longest first**, so a short secret (a
+  password) redacted inside a longer one (an assertion) no longer leaves the
+  rest of the longer one readable.
+- **A registered OAuth error code is never redacted**: an `error` equal to
+  one of RFC 6749 §5.2 / §4.1.2.1, RFC 8628 §3.5, RFC 6750 §3.1 or
+  RFC 8693 §2.2.2's codes is kept verbatim, so a secret that happens to be a
+  substring of it (`a` in `authorization_pending`) no longer rewrites the code
+  and stops the device poll after its first pending answer. Any other `error`
+  value, and every `error_description` and `error_uri`, is redacted as before.
+
+### Security
+
+- No key, passphrase, certificate content or client assertion reaches a
+  refusal, a log line or a thrown error: the new error classes carry fixed
+  words only, and `noTokensInLogs.test.ts` covers the strategies.
+- No token request follows a redirect, with a strategy or without
+  (`maxRedirects: 0` on every request of every site, device initiation and
+  poll included): a 307/308 would re-send the client secret, the refresh
+  token, the code, the passcode, the password or the assertion, and present
+  the certificate, to wherever it points. OIDC discovery, a GET for public
+  metadata that sends no secret, still follows redirects.
+- The TLS agent of a token request is built from exactly `cert`, `key`, `pfx`
+  and `passphrase`; any other field the material carries at run time
+  (`rejectUnauthorized`, `ca`) never reaches it.
+- **No message of a thrown value reaches a log line.** A consumer's
+  collaborator — a client-authentication strategy (`authenticate()`,
+  `tlsMaterial()`), a certificate loader, the interactive strategy, a
+  device-code presenter, a SAML validator, `onTokens`, a browser launcher, an
+  SNC locator or probe — may throw text holding a key, a passphrase or a
+  token, and so may a network failure; `[BaseTokenProvider] Refresh failed`
+  logged it whole. Every log line about a thrown value now carries only the
+  words its refusal would (`loggedError`, `src/auth/refusal.ts`: fixed per
+  class by `instanceof`, allowlisted codes, else `unknown error`) and the
+  HTTP status when there is one — no message, `cause`, `stack` or
+  stringified error, for this package's own classes too. The UAA code
+  exchange's "no `access_token`" line logs the body through
+  `describeOAuthErrorBody` (was its raw `error`).
+- **A thrown token-request error keeps nothing of the reason phrase**: a
+  server answering `401 <secret>` put the secret in
+  `error.response.statusText`, now always `''`; the message is rebuilt from
+  the status (or the code), never copied.
+- **A thrown error's message carries no foreign text either** — whoever
+  catches it logs it. The UAA refresh and client-credentials sites, for a
+  failure without an HTTP response, throw `Token refresh failed: <fixed
+  words>` / `Client credentials authentication failed: <fixed words>` (the
+  refusal's words with an allowlisted code, e.g. `ECONNREFUSED`) with the
+  original as `cause` (were `…: <its message>`). A `BrowserAuthError` keeps
+  the message of this package's own callback failures (timeout, "already in
+  use", abort); for the identity provider's refusal or a custom transport's
+  or launcher's error its message is `the browser login failed (unknown
+  error)` and the original is `cause`. `EADDRINUSE`, `ECONNABORTED`,
+  `EPROTO` and `ERR_NETWORK` join the allowlisted system codes. Fixed words
+  still name the safe facts: a refusal and a log line add an integer HTTP
+  status, a registered OAuth / OIDC `error` code and an allowlisted system or
+  TLS code (e.g. `the refresh failed (HTTP 401, invalid_grant)` — the same
+  words for a `TokenEndpointError` and for a reduced `AxiosError`; "unknown
+  error" leads only when no server answered), never a description. Every
+  such property of a foreign error is read under a guard: a throwing getter
+  or a Proxy reads as absent, and `refusalFrom` / `loggedError` are total —
+  whatever still throws is `unknown error`, never an exception across the
+  contract. The SAML bearer exchange and refresh log the same safe facts
+  (they logged the redacted `error_description`). An identity provider's `?error=` on the browser callback
+  names only its registered code — `BrowserAuthError("the identity provider
+  refused the login (consent_required)")`, refused as such — and drops
+  `error_description`, `error_uri` and an unregistered code (they reach only
+  the escaped error page). A configured IdP
+  certificate that is not X.509 is refused as `a configured certificate is
+  not a valid X.509 certificate`, OpenSSL's text only in `cause`.
+- **The local callback pages no longer reflect HTML.** The IdP's `error` and
+  `error_description` — query parameters anyone can put in a link to the
+  callback — were written into the UAA error page unescaped, and the OIDC
+  callback answered them as an HTML body: a reflected HTML/script injection
+  on `localhost`. Every value a page interpolates is now escaped (`&`, `<`,
+  `>`, `"`, `'`); the OIDC refusal uses the same escaped page; the short
+  answers (OIDC and SAML success, a stray request) are `text/plain`. Every
+  response of the callback server carries `X-Content-Type-Options: nosniff`
+  and `Content-Security-Policy: default-src 'none'; style-src
+  'unsafe-inline'; form-action 'self'; base-uri 'none'; frame-ancestors
+  'none'`, and its pages `Content-Type: text/html; charset=utf-8`.
+
 ## [5.2.3] - 2026-10-04
 
 ### Fixed

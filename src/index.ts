@@ -10,6 +10,8 @@ export { withBrowserCallbackServer } from './auth/callbackServer';
 export type { OidcCallbackResult } from './auth/oidcBrowserAuth';
 export { withOidcCallbackServer } from './auth/oidcBrowserAuth';
 export { withSamlCallbackServer } from './auth/saml2Auth';
+// How a token provider's client authenticates to the authorization server.
+export * from './clientAuthentication';
 // Credentials the process delegates to — every one an IAuthProvider.
 export { BasicAuthProvider } from './credentials/BasicAuthProvider';
 export { CertificateAuthProvider } from './credentials/CertificateAuthProvider';
@@ -27,6 +29,13 @@ export {
   type AssertionCheck,
   AssertionValidationError,
 } from './errors/AssertionValidationError';
+export { CertificateMaterialError } from './errors/CertificateMaterialError';
+export {
+  BasicClientIdError,
+  ClientAuthenticationError,
+  ClientAuthenticationResultError,
+} from './errors/ClientAuthenticationError';
+export { TokenEndpointError } from './errors/TokenEndpointError';
 export {
   BrowserAuthError,
   RefreshError,

@@ -16,6 +16,10 @@ import type {
 } from '@mcp-abap-adt/interfaces-auth';
 import express from 'express';
 import { extractCode } from './browserAuth';
+import {
+  AuthorizationRefusedError,
+  CallbackScopeError,
+} from './callbackScopeError';
 
 /** Node's `setTimeout` takes a 32-bit signed delay; above this it fires in 1 ms. */
 const MAX_TIMEOUT_MS = 2_147_483_647;
@@ -49,7 +53,7 @@ export type RouteSetup<TResult> = (
 function validate(options: ICallbackServerOptions): void {
   const { port, timeoutMs } = options;
   if (!Number.isInteger(port) || port < 0 || port > 65535) {
-    throw new Error(
+    throw new CallbackScopeError(
       `Invalid callback server port: ${String(port)}. Must be an integer in 0..65535.`,
     );
   }
@@ -58,7 +62,7 @@ function validate(options: ICallbackServerOptions): void {
     timeoutMs <= 0 ||
     timeoutMs > MAX_TIMEOUT_MS
   ) {
-    throw new Error(
+    throw new CallbackScopeError(
       `Invalid callback server timeoutMs: ${String(timeoutMs)}. ` +
         `Must be finite and within 1..${MAX_TIMEOUT_MS}.`,
     );
@@ -79,10 +83,18 @@ export async function runCallbackScope<TResult, TReturn>(
 ): Promise<TReturn> {
   validate(options);
   if (options.signal?.aborted) {
-    throw new Error('Callback server aborted before it started');
+    throw new CallbackScopeError('Callback server aborted before it started');
   }
 
   const app = express();
+  // Every response: no sniffing, and a policy that runs no script, loads
+  // nothing and submits only to this server (the paste form). Inline style
+  // is the pages' only need.
+  app.use((_req, res, next) => {
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('Content-Security-Policy', CALLBACK_CSP);
+    next();
+  });
   const server = http.createServer(app);
   const sockets = new Set<Socket>();
   server.on('connection', (socket: Socket) => {
@@ -133,7 +145,9 @@ export async function runCallbackScope<TResult, TReturn>(
     }
     options.signal?.removeEventListener('abort', onAbort);
     settleResult({
-      error: new Error('Callback server closed before a result arrived'),
+      error: new CallbackScopeError(
+        'Callback server closed before a result arrived',
+      ),
     });
     void shutdown().then(() => {
       if ('value' in outcome) resolveScope(outcome.value);
@@ -142,7 +156,7 @@ export async function runCallbackScope<TResult, TReturn>(
   };
 
   function onAbort(): void {
-    endScope({ error: new Error('Callback server aborted') });
+    endScope({ error: new CallbackScopeError('Callback server aborted') });
   }
 
   /**
@@ -241,7 +255,7 @@ export async function runCallbackScope<TResult, TReturn>(
           ? ` ${ignored} incomplete request(s) reached /callback and were ignored.`
           : '';
       endScope({
-        error: new Error(
+        error: new CallbackScopeError(
           `Authentication timeout after ${options.timeoutMs / 1000} seconds. Please try again.${tally}`,
         ),
       });
@@ -255,7 +269,9 @@ export async function runCallbackScope<TResult, TReturn>(
       waitForResult: () =>
         alive
           ? resultPromise
-          : Promise.reject(new Error('Callback server scope has ended')),
+          : Promise.reject(
+              new CallbackScopeError('Callback server scope has ended'),
+            ),
       // Silent no-op once the scope has ended: this is called fire-and-forget
       // from a browser launcher's .catch(), and a late rejection must not become
       // a fresh unhandled rejection.
@@ -275,6 +291,43 @@ export async function runCallbackScope<TResult, TReturn>(
   return await scopePromise;
 }
 
+const CALLBACK_CSP =
+  "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'";
+
+/** `&`, `<`, `>`, `"` and `'` as entities: a value in a page is text, never markup. */
+export function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+/** An HTML page, said to be one, in UTF-8. */
+export function sendHtml(
+  res: express.Response,
+  status: number,
+  html: string,
+): void {
+  res
+    .status(status)
+    .setHeader('Content-Type', 'text/html; charset=utf-8')
+    .send(html);
+}
+
+/** Plain text, said to be plain text, in UTF-8: never rendered as markup. */
+export function sendText(
+  res: express.Response,
+  status: number,
+  text: string,
+): void {
+  res
+    .status(status)
+    .setHeader('Content-Type', 'text/plain; charset=utf-8')
+    .send(text);
+}
+
 const successHtml = `<!DOCTYPE html>
 <html lang="en"><head><meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -285,14 +338,15 @@ const successHtml = `<!DOCTYPE html>
 <p>You have successfully authenticated with SAP BTP. You can close this window.</p>
 </div></body></html>`;
 
-const errorHtml = (message: string): string => `<!DOCTYPE html>
+/** `message` may be the IdP's (attacker-controllable) text: escaped here. */
+export const errorHtml = (message: string): string => `<!DOCTYPE html>
 <html lang="en"><head><meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Authentication Error</title>
 <style>body{font-family:'Segoe UI',Tahoma,sans-serif;text-align:center;padding:50px 20px;background:linear-gradient(135deg,#dc2626,#ef4444);color:#fff;min-height:100vh;display:flex;flex-direction:column;justify-content:center;align-items:center}.container{background:rgba(255,255,255,.1);border-radius:20px;padding:40px;max-width:500px}.error-icon{font-size:4rem;margin-bottom:20px;color:#fbbf24}h1{font-weight:300}</style>
 </head><body><div class="container"><div class="error-icon">✗</div>
 <h1>Authentication Failed</h1>
-<p>${message}</p>
+<p>${escapeHtml(message)}</p>
 <p>Please check your service key configuration and try again.</p>
 </div></body></html>`;
 
@@ -306,7 +360,7 @@ const pasteFormHtml = (message?: string): string => `<!DOCTYPE html>
 <style>body{font-family:'Segoe UI',Tahoma,sans-serif;text-align:center;padding:50px 20px;background:linear-gradient(135deg,#0070f3,#00d4ff);color:#fff;min-height:100vh;display:flex;flex-direction:column;justify-content:center;align-items:center}.container{background:rgba(255,255,255,.1);border-radius:20px;padding:40px;max-width:560px;width:100%}h1{font-weight:300}input{width:100%;padding:12px;border-radius:8px;border:none;font-size:1rem;box-sizing:border-box;margin:14px 0}button{padding:12px 24px;border-radius:8px;border:none;background:#fff;color:#0070f3;font-size:1rem;cursor:pointer}.msg{color:#fde68a;margin-bottom:10px}</style>
 </head><body><div class="container">
 <h1>Paste authorization code</h1>
-${message ? `<p class="msg">${message}</p>` : ''}
+${message ? `<p class="msg">${escapeHtml(message)}</p>` : ''}
 <p>After signing in, copy the <code>code</code> from your browser's address bar
 (or paste the whole redirected URL) and submit it here.</p>
 <form action="/submit" method="get">
@@ -331,51 +385,47 @@ export const withBrowserCallbackServer: CallbackServerFactory<string> = (
     options,
     (app, settle) => {
       app.get('/callback', (req: express.Request, res: express.Response) => {
-        const { error, error_description, error_uri } = req.query;
+        const { error, error_description } = req.query;
         if (error) {
           const message = error_description
             ? `${String(error)}: ${String(error_description)}`
             : String(error);
-          res.status(400).send(errorHtml(message));
-          settle.err(
-            new Error(
-              `OAuth2 authentication failed: ${message}` +
-                (error_uri ? ` (${String(error_uri)})` : ''),
-            ),
-            res,
-          );
+          sendHtml(res, 400, errorHtml(message));
+          // The registered code only: the description and error_uri are
+          // anyone's text (a link to the local callback carries them).
+          settle.err(new AuthorizationRefusedError(error), res);
           return;
         }
 
         const { code } = req.query;
         if (!code || typeof code !== 'string') {
-          res.status(400).send('Error: not an authorization callback');
+          sendText(res, 400, 'Error: not an authorization callback');
           settle.ignore('no code and no error in query', res);
           return;
         }
 
-        res.send(successHtml);
+        sendHtml(res, 200, successHtml);
         settle.ok(code, res);
       });
 
       app.get('/', (_req: express.Request, res: express.Response) => {
-        res.send(pasteFormHtml());
+        sendHtml(res, 200, pasteFormHtml());
       });
 
       app.get('/submit', (req: express.Request, res: express.Response) => {
         const raw = req.query.input ?? req.query.code;
         const code = typeof raw === 'string' ? extractCode(raw) : null;
         if (!code) {
-          res
-            .status(400)
-            .send(
-              pasteFormHtml(
-                'Could not read an authorization code from that input. Try again.',
-              ),
-            );
+          sendHtml(
+            res,
+            400,
+            pasteFormHtml(
+              'Could not read an authorization code from that input. Try again.',
+            ),
+          );
           return;
         }
-        res.send(successHtml);
+        sendHtml(res, 200, successHtml);
         settle.ok(code, res);
       });
     },

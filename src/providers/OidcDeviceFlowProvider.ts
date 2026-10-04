@@ -8,12 +8,13 @@ import type {
 } from '@mcp-abap-adt/interfaces-auth';
 import { AUTH_TYPE_AUTHORIZATION_CODE } from '@mcp-abap-adt/interfaces-auth';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
-import { discoverOidc } from '../auth/oidcDiscovery';
+import { discoverOidc, mtlsAlias } from '../auth/oidcDiscovery';
 import {
   initiateDeviceAuthorization,
   pollDeviceTokens,
   refreshOidcToken,
 } from '../auth/oidcToken';
+import { loggedError } from '../auth/refusal';
 import {
   consoleDeviceCodePresenter,
   DeviceCodePresentationError,
@@ -22,10 +23,13 @@ import {
 import { RefreshError } from '../errors/TokenProviderErrors';
 import {
   BaseTokenProvider,
+  type ClientAuthenticationConfig,
   type TokenProviderHooks,
 } from './BaseTokenProvider';
 
-export interface OidcDeviceFlowProviderConfig extends TokenProviderHooks {
+export interface OidcDeviceFlowProviderConfig
+  extends TokenProviderHooks,
+    ClientAuthenticationConfig {
   issuerUrl?: string;
   clientId: string;
   clientSecret?: string;
@@ -114,6 +118,14 @@ export class OidcDeviceFlowProvider extends BaseTokenProvider {
       this.config.clientId,
       scope,
       this.logger,
+      // Its own alias: the device endpoint's, not the token endpoint's. The
+      // plain token endpoint beside it: a client assertion's audience.
+      await this.requestAuth(
+        this.config.deviceAuthorizationEndpoint
+          ? undefined
+          : mtlsAlias(discovery, 'device_authorization_endpoint'),
+        tokenEndpoint,
+      ),
     );
 
     try {
@@ -124,10 +136,11 @@ export class OidcDeviceFlowProvider extends BaseTokenProvider {
         expiresInSeconds: deviceFlow.expiresIn,
       });
     } catch (error) {
-      // The presenter's text may hold the code; the log gets its class only.
-      this.logger?.warn('[OidcDeviceFlowProvider] presenter failed', {
-        error: error instanceof Error ? 'Error' : typeof error,
-      });
+      // The presenter's text may hold the code; the log gets fixed words only.
+      this.logger?.warn(
+        '[OidcDeviceFlowProvider] presenter failed',
+        loggedError(error, 'the presenter'),
+      );
       throw new DeviceCodePresentationError();
     }
 
@@ -138,6 +151,11 @@ export class OidcDeviceFlowProvider extends BaseTokenProvider {
       deviceFlow.deviceCode,
       deviceFlow.interval || 5,
       this.logger,
+      await this.requestAuth(
+        this.config.tokenEndpoint
+          ? undefined
+          : mtlsAlias(discovery, 'token_endpoint'),
+      ),
     );
 
     return {
@@ -177,6 +195,12 @@ export class OidcDeviceFlowProvider extends BaseTokenProvider {
       this.config.clientSecret,
       this.refreshToken,
       this.logger,
+      // The alias belongs to the discovered endpoint only.
+      await this.requestAuth(
+        this.config.tokenEndpoint
+          ? undefined
+          : mtlsAlias(discovery, 'token_endpoint'),
+      ),
     );
 
     return {

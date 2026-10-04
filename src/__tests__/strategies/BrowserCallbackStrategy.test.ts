@@ -112,13 +112,20 @@ describe('BrowserCallbackStrategy', () => {
       openUrl,
     });
 
-    await expect(
-      strategy.authorize({
+    // A plain Error is foreign text: the message is fixed words, the
+    // original the cause.
+    const thrown = await strategy
+      .authorize({
         buildAuthorizationUrl: async () => {
           throw new Error('redirect_uri mismatch');
         },
-      }),
-    ).rejects.toThrow('redirect_uri mismatch');
+      })
+      .catch((e: Error & { cause?: Error }) => e);
+    expect(thrown).toBeInstanceOf(BrowserAuthError);
+    expect((thrown as Error).message).not.toContain('redirect_uri mismatch');
+    expect((thrown as { cause?: Error }).cause?.message).toBe(
+      'redirect_uri mismatch',
+    );
     expect(openUrl).not.toHaveBeenCalled();
     expect(released()).toBe(true);
   });
@@ -140,7 +147,7 @@ describe('BrowserCallbackStrategy', () => {
     await first;
   });
 
-  it('reports a busy fixed port in the words AuthBroker matches', async () => {
+  it('reports a busy fixed port as "already in use", kept for consumers that match it', async () => {
     const squatter = netModule.createServer();
     await new Promise<void>((resolve) => squatter.listen(7873, resolve));
     try {
@@ -217,7 +224,10 @@ describe('BrowserCallbackStrategy', () => {
       // Never settles, so the scope is still open when dispose lands.
       buildAuthorizationUrl: () => new Promise<string>(() => undefined),
     });
-    const settled = inFlight.catch((e: Error) => e.message);
+    // The fake transport's abort is foreign text: it is the cause.
+    const settled = inFlight.catch(
+      (e: Error & { cause?: Error }) => e.cause?.message,
+    );
     await hasEntered;
 
     await strategy.dispose();

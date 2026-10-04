@@ -277,7 +277,8 @@ describeBoth('SAML providers with Keycloak as the identity provider', () => {
   });
 
   // Validation passes here — the assertion answers the ID the provider minted
-  // — so the refusal below is UAA's, logged from its token endpoint.
+  // — so the refusal below is UAA's. The log names only the safe facts; UAA's
+  // reason is on the thrown error's reduced body (redacted OAuth fields).
   it('Saml2BearerProvider: UAA refuses the answer to the provider’s own AuthnRequest (InResponseTo)', async () => {
     const failures: unknown[] = [];
     const logger = {
@@ -287,20 +288,26 @@ describeBoth('SAML providers with Keycloak as the identity provider', () => {
       error: (_message: string, meta?: unknown) => failures.push(meta),
     };
 
-    await expect(
-      new Saml2BearerProvider({
-        ...bearerConfig(),
-        logger,
-        authorization: externalCodeStrategy({
-          redirectUri: bearerAcs,
-          provide: async (url) =>
-            (await samlResponseByForm(url, USER)).samlResponse,
-        }),
-      }).getTokens(),
-    ).rejects.toThrow(/401/);
-    expect(JSON.stringify(failures)).toMatch(
+    const thrown = await new Saml2BearerProvider({
+      ...bearerConfig(),
+      logger,
+      authorization: externalCodeStrategy({
+        redirectUri: bearerAcs,
+        provide: async (url) =>
+          (await samlResponseByForm(url, USER)).samlResponse,
+      }),
+    })
+      .getTokens()
+      .then(
+        () => undefined,
+        (error: unknown) => error as { response?: { data?: unknown } },
+      );
+    expect(String(thrown)).toMatch(/401/);
+    expect(JSON.stringify(thrown?.response?.data)).toMatch(
       /SubjectConfirmationData\/@InResponseTo.*did not match the valid value: null/,
     );
+    expect(JSON.stringify(failures)).toContain('HTTP 401');
+    expect(JSON.stringify(failures)).not.toMatch(/InResponseTo/);
   });
 
   it('Saml2PureProvider: Keycloak answers its AuthnRequest with a signed response for the SP', async () => {

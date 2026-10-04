@@ -1,12 +1,14 @@
 {
   "xsappname": "auth-providers-bearer-test",
   "tenant-mode": "dedicated",
-  "description": "auth-providers: checks of Saml2BearerProvider and UaaPasscodeProvider against XSUAA. Created and removed by tests/xsuaa scripts.",
+  "description": "auth-providers: checks of Saml2BearerProvider, UaaPasscodeProvider and ClientCredentialsProvider with an x509 key against XSUAA. Created and removed by tests/xsuaa scripts.",
   "oauth2-configuration": {
     "grant-types": [
       "urn:ietf:params:oauth:grant-type:saml2-bearer",
       "refresh_token",
-      "password"
-    ]
+      "password",
+      "client_credentials"
+    ],
+    "credential-types": ["binding-secret", "x509"]
   }
 }
