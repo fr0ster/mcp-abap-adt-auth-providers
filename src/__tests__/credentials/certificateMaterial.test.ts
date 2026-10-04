@@ -24,11 +24,19 @@ const PASSPHRASE = 'test-passphrase';
 const withMaterial = (material: ICertificateMaterial) =>
   new CertificateAuthProvider({ load: async () => material }, config);
 
+const INCOMPLETE = {
+  ok: false,
+  refusal: {
+    reason: 'the client certificate is incomplete',
+    hint: 'give a PFX, or a certificate together with its key',
+  },
+};
+
 const UNUSABLE = {
   ok: false,
   refusal: {
     reason: 'the client certificate could not be used',
-    hint: 'check the certificate and key files and the passphrase',
+    hint: 'check the certificate, the key and the passphrase, and that a PFX uses current encryption (not legacy RC2)',
   },
 };
 
@@ -80,6 +88,52 @@ describe('CertificateAuthProvider: the material is checked in prepare()', () => 
   it('a refused material is not presented: establish answers Oops, nothing reaches the logon', async () => {
     const p = withMaterial({ pfx: read('client.pfx'), passphrase: 'wrong' });
     await p.prepare();
+    const t = recordingTargets();
+    await expect(p.establish(t.logonTarget)).resolves.toMatchObject({
+      ok: false,
+    });
+    expect(t.logon.tls).toHaveLength(0);
+  });
+});
+
+describe('CertificateAuthProvider: what a material must hold', () => {
+  it('an encrypted PEM key with its passphrase is Ok', async () => {
+    const p = withMaterial({
+      cert: read('client.crt'),
+      key: read('client-encrypted.key'),
+      passphrase: PASSPHRASE,
+    });
+    await expect(p.prepare()).resolves.toEqual({ ok: true });
+  });
+
+  it('an encrypted PEM key without its passphrase is refused', async () => {
+    const p = withMaterial({
+      cert: read('client.crt'),
+      key: read('client-encrypted.key'),
+    });
+    await expect(p.prepare()).resolves.toEqual(UNUSABLE);
+  });
+
+  it.each([
+    ['nothing', {}],
+    ['a certificate alone', { cert: read('client.crt') }],
+    ['a key alone', { key: read('client.key') }],
+  ])(
+    '%s is refused — a logon would go out with no client certificate',
+    async (_label, material) => {
+      const p = withMaterial(material as ICertificateMaterial);
+      await expect(p.prepare()).resolves.toEqual(INCOMPLETE);
+    },
+  );
+
+  it('a prepare() that fails after one that succeeded leaves nothing to present', async () => {
+    const good = { cert: read('client.crt'), key: read('client.key') };
+    const bad = { pfx: read('client.pfx'), passphrase: 'wrong' };
+    let next: ICertificateMaterial = good;
+    const p = new CertificateAuthProvider({ load: async () => next }, config);
+    await expect(p.prepare()).resolves.toEqual({ ok: true });
+    next = bad;
+    await expect(p.prepare()).resolves.toEqual(UNUSABLE);
     const t = recordingTargets();
     await expect(p.establish(t.logonTarget)).resolves.toMatchObject({
       ok: false,

@@ -13,12 +13,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **`CertificateAuthProvider` proves its material in `prepare()`.** The loader
   only reads bytes, so a wrong PFX passphrase, a key that is not the
-  certificate's, or a damaged file passed `prepare()` and surfaced in the first
-  TLS handshake as a raw `mac verify failure` / key-mismatch error — across the
-  contract (rule 1). `prepare()` now builds a TLS context from the material and
-  refuses it in fixed words — "the client certificate could not be used" — with
-  nothing of what it read; a refused material is never presented (measured
-  2026-10-04).
+  certificate's, or a damaged file passed `prepare()` and `establish()` with Ok,
+  and the failure surfaced as the transport's raw TLS error (`mac verify
+  failure`, a key mismatch). `prepare()` now builds a TLS context from the
+  material and refuses it in fixed words — "the client certificate could not be
+  used" — with nothing of what it read; material without a PFX or without both a
+  certificate and its key — which a TLS context accepts, sending no client
+  certificate at all — is refused as incomplete; a refused material is never
+  presented, also after an earlier `prepare()` succeeded (measured 2026-10-04).
 
 ## [5.2.2] - 2026-10-03
 
