@@ -727,11 +727,14 @@ it treats it like an expired token: `getTokens()` and `authorize()` renew it
 once through the strategy and the pinned certificate — the refresh token when
 there is one, else (or when the refresh is refused) one login, no step twice —
 and the binding check then runs on the new token. Only when the new token is
-still bound elsewhere is it refused, as *the new token is bound to a client
-certificate this provider does not present* — and remembered: later attempts
-refuse it without renewing again, so a server that keeps binding to another
-certificate costs no token request (and no login) per request; `rejected()`
-renews once more, and so does the next `prepare()`. `getTokens()` pins the
+still bound elsewhere is it refused by `authorize()`, as *the new token is
+bound to a client certificate this provider does not present* — and
+remembered: later attempts do not renew it again, so a server that keeps
+binding to another certificate costs no token request (and no login) per
+request. `getTokens()` returns the remembered token; `authorize()` refuses it.
+The next `prepare()` renews once more. `rejected()` renews once more when the
+refused token is the one held; a refused token that was already superseded is
+answered Ok without a renewal (rule 6, as before). `getTokens()` pins the
 certificate to compare thumbprints, so with a bound token held it may throw a
 `CertificateMaterialError` when the material is unusable or expired. `establish()` reads such a held
 token as unknown and presents the pinned certificate. With **no** certificate

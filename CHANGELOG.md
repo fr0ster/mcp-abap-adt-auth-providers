@@ -73,10 +73,13 @@ and the error codes `CERTIFICATE_MATERIAL_ERROR` and
   (or its `cnf` names none readably) — a token restored after a rotation —
   `getTokens()` and `authorize()` renew it once through the pinned certificate
   (refresh, else one login), like an expired token, and check the new one;
-  only a new token still bound elsewhere is refused, as "the new token is bound
-  to a client certificate this provider does not present" — and remembered:
-  later attempts refuse it without renewing again (no token request, no login
-  per request) until `rejected()` renews or `prepare()` runs. With no
+  only a new token still bound elsewhere is refused by `authorize()`, as "the
+  new token is bound to a client certificate this provider does not present"
+  — and remembered: later attempts do not renew it again (no token request, no
+  login per request); `getTokens()` returns it, `authorize()` refuses it. The
+  next `prepare()` renews once more; `rejected()` renews once more when the
+  refused token is the one held, and answers Ok without a renewal when the
+  refused token was already superseded (rule 6, as before). With no
   certificate pinned, `getTokens()` returns a bound token as before and
   `establish()` / `authorize()` refuse it.
 - **Only `establish()` and `authorize()` present the certificate.**
