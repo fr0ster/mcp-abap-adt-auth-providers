@@ -8,7 +8,9 @@
  * verification is left as Node does it: `rejectUnauthorized` is never set, and
  * a private CA is `NODE_EXTRA_CA_CERTS`.
  *
- * What the strategy returned is checked before anything is sent: a value that
+ * Pinned material past its `notAfter` is refused first, before every request
+ * (a `CertificateMaterialError`, "has expired"). What the strategy returned is
+ * checked before anything is sent: a value that
  * is not a string, a header with a line break, a parameter or header that
  * would replace one of the site's own, an endpoint that is not an absolute `https:` URL —
  * each throws a `ClientAuthenticationResultError`, whose words are fixed.
@@ -34,6 +36,7 @@ import axios, {
   type AxiosResponse,
 } from 'axios';
 import { ClientAuthenticationResultError } from '../errors/ClientAuthenticationError';
+import { assertNotExpired } from './certificateMaterial';
 import { type OAuthErrorFields, oauthErrorFields } from './oauthErrorBody';
 
 /** What a site is given to authenticate one request with a strategy. */
@@ -41,6 +44,12 @@ export interface TokenRequestAuth {
   readonly strategy: IClientAuthentication;
   /** The strategy's TLS material, already pinned by the provider. */
   readonly material?: ICertificateMaterial;
+  /**
+   * The pinned certificate's `notAfter` (epoch ms). Checked before every
+   * request that presents the material — a device poll may outlive it — so no
+   * expired certificate is sent.
+   */
+  readonly notAfter?: number;
   /** The server's mTLS alias of this request's endpoint (RFC 8705 §5), when it published one. */
   readonly mtlsEndpoint?: string;
 }
@@ -157,6 +166,11 @@ export async function prepareTokenRequest(
   grant: GrantRequest,
   auth: TokenRequestAuth,
 ): Promise<PreparedTokenRequest> {
+  // Valid when the provider handed it over is not valid for every request
+  // that follows: refused before the strategy is asked or anything is sent.
+  if (auth.material && auth.notAfter !== undefined) {
+    assertNotExpired(auth.notAfter);
+  }
   const draft: ITokenRequestDraft =
     auth.mtlsEndpoint === undefined
       ? {

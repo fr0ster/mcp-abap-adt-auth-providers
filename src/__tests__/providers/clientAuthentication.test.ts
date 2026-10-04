@@ -723,6 +723,59 @@ describe('an expired client certificate', () => {
     await provider.refreshTokens();
     expect(sent[held].body).toMatchObject({ grant_type: 'refresh_token' });
   });
+
+  it('expired between two device polls: the next poll is not sent, and the login is refused in fixed words', async () => {
+    const { strategy } = recording([A]);
+    const provider = new OidcDeviceFlowProvider({
+      clientId: 'cid',
+      tokenEndpoint: 'https://idp/token',
+      deviceAuthorizationEndpoint: 'https://idp/device',
+      presenter: { present: async () => {} },
+      clientAuthentication: strategy,
+    });
+    let polls = 0;
+    // client.crt is valid until 2126: the first poll answers pending and the
+    // clock then passes notAfter — the clock moves, not crypto.
+    const now = jest.spyOn(Date, 'now');
+    mockedAxios.mockImplementation(async (config: any) => {
+      sent.push({
+        url: config.url,
+        body: Object.fromEntries(new URLSearchParams(config.data)),
+        cert: config.httpsAgent?.options?.cert,
+      });
+      if (String(config.url).includes('/device')) {
+        return {
+          data: {
+            device_code: 'dc',
+            user_code: 'UC',
+            verification_uri: 'https://idp/verify',
+            // `interval || 5`: 0 would wait 5 s; 1 ms keeps the poll real.
+            interval: 0.001,
+          },
+        };
+      }
+      polls += 1;
+      // A second poll, had it been sent, gets a token: the login would succeed.
+      if (polls > 1) {
+        return { data: { access_token: jwt('late'), expires_in: 3600 } };
+      }
+      now.mockReturnValue(Date.UTC(2127, 0, 1));
+      throw {
+        isAxiosError: true,
+        response: { status: 400, data: { error: 'authorization_pending' } },
+      };
+    });
+    try {
+      await expect(provider.prepare()).resolves.toEqual(EXPIRED);
+    } finally {
+      now.mockRestore();
+    }
+    expect(polls).toBe(1);
+    expect(sent.map((s) => s.url)).toEqual([
+      'https://idp/device',
+      'https://idp/token',
+    ]);
+  });
 });
 
 describe('OIDC discovery: mtls_endpoint_aliases', () => {

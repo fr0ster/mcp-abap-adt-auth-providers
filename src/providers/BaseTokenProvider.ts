@@ -230,7 +230,9 @@ export abstract class BaseTokenProvider
     const pinned = await this.presentable();
     return {
       strategy,
-      ...(pinned ? { material: pinned.material } : {}),
+      ...(pinned
+        ? { material: pinned.material, notAfter: pinned.notAfter }
+        : {}),
       ...(mtlsEndpoint === undefined ? {} : { mtlsEndpoint }),
     };
   }
