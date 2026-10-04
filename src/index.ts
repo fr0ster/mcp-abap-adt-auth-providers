@@ -10,6 +10,7 @@ export { withBrowserCallbackServer } from './auth/callbackServer';
 export type { OidcCallbackResult } from './auth/oidcBrowserAuth';
 export { withOidcCallbackServer } from './auth/oidcBrowserAuth';
 export { withSamlCallbackServer } from './auth/saml2Auth';
+export * from './clientAuthentication';
 // Credentials the process delegates to — every one an IAuthProvider.
 export { BasicAuthProvider } from './credentials/BasicAuthProvider';
 export { CertificateAuthProvider } from './credentials/CertificateAuthProvider';
@@ -27,6 +28,8 @@ export {
   type AssertionCheck,
   AssertionValidationError,
 } from './errors/AssertionValidationError';
+export { CertificateMaterialError } from './errors/CertificateMaterialError';
+export { ClientAuthenticationError } from './errors/ClientAuthenticationError';
 export {
   BrowserAuthError,
   RefreshError,

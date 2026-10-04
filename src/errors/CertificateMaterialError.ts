@@ -21,7 +21,7 @@ export class CertificateMaterialError extends TokenProviderError {
   constructor(public readonly incomplete: boolean) {
     super(
       incomplete ? CERTIFICATE_INCOMPLETE.reason : CERTIFICATE_UNUSABLE.reason,
-      TOKEN_PROVIDER_ERROR_CODES.VALIDATION_ERROR,
+      TOKEN_PROVIDER_ERROR_CODES.CERTIFICATE_MATERIAL_ERROR,
     );
     this.name = 'CertificateMaterialError';
     Object.setPrototypeOf(this, CertificateMaterialError.prototype);

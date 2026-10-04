@@ -21,6 +21,10 @@ import {
   CertificateMaterialError,
 } from '../errors/CertificateMaterialError';
 import {
+  CLIENT_KEY_UNUSABLE,
+  ClientAuthenticationError,
+} from '../errors/ClientAuthenticationError';
+import {
   BrowserAuthError,
   RefreshError,
   ServiceKeyError,
@@ -133,6 +137,7 @@ const OWN_CLASSES: ReadonlyArray<
 > = [
   [AssertionValidationError, 'AssertionValidationError'],
   [CertificateMaterialError, 'CertificateMaterialError'],
+  [ClientAuthenticationError, 'ClientAuthenticationError'],
   [BrowserAuthError, 'BrowserAuthError'],
   [RefreshError, 'RefreshError'],
   [ValidationError, 'ValidationError'],
@@ -178,6 +183,9 @@ export function refusalFrom(error: unknown, what: string): AuthOutcome {
       ? CERTIFICATE_INCOMPLETE
       : CERTIFICATE_UNUSABLE;
     return oops(words.reason, words.hint);
+  }
+  if (error instanceof ClientAuthenticationError) {
+    return oops(CLIENT_KEY_UNUSABLE.reason, CLIENT_KEY_UNUSABLE.hint);
   }
   if (error instanceof BrowserAuthError) {
     return oops(
