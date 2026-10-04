@@ -728,7 +728,12 @@ once through the strategy and the pinned certificate — the refresh token when
 there is one, else (or when the refresh is refused) one login, no step twice —
 and the binding check then runs on the new token. Only when the new token is
 still bound elsewhere is it refused, as *the new token is bound to a client
-certificate this provider does not present*. `establish()` reads such a held
+certificate this provider does not present* — and remembered: later attempts
+refuse it without renewing again, so a server that keeps binding to another
+certificate costs no token request (and no login) per request; `rejected()`
+renews once more, and so does the next `prepare()`. `getTokens()` pins the
+certificate to compare thumbprints, so with a bound token held it may throw a
+`CertificateMaterialError` when the material is unusable or expired. `establish()` reads such a held
 token as unknown and presents the pinned certificate. With **no** certificate
 pinned there is nothing to renew it for: `getTokens()` returns the token, and
 `establish()` / `authorize()` refuse it.

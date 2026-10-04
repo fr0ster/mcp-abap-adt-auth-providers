@@ -571,6 +571,59 @@ describe('a held token bound to another certificate, one pinned: renewed like an
     expect(requests.map((r) => r.grant)).toEqual(['refresh_token', 'password']);
   });
 
+  it('a renewal that stays bound elsewhere is remembered: the next authorize() refuses without renewing again', async () => {
+    const first = boundTo(THUMB_B, 3600);
+    issuing(first, boundTo(THUMB_B, 3700));
+    const { provider } = rotating({ refreshToken: 'R1' });
+    const t = recordingTargets();
+    for (let i = 0; i < 3; i += 1) {
+      await expect(provider.authorize(t.requestTarget)).resolves.toEqual(
+        RENEWED_REFUSAL,
+      );
+    }
+    await expect(provider.getTokens()).resolves.toMatchObject({
+      authorizationToken: first,
+    });
+    expect(requests.map((r) => r.grant)).toEqual(['refresh_token']);
+    expect(t.request.headers).toEqual({});
+  });
+
+  it('without a refresh token: one login, never a login per request', async () => {
+    issuing(boundTo(THUMB_B, 3600), boundTo(THUMB_B, 3700));
+    const { provider } = rotating();
+    const t = recordingTargets();
+    await provider.authorize(t.requestTarget);
+    await provider.authorize(t.requestTarget);
+    expect(requests.map((r) => r.grant)).toEqual(['password']);
+  });
+
+  it('after rejected(), a new renewal is attempted once — and remembered again', async () => {
+    issuing(boundTo(THUMB_B, 3600), boundTo(THUMB_B, 3700));
+    const { provider } = rotating({ refreshToken: 'R1' });
+    const t = recordingTargets();
+    await provider.authorize(t.requestTarget);
+    expect(requests).toHaveLength(1);
+    await expect(
+      provider.rejected({ at: 'request', status: 401, error: undefined }),
+    ).resolves.toEqual({ ok: true });
+    expect(requests).toHaveLength(2);
+    await expect(provider.authorize(t.requestTarget)).resolves.toEqual(
+      RENEWED_REFUSAL,
+    );
+    await provider.authorize(t.requestTarget);
+    expect(requests).toHaveLength(2);
+  });
+
+  it('prepare() clears the mark: one more renewal per connect', async () => {
+    issuing(boundTo(THUMB_B, 3600), boundTo(THUMB_B, 3700));
+    const { provider } = rotating({ refreshToken: 'R1' });
+    const t = recordingTargets();
+    await provider.authorize(t.requestTarget);
+    await provider.prepare();
+    await provider.authorize(t.requestTarget);
+    expect(requests).toHaveLength(2);
+  });
+
   it.each([
     ['cnf null', null],
     ['cnf without x5t#S256', { jkt: 'dpop-key' }],

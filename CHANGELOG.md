@@ -74,7 +74,9 @@ and the error codes `CERTIFICATE_MATERIAL_ERROR` and
   `getTokens()` and `authorize()` renew it once through the pinned certificate
   (refresh, else one login), like an expired token, and check the new one;
   only a new token still bound elsewhere is refused, as "the new token is bound
-  to a client certificate this provider does not present". With no
+  to a client certificate this provider does not present" — and remembered:
+  later attempts refuse it without renewing again (no token request, no login
+  per request) until `rejected()` renews or `prepare()` runs. With no
   certificate pinned, `getTokens()` returns a bound token as before and
   `establish()` / `authorize()` refuse it.
 - **Only `establish()` and `authorize()` present the certificate.**
@@ -124,6 +126,10 @@ and the error codes `CERTIFICATE_MATERIAL_ERROR` and
   carries `cnf`** ("the token is bound to a client certificate this provider
   does not present") in `establish()` and `authorize()`; it used to send it as
   a Bearer. `TokenAuthProvider.fixed()` still sends such a token unchecked.
+- **`getTokens()` may throw a `CertificateMaterialError`** (unusable or
+  expired material) when the cached token is bound and the strategy presents
+  a certificate: it pins the certificate to compare thumbprints, where it used
+  to return the cached token.
 - **A thrown token-request error is a plain `Error`**, with or without a
   strategy: `instanceof AxiosError` is false, and `response.headers`,
   `config` and `request` are gone (message, `code`, `isAxiosError`, `status`

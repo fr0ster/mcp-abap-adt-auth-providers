@@ -140,6 +140,13 @@ export abstract class BaseTokenProvider
   protected pinned?: PinnedCertificate;
   /** The pin attempt in flight; concurrent first needs share it. */
   private pinning?: Promise<PinnedCertificate>;
+  /**
+   * A token a renewal obtained that is still bound elsewhere than the pinned
+   * certificate. Held, it is refused, never renewed again on its own —
+   * otherwise every request attempt would cost a token request, or a login.
+   * Cleared whenever the token changes, and by prepare().
+   */
+  private renewedElsewhere?: string;
 
   constructor(config: BaseConfig = {}) {
     this.onTokens = config.onTokens;
@@ -230,10 +237,24 @@ export abstract class BaseTokenProvider
    * binding check refuses it where it would be presented.
    */
   private async boundToAnother(token: string): Promise<boolean> {
+    // A renewal already obtained this one: renewing again would not help.
+    if (token === this.renewedElsewhere) return false;
     const binding = readBinding(token);
     if (binding.state !== 'bound') return false;
     const pinned = await this.pin();
     return pinned !== undefined && !this.presents(binding, pinned);
+  }
+
+  /** Remembers a renewed token bound elsewhere than the pinned certificate. */
+  private markIfElsewhere(token: string): void {
+    const binding = readBinding(token);
+    if (
+      this.pinned !== undefined &&
+      binding.state === 'bound' &&
+      !this.presents(binding, this.pinned)
+    ) {
+      this.renewedElsewhere = token;
+    }
   }
 
   /**
@@ -401,6 +422,7 @@ export abstract class BaseTokenProvider
       try {
         const result = await this.performRefresh();
         this.updateTokens(result);
+        this.markIfElsewhere(result.authorizationToken);
         await this.obtained(result);
         this.logger?.info('[BaseTokenProvider] Token refreshed successfully', {
           newToken: this.formatToken(result.authorizationToken),
@@ -422,6 +444,7 @@ export abstract class BaseTokenProvider
     );
     const result = await this.performLogin();
     this.updateTokens(result);
+    this.markIfElsewhere(result.authorizationToken);
     await this.obtained(result);
     this.logger?.info('[BaseTokenProvider] Login completed', {
       newToken: this.formatToken(result.authorizationToken),
@@ -471,6 +494,7 @@ export abstract class BaseTokenProvider
    * @param result Token result to cache
    */
   protected updateTokens(result: ITokenResult): void {
+    this.renewedElsewhere = undefined;
     const oldToken = this.formatToken(this.authorizationToken);
     this.authorizationToken = result.authorizationToken;
     this.refreshToken = result.refreshToken;
@@ -585,6 +609,8 @@ export abstract class BaseTokenProvider
 
   async prepare(): Promise<AuthOutcome> {
     return safely(this.obtaining, async () => {
+      // Once per connect, a token renewed bound elsewhere gets one more try.
+      this.renewedElsewhere = undefined;
       await this.getTokens();
       return OK;
     });
