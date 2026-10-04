@@ -3,7 +3,14 @@
  */
 
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
-import axios from 'axios';
+import axios, { type AxiosResponse } from 'axios';
+import { redactKnownSecrets } from './oauthErrorBody';
+import { tlsTrustCode } from './refusal';
+import {
+  type PreparedTokenRequest,
+  prepareTokenRequest,
+  type TokenRequestAuth,
+} from './tokenRequest';
 
 export interface OidcTokenResponse {
   accessToken: string;
@@ -27,6 +34,60 @@ function buildAuthHeaders(
   return {};
 }
 
+/** Today's request: `params` as built (client_id included), Basic when a secret is given. */
+function sendAsToday(
+  endpoint: string,
+  params: URLSearchParams,
+  clientId: string,
+  clientSecret: string | undefined,
+): Promise<AxiosResponse> {
+  return axios.post(endpoint, params.toString(), {
+    headers: {
+      'Content-Type': 'application/x-www-form-urlencoded',
+      ...buildAuthHeaders(clientId, clientSecret),
+    },
+  });
+}
+
+/**
+ * With a strategy: today's parameters without `client_id` — the strategy
+ * decides whether the body carries it.
+ */
+function prepareWith(
+  auth: TokenRequestAuth,
+  endpoint: string,
+  clientId: string,
+  grantType: string,
+  params: URLSearchParams,
+): Promise<PreparedTokenRequest> {
+  const grant = new URLSearchParams(params);
+  grant.delete('client_id');
+  return prepareTokenRequest(
+    { endpoint, clientId, grantType, parameters: grant },
+    auth,
+  );
+}
+
+/** One request: through the strategy when there is one, else as today. */
+async function send(
+  auth: TokenRequestAuth | undefined,
+  endpoint: string,
+  clientId: string,
+  clientSecret: string | undefined,
+  grantType: string,
+  params: URLSearchParams,
+): Promise<AxiosResponse> {
+  if (!auth) return sendAsToday(endpoint, params, clientId, clientSecret);
+  const prepared = await prepareWith(
+    auth,
+    endpoint,
+    clientId,
+    grantType,
+    params,
+  );
+  return axios(prepared.config);
+}
+
 function mapTokenResponse(data: any): OidcTokenResponse {
   if (!data?.access_token) {
     throw new Error('Token response missing access_token');
@@ -48,6 +109,7 @@ export async function exchangeAuthorizationCode(
   redirectUri: string,
   codeVerifier: string,
   logger?: ILogger,
+  auth?: TokenRequestAuth,
 ): Promise<OidcTokenResponse> {
   const params = new URLSearchParams();
   params.append('grant_type', 'authorization_code');
@@ -60,12 +122,14 @@ export async function exchangeAuthorizationCode(
     tokenEndpoint,
   });
 
-  const response = await axios.post(tokenEndpoint, params.toString(), {
-    headers: {
-      'Content-Type': 'application/x-www-form-urlencoded',
-      ...buildAuthHeaders(clientId, clientSecret),
-    },
-  });
+  const response = await send(
+    auth,
+    tokenEndpoint,
+    clientId,
+    clientSecret,
+    'authorization_code',
+    params,
+  );
 
   return mapTokenResponse(response.data);
 }
@@ -76,6 +140,7 @@ export async function refreshOidcToken(
   clientSecret: string | undefined,
   refreshToken: string,
   logger?: ILogger,
+  auth?: TokenRequestAuth,
 ): Promise<OidcTokenResponse> {
   const params = new URLSearchParams();
   params.append('grant_type', 'refresh_token');
@@ -84,12 +149,14 @@ export async function refreshOidcToken(
 
   logger?.info('[OIDC] Refreshing token', { tokenEndpoint });
 
-  const response = await axios.post(tokenEndpoint, params.toString(), {
-    headers: {
-      'Content-Type': 'application/x-www-form-urlencoded',
-      ...buildAuthHeaders(clientId, clientSecret),
-    },
-  });
+  const response = await send(
+    auth,
+    tokenEndpoint,
+    clientId,
+    clientSecret,
+    'refresh_token',
+    params,
+  );
 
   return mapTokenResponse(response.data);
 }
@@ -108,6 +175,7 @@ export async function initiateDeviceAuthorization(
   clientId: string,
   scope: string | undefined,
   logger?: ILogger,
+  auth?: TokenRequestAuth,
 ): Promise<OidcDeviceFlowInitResponse> {
   const params = new URLSearchParams();
   params.append('client_id', clientId);
@@ -117,9 +185,23 @@ export async function initiateDeviceAuthorization(
 
   logger?.info('[OIDC] Initiating device authorization', { deviceEndpoint });
 
-  const response = await axios.post(deviceEndpoint, params.toString(), {
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-  });
+  // RFC 8628 §3.1: a confidential client authenticates here too. Without a
+  // strategy, today's request: client_id in the body, never Basic.
+  const response = auth
+    ? await axios(
+        (
+          await prepareWith(
+            auth,
+            deviceEndpoint,
+            clientId,
+            'device_authorization',
+            params,
+          )
+        ).config,
+      )
+    : await axios.post(deviceEndpoint, params.toString(), {
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      });
 
   const data = response.data;
   if (!data?.device_code || !data?.user_code || !data?.verification_uri) {
@@ -143,6 +225,7 @@ export async function pollDeviceTokens(
   deviceCode: string,
   interval: number = 5,
   logger?: ILogger,
+  auth?: TokenRequestAuth,
 ): Promise<OidcTokenResponse> {
   const params = new URLSearchParams();
   params.append('grant_type', 'urn:ietf:params:oauth:grant-type:device_code');
@@ -150,13 +233,20 @@ export async function pollDeviceTokens(
   params.append('client_id', clientId);
 
   while (true) {
+    // Authenticated anew per request: an assertion is never reused.
+    const prepared = auth
+      ? await prepareWith(
+          auth,
+          tokenEndpoint,
+          clientId,
+          'urn:ietf:params:oauth:grant-type:device_code',
+          params,
+        )
+      : undefined;
     try {
-      const response = await axios.post(tokenEndpoint, params.toString(), {
-        headers: {
-          'Content-Type': 'application/x-www-form-urlencoded',
-          ...buildAuthHeaders(clientId, clientSecret),
-        },
-      });
+      const response = prepared
+        ? await axios(prepared.config)
+        : await sendAsToday(tokenEndpoint, params, clientId, clientSecret);
       return mapTokenResponse(response.data);
     } catch (error: any) {
       const status = error?.response?.status;
@@ -183,6 +273,7 @@ export async function passwordGrant(
   password: string,
   scope: string | undefined,
   logger?: ILogger,
+  auth?: TokenRequestAuth,
 ): Promise<OidcTokenResponse> {
   const params = new URLSearchParams();
   params.append('grant_type', 'password');
@@ -195,21 +286,28 @@ export async function passwordGrant(
 
   logger?.info('[OIDC] Performing password grant', { tokenEndpoint });
 
+  // Asked before the try: what the strategy throws is not a token-endpoint failure.
+  const prepared = auth
+    ? await prepareWith(auth, tokenEndpoint, clientId, 'password', params)
+    : undefined;
   try {
-    const response = await axios.post(tokenEndpoint, params.toString(), {
-      headers: {
-        'Content-Type': 'application/x-www-form-urlencoded',
-        ...buildAuthHeaders(clientId, clientSecret),
-      },
-    });
+    const response = prepared
+      ? await axios(prepared.config)
+      : await sendAsToday(tokenEndpoint, params, clientId, clientSecret);
     return mapTokenResponse(response.data);
   } catch (error: any) {
+    // Unwrapped, so the refusal can name the code and NODE_EXTRA_CA_CERTS.
+    if (tlsTrustCode(error) !== undefined) throw error;
     const status = error?.response?.status;
     const data = error?.response?.data;
     const errorCode = data?.error;
     const errorDesc = data?.error_description;
+    // What the strategy sent never comes back out (the rest: as before).
     throw new Error(
-      `OIDC password grant failed (${status || 'unknown'}): ${errorCode || 'unknown'}${errorDesc ? ` - ${errorDesc}` : ''}`,
+      redactKnownSecrets(
+        `OIDC password grant failed (${status || 'unknown'}): ${errorCode || 'unknown'}${errorDesc ? ` - ${errorDesc}` : ''}`,
+        prepared?.secrets ?? [],
+      ),
     );
   }
 }
@@ -225,6 +323,7 @@ export async function tokenExchange(
   actorToken?: string,
   actorTokenType?: string,
   logger?: ILogger,
+  auth?: TokenRequestAuth,
 ): Promise<OidcTokenResponse> {
   const params = new URLSearchParams();
   params.append(
@@ -249,12 +348,14 @@ export async function tokenExchange(
 
   logger?.info('[OIDC] Performing token exchange', { tokenEndpoint });
 
-  const response = await axios.post(tokenEndpoint, params.toString(), {
-    headers: {
-      'Content-Type': 'application/x-www-form-urlencoded',
-      ...buildAuthHeaders(clientId, clientSecret),
-    },
-  });
+  const response = await send(
+    auth,
+    tokenEndpoint,
+    clientId,
+    clientSecret,
+    'urn:ietf:params:oauth:grant-type:token-exchange',
+    params,
+  );
 
   return mapTokenResponse(response.data);
 }

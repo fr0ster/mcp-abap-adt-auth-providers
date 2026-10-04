@@ -21,3 +21,27 @@ export class ClientAuthenticationError extends TokenProviderError {
     Object.setPrototypeOf(this, ClientAuthenticationError.prototype);
   }
 }
+
+/** The fixed words for a client authentication whose result cannot be sent. */
+export const CLIENT_AUTHENTICATION_UNUSABLE = {
+  reason: 'the client authentication returned a request that cannot be sent',
+  hint: 'check the client authentication strategy',
+} as const;
+
+/**
+ * Thrown, before anything is sent, when what a client authentication strategy
+ * returned cannot be sent: a value that is not a string, a header with a line
+ * break, a parameter or header that would replace one of the request's own, an
+ * endpoint that is not an absolute `https:` URL. Its message is fixed and
+ * carries nothing of what the strategy returned.
+ */
+export class ClientAuthenticationResultError extends TokenProviderError {
+  constructor() {
+    super(
+      CLIENT_AUTHENTICATION_UNUSABLE.reason,
+      TOKEN_PROVIDER_ERROR_CODES.CLIENT_AUTHENTICATION_ERROR,
+    );
+    this.name = 'ClientAuthenticationResultError';
+    Object.setPrototypeOf(this, ClientAuthenticationResultError.prototype);
+  }
+}

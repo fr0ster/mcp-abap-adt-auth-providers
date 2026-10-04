@@ -18,14 +18,13 @@ const quote = (value: string, cap: number): string =>
 const JWT_SHAPE = /eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]*/g;
 
 /**
- * Removes what a server might echo back: every secret the request itself
- * sent (a refresh token, an assertion, a client secret), in each form it may
- * come back in, and any JWT.
+ * Replaces every secret the request itself sent (a refresh token, an
+ * assertion, a client secret), in each form it may come back in.
  * Every known secret is redacted, however short: nothing guarantees a client
  * secret is long, and dropping a matching word from a diagnosis is the lesser
  * harm.
  */
-function redact(
+export function redactKnownSecrets(
   text: string,
   secrets: readonly (string | undefined)[],
 ): string {
@@ -41,7 +40,15 @@ function redact(
     ]);
     for (const form of forms) out = out.split(form).join('<redacted>');
   }
-  return out.replace(JWT_SHAPE, '<redacted jwt>');
+  return out;
+}
+
+/** Removes what a server might echo back: every known secret, and any JWT. */
+function redact(
+  text: string,
+  secrets: readonly (string | undefined)[],
+): string {
+  return redactKnownSecrets(text, secrets).replace(JWT_SHAPE, '<redacted jwt>');
 }
 
 /**

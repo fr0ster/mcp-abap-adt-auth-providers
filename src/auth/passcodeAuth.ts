@@ -18,6 +18,8 @@
 
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
 import axios, { type AxiosResponse } from 'axios';
+import { redactKnownSecrets } from './oauthErrorBody';
+import { prepareTokenRequest, type TokenRequestAuth } from './tokenRequest';
 
 export interface PasscodeTokens {
   accessToken: string;
@@ -31,31 +33,52 @@ export async function exchangePasscode(
   clientSecret: string | undefined,
   passcode: string,
   logger?: ILogger,
+  auth?: TokenRequestAuth,
 ): Promise<PasscodeTokens> {
   const tokenUrl = `${uaaUrl.replace(/\/+$/, '')}/oauth/token`;
   const params = new URLSearchParams();
   params.append('grant_type', 'password');
   params.append('passcode', passcode);
 
-  logger?.info('[UAA] Exchanging passcode for token', { tokenUrl });
+  const prepared = auth
+    ? await prepareTokenRequest(
+        {
+          endpoint: tokenUrl,
+          clientId,
+          grantType: 'password',
+          parameters: params,
+          headers: { Accept: 'application/json' },
+        },
+        auth,
+      )
+    : undefined;
 
-  // A public client — `cf` is one — authenticates with an empty secret.
-  const basic = Buffer.from(`${clientId}:${clientSecret ?? ''}`).toString(
-    'base64',
-  );
-  let response: AxiosResponse<{
-    access_token?: string;
-    refresh_token?: string;
-    expires_in?: number;
-  }>;
-  try {
-    response = await axios.post(tokenUrl, params.toString(), {
+  logger?.info('[UAA] Exchanging passcode for token', {
+    tokenUrl: prepared?.config.url ?? tokenUrl,
+  });
+
+  /** Today's request: Basic `id:secret`, an empty secret for a public client. */
+  const sendAsToday = () => {
+    // A public client — `cf` is one — authenticates with an empty secret.
+    const basic = Buffer.from(`${clientId}:${clientSecret ?? ''}`).toString(
+      'base64',
+    );
+    return axios.post(tokenUrl, params.toString(), {
       headers: {
         'Content-Type': 'application/x-www-form-urlencoded',
         Accept: 'application/json',
         Authorization: `Basic ${basic}`,
       },
     });
+  };
+
+  let response: AxiosResponse<{
+    access_token?: string;
+    refresh_token?: string;
+    expires_in?: number;
+  }>;
+  try {
+    response = prepared ? await axios(prepared.config) : await sendAsToday();
   } catch (error) {
     // UAA says why in the body — "Invalid passcode" for a mistyped or
     // already spent code — which is what the user needs to read.
@@ -63,8 +86,11 @@ export async function exchangePasscode(
       const body = error.response.data as
         | { error?: string; error_description?: string }
         | undefined;
-      const reason =
-        body?.error_description ?? body?.error ?? 'no reason given';
+      // What the strategy sent never comes back out (passcode, secret: as before).
+      const reason = redactKnownSecrets(
+        String(body?.error_description ?? body?.error ?? 'no reason given'),
+        prepared?.secrets ?? [],
+      );
       throw new Error(
         `Passcode exchange failed (${error.response.status}): ${reason}`,
       );

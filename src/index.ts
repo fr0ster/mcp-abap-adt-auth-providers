@@ -30,7 +30,10 @@ export {
   AssertionValidationError,
 } from './errors/AssertionValidationError';
 export { CertificateMaterialError } from './errors/CertificateMaterialError';
-export { ClientAuthenticationError } from './errors/ClientAuthenticationError';
+export {
+  ClientAuthenticationError,
+  ClientAuthenticationResultError,
+} from './errors/ClientAuthenticationError';
 export {
   BrowserAuthError,
   RefreshError,

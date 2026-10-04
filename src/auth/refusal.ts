@@ -21,8 +21,10 @@ import {
   CertificateMaterialError,
 } from '../errors/CertificateMaterialError';
 import {
+  CLIENT_AUTHENTICATION_UNUSABLE,
   CLIENT_KEY_UNUSABLE,
   ClientAuthenticationError,
+  ClientAuthenticationResultError,
 } from '../errors/ClientAuthenticationError';
 import {
   BrowserAuthError,
@@ -120,6 +122,27 @@ const KNOWN_SYSTEM_CODES: ReadonlySet<string> = new Set([
   'EPIPE',
 ]);
 
+/**
+ * Node's codes for a server certificate this process does not trust. The code
+ * is the only part of such an error a refusal names; its message never.
+ */
+const TLS_TRUST_CODES: ReadonlySet<string> = new Set([
+  'UNABLE_TO_VERIFY_LEAF_SIGNATURE',
+  'SELF_SIGNED_CERT_IN_CHAIN',
+  'DEPTH_ZERO_SELF_SIGNED_CERT',
+  'UNABLE_TO_GET_ISSUER_CERT_LOCALLY',
+  'CERT_HAS_EXPIRED',
+  'ERR_TLS_CERT_ALTNAME_INVALID',
+]);
+
+/** The allowlisted code of a TLS trust failure, else undefined. */
+export function tlsTrustCode(error: unknown): string | undefined {
+  const code = (error as { code?: unknown } | null)?.code;
+  return typeof code === 'string' && TLS_TRUST_CODES.has(code)
+    ? code
+    : undefined;
+}
+
 export const KNOWN_RFC_KEYS: ReadonlySet<string> = new Set([
   'RFC_COMMUNICATION_FAILURE',
   'RFC_LOGON_FAILURE',
@@ -137,6 +160,7 @@ const OWN_CLASSES: ReadonlyArray<
 > = [
   [AssertionValidationError, 'AssertionValidationError'],
   [CertificateMaterialError, 'CertificateMaterialError'],
+  [ClientAuthenticationResultError, 'ClientAuthenticationResultError'],
   [ClientAuthenticationError, 'ClientAuthenticationError'],
   [BrowserAuthError, 'BrowserAuthError'],
   [RefreshError, 'RefreshError'],
@@ -184,6 +208,12 @@ export function refusalFrom(error: unknown, what: string): AuthOutcome {
       : CERTIFICATE_UNUSABLE;
     return oops(words.reason, words.hint);
   }
+  if (error instanceof ClientAuthenticationResultError) {
+    return oops(
+      CLIENT_AUTHENTICATION_UNUSABLE.reason,
+      CLIENT_AUTHENTICATION_UNUSABLE.hint,
+    );
+  }
   if (error instanceof ClientAuthenticationError) {
     return oops(CLIENT_KEY_UNUSABLE.reason, CLIENT_KEY_UNUSABLE.hint);
   }
@@ -210,6 +240,13 @@ export function refusalFrom(error: unknown, what: string): AuthOutcome {
   }
   if (error instanceof TokenProviderError) {
     return oops(`${what} failed (${ownLabel(error)})`);
+  }
+  const trust = tlsTrustCode(error);
+  if (trust !== undefined) {
+    return oops(
+      `${what} failed: the server's certificate is not trusted (${trust})`,
+      'if the server uses a private CA, name its certificate in NODE_EXTRA_CA_CERTS',
+    );
   }
   return oops(`${what} failed (unknown error${systemCode(error)})`);
 }

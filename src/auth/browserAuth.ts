@@ -6,6 +6,7 @@ import * as child_process from 'node:child_process';
 import type { IAuthorizationConfig } from '@mcp-abap-adt/interfaces-auth-sap';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
 import axios from 'axios';
+import { prepareTokenRequest, type TokenRequestAuth } from './tokenRequest';
 
 const BROWSER_MAP: Record<string, string | undefined | null> = {
   chrome: 'chrome',
@@ -76,6 +77,7 @@ export async function exchangeCodeForToken(
   code: string,
   redirectUri: string,
   log?: ILogger | null,
+  auth?: TokenRequestAuth,
 ): Promise<{ accessToken: string; refreshToken?: string }> {
   const {
     uaaUrl: url,
@@ -89,21 +91,39 @@ export async function exchangeCodeForToken(
   params.append('code', code);
   params.append('redirect_uri', redirectUri);
 
-  const authString = Buffer.from(`${clientid}:${clientsecret}`).toString(
-    'base64',
-  );
+  const prepared = auth
+    ? await prepareTokenRequest(
+        {
+          endpoint: tokenUrl,
+          clientId: clientid,
+          grantType: 'authorization_code',
+          parameters: params,
+        },
+        auth,
+      )
+    : undefined;
 
-  log?.info(`Exchanging code for token: ${tokenUrl}`);
+  /** Today's request: Basic `id:secret`. */
+  const sendAsToday = () => {
+    const authString = Buffer.from(`${clientid}:${clientsecret}`).toString(
+      'base64',
+    );
+    return axios({
+      method: 'post',
+      url: tokenUrl,
+      headers: {
+        Authorization: `Basic ${authString}`,
+        'Content-Type': 'application/x-www-form-urlencoded',
+      },
+      data: params.toString(),
+    });
+  };
 
-  const response = await axios({
-    method: 'post',
-    url: tokenUrl,
-    headers: {
-      Authorization: `Basic ${authString}`,
-      'Content-Type': 'application/x-www-form-urlencoded',
-    },
-    data: params.toString(),
-  });
+  log?.info(`Exchanging code for token: ${prepared?.config.url ?? tokenUrl}`);
+
+  const response = prepared
+    ? await axios(prepared.config)
+    : await sendAsToday();
 
   if (response.data?.access_token) {
     const accessToken = response.data.access_token;

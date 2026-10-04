@@ -4,6 +4,8 @@
 
 import axios from 'axios';
 import { describeOAuthErrorBody } from './oauthErrorBody';
+import { tlsTrustCode } from './refusal';
+import { prepareTokenRequest, type TokenRequestAuth } from './tokenRequest';
 
 export interface TokenRefreshResult {
   accessToken: string;
@@ -16,7 +18,9 @@ export interface TokenRefreshResult {
  * @param refreshToken Refresh token
  * @param uaaUrl UAA URL (e.g., https://your-account.authentication.eu10.hana.ondemand.com)
  * @param clientId UAA client ID
- * @param clientSecret UAA client secret
+ * @param clientSecret UAA client secret; unused with `auth`
+ * @param auth the client authentication and its pinned material; without it,
+ *   Basic `id:secret`, as always
  * @returns Promise that resolves to new tokens
  * @internal - Internal function, not exported from package
  */
@@ -24,20 +28,33 @@ export async function refreshJwtToken(
   refreshToken: string,
   uaaUrl: string,
   clientId: string,
-  clientSecret: string,
+  clientSecret: string | undefined,
+  auth?: TokenRequestAuth,
 ): Promise<TokenRefreshResult> {
-  try {
-    const tokenUrl = `${uaaUrl}/oauth/token`;
+  const tokenUrl = `${uaaUrl}/oauth/token`;
+  const params = new URLSearchParams();
+  params.append('grant_type', 'refresh_token');
+  params.append('refresh_token', refreshToken);
+  // Asked before the try: what the strategy throws is not a token-endpoint failure.
+  const prepared = auth
+    ? await prepareTokenRequest(
+        {
+          endpoint: tokenUrl,
+          clientId,
+          grantType: 'refresh_token',
+          parameters: params,
+        },
+        auth,
+      )
+    : undefined;
+  const secrets = [refreshToken, clientSecret, ...(prepared?.secrets ?? [])];
 
-    const params = new URLSearchParams();
-    params.append('grant_type', 'refresh_token');
-    params.append('refresh_token', refreshToken);
-
+  /** Today's request: Basic `id:secret`. */
+  const sendAsToday = () => {
     const authString = Buffer.from(`${clientId}:${clientSecret}`).toString(
       'base64',
     );
-
-    const response = await axios({
+    return axios({
       method: 'post',
       url: tokenUrl,
       headers: {
@@ -46,6 +63,12 @@ export async function refreshJwtToken(
       },
       data: params.toString(),
     });
+  };
+
+  try {
+    const response = prepared
+      ? await axios(prepared.config)
+      : await sendAsToday();
 
     if (response.data?.access_token) {
       return {
@@ -70,8 +93,11 @@ export async function refreshJwtToken(
         response: { status: number; data: unknown };
       };
       throw new Error(
-        `Token refresh failed (${axiosError.response.status}): ${describeOAuthErrorBody(axiosError.response.data, [refreshToken, clientSecret])}`,
+        `Token refresh failed (${axiosError.response.status}): ${describeOAuthErrorBody(axiosError.response.data, secrets)}`,
       );
+    } else if (tlsTrustCode(error) !== undefined) {
+      // Unwrapped, so the refusal can name the code and NODE_EXTRA_CA_CERTS.
+      throw error;
     } else {
       const errorMessage =
         error instanceof Error ? error.message : String(error);
