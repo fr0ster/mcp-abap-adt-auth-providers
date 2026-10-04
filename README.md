@@ -638,8 +638,9 @@ const user = new OidcPasswordProvider({
   sends there unless it was given `endpoint`. An endpoint given in the
   configuration comes with no alias.
 - **A loader that fails with its own error** — a missing file, say — is
-  refused as *`<grant type>` token request failed (unknown error, ENOENT)*:
-  the error's code when it is on the package's allowlist, never its message.
+  refused as *`<auth type>` token request failed (unknown error, ENOENT)*,
+  where `<auth type>` is the provider's `getAuthType()`. The refusal names the
+  error's code when it is on the package's allowlist, never its message.
   That is by design (rule 2 of the contract); a loader that wants its own words
   refused throws one of this package's classes.
 - **Thrown errors carry no request.** A failed token request rethrows without
@@ -752,8 +753,10 @@ const provider = new ClientCredentialsProvider({
 short-lived, so a consumer that keeps a provider for long creates a new key —
 and a new provider — before it expires. `npm run test:xsuaa` runs this recipe
 against a real XSUAA (see [Testing](#live-checks-against-xsuaa-btp-subaccount)).
-A `client_credentials` token carries no user, which is why ADT refuses it —
-see [docs/btp-setup.md](docs/btp-setup.md).
+ADT answered `401` to a `client_credentials` token obtained this way
+(measured on a trial); why is inference — the token carries no user, and its
+client is outside the ABAP system's `xsappname`. See
+[docs/btp-setup.md](docs/btp-setup.md).
 
 #### Refusals
 
@@ -1660,8 +1663,9 @@ const provider = new UaaPasscodeProvider({
 The exchange is the password grant with `passcode` instead of a username and
 password — a UAA extension, not an RFC. A code is single-use; a mistyped or
 spent one fails with `Passcode exchange failed (401): "unauthorized": "Invalid passcode"`
-— the server's `error` and `error_description`, with the passcode, the
-password and the client secret redacted if the server echoes them.
+— the server's `error` and `error_description`, with the passcode, the client
+secret and what a client-authentication strategy sent redacted if the server
+echoes them.
 
 #### Device flow prompts
 

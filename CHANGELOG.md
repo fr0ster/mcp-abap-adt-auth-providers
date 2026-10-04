@@ -95,8 +95,8 @@ and the error codes `CERTIFICATE_MATERIAL_ERROR` and
   body reduced to `error`, `error_description` and `error_uri`, every secret
   the request sent redacted.
 - **The passcode exchange and the OIDC password grant report the server's
-  error through `describeOAuthErrorBody`**, with the passcode, the password and
-  the client secret redacted. The messages read
+  error through `describeOAuthErrorBody`**, with the passcode (or the password),
+  the client secret and what a strategy sent redacted. The messages read
   `Passcode exchange failed (401): "unauthorized": "Invalid passcode"` and
   `OIDC password grant failed (401): "invalid_grant": "…"` (were
   `… (401): Invalid passcode` and `… (401): invalid_grant - …`).
