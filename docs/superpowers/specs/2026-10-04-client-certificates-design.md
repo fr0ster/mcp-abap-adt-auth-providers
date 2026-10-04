@@ -113,7 +113,8 @@ client is a mistake, not a preference. Where `clientSecret` is required today
 (`ClientCredentialsProvider`, `AuthorizationCodeProvider`), a strategy
 satisfies that requirement instead.
 
-**Without it,** each request is sent exactly as today (goal, Holds 3). Today's
+**Without it,** each request is sent exactly as today (goal, Holds 3), except
+that it no longer follows redirects (`maxRedirects: 0` on every token request). Today's
 shapes differ by site and are kept as they are:
 
 | Site | Today, with a secret | Today, without |

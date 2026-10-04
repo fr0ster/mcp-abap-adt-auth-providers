@@ -73,7 +73,9 @@ refused or accepted at the TLS level exactly as configured.
    no provider builds one of its own, no provider guesses from what fields
    happen to be present (rule 7).
 3. **What works today keeps working.** A consumer that passes `clientSecret`
-   sees no change in what is sent, and a public OIDC client — no
+   sees no change in what is sent — except that no token request follows a
+   redirect any more (a 307/308 would re-send the secret, a refresh token or
+   a code to wherever it points; decided 2026-10-04) — and a public OIDC client — no
    `clientSecret`, no client authentication — stays a supported composition,
    not an error and not a new mandatory collaborator.
 4. **The server certificate is always verified** on every token request,
