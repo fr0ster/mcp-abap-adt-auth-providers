@@ -542,8 +542,16 @@ public client that sends only `client_id`.
   material with neither a PFX nor both a certificate and its key is refused as
   *the client certificate is incomplete*; material a TLS context cannot be
   built from (a wrong passphrase, a key that is not the certificate's) as *the
-  client certificate could not be used*. A failed load is not kept — the next
+  client certificate could not be used*; a certificate past its `notAfter` as
+  *the client certificate has expired*. A failed load is not kept — the next
   request loads again.
+- **`endpoint` replaces the URL of every request** the provider sends through
+  `tlsClientCertificate`, not only the token request. With
+  `OidcDeviceFlowProvider` that includes the device authorization, which would
+  then go to the token endpoint you named. For the device flow, leave
+  `endpoint` out and let discovery's `mtls_endpoint_aliases` route each
+  request to its own mTLS alias (give `issuerUrl`, not the endpoints, so there
+  is a discovery document to read them from).
 - **`privateKeyJwt`** signs with `node:crypto`; `algorithm` is `RS256` (an RSA
   key) or `ES256` (a P-256 key). `key` is PEM text, PEM bytes or a
   `KeyObject`. Claims: `iss` = `sub` = the client id, `aud` = `audience`, else
@@ -620,7 +628,14 @@ const user = new OidcPasswordProvider({
   pins nothing and refuses the moment that needed it). This holds whatever
   the strategy, your own included. **A certificate that rotates means a new
   provider instance** — the consumer, or the broker, constructs it, as for any
-  other change of credential.
+  other change of credential. A token that new provider holds bound to the old
+  certificate is renewed, not refused (see below).
+- **An expired client certificate is refused before it is sent.** The leaf's
+  `notAfter` is checked when the material is pinned and again before every
+  token request and logon that presents it: *the client certificate has
+  expired*, with nothing sent — and a renewal refused that way keeps its
+  refresh token. `CertificateAuthProvider` checks the same in `prepare()` and
+  before each logon.
 - **No redirects are followed on the strategy path.** A redirect would re-send
   the secret or the assertion, and present the certificate, to wherever it
   points. Without a strategy a request is sent as before, with axios's default
@@ -629,9 +644,25 @@ const user = new OidcPasswordProvider({
   `rejectUnauthorized` is never set and there is no `ca` option. A server
   behind a private CA is trusted the way Node offers, explicitly and
   process-wide: `NODE_EXTRA_CA_CERTS=/path/to/ca.pem`, read when Node starts,
-  which adds to Node's store rather than replacing it. An untrusted server
-  certificate is refused as *… failed: the server's certificate is not trusted
-  (`<code>`)*, with a hint naming `NODE_EXTRA_CA_CERTS`.
+  which adds to Node's store rather than replacing it. A TLS failure is refused
+  naming its code, with fixed words per kind:
+
+  | Code | Reason (*… failed: …*) | Hint |
+  |---|---|---|
+  | `UNABLE_TO_VERIFY_LEAF_SIGNATURE`, `SELF_SIGNED_CERT_IN_CHAIN`, `DEPTH_ZERO_SELF_SIGNED_CERT`, `UNABLE_TO_GET_ISSUER_CERT_LOCALLY` | the server's certificate is not trusted (`<code>`) | if the server uses a private CA, name its certificate in NODE_EXTRA_CA_CERTS |
+  | `CERT_HAS_EXPIRED` | the server's certificate has expired (`<code>`) | the server must renew its certificate; check also this machine’s clock |
+  | `ERR_TLS_CERT_ALTNAME_INVALID` | the host name is not in the server's certificate (`<code>`) | use the host name the server’s certificate is issued for |
+  | `ERR_SSL_TLSV13_ALERT_CERTIFICATE_REQUIRED`, `ERR_SSL_TLSV1_ALERT_UNKNOWN_CA`, and `ERR_SSL_SSL/TLS_ALERT_…` / `ERR_SSL_SSLV3_ALERT_…` for `BAD_CERTIFICATE`, `CERTIFICATE_UNKNOWN`, `CERTIFICATE_EXPIRED`, `CERTIFICATE_REVOKED`, `UNSUPPORTED_CERTIFICATE` | the server refused the client certificate (`<code>`) | check that the server trusts the certificate’s issuer and that the certificate is valid and not revoked |
+
+  The last row is the alert a server sends when it refuses the client
+  certificate in the handshake. Current OpenSSL — 3.5, bundled with Node 22
+  and 24, and 3.6, both measured — spells the SSLv3-era alerts
+  `SSL/TLS_ALERT_…`; older releases spelled them `SSLV3_ALERT_…`, so both are
+  listed. Measured 2026-10-04 against `openssl s_server -Verify`:
+  no certificate → `…CERTIFICATE_REQUIRED`, an issuer the server does not
+  trust → `…UNKNOWN_CA`, an expired certificate →
+  `ERR_SSL_SSL/TLS_ALERT_CERTIFICATE_EXPIRED`. Any other code is
+  *unknown error*.
 - **mTLS aliases (RFC 8705 §5).** An OIDC provider that discovers an endpoint
   hands the strategy the server's `mtls_endpoint_aliases` entry for it
   (`token_endpoint`, `device_authorization_endpoint`); `tlsClientCertificate`
@@ -689,21 +720,50 @@ counts as unknown — the token presented will be the one `authorize()` obtains
 through the same strategy and pinned certificate, and `authorize()` checks
 that one.
 
+**After a rotation.** A held token bound to *another* certificate than the
+pinned one — restored from a store after the certificate was rotated, say —
+or whose `cnf` names no readable thumbprint, is unusable to this provider, and
+it treats it like an expired token: `getTokens()` and `authorize()` renew it
+once through the strategy and the pinned certificate — the refresh token when
+there is one, else (or when the refresh is refused) one login, no step twice —
+and the binding check then runs on the new token. Only when the new token is
+still bound elsewhere is it refused, as *the new token is bound to a client
+certificate this provider does not present*. `establish()` reads such a held
+token as unknown and presents the pinned certificate. With **no** certificate
+pinned there is nothing to renew it for: `getTokens()` returns the token, and
+`establish()` / `authorize()` refuse it.
+
 | Token | Certificate pinned | `establish(logon)` | `authorize(request)` |
 |---|---|---|---|
 | unbound | none | presents nothing, Ok | Bearer, Ok |
 | unbound | yes | presents it; Ok even when the logon takes no TLS material (the Bearer carries the token) — a logon target that throws is Oops | Bearer, Ok |
 | bound to the pinned one | yes | presents it; a logon that takes no TLS material (RFC) is that logon's Oops | Bearer, Ok |
-| bound to another, or none pinned | — | Oops, nothing presented | Oops, no header written |
+| bound to another, or `cnf` without a readable thumbprint | yes | read as **unknown**: presents the pinned one (a logon that takes no TLS material is that logon's Oops) | renewed once through the pinned one, the new token checked: Bearer, Ok — or, bound elsewhere again, Oops, no header written |
+| bound | none | Oops, nothing presented | Oops, no header written |
 | unknown | yes | **treated as bound**: presents it, and a logon that takes no TLS material is that logon's Oops | Bearer, Ok |
 | unknown | none | presents nothing, Ok | Bearer, Ok |
 
-The refusal for a token bound elsewhere is fixed words, with no thumbprint in
-them: *the token is bound to a client certificate this provider does not
-present*, hint *configure the certificate the token was issued for, or obtain a
-new token*. A renewal in `rejected()` goes through the same strategy and the
-same pinned certificate, so a refreshed token is bound to the same certificate,
-and is checked like any other.
+The refusals are fixed words, with no thumbprint in them: a bound token and no
+certificate pinned is *the token is bound to a client certificate this provider
+does not present*, hint *give the provider a clientAuthentication that presents
+the certificate the token was issued for*; a renewal still bound elsewhere is
+*the new token is bound to a client certificate this provider does not
+present*, hint *the authorization server bound the new token to another
+certificate: check the certificate registered for this client*. A renewal in
+`rejected()` goes through the same strategy and the same pinned certificate,
+so a refreshed token is bound to the same certificate, and is checked like any
+other.
+
+> **The token API does not present the certificate.** Only the `IAuthProvider`
+> methods — `establish()` and `authorize()` — present the pinned certificate
+> and check a token's binding. `getTokens()` and `refreshTokens()` (the
+> `IRefreshableTokenProvider` side, which the broker's token API uses) return
+> the token itself, which may be bound to the certificate: a consumer that
+> takes the token from there and sends it on its own connection must present
+> the same certificate itself, or the resource refuses it — or use
+> `establish()` / `authorize()` instead. `getTokens()` does renew a token bound
+> to another certificate than the pinned one (above); it never checks the
+> token it returns against a connection it does not own.
 
 > **The opaque-token limit.** A provider learns a binding only from the token
 > itself; it does not introspect. An **opaque** token bound to a certificate
@@ -764,9 +824,12 @@ client is outside the ABAP system's `xsappname`. See
 |---|---|---|
 | material without a PFX or without both certificate and key | the client certificate is incomplete | give a PFX, or a certificate together with its key |
 | material no TLS context accepts | the client certificate could not be used | check the certificate, the key and the passphrase, and that a PFX uses current encryption (not legacy RC2) |
+| a client certificate past its `notAfter`, when pinned or before a request or logon presents it | the client certificate has expired | renew the certificate; a token provider pins its certificate for life, so give the renewed one to a new provider |
 | a signing key that is not a private key of the algorithm | the client signing key could not be used | check the private key and that it matches the algorithm |
 | a strategy's result that cannot be sent | the client authentication returned a request that cannot be sent | check the client authentication strategy |
-| a token bound to a certificate this provider does not present | the token is bound to a client certificate this provider does not present | configure the certificate the token was issued for, or obtain a new token |
+| a bound token held, and no certificate pinned | the token is bound to a client certificate this provider does not present | give the provider a clientAuthentication that presents the certificate the token was issued for |
+| a token renewed because it was bound to another certificate, and the new one is bound elsewhere too | the new token is bound to a client certificate this provider does not present | the authorization server bound the new token to another certificate: check the certificate registered for this client |
+| the server refused the client certificate in the handshake | `<what>` failed: the server refused the client certificate (`<code>`) | check that the server trusts the certificate’s issuer and that the certificate is valid and not revoked |
 
 ### SSO Providers
 

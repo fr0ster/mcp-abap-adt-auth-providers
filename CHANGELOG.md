@@ -11,8 +11,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 A token provider's client can authenticate with a client certificate or a
 signed assertion instead of a secret, and a token bound to that certificate is
-presented only together with it. Nothing changes for a consumer that passes no
-strategy. See *Client authentication* in the README.
+presented only together with it. A consumer that passes no strategy sends the
+same requests as before; two things change for it too, listed under *Changed*
+(a seeded token carrying `cnf`, and the class of a thrown token-request error).
+See *Client authentication* in the README.
 
 Requires `@mcp-abap-adt/interfaces-auth` `^3.1.0` (was `^3.0.0`), which adds
 `IClientAuthentication`, `ITokenRequestDraft`, `ITokenRequestAuthentication`
@@ -27,7 +29,9 @@ and the error codes `CERTIFICATE_MATERIAL_ERROR` and
   `tlsClientCertificate({ material, endpoint? })` (`tls_client_auth`: the
   request goes over mTLS to `endpoint`, else the server's mTLS alias, else the
   configured endpoint; `material` is the certificate or a loader, read and
-  checked once, a failed load retried) and
+  checked once, a failed load retried; `endpoint` replaces the URL of every
+  request, so the device flow should rely on discovery's
+  `mtls_endpoint_aliases` instead) and
   `privateKeyJwt({ key, algorithm, keyId?, audience? })` (RS256 or ES256
   through `node:crypto`; a 60-second assertion whose `aud` is `audience`, else
   the endpoint the request goes to). A consumer may write its own.
@@ -46,8 +50,13 @@ and the error codes `CERTIFICATE_MATERIAL_ERROR` and
 - **One certificate per provider, pinned.** A provider reads its strategy's
   `tlsMaterial()` once, before its first request or logon, checks it, takes
   the `x5t#S256` thumbprint of its leaf certificate, and keeps a copy for its
-  lifetime; every token request, refresh and logon uses it. A rotated
-  certificate is a new provider instance.
+  lifetime; every token request, refresh and logon uses it — the logon target
+  gets a copy each time, so a target changing it changes nothing later. A
+  rotated certificate is a new provider instance. A certificate past its
+  `notAfter` is refused — when pinned, and before every token request and
+  logon that presents it — as "the client certificate has expired", nothing
+  sent and a refresh token kept; `CertificateAuthProvider` checks the same in
+  `prepare()` and before each logon.
 - **The binding check.** Before presenting a token, `establish()` and
   `authorize()` read its binding: a JWT with `cnf` (bound) is presented only
   with the pinned certificate of that thumbprint, else Oops "the token is
@@ -59,18 +68,40 @@ and the error codes `CERTIFICATE_MATERIAL_ERROR` and
   are checked like obtained ones. An opaque token bound to a certificate needs
   the certificate strategy configured: without it the provider cannot know
   the binding.
+- **A token bound to the previous certificate is renewed, not refused.** When
+  a certificate is pinned and the held token is bound to another thumbprint
+  (or its `cnf` names none readably) — a token restored after a rotation —
+  `getTokens()` and `authorize()` renew it once through the pinned certificate
+  (refresh, else one login), like an expired token, and check the new one;
+  only a new token still bound elsewhere is refused, as "the new token is bound
+  to a client certificate this provider does not present". With no
+  certificate pinned, `getTokens()` returns a bound token as before and
+  `establish()` / `authorize()` refuse it.
+- **Only `establish()` and `authorize()` present the certificate.**
+  `getTokens()` and `refreshTokens()` — the token API the broker uses — return
+  a token that may be bound to the certificate; a consumer sending it on its
+  own connection must present the same certificate itself, or use the
+  `IAuthProvider` methods.
 - **mTLS endpoint aliases** (RFC 8705 §5): an OIDC provider that discovers an
   endpoint hands the strategy the server's `mtls_endpoint_aliases` entry for it
   (`token_endpoint`, `device_authorization_endpoint`).
-- **Error classes** `CertificateMaterialError` (carries `incomplete`),
+- **Error classes** `CertificateMaterialError` (carries `incomplete` and
+  `expired`),
   `ClientAuthenticationError` (an unusable signing key) and
   `ClientAuthenticationResultError` (a strategy result that cannot be sent),
   each with a fixed message and fixed refusal words. `CertificateAuthProvider`
   and `tlsClientCertificate` share one material check, and its refusals.
-- **A server certificate Node does not trust** is refused naming its code
-  (`SELF_SIGNED_CERT_IN_CHAIN`, …) and, in the hint, `NODE_EXTRA_CA_CERTS` —
-  how a private CA is trusted; there is no `ca` option and
-  `rejectUnauthorized` is never set.
+- **A TLS failure is refused naming its code, in words fixed per kind.** A
+  server certificate Node does not trust (`SELF_SIGNED_CERT_IN_CHAIN`, …) gets
+  the hint `NODE_EXTRA_CA_CERTS` — how a private CA is trusted; there is no
+  `ca` option and `rejectUnauthorized` is never set. An expired server
+  certificate (`CERT_HAS_EXPIRED`) and a host name it does not name
+  (`ERR_TLS_CERT_ALTNAME_INVALID`) get their own words and hints. The alerts a
+  server sends when it refuses the client certificate
+  (`ERR_SSL_TLSV13_ALERT_CERTIFICATE_REQUIRED`,
+  `ERR_SSL_TLSV1_ALERT_UNKNOWN_CA`, `ERR_SSL_SSL/TLS_ALERT_…` and the older
+  `ERR_SSL_SSLV3_ALERT_…` for a bad, unknown, expired, revoked or unsupported
+  certificate) are refused as "the server refused the client certificate".
 - **Stand checks** (`npm run test:stand`): Keycloak gains HTTPS
   (`KEYCLOAK_HTTPS_PORT`, default 8444, loopback) with throwaway TLS fixtures
   in `tests/stand/keycloak/tls/`, trusted by the suites through
@@ -89,6 +120,14 @@ and the error codes `CERTIFICATE_MATERIAL_ERROR` and
 
 ### Changed
 
+- **A token provider without a strategy refuses a seeded or restored JWT that
+  carries `cnf`** ("the token is bound to a client certificate this provider
+  does not present") in `establish()` and `authorize()`; it used to send it as
+  a Bearer. `TokenAuthProvider.fixed()` still sends such a token unchecked.
+- **A thrown token-request error is a plain `Error`**, with or without a
+  strategy: `instanceof AxiosError` is false, and `response.headers`,
+  `config` and `request` are gone (message, `code`, `isAxiosError`, `status`
+  and the reduced `response.data` stay).
 - **A thrown token-request error carries no request**, with or without a
   strategy: no form body, no `Authorization` header, no TLS agent with a key,
   PFX or passphrase. It keeps its message, code and status, and the server's
