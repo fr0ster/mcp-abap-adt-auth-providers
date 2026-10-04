@@ -152,11 +152,17 @@ Measured 2026-10-04: the thumbprint of the leaf certificate equals the
 `TLSSocket` over the material's secure context and equals the PEM one.
 
 **The binding check, in every branch.** Before the provider presents or sends
-a token — `establish()` and `authorize()` — it reads the token's binding:
-`cnf["x5t#S256"]` from a JWT payload; an opaque token, or a JWT without
-`cnf`, is unbound. This covers a token the provider obtained and a token it
-was seeded with (`accessToken` in the configuration, or one restored by a
-store).
+a token — `establish()` and `authorize()` — it reads what the token says about
+its binding. Three states, not two:
+
+- **bound** — a JWT whose payload carries `cnf["x5t#S256"]`;
+- **unbound** — a JWT whose payload carries no `cnf`;
+- **unknown** — anything else, an opaque token above all. Its binding may live
+  only on the server and reach the resource through introspection
+  (RFC 8705 §3.2), so the token itself cannot say.
+
+This covers a token the provider obtained and a token it was seeded with
+(`accessToken` in the configuration, or one restored by a store).
 
 | Token | Pinned material | `establish(logon)` | `authorize(request)` |
 |---|---|---|---|
@@ -164,6 +170,18 @@ store).
 | unbound | yes | `logon.tlsMaterial(pinned)`: Ok → Ok; Oops → Ok (the Bearer carries it) | Bearer, Ok |
 | bound | equal thumbprint | `logon.tlsMaterial(pinned)`: Ok → Ok; Oops (RFC) → that Oops (rule 4) | Bearer, Ok |
 | bound | none, or another thumbprint | Oops, nothing presented | Oops, no header written |
+| unknown | yes | `logon.tlsMaterial(pinned)`: Ok → Ok; Oops (RFC) → that Oops — treated as bound, fail closed | Bearer, Ok |
+| unknown | none | nothing presented, Ok | Bearer, Ok |
+
+**Unknown with pinned material is treated as bound:** a token obtained over
+mTLS may be bound without saying so, so it is never sent on a connection
+that cannot carry its certificate. **Unknown without pinned material** goes
+out as a Bearer, as today: the provider has no certificate to present and no
+way to learn the binding (it does not introspect — that needs credentials
+for the resource server's side, not the client's). If the token is bound,
+the resource answers `401` and `rejected()` handles it as any refused
+credential. This limit is documented in the README, not hidden: an opaque
+token bound to a certificate needs the certificate strategy configured.
 
 The refusal for the last row is fixed words: `'the token is bound to a
 client certificate this provider does not present'`, hint `'configure the
@@ -231,7 +249,7 @@ to none.
 | unit, per site | without a strategy the request is byte-for-byte today's (§3 table) |
 | unit, per strategy | what each sends; `tlsClientCertificate` endpoint order; `privateKeyJwt` claims and signature verify with the public key; unusable material/key → the fixed refusal, nothing secret in it |
 | unit, providers | a strategy reaches every request of each provider, refresh included; `clientSecret` + strategy is a `ValidationError` |
-| unit, `establish()` / `authorize()` | every row of §4's table, a seeded bound `accessToken` without a strategy and with a different certificate included; a strategy answering A then B is called once and the provider keeps presenting A |
+| unit, `establish()` / `authorize()` | every row of §4's table — a seeded bound `accessToken` without a strategy and with a different certificate, an opaque token with pinned material on a wire that refuses TLS material (Oops), and an opaque token without material (Bearer) included; a strategy answering A then B is called once and the provider keeps presenting A |
 | stand, Keycloak | `ClientCredentialsProvider` + `tlsClientCertificate` → bound token; userinfo with the material from `establish()` → 200, none → 401, `client-b` → 401; token request with `client-b` → refused; `OidcPasswordProvider` + mTLS → refresh stays bound; `privateKeyJwt` → token |
 | stand, UAA | `ClientCredentialsProvider` + `privateKeyJwt` → token |
 | stand, part A | §6 |
