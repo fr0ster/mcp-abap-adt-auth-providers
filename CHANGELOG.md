@@ -77,7 +77,11 @@ and the error codes `CERTIFICATE_MATERIAL_ERROR` and
   only a new token still bound elsewhere is refused by `authorize()`, as "the
   new token is bound to a client certificate this provider does not present"
   — and remembered: later attempts do not renew it again (no token request, no
-  login per request); `getTokens()` returns it, `authorize()` refuses it. The
+  login per request); `getTokens()` returns it, `authorize()` refuses it. A
+  renewal that throws is remembered too: that attempt gets the renewal's own
+  refusal, later ones refuse the held token as "the token is bound to a client
+  certificate this provider does not present" without a token request or a
+  login, until the token changes. In both cases the
   next `prepare()` renews once more; `rejected()` renews once more when the
   refused token is the one held, and answers Ok without a renewal when the
   refused token was already superseded (rule 6, as before). With no

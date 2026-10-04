@@ -614,6 +614,147 @@ describe('a held token bound to another certificate, one pinned: renewed like an
     expect(requests).toHaveLength(2);
   });
 
+  /** Every request to the token endpoint is refused: refresh and login both fail. */
+  function refusingAll() {
+    mockedAxios.mockImplementation(async (config: any) => {
+      requests.push({
+        grant: new URLSearchParams(config.data).get('grant_type'),
+        cert: config.httpsAgent?.options?.cert,
+      });
+      throw Object.assign(new Error('refused'), {
+        isAxiosError: true,
+        response: { status: 400, data: { error: 'invalid_grant' } },
+      });
+    });
+  }
+
+  it.each([
+    [
+      'with a refresh token',
+      { refreshToken: 'R1' },
+      ['refresh_token', 'password'],
+    ],
+    ['without a refresh token', {}, ['password']],
+  ])(
+    'a renewal that throws, %s, is remembered too: later authorize() calls refuse without a token request or a login',
+    async (_label, options, firstRenewal) => {
+      refusingAll();
+      const { provider } = rotating(options);
+      const t = recordingTargets();
+      const first = await provider.authorize(t.requestTarget);
+      expect(first.ok).toBe(false);
+      expect(requests.map((r) => r.grant)).toEqual(firstRenewal);
+      for (let i = 0; i < 2; i += 1) {
+        await expect(provider.authorize(t.requestTarget)).resolves.toEqual(
+          REFUSAL,
+        );
+      }
+      expect(requests.map((r) => r.grant)).toEqual(firstRenewal);
+      expect(t.request.headers).toEqual({});
+    },
+  );
+
+  it('after a renewal that threw, rejected() tries exactly once more, and the mark holds again', async () => {
+    refusingAll();
+    const { provider } = rotating({ refreshToken: 'R1' });
+    const t = recordingTargets();
+    await provider.authorize(t.requestTarget);
+    await provider.authorize(t.requestTarget);
+    expect(requests).toHaveLength(2);
+    const outcome = await provider.rejected({
+      at: 'request',
+      status: 401,
+      error: undefined,
+    });
+    expect(outcome.ok).toBe(false);
+    // The refresh token was spent by the first refusal: one login, once.
+    expect(requests.map((r) => r.grant)).toEqual([
+      'refresh_token',
+      'password',
+      'password',
+    ]);
+    await expect(provider.authorize(t.requestTarget)).resolves.toEqual(REFUSAL);
+    expect(requests).toHaveLength(3);
+  });
+
+  it('after a renewal that threw, prepare() tries exactly once more', async () => {
+    refusingAll();
+    const { provider } = rotating({ refreshToken: 'R1' });
+    const t = recordingTargets();
+    await provider.authorize(t.requestTarget);
+    await provider.authorize(t.requestTarget);
+    expect(requests).toHaveLength(2);
+    expect((await provider.prepare()).ok).toBe(false);
+    expect(requests.map((r) => r.grant)).toEqual([
+      'refresh_token',
+      'password',
+      'password',
+    ]);
+    await expect(provider.authorize(t.requestTarget)).resolves.toEqual(REFUSAL);
+    expect(requests).toHaveLength(3);
+  });
+
+  it('after a renewal that threw, a new token held clears the mark', async () => {
+    refusingAll();
+    const { provider } = rotating({ refreshToken: 'R1' });
+    const t = recordingTargets();
+    await provider.authorize(t.requestTarget);
+    expect(requests).toHaveLength(2);
+    const fresh = boundTo(THUMB_A);
+    (
+      provider as unknown as { authorizationToken?: string }
+    ).authorizationToken = fresh;
+    await expect(provider.authorize(t.requestTarget)).resolves.toEqual({
+      ok: true,
+    });
+    expect(t.request.headers.Authorization).toBe(`Bearer ${fresh}`);
+    expect(requests).toHaveLength(2);
+  });
+
+  it.each([
+    ['with a refresh token', { refreshToken: 'R1' }, ['refresh_token']],
+    ['without a refresh token', {}, ['password']],
+  ])(
+    'two authorize() calls racing the first renewal, %s: exactly one token request',
+    async (_label, options, expected) => {
+      const renewed = boundTo(THUMB_A);
+      mockedAxios.mockImplementation(async (config: any) => {
+        requests.push({
+          grant: new URLSearchParams(config.data).get('grant_type'),
+          cert: config.httpsAgent?.options?.cert,
+        });
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        return { data: { access_token: renewed, expires_in: 3600 } };
+      });
+      const { provider } = rotating(options);
+      const a = recordingTargets();
+      const b = recordingTargets();
+      const outcomes = await Promise.all([
+        provider.authorize(a.requestTarget),
+        provider.authorize(b.requestTarget),
+      ]);
+      expect(outcomes).toEqual([{ ok: true }, { ok: true }]);
+      expect(requests.map((r) => r.grant)).toEqual(expected);
+      expect(a.request.headers.Authorization).toBe(`Bearer ${renewed}`);
+      expect(b.request.headers.Authorization).toBe(`Bearer ${renewed}`);
+    },
+  );
+
+  it('two authorize() calls racing a first renewal that throws: one refresh and one login, both refused, later calls make none', async () => {
+    refusingAll();
+    const { provider } = rotating({ refreshToken: 'R1' });
+    const a = recordingTargets();
+    const b = recordingTargets();
+    const outcomes = await Promise.all([
+      provider.authorize(a.requestTarget),
+      provider.authorize(b.requestTarget),
+    ]);
+    expect(outcomes.map((o) => o.ok)).toEqual([false, false]);
+    expect(requests.map((r) => r.grant)).toEqual(['refresh_token', 'password']);
+    await expect(provider.authorize(a.requestTarget)).resolves.toEqual(REFUSAL);
+    expect(requests).toHaveLength(2);
+  });
+
   it('prepare() clears the mark: one more renewal per connect', async () => {
     issuing(boundTo(THUMB_B, 3600), boundTo(THUMB_B, 3700));
     const { provider } = rotating({ refreshToken: 'R1' });
