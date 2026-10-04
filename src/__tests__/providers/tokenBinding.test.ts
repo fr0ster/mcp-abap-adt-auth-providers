@@ -422,6 +422,38 @@ describe('establish decides on the token held, never fetching one', () => {
     });
   });
 
+  it('a valid token bound elsewhere, while a renewal is in flight: unknown — the pinned material presented, not refused', async () => {
+    let answer: (value: unknown) => void = () => {};
+    const pending = new Promise((resolve) => {
+      answer = resolve;
+    });
+    mockedAxios.mockImplementation(() => pending);
+    mockedAxios.post.mockImplementation(() => pending);
+    const { strategy } = strategyWith(A);
+    const provider = new OidcPasswordProvider({
+      clientId: 'client',
+      username: 'user',
+      password: 'pw',
+      tokenEndpoint: 'https://idp.example/token',
+      accessToken: boundTo(THUMB_B),
+      refreshToken: 'R1',
+      clientAuthentication: strategy,
+    });
+    const renewal = provider.refreshTokens().catch(() => undefined);
+    // The refresh request is out and unanswered.
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(
+      mockedAxios.mock.calls.length + mockedAxios.post.mock.calls.length,
+    ).toBe(1);
+    const t = recordingTargets();
+    await expect(provider.establish(t.logonTarget)).resolves.toEqual({
+      ok: true,
+    });
+    expect(certificateThumbprint(t.logon.tls[0])).toBe(THUMB_A);
+    answer({ data: { access_token: boundTo(THUMB_A), expires_in: 3600 } });
+    await renewal;
+  });
+
   it('an expired token bound to another certificate is not refused at logon: the renewal will be bound to the pinned one', async () => {
     const { provider } = seeded(boundTo(THUMB_B, -3600), A);
     const t = recordingTargets();
