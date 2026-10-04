@@ -5,12 +5,34 @@
  * outright.
  */
 
-import { describe, expect, it } from '@jest/globals';
-import type { IAssertionValidator } from '@mcp-abap-adt/interfaces-auth';
+import { generateKeyPairSync } from 'node:crypto';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { beforeEach, describe, expect, it, jest } from '@jest/globals';
+import type {
+  IAssertionValidator,
+  ICertificateMaterial,
+  IClientAuthentication,
+} from '@mcp-abap-adt/interfaces-auth';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
+import axios from 'axios';
+import {
+  clientSecretBasic,
+  clientSecretPost,
+  privateKeyJwt,
+  tlsClientCertificate,
+} from '../../clientAuthentication';
 import { AuthorizationCodeProvider } from '../../providers/AuthorizationCodeProvider';
 import { Saml2PureProvider } from '../../providers/Saml2PureProvider';
 import { staticCodeStrategy } from '../../strategies';
+import { SITES, tokenReply } from '../helpers/tokenRequestSites';
+
+jest.mock('axios');
+type Mock = jest.Mock<(...args: any[]) => Promise<unknown>>;
+const mockedAxios = axios as unknown as Mock & {
+  post: Mock;
+  isAxiosError: jest.Mock<(e: unknown) => boolean>;
+};
 
 const b64url = (value: object) =>
   Buffer.from(JSON.stringify(value)).toString('base64url');
@@ -106,5 +128,141 @@ describe('no token in the logs', () => {
         expect(all).not.toContain(window);
       }
     }
+  });
+});
+
+describe('no secret of a client authentication in the logs', () => {
+  const dir = join(__dirname, '..', 'fixtures', 'certificates');
+  const PASSPHRASE = 'test-passphrase';
+  const SECRET = 'Zq8vK2pX9wLm4rT7nB3c';
+  const signingKey = generateKeyPairSync('rsa', { modulusLength: 2048 })
+    .privateKey.export({ type: 'pkcs8', format: 'pem' })
+    .toString();
+  const pemPair: ICertificateMaterial = {
+    cert: readFileSync(join(dir, 'client.crt')),
+    key: readFileSync(join(dir, 'client-encrypted.key')),
+    passphrase: PASSPHRASE,
+  };
+  const pfx: ICertificateMaterial = {
+    pfx: readFileSync(join(dir, 'client.pfx')),
+    passphrase: PASSPHRASE,
+  };
+
+  /** The base64 body of a PEM, or of DER bytes: what a leak would show. */
+  const body = (value: string | Buffer | undefined): string =>
+    value === undefined
+      ? ''
+      : Buffer.isBuffer(value) && !value.toString().includes('-----BEGIN')
+        ? value.toString('base64')
+        : value
+            .toString()
+            .replace(/-----[^-]+-----/g, '')
+            .replace(/\s+/g, '');
+  const longWindows = (secret: string) =>
+    Array.from({ length: Math.max(0, secret.length - 15) }, (_, i) =>
+      secret.slice(i, i + 16),
+    );
+
+  /** Every value a strategy sent in a body or a header, recorded as it left. */
+  const recordedFrom = (strategy: IClientAuthentication, seen: string[]) => ({
+    ...strategy,
+    authenticate: async (
+      draft: Parameters<IClientAuthentication['authenticate']>[0],
+    ) => {
+      const result = await strategy.authenticate(draft);
+      for (const record of [result.parameters, result.headers]) {
+        for (const [name, value] of Object.entries(record ?? {})) {
+          if (name !== 'client_id' && name !== 'client_assertion_type') {
+            seen.push(value);
+          }
+        }
+      }
+      return result;
+    },
+  });
+
+  const STRATEGIES: [
+    string,
+    () => IClientAuthentication,
+    ICertificateMaterial?,
+  ][] = [
+    ['clientSecretBasic', () => clientSecretBasic(SECRET)],
+    ['clientSecretPost', () => clientSecretPost(SECRET)],
+    [
+      'privateKeyJwt',
+      () => privateKeyJwt({ key: signingKey, algorithm: 'RS256' }),
+    ],
+    [
+      'tlsClientCertificate (PEM, encrypted key)',
+      () => tlsClientCertificate({ material: pemPair }),
+      pemPair,
+    ],
+    [
+      'tlsClientCertificate (PFX)',
+      () => tlsClientCertificate({ material: pfx }),
+      pfx,
+    ],
+  ];
+
+  beforeEach(() => {
+    jest.resetAllMocks();
+    mockedAxios.isAxiosError.mockImplementation(
+      (e) => !!(e as { isAxiosError?: boolean } | null)?.isAxiosError,
+    );
+  });
+
+  describe.each(STRATEGIES)('%s', (_name, make, material) => {
+    it.each(SITES.map((site) => [site.name, site] as const))(
+      '%s: neither on success nor in a failure whose body echoes what was sent',
+      async (_site, site) => {
+        const sent: string[] = [];
+        const { logger, lines } = recordingLogger();
+        const auth = { strategy: recordedFrom(make(), sent), material };
+
+        mockedAxios.mockResolvedValue(tokenReply);
+        await site.run(auth, logger);
+
+        // The server echoes what this request sent, not an earlier one.
+        const before = sent.length;
+        mockedAxios.mockImplementation(async () => {
+          const echoed = sent.slice(before).join(' ');
+          throw {
+            isAxiosError: true,
+            message: 'Request failed with status code 400',
+            response: {
+              status: 400,
+              data: {
+                error: `invalid_client ${echoed}`,
+                error_description: echoed,
+              },
+            },
+          };
+        });
+        let message = '';
+        try {
+          await site.run(auth, logger);
+        } catch (error) {
+          message = String((error as { message?: unknown }).message ?? error);
+        }
+
+        expect(sent.length > 0 || material !== undefined).toBe(true);
+        const all = `${lines.join('\n')}\n${message}`;
+        for (const secret of [SECRET, PASSPHRASE, ...sent]) {
+          for (const window of windows(secret)) {
+            expect(all).not.toContain(window);
+          }
+        }
+        for (const bytes of [
+          signingKey,
+          body(material?.cert),
+          body(material?.key),
+          body(material?.pfx),
+        ]) {
+          for (const window of longWindows(body(bytes))) {
+            expect(all).not.toContain(window);
+          }
+        }
+      },
+    );
   });
 });
