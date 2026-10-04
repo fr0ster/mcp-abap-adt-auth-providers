@@ -77,7 +77,10 @@ refused or accepted at the TLS level exactly as configured.
    `clientSecret`, no client authentication — stays a supported composition,
    not an error and not a new mandatory collaborator.
 4. **The server certificate is always verified** on every token request,
-   whatever the client presents; trusting a private CA is an explicit `ca`.
+   whatever the client presents — `rejectUnauthorized` is never set. A
+   private CA is trusted the way Node does it, explicitly and process-wide:
+   `NODE_EXTRA_CA_CERTS`, which adds to Node's store rather than replacing it;
+   no per-provider `ca` option in this change.
 5. **No key material reaches a log line**, as no token does today.
 6. **A bound token travels with its certificate.** A provider that obtains a
    certificate-bound token presents that certificate on every connection the
