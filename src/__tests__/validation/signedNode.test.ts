@@ -125,6 +125,23 @@ describe('resolveSignedElements', () => {
     expect(() => toPem('AAAA')).toThrow(/not a valid X.509 certificate/i);
   });
 
+  it("says so in fixed words; OpenSSL's text is only the cause", () => {
+    let thrown: (Error & { cause?: unknown }) | undefined;
+    try {
+      toPem('AAAA');
+    } catch (error) {
+      thrown = error as Error & { cause?: unknown };
+    }
+    expect(thrown?.message).toBe(
+      'a configured certificate is not a valid X.509 certificate',
+    );
+    expect(String(thrown)).not.toMatch(/asn1|routines/i);
+    // Node's error comes from another realm under Jest: read, not instanceof.
+    expect((thrown?.cause as Error | undefined)?.message).toMatch(
+      /asn1|routines|wrong tag/i,
+    );
+  });
+
   it('accepts a certificate later in the rotation list', () => {
     const other = generateKeyMaterial();
     const key = generateKeyMaterial();

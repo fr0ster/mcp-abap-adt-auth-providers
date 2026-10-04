@@ -7,7 +7,12 @@ import type {
   ICallbackServerHandle,
   ICallbackServerOptions,
 } from '@mcp-abap-adt/interfaces-auth';
-import { runCallbackScope } from './callbackServer';
+import {
+  errorHtml,
+  runCallbackScope,
+  sendHtml,
+  sendText,
+} from './callbackServer';
 
 export interface OidcCallbackResult {
   code: string;
@@ -31,7 +36,8 @@ export const withOidcCallbackServer: CallbackServerFactory<
           const message = error_description
             ? `${String(error)}: ${String(error_description)}`
             : String(error);
-          res.status(400).send(`Authentication failed: ${message}`);
+          // The IdP's text is attacker-controllable: escaped in an HTML page.
+          sendHtml(res, 400, errorHtml(message));
           settle.err(
             new Error(
               `OIDC authentication failed: ${message}` +
@@ -45,14 +51,16 @@ export const withOidcCallbackServer: CallbackServerFactory<
         const code = req.query.code;
         const state = req.query.state;
         if (!code || typeof code !== 'string') {
-          res.status(400).send('Error: not an authorization callback');
+          sendText(res, 400, 'Error: not an authorization callback');
           settle.ignore('no code and no error in query', res);
           return;
         }
 
-        res
-          .status(200)
-          .send('Authentication complete. You can close this window.');
+        sendText(
+          res,
+          200,
+          'Authentication complete. You can close this window.',
+        );
         settle.ok(
           { code, state: typeof state === 'string' ? state : undefined },
           res,

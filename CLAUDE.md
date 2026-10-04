@@ -209,6 +209,7 @@ A SAML provider validates the payload before anything else uses it — `Saml2Bea
 
 - `port: 0` binds an ephemeral port; `handle.port` and `handle.redirectUri` report what the OS gave. Not usable where the redirect is registered with the identity provider, as a SAML ACS always is.
 - The default port is **61001** — above Linux's `ip_local_port_range` (32768–60999) and clear of the 3001/3333 range application servers use. The default login timeout is 30 s.
+- **Every page is safe to render.** A value interpolated into a page goes through `escapeHtml` (the IdP's `error` / `error_description` are attacker-controllable query parameters); pages go out through `sendHtml` (`text/html; charset=utf-8`), short answers through `sendText` (`text/plain`); a middleware sets `X-Content-Type-Options: nosniff` and a CSP of `default-src 'none'` (inline style and a same-origin form only) on every response (`callbackPages.test.ts`).
 - A `/callback` carrying neither a payload nor an explicit error is answered `400`, counted, and **ignored** — the login keeps waiting, bounded by the timeout, whose message reports how many such requests arrived. An explicit `error=` from the provider still ends the login at once.
 
 ## Testing

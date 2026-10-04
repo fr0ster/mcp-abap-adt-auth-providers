@@ -10,7 +10,7 @@ import type {
   ICallbackServerOptions,
 } from '@mcp-abap-adt/interfaces-auth';
 import express from 'express';
-import { runCallbackScope } from './callbackServer';
+import { runCallbackScope, sendText } from './callbackServer';
 
 export interface Saml2AuthConfig {
   idpSsoUrl: string;
@@ -87,13 +87,15 @@ export const withSamlCallbackServer: CallbackServerFactory<string> = <TReturn>(
         // The response is decided after the payload is examined. Answering 200
         // first told a request that carried nothing that it had authenticated.
         if (typeof samlResponse === 'string' && samlResponse) {
-          res
-            .status(200)
-            .send('SAML authentication complete. You can close this window.');
+          sendText(
+            res,
+            200,
+            'SAML authentication complete. You can close this window.',
+          );
           settle.ok(samlResponse, res);
           return;
         }
-        res.status(400).send('Error: not a SAML assertion callback');
+        sendText(res, 400, 'Error: not a SAML assertion callback');
         settle.ignore('no SAMLResponse in the request', res);
       };
 

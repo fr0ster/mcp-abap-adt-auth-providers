@@ -52,8 +52,13 @@ export function toPem(certificate: string): string {
   try {
     new X509Certificate(pem);
   } catch (error) {
+    // Fixed words: OpenSSL's text is not this package's to repeat, and
+    // whoever catches this logs the message. The original is the cause.
     throw new Error(
-      `a configured certificate is not a valid X.509 certificate: ${(error as Error).message}`,
+      'a configured certificate is not a valid X.509 certificate',
+      {
+        cause: error,
+      },
     );
   }
   return pem;

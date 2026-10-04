@@ -248,7 +248,20 @@ and `CLIENT_AUTHENTICATION_ERROR`.
   error)` and the original is `cause`. A redirect or ACS mismatch found while
   building the authorization URL, and a missing OIDC authorization endpoint,
   are now `ValidationError`s (same words), so they pass through unchanged.
-  `EADDRINUSE` joins the allowlisted system codes.
+  `EADDRINUSE` joins the allowlisted system codes. A configured IdP
+  certificate that is not X.509 is refused as `a configured certificate is
+  not a valid X.509 certificate`, OpenSSL's text only in `cause`.
+- **The local callback pages no longer reflect HTML.** The IdP's `error` and
+  `error_description` — query parameters anyone can put in a link to the
+  callback — were written into the UAA error page unescaped, and the OIDC
+  callback answered them as an HTML body: a reflected HTML/script injection
+  on `localhost`. Every value a page interpolates is now escaped (`&`, `<`,
+  `>`, `"`, `'`); the OIDC refusal uses the same escaped page; the short
+  answers (OIDC and SAML success, a stray request) are `text/plain`. Every
+  response of the callback server carries `X-Content-Type-Options: nosniff`
+  and `Content-Security-Policy: default-src 'none'; style-src
+  'unsafe-inline'; form-action 'self'; base-uri 'none'; frame-ancestors
+  'none'`, and its pages `Content-Type: text/html; charset=utf-8`.
 
 ## [5.2.3] - 2026-10-04
 
