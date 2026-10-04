@@ -194,6 +194,7 @@ describe('the strategy reaches every request a provider sends', () => {
     expect(drafts).toEqual([
       {
         endpoint: 'https://uaa/oauth/token',
+        tokenEndpoint: 'https://uaa/oauth/token',
         clientId: 'cid',
         grantType: 'client_credentials',
       },
@@ -839,6 +840,42 @@ describe('OIDC discovery: mtls_endpoint_aliases', () => {
         'https://mtls.idp/token',
       ],
     ]);
+  });
+
+  it('the device initiation names the discovered token endpoint, not its mTLS alias, as tokenEndpoint', async () => {
+    const issuer = issuerWith({
+      mtls_endpoint_aliases: {
+        token_endpoint: 'https://mtls.idp/token',
+        device_authorization_endpoint: 'https://mtls.idp/device',
+      },
+    });
+    const { strategy, drafts } = recording();
+    await new OidcDeviceFlowProvider({
+      issuerUrl: issuer,
+      clientId: 'cid',
+      presenter: { present: async () => {} },
+      clientAuthentication: strategy,
+    }).getTokens();
+    expect(drafts.map((d) => [d.grantType, d.tokenEndpoint])).toEqual([
+      ['device_authorization', `${issuer}/token`],
+      ['urn:ietf:params:oauth:grant-type:device_code', `${issuer}/token`],
+    ]);
+  });
+
+  it('the device initiation names a configured token endpoint as tokenEndpoint', async () => {
+    const { strategy, drafts } = recording();
+    await new OidcDeviceFlowProvider({
+      clientId: 'cid',
+      tokenEndpoint: 'https://own/token',
+      deviceAuthorizationEndpoint: 'https://own/device',
+      presenter: { present: async () => {} },
+      clientAuthentication: strategy,
+    }).getTokens();
+    expect(drafts[0]).toMatchObject({
+      grantType: 'device_authorization',
+      endpoint: 'https://own/device',
+      tokenEndpoint: 'https://own/token',
+    });
   });
 
   it('OidcBrowserProvider and OidcTokenExchangeProvider use the token alias', async () => {

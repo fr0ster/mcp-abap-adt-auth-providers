@@ -52,6 +52,12 @@ export interface TokenRequestAuth {
   readonly notAfter?: number;
   /** The server's mTLS alias of this request's endpoint (RFC 8705 §5), when it published one. */
   readonly mtlsEndpoint?: string;
+  /**
+   * The authorization server's plain token endpoint (never its mTLS alias),
+   * for the device initiation, whose request goes elsewhere. A token request
+   * names its own endpoint; this is not read for one.
+   */
+  readonly tokenEndpoint?: string;
 }
 
 /** One request, before the client is authenticated. */
@@ -171,19 +177,22 @@ export async function prepareTokenRequest(
   if (auth.material && auth.notAfter !== undefined) {
     assertNotExpired(auth.notAfter);
   }
-  const draft: ITokenRequestDraft =
-    auth.mtlsEndpoint === undefined
-      ? {
-          endpoint: grant.endpoint,
-          clientId: grant.clientId,
-          grantType: grant.grantType,
-        }
-      : {
-          endpoint: grant.endpoint,
-          mtlsEndpoint: auth.mtlsEndpoint,
-          clientId: grant.clientId,
-          grantType: grant.grantType,
-        };
+  // The token endpoint a client assertion names as its audience (RFC 7523):
+  // a token request's own endpoint; for the device initiation, the one the
+  // provider gave — never the device endpoint, which Keycloak refuses as aud.
+  const tokenEndpoint =
+    grant.grantType === 'device_authorization'
+      ? auth.tokenEndpoint
+      : grant.endpoint;
+  const draft: ITokenRequestDraft = {
+    endpoint: grant.endpoint,
+    ...(auth.mtlsEndpoint === undefined
+      ? {}
+      : { mtlsEndpoint: auth.mtlsEndpoint }),
+    ...(tokenEndpoint === undefined ? {} : { tokenEndpoint }),
+    clientId: grant.clientId,
+    grantType: grant.grantType,
+  };
   const result: ITokenRequestAuthentication | null | undefined =
     await auth.strategy.authenticate(draft);
   if (!result || typeof result !== 'object') unusable();

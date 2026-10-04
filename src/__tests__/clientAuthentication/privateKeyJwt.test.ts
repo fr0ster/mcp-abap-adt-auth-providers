@@ -1,5 +1,6 @@
 import { generateKeyPairSync, type KeyObject, verify } from 'node:crypto';
 import { describe, expect, it } from '@jest/globals';
+import type { ITokenRequestDraft } from '@mcp-abap-adt/interfaces-auth';
 import { refusalFrom } from '../../auth/refusal';
 import { privateKeyJwt } from '../../clientAuthentication';
 import { ClientAuthenticationError } from '../../errors/ClientAuthenticationError';
@@ -28,7 +29,7 @@ function parts(jwt: string) {
 
 async function assertion(
   config: Parameters<typeof privateKeyJwt>[0],
-  d = draft,
+  d: ITokenRequestDraft = draft,
 ) {
   const sent = await privateKeyJwt(config).authenticate(d);
   return { sent, jwt: sent.parameters?.client_assertion as string };
@@ -73,6 +74,28 @@ describe('privateKeyJwt — claims and header', () => {
     expect(Object.keys(claims).sort()).toEqual(
       ['aud', 'exp', 'iat', 'iss', 'jti', 'sub'].sort(),
     );
+  });
+  it('aud is the draft tokenEndpoint when there is one and no audience — not the endpoint', async () => {
+    const { jwt } = await assertion(
+      { key: rsa.privateKey, algorithm: 'RS256' },
+      {
+        ...draft,
+        endpoint: 'https://idp.example/device',
+        tokenEndpoint: 'https://idp.example/token',
+      },
+    );
+    expect(parts(jwt).claims.aud).toBe('https://idp.example/token');
+  });
+  it('the configured audience wins over the draft tokenEndpoint', async () => {
+    const { jwt } = await assertion(
+      {
+        key: rsa.privateKey,
+        algorithm: 'RS256',
+        audience: 'https://issuer.example',
+      },
+      { ...draft, tokenEndpoint: 'https://idp.example/token' },
+    );
+    expect(parts(jwt).claims.aud).toBe('https://issuer.example');
   });
   it('aud is the configured audience when given', async () => {
     const { jwt } = await assertion({

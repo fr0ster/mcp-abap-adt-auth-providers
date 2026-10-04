@@ -18,10 +18,11 @@ follows a redirect, and a thrown token-request error that no longer carries
 the request).
 See *Client authentication* in the README.
 
-Requires `@mcp-abap-adt/interfaces-auth` `^3.1.0` (was `^3.0.0`), which adds
-`IClientAuthentication`, `ITokenRequestDraft`, `ITokenRequestAuthentication`
-and the error codes `CERTIFICATE_MATERIAL_ERROR` and
-`CLIENT_AUTHENTICATION_ERROR`.
+Requires `@mcp-abap-adt/interfaces-auth` `^3.2.0` (was `^3.0.0`), which adds
+`IClientAuthentication`, `ITokenRequestDraft` (with its `tokenEndpoint`, the
+authorization server's token endpoint also for the device authorization),
+`ITokenRequestAuthentication` and the error codes `CERTIFICATE_MATERIAL_ERROR`
+and `CLIENT_AUTHENTICATION_ERROR`.
 
 ### Added
 
@@ -36,7 +37,15 @@ and the error codes `CERTIFICATE_MATERIAL_ERROR` and
   `mtls_endpoint_aliases` instead) and
   `privateKeyJwt({ key, algorithm, keyId?, audience? })` (RS256 or ES256
   through `node:crypto`; a 60-second assertion whose `aud` is `audience`, else
-  the endpoint the request goes to). A consumer may write its own.
+  the draft's `tokenEndpoint`, else the endpoint the request goes to). A
+  consumer may write its own.
+- **Every draft names the token endpoint** (`ITokenRequestDraft.tokenEndpoint`):
+  a token request its own endpoint; the device authorization the provider's
+  plain token endpoint — configured or discovered, never its mTLS alias. So
+  `privateKeyJwt`'s default audience is the token endpoint for the device
+  flow too: Keycloak refuses an assertion whose `aud` is the device
+  authorization endpoint, and the device flow now completes there without
+  `audience`.
 - **`clientAuthentication` on eight token providers** —
   `ClientCredentialsProvider`, `AuthorizationCodeProvider`,
   `UaaPasscodeProvider`, `Saml2BearerProvider`, `OidcBrowserProvider`,
@@ -119,7 +128,8 @@ and the error codes `CERTIFICATE_MATERIAL_ERROR` and
   in `tests/stand/keycloak/tls/`, trusted by the suites through
   `NODE_EXTRA_CA_CERTS`; a token bound to the certificate and accepted by
   userinfo only with it, a refresh that stays bound, `private_key_jwt` on
-  Keycloak and on UAA, the device flow's assertion audience, and the X.509
+  Keycloak and on UAA, the device flow with the default assertion audience
+  (and Keycloak's refusal of the device endpoint as `aud`), and the X.509
   user logon (`CertificateAuthProvider`, the analogue of ABAP `CERTRULE`). A
   stand started before this release must be stopped once
   (`npm run stand:down`).

@@ -138,6 +138,11 @@ describe.each(SITES)('$name with a client authentication', (site) => {
     expect(strategy.drafts).toEqual([
       {
         endpoint: site.endpoint,
+        // A token request names its own endpoint; the device initiation
+        // names only the one it is given.
+        ...(site.grantType === 'device_authorization'
+          ? {}
+          : { tokenEndpoint: site.endpoint }),
         clientId: 'cid',
         grantType: site.grantType,
       },
@@ -149,6 +154,26 @@ describe.each(SITES)('$name with a client authentication', (site) => {
       strategy: returning({ parameters: { client_id: 'cid' } }),
     });
     expect(sent().url).toBe(site.endpoint);
+  });
+
+  it('names the token endpoint in the draft: its own endpoint, or for the device initiation the one it was given', async () => {
+    const strategy = returning({});
+    await site.run({ strategy, tokenEndpoint: 'https://idp/the-token' });
+    expect(strategy.drafts[0].tokenEndpoint).toBe(
+      site.grantType === 'device_authorization'
+        ? 'https://idp/the-token'
+        : site.endpoint,
+    );
+  });
+
+  it('without a token endpoint given, the device initiation names none — never its own endpoint', async () => {
+    const strategy = returning({});
+    await site.run({ strategy });
+    if (site.grantType === 'device_authorization') {
+      expect('tokenEndpoint' in strategy.drafts[0]).toBe(false);
+    } else {
+      expect(strategy.drafts[0].tokenEndpoint).toBe(site.endpoint);
+    }
   });
 
   it('passes the mTLS alias it was given in the draft', async () => {

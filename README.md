@@ -555,7 +555,8 @@ public client that sends only `client_id`.
 - **`privateKeyJwt`** signs with `node:crypto`; `algorithm` is `RS256` (an RSA
   key) or `ES256` (a P-256 key). `key` is PEM text, PEM bytes or a
   `KeyObject`. Claims: `iss` = `sub` = the client id, `aud` = `audience`, else
-  the endpoint the request goes to, a random `jti`, `iat` now, `exp` 60 seconds
+  the draft's `tokenEndpoint` (the token endpoint, also for the device
+  authorization), else the endpoint the request goes to, a random `jti`, `iat` now, `exp` 60 seconds
   later; a `kid` header when `keyId` is given. A key that is not a private key
   of that algorithm is refused on first use as *the client signing key could
   not be used*, and nothing of the key is in the refusal.
@@ -690,19 +691,26 @@ const user = new OidcPasswordProvider({
 
 #### `privateKeyJwt`'s `audience`
 
-By default the assertion's `aud` is the endpoint the request goes to. Measured
-2026-10-04 on the provider stand:
+By default the assertion's `aud` is the authorization server's token endpoint
+— the draft's `tokenEndpoint`, which every request this package builds
+carries, the device authorization included (since 5.3.0); a custom site's
+draft without one falls back to the endpoint the request goes to. `audience`
+overrides both for every request of the provider. Measured 2026-10-04 on the
+provider stand:
 
 - **Cloud Foundry UAA** (v79.7) accepts its issuer, `…/uaa/oauth/token` —
   which is also its token endpoint. Set `audience` to the issuer from its
   discovery when the URL you reach UAA by may differ from the one it calls
   itself.
 - **Keycloak** (26.7) accepts the token endpoint (measured with the password
-  grant), but **not the device authorization endpoint**: the device flow's first request, sent
-  with the default audience, is refused *"invalid_client": "Invalid token
-  audience"*. For `OidcDeviceFlowProvider` on Keycloak, set `audience` to the
-  issuer (`https://<keycloak>/realms/<realm>`); `audience` applies to every
-  request of that provider, and the whole device flow then completes.
+  grant and the whole device flow), but **not the device authorization
+  endpoint**: an assertion whose `aud` is that endpoint is refused
+  *"invalid_client": "Invalid token audience"*. `OidcDeviceFlowProvider` on
+  Keycloak therefore needs no `audience`: the default names the token endpoint
+  for the device authorization too. (The issuer,
+  `https://<keycloak>/realms/<realm>`, set as `audience` was also measured to
+  carry the whole device flow, on 2026-10-04 before this default; the stand
+  no longer runs that case.)
 
 #### A certificate-bound token, and its certificate
 
@@ -2419,7 +2427,7 @@ server certificate, client certificates `client-a` (mapped) and `client-b`
 | the bound token at a resource | Keycloak HTTPS (userinfo) | the certificate `establish()` hands the logon target is `client-a`'s; userinfo answers 200 with it, 401 with none and 401 with `client-b` |
 | `OidcPasswordProvider` + `tlsClientCertificate` | Keycloak HTTPS (client `mtls`) | a refresh over mTLS, and the new token bound to the same certificate |
 | `OidcPasswordProvider` + `privateKeyJwt` | Keycloak HTTPS (client `jwt`) | a token with the default audience, the token endpoint |
-| `OidcDeviceFlowProvider` + `privateKeyJwt` | Keycloak HTTPS (client `jwt`) | the device initiation refused with the default audience, the device endpoint; the whole flow with `audience` set to the issuer |
+| `OidcDeviceFlowProvider` + `privateKeyJwt` | Keycloak HTTPS (client `jwt`) | the whole flow with the default audience, the token endpoint, and no `audience`; the device initiation refused with `audience` set to the device endpoint |
 | `CertificateAuthProvider` | Keycloak HTTPS (client `x509-login`) | the X.509 user logon, Keycloak's analogue of ABAP `CERTRULE`: the material the provider hands a logon logs on as the user `client-a`; `client-b` and no certificate refused |
 | `ClientCredentialsProvider` + `privateKeyJwt` | UAA (client `jwt_client`) | a client token with no secret, the assertion's audience UAA's issuer |
 

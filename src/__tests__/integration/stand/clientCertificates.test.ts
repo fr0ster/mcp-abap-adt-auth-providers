@@ -144,6 +144,7 @@ describeKeycloak(
     const issuer = KEYCLOAK_HTTPS_URL as string;
     let tokenEndpoint = '';
     let userinfoEndpoint = '';
+    let deviceEndpoint = '';
 
     beforeAll(async () => {
       const discovery = (await (
@@ -151,6 +152,7 @@ describeKeycloak(
       ).json()) as Record<string, string>;
       tokenEndpoint = discovery.token_endpoint;
       userinfoEndpoint = discovery.userinfo_endpoint;
+      deviceEndpoint = discovery.device_authorization_endpoint;
     });
 
     it('the stand’s two client certificates differ, so a thumbprint names one', () => {
@@ -322,7 +324,10 @@ describeKeycloak(
 
       // Measured 2026-10-04 on Keycloak 26.7.4: the device authorization
       // endpoint is not an audience Keycloak accepts for a client assertion.
-      it('the device initiation is refused with the default audience, the device endpoint', async () => {
+      // This is why the default audience is the draft's tokenEndpoint (5.3.0),
+      // not the endpoint the request goes to; `audience` still overrides it.
+      it('Keycloak refuses an assertion whose audience is the device endpoint', async () => {
+        expect(deviceEndpoint).toMatch(/^https:/);
         const provider = OidcDeviceFlowProvider.toConsole({
           issuerUrl: issuer,
           clientId: 'jwt',
@@ -331,6 +336,7 @@ describeKeycloak(
           clientAuthentication: privateKeyJwt({
             key: JWT_KEY,
             algorithm: 'RS256',
+            audience: deviceEndpoint,
           }),
         });
 
@@ -339,7 +345,7 @@ describeKeycloak(
         );
       });
 
-      it('the device flow completes with `audience` set to the issuer', async () => {
+      it('the device flow completes with the default audience — the token endpoint, no `audience` given', async () => {
         let approval: Promise<void> | undefined;
         const logger = silentLogger((message) => {
           const complete = /^Or use: (\S+)/.exec(message)?.[1];
@@ -356,7 +362,6 @@ describeKeycloak(
           clientAuthentication: privateKeyJwt({
             key: JWT_KEY,
             algorithm: 'RS256',
-            audience: issuer,
           }),
         }).getTokens();
 

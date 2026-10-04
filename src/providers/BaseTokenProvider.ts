@@ -219,11 +219,14 @@ export abstract class BaseTokenProvider
 
   /**
    * What a token-request site is given for one request: the strategy, the
-   * pinned material, and the server's mTLS alias of that request's endpoint.
-   * Undefined without a strategy — the site then sends today's request.
+   * pinned material, the server's mTLS alias of that request's endpoint, and
+   * — for a request that goes elsewhere than the token endpoint (the device
+   * initiation) — the plain token endpoint. Undefined without a strategy —
+   * the site then sends today's request.
    */
   protected async requestAuth(
     mtlsEndpoint?: string,
+    tokenEndpoint?: string,
   ): Promise<TokenRequestAuth | undefined> {
     const strategy = this.clientAuthentication;
     if (!strategy) return undefined;
@@ -234,6 +237,7 @@ export abstract class BaseTokenProvider
         ? { material: pinned.material, notAfter: pinned.notAfter }
         : {}),
       ...(mtlsEndpoint === undefined ? {} : { mtlsEndpoint }),
+      ...(tokenEndpoint === undefined ? {} : { tokenEndpoint }),
     };
   }
 

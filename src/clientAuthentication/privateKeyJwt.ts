@@ -12,7 +12,11 @@ export interface PrivateKeyJwtConfig {
   key: string | Buffer | KeyObject;
   algorithm: 'RS256' | 'ES256';
   keyId?: string;
-  /** The assertion's audience; else the endpoint the request goes to. */
+  /**
+   * The assertion's audience. Else the draft's `tokenEndpoint` — the
+   * authorization server's token endpoint, also for the device initiation —
+   * and, for a draft without one, the endpoint the request goes to.
+   */
   audience?: string;
 }
 
@@ -58,7 +62,7 @@ export function privateKeyJwt(
       const claims = {
         iss: draft.clientId,
         sub: draft.clientId,
-        aud: config.audience ?? draft.endpoint,
+        aud: config.audience ?? draft.tokenEndpoint ?? draft.endpoint,
         jti: randomUUID(),
         iat,
         exp: iat + LIFETIME_SECONDS,

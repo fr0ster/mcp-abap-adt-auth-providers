@@ -117,11 +117,13 @@ export class OidcDeviceFlowProvider extends BaseTokenProvider {
       this.config.clientId,
       scope,
       this.logger,
-      // Its own alias: the device endpoint's, not the token endpoint's.
+      // Its own alias: the device endpoint's, not the token endpoint's. The
+      // plain token endpoint beside it: a client assertion's audience.
       await this.requestAuth(
         this.config.deviceAuthorizationEndpoint
           ? undefined
           : mtlsAlias(discovery, 'device_authorization_endpoint'),
+        tokenEndpoint,
       ),
     );
 
