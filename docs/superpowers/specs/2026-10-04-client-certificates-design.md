@@ -167,6 +167,14 @@ its binding. Three states, not two:
 This covers a token the provider obtained and a token it was seeded with
 (`accessToken` in the configuration, or one restored by a store).
 
+`establish()` obtains nothing: it pins (no network) and decides on the token
+the provider already holds. No token, or an expired one, counts as
+**unknown** — the token that will be presented is the one `authorize()`
+obtains through the same strategy and pinned material — so with material it
+is presented and the wire's Oops returned, and without material nothing is
+presented. `authorize()` obtains or renews as today and checks the token it
+actually sends.
+
 | Token | Pinned material | `establish(logon)` | `authorize(request)` |
 |---|---|---|---|
 | unbound | none | nothing presented, Ok | Bearer, Ok |
