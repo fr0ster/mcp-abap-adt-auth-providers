@@ -134,22 +134,45 @@ else about discovery changes. Measured: Keycloak 26.7 publishes them.
 
 ## 4. A bound token at the resource
 
-`BaseTokenProvider.establish(logon)`:
+**One certificate per provider, pinned.** A provider calls
+`strategy.tlsMaterial()` **once** — before its first request to the server or
+its first logon, whichever comes first — checks the material (§2), computes
+the SHA-256 thumbprint of its leaf certificate (`x5t#S256`, base64url, over
+the DER), and keeps both for its lifetime. Every later token request, refresh
+and resource logon uses that pinned material; `tlsMaterial()` is never called
+again. A certificate that rotates means a new provider instance — the
+consumer (or the broker) constructs it, as for any other credential change.
+This holds whatever the strategy is, the consumer's own included, so a
+strategy that would answer A, then B cannot split a token from its logon
+(RFC 8705 §3). `tlsClientCertificate` also reads its material once, but the
+guarantee is the provider's, not the strategy's.
 
-- strategy without `tlsMaterial` → nothing presented, Ok (as today);
-- with `tlsMaterial` → `logon.tlsMaterial(await strategy.tlsMaterial())`:
-  - Ok → Ok;
-  - Oops (the wire takes no TLS material — RFC) → if the token held is
-    bound (its JWT payload carries `cnf["x5t#S256"]`), the target's Oops is
-    the provider's (rule 4: no other way in); if not bound or not a JWT, Ok
-    — the Bearer header still carries it.
+Measured 2026-10-04: the thumbprint of the leaf certificate equals the
+`cnf.x5t#S256` Keycloak 26.7 put in the token; from a PFX it is read through a
+`TLSSocket` over the material's secure context and equals the PEM one.
 
-The material is the strategy's, never a second loader's — so the token
-request and the resource logon cannot present different certificates (goal,
-Holds 6). `authorize()` is unchanged: it adds the Bearer header.
+**The binding check, in every branch.** Before the provider presents or sends
+a token — `establish()` and `authorize()` — it reads the token's binding:
+`cnf["x5t#S256"]` from a JWT payload; an opaque token, or a JWT without
+`cnf`, is unbound. This covers a token the provider obtained and a token it
+was seeded with (`accessToken` in the configuration, or one restored by a
+store).
 
-`rejected()` is unchanged in what it decides; a renewal goes through the
-same strategy, so a refreshed bound token stays bound to the same material.
+| Token | Pinned material | `establish(logon)` | `authorize(request)` |
+|---|---|---|---|
+| unbound | none | nothing presented, Ok | Bearer, Ok |
+| unbound | yes | `logon.tlsMaterial(pinned)`: Ok → Ok; Oops → Ok (the Bearer carries it) | Bearer, Ok |
+| bound | equal thumbprint | `logon.tlsMaterial(pinned)`: Ok → Ok; Oops (RFC) → that Oops (rule 4) | Bearer, Ok |
+| bound | none, or another thumbprint | Oops, nothing presented | Oops, no header written |
+
+The refusal for the last row is fixed words: `'the token is bound to a
+client certificate this provider does not present'`, hint `'configure the
+certificate the token was issued for, or obtain a new token'`. No thumbprint
+appears in it. A renewal in `rejected()` goes through the same strategy and
+the same pinned material, so a refreshed token is bound to the same
+certificate — and the check above runs on it like on any other.
+
+`authorize()` otherwise stays as it is: it adds the Bearer header.
 
 ## 5. Refusals and logs
 
@@ -208,7 +231,7 @@ to none.
 | unit, per site | without a strategy the request is byte-for-byte today's (§3 table) |
 | unit, per strategy | what each sends; `tlsClientCertificate` endpoint order; `privateKeyJwt` claims and signature verify with the public key; unusable material/key → the fixed refusal, nothing secret in it |
 | unit, providers | a strategy reaches every request of each provider, refresh included; `clientSecret` + strategy is a `ValidationError` |
-| unit, `establish()` | §4's four cases, with recording targets |
+| unit, `establish()` / `authorize()` | every row of §4's table, a seeded bound `accessToken` without a strategy and with a different certificate included; a strategy answering A then B is called once and the provider keeps presenting A |
 | stand, Keycloak | `ClientCredentialsProvider` + `tlsClientCertificate` → bound token; userinfo with the material from `establish()` → 200, none → 401, `client-b` → 401; token request with `client-b` → refused; `OidcPasswordProvider` + mTLS → refresh stays bound; `privateKeyJwt` → token |
 | stand, UAA | `ClientCredentialsProvider` + `privateKeyJwt` → token |
 | stand, part A | §6 |
