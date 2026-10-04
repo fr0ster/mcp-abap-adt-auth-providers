@@ -2,11 +2,7 @@ import type {
   ICertificateMaterial,
   IClientAuthentication,
 } from '@mcp-abap-adt/interfaces-auth';
-import { checkCertificateMaterial } from '../auth/certificateMaterial';
-import {
-  CERTIFICATE_INCOMPLETE,
-  CertificateMaterialError,
-} from '../errors/CertificateMaterialError';
+import { assertCertificateMaterial } from '../auth/certificateMaterial';
 
 export interface TlsClientCertificateConfig {
   /** The material, or a loader the consumer owns; read and checked once. */
@@ -21,20 +17,21 @@ export function tlsClientCertificate(
 ): IClientAuthentication {
   let checked: Promise<ICertificateMaterial> | undefined;
   const load = (): Promise<ICertificateMaterial> => {
-    checked ??= (async () => {
+    if (checked) return checked;
+    const attempt = (async () => {
       const material =
         typeof config.material === 'function'
           ? await config.material()
           : config.material;
-      const outcome = checkCertificateMaterial(material);
-      if (!outcome.ok) {
-        throw new CertificateMaterialError(
-          outcome.refusal.reason === CERTIFICATE_INCOMPLETE.reason,
-        );
-      }
+      assertCertificateMaterial(material);
       return material;
     })();
-    return checked;
+    checked = attempt;
+    // A success stays; a failure is forgotten so the next call loads again.
+    attempt.catch(() => {
+      if (checked === attempt) checked = undefined;
+    });
+    return attempt;
   };
   return {
     authenticate: async (draft) => {

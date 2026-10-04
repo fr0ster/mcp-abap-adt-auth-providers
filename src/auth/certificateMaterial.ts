@@ -19,18 +19,32 @@ function isIncomplete(material: ICertificateMaterial): boolean {
 
 /**
  * Proves certificate material whole and usable: complete first, then a TLS
- * context built from it. The refusals are fixed words — an error's own text,
- * which can name what it read, never reaches them.
+ * context built from it. Throws a CertificateMaterialError (`incomplete` says
+ * which) — its words are fixed; an error's own text never reaches them.
  */
-export function checkCertificateMaterial(
+export function assertCertificateMaterial(
   material: ICertificateMaterial,
-): AuthOutcome {
-  if (isIncomplete(material))
-    return oops(CERTIFICATE_INCOMPLETE.reason, CERTIFICATE_INCOMPLETE.hint);
+): void {
+  if (isIncomplete(material)) throw new CertificateMaterialError(true);
   try {
     createSecureContext(material);
   } catch {
-    return oops(CERTIFICATE_UNUSABLE.reason, CERTIFICATE_UNUSABLE.hint);
+    throw new CertificateMaterialError(false);
+  }
+}
+
+/** The same proof as an outcome: the refusal carries the fixed words. */
+export function checkCertificateMaterial(
+  material: ICertificateMaterial,
+): AuthOutcome {
+  try {
+    assertCertificateMaterial(material);
+  } catch (e) {
+    const words =
+      e instanceof CertificateMaterialError && e.incomplete
+        ? CERTIFICATE_INCOMPLETE
+        : CERTIFICATE_UNUSABLE;
+    return oops(words.reason, words.hint);
   }
   return OK;
 }

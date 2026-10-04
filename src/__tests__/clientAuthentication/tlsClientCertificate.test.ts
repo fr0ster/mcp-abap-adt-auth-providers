@@ -99,4 +99,43 @@ describe('tlsClientCertificate — the material', () => {
       refusal: { reason: 'the client certificate could not be used' },
     });
   });
+  it('retries after a failed load; a success stays memoized', async () => {
+    const loader = jest
+      .fn<() => Promise<ICertificateMaterial>>()
+      .mockRejectedValueOnce(new Error('mid-rotation'))
+      .mockResolvedValue(pem);
+    const auth = tlsClientCertificate({ material: loader });
+    await expect(auth.authenticate(base)).rejects.toThrow('mid-rotation');
+    await expect(auth.authenticate(base)).resolves.toBeDefined();
+    await auth.authenticate(base);
+    expect(loader).toHaveBeenCalledTimes(2);
+  });
+  it('shares one failing load among concurrent callers', async () => {
+    const boom = new Error('timeout');
+    const loader = jest.fn(async (): Promise<ICertificateMaterial> => {
+      throw boom;
+    });
+    const auth = tlsClientCertificate({ material: loader });
+    const results = await Promise.allSettled([
+      auth.authenticate(base),
+      auth.authenticate(base),
+      auth.tlsMaterial?.(),
+    ]);
+    expect(loader).toHaveBeenCalledTimes(1);
+    for (const r of results) {
+      expect(r.status).toBe('rejected');
+      expect((r as PromiseRejectedResult).reason).toBe(boom);
+    }
+  });
+  it('retries after unusable material too', async () => {
+    const loader = jest
+      .fn<() => Promise<ICertificateMaterial>>()
+      .mockResolvedValueOnce({ cert: pem.cert })
+      .mockResolvedValue(pem);
+    const auth = tlsClientCertificate({ material: loader });
+    await expect(auth.authenticate(base)).rejects.toBeInstanceOf(
+      CertificateMaterialError,
+    );
+    await expect(auth.authenticate(base)).resolves.toBeDefined();
+  });
 });
