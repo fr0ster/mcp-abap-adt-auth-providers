@@ -94,7 +94,7 @@ Characterization first, before any site changes.
 **Files:**
 - Create: `src/auth/tokenRequest.ts` — builds and sends one request from grant parameters, a draft and an `IClientAuthentication` (or a private today's-shape adapter), with an `https.Agent` from given TLS material when there is one
 - Modify: `src/auth/clientCredentialsAuth.ts`, `tokenRefresher.ts`, `browserAuth.ts` (code exchange only), `passcodeAuth.ts`, `saml2TokenExchange.ts`, `oidcToken.ts` (all six requests, device initiation included) — each takes an optional authentication + pinned material and otherwise keeps its adapter
-- Modify: `src/__tests__/noTokensInLogs.test.ts`; `describeOAuthErrorBody` callers — the strategy's parameter values (`client_secret`, `client_assertion`) join the redaction list
+- Modify: `src/__tests__/providers/noTokensInLogs.test.ts`; `describeOAuthErrorBody` callers — the strategy's parameter values (`client_secret`, `client_assertion`) join the redaction list
 - Test: `src/__tests__/auth/tokenRequest.test.ts`; Task 2's tests must stay green unchanged
 
 **Interfaces — Consumes:** Tasks 1, 3, 4. **Produces:** each site's signature gains `auth?: { strategy: IClientAuthentication; material?: ICertificateMaterial }` (the material already pinned by the provider, Task 6).
