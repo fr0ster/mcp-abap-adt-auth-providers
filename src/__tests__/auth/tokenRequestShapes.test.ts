@@ -49,6 +49,8 @@ function sentByPost(): Sent {
     string,
     { headers: Record<string, string> },
   ];
+  // Today's third argument is exactly `{ headers }`: any added key fails here.
+  expect(Object.keys(config)).toEqual(['headers']);
   return {
     url,
     method: 'post',
@@ -58,7 +60,7 @@ function sentByPost(): Sent {
 }
 
 /** The request of `axios(config)`. */
-function sentByConfig(): Sent & { timeout?: number } {
+function sentByConfig(expectTimeout = false): Sent & { timeout?: number } {
   expect(mockedAxios).toHaveBeenCalledTimes(1);
   const config = mockedAxios.mock.calls[0][0] as {
     url: string;
@@ -67,6 +69,13 @@ function sentByConfig(): Sent & { timeout?: number } {
     headers: Record<string, string>;
     timeout?: number;
   };
+  // The whole config object: any added key (httpsAgent, ...) fails, and
+  // `timeout` is present exactly where today's code sets it.
+  expect(Object.keys(config).sort()).toEqual(
+    expectTimeout
+      ? ['data', 'headers', 'method', 'timeout', 'url']
+      : ['data', 'headers', 'method', 'url'],
+  );
   return {
     url: config.url,
     method: config.method,
@@ -86,7 +95,7 @@ describe('token request shapes, as sent today', () => {
   describe('clientCredentialsAuth', () => {
     it('with a secret: client_id and client_secret in the body, no Authorization', async () => {
       await getTokenWithClientCredentials('https://uaa', 'cid', 'sec');
-      const sent = sentByConfig();
+      const sent = sentByConfig(true);
       expect(sent.url).toBe('https://uaa/oauth/token');
       expect(sent.method).toBe('post');
       expect(sent.body).toEqual({
@@ -115,6 +124,24 @@ describe('token request shapes, as sent today', () => {
         'Content-Type': FORM,
       });
     });
+
+    it('with an undefined secret: Basic "cid:undefined" (today, not endorsed)', async () => {
+      await refreshJwtToken(
+        'old-rt',
+        'https://uaa',
+        'cid',
+        undefined as unknown as string,
+      );
+      const sent = sentByConfig();
+      expect(sent.body).toEqual({
+        grant_type: 'refresh_token',
+        refresh_token: 'old-rt',
+      });
+      expect(sent.headers).toEqual({
+        Authorization: basic('cid:undefined'),
+        'Content-Type': FORM,
+      });
+    });
   });
 
   describe('browserAuth.exchangeCodeForToken', () => {
@@ -138,6 +165,26 @@ describe('token request shapes, as sent today', () => {
       });
       expect(sent.headers).toEqual({
         Authorization: basic('cid:sec'),
+        'Content-Type': FORM,
+      });
+    });
+
+    it('with an undefined secret: Basic "cid:undefined" (today, not endorsed)', async () => {
+      await exchangeCodeForToken(
+        { uaaUrl: 'https://uaa', uaaClientId: 'cid' } as Parameters<
+          typeof exchangeCodeForToken
+        >[0],
+        'the-code',
+        'http://localhost:61001/callback',
+      );
+      const sent = sentByConfig();
+      expect(sent.body).toEqual({
+        grant_type: 'authorization_code',
+        code: 'the-code',
+        redirect_uri: 'http://localhost:61001/callback',
+      });
+      expect(sent.headers).toEqual({
+        Authorization: basic('cid:undefined'),
         'Content-Type': FORM,
       });
     });
@@ -228,6 +275,60 @@ describe('token request shapes, as sent today', () => {
       });
       expect(sent.headers).toEqual({ 'Content-Type': FORM });
     });
+
+    it('exchange with an empty secret: client_id in the body, no Authorization', async () => {
+      await exchangeSamlAssertion('ASSERTION', 'https://t/token', 'cid', '');
+      const sent = sentByPost();
+      expect(sent.body).toEqual({
+        grant_type: 'urn:ietf:params:oauth:grant-type:saml2-bearer',
+        assertion: 'ASSERTION',
+        client_id: 'cid',
+      });
+      expect(sent.headers).toEqual({ 'Content-Type': FORM });
+    });
+
+    it('refresh with an empty secret: client_id in the body, no Authorization', async () => {
+      await refreshSamlBearerToken('old-rt', 'https://t/token', 'cid', '');
+      const sent = sentByPost();
+      expect(sent.body).toEqual({
+        grant_type: 'refresh_token',
+        refresh_token: 'old-rt',
+        client_id: 'cid',
+      });
+      expect(sent.headers).toEqual({ 'Content-Type': FORM });
+    });
+
+    it('exchange without a clientId: no client_id, no Authorization', async () => {
+      await exchangeSamlAssertion(
+        'ASSERTION',
+        'https://t/token',
+        undefined,
+        'sec',
+      );
+      const sent = sentByPost();
+      expect(sent.url).toBe('https://t/token');
+      expect(sent.body).toEqual({
+        grant_type: 'urn:ietf:params:oauth:grant-type:saml2-bearer',
+        assertion: 'ASSERTION',
+      });
+      expect(sent.headers).toEqual({ 'Content-Type': FORM });
+    });
+
+    it('refresh without a clientId: no client_id, no Authorization', async () => {
+      await refreshSamlBearerToken(
+        'old-rt',
+        'https://t/token',
+        undefined,
+        'sec',
+      );
+      const sent = sentByPost();
+      expect(sent.url).toBe('https://t/token');
+      expect(sent.body).toEqual({
+        grant_type: 'refresh_token',
+        refresh_token: 'old-rt',
+      });
+      expect(sent.headers).toEqual({ 'Content-Type': FORM });
+    });
   });
 
   describe('oidcToken', () => {
@@ -273,6 +374,24 @@ describe('token request shapes, as sent today', () => {
         expect(sent.url).toBe(endpoint);
         expect(sent.body).toEqual(expectedBody);
         expect(sent.headers).toEqual({ 'Content-Type': FORM });
+      });
+
+      it('with an empty secret: Basic "cid:" (the check is !== undefined)', async () => {
+        await exchangeAuthorizationCode(
+          endpoint,
+          'cid',
+          '',
+          'the-code',
+          'http://localhost:61001/callback',
+          'verifier',
+        );
+        const sent = sentByPost();
+        expect(sent.url).toBe(endpoint);
+        expect(sent.body).toEqual(expectedBody);
+        expect(sent.headers).toEqual({
+          'Content-Type': FORM,
+          Authorization: basic('cid:'),
+        });
       });
     });
 
@@ -327,6 +446,33 @@ describe('token request shapes, as sent today', () => {
         expect(sent.url).toBe(endpoint);
         expect(sent.body).toEqual(expectedBody);
         expect(sent.headers).toEqual({ 'Content-Type': FORM });
+      });
+
+      it('after authorization_pending: the second request is the same as the first', async () => {
+        mockedAxios.post
+          .mockRejectedValueOnce({
+            response: { status: 400, data: { error: 'authorization_pending' } },
+          })
+          .mockResolvedValueOnce(tokenReply);
+        await pollDeviceTokens(endpoint, 'cid', 'sec', 'dc', 0);
+        expect(mockedAxios.post).toHaveBeenCalledTimes(2);
+        for (const call of mockedAxios.post.mock.calls) {
+          const [url, body, config] = call as [
+            string,
+            string,
+            Record<string, unknown>,
+          ];
+          expect(url).toBe(endpoint);
+          expect(Object.fromEntries(new URLSearchParams(body))).toEqual(
+            expectedBody,
+          );
+          expect(config).toEqual({
+            headers: {
+              'Content-Type': FORM,
+              Authorization: basic('cid:sec'),
+            },
+          });
+        }
       });
     });
 
