@@ -13,14 +13,23 @@ every claim about it is proven on a stand, not assumed.
 Two places a certificate is used, and this work covers both to the depth that
 can be measured:
 
-- **B — the token endpoint (the main part).** Today every token request
+- **B — the token endpoint (the main part).** Today a token request
   (`clientCredentialsAuth`, `browserAuth`, `tokenRefresher`, `oidcToken`,
   `passcodeAuth`, `saml2TokenExchange`) authenticates the *client* with
-  `clientId` + `clientSecret`. An XSUAA service key with
+  `clientId` + `clientSecret` — or, for the OIDC providers, whose
+  `clientSecret` is optional, not at all: a public client sends only
+  `client_id` (`oidcToken`'s `buildAuthHeaders`). An XSUAA service key with
   `credential-type: x509` has no secret at all: it carries `certificate`, `key`
   and `certurl`, and the token request must go over mTLS to `certurl`.
   Keycloak accepts the same (`client-x509`), and UAA accepts `private_key_jwt`
   instead. A token provider must be able to authenticate its client either way.
+- **B, at the resource — a certificate-bound token.** A token issued over mTLS
+  may be bound to the certificate (`cnf.x5t#S256`, RFC 8705 §3): the resource
+  server then accepts it only over a TLS connection that presents the same
+  certificate. Today `BaseTokenProvider.establish()` presents nothing and
+  `authorize()` adds only `Authorization: Bearer`, so a bound token would be
+  refused at the resource. Obtaining the token is not enough: the provider
+  must also present the certificate on the resource connection.
 - **A — the logon to the ABAP system.** `CertificateAuthProvider` presents a
   client certificate in the TLS handshake of each logon. Proven here to the TLS
   level and to an X.509 user mapping in Keycloak; **not** against an ABAP
@@ -28,7 +37,9 @@ can be measured:
 
 **Success:** an XSUAA x509 service key, a Keycloak `client-x509` client and a
 UAA `private_key_jwt` client each yield a token through this package's
-providers, with no secret configured, in tests that run against the stand (UAA,
+providers, with no secret configured; a certificate-bound token is accepted by
+a resource that enforces the binding when the provider presents its
+certificate, and refused when the certificate is absent or another one — in tests that run against the stand (UAA,
 Keycloak) or the BTP trial (XSUAA, not in CI); and a certificate logon is
 refused or accepted at the TLS level exactly as configured.
 
@@ -61,15 +72,21 @@ refused or accepted at the TLS level exactly as configured.
    A secret, a certificate, a signed JWT — each is a collaborator passed in;
    no provider builds one of its own, no provider guesses from what fields
    happen to be present (rule 7).
-3. **The secret path keeps working as it does today.** A consumer that passes
-   `clientSecret` sees no change in what is sent.
+3. **What works today keeps working.** A consumer that passes `clientSecret`
+   sees no change in what is sent, and a public OIDC client — no
+   `clientSecret`, no client authentication — stays a supported composition,
+   not an error and not a new mandatory collaborator.
 4. **The server certificate is always verified** on every token request,
    whatever the client presents; trusting a private CA is an explicit `ca`.
 5. **No key material reaches a log line**, as no token does today.
-6. **Every supported combination is proven on the stand or the trial.** What
+6. **A bound token travels with its certificate.** A provider that obtains a
+   certificate-bound token presents that certificate on every connection the
+   token is used on — the resource logon (`establish()` → the logon target's
+   TLS material) and every refresh — or the token is not offered at all.
+7. **Every supported combination is proven on the stand or the trial.** What
    cannot be measured (ABAP `CERTRULE`, an x509 token accepted by ADT) is
    written down as unproven, not claimed.
-7. **Dependencies only from the registry**, contracts only from the contract
+8. **Dependencies only from the registry**, contracts only from the contract
    packages this package already uses.
 
 ## Out of scope
@@ -84,16 +101,21 @@ refused or accepted at the TLS level exactly as configured.
 ## Open, for the spec
 
 1. **The client-authentication contract.** One interface every token request
-   goes through (secret in the body or basic header, mTLS certificate,
-   `private_key_jwt`) — and whether it belongs in this package or in
+   goes through (none for a public client, secret in the body or basic header,
+   mTLS certificate, `private_key_jwt`) — and whether it belongs in this package or in
    `@mcp-abap-adt/interfaces-auth` / `interfaces-auth-sap`.
 2. **The endpoint.** XSUAA x509 sends to `certurl`, not `url`: who decides the
    token URL — the configuration, or the client-authentication strategy.
 3. **Which providers take it.** All token providers, or those whose grant has
    a client to authenticate on the server side (`client_credentials`,
    authorization code, refresh, SAML bearer, token exchange, passcode).
-4. **Certificate-bound tokens** (`cnf.x5t#S256`): a refresh must go over the
-   same mTLS client, or the bound token is refused.
+4. **Certificate-bound tokens** (`cnf.x5t#S256`): how the consumer composes
+   one certificate for the token endpoint, the refresh and the resource logon
+   — a token provider presenting TLS material in `establish()`, or a
+   composition with `CertificateAuthProvider` — and what a provider answers
+   when the logon target cannot take TLS material (RFC). Not yet measured:
+   the stand must prove right certificate → accepted, none or another →
+   refused, at a resource that enforces the binding.
 5. **Version.** Additive (5.3.0) if the secret stays the default shape;
    a major if the configuration must change.
 6. **The Keycloak stand:** HTTPS with client-auth `request`, a test CA and
@@ -102,8 +124,8 @@ refused or accepted at the TLS level exactly as configured.
 ## Path
 
 1. This goal → spec → plan, each reviewed in this PR.
-2. Implementation in this PR; stand suites (Keycloak mTLS, UAA
-   `private_key_jwt`) in `npm run test:stand`; XSUAA x509 in
+2. Implementation in this PR; stand suites (Keycloak mTLS and a bound token
+   at a resource enforcing the binding, UAA `private_key_jwt`) in `npm run test:stand`; XSUAA x509 in
    `npm run test:xsuaa` (trial, not in CI).
 3. If a contract package must change, that change is released first, in its
    own repository, and this PR builds against the published version.
