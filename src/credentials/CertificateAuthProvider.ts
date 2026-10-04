@@ -1,4 +1,3 @@
-import { createSecureContext } from 'node:tls';
 import type {
   AuthOutcome,
   IAuthProvider,
@@ -11,6 +10,7 @@ import type {
   ICertificateMaterialLoader,
   ISapConfig,
 } from '@mcp-abap-adt/interfaces-auth-sap';
+import { checkCertificateMaterial } from '../auth/certificateMaterial';
 import { OK, oops, safely } from '../auth/refusal';
 import { refuseFor } from '../auth/rejection';
 import { FileCertificateMaterialLoader } from './FileCertificateMaterialLoader';
@@ -35,21 +35,8 @@ export class CertificateAuthProvider implements IAuthProvider {
     return safely('loading the certificate', async () => {
       this.material = null;
       const material = await this.loader.load(this.config);
-      // A TLS context accepts {}, a certificate alone or a key alone, and the
-      // logon then goes out with no client certificate at all.
-      if (material.pfx === undefined && (!material.cert || !material.key))
-        return oops(
-          'the client certificate is incomplete',
-          'give a PFX, or a certificate together with its key',
-        );
-      try {
-        createSecureContext(material);
-      } catch {
-        return oops(
-          'the client certificate could not be used',
-          'check the certificate, the key and the passphrase, and that a PFX uses current encryption (not legacy RC2)',
-        );
-      }
+      const checked = checkCertificateMaterial(material);
+      if (!checked.ok) return checked;
       this.material = material;
       return OK;
     });

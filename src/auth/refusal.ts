@@ -16,6 +16,11 @@ import {
   AssertionValidationError,
 } from '../errors/AssertionValidationError';
 import {
+  CERTIFICATE_INCOMPLETE,
+  CERTIFICATE_UNUSABLE,
+  CertificateMaterialError,
+} from '../errors/CertificateMaterialError';
+import {
   BrowserAuthError,
   RefreshError,
   ServiceKeyError,
@@ -127,6 +132,7 @@ const OWN_CLASSES: ReadonlyArray<
   readonly [abstract new (...a: never[]) => unknown, string]
 > = [
   [AssertionValidationError, 'AssertionValidationError'],
+  [CertificateMaterialError, 'CertificateMaterialError'],
   [BrowserAuthError, 'BrowserAuthError'],
   [RefreshError, 'RefreshError'],
   [ValidationError, 'ValidationError'],
@@ -166,6 +172,12 @@ export function refusalFrom(error: unknown, what: string): AuthOutcome {
   if (error instanceof AssertionValidationError) {
     const check = ASSERTION_CHECKS.has(error.check) ? ` (${error.check})` : '';
     return oops(`the SAML assertion was refused${check}`);
+  }
+  if (error instanceof CertificateMaterialError) {
+    const words = error.incomplete
+      ? CERTIFICATE_INCOMPLETE
+      : CERTIFICATE_UNUSABLE;
+    return oops(words.reason, words.hint);
   }
   if (error instanceof BrowserAuthError) {
     return oops(
