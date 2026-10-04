@@ -47,6 +47,48 @@ function redactKnownSecrets(
   return out;
 }
 
+/**
+ * The registered OAuth error codes a token endpoint (or the device
+ * authorization endpoint) answers with: RFC 6749 §5.2 and §4.1.2.1, RFC 8628
+ * §3.5, RFC 6750 §3.1, RFC 8693 §2.2.2. Each is a fixed protocol word, never
+ * a secret, and control flow reads it (the device poll continues on
+ * `authorization_pending` and `slow_down`): an `error` exactly equal to one is
+ * kept verbatim, because redacting a secret that happens to be a substring
+ * (`a` in `authorization_pending`) would rewrite the code itself. Any other
+ * `error` value is redacted like every other field.
+ */
+const REGISTERED_ERROR_CODES: ReadonlySet<string> = new Set([
+  // RFC 6749 §5.2 — token endpoint
+  'invalid_request',
+  'invalid_client',
+  'invalid_grant',
+  'unauthorized_client',
+  'unsupported_grant_type',
+  'invalid_scope',
+  // RFC 6749 §4.1.2.1 — authorization endpoint, also seen from token endpoints
+  'access_denied',
+  'unsupported_response_type',
+  'server_error',
+  'temporarily_unavailable',
+  // RFC 8628 §3.5 — device access token response
+  'authorization_pending',
+  'slow_down',
+  'expired_token',
+  // RFC 6750 §3.1 — bearer token usage
+  'invalid_token',
+  'insufficient_scope',
+  // RFC 8693 §2.2.2 — token exchange
+  'invalid_target',
+]);
+
+/** `error` as it may stay: a registered code verbatim, anything else redacted. */
+function errorCode(
+  value: string,
+  secrets: readonly (string | undefined)[],
+): string {
+  return REGISTERED_ERROR_CODES.has(value) ? value : redact(value, secrets);
+}
+
 /** Removes what a server might echo back: every known secret, and any JWT. */
 function redact(
   text: string,
@@ -70,7 +112,7 @@ export function describeOAuthErrorBody(
   };
   const parts: string[] = [];
   if (typeof error === 'string')
-    parts.push(quote(redact(error, knownSecrets), ERROR_CAP));
+    parts.push(quote(errorCode(error, knownSecrets), ERROR_CAP));
   if (typeof error_description === 'string') {
     parts.push(quote(redact(error_description, knownSecrets), DESCRIPTION_CAP));
   }
@@ -86,7 +128,8 @@ export interface OAuthErrorFields {
 
 /**
  * An error body reduced to `error`, `error_description` and `error_uri` (each
- * only when a string), every known secret and any JWT redacted — what may stay
+ * only when a string), every known secret and any JWT redacted — except an
+ * `error` that is a registered code, kept verbatim — what may stay
  * on a thrown error. Anything else a server put in the body (a token, an echo
  * of the request) is dropped; a body that is not an object becomes undefined.
  */
@@ -98,7 +141,11 @@ export function oauthErrorFields(
   const out: OAuthErrorFields = {};
   for (const field of ['error', 'error_description', 'error_uri'] as const) {
     const value = (data as Record<string, unknown>)[field];
-    if (typeof value === 'string') out[field] = redact(value, knownSecrets);
+    if (typeof value !== 'string') continue;
+    out[field] =
+      field === 'error'
+        ? errorCode(value, knownSecrets)
+        : redact(value, knownSecrets);
   }
   return out;
 }

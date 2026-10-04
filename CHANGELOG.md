@@ -167,6 +167,12 @@ and the error codes `CERTIFICATE_MATERIAL_ERROR` and
 - **Known secrets are redacted longest first**, so a short secret (a
   password) redacted inside a longer one (an assertion) no longer leaves the
   rest of the longer one readable.
+- **A registered OAuth error code is never redacted**: an `error` equal to
+  one of RFC 6749 §5.2 / §4.1.2.1, RFC 8628 §3.5, RFC 6750 §3.1 or
+  RFC 8693 §2.2.2's codes is kept verbatim, so a secret that happens to be a
+  substring of it (`a` in `authorization_pending`) no longer rewrites the code
+  and stops the device poll after its first pending answer. Any other `error`
+  value, and every `error_description` and `error_uri`, is redacted as before.
 
 ### Security
 

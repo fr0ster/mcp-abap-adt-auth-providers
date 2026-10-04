@@ -1033,3 +1033,110 @@ describe('the device poll reads the reduced body', () => {
     },
   );
 });
+
+describe('a registered error code is never rewritten by redaction', () => {
+  const failing = (data: Record<string, string>) => ({
+    isAxiosError: true,
+    response: { status: 400, data },
+  });
+
+  // `a` is inside `authorization_pending`, `low` inside `slow_down`: redacting
+  // them in the code would stop the poll at the first pending answer.
+  it.each([
+    ['as today, client secret `a`, device code `low`', 'a', 'low', undefined],
+    [
+      'with a strategy, client secret `a`, device code `low`',
+      undefined,
+      'low',
+      { strategy: clientSecretPost('a') },
+    ],
+    [
+      'with a strategy, client secret `low`, device code `a`',
+      undefined,
+      'a',
+      { strategy: clientSecretPost('low') },
+    ],
+  ])(
+    '%s: the poll continues through authorization_pending and slow_down and gets the token',
+    async (_label, secret, deviceCode, auth) => {
+      const answers = [
+        failing({ error: 'authorization_pending' }),
+        failing({ error: 'slow_down' }),
+      ];
+      for (const target of [mockedAxios, mockedAxios.post]) {
+        target
+          .mockRejectedValueOnce(answers[0])
+          .mockRejectedValueOnce(answers[1])
+          .mockResolvedValueOnce(reply);
+      }
+      // slow_down waits interval + 5 s: run each wait at once.
+      const wait = jest.spyOn(global, 'setTimeout').mockImplementation(((
+        fn: () => void,
+      ) => {
+        fn();
+        return 0 as unknown as NodeJS.Timeout;
+      }) as unknown as typeof setTimeout);
+      try {
+        const tokens = await pollDeviceTokens(
+          OIDC,
+          'cid',
+          secret,
+          deviceCode,
+          0,
+          undefined,
+          auth,
+        );
+        expect(tokens.accessToken).toBe(reply.data.access_token);
+      } finally {
+        wait.mockRestore();
+      }
+      expect(
+        mockedAxios.mock.calls.length + mockedAxios.post.mock.calls.length,
+      ).toBe(3);
+    },
+  );
+
+  it.each([
+    ['as today', 'S3cr3t-value', undefined],
+    [
+      'with a strategy',
+      undefined,
+      { strategy: clientSecretPost('S3cr3t-value') },
+    ],
+  ])(
+    '%s: an unregistered error carrying a secret, and the description, are still redacted',
+    async (_label, secret, auth) => {
+      const body = failing({
+        error: 'custom_S3cr3t-value',
+        error_description: 'refused S3cr3t-value',
+        error_uri: 'https://idp/err?S3cr3t-value',
+      });
+      mockedAxios.mockRejectedValueOnce(body);
+      mockedAxios.post.mockRejectedValueOnce(body);
+      const thrown = (await failureOf(
+        pollDeviceTokens(OIDC, 'cid', secret, 'dc', 0, undefined, auth),
+      )) as { response: { data: Record<string, string> } };
+      expect(thrown.response.data).toEqual({
+        error: 'custom_<redacted>',
+        error_description: 'refused <redacted>',
+        error_uri: 'https://idp/err?<redacted>',
+      });
+    },
+  );
+
+  it('a registered code is kept, its description redacted, in a message too', async () => {
+    mockedAxios.mockRejectedValueOnce(
+      failing({ error: 'invalid_grant', error_description: 'bad a' }),
+    );
+    const error = await failureOf(
+      passwordGrant(OIDC, 'cid', 'a', 'user', 'pw', undefined, undefined, {
+        strategy: clientSecretPost('a'),
+      }),
+    );
+    const message = messageOf(error);
+    expect(message).toMatch(
+      /^OIDC password grant failed \(400\): "invalid_grant": "b<red/,
+    );
+    expect(message).not.toContain('bad a');
+  });
+});

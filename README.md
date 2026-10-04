@@ -2564,7 +2564,7 @@ Example output:
 ```
 
 **Logging Features**:
-- **No tokens in logs**: a token the provider holds or sent is never logged, not even in part. A log line carries only `<redacted, N chars>` (since 4.1.2; earlier versions logged a short refresh token whole). A token endpoint's error body contributes only `error` and `error_description`, with the request's secrets and anything shaped like a JWT redacted. A new opaque token that a server writes into `error_description` cannot be recognised and passes through, capped at 512 characters.
+- **No tokens in logs**: a token the provider holds or sent is never logged, not even in part. A log line carries only `<redacted, N chars>` (since 4.1.2; earlier versions logged a short refresh token whole). A token endpoint's error body contributes only `error` and `error_description`, with the request's secrets and anything shaped like a JWT redacted. An `error` that is a registered OAuth error code (`invalid_grant`, `authorization_pending`, `slow_down`, …) is kept verbatim: it is a protocol word, and the device poll reads it. A new opaque token that a server writes into `error_description` cannot be recognised and passes through, capped at 512 characters.
 - **Date Formatting**: Expiration dates are displayed in readable format (YYYY-MM-DD HH:MM:SS UTC) instead of ISO format
 - **Browser Information**: Logs browser type and authorization URL for debugging
 - **Token Lifecycle**: Detailed logging of token acquisition, validation, and refresh operations

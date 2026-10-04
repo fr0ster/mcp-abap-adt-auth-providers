@@ -147,7 +147,7 @@ src/
 │   ├── tokenRequest.ts       # prepareTokenRequest / sendTokenRequest: the one strategy path; errors without the request
 │   ├── certificateMaterial.ts  # assertCertificateMaterial / checkCertificateMaterial (shared with CertificateAuthProvider), certificateThumbprint
 │   ├── tokenBinding.ts       # readBinding: bound / unbound / unknown
-│   ├── oauthErrorBody.ts     # describeOAuthErrorBody, oauthErrorFields: redaction longest first, JWT-shaped values
+│   ├── oauthErrorBody.ts     # describeOAuthErrorBody, oauthErrorFields: redaction longest first, JWT-shaped values; a registered OAuth `error` code kept verbatim
 │   └── …                     # oidcToken, oidcDiscovery (mtlsAlias), oidcPkce, passcodeAuth, …
 ├── validation/
 │   ├── assertionValidator.ts   # createSignedResponseValidator / createSignedAssertionValidator: the check table
