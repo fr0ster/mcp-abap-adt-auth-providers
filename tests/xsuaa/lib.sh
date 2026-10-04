@@ -6,18 +6,21 @@
 #     XSUAA_CF_ORG and XSUAA_CF_SPACE — no defaults;
 #   - they touch only what they created. Every resource setup.sh creates is
 #     recorded in $LEDGER with its immutable ID — the service instance GUID,
-#     the trust's id — and the ledger itself names the target it belongs to.
+#     the x509 service key's GUID, the trust's id — and the ledger itself names the target it belongs to.
 #     A resource is ours only if its name AND its current ID match a record,
 #     checked right before it is reused, refreshed or deleted; a ledger from
 #     another target is refused outright.
 #
 # Ledger format:   target <api>|<org>|<space>
 #                  instance <name> <guid>
+#                  key <name> <guid>        (a key of $INSTANCE)
 #                  trust <origin> <id>
 
 INSTANCE=auth-providers-bearer-test
 API_INSTANCE=auth-providers-trust-test
 KEY=key
+# A second key of $INSTANCE, holding a client certificate instead of a secret.
+X509_KEY=x509-key
 ORIGIN=auth-providers-test-idp
 LOCAL="$HERE/.local"
 LEDGER="$LOCAL/owned"
@@ -99,9 +102,39 @@ instance_guid() { # name
   return 3
 }
 
-# `cf service-key` prints a header before the JSON.
-save_key() { # instance file
-  cf service-key "$1" "$KEY" 2>/dev/null | sed -n '/^{/,$p' > "$2"
-  chmod 600 "$2"
-  [ -s "$2" ]
+# Prints the GUID of the service key <key> of the instance <instance-guid>,
+# or nothing when the Cloud Controller lists no such key. Asked through the v3
+# API rather than `cf service-key --guid`, so absence is an empty list, not a
+# message to match: any answer that is not a list — no session, no network,
+# an API error — fails, and callers must stop rather than read it as "gone".
+key_guid() { # instance-guid key
+  out="$(cf curl "/v3/service_credential_bindings?type=key&service_instance_guids=$1&names=$2" 2>&1)" || {
+    echo "could not look up service key $2: $(printf '%s' "$out" | head -1)" >&2
+    return 3
+  }
+  printf '%s' "$out" | node -e '
+    let raw = "";
+    process.stdin.on("data", (c) => (raw += c)).on("end", () => {
+      let body;
+      try { body = JSON.parse(raw); } catch { body = undefined; }
+      if (!body || !Array.isArray(body.resources)) {
+        console.error(`could not look up service key ${process.argv[1]}: not a listing`);
+        process.exit(3);
+      }
+      if (body.resources.length > 1) {
+        console.error(`service key ${process.argv[1]}: ${body.resources.length} found, expected one`);
+        process.exit(3);
+      }
+      if (body.resources.length === 1) console.log(body.resources[0].guid);
+    });
+  ' "$2"
+}
+
+# `cf service-key` prints a header before the JSON. The file is created
+# readable by its owner only, before anything is written to it: the key holds
+# a secret or a private key, and never reaches the terminal.
+save_key() { # instance key file
+  rm -f "$3"
+  (umask 077 && cf service-key "$1" "$2" 2>/dev/null | sed -n '/^{/,$p' > "$3")
+  [ -s "$3" ]
 }

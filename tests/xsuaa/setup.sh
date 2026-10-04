@@ -1,7 +1,11 @@
 #!/usr/bin/env bash
 # Creates the XSUAA test environment in the targeted space and subaccount:
 #   - an xsuaa/application instance whose client may use saml2-bearer,
-#     refresh_token and password, with a service key;
+#     refresh_token, password and client_credentials, and authenticate with a
+#     secret or a client certificate (credential-types binding-secret, x509),
+#     with two service keys: `key`, holding a secret, and `x509-key`, holding
+#     a certificate and its private key. The x509 key is created afresh on
+#     every run — XSUAA's certificate is valid for about seven days;
 #   - an xsuaa/apiaccess instance with a key, used only to manage trust;
 #   - a SAML trust to a test identity provider whose key is generated here,
 #     locally, and never leaves tests/xsuaa/.local/ (gitignored).
@@ -28,6 +32,14 @@ for instance in "$INSTANCE" "$API_INSTANCE"; do
     refuse_foreign "service instance $instance ($guid)"
   fi
 done
+# On an instance of ours, an x509 key we did not record is someone else's.
+guid="$(instance_guid "$INSTANCE")" || exit 3
+if [ -n "$guid" ]; then
+  key="$(key_guid "$guid" "$X509_KEY")" || exit 3
+  if [ -n "$key" ] && [ "$key" != "$(recorded_id key "$X509_KEY")" ]; then
+    refuse_foreign "service key $X509_KEY of $INSTANCE ($key)"
+  fi
+fi
 
 start_ledger
 # Key and certificate are made as a pair, under temporary names, and moved in
@@ -48,10 +60,15 @@ if [ ! -f "$LOCAL/idp.key" ] || [ ! -f "$LOCAL/idp.crt" ]; then
   rm -f "$LOCAL/openssl.err"
 fi
 
-ensure_instance() { # name plan [params-file]
+ensure_instance() { # name plan [params-file [key-params]]
   guid="$(instance_guid "$1")" || exit 3
   if [ -n "$guid" ]; then
     [ "$guid" = "$(recorded_id instance "$1")" ] || refuse_foreign "service instance $1 ($guid)"
+    # An instance kept from an earlier run (XSUAA_KEEP=1) gets today's
+    # parameters: credential types and grant types may have been added since.
+    if [ -n "${3:-}" ]; then
+      cf update-service "$1" -c "$3" --wait >/dev/null
+    fi
     echo "$1: reused (owned, $guid)"
   else
     if [ -n "${3:-}" ]; then
@@ -65,12 +82,16 @@ ensure_instance() { # name plan [params-file]
     echo "$1: created ($guid)"
   fi
   if ! cf service-key "$1" "$KEY" >/dev/null 2>&1; then
-    cf create-service-key "$1" "$KEY" --wait >/dev/null
+    if [ -n "${4:-}" ]; then
+      cf create-service-key "$1" "$KEY" -c "$4" --wait >/dev/null
+    else
+      cf create-service-key "$1" "$KEY" --wait >/dev/null
+    fi
   fi
 }
 
 ensure_instance "$API_INSTANCE" apiaccess
-save_key "$API_INSTANCE" "$LOCAL/api-key.json"
+save_key "$API_INSTANCE" "$KEY" "$LOCAL/api-key.json"
 
 # The trust needs the apiaccess key to be checked at all, hence this order.
 trust_id="$(node "$HERE/trust.mjs" id "$LOCAL" "$ORIGIN")"
@@ -83,5 +104,27 @@ else
   echo "trust $ORIGIN: created ($trust_id)"
 fi
 
-ensure_instance "$INSTANCE" application "$HERE/xs-security.json"
-save_key "$INSTANCE" "$LOCAL/bearer-key.json"
+# `key` names its credential type: with two allowed, it must hold a secret
+# whatever XSUAA takes as the default.
+ensure_instance "$INSTANCE" application "$HERE/xs-security.json" \
+  '{"credential-type":"binding-secret"}'
+save_key "$INSTANCE" "$KEY" "$LOCAL/bearer-key.json"
+
+# The x509 key: deleted if we own one (its certificate may be near expiry),
+# then created afresh and recorded. Its file holds a private key; it is
+# written only by save_key, readable by its owner only, and never printed.
+instance="$(recorded_id instance "$INSTANCE")"
+key="$(key_guid "$instance" "$X509_KEY")" || exit 3
+if [ -n "$key" ]; then
+  [ "$key" = "$(recorded_id key "$X509_KEY")" ] || refuse_foreign "service key $X509_KEY of $INSTANCE ($key)"
+  cf delete-service-key "$INSTANCE" "$X509_KEY" -f --wait >/dev/null
+  disown key "$X509_KEY"
+  echo "$X509_KEY: deleted ($key), to be created afresh"
+fi
+rm -f "$LOCAL/x509-key.json"
+cf create-service-key "$INSTANCE" "$X509_KEY" -c '{"credential-type":"x509"}' --wait >/dev/null
+key="$(key_guid "$instance" "$X509_KEY")" || exit 3
+[ -n "$key" ] || { echo "$X509_KEY: created, but cf reports it absent" >&2; exit 1; }
+own key "$X509_KEY" "$key"
+echo "$X509_KEY: created ($key)"
+save_key "$INSTANCE" "$X509_KEY" "$LOCAL/x509-key.json"

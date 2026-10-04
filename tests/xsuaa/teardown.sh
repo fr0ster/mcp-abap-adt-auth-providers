@@ -39,6 +39,32 @@ delete_instance() { # name
   disown instance "$1"
 }
 
+# The x509 key goes first: an instance with a key cf did not delete for us
+# cannot be deleted. Ours only while both its instance and its own GUID are.
+delete_x509_key() {
+  recorded="$(recorded_id key "$X509_KEY")"
+  [ -n "$recorded" ] || return 0
+  instance="$(recorded_id instance "$INSTANCE")"
+  current_instance="$(instance_guid "$INSTANCE")" || fail "could not look up $INSTANCE"
+  if [ -z "$instance" ] || [ "$current_instance" != "$instance" ]; then
+    # Our instance is gone, and every key of it with it.
+    echo "$X509_KEY: already gone with $INSTANCE"
+  else
+    current="$(key_guid "$instance" "$X509_KEY")" || fail "could not look up $X509_KEY"
+    if [ -z "$current" ]; then
+      echo "$X509_KEY: already gone"
+    elif [ "$current" != "$recorded" ]; then
+      echo "$X509_KEY: now $current, not ours ($recorded) — left alone" >&2
+    else
+      cf delete-service-key "$INSTANCE" "$X509_KEY" -f --wait >/dev/null \
+        || fail "could not delete $X509_KEY"
+      echo "$X509_KEY: deleted ($recorded)"
+    fi
+  fi
+  disown key "$X509_KEY"
+}
+
+delete_x509_key
 delete_instance "$INSTANCE"
 recorded_trust="$(recorded_id trust "$ORIGIN")"
 if [ -n "$recorded_trust" ]; then
