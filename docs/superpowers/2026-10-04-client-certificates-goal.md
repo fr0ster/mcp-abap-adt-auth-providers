@@ -98,28 +98,37 @@ refused or accepted at the TLS level exactly as configured.
 - Issuing, rotating or storing certificates; loading a service key
   (`@mcp-abap-adt/auth-broker` / `auth-stores`).
 
-## Open, for the spec
+## Decided (2026-10-04, before the spec)
 
-1. **The client-authentication contract.** One interface every token request
-   goes through (none for a public client, secret in the body or basic header,
-   mTLS certificate, `private_key_jwt`) — and whether it belongs in this package or in
-   `@mcp-abap-adt/interfaces-auth` / `interfaces-auth-sap`.
-2. **The endpoint.** XSUAA x509 sends to `certurl`, not `url`: who decides the
-   token URL — the configuration, or the client-authentication strategy.
-3. **Which providers take it.** All token providers, or those whose grant has
-   a client to authenticate on the server side (`client_credentials`,
-   authorization code, refresh, SAML bearer, token exchange, passcode).
-4. **Certificate-bound tokens** (`cnf.x5t#S256`): how the consumer composes
-   one certificate for the token endpoint, the refresh and the resource logon
-   — a token provider presenting TLS material in `establish()`, or a
-   composition with `CertificateAuthProvider` — and what a provider answers
-   when the logon target cannot take TLS material (RFC). Not yet measured:
-   the stand must prove right certificate → accepted, none or another →
-   refused, at a resource that enforces the binding.
-5. **Version.** Additive (5.3.0) if the secret stays the default shape;
-   a major if the configuration must change.
-6. **The Keycloak stand:** HTTPS with client-auth `request`, a test CA and
-   client certificates as committed fixtures trusted by nothing but the stand.
+1. **The client-authentication contract** is a strategy, `IClientAuthentication`
+   (working name), in `@mcp-abap-adt/interfaces-auth` beside
+   `IAuthorizationStrategy` — a consumer may write its own (a JWT signed by an
+   HSM key), and the broker composes it. It shapes a token request: form
+   parameters, headers, TLS material, and the endpoint. This package ships
+   four: none (a public client), secret (Basic header or body), certificate
+   (mTLS) and `private_key_jwt`.
+2. **The endpoint is the strategy's.** A token request goes where the
+   strategy says: XSUAA x509 → `certurl`; OIDC → `mtls_endpoint_aliases` from
+   discovery when published. The authorization page stays where the
+   configuration says.
+3. **Every provider that sends a token request** takes an optional
+   `clientAuthentication`. Without it the provider does exactly what it does
+   today: the secret when given, else a public client. `Saml2PureProvider`
+   sends no token request and is not touched.
+4. **A bound token is presented by its own provider.** A token provider with
+   the certificate strategy presents the same material in `establish()`
+   through `logon.tlsMaterial()` — no separate `CertificateAuthProvider` to
+   compose, so the consumer cannot pair two different certificates. When the
+   logon target refuses TLS material (RFC) and the token is bound
+   (`cnf.x5t#S256`), the provider answers Oops; an unbound token goes on.
+5. **Version:** auth-providers 5.3.0 (an optional parameter is added);
+   `interfaces-auth` a minor (a type is added), released first.
+6. **The Keycloak stand:** HTTPS with client-auth `request`; a test CA, a
+   server certificate and client certificates as committed fixtures trusted
+   by nothing but the stand. The resource that enforces the binding is
+   Keycloak's own userinfo endpoint — a third party checks it, not our code;
+   measured first, and only if it does not enforce the binding, a minimal
+   resource on the stand instead.
 
 ## Path
 
@@ -127,7 +136,7 @@ refused or accepted at the TLS level exactly as configured.
 2. Implementation in this PR; stand suites (Keycloak mTLS and a bound token
    at a resource enforcing the binding, UAA `private_key_jwt`) in `npm run test:stand`; XSUAA x509 in
    `npm run test:xsuaa` (trial, not in CI).
-3. If a contract package must change, that change is released first, in its
-   own repository, and this PR builds against the published version.
+3. `interfaces-auth` gains `IClientAuthentication` in its own PR and release
+   first; this PR builds against the published version, never a link.
 4. External review, merge, release; then each consumer decides in its own
    change whether to use it.
