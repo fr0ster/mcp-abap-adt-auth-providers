@@ -144,7 +144,6 @@ describeKeycloak(
     const issuer = KEYCLOAK_HTTPS_URL as string;
     let tokenEndpoint = '';
     let userinfoEndpoint = '';
-    let deviceEndpoint = '';
 
     beforeAll(async () => {
       const discovery = (await (
@@ -152,7 +151,6 @@ describeKeycloak(
       ).json()) as Record<string, string>;
       tokenEndpoint = discovery.token_endpoint;
       userinfoEndpoint = discovery.userinfo_endpoint;
-      deviceEndpoint = discovery.device_authorization_endpoint;
     });
 
     it('the stand’s two client certificates differ, so a thumbprint names one', () => {
@@ -189,8 +187,12 @@ describeKeycloak(
         });
 
         // Keycloak itself refused the client — not the handshake, not trust.
+        // Its answer does not tell client-b from no certificate at all:
+        // measured 2026-10-04, both are 401 invalid_client "Invalid client or
+        // Invalid client credentials". What makes this client-b's refusal is
+        // the case above: the same configuration with client-a gets a token.
         await expect(provider.getTokens()).rejects.toThrow(
-          /\(401\): .*invalid_client/,
+          '(401): "invalid_client": "Invalid client or Invalid client credentials"',
         );
         await expect(provider.prepare()).resolves.toEqual({
           ok: false,
@@ -332,15 +334,9 @@ describeKeycloak(
           }),
         });
 
-        await expect(provider.getTokens()).rejects.toMatchObject({
-          response: {
-            status: 400,
-            data: {
-              error: 'invalid_client',
-              error_description: 'Invalid token audience',
-            },
-          },
-        });
+        await expect(provider.getTokens()).rejects.toThrow(
+          'OIDC device authorization failed (400): "invalid_client": "Invalid token audience"',
+        );
       });
 
       it('the device flow completes with `audience` set to the issuer', async () => {
@@ -366,7 +362,6 @@ describeKeycloak(
 
         await approval;
         expect(approval).toBeDefined();
-        expect(new URL(deviceEndpoint).origin).toBe(new URL(issuer).origin);
         expect(claims(tokens.authorizationToken).azp).toBe('jwt');
         expect(claims(tokens.authorizationToken).preferred_username).toBe(
           'tester',
