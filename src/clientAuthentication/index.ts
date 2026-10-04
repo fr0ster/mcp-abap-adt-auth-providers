@@ -1,4 +1,8 @@
-export { clientSecretBasic, clientSecretPost } from './clientSecret';
+export {
+  type ClientSecretBasicOptions,
+  clientSecretBasic,
+  clientSecretPost,
+} from './clientSecret';
 export { noClientAuthentication } from './noClientAuthentication';
 export {
   type PrivateKeyJwtConfig,

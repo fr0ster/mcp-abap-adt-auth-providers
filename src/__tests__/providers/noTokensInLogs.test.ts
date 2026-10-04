@@ -192,7 +192,11 @@ describe('no secret of a client authentication in the logs', () => {
     () => IClientAuthentication,
     ICertificateMaterial?,
   ][] = [
-    ['clientSecretBasic', () => clientSecretBasic(SECRET)],
+    ['clientSecretBasic', () => clientSecretBasic(SECRET, { encoding: 'raw' })],
+    [
+      'clientSecretBasic form',
+      () => clientSecretBasic(SECRET, { encoding: 'form' }),
+    ],
     ['clientSecretPost', () => clientSecretPost(SECRET)],
     [
       'privateKeyJwt',

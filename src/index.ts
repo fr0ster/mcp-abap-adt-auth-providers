@@ -31,6 +31,7 @@ export {
 } from './errors/AssertionValidationError';
 export { CertificateMaterialError } from './errors/CertificateMaterialError';
 export {
+  BasicClientIdError,
   ClientAuthenticationError,
   ClientAuthenticationResultError,
 } from './errors/ClientAuthenticationError';

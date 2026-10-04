@@ -45,3 +45,26 @@ export class ClientAuthenticationResultError extends TokenProviderError {
     Object.setPrototypeOf(this, ClientAuthenticationResultError.prototype);
   }
 }
+
+/** The fixed words for a client id raw Basic cannot carry: the one source. */
+export const BASIC_CLIENT_ID_UNUSABLE = {
+  reason: "the client id contains ':', which raw Basic cannot carry",
+  hint: "use encoding: 'form' or clientSecretPost",
+} as const;
+
+/**
+ * Thrown by `clientSecretBasic` with `encoding: 'raw'` for a client id that
+ * contains `:` — RFC 7617 splits the credential at the first colon, so no
+ * server can read that id back. Its message is fixed and carries nothing of
+ * the id or the secret.
+ */
+export class BasicClientIdError extends TokenProviderError {
+  constructor() {
+    super(
+      BASIC_CLIENT_ID_UNUSABLE.reason,
+      TOKEN_PROVIDER_ERROR_CODES.CLIENT_AUTHENTICATION_ERROR,
+    );
+    this.name = 'BasicClientIdError';
+    Object.setPrototypeOf(this, BasicClientIdError.prototype);
+  }
+}

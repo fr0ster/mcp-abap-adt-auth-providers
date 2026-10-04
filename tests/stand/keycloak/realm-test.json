@@ -160,6 +160,26 @@
       "authenticationFlowBindingOverrides": {
         "direct_grant": "5b0c8f0e-3c1a-4c55-9a43-7f1d2e6a9b01"
       }
+    },
+    {
+      "clientId": "basic-reserved",
+      "enabled": true,
+      "publicClient": false,
+      "secret": "se+cr%25et/x",
+      "directAccessGrantsEnabled": true,
+      "standardFlowEnabled": false,
+      "serviceAccountsEnabled": false,
+      "protocol": "openid-connect"
+    },
+    {
+      "clientId": "basic:colon",
+      "enabled": true,
+      "publicClient": false,
+      "secret": "se+cr%25et/x",
+      "directAccessGrantsEnabled": true,
+      "standardFlowEnabled": false,
+      "serviceAccountsEnabled": false,
+      "protocol": "openid-connect"
     }
   ],
   "authenticationFlows": [

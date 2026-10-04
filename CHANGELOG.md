@@ -28,7 +28,7 @@ and `CLIENT_AUTHENTICATION_ERROR`.
 
 - **Five client-authentication strategies**, each a factory returning
   `IClientAuthentication`: `noClientAuthentication()` (`client_id` in the
-  body), `clientSecretBasic(secret)`, `clientSecretPost(secret)`,
+  body), `clientSecretBasic(secret, { encoding })`, `clientSecretPost(secret)`,
   `tlsClientCertificate({ material, endpoint? })` (`tls_client_auth`: the
   request goes over mTLS to `endpoint`, else the server's mTLS alias, else the
   configured endpoint; `material` is the certificate or a loader, read and
@@ -39,6 +39,17 @@ and `CLIENT_AUTHENTICATION_ERROR`.
   through `node:crypto`; a 60-second assertion whose `aud` is `audience`, else
   the draft's `tokenEndpoint`, else the endpoint the request goes to). A
   consumer may write its own.
+- **`clientSecretBasic`'s `encoding` is required: `'raw'` or `'form'`**, with
+  no default, because servers disagree (measured 2026-10-04): XSUAA accepts
+  only the raw `id:secret`; Cloud Foundry UAA and Keycloak decode each
+  component (RFC 6749 §2.3.1) and need `'form'` for an id or secret holding
+  `+`, `%`, `/`, `:` or a space. A missing or other value is a
+  `ValidationError` naming `encoding`. With `'raw'`, a client id containing
+  `:` is refused before anything is sent — a `BasicClientIdError`, *the
+  client id contains ':', which raw Basic cannot carry*. A provider without a
+  strategy still sends its `clientSecret` raw, as before. The stand measures
+  both encodings on UAA and Keycloak (`clientSecretBasic.test.ts`, clients
+  `basic_reserved`, `basic-reserved` and `basic:colon`).
 - **Every draft names the token endpoint** (`ITokenRequestDraft.tokenEndpoint`):
   a token request its own endpoint; the device authorization the provider's
   plain token endpoint — configured or discovered, never its mTLS alias. So

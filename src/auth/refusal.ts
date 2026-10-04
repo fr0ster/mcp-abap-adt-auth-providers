@@ -17,6 +17,8 @@ import {
 } from '../errors/AssertionValidationError';
 import { CertificateMaterialError } from '../errors/CertificateMaterialError';
 import {
+  BASIC_CLIENT_ID_UNUSABLE,
+  BasicClientIdError,
   CLIENT_AUTHENTICATION_UNUSABLE,
   CLIENT_KEY_UNUSABLE,
   ClientAuthenticationError,
@@ -82,6 +84,7 @@ export const KNOWN_CONFIG_FIELDS: ReadonlySet<string> = new Set([
   'clockSkewMs',
   'cookieProvider',
   'deviceAuthorizationEndpoint',
+  'encoding',
   'idpCertificates',
   'idpEntityId',
   'idpInitiated',
@@ -233,6 +236,7 @@ const OWN_CLASSES: ReadonlyArray<
   [CertificateMaterialError, 'CertificateMaterialError'],
   [ClientAuthenticationResultError, 'ClientAuthenticationResultError'],
   [ClientAuthenticationError, 'ClientAuthenticationError'],
+  [BasicClientIdError, 'BasicClientIdError'],
   [BrowserAuthError, 'BrowserAuthError'],
   [RefreshError, 'RefreshError'],
   [ValidationError, 'ValidationError'],
@@ -285,6 +289,9 @@ export function refusalFrom(error: unknown, what: string): AuthOutcome {
   }
   if (error instanceof ClientAuthenticationError) {
     return oops(CLIENT_KEY_UNUSABLE.reason, CLIENT_KEY_UNUSABLE.hint);
+  }
+  if (error instanceof BasicClientIdError) {
+    return oops(BASIC_CLIENT_ID_UNUSABLE.reason, BASIC_CLIENT_ID_UNUSABLE.hint);
   }
   if (error instanceof BrowserAuthError) {
     return oops(

@@ -530,7 +530,7 @@ public client that sends only `client_id`.
 | Factory | What each request carries | Presents a certificate |
 |---|---|---|
 | `noClientAuthentication()` | `client_id` in the body | no |
-| `clientSecretBasic(secret)` | `Authorization: Basic base64(clientId:secret)` | no |
+| `clientSecretBasic(secret, { encoding: 'raw' \| 'form' })` | `Authorization: Basic base64(clientId:secret)`, each component written as `encoding` says — see [`clientSecretBasic`'s `encoding`](#clientsecretbasics-encoding) | no |
 | `clientSecretPost(secret)` | `client_id` and `client_secret` in the body | no |
 | `tlsClientCertificate({ material, endpoint? })` | `client_id` in the body, over a TLS connection presenting the certificate; sent to `endpoint`, else the server's mTLS alias of the endpoint, else the configured endpoint | yes |
 | `privateKeyJwt({ key, algorithm, keyId?, audience? })` | `client_id`, `client_assertion_type` (`urn:ietf:params:oauth:client-assertion-type:jwt-bearer`) and `client_assertion`: a JWT signed with `key` | no |
@@ -688,6 +688,35 @@ const user = new OidcPasswordProvider({
   `response` of `status`, `statusText`, empty `headers` and the server's body
   reduced to `error`, `error_description` and `error_uri`, with every secret
   the request sent redacted.
+
+#### `clientSecretBasic`'s `encoding`
+
+Servers disagree on how the id and secret inside a Basic credential are
+written, so `encoding` is required and has no default — the provider does not
+guess:
+
+- `'raw'` — `base64(clientId + ':' + secret)`, as given.
+- `'form'` — each of the two first `application/x-www-form-urlencoded`
+  (RFC 6749 §2.3.1; a space becomes `+`), then joined and base64'd.
+
+Measured 2026-10-04 with `client_credentials`:
+
+| Server | `raw` | `form` | Source |
+|---|---|---|---|
+| SAP XSUAA (trial) | accepted — an id holding `!` and `\|`, a secret holding `$`, `=` and `_` | refused (`401`) for that id and secret | Measured (live subaccount) |
+| Cloud Foundry UAA (v79.7) | refused (`401`) for a secret holding `+`, `%` or `/`, and an id holding `+`, `:` or a space | accepted | Measured (provider stand, `clientSecretBasic.test.ts`) |
+| Keycloak (26.7) | as UAA | accepted | Measured (provider stand, `clientSecretBasic.test.ts`) |
+
+An id and secret holding none of the characters form encoding changes (letters,
+digits, `*`, `-`, `.`, `_`) are the same in both, and every server accepts
+either. Use `'raw'` for XSUAA and `'form'` for UAA and Keycloak; where neither
+fits, `clientSecretPost` sends both in the body. With `'raw'`, a client id
+containing `:` cannot be carried at all (RFC 7617 splits at the first colon):
+each request is refused before anything is sent, *the client id contains ':',
+which raw Basic cannot carry*, hint *use encoding: 'form' or
+clientSecretPost*. A missing or other `encoding` is a `ValidationError` naming
+`encoding`, thrown by `clientSecretBasic` itself. A `401` is reported as the
+server's `401`: nothing is inferred from the secret's characters.
 
 #### `privateKeyJwt`'s `audience`
 

@@ -19,6 +19,7 @@ import type {
 } from '@mcp-abap-adt/interfaces-auth';
 import axios from 'axios';
 import { toBearerAssertion } from '../../auth/samlBearerAssertion';
+import { clientSecretBasic } from '../../clientAuthentication';
 import {
   CERTIFICATE_UNUSABLE,
   CertificateMaterialError,
@@ -920,5 +921,37 @@ describe('OIDC discovery: mtls_endpoint_aliases', () => {
       undefined,
       'https://mtls.idp/token',
     ]);
+  });
+});
+
+describe('clientSecretBasic through a provider', () => {
+  it("raw with a client id containing ':': prepare() refuses in fixed words, nothing sent", async () => {
+    const provider = new ClientCredentialsProvider({
+      uaaUrl: 'https://uaa',
+      clientId: 'my:client',
+      clientAuthentication: clientSecretBasic('top-secret', {
+        encoding: 'raw',
+      }),
+    });
+    expect(await provider.prepare()).toEqual({
+      ok: false,
+      refusal: {
+        reason: "the client id contains ':', which raw Basic cannot carry",
+        hint: "use encoding: 'form' or clientSecretPost",
+      },
+    });
+    expect(sent).toHaveLength(0);
+  });
+
+  it('form with the same client id: the request goes out, the id encoded', async () => {
+    const provider = new ClientCredentialsProvider({
+      uaaUrl: 'https://uaa',
+      clientId: 'my:client',
+      clientAuthentication: clientSecretBasic('top-secret', {
+        encoding: 'form',
+      }),
+    });
+    expect(await provider.prepare()).toEqual({ ok: true });
+    expect(sent).toHaveLength(1);
   });
 });
