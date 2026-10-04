@@ -376,64 +376,136 @@ describe.each(SITES)('$name with a client authentication', (site) => {
   });
 });
 
+/**
+ * Secrets a decoding server reads differently from what was sent, each with
+ * the form `application/x-www-form-urlencoded` writes it in and the form a
+ * server decodes the raw secret to. `&` and `=` are where a form decoder that
+ * parses a query string cuts the value; a malformed `%` stays as it is.
+ */
+const ECHOED_SECRETS = [
+  {
+    label: '`&` with `+` and `%`',
+    secret: 'd&se+cr%41et',
+    formSent: 'd%26se%2Bcr%2541et',
+    rawDecoded: 'd&se crAet',
+  },
+  {
+    label: '`=` with `+` and `%`',
+    secret: 'ab=c+d%42e',
+    formSent: 'ab%3Dc%2Bd%2542e',
+    rawDecoded: 'ab=c dBe',
+  },
+  {
+    label: 'a malformed `%`',
+    secret: 'x+y%zz%4',
+    formSent: 'x%2By%25zz%254',
+    rawDecoded: 'x y%zz%4',
+  },
+];
+
+const ECHO_PREFIX = 'bad client secret';
+
+/** A token endpoint's 401 echoing `echoed`, and everything that came out of the call. */
+async function echoedOutput(
+  echoed: string,
+  run: (logger: ILogger) => Promise<unknown>,
+): Promise<string> {
+  const unauthorized = {
+    isAxiosError: true,
+    message: 'Request failed with status code 401',
+    response: {
+      status: 401,
+      data: {
+        error: 'invalid_client',
+        error_description: `${ECHO_PREFIX} ${echoed}`,
+      },
+    },
+  };
+  // The strategy path calls axios(config); a site's own adapter calls
+  // axios.post or axios(config).
+  mockedAxios.mockRejectedValue(unauthorized);
+  mockedAxios.post.mockRejectedValue(unauthorized);
+  const lines: string[] = [];
+  const record = (message: string, meta?: unknown) =>
+    lines.push(`${message} ${JSON.stringify(meta ?? {})}`);
+  const logger = {
+    debug: record,
+    info: record,
+    warn: record,
+    error: record,
+  } as ILogger;
+  const error = await failureOf(run(logger));
+  return [
+    messageOf(error),
+    String(error),
+    JSON.stringify(error),
+    JSON.stringify(
+      (error as { response?: { data?: unknown } } | null)?.response?.data ??
+        null,
+    ),
+    ...lines,
+  ].join('\n');
+}
+
+/**
+ * The echo is redacted whole, and nothing else is: the description reads
+ * exactly the prefix and `<redacted>` — no tail of the secret left after a
+ * prefix of it was redacted, no letter of the prefix redacted for a short
+ * fragment of the secret.
+ */
+function expectRedactedWhole(text: string, echoed: string): void {
+  expect(text).not.toContain(echoed);
+  expect(text).toContain(`${ECHO_PREFIX} <redacted>`);
+  // Followed only by a closing quote (plain or JSON-escaped), a space or the end.
+  expect(text).not.toMatch(/bad client secret <redacted>[^"\\\s]/);
+}
+
 describe.each(SITES)(
   '$name: a Basic secret echoed back, as sent or as the server decoded it',
   (site) => {
-    // Form-encoded it is `se%2Bcr%2525et%2Fx+yz`; a server decoding raw
-    // reads `se cr%et/x yz`.
-    const SECRET = 'se+cr%25et/x yz';
-    const FORM_SENT = 'se%2Bcr%2525et%2Fx+yz';
-    const RAW_DECODED = 'se cr%et/x yz';
-
-    it.each<[string, 'raw' | 'form', string]>([
-      ['form: the original secret', 'form', SECRET],
-      ['form: the form-encoded secret that was sent', 'form', FORM_SENT],
-      ['raw: the secret as sent', 'raw', SECRET],
-      ['raw: the secret as the server decoded it', 'raw', RAW_DECODED],
-    ])(
-      '%s is in neither the message, the thrown error nor a log line',
-      async (_label, encoding, echoed) => {
-        mockedAxios.mockRejectedValue({
-          isAxiosError: true,
-          message: 'Request failed with status code 401',
-          response: {
-            status: 401,
-            data: {
-              error: 'invalid_client',
-              error_description: `bad client secret ${echoed}`,
-            },
-          },
-        });
-        const lines: string[] = [];
-        const record = (message: string, meta?: unknown) =>
-          lines.push(`${message} ${JSON.stringify(meta ?? {})}`);
-        const logger = {
-          debug: record,
-          info: record,
-          warn: record,
-          error: record,
-        } as ILogger;
-        const error = await failureOf(
-          site.run(
-            { strategy: clientSecretBasic(SECRET, { encoding }) },
-            logger,
-          ),
-        );
-        const text = [
-          messageOf(error),
-          String(error),
-          JSON.stringify(error),
-          JSON.stringify(
-            (error as { response?: { data?: unknown } } | null)?.response
-              ?.data ?? null,
-          ),
-          ...lines,
-        ].join('\n');
-        expect(text).not.toContain(echoed);
-      },
-    );
+    describe.each(ECHOED_SECRETS)('$label', (c) => {
+      it.each<[string, 'raw' | 'form', keyof typeof c]>([
+        ['form: the original secret', 'form', 'secret'],
+        ['form: the form-encoded secret that was sent', 'form', 'formSent'],
+        ['raw: the secret as sent', 'raw', 'secret'],
+        ['raw: the secret as the server decoded it', 'raw', 'rawDecoded'],
+      ])(
+        '%s is in neither the message, the thrown error nor a log line',
+        async (_label, encoding, which) => {
+          const echoed = c[which];
+          const text = await echoedOutput(echoed, (logger) =>
+            site.run(
+              { strategy: clientSecretBasic(c.secret, { encoding }) },
+              logger,
+            ),
+          );
+          expectRedactedWhole(text, echoed);
+        },
+      );
+    });
   },
 );
+
+describe.each(
+  SITES.filter((site) => site.grantType !== 'device_authorization'),
+)('$name without a strategy: the client secret echoed back', (site) => {
+  describe.each(ECHOED_SECRETS)('$label', (c) => {
+    it.each<[string, keyof typeof c]>([
+      ['as sent', 'secret'],
+      ['form-encoded', 'formSent'],
+      ['as a decoding server read it', 'rawDecoded'],
+    ])(
+      '%s is in neither the message, the thrown error nor a log line',
+      async (_label, which) => {
+        const echoed = c[which];
+        const text = await echoedOutput(echoed, (logger) =>
+          site.run(undefined, logger, c.secret),
+        );
+        expectRedactedWhole(text, echoed);
+      },
+    );
+  });
+});
 
 describe('client authentication per request', () => {
   it('the device poll authenticates every request anew', async () => {

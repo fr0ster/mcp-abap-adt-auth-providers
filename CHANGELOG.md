@@ -40,17 +40,21 @@ and `CLIENT_AUTHENTICATION_ERROR`.
   the draft's `tokenEndpoint`, else the endpoint the request goes to). A
   consumer may write its own.
 - **`clientSecretBasic`'s `encoding` is required: `'raw'` or `'form'`**, with
-  no default, because servers disagree (measured 2026-10-04): XSUAA accepts
-  only the raw `id:secret`; Cloud Foundry UAA and Keycloak decode each
-  component (RFC 6749 §2.3.1) and need `'form'` for an id or secret holding
-  `+`, `%`, `/`, `:` or a space. A missing or other value is a
+  no default, because servers disagree (measured 2026-10-04, for the
+  measured ids and secrets): XSUAA accepted only the raw `id:secret` (trial,
+  `client_credentials`, by hand); Cloud Foundry UAA (`client_credentials`) and
+  Keycloak (`password`) decode each component (RFC 6749 §2.3.1) and refused a
+  raw secret holding `+` and `%`, accepting it form-encoded. That an id
+  holding `+` or `%`, or an id or secret holding a space, needs `'form'` there
+  too is inference from the same rule, not measured. A missing or other value is a
   `ValidationError` naming `encoding`. With `'raw'`, a client id containing
   `:` is refused before anything is sent — a `BasicClientIdError`, *the
   client id contains ':', which raw Basic cannot carry*. A provider without a
   strategy still sends its `clientSecret` raw, as before. An error body is
-  redacted of the Basic secret both as sent and form-decoded: with `'form'`
-  the original and the encoded secret, with `'raw'` the secret and what a
-  decoding server read. The stand measures
+  redacted of every secret as sent, encoded and form-decoded — the whole
+  value, `&` and `=` included, a malformed `%` left as it is: with `'form'`
+  the original and the encoded secret, with `'raw'` and for a `clientSecret`
+  sent without a strategy the secret and what a decoding server read. The stand measures
   both encodings on UAA and Keycloak (`clientSecretBasic.test.ts`, clients
   `basic_reserved`, `basic-reserved` and `basic:colon`).
 - **Every draft names the token endpoint** (`ITokenRequestDraft.tokenEndpoint`):

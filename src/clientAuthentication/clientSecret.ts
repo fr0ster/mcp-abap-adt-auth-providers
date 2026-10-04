@@ -6,12 +6,16 @@ import { ValidationError } from '../errors/TokenProviderErrors';
  * How `clientSecretBasic` writes the client id and secret before joining them.
  * It depends on the server, so the consumer chooses — there is no default.
  *
- * - `'raw'`: as given, `base64(id + ':' + secret)`. Measured: XSUAA accepts
- *   only this; UAA and Keycloak refuse it for an id or secret holding `+`,
- *   `%`, `/`, `:` or a space, which they decode (RFC 6749 §2.3.1).
+ * - `'raw'`: as given, `base64(id + ':' + secret)`. Measured, for the
+ *   measured id and secret: XSUAA accepts only this; UAA and Keycloak, which
+ *   form-decode each component (RFC 6749 §2.3.1), refuse it for a secret
+ *   holding `+` and `%`. An id holding `+` or `%`, or a space anywhere:
+ *   Inference from the same rule, not measured.
  * - `'form'`: each component `application/x-www-form-urlencoded` first
  *   (RFC 6749 §2.3.1; a space becomes `+`). Measured: UAA and Keycloak accept
- *   it; XSUAA refuses it for an id or secret that encoding changes.
+ *   it; XSUAA refused it for the measured id and secret, which encoding
+ *   changes. A server percent-decoding per RFC 3986 would read a space's `+`
+ *   as `+` (Inference, not measured).
  */
 export interface ClientSecretBasicOptions {
   readonly encoding: 'raw' | 'form';

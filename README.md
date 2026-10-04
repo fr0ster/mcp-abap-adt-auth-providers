@@ -573,9 +573,11 @@ public client that sends only `client_id`.
   `ClientAuthenticationResultError`, refused as *the client authentication
   returned a request that cannot be sent*. Only `client_secret`,
   `client_assertion` and a Basic credential are known to be secrets and
-  redacted from an error body — a Basic secret both as sent and
-  form-decoded, so with either `encoding` neither the original nor the
-  encoded secret survives a server's echo; a secret your strategy puts in any other
+  redacted from an error body. Every secret is redacted as sent, encoded and
+  form-decoded (the whole value: `&` and `=` are part of it, a malformed `%`
+  stays) — so with either `encoding`, and for a `clientSecret` sent without a
+  strategy, neither the original, the encoded secret nor what a decoding
+  server read survives its echo; a secret your strategy puts in any other
   parameter or header is not recognised as one.
 
 ```typescript
@@ -701,18 +703,25 @@ guess:
 - `'form'` — each of the two first `application/x-www-form-urlencoded`
   (RFC 6749 §2.3.1; a space becomes `+`), then joined and base64'd.
 
-Measured 2026-10-04 with `client_credentials`:
+Measured 2026-10-04, each row with the grant named:
 
-| Server | `raw` | `form` | Source |
-|---|---|---|---|
-| SAP XSUAA (trial) | accepted — an id holding `!` and `\|`, a secret holding `$`, `=` and `_` | refused (`401`) for that id and secret | Measured (live subaccount) |
-| Cloud Foundry UAA (v79.7) | refused (`401`) for a secret holding `+`, `%` or `/`, and an id holding `+`, `:` or a space | accepted | Measured (provider stand, `clientSecretBasic.test.ts`) |
-| Keycloak (26.7) | as UAA | accepted | Measured (provider stand, `clientSecretBasic.test.ts`) |
+| Server | Grant | `raw` | `form` | Source |
+|---|---|---|---|---|
+| SAP XSUAA (trial) | `client_credentials` | accepted — an id holding `!` and `\|`, a secret holding `$`, `=` and `_` (two keys) | refused (`401`) for that id and secret, as was each component `encodeURIComponent`'d | Measured (trial, 2026-10-04, by hand; not in `test:xsuaa`) |
+| Cloud Foundry UAA (v79.7) | `client_credentials` (`ClientCredentialsProvider`) | refused (`401`) for the secret `se+cr%25et/x` | accepted for that secret, and for the id `basic:colon` | Measured (provider stand, `clientSecretBasic.test.ts`) |
+| Keycloak (26.7) | `password` (`OidcPasswordProvider`) | refused (`401`) for the secret `se+cr%25et/x` | accepted for that secret, and for the id `basic:colon` | Measured (provider stand, `clientSecretBasic.test.ts`) |
 
-An id and secret holding none of the characters form encoding changes (letters,
-digits, `*`, `-`, `.`, `_`) are the same in both, and every server accepts
-either. Use `'raw'` for XSUAA and `'form'` for UAA and Keycloak; where neither
-fits, `clientSecretPost` sends both in the body. With `'raw'`, a client id
+What makes the stand's raw secret fail is its `+` and `%`, which UAA and
+Keycloak form-decode (RFC 6749 §2.3.1) into another secret; its `/` is left as
+it is by form-decoding. A client id or secret holding a space, or an id
+holding `+` or `%`, is not measured: that UAA and Keycloak refuse it raw is
+Inference from the same rule. So is how `'form'` fares where the server
+percent-decodes per RFC 3986 instead — it would read a space's `+` as a `+`.
+
+For the measured ids and secrets: use `'raw'` for XSUAA and `'form'` for UAA
+and Keycloak. An id and secret holding none of the characters form encoding
+changes (letters, digits, `*`, `-`, `.`, `_`) are the same in both encodings.
+Where neither fits, `clientSecretPost` sends both in the body. With `'raw'`, a client id
 containing `:` cannot be carried at all (RFC 7617 splits at the first colon):
 each request is refused before anything is sent, *the client id contains ':',
 which raw Basic cannot carry*, hint *use encoding: 'form' or

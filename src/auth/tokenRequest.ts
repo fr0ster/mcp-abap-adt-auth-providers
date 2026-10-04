@@ -147,18 +147,10 @@ function agentFor(material: ICertificateMaterial): Agent {
 }
 
 /**
- * A value as a server reading it `application/x-www-form-urlencoded` decodes
- * it (RFC 6749 §2.3.1): `+` a space, `%XX` its byte. Never throws: a
- * malformed escape stays as it is.
- */
-const formDecoded = (value: string): string =>
-  new URLSearchParams(`v=${value}`).get('v') ?? value;
-
-/**
- * The secret of a `Basic` credential, in every form a server may echo: the
- * base64 credential, the secret as sent, and the secret form-decoded — which
- * is the original for `clientSecretBasic`'s `'form'`, and what a decoding
- * server read for its `'raw'`.
+ * The secrets of a `Basic` credential: the base64 credential and the secret
+ * as sent. Redaction tries each in every form a server may echo — its
+ * form-decoding among them, which is the original for `clientSecretBasic`'s
+ * `'form'`, and what a decoding server read for its `'raw'`.
  */
 function basicSecrets(headers: Record<string, string>): string[] {
   const out: string[] = [];
@@ -170,10 +162,7 @@ function basicSecrets(headers: Record<string, string>): string[] {
     const decoded = Buffer.from(match[1], 'base64').toString();
     const colon = decoded.indexOf(':');
     if (colon >= 0 && colon < decoded.length - 1) {
-      const sent = decoded.slice(colon + 1);
-      out.push(sent);
-      const read = formDecoded(sent);
-      if (read !== sent && read !== '') out.push(read);
+      out.push(decoded.slice(colon + 1));
     }
   }
   return out;

@@ -64,7 +64,7 @@ file or a service key by itself (rule 7).
 | Factory | Sends | `tlsMaterial()` |
 |---|---|---|
 | `noClientAuthentication()` | `client_id` in the body | — |
-| `clientSecretBasic(secret)` | `Authorization: Basic base64(id:secret)` | — |
+| `clientSecretBasic(secret, { encoding: 'raw' \| 'form' })` | `Authorization: Basic base64(id:secret)`, id and secret as given (`'raw'`) or each form-encoded first (`'form'`); `encoding` required, no default | — |
 | `clientSecretPost(secret)` | `client_id`, `client_secret` in the body | — |
 | `tlsClientCertificate({ material, endpoint? })` | `client_id` in the body; the request goes to `endpoint`, else `draft.mtlsEndpoint`, else `draft.endpoint` | the material |
 | `privateKeyJwt({ key, algorithm, keyId?, audience? })` | `client_id`, `client_assertion_type=urn:ietf:params:oauth:client-assertion-type:jwt-bearer`, `client_assertion` | — |

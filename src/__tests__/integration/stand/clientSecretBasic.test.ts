@@ -1,14 +1,17 @@
 /**
  * `clientSecretBasic`'s encoding against the stand's two servers — the
  * measurement behind the README's encoding table. Both decode each Basic
- * component per RFC 6749 §2.3.1, so a secret holding `+`, `%` and `/` is
- * accepted form-encoded and refused raw. The clients are stand fixtures:
+ * component per RFC 6749 §2.3.1, so a secret holding `+` and `%` is accepted
+ * form-encoded and refused raw (its `/`, which form-decoding leaves as it is,
+ * plays no part). UAA is measured through `client_credentials`, Keycloak
+ * through the `password` grant. The clients are stand fixtures:
  * `basic_reserved` / `basic:colon` in tests/stand/uaa/config/uaa.yml and
  * `basic-reserved` / `basic:colon` in tests/stand/keycloak/realm-test.json,
  * each with the secret `se+cr%25et/x`.
  *
- * XSUAA is the other way round (raw only; measured 2026-10-04 on a trial
- * subaccount) and is not part of the stand.
+ * XSUAA is the other way round — raw only, for an id holding `!` and `|` and a
+ * secret holding `$`, `=` and `_`: Measured (trial, 2026-10-04, by hand; not
+ * in test:xsuaa). It is not part of the stand.
  *
  * Runs only under `npm run test:stand`, which sets UAA_URL and KEYCLOAK_URL;
  * each block's title says why it is skipped otherwise.
@@ -49,7 +52,7 @@ describeUaa(
         clientAuthentication: clientSecretBasic(SECRET, { encoding }),
       });
 
-    it("form: a secret holding '+', '%' and '/' gets a token", async () => {
+    it("form: a secret holding '+' and '%' gets a token", async () => {
       const tokens = await provider('basic_reserved', 'form').getTokens();
       expect(claims(tokens.authorizationToken).client_id).toBe(
         'basic_reserved',
@@ -87,7 +90,7 @@ describeKeycloak(
         clientAuthentication: clientSecretBasic(SECRET, { encoding }),
       });
 
-    it("form: a secret holding '+', '%' and '/' gets a token", async () => {
+    it("form: a secret holding '+' and '%' gets a token", async () => {
       const tokens = await provider('basic-reserved', 'form').getTokens();
       expect(claims(tokens.authorizationToken).azp).toBe('basic-reserved');
     });

@@ -1,6 +1,6 @@
 /**
  * Every token-request site, called the same way: without `auth` as today with
- * the secret `sec`, with `auth` and no secret. Shared by the tests that run a
+ * a client secret (`sec` unless given), with `auth` and no secret. Shared by the tests that run a
  * property over all of them.
  */
 
@@ -37,8 +37,15 @@ export const tokenReply = {
 
 export interface Site {
   name: string;
-  /** Without `auth`, the site runs as today with the secret `sec`. */
-  run: (auth?: TokenRequestAuth, logger?: ILogger) => Promise<unknown>;
+  /**
+   * Without `auth`, the site runs as today with `secret` (default `sec`);
+   * the device initiation sends none.
+   */
+  run: (
+    auth?: TokenRequestAuth,
+    logger?: ILogger,
+    secret?: string,
+  ) => Promise<unknown>;
   /** The URL the site sends to today: the draft's endpoint. */
   endpoint: string;
   grantType: string;
@@ -49,16 +56,17 @@ export interface Site {
 }
 
 export const OIDC = 'https://idp/token';
-const secretUnless = (auth?: TokenRequestAuth) => (auth ? undefined : 'sec');
+const secretUnless = (auth?: TokenRequestAuth, secret = 'sec') =>
+  auth ? undefined : secret;
 
 export const SITES: Site[] = [
   {
     name: 'clientCredentialsAuth',
-    run: (auth) =>
+    run: (auth, _logger, secret) =>
       getTokenWithClientCredentials(
         'https://uaa',
         'cid',
-        secretUnless(auth),
+        secretUnless(auth, secret),
         auth,
       ),
     endpoint: 'https://uaa/oauth/token',
@@ -67,20 +75,26 @@ export const SITES: Site[] = [
   },
   {
     name: 'tokenRefresher',
-    run: (auth) =>
-      refreshJwtToken('old-rt', 'https://uaa', 'cid', secretUnless(auth), auth),
+    run: (auth, _logger, secret) =>
+      refreshJwtToken(
+        'old-rt',
+        'https://uaa',
+        'cid',
+        secretUnless(auth, secret),
+        auth,
+      ),
     endpoint: 'https://uaa/oauth/token',
     grantType: 'refresh_token',
     grant: { grant_type: 'refresh_token', refresh_token: 'old-rt' },
   },
   {
     name: 'browserAuth.exchangeCodeForToken',
-    run: (auth, logger) =>
+    run: (auth, logger, secret) =>
       exchangeCodeForToken(
         {
           uaaUrl: 'https://uaa',
           uaaClientId: 'cid',
-          uaaClientSecret: secretUnless(auth),
+          uaaClientSecret: secretUnless(auth, secret),
         } as Parameters<typeof exchangeCodeForToken>[0],
         'the-code',
         'http://localhost:61001/callback',
@@ -97,11 +111,11 @@ export const SITES: Site[] = [
   },
   {
     name: 'passcodeAuth',
-    run: (auth, logger) =>
+    run: (auth, logger, secret) =>
       exchangePasscode(
         'https://uaa/',
         'cid',
-        secretUnless(auth),
+        secretUnless(auth, secret),
         'CODE',
         logger,
         auth,
@@ -113,12 +127,12 @@ export const SITES: Site[] = [
   },
   {
     name: 'saml2TokenExchange.exchangeSamlAssertion',
-    run: (auth, logger) =>
+    run: (auth, logger, secret) =>
       exchangeSamlAssertion(
         'ASSERTION',
         'https://t/token',
         'cid',
-        secretUnless(auth),
+        secretUnless(auth, secret),
         logger,
         auth,
       ),
@@ -131,12 +145,12 @@ export const SITES: Site[] = [
   },
   {
     name: 'saml2TokenExchange.refreshSamlBearerToken',
-    run: (auth, logger) =>
+    run: (auth, logger, secret) =>
       refreshSamlBearerToken(
         'old-rt',
         'https://t/token',
         'cid',
-        secretUnless(auth),
+        secretUnless(auth, secret),
         logger,
         auth,
       ),
@@ -146,11 +160,11 @@ export const SITES: Site[] = [
   },
   {
     name: 'oidcToken.exchangeAuthorizationCode',
-    run: (auth, logger) =>
+    run: (auth, logger, secret) =>
       exchangeAuthorizationCode(
         OIDC,
         'cid',
-        secretUnless(auth),
+        secretUnless(auth, secret),
         'the-code',
         'http://localhost:61001/callback',
         'verifier',
@@ -168,8 +182,15 @@ export const SITES: Site[] = [
   },
   {
     name: 'oidcToken.refreshOidcToken',
-    run: (auth, logger) =>
-      refreshOidcToken(OIDC, 'cid', secretUnless(auth), 'old-rt', logger, auth),
+    run: (auth, logger, secret) =>
+      refreshOidcToken(
+        OIDC,
+        'cid',
+        secretUnless(auth, secret),
+        'old-rt',
+        logger,
+        auth,
+      ),
     endpoint: OIDC,
     grantType: 'refresh_token',
     grant: { grant_type: 'refresh_token', refresh_token: 'old-rt' },
@@ -190,8 +211,16 @@ export const SITES: Site[] = [
   },
   {
     name: 'oidcToken.pollDeviceTokens',
-    run: (auth, logger) =>
-      pollDeviceTokens(OIDC, 'cid', secretUnless(auth), 'dc', 0, logger, auth),
+    run: (auth, logger, secret) =>
+      pollDeviceTokens(
+        OIDC,
+        'cid',
+        secretUnless(auth, secret),
+        'dc',
+        0,
+        logger,
+        auth,
+      ),
     endpoint: OIDC,
     grantType: 'urn:ietf:params:oauth:grant-type:device_code',
     grant: {
@@ -201,11 +230,11 @@ export const SITES: Site[] = [
   },
   {
     name: 'oidcToken.passwordGrant',
-    run: (auth, logger) =>
+    run: (auth, logger, secret) =>
       passwordGrant(
         OIDC,
         'cid',
-        secretUnless(auth),
+        secretUnless(auth, secret),
         'user',
         'pw',
         'openid',
@@ -223,11 +252,11 @@ export const SITES: Site[] = [
   },
   {
     name: 'oidcToken.tokenExchange',
-    run: (auth, logger) =>
+    run: (auth, logger, secret) =>
       tokenExchange(
         OIDC,
         'cid',
-        secretUnless(auth),
+        secretUnless(auth, secret),
         'subj',
         'urn:ietf:params:oauth:token-type:access_token',
         'openid',

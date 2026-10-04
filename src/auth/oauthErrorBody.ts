@@ -18,6 +18,30 @@ const quote = (value: string, cap: number): string =>
 const JWT_SHAPE = /eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]*/g;
 
 /**
+ * A value as a server reading it `application/x-www-form-urlencoded` decodes
+ * it (RFC 6749 §2.3.1): `+` a space, `%XX` its byte, the whole value — `&`
+ * and `=` are part of it, never a separator. Never throws: a malformed escape
+ * stays as it is (WHATWG percent-decoding).
+ */
+const formDecoded = (value: string): string =>
+  new URLSearchParams(`v=${value.replace(/&/g, '%26')}`).get('v') ?? value;
+
+/**
+ * Every form a server may echo a secret in: as sent; as a request body
+ * encodes it (URLSearchParams: + / = become %2B %2F %3D); percent-encoded;
+ * and form-decoded — what a server decoding a raw `Basic` secret read
+ * (UAA, Keycloak), and the original of a `'form'`-encoded one.
+ */
+function echoedForms(secret: string): string[] {
+  return [
+    secret,
+    new URLSearchParams({ s: secret }).toString().slice(2),
+    encodeURIComponent(secret),
+    formDecoded(secret),
+  ];
+}
+
+/**
  * Replaces every secret the request itself sent (a refresh token, an
  * assertion, a client secret), in each form it may come back in.
  * Every known secret is redacted, however short: nothing guarantees a client
@@ -28,22 +52,19 @@ function redactKnownSecrets(
   text: string,
   secrets: readonly (string | undefined)[],
 ): string {
+  // Every form of every secret, longest first: a short one (a password, a
+  // decoded secret) redacted inside a longer one (an assertion, the secret as
+  // sent) would leave the rest of the longer one unrecognisable.
+  const forms = [
+    ...new Set(
+      secrets
+        .filter((secret): secret is string => !!secret)
+        .flatMap(echoedForms)
+        .filter((form) => form !== ''),
+    ),
+  ].sort((a, b) => b.length - a.length);
   let out = text;
-  // Longest first: a short secret (a password) redacted inside a longer one
-  // (an assertion) would leave the rest of the longer one unrecognisable.
-  const longestFirst = secrets
-    .filter((secret): secret is string => !!secret)
-    .sort((a, b) => b.length - a.length);
-  for (const secret of longestFirst) {
-    // As sent, as the request body encoded it (URLSearchParams: + / = become
-    // %2B %2F %3D), and percent-encoded: a server may echo any of these.
-    const forms = new Set([
-      secret,
-      new URLSearchParams({ s: secret }).toString().slice(2),
-      encodeURIComponent(secret),
-    ]);
-    for (const form of forms) out = out.split(form).join('<redacted>');
-  }
+  for (const form of forms) out = out.split(form).join('<redacted>');
   return out;
 }
 
