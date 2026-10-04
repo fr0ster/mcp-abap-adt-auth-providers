@@ -4,8 +4,8 @@ passphrase `test-passphrase`, the same key encrypted (`client-encrypted.key`, PK
 "key does not match the certificate" case. Trusted by nothing; never use it
 anywhere else.
 
-`other.crt` is a self-signed certificate for `other.key` (a second, unrelated
-certificate, for chains); `client-chain.pfx` holds the client key and
+`other.crt` is a self-signed certificate for `other.key` (a stand-in non-leaf
+certificate, not an issuer of `client.crt`, used only to make a PEM chain and the chain PFX); `client-chain.pfx` holds the client key and
 certificate with `other.crt` as an extra certificate (passphrase
 `test-passphrase`, current encryption: PBES2/AES-256-CBC). Made with:
 
