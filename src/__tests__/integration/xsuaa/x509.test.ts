@@ -54,9 +54,15 @@ describeXsuaa(`An x509 service key against a real XSUAA${unlessSet}`, () => {
   let x509: X509Key;
 
   beforeAll(() => {
-    const key = JSON.parse(
-      readFileSync(join(LOCAL as string, 'x509-key.json'), 'utf8'),
-    );
+    // A parse error quotes part of its input — here, part of a private key.
+    let key: { credentials?: X509Key } & X509Key;
+    try {
+      key = JSON.parse(
+        readFileSync(join(LOCAL as string, 'x509-key.json'), 'utf8'),
+      );
+    } catch {
+      throw new Error('x509-key.json is not JSON');
+    }
     x509 = key.credentials ?? key;
   });
 
