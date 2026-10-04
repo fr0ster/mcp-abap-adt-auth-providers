@@ -251,3 +251,36 @@ describe('a short secret inside a longer one', () => {
     expect(text).toContain('refused <redacted>');
   });
 });
+
+describe('every form is redacted in one pass', () => {
+  const MARKER = '<redacted>';
+  /** What is left once every whole marker is taken out: no piece of one. */
+  const outsideMarkers = (text: string): string => text.split(MARKER).join('');
+
+  it('a short form is never replaced inside a marker another form left', () => {
+    // `%65%64` form-decodes to `ed`, which every marker contains.
+    const text = describeOAuthErrorBody(
+      { error_description: 'bad secret %65%64 here' },
+      ['%65%64'],
+    );
+    expect(text).toBe(`"bad secret ${MARKER} here"`);
+  });
+
+  it('the output stays bounded: one marker per match in the original text', () => {
+    // Each decodes to one letter of the marker; replaced one after another,
+    // every pass would rewrite the markers of the one before.
+    const description = 'a d e r c t a d e r';
+    const text = describeOAuthErrorBody({ error_description: description }, [
+      '%61',
+      '%64',
+      '%65',
+      '%72',
+      '%63',
+      '%74',
+    ]);
+    expect(outsideMarkers(text)).toBe('"         "');
+    expect(text.length).toBeLessThanOrEqual(
+      description.length * MARKER.length + 2,
+    );
+  });
+});

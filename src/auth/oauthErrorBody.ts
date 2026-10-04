@@ -63,10 +63,17 @@ function redactKnownSecrets(
         .filter((form) => form !== ''),
     ),
   ].sort((a, b) => b.length - a.length);
-  let out = text;
-  for (const form of forms) out = out.split(form).join('<redacted>');
-  return out;
+  if (forms.length === 0) return text;
+  // One pass over the original text: an alternation tries the longest form
+  // first at each position, and a marker it writes is never scanned again —
+  // replaced one form after another, a short form (`ed`) would be redacted
+  // inside the markers the longer ones left, and the text would grow per form.
+  const anyForm = new RegExp(forms.map(escapeRegExp).join('|'), 'g');
+  return text.replace(anyForm, '<redacted>');
 }
+
+const escapeRegExp = (value: string): string =>
+  value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 /**
  * The registered OAuth error codes a token endpoint (or the device
