@@ -8,15 +8,18 @@ import type {
 } from '@mcp-abap-adt/interfaces-auth';
 import { AUTH_TYPE_PASSWORD } from '@mcp-abap-adt/interfaces-auth';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
-import { discoverOidc } from '../auth/oidcDiscovery';
+import { discoverOidc, mtlsAlias } from '../auth/oidcDiscovery';
 import { passwordGrant, refreshOidcToken } from '../auth/oidcToken';
 import { RefreshError } from '../errors/TokenProviderErrors';
 import {
   BaseTokenProvider,
+  type ClientAuthenticationConfig,
   type TokenProviderHooks,
 } from './BaseTokenProvider';
 
-export interface OidcPasswordProviderConfig extends TokenProviderHooks {
+export interface OidcPasswordProviderConfig
+  extends TokenProviderHooks,
+    ClientAuthenticationConfig {
   issuerUrl?: string;
   clientId: string;
   clientSecret?: string;
@@ -83,6 +86,11 @@ export class OidcPasswordProvider extends BaseTokenProvider {
       this.config.password,
       scope,
       this.logger,
+      await this.requestAuth(
+        this.config.tokenEndpoint
+          ? undefined
+          : mtlsAlias(discovery, 'token_endpoint'),
+      ),
     );
 
     return {
@@ -123,6 +131,12 @@ export class OidcPasswordProvider extends BaseTokenProvider {
       this.config.clientSecret,
       this.refreshToken,
       this.logger,
+      // The alias belongs to the discovered endpoint only.
+      await this.requestAuth(
+        this.config.tokenEndpoint
+          ? undefined
+          : mtlsAlias(discovery, 'token_endpoint'),
+      ),
     );
 
     return {

@@ -1,0 +1,688 @@
+/**
+ * Providers take a client authentication (spec §3) and pin one certificate
+ * (spec §4, first paragraphs).
+ *
+ * axios is mocked at the module boundary, so every real token-request site
+ * runs: what is asserted is what the strategy was asked (its drafts) and what
+ * each request carried (its URL and its TLS agent's certificate).
+ */
+
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { beforeEach, describe, expect, it, jest } from '@jest/globals';
+import type {
+  IAssertionValidator,
+  IAuthorizationStrategy,
+  ICertificateMaterial,
+  IClientAuthentication,
+  ITokenRequestDraft,
+} from '@mcp-abap-adt/interfaces-auth';
+import axios from 'axios';
+import { toBearerAssertion } from '../../auth/samlBearerAssertion';
+import {
+  CERTIFICATE_UNUSABLE,
+  CertificateMaterialError,
+} from '../../errors/CertificateMaterialError';
+import { ValidationError } from '../../errors/TokenProviderErrors';
+import { AuthorizationCodeProvider } from '../../providers/AuthorizationCodeProvider';
+import { ClientCredentialsProvider } from '../../providers/ClientCredentialsProvider';
+import { OidcBrowserProvider } from '../../providers/OidcBrowserProvider';
+import { OidcDeviceFlowProvider } from '../../providers/OidcDeviceFlowProvider';
+import { OidcPasswordProvider } from '../../providers/OidcPasswordProvider';
+import { OidcTokenExchangeProvider } from '../../providers/OidcTokenExchangeProvider';
+import { Saml2BearerProvider } from '../../providers/Saml2BearerProvider';
+import { UaaPasscodeProvider } from '../../providers/UaaPasscodeProvider';
+
+jest.mock('axios');
+type Mock = jest.Mock<(...args: any[]) => Promise<unknown>>;
+const mockedAxios = axios as unknown as Mock & { post: Mock; get: Mock };
+
+const dir = join(__dirname, '..', 'fixtures', 'certificates');
+const read = (name: string) => readFileSync(join(dir, name));
+const A: ICertificateMaterial = {
+  cert: read('client.crt'),
+  key: read('client.key'),
+};
+const B: ICertificateMaterial = {
+  cert: read('other.crt'),
+  key: read('other.key'),
+};
+
+function jwt(label: string, secondsFromNow = 3600): string {
+  const encode = (value: object) =>
+    Buffer.from(JSON.stringify(value)).toString('base64url');
+  const exp = Math.floor(Date.now() / 1000) + secondsFromNow;
+  return `${encode({ alg: 'none' })}.${encode({ exp, label })}.sig`;
+}
+
+let issued = 0;
+interface Sent {
+  url: string;
+  body: Record<string, string>;
+  cert?: unknown;
+}
+let sent: Sent[] = [];
+const discovery = new Map<string, unknown>();
+
+beforeEach(() => {
+  jest.clearAllMocks();
+  sent = [];
+  mockedAxios.mockImplementation(async (config: any) => {
+    sent.push({
+      url: config.url,
+      body: Object.fromEntries(new URLSearchParams(config.data)),
+      cert: config.httpsAgent?.options?.cert,
+    });
+    if (String(config.url).includes('/device')) {
+      return {
+        data: {
+          device_code: 'dc',
+          user_code: 'UC',
+          verification_uri: 'https://idp/verify',
+          interval: 0,
+        },
+      };
+    }
+    issued += 1;
+    return {
+      data: {
+        access_token: jwt(`at-${issued}`),
+        refresh_token: `rt-${issued}`,
+        expires_in: 3600,
+      },
+    };
+  });
+  mockedAxios.post.mockImplementation(async () => {
+    throw new Error('a request went out without the strategy');
+  });
+  mockedAxios.get.mockImplementation(async (url: string) => {
+    const doc = discovery.get(url);
+    if (!doc) throw new Error(`no discovery document at ${url}`);
+    return { data: doc };
+  });
+});
+
+/** A strategy that records each draft; with materials, answers them in turn. */
+function recording(materials?: Array<ICertificateMaterial | Error>) {
+  const drafts: ITokenRequestDraft[] = [];
+  let calls = 0;
+  const strategy: IClientAuthentication = {
+    authenticate: async (draft) => {
+      drafts.push(draft);
+      return { parameters: { client_id: draft.clientId } };
+    },
+  };
+  if (materials) {
+    strategy.tlsMaterial = async () => {
+      const answer = materials[Math.min(calls, materials.length - 1)];
+      calls += 1;
+      if (answer instanceof Error) throw answer;
+      return answer;
+    };
+  }
+  return { strategy, drafts, tlsCalls: () => calls };
+}
+
+const codeStrategy = (
+  payload = 'the-code',
+): IAuthorizationStrategy<string> & { authorize: jest.Mock<any> } => ({
+  authorize: jest.fn(async () => ({
+    payload,
+    redirectUri: 'http://localhost:61001/callback',
+  })),
+});
+
+const oidcCodeStrategy = (): IAuthorizationStrategy<{ code: string }> => ({
+  authorize: async () => ({
+    payload: { code: 'the-code' },
+    redirectUri: 'http://localhost:61001/callback',
+  }),
+});
+
+const acceptingSamlValidator = (): IAssertionValidator => ({
+  async validate(payload) {
+    return {
+      expiresAt: new Date(Date.now() + 3600_000),
+      assertionId: '_stub',
+      issuer: 'urn:stub:idp',
+      raw: payload,
+      signedXml: payload,
+    };
+  },
+});
+
+const samlPayload = (): string => {
+  const assertion =
+    '<saml2:Assertion xmlns:saml2="urn:oasis:names:tc:SAML:2.0:assertion" ID="_a"><saml2:Issuer>idp</saml2:Issuer></saml2:Assertion>';
+  const response = `<samlp:Response xmlns:samlp="urn:oasis:names:tc:SAML:2.0:protocol" ID="_r"><samlp:Status><samlp:StatusCode Value="urn:oasis:names:tc:SAML:2.0:status:Success"/></samlp:Status>${assertion}</samlp:Response>`;
+  return Buffer.from(response, 'utf8').toString('base64');
+};
+
+let issuerCount = 0;
+/** A fresh issuer (discovery is cached per URL) publishing `document`. */
+function issuerWith(document: Record<string, unknown>): string {
+  issuerCount += 1;
+  const issuer = `https://idp-${issuerCount}.example`;
+  discovery.set(`${issuer}/.well-known/openid-configuration`, {
+    issuer,
+    token_endpoint: `${issuer}/token`,
+    authorization_endpoint: `${issuer}/auth`,
+    device_authorization_endpoint: `${issuer}/device`,
+    ...document,
+  });
+  return issuer;
+}
+
+const grants = (drafts: ITokenRequestDraft[]) => drafts.map((d) => d.grantType);
+
+describe('the strategy reaches every request a provider sends', () => {
+  it('ClientCredentialsProvider: the client_credentials request', async () => {
+    const { strategy, drafts } = recording();
+    const provider = new ClientCredentialsProvider({
+      uaaUrl: 'https://uaa',
+      clientId: 'cid',
+      clientAuthentication: strategy,
+    });
+    expect(await provider.prepare()).toEqual({ ok: true });
+    expect(drafts).toEqual([
+      {
+        endpoint: 'https://uaa/oauth/token',
+        clientId: 'cid',
+        grantType: 'client_credentials',
+      },
+    ]);
+    expect(sent).toHaveLength(1);
+  });
+
+  it('AuthorizationCodeProvider: the code exchange and the refresh', async () => {
+    const { strategy, drafts } = recording();
+    const provider = new AuthorizationCodeProvider({
+      uaaUrl: 'https://uaa',
+      clientId: 'cid',
+      authorization: codeStrategy(),
+      clientAuthentication: strategy,
+    });
+    await provider.getTokens();
+    await provider.refreshTokens();
+    expect(grants(drafts)).toEqual(['authorization_code', 'refresh_token']);
+    expect(sent.map((s) => s.url)).toEqual([
+      'https://uaa/oauth/token',
+      'https://uaa/oauth/token',
+    ]);
+  });
+
+  it('UaaPasscodeProvider: the passcode exchange and the refresh', async () => {
+    const { strategy, drafts } = recording();
+    const provider = new UaaPasscodeProvider({
+      uaaUrl: 'https://uaa',
+      clientId: 'cf',
+      authorization: codeStrategy('passcode'),
+      clientAuthentication: strategy,
+    });
+    await provider.getTokens();
+    await provider.refreshTokens();
+    expect(grants(drafts)).toEqual(['password', 'refresh_token']);
+    expect(sent).toHaveLength(2);
+  });
+
+  it('Saml2BearerProvider: the assertion exchange and its refresh', async () => {
+    const { strategy, drafts } = recording();
+    const provider = new Saml2BearerProvider({
+      idpSsoUrl: 'https://idp/sso',
+      spEntityId: 'sp-entity',
+      uaaUrl: 'https://uaa',
+      clientId: 'cid',
+      idpInitiated: true,
+      authorization: codeStrategy(samlPayload()),
+      assertionValidator: acceptingSamlValidator(),
+      clientAuthentication: strategy,
+    });
+    await provider.getTokens();
+    await provider.refreshTokens();
+    expect(grants(drafts)).toEqual([
+      'urn:ietf:params:oauth:grant-type:saml2-bearer',
+      'refresh_token',
+    ]);
+    expect(sent[0].body.assertion).toBe(toBearerAssertion(samlPayload()));
+    expect(sent).toHaveLength(2);
+  });
+
+  it('OidcBrowserProvider: the code exchange and the refresh', async () => {
+    const { strategy, drafts } = recording();
+    const provider = new OidcBrowserProvider({
+      clientId: 'cid',
+      tokenEndpoint: 'https://idp/token',
+      authorizationEndpoint: 'https://idp/auth',
+      authorization: oidcCodeStrategy(),
+      clientAuthentication: strategy,
+    });
+    await provider.getTokens();
+    await provider.refreshTokens();
+    expect(grants(drafts)).toEqual(['authorization_code', 'refresh_token']);
+    expect(sent).toHaveLength(2);
+  });
+
+  it('OidcDeviceFlowProvider: the device initiation, the poll and the refresh', async () => {
+    const { strategy, drafts } = recording();
+    const provider = new OidcDeviceFlowProvider({
+      clientId: 'cid',
+      tokenEndpoint: 'https://idp/token',
+      deviceAuthorizationEndpoint: 'https://idp/device',
+      presenter: { present: async () => {} },
+      clientAuthentication: strategy,
+    });
+    await provider.getTokens();
+    await provider.refreshTokens();
+    expect(grants(drafts)).toEqual([
+      'device_authorization',
+      'urn:ietf:params:oauth:grant-type:device_code',
+      'refresh_token',
+    ]);
+    expect(sent.map((s) => s.url)).toEqual([
+      'https://idp/device',
+      'https://idp/token',
+      'https://idp/token',
+    ]);
+  });
+
+  it('OidcPasswordProvider: the password grant and the refresh', async () => {
+    const { strategy, drafts } = recording();
+    const provider = new OidcPasswordProvider({
+      clientId: 'cid',
+      tokenEndpoint: 'https://idp/token',
+      username: 'u',
+      password: 'p',
+      clientAuthentication: strategy,
+    });
+    await provider.getTokens();
+    await provider.refreshTokens();
+    expect(grants(drafts)).toEqual(['password', 'refresh_token']);
+    expect(sent).toHaveLength(2);
+  });
+
+  it('OidcTokenExchangeProvider: the token exchange', async () => {
+    const { strategy, drafts } = recording();
+    const provider = new OidcTokenExchangeProvider({
+      clientId: 'cid',
+      tokenEndpoint: 'https://idp/token',
+      subjectToken: 'subject',
+      subjectTokenType: 'urn:ietf:params:oauth:token-type:access_token',
+      clientAuthentication: strategy,
+    });
+    await provider.getTokens();
+    expect(grants(drafts)).toEqual([
+      'urn:ietf:params:oauth:grant-type:token-exchange',
+    ]);
+    expect(sent).toHaveLength(1);
+  });
+});
+
+describe('a strategy and a clientSecret together', () => {
+  const strategy = recording().strategy;
+  const both: Array<[string, () => unknown]> = [
+    [
+      'ClientCredentialsProvider',
+      () =>
+        new ClientCredentialsProvider({
+          uaaUrl: 'https://uaa',
+          clientId: 'cid',
+          clientSecret: 's',
+          clientAuthentication: strategy,
+        }),
+    ],
+    [
+      'AuthorizationCodeProvider',
+      () =>
+        new AuthorizationCodeProvider({
+          uaaUrl: 'https://uaa',
+          clientId: 'cid',
+          clientSecret: 's',
+          authorization: codeStrategy(),
+          clientAuthentication: strategy,
+        }),
+    ],
+    [
+      'UaaPasscodeProvider',
+      () =>
+        new UaaPasscodeProvider({
+          uaaUrl: 'https://uaa',
+          clientId: 'cf',
+          clientSecret: 's',
+          authorization: codeStrategy(),
+          clientAuthentication: strategy,
+        }),
+    ],
+    [
+      'Saml2BearerProvider',
+      () =>
+        new Saml2BearerProvider({
+          idpSsoUrl: 'https://idp/sso',
+          spEntityId: 'sp-entity',
+          uaaUrl: 'https://uaa',
+          clientId: 'cid',
+          clientSecret: 's',
+          idpInitiated: true,
+          authorization: codeStrategy(),
+          assertionValidator: acceptingSamlValidator(),
+          clientAuthentication: strategy,
+        }),
+    ],
+    [
+      'OidcBrowserProvider',
+      () =>
+        new OidcBrowserProvider({
+          clientId: 'cid',
+          clientSecret: 's',
+          authorization: oidcCodeStrategy(),
+          clientAuthentication: strategy,
+        }),
+    ],
+    [
+      'OidcDeviceFlowProvider',
+      () =>
+        new OidcDeviceFlowProvider({
+          clientId: 'cid',
+          clientSecret: 's',
+          presenter: { present: async () => {} },
+          clientAuthentication: strategy,
+        }),
+    ],
+    [
+      'OidcPasswordProvider',
+      () =>
+        new OidcPasswordProvider({
+          clientId: 'cid',
+          clientSecret: 's',
+          username: 'u',
+          password: 'p',
+          clientAuthentication: strategy,
+        }),
+    ],
+    [
+      'OidcTokenExchangeProvider',
+      () =>
+        new OidcTokenExchangeProvider({
+          clientId: 'cid',
+          clientSecret: 's',
+          subjectToken: 'subject',
+          subjectTokenType: 'urn:ietf:params:oauth:token-type:access_token',
+          clientAuthentication: strategy,
+        }),
+    ],
+  ];
+
+  it.each(both)('%s: a ValidationError naming clientSecret', (_name, make) => {
+    let thrown: unknown;
+    try {
+      make();
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toBeInstanceOf(ValidationError);
+    expect((thrown as ValidationError).missingFields).toEqual(['clientSecret']);
+  });
+});
+
+describe('a strategy satisfies the clientSecret requirement', () => {
+  it('ClientCredentialsProvider without a secret is still refused', () => {
+    expect(
+      () =>
+        new ClientCredentialsProvider({
+          uaaUrl: 'https://uaa',
+          clientId: 'cid',
+        } as never),
+    ).toThrow(/clientSecret/);
+  });
+
+  it('ClientCredentialsProvider with a strategy and no secret', () => {
+    expect(
+      () =>
+        new ClientCredentialsProvider({
+          uaaUrl: 'https://uaa',
+          clientId: 'cid',
+          clientAuthentication: recording().strategy,
+        }),
+    ).not.toThrow();
+  });
+
+  it('AuthorizationCodeProvider without a secret is still refused', () => {
+    expect(
+      () =>
+        new AuthorizationCodeProvider({
+          uaaUrl: 'https://uaa',
+          clientId: 'cid',
+          authorization: codeStrategy(),
+        } as never),
+    ).toThrow(/clientSecret/);
+  });
+
+  it('AuthorizationCodeProvider with a strategy and no secret', () => {
+    expect(
+      () =>
+        new AuthorizationCodeProvider({
+          uaaUrl: 'https://uaa',
+          clientId: 'cid',
+          authorization: codeStrategy(),
+          clientAuthentication: recording().strategy,
+        }),
+    ).not.toThrow();
+  });
+});
+
+describe('one certificate, pinned', () => {
+  it('a strategy answering A, then B, is asked once; every request presents A', async () => {
+    const { strategy, tlsCalls } = recording([A, B]);
+    const provider = new AuthorizationCodeProvider({
+      uaaUrl: 'https://uaa',
+      clientId: 'cid',
+      authorization: codeStrategy(),
+      clientAuthentication: strategy,
+    });
+    await provider.getTokens();
+    await provider.refreshTokens();
+    await provider.refreshTokens();
+    expect(sent).toHaveLength(3);
+    for (const request of sent) expect(request.cert).toEqual(A.cert);
+    expect(tlsCalls()).toBe(1);
+  });
+
+  it('concurrent prepare() calls share one load', async () => {
+    const { strategy, tlsCalls } = recording([A, B]);
+    const provider = new ClientCredentialsProvider({
+      uaaUrl: 'https://uaa',
+      clientId: 'cid',
+      clientAuthentication: strategy,
+    });
+    await Promise.all([provider.prepare(), provider.prepare()]);
+    expect(tlsCalls()).toBe(1);
+    for (const request of sent) expect(request.cert).toEqual(A.cert);
+  });
+
+  it('concurrent first needs outside a renewal share one in-flight load', async () => {
+    // The renewal is shared already; a logon (spec §4) needs the pin on its
+    // own, so two needs at once must still read the strategy once.
+    class TwoNeeds extends ClientCredentialsProvider {
+      needBoth() {
+        return Promise.all([this.pin(), this.pin()]);
+      }
+    }
+    const { strategy, tlsCalls } = recording([A, B]);
+    const provider = new TwoNeeds({
+      uaaUrl: 'https://uaa',
+      clientId: 'cid',
+      clientAuthentication: strategy,
+    });
+    const [first, second] = await provider.needBoth();
+    expect(tlsCalls()).toBe(1);
+    expect(first?.material.cert).toEqual(A.cert);
+    expect(second?.material.cert).toEqual(A.cert);
+  });
+
+  it('a strategy without tlsMaterial: no agent on the request', async () => {
+    const { strategy } = recording();
+    const provider = new ClientCredentialsProvider({
+      uaaUrl: 'https://uaa',
+      clientId: 'cid',
+      clientAuthentication: strategy,
+    });
+    await provider.prepare();
+    expect(sent[0].cert).toBeUndefined();
+  });
+
+  it('material that fails to load: refused in fixed words, the stored refresh token kept and not sent; a later moment loads again', async () => {
+    const { strategy, tlsCalls } = recording([
+      new CertificateMaterialError(false),
+      A,
+    ]);
+    const authorization = codeStrategy();
+    const provider = new AuthorizationCodeProvider({
+      uaaUrl: 'https://uaa',
+      clientId: 'cid',
+      refreshToken: 'stored-refresh',
+      authorization,
+      clientAuthentication: strategy,
+    });
+
+    expect(await provider.prepare()).toEqual({
+      ok: false,
+      refusal: {
+        reason: CERTIFICATE_UNUSABLE.reason,
+        hint: CERTIFICATE_UNUSABLE.hint,
+      },
+    });
+    expect(mockedAxios).not.toHaveBeenCalled();
+    expect(mockedAxios.post).not.toHaveBeenCalled();
+    expect(authorization.authorize).not.toHaveBeenCalled();
+
+    // The next moment tries again; the refresh token it still holds is spent.
+    expect(await provider.prepare()).toEqual({ ok: true });
+    expect(tlsCalls()).toBe(2);
+    expect(sent).toHaveLength(1);
+    expect(sent[0].body).toMatchObject({
+      grant_type: 'refresh_token',
+      refresh_token: 'stored-refresh',
+    });
+    expect(sent[0].cert).toEqual(A.cert);
+    expect(authorization.authorize).not.toHaveBeenCalled();
+  });
+
+  it('material that is not usable is not pinned', async () => {
+    const { strategy } = recording([{ cert: A.cert, key: B.key }]);
+    const provider = new ClientCredentialsProvider({
+      uaaUrl: 'https://uaa',
+      clientId: 'cid',
+      clientAuthentication: strategy,
+    });
+    const outcome = await provider.prepare();
+    expect(outcome.ok).toBe(false);
+    expect(sent).toHaveLength(0);
+  });
+});
+
+describe('OIDC discovery: mtls_endpoint_aliases', () => {
+  it('fills mtlsEndpoint from the token alias', async () => {
+    const issuer = issuerWith({
+      mtls_endpoint_aliases: { token_endpoint: 'https://mtls.idp/token' },
+    });
+    const { strategy, drafts } = recording();
+    const provider = new OidcPasswordProvider({
+      issuerUrl: issuer,
+      clientId: 'cid',
+      username: 'u',
+      password: 'p',
+      clientAuthentication: strategy,
+    });
+    await provider.getTokens();
+    await provider.refreshTokens();
+    expect(drafts.map((d) => d.mtlsEndpoint)).toEqual([
+      'https://mtls.idp/token',
+      'https://mtls.idp/token',
+    ]);
+  });
+
+  it('without aliases, leaves it absent', async () => {
+    const issuer = issuerWith({});
+    const { strategy, drafts } = recording();
+    const provider = new OidcPasswordProvider({
+      issuerUrl: issuer,
+      clientId: 'cid',
+      username: 'u',
+      password: 'p',
+      clientAuthentication: strategy,
+    });
+    await provider.getTokens();
+    expect(drafts).toHaveLength(1);
+    expect('mtlsEndpoint' in drafts[0]).toBe(false);
+  });
+
+  it('the device initiation gets the device alias, the poll the token alias', async () => {
+    const issuer = issuerWith({
+      mtls_endpoint_aliases: {
+        token_endpoint: 'https://mtls.idp/token',
+        device_authorization_endpoint: 'https://mtls.idp/device',
+      },
+    });
+    const { strategy, drafts } = recording();
+    const provider = new OidcDeviceFlowProvider({
+      issuerUrl: issuer,
+      clientId: 'cid',
+      presenter: { present: async () => {} },
+      clientAuthentication: strategy,
+    });
+    await provider.getTokens();
+    expect(
+      drafts.map((d) => [d.grantType, d.endpoint, d.mtlsEndpoint]),
+    ).toEqual([
+      ['device_authorization', `${issuer}/device`, 'https://mtls.idp/device'],
+      [
+        'urn:ietf:params:oauth:grant-type:device_code',
+        `${issuer}/token`,
+        'https://mtls.idp/token',
+      ],
+    ]);
+  });
+
+  it('OidcBrowserProvider and OidcTokenExchangeProvider use the token alias', async () => {
+    const issuer = issuerWith({
+      mtls_endpoint_aliases: { token_endpoint: 'https://mtls.idp/token' },
+    });
+    const browser = recording();
+    await new OidcBrowserProvider({
+      issuerUrl: issuer,
+      clientId: 'cid',
+      authorization: oidcCodeStrategy(),
+      clientAuthentication: browser.strategy,
+    }).getTokens();
+    const exchange = recording();
+    await new OidcTokenExchangeProvider({
+      issuerUrl: issuer,
+      clientId: 'cid',
+      subjectToken: 'subject',
+      subjectTokenType: 'urn:ietf:params:oauth:token-type:access_token',
+      clientAuthentication: exchange.strategy,
+    }).getTokens();
+    expect(browser.drafts[0].mtlsEndpoint).toBe('https://mtls.idp/token');
+    expect(exchange.drafts[0].mtlsEndpoint).toBe('https://mtls.idp/token');
+  });
+
+  it('an endpoint the configuration names takes no discovered alias', async () => {
+    const issuer = issuerWith({
+      mtls_endpoint_aliases: {
+        token_endpoint: 'https://mtls.idp/token',
+        device_authorization_endpoint: 'https://mtls.idp/device',
+      },
+    });
+    const { strategy, drafts } = recording();
+    await new OidcDeviceFlowProvider({
+      issuerUrl: issuer,
+      clientId: 'cid',
+      deviceAuthorizationEndpoint: 'https://own/device',
+      presenter: { present: async () => {} },
+      clientAuthentication: strategy,
+    }).getTokens();
+    expect(drafts.map((d) => d.mtlsEndpoint)).toEqual([
+      undefined,
+      'https://mtls.idp/token',
+    ]);
+  });
+});

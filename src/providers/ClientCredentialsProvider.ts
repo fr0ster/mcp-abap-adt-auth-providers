@@ -15,13 +15,17 @@ import { getTokenWithClientCredentials } from '../auth/clientCredentialsAuth';
 import { RefreshError } from '../errors/TokenProviderErrors';
 import {
   BaseTokenProvider,
+  type ClientAuthenticationConfig,
   type TokenProviderHooks,
 } from './BaseTokenProvider';
 
-export interface ClientCredentialsProviderConfig extends TokenProviderHooks {
+export interface ClientCredentialsProviderConfig
+  extends TokenProviderHooks,
+    ClientAuthenticationConfig {
   uaaUrl: string;
   clientId: string;
-  clientSecret: string;
+  /** Required, unless `clientAuthentication` is given — never both. */
+  clientSecret?: string;
   logger?: ILogger;
 }
 
@@ -45,7 +49,8 @@ export class ClientCredentialsProvider extends BaseTokenProvider {
     if (!config.clientId) {
       missingFields.push('clientId');
     }
-    if (!config.clientSecret) {
+    // A strategy authenticates the client instead (never both: the base).
+    if (!config.clientSecret && !config.clientAuthentication) {
       missingFields.push('clientSecret');
     }
     if (missingFields.length > 0) {
@@ -71,6 +76,7 @@ export class ClientCredentialsProvider extends BaseTokenProvider {
       this.config.uaaUrl,
       this.config.clientId,
       this.config.clientSecret,
+      await this.requestAuth(),
     );
 
     return {

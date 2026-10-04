@@ -12,6 +12,8 @@ import type {
   AuthOutcome,
   IAuthProvider,
   IAuthRejection,
+  ICertificateMaterial,
+  IClientAuthentication,
   ILogonTarget,
   IRefreshableTokenProvider,
   IRequestTarget,
@@ -19,8 +21,15 @@ import type {
   OAuth2GrantType,
 } from '@mcp-abap-adt/interfaces-auth';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
+import {
+  assertCertificateMaterial,
+  certificateThumbprint,
+} from '../auth/certificateMaterial';
 import { OK, oops, ownLabel, safely } from '../auth/refusal';
 import { readRejection } from '../auth/rejection';
+import type { TokenRequestAuth } from '../auth/tokenRequest';
+import { CertificateMaterialError } from '../errors/CertificateMaterialError';
+import { ValidationError } from '../errors/TokenProviderErrors';
 
 /** What every token provider's config may carry beside its own fields. */
 export interface TokenProviderHooks {
@@ -31,6 +40,39 @@ export interface TokenProviderHooks {
    * authentication.
    */
   onTokens?: (result: ITokenResult) => Promise<void>;
+}
+
+/**
+ * How the client authenticates to the authorization server (spec §3). Taken by
+ * every provider that sends a request to one; never beside a `clientSecret` —
+ * two ways of authenticating one client is a `ValidationError`.
+ */
+export interface ClientAuthenticationConfig {
+  clientAuthentication?: IClientAuthentication;
+}
+
+/** The certificate a provider presents for its lifetime, and its `x5t#S256`. */
+export interface PinnedCertificate {
+  readonly material: ICertificateMaterial;
+  readonly thumbprint: string;
+}
+
+/** What the base constructor reads of a provider's configuration. */
+type BaseConfig = TokenProviderHooks &
+  ClientAuthenticationConfig & { clientSecret?: unknown };
+
+/**
+ * The four material fields, copied: an object the strategy still holds, and
+ * changes later, never changes what is pinned.
+ */
+function copyMaterial(material: ICertificateMaterial): ICertificateMaterial {
+  const { cert, key, pfx, passphrase } = material;
+  return {
+    ...(cert === undefined ? {} : { cert }),
+    ...(key === undefined ? {} : { key }),
+    ...(pfx === undefined ? {} : { pfx }),
+    ...(passphrase === undefined ? {} : { passphrase }),
+  };
 }
 
 /**
@@ -70,9 +112,83 @@ export abstract class BaseTokenProvider
   private presented?: string;
   /** The renewal in flight; concurrent callers share it (one refresh, at most one login). */
   private renewal?: Promise<ITokenResult>;
+  /** How the client authenticates to the authorization server, when configured. */
+  protected readonly clientAuthentication?: IClientAuthentication;
+  /**
+   * The strategy's TLS material and its thumbprint: set on first need, never
+   * replaced (spec §4). A certificate that rotates is a new provider.
+   */
+  protected pinned?: PinnedCertificate;
+  /** The pin attempt in flight; concurrent first needs share it. */
+  private pinning?: Promise<PinnedCertificate>;
 
-  constructor(hooks: TokenProviderHooks = {}) {
-    this.onTokens = hooks.onTokens;
+  constructor(config: BaseConfig = {}) {
+    this.onTokens = config.onTokens;
+    if (config.clientAuthentication && config.clientSecret !== undefined) {
+      // Two ways of authenticating one client is a mistake, not a preference.
+      throw new ValidationError(
+        'clientSecret cannot be given beside clientAuthentication',
+        ['clientSecret'],
+      );
+    }
+    this.clientAuthentication = config.clientAuthentication;
+  }
+
+  /**
+   * The certificate this provider presents, read from the strategy once.
+   * Undefined for no strategy, or one that presents none. A failed read pins
+   * nothing and throws — the moment that needed it is refused, and the next
+   * moment reads again. After a success `tlsMaterial()` is never called again.
+   */
+  protected async pin(): Promise<PinnedCertificate | undefined> {
+    if (this.pinned) return this.pinned;
+    const strategy = this.clientAuthentication;
+    if (!strategy?.tlsMaterial) return undefined;
+    if (!this.pinning) {
+      const attempt = (async () => {
+        const loaded = await strategy.tlsMaterial?.();
+        // Nothing, or not an object: no certificate to present at all.
+        if (!loaded || typeof loaded !== 'object') {
+          throw new CertificateMaterialError(true);
+        }
+        const material = copyMaterial(loaded);
+        assertCertificateMaterial(material);
+        const pinned = {
+          material,
+          thumbprint: certificateThumbprint(material),
+        };
+        this.pinned = pinned;
+        return pinned;
+      })();
+      this.pinning = attempt;
+      attempt.then(
+        () => {
+          this.pinning = undefined;
+        },
+        () => {
+          this.pinning = undefined;
+        },
+      );
+    }
+    return this.pinning;
+  }
+
+  /**
+   * What a token-request site is given for one request: the strategy, the
+   * pinned material, and the server's mTLS alias of that request's endpoint.
+   * Undefined without a strategy — the site then sends today's request.
+   */
+  protected async requestAuth(
+    mtlsEndpoint?: string,
+  ): Promise<TokenRequestAuth | undefined> {
+    const strategy = this.clientAuthentication;
+    if (!strategy) return undefined;
+    const pinned = await this.pin();
+    return {
+      strategy,
+      ...(pinned ? { material: pinned.material } : {}),
+      ...(mtlsEndpoint === undefined ? {} : { mtlsEndpoint }),
+    };
   }
 
   /**
@@ -219,6 +335,10 @@ export abstract class BaseTokenProvider
 
   /** One renewal: one refresh, then — only if it is refused or impossible — one login. */
   private async renew(): Promise<ITokenResult> {
+    // Before anything is sent or started: material that cannot be loaded
+    // refuses the renewal whole — the refresh token is neither sent nor
+    // dropped, and no login begins.
+    await this.pin();
     const spent = this.refreshToken;
     if (spent && this.hasRefreshGrant()) {
       this.logger?.info(

@@ -21,14 +21,18 @@ import { refreshJwtToken } from '../auth/tokenRefresher';
 import { browserCallbackStrategy } from '../strategies';
 import {
   BaseTokenProvider,
+  type ClientAuthenticationConfig,
   type TokenProviderHooks,
 } from './BaseTokenProvider';
 
-export interface AuthorizationCodeProviderConfig extends TokenProviderHooks {
+export interface AuthorizationCodeProviderConfig
+  extends TokenProviderHooks,
+    ClientAuthenticationConfig {
   // Required for building the authorization URL and for the token exchange
   uaaUrl: string;
   clientId: string;
-  clientSecret: string;
+  /** Required, unless `clientAuthentication` is given — never both. */
+  clientSecret?: string;
 
   /** Pre-built authorization URL. Carries its own redirect; see the guard below. */
   authorizationUrl?: string;
@@ -81,7 +85,8 @@ export class AuthorizationCodeProvider extends BaseTokenProvider {
     if (!config.clientId) {
       missingFields.push('clientId');
     }
-    if (!config.clientSecret) {
+    // A strategy authenticates the client instead (never both: the base).
+    if (!config.clientSecret && !config.clientAuthentication) {
       missingFields.push('clientSecret');
     }
     if (missingFields.length > 0) {
@@ -143,7 +148,8 @@ export class AuthorizationCodeProvider extends BaseTokenProvider {
     const authConfig: IAuthorizationConfig = {
       uaaUrl: this.config.uaaUrl,
       uaaClientId: this.config.clientId,
-      uaaClientSecret: this.config.clientSecret,
+      // Required without a strategy (constructor); unused with one.
+      uaaClientSecret: this.config.clientSecret ?? '',
     };
 
     const prebuilt = this.config.authorizationUrl;
@@ -194,6 +200,7 @@ export class AuthorizationCodeProvider extends BaseTokenProvider {
       outcome.payload,
       outcome.redirectUri,
       this.logger,
+      await this.requestAuth(),
     );
 
     return {
@@ -216,6 +223,7 @@ export class AuthorizationCodeProvider extends BaseTokenProvider {
       this.config.uaaUrl,
       this.config.clientId,
       this.config.clientSecret,
+      await this.requestAuth(),
     );
 
     this.logger?.info('[AuthorizationCodeProvider] Token refresh completed', {

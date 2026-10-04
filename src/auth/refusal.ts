@@ -59,6 +59,7 @@ export const KNOWN_CONFIG_FIELDS: ReadonlySet<string> = new Set([
   'certPassphrase',
   'certPath',
   'certPfxPath',
+  'clientAuthentication',
   'clientId',
   'clientSecret',
   'clockSkewMs',

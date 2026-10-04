@@ -20,10 +20,13 @@ import { refreshJwtToken } from '../auth/tokenRefresher';
 import { manualPasscodeStrategy } from '../strategies/manualStrategies';
 import {
   BaseTokenProvider,
+  type ClientAuthenticationConfig,
   type TokenProviderHooks,
 } from './BaseTokenProvider';
 
-export interface UaaPasscodeProviderConfig extends TokenProviderHooks {
+export interface UaaPasscodeProviderConfig
+  extends TokenProviderHooks,
+    ClientAuthenticationConfig {
   /** UAA / XSUAA base URL, e.g. `https://<subdomain>.authentication.<region>.hana.ondemand.com`. */
   uaaUrl: string;
   /** A client allowed the `password` grant; add `refresh_token` to keep the session. */
@@ -98,6 +101,7 @@ export class UaaPasscodeProvider extends BaseTokenProvider {
       this.config.clientSecret,
       passcode,
       this.logger,
+      await this.requestAuth(),
     );
     return {
       authorizationToken: tokens.accessToken,
@@ -121,6 +125,7 @@ export class UaaPasscodeProvider extends BaseTokenProvider {
       this.baseUrl,
       this.config.clientId,
       this.config.clientSecret ?? '',
+      await this.requestAuth(),
     );
     return {
       authorizationToken: result.accessToken,
