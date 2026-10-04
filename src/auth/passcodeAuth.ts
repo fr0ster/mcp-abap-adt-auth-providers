@@ -18,8 +18,12 @@
 
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
 import axios, { type AxiosResponse } from 'axios';
-import { redactKnownSecrets } from './oauthErrorBody';
-import { prepareTokenRequest, type TokenRequestAuth } from './tokenRequest';
+import { describeOAuthErrorBody } from './oauthErrorBody';
+import {
+  prepareTokenRequest,
+  sendTokenRequest,
+  type TokenRequestAuth,
+} from './tokenRequest';
 
 export interface PasscodeTokens {
   accessToken: string;
@@ -78,19 +82,18 @@ export async function exchangePasscode(
     expires_in?: number;
   }>;
   try {
-    response = prepared ? await axios(prepared.config) : await sendAsToday();
+    response = await sendTokenRequest(prepared, sendAsToday);
   } catch (error) {
     // UAA says why in the body — "Invalid passcode" for a mistyped or
     // already spent code — which is what the user needs to read.
     if (axios.isAxiosError(error) && error.response) {
-      const body = error.response.data as
-        | { error?: string; error_description?: string }
-        | undefined;
-      // What the strategy sent never comes back out (passcode, secret: as before).
-      const reason = redactKnownSecrets(
-        String(body?.error_description ?? body?.error ?? 'no reason given'),
-        prepared?.secrets ?? [],
-      );
+      // Only `error` and `error_description`, with the passcode, the
+      // secret and what the strategy sent redacted: a server may echo them.
+      const reason = describeOAuthErrorBody(error.response.data, [
+        passcode,
+        clientSecret,
+        ...(prepared?.secrets ?? []),
+      ]);
       throw new Error(
         `Passcode exchange failed (${error.response.status}): ${reason}`,
       );

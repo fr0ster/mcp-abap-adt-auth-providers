@@ -6,7 +6,11 @@ import * as child_process from 'node:child_process';
 import type { IAuthorizationConfig } from '@mcp-abap-adt/interfaces-auth-sap';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
 import axios from 'axios';
-import { prepareTokenRequest, type TokenRequestAuth } from './tokenRequest';
+import {
+  prepareTokenRequest,
+  sendTokenRequest,
+  type TokenRequestAuth,
+} from './tokenRequest';
 
 const BROWSER_MAP: Record<string, string | undefined | null> = {
   chrome: 'chrome',
@@ -121,9 +125,7 @@ export async function exchangeCodeForToken(
 
   log?.info(`Exchanging code for token: ${prepared?.config.url ?? tokenUrl}`);
 
-  const response = prepared
-    ? await axios(prepared.config)
-    : await sendAsToday();
+  const response = await sendTokenRequest(prepared, sendAsToday);
 
   if (response.data?.access_token) {
     const accessToken = response.data.access_token;

@@ -8,6 +8,7 @@ import { beforeEach, describe, expect, it, jest } from '@jest/globals';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
 import axios from 'axios';
 import { getTokenWithClientCredentials } from '../../auth/clientCredentialsAuth';
+import { describeOAuthErrorBody } from '../../auth/oauthErrorBody';
 import {
   exchangeSamlAssertion,
   refreshSamlBearerToken,
@@ -227,5 +228,20 @@ describe('OAuth error bodies stay out of logs and messages', () => {
       expect(text()).not.toContain(assertion);
       expect(text()).toContain('bad client');
     });
+  });
+});
+
+describe('a short secret inside a longer one', () => {
+  it('redacts the longer one whole: secrets are redacted longest first', () => {
+    // An opaque assertion (not JWT-shaped) that contains the password.
+    const PASSWORD = 'pw';
+    const ASSERTION = 'opaque-pw-assertion-0123456789';
+    const text = describeOAuthErrorBody(
+      { error: 'invalid_grant', error_description: `refused ${ASSERTION}` },
+      [PASSWORD, ASSERTION],
+    );
+    expect(text).not.toContain('opaque-');
+    expect(text).not.toContain('-assertion-0123456789');
+    expect(text).toContain('refused <redacted>');
   });
 });

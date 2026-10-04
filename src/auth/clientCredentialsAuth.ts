@@ -8,7 +8,11 @@
 import axios from 'axios';
 import { describeOAuthErrorBody } from './oauthErrorBody';
 import { tlsTrustCode } from './refusal';
-import { prepareTokenRequest, type TokenRequestAuth } from './tokenRequest';
+import {
+  prepareTokenRequest,
+  sendTokenRequest,
+  type TokenRequestAuth,
+} from './tokenRequest';
 
 export interface ClientCredentialsResult {
   accessToken: string;
@@ -66,9 +70,7 @@ export async function getTokenWithClientCredentials(
   };
 
   try {
-    const response = prepared
-      ? await axios(prepared.config)
-      : await sendAsToday();
+    const response = await sendTokenRequest(prepared, sendAsToday);
 
     if (response.data?.access_token) {
       return {

@@ -27,7 +27,7 @@ import type {
   ITokenRequestAuthentication,
   ITokenRequestDraft,
 } from '@mcp-abap-adt/interfaces-auth';
-import type { AxiosRequestConfig } from 'axios';
+import axios, { type AxiosRequestConfig, type AxiosResponse } from 'axios';
 import { ClientAuthenticationResultError } from '../errors/ClientAuthenticationError';
 
 /** What a site is given to authenticate one request with a strategy. */
@@ -64,7 +64,12 @@ export interface PreparedTokenRequest {
 }
 
 const FORM = 'application/x-www-form-urlencoded';
-/** Parameters whose values are secrets: they join the redaction list. */
+/**
+ * Parameters whose values are secrets: they join the redaction list, with the
+ * credential of an `Authorization: Basic` header (`basicSecrets`). That is the
+ * limit of what is recognised: a custom strategy's secret in any other
+ * parameter or header is not known to be one, and is not redacted.
+ */
 const SECRET_PARAMETERS = ['client_secret', 'client_assertion'];
 
 function unusable(): never {
@@ -103,6 +108,21 @@ function targetUrl(
     unusable();
   }
   return named;
+}
+
+/**
+ * An agent carrying the four material fields and nothing else: a field the
+ * material object happens to carry at run time (`rejectUnauthorized`, `ca`,
+ * `checkServerIdentity`) never reaches it.
+ */
+function agentFor(material: ICertificateMaterial): Agent {
+  const { cert, key, pfx, passphrase } = material;
+  return new Agent({
+    ...(cert === undefined ? {} : { cert }),
+    ...(key === undefined ? {} : { key }),
+    ...(pfx === undefined ? {} : { pfx }),
+    ...(passphrase === undefined ? {} : { passphrase }),
+  });
 }
 
 /** The secret of a `Basic` credential, in both forms a server may echo. */
@@ -169,9 +189,12 @@ export async function prepareTokenRequest(
     url,
     headers: { ...added, 'Content-Type': FORM, ...grant.headers },
     data: body.toString(),
+    // A redirect would re-send the secret or the assertion, and present the
+    // certificate, to wherever it points, past every check above.
+    maxRedirects: 0,
   };
   if (grant.timeout !== undefined) config.timeout = grant.timeout;
-  if (auth.material) config.httpsAgent = new Agent({ ...auth.material });
+  if (auth.material) config.httpsAgent = agentFor(auth.material);
 
   const secrets = [
     ...SECRET_PARAMETERS.map((name) => parameters[name]).filter(
@@ -180,4 +203,58 @@ export async function prepareTokenRequest(
     ...basicSecrets(added),
   ];
   return { config, secrets };
+}
+
+/** What of a failed request a site's own handling reads. */
+export interface TokenRequestFailure extends Error {
+  isAxiosError?: true;
+  code?: string;
+  status?: number;
+  response?: { status?: unknown; statusText?: unknown; data?: unknown };
+}
+
+/**
+ * The failure without the request: an AxiosError carries its config (the
+ * httpsAgent and its key, PFX and passphrase; the form body with an assertion,
+ * a secret or a refresh token; the Authorization header) on itself, on
+ * `request` and on `response.config`. What is kept is what the sites read —
+ * `message`, `code`, `isAxiosError`, the response's `status` and `data`.
+ */
+function withoutRequest(error: unknown): unknown {
+  if (!error || typeof error !== 'object') return error;
+  const raw = error as Record<string, unknown>;
+  if (!('config' in raw) && !('request' in raw) && !('response' in raw)) {
+    return error;
+  }
+  const failure: TokenRequestFailure = new Error(
+    typeof raw.message === 'string' ? raw.message : 'the token request failed',
+  );
+  if (raw.isAxiosError === true) failure.isAxiosError = true;
+  if (typeof raw.code === 'string') failure.code = raw.code;
+  if (typeof raw.status === 'number') failure.status = raw.status;
+  const response = raw.response as Record<string, unknown> | undefined;
+  if (response && typeof response === 'object') {
+    failure.response = {
+      status: response.status,
+      statusText: response.statusText,
+      data: response.data,
+    };
+  }
+  return failure;
+}
+
+/**
+ * Sends one request — the prepared one when a strategy was given, else the
+ * site's own `asToday` — and on failure throws it without the request
+ * (`withoutRequest`). The request itself is not changed on either path.
+ */
+export async function sendTokenRequest<T>(
+  prepared: PreparedTokenRequest | undefined,
+  asToday: () => Promise<AxiosResponse<T>>,
+): Promise<AxiosResponse<T>> {
+  try {
+    return prepared ? await axios<T>(prepared.config) : await asToday();
+  } catch (error) {
+    throw withoutRequest(error);
+  }
 }

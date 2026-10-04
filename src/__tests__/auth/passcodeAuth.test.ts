@@ -77,9 +77,13 @@ describe('exchangePasscode', () => {
     mockedAxios.post.mockRejectedValue(refused);
     mockedAxios.isAxiosError.mockReturnValue(true);
 
+    // The reason goes through describeOAuthErrorBody: error and
+    // error_description, each quoted.
     await expect(
-      exchangePasscode('https://uaa', 'c', 's', 'SPENT'),
-    ).rejects.toThrow('Passcode exchange failed (401): Invalid passcode');
+      exchangePasscode('https://uaa', 'c', 'client-secret-value', 'SPENT'),
+    ).rejects.toThrow(
+      'Passcode exchange failed (401): "unauthorized": "Invalid passcode"',
+    );
   });
 
   it('refuses a response without an access token', async () => {

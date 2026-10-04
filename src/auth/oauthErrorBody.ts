@@ -24,13 +24,17 @@ const JWT_SHAPE = /eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]*/g;
  * secret is long, and dropping a matching word from a diagnosis is the lesser
  * harm.
  */
-export function redactKnownSecrets(
+function redactKnownSecrets(
   text: string,
   secrets: readonly (string | undefined)[],
 ): string {
   let out = text;
-  for (const secret of secrets) {
-    if (!secret) continue;
+  // Longest first: a short secret (a password) redacted inside a longer one
+  // (an assertion) would leave the rest of the longer one unrecognisable.
+  const longestFirst = secrets
+    .filter((secret): secret is string => !!secret)
+    .sort((a, b) => b.length - a.length);
+  for (const secret of longestFirst) {
     // As sent, as the request body encoded it (URLSearchParams: + / = become
     // %2B %2F %3D), and percent-encoded: a server may echo any of these.
     const forms = new Set([

@@ -9,6 +9,7 @@ import { describeOAuthErrorBody } from './oauthErrorBody';
 import {
   type PreparedTokenRequest,
   prepareTokenRequest,
+  sendTokenRequest,
   type TokenRequestAuth,
 } from './tokenRequest';
 
@@ -85,9 +86,9 @@ export async function exchangeSamlAssertion(
 
   let response: AxiosResponse;
   try {
-    response = prepared
-      ? await axios(prepared.config)
-      : await sendAsToday(tokenUrl, grant, clientId, clientSecret);
+    response = await sendTokenRequest(prepared, () =>
+      sendAsToday(tokenUrl, grant, clientId, clientSecret),
+    );
   } catch (error) {
     if (axios.isAxiosError(error)) {
       logger?.error('[SAML] Token exchange failed', {
@@ -142,9 +143,9 @@ export async function refreshSamlBearerToken(
 
   let response: AxiosResponse;
   try {
-    response = prepared
-      ? await axios(prepared.config)
-      : await sendAsToday(tokenUrl, grant, clientId, clientSecret);
+    response = await sendTokenRequest(prepared, () =>
+      sendAsToday(tokenUrl, grant, clientId, clientSecret),
+    );
   } catch (error) {
     if (axios.isAxiosError(error)) {
       logger?.error('[SAML] Token refresh failed', {

@@ -6,6 +6,7 @@
  * unedited, in tokenRequestShapes.test.ts.
  */
 
+import { generateKeyPairSync } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { Agent } from 'node:https';
 import { join } from 'node:path';
@@ -19,12 +20,14 @@ import type {
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
 import axios from 'axios';
 import { getTokenWithClientCredentials } from '../../auth/clientCredentialsAuth';
-import { pollDeviceTokens } from '../../auth/oidcToken';
+import { passwordGrant, pollDeviceTokens } from '../../auth/oidcToken';
+import { exchangePasscode } from '../../auth/passcodeAuth';
 import { refusalFrom } from '../../auth/refusal';
 import { exchangeSamlAssertion } from '../../auth/saml2TokenExchange';
 import { refreshJwtToken } from '../../auth/tokenRefresher';
 import {
   clientSecretPost,
+  privateKeyJwt,
   tlsClientCertificate,
 } from '../../clientAuthentication';
 import { OIDC, tokenReply as reply, SITES } from '../helpers/tokenRequestSites';
@@ -62,6 +65,7 @@ function returning(result: unknown): IClientAuthentication & {
 }
 
 interface SentConfig {
+  maxRedirects?: number;
   url: string;
   method: string;
   data: string;
@@ -445,5 +449,251 @@ describe('a TLS trust failure, by code', () => {
         'NODE_EXTRA_CA_CERTS',
       );
     }
+  });
+});
+
+/**
+ * What a real AxiosError carries: the request config (httpsAgent with its
+ * options, the form body, the headers) on itself, on `request` and on
+ * `response.config`.
+ */
+function realisticFailure(config: Record<string, unknown>) {
+  return {
+    isAxiosError: true,
+    name: 'AxiosError',
+    message: 'Request failed with status code 400',
+    code: 'ERR_BAD_REQUEST',
+    config,
+    request: { _header: JSON.stringify(config.headers), body: config.data },
+    response: {
+      status: 400,
+      statusText: 'Bad Request',
+      headers: {},
+      config,
+      data: { error: 'invalid_client' },
+    },
+  };
+}
+
+function failRealistically(): void {
+  mockedAxios.mockImplementation(async (config: Record<string, unknown>) => {
+    throw realisticFailure(config);
+  });
+  mockedAxios.post.mockImplementation(
+    async (url: string, data: string, config: Record<string, unknown>) => {
+      throw realisticFailure({ url, data, method: 'post', ...config });
+    },
+  );
+}
+
+/** JSON of anything, circular references included. */
+function serialized(value: unknown): string {
+  const seen = new WeakSet<object>();
+  return JSON.stringify(value, (_key, item) => {
+    if (item && typeof item === 'object') {
+      if (seen.has(item)) return '[circular]';
+      seen.add(item);
+    }
+    return typeof item === 'function' ? '[function]' : item;
+  });
+}
+
+/**
+ * Windows of `size` characters, every `stride`: any leaked run of
+ * `size + stride - 1` characters or more contains one of them.
+ */
+const windowsOf = (secret: string, size = 8, stride = 1) => {
+  const out: string[] = [];
+  for (let i = 0; i + size <= secret.length; i += stride) {
+    out.push(secret.slice(i, i + size));
+  }
+  return out;
+};
+
+const signingKey = generateKeyPairSync('rsa', { modulusLength: 2048 })
+  .privateKey.export({ type: 'pkcs8', format: 'pem' })
+  .toString();
+
+describe.each(SITES)('$name: the thrown error carries no request', (site) => {
+  // Every row has three cells: a shorter row makes jest pass `done` instead.
+  it.each<
+    [string, () => IClientAuthentication, ICertificateMaterial | undefined]
+  >([
+    [
+      'a PFX and its passphrase',
+      () => tlsClientCertificate({ material: pfxMaterial }),
+      pfxMaterial,
+    ],
+    [
+      'a private_key_jwt assertion',
+      () => privateKeyJwt({ key: signingKey, algorithm: 'RS256' }),
+      undefined,
+    ],
+    [
+      'a client secret in the body',
+      () => clientSecretPost('Zq8vK2pX9wLm4rT7nB3c'),
+      undefined,
+    ],
+  ])(
+    'with %s: neither its JSON nor its string holds any of it',
+    async (_label, make, m) => {
+      const sentValues: string[] = [];
+      const strategy = make();
+      const recording: IClientAuthentication = {
+        ...strategy,
+        authenticate: async (draft) => {
+          const result = await strategy.authenticate(draft);
+          for (const [name, value] of Object.entries(result.parameters ?? {})) {
+            if (name !== 'client_id' && name !== 'client_assertion_type') {
+              sentValues.push(value);
+            }
+          }
+          return result;
+        },
+      };
+      failRealistically();
+      const thrown = await failureOf(
+        site.run({ strategy: recording, material: m }),
+      );
+      const text = `${serialized(thrown)}\n${String(thrown)}`;
+      const needles = [
+        ...sentValues.flatMap((v) => windowsOf(v)),
+        ...(m?.passphrase ? windowsOf(m.passphrase) : []),
+        ...(m?.pfx ? windowsOf(JSON.stringify(m.pfx).slice(26), 40, 40) : []),
+        ...(m?.pfx ? windowsOf(m.pfx.toString('base64'), 16, 16) : []),
+        ...windowsOf(signingKey.replace(/-----[^-]+-----|\s/g, ''), 16, 16),
+      ];
+      expect(sentValues.length > 0 || m !== undefined).toBe(true);
+      expect(needles.filter((needle) => text.includes(needle))).toEqual([]);
+      // The status the sites report is still there.
+      expect(String(thrown)).toContain('400');
+    },
+  );
+
+  it('without a strategy: no config, request, secret, Basic or refresh token', async () => {
+    failRealistically();
+    const thrown = await failureOf(site.run());
+    const text = `${serialized(thrown)}\n${String(thrown)}`;
+    expect(text).not.toContain('"config"');
+    expect(text).not.toContain('"request"');
+    expect(text).not.toContain('client_secret');
+    expect(text).not.toContain('Authorization');
+    expect(text).not.toContain(Buffer.from('cid:sec').toString('base64'));
+    expect(text).not.toContain('old-rt');
+  });
+});
+
+describe.each(SITES)(
+  '$name: redirects and the agent on the strategy path',
+  (site) => {
+    it('follows no redirect: a 307 to another host fails the request', async () => {
+      mockedAxios.mockImplementation(
+        async (config: { maxRedirects?: number }) => {
+          // axios with maxRedirects 0 rejects a 3xx; with redirects it would follow.
+          if (config.maxRedirects === 0) {
+            throw {
+              isAxiosError: true,
+              message: 'Request failed with status code 307',
+              response: {
+                status: 307,
+                headers: { location: 'https://elsewhere.example/token' },
+                data: '',
+              },
+            };
+          }
+          return reply;
+        },
+      );
+      await failureOf(
+        site.run({ strategy: tlsClientCertificate({ material }), material }),
+      );
+      expect(sent().maxRedirects).toBe(0);
+    });
+
+    it('the agent takes cert, key, pfx and passphrase only: no field the material happens to carry', async () => {
+      const loaded = {
+        ...material,
+        rejectUnauthorized: false,
+        ca: 'ROGUE-CA',
+        checkServerIdentity: () => undefined,
+      } as ICertificateMaterial;
+      await site.run({
+        strategy: tlsClientCertificate({ material }),
+        material: loaded,
+      });
+      const options = (
+        sent().httpsAgent as unknown as { options: Record<string, unknown> }
+      ).options;
+      expect('rejectUnauthorized' in options).toBe(false);
+      expect('ca' in options).toBe(false);
+      expect('checkServerIdentity' in options).toBe(false);
+      expect(options.cert).toBe(material.cert);
+      expect(options.key).toBe(material.key);
+    });
+  },
+);
+
+describe('the server never reads back the password or the passcode', () => {
+  const echoing = (secrets: string[]) => ({
+    isAxiosError: true,
+    message: 'Request failed with status code 401',
+    response: {
+      status: 401,
+      data: {
+        error: `unauthorized ${secrets.join(' ')}`,
+        error_description: `refused ${secrets.join(' and ')}`,
+      },
+    },
+  });
+  const PASSCODE = 'PASSCODE-0123456789';
+  const PASSWORD = 'pass-word-9876543210';
+  const CLIENT_SECRET = 'client-secret-555555';
+
+  it.each([
+    ['as today', undefined],
+    ['with a strategy', { strategy: clientSecretPost(CLIENT_SECRET) }],
+  ])('passcode, %s', async (_label, auth) => {
+    mockedAxios.post.mockRejectedValue(echoing([PASSCODE, CLIENT_SECRET]));
+    mockedAxios.mockRejectedValue(echoing([PASSCODE, CLIENT_SECRET]));
+    const thrown = await failureOf(
+      exchangePasscode(
+        'https://uaa',
+        'cid',
+        auth ? undefined : CLIENT_SECRET,
+        PASSCODE,
+        undefined,
+        auth,
+      ),
+    );
+    const message = messageOf(thrown);
+    expect(message).toContain('Passcode exchange failed (401)');
+    expect(message).toContain('refused');
+    expect(message).not.toContain(PASSCODE);
+    expect(message).not.toContain(CLIENT_SECRET);
+  });
+
+  it.each([
+    ['as today', undefined],
+    ['with a strategy', { strategy: clientSecretPost(CLIENT_SECRET) }],
+  ])('password grant, %s', async (_label, auth) => {
+    mockedAxios.post.mockRejectedValue(echoing([PASSWORD, CLIENT_SECRET]));
+    mockedAxios.mockRejectedValue(echoing([PASSWORD, CLIENT_SECRET]));
+    const thrown = await failureOf(
+      passwordGrant(
+        OIDC,
+        'cid',
+        auth ? undefined : CLIENT_SECRET,
+        'user',
+        PASSWORD,
+        undefined,
+        undefined,
+        auth,
+      ),
+    );
+    const message = messageOf(thrown);
+    expect(message).toContain('OIDC password grant failed (401)');
+    expect(message).toContain('refused');
+    expect(message).not.toContain(PASSWORD);
+    expect(message).not.toContain(CLIENT_SECRET);
   });
 });

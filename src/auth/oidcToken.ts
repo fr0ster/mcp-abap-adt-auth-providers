@@ -4,11 +4,12 @@
 
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
 import axios, { type AxiosResponse } from 'axios';
-import { redactKnownSecrets } from './oauthErrorBody';
+import { describeOAuthErrorBody } from './oauthErrorBody';
 import { tlsTrustCode } from './refusal';
 import {
   type PreparedTokenRequest,
   prepareTokenRequest,
+  sendTokenRequest,
   type TokenRequestAuth,
 } from './tokenRequest';
 
@@ -77,15 +78,12 @@ async function send(
   grantType: string,
   params: URLSearchParams,
 ): Promise<AxiosResponse> {
-  if (!auth) return sendAsToday(endpoint, params, clientId, clientSecret);
-  const prepared = await prepareWith(
-    auth,
-    endpoint,
-    clientId,
-    grantType,
-    params,
+  const prepared = auth
+    ? await prepareWith(auth, endpoint, clientId, grantType, params)
+    : undefined;
+  return sendTokenRequest(prepared, () =>
+    sendAsToday(endpoint, params, clientId, clientSecret),
   );
-  return axios(prepared.config);
 }
 
 function mapTokenResponse(data: any): OidcTokenResponse {
@@ -187,21 +185,20 @@ export async function initiateDeviceAuthorization(
 
   // RFC 8628 §3.1: a confidential client authenticates here too. Without a
   // strategy, today's request: client_id in the body, never Basic.
-  const response = auth
-    ? await axios(
-        (
-          await prepareWith(
-            auth,
-            deviceEndpoint,
-            clientId,
-            'device_authorization',
-            params,
-          )
-        ).config,
+  const prepared = auth
+    ? await prepareWith(
+        auth,
+        deviceEndpoint,
+        clientId,
+        'device_authorization',
+        params,
       )
-    : await axios.post(deviceEndpoint, params.toString(), {
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      });
+    : undefined;
+  const response = await sendTokenRequest(prepared, () =>
+    axios.post(deviceEndpoint, params.toString(), {
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    }),
+  );
 
   const data = response.data;
   if (!data?.device_code || !data?.user_code || !data?.verification_uri) {
@@ -244,9 +241,9 @@ export async function pollDeviceTokens(
         )
       : undefined;
     try {
-      const response = prepared
-        ? await axios(prepared.config)
-        : await sendAsToday(tokenEndpoint, params, clientId, clientSecret);
+      const response = await sendTokenRequest(prepared, () =>
+        sendAsToday(tokenEndpoint, params, clientId, clientSecret),
+      );
       return mapTokenResponse(response.data);
     } catch (error: any) {
       const status = error?.response?.status;
@@ -291,23 +288,21 @@ export async function passwordGrant(
     ? await prepareWith(auth, tokenEndpoint, clientId, 'password', params)
     : undefined;
   try {
-    const response = prepared
-      ? await axios(prepared.config)
-      : await sendAsToday(tokenEndpoint, params, clientId, clientSecret);
+    const response = await sendTokenRequest(prepared, () =>
+      sendAsToday(tokenEndpoint, params, clientId, clientSecret),
+    );
     return mapTokenResponse(response.data);
   } catch (error: any) {
     // Unwrapped, so the refusal can name the code and NODE_EXTRA_CA_CERTS.
     if (tlsTrustCode(error) !== undefined) throw error;
     const status = error?.response?.status;
-    const data = error?.response?.data;
-    const errorCode = data?.error;
-    const errorDesc = data?.error_description;
-    // What the strategy sent never comes back out (the rest: as before).
+    // Only `error` and `error_description`, with the password, the secret
+    // and what the strategy sent redacted: a server may echo them.
     throw new Error(
-      redactKnownSecrets(
-        `OIDC password grant failed (${status || 'unknown'}): ${errorCode || 'unknown'}${errorDesc ? ` - ${errorDesc}` : ''}`,
-        prepared?.secrets ?? [],
-      ),
+      `OIDC password grant failed (${status || 'unknown'}): ${describeOAuthErrorBody(
+        error?.response?.data,
+        [password, clientSecret, ...(prepared?.secrets ?? [])],
+      )}`,
     );
   }
 }
