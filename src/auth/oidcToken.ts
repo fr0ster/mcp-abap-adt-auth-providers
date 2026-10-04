@@ -12,6 +12,7 @@ import {
   prepareTokenRequest,
   sendTokenRequest,
   type TokenRequestAuth,
+  type TokenRequestFailure,
 } from './tokenRequest';
 
 export interface OidcTokenResponse {
@@ -197,14 +198,29 @@ export async function initiateDeviceAuthorization(
         params,
       )
     : undefined;
-  const response = await sendTokenRequest(
-    prepared,
-    () =>
-      axios.post(deviceEndpoint, params.toString(), {
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      }),
-    grantSecrets(params),
-  );
+  let response: AxiosResponse;
+  try {
+    response = await sendTokenRequest(
+      prepared,
+      () =>
+        axios.post(deviceEndpoint, params.toString(), {
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        }),
+      grantSecrets(params),
+    );
+  } catch (error: unknown) {
+    // Unwrapped, so the refusal can name the code and NODE_EXTRA_CA_CERTS.
+    if (tlsTrustCode(error) !== undefined) throw error;
+    const response = (error as TokenRequestFailure | null)?.response;
+    // Only `error` and `error_description`, with what the strategy sent
+    // redacted: a server may echo it.
+    throw new Error(
+      `OIDC device authorization failed (${response?.status || 'unknown'}): ${describeOAuthErrorBody(
+        response?.data,
+        [...grantSecrets(params), ...(prepared?.secrets ?? [])],
+      )}`,
+    );
+  }
 
   const data = response.data;
   if (!data?.device_code || !data?.user_code || !data?.verification_uri) {

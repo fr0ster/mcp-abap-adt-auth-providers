@@ -20,7 +20,11 @@ import type {
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
 import axios from 'axios';
 import { getTokenWithClientCredentials } from '../../auth/clientCredentialsAuth';
-import { passwordGrant, pollDeviceTokens } from '../../auth/oidcToken';
+import {
+  initiateDeviceAuthorization,
+  passwordGrant,
+  pollDeviceTokens,
+} from '../../auth/oidcToken';
 import { exchangePasscode } from '../../auth/passcodeAuth';
 import { refusalFrom } from '../../auth/refusal';
 import { exchangeSamlAssertion } from '../../auth/saml2TokenExchange';
@@ -695,6 +699,34 @@ describe('the server never reads back the password or the passcode', () => {
     expect(message).toContain('refused');
     expect(message).not.toContain(PASSWORD);
     expect(message).not.toContain(CLIENT_SECRET);
+  });
+
+  it("device authorization: the OAuth summary in the message, the strategy's secret redacted", async () => {
+    mockedAxios.mockRejectedValue(echoing([CLIENT_SECRET]));
+    const thrown = await failureOf(
+      initiateDeviceAuthorization(
+        'https://idp/device-auth',
+        'cid',
+        'openid',
+        undefined,
+        { strategy: clientSecretPost(CLIENT_SECRET) },
+      ),
+    );
+    const message = messageOf(thrown);
+    expect(message).toContain('OIDC device authorization failed (401)');
+    expect(message).toContain('unauthorized');
+    expect(message).toContain('refused');
+    expect(message).not.toContain(CLIENT_SECRET);
+  });
+
+  it('device authorization as today: the OAuth summary in the message', async () => {
+    mockedAxios.post.mockRejectedValue(echoing([]));
+    const thrown = await failureOf(
+      initiateDeviceAuthorization('https://idp/device-auth', 'cid', 'openid'),
+    );
+    expect(messageOf(thrown)).toMatch(
+      /^OIDC device authorization failed \(401\): .*unauthorized.*refused/,
+    );
   });
 });
 
