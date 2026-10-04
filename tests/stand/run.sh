@@ -14,6 +14,7 @@ ROOT="$(cd "$HERE/../.." && pwd)"
 cd "$HERE"
 PORT="${UAA_PORT:-8080}"
 KC_PORT="${KEYCLOAK_PORT:-8081}"
+KC_HTTPS_PORT="${KEYCLOAK_HTTPS_PORT:-8444}"
 SERVICES="uaa keycloak"
 
 wanted_address() { # service
@@ -46,6 +47,15 @@ for service in $SERVICES; do
           "stop it (npm run stand:down) or run with its port" >&2
         exit 1
       fi
+      if [ "$service" = keycloak ]; then
+        actual="$(docker compose port keycloak 8443 2>/dev/null || true)"
+        if [ "$actual" != "127.0.0.1:$KC_HTTPS_PORT" ]; then
+          echo "keycloak is already running with HTTPS on ${actual:-no port}," \
+            "not 127.0.0.1:$KC_HTTPS_PORT; stop it (npm run stand:down)" \
+            "or run with its port" >&2
+          exit 1
+        fi
+      fi
       ;;
   esac
 done
@@ -72,8 +82,13 @@ stop() {
 }
 trap stop EXIT
 
-UAA_PORT="$PORT" KEYCLOAK_PORT="$KC_PORT" "$HERE/up.sh"
+UAA_PORT="$PORT" KEYCLOAK_PORT="$KC_PORT" KEYCLOAK_HTTPS_PORT="$KC_HTTPS_PORT" \
+  "$HERE/up.sh"
 cd "$ROOT"
+# NODE_EXTRA_CA_CERTS: the suites trust Keycloak's HTTPS through the stand's
+# own CA, as a consumer trusts a private CA — no provider takes a `ca`.
 UAA_URL="http://localhost:$PORT/uaa" \
   KEYCLOAK_URL="http://localhost:$KC_PORT/realms/test" \
+  KEYCLOAK_HTTPS_URL="https://localhost:$KC_HTTPS_PORT/realms/test" \
+  NODE_EXTRA_CA_CERTS="$HERE/keycloak/tls/ca.crt" \
   npm test -- src/__tests__/integration/stand "$@"

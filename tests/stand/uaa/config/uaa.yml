@@ -145,6 +145,14 @@ oauth:
       secret: secret
       authorized-grant-types: client_credentials
       authorities: uaa.resource
+    # ClientCredentialsProvider + privateKeyJwt: the client signs an assertion
+    # with tests/stand/keycloak/tls/jwt.key; this is its public half. UAA has
+    # no tls_client_auth, so private_key_jwt is the certificate-free way here.
+    jwt_client:
+      id: jwt_client
+      authorized-grant-types: client_credentials
+      authorities: uaa.resource
+      jwks: '{"keys":[{"kty":"RSA","kid":"jwt-client","use":"sig","alg":"RS256","n":"1HuVBxwQerck1O2HCsWOmrU7UQj1doM1A4EAxNz5Lt0ce2McZ_Hspft4X9GMU-z-oy2ze1c_8cIIENXKfnOy6D_D5YwAPXYS7YSi99SJONYX_hupTq2umRsIUkJ1YBW4-0PldtsYpF_EcQMeryrHv_WURKGcnERD4hPIW3dYuilDXulzIWIz4LjNhIee3ZvrKRu9z0FvCMrqmXQoPejSYuokmii0786GdJ5cxX2A4MqYJ8sgRLDbW6wEiBJoz2x1ZNxY2TAMnnG2215NCp2uvy1Xj6jkxy-K7eu7KCMWdx95qPO_DEp28tHDMrlgPmAOuEFYp1wsD2FZGT4pJXD_vQ","e":"AQAB"}]}'
     # UaaPasscodeProvider: the user fetches a one-time code from /passcode in a
     # browser; the provider exchanges it through the password grant.
     passcode_client:

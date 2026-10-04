@@ -18,6 +18,14 @@
           "temporary": false
         }
       ]
+    },
+    {
+      "username": "client-a",
+      "enabled": true,
+      "emailVerified": true,
+      "email": "client-a@example.com",
+      "firstName": "Client",
+      "lastName": "A"
     }
   ],
   "clients": [
@@ -116,6 +124,74 @@
         "saml_force_name_id_format": "true",
         "saml_name_id_format": "username",
         "saml.signature.algorithm": "RSA_SHA256"
+      }
+    },
+    {
+      "clientId": "mtls",
+      "publicClient": false,
+      "serviceAccountsEnabled": true,
+      "standardFlowEnabled": false,
+      "directAccessGrantsEnabled": true,
+      "clientAuthenticatorType": "client-x509",
+      "attributes": {
+        "x509.subjectdn": "CN=client-a,O=stand",
+        "x509.allow.regex.pattern.comparison": "false",
+        "tls.client.certificate.bound.access.tokens": "true"
+      }
+    },
+    {
+      "clientId": "jwt",
+      "publicClient": false,
+      "serviceAccountsEnabled": true,
+      "standardFlowEnabled": false,
+      "directAccessGrantsEnabled": true,
+      "clientAuthenticatorType": "client-jwt",
+      "attributes": {
+        "use.jwks.url": "false",
+        "jwt.credential.certificate": "MIIDKzCCAhOgAwIBAgIUBMj2dlCy35vkxOj1H2pzylWwO+IwDQYJKoZIhvcNAQELBQAwJTEOMAwGA1UECgwFc3RhbmQxEzARBgNVBAMMCmp3dC1jbGllbnQwHhcNMjYxMDA0MTIxNzU1WhcNMzYxMDAxMTIxNzU1WjAlMQ4wDAYDVQQKDAVzdGFuZDETMBEGA1UEAwwKand0LWNsaWVudDCCASIwDQYJKoZIhvcNAQEBBQADggEPADCCAQoCggEBANR7lQccEHq3JNTthwrFjpq1O1EI9XaDNQOBAMTc+S7dHHtjHGfx7KX7eF/RjFPs/qMts3tXP/HCCBDVyn5zsug/w+WMAD12Eu2EovfUiTjWF/4bqU6trpkbCFJCdWAVuPtD5XbbGKRfxHEDHq8qx7/1lEShnJxEQ+ITyFt3WLopQ17pcyFiM+C4zYSHnt2b6ykbvc9BbwjK6pl0KD3o0mLqJJootO/OhnSeXMV9gODKmCfLIESw21usBIgSaM9sdWTcWNkwDJ5xttteTQqdrr8tV4+o5Mcviu3ruygjFncfeajzvwxKdvLRwzK5YD5gDrhBWKdcLA9hWRk+KSVw/70CAwEAAaNTMFEwHQYDVR0OBBYEFBqDlWY49QdIMfMnK8We++IEHyZsMB8GA1UdIwQYMBaAFBqDlWY49QdIMfMnK8We++IEHyZsMA8GA1UdEwEB/wQFMAMBAf8wDQYJKoZIhvcNAQELBQADggEBALyo/yaJH3M9cvqVvXVU1hw6oDau78gMuPT2Pt4cOLL6icyUfSrSgI3pKOMefro3S4gJPpnoTclkj3fmb9zFHxun4djm8M88+Z9zheb1gJYrCf6YTwsskU0zGms9DWRywjUcFGZBjQ9yBhKhac8mVTnx9fiDzI2sKQgPf6ev7mQl3BF+lTDqHzU78wpHEIA57OwJtHBj9PnYgO97bw3UmNEmwr94StQ9p8dUvUwlHYzg9psX1qRfhSLlS8/dzwY5iMFEaGaKdyfQAsqUM9pIJaxUq5BB/MwgnaCNfZQqBv6KeW8XkihvAvZGuzDabh1A1QYKqfAn8FJZ0d9DaB1+u6I=",
+        "oauth2.device.authorization.grant.enabled": "true"
+      }
+    },
+    {
+      "clientId": "x509-login",
+      "publicClient": true,
+      "standardFlowEnabled": false,
+      "directAccessGrantsEnabled": true,
+      "authenticationFlowBindingOverrides": {
+        "direct_grant": "5b0c8f0e-3c1a-4c55-9a43-7f1d2e6a9b01"
+      }
+    }
+  ],
+  "authenticationFlows": [
+    {
+      "id": "5b0c8f0e-3c1a-4c55-9a43-7f1d2e6a9b01",
+      "alias": "x509 direct grant",
+      "description": "The CERTRULE analogue: the presented certificate's CN names the user",
+      "providerId": "basic-flow",
+      "topLevel": true,
+      "builtIn": false,
+      "authenticationExecutions": [
+        {
+          "authenticator": "direct-grant-auth-x509-username",
+          "authenticatorConfig": "x509 user from CN",
+          "requirement": "REQUIRED",
+          "priority": 10,
+          "authenticatorFlow": false,
+          "userSetupAllowed": false
+        }
+      ]
+    }
+  ],
+  "authenticatorConfig": [
+    {
+      "alias": "x509 user from CN",
+      "config": {
+        "x509-cert-auth.mapping-source-selection": "Match SubjectDN using regular expression",
+        "x509-cert-auth.regular-expression": "CN=(.*?)(?:,|$)",
+        "x509-cert-auth.mapper-selection": "Username or Email",
+        "x509-cert-auth.crl-checking-enabled": "false",
+        "x509-cert-auth.ocsp-checking-enabled": "false",
+        "x509-cert-auth.crldp-checking-enabled": "false"
       }
     }
   ]
