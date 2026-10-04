@@ -566,16 +566,50 @@ describe('one certificate, pinned', () => {
     expect(authorization.authorize).not.toHaveBeenCalled();
   });
 
-  it('material that is not usable is not pinned', async () => {
-    const { strategy } = recording([{ cert: A.cert, key: B.key }]);
+  it('material that is not usable is refused and not pinned; a later moment loads again', async () => {
+    const { strategy, tlsCalls } = recording([{ cert: A.cert, key: B.key }, A]);
     const provider = new ClientCredentialsProvider({
       uaaUrl: 'https://uaa',
       clientId: 'cid',
       clientAuthentication: strategy,
     });
-    const outcome = await provider.prepare();
-    expect(outcome.ok).toBe(false);
+    expect(await provider.prepare()).toEqual({
+      ok: false,
+      refusal: {
+        reason: CERTIFICATE_UNUSABLE.reason,
+        hint: CERTIFICATE_UNUSABLE.hint,
+      },
+    });
     expect(sent).toHaveLength(0);
+
+    expect(await provider.prepare()).toEqual({ ok: true });
+    expect(tlsCalls()).toBe(2);
+    expect(sent).toHaveLength(1);
+    expect(sent[0].cert).toEqual(A.cert);
+    // Pinned now: a further request reads the strategy no more.
+    await provider.refreshTokens();
+    expect(tlsCalls()).toBe(2);
+    expect(sent[1].cert).toEqual(A.cert);
+  });
+
+  it("a change to the strategy's Buffer after pinning does not change what is presented", async () => {
+    const cert = Buffer.from(A.cert as Buffer);
+    const key = Buffer.from(A.key as Buffer);
+    const original = Buffer.from(cert);
+    const { strategy } = recording([{ cert, key }]);
+    const provider = new ClientCredentialsProvider({
+      uaaUrl: 'https://uaa',
+      clientId: 'cid',
+      clientAuthentication: strategy,
+    });
+    await provider.prepare();
+    // The strategy overwrites the bytes it handed over, in place.
+    cert.fill(0);
+    await provider.refreshTokens();
+    expect(sent).toHaveLength(2);
+    for (const request of sent) {
+      expect(Buffer.from(request.cert as Buffer).equals(original)).toBe(true);
+    }
   });
 });
 

@@ -62,11 +62,17 @@ type BaseConfig = TokenProviderHooks &
   ClientAuthenticationConfig & { clientSecret?: unknown };
 
 /**
- * The four material fields, copied: an object the strategy still holds, and
- * changes later, never changes what is pinned.
+ * The four material fields, copied — each Buffer into a new one: an object or
+ * a Buffer the strategy still holds, and changes later, never changes what is
+ * pinned.
  */
 function copyMaterial(material: ICertificateMaterial): ICertificateMaterial {
-  const { cert, key, pfx, passphrase } = material;
+  const own = <T>(value: T): T =>
+    (Buffer.isBuffer(value) ? Buffer.from(value) : value) as T;
+  const cert = own(material.cert);
+  const key = own(material.key);
+  const pfx = own(material.pfx);
+  const { passphrase } = material;
   return {
     ...(cert === undefined ? {} : { cert }),
     ...(key === undefined ? {} : { key }),
