@@ -265,7 +265,7 @@ to none.
 | stand, Keycloak | `ClientCredentialsProvider` + `tlsClientCertificate` → bound token; userinfo with the material from `establish()` → 200, none → 401, `client-b` → 401; token request with `client-b` → refused; `OidcPasswordProvider` + mTLS → refresh stays bound; `privateKeyJwt` → token |
 | stand, UAA | `ClientCredentialsProvider` + `privateKeyJwt` → token |
 | stand, part A | §6 |
-| trial, XSUAA (`test:xsuaa`, not CI) | an x509 key (`setup.sh` creates the instance with `credential-types: ["x509"]` and the key with `credential-type: x509`) → `ClientCredentialsProvider` + `tlsClientCertificate({ endpoint: certurl })` → token, no secret anywhere |
+| trial, XSUAA (`test:xsuaa`, not CI) | an x509 key (`setup.sh` gives the one test instance `credential-types: ["binding-secret", "x509"]`; `key` stays a binding-secret key for the other suites, and `x509-key` is created fresh per run with `credential-type: x509`) → `ClientCredentialsProvider` + `tlsClientCertificate({ endpoint: certurl })` → token, no secret anywhere |
 
 Every new rule gets the load-bearing check: break it, watch its own test go
 red, revert.
