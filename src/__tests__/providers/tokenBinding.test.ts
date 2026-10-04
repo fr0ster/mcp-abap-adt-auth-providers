@@ -642,17 +642,19 @@ describe('a held token bound to another certificate, one pinned: renewed like an
     ],
     ['without a refresh token', {}, ['password']],
   ])(
-    'a renewal that throws, %s, is remembered too: later authorize() calls refuse without a token request or a login',
+    'a renewal that throws, %s, is remembered too: later authorize() calls give its refusal again, without a token request or a login',
     async (_label, options, firstRenewal) => {
       refusingAll();
       const { provider } = rotating(options);
       const t = recordingTargets();
       const first = await provider.authorize(t.requestTarget);
       expect(first.ok).toBe(false);
+      // The renewal's own refusal, not the generic bound-elsewhere words.
+      expect(first).not.toEqual(REFUSAL);
       expect(requests.map((r) => r.grant)).toEqual(firstRenewal);
       for (let i = 0; i < 2; i += 1) {
         await expect(provider.authorize(t.requestTarget)).resolves.toEqual(
-          REFUSAL,
+          first,
         );
       }
       expect(requests.map((r) => r.grant)).toEqual(firstRenewal);
@@ -679,7 +681,8 @@ describe('a held token bound to another certificate, one pinned: renewed like an
       'password',
       'password',
     ]);
-    await expect(provider.authorize(t.requestTarget)).resolves.toEqual(REFUSAL);
+    // The latest renewal's refusal is the one remembered.
+    await expect(provider.authorize(t.requestTarget)).resolves.toEqual(outcome);
     expect(requests).toHaveLength(3);
   });
 
@@ -690,13 +693,16 @@ describe('a held token bound to another certificate, one pinned: renewed like an
     await provider.authorize(t.requestTarget);
     await provider.authorize(t.requestTarget);
     expect(requests).toHaveLength(2);
-    expect((await provider.prepare()).ok).toBe(false);
+    const prepared = await provider.prepare();
+    expect(prepared.ok).toBe(false);
     expect(requests.map((r) => r.grant)).toEqual([
       'refresh_token',
       'password',
       'password',
     ]);
-    await expect(provider.authorize(t.requestTarget)).resolves.toEqual(REFUSAL);
+    await expect(provider.authorize(t.requestTarget)).resolves.toEqual(
+      prepared,
+    );
     expect(requests).toHaveLength(3);
   });
 
@@ -756,9 +762,85 @@ describe('a held token bound to another certificate, one pinned: renewed like an
       provider.authorize(b.requestTarget),
     ]);
     expect(outcomes.map((o) => o.ok)).toEqual([false, false]);
+    expect(outcomes[1]).toEqual(outcomes[0]);
     expect(requests.map((r) => r.grant)).toEqual(['refresh_token', 'password']);
-    await expect(provider.authorize(a.requestTarget)).resolves.toEqual(REFUSAL);
+    await expect(provider.authorize(a.requestTarget)).resolves.toEqual(
+      outcomes[0],
+    );
     expect(requests).toHaveLength(2);
+  });
+
+  it('a renewal refused because the client certificate expired: every later authorize() says so, with nothing sent', async () => {
+    const EXPIRED = {
+      ok: false,
+      refusal: {
+        reason: 'the client certificate has expired',
+        hint: 'renew the certificate; a token provider pins its certificate for life, so give the renewed one to a new provider',
+      },
+    };
+    // Bound to B and valid past the moved clock: renewed for its binding,
+    // not for its age.
+    const { provider } = rotating({
+      refreshToken: 'R1',
+      token: boundTo(THUMB_B, 200 * 365 * 86400),
+    });
+    const t = recordingTargets();
+    // Pinned while A is valid; nothing obtained.
+    await provider.establish(t.logonTarget);
+    // client.crt is valid until 2126: the clock is moved past it.
+    const now = jest.spyOn(Date, 'now').mockReturnValue(Date.UTC(2127, 0, 1));
+    try {
+      for (let i = 0; i < 3; i += 1) {
+        await expect(provider.authorize(t.requestTarget)).resolves.toEqual(
+          EXPIRED,
+        );
+      }
+    } finally {
+      now.mockRestore();
+    }
+    expect(requests).toHaveLength(0);
+    expect(t.request.headers).toEqual({});
+  });
+
+  it('a token renewed bound elsewhere, renewed again after prepare() and failing: later calls give that failure, not the earlier words', async () => {
+    issuing(boundTo(THUMB_B, 3600));
+    const { provider } = rotating({ refreshToken: 'R1' });
+    const t = recordingTargets();
+    await expect(provider.authorize(t.requestTarget)).resolves.toEqual(
+      RENEWED_REFUSAL,
+    );
+    refusingAll();
+    const prepared = await provider.prepare();
+    expect(prepared.ok).toBe(false);
+    expect(prepared).not.toEqual(RENEWED_REFUSAL);
+    const count = requests.length;
+    await expect(provider.authorize(t.requestTarget)).resolves.toEqual(
+      prepared,
+    );
+    await expect(provider.authorize(t.requestTarget)).resolves.toEqual(
+      prepared,
+    );
+    expect(requests).toHaveLength(count);
+  });
+
+  it('an EXPIRED token (bound to the pinned one) whose renewal fails is not remembered: each authorize() renews again, as before', async () => {
+    refusingAll();
+    const { provider } = rotating({
+      refreshToken: 'R1',
+      token: boundTo(THUMB_A, -3600),
+    });
+    const t = recordingTargets();
+    expect((await provider.authorize(t.requestTarget)).ok).toBe(false);
+    expect(requests.map((r) => r.grant)).toEqual(['refresh_token', 'password']);
+    expect((await provider.authorize(t.requestTarget)).ok).toBe(false);
+    expect((await provider.authorize(t.requestTarget)).ok).toBe(false);
+    // The refresh token was spent by the first refusal: a login each time.
+    expect(requests.map((r) => r.grant)).toEqual([
+      'refresh_token',
+      'password',
+      'password',
+      'password',
+    ]);
   });
 
   it('prepare() clears the mark: one more renewal per connect', async () => {

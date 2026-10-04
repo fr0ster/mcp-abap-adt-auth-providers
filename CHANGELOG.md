@@ -79,10 +79,11 @@ and the error codes `CERTIFICATE_MATERIAL_ERROR` and
   new token is bound to a client certificate this provider does not present"
   — and remembered: later attempts do not renew it again (no token request, no
   login per request); `getTokens()` returns it, `authorize()` refuses it. A
-  renewal that throws is remembered too: that attempt gets the renewal's own
-  refusal, later ones refuse the held token as "the token is bound to a client
-  certificate this provider does not present" without a token request or a
-  login, until the token changes. In both cases the
+  renewal that throws is remembered too, with its own refusal: later attempts
+  answer the same words (an expired client certificate stays "the client
+  certificate has expired"), without a token request or a login, until the
+  token changes; the latest renewal's words are the ones kept. An expired
+  token whose renewal fails is renewed again on the next attempt, as before. In both cases the
   next `prepare()` renews once more; `rejected()` renews once more when the
   refused token is the one held, and answers Ok without a renewal when the
   refused token was already superseded (rule 6, as before). With no

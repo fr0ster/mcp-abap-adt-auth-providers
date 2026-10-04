@@ -740,13 +740,14 @@ bound to a client certificate this provider does not present* — and
 remembered: later attempts do not renew it again, so a server that keeps
 binding to another certificate costs no token request (and no login) per
 request. `getTokens()` returns the remembered token; `authorize()` refuses it.
-A renewal that *fails* — the refresh and the login refused, the certificate
-expired, the server unreachable — is remembered the same way: that attempt is
-refused with the renewal's own words, and later attempts refuse the held token
-as *the token is bound to a client certificate this provider does not
-present*, with no token request and no login (after a refused refresh every
-renewal is a login, interactive for a browser or device strategy), until the
-token changes. The next `prepare()` renews once more. `rejected()` renews once more when the
+A renewal that *fails* — the refresh and the login refused, the client
+certificate expired, the server unreachable — is remembered the same way, with
+its own refusal: later attempts answer those same words (*the client
+certificate has expired*, say), with no token request and no login (after a
+refused refresh every renewal is a login, interactive for a browser or device
+strategy), until the token changes. The words are always those of the latest
+renewal. Only a token held *bound elsewhere* is remembered: an expired token
+whose renewal fails is renewed again on the next attempt, as before. The next `prepare()` renews once more. `rejected()` renews once more when the
 refused token is the one held; a refused token that was already superseded is
 answered Ok without a renewal (rule 6, as before). `getTokens()` pins the
 certificate to compare thumbprints, so with a bound token held it may throw a

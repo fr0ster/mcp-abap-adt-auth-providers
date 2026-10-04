@@ -141,20 +141,18 @@ export abstract class BaseTokenProvider
   /** The pin attempt in flight; concurrent first needs share it. */
   private pinning?: Promise<PinnedCertificate>;
   /**
-   * A token a renewal obtained that is still bound elsewhere than the pinned
-   * certificate. Held, it is refused, never renewed again on its own —
-   * otherwise every request attempt would cost a token request, or a login.
-   * Cleared whenever the token changes, and by prepare().
+   * A held token bound elsewhere than the pinned certificate that a renewal
+   * did not make usable, with the refusal that renewal produced: a renewal
+   * that obtained it still bound elsewhere ("the new token is bound to …"),
+   * or a renewal that threw while it was held (its own refusal — an expired
+   * client certificate, a refused login). It is not renewed again on its own
+   * — otherwise every request attempt would cost a token request, or a login,
+   * interactive for a browser or device strategy — and `authorize()` answers
+   * that same refusal, so the cause stays visible. Cleared whenever the token
+   * changes and by prepare(); rejected() renews regardless, once, and the
+   * latest renewal's refusal is the one kept.
    */
-  private renewedElsewhere?: string;
-  /**
-   * A held token bound elsewhere whose renewal threw. Like `renewedElsewhere`
-   * it is not renewed again on its own — after a refused refresh every renewal
-   * is a login, interactive for a browser or device strategy — and
-   * `authorize()` refuses it as bound elsewhere. Cleared the same way; and
-   * `rejected()` renews regardless, once.
-   */
-  private renewalFailedElsewhere?: string;
+  private remembered?: { token: string; refusal: AuthOutcome };
 
   constructor(config: BaseConfig = {}) {
     this.onTokens = config.onTokens;
@@ -247,23 +245,27 @@ export abstract class BaseTokenProvider
   private async boundToAnother(token: string): Promise<boolean> {
     // A renewal already obtained this one, or already failed to replace it:
     // renewing again on its own would not help.
-    if (token === this.renewedElsewhere) return false;
-    if (token === this.renewalFailedElsewhere) return false;
+    if (token === this.remembered?.token) return false;
     const binding = readBinding(token);
     if (binding.state !== 'bound') return false;
     const pinned = await this.pin();
     return pinned !== undefined && !this.presents(binding, pinned);
   }
 
-  /** Remembers a renewed token bound elsewhere than the pinned certificate. */
-  private markIfElsewhere(token: string): void {
+  /** True for a token bound — or binding unreadably — elsewhere than the pinned certificate. */
+  private elsewhereThanPinned(token: string): boolean {
     const binding = readBinding(token);
-    if (
+    return (
       this.pinned !== undefined &&
       binding.state === 'bound' &&
       !this.presents(binding, this.pinned)
-    ) {
-      this.renewedElsewhere = token;
+    );
+  }
+
+  /** Remembers a renewed token bound elsewhere than the pinned certificate. */
+  private markIfElsewhere(token: string): void {
+    if (this.elsewhereThanPinned(token)) {
+      this.remembered = { token, refusal: renewedBoundElsewhere() };
     }
   }
 
@@ -367,22 +369,12 @@ export abstract class BaseTokenProvider
     // If token is valid, return cached — unless it is bound to another
     // certificate than the pinned one (a restored token after a rotation):
     // that one is renewed like an expired one.
-    const held = this.authorizationToken;
     const valid = this.isTokenValid();
-    const elsewhere = valid && (await this.boundToAnother(held ?? ''));
+    const elsewhere =
+      valid && (await this.boundToAnother(this.authorizationToken ?? ''));
     if (this.renewal) return this.renewal;
-    if (elsewhere) {
-      try {
-        return await this.refreshTokens();
-      } catch (error) {
-        // The token it was to replace is still held: remembered, so the next
-        // request attempt does not renew — and maybe log in — again.
-        if (held !== undefined && this.authorizationToken === held) {
-          this.renewalFailedElsewhere = held;
-        }
-        throw error;
-      }
-    }
+    // A failure is remembered by renew() itself.
+    if (elsewhere) return this.refreshTokens();
     if (valid) {
       const authorizationToken = this.authorizationToken;
       if (!authorizationToken) {
@@ -426,8 +418,33 @@ export abstract class BaseTokenProvider
     return this.renewal;
   }
 
-  /** One renewal: one refresh, then — only if it is refused or impossible — one login. */
+  /**
+   * One renewal; when it throws while a token bound elsewhere than the pinned
+   * certificate is still held, that token is remembered with the renewal's
+   * refusal — the words the attempt that ran it got. An expired token bound
+   * to the pinned one (or unbound) is not: it is renewed again, as before.
+   */
   private async renew(): Promise<ITokenResult> {
+    const held = this.authorizationToken;
+    try {
+      return await this.renewOnce();
+    } catch (error) {
+      if (
+        held !== undefined &&
+        this.authorizationToken === held &&
+        this.elsewhereThanPinned(held)
+      ) {
+        this.remembered = {
+          token: held,
+          refusal: refusalFrom(error, this.obtaining),
+        };
+      }
+      throw error;
+    }
+  }
+
+  /** One refresh, then — only if it is refused or impossible — one login. */
+  private async renewOnce(): Promise<ITokenResult> {
     // Before anything is sent or started: material that cannot be loaded, or
     // has expired, refuses the renewal whole — the refresh token is neither
     // sent nor dropped, and no login begins.
@@ -516,8 +533,7 @@ export abstract class BaseTokenProvider
    * @param result Token result to cache
    */
   protected updateTokens(result: ITokenResult): void {
-    this.renewedElsewhere = undefined;
-    this.renewalFailedElsewhere = undefined;
+    this.remembered = undefined;
     const oldToken = this.formatToken(this.authorizationToken);
     this.authorizationToken = result.authorizationToken;
     this.refreshToken = result.refreshToken;
@@ -634,8 +650,7 @@ export abstract class BaseTokenProvider
     return safely(this.obtaining, async () => {
       // Once per connect, a token renewed bound elsewhere — or whose renewal
       // failed — gets one more try.
-      this.renewedElsewhere = undefined;
-      this.renewalFailedElsewhere = undefined;
+      this.remembered = undefined;
       await this.getTokens();
       return OK;
     });
@@ -692,15 +707,14 @@ export abstract class BaseTokenProvider
       const pinned = await this.pin();
       const result = await this.getTokens();
       if (!this.presents(readBinding(result.authorizationToken), pinned)) {
-        // Pinned: getTokens() already renewed a token bound elsewhere, so
-        // this one is the renewal's — unless that renewal threw: then it is
-        // the held one, refused as bound elsewhere (the renewal's own
-        // refusal went to the attempt that ran it).
-        if (
-          !pinned ||
-          result.authorizationToken === this.renewalFailedElsewhere
-        ) {
-          return boundElsewhere();
+        // Pinned: getTokens() already renewed a token bound elsewhere, and
+        // this one is remembered with what that renewal answered — still
+        // bound elsewhere, or its own refusal when it threw. A copy: a caller
+        // changing what it is given never changes the next answer.
+        if (!pinned) return boundElsewhere();
+        const remembered = this.remembered;
+        if (remembered && result.authorizationToken === remembered.token) {
+          return structuredClone(remembered.refusal);
         }
         return renewedBoundElsewhere();
       }
