@@ -7,6 +7,118 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [5.3.0] - 2026-10-04
+
+A token provider's client can authenticate with a client certificate or a
+signed assertion instead of a secret, and a token bound to that certificate is
+presented only together with it. Nothing changes for a consumer that passes no
+strategy. See *Client authentication* in the README.
+
+Requires `@mcp-abap-adt/interfaces-auth` `^3.1.0` (was `^3.0.0`), which adds
+`IClientAuthentication`, `ITokenRequestDraft`, `ITokenRequestAuthentication`
+and the error codes `CERTIFICATE_MATERIAL_ERROR` and
+`CLIENT_AUTHENTICATION_ERROR`.
+
+### Added
+
+- **Five client-authentication strategies**, each a factory returning
+  `IClientAuthentication`: `noClientAuthentication()` (`client_id` in the
+  body), `clientSecretBasic(secret)`, `clientSecretPost(secret)`,
+  `tlsClientCertificate({ material, endpoint? })` (`tls_client_auth`: the
+  request goes over mTLS to `endpoint`, else the server's mTLS alias, else the
+  configured endpoint; `material` is the certificate or a loader, read and
+  checked once, a failed load retried) and
+  `privateKeyJwt({ key, algorithm, keyId?, audience? })` (RS256 or ES256
+  through `node:crypto`; a 60-second assertion whose `aud` is `audience`, else
+  the endpoint the request goes to). A consumer may write its own.
+- **`clientAuthentication` on eight token providers** —
+  `ClientCredentialsProvider`, `AuthorizationCodeProvider`,
+  `UaaPasscodeProvider`, `Saml2BearerProvider`, `OidcBrowserProvider`,
+  `OidcDeviceFlowProvider`, `OidcPasswordProvider`,
+  `OidcTokenExchangeProvider`: every request the provider sends to the server
+  (first token, refresh, device authorization and poll, token exchange) is
+  authenticated by it. `clientSecret` beside a strategy is a `ValidationError`
+  naming `clientSecret` — an empty `clientSecret: ''` included; where
+  `clientSecret` was required, a strategy satisfies it. What a strategy
+  returns is checked before anything is sent (strings only, no line break in
+  a header, nothing replacing the request's own parameters or headers, an
+  absolute `https:` endpoint), and the strategy path follows no redirect.
+- **One certificate per provider, pinned.** A provider reads its strategy's
+  `tlsMaterial()` once, before its first request or logon, checks it, takes
+  the `x5t#S256` thumbprint of its leaf certificate, and keeps a copy for its
+  lifetime; every token request, refresh and logon uses it. A rotated
+  certificate is a new provider instance.
+- **The binding check.** Before presenting a token, `establish()` and
+  `authorize()` read its binding: a JWT with `cnf` (bound) is presented only
+  with the pinned certificate of that thumbprint, else Oops "the token is
+  bound to a client certificate this provider does not present"; a JWT
+  without `cnf` (unbound) goes as a Bearer; anything else (unknown — an opaque
+  token) is treated as bound when a certificate is pinned. `establish()` hands
+  the logon target the pinned certificate when the token may need it, and
+  decides on the token held without obtaining one. Seeded and restored tokens
+  are checked like obtained ones. An opaque token bound to a certificate needs
+  the certificate strategy configured: without it the provider cannot know
+  the binding.
+- **mTLS endpoint aliases** (RFC 8705 §5): an OIDC provider that discovers an
+  endpoint hands the strategy the server's `mtls_endpoint_aliases` entry for it
+  (`token_endpoint`, `device_authorization_endpoint`).
+- **Error classes** `CertificateMaterialError` (carries `incomplete`),
+  `ClientAuthenticationError` (an unusable signing key) and
+  `ClientAuthenticationResultError` (a strategy result that cannot be sent),
+  each with a fixed message and fixed refusal words. `CertificateAuthProvider`
+  and `tlsClientCertificate` share one material check, and its refusals.
+- **A server certificate Node does not trust** is refused naming its code
+  (`SELF_SIGNED_CERT_IN_CHAIN`, …) and, in the hint, `NODE_EXTRA_CA_CERTS` —
+  how a private CA is trusted; there is no `ca` option and
+  `rejectUnauthorized` is never set.
+- **Stand checks** (`npm run test:stand`): Keycloak gains HTTPS
+  (`KEYCLOAK_HTTPS_PORT`, default 8444, loopback) with throwaway TLS fixtures
+  in `tests/stand/keycloak/tls/`, trusted by the suites through
+  `NODE_EXTRA_CA_CERTS`; a token bound to the certificate and accepted by
+  userinfo only with it, a refresh that stays bound, `private_key_jwt` on
+  Keycloak and on UAA, the device flow's assertion audience, and the X.509
+  user logon (`CertificateAuthProvider`, the analogue of ABAP `CERTRULE`). A
+  stand started before this release must be stopped once
+  (`npm run stand:down`).
+- **XSUAA check** (`npm run test:xsuaa`, not in CI): the test instance allows
+  the `x509` credential type, and an `x509-key` created afresh per run gets a
+  client token through `ClientCredentialsProvider` and `tlsClientCertificate`
+  at its `certurl`, with no secret. Service keys are now recorded in the
+  ledger by GUID, like instances and trusts.
+
+### Changed
+
+- **A thrown token-request error carries no request**, with or without a
+  strategy: no form body, no `Authorization` header, no TLS agent with a key,
+  PFX or passphrase. It keeps its message, code and status, and the server's
+  body reduced to `error`, `error_description` and `error_uri`, every secret
+  the request sent redacted.
+- **The passcode exchange and the OIDC password grant report the server's
+  error through `describeOAuthErrorBody`**, with the passcode, the password and
+  the client secret redacted. The messages read
+  `Passcode exchange failed (401): "unauthorized": "Invalid passcode"` and
+  `OIDC password grant failed (401): "invalid_grant": "…"` (were
+  `… (401): Invalid passcode` and `… (401): invalid_grant - …`).
+- **A failed device authorization says what the server answered**:
+  `OIDC device authorization failed (<status>): "<error>": "<description>"`,
+  instead of the transport's `Request failed with status code 400`.
+- **Known secrets are redacted longest first**, so a short secret (a
+  password) redacted inside a longer one (an assertion) no longer leaves the
+  rest of the longer one readable.
+
+### Security
+
+- No key, passphrase, certificate content or client assertion reaches a
+  refusal, a log line or a thrown error: the new error classes carry fixed
+  words only, and `noTokensInLogs.test.ts` covers the strategies.
+- The strategy path follows no redirect: a redirect would re-send the secret
+  or the assertion, and present the certificate, to wherever it points. The
+  path without a strategy is unchanged, and still follows axios's default
+  redirects.
+- The TLS agent of a token request is built from exactly `cert`, `key`, `pfx`
+  and `passphrase`; any other field the material carries at run time
+  (`rejectUnauthorized`, `ca`) never reaches it.
+
 ## [5.2.3] - 2026-10-04
 
 ### Fixed
