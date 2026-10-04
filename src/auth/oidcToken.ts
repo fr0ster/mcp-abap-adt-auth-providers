@@ -4,7 +4,6 @@
 
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
 import axios, { type AxiosResponse } from 'axios';
-import { describeOAuthErrorBody } from './oauthErrorBody';
 import { tlsFailureCode } from './refusal';
 import {
   grantSecrets,
@@ -12,7 +11,7 @@ import {
   prepareTokenRequest,
   sendTokenRequest,
   type TokenRequestAuth,
-  type TokenRequestFailure,
+  tokenEndpointError,
 } from './tokenRequest';
 
 export interface OidcTokenResponse {
@@ -216,15 +215,12 @@ export async function initiateDeviceAuthorization(
   } catch (error: unknown) {
     // Unwrapped, so the refusal can name the TLS code and its fixed hint.
     if (tlsFailureCode(error) !== undefined) throw error;
-    const response = (error as TokenRequestFailure | null)?.response;
     // Only `error` and `error_description`, with what the strategy sent
-    // redacted: a server may echo it.
-    throw new Error(
-      `OIDC device authorization failed (${response?.status || 'unknown'}): ${describeOAuthErrorBody(
-        response?.data,
-        [...grantSecrets(params), ...(prepared?.secrets ?? [])],
-      )}`,
-    );
+    // redacted: a server may echo it; the safe facts as properties.
+    throw tokenEndpointError('OIDC device authorization failed', error, [
+      ...grantSecrets(params),
+      ...(prepared?.secrets ?? []),
+    ]);
   }
 
   const data = response.data;
@@ -326,15 +322,14 @@ export async function passwordGrant(
   } catch (error: any) {
     // Unwrapped, so the refusal can name the TLS code and its fixed hint.
     if (tlsFailureCode(error) !== undefined) throw error;
-    const status = error?.response?.status;
     // Only `error` and `error_description`, with the password, the secret
-    // and what the strategy sent redacted: a server may echo them.
-    throw new Error(
-      `OIDC password grant failed (${status || 'unknown'}): ${describeOAuthErrorBody(
-        error?.response?.data,
-        [password, clientSecret, ...(prepared?.secrets ?? [])],
-      )}`,
-    );
+    // and what the strategy sent redacted: a server may echo them; the safe
+    // facts as properties.
+    throw tokenEndpointError('OIDC password grant failed', error, [
+      password,
+      clientSecret,
+      ...(prepared?.secrets ?? []),
+    ]);
   }
 }
 

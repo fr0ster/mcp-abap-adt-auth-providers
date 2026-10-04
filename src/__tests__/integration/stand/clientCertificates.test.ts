@@ -199,7 +199,8 @@ describeKeycloak(
         await expect(provider.prepare()).resolves.toEqual({
           ok: false,
           refusal: {
-            reason: 'client_credentials token request failed (unknown error)',
+            reason:
+              'client_credentials token request failed (HTTP 401, invalid_client)',
           },
         });
       });

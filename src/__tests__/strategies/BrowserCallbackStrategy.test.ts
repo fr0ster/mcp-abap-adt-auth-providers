@@ -147,7 +147,7 @@ describe('BrowserCallbackStrategy', () => {
     await first;
   });
 
-  it('reports a busy fixed port in the words AuthBroker matches', async () => {
+  it('reports a busy fixed port as "already in use", kept for consumers that match it', async () => {
     const squatter = netModule.createServer();
     await new Promise<void>((resolve) => squatter.listen(7873, resolve));
     try {

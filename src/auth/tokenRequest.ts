@@ -36,8 +36,15 @@ import axios, {
   type AxiosResponse,
 } from 'axios';
 import { ClientAuthenticationResultError } from '../errors/ClientAuthenticationError';
+import { TokenEndpointError } from '../errors/TokenEndpointError';
 import { assertNotExpired } from './certificateMaterial';
-import { type OAuthErrorFields, oauthErrorFields } from './oauthErrorBody';
+import {
+  describeOAuthErrorBody,
+  type OAuthErrorFields,
+  oauthErrorFields,
+  registeredOAuthError,
+} from './oauthErrorBody';
+import { allowlistedCode, loggedError } from './refusal';
 
 /** What a site is given to authenticate one request with a strategy. */
 export interface TokenRequestAuth {
@@ -293,6 +300,7 @@ function withoutRequest(
     return error;
   }
   const code = typeof raw.code === 'string' ? raw.code : undefined;
+  const namedCode = allowlistedCode(code);
   const response = raw.response as Record<string, unknown> | undefined;
   const status =
     response && typeof response === 'object' ? response.status : undefined;
@@ -302,7 +310,7 @@ function withoutRequest(
   const message =
     typeof status === 'number'
       ? `Request failed with status code ${status}`
-      : `the token request failed${code ? ` (${code})` : ''}`;
+      : `the token request failed${namedCode ? ` (${namedCode})` : ''}`;
   const reduced =
     response && typeof response === 'object'
       ? ({
@@ -339,4 +347,35 @@ export async function sendTokenRequest<T>(
   } catch (error) {
     throw withoutRequest(error, [...sent, ...(prepared?.secrets ?? [])]);
   }
+}
+
+/**
+ * A failed token request as a site rethrows it: a `TokenEndpointError`
+ * carrying the safe facts — the HTTP status, the OAuth `error` when it is a
+ * registered code, an allowlisted system code — so a refusal and a log line
+ * can name them. With a response, the message is `<label> (<status>): ` and
+ * the OAuth summary with every known secret redacted (`describeOAuthErrorBody`);
+ * without one, `<label>: ` and fixed words (`loggedError`). The original is the
+ * cause.
+ */
+export function tokenEndpointError(
+  label: string,
+  error: unknown,
+  secrets: readonly (string | undefined)[],
+): TokenEndpointError {
+  const response = (error as TokenRequestFailure | null)?.response;
+  const status = response?.status;
+  if (response && typeof status === 'number') {
+    return new TokenEndpointError(
+      `${label} (${status}): ${describeOAuthErrorBody(response.data, secrets)}`,
+      { status, oauthError: registeredOAuthError(response.data?.error) },
+      { cause: error },
+    );
+  }
+  const code = allowlistedCode((error as { code?: unknown } | null)?.code);
+  return new TokenEndpointError(
+    `${label}: ${loggedError(error, 'the token request').error}`,
+    { code },
+    { cause: error },
+  );
 }

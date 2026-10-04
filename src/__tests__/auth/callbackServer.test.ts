@@ -525,7 +525,10 @@ describe('withBrowserCallbackServer', () => {
         async (srv) => await srv.waitForResult(),
       );
       void deliver('?error=access_denied&error_description=User%20said%20no');
-      await expect(attempt).rejects.toThrow(/access_denied: User said no/);
+      // The registered code only; the description is anyone's text.
+      await expect(attempt).rejects.toThrow(
+        'the identity provider refused the login (access_denied)',
+      );
     }, 30000);
   });
 

@@ -6,12 +6,12 @@
  */
 
 import axios, { type AxiosResponse } from 'axios';
-import { describeOAuthErrorBody } from './oauthErrorBody';
-import { loggedError, tlsFailureCode } from './refusal';
+import { tlsFailureCode } from './refusal';
 import {
   prepareTokenRequest,
   sendTokenRequest,
   type TokenRequestAuth,
+  tokenEndpointError,
 } from './tokenRequest';
 
 export interface ClientCredentialsResult {
@@ -75,32 +75,15 @@ export async function getTokenWithClientCredentials(
   try {
     response = await sendTokenRequest(prepared, sendAsToday, [clientSecret]);
   } catch (error: unknown) {
-    if (
-      error &&
-      typeof error === 'object' &&
-      'response' in error &&
-      error.response &&
-      typeof error.response === 'object' &&
-      'status' in error.response &&
-      'data' in error.response
-    ) {
-      const axiosError = error as {
-        response: { status: number; data: unknown };
-      };
-      throw new Error(
-        `Client credentials authentication failed (${axiosError.response.status}): ${describeOAuthErrorBody(axiosError.response.data, secrets)}`,
-      );
-    } else if (tlsFailureCode(error) !== undefined) {
-      // Unwrapped, so the refusal can name the TLS code and its fixed hint.
-      throw error;
-    } else {
-      // Fixed words only: what was thrown may hold a secret, and whoever
-      // catches this logs its message. The original stays the cause.
-      throw new Error(
-        `Client credentials authentication failed: ${loggedError(error, 'the token request').error}`,
-        { cause: error },
-      );
-    }
+    // Unwrapped, so the refusal can name the TLS code and its fixed hint.
+    if (tlsFailureCode(error) !== undefined) throw error;
+    // The safe facts as properties, never the server's description or the
+    // transport's text in a refusal or a log line; the original is the cause.
+    throw tokenEndpointError(
+      'Client credentials authentication failed',
+      error,
+      secrets,
+    );
   }
   // Outside the try: this package's own words, not a failure to wrap.
   if (response.data?.access_token) {

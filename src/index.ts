@@ -35,6 +35,7 @@ export {
   ClientAuthenticationError,
   ClientAuthenticationResultError,
 } from './errors/ClientAuthenticationError';
+export { TokenEndpointError } from './errors/TokenEndpointError';
 export {
   BrowserAuthError,
   RefreshError,

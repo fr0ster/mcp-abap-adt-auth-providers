@@ -24,6 +24,7 @@ import {
   ClientAuthenticationError,
   ClientAuthenticationResultError,
 } from '../errors/ClientAuthenticationError';
+import { TokenEndpointError } from '../errors/TokenEndpointError';
 import {
   BrowserAuthError,
   RefreshError,
@@ -32,6 +33,8 @@ import {
   TokenProviderError,
   ValidationError,
 } from '../errors/TokenProviderErrors';
+import { AuthorizationRefusedError } from './callbackScopeError';
+import { registeredOAuthError } from './oauthErrorBody';
 
 export const OK: AuthOutcome = { ok: true };
 
@@ -142,6 +145,10 @@ const KNOWN_SYSTEM_CODES: ReadonlySet<string> = new Set([
   'EAI_AGAIN',
   'EPIPE',
   'EADDRINUSE',
+  'ECONNABORTED',
+  'EPROTO',
+  // axios's own, for a request that got no response
+  'ERR_NETWORK',
 ]);
 
 /** The fixed words for one TLS failure: what it says, and what to do. */
@@ -244,6 +251,7 @@ const OWN_CLASSES: ReadonlyArray<
   [ServiceKeyError, 'ServiceKeyError'],
   [SessionDataError, 'SessionDataError'],
   [DeviceCodePresentationError, 'DeviceCodePresentationError'],
+  [TokenEndpointError, 'TokenEndpointError'],
   [TokenProviderError, 'TokenProviderError'],
 ];
 
@@ -263,11 +271,40 @@ function knownFields(missing: unknown): string {
   return names.length ? `: ${names.join(', ')}` : '';
 }
 
-function systemCode(error: unknown): string {
-  const code = (error as { code?: unknown } | null)?.code;
-  return typeof code === 'string' && KNOWN_SYSTEM_CODES.has(code)
-    ? `, ${code}`
-    : '';
+/** The code when it is an allowlisted system or TLS code, else undefined. */
+export function allowlistedCode(code: unknown): string | undefined {
+  return typeof code === 'string' &&
+    (KNOWN_SYSTEM_CODES.has(code) || TLS_CODES.has(code))
+    ? code
+    : undefined;
+}
+
+/**
+ * What may be named of a thrown value besides its class: an integer HTTP
+ * status (`status`, else `response.status`), a registered OAuth error code
+ * (`oauthError`, else `response.data.error`) and an allowlisted code. Each is
+ * re-checked here, whoever built the error; nothing else is read.
+ */
+function safeFacts(error: unknown): string[] {
+  const e = error as {
+    status?: unknown;
+    code?: unknown;
+    oauthError?: unknown;
+    response?: { status?: unknown; data?: { error?: unknown } | null };
+  } | null;
+  if (!e || typeof e !== 'object') return [];
+  const facts: string[] = [];
+  const status = Number.isInteger(e.status) ? e.status : e.response?.status;
+  if (typeof status === 'number' && Number.isInteger(status)) {
+    facts.push(`HTTP ${status}`);
+  }
+  const oauth =
+    registeredOAuthError(e.oauthError) ??
+    registeredOAuthError(e.response?.data?.error);
+  if (oauth) facts.push(oauth);
+  const code = allowlistedCode(e.code);
+  if (code) facts.push(code);
+  return facts;
 }
 
 export function refusalFrom(error: unknown, what: string): AuthOutcome {
@@ -295,6 +332,13 @@ export function refusalFrom(error: unknown, what: string): AuthOutcome {
     return oops(BASIC_CLIENT_ID_UNUSABLE.reason, BASIC_CLIENT_ID_UNUSABLE.hint);
   }
   if (error instanceof BrowserAuthError) {
+    const refused = error.cause;
+    if (refused instanceof AuthorizationRefusedError) {
+      return oops(
+        `the identity provider refused the login${refused.oauthError ? ` (${refused.oauthError})` : ''}`,
+        'check the identity provider: the user, the client and the scopes it allows',
+      );
+    }
     return oops(
       'the interactive login did not complete',
       "complete the login within the strategy's time",
@@ -318,12 +362,21 @@ export function refusalFrom(error: unknown, what: string): AuthOutcome {
   if (error instanceof TokenProviderError) {
     return oops(`${what} failed (${ownLabel(error)})`);
   }
+  if (error instanceof TokenEndpointError) {
+    const facts = safeFacts(error);
+    return oops(
+      `${what} failed (${facts.length ? facts.join(', ') : 'the token endpoint gave no reason'})`,
+    );
+  }
   const tls = tlsFailureCode(error);
   const words = tls === undefined ? undefined : TLS_CODES.get(tls);
   if (words !== undefined) {
     return oops(`${what} failed: ${words.says} (${tls})`, words.hint);
   }
-  return oops(`${what} failed (unknown error${systemCode(error)})`);
+  const facts = safeFacts(error);
+  return oops(
+    `${what} failed (unknown error${facts.length ? `, ${facts.join(', ')}` : ''})`,
+  );
 }
 
 /**

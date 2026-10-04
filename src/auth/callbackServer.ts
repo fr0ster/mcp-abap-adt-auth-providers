@@ -16,7 +16,10 @@ import type {
 } from '@mcp-abap-adt/interfaces-auth';
 import express from 'express';
 import { extractCode } from './browserAuth';
-import { CallbackScopeError } from './callbackScopeError';
+import {
+  AuthorizationRefusedError,
+  CallbackScopeError,
+} from './callbackScopeError';
 
 /** Node's `setTimeout` takes a 32-bit signed delay; above this it fires in 1 ms. */
 const MAX_TIMEOUT_MS = 2_147_483_647;
@@ -382,19 +385,15 @@ export const withBrowserCallbackServer: CallbackServerFactory<string> = (
     options,
     (app, settle) => {
       app.get('/callback', (req: express.Request, res: express.Response) => {
-        const { error, error_description, error_uri } = req.query;
+        const { error, error_description } = req.query;
         if (error) {
           const message = error_description
             ? `${String(error)}: ${String(error_description)}`
             : String(error);
           sendHtml(res, 400, errorHtml(message));
-          settle.err(
-            new Error(
-              `OAuth2 authentication failed: ${message}` +
-                (error_uri ? ` (${String(error_uri)})` : ''),
-            ),
-            res,
-          );
+          // The registered code only: the description and error_uri are
+          // anyone's text (a link to the local callback carries them).
+          settle.err(new AuthorizationRefusedError(error), res);
           return;
         }
 

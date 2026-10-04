@@ -186,6 +186,28 @@ and `CLIENT_AUTHENTICATION_ERROR`.
   (now empty), `response.statusText` (now `''`: the reason phrase is the
   server's free text), `response.config` and the transport's own message for
   a network failure are what a caller loses.
+- **A token request that failed is a `TokenEndpointError`** (new, exported)
+  at the sites that wrap it — UAA refresh, client credentials, passcode, OIDC
+  device initiation and password grant (were plain `Error`s). It carries the
+  safe facts as properties: `status`, `oauthError` (a registered OAuth / OIDC
+  code only; OIDC Core §3.1.2.6's codes joined the registered list) and
+  `code` (an allowlisted system or TLS code only); `cause` is the original.
+  The message keeps its form, `<label> (<status>): <redacted OAuth summary>`;
+  without a response it is `<label>: <fixed words>` (was the transport's
+  message), and the device initiation and password grant no longer say
+  `(unknown): no error given` for a network failure.
+- **A configuration mismatch found by the provider is a `ValidationError`**:
+  a pre-built `authorizationUrl` whose `redirect_uri` differs from the
+  strategy's, a SAML `acsUrl` the strategy is not listening on, and a missing
+  OIDC authorization endpoint (same words, `missingFields` `authorizationUrl`
+  / `acsUrl` / `authorizationEndpoint`). They were plain `Error`s — and,
+  raised while a browser strategy built the URL, reached the caller as a
+  `BrowserAuthError` carrying their text; they now pass through the
+  strategy unchanged, and their refusal names the field.
+- **An IdP refusal on the browser callback** rejects with
+  `the identity provider refused the login (<registered code>)` (was
+  `OAuth2 authentication failed: <error>: <error_description> (<error_uri>)`
+  or `OIDC authentication failed: …`).
 - **The passcode exchange and the OIDC password grant report the server's
   error through `describeOAuthErrorBody`**, with the passcode (or the password),
   the client secret and what a strategy sent redacted. The messages read
@@ -245,10 +267,16 @@ and `CLIENT_AUTHENTICATION_ERROR`.
   the message of this package's own callback failures (timeout, "already in
   use", abort); for the identity provider's refusal or a custom transport's
   or launcher's error its message is `the browser login failed (unknown
-  error)` and the original is `cause`. A redirect or ACS mismatch found while
-  building the authorization URL, and a missing OIDC authorization endpoint,
-  are now `ValidationError`s (same words), so they pass through unchanged.
-  `EADDRINUSE` joins the allowlisted system codes. A configured IdP
+  error)` and the original is `cause`. `EADDRINUSE`, `ECONNABORTED`,
+  `EPROTO` and `ERR_NETWORK` join the allowlisted system codes. Fixed words
+  still name the safe facts: a refusal and a log line add an integer HTTP
+  status, a registered OAuth / OIDC `error` code and an allowlisted system or
+  TLS code (e.g. `the refresh failed (HTTP 401, invalid_grant)`), never a
+  description. An identity provider's `?error=` on the browser callback
+  names only its registered code — `BrowserAuthError("the identity provider
+  refused the login (consent_required)")`, refused as such — and drops
+  `error_description`, `error_uri` and an unregistered code (they reach only
+  the escaped error page). A configured IdP
   certificate that is not X.509 is refused as `a configured certificate is
   not a valid X.509 certificate`, OpenSSL's text only in `cause`.
 - **The local callback pages no longer reflect HTML.** The IdP's `error` and

@@ -73,11 +73,20 @@ export interface BrowserCallbackStrategyOptions<TResult>
   callbackServer: CallbackServerFactory<TResult>;
 }
 
+/** Fixed words for a foreign failure, and its HTTP status when it has one. */
+function browserLoginWords(error: unknown): string {
+  const { error: words, status } = loggedError(error, 'the browser login');
+  return status === undefined || words.includes(`HTTP ${status}`)
+    ? words
+    : `${words} (HTTP ${status})`;
+}
+
 /**
  * Kept for its wording, not its certainty.
  *
- * `AuthBroker` matches /already in use/i to tell a busy port from every other
- * failure, and the bind error Node raises says `EADDRINUSE` instead. Skipped
+ * Its "already in use" is kept for any consumer that may match it to tell a
+ * busy port from every other failure (the bind error Node raises says
+ * `EADDRINUSE` instead). Skipped
  * entirely for an ephemeral port: there is nothing to check, and the answer
  * would be about a port we are not going to get.
  */
@@ -216,7 +225,7 @@ export class BrowserCallbackStrategy<TResult>
       throw new BrowserAuthError(
         error instanceof CallbackScopeError
           ? error.message
-          : loggedError(error, 'the browser login').error,
+          : browserLoginWords(error),
         cause,
       );
     } finally {

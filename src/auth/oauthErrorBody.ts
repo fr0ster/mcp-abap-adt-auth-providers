@@ -107,7 +107,24 @@ const REGISTERED_ERROR_CODES: ReadonlySet<string> = new Set([
   'insufficient_scope',
   // RFC 8693 §2.2.2 — token exchange
   'invalid_target',
+  // OpenID Connect Core 1.0 §3.1.2.6 — authentication error response
+  'interaction_required',
+  'login_required',
+  'account_selection_required',
+  'consent_required',
+  'invalid_request_uri',
+  'invalid_request_object',
+  'request_not_supported',
+  'request_uri_not_supported',
+  'registration_not_supported',
 ]);
+
+/** The value when it is a registered OAuth / OIDC error code, else undefined. */
+export function registeredOAuthError(value: unknown): string | undefined {
+  return typeof value === 'string' && REGISTERED_ERROR_CODES.has(value)
+    ? value
+    : undefined;
+}
 
 /** `error` as it may stay: a registered code verbatim, anything else redacted. */
 function errorCode(

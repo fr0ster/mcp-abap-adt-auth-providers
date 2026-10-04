@@ -18,12 +18,12 @@
 
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
 import axios, { type AxiosResponse } from 'axios';
-import { describeOAuthErrorBody } from './oauthErrorBody';
 import {
   grantSecrets,
   prepareTokenRequest,
   sendTokenRequest,
   type TokenRequestAuth,
+  tokenEndpointError,
 } from './tokenRequest';
 
 export interface PasscodeTokens {
@@ -95,14 +95,11 @@ export async function exchangePasscode(
     if (axios.isAxiosError(error) && error.response) {
       // Only `error` and `error_description`, with the passcode, the
       // secret and what the strategy sent redacted: a server may echo them.
-      const reason = describeOAuthErrorBody(error.response.data, [
+      throw tokenEndpointError('Passcode exchange failed', error, [
         passcode,
         clientSecret,
         ...(prepared?.secrets ?? []),
       ]);
-      throw new Error(
-        `Passcode exchange failed (${error.response.status}): ${reason}`,
-      );
     }
     throw error;
   }

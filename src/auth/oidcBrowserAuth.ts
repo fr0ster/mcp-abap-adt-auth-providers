@@ -7,6 +7,7 @@ import type {
   ICallbackServerHandle,
   ICallbackServerOptions,
 } from '@mcp-abap-adt/interfaces-auth';
+import { AuthorizationRefusedError } from './callbackScopeError';
 import {
   errorHtml,
   runCallbackScope,
@@ -31,20 +32,16 @@ export const withOidcCallbackServer: CallbackServerFactory<
       app.get('/callback', (req, res) => {
         // An IdP that declines says so explicitly. That is a finished login,
         // not a stray request, and it must not wait for the timeout.
-        const { error, error_description, error_uri } = req.query;
+        const { error, error_description } = req.query;
         if (error) {
           const message = error_description
             ? `${String(error)}: ${String(error_description)}`
             : String(error);
           // The IdP's text is attacker-controllable: escaped in an HTML page.
           sendHtml(res, 400, errorHtml(message));
-          settle.err(
-            new Error(
-              `OIDC authentication failed: ${message}` +
-                (error_uri ? ` (${String(error_uri)})` : ''),
-            ),
-            res,
-          );
+          // The registered code only: the description and error_uri are
+          // anyone's text (a link to the local callback carries them).
+          settle.err(new AuthorizationRefusedError(error), res);
           return;
         }
 
