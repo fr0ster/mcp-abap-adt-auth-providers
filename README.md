@@ -573,7 +573,9 @@ public client that sends only `client_id`.
   `ClientAuthenticationResultError`, refused as *the client authentication
   returned a request that cannot be sent*. Only `client_secret`,
   `client_assertion` and a Basic credential are known to be secrets and
-  redacted from an error body; a secret your strategy puts in any other
+  redacted from an error body — a Basic secret both as sent and
+  form-decoded, so with either `encoding` neither the original nor the
+  encoded secret survives a server's echo; a secret your strategy puts in any other
   parameter or header is not recognised as one.
 
 ```typescript

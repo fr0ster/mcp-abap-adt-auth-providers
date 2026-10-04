@@ -47,7 +47,10 @@ and `CLIENT_AUTHENTICATION_ERROR`.
   `ValidationError` naming `encoding`. With `'raw'`, a client id containing
   `:` is refused before anything is sent — a `BasicClientIdError`, *the
   client id contains ':', which raw Basic cannot carry*. A provider without a
-  strategy still sends its `clientSecret` raw, as before. The stand measures
+  strategy still sends its `clientSecret` raw, as before. An error body is
+  redacted of the Basic secret both as sent and form-decoded: with `'form'`
+  the original and the encoded secret, with `'raw'` the secret and what a
+  decoding server read. The stand measures
   both encodings on UAA and Keycloak (`clientSecretBasic.test.ts`, clients
   `basic_reserved`, `basic-reserved` and `basic:colon`).
 - **Every draft names the token endpoint** (`ITokenRequestDraft.tokenEndpoint`):

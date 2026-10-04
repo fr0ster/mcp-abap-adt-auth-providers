@@ -30,6 +30,7 @@ import { refusalFrom } from '../../auth/refusal';
 import { exchangeSamlAssertion } from '../../auth/saml2TokenExchange';
 import { refreshJwtToken } from '../../auth/tokenRefresher';
 import {
+  clientSecretBasic,
   clientSecretPost,
   privateKeyJwt,
   tlsClientCertificate,
@@ -374,6 +375,65 @@ describe.each(SITES)('$name with a client authentication', (site) => {
     expect(text).not.toContain(ASSERTION);
   });
 });
+
+describe.each(SITES)(
+  '$name: a Basic secret echoed back, as sent or as the server decoded it',
+  (site) => {
+    // Form-encoded it is `se%2Bcr%2525et%2Fx+yz`; a server decoding raw
+    // reads `se cr%et/x yz`.
+    const SECRET = 'se+cr%25et/x yz';
+    const FORM_SENT = 'se%2Bcr%2525et%2Fx+yz';
+    const RAW_DECODED = 'se cr%et/x yz';
+
+    it.each<[string, 'raw' | 'form', string]>([
+      ['form: the original secret', 'form', SECRET],
+      ['form: the form-encoded secret that was sent', 'form', FORM_SENT],
+      ['raw: the secret as sent', 'raw', SECRET],
+      ['raw: the secret as the server decoded it', 'raw', RAW_DECODED],
+    ])(
+      '%s is in neither the message, the thrown error nor a log line',
+      async (_label, encoding, echoed) => {
+        mockedAxios.mockRejectedValue({
+          isAxiosError: true,
+          message: 'Request failed with status code 401',
+          response: {
+            status: 401,
+            data: {
+              error: 'invalid_client',
+              error_description: `bad client secret ${echoed}`,
+            },
+          },
+        });
+        const lines: string[] = [];
+        const record = (message: string, meta?: unknown) =>
+          lines.push(`${message} ${JSON.stringify(meta ?? {})}`);
+        const logger = {
+          debug: record,
+          info: record,
+          warn: record,
+          error: record,
+        } as ILogger;
+        const error = await failureOf(
+          site.run(
+            { strategy: clientSecretBasic(SECRET, { encoding }) },
+            logger,
+          ),
+        );
+        const text = [
+          messageOf(error),
+          String(error),
+          JSON.stringify(error),
+          JSON.stringify(
+            (error as { response?: { data?: unknown } } | null)?.response
+              ?.data ?? null,
+          ),
+          ...lines,
+        ].join('\n');
+        expect(text).not.toContain(echoed);
+      },
+    );
+  },
+);
 
 describe('client authentication per request', () => {
   it('the device poll authenticates every request anew', async () => {

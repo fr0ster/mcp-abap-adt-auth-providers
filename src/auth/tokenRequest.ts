@@ -146,7 +146,20 @@ function agentFor(material: ICertificateMaterial): Agent {
   });
 }
 
-/** The secret of a `Basic` credential, in both forms a server may echo. */
+/**
+ * A value as a server reading it `application/x-www-form-urlencoded` decodes
+ * it (RFC 6749 §2.3.1): `+` a space, `%XX` its byte. Never throws: a
+ * malformed escape stays as it is.
+ */
+const formDecoded = (value: string): string =>
+  new URLSearchParams(`v=${value}`).get('v') ?? value;
+
+/**
+ * The secret of a `Basic` credential, in every form a server may echo: the
+ * base64 credential, the secret as sent, and the secret form-decoded — which
+ * is the original for `clientSecretBasic`'s `'form'`, and what a decoding
+ * server read for its `'raw'`.
+ */
 function basicSecrets(headers: Record<string, string>): string[] {
   const out: string[] = [];
   for (const [name, value] of Object.entries(headers)) {
@@ -157,7 +170,10 @@ function basicSecrets(headers: Record<string, string>): string[] {
     const decoded = Buffer.from(match[1], 'base64').toString();
     const colon = decoded.indexOf(':');
     if (colon >= 0 && colon < decoded.length - 1) {
-      out.push(decoded.slice(colon + 1));
+      const sent = decoded.slice(colon + 1);
+      out.push(sent);
+      const read = formDecoded(sent);
+      if (read !== sent && read !== '') out.push(read);
     }
   }
   return out;
