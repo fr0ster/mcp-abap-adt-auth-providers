@@ -74,6 +74,8 @@ export async function exchangePasscode(
         Accept: 'application/json',
         Authorization: `Basic ${basic}`,
       },
+      // A redirect would re-send the passcode and the secret: never followed.
+      maxRedirects: 0,
     });
   };
 

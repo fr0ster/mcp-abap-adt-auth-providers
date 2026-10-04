@@ -1,14 +1,29 @@
 /**
- * A redirect is never followed on the strategy path — against real sockets,
- * with axios unmocked: a 307 would re-send the secret, the assertion and the
- * client certificate to wherever it points.
+ * A redirect is never followed by any token request, with a strategy or
+ * without — against real sockets, with axios unmocked: a 307 would re-send the
+ * secret, the refresh token, the code, the passcode, the password, the
+ * assertion and the client certificate to wherever it points.
  */
 
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { afterAll, beforeAll, describe, expect, it } from '@jest/globals';
+import { exchangeCodeForToken } from '../../auth/browserAuth';
 import { getTokenWithClientCredentials } from '../../auth/clientCredentialsAuth';
-import { refreshOidcToken } from '../../auth/oidcToken';
+import {
+  exchangeAuthorizationCode,
+  initiateDeviceAuthorization,
+  passwordGrant,
+  pollDeviceTokens,
+  refreshOidcToken,
+  tokenExchange,
+} from '../../auth/oidcToken';
+import { exchangePasscode } from '../../auth/passcodeAuth';
+import {
+  exchangeSamlAssertion,
+  refreshSamlBearerToken,
+} from '../../auth/saml2TokenExchange';
+import { refreshJwtToken } from '../../auth/tokenRefresher';
 import { clientSecretPost } from '../../clientAuthentication';
 
 function listen(server: Server): Promise<number> {
@@ -63,6 +78,119 @@ describe('a 307 from the token endpoint', () => {
     ],
   ])(
     '%s with a strategy: fails, and the other host sees no request',
+    async (_label, run) => {
+      elsewhereHits = 0;
+      const failed = expect(run()).rejects.toBeDefined();
+      await failed;
+      expect(elsewhereHits).toBe(0);
+    },
+  );
+
+  it.each([
+    [
+      'client credentials',
+      () => getTokenWithClientCredentials(base, 'cid', 'client-secret-value'),
+    ],
+    [
+      'UAA refresh',
+      () => refreshJwtToken('rt', base, 'cid', 'client-secret-value'),
+    ],
+    [
+      'UAA authorization code',
+      () =>
+        exchangeCodeForToken(
+          {
+            uaaUrl: base,
+            uaaClientId: 'cid',
+            uaaClientSecret: 'client-secret-value',
+          } as Parameters<typeof exchangeCodeForToken>[0],
+          'the-code',
+          'http://localhost:61001/callback',
+        ),
+    ],
+    [
+      'UAA passcode',
+      () => exchangePasscode(base, 'cf', 'client-secret-value', 'PASSCODE'),
+    ],
+    [
+      'SAML bearer exchange',
+      () =>
+        exchangeSamlAssertion(
+          'ASSERTION',
+          `${base}/token`,
+          'cid',
+          'client-secret-value',
+        ),
+    ],
+    [
+      'SAML bearer refresh',
+      () =>
+        refreshSamlBearerToken(
+          'rt',
+          `${base}/token`,
+          'cid',
+          'client-secret-value',
+        ),
+    ],
+    [
+      'OIDC authorization code',
+      () =>
+        exchangeAuthorizationCode(
+          `${base}/token`,
+          'cid',
+          'client-secret-value',
+          'the-code',
+          'http://localhost:61001/callback',
+          'verifier',
+        ),
+    ],
+    [
+      'OIDC refresh',
+      () =>
+        refreshOidcToken(`${base}/token`, 'cid', 'client-secret-value', 'rt'),
+    ],
+    [
+      'OIDC device initiation',
+      () => initiateDeviceAuthorization(`${base}/device`, 'cid', 'openid'),
+    ],
+    [
+      'OIDC device poll',
+      () =>
+        pollDeviceTokens(
+          `${base}/token`,
+          'cid',
+          'client-secret-value',
+          'dc',
+          0,
+        ),
+    ],
+    [
+      'OIDC password',
+      () =>
+        passwordGrant(
+          `${base}/token`,
+          'cid',
+          'client-secret-value',
+          'user',
+          'pw',
+          undefined,
+        ),
+    ],
+    [
+      'OIDC token exchange',
+      () =>
+        tokenExchange(
+          `${base}/token`,
+          'cid',
+          'client-secret-value',
+          'subject',
+          'urn:ietf:params:oauth:token-type:access_token',
+          undefined,
+          undefined,
+        ),
+    ],
+  ])(
+    '%s without a strategy: fails, and the other host sees no request',
     async (_label, run) => {
       elsewhereHits = 0;
       const failed = expect(run()).rejects.toBeDefined();

@@ -66,6 +66,8 @@ export async function getTokenWithClientCredentials(
       },
       data: params.toString(),
       timeout,
+      // A redirect would re-send the secret: never followed.
+      maxRedirects: 0,
     });
   };
 

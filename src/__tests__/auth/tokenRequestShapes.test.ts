@@ -47,10 +47,11 @@ function sentByPost(): Sent {
   const [url, body, config] = mockedAxios.post.mock.calls[0] as [
     string,
     string,
-    { headers: Record<string, string> },
+    { headers: Record<string, string>; maxRedirects: number },
   ];
-  // Today's third argument is exactly `{ headers }`: any added key fails here.
-  expect(Object.keys(config)).toEqual(['headers']);
+  // Today's third argument is exactly `{ headers, maxRedirects: 0 }`: any added key fails here.
+  expect(Object.keys(config)).toEqual(['headers', 'maxRedirects']);
+  expect(config.maxRedirects).toBe(0);
   return {
     url,
     method: 'post',
@@ -68,14 +69,16 @@ function sentByConfig(expectTimeout = false): Sent & { timeout?: number } {
     data: string;
     headers: Record<string, string>;
     timeout?: number;
+    maxRedirects: number;
   };
   // The whole config object: any added key (httpsAgent, ...) fails, and
   // `timeout` is present exactly where today's code sets it.
   expect(Object.keys(config).sort()).toEqual(
     expectTimeout
-      ? ['data', 'headers', 'method', 'timeout', 'url']
-      : ['data', 'headers', 'method', 'url'],
+      ? ['data', 'headers', 'maxRedirects', 'method', 'timeout', 'url']
+      : ['data', 'headers', 'maxRedirects', 'method', 'url'],
   );
+  expect(config.maxRedirects).toBe(0);
   return {
     url: config.url,
     method: config.method,
@@ -471,6 +474,7 @@ describe('token request shapes, as sent today', () => {
               'Content-Type': FORM,
               Authorization: basic('cid:sec'),
             },
+            maxRedirects: 0,
           });
         }
       });

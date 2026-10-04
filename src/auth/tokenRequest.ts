@@ -17,7 +17,8 @@
  * `http:` request would silently not present.
  *
  * Without a strategy no site comes here: each keeps its own private adapter,
- * which sends exactly what that site sent before strategies existed.
+ * which sends exactly what that site sent before strategies existed — except
+ * that no request on either path follows a redirect (`maxRedirects: 0`).
  */
 
 import { Agent } from 'node:https';

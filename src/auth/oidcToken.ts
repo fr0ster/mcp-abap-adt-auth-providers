@@ -49,6 +49,9 @@ function sendAsToday(
       'Content-Type': 'application/x-www-form-urlencoded',
       ...buildAuthHeaders(clientId, clientSecret),
     },
+    // A redirect would re-send the grant's secret (code, refresh token,
+    // device code, password, subject token) and the client's: never followed.
+    maxRedirects: 0,
   });
 }
 
@@ -205,6 +208,8 @@ export async function initiateDeviceAuthorization(
       () =>
         axios.post(deviceEndpoint, params.toString(), {
           headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          // Never followed, like every token request.
+          maxRedirects: 0,
         }),
       grantSecrets(params),
     );

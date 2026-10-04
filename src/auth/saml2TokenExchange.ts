@@ -62,7 +62,9 @@ function sendAsToday(
   if (clientId && clientSecret) {
     headers.Authorization = `Basic ${toBasicAuth(clientId, clientSecret)}`;
   }
-  return axios.post(tokenUrl, params.toString(), { headers });
+  // A redirect would re-send the assertion or the refresh token, and the
+  // secret: never followed.
+  return axios.post(tokenUrl, params.toString(), { headers, maxRedirects: 0 });
 }
 
 export async function exchangeSamlAssertion(

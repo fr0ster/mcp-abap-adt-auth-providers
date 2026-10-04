@@ -121,6 +121,8 @@ export async function exchangeCodeForToken(
         'Content-Type': 'application/x-www-form-urlencoded',
       },
       data: params.toString(),
+      // A redirect would re-send the code and the secret: never followed.
+      maxRedirects: 0,
     });
   };
 

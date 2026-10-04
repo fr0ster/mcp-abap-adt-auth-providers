@@ -67,6 +67,8 @@ export async function refreshJwtToken(
         'Content-Type': 'application/x-www-form-urlencoded',
       },
       data: params.toString(),
+      // A redirect would re-send the refresh token and the secret: never followed.
+      maxRedirects: 0,
     });
   };
 
