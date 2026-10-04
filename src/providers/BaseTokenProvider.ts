@@ -28,9 +28,9 @@ import {
   certificateThumbprint,
 } from '../auth/certificateMaterial';
 import {
+  loggedError,
   OK,
   oops,
-  ownLabel,
   refusalFrom,
   safely,
   TOKEN_BOUND_ELSEWHERE,
@@ -475,9 +475,10 @@ export abstract class BaseTokenProvider
         });
         return result;
       } catch (error) {
-        this.logger?.warn('[BaseTokenProvider] Refresh failed', {
-          error: error instanceof Error ? error.message : String(error),
-        });
+        this.logger?.warn(
+          '[BaseTokenProvider] Refresh failed',
+          loggedError(error, 'the refresh'),
+        );
         // The refresh token was refused: it is spent, so a login follows.
         // Only that one — never a token something else stored meanwhile.
         if (this.refreshToken === spent) this.refreshToken = undefined;
@@ -630,12 +631,10 @@ export abstract class BaseTokenProvider
     try {
       await this.onTokens(result);
     } catch (error) {
-      // Class name only: the hook holds the tokens, its message is foreign text.
+      // Fixed words only: the hook holds the tokens, its message is foreign text.
       this.logger?.warn(
         '[BaseTokenProvider] onTokens failed; the token stands',
-        {
-          error: ownLabel(error),
-        },
+        loggedError(error, 'onTokens'),
       );
     }
   }

@@ -7,6 +7,7 @@
 
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
+import { inspect } from 'node:util';
 import { afterAll, beforeAll, describe, expect, it } from '@jest/globals';
 import axios, { AxiosError } from 'axios';
 import { exchangeCodeForToken } from '../../auth/browserAuth';
@@ -293,7 +294,8 @@ describe('a 400 from the token endpoint that echoes the request', () => {
       expect(error.name).toBe('AxiosError');
       expect(error.status).toBe(400);
       expect(error.response?.status).toBe(400);
-      expect(error.response?.statusText).toBe('Bad Request');
+      // The reason phrase is the server's text: not kept (statusText '').
+      expect(error.response?.statusText).toBe('');
       expect(error.response?.data).toEqual({
         error: 'invalid_grant',
         error_description: 'refused',
@@ -315,4 +317,215 @@ describe('a 400 from the token endpoint that echoes the request', () => {
       expect(needles.filter((needle) => text.includes(needle))).toEqual([]);
     },
   );
+});
+
+describe('a reason phrase that holds a secret', () => {
+  const PHRASE_SECRET = 'REVIEW_TEST_SECRET_5d81e0';
+  const replying = createServer((req, res) => {
+    req.resume();
+    req.on('end', () => {
+      res.statusCode = 401;
+      res.statusMessage = `echo ${PHRASE_SECRET}`;
+      res.setHeader('Content-Type', 'application/json');
+      res.end(JSON.stringify({ error: 'invalid_client' }));
+    });
+  });
+  let base = '';
+  beforeAll(async () => {
+    base = `http://127.0.0.1:${await listen(replying)}`;
+  });
+  afterAll(() => close(replying));
+
+  const auth = () => ({ strategy: clientSecretPost('client-secret-value') });
+  /** Every site; `withAuth` picks the path with a strategy. */
+  const sites = (withAuth: boolean): [string, () => Promise<unknown>][] => {
+    const a = withAuth ? auth() : undefined;
+    const secret = withAuth ? undefined : 'client-secret-value';
+    return [
+      [
+        'client credentials',
+        () => getTokenWithClientCredentials(base, 'cid', secret, a),
+      ],
+      ['UAA refresh', () => refreshJwtToken('rt', base, 'cid', secret, a)],
+      [
+        'UAA authorization code',
+        () =>
+          exchangeCodeForToken(
+            {
+              uaaUrl: base,
+              uaaClientId: 'cid',
+              uaaClientSecret: secret,
+            } as Parameters<typeof exchangeCodeForToken>[0],
+            'the-code',
+            'http://localhost:61001/callback',
+            undefined,
+            a,
+          ),
+      ],
+      [
+        'UAA passcode',
+        () => exchangePasscode(base, 'cf', secret, 'PASSCODE', undefined, a),
+      ],
+      [
+        'SAML bearer exchange',
+        () =>
+          exchangeSamlAssertion(
+            'ASSERTION',
+            `${base}/token`,
+            'cid',
+            secret,
+            undefined,
+            a,
+          ),
+      ],
+      [
+        'SAML bearer refresh',
+        () =>
+          refreshSamlBearerToken(
+            'rt',
+            `${base}/token`,
+            'cid',
+            secret,
+            undefined,
+            a,
+          ),
+      ],
+      [
+        'OIDC authorization code',
+        () =>
+          exchangeAuthorizationCode(
+            `${base}/token`,
+            'cid',
+            secret,
+            'the-code',
+            'http://localhost:61001/callback',
+            'verifier',
+            undefined,
+            a,
+          ),
+      ],
+      [
+        'OIDC refresh',
+        () =>
+          refreshOidcToken(`${base}/token`, 'cid', secret, 'rt', undefined, a),
+      ],
+      [
+        'OIDC device initiation',
+        () =>
+          initiateDeviceAuthorization(
+            `${base}/device`,
+            'cid',
+            'openid',
+            undefined,
+            a,
+          ),
+      ],
+      [
+        'OIDC device poll',
+        () =>
+          pollDeviceTokens(
+            `${base}/token`,
+            'cid',
+            secret,
+            'dc',
+            0,
+            undefined,
+            a,
+          ),
+      ],
+      [
+        'OIDC password',
+        () =>
+          passwordGrant(
+            `${base}/token`,
+            'cid',
+            secret,
+            'user',
+            'pw',
+            undefined,
+            undefined,
+            a,
+          ),
+      ],
+      [
+        'OIDC token exchange',
+        () =>
+          tokenExchange(
+            `${base}/token`,
+            'cid',
+            secret,
+            'subject',
+            'urn:ietf:params:oauth:token-type:access_token',
+            undefined,
+            undefined,
+            undefined,
+            undefined,
+            undefined,
+            a,
+          ),
+      ],
+    ];
+  };
+
+  const windows = (secret: string) => {
+    const out: string[] = [];
+    for (let i = 0; i + 8 <= secret.length; i++)
+      out.push(secret.slice(i, i + 8));
+    return out;
+  };
+
+  /** Every way the error can be rendered or read, own and inherited. */
+  const rendered = (thrown: unknown): string => {
+    const parts = [
+      String(thrown),
+      JSON.stringify(thrown),
+      inspect(thrown, { depth: 10, showHidden: true, getters: true }),
+    ];
+    const value = thrown as Record<string, unknown> & {
+      toJSON?: () => unknown;
+    };
+    if (typeof value?.toJSON === 'function')
+      parts.push(JSON.stringify(value.toJSON()));
+    for (
+      let o: object | null = value;
+      o && o !== Object.prototype;
+      o = Object.getPrototypeOf(o)
+    ) {
+      for (const key of Object.getOwnPropertyNames(o)) {
+        try {
+          const v = (value as Record<string, unknown>)[key];
+          if (typeof v !== 'function')
+            parts.push(`${key}=${inspect(v, { depth: 10, showHidden: true })}`);
+        } catch {
+          // a getter that throws renders nothing
+        }
+      }
+    }
+    return parts.join('\n');
+  };
+
+  describe.each([
+    ['without a strategy', false],
+    ['with a strategy', true],
+  ] as const)('%s', (_path, withAuth) => {
+    it.each(sites(withAuth).map(([name], i) => [name, i] as const))(
+      '%s: the thrown error carries no window of the reason phrase',
+      async (_name, index) => {
+        let thrown: unknown;
+        try {
+          await sites(withAuth)[index][1]();
+        } catch (error) {
+          thrown = error;
+        }
+        expect(thrown).toBeDefined();
+        const text = rendered(thrown);
+        // Not vacuous: the failure is the server's 401.
+        expect(text).toContain('401');
+        expect(windows(PHRASE_SECRET).filter((w) => text.includes(w))).toEqual(
+          [],
+        );
+        expect(text).not.toContain('echo ');
+      },
+    );
+  });
 });

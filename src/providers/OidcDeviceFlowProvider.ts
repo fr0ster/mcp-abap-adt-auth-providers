@@ -14,6 +14,7 @@ import {
   pollDeviceTokens,
   refreshOidcToken,
 } from '../auth/oidcToken';
+import { loggedError } from '../auth/refusal';
 import {
   consoleDeviceCodePresenter,
   DeviceCodePresentationError,
@@ -135,10 +136,11 @@ export class OidcDeviceFlowProvider extends BaseTokenProvider {
         expiresInSeconds: deviceFlow.expiresIn,
       });
     } catch (error) {
-      // The presenter's text may hold the code; the log gets its class only.
-      this.logger?.warn('[OidcDeviceFlowProvider] presenter failed', {
-        error: error instanceof Error ? 'Error' : typeof error,
-      });
+      // The presenter's text may hold the code; the log gets fixed words only.
+      this.logger?.warn(
+        '[OidcDeviceFlowProvider] presenter failed',
+        loggedError(error, 'the presenter'),
+      );
       throw new DeviceCodePresentationError();
     }
 

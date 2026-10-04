@@ -325,6 +325,30 @@ export function refusalFrom(error: unknown, what: string): AuthOutcome {
   return oops(`${what} failed (unknown error${systemCode(error)})`);
 }
 
+/**
+ * What a log line may say about a thrown value: the reason its refusal would
+ * carry (`refusalFrom`) — fixed words per class decided by `instanceof`, plus
+ * allowlisted metadata (a known config field, a TLS or system code, an
+ * assertion check), else "unknown error" — and an HTTP status when the value
+ * carries a numeric one. Never its `message`, `cause`, `stack` or a
+ * stringified form: a consumer's strategy, loader, presenter or validator may
+ * throw text holding a key, a passphrase or a token, and so may a network
+ * failure. No class of this package keeps its message here either — even
+ * ones built from fixed words: the class's words are the same.
+ */
+export function loggedError(
+  error: unknown,
+  what: string,
+): { error: string; status?: number } {
+  const outcome = refusalFrom(error, what);
+  const words = outcome.ok ? `${what} failed` : outcome.refusal.reason;
+  const status = (error as { response?: { status?: unknown } } | null)?.response
+    ?.status;
+  return typeof status === 'number' && Number.isInteger(status)
+    ? { error: words, status }
+    : { error: words };
+}
+
 /** The boundary every contract method runs inside (spec rule 1). */
 export async function safely(
   what: string,

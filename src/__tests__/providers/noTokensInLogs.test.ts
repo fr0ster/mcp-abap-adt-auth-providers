@@ -16,6 +16,7 @@ import type {
 } from '@mcp-abap-adt/interfaces-auth';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
 import axios from 'axios';
+import { exchangeCodeForToken, launchBrowser } from '../../auth/browserAuth';
 import {
   clientSecretBasic,
   clientSecretPost,
@@ -23,8 +24,11 @@ import {
   tlsClientCertificate,
 } from '../../clientAuthentication';
 import { AuthorizationCodeProvider } from '../../providers/AuthorizationCodeProvider';
+import { OidcDeviceFlowProvider } from '../../providers/OidcDeviceFlowProvider';
+import { Saml2BearerProvider } from '../../providers/Saml2BearerProvider';
 import { Saml2PureProvider } from '../../providers/Saml2PureProvider';
-import { staticCodeStrategy } from '../../strategies';
+import { SncLogonProvider } from '../../snc/SncLogonProvider';
+import { browserCallbackStrategy, staticCodeStrategy } from '../../strategies';
 import { SITES, tokenReply } from '../helpers/tokenRequestSites';
 
 // Automocked, but with axios's own error class: the sites throw it.
@@ -34,6 +38,20 @@ jest.mock('axios', () => {
     jest.requireActual<Record<string, unknown>>('axios').AxiosError;
   return mocked;
 });
+// `open` and `exec`, each replaceable per test: the browser launch logs
+// what a failed launch said.
+const mockOpen: { default?: unknown } = {};
+jest.mock('open', () => ({
+  __esModule: true,
+  get default() {
+    return mockOpen.default;
+  },
+}));
+const mockExec: { run?: (...args: unknown[]) => unknown } = {};
+jest.mock('node:child_process', () => ({
+  ...jest.requireActual<Record<string, unknown>>('node:child_process'),
+  exec: (...args: unknown[]) => mockExec.run?.(...args),
+}));
 type Mock = jest.Mock<(...args: any[]) => Promise<unknown>>;
 const mockedAxios = axios as unknown as Mock & {
   post: Mock;
@@ -282,5 +300,338 @@ describe('no secret of a client authentication in the logs', () => {
         }
       },
     );
+  });
+});
+
+/**
+ * No message of a thrown value reaches a log line. A collaborator the consumer
+ * supplies — a client-authentication strategy, a certificate loader, the
+ * interactive strategy, a device-code presenter, a SAML validator, `onTokens`,
+ * a browser launcher, an SNC locator or probe — may throw an error whose text
+ * holds a key, a passphrase or a token, and so may a network failure. What a
+ * log line says of it is fixed per class (`refusal.ts`), never its message.
+ */
+describe('no message of a thrown error in the logs', () => {
+  const MARKER = 'REVIEW_TEST_PRIVATE_KEY_7f3a9c';
+  const thrown = (kind: 'Error' | 'string') =>
+    kind === 'Error' ? new Error(MARKER) : MARKER;
+
+  /** Expired, so getTokens renews: a refresh first, then a login. */
+  const EXPIRED = `${b64url({ alg: 'none', typ: 'JWT' })}.${b64url({
+    exp: Math.floor(Date.now() / 1000) - 60,
+  })}.sig`;
+  type Exercised = Pick<
+    AuthorizationCodeProvider,
+    'prepare' | 'getTokens' | 'refreshTokens' | 'rejected'
+  >;
+  const refused400 = () => ({
+    isAxiosError: true,
+    message: 'Request failed with status code 400',
+    response: { status: 400, data: { error: 'invalid_grant' } },
+  });
+
+  beforeEach(() => {
+    jest.resetAllMocks();
+    mockedAxios.isAxiosError.mockImplementation(
+      (e) => !!(e as { isAxiosError?: boolean } | null)?.isAxiosError,
+    );
+    answer(async () => tokenReply);
+  });
+
+  /** Both ways a site sends: `axios(config)` and `axios.post(url, …)`. */
+  const answer = (reply: (url: string) => Promise<unknown>) => {
+    mockedAxios.mockImplementation(async (config: any) => reply(config.url));
+    mockedAxios.post.mockImplementation(async (url: any) => reply(url));
+  };
+
+  /** Every moment that can run the collaborator; none may throw out. */
+  async function exercise(provider: Exercised) {
+    for (const run of [
+      () => provider.getTokens(),
+      () => provider.refreshTokens(),
+      () => provider.prepare(),
+      () => provider.rejected({ at: 'request', status: 401, error: undefined }),
+    ]) {
+      try {
+        await run();
+      } catch {
+        // Thrown to the caller, who decides; only the log is asserted here.
+      }
+    }
+  }
+
+  const codeProvider = (
+    logger: ILogger,
+    extra: Partial<ConstructorParameters<typeof AuthorizationCodeProvider>[0]>,
+  ) =>
+    new AuthorizationCodeProvider({
+      uaaUrl: 'https://uaa.example',
+      clientId: 'client',
+      accessToken: EXPIRED,
+      refreshToken: REFRESH_TOKEN,
+      authorization: staticCodeStrategy({ payload: 'the-code' }),
+      logger,
+      ...(extra.clientAuthentication ? {} : { clientSecret: 'secret' }),
+      ...extra,
+    } as ConstructorParameters<typeof AuthorizationCodeProvider>[0]);
+
+  const CASES: [
+    string,
+    (logger: ILogger, kind: 'Error' | 'string') => Exercised,
+    string,
+  ][] = [
+    [
+      'a client-authentication strategy whose authenticate() throws',
+      (logger, kind) =>
+        codeProvider(logger, {
+          clientAuthentication: {
+            authenticate: async () => {
+              throw thrown(kind);
+            },
+          },
+        }),
+      'Refresh failed',
+    ],
+    [
+      'a client-authentication strategy whose tlsMaterial() throws',
+      (logger, kind) =>
+        codeProvider(logger, {
+          clientAuthentication: {
+            authenticate: async (draft) => ({
+              parameters: { client_id: draft.clientId },
+            }),
+            tlsMaterial: async () => {
+              throw thrown(kind);
+            },
+          },
+        }),
+      '',
+    ],
+    [
+      'a certificate loader that throws',
+      (logger, kind) =>
+        codeProvider(logger, {
+          clientAuthentication: tlsClientCertificate({
+            material: async () => {
+              throw thrown(kind);
+            },
+          }),
+        }),
+      '',
+    ],
+    [
+      'a network failure whose message holds the secret',
+      (logger, kind) => {
+        answer(async () => {
+          throw thrown(kind);
+        });
+        return codeProvider(logger, {});
+      },
+      'Refresh failed',
+    ],
+    [
+      'an interactive strategy that throws',
+      (logger, kind) => {
+        answer(async () => {
+          throw refused400();
+        });
+        return codeProvider(logger, {
+          authorization: {
+            authorize: async () => {
+              throw thrown(kind);
+            },
+          },
+        });
+      },
+      'Refresh failed',
+    ],
+    [
+      'onTokens that throws',
+      (logger, kind) =>
+        codeProvider(logger, {
+          onTokens: async () => {
+            throw thrown(kind);
+          },
+        }),
+      'onTokens failed',
+    ],
+    [
+      'a device-code presenter that throws',
+      (logger, kind) => {
+        answer(async (url) => {
+          if (String(url).includes('/device')) return tokenReply;
+          throw refused400();
+        });
+        return new OidcDeviceFlowProvider({
+          clientId: 'cid',
+          clientSecret: 'secret',
+          tokenEndpoint: 'https://idp/token',
+          deviceAuthorizationEndpoint: 'https://idp/device',
+          refreshToken: REFRESH_TOKEN,
+          presenter: {
+            present: async () => {
+              throw thrown(kind);
+            },
+          },
+          logger,
+        } as ConstructorParameters<typeof OidcDeviceFlowProvider>[0]);
+      },
+      'presenter failed',
+    ],
+    [
+      'a SAML validator that throws',
+      (logger, kind) => {
+        answer(async () => {
+          throw refused400();
+        });
+        return new Saml2BearerProvider({
+          idpSsoUrl: 'https://idp/sso',
+          spEntityId: 'sp',
+          uaaUrl: 'https://uaa',
+          clientId: 'cid',
+          clientSecret: 'secret',
+          idpInitiated: true,
+          refreshToken: REFRESH_TOKEN,
+          authorization: staticCodeStrategy({ payload: 'PHNhbWw+' }),
+          assertionValidator: {
+            validate: async () => {
+              throw thrown(kind);
+            },
+          },
+          logger,
+        } as ConstructorParameters<typeof Saml2BearerProvider>[0]);
+      },
+      'Refresh failed',
+    ],
+  ];
+
+  describe.each(['Error', 'string'] as const)('thrown as %s', (kind) => {
+    it.each(CASES)('%s', async (_name, make, expected) => {
+      const { logger, lines } = recordingLogger();
+      await exercise(make(logger, kind));
+      const all = lines.join('\n');
+      // Not vacuous: the failure was logged, in the words it is allowed.
+      if (expected) expect(all).toContain(expected);
+      expect(all).not.toContain(MARKER);
+    });
+  });
+
+  it('an SNC locator and probe that throw', async () => {
+    const { logger, lines } = recordingLogger();
+    const failing = new SncLogonProvider({
+      partnerName: 'p:CN=SID',
+      locator: {
+        locate: async () => {
+          throw new Error(MARKER);
+        },
+      },
+      probes: [],
+      logger,
+    });
+    await failing.prepare();
+    const probing = new SncLogonProvider({
+      partnerName: 'p:CN=SID',
+      locator: {
+        locate: async () => ({ path: '/lib/libsapcrypto.so', archs: [] }),
+      },
+      probes: [
+        {
+          product: 'probe',
+          appliesTo: async () => {
+            throw new Error(MARKER);
+          },
+        },
+      ],
+      logger,
+    });
+    await probing.prepare();
+    const all = lines.join('\n');
+    expect(all).toContain('SNC library not found');
+    expect(all).toContain('an SNC product probe failed');
+    expect(all).not.toContain(MARKER);
+  });
+
+  it('a browser launcher that rejects', async () => {
+    const { logger, lines } = recordingLogger();
+    const strategy = browserCallbackStrategy({
+      port: 0,
+      timeoutMs: 2000,
+      openUrl: async () => {
+        throw new Error(MARKER);
+      },
+    });
+    await expect(
+      strategy.authorize({
+        buildAuthorizationUrl: async (redirectUri) =>
+          `https://idp.example/authorize?redirect_uri=${redirectUri}`,
+        logger,
+      }),
+    ).rejects.toThrow();
+    await strategy.dispose?.();
+    const all = lines.join('\n');
+    expect(all).toContain('Failed to open browser');
+    expect(all).not.toContain(MARKER);
+  });
+
+  it('`open` that rejects, and the shell fallback that fails', async () => {
+    const { logger, lines } = recordingLogger();
+    mockOpen.default = async () => {
+      throw new Error(MARKER);
+    };
+    await launchBrowser(
+      'https://idp/a',
+      'auto',
+      'http://localhost/cb',
+      () => {},
+      logger,
+    );
+    mockOpen.default = undefined;
+    const exited = new Promise<void>((resolve) => {
+      mockExec.run = (_command, callback) => {
+        (callback as (e: Error) => void)(new Error(MARKER));
+        resolve();
+      };
+    });
+    await launchBrowser(
+      'https://idp/a',
+      'chrome',
+      'http://localhost/cb',
+      () => {},
+      logger,
+    );
+    await exited;
+    const all = lines.join('\n');
+    expect(all).toContain('Could not open browser automatically');
+    expect(all).toContain('Failed to open browser');
+    expect(all).not.toContain(MARKER);
+  });
+
+  it('a 200 without a token whose error echoes the secret and the code', async () => {
+    const { logger, lines } = recordingLogger();
+    const SECRET = 'client-secret-9c41d2e7';
+    const CODE = 'authorization-code-55aa13';
+    answer(async () => ({
+      status: 200,
+      data: { error: `${SECRET} ${CODE}`, error_description: SECRET },
+    }));
+    await expect(
+      exchangeCodeForToken(
+        {
+          uaaUrl: 'https://uaa.example',
+          uaaClientId: 'cid',
+          uaaClientSecret: SECRET,
+        } as Parameters<typeof exchangeCodeForToken>[0],
+        CODE,
+        'http://localhost:61001/callback',
+        logger,
+      ),
+    ).rejects.toThrow();
+    const all = lines.join('\n');
+    expect(all).toContain('Token exchange failed: status 200');
+    for (const secret of [SECRET, CODE]) {
+      for (const window of windows(secret)) {
+        expect(all).not.toContain(window);
+      }
+    }
   });
 });

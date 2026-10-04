@@ -124,7 +124,7 @@ describe('browserAuth token exchange', () => {
 
       // Verify error was logged (but not to console)
       expect(logger.error).toHaveBeenCalledWith(
-        'Token exchange failed: status 200, error: invalid_grant',
+        'Token exchange failed: status 200, error: "invalid_grant"',
       );
     });
 

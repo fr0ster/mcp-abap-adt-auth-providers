@@ -825,7 +825,8 @@ function expectReducedAxiosError(thrown: unknown): void {
   expect(error.cause).toBeUndefined();
   expect(error.status).toBe(400);
   expect(error.response?.status).toBe(400);
-  expect(error.response?.statusText).toBe('Bad Request');
+  // The reason phrase is the server's text: never kept.
+  expect(error.response?.statusText).toBe('');
   expect(error.response?.data).toEqual({ error: 'invalid_client' });
   expect(error.response?.config).toBeUndefined();
   expect(error.toJSON()).not.toHaveProperty('config.data');

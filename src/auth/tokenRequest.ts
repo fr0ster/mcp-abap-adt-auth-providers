@@ -275,8 +275,10 @@ export interface TokenRequestFailure extends Error {
  * a secret or a refresh token; the Authorization header) on itself, on
  * `request` and on `response.config`. What is rethrown is a new `AxiosError`
  * — `instanceof AxiosError` and `axios.isAxiosError` hold — built from what the
- * sites read and nothing else: `message`, `code`, `status`, and a response of
- * `status`, `statusText`, empty `headers` and `data` reduced to the OAuth
+ * sites read and nothing else: a rebuilt `message` (axios's "Request failed
+ * with status code N", or fixed words with the code), `code`, `status`, and a
+ * response of `status`, an empty `statusText` (the reason phrase is the
+ * server's text), empty `headers` and `data` reduced to the OAuth
  * error fields with every known secret redacted (`oauthErrorFields`): a server
  * may echo the request, or put a token there. No `config`, `request` or
  * `cause` is set, so `toJSON()`, which reads `this.config`, serialises none.
@@ -290,15 +292,23 @@ function withoutRequest(
   if (!('config' in raw) && !('request' in raw) && !('response' in raw)) {
     return error;
   }
-  const message =
-    typeof raw.message === 'string' ? raw.message : 'the token request failed';
   const code = typeof raw.code === 'string' ? raw.code : undefined;
   const response = raw.response as Record<string, unknown> | undefined;
+  const status =
+    response && typeof response === 'object' ? response.status : undefined;
+  // The message is rebuilt, never copied: axios's own words for a status, else
+  // fixed words with the code. Nothing of the server (a reason phrase, a body)
+  // or of the request (a URL) can be in it.
+  const message =
+    typeof status === 'number'
+      ? `Request failed with status code ${status}`
+      : `the token request failed${code ? ` (${code})` : ''}`;
   const reduced =
     response && typeof response === 'object'
       ? ({
-          status: response.status,
-          statusText: response.statusText,
+          status,
+          // The reason phrase is the server's free text: it may echo a secret.
+          statusText: '',
           headers: {},
           data: oauthErrorFields(response.data, secrets),
         } as unknown as AxiosResponse)

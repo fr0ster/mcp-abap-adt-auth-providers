@@ -177,12 +177,15 @@ and `CLIENT_AUTHENTICATION_ERROR`.
   strategy: no form body, no `Authorization` header, no TLS agent with a key,
   PFX or passphrase. It is still an `AxiosError` — `instanceof AxiosError` and
   `axios.isAxiosError()` hold — but a new one, built without `config`,
-  `request` or `cause` (so its `toJSON()` serialises no config): it keeps its
-  message, `code` and `status`, and a `response` of `status`, `statusText`,
-  empty `headers` and the server's body reduced to `error`,
-  `error_description` and `error_uri`, every secret the request sent
-  redacted. `response.headers` (now empty) and `response.config` are what a
-  caller loses.
+  `request` or `cause` (so its `toJSON()` serialises no config): it keeps
+  `code` and `status`, a rebuilt message — axios's `Request failed with
+  status code N`, or `the token request failed (<code>)` when no response
+  came — and a `response` of `status`, an empty `statusText`, empty `headers`
+  and the server's body reduced to `error`, `error_description` and
+  `error_uri`, every secret the request sent redacted. `response.headers`
+  (now empty), `response.statusText` (now `''`: the reason phrase is the
+  server's free text), `response.config` and the transport's own message for
+  a network failure are what a caller loses.
 - **The passcode exchange and the OIDC password grant report the server's
   error through `describeOAuthErrorBody`**, with the passcode (or the password),
   the client secret and what a strategy sent redacted. The messages read
@@ -216,6 +219,23 @@ and `CLIENT_AUTHENTICATION_ERROR`.
 - The TLS agent of a token request is built from exactly `cert`, `key`, `pfx`
   and `passphrase`; any other field the material carries at run time
   (`rejectUnauthorized`, `ca`) never reaches it.
+- **No message of a thrown value reaches a log line.** A consumer's
+  collaborator — a client-authentication strategy (`authenticate()`,
+  `tlsMaterial()`), a certificate loader, the interactive strategy, a
+  device-code presenter, a SAML validator, `onTokens`, a browser launcher, an
+  SNC locator or probe — may throw text holding a key, a passphrase or a
+  token, and so may a network failure; `[BaseTokenProvider] Refresh failed`
+  logged it whole. Every log line about a thrown value now carries only the
+  words its refusal would (`loggedError`, `src/auth/refusal.ts`: fixed per
+  class by `instanceof`, allowlisted codes, else `unknown error`) and the
+  HTTP status when there is one — no message, `cause`, `stack` or
+  stringified error, for this package's own classes too. The UAA code
+  exchange's "no `access_token`" line logs the body through
+  `describeOAuthErrorBody` (was its raw `error`).
+- **A thrown token-request error keeps nothing of the reason phrase**: a
+  server answering `401 <secret>` put the secret in
+  `error.response.statusText`, now always `''`; the message is rebuilt from
+  the status (or the code), never copied.
 
 ## [5.2.3] - 2026-10-04
 

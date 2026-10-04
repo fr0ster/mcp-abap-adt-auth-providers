@@ -19,6 +19,7 @@ import { launchBrowser } from '../auth/browserAuth';
 import { withBrowserCallbackServer } from '../auth/callbackServer';
 import type { OidcCallbackResult } from '../auth/oidcBrowserAuth';
 import { withOidcCallbackServer } from '../auth/oidcBrowserAuth';
+import { loggedError } from '../auth/refusal';
 import { withSamlCallbackServer } from '../auth/saml2Auth';
 import {
   BrowserAuthError,
@@ -171,11 +172,14 @@ export class BrowserCallbackStrategy<TResult>
           // release, and one that fails ends the scope through `fail`.
           void open(url, browser, server.redirectUri).catch(
             (error: unknown) => {
-              const message =
-                error instanceof Error ? error.message : String(error);
+              // Fixed words only: the launcher is the consumer's, its text foreign.
+              const { error: words } = loggedError(
+                error,
+                'opening the browser',
+              );
               request.logger?.error(
-                `Failed to open browser: ${message}. Open manually: ${url}`,
-                { error: message, url },
+                `Failed to open browser: ${words}. Open manually: ${url}`,
+                { error: words, url },
               );
               server.fail(
                 new Error(`Browser opening failed. Open manually: ${url}`),

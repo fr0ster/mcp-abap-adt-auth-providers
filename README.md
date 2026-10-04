@@ -36,8 +36,8 @@ updating in place; 9.x speaks the old, narrower `IAuthProvider`.
   Every token provider's config takes an optional
   `onTokens?: (result: ITokenResult) => Promise<void>`, called after every
   *new* token — a login or a refresh, never a cache hit — and awaited before
-  the provider answers. It is best effort: a failing `onTokens` is logged (its
-  class name only, since it holds the tokens) and does not fail the
+  the provider answers. It is best effort: a failing `onTokens` is logged (in
+  fixed words only, since it holds the tokens) and does not fail the
   authentication.
 - **Nothing is defaulted any more.** A provider that used to build its own
   strategy, SAML validator, replay store or device-code output now takes it
@@ -688,10 +688,12 @@ const user = new OidcPasswordProvider({
   with a key or a passphrase — on both paths, strategy or not. It is still an
   `AxiosError` (`instanceof AxiosError` and `axios.isAxiosError()` hold), but
   a new one built without `config`, `request` or `cause`, so its `toJSON()`
-  serialises no config: it keeps the message, `code` and `status`, and a
-  `response` of `status`, `statusText`, empty `headers` and the server's body
-  reduced to `error`, `error_description` and `error_uri`, with every secret
-  the request sent redacted.
+  serialises no config: it keeps `code` and `status`, a rebuilt message
+  (`Request failed with status code N`, or `the token request failed (<code>)`
+  when no response came), and a `response` of `status`, an empty `statusText`
+  (the reason phrase is the server's free text), empty `headers` and the
+  server's body reduced to `error`, `error_description` and `error_uri`, with
+  every secret the request sent redacted.
 
 #### `clientSecretBasic`'s `encoding`
 
@@ -2600,7 +2602,7 @@ Logging uses `@mcp-abap-adt/logger` package with structured logging:
 - Token exchange stages (what we send, what we receive)
 - Token information (lengths, previews, expiration)
 - Token validation checks (expiration, validity)
-- Errors with details
+- Errors in fixed words (see below)
 
 Example output:
 ```
@@ -2613,6 +2615,7 @@ Example output:
 
 **Logging Features**:
 - **No tokens in logs**: a token the provider holds or sent is never logged, not even in part. A log line carries only `<redacted, N chars>` (since 4.1.2; earlier versions logged a short refresh token whole). A token endpoint's error body contributes only `error` and `error_description`, with the request's secrets and anything shaped like a JWT redacted. An `error` that is a registered OAuth error code (`invalid_grant`, `authorization_pending`, `slow_down`, …) is kept verbatim: it is a protocol word, and the device poll reads it. A new opaque token that a server writes into `error_description` cannot be recognised and passes through, capped at 512 characters.
+- **No error message in logs**: a log line about a thrown value — a refresh that failed, a strategy, loader, presenter, validator, `onTokens`, browser launcher or SNC locator/probe that threw — carries only the words its refusal would (fixed per error class, an allowlisted TLS or system code, else `unknown error`) and the HTTP status when there is one, never the error's message, `cause` or stack: a consumer's collaborator may throw text holding a key, a passphrase or a token. Diagnose a collaborator's failure where it throws, not from this package's log.
 - **Date Formatting**: Expiration dates are displayed in readable format (YYYY-MM-DD HH:MM:SS UTC) instead of ISO format
 - **Browser Information**: Logs browser type and authorization URL for debugging
 - **Token Lifecycle**: Detailed logging of token acquisition, validation, and refresh operations
