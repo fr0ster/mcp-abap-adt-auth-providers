@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from '@jest/globals';
 import {
+  assertCertificateMaterial,
   certificateThumbprint,
   checkCertificateMaterial,
 } from '../../auth/certificateMaterial';
@@ -67,6 +68,45 @@ describe('checkCertificateMaterial', () => {
         hint: 'check the certificate, the key and the passphrase, and that a PFX uses current encryption (not legacy RC2)',
       },
     });
+  });
+});
+
+describe('an expired client certificate', () => {
+  const EXPIRED = {
+    ok: false,
+    refusal: {
+      reason: 'the client certificate has expired',
+      hint: 'renew the certificate; a token provider pins its certificate for life, so give the renewed one to a new provider',
+    },
+  };
+
+  it('is refused in fixed words (fixture: valid 2020-01-01 to 2021-01-01)', () => {
+    expect(
+      checkCertificateMaterial({
+        cert: read('expired.crt'),
+        key: read('client.key'),
+      }),
+    ).toEqual(EXPIRED);
+  });
+
+  it('throws an allowlisted class, read by refusalFrom into the same words', () => {
+    const e = thrown(() =>
+      assertCertificateMaterial({
+        cert: read('expired.crt'),
+        key: read('client.key'),
+      }),
+    );
+    expect(e).toBeInstanceOf(CertificateMaterialError);
+    expect(refusalFrom(e, 'x')).toEqual(EXPIRED);
+  });
+
+  it('a certificate still valid is not refused', () => {
+    expect(
+      checkCertificateMaterial({
+        cert: read('client.crt'),
+        key: read('client.key'),
+      }),
+    ).toEqual({ ok: true });
   });
 });
 

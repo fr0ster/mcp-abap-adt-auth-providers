@@ -10,7 +10,7 @@
 
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { describe, expect, it } from '@jest/globals';
+import { describe, expect, it, jest } from '@jest/globals';
 import type { ICertificateMaterial } from '@mcp-abap-adt/interfaces-auth';
 import type { ISapConfig } from '@mcp-abap-adt/interfaces-auth-sap';
 import { CertificateAuthProvider } from '../../credentials/CertificateAuthProvider';
@@ -139,5 +139,43 @@ describe('CertificateAuthProvider: what a material must hold', () => {
       ok: false,
     });
     expect(t.logon.tls).toHaveLength(0);
+  });
+});
+
+describe('CertificateAuthProvider: an expired certificate', () => {
+  const EXPIRED = {
+    ok: false,
+    refusal: {
+      reason: 'the client certificate has expired',
+      hint: 'renew the certificate; a token provider pins its certificate for life, so give the renewed one to a new provider',
+    },
+  };
+
+  it('is refused in prepare() — already expired (fixture: 2020-01-01 to 2021-01-01)', async () => {
+    const p = withMaterial({
+      cert: read('expired.crt'),
+      key: read('client.key'),
+    });
+    await expect(p.prepare()).resolves.toEqual(EXPIRED);
+    const t = recordingTargets();
+    await p.establish(t.logonTarget);
+    expect(t.logon.tls).toHaveLength(0);
+  });
+
+  it('is refused at the logon once it expires after prepare(), nothing presented', async () => {
+    const p = withMaterial({
+      cert: read('client.crt'),
+      key: read('client.key'),
+    });
+    await expect(p.prepare()).resolves.toEqual({ ok: true });
+    // client.crt is valid until 2126: the clock is moved past it, not crypto.
+    const now = jest.spyOn(Date, 'now').mockReturnValue(Date.UTC(2127, 0, 1));
+    try {
+      const t = recordingTargets();
+      await expect(p.establish(t.logonTarget)).resolves.toEqual(EXPIRED);
+      expect(t.logon.tls).toHaveLength(0);
+    } finally {
+      now.mockRestore();
+    }
   });
 });

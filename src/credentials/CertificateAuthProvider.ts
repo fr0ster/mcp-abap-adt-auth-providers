@@ -10,7 +10,11 @@ import type {
   ICertificateMaterialLoader,
   ISapConfig,
 } from '@mcp-abap-adt/interfaces-auth-sap';
-import { checkCertificateMaterial } from '../auth/certificateMaterial';
+import {
+  assertNotExpired,
+  certificateNotAfter,
+  checkCertificateMaterial,
+} from '../auth/certificateMaterial';
 import { OK, oops, safely } from '../auth/refusal';
 import { refuseFor } from '../auth/rejection';
 import { FileCertificateMaterialLoader } from './FileCertificateMaterialLoader';
@@ -19,6 +23,8 @@ import { FileCertificateMaterialLoader } from './FileCertificateMaterialLoader';
 export class CertificateAuthProvider implements IAuthProvider {
   readonly kind = 'certificate';
   private material: ICertificateMaterial | null = null;
+  /** The loaded certificate's `notAfter`, checked again before each logon. */
+  private notAfter = 0;
 
   constructor(
     private readonly loader: ICertificateMaterialLoader,
@@ -37,6 +43,7 @@ export class CertificateAuthProvider implements IAuthProvider {
       const material = await this.loader.load(this.config);
       const checked = checkCertificateMaterial(material);
       if (!checked.ok) return checked;
+      this.notAfter = certificateNotAfter(material);
       this.material = material;
       return OK;
     });
@@ -51,6 +58,9 @@ export class CertificateAuthProvider implements IAuthProvider {
         'connect() prepares it first',
       );
     return safely('presenting the certificate', () => {
+      // Valid at prepare() is not valid for life: a long-lived connection
+      // reaches the certificate's notAfter between logons.
+      assertNotExpired(this.notAfter);
       const { cert, key, pfx, passphrase } = material;
       const presented: ICertificateMaterial = {};
       if (cert !== undefined) presented.cert = cert;

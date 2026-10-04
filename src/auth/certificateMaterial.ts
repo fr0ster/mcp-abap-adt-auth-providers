@@ -5,7 +5,6 @@ import type {
   ICertificateMaterial,
 } from '@mcp-abap-adt/interfaces-auth';
 import {
-  CERTIFICATE_INCOMPLETE,
   CERTIFICATE_UNUSABLE,
   CertificateMaterialError,
 } from '../errors/CertificateMaterialError';
@@ -18,9 +17,10 @@ function isIncomplete(material: ICertificateMaterial): boolean {
 }
 
 /**
- * Proves certificate material whole and usable: complete first, then a TLS
- * context built from it. Throws a CertificateMaterialError (`incomplete` says
- * which) — its words are fixed; an error's own text never reaches them.
+ * Proves certificate material whole, usable and current: complete first, then
+ * a TLS context built from it, then its leaf certificate not past `notAfter`.
+ * Throws a CertificateMaterialError (`incomplete` and `expired` say which) —
+ * its words are fixed; an error's own text never reaches them.
  */
 export function assertCertificateMaterial(
   material: ICertificateMaterial,
@@ -31,6 +31,28 @@ export function assertCertificateMaterial(
   } catch {
     throw new CertificateMaterialError(false);
   }
+  assertNotExpired(certificateNotAfter(material));
+}
+
+/**
+ * When the leaf certificate stops being valid: its `notAfter`, in epoch
+ * milliseconds. Throws a CertificateMaterialError when no leaf can be read.
+ */
+export function certificateNotAfter(material: ICertificateMaterial): number {
+  if (isIncomplete(material)) throw new CertificateMaterialError(true);
+  let notAfter: number;
+  try {
+    notAfter = Date.parse(new X509Certificate(leafDer(material)).validTo);
+  } catch {
+    throw new CertificateMaterialError(false);
+  }
+  if (!Number.isFinite(notAfter)) throw new CertificateMaterialError(false);
+  return notAfter;
+}
+
+/** Throws the "has expired" CertificateMaterialError once `notAfter` is reached. */
+export function assertNotExpired(notAfter: number): void {
+  if (Date.now() >= notAfter) throw new CertificateMaterialError(false, true);
 }
 
 /** The same proof as an outcome: the refusal carries the fixed words. */
@@ -41,9 +63,7 @@ export function checkCertificateMaterial(
     assertCertificateMaterial(material);
   } catch (e) {
     const words =
-      e instanceof CertificateMaterialError && e.incomplete
-        ? CERTIFICATE_INCOMPLETE
-        : CERTIFICATE_UNUSABLE;
+      e instanceof CertificateMaterialError ? e.words : CERTIFICATE_UNUSABLE;
     return oops(words.reason, words.hint);
   }
   return OK;

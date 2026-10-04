@@ -23,6 +23,8 @@ import type {
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
 import {
   assertCertificateMaterial,
+  assertNotExpired,
+  certificateNotAfter,
   certificateThumbprint,
 } from '../auth/certificateMaterial';
 import {
@@ -63,6 +65,8 @@ export interface ClientAuthenticationConfig {
 export interface PinnedCertificate {
   readonly material: ICertificateMaterial;
   readonly thumbprint: string;
+  /** The leaf's `notAfter`, epoch ms: checked before every request that presents it. */
+  readonly notAfter: number;
 }
 
 /** What the base constructor reads of a provider's configuration. */
@@ -170,6 +174,7 @@ export abstract class BaseTokenProvider
         const pinned = {
           material,
           thumbprint: certificateThumbprint(material),
+          notAfter: certificateNotAfter(material),
         };
         this.pinned = pinned;
         return pinned;
@@ -188,6 +193,17 @@ export abstract class BaseTokenProvider
   }
 
   /**
+   * The pinned certificate, about to be presented: pinned if it is not yet,
+   * and refused — a CertificateMaterialError, "has expired" — once past its
+   * `notAfter`. Valid at pin time is not valid for life.
+   */
+  private async presentable(): Promise<PinnedCertificate | undefined> {
+    const pinned = await this.pin();
+    if (pinned) assertNotExpired(pinned.notAfter);
+    return pinned;
+  }
+
+  /**
    * What a token-request site is given for one request: the strategy, the
    * pinned material, and the server's mTLS alias of that request's endpoint.
    * Undefined without a strategy — the site then sends today's request.
@@ -197,7 +213,7 @@ export abstract class BaseTokenProvider
   ): Promise<TokenRequestAuth | undefined> {
     const strategy = this.clientAuthentication;
     if (!strategy) return undefined;
-    const pinned = await this.pin();
+    const pinned = await this.presentable();
     return {
       strategy,
       ...(pinned ? { material: pinned.material } : {}),
@@ -349,10 +365,10 @@ export abstract class BaseTokenProvider
 
   /** One renewal: one refresh, then — only if it is refused or impossible — one login. */
   private async renew(): Promise<ITokenResult> {
-    // Before anything is sent or started: material that cannot be loaded
-    // refuses the renewal whole — the refresh token is neither sent nor
-    // dropped, and no login begins.
-    await this.pin();
+    // Before anything is sent or started: material that cannot be loaded, or
+    // has expired, refuses the renewal whole — the refresh token is neither
+    // sent nor dropped, and no login begins.
+    await this.presentable();
     const spent = this.refreshToken;
     if (spent && this.hasRefreshGrant()) {
       this.logger?.info(
@@ -564,7 +580,7 @@ export abstract class BaseTokenProvider
    */
   async establish(logon: ILogonTarget): Promise<AuthOutcome> {
     return safely(this.obtaining, async () => {
-      const pinned = await this.pin();
+      const pinned = await this.presentable();
       const held =
         !this.renewal && this.isTokenValid()
           ? this.authorizationToken
@@ -573,8 +589,10 @@ export abstract class BaseTokenProvider
         held === undefined ? { state: 'unknown' } : readBinding(held);
       if (!this.presents(binding, pinned)) return boundElsewhere();
       if (!pinned) return OK;
+      // A copy: a target that changes what it is given never changes what
+      // later requests present.
       const presented = atTarget('presenting the certificate', () =>
-        logon.tlsMaterial(pinned.material),
+        logon.tlsMaterial(copyMaterial(pinned.material)),
       );
       // Unbound: the Bearer carries the token, the certificate is a courtesy
       // — but a target that throws is broken (rule 1), and that is an Oops.

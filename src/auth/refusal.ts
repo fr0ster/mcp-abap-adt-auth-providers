@@ -15,11 +15,7 @@ import {
   type AssertionCheck,
   AssertionValidationError,
 } from '../errors/AssertionValidationError';
-import {
-  CERTIFICATE_INCOMPLETE,
-  CERTIFICATE_UNUSABLE,
-  CertificateMaterialError,
-} from '../errors/CertificateMaterialError';
+import { CertificateMaterialError } from '../errors/CertificateMaterialError';
 import {
   CLIENT_AUTHENTICATION_UNUSABLE,
   CLIENT_KEY_UNUSABLE,
@@ -267,10 +263,8 @@ export function refusalFrom(error: unknown, what: string): AuthOutcome {
     return oops(`the SAML assertion was refused${check}`);
   }
   if (error instanceof CertificateMaterialError) {
-    const words = error.incomplete
-      ? CERTIFICATE_INCOMPLETE
-      : CERTIFICATE_UNUSABLE;
-    return oops(words.reason, words.hint);
+    const { reason, hint } = error.words;
+    return oops(reason, hint);
   }
   if (error instanceof ClientAuthenticationResultError) {
     return oops(

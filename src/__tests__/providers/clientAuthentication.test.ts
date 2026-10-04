@@ -32,6 +32,7 @@ import { OidcPasswordProvider } from '../../providers/OidcPasswordProvider';
 import { OidcTokenExchangeProvider } from '../../providers/OidcTokenExchangeProvider';
 import { Saml2BearerProvider } from '../../providers/Saml2BearerProvider';
 import { UaaPasscodeProvider } from '../../providers/UaaPasscodeProvider';
+import { recordingTargets } from '../helpers/targets';
 
 jest.mock('axios');
 type Mock = jest.Mock<(...args: any[]) => Promise<unknown>>;
@@ -610,6 +611,111 @@ describe('one certificate, pinned', () => {
     for (const request of sent) {
       expect(Buffer.from(request.cert as Buffer).equals(original)).toBe(true);
     }
+  });
+
+  it('a logon target that changes the material it was given does not change what later requests present', async () => {
+    const original = Buffer.from(A.cert as Buffer);
+    const { strategy } = recording([A]);
+    const provider = new ClientCredentialsProvider({
+      uaaUrl: 'https://uaa',
+      clientId: 'cid',
+      clientAuthentication: strategy,
+    });
+    const t = recordingTargets();
+    const mutating = {
+      ...t.logonTarget,
+      tlsMaterial(material: ICertificateMaterial) {
+        // In place, and by replacing the fields.
+        (material.cert as Buffer).fill(0);
+        material.cert = B.cert;
+        material.key = B.key;
+        return { ok: true as const };
+      },
+    };
+    await expect(provider.establish(mutating)).resolves.toEqual({ ok: true });
+    await provider.prepare();
+    await expect(provider.establish(mutating)).resolves.toEqual({ ok: true });
+    await provider.refreshTokens();
+    expect(sent).toHaveLength(2);
+    for (const request of sent) {
+      expect(Buffer.from(request.cert as Buffer).equals(original)).toBe(true);
+    }
+  });
+});
+
+describe('an expired client certificate', () => {
+  const EXPIRED = {
+    ok: false,
+    refusal: {
+      reason: 'the client certificate has expired',
+      hint: 'renew the certificate; a token provider pins its certificate for life, so give the renewed one to a new provider',
+    },
+  };
+  const expired: ICertificateMaterial = {
+    cert: read('expired.crt'),
+    key: read('client.key'),
+  };
+
+  it('is refused at pin time: nothing sent, nothing pinned (fixture: 2020-01-01 to 2021-01-01)', async () => {
+    const { strategy } = recording([expired]);
+    const provider = new ClientCredentialsProvider({
+      uaaUrl: 'https://uaa',
+      clientId: 'cid',
+      clientAuthentication: strategy,
+    });
+    await expect(provider.prepare()).resolves.toEqual(EXPIRED);
+    const t = recordingTargets();
+    await expect(provider.establish(t.logonTarget)).resolves.toEqual(EXPIRED);
+    expect(t.logon.tls).toHaveLength(0);
+    expect(sent).toHaveLength(0);
+  });
+
+  it('pinned while valid, then expired: refused before the next request presents it, and at the logon', async () => {
+    const { strategy } = recording([A]);
+    const provider = new ClientCredentialsProvider({
+      uaaUrl: 'https://uaa',
+      clientId: 'cid',
+      clientAuthentication: strategy,
+    });
+    await expect(provider.prepare()).resolves.toEqual({ ok: true });
+    expect(sent).toHaveLength(1);
+    // client.crt is valid until 2126: the clock is moved past it, not crypto.
+    const now = jest.spyOn(Date, 'now').mockReturnValue(Date.UTC(2127, 0, 1));
+    try {
+      await expect(provider.prepare()).resolves.toEqual(EXPIRED);
+      expect(sent).toHaveLength(1);
+      const t = recordingTargets();
+      await expect(provider.establish(t.logonTarget)).resolves.toEqual(EXPIRED);
+      expect(t.logon.tls).toHaveLength(0);
+    } finally {
+      now.mockRestore();
+    }
+  });
+  it('an expired certificate refuses the renewal whole: the refresh token is neither sent nor dropped', async () => {
+    const { strategy } = recording([A]);
+    const authorization = codeStrategy();
+    const provider = new AuthorizationCodeProvider({
+      uaaUrl: 'https://uaa',
+      clientId: 'cid',
+      authorization,
+      clientAuthentication: strategy,
+    });
+    await provider.getTokens();
+    expect(sent).toHaveLength(1);
+    const held = sent.length;
+    const now = jest.spyOn(Date, 'now').mockReturnValue(Date.UTC(2127, 0, 1));
+    try {
+      await expect(provider.refreshTokens()).rejects.toBeInstanceOf(
+        CertificateMaterialError,
+      );
+    } finally {
+      now.mockRestore();
+    }
+    expect(sent).toHaveLength(held);
+    expect(authorization.authorize).toHaveBeenCalledTimes(1);
+    // The clock back: the refresh token it held is still there to send.
+    await provider.refreshTokens();
+    expect(sent[held].body).toMatchObject({ grant_type: 'refresh_token' });
   });
 });
 
