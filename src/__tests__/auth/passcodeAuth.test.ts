@@ -7,7 +7,13 @@ import { beforeEach, describe, expect, it, jest } from '@jest/globals';
 import axios from 'axios';
 import { exchangePasscode } from '../../auth/passcodeAuth';
 
-jest.mock('axios');
+// Automocked, but with axios's own error class: the sites throw it.
+jest.mock('axios', () => {
+  const mocked = jest.createMockFromModule<Record<string, unknown>>('axios');
+  mocked.AxiosError =
+    jest.requireActual<Record<string, unknown>>('axios').AxiosError;
+  return mocked;
+});
 const mockedAxios = axios as jest.Mocked<typeof axios>;
 
 const call = () =>

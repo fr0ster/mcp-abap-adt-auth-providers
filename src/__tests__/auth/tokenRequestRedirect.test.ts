@@ -8,6 +8,7 @@
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { afterAll, beforeAll, describe, expect, it } from '@jest/globals';
+import axios, { AxiosError } from 'axios';
 import { exchangeCodeForToken } from '../../auth/browserAuth';
 import { getTokenWithClientCredentials } from '../../auth/clientCredentialsAuth';
 import {
@@ -196,6 +197,122 @@ describe('a 307 from the token endpoint', () => {
       const failed = expect(run()).rejects.toBeDefined();
       await failed;
       expect(elsewhereHits).toBe(0);
+    },
+  );
+});
+
+describe('a 400 from the token endpoint that echoes the request', () => {
+  const SECRET = 'client-secret-0123456789';
+  const REFRESH = 'refresh-token-abcdefghij';
+  const DEVICE = 'device-code-klmnopqrstu';
+  let lastBody = '';
+  const echoing = createServer((req, res) => {
+    const chunks: Buffer[] = [];
+    req.on('data', (chunk: Buffer) => chunks.push(chunk));
+    req.on('end', () => {
+      lastBody = Buffer.concat(chunks).toString();
+      res.statusCode = 400;
+      res.statusMessage = 'Bad Request';
+      res.setHeader('Content-Type', 'application/json');
+      res.setHeader('X-Echo', encodeURIComponent(lastBody));
+      res.end(
+        JSON.stringify({
+          error: 'invalid_grant',
+          error_description: 'refused',
+          echoed: lastBody,
+          authorization: req.headers.authorization ?? '',
+        }),
+      );
+    });
+  });
+  let base = '';
+  beforeAll(async () => {
+    base = `http://127.0.0.1:${await listen(echoing)}`;
+  });
+  afterAll(() => close(echoing));
+
+  const windows = (secret: string) => {
+    const out: string[] = [];
+    for (let i = 0; i + 8 <= secret.length; i++)
+      out.push(secret.slice(i, i + 8));
+    return out;
+  };
+
+  it.each([
+    [
+      'OIDC refresh without a strategy',
+      () => refreshOidcToken(`${base}/token`, 'cid', SECRET, REFRESH),
+    ],
+    [
+      'OIDC refresh with a strategy',
+      () =>
+        refreshOidcToken(
+          `${base}/token`,
+          'cid',
+          undefined,
+          REFRESH,
+          undefined,
+          {
+            strategy: clientSecretPost(SECRET),
+          },
+        ),
+    ],
+    [
+      'OIDC device poll without a strategy',
+      () => pollDeviceTokens(`${base}/token`, 'cid', SECRET, DEVICE, 0),
+    ],
+    [
+      'UAA authorization code without a strategy',
+      () =>
+        exchangeCodeForToken(
+          {
+            uaaUrl: base,
+            uaaClientId: 'cid',
+            uaaClientSecret: SECRET,
+          } as Parameters<typeof exchangeCodeForToken>[0],
+          REFRESH,
+          'http://localhost:61001/callback',
+        ),
+    ],
+  ])(
+    '%s: an AxiosError without the request, whose JSON and string hold no secret',
+    async (_label, run) => {
+      let thrown: unknown;
+      try {
+        await run();
+      } catch (error) {
+        thrown = error;
+      }
+      // The server did receive, and echo, a secret of the grant.
+      expect(lastBody.includes(REFRESH) || lastBody.includes(DEVICE)).toBe(
+        true,
+      );
+      expect(thrown).toBeInstanceOf(AxiosError);
+      expect(axios.isAxiosError(thrown)).toBe(true);
+      const error = thrown as AxiosError;
+      expect(error.name).toBe('AxiosError');
+      expect(error.status).toBe(400);
+      expect(error.response?.status).toBe(400);
+      expect(error.response?.statusText).toBe('Bad Request');
+      expect(error.response?.data).toEqual({
+        error: 'invalid_grant',
+        error_description: 'refused',
+      });
+      expect(error.config).toBeUndefined();
+      expect(error.request).toBeUndefined();
+      expect(error.response?.config).toBeUndefined();
+      expect(error.response?.request).toBeUndefined();
+      expect(error.cause).toBeUndefined();
+      expect(JSON.stringify(error.toJSON())).not.toContain('"config":{');
+      const text = `${JSON.stringify(error)}\n${JSON.stringify(error.toJSON())}\n${String(error)}\n${error.stack}`;
+      const basic = Buffer.from(`cid:${SECRET}`).toString('base64');
+      const needles = [
+        ...windows(SECRET),
+        ...windows(REFRESH),
+        ...windows(DEVICE),
+        ...windows(basic),
+      ];
+      expect(needles.filter((needle) => text.includes(needle))).toEqual([]);
     },
   );
 });

@@ -28,7 +28,11 @@ import type {
   ITokenRequestAuthentication,
   ITokenRequestDraft,
 } from '@mcp-abap-adt/interfaces-auth';
-import axios, { type AxiosRequestConfig, type AxiosResponse } from 'axios';
+import axios, {
+  AxiosError,
+  type AxiosRequestConfig,
+  type AxiosResponse,
+} from 'axios';
 import { ClientAuthenticationResultError } from '../errors/ClientAuthenticationError';
 import { type OAuthErrorFields, oauthErrorFields } from './oauthErrorBody';
 
@@ -241,10 +245,13 @@ export interface TokenRequestFailure extends Error {
  * The failure without the request: an AxiosError carries its config (the
  * httpsAgent and its key, PFX and passphrase; the form body with an assertion,
  * a secret or a refresh token; the Authorization header) on itself, on
- * `request` and on `response.config`. What is kept is what the sites read —
- * `message`, `code`, `isAxiosError`, the response's `status`, and its `data`
- * reduced to the OAuth error fields with every known secret redacted
- * (`oauthErrorFields`): a server may echo the request, or put a token there.
+ * `request` and on `response.config`. What is rethrown is a new `AxiosError`
+ * — `instanceof AxiosError` and `axios.isAxiosError` hold — built from what the
+ * sites read and nothing else: `message`, `code`, `status`, and a response of
+ * `status`, `statusText`, empty `headers` and `data` reduced to the OAuth
+ * error fields with every known secret redacted (`oauthErrorFields`): a server
+ * may echo the request, or put a token there. No `config`, `request` or
+ * `cause` is set, so `toJSON()`, which reads `this.config`, serialises none.
  */
 function withoutRequest(
   error: unknown,
@@ -255,19 +262,22 @@ function withoutRequest(
   if (!('config' in raw) && !('request' in raw) && !('response' in raw)) {
     return error;
   }
-  const failure: TokenRequestFailure = new Error(
-    typeof raw.message === 'string' ? raw.message : 'the token request failed',
-  );
-  if (raw.isAxiosError === true) failure.isAxiosError = true;
-  if (typeof raw.code === 'string') failure.code = raw.code;
-  if (typeof raw.status === 'number') failure.status = raw.status;
+  const message =
+    typeof raw.message === 'string' ? raw.message : 'the token request failed';
+  const code = typeof raw.code === 'string' ? raw.code : undefined;
   const response = raw.response as Record<string, unknown> | undefined;
-  if (response && typeof response === 'object') {
-    failure.response = {
-      status: response.status,
-      statusText: response.statusText,
-      data: oauthErrorFields(response.data, secrets),
-    };
+  const reduced =
+    response && typeof response === 'object'
+      ? ({
+          status: response.status,
+          statusText: response.statusText,
+          headers: {},
+          data: oauthErrorFields(response.data, secrets),
+        } as unknown as AxiosResponse)
+      : undefined;
+  const failure = new AxiosError(message, code, undefined, undefined, reduced);
+  if (failure.status === undefined && typeof raw.status === 'number') {
+    failure.status = raw.status;
   }
   return failure;
 }

@@ -13,7 +13,8 @@ A token provider's client can authenticate with a client certificate or a
 signed assertion instead of a secret, and a token bound to that certificate is
 presented only together with it. A consumer that passes no strategy sends the
 same requests as before; two things change for it too, listed under *Changed*
-(a seeded token carrying `cnf`, and the class of a thrown token-request error).
+(a seeded token carrying `cnf`, and a thrown token-request error that no
+longer carries the request).
 See *Client authentication* in the README.
 
 Requires `@mcp-abap-adt/interfaces-auth` `^3.1.0` (was `^3.0.0`), which adds
@@ -133,15 +134,16 @@ and the error codes `CERTIFICATE_MATERIAL_ERROR` and
   expired material) when the cached token is bound and the strategy presents
   a certificate: it pins the certificate to compare thumbprints, where it used
   to return the cached token.
-- **A thrown token-request error is a plain `Error`**, with or without a
-  strategy: `instanceof AxiosError` is false, and `response.headers`,
-  `config` and `request` are gone (message, `code`, `isAxiosError`, `status`
-  and the reduced `response.data` stay).
 - **A thrown token-request error carries no request**, with or without a
   strategy: no form body, no `Authorization` header, no TLS agent with a key,
-  PFX or passphrase. It keeps its message, code and status, and the server's
-  body reduced to `error`, `error_description` and `error_uri`, every secret
-  the request sent redacted.
+  PFX or passphrase. It is still an `AxiosError` — `instanceof AxiosError` and
+  `axios.isAxiosError()` hold — but a new one, built without `config`,
+  `request` or `cause` (so its `toJSON()` serialises no config): it keeps its
+  message, `code` and `status`, and a `response` of `status`, `statusText`,
+  empty `headers` and the server's body reduced to `error`,
+  `error_description` and `error_uri`, every secret the request sent
+  redacted. `response.headers` (now empty) and `response.config` are what a
+  caller loses.
 - **The passcode exchange and the OIDC password grant report the server's
   error through `describeOAuthErrorBody`**, with the passcode (or the password),
   the client secret and what a strategy sent redacted. The messages read

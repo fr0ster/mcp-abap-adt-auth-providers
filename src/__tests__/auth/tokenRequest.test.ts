@@ -18,7 +18,7 @@ import type {
   ITokenRequestDraft,
 } from '@mcp-abap-adt/interfaces-auth';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
-import axios from 'axios';
+import axios, { AxiosError } from 'axios';
 import { getTokenWithClientCredentials } from '../../auth/clientCredentialsAuth';
 import {
   initiateDeviceAuthorization,
@@ -36,7 +36,13 @@ import {
 } from '../../clientAuthentication';
 import { OIDC, tokenReply as reply, SITES } from '../helpers/tokenRequestSites';
 
-jest.mock('axios');
+// Automocked, but with axios's own error class: the sites throw it.
+jest.mock('axios', () => {
+  const mocked = jest.createMockFromModule<Record<string, unknown>>('axios');
+  mocked.AxiosError =
+    jest.requireActual<Record<string, unknown>>('axios').AxiosError;
+  return mocked;
+});
 type Mock = jest.Mock<(...args: any[]) => Promise<unknown>>;
 const mockedAxios = axios as unknown as Mock & {
   post: Mock;
@@ -635,6 +641,40 @@ const windowsOf = (secret: string, size = 8, stride = 1) => {
   return out;
 };
 
+/** The sites that rethrow the request's failure itself, not their own Error. */
+const RETHROWN_AS_IS = new Set([
+  'browserAuth.exchangeCodeForToken',
+  'oidcToken.exchangeAuthorizationCode',
+  'oidcToken.refreshOidcToken',
+  'oidcToken.pollDeviceTokens',
+  'oidcToken.tokenExchange',
+]);
+
+/**
+ * A site that rethrows the request's failure as it is: an AxiosError again —
+ * `instanceof`, `isAxiosError` — with no config, request or cause, and the
+ * response's status and reduced body.
+ */
+function expectReducedAxiosError(thrown: unknown): void {
+  expect(thrown).toBeInstanceOf(AxiosError);
+  expect(jest.requireActual<typeof axios>('axios').isAxiosError(thrown)).toBe(
+    true,
+  );
+  const error = thrown as AxiosError;
+  expect(error.name).toBe('AxiosError');
+  expect(error.code).toBe('ERR_BAD_REQUEST');
+  expect(error.config).toBeUndefined();
+  expect(error.request).toBeUndefined();
+  expect(error.cause).toBeUndefined();
+  expect(error.status).toBe(400);
+  expect(error.response?.status).toBe(400);
+  expect(error.response?.statusText).toBe('Bad Request');
+  expect(error.response?.data).toEqual({ error: 'invalid_client' });
+  expect(error.response?.config).toBeUndefined();
+  expect(error.toJSON()).not.toHaveProperty('config.data');
+  expect((error.toJSON() as { config?: unknown }).config).toBeUndefined();
+}
+
 const signingKey = generateKeyPairSync('rsa', { modulusLength: 2048 })
   .privateKey.export({ type: 'pkcs8', format: 'pem' })
   .toString();
@@ -692,6 +732,7 @@ describe.each(SITES)('$name: the thrown error carries no request', (site) => {
       expect(needles.filter((needle) => text.includes(needle))).toEqual([]);
       // The status the sites report is still there.
       expect(String(thrown)).toContain('400');
+      if (RETHROWN_AS_IS.has(site.name)) expectReducedAxiosError(thrown);
     },
   );
 
@@ -705,6 +746,7 @@ describe.each(SITES)('$name: the thrown error carries no request', (site) => {
     expect(text).not.toContain('Authorization');
     expect(text).not.toContain(Buffer.from('cid:sec').toString('base64'));
     expect(text).not.toContain('old-rt');
+    if (RETHROWN_AS_IS.has(site.name)) expectReducedAxiosError(thrown);
   });
 });
 

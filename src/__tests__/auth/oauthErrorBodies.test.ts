@@ -15,7 +15,13 @@ import {
 } from '../../auth/saml2TokenExchange';
 import { refreshJwtToken } from '../../auth/tokenRefresher';
 
-jest.mock('axios');
+// Automocked, but with axios's own error class: the sites throw it.
+jest.mock('axios', () => {
+  const mocked = jest.createMockFromModule<Record<string, unknown>>('axios');
+  mocked.AxiosError =
+    jest.requireActual<Record<string, unknown>>('axios').AxiosError;
+  return mocked;
+});
 const mockedAxios = axios as jest.Mocked<typeof axios>;
 
 const LEAKED_ACCESS = 'leaked-access-token-0123456789abcdef';
