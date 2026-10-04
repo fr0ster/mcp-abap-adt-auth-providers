@@ -83,7 +83,7 @@ export class SncLogonProvider implements IAuthProvider {
     const partnerName = config.partnerName?.trim();
     if (!partnerName) {
       throw new ValidationError(
-        'SncLogonProvider needs partnerName — the system’s SNC name.',
+        "SncLogonProvider needs partnerName — the system's SNC name.",
         ['partnerName'],
       );
     }

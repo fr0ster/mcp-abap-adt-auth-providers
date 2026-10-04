@@ -52,6 +52,11 @@ describe('construction', () => {
       () => new SncLogonProvider({ partnerName: ' ', ...parts(machine()) }),
     ).toThrow(ValidationError);
   });
+  it('names partnerName with an ASCII apostrophe', () => {
+    expect(
+      () => new SncLogonProvider({ partnerName: ' ', ...parts(machine()) }),
+    ).toThrow("SncLogonProvider needs partnerName — the system's SNC name.");
+  });
   it.each(['0', '4', '5', '6', '7', '10', 'max', ''])(
     'refuses qop %p',
     (qop) => {
