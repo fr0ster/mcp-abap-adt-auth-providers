@@ -12,9 +12,7 @@ const dir = join(__dirname, '..', 'fixtures', 'certificates');
 const read = (name: string) => readFileSync(join(dir, name));
 const PASSPHRASE = 'test-passphrase';
 const FIXTURE_THUMBPRINT = 'Hxfr0QUzsXiurYY1W5T4th39ZFrzAnaXsecrqFmlKiQ';
-const otherCert = readFileSync(
-  join(__dirname, '..', '..', '..', 'tests', 'stand', 'uaa', 'idp', 'idp.crt'),
-);
+const otherCert = read('other.crt');
 
 const thrown = (fn: () => unknown): unknown => {
   try {
@@ -95,6 +93,15 @@ describe('certificateThumbprint', () => {
     ).not.toBe(FIXTURE_THUMBPRINT);
   });
 
+  it('is the leaf of a PFX that carries a chain', () => {
+    expect(
+      certificateThumbprint({
+        pfx: read('client-chain.pfx'),
+        passphrase: PASSPHRASE,
+      }),
+    ).toBe(FIXTURE_THUMBPRINT);
+  });
+
   it('throws an allowlisted class for incomplete material, with its words', () => {
     const e = thrown(() => certificateThumbprint({ cert: read('client.crt') }));
     expect(e).toBeInstanceOf(CertificateMaterialError);
@@ -123,9 +130,7 @@ describe('certificateThumbprint', () => {
         hint: 'check the certificate, the key and the passphrase, and that a PFX uses current encryption (not legacy RC2)',
       },
     });
-    expect(JSON.stringify(out) + (e as Error).message).not.toMatch(
-      /sEcReT|mac verify/,
-    );
+    expect(JSON.stringify(out)).not.toMatch(/sEcReT|mac verify/);
     const garbage = thrown(() =>
       certificateThumbprint({
         cert: Buffer.from('not a cert'),

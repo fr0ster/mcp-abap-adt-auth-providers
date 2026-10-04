@@ -37,8 +37,11 @@ export function checkCertificateMaterial(
 
 /**
  * SHA-256 over the leaf certificate's DER, base64url without padding. The
- * leaf of a PEM chain is its first certificate. Throws a
- * CertificateMaterialError when the material is unusable.
+ * leaf of a PEM chain is its first certificate. It expects material that
+ * already passed `checkCertificateMaterial` and does not prove it usable (a
+ * PEM whose key is not the certificate's still yields a thumbprint). It
+ * throws a CertificateMaterialError when the material is incomplete or no
+ * leaf certificate can be read from it.
  */
 export function certificateThumbprint(material: ICertificateMaterial): string {
   if (isIncomplete(material)) throw new CertificateMaterialError(true);
