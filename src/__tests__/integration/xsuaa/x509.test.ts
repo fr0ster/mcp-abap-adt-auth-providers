@@ -30,8 +30,16 @@ const unlessSet = LOCAL
   ? ''
   : ' — skipped: XSUAA_LOCAL is not set (npm run test:xsuaa sets it)';
 
-const claims = (jwt: string): Record<string, unknown> =>
-  JSON.parse(Buffer.from(jwt.split('.')[1], 'base64url').toString('utf8'));
+/** A token's claims; {} for anything unreadable, whose parse error would quote it. */
+const claims = (jwt: string): Record<string, unknown> => {
+  try {
+    return JSON.parse(
+      Buffer.from(jwt.split('.')[1], 'base64url').toString('utf8'),
+    );
+  } catch {
+    return {};
+  }
+};
 
 interface X509Key {
   url: string;
@@ -52,12 +60,20 @@ describeXsuaa(`An x509 service key against a real XSUAA${unlessSet}`, () => {
     x509 = key.credentials ?? key;
   });
 
+  // Jest prints the received value when a matcher fails: every assertion on
+  // the key's material or on a token is made on a boolean projection of it,
+  // so a failure never echoes a private key, a certificate or a token.
   it('the key holds a certificate, its key and the mTLS host — and no secret', () => {
-    expect(x509.certificate).toContain('-----BEGIN CERTIFICATE-----');
-    expect(x509.key).toContain('PRIVATE KEY-----');
+    expect(
+      typeof x509.certificate === 'string' &&
+        x509.certificate.includes('-----BEGIN CERTIFICATE-----'),
+    ).toBe(true);
+    expect(
+      typeof x509.key === 'string' && x509.key.includes('PRIVATE KEY-----'),
+    ).toBe(true);
     expect(x509.certurl).toMatch(/^https:\/\//);
-    expect(x509.clientid).toEqual(expect.any(String));
-    expect(x509.clientsecret).toBeUndefined();
+    expect(typeof x509.clientid).toBe('string');
+    expect('clientsecret' in x509).toBe(false);
   });
 
   it('ClientCredentialsProvider gets a client token over mTLS at certurl, with no secret anywhere', async () => {
@@ -71,15 +87,14 @@ describeXsuaa(`An x509 service key against a real XSUAA${unlessSet}`, () => {
         endpoint: `${x509.certurl}/oauth/token`,
       }),
     };
-    // Nothing the provider is given is a secret: no field for one, and no
-    // value anywhere in what it is given that reads as one.
-    expect(config).not.toHaveProperty('clientSecret');
-    expect(JSON.stringify(config)).not.toMatch(/secret/i);
+    // The client authenticates with its certificate: no secret is given.
+    expect('clientSecret' in config).toBe(false);
 
     const provider = new ClientCredentialsProvider(config);
     expect(await provider.prepare()).toEqual({ ok: true });
 
     // prepare() obtained the token; getTokens() hands back the one it holds.
+    // Only the claims are read and compared — never the token itself.
     const token = claims((await provider.getTokens()).authorizationToken);
     expect(token.client_id ?? token.cid).toBe(x509.clientid);
     expect(token.grant_type).toBe('client_credentials');

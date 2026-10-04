@@ -6,14 +6,14 @@
 #     XSUAA_CF_ORG and XSUAA_CF_SPACE — no defaults;
 #   - they touch only what they created. Every resource setup.sh creates is
 #     recorded in $LEDGER with its immutable ID — the service instance GUID,
-#     the x509 service key's GUID, the trust's id — and the ledger itself names the target it belongs to.
+#     each service key's GUID, the trust's id — and the ledger itself names the target it belongs to.
 #     A resource is ours only if its name AND its current ID match a record,
 #     checked right before it is reused, refreshed or deleted; a ledger from
 #     another target is refused outright.
 #
 # Ledger format:   target <api>|<org>|<space>
 #                  instance <name> <guid>
-#                  key <name> <guid>        (a key of $INSTANCE)
+#                  key <instance>/<key> <guid>
 #                  trust <origin> <id>
 
 INSTANCE=auth-providers-bearer-test
@@ -106,28 +106,44 @@ instance_guid() { # name
 # or nothing when the Cloud Controller lists no such key. Asked through the v3
 # API rather than `cf service-key --guid`, so absence is an empty list, not a
 # message to match: any answer that is not a list — no session, no network,
-# an API error — fails, and callers must stop rather than read it as "gone".
+# an API error — fails, and so does a listed key that is not the one asked
+# for (another name, another instance, no GUID). Callers must stop on that
+# failure rather than read it as "gone".
 key_guid() { # instance-guid key
   out="$(cf curl "/v3/service_credential_bindings?type=key&service_instance_guids=$1&names=$2" 2>&1)" || {
     echo "could not look up service key $2: $(printf '%s' "$out" | head -1)" >&2
     return 3
   }
   printf '%s' "$out" | node -e '
+    const [instance, name] = process.argv.slice(1);
+    const fail = (why) => {
+      console.error(`could not look up service key ${name}: ${why}`);
+      process.exit(3);
+    };
     let raw = "";
     process.stdin.on("data", (c) => (raw += c)).on("end", () => {
       let body;
       try { body = JSON.parse(raw); } catch { body = undefined; }
-      if (!body || !Array.isArray(body.resources)) {
-        console.error(`could not look up service key ${process.argv[1]}: not a listing`);
-        process.exit(3);
-      }
-      if (body.resources.length > 1) {
-        console.error(`service key ${process.argv[1]}: ${body.resources.length} found, expected one`);
-        process.exit(3);
-      }
-      if (body.resources.length === 1) console.log(body.resources[0].guid);
+      if (!body || !Array.isArray(body.resources)) fail("not a listing");
+      if (body.resources.length > 1) fail(`${body.resources.length} listed, expected one`);
+      if (body.resources.length === 0) return;
+      const [key] = body.resources;
+      if (key.name !== name) fail("the listed key has another name");
+      if (key.relationships?.service_instance?.data?.guid !== instance)
+        fail("the listed key belongs to another instance");
+      if (typeof key.guid !== "string" || key.guid === "") fail("the listed key has no GUID");
+      console.log(key.guid);
     });
-  ' "$2"
+  ' "$1" "$2"
+}
+
+# Runs a cf command that prints no secret, showing its output only when it
+# fails — cf writes the reason to stdout as often as to stderr.
+quietly() { # command...
+  if ! out="$("$@" 2>&1)"; then
+    printf '%s\n' "$out" >&2
+    return 1
+  fi
 }
 
 # `cf service-key` prints a header before the JSON. The file is created

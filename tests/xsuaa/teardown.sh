@@ -23,6 +23,30 @@ fail() {
   exit 1
 }
 
+# A key is ours only while both its instance and its own GUID are. Keys go
+# before their instance: cf refuses to delete an instance that still has one.
+delete_key() { # instance key
+  recorded="$(recorded_id key "$1/$2")"
+  [ -n "$recorded" ] || return 0
+  instance="$(recorded_id instance "$1")"
+  current_instance="$(instance_guid "$1")" || fail "could not look up $1"
+  if [ -z "$instance" ] || [ "$current_instance" != "$instance" ]; then
+    # Our instance is gone, and every key of it with it.
+    echo "$1/$2: already gone with $1"
+  else
+    current="$(key_guid "$instance" "$2")" || fail "could not look up $1/$2"
+    if [ -z "$current" ]; then
+      echo "$1/$2: already gone"
+    elif [ "$current" != "$recorded" ]; then
+      echo "$1/$2: now $current, not ours ($recorded) — left alone" >&2
+    else
+      quietly cf delete-service-key "$1" "$2" -f --wait || fail "could not delete $1/$2"
+      echo "$1/$2: deleted ($recorded)"
+    fi
+  fi
+  disown key "$1/$2"
+}
+
 delete_instance() { # name
   recorded="$(recorded_id instance "$1")"
   [ -n "$recorded" ] || return 0
@@ -32,39 +56,14 @@ delete_instance() { # name
   elif [ "$current" != "$recorded" ]; then
     echo "$1: now $current, not ours ($recorded) — left alone" >&2
   else
-    cf delete-service-key "$1" "$KEY" -f --wait >/dev/null 2>&1 || true
-    cf delete-service "$1" -f --wait >/dev/null || fail "could not delete $1"
+    quietly cf delete-service "$1" -f --wait || fail "could not delete $1 (a service key not recorded as ours blocks it? cf service-keys $1 lists them; one you know is a leftover of these tests: cf delete-service-key $1 <key> -f)"
     echo "$1: deleted ($recorded)"
   fi
   disown instance "$1"
 }
 
-# The x509 key goes first: an instance with a key cf did not delete for us
-# cannot be deleted. Ours only while both its instance and its own GUID are.
-delete_x509_key() {
-  recorded="$(recorded_id key "$X509_KEY")"
-  [ -n "$recorded" ] || return 0
-  instance="$(recorded_id instance "$INSTANCE")"
-  current_instance="$(instance_guid "$INSTANCE")" || fail "could not look up $INSTANCE"
-  if [ -z "$instance" ] || [ "$current_instance" != "$instance" ]; then
-    # Our instance is gone, and every key of it with it.
-    echo "$X509_KEY: already gone with $INSTANCE"
-  else
-    current="$(key_guid "$instance" "$X509_KEY")" || fail "could not look up $X509_KEY"
-    if [ -z "$current" ]; then
-      echo "$X509_KEY: already gone"
-    elif [ "$current" != "$recorded" ]; then
-      echo "$X509_KEY: now $current, not ours ($recorded) — left alone" >&2
-    else
-      cf delete-service-key "$INSTANCE" "$X509_KEY" -f --wait >/dev/null \
-        || fail "could not delete $X509_KEY"
-      echo "$X509_KEY: deleted ($recorded)"
-    fi
-  fi
-  disown key "$X509_KEY"
-}
-
-delete_x509_key
+delete_key "$INSTANCE" "$X509_KEY"
+delete_key "$INSTANCE" "$KEY"
 delete_instance "$INSTANCE"
 recorded_trust="$(recorded_id trust "$ORIGIN")"
 if [ -n "$recorded_trust" ]; then
@@ -72,6 +71,7 @@ if [ -n "$recorded_trust" ]; then
     || fail "could not delete trust $ORIGIN"
   disown trust "$ORIGIN"
 fi
+delete_key "$API_INSTANCE" "$KEY"
 delete_instance "$API_INSTANCE"
 
 if [ -n "$(ledger_entries)" ]; then
