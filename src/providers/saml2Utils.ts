@@ -3,11 +3,13 @@
  */
 
 import type {
+  AuthorizationRequest,
   IAssertionReplayStore,
   IAssertionValidator,
   IAuthorizationStrategy,
 } from '@mcp-abap-adt/interfaces-auth';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
+import { asContract } from '../auth/contractShape';
 import { buildSamlAuthorizationUrl } from '../auth/saml2Auth';
 import { ValidationError } from '../errors/TokenProviderErrors';
 import { isShippedValidator } from '../validation/assertionValidator';
@@ -131,7 +133,7 @@ export interface SamlAssertionResult {
    * `undefined` exactly when the login is declared `idpInitiated` and no ID
    * was minted or declared for it.
    */
-  readonly requestId?: string;
+  readonly requestId?: string | undefined;
   /** Where the strategy actually listened — `outcome.redirectUri`, never `config.acsUrl`. */
   readonly acsUrl: string;
 }
@@ -143,7 +145,7 @@ export async function getSamlAssertion(
   let mintedRequestId: string | undefined;
 
   const request = {
-    ...(config.logger ? { logger: config.logger } : {}),
+    logger: config.logger,
     buildAuthorizationUrl: async (redirectUri: string): Promise<string> => {
       // An IdP-initiated login sends no AuthnRequest, and without a pre-built
       // authorizationUrl the only URL this could produce is one carrying a
@@ -182,7 +184,9 @@ export async function getSamlAssertion(
   };
 
   const strategy = config.authorization;
-  const outcome = await strategy.authorize(request);
+  const outcome = await strategy.authorize(
+    asContract<AuthorizationRequest>(request),
+  );
   // The second net, for a strategy that never called the builder and so
   // never met the check inside it.
   if (declaredAcs && declaredAcs !== outcome.redirectUri) {
@@ -197,7 +201,7 @@ export async function getSamlAssertion(
 
   return {
     payload: outcome.payload,
-    ...(requestId === undefined ? {} : { requestId }),
+    requestId,
     acsUrl: outcome.redirectUri,
   };
 }

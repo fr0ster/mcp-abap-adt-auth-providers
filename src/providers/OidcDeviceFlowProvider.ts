@@ -8,6 +8,7 @@ import type {
 } from '@mcp-abap-adt/interfaces-auth';
 import { AUTH_TYPE_AUTHORIZATION_CODE } from '@mcp-abap-adt/interfaces-auth';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
+import { asContract } from '../auth/contractShape';
 import { discoverOidc, mtlsAlias } from '../auth/oidcDiscovery';
 import {
   initiateDeviceAuthorization,
@@ -25,7 +26,6 @@ import {
   BaseTokenProvider,
   type ClientAuthenticationConfig,
   type TokenProviderHooks,
-  tokenResult,
 } from './BaseTokenProvider';
 
 export interface OidcDeviceFlowProviderConfig
@@ -130,14 +130,11 @@ export class OidcDeviceFlowProvider extends BaseTokenProvider {
     );
 
     try {
-      const { verificationUriComplete, expiresIn } = deviceFlow;
       await this.config.presenter.present({
         verificationUri: deviceFlow.verificationUri,
-        ...(verificationUriComplete === undefined
-          ? {}
-          : { verificationUriComplete }),
+        verificationUriComplete: deviceFlow.verificationUriComplete,
         userCode: deviceFlow.userCode,
-        ...(expiresIn === undefined ? {} : { expiresInSeconds: expiresIn }),
+        expiresInSeconds: deviceFlow.expiresIn,
       });
     } catch (error) {
       // The presenter's text may hold the code; the log gets fixed words only.
@@ -162,7 +159,7 @@ export class OidcDeviceFlowProvider extends BaseTokenProvider {
       ),
     );
 
-    return tokenResult({
+    return asContract<ITokenResult>({
       authorizationToken: tokens.accessToken,
       refreshToken: tokens.refreshToken,
       authType: AUTH_TYPE_AUTHORIZATION_CODE,
@@ -207,7 +204,7 @@ export class OidcDeviceFlowProvider extends BaseTokenProvider {
       ),
     );
 
-    return tokenResult({
+    return asContract<ITokenResult>({
       authorizationToken: tokens.accessToken,
       refreshToken: tokens.refreshToken || this.refreshToken,
       authType: AUTH_TYPE_AUTHORIZATION_CODE,

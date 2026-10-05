@@ -28,6 +28,7 @@ import {
   type Node,
   XMLSerializer,
 } from '@xmldom/xmldom';
+import { asContract } from '../auth/contractShape';
 import { parseStrictXml } from '../auth/strictXml';
 import {
   type AssertionCheck,
@@ -473,16 +474,16 @@ function createValidator(
       const nameId = subject
         ? (directChild(subject, SAML_NS, 'NameID')?.textContent ?? undefined)
         : undefined;
-      return {
+      return asContract<ValidatedAssertion>({
         expiresAt,
         assertionId,
         issuer,
-        ...(nameId === undefined ? {} : { nameId }),
+        nameId,
         raw: samlResponse,
         // The signed element, not the response: this is what a consumer may
         // parse without re-deriving what the signature covered.
         signedXml: new XMLSerializer().serializeToString(signed),
-      };
+      });
     },
   };
 }

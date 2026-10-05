@@ -17,10 +17,10 @@ import {
 
 export interface OidcTokenResponse {
   accessToken: string;
-  refreshToken?: string;
-  idToken?: string;
-  expiresIn?: number;
-  tokenType?: string;
+  refreshToken?: string | undefined;
+  idToken?: string | undefined;
+  expiresIn?: number | undefined;
+  tokenType?: string | undefined;
 }
 
 function toBasicAuth(clientId: string, clientSecret: string): string {
@@ -108,18 +108,12 @@ function mapTokenResponse(
   if (!data?.access_token) {
     throw new Error('Token response missing access_token');
   }
-  const {
-    refresh_token: refreshToken,
-    id_token: idToken,
-    expires_in: expiresIn,
-    token_type: tokenType,
-  } = data;
   return {
     accessToken: data.access_token,
-    ...(refreshToken === undefined ? {} : { refreshToken }),
-    ...(idToken === undefined ? {} : { idToken }),
-    ...(expiresIn === undefined ? {} : { expiresIn }),
-    ...(tokenType === undefined ? {} : { tokenType }),
+    refreshToken: data.refresh_token,
+    idToken: data.id_token,
+    expiresIn: data.expires_in,
+    tokenType: data.token_type,
   };
 }
 

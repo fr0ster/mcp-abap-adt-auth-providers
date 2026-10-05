@@ -5,6 +5,7 @@
  */
 
 import type {
+  AssertionContext,
   IAssertionValidator,
   IRequestTarget,
   ITokenResult,
@@ -12,6 +13,7 @@ import type {
 } from '@mcp-abap-adt/interfaces-auth';
 import { AUTH_TYPE_USER_TOKEN } from '@mcp-abap-adt/interfaces-auth';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
+import { asContract } from '../auth/contractShape';
 import { RefreshError } from '../errors/TokenProviderErrors';
 import { samlCallbackStrategy } from '../strategies';
 import { createSignedResponseValidator } from '../validation/assertionValidator';
@@ -20,7 +22,6 @@ import {
   BaseTokenProvider,
   storedExpiry,
   type TokenProviderHooks,
-  tokenResult,
 } from './BaseTokenProvider';
 import type { Saml2CommonConfig, SamlTrust } from './saml2Utils';
 import {
@@ -98,18 +99,19 @@ export class Saml2PureProvider extends BaseTokenProvider {
     const { payload, requestId, acsUrl } = await getSamlAssertion(this.config);
     // acsUrl is where the strategy actually listened — with an ephemeral port
     // the configured value is usually absent and never authoritative.
-    const validated = await this.validator.validate(payload, {
-      ...(requestId === undefined ? {} : { expectedInResponseTo: requestId }),
-      audience: this.config.spEntityId,
-      acsUrl,
-      ...(this.config.idpEntityId === undefined
-        ? {}
-        : { expectedIssuer: this.config.idpEntityId }),
-      ...(this.logger ? { logger: this.logger } : {}),
-    });
+    const validated = await this.validator.validate(
+      payload,
+      asContract<AssertionContext>({
+        expectedInResponseTo: requestId,
+        audience: this.config.spEntityId,
+        acsUrl,
+        expectedIssuer: this.config.idpEntityId,
+        logger: this.logger,
+      }),
+    );
     const sessionCookies = await this.config.cookieProvider(payload);
 
-    return tokenResult({
+    return asContract<ITokenResult>({
       authorizationToken: sessionCookies,
       authType: AUTH_TYPE_USER_TOKEN,
       tokenType: 'saml',

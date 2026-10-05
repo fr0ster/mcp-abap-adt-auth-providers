@@ -9,12 +9,14 @@
  */
 
 import type {
+  AuthorizationRequest,
   IAuthorizationStrategy,
   ITokenResult,
   OAuth2GrantType,
 } from '@mcp-abap-adt/interfaces-auth';
 import { AUTH_TYPE_PASSWORD } from '@mcp-abap-adt/interfaces-auth';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
+import { asContract } from '../auth/contractShape';
 import { exchangePasscode } from '../auth/passcodeAuth';
 import { refreshJwtToken } from '../auth/tokenRefresher';
 import { manualPasscodeStrategy } from '../strategies/manualStrategies';
@@ -22,7 +24,6 @@ import {
   BaseTokenProvider,
   type ClientAuthenticationConfig,
   type TokenProviderHooks,
-  tokenResult,
 } from './BaseTokenProvider';
 
 export interface UaaPasscodeProviderConfig
@@ -90,10 +91,12 @@ export class UaaPasscodeProvider extends BaseTokenProvider {
   protected async performLogin(): Promise<ITokenResult> {
     const strategy = this.config.authorization;
     // The passcode page takes no redirect: the code travels by hand.
-    const outcome = await strategy.authorize({
-      ...(this.logger ? { logger: this.logger } : {}),
-      buildAuthorizationUrl: async () => `${this.baseUrl}/passcode`,
-    });
+    const outcome = await strategy.authorize(
+      asContract<AuthorizationRequest>({
+        logger: this.logger,
+        buildAuthorizationUrl: async () => `${this.baseUrl}/passcode`,
+      }),
+    );
     const passcode = outcome.payload;
 
     const tokens = await exchangePasscode(
@@ -104,7 +107,7 @@ export class UaaPasscodeProvider extends BaseTokenProvider {
       this.logger,
       await this.requestAuth(),
     );
-    return tokenResult({
+    return asContract<ITokenResult>({
       authorizationToken: tokens.accessToken,
       refreshToken: tokens.refreshToken,
       authType: AUTH_TYPE_PASSWORD,
@@ -128,7 +131,7 @@ export class UaaPasscodeProvider extends BaseTokenProvider {
       this.config.clientSecret ?? '',
       await this.requestAuth(),
     );
-    return tokenResult({
+    return asContract<ITokenResult>({
       authorizationToken: result.accessToken,
       refreshToken: result.refreshToken || this.refreshToken,
       authType: AUTH_TYPE_PASSWORD,

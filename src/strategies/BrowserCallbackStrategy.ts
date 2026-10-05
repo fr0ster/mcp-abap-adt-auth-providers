@@ -13,11 +13,13 @@ import type {
   AuthorizationRequest,
   CallbackServerFactory,
   IAuthorizationStrategy,
+  ICallbackServerOptions,
 } from '@mcp-abap-adt/interfaces-auth';
 import { announcer } from '../auth/announce';
 import { launchBrowser } from '../auth/browserAuth';
 import { CallbackScopeError } from '../auth/callbackScopeError';
 import { withBrowserCallbackServer } from '../auth/callbackServer';
+import { asContract } from '../auth/contractShape';
 import type { OidcCallbackResult } from '../auth/oidcBrowserAuth';
 import { withOidcCallbackServer } from '../auth/oidcBrowserAuth';
 import { loggedError } from '../auth/refusal';
@@ -152,12 +154,12 @@ export class BrowserCallbackStrategy<TResult>
         );
       }
       return await this.options.callbackServer(
-        {
+        asContract<ICallbackServerOptions>({
           port,
           timeoutMs: this.options.timeoutMs ?? DEFAULT_LOGIN_TIMEOUT_MS,
           signal: controller.signal,
-          ...(request.logger ? { logger: request.logger } : {}),
-        },
+          logger: request.logger,
+        }),
         async (server) => {
           // Thrown before anything is opened: a redirect the provider cannot
           // honour must fail here, not as a callback that never arrives.

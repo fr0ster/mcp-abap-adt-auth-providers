@@ -17,7 +17,7 @@ import {
 
 export interface OidcCallbackResult {
   code: string;
-  state?: string;
+  state?: string | undefined;
 }
 
 export const withOidcCallbackServer: CallbackServerFactory<
@@ -58,7 +58,10 @@ export const withOidcCallbackServer: CallbackServerFactory<
           200,
           'Authentication complete. You can close this window.',
         );
-        settle.ok(typeof state === 'string' ? { code, state } : { code }, res);
+        settle.ok(
+          { code, state: typeof state === 'string' ? state : undefined },
+          res,
+        );
       });
     },
     use,

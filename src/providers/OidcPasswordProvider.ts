@@ -8,6 +8,7 @@ import type {
 } from '@mcp-abap-adt/interfaces-auth';
 import { AUTH_TYPE_PASSWORD } from '@mcp-abap-adt/interfaces-auth';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
+import { asContract } from '../auth/contractShape';
 import { discoverOidc, mtlsAlias } from '../auth/oidcDiscovery';
 import { passwordGrant, refreshOidcToken } from '../auth/oidcToken';
 import { RefreshError } from '../errors/TokenProviderErrors';
@@ -15,7 +16,6 @@ import {
   BaseTokenProvider,
   type ClientAuthenticationConfig,
   type TokenProviderHooks,
-  tokenResult,
 } from './BaseTokenProvider';
 
 export interface OidcPasswordProviderConfig
@@ -94,7 +94,7 @@ export class OidcPasswordProvider extends BaseTokenProvider {
       ),
     );
 
-    return tokenResult({
+    return asContract<ITokenResult>({
       authorizationToken: tokens.accessToken,
       refreshToken: tokens.refreshToken,
       authType: AUTH_TYPE_PASSWORD,
@@ -140,7 +140,7 @@ export class OidcPasswordProvider extends BaseTokenProvider {
       ),
     );
 
-    return tokenResult({
+    return asContract<ITokenResult>({
       authorizationToken: tokens.accessToken,
       refreshToken: tokens.refreshToken || this.refreshToken,
       authType: AUTH_TYPE_PASSWORD,

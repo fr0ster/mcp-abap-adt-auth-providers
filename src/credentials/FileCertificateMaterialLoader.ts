@@ -4,13 +4,8 @@ import type {
   ICertificateMaterialLoader,
   ISapConfig,
 } from '@mcp-abap-adt/interfaces-auth-sap';
+import { asContract } from '../auth/contractShape';
 import { ValidationError } from '../errors/TokenProviderErrors';
-
-/** The passphrase, only when the configuration states one. */
-function passphraseOf(config: ISapConfig): { passphrase?: string } {
-  const { certPassphrase } = config;
-  return certPassphrase === undefined ? {} : { passphrase: certPassphrase };
-}
 
 export class FileCertificateMaterialLoader
   implements ICertificateMaterialLoader
@@ -25,17 +20,17 @@ export class FileCertificateMaterialLoader
       );
     }
     if (hasPfx) {
-      return {
+      return asContract<ICertificateMaterial>({
         pfx: await readFile(config.certPfxPath as string),
-        ...passphraseOf(config),
-      };
+        passphrase: config.certPassphrase,
+      });
     }
     if (config.certPath && config.certKeyPath) {
-      return {
+      return asContract<ICertificateMaterial>({
         cert: await readFile(config.certPath),
         key: await readFile(config.certKeyPath),
-        ...passphraseOf(config),
-      };
+        passphrase: config.certPassphrase,
+      });
     }
     throw new ValidationError(
       'Certificate auth requires certPfxPath OR (certPath AND certKeyPath).',

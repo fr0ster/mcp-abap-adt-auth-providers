@@ -3,12 +3,14 @@
  */
 
 import type {
+  AuthorizationRequest,
   IAuthorizationStrategy,
   ITokenResult,
   OAuth2GrantType,
 } from '@mcp-abap-adt/interfaces-auth';
 import { AUTH_TYPE_AUTHORIZATION_CODE_PKCE } from '@mcp-abap-adt/interfaces-auth';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
+import { asContract } from '../auth/contractShape';
 import type { OidcCallbackResult } from '../auth/oidcBrowserAuth';
 import { discoverOidc, mtlsAlias } from '../auth/oidcDiscovery';
 import { generatePkceChallenge, generatePkceVerifier } from '../auth/oidcPkce';
@@ -19,7 +21,6 @@ import {
   BaseTokenProvider,
   type ClientAuthenticationConfig,
   type TokenProviderHooks,
-  tokenResult,
 } from './BaseTokenProvider';
 
 export interface OidcBrowserProviderConfig
@@ -103,7 +104,7 @@ export class OidcBrowserProvider extends BaseTokenProvider {
     ).join(' ');
 
     const request = {
-      ...(this.logger ? { logger: this.logger } : {}),
+      logger: this.logger,
       buildAuthorizationUrl: async (redirectUri: string): Promise<string> => {
         const endpoint =
           this.config.authorizationEndpoint ||
@@ -127,7 +128,9 @@ export class OidcBrowserProvider extends BaseTokenProvider {
 
     const strategy = this.config.authorization;
 
-    const outcome = await strategy.authorize(request);
+    const outcome = await strategy.authorize(
+      asContract<AuthorizationRequest>(request),
+    );
 
     const discovered = this.config.tokenEndpoint ? null : await discover();
     const tokenEndpoint =
@@ -150,7 +153,7 @@ export class OidcBrowserProvider extends BaseTokenProvider {
       await this.requestAuth(mtlsAlias(discovered, 'token_endpoint')),
     );
 
-    return tokenResult({
+    return asContract<ITokenResult>({
       authorizationToken: tokens.accessToken,
       refreshToken: tokens.refreshToken,
       authType: AUTH_TYPE_AUTHORIZATION_CODE_PKCE,
@@ -195,7 +198,7 @@ export class OidcBrowserProvider extends BaseTokenProvider {
       ),
     );
 
-    return tokenResult({
+    return asContract<ITokenResult>({
       authorizationToken: tokens.accessToken,
       refreshToken: tokens.refreshToken || this.refreshToken,
       authType: AUTH_TYPE_AUTHORIZATION_CODE_PKCE,

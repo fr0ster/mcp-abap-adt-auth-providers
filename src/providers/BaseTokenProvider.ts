@@ -27,6 +27,7 @@ import {
   certificateNotAfter,
   certificateThumbprint,
 } from '../auth/certificateMaterial';
+import { asContract } from '../auth/contractShape';
 import {
   loggedError,
   OK,
@@ -91,32 +92,6 @@ function copyMaterial(material: ICertificateMaterial): ICertificateMaterial {
     ...(key === undefined ? {} : { key }),
     ...(pfx === undefined ? {} : { pfx }),
     ...(passphrase === undefined ? {} : { passphrase }),
-  };
-}
-
-/** The fields of a token result, an optional one possibly without a value. */
-export interface TokenResultFields {
-  authorizationToken: string;
-  authType: OAuth2GrantType;
-  refreshToken?: string | undefined;
-  expiresIn?: number | undefined;
-  expiresAt?: number | undefined;
-  tokenType?: ITokenResult['tokenType'] | undefined;
-}
-
-/**
- * A token result carrying only the optional fields that have a value: one
- * without a value is left out, never set to `undefined`.
- */
-export function tokenResult(fields: TokenResultFields): ITokenResult {
-  const { refreshToken, expiresIn, expiresAt, tokenType } = fields;
-  return {
-    authorizationToken: fields.authorizationToken,
-    ...(refreshToken === undefined ? {} : { refreshToken }),
-    authType: fields.authType,
-    ...(expiresIn === undefined ? {} : { expiresIn }),
-    ...(expiresAt === undefined ? {} : { expiresAt }),
-    ...(tokenType === undefined ? {} : { tokenType }),
   };
 }
 
@@ -418,17 +393,16 @@ export abstract class BaseTokenProvider
           ? Math.floor((this.expiresAt - Date.now()) / 1000)
           : undefined,
       });
-      const { refreshToken, expiresAt } = this;
-      return {
+      return asContract<ITokenResult>({
         authorizationToken,
-        ...(refreshToken === undefined ? {} : { refreshToken }),
+        refreshToken: this.refreshToken,
         authType: this.getAuthType(),
         tokenType: this.tokenType ?? 'jwt',
-        ...(expiresAt === undefined ? {} : { expiresAt }),
-        ...(expiresAt
-          ? { expiresIn: Math.floor((expiresAt - Date.now()) / 1000) }
-          : {}),
-      };
+        expiresAt: this.expiresAt,
+        expiresIn: this.expiresAt
+          ? Math.floor((this.expiresAt - Date.now()) / 1000)
+          : undefined,
+      });
     }
 
     return this.refreshTokens();

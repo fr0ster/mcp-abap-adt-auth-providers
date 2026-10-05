@@ -6,6 +6,7 @@
  */
 
 import type {
+  AuthorizationRequest,
   IAuthorizationStrategy,
   ITokenResult,
   OAuth2GrantType,
@@ -17,6 +18,7 @@ import {
   exchangeCodeForToken,
   getJwtAuthorizationUrl,
 } from '../auth/browserAuth';
+import { asContract } from '../auth/contractShape';
 import { refreshJwtToken } from '../auth/tokenRefresher';
 import { ValidationError } from '../errors/TokenProviderErrors';
 import { browserCallbackStrategy } from '../strategies';
@@ -24,7 +26,6 @@ import {
   BaseTokenProvider,
   type ClientAuthenticationConfig,
   type TokenProviderHooks,
-  tokenResult,
 } from './BaseTokenProvider';
 
 export interface AuthorizationCodeProviderConfig
@@ -169,7 +170,7 @@ export class AuthorizationCodeProvider extends BaseTokenProvider {
     // produces no callback at all — checking the outcome would mean waiting for
     // a timeout that explains nothing.
     const request = {
-      ...(this.logger ? { logger: this.logger } : {}),
+      logger: this.logger,
       buildAuthorizationUrl: async (redirectUri: string): Promise<string> => {
         if (prebuilt) {
           if (declaredRedirect && declaredRedirect !== redirectUri) {
@@ -185,7 +186,9 @@ export class AuthorizationCodeProvider extends BaseTokenProvider {
 
     const strategy = this.config.authorization;
 
-    const outcome = await strategy.authorize(request);
+    const outcome = await strategy.authorize(
+      asContract<AuthorizationRequest>(request),
+    );
 
     // The second net. A strategy that never called the builder — `staticCodeStrategy`
     // holds its payload already — passed the first check by not participating in
@@ -209,7 +212,7 @@ export class AuthorizationCodeProvider extends BaseTokenProvider {
       await this.requestAuth(),
     );
 
-    return tokenResult({
+    return asContract<ITokenResult>({
       authorizationToken: result.accessToken,
       refreshToken: result.refreshToken,
       authType: AUTH_TYPE_AUTHORIZATION_CODE,
@@ -242,7 +245,7 @@ export class AuthorizationCodeProvider extends BaseTokenProvider {
 
     const expiresIn = this.calculateExpiresIn(result.accessToken);
 
-    return tokenResult({
+    return asContract<ITokenResult>({
       authorizationToken: result.accessToken,
       refreshToken: result.refreshToken || this.refreshToken, // Keep old if new not provided
       authType: AUTH_TYPE_AUTHORIZATION_CODE,
