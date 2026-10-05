@@ -23,10 +23,13 @@ renderer so the same words can be produced anywhere (the broker relays the
 error whole and copies no phrase).
 
 **Success:** every refusal and every thrown token error of
-`@mcp-abap-adt/auth-providers` is an `IAuthProviderError`; the broker relays
-them without copied phrases; a consumer that switches on `kind` without a
-`default` stops compiling when a kind is added; nothing about a refusal is
-discovered at run time that the compiler could have reported.
+`@mcp-abap-adt/auth-providers`, and every refusal a logon target returns, is
+an `IAuthProviderError`; the broker relays them without copied phrases; a
+consumer that handles kinds exhaustively — a `never` assertion in the
+`default`, or a handler map typed over every kind — stops compiling when it
+upgrades to a contract with a new kind (a switch without either is not
+checked by TypeScript, so the contract's guides require one); nothing about a
+refusal is discovered at run time that the compiler could have reported.
 
 ## Why
 
@@ -51,8 +54,15 @@ cover thrown classes only, not refusals.
    (`src/auth/contractShape.ts`), the one cast 5.4.1 kept for them.
 3. **`@mcp-abap-adt/auth-broker`** — relays the error; its copied certificate
    phrases go.
-4. **`@mcp-abap-adt/connection` and further consumers** — read `kind` where
-   they act on a refusal; each in its own change.
+4. **`@mcp-abap-adt/connection`** — its logon targets (`ILogonTarget`:
+   `header`, `cookies`, `logonParameters`, `tlsMaterial`) return an
+   `AuthOutcome` too, and a provider with no other way in returns the
+   target's Oops as its own (providers' rule 4: `CertificateAuthProvider`,
+   `SncLogonProvider`). A target is a producer of refusals, not only a reader:
+   its refusals are `IAuthProviderError`s of the same contract, built through
+   the same exported means, and connection reads `kind` where it acts on one.
+5. **Further consumers** (the server `mcp-abap-adt`) — read `kind` where they
+   act on a refusal; each in its own change.
 
 ## Holds throughout
 
@@ -74,12 +84,18 @@ cover thrown classes only, not refusals.
      type), so a kind without words does not compile;
    - an `IAuthProviderError` cannot be assembled by hand where the contract
      expects one minted by the renderer (a type-only brand);
-   - a method body outside the `safely` boundary does not compile (an
-     internal brand on its result);
+   - rule 1 (no exception crosses the contract) is held structurally, not by
+     a type: TypeScript does not track what a function throws, so a brand on
+     a result proves only where the result came from. The four methods are
+     owned by one place that runs each body inside `safely` (a base or
+     wrapper the providers cannot bypass), a lint rule refuses another
+     shape, and runtime tests throw from every collaborator;
    - type tests (`@ts-expect-error`, part of `test:check`) prove each static
      rule is load-bearing, as runtime tests do for runtime rules.
-5. **The union is closed; a new kind is a major of `interfaces-auth`.** That
-   is what turns an upgrade into a build error instead of a runtime surprise.
+5. **The union is closed; a new kind is a major of `interfaces-auth`.**
+   With consumers handling kinds exhaustively (see Success), that is what
+   turns an upgrade into a build error instead of a runtime surprise; an
+   installed consumer is not changed by a release, only by its own upgrade.
 6. **The consumer composes.** Text is the consumer's choice: the shipped
    renderer is a default it may replace, never something a provider forces.
 
@@ -111,6 +127,16 @@ surfaces only when Jest runs), and the stricter compiler options
 3. How `getTokens()` / `refreshTokens()` carry the error: a thrown class that
    holds an `IAuthProviderError`, or the existing classes extended.
 4. The transition for consumers reading `IAuthRefusal` today.
+5. **A diagnostic compatibility matrix**, a release gate: every message a user
+   sees today — each refusal, each `loggedError` line, each thrown message
+   (`TokenEndpointError`'s redacted OAuth summary, `CallbackScopeError`'s
+   timeout / port in use / abort, each SAML validator sub-rule and its listed
+   candidates, each SNC library candidate and GSS classification) and the
+   README refusal table — mapped to its kind and facts, with every loss of
+   information named and approved, and the README, guides and migration notes
+   updated before release.
+6. How a logon target (connection) builds its refusals, and how a provider
+   relays one under rule 4.
 
 ## Path
 
@@ -148,6 +174,11 @@ against it, published.
 **The error contract appears** for consumers at step 6 (auth-providers
 release) and is used end to end at step 8 (broker release).
 
-**After** — each its own task: `@mcp-abap-adt/connection` and the server
-`mcp-abap-adt` read `kind` where they act on a refusal; the server's version
-bump also takes the x509 and strict-compiler releases.
+`@mcp-abap-adt/connection` comes between steps 5 and 6 in dependency terms:
+its logon targets produce refusals, so it moves to the new interfaces-auth
+major (its own PR, released) before a provider relays a target's refusal
+under the new contract.
+
+**After** — its own task: the server `mcp-abap-adt` reads `kind` where it
+acts on a refusal; its version bump also takes the x509 and strict-compiler
+releases.
