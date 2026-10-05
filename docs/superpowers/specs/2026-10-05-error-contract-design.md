@@ -845,8 +845,14 @@ the user 2026-10-05:
   is a registered code — the same facts `logFields` may carry, no server
   text, no secret — guarded (a throwing logger is swallowed), none without a
   logger, none for the device poll's `authorization_pending` / `slow_down`.
-  It is written whatever `authDebug` says. A 2xx without a token
-  (`rejectMissingToken`) gets no default line, as in 5.4.2.
+  It is written whatever `authDebug` says. **A 2xx without a token**
+  (`rejectMissingToken`) also gets one guarded default line of the same safe
+  facts (status, registered `error`): at the UAA code exchange it is 5.4.2's
+  own line, kept verbatim at its `error` level (`Token exchange failed:
+  status <n>, error: "<code>"` / `no error given`, `browserAuth.ts:148-161`
+  at 5.4.2); at every other 2xx-without-token site, which logs nothing in
+  5.4.2, it is a new `debug` line — an addition, not a change. The site
+  passes the level to `rejectMissingToken`.
 - **`authDebug: true`, an explicit consumer option.** Only with it is the
   safe-facts line extended into the debug line below — the same status and
   registered `error` plus the server's text, with every secret
@@ -1032,12 +1038,14 @@ export function rejectMissingToken(
 It joins exactly the secrets `sendTokenRequest` joins — `site.secrets`,
 `site.basic?.secrets`, `prepared?.secrets` — through the same private join
 function (one function, two callers, so the two cannot drift), reduces the
-body and writes one `debug` line through `site.logger` — **only when
-`site.authDebug` is true**, previewing secrets as above, inside a `try` that
-swallows a throwing logger — and throws `request-failed` with the status and
-the problem. The code exchange's `error`-level line (`browserAuth.ts:150-157`)
-goes: by default nothing of a 2xx body is logged; with `authDebug`, the debug
-line; nothing of the body enters the failure either way.
+body only with `authDebug`, and writes one line through `site.logger` at the
+level its site passes (`'error'` at the UAA code exchange, as 5.4.2;
+`'debug'` elsewhere), inside a `try` that swallows a throwing logger: by
+default the safe facts only (status, registered `error`) — at the code
+exchange 5.4.2's line verbatim —, with `authDebug` the same facts plus the
+previewed `error_description` / `error_uri`; then it throws `request-failed`
+with the status and the problem. Nothing of the body enters the failure
+either way.
 
 **Header-echo tests** (one per site that builds a legacy Basic header, on the
 path without a strategy: the SAML exchange, the SAML refresh, the OIDC token
@@ -1046,7 +1054,8 @@ refresh, the passcode exchange): the server answers `400` with
 `error_description` and `error_uri` echoing the request's `Authorization`
 header whole, its base64 credential alone, the base64 URL-encoded and
 form-encoded, and the decoded `id:secret` — with `authDebug` the debug line
-carries each only as its preview, without it there is no line, and no
+carries each only as its preview, without it only the safe-facts line
+(status and registered `error`, no form of the credential), and no
 rendering of the failure carries any; the same with a client id
 containing `:` and a secret containing `+`, `%` and `/`. The same echoes in
 a **`200` without `access_token`** (and, for the device initiation, a `200`
@@ -1054,7 +1063,10 @@ without its required fields) for every site with such a branch — the UAA
 code exchange, the passcode exchange, the OIDC token request and password
 grant, the SAML exchange and refresh, client credentials, the UAA refresh,
 the device initiation — without a strategy and with each strategy: without
-`authDebug` no line; with it one debug line, every form of the Basic
+`authDebug` only the safe-facts line at the site's level (5.4.2's `error`
+line verbatim at the UAA code exchange — a regression test pins it against
+5.4.2's output for the same response, with and without a registered
+`error`); with it one line at that level, every form of the Basic
 credential, the grant's and the strategy's secrets previewed and none whole,
 in it or in the failure; no logger, no line; a throwing logger, the same
 failure. Load-bearing: passing `secrets` without `basic`, in either
@@ -2604,7 +2616,7 @@ diagnostics? }`):
 | H7 | `BrowserCallbackStrategy.ts:186-193` | `Failed to open browser: <words>. Open manually: <url>` + `{ error, url }` | unchanged: the URL is the strategy's own announcement, not an error's text |
 | H8 | `browserAuth.ts:217-220`, `:298-302` | `Could not open browser automatically: <words>` / `Failed to open browser: <words>. Please open manually: <url>` | same as H7 |
 | H9 | `tokenRequest.ts:393` | words inside `TokenEndpointError`'s message | gone with the class (D2) |
-| H10 | `sendTokenRequest` and `rejectMissingToken`, for every token site (§6) | 5.4.2's safe-facts line (`logRefusedRequest`); the code exchange's `error`-level 2xx body line (`browserAuth.ts:150-157`) | **by default**: for a failed request with a response, one `debug` line with the HTTP status and the registered `error` only (5.4.2's line, kept; none for `authorization_pending` / `slow_down`, none without a logger, a throwing logger swallowed); **with `authDebug: true`** instead one `debug` line per failed request or token-less 2xx with those facts plus `error_description` and `error_uri`, every secret previewed (≤ 4 + 4 characters, `<redacted, N chars>`; under 16 characters the length only); the code exchange's `error`-level line goes; never in the failure |
+| H10 | `sendTokenRequest` and `rejectMissingToken`, for every token site (§6) | 5.4.2's safe-facts line for a refused request (`logRefusedRequest`, `debug`) and for the code exchange's 2xx without `access_token` (`browserAuth.ts:148-161`, `error`) | **by default**: for a failed request with a response, one `debug` line with the HTTP status and the registered `error` only (none for `authorization_pending` / `slow_down`); for a 2xx without a token, one line of the same safe facts — 5.4.2's `error`-level line verbatim at the code exchange, a new `debug` line at every other such site (an addition); none without a logger, a throwing logger swallowed; **with `authDebug: true`** the same line, at the same level, adds `error_description` and `error_uri` with every secret previewed (≤ 4 + 4 characters, `<redacted, N chars>`; under 16 characters the length only); never in the failure |
 
 ### A.9 connection
 
