@@ -114,8 +114,40 @@ surfaces only when Jest runs), and the stricter compiler options
 
 ## Path
 
-1. The compiler change above: its own PR in auth-providers, after PR #66.
-2. This goal → spec → plan, each reviewed in this PR.
-3. interfaces-auth: its own PR, released first.
-4. auth-providers implementation in this PR, against the published
-   interfaces; then the broker; merge and release on the user's word.
+Order, not dates. Each step is one PR in its repository (one open PR per
+repository at a time) and ends with a review; a step starts only when the one
+before it that it depends on is merged — and, where a later repository builds
+against it, published.
+
+**Groundwork — done or in review**
+1. Strict compiler: auth-providers 5.4.1 (published), interfaces 4.0.0 /
+   3.0.0 / 2.0.0 / 13.0.0 (published), auth-stores (PR open, unreleased),
+   auth-broker + CLI (next, unreleased).
+
+**The error contract — this PR, in auth-providers**
+2. This goal, reviewed and approved.
+3. The spec, reviewed and approved: the kinds and their facts, built from
+   every refusal the providers produce today; the renderer; how thrown token
+   errors carry the error; the transition for readers of `IAuthRefusal`.
+4. The plan, reviewed and approved: steps, order, decisions.
+
+**Implementation, in dependency order**
+5. `@mcp-abap-adt/interfaces-auth` — the error contract's types and
+   constants (a major: `IAuthRefusal` changes). Its own PR, released first.
+6. `@mcp-abap-adt/auth-providers` — in this PR, against the published
+   interfaces: classification, renderer, every refusal and thrown token error
+   through them, type tests for the static rules, `asContract` deleted.
+   Released.
+7. `@mcp-abap-adt/auth-stores` — moves to the new interfaces majors and
+   deletes its `asContract`; released together with its unreleased
+   strict-compiler change.
+8. `@mcp-abap-adt/auth-broker` + CLI — relay the error, drop the copied
+   certificate phrases; released together with their unreleased
+   strict-compiler change.
+
+**The error contract appears** for consumers at step 6 (auth-providers
+release) and is used end to end at step 8 (broker release).
+
+**After** — each its own task: `@mcp-abap-adt/connection` and the server
+`mcp-abap-adt` read `kind` where they act on a refusal; the server's version
+bump also takes the x509 and strict-compiler releases.
