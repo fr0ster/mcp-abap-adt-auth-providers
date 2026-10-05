@@ -145,7 +145,7 @@ present only when known; the builder omits the key otherwise (no
 | `request-failed` | `operation: Operation`, `grant?: OAuth2GrantType`, `problem: RequestProblem`, `status?: HttpStatus`, `oauthError?: OAuthErrorCode`, `code?: SystemCode` |
 | `tls` | `operation: Operation`, `grant?: OAuth2GrantType`, `code: TlsFailureCode` |
 | `interactive-login` | discriminated by `outcome: InteractiveOutcome` — `port-in-use`: `port: Port`; `aborted`: `ignoredCallbacks?: Count`; `disposed`: `strategy: 'browser' \| 'manual'`; `identity-provider-refused`: `oauthError?: OAuthErrorCode`; `browser-launch-failed`: `code?: SystemCode`; `failed`: `code?: SystemCode`, `status?: HttpStatus`; every other outcome: none |
-| `saml-assertion` | per rule, a discriminated union: `rule: AssertionRule`, `check: CheckOf<rule>` (fixed by the rule), `count?: Count` (rules that say "carries N"), `statusCode?: SamlStatusCode` (rule `declined`), `candidates?: readonly BearerCandidate[]` (≤ 5) and `moreCandidates?: Count` (rule `no-bearer-qualifies`) |
+| `saml-assertion` | per rule, a discriminated union: `rule: AssertionRule`, `check: CheckOf<rule>` (fixed by the rule), `count?: Count` (rules that say "carries N"), `statusCode?: SamlStatusCode` (rule `declined`), `candidates?: readonly BearerCandidate[]` (≤ 5) and `moreCandidates?: Count` (rule `no-bearer-qualifies`; the builder cuts candidates beyond 5 and adds their number to `moreCandidates`) |
 | `snc` | per problem, a discriminated union (`SncFactsOf<P>`, below): only the fields each problem carries (§A.7) |
 | `credential-refused` | `credential: CredentialKind`, `at?: 'logon' \| 'request'` |
 | `system-refused` | discriminated by `verdict`: `'not-authorized'` / `'redirected'` / `'system-failed'` / `'other-status'` with `status: HttpStatus`; `'rfc-failure'` with `rfcKey: RfcKey`; `'unknown'`; each with `at: 'logon' \| 'request'` |
@@ -1896,6 +1896,10 @@ plugins do not have). It refuses, in `src/` outside tests:
    `IAuthProviderFailure` or a branded integer, except at the sites named in
    the repository's `tools/assertion-sites.json` — `auth-errors`' `mint` and
    its three integer makers (§4.3); every other repository's list is empty;
+   and an overload signature whose return type is or contains
+   `IAuthProviderError` or `AuthOutcome`, outside `builders.ts` and `mint.ts`
+   of `auth-errors` (an overload is a cast in disguise: its implementation's
+   wider return is not checked against it);
 5. a spread or `Object.assign` whose source is typed `IAuthProviderError` (a
    spread keeps the brand and would let `{ ...minted, reason }` compile);
 6. a builder call (`authError.<kind>(facts, diagnostics)`) passing a
@@ -2622,8 +2626,8 @@ today's string exactly, pinned by a test; "→ Cn" points to Appendix C.
 | A5 | `refusal.ts:270-274`, `ClientAuthenticationError.ts:26-29` | `the client authentication returned a request that cannot be sent` / `check the client authentication strategy` | `client-authentication` | `problem: result-unsendable` | — | verbatim |
 | A6 | `refusal.ts:276-278`, `ClientAuthenticationError.ts:5-8` | `the client signing key could not be used` / hint | `client-authentication` | `problem: signing-key-unusable` | — | verbatim |
 | A7 | `refusal.ts:279-281`, `ClientAuthenticationError.ts:50-53` | `the client id contains ':', which raw Basic cannot carry` / hint | `client-authentication` | `problem: basic-client-id-colon` | — | verbatim |
-| A8 | `refusal.ts:282-291` | `the identity provider refused the login (<code>)` / `check the identity provider: the user, the client and the scopes it allows` | `interactive-login` | `outcome: identity-provider-refused`, `oauthError?` | — | verbatim |
-| A9 | `refusal.ts:292-295` | `the interactive login did not complete` / `complete the login within the strategy's time` | `interactive-login` | `outcome` (A.3), its facts | — | reason names the outcome (K1–K17's words); the old sentence stays for `outcome: failed`, its hint becomes `complete the login, or abort it` (no strategy time exists, §6a) — more information |
+| A8 | `refusal.ts:282-291` | `the identity provider refused the login (<code>)` / `check the identity provider: the user, the client and the scopes it allows` | `interactive-login` | `outcome: identity-provider-refused`, `oauthError?` | — | verbatim with a registered code; without one, K10's form `the identity provider refused the login (an unregistered error code)` |
+| A9 | `refusal.ts:292-295` | `the interactive login did not complete` / `complete the login within the strategy's time` | `interactive-login` | `outcome` (A.3), its facts | — | reason names the outcome (K1–K17's words); `outcome: failed` renders K11's reason verbatim with A9's new hint `complete the login, or abort it` (no strategy time exists, §6a); A9's old sentence `the interactive login did not complete` goes — more information |
 | A10 | `refusal.ts:297-298` | `the refresh token was refused` / `log in again` | `credential-refused` | `credential: refresh-token` | — | verbatim |
 | A11 | `refusal.ts:300-305` | `the provider configuration is incomplete or invalid[: <fields>]` / `check the provider configuration` | `configuration` | `case`, `fields`, `allowed?` | mismatch URIs | per-case words (A.5); fields kept |
 | A12 | `refusal.ts:306-311` | `the service key or session data is incomplete[: <fields>]` | — | — | — | no producer in this package (README `:2062`); removed with the classes |
@@ -2669,7 +2673,7 @@ today's string exactly, pinned by a test; "→ Cn" points to Appendix C.
 | K8 | `callbackServer.ts:148-150`, `:273` | `Callback server closed before a result arrived` / `Callback server scope has ended` | `interactive-login` | `outcome: callback-closed` | — | one sentence |
 | K9 | `callbackServer.ts:249-262` | `Authentication timeout after <s> seconds. Please try again.[ <k> incomplete request(s) reached /callback and were ignored.]` | — | — | — | gone: no built-in timeout (§6a); a consumer's `AbortSignal.timeout` ends `aborted` (K4), which keeps the ignored-request count → L14 |
 | K10 | `callbackScopeError.ts:139-151` | `the identity provider refused the login (<code>\|an unregistered error code)` | `interactive-login` | `outcome: identity-provider-refused`, `oauthError?` | — | verbatim |
-| K11 | `BrowserCallbackStrategy.ts:77-82`, `:224-230` | `BrowserAuthError` with `the browser login failed (unknown error[, <code>])[ (HTTP <n>)]`, original as `cause` | `interactive-login` | `outcome: failed`, `code?`, `status?` | — | verbatim; `cause` lost → L2 |
+| K11 | `BrowserCallbackStrategy.ts:77-82`, `:224-230` | `BrowserAuthError` with `the browser login failed (HTTP <n>[, <code>])` (and, with no status, `the browser login failed (unknown error[, <code>])`), original as `cause` | `interactive-login` | `outcome: failed`, `code?`, `status?` | — | verbatim; `cause` lost → L2 |
 | K12 | `manualStrategies.ts:50-52` | `the manual input was abandoned before it began` | `interactive-login` | `outcome: input-abandoned` | — | verbatim |
 | K13 | `manualStrategies.ts:55-57` | `Manual input needs an interactive terminal. Supply \`read\` to source the value elsewhere.` | `interactive-login` | `outcome: no-terminal` | — | verbatim |
 | K14 | `manualStrategies.ts:69`, `:172`, `:193`, `codeStrategies.ts:42` | `No input received` / `No SAMLResponse was provided` / `No passcode was provided` / `Authorization code provider returned an empty value` | `interactive-login` | `outcome: no-input` | — | `no input was received`; which input lost (minor) |
