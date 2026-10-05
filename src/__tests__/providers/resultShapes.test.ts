@@ -9,15 +9,25 @@
 import { join } from 'node:path';
 import { beforeEach, describe, expect, it, jest } from '@jest/globals';
 import type {
+  AssertionContext,
   AuthorizationRequest,
   CallbackServerFactory,
+  IAssertionValidator,
   IAuthorizationStrategy,
   ICallbackServerOptions,
+  ITokenResult,
 } from '@mcp-abap-adt/interfaces-auth';
 import type { ISapConfig } from '@mcp-abap-adt/interfaces-auth-sap';
 import axios from 'axios';
 import { FileCertificateMaterialLoader } from '../../credentials/FileCertificateMaterialLoader';
+import { AuthorizationCodeProvider } from '../../providers/AuthorizationCodeProvider';
 import { ClientCredentialsProvider } from '../../providers/ClientCredentialsProvider';
+import { OidcBrowserProvider } from '../../providers/OidcBrowserProvider';
+import { OidcDeviceFlowProvider } from '../../providers/OidcDeviceFlowProvider';
+import { OidcPasswordProvider } from '../../providers/OidcPasswordProvider';
+import { OidcTokenExchangeProvider } from '../../providers/OidcTokenExchangeProvider';
+import { Saml2BearerProvider } from '../../providers/Saml2BearerProvider';
+import { Saml2PureProvider } from '../../providers/Saml2PureProvider';
 import { UaaPasscodeProvider } from '../../providers/UaaPasscodeProvider';
 import { BrowserCallbackStrategy } from '../../strategies/BrowserCallbackStrategy';
 
@@ -38,11 +48,290 @@ function jwt(): string {
   return `${part({ alg: 'none' })}.${part({ exp: Math.floor(Date.now() / 1000) + 3600 })}.`;
 }
 
+/** A token endpoint that answers every grant without a refresh token. */
+function answerWithoutRefreshToken(): void {
+  const reply = async (url: unknown) =>
+    String(url).includes('/device')
+      ? {
+          data: {
+            device_code: 'dc',
+            user_code: 'UC',
+            verification_uri: 'https://idp.example/activate',
+            interval: 0,
+          },
+        }
+      : { data: { access_token: jwt(), expires_in: 3600 } };
+  mockedAxios.mockImplementation(async (config: { url?: unknown }) =>
+    reply(config.url),
+  );
+  mockedAxios.post.mockImplementation(async (url: unknown) => reply(url));
+}
+
 beforeEach(() => {
   jest.resetAllMocks();
+  answerWithoutRefreshToken();
 });
 
-describe('token result', () => {
+const SAML_PAYLOAD = Buffer.from(
+  '<samlp:Response xmlns:samlp="urn:oasis:names:tc:SAML:2.0:protocol" ID="_r">' +
+    '<samlp:Status><samlp:StatusCode Value="urn:oasis:names:tc:SAML:2.0:status:Success"/></samlp:Status>' +
+    '<saml2:Assertion xmlns:saml2="urn:oasis:names:tc:SAML:2.0:assertion" ID="_a"><saml2:Issuer>idp</saml2:Issuer></saml2:Assertion>' +
+    '</samlp:Response>',
+  'utf8',
+).toString('base64');
+
+/** Accepts every payload and records the context it was given. */
+function recordingValidator(contexts: AssertionContext[]): IAssertionValidator {
+  return {
+    async validate(payload, context) {
+      contexts.push(context);
+      return {
+        expiresAt: new Date(Date.now() + 3600_000),
+        assertionId: '_stub',
+        issuer: 'urn:stub:idp',
+        raw: payload,
+        signedXml: payload,
+      };
+    },
+  };
+}
+
+/** A strategy answering `payload` at once, recording the request. */
+function answering<T>(
+  payload: T,
+  seen: AuthorizationRequest[] = [],
+): IAuthorizationStrategy<T> {
+  return {
+    authorize: async (request) => {
+      seen.push(request);
+      return { payload, redirectUri: 'http://localhost:61001/callback' };
+    },
+  };
+}
+
+/** The protected moments, reached the way the base class reaches them. */
+interface Moments {
+  performLogin(): Promise<ITokenResult>;
+  performRefresh(): Promise<ITokenResult>;
+}
+const moments = (provider: unknown) => provider as Moments;
+
+const sorted = (keys: string[]) => [...keys].sort();
+const OAUTH = sorted([
+  'authorizationToken',
+  'refreshToken',
+  'authType',
+  'expiresIn',
+]);
+const OIDC = sorted([...OAUTH, 'tokenType']);
+
+// The keys each provider's result carried in 5.4.0, `undefined` values
+// included. `seeded` builds it with a refresh token, for the refresh row.
+const providers: [
+  string,
+  (seeded: boolean, seen?: AuthorizationRequest[]) => unknown,
+  string[],
+  string[] | null,
+][] = [
+  [
+    'AuthorizationCodeProvider',
+    (seeded, seen) =>
+      new AuthorizationCodeProvider({
+        uaaUrl: 'https://uaa.example',
+        clientId: 'cid',
+        clientSecret: 's',
+        authorization: answering('the-code', seen),
+        ...(seeded ? { refreshToken: 'rt' } : {}),
+      }),
+    OAUTH,
+    OAUTH,
+  ],
+  [
+    'ClientCredentialsProvider',
+    () =>
+      new ClientCredentialsProvider({
+        uaaUrl: 'https://uaa.example',
+        clientId: 'cid',
+        clientSecret: 's',
+      }),
+    OAUTH,
+    null,
+  ],
+  [
+    'OidcBrowserProvider',
+    (seeded, seen) =>
+      new OidcBrowserProvider({
+        clientId: 'cid',
+        tokenEndpoint: 'https://idp.example/token',
+        authorizationEndpoint: 'https://idp.example/auth',
+        authorization: answering({ code: 'the-code' }, seen),
+        ...(seeded ? { refreshToken: 'rt' } : {}),
+      }),
+    OIDC,
+    OIDC,
+  ],
+  [
+    'OidcDeviceFlowProvider',
+    (seeded) =>
+      new OidcDeviceFlowProvider({
+        clientId: 'cid',
+        tokenEndpoint: 'https://idp.example/token',
+        deviceAuthorizationEndpoint: 'https://idp.example/device',
+        presenter: { present: async () => {} },
+        ...(seeded ? { refreshToken: 'rt' } : {}),
+      }),
+    OIDC,
+    OIDC,
+  ],
+  [
+    'OidcPasswordProvider',
+    (seeded) =>
+      new OidcPasswordProvider({
+        clientId: 'cid',
+        tokenEndpoint: 'https://idp.example/token',
+        username: 'u',
+        password: 'p',
+        ...(seeded ? { refreshToken: 'rt' } : {}),
+      }),
+    OIDC,
+    OIDC,
+  ],
+  [
+    'OidcTokenExchangeProvider',
+    () =>
+      new OidcTokenExchangeProvider({
+        clientId: 'cid',
+        tokenEndpoint: 'https://idp.example/token',
+        subjectToken: 'subject',
+        subjectTokenType: 'urn:ietf:params:oauth:token-type:access_token',
+      }),
+    OIDC,
+    null,
+  ],
+  [
+    'Saml2BearerProvider',
+    (seeded, seen) =>
+      new Saml2BearerProvider({
+        idpSsoUrl: 'https://idp.example/sso',
+        spEntityId: 'sp-entity',
+        uaaUrl: 'https://uaa.example',
+        clientId: 'cid',
+        idpInitiated: true,
+        authorization: answering(SAML_PAYLOAD, seen),
+        assertionValidator: recordingValidator([]),
+        ...(seeded ? { refreshToken: 'rt' } : {}),
+      }),
+    OIDC,
+    OIDC,
+  ],
+  [
+    'Saml2PureProvider',
+    (_seeded, seen) =>
+      new Saml2PureProvider({
+        idpSsoUrl: 'https://idp.example/sso',
+        spEntityId: 'sp-entity',
+        idpInitiated: true,
+        authorization: answering(SAML_PAYLOAD, seen),
+        assertionValidator: recordingValidator([]),
+        cookieProvider: async () => 'SAP_SESSIONID=x',
+      }),
+    sorted(['authorizationToken', 'authType', 'tokenType', 'expiresAt']),
+    null,
+  ],
+  [
+    'UaaPasscodeProvider',
+    (seeded, seen) =>
+      new UaaPasscodeProvider({
+        uaaUrl: 'https://uaa.example',
+        clientId: 'cf',
+        clientSecret: 's',
+        authorization: answering('passcode', seen),
+        ...(seeded ? { refreshToken: 'rt' } : {}),
+      }),
+    OIDC,
+    OIDC,
+  ],
+];
+
+describe.each(providers)(
+  '%s result',
+  (_name, build, loginKeys, refreshKeys) => {
+    it('login: the keys of 5.4.0, an absent value present as undefined', async () => {
+      const result = await moments(build(false)).performLogin();
+      expect(sorted(Object.keys(result))).toEqual(loginKeys);
+    });
+
+    if (refreshKeys) {
+      it('refresh: the keys of 5.4.0', async () => {
+        const result = await moments(build(true)).performRefresh();
+        expect(sorted(Object.keys(result))).toEqual(refreshKeys);
+      });
+    }
+  },
+);
+
+describe.each(
+  providers.filter(([name]) =>
+    [
+      'AuthorizationCodeProvider',
+      'OidcBrowserProvider',
+      'Saml2BearerProvider',
+      'Saml2PureProvider',
+      'UaaPasscodeProvider',
+    ].includes(name),
+  ),
+)('%s: the request its strategy gets', (_name, build) => {
+  it('carries logger as an own key, undefined, without a logger', async () => {
+    const seen: AuthorizationRequest[] = [];
+    await moments(build(false, seen)).performLogin();
+    expect(seen).toHaveLength(1);
+    expect(Object.hasOwn(seen[0]!, 'logger')).toBe(true);
+    expect(seen[0]!.logger).toBeUndefined();
+  });
+});
+
+describe.each([
+  [
+    'Saml2BearerProvider',
+    (validator: IAssertionValidator) =>
+      new Saml2BearerProvider({
+        idpSsoUrl: 'https://idp.example/sso',
+        spEntityId: 'sp-entity',
+        uaaUrl: 'https://uaa.example',
+        clientId: 'cid',
+        idpInitiated: true,
+        authorization: answering(SAML_PAYLOAD),
+        assertionValidator: validator,
+      }),
+  ],
+  [
+    'Saml2PureProvider',
+    (validator: IAssertionValidator) =>
+      new Saml2PureProvider({
+        idpSsoUrl: 'https://idp.example/sso',
+        spEntityId: 'sp-entity',
+        idpInitiated: true,
+        authorization: answering(SAML_PAYLOAD),
+        assertionValidator: validator,
+        cookieProvider: async () => 'SAP_SESSIONID=x',
+      }),
+  ],
+])('%s: the assertion context', (_name, build) => {
+  it('IdP-initiated, no idpEntityId, no logger: each an own key, undefined', async () => {
+    const contexts: AssertionContext[] = [];
+    await moments(build(recordingValidator(contexts))).performLogin();
+    expect(contexts).toHaveLength(1);
+    const [context] = contexts;
+    for (const key of ['expectedInResponseTo', 'expectedIssuer', 'logger']) {
+      expect(Object.hasOwn(context!, key)).toBe(true);
+    }
+    expect(context!.expectedInResponseTo).toBeUndefined();
+    expect(context!.expectedIssuer).toBeUndefined();
+    expect(context!.logger).toBeUndefined();
+  });
+});
+
+describe('token result, through getTokens()', () => {
   it('carries refreshToken as an own key, undefined, when the grant gives none — login and cache alike', async () => {
     const reply = { data: { access_token: jwt(), expires_in: 3600 } };
     mockedAxios.mockResolvedValue(reply);
@@ -64,7 +353,7 @@ describe('token result', () => {
   });
 });
 
-describe('the request a strategy gets', () => {
+describe('the request a strategy gets, through getTokens()', () => {
   it('carries logger as an own key, undefined, when the provider has none', async () => {
     mockedAxios.mockResolvedValue({ data: { access_token: jwt() } });
     mockedAxios.post.mockResolvedValue({ data: { access_token: jwt() } });
@@ -120,6 +409,17 @@ describe('FileCertificateMaterialLoader', () => {
       certKeyPath: join(dir, 'client.key'),
     } as ISapConfig);
     expect(Object.hasOwn(material, 'passphrase')).toBe(true);
+    expect(material.passphrase).toBeUndefined();
+  });
+
+  it('returns a PFX with passphrase as an own key, undefined, when none is configured', async () => {
+    const dir = join(__dirname, '..', 'fixtures', 'certificates');
+    const material = await new FileCertificateMaterialLoader().load({
+      url: 'https://h',
+      authType: 'certificate',
+      certPfxPath: join(dir, 'client.pfx'),
+    } as ISapConfig);
+    expect(sorted(Object.keys(material))).toEqual(['passphrase', 'pfx']);
     expect(material.passphrase).toBeUndefined();
   });
 });

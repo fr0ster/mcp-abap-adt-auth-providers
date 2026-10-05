@@ -626,6 +626,8 @@ describe("the signed-Response validator (Saml2PureProvider's default)", () => {
     );
     const result = await validator().validate(encode(xml), context);
     expect(result.nameId).toBeUndefined();
+    // Present as a key, as in 5.4.0: a consumer may merge the result.
+    expect(Object.hasOwn(result, 'nameId')).toBe(true);
   });
 
   it('reports no nameId when the Subject carries two', async () => {
