@@ -1104,6 +1104,51 @@ reading `diagnostic` fields without `authDebug` turns the read-count case
 red; handing the site the raw response instead of the snapshot turns the
 hostile cases red.
 
+**OIDC discovery has its own snapshot, not `sendTokenRequest`'s.** Discovery
+is not a token request: a GET for public metadata, no secret, the one request
+that follows redirects, and its answer is not a token response — so
+`ANSWER_FIELDS` cannot serve it. At 5.4.2's head (`5bfa9e4`) `discoverOidc`
+(`oidcDiscovery.ts:48-93`) sends `axios.get` itself, replaces any rejection
+with `withoutRequest`'s safe error, copies the document with
+`JSON.parse(JSON.stringify(…))` and requires `token_endpoint`. 6.0.0 keeps
+that path out of `sendTokenRequest` and replaces the whole-document copy with
+a **discovery snapshot** built only from the fields the providers read
+(checked 2026-10-05: `OidcBrowserProvider`, `OidcDeviceFlowProvider`,
+`OidcPasswordProvider`, `OidcTokenExchangeProvider`, `mtlsAlias`):
+
+- `DISCOVERY_FIELDS`: `authorization_endpoint`, `token_endpoint`,
+  `device_authorization_endpoint`, each read through `readSafely` and kept
+  only when it is a non-empty string;
+- `mtls_endpoint_aliases`, read through `readSafely`, rebuilt as a plain
+  object holding only its `token_endpoint` and `device_authorization_endpoint`
+  when each is a non-empty string (no other key, never the foreign object);
+- nothing else: `issuer`, `jwks_uri` and `end_session_endpoint`, declared in
+  `OidcDiscoveryDocument` today but read by no code, leave the internal type
+  (it is not exported).
+
+The snapshot is what the discovery cache holds and what the providers and
+`mtlsAlias` read. Failures are classified like a token request's (operation
+`oidc-discovery`): a transport rejection becomes `tls` or `request-failed`
+(`refused` with the status, `no-response` with an allowlisted code); a
+document without `token_endpoint`, or a snapshot that throws past
+`readSafely`, becomes `request-failed` `incomplete-response` (D6) with the
+operation only — no foreign value, no cause. Discovery carries the
+attempt's signal (it is cut by an abort like any non-refresh request); an
+aborted or failed discovery is not cached. As in 5.4.2 it writes no
+failure line (its `[OIDC] Fetching discovery document` info line stays).
+
+Tests: a successful discovery → the snapshot holds the three endpoints and
+the aliases, and a provider uses them; mTLS alias resolution — a token and a
+device alias used, an alias that is not a string, an empty one, an
+`mtls_endpoint_aliases` that is not an object, each ignored; an extra field
+carrying a marker is absent from the snapshot and the cache; hostile
+documents — a Proxy whose traps throw, getters on `token_endpoint` and on
+`mtls_endpoint_aliases` that throw or return a marker, a throwing `toJSON` —
+→ `request-failed` `incomplete-response`, no marker anywhere, nothing cached;
+an aborted discovery → its request's signal aborted, nothing cached, the next
+call fetches again. Load-bearing: copying the whole document again turns the
+extra-field case red.
+
 It joins exactly the secrets `sendTokenRequest` joins — `site.secrets`,
 `site.basic?.secrets`, `prepared?.secrets` — through the same private join
 function (one function, two callers, so the two cannot drift), reduces the
@@ -1422,9 +1467,10 @@ signal (or none). The rule, wherever an attempt is shared:
   it holds no local resource, and a server that never answers must not
   block the next login. Every token request an attempt sends **except a
   refresh** — device initiation and every device poll, the passcode
-  exchange, the code exchange, the SAML exchange, the OIDC token request,
-  OIDC discovery — carries the attempt's signal (`TokenRequestSite.signal`,
-  passed by `sendTokenRequest` to axios as `signal` on both paths), so an
+  exchange, the code exchange, the SAML exchange, the OIDC token request —
+  carries the attempt's signal (`TokenRequestSite.signal`, passed by
+  `sendTokenRequest` to axios as `signal` on both paths), and so does OIDC
+  discovery on its own path (§6, the discovery snapshot), so an
   aborted attempt cuts what it has outstanding, and any response that still
   arrives is discarded by the commit rule above. A refresh request
   (`TokenRequestSite.signal` absent by construction at every refresh site:
