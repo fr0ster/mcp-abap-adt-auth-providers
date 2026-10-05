@@ -488,9 +488,14 @@ released after 5.0.0 and before `auth-errors` 1.0.0, which depends on
 table from the `AUTH_TYPE_*` constants. The siblings (`interfaces-auth-sap`
 and the others) widen their ranges in the interfaces PR #125; their exact
 versions are decided there by the rule PR #123 established. Words: `aborted`
-with `strategy: 'browser'` or no strategy → `the browser login was aborted`
-(K4) plus the ignored-callbacks clause; with `strategy: 'manual'` → `the
-manual login was aborted`, no clause. `failed` → K11 with the registered code
+with `strategy: 'browser'` → `the browser login was aborted` (K4) plus the
+ignored-callbacks clause; with `strategy: 'manual'` → `the manual login was
+aborted`, no clause; with no strategy → `the authorization was aborted` plus
+the clause when present — a waiter's abort of a shared attempt (§6b: a
+renewal, a pin, a broker build) carries no strategy, and is not a browser
+login (ruling 2026-10-05, Task 11a). Every producer that aborts a strategy's
+login sets `strategy`: `BrowserCallbackStrategy` and the callback server
+`'browser'`, the manual strategies `'manual'`. `failed` → K11 with the registered code
 in the place today's words put it.
 
 ### 4.4 What else changes in 5.0.0
