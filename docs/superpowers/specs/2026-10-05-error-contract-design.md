@@ -773,7 +773,7 @@ the `structuredClone` at `:741` goes).
 
 **One conversion point for a failed token request, and its readers.**
 `sendTokenRequest` (`tokenRequest.ts:344-363`) is where every token request
-fails, on both paths. It now takes the site's `operation` and `grant` and
+fails, on both paths. It now takes the site's `operation`, `grant`, logger and secrets (`TokenRequestSite`, below) and
 throws an `AuthProviderFailure` built right there: `tls` for an allowlisted
 TLS code; else `request-failed` with `status` (`httpStatus(response.status)`),
 `oauthError` (`response.data.error` when registered) and `code` (when
@@ -804,12 +804,61 @@ no retry); and the same four through the strategy path
 `oauthError` from anything but the classified facts (or dropping it in
 `sendTokenRequest`) turns pending → success red.
 
-**The OAuth error description.** A token endpoint's `error_description`
-(and `error_uri`) is server free text and never enters an error. Decision,
-for approval (Appendix C, L1): each wrapping site logs it once at `debug`
-through the provider's logger, redacted by `describeOAuthErrorBody` exactly
-as today (`oauthErrorBody.ts:149-166`), beside the error's `logFields` —
-a log line, not an error. The alternative is to drop it entirely.
+**The OAuth error description — logged inside `sendTokenRequest`, before
+conversion.** A token endpoint's `error_description` and `error_uri` are
+server free text and never enter an error. Once `sendTokenRequest` throws an
+`AuthProviderFailure`, no site can read the body any more, so the one place
+that still holds it writes the debug line. Decision, for approval (Appendix
+C, L1):
+
+```ts
+export interface TokenRequestSite {
+  readonly operation: Operation;
+  readonly grant?: OAuth2GrantType | undefined;
+  /** The provider's logger; no logger → no debug line, nothing else changes. */
+  readonly logger?: ILogger | undefined;
+  /** Every secret this request carried: grantSecrets(params) + the configured clientSecret. */
+  readonly secrets: readonly (string | undefined)[];
+}
+export async function sendTokenRequest<T>(
+  prepared: PreparedTokenRequest | undefined,
+  asToday: () => Promise<AxiosResponse<T>>,
+  site: TokenRequestSite,
+): Promise<AxiosResponse<T>>;
+```
+
+On a failure with a response, `sendTokenRequest`, before building the
+failure: (1) joins `site.secrets` with the strategy's (`prepared.secrets`:
+`client_secret`, `client_assertion`, a Basic credential) — passed explicitly
+by every site, never looked up; (2) reduces the body with `oauthErrorFields`
+(`oauthErrorBody.ts:181-195`: `error`, `error_description`, `error_uri`, each
+secret redacted in every form it may be echoed in, JWT-shaped values
+redacted, `oauthErrorBody.ts:35-73`); (3) writes **one** line,
+`logger.debug('[<operation>] token endpoint said', { status, error,
+error_description, error_uri })` with the reduced fields only; (4) builds the
+`AuthProviderFailure` from the status, the registered `error` and the
+allowlisted code — the body never enters it, and the reduced fields are
+dropped with the local. The line is written for **every** site that sends a
+token request (the five that wrapped today — passcode, client credentials,
+UAA refresh, device initiation, password grant — and the code exchange, the
+OIDC token request and device poll, the SAML exchange and refresh), on both
+paths; device polling's `authorization_pending` / `slow_down` answers are
+not logged (they are the protocol, not a failure). A logger that throws is
+caught and ignored, as SNC's `log` does (`SncLogonProvider.ts:217-223`). The
+alternative for approval is to write no line at all.
+
+Tests (`oauthErrorBodies.test.ts`, `tokenRequestShapes.test.ts`): for each
+token site, without and with a client-authentication strategy (secret Basic
+raw and form, `clientSecretPost`, `privateKeyJwt`), a server answering `400`
+with an `error_description` and an `error_uri` that echo every secret the
+request carried — the grant's (refresh token, code, verifier, assertion,
+passcode, password, device code, subject / actor token), the configured
+`clientSecret`, the strategy's — in each echoed form and as a JWT: exactly
+one debug line, carrying the redacted summary, no secret in any form in it,
+and none in any rendering of the thrown failure; with no logger, no line and
+the same failure; a logger whose `debug` throws, the same failure.
+Load-bearing: dropping `prepared.secrets` from the join, or one site's
+`secrets`, turns that site's case red.
 
 ## 7. Logon targets (connection) and rule 4
 
@@ -1191,7 +1240,7 @@ it: `legacyProvider(new BasicAuthProvider(…))`.
 **The second compatibility run (a gate).** Once auth-providers 6.0.0 is
 published, connection's devDependency moves to `^6.0.0`, the adapter and its
 table are deleted, and the same suites run against the real 6.0.0 providers
-(no adapter). Green is a release gate of the chain (§11.5, gate 6); any
+(no adapter). Green is a release gate of the chain (§11.5, gate 7); any
 difference — a word, a kind, a disposition — is fixed in a connection patch
 (12.0.x) released before auth-stores and the broker move, so the chain never
 ships a connection whose tests ran only against the adapter.
@@ -1484,7 +1533,9 @@ README differs from the generated table.
    install of each from the registry outside the repositories.
 5. `docs/superpowers/` emptied of this work's documents before the
    auth-providers release.
-6. connection's suites, run once against the published auth-providers
+6. The debug-line tests of §6 green for every token site on both paths, and
+   the decision on L1 (the line, or none) recorded in the PR.
+7. connection's suites, run once against the published auth-providers
    6.0.0 without the legacy adapter (§10.3), green — before auth-stores and
    the broker move; a connection 12.0.x patch first if they are not.
 
@@ -1751,7 +1802,7 @@ diagnostics? }`):
 | H7 | `BrowserCallbackStrategy.ts:186-193` | `Failed to open browser: <words>. Open manually: <url>` + `{ error, url }` | unchanged: the URL is the strategy's own announcement, not an error's text |
 | H8 | `browserAuth.ts:217-220`, `:298-302` | `Could not open browser automatically: <words>` / `Failed to open browser: <words>. Please open manually: <url>` | same as H7 |
 | H9 | `tokenRequest.ts:393` | words inside `TokenEndpointError`'s message | gone with the class (D2) |
-| H10 | each wrapping token site | (new) | one `debug` line with the redacted OAuth summary, if L1 is approved as proposed |
+| H10 | `sendTokenRequest`, for every token site (§6) | (new) | one `debug` line per failed request with a response: `error`, `error_description`, `error_uri` reduced by `oauthErrorFields` with the site's and the strategy's secrets; never in the failure; none without a logger — if L1 is approved as proposed |
 
 ### A.9 connection
 
@@ -1854,7 +1905,10 @@ of Appendix A keeps its information as facts, as diagnostics, or verbatim.
 - **L1 — A token endpoint's `error_description` and `error_uri`.** Today in
   `TokenEndpointError.message` (redacted) and in the reduced `AxiosError`'s
   `response.data` (D1, D3). Server free text: never in an error. *Proposed:*
-  each wrapping site logs it once at `debug`, redacted as today (H10).
+  `sendTokenRequest` logs them once per failed request at `debug`, through
+  the site's logger, reduced and redacted with the site's and the strategy's
+  secrets before the failure is built (§6, H10); the failure never carries
+  them.
   *Alternative:* drop it everywhere. The registered `error` code stays a fact.
 - **L2 — `cause`.** `TokenEndpointError`, `BrowserAuthError`,
   `RefreshError`, the IdP-certificate `Error` (E26) keep the original as
