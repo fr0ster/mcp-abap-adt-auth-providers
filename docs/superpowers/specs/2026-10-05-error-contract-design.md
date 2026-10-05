@@ -1173,10 +1173,23 @@ signal (or none). The rule, wherever an attempt is shared:
   shutdown, `callbackServer.ts:152-155`, `:168-190`), a manual strategy may
   still hold its stdin reader, a device-code poller may still be in its wait.
   So every attempt has a **drain** promise that settles when its own
-  exclusive work has settled — the strategy's `authorize` promise (which a
-  shipped strategy settles only after its socket is closed or its reader
-  closed), the device-code polling loop's exit — **and** the drain it
-  inherited has settled. When an attempt leaves its slot aborted, the slot
+  exclusive **local** resources are released — the strategy's `authorize`
+  promise, which a shipped strategy settles only after its callback port is
+  closed (browser, OIDC, SAML) or its stdin reader closed (manual), and a
+  consumer strategy is required to settle the same way — **and** the drain
+  it inherited has settled. **A network request is never part of a drain**:
+  it holds no local resource, and a server that never answers must not
+  block the next login. Every token request an attempt sends — device
+  initiation and every device poll, the passcode exchange, the code
+  exchange, the SAML exchange, the OIDC token request, a refresh — carries
+  the attempt's signal (`TokenRequestSite.signal`, passed by
+  `sendTokenRequest` to axios as `signal` on both paths), so an aborted
+  attempt cuts what it has outstanding, and any response that still arrives
+  is discarded by the commit rule above. The device-code polling loop checks
+  the attempt's aborted state before every poll and after every await (the
+  request, the wait), so it never polls again once the attempt is aborted;
+  its part of the drain settles at the abort itself — when that guarantee
+  holds — not when an outstanding poll completes. When an attempt leaves its slot aborted, the slot
   keeps its drain as `previousDrain` (identity-checked like the slot). A new
   attempt inherits `previousDrain` and, before it starts its own
   authorization (the strategy's `authorize`, the device-code initiation, the
@@ -1198,8 +1211,9 @@ signal and every login path passes it on — the strategy through
 `AuthorizationRequest.signal` (shipped strategies combine it with their own
 option signal), `OidcDeviceFlowProvider`'s polling (it stops at the next wait,
 and the wait itself is abortable), `UaaPasscodeProvider`'s strategy. A
-token request already on the wire is not cut (it is bounded by the server
-and short); its result is discarded if the attempt was aborted. The broker
+token request on the wire carries the attempt's signal and is cut by its
+abort; whatever arrives anyway is discarded (the commit rule). No request is
+part of a drain. The broker
 keeps its own, equivalent rule for its build cache (it does not import the
 provider's internal helper): `getProvider` callers are waiters of the
 destination's build, with the same immediate removal and commit-only-if-not-
@@ -1292,9 +1306,16 @@ a fresh login — no `busy`, no `port-in-use`; while the new attempt waits,
 aborting its only waiter ends the wait with `aborted` and no authorization
 started; three attempts aborted in a row each wait on the whole chain; the
 same for a manual strategy (the old reader closed before a new one opens —
-never two readers on stdin) and for the device flow (no poll request of the
-old loop after the new attempt's initiation). Load-bearing: dropping the
-handoff turns the deferred-shutdown case red (`busy`).
+never two readers on stdin). **Network never drains:** a server holds a
+device-poll response open; the attempt is aborted; the poll request's signal
+is aborted (the request cut), a replacement device initiation proceeds at
+once without the old response completing, and the old loop sends no further
+poll — also when the held response is released afterwards (its result
+discarded, nothing committed); the same with a held passcode-exchange and
+code-exchange response. Load-bearing: dropping the handoff turns the
+deferred-shutdown case red (`busy`); awaiting the outstanding request in the
+drain turns the held-poll case red; dropping the check after an await turns
+the no-further-poll case red.
 Broker tests: §10.6.
 
 ## 7. Logon targets (connection) and rule 4
