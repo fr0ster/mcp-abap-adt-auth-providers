@@ -1131,8 +1131,8 @@ The snapshot is what the discovery cache holds and what the providers and
 `oidc-discovery`): a transport rejection becomes `tls` or `request-failed`
 (`refused` with the status, `no-response` with an allowlisted code); a
 document without `token_endpoint`, or a snapshot that throws past
-`readSafely`, becomes `request-failed` `incomplete-response` (D6) with the
-operation only — no foreign value, no cause. Discovery carries the
+`readSafely` (the response object itself unreadable), becomes
+`request-failed` `incomplete-response` (D6) with the operation only — no foreign value, no cause. Discovery carries the
 attempt's signal (it is cut by an abort like any non-refresh request); an
 aborted or failed discovery is not cached. As in 5.4.2 it writes no
 failure line (its `[OIDC] Fetching discovery document` info line stays).
@@ -1141,10 +1141,16 @@ Tests: a successful discovery → the snapshot holds the three endpoints and
 the aliases, and a provider uses them; mTLS alias resolution — a token and a
 device alias used, an alias that is not a string, an empty one, an
 `mtls_endpoint_aliases` that is not an object, each ignored; an extra field
-carrying a marker is absent from the snapshot and the cache; hostile
-documents — a Proxy whose traps throw, getters on `token_endpoint` and on
-`mtls_endpoint_aliases` that throw or return a marker, a throwing `toJSON` —
-→ `request-failed` `incomplete-response`, no marker anywhere, nothing cached;
+outside the snapshot's list is absent from the snapshot, the cache and what
+a provider reads; field-only semantics on hostile documents — a missing or
+throwing `token_endpoint` (a getter that throws, a Proxy whose traps throw)
+→ `request-failed` `incomplete-response`, nothing cached; a throwing or
+invalid optional field (`mtls_endpoint_aliases` or its entries,
+`authorization_endpoint`, `device_authorization_endpoint`) → ignored, and
+discovery succeeds with the valid ones; a `toJSON` on the document is never
+invoked (asserted with a spy); a marker string in a kept field is simply
+that field's value (public metadata) — the assertion is that nothing outside
+the list ever reaches the cache or a provider;
 an aborted discovery → its request's signal aborted, nothing cached, the next
 call fetches again. Load-bearing: copying the whole document again turns the
 extra-field case red.
