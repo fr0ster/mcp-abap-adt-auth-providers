@@ -1172,10 +1172,19 @@ signal (or none). The rule, wherever an attempt is shared:
   that describes the server's state stays applied (a refresh token the server
   refused is spent, as today); nothing that arrives after the abort is —
   with the one exception of a refresh, below.
-- **A refresh cut after dispatch is an uncertain outcome.** Once a refresh
-  request carrying refresh token R has been dispatched, the server may have
-  consumed R and issued R2 even if the attempt is then aborted and the
-  request cut. Rules:
+- **A refresh aborted after dispatch is an uncertain outcome.** Once a
+  refresh request carrying refresh token R has been dispatched, the server
+  may have consumed R and issued R2. **A dispatched refresh request is never
+  given the attempt's signal**: axios rejects an aborted request with
+  `ERR_CANCELED` even when the response arrives later, which would make R2
+  unreachable. So the refresh request continues in the background,
+  independent of waiter cancellation; its waiters are released at once on
+  the abort (`aborted`); it is part of no drain (it holds no exclusive local
+  resource), so nothing waits for it; and when its response arrives it goes
+  through the commit queue under the rules below. A refresh whose server
+  never answers lingers until the server or the OS ends the socket —
+  harmless, since nothing waits for it (stated in the README). ("Cut" below
+  means its attempt was aborted, not the request.) Rules:
   1. On that abort, R is **quarantined synchronously** — added, in the abort
      handler itself, to a per-provider in-memory set of spent refresh tokens
      that lives outside the commit queue, advances no watermark and is never
@@ -1316,13 +1325,16 @@ signal (or none). The rule, wherever an attempt is shared:
   consumer strategy is required to settle the same way — **and** the drain
   it inherited has settled. **A network request is never part of a drain**:
   it holds no local resource, and a server that never answers must not
-  block the next login. Every token request an attempt sends — device
-  initiation and every device poll, the passcode exchange, the code
-  exchange, the SAML exchange, the OIDC token request, a refresh — carries
-  the attempt's signal (`TokenRequestSite.signal`, passed by
-  `sendTokenRequest` to axios as `signal` on both paths), so an aborted
-  attempt cuts what it has outstanding, and any response that still arrives
-  is discarded by the commit rule above. The device-code polling loop checks
+  block the next login. Every token request an attempt sends **except a
+  refresh** — device initiation and every device poll, the passcode
+  exchange, the code exchange, the SAML exchange, the OIDC token request,
+  OIDC discovery — carries the attempt's signal (`TokenRequestSite.signal`,
+  passed by `sendTokenRequest` to axios as `signal` on both paths), so an
+  aborted attempt cuts what it has outstanding, and any response that still
+  arrives is discarded by the commit rule above. A refresh request
+  (`TokenRequestSite.signal` absent by construction at every refresh site:
+  UAA refresh, SAML refresh, OIDC refresh) runs on in the background and its
+  late result is offered to the commit queue (above). The device-code polling loop checks
   the attempt's aborted state before every poll and after every await (the
   request, the wait), so it never polls again once the attempt is aborted;
   its part of the drain settles at the abort itself — when that guarantee
@@ -1348,9 +1360,10 @@ signal and every login path passes it on — the strategy through
 `AuthorizationRequest.signal` (shipped strategies combine it with their own
 option signal), `OidcDeviceFlowProvider`'s polling (it stops at the next wait,
 and the wait itself is abortable), `UaaPasscodeProvider`'s strategy. A
-token request on the wire carries the attempt's signal and is cut by its
-abort; whatever arrives anyway is discarded (the commit rule). No request is
-part of a drain. The broker
+token request on the wire — a refresh excepted — carries the attempt's
+signal and is cut by its abort; whatever arrives anyway is discarded (the
+commit rule). A refresh runs on and its result goes to the commit queue. No
+request is part of a drain. The broker
 keeps its own, equivalent rule for its build cache (it does not import the
 provider's internal helper): `getProvider` callers are waiters of the
 destination's build, with the same immediate removal and commit-only-if-not-
@@ -1429,8 +1442,12 @@ outstanding; a new caller arriving before it completes starts a fresh
 attempt (a second request) and gets that attempt's result; when the first
 request then completes, nothing changes — tokens, the refresh token, the
 pinned material, `remembered`, no `onTokens` call; the same for `pin` with
-an outstanding loader read. **Refresh cut after dispatch:** a server that
-rotates R → R2 and withholds the response; the attempt is aborted; the next
+an outstanding loader read. **Refresh aborted after dispatch** (on a real
+socket through real axios — a local HTTP server that rotates R → R2 and
+withholds its response; never a mocked `sendTokenRequest`, since the point
+is what axios does): the attempt is aborted; its waiter is released at once;
+the refresh request is not aborted (the server's socket stays open, no
+`ERR_CANCELED`); a replacement attempt proceeds without waiting for it; the next
 moment does not submit R (asserted on the server: R arrives once) and logs
 in through the strategy; variant — the withheld response is released later
 with nothing newer committed → R2 and its tokens are adopted and `onTokens`
