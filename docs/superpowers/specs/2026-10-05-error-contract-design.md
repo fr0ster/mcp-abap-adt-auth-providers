@@ -838,9 +838,18 @@ the user 2026-10-05:
   server's free text — reach no error, no `AuthProviderFailure`, no response
   data and **no log line**. A secret appears in a log only as `<redacted, N
   chars>` (`BaseTokenProvider.formatToken`, unchanged). This is also what
-  5.4.2 does for errors.
+  5.4.2 does for errors. **The safe-facts line stays** (ruling 2026-10-05,
+  keeping 5.4.2's `logRefusedRequest`): for a failed token request with a
+  response, `sendTokenRequest` writes one `debug` line through the site's
+  logger carrying only the integer HTTP status and the OAuth `error` when it
+  is a registered code — the same facts `logFields` may carry, no server
+  text, no secret — guarded (a throwing logger is swallowed), none without a
+  logger, none for the device poll's `authorization_pending` / `slow_down`.
+  It is written whatever `authDebug` says. A 2xx without a token
+  (`rejectMissingToken`) gets no default line, as in 5.4.2.
 - **`authDebug: true`, an explicit consumer option.** Only with it is the
-  debug line below written, carrying the server's text, with every secret
+  safe-facts line extended into the debug line below — the same status and
+  registered `error` plus the server's text, with every secret
   found in it — in every encoding the redaction recognises — replaced by a
   **preview**. Never read from the environment (`DEBUG_AUTH_PROVIDERS` and
   its kin keep controlling only what they control today, and never this),
@@ -952,12 +961,14 @@ failure: (1) joins `site.secrets`, `site.basic?.secrets` and the strategy's
 credential) — each passed explicitly by the site, never looked up; (2) reduces the body with `oauthErrorFields`
 (`oauthErrorBody.ts:181-195`: `error`, `error_description`, `error_uri`, each
 secret redacted in every form it may be echoed in, JWT-shaped values
-redacted, `oauthErrorBody.ts:35-73`); (3) **only when `site.authDebug` is
-true and there is a logger**, writes one line,
+redacted, `oauthErrorBody.ts:35-73`); (3) when there is a logger, writes
+**one** line: without `authDebug`, the safe-facts line (status and a
+registered `error` only, above); **only when `site.authDebug` is true**,
+instead of it the line
 `logger.debug('[<operation>] token endpoint said', { status, error,
 error_description, error_uri })` — the reduced fields with every secret
-previewed (above), not erased; without `authDebug` steps (2) and (3) do not
-run and nothing of the body is read beyond `error`; (4) builds the
+previewed (above), not erased; without `authDebug` step (2) does not run
+and nothing of the body is read beyond `error`; (4) builds the
 `AuthProviderFailure` from the status, the registered `error` and the
 allowlisted code — the body never enters it, and the reduced fields are
 dropped with the local. With `authDebug`, the line is written for **every**
@@ -977,10 +988,13 @@ request carried — the grant's (refresh token, code, verifier, assertion,
 passcode, password, device code, subject / actor token), the configured
 `clientSecret`, the strategy's — in each echoed form and as a JWT:
 - **without `authDebug`** (absent, `false`, `'true'`, and with
-  `DEBUG_AUTH_PROVIDERS=true` set in the environment): no debug line, no log
-  line of any level carrying `error_description` / `error_uri` text, and the
-  same failure;
-- **with `authDebug: true`**: exactly one debug line; every echoed form of
+  `DEBUG_AUTH_PROVIDERS=true` set in the environment): exactly one debug
+  line, the safe-facts line — the status and the registered `error`, no
+  other key, no `error_description` / `error_uri` text, no form of any
+  secret; no line of any level carrying server text; none for
+  `authorization_pending` / `slow_down`; the same failure;
+- **with `authDebug: true`**: exactly one debug line, carrying the same
+  safe facts plus the previewed server text; every echoed form of
   every secret replaced by its preview — none present whole; each preview at
   most 4 + 4 characters of that form plus `<redacted, N chars>` with N the
   form's length; a secret (form) shorter than 16 characters shown only as
@@ -2316,8 +2330,10 @@ README differs from the generated table.
 6. The debug-line tests and the header-echo tests of §6 (`400` and `200`
    without a token) green for every token
    site on both paths, the 6.0.0 CHANGELOG's **Fixed** entry for the legacy
-   Basic credential written, the `authDebug` tests (no line without it, the
-   preview bounds, short secrets as a length only, every encoding previewed)
+   Basic credential written, the `authDebug` tests (without it exactly the
+   safe-facts line and no server text; with it the safe facts plus the
+   previewed text; the preview bounds, short secrets as a length only, every
+   encoding previewed)
    green in auth-providers and the broker / CLI pass-through tests green.
 7. connection's suites, run once against the published auth-providers
    6.0.0 without the legacy adapter (§10.3), green — before auth-stores and
@@ -2588,7 +2604,7 @@ diagnostics? }`):
 | H7 | `BrowserCallbackStrategy.ts:186-193` | `Failed to open browser: <words>. Open manually: <url>` + `{ error, url }` | unchanged: the URL is the strategy's own announcement, not an error's text |
 | H8 | `browserAuth.ts:217-220`, `:298-302` | `Could not open browser automatically: <words>` / `Failed to open browser: <words>. Please open manually: <url>` | same as H7 |
 | H9 | `tokenRequest.ts:393` | words inside `TokenEndpointError`'s message | gone with the class (D2) |
-| H10 | `sendTokenRequest` and `rejectMissingToken`, for every token site (§6) | the code exchange's `error`-level 2xx body line (`browserAuth.ts:150-157`) | **only with `authDebug: true`**: one `debug` line per failed request or token-less 2xx — `error`, `error_description`, `error_uri` with every secret previewed (≤ 4 + 4 characters, `<redacted, N chars>`; under 16 characters the length only); without it no line, and the code exchange's line goes; never in the failure |
+| H10 | `sendTokenRequest` and `rejectMissingToken`, for every token site (§6) | 5.4.2's safe-facts line (`logRefusedRequest`); the code exchange's `error`-level 2xx body line (`browserAuth.ts:150-157`) | **by default**: for a failed request with a response, one `debug` line with the HTTP status and the registered `error` only (5.4.2's line, kept; none for `authorization_pending` / `slow_down`, none without a logger, a throwing logger swallowed); **with `authDebug: true`** instead one `debug` line per failed request or token-less 2xx with those facts plus `error_description` and `error_uri`, every secret previewed (≤ 4 + 4 characters, `<redacted, N chars>`; under 16 characters the length only); the code exchange's `error`-level line goes; never in the failure |
 
 ### A.9 connection
 
@@ -2685,7 +2701,8 @@ each with today's words verbatim.
 (the server's text only with `authDebug`).**
 
 **Also decided by the user 2026-10-05:** by default the server's free text
-reaches no error, failure, response data or log line, and a secret appears
+reaches no error, failure, response data or log line (the safe-facts line of
+status and registered `error` stays, ruling 2026-10-05), and a secret appears
 only as `<redacted, N chars>`; with the consumer's explicit `authDebug: true`
 the debug line is written at every token site, the SAML exchange and refresh
 included, with secrets previewed (§6); the 5.4.1 Basic-credential
@@ -2702,10 +2719,12 @@ of Appendix A keeps its information as facts, as diagnostics, or verbatim.
   loss.) Today in
   `TokenEndpointError.message` (redacted) and in the reduced `AxiosError`'s
   `response.data` (D1, D3). Server free text: never in an error, a failure,
-  response data or — by default — a log line. **Only with the consumer's
-  `authDebug: true`** does `sendTokenRequest` (or `rejectMissingToken`) write
-  them in one `debug` line per failed request, through the site's logger,
-  every secret previewed (§6, H10). The registered `error` code stays a fact.
+  response data or — by default — a log line; by default a failed request
+  logs only 5.4.2's safe-facts line (status and the registered `error`).
+  **Only with the consumer's `authDebug: true`** does `sendTokenRequest` (or
+  `rejectMissingToken`) write them, in one `debug` line per failed request
+  through the site's logger, beside the same safe facts, every secret
+  previewed (§6, H10). The registered `error` code stays a fact.
 - **L2 — `cause`.** `TokenEndpointError`, `BrowserAuthError`,
   `RefreshError`, the IdP-certificate `Error` (E26) keep the original as
   `cause` today. `AuthProviderFailure` carries no original — the goal's "no
