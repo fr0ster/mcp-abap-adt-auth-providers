@@ -50,7 +50,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `axios.isAxiosError` both hold. A consumer's logger that throws while a
   token site reports a failure (the SAML exchange and refresh, the device
   poll's wait) is ignored, so it can no longer replace the safe rejection
-  with its own text.
+  with its own text. A successful answer is not trusted either: a fulfilled
+  interceptor may hand over data whose getter, Proxy trap or `toJSON`
+  throws the server's text into the site's parsing. Every site now reads
+  only a snapshot — an integer status and the expected fields
+  (`access_token`, `refresh_token`, `id_token`, `token_type`, `expires_in`,
+  `scope`, the device fields, `error`) that are strings or numbers, each
+  read safely — and OIDC discovery a plain copy of its document; a field
+  whose read throws is absent, a copy that throws is fixed words.
 
 - **Security: a server echoing the Basic header could expose the client
   credential, on the path without a client-authentication strategy.** Without

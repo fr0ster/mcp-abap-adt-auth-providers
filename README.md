@@ -2088,7 +2088,10 @@ rejected with: anything that reached it (an axios failure, or what a global
 response interceptor of yours threw — the server's text, a primitive, an
 object with throwing getters) is replaced by a fresh `AxiosError` of fixed
 words, an integer status and an allowlisted code — an aborted request by a
-`CanceledError`, so `axios.isCancel` still holds (since 5.4.2); and with the server's body reduced to
+`CanceledError`, so `axios.isCancel` still holds — and a successful answer is
+read only as a snapshot of its expected string and number fields, so a
+response interceptor's hostile data cannot throw through either (since
+5.4.2); and with the server's body reduced to
 its `error` when that is a registered OAuth code; the server's
 `error_description` and `error_uri` go nowhere — no error, no log line
 (since 5.4.2).
