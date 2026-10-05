@@ -1149,7 +1149,22 @@ signal (or none). The rule, wherever an attempt is shared:
   today; the broker drops a failed or aborted build from its cache, as it
   drops a failed one today, `AuthBroker.ts:1030-1045`); an aborted renewal is
   never stored in `remembered` (rule 8: an abort is the consumer's decision,
-  not the token's).
+  not the token's);
+- **an aborted attempt is non-joinable at once.** At the moment its last
+  waiter aborts — before that waiter's promise is rejected, and before the
+  attempt's controller aborts — the attempt removes itself from its active
+  slot (`renewal`, `pinning`, the broker's `built` entry), identity-checked
+  (only if the slot still holds this attempt). Work it already sent (a token
+  request on the wire, a loader read, a store read) may still complete; a
+  caller arriving meanwhile finds the slot empty and starts a fresh attempt
+  with its own result. **A late result of an aborted attempt changes
+  nothing:** the attempt's work produces a value, and its effects are applied
+  in one commit step that runs only if the attempt was not aborted — no
+  `updateTokens`, no `markIfElsewhere`, no `obtained` (so no `onTokens`, no
+  persistence), no pinned material, no `remembered`, no broker cache entry and
+  no session-secret write. What the server answered *before* the abort and
+  that describes the server's state stays applied (a refresh token the server
+  refused is spent, as today); nothing that arrives after the abort is.
 
 **Where it lives.** One helper, `sharedAttempt` (auth-providers,
 `src/auth/sharedAttempt.ts`, internal), implements the rule for the
@@ -1164,7 +1179,8 @@ token request already on the wire is not cut (it is bounded by the server
 and short); its result is discarded if the attempt was aborted. The broker
 keeps its own, equivalent rule for its build cache (it does not import the
 provider's internal helper): `getProvider` callers are waiters of the
-destination's build.
+destination's build, with the same immediate removal and commit-only-if-not-
+aborted rule.
 
 **Which signals are waiters.**
 - `getTokens({ signal })` / `refreshTokens({ signal })`: that call is a waiter
@@ -1173,20 +1189,34 @@ destination's build.
   per-call signal: its waiter is the provider's **attached parties**. A token
   provider takes `signal?: AbortSignal | undefined` in its config (auth-
   providers' `BaseConfig`, beside `authDebug`) — one party attached at
-  construction — and exposes `attach(signal?: AbortSignal | undefined): void`
-  for each further party sharing the provider (`undefined` attaches a party
-  that never cancels). The moment's waiter aborts when every attached party's
-  signal has aborted; with none attached, it never aborts (today's
-  behaviour). A party attached after its own signal aborted counts as
-  aborted.
-- The broker: `getProvider(destination, { signal })` makes the caller a
-  waiter of the shared build **and** attaches the same signal to the token
-  provider it returns (on a cache hit too), so a login that provider starts
-  later — in `rejected()` above all — is cancelled when every session that
-  holds it has gone. `getToken(destination, { signal })` /
-  `refreshToken(destination, { signal })` pass the call's signal to
-  `getTokens` / `refreshTokens`. The broker adds no bound and no signal of
-  its own.
+  construction when given — and exposes `attach(signal: AbortSignal): () =>
+  void` for each further party sharing the provider. **A signal is required**
+  (a party without one has nothing to cancel with and simply does not
+  attach); the same signal attached twice is one party. An attachment is
+  **released** when its signal aborts — removed from the set and its listener
+  removed (`{ once: true }`) — or when the returned `detach()` is called, so
+  attachments never accumulate. A provider that has never had an attachment
+  behaves as today: a moment's login has a waiter that never aborts. Once a
+  provider has had one, a moment's login waits on the **live** attached
+  parties at its start plus any attached while it runs, and is aborted when
+  all of them have aborted; a moment that finds no live party on such a
+  provider answers Oops `aborted` at once and starts no login (every party
+  that wanted it has gone). A party attached with an already-aborted signal is
+  not added.
+- The broker keeps **two ways** to reach a destination's provider. The
+  public `getProvider(destination, { signal })` is a **session**: the caller
+  is a waiter of the shared build, and — only when it gave a signal — the
+  signal is attached to the token provider returned (built or from the cache),
+  so a login that provider starts later, in `rejected()` above all, is
+  cancelled when every session holding it has gone; `getProvider` without a
+  signal attaches nothing. The internal lookup the token API uses (today
+  `obtainShared` calls `getProvider(destination)`, `AuthBroker.ts:621`)
+  becomes a separate private `providerFor(destination, signal?)` that joins
+  the build as a waiter with the call's signal and **never attaches**; it is
+  the only way `getToken` / `refreshToken` reach the provider, and they pass
+  the call's signal to `getTokens` / `refreshTokens`. So an ordinary token
+  call can never make a later moment's login immortal. The broker adds no
+  bound and no signal of its own.
 
 Tests (auth-providers, on a strategy that waits until aborted, with the
 callback port asserted, CLAUDE.md "assert on the port"): two `getTokens`
@@ -1198,11 +1228,23 @@ is not reused — the next `getTokens` starts a new login; a caller without a
 signal beside one that aborts → the login continues; a login started by
 `rejected()` with the config `signal` aborted → `rejected()` answers Oops
 `aborted` and the port is free; two attached parties, one aborts → the
-login continues, both → aborted; the device flow stops polling on abort (no
-request after the abort, fake timers); an aborted renewal is not
-`remembered`. Load-bearing: aborting the attempt on the first waiter's abort
+login continues, both → aborted; after both, a `rejected()` answers Oops
+`aborted` at once and the strategy is not called; a never-attached provider's
+`rejected()` login runs as today; `detach()` and an aborted signal each
+remove the party (a later moment no longer waits on it; the signal has no
+listener left); `attach` of an aborted signal adds nothing; the device flow
+stops polling on abort (no request after the abort, fake timers); an aborted
+renewal is not `remembered`. **Doomed join window:** all waiters abort while
+the attempt's token request (a deferred mock) is still outstanding; a new
+caller arriving before it completes starts a fresh attempt (a second
+request) and gets that attempt's result; when the first request then
+completes, nothing changes — tokens, the refresh token, the pinned material,
+`remembered`, no `onTokens` call; the same for `pin` with an outstanding
+loader read. Load-bearing: aborting the attempt on the first waiter's abort
 turns the two-waiter case red; caching the aborted attempt turns the retry
-case red. Broker tests: §10.6.
+case red; clearing the slot only on settle turns the doomed-join case red;
+applying effects before the commit check turns the late-result case red.
+Broker tests: §10.6.
 
 ## 7. Logon targets (connection) and rule 4
 
@@ -1696,11 +1738,22 @@ kind. Migration note: none beyond the versions.
   AbortSignal | undefined })`, `getToken(destination, options?)`,
   `refreshToken(destination, options?)`. `getProvider`'s caller is a waiter
   of the destination's shared build (one caller's abort rejects only its
-  promise, `aborted`; when every caller has aborted the build is abandoned
-  and nothing is cached; a failed or aborted build is retried on the next
-  call), and its signal is attached to the token provider returned — built
-  or from the cache (`attach`). The token API passes the call's signal to
-  `getTokens` / `refreshTokens`. The broker adds no bound. Tests: two
+  promise, `aborted`; when every caller has aborted the build is removed from
+  `built` at once, identity-checked, and its late completion is neither
+  cached nor written; a failed or aborted build is retried on the next call),
+  and only a given signal is attached to the token provider returned — built
+  or from the cache (`attach`; the broker keeps the `detach` and calls it
+  never itself: the session ends by aborting). The token API reaches the
+  provider only through the private, non-attaching `providerFor` (§6b) and
+  passes the call's signal to `getTokens` / `refreshTokens`. The broker adds
+  no bound. Tests: a `getToken` without a signal, then two sessions
+  (`getProvider(…, { signal })`), a `rejected()`-started login, both sessions
+  close → the login aborts and the port is bound by the test afterwards (the
+  `getToken` left no party behind); `getProvider` without a signal attaches
+  nothing; all `getProvider` callers abort while the build's store read is
+  outstanding → a new `getProvider` arriving before it completes builds
+  afresh and gets its own provider, and the first build's late completion is
+  not cached and writes no session secret; two
   `getProvider` callers, one aborts → the other gets the provider; both
   abort → nothing cached, the next call builds again; a provider obtained
   through `getProvider(…, { signal })` whose `rejected()` starts a login is
