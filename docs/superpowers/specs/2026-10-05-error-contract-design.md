@@ -531,7 +531,8 @@ the user 2026-10-05). The runtime half of the contract.
   makers); `admission.ts` (§5.3); `mint.ts` (the one assertion, the
   `WeakSet`); `builders.ts` (§5.2); `words.ts` (§5.6); `diagnostics.ts`
   (renderer, §5.6); `classify.ts` (§5.4); `failure.ts` (§6); `guard.ts`
-  (§8.1); `exhaustive.ts` (§9); `__tests__/`; `__typechecks__/`.
+  (§8.1); `exhaustive.ts` (§9); `sharedAttempt.ts` (§6b); `__tests__/`;
+  `__typechecks__/`.
 
 ### 5.2 Builders
 
@@ -741,6 +742,11 @@ anything it computes.
 - `matchKind`, `unreachableKind` (§9); `guard`, `relayOutcome` (§7, §8.1);
   `AuthProviderFailure`, `readFailure`, `isAuthProviderFailure` (§6);
   `OK` (the frozen `{ ok: true }`).
+- `isMinted(value): value is IAuthProviderError` — a public guard: true only
+  for an error this copy minted (the `WeakSet`); what a test or a consumer
+  uses to tell a minted error from a structurally similar object.
+- `sharedAttempt` (§6b) — the waiter rules for a shared attempt, used by the
+  token providers (renewal, pin) and by the broker (its build cache).
 
 ## 6. Thrown token errors
 
@@ -759,8 +765,9 @@ export function isAuthProviderFailure(value: unknown): value is IAuthProviderFai
 ```
 
 `AuthProviderFailure`'s constructor takes a minted error only (typed, and
-checked against the `WeakSet` — an unminted value becomes `unknown`), so it
-cannot be built with free text.
+checked against the `WeakSet` — an unminted value becomes the fixed
+`authError.unknown({ operation: 'unfamiliar-error' })`; the constructor takes
+no operation), so it cannot be built with free text.
 
 **Why not extend the existing classes.** Thirteen classes
 (`refusal.ts:162-178`) each with its own message rules is the "words chosen
@@ -941,7 +948,7 @@ export async function sendTokenRequest<T>(
   prepared: PreparedTokenRequest | undefined,
   asToday: () => Promise<AxiosResponse<T>>,
   site: TokenRequestSite,
-): Promise<AxiosResponse<T>>;
+): Promise<TokenResponseSnapshot<T>>;   // the snapshot below, not axios's response
 ```
 
 **The legacy Basic header carries its own secrets.** On the path without a
@@ -1498,10 +1505,16 @@ signal (or none). The rule, wherever an attempt is shared:
   blocks the next login until it does — stated in the README beside the
   requirement.
 
-**Where it lives.** One helper, `sharedAttempt` (auth-providers,
-`src/auth/sharedAttempt.ts`, internal), implements the rule for the
-provider: an attempt holds its `AbortController` and a set of live waiters;
-`join(signal?)` adds one and returns that waiter's promise. `BaseTokenProvider`
+**Where it lives.** One helper, `sharedAttempt`, part of `auth-errors`'
+public API (`src/sharedAttempt.ts`, §5.1, §5.6), implements the waiter rules
+once for every user: an attempt holds its `AbortController` and a set of live
+waiters; `join(signal?)` adds one and returns that waiter's promise; the
+last live waiter's abort removes the attempt from its slot (identity-checked)
+before rejecting that waiter and aborting the controller; every attempt
+carries its `drain` and inherits the slot's `previousDrain`; an aborted
+waiter rejects with an `AuthProviderFailure` of `interactive-login`
+`aborted`. What an attempt commits (the provider's commit queue, the
+broker's cache entry) stays with its user. `BaseTokenProvider`
 runs `renew` and `pin` through it; `performLogin` receives the attempt's
 signal and every login path passes it on — the strategy through
 `AuthorizationRequest.signal` (shipped strategies combine it with their own
@@ -1510,11 +1523,10 @@ and the wait itself is abortable), `UaaPasscodeProvider`'s strategy. A
 token request on the wire — a refresh excepted — carries the attempt's
 signal and is cut by its abort; whatever arrives anyway is discarded (the
 commit rule). A refresh runs on and its result goes to the commit queue. No
-request is part of a drain. The broker
-keeps its own, equivalent rule for its build cache (it does not import the
-provider's internal helper): `getProvider` callers are waiters of the
-destination's build, with the same immediate removal and commit-only-if-not-
-aborted rule.
+request is part of a drain. The broker uses the same `sharedAttempt` for its
+build cache — no second implementation of the waiter rules: `getProvider`
+callers are waiters of the destination's build, with the same immediate
+removal and commit-only-if-not-aborted rule.
 
 **Which signals are waiters.**
 - `getTokens({ signal })` / `refreshTokens({ signal })`: that call is a waiter
@@ -1875,7 +1887,8 @@ plugins do not have). It refuses, in `src/` outside tests:
 
 connection runs the same script for rules 4, 5 and 6 (it has no providers,
 and its refusals carry no diagnostics, so its site list is empty);
-`auth-errors` runs rule 4 with one allowed site, `mint` in `mint.ts`; the
+`auth-errors` runs rule 4 with four allowed sites — `mint` in `mint.ts` and
+the three integer makers in `numbers.ts` (§4.3) — and rule 6 (empty list); the
 broker runs rules 4, 5 and 6 (empty list). Each repository's test suite runs the script
 against fixtures that break each rule and expects each to be reported
 (§11.3).
@@ -2067,7 +2080,8 @@ is not this work.
   `oops`, the word constants go), `src/auth/rejection.ts` (answers
   `credential-refused` / `system-refused`), `src/auth/knownCodes.ts` (code
   lists move to interfaces-auth; `readSafely` stays), `src/auth/tokenRequest.ts`
-  (`tokenEndpointError` builds `request-failed` / `tls`), every token site of
+  (`tokenEndpointError` and `withoutRequest` removed: `sendTokenRequest` builds
+  `request-failed` / `tls` itself), every token site of
   Appendix A §A.4, `src/auth/callbackServer.ts` and
   `src/strategies/*` (`interactive-login`), `src/snc/*` (`snc`),
   `src/validation/*` (`saml-assertion`, the rule ids of Appendix B),
