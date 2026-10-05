@@ -156,6 +156,10 @@ present only when known; the builder omits the key otherwise (no
 | `connection` | `problem: 'provider-threw' \| 'refused-after-renewal' \| 'no-credential'`, `at?: 'prepare' \| 'logon' \| 'request'` |
 | `unknown` | `operation: Operation`, `grant?: OAuth2GrantType`, `status?: HttpStatus`, `oauthError?: OAuthErrorCode`, `code?: SystemCode` |
 
+For `saml-assertion`, `snc` and `configuration`, the value of `rule`,
+`problem` and `case` is also the error's top-level `variant` (§4.1), so that
+a consumer can narrow the whole error on it.
+
 Composite fact types:
 
 ```ts
@@ -236,7 +240,7 @@ files reference only `IAuthProviderError` / `IAuthRefusal` /
 // src/error/IAuthProviderError.ts
 declare const minted: unique symbol;            // not exported: unnameable outside
 
-interface Minted<K extends AuthProviderErrorKind> {
+interface Common<K extends AuthProviderErrorKind> {
   readonly kind: K;
   /** Rendered from kind and facts by the default renderer, at minting. */
   readonly reason: string;
@@ -244,61 +248,67 @@ interface Minted<K extends AuthProviderErrorKind> {
   readonly [minted]: true;
 }
 
-/** One kind's error: its facts and diagnostics as correlated variants. */
+/** Only the permitted diagnostic fields are declared; none at all → `?: never`. */
+type DiagOf<T, Allowed extends keyof T> = [Allowed] extends [never]
+  ? { readonly diagnostics?: never }
+  : { readonly diagnostics?: { readonly [F in Allowed]?: T[F] } };
+
+/** The three kinds with diagnostics: one object type per variant. */
+export type SamlAssertionError = { [R in AssertionRule]:
+  Common<'saml-assertion'> & { readonly variant: R; readonly facts: SamlFactsOf<R> }
+  & DiagOf<SamlDiagnosticValues, SamlDiagnosticOf<R>> }[AssertionRule];
+export type SncError = { [P in SncProblem]:
+  Common<'snc'> & { readonly variant: P; readonly facts: SncFactsOf<P> }
+  & DiagOf<SncDiagnosticValues, SncDiagnosticOf<P>> }[SncProblem];
+export type ConfigurationError = { [C in ConfigCase]:
+  Common<'configuration'> & { readonly variant: C; readonly facts: ConfigFactsOf<C> }
+  & DiagOf<ConfigDiagnosticValues, ConfigDiagnosticOf<C>> }[ConfigCase];
+
+/** Every other kind: one object type, no variant, no diagnostics. */
+type PlainError<K extends PlainKind> =
+  Common<K> & { readonly facts: AuthProviderErrorFacts[K]; readonly diagnostics?: never };
+
 export type AuthProviderErrorOf<K extends AuthProviderErrorKind> =
-  Minted<K> & AuthProviderErrorVariants[K];
+  K extends 'saml-assertion' ? SamlAssertionError
+  : K extends 'snc' ? SncError
+  : K extends 'configuration' ? ConfigurationError
+  : K extends PlainKind ? PlainError<K> : never;
 
 export type IAuthProviderError = {
   [K in AuthProviderErrorKind]: AuthProviderErrorOf<K>;
 }[AuthProviderErrorKind];
 ```
 
-**Facts and diagnostics are correlated, not independent.**
-`AuthProviderErrorVariants[K]` is a union of `{ readonly facts; readonly
-diagnostics? }` pairs — one pair per value of the kind's discriminant that
-decides which diagnostic may appear:
-
-```ts
-// The diagnostic fields a variant may carry; every other field is `?: never`.
-type Diag<All extends string, Allowed extends All, T> =
-  { readonly [F in All]?: F extends Allowed ? T[F & keyof T] : never };
-
-interface AuthProviderErrorVariants {
-  'saml-assertion': { [R in AssertionRule]: {
-      readonly facts: SamlFactsOf<R>;                         // rule: R, check: CheckOf<R>, …
-      readonly diagnostics?: Diag<SamlDiagnosticField, SamlDiagnosticOf<R>, SamlDiagnosticValues>;
-    } }[AssertionRule];
-  snc: { [P in SncProblem]: {
-      readonly facts: SncFactsOf<P>;                          // problem: P, …
-      readonly diagnostics?: Diag<SncDiagnosticField, SncDiagnosticOf<P>, SncDiagnosticValues>;
-    } }[SncProblem];
-  configuration: { [C in ConfigCase]: {
-      readonly facts: ConfigFactsOf<C>;                       // case: C, fields, allowed?
-      readonly diagnostics?: Diag<ConfigDiagnosticField, ConfigDiagnosticOf<C>, ConfigDiagnosticValues>;
-    } }[ConfigCase];
-  // every other kind: one variant, no diagnostics
-  'client-certificate': { readonly facts: ClientCertificateFacts; readonly diagnostics?: never };
-  // …
-}
-```
+**Facts and diagnostics are correlated through a top-level discriminant.**
+For `saml-assertion`, `snc` and `configuration`, the value that decides which
+diagnostic may appear — the rule, the problem, the case — is lifted onto the
+error as **`variant`**, beside `kind` (and stays in `facts` as `rule` /
+`problem` / `case`, the same value: the builder writes both, classification
+rebuilds only when they are equal). `kind` and `variant` are properties of
+the error itself, so `e.kind === 'saml-assertion' && e.variant ===
+'untrusted-issuer'` narrows the **whole** object — `facts` and `diagnostics`
+included. Narrowing on `e.facts.rule` does not: TypeScript narrows a union
+only by a discriminant property of its members, not of a nested object
+(measured, §11.2 probe). Each variant declares only its permitted diagnostic
+fields, so reading another one is a compile error, not an access to an
+optional `never`.
 
 The maps from discriminant to permitted field are `as const` objects
 (`SAML_RULE_DIAGNOSTIC`, `SNC_PROBLEM_DIAGNOSTICS`,
-`CONFIG_CASE_DIAGNOSTICS`), and `SamlDiagnosticOf<R>` and its siblings are
-read from them, so the type and the runtime admission table (§5.3) come from
-one source:
+`CONFIG_CASE_DIAGNOSTICS`, each `satisfies Record<Discriminant, …>`), and
+`SamlDiagnosticOf<R>` and its siblings are read from them, so the type and
+the runtime admission table (§5.3) come from one source:
 
-| Kind | Discriminant | Permitted diagnostics |
+| Kind | `variant` (= `facts.rule` / `.problem` / `.case`) | Permitted diagnostics |
 |---|---|---|
-| `saml-assertion` | `rule` | the one field of Appendix B's "Diagnostic" column, else none |
-| `snc` | `problem` | `no-credential`, `library-init-failed`: `library`; `library-not-found`: `candidatePaths`; `logon-refused`, `locator-returned-no-path`: none |
-| `configuration` | `case` | `saml-acs-mismatch`, `redirect-mismatch`: `configuredUri`, `strategyUri`; every other case: none |
+| `saml-assertion` | the rule | the one field of Appendix B's "Diagnostic" column, else none |
+| `snc` | the problem | `no-credential`, `library-init-failed`: `library`; `library-not-found`: `candidatePaths`; `logon-refused`, `locator-returned-no-path`: none |
+| `configuration` | the case | `saml-acs-mismatch`, `redirect-mismatch`: `configuredUri`, `strategyUri`; every other case: none |
 
-So `{ facts: { rule: 'duplicate-id', … }, diagnostics: { issuer } }` is not an
-`IAuthProviderError` — the pair matches no variant — and narrowing on
-`error.facts.rule === 'untrusted-issuer'` narrows `error.diagnostics` to
-`{ issuer?: DocumentValue }`. A kind without diagnostics has `diagnostics?:
-never`, so it cannot be given. `AuthProviderErrorKind` is
+So an object with `variant: 'duplicate-id'` and `diagnostics: { issuer }` is
+not an `IAuthProviderError` even before the brand is considered — the pair
+matches no variant. A kind without diagnostics has `diagnostics?: never`, so
+it cannot be given. `AuthProviderErrorKind` is
 `(typeof AUTH_PROVIDER_ERROR_KINDS)[number]`, and a type test asserts
 `keyof AuthProviderErrorFacts` equals it both ways — a kind added to the array
 without facts, or facts without the kind, does not compile.
@@ -466,47 +476,44 @@ One builder per kind, the only exported way to obtain an error:
 ```ts
 /** A single member of a union, else never: the correlation needs one variant. */
 type One<T, A = T> = T extends unknown ? ([A] extends [T] ? T : never) : never;
-
-export const authError: {
-  // kinds with diagnostics: generic over the discriminant, so facts and
-  // diagnostics are checked against the same variant
-  'saml-assertion'<R extends AssertionRule>(
-    facts: SamlFactsOf<One<R>>,
-    diagnostics?: DiagnosticsInputOf<SamlDiagnosticField, SamlDiagnosticOf<R>>,
-  ): AuthProviderErrorOf<'saml-assertion'> & { readonly facts: SamlFactsOf<R> };
-  snc<P extends SncProblem>(
-    facts: SncFactsOf<One<P>>,
-    diagnostics?: DiagnosticsInputOf<SncDiagnosticField, SncDiagnosticOf<P>>,
-  ): AuthProviderErrorOf<'snc'> & { readonly facts: SncFactsOf<P> };
-  configuration<C extends ConfigCase>(
-    facts: ConfigFactsOf<One<C>>,
-    diagnostics?: DiagnosticsInputOf<ConfigDiagnosticField, ConfigDiagnosticOf<C>>,
-  ): AuthProviderErrorOf<'configuration'> & { readonly facts: ConfigFactsOf<C> };
-} & {
-  // every other kind: facts only, no diagnostics parameter at all
-  [K in Exclude<AuthProviderErrorKind, 'saml-assertion' | 'snc' | 'configuration'>]:
-    (facts: AuthProviderErrorFacts[K]) => AuthProviderErrorOf<K>;
-};
-
 /** Raw candidates, admitted by the builder: permitted fields `unknown`, the rest `never`. */
 type DiagnosticsInputOf<All extends string, Allowed extends All> =
   { readonly [F in All]?: F extends Allowed ? unknown : never };
 
+export declare const authError: {
+  // kinds with diagnostics: generic over the variant, inferred from the facts
+  'saml-assertion'<R extends AssertionRule>(
+    facts: SamlFactsOf<One<R>>,
+    diagnostics?: DiagnosticsInputOf<SamlDiagnosticField, SamlDiagnosticOf<R>>,
+  ): Extract<SamlAssertionError, { variant: R }>;
+  snc<P extends SncProblem>(
+    facts: SncFactsOf<One<P>>,
+    diagnostics?: DiagnosticsInputOf<SncDiagnosticField, SncDiagnosticOf<P>>,
+  ): Extract<SncError, { variant: P }>;
+  configuration<C extends ConfigCase>(
+    facts: ConfigFactsOf<One<C>>,
+    diagnostics?: DiagnosticsInputOf<ConfigDiagnosticField, ConfigDiagnosticOf<C>>,
+  ): Extract<ConfigurationError, { variant: C }>;
+} & {
+  // every other kind: facts only, no diagnostics parameter at all
+  readonly [K in PlainKind]: (facts: AuthProviderErrorFacts[K]) => PlainError<K>;
+};
+
 // e.g.
 authError['client-certificate']({ problem: 'expired' });
-authError.snc({ problem: 'no-credential', secureLoginClient: false },
-              { library: path });
-authError['saml-assertion']({ rule: 'duplicate-id', check: 'duplicateId' },
-                            { id: value });
-// does not compile: `issuer` is `never` for rule 'duplicate-id'
-// authError['saml-assertion']({ rule: 'duplicate-id', check: 'duplicateId' }, { issuer: v });
+authError.snc({ problem: 'no-credential', secureLoginClient: false }, { library: path });
+authError['saml-assertion']({ rule: 'duplicate-id', check: 'duplicateId' }, { id: value });
 ```
 
-The discriminant is inferred from the facts literal; `One<…>` refuses a
-discriminant typed as a union (a `rule` variable of type `AssertionRule`
-would otherwise widen the permitted diagnostics to every rule's), so a
-producer passes a literal or narrows first. The return type keeps the
-variant, so the result is a member of the correlated union of §4.1.
+The variant is inferred from the facts literal and the builder sets
+`variant` from it; `One<…>` refuses a discriminant typed as a union (a `rule`
+variable of type `AssertionRule` would otherwise widen the permitted
+diagnostics to every rule's), so a producer passes a literal or narrows
+first. The return type is the one variant (`Extract<…, { variant: R }>`), so
+the result is a member of the correlated union of §4.1 and its diagnostics
+are typed for that variant. (An input field that is forbidden is typed
+`?: never`; under `exactOptionalPropertyTypes` passing any value to it is a
+compile error — measured, §11.2.)
 
 A builder: normalises the facts it is given (omits absent keys, caps and
 deduplicates arrays as §3.2 says, freezes nested arrays and objects); admits
@@ -1182,22 +1189,87 @@ directive fails `test:check`, so each line is load-bearing by construction:
 - a fact of another kind (`authError.tls({ problem: 'expired' })`), a fact of
   the wrong type (`status: 500`, `code: 'EWHATEVER'`, `rule: 'audience-not-us'`
   with `check: 'issuer'`);
-- a diagnostics field on a kind without diagnostics; a `saml-assertion`
-- a diagnostics field on a kind without diagnostics — the builder has no
-  second parameter (`authError['client-certificate']({ problem: 'expired' },
-  { library: p })`); and against the exact public builder signatures, one per
-  correlated kind: `authError['saml-assertion']({ rule: 'duplicate-id', check:
-  'duplicateId' }, { issuer: v })`, `authError.snc({ problem: 'logon-refused' },
-  { library: p })`, `authError.configuration({ case:
-  'required-fields-missing', fields: ['clientId'] }, { configuredUri: u })`;
-  a discriminant typed as the whole union (`declare const r: AssertionRule;
-  authError['saml-assertion']({ rule: r, … }, { issuer: v })`); and an object
-  of type `IAuthProviderError` assembled (inside `__typechecks__`, through the
-  test's own brand cast) with `rule: 'duplicate-id'` and `diagnostics: {
-  issuer }` — the pairing matches no variant; each beside the valid call
-  (`rule: 'untrusted-issuer'` with `issuer`), and a narrowing test
-  (`if (e.kind === 'saml-assertion' && e.facts.rule === 'untrusted-issuer')`
-  makes `e.diagnostics?.issuer` readable, `e.diagnostics?.id` an error)
+- **the correlation of facts and diagnostics** — the probe below, compiled
+  on 2026-10-05 with TypeScript 5.9.3 (the version installed in this
+  repository) under auth-providers' flags (`strict`,
+  `exactOptionalPropertyTypes`, `noUncheckedIndexedAccess`,
+  `noImplicitReturns`, `noFallthroughCasesInSwitch`, `noImplicitOverride`),
+  against a model of §4.1 / §5.2 with three rules, three SNC problems, two
+  configuration cases and one plain kind. Result: **0 errors with the 14
+  directives in place** (every one used); **14 errors with them removed**,
+  each the expected one (TS2322 "not assignable to type 'undefined'" for a
+  forbidden builder field, TS2322 for the fixed `check`, TS2322 "… to type
+  'never'" for a union discriminant, TS2554 "Expected 1 arguments" for a
+  diagnostics argument on a plain kind, TS2339 "Property 'id' does not exist
+  on type '{ readonly issuer?: DocumentValue; }'" after narrowing, TS2339
+  "… on type 'never'" for a variant without diagnostics, TS2322 "has no
+  properties in common" for the mismatched pairing without the brand). The
+  type tests in `auth-errors` and `interfaces-auth` are this probe on the full
+  types:
+
+```ts
+// builders — exact public signatures
+authError['saml-assertion']({ rule: 'untrusted-issuer', check: 'issuer' }, { issuer: v }); // ok
+authError['saml-assertion']({ rule: 'duplicate-id', check: 'duplicateId' }, { id: v });    // ok
+authError.snc({ problem: 'no-credential' }, { library: v });                               // ok
+authError.configuration({ case: 'saml-acs-mismatch', fields: ['acsUrl'] },
+                        { configuredUri: v, strategyUri: v });                             // ok
+const a = authError['saml-assertion']({ rule: 'untrusted-issuer', check: 'issuer' }, { issuer: v });
+const i: string | undefined = a.diagnostics?.issuer;                                       // ok: the result keeps its variant
+// @ts-expect-error duplicate-id carries no issuer
+authError['saml-assertion']({ rule: 'duplicate-id', check: 'duplicateId' }, { issuer: v });
+// @ts-expect-error logon-refused carries no library
+authError.snc({ problem: 'logon-refused' }, { library: v });
+// @ts-expect-error a non-mismatch case carries no configuredUri
+authError.configuration({ case: 'required-fields-missing', fields: ['clientId'] }, { configuredUri: v });
+// @ts-expect-error the rule's check is fixed
+authError['saml-assertion']({ rule: 'duplicate-id', check: 'issuer' });
+declare const anyRule: AssertionRule;
+// @ts-expect-error a discriminant typed as the whole union
+authError['saml-assertion']({ rule: anyRule, check: 'issuer' }, { issuer: v });
+// @ts-expect-error no diagnostics parameter on a kind without diagnostics
+authError['client-certificate']({ problem: 'expired' }, { library: v });
+
+// consumers — narrowing by kind + variant
+declare const e: IAuthProviderError;
+if (e.kind === 'saml-assertion' && e.variant === 'untrusted-issuer') {
+  use(e.diagnostics?.issuer);                       // ok
+  const r: 'untrusted-issuer' = e.facts.rule;       // ok: facts narrowed too
+  // @ts-expect-error id is not a field of this variant
+  use(e.diagnostics?.id);
+}
+if (e.kind === 'saml-assertion' && e.variant === 'expired') {
+  // @ts-expect-error this variant has no diagnostics
+  use(e.diagnostics?.issuer);
+}
+if (e.kind === 'snc' && e.variant === 'no-credential') {
+  use(e.diagnostics?.library);                      // ok
+  // @ts-expect-error candidatePaths belongs to library-not-found
+  use(e.diagnostics?.candidatePaths);
+}
+if (e.kind === 'configuration' && e.variant === 'required-fields-missing') {
+  // @ts-expect-error no diagnostics for this case
+  use(e.diagnostics?.configuredUri);
+}
+if (e.kind === 'client-certificate') {
+  // @ts-expect-error no diagnostics on this kind
+  use(e.diagnostics?.library);
+}
+// facts.rule alone does not narrow the union (why `variant` is top-level):
+if (e.kind === 'saml-assertion' && e.facts.rule === 'untrusted-issuer') {
+  // @ts-expect-error issuer is not known to be permitted here
+  use(e.diagnostics?.issuer);
+}
+// a mismatched pairing — with the brand missing, and with the brand set aside
+const forged = { kind: 'saml-assertion', variant: 'duplicate-id',
+  facts: { rule: 'duplicate-id', check: 'duplicateId' }, diagnostics: { issuer: 'x' }, reason: '' } as const;
+// @ts-expect-error brand missing, and the pairing matches no variant
+const f2: IAuthProviderError = forged;
+type Unbranded<T> = T extends unknown ? { [K in keyof T as K extends string ? K : never]: T[K] } : never;
+// @ts-expect-error duplicate-id with an issuer matches no variant
+const f3: Unbranded<IAuthProviderError> = forged;
+```
+
 - `WORDS` without one kind (a local copy with a key removed does not satisfy
   the mapped type); a discriminant switch missing one member;
 - `matchKind` with one handler missing; a `switch` over all but one kind with
