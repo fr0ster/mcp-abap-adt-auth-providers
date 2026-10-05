@@ -45,7 +45,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   fresh `AxiosError` of fixed words carrying only an integer status, an
   allowlisted (or axios's own) code and a registered OAuth `error` — never the
   original, not even as `cause`. The device poll's `authorization_pending` /
-  `slow_down` still continue.
+  `slow_down` still continue. A cancellation stays one: an aborted request
+  becomes a `CanceledError` in fixed words, so `axios.isCancel` and
+  `axios.isAxiosError` both hold. A consumer's logger that throws while a
+  token site reports a failure (the SAML exchange and refresh, the device
+  poll's wait) is ignored, so it can no longer replace the safe rejection
+  with its own text.
 
 - **Security: a server echoing the Basic header could expose the client
   credential, on the path without a client-authentication strategy.** Without
