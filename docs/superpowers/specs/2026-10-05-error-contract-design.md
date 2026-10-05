@@ -639,9 +639,13 @@ compile error — measured, §11.2.)
 A builder: normalises the facts it is given (omits absent keys, caps and
 deduplicates arrays as §3.2 says, freezes nested arrays and objects); admits
 each diagnostic field (§5.3); renders `reason` / `hint` with the default words
-(§5.6); calls `mint`. Facts are not re-checked at run time: their types are
-the check (goal invariant 4), and `facts` from an unknown source never reach
-a builder — they go through classification.
+(§5.6); calls `mint`. Facts are typed — the types are the check for a
+TypeScript caller (goal invariant 4) — and, as built (Task 7 ruling F1), the
+builders, the renderer, `blamesCredential`, `logFields` and
+`renderDiagnostics` also re-check each interpolated value against its guard or
+maker, so a JavaScript caller's invalid required fact yields the unfamiliar
+words and an invalid optional one is dropped; `facts` from an unknown source
+still go through classification.
 
 Each permitted diagnostic is `unknown` at the call: the builder, not the
 caller, decides what is admitted (§5.3), and it admits a field only when the
