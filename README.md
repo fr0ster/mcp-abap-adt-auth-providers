@@ -573,9 +573,12 @@ public client that sends only `client_id`.
   `ClientAuthenticationResultError`, refused as *the client authentication
   returned a request that cannot be sent*. Only `client_secret`,
   `client_assertion` and a Basic credential are known to be secrets and
-  redacted from an error body. Every secret is redacted as sent, encoded and
-  form-decoded (the whole value: `&` and `=` are part of it, a malformed `%`
-  stays) — so with either `encoding`, and for a `clientSecret` sent without a
+  redacted from an error body. Every secret is redacted as sent, encoded —
+  each character as itself or percent-escaped in either case, a space also as
+  `+` — and form-decoded (the whole value: `&` and `=` are part of it, a
+  malformed `%` stays), and any base64 in the body (either alphabet, any
+  padding, escaped or not) that decodes to text holding a secret is redacted
+  too (since 5.4.2) — so with either `encoding`, and for a `clientSecret` sent without a
   strategy, neither the original, the encoded secret nor what a decoding
   server read survives its echo. Without a strategy, the Basic header a
   provider builds from `clientId` and `clientSecret` is redacted the same way

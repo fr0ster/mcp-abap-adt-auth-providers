@@ -32,6 +32,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   affected. Nothing else changed: the request sent, the messages and the
   error shapes are as in 5.4.1; a logger that throws while the code exchange
   logs a `200` without `access_token` no longer replaces its failure.
+- **Security: a secret echoed in an equivalent encoding escaped the
+  redaction, on both paths.** Redaction matched a fixed list of spellings, so
+  a server echoing a secret in another, equally readable one left it in the
+  same three places: a base64 credential without its padding, with other
+  padding or in the URL-safe alphabet; a percent escape in lower or mixed
+  case (`%2f` for `%2F`); a space as `+` or `%20`. Every secret the request
+  carried — the client secret, the grant's (refresh token, code, verifier,
+  assertion, passcode, password, device code, subject / actor token) and a
+  strategy's (`client_secret`, `client_assertion`, a Basic credential) — is
+  now matched with each character as itself or percent-escaped in any case,
+  a space also as `+`; then every base64 run of the answer (either alphabet,
+  any padding, escaped or not) is decoded, and the smallest span of it that
+  decodes to text holding a secret is redacted. Markers are never scanned
+  again, so the output stays bounded.
 
 ## [5.4.1] - 2026-10-05
 
