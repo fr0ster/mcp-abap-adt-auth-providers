@@ -1,6 +1,6 @@
 # Error contract — goal and path
 
-**Status:** draft, 2026-10-05, for review. The spec and then the plan come
+**Status:** goal approved by the user 2026-10-05 (after four Codex adversarial passes). The spec and then the plan come
 next, in this PR. This file is the anchor: it says what they are for, and what
 neither may trade away. If the spec or the plan needs to depart from anything
 under *Holds throughout*, this file changes first — explicitly, in review.
