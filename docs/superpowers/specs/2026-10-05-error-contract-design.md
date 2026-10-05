@@ -622,12 +622,12 @@ enforces.
 ### 5.3 Diagnostics admission
 
 The second boundary of goal invariant 4. Each check is total (it reads its
-input through a guarded read, so a getter or a Proxy reads as absent) and
+input through a guarded read, so a getter, or a Proxy trap that throws, reads as absent) and
 answers the admitted value or "drop":
 
 | Check | Rule |
 |---|---|
-| `LocalPath` | a string of 1–1 024 code points; no C0 control, DEL, C1 control, U+2028/U+2029, bidirectional control (U+202A–U+202E, U+2066–U+2069), invisible format character (U+200B–U+200F, U+061C, U+180E, U+2060–U+2064, U+FEFF) or lone surrogate; never truncated (a truncated path misleads) — longer is dropped |
+| `LocalPath` | a string of 1–1 024 code points; no C0 control, DEL, C1 control, U+2028/U+2029, code point whose General_Category is Cc, Cf (every format character: bidi controls, U+200B–U+200F, U+061C, U+180E, U+2060–U+206F, U+FEFF, the tag block U+E0000–U+E007F used to smuggle hidden text to a model, …), Cs (a lone surrogate), Zl, Zp or Co (private use), nor a noncharacter, a variation selector (U+FE00–U+FE0F, U+E0100–U+E01EF), U+034F or a Hangul filler (U+115F, U+1160, U+3164, U+FFA0) — refused by category (`\p{…}` captured at load), not by a list; never truncated (a truncated path misleads) — longer is dropped |
 | `DocumentValue` | a non-empty string with none of the characters `LocalPath` refuses; cut to 64 code points at a code-point boundary with `…` appended when longer (today's `quoteUntrusted` cap, `signedNode.ts:73-78`); the ASCII-only fields (`referenceUri`, `statusCode`) additionally refuse anything outside U+0021–U+007E |
 | `XmlName` | matches `^[A-Za-z_][A-Za-z0-9._-]{0,63}$` |
 | `XmlId` | matches `^[A-Za-z_][A-Za-z0-9._-]*$`, then cut as `DocumentValue` |
