@@ -819,6 +819,11 @@ export interface TokenRequestSite {
   readonly logger?: ILogger | undefined;
   /** Every secret this request carried: grantSecrets(params) + the configured clientSecret. */
   readonly secrets: readonly (string | undefined)[];
+  /**
+   * The site's own Basic header on the path without a strategy, as built by
+   * legacyBasic() — never assembled by the site itself.
+   */
+  readonly basic?: LegacyBasic | undefined;
 }
 export async function sendTokenRequest<T>(
   prepared: PreparedTokenRequest | undefined,
@@ -827,10 +832,42 @@ export async function sendTokenRequest<T>(
 ): Promise<AxiosResponse<T>>;
 ```
 
+**The legacy Basic header carries its own secrets.** On the path without a
+strategy, five sites build an `Authorization: Basic base64(id:secret)` header
+of their own — `saml2TokenExchange.ts:24-26`, `:57-62` (SAML exchange and
+refresh), `oidcToken.ts:26-37` (`toBasicAuth` / `buildAuthHeaders`: OIDC token
+request, device poll, password grant), `browserAuth.ts:113-121` (UAA code
+exchange), `tokenRefresher.ts:57-65` (UAA refresh), `passcodeAuth.ts:69-77`
+(passcode). The base64 credential is not any form of `clientSecret` the
+redaction knows (`echoedForms`, `oauthErrorBody.ts:35-42`), so a server
+echoing the header would put a recoverable `id:secret` into what is kept.
+They all move to one helper, so a site cannot build the header without its
+secrets:
+
+```ts
+// tokenRequest.ts
+export interface LegacyBasic {
+  readonly header: string;             // `Basic ${base64}`
+  readonly secrets: readonly string[]; // what basicSecrets() extracts from it
+}
+export function legacyBasic(clientId: string, clientSecret: string): LegacyBasic;
+```
+
+`legacyBasic` builds the header and derives `secrets` from it with the same
+`basicSecrets` (`tokenRequest.ts:162-176`) that extracts a strategy's Basic
+credential — the base64 credential and the decoded secret after the first
+colon — so both paths redact the same forms. A site passes the result as
+`site.basic` and puts `basic.header` on its request; the shape check gains a
+rule (§8.2 rule 8): outside `legacyBasic` and `clientSecretBasic`
+(`clientSecret.ts:60`), no file under `src/auth` or `src/providers` writes a
+`Basic ` header or base64-encodes a value containing a client secret.
+`BasicAuthProvider` (`BasicAuthProvider.ts:36`) is a credential presented to
+the ABAP system, not a token request, and stays.
+
 On a failure with a response, `sendTokenRequest`, before building the
-failure: (1) joins `site.secrets` with the strategy's (`prepared.secrets`:
-`client_secret`, `client_assertion`, a Basic credential) — passed explicitly
-by every site, never looked up; (2) reduces the body with `oauthErrorFields`
+failure: (1) joins `site.secrets`, `site.basic?.secrets` and the strategy's
+(`prepared.secrets`: `client_secret`, `client_assertion`, a Basic
+credential) — each passed explicitly by the site, never looked up; (2) reduces the body with `oauthErrorFields`
 (`oauthErrorBody.ts:181-195`: `error`, `error_description`, `error_uri`, each
 secret redacted in every form it may be echoed in, JWT-shaped values
 redacted, `oauthErrorBody.ts:35-73`); (3) writes **one** line,
@@ -859,6 +896,43 @@ and none in any rendering of the thrown failure; with no logger, no line and
 the same failure; a logger whose `debug` throws, the same failure.
 Load-bearing: dropping `prepared.secrets` from the join, or one site's
 `secrets`, turns that site's case red.
+
+**Header-echo tests** (one per site that builds a legacy Basic header, on the
+path without a strategy: the SAML exchange, the SAML refresh, the OIDC token
+request, the device poll, the password grant, the UAA code exchange, the UAA
+refresh, the passcode exchange): the server answers `400` with
+`error_description` and `error_uri` echoing the request's `Authorization`
+header whole, its base64 credential alone, the base64 URL-encoded and
+form-encoded, and the decoded `id:secret` — the debug line carries none of
+them, nor does any rendering of the failure; the same with a client id
+containing `:` and a secret containing `+`, `%` and `/`. Load-bearing:
+passing `secrets` without `basic` turns every one red. A source test asserts
+rule 8 (no `Basic ` header and no base64 of a secret outside the two helpers).
+
+**Today's code (5.4.1) leaks this — a Fixed item.** Read from the code (not
+yet measured by a test, because none exists — `oauthErrorBodies.test.ts`
+has no Basic case): every site above passes only `clientSecret` and its grant
+secrets to the redaction, so a server echoing the Basic header leaves the
+base64 credential, from which `id:secret` decodes, in
+- the message of the `TokenEndpointError` the wrapping sites throw (UAA
+  refresh `tokenRefresher.ts:86`, passcode `passcodeAuth.ts:98`, password
+  grant `oidcToken.ts:341`) — a message every catcher logs;
+- the reduced `response.data` of the `AxiosError` the other sites rethrow
+  (`tokenRequest.ts:329-337`: the SAML exchange and refresh, the OIDC token
+  request and device poll, the UAA code exchange) — not logged by the
+  package, but kept on a value consumers serialise;
+- the error log of the UAA code exchange's 2xx without `access_token`
+  (`browserAuth.ts:150-157`).
+The strategy path is not affected (`basicSecrets` covers it). The condition is
+a server that echoes request headers into its error body — a misbehaving or
+hostile one, which is exactly the case the redaction exists for. 6.0.0 ships
+the fix and lists it under **Fixed** in its CHANGELOG. It **warrants an
+earlier 5.4.2 patch** — the 6.0.0 chain is several releases away, and the
+documented guarantee ("redacts every secret the request sent") is broken
+today for every consumer on 5.x — made as its own small change from `master`
+(the same `legacyBasic` helper and header-echo tests, nothing of the error
+contract). Under the one-PR-per-task rule it is recorded here and in this
+PR's description; opening it is the user's decision.
 
 ## 7. Logon targets (connection) and rule 4
 
@@ -1062,7 +1136,11 @@ plugins do not have). It refuses, in `src/` outside tests:
 7. a call of `guard` whose `grant` argument is not a function expression, or
    any read of a provider property in a `guard` call's argument list other
    than `this.#moments` (the base's own field) — so no metadata is evaluated
-   before the boundary.
+   before the boundary;
+8. (auth-providers) a `Basic ` authorization value, or a base64 encoding of a
+   string built from a client secret, outside `legacyBasic`
+   (`tokenRequest.ts`) and `clientSecretBasic` (`clientSecret.ts`) — so no
+   token request carries a Basic credential the redaction does not know.
 
 connection runs the same script for rules 4, 5 and 6 (it has no providers,
 and its refusals carry no diagnostics, so its site list is empty);
@@ -1533,8 +1611,10 @@ README differs from the generated table.
    install of each from the registry outside the repositories.
 5. `docs/superpowers/` emptied of this work's documents before the
    auth-providers release.
-6. The debug-line tests of §6 green for every token site on both paths, and
-   the decision on L1 (the line, or none) recorded in the PR.
+6. The debug-line tests and the header-echo tests of §6 green for every token
+   site on both paths, the 6.0.0 CHANGELOG's **Fixed** entry for the legacy
+   Basic credential written, the decision on L1 (the line, or none) and on a
+   5.4.2 patch recorded in the PR.
 7. connection's suites, run once against the published auth-providers
    6.0.0 without the legacy adapter (§10.3), green — before auth-stores and
    the broker move; a connection 12.0.x patch first if they are not.
@@ -1902,7 +1982,9 @@ Each item is something a person or a program can see today and will not see
 in the same place after this change. Nothing else is lost: every other row
 of Appendix A keeps its information as facts, as diagnostics, or verbatim.
 
-- **L1 — A token endpoint's `error_description` and `error_uri`.** Today in
+- **L1 — A token endpoint's `error_description` and `error_uri`.** (The
+  legacy Basic credential is now redacted from them too, §6 — a fix, not a
+  loss.) Today in
   `TokenEndpointError.message` (redacted) and in the reduced `AxiosError`'s
   `response.data` (D1, D3). Server free text: never in an error. *Proposed:*
   `sendTokenRequest` logs them once per failed request at `debug`, through
