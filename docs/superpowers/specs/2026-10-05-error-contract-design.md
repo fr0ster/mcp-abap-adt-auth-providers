@@ -1,6 +1,6 @@
 # Error contract — design spec
 
-**Status:** draft for review, 2026-10-05; Codex adversarial approve (fifth pass); information losses L1–L13 and the SAML debug line approved by the user 2026-10-05; spec approved by the user 2026-10-05. Anchor:
+**Status:** draft for review, 2026-10-05; Codex adversarial approve (fifth pass); information losses L1–L13 and the SAML debug line approved by the user 2026-10-05; spec approved by the user 2026-10-05; `authDebug` (opt-in server text, §6) decided by the user 2026-10-05. Anchor:
 [`../2026-10-05-error-contract-goal.md`](../2026-10-05-error-contract-goal.md)
 (approved 2026-10-05). Every "Holds throughout" invariant of the goal binds
 this spec; §13 says how each is honoured and which ones are held by something
@@ -789,7 +789,7 @@ facts instead — found by a sweep of `src` for `isAxiosError`, `.response`,
 | `passcodeAuth.ts:95-104` | `axios.isAxiosError(error) && error.response` → wrap in `TokenEndpointError` | nothing to read: the failure from `sendTokenRequest` is thrown as it is (`operation: 'passcode-exchange'`) |
 | `clientCredentialsAuth.ts:76-87`, `tokenRefresher.ts:80-87`, `oidcToken.ts:227-236` (device initiation), `oidcToken.ts:335-345` (password grant) | `tlsFailureCode(error)` to let a TLS failure through unwrapped, else wrap | nothing to read: `sendTokenRequest` already chose `tls` or `request-failed`; the site passes its operation |
 | `saml2TokenExchange.ts:97-106`, `:154-163` | `axios.isAxiosError(error)` to decide whether to log | logs `logFields(readFailure(error, …))` for any failure, then rethrows it |
-| `browserAuth.ts:150-157` | a 2xx `response` without `access_token`: logs the status and the redacted OAuth body — redacting only `clientsecret`, `grantSecrets(params)` and `prepared.secrets`, never the site's own Basic credential | `rejectMissingToken(site, response)` (below): the same joined secrets as a failed request, one `debug` line, then `request-failed` `problem: 'no-access-token'` |
+| `browserAuth.ts:150-157` | a 2xx `response` without `access_token`: logs the status and the redacted OAuth body — redacting only `clientsecret`, `grantSecrets(params)` and `prepared.secrets`, never the site's own Basic credential | `rejectMissingToken(site, response)` (below): no log line by default; with `authDebug`, one `debug` line with the same joined secrets as a failed request, previewed; then `request-failed` `problem: 'no-access-token'` |
 | `BaseTokenProvider.ts:475-487` — refresh falling back to login | nothing (any throw) | unchanged: any failure of the refresh falls back |
 | the broker (`AuthBroker.ts:660`, `SessionWriter.ts:40-46`) | nothing of the error but its class name (`classLabel`) | logs `AuthProviderFailure`; no other reader (no `isAxiosError` in the broker or the CLI, searched) |
 
@@ -804,12 +804,50 @@ no retry); and the same four through the strategy path
 `oauthError` from anything but the classified facts (or dropping it in
 `sendTokenRequest`) turns pending → success red.
 
-**The OAuth error description — logged inside `sendTokenRequest`, before
-conversion.** A token endpoint's `error_description` and `error_uri` are
-server free text and never enter an error. Once `sendTokenRequest` throws an
-`AuthProviderFailure`, no site can read the body any more, so the one place
-that still holds it writes the debug line. Decision, for approval (Appendix
-C, L1):
+**The OAuth error description — by default nowhere; with `authDebug`,
+one line written inside `sendTokenRequest`, before conversion.** Decided by
+the user 2026-10-05:
+
+- **Default.** A token endpoint's `error_description` and `error_uri` — the
+  server's free text — reach no error, no `AuthProviderFailure`, no response
+  data and **no log line**. A secret appears in a log only as `<redacted, N
+  chars>` (`BaseTokenProvider.formatToken`, unchanged). This is also what
+  5.4.2 does for errors.
+- **`authDebug: true`, an explicit consumer option.** Only with it is the
+  debug line below written, carrying the server's text, with every secret
+  found in it — in every encoding the redaction recognises — replaced by a
+  **preview**. Never read from the environment (`DEBUG_AUTH_PROVIDERS` and
+  its kin keep controlling only what they control today, and never this),
+  never defaulted on (rule 7: the consumer composes).
+
+**Where the option lives.** `authDebug?: boolean | undefined` is a
+constructor option of every token provider: a new exported interface
+`TokenProviderDebug { readonly authDebug?: boolean | undefined }` in
+auth-providers, joined into `BaseConfig` (`BaseTokenProvider.ts:75`) and so
+into every `…ProviderConfig` type. It is not a contract of
+`interfaces-auth` (no contract consumer needs it; `ITokenProviderOptions`
+stays as it is) and not part of `auth-errors` — `logFields` and every error
+stay free of server text whatever the option says. `BaseTokenProvider`
+reads it once in its constructor as `config.authDebug === true` (anything
+else, `'true'` included, is off) and hands it to every site in its
+`TokenRequestSite`. The non-token credentials send no token request and take
+no option. The broker passes it through (§10.6): `AuthBrokerConfig.authDebug`
+is given to every provider the broker builds; a provider a consumer supplies
+already built keeps its own setting. The CLI exposes it as `--auth-debug`.
+
+**The preview.** `previewSecret(form)`, in `oauthErrorBody.ts`, for a matched
+form of length N: N < 16 → `<redacted, N chars>`; N ≥ 16 → its first 4 and
+last 4 characters around the marker, `abcd…wxyz <redacted, N chars>` — never
+more than 8 characters of any form. Every recognised form is previewed on its
+own, from its own characters: as sent, form-encoded, `encodeURIComponent`'d,
+form-decoded (`echoedForms`, `oauthErrorBody.ts:35-42`), a Basic credential's
+base64 and decoded secret (`basicSecrets`), and anything JWT-shaped
+(`JWT_SHAPE`, `oauthErrorBody.ts:18`). The replacement is the same single
+pass as today's redaction — one alternation, longest first, a marker never
+rescanned (`oauthErrorBody.ts:51-73`) — with the preview as the replacement.
+The registered `error` code is kept verbatim, as today.
+
+The site description:
 
 ```ts
 export interface TokenRequestSite {
@@ -817,6 +855,8 @@ export interface TokenRequestSite {
   readonly grant?: OAuth2GrantType | undefined;
   /** The provider's logger; no logger → no debug line, nothing else changes. */
   readonly logger?: ILogger | undefined;
+  /** The consumer's `authDebug === true`; false → no debug line at all. */
+  readonly authDebug: boolean;
   /** Every secret this request carried: grantSecrets(params) + the configured clientSecret. */
   readonly secrets: readonly (string | undefined)[];
   /**
@@ -870,19 +910,22 @@ failure: (1) joins `site.secrets`, `site.basic?.secrets` and the strategy's
 credential) — each passed explicitly by the site, never looked up; (2) reduces the body with `oauthErrorFields`
 (`oauthErrorBody.ts:181-195`: `error`, `error_description`, `error_uri`, each
 secret redacted in every form it may be echoed in, JWT-shaped values
-redacted, `oauthErrorBody.ts:35-73`); (3) writes **one** line,
+redacted, `oauthErrorBody.ts:35-73`); (3) **only when `site.authDebug` is
+true and there is a logger**, writes one line,
 `logger.debug('[<operation>] token endpoint said', { status, error,
-error_description, error_uri })` with the reduced fields only; (4) builds the
+error_description, error_uri })` — the reduced fields with every secret
+previewed (above), not erased; without `authDebug` steps (2) and (3) do not
+run and nothing of the body is read beyond `error`; (4) builds the
 `AuthProviderFailure` from the status, the registered `error` and the
 allowlisted code — the body never enters it, and the reduced fields are
-dropped with the local. The line is written for **every** site that sends a
-token request (the five that wrapped today — passcode, client credentials,
-UAA refresh, device initiation, password grant — and the code exchange, the
-OIDC token request and device poll, the SAML exchange and refresh), on both
-paths; device polling's `authorization_pending` / `slow_down` answers are
-not logged (they are the protocol, not a failure). A logger that throws is
-caught and ignored, as SNC's `log` does (`SncLogonProvider.ts:217-223`). The
-alternative for approval is to write no line at all.
+dropped with the local. With `authDebug`, the line is written for **every**
+site that sends a token request (the five that wrapped today — passcode,
+client credentials, UAA refresh, device initiation, password grant — and the
+code exchange, the OIDC token request and device poll, the SAML exchange and
+refresh), on both paths; device polling's `authorization_pending` /
+`slow_down` answers are not logged (they are the protocol, not a failure). A
+logger that throws is caught and ignored, as SNC's `log` does
+(`SncLogonProvider.ts:217-223`).
 
 Tests (`oauthErrorBodies.test.ts`, `tokenRequestShapes.test.ts`): for each
 token site, without and with a client-authentication strategy (secret Basic
@@ -890,10 +933,20 @@ raw and form, `clientSecretPost`, `privateKeyJwt`), a server answering `400`
 with an `error_description` and an `error_uri` that echo every secret the
 request carried — the grant's (refresh token, code, verifier, assertion,
 passcode, password, device code, subject / actor token), the configured
-`clientSecret`, the strategy's — in each echoed form and as a JWT: exactly
-one debug line, carrying the redacted summary, no secret in any form in it,
-and none in any rendering of the thrown failure; with no logger, no line and
-the same failure; a logger whose `debug` throws, the same failure.
+`clientSecret`, the strategy's — in each echoed form and as a JWT:
+- **without `authDebug`** (absent, `false`, `'true'`, and with
+  `DEBUG_AUTH_PROVIDERS=true` set in the environment): no debug line, no log
+  line of any level carrying `error_description` / `error_uri` text, and the
+  same failure;
+- **with `authDebug: true`**: exactly one debug line; every echoed form of
+  every secret replaced by its preview — none present whole; each preview at
+  most 4 + 4 characters of that form plus `<redacted, N chars>` with N the
+  form's length; a secret (form) shorter than 16 characters shown only as
+  `<redacted, N chars>`, boundary cases 15 and 16; two forms of one secret
+  previewed separately; the server's other text kept; none of it in any
+  rendering of the thrown failure;
+- with `authDebug: true` and no logger, no line and the same failure; a
+  logger whose `debug` throws, the same failure.
 Load-bearing: dropping `prepared.secrets` from the join, or one site's
 `secrets`, turns that site's case red.
 
@@ -911,7 +964,7 @@ log nothing of the body today. All of them now call one helper beside
 `sendTokenRequest`:
 
 ```ts
-/** A 2xx that carries no usable token: one debug line, then the failure. */
+/** A 2xx that carries no usable token: a debug line with authDebug, then the failure. */
 export function rejectMissingToken(
   site: TokenRequestSite,
   prepared: PreparedTokenRequest | undefined,
@@ -923,11 +976,12 @@ export function rejectMissingToken(
 It joins exactly the secrets `sendTokenRequest` joins — `site.secrets`,
 `site.basic?.secrets`, `prepared?.secrets` — through the same private join
 function (one function, two callers, so the two cannot drift), reduces the
-body with `oauthErrorFields`, writes one `debug` line through `site.logger`
-inside a `try` that swallows a throwing logger, and throws `request-failed`
-with the status and the problem. The code exchange's line moves from `error`
-to `debug` level, like every other body line (L1's policy); nothing of the
-body enters the failure.
+body and writes one `debug` line through `site.logger` — **only when
+`site.authDebug` is true**, previewing secrets as above, inside a `try` that
+swallows a throwing logger — and throws `request-failed` with the status and
+the problem. The code exchange's `error`-level line (`browserAuth.ts:150-157`)
+goes: by default nothing of a 2xx body is logged; with `authDebug`, the debug
+line; nothing of the body enters the failure either way.
 
 **Header-echo tests** (one per site that builds a legacy Basic header, on the
 path without a strategy: the SAML exchange, the SAML refresh, the OIDC token
@@ -935,15 +989,17 @@ request, the device poll, the password grant, the UAA code exchange, the UAA
 refresh, the passcode exchange): the server answers `400` with
 `error_description` and `error_uri` echoing the request's `Authorization`
 header whole, its base64 credential alone, the base64 URL-encoded and
-form-encoded, and the decoded `id:secret` — the debug line carries none of
-them, nor does any rendering of the failure; the same with a client id
+form-encoded, and the decoded `id:secret` — with `authDebug` the debug line
+carries each only as its preview, without it there is no line, and no
+rendering of the failure carries any; the same with a client id
 containing `:` and a secret containing `+`, `%` and `/`. The same echoes in
 a **`200` without `access_token`** (and, for the device initiation, a `200`
 without its required fields) for every site with such a branch — the UAA
 code exchange, the passcode exchange, the OIDC token request and password
 grant, the SAML exchange and refresh, client credentials, the UAA refresh,
-the device initiation — without a strategy and with each strategy: one debug
-line, no form of the Basic credential, the grant's or the strategy's secrets
+the device initiation — without a strategy and with each strategy: without
+`authDebug` no line; with it one debug line, every form of the Basic
+credential, the grant's and the strategy's secrets previewed and none whole,
 in it or in the failure; no logger, no line; a throwing logger, the same
 failure. Load-bearing: passing `secrets` without `basic`, in either
 `sendTokenRequest` or `rejectMissingToken`, turns every one red. A source test asserts
@@ -1394,7 +1450,9 @@ is not this work.
   "Error Handling" and "Relaying a refusal" (`:2018-2107`) rewritten on kinds;
   the refusal tables generated (§11.4); a "Migrating to 6.0.0" section
   (catch with `readFailure`, switch on `kind`, `refusalWords` → `classify`,
-  the classes removed, Appendix C's losses stated).
+  the classes removed, Appendix C's losses stated); `authDebug` documented
+  in "Debug Logging" and "Error Handling" — what it writes, the preview, that
+  it is off by default and never read from the environment.
 - `CLAUDE.md`: provider rules 1, 2, 5, 8 and "Error classes" restated on
   kinds; the module structure; `docs/passwordless-sso.md:235-237` quotes "the
   SNC library has no credential to present (A2200019)", which stays verbatim
@@ -1433,6 +1491,15 @@ kind. Migration note: none beyond the versions.
   through `SNC_FIELDS` as today.
 - `getTokens` / `refreshTokens` relay the provider's `AuthProviderFailure`
   unchanged.
+- `AuthBrokerConfig.authDebug?: boolean | undefined` (§6): passed as
+  `authDebug` to every token provider the broker builds from a destination
+  (`destinations.ts`'s provider construction), `=== true` only; never read
+  from the environment; a consumer-supplied provider instance or factory
+  result keeps its own setting. The CLI (`mcp-auth`, `generate-env`) gains
+  `--auth-debug`, which sets it and nothing else; without the flag the CLI
+  prints no server text. Tests: a destination-built provider receives
+  `authDebug: true` only with the option / flag; an environment variable
+  alone changes nothing.
 - `tools/check-provider-shape.mjs` rules 4–5.
 - Major: what `AuthBroker.getTokens()` rejects with changes class, and
   `DestinationConfigError` gains a field. The CLI is a major because what it
@@ -1657,8 +1724,9 @@ README differs from the generated table.
 6. The debug-line tests and the header-echo tests of §6 (`400` and `200`
    without a token) green for every token
    site on both paths, the 6.0.0 CHANGELOG's **Fixed** entry for the legacy
-   Basic credential written, the decision on L1 (the line, or none) and on a
-   5.4.2 patch recorded in the PR.
+   Basic credential written, the `authDebug` tests (no line without it, the
+   preview bounds, short secrets as a length only, every encoding previewed)
+   green in auth-providers and the broker / CLI pass-through tests green.
 7. connection's suites, run once against the published auth-providers
    6.0.0 without the legacy adapter (§10.3), green — before auth-stores and
    the broker move; a connection 12.0.x patch first if they are not.
@@ -1926,7 +1994,7 @@ diagnostics? }`):
 | H7 | `BrowserCallbackStrategy.ts:186-193` | `Failed to open browser: <words>. Open manually: <url>` + `{ error, url }` | unchanged: the URL is the strategy's own announcement, not an error's text |
 | H8 | `browserAuth.ts:217-220`, `:298-302` | `Could not open browser automatically: <words>` / `Failed to open browser: <words>. Please open manually: <url>` | same as H7 |
 | H9 | `tokenRequest.ts:393` | words inside `TokenEndpointError`'s message | gone with the class (D2) |
-| H10 | `sendTokenRequest`, for every token site (§6) | (new) | one `debug` line per failed request with a response: `error`, `error_description`, `error_uri` reduced by `oauthErrorFields` with the site's and the strategy's secrets; never in the failure; none without a logger — if L1 is approved as proposed |
+| H10 | `sendTokenRequest` and `rejectMissingToken`, for every token site (§6) | the code exchange's `error`-level 2xx body line (`browserAuth.ts:150-157`) | **only with `authDebug: true`**: one `debug` line per failed request or token-less 2xx — `error`, `error_description`, `error_uri` with every secret previewed (≤ 4 + 4 characters, `<redacted, N chars>`; under 16 characters the length only); without it no line, and the code exchange's line goes; never in the failure |
 
 ### A.9 connection
 
@@ -2019,11 +2087,14 @@ each with today's words verbatim.
 
 ## Appendix C — Information lost, for the user's approval
 
-**Approved by the user 2026-10-05: L1–L13 as written; L1 keeps the proposed
-redacted `debug` log line per site.**
+**Approved by the user 2026-10-05: L1–L13 as written; L1 as amended below
+(the server's text only with `authDebug`).**
 
-**Also decided by the user 2026-10-05:** the debug line is written at every
-token site, the SAML exchange and refresh included; the 5.4.1 Basic-credential
+**Also decided by the user 2026-10-05:** by default the server's free text
+reaches no error, failure, response data or log line, and a secret appears
+only as `<redacted, N chars>`; with the consumer's explicit `authDebug: true`
+the debug line is written at every token site, the SAML exchange and refresh
+included, with secrets previewed (§6); the 5.4.1 Basic-credential
 leak is fixed now in a separate auth-providers 5.4.2 patch from `master`
 (its own PR, an approved exception to one open PR per repository), and the
 same fix carries into 6.0.0.
@@ -2036,12 +2107,11 @@ of Appendix A keeps its information as facts, as diagnostics, or verbatim.
   legacy Basic credential is now redacted from them too, §6 — a fix, not a
   loss.) Today in
   `TokenEndpointError.message` (redacted) and in the reduced `AxiosError`'s
-  `response.data` (D1, D3). Server free text: never in an error. *Proposed:*
-  `sendTokenRequest` logs them once per failed request at `debug`, through
-  the site's logger, reduced and redacted with the site's and the strategy's
-  secrets before the failure is built (§6, H10); the failure never carries
-  them.
-  *Alternative:* drop it everywhere. The registered `error` code stays a fact.
+  `response.data` (D1, D3). Server free text: never in an error, a failure,
+  response data or — by default — a log line. **Only with the consumer's
+  `authDebug: true`** does `sendTokenRequest` (or `rejectMissingToken`) write
+  them in one `debug` line per failed request, through the site's logger,
+  every secret previewed (§6, H10). The registered `error` code stays a fact.
 - **L2 — `cause`.** `TokenEndpointError`, `BrowserAuthError`,
   `RefreshError`, the IdP-certificate `Error` (E26) keep the original as
   `cause` today. `AuthProviderFailure` carries no original — the goal's "no
