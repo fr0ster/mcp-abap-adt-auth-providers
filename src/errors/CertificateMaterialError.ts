@@ -22,8 +22,11 @@ export const CERTIFICATE_EXPIRED = {
   hint: 'renew the certificate; a token provider pins its certificate for life, so give the renewed one to a new provider',
 } as const;
 
-/** Which fixed words a CertificateMaterialError carries. */
-function wordsFor(incomplete: boolean, expired: boolean) {
+/**
+ * Which fixed words a CertificateMaterialError carries. Internal: the package
+ * index does not export it.
+ */
+export function certificateWords(incomplete: boolean, expired: boolean) {
   if (incomplete) return CERTIFICATE_INCOMPLETE;
   return expired ? CERTIFICATE_EXPIRED : CERTIFICATE_UNUSABLE;
 }
@@ -40,7 +43,7 @@ export class CertificateMaterialError extends TokenProviderError {
     public readonly expired: boolean = false,
   ) {
     super(
-      wordsFor(incomplete, expired).reason,
+      certificateWords(incomplete, expired).reason,
       TOKEN_PROVIDER_ERROR_CODES.CERTIFICATE_MATERIAL_ERROR,
     );
     this.name = 'CertificateMaterialError';
@@ -49,6 +52,6 @@ export class CertificateMaterialError extends TokenProviderError {
 
   /** The fixed reason and hint this error stands for. */
   get words(): { readonly reason: string; readonly hint: string } {
-    return wordsFor(this.incomplete, this.expired);
+    return certificateWords(this.incomplete, this.expired);
   }
 }

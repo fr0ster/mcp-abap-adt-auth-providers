@@ -9,13 +9,16 @@
  * allowlist this package owns. A `name` property is never read.
  */
 
-import type { AuthOutcome } from '@mcp-abap-adt/interfaces-auth';
+import type { AuthOutcome, IAuthRefusal } from '@mcp-abap-adt/interfaces-auth';
 import { DeviceCodePresentationError } from '../deviceCode/DeviceCodePresenter';
 import {
   type AssertionCheck,
   AssertionValidationError,
 } from '../errors/AssertionValidationError';
-import { CertificateMaterialError } from '../errors/CertificateMaterialError';
+import {
+  CertificateMaterialError,
+  certificateWords,
+} from '../errors/CertificateMaterialError';
 import {
   BASIC_CLIENT_ID_UNUSABLE,
   BasicClientIdError,
@@ -233,7 +236,12 @@ function refusalFromUnguarded(error: unknown, what: string): AuthOutcome {
     return oops(`the SAML assertion was refused${check}`);
   }
   if (error instanceof CertificateMaterialError) {
-    const { reason, hint } = error.words;
+    // Chosen from the two flags, never read from `words`: an instance (or an
+    // object whose prototype is this class) may carry its own `words`.
+    const { reason, hint } = certificateWords(
+      error.incomplete === true,
+      error.expired === true,
+    );
     return oops(reason, hint);
   }
   if (error instanceof ClientAuthenticationResultError) {
@@ -301,6 +309,23 @@ function refusalFromUnguarded(error: unknown, what: string): AuthOutcome {
   return oops(
     `${what} failed (unknown error${facts.length ? `, ${facts.join(', ')}` : ''})`,
   );
+}
+
+/**
+ * The refusal words this package would give for a thrown value — exactly the
+ * `reason` and `hint` of `refusalFrom(error, what)`, for a consumer that
+ * relays them (in its own error, say) instead of copying them. Fixed words per
+ * class of this package decided by `instanceof`, plus allowlisted metadata,
+ * else "`what` failed (unknown error)"; never an error's message, cause or
+ * body. Total: a hostile value (a Proxy, a throwing getter) never makes it
+ * throw. `what` names what the consumer was doing; it appears only in the
+ * words for an error this package has no fixed words for.
+ */
+export function refusalWords(error: unknown, what: string): IAuthRefusal {
+  const outcome = refusalFrom(error, what);
+  if (outcome.ok) return { reason: `${what} failed (unknown error)` };
+  const { reason, hint } = outcome.refusal;
+  return hint === undefined ? { reason } : { reason, hint };
 }
 
 /**

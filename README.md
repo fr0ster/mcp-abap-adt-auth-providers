@@ -2070,6 +2070,34 @@ A failed token request throws without the request it sent — no form body, no
 `error`, `error_description` and `error_uri`, every secret the request sent
 redacted.
 
+#### Relaying a refusal: `refusalWords`
+
+A consumer that catches an error from this package — a strategy's
+`tlsMaterial()` checked eagerly, say — and reports it in its own error should
+relay the words this package would refuse with, not copy them:
+
+```typescript
+import { refusalWords, tlsClientCertificate } from '@mcp-abap-adt/auth-providers';
+
+try {
+  await tlsClientCertificate({ material: loader }).tlsMaterial?.();
+} catch (error) {
+  const { reason, hint } = refusalWords(error, 'loading the client certificate');
+  throw new MyConfigError(hint ? `${reason}: ${hint}` : reason);
+}
+```
+
+`refusalWords(error: unknown, what: string): IAuthRefusal` answers exactly the
+`reason` and `hint` a provider's refusal would carry for that thrown value —
+for a `CertificateMaterialError`, its kind's words from the
+[Refusals](#refusals) table, hint included. The words are fixed per class of
+this package, decided by `instanceof`, plus allowlisted facts (a known config
+field, an HTTP status, a registered OAuth code, a system or TLS code); for
+anything else, `<what> failed (unknown error)`. Never an error's message,
+`cause` or body. It never throws: a Proxy or a throwing getter gets fixed
+words. `what` is the consumer's own description of what it was doing, and
+appears only in the words for an error this package has no fixed words for.
+
 All error codes are defined in `@mcp-abap-adt/interfaces-auth` package as `TOKEN_PROVIDER_ERROR_CODES` — `CertificateMaterialError`'s is `CERTIFICATE_MATERIAL_ERROR`; `ClientAuthenticationError` and `ClientAuthenticationResultError` share `CLIENT_AUTHENTICATION_ERROR` — and `AssertionValidationError`'s as `ASSERTION_ERROR_CODES`.
 
 ## Upgrading from 4.0 to 4.1

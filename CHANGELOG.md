@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [5.4.0] - 2026-10-05
+
+### Added
+
+- **`refusalWords(error, what)`**, exported from the package index: the
+  `{ reason, hint? }` a provider's refusal would carry for a thrown value — the
+  same derivation as the providers' own (fixed words per class of this
+  package, allowlisted facts, else `<what> failed (unknown error)`), never an
+  error's message, cause or body, and total for a hostile value. A consumer
+  that reports a failure in its own error — the broker checking a client
+  certificate eagerly — relays the package's words, hint included, instead of
+  copying them. See *Relaying a refusal* in the README.
+
+### Fixed
+
+- A `CertificateMaterialError`'s refusal is chosen from its `incomplete` and
+  `expired` flags, no longer read from its `words` getter: an object whose
+  prototype is the class, or an instance given its own `words`, can no longer
+  put its own text into a refusal or a log line.
+
 ## [5.3.0] - 2026-10-04
 
 A token provider's client can authenticate with a client certificate or a
