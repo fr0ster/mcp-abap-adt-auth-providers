@@ -45,7 +45,10 @@ cover thrown classes only, not refusals.
    only — no logic (the interfaces package holds none).
 2. **`@mcp-abap-adt/auth-providers`** — classification (`unknown` →
    `IAuthProviderError`, the one runtime boundary), the renderer, every
-   refusal and thrown token error built through them.
+   refusal and thrown token error built through them. It also moves to
+   `@mcp-abap-adt/interfaces-auth` ^4 (optional fields a provider hands out
+   are `?: T | undefined`) and deletes `asContract`
+   (`src/auth/contractShape.ts`), the one cast 5.4.1 kept for them.
 3. **`@mcp-abap-adt/auth-broker`** — relays the error; its copied certificate
    phrases go.
 4. **`@mcp-abap-adt/connection` and further consumers** — read `kind` where
@@ -82,8 +85,10 @@ cover thrown classes only, not refusals.
 
 ## Before this work
 
-A separate, earlier change in `@mcp-abap-adt/auth-providers` puts the package
-under the compiler this goal relies on: the test files type-checked by
+Done 2026-10-05: auth-providers 5.4.1 is under the compiler this goal relies
+on; interfaces 4.0.0 (auth), 3.0.0 (auth-sap) carry the widened fields;
+auth-stores and auth-broker get the same compiler in their own PRs, released
+with this work. What that change did: the test files type-checked by
 `test:check` (they are excluded from it today, so a type error in a test
 surfaces only when Jest runs), and the stricter compiler options
 (`noUncheckedIndexedAccess`, `exactOptionalPropertyTypes`,
