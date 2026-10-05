@@ -1220,6 +1220,19 @@ signal (or none). The rule, wherever an attempt is shared:
      the abort and the queued clearing step's write may submit the persisted
      R once after a restart (the tombstones live in memory) — stated in the
      README.
+     **A failed notification is not lost.** `onTokens` is best effort (its
+     failure is logged and does not fail authentication, rule 7), so a
+     `'clear'` whose `onTokens` threw would otherwise be followed by a
+     `'keep'` that lets persistence keep R. The provider therefore keeps a
+     **pending disposition**: when an `onTokens` carrying `'clear'` or
+     `'replace'` fails, that disposition stays pending; every later credential
+     notification carries the **logical** refresh state instead of a bare
+     `'keep'` — a pending `'clear'` is sent again as `'clear'`, a pending
+     `'replace'` as `'replace'` with the currently held refresh token — until
+     one `onTokens` succeeds; a new `'replace'` or `'clear'` supersedes the
+     pending one. There is no retry loop and no timer: the next commit is the
+     retry; if none comes before the process ends, the restart limit above
+     applies.
   2. A late response to that refresh that does arrive is offered to the
      commit queue (below) with the **generation of its attempt**: it is
      committed — tokens, R2, `onTokens` — if and only if no newer credential
@@ -1437,7 +1450,12 @@ access token installed, R neither installed nor persisted as usable
 token); **dispositions:** a refresh returning a new token → `'replace'`; a
 result with none and nothing cut → `'keep'`; the queued clearing step of a
 cut → `onTokens` called once with `'clear'` and the held access token;
-dropping the clearing step's `onTokens` turns its case red; reinstating an exit rule ("leave once a
+dropping the clearing step's `onTokens` turns its case red; **pending
+disposition:** the clearing step's `onTokens` throws, the next commit (a
+token-only result) calls `onTokens` with `'clear'` again, not `'keep'`; a
+`'replace'` whose `onTokens` throws is sent as `'replace'` with the held
+token by the next commit; a new `'replace'` supersedes a pending `'clear'`;
+sending a bare `'keep'` after a failed `'clear'` turns the first case red; reinstating an exit rule ("leave once a
 different token is installed") turns the first case red; running `onTokens` hooks concurrently turns the
 commit-order case red; re-submitting a cut R turns the refresh case red;
 reinstating a "no live party → `aborted`" rule turns the after-release and
@@ -1957,11 +1975,20 @@ R. Migration note: none beyond the versions and that statement.
   (`mcp-abap-adt`, after this chain): the server must choose its own bound
   for an interactive login it triggers, or document that it waits until the
   user finishes or the request is cancelled.
-- **Refresh-token disposition (§6b).** The session write
-  (`AuthBroker.ts:1282-1295`) reads `result.refreshTokenDisposition`:
-  `'replace'` writes `result.refreshToken`; `'keep'` (or absent with no
-  refresh token) keeps today's fallback to the stored token; `'clear'`
-  writes `refreshToken: ''` and never reads the stored one; an access token
+- **Refresh-token disposition (§6b).** The broker composes dispositions
+  per destination instead of writing each result on its own: its session
+  writer keeps only the latest pending result (`SessionWriter.ts:80-84`), so
+  a failed `'clear'` write followed by a `'keep'` result would otherwise
+  fall back to the stored R. It keeps a **logical refresh state** per
+  destination — `stored` (initially), `cleared`, or `token(X)` — updated by
+  each result: `'replace'` → `token(X)`, `'clear'` → `cleared`, `'keep'` →
+  unchanged. A write (`AuthBroker.ts:1282-1295`, and every retry of a
+  pending write) is built from that state, never from the single result:
+  `token(X)` writes X; `cleared` writes `refreshToken: ''` and never reads
+  the stored one — `'clear'` is sticky until a `'replace'` supersedes it;
+  only `stored` keeps today's fallback to the stored token. A pending
+  write that is replaced by a later result is rebuilt from the state, so an
+  unpersisted clear stays clear; an access token
   is written only when the result carries a non-empty one (a clearing
   notification may carry none). End-to-end tests with the published
   auth-stores session store: a persisted R, a refresh cut after dispatch,
@@ -1969,8 +1996,13 @@ R. Migration note: none beyond the versions and that statement.
   store: R absent; a persisted R and only the cut (no later result) → the
   queued clearing step's write has removed R, and a fresh broker on the same
   store (a restart) finds no refresh token and logs in; `'keep'` keeps a
-  stored R. Break: falling back to the stored token on `'clear'` turns the
-  first case red.
+  stored R; **composition:** a persisted R → a cut → the `'clear'` save
+  fails (a store that throws once) → a token-only `'keep'` result arrives →
+  the retried write succeeds → a fresh broker on the same store (a restart)
+  finds no R; a `'replace'` after a pending `'clear'` wins (the new token is
+  stored). Breaks: falling back to the stored token on `'clear'` turns the
+  first case red; writing each result on its own (no composition) turns the
+  composition case red.
 - **Cancelling (§6b).** `getProvider(destination, options?: { signal?:
   AbortSignal | undefined })`, `getToken(destination, options?)`,
   `refreshToken(destination, options?)`. `getProvider`'s caller is a waiter
