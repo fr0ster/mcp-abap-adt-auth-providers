@@ -2089,7 +2089,7 @@ the brand and its limit.
 
 ### 10.3 `mcp-abap-connection` 12.0.0
 
-- `package.json`: `interfaces-auth ^6.0.0`, `interfaces-auth-sap ^3.1.0`,
+- `package.json`: `interfaces-auth ^6.0.0`, `interfaces-auth-sap ^3.2.0`,
   `auth-errors ^1.0.0` (it is on `^3.0.0` / `^2.0.0` today, so this also
   takes interfaces-auth 4.0.0's widened fields). Major: `AuthRefusedError`'s
   `refusal` changes type, and its exported refusal constants change shape.
@@ -2163,7 +2163,7 @@ is not this work.
 
 ### 10.4 `mcp-abap-adt-auth-providers` 6.0.0 (this PR)
 
-- `package.json`: `interfaces-auth ^6.0.0`, `interfaces-auth-sap ^3.1.0`,
+- `package.json`: `interfaces-auth ^6.0.0`, `interfaces-auth-sap ^3.2.0`,
   `auth-errors ^1.0.0`.
 - New: `src/auth/AuthProviderBase.ts`; `tools/check-provider-shape.mjs`.
 - Rewritten on the builders and `classify`: `src/auth/refusal.ts` (only
@@ -2206,7 +2206,7 @@ is not this work.
 
 Its unreleased change is already breaking (Node 22/24/26 engines,
 `CHANGELOG.md` "Unreleased"), so it releases as a major anyway. Moves to
-`interfaces-auth ^6.0.0`, `interfaces-auth-sap ^3.1.0`,
+`interfaces-auth ^6.0.0`, `interfaces-auth-sap ^3.2.0`,
 `interfaces-auth-broker ^1.3.0`; deletes its `asContract`. It produces no
 auth refusal (it uses only `STORE_ERROR_CODES`, `StoreErrors.ts:5-6`), so no
 kind. **Refresh-token clearing (§6b):** `saveSession` with `refreshToken:
@@ -2220,7 +2220,7 @@ R. Migration note: none beyond the versions and that statement.
 
 ### 10.6 `mcp-abap-adt-auth-broker` 5.0.0 and `auth-broker-cli` 3.0.0
 
-- Dependencies: interfaces-auth `^6.0.0`, interfaces-auth-sap `^3.1.0`,
+- Dependencies: interfaces-auth `^6.0.0`, interfaces-auth-sap `^3.2.0`,
   interfaces-auth-broker `^1.3.0`, auth-errors `^1.0.0`, auth-providers
   `^6.0.0`, auth-stores `^4.0.0`.
 - `clientAuthentication.ts:77-80` (the copied certificate phrases) and
@@ -2571,7 +2571,7 @@ README differs from the generated table.
 3. README, guides, CLAUDE.md and migration notes updated (global
    CLAUDE.md "Releasing"; goal Open 5), the generated tables current.
 4. Dependencies only from the registry, in order: interfaces (auth 5.0.0,
-   auth-sap 3.1.0) → interfaces-auth 6.0.0 (§4.3a) → auth-errors 1.0.0 → connection 12.0.0 → auth-providers
+   auth-sap 3.1.0) → interfaces (auth 6.0.0, auth-sap 3.2.0; §4.3a) → auth-errors 1.0.0 → connection 12.0.0 → auth-providers
    6.0.0 → auth-stores 4.0.0 → auth-broker 5.0.0 + CLI 3.0.0; each consumer
    built against the published versions, the lockfile checked for
    `"link": true` and non-registry resolutions; after publishing, a clean
