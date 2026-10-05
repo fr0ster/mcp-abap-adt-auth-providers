@@ -17,9 +17,9 @@ import type { AddressInfo } from 'node:net';
 import { inspect } from 'node:util';
 import { afterAll, beforeAll, describe, expect, it } from '@jest/globals';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
-import axios from 'axios';
 import { exchangeCodeForToken } from '../../auth/browserAuth';
 import { getTokenWithClientCredentials } from '../../auth/clientCredentialsAuth';
+import { oauthErrorFields } from '../../auth/oauthErrorBody';
 import {
   exchangeAuthorizationCode,
   initiateDeviceAuthorization,
@@ -34,7 +34,7 @@ import {
   refreshSamlBearerToken,
 } from '../../auth/saml2TokenExchange';
 import { refreshJwtToken } from '../../auth/tokenRefresher';
-import { legacyBasic, sendTokenRequest } from '../../auth/tokenRequest';
+import { legacyBasic } from '../../auth/tokenRequest';
 
 function listen(server: Server): Promise<number> {
   return new Promise((resolve) => {
@@ -271,26 +271,26 @@ function forbidden(c: Credential, authorization: string | undefined): string[] {
 
 /**
  * The server's free text (its description and URI) is in no rendering of the
- * thrown error and in no log line but one debug line — present only where the
- * site has something to say (`says`).
+ * thrown error and in no log line: by default nothing the server wrote
+ * reaches the consumer. Where the site has a logger, one debug line names the
+ * refusal's safe facts (`says`).
  */
-function expectSaidOnlyInDebug(
+function expectNoFreeText(
   rendered: Record<string, string>,
   logs: string,
   says: boolean,
 ): void {
-  for (const [where, text] of Object.entries(rendered)) {
-    expect({ where, free: /refused|idp\.example/.test(text) }).toEqual({
+  for (const [where, text] of Object.entries({ ...rendered, logs })) {
+    expect({ where, free: /refused:|idp\.example/.test(text) }).toEqual({
       where,
       free: false,
     });
   }
-  const lines = logs.split('\n').filter((l) => /refused|idp\.example/.test(l));
-  expect(lines).toHaveLength(says ? 1 : 0);
-  for (const line of lines) {
-    expect(line).toMatch(/^debug .*: the token endpoint said /);
-    expect(line).toContain('refused: header=Basic <redacted>');
-  }
+  const noted = logs
+    .split('\n')
+    .filter((l) => l.includes('the token endpoint refused the request'));
+  expect(noted).toHaveLength(says ? 1 : 0);
+  for (const line of noted) expect(line).toMatch(/^debug /);
 }
 
 async function expectNoCredential(
@@ -318,7 +318,7 @@ async function expectNoCredential(
   } else {
     expect(received).toBeUndefined();
   }
-  expectSaidOnlyInDebug(renderings(thrown), text(), says);
+  expectNoFreeText(renderings(thrown), text(), says);
   const surfaces = { ...renderings(thrown), logs: text() };
   for (const form of forbidden(c, received)) {
     for (const [where, rendered] of Object.entries(surfaces)) {
@@ -345,15 +345,10 @@ describe.each(CREDENTIALS)('a server echoing the Basic header, $label', (c) => {
   describe('in a 200 without access_token', () => {
     it.each(BASIC_SITES)(
       '%s without a strategy: no form of the credential comes back out',
-      async (label, run) => {
+      async (_label, run) => {
         status = 200;
-        // Only the code exchange logs a 200 without a token.
-        await expectNoCredential(
-          run,
-          c,
-          true,
-          label === 'UAA authorization code',
-        );
+        // A 200 is no refused request: no debug line.
+        await expectNoCredential(run, c, true, false);
       },
     );
     it.each(NON_BASIC_SITES)(
@@ -394,41 +389,27 @@ describe('the UAA code exchange logging a 200 without access_token', () => {
 });
 
 describe('legacyBasic carries its own secrets', () => {
-  // Every site also passes its clientSecret, from which the decoded
-  // credential is recognised too; this pins that the header's own secrets
-  // suffice, so dropping `basic` from the join is caught on its own.
+  // Nothing in 5.4.2 writes the server's words, so nothing redacts them; the
+  // redactor stays as defence in depth, and the header's own secrets alone
+  // must let it remove every form of the credential.
   it.each(CREDENTIALS)(
-    '$label: sendTokenRequest given only `basic` keeps no form of it',
-    async (c) => {
-      status = 400;
+    '$label: the redactor given only legacyBasic secrets keeps no form of it',
+    (c) => {
       const basic = legacyBasic(c.id, c.secret);
-      let thrown: unknown;
-      const failed = expect(
-        sendTokenRequest(
-          undefined,
-          () =>
-            axios.post(`${base}/token`, 'grant_type=x', {
-              headers: { Authorization: basic.header },
-              maxRedirects: 0,
-            }),
-          [],
-          basic,
-        ).catch((error: unknown) => {
-          thrown = error;
-          throw error;
-        }),
-      ).rejects.toBeDefined();
-      await failed;
-      expect(received).toBe(basic.header);
-      const rendered = renderings(thrown);
-      for (const form of forbidden(c, received)) {
-        for (const [where, text] of Object.entries(rendered)) {
-          expect({ where, form, found: text.includes(form) }).toEqual({
-            where,
-            form,
-            found: false,
-          });
-        }
+      const echo = echoesOf(basic.header);
+      const fields = oauthErrorFields(
+        {
+          error_description: `refused: ${echo}`,
+          error_uri: `https://x/?e=${echo}`,
+        },
+        basic.secrets,
+      );
+      const text = JSON.stringify(fields);
+      for (const form of forbidden(c, basic.header)) {
+        expect({ form, found: text.includes(form) }).toEqual({
+          form,
+          found: false,
+        });
       }
     },
   );

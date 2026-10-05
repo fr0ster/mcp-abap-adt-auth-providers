@@ -85,7 +85,7 @@ describe('exchangePasscode', () => {
 
     // The message names the status and a registered code only:
     // `unauthorized` is UAA's own, and the description is the server's free
-    // text — it goes to the debug line.
+    // text — it reaches no message and no log line.
     const debug = jest.fn();
     const logger = {
       debug,
@@ -104,12 +104,8 @@ describe('exchangePasscode', () => {
     ).rejects.toThrow(/^Passcode exchange failed \(401\)$/);
     await failed;
     expect(debug).toHaveBeenCalledWith(
-      'Passcode exchange failed: the token endpoint said',
-      {
-        status: 401,
-        error: 'unauthorized',
-        error_description: 'Invalid passcode',
-      },
+      'Passcode exchange failed: the token endpoint refused the request',
+      { status: 401 },
     );
   });
 

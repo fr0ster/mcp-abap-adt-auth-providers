@@ -40,11 +40,7 @@ import { ClientAuthenticationResultError } from '../errors/ClientAuthenticationE
 import { TokenEndpointError } from '../errors/TokenEndpointError';
 import { assertNotExpired } from './certificateMaterial';
 import { allowlistedCode, integerStatus, readSafely } from './knownCodes';
-import {
-  type OAuthErrorFields,
-  oauthErrorFields,
-  registeredOAuthError,
-} from './oauthErrorBody';
+import { type OAuthErrorFields, registeredOAuthError } from './oauthErrorBody';
 import { loggedError } from './refusal';
 
 /** What a site is given to authenticate one request with a strategy. */
@@ -188,10 +184,10 @@ export interface LegacyBasic {
 }
 
 /**
- * The one place a site without a strategy builds its Basic header: the
+ * The one place a site without a strategy builds its Basic header. Its
  * secrets come from the same `basicSecrets()` a strategy's Basic credential
- * goes through, so both paths redact the same forms, and a site cannot send
- * the header without them.
+ * goes through, for any redaction of what a server says back — 5.4.2 writes
+ * none of the server's words anywhere, so nothing reads them yet.
  */
 export function legacyBasic(
   clientId: string,
@@ -199,21 +195,6 @@ export function legacyBasic(
 ): LegacyBasic {
   const header = `Basic ${Buffer.from(`${clientId}:${clientSecret}`).toString('base64')}`;
   return { header, secrets: basicSecrets({ Authorization: header }) };
-}
-
-/**
- * Every secret one request carried, joined in one place: the site's own (its
- * grant's, its configured client secret), its legacy Basic credential, and
- * what the strategy sent. Every redaction of that request's answer — a failed
- * one in `sendTokenRequest`, a site's `tokenEndpointError`, a logged body of a
- * success without a token — joins through here, so none can drift.
- */
-export function requestSecrets(
-  sent: readonly (string | undefined)[],
-  basic: LegacyBasic | undefined,
-  prepared: PreparedTokenRequest | undefined,
-): (string | undefined)[] {
-  return [...sent, ...(basic?.secrets ?? []), ...(prepared?.secrets ?? [])];
 }
 
 /**
@@ -329,8 +310,8 @@ export interface TokenRequestFailure extends Error {
  * server's text), empty `headers` and `data` reduced to the OAuth `error`
  * when it is a registered code — the server's free text (`error_description`,
  * `error_uri`) and an unregistered code are dropped: a server may echo the
- * request in them, in encodings no redaction can enumerate. They reach only
- * the site's debug line (`logServerWords`). No `config`, `request` or
+ * request in them, in encodings no redaction can enumerate. They reach no
+ * error and no log line. No `config`, `request` or
  * `cause` is set, so `toJSON()`, which reads `this.config`, serialises none.
  */
 function withoutRequest(error: unknown): unknown {
@@ -390,7 +371,7 @@ function registeredOnly(data: unknown): OAuthErrorFields | undefined {
   return error === undefined ? {} : { error };
 }
 
-/** Where a site's failed request may say what the server said: one debug line. */
+/** Where a site's failed request is noted: one debug line of safe facts. */
 export interface TokenRequestDiagnostics {
   /** The site's logger; without one, no line. */
   readonly logger?: ILogger | null | undefined;
@@ -402,28 +383,31 @@ export interface TokenRequestDiagnostics {
 const WAITING = new Set(['authorization_pending', 'slow_down']);
 
 /**
- * The server's own words about a failed request — `error`,
- * `error_description`, `error_uri`, every secret the request carried redacted
- * (`oauthErrorFields`) — in one `debug` line through the site's logger, the
- * only place they go. No logger, no line; a logger that throws is ignored, so
- * the failure the site throws is never replaced.
+ * A failed request in one `debug` line through the site's logger: the HTTP
+ * status and the OAuth `error` when it is a registered code — never the
+ * server's free text (`error_description`, `error_uri`), which may echo any
+ * secret of the request in an encoding no redaction can enumerate, nor an
+ * unregistered code. No line for the device poll's waiting answers, none
+ * without a logger; a logger that throws is ignored, so the failure the site
+ * throws is never replaced.
  */
-export function logServerWords(
+export function logRefusedRequest(
   diagnostics: TokenRequestDiagnostics | undefined,
   status: unknown,
   data: unknown,
-  secrets: readonly (string | undefined)[],
 ): void {
   const logger = diagnostics?.logger;
   if (!logger) return;
   try {
-    const fields = oauthErrorFields(data, secrets);
-    if (!fields || Object.keys(fields).length === 0) return;
-    if (fields.error !== undefined && WAITING.has(fields.error)) return;
-    logger.debug(`${diagnostics.label}: the token endpoint said`, {
-      status: integerStatus(status),
-      ...fields,
-    });
+    const error = registeredOAuthError(readSafely(data, 'error'));
+    if (error !== undefined && WAITING.has(error)) return;
+    logger.debug(
+      `${diagnostics.label}: the token endpoint refused the request`,
+      {
+        status: integerStatus(status),
+        ...(error === undefined ? {} : { error }),
+      },
+    );
   } catch {
     // The site's failure is what the caller needs.
   }
@@ -434,30 +418,22 @@ export function logServerWords(
  * site's own `asToday` — and on failure throws it without the request
  * (`withoutRequest`). The request itself is not changed on either path.
  *
- * @param sent the secrets the site itself put in the request (a refresh
- *   token, a code, an assertion, a client secret); with the site's own Basic
- *   credential and what the strategy added, they are redacted from the error
- *   body that stays on the error.
- * @param basic the site's own Basic header without a strategy (`legacyBasic`).
- * @param diagnostics where the server's own words go (`logServerWords`): the
- *   thrown error carries none of them.
+ * @param diagnostics where the failure is noted (`logRefusedRequest`): safe
+ *   facts only, like the thrown error.
  */
 export async function sendTokenRequest<T>(
   prepared: PreparedTokenRequest | undefined,
   asToday: () => Promise<AxiosResponse<T>>,
-  sent: readonly (string | undefined)[] = [],
-  basic?: LegacyBasic,
   diagnostics?: TokenRequestDiagnostics,
 ): Promise<AxiosResponse<T>> {
   try {
     return prepared ? await axios<T>(prepared.config) : await asToday();
   } catch (error) {
     const response = readSafely(error, 'response');
-    logServerWords(
+    logRefusedRequest(
       diagnostics,
       readSafely(response, 'status'),
       readSafely(response, 'data'),
-      requestSecrets(sent, basic, prepared),
     );
     throw withoutRequest(error);
   }
@@ -469,7 +445,7 @@ export async function sendTokenRequest<T>(
  * registered code, an allowlisted system code — so a refusal and a log line
  * can name them. With a response, the message is `<label> (<status>)` and,
  * when the server gave a registered code, `: <code>`; the server's
- * description never (it went to the site's debug line, `logServerWords`).
+ * description never.
  * Without one, `<label>: ` and fixed words (`loggedError`). The original is
  * the cause.
  */

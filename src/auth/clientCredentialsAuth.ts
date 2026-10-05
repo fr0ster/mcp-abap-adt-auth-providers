@@ -74,13 +74,10 @@ export async function getTokenWithClientCredentials(
 
   let response: AxiosResponse;
   try {
-    response = await sendTokenRequest(
-      prepared,
-      sendAsToday,
-      [clientSecret],
-      undefined,
-      { logger, label: 'Client credentials authentication failed' },
-    );
+    response = await sendTokenRequest(prepared, sendAsToday, {
+      logger,
+      label: 'Client credentials authentication failed',
+    });
   } catch (error: unknown) {
     // Unwrapped, so the refusal can name the TLS code and its fixed hint.
     if (tlsFailureCode(error) !== undefined) throw error;

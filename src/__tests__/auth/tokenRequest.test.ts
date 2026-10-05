@@ -21,6 +21,7 @@ import type {
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
 import axios, { AxiosError } from 'axios';
 import { getTokenWithClientCredentials } from '../../auth/clientCredentialsAuth';
+import { oauthErrorFields } from '../../auth/oauthErrorBody';
 import {
   initiateDeviceAuthorization,
   passwordGrant,
@@ -461,24 +462,26 @@ async function echoedOutput(
 }
 
 /**
- * The server's description reaches no rendering of the thrown error, and
- * only one debug line, where the echo is redacted whole and nothing else is:
- * the description reads exactly the prefix and `<redacted>` — no tail of the
- * secret left after a prefix of it was redacted, no letter of the prefix
- * redacted for a short fragment of the secret.
+ * The server's description reaches no rendering of the thrown error and no
+ * log line. The redactor — called by no site in 5.4.2, kept as defence in
+ * depth — given the secrets the request carried, redacts the echo whole and
+ * nothing else: the description reads exactly the prefix and `<redacted>` —
+ * no tail of the secret left after a prefix of it was redacted, no letter of
+ * the prefix redacted for a short fragment of the secret.
  */
 function expectRedactedWhole(
   out: { error: string; logs: string; debug: string[] },
   echoed: string,
+  secrets: string[],
 ): void {
   expect(out.error).not.toContain(ECHO_PREFIX);
   expect(out.error).not.toContain(echoed);
+  expect(out.logs).not.toContain(ECHO_PREFIX);
   expect(out.logs).not.toContain(echoed);
-  const said = out.debug.filter((line) => line.includes(ECHO_PREFIX));
-  expect(said).toHaveLength(1);
-  expect(said[0]).toContain(`${ECHO_PREFIX} <redacted>`);
-  // Followed only by a closing quote (plain or JSON-escaped), a space or the end.
-  expect(said[0]).not.toMatch(/bad client secret <redacted>[^"\\\s]/);
+  expect(
+    oauthErrorFields({ error_description: `${ECHO_PREFIX} ${echoed}` }, secrets)
+      ?.error_description,
+  ).toBe(`${ECHO_PREFIX} <redacted>`);
 }
 
 describe.each(SITES)(
@@ -491,7 +494,7 @@ describe.each(SITES)(
         ['raw: the secret as sent', 'raw', 'secret'],
         ['raw: the secret as the server decoded it', 'raw', 'rawDecoded'],
       ])(
-        '%s is in no rendering of the thrown error, and only redacted in one debug line',
+        '%s is in no rendering of the thrown error nor any log line, and the redactor removes it whole',
         async (_label, encoding, which) => {
           const echoed = c[which];
           const out = await echoedOutput(echoed, (logger) =>
@@ -500,7 +503,10 @@ describe.each(SITES)(
               logger,
             ),
           );
-          expectRedactedWhole(out, echoed);
+          // The secret as the strategy's Basic header carried it.
+          expectRedactedWhole(out, echoed, [
+            encoding === 'form' ? c.formSent : c.secret,
+          ]);
         },
       );
     });
@@ -516,13 +522,13 @@ describe.each(
       ['form-encoded', 'formSent'],
       ['as a decoding server read it', 'rawDecoded'],
     ])(
-      '%s is in no rendering of the thrown error, and only redacted in one debug line',
+      '%s is in no rendering of the thrown error nor any log line, and the redactor removes it whole',
       async (_label, which) => {
         const echoed = c[which];
         const out = await echoedOutput(echoed, (logger) =>
           site.run(undefined, logger, c.secret),
         );
-        expectRedactedWhole(out, echoed);
+        expectRedactedWhole(out, echoed, [c.secret]);
       },
     );
   });
@@ -1008,17 +1014,19 @@ describe('the server never reads back the password or the passcode', () => {
   };
   /**
    * The message is the label and the status alone (the code is not a
-   * registered one); the server's words, redacted, are in one debug line.
+   * registered one); the server's words are in no line.
    */
-  const expectSaidOnlyInDebug = (
+  const expectRefusalNoted = (
     thrown: unknown,
     label: string,
     lines: string[],
     secrets: string[],
   ) => {
     expect(messageOf(thrown)).toBe(`${label} (401)`);
-    expect(lines).toHaveLength(1);
-    expect(lines[0]).toContain('refused <redacted>');
+    // One debug line of safe facts: the status; the code is not registered.
+    expect(lines).toEqual([
+      `${label}: the token endpoint refused the request {"status":401}`,
+    ]);
     for (const secret of secrets) expect(lines[0]).not.toContain(secret);
   };
 
@@ -1039,7 +1047,7 @@ describe('the server never reads back the password or the passcode', () => {
         auth,
       ),
     );
-    expectSaidOnlyInDebug(thrown, 'Passcode exchange failed', lines, [
+    expectRefusalNoted(thrown, 'Passcode exchange failed', lines, [
       PASSCODE,
       CLIENT_SECRET,
     ]);
@@ -1064,7 +1072,7 @@ describe('the server never reads back the password or the passcode', () => {
         auth,
       ),
     );
-    expectSaidOnlyInDebug(thrown, 'OIDC password grant failed', lines, [
+    expectRefusalNoted(thrown, 'OIDC password grant failed', lines, [
       PASSWORD,
       CLIENT_SECRET,
     ]);
@@ -1084,7 +1092,7 @@ describe('the server never reads back the password or the passcode', () => {
         },
       ),
     );
-    expectSaidOnlyInDebug(thrown, 'OIDC device authorization failed', lines, [
+    expectRefusalNoted(thrown, 'OIDC device authorization failed', lines, [
       CLIENT_SECRET,
     ]);
   });
@@ -1312,7 +1320,7 @@ describe('a registered error code is never rewritten by redaction', () => {
       { strategy: clientSecretPost('S3cr3t-value') },
     ],
   ])(
-    '%s: an unregistered error and the free text stay off the error, and reach the debug line redacted',
+    '%s: an unregistered error and the free text stay off the error and the log',
     async (_label, secret, auth) => {
       const body = failing({
         error: 'custom_S3cr3t-value',
@@ -1332,14 +1340,8 @@ describe('a registered error code is never rewritten by redaction', () => {
         pollDeviceTokens(OIDC, 'cid', secret, 'dc', 0, logger, auth),
       )) as { response: { data: Record<string, string> } };
       expect(thrown.response.data).toEqual({});
-      expect(lines).toEqual([
-        {
-          status: 400,
-          error: 'custom_<redacted>',
-          error_description: 'refused <redacted>',
-          error_uri: 'https://idp/err?<redacted>',
-        },
-      ]);
+      // Safe facts only: the status; the unregistered code is dropped.
+      expect(lines).toEqual([{ status: 400 }]);
     },
   );
 

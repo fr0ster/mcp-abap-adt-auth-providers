@@ -7,7 +7,6 @@ import axios, { type AxiosResponse } from 'axios';
 import { readSafely } from './knownCodes';
 import { tlsFailureCode } from './refusal';
 import {
-  grantSecrets,
   type LegacyBasic,
   legacyBasic,
   type PreparedTokenRequest,
@@ -93,8 +92,6 @@ async function send(
   return sendTokenRequest(
     prepared,
     () => sendAsToday(endpoint, params, basic),
-    [clientSecret, ...grantSecrets(params)],
-    basic,
     diagnostics,
   );
 }
@@ -230,8 +227,6 @@ export async function initiateDeviceAuthorization(
           // Never followed, like every token request.
           maxRedirects: 0,
         }),
-      grantSecrets(params),
-      undefined,
       { logger, label: 'OIDC device authorization failed' },
     );
   } catch (error: unknown) {
@@ -286,8 +281,6 @@ export async function pollDeviceTokens(
       const response = await sendTokenRequest(
         prepared,
         () => sendAsToday(tokenEndpoint, params, basic),
-        [clientSecret, ...grantSecrets(params)],
-        basic,
         { logger, label: 'OIDC device poll failed' },
       );
       return mapTokenResponse(response.data);
@@ -339,8 +332,6 @@ export async function passwordGrant(
     const response = await sendTokenRequest(
       prepared,
       () => sendAsToday(tokenEndpoint, params, basic),
-      [clientSecret, ...grantSecrets(params)],
-      basic,
       { logger, label: 'OIDC password grant failed' },
     );
     return mapTokenResponse(response.data);

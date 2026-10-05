@@ -10,11 +10,8 @@ import { readSafely } from './knownCodes';
 import { registeredOAuthError } from './oauthErrorBody';
 import { loggedError } from './refusal';
 import {
-  grantSecrets,
   legacyBasic,
-  logServerWords,
   prepareTokenRequest,
-  requestSecrets,
   sendTokenRequest,
   type TokenRequestAuth,
 } from './tokenRequest';
@@ -133,15 +130,8 @@ export async function exchangeCodeForToken(
 
   log?.info(`Exchanging code for token: ${prepared?.config.url ?? tokenUrl}`);
 
-  const sent = [clientsecret, ...grantSecrets(params)];
   const diagnostics = { logger: log, label: 'Token exchange failed' };
-  const response = await sendTokenRequest(
-    prepared,
-    sendAsToday,
-    sent,
-    basic,
-    diagnostics,
-  );
+  const response = await sendTokenRequest(prepared, sendAsToday, diagnostics);
 
   if (response.data?.access_token) {
     const accessToken = response.data.access_token;
@@ -156,9 +146,8 @@ export async function exchangeCodeForToken(
       refreshToken,
     };
   } else {
-    // The status and a registered code at error level; the server's own
-    // words, every secret the request carried redacted, only in one debug
-    // line. A logger that throws does not replace the failure.
+    // The status and a registered code only: the server's own words reach
+    // no log line. A logger that throws does not replace the failure.
     const code = registeredOAuthError(readSafely(response.data, 'error'));
     try {
       log?.error(
@@ -167,12 +156,6 @@ export async function exchangeCodeForToken(
     } catch {
       // The failure below is what the caller needs.
     }
-    logServerWords(
-      diagnostics,
-      response.status,
-      response.data,
-      requestSecrets(sent, basic, prepared),
-    );
     throw new Error('Response does not contain access_token');
   }
 }

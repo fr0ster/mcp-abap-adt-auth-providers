@@ -6,7 +6,6 @@ import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
 import axios, { type AxiosResponse } from 'axios';
 import { tlsFailureCode } from './refusal';
 import {
-  grantSecrets,
   legacyBasic,
   prepareTokenRequest,
   sendTokenRequest,
@@ -76,13 +75,10 @@ export async function refreshJwtToken(
 
   let response: AxiosResponse;
   try {
-    response = await sendTokenRequest(
-      prepared,
-      sendAsToday,
-      [clientSecret, ...grantSecrets(params)],
-      basic,
-      { logger, label: 'Token refresh failed' },
-    );
+    response = await sendTokenRequest(prepared, sendAsToday, {
+      logger,
+      label: 'Token refresh failed',
+    });
   } catch (error: unknown) {
     // Unwrapped, so the refusal can name the TLS code and its fixed hint.
     if (tlsFailureCode(error) !== undefined) throw error;

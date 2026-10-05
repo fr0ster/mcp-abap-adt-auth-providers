@@ -19,7 +19,6 @@
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
 import axios, { type AxiosResponse } from 'axios';
 import {
-  grantSecrets,
   legacyBasic,
   prepareTokenRequest,
   sendTokenRequest,
@@ -86,13 +85,10 @@ export async function exchangePasscode(
     expires_in?: number;
   }>;
   try {
-    response = await sendTokenRequest(
-      prepared,
-      sendAsToday,
-      [clientSecret, ...grantSecrets(params)],
-      basic,
-      { logger, label: 'Passcode exchange failed' },
-    );
+    response = await sendTokenRequest(prepared, sendAsToday, {
+      logger,
+      label: 'Passcode exchange failed',
+    });
   } catch (error) {
     // UAA says why in the body — "Invalid passcode" for a mistyped or
     // already spent code — which the debug line carries, redacted.

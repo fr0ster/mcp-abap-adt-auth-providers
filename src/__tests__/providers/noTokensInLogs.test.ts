@@ -279,10 +279,11 @@ describe('no secret of a client authentication in the logs', () => {
 
         expect(sent.length > 0 || material !== undefined).toBe(true);
         const all = `${lines.join('\n')}\n${message}\n${data}`;
-        // The failure is not vacuous: the server's OAuth summary reached the
-        // message, a log line or the reduced body — with what was sent redacted.
-        expect(all).toContain('invalid_client');
-        if (sent.length > before) expect(all).toContain('<redacted');
+        // The failure is not vacuous: the site failed on the 400. Nothing the
+        // server wrote reached the message, a log line or the reduced body —
+        // its `error` here is not a registered code, so not even that.
+        expect(message).toContain('400');
+        expect(all).not.toContain('invalid_client');
         for (const secret of [SECRET, PASSPHRASE, ...sent]) {
           for (const window of windows(secret)) {
             expect(all).not.toContain(window);

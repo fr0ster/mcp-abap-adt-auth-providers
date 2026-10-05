@@ -7,7 +7,6 @@ import axios, { type AxiosResponse } from 'axios';
 import { ValidationError } from '../errors/TokenProviderErrors';
 import { loggedError } from './refusal';
 import {
-  grantSecrets,
   type LegacyBasic,
   legacyBasic,
   type PreparedTokenRequest,
@@ -105,8 +104,6 @@ export async function exchangeSamlAssertion(
     response = await sendTokenRequest(
       prepared,
       () => sendAsToday(tokenUrl, grant, clientId, basic),
-      [clientSecret, ...grantSecrets(grant)],
-      basic,
       { logger, label: '[SAML] Token exchange failed' },
     );
   } catch (error) {
@@ -165,8 +162,6 @@ export async function refreshSamlBearerToken(
     response = await sendTokenRequest(
       prepared,
       () => sendAsToday(tokenUrl, grant, clientId, basic),
-      [clientSecret, ...grantSecrets(grant)],
-      basic,
       { logger, label: '[SAML] Token refresh failed' },
     );
   } catch (error) {

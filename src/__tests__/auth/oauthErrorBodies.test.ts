@@ -80,19 +80,17 @@ async function messageOf(p: Promise<unknown>): Promise<string> {
   throw new Error('expected a rejection');
 }
 
-/** The debug line where a site says what the token endpoint said. */
-const SAID = 'the token endpoint said';
-const said = (text: string): string => {
-  const lines = text.split('\n').filter((line) => line.includes(SAID));
-  expect(lines).toHaveLength(1);
-  return lines[0] ?? '';
-};
-/** Every other line. */
-const unsaid = (text: string): string =>
-  text
-    .split('\n')
-    .filter((line) => !line.includes(SAID))
-    .join('\n');
+/** The last description a mocked server sent. */
+let lastDescription = '';
+/**
+ * Nothing the server wrote reaches a log line; the redactor — not called by
+ * any site in 5.4.2, kept as defence in depth — would redact it like this.
+ */
+const redactedBy = (secrets: string[]): string =>
+  describeOAuthErrorBody(
+    { error: 'invalid_grant', error_description: lastDescription },
+    secrets,
+  );
 
 const expectNoTokens = (text: string) => {
   expect(text).not.toContain(LEAKED_ACCESS);
@@ -105,7 +103,7 @@ describe('OAuth error bodies stay out of logs and messages', () => {
     failWithTokensInBody();
   });
 
-  it('refreshJwtToken reports the registered code, not the body; the description only in the debug line', async () => {
+  it('refreshJwtToken reports the registered code, not the body; the description in no line', async () => {
     const { logger, text } = recordingLogger();
     const message = await messageOf(
       refreshJwtToken(
@@ -120,7 +118,7 @@ describe('OAuth error bodies stay out of logs and messages', () => {
     expectNoTokens(message);
     expect(message).toBe('Token refresh failed (400): invalid_grant');
     expectNoTokens(text());
-    expect(said(text())).toContain('refresh token expired');
+    expect(text()).not.toContain('refresh token expired');
   });
 
   it('getTokenWithClientCredentials reports the error, not the body', async () => {
@@ -161,14 +159,15 @@ describe('OAuth error bodies stay out of logs and messages', () => {
     expect(text()).toContain('invalid_grant');
   });
 
-  // error_description goes to one debug line for diagnosis, never to a
-  // thrown error, so what it may carry is redacted there: any secret the
-  // request itself sent, and anything shaped like a JWT.
+  // error_description reaches no thrown error and no log line. The redactor
+  // is checked on the same descriptions directly: any secret the request
+  // itself sent, and anything shaped like a JWT.
   describe('a secret inside error_description', () => {
     const SENT_REFRESH = 'sent-refresh-token-0123456789abcdef';
     const JWT = 'eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJ1c2VyIn0.c2lnbmF0dXJl';
 
     const failWithDescription = (description: string) => {
+      lastDescription = description;
       const body = {
         isAxiosError: true,
         message: 'Request failed with status code 400',
@@ -198,7 +197,8 @@ describe('OAuth error bodies stay out of logs and messages', () => {
       );
       expect(message).toBe('Token refresh failed (400): invalid_grant');
       expect(text()).not.toContain(SENT_REFRESH);
-      expect(said(text())).toContain(
+      expect(text()).not.toContain('Invalid refresh token');
+      expect(redactedBy([SENT_REFRESH, 'secret'])).toContain(
         'Invalid refresh token (expired): <redacted>',
       );
     });
@@ -216,11 +216,12 @@ describe('OAuth error bodies stay out of logs and messages', () => {
         ),
       );
       expect(text()).not.toContain(JWT);
-      // The SAML error line carries the safe facts; the description, redacted,
-      // only the debug line.
+      // The SAML error line carries the safe facts; the description no line.
       expect(text()).toContain('HTTP 400, invalid_grant');
-      expect(said(text())).toContain('token <redacted jwt> is not acceptable');
-      expect(unsaid(text())).not.toContain('is not acceptable');
+      expect(text()).not.toContain('is not acceptable');
+      expect(redactedBy(['rt', 'client-secret-value'])).toContain(
+        'token <redacted jwt> is not acceptable',
+      );
     });
 
     // The request sent the assertion form-urlencoded, so a server echoing its
@@ -242,11 +243,12 @@ describe('OAuth error bodies stay out of logs and messages', () => {
       );
       expect(text()).not.toContain(encoded);
       expect(text()).not.toContain(assertion);
-      // The SAML error line carries the safe facts; the description, redacted,
-      // only the debug line.
+      // The SAML error line carries the safe facts; the description no line.
       expect(text()).toContain('HTTP 400, invalid_grant');
-      expect(said(text())).toContain('could not parse assertion=<redacted>');
-      expect(unsaid(text())).not.toContain('could not parse assertion=');
+      expect(text()).not.toContain('could not parse assertion=');
+      expect(redactedBy([assertion, 'client-secret-value'])).toContain(
+        'could not parse assertion=<redacted>',
+      );
     });
 
     // A known secret is redacted whatever its length: nothing checks that a
@@ -267,7 +269,8 @@ describe('OAuth error bodies stay out of logs and messages', () => {
         'Client credentials authentication failed (400): invalid_grant',
       );
       expect(text()).not.toContain('XyZ9ab');
-      expect(said(text())).toContain(
+      expect(text()).not.toContain('is not valid for client');
+      expect(redactedBy(['XyZ9ab'])).toContain(
         'the client secret <redacted> is not valid for client',
       );
     });
@@ -287,11 +290,12 @@ describe('OAuth error bodies stay out of logs and messages', () => {
       );
       expect(text()).not.toContain('secret-value-xyz');
       expect(text()).not.toContain(assertion);
-      // The SAML error line carries the safe facts; the description, redacted,
-      // only the debug line.
+      // The SAML error line carries the safe facts; the description no line.
       expect(text()).toContain('HTTP 400, invalid_grant');
-      expect(said(text())).toContain('bad client <redacted> for <redacted>');
-      expect(unsaid(text())).not.toContain('bad client');
+      expect(text()).not.toContain('bad client');
+      expect(redactedBy(['secret-value-xyz', assertion])).toContain(
+        'bad client <redacted> for <redacted>',
+      );
     });
   });
 });
