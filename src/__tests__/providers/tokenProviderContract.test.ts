@@ -15,13 +15,15 @@ import { Saml2PureProvider } from '../../providers/Saml2PureProvider';
 import { recordingTargets } from '../helpers/targets';
 
 const inAnHour = () => Date.now() + 3600_000;
-const result = (token: string, refresh?: string): ITokenResult => ({
-  authorizationToken: token,
-  ...(refresh === undefined ? {} : { refreshToken: refresh }),
-  authType: 'client_credentials',
-  tokenType: 'opaque',
-  expiresAt: inAnHour(),
-});
+// As a provider builds it: `refreshToken: undefined` present when there is none.
+const result = (token: string, refresh?: string): ITokenResult =>
+  ({
+    authorizationToken: token,
+    refreshToken: refresh,
+    authType: 'client_credentials',
+    tokenType: 'opaque',
+    expiresAt: inAnHour(),
+  }) as ITokenResult;
 
 class TestProvider extends BaseTokenProvider {
   login = jest.fn(async () => result('T1', 'R1'));

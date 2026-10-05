@@ -1,11 +1,14 @@
 import { describe, expect, it, jest } from '@jest/globals';
+import type { AuthorizationRequest } from '@mcp-abap-adt/interfaces-auth';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
 import { manualPasscodeStrategy } from '../../strategies';
 
-const request = (logger?: ILogger) => ({
-  ...(logger ? { logger } : {}),
-  buildAuthorizationUrl: async () => 'https://uaa.example/passcode',
-});
+// As a provider hands it over: `logger: undefined` present when there is none.
+const request = (logger?: ILogger) =>
+  ({
+    logger,
+    buildAuthorizationUrl: async () => 'https://uaa.example/passcode',
+  }) as AuthorizationRequest;
 
 describe('manualPasscodeStrategy', () => {
   it('shows where to get the code and returns what the user pastes, trimmed', async () => {
