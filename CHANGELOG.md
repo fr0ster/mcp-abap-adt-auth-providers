@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [5.4.2] - 2026-10-05
+
+### Fixed
+
+- **Security: a server echoing the Basic header could expose the client
+  credential, on the path without a client-authentication strategy.** Without
+  a strategy, the UAA code exchange, the UAA refresh, the passcode exchange,
+  the SAML bearer exchange and refresh, and the OIDC authorization code,
+  refresh, token exchange, device poll and password grant send
+  `Authorization: Basic base64(id:secret)`, but redacted only the configured
+  `clientSecret` and the grant's secrets from the answer — not the base64
+  credential, from which `id:secret` decodes. A token endpoint that echoes
+  request headers into `error_description` or `error_uri` therefore left it
+  in: the message of the `TokenEndpointError` the UAA refresh, the passcode
+  exchange and the password grant throw (a message every catcher logs); the
+  reduced `response.data` of the `AxiosError` the other sites rethrow; and the
+  `error`-level log line of the UAA code exchange's `200` without
+  `access_token`. Each of these sites now builds its header only through one
+  helper, which also yields the credential's secrets — the base64 credential
+  and the secret, through the same extraction a strategy's Basic credential
+  already went through — and every redaction of that request's answer joins
+  them, as sent, encoded and form-decoded. The path with a strategy was not
+  affected. Nothing else changed: the request sent, the messages and the
+  error shapes are as in 5.4.1; a logger that throws while the code exchange
+  logs a `200` without `access_token` no longer replaces its failure.
+
 ## [5.4.1] - 2026-10-05
 
 ### Changed

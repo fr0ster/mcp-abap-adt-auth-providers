@@ -577,8 +577,11 @@ public client that sends only `client_id`.
   form-decoded (the whole value: `&` and `=` are part of it, a malformed `%`
   stays) — so with either `encoding`, and for a `clientSecret` sent without a
   strategy, neither the original, the encoded secret nor what a decoding
-  server read survives its echo; a secret your strategy puts in any other
-  parameter or header is not recognised as one.
+  server read survives its echo. Without a strategy, the Basic header a
+  provider builds from `clientId` and `clientSecret` is redacted the same way
+  — its base64 credential and its secret (since 5.4.2; earlier versions left
+  an echoed base64 credential, from which `id:secret` decodes). A secret your
+  strategy puts in any other parameter or header is not recognised as one.
 
 ```typescript
 import { readFile } from 'node:fs/promises';
@@ -1800,8 +1803,8 @@ The exchange is the password grant with `passcode` instead of a username and
 password — a UAA extension, not an RFC. A code is single-use; a mistyped or
 spent one fails with `Passcode exchange failed (401): "unauthorized": "Invalid passcode"`
 — the server's `error` and `error_description`, with the passcode, the client
-secret and what a client-authentication strategy sent redacted if the server
-echoes them.
+secret, the Basic credential sent without a strategy and what a
+client-authentication strategy sent redacted if the server echoes them.
 
 #### Device flow prompts
 
@@ -2648,7 +2651,7 @@ Example output:
 ```
 
 **Logging Features**:
-- **No tokens in logs**: a token the provider holds or sent is never logged, not even in part. A log line carries only `<redacted, N chars>` (since 4.1.2; earlier versions logged a short refresh token whole). A token endpoint's error body contributes only `error` and `error_description`, with the request's secrets and anything shaped like a JWT redacted. An `error` that is a registered OAuth error code (`invalid_grant`, `authorization_pending`, `slow_down`, …) is kept verbatim: it is a protocol word, and the device poll reads it. A new opaque token that a server writes into `error_description` cannot be recognised and passes through, capped at 512 characters.
+- **No tokens in logs**: a token the provider holds or sent is never logged, not even in part. A log line carries only `<redacted, N chars>` (since 4.1.2; earlier versions logged a short refresh token whole). A token endpoint's error body contributes only `error` and `error_description`, with the request's secrets (the client's Basic credential included) and anything shaped like a JWT redacted. An `error` that is a registered OAuth error code (`invalid_grant`, `authorization_pending`, `slow_down`, …) is kept verbatim: it is a protocol word, and the device poll reads it. A new opaque token that a server writes into `error_description` cannot be recognised and passes through, capped at 512 characters.
 - **No error message in logs**: a log line about a thrown value — a refresh that failed, a strategy, loader, presenter, validator, `onTokens`, browser launcher or SNC locator/probe that threw — carries only the words its refusal would (fixed per error class, an allowlisted TLS or system code, else `unknown error`) and the HTTP status when there is one, never the error's message, `cause` or stack: a consumer's collaborator may throw text holding a key, a passphrase or a token. Diagnose a collaborator's failure where it throws, not from this package's log.
 - **Date Formatting**: Expiration dates are displayed in readable format (YYYY-MM-DD HH:MM:SS UTC) instead of ISO format
 - **Browser Information**: Logs browser type and authorization URL for debugging
