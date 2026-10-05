@@ -1,6 +1,6 @@
 # Error contract — design spec
 
-**Status:** draft for review, 2026-10-05; Codex adversarial approve (fifth pass); information losses L1–L13 approved by the user 2026-10-05. Anchor:
+**Status:** draft for review, 2026-10-05; Codex adversarial approve (fifth pass); information losses L1–L13 and the SAML debug line approved by the user 2026-10-05; spec approved by the user 2026-10-05. Anchor:
 [`../2026-10-05-error-contract-goal.md`](../2026-10-05-error-contract-goal.md)
 (approved 2026-10-05). Every "Holds throughout" invariant of the goal binds
 this spec; §13 says how each is honoured and which ones are held by something
@@ -2021,6 +2021,12 @@ each with today's words verbatim.
 
 **Approved by the user 2026-10-05: L1–L13 as written; L1 keeps the proposed
 redacted `debug` log line per site.**
+
+**Also decided by the user 2026-10-05:** the debug line is written at every
+token site, the SAML exchange and refresh included; the 5.4.1 Basic-credential
+leak is fixed now in a separate auth-providers 5.4.2 patch from `master`
+(its own PR, an approved exception to one open PR per repository), and the
+same fix carries into 6.0.0.
 
 Each item is something a person or a program can see today and will not see
 in the same place after this change. Nothing else is lost: every other row
