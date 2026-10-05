@@ -83,12 +83,33 @@ describe('exchangePasscode', () => {
     mockedAxios.post.mockRejectedValue(refused);
     mockedAxios.isAxiosError.mockReturnValue(true);
 
-    // The reason goes through describeOAuthErrorBody: error and
-    // error_description, each quoted.
-    await expect(
-      exchangePasscode('https://uaa', 'c', 'client-secret-value', 'SPENT'),
-    ).rejects.toThrow(
-      'Passcode exchange failed (401): "unauthorized": "Invalid passcode"',
+    // The message names the status and a registered code only:
+    // `unauthorized` is UAA's own, and the description is the server's free
+    // text — it goes to the debug line.
+    const debug = jest.fn();
+    const logger = {
+      debug,
+      info: jest.fn(),
+      warn: jest.fn(),
+      error: jest.fn(),
+    };
+    const failed = expect(
+      exchangePasscode(
+        'https://uaa',
+        'c',
+        'client-secret-value',
+        'SPENT',
+        logger,
+      ),
+    ).rejects.toThrow(/^Passcode exchange failed \(401\)$/);
+    await failed;
+    expect(debug).toHaveBeenCalledWith(
+      'Passcode exchange failed: the token endpoint said',
+      {
+        status: 401,
+        error: 'unauthorized',
+        error_description: 'Invalid passcode',
+      },
     );
   });
 

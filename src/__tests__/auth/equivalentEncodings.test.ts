@@ -312,7 +312,8 @@ const SITES: [string, Run][] = [
   ],
   [
     'UAA refresh',
-    (c, auth) => refreshJwtToken(GRANT.refresh, base, c.id, own(c, auth), auth),
+    (c, auth, logger) =>
+      refreshJwtToken(GRANT.refresh, base, c.id, own(c, auth), auth, logger),
   ],
   [
     'UAA passcode',
@@ -321,7 +322,8 @@ const SITES: [string, Run][] = [
   ],
   [
     'client credentials',
-    (c, auth) => getTokenWithClientCredentials(base, c.id, own(c, auth), auth),
+    (c, auth, logger) =>
+      getTokenWithClientCredentials(base, c.id, own(c, auth), auth, logger),
   ],
   [
     'SAML bearer exchange',
@@ -436,7 +438,7 @@ function recordingLogger(): { logger: ILogger; text: () => string } {
     (level: string) =>
     (...args: unknown[]) => {
       lines.push(
-        `${level} ${args.map((a) => (typeof a === 'string' ? a : inspect(a, { depth: null }))).join(' ')}`,
+        `${level} ${args.map((a) => (typeof a === 'string' ? a : JSON.stringify(a))).join(' ')}`,
       );
     };
   return {
@@ -487,7 +489,7 @@ const CASES = PATHS.flatMap((path) =>
 describe.each([400, 500, 200])(
   'a %i echoing every secret in equivalent forms',
   (code) => {
-    it.each(CASES)('%s: nothing recoverable', async (_label, run, path, c) => {
+    it.each(CASES)('%s: nothing recoverable', async (label, run, path, c) => {
       status = code;
       const strategy = path.auth(c);
       const auth = strategy ? { strategy } : undefined;
@@ -500,6 +502,22 @@ describe.each([400, 500, 200])(
         }),
       ).rejects.toBeDefined();
       await failed;
+      // The free text only in one debug line: none on a 200, but the code
+      // exchange's.
+      const free = /refused|idp\.example/;
+      const { logs, ...onError } = surfaces(thrown, text());
+      for (const [where, rendered] of Object.entries(onError)) {
+        expect({ where, free: free.test(rendered) }).toEqual({
+          where,
+          free: false,
+        });
+      }
+      const saying = (logs ?? '').split('\n').filter((l) => free.test(l));
+      const says = code !== 200 || label.startsWith('UAA authorization code');
+      expect(saying).toHaveLength(says ? 1 : 0);
+      for (const line of saying) {
+        expect(line).toMatch(/^debug .*: the token endpoint said /);
+      }
       const secrets = [c.secret, ...Object.values(GRANT)];
       for (const [where, rendered] of Object.entries(
         surfaces(thrown, text()),

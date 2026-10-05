@@ -235,7 +235,12 @@ describe('a token-endpoint failure keeps its safe facts', () => {
     const refreshLine = lines.find((l) => l.includes('Refresh failed')) ?? '';
     expect(refreshLine).toContain('HTTP 401');
     expect(refreshLine).toContain('invalid_grant');
-    expect(lines.join('\n')).not.toContain(DESCRIPTION);
+    // The server's description: in one debug line, in no other.
+    const saying = lines.filter((l) => l.includes(DESCRIPTION));
+    expect(saying).toHaveLength(1);
+    expect(saying[0]).toMatch(
+      /^debug Token refresh failed: the token endpoint said /,
+    );
   });
 });
 

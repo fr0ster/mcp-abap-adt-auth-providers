@@ -100,7 +100,7 @@ function recordingLogger(): { logger: ILogger; text: () => string } {
     (level: string) =>
     (...args: unknown[]) => {
       lines.push(
-        `${level} ${args.map((a) => inspect(a, { depth: null })).join(' ')}`,
+        `${level} ${args.map((a) => (typeof a === 'string' ? a : JSON.stringify(a))).join(' ')}`,
       );
     };
   return {
@@ -164,7 +164,11 @@ const BASIC_SITES: [string, Run][] = [
         logger,
       ),
   ],
-  ['UAA refresh', (c) => refreshJwtToken('rt', base, c.id, c.secret)],
+  [
+    'UAA refresh',
+    (c, logger) =>
+      refreshJwtToken('rt', base, c.id, c.secret, undefined, logger),
+  ],
   [
     'UAA passcode',
     (c, logger) => exchangePasscode(base, c.id, c.secret, 'PASSCODE', logger),
@@ -246,7 +250,8 @@ const BASIC_SITES: [string, Run][] = [
 const NON_BASIC_SITES: [string, Run][] = [
   [
     'client credentials',
-    (c) => getTokenWithClientCredentials(base, c.id, c.secret),
+    (c, logger) =>
+      getTokenWithClientCredentials(base, c.id, c.secret, undefined, logger),
   ],
   [
     'OIDC device initiation',
@@ -264,10 +269,35 @@ function forbidden(c: Credential, authorization: string | undefined): string[] {
   ];
 }
 
+/**
+ * The server's free text (its description and URI) is in no rendering of the
+ * thrown error and in no log line but one debug line — present only where the
+ * site has something to say (`says`).
+ */
+function expectSaidOnlyInDebug(
+  rendered: Record<string, string>,
+  logs: string,
+  says: boolean,
+): void {
+  for (const [where, text] of Object.entries(rendered)) {
+    expect({ where, free: /refused|idp\.example/.test(text) }).toEqual({
+      where,
+      free: false,
+    });
+  }
+  const lines = logs.split('\n').filter((l) => /refused|idp\.example/.test(l));
+  expect(lines).toHaveLength(says ? 1 : 0);
+  for (const line of lines) {
+    expect(line).toMatch(/^debug .*: the token endpoint said /);
+    expect(line).toContain('refused: header=Basic <redacted>');
+  }
+}
+
 async function expectNoCredential(
   run: Run,
   c: Credential,
   basic: boolean,
+  says = false,
 ): Promise<void> {
   received = undefined;
   const { logger, text } = recordingLogger();
@@ -288,6 +318,7 @@ async function expectNoCredential(
   } else {
     expect(received).toBeUndefined();
   }
+  expectSaidOnlyInDebug(renderings(thrown), text(), says);
   const surfaces = { ...renderings(thrown), logs: text() };
   for (const form of forbidden(c, received)) {
     for (const [where, rendered] of Object.entries(surfaces)) {
@@ -306,7 +337,7 @@ describe.each(CREDENTIALS)('a server echoing the Basic header, $label', (c) => {
       '%s without a strategy: no form of the credential comes back out',
       async (_label, run) => {
         status = 400;
-        await expectNoCredential(run, c, true);
+        await expectNoCredential(run, c, true, true);
       },
     );
   });
@@ -314,9 +345,15 @@ describe.each(CREDENTIALS)('a server echoing the Basic header, $label', (c) => {
   describe('in a 200 without access_token', () => {
     it.each(BASIC_SITES)(
       '%s without a strategy: no form of the credential comes back out',
-      async (_label, run) => {
+      async (label, run) => {
         status = 200;
-        await expectNoCredential(run, c, true);
+        // Only the code exchange logs a 200 without a token.
+        await expectNoCredential(
+          run,
+          c,
+          true,
+          label === 'UAA authorization code',
+        );
       },
     );
     it.each(NON_BASIC_SITES)(
@@ -395,4 +432,26 @@ describe('legacyBasic carries its own secrets', () => {
       }
     },
   );
+});
+
+describe('the debug line never replaces the failure', () => {
+  it('a logger whose debug throws: the same error as with none', async () => {
+    status = 400;
+    const throwing = {
+      info: () => {},
+      warn: () => {},
+      error: () => {},
+      debug: () => {
+        throw new Error('logger down');
+      },
+    } as ILogger;
+    const withThrowing = expect(
+      refreshJwtToken('rt', base, 'cid', 'secret', undefined, throwing),
+    ).rejects.toThrow(/^Token refresh failed \(400\): invalid_client$/);
+    await withThrowing;
+    const withNone = expect(
+      refreshJwtToken('rt', base, 'cid', 'secret'),
+    ).rejects.toThrow(/^Token refresh failed \(400\): invalid_client$/);
+    await withNone;
+  });
 });
