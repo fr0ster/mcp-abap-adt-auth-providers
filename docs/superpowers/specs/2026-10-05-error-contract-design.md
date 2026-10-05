@@ -236,25 +236,69 @@ files reference only `IAuthProviderError` / `IAuthRefusal` /
 // src/error/IAuthProviderError.ts
 declare const minted: unique symbol;            // not exported: unnameable outside
 
-/** One kind's error. Built only by @mcp-abap-adt/auth-errors. */
-export interface AuthProviderErrorOf<K extends AuthProviderErrorKind> {
+interface Minted<K extends AuthProviderErrorKind> {
   readonly kind: K;
-  readonly facts: AuthProviderErrorFacts[K];
-  readonly diagnostics?: AuthProviderErrorDiagnostics[K] | undefined;
   /** Rendered from kind and facts by the default renderer, at minting. */
   readonly reason: string;
   readonly hint?: string | undefined;
   readonly [minted]: true;
 }
 
+/** One kind's error: its facts and diagnostics as correlated variants. */
+export type AuthProviderErrorOf<K extends AuthProviderErrorKind> =
+  Minted<K> & AuthProviderErrorVariants[K];
+
 export type IAuthProviderError = {
   [K in AuthProviderErrorKind]: AuthProviderErrorOf<K>;
 }[AuthProviderErrorKind];
 ```
 
-`AuthProviderErrorFacts` and `AuthProviderErrorDiagnostics` are interfaces
-keyed by kind (`AuthProviderErrorDiagnostics[K]` is `never` for a kind without
-diagnostics, so `diagnostics` cannot be given). `AuthProviderErrorKind` is
+**Facts and diagnostics are correlated, not independent.**
+`AuthProviderErrorVariants[K]` is a union of `{ readonly facts; readonly
+diagnostics? }` pairs — one pair per value of the kind's discriminant that
+decides which diagnostic may appear:
+
+```ts
+// The diagnostic fields a variant may carry; every other field is `?: never`.
+type Diag<All extends string, Allowed extends All, T> =
+  { readonly [F in All]?: F extends Allowed ? T[F & keyof T] : never };
+
+interface AuthProviderErrorVariants {
+  'saml-assertion': { [R in AssertionRule]: {
+      readonly facts: SamlFactsOf<R>;                         // rule: R, check: CheckOf<R>, …
+      readonly diagnostics?: Diag<SamlDiagnosticField, SamlDiagnosticOf<R>, SamlDiagnosticValues>;
+    } }[AssertionRule];
+  snc: { [P in SncProblem]: {
+      readonly facts: SncFactsOf<P>;                          // problem: P, …
+      readonly diagnostics?: Diag<SncDiagnosticField, SncDiagnosticOf<P>, SncDiagnosticValues>;
+    } }[SncProblem];
+  configuration: { [C in ConfigCase]: {
+      readonly facts: ConfigFactsOf<C>;                       // case: C, fields, allowed?
+      readonly diagnostics?: Diag<ConfigDiagnosticField, ConfigDiagnosticOf<C>, ConfigDiagnosticValues>;
+    } }[ConfigCase];
+  // every other kind: one variant, no diagnostics
+  'client-certificate': { readonly facts: ClientCertificateFacts; readonly diagnostics?: never };
+  // …
+}
+```
+
+The maps from discriminant to permitted field are `as const` objects
+(`SAML_RULE_DIAGNOSTIC`, `SNC_PROBLEM_DIAGNOSTICS`,
+`CONFIG_CASE_DIAGNOSTICS`), and `SamlDiagnosticOf<R>` and its siblings are
+read from them, so the type and the runtime admission table (§5.3) come from
+one source:
+
+| Kind | Discriminant | Permitted diagnostics |
+|---|---|---|
+| `saml-assertion` | `rule` | the one field of Appendix B's "Diagnostic" column, else none |
+| `snc` | `problem` | `no-credential`, `library-init-failed`: `library`; `library-not-found`: `candidatePaths`; `logon-refused`, `locator-returned-no-path`: none |
+| `configuration` | `case` | `saml-acs-mismatch`, `redirect-mismatch`: `configuredUri`, `strategyUri`; every other case: none |
+
+So `{ facts: { rule: 'duplicate-id', … }, diagnostics: { issuer } }` is not an
+`IAuthProviderError` — the pair matches no variant — and narrowing on
+`error.facts.rule === 'untrusted-issuer'` narrows `error.diagnostics` to
+`{ issuer?: DocumentValue }`. A kind without diagnostics has `diagnostics?:
+never`, so it cannot be given. `AuthProviderErrorKind` is
 `(typeof AUTH_PROVIDER_ERROR_KINDS)[number]`, and a type test asserts
 `keyof AuthProviderErrorFacts` equals it both ways — a kind added to the array
 without facts, or facts without the kind, does not compile.
@@ -420,17 +464,49 @@ the user 2026-10-05). The runtime half of the contract.
 One builder per kind, the only exported way to obtain an error:
 
 ```ts
+/** A single member of a union, else never: the correlation needs one variant. */
+type One<T, A = T> = T extends unknown ? ([A] extends [T] ? T : never) : never;
+
 export const authError: {
-  [K in AuthProviderErrorKind]: (
-    facts: AuthProviderErrorFacts[K],
-    diagnostics?: DiagnosticsInput[K],   // raw candidates, admitted here
-  ) => AuthProviderErrorOf<K>;
+  // kinds with diagnostics: generic over the discriminant, so facts and
+  // diagnostics are checked against the same variant
+  'saml-assertion'<R extends AssertionRule>(
+    facts: SamlFactsOf<One<R>>,
+    diagnostics?: DiagnosticsInputOf<SamlDiagnosticField, SamlDiagnosticOf<R>>,
+  ): AuthProviderErrorOf<'saml-assertion'> & { readonly facts: SamlFactsOf<R> };
+  snc<P extends SncProblem>(
+    facts: SncFactsOf<One<P>>,
+    diagnostics?: DiagnosticsInputOf<SncDiagnosticField, SncDiagnosticOf<P>>,
+  ): AuthProviderErrorOf<'snc'> & { readonly facts: SncFactsOf<P> };
+  configuration<C extends ConfigCase>(
+    facts: ConfigFactsOf<One<C>>,
+    diagnostics?: DiagnosticsInputOf<ConfigDiagnosticField, ConfigDiagnosticOf<C>>,
+  ): AuthProviderErrorOf<'configuration'> & { readonly facts: ConfigFactsOf<C> };
+} & {
+  // every other kind: facts only, no diagnostics parameter at all
+  [K in Exclude<AuthProviderErrorKind, 'saml-assertion' | 'snc' | 'configuration'>]:
+    (facts: AuthProviderErrorFacts[K]) => AuthProviderErrorOf<K>;
 };
+
+/** Raw candidates, admitted by the builder: permitted fields `unknown`, the rest `never`. */
+type DiagnosticsInputOf<All extends string, Allowed extends All> =
+  { readonly [F in All]?: F extends Allowed ? unknown : never };
+
 // e.g.
 authError['client-certificate']({ problem: 'expired' });
 authError.snc({ problem: 'no-credential', secureLoginClient: false },
               { library: path });
+authError['saml-assertion']({ rule: 'duplicate-id', check: 'duplicateId' },
+                            { id: value });
+// does not compile: `issuer` is `never` for rule 'duplicate-id'
+// authError['saml-assertion']({ rule: 'duplicate-id', check: 'duplicateId' }, { issuer: v });
 ```
+
+The discriminant is inferred from the facts literal; `One<…>` refuses a
+discriminant typed as a union (a `rule` variable of type `AssertionRule`
+would otherwise widen the permitted diagnostics to every rule's), so a
+producer passes a literal or narrows first. The return type keeps the
+variant, so the result is a member of the correlated union of §4.1.
 
 A builder: normalises the facts it is given (omits absent keys, caps and
 deduplicates arrays as §3.2 says, freezes nested arrays and objects); admits
@@ -439,8 +515,11 @@ each diagnostic field (§5.3); renders `reason` / `hint` with the default words
 the check (goal invariant 4), and `facts` from an unknown source never reach
 a builder — they go through classification.
 
-`DiagnosticsInput[K]` is `unknown` per field: the builder, not the caller,
-decides what is admitted.
+Each permitted diagnostic is `unknown` at the call: the builder, not the
+caller, decides what is admitted (§5.3), and it admits a field only when the
+runtime table of §4.1 permits it for the facts' discriminant — a JavaScript
+caller passing a forbidden field gets it dropped, the same rule the type
+enforces.
 
 ### 5.3 Diagnostics admission
 
@@ -867,12 +946,38 @@ switch (error.kind) {
 
 - `matchKind<R>(error, handlers: { readonly [K in Kind]: (e:
   AuthProviderErrorOf<K>) => R }): R` — a missing handler does not compile.
-  At run time, an error whose `kind` this build does not know (one from a
-  newer contract installed beside an older consumer) is passed to the
-  `unknown` handler, so the map never throws.
+  **At run time a handler only ever receives an error this copy minted.**
+  `matchKind` first normalises its argument: an error minted by this copy
+  (the `WeakSet`) is dispatched as it is; anything else — an error minted by
+  another copy, one from a newer contract whose `kind` this build does not
+  know, a known kind whose facts carry a member this build does not know —
+  goes through `classify(error, 'unfamiliar-error')` (§5.4). A known kind
+  with valid facts comes back rebuilt as that kind (without diagnostics,
+  L13); everything else comes back as a minted `unknown` error with
+  `facts.operation: 'unfamiliar-error'` — the required facts of the
+  `unknown` handler's type are therefore always there. `classify` is total,
+  so the map never throws for a foreign value either.
 - `unreachableKind(error: never): IAuthProviderError` — compiles only when
-  every kind was handled; at run time it returns its argument (typed as the
-  union), so a default branch can render it generically instead of throwing.
+  every kind was handled; at run time it returns the same normalisation:
+  `classify(error, 'unfamiliar-error')`, a minted error of a kind this build
+  knows, with its facts complete — never the foreign object typed as the
+  union — so a default branch can render it generically, or read its facts,
+  instead of throwing.
+
+`'unfamiliar-error'` joins `OPERATIONS` (A.8); its words: "an
+authentication error of a kind this version does not know".
+
+Tests (auth-errors, version skew): an object shaped as a minted error from a
+newer contract — `kind: 'future-kind'`, and separately `kind: 'tls'` with
+`code` outside `TLS_FAILURE_CODES`, and `kind: 'snc'` with an unknown
+`problem` — passed to `matchKind` with handlers that read their required
+facts (`unknown: (e) => e.facts.operation.length`, `tls: (e) =>
+e.facts.code.length`): no handler throws, the `unknown` handler receives
+`operation: 'unfamiliar-error'`, and a valid foreign `tls` error reaches the
+`tls` handler; the same values through a `switch` whose `default` calls
+`unreachableKind(e as never)` and reads `facts.operation` of the result.
+Load-bearing: passing the argument through unnormalised turns the
+`future-kind` case red (a `TypeError` reading `facts.operation`).
 
 A `switch` with neither is not checked by TypeScript; the auth-errors README,
 the interfaces-auth JSDoc of `IAuthProviderError` and auth-providers' README
@@ -1078,7 +1183,21 @@ directive fails `test:check`, so each line is load-bearing by construction:
   the wrong type (`status: 500`, `code: 'EWHATEVER'`, `rule: 'audience-not-us'`
   with `check: 'issuer'`);
 - a diagnostics field on a kind without diagnostics; a `saml-assertion`
-  diagnostic the rule does not permit (`issuer` on rule `duplicate-id`);
+- a diagnostics field on a kind without diagnostics — the builder has no
+  second parameter (`authError['client-certificate']({ problem: 'expired' },
+  { library: p })`); and against the exact public builder signatures, one per
+  correlated kind: `authError['saml-assertion']({ rule: 'duplicate-id', check:
+  'duplicateId' }, { issuer: v })`, `authError.snc({ problem: 'logon-refused' },
+  { library: p })`, `authError.configuration({ case:
+  'required-fields-missing', fields: ['clientId'] }, { configuredUri: u })`;
+  a discriminant typed as the whole union (`declare const r: AssertionRule;
+  authError['saml-assertion']({ rule: r, … }, { issuer: v })`); and an object
+  of type `IAuthProviderError` assembled (inside `__typechecks__`, through the
+  test's own brand cast) with `rule: 'duplicate-id'` and `diagnostics: {
+  issuer }` — the pairing matches no variant; each beside the valid call
+  (`rule: 'untrusted-issuer'` with `issuer`), and a narrowing test
+  (`if (e.kind === 'saml-assertion' && e.facts.rule === 'untrusted-issuer')`
+  makes `e.diagnostics?.issuer` readable, `e.diagnostics?.id` an error)
 - `WORDS` without one kind (a local copy with a key removed does not satisfy
   the mapped type); a discriminant switch missing one member;
 - `matchKind` with one handler missing; a `switch` over all but one kind with
@@ -1368,6 +1487,7 @@ of Appendix B, kind `saml-assertion`. Outside the validators:
 | `oidc-discovery`, `code-exchange`, `device-poll`, `oidc-token-request` | the non-wrapping sites (D3, D6) |
 | `validating-assertion` | a custom `IAssertionValidator`'s throw |
 | `client-authentication-strategy` | the broker's `resolveClientAuthentication` |
+| `unfamiliar-error` | new: `matchKind` / `unreachableKind` normalising a value this build does not know (§9) |
 | `preparing`, `establishing`, `authorizing` (and `reading-rejection`) | new: `AuthProviderBase`'s fixed fallbacks when a configured operation cannot be read (§8.1) |
 
 The log lines (each now `logFields(error)`: `{ error: reason, kind, status?,
