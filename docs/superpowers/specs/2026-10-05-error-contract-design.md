@@ -852,7 +852,15 @@ the user 2026-10-05:
   one — the same facts `logFields` may carry, no server text, no secret.
   Guarded (a throwing logger is swallowed), none without a logger, none for
   the device poll's `authorization_pending` / `slow_down`. It is written
-  whatever `authDebug` says. **A 2xx without a token**
+  whatever `authDebug` says.
+  **Every log call on a failure path is guarded.** Any log call a token
+  site makes inside its `catch` or on its failure path — the safe-facts
+  line, the `rejectMissingToken` line, the `authDebug` line, the SAML
+  exchange's and refresh's `[SAML] Token exchange failed` / `[SAML] Token
+  refresh failed` lines (H6), the device-pending line, the refresh-failed
+  line (H1) — runs inside a guard that ignores a throwing logger (5.4.2's
+  `logQuietly`, `tokenRequest.ts:413-419` at 5.4.2): a logger that throws
+  never replaces or masks the failure the site throws. **A 2xx without a token**
   (`rejectMissingToken`) also gets one guarded default line of the same safe
   facts (status, registered `error`): at the UAA code exchange it is 5.4.2's
   own line, kept verbatim at its `error` level (`Token exchange failed:
