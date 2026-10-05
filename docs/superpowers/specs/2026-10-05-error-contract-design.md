@@ -1165,6 +1165,29 @@ signal (or none). The rule, wherever an attempt is shared:
   no session-secret write. What the server answered *before* the abort and
   that describes the server's state stays applied (a refresh token the server
   refused is spent, as today); nothing that arrives after the abort is.
+- **Drain handoff: a replacement waits for the release.** Non-joinable is
+  not released: an aborted attempt's strategy may still be closing its
+  socket (`BrowserCallbackStrategy` refuses a second authorization while its
+  `inFlight` exists, `BrowserCallbackStrategy.ts:124-127`, and clears it only
+  after the callback factory settles, `:209-235`, which awaits the socket's
+  shutdown, `callbackServer.ts:152-155`, `:168-190`), a manual strategy may
+  still hold its stdin reader, a device-code poller may still be in its wait.
+  So every attempt has a **drain** promise that settles when its own
+  exclusive work has settled — the strategy's `authorize` promise (which a
+  shipped strategy settles only after its socket is closed or its reader
+  closed), the device-code polling loop's exit — **and** the drain it
+  inherited has settled. When an attempt leaves its slot aborted, the slot
+  keeps its drain as `previousDrain` (identity-checked like the slot). A new
+  attempt inherits `previousDrain` and, before it starts its own
+  authorization (the strategy's `authorize`, the device-code initiation, the
+  passcode strategy), awaits it — raced only against its own attempt signal,
+  so when all of the new attempt's waiters abort the wait ends and the new
+  attempt is aborted in turn, having started nothing. A refresh, which holds
+  no exclusive resource, does not wait. The drain is never a timer and adds
+  no bound. A consumer strategy that ignores `AuthorizationRequest.signal`
+  (§4.4: a strategy must honour it) never settles its `authorize`, and so
+  blocks the next login until it does — stated in the README beside the
+  requirement.
 
 **Where it lives.** One helper, `sharedAttempt` (auth-providers,
 `src/auth/sharedAttempt.ts`, internal), implements the rule for the
@@ -1260,7 +1283,18 @@ turns the two-waiter case red; caching the aborted attempt turns the retry
 case red; clearing the slot only on settle turns the doomed-join case red;
 applying effects before the commit check turns the late-result case red;
 reinstating a "no live party → `aborted`" rule turns the after-release and
-the mixed-consumer cases red.
+the mixed-consumer cases red. **Drain handoff:** with the callback server's
+shutdown deliberately deferred (a test hook holding the socket's close open,
+on a fixed test port), all waiters abort and a new `getTokens` (and,
+separately, a new `rejected()`) arrives at once: the new attempt does not
+call the strategy until the old one's `authorize` has settled, then obtains
+a fresh login — no `busy`, no `port-in-use`; while the new attempt waits,
+aborting its only waiter ends the wait with `aborted` and no authorization
+started; three attempts aborted in a row each wait on the whole chain; the
+same for a manual strategy (the old reader closed before a new one opens —
+never two readers on stdin) and for the device flow (no poll request of the
+old loop after the new attempt's initiation). Load-bearing: dropping the
+handoff turns the deferred-shutdown case red (`busy`).
 Broker tests: §10.6.
 
 ## 7. Logon targets (connection) and rule 4
