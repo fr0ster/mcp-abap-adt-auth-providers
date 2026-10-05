@@ -381,3 +381,88 @@ describe('a consumer logger that throws while a site reports the failure', () =>
     );
   });
 });
+
+/**
+ * A fulfilled interceptor hands the site data it cannot trust: a getter, a
+ * Proxy trap or `toJSON` that throws the server's text. Every site reads
+ * only a snapshot built through `readSafely`, so none of it comes out.
+ */
+const HOSTILE_DATA: [string, (data: unknown) => unknown][] = [
+  [
+    'a field getter that throws the description',
+    (data) => {
+      const words = String(
+        (data as { error_description?: unknown })?.error_description,
+      );
+      return {
+        get access_token(): string {
+          throw new Error(words);
+        },
+        get token_endpoint(): string {
+          throw new Error(words);
+        },
+        get device_code(): string {
+          throw new Error(words);
+        },
+      };
+    },
+  ],
+  [
+    'a Proxy whose every trap throws',
+    () =>
+      new Proxy(
+        {},
+        {
+          get: () => {
+            throw new Error(`${MARKER} get trap`);
+          },
+          has: () => {
+            throw new Error(`${MARKER} has trap`);
+          },
+          ownKeys: () => {
+            throw new Error(`${MARKER} ownKeys trap`);
+          },
+          getOwnPropertyDescriptor: () => {
+            throw new Error(`${MARKER} descriptor trap`);
+          },
+        },
+      ),
+  ],
+  [
+    'data whose toJSON throws',
+    () => ({
+      note: `${MARKER} note`,
+      toJSON: () => {
+        throw new Error(`${MARKER} toJSON`);
+      },
+    }),
+  ],
+];
+
+describe.each(HOSTILE_DATA)(
+  'a fulfilled interceptor returning %s',
+  (_label, make) => {
+    describe.each(PATHS)('%s', (_path, auth) => {
+      it.each(SITES)('%s: none of it comes back out', async (_site, run) => {
+        status = 200;
+        installed = axios.interceptors.response.use(
+          (response: AxiosResponse) => ({
+            ...response,
+            data: make(response.data),
+          }),
+        );
+        const { logger, text } = recordingLogger();
+        let thrown: unknown;
+        const failed = expect(
+          run(auth(), logger).catch((error: unknown) => {
+            thrown = error;
+            throw error;
+          }),
+        ).rejects.toBeDefined();
+        await failed;
+        expect(renderings(thrown)).not.toContain(MARKER);
+        expect(text()).not.toContain(MARKER);
+      });
+    });
+  },
+);
