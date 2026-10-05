@@ -8,6 +8,7 @@
  */
 
 import http from 'node:http';
+import { inspect } from 'node:util';
 import { beforeEach, describe, expect, it, jest } from '@jest/globals';
 import axios, { AxiosError } from 'axios';
 import { AuthorizationRefusedError } from '../../auth/callbackScopeError';
@@ -73,14 +74,20 @@ describe('a thrown error carries no foreign message', () => {
       () => refreshJwtToken('rt', 'https://uaa', 'cid', 'secret'),
       'Token refresh failed',
     ],
-  ])('%s: fixed words, the original as cause', async (_name, run, words) => {
-    const { error, text } = await thrownBy(run);
-    expect(text).toContain(words);
-    // The allowlisted code still says what happened.
-    expect(text).toContain('ECONNREFUSED');
-    expect(text).not.toContain(MARKER);
-    expect(error.cause).toBe(original);
-  });
+  ])(
+    '%s: fixed words; the cause is a safe replacement, never the original',
+    async (_name, run, words) => {
+      const { error, text } = await thrownBy(run);
+      expect(text).toContain(words);
+      // The allowlisted code still says what happened.
+      expect(text).toContain('ECONNREFUSED');
+      expect(text).not.toContain(MARKER);
+      // The original is replaced, even as cause: util.inspect prints causes.
+      expect(error.cause).not.toBe(original);
+      expect(inspect(error, { depth: null })).not.toContain(MARKER);
+      expect((error.cause as { code?: unknown }).code).toBe('ECONNREFUSED');
+    },
+  );
 
   it('through a provider: getTokens() throws no window of it', async () => {
     const provider = new ClientCredentialsProvider({
