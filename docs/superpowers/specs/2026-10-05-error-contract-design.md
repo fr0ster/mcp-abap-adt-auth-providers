@@ -693,12 +693,14 @@ Proxy) answers `unknown` with the operation. In order:
    is — diagnostics included.
 3. **Structural rebuild**, tried on the local of step 2 first, then on the
    value itself (a bare error object from another copy, as a refusal is): its
-   `kind` is in `AUTH_PROVIDER_ERROR_KINDS` and every fact passes its runtime
-   set or range (one validator per kind, `satisfies` a mapped type over the
-   kinds); each property is read once, guarded. The result is **re-minted**
+   `kind` is in `AUTH_PROVIDER_ERROR_KINDS` and every required fact passes its
+   runtime set or range — an optional fact that fails is dropped, as the
+   builders drop it (one validator per kind, `satisfies` a mapped type over
+   the kinds); each property is read once, guarded. The result is **re-minted**
    with words rendered here, from `kind` and the checked `facts` only: its
-   own `reason`, `hint` **and `diagnostics` are never read**. Anything that
-   fails a check falls through to step 4 with the original value.
+   own `reason`, `hint` **and `diagnostics` are never read**. An unknown
+   `kind` or a failed required fact falls through to step 4 with the
+   original value.
 4. A TLS failure (`code` in `TLS_FAILURE_CODES`): `tls`.
 5. A value with an integer status (`status`, else `response.status`), a
    registered OAuth error (`oauthError`, else `response.data.error`) or an
