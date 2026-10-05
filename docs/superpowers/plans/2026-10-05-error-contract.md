@@ -4,7 +4,7 @@
 
 **Goal:** what goes wrong in authentication has its own contract. Every refusal and every thrown token error of `@mcp-abap-adt/auth-providers`, and every refusal a logon target returns, is an `IAuthProviderError` — a closed union discriminated by `kind`, with allowlisted `facts`, words rendered from `kind` and `facts` alone, and admitted `diagnostics` beside them; the broker relays it without copied phrases (goal, "Goal" and "Success").
 
-**Architecture:** the types and the `as const` allowlists live in `@mcp-abap-adt/interfaces-auth` 5.0.0 (no logic). The runtime half — builders, `mint` and its brand, the renderer, diagnostics admission, classification, `AuthProviderFailure`, `guard`, `relayOutcome`, `matchKind` — lives in the new `@mcp-abap-adt/auth-errors` 1.0.0. connection 12.0.0's logon targets and its own refusals mint through `auth-errors`; auth-providers 6.0.0 puts every provider behind `AuthProviderBase` (the four methods run inside `guard`), converts every refusal and thrown error, and deletes its error classes; auth-stores 4.0.0 and auth-broker 5.0.0 + CLI 3.0.0 move to the new majors and relay the error.
+**Architecture:** the types and the `as const` allowlists live in `@mcp-abap-adt/interfaces-auth` 5.0.0 (the two optional fields of §4.3a land in 6.0.0, the contract major every later repository uses) (no logic). The runtime half — builders, `mint` and its brand, the renderer, diagnostics admission, classification, `AuthProviderFailure`, `guard`, `relayOutcome`, `matchKind` — lives in the new `@mcp-abap-adt/auth-errors` 1.0.0. connection 12.0.0's logon targets and its own refusals mint through `auth-errors`; auth-providers 6.0.0 puts every provider behind `AuthProviderBase` (the four methods run inside `guard`), converts every refusal and thrown error, and deletes its error classes; auth-stores 4.0.0 and auth-broker 5.0.0 + CLI 3.0.0 move to the new majors and relay the error.
 
 **Anchors (binding):**
 - Goal: `docs/superpowers/2026-10-05-error-contract-goal.md` (approved 2026-10-05) — its "Holds throughout" invariants bind this plan.
@@ -18,7 +18,7 @@ Where this plan has to decide something the spec leaves open, it says so under *
 
 Copied from the goal and the spec; every task is bound by all of them.
 
-**Versions and order (spec §11.5 gate 4).** "interfaces (auth 5.0.0, auth-sap 3.1.0) → [interfaces-auth 5.1.0, spec §4.3a] → auth-errors 1.0.0 → connection 12.0.0 → auth-providers 6.0.0 → auth-stores 4.0.0 → auth-broker 5.0.0 + CLI 3.0.0; each consumer built against the published versions, the lockfile checked for `"link": true` and non-registry resolutions; after publishing, a clean install of each from the registry outside the repositories." `interfaces-auth-broker` gets no release (§4.6: "3.1.0 is inside `^3.0.0`").
+**Versions and order (spec §11.5 gate 4).** "interfaces (auth 5.0.0, auth-sap 3.1.0) → [interfaces-auth 6.0.0 and sibling ranges, interfaces PR #125, spec §4.3a] → auth-errors 1.0.0 → connection 12.0.0 → auth-providers 6.0.0 → auth-stores 4.0.0 → auth-broker 5.0.0 + CLI 3.0.0; each consumer built against the published versions, the lockfile checked for `"link": true` and non-registry resolutions; after publishing, a clean install of each from the registry outside the repositories." `interfaces-auth-broker` gets no release (§4.6: "3.1.0 is inside `^3.0.0`").
 
 **Dependencies only from the registry** (global CLAUDE.md). A consumer step starts only after what it builds against is published. No `file:`, `link:`, `npm link`, no cross-repository workspace link. The broker repository's own workspace link (CLI → auth-broker) is the standing same-repository exception and must be gone from what is released. After every install: no `"link": true` in the lockfile except same-repo workspace siblings, nothing resolved from outside the registry.
 
@@ -75,7 +75,7 @@ Inputs most likely to reach a user that no task's spec-listed tests exercise; ea
 | 1 | interfaces | Error contract types and frozen allowlists | judgement |
 | 2 | interfaces | Outcome/refusal/failure, removals, JSDoc, type tests, surface tools | judgement |
 | 3 | interfaces | interfaces-auth-sap 3.1.0, READMEs, CHANGELOGs, migration notes | mechanical |
-| 3a | interfaces | interfaces-auth 5.1.0: `aborted.strategy?`, `failed.oauthError?` (spec §4.3a) | mechanical |
+| 3a | interfaces | interfaces-auth 6.0.0: `aborted.strategy?`, `failed.oauthError?` (spec §4.3a) | mechanical |
 | 4 | auth-errors | Repository scaffold, CI, strict flags, lint | mechanical |
 | 5 | auth-errors | Branded integer makers, private sets, membership guards | mechanical |
 | 6 | auth-errors | Diagnostics admission | judgement |
@@ -101,7 +101,7 @@ Inputs most likely to reach a user that no task's spec-listed tests exercise; ea
 | 24 | auth-providers | SAML (`saml-assertion`, rule ids, diagnostics) | judgement |
 | 25 | auth-providers | SNC onto `AuthProviderBase` (`snc`, `candidatePaths`, `library`) | judgement |
 | 26 | auth-providers | Configuration throws (`configuration`, every case) | mechanical |
-| 27 | auth-providers | Flip to interfaces-auth 5.0.0; delete every transition piece, the classes, `asContract` | mechanical |
+| 27 | auth-providers | Flip to interfaces-auth 6.0.0; delete every transition piece, the classes, `asContract` | mechanical |
 | 28 | auth-providers | Shape check rules 1–8 and the site lists | judgement |
 | 29 | auth-providers | Matrix audit, rule-1 suite, log/thrown-message suites | judgement |
 | 30 | auth-providers | README (generated tables), CLAUDE.md, CHANGELOG, migration | mixed |
@@ -154,7 +154,7 @@ Publish dependency: none (first in the chain). Branch from `master` in a worktre
 
 ### Task 3: interfaces-auth-sap 3.1.0, docs
 
-**Files:** `packages/interfaces-auth-sap/package.json` (range `^4.0.0 || ^5.0.0`), `__typechecks__/certificateLoaderCompatibility.ts` (the 5.x assertion both ways, §4.6), both CHANGELOGs, interfaces-auth README (error contract section, exhaustiveness requirement, "Migrating to 5.0.0" with the §4.5 table), auth-sap migration note "nothing to do". Versions: interfaces-auth 5.0.0, interfaces-auth-sap 3.1.0; interfaces-auth-broker untouched.
+**Files:** `packages/interfaces-auth-sap/package.json` (range `^4.0.0 || ^5.0.0`, widened to include `^6.0.0` in the interfaces PR #125 (spec §4.3a)), `__typechecks__/certificateLoaderCompatibility.ts` (the 5.x assertion both ways, §4.6), both CHANGELOGs, interfaces-auth README (error contract section, exhaustiveness requirement, "Migrating to 5.0.0" with the §4.5 table), auth-sap migration note "nothing to do". Versions: interfaces-auth 5.0.0, interfaces-auth-sap 3.1.0; interfaces-auth-broker untouched.
 
 **Gate:** standard; `npm pack --dry-run` of both shows only `dist`, README, CHANGELOG, licences.
 
@@ -162,25 +162,25 @@ Publish dependency: none (first in the chain). Branch from `master` in a worktre
 
 ---
 
-### Task 3a: interfaces-auth 5.1.0 (spec §4.3a; new PR in the interfaces repository after G1)
+### Task 3a: interfaces-auth 6.0.0 (spec §4.3a; new PR in the interfaces repository after G1)
 
-**Files:** `packages/interfaces-auth/src/error/facts.ts` — `interactive-login` `aborted` gains `strategy?: 'browser' | 'manual'`, `failed` gains `oauthError?: OAuthErrorCode`; spec §4.3's rule stated in the README's versioning note (a new optional fact field is a minor); `CHANGELOG.md` 5.1.0; version 5.1.0; `tools/package-map.json` unchanged (no new symbol).
+**Files:** `packages/interfaces-auth/src/error/facts.ts` — `interactive-login` `aborted` gains `strategy?: 'browser' | 'manual'`, `failed` gains `oauthError?: OAuthErrorCode`; spec §4.3's rule stated in the README's versioning note (any change to the shape of facts or diagnostics is a major: a field added, removed, made required or narrowed); `CHANGELOG.md` 6.0.0 (migration note: the two optional fields); version 6.0.0; sibling ranges widened in the same PR (#125), versions by the PR #123 rule; `tools/package-map.json` unchanged (no new symbol).
 
-**Tests first** (`src/__typechecks__/errorContract.ts`): positive lines — an `aborted` error with `strategy: 'manual'`, a `failed` error with `oauthError: 'access_denied'`; `@ts-expect-error` — `aborted` with `strategy: 'device'`, `failed` with an unregistered `oauthError`, `oauthError` on `aborted`; **the union stays closed**: `keyof AuthProviderErrorFacts` still `Equal<>` `AuthProviderErrorKind`, `INTERACTIVE_OUTCOMES` unchanged (`Equal<>` against 5.0.0's list), and a handler map over every kind still compiles without a new handler — a minor adds no kind.
+**Tests first** (`src/__typechecks__/errorContract.ts`): positive lines — an `aborted` error with `strategy: 'manual'`, a `failed` error with `oauthError: 'access_denied'`; `@ts-expect-error` — `aborted` with `strategy: 'device'`, `failed` with an unregistered `oauthError`, `oauthError` on `aborted`; **the union stays closed**: `keyof AuthProviderErrorFacts` still `Equal<>` `AuthProviderErrorKind`, `INTERACTIVE_OUTCOMES` unchanged (`Equal<>` against 5.0.0's list), and a handler map over every kind still compiles without a new handler — a major for a field adds no kind.
 
 **Gate:** standard; `check:surface`, `check:graph`.
 
-**G1a (user):** merge, tag, publish interfaces-auth 5.1.0. Verify with `npm view` before Task 4.
+**G1a (user):** merge, tag, publish interfaces-auth 6.0.0. Verify with `npm view` before Task 4.
 
 ---
 
 ## Repository 2 — `mcp-abap-adt-auth-errors` (new; one PR after the initial commit)
 
-Publish dependency: interfaces-auth 5.1.0 on the registry (G1, G1a); repository and npm name ready (U2).
+Publish dependency: interfaces-auth 6.0.0 on the registry (G1, G1a); repository and npm name ready (U2).
 
 ### Task 4: Scaffold
 
-**Files (§5.1):** `package.json` (`main`, `types`, `files`, `license: LGPL-3.0-only`, `engines`, `sideEffects: false`, scripts `clean`, `build`, `build:fast`, `test`, `test:check`, `lint`, `lint:check`, `prepublishOnly`; `dependencies`: `@mcp-abap-adt/interfaces-auth ^5.1.0` only (spec §4.3a); `devDependencies` as auth-stores), `tsconfig.json` (the six flags), `tsconfig.build.json` (excludes tests and `__typechecks__`), `biome.json` (auth-providers'), `jest.config.js`, `.github/workflows/ci.yml` (Node 22, 24, 26: `npm ci`, build, `test:check`, `lint:check`, `test`), `release.yml` (on `v*.*.*`), `CHANGELOG.md`, `README.md`, `CLAUDE.md`, `LICENSE`, `COPYING`, `.npmrc`, `.gitignore`, `src/index.ts`; empty module files of §5.1's `src/` list.
+**Files (§5.1):** `package.json` (`main`, `types`, `files`, `license: LGPL-3.0-only`, `engines`, `sideEffects: false`, scripts `clean`, `build`, `build:fast`, `test`, `test:check`, `lint`, `lint:check`, `prepublishOnly`; `dependencies`: `@mcp-abap-adt/interfaces-auth ^6.0.0` only (spec §4.3a); `devDependencies` as auth-stores), `tsconfig.json` (the six flags), `tsconfig.build.json` (excludes tests and `__typechecks__`), `biome.json` (auth-providers'), `jest.config.js`, `.github/workflows/ci.yml` (Node 22, 24, 26: `npm ci`, build, `test:check`, `lint:check`, `test`), `release.yml` (on `v*.*.*`), `CHANGELOG.md`, `README.md`, `CLAUDE.md`, `LICENSE`, `COPYING`, `.npmrc`, `.gitignore`, `src/index.ts`; empty module files of §5.1's `src/` list.
 
 **Steps:** initial scaffold commit on `main` (the user's new repository may need the first push to `main`; everything after goes through one PR, branch `feat/auth-errors-1`). Lockfile check after `npm install`.
 
@@ -287,20 +287,20 @@ Publish dependency: interfaces-auth 5.1.0 on the registry (G1, G1a); repository 
 
 **Tests first (§11.1 "Exported allowlists cannot be widened"):** every attack listed (push through a cast, index assignment, `defineProperty`, `splice`, `.call` of `Set`/`Map` methods on every export, patching `Set.prototype.has`) then a foreign code is still refused and no word contains it; an `instanceof Set` / `Map` sweep over the module namespace nested one level finds nothing; the README table equals the generated one.
 
-**G2 (user):** merge, tag `v1.0.0`, publish `@mcp-abap-adt/auth-errors` 1.0.0 (depending on `interfaces-auth ^5.1.0`, published at G1a). Verify with `npm view`, and that the published `package.json` declares `^5.1.0`.
+**G2 (user):** merge, tag `v1.0.0`, publish `@mcp-abap-adt/auth-errors` 1.0.0 (depending on `interfaces-auth ^6.0.0`, published at G1a). Verify with `npm view`, and that the published `package.json` declares `^6.0.0`.
 
 ---
 
 ## Repository 3 — `mcp-abap-connection` 12.0.0 (one PR)
 
-Publish dependency: interfaces-auth 5.0.0, interfaces-auth-sap 3.1.0, auth-errors 1.0.0 on the registry (G1, G2).
+Publish dependency: interfaces-auth 6.0.0, interfaces-auth-sap 3.1.0, auth-errors 1.0.0 on the registry (G1, G2).
 
-**Why one task flips and bridges.** On interfaces-auth 5.0.0 nothing unbranded compiles: connection's own refusal constants, its targets, and every test that hands a 5.x auth-providers provider to connection as an `IAuthProvider` (its devDependency `^5.2.0`, 13 test files). A preparatory adapter cannot be written before the flip either: the adapter translates into `auth-errors` builders, which need interfaces-auth 5.0.0. So the flip, connection's producers, the adapter, its table and the migration of every affected test are one task, Task 14, and it is the first green state of the PR.
+**Why one task flips and bridges.** On interfaces-auth 6.0.0 nothing unbranded compiles: connection's own refusal constants, its targets, and every test that hands a 5.x auth-providers provider to connection as an `IAuthProvider` (its devDependency `^5.2.0`, 13 test files). A preparatory adapter cannot be written before the flip either: the adapter translates into `auth-errors` builders, which need interfaces-auth 6.0.0. So the flip, connection's producers, the adapter, its table and the migration of every affected test are one task, Task 14, and it is the first green state of the PR.
 
 ### Task 14: Flip to the error contract, with the legacy provider adapter
 
 **Files:**
-- `package.json` (`interfaces-auth ^5.0.0`, `interfaces-auth-sap ^3.1.0`, `auth-errors ^1.0.0`; devDependency auth-providers stays `^5.2.0` until Task 32); lockfile check.
+- `package.json` (`interfaces-auth ^6.0.0`, `interfaces-auth-sap ^3.1.0`, `auth-errors ^1.0.0`; devDependency auth-providers stays `^5.2.0` until Task 32); lockfile check.
 - `src/connection/authErrors.ts` (I3–I5 as `authError.connection({ problem, at })`; `guarded` through `classifyOutcome(answer, authError.connection({ problem: 'provider-threw', at }))`; `AuthRefusedError` unchanged in shape and `reason — hint` message), `RfcTransport.ts:477-487`, `HttpTransport.ts:514-528` (I1, I2 via `authError['logon-target']`), `AbstractAbapConnection.ts:975`, `:1612`. Where connection acts on a refusal it reads `kind` (§7).
 - `src/__tests__/helpers/legacyProvider.ts` (§10.3: `LegacyRefusal`, `LegacyOutcome`, `LegacyLogonTarget`, `LegacyAuthProvider`, `legacyProvider`), its closed translation table (the exact 5.x words connection's tests produce → the Appendix A builder call), the recorder, and an `afterEach` failing on any untranslated reason.
 - Every test file that builds a provider from auth-providers wraps it in `legacyProvider(…)` (`realProviders.test.ts`, `connectorAxes.test.ts`, `connectors/fixtures.ts`, `helpers/onPrem.ts`, … — 13 files, found by import of `@mcp-abap-adt/auth-providers`); every test double that builds a refusal by hand mints it through `auth-errors`.
@@ -333,18 +333,18 @@ Publish dependency: interfaces-auth 5.0.0, interfaces-auth-sap 3.1.0, auth-error
 
 Publish dependency: U1 (5.4.2 published), G1, G2 (G3 is not needed to build auth-providers: connection is no dependency of it).
 
-**Decision D6 (intra-PR order with green gates).** Every task of this repository ends with `build`, `test:check`, `lint:check` and `test` green. Bumping `interfaces-auth` to `^5.0.0` first would leave every unbranded refusal uncompiled until the last module is converted. Instead:
-- Task 17 first moves auth-providers from 5.4.2's `interfaces-auth ^3.2.0` / `interfaces-auth-sap ^2.0.0` to the published `^4.0.0` / `^3.0.0` (C2), then Tasks 17–26 keep those as direct dependencies and add `auth-errors ^1.0.0`, which brings interfaces-auth 5.0.0 nested.
+**Decision D6 (intra-PR order with green gates).** Every task of this repository ends with `build`, `test:check`, `lint:check` and `test` green. Bumping `interfaces-auth` to `^6.0.0` first would leave every unbranded refusal uncompiled until the last module is converted. Instead:
+- Task 17 first moves auth-providers from 5.4.2's `interfaces-auth ^3.2.0` / `interfaces-auth-sap ^2.0.0` to the published `^4.0.0` / `^3.0.0` (C2), then Tasks 17–26 keep those as direct dependencies and add `auth-errors ^1.0.0`, which brings interfaces-auth 6.0.0 nested.
 - **A minted error is not directly a 4.x refusal** (C1): its `hint?: string | undefined` does not assign to 4.x's `hint?: string` under `exactOptionalPropertyTypes` (measured, TS2375). So every place a 5.x outcome flows into a 4.x-typed return goes through a temporary `toLegacyRefusal(error)` / `toLegacyOutcome(outcome)` (`contractTransition.ts`): it returns the minted error itself when its `hint` key is absent or a string — always true, since a builder omits absent keys — narrowed by a type predicate, so tests still see the same object with `kind` and `facts`; otherwise it builds `{ reason, hint? }` omitting an undefined hint. No type assertion. An unconverted module (still returning a 4.x `oops(…)`) keeps compiling beside it.
 - **`refreshTokenDisposition` before 5.0.0** (C3): `ITokenResult` gains the field only in 5.0.0, so Tasks 22 and 22a emit through a local `TokenResultWithDisposition` (`ITokenResult & { readonly refreshTokenDisposition?: 'keep' \| 'replace' \| 'clear' }`) until Task 27.
-- Names from 5.0.0 (`IAuthProviderError`, `Operation`, the 5.x `AuthOutcome`) come from `auth-errors`' signatures in one temporary module, `src/auth/contractTransition.ts` (aliases derived with `ReturnType` / `Parameters` of `classify`, `guard`, `authError`), never from a second, aliased copy of interfaces-auth (two physical copies would declare two different `minted` symbols).
+- Names from 6.0.0 (`IAuthProviderError`, `Operation`, the 5.x `AuthOutcome`) come from `auth-errors`' signatures in one temporary module, `src/auth/contractTransition.ts` (aliases derived with `ReturnType` / `Parameters` of `classify`, `guard`, `authError`), never from a second, aliased copy of interfaces-auth (two physical copies would declare two different `minted` symbols).
 - Every old helper keeps its signature until its last caller has moved, and each temporary piece has a named transition test and a named task that removes it:
 
 | Temporary piece | Exists from | Its callers move in | Transition test (kept green while the piece lives) | Removed in |
 |---|---|---|---|---|
 | `src/auth/contractTransition.ts` | 17 | 18–26 | `contractTransition.typecheck.ts` (see `toLegacyRefusal`) | 27 |
 | `toLegacyRefusal(error)` / `toLegacyOutcome(outcome)` (C1): the minted error narrowed by a type predicate to the 4.x refusal (hint key absent or a string), else `{ reason, hint? }` without an undefined hint; no cast | 17 | every 5.x outcome returned through a 4.x-typed method, 18–26 | `contractTransition.typecheck.ts`: `toLegacyOutcome(minted outcome)` assignable to the 4.x `AuthOutcome`, a raw minted error **not** assignable (`@ts-expect-error`); `contractTransition.test.ts`: the returned refusal is the same object (`toBe`), and a hint-less error yields no `hint` key | 27 |
-| `TokenResultWithDisposition` (C3): `ITokenResult & { refreshTokenDisposition? }`, the type `onTokens` receives | 22 | 22, 22a | Task 22's and 22a's disposition cases | 27 (replaced by 5.0.0's `ITokenResult`) |
+| `TokenResultWithDisposition` (C3): `ITokenResult & { refreshTokenDisposition? }`, the type `onTokens` receives | 22 | 22, 22a | Task 22's and 22a's disposition cases | 27 (replaced by 6.0.0's `ITokenResult`) |
 | `oops(reason, hint)` — unchanged, a 4.x unbranded outcome | today | credentials and `BaseTokenProvider` (B7–B13, A17, A18) in 19; `SncLogonProvider` in 25 | the existing credential and SNC tests, unchanged until their task | 25, with a source test "no `oops(` in `src`" |
 | `safely(what, body)` — unchanged | today | the five credentials and `BaseTokenProvider` in 19 | existing tests | 19 |
 | SNC's `bounded` — unchanged | today | 25 | existing SNC tests | 25 |
@@ -355,10 +355,10 @@ Publish dependency: U1 (5.4.2 published), G1, G2 (G3 is not needed to build auth
 | `sendTokenRequest`'s third parameter widened to 5.4.2's `TokenRequestDiagnostics` (`{ logger, label }`) `\| TokenRequestSite`, the arms told apart by an explicit discriminant — a temporary `readonly arm: 'site'` on `TokenRequestSite` (no structural guessing); the legacy arm keeps 5.4.2's behaviour exactly | 20 | the 10 call sites in 21 | `sendTokenRequestArms.test.ts` (both arms) plus 5.4.2's request tests unchanged and green | 21 (the legacy arm, `TokenRequestDiagnostics`, the `arm` field, `withoutRequest`, `tokenEndpointError`) |
 | `getTokens()` / `refreshTokens()` rethrowing what they catch as it is | today | 22 | Task 21's site tests (they see the site's `AuthProviderFailure` through it) | 22 |
 | `ICallbackServerOptions.timeoutMs` still passed (`Number.POSITIVE_INFINITY`) to satisfy the 4.x type; `runCallbackScope` ignores it, no timer | 23 | — | Task 23's "`timeoutMs: 1` stays open until aborted" case and the no-`setTimeout` source test | 27 |
-| `getTokens(options?)` / `refreshTokens(options?)` and `attach` on top of the 4.x interfaces, and a local `SignalledAuthorizationRequest` (the 4.x `AuthorizationRequest` plus `signal?`) that the providers build and the shipped strategies read | 22a | — | Task 22a's cancellation suite | 27 (the local type replaced by 5.0.0's `AuthorizationRequest`) |
+| `getTokens(options?)` / `refreshTokens(options?)` and `attach` on top of the 4.x interfaces, and a local `SignalledAuthorizationRequest` (the 4.x `AuthorizationRequest` plus `signal?`) that the providers build and the shipped strategies read | 22a | — | Task 22a's cancellation suite | 27 (the local type replaced by 6.0.0's `AuthorizationRequest`) |
 | The 13 error classes and `callbackScopeError.ts` | today | their producers, 21–26 | `legacyLadder.test.ts` | 27 |
 
-- Task 27 flips the direct dependencies to 5.0.0 / 3.1.0 and removes everything in the table that is still there; after it no transition test remains (each case is covered by its Appendix A row test).
+- Task 27 flips the direct dependencies to 6.0.0 / 3.1.0 and removes everything in the table that is still there; after it no transition test remains (each case is covered by its Appendix A row test).
 
 ### Task 17: Start from 5.4.2; `auth-errors`
 
@@ -366,7 +366,7 @@ Publish dependency: U1 (5.4.2 published), G1, G2 (G3 is not needed to build auth
 - [ ] After U1: merge `master` — **the merged and published 5.4.2**, not its branch as it stood when this plan was written (it was still receiving fixes: guarded SAML loggers, `CanceledError` handling, stand wording) — into `feat/error-contract`; resolve; gates green.
 - [ ] Re-read 5.4.2's final `src/auth/tokenRequest.ts` (`sendTokenRequest`, `TokenRequestDiagnostics`, `logRefusedRequest`, `logQuietly`, `snapshotOf` and `ANSWER_FIELDS`, `withoutRequest`, `legacyBasic`, the encoded-secret recogniser) and its callers, and re-verify Task 20's transition contract against them before Task 20 starts; any signature that differs from what Task 20 names is corrected in this plan first (a plan commit), not improvised in code.
 - [ ] **Move to the published 4.x interfaces (C2):** `interfaces-auth ^4.0.0`, `interfaces-auth-sap ^3.0.0` (5.4.2 is on `^3.2.0` / `^2.0.0`); fix what 4.0.0's widened `?: T | undefined` fields require (through the existing `asContract`, removed in Task 27); gates green before anything else.
-- [ ] `npm install @mcp-abap-adt/auth-errors@^1.0.0`; lockfile check (no `"link": true`, everything from the registry; interfaces-auth present twice, 4.x direct and 5.0.0 nested, is expected until Task 27).
+- [ ] `npm install @mcp-abap-adt/auth-errors@^1.0.0`; lockfile check (no `"link": true`, everything from the registry; interfaces-auth present twice, 4.x direct and 6.0.0 nested, is expected until Task 27).
 - [ ] `src/auth/contractTransition.ts` per D6, with a header naming Task 27 as its removal.
 
 **Tests first:** `contractTransition.typecheck.ts` (in the type tests `test:check` compiles): `@ts-expect-error` assigning a value returned by `authError['client-certificate']` directly to the 4.x `AuthOutcome['refusal']` (C1, TS2375); `toLegacyOutcome({ ok: false, refusal: that })` assignable to the 4.x `AuthOutcome`; `contractTransition.test.ts`: `toLegacyRefusal` returns the same object for an error with and without a hint, and never a `hint: undefined` key.
@@ -496,12 +496,12 @@ Publish dependency: U1 (5.4.2 published), G1, G2 (G3 is not needed to build auth
 ### Task 27: Flip and delete
 
 **Steps:**
-- [ ] `interfaces-auth ^5.1.0`, `interfaces-auth-sap ^3.1.0` as direct dependencies; one deduplicated interfaces-auth in the lockfile; lockfile check.
+- [ ] `interfaces-auth ^6.0.0`, `interfaces-auth-sap ^3.1.0` as direct dependencies; one deduplicated interfaces-auth in the lockfile; lockfile check.
 - [ ] Delete every remaining piece of the Decision D6 table: `src/auth/contractTransition.ts` (imports move to interfaces-auth / auth-errors), the ladder and `refusalFrom`, `legacyBridge`, `loggedError`, `refusalWords`, `src/errors/` (all five files), `src/auth/callbackScopeError.ts`, `DeviceCodePresentationError` (`src/deviceCode/DeviceCodePresenter.ts:26`, C11), `toLegacyRefusal` / `toLegacyOutcome`, `TokenResultWithDisposition`; and `src/auth/contractShape.ts` (`asContract`, goal step 8) with every call of it. `src/index.ts` drops the error classes and `refusalWords`; `AuthProviderBase` stays exported (Task 19); `TokenRequestSite`, `legacyBasic` and `rejectMissingToken` are internal and not exported.
 - [ ] Delete the transition tests `legacyLadder.test.ts`, `legacyBridge.test.ts`, `contractTransition.typecheck.ts`; their coverage moves to `transitionCoverage.test.ts` (R6): a table mapping each deleted transition case to the Appendix A row test that now covers it, and a test that every named row test exists in `src/__tests__` (by name) — a missing counterpart fails the suite.
 - [ ] No reference to `TOKEN_PROVIDER_ERROR_CODES` / `ASSERTION_ERROR_CODES` remains.
 
-**Tests first:** a type test that `src/index.ts` exports none of the deleted names, `DEFAULT_LOGIN_TIMEOUT_MS` (removed in Task 23) among them (`@ts-expect-error` imports); after the switch to interfaces-auth 5.0.0: `@ts-expect-error` on an `ICallbackServerOptions` literal with `timeoutMs` (positive line: the same literal with `signal`), and the `Number.POSITIVE_INFINITY` placeholder removed from every `runCallbackScope` call (Task 23's temporary 4.x compatibility) with a source test that no `timeoutMs` remains in `src`; `resultShapes.test.ts` passes without `asContract` (the contract's `?: T | undefined` in 5.0.0 carries the keys).
+**Tests first:** a type test that `src/index.ts` exports none of the deleted names, `DEFAULT_LOGIN_TIMEOUT_MS` (removed in Task 23) among them (`@ts-expect-error` imports); after the switch to interfaces-auth 6.0.0: `@ts-expect-error` on an `ICallbackServerOptions` literal with `timeoutMs` (positive line: the same literal with `signal`), and the `Number.POSITIVE_INFINITY` placeholder removed from every `runCallbackScope` call (Task 23's temporary 4.x compatibility) with a source test that no `timeoutMs` remains in `src`; `resultShapes.test.ts` passes without `asContract` (the contract's `?: T | undefined` in 5.0.0 carries the keys).
 
 **Gate:** standard; `npm ls @mcp-abap-adt/interfaces-auth` shows one copy.
 
@@ -548,15 +548,15 @@ Repository connection, new PR. Publish dependency: auth-providers 6.0.0 (G4).
 
 ### Task 33: auth-stores 4.0.0
 
-Repository auth-stores, one PR. Publish dependency: interfaces-auth 5.0.0, interfaces-auth-sap 3.1.0 (interfaces-auth-broker 1.3.0 already published).
+Repository auth-stores, one PR. Publish dependency: interfaces-auth 6.0.0, interfaces-auth-sap 3.1.0 (interfaces-auth-broker 1.3.0 already published).
 
-**Steps:** dependencies `interfaces-auth ^5.0.0`, `interfaces-auth-sap ^3.1.0`, `interfaces-auth-broker ^1.3.0`; delete its `asContract`; released with its unreleased strict-compiler change (already breaking: engines) as 4.0.0; **refresh-token clearing (spec §10.5, §6b):** `saveSession` with `refreshToken: ''` (already removing it, `sessionSecret.ts:168-170`) documented as the clearing operation (`''` clears, `undefined` keeps) in README and the store notes, pinned by a test per session store (file, in-memory): saved R, then a save with `refreshToken: ''` and a new access token → reload has the access token and no refresh token; a save with `refreshToken` omitted keeps R (break: treat `''` as omitted → red); CHANGELOG / README migration: the versions and that statement. Standard gates; lockfile check.
+**Steps:** dependencies `interfaces-auth ^6.0.0`, `interfaces-auth-sap ^3.1.0`, `interfaces-auth-broker ^1.3.0`; delete its `asContract`; released with its unreleased strict-compiler change (already breaking: engines) as 4.0.0; **refresh-token clearing (spec §10.5, §6b):** `saveSession` with `refreshToken: ''` (already removing it, `sessionSecret.ts:168-170`) documented as the clearing operation (`''` clears, `undefined` keeps) in README and the store notes, pinned by a test per session store (file, in-memory): saved R, then a save with `refreshToken: ''` and a new access token → reload has the access token and no refresh token; a save with `refreshToken` omitted keeps R (break: treat `''` as omitted → red); CHANGELOG / README migration: the versions and that statement. Standard gates; lockfile check.
 
 **G5 (user):** merge, tag, publish auth-stores 4.0.0.
 
 ### Task 34: auth-broker 5.0.0 and auth-broker-cli 3.0.0
 
-Repository auth-broker (workspace), one PR. Publish dependency: interfaces-auth 5.0.0, interfaces-auth-sap 3.1.0, auth-errors 1.0.0, auth-providers 6.0.0, auth-stores 4.0.0 (G1, G2, G4, G5) and gate 7 met (Task 32).
+Repository auth-broker (workspace), one PR. Publish dependency: interfaces-auth 6.0.0, interfaces-auth-sap 3.1.0, auth-errors 1.0.0, auth-providers 6.0.0, auth-stores 4.0.0 (G1, G2, G4, G5) and gate 7 met (Task 32).
 
 **Files:** both `package.json`s (§10.6; the CLI also takes `auth-errors ^1.0.0` for `renderDiagnostics`); `clientAuthentication.ts` (J1: copied phrases at `:77-80` and `:220-226` deleted; `resolveClientAuthentication` catches with `readFailure(error, 'client-authentication-strategy')`; `DestinationConfigError` gains `readonly error?: IAuthProviderError`; reason `the clientAuthentication strategy refused: ${error.reason}` for `client-certificate`, else `the clientAuthentication strategy failed` — rendered, not copied; J2, J3, J4 stay); `destinations.ts:247-255` (J5 on `kind === 'configuration'` and `facts.fields`); `getTokens` / `refreshTokens` relay the provider's failure unchanged; **cancelling (spec §6b, §10.6):** `getProvider(destination, { signal })`, `getToken(destination, { signal })`, `refreshToken(destination, { signal })`; `getProvider` callers are waiters of the destination's shared build (the build-cache rule of §6b, through auth-errors' `sharedAttempt` — no second implementation of the waiter rules, R2: one caller's abort rejects only its promise `aborted`; when all have aborted the build is removed from `built` at once, identity-checked, and its late completion is neither cached nor written; a failed or aborted build retried on the next call), and only a given signal is attached (`attach`) to the token provider returned, built or cached — `getProvider` without a signal attaches nothing; the token API reaches the provider only through a new private, non-attaching `providerFor(destination, signal?)` (replacing `obtainShared`'s call of `getProvider`, `AuthBroker.ts:621`) and passes the call's signal to `getTokens` / `refreshTokens`; the broker adds no bound and no signal of its own; **refresh-token disposition (spec §6b, §10.6):** the broker keeps a **logical refresh state** per destination (`stored` initially, `cleared`, `token(X)`; `'replace'` → `token(X)`, `'clear'` → `cleared`, `'keep'` → unchanged) and builds every session write and every retry of a pending write from it (`AuthBroker.ts:1282-1295`, `SessionWriter.ts:80-84`, which keeps only the latest pending result): `token(X)` writes X, `cleared` writes `refreshToken: ''` with no stored-token fallback (sticky until a `'replace'`), only `stored` keeps today's fallback; an access token written only when non-empty; **login bound (§6a):** the broker sets and adds none — its consumer composes a strategy or factory with a `signal`; the CLI keeps no bound either (user decision 2026-10-05): `INTERACTIVE_LOGIN_TIMEOUT_MS` (`mcp-auth.ts:40`, `:580`; `generate-env-from-service-key.ts:44`, `:54`; `mcpSsoConfig.ts:40`, `:700`, `:717`, `:758`) is removed, not turned into `AbortSignal.timeout`; each command that starts a login creates one `AbortController`, wires `SIGINT` and `SIGTERM` to its `abort()` for the duration of the login (handlers removed afterwards) and passes its `signal` to the strategy or factory; an aborted login prints the `aborted` words and exits non-zero without a stack trace; no `timeoutMs` is passed anywhere; `AuthBroker.ts:660`, `SessionWriter.ts:40-46` log `AuthProviderFailure`; CLI `generateEnv.ts:262-264`, `mcp-auth.ts:587-591` (J6: `reason — hint`, then `renderDiagnostics` on its own line); `AuthBrokerConfig.authDebug?: boolean | undefined` passed as `authDebug` to every token provider the broker builds from a destination (`destinations.ts`'s provider construction), `=== true` only, never read from the environment; a consumer-supplied provider instance or factory result keeps its own setting; the CLI (`mcp-auth`, `generate-env`) gains `--auth-debug`, which sets it and nothing else; `tools/check-provider-shape.mjs` copied with `--rules 4,5,6`, with the byte-identity test (R1); READMEs (the option and the flag: off by default, what they write), CHANGELOGs, migration notes of both packages (incl.: a consumer that relied on the providers' 30 s / 300 s defaults must now bound the login itself; the CLI's five-minute limit is gone — interrupt with Ctrl+C).
 
@@ -574,7 +574,7 @@ Repository auth-broker (workspace), one PR. Publish dependency: interfaces-auth 
 - [ ] Gate 1: every Appendix A row implemented as mapped (Task 29's audit, connection's I rows, the broker's J rows); L1–L13 approved (spec Appendix C header).
 - [ ] Gate 2: each repository's standard gates on its released tag; `test:stand` for auth-providers.
 - [ ] Gate 3: READMEs, guides, CLAUDE.md, migration notes, generated tables current in all six packages.
-- [ ] Gate 4: in an empty directory outside every repository, `npm install` of interfaces-auth 5.0.0, interfaces-auth-sap 3.1.0, auth-errors 1.0.0, connection 12.0.x, auth-providers 6.0.0, auth-stores 4.0.0, auth-broker 5.0.0, auth-broker-cli 3.0.0 from the registry; lockfile: no `"link": true`, every resolution from the registry. **RF5:** `npm ls @mcp-abap-adt/auth-errors` and `npm ls @mcp-abap-adt/interfaces-auth` show one deduplicated copy each; a smoke script there builds a provider, runs `prepare()` / a refused `rejected()` and prints `reason`, `kind`.
+- [ ] Gate 4: in an empty directory outside every repository, `npm install` of interfaces-auth 6.0.0, interfaces-auth-sap 3.1.0, auth-errors 1.0.0, connection 12.0.x, auth-providers 6.0.0, auth-stores 4.0.0, auth-broker 5.0.0, auth-broker-cli 3.0.0 from the registry; lockfile: no `"link": true`, every resolution from the registry. **RF5:** `npm ls @mcp-abap-adt/auth-errors` and `npm ls @mcp-abap-adt/interfaces-auth` show one deduplicated copy each; a smoke script there builds a provider, runs `prepare()` / a refused `rejected()` and prints `reason`, `kind`.
 - [ ] Gate 5: `docs/superpowers/` holds none of this work's documents on auth-providers' master.
 - [ ] Gate 6: the CHANGELOG **Fixed** entry for the legacy Basic credential; the `authDebug` tests green in auth-providers — only the safe-facts line without it (every failed request, with or without a response; the code exchange's 2xx line verbatim at `error`), the preview bounds (15/16), a short secret as its length only, every encoding previewed separately — and the header-echo tests for every token site on both paths in both modes; the broker and CLI pass-through tests green (Task 34); L1 as amended and the 5.4.2 record in #68.
 - [ ] Gate 7: Task 32 green before Tasks 33–34 moved.
@@ -630,7 +630,7 @@ Words the spec does not fix. `<…>` is a fact; a hint `—` means none. Each is
 - **Decision D3** — `relayOutcome` lives in `guard.ts` (Task 11).
 - **Decision D4** — The shape-check script is authored in auth-errors, published as a plain file in its package, and copied byte-identically (a byte-comparison test per repository, R1) into the other repositories with its source commit; not published (Task 12).
 - **Decision D5** — Rules per repository: auth-errors 4 (four sites) + 6 (empty); connection and broker 4, 5, 6; auth-providers 1–8 (Task 12).
-- **Decision D6** — Intra-PR order in auth-providers: stay on interfaces-auth 4.x direct with auth-errors (5.0.0 nested), derive 5.x names from auth-errors' signatures, keep every old helper's signature until its last caller moves, bridge legacy throws inside guarded bodies, flip in Task 27; each temporary piece has a transition test and a removal task (the Decision D6 table) — so every task's gates are green.
+- **Decision D6** — Intra-PR order in auth-providers: stay on interfaces-auth 4.x direct with auth-errors (6.0.0 nested), derive 5.x names from auth-errors' signatures, keep every old helper's signature until its last caller moves, bridge legacy throws inside guarded bodies, flip in Task 27; each temporary piece has a transition test and a removal task (the Decision D6 table) — so every task's gates are green.
 - **Decision D12** — connection's flip, its producers, the legacy adapter, its table and the 13 test files' migration are one task (Task 14): nothing unbranded compiles after the flip, and the adapter cannot exist before it.
 - **Decision D7** — `refusalWords` survives until Task 27 (implemented on `classify`), then is deleted with the classes.
 - **Decision D8** — connection's gate-7 PR releases only if it changes shipped code (a 12.0.x patch); a test-only change is merged without a release unless the user asks.
