@@ -92,8 +92,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   protocol and flow".
 - `OidcDeviceFlowProvider`'s poll reads the status and OAuth `error` of what
   a poll threw through `readSafely`, like every other read of a foreign
-  error: a throwing getter on the thrown value no longer replaces the
-  original error with its own.
+  error: a thrown value whose property read throws (a Proxy) is rethrown as
+  it is, no longer replaced by the error its read raised.
 
 ## [5.4.0] - 2026-10-05
 
