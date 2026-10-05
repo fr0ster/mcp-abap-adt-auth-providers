@@ -126,7 +126,7 @@ export class AuthorizationCodeProvider extends BaseTokenProvider {
     }
   }
 
-  async getTokens(): Promise<ITokenResult> {
+  override async getTokens(): Promise<ITokenResult> {
     return super.getTokens();
   }
 
