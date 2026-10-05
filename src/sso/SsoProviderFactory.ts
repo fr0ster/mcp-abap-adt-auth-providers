@@ -8,11 +8,12 @@ import { Saml2PureProvider } from '../providers/Saml2PureProvider';
 import type { SsoProviderConfig } from './types';
 
 /**
- * Builds the provider a protocol and flow name. An object, not a class: it
- * holds no state, and `SsoProviderFactory.create(…)` reads as before.
+ * Builds the provider a protocol and flow name. A class holding only a static
+ * member — biome's noStaticOnlyClass is off for this file (biome.json) — kept
+ * a class because it is public: a patch does not change a public type.
  */
-export const SsoProviderFactory = {
-  create(config: SsoProviderConfig): IRefreshableTokenProvider {
+export class SsoProviderFactory {
+  static create(config: SsoProviderConfig): IRefreshableTokenProvider {
     if (config.protocol === 'oidc') {
       if (config.flow === 'browser') {
         return new OidcBrowserProvider(config.config);
@@ -41,5 +42,5 @@ export const SsoProviderFactory = {
     throw new Error(
       'Unsupported SSO provider config: no provider for this protocol and flow',
     );
-  },
-};
+  }
+}
