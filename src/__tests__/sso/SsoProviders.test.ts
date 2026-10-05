@@ -1726,6 +1726,35 @@ describe('Saml2 provider construction faults', () => {
     uaaUrl: 'https://uaa',
   };
 
+  // 5.4.0 read the brand with a plain property access, so an untyped
+  // consumer's non-object validator was taken for a custom one and the
+  // provider constructed; it must not throw now either.
+  it.each([
+    ['a string', 'str'],
+    ['a number', 42],
+  ])(
+    'a non-object assertionValidator (%s) is not a shipped one: the provider constructs',
+    (_label, value) => {
+      const assertionValidator = value as unknown as IAssertionValidator;
+      expect(
+        () =>
+          new Saml2PureProvider({
+            ...validPureConfig,
+            authorization: unusedAuthorization,
+            assertionValidator,
+          }),
+      ).not.toThrow();
+      expect(
+        () =>
+          new Saml2BearerProvider({
+            ...validBearerConfig,
+            authorization: unusedAuthorization,
+            assertionValidator,
+          }),
+      ).not.toThrow();
+    },
+  );
+
   it('Saml2PureProvider refuses construction when idpEntityId is missing', () => {
     const error = constructionError(() =>
       Saml2PureProvider.inBrowser(

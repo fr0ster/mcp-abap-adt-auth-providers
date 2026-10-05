@@ -111,7 +111,9 @@ function brand(validator: IAssertionValidator): IAssertionValidator {
 
 /** Whether this validator came from one of the two shipped factories. */
 export function isShippedValidator(validator: IAssertionValidator): boolean {
-  return Reflect.get(validator, SHIPPED) === true;
+  const branded: IAssertionValidator & { readonly [SHIPPED]?: unknown } =
+    validator;
+  return branded[SHIPPED] === true;
 }
 
 export const createSignedResponseValidator = (
