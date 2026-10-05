@@ -46,23 +46,30 @@ cover thrown classes only, not refusals.
    facts of each, the allowlist types (`as const` arrays and the unions they
    give), `IAuthProviderError`; `IAuthRefusal` carries it. Types and constants
    only — no logic (the interfaces package holds none).
-2. **`@mcp-abap-adt/auth-providers`** — classification (`unknown` →
-   `IAuthProviderError`, the one runtime boundary), the renderer, every
-   refusal and thrown token error built through them. It also moves to the
+2. **`@mcp-abap-adt/auth-errors`** (new package, its own repository; decided
+   by the user 2026-10-05) — the runtime half of the contract, which the
+   interfaces package cannot hold: the one way to build an
+   `IAuthProviderError` (the brand is minted only here), the renderer, and the
+   allowlists' runtime sets. Small and dependency-free apart from
+   `interfaces-auth`, so every producer — providers, connection's logon
+   targets, the broker — depends on it without pulling in a provider.
+3. **`@mcp-abap-adt/auth-providers`** — classification (`unknown` →
+   `IAuthProviderError`, the one runtime boundary), and every refusal and
+   thrown token error built through `auth-errors`. It also moves to the
    error contract's `@mcp-abap-adt/interfaces-auth` major (5.0.0; it carries
    4.0.0's `?: T | undefined` fields too) and deletes `asContract`
    (`src/auth/contractShape.ts`), the one cast 5.4.1 kept for them. Every
    producer and consumer in this release chain moves to that same major.
-3. **`@mcp-abap-adt/auth-broker`** — relays the error; its copied certificate
+4. **`@mcp-abap-adt/auth-broker`** — relays the error; its copied certificate
    phrases go.
-4. **`@mcp-abap-adt/connection`** — its logon targets (`ILogonTarget`:
+5. **`@mcp-abap-adt/connection`** — its logon targets (`ILogonTarget`:
    `header`, `cookies`, `logonParameters`, `tlsMaterial`) return an
    `AuthOutcome` too, and a provider with no other way in returns the
    target's Oops as its own (providers' rule 4: `CertificateAuthProvider`,
    `SncLogonProvider`). A target is a producer of refusals, not only a reader:
    its refusals are `IAuthProviderError`s of the same contract, built through
-   the same exported means, and connection reads `kind` where it acts on one.
-5. **Further consumers** (the server `mcp-abap-adt`) — read `kind` where they
+   `auth-errors`, and connection reads `kind` where it acts on one.
+6. **Further consumers** (the server `mcp-abap-adt`) — read `kind` where they
    act on a refusal; each in its own change.
 
 ## Holds throughout
@@ -72,10 +79,18 @@ cover thrown classes only, not refusals.
    kinds.
 2. **No exception crosses `IAuthProvider`** (providers' rule 1): the error is a
    value in the outcome, never thrown across the contract.
-3. **No free text in an error.** `facts` hold only allowlisted values;
-   `reason` / `hint` are a function of `kind` and `facts`, produced by the
-   renderer and nothing else. No `message`, `cause` or body of any thrown
-   value reaches an error (providers' rule 2).
+3. **No free text in an error's facts.** `facts` hold only allowlisted
+   values; `reason` / `hint` are a function of `kind`, `facts` and
+   `diagnostics`, produced by the renderer and nothing else. No `message`,
+   `cause` or body of any thrown value reaches an error (providers' rule 2).
+   **`diagnostics`** (decided by the user 2026-10-05) is a separate, typed
+   channel for the values that help a person and cannot be allowlisted —
+   today an SNC library's and each candidate's path, and a SAML document's
+   values quoted by `quoteUntrusted` — admitted only when the value is one the
+   consumer supplied or received in clear (its own configuration and files,
+   the assertion it was handed), never a secret, a token, key material or a
+   server's free text. Each kind declares which diagnostics it may carry; the
+   renderer shows them apart from the reason, and a consumer may drop them.
 4. **Runtime checking only at the boundary; the compiler guarantees the
    rest.** One classification function turns a thrown `unknown` into an
    `IAuthProviderError`; everything after it is typed:
@@ -143,42 +158,41 @@ surfaces only when Jest runs), and the stricter compiler options
 
 Order, not dates. Each step is one PR in its repository (one open PR per
 repository at a time) and ends with a review; a step starts only when the one
-before it that it depends on is merged — and, where a later repository builds
-against it, published.
+it depends on is merged — and, where a later repository builds against it,
+published.
 
-**Groundwork — done or in review**
-1. Strict compiler: auth-providers 5.4.1 (published), interfaces 4.0.0 /
-   3.0.0 / 2.0.0 / 13.0.0 (published), auth-stores (PR open, unreleased),
-   auth-broker + CLI (next, unreleased).
+**Groundwork — done**
+1. Strict compiler: auth-providers 5.4.1, interfaces (auth 4.0.0, auth-sap
+   3.0.0, auth-broker 1.3.0, adt-connection 2.0.0, adt 13.0.0) published;
+   auth-stores and auth-broker + CLI merged, unreleased — they ship with
+   steps 9 and 10.
 
 **The error contract — this PR, in auth-providers**
 2. This goal, reviewed and approved.
-3. The spec, reviewed and approved: the kinds and their facts, built from
-   every refusal the providers produce today; the renderer; how thrown token
-   errors carry the error; the transition for readers of `IAuthRefusal`.
+3. The spec, reviewed and approved: the kinds, their facts and diagnostics,
+   built from every refusal and message the chain produces today (the
+   diagnostic compatibility matrix); the builder and renderer; how thrown
+   token errors carry the error; how a logon target builds a refusal; the
+   transition for readers of `IAuthRefusal`.
 4. The plan, reviewed and approved: steps, order, decisions.
 
 **Implementation, in dependency order**
-5. `@mcp-abap-adt/interfaces-auth` — the error contract's types and
-   constants (a major: `IAuthRefusal` changes). Its own PR, released first.
-6. `@mcp-abap-adt/auth-providers` — in this PR, against the published
-   interfaces: classification, renderer, every refusal and thrown token error
-   through them, type tests for the static rules, `asContract` deleted.
-   Released.
-7. `@mcp-abap-adt/auth-stores` — moves to the new interfaces majors and
-   deletes its `asContract`; released together with its unreleased
-   strict-compiler change.
-8. `@mcp-abap-adt/auth-broker` + CLI — relay the error, drop the copied
-   certificate phrases; released together with their unreleased
-   strict-compiler change.
-
-**The error contract appears** for consumers at step 6 (auth-providers
-release) and is used end to end at step 8 (broker release).
-
-`@mcp-abap-adt/connection` comes between steps 5 and 6 in dependency terms:
-its logon targets produce refusals, so it moves to the new interfaces-auth
-major (its own PR, released) before a provider relays a target's refusal
-under the new contract.
+5. `@mcp-abap-adt/interfaces-auth` 5.0.0 — the contract's types and
+   constants (a major: `IAuthRefusal` changes). Released first.
+6. `@mcp-abap-adt/auth-errors` 1.0.0 — new repository: builder, renderer,
+   allowlist sets, type tests. Released.
+7. `@mcp-abap-adt/connection` — logon targets build refusals through
+   `auth-errors`; moves to interfaces-auth 5.0.0. Released.
+8. `@mcp-abap-adt/auth-providers` — in this PR: classification, every refusal
+   and thrown token error through `auth-errors`, a target's refusal relayed
+   under rule 4, rule 1 held structurally, type tests, `asContract` deleted.
+   Released. **The error contract appears for consumers here.**
+9. `@mcp-abap-adt/auth-stores` — moves to interfaces-auth 5.0.0 (and the
+   matching auth-sap / auth-broker majors), deletes its `asContract`;
+   released with its unreleased strict-compiler change.
+10. `@mcp-abap-adt/auth-broker` + CLI — relay the error, drop the copied
+    certificate phrases; released with their unreleased strict-compiler
+    change. **The contract is used end to end here.**
 
 **After** — its own task: the server `mcp-abap-adt` reads `kind` where it
 acts on a refusal; its version bump also takes the x509 and strict-compiler
