@@ -1,4 +1,5 @@
 import { TOKEN_PROVIDER_ERROR_CODES } from '@mcp-abap-adt/interfaces-auth';
+import { readSafely } from '../auth/knownCodes';
 import { TokenProviderError } from './TokenProviderErrors';
 
 /** The fixed words for certificate material that is not whole: the one source. */
@@ -37,21 +38,48 @@ export function certificateWords(incomplete: boolean, expired: boolean) {
  * `expired` alone.
  */
 export class CertificateMaterialError extends TokenProviderError {
-  constructor(
-    public readonly incomplete: boolean,
-    /** Whole and usable, but past its `notAfter`. */
-    public readonly expired: boolean = false,
-  ) {
+  public readonly incomplete: boolean;
+  /** Whole and usable, but past its `notAfter`. */
+  public readonly expired: boolean;
+
+  constructor(incomplete: boolean, expired = false) {
     super(
-      certificateWords(incomplete, expired).reason,
+      certificateWords(incomplete === true, expired === true).reason,
       TOKEN_PROVIDER_ERROR_CODES.CERTIFICATE_MATERIAL_ERROR,
     );
+    this.incomplete = incomplete === true;
+    this.expired = expired === true;
     this.name = 'CertificateMaterialError';
     Object.setPrototypeOf(this, CertificateMaterialError.prototype);
   }
 
-  /** The fixed reason and hint this error stands for. */
+  /**
+   * The fixed reason and hint this error stands for.
+   *
+   * @deprecated Use `refusalWords(error, what)`: this package never reads
+   * `words` from a thrown value, since any object can carry its own.
+   */
   get words(): { readonly reason: string; readonly hint: string } {
-    return certificateWords(this.incomplete, this.expired);
+    return certificateWords(this.incomplete === true, this.expired === true);
   }
+}
+
+/**
+ * The fixed words of a thrown CertificateMaterialError, chosen from its two
+ * flags — never read from its `words`, which a forged object can carry — or
+ * undefined when the value is not one. Total: an `instanceof` that throws is
+ * "not one", and a flag that throws reads as not set.
+ */
+export function certificateWordsOf(
+  error: unknown,
+): { readonly reason: string; readonly hint: string } | undefined {
+  try {
+    if (!(error instanceof CertificateMaterialError)) return undefined;
+  } catch {
+    return undefined;
+  }
+  return certificateWords(
+    readSafely(error, 'incomplete') === true,
+    readSafely(error, 'expired') === true,
+  );
 }

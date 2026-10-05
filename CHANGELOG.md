@@ -22,10 +22,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- A `CertificateMaterialError`'s refusal is chosen from its `incomplete` and
-  `expired` flags, no longer read from its `words` getter: an object whose
-  prototype is the class, or an instance given its own `words`, can no longer
-  put its own text into a refusal or a log line.
+A forged error — an object whose prototype is one of this package's classes,
+or an instance given its own properties — can no longer put its own text into
+a refusal or a log line, nor make building one throw:
+
+- A `CertificateMaterialError`'s words are chosen from its `incomplete` and
+  `expired` flags, each read once and only when exactly `true`, and never read
+  from its `words` — in `refusalFrom` (and so `refusalWords`, `loggedError`
+  and every provider's refusal, a token provider's pinning included) and in
+  the material check behind `CertificateAuthProvider.prepare()`, where a
+  consumer's loader can throw one.
+- An `AssertionValidationError`'s `check` is read once: the value tested
+  against the allowlist is the value named.
+- A `ValidationError`'s, `ServiceKeyError`'s or `SessionDataError`'s
+  `missingFields` is read element by element, at most 64 elements, with none
+  of the array's own methods called; only allowlisted names are kept.
+
+### Changed
+
+- `CertificateMaterialError`'s constructor stores `incomplete` and `expired`
+  as `=== true` (was: as given, chosen by truthiness), as the refusal reads them.
+
+### Deprecated
+
+- `CertificateMaterialError.words`: use `refusalWords(error, what)`. The
+  package no longer reads it from a thrown value.
 
 ## [5.3.0] - 2026-10-04
 

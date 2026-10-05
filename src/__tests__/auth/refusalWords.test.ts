@@ -6,10 +6,15 @@
 
 import { describe, expect, it } from '@jest/globals';
 import {
+  AssertionValidationError,
+  CertificateAuthProvider,
   CertificateMaterialError,
   ClientAuthenticationError,
   refusalWords,
+  ServiceKeyError,
+  SessionDataError,
   TokenEndpointError,
+  ValidationError,
 } from '../../index';
 
 const MARKER = 'SECRET-MARKER';
@@ -135,7 +140,7 @@ describe('refusalWords', () => {
     });
   });
 
-  it('a throwing `incomplete` flag → "unknown error", no throw', () => {
+  it('a throwing `incomplete` flag reads as not set → fixed words, no throw', () => {
     const forged = Object.create(CertificateMaterialError.prototype, {
       incomplete: {
         get: () => {
@@ -144,7 +149,8 @@ describe('refusalWords', () => {
       },
     });
     expect(refusalWords(forged, 'it')).toEqual({
-      reason: 'it failed (unknown error)',
+      reason: 'the client certificate could not be used',
+      hint: 'check the certificate, the key and the passphrase, and that a PFX uses current encryption (not legacy RC2)',
     });
   });
 
@@ -160,5 +166,127 @@ describe('refusalWords', () => {
     const words = refusalWords(forged, 'it');
     expect(words).toEqual({ reason: 'it failed (unknown error)' });
     expect(text(words)).not.toContain(MARKER);
+  });
+
+  it('an assertion `check` getter is read once: allowed, then a marker → the allowed one', () => {
+    const forged = new AssertionValidationError('signature', 'x');
+    let reads = 0;
+    Object.defineProperty(forged, 'check', {
+      get: () => (reads++ === 0 ? 'signature' : MARKER),
+    });
+    const words = refusalWords(forged, 'it');
+    expect(words).toEqual({
+      reason: 'the SAML assertion was refused (signature)',
+    });
+    expect(text(words)).not.toContain(MARKER);
+  });
+
+  it.each([
+    [
+      'ValidationError',
+      () => new ValidationError('x', ['clientId']),
+      'the provider configuration is incomplete or invalid',
+    ],
+    [
+      'ServiceKeyError',
+      () => new ServiceKeyError('x', ['uaaUrl']),
+      'the service key or session data is incomplete',
+    ],
+    [
+      'SessionDataError',
+      () => new SessionDataError('x', ['refreshToken']),
+      'the service key or session data is incomplete',
+    ],
+  ])(
+    '%s: missingFields with its own filter/join → only allowlisted names',
+    (_name, make, prefix) => {
+      const error = make();
+      const missing = ['clientId', 'not-a-field', MARKER];
+      Object.defineProperty(missing, 'filter', { value: () => [MARKER] });
+      Object.defineProperty(missing, 'join', { value: () => MARKER });
+      Object.defineProperty(missing, 'map', { value: () => [MARKER] });
+      (error as { missingFields: unknown }).missingFields = missing;
+      const words = refusalWords(error, 'it');
+      expect(words.reason).toBe(`${prefix}: clientId`);
+      expect(text(words)).not.toContain(MARKER);
+    },
+  );
+
+  it('missingFields as a Proxy claiming a huge length → bounded reads, no throw', () => {
+    let reads = 0;
+    const huge = new Proxy(['clientId'], {
+      get: (target, key) => {
+        if (key === 'length') return 2 ** 32 - 1;
+        reads++;
+        return key === '0' ? target[0] : 'scope';
+      },
+    });
+    const error = new ValidationError('x', []);
+    (error as { missingFields: unknown }).missingFields = huge;
+    const words = refusalWords(error, 'it');
+    expect(words.reason).toBe(
+      'the provider configuration is incomplete or invalid: clientId, scope',
+    );
+    expect(reads).toBeLessThanOrEqual(64);
+  });
+
+  it('CertificateAuthProvider.prepare: a loader throwing a forged CertificateMaterialError → fixed words', async () => {
+    const forged = new CertificateMaterialError(false, true);
+    Object.defineProperty(forged, 'words', {
+      get: () => ({ reason: MARKER, hint: MARKER }),
+    });
+    const provider = new CertificateAuthProvider(
+      {
+        load: async () => ({
+          get pfx(): Buffer {
+            throw forged;
+          },
+        }),
+      },
+      {} as never,
+    );
+    const outcome = await provider.prepare();
+    expect(outcome).toEqual({
+      ok: false,
+      refusal: {
+        reason: 'the client certificate has expired',
+        hint: 'renew the certificate; a token provider pins its certificate for life, so give the renewed one to a new provider',
+      },
+    });
+    expect(text(outcome)).not.toContain(MARKER);
+  });
+
+  it('CertificateAuthProvider.prepare: a forged error whose `words` throws → fixed words, no throw', async () => {
+    const forged = new CertificateMaterialError(true);
+    Object.defineProperty(forged, 'words', {
+      get: () => {
+        throw new Error(MARKER);
+      },
+    });
+    const provider = new CertificateAuthProvider(
+      {
+        load: async () => ({
+          get pfx(): Buffer {
+            throw forged;
+          },
+        }),
+      },
+      {} as never,
+    );
+    const outcome = await provider.prepare();
+    expect(outcome).toEqual({
+      ok: false,
+      refusal: {
+        reason: 'the client certificate is incomplete',
+        hint: 'give a PFX, or a certificate together with its key',
+      },
+    });
+  });
+
+  it('CertificateMaterialError normalises its flags to booleans', () => {
+    const error = new CertificateMaterialError(1 as never, 'yes' as never);
+    expect(error.incomplete).toBe(false);
+    expect(error.expired).toBe(false);
+    expect(error.message).toBe('the client certificate could not be used');
   });
 });

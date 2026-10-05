@@ -180,3 +180,40 @@ describe('certificateThumbprint', () => {
     expect(garbage).toBeInstanceOf(CertificateMaterialError);
   });
 });
+
+describe('checkCertificateMaterial and a forged CertificateMaterialError', () => {
+  const forgedMaterial = (words: PropertyDescriptor) => {
+    const forged = new CertificateMaterialError(true);
+    Object.defineProperty(forged, 'words', words);
+    return {
+      get pfx(): Buffer {
+        throw forged;
+      },
+    };
+  };
+
+  it('own `words` carrying a marker → the fixed words', () => {
+    const outcome = checkCertificateMaterial(
+      forgedMaterial({ get: () => ({ reason: 'MARK', hint: 'MARK' }) }),
+    );
+    expect(outcome).toEqual({
+      ok: false,
+      refusal: {
+        reason: 'the client certificate is incomplete',
+        hint: 'give a PFX, or a certificate together with its key',
+      },
+    });
+  });
+
+  it('a throwing `words` getter → fixed words, no throw', () => {
+    expect(() =>
+      checkCertificateMaterial(
+        forgedMaterial({
+          get: () => {
+            throw new Error('MARK');
+          },
+        }),
+      ),
+    ).not.toThrow();
+  });
+});

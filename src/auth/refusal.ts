@@ -17,7 +17,7 @@ import {
 } from '../errors/AssertionValidationError';
 import {
   CertificateMaterialError,
-  certificateWords,
+  certificateWordsOf,
 } from '../errors/CertificateMaterialError';
 import {
   BASIC_CLIENT_ID_UNUSABLE,
@@ -184,11 +184,31 @@ export function ownLabel(error: unknown): string {
   return 'unknown error';
 }
 
+/** How many elements of `missingFields` are read at most. */
+const MAX_FIELDS_READ = 64;
+
+/**
+ * The known config field names among `missing`, read element by element:
+ * none of the array's own methods is called (an array may carry its own
+ * `filter` or `join`), only values already checked against the allowlist are
+ * kept, and at most MAX_FIELDS_READ elements are read — a Proxy array may
+ * claim any length.
+ */
 function knownFields(missing: unknown): string {
   if (!Array.isArray(missing)) return '';
-  const names = missing.filter(
-    (m): m is string => typeof m === 'string' && KNOWN_CONFIG_FIELDS.has(m),
-  );
+  const length = readSafely(missing, 'length');
+  if (typeof length !== 'number' || !Number.isInteger(length)) return '';
+  const names: string[] = [];
+  for (let i = 0; i < Math.min(length, MAX_FIELDS_READ); i++) {
+    const name = readSafely(missing, String(i));
+    if (
+      typeof name === 'string' &&
+      KNOWN_CONFIG_FIELDS.has(name) &&
+      !names.includes(name)
+    ) {
+      names.push(name);
+    }
+  }
   return names.length ? `: ${names.join(', ')}` : '';
 }
 
@@ -232,17 +252,19 @@ function refusalFromUnguarded(error: unknown, what: string): AuthOutcome {
     return oops('showing the device code failed');
   }
   if (error instanceof AssertionValidationError) {
-    const check = ASSERTION_CHECKS.has(error.check) ? ` (${error.check})` : '';
+    // Read once: a getter could answer an allowed value to the test and
+    // another to the interpolation.
+    const value = readSafely(error, 'check');
+    const check = ASSERTION_CHECKS.has(value as AssertionCheck)
+      ? ` (${value as AssertionCheck})`
+      : '';
     return oops(`the SAML assertion was refused${check}`);
   }
-  if (error instanceof CertificateMaterialError) {
-    // Chosen from the two flags, never read from `words`: an instance (or an
-    // object whose prototype is this class) may carry its own `words`.
-    const { reason, hint } = certificateWords(
-      error.incomplete === true,
-      error.expired === true,
-    );
-    return oops(reason, hint);
+  // Chosen from the two flags, never read from `words`: an instance (or an
+  // object whose prototype is this class) may carry its own `words`.
+  const certificate = certificateWordsOf(error);
+  if (certificate !== undefined) {
+    return oops(certificate.reason, certificate.hint);
   }
   if (error instanceof ClientAuthenticationResultError) {
     return oops(
@@ -323,6 +345,7 @@ function refusalFromUnguarded(error: unknown, what: string): AuthOutcome {
  */
 export function refusalWords(error: unknown, what: string): IAuthRefusal {
   const outcome = refusalFrom(error, what);
+  // refusalFrom only ever answers Oops; the branch exists for the type.
   if (outcome.ok) return { reason: `${what} failed (unknown error)` };
   const { reason, hint } = outcome.refusal;
   return hint === undefined ? { reason } : { reason, hint };

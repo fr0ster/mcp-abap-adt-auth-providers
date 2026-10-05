@@ -7,6 +7,7 @@ import type {
 import {
   CERTIFICATE_UNUSABLE,
   CertificateMaterialError,
+  certificateWordsOf,
 } from '../errors/CertificateMaterialError';
 import { OK, oops } from './refusal';
 
@@ -62,8 +63,9 @@ export function checkCertificateMaterial(
   try {
     assertCertificateMaterial(material);
   } catch (e) {
-    const words =
-      e instanceof CertificateMaterialError ? e.words : CERTIFICATE_UNUSABLE;
+    // Never `e.words`: a consumer's loader can throw an object of this class
+    // carrying its own.
+    const words = certificateWordsOf(e) ?? CERTIFICATE_UNUSABLE;
     return oops(words.reason, words.hint);
   }
   return OK;
