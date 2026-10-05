@@ -11,25 +11,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- **The token endpoint's free text no longer reaches a thrown error, on
-  either path.** A server's `error_description` and `error_uri` are its own
-  text: a misbehaving or hostile one can echo any secret of the request in
-  them, in encodings no redaction can enumerate (the Fixed items below). So a
-  thrown error now carries only safe facts: a `TokenEndpointError`'s message
-  is `<label> (<status>)`, plus `: <code>` when the OAuth `error` is a
+- **The token endpoint's free text reaches no thrown error and no log line,
+  on either path.** A server's `error_description` and `error_uri` are its
+  own text: a misbehaving or hostile one can echo any secret of the request
+  in them, in encodings no redaction can enumerate — the Fixed items below
+  are bypasses found one after another (line-wrapped base64 the last). By
+  default nothing the server wrote and no secret goes anywhere. A thrown
+  error carries only safe facts: a `TokenEndpointError`'s message is
+  `<label> (<status>)`, plus `: <code>` when the OAuth `error` is a
   registered code (`Token refresh failed (400): invalid_grant`), and the
-  reduced `AxiosError`'s `response.data` keeps only that registered `error` —
-  `err.response.data.error` still reads it — and is `{}` otherwise. The
-  description and URI, redacted with everything the request carried, go to
-  one `debug` line through the provider's logger (`<site>: the token endpoint
-  said`, `{ status, error, error_description, error_uri }`), not for the
-  device poll's `authorization_pending` / `slow_down`; no logger, no line; a
-  logger that throws is ignored. `refreshJwtToken` and
-  `getTokenWithClientCredentials` (internal) take the provider's logger for
-  it. The UAA code exchange's `error` line for a `200` without
-  `access_token` names the status and a registered code only; what the server
-  said goes to the same `debug` line. A consumer that matched words of the
-  server's description in a message must read the `debug` line instead.
+  reduced `AxiosError`'s `response.data` keeps only that registered `error`
+  — `err.response.data.error` still reads it — and is `{}` otherwise. A
+  failed request is noted in one `debug` line through the provider's logger
+  with the same facts (`<site>: the token endpoint refused the request`,
+  `{ status, error? }`), none for the device poll's `authorization_pending`
+  / `slow_down`, none without a logger, a logger that throws ignored;
+  `refreshJwtToken` and `getTokenWithClientCredentials` (internal) take the
+  provider's logger for it. The UAA code exchange's `error` line for a `200`
+  without `access_token` names the status and a registered code only. A
+  consumer that matched words of the server's description in a message or a
+  log line can no longer; an opt-in diagnostic mode comes with 6.0.0.
 
 ### Fixed
 
@@ -68,7 +69,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   base64 run of the answer (either alphabet, any padding, any of its
   characters escaped or not) is decoded, and the smallest span of it that
   decodes to text holding a secret is redacted. Markers are never scanned
-  again, so the output stays bounded. **Limits**, not covered: an escape
+  again, so the output stays bounded; base64 broken by whitespace — a space,
+  a tab, a line break, escaped or not (`c3Vw\r\nZXJz…`, `%0D%0A`) — is
+  decoded with the whitespace dropped and its whole span redacted. Since the
+  server's words are written nowhere in 5.4.2 (Changed), the redactor is
+  defence in depth here. **Limits**, not covered: an escape
   escaped again (`%252F`); an echo truncated inside a secret, which holds
   only part of it; and a secret of one or two characters, which is redacted
   wherever it appears — in decoded base64 too, so unrelated words may be

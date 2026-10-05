@@ -573,13 +573,15 @@ public client that sends only `client_id`.
   `ClientAuthenticationResultError`, refused as *the client authentication
   returned a request that cannot be sent*. Only `client_secret`,
   `client_assertion` and a Basic credential are known to be secrets and
-  redacted from what the server said — which, since 5.4.2, reaches only one
-  `debug` line through the provider's logger, never a thrown error. Every secret is redacted as sent, encoded —
+  redacted from what the server said — which, since 5.4.2, the package
+  writes nowhere: not on a thrown error, not in a log line; the redaction
+  stays as defence in depth. Every secret is redacted as sent, encoded —
   each character, unreserved ones included, as itself or percent-escaped in
   either case, a space also as `+` — and form-decoded (the whole value: `&`
   and `=` are part of it, a malformed `%` stays), and any base64 in the body
-  (either alphabet, any padding, escaped or not) that decodes to text holding
-  a secret is redacted too (since 5.4.2). Limits: an escape escaped again
+  (either alphabet, any padding, escaped or not, broken by spaces, tabs or
+  line breaks) that decodes to text holding a secret is redacted too (since
+  5.4.2). Limits: an escape escaped again
   (`%252F`) and an echo truncated inside a secret are not recognised, and a
   secret of one or two characters is redacted wherever it appears, unrelated
   words included — so with either `encoding`, and for a `clientSecret` sent without a
@@ -704,11 +706,11 @@ const user = new OidcPasswordProvider({
   (the reason phrase is the server's free text), empty `headers` and the
   server's body reduced to `error` when it is a registered OAuth code
   (`err.response.data.error` still reads `invalid_grant`), and to `{}`
-  otherwise. Since 5.4.2 the server's `error_description` and `error_uri` are
-  on no thrown error: they go, with every secret the request carried
-  redacted, to one `debug` line through the provider's logger (`<site>: the
-  token endpoint said`, with `status`, `error`, `error_description`,
-  `error_uri`), and nowhere without one.
+  otherwise. Since 5.4.2 the server's `error_description` and `error_uri` go
+  nowhere — no thrown error, no log line: a hostile server can echo any
+  secret of the request in them. A failed request is noted in one `debug`
+  line through the provider's logger with the same safe facts (`<site>: the
+  token endpoint refused the request`, `{ status, error? }`).
 
 #### `clientSecretBasic`'s `encoding`
 
@@ -1815,10 +1817,8 @@ The exchange is the password grant with `passcode` instead of a username and
 password — a UAA extension, not an RFC. A code is single-use; a mistyped or
 spent one fails with `Passcode exchange failed (401)` — the message names the
 status, and the OAuth `error` only when it is a registered code (UAA's
-`unauthorized` is not). What UAA said (`"unauthorized"`, `"Invalid passcode"`)
-is in the provider logger's `debug` line, with the passcode, the client
-secret, the Basic credential and what a client-authentication strategy sent
-redacted if the server echoes them.
+`unauthorized` is not). What UAA said (`"Invalid passcode"`) is written
+nowhere: the server's free text may echo the passcode or the client secret.
 
 #### Device flow prompts
 
@@ -2085,8 +2085,8 @@ try {
 A failed token request throws without the request it sent — no form body, no
 `Authorization` header, no TLS agent — and with the server's body reduced to
 its `error` when that is a registered OAuth code; the server's
-`error_description` and `error_uri` go only to the provider logger's `debug`
-line, every secret the request sent redacted (since 5.4.2).
+`error_description` and `error_uri` go nowhere — no error, no log line
+(since 5.4.2).
 
 #### Relaying a refusal: `refusalWords`
 
@@ -2666,7 +2666,7 @@ Example output:
 ```
 
 **Logging Features**:
-- **No tokens in logs**: a token the provider holds or sent is never logged, not even in part. A log line carries only `<redacted, N chars>` (since 4.1.2; earlier versions logged a short refresh token whole). A token endpoint's error body contributes `error`, `error_description` and `error_uri` to one `debug` line only, with the request's secrets (the client's Basic credential included) and anything shaped like a JWT redacted; a thrown error carries only the status and a registered `error` (since 5.4.2). An `error` that is a registered OAuth error code (`invalid_grant`, `authorization_pending`, `slow_down`, …) is kept verbatim: it is a protocol word, and the device poll reads it. A new opaque token that a server writes into `error_description` cannot be recognised and passes through, capped at 512 characters.
+- **No tokens in logs**: a token the provider holds or sent is never logged, not even in part. A log line carries only `<redacted, N chars>` (since 4.1.2; earlier versions logged a short refresh token whole). Since 5.4.2 a token endpoint's error body contributes only a registered `error` code and the status — to a thrown error and to one `debug` line; its `error_description` and `error_uri` reach neither. An `error` that is a registered OAuth error code (`invalid_grant`, `authorization_pending`, `slow_down`, …) is kept verbatim: it is a protocol word, and the device poll reads it. Before 5.4.2, a new opaque token a server wrote into `error_description` could not be recognised and passed through; the description is now written nowhere.
 - **No error message in logs**: a log line about a thrown value — a refresh that failed, a strategy, loader, presenter, validator, `onTokens`, browser launcher or SNC locator/probe that threw — carries only the words its refusal would (fixed per error class, an allowlisted TLS or system code, else `unknown error`) and the HTTP status when there is one, never the error's message, `cause` or stack: a consumer's collaborator may throw text holding a key, a passphrase or a token. Diagnose a collaborator's failure where it throws, not from this package's log.
 - **Date Formatting**: Expiration dates are displayed in readable format (YYYY-MM-DD HH:MM:SS UTC) instead of ISO format
 - **Browser Information**: Logs browser type and authorization URL for debugging
