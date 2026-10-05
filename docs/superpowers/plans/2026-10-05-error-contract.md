@@ -226,6 +226,8 @@ Publish dependency: interfaces-auth 5.0.0 on the registry (G1); repository and n
 
 **Load-bearing:** each step deleted in turn (minted-membership, carrier read-once, structural rebuild, TLS, status/oauth/code) → its named case red; reading `reason` in the rebuild → the forged-carrier case red; copying the input's `diagnostics` into the rebuilt error → the (a), (b), (c) and (e) cases red through `classify`; returning a foreign refusal as it is from `classifyOutcome` → the (c) cases red through `classifyOutcome`.
 
+**Index-signature limit (added 2026-10-05, spec §13 item 3):** a test feeds `classify` / `classifyOutcome` a minted-looking structure whose `diagnostics` and `facts` are index-signature objects carrying another kind's keys (`library`, `credential`) beside the allowed ones: the rebuilt error carries only the declared keys of its variant (and no diagnostics, being a structural rebuild).
+
 ### Task 10: `AuthProviderFailure`, `readFailure`, `isAuthProviderFailure`, `OK`
 
 **Files:** `src/failure.ts` (§6): constructor takes a minted error (unminted → `unknown`), `message` = `reason` or `reason — hint`, no `cause`, no diagnostics in the message; `readFailure = classify`; `isAuthProviderFailure` works across copies (structural: `name` + a valid `error` — **Decision D2**: it answers true for another copy's instance whose `error` passes the structural rebuild; it never reads `message`); `OK` frozen.

@@ -2579,6 +2579,16 @@ bound for an interactive login, now that 6.0.0 has no built-in timeout (§6a,
    (a mutation fails), and every relay boundary re-mints or passes the
    original object (§7), so a forged copy does not survive a hop; within one
    producer, the check is what holds it.
+   The same limit covers a source typed with an index signature (decided with
+   the user 2026-10-05, after three adversarial passes on interfaces PR #124):
+   per-variant `?: never` closing refuses literals and declared fields of any
+   kind, but TypeScript has no exact types, so
+   `const d: { [k: string]: string; issuer: string } = { issuer, library };
+   { ...minted, diagnostics: d }` compiles (likewise for facts). Both
+   reproductions are kept in interfaces-auth's `__typechecks__` as the
+   labelled known limit; the shape check (rule 5) forbids the spread, and
+   every rebuild (§5.4) reads only the declared keys, so the extra keys never
+   survive a hop.
 4. **Runtime checking only at the boundaries** — classification (§5.4) and
    admission (§5.3) are the only runtime checks of an error's content; the
    branded-integer makers are the builder's input checks. The static rules are
