@@ -42,6 +42,8 @@ a refusal or a log line, nor make building one throw:
   `CertificateMaterialError.words` returned the very object the refusal and
   the constructor read, so changing it (from a forged error's flag getter, or
   anywhere else) changed every later refusal, log line and message.
+  The guarantee stops at the public surface: in-process code that patches
+  built-ins or imports `dist/` files directly is outside it.
 
 ### Changed
 

@@ -2098,6 +2098,11 @@ anything else, `<what> failed (unknown error)`. Never an error's message,
 words. `what` is the consumer's own description of what it was doing, and
 appears only in the words for an error this package has no fixed words for.
 
+The guarantee covers what a thrown value carries and the package's public
+surface. Code running in the same process that patches built-ins (say
+`Map.prototype.get`) or imports `dist/` files directly can change anything the
+package computes; no library can defend against that from inside the process.
+
 All error codes are defined in `@mcp-abap-adt/interfaces-auth` package as `TOKEN_PROVIDER_ERROR_CODES` — `CertificateMaterialError`'s is `CERTIFICATE_MATERIAL_ERROR`; `ClientAuthenticationError` and `ClientAuthenticationResultError` share `CLIENT_AUTHENTICATION_ERROR` — and `AssertionValidationError`'s as `ASSERTION_ERROR_CODES`.
 
 ## Upgrading from 4.0 to 4.1
