@@ -130,6 +130,7 @@ export class UaaPasscodeProvider extends BaseTokenProvider {
       this.config.clientId,
       this.config.clientSecret ?? '',
       await this.requestAuth(),
+      this.logger,
     );
     return asContract<ITokenResult>({
       authorizationToken: result.accessToken,

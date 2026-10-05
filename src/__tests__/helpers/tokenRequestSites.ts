@@ -62,12 +62,13 @@ const secretUnless = (auth?: TokenRequestAuth, secret = 'sec') =>
 export const SITES: Site[] = [
   {
     name: 'clientCredentialsAuth',
-    run: (auth, _logger, secret) =>
+    run: (auth, logger, secret) =>
       getTokenWithClientCredentials(
         'https://uaa',
         'cid',
         secretUnless(auth, secret),
         auth,
+        logger,
       ),
     endpoint: 'https://uaa/oauth/token',
     grantType: 'client_credentials',
@@ -75,13 +76,14 @@ export const SITES: Site[] = [
   },
   {
     name: 'tokenRefresher',
-    run: (auth, _logger, secret) =>
+    run: (auth, logger, secret) =>
       refreshJwtToken(
         'old-rt',
         'https://uaa',
         'cid',
         secretUnless(auth, secret),
         auth,
+        logger,
       ),
     endpoint: 'https://uaa/oauth/token',
     grantType: 'refresh_token',

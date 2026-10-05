@@ -233,6 +233,7 @@ export class AuthorizationCodeProvider extends BaseTokenProvider {
       this.config.clientId,
       this.config.clientSecret,
       await this.requestAuth(),
+      this.logger,
     );
 
     this.logger?.info('[AuthorizationCodeProvider] Token refresh completed', {

@@ -5,6 +5,7 @@
  * using POST request to UAA token endpoint (no browser required)
  */
 
+import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
 import axios, { type AxiosResponse } from 'axios';
 import { tlsFailureCode } from './refusal';
 import {
@@ -26,6 +27,7 @@ export interface ClientCredentialsResult {
  * @param clientSecret UAA client secret; unused with `auth`
  * @param auth the client authentication and its pinned material; without it,
  *   `client_id` and `client_secret` go in the body, as always
+ * @param logger where the server's own words about a failure go: one debug line
  * @returns Promise that resolves to access token
  * @internal - Internal function, not exported from package
  */
@@ -34,6 +36,7 @@ export async function getTokenWithClientCredentials(
   clientId: string,
   clientSecret: string | undefined,
   auth?: TokenRequestAuth,
+  logger?: ILogger,
 ): Promise<ClientCredentialsResult> {
   const tokenUrl = `${uaaUrl}/oauth/token`;
   const timeout = 30000; // 30 seconds timeout to prevent hanging
@@ -50,8 +53,6 @@ export async function getTokenWithClientCredentials(
         auth,
       )
     : undefined;
-  const secrets = [clientSecret, ...(prepared?.secrets ?? [])];
-
   /** Today's request: the secret in the body. */
   const sendAsToday = () => {
     const params = new URLSearchParams();
@@ -73,17 +74,16 @@ export async function getTokenWithClientCredentials(
 
   let response: AxiosResponse;
   try {
-    response = await sendTokenRequest(prepared, sendAsToday, [clientSecret]);
+    response = await sendTokenRequest(prepared, sendAsToday, {
+      logger,
+      label: 'Client credentials authentication failed',
+    });
   } catch (error: unknown) {
     // Unwrapped, so the refusal can name the TLS code and its fixed hint.
     if (tlsFailureCode(error) !== undefined) throw error;
     // The safe facts as properties, never the server's description or the
-    // transport's text in a refusal or a log line; the original is the cause.
-    throw tokenEndpointError(
-      'Client credentials authentication failed',
-      error,
-      secrets,
-    );
+    // transport's text in a refusal or a log line; the cause is the safe replacement.
+    throw tokenEndpointError('Client credentials authentication failed', error);
   }
   // Outside the try: this package's own words, not a failure to wrap.
   if (response.data?.access_token) {

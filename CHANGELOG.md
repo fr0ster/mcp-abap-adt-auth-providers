@@ -7,6 +7,103 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [5.4.2] - 2026-10-05
+
+### Changed
+
+- **The token endpoint's free text reaches no thrown error and no log line,
+  on either path.** A server's `error_description` and `error_uri` are its
+  own text: a misbehaving or hostile one can echo any secret of the request
+  in them, in encodings no redaction can enumerate — the Fixed items below
+  are bypasses found one after another (line-wrapped base64 the last). By
+  default nothing the server wrote and no secret goes anywhere. A thrown
+  error carries only safe facts: a `TokenEndpointError`'s message is
+  `<label> (<status>)`, plus `: <code>` when the OAuth `error` is a
+  registered code (`Token refresh failed (400): invalid_grant`), and the
+  reduced `AxiosError`'s `response.data` keeps only that registered `error`
+  — `err.response.data.error` still reads it — and is `{}` otherwise. A
+  failed request is noted in one `debug` line through the provider's logger
+  with the same facts (`<site>: the token endpoint refused the request`,
+  `{ status, error? }`), none for the device poll's `authorization_pending`
+  / `slow_down`, none without a logger, a logger that throws ignored;
+  `refreshJwtToken` and `getTokenWithClientCredentials` (internal) take the
+  provider's logger for it. The UAA code exchange's `error` line for a `200`
+  without `access_token` names the status and a registered code only. A
+  consumer that matched words of the server's description in a message or a
+  log line can no longer; an opt-in diagnostic mode comes with 6.0.0.
+
+### Fixed
+
+- **Security: what a token request's promise rejected with was kept.** The
+  reduction rebuilt only values that looked like axios failures; anything
+  else passed through unchanged. A consumer's global axios response
+  interceptor throwing `new Error(r.data.error_description)` — or a
+  primitive, or an object whose getters throw — therefore reached the
+  consumer with the server's text, in the OIDC sites' message and rendering,
+  and as the `cause` of the `TokenEndpointError` the wrapping sites throw.
+  Every rejection is now replaced, on both paths and in OIDC discovery, by a
+  fresh `AxiosError` of fixed words carrying only an integer status, an
+  allowlisted (or axios's own) code and a registered OAuth `error` — never the
+  original, not even as `cause`. The device poll's `authorization_pending` /
+  `slow_down` still continue. A cancellation stays one: an aborted request
+  becomes a `CanceledError` in fixed words, so `axios.isCancel` and
+  `axios.isAxiosError` both hold. A consumer's logger that throws while a
+  token site reports a failure (the SAML exchange and refresh, the device
+  poll's wait) is ignored, so it can no longer replace the safe rejection
+  with its own text. A successful answer is not trusted either: a fulfilled
+  interceptor may hand over data whose getter, Proxy trap or `toJSON`
+  throws the server's text into the site's parsing. Every site now reads
+  only a snapshot — an integer status and the expected fields
+  (`access_token`, `refresh_token`, `id_token`, `token_type`, `expires_in`,
+  `scope`, the device fields, `error`) that are strings or numbers, each
+  read safely — and OIDC discovery a plain copy of its document; a field
+  whose read throws is absent, a copy that throws is fixed words.
+
+- **Security: a server echoing the Basic header could expose the client
+  credential, on the path without a client-authentication strategy.** Without
+  a strategy, the UAA code exchange, the UAA refresh, the passcode exchange,
+  the SAML bearer exchange and refresh, and the OIDC authorization code,
+  refresh, token exchange, device poll and password grant send
+  `Authorization: Basic base64(id:secret)`, but redacted only the configured
+  `clientSecret` and the grant's secrets from the answer — not the base64
+  credential, from which `id:secret` decodes. A token endpoint that echoes
+  request headers into `error_description` or `error_uri` therefore left it
+  in: the message of the `TokenEndpointError` the UAA refresh, the passcode
+  exchange and the password grant throw (a message every catcher logs); the
+  reduced `response.data` of the `AxiosError` the other sites rethrow; and the
+  `error`-level log line of the UAA code exchange's `200` without
+  `access_token`. Each of these sites now builds its header only through one
+  helper, which also yields the credential's secrets — the base64 credential
+  and the secret, through the same extraction a strategy's Basic credential
+  already went through — and every redaction of that request's answer joins
+  them, as sent, encoded and form-decoded. The path with a strategy was not
+  affected. Nothing else changed: the request sent, the messages and the
+  error shapes are as in 5.4.1; a logger that throws while the code exchange
+  logs a `200` without `access_token` no longer replaces its failure.
+- **Security: a secret echoed in an equivalent encoding escaped the
+  redaction, on both paths.** Redaction matched a fixed list of spellings, so
+  a server echoing a secret in another, equally readable one left it in the
+  same three places: a base64 credential without its padding, with other
+  padding or in the URL-safe alphabet; a percent escape in lower or mixed
+  case (`%2f` for `%2F`); a space as `+` or `%20`. Every secret the request
+  carried — the client secret, the grant's (refresh token, code, verifier,
+  assertion, passcode, password, device code, subject / actor token) and a
+  strategy's (`client_secret`, `client_assertion`, a Basic credential) — is
+  now matched with each character — unreserved ones included (`%41` for `A`)
+  — as itself or percent-escaped in any case, a space also as `+`; then every
+  base64 run of the answer (either alphabet, any padding, any of its
+  characters escaped or not) is decoded, and the smallest span of it that
+  decodes to text holding a secret is redacted. Markers are never scanned
+  again, so the output stays bounded; base64 broken by whitespace — a space,
+  a tab, a line break, escaped or not (`c3Vw\r\nZXJz…`, `%0D%0A`) — is
+  decoded with the whitespace dropped and its whole span redacted. Since the
+  server's words are written nowhere in 5.4.2 (Changed), the redactor is
+  defence in depth here. **Limits**, not covered: an escape
+  escaped again (`%252F`); an echo truncated inside a secret, which holds
+  only part of it; and a secret of one or two characters, which is redacted
+  wherever it appears — in decoded base64 too, so unrelated words may be
+  removed.
+
 ## [5.4.1] - 2026-10-05
 
 ### Changed

@@ -7,6 +7,7 @@
  * formLogin.ts.
  */
 
+import { inspect } from 'node:util';
 import { describe, expect, it, jest } from '@jest/globals';
 import type { IAuthorizationStrategy } from '@mcp-abap-adt/interfaces-auth';
 import { UaaPasscodeProvider } from '../../../providers/UaaPasscodeProvider';
@@ -91,11 +92,19 @@ describeUaa('UaaPasscodeProvider against Cloud Foundry UAA', () => {
       authorization: staticCodeStrategy({ payload: code }),
     }).getTokens();
 
-    await expect(
-      new UaaPasscodeProvider({
-        ...config(),
-        authorization: staticCodeStrategy({ payload: code }),
-      }).getTokens(),
-    ).rejects.toThrow(/Invalid passcode/);
+    // UAA refuses with 401 "unauthorized" — not a registered OAuth code —
+    // and "Invalid passcode", its own text: since 5.4.2 the message names
+    // the status alone, and UAA's words are written nowhere.
+    const thrown = await new UaaPasscodeProvider({
+      ...config(),
+      authorization: staticCodeStrategy({ payload: code }),
+    })
+      .getTokens()
+      .then(
+        () => undefined,
+        (error: unknown) => error as Error,
+      );
+    expect(thrown?.message).toBe('Passcode exchange failed (401)');
+    expect(inspect(thrown, { depth: null })).not.toContain('Invalid passcode');
   });
 });

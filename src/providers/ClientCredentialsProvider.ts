@@ -78,6 +78,7 @@ export class ClientCredentialsProvider extends BaseTokenProvider {
       this.config.clientId,
       this.config.clientSecret,
       await this.requestAuth(),
+      this.logger,
     );
 
     return asContract<ITokenResult>({
