@@ -1170,12 +1170,21 @@ signal (or none). The rule, wherever an attempt is shared:
   request carrying refresh token R has been dispatched, the server may have
   consumed R and issued R2 even if the attempt is then aborted and the
   request cut. Rules:
-  1. On that abort, R is marked **spent** in memory (`refreshToken` cleared,
-     identity-checked as today, `BaseTokenProvider.ts:459-485`) and is never
-     submitted again by this provider — a rotating endpoint with
-     reuse detection would otherwise revoke the whole token family. The next
-     moment follows rule 6: no usable refresh token → one login through the
-     strategy. Persistence is told nothing new (no `onTokens`) until a result
+  1. On that abort, R is **quarantined synchronously** — added, in the abort
+     handler itself, to a per-provider in-memory set of spent refresh tokens
+     that lives outside the commit queue, advances no watermark and is never
+     persisted — and is never submitted again by this provider: a rotating
+     endpoint with reuse detection would otherwise revoke the whole token
+     family. **Every refresh dispatch checks the quarantine first** and treats
+     a quarantined R as absent, so the next moment follows rule 6: no usable
+     refresh token → one login through the strategy. This cannot wait for the
+     queue: a commit that installed R may still be stalled in its `onTokens`,
+     and a replacement attempt would otherwise read the held R and submit it
+     before any queued step ran. The queued clearing step (below) stays, for
+     the held state and persistence (`refreshToken` cleared,
+     identity-checked as today, `BaseTokenProvider.ts:459-485`). An entry is
+     dropped once a credential commit has installed a different refresh
+     token, so the set holds only tokens that could still be read. Persistence is told nothing new (no `onTokens`) until a result
      is known; the persisted R stays where it is, so a restarted process may
      submit it once and be refused — rule 6 again, one login.
   2. A late response to that refresh that does arrive is offered to the
@@ -1206,8 +1215,9 @@ signal (or none). The rule, wherever an attempt is shared:
     (taken when the renewal attempt begins) and is checked against the
     **credential watermark** only;
   - neither kind ever advances the other's watermark;
-  - **spending a cut refresh token** (above, rule 1) is applied in the queue
-    as a step of its own that advances **no** watermark and clears
+  - **spending a cut refresh token** (above, rule 1) is two things: the
+    synchronous quarantine, which is what keeps R from being submitted, and a
+    queued step of its own that advances **no** watermark and clears
     `refreshToken` only if it still holds that R — so the same attempt's late
     R2 can still be committed;
   - **dependent effects are ordered after what they read:** a renewal applies
@@ -1381,7 +1391,12 @@ token are cached and `onTokens` persists them exactly once, and the pinned
 material is set exactly once; `markIfElsewhere` of the new token sees the
 thumbprint pinned by that same renewal; a single shared counter for pin and
 credential commits turns both cases red, and a spend step that advances the
-credential watermark turns the "late R2 adopted" case red; running `onTokens` hooks concurrently turns the
+credential watermark turns the "late R2 adopted" case red; **quarantine
+before the queue:** commit A installs R and stalls in its `onTokens` (a test
+hook); replacement B reads R, dispatches a refresh and is aborted; replacement
+C does not submit R (asserted on the server: R arrives once, from B) and
+goes to login; relying on the queued clearing step alone turns this case
+red; running `onTokens` hooks concurrently turns the
 commit-order case red; re-submitting a cut R turns the refresh case red;
 reinstating a "no live party → `aborted`" rule turns the after-release and
 the mixed-consumer cases red. **Drain handoff:** with the callback server's
