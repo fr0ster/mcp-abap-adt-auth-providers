@@ -31,6 +31,7 @@
  * Runs only with both UAA_URL and KEYCLOAK_URL set (`npm run test:stand`).
  */
 
+import { inspect } from 'node:util';
 import { beforeAll, describe, expect, it } from '@jest/globals';
 import { DOMParser } from '@xmldom/xmldom';
 import { parseStrictXml } from '../../../auth/strictXml';
@@ -303,10 +304,16 @@ describeBoth('SAML providers with Keycloak as the identity provider', () => {
         () => undefined,
         (error: unknown) => error as { response?: { data?: unknown } },
       );
+    // UAA refuses with 401. Its reason (the InResponseTo it expects null)
+    // was in the description, which since 5.4.2 is written nowhere: the
+    // error keeps the status and a registered code at most.
     expect(String(thrown)).toMatch(/401/);
-    expect(JSON.stringify(thrown?.response?.data)).toMatch(
-      /SubjectConfirmationData\/@InResponseTo.*did not match the valid value: null/,
-    );
+    expect(inspect(thrown, { depth: null })).not.toMatch(/InResponseTo/);
+    expect(
+      Object.keys(
+        (thrown?.response?.data ?? {}) as Record<string, unknown>,
+      ).filter((key) => key !== 'error'),
+    ).toEqual([]);
     expect(JSON.stringify(failures)).toContain('HTTP 401');
     expect(JSON.stringify(failures)).not.toMatch(/InResponseTo/);
   });

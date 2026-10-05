@@ -19,6 +19,7 @@ import { createHash, X509Certificate } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { Agent, request } from 'node:https';
 import { join } from 'node:path';
+import { inspect } from 'node:util';
 import { beforeAll, describe, expect, it } from '@jest/globals';
 import type { ICertificateMaterial } from '@mcp-abap-adt/interfaces-auth';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
@@ -193,8 +194,15 @@ describeKeycloak(
         // measured 2026-10-04, both are 401 invalid_client "Invalid client or
         // Invalid client credentials". What makes this client-b's refusal is
         // the case above: the same configuration with client-a gets a token.
-        await expect(provider.getTokens()).rejects.toThrow(
-          '(401): "invalid_client": "Invalid client or Invalid client credentials"',
+        // Since 5.4.2 the message names the status and the registered code
+        // only — Keycloak's description is written nowhere.
+        const thrown = await provider.getTokens().then(
+          () => undefined,
+          (error: unknown) => error as Error,
+        );
+        expect(thrown?.message).toMatch(/\(401\): invalid_client$/);
+        expect(inspect(thrown, { depth: null })).not.toContain(
+          'Invalid client or Invalid client credentials',
         );
         await expect(provider.prepare()).resolves.toEqual({
           ok: false,
@@ -341,8 +349,18 @@ describeKeycloak(
           }),
         });
 
-        await expect(provider.getTokens()).rejects.toThrow(
-          'OIDC device authorization failed (400): "invalid_client": "Invalid token audience"',
+        // The refusal is the client's (400 invalid_client), and only the
+        // audience differs from the next case, which completes. Keycloak's
+        // description ("Invalid token audience") is written nowhere.
+        const thrown = await provider.getTokens().then(
+          () => undefined,
+          (error: unknown) => error as Error,
+        );
+        expect(thrown?.message).toBe(
+          'OIDC device authorization failed (400): invalid_client',
+        );
+        expect(inspect(thrown, { depth: null })).not.toContain(
+          'Invalid token audience',
         );
       });
 
