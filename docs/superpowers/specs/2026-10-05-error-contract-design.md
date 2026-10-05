@@ -789,7 +789,7 @@ facts instead — found by a sweep of `src` for `isAxiosError`, `.response`,
 | `passcodeAuth.ts:95-104` | `axios.isAxiosError(error) && error.response` → wrap in `TokenEndpointError` | nothing to read: the failure from `sendTokenRequest` is thrown as it is (`operation: 'passcode-exchange'`) |
 | `clientCredentialsAuth.ts:76-87`, `tokenRefresher.ts:80-87`, `oidcToken.ts:227-236` (device initiation), `oidcToken.ts:335-345` (password grant) | `tlsFailureCode(error)` to let a TLS failure through unwrapped, else wrap | nothing to read: `sendTokenRequest` already chose `tls` or `request-failed`; the site passes its operation |
 | `saml2TokenExchange.ts:97-106`, `:154-163` | `axios.isAxiosError(error)` to decide whether to log | logs `logFields(readFailure(error, …))` for any failure, then rethrows it |
-| `browserAuth.ts:150-157` | a 2xx `response` without `access_token`: logs the status and the redacted OAuth body | unchanged log (H10's policy), then throws `request-failed` `problem: 'no-access-token'` |
+| `browserAuth.ts:150-157` | a 2xx `response` without `access_token`: logs the status and the redacted OAuth body — redacting only `clientsecret`, `grantSecrets(params)` and `prepared.secrets`, never the site's own Basic credential | `rejectMissingToken(site, response)` (below): the same joined secrets as a failed request, one `debug` line, then `request-failed` `problem: 'no-access-token'` |
 | `BaseTokenProvider.ts:475-487` — refresh falling back to login | nothing (any throw) | unchanged: any failure of the refresh falls back |
 | the broker (`AuthBroker.ts:660`, `SessionWriter.ts:40-46`) | nothing of the error but its class name (`classLabel`) | logs `AuthProviderFailure`; no other reader (no `isAxiosError` in the broker or the CLI, searched) |
 
@@ -897,6 +897,38 @@ the same failure; a logger whose `debug` throws, the same failure.
 Load-bearing: dropping `prepared.secrets` from the join, or one site's
 `secrets`, turns that site's case red.
 
+**A successful status without a token goes through the same redaction.**
+A sweep of `src` for `describeOAuthErrorBody`, `oauthErrorFields` and every
+`access_token` check (2026-10-05) finds one place that logs a body of a
+**successful** response: the UAA code exchange (`browserAuth.ts:150-157`),
+which redacts `clientsecret`, the grant's secrets and the strategy's — not
+the Basic credential its own `sendAsToday` built (`:113-121`). The other
+2xx-without-token branches (`passcodeAuth.ts:107-108`, `oidcToken.ts:108-109`,
+`saml2TokenExchange.ts:109-110`, `:166-167`, `clientCredentialsAuth.ts`'s and
+`tokenRefresher.ts`'s "does not contain access_token",
+`oidcToken.ts:240` "device authorization response missing required fields")
+log nothing of the body today. All of them now call one helper beside
+`sendTokenRequest`:
+
+```ts
+/** A 2xx that carries no usable token: one debug line, then the failure. */
+export function rejectMissingToken(
+  site: TokenRequestSite,
+  prepared: PreparedTokenRequest | undefined,
+  response: AxiosResponse,
+  problem: 'no-access-token' | 'incomplete-response',
+): never;
+```
+
+It joins exactly the secrets `sendTokenRequest` joins — `site.secrets`,
+`site.basic?.secrets`, `prepared?.secrets` — through the same private join
+function (one function, two callers, so the two cannot drift), reduces the
+body with `oauthErrorFields`, writes one `debug` line through `site.logger`
+inside a `try` that swallows a throwing logger, and throws `request-failed`
+with the status and the problem. The code exchange's line moves from `error`
+to `debug` level, like every other body line (L1's policy); nothing of the
+body enters the failure.
+
 **Header-echo tests** (one per site that builds a legacy Basic header, on the
 path without a strategy: the SAML exchange, the SAML refresh, the OIDC token
 request, the device poll, the password grant, the UAA code exchange, the UAA
@@ -905,8 +937,16 @@ refresh, the passcode exchange): the server answers `400` with
 header whole, its base64 credential alone, the base64 URL-encoded and
 form-encoded, and the decoded `id:secret` — the debug line carries none of
 them, nor does any rendering of the failure; the same with a client id
-containing `:` and a secret containing `+`, `%` and `/`. Load-bearing:
-passing `secrets` without `basic` turns every one red. A source test asserts
+containing `:` and a secret containing `+`, `%` and `/`. The same echoes in
+a **`200` without `access_token`** (and, for the device initiation, a `200`
+without its required fields) for every site with such a branch — the UAA
+code exchange, the passcode exchange, the OIDC token request and password
+grant, the SAML exchange and refresh, client credentials, the UAA refresh,
+the device initiation — without a strategy and with each strategy: one debug
+line, no form of the Basic credential, the grant's or the strategy's secrets
+in it or in the failure; no logger, no line; a throwing logger, the same
+failure. Load-bearing: passing `secrets` without `basic`, in either
+`sendTokenRequest` or `rejectMissingToken`, turns every one red. A source test asserts
 rule 8 (no `Basic ` header and no base64 of a secret outside the two helpers).
 
 **Today's code (5.4.1) leaks this — a Fixed item.** Read from the code (not
@@ -921,8 +961,10 @@ base64 credential, from which `id:secret` decodes, in
   (`tokenRequest.ts:329-337`: the SAML exchange and refresh, the OIDC token
   request and device poll, the UAA code exchange) — not logged by the
   package, but kept on a value consumers serialise;
-- the error log of the UAA code exchange's 2xx without `access_token`
-  (`browserAuth.ts:150-157`).
+- the `error`-level log of the UAA code exchange's 2xx without
+  `access_token` (`browserAuth.ts:150-157`) — a `200` echoing the header is
+  logged with the credential (confirmed by the review's probe), and no test
+  covers a `200` at all.
 The strategy path is not affected (`basicSecrets` covers it). The condition is
 a server that echoes request headers into its error body — a misbehaving or
 hostile one, which is exactly the case the redaction exists for. 6.0.0 ships
@@ -930,8 +972,9 @@ the fix and lists it under **Fixed** in its CHANGELOG. It **warrants an
 earlier 5.4.2 patch** — the 6.0.0 chain is several releases away, and the
 documented guarantee ("redacts every secret the request sent") is broken
 today for every consumer on 5.x — made as its own small change from `master`
-(the same `legacyBasic` helper and header-echo tests, nothing of the error
-contract). Under the one-PR-per-task rule it is recorded here and in this
+(the same `legacyBasic` helper, the code exchange's 2xx log redacting its
+Basic credential, and the header-echo tests for both a `400` and a `200`
+without `access_token`, nothing of the error contract). Under the one-PR-per-task rule it is recorded here and in this
 PR's description; opening it is the user's decision.
 
 ## 7. Logon targets (connection) and rule 4
@@ -1611,7 +1654,8 @@ README differs from the generated table.
    install of each from the registry outside the repositories.
 5. `docs/superpowers/` emptied of this work's documents before the
    auth-providers release.
-6. The debug-line tests and the header-echo tests of §6 green for every token
+6. The debug-line tests and the header-echo tests of §6 (`400` and `200`
+   without a token) green for every token
    site on both paths, the 6.0.0 CHANGELOG's **Fixed** entry for the legacy
    Basic credential written, the decision on L1 (the line, or none) and on a
    5.4.2 patch recorded in the PR.
