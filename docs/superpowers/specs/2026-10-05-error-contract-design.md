@@ -1045,10 +1045,63 @@ log nothing of the body today. All of them now call one helper beside
 export function rejectMissingToken(
   site: TokenRequestSite,
   prepared: PreparedTokenRequest | undefined,
-  response: AxiosResponse,
+  response: TokenResponseSnapshot,
   problem: 'no-access-token' | 'incomplete-response',
+  level: 'error' | 'debug',
 ): never;
 ```
+
+**The successful-response snapshot.** 5.4.2 already returns, from
+`sendTokenRequest`, not the response axios handed over but a snapshot of it
+(`snapshotOf`, `tokenRequest.ts:488`, `:496-541` at 5.4.2): an integer
+`status` and a plain `data` object holding only the expected fields
+(`ANSWER_FIELDS`: the token response's, the device authorization response's
+and `error`) that are strings or numbers, each read through `readSafely`;
+anything that throws while snapshotting becomes a safe error. That boundary
+is kept, and the snapshot gains one part:
+
+```ts
+export interface TokenResponseSnapshot<T = Record<string, string | number>> {
+  readonly status: number | undefined;
+  readonly data: T;                       // ANSWER_FIELDS only, plain values
+  /** Only when site.authDebug === true: the server's text, plain strings. */
+  readonly diagnostic?: {
+    readonly error_description?: string;
+    readonly error_uri?: string;
+  };
+}
+```
+
+- **Sites parse only `data`.** No site reads `diagnostic`; a site's parsing
+  sees exactly what 5.4.2's sees.
+- **`diagnostic` exists only with `authDebug`.** When `site.authDebug` is
+  true, `sendTokenRequest` also reads `error_description` and `error_uri`
+  from the response body through `readSafely`, keeps each only if it is a
+  string, and puts them in `diagnostic` — plain strings, never the foreign
+  object or a reference into it. Without `authDebug` the two fields are
+  never read at all.
+- **Only the debug line consumes it.** `rejectMissingToken` reads
+  `snapshot.status` and `snapshot.data.error` for the safe facts and, with
+  `authDebug`, `snapshot.diagnostic` for the previewed text; nothing else
+  reads `diagnostic`, and it never enters a failure.
+- A snapshot that fails (a hostile getter, Proxy or `toJSON` that throws
+  past `readSafely`) becomes, on the new arm, an `AuthProviderFailure` of
+  `request-failed` `incomplete-response` carrying only the operation — no
+  foreign value, no cause.
+
+Tests (through the real flow `sendTokenRequest` → site → `rejectMissingToken`,
+on an axios adapter answering `200`): a body without `access_token` whose
+`error_description` / `error_uri` echo every secret — default mode: the
+safe-facts line only, the snapshot has no `diagnostic` and the two fields
+were never read (a getter counting reads); `authDebug`: the line carries the
+previewed text; hostile bodies — a Proxy whose every trap throws, getters on
+`error_description` / `error_uri` / `access_token` that throw or return a
+marker, a `toJSON` that throws, a `data` getter that throws — in both modes:
+no marker in the line, the failure or any rendering of it, and the site
+throws only a minted `AuthProviderFailure` (no foreign error). Load-bearing:
+reading `diagnostic` fields without `authDebug` turns the read-count case
+red; handing the site the raw response instead of the snapshot turns the
+hostile cases red.
 
 It joins exactly the secrets `sendTokenRequest` joins — `site.secrets`,
 `site.basic?.secrets`, `prepared?.secrets` — through the same private join
