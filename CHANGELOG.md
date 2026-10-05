@@ -7,6 +7,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [5.4.1] - 2026-10-05
+
+### Changed
+
+- **A stricter compiler.** `tsconfig.json` adds `noImplicitReturns`,
+  `noFallthroughCasesInSwitch`, `noImplicitOverride`,
+  `noUncheckedIndexedAccess` and `exactOptionalPropertyTypes`, for the source
+  and the tests alike. Every error was fixed on its merits: an index that may
+  be absent is read once and checked, never asserted.
+- **Optional fields, decided per type.** What a consumer configures — every
+  provider config, the strategy, client-authentication and manual-strategy
+  options, `SamlTrust`, `ShippedValidatorOptions`, `SncLogonProviderConfig`
+  — accepts an explicit `undefined` for an optional field, meaning "not
+  given", as every constructor already read it; a consumer compiled with
+  `exactOptionalPropertyTypes` can pass a stored value that may be missing.
+  What the package hands out — a token result, the request a strategy gets,
+  the callback server options, the assertion context, a `ValidatedAssertion`,
+  the material `FileCertificateMaterialLoader` returns, the device-code
+  prompt — leaves a field without a value out instead of carrying it as
+  `undefined` (`toEqual` reads both alike).
+- **The tests are type-checked.** `npm run test:check` now covers
+  `src/__tests__` too; `tsconfig.build.json` still leaves the tests out of
+  `dist`.
+- **CI gates on the type check and the lint.** The build-and-test job runs
+  `npm run test:check` and `npm run lint:check`.
+- **Lint.** `noExplicitAny` is an error outside the tests; `src` has no
+  explicit `any`, no lint warning, and one `as unknown as` (the reduced
+  `AxiosResponse`, which has no `config` on purpose).
+- `SsoProviderFactory` is an object with the same `create()` instead of a
+  class holding only a static member.
+
+### Fixed
+
+- `SsoProviderFactory.create()` given a protocol and flow no provider has (a
+  consumer without types) threw an error whose message was the whole config
+  serialised — the client secret, a password, the tokens. Its message is now
+  fixed words: "Unsupported SSO provider config: no provider for this
+  protocol and flow".
+
 ## [5.4.0] - 2026-10-05
 
 ### Added
