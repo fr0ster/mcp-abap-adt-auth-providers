@@ -41,11 +41,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   carried — the client secret, the grant's (refresh token, code, verifier,
   assertion, passcode, password, device code, subject / actor token) and a
   strategy's (`client_secret`, `client_assertion`, a Basic credential) — is
-  now matched with each character as itself or percent-escaped in any case,
-  a space also as `+`; then every base64 run of the answer (either alphabet,
-  any padding, escaped or not) is decoded, and the smallest span of it that
+  now matched with each character — unreserved ones included (`%41` for `A`)
+  — as itself or percent-escaped in any case, a space also as `+`; then every
+  base64 run of the answer (either alphabet, any padding, any of its
+  characters escaped or not) is decoded, and the smallest span of it that
   decodes to text holding a secret is redacted. Markers are never scanned
-  again, so the output stays bounded.
+  again, so the output stays bounded. **Limits**, not covered: an escape
+  escaped again (`%252F`); an echo truncated inside a secret, which holds
+  only part of it; and a secret of one or two characters, which is redacted
+  wherever it appears — in decoded base64 too, so unrelated words may be
+  removed.
 
 ## [5.4.1] - 2026-10-05
 

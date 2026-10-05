@@ -120,19 +120,30 @@ describe('the oracle', () => {
     expect(recoverable(`x${b64.replace(/\+/g, '-')}`, 'se cr/t?')).toBe(true);
     expect(recoverable('a se%20cr%2ft%3F b', 'se cr/t?')).toBe(true);
     expect(recoverable('se+cr%2Ft%3f', 'se cr/t?')).toBe(true);
+    expect(
+      recoverable('%73%45%20%63%72%2f%74%3F', 'se cr/t?'.replace('e', 'E')),
+    ).toBe(true);
     expect(recoverable('nothing <redacted> here', 'se cr/t?')).toBe(false);
   });
 });
 
 // ---------------------------------------------------------------- the server
 
-/** Percent-encodes every byte outside the unreserved set, in a given case. */
-function percent(value: string, upper: (i: number) => boolean): string {
+/**
+ * Percent-encodes a value in a given case: every byte outside the unreserved
+ * set, and those inside it the `all` predicate picks — a hostile server may
+ * escape any character.
+ */
+function percent(
+  value: string,
+  upper: (i: number) => boolean,
+  all: (i: number) => boolean = () => false,
+): string {
   let i = 0;
   return [...Buffer.from(value, 'utf8')]
-    .map((byte) => {
+    .map((byte, at) => {
       const ch = String.fromCharCode(byte);
-      if (/[A-Za-z0-9\-._~]/.test(ch)) return ch;
+      if (/[A-Za-z0-9\-._~]/.test(ch) && !all(at)) return ch;
       const hex = byte.toString(16).padStart(2, '0');
       return `%${upper(i++) ? hex.toUpperCase() : hex.toLowerCase()}`;
     })
@@ -140,6 +151,9 @@ function percent(value: string, upper: (i: number) => boolean): string {
 }
 const lower = () => false;
 const mixed = (i: number) => i % 2 === 1;
+const every = () => true;
+/** A fixed pseudo-random subset: the same on every run. */
+const some = (i: number) => (i * 7 + 3) % 5 < 2;
 
 /** Every equivalent representation the server echoes of one value. */
 function variants(value: string): string[] {
@@ -148,12 +162,16 @@ function variants(value: string): string[] {
     percent(value, mixed),
     percent(value, lower).replace(/%20/g, '+'),
     value.replace(/ /g, '%20'),
+    percent(value, lower, every),
+    percent(value, mixed, every),
+    percent(value, mixed, some),
   ];
 }
 
 /** And of a base64 credential. */
 function base64Variants(credential: string): string[] {
   const bare = credential.replace(/=+$/, '');
+  const decoded = Buffer.from(credential, 'base64').toString('utf8');
   return [
     bare,
     `${bare}=`,
@@ -162,7 +180,11 @@ function base64Variants(credential: string): string[] {
     percent(credential, lower),
     percent(credential, mixed),
     bare.replace(/\+/g, ' '),
-    Buffer.from(credential, 'base64').toString('utf8'),
+    decoded,
+    percent(credential, mixed, every),
+    percent(bare, lower, some),
+    percent(decoded, mixed, every),
+    percent(decoded, lower, some),
   ];
 }
 

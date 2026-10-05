@@ -26,9 +26,6 @@ const JWT_SHAPE = /eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]*/g;
 const formDecoded = (value: string): string =>
   new URLSearchParams(`v=${value.replace(/&/g, '%26')}`).get('v') ?? value;
 
-/** Characters RFC 3986 never escapes: matched only as themselves. */
-const UNRESERVED = /^[A-Za-z0-9\-._~]$/;
-
 /** `%XX` for one byte, either case of each hex digit. */
 const escapePattern = (byte: number): string =>
   `%${[...byte.toString(16).toUpperCase().padStart(2, '0')]
@@ -39,13 +36,13 @@ const escapePattern = (byte: number): string =>
 
 /**
  * One character in every form a server may echo it: as itself, or
- * percent-escaped in any case (`%2F`, `%2f`); a space also as `+`. So one
- * pattern matches the value as sent, form-encoded, `encodeURIComponent`'d,
- * and any mix of those.
+ * percent-escaped in any case (`%2F`, `%2f`, `%41` for `A` — a server may
+ * escape any character, unreserved ones included); a space also as `+`. So
+ * one pattern matches the value as sent, form-encoded,
+ * `encodeURIComponent`'d, escaped whole, and any mix of those.
  */
 function characterPattern(character: string): string {
   const literal = escapeRegExp(character);
-  if (UNRESERVED.test(character)) return literal;
   const escaped = [...Buffer.from(character, 'utf8')]
     .map(escapePattern)
     .join('');
@@ -102,22 +99,31 @@ function redactKnownSecrets(
 const REDACTED = '<redacted>';
 
 /**
- * A run of base64 in any form a server may echo it: either alphabet, `+` `/`
- * and `=` escaped in any case, a `+` read as a space (`%20` or ` `), any
- * padding.
+ * A run of base64 in any form a server may echo it: either alphabet, any of
+ * its characters percent-escaped in any case, a `+` read as a space (`%20`
+ * or ` `), any padding.
  */
-const BASE64_RUN = /(?:[A-Za-z0-9+/_-]|%2[BbFf]|%20| )+(?:=|%3[Dd]){0,2}/g;
+const BASE64_ESCAPE =
+  '%(?:3[0-9]|4[1-9A-Fa-f]|5[0-9Aa]|6[1-9A-Fa-f]|7[0-9Aa]|2[BbDdFf]|5[Ff]|20)';
+const BASE64_RUN = new RegExp(
+  `(?:[A-Za-z0-9+/_ -]|${BASE64_ESCAPE})+(?:=|%3[Dd]){0,2}`,
+  'g',
+);
 /** Separators a form-decoded `+` became: a run is shrunk at these. */
 const SPACE = /%20| /g;
 /** Never more pieces than this are tried one span at a time. */
 const MAX_PIECES = 32;
 
-/** The run as plain base64: `+` and `/`, no escapes, no padding. */
+/** The run as plain base64: escapes decoded, `+` and `/`, no padding. */
 const normalized = (run: string): string =>
   run
-    .replace(/%2[Bb]|%20| |-/g, '+')
-    .replace(/%2[Ff]|_/g, '/')
-    .replace(/(?:=|%3[Dd])+$/, '');
+    .replace(/%20/g, ' ')
+    .replace(/%([0-9A-Fa-f]{2})/g, (_escape, hex: string) =>
+      String.fromCharCode(Number.parseInt(hex, 16)),
+    )
+    .replace(/[ -]/g, '+')
+    .replace(/_/g, '/')
+    .replace(/=+$/, '');
 
 /** True when the run, decoded from any of its four alignments, holds a secret. */
 function holdsSecret(run: string, secret: RegExp): boolean {
