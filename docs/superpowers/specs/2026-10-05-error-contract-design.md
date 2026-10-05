@@ -1952,6 +1952,30 @@ plugins do not have). It refuses, in `src/` outside tests:
    (`tokenRequest.ts`) and `clientSecretBasic` (`clientSecret.ts`) — so no
    token request carries a Basic credential the redaction does not know.
 
+**As built (Task 12, reviewed 2026-10-06) — stricter than the list above,
+each with a fixture:** rule 1 also refuses a class that satisfies
+`IAuthProvider` structurally without reaching `AuthProviderBase`, and tells a
+class that extends the base and also `implements IAuthProvider` to drop the
+`implements` (the base carries it); rule 2 also refuses `this.<moment> = …`,
+`(this as any)[CONST] = …`, `C.prototype.<moment> = …`, `Object.assign` of a
+moment onto `this` or a prototype, and constructor parameter properties named
+after a moment; rules 6 and 7 also refuse a builder or `guard` reached through
+`call` / `apply` / `bind`, spread arguments, and (rule 7) `super` reads; rule 8
+refuses a `Basic ` header value (at the start of a string, folded through
+same-file constants, `concat`, `join` and template literals, any case) and a
+base64 encoding of a value whose identifier or key names a secret (a
+heuristic, documented), in `src/auth` and `src/providers` only (C12) — a
+digest (`createHmac`, `digest('base64')`) is not an encoding of the secret
+and is not refused. Rules 4 and 5 recognise contract types by the
+interfaces-auth 6 brands and **exit 2** when a selected rule finds no brand;
+the script also exits 2 on a tree that does not type-check, a missing explicit
+file, or zero files checked — it never passes silently. Rules 6 and 7 pass a
+tree that imports no builder or `guard` (nothing to check). The limits not
+caught (an unconstrained generic cast helper, reads through `self = this`,
+`Object.assign` through an alias, `structuredClone`, JSDoc casts in `.js`,
+mixin-built providers, `Reflect.apply`, laundering through `any`) are listed
+in the script's header.
+
 connection runs the same script for rules 4, 5 and 6 (it has no providers,
 and its refusals carry no diagnostics, so its site list is empty);
 `auth-errors` runs rule 4 with four allowed sites — `mint` in `mint.ts` and
