@@ -1195,14 +1195,24 @@ aborted rule.
   attach); the same signal attached twice is one party. An attachment is
   **released** when its signal aborts — removed from the set and its listener
   removed (`{ once: true }`) — or when the returned `detach()` is called, so
-  attachments never accumulate. A provider that has never had an attachment
-  behaves as today: a moment's login has a waiter that never aborts. Once a
-  provider has had one, a moment's login waits on the **live** attached
-  parties at its start plus any attached while it runs, and is aborted when
-  all of them have aborted; a moment that finds no live party on such a
-  provider answers Oops `aborted` at once and starts no login (every party
-  that wanted it has gone). A party attached with an already-aborted signal is
-  not added.
+  attachments never accumulate. **A login a moment starts** waits on the
+  **live** attached parties at its start plus any attached while it runs,
+  and is aborted when all of them have aborted. **With no live party** — never
+  attached, or every attachment already released — a moment's login has a
+  waiter that never aborts, exactly as today: the provider is used by a
+  consumer that gave no signal, and an unsignalled consumer chose no bound
+  (decided by the user 2026-10-05; the broker caches a provider for its whole
+  lifetime, `AuthBroker.ts:1030-1045`, and connection calls the moments
+  without a signal, `CredentialAbapConnection.ts:54`, `:74`, `:98`, so a later
+  unsignalled session must be able to log in on a provider earlier sessions
+  attached to). A party attached with an already-aborted signal is not added.
+  **The limit, stated:** a moment cannot tell which session called it, so a
+  login started while a signalled session is attached is bounded by that
+  session — if it closes mid-login, an unsignalled session that joined the
+  same login through its own moment gets Oops `aborted` for that moment, and
+  its next moment (the next request's renewal) starts a fresh, unbounded
+  login and gets a token. No unsignalled session is ever left unable to log
+  in.
 - The broker keeps **two ways** to reach a destination's provider. The
   public `getProvider(destination, { signal })` is a **session**: the caller
   is a waiter of the shared build, and — only when it gave a signal — the
@@ -1226,11 +1236,16 @@ was called once, its signal not aborted); both abort → the strategy's signal
 is aborted and the port is bound by the test afterwards; an aborted attempt
 is not reused — the next `getTokens` starts a new login; a caller without a
 signal beside one that aborts → the login continues; a login started by
-`rejected()` with the config `signal` aborted → `rejected()` answers Oops
-`aborted` and the port is free; two attached parties, one aborts → the
-login continues, both → aborted; after both, a `rejected()` answers Oops
-`aborted` at once and the strategy is not called; a never-attached provider's
-`rejected()` login runs as today; `detach()` and an aborted signal each
+`rejected()` that is running when the config `signal` aborts → `rejected()`
+answers Oops `aborted` and the port is free; two attached parties, one
+aborts → the login continues, both → aborted; **after every attachment has
+been released, a later moment's login runs unbounded and gets a token** (the
+strategy is called, its signal never aborts) — the same as a never-attached
+provider's; a signalled and an unsignalled consumer sharing the provider: the
+signalled one closes with no login running → the unsignalled one's renewal
+gets a token; it closes while a login it bounds is running → that login
+aborts, the unsignalled one's next moment starts a fresh login and gets a
+token; `detach()` and an aborted signal each
 remove the party (a later moment no longer waits on it; the signal has no
 listener left); `attach` of an aborted signal adds nothing; the device flow
 stops polling on abort (no request after the abort, fake timers); an aborted
@@ -1243,7 +1258,9 @@ completes, nothing changes — tokens, the refresh token, the pinned material,
 loader read. Load-bearing: aborting the attempt on the first waiter's abort
 turns the two-waiter case red; caching the aborted attempt turns the retry
 case red; clearing the slot only on settle turns the doomed-join case red;
-applying effects before the commit check turns the late-result case red.
+applying effects before the commit check turns the late-result case red;
+reinstating a "no live party → `aborted`" rule turns the after-release and
+the mixed-consumer cases red.
 Broker tests: §10.6.
 
 ## 7. Logon targets (connection) and rule 4
@@ -1750,7 +1767,12 @@ kind. Migration note: none beyond the versions.
   (`getProvider(…, { signal })`), a `rejected()`-started login, both sessions
   close → the login aborts and the port is bound by the test afterwards (the
   `getToken` left no party behind); `getProvider` without a signal attaches
-  nothing; all `getProvider` callers abort while the build's store read is
+  nothing; after every session's signal has aborted, a later
+  `getProvider(destination)` without a signal — a cache hit, the same
+  provider — handed to a connection whose renewal (`rejected()`) logs in gets
+  a token (strategy called, never aborted); a signalled and an unsignalled
+  connection sharing the provider: the signalled one closes → the
+  unsignalled one's next renewal gets a token; all `getProvider` callers abort while the build's store read is
   outstanding → a new `getProvider` arriving before it completes builds
   afresh and gets its own provider, and the first build's late completion is
   not cached and writes no session secret; two
