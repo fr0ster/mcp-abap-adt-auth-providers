@@ -108,7 +108,7 @@ what drove the kinds:
 | 2 | `client-certificate` | `CertificateMaterialError` | no |
 | 3 | `client-authentication` | `ClientAuthenticationError`, `ClientAuthenticationResultError`, `BasicClientIdError` | no |
 | 4 | `request-failed` | `TokenEndpointError`, the reduced `AxiosError`, "response missing access_token" | no |
-| 5 | `tls` | an allowlisted TLS code (`knownCodes.ts:470-497`) | no |
+| 5 | `tls` | an allowlisted TLS code (`TLS_CODES`, `knownCodes.ts:81-108`) | no |
 | 6 | `interactive-login` | `BrowserAuthError`, `CallbackScopeError`, `AuthorizationRefusedError`, the manual strategies, `DeviceCodePresentationError` | no |
 | 7 | `saml-assertion` | `AssertionValidationError`, the bearer conversion (`samlBearerAssertion.ts`) | no |
 | 8 | `snc` | `sncRefusal.ts`, `SncLogonProvider.ts:135`, `SncLibraryNotFoundError` | only `problem: 'no-credential'`, and `'logon-refused'` with `rfcKey: 'RFC_LOGON_FAILURE'` |
@@ -139,14 +139,14 @@ present only when known; the builder omits the key otherwise (no
 
 | `kind` | `facts` |
 |---|---|
-| `configuration` | `case: ConfigCase`, `fields: readonly ConfigField[]` (≤ 8, deduplicated, in the order given), `allowed?: AllowedValueSet` |
+| `configuration` | per case, a discriminated union (`ConfigFactsOf<C>`, below): `case: C`, `fields: readonly ConfigField[]` (≤ 8, deduplicated, in the order given), and `allowed` only on the cases that carry an allowed-value set |
 | `client-certificate` | `problem: 'incomplete' \| 'unusable' \| 'expired'` |
 | `client-authentication` | `problem: 'signing-key-unusable' \| 'result-unsendable' \| 'basic-client-id-colon'` |
 | `request-failed` | `operation: Operation`, `grant?: OAuth2GrantType`, `problem: RequestProblem`, `status?: HttpStatus`, `oauthError?: OAuthErrorCode`, `code?: SystemCode` |
 | `tls` | `operation: Operation`, `grant?: OAuth2GrantType`, `code: TlsFailureCode` |
 | `interactive-login` | discriminated by `outcome: InteractiveOutcome` — `port-in-use`: `port: Port`; `aborted`: `ignoredCallbacks?: Count`; `disposed`: `strategy: 'browser' \| 'manual'`; `identity-provider-refused`: `oauthError?: OAuthErrorCode`; `browser-launch-failed`: `code?: SystemCode`; `failed`: `code?: SystemCode`, `status?: HttpStatus`; every other outcome: none |
 | `saml-assertion` | per rule, a discriminated union: `rule: AssertionRule`, `check: CheckOf<rule>` (fixed by the rule), `count?: Count` (rules that say "carries N"), `statusCode?: SamlStatusCode` (rule `declined`), `candidates?: readonly BearerCandidate[]` (≤ 5) and `moreCandidates?: Count` (rule `no-bearer-qualifies`) |
-| `snc` | `problem: SncProblem`, `rfcKey?: RfcKey`, `secureLoginClient?: boolean`, `libraryArchs?: readonly SncArch[]`, `candidates?: readonly SncCandidate[]` (≤ 8), `searched?: boolean`, `processArch?: SncArch` |
+| `snc` | per problem, a discriminated union (`SncFactsOf<P>`, below): only the fields each problem carries (§A.7) |
 | `credential-refused` | `credential: CredentialKind`, `at?: 'logon' \| 'request'` |
 | `system-refused` | discriminated by `verdict`: `'not-authorized'` / `'redirected'` / `'system-failed'` / `'other-status'` with `status: HttpStatus`; `'rfc-failure'` with `rfcKey: RfcKey`; `'unknown'`; each with `at: 'logon' \| 'request'` |
 | `renewal-unchanged` | `source: 'token-source' \| 'token-provider'` |
@@ -159,6 +159,31 @@ present only when known; the builder omits the key otherwise (no
 For `saml-assertion`, `snc` and `configuration`, the value of `rule`,
 `problem` and `case` is also the error's top-level `variant` (§4.1), so that
 a consumer can narrow the whole error on it.
+
+**Facts narrowed per variant** (decided 2026-10-05: everything the compiler
+can check is checked, and tightening after 5.0.0 would be breaking). As
+`SamlFactsOf<R>` gives each rule only its own facts, `SncFactsOf<P>` and
+`ConfigFactsOf<C>` give each problem and each case only theirs — a fact
+another variant carries is a compile error, not an optional field:
+
+| `snc` `problem` (§A.7) | Facts beside `problem` |
+|---|---|
+| `no-credential` (G1) | `secureLoginClient?: boolean`, `libraryArchs?: readonly SncArch[]` |
+| `library-init-failed` (G2) | `libraryArchs?: readonly SncArch[]` |
+| `logon-refused` (G3) | `rfcKey?: RfcKey` |
+| `library-not-found` (G4–G7) | `searched?: true`, `candidates?: readonly SncCandidate[]` (≤ 8), `processArch?: SncArch` |
+| `locator-returned-no-path` (G8) | none |
+
+| `configuration` `case` (§A.5) | Facts beside `case` and `fields` |
+|---|---|
+| `snc-qop-invalid` (E21) | `allowed: 'snc-qop'` |
+| `basic-encoding-missing` (E19) | `allowed: 'basic-encoding'` |
+| every other case | none (`allowed` is a compile error) |
+
+Each map is an `as const` object `satisfies Record<…>` in interfaces-auth
+(`SNC_PROBLEM_FACTS`, `CONFIG_CASE_FACTS`-style type maps, types only), so
+classification's per-kind validator (§5.4) checks exactly these fields per
+variant.
 
 Composite fact types:
 
@@ -220,7 +245,7 @@ ever part of `reason` / `hint`.
 | `configuration` | `configuredUri` | the provider's configured `acsUrl`, or the `redirect_uri` of the configured pre-built `authorizationUrl` (`saml2Utils.ts:168-196`, `AuthorizationCodeProvider.ts:159-166`); cases `saml-acs-mismatch`, `redirect-mismatch` | `ConfigUri` |
 | `configuration` | `strategyUri` | the redirect URI the consumer's strategy reported (`AuthorizationOutcome.redirectUri`, or the bound handle's `redirectUri`), same cases | `ConfigUri` |
 
-Which `saml-assertion` field a rule may carry is a type: `SamlDiagnosticsOf<R>`
+Which `saml-assertion` field a rule may carry is a type: `SamlDiagnosticOf<R>`
 maps each rule to at most one field (Appendix B). The `issuer`,
 `statusCode`, `destination`, `referenceUri` and time values are
 attacker-controlled; they are admitted because the goal names them as
@@ -366,8 +391,8 @@ type and the set cannot drift.
 | `ALLOWED_VALUE_SETS` | `AllowedValueSet` | new: `'snc-qop'`, `'basic-encoding'`; their members are `SNC_QOP_VALUES` (`SncLogonProvider.ts:34`) and `BASIC_ENCODINGS` (`clientSecret.ts:44-47`), both moved here `as const` |
 | `OPERATIONS` | `Operation` | every `what` passed to `safely` / `refusalFrom` / `loggedError` / `tokenEndpointError` today (Appendix A §A.8) |
 | `REQUEST_PROBLEMS` | `RequestProblem` | new (§3.2) |
-| `SYSTEM_CODES` | `SystemCode` | `KNOWN_SYSTEM_CODES`, `knownCodes.ts:415-430` (13) |
-| `TLS_FAILURE_CODES` | `TlsFailureCode` | the keys of `TLS_CODES`, `knownCodes.ts:470-497` (18) — the words stay in the renderer |
+| `SYSTEM_CODES` | `SystemCode` | `KNOWN_SYSTEM_CODES`, `knownCodes.ts:26-41` (13) |
+| `TLS_FAILURE_CODES` | `TlsFailureCode` | the keys of `TLS_CODES`, `knownCodes.ts:81-108` (18) — the words stay in the renderer |
 | `OAUTH_ERROR_CODES` | `OAuthErrorCode` | `REGISTERED_ERROR_CODES`, `oauthErrorBody.ts:88-120` (25) |
 | `RFC_KEYS` | `RfcKey` | `KNOWN_RFC_KEYS`, `refusal.ts:150-159` (8) |
 | `ASSERTION_CHECKS` | `AssertionCheck` | `AssertionCheck`, `AssertionValidationError.ts:13-27`, and its set `refusal.ts:131-146` (14) |
@@ -2384,6 +2409,19 @@ authError['saml-assertion']({ rule: 'duplicate-id', check: 'duplicateId' }, { is
 authError.snc({ problem: 'logon-refused' }, { library: v });
 // @ts-expect-error a non-mismatch case carries no configuredUri
 authError.configuration({ case: 'required-fields-missing', fields: ['clientId'] }, { configuredUri: v });
+// facts narrowed per variant (SncFactsOf<P>, ConfigFactsOf<C>)
+authError.snc({ problem: 'logon-refused', rfcKey: 'RFC_LOGON_FAILURE' });                 // ok
+authError.configuration({ case: 'snc-qop-invalid', fields: ['qop'], allowed: 'snc-qop' }); // ok
+// @ts-expect-error logon-refused carries no candidates
+authError.snc({ problem: 'logon-refused', candidates: [] });
+// @ts-expect-error logon-refused carries no libraryArchs
+authError.snc({ problem: 'logon-refused', libraryArchs: [] });
+// @ts-expect-error library-not-found carries no rfcKey
+authError.snc({ problem: 'library-not-found', rfcKey: 'RFC_LOGON_FAILURE' });
+// @ts-expect-error snc-qop-invalid's allowed set is snc-qop
+authError.configuration({ case: 'snc-qop-invalid', fields: ['qop'], allowed: 'basic-encoding' });
+// @ts-expect-error required-fields-missing carries no allowed set
+authError.configuration({ case: 'required-fields-missing', fields: ['clientId'], allowed: 'snc-qop' });
 // @ts-expect-error the rule's check is fixed
 authError['saml-assertion']({ rule: 'duplicate-id', check: 'issuer' });
 declare const anyRule: AssertionRule;
@@ -2580,7 +2618,7 @@ today's string exactly, pinned by a test; "→ Cn" points to Appendix C.
 | A12 | `refusal.ts:306-311` | `the service key or session data is incomplete[: <fields>]` | — | — | — | no producer in this package (README `:2062`); removed with the classes |
 | A13 | `refusal.ts:312-314` | `<what> failed (<OwnClassLabel>)` | `unknown` | `operation` | — | `<operation> failed (unknown error)`; class label lost (L11) |
 | A14 | `refusal.ts:315-320` | `<what> failed (HTTP <n>[, <oauth>][, <code>])` / `(the token endpoint gave no reason)` | `request-failed` | `operation`, `grant?`, `problem`, `status?`, `oauthError?`, `code?` | — | verbatim |
-| A15 | `refusal.ts:321-325`, `knownCodes.ts:438-497` | `<what> failed: <tls words> (<code>)` / TLS hint | `tls` | `operation`, `grant?`, `code` | — | verbatim |
+| A15 | `refusal.ts:321-325`, `knownCodes.ts:44-108` (`TlsWords`, `TLS_CODES`) | `<what> failed: <tls words> (<code>)` / TLS hint | `tls` | `operation`, `grant?`, `code` | — | verbatim |
 | A16 | `refusal.ts:326-334` | `<what> failed (HTTP <n>, …)` or `(unknown error[, <facts>])` for a foreign value | `unknown` | `operation`, `status?`, `oauthError?`, `code?` | — | verbatim |
 | A17 | `refusal.ts:63-67`, `BaseTokenProvider.ts:795-797` | `the token is bound to a client certificate this provider does not present` / hint | `token-binding` | `problem: bound-to-unpinned` | — | verbatim |
 | A18 | `refusal.ts:74-78`, `BaseTokenProvider.ts:800-805` | `the new token is bound to a client certificate this provider does not present` / hint | `token-binding` | `problem: renewed-bound-elsewhere` | — | verbatim |
