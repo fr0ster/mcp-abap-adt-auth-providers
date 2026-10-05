@@ -369,7 +369,7 @@ export interface IAuthProviderFailure extends Error {
 `IAuthProvider` (`src/auth/IAuthProvider.ts`) is unchanged in shape; its
 JSDoc says an Oops's refusal is an `IAuthProviderError` and that a method
 never throws. `ITokenProvider.getTokens` and
-`IRefreshableTokenProvider.refreshTokens` keep their signatures; their JSDoc
+`IRefreshableTokenProvider.refreshTokens` gain only an optional `options?: ITokenRequestOptions` (§4.4, §6b; an implementer without the parameter still satisfies them); their JSDoc
 says they reject with an `IAuthProviderFailure` (TypeScript does not type a
 rejection; `auth-errors`' `readFailure` is how a consumer reads one, §6).
 `ILogonTarget` keeps returning `AuthOutcome`; its JSDoc says a target's Oops
