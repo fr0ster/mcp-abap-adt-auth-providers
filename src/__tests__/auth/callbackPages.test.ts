@@ -93,6 +93,7 @@ describe('callback pages', () => {
       const [reply] = await replies(factory as CallbackServerFactory<unknown>, [
         ATTACK,
       ]);
+      if (!reply) throw new Error('no reply');
       expect(reply.status).toBe(400);
       expect(reply.headers['content-type']).toMatch(/^text\/html/);
       // Not vacuous: the refusal is shown, escaped.

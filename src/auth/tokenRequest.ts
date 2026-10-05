@@ -163,10 +163,10 @@ function basicSecrets(headers: Record<string, string>): string[] {
   const out: string[] = [];
   for (const [name, value] of Object.entries(headers)) {
     if (name.toLowerCase() !== 'authorization') continue;
-    const match = /^Basic\s+(\S+)$/i.exec(value);
-    if (!match) continue;
-    out.push(match[1]);
-    const decoded = Buffer.from(match[1], 'base64').toString();
+    const credential = /^Basic\s+(\S+)$/i.exec(value)?.[1];
+    if (credential === undefined) continue;
+    out.push(credential);
+    const decoded = Buffer.from(credential, 'base64').toString();
     const colon = decoded.indexOf(':');
     if (colon >= 0 && colon < decoded.length - 1) {
       out.push(decoded.slice(colon + 1));

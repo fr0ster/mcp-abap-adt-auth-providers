@@ -249,7 +249,7 @@ describe('the binding table (spec §4)', () => {
       ok: true,
     });
     expect(t.logon.tls).toHaveLength(1);
-    expect(certificateThumbprint(t.logon.tls[0])).toBe(THUMB_A);
+    expect(certificateThumbprint(t.logon.tls[0]!)).toBe(THUMB_A);
     await expect(provider.authorize(t.requestTarget)).resolves.toEqual({
       ok: true,
     });
@@ -363,7 +363,7 @@ describe('around the table', () => {
       ok: true,
     });
     expect(tlsCalls()).toBe(1);
-    expect(certificateThumbprint(t.logon.tls[0])).toBe(THUMB_A);
+    expect(certificateThumbprint(t.logon.tls[0]!)).toBe(THUMB_A);
     // Pinned once, for life.
     await provider.establish(t.logonTarget);
     await provider.authorize(t.requestTarget);
@@ -448,7 +448,7 @@ describe('establish decides on the token held, never fetching one', () => {
     await expect(provider.establish(t.logonTarget)).resolves.toEqual({
       ok: true,
     });
-    expect(certificateThumbprint(t.logon.tls[0])).toBe(THUMB_A);
+    expect(certificateThumbprint(t.logon.tls[0]!)).toBe(THUMB_A);
     expect(mockedAxios).not.toHaveBeenCalled();
     expect(mockedAxios.post).not.toHaveBeenCalled();
   });
@@ -489,7 +489,7 @@ describe('establish decides on the token held, never fetching one', () => {
     await expect(provider.establish(t.logonTarget)).resolves.toEqual({
       ok: true,
     });
-    expect(certificateThumbprint(t.logon.tls[0])).toBe(THUMB_A);
+    expect(certificateThumbprint(t.logon.tls[0]!)).toBe(THUMB_A);
     answer({ data: { access_token: boundTo(THUMB_A), expires_in: 3600 } });
     await renewal;
   });
@@ -500,7 +500,7 @@ describe('establish decides on the token held, never fetching one', () => {
     await expect(provider.establish(t.logonTarget)).resolves.toEqual({
       ok: true,
     });
-    expect(certificateThumbprint(t.logon.tls[0])).toBe(THUMB_A);
+    expect(certificateThumbprint(t.logon.tls[0]!)).toBe(THUMB_A);
     expect(mockedAxios).not.toHaveBeenCalled();
     expect(mockedAxios.post).not.toHaveBeenCalled();
   });
@@ -878,7 +878,7 @@ describe('a held token bound to another certificate, one pinned: renewed like an
     await expect(provider.establish(t.logonTarget)).resolves.toEqual({
       ok: true,
     });
-    expect(certificateThumbprint(t.logon.tls[0])).toBe(THUMB_A);
+    expect(certificateThumbprint(t.logon.tls[0]!)).toBe(THUMB_A);
     expect(mockedAxios).not.toHaveBeenCalled();
     expect(mockedAxios.post).not.toHaveBeenCalled();
   });

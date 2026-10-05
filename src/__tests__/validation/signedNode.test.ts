@@ -57,7 +57,7 @@ function signWithPatchedReference(
   const original = internals.addAllReferences.bind(signer);
   internals.addAllReferences = (doc, signature, ...rest) => {
     original(doc, signature, ...rest);
-    patch(signature.getElementsByTagNameNS(DSIG_NS, 'Reference')[0], doc);
+    patch(signature.getElementsByTagNameNS(DSIG_NS, 'Reference')[0]!, doc);
   };
   signer.computeSignature(ASSERTION(), {
     location: { reference: "//*[local-name(.)='Issuer']", action: 'after' },
@@ -82,7 +82,7 @@ describe('resolveSignedElements', () => {
     const [element] = resolveSignedElements(wrapped, parse(wrapped), [
       key.certificatePem,
     ]);
-    expect(element.localName).toBe('Assertion');
+    expect(element!.localName).toBe('Assertion');
   });
 
   // The spec promises PEM or base64 DER, and metadata carries the latter.
@@ -102,7 +102,7 @@ describe('resolveSignedElements', () => {
     const [element] = resolveSignedElements(wrapped, parse(wrapped), [
       toPem(der),
     ]);
-    expect(element.localName).toBe('Assertion');
+    expect(element!.localName).toBe('Assertion');
 
     // Passed raw, without the caller's normalisation, the same bytes are
     // rejected — pinning that the conversion is real work, not a no-op.
@@ -151,7 +151,7 @@ describe('resolveSignedElements', () => {
       other.certificatePem,
       key.certificatePem,
     ]);
-    expect(element.localName).toBe('Assertion');
+    expect(element!.localName).toBe('Assertion');
   });
 
   it('refuses a document with no signature', () => {
@@ -456,7 +456,7 @@ describe('resolveSignedElements', () => {
     const [element] = resolveSignedElements(wrapped, parse(wrapped), [
       key.certificatePem,
     ]);
-    expect(element.getAttribute('ID')).toBe('_real');
+    expect(element!.getAttribute('ID')).toBe('_real');
   });
 
   // Identity providers often sign both levels — Keycloak does by default. The

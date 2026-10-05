@@ -574,11 +574,11 @@ export abstract class BaseTokenProvider
   protected parseExpirationFromJWT(token: string): number | undefined {
     try {
       const parts = token.split('.');
-      if (parts.length !== 3) {
+      const payload = parts[1];
+      if (parts.length !== 3 || payload === undefined) {
         return undefined;
       }
 
-      const payload = parts[1];
       // Convert base64url to base64
       const base64 = payload.replace(/-/g, '+').replace(/_/g, '/');
       // Add padding if needed

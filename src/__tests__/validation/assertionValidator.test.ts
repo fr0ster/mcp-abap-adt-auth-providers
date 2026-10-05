@@ -449,7 +449,7 @@ describe("the signed-Response validator (Saml2PureProvider's default)", () => {
     const xml = alteredResponse((u) =>
       u.replace(/<saml:Assertion[\s\S]*<\/saml:Assertion>/, ''),
     );
-    expect(signedElementsOf(xml)[0].localName).toBe('Response');
+    expect(signedElementsOf(xml)[0]!.localName).toBe('Response');
     await expect(
       validator().validate(encode(xml), context),
     ).rejects.toMatchObject({
@@ -469,7 +469,7 @@ describe("the signed-Response validator (Saml2PureProvider's default)", () => {
         `${assertion}${assertion.replace('ID="_a1"', 'ID="_a2"')}`,
       );
     });
-    expect(signedElementsOf(xml)[0].localName).toBe('Response');
+    expect(signedElementsOf(xml)[0]!.localName).toBe('Response');
     await expect(
       validator().validate(encode(xml), context),
     ).rejects.toMatchObject({
@@ -493,7 +493,7 @@ describe("the signed-Response validator (Saml2PureProvider's default)", () => {
         '<samlp:Status>',
         `<samlp:Extensions>${assertion}</samlp:Extensions><samlp:Status>`,
       );
-    expect(signedElementsOf(xml)[0].getAttribute('ID')).toBe('_a1');
+    expect(signedElementsOf(xml)[0]!.getAttribute('ID')).toBe('_a1');
     await expect(
       assertionValidator().validate(encode(xml), context),
     ).rejects.toMatchObject({
@@ -508,7 +508,7 @@ describe("the signed-Response validator (Saml2PureProvider's default)", () => {
     const xml = alteredResponse((u) =>
       u.replace(/<samlp:Status>[\s\S]*?<\/samlp:Status>/, ''),
     );
-    expect(signedElementsOf(xml)[0].localName).toBe('Response');
+    expect(signedElementsOf(xml)[0]!.localName).toBe('Response');
     await expect(
       validator().validate(encode(xml), context),
     ).rejects.toMatchObject({
@@ -525,7 +525,7 @@ describe("the signed-Response validator (Saml2PureProvider's default)", () => {
           'Value="urn:oasis:names:tc:SAML:2.0:status:Success"/></samlp:Status>',
       ),
     );
-    expect(signedElementsOf(xml)[0].localName).toBe('Response');
+    expect(signedElementsOf(xml)[0]!.localName).toBe('Response');
     await expect(
       validator().validate(encode(xml), context),
     ).rejects.toMatchObject({
@@ -540,7 +540,7 @@ describe("the signed-Response validator (Saml2PureProvider's default)", () => {
     const xml = alteredResponse((u) =>
       u.replace(/<samlp:StatusCode [^>]*\/>/, ''),
     );
-    expect(signedElementsOf(xml)[0].localName).toBe('Response');
+    expect(signedElementsOf(xml)[0]!.localName).toBe('Response');
     await expect(
       validator().validate(encode(xml), context),
     ).rejects.toMatchObject({
@@ -555,7 +555,7 @@ describe("the signed-Response validator (Saml2PureProvider's default)", () => {
     const xml = alteredResponse((u) =>
       u.replace(/(<samlp:StatusCode [^>]*\/>)/, '$1$1'),
     );
-    expect(signedElementsOf(xml)[0].localName).toBe('Response');
+    expect(signedElementsOf(xml)[0]!.localName).toBe('Response');
     await expect(
       validator().validate(encode(xml), context),
     ).rejects.toMatchObject({
@@ -570,7 +570,7 @@ describe("the signed-Response validator (Saml2PureProvider's default)", () => {
     const xml = alteredResponse((u) =>
       u.replace(/<samlp:StatusCode [^>]*\/>/, '<samlp:StatusCode/>'),
     );
-    expect(signedElementsOf(xml)[0].localName).toBe('Response');
+    expect(signedElementsOf(xml)[0]!.localName).toBe('Response');
     await expect(
       validator().validate(encode(xml), context),
     ).rejects.toMatchObject({
@@ -588,7 +588,7 @@ describe("the signed-Response validator (Saml2PureProvider's default)", () => {
         '</saml:Issuer><saml:Issuer>urn:someone:else</saml:Issuer>',
       ),
     );
-    expect(signedElementsOf(xml)[0].localName).toBe('Response');
+    expect(signedElementsOf(xml)[0]!.localName).toBe('Response');
     await expect(
       validator().validate(encode(xml), context),
     ).rejects.toMatchObject({
@@ -1049,8 +1049,8 @@ describe("the signed-Response validator (Saml2PureProvider's default)", () => {
       [toPem(KEY.certificatePem)],
     );
     expect(covered).toHaveLength(1);
-    expect(covered[0].localName).toBe('Assertion');
-    expect(covered[0].getAttribute('ID')).toBe('_a1');
+    expect(covered[0]!.localName).toBe('Assertion');
+    expect(covered[0]!.getAttribute('ID')).toBe('_a1');
 
     await expect(
       assertionValidator().validate(encode(doctored), context),
@@ -1088,7 +1088,7 @@ describe("the signed-Response validator (Saml2PureProvider's default)", () => {
     const attack = forgedWrapping();
     const covered = signedElementsOf(attack);
     expect(covered).toHaveLength(1);
-    expect(covered[0].getAttribute('ID')).toBe('_a1');
+    expect(covered[0]!.getAttribute('ID')).toBe('_a1');
     expect(
       (
         new DOMParser().parseFromString(attack, 'text/xml')
@@ -1114,7 +1114,7 @@ describe("the signed-Response validator (Saml2PureProvider's default)", () => {
       `${forgedWrapping()}</samlp:Response>`;
     const covered = signedElementsOf(attack);
     expect(covered).toHaveLength(1);
-    expect(covered[0].getAttribute('ID')).toBe('_a1');
+    expect(covered[0]!.getAttribute('ID')).toBe('_a1');
 
     await expect(
       assertionValidator().validate(encode(attack), context),
@@ -1202,7 +1202,7 @@ describe("the signed-Response validator (Saml2PureProvider's default)", () => {
     );
     const covered = signedElementsOf(doctored);
     expect(covered).toHaveLength(1);
-    expect(covered[0].getAttribute('ID')).toBe('_a1');
+    expect(covered[0]!.getAttribute('ID')).toBe('_a1');
 
     await expect(
       assertionValidator().validate(encode(doctored), context),
@@ -1221,7 +1221,7 @@ describe("the signed-Response validator (Saml2PureProvider's default)", () => {
     );
     const covered = signedElementsOf(doctored);
     expect(covered).toHaveLength(1);
-    expect(covered[0].getAttribute('ID')).toBe('_a1');
+    expect(covered[0]!.getAttribute('ID')).toBe('_a1');
 
     await expect(
       assertionValidator().validate(encode(doctored), context),
@@ -1244,7 +1244,7 @@ describe("the signed-Response validator (Saml2PureProvider's default)", () => {
     );
     const covered = signedElementsOf(doctored);
     expect(covered).toHaveLength(1);
-    expect(covered[0].getAttribute('ID')).toBe('_a1');
+    expect(covered[0]!.getAttribute('ID')).toBe('_a1');
 
     await expect(
       assertionValidator().validate(encode(doctored), context),
@@ -1375,7 +1375,7 @@ describe("the signed-Response validator (Saml2PureProvider's default)", () => {
     });
     const covered = signedElementsOf(signed);
     expect(covered).toHaveLength(1);
-    expect(covered[0].localName).toBe('Response');
+    expect(covered[0]!.localName).toBe('Response');
 
     await expect(
       validator().validate(encode(signed), context),
@@ -1389,7 +1389,7 @@ describe("the signed-Response validator (Saml2PureProvider's default)", () => {
     const signed = buildResponse({ responseIssuer: '' });
     // signXml serialises the empty element self-closed.
     expect(signed).toContain('<saml:Issuer/>');
-    expect(signedElementsOf(signed)[0].localName).toBe('Response');
+    expect(signedElementsOf(signed)[0]!.localName).toBe('Response');
 
     await expect(
       validator().validate(encode(signed), context),
@@ -1478,7 +1478,7 @@ describe("the signed-Response validator (Saml2PureProvider's default)", () => {
     const xml = alteredResponse((u) =>
       u.replace(/<saml:Subject>[\s\S]*?<\/saml:Subject>/, ''),
     );
-    expect(signedElementsOf(xml)[0].localName).toBe('Response');
+    expect(signedElementsOf(xml)[0]!.localName).toBe('Response');
     await expect(
       validator().validate(encode(xml), context),
     ).rejects.toMatchObject({
@@ -1494,7 +1494,7 @@ describe("the signed-Response validator (Saml2PureProvider's default)", () => {
         '</saml:Subject><saml:Subject><saml:NameID>other</saml:NameID></saml:Subject>',
       ),
     );
-    expect(signedElementsOf(xml)[0].localName).toBe('Response');
+    expect(signedElementsOf(xml)[0]!.localName).toBe('Response');
     await expect(
       validator().validate(encode(xml), context),
     ).rejects.toMatchObject({
@@ -1810,7 +1810,7 @@ describe("the signed-Response validator (Saml2PureProvider's default)", () => {
   // genuinely signed, so only the DOCTYPE rule can refuse it.
   it('refuses a document carrying a DOCTYPE declaration', async () => {
     const withDoctype = `<!DOCTYPE samlp:Response>${buildResponse()}`;
-    expect(signedElementsOf(withDoctype)[0].localName).toBe('Response');
+    expect(signedElementsOf(withDoctype)[0]!.localName).toBe('Response');
     await expect(
       validator().validate(encode(withDoctype), context),
     ).rejects.toMatchObject({

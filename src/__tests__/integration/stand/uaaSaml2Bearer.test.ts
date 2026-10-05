@@ -131,7 +131,7 @@ const expiredJwt = (): string => {
 };
 
 const issuerOf = (jwt: string): string =>
-  JSON.parse(Buffer.from(jwt.split('.')[1], 'base64url').toString('utf8')).iss;
+  JSON.parse(Buffer.from(jwt.split('.')[1]!, 'base64url').toString('utf8')).iss;
 
 const baseConfig = (clientId: string) => ({
   idpSsoUrl: 'http://test-idp.invalid/sso',

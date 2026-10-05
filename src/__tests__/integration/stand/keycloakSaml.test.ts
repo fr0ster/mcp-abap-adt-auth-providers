@@ -52,7 +52,7 @@ const USER = { username: 'tester', password: 'tester' };
 const SAML_NS = 'urn:oasis:names:tc:SAML:2.0:assertion';
 
 const claims = (jwt: string): Record<string, unknown> =>
-  JSON.parse(Buffer.from(jwt.split('.')[1], 'base64url').toString('utf8'));
+  JSON.parse(Buffer.from(jwt.split('.')[1]!, 'base64url').toString('utf8'));
 
 const basic = (client: string) =>
   `Basic ${Buffer.from(`${client}:secret`).toString('base64')}`;
@@ -132,14 +132,14 @@ function signingCertificates(metadata: string): string[] {
   const found: string[] = [];
   const descriptors = doc.getElementsByTagNameNS(MD_NS, 'KeyDescriptor');
   for (let i = 0; i < descriptors.length; i++) {
-    const descriptor = descriptors[i];
+    const descriptor = descriptors[i]!;
     if (descriptor.getAttribute('use') !== 'signing') continue;
     const certificates = descriptor.getElementsByTagNameNS(
       DSIG_NS,
       'X509Certificate',
     );
     for (let j = 0; j < certificates.length; j++) {
-      const body = (certificates[j].textContent ?? '').replace(/\s+/g, '');
+      const body = (certificates[j]!.textContent ?? '').replace(/\s+/g, '');
       if (body) found.push(body);
     }
   }
@@ -202,6 +202,7 @@ async function idpInitiatedSsoTo(acsUrl: string): Promise<string> {
       headers,
     })
   ).json()) as { id: string; attributes: Record<string, string> }[];
+  if (!client) throw new Error('Keycloak has no client uaa-sp');
   client.attributes = {
     ...client.attributes,
     saml_idp_initiated_sso_url_name: 'uaa-sp',
@@ -343,12 +344,12 @@ describeBoth('SAML providers with Keycloak as the identity provider', () => {
 
     expect(tokens.authorizationToken).toBe('SAP_SESSIONID=stand');
     // Keycloak posts to the ACS the provider's AuthnRequest named…
-    expect(delivered[0].acsUrl).toBe(acsUrl);
+    expect(delivered[0]!.acsUrl).toBe(acsUrl);
     // …and the cookie provider gets exactly what Keycloak issued.
-    expect(received).toEqual([delivered[0].samlResponse]);
+    expect(received).toEqual([delivered[0]!.samlResponse]);
 
     const doc = new DOMParser().parseFromString(
-      Buffer.from(received[0], 'base64').toString('utf8'),
+      Buffer.from(received[0]!, 'base64').toString('utf8'),
       'text/xml',
     );
     const text = (name: string) =>

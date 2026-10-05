@@ -204,7 +204,12 @@ function createValidator(
       const direct = rootIsResponse
         ? directChildren(root, SAML_NS, 'Assertion')
         : [];
-      if (rootIsResponse && direct.length === 0) {
+      // 3c. Everything below is read from `assertion` and nowhere else: the
+      // bare root Assertion, or the Response's single direct-child one —
+      // either the signed element itself or, when the Response is signed,
+      // inside it.
+      const assertion = rootIsResponse ? direct[0] : root;
+      if (assertion === undefined) {
         return fail(
           'signedNode',
           'the response carries no direct-child saml:Assertion',
@@ -225,7 +230,7 @@ function createValidator(
       // nested in Advice whenever its signature precedes the outer one's —
       // and a covered element anywhere but here is the wrapping attack.
       const target =
-        require === 'response' || rootIsAssertion ? root : direct[0];
+        require === 'response' || rootIsAssertion ? root : assertion;
       const signed = covered.find((element) => element === target);
       if (!signed) {
         return fail(
@@ -234,11 +239,6 @@ function createValidator(
         );
       }
 
-      // 3c. Everything below is read from `assertion` and nowhere else: the
-      // bare root Assertion, or the Response's single direct-child one —
-      // either the signed element itself or, when the Response is signed,
-      // inside it.
-      const assertion = rootIsAssertion ? root : direct[0];
       // 3d. Nothing assertion-shaped outside the one read. Wherever the
       // signature sits, the payload travels on whole — Saml2PureProvider hands
       // it to the cookie provider — so an Assertion or EncryptedAssertion in
@@ -337,9 +337,10 @@ function createValidator(
             'the response must carry at most one saml:Issuer',
           );
         }
+        const [responseIssuer] = responseIssuers;
         if (
-          responseIssuers.length === 1 &&
-          (responseIssuers[0].textContent ?? '') !== issuer
+          responseIssuer !== undefined &&
+          (responseIssuer.textContent ?? '') !== issuer
         ) {
           return fail(
             'issuer',
@@ -525,7 +526,8 @@ function directChild(
   // Not "the first": two siblings sharing a name is an ambiguity, and
   // resolving it silently in favour of the first is how a forged element comes
   // to be read in preference to a real one.
-  return found.length === 1 ? found[0] : null;
+  const [first] = found;
+  return found.length === 1 ? (first ?? null) : null;
 }
 
 /**
@@ -542,14 +544,15 @@ function requireOne(
   label: string,
 ): Element {
   const found = directChildren(parent, ns, local);
-  if (found.length === 0) return fail(check, `${holder} carries no ${label}`);
+  const [first] = found;
+  if (first === undefined) return fail(check, `${holder} carries no ${label}`);
   if (found.length > 1) {
     return fail(
       check,
       `${holder} carries ${found.length} ${label}; exactly one is allowed`,
     );
   }
-  return found[0];
+  return first;
 }
 
 /** Where the assertion-shaped elements of a document sit relative to the one read. */
@@ -679,7 +682,8 @@ function readConfirmation(
   }
   // 2.
   const data = directChildren(confirmation, SAML_NS, 'SubjectConfirmationData');
-  if (data.length === 0) {
+  const [only] = data;
+  if (only === undefined) {
     return { reason: 'carries no SubjectConfirmationData' };
   }
   if (data.length > 1) {
@@ -687,7 +691,6 @@ function readConfirmation(
       reason: `carries ${data.length} SubjectConfirmationData; exactly one is allowed`,
     };
   }
-  const only = data[0];
   // 3. Option B: an expected ID must be matched exactly; no expected ID — an
   // IdP-initiated login — means the attribute must not be there at all.
   if (context.expectedInResponseTo === undefined) {

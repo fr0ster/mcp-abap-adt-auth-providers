@@ -25,6 +25,8 @@ export function parseXsdDateTime(
   if (!m) return null;
 
   const [, y, mo, d, h, mi, s, fraction, zone] = m;
+  // The zone group is not optional, so a match always carries one.
+  if (zone === undefined) return null;
   const year = Number(y);
   const month = Number(mo);
   const day = Number(d);

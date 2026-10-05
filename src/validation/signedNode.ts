@@ -106,8 +106,8 @@ export function resolveSignedElements(
   // transform the later one changes the bytes the earlier one's digest
   // covered — so no separate rule guards against it.
   const covered: Element[] = [];
-  for (let i = 0; i < signatures.length; i++) {
-    covered.push(resolveOne(xml, doc, signatures[i], certificates));
+  for (const signature of signatures) {
+    covered.push(resolveOne(xml, doc, signature, certificates));
   }
   return covered;
 }
@@ -164,7 +164,8 @@ function resolveOne(
   // reference: two would be two candidate answers to "what is signed", the
   // ambiguity this module exists to remove.
   const references = signatureNode.getElementsByTagNameNS(DSIG_NS, 'Reference');
-  if (references.length === 0) {
+  const reference = references.item(0);
+  if (!reference) {
     throw new Error('the signature carries no ds:Reference');
   }
   if (references.length > 1) {
@@ -172,7 +173,7 @@ function resolveOne(
       `the signature carries ${references.length} ds:Reference; exactly one is allowed`,
     );
   }
-  const uri = references[0].getAttribute('URI') ?? '';
+  const uri = reference.getAttribute('URI') ?? '';
   let referenced: Element | null = null;
 
   if (uri === '') {
@@ -187,9 +188,9 @@ function resolveOne(
   } else {
     const id = uri.slice(1);
     const elements = doc.getElementsByTagName('*');
-    for (let i = 0; i < elements.length; i++) {
-      if (elements[i].getAttribute('ID') === id) {
-        referenced = elements[i] as unknown as Element;
+    for (const element of elements) {
+      if (element.getAttribute('ID') === id) {
+        referenced = element as unknown as Element;
         break;
       }
     }

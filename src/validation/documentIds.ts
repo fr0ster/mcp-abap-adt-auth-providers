@@ -14,8 +14,8 @@ import type { Document, Element } from '@xmldom/xmldom';
 export function findDuplicateId(doc: Document): string | null {
   const seen = new Set<string>();
   const elements = doc.getElementsByTagName('*');
-  for (let i = 0; i < elements.length; i++) {
-    const id = elements[i].getAttribute('ID');
+  for (const element of elements) {
+    const id = element.getAttribute('ID');
     if (!id) continue;
     if (seen.has(id)) return id;
     seen.add(id);

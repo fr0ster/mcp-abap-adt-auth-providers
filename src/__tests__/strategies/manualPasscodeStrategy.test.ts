@@ -23,10 +23,10 @@ describe('manualPasscodeStrategy', () => {
     );
 
     expect(outcome.payload).toBe('abc123');
-    expect(String(info.mock.calls[0][0])).toContain(
+    expect(String(info.mock.calls[0]![0])).toContain(
       'https://uaa.example/passcode',
     );
-    expect(String(read.mock.calls[0][0])).toMatch(
+    expect(String(read.mock.calls[0]![0])).toMatch(
       /passcode|Temporary Authentication Code/i,
     );
   });

@@ -146,7 +146,7 @@ function mintedIdFrom(authorizationUrl: string): string {
   if (!match) {
     throw new Error('no ID attribute found in the inflated AuthnRequest XML');
   }
-  return match[1];
+  return match[1]!;
 }
 
 /** Whatever `factory` throws, so its `message` and `missingFields` can be asserted on. */

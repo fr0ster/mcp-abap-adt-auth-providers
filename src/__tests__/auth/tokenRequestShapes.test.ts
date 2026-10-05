@@ -69,7 +69,7 @@ function sentByPost(): Sent {
 /** The request of `axios(config)`. */
 function sentByConfig(expectTimeout = false): Sent & { timeout?: number } {
   expect(mockedAxios).toHaveBeenCalledTimes(1);
-  const config = mockedAxios.mock.calls[0][0] as {
+  const config = mockedAxios.mock.calls[0]![0] as {
     url: string;
     method: string;
     data: string;

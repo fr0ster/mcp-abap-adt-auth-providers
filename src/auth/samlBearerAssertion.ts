@@ -59,7 +59,8 @@ export function toBearerAssertion(payload: string): string {
   const assertions = children.filter((e) =>
     isElement(e, SAML_ASSERTION_NS, 'Assertion'),
   );
-  if (assertions.length === 0) {
+  const [assertion] = assertions;
+  if (assertion === undefined) {
     if (
       children.some((e) =>
         isElement(e, SAML_ASSERTION_NS, 'EncryptedAssertion'),
@@ -77,7 +78,6 @@ export function toBearerAssertion(payload: string): string {
     );
   }
 
-  const assertion = assertions[0];
   declareInheritedNamespaces(assertion);
   const serialized = new XMLSerializer().serializeToString(assertion);
   return Buffer.from(serialized, 'utf8').toString('base64url');

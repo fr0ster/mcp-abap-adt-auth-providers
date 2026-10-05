@@ -18,7 +18,7 @@ const ec384 = generateKeyPairSync('ec', { namedCurve: 'P-384' });
 const JWT_BEARER = 'urn:ietf:params:oauth:client-assertion-type:jwt-bearer';
 
 function parts(jwt: string) {
-  const [h, p, s] = jwt.split('.');
+  const [h = '', p = '', s = ''] = jwt.split('.');
   return {
     header: JSON.parse(Buffer.from(h, 'base64url').toString()),
     claims: JSON.parse(Buffer.from(p, 'base64url').toString()),
