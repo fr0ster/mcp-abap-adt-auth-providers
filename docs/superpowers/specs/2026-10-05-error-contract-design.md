@@ -532,7 +532,7 @@ the user 2026-10-05). The runtime half of the contract.
 ### 5.1 Dependencies and layout
 
 - `dependencies`: `@mcp-abap-adt/interfaces-auth ^5.0.0` — nothing else.
-  `devDependencies` as auth-stores: `@biomejs/biome`, `typescript`, `jest`,
+  `devDependencies` as auth-stores (`jest-util` included — ts-jest needs it under `install-strategy=nested`): `@biomejs/biome`, `typescript`, `jest`,
   `ts-jest`, `@types/jest`, `@types/node`.
 - Layout, mirroring the single-package repositories (auth-stores,
   auth-providers): `package.json` (`main: dist/index.js`, `types:
