@@ -573,7 +573,8 @@ public client that sends only `client_id`.
   `ClientAuthenticationResultError`, refused as *the client authentication
   returned a request that cannot be sent*. Only `client_secret`,
   `client_assertion` and a Basic credential are known to be secrets and
-  redacted from an error body. Every secret is redacted as sent, encoded —
+  redacted from what the server said — which, since 5.4.2, reaches only one
+  `debug` line through the provider's logger, never a thrown error. Every secret is redacted as sent, encoded —
   each character, unreserved ones included, as itself or percent-escaped in
   either case, a space also as `+` — and form-decoded (the whole value: `&`
   and `=` are part of it, a malformed `%` stays), and any base64 in the body
@@ -701,8 +702,13 @@ const user = new OidcPasswordProvider({
   (`Request failed with status code N`, or `the token request failed (<code>)`
   when no response came), and a `response` of `status`, an empty `statusText`
   (the reason phrase is the server's free text), empty `headers` and the
-  server's body reduced to `error`, `error_description` and `error_uri`, with
-  every secret the request sent redacted.
+  server's body reduced to `error` when it is a registered OAuth code
+  (`err.response.data.error` still reads `invalid_grant`), and to `{}`
+  otherwise. Since 5.4.2 the server's `error_description` and `error_uri` are
+  on no thrown error: they go, with every secret the request carried
+  redacted, to one `debug` line through the provider's logger (`<site>: the
+  token endpoint said`, with `status`, `error`, `error_description`,
+  `error_uri`), and nowhere without one.
 
 #### `clientSecretBasic`'s `encoding`
 
@@ -1807,10 +1813,12 @@ const provider = new UaaPasscodeProvider({
 
 The exchange is the password grant with `passcode` instead of a username and
 password — a UAA extension, not an RFC. A code is single-use; a mistyped or
-spent one fails with `Passcode exchange failed (401): "unauthorized": "Invalid passcode"`
-— the server's `error` and `error_description`, with the passcode, the client
-secret, the Basic credential sent without a strategy and what a
-client-authentication strategy sent redacted if the server echoes them.
+spent one fails with `Passcode exchange failed (401)` — the message names the
+status, and the OAuth `error` only when it is a registered code (UAA's
+`unauthorized` is not). What UAA said (`"unauthorized"`, `"Invalid passcode"`)
+is in the provider logger's `debug` line, with the passcode, the client
+secret, the Basic credential and what a client-authentication strategy sent
+redacted if the server echoes them.
 
 #### Device flow prompts
 
@@ -2076,8 +2084,9 @@ try {
 
 A failed token request throws without the request it sent — no form body, no
 `Authorization` header, no TLS agent — and with the server's body reduced to
-`error`, `error_description` and `error_uri`, every secret the request sent
-redacted.
+its `error` when that is a registered OAuth code; the server's
+`error_description` and `error_uri` go only to the provider logger's `debug`
+line, every secret the request sent redacted (since 5.4.2).
 
 #### Relaying a refusal: `refusalWords`
 
@@ -2657,7 +2666,7 @@ Example output:
 ```
 
 **Logging Features**:
-- **No tokens in logs**: a token the provider holds or sent is never logged, not even in part. A log line carries only `<redacted, N chars>` (since 4.1.2; earlier versions logged a short refresh token whole). A token endpoint's error body contributes only `error` and `error_description`, with the request's secrets (the client's Basic credential included) and anything shaped like a JWT redacted. An `error` that is a registered OAuth error code (`invalid_grant`, `authorization_pending`, `slow_down`, …) is kept verbatim: it is a protocol word, and the device poll reads it. A new opaque token that a server writes into `error_description` cannot be recognised and passes through, capped at 512 characters.
+- **No tokens in logs**: a token the provider holds or sent is never logged, not even in part. A log line carries only `<redacted, N chars>` (since 4.1.2; earlier versions logged a short refresh token whole). A token endpoint's error body contributes `error`, `error_description` and `error_uri` to one `debug` line only, with the request's secrets (the client's Basic credential included) and anything shaped like a JWT redacted; a thrown error carries only the status and a registered `error` (since 5.4.2). An `error` that is a registered OAuth error code (`invalid_grant`, `authorization_pending`, `slow_down`, …) is kept verbatim: it is a protocol word, and the device poll reads it. A new opaque token that a server writes into `error_description` cannot be recognised and passes through, capped at 512 characters.
 - **No error message in logs**: a log line about a thrown value — a refresh that failed, a strategy, loader, presenter, validator, `onTokens`, browser launcher or SNC locator/probe that threw — carries only the words its refusal would (fixed per error class, an allowlisted TLS or system code, else `unknown error`) and the HTTP status when there is one, never the error's message, `cause` or stack: a consumer's collaborator may throw text holding a key, a passphrase or a token. Diagnose a collaborator's failure where it throws, not from this package's log.
 - **Date Formatting**: Expiration dates are displayed in readable format (YYYY-MM-DD HH:MM:SS UTC) instead of ISO format
 - **Browser Information**: Logs browser type and authorization URL for debugging

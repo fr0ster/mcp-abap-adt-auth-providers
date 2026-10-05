@@ -9,6 +9,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [5.4.2] - 2026-10-05
 
+### Changed
+
+- **The token endpoint's free text no longer reaches a thrown error, on
+  either path.** A server's `error_description` and `error_uri` are its own
+  text: a misbehaving or hostile one can echo any secret of the request in
+  them, in encodings no redaction can enumerate (the Fixed items below). So a
+  thrown error now carries only safe facts: a `TokenEndpointError`'s message
+  is `<label> (<status>)`, plus `: <code>` when the OAuth `error` is a
+  registered code (`Token refresh failed (400): invalid_grant`), and the
+  reduced `AxiosError`'s `response.data` keeps only that registered `error` —
+  `err.response.data.error` still reads it — and is `{}` otherwise. The
+  description and URI, redacted with everything the request carried, go to
+  one `debug` line through the provider's logger (`<site>: the token endpoint
+  said`, `{ status, error, error_description, error_uri }`), not for the
+  device poll's `authorization_pending` / `slow_down`; no logger, no line; a
+  logger that throws is ignored. `refreshJwtToken` and
+  `getTokenWithClientCredentials` (internal) take the provider's logger for
+  it. The UAA code exchange's `error` line for a `200` without
+  `access_token` names the status and a registered code only; what the server
+  said goes to the same `debug` line. A consumer that matched words of the
+  server's description in a message must read the `debug` line instead.
+
 ### Fixed
 
 - **Security: a server echoing the Basic header could expose the client
