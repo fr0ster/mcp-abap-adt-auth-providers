@@ -8,6 +8,7 @@ import type {
 } from '@mcp-abap-adt/interfaces-auth';
 import { AUTH_TYPE_AUTHORIZATION_CODE } from '@mcp-abap-adt/interfaces-auth';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
+import { asContract } from '../auth/contractShape';
 import { discoverOidc, mtlsAlias } from '../auth/oidcDiscovery';
 import {
   initiateDeviceAuthorization,
@@ -30,20 +31,20 @@ import {
 export interface OidcDeviceFlowProviderConfig
   extends TokenProviderHooks,
     ClientAuthenticationConfig {
-  issuerUrl?: string;
+  issuerUrl?: string | undefined;
   clientId: string;
-  clientSecret?: string;
-  scopes?: string[];
-  deviceAuthorizationEndpoint?: string;
-  tokenEndpoint?: string;
-  accessToken?: string;
-  refreshToken?: string;
+  clientSecret?: string | undefined;
+  scopes?: string[] | undefined;
+  deviceAuthorizationEndpoint?: string | undefined;
+  tokenEndpoint?: string | undefined;
+  accessToken?: string | undefined;
+  refreshToken?: string | undefined;
   /**
    * When `accessToken` expires (epoch ms), for a token that carries no `exp`
    * of its own. A JWT's `exp` wins; without either the seed counts as expired.
    */
-  expiresAt?: number;
-  logger?: ILogger;
+  expiresAt?: number | undefined;
+  logger?: ILogger | undefined;
   /**
    * How the user learns the verification URL and code. Required — see the
    * static factories for the usual choice.
@@ -158,13 +159,13 @@ export class OidcDeviceFlowProvider extends BaseTokenProvider {
       ),
     );
 
-    return {
+    return asContract<ITokenResult>({
       authorizationToken: tokens.accessToken,
       refreshToken: tokens.refreshToken,
       authType: AUTH_TYPE_AUTHORIZATION_CODE,
       expiresIn: tokens.expiresIn,
       tokenType: 'jwt',
-    };
+    });
   }
 
   protected async performRefresh(): Promise<ITokenResult> {
@@ -203,12 +204,12 @@ export class OidcDeviceFlowProvider extends BaseTokenProvider {
       ),
     );
 
-    return {
+    return asContract<ITokenResult>({
       authorizationToken: tokens.accessToken,
       refreshToken: tokens.refreshToken || this.refreshToken,
       authType: AUTH_TYPE_AUTHORIZATION_CODE,
       expiresIn: tokens.expiresIn,
       tokenType: 'jwt',
-    };
+    });
   }
 }

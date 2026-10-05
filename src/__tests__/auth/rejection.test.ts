@@ -5,7 +5,9 @@ import { readRejection } from '../../auth/rejection';
 const at = (
   status: number | undefined,
   error: unknown = new Error('SECRET'),
-): IAuthRejection => ({ at: 'request', status, error });
+): IAuthRejection =>
+  // As a consumer builds it: `status: undefined` present when there is none.
+  ({ at: 'request', status, error }) as IAuthRejection;
 
 describe('readRejection — only a refused credential is the credential', () => {
   it('401 is the credential', () => {

@@ -31,7 +31,9 @@ export function parseRegQuery(
 ): string | undefined {
   for (const line of output.split(/\r?\n/)) {
     const match = /^\s+(\S.*?)\s+REG_\w+\s+(.*?)\s*$/.exec(line);
-    if (match && match[1].toLowerCase() === name.toLowerCase()) return match[2];
+    if (!match) continue;
+    const [, valueName, data] = match;
+    if (valueName?.toLowerCase() === name.toLowerCase()) return data;
   }
   return undefined;
 }

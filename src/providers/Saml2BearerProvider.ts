@@ -5,12 +5,14 @@
  */
 
 import type {
+  AssertionContext,
   IAssertionValidator,
   ITokenResult,
   OAuth2GrantType,
 } from '@mcp-abap-adt/interfaces-auth';
 import { AUTH_TYPE_SAML2_BEARER } from '@mcp-abap-adt/interfaces-auth';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
+import { asContract } from '../auth/contractShape';
 import {
   exchangeSamlAssertion,
   refreshSamlBearerToken,
@@ -41,14 +43,14 @@ export interface Saml2BearerProviderConfig
     Saml2BearerExchangeConfig,
     TokenProviderHooks,
     ClientAuthenticationConfig {
-  logger?: ILogger;
-  accessToken?: string;
-  refreshToken?: string;
+  logger?: ILogger | undefined;
+  accessToken?: string | undefined;
+  refreshToken?: string | undefined;
   /**
    * When `accessToken` expires (epoch ms), for a token that carries no `exp`
    * of its own. A JWT's `exp` wins; without either the seed counts as expired.
    */
-  expiresAt?: number;
+  expiresAt?: number | undefined;
 }
 
 export class Saml2BearerProvider extends BaseTokenProvider {
@@ -105,13 +107,16 @@ export class Saml2BearerProvider extends BaseTokenProvider {
     // Validation establishes trust before anything reaches the token
     // endpoint; it does not change what is sent beyond toBearerAssertion's
     // conversion below.
-    await this.validator.validate(payload, {
-      expectedInResponseTo: requestId,
-      audience: this.config.spEntityId,
-      acsUrl,
-      expectedIssuer: this.config.idpEntityId,
-      logger: this.logger,
-    });
+    await this.validator.validate(
+      payload,
+      asContract<AssertionContext>({
+        expectedInResponseTo: requestId,
+        audience: this.config.spEntityId,
+        acsUrl,
+        expectedIssuer: this.config.idpEntityId,
+        logger: this.logger,
+      }),
+    );
     const tokenUrl = resolveTokenUrl(this.config);
     // RFC 7522 takes one base64url Assertion; a login delivers the whole
     // Response in standard base64, which a conforming endpoint refuses.
@@ -124,13 +129,13 @@ export class Saml2BearerProvider extends BaseTokenProvider {
       await this.requestAuth(),
     );
 
-    return {
+    return asContract<ITokenResult>({
       authorizationToken: tokens.accessToken,
       refreshToken: tokens.refreshToken,
       authType: AUTH_TYPE_SAML2_BEARER,
       expiresIn: tokens.expiresIn,
       tokenType: 'jwt',
-    };
+    });
   }
 
   /**
@@ -152,12 +157,12 @@ export class Saml2BearerProvider extends BaseTokenProvider {
       await this.requestAuth(),
     );
 
-    return {
+    return asContract<ITokenResult>({
       authorizationToken: tokens.accessToken,
       refreshToken: tokens.refreshToken || this.refreshToken,
       authType: AUTH_TYPE_SAML2_BEARER,
       expiresIn: tokens.expiresIn,
       tokenType: 'jwt',
-    };
+    });
   }
 }

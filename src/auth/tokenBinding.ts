@@ -24,11 +24,11 @@ export type TokenBinding =
 const JWT_SHAPE = /^[A-Za-z0-9_-]+\.([A-Za-z0-9_-]+)\.[A-Za-z0-9_-]*$/;
 
 export function readBinding(token: string): TokenBinding {
-  const match = JWT_SHAPE.exec(token);
-  if (!match) return { state: 'unknown' };
+  const encoded = JWT_SHAPE.exec(token)?.[1];
+  if (encoded === undefined) return { state: 'unknown' };
   let payload: unknown;
   try {
-    payload = JSON.parse(Buffer.from(match[1], 'base64url').toString('utf8'));
+    payload = JSON.parse(Buffer.from(encoded, 'base64url').toString('utf8'));
   } catch {
     return { state: 'unknown' };
   }

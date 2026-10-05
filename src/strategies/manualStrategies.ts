@@ -19,14 +19,14 @@ import { DEFAULT_CALLBACK_PORT } from './BrowserCallbackStrategy';
 
 export interface ManualStrategyOptions {
   /** Must match what the authorization request advertises and the exchange sends. */
-  redirectUri?: string;
+  redirectUri?: string | undefined;
   /**
    * Where the pasted value comes from. Defaults to an interactive stdin read.
    * The signal aborts when the timeout expires or the strategy is disposed.
    */
-  read?: (prompt: string, signal: AbortSignal) => Promise<string>;
+  read?: ((prompt: string, signal: AbortSignal) => Promise<string>) | undefined;
   /** Milliseconds before the read is abandoned. Absent: no deadline — the consumer's choice. */
-  timeoutMs?: number;
+  timeoutMs?: number | undefined;
 }
 
 const defaultRedirectUri = () =>

@@ -87,7 +87,7 @@ interface SentConfig {
 
 function sent(index = 0): SentConfig {
   expect(mockedAxios.post).not.toHaveBeenCalled();
-  return mockedAxios.mock.calls[index][0] as SentConfig;
+  return mockedAxios.mock.calls[index]![0] as SentConfig;
 }
 
 const bodyOf = (config: SentConfig) =>
@@ -160,7 +160,7 @@ describe.each(SITES)('$name with a client authentication', (site) => {
   it('names the token endpoint in the draft: its own endpoint, or for the device initiation the one it was given', async () => {
     const strategy = returning({});
     await site.run({ strategy, tokenEndpoint: 'https://idp/the-token' });
-    expect(strategy.drafts[0].tokenEndpoint).toBe(
+    expect(strategy.drafts[0]!.tokenEndpoint).toBe(
       site.grantType === 'device_authorization'
         ? 'https://idp/the-token'
         : site.endpoint,
@@ -171,16 +171,16 @@ describe.each(SITES)('$name with a client authentication', (site) => {
     const strategy = returning({});
     await site.run({ strategy });
     if (site.grantType === 'device_authorization') {
-      expect('tokenEndpoint' in strategy.drafts[0]).toBe(false);
+      expect('tokenEndpoint' in strategy.drafts[0]!).toBe(false);
     } else {
-      expect(strategy.drafts[0].tokenEndpoint).toBe(site.endpoint);
+      expect(strategy.drafts[0]!.tokenEndpoint).toBe(site.endpoint);
     }
   });
 
   it('passes the mTLS alias it was given in the draft', async () => {
     const strategy = returning({});
     await site.run({ strategy, mtlsEndpoint: 'https://mtls.idp/token' });
-    expect(strategy.drafts[0].mtlsEndpoint).toBe('https://mtls.idp/token');
+    expect(strategy.drafts[0]!.mtlsEndpoint).toBe('https://mtls.idp/token');
   });
 
   it.each([

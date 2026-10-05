@@ -513,7 +513,7 @@ describe('a reason phrase that holds a secret', () => {
       async (_name, index) => {
         let thrown: unknown;
         try {
-          await sites(withAuth)[index][1]();
+          await sites(withAuth)[index]![1]();
         } catch (error) {
           thrown = error;
         }

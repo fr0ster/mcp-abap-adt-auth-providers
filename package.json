@@ -1,6 +1,6 @@
 {
   "name": "@mcp-abap-adt/auth-providers",
-  "version": "5.4.0",
+  "version": "5.4.1",
   "description": "Every IAuthProvider for SAP ABAP ADT: the credentials a process delegates to, and the token providers behind them",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -41,7 +41,7 @@
     "chrono": "./tools/version-stats.sh",
     "clean": "rm -rf dist tsconfig.tsbuildinfo tsconfig.build.tsbuildinfo",
     "lint": "npx biome check --write src",
-    "lint:check": "npx biome check src",
+    "lint:check": "npx biome check --error-on-warnings src",
     "format": "npx biome format --write src",
     "build": "npm run --silent clean && npx biome check src --diagnostic-level=error && npx tsc -p tsconfig.build.json",
     "build:fast": "npx tsc -p tsconfig.build.json",

@@ -69,7 +69,7 @@ function sentByPost(): Sent {
 /** The request of `axios(config)`. */
 function sentByConfig(expectTimeout = false): Sent & { timeout?: number } {
   expect(mockedAxios).toHaveBeenCalledTimes(1);
-  const config = mockedAxios.mock.calls[0][0] as {
+  const config = mockedAxios.mock.calls[0]![0] as {
     url: string;
     method: string;
     data: string;
@@ -90,7 +90,7 @@ function sentByConfig(expectTimeout = false): Sent & { timeout?: number } {
     method: config.method,
     body: Object.fromEntries(new URLSearchParams(config.data)),
     headers: config.headers,
-    timeout: config.timeout,
+    ...(config.timeout === undefined ? {} : { timeout: config.timeout }),
   };
 }
 

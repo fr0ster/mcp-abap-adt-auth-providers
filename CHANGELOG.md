@@ -7,6 +7,94 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [5.4.1] - 2026-10-05
+
+### Changed
+
+- **A stricter compiler.** `tsconfig.json` adds `noImplicitReturns`,
+  `noFallthroughCasesInSwitch`, `noImplicitOverride`,
+  `noUncheckedIndexedAccess` and `exactOptionalPropertyTypes`, for the source
+  and the tests alike. Every error was fixed on its merits: an index that may
+  be absent is read once and checked, never asserted.
+- **Optional fields accept an explicit `undefined`.** No runtime shape
+  changed: every object this package returns or hands to a strategy, a
+  callback server, a validator, a presenter or `onTokens` carries exactly the
+  keys it carried in 5.4.0 — an optional field without a value is present as
+  `undefined` (`refreshToken: undefined`), which a consumer merging
+  `{ ...stored, ...result }` relies on; `resultShapes.test.ts` pins it. For
+  the contract types of `@mcp-abap-adt/interfaces-auth`, which declare
+  `?: T`, one helper (`asContract`, internal) states that shape. The exported
+  declarations widened, each field from `?: T` to `?: T | undefined`. No
+  consumer without `exactOptionalPropertyTypes` stops compiling. A consumer
+  with it that assigns one of these values to a type of its own declared
+  `?: T` must widen that type to `?: T | undefined` — above all where it reads
+  what the package hands it: `DeviceCodePrompt` (a presenter),
+  `OidcCallbackResult` (a custom OIDC callback server or strategy), and
+  `BaseTokenProvider`'s protected `authorizationToken`, `refreshToken`,
+  `expiresAt`, `logger` and `clientAuthentication` (a subclass); the config
+  types are written by a consumer, rarely read. The widened fields:
+  - `AuthorizationCodeProviderConfig`: `clientSecret`, `authorizationUrl`,
+    `accessToken`, `refreshToken`, `expiresAt`, `logger`
+  - `ClientCredentialsProviderConfig`: `clientSecret`, `logger`
+  - `OidcBrowserProviderConfig`: `issuerUrl`, `clientSecret`, `scopes`,
+    `authorizationEndpoint`, `tokenEndpoint`, `accessToken`, `refreshToken`,
+    `expiresAt`, `logger`
+  - `OidcDeviceFlowProviderConfig`: `issuerUrl`, `clientSecret`, `scopes`,
+    `deviceAuthorizationEndpoint`, `tokenEndpoint`, `accessToken`,
+    `refreshToken`, `expiresAt`, `logger`
+  - `OidcPasswordProviderConfig`: `issuerUrl`, `clientSecret`, `scopes`,
+    `tokenEndpoint`, `accessToken`, `refreshToken`, `expiresAt`, `logger`
+  - `OidcTokenExchangeProviderConfig`: `issuerUrl`, `clientSecret`, `scope`,
+    `audience`, `actorToken`, `actorTokenType`, `tokenEndpoint`,
+    `accessToken`, `refreshToken`, `expiresAt`, `logger`
+  - `Saml2BearerProviderConfig` and `Saml2PureProviderConfig`: their own
+    `logger`, `accessToken`, `expiresAt` (and `refreshToken` for bearer), and
+    the shared SAML fields `acsUrl`, `relayState`, `authorizationUrl`,
+    `logger`, `idpEntityId`, `authnRequestId`, `idpInitiated` (bearer also
+    `tokenUrl`, `uaaUrl`, `clientId`, `clientSecret`)
+  - `UaaPasscodeProviderConfig`: `clientSecret`, `accessToken`,
+    `refreshToken`, `expiresAt`, `logger`
+  - `SncLogonProviderConfig`: `qop`, `myName`, `logger`
+  - `TokenProviderHooks.onTokens`; the `clientAuthentication` every token
+    provider config takes
+  - `SamlTrust`: `clockSkewMs`, `replayStore`; `ShippedValidatorOptions`:
+    `clockSkewMs`
+  - `CallbackStrategyOptions` (and `BrowserCallbackStrategyOptions`): `port`,
+    `timeoutMs`, `browser`, `callbackServer`, `openUrl`, `remoteHint`,
+    `signal`
+  - `ManualStrategyOptions`: `redirectUri`, `read`, `timeoutMs`;
+    `ExternalCodeStrategyOptions` and `StaticCodeStrategyOptions`:
+    `redirectUri`
+  - `PrivateKeyJwtConfig`: `keyId`, `audience`; `TlsClientCertificateConfig`:
+    `endpoint`
+  - `DeviceCodePrompt`: `verificationUriComplete`, `expiresInSeconds`;
+    `OidcCallbackResult`: `state`
+  - `BaseTokenProvider`'s protected `authorizationToken`, `refreshToken`,
+    `expiresAt`, `logger`, `clientAuthentication`
+- **The tests are type-checked.** `npm run test:check` now covers
+  `src/__tests__` too; `tsconfig.build.json` still leaves the tests out of
+  `dist`.
+- **CI gates on the type check and the lint.** The build-and-test job runs
+  `npm run test:check` and `npm run lint:check`.
+- **Lint.** `noExplicitAny` is an error outside the tests, and
+  `npm run lint:check` fails on a warning (`--error-on-warnings`); `src` has
+  no explicit `any`, no lint warning, and one `as unknown as` (the reduced
+  `AxiosResponse`, which has no `config` on purpose). `SsoProviderFactory`
+  stays a class holding only a static member — it is public — so
+  `noStaticOnlyClass` is off for that one file in `biome.json`.
+
+### Fixed
+
+- `SsoProviderFactory.create()` given a protocol and flow no provider has (a
+  consumer without types) threw an error whose message was the whole config
+  serialised — the client secret, a password, the tokens. Its message is now
+  fixed words: "Unsupported SSO provider config: no provider for this
+  protocol and flow".
+- `OidcDeviceFlowProvider`'s poll reads the status and OAuth `error` of what
+  a poll threw through `readSafely`, like every other read of a foreign
+  error: a thrown value whose property read throws (a Proxy) is rethrown as
+  it is, no longer replaced by the error its read raised.
+
 ## [5.4.0] - 2026-10-05
 
 ### Added

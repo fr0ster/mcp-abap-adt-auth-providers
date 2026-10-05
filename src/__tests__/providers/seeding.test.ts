@@ -174,7 +174,7 @@ describe('Saml2PureProvider seeded with stored cookies', () => {
     });
     await provider.getTokens();
     expect(onTokens).toHaveBeenCalledTimes(1);
-    expect(onTokens.mock.calls[0][0]).toMatchObject({
+    expect(onTokens.mock.calls[0]![0]).toMatchObject({
       authorizationToken: NEW_COOKIES,
       tokenType: 'saml',
       expiresAt: loginExpiresAt,

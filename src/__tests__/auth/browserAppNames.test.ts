@@ -32,7 +32,7 @@ async function appNameFor(browser: string): Promise<unknown> {
   openMock.mockClear();
   await launchBrowser(URL, browser, CALLBACK, () => {}, null);
   expect(openMock).toHaveBeenCalledTimes(1);
-  const opts = openMock.mock.calls[0][1] as { app?: { name?: unknown } };
+  const opts = openMock.mock.calls[0]![1] as { app?: { name?: unknown } };
   return opts?.app?.name;
 }
 

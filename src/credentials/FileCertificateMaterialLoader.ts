@@ -4,6 +4,7 @@ import type {
   ICertificateMaterialLoader,
   ISapConfig,
 } from '@mcp-abap-adt/interfaces-auth-sap';
+import { asContract } from '../auth/contractShape';
 import { ValidationError } from '../errors/TokenProviderErrors';
 
 export class FileCertificateMaterialLoader
@@ -19,17 +20,17 @@ export class FileCertificateMaterialLoader
       );
     }
     if (hasPfx) {
-      return {
+      return asContract<ICertificateMaterial>({
         pfx: await readFile(config.certPfxPath as string),
         passphrase: config.certPassphrase,
-      };
+      });
     }
     if (config.certPath && config.certKeyPath) {
-      return {
+      return asContract<ICertificateMaterial>({
         cert: await readFile(config.certPath),
         key: await readFile(config.certKeyPath),
         passphrase: config.certPassphrase,
-      };
+      });
     }
     throw new ValidationError(
       'Certificate auth requires certPfxPath OR (certPath AND certKeyPath).',

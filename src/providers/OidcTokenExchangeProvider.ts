@@ -8,6 +8,7 @@ import type {
 } from '@mcp-abap-adt/interfaces-auth';
 import { AUTH_TYPE_USER_TOKEN } from '@mcp-abap-adt/interfaces-auth';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
+import { asContract } from '../auth/contractShape';
 import { discoverOidc, mtlsAlias } from '../auth/oidcDiscovery';
 import { tokenExchange } from '../auth/oidcToken';
 import { RefreshError } from '../errors/TokenProviderErrors';
@@ -20,24 +21,24 @@ import {
 export interface OidcTokenExchangeProviderConfig
   extends TokenProviderHooks,
     ClientAuthenticationConfig {
-  issuerUrl?: string;
+  issuerUrl?: string | undefined;
   clientId: string;
-  clientSecret?: string;
+  clientSecret?: string | undefined;
   subjectToken: string;
   subjectTokenType: string;
-  scope?: string;
-  audience?: string;
-  actorToken?: string;
-  actorTokenType?: string;
-  tokenEndpoint?: string;
-  accessToken?: string;
-  refreshToken?: string;
+  scope?: string | undefined;
+  audience?: string | undefined;
+  actorToken?: string | undefined;
+  actorTokenType?: string | undefined;
+  tokenEndpoint?: string | undefined;
+  accessToken?: string | undefined;
+  refreshToken?: string | undefined;
   /**
    * When `accessToken` expires (epoch ms), for a token that carries no `exp`
    * of its own. A JWT's `exp` wins; without either the seed counts as expired.
    */
-  expiresAt?: number;
-  logger?: ILogger;
+  expiresAt?: number | undefined;
+  logger?: ILogger | undefined;
 }
 
 export class OidcTokenExchangeProvider extends BaseTokenProvider {
@@ -98,13 +99,13 @@ export class OidcTokenExchangeProvider extends BaseTokenProvider {
       ),
     );
 
-    return {
+    return asContract<ITokenResult>({
       authorizationToken: tokens.accessToken,
       refreshToken: tokens.refreshToken,
       authType: AUTH_TYPE_USER_TOKEN,
       expiresIn: tokens.expiresIn,
       tokenType: 'jwt',
-    };
+    });
   }
 
   /** No refresh grant: the base logs in once instead of refreshing. */

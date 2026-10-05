@@ -61,7 +61,7 @@ const thumbprint = (material: ICertificateMaterial): string =>
 const USER = { username: 'tester', password: 'tester' };
 
 const claims = (jwt: string): Record<string, unknown> =>
-  JSON.parse(Buffer.from(jwt.split('.')[1], 'base64url').toString('utf8'));
+  JSON.parse(Buffer.from(jwt.split('.')[1]!, 'base64url').toString('utf8'));
 const boundTo = (jwt: string): unknown =>
   (claims(jwt).cnf as Record<string, unknown> | undefined)?.['x5t#S256'];
 
@@ -94,7 +94,7 @@ interface Answer {
 function send(
   url: string,
   options: {
-    material?: ICertificateMaterial;
+    material?: ICertificateMaterial | undefined;
     headers?: Record<string, string>;
     form?: Record<string, string>;
   } = {},
@@ -150,9 +150,9 @@ describeKeycloak(
       const discovery = (await (
         await fetch(`${issuer}/.well-known/openid-configuration`)
       ).json()) as Record<string, string>;
-      tokenEndpoint = discovery.token_endpoint;
-      userinfoEndpoint = discovery.userinfo_endpoint;
-      deviceEndpoint = discovery.device_authorization_endpoint;
+      tokenEndpoint = discovery.token_endpoint!;
+      userinfoEndpoint = discovery.userinfo_endpoint!;
+      deviceEndpoint = discovery.device_authorization_endpoint!;
     });
 
     it('the stand’s two client certificates differ, so a thumbprint names one', () => {
@@ -230,7 +230,7 @@ describeKeycloak(
             ok: true,
           });
           [presented] = targets.logon.tls;
-          authorization = targets.request.headers.Authorization;
+          authorization = targets.request.headers.Authorization!;
         });
 
         it('establish() hands the logon client-a’s certificate, the one the token is bound to', () => {

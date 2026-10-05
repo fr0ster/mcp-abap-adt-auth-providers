@@ -9,9 +9,9 @@ import { announcer } from '../auth/announce';
 
 export interface DeviceCodePrompt {
   verificationUri: string;
-  verificationUriComplete?: string;
+  verificationUriComplete?: string | undefined;
   userCode: string;
-  expiresInSeconds?: number;
+  expiresInSeconds?: number | undefined;
 }
 
 export interface IDeviceCodePresenter {

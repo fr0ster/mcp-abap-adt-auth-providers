@@ -15,7 +15,7 @@
 - `npm run lint` / `npm run lint:check`: format+lint or lint-only with Biome.
 - `npm run format`: apply Biome formatting to `src/`.
 - `npm test`: run Jest with `ts-jest` in Node.
-- `npm run test:check`: TypeScript type check only.
+- `npm run test:check`: TypeScript type check only, the tests included.
 - `npm run chrono`: run `tools/version-stats.sh` for version stats.
 
 ## Coding Style & Naming Conventions

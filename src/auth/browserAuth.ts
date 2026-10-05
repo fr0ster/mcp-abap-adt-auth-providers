@@ -42,12 +42,12 @@ export function extractCode(input: string): string | null {
   if (!trimmed) return null;
 
   // Anywhere a `code=` query parameter appears (full URL or query string)
-  const fromQuery = trimmed.match(/[?&]code=([^&\s]+)/);
-  if (fromQuery) return decodeURIComponent(fromQuery[1]);
+  const fromQuery = trimmed.match(/[?&]code=([^&\s]+)/)?.[1];
+  if (fromQuery !== undefined) return decodeURIComponent(fromQuery);
 
   // Bare `code=XYZ`
-  const bareKv = trimmed.match(/^code=([^&\s]+)$/);
-  if (bareKv) return decodeURIComponent(bareKv[1]);
+  const bareKv = trimmed.match(/^code=([^&\s]+)$/)?.[1];
+  if (bareKv !== undefined) return decodeURIComponent(bareKv);
 
   // Otherwise treat the whole token as the code, but reject anything with
   // whitespace (clearly not a single code).
@@ -237,15 +237,18 @@ export async function launchBrowser(
     log?.debug('DISPLAY not set, using fallback DISPLAY=:0');
   }
 
-  type OpenFn = (url: string, opts?: unknown) => Promise<unknown>;
+  type OpenFn = (
+    url: string,
+    opts?: { app: { name: string | readonly string[] } },
+  ) => Promise<unknown>;
   let open: OpenFn | null = null;
   // `open`'s per-platform names for each common browser. An `app.name` is an
   // executable name, and Chrome is no `chrome` on Linux (`google-chrome`,
   // `google-chrome-stable`, …): handing `open` the bare name failed with ENOENT.
-  let appNames: Record<string, string | readonly string[]> = {};
+  let appNames: Partial<Record<string, string | readonly string[]>> = {};
   try {
     const openModule = await import('open');
-    open = openModule.default as unknown as OpenFn;
+    open = openModule.default;
     const apps = (openModule as { apps?: Record<string, string | string[]> })
       .apps;
     if (apps)

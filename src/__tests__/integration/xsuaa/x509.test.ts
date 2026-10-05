@@ -34,7 +34,7 @@ const unlessSet = LOCAL
 const claims = (jwt: string): Record<string, unknown> => {
   try {
     return JSON.parse(
-      Buffer.from(jwt.split('.')[1], 'base64url').toString('utf8'),
+      Buffer.from(jwt.split('.')[1]!, 'base64url').toString('utf8'),
     );
   } catch {
     return {};

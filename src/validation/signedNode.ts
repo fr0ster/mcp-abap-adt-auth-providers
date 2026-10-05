@@ -8,7 +8,7 @@
  */
 
 import { X509Certificate } from 'node:crypto';
-import type { Document, Element, Node as XmlNode } from '@xmldom/xmldom';
+import type { Document, Element } from '@xmldom/xmldom';
 import { SignedXml } from 'xml-crypto';
 
 const DSIG_NS = 'http://www.w3.org/2000/09/xmldsig#';
@@ -106,8 +106,8 @@ export function resolveSignedElements(
   // transform the later one changes the bytes the earlier one's digest
   // covered — so no separate rule guards against it.
   const covered: Element[] = [];
-  for (let i = 0; i < signatures.length; i++) {
-    covered.push(resolveOne(xml, doc, signatures[i], certificates));
+  for (const signature of signatures) {
+    covered.push(resolveOne(xml, doc, signature, certificates));
   }
   return covered;
 }
@@ -136,7 +136,7 @@ function resolveOne(
     // loadSignature throws for a malformed Signature, and xml-crypto's
     // message embeds the offending element: document text, so quoted.
     try {
-      verifier.loadSignature(signatureNode as unknown as XmlNode);
+      verifier.loadSignature(signatureNode);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       throw new Error(
@@ -164,7 +164,8 @@ function resolveOne(
   // reference: two would be two candidate answers to "what is signed", the
   // ambiguity this module exists to remove.
   const references = signatureNode.getElementsByTagNameNS(DSIG_NS, 'Reference');
-  if (references.length === 0) {
+  const reference = references.item(0);
+  if (!reference) {
     throw new Error('the signature carries no ds:Reference');
   }
   if (references.length > 1) {
@@ -172,14 +173,14 @@ function resolveOne(
       `the signature carries ${references.length} ds:Reference; exactly one is allowed`,
     );
   }
-  const uri = references[0].getAttribute('URI') ?? '';
+  const uri = reference.getAttribute('URI') ?? '';
   let referenced: Element | null = null;
 
   if (uri === '') {
     // An empty URI signs the whole document. It must still satisfy the
     // enveloping rule below — returning early here is exactly how a detached
     // signature with an empty reference walks straight past that rule.
-    referenced = doc.documentElement as unknown as Element;
+    referenced = doc.documentElement;
   } else if (!uri.startsWith('#')) {
     throw new Error(
       `the signature reference is not a same-document URI: ${quoteUntrusted(uri)}`,
@@ -187,9 +188,9 @@ function resolveOne(
   } else {
     const id = uri.slice(1);
     const elements = doc.getElementsByTagName('*');
-    for (let i = 0; i < elements.length; i++) {
-      if (elements[i].getAttribute('ID') === id) {
-        referenced = elements[i] as unknown as Element;
+    for (const element of elements) {
+      if (element.getAttribute('ID') === id) {
+        referenced = element;
         break;
       }
     }
@@ -207,7 +208,7 @@ function resolveOne(
   // does. It is the check @node-saml/node-saml makes, and the one whose
   // absence made every response @mcp-abap-adt/auth-mocks produced
   // unacceptable to a real library until it was fixed there.
-  if ((signatureNode.parentNode as unknown as Element | null) !== referenced) {
+  if (signatureNode.parentNode !== referenced) {
     throw new Error(
       'the signature is not inside the element it references, so it does not envelope it',
     );

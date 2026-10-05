@@ -27,6 +27,7 @@ import {
   certificateNotAfter,
   certificateThumbprint,
 } from '../auth/certificateMaterial';
+import { asContract } from '../auth/contractShape';
 import {
   loggedError,
   OK,
@@ -50,7 +51,7 @@ export interface TokenProviderHooks {
    * Best effort: a failure is logged by class name and does not fail the
    * authentication.
    */
-  onTokens?: (result: ITokenResult) => Promise<void>;
+  onTokens?: ((result: ITokenResult) => Promise<void>) | undefined;
 }
 
 /**
@@ -59,7 +60,7 @@ export interface TokenProviderHooks {
  * two ways of authenticating one client is a `ValidationError`.
  */
 export interface ClientAuthenticationConfig {
-  clientAuthentication?: IClientAuthentication;
+  clientAuthentication?: IClientAuthentication | undefined;
 }
 
 /** The certificate a provider presents for its lifetime, and its `x5t#S256`. */
@@ -121,25 +122,25 @@ export function storedExpiry(expiresAt: unknown): number | undefined {
 export abstract class BaseTokenProvider
   implements IRefreshableTokenProvider, IAuthProvider
 {
-  protected authorizationToken?: string;
-  protected refreshToken?: string;
-  protected expiresAt?: number; // timestamp in milliseconds
+  protected authorizationToken?: string | undefined;
+  protected refreshToken?: string | undefined;
+  protected expiresAt?: number | undefined; // timestamp in milliseconds
   protected tokenType?: 'jwt' | 'saml' | 'opaque';
-  protected logger?: ILogger;
-  private readonly onTokens?: TokenProviderHooks['onTokens'];
+  protected logger?: ILogger | undefined;
+  private readonly onTokens?: TokenProviderHooks['onTokens'] | undefined;
   /** The token last put on a request, so rejected() can tell a renewal from a repeat. */
-  private presented?: string;
+  private presented?: string | undefined;
   /** The renewal in flight; concurrent callers share it (one refresh, at most one login). */
-  private renewal?: Promise<ITokenResult>;
+  private renewal?: Promise<ITokenResult> | undefined;
   /** How the client authenticates to the authorization server, when configured. */
-  protected readonly clientAuthentication?: IClientAuthentication;
+  protected readonly clientAuthentication?: IClientAuthentication | undefined;
   /**
    * The strategy's TLS material and its thumbprint: set on first need, never
    * replaced (spec §4). A certificate that rotates is a new provider.
    */
   protected pinned?: PinnedCertificate;
   /** The pin attempt in flight; concurrent first needs share it. */
-  private pinning?: Promise<PinnedCertificate>;
+  private pinning?: Promise<PinnedCertificate> | undefined;
   /**
    * A held token bound elsewhere than the pinned certificate that a renewal
    * did not make usable, with the refusal that renewal produced: a renewal
@@ -152,7 +153,7 @@ export abstract class BaseTokenProvider
    * changes and by prepare(); rejected() renews regardless, once, and the
    * latest renewal's refusal is the one kept.
    */
-  private remembered?: { token: string; refusal: AuthOutcome };
+  private remembered?: { token: string; refusal: AuthOutcome } | undefined;
 
   constructor(config: BaseConfig = {}) {
     this.onTokens = config.onTokens;
@@ -392,7 +393,7 @@ export abstract class BaseTokenProvider
           ? Math.floor((this.expiresAt - Date.now()) / 1000)
           : undefined,
       });
-      return {
+      return asContract<ITokenResult>({
         authorizationToken,
         refreshToken: this.refreshToken,
         authType: this.getAuthType(),
@@ -401,7 +402,7 @@ export abstract class BaseTokenProvider
         expiresIn: this.expiresAt
           ? Math.floor((this.expiresAt - Date.now()) / 1000)
           : undefined,
-      };
+      });
     }
 
     return this.refreshTokens();
@@ -574,11 +575,11 @@ export abstract class BaseTokenProvider
   protected parseExpirationFromJWT(token: string): number | undefined {
     try {
       const parts = token.split('.');
-      if (parts.length !== 3) {
+      const payload = parts[1];
+      if (parts.length !== 3 || payload === undefined) {
         return undefined;
       }
 
-      const payload = parts[1];
       // Convert base64url to base64
       const base64 = payload.replace(/-/g, '+').replace(/_/g, '/');
       // Add padding if needed

@@ -22,7 +22,13 @@ import type {
   IAssertionValidator,
   ValidatedAssertion,
 } from '@mcp-abap-adt/interfaces-auth';
-import { type Document, type Element, XMLSerializer } from '@xmldom/xmldom';
+import {
+  type Document,
+  type Element,
+  type Node,
+  XMLSerializer,
+} from '@xmldom/xmldom';
+import { asContract } from '../auth/contractShape';
 import { parseStrictXml } from '../auth/strictXml';
 import {
   type AssertionCheck,
@@ -58,7 +64,7 @@ export interface ShippedValidatorOptions {
    */
   readonly idpCertificates: readonly string[];
   /** Tolerance for the time checks, in ms; default `0`. */
-  readonly clockSkewMs?: number;
+  readonly clockSkewMs?: number | undefined;
   /**
    * Where accepted assertions are recorded so a second presentation is refused
    * as a replay. Required: `defaultReplayStore` (process-wide, in memory) or a
@@ -105,7 +111,9 @@ function brand(validator: IAssertionValidator): IAssertionValidator {
 
 /** Whether this validator came from one of the two shipped factories. */
 export function isShippedValidator(validator: IAssertionValidator): boolean {
-  return (validator as unknown as Record<symbol, unknown>)[SHIPPED] === true;
+  const branded: IAssertionValidator & { readonly [SHIPPED]?: unknown } =
+    validator;
+  return branded[SHIPPED] === true;
 }
 
 export const createSignedResponseValidator = (
@@ -156,11 +164,11 @@ function createValidator(
       }
       let doc: Document;
       try {
-        doc = parseStrictXml(xml) as unknown as Document;
+        doc = parseStrictXml(xml);
       } catch {
         return fail('document', 'the SAMLResponse did not parse as XML');
       }
-      const root = doc.documentElement as unknown as Element | null;
+      const root = doc.documentElement;
       if (!root)
         return fail('document', 'the SAMLResponse did not parse as XML');
       const rootIsResponse =
@@ -204,7 +212,12 @@ function createValidator(
       const direct = rootIsResponse
         ? directChildren(root, SAML_NS, 'Assertion')
         : [];
-      if (rootIsResponse && direct.length === 0) {
+      // 3c. Everything below is read from `assertion` and nowhere else: the
+      // bare root Assertion, or the Response's single direct-child one —
+      // either the signed element itself or, when the Response is signed,
+      // inside it.
+      const assertion = rootIsResponse ? direct[0] : root;
+      if (assertion === undefined) {
         return fail(
           'signedNode',
           'the response carries no direct-child saml:Assertion',
@@ -225,7 +238,7 @@ function createValidator(
       // nested in Advice whenever its signature precedes the outer one's —
       // and a covered element anywhere but here is the wrapping attack.
       const target =
-        require === 'response' || rootIsAssertion ? root : direct[0];
+        require === 'response' || rootIsAssertion ? root : assertion;
       const signed = covered.find((element) => element === target);
       if (!signed) {
         return fail(
@@ -234,11 +247,6 @@ function createValidator(
         );
       }
 
-      // 3c. Everything below is read from `assertion` and nowhere else: the
-      // bare root Assertion, or the Response's single direct-child one —
-      // either the signed element itself or, when the Response is signed,
-      // inside it.
-      const assertion = rootIsAssertion ? root : direct[0];
       // 3d. Nothing assertion-shaped outside the one read. Wherever the
       // signature sits, the payload travels on whole — Saml2PureProvider hands
       // it to the cookie provider — so an Assertion or EncryptedAssertion in
@@ -337,9 +345,10 @@ function createValidator(
             'the response must carry at most one saml:Issuer',
           );
         }
+        const [responseIssuer] = responseIssuers;
         if (
-          responseIssuers.length === 1 &&
-          (responseIssuers[0].textContent ?? '') !== issuer
+          responseIssuer !== undefined &&
+          (responseIssuer.textContent ?? '') !== issuer
         ) {
           return fail(
             'issuer',
@@ -461,24 +470,22 @@ function createValidator(
         return fail('replay', 'this assertion has been presented before');
       }
 
-      return {
+      // Subject, then NameID — no `?? assertion` fallback, which would read a
+      // NameID from outside the Subject when the Subject is absent.
+      const subject = directChild(assertion, SAML_NS, 'Subject');
+      const nameId = subject
+        ? (directChild(subject, SAML_NS, 'NameID')?.textContent ?? undefined)
+        : undefined;
+      return asContract<ValidatedAssertion>({
         expiresAt,
         assertionId,
         issuer,
-        nameId: (() => {
-          // Subject, then NameID — no `?? assertion` fallback, which would
-          // read a NameID from outside the Subject when the Subject is absent.
-          const subject = directChild(assertion, SAML_NS, 'Subject');
-          return subject
-            ? (directChild(subject, SAML_NS, 'NameID')?.textContent ??
-                undefined)
-            : undefined;
-        })(),
+        nameId,
         raw: samlResponse,
         // The signed element, not the response: this is what a consumer may
         // parse without re-deriving what the signature covered.
         signedXml: new XMLSerializer().serializeToString(signed),
-      };
+      });
     },
   };
 }
@@ -499,13 +506,9 @@ function fail(check: AssertionCheck, message: string): never {
  */
 function directChildren(parent: Element, ns: string, local: string): Element[] {
   const out: Element[] = [];
-  const nodes = parent.childNodes;
-  for (let i = 0; i < nodes.length; i++) {
-    const node = nodes[i] as unknown as Element;
-    // nodeType 1 is ELEMENT_NODE; the constant is unavailable without the dom
-    // lib, which this project deliberately does not use.
+  for (const node of parent.childNodes) {
     if (
-      node.nodeType === 1 &&
+      isElementNode(node) &&
       node.namespaceURI === ns &&
       node.localName === local
     ) {
@@ -513,6 +516,14 @@ function directChildren(parent: Element, ns: string, local: string): Element[] {
     }
   }
   return out;
+}
+
+/**
+ * Whether the node is an element. nodeType 1 is ELEMENT_NODE; the constant is
+ * unavailable without the dom lib, which this project deliberately does not use.
+ */
+function isElementNode(node: Node): node is Element {
+  return node.nodeType === 1;
 }
 
 /** The single direct child with this name, or null when there is not exactly one. */
@@ -525,7 +536,8 @@ function directChild(
   // Not "the first": two siblings sharing a name is an ambiguity, and
   // resolving it silently in favour of the first is how a forged element comes
   // to be read in preference to a real one.
-  return found.length === 1 ? found[0] : null;
+  const [first] = found;
+  return found.length === 1 ? (first ?? null) : null;
 }
 
 /**
@@ -542,14 +554,15 @@ function requireOne(
   label: string,
 ): Element {
   const found = directChildren(parent, ns, local);
-  if (found.length === 0) return fail(check, `${holder} carries no ${label}`);
+  const [first] = found;
+  if (first === undefined) return fail(check, `${holder} carries no ${label}`);
   if (found.length > 1) {
     return fail(
       check,
       `${holder} carries ${found.length} ${label}; exactly one is allowed`,
     );
   }
-  return found[0];
+  return first;
 }
 
 /** Where the assertion-shaped elements of a document sit relative to the one read. */
@@ -563,14 +576,17 @@ type AssertionPlace = 'within' | 'outside' | 'inSignature';
  */
 function placeOfAssertions(doc: Document, assertion: Element): AssertionPlace {
   for (const [ns, local] of ASSERTION_SHAPED) {
-    const found = doc.getElementsByTagNameNS(ns, local);
-    for (let i = 0; i < found.length; i++) {
-      let node = found[i] as unknown as Element | null;
+    for (const element of doc.getElementsByTagNameNS(ns, local)) {
+      let node: Node | null = element;
       while (node && node !== assertion) {
-        if (node.localName === 'Signature' && node.namespaceURI === DSIG_NS) {
+        if (
+          isElementNode(node) &&
+          node.localName === 'Signature' &&
+          node.namespaceURI === DSIG_NS
+        ) {
           return 'inSignature';
         }
-        node = node.parentNode as unknown as Element | null;
+        node = node.parentNode;
       }
       if (!node) return 'outside';
     }
@@ -679,7 +695,8 @@ function readConfirmation(
   }
   // 2.
   const data = directChildren(confirmation, SAML_NS, 'SubjectConfirmationData');
-  if (data.length === 0) {
+  const [only] = data;
+  if (only === undefined) {
     return { reason: 'carries no SubjectConfirmationData' };
   }
   if (data.length > 1) {
@@ -687,7 +704,6 @@ function readConfirmation(
       reason: `carries ${data.length} SubjectConfirmationData; exactly one is allowed`,
     };
   }
-  const only = data[0];
   // 3. Option B: an expected ID must be matched exactly; no expected ID — an
   // IdP-initiated login — means the attribute must not be there at all.
   if (context.expectedInResponseTo === undefined) {

@@ -6,6 +6,7 @@
  */
 
 import type {
+  AuthorizationRequest,
   IAuthorizationStrategy,
   ITokenResult,
   OAuth2GrantType,
@@ -17,6 +18,7 @@ import {
   exchangeCodeForToken,
   getJwtAuthorizationUrl,
 } from '../auth/browserAuth';
+import { asContract } from '../auth/contractShape';
 import { refreshJwtToken } from '../auth/tokenRefresher';
 import { ValidationError } from '../errors/TokenProviderErrors';
 import { browserCallbackStrategy } from '../strategies';
@@ -33,10 +35,10 @@ export interface AuthorizationCodeProviderConfig
   uaaUrl: string;
   clientId: string;
   /** Required, unless `clientAuthentication` is given — never both. */
-  clientSecret?: string;
+  clientSecret?: string | undefined;
 
   /** Pre-built authorization URL. Carries its own redirect; see the guard below. */
-  authorizationUrl?: string;
+  authorizationUrl?: string | undefined;
 
   /**
    * How the login is conducted. Required — see the static factories for the
@@ -45,15 +47,15 @@ export interface AuthorizationCodeProviderConfig
   authorization: IAuthorizationStrategy<string>;
 
   // Optional: existing tokens (for the refresh scenario)
-  accessToken?: string;
-  refreshToken?: string;
+  accessToken?: string | undefined;
+  refreshToken?: string | undefined;
   /**
    * When `accessToken` expires (epoch ms), for a token that carries no `exp`
    * of its own. A JWT's `exp` wins; without either the seed counts as expired.
    */
-  expiresAt?: number;
+  expiresAt?: number | undefined;
 
-  logger?: ILogger;
+  logger?: ILogger | undefined;
 }
 
 /**
@@ -126,7 +128,7 @@ export class AuthorizationCodeProvider extends BaseTokenProvider {
     }
   }
 
-  async getTokens(): Promise<ITokenResult> {
+  override async getTokens(): Promise<ITokenResult> {
     return super.getTokens();
   }
 
@@ -184,7 +186,9 @@ export class AuthorizationCodeProvider extends BaseTokenProvider {
 
     const strategy = this.config.authorization;
 
-    const outcome = await strategy.authorize(request);
+    const outcome = await strategy.authorize(
+      asContract<AuthorizationRequest>(request),
+    );
 
     // The second net. A strategy that never called the builder — `staticCodeStrategy`
     // holds its payload already — passed the first check by not participating in
@@ -208,12 +212,12 @@ export class AuthorizationCodeProvider extends BaseTokenProvider {
       await this.requestAuth(),
     );
 
-    return {
+    return asContract<ITokenResult>({
       authorizationToken: result.accessToken,
       refreshToken: result.refreshToken,
       authType: AUTH_TYPE_AUTHORIZATION_CODE,
       expiresIn: this.calculateExpiresIn(result.accessToken),
-    };
+    });
   }
 
   protected async performRefresh(): Promise<ITokenResult> {
@@ -241,11 +245,11 @@ export class AuthorizationCodeProvider extends BaseTokenProvider {
 
     const expiresIn = this.calculateExpiresIn(result.accessToken);
 
-    return {
+    return asContract<ITokenResult>({
       authorizationToken: result.accessToken,
       refreshToken: result.refreshToken || this.refreshToken, // Keep old if new not provided
       authType: AUTH_TYPE_AUTHORIZATION_CODE,
       expiresIn,
-    };
+    });
   }
 }

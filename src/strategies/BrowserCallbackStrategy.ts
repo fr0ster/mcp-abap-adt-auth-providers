@@ -13,11 +13,13 @@ import type {
   AuthorizationRequest,
   CallbackServerFactory,
   IAuthorizationStrategy,
+  ICallbackServerOptions,
 } from '@mcp-abap-adt/interfaces-auth';
 import { announcer } from '../auth/announce';
 import { launchBrowser } from '../auth/browserAuth';
 import { CallbackScopeError } from '../auth/callbackScopeError';
 import { withBrowserCallbackServer } from '../auth/callbackServer';
+import { asContract } from '../auth/contractShape';
 import type { OidcCallbackResult } from '../auth/oidcBrowserAuth';
 import { withOidcCallbackServer } from '../auth/oidcBrowserAuth';
 import { loggedError } from '../auth/refusal';
@@ -38,23 +40,21 @@ export const DEFAULT_LOGIN_TIMEOUT_MS = 30_000;
 
 export interface CallbackStrategyOptions<TResult = string> {
   /** `0` binds an ephemeral port. Unusable where the IdP has a registered URI. */
-  port?: number;
-  timeoutMs?: number;
+  port?: number | undefined;
+  timeoutMs?: number | undefined;
   /** 'none' | 'headless' print the URL; 'auto' | 'system' | 'chrome' | … open it. */
-  browser?: string;
+  browser?: string | undefined;
   /**
    * The transport. Omitted means the one this package ships for the flow; a
    * consumer that already runs an HTTP server passes its own here and keeps
    * everything else — which is the point of the ready constructors existing at
    * all rather than forcing everyone through the class.
    */
-  callbackServer?: CallbackServerFactory<TResult>;
+  callbackServer?: CallbackServerFactory<TResult> | undefined;
   /** Receives the bound redirect URI too, since with `port: 0` nobody knew it earlier. */
-  openUrl?: (
-    url: string,
-    browser: string,
-    redirectUri: string,
-  ) => Promise<void>;
+  openUrl?:
+    | ((url: string, browser: string, redirectUri: string) => Promise<void>)
+    | undefined;
   /**
    * Extra guidance for 'none'/'headless', built from the URI actually bound —
    * "if your browser is elsewhere, do this instead".
@@ -64,8 +64,8 @@ export interface CallbackStrategyOptions<TResult = string> {
    * package supplies one only for the transport it ships, and never guesses on
    * behalf of an injected one.
    */
-  remoteHint?: (redirectUri: string) => string;
-  signal?: AbortSignal;
+  remoteHint?: ((redirectUri: string) => string) | undefined;
+  signal?: AbortSignal | undefined;
 }
 
 export interface BrowserCallbackStrategyOptions<TResult>
@@ -154,12 +154,12 @@ export class BrowserCallbackStrategy<TResult>
         );
       }
       return await this.options.callbackServer(
-        {
+        asContract<ICallbackServerOptions>({
           port,
           timeoutMs: this.options.timeoutMs ?? DEFAULT_LOGIN_TIMEOUT_MS,
           signal: controller.signal,
           logger: request.logger,
-        },
+        }),
         async (server) => {
           // Thrown before anything is opened: a redirect the provider cannot
           // honour must fail here, not as a callback that never arrives.

@@ -12,6 +12,7 @@ import type {
 import { AUTH_TYPE_CLIENT_CREDENTIALS } from '@mcp-abap-adt/interfaces-auth';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
 import { getTokenWithClientCredentials } from '../auth/clientCredentialsAuth';
+import { asContract } from '../auth/contractShape';
 import { RefreshError } from '../errors/TokenProviderErrors';
 import {
   BaseTokenProvider,
@@ -25,8 +26,8 @@ export interface ClientCredentialsProviderConfig
   uaaUrl: string;
   clientId: string;
   /** Required, unless `clientAuthentication` is given — never both. */
-  clientSecret?: string;
-  logger?: ILogger;
+  clientSecret?: string | undefined;
+  logger?: ILogger | undefined;
 }
 
 /**
@@ -63,7 +64,7 @@ export class ClientCredentialsProvider extends BaseTokenProvider {
     }
   }
 
-  async getTokens(): Promise<ITokenResult> {
+  override async getTokens(): Promise<ITokenResult> {
     return super.getTokens();
   }
 
@@ -79,12 +80,12 @@ export class ClientCredentialsProvider extends BaseTokenProvider {
       await this.requestAuth(),
     );
 
-    return {
+    return asContract<ITokenResult>({
       authorizationToken: result.accessToken,
       refreshToken: undefined, // client_credentials doesn't provide refresh token
       authType: AUTH_TYPE_CLIENT_CREDENTIALS,
       expiresIn: result.expiresIn,
-    };
+    });
   }
 
   /** No refresh grant: the base logs in once instead of refreshing. */

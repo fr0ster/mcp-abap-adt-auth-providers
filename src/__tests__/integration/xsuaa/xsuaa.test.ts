@@ -38,7 +38,7 @@ const itWithPasscode = PASSCODE ? it : it.skip;
 const ORIGIN = 'auth-providers-test-idp';
 
 const claims = (jwt: string): Record<string, unknown> =>
-  JSON.parse(Buffer.from(jwt.split('.')[1], 'base64url').toString('utf8'));
+  JSON.parse(Buffer.from(jwt.split('.')[1]!, 'base64url').toString('utf8'));
 
 /** Unsigned, never sent: only its `exp` is read, to force a refresh. */
 const expiredJwt = (): string => {

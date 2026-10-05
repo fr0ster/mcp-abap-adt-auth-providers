@@ -68,7 +68,7 @@ describe('nodeSncSystem reading the registry', () => {
       'InstallPath64',
     );
     expect(value).toBe('C:\\SLC\\');
-    const [file, args, options] = calls()[0];
+    const [file, args, options] = calls()[0]!;
     expect(file).toBe('D:\\WinDir\\System32\\reg.exe');
     expect(args).toEqual([
       'query',
@@ -84,7 +84,7 @@ describe('nodeSncSystem reading the registry', () => {
     asWindows();
     delete process.env.SystemRoot;
     await nodeSncSystem().readRegistryValue('HKLM\\X', 'Y');
-    expect(calls()[0][0]).toBe('C:\\Windows\\System32\\reg.exe');
+    expect(calls()[0]![0]).toBe('C:\\Windows\\System32\\reg.exe');
   });
 
   it('has no process listing', () => {

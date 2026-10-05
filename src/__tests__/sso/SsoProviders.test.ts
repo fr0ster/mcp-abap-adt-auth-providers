@@ -146,7 +146,7 @@ function mintedIdFrom(authorizationUrl: string): string {
   if (!match) {
     throw new Error('no ID attribute found in the inflated AuthnRequest XML');
   }
-  return match[1];
+  return match[1]!;
 }
 
 /** Whatever `factory` throws, so its `message` and `missingFields` can be asserted on. */
@@ -1725,6 +1725,35 @@ describe('Saml2 provider construction faults', () => {
     idpEntityId: 'urn:mock:idp',
     uaaUrl: 'https://uaa',
   };
+
+  // 5.4.0 read the brand with a plain property access, so an untyped
+  // consumer's non-object validator was taken for a custom one and the
+  // provider constructed; it must not throw now either.
+  it.each([
+    ['a string', 'str'],
+    ['a number', 42],
+  ])(
+    'a non-object assertionValidator (%s) is not a shipped one: the provider constructs',
+    (_label, value) => {
+      const assertionValidator = value as unknown as IAssertionValidator;
+      expect(
+        () =>
+          new Saml2PureProvider({
+            ...validPureConfig,
+            authorization: unusedAuthorization,
+            assertionValidator,
+          }),
+      ).not.toThrow();
+      expect(
+        () =>
+          new Saml2BearerProvider({
+            ...validBearerConfig,
+            authorization: unusedAuthorization,
+            assertionValidator,
+          }),
+      ).not.toThrow();
+    },
+  );
 
   it('Saml2PureProvider refuses construction when idpEntityId is missing', () => {
     const error = constructionError(() =>

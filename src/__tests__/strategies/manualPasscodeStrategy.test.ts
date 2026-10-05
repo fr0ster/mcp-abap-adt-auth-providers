@@ -1,11 +1,14 @@
 import { describe, expect, it, jest } from '@jest/globals';
+import type { AuthorizationRequest } from '@mcp-abap-adt/interfaces-auth';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
 import { manualPasscodeStrategy } from '../../strategies';
 
-const request = (logger?: ILogger) => ({
-  logger,
-  buildAuthorizationUrl: async () => 'https://uaa.example/passcode',
-});
+// As a provider hands it over: `logger: undefined` present when there is none.
+const request = (logger?: ILogger) =>
+  ({
+    logger,
+    buildAuthorizationUrl: async () => 'https://uaa.example/passcode',
+  }) as AuthorizationRequest;
 
 describe('manualPasscodeStrategy', () => {
   it('shows where to get the code and returns what the user pastes, trimmed', async () => {
@@ -23,10 +26,10 @@ describe('manualPasscodeStrategy', () => {
     );
 
     expect(outcome.payload).toBe('abc123');
-    expect(String(info.mock.calls[0][0])).toContain(
+    expect(String(info.mock.calls[0]![0])).toContain(
       'https://uaa.example/passcode',
     );
-    expect(String(read.mock.calls[0][0])).toMatch(
+    expect(String(read.mock.calls[0]![0])).toMatch(
       /passcode|Temporary Authentication Code/i,
     );
   });

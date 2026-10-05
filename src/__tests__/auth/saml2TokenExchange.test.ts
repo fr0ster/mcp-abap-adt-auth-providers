@@ -64,7 +64,7 @@ describe('refreshSamlBearerToken', () => {
 
     await refreshSamlBearerToken('r', 'https://uaa/oauth/token', 'client');
 
-    const options = mockedAxios.post.mock.calls[0][2] as {
+    const options = mockedAxios.post.mock.calls[0]![2] as {
       headers: Record<string, string>;
     };
     expect(options.headers.Authorization).toBeUndefined();

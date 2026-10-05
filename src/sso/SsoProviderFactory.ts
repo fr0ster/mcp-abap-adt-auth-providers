@@ -7,6 +7,11 @@ import { Saml2BearerProvider } from '../providers/Saml2BearerProvider';
 import { Saml2PureProvider } from '../providers/Saml2PureProvider';
 import type { SsoProviderConfig } from './types';
 
+/**
+ * Builds the provider a protocol and flow name. A class holding only a static
+ * member — biome's noStaticOnlyClass is off for this file (biome.json) — kept
+ * a class because it is public: a patch does not change a public type.
+ */
 export class SsoProviderFactory {
   static create(config: SsoProviderConfig): IRefreshableTokenProvider {
     if (config.protocol === 'oidc') {
@@ -33,8 +38,9 @@ export class SsoProviderFactory {
       }
     }
 
+    // Fixed words: the config holds the client secret, a password, tokens.
     throw new Error(
-      `Unsupported SSO provider config: ${JSON.stringify(config)}`,
+      'Unsupported SSO provider config: no provider for this protocol and flow',
     );
   }
 }

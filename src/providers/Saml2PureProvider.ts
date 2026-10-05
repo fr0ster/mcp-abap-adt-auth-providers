@@ -5,6 +5,7 @@
  */
 
 import type {
+  AssertionContext,
   IAssertionValidator,
   IRequestTarget,
   ITokenResult,
@@ -12,6 +13,7 @@ import type {
 } from '@mcp-abap-adt/interfaces-auth';
 import { AUTH_TYPE_USER_TOKEN } from '@mcp-abap-adt/interfaces-auth';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
+import { asContract } from '../auth/contractShape';
 import { RefreshError } from '../errors/TokenProviderErrors';
 import { samlCallbackStrategy } from '../strategies';
 import { createSignedResponseValidator } from '../validation/assertionValidator';
@@ -31,20 +33,20 @@ import {
 export interface Saml2PureProviderConfig
   extends Saml2CommonConfig,
     TokenProviderHooks {
-  logger?: ILogger;
+  logger?: ILogger | undefined;
   cookieProvider: (samlResponse: string) => Promise<string>;
   /**
    * Stored session cookies — what this provider answers as its token — to
    * present instead of logging in while they last. No refresh token: SAML has
    * none, so past `expiresAt` the provider logs in again.
    */
-  accessToken?: string;
+  accessToken?: string | undefined;
   /**
    * When `accessToken` stops being valid (epoch ms). Cookies carry no expiry
    * of their own, so without this the stored cookies count as expired and the
    * first getTokens() logs in.
    */
-  expiresAt?: number;
+  expiresAt?: number | undefined;
 }
 
 export class Saml2PureProvider extends BaseTokenProvider {
@@ -97,23 +99,26 @@ export class Saml2PureProvider extends BaseTokenProvider {
     const { payload, requestId, acsUrl } = await getSamlAssertion(this.config);
     // acsUrl is where the strategy actually listened — with an ephemeral port
     // the configured value is usually absent and never authoritative.
-    const validated = await this.validator.validate(payload, {
-      expectedInResponseTo: requestId,
-      audience: this.config.spEntityId,
-      acsUrl,
-      expectedIssuer: this.config.idpEntityId,
-      logger: this.logger,
-    });
+    const validated = await this.validator.validate(
+      payload,
+      asContract<AssertionContext>({
+        expectedInResponseTo: requestId,
+        audience: this.config.spEntityId,
+        acsUrl,
+        expectedIssuer: this.config.idpEntityId,
+        logger: this.logger,
+      }),
+    );
     const sessionCookies = await this.config.cookieProvider(payload);
 
-    return {
+    return asContract<ITokenResult>({
       authorizationToken: sessionCookies,
       authType: AUTH_TYPE_USER_TOKEN,
       tokenType: 'saml',
       // ITokenResult.expiresAt is an epoch-ms number, unlike
       // ValidatedAssertion.expiresAt, which is a Date.
       expiresAt: validated.expiresAt.getTime(),
-    };
+    });
   }
 
   /** No refresh grant: the base logs in once instead of refreshing. */

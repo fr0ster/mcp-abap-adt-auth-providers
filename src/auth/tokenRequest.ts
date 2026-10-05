@@ -50,21 +50,21 @@ import { loggedError } from './refusal';
 export interface TokenRequestAuth {
   readonly strategy: IClientAuthentication;
   /** The strategy's TLS material, already pinned by the provider. */
-  readonly material?: ICertificateMaterial;
+  readonly material?: ICertificateMaterial | undefined;
   /**
    * The pinned certificate's `notAfter` (epoch ms). Checked before every
    * request that presents the material — a device poll may outlive it — so no
    * expired certificate is sent.
    */
-  readonly notAfter?: number;
+  readonly notAfter?: number | undefined;
   /** The server's mTLS alias of this request's endpoint (RFC 8705 §5), when it published one. */
-  readonly mtlsEndpoint?: string;
+  readonly mtlsEndpoint?: string | undefined;
   /**
    * The authorization server's plain token endpoint (never its mTLS alias),
    * for the device initiation, whose request goes elsewhere. A token request
    * names its own endpoint; this is not read for one.
    */
-  readonly tokenEndpoint?: string;
+  readonly tokenEndpoint?: string | undefined;
 }
 
 /** One request, before the client is authenticated. */
@@ -77,8 +77,8 @@ export interface GrantRequest {
   /** The grant's own body parameters. */
   readonly parameters: URLSearchParams;
   /** The site's own headers besides Content-Type (passcode: Accept). */
-  readonly headers?: Readonly<Record<string, string>>;
-  readonly timeout?: number;
+  readonly headers?: Readonly<Record<string, string>> | undefined;
+  readonly timeout?: number | undefined;
 }
 
 export interface PreparedTokenRequest {
@@ -163,10 +163,10 @@ function basicSecrets(headers: Record<string, string>): string[] {
   const out: string[] = [];
   for (const [name, value] of Object.entries(headers)) {
     if (name.toLowerCase() !== 'authorization') continue;
-    const match = /^Basic\s+(\S+)$/i.exec(value);
-    if (!match) continue;
-    out.push(match[1]);
-    const decoded = Buffer.from(match[1], 'base64').toString();
+    const credential = /^Basic\s+(\S+)$/i.exec(value)?.[1];
+    if (credential === undefined) continue;
+    out.push(credential);
+    const decoded = Buffer.from(credential, 'base64').toString();
     const colon = decoded.indexOf(':');
     if (colon >= 0 && colon < decoded.length - 1) {
       out.push(decoded.slice(colon + 1));
@@ -323,6 +323,8 @@ function reduce(
     typeof status === 'number'
       ? `Request failed with status code ${status}`
       : `the token request failed${namedCode ? ` (${namedCode})` : ''}`;
+  // AxiosResponse requires a config, and this one has none on purpose: the
+  // config carries the agent's key, the form body and Authorization.
   const reduced =
     response && typeof response === 'object'
       ? ({

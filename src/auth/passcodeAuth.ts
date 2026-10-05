@@ -28,8 +28,8 @@ import {
 
 export interface PasscodeTokens {
   accessToken: string;
-  refreshToken?: string;
-  expiresIn?: number;
+  refreshToken?: string | undefined;
+  expiresIn?: number | undefined;
 }
 
 export async function exchangePasscode(

@@ -3,12 +3,14 @@
  */
 
 import type {
+  AuthorizationRequest,
   IAuthorizationStrategy,
   ITokenResult,
   OAuth2GrantType,
 } from '@mcp-abap-adt/interfaces-auth';
 import { AUTH_TYPE_AUTHORIZATION_CODE_PKCE } from '@mcp-abap-adt/interfaces-auth';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
+import { asContract } from '../auth/contractShape';
 import type { OidcCallbackResult } from '../auth/oidcBrowserAuth';
 import { discoverOidc, mtlsAlias } from '../auth/oidcDiscovery';
 import { generatePkceChallenge, generatePkceVerifier } from '../auth/oidcPkce';
@@ -24,25 +26,25 @@ import {
 export interface OidcBrowserProviderConfig
   extends TokenProviderHooks,
     ClientAuthenticationConfig {
-  issuerUrl?: string;
+  issuerUrl?: string | undefined;
   clientId: string;
-  clientSecret?: string;
-  scopes?: string[];
-  authorizationEndpoint?: string;
-  tokenEndpoint?: string;
+  clientSecret?: string | undefined;
+  scopes?: string[] | undefined;
+  authorizationEndpoint?: string | undefined;
+  tokenEndpoint?: string | undefined;
   /**
    * How the login is conducted. Required — see the static factories for the
    * usual choice.
    */
   authorization: IAuthorizationStrategy<OidcCallbackResult>;
-  accessToken?: string;
-  refreshToken?: string;
+  accessToken?: string | undefined;
+  refreshToken?: string | undefined;
   /**
    * When `accessToken` expires (epoch ms), for a token that carries no `exp`
    * of its own. A JWT's `exp` wins; without either the seed counts as expired.
    */
-  expiresAt?: number;
-  logger?: ILogger;
+  expiresAt?: number | undefined;
+  logger?: ILogger | undefined;
 }
 
 export class OidcBrowserProvider extends BaseTokenProvider {
@@ -126,7 +128,9 @@ export class OidcBrowserProvider extends BaseTokenProvider {
 
     const strategy = this.config.authorization;
 
-    const outcome = await strategy.authorize(request);
+    const outcome = await strategy.authorize(
+      asContract<AuthorizationRequest>(request),
+    );
 
     const discovered = this.config.tokenEndpoint ? null : await discover();
     const tokenEndpoint =
@@ -149,13 +153,13 @@ export class OidcBrowserProvider extends BaseTokenProvider {
       await this.requestAuth(mtlsAlias(discovered, 'token_endpoint')),
     );
 
-    return {
+    return asContract<ITokenResult>({
       authorizationToken: tokens.accessToken,
       refreshToken: tokens.refreshToken,
       authType: AUTH_TYPE_AUTHORIZATION_CODE_PKCE,
       expiresIn: tokens.expiresIn,
       tokenType: 'jwt',
-    };
+    });
   }
 
   protected async performRefresh(): Promise<ITokenResult> {
@@ -194,12 +198,12 @@ export class OidcBrowserProvider extends BaseTokenProvider {
       ),
     );
 
-    return {
+    return asContract<ITokenResult>({
       authorizationToken: tokens.accessToken,
       refreshToken: tokens.refreshToken || this.refreshToken,
       authType: AUTH_TYPE_AUTHORIZATION_CODE_PKCE,
       expiresIn: tokens.expiresIn,
       tokenType: 'jwt',
-    };
+    });
   }
 }

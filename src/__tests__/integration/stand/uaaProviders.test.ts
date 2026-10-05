@@ -32,7 +32,7 @@ const USER = { username: 'tester', password: 'tester' };
 const CALLBACK = 'http://localhost/callback';
 
 const claims = (jwt: string): Record<string, unknown> =>
-  JSON.parse(Buffer.from(jwt.split('.')[1], 'base64url').toString('utf8'));
+  JSON.parse(Buffer.from(jwt.split('.')[1]!, 'base64url').toString('utf8'));
 
 /** Unsigned, never sent: only its `exp` is read, to force a refresh. */
 const expiredJwt = (): string => {

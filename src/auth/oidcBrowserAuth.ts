@@ -17,7 +17,7 @@ import {
 
 export interface OidcCallbackResult {
   code: string;
-  state?: string;
+  state?: string | undefined;
 }
 
 export const withOidcCallbackServer: CallbackServerFactory<

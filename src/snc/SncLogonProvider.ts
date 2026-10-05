@@ -37,14 +37,14 @@ export interface SncLogonProviderConfig {
   /** The system's SNC name, e.g. `p:CN=SID, O=ACME`. */
   partnerName: string;
   /** `'1' | '2' | '3' | '8' | '9'`; default `'9'` (maximum available). */
-  qop?: string;
+  qop?: string | undefined;
   /** Sent as `snc_myname` only when set. */
-  myName?: string;
+  myName?: string | undefined;
   /** Where the SNC library is. Required. */
   locator: ISncLibraryLocator;
   /** Which product is behind the library, for the `rejected` hint; `[]` for none. Required. */
   probes: ISncProductProbe[];
-  logger?: ILogger;
+  logger?: ILogger | undefined;
 }
 
 /**
@@ -68,11 +68,11 @@ export class SncLogonProvider implements IAuthProvider {
   readonly kind = 'snc';
   private readonly partnerName: string;
   private readonly qop: string;
-  private readonly myName?: string;
+  private readonly myName?: string | undefined;
   private readonly locator: ISncLibraryLocator;
   private readonly probes: ISncProductProbe[];
-  private readonly logger?: ILogger;
-  private library?: SncLibrary;
+  private readonly logger?: ILogger | undefined;
+  private library?: SncLibrary | undefined;
   /** The shipped Secure Login Client probe applies — the one product a refusal may name. */
   private secureLoginClient = false;
 

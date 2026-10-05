@@ -122,7 +122,7 @@ function recording(materials?: Array<ICertificateMaterial | Error>) {
   };
   if (materials) {
     strategy.tlsMaterial = async () => {
-      const answer = materials[Math.min(calls, materials.length - 1)];
+      const answer = materials[Math.min(calls, materials.length - 1)]!;
       calls += 1;
       if (answer instanceof Error) throw answer;
       return answer;
@@ -252,7 +252,7 @@ describe('the strategy reaches every request a provider sends', () => {
       'urn:ietf:params:oauth:grant-type:saml2-bearer',
       'refresh_token',
     ]);
-    expect(sent[0].body.assertion).toBe(toBearerAssertion(samlPayload()));
+    expect(sent[0]!.body.assertion).toBe(toBearerAssertion(samlPayload()));
     expect(sent).toHaveLength(2);
   });
 
@@ -535,7 +535,7 @@ describe('one certificate, pinned', () => {
       clientAuthentication: strategy,
     });
     await provider.prepare();
-    expect(sent[0].cert).toBeUndefined();
+    expect(sent[0]!.cert).toBeUndefined();
   });
 
   it('material that fails to load: refused in fixed words, the stored refresh token kept and not sent; a later moment loads again', async () => {
@@ -567,16 +567,19 @@ describe('one certificate, pinned', () => {
     expect(await provider.prepare()).toEqual({ ok: true });
     expect(tlsCalls()).toBe(2);
     expect(sent).toHaveLength(1);
-    expect(sent[0].body).toMatchObject({
+    expect(sent[0]!.body).toMatchObject({
       grant_type: 'refresh_token',
       refresh_token: 'stored-refresh',
     });
-    expect(sent[0].cert).toEqual(A.cert);
+    expect(sent[0]!.cert).toEqual(A.cert);
     expect(authorization.authorize).not.toHaveBeenCalled();
   });
 
   it('material that is not usable is refused and not pinned; a later moment loads again', async () => {
-    const { strategy, tlsCalls } = recording([{ cert: A.cert, key: B.key }, A]);
+    const { strategy, tlsCalls } = recording([
+      { cert: A.cert!, key: B.key! },
+      A,
+    ]);
     const provider = new ClientCredentialsProvider({
       uaaUrl: 'https://uaa',
       clientId: 'cid',
@@ -594,11 +597,11 @@ describe('one certificate, pinned', () => {
     expect(await provider.prepare()).toEqual({ ok: true });
     expect(tlsCalls()).toBe(2);
     expect(sent).toHaveLength(1);
-    expect(sent[0].cert).toEqual(A.cert);
+    expect(sent[0]!.cert).toEqual(A.cert);
     // Pinned now: a further request reads the strategy no more.
     await provider.refreshTokens();
     expect(tlsCalls()).toBe(2);
-    expect(sent[1].cert).toEqual(A.cert);
+    expect(sent[1]!.cert).toEqual(A.cert);
   });
 
   it("a change to the strategy's Buffer after pinning does not change what is presented", async () => {
@@ -635,8 +638,8 @@ describe('one certificate, pinned', () => {
       tlsMaterial(material: ICertificateMaterial) {
         // In place, and by replacing the fields.
         (material.cert as Buffer).fill(0);
-        material.cert = B.cert;
-        material.key = B.key;
+        material.cert = B.cert!;
+        material.key = B.key!;
         return { ok: true as const };
       },
     };
@@ -723,7 +726,7 @@ describe('an expired client certificate', () => {
     expect(authorization.authorize).toHaveBeenCalledTimes(1);
     // The clock back: the refresh token it held is still there to send.
     await provider.refreshTokens();
-    expect(sent[held].body).toMatchObject({ grant_type: 'refresh_token' });
+    expect(sent[held]!.body).toMatchObject({ grant_type: 'refresh_token' });
   });
 
   it('expired between two device polls: the next poll is not sent, and the login is refused in fixed words', async () => {
@@ -813,7 +816,7 @@ describe('OIDC discovery: mtls_endpoint_aliases', () => {
     });
     await provider.getTokens();
     expect(drafts).toHaveLength(1);
-    expect('mtlsEndpoint' in drafts[0]).toBe(false);
+    expect('mtlsEndpoint' in drafts[0]!).toBe(false);
   });
 
   it('the device initiation gets the device alias, the poll the token alias', async () => {
@@ -898,8 +901,8 @@ describe('OIDC discovery: mtls_endpoint_aliases', () => {
       subjectTokenType: 'urn:ietf:params:oauth:token-type:access_token',
       clientAuthentication: exchange.strategy,
     }).getTokens();
-    expect(browser.drafts[0].mtlsEndpoint).toBe('https://mtls.idp/token');
-    expect(exchange.drafts[0].mtlsEndpoint).toBe('https://mtls.idp/token');
+    expect(browser.drafts[0]!.mtlsEndpoint).toBe('https://mtls.idp/token');
+    expect(exchange.drafts[0]!.mtlsEndpoint).toBe('https://mtls.idp/token');
   });
 
   it('an endpoint the configuration names takes no discovered alias', async () => {

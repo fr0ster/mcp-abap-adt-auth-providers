@@ -3,11 +3,13 @@
  */
 
 import type {
+  AuthorizationRequest,
   IAssertionReplayStore,
   IAssertionValidator,
   IAuthorizationStrategy,
 } from '@mcp-abap-adt/interfaces-auth';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
+import { asContract } from '../auth/contractShape';
 import { buildSamlAuthorizationUrl } from '../auth/saml2Auth';
 import { ValidationError } from '../errors/TokenProviderErrors';
 import { isShippedValidator } from '../validation/assertionValidator';
@@ -20,34 +22,34 @@ export interface Saml2CommonConfig {
    * the ACS is then buried in a deflated `SAMLRequest` this package did not
    * build and cannot read, so it must be declared rather than inferred.
    */
-  acsUrl?: string;
-  relayState?: string;
-  authorizationUrl?: string;
+  acsUrl?: string | undefined;
+  relayState?: string | undefined;
+  authorizationUrl?: string | undefined;
   /**
    * How the login is conducted. Required — see the static factories for the
    * usual choice.
    */
   authorization: IAuthorizationStrategy<string>;
-  logger?: ILogger;
+  logger?: ILogger | undefined;
   /**
    * The `Issuer` the assertion must name. Required unless the supplied
    * `assertionValidator` is a custom one: a shipped validator supplied there
    * still needs it, since it fails closed without an expected issuer.
    */
-  idpEntityId?: string;
+  idpEntityId?: string | undefined;
   /**
    * The AuthnRequest ID this login answers, when this package did not mint one
    * itself — a pre-built `authorizationUrl`, or a strategy that obtained the
    * response some other way after a request the consumer sent.
    */
-  authnRequestId?: string;
+  authnRequestId?: string | undefined;
   /**
    * Declares that no AuthnRequest is sent: the assertion must carry no
    * `InResponseTo`. Default `false`. Combining this with a request ID is a
    * configuration error, since the two describe different logins: with
    * `authnRequestId` a provider refuses at construction.
    */
-  idpInitiated?: boolean;
+  idpInitiated?: boolean | undefined;
   /**
    * Which validator to use. Required — see the static factories for the
    * usual choice, which builds a shipped one from a `SamlTrust`.
@@ -56,10 +58,10 @@ export interface Saml2CommonConfig {
 }
 
 export interface Saml2BearerExchangeConfig {
-  tokenUrl?: string;
-  uaaUrl?: string;
-  clientId?: string;
-  clientSecret?: string;
+  tokenUrl?: string | undefined;
+  uaaUrl?: string | undefined;
+  clientId?: string | undefined;
+  clientSecret?: string | undefined;
 }
 
 /** Throw at construction rather than half-verify at runtime. */
@@ -86,9 +88,9 @@ export function validateSamlConfig(config: Saml2CommonConfig): void {
 /** What a recipe needs to build a shipped validator. */
 export interface SamlTrust {
   idpCertificates: string[];
-  clockSkewMs?: number;
+  clockSkewMs?: number | undefined;
   /** Default in the recipe: the process-wide `defaultReplayStore`. */
-  replayStore?: IAssertionReplayStore;
+  replayStore?: IAssertionReplayStore | undefined;
 }
 
 /**
@@ -131,7 +133,7 @@ export interface SamlAssertionResult {
    * `undefined` exactly when the login is declared `idpInitiated` and no ID
    * was minted or declared for it.
    */
-  readonly requestId?: string;
+  readonly requestId?: string | undefined;
   /** Where the strategy actually listened — `outcome.redirectUri`, never `config.acsUrl`. */
   readonly acsUrl: string;
 }
@@ -182,7 +184,9 @@ export async function getSamlAssertion(
   };
 
   const strategy = config.authorization;
-  const outcome = await strategy.authorize(request);
+  const outcome = await strategy.authorize(
+    asContract<AuthorizationRequest>(request),
+  );
   // The second net, for a strategy that never called the builder and so
   // never met the check inside it.
   if (declaredAcs && declaredAcs !== outcome.redirectUri) {

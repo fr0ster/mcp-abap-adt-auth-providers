@@ -41,7 +41,7 @@ export class ValidationError extends TokenProviderError {
 export class RefreshError extends TokenProviderError {
   constructor(
     message: string,
-    public readonly cause?: Error,
+    public override readonly cause?: Error,
   ) {
     super(message, TOKEN_PROVIDER_ERROR_CODES.REFRESH_ERROR);
     this.name = 'RefreshError';
@@ -83,7 +83,7 @@ export class ServiceKeyError extends TokenProviderError {
 export class BrowserAuthError extends TokenProviderError {
   constructor(
     message: string,
-    public readonly cause?: Error,
+    public override readonly cause?: Error,
   ) {
     super(message, TOKEN_PROVIDER_ERROR_CODES.BROWSER_AUTH_ERROR);
     this.name = 'BrowserAuthError';

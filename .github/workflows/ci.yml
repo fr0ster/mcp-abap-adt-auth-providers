@@ -32,6 +32,12 @@ jobs:
       - name: Build
         run: npm run build
 
+      - name: Type-check, tests included
+        run: npm run test:check
+
+      - name: Lint
+        run: npm run lint:check
+
       - name: Test
         run: npm test
 

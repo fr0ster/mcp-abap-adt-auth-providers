@@ -357,7 +357,7 @@ describe('SAML validation end to end against auth-mocks', () => {
 
         expect(tokens.authorizationToken).toBe(COOKIE);
         expect(received).toHaveLength(1);
-        const xml = decode(received[0]);
+        const xml = decode(received[0]!);
         expect(firstAttribute(xml, 'Assertion', 'ID')).toBe(
           stand.idp.lastAssertionId(),
         );
@@ -372,7 +372,7 @@ describe('SAML validation end to end against auth-mocks', () => {
         // Which element the signature covered, as the validator reported it.
         expect(validated).toHaveLength(1);
         const signedRoot = new DOMParser().parseFromString(
-          validated[0].signedXml,
+          validated[0]!.signedXml,
           'text/xml',
         ).documentElement;
         expect(signedRoot?.localName).toBe(
