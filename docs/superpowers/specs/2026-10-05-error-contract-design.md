@@ -144,7 +144,7 @@ present only when known; the builder omits the key otherwise (no
 | `client-authentication` | `problem: 'signing-key-unusable' \| 'result-unsendable' \| 'basic-client-id-colon'` |
 | `request-failed` | `operation: Operation`, `grant?: OAuth2GrantType`, `problem: RequestProblem`, `status?: HttpStatus`, `oauthError?: OAuthErrorCode`, `code?: SystemCode` |
 | `tls` | `operation: Operation`, `grant?: OAuth2GrantType`, `code: TlsFailureCode` |
-| `interactive-login` | discriminated by `outcome: InteractiveOutcome` — `port-in-use`: `port: Port`; `aborted`: `ignoredCallbacks?: Count`; `disposed`: `strategy: 'browser' \| 'manual'`; `identity-provider-refused`: `oauthError?: OAuthErrorCode`; `browser-launch-failed`: `code?: SystemCode`; `failed`: `code?: SystemCode`, `status?: HttpStatus`; every other outcome: none |
+| `interactive-login` | discriminated by `outcome: InteractiveOutcome` — `port-in-use`: `port: Port`; `aborted`: `strategy?: 'browser' \| 'manual'` (5.1.0), `ignoredCallbacks?: Count`; `disposed`: `strategy: 'browser' \| 'manual'`; `identity-provider-refused`: `oauthError?: OAuthErrorCode`; `browser-launch-failed`: `code?: SystemCode`; `failed`: `code?: SystemCode`, `status?: HttpStatus`, `oauthError?: OAuthErrorCode` (5.1.0, a registered code only); every other outcome: none |
 | `saml-assertion` | per rule, a discriminated union: `rule: AssertionRule`, `check: CheckOf<rule>` (fixed by the rule), `count?: Count` (rules that say "carries N"), `statusCode?: SamlStatusCode` (rule `declined`), `candidates?: readonly BearerCandidate[]` (≤ 5) and `moreCandidates?: Count` (rule `no-bearer-qualifies`; the builder cuts candidates beyond 5 and adds their number to `moreCandidates`) |
 | `snc` | per problem, a discriminated union (`SncFactsOf<P>`, below): only the fields each problem carries (§A.7) |
 | `credential-refused` | `credential: CredentialKind`, `at?: 'logon' \| 'request'` |
@@ -466,7 +466,24 @@ discriminant a consumer is expected to switch on (`problem`, `outcome`,
 major of `interfaces-auth` (goal invariant 5). A new member of a **code
 list** — `SystemCode`, `TlsFailureCode`, `OAuthErrorCode`, `RfcKey`,
 `ConfigField`, `SamlStatusCode` — is a minor; the guides say not to assert
-exhaustiveness over code lists, only over kinds and discriminants.
+exhaustiveness over code lists, only over kinds and discriminants. **A new
+optional fact field** on an existing kind or variant (a consumer that does
+not read it is unaffected; one that builds facts is a producer through
+`auth-errors`) is a minor too; making an optional field required, removing a
+field or narrowing its type is a major.
+
+### 4.3a interfaces-auth 5.1.0
+
+Decided by the user 2026-10-05: `interactive-login` `aborted` gains
+`strategy?: 'browser' | 'manual'` (as `disposed` has), and `failed` gains
+`oauthError?: OAuthErrorCode` (a registered code only, as today's K11
+renders it — no loss). Both are optional fact fields, so they ship as the
+minor **interfaces-auth 5.1.0**, released after 5.0.0 and before
+`auth-errors` 1.0.0, which depends on `^5.1.0`. Words: `aborted` with
+`strategy: 'browser'` or no strategy → `the browser login was aborted` (K4)
+plus the ignored-callbacks clause; with `strategy: 'manual'` → `the manual
+login was aborted`, no clause. `failed` → K11 with the registered code in
+the place today's words put it.
 
 ### 4.4 What else changes in 5.0.0
 
@@ -532,7 +549,7 @@ the user 2026-10-05). The runtime half of the contract.
 
 ### 5.1 Dependencies and layout
 
-- `dependencies`: `@mcp-abap-adt/interfaces-auth ^5.0.0` — nothing else.
+- `dependencies`: `@mcp-abap-adt/interfaces-auth ^5.1.0` (§4.3a) — nothing else.
   `devDependencies` as auth-stores (`jest-util` included — ts-jest needs it under `install-strategy=nested`): `@biomejs/biome`, `typescript`, `jest`,
   `ts-jest`, `@types/jest`, `@types/node`.
 - Layout, mirroring the single-package repositories (auth-stores,
@@ -2102,7 +2119,7 @@ is not this work.
 
 ### 10.4 `mcp-abap-adt-auth-providers` 6.0.0 (this PR)
 
-- `package.json`: `interfaces-auth ^5.0.0`, `interfaces-auth-sap ^3.1.0`,
+- `package.json`: `interfaces-auth ^5.1.0`, `interfaces-auth-sap ^3.1.0`,
   `auth-errors ^1.0.0`.
 - New: `src/auth/AuthProviderBase.ts`; `tools/check-provider-shape.mjs`.
 - Rewritten on the builders and `classify`: `src/auth/refusal.ts` (only
@@ -2510,7 +2527,7 @@ README differs from the generated table.
 3. README, guides, CLAUDE.md and migration notes updated (global
    CLAUDE.md "Releasing"; goal Open 5), the generated tables current.
 4. Dependencies only from the registry, in order: interfaces (auth 5.0.0,
-   auth-sap 3.1.0) → auth-errors 1.0.0 → connection 12.0.0 → auth-providers
+   auth-sap 3.1.0) → interfaces-auth 5.1.0 (§4.3a) → auth-errors 1.0.0 → connection 12.0.0 → auth-providers
    6.0.0 → auth-stores 4.0.0 → auth-broker 5.0.0 + CLI 3.0.0; each consumer
    built against the published versions, the lockfile checked for
    `"link": true` and non-registry resolutions; after publishing, a clean
@@ -2666,14 +2683,14 @@ today's string exactly, pinned by a test; "→ Cn" points to Appendix C.
 | K1 | `BrowserCallbackStrategy.ts:101-103` | `Port <n> is already in use. Please specify a different port or free the port.` | `interactive-login` | `outcome: port-in-use`, `port` | — | verbatim (the phrase "already in use" kept, `CallbackScopeError` doc) |
 | K2 | `BrowserCallbackStrategy.ts:122` | `BrowserCallbackStrategy has been disposed` | `interactive-login` | `outcome: disposed`, `strategy: browser` | — | verbatim |
 | K3 | `BrowserCallbackStrategy.ts:125-127` | `BrowserCallbackStrategy is already authorizing; it holds a single port` | `interactive-login` | `outcome: busy` | — | verbatim |
-| K4 | `BrowserCallbackStrategy.ts:152-154`, `callbackServer.ts:86`, `:159` | `Authorization aborted before the callback server bound` / `Callback server aborted before it started` / `Callback server aborted` | `interactive-login` | `outcome: aborted`, `ignoredCallbacks?` | — | one sentence, `the browser login was aborted[; <k> incomplete request(s) reached /callback and were ignored]`; which of three moments lost (minor) |
+| K4 | `BrowserCallbackStrategy.ts:152-154`, `callbackServer.ts:86`, `:159` | `Authorization aborted before the callback server bound` / `Callback server aborted before it started` / `Callback server aborted` | `interactive-login` | `outcome: aborted`, `strategy?` (5.1.0), `ignoredCallbacks?` | — | one sentence, `the browser login was aborted[; <k> incomplete request(s) reached /callback and were ignored]` (browser or no strategy), `the manual login was aborted` (manual); which of three moments lost (minor) |
 | K5 | `BrowserCallbackStrategy.ts:195-197` | `Browser opening failed. Open manually: <authorization URL>` | `interactive-login` | `outcome: browser-launch-failed`, `code?` | — | URL leaves the thrown message; stays in the strategy's log line (H7) → L4 |
 | K6 | `callbackServer.ts:56-58` | `Invalid callback server port: <value>. Must be an integer in 0..65535.` | `configuration` | `case: callback-port-invalid`, `fields: [port]` | — | value lost → L5 |
 | K7 | `callbackServer.ts:65-68` | `Invalid callback server timeoutMs: <value>. Must be finite and within 1..<max>.` | — | — | — | gone with the option (§6a) → L14 |
 | K8 | `callbackServer.ts:148-150`, `:273` | `Callback server closed before a result arrived` / `Callback server scope has ended` | `interactive-login` | `outcome: callback-closed` | — | one sentence |
 | K9 | `callbackServer.ts:249-262` | `Authentication timeout after <s> seconds. Please try again.[ <k> incomplete request(s) reached /callback and were ignored.]` | — | — | — | gone: no built-in timeout (§6a); a consumer's `AbortSignal.timeout` ends `aborted` (K4), which keeps the ignored-request count → L14 |
 | K10 | `callbackScopeError.ts:139-151` | `the identity provider refused the login (<code>\|an unregistered error code)` | `interactive-login` | `outcome: identity-provider-refused`, `oauthError?` | — | verbatim |
-| K11 | `BrowserCallbackStrategy.ts:77-82`, `:224-230` | `BrowserAuthError` with `the browser login failed (HTTP <n>[, <code>])` (and, with no status, `the browser login failed (unknown error[, <code>])`), original as `cause` | `interactive-login` | `outcome: failed`, `code?`, `status?` | — | verbatim; `cause` lost → L2 |
+| K11 | `BrowserCallbackStrategy.ts:77-82`, `:224-230` | `BrowserAuthError` with `the browser login failed (HTTP <n>[, <code>])` (and, with no status, `the browser login failed (unknown error[, <code>])`) — `<code>` being today's registered OAuth `error` and/or allowlisted code, original as `cause` | `interactive-login` | `outcome: failed`, `code?`, `status?`, `oauthError?` (5.1.0) | — | verbatim; `cause` lost → L2 |
 | K12 | `manualStrategies.ts:50-52` | `the manual input was abandoned before it began` | `interactive-login` | `outcome: input-abandoned` | — | verbatim |
 | K13 | `manualStrategies.ts:55-57` | `Manual input needs an interactive terminal. Supply \`read\` to source the value elsewhere.` | `interactive-login` | `outcome: no-terminal` | — | verbatim |
 | K14 | `manualStrategies.ts:69`, `:172`, `:193`, `codeStrategies.ts:42` | `No input received` / `No SAMLResponse was provided` / `No passcode was provided` / `Authorization code provider returned an empty value` | `interactive-login` | `outcome: no-input` | — | `no input was received`; which input lost (minor) |

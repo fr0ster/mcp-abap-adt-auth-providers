@@ -18,7 +18,7 @@ Where this plan has to decide something the spec leaves open, it says so under *
 
 Copied from the goal and the spec; every task is bound by all of them.
 
-**Versions and order (spec §11.5 gate 4).** "interfaces (auth 5.0.0, auth-sap 3.1.0) → auth-errors 1.0.0 → connection 12.0.0 → auth-providers 6.0.0 → auth-stores 4.0.0 → auth-broker 5.0.0 + CLI 3.0.0; each consumer built against the published versions, the lockfile checked for `"link": true` and non-registry resolutions; after publishing, a clean install of each from the registry outside the repositories." `interfaces-auth-broker` gets no release (§4.6: "3.1.0 is inside `^3.0.0`").
+**Versions and order (spec §11.5 gate 4).** "interfaces (auth 5.0.0, auth-sap 3.1.0) → [interfaces-auth 5.1.0, spec §4.3a] → auth-errors 1.0.0 → connection 12.0.0 → auth-providers 6.0.0 → auth-stores 4.0.0 → auth-broker 5.0.0 + CLI 3.0.0; each consumer built against the published versions, the lockfile checked for `"link": true` and non-registry resolutions; after publishing, a clean install of each from the registry outside the repositories." `interfaces-auth-broker` gets no release (§4.6: "3.1.0 is inside `^3.0.0`").
 
 **Dependencies only from the registry** (global CLAUDE.md). A consumer step starts only after what it builds against is published. No `file:`, `link:`, `npm link`, no cross-repository workspace link. The broker repository's own workspace link (CLI → auth-broker) is the standing same-repository exception and must be gone from what is released. After every install: no `"link": true` in the lockfile except same-repo workspace siblings, nothing resolved from outside the registry.
 
@@ -75,6 +75,7 @@ Inputs most likely to reach a user that no task's spec-listed tests exercise; ea
 | 1 | interfaces | Error contract types and frozen allowlists | judgement |
 | 2 | interfaces | Outcome/refusal/failure, removals, JSDoc, type tests, surface tools | judgement |
 | 3 | interfaces | interfaces-auth-sap 3.1.0, READMEs, CHANGELOGs, migration notes | mechanical |
+| 3a | interfaces | interfaces-auth 5.1.0: `aborted.strategy?`, `failed.oauthError?` (spec §4.3a) | mechanical |
 | 4 | auth-errors | Repository scaffold, CI, strict flags, lint | mechanical |
 | 5 | auth-errors | Branded integer makers, private sets, membership guards | mechanical |
 | 6 | auth-errors | Diagnostics admission | judgement |
@@ -161,13 +162,25 @@ Publish dependency: none (first in the chain). Branch from `master` in a worktre
 
 ---
 
+### Task 3a: interfaces-auth 5.1.0 (spec §4.3a; new PR in the interfaces repository after G1)
+
+**Files:** `packages/interfaces-auth/src/error/facts.ts` — `interactive-login` `aborted` gains `strategy?: 'browser' | 'manual'`, `failed` gains `oauthError?: OAuthErrorCode`; spec §4.3's rule stated in the README's versioning note (a new optional fact field is a minor); `CHANGELOG.md` 5.1.0; version 5.1.0; `tools/package-map.json` unchanged (no new symbol).
+
+**Tests first** (`src/__typechecks__/errorContract.ts`): positive lines — an `aborted` error with `strategy: 'manual'`, a `failed` error with `oauthError: 'access_denied'`; `@ts-expect-error` — `aborted` with `strategy: 'device'`, `failed` with an unregistered `oauthError`, `oauthError` on `aborted`; **the union stays closed**: `keyof AuthProviderErrorFacts` still `Equal<>` `AuthProviderErrorKind`, `INTERACTIVE_OUTCOMES` unchanged (`Equal<>` against 5.0.0's list), and a handler map over every kind still compiles without a new handler — a minor adds no kind.
+
+**Gate:** standard; `check:surface`, `check:graph`.
+
+**G1a (user):** merge, tag, publish interfaces-auth 5.1.0. Verify with `npm view` before Task 4.
+
+---
+
 ## Repository 2 — `mcp-abap-adt-auth-errors` (new; one PR after the initial commit)
 
-Publish dependency: interfaces-auth 5.0.0 on the registry (G1); repository and npm name ready (U2).
+Publish dependency: interfaces-auth 5.1.0 on the registry (G1, G1a); repository and npm name ready (U2).
 
 ### Task 4: Scaffold
 
-**Files (§5.1):** `package.json` (`main`, `types`, `files`, `license: LGPL-3.0-only`, `engines`, `sideEffects: false`, scripts `clean`, `build`, `build:fast`, `test`, `test:check`, `lint`, `lint:check`, `prepublishOnly`; `dependencies`: `@mcp-abap-adt/interfaces-auth ^5.0.0` only; `devDependencies` as auth-stores), `tsconfig.json` (the six flags), `tsconfig.build.json` (excludes tests and `__typechecks__`), `biome.json` (auth-providers'), `jest.config.js`, `.github/workflows/ci.yml` (Node 22, 24, 26: `npm ci`, build, `test:check`, `lint:check`, `test`), `release.yml` (on `v*.*.*`), `CHANGELOG.md`, `README.md`, `CLAUDE.md`, `LICENSE`, `COPYING`, `.npmrc`, `.gitignore`, `src/index.ts`; empty module files of §5.1's `src/` list.
+**Files (§5.1):** `package.json` (`main`, `types`, `files`, `license: LGPL-3.0-only`, `engines`, `sideEffects: false`, scripts `clean`, `build`, `build:fast`, `test`, `test:check`, `lint`, `lint:check`, `prepublishOnly`; `dependencies`: `@mcp-abap-adt/interfaces-auth ^5.1.0` only (spec §4.3a); `devDependencies` as auth-stores), `tsconfig.json` (the six flags), `tsconfig.build.json` (excludes tests and `__typechecks__`), `biome.json` (auth-providers'), `jest.config.js`, `.github/workflows/ci.yml` (Node 22, 24, 26: `npm ci`, build, `test:check`, `lint:check`, `test`), `release.yml` (on `v*.*.*`), `CHANGELOG.md`, `README.md`, `CLAUDE.md`, `LICENSE`, `COPYING`, `.npmrc`, `.gitignore`, `src/index.ts`; empty module files of §5.1's `src/` list.
 
 **Steps:** initial scaffold commit on `main` (the user's new repository may need the first push to `main`; everything after goes through one PR, branch `feat/auth-errors-1`). Lockfile check after `npm install`.
 
@@ -204,7 +217,7 @@ Publish dependency: interfaces-auth 5.0.0 on the registry (G1); repository and n
 **Tests first:**
 - Builders: each kind; `variant` set from the facts' discriminant; absent keys omitted (no `undefined`-valued key); `fields` capped at 8 and deduplicated in order; `candidates` capped at 5 / 8, bearer candidates beyond 5 counted into `moreCandidates` (7 given → 5 kept, `moreCandidates` 2; with a given `moreCandidates` 3 → 5); result frozen deeply; a JavaScript caller passing a forbidden diagnostic gets it dropped; a refused diagnostic dropped and the error still minted.
 - Words (§11.1 "Words"): every kind × every discriminant value renders; each *verbatim* row of Appendix A asserts the exact string (A2, A4–A8, A10, A14–A18, B1–B14, K1, K2, K3, K10–K13, K15 (first sentence), K16, K17, G1 reason, G3, G4, G6, G8–G10, I1–I5 — the I rows' words live here because connection mints with them); no rendered string contains a diagnostic value (each built with a marker); `blamesCredential` per row of §3.1 incl. `snc` `logon-refused` with and without `RFC_LOGON_FAILURE`, `connection` `refused-after-renewal`.
-- `interactive-login`: `disposed` renders K2's sentence for `strategy: 'browser'` and K15's first for `'manual'`; `aborted` renders `the browser login was aborted` and, with `ignoredCallbacks`, the tally clause; A9's `failed` hint is `complete the login, or abort it`; no word mentions a timeout or a number of seconds (a test scans every rendered `interactive-login` string).
+- `interactive-login`: `disposed` renders K2's sentence for `strategy: 'browser'` and K15's first for `'manual'`; `aborted` renders `the browser login was aborted` for `strategy: 'browser'` or no strategy, with the tally clause when `ignoredCallbacks` is set, and `the manual login was aborted` for `strategy: 'manual'`, never with the clause; `failed` with `oauthError` renders it where K11 puts the code (`(HTTP <n>, <oauthError>[, <code>])`), verbatim against today's `browserLoginWords` output for the same facts; A9's `failed` hint is `complete the login, or abort it`; no word mentions a timeout or a number of seconds (a test scans every rendered `interactive-login` string).
 - **RF3 (part):** assignment to a minted error's `reason` and to a nested `facts` array throws `TypeError` under `'use strict'`.
 - Type tests (§11.2): the builder half of the probe verbatim (positive and `@ts-expect-error` lines); `WORDS` with one kind removed does not satisfy; a discriminant switch missing a member fails.
 
@@ -274,7 +287,7 @@ Publish dependency: interfaces-auth 5.0.0 on the registry (G1); repository and n
 
 **Tests first (§11.1 "Exported allowlists cannot be widened"):** every attack listed (push through a cast, index assignment, `defineProperty`, `splice`, `.call` of `Set`/`Map` methods on every export, patching `Set.prototype.has`) then a foreign code is still refused and no word contains it; an `instanceof Set` / `Map` sweep over the module namespace nested one level finds nothing; the README table equals the generated one.
 
-**G2 (user):** merge, tag `v1.0.0`, publish `@mcp-abap-adt/auth-errors` 1.0.0. Verify with `npm view`.
+**G2 (user):** merge, tag `v1.0.0`, publish `@mcp-abap-adt/auth-errors` 1.0.0 (depending on `interfaces-auth ^5.1.0`, published at G1a). Verify with `npm view`, and that the published `package.json` declares `^5.1.0`.
 
 ---
 
@@ -442,6 +455,8 @@ Publish dependency: U1 (5.4.2 published), G1, G2 (G3 is not needed to build auth
 
 **Drain with a manual strategy (moved from Task 22a, C7):** with the `readline` close deliberately deferred, all waiters abort and a new attempt arrives at once → the new attempt's reader opens only after the old one is closed — never two readers on stdin, asserted on stdin's listener count.
 
+**`aborted` by strategy (spec §4.3a):** an abort of a browser, OIDC or SAML strategy → `aborted` with `strategy: 'browser'`; of a manual strategy → `strategy: 'manual'`, words `the manual login was aborted`; a browser login failing with a registered OAuth `error` → `failed` with `oauthError`, words as today's.
+
 **Load-bearing:** drop `ignoredCallbacks` from the `aborted` facts → the tally case red; settle the manual strategy before `rl.close()` → the stdin-reader drain case red; skip the release on abort → the port-bind assertion red; ignore `signal` in one factory → its RF1 abort case never ends (the test's own bound fails it).
 
 **Removes:** nothing from the Decision D6 table (the classes go in 27). **Gate:** standard.
@@ -481,7 +496,7 @@ Publish dependency: U1 (5.4.2 published), G1, G2 (G3 is not needed to build auth
 ### Task 27: Flip and delete
 
 **Steps:**
-- [ ] `interfaces-auth ^5.0.0`, `interfaces-auth-sap ^3.1.0` as direct dependencies; one deduplicated interfaces-auth in the lockfile; lockfile check.
+- [ ] `interfaces-auth ^5.1.0`, `interfaces-auth-sap ^3.1.0` as direct dependencies; one deduplicated interfaces-auth in the lockfile; lockfile check.
 - [ ] Delete every remaining piece of the Decision D6 table: `src/auth/contractTransition.ts` (imports move to interfaces-auth / auth-errors), the ladder and `refusalFrom`, `legacyBridge`, `loggedError`, `refusalWords`, `src/errors/` (all five files), `src/auth/callbackScopeError.ts`, `DeviceCodePresentationError` (`src/deviceCode/DeviceCodePresenter.ts:26`, C11), `toLegacyRefusal` / `toLegacyOutcome`, `TokenResultWithDisposition`; and `src/auth/contractShape.ts` (`asContract`, goal step 8) with every call of it. `src/index.ts` drops the error classes and `refusalWords`; `AuthProviderBase` stays exported (Task 19); `TokenRequestSite`, `legacyBasic` and `rejectMissingToken` are internal and not exported.
 - [ ] Delete the transition tests `legacyLadder.test.ts`, `legacyBridge.test.ts`, `contractTransition.typecheck.ts`; their coverage moves to `transitionCoverage.test.ts` (R6): a table mapping each deleted transition case to the Appendix A row test that now covers it, and a test that every named row test exists in `src/__tests__` (by name) — a missing counterpart fails the suite.
 - [ ] No reference to `TOKEN_PROVIDER_ERROR_CODES` / `ASSERTION_ERROR_CODES` remains.
