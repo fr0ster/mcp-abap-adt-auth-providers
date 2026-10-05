@@ -1096,6 +1096,9 @@ after N seconds" text (K9), the manual input's "did not arrive in time"
 300 s for the passcode) are gone. A consumer that passed `timeoutMs` must
 pass a `signal` (migration note, §10.4); one that passed nothing now waits
 until it aborts — the broker and the server decide their own bound (§10.6).
+The CLI keeps no bound either (decided by the user 2026-10-05): its login
+ends on a result, the identity provider's refusal or the user's Ctrl+C
+(§10.6).
 
 Tests (auth-providers): a browser, OIDC and SAML login without a signal
 keeps waiting — bounded only by the test's own `AbortController`, aborted
@@ -1576,13 +1579,25 @@ kind. Migration note: none beyond the versions.
 - **Login bound (§6a).** The broker sets no bound and adds none: a login it
   starts through a provider ends on a result, a refusal or an abort, and the
   broker's consumer decides the bound — it passes a strategy or factory
-  composed with a `signal`. The CLI keeps its five-minute bound as its own
-  decision: `INTERACTIVE_LOGIN_TIMEOUT_MS` (`mcp-auth.ts:40`, `:580`;
+  composed with a `signal`. **The CLI keeps no bound either** (decided by the
+  user 2026-10-05): `INTERACTIVE_LOGIN_TIMEOUT_MS` (`mcp-auth.ts:40`, `:580`;
   `generate-env-from-service-key.ts:44`, `:54`; `mcpSsoConfig.ts:40`, `:700`,
-  `:717`, `:758`) becomes `signal: AbortSignal.timeout(…)` on the same
-  strategies, and an aborted login prints the `aborted` words. Migration
-  notes of both packages say a consumer that relied on the providers' 30 s /
-  300 s defaults must now bound the login itself. **For the server task**
+  `:717`, `:758`) is **removed**, not turned into `AbortSignal.timeout`. A
+  CLI login ends on a result, the identity provider's refusal, or the user's
+  Ctrl+C: each command that starts a login creates one `AbortController`,
+  wires `SIGINT` and `SIGTERM` to its `abort()` for the duration of the login
+  (handlers removed afterwards), and passes its `signal` to the strategy or
+  factory; the abort releases the callback port, the login ends `aborted`,
+  the CLI prints the `aborted` words and exits non-zero without a stack
+  trace. Migration notes of both packages say a consumer that relied on the
+  providers' 30 s / 300 s defaults must now bound the login itself, and the
+  CLI's say its five-minute limit is gone — interrupt with Ctrl+C. Tests
+  (CLI): a source test finds no timer bounding a login in the CLI
+  (`INTERACTIVE_LOGIN_TIMEOUT_MS`, `AbortSignal.timeout`, `setTimeout` on a
+  login path); `SIGINT` (and `SIGTERM`) delivered while a login waits aborts
+  it — asserted by binding the callback port afterwards, not by a log line;
+  a login with no signal delivered keeps waiting past the old five minutes
+  (fake timers), the test ending it with its own abort. **For the server task**
   (`mcp-abap-adt`, after this chain): the server must choose its own bound
   for an interactive login it triggers, or document that it waits until the
   user finishes or the request is cancelled.
@@ -2266,4 +2281,7 @@ of Appendix A keeps its information as facts, as diagnostics, or verbatim.
   `ICallbackServerOptions.timeoutMs`, the static factories' `timeoutMs`,
   `DEFAULT_LOGIN_TIMEOUT_MS` (30 s), `MAX_TIMEOUT_MS` and the passcode's
   300 s default — are removed (§6a). A login ends on a result, the identity
-  provider's refusal or the consumer's `AbortSignal`.
+  provider's refusal or the consumer's `AbortSignal`. The CLI's own
+  five-minute bound (`INTERACTIVE_LOGIN_TIMEOUT_MS`) goes too: a CLI login
+  ends on a result, the refusal or the user's Ctrl+C (`SIGINT` / `SIGTERM`
+  wired to an abort, §10.6).
