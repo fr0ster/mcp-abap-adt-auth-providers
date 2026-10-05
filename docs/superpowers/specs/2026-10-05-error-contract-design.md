@@ -391,6 +391,44 @@ by `auth-errors`' `httpStatus()`, `count()`, `port()`, `seconds()` (each
 returns `undefined` outside the range). `facts.status: 500` does not
 compile; `facts.status: httpStatus(500)` does once narrowed.
 
+**The trusted branding sites.** A range check does not narrow `number` to a
+brand (measured, below), so each maker ends in one type assertion, and those
+four assertions plus `mint` are the only ones the shape check (§8.2 rule 4)
+permits in any repository — listed by file and function in
+`tools/assertion-sites.json` of `auth-errors` (`numbers.ts`: `httpStatus`,
+`count`, `port`, `seconds`; `mint.ts`: `mint`); the list is empty everywhere
+else. The makers as they will be written, compiled on 2026-10-05 with
+TypeScript 5.9.3 under the repository's strict flags, brands declared in a
+separate module with unexported symbols as in interfaces-auth:
+
+```ts
+/** A finite integer in [min, max], read without coercion. */
+function inRange(value: unknown, min: number, max: number): value is number {
+  return typeof value === 'number' && Number.isInteger(value) && value >= min && value <= max;
+}
+export function httpStatus(value: unknown): HttpStatus | undefined {
+  return inRange(value, 100, 599) ? (value as HttpStatus) : undefined;
+}
+export function count(value: unknown): Count | undefined {
+  return inRange(value, 0, 1_000_000) ? (value as Count) : undefined;
+}
+export function port(value: unknown): Port | undefined {
+  return inRange(value, 0, 65_535) ? (value as Port) : undefined;
+}
+export function seconds(value: unknown): Seconds | undefined {
+  return inRange(value, 0, 86_400_000) ? (value as Seconds) : undefined;
+}
+```
+
+Result: 0 errors. The companion probe — `const s: HttpStatus = n` inside an
+`n >= 100 && n <= 599 && Number.isInteger(n)` check, and `const lit:
+HttpStatus = 500` — fails with TS2322 "Type 'number' is not assignable to type
+'HttpStatus'" both times (so the assertion in the maker is required), while
+`500 as HttpStatus` compiles (so outside the makers the shape check, not the
+compiler, refuses it). That last line is the shape check's fixture for rule 4
+with a branded integer (§11.3): reported in any file, and not reported in
+`numbers.ts`'s four makers.
+
 **What a later release may change.** A new kind, or a new member of a
 discriminant a consumer is expected to switch on (`problem`, `outcome`,
 `verdict`, `case`, `rule`, `credential`, `source`, `wire`, `refused`), is a
@@ -733,6 +771,39 @@ provider's internal control flow (a refused refresh falling back to a login,
 `IAuthProviderError` the renewal produced and answers it as is (frozen, so
 the `structuredClone` at `:741` goes).
 
+**One conversion point for a failed token request, and its readers.**
+`sendTokenRequest` (`tokenRequest.ts:344-363`) is where every token request
+fails, on both paths. It now takes the site's `operation` and `grant` and
+throws an `AuthProviderFailure` built right there: `tls` for an allowlisted
+TLS code; else `request-failed` with `status` (`httpStatus(response.status)`),
+`oauthError` (`response.data.error` when registered) and `code` (when
+allowlisted), `problem: 'refused'` with a status and `'no-response'` without.
+The reduced `AxiosError` and `tokenEndpointError` go. Every site that today
+**reads the thrown request error's fields** is migrated to read the failure's
+facts instead — found by a sweep of `src` for `isAxiosError`, `.response`,
+`response.status`, `response.data` and `tlsFailureCode(error)` (2026-10-05):
+
+| Site today | What it reads | After |
+|---|---|---|
+| `oidcToken.ts:285-298` — device polling | `response.status === 400` and `response.data.error` ∈ {`authorization_pending`, `slow_down`}: keep polling, `slow_down` adding 5 s to the interval; anything else ends the login | `const e = readFailure(error, 'device-poll')`; `e.kind === 'request-failed' && e.facts.status === 400 && (e.facts.oauthError === 'authorization_pending' \|\| e.facts.oauthError === 'slow_down')` → the same two retry branches, the same waits; else rethrow the failure. Both codes are registered (RFC 8628), so they survive as facts |
+| `passcodeAuth.ts:95-104` | `axios.isAxiosError(error) && error.response` → wrap in `TokenEndpointError` | nothing to read: the failure from `sendTokenRequest` is thrown as it is (`operation: 'passcode-exchange'`) |
+| `clientCredentialsAuth.ts:76-87`, `tokenRefresher.ts:80-87`, `oidcToken.ts:227-236` (device initiation), `oidcToken.ts:335-345` (password grant) | `tlsFailureCode(error)` to let a TLS failure through unwrapped, else wrap | nothing to read: `sendTokenRequest` already chose `tls` or `request-failed`; the site passes its operation |
+| `saml2TokenExchange.ts:97-106`, `:154-163` | `axios.isAxiosError(error)` to decide whether to log | logs `logFields(readFailure(error, …))` for any failure, then rethrows it |
+| `browserAuth.ts:150-157` | a 2xx `response` without `access_token`: logs the status and the redacted OAuth body | unchanged log (H10's policy), then throws `request-failed` `problem: 'no-access-token'` |
+| `BaseTokenProvider.ts:475-487` — refresh falling back to login | nothing (any throw) | unchanged: any failure of the refresh falls back |
+| the broker (`AuthBroker.ts:660`, `SessionWriter.ts:40-46`) | nothing of the error but its class name (`classLabel`) | logs `AuthProviderFailure`; no other reader (no `isAxiosError` in the broker or the CLI, searched) |
+
+Tests (auth-providers, on the axios mock and on the stand's Keycloak device
+endpoint where it applies): pending → success; `slow_down` → success with the
+interval increased by 5 s (fake timers assert the wait); a terminal OAuth
+error (`access_denied`, `expired_token`) ends the login with `request-failed`
+carrying that `oauthError`; a `400` **without a body** ends the login at once
+with `request-failed` `status: 400` and no `oauthError` (as today: no code,
+no retry); and the same four through the strategy path
+(`prepareTokenRequest`) and the path without one. Load-bearing: reading
+`oauthError` from anything but the classified facts (or dropping it in
+`sendTokenRequest`) turns pending → success red.
+
 **The OAuth error description.** A token endpoint's `error_description`
 (and `error_uri`) is server free text and never enters an error. Decision,
 for approval (Appendix C, L1): each wrapping site logs it once at `debug`
@@ -930,7 +1001,9 @@ plugins do not have). It refuses, in `src/` outside tests:
    or a function returning one) — every provider is a class reaching the base;
 4. a type assertion (`as`, `<T>`) whose target is or contains
    `IAuthProviderError`, `IAuthRefusal`, `AuthOutcome`,
-   `IAuthProviderFailure` or a branded integer;
+   `IAuthProviderFailure` or a branded integer, except at the sites named in
+   the repository's `tools/assertion-sites.json` — `auth-errors`' `mint` and
+   its four integer makers (§4.3); every other repository's list is empty;
 5. a spread or `Object.assign` whose source is typed `IAuthProviderError` (a
    spread keeps the brand and would let `{ ...minted, reason }` compile);
 6. a builder call (`authError.<kind>(facts, diagnostics)`) passing a
@@ -1067,6 +1140,61 @@ the brand and its limit.
 - `tools/check-provider-shape.mjs` rules 4–5, wired into `lint:check`.
 - README / CHANGELOG: migration note (a custom `ILogonTarget` builds its
   refusal through `auth-errors`; `AuthRefusedError.refusal.kind`).
+
+**connection's tests before auth-providers 6.0.0 exists.** connection
+releases before auth-providers (goal Path, steps 7 → 8), but its tests use
+real providers from its devDependency `@mcp-abap-adt/auth-providers ^5.2.0`
+(`package.json` devDependencies; imported by 13 test files —
+`realProviders.test.ts:16`, `connectorAxes.test.ts:17`,
+`connectors/fixtures.ts:18`, `helpers/onPrem.ts:11`, …) as
+`IAuthProvider`, and a 5.x provider's unbranded `{ reason, hint }` refusal is
+not an `AuthOutcome` of interfaces-auth 5.0.0 (confirmed by a probe). The
+dependency order is kept; connection's tests bridge the gap with a
+**test-only legacy adapter**, `src/__tests__/helpers/legacyProvider.ts`, never
+shipped (`tsconfig.build.json` excludes `src/__tests__`):
+
+```ts
+/** A 5.x provider, structurally: its four methods and their 5.x outcome. */
+interface LegacyRefusal { readonly reason: string; readonly hint?: string | undefined }
+type LegacyOutcome = { readonly ok: true } | { readonly ok: false; readonly refusal: LegacyRefusal };
+interface LegacyLogonTarget {
+  tlsMaterial(material: ICertificateMaterial): LegacyOutcome;
+  logonParameters(parameters: Readonly<Record<string, string>>): LegacyOutcome;
+}
+interface LegacyAuthProvider {
+  readonly kind: string;
+  prepare(): Promise<LegacyOutcome>;
+  establish(logon: LegacyLogonTarget): Promise<LegacyOutcome>;
+  authorize(request: IRequestTarget): Promise<LegacyOutcome>;
+  rejected(rejection: IAuthRejection): Promise<LegacyOutcome>;
+}
+export function legacyProvider(legacy: LegacyAuthProvider): IAuthProvider;
+```
+
+No cast anywhere: the 5.x classes satisfy `LegacyAuthProvider` structurally,
+and the adapter is an ordinary `IAuthProvider`. It hands the 5.x provider a
+`LegacyLogonTarget` that calls the real target and answers its (new) outcome
+as `{ ok, refusal: { reason, hint } }` — read from the minted error, which has
+both. Each 5.x answer becomes a new outcome through `classifyOutcome(answer,
+fallback)` after one step `classifyOutcome` cannot do — a 5.x refusal is
+unbranded free text, so it is translated by a **closed test table** from the
+exact 5.x words connection's tests produce to the builder call of Appendix A
+(`'the user or password was refused'` → `authError['credential-refused']({
+credential: 'user-password', at })`, `'the token was refused'`, the
+certificate words, the `system-refused` words, …). A 5.x reason not in the
+table answers the fallback `authError.connection({ problem: 'provider-threw'
+})` and is recorded; an `afterEach` in every suite that uses the adapter
+fails the test when anything was recorded, so no refusal is silently
+re-worded. Every test file that builds a provider from auth-providers wraps
+it: `legacyProvider(new BasicAuthProvider(…))`.
+
+**The second compatibility run (a gate).** Once auth-providers 6.0.0 is
+published, connection's devDependency moves to `^6.0.0`, the adapter and its
+table are deleted, and the same suites run against the real 6.0.0 providers
+(no adapter). Green is a release gate of the chain (§11.5, gate 6); any
+difference — a word, a kind, a disposition — is fixed in a connection patch
+(12.0.x) released before auth-stores and the broker move, so the chain never
+ships a connection whose tests ran only against the adapter.
 
 `interfaces-adt-connection` stays where it is: moving connection to its 2.0.0
 is not this work.
@@ -1356,6 +1484,9 @@ README differs from the generated table.
    install of each from the registry outside the repositories.
 5. `docs/superpowers/` emptied of this work's documents before the
    auth-providers release.
+6. connection's suites, run once against the published auth-providers
+   6.0.0 without the legacy adapter (§10.3), green — before auth-stores and
+   the broker move; a connection 12.0.x patch first if they are not.
 
 ## 12. Out of scope, and what is not measured
 
