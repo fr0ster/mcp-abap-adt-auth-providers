@@ -1182,9 +1182,18 @@ signal (or none). The rule, wherever an attempt is shared:
      and a replacement attempt would otherwise read the held R and submit it
      before any queued step ran. The queued clearing step (below) stays, for
      the held state and persistence (`refreshToken` cleared,
-     identity-checked as today, `BaseTokenProvider.ts:459-485`). An entry is
-     dropped once a credential commit has installed a different refresh
-     token, so the set holds only tokens that could still be read. Persistence is told nothing new (no `onTokens`) until a result
+     identity-checked as today, `BaseTokenProvider.ts:459-485`). **A
+     quarantined token is a tombstone for the provider's lifetime:** no entry
+     ever leaves the set (its size is the number of cut refreshes — tiny), so
+     R → S → R cannot bring R back. A **credential commit carrying a
+     tombstoned refresh token** — a newer result that returns R again, a late
+     response of a non-rotating endpoint — installs its access token but
+     treats that refresh token as absent: it is neither installed nor
+     persisted as usable (`onTokens` is told the result without it), and the
+     result's refresh token is not accepted without this check
+     (`BaseTokenProvider.ts:543-547`). The tombstones are lost with the
+     instance: a re-seeded or new provider (a restart) may submit a persisted
+     R once — the documented restart limit above. Persistence is told nothing new (no `onTokens`) until a result
      is known; the persisted R stays where it is, so a restarted process may
      submit it once and be refused — rule 6 again, one login.
   2. A late response to that refresh that does arrive is offered to the
@@ -1396,7 +1405,12 @@ before the queue:** commit A installs R and stalls in its `onTokens` (a test
 hook); replacement B reads R, dispatches a refresh and is aborted; replacement
 C does not submit R (asserted on the server: R arrives once, from B) and
 goes to login; relying on the queued clearing step alone turns this case
-red; running `onTokens` hooks concurrently turns the
+red; **tombstones for life:** R cut → a commit installs S → a newer commit
+returns R → the next refresh never submits R (asserted on the server) and
+goes to login; a late response of a non-rotating endpoint returning R → its
+access token installed, R neither installed nor persisted as usable
+(`onTokens` sees no refresh token); reinstating an exit rule ("leave once a
+different token is installed") turns the first case red; running `onTokens` hooks concurrently turns the
 commit-order case red; re-submitting a cut R turns the refresh case red;
 reinstating a "no live party → `aborted`" rule turns the after-release and
 the mixed-consumer cases red. **Drain handoff:** with the callback server's
