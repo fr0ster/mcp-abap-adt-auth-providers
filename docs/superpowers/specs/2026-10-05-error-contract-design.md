@@ -455,6 +455,15 @@ exhaustiveness over code lists, only over kinds and discriminants.
   result, and its JSDoc and the `withBrowserCallbackServer` example
   (`:136-141`) say so (§6a). `IAuthorizationStrategy`'s JSDoc stops naming
   "the timeout" as something a strategy owns.
+- **Cancelling a login (§6b).** `AuthorizationRequest` gains `readonly
+  signal?: AbortSignal | undefined` — the provider's signal for this login,
+  which a strategy must honour as it honours its own option signal. A new
+  `ITokenRequestOptions { readonly signal?: AbortSignal | undefined }`;
+  `ITokenProvider.getTokens(options?: ITokenRequestOptions)` and
+  `IRefreshableTokenProvider.refreshTokens(options?: ITokenRequestOptions)`
+  take it (optional, so a 4.x-shaped implementation still satisfies the
+  type). Types only. `IAuthProvider`'s four methods are unchanged: a login a
+  moment starts is cancelled through the provider's attached signals (§6b).
 - `tools/package-map.json` maps every new symbol to `interfaces-auth`;
   `check:surface` and `check:graph` pass.
 - `src/__typechecks__/errorContract.ts` holds the type tests of the
@@ -1113,6 +1122,88 @@ options and `ICallbackServerOptions` is a compile error
 (`@ts-expect-error` on the object literal), and `DEFAULT_LOGIN_TIMEOUT_MS`
 is not exported (`@ts-expect-error` on its import).
 
+## 6b. Cancelling a login
+
+Decided by the user 2026-10-05. With no built-in timeout (§6a), a consumer
+without a human at a terminal — the server — must be able to cancel a login
+it no longer needs: an MCP request cancelled, a session closed.
+
+**Waiters, not owners.** A login a token provider starts is a **shared
+attempt**: concurrent first needs share it (`BaseTokenProvider`'s in-flight
+`renewal`, and `pin`), and the broker's per-destination build is shared the
+same way. Each party waiting on a shared attempt is a **waiter** with its own
+signal (or none). The rule, wherever an attempt is shared:
+
+- one waiter's abort releases **only that waiter**: its promise rejects with
+  an `AuthProviderFailure` of `interactive-login` `aborted` (a moment answers
+  Oops with that error); the attempt continues for the others;
+- a waiter without a signal never aborts, so an attempt it waits on runs to
+  its end;
+- when **every** waiter has aborted, the attempt itself is aborted: its own
+  `AbortController` aborts, its signal reaches the strategy
+  (`AuthorizationRequest.signal`) and the device-code polling loop, the
+  callback socket is released (§6a's release rules), and the attempt settles
+  `aborted`;
+- an attempt that failed or was aborted is **not kept**: the next need starts
+  a new one (the in-flight `renewal` and `pinning` are cleared on settle, as
+  today; the broker drops a failed or aborted build from its cache, as it
+  drops a failed one today, `AuthBroker.ts:1030-1045`); an aborted renewal is
+  never stored in `remembered` (rule 8: an abort is the consumer's decision,
+  not the token's).
+
+**Where it lives.** One helper, `sharedAttempt` (auth-providers,
+`src/auth/sharedAttempt.ts`, internal), implements the rule for the
+provider: an attempt holds its `AbortController` and a set of live waiters;
+`join(signal?)` adds one and returns that waiter's promise. `BaseTokenProvider`
+runs `renew` and `pin` through it; `performLogin` receives the attempt's
+signal and every login path passes it on — the strategy through
+`AuthorizationRequest.signal` (shipped strategies combine it with their own
+option signal), `OidcDeviceFlowProvider`'s polling (it stops at the next wait,
+and the wait itself is abortable), `UaaPasscodeProvider`'s strategy. A
+token request already on the wire is not cut (it is bounded by the server
+and short); its result is discarded if the attempt was aborted. The broker
+keeps its own, equivalent rule for its build cache (it does not import the
+provider's internal helper): `getProvider` callers are waiters of the
+destination's build.
+
+**Which signals are waiters.**
+- `getTokens({ signal })` / `refreshTokens({ signal })`: that call is a waiter
+  with that signal; without one, a waiter that never aborts.
+- A login a **moment** starts (`prepare`, `authorize`, `rejected`, …) has no
+  per-call signal: its waiter is the provider's **attached parties**. A token
+  provider takes `signal?: AbortSignal | undefined` in its config (auth-
+  providers' `BaseConfig`, beside `authDebug`) — one party attached at
+  construction — and exposes `attach(signal?: AbortSignal | undefined): void`
+  for each further party sharing the provider (`undefined` attaches a party
+  that never cancels). The moment's waiter aborts when every attached party's
+  signal has aborted; with none attached, it never aborts (today's
+  behaviour). A party attached after its own signal aborted counts as
+  aborted.
+- The broker: `getProvider(destination, { signal })` makes the caller a
+  waiter of the shared build **and** attaches the same signal to the token
+  provider it returns (on a cache hit too), so a login that provider starts
+  later — in `rejected()` above all — is cancelled when every session that
+  holds it has gone. `getToken(destination, { signal })` /
+  `refreshToken(destination, { signal })` pass the call's signal to
+  `getTokens` / `refreshTokens`. The broker adds no bound and no signal of
+  its own.
+
+Tests (auth-providers, on a strategy that waits until aborted, with the
+callback port asserted, CLAUDE.md "assert on the port"): two `getTokens`
+callers with separate signals share one login; the first aborts → it rejects
+`aborted`, the second still gets the token from the same login (the strategy
+was called once, its signal not aborted); both abort → the strategy's signal
+is aborted and the port is bound by the test afterwards; an aborted attempt
+is not reused — the next `getTokens` starts a new login; a caller without a
+signal beside one that aborts → the login continues; a login started by
+`rejected()` with the config `signal` aborted → `rejected()` answers Oops
+`aborted` and the port is free; two attached parties, one aborts → the
+login continues, both → aborted; the device flow stops polling on abort (no
+request after the abort, fake timers); an aborted renewal is not
+`remembered`. Load-bearing: aborting the attempt on the first waiter's abort
+turns the two-waiter case red; caching the aborted attempt turns the retry
+case red. Broker tests: §10.6.
+
 ## 7. Logon targets (connection) and rule 4
 
 **How a target builds its refusal.** connection depends on `auth-errors` and
@@ -1601,6 +1692,24 @@ kind. Migration note: none beyond the versions.
   (`mcp-abap-adt`, after this chain): the server must choose its own bound
   for an interactive login it triggers, or document that it waits until the
   user finishes or the request is cancelled.
+- **Cancelling (§6b).** `getProvider(destination, options?: { signal?:
+  AbortSignal | undefined })`, `getToken(destination, options?)`,
+  `refreshToken(destination, options?)`. `getProvider`'s caller is a waiter
+  of the destination's shared build (one caller's abort rejects only its
+  promise, `aborted`; when every caller has aborted the build is abandoned
+  and nothing is cached; a failed or aborted build is retried on the next
+  call), and its signal is attached to the token provider returned — built
+  or from the cache (`attach`). The token API passes the call's signal to
+  `getTokens` / `refreshTokens`. The broker adds no bound. Tests: two
+  `getProvider` callers, one aborts → the other gets the provider; both
+  abort → nothing cached, the next call builds again; a provider obtained
+  through `getProvider(…, { signal })` whose `rejected()` starts a login is
+  cancelled by that signal (strategy signal aborted, port bound afterwards),
+  and not cancelled while another `getProvider` caller's signal is live;
+  `getToken(…, { signal })` aborted → rejects `aborted`, a concurrent
+  `getToken` without a signal still gets the token. **For the server task:**
+  it ties each MCP request's cancellation to the token API's per-call signal
+  and each session's close to the signal it passes to `getProvider`.
 - `AuthBrokerConfig.authDebug?: boolean | undefined` (§6): passed as
   `authDebug` to every token provider the broker builds from a destination
   (`destinations.ts`'s provider construction), `=== true` only; never read
