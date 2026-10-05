@@ -1233,6 +1233,22 @@ signal (or none). The rule, wherever an attempt is shared:
      pending one. There is no retry loop and no timer: the next commit is the
      retry; if none comes before the process ends, the restart limit above
      applies.
+     **Every discarded refresh token clears, not only a cut one.** The
+     provider keeps a **logical refresh state** — `held` (a usable refresh
+     token it has, or none ever known) or `cleared` — and moves it to
+     `cleared` whenever it discards a refresh token for any reason: refused
+     by the server on refresh (rules 5/6, `BaseTokenProvider.ts:478-495`,
+     which spends R and then logs in), cut after dispatch, or tombstoned.
+     The discard is notified at once by a queued clearing step (`onTokens`
+     with the held access token and `'clear'`, advancing no watermark) under
+     the pending rule above, so the persisted R goes even when the login that
+     follows fails. Every later credential notification derives its
+     disposition from the state: a result with a new usable refresh token →
+     `'replace'` (state `held`); otherwise `'clear'` while the state is
+     `cleared`, and `'keep'` only while it is `held` — so the login that
+     follows a refused refresh and returns no refresh token carries
+     `'clear'`, and the broker's `stored` fallback can never restore R
+     (`AuthBroker.ts:1282-1295`).
   2. A late response to that refresh that does arrive is offered to the
      commit queue (below) with the **generation of its attempt**: it is
      committed — tokens, R2, `onTokens` — if and only if no newer credential
@@ -1455,7 +1471,12 @@ disposition:** the clearing step's `onTokens` throws, the next commit (a
 token-only result) calls `onTokens` with `'clear'` again, not `'keep'`; a
 `'replace'` whose `onTokens` throws is sent as `'replace'` with the held
 token by the next commit; a new `'replace'` supersedes a pending `'clear'`;
-sending a bare `'keep'` after a failed `'clear'` turns the first case red; reinstating an exit rule ("leave once a
+sending a bare `'keep'` after a failed `'clear'` turns the first case red;
+**refused refresh:** a refresh refused by the server → a clearing
+notification (`'clear'`) before the login starts; the token-only login that
+follows notifies `'clear'`, not `'keep'`; the login failing leaves the
+`'clear'` notified; emitting `'keep'` after a refused refresh turns the
+token-only case red; reinstating an exit rule ("leave once a
 different token is installed") turns the first case red; running `onTokens` hooks concurrently turns the
 commit-order case red; re-submitting a cut R turns the refresh case red;
 reinstating a "no live party → `aborted`" rule turns the after-release and
@@ -2000,8 +2021,13 @@ R. Migration note: none beyond the versions and that statement.
   fails (a store that throws once) → a token-only `'keep'` result arrives →
   the retried write succeeds → a fresh broker on the same store (a restart)
   finds no R; a `'replace'` after a pending `'clear'` wins (the new token is
-  stored). Breaks: falling back to the stored token on `'clear'` turns the
-  first case red; writing each result on its own (no composition) turns the
+  stored); **refused refresh, end to end:** a persisted R → the refresh
+  refused by the server → a token-only login → a fresh broker on the same
+  store (a restart) finds no R; the same with the `'clear'` write failing once
+  and then succeeding; the same with the fallback login itself failing — R is
+  still cleared in the store. Breaks: falling back to the stored token on
+  `'clear'` turns the first case red; a provider emitting `'keep'` after a
+  refused refresh turns the refused-refresh case red; writing each result on its own (no composition) turns the
   composition case red.
 - **Cancelling (§6b).** `getProvider(destination, options?: { signal?:
   AbortSignal | undefined })`, `getToken(destination, options?)`,
