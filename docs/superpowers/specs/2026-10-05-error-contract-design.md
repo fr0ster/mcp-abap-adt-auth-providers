@@ -1,6 +1,6 @@
 # Error contract — design spec
 
-**Status:** draft for review, 2026-10-05. Anchor:
+**Status:** draft for review, 2026-10-05; Codex adversarial approve (fifth pass); information losses L1–L13 approved by the user 2026-10-05. Anchor:
 [`../2026-10-05-error-contract-goal.md`](../2026-10-05-error-contract-goal.md)
 (approved 2026-10-05). Every "Holds throughout" invariant of the goal binds
 this spec; §13 says how each is honoured and which ones are held by something
@@ -1712,6 +1712,9 @@ two rules each) and 6 payload rules: 56 in `ASSERTION_RULES`.
 each with today's words verbatim.
 
 ## Appendix C — Information lost, for the user's approval
+
+**Approved by the user 2026-10-05: L1–L13 as written; L1 keeps the proposed
+redacted `debug` log line per site.**
 
 Each item is something a person or a program can see today and will not see
 in the same place after this change. Nothing else is lost: every other row
