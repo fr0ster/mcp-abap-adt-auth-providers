@@ -1193,10 +1193,31 @@ signal (or none). The rule, wherever an attempt is shared:
   `updateTokens`, `markIfElsewhere`, the pinned material, `remembered`, and
   `obtained` (`onTokens`, so persistence, `BaseTokenProvider.ts:630-639`) — is
   applied by a **commit** that runs in one serialized queue per provider,
-  never concurrently with another. Each attempt takes a **generation** from a
-  per-provider counter when it begins; a commit applies only if its
-  generation is newer than the last applied one, else it is discarded whole
-  (no in-memory change, no hook). The queue runs in arrival order: a later
+  never concurrently with another. **Two kinds of commit, two watermarks.**
+  A renewal and a pin are different attempts — and a renewal contains a pin
+  (`renewOnce` awaits `presentable()` → `pin`, `BaseTokenProvider.ts:454-458`,
+  `:215-217`) — so one counter would let the nested pin's commit discard its
+  own renewal's. Therefore:
+  - a **pin commit** sets the pinned material only; it carries a **pin
+    generation** (taken when the pin attempt begins) and is checked against
+    the **pin watermark** only;
+  - a **credential commit** sets the tokens (`updateTokens`), `remembered`,
+    and runs `obtained` (`onTokens`); it carries a **credential generation**
+    (taken when the renewal attempt begins) and is checked against the
+    **credential watermark** only;
+  - neither kind ever advances the other's watermark;
+  - **spending a cut refresh token** (above, rule 1) is applied in the queue
+    as a step of its own that advances **no** watermark and clears
+    `refreshToken` only if it still holds that R — so the same attempt's late
+    R2 can still be committed;
+  - **dependent effects are ordered after what they read:** a renewal applies
+    its pin commit (not merely enqueues it) before it sends anything, as
+    `presentable()` already requires; `markIfElsewhere` runs inside the
+    credential commit and reads the pinned thumbprint current at that point,
+    which is therefore always the one this renewal pinned or a newer one.
+  A commit applies only if its generation is newer than its own kind's
+  watermark, else it is discarded whole (no in-memory change, no hook). The
+  queue runs in arrival order: a later
   commit — its in-memory change included — starts only after the earlier
   one, its `onTokens` included, has settled; so persistence is always told
   the credentials in the order they became current, and the last persisted
@@ -1353,7 +1374,14 @@ turns the two-waiter case red; caching the aborted attempt turns the retry
 case red; clearing the slot only on settle turns the doomed-join case red;
 applying effects before the commit check turns the late-result case red;
 dropping the generation check turns the newer-login-first and the
-commit-order cases red; running `onTokens` hooks concurrently turns the
+commit-order cases red; **separate watermarks:** a first login and a refresh
+of a seeded token, each on a provider whose TLS material is not yet pinned
+(the pin happens inside the renewal) → the tokens and the replacement refresh
+token are cached and `onTokens` persists them exactly once, and the pinned
+material is set exactly once; `markIfElsewhere` of the new token sees the
+thumbprint pinned by that same renewal; a single shared counter for pin and
+credential commits turns both cases red, and a spend step that advances the
+credential watermark turns the "late R2 adopted" case red; running `onTokens` hooks concurrently turns the
 commit-order case red; re-submitting a cut R turns the refresh case red;
 reinstating a "no live party → `aborted`" rule turns the after-release and
 the mixed-consumer cases red. **Drain handoff:** with the callback server's
