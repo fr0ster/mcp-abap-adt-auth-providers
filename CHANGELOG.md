@@ -34,6 +34,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Security: what a token request's promise rejected with was kept.** The
+  reduction rebuilt only values that looked like axios failures; anything
+  else passed through unchanged. A consumer's global axios response
+  interceptor throwing `new Error(r.data.error_description)` — or a
+  primitive, or an object whose getters throw — therefore reached the
+  consumer with the server's text, in the OIDC sites' message and rendering,
+  and as the `cause` of the `TokenEndpointError` the wrapping sites throw.
+  Every rejection is now replaced, on both paths and in OIDC discovery, by a
+  fresh `AxiosError` of fixed words carrying only an integer status, an
+  allowlisted (or axios's own) code and a registered OAuth `error` — never the
+  original, not even as `cause`. The device poll's `authorization_pending` /
+  `slow_down` still continue.
+
 - **Security: a server echoing the Basic header could expose the client
   credential, on the path without a client-authentication strategy.** Without
   a strategy, the UAA code exchange, the UAA refresh, the passcode exchange,

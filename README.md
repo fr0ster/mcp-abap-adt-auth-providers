@@ -2075,7 +2075,7 @@ try {
 - `TokenProviderError` - Base class with `code: string` property
 - `ValidationError` - provider config validation failed, includes `missingFields: string[]`
 - `BrowserAuthError` - a browser login failed (timeout, the identity provider's refusal, a busy callback port, a browser that would not open, an abort), includes `cause?: Error`; thrown by every browser strategy (`browserCallbackStrategy`, `oidcCallbackStrategy`, `samlCallbackStrategy`). Its message keeps this package's own words (the timeout, "Port N is already in use", an abort); the identity provider's refusal names only its registered code (`the identity provider refused the login (consent_required)`), never `error_description`; for anything else — a custom transport's or launcher's error — it is fixed words (`the browser login failed (unknown error)`, with an allowlisted code when there is one) and the original is `cause`, since the foreign text may hold a secret and the message is what gets logged
-- `TokenEndpointError` - a token request failed at a site that wraps it (UAA refresh, client credentials, passcode, OIDC device initiation, password grant); a plain `Error`, not a `TokenProviderError`; carries `status`, `oauthError` (a registered OAuth / OIDC code only) and `code` (an allowlisted system or TLS code only), the original as `cause`
+- `TokenEndpointError` - a token request failed at a site that wraps it (UAA refresh, client credentials, passcode, OIDC device initiation, password grant); a plain `Error`, not a `TokenProviderError`; carries `status`, `oauthError` (a registered OAuth / OIDC code only) and `code` (an allowlisted system or TLS code only); its `cause` is the safe `AxiosError` the request was reduced to, never what the request rejected with (since 5.4.2)
 - `RefreshError`, `SessionDataError`, `ServiceKeyError` - exported, but no provider throws them: a refused refresh falls back to a login inside `getTokens()`/`refreshTokens()`, and sessions and service keys are read by `@mcp-abap-adt/auth-stores`, not here
 - `AssertionValidationError` - a SAML assertion was refused, includes `check: AssertionCheck` naming the check that failed — see [SAML assertion validation](#errors)
 - `CertificateMaterialError` - client certificate material cannot be used, includes `incomplete: boolean` (no PFX and not both a certificate and its key, versus material no TLS context accepts); its message is fixed and carries nothing of the material. Thrown by `tlsClientCertificate` and by a provider pinning a strategy's certificate. Its `words` getter is deprecated: use `refusalWords` (the package never reads `words` from a thrown value, since any object can carry its own)
@@ -2083,7 +2083,11 @@ try {
 - `ClientAuthenticationResultError` - what a client authentication strategy returned cannot be sent (a non-string value, a header with a line break, a parameter or header replacing the request's own, an endpoint that is not an absolute `https:` URL); thrown before anything is sent, fixed message
 
 A failed token request throws without the request it sent — no form body, no
-`Authorization` header, no TLS agent — and with the server's body reduced to
+`Authorization` header, no TLS agent — and never with what its promise
+rejected with: anything that reached it (an axios failure, or what a global
+response interceptor of yours threw — the server's text, a primitive, an
+object with throwing getters) is replaced by a fresh `AxiosError` of fixed
+words, an integer status and an allowlisted code (since 5.4.2); and with the server's body reduced to
 its `error` when that is a registered OAuth code; the server's
 `error_description` and `error_uri` go nowhere — no error, no log line
 (since 5.4.2).
