@@ -814,7 +814,10 @@ export class AuthProviderFailure extends Error implements IAuthProviderFailure {
   // no `cause`, no diagnostics in the message.
 }
 export function readFailure(thrown: unknown, operation: Operation): IAuthProviderError; // = classify
-export function isAuthProviderFailure(value: unknown): value is IAuthProviderFailure;
+export function isAuthProviderFailure(value: unknown): value is AuthProviderFailureLike;
+// AuthProviderFailureLike = Error & { readonly name: 'AuthProviderFailure' }: the guard
+// is structural (another copy's failure answers true), so it promises no
+// trusted `error`, `message` or words — the error is read with readFailure.
 ```
 
 `AuthProviderFailure`'s constructor takes a minted error only (typed, and
