@@ -24,8 +24,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `{ ...stored, ...result }` relies on; `resultShapes.test.ts` pins it. For
   the contract types of `@mcp-abap-adt/interfaces-auth`, which declare
   `?: T`, one helper (`asContract`, internal) states that shape. The exported
-  declarations widened, each field from `?: T` to `?: T | undefined` — no
-  consumer that compiled against 5.4.0 stops compiling:
+  declarations widened, each field from `?: T` to `?: T | undefined`. No
+  consumer without `exactOptionalPropertyTypes` stops compiling. A consumer
+  with it that assigns one of these values to a type of its own declared
+  `?: T` must widen that type to `?: T | undefined` — above all where it reads
+  what the package hands it: `DeviceCodePrompt` (a presenter),
+  `OidcCallbackResult` (a custom OIDC callback server or strategy), and
+  `BaseTokenProvider`'s protected `authorizationToken`, `refreshToken`,
+  `expiresAt`, `logger` and `clientAuthentication` (a subclass); the config
+  types are written by a consumer, rarely read. The widened fields:
   - `AuthorizationCodeProviderConfig`: `clientSecret`, `authorizationUrl`,
     `accessToken`, `refreshToken`, `expiresAt`, `logger`
   - `ClientCredentialsProviderConfig`: `clientSecret`, `logger`
@@ -83,6 +90,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   serialised — the client secret, a password, the tokens. Its message is now
   fixed words: "Unsupported SSO provider config: no provider for this
   protocol and flow".
+- `OidcDeviceFlowProvider`'s poll reads the status and OAuth `error` of what
+  a poll threw through `readSafely`, like every other read of a foreign
+  error: a throwing getter on the thrown value no longer replaces the
+  original error with its own.
 
 ## [5.4.0] - 2026-10-05
 
