@@ -47,4 +47,34 @@ describe('pollDeviceTokens', () => {
     expect((outcome.thrown as Error).message).toBe('the token request failed');
     expect((outcome.thrown as Error).cause).toBeUndefined();
   });
+
+  it('a logger that throws while the poll waits: the poll goes on', async () => {
+    mockedAxios.post
+      .mockImplementationOnce(() =>
+        Promise.reject({
+          isAxiosError: true,
+          response: { status: 400, data: { error: 'authorization_pending' } },
+        }),
+      )
+      .mockImplementationOnce(() =>
+        Promise.resolve({ data: { access_token: 'at', expires_in: 60 } }),
+      );
+    const logger = {
+      info: () => {},
+      warn: () => {},
+      error: () => {},
+      debug: () => {
+        throw new Error('logger down');
+      },
+    };
+    const tokens = await pollDeviceTokens(
+      'https://idp.example/token',
+      'client',
+      undefined,
+      'device-code',
+      0,
+      logger,
+    );
+    expect(tokens.accessToken).toBe('at');
+  });
 });

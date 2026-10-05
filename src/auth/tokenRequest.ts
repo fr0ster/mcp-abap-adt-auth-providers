@@ -35,6 +35,7 @@ import axios, {
   AxiosError,
   type AxiosRequestConfig,
   type AxiosResponse,
+  CanceledError,
 } from 'axios';
 import { ClientAuthenticationResultError } from '../errors/ClientAuthenticationError';
 import { TokenEndpointError } from '../errors/TokenEndpointError';
@@ -350,6 +351,11 @@ const AXIOS_CODES: ReadonlySet<string> = new Set([
 ]);
 
 function reduce(error: unknown): AxiosError {
+  // A cancellation stays one — `axios.isCancel` and `axios.isAxiosError`
+  // both hold — in fixed words, with nothing of the original.
+  if (readSafely(error, '__CANCEL__') === true) {
+    return new CanceledError('the token request was canceled');
+  }
   const rawCode = readSafely(error, 'code');
   const namedCode = allowlistedCode(rawCode);
   const code =
@@ -396,6 +402,20 @@ function registeredOnly(data: unknown): OAuthErrorFields | undefined {
   if (!data || typeof data !== 'object') return undefined;
   const error = registeredOAuthError(readSafely(data, 'error'));
   return error === undefined ? {} : { error };
+}
+
+/**
+ * Runs a log call for a token site where a logger that throws must change
+ * nothing: inside a catch, the failure the site rethrows — already replaced
+ * by safe facts — must not be replaced by whatever the consumer's logger
+ * threw.
+ */
+export function logQuietly(write: () => void): void {
+  try {
+    write();
+  } catch {
+    // The site's own outcome is what the caller needs.
+  }
 }
 
 /** Where a site's failed request is noted: one debug line of safe facts. */

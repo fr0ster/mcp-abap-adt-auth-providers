@@ -9,6 +9,7 @@ import { loggedError } from './refusal';
 import {
   type LegacyBasic,
   legacyBasic,
+  logQuietly,
   type PreparedTokenRequest,
   prepareTokenRequest,
   sendTokenRequest,
@@ -110,9 +111,12 @@ export async function exchangeSamlAssertion(
     if (axios.isAxiosError(error)) {
       // The safe facts only (status, a registered code, an allowlisted
       // system code): not even a redacted description reaches the log.
-      logger?.error(
-        '[SAML] Token exchange failed',
-        loggedError(error, 'the SAML token exchange'),
+      // A logger that throws must not replace the safe rejection.
+      logQuietly(() =>
+        logger?.error(
+          '[SAML] Token exchange failed',
+          loggedError(error, 'the SAML token exchange'),
+        ),
       );
     }
     throw error;
@@ -168,9 +172,12 @@ export async function refreshSamlBearerToken(
     if (axios.isAxiosError(error)) {
       // The safe facts only (status, a registered code, an allowlisted
       // system code): not even a redacted description reaches the log.
-      logger?.error(
-        '[SAML] Token refresh failed',
-        loggedError(error, 'the SAML token refresh'),
+      // A logger that throws must not replace the safe rejection.
+      logQuietly(() =>
+        logger?.error(
+          '[SAML] Token refresh failed',
+          loggedError(error, 'the SAML token refresh'),
+        ),
       );
     }
     throw error;

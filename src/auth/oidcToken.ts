@@ -9,6 +9,7 @@ import { tlsFailureCode } from './refusal';
 import {
   type LegacyBasic,
   legacyBasic,
+  logQuietly,
   type PreparedTokenRequest,
   prepareTokenRequest,
   sendTokenRequest,
@@ -293,7 +294,9 @@ export async function pollDeviceTokens(
         (errorCode === 'authorization_pending' || errorCode === 'slow_down')
       ) {
         const wait = errorCode === 'slow_down' ? interval + 5 : interval;
-        logger?.debug('[OIDC] Device authorization pending', { wait });
+        logQuietly(() =>
+          logger?.debug('[OIDC] Device authorization pending', { wait }),
+        );
         await new Promise((resolve) => setTimeout(resolve, wait * 1000));
         continue;
       }

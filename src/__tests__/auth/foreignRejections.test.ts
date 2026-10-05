@@ -321,3 +321,63 @@ describe.each([200, 400])('a %i', (code) => {
     },
   );
 });
+
+describe('a consumer logger that throws while a site reports the failure', () => {
+  const throwing = {
+    info: () => {},
+    warn: () => {},
+    debug: () => {
+      throw new Error(`${MARKER} debug`);
+    },
+    error: () => {
+      throw new Error(`${MARKER} error`);
+    },
+  } as ILogger;
+
+  describe.each(PATHS)('%s', (_path, auth) => {
+    it.each([
+      [
+        'SAML bearer exchange',
+        () =>
+          exchangeSamlAssertion(
+            'A',
+            `${base}/token`,
+            'cid',
+            auth() ? undefined : 'secret',
+            throwing,
+            auth(),
+          ),
+      ],
+      [
+        'SAML bearer refresh',
+        () =>
+          refreshSamlBearerToken(
+            'rt',
+            `${base}/token`,
+            'cid',
+            auth() ? undefined : 'secret',
+            throwing,
+            auth(),
+          ),
+      ],
+    ])(
+      '%s: the safe rejection, not what the logger threw',
+      async (_site, run) => {
+        status = 400;
+        let thrown: unknown;
+        const failed = expect(
+          run().catch((error: unknown) => {
+            thrown = error;
+            throw error;
+          }),
+        ).rejects.toBeDefined();
+        await failed;
+        expect(axios.isAxiosError(thrown)).toBe(true);
+        expect((thrown as Error).message).toBe(
+          'Request failed with status code 400',
+        );
+        expect(renderings(thrown)).not.toContain(MARKER);
+      },
+    );
+  });
+});
