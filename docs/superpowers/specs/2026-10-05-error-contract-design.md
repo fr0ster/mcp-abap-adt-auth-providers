@@ -1851,6 +1851,13 @@ and `classify`, which is total. A throwing `grant` therefore becomes a
 refusal naming the operation without a grant; nothing is evaluated outside
 the `try` but the two locals' initial values.
 
+The body's resolved answer is **normalised** too, through
+`classifyOutcome(answer, <a fallback built here from the operation and the
+grant>)`: a forged refusal, one minted by another copy (rebuilt without
+diagnostics) or a malformed answer does not pass the boundary because the
+body returned it rather than threw it; this copy's minted refusal and `OK`
+pass as they are (Codex review, 2026-10-06).
+
 auth-providers adds `AuthProviderBase` (`src/auth/AuthProviderBase.ts`,
 exported for consumers who write a provider of their own):
 
@@ -1977,7 +1984,13 @@ tree that imports no builder or `guard` (nothing to check). The limits not
 caught (an unconstrained generic cast helper, reads through `self = this`,
 `Object.assign` through an alias, `structuredClone`, JSDoc casts in `.js`,
 mixin-built providers, `Reflect.apply`, laundering through `any`) are listed
-in the script's header.
+in the script's header. **The base is identified by declaration, not by
+name:** the repository names its `AuthProviderBase` in the script's arguments
+(`--base <module>#AuthProviderBase` — the local file in auth-providers, the
+installed `@mcp-abap-adt/auth-providers` elsewhere), the check compares the
+declaration a class reaches with that one, and it verifies the base itself
+(each of the four moments only delegates to `guard`); a same-named local class
+exempts nothing (Codex review, 2026-10-06).
 
 connection runs the same script for rules 4, 5 and 6 (it has no providers,
 and its refusals carry no diagnostics, so its site list is empty);
