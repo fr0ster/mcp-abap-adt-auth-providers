@@ -17,13 +17,13 @@ const defaultRedirectUri = () =>
   `http://localhost:${DEFAULT_CALLBACK_PORT}/callback`;
 
 export interface ExternalCodeStrategyOptions {
-  redirectUri?: string;
+  redirectUri?: string | undefined;
   /** Receives the assembled URL — so the code returned matches its PKCE challenge. */
   provide: (authorizationUrl: string) => Promise<string>;
 }
 
 export interface StaticCodeStrategyOptions {
-  redirectUri?: string;
+  redirectUri?: string | undefined;
   payload: string;
 }
 

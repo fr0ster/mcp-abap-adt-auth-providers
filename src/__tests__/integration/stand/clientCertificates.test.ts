@@ -94,7 +94,7 @@ interface Answer {
 function send(
   url: string,
   options: {
-    material?: ICertificateMaterial;
+    material?: ICertificateMaterial | undefined;
     headers?: Record<string, string>;
     form?: Record<string, string>;
   } = {},

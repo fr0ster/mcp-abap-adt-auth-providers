@@ -16,8 +16,8 @@ export interface Saml2AuthConfig {
   idpSsoUrl: string;
   spEntityId: string;
   acsUrl: string;
-  relayState?: string;
-  authorizationUrl?: string;
+  relayState?: string | undefined;
+  authorizationUrl?: string | undefined;
 }
 
 function base64Encode(input: string | Buffer): string {

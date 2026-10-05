@@ -22,6 +22,7 @@ import {
   BaseTokenProvider,
   type ClientAuthenticationConfig,
   type TokenProviderHooks,
+  tokenResult,
 } from './BaseTokenProvider';
 
 export interface UaaPasscodeProviderConfig
@@ -32,21 +33,21 @@ export interface UaaPasscodeProviderConfig
   /** A client allowed the `password` grant; add `refresh_token` to keep the session. */
   clientId: string;
   /** Omitted for a public client, which authenticates with an empty secret. */
-  clientSecret?: string;
+  clientSecret?: string | undefined;
   /**
    * How the user's code reaches the provider. The strategy is handed
    * `<uaaUrl>/passcode` as the URL to send the user to, and returns the code.
    * Required — see the static factories for the usual choice.
    */
   authorization: IAuthorizationStrategy<string>;
-  accessToken?: string;
-  refreshToken?: string;
+  accessToken?: string | undefined;
+  refreshToken?: string | undefined;
   /**
    * When `accessToken` expires (epoch ms), for a token that carries no `exp`
    * of its own. A JWT's `exp` wins; without either the seed counts as expired.
    */
-  expiresAt?: number;
-  logger?: ILogger;
+  expiresAt?: number | undefined;
+  logger?: ILogger | undefined;
 }
 
 export class UaaPasscodeProvider extends BaseTokenProvider {
@@ -90,7 +91,7 @@ export class UaaPasscodeProvider extends BaseTokenProvider {
     const strategy = this.config.authorization;
     // The passcode page takes no redirect: the code travels by hand.
     const outcome = await strategy.authorize({
-      logger: this.logger,
+      ...(this.logger ? { logger: this.logger } : {}),
       buildAuthorizationUrl: async () => `${this.baseUrl}/passcode`,
     });
     const passcode = outcome.payload;
@@ -103,13 +104,13 @@ export class UaaPasscodeProvider extends BaseTokenProvider {
       this.logger,
       await this.requestAuth(),
     );
-    return {
+    return tokenResult({
       authorizationToken: tokens.accessToken,
       refreshToken: tokens.refreshToken,
       authType: AUTH_TYPE_PASSWORD,
       expiresIn: tokens.expiresIn,
       tokenType: 'jwt',
-    };
+    });
   }
 
   /**
@@ -127,12 +128,12 @@ export class UaaPasscodeProvider extends BaseTokenProvider {
       this.config.clientSecret ?? '',
       await this.requestAuth(),
     );
-    return {
+    return tokenResult({
       authorizationToken: result.accessToken,
       refreshToken: result.refreshToken || this.refreshToken,
       authType: AUTH_TYPE_PASSWORD,
       expiresIn: result.expiresIn,
       tokenType: 'jwt',
-    };
+    });
   }
 }

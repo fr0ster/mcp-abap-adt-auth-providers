@@ -24,6 +24,7 @@ import {
   BaseTokenProvider,
   type ClientAuthenticationConfig,
   type TokenProviderHooks,
+  tokenResult,
 } from './BaseTokenProvider';
 
 export interface AuthorizationCodeProviderConfig
@@ -33,10 +34,10 @@ export interface AuthorizationCodeProviderConfig
   uaaUrl: string;
   clientId: string;
   /** Required, unless `clientAuthentication` is given — never both. */
-  clientSecret?: string;
+  clientSecret?: string | undefined;
 
   /** Pre-built authorization URL. Carries its own redirect; see the guard below. */
-  authorizationUrl?: string;
+  authorizationUrl?: string | undefined;
 
   /**
    * How the login is conducted. Required — see the static factories for the
@@ -45,15 +46,15 @@ export interface AuthorizationCodeProviderConfig
   authorization: IAuthorizationStrategy<string>;
 
   // Optional: existing tokens (for the refresh scenario)
-  accessToken?: string;
-  refreshToken?: string;
+  accessToken?: string | undefined;
+  refreshToken?: string | undefined;
   /**
    * When `accessToken` expires (epoch ms), for a token that carries no `exp`
    * of its own. A JWT's `exp` wins; without either the seed counts as expired.
    */
-  expiresAt?: number;
+  expiresAt?: number | undefined;
 
-  logger?: ILogger;
+  logger?: ILogger | undefined;
 }
 
 /**
@@ -168,7 +169,7 @@ export class AuthorizationCodeProvider extends BaseTokenProvider {
     // produces no callback at all — checking the outcome would mean waiting for
     // a timeout that explains nothing.
     const request = {
-      logger: this.logger,
+      ...(this.logger ? { logger: this.logger } : {}),
       buildAuthorizationUrl: async (redirectUri: string): Promise<string> => {
         if (prebuilt) {
           if (declaredRedirect && declaredRedirect !== redirectUri) {
@@ -208,12 +209,12 @@ export class AuthorizationCodeProvider extends BaseTokenProvider {
       await this.requestAuth(),
     );
 
-    return {
+    return tokenResult({
       authorizationToken: result.accessToken,
       refreshToken: result.refreshToken,
       authType: AUTH_TYPE_AUTHORIZATION_CODE,
       expiresIn: this.calculateExpiresIn(result.accessToken),
-    };
+    });
   }
 
   protected async performRefresh(): Promise<ITokenResult> {
@@ -241,11 +242,11 @@ export class AuthorizationCodeProvider extends BaseTokenProvider {
 
     const expiresIn = this.calculateExpiresIn(result.accessToken);
 
-    return {
+    return tokenResult({
       authorizationToken: result.accessToken,
       refreshToken: result.refreshToken || this.refreshToken, // Keep old if new not provided
       authType: AUTH_TYPE_AUTHORIZATION_CODE,
       expiresIn,
-    };
+    });
   }
 }

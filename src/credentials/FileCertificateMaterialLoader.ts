@@ -6,6 +6,12 @@ import type {
 } from '@mcp-abap-adt/interfaces-auth-sap';
 import { ValidationError } from '../errors/TokenProviderErrors';
 
+/** The passphrase, only when the configuration states one. */
+function passphraseOf(config: ISapConfig): { passphrase?: string } {
+  const { certPassphrase } = config;
+  return certPassphrase === undefined ? {} : { passphrase: certPassphrase };
+}
+
 export class FileCertificateMaterialLoader
   implements ICertificateMaterialLoader
 {
@@ -21,14 +27,14 @@ export class FileCertificateMaterialLoader
     if (hasPfx) {
       return {
         pfx: await readFile(config.certPfxPath as string),
-        passphrase: config.certPassphrase,
+        ...passphraseOf(config),
       };
     }
     if (config.certPath && config.certKeyPath) {
       return {
         cert: await readFile(config.certPath),
         key: await readFile(config.certKeyPath),
-        passphrase: config.certPassphrase,
+        ...passphraseOf(config),
       };
     }
     throw new ValidationError(

@@ -58,7 +58,7 @@ export interface ShippedValidatorOptions {
    */
   readonly idpCertificates: readonly string[];
   /** Tolerance for the time checks, in ms; default `0`. */
-  readonly clockSkewMs?: number;
+  readonly clockSkewMs?: number | undefined;
   /**
    * Where accepted assertions are recorded so a second presentation is refused
    * as a replay. Required: `defaultReplayStore` (process-wide, in memory) or a
@@ -462,19 +462,17 @@ function createValidator(
         return fail('replay', 'this assertion has been presented before');
       }
 
+      // Subject, then NameID — no `?? assertion` fallback, which would read a
+      // NameID from outside the Subject when the Subject is absent.
+      const subject = directChild(assertion, SAML_NS, 'Subject');
+      const nameId = subject
+        ? (directChild(subject, SAML_NS, 'NameID')?.textContent ?? undefined)
+        : undefined;
       return {
         expiresAt,
         assertionId,
         issuer,
-        nameId: (() => {
-          // Subject, then NameID — no `?? assertion` fallback, which would
-          // read a NameID from outside the Subject when the Subject is absent.
-          const subject = directChild(assertion, SAML_NS, 'Subject');
-          return subject
-            ? (directChild(subject, SAML_NS, 'NameID')?.textContent ??
-                undefined)
-            : undefined;
-        })(),
+        ...(nameId === undefined ? {} : { nameId }),
         raw: samlResponse,
         // The signed element, not the response: this is what a consumer may
         // parse without re-deriving what the signature covered.

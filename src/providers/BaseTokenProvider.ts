@@ -50,7 +50,7 @@ export interface TokenProviderHooks {
    * Best effort: a failure is logged by class name and does not fail the
    * authentication.
    */
-  onTokens?: (result: ITokenResult) => Promise<void>;
+  onTokens?: ((result: ITokenResult) => Promise<void>) | undefined;
 }
 
 /**
@@ -59,7 +59,7 @@ export interface TokenProviderHooks {
  * two ways of authenticating one client is a `ValidationError`.
  */
 export interface ClientAuthenticationConfig {
-  clientAuthentication?: IClientAuthentication;
+  clientAuthentication?: IClientAuthentication | undefined;
 }
 
 /** The certificate a provider presents for its lifetime, and its `x5t#S256`. */
@@ -94,6 +94,32 @@ function copyMaterial(material: ICertificateMaterial): ICertificateMaterial {
   };
 }
 
+/** The fields of a token result, an optional one possibly without a value. */
+export interface TokenResultFields {
+  authorizationToken: string;
+  authType: OAuth2GrantType;
+  refreshToken?: string | undefined;
+  expiresIn?: number | undefined;
+  expiresAt?: number | undefined;
+  tokenType?: ITokenResult['tokenType'] | undefined;
+}
+
+/**
+ * A token result carrying only the optional fields that have a value: one
+ * without a value is left out, never set to `undefined`.
+ */
+export function tokenResult(fields: TokenResultFields): ITokenResult {
+  const { refreshToken, expiresIn, expiresAt, tokenType } = fields;
+  return {
+    authorizationToken: fields.authorizationToken,
+    ...(refreshToken === undefined ? {} : { refreshToken }),
+    authType: fields.authType,
+    ...(expiresIn === undefined ? {} : { expiresIn }),
+    ...(expiresAt === undefined ? {} : { expiresAt }),
+    ...(tokenType === undefined ? {} : { tokenType }),
+  };
+}
+
 /**
  * A stored `expiresAt` as an expiry: a finite, non-negative number of epoch
  * milliseconds. Anything else — `Infinity`, `NaN`, a string from an unparsed
@@ -121,25 +147,25 @@ export function storedExpiry(expiresAt: unknown): number | undefined {
 export abstract class BaseTokenProvider
   implements IRefreshableTokenProvider, IAuthProvider
 {
-  protected authorizationToken?: string;
-  protected refreshToken?: string;
-  protected expiresAt?: number; // timestamp in milliseconds
+  protected authorizationToken?: string | undefined;
+  protected refreshToken?: string | undefined;
+  protected expiresAt?: number | undefined; // timestamp in milliseconds
   protected tokenType?: 'jwt' | 'saml' | 'opaque';
-  protected logger?: ILogger;
-  private readonly onTokens?: TokenProviderHooks['onTokens'];
+  protected logger?: ILogger | undefined;
+  private readonly onTokens?: TokenProviderHooks['onTokens'] | undefined;
   /** The token last put on a request, so rejected() can tell a renewal from a repeat. */
-  private presented?: string;
+  private presented?: string | undefined;
   /** The renewal in flight; concurrent callers share it (one refresh, at most one login). */
-  private renewal?: Promise<ITokenResult>;
+  private renewal?: Promise<ITokenResult> | undefined;
   /** How the client authenticates to the authorization server, when configured. */
-  protected readonly clientAuthentication?: IClientAuthentication;
+  protected readonly clientAuthentication?: IClientAuthentication | undefined;
   /**
    * The strategy's TLS material and its thumbprint: set on first need, never
    * replaced (spec §4). A certificate that rotates is a new provider.
    */
   protected pinned?: PinnedCertificate;
   /** The pin attempt in flight; concurrent first needs share it. */
-  private pinning?: Promise<PinnedCertificate>;
+  private pinning?: Promise<PinnedCertificate> | undefined;
   /**
    * A held token bound elsewhere than the pinned certificate that a renewal
    * did not make usable, with the refusal that renewal produced: a renewal
@@ -152,7 +178,7 @@ export abstract class BaseTokenProvider
    * changes and by prepare(); rejected() renews regardless, once, and the
    * latest renewal's refusal is the one kept.
    */
-  private remembered?: { token: string; refusal: AuthOutcome };
+  private remembered?: { token: string; refusal: AuthOutcome } | undefined;
 
   constructor(config: BaseConfig = {}) {
     this.onTokens = config.onTokens;
@@ -392,15 +418,16 @@ export abstract class BaseTokenProvider
           ? Math.floor((this.expiresAt - Date.now()) / 1000)
           : undefined,
       });
+      const { refreshToken, expiresAt } = this;
       return {
         authorizationToken,
-        refreshToken: this.refreshToken,
+        ...(refreshToken === undefined ? {} : { refreshToken }),
         authType: this.getAuthType(),
         tokenType: this.tokenType ?? 'jwt',
-        expiresAt: this.expiresAt,
-        expiresIn: this.expiresAt
-          ? Math.floor((this.expiresAt - Date.now()) / 1000)
-          : undefined,
+        ...(expiresAt === undefined ? {} : { expiresAt }),
+        ...(expiresAt
+          ? { expiresIn: Math.floor((expiresAt - Date.now()) / 1000) }
+          : {}),
       };
     }
 

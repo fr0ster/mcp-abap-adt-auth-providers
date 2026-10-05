@@ -90,7 +90,7 @@ function sentByConfig(expectTimeout = false): Sent & { timeout?: number } {
     method: config.method,
     body: Object.fromEntries(new URLSearchParams(config.data)),
     headers: config.headers,
-    timeout: config.timeout,
+    ...(config.timeout === undefined ? {} : { timeout: config.timeout }),
   };
 }
 

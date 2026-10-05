@@ -58,10 +58,7 @@ export const withOidcCallbackServer: CallbackServerFactory<
           200,
           'Authentication complete. You can close this window.',
         );
-        settle.ok(
-          { code, state: typeof state === 'string' ? state : undefined },
-          res,
-        );
+        settle.ok(typeof state === 'string' ? { code, state } : { code }, res);
       });
     },
     use,

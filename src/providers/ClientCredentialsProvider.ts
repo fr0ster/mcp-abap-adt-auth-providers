@@ -17,6 +17,7 @@ import {
   BaseTokenProvider,
   type ClientAuthenticationConfig,
   type TokenProviderHooks,
+  tokenResult,
 } from './BaseTokenProvider';
 
 export interface ClientCredentialsProviderConfig
@@ -25,8 +26,8 @@ export interface ClientCredentialsProviderConfig
   uaaUrl: string;
   clientId: string;
   /** Required, unless `clientAuthentication` is given — never both. */
-  clientSecret?: string;
-  logger?: ILogger;
+  clientSecret?: string | undefined;
+  logger?: ILogger | undefined;
 }
 
 /**
@@ -79,12 +80,12 @@ export class ClientCredentialsProvider extends BaseTokenProvider {
       await this.requestAuth(),
     );
 
-    return {
+    return tokenResult({
       authorizationToken: result.accessToken,
       refreshToken: undefined, // client_credentials doesn't provide refresh token
       authType: AUTH_TYPE_CLIENT_CREDENTIALS,
       expiresIn: result.expiresIn,
-    };
+    });
   }
 
   /** No refresh grant: the base logs in once instead of refreshing. */

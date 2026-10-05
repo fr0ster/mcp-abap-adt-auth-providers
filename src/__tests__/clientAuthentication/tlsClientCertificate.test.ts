@@ -77,7 +77,7 @@ describe('tlsClientCertificate — the material', () => {
     expect(loader).not.toHaveBeenCalled();
   });
   it('refuses incomplete material as incomplete, in the 5.2.3 words', async () => {
-    const auth = tlsClientCertificate({ material: { cert: pem.cert } });
+    const auth = tlsClientCertificate({ material: { cert: pem.cert! } });
     const e = await auth.authenticate(base).catch((x) => x);
     expect(e).toBeInstanceOf(CertificateMaterialError);
     expect(refusalFrom(e, 'x')).toEqual({
@@ -90,7 +90,7 @@ describe('tlsClientCertificate — the material', () => {
   });
   it('refuses unusable material as unusable, from tlsMaterial() too', async () => {
     const auth = tlsClientCertificate({
-      material: { pfx: pfx.pfx, passphrase: 'wrong' },
+      material: { pfx: pfx.pfx!, passphrase: 'wrong' },
     });
     const e = await auth.tlsMaterial?.().catch((x) => x);
     expect(e).toBeInstanceOf(CertificateMaterialError);
@@ -130,7 +130,7 @@ describe('tlsClientCertificate — the material', () => {
   it('retries after unusable material too', async () => {
     const loader = jest
       .fn<() => Promise<ICertificateMaterial>>()
-      .mockResolvedValueOnce({ cert: pem.cert })
+      .mockResolvedValueOnce({ cert: pem.cert! })
       .mockResolvedValue(pem);
     const auth = tlsClientCertificate({ material: loader });
     await expect(auth.authenticate(base)).rejects.toBeInstanceOf(

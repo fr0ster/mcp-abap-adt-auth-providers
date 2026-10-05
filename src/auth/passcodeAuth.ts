@@ -107,9 +107,10 @@ export async function exchangePasscode(
   if (!data?.access_token) {
     throw new Error('Passcode exchange returned no access_token');
   }
+  const { refresh_token: refreshToken, expires_in: expiresIn } = data;
   return {
     accessToken: data.access_token,
-    refreshToken: data.refresh_token,
-    expiresIn: data.expires_in,
+    ...(refreshToken === undefined ? {} : { refreshToken }),
+    ...(expiresIn === undefined ? {} : { expiresIn }),
   };
 }

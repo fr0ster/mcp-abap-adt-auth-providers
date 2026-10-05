@@ -15,26 +15,27 @@ import {
   BaseTokenProvider,
   type ClientAuthenticationConfig,
   type TokenProviderHooks,
+  tokenResult,
 } from './BaseTokenProvider';
 
 export interface OidcPasswordProviderConfig
   extends TokenProviderHooks,
     ClientAuthenticationConfig {
-  issuerUrl?: string;
+  issuerUrl?: string | undefined;
   clientId: string;
-  clientSecret?: string;
+  clientSecret?: string | undefined;
   username: string;
   password: string;
-  scopes?: string[];
-  tokenEndpoint?: string;
-  accessToken?: string;
-  refreshToken?: string;
+  scopes?: string[] | undefined;
+  tokenEndpoint?: string | undefined;
+  accessToken?: string | undefined;
+  refreshToken?: string | undefined;
   /**
    * When `accessToken` expires (epoch ms), for a token that carries no `exp`
    * of its own. A JWT's `exp` wins; without either the seed counts as expired.
    */
-  expiresAt?: number;
-  logger?: ILogger;
+  expiresAt?: number | undefined;
+  logger?: ILogger | undefined;
 }
 
 export class OidcPasswordProvider extends BaseTokenProvider {
@@ -93,13 +94,13 @@ export class OidcPasswordProvider extends BaseTokenProvider {
       ),
     );
 
-    return {
+    return tokenResult({
       authorizationToken: tokens.accessToken,
       refreshToken: tokens.refreshToken,
       authType: AUTH_TYPE_PASSWORD,
       expiresIn: tokens.expiresIn,
       tokenType: 'jwt',
-    };
+    });
   }
 
   protected async performRefresh(): Promise<ITokenResult> {
@@ -139,12 +140,12 @@ export class OidcPasswordProvider extends BaseTokenProvider {
       ),
     );
 
-    return {
+    return tokenResult({
       authorizationToken: tokens.accessToken,
       refreshToken: tokens.refreshToken || this.refreshToken,
       authType: AUTH_TYPE_PASSWORD,
       expiresIn: tokens.expiresIn,
       tokenType: 'jwt',
-    };
+    });
   }
 }

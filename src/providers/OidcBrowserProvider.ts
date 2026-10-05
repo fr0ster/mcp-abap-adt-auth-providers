@@ -19,30 +19,31 @@ import {
   BaseTokenProvider,
   type ClientAuthenticationConfig,
   type TokenProviderHooks,
+  tokenResult,
 } from './BaseTokenProvider';
 
 export interface OidcBrowserProviderConfig
   extends TokenProviderHooks,
     ClientAuthenticationConfig {
-  issuerUrl?: string;
+  issuerUrl?: string | undefined;
   clientId: string;
-  clientSecret?: string;
-  scopes?: string[];
-  authorizationEndpoint?: string;
-  tokenEndpoint?: string;
+  clientSecret?: string | undefined;
+  scopes?: string[] | undefined;
+  authorizationEndpoint?: string | undefined;
+  tokenEndpoint?: string | undefined;
   /**
    * How the login is conducted. Required — see the static factories for the
    * usual choice.
    */
   authorization: IAuthorizationStrategy<OidcCallbackResult>;
-  accessToken?: string;
-  refreshToken?: string;
+  accessToken?: string | undefined;
+  refreshToken?: string | undefined;
   /**
    * When `accessToken` expires (epoch ms), for a token that carries no `exp`
    * of its own. A JWT's `exp` wins; without either the seed counts as expired.
    */
-  expiresAt?: number;
-  logger?: ILogger;
+  expiresAt?: number | undefined;
+  logger?: ILogger | undefined;
 }
 
 export class OidcBrowserProvider extends BaseTokenProvider {
@@ -102,7 +103,7 @@ export class OidcBrowserProvider extends BaseTokenProvider {
     ).join(' ');
 
     const request = {
-      logger: this.logger,
+      ...(this.logger ? { logger: this.logger } : {}),
       buildAuthorizationUrl: async (redirectUri: string): Promise<string> => {
         const endpoint =
           this.config.authorizationEndpoint ||
@@ -149,13 +150,13 @@ export class OidcBrowserProvider extends BaseTokenProvider {
       await this.requestAuth(mtlsAlias(discovered, 'token_endpoint')),
     );
 
-    return {
+    return tokenResult({
       authorizationToken: tokens.accessToken,
       refreshToken: tokens.refreshToken,
       authType: AUTH_TYPE_AUTHORIZATION_CODE_PKCE,
       expiresIn: tokens.expiresIn,
       tokenType: 'jwt',
-    };
+    });
   }
 
   protected async performRefresh(): Promise<ITokenResult> {
@@ -194,12 +195,12 @@ export class OidcBrowserProvider extends BaseTokenProvider {
       ),
     );
 
-    return {
+    return tokenResult({
       authorizationToken: tokens.accessToken,
       refreshToken: tokens.refreshToken || this.refreshToken,
       authType: AUTH_TYPE_AUTHORIZATION_CODE_PKCE,
       expiresIn: tokens.expiresIn,
       tokenType: 'jwt',
-    };
+    });
   }
 }

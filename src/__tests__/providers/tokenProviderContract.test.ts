@@ -17,7 +17,7 @@ import { recordingTargets } from '../helpers/targets';
 const inAnHour = () => Date.now() + 3600_000;
 const result = (token: string, refresh?: string): ITokenResult => ({
   authorizationToken: token,
-  refreshToken: refresh,
+  ...(refresh === undefined ? {} : { refreshToken: refresh }),
   authType: 'client_credentials',
   tokenType: 'opaque',
   expiresAt: inAnHour(),

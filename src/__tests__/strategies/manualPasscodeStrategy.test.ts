@@ -3,7 +3,7 @@ import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
 import { manualPasscodeStrategy } from '../../strategies';
 
 const request = (logger?: ILogger) => ({
-  logger,
+  ...(logger ? { logger } : {}),
   buildAuthorizationUrl: async () => 'https://uaa.example/passcode',
 });
 

@@ -576,7 +576,10 @@ describe('one certificate, pinned', () => {
   });
 
   it('material that is not usable is refused and not pinned; a later moment loads again', async () => {
-    const { strategy, tlsCalls } = recording([{ cert: A.cert, key: B.key }, A]);
+    const { strategy, tlsCalls } = recording([
+      { cert: A.cert!, key: B.key! },
+      A,
+    ]);
     const provider = new ClientCredentialsProvider({
       uaaUrl: 'https://uaa',
       clientId: 'cid',
@@ -635,8 +638,8 @@ describe('one certificate, pinned', () => {
       tlsMaterial(material: ICertificateMaterial) {
         // In place, and by replacing the fields.
         (material.cert as Buffer).fill(0);
-        material.cert = B.cert;
-        material.key = B.key;
+        material.cert = B.cert!;
+        material.key = B.key!;
         return { ok: true as const };
       },
     };

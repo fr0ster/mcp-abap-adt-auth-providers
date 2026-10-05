@@ -23,6 +23,7 @@ import {
   BaseTokenProvider,
   type ClientAuthenticationConfig,
   type TokenProviderHooks,
+  tokenResult,
 } from './BaseTokenProvider';
 import type {
   Saml2BearerExchangeConfig,
@@ -41,14 +42,14 @@ export interface Saml2BearerProviderConfig
     Saml2BearerExchangeConfig,
     TokenProviderHooks,
     ClientAuthenticationConfig {
-  logger?: ILogger;
-  accessToken?: string;
-  refreshToken?: string;
+  logger?: ILogger | undefined;
+  accessToken?: string | undefined;
+  refreshToken?: string | undefined;
   /**
    * When `accessToken` expires (epoch ms), for a token that carries no `exp`
    * of its own. A JWT's `exp` wins; without either the seed counts as expired.
    */
-  expiresAt?: number;
+  expiresAt?: number | undefined;
 }
 
 export class Saml2BearerProvider extends BaseTokenProvider {
@@ -106,11 +107,13 @@ export class Saml2BearerProvider extends BaseTokenProvider {
     // endpoint; it does not change what is sent beyond toBearerAssertion's
     // conversion below.
     await this.validator.validate(payload, {
-      expectedInResponseTo: requestId,
+      ...(requestId === undefined ? {} : { expectedInResponseTo: requestId }),
       audience: this.config.spEntityId,
       acsUrl,
-      expectedIssuer: this.config.idpEntityId,
-      logger: this.logger,
+      ...(this.config.idpEntityId === undefined
+        ? {}
+        : { expectedIssuer: this.config.idpEntityId }),
+      ...(this.logger ? { logger: this.logger } : {}),
     });
     const tokenUrl = resolveTokenUrl(this.config);
     // RFC 7522 takes one base64url Assertion; a login delivers the whole
@@ -124,13 +127,13 @@ export class Saml2BearerProvider extends BaseTokenProvider {
       await this.requestAuth(),
     );
 
-    return {
+    return tokenResult({
       authorizationToken: tokens.accessToken,
       refreshToken: tokens.refreshToken,
       authType: AUTH_TYPE_SAML2_BEARER,
       expiresIn: tokens.expiresIn,
       tokenType: 'jwt',
-    };
+    });
   }
 
   /**
@@ -152,12 +155,12 @@ export class Saml2BearerProvider extends BaseTokenProvider {
       await this.requestAuth(),
     );
 
-    return {
+    return tokenResult({
       authorizationToken: tokens.accessToken,
       refreshToken: tokens.refreshToken || this.refreshToken,
       authType: AUTH_TYPE_SAML2_BEARER,
       expiresIn: tokens.expiresIn,
       tokenType: 'jwt',
-    };
+    });
   }
 }

@@ -11,13 +11,13 @@ export interface PrivateKeyJwtConfig {
   /** A private key: PEM text or bytes, or a KeyObject. */
   key: string | Buffer | KeyObject;
   algorithm: 'RS256' | 'ES256';
-  keyId?: string;
+  keyId?: string | undefined;
   /**
    * The assertion's audience. Else the draft's `tokenEndpoint` — the
    * authorization server's token endpoint, also for the device initiation —
    * and, for a draft without one, the endpoint the request goes to.
    */
-  audience?: string;
+  audience?: string | undefined;
 }
 
 const ASSERTION_TYPE = 'urn:ietf:params:oauth:client-assertion-type:jwt-bearer';

@@ -5,7 +5,11 @@ import { readRejection } from '../../auth/rejection';
 const at = (
   status: number | undefined,
   error: unknown = new Error('SECRET'),
-): IAuthRejection => ({ at: 'request', status, error });
+): IAuthRejection => ({
+  at: 'request',
+  ...(status === undefined ? {} : { status }),
+  error,
+});
 
 describe('readRejection — only a refused credential is the credential', () => {
   it('401 is the credential', () => {

@@ -37,7 +37,7 @@ function describeLibrary(library?: SncLibrary): string {
 /** The explanation of a GSS code in the error, when it carries one. */
 export function sncCause(
   error: unknown,
-  context: { library?: SncLibrary; secureLoginClient: boolean },
+  context: { library?: SncLibrary | undefined; secureLoginClient: boolean },
 ): IAuthRefusal | undefined {
   const text = searchable(error);
   const library = describeLibrary(context.library);
@@ -59,7 +59,7 @@ export function sncCause(
 
 export function sncRefusal(
   error: unknown,
-  context: { library?: SncLibrary; secureLoginClient: boolean },
+  context: { library?: SncLibrary | undefined; secureLoginClient: boolean },
 ): IAuthRefusal {
   return (
     sncCause(error, context) ?? { reason: `SNC logon refused${sdkKey(error)}` }

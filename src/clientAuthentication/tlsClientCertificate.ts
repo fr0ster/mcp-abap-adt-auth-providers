@@ -8,7 +8,7 @@ export interface TlsClientCertificateConfig {
   /** The material, or a loader the consumer owns; read and checked once. */
   material: ICertificateMaterial | (() => Promise<ICertificateMaterial>);
   /** Where the request goes; else the draft's mTLS alias, else its endpoint. */
-  endpoint?: string;
+  endpoint?: string | undefined;
 }
 
 /** `tls_client_auth`: the client is the certificate it presents in the handshake. */
