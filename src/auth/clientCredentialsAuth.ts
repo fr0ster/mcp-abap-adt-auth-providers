@@ -82,7 +82,7 @@ export async function getTokenWithClientCredentials(
     // Unwrapped, so the refusal can name the TLS code and its fixed hint.
     if (tlsFailureCode(error) !== undefined) throw error;
     // The safe facts as properties, never the server's description or the
-    // transport's text in a refusal or a log line; the original is the cause.
+    // transport's text in a refusal or a log line; the cause is the safe replacement.
     throw tokenEndpointError('Client credentials authentication failed', error);
   }
   // Outside the try: this package's own words, not a failure to wrap.

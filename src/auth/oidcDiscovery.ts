@@ -3,7 +3,8 @@
  */
 
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
-import axios from 'axios';
+import axios, { type AxiosResponse } from 'axios';
+import { withoutRequest } from './tokenRequest';
 
 export interface OidcDiscoveryDocument {
   issuer: string;
@@ -57,9 +58,16 @@ export async function discoverOidc(
   // The one request that may follow a redirect: it sends no secret — no
   // credential, no grant, no client certificate — only a GET for public
   // metadata. Every token request sets `maxRedirects: 0`.
-  const response = await axios.get<OidcDiscoveryDocument>(discoveryUrl, {
-    headers: { Accept: 'application/json' },
-  });
+  let response: AxiosResponse<OidcDiscoveryDocument>;
+  try {
+    response = await axios.get<OidcDiscoveryDocument>(discoveryUrl, {
+      headers: { Accept: 'application/json' },
+    });
+  } catch (error) {
+    // Whatever was thrown — the server's text through a consumer's
+    // interceptor included — is replaced by the safe facts alone.
+    throw withoutRequest(error);
+  }
 
   if (!response.data?.token_endpoint) {
     throw new Error('OIDC discovery document missing token_endpoint');

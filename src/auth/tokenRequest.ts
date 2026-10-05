@@ -313,49 +313,76 @@ export interface TokenRequestFailure extends Error {
  * request in them, in encodings no redaction can enumerate. They reach no
  * error and no log line. No `config`, `request` or
  * `cause` is set, so `toJSON()`, which reads `this.config`, serialises none.
+ * Not only an axios failure: every rejection is replaced (`reduce`).
  */
-function withoutRequest(error: unknown): unknown {
+export function withoutRequest(error: unknown): AxiosError {
   try {
     return reduce(error);
   } catch {
-    // A value whose reading throws: nothing of it is kept.
+    // Nothing of a value whose reading throws is kept.
     return new AxiosError('the token request failed');
   }
 }
 
-function reduce(error: unknown): unknown {
-  if (!error || typeof error !== 'object') return error;
-  const raw = error as Record<string, unknown>;
-  if (!('config' in raw) && !('request' in raw) && !('response' in raw)) {
-    return error;
-  }
-  const code = typeof raw.code === 'string' ? raw.code : undefined;
-  const namedCode = allowlistedCode(code);
-  const response = raw.response as Record<string, unknown> | undefined;
+/**
+ * Every rejection is replaced, whatever it is: an axios failure, or anything
+ * else that reached the request's promise — a consumer's response
+ * interceptor throwing the server's `error_description`, a primitive, a
+ * Proxy, an object whose getters throw. Only facts read through `readSafely`
+ * and validated survive: an integer status, an allowlisted code, a registered
+ * OAuth `error`. The original is never kept, not even as `cause` (which
+ * `util.inspect` prints).
+ */
+/** axios's own error codes: its fixed words, kept on the replacement. */
+const AXIOS_CODES: ReadonlySet<string> = new Set([
+  AxiosError.ERR_FR_TOO_MANY_REDIRECTS,
+  AxiosError.ERR_BAD_OPTION_VALUE,
+  AxiosError.ERR_BAD_OPTION,
+  AxiosError.ERR_NETWORK,
+  AxiosError.ERR_DEPRECATED,
+  AxiosError.ERR_BAD_RESPONSE,
+  AxiosError.ERR_BAD_REQUEST,
+  AxiosError.ERR_NOT_SUPPORT,
+  AxiosError.ERR_INVALID_URL,
+  AxiosError.ERR_CANCELED,
+  AxiosError.ECONNABORTED,
+  AxiosError.ETIMEDOUT,
+]);
+
+function reduce(error: unknown): AxiosError {
+  const rawCode = readSafely(error, 'code');
+  const namedCode = allowlistedCode(rawCode);
+  const code =
+    namedCode ??
+    (typeof rawCode === 'string' && AXIOS_CODES.has(rawCode)
+      ? rawCode
+      : undefined);
+  const response = readSafely(error, 'response');
+  const hasResponse = !!response && typeof response === 'object';
   const status =
-    response && typeof response === 'object' ? response.status : undefined;
+    integerStatus(readSafely(response, 'status')) ??
+    integerStatus(readSafely(error, 'status'));
   // The message is rebuilt, never copied: axios's own words for a status, else
   // fixed words with the code. Nothing of the server (a reason phrase, a body)
   // or of the request (a URL) can be in it.
   const message =
-    typeof status === 'number'
+    status !== undefined
       ? `Request failed with status code ${status}`
       : `the token request failed${namedCode ? ` (${namedCode})` : ''}`;
   // AxiosResponse requires a config, and this one has none on purpose: the
   // config carries the agent's key, the form body and Authorization.
-  const reduced =
-    response && typeof response === 'object'
-      ? ({
-          status,
-          // The reason phrase is the server's free text: it may echo a secret.
-          statusText: '',
-          headers: {},
-          data: registeredOnly(response.data),
-        } as unknown as AxiosResponse)
-      : undefined;
+  const reduced = hasResponse
+    ? ({
+        status,
+        // The reason phrase is the server's free text: it may echo a secret.
+        statusText: '',
+        headers: {},
+        data: registeredOnly(readSafely(response, 'data')),
+      } as unknown as AxiosResponse)
+    : undefined;
   const failure = new AxiosError(message, code, undefined, undefined, reduced);
-  if (failure.status === undefined && typeof raw.status === 'number') {
-    failure.status = raw.status;
+  if (failure.status === undefined && status !== undefined) {
+    failure.status = status;
   }
   return failure;
 }
@@ -446,8 +473,8 @@ export async function sendTokenRequest<T>(
  * can name them. With a response, the message is `<label> (<status>)` and,
  * when the server gave a registered code, `: <code>`; the server's
  * description never.
- * Without one, `<label>: ` and fixed words (`loggedError`). The original is
- * the cause.
+ * Without one, `<label>: ` and fixed words (`loggedError`). The cause is
+ * what `sendTokenRequest` threw: its safe replacement, never the original.
  */
 export function tokenEndpointError(
   label: string,
