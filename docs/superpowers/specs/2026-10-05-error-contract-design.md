@@ -253,8 +253,8 @@ selected metadata, and because admission makes them safe to print
 (§5.3) — not because of where they came from. **Never admitted, by
 construction:** an exception's message (xml-crypto's, the XML parser's,
 OpenSSL's), any element's text other than `saml:Issuer`, a token, a secret,
-key material, a server's body or reason phrase, a URL with a query or
-userinfo.
+key material, a server's body or reason phrase, a URL with userinfo, or a
+URL's query or fragment (`ConfigUri` strips them and keeps origin + pathname).
 
 ## 4. Types in `@mcp-abap-adt/interfaces-auth` 5.0.0
 
@@ -627,7 +627,7 @@ answers the admitted value or "drop":
 
 | Check | Rule |
 |---|---|
-| `LocalPath` | a string of 1–1 024 code points; no C0 control, DEL, C1 control, U+2028/U+2029, bidirectional control (U+202A–U+202E, U+2066–U+2069) or lone surrogate; never truncated (a truncated path misleads) — longer is dropped |
+| `LocalPath` | a string of 1–1 024 code points; no C0 control, DEL, C1 control, U+2028/U+2029, bidirectional control (U+202A–U+202E, U+2066–U+2069), invisible format character (U+200B–U+200F, U+061C, U+180E, U+2060–U+2064, U+FEFF) or lone surrogate; never truncated (a truncated path misleads) — longer is dropped |
 | `DocumentValue` | a non-empty string with none of the characters `LocalPath` refuses; cut to 64 code points at a code-point boundary with `…` appended when longer (today's `quoteUntrusted` cap, `signedNode.ts:73-78`); the ASCII-only fields (`referenceUri`, `statusCode`) additionally refuse anything outside U+0021–U+007E |
 | `XmlName` | matches `^[A-Za-z_][A-Za-z0-9._-]{0,63}$` |
 | `XmlId` | matches `^[A-Za-z_][A-Za-z0-9._-]*$`, then cut as `DocumentValue` |
@@ -2320,7 +2320,7 @@ In `auth-errors`:
   `reason`, `hint`, `renderDiagnostics(error)`, `logFields(error)` or
   `AuthProviderFailure.message`.
 - **Diagnostics admission:** each check of §5.3 with an accepted value, each
-  refused character class (C0, DEL, C1, U+2028/9, each bidi control, a lone
+  refused character class (C0, DEL, C1, U+2028/9, each bidi control, each invisible format character, a lone
   surrogate), the length limits on both sides, a non-string, a throwing
   getter; attacker-shaped assertion values (`&#10;`-decoded newlines in an
   Issuer, a 10 000-character Destination, an `xsd:dateTime` with a quote, a
