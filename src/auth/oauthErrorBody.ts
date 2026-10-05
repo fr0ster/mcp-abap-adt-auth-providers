@@ -100,43 +100,60 @@ const REDACTED = '<redacted>';
 
 /**
  * A run of base64 in any form a server may echo it: either alphabet, any of
- * its characters percent-escaped in any case, a `+` read as a space (`%20`
- * or ` `), any padding.
+ * its characters percent-escaped in any case, any padding, and broken by
+ * whitespace — a space (a form-decoded `+`), a tab, a line break (a server
+ * wrapping lines) — as itself or escaped (`%20`, `%09`, `%0A`, `%0D`).
  */
 const BASE64_ESCAPE =
-  '%(?:3[0-9]|4[1-9A-Fa-f]|5[0-9Aa]|6[1-9A-Fa-f]|7[0-9Aa]|2[BbDdFf]|5[Ff]|20)';
+  '%(?:3[0-9]|4[1-9A-Fa-f]|5[0-9Aa]|6[1-9A-Fa-f]|7[0-9Aa]|2[BbDdFf]|5[Ff])';
+const WHITESPACE = '[ \\t\\r\\n]|%(?:20|09|0[AaDd])';
 const BASE64_RUN = new RegExp(
-  `(?:[A-Za-z0-9+/_ -]|${BASE64_ESCAPE})+(?:=|%3[Dd]){0,2}`,
+  `(?:[A-Za-z0-9+/_-]|${BASE64_ESCAPE}|${WHITESPACE})+(?:=|%3[Dd]){0,2}`,
   'g',
 );
-/** Separators a form-decoded `+` became: a run is shrunk at these. */
-const SPACE = /%20| /g;
+/** Whitespace inside a run: where it is cut into pieces. */
+const BREAK = new RegExp(`(?:${WHITESPACE})+`, 'g');
+/** Whitespace around a run: the text's, not the run's. */
+const AROUND = new RegExp(
+  `^((?:${WHITESPACE})*)([\\s\\S]*?)((?:${WHITESPACE})*)$`,
+);
 /** Never more pieces than this are tried one span at a time. */
 const MAX_PIECES = 32;
 
-/** The run as plain base64: escapes decoded, `+` and `/`, no padding. */
-const normalized = (run: string): string =>
-  run
-    .replace(/%20/g, ' ')
+/**
+ * The run as plain base64 — escapes decoded, `+` and `/`, no padding — read
+ * both ways whitespace may have come in: dropped (a wrapped line) and as `+`
+ * (a form-decoded one).
+ */
+function normalized(run: string): string[] {
+  const unescaped = run
     .replace(/%([0-9A-Fa-f]{2})/g, (_escape, hex: string) =>
       String.fromCharCode(Number.parseInt(hex, 16)),
     )
-    .replace(/[ -]/g, '+')
+    .replace(/-/g, '+')
     .replace(/_/g, '/')
     .replace(/=+$/, '');
+  return [
+    unescaped.replace(/[ \t\r\n]/g, ''),
+    unescaped.replace(/[\t\r\n]/g, '').replace(/ /g, '+'),
+  ];
+}
 
 /** True when the run, decoded from any of its four alignments, holds a secret. */
 function holdsSecret(run: string, secret: RegExp): boolean {
-  const plain = normalized(run);
-  for (let offset = 0; offset < 4 && offset < plain.length; offset++) {
-    const decoded = Buffer.from(plain.slice(offset), 'base64').toString('utf8');
-    if (secret.test(decoded)) return true;
+  for (const plain of normalized(run)) {
+    for (let offset = 0; offset < 4 && offset < plain.length; offset++) {
+      const decoded = Buffer.from(plain.slice(offset), 'base64').toString(
+        'utf8',
+      );
+      if (secret.test(decoded)) return true;
+    }
   }
   return false;
 }
 
 /**
- * Redacts the smallest span of whole pieces (a run split at its spaces) that
+ * Redacts the smallest span of whole pieces (a run split at its whitespace) that
  * still holds a secret, then looks again on either side of it: a run may be
  * a sentence around one credential.
  */
@@ -144,7 +161,7 @@ function redactRun(run: string, secret: RegExp): string {
   if (!holdsSecret(run, secret)) return run;
   const pieces: { start: number; end: number }[] = [];
   let start = 0;
-  for (const space of run.matchAll(SPACE)) {
+  for (const space of run.matchAll(BREAK)) {
     if (space.index > start) pieces.push({ start, end: space.index });
     start = space.index + space[0].length;
   }
@@ -179,9 +196,7 @@ function redactEncodedSecrets(text: string, secret: RegExp): string {
 
 function redactEncodedPiece(text: string, secret: RegExp): string {
   return text.replace(BASE64_RUN, (run) => {
-    // The spaces around a run are the text's, not the run's.
-    const [, before = '', core = '', after = ''] =
-      /^((?:%20| )*)(.*?)((?:%20| )*)$/s.exec(run) ?? [];
+    const [, before = '', core = '', after = ''] = AROUND.exec(run) ?? [];
     return core.length < 2
       ? run
       : `${before}${redactRun(core, secret)}${after}`;

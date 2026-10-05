@@ -20,6 +20,7 @@ import type { IClientAuthentication } from '@mcp-abap-adt/interfaces-auth';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
 import { exchangeCodeForToken } from '../../auth/browserAuth';
 import { getTokenWithClientCredentials } from '../../auth/clientCredentialsAuth';
+import { oauthErrorFields } from '../../auth/oauthErrorBody';
 import {
   exchangeAuthorizationCode,
   initiateDeviceAuthorization,
@@ -34,7 +35,7 @@ import {
   refreshSamlBearerToken,
 } from '../../auth/saml2TokenExchange';
 import { refreshJwtToken } from '../../auth/tokenRefresher';
-import type { TokenRequestAuth } from '../../auth/tokenRequest';
+import { legacyBasic, type TokenRequestAuth } from '../../auth/tokenRequest';
 import {
   clientSecretBasic,
   clientSecretPost,
@@ -88,7 +89,7 @@ function readings(text: string): string[] {
     text,
     percentDecoded(text, false),
     percentDecoded(text, true),
-  ];
+  ].flatMap((t) => [t, t.replace(/[\r\n\t]/g, ''), t.replace(/\s/g, '')]);
   const out = [...decoded];
   for (const candidate of decoded) {
     for (const run of candidate.match(/[A-Za-z0-9+/_\- =]{2,}/g) ?? []) {
@@ -169,10 +170,25 @@ function variants(value: string): string[] {
 }
 
 /** And of a base64 credential. */
+/** A value cut into lines of `width` characters, joined by `eol`. */
+const wrapped = (value: string, width: number, eol: string): string =>
+  (value.match(new RegExp(`.{1,${width}}`, 'g')) ?? []).join(eol);
+
+/** Base64 as a server wrapping its lines may echo it. */
+const wrappings = (value: string): string[] => [
+  wrapped(value, 4, '\r\n'),
+  wrapped(value, 8, '\n'),
+  wrapped(value, 6, '%0D%0A'),
+  wrapped(value, 5, '%0a'),
+  wrapped(value, 7, '\t'),
+];
+
 function base64Variants(credential: string): string[] {
   const bare = credential.replace(/=+$/, '');
   const decoded = Buffer.from(credential, 'base64').toString('utf8');
   return [
+    ...wrappings(credential),
+    ...wrappings(bare),
     bare,
     `${bare}=`,
     `${bare}==`,
@@ -201,24 +217,34 @@ const SECRET_PARAMETERS = [
 ];
 
 let status = 400;
+/** Everything a hostile server echoes of one request. */
+function echoOf(
+  authorization: string | undefined,
+  body: URLSearchParams,
+): string {
+  const echoes: string[] = [];
+  const basic = /^Basic\s+(\S+)$/i.exec(authorization ?? '')?.[1];
+  if (basic) echoes.push(...base64Variants(basic));
+  for (const name of SECRET_PARAMETERS) {
+    for (const value of body.getAll(name)) {
+      const b64 = Buffer.from(value).toString('base64');
+      echoes.push(
+        ...variants(value),
+        b64.replace(/=+$/, ''),
+        Buffer.from(value).toString('base64url'),
+        ...wrappings(b64),
+      );
+    }
+  }
+  return echoes.join(' | ');
+}
+
 const echoing = createServer((req, res) => {
   const chunks: Buffer[] = [];
   req.on('data', (chunk: Buffer) => chunks.push(chunk));
   req.on('end', () => {
     const body = new URLSearchParams(Buffer.concat(chunks).toString());
-    const echoes: string[] = [];
-    const basic = /^Basic\s+(\S+)$/i.exec(req.headers.authorization ?? '')?.[1];
-    if (basic) echoes.push(...base64Variants(basic));
-    for (const name of SECRET_PARAMETERS) {
-      for (const value of body.getAll(name)) {
-        echoes.push(
-          ...variants(value),
-          Buffer.from(value).toString('base64').replace(/=+$/, ''),
-          Buffer.from(value).toString('base64url'),
-        );
-      }
-    }
-    const echo = echoes.join(' | ');
+    const echo = echoOf(req.headers.authorization, body);
     res.statusCode = status;
     res.setHeader('Content-Type', 'application/json');
     res.end(
@@ -489,7 +515,7 @@ const CASES = PATHS.flatMap((path) =>
 describe.each([400, 500, 200])(
   'a %i echoing every secret in equivalent forms',
   (code) => {
-    it.each(CASES)('%s: nothing recoverable', async (label, run, path, c) => {
+    it.each(CASES)('%s: nothing recoverable', async (_label, run, path, c) => {
       status = code;
       const strategy = path.auth(c);
       const auth = strategy ? { strategy } : undefined;
@@ -502,21 +528,15 @@ describe.each([400, 500, 200])(
         }),
       ).rejects.toBeDefined();
       await failed;
-      // The free text only in one debug line: none on a 200, but the code
-      // exchange's.
-      const free = /refused|idp\.example/;
-      const { logs, ...onError } = surfaces(thrown, text());
-      for (const [where, rendered] of Object.entries(onError)) {
+      // No free text of the server anywhere: not on the error, not in a log.
+      const free = /refused:|idp\.example/;
+      for (const [where, rendered] of Object.entries(
+        surfaces(thrown, text()),
+      )) {
         expect({ where, free: free.test(rendered) }).toEqual({
           where,
           free: false,
         });
-      }
-      const saying = (logs ?? '').split('\n').filter((l) => free.test(l));
-      const says = code !== 200 || label.startsWith('UAA authorization code');
-      expect(saying).toHaveLength(says ? 1 : 0);
-      for (const line of saying) {
-        expect(line).toMatch(/^debug .*: the token endpoint said /);
       }
       const secrets = [c.secret, ...Object.values(GRANT)];
       for (const [where, rendered] of Object.entries(
@@ -528,3 +548,86 @@ describe.each([400, 500, 200])(
     });
   },
 );
+
+/**
+ * The redactor itself, given what each request carried: 5.4.2 writes none of
+ * the server's words, but the redactor stays as defence in depth (6.0.0's
+ * opt-in debug line uses it), so every echo above must leave nothing
+ * recoverable in what it returns.
+ */
+const formEncoded = (value: string): string =>
+  new URLSearchParams([['', value]]).toString().slice(1);
+
+describe.each(PATHS)('the redactor, $label', (path) => {
+  it.each(
+    CREDENTIALS.filter(
+      (c) => !(path.label.includes("'raw'") && c.id.includes(':')),
+    ),
+  )('id $id / $secret: nothing recoverable', (c) => {
+    const body = new URLSearchParams(
+      Object.entries({
+        refresh_token: GRANT.refresh,
+        code: GRANT.code,
+        code_verifier: GRANT.verifier,
+        password: GRANT.password,
+        passcode: GRANT.passcode,
+        assertion: GRANT.assertion,
+        device_code: GRANT.device,
+        subject_token: GRANT.subject,
+      }),
+    );
+    // What the request carried, as each path sends it, and the secrets the
+    // site would know: its own, its Basic header's, the strategy's.
+    let authorization: string | undefined;
+    const secrets: (string | undefined)[] = [...Object.values(GRANT)];
+    if (path.label === 'without a strategy') {
+      const basic = legacyBasic(c.id, c.secret);
+      authorization = basic.header;
+      secrets.push(c.secret, ...basic.secrets);
+    } else if (path.label === "clientSecretBasic 'raw'") {
+      const basic = legacyBasic(c.id, c.secret);
+      authorization = basic.header;
+      secrets.push(...basic.secrets);
+    } else if (path.label === "clientSecretBasic 'form'") {
+      const basic = legacyBasic(formEncoded(c.id), formEncoded(c.secret));
+      authorization = basic.header;
+      secrets.push(...basic.secrets);
+    } else {
+      body.append('client_secret', c.secret);
+      secrets.push(c.secret);
+    }
+    const echo = echoOf(authorization, body);
+    const fields = oauthErrorFields(
+      {
+        error: 'invalid_client',
+        error_description: `refused: ${echo}`,
+        error_uri: `https://idp.example/err?echo=${echo}`,
+      },
+      secrets,
+    );
+    const said = `${fields?.error_description ?? ''}\n${fields?.error_uri ?? ''}`;
+    // Not vacuous: the echo itself gives the secret away.
+    expect(recovered(echo, [c.secret])).toEqual([c.secret]);
+    expect(recovered(said, [c.secret, ...Object.values(GRANT)])).toEqual([]);
+  });
+});
+
+describe('the redactor, line-wrapped base64', () => {
+  const SECRET = 'supersecret';
+  it.each([
+    ['CRLF', 'c3Vw\r\nZXJzZWNyZXQ='],
+    ['LF', 'c3Vw\nZXJz\nZWNy\nZXQ='],
+    ['escaped CRLF', 'c3Vw%0D%0AZXJzZWNyZXQ%3D'],
+    ['escaped LF, lower case', 'c3Vw%0aZXJz%0aZWNyZXQ'],
+    ['tab', 'c3Vw\tZXJzZWNyZXQ='],
+    ['escaped tab', 'c3Vw%09ZXJzZWNyZXQ='],
+    ['CRLF, unpadded', 'c3Vw\r\nZXJz\r\nZWNy\r\nZXQ'],
+  ])('%s: the whole span is redacted', (_label, echoed) => {
+    expect(recoverable(echoed, SECRET)).toBe(true);
+    const fields = oauthErrorFields(
+      { error_description: `bad ${echoed} here` },
+      [SECRET],
+    );
+    expect(fields?.error_description).toBe('bad <redacted> here');
+  });
+});
