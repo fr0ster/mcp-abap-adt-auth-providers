@@ -46,10 +46,10 @@ export interface TlsWords {
   readonly hint: string;
 }
 
-const UNTRUSTED_SERVER: TlsWords = {
+const UNTRUSTED_SERVER: TlsWords = Object.freeze({
   says: "the server's certificate is not trusted",
   hint: 'if the server uses a private CA, name its certificate in NODE_EXTRA_CA_CERTS',
-};
+});
 
 /**
  * The server asked for a client certificate and refused the one presented, or
@@ -58,10 +58,10 @@ const UNTRUSTED_SERVER: TlsWords = {
  * `SSL/TLS_ALERT_…`; older releases spelled them `SSLV3_ALERT_…` — both are
  * listed.
  */
-const REFUSED_CLIENT_CERTIFICATE: TlsWords = {
+const REFUSED_CLIENT_CERTIFICATE: TlsWords = Object.freeze({
   says: 'the server refused the client certificate',
   hint: "check that the server trusts the certificate's issuer and that the certificate is valid and not revoked",
-};
+});
 
 const CLIENT_CERTIFICATE_ALERTS = [
   'BAD_CERTIFICATE',
@@ -88,17 +88,17 @@ export const TLS_CODES: ReadonlyMap<string, TlsWords> = new Map<
   ['UNABLE_TO_GET_ISSUER_CERT_LOCALLY', UNTRUSTED_SERVER],
   [
     'CERT_HAS_EXPIRED',
-    {
+    Object.freeze({
       says: "the server's certificate has expired",
       hint: "the server must renew its certificate; check also this machine's clock",
-    },
+    }),
   ],
   [
     'ERR_TLS_CERT_ALTNAME_INVALID',
-    {
+    Object.freeze({
       says: "the host name is not in the server's certificate",
       hint: "use the host name the server's certificate is issued for",
-    },
+    }),
   ],
   ['ERR_SSL_TLSV13_ALERT_CERTIFICATE_REQUIRED', REFUSED_CLIENT_CERTIFICATE],
   ['ERR_SSL_TLSV1_ALERT_UNKNOWN_CA', REFUSED_CLIENT_CERTIFICATE],

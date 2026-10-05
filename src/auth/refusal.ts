@@ -46,7 +46,8 @@ import {
 } from './knownCodes';
 import { registeredOAuthError } from './oauthErrorBody';
 
-export const OK: AuthOutcome = { ok: true };
+/** Frozen: a provider returns this very object to its consumer. */
+export const OK: AuthOutcome = Object.freeze({ ok: true });
 
 export function oops(reason: string, hint?: string): AuthOutcome {
   return hint === undefined
@@ -59,22 +60,22 @@ export function oops(reason: string, hint?: string): AuthOutcome {
  * certificate is pinned (spec §4) — none configured, or a binding it cannot
  * read. No thumbprint appears in them.
  */
-export const TOKEN_BOUND_ELSEWHERE = {
+export const TOKEN_BOUND_ELSEWHERE = Object.freeze({
   reason:
     'the token is bound to a client certificate this provider does not present',
   hint: 'give the provider a clientAuthentication that presents the certificate the token was issued for',
-} as const;
+} as const);
 
 /**
  * The fixed words for a token renewed because the one held was bound to
  * another certificate than the pinned one, when the new token is bound
  * elsewhere too. No thumbprint appears in them.
  */
-export const TOKEN_RENEWED_BOUND_ELSEWHERE = {
+export const TOKEN_RENEWED_BOUND_ELSEWHERE = Object.freeze({
   reason:
     'the new token is bound to a client certificate this provider does not present',
   hint: 'the authorization server bound the new token to another certificate: check the certificate registered for this client',
-} as const;
+} as const);
 
 /** Every config property name this package's providers declare. */
 export const KNOWN_CONFIG_FIELDS: ReadonlySet<string> = new Set([

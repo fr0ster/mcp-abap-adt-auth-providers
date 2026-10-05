@@ -2,10 +2,10 @@ import { TOKEN_PROVIDER_ERROR_CODES } from '@mcp-abap-adt/interfaces-auth';
 import { TokenProviderError } from './TokenProviderErrors';
 
 /** The fixed words for a client signing key that cannot be used: the one source. */
-export const CLIENT_KEY_UNUSABLE = {
+export const CLIENT_KEY_UNUSABLE = Object.freeze({
   reason: 'the client signing key could not be used',
   hint: 'check the private key and that it matches the algorithm',
-} as const;
+} as const);
 
 /**
  * Thrown when the key a client signs its assertion with cannot be used. Its
@@ -23,10 +23,10 @@ export class ClientAuthenticationError extends TokenProviderError {
 }
 
 /** The fixed words for a client authentication whose result cannot be sent. */
-export const CLIENT_AUTHENTICATION_UNUSABLE = {
+export const CLIENT_AUTHENTICATION_UNUSABLE = Object.freeze({
   reason: 'the client authentication returned a request that cannot be sent',
   hint: 'check the client authentication strategy',
-} as const;
+} as const);
 
 /**
  * Thrown, before anything is sent, when what a client authentication strategy
@@ -47,10 +47,10 @@ export class ClientAuthenticationResultError extends TokenProviderError {
 }
 
 /** The fixed words for a client id raw Basic cannot carry: the one source. */
-export const BASIC_CLIENT_ID_UNUSABLE = {
+export const BASIC_CLIENT_ID_UNUSABLE = Object.freeze({
   reason: "the client id contains ':', which raw Basic cannot carry",
   hint: "use encoding: 'form' or clientSecretPost",
-} as const;
+} as const);
 
 /**
  * Thrown by `clientSecretBasic` with `encoding: 'raw'` for a client id that

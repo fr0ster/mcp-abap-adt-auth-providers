@@ -24,8 +24,8 @@ export type RejectionReading =
   | { readonly verdict: 'unknown' }
   | { readonly verdict: 'not-credential'; readonly refusal: IAuthRefusal };
 
-const CREDENTIAL: RejectionReading = { verdict: 'credential' };
-const UNKNOWN: RejectionReading = { verdict: 'unknown' };
+const CREDENTIAL: RejectionReading = Object.freeze({ verdict: 'credential' });
+const UNKNOWN: RejectionReading = Object.freeze({ verdict: 'unknown' });
 
 function notCredential(reason: string, hint?: string): RejectionReading {
   return {

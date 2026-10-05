@@ -5,6 +5,7 @@
  */
 
 import { describe, expect, it } from '@jest/globals';
+import { loggedError } from '../../auth/refusal';
 import {
   AssertionValidationError,
   CertificateAuthProvider,
@@ -288,5 +289,82 @@ describe('refusalWords', () => {
     expect(error.incomplete).toBe(false);
     expect(error.expired).toBe(false);
     expect(error.message).toBe('the client certificate could not be used');
+  });
+
+  describe('the word objects `words` hands out cannot be changed', () => {
+    const INCOMPLETE = {
+      reason: 'the client certificate is incomplete',
+      hint: 'give a PFX, or a certificate together with its key',
+    };
+    // Every way of changing the shared object, tried during a hostile flag
+    // read — the moment the refusal is about to choose its words.
+    const tamperings: Array<[string, (words: object) => void]> = [
+      [
+        'assignment',
+        (words) => {
+          Object.assign(words, { reason: MARKER, hint: MARKER });
+        },
+      ],
+      [
+        'defineProperty',
+        (words) => {
+          Object.defineProperty(words, 'reason', { value: MARKER });
+        },
+      ],
+      [
+        'a throwing getter',
+        (words) => {
+          Object.defineProperty(words, 'reason', {
+            get: () => {
+              throw new Error(MARKER);
+            },
+          });
+        },
+      ],
+    ];
+
+    it.each(tamperings)(
+      '%s → refusalWords, loggedError, the certificate check and a later construction keep the fixed words',
+      async (_how, tamper) => {
+        const shared = new CertificateMaterialError(true).words;
+        const forged = Object.create(CertificateMaterialError.prototype, {
+          incomplete: {
+            get: () => {
+              try {
+                tamper(shared);
+              } catch {
+                // frozen: the change is refused
+              }
+              return true;
+            },
+          },
+        });
+
+        expect(refusalWords(forged, 'it')).toEqual(INCOMPLETE);
+        expect(loggedError(forged, 'it')).toEqual({ error: INCOMPLETE.reason });
+        const provider = new CertificateAuthProvider(
+          {
+            load: async () => ({
+              get pfx(): Buffer {
+                throw forged;
+              },
+            }),
+          },
+          {} as never,
+        );
+        expect(await provider.prepare()).toEqual({
+          ok: false,
+          refusal: INCOMPLETE,
+        });
+
+        const genuine = new CertificateMaterialError(true);
+        expect(genuine.message).toBe(INCOMPLETE.reason);
+        expect(refusalWords(genuine, 'it')).toEqual(INCOMPLETE);
+        expect(loggedError(genuine, 'it')).toEqual({
+          error: INCOMPLETE.reason,
+        });
+        expect(text(genuine.words)).not.toContain(MARKER);
+      },
+    );
   });
 });

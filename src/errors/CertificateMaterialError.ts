@@ -2,26 +2,29 @@ import { TOKEN_PROVIDER_ERROR_CODES } from '@mcp-abap-adt/interfaces-auth';
 import { readSafely } from '../auth/knownCodes';
 import { TokenProviderError } from './TokenProviderErrors';
 
+// Every word object here is frozen: `words` hands it to anyone holding an
+// error, and the refusal and the constructor read the same object.
+
 /** The fixed words for certificate material that is not whole: the one source. */
-export const CERTIFICATE_INCOMPLETE = {
+export const CERTIFICATE_INCOMPLETE = Object.freeze({
   reason: 'the client certificate is incomplete',
   hint: 'give a PFX, or a certificate together with its key',
-} as const;
+} as const);
 
 /** The fixed words for certificate material that is whole but cannot be used. */
-export const CERTIFICATE_UNUSABLE = {
+export const CERTIFICATE_UNUSABLE = Object.freeze({
   reason: 'the client certificate could not be used',
   hint: 'check the certificate, the key and the passphrase, and that a PFX uses current encryption (not legacy RC2)',
-} as const;
+} as const);
 
 /**
  * The fixed words for a client certificate past its `notAfter` — at pin time,
  * or before a request that would present it.
  */
-export const CERTIFICATE_EXPIRED = {
+export const CERTIFICATE_EXPIRED = Object.freeze({
   reason: 'the client certificate has expired',
   hint: 'renew the certificate; a token provider pins its certificate for life, so give the renewed one to a new provider',
-} as const;
+} as const);
 
 /**
  * Which fixed words a CertificateMaterialError carries. Internal: the package

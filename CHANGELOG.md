@@ -37,6 +37,11 @@ a refusal or a log line, nor make building one throw:
 - A `ValidationError`'s, `ServiceKeyError`'s or `SessionDataError`'s
   `missingFields` is read element by element, at most 64 elements, with none
   of the array's own methods called; only allowlisted names are kept.
+- Every shared word object is frozen — the certificate, client-authentication,
+  bound-token and TLS words, and the `OK` outcome a provider hands out.
+  `CertificateMaterialError.words` returned the very object the refusal and
+  the constructor read, so changing it (from a forged error's flag getter, or
+  anywhere else) changed every later refusal, log line and message.
 
 ### Changed
 
