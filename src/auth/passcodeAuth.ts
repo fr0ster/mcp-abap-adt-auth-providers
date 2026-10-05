@@ -22,7 +22,6 @@ import {
   grantSecrets,
   legacyBasic,
   prepareTokenRequest,
-  requestSecrets,
   sendTokenRequest,
   type TokenRequestAuth,
   tokenEndpointError,
@@ -92,18 +91,14 @@ export async function exchangePasscode(
       sendAsToday,
       [clientSecret, ...grantSecrets(params)],
       basic,
+      { logger, label: 'Passcode exchange failed' },
     );
   } catch (error) {
     // UAA says why in the body — "Invalid passcode" for a mistyped or
-    // already spent code — which is what the user needs to read.
+    // already spent code — which the debug line carries, redacted.
     if (axios.isAxiosError(error) && error.response) {
-      // Only `error` and `error_description`, with the passcode, the
-      // secret and what the strategy sent redacted: a server may echo them.
-      throw tokenEndpointError(
-        'Passcode exchange failed',
-        error,
-        requestSecrets([passcode, clientSecret], basic, prepared),
-      );
+      // The safe facts only: the status and a registered code.
+      throw tokenEndpointError('Passcode exchange failed', error);
     }
     throw error;
   }

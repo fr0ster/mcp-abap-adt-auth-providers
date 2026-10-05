@@ -30,6 +30,7 @@ import type {
   ITokenRequestAuthentication,
   ITokenRequestDraft,
 } from '@mcp-abap-adt/interfaces-auth';
+import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
 import axios, {
   AxiosError,
   type AxiosRequestConfig,
@@ -40,9 +41,9 @@ import { TokenEndpointError } from '../errors/TokenEndpointError';
 import { assertNotExpired } from './certificateMaterial';
 import { allowlistedCode, integerStatus, readSafely } from './knownCodes';
 import {
-  describeOAuthErrorBody,
   type OAuthErrorFields,
   oauthErrorFields,
+  registeredOAuthError,
 } from './oauthErrorBody';
 import { loggedError } from './refusal';
 
@@ -325,27 +326,23 @@ export interface TokenRequestFailure extends Error {
  * sites read and nothing else: a rebuilt `message` (axios's "Request failed
  * with status code N", or fixed words with the code), `code`, `status`, and a
  * response of `status`, an empty `statusText` (the reason phrase is the
- * server's text), empty `headers` and `data` reduced to the OAuth
- * error fields with every known secret redacted (`oauthErrorFields`): a server
- * may echo the request, or put a token there. No `config`, `request` or
+ * server's text), empty `headers` and `data` reduced to the OAuth `error`
+ * when it is a registered code — the server's free text (`error_description`,
+ * `error_uri`) and an unregistered code are dropped: a server may echo the
+ * request in them, in encodings no redaction can enumerate. They reach only
+ * the site's debug line (`logServerWords`). No `config`, `request` or
  * `cause` is set, so `toJSON()`, which reads `this.config`, serialises none.
  */
-function withoutRequest(
-  error: unknown,
-  secrets: readonly (string | undefined)[],
-): unknown {
+function withoutRequest(error: unknown): unknown {
   try {
-    return reduce(error, secrets);
+    return reduce(error);
   } catch {
     // A value whose reading throws: nothing of it is kept.
     return new AxiosError('the token request failed');
   }
 }
 
-function reduce(
-  error: unknown,
-  secrets: readonly (string | undefined)[],
-): unknown {
+function reduce(error: unknown): unknown {
   if (!error || typeof error !== 'object') return error;
   const raw = error as Record<string, unknown>;
   if (!('config' in raw) && !('request' in raw) && !('response' in raw)) {
@@ -372,7 +369,7 @@ function reduce(
           // The reason phrase is the server's free text: it may echo a secret.
           statusText: '',
           headers: {},
-          data: oauthErrorFields(response.data, secrets),
+          data: registeredOnly(response.data),
         } as unknown as AxiosResponse)
       : undefined;
   const failure = new AxiosError(message, code, undefined, undefined, reduced);
@@ -380,6 +377,56 @@ function reduce(
     failure.status = raw.status;
   }
   return failure;
+}
+
+/**
+ * What of an error body stays on a thrown error: the OAuth `error` when it is
+ * a registered code (a consumer, and the device poll, read it), nothing else;
+ * a body that is not an object becomes undefined.
+ */
+function registeredOnly(data: unknown): OAuthErrorFields | undefined {
+  if (!data || typeof data !== 'object') return undefined;
+  const error = registeredOAuthError(readSafely(data, 'error'));
+  return error === undefined ? {} : { error };
+}
+
+/** Where a site's failed request may say what the server said: one debug line. */
+export interface TokenRequestDiagnostics {
+  /** The site's logger; without one, no line. */
+  readonly logger?: ILogger | null | undefined;
+  /** The site, naming the line. */
+  readonly label: string;
+}
+
+/** The device poll's answers while it waits: the protocol, not a failure. */
+const WAITING = new Set(['authorization_pending', 'slow_down']);
+
+/**
+ * The server's own words about a failed request — `error`,
+ * `error_description`, `error_uri`, every secret the request carried redacted
+ * (`oauthErrorFields`) — in one `debug` line through the site's logger, the
+ * only place they go. No logger, no line; a logger that throws is ignored, so
+ * the failure the site throws is never replaced.
+ */
+export function logServerWords(
+  diagnostics: TokenRequestDiagnostics | undefined,
+  status: unknown,
+  data: unknown,
+  secrets: readonly (string | undefined)[],
+): void {
+  const logger = diagnostics?.logger;
+  if (!logger) return;
+  try {
+    const fields = oauthErrorFields(data, secrets);
+    if (!fields || Object.keys(fields).length === 0) return;
+    if (fields.error !== undefined && WAITING.has(fields.error)) return;
+    logger.debug(`${diagnostics.label}: the token endpoint said`, {
+      status: integerStatus(status),
+      ...fields,
+    });
+  } catch {
+    // The site's failure is what the caller needs.
+  }
 }
 
 /**
@@ -392,17 +439,27 @@ function reduce(
  *   credential and what the strategy added, they are redacted from the error
  *   body that stays on the error.
  * @param basic the site's own Basic header without a strategy (`legacyBasic`).
+ * @param diagnostics where the server's own words go (`logServerWords`): the
+ *   thrown error carries none of them.
  */
 export async function sendTokenRequest<T>(
   prepared: PreparedTokenRequest | undefined,
   asToday: () => Promise<AxiosResponse<T>>,
   sent: readonly (string | undefined)[] = [],
   basic?: LegacyBasic,
+  diagnostics?: TokenRequestDiagnostics,
 ): Promise<AxiosResponse<T>> {
   try {
     return prepared ? await axios<T>(prepared.config) : await asToday();
   } catch (error) {
-    throw withoutRequest(error, requestSecrets(sent, basic, prepared));
+    const response = readSafely(error, 'response');
+    logServerWords(
+      diagnostics,
+      readSafely(response, 'status'),
+      readSafely(response, 'data'),
+      requestSecrets(sent, basic, prepared),
+    );
+    throw withoutRequest(error);
   }
 }
 
@@ -410,24 +467,26 @@ export async function sendTokenRequest<T>(
  * A failed token request as a site rethrows it: a `TokenEndpointError`
  * carrying the safe facts — the HTTP status, the OAuth `error` when it is a
  * registered code, an allowlisted system code — so a refusal and a log line
- * can name them. With a response, the message is `<label> (<status>): ` and
- * the OAuth summary with every known secret redacted (`describeOAuthErrorBody`);
- * without one, `<label>: ` and fixed words (`loggedError`). The original is the
- * cause.
+ * can name them. With a response, the message is `<label> (<status>)` and,
+ * when the server gave a registered code, `: <code>`; the server's
+ * description never (it went to the site's debug line, `logServerWords`).
+ * Without one, `<label>: ` and fixed words (`loggedError`). The original is
+ * the cause.
  */
 export function tokenEndpointError(
   label: string,
   error: unknown,
-  secrets: readonly (string | undefined)[],
 ): TokenEndpointError {
   // Guarded reads: a getter or a Proxy reads as absent.
   const response = readSafely(error, 'response');
   const status = integerStatus(readSafely(response, 'status'));
   if (status !== undefined) {
-    const data = readSafely(response, 'data');
+    const oauthError = registeredOAuthError(
+      readSafely(readSafely(response, 'data'), 'error'),
+    );
     return new TokenEndpointError(
-      `${label} (${status}): ${describeOAuthErrorBody(data, secrets)}`,
-      { status, oauthError: readSafely(data, 'error') },
+      `${label} (${status})${oauthError === undefined ? '' : `: ${oauthError}`}`,
+      { status, oauthError },
       { cause: error },
     );
   }

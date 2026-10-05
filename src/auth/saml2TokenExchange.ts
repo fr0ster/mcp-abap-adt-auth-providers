@@ -107,6 +107,7 @@ export async function exchangeSamlAssertion(
       () => sendAsToday(tokenUrl, grant, clientId, basic),
       [clientSecret, ...grantSecrets(grant)],
       basic,
+      { logger, label: '[SAML] Token exchange failed' },
     );
   } catch (error) {
     if (axios.isAxiosError(error)) {
@@ -166,6 +167,7 @@ export async function refreshSamlBearerToken(
       () => sendAsToday(tokenUrl, grant, clientId, basic),
       [clientSecret, ...grantSecrets(grant)],
       basic,
+      { logger, label: '[SAML] Token refresh failed' },
     );
   } catch (error) {
     if (axios.isAxiosError(error)) {
