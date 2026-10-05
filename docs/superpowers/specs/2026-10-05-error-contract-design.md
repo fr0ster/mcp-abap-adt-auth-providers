@@ -815,7 +815,7 @@ facts instead — found by a sweep of `src` for `isAxiosError`, `.response`,
 | `passcodeAuth.ts:95-104` | `axios.isAxiosError(error) && error.response` → wrap in `TokenEndpointError` | nothing to read: the failure from `sendTokenRequest` is thrown as it is (`operation: 'passcode-exchange'`) |
 | `clientCredentialsAuth.ts:76-87`, `tokenRefresher.ts:80-87`, `oidcToken.ts:227-236` (device initiation), `oidcToken.ts:335-345` (password grant) | `tlsFailureCode(error)` to let a TLS failure through unwrapped, else wrap | nothing to read: `sendTokenRequest` already chose `tls` or `request-failed`; the site passes its operation |
 | `saml2TokenExchange.ts:97-106`, `:154-163` | `axios.isAxiosError(error)` to decide whether to log | logs `logFields(readFailure(error, …))` for any failure, then rethrows it |
-| `browserAuth.ts:150-157` | a 2xx `response` without `access_token`: logs the status and the redacted OAuth body — redacting only `clientsecret`, `grantSecrets(params)` and `prepared.secrets`, never the site's own Basic credential | `rejectMissingToken(site, response)` (below): no log line by default; with `authDebug`, one `debug` line with the same joined secrets as a failed request, previewed; then `request-failed` `problem: 'no-access-token'` |
+| `browserAuth.ts:150-157` | a 2xx `response` without `access_token`: logs the status and the redacted OAuth body — redacting only `clientsecret`, `grantSecrets(params)` and `prepared.secrets`, never the site's own Basic credential | `rejectMissingToken(site, prepared, snapshot, 'no-access-token', 'error')` (below), in both modes: by default 5.4.2's `error`-level safe-facts line verbatim (status, registered `error`); with `authDebug` the same line adds the previewed text, the same joined secrets as a failed request; then `request-failed` `problem: 'no-access-token'` |
 | `BaseTokenProvider.ts:475-487` — refresh falling back to login | nothing (any throw) | unchanged: any failure of the refresh falls back |
 | the broker (`AuthBroker.ts:660`, `SessionWriter.ts:40-46`) | nothing of the error but its class name (`classLabel`) | logs `AuthProviderFailure`; no other reader (no `isAxiosError` in the broker or the CLI, searched) |
 
@@ -927,7 +927,7 @@ export interface TokenRequestSite {
   readonly grant?: OAuth2GrantType | undefined;
   /** The provider's logger; no logger → no debug line, nothing else changes. */
   readonly logger?: ILogger | undefined;
-  /** The consumer's `authDebug === true`; false → no debug line at all. */
+  /** The consumer's `authDebug === true`; false → the safe-facts line only, no server text. */
   readonly authDebug: boolean;
   /** Every secret this request carried: grantSecrets(params) + the configured clientSecret. */
   readonly secrets: readonly (string | undefined)[];
@@ -992,8 +992,9 @@ previewed (above), not erased; without `authDebug` step (2) does not run
 and nothing of the body is read beyond `error`; (4) builds the
 `AuthProviderFailure` from the status, the registered `error` and the
 allowlisted code — the body never enters it, and the reduced fields are
-dropped with the local. With `authDebug`, the line is written for **every**
-site that sends a token request (the five that wrapped today — passcode,
+dropped with the local. The line — the safe facts by default, with the
+previewed server text under `authDebug` — is written for **every** site that
+sends a token request (the five that wrapped today — passcode,
 client credentials, UAA refresh, device initiation, password grant — and the
 code exchange, the OIDC token request and device poll, the SAML exchange and
 refresh), on both paths; device polling's `authorization_pending` /
