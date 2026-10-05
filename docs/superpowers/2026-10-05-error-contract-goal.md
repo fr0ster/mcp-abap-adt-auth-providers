@@ -48,10 +48,11 @@ cover thrown classes only, not refusals.
    only — no logic (the interfaces package holds none).
 2. **`@mcp-abap-adt/auth-providers`** — classification (`unknown` →
    `IAuthProviderError`, the one runtime boundary), the renderer, every
-   refusal and thrown token error built through them. It also moves to
-   `@mcp-abap-adt/interfaces-auth` ^4 (optional fields a provider hands out
-   are `?: T | undefined`) and deletes `asContract`
-   (`src/auth/contractShape.ts`), the one cast 5.4.1 kept for them.
+   refusal and thrown token error built through them. It also moves to the
+   error contract's `@mcp-abap-adt/interfaces-auth` major (5.0.0; it carries
+   4.0.0's `?: T | undefined` fields too) and deletes `asContract`
+   (`src/auth/contractShape.ts`), the one cast 5.4.1 kept for them. Every
+   producer and consumer in this release chain moves to that same major.
 3. **`@mcp-abap-adt/auth-broker`** — relays the error; its copied certificate
    phrases go.
 4. **`@mcp-abap-adt/connection`** — its logon targets (`ILogonTarget`:
