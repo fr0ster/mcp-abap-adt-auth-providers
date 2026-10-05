@@ -455,6 +455,12 @@ exhaustiveness over code lists, only over kinds and discriminants.
   result, and its JSDoc and the `withBrowserCallbackServer` example
   (`:136-141`) say so (§6a). `IAuthorizationStrategy`'s JSDoc stops naming
   "the timeout" as something a strategy owns.
+- **Refresh-token disposition (§6b).** `ITokenResult` gains
+  `readonly refreshTokenDisposition?: 'keep' | 'replace' | 'clear' |
+  undefined` (an `as const` array `REFRESH_TOKEN_DISPOSITIONS` and its
+  union). Optional in the type so a 4.x-shaped result still compiles; every
+  result auth-providers 6.0.0 produces sets it; a reader that finds it absent
+  infers today's meaning (a refresh token present → `replace`, else `keep`).
 - **Cancelling a login (§6b).** `AuthorizationRequest` gains `readonly
   signal?: AbortSignal | undefined` — the provider's signal for this login,
   which a strategy must honour as it honours its own option signal. A new
@@ -1189,13 +1195,31 @@ signal (or none). The rule, wherever an attempt is shared:
      tombstoned refresh token** — a newer result that returns R again, a late
      response of a non-rotating endpoint — installs its access token but
      treats that refresh token as absent: it is neither installed nor
-     persisted as usable (`onTokens` is told the result without it), and the
-     result's refresh token is not accepted without this check
-     (`BaseTokenProvider.ts:543-547`). The tombstones are lost with the
-     instance: a re-seeded or new provider (a restart) may submit a persisted
-     R once — the documented restart limit above. Persistence is told nothing new (no `onTokens`) until a result
-     is known; the persisted R stays where it is, so a restarted process may
-     submit it once and be refused — rule 6 again, one login.
+     persisted as usable, and the result's refresh token is not accepted
+     without this check (`BaseTokenProvider.ts:543-547`).
+     **Persistence is told explicitly.** Omitting a refresh token from what
+     `onTokens` receives does not clear it: the broker reloads the stored
+     refresh token when a result omits one and writes it back
+     (`AuthBroker.ts:1282-1295`), and the session store keeps an omitted
+     refresh token — only `''` clears it (auth-stores `sessionSecret.ts:168-170`).
+     So every credential commit carries a **refresh-token disposition**,
+     `ITokenResult.refreshTokenDisposition` (interfaces-auth 5.0.0, §4.4):
+     - `'replace'` — the result carries a new, usable refresh token;
+     - `'keep'` — the result carries none and nothing was cut: the stored one
+       stands (the broker's fallback to the stored token applies);
+     - `'clear'` — the held refresh token was cut (tombstoned), or the result
+       carried a tombstoned one: the stored refresh token must go.
+     The queued clearing step of a cut is itself a credential notification:
+     it runs `onTokens` with the held access token unchanged (or none) and
+     `refreshTokenDisposition: 'clear'`, so the persisted R is removed as soon
+     as the queue reaches it, and the next moment — in this process or after
+     a restart — finds no refresh token and logs in (rule 6). The broker
+     honours `'clear'` by writing `refreshToken: ''` with no stored-token
+     fallback (§10.6); the store's existing `''` is the clearing operation
+     (§10.5). What remains of the restart limit: a process that dies between
+     the abort and the queued clearing step's write may submit the persisted
+     R once after a restart (the tombstones live in memory) — stated in the
+     README.
   2. A late response to that refresh that does arrive is offered to the
      commit queue (below) with the **generation of its attempt**: it is
      committed — tokens, R2, `onTokens` — if and only if no newer credential
@@ -1409,7 +1433,11 @@ red; **tombstones for life:** R cut → a commit installs S → a newer commit
 returns R → the next refresh never submits R (asserted on the server) and
 goes to login; a late response of a non-rotating endpoint returning R → its
 access token installed, R neither installed nor persisted as usable
-(`onTokens` sees no refresh token); reinstating an exit rule ("leave once a
+(`onTokens` receives `refreshTokenDisposition: 'clear'` and no refresh
+token); **dispositions:** a refresh returning a new token → `'replace'`; a
+result with none and nothing cut → `'keep'`; the queued clearing step of a
+cut → `onTokens` called once with `'clear'` and the held access token;
+dropping the clearing step's `onTokens` turns its case red; reinstating an exit rule ("leave once a
 different token is installed") turns the first case red; running `onTokens` hooks concurrently turns the
 commit-order case red; re-submitting a cut R turns the refresh case red;
 reinstating a "no live party → `aborted`" rule turns the after-release and
@@ -1873,7 +1901,14 @@ Its unreleased change is already breaking (Node 22/24/26 engines,
 `interfaces-auth ^5.0.0`, `interfaces-auth-sap ^3.1.0`,
 `interfaces-auth-broker ^1.3.0`; deletes its `asContract`. It produces no
 auth refusal (it uses only `STORE_ERROR_CODES`, `StoreErrors.ts:5-6`), so no
-kind. Migration note: none beyond the versions.
+kind. **Refresh-token clearing (§6b):** `saveSession` with `refreshToken:
+''` already removes the stored refresh token (`sessionSecret.ts:168-170`);
+4.0.0 makes that the documented clearing operation — README and the
+`ISessionStore` usage notes say `''` clears and `undefined` keeps — and pins
+it with a test per session store (file and in-memory): a saved R, then a
+save with `refreshToken: ''` and a new access token → reload has the new
+access token and no refresh token; a save with `refreshToken` omitted keeps
+R. Migration note: none beyond the versions and that statement.
 
 ### 10.6 `mcp-abap-adt-auth-broker` 5.0.0 and `auth-broker-cli` 3.0.0
 
@@ -1922,6 +1957,20 @@ kind. Migration note: none beyond the versions.
   (`mcp-abap-adt`, after this chain): the server must choose its own bound
   for an interactive login it triggers, or document that it waits until the
   user finishes or the request is cancelled.
+- **Refresh-token disposition (§6b).** The session write
+  (`AuthBroker.ts:1282-1295`) reads `result.refreshTokenDisposition`:
+  `'replace'` writes `result.refreshToken`; `'keep'` (or absent with no
+  refresh token) keeps today's fallback to the stored token; `'clear'`
+  writes `refreshToken: ''` and never reads the stored one; an access token
+  is written only when the result carries a non-empty one (a clearing
+  notification may carry none). End-to-end tests with the published
+  auth-stores session store: a persisted R, a refresh cut after dispatch,
+  then a result carrying the tombstoned R → reload the session from the
+  store: R absent; a persisted R and only the cut (no later result) → the
+  queued clearing step's write has removed R, and a fresh broker on the same
+  store (a restart) finds no refresh token and logs in; `'keep'` keeps a
+  stored R. Break: falling back to the stored token on `'clear'` turns the
+  first case red.
 - **Cancelling (§6b).** `getProvider(destination, options?: { signal?:
   AbortSignal | undefined })`, `getToken(destination, options?)`,
   `refreshToken(destination, options?)`. `getProvider`'s caller is a waiter
