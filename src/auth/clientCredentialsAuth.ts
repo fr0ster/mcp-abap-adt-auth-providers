@@ -9,6 +9,7 @@ import axios, { type AxiosResponse } from 'axios';
 import { tlsFailureCode } from './refusal';
 import {
   prepareTokenRequest,
+  requestSecrets,
   sendTokenRequest,
   type TokenRequestAuth,
   tokenEndpointError,
@@ -50,7 +51,7 @@ export async function getTokenWithClientCredentials(
         auth,
       )
     : undefined;
-  const secrets = [clientSecret, ...(prepared?.secrets ?? [])];
+  const secrets = requestSecrets([clientSecret], undefined, prepared);
 
   /** Today's request: the secret in the body. */
   const sendAsToday = () => {

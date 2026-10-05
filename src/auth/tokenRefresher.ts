@@ -6,7 +6,9 @@ import axios, { type AxiosResponse } from 'axios';
 import { tlsFailureCode } from './refusal';
 import {
   grantSecrets,
+  legacyBasic,
   prepareTokenRequest,
+  requestSecrets,
   sendTokenRequest,
   type TokenRequestAuth,
   tokenEndpointError,
@@ -52,32 +54,33 @@ export async function refreshJwtToken(
         auth,
       )
     : undefined;
-  const secrets = [refreshToken, clientSecret, ...(prepared?.secrets ?? [])];
+  // Today's request: Basic `id:secret` — an absent secret sent as it always
+  // was, the word in a template — built only through legacyBasic, so its
+  // secrets join every redaction of the answer.
+  const basic = prepared ? undefined : legacyBasic(clientId, `${clientSecret}`);
+  const secrets = requestSecrets([refreshToken, clientSecret], basic, prepared);
 
-  /** Today's request: Basic `id:secret`. */
-  const sendAsToday = () => {
-    const authString = Buffer.from(`${clientId}:${clientSecret}`).toString(
-      'base64',
-    );
-    return axios({
+  const sendAsToday = () =>
+    axios({
       method: 'post',
       url: tokenUrl,
       headers: {
-        Authorization: `Basic ${authString}`,
+        ...(basic ? { Authorization: basic.header } : {}),
         'Content-Type': 'application/x-www-form-urlencoded',
       },
       data: params.toString(),
       // A redirect would re-send the refresh token and the secret: never followed.
       maxRedirects: 0,
     });
-  };
 
   let response: AxiosResponse;
   try {
-    response = await sendTokenRequest(prepared, sendAsToday, [
-      clientSecret,
-      ...grantSecrets(params),
-    ]);
+    response = await sendTokenRequest(
+      prepared,
+      sendAsToday,
+      [clientSecret, ...grantSecrets(params)],
+      basic,
+    );
   } catch (error: unknown) {
     // Unwrapped, so the refusal can name the TLS code and its fixed hint.
     if (tlsFailureCode(error) !== undefined) throw error;

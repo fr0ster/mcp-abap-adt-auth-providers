@@ -176,6 +176,46 @@ function basicSecrets(headers: Record<string, string>): string[] {
 }
 
 /**
+ * A site's own `Authorization: Basic` header on the path without a strategy,
+ * with the secrets a server echoing it would hand back.
+ */
+export interface LegacyBasic {
+  /** `Basic ${base64(id:secret)}`. */
+  readonly header: string;
+  /** What `basicSecrets()` extracts from it: the base64 credential and the secret. */
+  readonly secrets: readonly string[];
+}
+
+/**
+ * The one place a site without a strategy builds its Basic header: the
+ * secrets come from the same `basicSecrets()` a strategy's Basic credential
+ * goes through, so both paths redact the same forms, and a site cannot send
+ * the header without them.
+ */
+export function legacyBasic(
+  clientId: string,
+  clientSecret: string,
+): LegacyBasic {
+  const header = `Basic ${Buffer.from(`${clientId}:${clientSecret}`).toString('base64')}`;
+  return { header, secrets: basicSecrets({ Authorization: header }) };
+}
+
+/**
+ * Every secret one request carried, joined in one place: the site's own (its
+ * grant's, its configured client secret), its legacy Basic credential, and
+ * what the strategy sent. Every redaction of that request's answer — a failed
+ * one in `sendTokenRequest`, a site's `tokenEndpointError`, a logged body of a
+ * success without a token — joins through here, so none can drift.
+ */
+export function requestSecrets(
+  sent: readonly (string | undefined)[],
+  basic: LegacyBasic | undefined,
+  prepared: PreparedTokenRequest | undefined,
+): (string | undefined)[] {
+  return [...sent, ...(basic?.secrets ?? []), ...(prepared?.secrets ?? [])];
+}
+
+/**
  * Asks the strategy, checks what it returned, and assembles the request. Throws
  * — before anything is sent — whatever the strategy threw, or a
  * `ClientAuthenticationResultError` for a result that cannot be sent.
@@ -348,18 +388,21 @@ function reduce(
  * (`withoutRequest`). The request itself is not changed on either path.
  *
  * @param sent the secrets the site itself put in the request (a refresh
- *   token, a code, an assertion, a client secret); with what the strategy
- *   added, they are redacted from the error body that stays on the error.
+ *   token, a code, an assertion, a client secret); with the site's own Basic
+ *   credential and what the strategy added, they are redacted from the error
+ *   body that stays on the error.
+ * @param basic the site's own Basic header without a strategy (`legacyBasic`).
  */
 export async function sendTokenRequest<T>(
   prepared: PreparedTokenRequest | undefined,
   asToday: () => Promise<AxiosResponse<T>>,
   sent: readonly (string | undefined)[] = [],
+  basic?: LegacyBasic,
 ): Promise<AxiosResponse<T>> {
   try {
     return prepared ? await axios<T>(prepared.config) : await asToday();
   } catch (error) {
-    throw withoutRequest(error, [...sent, ...(prepared?.secrets ?? [])]);
+    throw withoutRequest(error, requestSecrets(sent, basic, prepared));
   }
 }
 

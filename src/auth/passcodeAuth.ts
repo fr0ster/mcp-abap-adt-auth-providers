@@ -20,7 +20,9 @@ import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
 import axios, { type AxiosResponse } from 'axios';
 import {
   grantSecrets,
+  legacyBasic,
   prepareTokenRequest,
+  requestSecrets,
   sendTokenRequest,
   type TokenRequestAuth,
   tokenEndpointError,
@@ -62,22 +64,22 @@ export async function exchangePasscode(
     tokenUrl: prepared?.config.url ?? tokenUrl,
   });
 
-  /** Today's request: Basic `id:secret`, an empty secret for a public client. */
-  const sendAsToday = () => {
-    // A public client — `cf` is one — authenticates with an empty secret.
-    const basic = Buffer.from(`${clientId}:${clientSecret ?? ''}`).toString(
-      'base64',
-    );
-    return axios.post(tokenUrl, params.toString(), {
+  // Today's request: Basic `id:secret` — a public client, `cf` among them,
+  // authenticates with an empty secret — built only through legacyBasic, so
+  // its secrets join every redaction of the answer.
+  const basic = prepared
+    ? undefined
+    : legacyBasic(clientId, clientSecret ?? '');
+  const sendAsToday = () =>
+    axios.post(tokenUrl, params.toString(), {
       headers: {
         'Content-Type': 'application/x-www-form-urlencoded',
         Accept: 'application/json',
-        Authorization: `Basic ${basic}`,
+        ...(basic ? { Authorization: basic.header } : {}),
       },
       // A redirect would re-send the passcode and the secret: never followed.
       maxRedirects: 0,
     });
-  };
 
   let response: AxiosResponse<{
     access_token?: string;
@@ -85,21 +87,23 @@ export async function exchangePasscode(
     expires_in?: number;
   }>;
   try {
-    response = await sendTokenRequest(prepared, sendAsToday, [
-      clientSecret,
-      ...grantSecrets(params),
-    ]);
+    response = await sendTokenRequest(
+      prepared,
+      sendAsToday,
+      [clientSecret, ...grantSecrets(params)],
+      basic,
+    );
   } catch (error) {
     // UAA says why in the body — "Invalid passcode" for a mistyped or
     // already spent code — which is what the user needs to read.
     if (axios.isAxiosError(error) && error.response) {
       // Only `error` and `error_description`, with the passcode, the
       // secret and what the strategy sent redacted: a server may echo them.
-      throw tokenEndpointError('Passcode exchange failed', error, [
-        passcode,
-        clientSecret,
-        ...(prepared?.secrets ?? []),
-      ]);
+      throw tokenEndpointError(
+        'Passcode exchange failed',
+        error,
+        requestSecrets([passcode, clientSecret], basic, prepared),
+      );
     }
     throw error;
   }

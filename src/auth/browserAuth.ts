@@ -10,7 +10,9 @@ import { describeOAuthErrorBody } from './oauthErrorBody';
 import { loggedError } from './refusal';
 import {
   grantSecrets,
+  legacyBasic,
   prepareTokenRequest,
+  requestSecrets,
   sendTokenRequest,
   type TokenRequestAuth,
 } from './tokenRequest';
@@ -110,30 +112,27 @@ export async function exchangeCodeForToken(
       )
     : undefined;
 
-  /** Today's request: Basic `id:secret`. */
-  const sendAsToday = () => {
-    const authString = Buffer.from(`${clientid}:${clientsecret}`).toString(
-      'base64',
-    );
-    return axios({
+  // Today's request: Basic `id:secret` — an absent secret sent as it always
+  // was, the word in a template — built only through legacyBasic, so its
+  // secrets join every redaction of the answer.
+  const basic = prepared ? undefined : legacyBasic(clientid, `${clientsecret}`);
+  const sendAsToday = () =>
+    axios({
       method: 'post',
       url: tokenUrl,
       headers: {
-        Authorization: `Basic ${authString}`,
+        ...(basic ? { Authorization: basic.header } : {}),
         'Content-Type': 'application/x-www-form-urlencoded',
       },
       data: params.toString(),
       // A redirect would re-send the code and the secret: never followed.
       maxRedirects: 0,
     });
-  };
 
   log?.info(`Exchanging code for token: ${prepared?.config.url ?? tokenUrl}`);
 
-  const response = await sendTokenRequest(prepared, sendAsToday, [
-    clientsecret,
-    ...grantSecrets(params),
-  ]);
+  const sent = [clientsecret, ...grantSecrets(params)];
+  const response = await sendTokenRequest(prepared, sendAsToday, sent, basic);
 
   if (response.data?.access_token) {
     const accessToken = response.data.access_token;
@@ -148,13 +147,19 @@ export async function exchangeCodeForToken(
       refreshToken,
     };
   } else {
-    // The body is the server's: only its OAuth fields, every secret redacted.
-    log?.error(
-      `Token exchange failed: status ${response.status}, error: ${describeOAuthErrorBody(
-        response.data,
-        [clientsecret, ...grantSecrets(params), ...(prepared?.secrets ?? [])],
-      )}`,
-    );
+    // The body is the server's: only its OAuth fields, every secret the
+    // request carried redacted — its Basic credential included. A logger
+    // that throws does not replace the failure.
+    try {
+      log?.error(
+        `Token exchange failed: status ${response.status}, error: ${describeOAuthErrorBody(
+          response.data,
+          requestSecrets(sent, basic, prepared),
+        )}`,
+      );
+    } catch {
+      // The failure below is what the caller needs.
+    }
     throw new Error('Response does not contain access_token');
   }
 }
