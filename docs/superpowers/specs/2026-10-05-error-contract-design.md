@@ -846,6 +846,22 @@ no option. The broker passes it through (§10.6): `AuthBrokerConfig.authDebug`
 is given to every provider the broker builds; a provider a consumer supplies
 already built keeps its own setting. The CLI exposes it as `--auth-debug`.
 
+**Recognition first: whitespace-wrapped base64.** The preview replaces what
+the redaction recognises, so the redaction must recognise a base64 credential
+however a server echoes it. 6.0.0 carries 5.4.2's encoded-secret recogniser
+unchanged (`redactEncodedSecrets` and `BASE64_RUN`, `oauthErrorBody.ts` on
+5.4.2): a base64 run may be broken by CR, LF, space and tab, as themselves or
+escaped (`%0D`, `%0A`, `%20`, `%09`), and may carry percent-escaped alphabet
+characters and padding in either case; the whitespace is stripped while the
+run is decoded and compared, and on a match the **whole span** — whitespace
+and escapes included — is replaced, never only its contiguous pieces. With
+`authDebug`, that span is replaced by one preview computed from the form it
+was recognised as (the plain base64 credential, or the decoded secret), so no
+whitespace, escape or other character of the span itself reaches the line,
+and the preview's bounds below hold with N the recognised form's length.
+Without this, a server wrapping the echoed `Authorization` credential at 76
+characters would leave each line's characters in the log.
+
 **The preview.** `previewSecret(form)`, in `oauthErrorBody.ts`, for a matched
 form of length N: N < 16 → `<redacted, N chars>`; N ≥ 16 → its first 4 and
 last 4 characters around the marker, `abcd…wxyz <redacted, N chars>` — never
