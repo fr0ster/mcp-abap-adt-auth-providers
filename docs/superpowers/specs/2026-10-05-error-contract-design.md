@@ -615,11 +615,43 @@ source.
 
 ### 5.5 Allowlist runtime sets
 
-`allowlists.ts` builds one frozen `ReadonlySet` per array of §4.3 —
-`new Set(SYSTEM_CODES)` and so on — and nothing else. A type test asserts each
-set's element type is the array's union. These sets are exported for
-producers that check a value before choosing a fact (`isSystemCode(v): v is
-SystemCode`, one guard per code list).
+**Nothing mutable is exported.** `Object.freeze` does not stop a `Set`'s
+`add`, `delete` or `clear` (a frozen `Set` still mutates through its
+methods), so an exported set — even a frozen one — would let any code in the
+process widen an allowlist and pass a foreign code through classification
+into facts and words. Therefore:
+
+- `allowlists.ts` builds one `Set` per array of §4.3 — `new Set(SYSTEM_CODES)`
+  and so on — held in **module-private** constants, never exported, never
+  returned, never passed to a callback. It copies each array at module load;
+  nothing reads the array again.
+- What is exported is a **membership guard** per list: `isSystemCode(v): v is
+  SystemCode`, `isTlsFailureCode`, `isOAuthErrorCode`, `isRfcKey`,
+  `isConfigField`, `isAssertionRule`, `isOperation`, … (one per array, a type
+  test asserting its predicate type is the array's union). A guard calls
+  `Set.prototype.has` captured at module load (`const has =
+  Function.prototype.call.bind(Set.prototype.has)`), so patching
+  `Set.prototype.has` later does not change an answer either.
+- A consumer that needs a list uses the `as const` array from
+  `interfaces-auth`, which declares every allowlist array **frozen**:
+  `export const SYSTEM_CODES = Object.freeze([...] as const)`. A frozen array
+  is immutable (`push`, index assignment and `defineProperty` throw in strict
+  mode and do nothing otherwise), and it is frozen at its definition, before
+  any consumer code can run. `Object.freeze` over a literal is a constant
+  expression, not logic; the interfaces repository's `check:surface` and
+  `check:graph` are run to confirm they accept it (if a check refuses it, the
+  check is amended in that PR, not the freeze dropped). `auth-errors` exports
+  no `Set`, `Map` or array of its own.
+- The same holds for every other table `auth-errors` keeps at run time —
+  `WORDS`, `ASSERTION_RULE_CHECK`, the diagnostics tables, the TLS words, the
+  blame table: module-private, or exported only as deeply frozen plain
+  objects of strings whose mutation cannot reach the private copies that
+  classification, admission and rendering read.
+
+What remains outside any library's reach is stated in auth-providers' README
+today and carries over: code in the same process that patches built-ins
+before this package loads, or imports `dist/` files directly, can change
+anything it computes.
 
 ### 5.6 Renderers and helpers
 
@@ -1154,6 +1186,18 @@ In `auth-errors`:
 - **Words:** every kind × every discriminant value renders; each row of
   Appendix A marked *verbatim* asserts the exact string; no rendered string
   contains a diagnostic value (each diagnostic built with a marker).
+- **Exported allowlists cannot be widened:** for every export of
+  `auth-errors` and every allowlist array of `interfaces-auth` — an attempt
+  to `push` (through a cast), assign an index, `Object.defineProperty` a new
+  index or `length`, `splice`, and, on any exported object, `add` / `delete`
+  / `clear` / `set` (calling `Set.prototype` and `Map.prototype` methods on it
+  with `.call`), and patching `Set.prototype.has` after load — then
+  classification of a foreign code (`code: 'EVIL_CODE'`, an unregistered
+  OAuth code, a made-up rule) still answers without it as a fact, every
+  `is…` guard answers as before, and no rendered word contains it. The test
+  also asserts that no export of `auth-errors` is a `Set` or a `Map` (an
+  `instanceof` sweep over the module namespace, nested one level), so a later
+  change exporting one fails here.
 - **Re-mint across copies:** a second copy of the built package loaded under
   another path; an error minted by one — bare, and inside that copy's
   `AuthProviderFailure` — is classified by the other and comes out equal in
