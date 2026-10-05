@@ -1553,8 +1553,10 @@ signal (or none). The rule, wherever an attempt is shared:
   the attempt's aborted state before every poll and after every await (the
   request, the wait), so it never polls again once the attempt is aborted;
   its part of the drain settles at the abort itself — when that guarantee
-  holds — not when an outstanding poll completes. When an attempt leaves its slot aborted, the slot
-  keeps its drain as `previousDrain` (identity-checked like the slot). A new
+  holds — not when an outstanding poll completes. When an attempt leaves its slot — aborted or
+  settled — the slot keeps its drain (which includes the drain it inherited)
+  as `previousDrain`, so a refresh that settles between an aborted login and
+  the next login does not drop the aborted login's drain, (identity-checked like the slot). A new
   attempt inherits `previousDrain` and, before it starts its own
   authorization (the strategy's `authorize`, the device-code initiation, the
   passcode strategy), awaits it — raced only against its own attempt signal,
