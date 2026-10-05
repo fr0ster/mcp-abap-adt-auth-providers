@@ -9,13 +9,16 @@
  * allowlist this package owns. A `name` property is never read.
  */
 
-import type { AuthOutcome } from '@mcp-abap-adt/interfaces-auth';
+import type { AuthOutcome, IAuthRefusal } from '@mcp-abap-adt/interfaces-auth';
 import { DeviceCodePresentationError } from '../deviceCode/DeviceCodePresenter';
 import {
   type AssertionCheck,
   AssertionValidationError,
 } from '../errors/AssertionValidationError';
-import { CertificateMaterialError } from '../errors/CertificateMaterialError';
+import {
+  CertificateMaterialError,
+  certificateWordsOf,
+} from '../errors/CertificateMaterialError';
 import {
   BASIC_CLIENT_ID_UNUSABLE,
   BasicClientIdError,
@@ -43,7 +46,8 @@ import {
 } from './knownCodes';
 import { registeredOAuthError } from './oauthErrorBody';
 
-export const OK: AuthOutcome = { ok: true };
+/** Frozen: a provider returns this very object to its consumer. */
+export const OK: AuthOutcome = Object.freeze({ ok: true });
 
 export function oops(reason: string, hint?: string): AuthOutcome {
   return hint === undefined
@@ -56,22 +60,22 @@ export function oops(reason: string, hint?: string): AuthOutcome {
  * certificate is pinned (spec §4) — none configured, or a binding it cannot
  * read. No thumbprint appears in them.
  */
-export const TOKEN_BOUND_ELSEWHERE = {
+export const TOKEN_BOUND_ELSEWHERE = Object.freeze({
   reason:
     'the token is bound to a client certificate this provider does not present',
   hint: 'give the provider a clientAuthentication that presents the certificate the token was issued for',
-} as const;
+} as const);
 
 /**
  * The fixed words for a token renewed because the one held was bound to
  * another certificate than the pinned one, when the new token is bound
  * elsewhere too. No thumbprint appears in them.
  */
-export const TOKEN_RENEWED_BOUND_ELSEWHERE = {
+export const TOKEN_RENEWED_BOUND_ELSEWHERE = Object.freeze({
   reason:
     'the new token is bound to a client certificate this provider does not present',
   hint: 'the authorization server bound the new token to another certificate: check the certificate registered for this client',
-} as const;
+} as const);
 
 /** Every config property name this package's providers declare. */
 export const KNOWN_CONFIG_FIELDS: ReadonlySet<string> = new Set([
@@ -181,11 +185,31 @@ export function ownLabel(error: unknown): string {
   return 'unknown error';
 }
 
+/** How many elements of `missingFields` are read at most. */
+const MAX_FIELDS_READ = 64;
+
+/**
+ * The known config field names among `missing`, read element by element:
+ * none of the array's own methods is called (an array may carry its own
+ * `filter` or `join`), only values already checked against the allowlist are
+ * kept, and at most MAX_FIELDS_READ elements are read — a Proxy array may
+ * claim any length.
+ */
 function knownFields(missing: unknown): string {
   if (!Array.isArray(missing)) return '';
-  const names = missing.filter(
-    (m): m is string => typeof m === 'string' && KNOWN_CONFIG_FIELDS.has(m),
-  );
+  const length = readSafely(missing, 'length');
+  if (typeof length !== 'number' || !Number.isInteger(length)) return '';
+  const names: string[] = [];
+  for (let i = 0; i < Math.min(length, MAX_FIELDS_READ); i++) {
+    const name = readSafely(missing, String(i));
+    if (
+      typeof name === 'string' &&
+      KNOWN_CONFIG_FIELDS.has(name) &&
+      !names.includes(name)
+    ) {
+      names.push(name);
+    }
+  }
   return names.length ? `: ${names.join(', ')}` : '';
 }
 
@@ -229,12 +253,19 @@ function refusalFromUnguarded(error: unknown, what: string): AuthOutcome {
     return oops('showing the device code failed');
   }
   if (error instanceof AssertionValidationError) {
-    const check = ASSERTION_CHECKS.has(error.check) ? ` (${error.check})` : '';
+    // Read once: a getter could answer an allowed value to the test and
+    // another to the interpolation.
+    const value = readSafely(error, 'check');
+    const check = ASSERTION_CHECKS.has(value as AssertionCheck)
+      ? ` (${value as AssertionCheck})`
+      : '';
     return oops(`the SAML assertion was refused${check}`);
   }
-  if (error instanceof CertificateMaterialError) {
-    const { reason, hint } = error.words;
-    return oops(reason, hint);
+  // Chosen from the two flags, never read from `words`: an instance (or an
+  // object whose prototype is this class) may carry its own `words`.
+  const certificate = certificateWordsOf(error);
+  if (certificate !== undefined) {
+    return oops(certificate.reason, certificate.hint);
   }
   if (error instanceof ClientAuthenticationResultError) {
     return oops(
@@ -301,6 +332,24 @@ function refusalFromUnguarded(error: unknown, what: string): AuthOutcome {
   return oops(
     `${what} failed (unknown error${facts.length ? `, ${facts.join(', ')}` : ''})`,
   );
+}
+
+/**
+ * The refusal words this package would give for a thrown value — exactly the
+ * `reason` and `hint` of `refusalFrom(error, what)`, for a consumer that
+ * relays them (in its own error, say) instead of copying them. Fixed words per
+ * class of this package decided by `instanceof`, plus allowlisted metadata,
+ * else "`what` failed (unknown error)"; never an error's message, cause or
+ * body. Total: a hostile value (a Proxy, a throwing getter) never makes it
+ * throw. `what` names what the consumer was doing; it appears only in the
+ * words for an error this package has no fixed words for.
+ */
+export function refusalWords(error: unknown, what: string): IAuthRefusal {
+  const outcome = refusalFrom(error, what);
+  // refusalFrom only ever answers Oops; the branch exists for the type.
+  if (outcome.ok) return { reason: `${what} failed (unknown error)` };
+  const { reason, hint } = outcome.refusal;
+  return hint === undefined ? { reason } : { reason, hint };
 }
 
 /**

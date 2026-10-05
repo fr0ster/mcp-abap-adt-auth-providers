@@ -175,3 +175,25 @@ describe('refusal', () => {
     await expect(safely('it', () => OK)).resolves.toEqual({ ok: true });
   });
 });
+
+describe('shared word and outcome objects are frozen', () => {
+  it('every one a refusal, a log line or a provider hands out', async () => {
+    const certificate = await import('../../errors/CertificateMaterialError');
+    const client = await import('../../errors/ClientAuthenticationError');
+    const refusal = await import('../../auth/refusal');
+    const known = await import('../../auth/knownCodes');
+    const shared: object[] = [
+      certificate.CERTIFICATE_INCOMPLETE,
+      certificate.CERTIFICATE_UNUSABLE,
+      certificate.CERTIFICATE_EXPIRED,
+      client.CLIENT_KEY_UNUSABLE,
+      client.CLIENT_AUTHENTICATION_UNUSABLE,
+      client.BASIC_CLIENT_ID_UNUSABLE,
+      refusal.OK,
+      refusal.TOKEN_BOUND_ELSEWHERE,
+      refusal.TOKEN_RENEWED_BOUND_ELSEWHERE,
+      ...known.TLS_CODES.values(),
+    ];
+    for (const words of shared) expect(Object.isFrozen(words)).toBe(true);
+  });
+});

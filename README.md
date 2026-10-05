@@ -2061,7 +2061,7 @@ try {
 - `TokenEndpointError` - a token request failed at a site that wraps it (UAA refresh, client credentials, passcode, OIDC device initiation, password grant); a plain `Error`, not a `TokenProviderError`; carries `status`, `oauthError` (a registered OAuth / OIDC code only) and `code` (an allowlisted system or TLS code only), the original as `cause`
 - `RefreshError`, `SessionDataError`, `ServiceKeyError` - exported, but no provider throws them: a refused refresh falls back to a login inside `getTokens()`/`refreshTokens()`, and sessions and service keys are read by `@mcp-abap-adt/auth-stores`, not here
 - `AssertionValidationError` - a SAML assertion was refused, includes `check: AssertionCheck` naming the check that failed — see [SAML assertion validation](#errors)
-- `CertificateMaterialError` - client certificate material cannot be used, includes `incomplete: boolean` (no PFX and not both a certificate and its key, versus material no TLS context accepts); its message is fixed and carries nothing of the material. Thrown by `tlsClientCertificate` and by a provider pinning a strategy's certificate
+- `CertificateMaterialError` - client certificate material cannot be used, includes `incomplete: boolean` (no PFX and not both a certificate and its key, versus material no TLS context accepts); its message is fixed and carries nothing of the material. Thrown by `tlsClientCertificate` and by a provider pinning a strategy's certificate. Its `words` getter is deprecated: use `refusalWords` (the package never reads `words` from a thrown value, since any object can carry its own)
 - `ClientAuthenticationError` - `privateKeyJwt`'s key is not a private key of its algorithm, or cannot sign; fixed message, nothing of the key
 - `ClientAuthenticationResultError` - what a client authentication strategy returned cannot be sent (a non-string value, a header with a line break, a parameter or header replacing the request's own, an endpoint that is not an absolute `https:` URL); thrown before anything is sent, fixed message
 
@@ -2069,6 +2069,39 @@ A failed token request throws without the request it sent — no form body, no
 `Authorization` header, no TLS agent — and with the server's body reduced to
 `error`, `error_description` and `error_uri`, every secret the request sent
 redacted.
+
+#### Relaying a refusal: `refusalWords`
+
+A consumer that catches an error from this package — a strategy's
+`tlsMaterial()` checked eagerly, say — and reports it in its own error should
+relay the words this package would refuse with, not copy them:
+
+```typescript
+import { refusalWords, tlsClientCertificate } from '@mcp-abap-adt/auth-providers';
+
+try {
+  await tlsClientCertificate({ material: loader }).tlsMaterial?.();
+} catch (error) {
+  const { reason, hint } = refusalWords(error, 'loading the client certificate');
+  throw new MyConfigError(hint ? `${reason}: ${hint}` : reason);
+}
+```
+
+`refusalWords(error: unknown, what: string): IAuthRefusal` answers exactly the
+`reason` and `hint` a provider's refusal would carry for that thrown value —
+for a `CertificateMaterialError`, its kind's words from the
+[Refusals](#refusals) table, hint included. The words are fixed per class of
+this package, decided by `instanceof`, plus allowlisted facts (a known config
+field, an HTTP status, a registered OAuth code, a system or TLS code); for
+anything else, `<what> failed (unknown error)`. Never an error's message,
+`cause` or body. It never throws: a Proxy or a throwing getter gets fixed
+words. `what` is the consumer's own description of what it was doing, and
+appears only in the words for an error this package has no fixed words for.
+
+The guarantee covers what a thrown value carries and the package's public
+surface. Code running in the same process that patches built-ins (say
+`Map.prototype.get`) or imports `dist/` files directly can change anything the
+package computes; no library can defend against that from inside the process.
 
 All error codes are defined in `@mcp-abap-adt/interfaces-auth` package as `TOKEN_PROVIDER_ERROR_CODES` — `CertificateMaterialError`'s is `CERTIFICATE_MATERIAL_ERROR`; `ClientAuthenticationError` and `ClientAuthenticationResultError` share `CLIENT_AUTHENTICATION_ERROR` — and `AssertionValidationError`'s as `ASSERTION_ERROR_CODES`.
 

@@ -7,6 +7,54 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [5.4.0] - 2026-10-05
+
+### Added
+
+- **`refusalWords(error, what)`**, exported from the package index: the
+  `{ reason, hint? }` a provider's refusal would carry for a thrown value — the
+  same derivation as the providers' own (fixed words per class of this
+  package, allowlisted facts, else `<what> failed (unknown error)`), never an
+  error's message, cause or body, and total for a hostile value. A consumer
+  that reports a failure in its own error — the broker checking a client
+  certificate eagerly — relays the package's words, hint included, instead of
+  copying them. See *Relaying a refusal* in the README.
+
+### Fixed
+
+A forged error — an object whose prototype is one of this package's classes,
+or an instance given its own properties — can no longer put its own text into
+a refusal or a log line, nor make building one throw:
+
+- A `CertificateMaterialError`'s words are chosen from its `incomplete` and
+  `expired` flags, each read once and only when exactly `true`, and never read
+  from its `words` — in `refusalFrom` (and so `refusalWords`, `loggedError`
+  and every provider's refusal, a token provider's pinning included) and in
+  the material check behind `CertificateAuthProvider.prepare()`, where a
+  consumer's loader can throw one.
+- An `AssertionValidationError`'s `check` is read once: the value tested
+  against the allowlist is the value named.
+- A `ValidationError`'s, `ServiceKeyError`'s or `SessionDataError`'s
+  `missingFields` is read element by element, at most 64 elements, with none
+  of the array's own methods called; only allowlisted names are kept.
+- Every shared word object is frozen — the certificate, client-authentication,
+  bound-token and TLS words, and the `OK` outcome a provider hands out.
+  `CertificateMaterialError.words` returned the very object the refusal and
+  the constructor read, so changing it (from a forged error's flag getter, or
+  anywhere else) changed every later refusal, log line and message.
+  The guarantee stops at the public surface: in-process code that patches
+  built-ins or imports `dist/` files directly is outside it.
+
+### Changed
+
+- `CertificateMaterialError`'s constructor stores `incomplete` and `expired`
+  as `=== true` (was: as given, chosen by truthiness), as the refusal reads them.
+
+### Deprecated
+
+- `CertificateMaterialError.words`: use `refusalWords(error, what)`. The
+  package no longer reads it from a thrown value.
+
 ## [5.3.0] - 2026-10-04
 
 A token provider's client can authenticate with a client certificate or a
