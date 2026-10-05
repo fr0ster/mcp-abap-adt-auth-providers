@@ -477,16 +477,26 @@ inside its own `try`, and anything that throws while reading the value
 (`instanceof` with a throwing `getPrototypeOf` trap, a getter, a revoked
 Proxy) answers `unknown` with the operation. In order:
 
-1. An `AuthProviderFailure` of this copy (`instanceof`, then `WeakSet`
-   membership of its `error`): its `error`, as it is.
-2. An object whose `error` property (read once, guarded) is an error minted by
-   this copy: that error.
-3. A structurally valid error from another copy of `auth-errors` (another
-   major installed beside this one): `kind` is in `AUTH_PROVIDER_ERROR_KINDS`,
-   every fact passes its runtime set or range (one validator per kind,
-   `satisfies` a mapped type over the kinds), diagnostics pass admission —
-   **re-minted** with words rendered here; its own `reason` / `hint` are
-   never read. Anything that fails a check falls through.
+1. **The value itself is minted by this copy** (`WeakSet` membership —
+   a refusal handed back whole): it, as it is.
+2. **Carrier extraction.** If the value is an object, its `error` property is
+   read **once**, through the guarded read, into a local — whatever the
+   value's class: this copy's `AuthProviderFailure`, another copy's
+   `AuthProviderFailure` (whose `instanceof` against this copy's class is
+   false), or any object with an `error` key. (connection's
+   `AuthRefusedError` carries `refusal`, not `error`, and is not a carrier of
+   this contract: it is not unwrapped.) Every later
+   step reads that local, never the property again (a getter could answer
+   differently twice). If the local is minted by this copy: that error, as it
+   is — diagnostics included.
+3. **Structural rebuild**, tried on the local of step 2 first, then on the
+   value itself (a bare error object from another copy, as a refusal is): its
+   `kind` is in `AUTH_PROVIDER_ERROR_KINDS` and every fact passes its runtime
+   set or range (one validator per kind, `satisfies` a mapped type over the
+   kinds); each property is read once, guarded. The result is **re-minted**
+   with words rendered here, from `kind` and the checked `facts` only: its
+   own `reason`, `hint` **and `diagnostics` are never read**. Anything that
+   fails a check falls through to step 4 with the original value.
 4. A TLS failure (`code` in `TLS_FAILURE_CODES`): `tls`.
 5. A value with an integer status (`status`, else `response.status`), a
    registered OAuth error (`oauthError`, else `response.data.error`) or an
@@ -499,9 +509,23 @@ step — the same reads `refusalFrom` does today (`refusal.ts:222-236`), less th
 
 `classifyOutcome` handles an `AuthOutcome` that came from a collaborator (a
 logon target, a consumer's provider): `{ ok: true }` (exactly, read guarded)
-answers the frozen `OK`; `{ ok: false, refusal }` whose refusal passes steps
-1–3 above answers a fresh `{ ok: false, refusal }` with that (possibly
-re-minted) error; anything else answers `{ ok: false, refusal: fallback }`.
+answers the frozen `OK`; `{ ok: false, refusal }` whose refusal (read once)
+passes step 1 or step 3 above answers a fresh `{ ok: false, refusal }` with
+that error — this copy's minted object as it is, anything else rebuilt
+without diagnostics; anything else answers `{ ok: false, refusal: fallback }`.
+
+**Diagnostics have provenance, not only a shape.** Admission (§5.3) checks a
+value's shape; it cannot tell a Secure Login Client path from a token that
+happens to look like a path. So diagnostics are kept only on the one trusted
+route: **a builder call made by a producer at an approved extraction site**
+(§3.3), which mints the error into this copy's `WeakSet`. That membership is
+the provenance mark, and it is the only one — there is no cross-copy
+provenance mechanism: an error rebuilt from a structure (step 3), whatever
+copy or forger it came from, keeps its kind and its allowlisted facts and
+drops every diagnostic (Appendix C, L13). The approved sites are enforced by
+the shape check (§8.2, rule 6): a builder call passing a diagnostics argument
+is allowed only in the files and functions Appendix A names as a field's
+source.
 
 ### 5.5 Allowlist runtime sets
 
@@ -630,32 +654,55 @@ A provider's throw stays `provider-threw` (today's `PROVIDER_FAILED`).
 returns a target's object. `auth-errors` exports:
 
 ```ts
+export interface RelayedOutcome {
+  readonly outcome: AuthOutcome;
+  /** The call threw (a broken target), as opposed to answering. */
+  readonly thrown: boolean;
+}
 export function relayOutcome(
   call: () => unknown,                 // logon.tlsMaterial(...) / logonParameters(...)
   refused: 'tls-material' | 'logon-parameters',
   operation: Operation,
-): AuthOutcome;
+): RelayedOutcome;
 ```
 
-It runs the call inside a `try`: a throw becomes `classify(thrown,
-operation)` (today `atTarget`, `BaseTokenProvider.ts:812-821`); a returned
+It runs the call inside a `try`: a throw becomes `{ outcome: { ok: false,
+refusal: classify(thrown, operation) }, thrown: true }` (today `atTarget`,
+`BaseTokenProvider.ts:812-821`, which returns the same pair); a returned
 value goes through `classifyOutcome` with fallback
-`authError['logon-target']({ wire: 'unknown', refused })`. A connection
-refusal minted by the same `auth-errors` passes through as the same frozen
-object; one from another copy is re-minted; anything else is the fallback.
+`authError['logon-target']({ wire: 'unknown', refused })` and `thrown:
+false` — even when the value is unusable, because the target answered. The
+disposition is kept beside the normalised outcome because a provider decides
+on it: the same refusal object means "the wire cannot take this" when
+returned and "the target is broken" when thrown. A connection refusal minted
+by the same `auth-errors` passes through as the same frozen object; one from
+another copy is rebuilt (without diagnostics); anything else is the fallback.
 Then:
 
 - **no other way in** — `CertificateAuthProvider.establish`
   (`CertificateAuthProvider.ts:60-74`) and `SncLogonProvider.establish`
-  (`SncLogonProvider.ts:172-189`): return `relayOutcome(...)` — the target's
-  Oops is the provider's own;
+  (`SncLogonProvider.ts:172-189`): return `relayOutcome(...).outcome` — the
+  target's Oops, returned or thrown, is the provider's own;
 - **another way in** — `BasicAuthProvider.establish`
-  (`BasicAuthProvider.ts:25-30`): `relayOutcome` runs (a throwing target is
-  still an Oops, rule 1), its Oops is discarded, the provider answers `OK`;
+  (`BasicAuthProvider.ts:25-30`): `relayOutcome` runs; its outcome is
+  discarded and the provider answers `OK`, as today (today a throwing
+  `logonParameters` is caught by `safely` and answers Oops; that stays:
+  `thrown: true` answers its outcome, `thrown: false` answers `OK`);
 - **token providers** — `BaseTokenProvider.establish`
-  (`BaseTokenProvider.ts:669-702`): unchanged decision table; the target's
-  answer is read through `relayOutcome`, and an unbound token goes on unless
-  the target threw.
+  (`BaseTokenProvider.ts:669-702`): unchanged decision table, reading both
+  fields as it reads `atTarget`'s today (`:692-700`): an unbound token answers
+  `OK` unless `thrown`, then `outcome`; a bound or unknown one answers
+  `outcome`. `authorize()`'s write of the token (`:732-737`) uses the same
+  pair.
+
+Tests (auth-providers): for each of the three shapes above, the same minted
+refusal object **returned** by the target and **thrown** by it — with an
+unbound token, a bound one and an unknown one for `BaseTokenProvider`, and for
+`BasicAuthProvider` — asserting the answers differ exactly as the table says
+(returned + unbound → `OK`; thrown + unbound → Oops); and a target returning
+garbage versus throwing garbage (`logon-target` fallback, `thrown: false`,
+versus `unknown`, `thrown: true`). Load-bearing: collapsing the pair to the
+outcome alone turns the returned+unbound case red.
 
 ## 8. Rule 1 held structurally
 
@@ -667,27 +714,49 @@ only where the result came from. Rule 1 is held by three things together.
 `auth-errors` exports the boundary:
 
 ```ts
-export async function guard(operation: Operation,
-                            body: () => AuthOutcome | Promise<AuthOutcome>,
-                            grant?: OAuth2GrantType): Promise<AuthOutcome>;
-// try { return await body(); } catch (e) { return { ok: false, refusal: classify(e, operation, grant) }; }
+export async function guard(
+  operation: Operation,                       // a value, already validated
+  body: () => AuthOutcome | Promise<AuthOutcome>,
+  grant?: () => unknown,                      // read inside the boundary
+): Promise<AuthOutcome>;
 ```
+
+Everything that can throw runs inside one `try`, the reading of the grant
+included: on entry `guard` holds `operation` (a plain value its caller
+validated) and `g = undefined`; inside the `try` it calls `grant?.()`, keeps
+the result only if it is in the `OAuth2GrantType` set, then runs `body()`.
+The `catch` uses only those two locals — never a property of the provider —
+and `classify`, which is total. A throwing `grant` therefore becomes a
+refusal naming the operation without a grant; nothing is evaluated outside
+the `try` but the two locals' initial values.
 
 auth-providers adds `AuthProviderBase` (`src/auth/AuthProviderBase.ts`,
 exported for consumers who write a provider of their own):
 
 ```ts
+type Moment = 'prepare' | 'establish' | 'authorize' | 'rejected';
+/** Fixed, used when a configured operation is not on the list. */
+const FALLBACK: Readonly<Record<Moment, Operation>> =
+  { prepare: 'preparing', establish: 'establishing',
+    authorize: 'authorizing', rejected: 'reading-rejection' };
+
 export abstract class AuthProviderBase implements IAuthProvider {
   abstract readonly kind: string;
-  /** The operation each moment's refusal names. */
-  protected abstract readonly moments: Readonly<Record<
-    'prepare' | 'establish' | 'authorize' | 'rejected', Operation>>;
+  /** Base-owned, captured and validated once: no subclass can override it. */
+  readonly #moments: Readonly<Record<Moment, Operation>>;
+
+  protected constructor(moments: Readonly<Record<Moment, Operation>>) {
+    // Each entry read once, guarded, checked against the OPERATIONS set;
+    // anything else (a throwing getter, a value off the list) is FALLBACK's.
+    this.#moments = Object.freeze(validatedMoments(moments, FALLBACK));
+  }
+  /** Read only inside guard's try. */
   protected grant(): OAuth2GrantType | undefined { return undefined; }
 
-  prepare()                { return guard(this.moments.prepare,   () => this.onPrepare(),            this.grant()); }
-  establish(l: ILogonTarget)  { return guard(this.moments.establish, () => this.onEstablish(l),  this.grant()); }
-  authorize(r: IRequestTarget){ return guard(this.moments.authorize, () => this.onAuthorize(r),  this.grant()); }
-  rejected(x: IAuthRejection) { return guard(this.moments.rejected,  () => this.onRejected(x),   this.grant()); }
+  prepare()                   { return guard(this.#moments.prepare,   () => this.onPrepare(),     () => this.grant()); }
+  establish(l: ILogonTarget)  { return guard(this.#moments.establish, () => this.onEstablish(l), () => this.grant()); }
+  authorize(r: IRequestTarget){ return guard(this.#moments.authorize, () => this.onAuthorize(r), () => this.grant()); }
+  rejected(x: IAuthRejection) { return guard(this.#moments.rejected,  () => this.onRejected(x),  () => this.grant()); }
 
   protected abstract onPrepare(): AuthOutcome | Promise<AuthOutcome>;
   protected abstract onEstablish(logon: ILogonTarget): AuthOutcome | Promise<AuthOutcome>;
@@ -703,8 +772,30 @@ unguarded `oops` before `safely` in `CertificateAuthProvider.establish`
 (`CertificateAuthProvider.ts:55-59`) disappear: the guard is outside every
 body. The words of SNC's outer boundary ("the SNC provider failed while
 resolving the SNC library (unknown error)") come from the SNC operations'
-words, so they stay verbatim. Reading `this.moments` cannot throw (an own
-frozen field), and `classify` is total, so `guard` cannot reject.
+words, so they stay verbatim.
+
+Nothing a subclass controls is evaluated outside `guard`'s `try`: the
+operations live in an ECMAScript private field (`#moments`) of the base,
+which a subclass can neither override nor shadow with a getter — a subclass
+declaring its own `moments` getter changes nothing the base reads — and they
+were validated against `OPERATIONS` when captured, so a constructor argument
+with a throwing getter or a value off the list yields the fixed `FALLBACK`
+operation instead of throwing out of a method later. `grant()` (which
+`BaseTokenProvider` implements over the overridable `getAuthType()`) and the
+`on…` dispatch are called inside the `try`. `#moments` is read on a frozen
+object of `Operation` strings, which cannot throw; `classify` is total; so
+`guard` cannot reject. (A constructor that throws is not a moment of the
+contract: rule 1 covers the four methods.) The four fallback operations join
+`OPERATIONS` (Appendix A §A.8).
+
+Fixtures (runtime, §8.3): a subclass whose `grant()` throws; one whose
+`getAuthType()` throws (through `BaseTokenProvider`); one that defines a
+throwing `moments` getter; one constructed with a `moments` object whose
+`establish` getter throws and one whose `prepare` is `'not-an-operation'` —
+each method of each answers Oops with a minted error (the fallback
+operation, no grant, where the metadata failed) and never rejects.
+Load-bearing: moving `this.grant()` back out of the thunk turns the first
+fixture red.
 
 ### 8.2 The shape check (the lint rule)
 
@@ -723,11 +814,20 @@ plugins do not have). It refuses, in `src/` outside tests:
    `IAuthProviderError`, `IAuthRefusal`, `AuthOutcome`,
    `IAuthProviderFailure` or a branded integer;
 5. a spread or `Object.assign` whose source is typed `IAuthProviderError` (a
-   spread keeps the brand and would let `{ ...minted, reason }` compile).
+   spread keeps the brand and would let `{ ...minted, reason }` compile);
+6. a builder call (`authError.<kind>(facts, diagnostics)`) passing a
+   diagnostics argument outside the approved extraction sites — a list in
+   `tools/diagnostic-sites.json` (file and function per diagnostic field),
+   reviewed with Appendix A's sources (§3.3) and changed only with it;
+7. a call of `guard` whose `grant` argument is not a function expression, or
+   any read of a provider property in a `guard` call's argument list other
+   than `this.#moments` (the base's own field) — so no metadata is evaluated
+   before the boundary.
 
-connection runs the same script for rules 4 and 5 (it has no providers);
+connection runs the same script for rules 4, 5 and 6 (it has no providers,
+and its refusals carry no diagnostics, so its site list is empty);
 `auth-errors` runs rule 4 with one allowed site, `mint` in `mint.ts`; the
-broker runs rules 4 and 5. Each repository's test suite runs the script
+broker runs rules 4, 5 and 6 (empty list). Each repository's test suite runs the script
 against fixtures that break each rule and expects each to be reported
 (§11.3).
 
@@ -912,6 +1012,20 @@ In `auth-errors`:
   'client-certificate', facts: { problem: 'expired' }, reason: '<secret>' } }`
   (re-minted, the secret gone); a carrier with an unknown `kind`; facts out of
   their sets; `null`, `undefined`, strings, numbers, symbols, functions.
+- **Carriers from another copy:** an `AuthProviderFailure` instance built by
+  a second copy of the package (loaded under another path), for every kind —
+  classified by the first copy into the same kind and facts, re-rendered; the
+  same with a getter on `error` that answers a valid error on the first read
+  and a forged one on the second (only the first is used); a foreign carrier
+  whose `error` is invalid falls through to steps 4–6 on the carrier.
+- **Forged diagnostics:** a structurally valid `snc` error (own copy's shape,
+  not minted) whose `diagnostics.library` holds a JWT-shaped token that passes
+  `LocalPath`, a `saml-assertion` error whose `diagnostics.issuer` holds an
+  exception message, and a foreign-copy `AuthProviderFailure` carrying the
+  same — each classified (`classify`, `classifyOutcome`, `relayOutcome`):
+  the result has its kind and facts and **no** `diagnostics`, and the marker
+  appears in none of its renderings. A same-copy minted error with
+  diagnostics keeps them through every relay (the positive case).
 - **Exception text excluded:** for each kind, an `Error` whose `message`,
   `cause`, `stack` and `name` hold a marker secret is classified and built
   through every path; the marker appears in no `JSON.stringify(error)`,
@@ -929,8 +1043,9 @@ In `auth-errors`:
   Appendix A marked *verbatim* asserts the exact string; no rendered string
   contains a diagnostic value (each diagnostic built with a marker).
 - **Re-mint across copies:** a second copy of the built package loaded under
-  another path; an error minted by one is classified by the other and comes
-  out equal in kind and facts, re-rendered.
+  another path; an error minted by one — bare, and inside that copy's
+  `AuthProviderFailure` — is classified by the other and comes out equal in
+  kind and facts, re-rendered, without diagnostics.
 
 In auth-providers: the rule 1 suite (§8.3); `noTokensInLogs.test.ts` and
 `thrownMessages.test.ts` rewritten on `logFields` and `AuthProviderFailure`;
@@ -1051,8 +1166,10 @@ policy). Moving connection to `interfaces-adt-connection` 2.0.0. The server
 3. **No free text in facts; diagnostics admitted** — facts are allowlist
    unions and branded ranges (§4.3); `reason` / `hint` come from `WORDS` only
    (§5.6); diagnostics have one source each and are admitted at the builder
-   (§3.3, §5.3); every exception message and free value quoted today outside
-   that list is dropped (Appendix C, L7–L8). *Hard to honour fully:* the
+   (§3.3, §5.3), and kept only when minted by this copy's builder at an
+   approved site — a structural rebuild drops them (§5.4, L13); every
+   exception message and free value quoted today outside that list is dropped
+   (Appendix C, L7–L8). *Hard to honour fully:* the
    compiler cannot stop `{ ...minted, reason: '…' }` — a spread keeps the
    brand. It is refused by the shape check (§8.2 rule 5), frozen at run time
    (a mutation fails), and every relay boundary re-mints or passes the
@@ -1251,6 +1368,7 @@ of Appendix B, kind `saml-assertion`. Outside the validators:
 | `oidc-discovery`, `code-exchange`, `device-poll`, `oidc-token-request` | the non-wrapping sites (D3, D6) |
 | `validating-assertion` | a custom `IAssertionValidator`'s throw |
 | `client-authentication-strategy` | the broker's `resolveClientAuthentication` |
+| `preparing`, `establishing`, `authorizing` (and `reading-rejection`) | new: `AuthProviderBase`'s fixed fallbacks when a configured operation cannot be read (§8.1) |
 
 The log lines (each now `logFields(error)`: `{ error: reason, kind, status?,
 diagnostics? }`):
@@ -1410,3 +1528,11 @@ of Appendix A keeps its information as facts, as diagnostics, or verbatim.
   `check` as a class property, `CertificateMaterialError.incomplete` /
   `.expired` / `.words`, `TokenEndpointError.status` / `.oauthError` /
   `.code`: each is now a fact of `error`.
+- **L13 — Diagnostics of an error that crosses a copy of `auth-errors`, or
+  that was not minted by a builder.** An error rebuilt structurally — from
+  another installed copy of `auth-errors` (bare, or inside that copy's
+  `AuthProviderFailure`), or from any object shaped like one — keeps its kind
+  and facts and loses its diagnostics (§5.4): no provenance mark crosses a
+  copy. With one copy installed (the release gate's clean install, deduplicated
+  by npm), nothing is lost; with two, an SNC path or a SAML issuer seen
+  through the other copy is not shown.
