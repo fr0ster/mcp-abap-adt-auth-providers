@@ -721,7 +721,10 @@ logon target, a consumer's provider): `{ ok: true }` (exactly, read guarded)
 answers the frozen `OK`; `{ ok: false, refusal }` whose refusal (read once)
 passes step 1 or step 3 above answers a fresh `{ ok: false, refusal }` with
 that error — this copy's minted object as it is, anything else rebuilt
-without diagnostics; anything else answers `{ ok: false, refusal: fallback }`.
+without diagnostics; anything else answers `{ ok: false, refusal: fallback }`,
+the fallback itself normalised through `classify(fallback, 'unfamiliar-error')`
+— a typed error from another copy, or a forged one, does not pass the minted
+boundary by being handed in as the fallback (Codex review, 2026-10-06).
 
 **Diagnostics have provenance, not only a shape.** Admission (§5.3) checks a
 value's shape; it cannot tell a Secure Login Client path from a token that
