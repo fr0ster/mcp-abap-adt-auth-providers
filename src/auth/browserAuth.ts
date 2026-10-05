@@ -237,7 +237,10 @@ export async function launchBrowser(
     log?.debug('DISPLAY not set, using fallback DISPLAY=:0');
   }
 
-  type OpenFn = (url: string, opts?: unknown) => Promise<unknown>;
+  type OpenFn = (
+    url: string,
+    opts?: { app: { name: string | readonly string[] } },
+  ) => Promise<unknown>;
   let open: OpenFn | null = null;
   // `open`'s per-platform names for each common browser. An `app.name` is an
   // executable name, and Chrome is no `chrome` on Linux (`google-chrome`,
@@ -245,7 +248,7 @@ export async function launchBrowser(
   let appNames: Partial<Record<string, string | readonly string[]>> = {};
   try {
     const openModule = await import('open');
-    open = openModule.default as unknown as OpenFn;
+    open = openModule.default;
     const apps = (openModule as { apps?: Record<string, string | string[]> })
       .apps;
     if (apps)

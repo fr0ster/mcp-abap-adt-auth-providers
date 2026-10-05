@@ -323,6 +323,8 @@ function reduce(
     typeof status === 'number'
       ? `Request failed with status code ${status}`
       : `the token request failed${namedCode ? ` (${namedCode})` : ''}`;
+  // AxiosResponse requires a config, and this one has none on purpose: the
+  // config carries the agent's key, the form body and Authorization.
   const reduced =
     response && typeof response === 'object'
       ? ({

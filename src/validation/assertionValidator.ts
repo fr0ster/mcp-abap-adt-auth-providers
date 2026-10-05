@@ -22,7 +22,12 @@ import type {
   IAssertionValidator,
   ValidatedAssertion,
 } from '@mcp-abap-adt/interfaces-auth';
-import { type Document, type Element, XMLSerializer } from '@xmldom/xmldom';
+import {
+  type Document,
+  type Element,
+  type Node,
+  XMLSerializer,
+} from '@xmldom/xmldom';
 import { parseStrictXml } from '../auth/strictXml';
 import {
   type AssertionCheck,
@@ -105,7 +110,7 @@ function brand(validator: IAssertionValidator): IAssertionValidator {
 
 /** Whether this validator came from one of the two shipped factories. */
 export function isShippedValidator(validator: IAssertionValidator): boolean {
-  return (validator as unknown as Record<symbol, unknown>)[SHIPPED] === true;
+  return Reflect.get(validator, SHIPPED) === true;
 }
 
 export const createSignedResponseValidator = (
@@ -156,11 +161,11 @@ function createValidator(
       }
       let doc: Document;
       try {
-        doc = parseStrictXml(xml) as unknown as Document;
+        doc = parseStrictXml(xml);
       } catch {
         return fail('document', 'the SAMLResponse did not parse as XML');
       }
-      const root = doc.documentElement as unknown as Element | null;
+      const root = doc.documentElement;
       if (!root)
         return fail('document', 'the SAMLResponse did not parse as XML');
       const rootIsResponse =
@@ -498,13 +503,9 @@ function fail(check: AssertionCheck, message: string): never {
  */
 function directChildren(parent: Element, ns: string, local: string): Element[] {
   const out: Element[] = [];
-  const nodes = parent.childNodes;
-  for (let i = 0; i < nodes.length; i++) {
-    const node = nodes[i] as unknown as Element;
-    // nodeType 1 is ELEMENT_NODE; the constant is unavailable without the dom
-    // lib, which this project deliberately does not use.
+  for (const node of parent.childNodes) {
     if (
-      node.nodeType === 1 &&
+      isElementNode(node) &&
       node.namespaceURI === ns &&
       node.localName === local
     ) {
@@ -512,6 +513,14 @@ function directChildren(parent: Element, ns: string, local: string): Element[] {
     }
   }
   return out;
+}
+
+/**
+ * Whether the node is an element. nodeType 1 is ELEMENT_NODE; the constant is
+ * unavailable without the dom lib, which this project deliberately does not use.
+ */
+function isElementNode(node: Node): node is Element {
+  return node.nodeType === 1;
 }
 
 /** The single direct child with this name, or null when there is not exactly one. */
@@ -564,14 +573,17 @@ type AssertionPlace = 'within' | 'outside' | 'inSignature';
  */
 function placeOfAssertions(doc: Document, assertion: Element): AssertionPlace {
   for (const [ns, local] of ASSERTION_SHAPED) {
-    const found = doc.getElementsByTagNameNS(ns, local);
-    for (let i = 0; i < found.length; i++) {
-      let node = found[i] as unknown as Element | null;
+    for (const element of doc.getElementsByTagNameNS(ns, local)) {
+      let node: Node | null = element;
       while (node && node !== assertion) {
-        if (node.localName === 'Signature' && node.namespaceURI === DSIG_NS) {
+        if (
+          isElementNode(node) &&
+          node.localName === 'Signature' &&
+          node.namespaceURI === DSIG_NS
+        ) {
           return 'inSignature';
         }
-        node = node.parentNode as unknown as Element | null;
+        node = node.parentNode;
       }
       if (!node) return 'outside';
     }

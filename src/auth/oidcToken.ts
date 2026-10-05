@@ -4,6 +4,7 @@
 
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
 import axios, { type AxiosResponse } from 'axios';
+import { readSafely } from './knownCodes';
 import { tlsFailureCode } from './refusal';
 import {
   grantSecrets,
@@ -92,16 +93,33 @@ async function send(
   );
 }
 
-function mapTokenResponse(data: any): OidcTokenResponse {
+/** A token endpoint's success body (RFC 6749 §5.1, OIDC Core §3.1.3.3). */
+interface TokenResponseBody {
+  access_token?: string;
+  refresh_token?: string;
+  id_token?: string;
+  expires_in?: number;
+  token_type?: string;
+}
+
+function mapTokenResponse(
+  data: TokenResponseBody | null | undefined,
+): OidcTokenResponse {
   if (!data?.access_token) {
     throw new Error('Token response missing access_token');
   }
+  const {
+    refresh_token: refreshToken,
+    id_token: idToken,
+    expires_in: expiresIn,
+    token_type: tokenType,
+  } = data;
   return {
     accessToken: data.access_token,
-    refreshToken: data.refresh_token,
-    idToken: data.id_token,
-    expiresIn: data.expires_in,
-    tokenType: data.token_type,
+    ...(refreshToken === undefined ? {} : { refreshToken }),
+    ...(idToken === undefined ? {} : { idToken }),
+    ...(expiresIn === undefined ? {} : { expiresIn }),
+    ...(tokenType === undefined ? {} : { tokenType }),
   };
 }
 
@@ -270,9 +288,10 @@ export async function pollDeviceTokens(
         [clientSecret, ...grantSecrets(params)],
       );
       return mapTokenResponse(response.data);
-    } catch (error: any) {
-      const status = error?.response?.status;
-      const errorCode = error?.response?.data?.error;
+    } catch (error) {
+      const response = readSafely(error, 'response');
+      const status = readSafely(response, 'status');
+      const errorCode = readSafely(readSafely(response, 'data'), 'error');
       if (
         status === 400 &&
         (errorCode === 'authorization_pending' || errorCode === 'slow_down')
@@ -319,7 +338,7 @@ export async function passwordGrant(
       [clientSecret, ...grantSecrets(params)],
     );
     return mapTokenResponse(response.data);
-  } catch (error: any) {
+  } catch (error) {
     // Unwrapped, so the refusal can name the TLS code and its fixed hint.
     if (tlsFailureCode(error) !== undefined) throw error;
     // Only `error` and `error_description`, with the password, the secret
