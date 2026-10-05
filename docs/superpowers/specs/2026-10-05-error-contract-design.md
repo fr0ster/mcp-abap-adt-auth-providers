@@ -446,8 +446,8 @@ export function count(value: unknown): Count | undefined {
 }
 export function port(value: unknown): Port | undefined {
   return inRange(value, 0, 65_535) ? ((value + 0) as Port) : undefined;
-// `+ 0` turns -0 into 0: a fact never carries -0 (decided 2026-10-05).
 }
+// `+ 0` turns -0 into 0: a fact never carries -0 (decided 2026-10-05).
 ```
 
 Result: 0 errors (the probe compiled a fourth maker, `seconds`, of the same
