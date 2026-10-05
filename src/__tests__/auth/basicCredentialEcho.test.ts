@@ -17,6 +17,7 @@ import type { AddressInfo } from 'node:net';
 import { inspect } from 'node:util';
 import { afterAll, beforeAll, describe, expect, it } from '@jest/globals';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
+import axios from 'axios';
 import { exchangeCodeForToken } from '../../auth/browserAuth';
 import { getTokenWithClientCredentials } from '../../auth/clientCredentialsAuth';
 import {
@@ -33,6 +34,7 @@ import {
   refreshSamlBearerToken,
 } from '../../auth/saml2TokenExchange';
 import { refreshJwtToken } from '../../auth/tokenRefresher';
+import { legacyBasic, sendTokenRequest } from '../../auth/tokenRequest';
 
 function listen(server: Server): Promise<number> {
   return new Promise((resolve) => {
@@ -352,4 +354,45 @@ describe('the UAA code exchange logging a 200 without access_token', () => {
     ).rejects.toThrow('Response does not contain access_token');
     await failed;
   });
+});
+
+describe('legacyBasic carries its own secrets', () => {
+  // Every site also passes its clientSecret, from which the decoded
+  // credential is recognised too; this pins that the header's own secrets
+  // suffice, so dropping `basic` from the join is caught on its own.
+  it.each(CREDENTIALS)(
+    '$label: sendTokenRequest given only `basic` keeps no form of it',
+    async (c) => {
+      status = 400;
+      const basic = legacyBasic(c.id, c.secret);
+      let thrown: unknown;
+      const failed = expect(
+        sendTokenRequest(
+          undefined,
+          () =>
+            axios.post(`${base}/token`, 'grant_type=x', {
+              headers: { Authorization: basic.header },
+              maxRedirects: 0,
+            }),
+          [],
+          basic,
+        ).catch((error: unknown) => {
+          thrown = error;
+          throw error;
+        }),
+      ).rejects.toBeDefined();
+      await failed;
+      expect(received).toBe(basic.header);
+      const rendered = renderings(thrown);
+      for (const form of forbidden(c, received)) {
+        for (const [where, text] of Object.entries(rendered)) {
+          expect({ where, form, found: text.includes(form) }).toEqual({
+            where,
+            form,
+            found: false,
+          });
+        }
+      }
+    },
+  );
 });
