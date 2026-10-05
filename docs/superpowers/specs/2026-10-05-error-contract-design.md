@@ -1164,7 +1164,51 @@ signal (or none). The rule, wherever an attempt is shared:
   persistence), no pinned material, no `remembered`, no broker cache entry and
   no session-secret write. What the server answered *before* the abort and
   that describes the server's state stays applied (a refresh token the server
-  refused is spent, as today); nothing that arrives after the abort is.
+  refused is spent, as today); nothing that arrives after the abort is —
+  with the one exception of a refresh, below.
+- **A refresh cut after dispatch is an uncertain outcome.** Once a refresh
+  request carrying refresh token R has been dispatched, the server may have
+  consumed R and issued R2 even if the attempt is then aborted and the
+  request cut. Rules:
+  1. On that abort, R is marked **spent** in memory (`refreshToken` cleared,
+     identity-checked as today, `BaseTokenProvider.ts:459-485`) and is never
+     submitted again by this provider — a rotating endpoint with
+     reuse detection would otherwise revoke the whole token family. The next
+     moment follows rule 6: no usable refresh token → one login through the
+     strategy. Persistence is told nothing new (no `onTokens`) until a result
+     is known; the persisted R stays where it is, so a restarted process may
+     submit it once and be refused — rule 6 again, one login.
+  2. A late response to that refresh that does arrive is offered to the
+     commit queue (below) with the **generation of its attempt**: it is
+     committed — tokens, R2, `onTokens` — if and only if no newer credential
+     has been committed since that attempt began; otherwise it is discarded.
+     So R2 is kept when nothing overtook it, and never overwrites a newer
+     login. A late result of anything else (a code exchange, a device poll, a
+     passcode or SAML exchange, a loader read, a broker build) is discarded,
+     as above: losing it costs one more login, while losing R2 on a rotating
+     endpoint would strand the refresh family.
+  3. Stated in the README: on a rotating endpoint a cancelled refresh can
+     force one interactive login.
+- **One serialized commit queue per provider.** Every effect of an attempt —
+  `updateTokens`, `markIfElsewhere`, the pinned material, `remembered`, and
+  `obtained` (`onTokens`, so persistence, `BaseTokenProvider.ts:630-639`) — is
+  applied by a **commit** that runs in one serialized queue per provider,
+  never concurrently with another. Each attempt takes a **generation** from a
+  per-provider counter when it begins; a commit applies only if its
+  generation is newer than the last applied one, else it is discarded whole
+  (no in-memory change, no hook). The queue runs in arrival order: a later
+  commit — its in-memory change included — starts only after the earlier
+  one, its `onTokens` included, has settled; so persistence is always told
+  the credentials in the order they became current, and the last persisted
+  state is the newest. A consumer `onTokens` that never settles blocks every
+  later commit of that provider (and so the waiters of later attempts, each
+  still releasable by its own signal) — stated in the README beside rule 7.
+  Once a commit has begun, aborting its attempt's waiters releases them
+  (`aborted`) but does not cancel or reorder the commit: a replacement
+  attempt's commit queues behind it. The broker's session-secret writes
+  follow the same rule per destination: serialized, each tagged with the
+  generation of what it writes, an older write (a retry of a failed one
+  included, `AuthBroker.ts` `failedWrites`) never applied after a newer one.
 - **Drain handoff: a replacement waits for the release.** Non-joinable is
   not released: an aborted attempt's strategy may still be closing its
   socket (`BrowserCallbackStrategy` refuses a second authorization while its
@@ -1287,15 +1331,30 @@ remove the party (a later moment no longer waits on it; the signal has no
 listener left); `attach` of an aborted signal adds nothing; the device flow
 stops polling on abort (no request after the abort, fake timers); an aborted
 renewal is not `remembered`. **Doomed join window:** all waiters abort while
-the attempt's token request (a deferred mock) is still outstanding; a new
-caller arriving before it completes starts a fresh attempt (a second
-request) and gets that attempt's result; when the first request then
-completes, nothing changes — tokens, the refresh token, the pinned material,
-`remembered`, no `onTokens` call; the same for `pin` with an outstanding
-loader read. Load-bearing: aborting the attempt on the first waiter's abort
+the attempt's login request (a code exchange, a deferred mock) is still
+outstanding; a new caller arriving before it completes starts a fresh
+attempt (a second request) and gets that attempt's result; when the first
+request then completes, nothing changes — tokens, the refresh token, the
+pinned material, `remembered`, no `onTokens` call; the same for `pin` with
+an outstanding loader read. **Refresh cut after dispatch:** a server that
+rotates R → R2 and withholds the response; the attempt is aborted; the next
+moment does not submit R (asserted on the server: R arrives once) and logs
+in through the strategy; variant — the withheld response is released later
+with nothing newer committed → R2 and its tokens are adopted and `onTokens`
+persists them; variant — a newer login committed first → the late R2 is
+discarded, the login's credentials stay and are the last persisted.
+**Commit order:** a renewal whose `onTokens` is deferred (a test hook), its
+waiter aborted meanwhile, then another renewal completing → the second
+commit waits for the first hook to settle, and the persisted state ends as
+the newer credentials, never the older (hooks observed in commit order, never
+concurrently); an older-generation commit arriving after a newer one is
+discarded whole. Load-bearing: aborting the attempt on the first waiter's abort
 turns the two-waiter case red; caching the aborted attempt turns the retry
 case red; clearing the slot only on settle turns the doomed-join case red;
 applying effects before the commit check turns the late-result case red;
+dropping the generation check turns the newer-login-first and the
+commit-order cases red; running `onTokens` hooks concurrently turns the
+commit-order case red; re-submitting a cut R turns the refresh case red;
 reinstating a "no live party → `aborted`" rule turns the after-release and
 the mixed-consumer cases red. **Drain handoff:** with the callback server's
 shutdown deliberately deferred (a test hook holding the socket's close open,
@@ -1830,7 +1889,10 @@ kind. Migration note: none beyond the versions.
   unsignalled one's next renewal gets a token; all `getProvider` callers abort while the build's store read is
   outstanding → a new `getProvider` arriving before it completes builds
   afresh and gets its own provider, and the first build's late completion is
-  not cached and writes no session secret; two
+  not cached and writes no session secret; session-secret writes for one
+  destination applied in generation order — a deferred older write (a
+  retried failed write) completing after a newer one does not overwrite it;
+  two
   `getProvider` callers, one aborts → the other gets the provider; both
   abort → nothing cached, the next call builds again; a provider obtained
   through `getProvider(…, { signal })` whose `rejected()` starts a login is
