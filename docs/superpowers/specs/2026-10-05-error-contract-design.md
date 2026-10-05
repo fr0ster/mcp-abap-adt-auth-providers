@@ -1,6 +1,6 @@
 # Error contract — design spec
 
-**Status:** draft for review, 2026-10-05; Codex adversarial approve (fifth pass); information losses L1–L13 and the SAML debug line approved by the user 2026-10-05; spec approved by the user 2026-10-05; `authDebug` (opt-in server text, §6) decided by the user 2026-10-05. Anchor:
+**Status:** draft for review, 2026-10-05; Codex adversarial approve (fifth pass); information losses L1–L13 and the SAML debug line approved by the user 2026-10-05; spec approved by the user 2026-10-05; `authDebug` (opt-in server text, §6) and no built-in login timeouts (§6a) decided by the user 2026-10-05. Anchor:
 [`../2026-10-05-error-contract-goal.md`](../2026-10-05-error-contract-goal.md)
 (approved 2026-10-05). Every "Holds throughout" invariant of the goal binds
 this spec; §13 says how each is honoured and which ones are held by something
@@ -144,7 +144,7 @@ present only when known; the builder omits the key otherwise (no
 | `client-authentication` | `problem: 'signing-key-unusable' \| 'result-unsendable' \| 'basic-client-id-colon'` |
 | `request-failed` | `operation: Operation`, `grant?: OAuth2GrantType`, `problem: RequestProblem`, `status?: HttpStatus`, `oauthError?: OAuthErrorCode`, `code?: SystemCode` |
 | `tls` | `operation: Operation`, `grant?: OAuth2GrantType`, `code: TlsFailureCode` |
-| `interactive-login` | `outcome: InteractiveOutcome`, `port?: Port`, `timeoutSeconds?: Seconds`, `ignoredCallbacks?: Count`, `oauthError?: OAuthErrorCode`, `code?: SystemCode`, `status?: HttpStatus` |
+| `interactive-login` | discriminated by `outcome: InteractiveOutcome` — `port-in-use`: `port: Port`; `aborted`: `ignoredCallbacks?: Count`; `disposed`: `strategy: 'browser' \| 'manual'`; `identity-provider-refused`: `oauthError?: OAuthErrorCode`; `browser-launch-failed`: `code?: SystemCode`; `failed`: `code?: SystemCode`, `status?: HttpStatus`; every other outcome: none |
 | `saml-assertion` | per rule, a discriminated union: `rule: AssertionRule`, `check: CheckOf<rule>` (fixed by the rule), `count?: Count` (rules that say "carries N"), `statusCode?: SamlStatusCode` (rule `declined`), `candidates?: readonly BearerCandidate[]` (≤ 5) and `moreCandidates?: Count` (rule `no-bearer-qualifies`) |
 | `snc` | `problem: SncProblem`, `rfcKey?: RfcKey`, `secureLoginClient?: boolean`, `libraryArchs?: readonly SncArch[]`, `candidates?: readonly SncCandidate[]` (≤ 8), `searched?: boolean`, `processArch?: SncArch` |
 | `credential-refused` | `credential: CredentialKind`, `at?: 'logon' \| 'request'` |
@@ -180,13 +180,17 @@ a status), `'no-response'` (a transport failure, `code` when allowlisted),
 (a device authorization response without its fields, a discovery document
 without `token_endpoint`).
 
-`interactive-login`'s `outcome` (`InteractiveOutcome`): `'timeout'`,
-`'port-in-use'`, `'aborted'`, `'disposed'`, `'busy'`,
-`'browser-launch-failed'`, `'callback-closed'`, `'identity-provider-refused'`,
-`'input-abandoned'`, `'input-timeout'`, `'no-input'`, `'unreadable-input'`,
-`'no-terminal'`, `'device-code-not-shown'`, `'failed'` (anything else ending a
-browser login: `code` / `status` when safe — `browserLoginWords`,
-`BrowserCallbackStrategy.ts:77-82`).
+`interactive-login`'s `outcome` (`InteractiveOutcome`): `'port-in-use'`,
+`'aborted'`, `'disposed'`, `'busy'`, `'browser-launch-failed'`,
+`'callback-closed'`, `'identity-provider-refused'`, `'input-abandoned'`,
+`'no-input'`, `'unreadable-input'`, `'no-terminal'`,
+`'device-code-not-shown'`, `'failed'` (anything else ending a browser login:
+`code` / `status` when safe — `browserLoginWords`,
+`BrowserCallbackStrategy.ts:77-82`). There is **no timeout outcome**: 6.0.0
+has no built-in login timeout (§6a); a login the consumer bounds with
+`AbortSignal.timeout(ms)` ends `aborted`, with no number of seconds.
+`disposed` carries `strategy: 'browser' | 'manual'`, so the renderer keeps
+both of today's sentences (K2, K15).
 
 `snc`'s `problem` (`SncProblem`): `'no-credential'` (A2200019),
 `'library-init-failed'` (SNCERR_INIT), `'logon-refused'`,
@@ -357,7 +361,7 @@ type and the set cannot drift.
 | Array (interfaces-auth 5.0.0) | Union | Source today |
 |---|---|---|
 | `AUTH_PROVIDER_ERROR_KINDS` | `AuthProviderErrorKind` | new (§3.1) |
-| `CONFIG_FIELDS` | `ConfigField` | `KNOWN_CONFIG_FIELDS`, `refusal.ts:81-129` (47 names), plus `port`, `timeoutMs`, `payload` and `read` — field names thrown today but absent from the set (`callbackServer.ts:56-68`, `codeStrategies.ts:55`, `manualStrategies.ts:55`) |
+| `CONFIG_FIELDS` | `ConfigField` | `KNOWN_CONFIG_FIELDS`, `refusal.ts:81-129` (47 names), plus `port`, `payload` and `read` — field names thrown today but absent from the set (`timeoutMs` is not added: the option is removed, §6a) (`callbackServer.ts:56-68`, `codeStrategies.ts:55`, `manualStrategies.ts:55`) |
 | `CONFIG_CASES` | `ConfigCase` | new: one per configuration sentence of Appendix A §A.5 |
 | `ALLOWED_VALUE_SETS` | `AllowedValueSet` | new: `'snc-qop'`, `'basic-encoding'`; their members are `SNC_QOP_VALUES` (`SncLogonProvider.ts:34`) and `BASIC_ENCODINGS` (`clientSecret.ts:44-47`), both moved here `as const` |
 | `OPERATIONS` | `Operation` | every `what` passed to `safely` / `refusalFrom` / `loggedError` / `tokenEndpointError` today (Appendix A §A.8) |
@@ -385,18 +389,21 @@ The small closed sets that only one kind uses (`'incomplete' | 'unusable' |
 pattern, so classification can check them (§5.4).
 
 **Branded integers.** `HttpStatus` (integer 100–599), `Count` (integer
-0–1 000 000), `Port` (integer 0–65 535), `Seconds` (integer 0–86 400 000) are
+0–1 000 000) and `Port` (integer 0–65 535) are
 `number & { readonly [brand]: … }` with unexported brand symbols, minted only
-by `auth-errors`' `httpStatus()`, `count()`, `port()`, `seconds()` (each
+by `auth-errors`' `httpStatus()`, `count()`, `port()` (each
 returns `undefined` outside the range). `facts.status: 500` does not
-compile; `facts.status: httpStatus(500)` does once narrowed.
+compile; `facts.status: httpStatus(500)` does once narrowed. (`Seconds`
+existed only for the login timeout's `timeoutSeconds`; with no built-in
+timeout (§6a) nothing uses it, so it is not part of the contract — checked
+against every fact of §3.2.)
 
 **The trusted branding sites.** A range check does not narrow `number` to a
 brand (measured, below), so each maker ends in one type assertion, and those
-four assertions plus `mint` are the only ones the shape check (§8.2 rule 4)
+three assertions plus `mint` are the only ones the shape check (§8.2 rule 4)
 permits in any repository — listed by file and function in
 `tools/assertion-sites.json` of `auth-errors` (`numbers.ts`: `httpStatus`,
-`count`, `port`, `seconds`; `mint.ts`: `mint`); the list is empty everywhere
+`count`, `port`; `mint.ts`: `mint`); the list is empty everywhere
 else. The makers as they will be written, compiled on 2026-10-05 with
 TypeScript 5.9.3 under the repository's strict flags, brands declared in a
 separate module with unexported symbols as in interfaces-auth:
@@ -415,19 +422,17 @@ export function count(value: unknown): Count | undefined {
 export function port(value: unknown): Port | undefined {
   return inRange(value, 0, 65_535) ? (value as Port) : undefined;
 }
-export function seconds(value: unknown): Seconds | undefined {
-  return inRange(value, 0, 86_400_000) ? (value as Seconds) : undefined;
-}
 ```
 
-Result: 0 errors. The companion probe — `const s: HttpStatus = n` inside an
+Result: 0 errors (the probe compiled a fourth maker, `seconds`, of the same
+form; it is dropped with `Seconds`). The companion probe — `const s: HttpStatus = n` inside an
 `n >= 100 && n <= 599 && Number.isInteger(n)` check, and `const lit:
 HttpStatus = 500` — fails with TS2322 "Type 'number' is not assignable to type
 'HttpStatus'" both times (so the assertion in the maker is required), while
 `500 as HttpStatus` compiles (so outside the makers the shape check, not the
 compiler, refuses it). That last line is the shape check's fixture for rule 4
 with a branded integer (§11.3): reported in any file, and not reported in
-`numbers.ts`'s four makers.
+`numbers.ts`'s three makers.
 
 **What a later release may change.** A new kind, or a new member of a
 discriminant a consumer is expected to switch on (`problem`, `outcome`,
@@ -444,6 +449,12 @@ exhaustiveness over code lists, only over kinds and discriminants.
   thrown classes that no longer exist, and no package outside auth-providers
   imports them (§1). `STORE_ERROR_CODES` stays (the stores' own errors).
 - 4.0.0's widened optional fields (`?: T | undefined`) are carried unchanged.
+- `ICallbackServerOptions.timeoutMs` (`src/auth/ICallbackServer.ts:28-42`,
+  required today, with its `2_147_483_647` bound in the JSDoc) is
+  **removed**; `signal` (`:44-48`) is the only way a scope ends without a
+  result, and its JSDoc and the `withBrowserCallbackServer` example
+  (`:136-141`) say so (§6a). `IAuthorizationStrategy`'s JSDoc stops naming
+  "the timeout" as something a strategy owns.
 - `tools/package-map.json` maps every new symbol to `interfaces-auth`;
   `check:surface` and `check:graph` pass.
 - `src/__typechecks__/errorContract.ts` holds the type tests of the
@@ -1033,6 +1044,56 @@ Basic credential, and the header-echo tests for both a `400` and a `200`
 without `access_token`, nothing of the error contract). Under the one-PR-per-task rule it is recorded here and in this
 PR's description; opening it is the user's decision.
 
+## 6a. No built-in login timeouts
+
+Decided by the user 2026-10-05. In 6.0.0 an interactive login ends only on a
+result, an explicit refusal by the identity provider, or the consumer's
+`AbortSignal`. A consumer that wants a bound composes one —
+`signal: AbortSignal.timeout(ms)`, or its own controller (rule 7: the
+consumer composes; no provider or strategy bounds a login on its own).
+
+**Removed** (auth-providers 6.0.0):
+- `BrowserCallbackStrategyOptions.timeoutMs` and `DEFAULT_LOGIN_TIMEOUT_MS`
+  (`BrowserCallbackStrategy.ts:39`, `:44`, `:159`; exported from
+  `src/index.ts:106` and `src/strategies/index.ts:10`), and the same option of
+  `browserCallbackStrategy`, `oidcCallbackStrategy`, `samlCallbackStrategy`;
+- `runCallbackScope`'s timer and its message (`callbackServer.ts:249-262`),
+  `MAX_TIMEOUT_MS` and the `timeoutMs` validation (`:25`, `:54-68`);
+- the static factories' `options.timeoutMs` —
+  `AuthorizationCodeProvider.ts:138-142`, `OidcBrowserProvider.ts:70-74`,
+  `Saml2BearerProvider.ts:88-92`, `Saml2PureProvider.ts:81-85` — and
+  `UaaPasscodeProvider`'s `timeoutMs ?? 300_000` (`UaaPasscodeProvider.ts:81-86`);
+- `ManualStrategyOptions.timeoutMs` (`manualStrategies.ts:29`, `:103-113`).
+
+Each factory and strategy takes `signal?: AbortSignal | undefined` where it
+does not already, and passes it through. **Unchanged:** the callback socket
+is released on the first terminal outcome — a result, an IdP error, or the
+abort — and the factory settles only once the port is free; an abort before
+the bind, during it or while waiting is honoured as today
+(`ICallbackServerOptions.signal`). `/callback` requests without a payload
+are still answered `400`, counted and ignored; their count is reported in the
+`aborted` words when the consumer aborts (`ignoredCallbacks`).
+
+**What this costs, approved** (Appendix C, L14): the "Authentication timeout
+after N seconds" text (K9), the manual input's "did not arrive in time"
+(K15), the `timeoutMs` options and their defaults (30 s for a browser login,
+300 s for the passcode) are gone. A consumer that passed `timeoutMs` must
+pass a `signal` (migration note, §10.4); one that passed nothing now waits
+until it aborts — the broker and the server decide their own bound (§10.6).
+
+Tests (auth-providers): a browser, OIDC and SAML login without a signal
+keeps waiting — bounded only by the test's own `AbortController`, aborted
+after the test has observed the scope still open (fake timers advanced well
+past the old 30 s and 300 s defaults); the abort ends the login `aborted`,
+and the port is bound by the test afterwards (CLAUDE.md "assert on the port,
+not on a log line"); the same for the manual strategies (an abort while
+reading ends `aborted`, and nothing is left reading stdin); `ignoredCallbacks`
+appears in the `aborted` words after two empty `/callback` requests. Type
+tests (§11.2): `timeoutMs` on each strategy's options, each static factory's
+options and `ICallbackServerOptions` is a compile error
+(`@ts-expect-error` on the object literal), and `DEFAULT_LOGIN_TIMEOUT_MS`
+is not exported (`@ts-expect-error` on its import).
+
 ## 7. Logon targets (connection) and rule 4
 
 **How a target builds its refusal.** connection depends on `auth-errors` and
@@ -1225,7 +1286,7 @@ plugins do not have). It refuses, in `src/` outside tests:
    `IAuthProviderError`, `IAuthRefusal`, `AuthOutcome`,
    `IAuthProviderFailure` or a branded integer, except at the sites named in
    the repository's `tools/assertion-sites.json` — `auth-errors`' `mint` and
-   its four integer makers (§4.3); every other repository's list is empty;
+   its three integer makers (§4.3); every other repository's list is empty;
 5. a spread or `Object.assign` whose source is typed `IAuthProviderError` (a
    spread keeps the brand and would let `{ ...minted, reason }` compile);
 6. a builder call (`authError.<kind>(facts, diagnostics)`) passing a
@@ -1452,7 +1513,12 @@ is not this work.
   (catch with `readFailure`, switch on `kind`, `refusalWords` → `classify`,
   the classes removed, Appendix C's losses stated); `authDebug` documented
   in "Debug Logging" and "Error Handling" — what it writes, the preview, that
-  it is off by default and never read from the environment.
+  it is off by default and never read from the environment; "Callback port
+  and lifetime" and every `timeoutMs` example rewritten on `signal` (§6a),
+  with the migration note: **a consumer passing `timeoutMs` must pass
+  `signal: AbortSignal.timeout(ms)` instead; one passing nothing now waits
+  until it aborts**. CLAUDE.md's "The default login timeout is 30 s" and the
+  callback server's timeout bullet go.
 - `CLAUDE.md`: provider rules 1, 2, 5, 8 and "Error classes" restated on
   kinds; the module structure; `docs/passwordless-sso.md:235-237` quotes "the
   SNC library has no credential to present (A2200019)", which stays verbatim
@@ -1491,6 +1557,19 @@ kind. Migration note: none beyond the versions.
   through `SNC_FIELDS` as today.
 - `getTokens` / `refreshTokens` relay the provider's `AuthProviderFailure`
   unchanged.
+- **Login bound (§6a).** The broker sets no bound and adds none: a login it
+  starts through a provider ends on a result, a refusal or an abort, and the
+  broker's consumer decides the bound — it passes a strategy or factory
+  composed with a `signal`. The CLI keeps its five-minute bound as its own
+  decision: `INTERACTIVE_LOGIN_TIMEOUT_MS` (`mcp-auth.ts:40`, `:580`;
+  `generate-env-from-service-key.ts:44`, `:54`; `mcpSsoConfig.ts:40`, `:700`,
+  `:717`, `:758`) becomes `signal: AbortSignal.timeout(…)` on the same
+  strategies, and an aborted login prints the `aborted` words. Migration
+  notes of both packages say a consumer that relied on the providers' 30 s /
+  300 s defaults must now bound the login itself. **For the server task**
+  (`mcp-abap-adt`, after this chain): the server must choose its own bound
+  for an interactive login it triggers, or document that it waits until the
+  user finishes or the request is cancelled.
 - `AuthBrokerConfig.authDebug?: boolean | undefined` (§6): passed as
   `authDebug` to every token provider the broker builds from a destination
   (`destinations.ts`'s provider construction), `=== true` only; never read
@@ -1741,7 +1820,9 @@ the wire error's message by design and travels as `IAuthRejection.error`, not
 as a refusal. connection's `AuthRefusedError.cause` (the wire's error, its own
 policy). Moving connection to `interfaces-adt-connection` 2.0.0. The server
 `mcp-abap-adt`, which reads only `AuthRefusedError.message`
-(`src/lib/auth/errors.ts:110`) and moves in its own task.
+(`src/lib/auth/errors.ts:110`) and moves in its own task — including its own
+bound for an interactive login, now that 6.0.0 has no built-in timeout (§6a,
+§10.6).
 
 **Not measured; to be checked during implementation:**
 
@@ -1817,7 +1898,7 @@ today's string exactly, pinned by a test; "→ Cn" points to Appendix C.
 | A6 | `refusal.ts:276-278`, `ClientAuthenticationError.ts:5-8` | `the client signing key could not be used` / hint | `client-authentication` | `problem: signing-key-unusable` | — | verbatim |
 | A7 | `refusal.ts:279-281`, `ClientAuthenticationError.ts:50-53` | `the client id contains ':', which raw Basic cannot carry` / hint | `client-authentication` | `problem: basic-client-id-colon` | — | verbatim |
 | A8 | `refusal.ts:282-291` | `the identity provider refused the login (<code>)` / `check the identity provider: the user, the client and the scopes it allows` | `interactive-login` | `outcome: identity-provider-refused`, `oauthError?` | — | verbatim |
-| A9 | `refusal.ts:292-295` | `the interactive login did not complete` / `complete the login within the strategy's time` | `interactive-login` | `outcome` (A.3), its facts | — | reason names the outcome (`the interactive login timed out after <n> s`, …); the old sentence stays for `outcome: failed` — more information |
+| A9 | `refusal.ts:292-295` | `the interactive login did not complete` / `complete the login within the strategy's time` | `interactive-login` | `outcome` (A.3), its facts | — | reason names the outcome (K1–K17's words); the old sentence stays for `outcome: failed`, its hint becomes `complete the login, or abort it` (no strategy time exists, §6a) — more information |
 | A10 | `refusal.ts:297-298` | `the refresh token was refused` / `log in again` | `credential-refused` | `credential: refresh-token` | — | verbatim |
 | A11 | `refusal.ts:300-305` | `the provider configuration is incomplete or invalid[: <fields>]` / `check the provider configuration` | `configuration` | `case`, `fields`, `allowed?` | mismatch URIs | per-case words (A.5); fields kept |
 | A12 | `refusal.ts:306-311` | `the service key or session data is incomplete[: <fields>]` | — | — | — | no producer in this package (README `:2062`); removed with the classes |
@@ -1854,20 +1935,20 @@ today's string exactly, pinned by a test; "→ Cn" points to Appendix C.
 | # | Source | Today's text | Kind | Facts | Diag. | New words / lost |
 |---|---|---|---|---|---|---|
 | K1 | `BrowserCallbackStrategy.ts:101-103` | `Port <n> is already in use. Please specify a different port or free the port.` | `interactive-login` | `outcome: port-in-use`, `port` | — | verbatim (the phrase "already in use" kept, `CallbackScopeError` doc) |
-| K2 | `BrowserCallbackStrategy.ts:122` | `BrowserCallbackStrategy has been disposed` | `interactive-login` | `outcome: disposed` | — | `the browser login strategy has been disposed` |
+| K2 | `BrowserCallbackStrategy.ts:122` | `BrowserCallbackStrategy has been disposed` | `interactive-login` | `outcome: disposed`, `strategy: browser` | — | verbatim |
 | K3 | `BrowserCallbackStrategy.ts:125-127` | `BrowserCallbackStrategy is already authorizing; it holds a single port` | `interactive-login` | `outcome: busy` | — | verbatim |
-| K4 | `BrowserCallbackStrategy.ts:152-154`, `callbackServer.ts:86`, `:159` | `Authorization aborted before the callback server bound` / `Callback server aborted before it started` / `Callback server aborted` | `interactive-login` | `outcome: aborted` | — | one sentence, `the browser login was aborted`; which of three moments lost (minor) |
+| K4 | `BrowserCallbackStrategy.ts:152-154`, `callbackServer.ts:86`, `:159` | `Authorization aborted before the callback server bound` / `Callback server aborted before it started` / `Callback server aborted` | `interactive-login` | `outcome: aborted`, `ignoredCallbacks?` | — | one sentence, `the browser login was aborted[; <k> incomplete request(s) reached /callback and were ignored]`; which of three moments lost (minor) |
 | K5 | `BrowserCallbackStrategy.ts:195-197` | `Browser opening failed. Open manually: <authorization URL>` | `interactive-login` | `outcome: browser-launch-failed`, `code?` | — | URL leaves the thrown message; stays in the strategy's log line (H7) → L4 |
 | K6 | `callbackServer.ts:56-58` | `Invalid callback server port: <value>. Must be an integer in 0..65535.` | `configuration` | `case: callback-port-invalid`, `fields: [port]` | — | value lost → L5 |
-| K7 | `callbackServer.ts:65-68` | `Invalid callback server timeoutMs: <value>. Must be finite and within 1..<max>.` | `configuration` | `case: callback-timeout-invalid`, `fields: [timeoutMs]` | — | value lost → L5 |
+| K7 | `callbackServer.ts:65-68` | `Invalid callback server timeoutMs: <value>. Must be finite and within 1..<max>.` | — | — | — | gone with the option (§6a) → L14 |
 | K8 | `callbackServer.ts:148-150`, `:273` | `Callback server closed before a result arrived` / `Callback server scope has ended` | `interactive-login` | `outcome: callback-closed` | — | one sentence |
-| K9 | `callbackServer.ts:258-260` | `Authentication timeout after <s> seconds. Please try again.[ <k> incomplete request(s) reached /callback and were ignored.]` | `interactive-login` | `outcome: timeout`, `timeoutSeconds`, `ignoredCallbacks?` | — | verbatim |
+| K9 | `callbackServer.ts:249-262` | `Authentication timeout after <s> seconds. Please try again.[ <k> incomplete request(s) reached /callback and were ignored.]` | — | — | — | gone: no built-in timeout (§6a); a consumer's `AbortSignal.timeout` ends `aborted` (K4), which keeps the ignored-request count → L14 |
 | K10 | `callbackScopeError.ts:139-151` | `the identity provider refused the login (<code>\|an unregistered error code)` | `interactive-login` | `outcome: identity-provider-refused`, `oauthError?` | — | verbatim |
 | K11 | `BrowserCallbackStrategy.ts:77-82`, `:224-230` | `BrowserAuthError` with `the browser login failed (unknown error[, <code>])[ (HTTP <n>)]`, original as `cause` | `interactive-login` | `outcome: failed`, `code?`, `status?` | — | verbatim; `cause` lost → L2 |
 | K12 | `manualStrategies.ts:50-52` | `the manual input was abandoned before it began` | `interactive-login` | `outcome: input-abandoned` | — | verbatim |
 | K13 | `manualStrategies.ts:55-57` | `Manual input needs an interactive terminal. Supply \`read\` to source the value elsewhere.` | `interactive-login` | `outcome: no-terminal` | — | verbatim |
 | K14 | `manualStrategies.ts:69`, `:172`, `:193`, `codeStrategies.ts:42` | `No input received` / `No SAMLResponse was provided` / `No passcode was provided` / `Authorization code provider returned an empty value` | `interactive-login` | `outcome: no-input` | — | `no input was received`; which input lost (minor) |
-| K15 | `manualStrategies.ts:100`, `:111-113` | `the manual strategy was disposed` / `the manual input did not arrive in time, or the strategy was disposed` | `interactive-login` | `outcome: disposed` / `input-timeout` | — | verbatim |
+| K15 | `manualStrategies.ts:100`, `:111-113` | `the manual strategy was disposed` / `the manual input did not arrive in time, or the strategy was disposed` | `interactive-login` | `outcome: disposed`, `strategy: manual` | — | first verbatim; the second is gone with `timeoutMs` (§6a; an abort is `aborted`) → L14 |
 | K16 | `manualStrategies.ts:154` | `Could not read an authorization code from that input` | `interactive-login` | `outcome: unreadable-input` | — | verbatim |
 | K17 | `DeviceCodePresenter.ts:26-31` | `showing the device code failed` | `interactive-login` | `outcome: device-code-not-shown` | — | verbatim |
 
@@ -2124,8 +2205,7 @@ of Appendix A keeps its information as facts, as diagnostics, or verbatim.
 - **L4 — The authorization URL in a failed browser launch's error.**
   "Browser opening failed. Open manually: <url>" (K5). The URL stays in the
   strategy's log line and announcement (H7, H8); the error does not carry it.
-- **L5 — A rejected configuration value.** The callback `port` and
-  `timeoutMs` (K6, K7), the SNC `qop` (E21), the validator's `clockSkewMs`
+- **L5 — A rejected configuration value.** The callback `port` (K6), the SNC `qop` (E21), the validator's `clockSkewMs`
   (E24): the field name stays, and for `qop` the allowed values; the value
   given does not.
 - **L6 — Explanatory sentences of configuration errors.** Each configuration
@@ -2162,3 +2242,12 @@ of Appendix A keeps its information as facts, as diagnostics, or verbatim.
   copy. With one copy installed (the release gate's clean install, deduplicated
   by npm), nothing is lost; with two, an SNC path or a SAML issuer seen
   through the other copy is not shown.
+- **L14 — Built-in login timeouts (approved by the user 2026-10-05).** The
+  "Authentication timeout after N seconds. Please try again." text (K9), the
+  manual input's "did not arrive in time" (K15), the invalid-`timeoutMs`
+  configuration error (K7), and the options themselves — `timeoutMs` of every
+  browser / OIDC / SAML strategy and of the manual strategies,
+  `ICallbackServerOptions.timeoutMs`, the static factories' `timeoutMs`,
+  `DEFAULT_LOGIN_TIMEOUT_MS` (30 s), `MAX_TIMEOUT_MS` and the passcode's
+  300 s default — are removed (§6a). A login ends on a result, the identity
+  provider's refusal or the consumer's `AbortSignal`.
