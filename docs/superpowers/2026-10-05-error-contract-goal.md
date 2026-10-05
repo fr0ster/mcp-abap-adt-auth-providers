@@ -17,10 +17,13 @@ of errors from one provider, whichever contract it calls.
 An `IAuthProviderError` is a **closed union discriminated by `kind`**: each
 kind carries its own `facts`, every fact a value from an allowlist, and
 `reason` / `hint` — text derived from `kind` and `facts` alone, by the
-package's renderer. A consumer may show `reason` / `hint` as they are, or
-render its own text from `kind` and `facts`; the provider exports its
-renderer so the same words can be produced anywhere (the broker relays the
-error whole and copies no phrase).
+renderer in `@mcp-abap-adt/auth-errors`. Beside them, an error may carry
+`diagnostics` (see invariant 3), rendered by a separate function and never
+part of `reason` / `hint`: a consumer that drops diagnostics drops every
+diagnostic-derived character. A consumer may show `reason` / `hint` as they
+are, or render its own text from `kind` and `facts`; the renderer is exported
+so the same words can be produced anywhere (the broker relays the error whole
+and copies no phrase).
 
 **Success:** every refusal and every thrown token error of
 `@mcp-abap-adt/auth-providers`, and every refusal a logon target returns, is
@@ -80,20 +83,33 @@ cover thrown classes only, not refusals.
 2. **No exception crosses `IAuthProvider`** (providers' rule 1): the error is a
    value in the outcome, never thrown across the contract.
 3. **No free text in an error's facts.** `facts` hold only allowlisted
-   values; `reason` / `hint` are a function of `kind`, `facts` and
-   `diagnostics`, produced by the renderer and nothing else. No `message`,
+   values; `reason` / `hint` are a function of `kind` and `facts` only,
+   produced by the renderer and nothing else. No `message`,
    `cause` or body of any thrown value reaches an error (providers' rule 2).
    **`diagnostics`** (decided by the user 2026-10-05) is a separate, typed
    channel for the values that help a person and cannot be allowlisted —
    today an SNC library's and each candidate's path, and a SAML document's
    values quoted by `quoteUntrusted` — admitted only when the value is one the
    consumer supplied or received in clear (its own configuration and files,
-   the assertion it was handed), never a secret, a token, key material or a
-   server's free text. Each kind declares which diagnostics it may carry; the
-   renderer shows them apart from the reason, and a consumer may drop them.
-4. **Runtime checking only at the boundary; the compiler guarantees the
-   rest.** One classification function turns a thrown `unknown` into an
-   `IAuthProviderError`; everything after it is typed:
+   the assertion it was handed), never a secret, a token, key material, a
+   server's free text or any exception's text. Provenance alone does not make
+   a value safe — an assertion is attacker-controlled — so the spec
+   enumerates each diagnostic field per kind with its one approved extraction
+   source (e.g. the configured SNC library path, a candidate path the locator
+   built; from an assertion only selected metadata such as an Issuer, an
+   InResponseTo, an ID or a time — never arbitrary element content), and
+   **admission is checked at the producing boundary**: the builder in
+   `auth-errors` validates each diagnostic field (shape, length, the
+   escaping `quoteUntrusted` does today) before the error is minted. Values
+   quoted today that fall outside this — exception messages quoted inside
+   SAML refusals (`signedNode.ts`), any other free text — are dropped, and
+   the diagnostic compatibility matrix records each one. Diagnostics are
+   rendered by their own function, never into `reason` / `hint`.
+4. **Runtime checking only at the boundaries; the compiler guarantees the
+   rest.** Two boundaries, both in `auth-errors`'s builder or called by it:
+   classification turns a thrown `unknown` into an `IAuthProviderError`, and
+   diagnostics admission validates each diagnostic field before minting.
+   Everything after them is typed:
    - a fact of the wrong type for its kind does not compile;
    - an allowlist type and its runtime set come from one `as const` array;
    - the renderer is checked complete over the kinds (`satisfies` a mapped
@@ -177,21 +193,28 @@ published.
 4. The plan, reviewed and approved: steps, order, decisions.
 
 **Implementation, in dependency order**
-5. `@mcp-abap-adt/interfaces-auth` 5.0.0 — the contract's types and
-   constants (a major: `IAuthRefusal` changes). Released first.
+5. Interfaces, one PR in the interfaces repository, released first:
+   `@mcp-abap-adt/interfaces-auth` 5.0.0 — the contract's types and constants
+   (a major: `IAuthRefusal` changes); and every sibling that depends on it
+   (`interfaces-auth-sap`, and through it `interfaces-auth-broker`) moved to
+   it — a major where any exported type reaches a changed type, else a range
+   widening, by the rule PR #123 established. The spec names each resulting
+   version.
 6. `@mcp-abap-adt/auth-errors` 1.0.0 — new repository: builder, renderer,
    allowlist sets, type tests. Released.
 7. `@mcp-abap-adt/connection` — logon targets build refusals through
-   `auth-errors`; moves to interfaces-auth 5.0.0. Released.
+   `auth-errors`; moves to interfaces-auth 5.0.0 (and the interface majors of
+   step 5 it uses). Released.
 8. `@mcp-abap-adt/auth-providers` — in this PR: classification, every refusal
    and thrown token error through `auth-errors`, a target's refusal relayed
    under rule 4, rule 1 held structurally, type tests, `asContract` deleted.
    Released. **The error contract appears for consumers here.**
-9. `@mcp-abap-adt/auth-stores` — moves to interfaces-auth 5.0.0 (and the
-   matching auth-sap / auth-broker majors), deletes its `asContract`;
+9. `@mcp-abap-adt/auth-stores` — moves to the step-5 interface versions
+   (interfaces-auth, -auth-sap, -auth-broker), deletes its `asContract`;
    released with its unreleased strict-compiler change.
-10. `@mcp-abap-adt/auth-broker` + CLI — relay the error, drop the copied
-    certificate phrases; released with their unreleased strict-compiler
+10. `@mcp-abap-adt/auth-broker` + CLI — move to the step-5 interface
+    versions, auth-errors, the step-8 auth-providers and the step-9
+    auth-stores; relay the error, drop the copied certificate phrases; released with their unreleased strict-compiler
     change. **The contract is used end to end here.**
 
 **After** — its own task: the server `mcp-abap-adt` reads `kind` where it
