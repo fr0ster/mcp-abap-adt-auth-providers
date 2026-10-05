@@ -473,8 +473,9 @@ export async function sendTokenRequest<T>(
   asToday: () => Promise<AxiosResponse<T>>,
   diagnostics?: TokenRequestDiagnostics,
 ): Promise<AxiosResponse<T>> {
+  let response: unknown;
   try {
-    return prepared ? await axios<T>(prepared.config) : await asToday();
+    response = prepared ? await axios<T>(prepared.config) : await asToday();
   } catch (error) {
     const response = readSafely(error, 'response');
     logRefusedRequest(
@@ -483,6 +484,57 @@ export async function sendTokenRequest<T>(
       readSafely(response, 'data'),
     );
     throw withoutRequest(error);
+  }
+  return snapshotOf<T>(response);
+}
+
+/**
+ * The fields a token site reads from an answer: the token response's (RFC
+ * 6749 §5.1, OIDC Core §3.1.3.3), the device authorization response's (RFC
+ * 8628 §3.2) and the OAuth `error`.
+ */
+const ANSWER_FIELDS = [
+  'access_token',
+  'refresh_token',
+  'id_token',
+  'token_type',
+  'expires_in',
+  'scope',
+  'device_code',
+  'user_code',
+  'verification_uri',
+  'verification_uri_complete',
+  'interval',
+  'error',
+] as const;
+
+/**
+ * What a site may read of a successful answer: an integer status and a plain
+ * object of the expected fields that are strings or numbers, each read
+ * through `readSafely` — never the object axios (or a consumer's response
+ * interceptor) handed over, whose getters, Proxy traps or `toJSON` could
+ * throw the server's text into a site's parsing. A field whose read throws
+ * reads as absent; anything that still throws here is replaced by a safe
+ * error with no cause.
+ */
+function snapshotOf<T>(response: unknown): AxiosResponse<T> {
+  try {
+    const raw = readSafely(response, 'data');
+    const data: Record<string, string | number> = {};
+    for (const field of ANSWER_FIELDS) {
+      const value = readSafely(raw, field);
+      if (typeof value === 'string' || typeof value === 'number') {
+        data[field] = value;
+      }
+    }
+    return {
+      status: integerStatus(readSafely(response, 'status')),
+      statusText: '',
+      headers: {},
+      data,
+    } as unknown as AxiosResponse<T>;
+  } catch {
+    throw new AxiosError('the token request failed');
   }
 }
 

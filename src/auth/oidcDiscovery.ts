@@ -3,7 +3,7 @@
  */
 
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
-import axios, { type AxiosResponse } from 'axios';
+import axios, { AxiosError, type AxiosResponse } from 'axios';
 import { withoutRequest } from './tokenRequest';
 
 export interface OidcDiscoveryDocument {
@@ -69,10 +69,23 @@ export async function discoverOidc(
     throw withoutRequest(error);
   }
 
-  if (!response.data?.token_endpoint) {
+  // A plain copy of the document, never the object handed over: a consumer's
+  // response interceptor may return data whose getters, Proxy traps or
+  // `toJSON` throw the server's text. Whatever throws while copying is
+  // replaced by fixed words, with no cause.
+  let document: OidcDiscoveryDocument;
+  try {
+    const copy: unknown = JSON.parse(JSON.stringify(response.data ?? null));
+    document = (
+      copy && typeof copy === 'object' ? copy : {}
+    ) as OidcDiscoveryDocument;
+  } catch {
+    throw new AxiosError('the OIDC discovery request failed');
+  }
+  if (typeof document.token_endpoint !== 'string' || !document.token_endpoint) {
     throw new Error('OIDC discovery document missing token_endpoint');
   }
 
-  discoveryCache.set(discoveryUrl, response.data);
-  return response.data;
+  discoveryCache.set(discoveryUrl, document);
+  return document;
 }
