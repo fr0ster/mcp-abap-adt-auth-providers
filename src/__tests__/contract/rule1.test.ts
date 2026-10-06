@@ -183,3 +183,47 @@ type IAuthRejectionLike = {
   status?: number;
   error: unknown;
 };
+
+describe('rule 1: a grant() that throws or answers a rejecting promise', () => {
+  const grants: Array<[string, (value: () => unknown) => unknown]> = [
+    [
+      'throws',
+      (value) => {
+        throw value();
+      },
+    ],
+    ['answers a rejecting promise', (value) => Promise.reject(value())],
+  ];
+  for (const [how, grantOf] of grants) {
+    for (const [valueName, value] of hostileValues()) {
+      it(`a Basic subclass whose grant() ${how} — ${valueName}`, async () => {
+        let calls = 0;
+        class Granting extends BasicAuthProvider {
+          protected override grant() {
+            calls += 1;
+            return grantOf(value) as never;
+          }
+        }
+        const p = new Granting('u', 'p');
+        const seen: unknown[] = [];
+        const listener = (reason: unknown) => seen.push(reason);
+        process.on('unhandledRejection', listener);
+        const outcomes: AuthOutcome[] = [];
+        try {
+          outcomes.push(await p.prepare());
+          outcomes.push(await p.establish(logonThrowing(value)));
+          outcomes.push(await p.authorize(requestThrowing(value)));
+          outcomes.push(
+            await p.rejected({ at: 'request', status: 401, error: {} }),
+          );
+          await new Promise((resolve) => setTimeout(resolve, 20));
+        } finally {
+          process.off('unhandledRejection', listener);
+        }
+        expect(seen).toEqual([]);
+        expect(calls).toBe(4);
+        for (const outcome of outcomes) check(outcome);
+      });
+    }
+  }
+});

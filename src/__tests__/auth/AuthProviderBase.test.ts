@@ -18,6 +18,7 @@ import {
   type MomentOperations,
 } from '../../auth/AuthProviderBase';
 import { OK } from '../../auth/refusal';
+import { TokenEndpointError } from '../../errors/TokenEndpointError';
 import { BaseTokenProvider } from '../../index';
 import { recordingTargets } from '../helpers/targets';
 
@@ -195,5 +196,128 @@ describe('AuthProviderBase (spec §8.1)', () => {
       }
     }
     await expect(new Fine().prepare()).resolves.toEqual({ ok: true });
+  });
+});
+
+describe('the grant is read once per moment, inside the boundary', () => {
+  /** Unhandled rejections seen while `run` settles, and a tick after. */
+  async function unhandledDuring(run: () => Promise<unknown>) {
+    const seen: unknown[] = [];
+    const listener = (reason: unknown) => seen.push(reason);
+    process.on('unhandledRejection', listener);
+    try {
+      await run();
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    } finally {
+      process.off('unhandledRejection', listener);
+    }
+    return seen;
+  }
+
+  const grantAnswers: Array<[string, () => unknown]> = [
+    ['a rejecting promise', () => Promise.reject(new Error(MARKER))],
+    [
+      'a throw',
+      () => {
+        throw new Error(MARKER);
+      },
+    ],
+  ];
+  it.each(
+    grantAnswers.flatMap(([name, answer]) =>
+      (['throws', 'answers Ok'] as const).map(
+        (body) => [name, body, answer] as const,
+      ),
+    ),
+  )(
+    'grant() answering %s, a body that %s: no unhandled rejection, one call per moment',
+    async (_name, body, answer) => {
+      let calls = 0;
+      class Granting extends Throwing {
+        protected override grant(): OAuth2GrantType | undefined {
+          calls += 1;
+          return answer() as never;
+        }
+        protected override onPrepare(): AuthOutcome {
+          return body === 'throws' ? boom() : OK;
+        }
+        protected override onEstablish(): AuthOutcome {
+          return body === 'throws' ? boom() : OK;
+        }
+        protected override onAuthorize(): AuthOutcome {
+          return body === 'throws' ? boom() : OK;
+        }
+        protected override onRejected(): AuthOutcome {
+          return body === 'throws' ? boom() : OK;
+        }
+      }
+      const p = new Granting();
+      const outcomes: AuthOutcome[] = [];
+      const seen = await unhandledDuring(async () => {
+        const t = recordingTargets();
+        outcomes.push(await p.prepare());
+        outcomes.push(await p.establish(t.logonTarget));
+        outcomes.push(await p.authorize(t.requestTarget));
+        outcomes.push(
+          await p.rejected({ at: 'request', status: 401, error: {} }),
+        );
+      });
+      expect(seen).toEqual([]);
+      expect(calls).toBe(4);
+      for (const outcome of outcomes) {
+        // A throwing grant() refuses the moment; a rejecting promise is no
+        // grant, and the body decides.
+        if (body === 'throws' || answer === grantAnswers[1]?.[1]) {
+          expect(factsOf(outcome)).not.toHaveProperty('grant');
+        } else {
+          expect(outcome).toEqual({ ok: true });
+        }
+      }
+    },
+  );
+
+  it('a ladder class thrown by the body names the grant read once', async () => {
+    let calls = 0;
+    class Ladder extends Throwing {
+      protected override grant(): OAuth2GrantType | undefined {
+        calls += 1;
+        return 'password';
+      }
+      protected override onPrepare(): AuthOutcome {
+        throw new TokenEndpointError(MARKER, { status: 401 });
+      }
+    }
+    expect(factsOf(await new Ladder().prepare())).toEqual({
+      operation: 'loading-certificate',
+      grant: 'password',
+      problem: 'refused',
+      status: 401,
+    });
+    expect(calls).toBe(1);
+  });
+
+  it('getAuthType() answering a rejecting promise (BaseTokenProvider): no unhandled rejection, one call per moment', async () => {
+    let calls = 0;
+    class Rejecting extends BaseTokenProvider {
+      protected performLogin(): Promise<ITokenResult> {
+        return boom();
+      }
+      protected performRefresh(): Promise<ITokenResult> {
+        return boom();
+      }
+      protected getAuthType(): OAuth2GrantType {
+        calls += 1;
+        return Promise.reject(new Error(MARKER)) as never;
+      }
+    }
+    const p = new Rejecting();
+    let outcome: AuthOutcome | undefined;
+    const seen = await unhandledDuring(async () => {
+      outcome = await p.prepare();
+    });
+    expect(seen).toEqual([]);
+    expect(calls).toBe(1);
+    if (!outcome) throw new Error('unreachable');
+    expect(factsOf(outcome)).toEqual({ operation: 'token-request' });
   });
 });

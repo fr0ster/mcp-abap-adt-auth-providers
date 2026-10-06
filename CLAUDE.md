@@ -40,7 +40,7 @@ Every token provider that sends a request to an authorization server — all but
 
 ### Rules every provider follows
 
-1. **No exception crosses the contract.** Each of the four methods catches everything its body throws — its own work, a collaborator, and a target (`header`, `cookies`, `logonParameters`, `tlsMaterial` may throw) — and answers Oops. Every method body runs inside one `safely(…)` boundary (`src/auth/refusal.ts`).
+1. **No exception crosses the contract.** Each of the four methods catches everything its body throws — its own work, a collaborator, and a target (`header`, `cookies`, `logonParameters`, `tlsMaterial` may throw) — and answers Oops. Every provider extends `AuthProviderBase` (`src/auth/AuthProviderBase.ts`), which owns the four methods: each runs its `on…` body inside auth-errors' `guard`, with the operation per moment validated once at construction and `grant()` read once, inside the boundary (until Task 27 through `contractTransition`'s typed `guard` wrapper). `SncLogonProvider` still uses its own `bounded` until it moves onto the base.
 2. **A refusal carries no secret — so it never carries an error's message.** It is built only from fixed wording chosen per error class, plus metadata only when its value is on an allowlist this package owns: config field names (`KNOWN_CONFIG_FIELDS`), an `AssertionValidationError`'s `check` (`AssertionCheck` values only), a fixed set of system error codes, a fixed set of RFC SDK keys (SNC), or a class label decided by `instanceof` against this package's own constructors — else "unknown error". No `message`, `cause` or body of any error reaches a refusal, and a `name` property is never read.
 3. **Nothing to add is Ok.** A provider with nothing for a moment writes to no target and answers Ok.
 4. **A target's Oops is the provider's to judge.** A provider with no other way in (SNC, certificate) returns the target's Oops as its own; one that has another (a password is also a header) goes on.
@@ -54,7 +54,8 @@ Every token provider that sends a request to an authorization server — all but
 - `src/credentials/` — `BasicAuthProvider`, `CertificateAuthProvider`, `FileCertificateMaterialLoader`, `SamlAuthProvider`, `TokenAuthProvider`
 - `src/deviceCode/` — `IDeviceCodePresenter`, `DeviceCodePrompt`, `consoleDeviceCodePresenter`: how `OidcDeviceFlowProvider` shows the user where to go and what to enter, injected like a strategy instead of writing to the logger itself
 - `src/snc/` — `SncLogonProvider` and its collaborators: `DefaultSncLibraryLocator`, `SecureLoginClientProbe`, `nodeSncSystem` (the machine seam — env, file heads, registry, behind one injectable interface), the PE/Mach-O/ELF architecture reader, the refusal mapping (`sncRefusal`). A product probe only names the product behind the library, for the `rejected()` hint — it checks nothing, because the SNC library starts the Secure Login Client on demand (measured), so `prepare()` is Ok with the client not running. An unusable library is refused naming each candidate's source, path and fixed reason
-- `src/auth/refusal.ts` — `OK`, `oops`, `refusalFrom`, `safely` — the one place a thrown value becomes a refusal (rules 1 and 2), and the allowlists; `loggedError` — what a log line may say of a thrown value, derived from the same refusal; `refusalWords` — exported: the same refusal's `{ reason, hint? }`, so a consumer relays the package's words instead of copying them
+- `src/auth/AuthProviderBase.ts` — the base every provider extends: the four moments, each inside `guard` (rule 1); exported
+- `src/auth/refusal.ts` — `OK`, `oops`, `refusalFrom` / `refusalFor` (the class ladder, then auth-errors' `classify`) — where this package's error classes become refusals (rule 2); `loggedError` — what a log line may say of a thrown value, derived from the same refusal; `refusalWords` — exported: the same refusal's `{ reason, hint? }`, so a consumer relays the package's words instead of copying them
 - `src/auth/rejection.ts` — `readRejection`, `refuseFor`, `unknownRefusal` — what a rejection says about the credential (rule 5)
 - `src/clientAuthentication/` — the five shipped `IClientAuthentication` factories: `noClientAuthentication`, `clientSecretBasic` (required `encoding: 'raw' | 'form'`, no default — measured for the stand's and the trial's ids and secrets: XSUAA accepts only raw, UAA and Keycloak need form for a secret holding `+` and `%` (id characters and spaces: Inference); raw refuses a client id with `:`, `BasicClientIdError`) / `clientSecretPost` (`clientSecret.ts`), `tlsClientCertificate` (material or a loader, read and checked once; a failed load is retried), `privateKeyJwt` (RS256 / ES256 through `node:crypto`, 60 s assertion, `aud` = `audience`, else the draft's `tokenEndpoint` — every draft this package builds carries the plain token endpoint, the device initiation's included, never the mTLS alias — else the request's endpoint). None reads the environment, a file or a service key
 
@@ -136,7 +137,8 @@ src/
 │   ├── codeStrategies.ts           # external (needs the URL) and static (does not)
 │   └── asOidcResult.ts             # string payload → OidcCallbackResult
 ├── auth/
-│   ├── refusal.ts             # OK, oops, refusalFrom, safely — where every thrown value becomes a refusal; refusalWords (exported)
+│   ├── AuthProviderBase.ts    # the four moments, each inside guard (exported)
+│   ├── refusal.ts             # OK, oops, refusalFrom — the class ladder, then classify; refusalWords (exported)
 │   ├── rejection.ts           # readRejection: is this rejection the credential's?
 │   ├── callbackServer.ts     # runCallbackScope: one owner, one release point
 │   ├── announce.ts           # logger-or-stderr, never stdout

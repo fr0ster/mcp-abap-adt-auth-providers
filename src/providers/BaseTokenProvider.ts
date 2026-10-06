@@ -675,36 +675,34 @@ export abstract class BaseTokenProvider
    * strategy and pinned material, and authorize() checks that one.
    */
   protected async onEstablish(logon: ILogonTarget): Promise<AnyOutcome> {
-    {
-      const pinned = await this.presentable();
-      const held =
-        !this.renewal && this.isTokenValid()
-          ? this.authorizationToken
-          : undefined;
-      let binding: TokenBinding =
-        held === undefined ? { state: 'unknown' } : readBinding(held);
-      // Bound to another certificate than the pinned one: authorize() renews
-      // it through the pinned material, as it would an expired one — so it
-      // reads as unknown here, like an expired token.
-      if (pinned && !this.presents(binding, pinned)) {
-        binding = { state: 'unknown' };
-      }
-      if (!this.presents(binding, pinned)) return boundElsewhere();
-      if (!pinned) return OK;
-      // A copy: a target that changes what it is given never changes what
-      // later requests present.
-      const presented = relayOutcome(
-        () => logon.tlsMaterial(copyMaterial(pinned.material)),
-        'tls-material',
-        'presenting-certificate',
-      );
-      // Unbound: the Bearer carries the token, the certificate is a courtesy
-      // — but a target that throws is broken (rule 1), and that is an Oops.
-      // Bound or unknown: the token is not sent on a connection without it.
-      return binding.state === 'unbound' && !presented.thrown
-        ? OK
-        : presented.outcome;
+    const pinned = await this.presentable();
+    const held =
+      !this.renewal && this.isTokenValid()
+        ? this.authorizationToken
+        : undefined;
+    let binding: TokenBinding =
+      held === undefined ? { state: 'unknown' } : readBinding(held);
+    // Bound to another certificate than the pinned one: authorize() renews
+    // it through the pinned material, as it would an expired one — so it
+    // reads as unknown here, like an expired token.
+    if (pinned && !this.presents(binding, pinned)) {
+      binding = { state: 'unknown' };
     }
+    if (!this.presents(binding, pinned)) return boundElsewhere();
+    if (!pinned) return OK;
+    // A copy: a target that changes what it is given never changes what
+    // later requests present.
+    const presented = relayOutcome(
+      () => logon.tlsMaterial(copyMaterial(pinned.material)),
+      'tls-material',
+      'presenting-certificate',
+    );
+    // Unbound: the Bearer carries the token, the certificate is a courtesy
+    // — but a target that throws is broken (rule 1), and that is an Oops.
+    // Bound or unknown: the token is not sent on a connection without it.
+    return binding.state === 'unbound' && !presented.thrown
+      ? OK
+      : presented.outcome;
   }
 
   /**
@@ -713,37 +711,35 @@ export abstract class BaseTokenProvider
    * the one checked.
    */
   protected async onAuthorize(request: IRequestTarget): Promise<AnyOutcome> {
-    {
-      // Pinned here too, so a token served from cache (seeded, restored) is
-      // checked against the certificate like an obtained one.
-      const pinned = await this.pin();
-      const result = await this.getTokens();
-      if (!this.presents(readBinding(result.authorizationToken), pinned)) {
-        // Pinned: getTokens() already renewed a token bound elsewhere, and
-        // this one is remembered with what that renewal answered — still
-        // bound elsewhere, or its own refusal when it threw. A copy: a caller
-        // changing what it is given never changes the next answer.
-        if (!pinned) return boundElsewhere();
-        const remembered = this.remembered;
-        if (remembered && result.authorizationToken === remembered.token) {
-          return structuredClone(remembered.refusal);
-        }
-        return renewedBoundElsewhere();
+    // Pinned here too, so a token served from cache (seeded, restored) is
+    // checked against the certificate like an obtained one.
+    const pinned = await this.pin();
+    const result = await this.getTokens();
+    if (!this.presents(readBinding(result.authorizationToken), pinned)) {
+      // Pinned: getTokens() already renewed a token bound elsewhere, and
+      // this one is remembered with what that renewal answered — still
+      // bound elsewhere, or its own refusal when it threw. The minted
+      // refusal itself, frozen: no caller can change the next answer.
+      if (!pinned) return boundElsewhere();
+      const remembered = this.remembered;
+      if (remembered && result.authorizationToken === remembered.token) {
+        return remembered.refusal;
       }
-      // The thunk answers OK or throws: `refused` names no fallback that
-      // can apply, a throw is the target's failure (rule 1).
-      const written = relayOutcome(
-        () => {
-          this.applyToken(request, result);
-          return OK;
-        },
-        'logon-parameters',
-        'presenting-token',
-      );
-      if (written.thrown) return written.outcome;
-      this.presented = result.authorizationToken;
-      return OK;
+      return renewedBoundElsewhere();
     }
+    // The thunk answers OK or throws: `refused` names no fallback that
+    // can apply, a throw is the target's failure (rule 1).
+    const written = relayOutcome(
+      () => {
+        this.applyToken(request, result);
+        return OK;
+      },
+      'logon-parameters',
+      'presenting-token',
+    );
+    if (written.thrown) return written.outcome;
+    this.presented = result.authorizationToken;
+    return OK;
   }
 
   /**
@@ -769,32 +765,30 @@ export abstract class BaseTokenProvider
    * superseded by a renewal answers Ok without renewing again.
    */
   protected async onRejected(rejection: IAuthRejection): Promise<AnyOutcome> {
-    {
-      // A 403, a redirect, a 5xx: a new token would be refused the same way.
-      const read = readRejection(rejection);
-      if (read.verdict === 'not-credential') {
-        return { ok: false, refusal: read.refusal };
-      }
-      // Nothing presented yet (a rejection before any authorize): the token
-      // held — from a login or from config — is the one taken as refused.
-      const refused = this.presented ?? this.authorizationToken;
-      if (
-        !this.renewal &&
-        refused !== undefined &&
-        this.authorizationToken !== undefined &&
-        this.authorizationToken !== refused
-      ) {
-        return OK;
-      }
-      const result = await this.refreshTokens();
-      if (refused !== undefined && result.authorizationToken === refused) {
-        return {
-          ok: false,
-          refusal: authError['renewal-unchanged']({ source: 'token-provider' }),
-        };
-      }
+    // A 403, a redirect, a 5xx: a new token would be refused the same way.
+    const read = readRejection(rejection);
+    if (read.verdict === 'not-credential') {
+      return { ok: false, refusal: read.refusal };
+    }
+    // Nothing presented yet (a rejection before any authorize): the token
+    // held — from a login or from config — is the one taken as refused.
+    const refused = this.presented ?? this.authorizationToken;
+    if (
+      !this.renewal &&
+      refused !== undefined &&
+      this.authorizationToken !== undefined &&
+      this.authorizationToken !== refused
+    ) {
       return OK;
     }
+    const result = await this.refreshTokens();
+    if (refused !== undefined && result.authorizationToken === refused) {
+      return {
+        ok: false,
+        refusal: authError['renewal-unchanged']({ source: 'token-provider' }),
+      };
+    }
+    return OK;
   }
 
   /** How this provider's token rides on a request. Bearer by default. */

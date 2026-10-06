@@ -306,4 +306,16 @@ describe('A.1 — the token binding refusals', () => {
     );
     expect(t.request.headers).toEqual({});
   });
+
+  it('A18: the remembered refusal is answered itself — the same minted object every time', async () => {
+    const strategy: IClientAuthentication = {
+      authenticate: async () => ({}),
+      tlsMaterial: async () => A,
+    };
+    const p = new Issuing(boundTo(B), strategy);
+    const first = refusal(await p.authorize(recordingTargets().requestTarget));
+    const second = refusal(await p.authorize(recordingTargets().requestTarget));
+    expect(second).toBe(first);
+    expect(second.facts).toEqual({ problem: 'renewed-bound-elsewhere' });
+  });
 });

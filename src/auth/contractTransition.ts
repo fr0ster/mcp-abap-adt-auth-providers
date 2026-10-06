@@ -72,33 +72,45 @@ export function toLegacyOutcome(outcome: AuthOutcome): LegacyAuthOutcome {
 }
 
 /**
- * auth-errors' `guard`, typed for this package's 4.x `IAuthProvider` (C1):
- * the body may still answer a 4.x outcome — normalised by `classifyOutcome`
- * exactly as `guard` normalises any answer, an unminted refusal becoming the
- * fallback `guard` itself builds (`unknown` with the operation and the grant
- * read inside the boundary) — and the answer reaches the caller through
- * `toLegacyOutcome`, the minted error itself. Never rejects (`guard` does
- * not). Task 27: `AuthProviderBase` imports `guard` from auth-errors.
+ * auth-errors' `guard`, typed for this package's 4.x `IAuthProvider` (C1).
+ * The grant is read **once**: `grant` is wrapped in a memoising thunk that
+ * auth-errors' `guard` calls inside its boundary (a throw, or a rejecting
+ * promise it answers, is guard's to handle); the body receives that same
+ * thunk, so the bridge and the fallback reuse the value and never call
+ * `grant` again. The body may still answer a 4.x outcome: `classifyOutcome`
+ * is the one assertion-free way to the 5.x type, normalising it exactly as
+ * `guard` does (an unminted refusal becomes `unknown` with the operation and
+ * the grant read). The answer reaches the caller through `toLegacyOutcome`,
+ * the minted error itself. Never rejects. Task 27: `AuthProviderBase`
+ * imports `guard` from auth-errors.
  */
 export function guard(
   operation: Operation,
-  body: () => AnyOutcome | Promise<AnyOutcome>,
+  body: (grant: () => unknown) => AnyOutcome | Promise<AnyOutcome>,
   grant?: () => unknown,
 ): Promise<LegacyAuthOutcome> {
+  let read = false;
+  let value: unknown;
+  const once = (): unknown => {
+    if (!read) {
+      read = true;
+      value = grant?.();
+    }
+    return value;
+  };
   return guardOf6(
     operation,
     async () => {
-      const answer = await body();
-      // Read again, inside the boundary: a throw is guard's to classify.
-      const read = grant?.();
+      const answer = await body(once);
+      const kept = once();
       return classifyOutcome(
         answer,
         authError.unknown({
           operation,
-          ...(isGrant(read) ? { grant: read } : {}),
+          ...(isGrant(kept) ? { grant: kept } : {}),
         }),
       );
     },
-    grant,
+    once,
   ).then(toLegacyOutcome);
 }

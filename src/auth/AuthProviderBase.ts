@@ -73,8 +73,9 @@ function validatedMoments(moments: unknown): MomentOperations {
 
 /**
  * TRANSITION (removed in Task 27): a body throwing one of this package's
- * error classes answers the ladder's refusal, read inside the boundary;
- * anything else is rethrown to `guard`'s `classify`.
+ * error classes answers the ladder's refusal, inside the boundary; anything
+ * else is rethrown to `guard`'s `classify`. `grant` is the guard's memoised
+ * read: its value, never a second call of the provider's `grant()`.
  */
 async function legacyBridge(
   body: () => AnyOutcome | Promise<AnyOutcome>,
@@ -116,12 +117,8 @@ export abstract class AuthProviderBase implements IAuthProvider {
   prepare(): Promise<AuthOutcome> {
     return guard(
       this.#moments.prepare,
-      () =>
-        legacyBridge(
-          () => this.onPrepare(),
-          this.#moments.prepare,
-          () => this.grant(),
-        ),
+      (grant) =>
+        legacyBridge(() => this.onPrepare(), this.#moments.prepare, grant),
       () => this.grant(),
     );
   }
@@ -129,11 +126,11 @@ export abstract class AuthProviderBase implements IAuthProvider {
   establish(logon: ILogonTarget): Promise<AuthOutcome> {
     return guard(
       this.#moments.establish,
-      () =>
+      (grant) =>
         legacyBridge(
           () => this.onEstablish(logon),
           this.#moments.establish,
-          () => this.grant(),
+          grant,
         ),
       () => this.grant(),
     );
@@ -142,11 +139,11 @@ export abstract class AuthProviderBase implements IAuthProvider {
   authorize(request: IRequestTarget): Promise<AuthOutcome> {
     return guard(
       this.#moments.authorize,
-      () =>
+      (grant) =>
         legacyBridge(
           () => this.onAuthorize(request),
           this.#moments.authorize,
-          () => this.grant(),
+          grant,
         ),
       () => this.grant(),
     );
@@ -155,11 +152,11 @@ export abstract class AuthProviderBase implements IAuthProvider {
   rejected(rejection: IAuthRejection): Promise<AuthOutcome> {
     return guard(
       this.#moments.rejected,
-      () =>
+      (grant) =>
         legacyBridge(
           () => this.onRejected(rejection),
           this.#moments.rejected,
-          () => this.grant(),
+          grant,
         ),
       () => this.grant(),
     );
