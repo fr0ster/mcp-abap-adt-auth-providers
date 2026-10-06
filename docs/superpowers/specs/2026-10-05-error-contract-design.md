@@ -1,6 +1,6 @@
 # Error contract — design spec
 
-**Status:** draft for review, 2026-10-05; Codex adversarial approve (fifth pass); information losses L1–L13 and the SAML debug line approved by the user 2026-10-05; spec approved by the user 2026-10-05; `authDebug` (opt-in server text, §6) and no built-in login timeouts (§6a) decided by the user 2026-10-05. Anchor:
+**Status:** draft for review, 2026-10-05; Codex adversarial approve (fifth pass); information losses L1–L13 and the SAML debug line approved by the user 2026-10-05; spec approved by the user 2026-10-05; `authDebug` (opt-in secret preparer, no server text, §6) and no built-in login timeouts (§6a) decided by the user 2026-10-05. Anchor:
 [`../2026-10-05-error-contract-goal.md`](../2026-10-05-error-contract-goal.md)
 (approved 2026-10-05). Every "Holds throughout" invariant of the goal binds
 this spec; §13 says how each is honoured and which ones are held by something
@@ -890,7 +890,7 @@ facts instead — found by a sweep of `src` for `isAxiosError`, `.response`,
 | `passcodeAuth.ts:95-104` | `axios.isAxiosError(error) && error.response` → wrap in `TokenEndpointError` | nothing to read: the failure from `sendTokenRequest` is thrown as it is (`operation: 'passcode-exchange'`) |
 | `clientCredentialsAuth.ts:76-87`, `tokenRefresher.ts:80-87`, `oidcToken.ts:227-236` (device initiation), `oidcToken.ts:335-345` (password grant) | `tlsFailureCode(error)` to let a TLS failure through unwrapped, else wrap | nothing to read: `sendTokenRequest` already chose `tls` or `request-failed`; the site passes its operation |
 | `saml2TokenExchange.ts:97-106`, `:154-163` | `axios.isAxiosError(error)` to decide whether to log | logs `logFields(readFailure(error, …))` for any failure, then rethrows it |
-| `browserAuth.ts:150-157` | a 2xx `response` without `access_token`: logs the status and the redacted OAuth body — redacting only `clientsecret`, `grantSecrets(params)` and `prepared.secrets`, never the site's own Basic credential | `rejectMissingToken(site, prepared, snapshot, 'no-access-token', 'error')` (below), in both modes: by default 5.4.2's `error`-level safe-facts line verbatim (status, registered `error`); with `authDebug` the same line adds the previewed text, the same joined secrets as a failed request; then `request-failed` `problem: 'no-access-token'` |
+| `browserAuth.ts:150-157` | a 2xx `response` without `access_token`: logs the status and the OAuth body, passing it through a redaction that knew only `clientsecret`, `grantSecrets(params)` and `prepared.secrets`, never the site's own Basic credential | `rejectMissingToken(site, prepared, snapshot, 'no-access-token', 'error')` (below), in both modes: by default 5.4.2's `error`-level safe-facts line verbatim (status, registered `error`); with `authDebug` the line carries `{ status, error?, sent }`, the same joined secrets as a failed request, prepared; no server text; then `request-failed` `problem: 'no-access-token'` |
 | `BaseTokenProvider.ts:475-487` — refresh falling back to login | nothing (any throw) | unchanged: any failure of the refresh falls back |
 | the broker (`AuthBroker.ts:660`, `SessionWriter.ts:40-46`) | nothing of the error but its class name (`classLabel`) | logs `AuthProviderFailure`; no other reader (no `isAxiosError` in the broker or the CLI, searched) |
 
@@ -944,8 +944,8 @@ the user 2026-10-05:
   5.4.2, it is a new `debug` line — an addition, not a change. The site
   passes the level to `rejectMissingToken`.
 - **`authDebug: true`, an explicit consumer option.** Only with it is the
-  safe-facts line extended into the debug line below — the same status and
-  registered `error` plus the secrets this request sent, each passed through
+  safe-facts line replaced by the debug line below — `{ status, error?, code?, sent }`:
+  the same status, registered `error` and allowlisted `code`, plus the secrets this request sent, each passed through
   `prepareSecret` (below) at the point of logging. **No secret is ever put
   into a log line and removed afterwards, and no server text is logged:**
   the server's `error_description` / `error_uri` may echo a secret in any
@@ -991,8 +991,12 @@ export interface TokenRequestSite {
   readonly logger?: ILogger | undefined;
   /** The consumer's `authDebug === true`; false → the safe-facts line only, no server text. */
   readonly authDebug: boolean;
-  /** Every secret this request carried: grantSecrets(params) + the configured clientSecret. */
-  readonly secrets: readonly (string | undefined)[];
+  /**
+   * Every secret this request carried, named: grantSecrets(params) (by
+   * parameter name: `refresh_token`, `code`, …) + the configured
+   * `client_secret`. A record, not an array, because `sent` names each secret.
+   */
+  readonly secrets: SentSecrets;
   /**
    * The site's own Basic header on the path without a strategy, as built by
    * legacyBasic() — never assembled by the site itself.
@@ -1012,40 +1016,48 @@ of their own — `saml2TokenExchange.ts:24-26`, `:57-62` (SAML exchange and
 refresh), `oidcToken.ts:26-37` (`toBasicAuth` / `buildAuthHeaders`: OIDC token
 request, device poll, password grant), `browserAuth.ts:113-121` (UAA code
 exchange), `tokenRefresher.ts:57-65` (UAA refresh), `passcodeAuth.ts:69-77`
-(passcode). The base64 credential is not any form of `clientSecret` the
-redaction knows (`echoedValues`, `oauthErrorBody.ts:59`), so a server
-echoing the header would put a recoverable `id:secret` into what is kept.
-They all move to one helper, so a site cannot build the header without its
+(passcode). The base64 credential is a secret of the request that is not
+the configured `clientSecret`, and 5.4.1 never named it, so a server echoing
+the header put a recoverable `id:secret` into what was kept. They all move
+to one helper, so a site cannot build the header without naming its
 secrets:
 
 ```ts
 // tokenRequest.ts
+/** A secret by the name it was carried under; `sent` of the debug line names each. */
+export type SentSecrets = Readonly<Record<string, string | undefined>>;
+
 export interface LegacyBasic {
-  readonly header: string;             // `Basic ${base64}`
-  readonly secrets: readonly string[]; // what basicSecrets() extracts from it
+  readonly header: string;     // `Basic ${base64}`
+  readonly secrets: SentSecrets; // basicSecrets() of it: `basic` (the base64 credential
+                               // as sent) and `basic_secret` (the part after the first colon)
 }
 export function legacyBasic(clientId: string, clientSecret: string): LegacyBasic;
 ```
 
 `legacyBasic` builds the header and derives `secrets` from it with the same
 `basicSecrets` (`tokenRequest.ts:162-176`) that extracts a strategy's Basic
-credential — the base64 credential and the decoded secret after the first
-colon — so both paths redact the same forms. A site passes the result as
+credential — `basic`, the base64 credential as sent, and `basic_secret`,
+the decoded secret after the first colon — so both paths name the same two
+secrets in `sent`. A site passes the result as
 `site.basic` and puts `basic.header` on its request; the shape check gains a
 rule (§8.2 rule 8): outside `legacyBasic` and `clientSecretBasic`
 (`clientSecret.ts:60`), no file under `src/auth` or `src/providers` writes a
-`Basic ` header or base64-encodes a value containing a client secret.
+`Basic ` header or base64-encodes a value containing a client secret, so
+`sent` always names the Basic credential (not for redaction: nothing is
+redacted).
 `BasicAuthProvider` (`BasicAuthProvider.ts:36`) is a credential presented to
 the ABAP system, not a token request, and stays.
 
 On a failure with a response, `sendTokenRequest`, before building the
 failure: (1) gathers the secrets this request sent — `site.secrets`,
-`site.basic?.secrets` and the strategy's (`prepared.secrets`) — each passed
-explicitly by the site, never looked up; (2) reads nothing of the body but a
+`site.basic?.secrets` and the strategy's (`prepared.secrets`), joined by one
+function (`sentOf`) in that order, a name already taken kept, an empty value
+skipped — each passed explicitly by the site, never looked up; (2) reads nothing of the body but a
 registered `error`; (3) when there is a logger, writes **one** line: without
 `authDebug`, the safe-facts line (status and a registered `error` only,
 above); **only when `site.authDebug` is true**, instead of it
-`logger.debug('[<operation>] token endpoint said', { status, error, sent })`,
+`logger.debug('[<operation>] token endpoint said', { status, error?, code?, sent })`,
 where `sent` names each secret the request carried (`client_secret`,
 `client_assertion`, `refresh_token`, `basic`, …) with its value through
 `prepareSecret` — no server text; (4) builds the `AuthProviderFailure` from
@@ -1060,13 +1072,13 @@ refresh), on both paths; device polling's `authorization_pending` /
 logger that throws is caught and ignored, as SNC's `log` does
 (`SncLogonProvider.ts:217-223`).
 
-Tests (`oauthErrorBodies.test.ts`, `tokenRequestShapes.test.ts`): for each
+Tests (`tokenRequestSite.test.ts`, `tokenRequestShapes.test.ts`): for each
 token site, without and with a client-authentication strategy (secret Basic
 raw and form, `clientSecretPost`, `privateKeyJwt`), a server answering `400`
 with an `error_description` and an `error_uri` that echo every secret the
 request carried — the grant's (refresh token, code, verifier, assertion,
 passcode, password, device code, subject / actor token), the configured
-`clientSecret`, the strategy's — in each echoed form and as a JWT:
+`clientSecret`, the strategy's — in each form a server might echo it (as sent, form-encoded, URI-encoded once and twice, form-decoded, base64) and as a JWT:
 - **without `authDebug`** (absent, `false`, `'true'`, and with
   `DEBUG_AUTH_PROVIDERS=true` set in the environment): exactly one debug
   line, the safe-facts line — the status and the registered `error`, no
@@ -1086,11 +1098,11 @@ Load-bearing: dropping `prepared.secrets` from the join, or one site's
 `secrets`, turns that site's case red.
 
 **A successful status without a token logs the same way.** (2026-10-06: no server text, under `authDebug` the prepared secrets only — as a failed request.)
-A sweep of `src` for `describeOAuthErrorBody`, `oauthErrorFields` and every
-`access_token` check (2026-10-05) finds one place that logs a body of a
-**successful** response: the UAA code exchange (`browserAuth.ts:150-157`),
-which redacts `clientsecret`, the grant's secrets and the strategy's — not
-the Basic credential its own `sendAsToday` built (`:113-121`). The other
+A sweep of `src` for every `access_token` check (2026-10-05) finds one
+place that logs a body of a **successful** response at 5.4.2: the UAA code
+exchange (`browserAuth.ts:150-157`), which redacted `clientsecret`, the
+grant's secrets and the strategy's — not the Basic credential its own
+`sendAsToday` built (`:113-121`). 6.0.0 logs no body there either. The other
 2xx-without-token branches (`passcodeAuth.ts:107-108`, `oidcToken.ts:108-109`,
 `saml2TokenExchange.ts:109-110`, `:166-167`, `clientCredentialsAuth.ts`'s and
 `tokenRefresher.ts`'s "does not contain access_token",
@@ -1116,32 +1128,24 @@ export function rejectMissingToken(
 (`ANSWER_FIELDS`: the token response's, the device authorization response's
 and `error`) that are strings or numbers, each read through `readSafely`;
 anything that throws while snapshotting becomes a safe error. That boundary
-is kept, and the snapshot gains one part:
+is kept unchanged; the new arm's snapshot is exactly that and nothing more:
 
 ```ts
 export interface TokenResponseSnapshot<T = Record<string, string | number>> {
   readonly status: number | undefined;
   readonly data: T;                       // ANSWER_FIELDS only, plain values
-  /** Only when site.authDebug === true: the server's text, plain strings. */
-  readonly diagnostic?: {
-    readonly error_description?: string;
-    readonly error_uri?: string;
-  };
 }
 ```
 
-- **Sites parse only `data`.** No site reads `diagnostic`; a site's parsing
-  sees exactly what 5.4.2's sees.
-- **`diagnostic` exists only with `authDebug`.** When `site.authDebug` is
-  true, `sendTokenRequest` also reads `error_description` and `error_uri`
-  from the response body through `readSafely`, keeps each only if it is a
-  string, and puts them in `diagnostic` — plain strings, never the foreign
-  object or a reference into it. Without `authDebug` the two fields are
-  never read at all.
+- **Sites parse only `data`.** A site's parsing sees exactly what 5.4.2's
+  sees.
+- **No server text in it.** `error_description` and `error_uri` are not in
+  `ANSWER_FIELDS` and are never read, with `authDebug` or without (decided
+  2026-10-06; the earlier `diagnostic` part, which held them as plain
+  strings under `authDebug`, is not built).
 - **Only the debug line consumes it.** `rejectMissingToken` reads
-  `snapshot.status` and `snapshot.data.error` for the safe facts and, with
-  `authDebug`, `snapshot.diagnostic` for the previewed text; nothing else
-  reads `diagnostic`, and it never enters a failure.
+  `snapshot.status` and `snapshot.data.error` (registered only) for the safe
+  facts; with `authDebug` the line adds `sent`; nothing of the body else.
 - A snapshot that fails (a hostile getter, Proxy or `toJSON` that throws
   past `readSafely`) becomes, on the new arm, an `AuthProviderFailure` of
   `request-failed` `incomplete-response` carrying only the operation — no
@@ -1150,14 +1154,14 @@ export interface TokenResponseSnapshot<T = Record<string, string | number>> {
 Tests (through the real flow `sendTokenRequest` → site → `rejectMissingToken`,
 on an axios adapter answering `200`): a body without `access_token` whose
 `error_description` / `error_uri` echo every secret — default mode: the
-safe-facts line only, the snapshot has no `diagnostic` and the two fields
-were never read (a getter counting reads); `authDebug`: the line carries the
-previewed text; hostile bodies — a Proxy whose every trap throws, getters on
+safe-facts line only; `authDebug`: the line `{ status, error?, sent }`, no
+server text; in both modes `error_description` / `error_uri` were never read
+(a getter counting reads stays at 0); hostile bodies — a Proxy whose every trap throws, getters on
 `error_description` / `error_uri` / `access_token` that throw or return a
 marker, a `toJSON` that throws, a `data` getter that throws — in both modes:
 no marker in the line, the failure or any rendering of it, and the site
 throws only a minted `AuthProviderFailure` (no foreign error). Load-bearing:
-reading `diagnostic` fields without `authDebug` turns the read-count case
+reading `error_description` into the snapshot turns the read-count case
 red; handing the site the raw response instead of the snapshot turns the
 hostile cases red.
 
@@ -1212,17 +1216,17 @@ an aborted discovery → its request's signal aborted, nothing cached, the next
 call fetches again. Load-bearing: copying the whole document again turns the
 extra-field case red.
 
-It joins exactly the secrets `sendTokenRequest` joins — `site.secrets`,
-`site.basic?.secrets`, `prepared?.secrets` — through the same private join
-function (one function, two callers, so the two cannot drift), reduces the
-body only with `authDebug`, and writes one line through `site.logger` at the
-level its site passes (`'error'` at the UAA code exchange, as 5.4.2;
-`'debug'` elsewhere), inside a `try` that swallows a throwing logger: by
-default the safe facts only (status, registered `error`) — at the code
-exchange 5.4.2's line verbatim —, with `authDebug` the same facts plus the
-previewed `error_description` / `error_uri`; then it throws `request-failed`
-with the status and the problem. Nothing of the body enters the failure
-either way.
+`rejectMissingToken` joins exactly the secrets `sendTokenRequest` joins —
+`site.secrets`, `site.basic?.secrets`, `prepared?.secrets` — through the same
+private join function, `sentOf` (one function, two callers, so the two cannot
+drift), and writes one line through `site.logger` at the level its site
+passes (`'error'` at the UAA code exchange, as 5.4.2; `'debug'` elsewhere),
+inside a `try` that swallows a throwing logger: by default the safe facts
+only (status, registered `error`) — at the code exchange 5.4.2's line
+verbatim —, with `authDebug` the same message with `{ status, error?, sent }`;
+then it throws `request-failed` with the status and the problem. The body is
+read for a registered `error` only, and nothing of it enters the line or the
+failure.
 
 **Header-echo tests** (one per site that builds a legacy Basic header, on the
 path without a strategy: the SAML exchange, the SAML refresh, the OIDC token
@@ -1231,7 +1235,8 @@ refresh, the passcode exchange): the server answers `400` with
 `error_description` and `error_uri` echoing the request's `Authorization`
 header whole, its base64 credential alone, the base64 URL-encoded and
 form-encoded, and the decoded `id:secret` — with `authDebug` the debug line
-carries each only as its preview, without it only the safe-facts line
+names the credential only in `sent` (`basic`, `basic_secret`) as prepared
+values and carries none of the echo, without it only the safe-facts line
 (status and registered `error`, no form of the credential), and no
 rendering of the failure carries any; the same with a client id
 containing `:` and a secret containing `+`, `%` and `/`. The same echoes in
@@ -1243,9 +1248,9 @@ the device initiation — without a strategy and with each strategy: without
 `authDebug` only the safe-facts line at the site's level (5.4.2's `error`
 line verbatim at the UAA code exchange — a regression test pins it against
 5.4.2's output for the same response, with and without a registered
-`error`); with it one line at that level, every form of the Basic
-credential, the grant's and the strategy's secrets previewed and none whole,
-in it or in the failure; no logger, no line; a throwing logger, the same
+`error`); with it one line at that level, `sent` naming the Basic
+credential, the grant's and the strategy's secrets prepared and none whole,
+and no echoed form, in the line or in the failure; no logger, no line; a throwing logger, the same
 failure. Load-bearing: passing `secrets` without `basic`, in either
 `sendTokenRequest` or `rejectMissingToken`, turns every one red. A source test asserts
 rule 8 (no `Basic ` header and no base64 of a secret outside the two helpers).
@@ -1253,7 +1258,7 @@ rule 8 (no `Basic ` header and no base64 of a secret outside the two helpers).
 **Today's code (5.4.1) leaks this — a Fixed item.** Read from the code (not
 yet measured by a test, because none exists — `oauthErrorBodies.test.ts`
 has no Basic case): every site above passes only `clientSecret` and its grant
-secrets to the redaction, so a server echoing the Basic header leaves the
+secrets to 5.4.1's redactor, so a server echoing the Basic header leaves the
 base64 credential, from which `id:secret` decodes, in
 - the message of the `TokenEndpointError` the wrapping sites throw (UAA
   refresh `tokenRefresher.ts:86`, passcode `passcodeAuth.ts:98`, password
@@ -1268,12 +1273,11 @@ base64 credential, from which `id:secret` decodes, in
   covers a `200` at all.
 The strategy path is not affected (`basicSecrets` covers it). The condition is
 a server that echoes request headers into its error body — a misbehaving or
-hostile one, which is exactly the case the redaction exists for. 6.0.0 ships
+hostile one — the case 5.4.2 closes by redacting the credential too, and 6.0.0 by reading no server text at all. 6.0.0 ships
 the fix and lists it under **Fixed** in its CHANGELOG. It **warrants an
-earlier 5.4.2 patch** — the 6.0.0 chain is several releases away, and the
-documented guarantee ("redacts every secret the request sent") is broken
+earlier 5.4.2 patch** — the 6.0.0 chain is several releases away, and the documented guarantee (no secret of the request in an error or a log line) is broken
 today for every consumer on 5.x — made as its own small change from `master`
-(the same `legacyBasic` helper, the code exchange's 2xx log redacting its
+(the same `legacyBasic` helper, the code exchange's 2xx log naming its
 Basic credential, and the header-echo tests for both a `400` and a `200`
 without `access_token`, nothing of the error contract). Under the one-PR-per-task rule it is recorded here and in this
 PR's description; opening it is the user's decision.
@@ -1945,8 +1949,9 @@ plugins do not have). It refuses, in `src/` outside tests:
    before the boundary;
 8. (auth-providers) a `Basic ` authorization value, or a base64 encoding of a
    string built from a client secret, outside `legacyBasic`
-   (`tokenRequest.ts`) and `clientSecretBasic` (`clientSecret.ts`) — so no
-   token request carries a Basic credential the redaction does not know.
+   (`tokenRequest.ts`) and `clientSecretBasic` (`clientSecret.ts`) — so
+   `sent` always names the Basic credential a token request carries (not for
+   redaction: nothing is redacted).
 
 **As built (Task 12, reviewed 2026-10-06) — stricter than the list above,
 each with a fixture:** rule 1 also refuses a class that satisfies
@@ -2190,8 +2195,8 @@ is not this work.
   the refusal tables generated (§11.4); a "Migrating to 6.0.0" section
   (catch with `readFailure`, switch on `kind`, `refusalWords` → `classify`,
   the classes removed, Appendix C's losses stated); `authDebug` documented
-  in "Debug Logging" and "Error Handling" — what it writes, the preview, that
-  it is off by default and never read from the environment; "Callback port
+  in "Debug Logging" and "Error Handling" — what it writes (`sent`, each secret
+  prepared, never server text), that it is off by default and never read from the environment; "Callback port
   and lifetime" and every `timeoutMs` example rewritten on `signal` (§6a),
   with the migration note: **a consumer passing `timeoutMs` must pass
   `signal: AbortSignal.timeout(ms)` instead; one passing nothing now waits
@@ -2584,9 +2589,9 @@ README differs from the generated table.
    without a token) green for every token
    site on both paths, the 6.0.0 CHANGELOG's **Fixed** entry for the legacy
    Basic credential written, the `authDebug` tests (without it exactly the
-   safe-facts line and no server text; with it the safe facts plus the
-   previewed text; the preview bounds, short secrets as a length only, every
-   encoding previewed)
+   safe-facts line and no server text; with it the safe facts plus `sent`,
+   each secret through `prepareSecret`; the 15/16 boundary, short secrets as
+   a length only, no echoed form in any line)
    green in auth-providers and the broker / CLI pass-through tests green.
 7. connection's suites, run once against the published auth-providers
    6.0.0 without the legacy adapter (§10.3), green — before auth-stores and
@@ -2748,9 +2753,9 @@ today's string exactly, pinned by a test; "→ Cn" points to Appendix C.
 
 | # | Source | Today's text | Kind | Facts | Diag. | New words / lost |
 |---|---|---|---|---|---|---|
-| D1 | `tokenRequest.ts:375-390` via `passcodeAuth.ts:98`, `oidcToken.ts:232`, `:341`, `clientCredentialsAuth.ts:82-86`, `tokenRefresher.ts:86` | `TokenEndpointError`: `<label> (<status>): <redacted OAuth summary>`, `status`, `oauthError`, original as `cause` | `request-failed` | `operation` (label → A.8), `grant?`, `problem: refused`, `status`, `oauthError?` | — | `<operation> failed (HTTP <n>[, <oauth>])`; redacted `error_description` lost → L1; `cause` → L2 |
+| D1 | `tokenRequest.ts:375-390` via `passcodeAuth.ts:98`, `oidcToken.ts:232`, `:341`, `clientCredentialsAuth.ts:82-86`, `tokenRefresher.ts:86` | `TokenEndpointError`: `<label> (<status>)[: <registered code>]`, `status`, `oauthError`, original as `cause` | `request-failed` | `operation` (label → A.8), `grant?`, `problem: refused`, `status`, `oauthError?` | — | `<operation> failed (HTTP <n>[, <oauth>])`; `error_description` lost → L1; `cause` → L2 |
 | D2 | `tokenRequest.ts:391-396` | `<label>: <loggedError words>`, `code?` | `request-failed` / `tls` | `problem: no-response`, `code?` | — | verbatim words of A14/A15 |
-| D3 | `tokenRequest.ts:293-341` (`sendTokenRequest`, the non-wrapping sites: code exchange `browserAuth.ts`, OIDC token and device poll `oidcToken.ts`, SAML exchange and refresh `saml2TokenExchange.ts`) | reduced `AxiosError`: `Request failed with status code <n>` / `the token request failed (<code>)`; `response.data` = `{error, error_description, error_uri}` redacted | `request-failed` / `tls` | as D1/D2 | — | words as A14; reduced body lost → L1; `AxiosError` identity lost → L3 |
+| D3 | `tokenRequest.ts:293-341` (`sendTokenRequest`, the non-wrapping sites: code exchange `browserAuth.ts`, OIDC token and device poll `oidcToken.ts`, SAML exchange and refresh `saml2TokenExchange.ts`) | reduced `AxiosError`: `Request failed with status code <n>` / `the token request failed (<code>)`; `response.data` = `{error, error_description, error_uri}` as 5.4.2 reduced it | `request-failed` / `tls` | as D1/D2 | — | words as A14; reduced body lost → L1; `AxiosError` identity lost → L3 |
 | D4 | `browserAuth.ts:158`, `saml2TokenExchange.ts:110`, `:167`, `passcodeAuth.ts:108`, `clientCredentialsAuth.ts:95-97`, `oidcToken.ts:109`, `tokenRefresher.ts:96-98` | `… missing access_token` / `… returned no access_token` / `… does not contain access_token` | `request-failed` | `operation`, `problem: no-access-token` | — | `<operation> returned no access_token` |
 | D5 | `oidcToken.ts:240` | `Device authorization response missing required fields` | `request-failed` | `operation: device-authorization`, `problem: incomplete-response` | — | verbatim meaning |
 | D6 | `oidcDiscovery.ts:65` | `OIDC discovery document missing token_endpoint` | `request-failed` | `operation: oidc-discovery`, `problem: incomplete-response` | — | verbatim meaning |
@@ -2867,7 +2872,7 @@ diagnostics? }`):
 | H7 | `BrowserCallbackStrategy.ts:186-193` | `Failed to open browser: <words>. Open manually: <url>` + `{ error, url }` | unchanged: the URL is the strategy's own announcement, not an error's text |
 | H8 | `browserAuth.ts:217-220`, `:298-302` | `Could not open browser automatically: <words>` / `Failed to open browser: <words>. Please open manually: <url>` | same as H7 |
 | H9 | `tokenRequest.ts:393` | words inside `TokenEndpointError`'s message | gone with the class (D2) |
-| H10 | `sendTokenRequest` and `rejectMissingToken`, for every token site (§6) | 5.4.2's safe-facts line for a refused request (`logRefusedRequest`, `debug`) and for the code exchange's 2xx without `access_token` (`browserAuth.ts:148-161`, `error`) | **by default**: for every failed request, with a response or without one, one `debug` line with 5.4.2's fields — `status` (integer, or `undefined` without a response) and the registered `error` when there is one — plus an allowlisted `code` (an addition); none for `authorization_pending` / `slow_down`; for a 2xx without a token, one line of the same safe facts — 5.4.2's `error`-level line verbatim at the code exchange, a new `debug` line at every other such site (an addition); none without a logger, a throwing logger swallowed; **with `authDebug: true`** — for a failed request, §6's `[<operation>] token endpoint said` line instead of the safe-facts line; for a 2xx without a token, the same line, at the same level, adds `error_description` and `error_uri` with every secret previewed (≤ 4 + 4 characters, `<redacted, N chars>`; under 16 characters the length only); never in the failure |
+| H10 | `sendTokenRequest` and `rejectMissingToken`, for every token site (§6) | 5.4.2's safe-facts line for a refused request (`logRefusedRequest`, `debug`) and for the code exchange's 2xx without `access_token` (`browserAuth.ts:148-161`, `error`) | **by default**: for every failed request, with a response or without one, one `debug` line with 5.4.2's fields — `status` (integer, or `undefined` without a response) and the registered `error` when there is one — plus an allowlisted `code` (an addition); none for `authorization_pending` / `slow_down`; for a 2xx without a token, one line of the same safe facts — 5.4.2's `error`-level line verbatim at the code exchange, a new `debug` line at every other such site (an addition); none without a logger, a throwing logger swallowed; **with `authDebug: true`** — for a failed request, §6's `[<operation>] token endpoint said` line instead of the safe-facts line; for a 2xx without a token, the same line, at the same level, adds `sent`, every secret prepared (≤ 4 + 4 characters, `<redacted, N chars>`; under 16 characters the length only); never `error_description` / `error_uri`, never in the failure |
 
 ### A.9 connection
 
@@ -2961,14 +2966,14 @@ each with today's words verbatim.
 ## Appendix C — Information lost, for the user's approval
 
 **Approved by the user 2026-10-05: L1–L13 as written; L1 as amended below
-(the server's text only with `authDebug`).**
+(the server's text only with `authDebug`; withdrawn 2026-10-06: never).**
 
 **Also decided by the user 2026-10-05:** by default the server's free text
 reaches no error, failure, response data or log line (the safe-facts line of
 status and registered `error` stays, ruling 2026-10-05), and a secret appears
 only as `<redacted, N chars>`; with the consumer's explicit `authDebug: true`
 the debug line is written at every token site, the SAML exchange and refresh
-included, with secrets previewed (§6); the 5.4.1 Basic-credential
+included, with secrets prepared, never server text (§6); the 5.4.1 Basic-credential
 leak is fixed now in a separate auth-providers 5.4.2 patch from `master`
 (its own PR, an approved exception to one open PR per repository), and the
 same fix carries into 6.0.0.
@@ -2977,17 +2982,15 @@ Each item is something a person or a program can see today and will not see
 in the same place after this change. Nothing else is lost: every other row
 of Appendix A keeps its information as facts, as diagnostics, or verbatim.
 
-- **L1 — A token endpoint's `error_description` and `error_uri`.** (The
-  legacy Basic credential is now redacted from them too, §6 — a fix, not a
-  loss.) Today in
-  `TokenEndpointError.message` (redacted) and in the reduced `AxiosError`'s
-  `response.data` (D1, D3). Server free text: never in an error, a failure,
-  response data or — by default — a log line; by default a failed request
-  logs only 5.4.2's safe-facts line (status and the registered `error`).
-  **Only with the consumer's `authDebug: true`** does `sendTokenRequest` (or
-  `rejectMissingToken`) write them, in one `debug` line per failed request
-  through the site's logger, beside the same safe facts, every secret
-  previewed (§6, H10). The registered `error` code stays a fact.
+- **L1 — A token endpoint's `error_description` and `error_uri`.** Today in
+  `TokenEndpointError.message` (as 5.4.2 reduced it) and in the reduced
+  `AxiosError`'s `response.data` (D1, D3). Server free text: never in an
+  error, a failure, response data or a log line, `authDebug` or not (decided
+  2026-10-06; 2026-10-05's opt-in text is withdrawn). A failed request logs
+  5.4.2's safe-facts line (status and the registered `error`); with the
+  consumer's `authDebug: true`, one `debug` line `{ status, error?, code?,
+  sent }` with every secret prepared (§6, H10). The registered `error` code
+  stays a fact.
 - **L2 — `cause`.** `TokenEndpointError`, `BrowserAuthError`,
   `RefreshError`, the IdP-certificate `Error` (E26) keep the original as
   `cause` today. `AuthProviderFailure` carries no original — the goal's "no
