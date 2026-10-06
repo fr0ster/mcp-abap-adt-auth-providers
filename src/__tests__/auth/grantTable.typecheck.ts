@@ -1,10 +1,10 @@
 /**
  * Type test, compiled by `test:check` and run by nothing: `GrantTable`, the
- * type `refusal.ts`'s grant list satisfies, takes every grant type and no
+ * type `grants.ts`'s grant list satisfies, takes every grant type and no
  * other — a list missing one, or naming one that does not exist, does not
  * compile.
  */
-import type { GrantTable } from '../../auth/refusal';
+import type { GrantTable } from '../../auth/grants';
 
 export const complete = {
   authorization_code: true,

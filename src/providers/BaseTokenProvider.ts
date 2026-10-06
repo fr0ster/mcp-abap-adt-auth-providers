@@ -8,9 +8,8 @@
  * - Automatic refresh/relogin
  */
 
+import { authError, relayOutcome } from '@mcp-abap-adt/auth-errors';
 import type {
-  AuthOutcome,
-  IAuthProvider,
   IAuthRejection,
   ICertificateMaterial,
   IClientAuthentication,
@@ -21,6 +20,7 @@ import type {
   OAuth2GrantType,
 } from '@mcp-abap-adt/interfaces-auth';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
+import { AuthProviderBase } from '../auth/AuthProviderBase';
 import {
   assertCertificateMaterial,
   assertNotExpired,
@@ -28,15 +28,8 @@ import {
   certificateThumbprint,
 } from '../auth/certificateMaterial';
 import { asContract } from '../auth/contractShape';
-import {
-  loggedError,
-  OK,
-  oops,
-  refusalFrom,
-  safely,
-  TOKEN_BOUND_ELSEWHERE,
-  TOKEN_RENEWED_BOUND_ELSEWHERE,
-} from '../auth/refusal';
+import type { AnyOutcome } from '../auth/contractTransition';
+import { loggedError, OK, refusalFrom } from '../auth/refusal';
 import { readRejection } from '../auth/rejection';
 import { readBinding, type TokenBinding } from '../auth/tokenBinding';
 import type { TokenRequestAuth } from '../auth/tokenRequest';
@@ -120,7 +113,8 @@ export function storedExpiry(expiresAt: unknown): number | undefined {
  * - Shares one in-flight renewal among concurrent callers
  */
 export abstract class BaseTokenProvider
-  implements IRefreshableTokenProvider, IAuthProvider
+  extends AuthProviderBase
+  implements IRefreshableTokenProvider
 {
   protected authorizationToken?: string | undefined;
   protected refreshToken?: string | undefined;
@@ -153,9 +147,16 @@ export abstract class BaseTokenProvider
    * changes and by prepare(); rejected() renews regardless, once, and the
    * latest renewal's refusal is the one kept.
    */
-  private remembered?: { token: string; refusal: AuthOutcome } | undefined;
+  private remembered?: { token: string; refusal: AnyOutcome } | undefined;
 
   constructor(config: BaseConfig = {}) {
+    // Every moment of a token provider is its token request (spec A.8).
+    super({
+      prepare: 'token-request',
+      establish: 'token-request',
+      authorize: 'token-request',
+      rejected: 'token-request',
+    });
     this.onTokens = config.onTokens;
     if (config.clientAuthentication && config.clientSecret !== undefined) {
       // Two ways of authenticating one client is a mistake, not a preference.
@@ -647,19 +648,22 @@ export abstract class BaseTokenProvider
     return this.getAuthType();
   }
 
+  /** The grant a refusal names: `getAuthType()`, read inside the boundary. */
+  protected override grant(): OAuth2GrantType {
+    return this.getAuthType();
+  }
+
   /** The subject of a fixed refusal: "<grant type> token request failed". */
   private get obtaining(): string {
     return `${this.kind} token request`;
   }
 
-  async prepare(): Promise<AuthOutcome> {
-    return safely(this.obtaining, async () => {
-      // Once per connect, a token renewed bound elsewhere — or whose renewal
-      // failed — gets one more try.
-      this.remembered = undefined;
-      await this.getTokens();
-      return OK;
-    });
+  protected async onPrepare(): Promise<AnyOutcome> {
+    // Once per connect, a token renewed bound elsewhere — or whose renewal
+    // failed — gets one more try.
+    this.remembered = undefined;
+    await this.getTokens();
+    return OK;
   }
 
   /**
@@ -670,8 +674,8 @@ export abstract class BaseTokenProvider
    * token presented will be the one authorize() obtains through the same
    * strategy and pinned material, and authorize() checks that one.
    */
-  async establish(logon: ILogonTarget): Promise<AuthOutcome> {
-    return safely(this.obtaining, async () => {
+  protected async onEstablish(logon: ILogonTarget): Promise<AnyOutcome> {
+    {
       const pinned = await this.presentable();
       const held =
         !this.renewal && this.isTokenValid()
@@ -689,8 +693,10 @@ export abstract class BaseTokenProvider
       if (!pinned) return OK;
       // A copy: a target that changes what it is given never changes what
       // later requests present.
-      const presented = atTarget('presenting the certificate', () =>
-        logon.tlsMaterial(copyMaterial(pinned.material)),
+      const presented = relayOutcome(
+        () => logon.tlsMaterial(copyMaterial(pinned.material)),
+        'tls-material',
+        'presenting-certificate',
       );
       // Unbound: the Bearer carries the token, the certificate is a courtesy
       // — but a target that throws is broken (rule 1), and that is an Oops.
@@ -698,7 +704,7 @@ export abstract class BaseTokenProvider
       return binding.state === 'unbound' && !presented.thrown
         ? OK
         : presented.outcome;
-    });
+    }
   }
 
   /**
@@ -706,8 +712,8 @@ export abstract class BaseTokenProvider
    * another certificate than the pinned one — and the token actually sent is
    * the one checked.
    */
-  async authorize(request: IRequestTarget): Promise<AuthOutcome> {
-    return safely(this.obtaining, async () => {
+  protected async onAuthorize(request: IRequestTarget): Promise<AnyOutcome> {
+    {
       // Pinned here too, so a token served from cache (seeded, restored) is
       // checked against the certificate like an obtained one.
       const pinned = await this.pin();
@@ -724,14 +730,20 @@ export abstract class BaseTokenProvider
         }
         return renewedBoundElsewhere();
       }
-      const written = atTarget('presenting the token', () => {
-        this.applyToken(request, result);
-        return OK;
-      });
+      // The thunk answers OK or throws: `refused` names no fallback that
+      // can apply, a throw is the target's failure (rule 1).
+      const written = relayOutcome(
+        () => {
+          this.applyToken(request, result);
+          return OK;
+        },
+        'logon-parameters',
+        'presenting-token',
+      );
       if (written.thrown) return written.outcome;
       this.presented = result.authorizationToken;
       return OK;
-    });
+    }
   }
 
   /**
@@ -756,8 +768,8 @@ export abstract class BaseTokenProvider
    * caller's. A renewal in flight is joined; a presented token already
    * superseded by a renewal answers Ok without renewing again.
    */
-  async rejected(rejection: IAuthRejection): Promise<AuthOutcome> {
-    return safely(this.obtaining, async () => {
+  protected async onRejected(rejection: IAuthRejection): Promise<AnyOutcome> {
+    {
       // A 403, a redirect, a 5xx: a new token would be refused the same way.
       const read = readRejection(rejection);
       if (read.verdict === 'not-credential') {
@@ -776,13 +788,13 @@ export abstract class BaseTokenProvider
       }
       const result = await this.refreshTokens();
       if (refused !== undefined && result.authorizationToken === refused) {
-        return oops(
-          'the renewal returned the credential that was refused',
-          'the token source must issue a new token; log in again',
-        );
+        return {
+          ok: false,
+          refusal: authError['renewal-unchanged']({ source: 'token-provider' }),
+        };
       }
       return OK;
-    });
+    }
   }
 
   /** How this provider's token rides on a request. Bearer by default. */
@@ -791,31 +803,18 @@ export abstract class BaseTokenProvider
   }
 }
 
-/** The refusal for a held token bound to a certificate while none is pinned. */
-function boundElsewhere(): AuthOutcome {
-  return oops(TOKEN_BOUND_ELSEWHERE.reason, TOKEN_BOUND_ELSEWHERE.hint);
+/** A17: a held token bound to a certificate while none is pinned. */
+function boundElsewhere(): AnyOutcome {
+  return {
+    ok: false,
+    refusal: authError['token-binding']({ problem: 'bound-to-unpinned' }),
+  };
 }
 
-/** The refusal for a renewed token still bound to another certificate. */
-function renewedBoundElsewhere(): AuthOutcome {
-  return oops(
-    TOKEN_RENEWED_BOUND_ELSEWHERE.reason,
-    TOKEN_RENEWED_BOUND_ELSEWHERE.hint,
-  );
-}
-
-/**
- * One write to a consumer's target. A target that throws is the target's
- * failure, not the token request's: it is refused under `what`, through the
- * same refusalFrom as every other thrown value (rule 2).
- */
-function atTarget(
-  what: string,
-  write: () => AuthOutcome,
-): { outcome: AuthOutcome; thrown: boolean } {
-  try {
-    return { outcome: write(), thrown: false };
-  } catch (error) {
-    return { outcome: refusalFrom(error, what), thrown: true };
-  }
+/** A18: a renewed token still bound to another certificate. */
+function renewedBoundElsewhere(): AnyOutcome {
+  return {
+    ok: false,
+    refusal: authError['token-binding']({ problem: 'renewed-bound-elsewhere' }),
+  };
 }

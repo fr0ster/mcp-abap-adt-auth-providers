@@ -120,13 +120,13 @@ describe('A.2 — rejection reading', () => {
     );
     // refuseFor answers the same error for a rejection it cannot tell.
     const told = mintedRefusal(
-      refuseFor({ at: 'request', error: {} }, { reason: 'blamed' }),
+      refuseFor({ at: 'request', error: {} }, 'user-password'),
     );
     expect(told.facts).toEqual({ verdict: 'unknown', at: 'request' });
   });
 
   it('refuseFor relays the neutral error itself for a rejection that is not the credential', () => {
-    const error = mintedRefusal(refuseFor(status(403), { reason: 'blamed' }));
+    const error = mintedRefusal(refuseFor(status(403), 'user-password'));
     expect(error.kind).toBe('system-refused');
     expect(error.facts).toMatchObject({ verdict: 'not-authorized' });
   });

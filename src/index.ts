@@ -5,6 +5,12 @@
  * Provides token providers
  */
 
+// The base every provider extends: the four moments, each inside guard.
+export {
+  AuthProviderBase,
+  type Moment,
+  type MomentOperations,
+} from './auth/AuthProviderBase';
 // Callback server factories — "take the transport this package gives".
 export { withBrowserCallbackServer } from './auth/callbackServer';
 export type { OidcCallbackResult } from './auth/oidcBrowserAuth';

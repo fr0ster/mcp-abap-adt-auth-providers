@@ -206,10 +206,8 @@ describe('A.8 — every what of this package is a closed operation', () => {
   it('the scan finds the call sites', () => {
     expect(literals).toEqual(
       expect.arrayContaining([
-        'loading the certificate',
         'onTokens',
         'opening the browser',
-        'reading the rejection',
         'the presenter',
         'the probe',
         'the token request',

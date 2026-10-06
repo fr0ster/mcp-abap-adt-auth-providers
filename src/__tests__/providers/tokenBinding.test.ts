@@ -17,10 +17,6 @@ import type {
 } from '@mcp-abap-adt/interfaces-auth';
 import axios from 'axios';
 import { certificateThumbprint } from '../../auth/certificateMaterial';
-import {
-  TOKEN_BOUND_ELSEWHERE,
-  TOKEN_RENEWED_BOUND_ELSEWHERE,
-} from '../../auth/refusal';
 import { readBinding } from '../../auth/tokenBinding';
 import { OidcPasswordProvider } from '../../providers/OidcPasswordProvider';
 import { wordsOf } from '../helpers/minted';
@@ -260,9 +256,9 @@ describe('the binding table (spec §4)', () => {
   it("bound, equal thumbprint, a wire refusing TLS material: the wire's Oops (rule 4)", async () => {
     const { provider } = seeded(boundTo(THUMB_A), A);
     const t = recordingTargets({ acceptsTls: false });
-    await expect(provider.establish(t.logonTarget)).resolves.toEqual({
+    expect(wordsOf(await provider.establish(t.logonTarget))).toEqual({
       ok: false,
-      refusal: { reason: 'this wire does not take TLS material' },
+      refusal: { reason: 'this wire carries no TLS material (RFC)' },
     });
   });
 
@@ -270,16 +266,16 @@ describe('the binding table (spec §4)', () => {
   it('bound, no material: Oops in both, nothing presented, no header written', async () => {
     const { provider } = seeded(boundTo(THUMB_A));
     const t = recordingTargets();
-    await expect(provider.establish(t.logonTarget)).resolves.toEqual(REFUSAL);
+    expect(wordsOf(await provider.establish(t.logonTarget))).toEqual(REFUSAL);
     expect(t.logon.tls).toHaveLength(0);
-    await expect(provider.authorize(t.requestTarget)).resolves.toEqual(REFUSAL);
+    expect(wordsOf(await provider.authorize(t.requestTarget))).toEqual(REFUSAL);
     expect(t.request.headers).toEqual({});
   });
 
   it('authorize alone refuses a seeded bound token without a strategy', async () => {
     const { provider } = seeded(boundTo(THUMB_A));
     const t = recordingTargets();
-    await expect(provider.authorize(t.requestTarget)).resolves.toEqual(REFUSAL);
+    expect(wordsOf(await provider.authorize(t.requestTarget))).toEqual(REFUSAL);
     expect(t.request.headers).toEqual({});
   });
 
@@ -292,8 +288,8 @@ describe('the binding table (spec §4)', () => {
     async (_label, cnf) => {
       const { provider } = seeded(jwt({ cnf }));
       const t = recordingTargets();
-      await expect(provider.establish(t.logonTarget)).resolves.toEqual(REFUSAL);
-      await expect(provider.authorize(t.requestTarget)).resolves.toEqual(
+      expect(wordsOf(await provider.establish(t.logonTarget))).toEqual(REFUSAL);
+      expect(wordsOf(await provider.authorize(t.requestTarget))).toEqual(
         REFUSAL,
       );
       expect(t.logon.tls).toHaveLength(0);
@@ -318,9 +314,9 @@ describe('the binding table (spec §4)', () => {
   it("unknown, material, a wire refusing TLS material: the wire's Oops — treated as bound", async () => {
     const { provider } = seeded(OPAQUE, A);
     const t = recordingTargets({ acceptsTls: false });
-    await expect(provider.establish(t.logonTarget)).resolves.toEqual({
+    expect(wordsOf(await provider.establish(t.logonTarget))).toEqual({
       ok: false,
-      refusal: { reason: 'this wire does not take TLS material' },
+      refusal: { reason: 'this wire carries no TLS material (RFC)' },
     });
   });
 
@@ -345,15 +341,15 @@ describe('around the table', () => {
     issuing(boundTo(THUMB_B));
     const renewed = rotating({ refreshToken: 'R1' }).provider;
     const outcomes = [
-      [await held.establish(t.logonTarget), TOKEN_BOUND_ELSEWHERE],
-      [await held.authorize(t.requestTarget), TOKEN_BOUND_ELSEWHERE],
-      [await renewed.authorize(t.requestTarget), TOKEN_RENEWED_BOUND_ELSEWHERE],
+      [await held.establish(t.logonTarget), REFUSAL],
+      [await held.authorize(t.requestTarget), REFUSAL],
+      [await renewed.authorize(t.requestTarget), RENEWED_REFUSAL],
     ] as const;
     for (const [outcome, words] of outcomes) {
       const text = JSON.stringify(outcome);
       expect(text).not.toContain(THUMB_A);
       expect(text).not.toContain(THUMB_B);
-      expect(outcome).toEqual({ ok: false, refusal: { ...words } });
+      expect(wordsOf(outcome)).toEqual(words);
     }
   });
 
@@ -424,7 +420,7 @@ describe('around the table', () => {
     // Bound elsewhere: renewed once, and the renewal is bound elsewhere too.
     issuing(boundTo(THUMB_B));
     internals.authorizationToken = boundTo(THUMB_B);
-    await expect(provider.authorize(t.requestTarget)).resolves.toEqual(
+    expect(wordsOf(await provider.authorize(t.requestTarget))).toEqual(
       RENEWED_REFUSAL,
     );
     expect(internals.presented).toBe(UNBOUND);
@@ -457,9 +453,9 @@ describe('establish decides on the token held, never fetching one', () => {
   it("no token, material, a wire refusing TLS material: the wire's Oops (fail closed)", async () => {
     const { provider } = unseeded(A);
     const t = recordingTargets({ acceptsTls: false });
-    await expect(provider.establish(t.logonTarget)).resolves.toEqual({
+    expect(wordsOf(await provider.establish(t.logonTarget))).toEqual({
       ok: false,
-      refusal: { reason: 'this wire does not take TLS material' },
+      refusal: { reason: 'this wire carries no TLS material (RFC)' },
     });
   });
 
@@ -546,7 +542,7 @@ describe('a held token bound to another certificate, one pinned: renewed like an
     issuing(boundTo(THUMB_B));
     const { provider } = rotating({ refreshToken: 'R1' });
     const t = recordingTargets();
-    await expect(provider.authorize(t.requestTarget)).resolves.toEqual(
+    expect(wordsOf(await provider.authorize(t.requestTarget))).toEqual(
       RENEWED_REFUSAL,
     );
     expect(t.request.headers).toEqual({});
@@ -571,7 +567,7 @@ describe('a held token bound to another certificate, one pinned: renewed like an
     });
     const { provider } = rotating({ refreshToken: 'R1' });
     const t = recordingTargets();
-    await expect(provider.authorize(t.requestTarget)).resolves.toEqual(
+    expect(wordsOf(await provider.authorize(t.requestTarget))).toEqual(
       RENEWED_REFUSAL,
     );
     expect(t.request.headers).toEqual({});
@@ -584,7 +580,7 @@ describe('a held token bound to another certificate, one pinned: renewed like an
     const { provider } = rotating({ refreshToken: 'R1' });
     const t = recordingTargets();
     for (let i = 0; i < 3; i += 1) {
-      await expect(provider.authorize(t.requestTarget)).resolves.toEqual(
+      expect(wordsOf(await provider.authorize(t.requestTarget))).toEqual(
         RENEWED_REFUSAL,
       );
     }
@@ -614,7 +610,7 @@ describe('a held token bound to another certificate, one pinned: renewed like an
       provider.rejected({ at: 'request', status: 401, error: undefined }),
     ).resolves.toEqual({ ok: true });
     expect(requests).toHaveLength(2);
-    await expect(provider.authorize(t.requestTarget)).resolves.toEqual(
+    expect(wordsOf(await provider.authorize(t.requestTarget))).toEqual(
       RENEWED_REFUSAL,
     );
     await provider.authorize(t.requestTarget);
@@ -651,7 +647,7 @@ describe('a held token bound to another certificate, one pinned: renewed like an
       const first = await provider.authorize(t.requestTarget);
       expect(first.ok).toBe(false);
       // The renewal's own refusal, not the generic bound-elsewhere words.
-      expect(first).not.toEqual(REFUSAL);
+      expect(wordsOf(first)).not.toEqual(REFUSAL);
       expect(requests.map((r) => r.grant)).toEqual(firstRenewal);
       for (let i = 0; i < 2; i += 1) {
         await expect(provider.authorize(t.requestTarget)).resolves.toEqual(
@@ -807,13 +803,13 @@ describe('a held token bound to another certificate, one pinned: renewed like an
     issuing(boundTo(THUMB_B, 3600));
     const { provider } = rotating({ refreshToken: 'R1' });
     const t = recordingTargets();
-    await expect(provider.authorize(t.requestTarget)).resolves.toEqual(
+    expect(wordsOf(await provider.authorize(t.requestTarget))).toEqual(
       RENEWED_REFUSAL,
     );
     refusingAll();
     const prepared = await provider.prepare();
     expect(prepared.ok).toBe(false);
-    expect(prepared).not.toEqual(RENEWED_REFUSAL);
+    expect(wordsOf(prepared)).not.toEqual(RENEWED_REFUSAL);
     const count = requests.length;
     await expect(provider.authorize(t.requestTarget)).resolves.toEqual(
       prepared,
@@ -891,8 +887,8 @@ describe('a held token bound to another certificate, one pinned: renewed like an
       authorizationToken: token,
     });
     const t = recordingTargets();
-    await expect(provider.establish(t.logonTarget)).resolves.toEqual(REFUSAL);
-    await expect(provider.authorize(t.requestTarget)).resolves.toEqual(REFUSAL);
+    expect(wordsOf(await provider.establish(t.logonTarget))).toEqual(REFUSAL);
+    expect(wordsOf(await provider.authorize(t.requestTarget))).toEqual(REFUSAL);
     expect(t.request.headers).toEqual({});
     expect(mockedAxios).not.toHaveBeenCalled();
     expect(mockedAxios.post).not.toHaveBeenCalled();

@@ -167,7 +167,7 @@ describe('CertificateAuthProvider', () => {
     expect(t.logon.tls).toEqual([{ cert, key }]);
   });
 
-  it('a loader ValidationError gives the fixed wording with known field names; a foreign one gives its code only', async () => {
+  it("a loader ValidationError answers the moment's fallback until Task 26; a foreign one gives its code only", async () => {
     const own = new CertificateAuthProvider(
       {
         load: async () => {
@@ -176,13 +176,12 @@ describe('CertificateAuthProvider', () => {
       },
       config,
     );
-    await expect(own.prepare()).resolves.toEqual({
+    // TRANSITION (A11): a ValidationError carries no `case`, so its 5.4.2
+    // words stay unminted and guard answers its own fallback — until Task 26
+    // gives this throw its `configuration` case (E17/E18).
+    expect(wordsOf(await own.prepare())).toEqual({
       ok: false,
-      refusal: {
-        reason:
-          'the provider configuration is incomplete or invalid: certPath, certPfxPath',
-        hint: 'check the provider configuration',
-      },
+      refusal: { reason: 'loading the certificate failed (unknown error)' },
     });
     const fsError = Object.assign(
       new Error("ENOENT: no such file 'C:\\\\SECRET\\\\key.pem'"),
@@ -220,7 +219,7 @@ describe('CertificateAuthProvider', () => {
       p.establish(recordingTargets({ acceptsTls: false }).logonTarget),
     ).resolves.toMatchObject({
       ok: false,
-      refusal: { reason: 'this wire does not take TLS material' },
+      refusal: { reason: 'this wire carries no TLS material (RFC)' },
     });
     const outcome = await p.establish(broken().logonTarget);
     expect(outcome.ok).toBe(false);

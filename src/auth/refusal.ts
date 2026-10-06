@@ -47,6 +47,7 @@ import {
   type Operation,
   toLegacyOutcome,
 } from './contractTransition';
+import { isGrant } from './grants';
 import { integerStatus, readSafely } from './knownCodes';
 
 export { OK } from '@mcp-abap-adt/auth-errors';
@@ -57,28 +58,6 @@ export function oops(reason: string, hint?: string): AuthOutcome {
     ? { ok: false, refusal: { reason } }
     : { ok: false, refusal: { reason, hint } };
 }
-
-/**
- * The fixed words for a token held bound to a client certificate while no
- * certificate is pinned (spec §4) — none configured, or a binding it cannot
- * read. No thumbprint appears in them.
- */
-export const TOKEN_BOUND_ELSEWHERE = Object.freeze({
-  reason:
-    'the token is bound to a client certificate this provider does not present',
-  hint: 'give the provider a clientAuthentication that presents the certificate the token was issued for',
-} as const);
-
-/**
- * The fixed words for a token renewed because the one held was bound to
- * another certificate than the pinned one, when the new token is bound
- * elsewhere too. No thumbprint appears in them.
- */
-export const TOKEN_RENEWED_BOUND_ELSEWHERE = Object.freeze({
-  reason:
-    'the new token is bound to a client certificate this provider does not present',
-  hint: 'the authorization server bound the new token to another certificate: check the certificate registered for this client',
-} as const);
 
 /** The operation a `what` names, with the grant of a token request. */
 export interface OperationOf {
@@ -110,24 +89,6 @@ const OPERATION_OF_WHAT: Readonly<Record<string, Operation>> = Object.freeze({
   'the browser login': 'browser-login',
   'opening the browser': 'opening-browser',
 });
-
-/** One entry per grant type: a missing or an unknown one does not compile. */
-export type GrantTable = { readonly [G in OAuth2GrantType]: true };
-
-/** The grant types a `<grant> token request` names (`getAuthType()`). */
-const GRANTS = Object.freeze({
-  authorization_code: true,
-  authorization_code_pkce: true,
-  password: true,
-  client_credentials: true,
-  user_token: true,
-  client_x509: true,
-  saml2_bearer: true,
-} as const satisfies GrantTable);
-
-function isGrant(value: string): value is OAuth2GrantType {
-  return Object.hasOwn(GRANTS, value);
-}
 
 const TOKEN_REQUEST = ' token request';
 
@@ -207,12 +168,42 @@ function requestFailed(error: unknown, of: OperationOf): IAuthProviderError {
  * `unknown` with the operation (A1).
  */
 export function refusalFrom(error: unknown, what: string): AuthOutcome {
-  const of = operationFor(what);
+  return refusalFor(error, operationFor(what));
+}
+
+/** `refusalFrom` for a closed operation: the ladder, then `classify`. Total. */
+export function refusalFor(error: unknown, of: OperationOf): AuthOutcome {
   try {
     return ladder(error, of);
   } catch {
     return refused(authError.unknown(of));
   }
+}
+
+/** This package's error classes, the ladder's rungs (A.1's 13). */
+const LADDER: ReadonlyArray<abstract new (...args: never[]) => unknown> = [
+  DeviceCodePresentationError,
+  AssertionValidationError,
+  CertificateMaterialError,
+  ClientAuthenticationResultError,
+  ClientAuthenticationError,
+  BasicClientIdError,
+  BrowserAuthError,
+  RefreshError,
+  ValidationError,
+  ServiceKeyError,
+  SessionDataError,
+  TokenProviderError,
+  TokenEndpointError,
+];
+
+/**
+ * Whether `error` is one of this package's classes — what auth-errors'
+ * `classify` does not know. May throw (a Proxy's prototype trap): a caller
+ * runs it inside a boundary.
+ */
+export function isLadderClass(error: unknown): boolean {
+  return LADDER.some((rung) => error instanceof rung);
 }
 
 /**
@@ -329,16 +320,4 @@ export function loggedError(
     integerStatus(readSafely(error, 'status')) ??
     integerStatus(readSafely(readSafely(error, 'response'), 'status'));
   return status === undefined ? { error: words } : { error: words, status };
-}
-
-/** The boundary every contract method runs inside (spec rule 1). */
-export async function safely(
-  what: string,
-  work: () => AuthOutcome | Promise<AuthOutcome>,
-): Promise<AuthOutcome> {
-  try {
-    return await work();
-  } catch (error) {
-    return refusalFrom(error, what);
-  }
 }

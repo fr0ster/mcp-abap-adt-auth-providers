@@ -1,5 +1,5 @@
 import { describe, expect, it } from '@jest/globals';
-import { OK, oops, refusalFrom, safely } from '../../auth/refusal';
+import { OK, oops, refusalFrom } from '../../auth/refusal';
 import { DeviceCodePresentationError } from '../../deviceCode/DeviceCodePresenter';
 import { AssertionValidationError } from '../../errors/AssertionValidationError';
 import {
@@ -167,28 +167,6 @@ describe('refusal', () => {
       refusal: { reason: 'showing the device code failed' },
     });
   });
-
-  it('safely: sync throw, async rejection and a returned outcome', async () => {
-    expect(
-      wordsOf(
-        await safely('the token source', () => {
-          throw new Error('SECRET');
-        }),
-      ),
-    ).toEqual({
-      ok: false,
-      refusal: { reason: 'the token source failed (unknown error)' },
-    });
-    await expect(
-      safely('it', async () => {
-        throw new RefreshError('SECRET');
-      }),
-    ).resolves.toMatchObject({
-      ok: false,
-      refusal: { reason: 'the refresh token was refused' },
-    });
-    await expect(safely('it', () => OK)).resolves.toEqual({ ok: true });
-  });
 });
 
 describe('shared word and outcome objects are frozen', () => {
@@ -204,8 +182,6 @@ describe('shared word and outcome objects are frozen', () => {
       client.CLIENT_AUTHENTICATION_UNUSABLE,
       client.BASIC_CLIENT_ID_UNUSABLE,
       refusal.OK,
-      refusal.TOKEN_BOUND_ELSEWHERE,
-      refusal.TOKEN_RENEWED_BOUND_ELSEWHERE,
     ];
     for (const words of shared) expect(Object.isFrozen(words)).toBe(true);
   });

@@ -133,7 +133,7 @@ describe('the four moments', () => {
       ),
     ).resolves.toMatchObject({
       ok: false,
-      refusal: { reason: 'this wire does not take logon parameters' },
+      refusal: { reason: 'this wire takes no logon parameters (HTTP)' },
     });
   });
   it('a throwing target is an Oops', async () => {

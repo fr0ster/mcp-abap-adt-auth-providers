@@ -224,7 +224,7 @@ names only the status or the SDK key, and nothing is renewed:
 <!-- generated:refusal-table rejected -->
 | The rejection | Kind | Basic, certificate, SAML cookies, fixed token | Token providers, `TokenAuthProvider.from` |
 |---|---|---|---|
-| `401`, `RFC_LOGON_FAILURE` | `credential-refused` | their own refusal ("the user or password was refused", …) | one renewal; Ok only if the credential changed |
+| `401`, `RFC_LOGON_FAILURE` | `credential-refused` | their own refusal: Basic "the user or password was refused"; certificate "the client certificate was refused"; SAML cookies "the SAML session was refused or has expired"; fixed token "the token was refused" | one renewal; Ok only if the credential changed |
 | `403` | `system-refused` `not-authorized` | "the credential was accepted, but the user is not authorized (403)" — "check the user's authorizations in the system" | the same, no renewal |
 | `3xx`, e.g. `302` | `system-refused` `redirected` | "the system redirected instead of accepting the credential (302)" — "the service may require another logon procedure (single sign-on, an identity provider)" | the same, no renewal |
 | `5xx`, e.g. `503` | `system-refused` `system-failed` | "the system failed (503), not the credential" — "try again later" | the same, no renewal |

@@ -47,7 +47,17 @@ function each(values, rows, table) {
 
 /** "What `rejected()` answers": the verdicts of `system-refused` (B1–B6). */
 function rejectedTable() {
-  const own = render('credential-refused', { credential: 'user-password' });
+  const own = [
+    ['Basic', 'user-password'],
+    ['certificate', 'client-certificate'],
+    ['SAML cookies', 'saml-session'],
+    ['fixed token', 'token'],
+  ]
+    .map(
+      ([provider, credential]) =>
+        `${provider} ${quoted(render('credential-refused', { credential, at: 'request' }).reason)}`,
+    )
+    .join('; ');
   const examples = {
     'not-authorized': { rejection: '`403`', facts: { status: 403 } },
     redirected: { rejection: '`3xx`, e.g. `302`', facts: { status: 302 } },
@@ -65,7 +75,7 @@ function rejectedTable() {
   const lines = [
     '| The rejection | Kind | Basic, certificate, SAML cookies, fixed token | Token providers, `TokenAuthProvider.from` |',
     '|---|---|---|---|',
-    `| \`401\`, \`RFC_LOGON_FAILURE\` | \`credential-refused\` | their own refusal (${quoted(own.reason)}, …) | one renewal; Ok only if the credential changed |`,
+    `| \`401\`, \`RFC_LOGON_FAILURE\` | \`credential-refused\` | their own refusal: ${cell(own)} | one renewal; Ok only if the credential changed |`,
   ];
   for (const [verdict, example] of each(
     contract.SYSTEM_REFUSED_VERDICTS,

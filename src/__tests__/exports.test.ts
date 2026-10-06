@@ -56,6 +56,7 @@ describe('public exports — 5.0.0', () => {
     'SecureLoginClientProbe',
     'nodeSncSystem',
     'consoleDeviceCodePresenter',
+    'AuthProviderBase',
   ])('exports %s', (name) => {
     expect((surface as Record<string, unknown>)[name]).toBeDefined();
   });

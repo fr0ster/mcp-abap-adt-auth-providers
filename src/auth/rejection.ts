@@ -21,7 +21,7 @@ import type {
   IAuthRefusal,
   IAuthRejection,
 } from '@mcp-abap-adt/interfaces-auth';
-import { toLegacyRefusal } from './contractTransition';
+import { type CredentialKind, toLegacyRefusal } from './contractTransition';
 import { readSafely } from './knownCodes';
 
 export type RejectionReading =
@@ -35,7 +35,7 @@ const UNKNOWN: RejectionReading = Object.freeze({ verdict: 'unknown' });
 type Moment = 'logon' | 'request';
 
 /** The moment of a rejection; anything but a request reads as a logon, as in 5.4.2. */
-function momentOf(rejection: IAuthRejection | undefined): Moment {
+export function momentOf(rejection: IAuthRejection | undefined): Moment {
   return readSafely(rejection, 'at') === 'request' ? 'request' : 'logon';
 }
 
@@ -102,15 +102,26 @@ export function unknownRefusal(
 }
 
 /**
- * A provider that cannot renew: its own refusal when the credential was
- * refused, the neutral `system-refused` error otherwise.
+ * A provider that cannot renew: `credential-refused` naming its credential
+ * and the moment when the credential was refused (B7, B9–B11), the neutral
+ * `system-refused` error otherwise.
  */
 export function refuseFor(
   rejection: IAuthRejection | undefined,
-  blame: IAuthRefusal,
+  credential: CredentialKind,
 ): AuthOutcome {
   const read = readRejection(rejection);
-  if (read.verdict === 'credential') return { ok: false, refusal: blame };
+  if (read.verdict === 'credential') {
+    return {
+      ok: false,
+      refusal: toLegacyRefusal(
+        authError['credential-refused']({
+          credential,
+          at: momentOf(rejection),
+        }),
+      ),
+    };
+  }
   if (read.verdict === 'not-credential') {
     return { ok: false, refusal: read.refusal };
   }
