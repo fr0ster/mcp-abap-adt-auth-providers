@@ -234,7 +234,7 @@ ever part of `reason` / `hint`.
 | `kind` | Field | The one extraction source | Admission |
 |---|---|---|---|
 | `snc` | `library` | the `path` the locator returned and `prepare()` trimmed (`SncLogonProvider.ts:133`) — the consumer's `sncLib`, `SNC_LIB_64` / `SNC_LIB`, the Secure Login Client registry install path + `lib\sapcrypto.dll`, or the fixed macOS bundle path (`DefaultSncLibraryLocator.ts:118-144`) | `LocalPath` |
-| `snc` | `candidatePaths` | `SncLibraryNotFoundError.tried[i].path`, read only from an instance of the shipped locator's class, aligned index for index with `facts.candidates` | `LocalPath` each; a dropped one becomes `null`, so indices stay aligned |
+| `snc` | `candidatePaths` | the `tried[i].path` of a failure **the shipped locator builds**: those failures (the class `SncLibraryNotFoundError` is gone) are recorded in a module-private `WeakSet` (`isShippedLocatorFailure`, Task 25), and only a recorded failure's paths are read, aligned index for index with `facts.candidates`; a consumer's locator that throws gets G4's words and no `candidatePaths` | `LocalPath` each; a dropped one becomes `null`, so indices stay aligned |
 | `saml-assertion` | `rootElement` | the document element's `localName` (`assertionValidator.ts:185-186`); rules `root-not-response-or-assertion`, `root-not-response` | `XmlName` |
 | `saml-assertion` | `id` | the `ID` attribute value used more than once (`documentIds.ts`, `assertionValidator.ts:195`); rule `duplicate-id` | `XmlId` |
 | `saml-assertion` | `referenceUri` | `ds:Reference/@URI` (`signedNode.ts:185-187`, `:200-202`); rules `reference-not-same-document`, `reference-not-found` | `DocumentValue`, printable ASCII only |
@@ -630,7 +630,11 @@ The variant is inferred from the facts literal and the builder sets
 `variant` from it; `One<…>` refuses a discriminant typed as a union (a `rule`
 variable of type `AssertionRule` would otherwise widen the permitted
 diagnostics to every rule's), so a producer passes a literal or narrows
-first. The return type is the one variant (`Extract<…, { variant: R }>`), so
+first. (As built, Task 24: the variant is inferred per rule only when the
+contextual type is not a union — a helper that takes the union `AuthProviderError`
+as its contextual type makes TypeScript infer the builder's `R` from the return
+type and `One<R>` becomes `never`; the SAML sites' `refuse` therefore takes
+`{ kind: 'saml-assertion' }`, not the union.) The return type is the one variant (`Extract<…, { variant: R }>`), so
 the result is a member of the correlated union of §4.1 and its diagnostics
 are typed for that variant. (An input field that is forbidden is typed
 `?: never`; under `exactOptionalPropertyTypes` passing any value to it is a
@@ -1300,6 +1304,25 @@ Basic credential, and the header-echo tests for both a `400` and a `200`
 without `access_token`, nothing of the error contract). Under the one-PR-per-task rule it is recorded here and in this
 PR's description; opening it is the user's decision.
 
+## 6a0. Configuration and browser launch as built (Task 26)
+
+- An **unparseable `authorizationUrl`** is a `configuration` error, case
+  `required-fields-missing`, `fields: ['authorizationUrl']`, at construction
+  and at login. Known wording limit: interfaces-auth 6 has no invalid-value
+  case, so the words say "required configuration is missing" for a value that
+  is present but unparseable; a proper case needs an interfaces-auth major.
+- **K6 (`callback-port-invalid`) is validated before any probe:** `validatePort`
+  runs in `BrowserCallbackStrategy`'s constructor and again at the start of
+  `authorize()`, so no socket is touched for a bad port.
+- **The browser is opened without a shell** (security fix, `src/auth/browserLaunch.ts`):
+  only an `http(s)` URL is launched, as its `href` (unsafe characters refused or
+  percent-encoded; it cannot start with `-`), otherwise nothing is launched and
+  the URL is announced. Every launcher is `child_process.spawn(cmd, argv)`, never
+  `shell: true` and never `cmd`: `xdg-open` / named browsers on Linux, `open` on
+  macOS, and on Windows `rundll32.exe url.dll,FileProtocolHandler <url>` or, for a
+  named browser, `powershell.exe … Start-Process` with the URL only in the
+  environment — both by absolute path under `%SystemRoot%\System32`.
+
 ## 6a. No built-in login timeouts
 
 Decided by the user 2026-10-05. In 6.0.0 an interactive login ends only on a
@@ -1358,9 +1381,25 @@ is not exported (`@ts-expect-error` on its import).
 site, with a strategy or without one — and no OIDC discovery carries a request
 timeout of the package's choosing: the client-credentials site's 30 s timeout
 and `GrantRequest.timeout` are removed (implemented in `bbfa3d2`). A
-consumer's `AbortSignal` is the bound. Out of this section's scope: the
-SNC registry lookup's 5 s timeout (`SncSystem`, a child process, not a
-request), and the interactive-login timeouts, which are Task 23's.
+consumer's `AbortSignal` is the bound. **The SNC registry lookup's 5 s
+timeout is removed too (decided by the user 2026-10-06; Task 25):**
+`SncSystem.readRegistryValue(key, name, signal?)` runs `reg.exe` through
+`execFile` with the moment's / attempt's `AbortSignal` (`{ windowsHide: true,
+signal }`); an abort kills the child and the moment answers Oops `aborted`.
+A time limit is the consumer's (its signal) or the called server's, never the
+package's. The interactive-login timeouts are Task 23's (above).
+
+**SNC signal surface (additive, Task 25).** `SncLogonProviderConfig.signal?:
+AbortSignal | undefined` (one party attached at construction),
+`SncLogonProvider.forSecureLoginClient({ …, signal })`,
+`SncLogonProvider.attach(signal): () => void` (the parties of §6b, the same
+rules as `BaseTokenProvider`'s: no live party → a waiter that never aborts),
+and an optional `signal?: AbortSignal` parameter on
+`ISncLibraryLocator.locate(signal?)`, `ISncProductProbe.appliesTo(path,
+signal?)` and `SncSystem.readRegistryValue(…, signal?)`. A moment hands its
+waiter signal to the locator and the probe; the shipped ones pass it on to
+`reg.exe`. A consumer's locator or probe that ignores the argument still
+compiles.
 
 ## 6b. Cancelling a login
 
@@ -1621,7 +1660,10 @@ removal and commit-only-if-not-aborted rule.
   construction when given — and exposes `attach(signal: AbortSignal): () =>
   void` for each further party sharing the provider. **A signal is required**
   (a party without one has nothing to cancel with and simply does not
-  attach); the same signal attached twice is one party. An attachment is
+  attach); the same signal attached twice is one party. `SncLogonProvider`
+  has the same `signal` config field and `attach(signal)` (§6a, "SNC signal
+  surface"), its parties handed to the locator, the probe and the registry
+  query; An attachment is
   **released** when its signal aborts — removed from the set and its listener
   removed (`{ once: true }`) — or when the returned `detach()` is called, so
   attachments never accumulate. **A login a moment starts** waits on the
@@ -2955,7 +2997,7 @@ apart). Rule ids, in the README table's order:
 | status | `no-status` / `several-status` | `the response carries no samlp:Status` / `<n> samlp:Status; …` | `count` (several) | — |
 | status | `no-status-code` / `several-status-codes` | `the samlp:Status carries no samlp:StatusCode` / `<n> …` | `count` (several) | — |
 | status | `status-code-no-value` | `the samlp:StatusCode carries no Value` | — | — |
-| status | `declined` | `the identity provider declined the login: "…"` | `statusCode?` (registered) | `statusCode` (unregistered) |
+| status | `declined` | `the identity provider declined the login: "…"` (the signed-Response validator reads `Status` after the signatures and the placement checks and before counting the direct-child `Assertion`, so a real decline refuses `declined`, not `no-direct-assertion`; an unsigned `Status` decides nothing — `response-not-signed`, Task 24) | `statusCode?` (registered) | `statusCode` (unregistered) |
 | assertionId | `no-assertion-id` | `the assertion carries no ID` | — | — |
 | issuer | `no-issuer` / `several-issuers` | `the assertion carries no saml:Issuer` / `<n> saml:Issuer; …` | `count` (several) | — |
 | issuer | `empty-issuer` | `the assertion's saml:Issuer is empty` | — | — |
