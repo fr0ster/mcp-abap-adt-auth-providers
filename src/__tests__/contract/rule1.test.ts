@@ -220,10 +220,16 @@ describe('rule 1: the whole matrix, under plain node against the compiled source
         ).outputText,
       );
       const fixtures = join(__dirname, '..', 'fixtures');
-      const run = runPlainNode<Rule1Report>(`
+      const run = runPlainNode<Rule1Report>(
+        `
 const scenario = require(${JSON.stringify(scenario)});
 report(await scenario.run(lib, errors, require('@mcp-abap-adt/auth-mocks'), ${JSON.stringify(fixtures)}));
-`);
+`,
+        // The test's own bound: a regression that makes moments hang fails
+        // here instead of hanging the run (about 70 s when green).
+        { boundMs: 400_000 },
+      );
+      expect(run.timedOut).toBe(false);
       expect(run.unhandled).toEqual([]);
       expect(run.result.failures).toEqual([]);
       const providers = new Set(

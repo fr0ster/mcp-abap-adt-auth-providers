@@ -6,7 +6,7 @@ import type {
   ITokenRefresher,
 } from '@mcp-abap-adt/interfaces-auth';
 import { AuthProviderBase } from '../auth/AuthProviderBase';
-import { markHandled } from '../auth/handled';
+import { answered, markHandled } from '../auth/handled';
 import { momentOf, readRejection, unknownRefusal } from '../auth/rejection';
 
 /**
@@ -37,8 +37,8 @@ export class TokenAuthProvider extends AuthProviderBase {
 
   static from(refresher: ITokenRefresher): TokenAuthProvider {
     return new TokenAuthProvider(
-      () => refresher.getToken(),
-      () => refresher.refreshToken(),
+      async () => (await answered(refresher.getToken())).value,
+      async () => (await answered(refresher.refreshToken())).value,
     );
   }
 

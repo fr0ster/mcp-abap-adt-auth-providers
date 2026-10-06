@@ -20,6 +20,7 @@ import {
   getJwtAuthorizationUrl,
 } from '../auth/browserAuth';
 import { misconfigured, requiredFieldsMissing } from '../auth/configuration';
+import { answered } from '../auth/handled';
 import { refreshJwtToken } from '../auth/tokenRefresher';
 import { logQuietly } from '../auth/tokenRequest';
 import { browserCallbackStrategy } from '../strategies';
@@ -211,7 +212,9 @@ export class AuthorizationCodeProvider extends BaseTokenProvider {
 
     // The strategy holds a socket or a reader: it starts only once the
     // previous attempt has released its own (the drain, spec §6b).
-    const outcome = await attempt.exclusive(() => strategy.authorize(request));
+    const { value: outcome } = await attempt.exclusive(() =>
+      answered(strategy.authorize(request)),
+    );
 
     // The second net. A strategy that never called the builder — `staticCodeStrategy`
     // holds its payload already — passed the first check by not participating in

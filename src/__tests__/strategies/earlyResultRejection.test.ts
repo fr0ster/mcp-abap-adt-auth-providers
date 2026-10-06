@@ -58,15 +58,7 @@ describe('a callback server whose result rejects early, never awaited', () => {
     expect(run.unhandled).toEqual([]);
   });
 
-  it('a foreign thenable as the result: its then is never run by the marking', () => {
-    const run = runPlainNode<{ kind: string; thenRan: boolean }>(
-      scenario(
-        `() => { throw new Error('sync'); }`,
-        `({ then() { seen.thenRan = true; } })`,
-      ),
-    );
-    expect(run.stderr).toBe('');
-    expect(run.result).toEqual({ kind: 'interactive-login', thenRan: false });
-    expect(run.unhandled).toEqual([]);
-  });
+  // A foreign thenable as the result: awaiting the server's result is the
+  // contract, so its `then` runs at the await; that the marking itself never
+  // runs it is proven directly in auth/handled.test.ts.
 });

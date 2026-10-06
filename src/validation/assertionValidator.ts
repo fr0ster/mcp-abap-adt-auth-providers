@@ -36,6 +36,7 @@ import {
   XMLSerializer,
 } from '@xmldom/xmldom';
 import { misconfigured } from '../auth/configuration';
+import { answered } from '../auth/handled';
 import { parseStrictXml } from '../auth/strictXml';
 import { findDuplicateId, readRequiredId } from './documentIds';
 import { refuse, type SamlRefusal, several } from './samlRefusal';
@@ -551,9 +552,8 @@ function createValidator(
           chosen.latestNotOnOrAfter.getTime(),
         ) + skew,
       );
-      const fresh = await store.recordIfUnseen(
-        { issuer, assertionId },
-        retainUntil,
+      const { value: fresh } = await answered(
+        store.recordIfUnseen({ issuer, assertionId }, retainUntil),
       );
       if (!fresh) {
         return refuse(

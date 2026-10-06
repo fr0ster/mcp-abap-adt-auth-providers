@@ -13,6 +13,7 @@ import { AUTH_TYPE_AUTHORIZATION_CODE_PKCE } from '@mcp-abap-adt/interfaces-auth
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
 import { throwIfAborted } from '../auth/attempt';
 import { oidcEndpointMissing, oidcIssuerRequired } from '../auth/configuration';
+import { answered } from '../auth/handled';
 import type { OidcCallbackResult } from '../auth/oidcBrowserAuth';
 import { discoverOidc, mtlsAlias } from '../auth/oidcDiscovery';
 import { generatePkceChallenge, generatePkceVerifier } from '../auth/oidcPkce';
@@ -136,7 +137,9 @@ export class OidcBrowserProvider extends BaseTokenProvider {
 
     // The strategy holds a socket or a reader: it starts only once the
     // previous attempt has released its own (the drain, spec §6b).
-    const outcome = await attempt.exclusive(() => strategy.authorize(request));
+    const { value: outcome } = await attempt.exclusive(() =>
+      answered(strategy.authorize(request)),
+    );
 
     const discovered = this.config.tokenEndpoint ? null : await discover();
     const tokenEndpoint =

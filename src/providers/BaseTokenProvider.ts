@@ -46,7 +46,7 @@ import {
 } from '../auth/certificateMaterial';
 import { misconfigured } from '../auth/configuration';
 import { isGrant } from '../auth/grants';
-import { markHandled } from '../auth/handled';
+import { answered, markHandled } from '../auth/handled';
 import { readRejection } from '../auth/rejection';
 import { readBinding, type TokenBinding } from '../auth/tokenBinding';
 import {
@@ -384,7 +384,7 @@ export abstract class BaseTokenProvider
   ): Promise<Settled<PinnedCertificate>> {
     const generation = ++this.pinGeneration;
     try {
-      const loaded = await strategy.tlsMaterial?.();
+      const { value: loaded } = await answered(strategy.tlsMaterial?.());
       // Nothing, or not an object: no certificate to present at all.
       if (!loaded || typeof loaded !== 'object') {
         throw certificateFailure('incomplete');
@@ -1252,7 +1252,7 @@ export abstract class BaseTokenProvider
   private async notify(build: () => ITokenResult): Promise<boolean> {
     if (!this.onTokens) return true;
     try {
-      await this.onTokens(build());
+      await answered(this.onTokens(build()));
       return true;
     } catch (error) {
       // Fixed words only: the hook holds the tokens, its message is foreign text.

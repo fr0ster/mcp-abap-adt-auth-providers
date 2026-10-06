@@ -29,6 +29,18 @@ import type * as Lib from '../../index';
 
 export const MARKER = 'SECRET-RULE1';
 
+/** Calls of any foreign thenable's `then` / `catch` — the package must make none. */
+export const thenCalls = { count: 0 };
+
+/** A foreign thenable whose `then` / `catch` only count their calls. */
+function countingThenable(): object {
+  const count = () => {
+    thenCalls.count += 1;
+  };
+  // biome-ignore lint/suspicious/noThenProperty: a foreign thenable is the hostile value
+  return { then: count, catch: count, message: MARKER };
+}
+
 /** The hostile values of §11.1, each carrying the marker where it can. */
 export function hostileValues(): Array<[string, () => unknown]> {
   const boom = () => {
@@ -107,6 +119,7 @@ export function hostileValues(): Array<[string, () => unknown]> {
     ['a number', () => 42],
     ['a symbol', () => Symbol(MARKER)],
     ['a function', () => () => MARKER],
+    ['a foreign thenable', countingThenable],
   ];
 }
 
@@ -119,7 +132,24 @@ export interface Rule1Report {
   readonly failures: string[];
 }
 
-type Mode = 'throws' | 'rejects';
+/**
+ * How a collaborator fails: it throws, answers a rejecting native promise,
+ * or answers a foreign thenable that would resolve with the value, reject
+ * with it, or throw it from its `then` — whose `then` must never be called.
+ */
+type Mode =
+  | 'throws'
+  | 'rejects'
+  | 'thenable resolving'
+  | 'thenable rejecting'
+  | 'thenable whose then throws';
+const MODES: readonly Mode[] = [
+  'throws',
+  'rejects',
+  'thenable resolving',
+  'thenable rejecting',
+  'thenable whose then throws',
+];
 
 /** A collaborator's method: throws `value()` now, or answers its rejection. */
 type Failing = (...args: unknown[]) => never;
@@ -160,7 +190,12 @@ function tokenServer(): Promise<{ server: Server; base: string }> {
   const server = createServer((req, res) => {
     req.resume();
     req.on('end', () => {
-      res.writeHead(200, { 'content-type': 'application/json' });
+      // No keep-alive: a reused socket the server just closed would be a
+      // test-only ECONNRESET under load.
+      res.writeHead(200, {
+        'content-type': 'application/json',
+        connection: 'close',
+      });
       if (String(req.url).includes('/device')) {
         res.end(
           JSON.stringify({
@@ -248,7 +283,14 @@ function rows(lib: typeof Lib): Row[] {
     if (strategy) return { authorize: strategy } as T;
     const launcher = w.hostile('browser launcher');
     if (launcher)
-      return lib.browserCallbackStrategy({ port: 0, openUrl: launcher }) as T;
+      return lib.browserCallbackStrategy({
+        port: 0,
+        openUrl: launcher,
+        // The test's own bound: a launcher answering a foreign thenable is
+        // never called, so its login waits for a browser that never comes —
+        // as a launcher that succeeded would. The consumer's abort ends it.
+        signal: AbortSignal.timeout(500),
+      }) as T;
     const factory = w.hostile('callback server factory');
     if (factory)
       return new lib.BrowserCallbackStrategy({
@@ -428,7 +470,7 @@ function rows(lib: typeof Lib): Row[] {
     },
     {
       provider: 'AuthorizationCodeProvider',
-      collaborators: [...INTERACTIVE, 'client authentication', ...TOKEN_COMMON],
+      collaborators: [...INTERACTIVE, ...CLIENT, ...TOKEN_COMMON],
       token: true,
       make: (w) =>
         new lib.AuthorizationCodeProvider({
@@ -441,7 +483,7 @@ function rows(lib: typeof Lib): Row[] {
     },
     {
       provider: 'OidcBrowserProvider',
-      collaborators: [...INTERACTIVE, ...TOKEN_COMMON],
+      collaborators: [...INTERACTIVE, ...CLIENT, ...TOKEN_COMMON],
       token: true,
       make: (w) =>
         new lib.OidcBrowserProvider({
@@ -454,12 +496,15 @@ function rows(lib: typeof Lib): Row[] {
               ...(state ? { state } : {}),
             })),
           ),
+          ...(clientAuthentication(w)
+            ? { clientAuthentication: clientAuthentication(w) }
+            : {}),
           ...hooks(w),
         } as never),
     },
     {
       provider: 'OidcDeviceFlowProvider',
-      collaborators: ['device-code presenter', ...TOKEN_COMMON],
+      collaborators: ['device-code presenter', ...CLIENT, ...TOKEN_COMMON],
       token: true,
       make: (w) =>
         new lib.OidcDeviceFlowProvider({
@@ -471,12 +516,15 @@ function rows(lib: typeof Lib): Row[] {
               (w.hostile('device-code presenter') as never) ??
               (async () => undefined),
           },
+          ...(clientAuthentication(w)
+            ? { clientAuthentication: clientAuthentication(w) }
+            : {}),
           ...hooks(w),
         } as never),
     },
     {
       provider: 'OidcPasswordProvider',
-      collaborators: ['client authentication', ...TOKEN_COMMON],
+      collaborators: [...CLIENT, ...TOKEN_COMMON],
       token: true,
       make: (w) =>
         new lib.OidcPasswordProvider({
@@ -492,7 +540,7 @@ function rows(lib: typeof Lib): Row[] {
     },
     {
       provider: 'OidcTokenExchangeProvider',
-      collaborators: ['client authentication', ...TOKEN_COMMON],
+      collaborators: [...CLIENT, ...TOKEN_COMMON],
       token: true,
       make: (w) =>
         new lib.OidcTokenExchangeProvider({
@@ -512,7 +560,7 @@ function rows(lib: typeof Lib): Row[] {
         'interactive strategy',
         'assertion validator',
         'replay store',
-        'client authentication',
+        ...CLIENT,
         ...TOKEN_COMMON,
       ],
       token: true,
@@ -769,13 +817,25 @@ export async function run(
       for (const collaborator of row.collaborators) {
         combinations.push(`${row.provider} · ${collaborator}`);
         for (const [valueName, value] of hostileValues()) {
-          for (const mode of ['throws', 'rejects'] as Mode[]) {
+          for (const mode of MODES) {
             const where = `${row.provider} · ${collaborator} · ${valueName} · ${mode}`;
             let called = 0;
             const fail = ((..._args: unknown[]) => {
               called += 1;
               if (mode === 'throws') throw value();
-              return Promise.reject(value());
+              if (mode === 'rejects') return Promise.reject(value());
+              return {
+                // biome-ignore lint/suspicious/noThenProperty: the hostile answer is a foreign thenable
+                then(
+                  resolve?: (v: unknown) => void,
+                  reject?: (e: unknown) => void,
+                ) {
+                  thenCalls.count += 1;
+                  if (mode === 'thenable resolving') resolve?.(value());
+                  else if (mode === 'thenable rejecting') reject?.(value());
+                  else throw value();
+                },
+              };
             }) as Failing;
             const wiring: Wiring = {
               hostile: (name) => (name === collaborator ? fail : undefined),
@@ -867,6 +927,12 @@ export async function run(
                 `${where} · refreshTokens`,
                 await settled(() => tokens.refreshTokens()),
               );
+            }
+            if (thenCalls.count > 0) {
+              failures.push(
+                `${where}: a foreign then was called ${thenCalls.count} time(s)`,
+              );
+              thenCalls.count = 0;
             }
             if (called === 0)
               failures.push(`${where}: collaborator never called`);

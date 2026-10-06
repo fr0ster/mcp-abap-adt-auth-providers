@@ -8,6 +8,7 @@
  */
 
 import { win32 } from 'node:path';
+import { answered } from '../auth/handled';
 import type { SncSystem } from './SncSystem';
 import {
   MACOS_SLC_APP,
@@ -39,11 +40,13 @@ export class SecureLoginClientProbe implements ISncProductProbe {
   async appliesTo(libraryPath: string, signal?: AbortSignal): Promise<boolean> {
     const { system } = this;
     if (system.platform === 'win32') {
-      const dirs = await Promise.all(
-        ['InstallPath64', 'InstallPath32'].map((name) =>
-          system.readRegistryValue(SLC_REGISTRY_KEY, name, signal),
-        ),
-      );
+      const dirs = (
+        await Promise.all(
+          ['InstallPath64', 'InstallPath32'].map((name) =>
+            answered(system.readRegistryValue(SLC_REGISTRY_KEY, name, signal)),
+          ),
+        )
+      ).map((dir) => dir.value);
       const library = win32.normalize(libraryPath.trim()).toLowerCase();
       return dirs.some(
         (dir) =>

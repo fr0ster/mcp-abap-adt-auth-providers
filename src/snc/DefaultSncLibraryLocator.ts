@@ -19,6 +19,7 @@ import {
   authError,
   isSncArch,
 } from '@mcp-abap-adt/auth-errors';
+import { answered } from '../auth/handled';
 import { libraryArchitectures, type SncArch } from './libraryArchitectures';
 import type { SncSystem } from './SncSystem';
 import { MACOS_SLC_LIBRARY, SLC_REGISTRY_KEY } from './secureLoginClient';
@@ -135,10 +136,8 @@ export class DefaultSncLibraryLocator implements ISncLibraryLocator {
       const name = is64 ? 'InstallPath64' : 'InstallPath32';
       // Trimmed before it becomes a path (RF4): a value ending in spaces or
       // a CR/LF would make the whole candidate path inadmissible.
-      const value = await system.readRegistryValue(
-        SLC_REGISTRY_KEY,
-        name,
-        signal,
+      const { value } = await answered(
+        system.readRegistryValue(SLC_REGISTRY_KEY, name, signal),
       );
       const dir = typeof value === 'string' ? value.trim() : '';
       if (dir)
@@ -154,7 +153,9 @@ export class DefaultSncLibraryLocator implements ISncLibraryLocator {
   }
 
   private async inspect(path: string): Promise<Inspection> {
-    const head = await this.system.readHead(path, HEAD_BYTES);
+    const { value: head } = await answered(
+      this.system.readHead(path, HEAD_BYTES),
+    );
     if (!head) return { reason: 'missing' };
     const archs = libraryArchitectures(head);
     if (archs.length === 0) return { reason: 'not a library' };
