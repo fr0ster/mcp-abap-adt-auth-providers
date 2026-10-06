@@ -34,6 +34,7 @@ import {
   legacyBasic,
   type PreparedTokenRequest,
   prepareSecret,
+  prepareTokenRequest,
   rejectMissingToken,
   sendTokenRequest,
   type TokenRequestSite,
@@ -796,5 +797,71 @@ describe("each token site's phrase", () => {
     expect(quiet.lines[0]?.message).toBe(
       `${lead}: status 200, error: no error given`,
     );
+  });
+});
+
+/**
+ * `basicSecrets` in plain code accepts exactly what 5.4.2's
+ * `/^Basic\s+(\S+)$/i` accepted (the regex is the oracle here, in the test
+ * only), and names every `Authorization` header, in any casing of the name.
+ */
+describe("a strategy's Basic header, read without a regex", () => {
+  const ORACLE = /^Basic\s+(\S+)$/i;
+  const credential = Buffer.from('id:the-secret').toString('base64');
+  const preparedWith = (headers: Record<string, string>) =>
+    prepareTokenRequest(
+      {
+        endpoint: 'https://as.example/token',
+        clientId: 'id',
+        grantType: 'client_credentials',
+        parameters: new URLSearchParams({ grant_type: 'client_credentials' }),
+      },
+      { strategy: { authenticate: async () => ({ headers }) } },
+    );
+
+  it.each([
+    `Basic ${credential}`,
+    `basic  ${credential}`,
+    `BASIC\t${credential}`,
+    `Basic ${credential}`,
+    `Basic\v${credential}`,
+    `Basic  ${credential}`,
+    `Basic ${credential} `,
+    `Basic ${credential} `,
+    `Basic a bc`,
+    'Basic a\fbc',
+    `Basic${credential}`,
+    'Basic ',
+    'Basic',
+    `xBasic ${credential}`,
+    `Bearer ${credential}`,
+  ])('%j: as the regex read it', async (value) => {
+    const expected = ORACLE.exec(value)?.[1];
+    const prepared = await preparedWith({ Authorization: value });
+    if (expected === undefined) {
+      expect(prepared.secrets).toEqual({});
+    } else {
+      const decoded = Buffer.from(expected, 'base64').toString();
+      const colon = decoded.indexOf(':');
+      expect(prepared.secrets).toEqual(
+        colon >= 0 && colon < decoded.length - 1
+          ? { basic: expected, basic_secret: decoded.slice(colon + 1) }
+          : { basic: expected },
+      );
+    }
+  });
+
+  it('every Authorization header, in any casing of the name, is named', async () => {
+    const other = Buffer.from('id2:other-secret').toString('base64');
+    const prepared = await preparedWith({
+      Authorization: `Basic ${credential}`,
+      authorization: `Basic ${other}`,
+    });
+    expect(prepared.secrets).toEqual({
+      basic: credential,
+      basic_secret: 'the-secret',
+      basic_2: other,
+      basic_secret_2: 'other-secret',
+    });
   });
 });

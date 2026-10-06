@@ -173,33 +173,50 @@ function agentFor(material: ICertificateMaterial): Agent {
   });
 }
 
+/** Whitespace as the regex `\s` reads it: exactly what `trim()` removes. */
+const isWhitespace = (character: string): boolean => character.trim() === '';
+
 /**
- * The secrets of a `Basic` credential, by name: `basic`, the base64
- * credential as sent, and `basic_secret`, the secret after its first colon.
- * Read with plain string operations, no regex: `Basic`, in any case, then
- * whitespace, then one token.
+ * The credential of one `Basic` header value, accepting exactly what 5.4.2's
+ * `/^Basic\s+(\S+)$/i` accepted, in plain code: `basic` in any case, at
+ * least one whitespace character (`\s`: NBSP, `\v`, `\f` included), then a
+ * non-empty token with no whitespace to the very end — trailing whitespace
+ * refuses the value, as `$` after `\S+` did.
+ */
+function basicCredential(value: string): string | undefined {
+  if (value.slice(0, 5).toLowerCase() !== 'basic') return undefined;
+  const characters = [...value.slice(5)];
+  let at = 0;
+  while (at < characters.length && isWhitespace(characters[at] ?? '')) at++;
+  if (at === 0 || at === characters.length) return undefined;
+  const token = characters.slice(at);
+  return token.some(isWhitespace) ? undefined : token.join('');
+}
+
+/**
+ * The secrets of every `Authorization: Basic` header, by name — as 5.4.2
+ * read every header named `authorization` in any case: `basic`, the base64
+ * credential as sent, and `basic_secret`, the secret after its first colon;
+ * a second such header (another casing of the name) `basic_2` /
+ * `basic_secret_2`, and so on, so `sent` names each.
  */
 function basicSecrets(headers: Record<string, string>): Record<string, string> {
+  const out: Record<string, string> = {};
+  let found = 0;
   for (const [name, value] of Object.entries(headers)) {
     if (name.toLowerCase() !== 'authorization') continue;
-    if (value.slice(0, 5).toLowerCase() !== 'basic') continue;
-    const credential = value.slice(5).trim();
-    if (
-      credential === '' ||
-      credential.length === value.length - 5 ||
-      [...credential].some(
-        (c) => c === ' ' || c === '\t' || c === '\r' || c === '\n',
-      )
-    ) {
-      continue;
-    }
+    const credential = basicCredential(value);
+    if (credential === undefined) continue;
+    found++;
+    const suffix = found === 1 ? '' : `_${found}`;
+    out[`basic${suffix}`] = credential;
     const decoded = Buffer.from(credential, 'base64').toString();
     const colon = decoded.indexOf(':');
-    return colon >= 0 && colon < decoded.length - 1
-      ? { basic: credential, basic_secret: decoded.slice(colon + 1) }
-      : { basic: credential };
+    if (colon >= 0 && colon < decoded.length - 1) {
+      out[`basic_secret${suffix}`] = decoded.slice(colon + 1);
+    }
   }
-  return {};
+  return out;
 }
 
 /**
@@ -530,8 +547,9 @@ export function logRefusedRequest(
 /**
  * A token site, as the error contract's conversion point reads it (spec §6):
  * what it was doing, through which grant, where its one line goes, whether
- * its consumer opted into the server's text, and every secret its request
- * carried — each passed by the site, never looked up.
+ * its consumer opted into `sent` (`authDebug`), and every secret its request
+ * carried — each passed by the site, never looked up. The server's text is
+ * never read for any site.
  */
 export interface TokenRequestSite {
   /**
@@ -596,7 +614,7 @@ function sentOf(
   return sent;
 }
 
-/** Whether the consumer opted into the server's text: `true` itself, nothing else. */
+/** Whether the consumer opted into `sent`: `true` itself, nothing else. */
 const debugging = (site: TokenRequestSite): boolean => site.authDebug === true;
 
 /** The operation and grant of a site, as the facts of its failure. */
@@ -632,8 +650,9 @@ function phraseOf(site: TokenRequestSite): string {
  * The facts are read once, each through `readSafely`: an integer status, a
  * registered OAuth `error`, an allowlisted code. By default the line is
  * 5.4.2's safe facts (`status`, `error` when registered) plus an allowlisted
- * `code` (a recorded addition) — nothing of the body read beyond `error`;
- * only with `authDebug` the same facts plus the previewed
+ * `code` (a recorded addition); only with `authDebug`, instead, the line
+ * `[<operation>] token endpoint said` with the same facts plus `sent`.
+ * Nothing of the body is read beyond `error`, in either mode — never
  * `error_description` / `error_uri`. None for the device poll's waiting
  * answers, none without a logger, a throwing logger swallowed. The failure
  * is `tls` for an allowlisted TLS code, else `request-failed` — `refused`
@@ -868,10 +887,10 @@ function missingTokenLead(site: TokenRequestSite): string {
  * level the site passes — by default the safe facts only,
  * `<lead>: status <n>, error: "<code>"` (or `no error given`; at the code
  * exchange 5.4.2's `error` line verbatim) — and, with `authDebug`, the same
- * line with the facts and the previewed `error_description` / `error_uri`
- * of the snapshot's `diagnostic` beside it, the secrets joined exactly as
- * `sendTokenRequest` joins them. Then `request-failed` with the status and
- * the problem; nothing of the body enters it.
+ * message with `{ status, error?, sent }` beside it, `sent` joined exactly
+ * as `sendTokenRequest` joins it (`sentOf`). Nothing of the body is read but
+ * the registered `error`. Then `request-failed` with the status and the
+ * problem; nothing of the body enters it.
  */
 export function rejectMissingToken(
   site: TokenRequestSite,

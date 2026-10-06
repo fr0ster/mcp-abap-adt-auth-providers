@@ -37,13 +37,15 @@ import { CertificateMaterialError } from '../errors/CertificateMaterialError';
 import { ValidationError } from '../errors/TokenProviderErrors';
 
 /**
- * The consumer's opt-in to the token endpoint's own text (spec §6): with
- * `authDebug: true` — `true` itself, nothing else — a failed token request,
- * or an answer without a token, writes its one debug line with the server's
- * `error_description` / `error_uri`, every secret the request carried
- * previewed (at most 4 + 4 characters, `<redacted, N chars>`). Without it
- * that line carries the safe facts only. Never read from the environment,
- * never defaulted on; no error ever carries the server's text either way.
+ * The consumer's opt-in to naming the request's secrets in its debug line
+ * (spec §6): with `authDebug: true` — `true` itself, nothing else — a failed
+ * token request, or an answer without a token, writes its one line with the
+ * safe facts plus `sent`, each secret the request carried by name, at most
+ * its first and last 4 characters (`abcd…wxyz <redacted, N chars>`; under 16
+ * characters its length only). Without it the line carries the safe facts
+ * only. The server's own text (`error_description`, `error_uri`) is never
+ * read, logged or kept, either way. Never read from the environment, never
+ * defaulted on.
  */
 export interface TokenProviderDebug {
   readonly authDebug?: boolean | undefined;
