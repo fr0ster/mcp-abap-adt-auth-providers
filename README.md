@@ -570,9 +570,9 @@ public client that sends only `client_id`.
   line break; no parameter or header replacing one of the request's own
   (`grant_type`, `Content-Type`, …); an endpoint that is an absolute `https:`
   URL — `http:` only when the configured endpoint is itself `http:` and no
-  certificate is presented. Anything else is a
-  `ClientAuthenticationResultError`, refused as *the client authentication
-  returned a request that cannot be sent*. Only `client_secret`,
+  certificate is presented. Anything else is refused, `client-authentication`
+  `result-unsendable`: *the client authentication returned a request that
+  cannot be sent*. Only `client_secret`,
   `client_assertion` and a Basic credential are known to be secrets and
   redacted from what the server said — which, since 5.4.2, the package
   writes nowhere: not on a thrown error, not in a log line; the redaction
@@ -630,8 +630,9 @@ const user = new OidcPasswordProvider({
 
 #### Rules a provider keeps
 
-- **`clientSecret` and a strategy together are a `ValidationError`** naming
-  `clientSecret`, thrown by the constructor: two ways of authenticating one
+- **`clientSecret` and a strategy together are a configuration error**
+  (`client-secret-beside-client-authentication`) naming `clientSecret`,
+  thrown by the constructor: two ways of authenticating one
   client is a mistake, not a preference. The check is for presence, not value
   — `clientSecret: ''` beside a strategy is refused too, so a consumer mapping
   a service key without a secret must leave `clientSecret` out rather than set
@@ -745,8 +746,9 @@ Where neither fits, `clientSecretPost` sends both in the body. With `'raw'`, a c
 containing `:` cannot be carried at all (RFC 7617 splits at the first colon):
 each request is refused before anything is sent, *the client id contains ':',
 which raw Basic cannot carry*, hint *use encoding: 'form' or
-clientSecretPost*. A missing or other `encoding` is a `ValidationError` naming
-`encoding`, thrown by `clientSecretBasic` itself. A `401` is reported as the
+clientSecretPost*. A missing or other `encoding` is a configuration error
+(`basic-encoding-missing`, `allowed: 'basic-encoding'`) naming `encoding`,
+thrown by `clientSecretBasic` itself. A `401` is reported as the
 server's `401`: nothing is inferred from the secret's characters.
 
 #### `privateKeyJwt`'s `audience`
@@ -819,7 +821,7 @@ whose renewal fails is renewed again on the next attempt, as before. The next `p
 refused token is the one held; a refused token that was already superseded is
 answered Ok without a renewal (rule 6, as before). `getTokens()` pins the
 certificate to compare thumbprints, so with a bound token held it may throw a
-`CertificateMaterialError` when the material is unusable or expired. `establish()` reads such a held
+`client-certificate` failure when the material is unusable or expired. `establish()` reads such a held
 token as unknown and presents the pinned certificate. With **no** certificate
 pinned there is nothing to renew it for: `getTokens()` returns the token, and
 `establish()` / `authorize()` refuse it.
@@ -1072,8 +1074,9 @@ strategy that does not call
 `buildAuthorizationUrl`: `staticCodeStrategy`, or your own as above.
 `samlCallbackStrategy`, `manualSamlResponseStrategy` and `externalCodeStrategy`
 all call it, and with `idpInitiated: true` and no `authorizationUrl` the builder
-refuses: a `ValidationError` (`missingFields: ['authorizationUrl']`) thrown
-before any URL is produced, so before a browser opens. (3.0's advice —
+refuses: a configuration error
+(`saml-idp-initiated-without-authorization-url`) thrown before any URL is
+produced, so before a browser opens. (3.0's advice —
 `externalCodeStrategy` whose `provide` ignores the URL — no longer works for
 that reason.) See
 [Where the expected request ID comes from](#where-the-expected-request-id-comes-from).
@@ -1185,7 +1188,8 @@ took its session lifetime from a regular expression over the unverified XML.
 as `assertionValidator` — a shipped one built from the identity provider's
 certificates, or your own — and omitting it does not compile. A shipped
 validator supplied without `idpEntityId` fails at construction — a
-`ValidationError` whose `missingFields` names it — before any browser opens or
+configuration error (`saml-shipped-validator-without-issuer`) naming it —
+before any browser opens or
 any request is sent. `inBrowser(config, trust)` is the recipe that builds the
 shipped validator from a `SamlTrust`.
 
@@ -1518,10 +1522,11 @@ A custom `assertionValidator` may throw anything: its throw is classified
 with the operation `validating-assertion` — a shipped validator's refusal it
 passes on stays as it is, diagnostics included; any other value is never
 handed back, nor its message. A provider configured with both
-`idpInitiated: true` and `authnRequestId` throws a `ValidationError`
-(`missingFields: ['idpInitiated']`) at construction: `SAML idpInitiated is
-true and authnRequestId is set: an IdP-initiated login sends no request, so
-the two describe different logins. Remove one of them.`
+`idpInitiated: true` and `authnRequestId` throws a configuration error
+(`saml-idp-initiated-with-request-id`, `fields: ['idpInitiated',
+'authnRequestId']`) at construction: `SAML idpInitiated is true, but a
+request ID was also configured or minted: an IdP-initiated login sends no
+request` — `remove one of them`.
 
 **Expiry comes from the verified document.** A validated assertion's
 `expiresAt` is the earlier of `Conditions/@NotOnOrAfter` and the `NotOnOrAfter`
@@ -1558,8 +1563,8 @@ and the login is not declared IdP-initiated. Two flows trigger it:
 - a strategy that returns a payload without calling `buildAuthorizationUrl` —
   `staticCodeStrategy`, or your own — after a request you sent some other way.
 
-Without it, the login fails with a `ValidationError` (`missingFields:
-['authnRequestId']`) after the strategy returns and before the assertion is
+Without it, the login fails with a configuration error
+(`saml-in-response-to-undeclared`) after the strategy returns and before the assertion is
 read — as a configuration fault, not a refusal blamed on the assertion. A
 strategy that merely forgot to call the builder must not silently switch the
 provider into accepting unsolicited responses.
@@ -1578,12 +1583,12 @@ assertion without `InResponseTo` does not make a login IdP-initiated; only
 
 `idpInitiated: true` together with a request ID is a configuration error too:
 the two describe different logins. With a declared `authnRequestId` the
-provider refuses at construction — a `ValidationError` (`missingFields:
-['idpInitiated']`) — before any browser opens. A strategy that calls
+provider refuses at construction — a configuration error
+(`saml-idp-initiated-with-request-id`) — before any browser opens. A strategy that calls
 `buildAuthorizationUrl` with no
 `authorizationUrl` configured is refused inside the builder, before a URL — and
-so a request ID — exists: a `ValidationError` with `missingFields:
-['authorizationUrl']`. Use a strategy that does not call the builder, and leave
+so a request ID — exists: a configuration error
+(`saml-idp-initiated-without-authorization-url`). Use a strategy that does not call the builder, and leave
 `authnRequestId` unset; or configure the identity provider's IdP-initiated SSO
 URL as `authorizationUrl`, which the builder hands over without minting
 anything.
@@ -1713,7 +1718,7 @@ assertion must answer it; absent, the assertion must carry no `InResponseTo`.
 | Error | When |
 |---|---|
 | `AuthProviderFailure`, kind `saml-assertion` | an assertion was refused. `error.facts.rule` names the rule and `error.facts.check` the row above — tell "your IdP declined" (`declined`) from "not addressed to us" (`audience-not-us`, `no-bearer-qualifies`, `destination-not-us`) without parsing the words; the one document value a rule may show is `error.diagnostics` (see [Refusal messages](#refusal-messages)). Since 6.0.0 `AssertionValidationError` is thrown by nothing (it is removed in 6.0.0's final release) |
-| `ValidationError` | configuration: `idpEntityId` missing with a shipped validator supplied as `assertionValidator` (at construction); `idpInitiated` with no `authorizationUrl` and a strategy that calls `buildAuthorizationUrl` (inside the builder, before any URL is produced); `idpInitiated` combined with a declared `authnRequestId` (at construction); `authnRequestId` missing (at login, after the strategy returns and before the assertion is read). `missingFields` names the field |
+| `AuthProviderFailure`, kind `configuration` | configuration: `idpEntityId` missing with a shipped validator supplied as `assertionValidator` (at construction, `saml-shipped-validator-without-issuer`); `idpInitiated` with no `authorizationUrl` and a strategy that calls `buildAuthorizationUrl` (inside the builder, before any URL is produced, `saml-idp-initiated-without-authorization-url`); `idpInitiated` combined with a declared `authnRequestId` (at construction, `saml-idp-initiated-with-request-id`); `authnRequestId` missing (at login, after the strategy returns and before the assertion is read, `saml-in-response-to-undeclared`). `facts.fields` names the fields — see [Configuration errors](#configuration-errors). Since 6.0.0 `ValidationError` is thrown by nothing |
 | `Error` | a certificate that is neither PEM nor base64 DER, or not a valid X.509 certificate; a `clockSkewMs` that is not a finite non-negative integer; and an empty `idpCertificates` (*"must not be empty"*) — all when the validator is built, which for `inBrowser` is when the provider is |
 
 ### With Stores
@@ -2068,11 +2073,13 @@ try {
   const result = await provider.getTokens();
   // Returns new access token and refresh token (if available)
 } catch (error) {
-  if (error instanceof ValidationError) {
-    console.error('Missing fields:', error.missingFields);
-  } else if (error instanceof BrowserAuthError) {
-    // the login timed out, the IdP refused, the port was taken, ...
-    console.error('Browser auth failed:', error.message, error.cause);
+  if (isAuthProviderFailure(error)) {
+    const failure = readFailure(error, 'token-request');
+    if (failure.kind === 'configuration') {
+      // what to fix: failure.facts.case, failure.facts.fields
+    }
+    // the login was aborted, the IdP refused, the port was taken, ...
+    console.error('Failed:', failure.kind, failure.reason);
   }
 }
 ```
@@ -2151,31 +2158,20 @@ blocks every later commit of that provider (each waiter still releasable by its 
 The package provides typed error classes for better error handling:
 
 ```typescript
-import {
-  TokenProviderError,
-  ValidationError,
-  RefreshError,
-  SessionDataError,
-  ServiceKeyError,
-  CertificateMaterialError,
-  ClientAuthenticationError,
-  ClientAuthenticationResultError,
-} from '@mcp-abap-adt/auth-providers';
 import { isAuthProviderFailure, readFailure } from '@mcp-abap-adt/auth-errors';
 
 try {
+  const provider = new ClientCredentialsProvider(config); // may throw too
   const result = await provider.getTokens();
 } catch (error) {
-  if (error instanceof ValidationError) {
-    // provider config validation failed
-    console.error('Missing required fields:', error.missingFields);
-    console.error('Error code:', error.code); // 'VALIDATION_ERROR'
-  } else if (isAuthProviderFailure(error)) {
-    // Since 6.0.0 an interactive login ends with an `interactive-login`
-    // failure (`readFailure(error, operation).facts.outcome`: 'aborted',
-    // 'port-in-use', 'identity-provider-refused', 'browser-launch-failed',
-    // 'failed', …), and a refused SAML assertion with a `saml-assertion`
-    // one (`facts.rule`: 'untrusted-issuer', 'expired', 'replayed', …).
+  if (isAuthProviderFailure(error)) {
+    // Since 6.0.0 every throw of this package is an `AuthProviderFailure`:
+    // a configuration fault (`kind: 'configuration'`, `facts.case` and
+    // `facts.fields` — see [Configuration errors](#configuration-errors)),
+    // a client certificate or client authentication that cannot be used,
+    // an interactive login's end (`facts.outcome`: 'aborted', 'port-in-use',
+    // 'identity-provider-refused', …), a refused SAML assertion
+    // (`facts.rule`), a refused token request.
     const failure = readFailure(error, 'token-request');
     console.error('Failed:', failure.kind, failure.reason);
   }
@@ -2184,14 +2180,13 @@ try {
 
 **Error Types**:
 - `TokenProviderError` - Base class with `code: string` property
-- `ValidationError` - provider config validation failed, includes `missingFields: string[]`
+- `ValidationError` - exported, but thrown by nothing since 6.0.0 (removed in 6.0.0's final release): every configuration fault is an `AuthProviderFailure` of kind `configuration` naming its `case` and `fields` — see [Configuration errors](#configuration-errors); a `ValidationError` a consumer throws is read as `required-fields-missing` with the known names of its `missingFields`
 - `BrowserAuthError` - exported, but thrown by nothing since 6.0.0 (removed in 6.0.0's final release): every end of an interactive login — the identity provider's refusal, a busy callback port, a browser that would not open, an abort, a disposed or busy strategy, an empty or unreadable paste — is an `AuthProviderFailure` of kind `interactive-login`, thrown by every shipped strategy. Its words keep this package's own ("Port N is already in use", `BrowserCallbackStrategy has been disposed`); the identity provider's refusal names only its registered code (`the identity provider refused the login (consent_required)`), never `error_description` or `error_uri`; anything else — a custom transport's error — is `the browser login failed (…)` naming only an HTTP status, a registered OAuth `error` and an allowlisted code, with no `cause`
 - `TokenEndpointError` - a token request failed at a site that wraps it (UAA refresh, client credentials, passcode, OIDC device initiation, password grant); a plain `Error`, not a `TokenProviderError`; carries `status`, `oauthError` (a registered OAuth / OIDC code only) and `code` (an allowlisted system or TLS code only); its `cause` is the safe `AxiosError` the request was reduced to, never what the request rejected with (since 5.4.2)
 - `RefreshError`, `SessionDataError`, `ServiceKeyError` - exported, but no provider throws them: a refused refresh falls back to a login inside `getTokens()`/`refreshTokens()`, and sessions and service keys are read by `@mcp-abap-adt/auth-stores`, not here
 - `AssertionValidationError` - exported, but thrown by nothing since 6.0.0 (removed in 6.0.0's final release): a refused SAML assertion is an `AuthProviderFailure` of kind `saml-assertion` naming its `rule` and `check` — see [Refusal messages](#refusal-messages)
-- `CertificateMaterialError` - client certificate material cannot be used, includes `incomplete: boolean` (no PFX and not both a certificate and its key, versus material no TLS context accepts); its message is fixed and carries nothing of the material. Thrown by `tlsClientCertificate` and by a provider pinning a strategy's certificate. Its `words` getter is deprecated: use `refusalWords` (the package never reads `words` from a thrown value, since any object can carry its own)
-- `ClientAuthenticationError` - `privateKeyJwt`'s key is not a private key of its algorithm, or cannot sign; fixed message, nothing of the key
-- `ClientAuthenticationResultError` - what a client authentication strategy returned cannot be sent (a non-string value, a header with a line break, a parameter or header replacing the request's own, an endpoint that is not an absolute `https:` URL); thrown before anything is sent, fixed message
+- `CertificateMaterialError` - exported, but thrown by nothing since 6.0.0 (removed in 6.0.0's final release): certificate material that cannot be used — from `tlsClientCertificate` or a provider pinning a strategy's certificate — is an `AuthProviderFailure` of kind `client-certificate`, `facts.problem` `incomplete`, `unusable` or `expired` (the [Refusals](#refusals) table); nothing of the material. One a consumer's loader throws is still read by its flags, never its `words`
+- `ClientAuthenticationError`, `ClientAuthenticationResultError`, `BasicClientIdError` - exported, but thrown by nothing since 6.0.0 (removed in 6.0.0's final release): a `privateKeyJwt` key that cannot sign, a strategy's result that cannot be sent (a non-string value, a header with a line break, a parameter or header replacing the request's own, an endpoint that is not an absolute `https:` URL) and raw `clientSecretBasic` with a client id containing `:` are each an `AuthProviderFailure` of kind `client-authentication` (`facts.problem` `signing-key-unusable`, `result-unsendable`, `basic-client-id-colon`), thrown before anything is sent; nothing of the key or the result
 
 A failed token request throws without the request it sent — no form body, no
 `Authorization` header, no TLS agent — and never with what its promise
@@ -2206,6 +2201,46 @@ response interceptor's hostile data cannot throw through either (since
 its `error` when that is a registered OAuth code; the server's
 `error_description` and `error_uri` go nowhere — no error, no log line
 (since 5.4.2).
+
+#### Configuration errors
+
+A configuration fault is thrown — by a constructor (a constructor is not one
+of the four moments, so it may throw), by a strategy factory, by a loader, or
+inside a login — as an `AuthProviderFailure` of kind `configuration`:
+`facts.case` says which, `facts.fields` names the configuration fields
+involved (names on the `CONFIG_FIELDS` allowlist only), never a value given.
+For an ACS or redirect mismatch the two addresses are in `diagnostics`
+(origin and path only), never in the words. A provider moment that meets one
+answers it as its refusal.
+
+<!-- generated:refusal-table configuration -->
+| Thrown | `case` | `fields` | Reason | Hint |
+|---|---|---|---|---|
+| a required field or collaborator is missing (`ClientCredentialsProvider`, `AuthorizationCodeProvider`, the UAA authorization URL, a SAML provider without `assertionValidator`) | `required-fields-missing` | `<fields>` | required configuration is missing: `<fields>` | check the provider configuration |
+| a token provider constructed with both | `client-secret-beside-client-authentication` | `clientSecret` | clientSecret cannot be given beside clientAuthentication | give the secret to the clientAuthentication strategy, or drop the strategy |
+| a SAML provider constructed with `authorizationUrl` and no `acsUrl` | `saml-acs-required-with-authorization-url` | `acsUrl` | acsUrl is required when authorizationUrl is set: the ACS inside a pre-built SAML request cannot be read, so it must be declared | check the provider configuration |
+| a SAML provider constructed with `idpInitiated` and `authnRequestId` (`fields`: both), or a login that minted or declared a request ID (`fields`: `idpInitiated`) | `saml-idp-initiated-with-request-id` | `idpInitiated`, `authnRequestId` | SAML idpInitiated is true, but a request ID was also configured or minted: an IdP-initiated login sends no request | remove one of them |
+| a SAML provider constructed with a shipped validator and no `idpEntityId` | `saml-shipped-validator-without-issuer` | `idpEntityId` | the supplied assertionValidator is a shipped one, which refuses every assertion without an expected issuer: idpEntityId is missing | check the provider configuration |
+| the SAML bearer exchange without `tokenUrl` or `uaaUrl` | `saml-token-endpoint-missing` | `tokenUrl`, `uaaUrl` | the SAML bearer exchange needs tokenUrl or uaaUrl | check the provider configuration |
+| a strategy asks for the URL of an `idpInitiated` login without `authorizationUrl` | `saml-idp-initiated-without-authorization-url` | `idpInitiated`, `authorizationUrl` | SAML idpInitiated is true and no authorizationUrl is configured, but the authorization strategy asked for an authorization URL | configure the IdP-initiated SSO URL as authorizationUrl, or use a strategy that does not call buildAuthorizationUrl |
+| the strategy listens, or listened, elsewhere than `acsUrl`; the two addresses are `diagnostics.configuredUri` / `strategyUri` | `saml-acs-mismatch` | `acsUrl` | SAML acsUrl and the address the authorization strategy used do not match | they must match |
+| a SAML login with no request ID minted, declared or declared absent | `saml-in-response-to-undeclared` | `authnRequestId`, `idpInitiated` | cannot validate InResponseTo: this login did not build its own AuthnRequest | configure authnRequestId, or idpInitiated: true if the identity provider starts this login itself |
+| a SAML exchange or refresh with a `clientAuthentication` and no `clientId` | `client-id-required-with-client-authentication` | `clientId` | clientId is required with a client authentication | check the provider configuration |
+| a pre-built `authorizationUrl` whose `redirect_uri` the strategy did not use; the two addresses are `diagnostics.configuredUri` / `strategyUri` | `redirect-mismatch` | `authorizationUrl` | the pre-built authorizationUrl declares a redirect_uri the authorization strategy did not use | an ephemeral port cannot be used with a pre-built URL |
+| an OIDC endpoint to discover and no `issuerUrl` | `oidc-discovery-needs-issuer` | `issuerUrl` | OIDC issuerUrl is required when discovery is used | check the provider configuration |
+| an OIDC endpoint neither configured nor discovered (`authorizationEndpoint`, `tokenEndpoint` or `deviceAuthorizationEndpoint`) | `oidc-endpoint-missing` | `<fields>` | OIDC `<fields>` is required (configure it, or use discovery) | check the provider configuration |
+| `FileCertificateMaterialLoader`: PEM and PFX paths both given | `certificate-pem-and-pfx` | `certPath`, `certPfxPath` | certificate auth: provide either PEM (certPath + certKeyPath) or certPfxPath, not both | check the provider configuration |
+| `FileCertificateMaterialLoader`: neither a PFX nor a whole PEM pair | `certificate-files-missing` | `certPfxPath`, `certPath`, `certKeyPath` | certificate auth requires certPfxPath, or certPath and certKeyPath | check the provider configuration |
+| `clientSecretBasic` without `encoding: 'raw' \| 'form'` (`allowed: 'basic-encoding'`) | `basic-encoding-missing` | `encoding` | clientSecretBasic needs encoding: 'raw' or 'form' | check the provider configuration |
+| `SncLogonProvider` without `partnerName` | `snc-partner-name-missing` | `partnerName` | SncLogonProvider needs partnerName — the system's SNC name | check the provider configuration |
+| `SncLogonProvider` with another `qop` (`allowed: 'snc-qop'`) | `snc-qop-invalid` | `qop` | SncLogonProvider: qop must be one of 1, 2, 3, 8, 9 | check the provider configuration |
+| `SsoProviderFactory.create` with no provider for the protocol and flow | `unsupported-sso-flow` | — | unsupported SSO provider config: no provider for this protocol and flow | check the provider configuration |
+| a shipped validator with a `clockSkewMs` that is not a non-negative integer | `validator-clock-skew-invalid` | `clockSkewMs` | clockSkewMs must be a finite non-negative integer | check the provider configuration |
+| a shipped validator with no `idpCertificates` | `validator-no-certificates` | `idpCertificates` | idpCertificates must not be empty: nothing could be verified | check the provider configuration |
+| a shipped validator with a certificate that is neither PEM nor base64 DER, or no certificate | `idp-certificate-invalid` | `idpCertificates` | a configured IdP certificate is not a valid X.509 certificate in PEM or base64 DER | check the provider configuration |
+| `staticCodeStrategy` without a payload | `static-code-without-payload` | `payload` | staticCodeStrategy requires a payload | check the provider configuration |
+| a callback server port that is not an integer in 0..65535 | `callback-port-invalid` | `port` | invalid callback server port: it must be an integer in 0..65535 | check the provider configuration |
+<!-- /generated:refusal-table configuration -->
 
 #### Relaying a refusal: `refusalWords`
 
@@ -2240,7 +2275,7 @@ surface. Code running in the same process that patches built-ins (say
 `Map.prototype.get`) or imports `dist/` files directly can change anything the
 package computes; no library can defend against that from inside the process.
 
-All error codes are defined in `@mcp-abap-adt/interfaces-auth` package as `TOKEN_PROVIDER_ERROR_CODES` — `CertificateMaterialError`'s is `CERTIFICATE_MATERIAL_ERROR`; `ClientAuthenticationError` and `ClientAuthenticationResultError` share `CLIENT_AUTHENTICATION_ERROR` — and `AssertionValidationError`'s as `ASSERTION_ERROR_CODES`.
+The legacy classes' error codes are defined in `@mcp-abap-adt/interfaces-auth` as `TOKEN_PROVIDER_ERROR_CODES` — `CertificateMaterialError`'s is `CERTIFICATE_MATERIAL_ERROR`; `ClientAuthenticationError` and `ClientAuthenticationResultError` share `CLIENT_AUTHENTICATION_ERROR` — and `AssertionValidationError`'s as `ASSERTION_ERROR_CODES`; since 6.0.0 no site throws those classes, and the `kind` of an `AuthProviderFailure`'s error replaces the code.
 
 ## Upgrading from 4.0 to 4.1
 

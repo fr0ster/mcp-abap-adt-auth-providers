@@ -284,9 +284,144 @@ function samlCandidatesTable() {
   return lines.join('\n');
 }
 
+/**
+ * "Configuration errors" (spec Appendix A.5, K6): each case, where it is
+ * thrown and the fields it names. A case whose words list its fields is
+ * rendered with one field and shown with `<fields>` in its place.
+ */
+function configurationTable() {
+  const lines = [
+    '| Thrown | `case` | `fields` | Reason | Hint |',
+    '|---|---|---|---|---|',
+  ];
+  const rows = {
+    'required-fields-missing': [
+      'a required field or collaborator is missing (`ClientCredentialsProvider`, `AuthorizationCodeProvider`, the UAA authorization URL, a SAML provider without `assertionValidator`)',
+      null,
+    ],
+    'client-secret-beside-client-authentication': [
+      'a token provider constructed with both',
+      ['clientSecret'],
+    ],
+    'saml-acs-required-with-authorization-url': [
+      'a SAML provider constructed with `authorizationUrl` and no `acsUrl`',
+      ['acsUrl'],
+    ],
+    'saml-idp-initiated-with-request-id': [
+      'a SAML provider constructed with `idpInitiated` and `authnRequestId` (`fields`: both), or a login that minted or declared a request ID (`fields`: `idpInitiated`)',
+      ['idpInitiated', 'authnRequestId'],
+    ],
+    'saml-shipped-validator-without-issuer': [
+      'a SAML provider constructed with a shipped validator and no `idpEntityId`',
+      ['idpEntityId'],
+    ],
+    'saml-token-endpoint-missing': [
+      'the SAML bearer exchange without `tokenUrl` or `uaaUrl`',
+      ['tokenUrl', 'uaaUrl'],
+    ],
+    'saml-idp-initiated-without-authorization-url': [
+      'a strategy asks for the URL of an `idpInitiated` login without `authorizationUrl`',
+      ['idpInitiated', 'authorizationUrl'],
+    ],
+    'saml-acs-mismatch': [
+      'the strategy listens, or listened, elsewhere than `acsUrl`; the two addresses are `diagnostics.configuredUri` / `strategyUri`',
+      ['acsUrl'],
+    ],
+    'saml-in-response-to-undeclared': [
+      'a SAML login with no request ID minted, declared or declared absent',
+      ['authnRequestId', 'idpInitiated'],
+    ],
+    'client-id-required-with-client-authentication': [
+      'a SAML exchange or refresh with a `clientAuthentication` and no `clientId`',
+      ['clientId'],
+    ],
+    'redirect-mismatch': [
+      "a pre-built `authorizationUrl` whose `redirect_uri` the strategy did not use; the two addresses are `diagnostics.configuredUri` / `strategyUri`",
+      ['authorizationUrl'],
+    ],
+    'oidc-discovery-needs-issuer': [
+      'an OIDC endpoint to discover and no `issuerUrl`',
+      ['issuerUrl'],
+    ],
+    'oidc-endpoint-missing': [
+      'an OIDC endpoint neither configured nor discovered (`authorizationEndpoint`, `tokenEndpoint` or `deviceAuthorizationEndpoint`)',
+      null,
+    ],
+    'certificate-pem-and-pfx': [
+      '`FileCertificateMaterialLoader`: PEM and PFX paths both given',
+      ['certPath', 'certPfxPath'],
+    ],
+    'certificate-files-missing': [
+      '`FileCertificateMaterialLoader`: neither a PFX nor a whole PEM pair',
+      ['certPfxPath', 'certPath', 'certKeyPath'],
+    ],
+    'basic-encoding-missing': [
+      "`clientSecretBasic` without `encoding: 'raw' | 'form'` (`allowed: 'basic-encoding'`)",
+      ['encoding'],
+    ],
+    'snc-partner-name-missing': [
+      '`SncLogonProvider` without `partnerName`',
+      ['partnerName'],
+    ],
+    'snc-qop-invalid': [
+      "`SncLogonProvider` with another `qop` (`allowed: 'snc-qop'`)",
+      ['qop'],
+    ],
+    'unsupported-sso-flow': [
+      '`SsoProviderFactory.create` with no provider for the protocol and flow',
+      [],
+    ],
+    'validator-clock-skew-invalid': [
+      'a shipped validator with a `clockSkewMs` that is not a non-negative integer',
+      ['clockSkewMs'],
+    ],
+    'validator-no-certificates': [
+      'a shipped validator with no `idpCertificates`',
+      ['idpCertificates'],
+    ],
+    'idp-certificate-invalid': [
+      'a shipped validator with a certificate that is neither PEM nor base64 DER, or no certificate',
+      ['idpCertificates'],
+    ],
+    'static-code-without-payload': [
+      '`staticCodeStrategy` without a payload',
+      ['payload'],
+    ],
+    'callback-port-invalid': [
+      'a callback server port that is not an integer in 0..65535',
+      ['port'],
+    ],
+  };
+  for (const [kase, [when, fields]] of each(
+    contract.CONFIG_CASES,
+    rows,
+    'configuration',
+  )) {
+    const words =
+      fields === null
+        ? render('configuration', { case: kase, fields: ['clientId'] })
+        : render('configuration', { case: kase, fields });
+    const reason =
+      fields === null
+        ? words.reason.replace('clientId', '`<fields>`')
+        : words.reason;
+    const named =
+      fields === null
+        ? '`<fields>`'
+        : fields.length === 0
+          ? '—'
+          : fields.map((field) => `\`${field}\``).join(', ');
+    lines.push(
+      `| ${cell(when)} | \`${kase}\` | ${named} | ${cell(reason)} | ${cell(words.hint ?? '')} |`,
+    );
+  }
+  return lines.join('\n');
+}
+
 export const TABLES = {
   rejected: rejectedTable,
   refusals: refusalsTable,
+  configuration: configurationTable,
   saml: samlTable,
   'saml-candidates': samlCandidatesTable,
 };
