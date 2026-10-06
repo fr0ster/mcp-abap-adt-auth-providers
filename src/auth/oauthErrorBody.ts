@@ -26,24 +26,45 @@ const JWT_SHAPE = /eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]*/g;
 const formDecoded = (value: string): string =>
   new URLSearchParams(`v=${value.replace(/&/g, '%26')}`).get('v') ?? value;
 
+/** `%XX` for one byte, either case of each hex digit. */
+const escapePattern = (byte: number): string =>
+  `%${[...byte.toString(16).toUpperCase().padStart(2, '0')]
+    .map((digit) =>
+      /[A-F]/.test(digit) ? `[${digit}${digit.toLowerCase()}]` : digit,
+    )
+    .join('')}`;
+
 /**
- * Every form a server may echo a secret in: as sent; as a request body
- * encodes it (URLSearchParams: + / = become %2B %2F %3D); percent-encoded;
- * and form-decoded — what a server decoding a raw `Basic` secret read
- * (UAA, Keycloak), and the original of a `'form'`-encoded one.
+ * One character in every form a server may echo it: as itself, or
+ * percent-escaped in any case (`%2F`, `%2f`, `%41` for `A` — a server may
+ * escape any character, unreserved ones included); a space also as `+`. So
+ * one pattern matches the value as sent, form-encoded,
+ * `encodeURIComponent`'d, escaped whole, and any mix of those.
  */
-function echoedForms(secret: string): string[] {
-  return [
-    secret,
-    new URLSearchParams({ s: secret }).toString().slice(2),
-    encodeURIComponent(secret),
-    formDecoded(secret),
-  ];
+function characterPattern(character: string): string {
+  const literal = escapeRegExp(character);
+  const escaped = [...Buffer.from(character, 'utf8')]
+    .map(escapePattern)
+    .join('');
+  const space = character === ' ' ? '|\\+' : '';
+  return `(?:${literal}|${escaped}${space})`;
+}
+
+/**
+ * Every value a server may echo a secret as: the secret itself and its
+ * form-decoding — what a server decoding a raw `Basic` secret read (UAA,
+ * Keycloak), and the original of a `'form'`-encoded one — each matched in any
+ * escaping (`characterPattern`).
+ */
+function echoedValues(secret: string): string[] {
+  return [secret, formDecoded(secret)];
 }
 
 /**
  * Replaces every secret the request itself sent (a refresh token, an
- * assertion, a client secret), in each form it may come back in.
+ * assertion, a client secret), in each form it may come back in — and then
+ * every base64 run of the text (either alphabet, any padding, escaped or not)
+ * that decodes to text holding one (`redactEncodedSecrets`).
  * Every known secret is redacted, however short: nothing guarantees a client
  * secret is long, and dropping a matching word from a diagnosis is the lesser
  * harm.
@@ -52,24 +73,134 @@ function redactKnownSecrets(
   text: string,
   secrets: readonly (string | undefined)[],
 ): string {
-  // Every form of every secret, longest first: a short one (a password, a
+  // Every value of every secret, longest first: a short one (a password, a
   // decoded secret) redacted inside a longer one (an assertion, the secret as
   // sent) would leave the rest of the longer one unrecognisable.
-  const forms = [
+  const values = [
     ...new Set(
       secrets
         .filter((secret): secret is string => !!secret)
-        .flatMap(echoedForms)
-        .filter((form) => form !== ''),
+        .flatMap(echoedValues)
+        .filter((value) => value !== ''),
     ),
   ].sort((a, b) => b.length - a.length);
-  if (forms.length === 0) return text;
-  // One pass over the original text: an alternation tries the longest form
+  if (values.length === 0) return text;
+  const pattern = values
+    .map((value) => [...value].map(characterPattern).join(''))
+    .join('|');
+  // One pass over the original text: an alternation tries the longest value
   // first at each position, and a marker it writes is never scanned again —
-  // replaced one form after another, a short form (`ed`) would be redacted
-  // inside the markers the longer ones left, and the text would grow per form.
-  const anyForm = new RegExp(forms.map(escapeRegExp).join('|'), 'g');
-  return text.replace(anyForm, '<redacted>');
+  // replaced one value after another, a short one (`ed`) would be redacted
+  // inside the markers the longer ones left, and the text would grow per value.
+  const redacted = text.replace(new RegExp(pattern, 'g'), REDACTED);
+  return redactEncodedSecrets(redacted, new RegExp(pattern));
+}
+
+const REDACTED = '<redacted>';
+
+/**
+ * A run of base64 in any form a server may echo it: either alphabet, any of
+ * its characters percent-escaped in any case, any padding, and broken by
+ * whitespace — a space (a form-decoded `+`), a tab, a line break (a server
+ * wrapping lines) — as itself or escaped (`%20`, `%09`, `%0A`, `%0D`).
+ */
+const BASE64_ESCAPE =
+  '%(?:3[0-9]|4[1-9A-Fa-f]|5[0-9Aa]|6[1-9A-Fa-f]|7[0-9Aa]|2[BbDdFf]|5[Ff])';
+const WHITESPACE = '[ \\t\\r\\n]|%(?:20|09|0[AaDd])';
+const BASE64_RUN = new RegExp(
+  `(?:[A-Za-z0-9+/_-]|${BASE64_ESCAPE}|${WHITESPACE})+(?:=|%3[Dd]){0,2}`,
+  'g',
+);
+/** Whitespace inside a run: where it is cut into pieces. */
+const BREAK = new RegExp(`(?:${WHITESPACE})+`, 'g');
+/** Whitespace around a run: the text's, not the run's. */
+const AROUND = new RegExp(
+  `^((?:${WHITESPACE})*)([\\s\\S]*?)((?:${WHITESPACE})*)$`,
+);
+/** Never more pieces than this are tried one span at a time. */
+const MAX_PIECES = 32;
+
+/**
+ * The run as plain base64 — escapes decoded, `+` and `/`, no padding — read
+ * both ways whitespace may have come in: dropped (a wrapped line) and as `+`
+ * (a form-decoded one).
+ */
+function normalized(run: string): string[] {
+  const unescaped = run
+    .replace(/%([0-9A-Fa-f]{2})/g, (_escape, hex: string) =>
+      String.fromCharCode(Number.parseInt(hex, 16)),
+    )
+    .replace(/-/g, '+')
+    .replace(/_/g, '/')
+    .replace(/=+$/, '');
+  return [
+    unescaped.replace(/[ \t\r\n]/g, ''),
+    unescaped.replace(/[\t\r\n]/g, '').replace(/ /g, '+'),
+  ];
+}
+
+/** True when the run, decoded from any of its four alignments, holds a secret. */
+function holdsSecret(run: string, secret: RegExp): boolean {
+  for (const plain of normalized(run)) {
+    for (let offset = 0; offset < 4 && offset < plain.length; offset++) {
+      const decoded = Buffer.from(plain.slice(offset), 'base64').toString(
+        'utf8',
+      );
+      if (secret.test(decoded)) return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Redacts the smallest span of whole pieces (a run split at its whitespace) that
+ * still holds a secret, then looks again on either side of it: a run may be
+ * a sentence around one credential.
+ */
+function redactRun(run: string, secret: RegExp): string {
+  if (!holdsSecret(run, secret)) return run;
+  const pieces: { start: number; end: number }[] = [];
+  let start = 0;
+  for (const space of run.matchAll(BREAK)) {
+    if (space.index > start) pieces.push({ start, end: space.index });
+    start = space.index + space[0].length;
+  }
+  if (start < run.length) pieces.push({ start, end: run.length });
+  if (pieces.length <= 1 || pieces.length > MAX_PIECES) return REDACTED;
+  for (let size = 1; size <= pieces.length; size++) {
+    for (let first = 0; first + size <= pieces.length; first++) {
+      const from = pieces[first]?.start ?? 0;
+      const to = pieces[first + size - 1]?.end ?? run.length;
+      if (holdsSecret(run.slice(from, to), secret)) {
+        return `${redactRun(run.slice(0, from), secret)}${REDACTED}${redactRun(run.slice(to), secret)}`;
+      }
+    }
+  }
+  return REDACTED;
+}
+
+/**
+ * Every base64 run of the text that decodes to text holding a secret: a
+ * server may echo a Basic credential, or base64-encode a secret, in any
+ * equivalent form — without padding, with other padding, URL-safe, escaped —
+ * which no fixed list of forms can enumerate. What is decoded is matched by
+ * the same pattern as the text itself.
+ */
+function redactEncodedSecrets(text: string, secret: RegExp): string {
+  // Between the markers only: a marker is never scanned again.
+  return text
+    .split(REDACTED)
+    .map((piece) => redactEncodedPiece(piece, secret))
+    .join(REDACTED);
+}
+
+function redactEncodedPiece(text: string, secret: RegExp): string {
+  return text.replace(BASE64_RUN, (run) => {
+    const [, before = '', core = '', after = ''] = AROUND.exec(run) ?? [];
+    return core.length < 2
+      ? run
+      : `${before}${redactRun(core, secret)}${after}`;
+  });
 }
 
 const escapeRegExp = (value: string): string =>

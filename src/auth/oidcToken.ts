@@ -7,11 +7,14 @@ import axios, { type AxiosResponse } from 'axios';
 import { readSafely } from './knownCodes';
 import { tlsFailureCode } from './refusal';
 import {
-  grantSecrets,
+  type LegacyBasic,
+  legacyBasic,
+  logQuietly,
   type PreparedTokenRequest,
   prepareTokenRequest,
   sendTokenRequest,
   type TokenRequestAuth,
+  type TokenRequestDiagnostics,
   tokenEndpointError,
 } from './tokenRequest';
 
@@ -23,31 +26,30 @@ export interface OidcTokenResponse {
   tokenType?: string | undefined;
 }
 
-function toBasicAuth(clientId: string, clientSecret: string): string {
-  return Buffer.from(`${clientId}:${clientSecret}`).toString('base64');
-}
-
-function buildAuthHeaders(
+/**
+ * Today's Basic header, when a secret is given and there is no strategy —
+ * built only through legacyBasic, so its secrets join every redaction.
+ */
+function todaysBasic(
+  prepared: PreparedTokenRequest | undefined,
   clientId: string,
-  clientSecret?: string,
-): Record<string, string> {
-  if (clientSecret !== undefined) {
-    return { Authorization: `Basic ${toBasicAuth(clientId, clientSecret)}` };
-  }
-  return {};
+  clientSecret: string | undefined,
+): LegacyBasic | undefined {
+  return !prepared && clientSecret !== undefined
+    ? legacyBasic(clientId, clientSecret)
+    : undefined;
 }
 
 /** Today's request: `params` as built (client_id included), Basic when a secret is given. */
 function sendAsToday(
   endpoint: string,
   params: URLSearchParams,
-  clientId: string,
-  clientSecret: string | undefined,
+  basic: LegacyBasic | undefined,
 ): Promise<AxiosResponse> {
   return axios.post(endpoint, params.toString(), {
     headers: {
       'Content-Type': 'application/x-www-form-urlencoded',
-      ...buildAuthHeaders(clientId, clientSecret),
+      ...(basic ? { Authorization: basic.header } : {}),
     },
     // A redirect would re-send the grant's secret (code, refresh token,
     // device code, password, subject token) and the client's: never followed.
@@ -76,6 +78,7 @@ function prepareWith(
 
 /** One request: through the strategy when there is one, else as today. */
 async function send(
+  diagnostics: TokenRequestDiagnostics,
   auth: TokenRequestAuth | undefined,
   endpoint: string,
   clientId: string,
@@ -86,10 +89,11 @@ async function send(
   const prepared = auth
     ? await prepareWith(auth, endpoint, clientId, grantType, params)
     : undefined;
+  const basic = todaysBasic(prepared, clientId, clientSecret);
   return sendTokenRequest(
     prepared,
-    () => sendAsToday(endpoint, params, clientId, clientSecret),
-    [clientSecret, ...grantSecrets(params)],
+    () => sendAsToday(endpoint, params, basic),
+    diagnostics,
   );
 }
 
@@ -139,6 +143,7 @@ export async function exchangeAuthorizationCode(
   });
 
   const response = await send(
+    { logger, label: 'OIDC authorization code exchange failed' },
     auth,
     tokenEndpoint,
     clientId,
@@ -166,6 +171,7 @@ export async function refreshOidcToken(
   logger?.info('[OIDC] Refreshing token', { tokenEndpoint });
 
   const response = await send(
+    { logger, label: 'OIDC token refresh failed' },
     auth,
     tokenEndpoint,
     clientId,
@@ -222,17 +228,13 @@ export async function initiateDeviceAuthorization(
           // Never followed, like every token request.
           maxRedirects: 0,
         }),
-      grantSecrets(params),
+      { logger, label: 'OIDC device authorization failed' },
     );
   } catch (error: unknown) {
     // Unwrapped, so the refusal can name the TLS code and its fixed hint.
     if (tlsFailureCode(error) !== undefined) throw error;
-    // Only `error` and `error_description`, with what the strategy sent
-    // redacted: a server may echo it; the safe facts as properties.
-    throw tokenEndpointError('OIDC device authorization failed', error, [
-      ...grantSecrets(params),
-      ...(prepared?.secrets ?? []),
-    ]);
+    // The safe facts only: the status and a registered code.
+    throw tokenEndpointError('OIDC device authorization failed', error);
   }
 
   const data = response.data;
@@ -275,11 +277,12 @@ export async function pollDeviceTokens(
           params,
         )
       : undefined;
+    const basic = todaysBasic(prepared, clientId, clientSecret);
     try {
       const response = await sendTokenRequest(
         prepared,
-        () => sendAsToday(tokenEndpoint, params, clientId, clientSecret),
-        [clientSecret, ...grantSecrets(params)],
+        () => sendAsToday(tokenEndpoint, params, basic),
+        { logger, label: 'OIDC device poll failed' },
       );
       return mapTokenResponse(response.data);
     } catch (error) {
@@ -291,7 +294,9 @@ export async function pollDeviceTokens(
         (errorCode === 'authorization_pending' || errorCode === 'slow_down')
       ) {
         const wait = errorCode === 'slow_down' ? interval + 5 : interval;
-        logger?.debug('[OIDC] Device authorization pending', { wait });
+        logQuietly(() =>
+          logger?.debug('[OIDC] Device authorization pending', { wait }),
+        );
         await new Promise((resolve) => setTimeout(resolve, wait * 1000));
         continue;
       }
@@ -325,24 +330,19 @@ export async function passwordGrant(
   const prepared = auth
     ? await prepareWith(auth, tokenEndpoint, clientId, 'password', params)
     : undefined;
+  const basic = todaysBasic(prepared, clientId, clientSecret);
   try {
     const response = await sendTokenRequest(
       prepared,
-      () => sendAsToday(tokenEndpoint, params, clientId, clientSecret),
-      [clientSecret, ...grantSecrets(params)],
+      () => sendAsToday(tokenEndpoint, params, basic),
+      { logger, label: 'OIDC password grant failed' },
     );
     return mapTokenResponse(response.data);
   } catch (error) {
     // Unwrapped, so the refusal can name the TLS code and its fixed hint.
     if (tlsFailureCode(error) !== undefined) throw error;
-    // Only `error` and `error_description`, with the password, the secret
-    // and what the strategy sent redacted: a server may echo them; the safe
-    // facts as properties.
-    throw tokenEndpointError('OIDC password grant failed', error, [
-      password,
-      clientSecret,
-      ...(prepared?.secrets ?? []),
-    ]);
+    // The safe facts only: the status and a registered code.
+    throw tokenEndpointError('OIDC password grant failed', error);
   }
 }
 
@@ -383,6 +383,7 @@ export async function tokenExchange(
   logger?.info('[OIDC] Performing token exchange', { tokenEndpoint });
 
   const response = await send(
+    { logger, label: 'OIDC token exchange failed' },
     auth,
     tokenEndpoint,
     clientId,

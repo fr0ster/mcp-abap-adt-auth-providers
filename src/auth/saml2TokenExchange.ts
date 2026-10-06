@@ -7,7 +7,9 @@ import axios, { type AxiosResponse } from 'axios';
 import { ValidationError } from '../errors/TokenProviderErrors';
 import { loggedError } from './refusal';
 import {
-  grantSecrets,
+  type LegacyBasic,
+  legacyBasic,
+  logQuietly,
   type PreparedTokenRequest,
   prepareTokenRequest,
   sendTokenRequest,
@@ -21,8 +23,18 @@ export interface Saml2TokenExchangeResponse {
   tokenType?: string;
 }
 
-function toBasicAuth(clientId: string, clientSecret: string): string {
-  return Buffer.from(`${clientId}:${clientSecret}`).toString('base64');
+/**
+ * Today's Basic header, when a secret is known and there is no strategy —
+ * built only through legacyBasic, so its secrets join every redaction.
+ */
+function todaysBasic(
+  prepared: PreparedTokenRequest | undefined,
+  clientId: string | undefined,
+  clientSecret: string | undefined,
+): LegacyBasic | undefined {
+  return !prepared && clientId && clientSecret
+    ? legacyBasic(clientId, clientSecret)
+    : undefined;
 }
 
 /** With a strategy: the grant parameters alone, authenticated by it. */
@@ -50,7 +62,7 @@ function sendAsToday(
   tokenUrl: string,
   grant: URLSearchParams,
   clientId: string | undefined,
-  clientSecret: string | undefined,
+  basic: LegacyBasic | undefined,
 ): Promise<AxiosResponse> {
   const params = new URLSearchParams(grant);
   if (clientId) {
@@ -59,8 +71,8 @@ function sendAsToday(
   const headers: Record<string, string> = {
     'Content-Type': 'application/x-www-form-urlencoded',
   };
-  if (clientId && clientSecret) {
-    headers.Authorization = `Basic ${toBasicAuth(clientId, clientSecret)}`;
+  if (basic) {
+    headers.Authorization = basic.header;
   }
   // A redirect would re-send the assertion or the refresh token, and the
   // secret: never followed.
@@ -82,6 +94,7 @@ export async function exchangeSamlAssertion(
   const prepared = auth
     ? await prepareWith(auth, tokenUrl, clientId, grantType, grant)
     : undefined;
+  const basic = todaysBasic(prepared, clientId, clientSecret);
 
   logger?.info('[SAML] Exchanging assertion for token', {
     tokenUrl: prepared?.config.url ?? tokenUrl,
@@ -91,16 +104,19 @@ export async function exchangeSamlAssertion(
   try {
     response = await sendTokenRequest(
       prepared,
-      () => sendAsToday(tokenUrl, grant, clientId, clientSecret),
-      [clientSecret, ...grantSecrets(grant)],
+      () => sendAsToday(tokenUrl, grant, clientId, basic),
+      { logger, label: '[SAML] Token exchange failed' },
     );
   } catch (error) {
     if (axios.isAxiosError(error)) {
       // The safe facts only (status, a registered code, an allowlisted
       // system code): not even a redacted description reaches the log.
-      logger?.error(
-        '[SAML] Token exchange failed',
-        loggedError(error, 'the SAML token exchange'),
+      // A logger that throws must not replace the safe rejection.
+      logQuietly(() =>
+        logger?.error(
+          '[SAML] Token exchange failed',
+          loggedError(error, 'the SAML token exchange'),
+        ),
       );
     }
     throw error;
@@ -139,6 +155,7 @@ export async function refreshSamlBearerToken(
   const prepared = auth
     ? await prepareWith(auth, tokenUrl, clientId, 'refresh_token', grant)
     : undefined;
+  const basic = todaysBasic(prepared, clientId, clientSecret);
 
   logger?.info('[SAML] Refreshing token', {
     tokenUrl: prepared?.config.url ?? tokenUrl,
@@ -148,16 +165,19 @@ export async function refreshSamlBearerToken(
   try {
     response = await sendTokenRequest(
       prepared,
-      () => sendAsToday(tokenUrl, grant, clientId, clientSecret),
-      [clientSecret, ...grantSecrets(grant)],
+      () => sendAsToday(tokenUrl, grant, clientId, basic),
+      { logger, label: '[SAML] Token refresh failed' },
     );
   } catch (error) {
     if (axios.isAxiosError(error)) {
       // The safe facts only (status, a registered code, an allowlisted
       // system code): not even a redacted description reaches the log.
-      logger?.error(
-        '[SAML] Token refresh failed',
-        loggedError(error, 'the SAML token refresh'),
+      // A logger that throws must not replace the safe rejection.
+      logQuietly(() =>
+        logger?.error(
+          '[SAML] Token refresh failed',
+          loggedError(error, 'the SAML token refresh'),
+        ),
       );
     }
     throw error;

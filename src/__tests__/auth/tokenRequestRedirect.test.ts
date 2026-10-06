@@ -296,10 +296,8 @@ describe('a 400 from the token endpoint that echoes the request', () => {
       expect(error.response?.status).toBe(400);
       // The reason phrase is the server's text: not kept (statusText '').
       expect(error.response?.statusText).toBe('');
-      expect(error.response?.data).toEqual({
-        error: 'invalid_grant',
-        error_description: 'refused',
-      });
+      // Only the registered code: the server's free text stays off the error.
+      expect(error.response?.data).toEqual({ error: 'invalid_grant' });
       expect(error.config).toBeUndefined();
       expect(error.request).toBeUndefined();
       expect(error.response?.config).toBeUndefined();

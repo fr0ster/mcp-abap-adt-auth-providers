@@ -10,6 +10,7 @@ import { generateKeyPairSync } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { Agent } from 'node:https';
 import { join } from 'node:path';
+import { inspect } from 'node:util';
 import { beforeEach, describe, expect, it, jest } from '@jest/globals';
 import type {
   ICertificateMaterial,
@@ -20,10 +21,12 @@ import type {
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
 import axios, { AxiosError } from 'axios';
 import { getTokenWithClientCredentials } from '../../auth/clientCredentialsAuth';
+import { oauthErrorFields } from '../../auth/oauthErrorBody';
 import {
   initiateDeviceAuthorization,
   passwordGrant,
   pollDeviceTokens,
+  refreshOidcToken,
 } from '../../auth/oidcToken';
 import { exchangePasscode } from '../../auth/passcodeAuth';
 import { refusalFrom } from '../../auth/refusal';
@@ -405,11 +408,14 @@ const ECHOED_SECRETS = [
 
 const ECHO_PREFIX = 'bad client secret';
 
-/** A token endpoint's 401 echoing `echoed`, and everything that came out of the call. */
+/**
+ * A token endpoint's 401 echoing `echoed`: what the thrown error says (every
+ * rendering of it) and what the logger was given.
+ */
 async function echoedOutput(
   echoed: string,
   run: (logger: ILogger) => Promise<unknown>,
-): Promise<string> {
+): Promise<{ error: string; logs: string; debug: string[] }> {
   const unauthorized = {
     isAxiosError: true,
     message: 'Request failed with status code 401',
@@ -426,38 +432,56 @@ async function echoedOutput(
   mockedAxios.mockRejectedValue(unauthorized);
   mockedAxios.post.mockRejectedValue(unauthorized);
   const lines: string[] = [];
+  const debug: string[] = [];
   const record = (message: string, meta?: unknown) =>
     lines.push(`${message} ${JSON.stringify(meta ?? {})}`);
   const logger = {
-    debug: record,
+    debug: (message: string, meta?: unknown) => {
+      record(message, meta);
+      debug.push(`${message} ${JSON.stringify(meta ?? {})}`);
+    },
     info: record,
     warn: record,
     error: record,
   } as ILogger;
   const error = await failureOf(run(logger));
-  return [
-    messageOf(error),
-    String(error),
-    JSON.stringify(error),
-    JSON.stringify(
-      (error as { response?: { data?: unknown } } | null)?.response?.data ??
-        null,
-    ),
-    ...lines,
-  ].join('\n');
+  return {
+    error: [
+      messageOf(error),
+      String(error),
+      JSON.stringify(error),
+      JSON.stringify(
+        (error as { response?: { data?: unknown } } | null)?.response?.data ??
+          null,
+      ),
+      inspect(error, { depth: null }),
+    ].join('\n'),
+    logs: lines.join('\n'),
+    debug,
+  };
 }
 
 /**
- * The echo is redacted whole, and nothing else is: the description reads
- * exactly the prefix and `<redacted>` — no tail of the secret left after a
- * prefix of it was redacted, no letter of the prefix redacted for a short
- * fragment of the secret.
+ * The server's description reaches no rendering of the thrown error and no
+ * log line. The redactor — called by no site in 5.4.2, kept as defence in
+ * depth — given the secrets the request carried, redacts the echo whole and
+ * nothing else: the description reads exactly the prefix and `<redacted>` —
+ * no tail of the secret left after a prefix of it was redacted, no letter of
+ * the prefix redacted for a short fragment of the secret.
  */
-function expectRedactedWhole(text: string, echoed: string): void {
-  expect(text).not.toContain(echoed);
-  expect(text).toContain(`${ECHO_PREFIX} <redacted>`);
-  // Followed only by a closing quote (plain or JSON-escaped), a space or the end.
-  expect(text).not.toMatch(/bad client secret <redacted>[^"\\\s]/);
+function expectRedactedWhole(
+  out: { error: string; logs: string; debug: string[] },
+  echoed: string,
+  secrets: string[],
+): void {
+  expect(out.error).not.toContain(ECHO_PREFIX);
+  expect(out.error).not.toContain(echoed);
+  expect(out.logs).not.toContain(ECHO_PREFIX);
+  expect(out.logs).not.toContain(echoed);
+  expect(
+    oauthErrorFields({ error_description: `${ECHO_PREFIX} ${echoed}` }, secrets)
+      ?.error_description,
+  ).toBe(`${ECHO_PREFIX} <redacted>`);
 }
 
 describe.each(SITES)(
@@ -470,16 +494,19 @@ describe.each(SITES)(
         ['raw: the secret as sent', 'raw', 'secret'],
         ['raw: the secret as the server decoded it', 'raw', 'rawDecoded'],
       ])(
-        '%s is in neither the message, the thrown error nor a log line',
+        '%s is in no rendering of the thrown error nor any log line, and the redactor removes it whole',
         async (_label, encoding, which) => {
           const echoed = c[which];
-          const text = await echoedOutput(echoed, (logger) =>
+          const out = await echoedOutput(echoed, (logger) =>
             site.run(
               { strategy: clientSecretBasic(c.secret, { encoding }) },
               logger,
             ),
           );
-          expectRedactedWhole(text, echoed);
+          // The secret as the strategy's Basic header carried it.
+          expectRedactedWhole(out, echoed, [
+            encoding === 'form' ? c.formSent : c.secret,
+          ]);
         },
       );
     });
@@ -495,13 +522,13 @@ describe.each(
       ['form-encoded', 'formSent'],
       ['as a decoding server read it', 'rawDecoded'],
     ])(
-      '%s is in neither the message, the thrown error nor a log line',
+      '%s is in no rendering of the thrown error nor any log line, and the redactor removes it whole',
       async (_label, which) => {
         const echoed = c[which];
-        const text = await echoedOutput(echoed, (logger) =>
+        const out = await echoedOutput(echoed, (logger) =>
           site.run(undefined, logger, c.secret),
         );
-        expectRedactedWhole(text, echoed);
+        expectRedactedWhole(out, echoed, [c.secret]);
       },
     );
   });
@@ -973,6 +1000,35 @@ describe('the server never reads back the password or the passcode', () => {
   const PASSCODE = 'PASSCODE-0123456789';
   const PASSWORD = 'pass-word-9876543210';
   const CLIENT_SECRET = 'client-secret-555555';
+  /** A logger keeping its debug lines. */
+  const debugging = () => {
+    const lines: string[] = [];
+    const logger = {
+      debug: (message: string, meta?: unknown) =>
+        lines.push(`${message} ${JSON.stringify(meta ?? {})}`),
+      info: () => {},
+      warn: () => {},
+      error: () => {},
+    } as ILogger;
+    return { logger, lines };
+  };
+  /**
+   * The message is the label and the status alone (the code is not a
+   * registered one); the server's words are in no line.
+   */
+  const expectRefusalNoted = (
+    thrown: unknown,
+    label: string,
+    lines: string[],
+    secrets: string[],
+  ) => {
+    expect(messageOf(thrown)).toBe(`${label} (401)`);
+    // One debug line of safe facts: the status; the code is not registered.
+    expect(lines).toEqual([
+      `${label}: the token endpoint refused the request {"status":401}`,
+    ]);
+    for (const secret of secrets) expect(lines[0]).not.toContain(secret);
+  };
 
   it.each([
     ['as today', undefined],
@@ -980,21 +1036,21 @@ describe('the server never reads back the password or the passcode', () => {
   ])('passcode, %s', async (_label, auth) => {
     mockedAxios.post.mockRejectedValue(echoing([PASSCODE, CLIENT_SECRET]));
     mockedAxios.mockRejectedValue(echoing([PASSCODE, CLIENT_SECRET]));
+    const { logger, lines } = debugging();
     const thrown = await failureOf(
       exchangePasscode(
         'https://uaa',
         'cid',
         auth ? undefined : CLIENT_SECRET,
         PASSCODE,
-        undefined,
+        logger,
         auth,
       ),
     );
-    const message = messageOf(thrown);
-    expect(message).toContain('Passcode exchange failed (401)');
-    expect(message).toContain('refused');
-    expect(message).not.toContain(PASSCODE);
-    expect(message).not.toContain(CLIENT_SECRET);
+    expectRefusalNoted(thrown, 'Passcode exchange failed', lines, [
+      PASSCODE,
+      CLIENT_SECRET,
+    ]);
   });
 
   it.each([
@@ -1003,6 +1059,7 @@ describe('the server never reads back the password or the passcode', () => {
   ])('password grant, %s', async (_label, auth) => {
     mockedAxios.post.mockRejectedValue(echoing([PASSWORD, CLIENT_SECRET]));
     mockedAxios.mockRejectedValue(echoing([PASSWORD, CLIENT_SECRET]));
+    const { logger, lines } = debugging();
     const thrown = await failureOf(
       passwordGrant(
         OIDC,
@@ -1011,43 +1068,41 @@ describe('the server never reads back the password or the passcode', () => {
         'user',
         PASSWORD,
         undefined,
-        undefined,
+        logger,
         auth,
       ),
     );
-    const message = messageOf(thrown);
-    expect(message).toContain('OIDC password grant failed (401)');
-    expect(message).toContain('refused');
-    expect(message).not.toContain(PASSWORD);
-    expect(message).not.toContain(CLIENT_SECRET);
+    expectRefusalNoted(thrown, 'OIDC password grant failed', lines, [
+      PASSWORD,
+      CLIENT_SECRET,
+    ]);
   });
 
-  it("device authorization: the OAuth summary in the message, the strategy's secret redacted", async () => {
+  it("device authorization: the server's words only in the debug line, the strategy's secret redacted", async () => {
     mockedAxios.mockRejectedValue(echoing([CLIENT_SECRET]));
+    const { logger, lines } = debugging();
     const thrown = await failureOf(
       initiateDeviceAuthorization(
         'https://idp/device-auth',
         'cid',
         'openid',
-        undefined,
-        { strategy: clientSecretPost(CLIENT_SECRET) },
+        logger,
+        {
+          strategy: clientSecretPost(CLIENT_SECRET),
+        },
       ),
     );
-    const message = messageOf(thrown);
-    expect(message).toContain('OIDC device authorization failed (401)');
-    expect(message).toContain('unauthorized');
-    expect(message).toContain('refused');
-    expect(message).not.toContain(CLIENT_SECRET);
+    expectRefusalNoted(thrown, 'OIDC device authorization failed', lines, [
+      CLIENT_SECRET,
+    ]);
   });
 
-  it('device authorization as today: the OAuth summary in the message', async () => {
+  it('device authorization as today, with no logger: the status alone, no line', async () => {
     mockedAxios.post.mockRejectedValue(echoing([]));
     const thrown = await failureOf(
       initiateDeviceAuthorization('https://idp/device-auth', 'cid', 'openid'),
     );
-    expect(messageOf(thrown)).toMatch(
-      /^OIDC device authorization failed \(401\): .*unauthorized.*refused/,
-    );
+    expect(messageOf(thrown)).toBe('OIDC device authorization failed (401)');
   });
 
   it.each([
@@ -1108,15 +1163,18 @@ describe.each(SITES)('$name: the error body on the thrown object', (site) => {
       },
     },
   });
+  /**
+   * Only the registered code stays, wherever the body is kept: never the
+   * server's description or URI, in no rendering of the error.
+   */
   const onlyOAuthFields = (thrown: unknown) => {
     const data = (thrown as { response?: { data?: unknown } }).response?.data;
     if (data !== undefined) {
-      expect(
-        Object.keys(data as object).every((k) =>
-          ['error', 'error_description', 'error_uri'].includes(k),
-        ),
-      ).toBe(true);
+      expect(data).toEqual({ error: 'invalid_grant' });
     }
+    const text = `${serialized(thrown)}\n${String(thrown)}\n${inspect(thrown, { depth: null })}`;
+    expect(text).not.toContain('refused');
+    expect(text).not.toContain('docs.example');
   };
 
   it('with a strategy: only the OAuth fields, nothing the strategy sent', async () => {
@@ -1262,7 +1320,7 @@ describe('a registered error code is never rewritten by redaction', () => {
       { strategy: clientSecretPost('S3cr3t-value') },
     ],
   ])(
-    '%s: an unregistered error carrying a secret, and the description, are still redacted',
+    '%s: an unregistered error and the free text stay off the error and the log',
     async (_label, secret, auth) => {
       const body = failing({
         error: 'custom_S3cr3t-value',
@@ -1271,18 +1329,23 @@ describe('a registered error code is never rewritten by redaction', () => {
       });
       mockedAxios.mockRejectedValueOnce(body);
       mockedAxios.post.mockRejectedValueOnce(body);
+      const lines: unknown[] = [];
+      const logger = {
+        debug: (_message: string, meta?: unknown) => lines.push(meta),
+        info: () => {},
+        warn: () => {},
+        error: () => {},
+      } as ILogger;
       const thrown = (await failureOf(
-        pollDeviceTokens(OIDC, 'cid', secret, 'dc', 0, undefined, auth),
+        pollDeviceTokens(OIDC, 'cid', secret, 'dc', 0, logger, auth),
       )) as { response: { data: Record<string, string> } };
-      expect(thrown.response.data).toEqual({
-        error: 'custom_<redacted>',
-        error_description: 'refused <redacted>',
-        error_uri: 'https://idp/err?<redacted>',
-      });
+      expect(thrown.response.data).toEqual({});
+      // Safe facts only: the status; the unregistered code is dropped.
+      expect(lines).toEqual([{ status: 400 }]);
     },
   );
 
-  it('a registered code is kept, its description redacted, in a message too', async () => {
+  it("a registered code is the message's only word from the server", async () => {
     mockedAxios.mockRejectedValueOnce(
       failing({ error: 'invalid_grant', error_description: 'bad a' }),
     );
@@ -1291,10 +1354,29 @@ describe('a registered error code is never rewritten by redaction', () => {
         strategy: clientSecretPost('a'),
       }),
     );
-    const message = messageOf(error);
-    expect(message).toMatch(
-      /^OIDC password grant failed \(400\): "invalid_grant": "b<red/,
+    expect(messageOf(error)).toBe(
+      'OIDC password grant failed (400): invalid_grant',
     );
-    expect(message).not.toContain('bad a');
   });
+
+  it.each([
+    ['as today', 'sec', undefined],
+    ['with a strategy', undefined, { strategy: clientSecretPost('sec') }],
+  ])(
+    '%s: a consumer reading err.response.data.error still gets the registered code, and nothing else',
+    async (_label, secret, auth) => {
+      const body = failing({
+        error: 'invalid_grant',
+        error_description: 'refresh token expired',
+        error_uri: 'https://idp/err',
+      });
+      mockedAxios.mockRejectedValueOnce(body);
+      mockedAxios.post.mockRejectedValueOnce(body);
+      const thrown = (await failureOf(
+        refreshOidcToken(OIDC, 'cid', secret, 'rt', undefined, auth),
+      )) as { response: { data: Record<string, string> } };
+      expect(thrown.response.data.error).toBe('invalid_grant');
+      expect(thrown.response.data).toEqual({ error: 'invalid_grant' });
+    },
+  );
 });

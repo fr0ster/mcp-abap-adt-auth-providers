@@ -3,8 +3,8 @@
  * properties — the HTTP `status`, an allowlisted system or TLS `code`, and the
  * OAuth `error` when it is a registered code (`oauthError`). The server's
  * description, an unregistered code and the transport's text are never
- * properties; the message names only the status and the OAuth summary the
- * site already redacted (`describeOAuthErrorBody`), or fixed words.
+ * properties; the message names only the status and a registered code, or
+ * fixed words.
  *
  * The constructor keeps a fact only when it passes its allowlist — an integer
  * status, an allowlisted code, a registered OAuth / OIDC code — so the

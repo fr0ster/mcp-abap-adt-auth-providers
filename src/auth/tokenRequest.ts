@@ -30,20 +30,18 @@ import type {
   ITokenRequestAuthentication,
   ITokenRequestDraft,
 } from '@mcp-abap-adt/interfaces-auth';
+import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
 import axios, {
   AxiosError,
   type AxiosRequestConfig,
   type AxiosResponse,
+  CanceledError,
 } from 'axios';
 import { ClientAuthenticationResultError } from '../errors/ClientAuthenticationError';
 import { TokenEndpointError } from '../errors/TokenEndpointError';
 import { assertNotExpired } from './certificateMaterial';
 import { allowlistedCode, integerStatus, readSafely } from './knownCodes';
-import {
-  describeOAuthErrorBody,
-  type OAuthErrorFields,
-  oauthErrorFields,
-} from './oauthErrorBody';
+import { type OAuthErrorFields, registeredOAuthError } from './oauthErrorBody';
 import { loggedError } from './refusal';
 
 /** What a site is given to authenticate one request with a strategy. */
@@ -176,6 +174,31 @@ function basicSecrets(headers: Record<string, string>): string[] {
 }
 
 /**
+ * A site's own `Authorization: Basic` header on the path without a strategy,
+ * with the secrets a server echoing it would hand back.
+ */
+export interface LegacyBasic {
+  /** `Basic ${base64(id:secret)}`. */
+  readonly header: string;
+  /** What `basicSecrets()` extracts from it: the base64 credential and the secret. */
+  readonly secrets: readonly string[];
+}
+
+/**
+ * The one place a site without a strategy builds its Basic header. Its
+ * secrets come from the same `basicSecrets()` a strategy's Basic credential
+ * goes through, for any redaction of what a server says back — 5.4.2 writes
+ * none of the server's words anywhere, so nothing reads them yet.
+ */
+export function legacyBasic(
+  clientId: string,
+  clientSecret: string,
+): LegacyBasic {
+  const header = `Basic ${Buffer.from(`${clientId}:${clientSecret}`).toString('base64')}`;
+  return { header, secrets: basicSecrets({ Authorization: header }) };
+}
+
+/**
  * Asks the strategy, checks what it returned, and assembles the request. Throws
  * — before anything is sent — whatever the strategy threw, or a
  * `ClientAuthenticationResultError` for a result that cannot be sent.
@@ -285,61 +308,156 @@ export interface TokenRequestFailure extends Error {
  * sites read and nothing else: a rebuilt `message` (axios's "Request failed
  * with status code N", or fixed words with the code), `code`, `status`, and a
  * response of `status`, an empty `statusText` (the reason phrase is the
- * server's text), empty `headers` and `data` reduced to the OAuth
- * error fields with every known secret redacted (`oauthErrorFields`): a server
- * may echo the request, or put a token there. No `config`, `request` or
+ * server's text), empty `headers` and `data` reduced to the OAuth `error`
+ * when it is a registered code — the server's free text (`error_description`,
+ * `error_uri`) and an unregistered code are dropped: a server may echo the
+ * request in them, in encodings no redaction can enumerate. They reach no
+ * error and no log line. No `config`, `request` or
  * `cause` is set, so `toJSON()`, which reads `this.config`, serialises none.
+ * Not only an axios failure: every rejection is replaced (`reduce`).
  */
-function withoutRequest(
-  error: unknown,
-  secrets: readonly (string | undefined)[],
-): unknown {
+export function withoutRequest(error: unknown): AxiosError {
   try {
-    return reduce(error, secrets);
+    return reduce(error);
   } catch {
-    // A value whose reading throws: nothing of it is kept.
+    // Nothing of a value whose reading throws is kept.
     return new AxiosError('the token request failed');
   }
 }
 
-function reduce(
-  error: unknown,
-  secrets: readonly (string | undefined)[],
-): unknown {
-  if (!error || typeof error !== 'object') return error;
-  const raw = error as Record<string, unknown>;
-  if (!('config' in raw) && !('request' in raw) && !('response' in raw)) {
-    return error;
+/**
+ * Every rejection is replaced, whatever it is: an axios failure, or anything
+ * else that reached the request's promise — a consumer's response
+ * interceptor throwing the server's `error_description`, a primitive, a
+ * Proxy, an object whose getters throw. Only facts read through `readSafely`
+ * and validated survive: an integer status, an allowlisted code, a registered
+ * OAuth `error`. The original is never kept, not even as `cause` (which
+ * `util.inspect` prints).
+ */
+/** axios's own error codes: its fixed words, kept on the replacement. */
+const AXIOS_CODES: ReadonlySet<string> = new Set([
+  AxiosError.ERR_FR_TOO_MANY_REDIRECTS,
+  AxiosError.ERR_BAD_OPTION_VALUE,
+  AxiosError.ERR_BAD_OPTION,
+  AxiosError.ERR_NETWORK,
+  AxiosError.ERR_DEPRECATED,
+  AxiosError.ERR_BAD_RESPONSE,
+  AxiosError.ERR_BAD_REQUEST,
+  AxiosError.ERR_NOT_SUPPORT,
+  AxiosError.ERR_INVALID_URL,
+  AxiosError.ERR_CANCELED,
+  AxiosError.ECONNABORTED,
+  AxiosError.ETIMEDOUT,
+]);
+
+function reduce(error: unknown): AxiosError {
+  // A cancellation stays one — `axios.isCancel` and `axios.isAxiosError`
+  // both hold — in fixed words, with nothing of the original.
+  if (readSafely(error, '__CANCEL__') === true) {
+    return new CanceledError('the token request was canceled');
   }
-  const code = typeof raw.code === 'string' ? raw.code : undefined;
-  const namedCode = allowlistedCode(code);
-  const response = raw.response as Record<string, unknown> | undefined;
+  const rawCode = readSafely(error, 'code');
+  const namedCode = allowlistedCode(rawCode);
+  const code =
+    namedCode ??
+    (typeof rawCode === 'string' && AXIOS_CODES.has(rawCode)
+      ? rawCode
+      : undefined);
+  const response = readSafely(error, 'response');
+  const hasResponse = !!response && typeof response === 'object';
   const status =
-    response && typeof response === 'object' ? response.status : undefined;
+    integerStatus(readSafely(response, 'status')) ??
+    integerStatus(readSafely(error, 'status'));
   // The message is rebuilt, never copied: axios's own words for a status, else
   // fixed words with the code. Nothing of the server (a reason phrase, a body)
   // or of the request (a URL) can be in it.
   const message =
-    typeof status === 'number'
+    status !== undefined
       ? `Request failed with status code ${status}`
       : `the token request failed${namedCode ? ` (${namedCode})` : ''}`;
   // AxiosResponse requires a config, and this one has none on purpose: the
   // config carries the agent's key, the form body and Authorization.
-  const reduced =
-    response && typeof response === 'object'
-      ? ({
-          status,
-          // The reason phrase is the server's free text: it may echo a secret.
-          statusText: '',
-          headers: {},
-          data: oauthErrorFields(response.data, secrets),
-        } as unknown as AxiosResponse)
-      : undefined;
+  const reduced = hasResponse
+    ? ({
+        status,
+        // The reason phrase is the server's free text: it may echo a secret.
+        statusText: '',
+        headers: {},
+        data: registeredOnly(readSafely(response, 'data')),
+      } as unknown as AxiosResponse)
+    : undefined;
   const failure = new AxiosError(message, code, undefined, undefined, reduced);
-  if (failure.status === undefined && typeof raw.status === 'number') {
-    failure.status = raw.status;
+  if (failure.status === undefined && status !== undefined) {
+    failure.status = status;
   }
   return failure;
+}
+
+/**
+ * What of an error body stays on a thrown error: the OAuth `error` when it is
+ * a registered code (a consumer, and the device poll, read it), nothing else;
+ * a body that is not an object becomes undefined.
+ */
+function registeredOnly(data: unknown): OAuthErrorFields | undefined {
+  if (!data || typeof data !== 'object') return undefined;
+  const error = registeredOAuthError(readSafely(data, 'error'));
+  return error === undefined ? {} : { error };
+}
+
+/**
+ * Runs a log call for a token site where a logger that throws must change
+ * nothing: inside a catch, the failure the site rethrows — already replaced
+ * by safe facts — must not be replaced by whatever the consumer's logger
+ * threw.
+ */
+export function logQuietly(write: () => void): void {
+  try {
+    write();
+  } catch {
+    // The site's own outcome is what the caller needs.
+  }
+}
+
+/** Where a site's failed request is noted: one debug line of safe facts. */
+export interface TokenRequestDiagnostics {
+  /** The site's logger; without one, no line. */
+  readonly logger?: ILogger | null | undefined;
+  /** The site, naming the line. */
+  readonly label: string;
+}
+
+/** The device poll's answers while it waits: the protocol, not a failure. */
+const WAITING = new Set(['authorization_pending', 'slow_down']);
+
+/**
+ * A failed request in one `debug` line through the site's logger: the HTTP
+ * status and the OAuth `error` when it is a registered code — never the
+ * server's free text (`error_description`, `error_uri`), which may echo any
+ * secret of the request in an encoding no redaction can enumerate, nor an
+ * unregistered code. No line for the device poll's waiting answers, none
+ * without a logger; a logger that throws is ignored, so the failure the site
+ * throws is never replaced.
+ */
+export function logRefusedRequest(
+  diagnostics: TokenRequestDiagnostics | undefined,
+  status: unknown,
+  data: unknown,
+): void {
+  const logger = diagnostics?.logger;
+  if (!logger) return;
+  try {
+    const error = registeredOAuthError(readSafely(data, 'error'));
+    if (error !== undefined && WAITING.has(error)) return;
+    logger.debug(
+      `${diagnostics.label}: the token endpoint refused the request`,
+      {
+        status: integerStatus(status),
+        ...(error === undefined ? {} : { error }),
+      },
+    );
+  } catch {
+    // The site's failure is what the caller needs.
+  }
 }
 
 /**
@@ -347,19 +465,76 @@ function reduce(
  * site's own `asToday` — and on failure throws it without the request
  * (`withoutRequest`). The request itself is not changed on either path.
  *
- * @param sent the secrets the site itself put in the request (a refresh
- *   token, a code, an assertion, a client secret); with what the strategy
- *   added, they are redacted from the error body that stays on the error.
+ * @param diagnostics where the failure is noted (`logRefusedRequest`): safe
+ *   facts only, like the thrown error.
  */
 export async function sendTokenRequest<T>(
   prepared: PreparedTokenRequest | undefined,
   asToday: () => Promise<AxiosResponse<T>>,
-  sent: readonly (string | undefined)[] = [],
+  diagnostics?: TokenRequestDiagnostics,
 ): Promise<AxiosResponse<T>> {
+  let response: unknown;
   try {
-    return prepared ? await axios<T>(prepared.config) : await asToday();
+    response = prepared ? await axios<T>(prepared.config) : await asToday();
   } catch (error) {
-    throw withoutRequest(error, [...sent, ...(prepared?.secrets ?? [])]);
+    const response = readSafely(error, 'response');
+    logRefusedRequest(
+      diagnostics,
+      readSafely(response, 'status'),
+      readSafely(response, 'data'),
+    );
+    throw withoutRequest(error);
+  }
+  return snapshotOf<T>(response);
+}
+
+/**
+ * The fields a token site reads from an answer: the token response's (RFC
+ * 6749 §5.1, OIDC Core §3.1.3.3), the device authorization response's (RFC
+ * 8628 §3.2) and the OAuth `error`.
+ */
+const ANSWER_FIELDS = [
+  'access_token',
+  'refresh_token',
+  'id_token',
+  'token_type',
+  'expires_in',
+  'scope',
+  'device_code',
+  'user_code',
+  'verification_uri',
+  'verification_uri_complete',
+  'interval',
+  'error',
+] as const;
+
+/**
+ * What a site may read of a successful answer: an integer status and a plain
+ * object of the expected fields that are strings or numbers, each read
+ * through `readSafely` — never the object axios (or a consumer's response
+ * interceptor) handed over, whose getters, Proxy traps or `toJSON` could
+ * throw the server's text into a site's parsing. A field whose read throws
+ * reads as absent; anything that still throws here is replaced by a safe
+ * error with no cause.
+ */
+function snapshotOf<T>(response: unknown): AxiosResponse<T> {
+  try {
+    const raw = readSafely(response, 'data');
+    const data: Record<string, string | number> = {};
+    for (const field of ANSWER_FIELDS) {
+      const value = readSafely(raw, field);
+      if (typeof value === 'string' || typeof value === 'number') {
+        data[field] = value;
+      }
+    }
+    return {
+      status: integerStatus(readSafely(response, 'status')),
+      statusText: '',
+      headers: {},
+      data,
+    } as unknown as AxiosResponse<T>;
+  } catch {
+    throw new AxiosError('the token request failed');
   }
 }
 
@@ -367,24 +542,26 @@ export async function sendTokenRequest<T>(
  * A failed token request as a site rethrows it: a `TokenEndpointError`
  * carrying the safe facts — the HTTP status, the OAuth `error` when it is a
  * registered code, an allowlisted system code — so a refusal and a log line
- * can name them. With a response, the message is `<label> (<status>): ` and
- * the OAuth summary with every known secret redacted (`describeOAuthErrorBody`);
- * without one, `<label>: ` and fixed words (`loggedError`). The original is the
- * cause.
+ * can name them. With a response, the message is `<label> (<status>)` and,
+ * when the server gave a registered code, `: <code>`; the server's
+ * description never.
+ * Without one, `<label>: ` and fixed words (`loggedError`). The cause is
+ * what `sendTokenRequest` threw: its safe replacement, never the original.
  */
 export function tokenEndpointError(
   label: string,
   error: unknown,
-  secrets: readonly (string | undefined)[],
 ): TokenEndpointError {
   // Guarded reads: a getter or a Proxy reads as absent.
   const response = readSafely(error, 'response');
   const status = integerStatus(readSafely(response, 'status'));
   if (status !== undefined) {
-    const data = readSafely(response, 'data');
+    const oauthError = registeredOAuthError(
+      readSafely(readSafely(response, 'data'), 'error'),
+    );
     return new TokenEndpointError(
-      `${label} (${status}): ${describeOAuthErrorBody(data, secrets)}`,
-      { status, oauthError: readSafely(data, 'error') },
+      `${label} (${status})${oauthError === undefined ? '' : `: ${oauthError}`}`,
+      { status, oauthError },
       { cause: error },
     );
   }

@@ -573,12 +573,24 @@ public client that sends only `client_id`.
   `ClientAuthenticationResultError`, refused as *the client authentication
   returned a request that cannot be sent*. Only `client_secret`,
   `client_assertion` and a Basic credential are known to be secrets and
-  redacted from an error body. Every secret is redacted as sent, encoded and
-  form-decoded (the whole value: `&` and `=` are part of it, a malformed `%`
-  stays) — so with either `encoding`, and for a `clientSecret` sent without a
+  redacted from what the server said — which, since 5.4.2, the package
+  writes nowhere: not on a thrown error, not in a log line; the redaction
+  stays as defence in depth. Every secret is redacted as sent, encoded —
+  each character, unreserved ones included, as itself or percent-escaped in
+  either case, a space also as `+` — and form-decoded (the whole value: `&`
+  and `=` are part of it, a malformed `%` stays), and any base64 in the body
+  (either alphabet, any padding, escaped or not, broken by spaces, tabs or
+  line breaks) that decodes to text holding a secret is redacted too (since
+  5.4.2). Limits: an escape escaped again
+  (`%252F`) and an echo truncated inside a secret are not recognised, and a
+  secret of one or two characters is redacted wherever it appears, unrelated
+  words included — so with either `encoding`, and for a `clientSecret` sent without a
   strategy, neither the original, the encoded secret nor what a decoding
-  server read survives its echo; a secret your strategy puts in any other
-  parameter or header is not recognised as one.
+  server read survives its echo. Without a strategy, the Basic header a
+  provider builds from `clientId` and `clientSecret` is redacted the same way
+  — its base64 credential and its secret (since 5.4.2; earlier versions left
+  an echoed base64 credential, from which `id:secret` decodes). A secret your
+  strategy puts in any other parameter or header is not recognised as one.
 
 ```typescript
 import { readFile } from 'node:fs/promises';
@@ -692,8 +704,13 @@ const user = new OidcPasswordProvider({
   (`Request failed with status code N`, or `the token request failed (<code>)`
   when no response came), and a `response` of `status`, an empty `statusText`
   (the reason phrase is the server's free text), empty `headers` and the
-  server's body reduced to `error`, `error_description` and `error_uri`, with
-  every secret the request sent redacted.
+  server's body reduced to `error` when it is a registered OAuth code
+  (`err.response.data.error` still reads `invalid_grant`), and to `{}`
+  otherwise. Since 5.4.2 the server's `error_description` and `error_uri` go
+  nowhere — no thrown error, no log line: a hostile server can echo any
+  secret of the request in them. A failed request is noted in one `debug`
+  line through the provider's logger with the same safe facts (`<site>: the
+  token endpoint refused the request`, `{ status, error? }`).
 
 #### `clientSecretBasic`'s `encoding`
 
@@ -1798,10 +1815,10 @@ const provider = new UaaPasscodeProvider({
 
 The exchange is the password grant with `passcode` instead of a username and
 password — a UAA extension, not an RFC. A code is single-use; a mistyped or
-spent one fails with `Passcode exchange failed (401): "unauthorized": "Invalid passcode"`
-— the server's `error` and `error_description`, with the passcode, the client
-secret and what a client-authentication strategy sent redacted if the server
-echoes them.
+spent one fails with `Passcode exchange failed (401)` — the message names the
+status, and the OAuth `error` only when it is a registered code (UAA's
+`unauthorized` is not). What UAA said (`"Invalid passcode"`) is written
+nowhere: the server's free text may echo the passcode or the client secret.
 
 #### Device flow prompts
 
@@ -2058,7 +2075,7 @@ try {
 - `TokenProviderError` - Base class with `code: string` property
 - `ValidationError` - provider config validation failed, includes `missingFields: string[]`
 - `BrowserAuthError` - a browser login failed (timeout, the identity provider's refusal, a busy callback port, a browser that would not open, an abort), includes `cause?: Error`; thrown by every browser strategy (`browserCallbackStrategy`, `oidcCallbackStrategy`, `samlCallbackStrategy`). Its message keeps this package's own words (the timeout, "Port N is already in use", an abort); the identity provider's refusal names only its registered code (`the identity provider refused the login (consent_required)`), never `error_description`; for anything else — a custom transport's or launcher's error — it is fixed words (`the browser login failed (unknown error)`, with an allowlisted code when there is one) and the original is `cause`, since the foreign text may hold a secret and the message is what gets logged
-- `TokenEndpointError` - a token request failed at a site that wraps it (UAA refresh, client credentials, passcode, OIDC device initiation, password grant); a plain `Error`, not a `TokenProviderError`; carries `status`, `oauthError` (a registered OAuth / OIDC code only) and `code` (an allowlisted system or TLS code only), the original as `cause`
+- `TokenEndpointError` - a token request failed at a site that wraps it (UAA refresh, client credentials, passcode, OIDC device initiation, password grant); a plain `Error`, not a `TokenProviderError`; carries `status`, `oauthError` (a registered OAuth / OIDC code only) and `code` (an allowlisted system or TLS code only); its `cause` is the safe `AxiosError` the request was reduced to, never what the request rejected with (since 5.4.2)
 - `RefreshError`, `SessionDataError`, `ServiceKeyError` - exported, but no provider throws them: a refused refresh falls back to a login inside `getTokens()`/`refreshTokens()`, and sessions and service keys are read by `@mcp-abap-adt/auth-stores`, not here
 - `AssertionValidationError` - a SAML assertion was refused, includes `check: AssertionCheck` naming the check that failed — see [SAML assertion validation](#errors)
 - `CertificateMaterialError` - client certificate material cannot be used, includes `incomplete: boolean` (no PFX and not both a certificate and its key, versus material no TLS context accepts); its message is fixed and carries nothing of the material. Thrown by `tlsClientCertificate` and by a provider pinning a strategy's certificate. Its `words` getter is deprecated: use `refusalWords` (the package never reads `words` from a thrown value, since any object can carry its own)
@@ -2066,9 +2083,18 @@ try {
 - `ClientAuthenticationResultError` - what a client authentication strategy returned cannot be sent (a non-string value, a header with a line break, a parameter or header replacing the request's own, an endpoint that is not an absolute `https:` URL); thrown before anything is sent, fixed message
 
 A failed token request throws without the request it sent — no form body, no
-`Authorization` header, no TLS agent — and with the server's body reduced to
-`error`, `error_description` and `error_uri`, every secret the request sent
-redacted.
+`Authorization` header, no TLS agent — and never with what its promise
+rejected with: anything that reached it (an axios failure, or what a global
+response interceptor of yours threw — the server's text, a primitive, an
+object with throwing getters) is replaced by a fresh `AxiosError` of fixed
+words, an integer status and an allowlisted code — an aborted request by a
+`CanceledError`, so `axios.isCancel` still holds — and a successful answer is
+read only as a snapshot of its expected string and number fields, so a
+response interceptor's hostile data cannot throw through either (since
+5.4.2); and with the server's body reduced to
+its `error` when that is a registered OAuth code; the server's
+`error_description` and `error_uri` go nowhere — no error, no log line
+(since 5.4.2).
 
 #### Relaying a refusal: `refusalWords`
 
@@ -2648,7 +2674,7 @@ Example output:
 ```
 
 **Logging Features**:
-- **No tokens in logs**: a token the provider holds or sent is never logged, not even in part. A log line carries only `<redacted, N chars>` (since 4.1.2; earlier versions logged a short refresh token whole). A token endpoint's error body contributes only `error` and `error_description`, with the request's secrets and anything shaped like a JWT redacted. An `error` that is a registered OAuth error code (`invalid_grant`, `authorization_pending`, `slow_down`, …) is kept verbatim: it is a protocol word, and the device poll reads it. A new opaque token that a server writes into `error_description` cannot be recognised and passes through, capped at 512 characters.
+- **No tokens in logs**: a token the provider holds or sent is never logged, not even in part. A log line carries only `<redacted, N chars>` (since 4.1.2; earlier versions logged a short refresh token whole). Since 5.4.2 a token endpoint's error body contributes only a registered `error` code and the status — to a thrown error and to one `debug` line; its `error_description` and `error_uri` reach neither. An `error` that is a registered OAuth error code (`invalid_grant`, `authorization_pending`, `slow_down`, …) is kept verbatim: it is a protocol word, and the device poll reads it. Before 5.4.2, a new opaque token a server wrote into `error_description` could not be recognised and passed through; the description is now written nowhere.
 - **No error message in logs**: a log line about a thrown value — a refresh that failed, a strategy, loader, presenter, validator, `onTokens`, browser launcher or SNC locator/probe that threw — carries only the words its refusal would (fixed per error class, an allowlisted TLS or system code, else `unknown error`) and the HTTP status when there is one, never the error's message, `cause` or stack: a consumer's collaborator may throw text holding a key, a passphrase or a token. Diagnose a collaborator's failure where it throws, not from this package's log.
 - **Date Formatting**: Expiration dates are displayed in readable format (YYYY-MM-DD HH:MM:SS UTC) instead of ISO format
 - **Browser Information**: Logs browser type and authorization URL for debugging
