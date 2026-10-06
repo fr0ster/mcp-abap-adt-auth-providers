@@ -945,9 +945,12 @@ the user 2026-10-05:
   passes the level to `rejectMissingToken`.
 - **`authDebug: true`, an explicit consumer option.** Only with it is the
   safe-facts line extended into the debug line below — the same status and
-  registered `error` plus the server's text, with every secret
-  found in it — in every encoding the redaction recognises — replaced by a
-  **preview**. Never read from the environment (`DEBUG_AUTH_PROVIDERS` and
+  registered `error` plus the secrets this request sent, each passed through
+  `prepareSecret` (below) at the point of logging. **No secret is ever put
+  into a log line and removed afterwards, and no server text is logged:**
+  the server's `error_description` / `error_uri` may echo a secret in any
+  encoding, so they stay out of every line, `authDebug` or not (decided by
+  the user 2026-10-06, replacing the redactor this section described before). Never read from the environment (`DEBUG_AUTH_PROVIDERS` and
   its kin keep controlling only what they control today, and never this),
   never defaulted on (rule 7: the consumer composes).
 
@@ -966,33 +969,17 @@ no option. The broker passes it through (§10.6): `AuthBrokerConfig.authDebug`
 is given to every provider the broker builds; a provider a consumer supplies
 already built keeps its own setting. The CLI exposes it as `--auth-debug`.
 
-**Recognition first: whitespace-wrapped base64.** The preview replaces what
-the redaction recognises, so the redaction must recognise a base64 credential
-however a server echoes it. 6.0.0 carries 5.4.2's encoded-secret recogniser
-unchanged (`redactEncodedSecrets` and `BASE64_RUN`, `oauthErrorBody.ts` on
-5.4.2): a base64 run may be broken by CR, LF, space and tab, as themselves or
-escaped (`%0D`, `%0A`, `%20`, `%09`), and may carry percent-escaped alphabet
-characters and padding in either case; the whitespace is stripped while the
-run is decoded and compared, and on a match the **whole span** — whitespace
-and escapes included — is replaced, never only its contiguous pieces. With
-`authDebug`, that span is replaced by one preview computed from the form it
-was recognised as (the plain base64 credential, or the decoded secret), so no
-whitespace, escape or other character of the span itself reaches the line,
-and the preview's bounds below hold with N the recognised form's length.
-Without this, a server wrapping the echoed `Authorization` credential at 76
-characters would leave each line's characters in the log.
-
-**The preview.** `previewSecret(form)`, in `oauthErrorBody.ts`, for a matched
-form of length N: N < 16 → `<redacted, N chars>`; N ≥ 16 → its first 4 and
-last 4 characters around the marker, `abcd…wxyz <redacted, N chars>` — never
-more than 8 characters of any form. Every recognised form is previewed on its
-own, from its own characters: as sent, form-encoded, `encodeURIComponent`'d,
-form-decoded (`echoedValues`, `oauthErrorBody.ts:59`), a Basic credential's
-base64 and decoded secret (`basicSecrets`), and anything JWT-shaped
-(`JWT_SHAPE`, `oauthErrorBody.ts:18`). The replacement is the same single
-pass as today's redaction — one alternation, longest first, a marker never
-rescanned (`oauthErrorBody.ts:51-73`) — with the preview as the replacement.
-The registered `error` code is kept verbatim, as today.
+**The secret preparer, not a redactor.** `prepareSecret(value, authDebug)`
+(`tokenRequest.ts`) is the one way a secret reaches a log line, called at the
+point of logging with the secret as a separate value — never applied to a
+finished line: `authDebug` false → `<redacted, N chars>`; `authDebug` true →
+N < 16 → `<redacted, N chars>`, N ≥ 16 → its first 4 and last 4 characters
+around the marker, `abcd…wxyz <redacted, N chars>` — never more than 8
+characters of a secret; characters counted whole (no surrogate pair split).
+Nothing scans text for secrets: the redactor (`oauthErrorFields`,
+`describeOAuthErrorBody`, `redactEncodedSecrets`, the base64 and JWT passes,
+the fail-closed pass) is deleted, and with it every regex over server text
+(the user's rule: regexes in input-facing code cost more than they solve).
 
 The site description:
 
@@ -1052,23 +1039,19 @@ rule (§8.2 rule 8): outside `legacyBasic` and `clientSecretBasic`
 the ABAP system, not a token request, and stays.
 
 On a failure with a response, `sendTokenRequest`, before building the
-failure: (1) joins `site.secrets`, `site.basic?.secrets` and the strategy's
-(`prepared.secrets`: `client_secret`, `client_assertion`, a Basic
-credential) — each passed explicitly by the site, never looked up; (2) reduces the body with `oauthErrorFields`
-(`oauthErrorBody.ts:181-195`: `error`, `error_description`, `error_uri`, each
-secret redacted in every form it may be echoed in, JWT-shaped values
-redacted, `oauthErrorBody.ts:35-73`); (3) when there is a logger, writes
-**one** line: without `authDebug`, the safe-facts line (status and a
-registered `error` only, above); **only when `site.authDebug` is true**,
-instead of it the line
-`logger.debug('[<operation>] token endpoint said', { status, error,
-error_description, error_uri })` — the reduced fields with every secret
-previewed (above), not erased; without `authDebug` step (2) does not run
-and nothing of the body is read beyond `error`; (4) builds the
-`AuthProviderFailure` from the status, the registered `error` and the
-allowlisted code — the body never enters it, and the reduced fields are
-dropped with the local. The line — the safe facts by default, with the
-previewed server text under `authDebug` — is written for **every** site that
+failure: (1) gathers the secrets this request sent — `site.secrets`,
+`site.basic?.secrets` and the strategy's (`prepared.secrets`) — each passed
+explicitly by the site, never looked up; (2) reads nothing of the body but a
+registered `error`; (3) when there is a logger, writes **one** line: without
+`authDebug`, the safe-facts line (status and a registered `error` only,
+above); **only when `site.authDebug` is true**, instead of it
+`logger.debug('[<operation>] token endpoint said', { status, error, sent })`,
+where `sent` names each secret the request carried (`client_secret`,
+`client_assertion`, `refresh_token`, `basic`, …) with its value through
+`prepareSecret` — no server text; (4) builds the `AuthProviderFailure` from
+the status, the registered `error` and the allowlisted code — the body never
+enters it. The line — the safe facts by default, with the
+prepared secrets under `authDebug` — is written for **every** site that
 sends a token request (the five that wrapped today — passcode,
 client credentials, UAA refresh, device initiation, password grant — and the
 code exchange, the OIDC token request and device poll, the SAML exchange and
@@ -1091,19 +1074,18 @@ passcode, password, device code, subject / actor token), the configured
   secret; no line of any level carrying server text; none for
   `authorization_pending` / `slow_down`; the same failure;
 - **with `authDebug: true`**: exactly one debug line, carrying the same
-  safe facts plus the previewed server text; every echoed form of
-  every secret replaced by its preview — none present whole; each preview at
-  most 4 + 4 characters of that form plus `<redacted, N chars>` with N the
-  form's length; a secret (form) shorter than 16 characters shown only as
-  `<redacted, N chars>`, boundary cases 15 and 16; two forms of one secret
-  previewed separately; the server's other text kept; none of it in any
+  safe facts plus `sent` — each secret the request carried through
+  `prepareSecret`: at most 4 + 4 characters plus `<redacted, N chars>`, a
+  secret shorter than 16 characters only as `<redacted, N chars>` (boundary
+  cases 15 and 16); no `error_description` / `error_uri` text and no
+  character of any echoed form beyond the prepared value; none of it in any
   rendering of the thrown failure;
 - with `authDebug: true` and no logger, no line and the same failure; a
   logger whose `debug` throws, the same failure.
 Load-bearing: dropping `prepared.secrets` from the join, or one site's
 `secrets`, turns that site's case red.
 
-**A successful status without a token goes through the same redaction.**
+**A successful status without a token logs the same way.** (2026-10-06: no server text, under `authDebug` the prepared secrets only — as a failed request.)
 A sweep of `src` for `describeOAuthErrorBody`, `oauthErrorFields` and every
 `access_token` check (2026-10-05) finds one place that logs a body of a
 **successful** response: the UAA code exchange (`browserAuth.ts:150-157`),
