@@ -16,6 +16,7 @@ import {
   refreshOidcToken,
 } from '../auth/oidcToken';
 import { loggedError } from '../auth/refusal';
+import { logQuietly } from '../auth/tokenRequest';
 import {
   consoleDeviceCodePresenter,
   DeviceCodePresentationError,
@@ -139,9 +140,11 @@ export class OidcDeviceFlowProvider extends BaseTokenProvider {
       });
     } catch (error) {
       // The presenter's text may hold the code; the log gets fixed words only.
-      this.logger?.warn(
-        '[OidcDeviceFlowProvider] presenter failed',
-        loggedError(error, 'the presenter'),
+      logQuietly(() =>
+        this.logger?.warn(
+          '[OidcDeviceFlowProvider] presenter failed',
+          loggedError(error, 'the presenter'),
+        ),
       );
       throw new DeviceCodePresentationError();
     }

@@ -20,6 +20,7 @@ import {
 } from '../auth/browserAuth';
 import { asContract } from '../auth/contractShape';
 import { refreshJwtToken } from '../auth/tokenRefresher';
+import { logQuietly } from '../auth/tokenRequest';
 import { ValidationError } from '../errors/TokenProviderErrors';
 import { browserCallbackStrategy } from '../strategies';
 import {
@@ -73,14 +74,16 @@ export class AuthorizationCodeProvider extends BaseTokenProvider {
     this.config = config;
     this.logger = config.logger;
 
-    this.logger?.info('[AuthorizationCodeProvider] Provider created', {
-      uaaUrl: config.uaaUrl,
-      clientId: config.clientId,
-      hasAccessToken: !!config.accessToken,
-      hasRefreshToken: !!config.refreshToken,
-      accessToken: this.formatToken(config.accessToken),
-      refreshToken: this.formatToken(config.refreshToken),
-    });
+    logQuietly(() =>
+      this.logger?.info('[AuthorizationCodeProvider] Provider created', {
+        uaaUrl: config.uaaUrl,
+        clientId: config.clientId,
+        hasAccessToken: !!config.accessToken,
+        hasRefreshToken: !!config.refreshToken,
+        accessToken: this.formatToken(config.accessToken),
+        refreshToken: this.formatToken(config.refreshToken),
+      }),
+    );
 
     const missingFields: string[] = [];
     if (!config.uaaUrl) {
@@ -107,24 +110,28 @@ export class AuthorizationCodeProvider extends BaseTokenProvider {
       this.authorizationToken = config.accessToken;
       // The JWT's exp, else the stated expiresAt
       this.expiresAt = this.seededExpiry(config.accessToken, config.expiresAt);
-      this.logger?.info(
-        '[AuthorizationCodeProvider] Initialized with access token',
-        {
-          accessToken: this.formatToken(config.accessToken),
-          hasExpiresAt: !!this.expiresAt,
-          expiresAt: this.expiresAt
-            ? this.formatExpirationDate(this.expiresAt)
-            : undefined,
-        },
+      logQuietly(() =>
+        this.logger?.info(
+          '[AuthorizationCodeProvider] Initialized with access token',
+          {
+            accessToken: this.formatToken(config.accessToken),
+            hasExpiresAt: !!this.expiresAt,
+            expiresAt: this.expiresAt
+              ? this.formatExpirationDate(this.expiresAt)
+              : undefined,
+          },
+        ),
       );
     }
     if (config.refreshToken) {
       this.refreshToken = config.refreshToken;
-      this.logger?.info(
-        '[AuthorizationCodeProvider] Initialized with refresh token',
-        {
-          refreshToken: this.formatToken(config.refreshToken),
-        },
+      logQuietly(() =>
+        this.logger?.info(
+          '[AuthorizationCodeProvider] Initialized with refresh token',
+          {
+            refreshToken: this.formatToken(config.refreshToken),
+          },
+        ),
       );
     }
   }
@@ -201,9 +208,11 @@ export class AuthorizationCodeProvider extends BaseTokenProvider {
       ]);
     }
 
-    this.logger?.info('[AuthorizationCodeProvider] Code received', {
-      redirectUri: outcome.redirectUri,
-    });
+    logQuietly(() =>
+      this.logger?.info('[AuthorizationCodeProvider] Code received', {
+        redirectUri: outcome.redirectUri,
+      }),
+    );
 
     const result = await exchangeCodeForToken(
       authConfig,
@@ -227,7 +236,9 @@ export class AuthorizationCodeProvider extends BaseTokenProvider {
       throw refreshTokenRefused();
     }
 
-    this.logger?.info('[AuthorizationCodeProvider] Refreshing token');
+    logQuietly(() =>
+      this.logger?.info('[AuthorizationCodeProvider] Refreshing token'),
+    );
     // A failure throws: the base decides the one login (rule 6).
     const result = await refreshJwtToken(
       this.refreshToken,
@@ -239,13 +250,15 @@ export class AuthorizationCodeProvider extends BaseTokenProvider {
       this.siteOptions(),
     );
 
-    this.logger?.info('[AuthorizationCodeProvider] Token refresh completed', {
-      hasAccessToken: !!result.accessToken,
-      hasRefreshToken: !!result.refreshToken,
-      newAccessToken: this.formatToken(result.accessToken),
-      newRefreshToken: this.formatToken(result.refreshToken),
-      oldRefreshToken: this.formatToken(this.refreshToken),
-    });
+    logQuietly(() =>
+      this.logger?.info('[AuthorizationCodeProvider] Token refresh completed', {
+        hasAccessToken: !!result.accessToken,
+        hasRefreshToken: !!result.refreshToken,
+        newAccessToken: this.formatToken(result.accessToken),
+        newRefreshToken: this.formatToken(result.refreshToken),
+        oldRefreshToken: this.formatToken(this.refreshToken),
+      }),
+    );
 
     const expiresIn = this.calculateExpiresIn(result.accessToken);
 

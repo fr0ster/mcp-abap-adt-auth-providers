@@ -169,9 +169,11 @@ export async function exchangeSamlAssertion(
     ? await prepareWith(auth, tokenUrl, clientId, grantType, grant)
     : undefined;
 
-  logger?.info('[SAML] Exchanging assertion for token', {
-    tokenUrl: prepared?.config.url ?? tokenUrl,
-  });
+  logQuietly(() =>
+    logger?.info('[SAML] Exchanging assertion for token', {
+      tokenUrl: prepared?.config.url ?? tokenUrl,
+    }),
+  );
 
   return requestTokens(
     {
@@ -211,9 +213,11 @@ export async function refreshSamlBearerToken(
     ? await prepareWith(auth, tokenUrl, clientId, 'refresh_token', grant)
     : undefined;
 
-  logger?.info('[SAML] Refreshing token', {
-    tokenUrl: prepared?.config.url ?? tokenUrl,
-  });
+  logQuietly(() =>
+    logger?.info('[SAML] Refreshing token', {
+      tokenUrl: prepared?.config.url ?? tokenUrl,
+    }),
+  );
 
   return requestTokens(
     {

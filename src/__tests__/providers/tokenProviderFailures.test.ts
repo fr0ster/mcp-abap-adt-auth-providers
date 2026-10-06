@@ -1028,3 +1028,232 @@ describe('D8: RefreshError is no longer constructed', () => {
     }
   });
 });
+
+/** A logger whose `levels` throw (a marker); the others record nothing. */
+function throwingLogger(
+  levels: readonly string[] = ['debug', 'info', 'warn', 'error'],
+) {
+  const at = (level: string) => () => {
+    if (levels.includes(level)) throw new Error(`${level} ${MARKER}`);
+  };
+  return {
+    debug: at('debug'),
+    info: at('info'),
+    warn: at('warn'),
+    error: at('error'),
+  };
+}
+
+const withLogger = <T>(provider: T, logger: unknown): T => {
+  (provider as unknown as { logger: unknown }).logger = logger;
+  return provider;
+};
+
+describe('a throwing logger changes nothing on the token paths (spec §6 guards)', () => {
+  it('H1: a refused refresh with a throwing logger still clears, logs in, and holds no refused refresh token', async () => {
+    const p = withLogger(new TestProvider(), throwingLogger());
+    p.login.mockResolvedValueOnce(result('T1', 'R0'));
+    await p.getTokens();
+    p.expire();
+    p.refresh.mockRejectedValue(new Error('refused'));
+    p.login.mockResolvedValue(result('T3'));
+    await expect(p.getTokens()).resolves.toMatchObject({
+      authorizationToken: 'T3',
+    });
+    expect(p.steps()).toEqual([
+      'login',
+      'onTokens:replace',
+      'refresh',
+      'onTokens:clear',
+      'login',
+      'onTokens:clear',
+    ]);
+    expect(
+      (p as unknown as { refreshToken?: string }).refreshToken,
+    ).toBeUndefined();
+  });
+
+  it('H2: a throwing clearing onTokens and a throwing logger: the login still runs', async () => {
+    let calls = 0;
+    const p = withLogger(
+      new TestProvider({
+        onTokens: async () => {
+          calls += 1;
+          if (calls === 2) throw new Error(`store down ${MARKER}`);
+        },
+      }),
+      throwingLogger(),
+    );
+    await p.getTokens();
+    p.expire();
+    p.refresh.mockRejectedValue(new Error('refused'));
+    p.login.mockResolvedValue(result('T3', 'R3'));
+    await expect(p.getTokens()).resolves.toMatchObject({
+      authorizationToken: 'T3',
+    });
+    expect(p.dispositions()).toEqual(['replace', 'clear', 'replace']);
+  });
+
+  it('H2: a throwing onTokens after a login and a throwing logger: the token stands', async () => {
+    const p = withLogger(
+      new TestProvider({
+        onTokens: async () => {
+          throw new Error('store down');
+        },
+      }),
+      throwingLogger(),
+    );
+    await expect(p.getTokens()).resolves.toMatchObject({
+      authorizationToken: 'T1',
+    });
+  });
+
+  it.each(['debug', 'info', 'warn', 'error'])(
+    'a logger whose %s throws: login, cache hit, refresh, refused refresh all answer as with a working one',
+    async (level) => {
+      const p = withLogger(new TestProvider(), throwingLogger([level]));
+      await expect(p.getTokens()).resolves.toMatchObject({
+        authorizationToken: 'T1',
+      });
+      await expect(p.getTokens()).resolves.toMatchObject({
+        authorizationToken: 'T1',
+      });
+      p.expire();
+      await expect(p.getTokens()).resolves.toMatchObject({
+        authorizationToken: 'T2',
+      });
+      p.expire();
+      p.refresh.mockRejectedValue(new Error('refused'));
+      p.login.mockResolvedValue(result('T3', 'R3'));
+      await expect(p.getTokens()).resolves.toMatchObject({
+        authorizationToken: 'T3',
+      });
+      expect(p.steps()).toEqual([
+        'login',
+        'onTokens:replace',
+        'refresh',
+        'onTokens:replace',
+        'refresh',
+        'onTokens:clear',
+        'login',
+        'onTokens:replace',
+      ]);
+      await expect(p.validateToken('opaque')).resolves.toBe(true);
+    },
+  );
+
+  it.each(['debug', 'info', 'warn', 'error'])(
+    'a logger whose %s throws, through real sites: password grant, refresh, discovery',
+    async (level) => {
+      let n = 0;
+      answer(async (url, grant) => {
+        n += 1;
+        if (url.endsWith('/.well-known/openid-configuration')) {
+          return {
+            status: 200,
+            data: { token_endpoint: 'https://idp.example/token' },
+          };
+        }
+        return {
+          status: 200,
+          data: {
+            access_token: `A${n}-${String(grant)}`,
+            refresh_token: `R${n}`,
+            expires_in: 3600,
+          },
+        };
+      });
+      mockedAxios.get.mockImplementation(async () => ({
+        status: 200,
+        data: { token_endpoint: 'https://idp.example/token' },
+      }));
+      const provider = withLogger(
+        new OidcPasswordProvider({
+          clientId: 'cid',
+          issuerUrl: 'https://idp.example',
+          username: 'u',
+          password: 'p',
+        }),
+        throwingLogger([level]),
+      );
+      await expect(provider.getTokens()).resolves.toMatchObject({
+        authorizationToken: expect.stringContaining('password'),
+      });
+      await expect(provider.refreshTokens()).resolves.toMatchObject({
+        authorizationToken: expect.stringContaining('refresh_token'),
+      });
+    },
+  );
+
+  it('a logger that throws everywhere: AuthorizationCodeProvider constructs, logs in and refreshes', async () => {
+    answer(async (_url, grant) => ({
+      status: 200,
+      data: {
+        access_token: `A-${String(grant)}`,
+        refresh_token: 'R',
+        expires_in: 3600,
+      },
+    }));
+    const provider = new AuthorizationCodeProvider({
+      uaaUrl: 'https://uaa.example',
+      clientId: 'cid',
+      clientSecret: 's',
+      accessToken: 'seeded',
+      refreshToken: 'R0',
+      logger: throwingLogger(),
+      authorization: {
+        authorize: async () => ({
+          payload: 'the-code',
+          redirectUri: 'http://localhost:61001/callback',
+        }),
+      },
+    });
+    await expect(provider.refreshTokens()).resolves.toMatchObject({
+      authorizationToken: 'A-refresh_token',
+    });
+  });
+
+  it("a throwing warn while the device presenter fails: the presenter's failure, not the logger's", async () => {
+    answer(async () => ({
+      status: 200,
+      data: {
+        device_code: 'dc',
+        user_code: 'UC',
+        verification_uri: 'https://idp.example/activate',
+        interval: 0,
+      },
+    }));
+    const provider = new OidcDeviceFlowProvider({
+      clientId: 'cid',
+      tokenEndpoint: 'https://idp.example/token',
+      deviceAuthorizationEndpoint: 'https://idp.example/device',
+      logger: throwingLogger(),
+      presenter: {
+        present: async () => {
+          throw new Error('presenter down');
+        },
+      },
+    });
+    const thrown = await rejectionOf(provider.getTokens());
+    expectFailure(thrown);
+    expect((thrown as AuthProviderFailure).error).toMatchObject({
+      kind: 'interactive-login',
+      facts: { outcome: 'device-code-not-shown' },
+    });
+  });
+});
+
+describe('the logical refresh state returns to held', () => {
+  it('refused refresh → a login with a refresh token (replace) → a token-only refresh says keep, not clear', async () => {
+    const p = new TestProvider();
+    await p.getTokens();
+    p.expire();
+    p.refresh.mockRejectedValueOnce(new Error('refused'));
+    p.login.mockResolvedValue(result('T3', 'R3'));
+    await p.getTokens();
+    p.expire();
+    p.refresh.mockResolvedValue(result('T4'));
+    await p.getTokens();
+    expect(p.dispositions()).toEqual(['replace', 'clear', 'replace', 'keep']);
+  });
+});

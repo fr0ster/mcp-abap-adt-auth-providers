@@ -1,4 +1,3 @@
-import { AuthProviderFailure } from '@mcp-abap-adt/auth-errors';
 /**
  * Integration tests for AuthorizationCodeProvider
  * Tests with real service keys and session files from test-config.yaml
@@ -16,6 +15,7 @@ import netModule from 'node:net';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { jest } from '@jest/globals';
+import { AuthProviderFailure } from '@mcp-abap-adt/auth-errors';
 import {
   AbapServiceKeyStore,
   AbapSessionStore,

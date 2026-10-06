@@ -47,7 +47,11 @@ import {
 } from '../auth/refusal';
 import { readRejection } from '../auth/rejection';
 import { readBinding, type TokenBinding } from '../auth/tokenBinding';
-import type { TokenRequestAuth, TokenSiteOptions } from '../auth/tokenRequest';
+import {
+  logQuietly,
+  type TokenRequestAuth,
+  type TokenSiteOptions,
+} from '../auth/tokenRequest';
 import { CertificateMaterialError } from '../errors/CertificateMaterialError';
 import { ValidationError } from '../errors/TokenProviderErrors';
 
@@ -399,26 +403,31 @@ export abstract class BaseTokenProvider
    */
   protected isTokenValid(): boolean {
     if (!this.authorizationToken || !this.expiresAt) {
-      this.logger?.debug(
-        '[BaseTokenProvider] Token invalid: missing token or expiration',
-        {
-          hasToken: !!this.authorizationToken,
-          hasExpiresAt: !!this.expiresAt,
-        },
+      logQuietly(() =>
+        this.logger?.debug(
+          '[BaseTokenProvider] Token invalid: missing token or expiration',
+          {
+            hasToken: !!this.authorizationToken,
+            hasExpiresAt: !!this.expiresAt,
+          },
+        ),
       );
       return false;
     }
     // Add 60 second buffer to account for clock skew and network latency
     const bufferMs = 60 * 1000;
     const now = Date.now();
-    const isValid = now < this.expiresAt - bufferMs;
-    this.logger?.debug('[BaseTokenProvider] Token validation check', {
-      now: this.formatExpirationDate(now),
-      expiresAt: this.formatExpirationDate(this.expiresAt),
-      expiresIn: Math.floor((this.expiresAt - now) / 1000),
-      isValid,
-      bufferMs,
-    });
+    const expiresAt = this.expiresAt;
+    const isValid = now < expiresAt - bufferMs;
+    logQuietly(() =>
+      this.logger?.debug('[BaseTokenProvider] Token validation check', {
+        now: this.formatExpirationDate(now),
+        expiresAt: this.formatExpirationDate(expiresAt),
+        expiresIn: Math.floor((expiresAt - now) / 1000),
+        isValid,
+        bufferMs,
+      }),
+    );
     return isValid;
   }
 
@@ -467,12 +476,14 @@ export abstract class BaseTokenProvider
 
   /** getTokens()'s body: the cache, else the renewal. */
   private async cachedOrRenewed(): Promise<ITokenResult> {
-    this.logger?.debug('[BaseTokenProvider] getTokens called', {
-      hasToken: !!this.authorizationToken,
-      hasExpiresAt: !!this.expiresAt,
-      hasRefreshToken: !!this.refreshToken,
-      currentToken: this.formatToken(this.authorizationToken),
-    });
+    logQuietly(() =>
+      this.logger?.debug('[BaseTokenProvider] getTokens called', {
+        hasToken: !!this.authorizationToken,
+        hasExpiresAt: !!this.expiresAt,
+        hasRefreshToken: !!this.refreshToken,
+        currentToken: this.formatToken(this.authorizationToken),
+      }),
+    );
     // A renewal in flight is replacing the cache: wait for it, not the old token
     if (this.renewal) return this.renewal;
     // If token is valid, return cached — unless it is bound to another
@@ -492,12 +503,14 @@ export abstract class BaseTokenProvider
           authError.unknown(this.operationOf('token-request')),
         );
       }
-      this.logger?.info('[BaseTokenProvider] Returning cached valid token', {
-        token: this.formatToken(authorizationToken),
-        expiresIn: this.expiresAt
-          ? Math.floor((this.expiresAt - Date.now()) / 1000)
-          : undefined,
-      });
+      logQuietly(() =>
+        this.logger?.info('[BaseTokenProvider] Returning cached valid token', {
+          token: this.formatToken(authorizationToken),
+          expiresIn: this.expiresAt
+            ? Math.floor((this.expiresAt - Date.now()) / 1000)
+            : undefined,
+        }),
+      );
       return asContract<ITokenResult>({
         authorizationToken,
         refreshToken: this.refreshToken,
@@ -608,28 +621,37 @@ export abstract class BaseTokenProvider
     await this.presentable();
     const spent = this.refreshToken;
     if (spent && this.hasRefreshGrant()) {
-      this.logger?.info(
-        '[BaseTokenProvider] Obtaining a new token by refresh',
-        {
-          oldToken: this.formatToken(this.authorizationToken),
-          refreshToken: this.formatToken(spent),
-        },
+      logQuietly(() =>
+        this.logger?.info(
+          '[BaseTokenProvider] Obtaining a new token by refresh',
+          {
+            oldToken: this.formatToken(this.authorizationToken),
+            refreshToken: this.formatToken(spent),
+          },
+        ),
       );
       try {
         const result = await this.performRefresh();
         this.updateTokens(result);
         this.markIfElsewhere(result.authorizationToken);
         await this.obtained(result);
-        this.logger?.info('[BaseTokenProvider] Token refreshed successfully', {
-          newToken: this.formatToken(result.authorizationToken),
-          newRefreshToken: this.formatToken(result.refreshToken),
-        });
+        logQuietly(() =>
+          this.logger?.info(
+            '[BaseTokenProvider] Token refreshed successfully',
+            {
+              newToken: this.formatToken(result.authorizationToken),
+              newRefreshToken: this.formatToken(result.refreshToken),
+            },
+          ),
+        );
         return result;
       } catch (error) {
         // H1: the failure's fixed words and kind, never its message.
-        this.logger?.warn(
-          '[BaseTokenProvider] Refresh failed',
-          logFields(errorFor(error, { operation: 'refresh' })),
+        logQuietly(() =>
+          this.logger?.warn(
+            '[BaseTokenProvider] Refresh failed',
+            logFields(errorFor(error, { operation: 'refresh' })),
+          ),
         );
         // The refresh token was refused: it is spent, so a login follows.
         // Only that one — never a token something else stored meanwhile.
@@ -643,53 +665,68 @@ export abstract class BaseTokenProvider
       }
     }
 
-    this.logger?.info(
-      '[BaseTokenProvider] No usable refresh token, performing login',
+    logQuietly(() =>
+      this.logger?.info(
+        '[BaseTokenProvider] No usable refresh token, performing login',
+      ),
     );
     const result = await this.performLogin();
     this.updateTokens(result);
     this.markIfElsewhere(result.authorizationToken);
     await this.obtained(result);
-    this.logger?.info('[BaseTokenProvider] Login completed', {
-      newToken: this.formatToken(result.authorizationToken),
-      newRefreshToken: this.formatToken(result.refreshToken),
-    });
+    logQuietly(() =>
+      this.logger?.info('[BaseTokenProvider] Login completed', {
+        newToken: this.formatToken(result.authorizationToken),
+        newRefreshToken: this.formatToken(result.refreshToken),
+      }),
+    );
     return result;
   }
 
   async validateToken(_token: string, _serviceUrl?: string): Promise<boolean> {
-    this.logger?.debug('[BaseTokenProvider] Validating token');
+    logQuietly(() =>
+      this.logger?.debug('[BaseTokenProvider] Validating token'),
+    );
     if (this.tokenType && this.tokenType !== 'jwt') {
       if (!this.expiresAt) {
-        this.logger?.warn(
-          '[BaseTokenProvider] Token validation failed: missing expiresAt for non-JWT token',
+        logQuietly(() =>
+          this.logger?.warn(
+            '[BaseTokenProvider] Token validation failed: missing expiresAt for non-JWT token',
+          ),
         );
         return false;
       }
       const bufferMs = 60 * 1000;
-      const isValid = Date.now() < this.expiresAt - bufferMs;
-      this.logger?.info('[BaseTokenProvider] Token validation result', {
-        isValid,
-        tokenType: this.tokenType,
-        expiresAt: this.formatExpirationDate(this.expiresAt),
-        expiresIn: Math.floor((this.expiresAt - Date.now()) / 1000),
-      });
+      const stated = this.expiresAt;
+      const isValid = Date.now() < stated - bufferMs;
+      logQuietly(() =>
+        this.logger?.info('[BaseTokenProvider] Token validation result', {
+          isValid,
+          tokenType: this.tokenType,
+          expiresAt: this.formatExpirationDate(stated),
+          expiresIn: Math.floor((stated - Date.now()) / 1000),
+        }),
+      );
       return isValid;
     }
     const expiresAt = this.parseExpirationFromJWT(_token);
     if (!expiresAt) {
-      this.logger?.warn(
-        '[BaseTokenProvider] Token validation failed: cannot parse expiration',
+      logQuietly(() =>
+        this.logger?.warn(
+          '[BaseTokenProvider] Token validation failed: cannot parse expiration',
+        ),
       );
       return false;
     }
     const bufferMs = 60 * 1000;
     const isValid = Date.now() < expiresAt - bufferMs;
-    this.logger?.info('[BaseTokenProvider] Token validation result', {
-      isValid,
-      expiresAt: this.formatExpirationDate(expiresAt),
-      expiresIn: Math.floor((expiresAt - Date.now()) / 1000),
-    });
+    logQuietly(() =>
+      this.logger?.info('[BaseTokenProvider] Token validation result', {
+        isValid,
+        expiresAt: this.formatExpirationDate(expiresAt),
+        expiresIn: Math.floor((expiresAt - Date.now()) / 1000),
+      }),
+    );
     return isValid;
   }
 
@@ -713,15 +750,17 @@ export abstract class BaseTokenProvider
     } else {
       this.expiresAt = undefined;
     }
-    this.logger?.info('[BaseTokenProvider] Tokens updated', {
-      oldToken,
-      newToken: this.formatToken(result.authorizationToken),
-      newRefreshToken: this.formatToken(result.refreshToken),
-      tokenType: this.tokenType,
-      expiresAt: this.expiresAt
-        ? this.formatExpirationDate(this.expiresAt)
-        : undefined,
-    });
+    logQuietly(() =>
+      this.logger?.info('[BaseTokenProvider] Tokens updated', {
+        oldToken,
+        newToken: this.formatToken(result.authorizationToken),
+        newRefreshToken: this.formatToken(result.refreshToken),
+        tokenType: this.tokenType,
+        expiresAt: this.expiresAt
+          ? this.formatExpirationDate(this.expiresAt)
+          : undefined,
+      }),
+    );
   }
 
   /**
@@ -829,9 +868,11 @@ export abstract class BaseTokenProvider
       await this.onTokens(build());
     } catch (error) {
       // Fixed words only: the hook holds the tokens, its message is foreign text.
-      this.logger?.warn(
-        '[BaseTokenProvider] onTokens failed; the token stands',
-        logFields(errorFor(error, { operation: 'on-tokens-hook' })),
+      logQuietly(() =>
+        this.logger?.warn(
+          '[BaseTokenProvider] onTokens failed; the token stands',
+          logFields(errorFor(error, { operation: 'on-tokens-hook' })),
+        ),
       );
     }
   }

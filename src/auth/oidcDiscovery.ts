@@ -6,7 +6,7 @@ import { AuthProviderFailure, authError } from '@mcp-abap-adt/auth-errors';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
 import axios from 'axios';
 import { readSafely } from './knownCodes';
-import { requestFailure } from './tokenRequest';
+import { logQuietly, requestFailure } from './tokenRequest';
 
 /**
  * The discovery snapshot (spec §6): the fields the providers and `mtlsAlias`
@@ -132,7 +132,9 @@ export async function discoverOidc(
     return cached;
   }
 
-  logger?.info('[OIDC] Fetching discovery document', { discoveryUrl });
+  logQuietly(() =>
+    logger?.info('[OIDC] Fetching discovery document', { discoveryUrl }),
+  );
   // The one request that may follow a redirect: it sends no secret — no
   // credential, no grant, no client certificate — only a GET for public
   // metadata. Every token request sets `maxRedirects: 0`.

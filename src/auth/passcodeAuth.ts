@@ -20,6 +20,7 @@ import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
 import axios from 'axios';
 import {
   legacyBasic,
+  logQuietly,
   prepareTokenRequest,
   rejectMissingToken,
   sendTokenRequest,
@@ -64,9 +65,11 @@ export async function exchangePasscode(
       )
     : undefined;
 
-  logger?.info('[UAA] Exchanging passcode for token', {
-    tokenUrl: prepared?.config.url ?? tokenUrl,
-  });
+  logQuietly(() =>
+    logger?.info('[UAA] Exchanging passcode for token', {
+      tokenUrl: prepared?.config.url ?? tokenUrl,
+    }),
+  );
 
   // Today's request: Basic `id:secret` — a public client, `cf` among them,
   // authenticates with an empty secret — built only through legacyBasic, so
