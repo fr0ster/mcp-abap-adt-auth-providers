@@ -219,8 +219,11 @@ recipe and no implicit default (Inference, design).
   product probe applies to it, and hands `RfcTransport` the logon
   parameters — it opens no connection itself and depends on neither
   `@mcp-abap-adt/sap-rfc-lite` nor `@mcp-abap-adt/connection`. An unusable
-  library is an Oops naming each candidate tried: its source, its path and
-  a fixed reason (missing, not a library, wrong architecture). See
+  library is an Oops naming each candidate tried: its source and a fixed
+  reason (missing, not a library, wrong architecture) in the words, its path
+  as a diagnostic beside them (6.0.0). The registry lookup has no timeout of
+  its own: it waits for `reg.exe`, or for the provider's signal, whose abort
+  kills it. See
   [the README](README.md#passwordless-rfc-logon-snc).
 
   **The product is named, not checked** (Measured, 2026-09-29, Windows,

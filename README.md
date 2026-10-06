@@ -106,7 +106,22 @@ const provider = SncLogonProvider.forSecureLoginClient({
 `DefaultSncLibraryLocator(system, sncLib)` and `[SecureLoginClientProbe(system)]`
 — "this machine, library discovery, the Secure Login Client probe". `qop`
 defaults to `'9'` (maximum, one of `'1' | '2' | '3' | '8' | '9'`), and
-`myName` is sent only when set.
+`myName` is sent only when set. A missing `partnerName` or another `qop` is
+thrown by the constructor as an `AuthProviderFailure` of kind `configuration`
+(`snc-partner-name-missing`, `snc-qop-invalid` — see the configuration errors
+table); the rejected `qop` value is never echoed.
+
+**No timeout of its own.** `prepare()` may wait on the machine: on Windows the
+locator and the Secure Login Client probe read the registry through
+`reg.exe` (by its absolute path under `%SystemRoot%\System32`, no shell).
+Since 6.0.0 that query has no built-in timeout — it runs until `reg.exe`
+answers, or until the provider's signal aborts, which kills the child. Pass
+`signal` (in the config, or to `forSecureLoginClient`) or `attach(signal)`
+for each party sharing the provider; `prepare()` then ends Oops `aborted`
+(`interactive-login`) once every attached party has aborted. With no signal
+it waits for `reg.exe`; bounding it is the consumer's decision
+(`AbortSignal.timeout(ms)`). A locator or probe of your own receives the same
+signal as `locate(signal)` / `appliesTo(path, signal)`.
 
 The explicit assembly, for a different SNC product, or a locator/probe of
 your own (no implicit defaults — a constructor takes every collaborator):
@@ -135,16 +150,30 @@ process) plus `lib\sapcrypto.dll`, then the macOS bundle `/Applications/Secure
 Login Client.app/Contents/MacOS/lib/libsapcrypto.dylib`. An unusable
 candidate — missing, not a recognised library, or built for the wrong
 architecture — is **skipped**, its reason kept, rather than failing the whole
-search; empty or whitespace environment variables count as unset. Nothing
-usable → `prepare()` is Oops listing every candidate tried, each as its source,
-its path and its reason, e.g. "no usable SNC library was found: SNC_LIB
-`<path>` (wrong architecture); registry `<path>` (missing)" — the source is one
+search; empty or whitespace environment variables count as unset, and the
+registry value is trimmed before it becomes a path. Nothing usable →
+`prepare()` is Oops, kind `snc`, variant `library-not-found`, listing every
+candidate tried by its source and its reason, e.g. "no usable SNC library was
+found: SNC_LIB (wrong architecture); registry (missing)" — the source is one
 of `SNC_LIB_64`, `SNC_LIB`, `registry`, `macOS bundle`, and the reason one of
-`missing`, `not a library`, `wrong architecture`; no error message is ever
-part of it, and it needs no logger. An **explicit** `sncLib` is the only
-candidate: unusable, and the Oops names that one — "no usable SNC library was
-found: sncLib `<path>` (missing)" — with no fallback to automatic discovery.
-The hint is always "set sncLib to the SNC (GSS) library of your SNC product".
+`missing`, `not a library`, `wrong architecture`. **Since 6.0.0 the paths are
+not in the words** (they are local values, kept apart so a logger can drop
+them): `error.facts.candidates[i]` holds each source, reason and — for a wrong
+architecture — the architectures the file was built for, `facts.processArch`
+this process's, and `error.diagnostics.candidatePaths[i]` the path tried,
+index for index (`null` for a path the admission check refused, e.g. one
+holding a control character). `renderDiagnostics(error)` prints them as
+`candidates: SNC_LIB "C:\\…\\sapcrypto.dll" (wrong architecture); registry
+"C:\\…\\sapcrypto.dll" (missing)`. No error message is ever part of it, and it
+needs no logger. An **explicit** `sncLib` is the only candidate: unusable,
+and the Oops names that one — "no usable SNC library was found: sncLib
+(missing)", the path in diagnostics — with no fallback to automatic
+discovery. With no candidate at all: "no usable SNC library was found: no
+candidate (SNC_LIB_64 and SNC_LIB are unset and no Secure Login Client
+installation was found)". A locator of your own that throws gets "no usable
+SNC library was found" alone: the candidate facts and paths are read only
+from `DefaultSncLibraryLocator`'s own failure. The hint is always "set sncLib
+to the SNC (GSS) library of your SNC product".
 Architecture comes from the
 file header — PE `Machine`; Mach-O thin and universal (`FAT_MAGIC` /
 `FAT_MAGIC_64`); ELF `e_machine` — because the trap this guards against is
@@ -175,20 +204,34 @@ product in the log, never in a refusal.
 as a generic communication error, so the cause is found by searching the GSS
 error text (never returned; only fixed wording and an allowlisted key go out):
 
-- **`A2200019`** — reason "the SNC library has no credential to present
-  (A2200019)"; hint "log on in the Secure Login Client, to the profile used
-  for SAP applications" when the Secure Login Client probe applied, otherwise
-  "make sure the SNC product behind `<library>` is logged on". Measured
+- **`A2200019`** — kind `snc`, variant `no-credential`; reason "the SNC
+  library has no credential to present (A2200019)"; hint "log on in the
+  Secure Login Client, to the profile used for SAP applications" when the
+  Secure Login Client probe applied, otherwise "make sure the SNC product
+  behind the SNC library is logged on" (since 6.0.0 the library's path is
+  `error.diagnostics.library`, not a word). Measured
   2026-09-29: with the client logged out, closing its logon window failed the
   RFC open with `GSS-API(min): A2200019:Operation aborted by user or
   application`, and `rejected()` answered with this reason.
-- **`SNCERR_INIT`** (or "gssapi library invalid/missing") — reason "the RFC
-  SDK could not initialise `<library>` as its SNC library (SNCERR_INIT)", no
-  hint — usually the architecture mismatch above, if a mismatched library
-  somehow reached this point.
-- anything else — reason "SNC logon refused", plus the SDK's error key in
-  parentheses when it is on the RFC-key allowlist (`RFC_LOGON_FAILURE`,
-  `RFC_COMMUNICATION_FAILURE`, …) — never the underlying message or object.
+- **`SNCERR_INIT`** (or "gssapi library invalid/missing") — variant
+  `library-init-failed`; reason "the RFC SDK could not initialise the SNC
+  library (`<archs>`) as its SNC library (SNCERR_INIT)", the path in
+  `error.diagnostics.library`, no hint — usually the architecture mismatch
+  above, if a mismatched library somehow reached this point.
+- anything else — variant `logon-refused`; reason "SNC logon refused", plus
+  the SDK's error key in parentheses (and as `facts.rfcKey`) when it is on the
+  RFC-key allowlist (`RFC_LOGON_FAILURE`, `RFC_COMMUNICATION_FAILURE`, …) —
+  never the underlying message or object.
+
+The GSS codes are found by plain substring search, never a regular
+expression over the SDK's text. `establish()` before `prepare()` is
+`not-prepared` ("the SNC provider is not prepared" — "connect() prepares it
+first"); a locator that answers no path is "no usable SNC library was found:
+the locator returned no path"; anything else escaping a moment is `unknown`,
+"the SNC provider failed while `<moment>` (unknown error)". A product probe
+that throws is logged ("an SNC product probe failed: the probe failed (unknown
+error)") and names nothing; "SNC library not found: `<reason>`" is logged with
+the paths only as the line's `diagnostics` field.
 
 ## Installation
 

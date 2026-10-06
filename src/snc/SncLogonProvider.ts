@@ -5,22 +5,40 @@
  * product is named, never checked — and hands the wire the logon parameters.
  * It opens no connection and loads no SAP library. No collaborator is
  * defaulted: forSecureLoginClient is the recipe.
+ *
+ * Its four moments run inside `AuthProviderBase`'s boundary (spec §8.1):
+ * anything that escapes a body is `unknown` with the moment's SNC operation —
+ * "the SNC provider failed while resolving the SNC library (unknown error)"
+ * (G10). Every refusal is minted (spec A.7); a library path is a diagnostic,
+ * never a word (L9).
  */
 
+import {
+  authError,
+  createParties,
+  isSncQop,
+  logFields,
+  readFailure,
+  relayOutcome,
+} from '@mcp-abap-adt/auth-errors';
 import type {
-  AuthOutcome,
-  IAuthProvider,
   IAuthRejection,
   ILogonTarget,
   IRequestTarget,
 } from '@mcp-abap-adt/interfaces-auth';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
-import { loggedError, OK, oops } from '../auth/refusal';
+import { AuthProviderBase } from '../auth/AuthProviderBase';
+import { throwIfAborted } from '../auth/attempt';
+import { misconfigured } from '../auth/configuration';
+import type { AnyOutcome } from '../auth/contractTransition';
+import { readSafely } from '../auth/knownCodes';
+import { OK } from '../auth/refusal';
 import { readRejection } from '../auth/rejection';
-import { ValidationError } from '../errors/TokenProviderErrors';
+import { logQuietly } from '../auth/tokenRequest';
 import {
   DefaultSncLibraryLocator,
   type ISncLibraryLocator,
+  isShippedLocatorFailure,
   type SncLibrary,
 } from './DefaultSncLibraryLocator';
 import {
@@ -28,10 +46,7 @@ import {
   SecureLoginClientProbe,
 } from './SecureLoginClientProbe';
 import { nodeSncSystem } from './SncSystem';
-import { locateRefusal, sncCause, sncRefusal } from './sncRefusal';
-
-/** SAP's SNC_QOP values: 1 authentication, 2 integrity, 3 privacy, 8 default, 9 maximum. */
-const SNC_QOP_VALUES = ['1', '2', '3', '8', '9'];
+import { foreignLocatorRefusal, sncCause, sncRefusal } from './sncRefusal';
 
 export interface SncLogonProviderConfig {
   /** The system's SNC name, e.g. `p:CN=SID, O=ACME`. */
@@ -45,26 +60,17 @@ export interface SncLogonProviderConfig {
   /** Which product is behind the library, for the `rejected` hint; `[]` for none. Required. */
   probes: ISncProductProbe[];
   logger?: ILogger | undefined;
+  /**
+   * The first attached party (spec §6b), as `attach(signal)` right after
+   * construction. `prepare()` hands the locator and the probes a signal that
+   * aborts when every attached party has aborted — the registry query is
+   * killed then; with none live, `prepare()` waits for the machine. No
+   * timeout of this package's choosing.
+   */
+  signal?: AbortSignal | undefined;
 }
 
-/**
- * The outer boundary of every method (rule 1): the SNC wording inside stays,
- * and anything that still escapes — a throwing logger, a malformed
- * collaborator — is a fixed SNC Oops. Nothing is logged here: the logger may
- * be what threw.
- */
-async function bounded(
-  moment: string,
-  work: () => AuthOutcome | Promise<AuthOutcome>,
-): Promise<AuthOutcome> {
-  try {
-    return await work();
-  } catch {
-    return oops(`the SNC provider failed while ${moment} (unknown error)`);
-  }
-}
-
-export class SncLogonProvider implements IAuthProvider {
+export class SncLogonProvider extends AuthProviderBase {
   readonly kind = 'snc';
   private readonly partnerName: string;
   private readonly qop: string;
@@ -72,23 +78,38 @@ export class SncLogonProvider implements IAuthProvider {
   private readonly locator: ISncLibraryLocator;
   private readonly probes: ISncProductProbe[];
   private readonly logger?: ILogger | undefined;
+  private readonly parties = createParties();
   private library?: SncLibrary | undefined;
   /** The shipped Secure Login Client probe applies — the one product a refusal may name. */
   private secureLoginClient = false;
 
   constructor(config: SncLogonProviderConfig) {
-    const partnerName = config.partnerName?.trim();
+    super({
+      prepare: 'resolving-snc-library',
+      establish: 'handing-over-snc-parameters',
+      authorize: 'authorizing-snc-request',
+      rejected: 'explaining-snc-refusal',
+    });
+    const given = readSafely(config, 'partnerName');
+    const partnerName = typeof given === 'string' ? given.trim() : '';
     if (!partnerName) {
-      throw new ValidationError(
-        "SncLogonProvider needs partnerName — the system's SNC name.",
-        ['partnerName'],
+      // E20.
+      throw misconfigured(
+        authError.configuration({
+          case: 'snc-partner-name-missing',
+          fields: ['partnerName'],
+        }),
       );
     }
     const qop = config.qop ?? '9';
-    if (!SNC_QOP_VALUES.includes(qop)) {
-      throw new ValidationError(
-        `SncLogonProvider: qop must be one of ${SNC_QOP_VALUES.join(', ')}, got '${qop}'.`,
-        ['qop'],
+    if (!isSncQop(qop)) {
+      // E21: the value is never echoed (L5); `allowed` names the set.
+      throw misconfigured(
+        authError.configuration({
+          case: 'snc-qop-invalid',
+          fields: ['qop'],
+          allowed: 'snc-qop',
+        }),
       );
     }
     this.partnerName = partnerName;
@@ -97,6 +118,8 @@ export class SncLogonProvider implements IAuthProvider {
     this.locator = config.locator;
     this.probes = config.probes;
     this.logger = config.logger;
+    // The config's signal is the first party; an aborted one adds nothing.
+    if (config.signal !== undefined) this.parties.attach(config.signal);
   }
 
   /** The usual choice: this machine, library discovery, the Secure Login Client probe. */
@@ -106,6 +129,7 @@ export class SncLogonProvider implements IAuthProvider {
     sncLib?: string;
     myName?: string;
     logger?: ILogger;
+    signal?: AbortSignal;
   }): SncLogonProvider {
     const system = nodeSncSystem();
     return new SncLogonProvider({
@@ -113,112 +137,141 @@ export class SncLogonProvider implements IAuthProvider {
       qop: options.qop,
       myName: options.myName,
       logger: options.logger,
+      signal: options.signal,
       locator: new DefaultSncLibraryLocator(system, options.sncLib),
       probes: [new SecureLoginClientProbe(system)],
     });
   }
 
+  /**
+   * Attaches a party sharing this provider (spec §6b): `prepare()` waits on
+   * the parties live at its start and any attached while it runs, and ends
+   * `aborted` when all of them have aborted. Released when its signal aborts
+   * or by the returned `detach()`.
+   */
+  attach(signal: AbortSignal): () => void {
+    return this.parties.attach(signal);
+  }
+
   /** Resolve the library; note which probe applies. The product is not checked. */
-  async prepare(): Promise<AuthOutcome> {
-    return bounded('resolving the SNC library', async () => {
-      let found: SncLibrary;
+  protected async onPrepare(): Promise<AnyOutcome> {
+    const waiter = this.parties.waiterSignal();
+    try {
+      return await this.resolve(waiter?.signal);
+    } finally {
+      waiter?.release();
+    }
+  }
+
+  private async resolve(signal: AbortSignal | undefined): Promise<AnyOutcome> {
+    let found: SncLibrary;
+    try {
+      found = await this.locator.locate(signal);
+    } catch (error) {
+      throwIfAborted(signal);
+      // G5–G7 only from the shipped locator (the approved source of the
+      // paths); anything else a locator throws is G4's fixed sentence.
+      const refusal = isShippedLocatorFailure(error)
+        ? readFailure(error, 'resolving-snc-library')
+        : foreignLocatorRefusal();
+      // H4: the words; the paths only as the diagnostics field.
+      const fields = logFields(refusal);
+      logQuietly(() =>
+        this.logger?.warn(`SNC library not found: ${fields.error}`, fields),
+      );
+      return { ok: false, refusal };
+    }
+    throwIfAborted(signal);
+    // A getter that throws here is the boundary's (G10), as in 5.4.2.
+    const given: unknown = found?.path;
+    const path = typeof given === 'string' ? given.trim() : '';
+    if (!path) {
+      // G8. Built apart: a union as the contextual type widens the problem.
+      const refusal = authError.snc({ problem: 'locator-returned-no-path' });
+      return { ok: false, refusal };
+    }
+    const archs: unknown = found.archs;
+    const library: SncLibrary = {
+      path,
+      archs: Array.isArray(archs) ? archs : [],
+    };
+    let applying: ISncProductProbe | undefined;
+    for (const probe of this.probes) {
       try {
-        found = await this.locator.locate();
+        if (await probe.appliesTo(library.path, signal)) {
+          applying = probe;
+          break;
+        }
       } catch (error) {
-        const refusal = locateRefusal(error);
-        // The refusal's words: fixed, or allowlisted sources and paths.
-        this.log('warn', `SNC library not found: ${refusal.reason}`);
-        return { ok: false, refusal };
-      }
-      const path = typeof found?.path === 'string' ? found.path.trim() : '';
-      if (!path) {
-        return oops(
-          'no usable SNC library was found: the locator returned no path',
-          'set sncLib to the SNC (GSS) library of your SNC product',
+        // H5: a probe that cannot tell names nothing; the logon goes on.
+        const fields = logFields(readFailure(error, 'probing-snc-product'));
+        logQuietly(() =>
+          this.logger?.warn(
+            `an SNC product probe failed: ${fields.error}`,
+            fields,
+          ),
         );
       }
-      const library: SncLibrary = {
-        path,
-        archs: Array.isArray(found.archs) ? found.archs : [],
-      };
-      let applying: ISncProductProbe | undefined;
-      for (const probe of this.probes) {
-        try {
-          if (await probe.appliesTo(library.path)) {
-            applying = probe;
-            break;
-          }
-        } catch (error) {
-          // A probe that cannot tell names nothing; the logon goes on.
-          this.log(
-            'warn',
-            `an SNC product probe failed: ${loggedError(error, 'the probe').error}`,
-          );
-        }
-      }
-      this.library = library;
-      this.secureLoginClient = applying instanceof SecureLoginClientProbe;
-      this.log(
-        'debug',
+    }
+    throwIfAborted(signal);
+    this.library = library;
+    this.secureLoginClient = applying instanceof SecureLoginClientProbe;
+    logQuietly(() =>
+      this.logger?.debug(
         `SNC library ${library.path} (${library.archs.join('/') || 'architecture not given'})${
           applying ? `, product: ${applying.product}` : ', no product named'
         }`,
-      );
-      return OK;
-    });
+      ),
+    );
+    return OK;
   }
 
-  /** No other way in: the wire's answer is this provider's own. */
-  async establish(logon: ILogonTarget): Promise<AuthOutcome> {
-    return bounded('handing over the SNC logon parameters', () => {
-      const library = this.library;
-      if (!library)
-        return oops(
-          'the SNC provider is not prepared',
-          'connect() prepares it first',
-        );
-      const params: Record<string, string> = {
-        snc_mode: '1',
-        snc_partnername: this.partnerName,
-        snc_qop: this.qop,
-        snc_lib: library.path,
+  /** No other way in (rule 4): the wire's answer is this provider's own. */
+  protected onEstablish(logon: ILogonTarget): AnyOutcome {
+    const library = this.library;
+    if (!library) {
+      // G9.
+      return {
+        ok: false,
+        refusal: authError['not-prepared']({ provider: 'snc' }),
       };
-      if (this.myName) params.snc_myname = this.myName;
-      return logon.logonParameters(params);
-    });
+    }
+    const params: Record<string, string> = {
+      snc_mode: '1',
+      snc_partnername: this.partnerName,
+      snc_qop: this.qop,
+      snc_lib: library.path,
+    };
+    if (this.myName) params.snc_myname = this.myName;
+    // The target's answer, returned or thrown — never the target's object.
+    return relayOutcome(
+      () => logon.logonParameters(params),
+      'logon-parameters',
+      'handing-over-snc-parameters',
+    ).outcome;
   }
 
-  async authorize(_request: IRequestTarget): Promise<AuthOutcome> {
-    return bounded('authorizing a request', () => OK);
+  protected onAuthorize(_request: IRequestTarget): AnyOutcome {
+    return OK;
   }
 
   /**
    * A GSS code in the error is explained first — the SDK reports SNC logon
    * failures as a communication failure. Without one, a status or an RFC key
-   * that is not about the credential gets the neutral words.
+   * that is not about the credential gets the neutral words (rule 5).
    */
-  async rejected(rejection: IAuthRejection): Promise<AuthOutcome> {
-    return bounded('explaining the SNC refusal', () => {
-      const context = {
-        library: this.library,
-        secureLoginClient: this.secureLoginClient,
-      };
-      const cause = sncCause(rejection?.error, context);
-      if (cause) return { ok: false, refusal: cause };
-      const read = readRejection(rejection);
-      if (read.verdict === 'not-credential') {
-        return { ok: false, refusal: read.refusal };
-      }
-      return { ok: false, refusal: sncRefusal(rejection?.error, context) };
-    });
-  }
-
-  /** A log line that cannot take the method down with it. */
-  private log(level: 'warn' | 'debug', message: string): void {
-    try {
-      this.logger?.[level](message);
-    } catch {
-      // The log sink is down; the answer does not depend on it.
+  protected onRejected(rejection: IAuthRejection): AnyOutcome {
+    const context = {
+      library: this.library,
+      secureLoginClient: this.secureLoginClient,
+    };
+    const error = readSafely(rejection, 'error');
+    const cause = sncCause(error, context);
+    if (cause) return { ok: false, refusal: cause };
+    const read = readRejection(rejection);
+    if (read.verdict === 'not-credential') {
+      return { ok: false, refusal: read.refusal };
     }
+    return { ok: false, refusal: sncRefusal(error, context) };
   }
 }

@@ -18,8 +18,12 @@ import {
 export interface ISncProductProbe {
   /** The product's name — for logs; a refusal names only the shipped probe's. */
   readonly product: string;
-  /** Whether the library at this path belongs to the product. */
-  appliesTo(libraryPath: string): Promise<boolean>;
+  /**
+   * Whether the library at this path belongs to the product. `signal`, when
+   * given, is the moment's: a probe that waits on the machine ends when it
+   * aborts.
+   */
+  appliesTo(libraryPath: string, signal?: AbortSignal): Promise<boolean>;
 }
 
 function asDirectory(path: string): string {
@@ -32,12 +36,12 @@ export class SecureLoginClientProbe implements ISncProductProbe {
 
   constructor(private readonly system: SncSystem) {}
 
-  async appliesTo(libraryPath: string): Promise<boolean> {
+  async appliesTo(libraryPath: string, signal?: AbortSignal): Promise<boolean> {
     const { system } = this;
     if (system.platform === 'win32') {
       const dirs = await Promise.all(
         ['InstallPath64', 'InstallPath32'].map((name) =>
-          system.readRegistryValue(SLC_REGISTRY_KEY, name),
+          system.readRegistryValue(SLC_REGISTRY_KEY, name, signal),
         ),
       );
       const library = win32.normalize(libraryPath.trim()).toLowerCase();

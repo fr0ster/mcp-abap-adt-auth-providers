@@ -54,12 +54,6 @@ import { integerStatus, readSafely } from './knownCodes';
 export { OK } from '@mcp-abap-adt/auth-errors';
 export { allowlistedCode, tlsFailureCode } from './knownCodes';
 
-export function oops(reason: string, hint?: string): AuthOutcome {
-  return hint === undefined
-    ? { ok: false, refusal: { reason } }
-    : { ok: false, refusal: { reason, hint } };
-}
-
 /** The operation a `what` names, with the grant of a token request. */
 export interface OperationOf {
   readonly operation: Operation;
@@ -319,10 +313,15 @@ function ladder(error: unknown, of: OperationOf): AuthOutcome {
     return refused(configuration);
   }
   if (error instanceof ServiceKeyError || error instanceof SessionDataError) {
-    return oops(
-      `the service key or session data is incomplete${knownFields(readSafely(error, 'missingFields'))}`,
-      'check the service key or session data',
-    );
+    // A12: no kind and no producer in this package — 5.4.2's words,
+    // unminted, until the classes go in Task 27.
+    return {
+      ok: false,
+      refusal: {
+        reason: `the service key or session data is incomplete${knownFields(readSafely(error, 'missingFields'))}`,
+        hint: 'check the service key or session data',
+      },
+    };
   }
   if (error instanceof TokenProviderError) {
     // A13: the class label is lost (spec L11).

@@ -1,5 +1,5 @@
 import { describe, expect, it } from '@jest/globals';
-import { OK, oops, refusalFrom } from '../../auth/refusal';
+import { OK, refusalFrom } from '../../auth/refusal';
 import { DeviceCodePresentationError } from '../../deviceCode/DeviceCodePresenter';
 import { AssertionValidationError } from '../../errors/AssertionValidationError';
 import {
@@ -15,13 +15,9 @@ import { wordsOf } from '../helpers/minted';
 const text = (x: unknown) => JSON.stringify(x);
 
 describe('refusal', () => {
-  it('OK and oops build the two outcomes', () => {
+  // `oops` is gone with its last caller (Task 25): every refusal is minted.
+  it('OK is the one success outcome', () => {
     expect(OK).toEqual({ ok: true });
-    expect(oops('r', 'h')).toEqual({
-      ok: false,
-      refusal: { reason: 'r', hint: 'h' },
-    });
-    expect(oops('r')).toEqual({ ok: false, refusal: { reason: 'r' } });
   });
 
   it.each([

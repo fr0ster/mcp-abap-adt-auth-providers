@@ -1,20 +1,19 @@
 /**
  * The sweep of `src` (plan Task 26): no `new Error(` and no construction of
  * any of this package's error classes — A.1's thirteen and the two of
- * `callbackScopeError.ts` — is left. Every throw is an `AuthProviderFailure`
- * of its row's kind, built at its site, or the rethrow of one.
+ * `callbackScopeError.ts`, and SNC's `SncLibraryNotFoundError` — is left.
+ * Every throw is an `AuthProviderFailure` of its row's kind, built at its
+ * site, or the rethrow of one; and no refusal is built from free words
+ * (`oops(`, the last caller removed in Task 25).
  *
- * TRANSITION: `src/snc` is Task 25's (E20, E21 and the locator's
- * `SncLibraryNotFoundError`), excluded here until that task removes the
- * exclusion. The classes themselves stay exported until Task 27.
+ * The classes themselves stay exported until Task 27.
  */
 
 import { readdirSync, readFileSync, statSync } from 'node:fs';
-import { join, relative, sep } from 'node:path';
+import { join, relative } from 'node:path';
 import { describe, expect, it } from '@jest/globals';
 
 const SRC = join(__dirname, '..', '..');
-const EXCLUDED = [`snc${sep}`];
 
 function sourceFiles(dir: string): string[] {
   return readdirSync(dir).flatMap((name) => {
@@ -25,19 +24,15 @@ function sourceFiles(dir: string): string[] {
   });
 }
 
-/** Every line of `src` (Task 25's excluded) holding `needle`, as `file:line`. */
+/** Every line of `src` holding `needle`, as `file:line`. */
 function linesWith(needle: string): string[] {
-  return sourceFiles(SRC)
-    .filter(
-      (file) => !EXCLUDED.some((dir) => relative(SRC, file).startsWith(dir)),
-    )
-    .flatMap((file) =>
-      readFileSync(file, 'utf8')
-        .split('\n')
-        .flatMap((line, i) =>
-          line.includes(needle) ? [`${relative(SRC, file)}:${i + 1}`] : [],
-        ),
-    );
+  return sourceFiles(SRC).flatMap((file) =>
+    readFileSync(file, 'utf8')
+      .split('\n')
+      .flatMap((line, i) =>
+        line.includes(needle) ? [`${relative(SRC, file)}:${i + 1}`] : [],
+      ),
+  );
 }
 
 const CLASSES = [
@@ -56,6 +51,7 @@ const CLASSES = [
   'TokenEndpointError',
   'CallbackScopeError',
   'AuthorizationRefusedError',
+  'SncLibraryNotFoundError',
 ];
 
 describe('nothing in src throws an unminted error', () => {
@@ -65,5 +61,9 @@ describe('nothing in src throws an unminted error', () => {
 
   it.each(CLASSES)('%s is constructed nowhere', (className) => {
     expect(linesWith(`new ${className}(`)).toEqual([]);
+  });
+
+  it('no refusal of free words: no oops(', () => {
+    expect(linesWith('oops(')).toEqual([]);
   });
 });

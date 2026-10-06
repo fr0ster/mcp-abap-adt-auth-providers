@@ -203,28 +203,24 @@ function whatLiterals(): string[] {
 describe('A.8 — every what of this package is a closed operation', () => {
   const literals = whatLiterals();
 
-  it('the scan finds the call sites', () => {
-    expect(literals).toEqual(
-      expect.arrayContaining([
-        'the probe',
-        // 'opening the browser' and 'the presenter' left with `logFields`
-        // (H7, H8, H3: Task 23).
-        // 'the token request' left with `tokenEndpointError` (D2, H9: Task 21).
-        // 'onTokens' and 'the refresh' left with `logFields` (H1, H2: Task 22).
-      ]),
-    );
+  it('no call site is left: every what moved to a closed operation', () => {
+    // 'the probe' left with `logFields` (H5: Task 25).
+    // 'opening the browser' and 'the presenter' left with `logFields`
+    // (H7, H8, H3: Task 23).
+    // 'the token request' left with `tokenEndpointError` (D2, H9: Task 21).
+    // 'onTokens' and 'the refresh' left with `logFields` (H1, H2: Task 22).
+    expect(literals).toEqual([]);
   });
 
-  it.each(literals)(
-    '%s → an operation whose words are its words (A1)',
-    (what) => {
+  it('each what of the table → an operation whose words are its words (A1)', () => {
+    for (const what of ['the probe', 'the presenter', 'opening the browser']) {
       const mapped = operationFor(what);
       expect(mapped.operation).not.toBe('unfamiliar-error');
       expect(authError.unknown(mapped).reason).toBe(
         `${what} failed (unknown error)`,
       );
-    },
-  );
+    }
+  });
 
   it.each([
     'authorization_code',
