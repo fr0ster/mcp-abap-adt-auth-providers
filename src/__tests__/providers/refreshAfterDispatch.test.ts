@@ -386,3 +386,41 @@ describe('a refresh answered, then cut while its outcome waits in the queue', ()
     );
   });
 });
+
+describe('a refresh whose own commit step fails', () => {
+  it('after the server rotated R → R2, a throwing commit step: R is spent, the next renewal logs in and R reaches the server once', async () => {
+    class FailingOnce extends AuthorizationCodeProvider {
+      fail = 1;
+      protected override updateTokens(
+        result: Parameters<AuthorizationCodeProvider['updateTokens']>[0],
+      ): void {
+        if (this.fail > 0) {
+          this.fail -= 1;
+          throw new Error('subclass update failed');
+        }
+        super.updateTokens(result);
+      }
+    }
+    const strategy = waitingStrategy();
+    const p = new FailingOnce({
+      uaaUrl: server.url,
+      clientId: 'cid',
+      clientSecret: 'sec',
+      authorization: strategy,
+      logger: silent,
+      accessToken: expired('held'),
+      refreshToken: 'R',
+    });
+    const failed = rejectionOf(p.getTokens());
+    (await waitForRefresh(0)).answer(200, {
+      access_token: jwt('rotated'),
+      refresh_token: 'R2',
+    });
+    await failed;
+
+    const next = p.getTokens();
+    (await strategy.nth(1)).answer('code-1');
+    await expect(next).resolves.toMatchObject({ refreshToken: 'S-1' });
+    expect(submitted()).toEqual(['R']);
+  });
+});

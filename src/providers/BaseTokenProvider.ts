@@ -881,7 +881,12 @@ export abstract class BaseTokenProvider
     // ends the attempt in between: an answer waiting in the queue behind a
     // stalled commit has not yet replaced or cleared it, and the next
     // renewal must not send it again.
+    // The same holds when the outcome's own step fails (a throwing commit
+    // after the server rotated R): unless it was applied, R is spent.
+    const outcome = { applied: false, cut: false };
     const cut = () => {
+      if (outcome.cut) return;
+      outcome.cut = true;
       this.quarantine.add(spent);
       void this.commit(() => this.discard(spent));
     };
@@ -905,6 +910,7 @@ export abstract class BaseTokenProvider
         // queue, before the login, so the stored one goes even if the login
         // fails.
         await this.commit(() => this.discard(spent));
+        outcome.applied = true;
         // Aborted while the clearing step waited: nobody waits for a login.
         throwIfAborted(signal);
         return undefined;
@@ -916,9 +922,11 @@ export abstract class BaseTokenProvider
         generation,
         attempt,
         'refresh',
+        outcome,
       );
     } finally {
       signal.removeEventListener('abort', cut);
+      if (!outcome.applied) cut();
     }
   }
 
@@ -952,6 +960,7 @@ export abstract class BaseTokenProvider
     generation: number,
     attempt: AttemptContext,
     obtained: Obtained,
+    outcome?: { applied: boolean },
   ): Promise<ITokenResult> {
     const applied = await this.commit(async () => {
       if (obtained === 'login' && attempt.signal.aborted) return undefined;
@@ -986,6 +995,8 @@ export abstract class BaseTokenProvider
       await this.obtained(accepted, heldBefore);
       return accepted;
     });
+    // The step ran to its end, applied or discarded whole.
+    if (outcome) outcome.applied = true;
     if (applied !== undefined) return applied;
     // Discarded: an aborted attempt has no waiter left to answer. A live
     // attempt is always the newest of its kind, so it is never discarded;
