@@ -7,6 +7,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+<!-- 6.0.0, in progress (PR #68); Task 30 writes the full entry. -->
+
+### Removed
+
+- **The 5.x error classes and `refusalWords`.** `TokenProviderError`,
+  `ValidationError`, `RefreshError`, `SessionDataError`, `ServiceKeyError`,
+  `BrowserAuthError`, `AssertionValidationError` (and the `AssertionCheck`
+  re-export: import it from `@mcp-abap-adt/interfaces-auth`),
+  `CertificateMaterialError`, `ClientAuthenticationError`,
+  `ClientAuthenticationResultError`, `BasicClientIdError` and
+  `TokenEndpointError` are gone; every throw is `@mcp-abap-adt/auth-errors`'
+  `AuthProviderFailure`, read with `readFailure(thrown, operation)` and
+  switched on `kind`. `getTokens()` / `refreshTokens()` throw nothing else.
+  `SessionDataError` / `ServiceKeyError` had no producer and have no
+  replacement.
+- **`refusalWords(error, what)` → `classify(error, operation)`**
+  (auth-errors), `.reason` / `.hint`. A caller that passed its own `what`
+  must name a closed `Operation`: `'unfamiliar-error'` answers the
+  unfamiliar-error words ("an authentication error of a kind this version
+  does not know") and no hint — a TLS failure's `NODE_EXTRA_CA_CERTS` hint
+  included; an operation of the list keeps its words and hints.
+- **`ICallbackServerOptions.timeoutMs`** (interfaces-auth 6.0.0): pass
+  `signal: AbortSignal.timeout(ms)` for a bound.
+
+### Changed
+
+- **Dependencies:** `@mcp-abap-adt/interfaces-auth ^6.0.0`,
+  `@mcp-abap-adt/interfaces-auth-sap ^3.2.0`, `@mcp-abap-adt/auth-errors
+  ^1.0.0`.
+- **Every token result carries `refreshTokenDisposition`** (interfaces-auth
+  6.0.0's `ITokenResult`): what `getTokens()` / `refreshTokens()` return
+  after a renewal is what `onTokens` was told; a cache hit says `'replace'`
+  with a usable refresh token, else `'clear'` after one was discarded, else
+  `'keep'`.
+
 ## [5.4.2] - 2026-10-05
 
 ### Changed

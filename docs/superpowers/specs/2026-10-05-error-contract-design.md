@@ -517,6 +517,13 @@ in the place today's words put it.
   union). Optional in the type so a 4.x-shaped result still compiles; every
   result auth-providers 6.0.0 produces sets it; a reader that finds it absent
   infers today's meaning (a refresh token present → `replace`, else `keep`).
+  "Every result" is what `onTokens` is told **and** what `getTokens()` /
+  `refreshTokens()` return (decided in plan Task 27, 2026-10-06): a renewal
+  returns exactly the result `onTokens` was told (the hook gets its own
+  copy); a result that is no new commit — a cache hit, or the credentials in
+  place — carries `'replace'` with the held refresh token when it is usable
+  (not quarantined), else `refreshToken: undefined` with `'clear'` while the
+  logical state is `cleared` (§6b), else `'keep'`.
 - **Cancelling a login (§6b).** `AuthorizationRequest` gains `readonly
   signal?: AbortSignal | undefined` — the provider's signal for this login,
   which a strategy must honour as it honours its own option signal. A new
