@@ -5,6 +5,7 @@ import type { ICertificateMaterial } from '@mcp-abap-adt/interfaces-auth';
 import { refusalFrom } from '../../auth/refusal';
 import { tlsClientCertificate } from '../../clientAuthentication';
 import { CertificateMaterialError } from '../../errors/CertificateMaterialError';
+import { wordsOf } from '../helpers/minted';
 
 const dir = join(__dirname, '..', 'fixtures', 'certificates');
 const pem: ICertificateMaterial = {
@@ -80,7 +81,7 @@ describe('tlsClientCertificate — the material', () => {
     const auth = tlsClientCertificate({ material: { cert: pem.cert! } });
     const e = await auth.authenticate(base).catch((x) => x);
     expect(e).toBeInstanceOf(CertificateMaterialError);
-    expect(refusalFrom(e, 'x')).toEqual({
+    expect(wordsOf(refusalFrom(e, 'x'))).toEqual({
       ok: false,
       refusal: {
         reason: 'the client certificate is incomplete',

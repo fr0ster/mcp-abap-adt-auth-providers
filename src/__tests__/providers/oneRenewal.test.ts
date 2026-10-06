@@ -29,6 +29,7 @@ jest.mock('../../auth/oidcToken', () => ({
 }));
 
 import { tokenExchange } from '../../auth/oidcToken';
+import { wordsOf } from '../helpers/minted';
 
 const refused = { at: 'request' as const, status: 401, error: {} };
 
@@ -49,9 +50,9 @@ describe('AuthorizationCodeProvider: one renewal, one login', () => {
 
     const outcome = await provider.rejected(refused);
 
-    expect(outcome).toMatchObject({
+    expect(wordsOf(outcome)).toMatchObject({
       ok: false,
-      refusal: { reason: 'the interactive login did not complete' },
+      refusal: { reason: 'the browser login failed (unknown error)' },
     });
     expect(authorize).toHaveBeenCalledTimes(1);
   });

@@ -7,6 +7,7 @@ import {
 } from '../../clientAuthentication';
 import { BasicClientIdError } from '../../errors/ClientAuthenticationError';
 import { ValidationError } from '../../errors/TokenProviderErrors';
+import { wordsOf } from '../helpers/minted';
 
 const draft = {
   endpoint: 'https://uaa.example/oauth/token',
@@ -56,7 +57,7 @@ describe('clientSecretBasic', () => {
       );
     expect(failure).toBeInstanceOf(BasicClientIdError);
     expect(String((failure as Error).message)).not.toContain('my:client');
-    expect(refusalFrom(failure, 'the token request')).toEqual({
+    expect(wordsOf(refusalFrom(failure, 'the token request'))).toEqual({
       ok: false,
       refusal: {
         reason: "the client id contains ':', which raw Basic cannot carry",

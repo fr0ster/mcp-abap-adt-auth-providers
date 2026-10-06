@@ -17,6 +17,7 @@ import {
   TokenEndpointError,
   ValidationError,
 } from '../../index';
+import { wordsOf } from '../helpers/minted';
 
 const MARKER = 'SECRET-MARKER';
 const text = (x: unknown) => JSON.stringify(x);
@@ -102,9 +103,11 @@ describe('refusalWords', () => {
     );
     let words: unknown;
     expect(() => {
-      words = refusalWords(hostile, 'it');
+      words = refusalWords(hostile, 'the token source');
     }).not.toThrow();
-    expect(words).toEqual({ reason: 'it failed (unknown error)' });
+    expect(words).toEqual({
+      reason: 'the token source failed (unknown error)',
+    });
   });
 
   it('a CertificateMaterialError whose own `words` carries a marker → the fixed words', () => {
@@ -164,8 +167,10 @@ describe('refusalWords', () => {
         return { reason: MARKER };
       },
     };
-    const words = refusalWords(forged, 'it');
-    expect(words).toEqual({ reason: 'it failed (unknown error)' });
+    const words = refusalWords(forged, 'the token source');
+    expect(words).toEqual({
+      reason: 'the token source failed (unknown error)',
+    });
     expect(text(words)).not.toContain(MARKER);
   });
 
@@ -247,7 +252,7 @@ describe('refusalWords', () => {
       {} as never,
     );
     const outcome = await provider.prepare();
-    expect(outcome).toEqual({
+    expect(wordsOf(outcome)).toEqual({
       ok: false,
       refusal: {
         reason: 'the client certificate has expired',
@@ -275,7 +280,7 @@ describe('refusalWords', () => {
       {} as never,
     );
     const outcome = await provider.prepare();
-    expect(outcome).toEqual({
+    expect(wordsOf(outcome)).toEqual({
       ok: false,
       refusal: {
         reason: 'the client certificate is incomplete',
@@ -352,7 +357,7 @@ describe('refusalWords', () => {
           },
           {} as never,
         );
-        expect(await provider.prepare()).toEqual({
+        expect(wordsOf(await provider.prepare())).toEqual({
           ok: false,
           refusal: INCOMPLETE,
         });

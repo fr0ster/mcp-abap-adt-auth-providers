@@ -12,6 +12,7 @@ import {
   type TokenProviderHooks,
 } from '../../providers/BaseTokenProvider';
 import { Saml2PureProvider } from '../../providers/Saml2PureProvider';
+import { wordsOf } from '../helpers/minted';
 import { recordingTargets } from '../helpers/targets';
 
 const inAnHour = () => Date.now() + 3600_000;
@@ -101,7 +102,7 @@ describe('BaseTokenProvider as IAuthProvider', () => {
     const outcome = await p.authorize(
       recordingTargets({ throws: true }).requestTarget,
     );
-    expect(outcome).toEqual({
+    expect(wordsOf(outcome)).toEqual({
       ok: false,
       refusal: { reason: 'presenting the token failed (unknown error)' },
     });
@@ -171,9 +172,9 @@ describe('BaseTokenProvider as IAuthProvider', () => {
     p.refresh.mockRejectedValue(new RefreshError('refused'));
     p.login.mockRejectedValue(new BrowserAuthError('SECRET-IDP-TEXT'));
     const outcome = await p.rejected(refused);
-    expect(outcome).toMatchObject({
+    expect(wordsOf(outcome)).toMatchObject({
       ok: false,
-      refusal: { reason: 'the interactive login did not complete' },
+      refusal: { reason: 'the browser login failed (unknown error)' },
     });
     expect(JSON.stringify(outcome)).not.toMatch(/SECRET/);
     expect(p.refresh).toHaveBeenCalledTimes(1);
@@ -193,7 +194,7 @@ describe('BaseTokenProvider as IAuthProvider', () => {
       new Error('invalid_grant for SECRET-CLIENT-SECRET'),
     );
     const outcome = await p.prepare();
-    expect(outcome).toEqual({
+    expect(wordsOf(outcome)).toEqual({
       ok: false,
       refusal: {
         reason: 'client_credentials token request failed (unknown error)',

@@ -592,7 +592,11 @@ describe('SSO Providers', () => {
       // The whole outcome, exactly: no hint, no code, no presenter message.
       expect(outcome).toEqual({
         ok: false,
-        refusal: { reason: 'showing the device code failed' },
+        refusal: {
+          kind: 'interactive-login',
+          facts: { outcome: 'device-code-not-shown' },
+          reason: 'showing the device code failed',
+        },
       });
     },
   );

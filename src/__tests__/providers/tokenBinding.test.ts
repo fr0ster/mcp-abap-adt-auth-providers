@@ -23,6 +23,7 @@ import {
 } from '../../auth/refusal';
 import { readBinding } from '../../auth/tokenBinding';
 import { OidcPasswordProvider } from '../../providers/OidcPasswordProvider';
+import { wordsOf } from '../helpers/minted';
 import { recordingTargets } from '../helpers/targets';
 
 // Automocked, but with axios's own error class: the sites throw it.
@@ -383,7 +384,7 @@ describe('around the table', () => {
     const { provider } = seeded(boundTo(THUMB_A), A);
     const t = recordingTargets({ throws: true });
     const outcome = await provider.establish(t.logonTarget);
-    expect(outcome).toEqual({
+    expect(wordsOf(outcome)).toEqual({
       ok: false,
       refusal: { reason: 'presenting the certificate failed (unknown error)' },
     });
@@ -393,7 +394,7 @@ describe('around the table', () => {
   it('unbound, material, a target that throws: Oops — a throwing target is broken (rule 1), not a refusal to go on from', async () => {
     const { provider } = seeded(UNBOUND, A);
     const t = recordingTargets({ throws: true });
-    await expect(provider.establish(t.logonTarget)).resolves.toEqual({
+    expect(wordsOf(await provider.establish(t.logonTarget))).toEqual({
       ok: false,
       refusal: { reason: 'presenting the certificate failed (unknown error)' },
     });
@@ -403,7 +404,7 @@ describe('around the table', () => {
     const { provider } = seeded(UNBOUND);
     const t = recordingTargets({ throws: true });
     const outcome = await provider.authorize(t.requestTarget);
-    expect(outcome).toEqual({
+    expect(wordsOf(outcome)).toEqual({
       ok: false,
       refusal: { reason: 'presenting the token failed (unknown error)' },
     });
@@ -791,7 +792,7 @@ describe('a held token bound to another certificate, one pinned: renewed like an
     const now = jest.spyOn(Date, 'now').mockReturnValue(Date.UTC(2127, 0, 1));
     try {
       for (let i = 0; i < 3; i += 1) {
-        await expect(provider.authorize(t.requestTarget)).resolves.toEqual(
+        expect(wordsOf(await provider.authorize(t.requestTarget))).toEqual(
           EXPIRED,
         );
       }

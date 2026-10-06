@@ -10,6 +10,7 @@ import {
   TokenProviderError,
   ValidationError,
 } from '../../errors/TokenProviderErrors';
+import { wordsOf } from '../helpers/minted';
 
 const text = (x: unknown) => JSON.stringify(x);
 
@@ -25,9 +26,10 @@ describe('refusal', () => {
 
   it.each([
     [
+      // A9: the outcome's words (K11) and the new hint (§6a).
       new BrowserAuthError('SECRET-MSG'),
-      'the interactive login did not complete',
-      "complete the login within the strategy's time",
+      'the browser login failed (unknown error)',
+      'complete the login, or abort it',
     ],
     [
       new RefreshError('SECRET-MSG'),
@@ -50,7 +52,7 @@ describe('refusal', () => {
       'check the service key or session data',
     ],
   ])('%p → fixed wording, never its message', (error, reason, hint) => {
-    expect(refusalFrom(error, 'it')).toEqual({
+    expect(wordsOf(refusalFrom(error, 'it'))).toEqual({
       ok: false,
       refusal: { reason, hint },
     });
@@ -95,12 +97,17 @@ describe('refusal', () => {
     });
   });
 
-  it('another own error: its class label, no message', () => {
+  it('another own error: unknown with the operation, no message (A13: the class label is lost, L11)', () => {
     expect(
-      refusalFrom(new TokenProviderError('SECRET', 'CODE'), 'x token request'),
+      wordsOf(
+        refusalFrom(
+          new TokenProviderError('SECRET', 'CODE'),
+          'password token request',
+        ),
+      ),
     ).toEqual({
       ok: false,
-      refusal: { reason: 'x token request failed (TokenProviderError)' },
+      refusal: { reason: 'password token request failed (unknown error)' },
     });
   });
 
@@ -110,45 +117,51 @@ describe('refusal', () => {
       code: 'ECONNREFUSED',
       response: { data: 'SECRET' },
     });
-    expect(refusalFrom(axios, 'the token endpoint')).toEqual({
+    expect(wordsOf(refusalFrom(axios, 'the token request'))).toEqual({
       ok: false,
       refusal: {
-        reason: 'the token endpoint failed (unknown error, ECONNREFUSED)',
+        reason: 'the token request failed (unknown error, ECONNREFUSED)',
       },
     });
     const forged = Object.assign(new Error('x'), {
       name: 'SECRETError',
       code: 'ESECRET',
     });
-    expect(refusalFrom(forged, 'it')).toEqual({
+    expect(wordsOf(refusalFrom(forged, 'the token request'))).toEqual({
       ok: false,
-      refusal: { reason: 'it failed (unknown error)' },
+      refusal: { reason: 'the token request failed (unknown error)' },
     });
   });
 
   it('a thrown string or object lends nothing', () => {
-    expect(refusalFrom('SECRET-STRING', 'it')).toEqual({
+    expect(wordsOf(refusalFrom('SECRET-STRING', 'the token source'))).toEqual({
       ok: false,
-      refusal: { reason: 'it failed (unknown error)' },
+      refusal: { reason: 'the token source failed (unknown error)' },
     });
     expect(
       text(
         refusalFrom(
           { message: 'SECRET', key: 'SECRET_KEY', code: 'ENOENT' },
-          'it',
+          'loading the certificate',
         ),
       ),
     ).toBe(
       text({
         ok: false,
-        refusal: { reason: 'it failed (unknown error, ENOENT)' },
+        refusal: {
+          kind: 'unknown',
+          facts: { operation: 'loading-certificate', code: 'ENOENT' },
+          reason: 'loading the certificate failed (unknown error, ENOENT)',
+        },
       }),
     );
   });
 
   it('a presenter failure is the fixed device-code refusal', () => {
     expect(
-      refusalFrom(new DeviceCodePresentationError(), 'x token request'),
+      wordsOf(
+        refusalFrom(new DeviceCodePresentationError(), 'x token request'),
+      ),
     ).toEqual({
       ok: false,
       refusal: { reason: 'showing the device code failed' },
@@ -156,13 +169,15 @@ describe('refusal', () => {
   });
 
   it('safely: sync throw, async rejection and a returned outcome', async () => {
-    await expect(
-      safely('it', () => {
-        throw new Error('SECRET');
-      }),
-    ).resolves.toEqual({
+    expect(
+      wordsOf(
+        await safely('the token source', () => {
+          throw new Error('SECRET');
+        }),
+      ),
+    ).toEqual({
       ok: false,
-      refusal: { reason: 'it failed (unknown error)' },
+      refusal: { reason: 'the token source failed (unknown error)' },
     });
     await expect(
       safely('it', async () => {
@@ -181,7 +196,6 @@ describe('shared word and outcome objects are frozen', () => {
     const certificate = await import('../../errors/CertificateMaterialError');
     const client = await import('../../errors/ClientAuthenticationError');
     const refusal = await import('../../auth/refusal');
-    const known = await import('../../auth/knownCodes');
     const shared: object[] = [
       certificate.CERTIFICATE_INCOMPLETE,
       certificate.CERTIFICATE_UNUSABLE,
@@ -192,7 +206,6 @@ describe('shared word and outcome objects are frozen', () => {
       refusal.OK,
       refusal.TOKEN_BOUND_ELSEWHERE,
       refusal.TOKEN_RENEWED_BOUND_ELSEWHERE,
-      ...known.TLS_CODES.values(),
     ];
     for (const words of shared) expect(Object.isFrozen(words)).toBe(true);
   });

@@ -9,6 +9,7 @@ import { FileCertificateMaterialLoader } from '../../credentials/FileCertificate
 import { SamlAuthProvider } from '../../credentials/SamlAuthProvider';
 import { TokenAuthProvider } from '../../credentials/TokenAuthProvider';
 import { ValidationError } from '../../errors/TokenProviderErrors';
+import { wordsOf } from '../helpers/minted';
 import { recordingTargets } from '../helpers/targets';
 
 const refusal = { at: 'request' as const, status: 401, error: {} };
@@ -196,7 +197,7 @@ describe('CertificateAuthProvider', () => {
       config,
     );
     const outcome = await foreign.prepare();
-    expect(outcome).toEqual({
+    expect(wordsOf(outcome)).toEqual({
       ok: false,
       refusal: {
         reason: 'loading the certificate failed (unknown error, ENOENT)',

@@ -32,6 +32,7 @@ import {
   browserCallbackStrategy,
   oidcCallbackStrategy,
 } from '../../strategies';
+import { wordsOf } from '../helpers/minted';
 
 jest.mock('axios', () => {
   const mocked = jest.createMockFromModule<Record<string, unknown>>('axios');
@@ -390,12 +391,12 @@ describe('refusalFrom and loggedError are total', () => {
   });
 
   it('a value whose every read throws is "unknown error", not an exception', () => {
-    expect(refusalFrom(hostile(), 'the step')).toEqual({
+    expect(wordsOf(refusalFrom(hostile(), 'the token source'))).toEqual({
       ok: false,
-      refusal: { reason: 'the step failed (unknown error)' },
+      refusal: { reason: 'the token source failed (unknown error)' },
     });
-    expect(loggedError(hostile(), 'the step')).toEqual({
-      error: 'the step failed (unknown error)',
+    expect(loggedError(hostile(), 'the token source')).toEqual({
+      error: 'the token source failed (unknown error)',
     });
   });
 
@@ -489,7 +490,7 @@ describe('the facts are re-checked wherever they are read', () => {
     ).toBe(401);
   });
 
-  it('a reduced AxiosError reads like a TokenEndpointError', () => {
+  it('a reduced AxiosError reads like a TokenEndpointError (the same words; its kind is unknown until Task 21 makes the site request-failed)', () => {
     const facts = { status: 401, oauthError: 'invalid_grant' };
     const axiosError = new AxiosError(
       'Request failed with status code 401',
@@ -503,9 +504,9 @@ describe('the facts are re-checked wherever they are read', () => {
         data: { error: 'invalid_grant' },
       } as never,
     );
-    const words = refusalFrom(axiosError, 'the refresh');
+    const words = wordsOf(refusalFrom(axiosError, 'the refresh'));
     expect(words).toEqual(
-      refusalFrom(new TokenEndpointError('m', facts), 'the refresh'),
+      wordsOf(refusalFrom(new TokenEndpointError('m', facts), 'the refresh')),
     );
     expect(words).toEqual({
       ok: false,

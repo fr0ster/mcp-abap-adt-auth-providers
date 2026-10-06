@@ -5,19 +5,24 @@
  * A provider blames its credential, and a token provider renews, only when the
  * rejection says the credential was refused: a 401, or the RFC SDK's
  * RFC_LOGON_FAILURE. Anything else the system said — 403, a redirect, 5xx,
- * another status, another RFC key — is answered with a neutral refusal that
- * names only the status or the allowlisted key (rule 2), and nothing is
- * renewed: a new credential would be refused the same way. A rejection that
+ * another status, another RFC key — is answered `system-refused` with its
+ * `verdict`, the status or the allowlisted key, and the moment (`at`); nothing
+ * is renewed: a new credential would be refused the same way. A rejection that
  * carries neither is `unknown`, and each provider decides what that means for
  * it.
+ *
+ * The refusals are minted by auth-errors and reach their 4.x-typed callers
+ * through `toLegacyRefusal` — the minted error itself (Decision D6).
  */
 
+import { authError, httpStatus, isRfcKey } from '@mcp-abap-adt/auth-errors';
 import type {
   AuthOutcome,
   IAuthRefusal,
   IAuthRejection,
 } from '@mcp-abap-adt/interfaces-auth';
-import { KNOWN_RFC_KEYS } from './refusal';
+import { toLegacyRefusal } from './contractTransition';
+import { readSafely } from './knownCodes';
 
 export type RejectionReading =
   | { readonly verdict: 'credential' }
@@ -27,76 +32,78 @@ export type RejectionReading =
 const CREDENTIAL: RejectionReading = Object.freeze({ verdict: 'credential' });
 const UNKNOWN: RejectionReading = Object.freeze({ verdict: 'unknown' });
 
-function notCredential(reason: string, hint?: string): RejectionReading {
-  return {
-    verdict: 'not-credential',
-    refusal: hint === undefined ? { reason } : { reason, hint },
-  };
+type Moment = 'logon' | 'request';
+
+/** The moment of a rejection; anything but a request reads as a logon, as in 5.4.2. */
+function momentOf(rejection: IAuthRejection | undefined): Moment {
+  return readSafely(rejection, 'at') === 'request' ? 'request' : 'logon';
 }
 
-function fromStatus(status: number): RejectionReading {
+function fromStatus(status: number, at: Moment): RejectionReading {
   if (status === 401) return CREDENTIAL;
-  if (status === 403) {
-    return notCredential(
-      'the credential was accepted, but the user is not authorized (403)',
-      "check the user's authorizations in the system",
-    );
-  }
-  if (status >= 300 && status < 400) {
-    return notCredential(
-      `the system redirected instead of accepting the credential (${status})`,
-      'the service may require another logon procedure (single sign-on, an identity provider)',
-    );
-  }
-  if (status >= 500) {
-    return notCredential(
-      `the system failed (${status}), not the credential`,
-      'try again later',
-    );
-  }
-  return notCredential(
-    `the system answered ${status}, which is not a credential refusal`,
-  );
+  const checked = httpStatus(status);
+  if (checked === undefined) return UNKNOWN;
+  const verdict =
+    status === 403
+      ? 'not-authorized'
+      : status >= 300 && status < 400
+        ? 'redirected'
+        : status >= 500
+          ? 'system-failed'
+          : 'other-status';
+  return {
+    verdict: 'not-credential',
+    refusal: toLegacyRefusal(
+      authError['system-refused']({ verdict, status: checked, at }),
+    ),
+  };
 }
 
 export function readRejection(
   rejection: IAuthRejection | undefined,
 ): RejectionReading {
-  const status = rejection?.status;
+  const at = momentOf(rejection);
+  const status = readSafely(rejection, 'status');
   if (
     typeof status === 'number' &&
     Number.isInteger(status) &&
     status >= 100 &&
     status <= 599
   ) {
-    return fromStatus(status);
+    return fromStatus(status, at);
   }
-  const key = (rejection?.error as { key?: unknown } | null | undefined)?.key;
-  if (typeof key === 'string' && KNOWN_RFC_KEYS.has(key)) {
+  const key = readSafely(readSafely(rejection, 'error'), 'key');
+  if (isRfcKey(key)) {
     if (key === 'RFC_LOGON_FAILURE') return CREDENTIAL;
-    const what = rejection?.at === 'request' ? 'call' : 'logon';
-    return notCredential(
-      `the RFC ${what} failed (${key}), not as a credential refusal`,
-    );
+    return {
+      verdict: 'not-credential',
+      refusal: toLegacyRefusal(
+        authError['system-refused']({
+          verdict: 'rfc-failure',
+          rfcKey: key,
+          at,
+        }),
+      ),
+    };
   }
   return UNKNOWN;
 }
 
-/** The neutral words for a rejection that cannot be told. */
+/** The neutral refusal for a rejection that cannot be told: `system-refused` `unknown`. */
 export function unknownRefusal(
   rejection: IAuthRejection | undefined,
 ): IAuthRefusal {
-  return {
-    reason:
-      rejection?.at === 'request'
-        ? 'the request was refused (unknown error)'
-        : 'the logon failed (unknown error)',
-  };
+  return toLegacyRefusal(
+    authError['system-refused']({
+      verdict: 'unknown',
+      at: momentOf(rejection),
+    }),
+  );
 }
 
 /**
  * A provider that cannot renew: its own refusal when the credential was
- * refused, the neutral words otherwise.
+ * refused, the neutral `system-refused` error otherwise.
  */
 export function refuseFor(
   rejection: IAuthRejection | undefined,

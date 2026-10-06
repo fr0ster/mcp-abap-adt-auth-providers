@@ -33,6 +33,7 @@ import { OidcPasswordProvider } from '../../providers/OidcPasswordProvider';
 import { OidcTokenExchangeProvider } from '../../providers/OidcTokenExchangeProvider';
 import { Saml2BearerProvider } from '../../providers/Saml2BearerProvider';
 import { UaaPasscodeProvider } from '../../providers/UaaPasscodeProvider';
+import { wordsOf } from '../helpers/minted';
 import { recordingTargets } from '../helpers/targets';
 
 // Automocked, but with axios's own error class: the sites throw it.
@@ -552,7 +553,7 @@ describe('one certificate, pinned', () => {
       clientAuthentication: strategy,
     });
 
-    expect(await provider.prepare()).toEqual({
+    expect(wordsOf(await provider.prepare())).toEqual({
       ok: false,
       refusal: {
         reason: CERTIFICATE_UNUSABLE.reason,
@@ -585,7 +586,7 @@ describe('one certificate, pinned', () => {
       clientId: 'cid',
       clientAuthentication: strategy,
     });
-    expect(await provider.prepare()).toEqual({
+    expect(wordsOf(await provider.prepare())).toEqual({
       ok: false,
       refusal: {
         reason: CERTIFICATE_UNUSABLE.reason,
@@ -674,9 +675,9 @@ describe('an expired client certificate', () => {
       clientId: 'cid',
       clientAuthentication: strategy,
     });
-    await expect(provider.prepare()).resolves.toEqual(EXPIRED);
+    expect(wordsOf(await provider.prepare())).toEqual(EXPIRED);
     const t = recordingTargets();
-    await expect(provider.establish(t.logonTarget)).resolves.toEqual(EXPIRED);
+    expect(wordsOf(await provider.establish(t.logonTarget))).toEqual(EXPIRED);
     expect(t.logon.tls).toHaveLength(0);
     expect(sent).toHaveLength(0);
   });
@@ -693,10 +694,10 @@ describe('an expired client certificate', () => {
     // client.crt is valid until 2126: the clock is moved past it, not crypto.
     const now = jest.spyOn(Date, 'now').mockReturnValue(Date.UTC(2127, 0, 1));
     try {
-      await expect(provider.prepare()).resolves.toEqual(EXPIRED);
+      expect(wordsOf(await provider.prepare())).toEqual(EXPIRED);
       expect(sent).toHaveLength(1);
       const t = recordingTargets();
-      await expect(provider.establish(t.logonTarget)).resolves.toEqual(EXPIRED);
+      expect(wordsOf(await provider.establish(t.logonTarget))).toEqual(EXPIRED);
       expect(t.logon.tls).toHaveLength(0);
     } finally {
       now.mockRestore();
@@ -771,7 +772,7 @@ describe('an expired client certificate', () => {
       };
     });
     try {
-      await expect(provider.prepare()).resolves.toEqual(EXPIRED);
+      expect(wordsOf(await provider.prepare())).toEqual(EXPIRED);
     } finally {
       now.mockRestore();
     }
@@ -936,7 +937,7 @@ describe('clientSecretBasic through a provider', () => {
         encoding: 'raw',
       }),
     });
-    expect(await provider.prepare()).toEqual({
+    expect(wordsOf(await provider.prepare())).toEqual({
       ok: false,
       refusal: {
         reason: "the client id contains ':', which raw Basic cannot carry",

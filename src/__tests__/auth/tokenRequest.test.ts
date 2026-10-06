@@ -38,6 +38,7 @@ import {
   privateKeyJwt,
   tlsClientCertificate,
 } from '../../clientAuthentication';
+import { wordsOf } from '../helpers/minted';
 import { OIDC, tokenReply as reply, SITES } from '../helpers/tokenRequestSites';
 
 // Automocked, but with axios's own error class: the sites throw it.
@@ -244,7 +245,7 @@ describe.each(SITES)('$name with a client authentication', (site) => {
       const error = await failureOf(site.run({ strategy: returning(result) }));
       expect(mockedAxios).not.toHaveBeenCalled();
       expect(mockedAxios.post).not.toHaveBeenCalled();
-      expect(refusalFrom(error, 'the token request')).toEqual({
+      expect(wordsOf(refusalFrom(error, 'the token request'))).toEqual({
         ok: false,
         refusal: {
           reason:
@@ -268,7 +269,7 @@ describe.each(SITES)('$name with a client authentication', (site) => {
     expect(mockedAxios).not.toHaveBeenCalled();
     expect(mockedAxios.post).not.toHaveBeenCalled();
     const refusal = refusalFrom(error, 'the token request');
-    expect(refusal).toEqual({
+    expect(wordsOf(refusal)).toEqual({
       ok: false,
       refusal: { reason: 'the token request failed (unknown error)' },
     });
@@ -282,7 +283,7 @@ describe.each(SITES)('$name with a client authentication', (site) => {
       }),
     );
     expect(mockedAxios).not.toHaveBeenCalled();
-    expect(refusalFrom(error, 'x')).toEqual({
+    expect(wordsOf(refusalFrom(error, 'the token request'))).toEqual({
       ok: false,
       refusal: {
         reason:
@@ -303,7 +304,7 @@ describe.each(SITES)('$name with a client authentication', (site) => {
       site.run({ strategy: tlsClientCertificate({ material }), material }),
     );
     const refusal = refusalFrom(error, 'the token request');
-    expect(refusal).toEqual({
+    expect(wordsOf(refusal)).toEqual({
       ok: false,
       refusal: {
         reason:
@@ -329,7 +330,9 @@ describe.each(SITES)('$name with a client authentication', (site) => {
       site.run({ strategy: tlsClientCertificate({ material }), material }),
     );
     expect(messageOf(withMtls)).toBe(messageOf(today));
-    expect(refusalFrom(withMtls, 'x')).toEqual(refusalFrom(today, 'x'));
+    expect(refusalFrom(withMtls, 'the token request')).toEqual(
+      refusalFrom(today, 'the token request'),
+    );
   });
 
   it('a secret or a non-JWT assertion the strategy sent is redacted from an echoing error body', async () => {
@@ -583,7 +586,7 @@ describe('client authentication per request', () => {
       ),
     );
     expect(mockedAxios).not.toHaveBeenCalled();
-    expect(refusalFrom(error, 'x')).toEqual({
+    expect(wordsOf(refusalFrom(error, 'the token request'))).toEqual({
       ok: false,
       refusal: {
         reason: 'the provider configuration is incomplete or invalid: clientId',
@@ -604,7 +607,7 @@ describe('a TLS failure, by code', () => {
       Object.assign(new Error('SECRET-TEXT'), { code }),
       'the token request',
     );
-    expect(refusal).toEqual({
+    expect(wordsOf(refusal)).toEqual({
       ok: false,
       refusal: {
         reason: `the token request failed: the server's certificate is not trusted (${code})`,
@@ -615,9 +618,11 @@ describe('a TLS failure, by code', () => {
 
   it('CERT_HAS_EXPIRED: the server certificate has expired — no NODE_EXTRA_CA_CERTS', () => {
     expect(
-      refusalFrom(
-        Object.assign(new Error('SECRET-TEXT'), { code: 'CERT_HAS_EXPIRED' }),
-        'the token request',
+      wordsOf(
+        refusalFrom(
+          Object.assign(new Error('SECRET-TEXT'), { code: 'CERT_HAS_EXPIRED' }),
+          'the token request',
+        ),
       ),
     ).toEqual({
       ok: false,
@@ -631,11 +636,13 @@ describe('a TLS failure, by code', () => {
 
   it('ERR_TLS_CERT_ALTNAME_INVALID: the host is not in the server certificate — no NODE_EXTRA_CA_CERTS', () => {
     expect(
-      refusalFrom(
-        Object.assign(new Error('SECRET-TEXT'), {
-          code: 'ERR_TLS_CERT_ALTNAME_INVALID',
-        }),
-        'the token request',
+      wordsOf(
+        refusalFrom(
+          Object.assign(new Error('SECRET-TEXT'), {
+            code: 'ERR_TLS_CERT_ALTNAME_INVALID',
+          }),
+          'the token request',
+        ),
       ),
     ).toEqual({
       ok: false,
@@ -667,9 +674,11 @@ describe('a TLS failure, by code', () => {
     'ERR_SSL_SSLV3_ALERT_UNSUPPORTED_CERTIFICATE',
   ])('%s: the server refused the client certificate', (code) => {
     expect(
-      refusalFrom(
-        Object.assign(new Error('SECRET-TEXT'), { code }),
-        'the token request',
+      wordsOf(
+        refusalFrom(
+          Object.assign(new Error('SECRET-TEXT'), { code }),
+          'the token request',
+        ),
       ),
     ).toEqual({
       ok: false,
@@ -682,11 +691,13 @@ describe('a TLS failure, by code', () => {
 
   it('a handshake failure is not read as a refused certificate: it has other causes', () => {
     expect(
-      refusalFrom(
-        Object.assign(new Error('SECRET-TEXT'), {
-          code: 'ERR_SSL_SSL/TLS_ALERT_HANDSHAKE_FAILURE',
-        }),
-        'the token request',
+      wordsOf(
+        refusalFrom(
+          Object.assign(new Error('SECRET-TEXT'), {
+            code: 'ERR_SSL_SSL/TLS_ALERT_HANDSHAKE_FAILURE',
+          }),
+          'the token request',
+        ),
       ),
     ).toEqual({
       ok: false,
@@ -696,9 +707,11 @@ describe('a TLS failure, by code', () => {
 
   it('a code off the list stays unknown, and nothing of the message', () => {
     expect(
-      refusalFrom(
-        Object.assign(new Error('SECRET-TEXT'), { code: 'SECRET_CODE' }),
-        'the token request',
+      wordsOf(
+        refusalFrom(
+          Object.assign(new Error('SECRET-TEXT'), { code: 'SECRET_CODE' }),
+          'the token request',
+        ),
       ),
     ).toEqual({
       ok: false,
@@ -717,7 +730,7 @@ describe('a TLS failure, by code', () => {
       () => getTokenWithClientCredentials('https://uaa', 'cid', 'sec'),
       () => refreshJwtToken('rt', 'https://uaa', 'cid', 'sec'),
     ]) {
-      const refusal = refusalFrom(await failureOf(run()), 'x');
+      const refusal = refusalFrom(await failureOf(run()), 'the token request');
       expect(refusal.ok === false && refusal.refusal.hint).toContain(
         'NODE_EXTRA_CA_CERTS',
       );
@@ -755,11 +768,13 @@ describe('a TLS failure, by code', () => {
           auth,
         ),
     ]) {
-      expect(refusalFrom(await failureOf(run()), 'x')).toEqual({
+      expect(
+        wordsOf(refusalFrom(await failureOf(run()), 'the token request')),
+      ).toEqual({
         ok: false,
         refusal: {
           reason:
-            'x failed: the server refused the client certificate (ERR_SSL_TLSV1_ALERT_UNKNOWN_CA)',
+            'the token request failed: the server refused the client certificate (ERR_SSL_TLSV1_ALERT_UNKNOWN_CA)',
           hint: "check that the server trusts the certificate's issuer and that the certificate is valid and not revoked",
         },
       });
@@ -1133,7 +1148,7 @@ describe('the server never reads back the password or the passcode', () => {
       expect((thrown as { code?: unknown }).code).toBe(
         'SELF_SIGNED_CERT_IN_CHAIN',
       );
-      expect(refusalFrom(thrown, 'the token request')).toEqual({
+      expect(wordsOf(refusalFrom(thrown, 'the token request'))).toEqual({
         ok: false,
         refusal: {
           reason:

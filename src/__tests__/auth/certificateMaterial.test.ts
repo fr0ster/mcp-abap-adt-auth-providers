@@ -8,6 +8,7 @@ import {
 } from '../../auth/certificateMaterial';
 import { refusalFrom } from '../../auth/refusal';
 import { CertificateMaterialError } from '../../errors/CertificateMaterialError';
+import { wordsOf } from '../helpers/minted';
 
 const dir = join(__dirname, '..', 'fixtures', 'certificates');
 const read = (name: string) => readFileSync(join(dir, name));
@@ -46,7 +47,7 @@ describe('checkCertificateMaterial', () => {
       { cert: read('client.crt') },
       { key: read('client.key') },
     ])
-      expect(checkCertificateMaterial(m)).toEqual({
+      expect(wordsOf(checkCertificateMaterial(m))).toEqual({
         ok: false,
         refusal: {
           reason: 'the client certificate is incomplete',
@@ -57,10 +58,12 @@ describe('checkCertificateMaterial', () => {
 
   it('refuses material a TLS context cannot be built from', () => {
     expect(
-      checkCertificateMaterial({
-        pfx: read('client.pfx'),
-        passphrase: 'wrong',
-      }),
+      wordsOf(
+        checkCertificateMaterial({
+          pfx: read('client.pfx'),
+          passphrase: 'wrong',
+        }),
+      ),
     ).toEqual({
       ok: false,
       refusal: {
@@ -82,10 +85,12 @@ describe('an expired client certificate', () => {
 
   it('is refused in fixed words (fixture: valid 2020-01-01 to 2021-01-01)', () => {
     expect(
-      checkCertificateMaterial({
-        cert: read('expired.crt'),
-        key: read('client.key'),
-      }),
+      wordsOf(
+        checkCertificateMaterial({
+          cert: read('expired.crt'),
+          key: read('client.key'),
+        }),
+      ),
     ).toEqual(EXPIRED);
   });
 
@@ -97,7 +102,7 @@ describe('an expired client certificate', () => {
       }),
     );
     expect(e).toBeInstanceOf(CertificateMaterialError);
-    expect(refusalFrom(e, 'x')).toEqual(EXPIRED);
+    expect(wordsOf(refusalFrom(e, 'x'))).toEqual(EXPIRED);
   });
 
   it('a certificate still valid is not refused', () => {
@@ -145,7 +150,7 @@ describe('certificateThumbprint', () => {
   it('throws an allowlisted class for incomplete material, with its words', () => {
     const e = thrown(() => certificateThumbprint({ cert: read('client.crt') }));
     expect(e).toBeInstanceOf(CertificateMaterialError);
-    expect(refusalFrom(e, 'x')).toEqual({
+    expect(wordsOf(refusalFrom(e, 'x'))).toEqual({
       ok: false,
       refusal: {
         reason: 'the client certificate is incomplete',
@@ -163,7 +168,7 @@ describe('certificateThumbprint', () => {
     );
     expect(e).toBeInstanceOf(CertificateMaterialError);
     const out = refusalFrom(e, 'x');
-    expect(out).toEqual({
+    expect(wordsOf(out)).toEqual({
       ok: false,
       refusal: {
         reason: 'the client certificate could not be used',
@@ -196,7 +201,7 @@ describe('checkCertificateMaterial and a forged CertificateMaterialError', () =>
     const outcome = checkCertificateMaterial(
       forgedMaterial({ get: () => ({ reason: 'MARK', hint: 'MARK' }) }),
     );
-    expect(outcome).toEqual({
+    expect(wordsOf(outcome)).toEqual({
       ok: false,
       refusal: {
         reason: 'the client certificate is incomplete',

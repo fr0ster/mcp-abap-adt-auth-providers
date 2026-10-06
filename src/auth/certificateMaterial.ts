@@ -4,12 +4,8 @@ import type {
   AuthOutcome,
   ICertificateMaterial,
 } from '@mcp-abap-adt/interfaces-auth';
-import {
-  CERTIFICATE_UNUSABLE,
-  CertificateMaterialError,
-  certificateWordsOf,
-} from '../errors/CertificateMaterialError';
-import { OK, oops } from './refusal';
+import { CertificateMaterialError } from '../errors/CertificateMaterialError';
+import { OK, refusalFrom } from './refusal';
 
 function isIncomplete(material: ICertificateMaterial): boolean {
   // A TLS context accepts {}, a certificate alone or a key alone, and the
@@ -56,17 +52,23 @@ export function assertNotExpired(notAfter: number): void {
   if (Date.now() >= notAfter) throw new CertificateMaterialError(false, true);
 }
 
-/** The same proof as an outcome: the refusal carries the fixed words. */
+/**
+ * The same proof as an outcome (B14): `client-certificate` with the problem
+ * the thrown CertificateMaterialError's flags say — chosen by the ladder in
+ * `refusalFrom`, never from `e.words`, which a consumer's loader may forge.
+ */
 export function checkCertificateMaterial(
   material: ICertificateMaterial,
 ): AuthOutcome {
   try {
     assertCertificateMaterial(material);
   } catch (e) {
-    // Never `e.words`: a consumer's loader can throw an object of this class
-    // carrying its own.
-    const words = certificateWordsOf(e) ?? CERTIFICATE_UNUSABLE;
-    return oops(words.reason, words.hint);
+    return refusalFrom(
+      e instanceof CertificateMaterialError
+        ? e
+        : new CertificateMaterialError(false),
+      'loading the certificate',
+    );
   }
   return OK;
 }

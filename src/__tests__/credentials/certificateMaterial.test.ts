@@ -14,6 +14,7 @@ import { describe, expect, it, jest } from '@jest/globals';
 import type { ICertificateMaterial } from '@mcp-abap-adt/interfaces-auth';
 import type { ISapConfig } from '@mcp-abap-adt/interfaces-auth-sap';
 import { CertificateAuthProvider } from '../../credentials/CertificateAuthProvider';
+import { wordsOf } from '../helpers/minted';
 import { recordingTargets } from '../helpers/targets';
 
 const dir = join(__dirname, '..', 'fixtures', 'certificates');
@@ -63,7 +64,7 @@ describe('CertificateAuthProvider: the material is checked in prepare()', () => 
       passphrase: 'SECRET-WRONG-PP',
     });
     const outcome = await p.prepare();
-    expect(outcome).toEqual(UNUSABLE);
+    expect(wordsOf(outcome)).toEqual(UNUSABLE);
     expect(JSON.stringify(outcome)).not.toMatch(/SECRET-WRONG-PP|mac verify/);
   });
 
@@ -73,7 +74,7 @@ describe('CertificateAuthProvider: the material is checked in prepare()', () => 
       key: read('other.key'),
     });
     const outcome = await p.prepare();
-    expect(outcome).toEqual(UNUSABLE);
+    expect(wordsOf(outcome)).toEqual(UNUSABLE);
     expect(JSON.stringify(outcome)).not.toMatch(/MISMATCH|x509/i);
   });
 
@@ -82,7 +83,7 @@ describe('CertificateAuthProvider: the material is checked in prepare()', () => 
       cert: Buffer.from('not a certificate'),
       key: read('client.key'),
     });
-    await expect(p.prepare()).resolves.toEqual(UNUSABLE);
+    expect(wordsOf(await p.prepare())).toEqual(UNUSABLE);
   });
 
   it('a refused material is not presented: establish answers Oops, nothing reaches the logon', async () => {
@@ -111,7 +112,7 @@ describe('CertificateAuthProvider: what a material must hold', () => {
       cert: read('client.crt'),
       key: read('client-encrypted.key'),
     });
-    await expect(p.prepare()).resolves.toEqual(UNUSABLE);
+    expect(wordsOf(await p.prepare())).toEqual(UNUSABLE);
   });
 
   it.each([
@@ -122,7 +123,7 @@ describe('CertificateAuthProvider: what a material must hold', () => {
     '%s is refused — a logon would go out with no client certificate',
     async (_label, material) => {
       const p = withMaterial(material as ICertificateMaterial);
-      await expect(p.prepare()).resolves.toEqual(INCOMPLETE);
+      expect(wordsOf(await p.prepare())).toEqual(INCOMPLETE);
     },
   );
 
@@ -133,7 +134,7 @@ describe('CertificateAuthProvider: what a material must hold', () => {
     const p = new CertificateAuthProvider({ load: async () => next }, config);
     await expect(p.prepare()).resolves.toEqual({ ok: true });
     next = bad;
-    await expect(p.prepare()).resolves.toEqual(UNUSABLE);
+    expect(wordsOf(await p.prepare())).toEqual(UNUSABLE);
     const t = recordingTargets();
     await expect(p.establish(t.logonTarget)).resolves.toMatchObject({
       ok: false,
@@ -156,7 +157,7 @@ describe('CertificateAuthProvider: an expired certificate', () => {
       cert: read('expired.crt'),
       key: read('client.key'),
     });
-    await expect(p.prepare()).resolves.toEqual(EXPIRED);
+    expect(wordsOf(await p.prepare())).toEqual(EXPIRED);
     const t = recordingTargets();
     await p.establish(t.logonTarget);
     expect(t.logon.tls).toHaveLength(0);
@@ -172,7 +173,7 @@ describe('CertificateAuthProvider: an expired certificate', () => {
     const now = jest.spyOn(Date, 'now').mockReturnValue(Date.UTC(2127, 0, 1));
     try {
       const t = recordingTargets();
-      await expect(p.establish(t.logonTarget)).resolves.toEqual(EXPIRED);
+      expect(wordsOf(await p.establish(t.logonTarget))).toEqual(EXPIRED);
       expect(t.logon.tls).toHaveLength(0);
     } finally {
       now.mockRestore();

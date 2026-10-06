@@ -12,7 +12,11 @@
  * 4.x refusal's `hint?: string` under `exactOptionalPropertyTypes`, so a
  * 5.x outcome reaches a 4.x-typed return only through `toLegacyOutcome`.
  */
-import type { classify, guard } from '@mcp-abap-adt/auth-errors';
+import type {
+  AuthErrorBuilders,
+  classify,
+  guard,
+} from '@mcp-abap-adt/auth-errors';
 import type {
   AuthOutcome as LegacyAuthOutcome,
   IAuthRefusal as LegacyAuthRefusal,
@@ -26,6 +30,12 @@ export type Operation = Parameters<typeof classify>[1];
 
 /** interfaces-auth 6.0.0's `AuthOutcome`, as auth-errors answers it. */
 export type AuthOutcome = Awaited<ReturnType<typeof guard>>;
+
+/** interfaces-auth 6.0.0's `OAuth2GrantType`, as auth-errors takes it. */
+export type OAuth2GrantType = NonNullable<Parameters<typeof classify>[2]>;
+
+/** interfaces-auth 6.0.0's `TlsFailureCode`, as the `tls` builder takes it. */
+export type TlsFailureCode = Parameters<AuthErrorBuilders['tls']>[0]['code'];
 
 /** The hint key absent or a string: the error is a 4.x refusal as it is. */
 function isLegacyShaped(

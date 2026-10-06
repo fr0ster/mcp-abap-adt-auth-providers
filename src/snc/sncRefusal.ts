@@ -6,8 +6,8 @@
  * library this provider resolved, and an allowlisted SDK key go out (rule 2).
  */
 
+import { isRfcKey } from '@mcp-abap-adt/auth-errors';
 import type { IAuthRefusal } from '@mcp-abap-adt/interfaces-auth';
-import { KNOWN_RFC_KEYS } from '../auth/refusal';
 import {
   SNC_CANDIDATE_SOURCES,
   SNC_UNUSABLE_REASONS,
@@ -25,7 +25,7 @@ function searchable(error: unknown): string {
 
 function sdkKey(error: unknown): string {
   const key = (error as { key?: unknown } | null)?.key;
-  return typeof key === 'string' && KNOWN_RFC_KEYS.has(key) ? ` (${key})` : '';
+  return isRfcKey(key) ? ` (${key})` : '';
 }
 
 function describeLibrary(library?: SncLibrary): string {
