@@ -38,8 +38,8 @@ jest.mock('axios', () => {
     jest.requireActual<Record<string, unknown>>('axios').AxiosError;
   return mocked;
 });
-// `open` and `exec`, each replaceable per test: the browser launch logs
-// what a failed launch said.
+// `open` and `spawn`, each replaceable per test: the browser launch logs
+// what a failed launch said. No launcher is ever really started.
 const mockOpen: { default?: unknown } = {};
 jest.mock('open', () => ({
   __esModule: true,
@@ -47,10 +47,10 @@ jest.mock('open', () => ({
     return mockOpen.default;
   },
 }));
-const mockExec: { run?: (...args: unknown[]) => unknown } = {};
+const mockSpawn: { run?: (...args: unknown[]) => unknown } = {};
 jest.mock('node:child_process', () => ({
   ...jest.requireActual<Record<string, unknown>>('node:child_process'),
-  exec: (...args: unknown[]) => mockExec.run?.(...args),
+  spawn: (...args: unknown[]) => mockSpawn.run?.(...args),
 }));
 type Mock = jest.Mock<(...args: any[]) => Promise<unknown>>;
 const mockedAxios = axios as unknown as Mock & {
@@ -586,11 +586,27 @@ describe('no message of a thrown error in the logs', () => {
       logger,
     );
     mockOpen.default = undefined;
-    const exited = new Promise<void>((resolve) => {
-      mockExec.run = (_command, callback) => {
-        (callback as (e: Error) => void)(new Error(MARKER));
-        resolve();
+    // Every candidate launcher fails to start, with a message holding the
+    // marker; the failure line is written once, after the last.
+    let started = 0;
+    mockSpawn.run = () => {
+      started += 1;
+      const { EventEmitter } =
+        jest.requireActual<typeof import('node:events')>('node:events');
+      const child = new EventEmitter() as InstanceType<typeof EventEmitter> & {
+        unref(): void;
       };
+      child.unref = () => undefined;
+      setImmediate(() => child.emit('error', new Error(MARKER)));
+      return child;
+    };
+    const exited = new Promise<void>((resolve) => {
+      const poll = setInterval(() => {
+        if (lines.some((line) => line.includes('Failed to open browser'))) {
+          clearInterval(poll);
+          resolve();
+        }
+      }, 5);
     });
     await launchBrowser(
       'https://idp/a',
@@ -600,6 +616,7 @@ describe('no message of a thrown error in the logs', () => {
       logger,
     );
     await exited;
+    expect(started).toBeGreaterThan(0);
     const all = lines.join('\n');
     expect(all).toContain('Could not open browser automatically');
     expect(all).toContain('Failed to open browser');

@@ -2,11 +2,16 @@
  * Browser authentication - OAuth2 flow for obtaining tokens
  */
 
-import * as child_process from 'node:child_process';
 import { logFields, readFailure } from '@mcp-abap-adt/auth-errors';
 import type { IAuthorizationConfig } from '@mcp-abap-adt/interfaces-auth-sap';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
 import axios from 'axios';
+import {
+  launchableUrl,
+  launchCommands,
+  type NamedBrowser,
+  runLaunchers,
+} from './browserLaunch';
 import { requiredFieldsMissing } from './configuration';
 import {
   attemptSite,
@@ -227,6 +232,13 @@ function _isDebugEnabled(): boolean {
   );
 }
 
+/** The named browser a `BROWSER_MAP` value stands for, else the default. */
+function namedBrowser(app: string | undefined): NamedBrowser | undefined {
+  return app === 'chrome' || app === 'msedge' || app === 'firefox'
+    ? app
+    : undefined;
+}
+
 /**
  * Open the authorization URL, or tell the user how to do it.
  *
@@ -260,13 +272,28 @@ export async function launchBrowser(
     return;
   }
 
+  // Only an http(s) URL, as its serialisation, is ever launched: it may
+  // come from discovery or configuration (`browserLaunch.ts`).
+  const href = launchableUrl(authorizationUrl);
+  if (href === undefined) {
+    logQuietly(() =>
+      log?.error(
+        '❌ The authorization URL is not an http(s) URL; it is not opened.',
+      ),
+    );
+    announce('🔗 Open this URL in your browser to authenticate:');
+    announce(`   ${authorizationUrl}`);
+    announce(`   Waiting for callback on ${callbackUri} ...`);
+    return;
+  }
+
   if (browser === 'auto') {
     logQuietly(() =>
       log?.info('🌐 Attempting to open browser for authentication...'),
     );
     try {
       const openModule = await import('open');
-      await openModule.default(authorizationUrl);
+      await openModule.default(href);
       logQuietly(() =>
         log?.info(
           '✅ Browser opened successfully. Waiting for authentication...',
@@ -323,40 +350,11 @@ export async function launchBrowser(
   }
 
   if (!open) {
-    // Fallback: shell out. Non-blocking by design.
-    const platform = process.platform;
-    let command: string;
-    if (browserApp === 'chrome') {
-      command =
-        platform === 'win32'
-          ? 'cmd /c start "" "chrome"'
-          : platform === 'darwin'
-            ? 'open -a "Google Chrome"'
-            : 'google-chrome || chromium || chromium-browser';
-    } else if (browserApp === 'msedge') {
-      command =
-        platform === 'win32'
-          ? 'cmd /c start "" "msedge"'
-          : platform === 'darwin'
-            ? 'open -a "Microsoft Edge"'
-            : 'microsoft-edge || microsoft-edge-stable';
-    } else if (browserApp === 'firefox') {
-      command =
-        platform === 'win32'
-          ? 'cmd /c start "" "firefox"'
-          : platform === 'darwin'
-            ? 'open -a Firefox'
-            : 'firefox || firefox-esr';
-    } else {
-      command =
-        platform === 'win32'
-          ? 'cmd /c start ""'
-          : platform === 'darwin'
-            ? 'open'
-            : 'xdg-open';
-    }
-    child_process.exec(`${command} "${authorizationUrl}"`, (error) => {
-      if (error) {
+    // Fallback without the `open` package: a launcher started with an
+    // argument array, never a shell (`browserLaunch.ts`). Non-blocking.
+    runLaunchers(
+      launchCommands(process.platform, namedBrowser(browserApp), href),
+      (error) => {
         // H8: `logFields` of the failure, and the URL already announced.
         const fields = logFields(readFailure(error, 'opening-browser'));
         logQuietly(() =>
@@ -365,14 +363,14 @@ export async function launchBrowser(
             { ...fields, url: authorizationUrl },
           ),
         );
-      }
-    });
+      },
+    );
     return;
   }
 
   if (browserApp)
-    await open(authorizationUrl, {
+    await open(href, {
       app: { name: appNames[browserApp] ?? browserApp },
     });
-  else await open(authorizationUrl);
+  else await open(href);
 }
