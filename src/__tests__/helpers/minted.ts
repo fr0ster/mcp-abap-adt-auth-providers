@@ -19,16 +19,36 @@ export function minted(refusal: IAuthRefusal | undefined): IAuthProviderError {
   return refusal;
 }
 
+/** The keys a refusal may carry: 4.x's words, and a minted error's own. */
+const REFUSAL_KEYS: readonly string[] = [
+  'kind',
+  'variant',
+  'facts',
+  'reason',
+  'hint',
+  'diagnostics',
+];
+
 /**
  * An outcome as 5.4.2's tests read it: `ok`, and the refusal's `reason` and
  * `hint` (only when it has one) — the words, without the 5.x `kind` and
  * `facts` the row tests assert (TRANSITION, Task 27 restates these tests on
- * kinds).
+ * kinds). The whole outcome is still checked: the outcome holds no key but
+ * `ok` and `refusal`, and the refusal none outside a minted error's keys, so
+ * a stray field fails the test as the whole-outcome `toEqual` did.
  */
 export function wordsOf(
   outcome: AuthOutcome,
 ): { ok: true } | { ok: false; refusal: { reason: string; hint?: string } } {
+  expect(
+    Object.keys(outcome).filter(
+      (key) => key !== 'ok' && (outcome.ok || key !== 'refusal'),
+    ),
+  ).toEqual([]);
   if (outcome.ok) return { ok: true };
+  expect(
+    Object.keys(outcome.refusal).filter((key) => !REFUSAL_KEYS.includes(key)),
+  ).toEqual([]);
   const { reason, hint } = outcome.refusal;
   return {
     ok: false,

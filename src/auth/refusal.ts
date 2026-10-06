@@ -111,16 +111,23 @@ const OPERATION_OF_WHAT: Readonly<Record<string, Operation>> = Object.freeze({
   'opening the browser': 'opening-browser',
 });
 
+/** One entry per grant type: a missing or an unknown one does not compile. */
+export type GrantTable = { readonly [G in OAuth2GrantType]: true };
+
 /** The grant types a `<grant> token request` names (`getAuthType()`). */
-const GRANTS: readonly OAuth2GrantType[] = Object.freeze([
-  'authorization_code',
-  'authorization_code_pkce',
-  'password',
-  'client_credentials',
-  'user_token',
-  'client_x509',
-  'saml2_bearer',
-]);
+const GRANTS = Object.freeze({
+  authorization_code: true,
+  authorization_code_pkce: true,
+  password: true,
+  client_credentials: true,
+  user_token: true,
+  client_x509: true,
+  saml2_bearer: true,
+} as const satisfies GrantTable);
+
+function isGrant(value: string): value is OAuth2GrantType {
+  return Object.hasOwn(GRANTS, value);
+}
 
 const TOKEN_REQUEST = ' token request';
 
@@ -132,10 +139,8 @@ const TOKEN_REQUEST = ' token request';
  */
 export function operationFor(what: string): OperationOf {
   if (what.endsWith(TOKEN_REQUEST)) {
-    const grant = GRANTS.find(
-      (g) => g === what.slice(0, -TOKEN_REQUEST.length),
-    );
-    if (grant !== undefined) return { operation: 'token-request', grant };
+    const grant = what.slice(0, -TOKEN_REQUEST.length);
+    if (isGrant(grant)) return { operation: 'token-request', grant };
   }
   // Own keys only: `what` may be `constructor` or `__proto__`.
   const operation = Object.hasOwn(OPERATION_OF_WHAT, what)
