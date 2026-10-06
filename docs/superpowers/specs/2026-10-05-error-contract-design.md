@@ -886,7 +886,7 @@ facts instead — found by a sweep of `src` for `isAxiosError`, `.response`,
 
 | Site today | What it reads | After |
 |---|---|---|
-| `oidcToken.ts:285-298` — device polling | `response.status === 400` and `response.data.error` ∈ {`authorization_pending`, `slow_down`}: keep polling, `slow_down` adding 5 s to the interval; anything else ends the login | `const e = readFailure(error, 'device-poll')`; `e.kind === 'request-failed' && e.facts.status === 400 && (e.facts.oauthError === 'authorization_pending' \|\| e.facts.oauthError === 'slow_down')` → the same two retry branches, the same waits; else rethrow the failure. Both codes are registered (RFC 8628), so they survive as facts |
+| `oidcToken.ts:285-298` — device polling | `response.status === 400` and `response.data.error` ∈ {`authorization_pending`, `slow_down`}: keep polling, `slow_down` adding 5 s to the interval; anything else ends the login | `const e = readFailure(error, 'device-poll')`; `e.kind === 'request-failed' && e.facts.status === 400 && (e.facts.oauthError === 'authorization_pending' \|\| e.facts.oauthError === 'slow_down')` → the two retry branches; else rethrow the failure (decided 2026-10-06: a waiting answer keeps the poll waiting only with status 400, any other status ends the poll with the failure and the safe-facts line; `slow_down` is cumulative, below). Both codes are registered (RFC 8628), so they survive as facts |
 | `passcodeAuth.ts:95-104` | `axios.isAxiosError(error) && error.response` → wrap in `TokenEndpointError` | nothing to read: the failure from `sendTokenRequest` is thrown as it is (`operation: 'passcode-exchange'`) |
 | `clientCredentialsAuth.ts:76-87`, `tokenRefresher.ts:80-87`, `oidcToken.ts:227-236` (device initiation), `oidcToken.ts:335-345` (password grant) | `tlsFailureCode(error)` to let a TLS failure through unwrapped, else wrap | nothing to read: `sendTokenRequest` already chose `tls` or `request-failed`; the site passes its operation |
 | `saml2TokenExchange.ts:97-106`, `:154-163` | `axios.isAxiosError(error)` to decide whether to log | logs `logFields(readFailure(error, …))` for any failure, then rethrows it |
@@ -894,9 +894,23 @@ facts instead — found by a sweep of `src` for `isAxiosError`, `.response`,
 | `BaseTokenProvider.ts:475-487` — refresh falling back to login | nothing (any throw) | unchanged: any failure of the refresh falls back |
 | the broker (`AuthBroker.ts:660`, `SessionWriter.ts:40-46`) | nothing of the error but its class name (`classLabel`) | logs `AuthProviderFailure`; no other reader (no `isAxiosError` in the broker or the CLI, searched) |
 
+**Device polling waits (decided 2026-10-06, RFC 8628 §3.5).** `slow_down`
+increases the interval by 5 s **for that request and every later one** —
+cumulative, not for one wait only. The server's `interval` counts only as a
+finite, non-negative JSON number; anything else (a string, `NaN`, a negative,
+absent) is the RFC default, 5 s, and device initiation returns no `interval`
+for it; `0` means no wait. A waiting answer (`authorization_pending` /
+`slow_down`) keeps the poll waiting only with status `400` and is left
+without a log line only at the device poll with a `400`; with any other
+status the poll ends with the failure and the safe-facts line, and the same
+codes at another site log their line like any failure.
+
 Tests (auth-providers, on the axios mock and on the stand's Keycloak device
 endpoint where it applies): pending → success; `slow_down` → success with the
-interval increased by 5 s (fake timers assert the wait); a terminal OAuth
+interval increased by 5 s, and a second `slow_down` increasing it by 5 s more
+(fake timers assert each wait); an `interval` that is not a finite,
+non-negative number → 5 s, `0` → no wait; `authorization_pending` with a
+status other than `400` ends the poll with the failure and the line; a terminal OAuth
 error (`access_denied`, `expired_token`) ends the login with `request-failed`
 carrying that `oauthError`; a `400` **without a body** ends the login at once
 with `request-failed` `status: 400` and no `oauthError` (as today: no code,
@@ -926,7 +940,9 @@ the user 2026-10-05:
   (`TLS_FAILURE_CODES`, `SYSTEM_CODES`) as a `code` field when there is
   one — the same facts `logFields` may carry, no server text, no secret.
   Guarded (a throwing logger is swallowed), none without a logger, none for
-  the device poll's `authorization_pending` / `slow_down`. It is written
+  the device poll's `authorization_pending` / `slow_down` **with status
+  `400`** (decided 2026-10-06; with another status, or at another site, the
+  line is written). It is written
   whatever `authDebug` says.
   **Every log call on a failure path is guarded.** Any log call a token
   site makes inside its `catch` or on its failure path — the safe-facts
@@ -1068,7 +1084,8 @@ sends a token request (the five that wrapped today — passcode,
 client credentials, UAA refresh, device initiation, password grant — and the
 code exchange, the OIDC token request and device poll, the SAML exchange and
 refresh), on both paths; device polling's `authorization_pending` /
-`slow_down` answers are not logged (they are the protocol, not a failure). A
+`slow_down` answers with status `400` are not logged (they are the protocol,
+not a failure; any other status is, decided 2026-10-06). A
 logger that throws is caught and ignored, as SNC's `log` does
 (`SncLogonProvider.ts:217-223`).
 
@@ -1084,7 +1101,8 @@ passcode, password, device code, subject / actor token), the configured
   line, the safe-facts line — the status and the registered `error`, no
   other key, no `error_description` / `error_uri` text, no form of any
   secret; no line of any level carrying server text; none for
-  `authorization_pending` / `slow_down`; the same failure;
+  `authorization_pending` / `slow_down` at the device poll with status `400`
+  (decided 2026-10-06); the same failure;
 - **with `authDebug: true`**: exactly one debug line, carrying the same
   safe facts plus `sent` — each secret the request carried through
   `prepareSecret`: at most 4 + 4 characters plus `<redacted, N chars>`, a
@@ -1334,6 +1352,15 @@ tests (§11.2): `timeoutMs` on each strategy's options, each static factory's
 options and `ICallbackServerOptions` is a compile error
 (`@ts-expect-error` on the object literal), and `DEFAULT_LOGIN_TIMEOUT_MS`
 is not exported (`@ts-expect-error` on its import).
+
+**Token requests and OIDC discovery carry no timeout either (decided
+2026-10-06, the user's rule: no built-in timeouts).** No token request — any
+site, with a strategy or without one — and no OIDC discovery carries a request
+timeout of the package's choosing: the client-credentials site's 30 s timeout
+and `GrantRequest.timeout` are removed (implemented in `bbfa3d2`). A
+consumer's `AbortSignal` is the bound. Out of this section's scope: the
+SNC registry lookup's 5 s timeout (`SncSystem`, a child process, not a
+request), and the interactive-login timeouts, which are Task 23's.
 
 ## 6b. Cancelling a login
 
