@@ -221,15 +221,17 @@ rejection says the credential was refused: status `401`, or the RFC SDK's
 `RFC_LOGON_FAILURE`. Anything else is answered with a neutral refusal that
 names only the status or the SDK key, and nothing is renewed:
 
-| The rejection | Basic, certificate, SAML cookies, fixed token | Token providers, `TokenAuthProvider.from` |
-|---|---|---|
-| `401`, `RFC_LOGON_FAILURE` | their own refusal ("the user or password was refused", …) | one renewal; Ok only if the credential changed |
-| `403` | "the credential was accepted, but the user is not authorized (403)" | the same, no renewal |
-| `3xx` | "the system redirected instead of accepting the credential (3xx)" | the same, no renewal |
-| `5xx` | "the system failed (5xx), not the credential" | the same, no renewal |
-| any other status | "the system answered N, which is not a credential refusal" | the same, no renewal |
-| another RFC key | "the RFC logon failed (KEY), not as a credential refusal" | the same, no renewal |
-| neither a status nor a known key | "the logon failed (unknown error)" | one renewal — the rejection cannot tell |
+<!-- generated:refusal-table rejected -->
+| The rejection | Kind | Basic, certificate, SAML cookies, fixed token | Token providers, `TokenAuthProvider.from` |
+|---|---|---|---|
+| `401`, `RFC_LOGON_FAILURE` | `credential-refused` | their own refusal ("the user or password was refused", …) | one renewal; Ok only if the credential changed |
+| `403` | `system-refused` `not-authorized` | "the credential was accepted, but the user is not authorized (403)" — "check the user's authorizations in the system" | the same, no renewal |
+| `3xx`, e.g. `302` | `system-refused` `redirected` | "the system redirected instead of accepting the credential (302)" — "the service may require another logon procedure (single sign-on, an identity provider)" | the same, no renewal |
+| `5xx`, e.g. `503` | `system-refused` `system-failed` | "the system failed (503), not the credential" — "try again later" | the same, no renewal |
+| any other status, e.g. `404` | `system-refused` `other-status` | "the system answered 404, which is not a credential refusal" | the same, no renewal |
+| another RFC key, e.g. `RFC_COMMUNICATION_FAILURE` | `system-refused` `rfc-failure` | at a logon "the RFC logon failed (RFC_COMMUNICATION_FAILURE), not as a credential refusal"; at a request "the RFC call failed (RFC_COMMUNICATION_FAILURE), not as a credential refusal" | the same, no renewal |
+| neither a status nor a known key | `system-refused` `unknown` | at a logon "the logon failed (unknown error)"; at a request "the request was refused (unknown error)" | one renewal — the rejection cannot tell |
+<!-- /generated:refusal-table rejected -->
 
 `SncLogonProvider` explains a GSS code in the error first (`A2200019`,
 `SNCERR_INIT`) — the SDK reports SNC logon failures as a communication
@@ -910,16 +912,22 @@ client is outside the ABAP system's `xsappname`. See
 
 #### Refusals
 
-| When | Reason | Hint |
-|---|---|---|
-| material without a PFX or without both certificate and key | the client certificate is incomplete | give a PFX, or a certificate together with its key |
-| material no TLS context accepts | the client certificate could not be used | check the certificate, the key and the passphrase, and that a PFX uses current encryption (not legacy RC2) |
-| a client certificate past its `notAfter`, when pinned or before a request or logon presents it | the client certificate has expired | renew the certificate; a token provider pins its certificate for life, so give the renewed one to a new provider |
-| a signing key that is not a private key of the algorithm | the client signing key could not be used | check the private key and that it matches the algorithm |
-| a strategy's result that cannot be sent | the client authentication returned a request that cannot be sent | check the client authentication strategy |
-| a bound token held, and no certificate pinned | the token is bound to a client certificate this provider does not present | give the provider a clientAuthentication that presents the certificate the token was issued for |
-| a token renewed because it was bound to another certificate, and the new one is bound elsewhere too | the new token is bound to a client certificate this provider does not present | the authorization server bound the new token to another certificate: check the certificate registered for this client |
-| the server refused the client certificate in the handshake | `<what>` failed: the server refused the client certificate (`<code>`) | check that the server trusts the certificate's issuer and that the certificate is valid and not revoked |
+<!-- generated:refusal-table refusals -->
+| When | Kind | Reason | Hint |
+|---|---|---|---|
+| material without a PFX or without both certificate and key | `client-certificate` `incomplete` | the client certificate is incomplete | give a PFX, or a certificate together with its key |
+| material no TLS context accepts | `client-certificate` `unusable` | the client certificate could not be used | check the certificate, the key and the passphrase, and that a PFX uses current encryption (not legacy RC2) |
+| a client certificate past its `notAfter`, when pinned or before a request or logon presents it | `client-certificate` `expired` | the client certificate has expired | renew the certificate; a token provider pins its certificate for life, so give the renewed one to a new provider |
+| a signing key that is not a private key of the algorithm | `client-authentication` `signing-key-unusable` | the client signing key could not be used | check the private key and that it matches the algorithm |
+| a strategy's result that cannot be sent | `client-authentication` `result-unsendable` | the client authentication returned a request that cannot be sent | check the client authentication strategy |
+| raw `clientSecretBasic` with a client id containing ':' | `client-authentication` `basic-client-id-colon` | the client id contains ':', which raw Basic cannot carry | use encoding: 'form' or clientSecretPost |
+| a bound token held, and no certificate pinned | `token-binding` `bound-to-unpinned` | the token is bound to a client certificate this provider does not present | give the provider a clientAuthentication that presents the certificate the token was issued for |
+| a token renewed because it was bound to another certificate, and the new one is bound elsewhere too | `token-binding` `renewed-bound-elsewhere` | the new token is bound to a client certificate this provider does not present | the authorization server bound the new token to another certificate: check the certificate registered for this client |
+| a TLS failure: `UNABLE_TO_VERIFY_LEAF_SIGNATURE`, `SELF_SIGNED_CERT_IN_CHAIN`, `DEPTH_ZERO_SELF_SIGNED_CERT`, `UNABLE_TO_GET_ISSUER_CERT_LOCALLY` | `tls` | `<operation>` failed: the server's certificate is not trusted (`<code>`) | if the server uses a private CA, name its certificate in NODE_EXTRA_CA_CERTS |
+| a TLS failure: `CERT_HAS_EXPIRED` | `tls` | `<operation>` failed: the server's certificate has expired (`<code>`) | the server must renew its certificate; check also this machine's clock |
+| a TLS failure: `ERR_TLS_CERT_ALTNAME_INVALID` | `tls` | `<operation>` failed: the host name is not in the server's certificate (`<code>`) | use the host name the server's certificate is issued for |
+| a TLS failure: `ERR_SSL_TLSV13_ALERT_CERTIFICATE_REQUIRED`, `ERR_SSL_TLSV1_ALERT_UNKNOWN_CA`, `ERR_SSL_SSL/TLS_ALERT_BAD_CERTIFICATE`, `ERR_SSL_SSLV3_ALERT_BAD_CERTIFICATE`, `ERR_SSL_SSL/TLS_ALERT_CERTIFICATE_UNKNOWN`, `ERR_SSL_SSLV3_ALERT_CERTIFICATE_UNKNOWN`, `ERR_SSL_SSL/TLS_ALERT_CERTIFICATE_EXPIRED`, `ERR_SSL_SSLV3_ALERT_CERTIFICATE_EXPIRED`, `ERR_SSL_SSL/TLS_ALERT_CERTIFICATE_REVOKED`, `ERR_SSL_SSLV3_ALERT_CERTIFICATE_REVOKED`, `ERR_SSL_SSL/TLS_ALERT_UNSUPPORTED_CERTIFICATE`, `ERR_SSL_SSLV3_ALERT_UNSUPPORTED_CERTIFICATE` | `tls` | `<operation>` failed: the server refused the client certificate (`<code>`) | check that the server trusts the certificate's issuer and that the certificate is valid and not revoked |
+<!-- /generated:refusal-table refusals -->
 
 ### SSO Providers
 
