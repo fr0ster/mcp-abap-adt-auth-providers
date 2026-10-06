@@ -15,8 +15,54 @@ const DESCRIPTION_CAP = 512;
 const quote = (value: string, cap: number): string =>
   JSON.stringify(value.length > cap ? `${value.slice(0, cap)}…` : value);
 
-/** Anything shaped like a JWT: three base64url segments, the first a header. */
-const JWT_SHAPE = /eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]*/g;
+/**
+ * A token a JWT may be found in: base64url characters and dots, maximal.
+ * Linear: one character class, nothing to backtrack into.
+ */
+const JWT_TOKEN = /[A-Za-z0-9_.-]+/g;
+
+/**
+ * Every JWT-shaped span of a token — `eyJ…` and at least one character,
+ * a dot, a second non-empty segment, a dot, a third segment (5.4.2's
+ * `eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]*`, leftmost first) —
+ * found segment by segment, so each character is read a fixed number of
+ * times: the regex retried at every `eyJ` of `eyJeyJeyJ…` was quadratic.
+ */
+function jwtSpans(token: string): [start: number, end: number][] {
+  const segments: { start: number; end: number }[] = [];
+  let start = 0;
+  for (;;) {
+    const dot = token.indexOf('.', start);
+    segments.push({ start, end: dot < 0 ? token.length : dot });
+    if (dot < 0) break;
+    start = dot + 1;
+  }
+  // Every `eyJ`, found once, read in order: no search runs past its segment.
+  const heads: number[] = [];
+  for (
+    let at = token.indexOf('eyJ');
+    at >= 0;
+    at = token.indexOf('eyJ', at + 1)
+  ) {
+    heads.push(at);
+  }
+  const spans: [number, number][] = [];
+  let next = 0;
+  for (let k = 0; k + 2 < segments.length; k++) {
+    const head = segments[k];
+    const body = segments[k + 1];
+    const tail = segments[k + 2];
+    if (!head || !body || !tail) break;
+    while ((heads[next] ?? Number.POSITIVE_INFINITY) < head.start) next++;
+    const at = heads[next];
+    if (at === undefined || at + 3 >= head.end || body.end === body.start) {
+      continue;
+    }
+    spans.push([at, tail.end]);
+    k += 2;
+  }
+  return spans;
+}
 
 /**
  * A value as a server reading it `application/x-www-form-urlencoded` decodes
@@ -127,8 +173,13 @@ const WHITESPACE = `[ \\t\\r\\n]|${ESCAPE}(?:20|09|0[AaDd])`;
 const BASE64_VALUE = /^[A-Za-z0-9+/_-]+={0,2}$/;
 
 /** The value a base64 run stands for once its whitespace and escapes are gone. */
-const canonicalBase64 = (value: string): string =>
-  value.replace(/-/g, '+').replace(/_/g, '/').replace(/=+$/, '');
+const canonicalBase64 = (value: string): string => {
+  const plain = value.replace(/-/g, '+').replace(/_/g, '/');
+  // Trailing `=` cut by a scan: `/=+$/` retried at every `=` is quadratic.
+  let end = plain.length;
+  while (end > 0 && plain[end - 1] === '=') end--;
+  return plain.slice(0, end);
+};
 
 /** One escape at any depth (`%2B`, `%252B`, `%25252B`), its byte captured. */
 const ANY_DEPTH_ESCAPE = /%(?:25)*([0-9A-Fa-f]{2})/g;
@@ -173,6 +224,21 @@ function unescapedFully(
   }
 }
 
+/**
+ * The pattern of one value: each character in every escaped form, and —
+ * for a value with no whitespace of its own — any wrapping whitespace (raw,
+ * or escaped at any depth) between two characters, so a secret a server
+ * line-wrapped is recognised whole, as one span, before any shape pass can
+ * take a piece of it. A value holding whitespace gets none: its own spaces
+ * and a wrap could not be told apart, and the ambiguity would backtrack.
+ */
+function valuePattern(value: string): string {
+  const characters = [...value].map(characterPattern);
+  return /[ \t\r\n]/.test(value)
+    ? characters.join('')
+    : characters.join(`(?:${WHITESPACE})*`);
+}
+
 /** Every recognised value of the secrets, and how to find them. */
 interface KnownForms {
   /** Every value, longest first; group `i + 1` of `pattern` is `values[i]`. */
@@ -210,9 +276,7 @@ function knownForms(secrets: readonly (string | undefined)[]): KnownForms {
     const canonical = canonicalBase64(value);
     if (!base64.has(canonical)) base64.set(canonical, value);
   }
-  const pattern = values
-    .map((value) => `(${[...value].map(characterPattern).join('')})`)
-    .join('|');
+  const pattern = values.map((value) => `(${valuePattern(value)})`).join('|');
   const shortest = Math.min(...values.map((value) => value.length));
   const shortestRun = Math.min(
     Math.ceil((shortest * 4) / 3),
@@ -264,7 +328,7 @@ function redactKnownSecrets(text: string, forms: KnownForms): Segment[] {
     at = match.index + match[0].length;
   }
   if (at < text.length) segments.push({ text: text.slice(at) });
-  return onText(segments, (piece) => redactEncodedPiece(piece, forms));
+  return segments;
 }
 
 /**
@@ -280,10 +344,28 @@ const BASE64_RUN = new RegExp(
 );
 /** Whitespace inside a run: where it is cut into pieces. */
 const BREAK = new RegExp(`(?:${WHITESPACE})+`, 'g');
-/** Whitespace around a run: the text's, not the run's. */
-const AROUND = new RegExp(
-  `^((?:${WHITESPACE})*)([\\s\\S]*?)((?:${WHITESPACE})*)$`,
-);
+/** Whitespace at the start of a run (sticky: matched at index 0 only). */
+const LEADING = new RegExp(`(?:${WHITESPACE})+`, 'y');
+
+/**
+ * A run cut into the whitespace around it — the text's, not the run's — and
+ * its core. Anchored trims instead of 5.4.2's `^(ws*)([\s\S]*?)(ws*)$`,
+ * whose lazy middle retried the trailing group at every character of a long
+ * whitespace run (quadratic): the leading run is one sticky match, the
+ * trailing one the last `BREAK` match that ends the run.
+ */
+function around(run: string): [before: string, core: string, after: string] {
+  LEADING.lastIndex = 0;
+  const lead = LEADING.exec(run)?.[0].length ?? 0;
+  if (lead === run.length) return [run, '', ''];
+  let tail = run.length;
+  for (const space of run.matchAll(BREAK)) {
+    if (space.index >= lead && space.index + space[0].length === run.length) {
+      tail = space.index;
+    }
+  }
+  return [run.slice(0, lead), run.slice(lead, tail), run.slice(tail)];
+}
 /** Never more pieces than this are tried one span at a time. */
 const MAX_PIECES = 32;
 
@@ -389,7 +471,7 @@ function redactEncodedPiece(text: string, forms: KnownForms): Segment[] {
   let at = 0;
   for (const match of text.matchAll(BASE64_RUN)) {
     const run = match[0];
-    const [, before = '', core = '', after = ''] = AROUND.exec(run) ?? [];
+    const [before, core, after] = around(run);
     // Too short to be a known base64 value or to decode to the shortest
     // value (escapes only shorten a run): left as it is, undecoded.
     if (core.length < 2 || core.length < forms.shortestRun) continue;
@@ -496,10 +578,14 @@ const WRAPPING = new RegExp(`(?:${WHITESPACE})+`, 'g');
 function previewJwts(piece: string): Segment[] {
   const segments: Segment[] = [];
   let at = 0;
-  for (const match of piece.matchAll(JWT_SHAPE)) {
-    segments.push({ text: piece.slice(at, match.index) });
-    segments.push({ preview: previewSecret(match[0]) });
-    at = match.index + match[0].length;
+  for (const token of piece.matchAll(JWT_TOKEN)) {
+    for (const [start, end] of jwtSpans(token[0])) {
+      segments.push({ text: piece.slice(at, token.index + start) });
+      segments.push({
+        preview: previewSecret(token[0].slice(start, end)),
+      });
+      at = token.index + end;
+    }
   }
   segments.push({ text: piece.slice(at) });
   return segments;
@@ -539,9 +625,16 @@ function redact(
   secrets: readonly (string | undefined)[],
 ): string {
   const forms = knownForms(secrets);
+  // Every check against a KNOWN secret first — its forms, escaped and
+  // wrapped (one span each), then the fail-closed net — and only then the
+  // shape passes (base64 runs, JWT-shaped): a shape pass never takes a
+  // fragment of a known secret before it was recognised whole.
+  const known = onText(redactKnownSecrets(text, forms), (piece) =>
+    failClosed(piece, forms),
+  );
   const segments = onText(
-    onText(redactKnownSecrets(text, forms), previewJwts),
-    (piece) => failClosed(piece, forms),
+    onText(known, (piece) => redactEncodedPiece(piece, forms)),
+    previewJwts,
   );
   return capped(segments, DESCRIPTION_CAP);
 }

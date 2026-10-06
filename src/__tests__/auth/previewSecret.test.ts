@@ -318,7 +318,13 @@ describe('a non-base64 secret wrapped by the server', () => {
       ['pw%2B7%\r\n2FQz-pass', 'pw+7/Qz-pass'],
     ] as const) {
       const out = described(`a ${echoed} b`, [...SECRETS, 'pw+7/Qz-pass']);
-      expect(out).toMatch(/^<redacted, \d+ chars>$/);
+      // Recognised whole as one preview where the wrap leaves every escape
+      // intact (round 3: known secrets are wrap-tolerant), else the
+      // fail-closed net's length only — either way nothing of it.
+      expect([
+        `a ${previewSecret(secret)} b`,
+        `<redacted, ${[...`a ${echoed} b`].length} chars>`,
+      ]).toContain(out);
       expect(longestRunOf(unescaped(out), secret)).toBeLessThanOrEqual(4);
     }
   });
@@ -343,4 +349,50 @@ describe('decoding cost', () => {
     ]);
     expect(performance.now() - started).toBeLessThan(2_000);
   });
+});
+
+/**
+ * Review fix round 3, finding 1: every check against a KNOWN secret runs
+ * before the shape passes (JWT-shaped, base64 runs), so no shape pass can
+ * take a fragment of a known secret first. A known JWT whose first wrapped
+ * line holds both dots is the case: the JWT pass alone would preview only
+ * that line and leave the rest of the signature.
+ */
+describe('a known JWT wrapped so its first line holds both dots', () => {
+  const JWT = `eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJ1In0.${'c2lnbmF0dXJl'.repeat(28)}x`;
+  const OTHER = 'some-other-secret-0123456789';
+
+  const wrap = (text: string, width: number, breaker: string): string =>
+    (text.match(new RegExp(`.{1,${width}}`, 'g')) ?? []).join(breaker);
+  const longestRunOf = (text: string, of: string): number => {
+    let best = 0;
+    for (let i = 0; i + best < of.length; i++) {
+      while (i + best < of.length && text.includes(of.slice(i, i + best + 1)))
+        best++;
+    }
+    return best;
+  };
+
+  it('is 374 characters, both dots in its first 76', () => {
+    expect(JWT).toHaveLength(374);
+    expect(JWT.slice(0, 76).split('.')).toHaveLength(3);
+  });
+
+  it.each(
+    [76, 3, 5, 8].flatMap((width) =>
+      ['\r\n', '\n', ' ', '\t', '%0D%0A', '%20'].map(
+        (breaker) => [width, JSON.stringify(breaker), breaker] as const,
+      ),
+    ),
+  )(
+    'wrapped at %i with %s: one preview of the known JWT, nothing of it left',
+    (width, _label, breaker) => {
+      const out = described(`token ${wrap(JWT, width, breaker)} refused`, [
+        JWT,
+        OTHER,
+      ]);
+      expect(out).toBe(`token ${previewSecret(JWT)} refused`);
+      expect(longestRunOf(out.replace(/\s+/g, ''), JWT)).toBeLessThanOrEqual(4);
+    },
+  );
 });
