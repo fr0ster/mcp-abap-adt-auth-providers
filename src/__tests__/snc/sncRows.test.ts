@@ -828,3 +828,126 @@ describe('the moments a request goes through', () => {
     expect(cookies).not.toHaveBeenCalled();
   });
 });
+
+describe('review round 1', () => {
+  it('the success debug line: fixed words, only admitted values as fields (\\n, U+202E)', async () => {
+    const { logger, lines } = recordingLogger();
+    const p = new SncLogonProvider({
+      partnerName: 'p:CN=SID',
+      locator: {
+        locate: async () =>
+          ({
+            path: '/lib.so\n[ERROR] forged line\u202e',
+            archs: ['x64\nforged-arch', 'x64'],
+          }) as never,
+      },
+      probes: [{ product: 'P\nforged-product', appliesTo: async () => true }],
+      logger,
+    });
+    await expect(p.prepare()).resolves.toEqual({ ok: true });
+    const debug = lines.filter((l) => l.level === 'debug');
+    expect(debug).toEqual([
+      {
+        level: 'debug',
+        message: 'SNC library resolved',
+        meta: { library: null, archs: ['x64'], product: 'a consumer probe' },
+      },
+    ]);
+    expect(JSON.stringify(lines)).not.toMatch(/forged|\u202e/);
+  });
+  it('the debug line keeps an admitted path and names only the shipped product', async () => {
+    const { logger, lines } = recordingLogger();
+    await snc(machine(), { logger }).prepare();
+    expect(lines.filter((l) => l.level === 'debug')).toEqual([
+      {
+        level: 'debug',
+        message: 'SNC library resolved',
+        meta: {
+          library: SLC,
+          archs: ['x64'],
+          product: 'SAP Secure Login Client',
+        },
+      },
+    ]);
+  });
+  it('an abort during a probe logs no "probe failed" line', async () => {
+    const { logger, lines } = recordingLogger();
+    const controller = new AbortController();
+    const p = new SncLogonProvider({
+      partnerName: 'p:CN=SID',
+      locator: new DefaultSncLibraryLocator(machine(), KRB),
+      probes: [
+        {
+          product: 'slow',
+          appliesTo: async () => {
+            controller.abort();
+            throw new Error(MARKER);
+          },
+        },
+      ],
+      signal: controller.signal,
+      logger,
+    });
+    expect(mintedRefusal(await p.prepare()).facts).toEqual({
+      outcome: 'aborted',
+    });
+    expect(lines.some((l) => l.message.includes('probe failed'))).toBe(false);
+  });
+  const parts = () => ({
+    locator: new DefaultSncLibraryLocator(machine()),
+    probes: [],
+  });
+  /** A config whose `getterKey` is an accessor that throws — set after the spread, so building it runs no getter. */
+  const construct = (config: object, getterKey?: string): unknown => {
+    const full: Record<string, unknown> = {
+      partnerName: 'p:CN=SID',
+      ...parts(),
+      ...config,
+    };
+    if (getterKey !== undefined) {
+      delete full[getterKey];
+      Object.defineProperty(full, getterKey, {
+        enumerable: true,
+        get() {
+          throw new Error(MARKER);
+        },
+      });
+    }
+    try {
+      new SncLogonProvider(full as never);
+    } catch (error) {
+      return error;
+    }
+    return undefined;
+  };
+  it.each([
+    ['a number', { myName: 42 }, undefined],
+    ['an object', { myName: { toString: () => MARKER } }, undefined],
+    ['a throwing getter', {}, 'myName'],
+  ])(
+    'myName as %s → configuration naming myName, never a TypeError',
+    (_, config, getterKey) => {
+      const thrown = construct(config, getterKey);
+      expect(configurationOf(thrown)).toEqual({
+        case: 'required-fields-missing',
+        fields: ['myName'],
+        reason: 'required configuration is missing: myName',
+      });
+      expect(JSON.stringify(thrown)).not.toContain(MARKER);
+    },
+  );
+  it('qop behind a throwing getter → E21, never the getter’s error', () => {
+    const thrown = construct({}, 'qop');
+    expect(configurationOf(thrown).case).toBe('snc-qop-invalid');
+    expect(JSON.stringify(thrown)).not.toContain(MARKER);
+  });
+  it('partnerName behind a getter is not read: E20', () => {
+    const thrown = construct({}, 'partnerName');
+    expect(configurationOf(thrown).case).toBe('snc-partner-name-missing');
+    expect(JSON.stringify(thrown)).not.toContain(MARKER);
+  });
+  it('a valid myName and an absent qop still construct', () => {
+    expect(construct({ myName: ' p:CN=ME ' })).toBeUndefined();
+    expect(construct({ qop: undefined })).toBeUndefined();
+  });
+});

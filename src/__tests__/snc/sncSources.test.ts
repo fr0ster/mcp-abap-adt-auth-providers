@@ -51,6 +51,25 @@ describe('src/snc reads untrusted text without regular expressions', () => {
   });
 });
 
+describe('src/snc has no timer and no timeout of its own', () => {
+  it('no timeout option (shorthand included), timers module or timer call', () => {
+    expect(
+      linesWith(sourceFiles(join(SRC, 'snc')), [
+        '{ timeout',
+        'timeout }',
+        'timeout,',
+        'timeout:',
+        'timers/promises',
+        "'timers'",
+        'AbortSignal.timeout(',
+        'setTimeout',
+        'setInterval',
+        'setImmediate',
+      ]),
+    ).toEqual([]);
+  });
+});
+
 describe('no package timer', () => {
   it('setTimeout only for the server’s poll interval; no setInterval', () => {
     expect(

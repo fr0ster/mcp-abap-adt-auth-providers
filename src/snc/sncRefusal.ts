@@ -30,7 +30,7 @@ function searchable(error: unknown): string {
 }
 
 /** The library's architectures, each on the allowlist; none when unknown. */
-function archsOf(library: SncLibrary | undefined): SncArch[] {
+export function archsOf(library: SncLibrary | undefined): SncArch[] {
   const archs = library?.archs;
   if (!Array.isArray(archs)) return [];
   return archs.filter((arch): arch is SncArch => isSncArch(arch));
@@ -39,6 +39,18 @@ function archsOf(library: SncLibrary | undefined): SncArch[] {
 /** The resolved library's path as the `library` diagnostic, when there is one. */
 function libraryDiagnostic(library: SncLibrary | undefined) {
   return library === undefined ? {} : { library: library.path };
+}
+
+/**
+ * `path` as the `library` diagnostic admits it (LocalPath), or `undefined`
+ * when admission drops it — the one check, auth-errors', for a log field.
+ */
+export function admittedLibraryPath(path: string): string | undefined {
+  const admitted = authError.snc(
+    { problem: 'library-init-failed' },
+    { library: path },
+  ).diagnostics?.library;
+  return typeof admitted === 'string' ? admitted : undefined;
 }
 
 /** The explanation of a GSS code in the error, when it carries one (G1, G2). */

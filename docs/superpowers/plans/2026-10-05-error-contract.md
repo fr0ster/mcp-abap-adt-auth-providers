@@ -483,7 +483,7 @@ Publish dependency: U1 (5.4.2 published), G1, G2 (G3 is not needed to build auth
 
 **Tests first:** G1–G10, H4, H5, E20, E21 rows; §8.1's fixtures and §7's returned/thrown matrix for `SncLogonProvider`; the hint of G1 for a non-SLC product (`the SNC library`, path in diagnostics, L9); `renderDiagnostics` shows each candidate's source, path and reason; `docs/passwordless-sso.md:235-237`'s quoted reason unchanged; source test: no `oops(` in `src`. **RF4:** the four real-world paths through the fake `SncSystem` and the shipped locator, each admitted and rendered; a registry value ending in `\r\n` and trailing spaces reaches `candidatePaths` trimmed, not `null`.
 
-**Load-bearing:** remove the trim → the RF4 registry case red (`null`); return the target's refusal object from `establish` instead of `relayOutcome`'s → the foreign-copy relay case red.
+**Load-bearing:** remove the trim → the RF4 registry case red (`null`); return the target's answer from `establish` instead of `relayOutcome`'s → the "garbage returned → `logon-target` fallback" relay case red (the foreign-copy case stays green either way: `guard`'s `classifyOutcome` rebuilds another copy's refusal on the way out, §8.1).
 
 **Removes:** `bounded`, `oops` (last caller). **Gate:** standard.
 

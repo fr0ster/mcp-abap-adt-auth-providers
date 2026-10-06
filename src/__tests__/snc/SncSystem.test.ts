@@ -52,6 +52,14 @@ describe('parseRegQuery', () => {
     expect(parseRegQuery(out, 'install path')).toBe('D:\\x');
     expect(parseRegQuery(out, 'Empty')).toBe('');
   });
+  it('a value whose name begins with REG_ is still found', () => {
+    expect(
+      parseRegQuery(
+        '\r\nHKEY_LOCAL_MACHINE\\X\r\n    REG_PATH    REG_SZ    C:\\x\r\n',
+        'REG_PATH',
+      ),
+    ).toBe('C:\\x');
+  });
   it('a line not indented, or with no REG_ type, is no value', () => {
     expect(
       parseRegQuery('InstallPath64    REG_SZ    C:\\x', 'InstallPath64'),

@@ -46,7 +46,14 @@ import {
   SecureLoginClientProbe,
 } from './SecureLoginClientProbe';
 import { nodeSncSystem } from './SncSystem';
-import { foreignLocatorRefusal, sncCause, sncRefusal } from './sncRefusal';
+import { SECURE_LOGIN_CLIENT } from './secureLoginClient';
+import {
+  admittedLibraryPath,
+  archsOf,
+  foreignLocatorRefusal,
+  sncCause,
+  sncRefusal,
+} from './sncRefusal';
 
 export interface SncLogonProviderConfig {
   /** The system's SNC name, e.g. `p:CN=SID, O=ACME`. */
@@ -70,6 +77,29 @@ export interface SncLogonProviderConfig {
   signal?: AbortSignal | undefined;
 }
 
+/**
+ * A configured field, read once as an own data property: an accessor (a
+ * getter is never run), a Proxy trap that throws or a non-object config is
+ * unreadable; an absent property reads as `undefined`.
+ */
+function ownData(
+  object: unknown,
+  key: string,
+): { readable: true; value: unknown } | { readable: false } {
+  if (object === null || typeof object !== 'object') {
+    return { readable: false };
+  }
+  try {
+    const descriptor = Object.getOwnPropertyDescriptor(object, key);
+    if (descriptor === undefined) return { readable: true, value: undefined };
+    return 'value' in descriptor
+      ? { readable: true, value: descriptor.value }
+      : { readable: false };
+  } catch {
+    return { readable: false };
+  }
+}
+
 export class SncLogonProvider extends AuthProviderBase {
   readonly kind = 'snc';
   private readonly partnerName: string;
@@ -90,8 +120,11 @@ export class SncLogonProvider extends AuthProviderBase {
       authorize: 'authorizing-snc-request',
       rejected: 'explaining-snc-refusal',
     });
-    const given = readSafely(config, 'partnerName');
-    const partnerName = typeof given === 'string' ? given.trim() : '';
+    const given = ownData(config, 'partnerName');
+    const partnerName =
+      given.readable && typeof given.value === 'string'
+        ? given.value.trim()
+        : '';
     if (!partnerName) {
       // E20.
       throw misconfigured(
@@ -101,7 +134,8 @@ export class SncLogonProvider extends AuthProviderBase {
         }),
       );
     }
-    const qop = config.qop ?? '9';
+    const qopRead = ownData(config, 'qop');
+    const qop = qopRead.readable ? (qopRead.value ?? '9') : undefined;
     if (!isSncQop(qop)) {
       // E21: the value is never echoed (L5); `allowed` names the set.
       throw misconfigured(
@@ -112,9 +146,26 @@ export class SncLogonProvider extends AuthProviderBase {
         }),
       );
     }
+    const myName = ownData(config, 'myName');
+    if (
+      !myName.readable ||
+      (myName.value !== undefined && typeof myName.value !== 'string')
+    ) {
+      // No snc case names myName (interfaces-auth's CONFIG_CASES): the
+      // generic case, naming the field — never the value or a getter's throw.
+      throw misconfigured(
+        authError.configuration({
+          case: 'required-fields-missing',
+          fields: ['myName'],
+        }),
+      );
+    }
     this.partnerName = partnerName;
     this.qop = qop;
-    this.myName = config.myName?.trim() || undefined;
+    this.myName =
+      typeof myName.value === 'string'
+        ? myName.value.trim() || undefined
+        : undefined;
     this.locator = config.locator;
     this.probes = config.probes;
     this.logger = config.logger;
@@ -203,6 +254,8 @@ export class SncLogonProvider extends AuthProviderBase {
           break;
         }
       } catch (error) {
+        // An abort is the consumer's, not the probe's failure: no H5 line.
+        throwIfAborted(signal);
         // H5: a probe that cannot tell names nothing; the logon goes on.
         const fields = logFields(readFailure(error, 'probing-snc-product'));
         logQuietly(() =>
@@ -216,13 +269,20 @@ export class SncLogonProvider extends AuthProviderBase {
     throwIfAborted(signal);
     this.library = library;
     this.secureLoginClient = applying instanceof SecureLoginClientProbe;
-    logQuietly(() =>
-      this.logger?.debug(
-        `SNC library ${library.path} (${library.archs.join('/') || 'architecture not given'})${
-          applying ? `, product: ${applying.product}` : ', no product named'
-        }`,
-      ),
-    );
+    // Fixed words; only admitted values as fields — the path through
+    // LocalPath, the architectures from the closed set, and a product name
+    // only when it is the shipped probe's. A consumer's text never reaches
+    // the line, so a newline or a bidi control cannot forge one.
+    const fields = {
+      library: admittedLibraryPath(library.path) ?? null,
+      archs: archsOf(library),
+      product: this.secureLoginClient
+        ? SECURE_LOGIN_CLIENT
+        : applying
+          ? 'a consumer probe'
+          : 'none',
+    };
+    logQuietly(() => this.logger?.debug('SNC library resolved', fields));
     return OK;
   }
 

@@ -70,10 +70,11 @@ function valueLine(line: string): { name: string; data: string } | undefined {
   // its name characters and then whitespace (or the line's end, no data).
   for (
     let at = body.indexOf('REG_');
-    at > 0;
+    at !== -1;
     at = body.indexOf('REG_', at + 1)
   ) {
-    if (!isSpace(body[at - 1])) continue;
+    // At 0 it is the value's name (`REG_…`), not its type column.
+    if (at === 0 || !isSpace(body[at - 1])) continue;
     let end = at + 4;
     while (isTypeChar(body[end])) end++;
     if (end === at + 4) continue;
