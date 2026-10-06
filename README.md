@@ -1947,7 +1947,7 @@ identity provider accepts a loopback redirect on any port.
 
 **Cross-Platform Browser Support**: The browser authentication works across Linux, macOS, and Windows:
 - **Linux**: Automatically sets `DISPLAY=:0` if neither `DISPLAY` nor `WAYLAND_DISPLAY` environment variables are set. Supports multiple browser executable names (`google-chrome`, `google-chrome-stable`, `chromium`, `chromium-browser` for Chrome; `firefox`, `firefox-esr` for Firefox).
-- **Windows**: the default browser through `rundll32 url.dll,FileProtocolHandler <url>`; a named one through PowerShell's `Start-Process`, which reads the URL from an environment variable. Never `cmd`, which parses `&`, `|`, `^` and `%` whatever the quoting.
+- **Windows**: the default browser through `%SystemRoot%\System32\rundll32.exe url.dll,FileProtocolHandler <url>` (absolute paths, never a program found in the current directory); a named one through PowerShell's `Start-Process`, which reads the URL from an environment variable. Never `cmd`, which parses `&`, `|`, `^` and `%` whatever the quoting.
 - **macOS**: Uses native `open` / `open -a <app>`.
 - **No shell, anywhere** (since 6.0.0): only an `http:` / `https:` URL is opened, as its serialisation (spaces and quotes percent-encoded), and every launcher is started with an argument array, the URL one argument of it. Through 5.4.2 the fallback without the `open` package handed the URL to a shell inside double quotes, so a `$(…)` or a backtick in it — from an OIDC provider's discovery document, say — ran as a command.
 

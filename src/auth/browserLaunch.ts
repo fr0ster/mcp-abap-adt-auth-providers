@@ -14,6 +14,11 @@
  * - every launcher is a program started with an argument array
  *   (`child_process.spawn`, no `shell` option): the URL is one element of
  *   argv, which no shell parses;
+ * - on Windows the launchers are the system's own, by absolute path under
+ *   `%SystemRoot%\System32` (a bare name is searched in the current
+ *   directory first), and the URL must hold no quote, space, `<`, `>`, `^`,
+ *   `|`, backslash or control character and a valid host — reasoned from
+ *   ShellExecute's parsing, not measured on a Windows host;
  * - on Windows `cmd /c start` is never used, since `cmd` parses `&`, `|`,
  *   `^` and `%` in its command line whatever the quoting. The default browser
  *   is opened by `rundll32 url.dll,FileProtocolHandler <url>`, which hands the
@@ -28,6 +33,7 @@
  */
 
 import * as child_process from 'node:child_process';
+import { win32 } from 'node:path';
 
 /** One way to start a browser: a program and its arguments. */
 export interface LaunchCommand {
@@ -67,9 +73,69 @@ export function launchableUrl(url: unknown): string | undefined {
   } catch {
     return undefined;
   }
-  return parsed.protocol === 'http:' || parsed.protocol === 'https:'
-    ? parsed.href
-    : undefined;
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+    return undefined;
+  }
+  const href = parsed.href;
+  // ShellExecute (Windows) receives the URL as a string it splits and
+  // matches by scheme: a quote, a space or a shell-ish character left in the
+  // serialisation (the parser keeps `"` in a host, `^` and `|` in a query)
+  // would make it something else. Refused, not repaired.
+  for (const character of href) {
+    const code = character.charCodeAt(0);
+    if (code <= 0x20 || code === 0x7f || UNSAFE.has(character)) {
+      return undefined;
+    }
+  }
+  return validHost(parsed.hostname) ? href : undefined;
+}
+
+/** Characters never launched, even where the URL serialiser keeps them. */
+const UNSAFE: ReadonlySet<string> = new Set(['"', '<', '>', '^', '|', '\\']);
+
+/**
+ * A host name (letters, digits, `-`, `_`, in non-empty dot-separated labels,
+ * as the parser lower-cases and punycodes it), an IPv4 address (the same
+ * rule covers it) or a bracketed IPv6 address. Plain code: the URL is
+ * already parsed.
+ */
+function validHost(hostname: string): boolean {
+  if (hostname.startsWith('[')) {
+    if (!hostname.endsWith(']') || hostname.length < 4) return false;
+    for (const character of hostname.slice(1, -1)) {
+      const hex =
+        (character >= '0' && character <= '9') ||
+        (character >= 'a' && character <= 'f');
+      if (!hex && character !== ':' && character !== '.') return false;
+    }
+    return true;
+  }
+  if (hostname === '') return false;
+  for (const label of hostname.split('.')) {
+    if (label === '') return false;
+    for (const character of label) {
+      const allowed =
+        (character >= 'a' && character <= 'z') ||
+        (character >= '0' && character <= '9') ||
+        character === '-' ||
+        character === '_';
+      if (!allowed) return false;
+    }
+  }
+  return true;
+}
+
+/**
+ * A program of the system's own `System32`, by absolute path: a bare name is
+ * searched in the current directory before `PATH` on Windows, where a planted
+ * `rundll32.exe` would receive the URL (as `reg.exe` in `SncSystem.ts`).
+ */
+function system32(...parts: string[]): string {
+  return win32.join(
+    process.env.SystemRoot?.trim() || 'C:\\Windows',
+    'System32',
+    ...parts,
+  );
 }
 
 /** The launchers to try, in order, for `href` (already `launchableUrl`). */
@@ -82,14 +148,14 @@ export function launchCommands(
     if (browser === undefined) {
       return [
         {
-          command: 'rundll32.exe',
+          command: system32('rundll32.exe'),
           args: ['url.dll,FileProtocolHandler', href],
         },
       ];
     }
     return [
       {
-        command: 'powershell.exe',
+        command: system32('WindowsPowerShell', 'v1.0', 'powershell.exe'),
         args: [
           '-NoProfile',
           '-NonInteractive',

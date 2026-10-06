@@ -74,7 +74,7 @@ const IFS = ['$', '{IFS}'].join('');
 const HOSTILE =
   // No space in the commands: `${IFS}` survives the URL serialisation, so a
   // shell that saw this URL would really run them (the 1a mutation proves it).
-  `https://idp.example/authorize?a=$(touch${IFS}MARKER1)&b=\`touch${IFS}MARKER2\`;touch${IFS}MARKER3|x&c="q'%26^&d=%(PATH)`;
+  `https://idp.example/authorize?a=$(touch${IFS}MARKER1)&b=\`touch${IFS}MARKER2\`;touch${IFS}MARKER3&c="q'%26&d=%(PATH)`;
 /**
  * For the real run: a URL a shell would parse cleanly (no stray quote or
  * parenthesis to stop it with a syntax error), so a shell would run all
@@ -105,6 +105,27 @@ describe('launchableUrl', () => {
     expect(launchableUrl(url)).toBeUndefined();
   });
 
+  // Re-review: what the serialiser keeps but ShellExecute would split or
+  // reinterpret is refused, and the host must be a host name or an address.
+  it.each([
+    'http://a"b/',
+    'https://idp.example/a?x=1^2',
+    'https://idp.example/a?x=1|2',
+    'http://a%20b/',
+    'http://exa!mple/',
+  ])('refuses %j (left with a character ShellExecute would misread)', (url) => {
+    expect(launchableUrl(url)).toBeUndefined();
+  });
+
+  it.each([
+    ['https://IDP.Example:8443/a?b=c#d', 'https://idp.example:8443/a?b=c#d'],
+    ['http://127.0.0.1:61001/cb', 'http://127.0.0.1:61001/cb'],
+    ['http://[::1]:61001/cb', 'http://[::1]:61001/cb'],
+    ['https://my_host.local/x', 'https://my_host.local/x'],
+  ])('keeps %j', (url, href) => {
+    expect(launchableUrl(url)).toBe(href);
+  });
+
   it('serialises an http(s) URL: no space and no double quote survive', () => {
     const href = launchableUrl('https://idp.example/a b?x="y z"#"f"');
     expect(href).toBe('https://idp.example/a%20b?x=%22y%20z%22#%22f%22');
@@ -119,7 +140,12 @@ describe('launchBrowser fallback: no shell, the URL one argument', () => {
     ['linux', 'chrome', 'google-chrome', [href]],
     ['darwin', 'system', 'open', [href]],
     ['darwin', 'firefox', 'open', ['-a', 'Firefox', href]],
-    ['win32', 'system', 'rundll32.exe', ['url.dll,FileProtocolHandler', href]],
+    [
+      'win32',
+      'system',
+      'C:\\Windows\\System32\\rundll32.exe',
+      ['url.dll,FileProtocolHandler', href],
+    ],
   ])('%s, %s', async (platform, browser, command, args) => {
     onPlatform(platform);
     await launchBrowser(HOSTILE, browser, CALLBACK, () => {}, null);
@@ -137,7 +163,9 @@ describe('launchBrowser fallback: no shell, the URL one argument', () => {
     onPlatform('win32');
     await launchBrowser(HOSTILE, 'chrome', CALLBACK, () => {}, null);
     const call = spawned[0] as SpawnCall;
-    expect(call.command).toBe('powershell.exe');
+    expect(call.command).toBe(
+      'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe',
+    );
     expect(call.args.join(' ')).not.toContain('idp.example');
     expect(call.args.at(-1)).toBe(
       `Start-Process -FilePath 'chrome' -ArgumentList $env:${URL_VARIABLE}`,
@@ -148,6 +176,25 @@ describe('launchBrowser fallback: no shell, the URL one argument', () => {
     };
     expect(options.shell).toBeUndefined();
     expect(options.env?.[URL_VARIABLE]).toBe(href);
+  });
+
+  // Re-review: a bare name is searched in the current directory first on
+  // Windows; the system's own programs are named by absolute path.
+  it('win32 launchers are absolute paths under SystemRoot (C:\\Windows without it)', () => {
+    const saved = process.env.SystemRoot;
+    try {
+      process.env.SystemRoot = 'D:\\Win';
+      for (const browser of [undefined, 'chrome'] as const) {
+        const [only] = launchCommands('win32', browser, 'https://x/');
+        expect(only?.command.startsWith('D:\\Win\\System32\\')).toBe(true);
+      }
+      delete process.env.SystemRoot;
+      const [fallback] = launchCommands('win32', undefined, 'https://x/');
+      expect(fallback?.command).toBe('C:\\Windows\\System32\\rundll32.exe');
+    } finally {
+      if (saved === undefined) delete process.env.SystemRoot;
+      else process.env.SystemRoot = saved;
+    }
   });
 
   it('no launcher anywhere is cmd', () => {
