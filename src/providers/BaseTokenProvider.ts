@@ -876,36 +876,50 @@ export abstract class BaseTokenProvider
     generation: number,
   ): Promise<ITokenResult | undefined> {
     const { signal } = attempt;
+    // From dispatch until this refresh's outcome — its commit, or its
+    // clearing step — has been applied, `spent` is quarantined by whatever
+    // ends the attempt in between: an answer waiting in the queue behind a
+    // stalled commit has not yet replaced or cleared it, and the next
+    // renewal must not send it again.
     const cut = () => {
       this.quarantine.add(spent);
       void this.commit(() => this.discard(spent));
     };
     signal.addEventListener('abort', cut, { once: true });
-    let result: ITokenResult;
     try {
-      result = await this.performRefresh(spent, signal);
-    } catch (error) {
-      signal.removeEventListener('abort', cut);
-      // H1: the failure's fixed words and kind, never its message.
-      logQuietly(() =>
-        this.logger?.warn(
-          '[BaseTokenProvider] Refresh failed',
-          logFields(errorFor(error, { operation: 'refresh' })),
-        ),
+      let result: ITokenResult;
+      try {
+        result = await this.performRefresh(spent, signal);
+      } catch (error) {
+        // H1: the failure's fixed words and kind, never its message.
+        logQuietly(() =>
+          this.logger?.warn(
+            '[BaseTokenProvider] Refresh failed',
+            logFields(errorFor(error, { operation: 'refresh' })),
+          ),
+        );
+        // Cut: the abort already spent it, and nobody waits for a login.
+        throwIfAborted(signal);
+        // The refresh token was refused: it is spent, so a login follows.
+        // Discarded explicitly (spec §6b): persistence is told through the
+        // queue, before the login, so the stored one goes even if the login
+        // fails.
+        await this.commit(() => this.discard(spent));
+        // Aborted while the clearing step waited: nobody waits for a login.
+        throwIfAborted(signal);
+        return undefined;
+      }
+      // Committed even when the attempt was aborted meanwhile, if nothing
+      // newer was (spec §6b, rule 2): losing R2 would strand the family.
+      return await this.commitCredentials(
+        result,
+        generation,
+        attempt,
+        'refresh',
       );
-      // Cut: the abort already spent it, and nobody waits for a login.
-      throwIfAborted(signal);
-      // The refresh token was refused: it is spent, so a login follows.
-      // Discarded explicitly (spec §6b): persistence is told through the
-      // queue, before the login, so the stored one goes even if the login
-      // fails.
-      await this.commit(() => this.discard(spent));
-      return undefined;
+    } finally {
+      signal.removeEventListener('abort', cut);
     }
-    signal.removeEventListener('abort', cut);
-    // Committed even when the attempt was aborted meanwhile, if nothing
-    // newer was (spec §6b, rule 2): losing R2 would strand the family.
-    return this.commitCredentials(result, generation, attempt, 'refresh');
   }
 
   /**

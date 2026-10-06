@@ -6,6 +6,10 @@
  * attempt is aborted when every waiter has. Run on a real token endpoint
  * (loopback) and a strategy that waits until answered or aborted; the
  * callback port, where one is bound, is asserted by binding it afterwards.
+ *
+ * No fixed-turn waits: an abort is dispatched synchronously — the parties,
+ * the attempt's controller and the strategy's request signal all abort
+ * inside `abort()` — so a check right after it sees everything it ever will.
  */
 
 import { getEventListeners } from 'node:events';
@@ -257,7 +261,6 @@ describe('a login a moment starts waits on the attached parties', () => {
     const outcome = p.rejected(refused);
     const call = await strategy.nth(1);
     a.abort();
-    await settle();
     expect(call.signal?.aborted).toBe(false);
     b.abort();
     const answered = await outcome;
@@ -276,7 +279,6 @@ describe('a login a moment starts waits on the attached parties', () => {
     const outcome = p.rejected(refused);
     const call = await strategy.nth(1);
     a.abort();
-    await settle();
     call.answer('code-1');
     await expect(outcome).resolves.toEqual({ ok: true });
     expect(call.signal?.aborted).toBe(false);
@@ -288,7 +290,6 @@ describe('a login a moment starts waits on the attached parties', () => {
     p.attach(AbortSignal.abort());
     const outcome = p.rejected(refused);
     const call = await strategy.nth(1);
-    await settle();
     expect(call.signal?.aborted).toBe(false);
     call.answer('code-1');
     await expect(outcome).resolves.toEqual({ ok: true });
@@ -304,7 +305,6 @@ describe('a login a moment starts waits on the attached parties', () => {
     detach();
     const outcome = p.rejected(refused);
     const call = await strategy.nth(1);
-    await settle();
     expect(call.signal?.aborted).toBe(false);
     call.answer('code-1');
     await expect(outcome).resolves.toEqual({ ok: true });
@@ -330,7 +330,6 @@ describe('a login a moment starts waits on the attached parties', () => {
       session.abort();
       const outcome = p.rejected(refused);
       const call = await strategy.nth(1);
-      await settle();
       expect(call.signal?.aborted).toBe(false);
       call.answer('code-1');
       await expect(outcome).resolves.toEqual({ ok: true });
@@ -350,7 +349,6 @@ describe('a login a moment starts waits on the attached parties', () => {
 
       const next = p.rejected(refused);
       const second = await strategy.nth(2);
-      await settle();
       expect(second.signal?.aborted).toBe(false);
       second.answer('code-2');
       await expect(next).resolves.toEqual({ ok: true });
@@ -391,7 +389,6 @@ describe('a login a moment starts waits on the attached parties', () => {
     // Neither bounds a later moment: its login runs unbounded.
     const outcome = p.rejected(refused);
     const call = await strategy.nth(1);
-    await settle();
     expect(call.signal?.aborted).toBe(false);
     call.answer('code-1');
     await expect(outcome).resolves.toEqual({ ok: true });
@@ -451,7 +448,6 @@ describe('a login a moment starts waits on the attached parties', () => {
     const caller = rejectionOf(p.getTokens({ signal: c.signal }));
 
     a.abort();
-    await settle();
     expect(signals[0]?.aborted).toBe(false);
     c.abort();
     expect(isAborted(await caller)).toBe(true);
@@ -489,7 +485,6 @@ describe('the pin attempt is shared the same way', () => {
     const leaving = new AbortController();
     const one = rejectionOf(pin(leaving.signal));
     const two = pin(new AbortController().signal);
-    await settle();
     leaving.abort();
     expect(isAborted(await one)).toBe(true);
     material.resolve(certificate());

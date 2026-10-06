@@ -10,6 +10,7 @@ import { loggedError } from './refusal';
 import {
   attemptSite,
   legacyBasic,
+  logQuietly,
   prepareTokenRequest,
   rejectMissingToken,
   sendTokenRequest,
@@ -158,7 +159,11 @@ export async function exchangeCodeForToken(
       ...(signal === undefined ? {} : { signal }),
     });
 
-  log?.info(`Exchanging code for token: ${prepared?.config.url ?? tokenUrl}`);
+  // Every line on the token path is guarded: a logger that throws, or an
+  // async one that rejects, changes nothing (logQuietly).
+  logQuietly(() =>
+    log?.info(`Exchanging code for token: ${prepared?.config.url ?? tokenUrl}`),
+  );
 
   const site = attemptSite(
     'code-exchange',
@@ -179,8 +184,10 @@ export async function exchangeCodeForToken(
     rejectMissingToken(site, prepared, response, 'no-access-token', 'error');
   }
   const refreshToken = response.data.refresh_token;
-  log?.info(
-    `Tokens received: accessToken(${accessToken.length} chars), refreshToken(${refreshToken?.length || 0} chars)`,
+  logQuietly(() =>
+    log?.info(
+      `Tokens received: accessToken(${accessToken.length} chars), refreshToken(${refreshToken?.length || 0} chars)`,
+    ),
   );
   return {
     accessToken,
@@ -235,17 +242,23 @@ export async function launchBrowser(
   }
 
   if (browser === 'auto') {
-    log?.info('🌐 Attempting to open browser for authentication...');
+    logQuietly(() =>
+      log?.info('🌐 Attempting to open browser for authentication...'),
+    );
     try {
       const openModule = await import('open');
       await openModule.default(authorizationUrl);
-      log?.info(
-        '✅ Browser opened successfully. Waiting for authentication...',
+      logQuietly(() =>
+        log?.info(
+          '✅ Browser opened successfully. Waiting for authentication...',
+        ),
       );
     } catch (error: unknown) {
       // Fixed words only: what `open` threw is not this package's text.
-      log?.warn(
-        `⚠️  Could not open browser automatically: ${loggedError(error, 'opening the browser').error}`,
+      logQuietly(() =>
+        log?.warn(
+          `⚠️  Could not open browser automatically: ${loggedError(error, 'opening the browser').error}`,
+        ),
       );
       announce('🔗 Please open this URL in your browser to authenticate:');
       announce(`   ${authorizationUrl}`);
@@ -263,7 +276,7 @@ export async function launchBrowser(
     !process.env.WAYLAND_DISPLAY
   ) {
     process.env.DISPLAY = ':0';
-    log?.debug('DISPLAY not set, using fallback DISPLAY=:0');
+    logQuietly(() => log?.debug('DISPLAY not set, using fallback DISPLAY=:0'));
   }
 
   type OpenFn = (
@@ -326,9 +339,11 @@ export async function launchBrowser(
     child_process.exec(`${command} "${authorizationUrl}"`, (error) => {
       if (error) {
         const { error: words } = loggedError(error, 'opening the browser');
-        log?.error(
-          `❌ Failed to open browser: ${words}. Please open manually: ${authorizationUrl}`,
-          { error: words, url: authorizationUrl },
+        logQuietly(() =>
+          log?.error(
+            `❌ Failed to open browser: ${words}. Please open manually: ${authorizationUrl}`,
+            { error: words, url: authorizationUrl },
+          ),
         );
       }
     });

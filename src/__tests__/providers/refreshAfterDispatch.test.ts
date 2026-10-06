@@ -15,12 +15,13 @@ import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
 import { AuthorizationCodeProvider } from '../../providers/AuthorizationCodeProvider';
 import type { TokenResultWithDisposition } from '../../providers/BaseTokenProvider';
 import {
+  Arrivals,
   type Deferred,
   deferred,
   type HeldRequest,
   jwt,
+  quiet,
   rejectionOf,
-  settle,
   startTokenServer,
   type TokenServer,
   type WaitingStrategy,
@@ -46,13 +47,13 @@ type Seen = [string, string | undefined, string | undefined];
 
 let server: TokenServer;
 /** Refresh requests the server holds, in arrival order. */
-let heldRefreshes: HeldRequest[];
+let heldRefreshes: Arrivals<HeldRequest>;
 /** What each login's code exchange answers, by login number. */
 let loginAnswers: Map<number, object>;
 let loginCount: number;
 
 beforeEach(async () => {
-  heldRefreshes = [];
+  heldRefreshes = new Arrivals<HeldRequest>();
   loginAnswers = new Map();
   loginCount = 0;
   server = await startTokenServer((request) => {
@@ -84,8 +85,13 @@ function provider(
   strategy: WaitingStrategy,
   seeded: { access?: string; refresh?: string } = {},
   onTokens?: (result: TokenResultWithDisposition) => Promise<void>,
-): { p: AuthorizationCodeProvider; seen: Seen[] } {
+): {
+  p: AuthorizationCodeProvider;
+  seen: Seen[];
+  notified: Arrivals<Seen>;
+} {
   const seen: Seen[] = [];
+  const notified = new Arrivals<Seen>();
   const p = new AuthorizationCodeProvider({
     uaaUrl: server.url,
     clientId: 'cid',
@@ -95,15 +101,17 @@ function provider(
     ...(seeded.access ? { accessToken: seeded.access } : {}),
     ...(seeded.refresh ? { refreshToken: seeded.refresh } : {}),
     onTokens: async (result) => {
-      seen.push([
+      const one: Seen = [
         result.authorizationToken,
         result.refreshToken,
         result.refreshTokenDisposition,
-      ]);
+      ];
+      seen.push(one);
+      notified.push(one);
       await onTokens?.(result);
     },
   });
-  return { p, seen };
+  return { p, seen, notified };
 }
 
 /** Starts a refresh of R through `getTokens({ signal })` and cuts it once the server holds it. */
@@ -121,8 +129,7 @@ async function cutRefresh(
 }
 
 async function waitForRefresh(index: number): Promise<HeldRequest> {
-  while (heldRefreshes.length <= index) await settle(1);
-  return heldRefreshes[index] as HeldRequest;
+  return heldRefreshes.nth(index + 1);
 }
 
 const expired = (subject: string) => jwt(subject, -3600);
@@ -135,7 +142,8 @@ describe('a refresh aborted after dispatch', () => {
       refresh: 'R',
     });
     const held = await cutRefresh(p, 0);
-    await settle();
+    // The socket must stay open: no event exists for a cut that must not come.
+    await quiet();
     // Not cut: the socket is still open, the server still holds it.
     expect(held.aborted()).toBe(false);
 
@@ -152,12 +160,14 @@ describe('a refresh aborted after dispatch', () => {
   it('the withheld answer released later, nothing newer committed: R2 and its tokens adopted and persisted', async () => {
     const strategy = waitingStrategy();
     const T0 = expired('held');
-    const { p, seen } = provider(strategy, { access: T0, refresh: 'R' });
+    const { p, seen, notified } = provider(strategy, {
+      access: T0,
+      refresh: 'R',
+    });
     const held = await cutRefresh(p, 0);
     const T2 = jwt('rotated');
     held.answer(200, { access_token: T2, refresh_token: 'R2' });
-    await held.closed;
-    await settle();
+    await notified.nth(2);
     expect(seen).toEqual([
       [T0, undefined, 'clear'],
       [T2, 'R2', 'replace'],
@@ -173,7 +183,10 @@ describe('a refresh aborted after dispatch', () => {
   it('a newer login committed first: the late R2 is discarded; the login stays, persisted last', async () => {
     const strategy = waitingStrategy();
     const T0 = expired('held');
-    const { p, seen } = provider(strategy, { access: T0, refresh: 'R' });
+    const { p, seen, notified } = provider(strategy, {
+      access: T0,
+      refresh: 'R',
+    });
     const held = await cutRefresh(p, 0);
     const next = p.getTokens();
     (await strategy.nth(1)).answer('code-1');
@@ -182,7 +195,8 @@ describe('a refresh aborted after dispatch', () => {
 
     held.answer(200, { access_token: jwt('late'), refresh_token: 'R2' });
     await held.closed;
-    await settle();
+    // The late answer must change nothing: no event exists for that.
+    await quiet();
     expect(seen).toEqual([
       [T0, undefined, 'clear'],
       [login.authorizationToken, 'S-1', 'replace'],
@@ -201,7 +215,7 @@ describe('quarantine before the queue', () => {
     let stalled = false;
     // Login 1 answers an expired access token: the next need refreshes R.
     loginAnswers.set(1, { access_token: expired('one'), refresh_token: 'R' });
-    const { p, seen } = provider(strategy, {}, async () => {
+    const { p, seen, notified } = provider(strategy, {}, async () => {
       if (stalled) return;
       stalled = true;
       await stall.promise;
@@ -209,7 +223,7 @@ describe('quarantine before the queue', () => {
     const a = new AbortController();
     const first = rejectionOf(p.getTokens({ signal: a.signal }));
     (await strategy.nth(1)).answer('code-1');
-    while (seen.length === 0) await settle(1);
+    await notified.nth(1);
     // Commit A has installed R and is stalled in its onTokens.
     a.abort();
     expect(isAborted(await first)).toBe(true);
@@ -224,7 +238,8 @@ describe('quarantine before the queue', () => {
     const login = await strategy.nth(2);
     expect(submitted()).toEqual(['R']);
     login.answer('code-2');
-    await settle();
+    // Nothing may be notified while A holds the queue: no event exists.
+    await quiet();
     expect(seen).toHaveLength(1);
 
     // Release A: the queue drains — the cut's clearing, then C's commit.
@@ -238,7 +253,7 @@ describe('quarantine before the queue', () => {
       [undefined, 'clear'],
       ['S-2', 'replace'],
     ]);
-    heldRefreshes[0]?.answer(200, { access_token: jwt('late') });
+    heldRefreshes.items[0]?.answer(200, { access_token: jwt('late') });
   });
 });
 
@@ -278,13 +293,15 @@ describe('tombstones for life', () => {
   it('a late answer of a non-rotating endpoint returning R: its access token installed, R neither installed nor persisted as usable', async () => {
     const strategy = waitingStrategy();
     const T0 = expired('held');
-    const { p, seen } = provider(strategy, { access: T0, refresh: 'R' });
+    const { p, seen, notified } = provider(strategy, {
+      access: T0,
+      refresh: 'R',
+    });
     const held = await cutRefresh(p, 0);
     const T2 = jwt('non-rotating');
     // No refresh_token in the answer: the site keeps the one it sent, R.
     held.answer(200, { access_token: T2 });
-    await held.closed;
-    await settle();
+    await notified.nth(2);
     expect(seen).toEqual([
       [T0, undefined, 'clear'],
       [T2, undefined, 'clear'],
@@ -293,5 +310,79 @@ describe('tombstones for life', () => {
       authorizationToken: T2,
       refreshToken: undefined,
     });
+  });
+});
+
+describe('a refresh answered, then cut while its outcome waits in the queue', () => {
+  /**
+   * Z refreshes R0 → R1, its commit stalls in onTokens, its waiter aborts.
+   * W refreshes R1; the server answers W; W's outcome (a commit, or a
+   * clearing step) waits behind Z; then W's waiter aborts. The next renewal
+   * must not send R1 again: it is quarantined until W's outcome is applied.
+   */
+  async function answeredThenCut(answerW: (held: HeldRequest) => void) {
+    const strategy = waitingStrategy();
+    // Z's onTokens stalls; every later one passes.
+    const stall = deferred<void>();
+    const stalled = deferred<void>();
+    let first = true;
+    const { p, seen } = provider(
+      strategy,
+      { access: expired('old'), refresh: 'R0' },
+      async () => {
+        if (!first) return;
+        first = false;
+        stalled.resolve();
+        await stall.promise;
+      },
+    );
+    const a = new AbortController();
+    const z = rejectionOf(p.getTokens({ signal: a.signal }));
+    (await waitForRefresh(0)).answer(200, {
+      access_token: jwt('Z', 10),
+      refresh_token: 'R1',
+    });
+    await stalled.promise;
+    a.abort();
+    expect(isAborted(await z)).toBe(true);
+
+    const s1 = new AbortController();
+    const w = rejectionOf(p.refreshTokens({ signal: s1.signal }));
+    const held = await waitForRefresh(1);
+    expect(held.params.get('refresh_token')).toBe('R1');
+    answerW(held);
+    // W's answer has reached the client: its socket is done.
+    await held.closed;
+    // Let the answer reach the provider and queue its outcome behind Z: it
+    // happens inside the provider, with no event a test can await.
+    await quiet();
+    s1.abort();
+    expect(isAborted(await w)).toBe(true);
+
+    // X: a new renewal, while the queue is still held by Z's onTokens.
+    const x = p.refreshTokens();
+    const login = await strategy.nth(1);
+    expect(submitted()).toEqual(['R0', 'R1']);
+    login.answer('code-1');
+    stall.resolve();
+    await x;
+    expect(submitted()).toEqual(['R0', 'R1']);
+    return seen;
+  }
+
+  it('answered with R2: R1 is not sent again; R2 is still committed before the login', async () => {
+    const seen = await answeredThenCut((held) =>
+      held.answer(200, { access_token: jwt('W'), refresh_token: 'R2' }),
+    );
+    expect(seen.map(([, refresh, how]) => [refresh, how])).toContainEqual([
+      'R2',
+      'replace',
+    ]);
+  });
+
+  it('refused (400 invalid_grant): R1 is not sent again', async () => {
+    await answeredThenCut((held) =>
+      held.answer(400, { error: 'invalid_grant' }),
+    );
   });
 });

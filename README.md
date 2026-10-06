@@ -2099,7 +2099,7 @@ On a rotating endpoint a cancelled refresh can therefore force one interactive l
 one stands) or `'clear'` (the held refresh token was refused, cut or quarantined: the stored one
 must go). A discarded refresh token is notified at once, with the held access token and
 `'clear'`, before the login that follows; a `'clear'` or `'replace'` whose `onTokens` failed is
-said again by the next notification until one succeeds. The quarantine lives in memory: a
+said again by the next notification until one succeeds. A re-sent `'replace'` may carry a refresh token the provider no longer holds in memory — the one persistence never heard of, after a later result without a refresh token replaced the in-memory one. The quarantine lives in memory: a
 process that dies between a cut refresh and that `'clear'` reaching the store may send the stored
 R once after a restart.
 

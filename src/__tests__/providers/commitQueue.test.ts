@@ -17,11 +17,12 @@ import type {
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
 import type { TokenResultWithDisposition } from '../../providers/BaseTokenProvider';
 import {
+  Arrivals,
   type Deferred,
   deferred,
   jwt,
+  quiet,
   rejectionOf,
-  settle,
 } from '../helpers/attemptHarness';
 import {
   certificate,
@@ -42,14 +43,17 @@ function isAborted(error: unknown): boolean {
 type Seen = [string, string | undefined, string | undefined];
 function recorder() {
   const seen: Seen[] = [];
+  const notified = new Arrivals<Seen>();
   const onTokens = async (result: TokenResultWithDisposition) => {
-    seen.push([
+    const one: Seen = [
       result.authorizationToken,
       result.refreshToken,
       result.refreshTokenDisposition,
-    ]);
+    ];
+    seen.push(one);
+    notified.push(one);
   };
-  return { seen, onTokens };
+  return { seen, notified, onTokens };
 }
 
 const b64url = (value: object) =>
@@ -84,7 +88,7 @@ describe('the doomed-join window', () => {
     });
 
     first.result.resolve(tokens(jwt('first'), 'R1'));
-    await settle();
+    await quiet();
     expect(provider.held()).toEqual({
       access: T2,
       refresh: 'R2',
@@ -116,14 +120,13 @@ describe('the doomed-join window', () => {
         }
       ).pin(signal);
     const only = new AbortController();
+    // The pin attempt starts synchronously: its loader is called at once.
     const doomed = rejectionOf(pin(only.signal));
-    await settle();
     expect(reads).toHaveLength(1);
     only.abort();
     expect(isAborted(await doomed)).toBe(true);
 
     const fresh = pin();
-    await settle();
     expect(reads).toHaveLength(2);
     reads[1]?.resolve(otherCertificate());
     await expect(fresh).resolves.toMatchObject({
@@ -131,7 +134,7 @@ describe('the doomed-join window', () => {
     });
 
     reads[0]?.resolve(certificate());
-    await settle();
+    await quiet();
     expect(provider.held().pinned).toBe(thumbprintOf(otherCertificate()));
   });
 });
@@ -153,18 +156,17 @@ describe('the doomed-join window, alone', () => {
         }
       ).pin(only.signal),
     );
-    await settle();
     only.abort();
     expect(isAborted(await doomed)).toBe(true);
     read.resolve(certificate());
-    await settle();
+    await quiet();
     expect(provider.held().pinned).toBeUndefined();
   });
 });
 
 describe('the commit queue', () => {
   it('commits run one at a time, in order: a renewal whose onTokens is held delays the next one; the newest is persisted last', async () => {
-    const hooks: { access: string; done: Deferred<void> }[] = [];
+    const hooks = new Arrivals<{ access: string; done: Deferred<void> }>();
     let active = 0;
     let most = 0;
     const provider = new ScriptedProvider({
@@ -182,9 +184,9 @@ describe('the commit queue', () => {
     const login1 = await provider.logins.nth(1);
     const T1 = jwt('one');
     login1.result.resolve(tokens(T1, 'R1'));
-    await settle();
     // The first commit has begun: it is in its onTokens.
-    expect(hooks.map((h) => h.access)).toEqual([T1]);
+    await hooks.nth(1);
+    expect(hooks.items.map((h) => h.access)).toEqual([T1]);
     first.abort();
     expect(isAborted(await older)).toBe(true);
 
@@ -195,13 +197,13 @@ describe('the commit queue', () => {
     const refresh = await provider.refreshes.nth(1);
     expect(refresh.refreshToken).toBe('R1');
     refresh.result.resolve(tokens(T2, 'R2'));
-    await settle();
     // Its commit waits for the first hook: not called yet.
-    expect(hooks.map((h) => h.access)).toEqual([T1]);
-    hooks[0]?.done.resolve();
-    await settle();
-    expect(hooks.map((h) => h.access)).toEqual([T1, T2]);
-    hooks[1]?.done.resolve();
+    await quiet();
+    expect(hooks.items.map((h) => h.access)).toEqual([T1]);
+    hooks.items[0]?.done.resolve();
+    await hooks.nth(2);
+    expect(hooks.items.map((h) => h.access)).toEqual([T1, T2]);
+    hooks.items[1]?.done.resolve();
     await expect(newer).resolves.toMatchObject({ authorizationToken: T2 });
     expect(most).toBe(1);
     expect(provider.held().access).toBe(T2);
@@ -240,7 +242,7 @@ describe('the commit queue', () => {
 
     // The older refresh answers late: discarded, nothing applied, no hook.
     refresh.result.resolve(tokens(jwt('late'), 'R1'));
-    await settle();
+    await quiet();
     expect(provider.held()).toMatchObject({ access: T2, refresh: 'R2' });
     expect(seen).toEqual([
       [T0, undefined, 'clear'],
@@ -384,7 +386,7 @@ describe('dispositions', () => {
   });
 
   it("the queued clearing step of a cut: onTokens once with 'clear' and the held access token", async () => {
-    const { seen, onTokens } = recorder();
+    const { seen, notified, onTokens } = recorder();
     const T0 = jwt('held', -3600);
     const provider = new ScriptedProvider({
       onTokens,
@@ -396,7 +398,9 @@ describe('dispositions', () => {
     await provider.refreshes.nth(1);
     only.abort();
     expect(isAborted(await cut)).toBe(true);
-    await settle();
+    await notified.nth(1);
+    // Once, and nothing after it.
+    await quiet();
     expect(seen).toEqual([[T0, undefined, 'clear']]);
     expect(provider.held().refresh).toBeUndefined();
   });
@@ -515,10 +519,12 @@ describe('a failed notification stays pending', () => {
 
   it("a refused refresh's clearing step runs through the queue, after a held earlier commit; the token-only login after it says 'clear'", async () => {
     const seen: Seen[] = [];
+    const firstCall = deferred<void>();
     const held = deferred();
     let holdFirst = true;
     const provider = new ScriptedProvider({
       onTokens: async (result) => {
+        firstCall.resolve();
         seen.push([
           result.authorizationToken,
           result.refreshToken,
@@ -534,7 +540,7 @@ describe('a failed notification stays pending', () => {
     const older = rejectionOf(provider.getTokens({ signal: first.signal }));
     const T1 = jwt('one');
     (await provider.logins.nth(1)).result.resolve(tokens(T1, 'R1'));
-    await settle();
+    await firstCall.promise;
     expect(seen).toEqual([[T1, 'R1', 'replace']]);
     first.abort();
     await older;
@@ -546,7 +552,7 @@ describe('a failed notification stays pending', () => {
     const refresh = await provider.refreshes.nth(1);
     expect(refresh.refreshToken).toBe('R1');
     refresh.result.reject(new Error('invalid_grant'));
-    await settle();
+    await quiet();
     // The clearing step waits behind the held commit.
     expect(seen).toEqual([[T1, 'R1', 'replace']]);
     expect(provider.logins.items).toHaveLength(1);
@@ -585,7 +591,7 @@ describe('an aborted renewal is never remembered (rule 8)', () => {
     only.abort();
     expect(isAborted(await doomed)).toBe(true);
     first.result.reject(new Error('the login failed'));
-    await settle();
+    await quiet();
 
     const next = provider.getTokens();
     const second = await provider.logins.nth(2);

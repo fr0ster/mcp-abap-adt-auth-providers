@@ -24,8 +24,8 @@ import {
   type Deferred,
   deferred,
   jwt,
+  quiet,
   rejectionOf,
-  settle,
   startTokenServer,
   type TokenServer,
 } from '../helpers/attemptHarness';
@@ -161,7 +161,8 @@ describe('drain handoff', () => {
     expect(isAborted(await first)).toBe(true);
 
     const next = provider.getTokens();
-    await settle();
+    // The strategy must NOT be called again yet: no event exists for that.
+    await quiet();
     expect(calls()).toBe(1);
     old.gate.resolve();
     const fresh = await scopes.nth(2);
@@ -184,7 +185,8 @@ describe('drain handoff', () => {
     await first;
 
     const outcome = provider.rejected(refused);
-    await settle();
+    // The strategy must NOT be called again yet: no event exists for that.
+    await quiet();
     expect(calls()).toBe(1);
     old.gate.resolve();
     const fresh = await scopes.nth(2);
@@ -204,12 +206,15 @@ describe('drain handoff', () => {
 
     const b = new AbortController();
     const waiting = rejectionOf(provider.getTokens({ signal: b.signal }));
-    await settle();
+    // Let the new attempt reach its drain wait: inside the provider, with no
+    // event a test can await.
+    await quiet();
     b.abort();
     expect(isAborted(await waiting)).toBe(true);
     old.gate.resolve();
     await old.closed;
-    await settle();
+    // The strategy must NOT be called again yet: no event exists for that.
+    await quiet();
     expect(calls()).toBe(1);
     expect(scopes.items).toHaveLength(1);
   });
@@ -225,13 +230,16 @@ describe('drain handoff', () => {
     for (let i = 0; i < 2; i++) {
       const c = new AbortController();
       const waiting = rejectionOf(provider.getTokens({ signal: c.signal }));
-      await settle();
+      // Let the new attempt reach its drain wait: inside the provider, with no
+      // event a test can await.
+      await quiet();
       c.abort();
       expect(isAborted(await waiting)).toBe(true);
     }
     // The fourth waits on all three: the first one's socket still holds.
     const last = provider.getTokens();
-    await settle();
+    // The strategy must NOT be called again yet: no event exists for that.
+    await quiet();
     expect(calls()).toBe(1);
     old.gate.resolve();
     const fresh = await scopes.nth(2);

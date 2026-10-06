@@ -18,6 +18,9 @@ const deferred = () => {
   return { promise, resolve, reject };
 };
 const until = async (condition) => { while (!condition()) await turn(); };
+// Fixed turns only to observe that nothing more happens, or to let a step
+// inside the provider run where it offers no event; every wait FOR something
+// is an until() on what the scenario observes.
 const settled = async (n = 5) => { for (let i = 0; i < n; i++) await turn(); };
 const b64 = (v) => Buffer.from(JSON.stringify(v)).toString('base64url');
 const jwt = (sub, seconds = 3600) =>

@@ -38,6 +38,15 @@ export async function settle(turns = 5): Promise<void> {
   for (let i = 0; i < turns; i++) await turn();
 }
 
+/**
+ * The one fixed-turn wait the suites use, and only to observe that
+ * something did NOT happen (a late result changed nothing, a step has not
+ * run yet): no event exists for a step that must not occur, so the test
+ * lets every already-queued continuation run — a few macrotask turns, no
+ * timer — and then looks. Anything a test waits FOR is awaited as an event.
+ */
+export const quiet = (): Promise<void> => settle(10);
+
 const b64url = (value: object) =>
   Buffer.from(JSON.stringify(value)).toString('base64url');
 
