@@ -55,11 +55,7 @@ import {
   readSafely,
   tlsFailureCode,
 } from './knownCodes';
-import {
-  type OAuthErrorFields,
-  oauthErrorFields,
-  registeredOAuthError,
-} from './oauthErrorBody';
+import { type OAuthErrorFields, registeredOAuthError } from './oauthErrorBody';
 import { loggedError } from './refusal';
 
 /** What a site is given to authenticate one request with a strategy. */
@@ -101,18 +97,26 @@ export interface PreparedTokenRequest {
   /** The whole axios config: url, method, headers, data, and httpsAgent / timeout when set. */
   readonly config: AxiosRequestConfig;
   /**
-   * What the strategy sent that must never come back out of an error body:
-   * `client_secret`, `client_assertion`, and a Basic credential.
+   * The secrets the strategy put on the request, by name: `client_secret`,
+   * `client_assertion`, and a Basic credential (`basic`, `basic_secret`) —
+   * what the `authDebug` line names in `sent`, each through `prepareSecret`.
    */
-  readonly secrets: readonly string[];
+  readonly secrets: SentSecrets;
 }
+
+/**
+ * The secrets a request carried, by the name it carried them under
+ * (`refresh_token`, `client_secret`, `basic`, …). A value is passed to a log
+ * line only through `prepareSecret`; nothing ever looks for one in text.
+ */
+export type SentSecrets = Readonly<Record<string, string | undefined>>;
 
 const FORM = 'application/x-www-form-urlencoded';
 /**
- * Parameters whose values are secrets: they join the redaction list, with the
- * credential of an `Authorization: Basic` header (`basicSecrets`). That is the
- * limit of what is recognised: a custom strategy's secret in any other
- * parameter or header is not known to be one, and is not redacted.
+ * A strategy's parameters whose values are secrets, named in `sent` with the
+ * credential of an `Authorization: Basic` header (`basicSecrets`). A custom
+ * strategy's secret in any other parameter or header is not known to be one;
+ * it is never logged either way — nothing of a request is logged but `sent`.
  */
 const SECRET_PARAMETERS = ['client_secret', 'client_assertion'];
 
@@ -170,25 +174,32 @@ function agentFor(material: ICertificateMaterial): Agent {
 }
 
 /**
- * The secrets of a `Basic` credential: the base64 credential and the secret
- * as sent. Redaction tries each in every form a server may echo — its
- * form-decoding among them, which is the original for `clientSecretBasic`'s
- * `'form'`, and what a decoding server read for its `'raw'`.
+ * The secrets of a `Basic` credential, by name: `basic`, the base64
+ * credential as sent, and `basic_secret`, the secret after its first colon.
+ * Read with plain string operations, no regex: `Basic`, in any case, then
+ * whitespace, then one token.
  */
-function basicSecrets(headers: Record<string, string>): string[] {
-  const out: string[] = [];
+function basicSecrets(headers: Record<string, string>): Record<string, string> {
   for (const [name, value] of Object.entries(headers)) {
     if (name.toLowerCase() !== 'authorization') continue;
-    const credential = /^Basic\s+(\S+)$/i.exec(value)?.[1];
-    if (credential === undefined) continue;
-    out.push(credential);
+    if (value.slice(0, 5).toLowerCase() !== 'basic') continue;
+    const credential = value.slice(5).trim();
+    if (
+      credential === '' ||
+      credential.length === value.length - 5 ||
+      [...credential].some(
+        (c) => c === ' ' || c === '\t' || c === '\r' || c === '\n',
+      )
+    ) {
+      continue;
+    }
     const decoded = Buffer.from(credential, 'base64').toString();
     const colon = decoded.indexOf(':');
-    if (colon >= 0 && colon < decoded.length - 1) {
-      out.push(decoded.slice(colon + 1));
-    }
+    return colon >= 0 && colon < decoded.length - 1
+      ? { basic: credential, basic_secret: decoded.slice(colon + 1) }
+      : { basic: credential };
   }
-  return out;
+  return {};
 }
 
 /**
@@ -198,16 +209,15 @@ function basicSecrets(headers: Record<string, string>): string[] {
 export interface LegacyBasic {
   /** `Basic ${base64(id:secret)}`. */
   readonly header: string;
-  /** What `basicSecrets()` extracts from it: the base64 credential and the secret. */
-  readonly secrets: readonly string[];
+  /** What `basicSecrets()` reads of it: `basic` and `basic_secret`. */
+  readonly secrets: SentSecrets;
 }
 
 /**
  * The one place a site without a strategy builds its Basic header. Its
  * secrets come from the same `basicSecrets()` a strategy's Basic credential
  * goes through: a site passes the result as `TokenRequestSite.basic`, so
- * the `authDebug` line previews its credential in every form a server may
- * echo it — wrapped, escaped or decoded (spec §6).
+ * the `authDebug` line names it in `sent` (spec §6).
  */
 export function legacyBasic(
   clientId: string,
@@ -264,7 +274,13 @@ export async function prepareTokenRequest(
     h.toLowerCase(),
   );
   for (const [name, value] of Object.entries(added)) {
-    if (own.includes(name.toLowerCase()) || /[\r\n]/.test(value)) unusable();
+    if (
+      own.includes(name.toLowerCase()) ||
+      value.includes('\r') ||
+      value.includes('\n')
+    ) {
+      unusable();
+    }
   }
 
   const config: AxiosRequestConfig = {
@@ -279,13 +295,12 @@ export async function prepareTokenRequest(
   if (grant.timeout !== undefined) config.timeout = grant.timeout;
   if (auth.material) config.httpsAgent = agentFor(auth.material);
 
-  const secrets = [
-    ...SECRET_PARAMETERS.map((name) => parameters[name]).filter(
-      (value): value is string => !!value,
-    ),
-    ...basicSecrets(added),
-  ];
-  return { config, secrets };
+  const secrets: Record<string, string> = {};
+  for (const name of SECRET_PARAMETERS) {
+    const value = parameters[name];
+    if (value) secrets[name] = value;
+  }
+  return { config, secrets: { ...secrets, ...basicSecrets(added) } };
 }
 
 /** Grant parameters whose values are secrets the request itself sends. */
@@ -301,9 +316,37 @@ const SECRET_GRANT_PARAMETERS = [
   'device_code',
 ];
 
-/** The secret values among a request's grant parameters. */
-export function grantSecrets(params: URLSearchParams): string[] {
-  return SECRET_GRANT_PARAMETERS.flatMap((name) => params.getAll(name));
+/** The secrets among a request's grant parameters, by parameter name. */
+export function grantSecrets(params: URLSearchParams): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const name of SECRET_GRANT_PARAMETERS) {
+    const value = params.get(name);
+    if (value !== null) out[name] = value;
+  }
+  return out;
+}
+
+/** Below this many characters a secret is shown by its length only. */
+const PREPARED_MIN = 16;
+/** How many characters of each end of a secret `authDebug` shows. */
+const PREPARED_EDGE = 4;
+
+/**
+ * The one way a secret reaches a log line (spec §6, "The secret preparer,
+ * not a redactor"): called at the point of logging with the secret as a
+ * separate value, never applied to a finished line. Without `authDebug`,
+ * `<redacted, N chars>`; with it, a secret under 16 characters the same,
+ * else its first 4 and last 4 characters around the marker,
+ * `abcd…wxyz <redacted, N chars>`. N and the edges count whole characters
+ * (code points), so no surrogate pair is split. No regex.
+ */
+export function prepareSecret(value: string, authDebug: boolean): string {
+  const characters = [...value];
+  const marker = `<redacted, ${characters.length} chars>`;
+  if (authDebug !== true || characters.length < PREPARED_MIN) return marker;
+  const head = characters.slice(0, PREPARED_EDGE).join('');
+  const tail = characters.slice(-PREPARED_EDGE).join('');
+  return `${head}…${tail} ${marker}`;
 }
 
 /** What of a failed request a site's own handling reads. */
@@ -503,11 +546,15 @@ export interface TokenRequestSite {
   readonly logger?: ILogger | null | undefined;
   /**
    * The consumer's `authDebug === true`; anything else → the safe-facts line
-   * only, and the server's text is never read.
+   * only. Either way the server's text is never read.
    */
   readonly authDebug: boolean;
-  /** Every secret this request carried: grantSecrets(params) + the configured clientSecret. */
-  readonly secrets: readonly (string | undefined)[];
+  /**
+   * Every secret this request carried, by name: `grantSecrets(params)` and
+   * the configured `client_secret` — what the `authDebug` line names in
+   * `sent`, each through `prepareSecret`.
+   */
+  readonly secrets: SentSecrets;
   /**
    * The site's own Basic header on the path without a strategy, as built by
    * `legacyBasic()` — never assembled by the site itself.
@@ -517,36 +564,36 @@ export interface TokenRequestSite {
 
 /**
  * What a site receives of a successful answer (spec §6): an integer status
- * and a plain `data` of `ANSWER_FIELDS` — never the object axios handed over.
- * `diagnostic` exists only for a site whose consumer set `authDebug`, and
- * only `rejectMissingToken`'s line reads it: no site parses it, and it never
- * enters a failure.
+ * and a plain `data` of `ANSWER_FIELDS` — never the object axios handed over,
+ * and never the server's free text (`error_description`, `error_uri`), with
+ * or without `authDebug`.
  */
 export interface TokenResponseSnapshot<T = Record<string, string | number>> {
   readonly status: number | undefined;
   readonly data: T;
-  /** Only when `site.authDebug === true`: the server's text, plain strings. */
-  readonly diagnostic?: {
-    readonly error_description?: string;
-    readonly error_uri?: string;
-  };
 }
 
 /**
- * Every secret a request carried, joined in one place for both readers of a
- * server's answer (`sendTokenRequest` and `rejectMissingToken`), so the two
- * cannot drift: the site's own (grant and configured client secret), its
- * legacy Basic credential, and the strategy's.
+ * `sent` of the `authDebug` line: every secret the request carried, by name,
+ * each through `prepareSecret` — joined in one place for both lines
+ * (`sendTokenRequest` and `rejectMissingToken`), so the two cannot drift:
+ * the site's own (grant and configured client secret), its legacy Basic
+ * credential, and the strategy's. Each is passed by the site, never looked
+ * up, and an absent or empty one is not named.
  */
-function requestSecrets(
+function sentOf(
   site: TokenRequestSite,
   prepared: PreparedTokenRequest | undefined,
-): (string | undefined)[] {
-  return [
-    ...site.secrets,
-    ...(site.basic?.secrets ?? []),
-    ...(prepared?.secrets ?? []),
-  ];
+): Record<string, string> {
+  const sent: Record<string, string> = {};
+  for (const source of [site.secrets, site.basic?.secrets, prepared?.secrets]) {
+    for (const [name, value] of Object.entries(source ?? {})) {
+      if (typeof value === 'string' && value !== '' && !(name in sent)) {
+        sent[name] = prepareSecret(value, debugging(site));
+      }
+    }
+  }
+  return sent;
 }
 
 /** Whether the consumer opted into the server's text: `true` itself, nothing else. */
@@ -578,29 +625,6 @@ function phraseOf(site: TokenRequestSite): string {
   return reason.endsWith(INCOMPLETE)
     ? reason.slice(0, -INCOMPLETE.length)
     : 'the token request';
-}
-
-/**
- * The server's text with every secret previewed (`oauthErrorFields`): read
- * only under `authDebug`, each field through `readSafely` and only when a
- * string, so the redactor sees plain strings, never the foreign object.
- */
-function previewedText(
-  body: unknown,
-  secrets: readonly (string | undefined)[],
-): { error_description?: string; error_uri?: string } {
-  const plain: Record<string, string> = {};
-  for (const field of ['error_description', 'error_uri'] as const) {
-    const value = readSafely(body, field);
-    if (typeof value === 'string') plain[field] = value;
-  }
-  const fields = oauthErrorFields(plain, secrets);
-  return {
-    ...(fields?.error_description === undefined
-      ? {}
-      : { error_description: fields.error_description }),
-    ...(fields?.error_uri === undefined ? {} : { error_uri: fields.error_uri }),
-  };
 }
 
 /**
@@ -643,7 +667,7 @@ function failedRequest(
         if (debugging(site)) {
           logger.debug(`[${site.operation}] token endpoint said`, {
             ...safe,
-            ...previewedText(body, requestSecrets(site, prepared)),
+            sent: sentOf(site, prepared),
           });
         } else {
           logger.debug(
@@ -751,7 +775,7 @@ async function sendForSite<T>(
     throw failedRequest(error, site, prepared);
   }
   try {
-    return siteSnapshot<T>(response, debugging(site));
+    return siteSnapshot<T>(response);
   } catch {
     throw new AuthProviderFailure(
       authError['request-failed']({
@@ -817,31 +841,14 @@ function answerData(raw: unknown): Record<string, string | number> {
 }
 
 /**
- * The new arm's snapshot: `snapshotOf`'s boundary, plus — only when the
- * consumer set `authDebug` — the server's `error_description` and
- * `error_uri` as plain strings, read through `readSafely`. Without it the
- * two are never read. May throw: the caller replaces any throw.
+ * The new arm's snapshot: `snapshotOf`'s boundary — an integer status and
+ * the expected fields only, never the server's text. May throw: the caller
+ * replaces any throw.
  */
-function siteSnapshot<T>(
-  response: unknown,
-  authDebug: boolean,
-): TokenResponseSnapshot<T> {
-  const raw = readSafely(response, 'data');
-  const snapshot = {
-    status: integerStatus(readSafely(response, 'status')),
-    data: answerData(raw) as unknown as T,
-  };
-  if (!authDebug) return snapshot;
-  const description = readSafely(raw, 'error_description');
-  const uri = readSafely(raw, 'error_uri');
+function siteSnapshot<T>(response: unknown): TokenResponseSnapshot<T> {
   return {
-    ...snapshot,
-    diagnostic: {
-      ...(typeof description === 'string'
-        ? { error_description: description }
-        : {}),
-      ...(typeof uri === 'string' ? { error_uri: uri } : {}),
-    },
+    status: integerStatus(readSafely(response, 'status')),
+    data: answerData(readSafely(response, 'data')) as unknown as T,
   };
 }
 
@@ -885,10 +892,7 @@ export function rejectMissingToken(
         logger[level](message, {
           status,
           ...(error === undefined ? {} : { error }),
-          ...previewedText(
-            readSafely(snapshot, 'diagnostic'),
-            requestSecrets(site, prepared),
-          ),
+          sent: sentOf(site, prepared),
         });
       } else {
         logger[level](message);

@@ -42,18 +42,43 @@ export function extractCode(input: string): string | null {
   const trimmed = input.trim();
   if (!trimmed) return null;
 
-  // Anywhere a `code=` query parameter appears (full URL or query string)
-  const fromQuery = trimmed.match(/[?&]code=([^&\s]+)/)?.[1];
-  if (fromQuery !== undefined) return decodeURIComponent(fromQuery);
+  // Anywhere a `code=` query parameter appears (full URL or query string):
+  // the first `?code=` / `&code=` followed by at least one character up to
+  // `&` or whitespace. Plain string scanning, no regex (pasted input).
+  for (let at = 0; at < trimmed.length; at++) {
+    const mark = trimmed[at];
+    if (mark !== '?' && mark !== '&') continue;
+    if (!trimmed.startsWith('code=', at + 1)) continue;
+    const value = valueUntilBreak(trimmed, at + 6);
+    if (value !== '') return decodeURIComponent(value);
+  }
 
   // Bare `code=XYZ`
-  const bareKv = trimmed.match(/^code=([^&\s]+)$/)?.[1];
-  if (bareKv !== undefined) return decodeURIComponent(bareKv);
+  if (trimmed.startsWith('code=')) {
+    const value = valueUntilBreak(trimmed, 5);
+    if (value !== '' && 5 + value.length === trimmed.length) {
+      return decodeURIComponent(value);
+    }
+  }
 
   // Otherwise treat the whole token as the code, but reject anything with
   // whitespace (clearly not a single code).
-  if (/\s/.test(trimmed)) return null;
+  if ([...trimmed].some(isWhitespace)) return null;
   return trimmed;
+}
+
+/** Whitespace as `\s` reads it: what `trim()` removes. */
+const isWhitespace = (character: string): boolean => character.trim() === '';
+
+/** The characters from `start` up to `&`, whitespace or the end. */
+function valueUntilBreak(text: string, start: number): string {
+  let end = start;
+  while (end < text.length) {
+    const character = text[end] ?? '';
+    if (character === '&' || isWhitespace(character)) break;
+    end++;
+  }
+  return text.slice(start, end);
 }
 
 /**

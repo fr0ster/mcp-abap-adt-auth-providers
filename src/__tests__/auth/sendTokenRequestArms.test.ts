@@ -62,7 +62,7 @@ const SITE: TokenRequestSite = {
   arm: 'site',
   operation: 'passcode-exchange',
   authDebug: false,
-  secrets: [],
+  secrets: {},
 };
 
 describe('the legacy arm: 5.4.2 exactly', () => {

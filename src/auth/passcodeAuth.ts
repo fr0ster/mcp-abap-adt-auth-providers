@@ -40,7 +40,9 @@ export async function exchangePasscode(
   logger?: ILogger,
   auth?: TokenRequestAuth,
 ): Promise<PasscodeTokens> {
-  const tokenUrl = `${uaaUrl.replace(/\/+$/, '')}/oauth/token`;
+  let end = uaaUrl.length;
+  while (end > 0 && uaaUrl[end - 1] === '/') end--;
+  const tokenUrl = `${uaaUrl.slice(0, end)}/oauth/token`;
   const params = new URLSearchParams();
   params.append('grant_type', 'password');
   params.append('passcode', passcode);

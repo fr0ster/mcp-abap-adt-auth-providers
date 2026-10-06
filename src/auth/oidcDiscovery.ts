@@ -41,7 +41,9 @@ function normalizeDiscoveryUrl(issuerOrDiscoveryUrl: string): string {
   if (issuerOrDiscoveryUrl.endsWith('/.well-known/openid-configuration')) {
     return issuerOrDiscoveryUrl;
   }
-  return `${issuerOrDiscoveryUrl.replace(/\/+$/, '')}/.well-known/openid-configuration`;
+  let end = issuerOrDiscoveryUrl.length;
+  while (end > 0 && issuerOrDiscoveryUrl[end - 1] === '/') end--;
+  return `${issuerOrDiscoveryUrl.slice(0, end)}/.well-known/openid-configuration`;
 }
 
 export async function discoverOidc(

@@ -21,7 +21,6 @@ import type {
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
 import axios, { AxiosError } from 'axios';
 import { getTokenWithClientCredentials } from '../../auth/clientCredentialsAuth';
-import { oauthErrorFields, previewSecret } from '../../auth/oauthErrorBody';
 import {
   initiateDeviceAuthorization,
   passwordGrant,
@@ -465,34 +464,20 @@ async function echoedOutput(
 }
 
 /**
- * The server's description reaches no rendering of the thrown error and no
- * log line. The redactor — called by no site in 5.4.2, kept as defence in
- * depth — given the secrets the request carried, redacts the echo whole and
- * nothing else: the description reads exactly the prefix and one preview —
- * no tail of the secret left after a prefix of it was redacted, no letter of
- * the prefix redacted for a short fragment of the secret.
+ * The server's description, and the echoed secret, reach no rendering of
+ * the thrown error and no log line. (The redactor these cases also checked
+ * is deleted: nothing scans text for secrets — spec §6, "The secret
+ * preparer, not a redactor".)
  */
-function expectRedactedWhole(
+function expectNoEcho(
   out: { error: string; logs: string; debug: string[] },
   echoed: string,
-  secrets: string[],
+  _secrets: string[],
 ): void {
   expect(out.error).not.toContain(ECHO_PREFIX);
   expect(out.error).not.toContain(echoed);
   expect(out.logs).not.toContain(ECHO_PREFIX);
   expect(out.logs).not.toContain(echoed);
-  // H10 / spec §6 "The preview": the echo is one preview of the form it was
-  // recognised as — a secret or its form-decoding — and nothing else.
-  const formDecoded = (value: string): string =>
-    new URLSearchParams(`v=${value.replace(/&/g, '%26')}`).get('v') ?? value;
-  expect(
-    secrets
-      .flatMap((secret) => [secret, formDecoded(secret)])
-      .map((form) => `${ECHO_PREFIX} ${previewSecret(form)}`),
-  ).toContain(
-    oauthErrorFields({ error_description: `${ECHO_PREFIX} ${echoed}` }, secrets)
-      ?.error_description,
-  );
 }
 
 describe.each(SITES)(
@@ -515,7 +500,7 @@ describe.each(SITES)(
             ),
           );
           // The secret as the strategy's Basic header carried it.
-          expectRedactedWhole(out, echoed, [
+          expectNoEcho(out, echoed, [
             encoding === 'form' ? c.formSent : c.secret,
           ]);
         },
@@ -539,7 +524,7 @@ describe.each(
         const out = await echoedOutput(echoed, (logger) =>
           site.run(undefined, logger, c.secret),
         );
-        expectRedactedWhole(out, echoed, [c.secret]);
+        expectNoEcho(out, echoed, [c.secret]);
       },
     );
   });
