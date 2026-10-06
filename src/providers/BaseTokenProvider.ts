@@ -601,12 +601,15 @@ export abstract class BaseTokenProvider
   /**
    * Spends `refreshToken` — the one the base read and checked, never
    * re-read from the provider. It never logs in: a failed refresh throws,
-   * and the base runs the single login. Its request is never given the
-   * attempt's signal: once sent it runs on, and its answer is offered to
-   * the commit queue (spec §6b).
+   * and the base runs the single login. `signal` is the attempt's: what the
+   * refresh does before it sends (OIDC discovery) carries it, and nothing is
+   * sent once it has aborted — but the refresh request itself never carries
+   * it: once sent it runs on, and its answer is offered to the commit queue
+   * (spec §6b).
    */
   protected abstract performRefresh(
     refreshToken: string,
+    signal: AbortSignal,
   ): Promise<ITokenResult>;
 
   /** False for a grant with no refresh: the base then skips performRefresh and logs in once. */
@@ -880,7 +883,7 @@ export abstract class BaseTokenProvider
     signal.addEventListener('abort', cut, { once: true });
     let result: ITokenResult;
     try {
-      result = await this.performRefresh(spent);
+      result = await this.performRefresh(spent, signal);
     } catch (error) {
       signal.removeEventListener('abort', cut);
       // H1: the failure's fixed words and kind, never its message.

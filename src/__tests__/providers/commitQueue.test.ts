@@ -136,6 +136,32 @@ describe('the doomed-join window', () => {
   });
 });
 
+describe('the doomed-join window, alone', () => {
+  it('a pin whose only waiter aborted: its late loader read pins nothing', async () => {
+    const read = deferred<ICertificateMaterial>();
+    const provider = new ScriptedProvider({
+      clientAuthentication: {
+        authenticate: async () => ({}),
+        tlsMaterial: () => read.promise,
+      },
+    });
+    const only = new AbortController();
+    const doomed = rejectionOf(
+      (
+        provider as unknown as {
+          pin(signal?: AbortSignal): Promise<unknown>;
+        }
+      ).pin(only.signal),
+    );
+    await settle();
+    only.abort();
+    expect(isAborted(await doomed)).toBe(true);
+    read.resolve(certificate());
+    await settle();
+    expect(provider.held().pinned).toBeUndefined();
+  });
+});
+
 describe('the commit queue', () => {
   it('commits run one at a time, in order: a renewal whose onTokens is held delays the next one; the newest is persisted last', async () => {
     const hooks: { access: string; done: Deferred<void> }[] = [];

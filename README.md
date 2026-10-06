@@ -2040,6 +2040,74 @@ try {
 }
 ```
 
+### Cancelling a login
+
+There is no built-in bound on a login: it ends on a result, the identity provider's refusal, or
+your `AbortSignal`. A renewal — one refresh, then at most one login — is shared by everyone who
+needs a token at the same time, and each of them is a **waiter** with a signal of its own:
+
+```typescript
+// This caller no longer needs the token (an MCP request cancelled, say):
+const tokens = await provider.getTokens({ signal: request.signal });
+await provider.refreshTokens({ signal: request.signal });
+```
+
+- One waiter's abort releases only that waiter: its call rejects with an `AuthProviderFailure` of
+  kind `interactive-login`, outcome `aborted`. The login runs on for the others.
+- A waiter without a signal never aborts, so a login it waits on runs to its end.
+- When every waiter has aborted, the login itself is aborted: the strategy's request signal
+  aborts, the callback socket is released, the device-code polling stops, every request the
+  login has on the wire is cut — and the next caller starts a fresh login.
+
+**A login a moment starts** (`prepare`, `authorize`, `rejected`, …) has no per-call signal. It
+waits on the provider's **attached parties**: the `signal` in the provider's config, and every
+`attach(signal)` after it (`attach` returns a `detach()`; the same signal twice is one party; an
+aborted signal is not added; a party leaves when its signal aborts or it is detached). Such a
+login is aborted when every party live at its start, and every party attached while it runs, has
+aborted. **With no live party — none attached, or all of them gone — it runs unbounded**, as a
+consumer that gave no signal chose.
+
+```typescript
+const provider = new AuthorizationCodeProvider({ ...config, signal: session.signal });
+const detach = provider.attach(otherSession.signal);
+```
+
+The limit: a moment cannot tell which session called it. A login started while a signalled
+session is attached is bounded by that session; if it closes mid-login, an unsignalled session
+that joined the same login through its own moment gets Oops `aborted` for that moment — and its
+next moment starts a fresh, unbounded login and gets a token.
+
+**A strategy must honour the request's signal.** Every login hands its strategy an
+`AuthorizationRequest` carrying `signal` (`SignalledAuthorizationRequest` until interfaces-auth
+6.0.0); the shipped strategies combine it with their own `signal` option, so either one ends the
+login. A replacement login waits until the aborted one's strategy has **settled** its `authorize`
+— its callback port closed, its stdin reader released — before it starts its own authorization
+(never `busy`, never `port-in-use`). A consumer strategy that ignores the signal never settles,
+and blocks the next login until it does; one that settles before releasing its socket lets the
+next login meet it. A request on the wire is never waited for: it holds nothing local.
+
+**A refresh is never cut.** Once a refresh request carrying refresh token R is sent, the server
+may have spent R and issued R2, so the request runs on whatever its waiters do — they are
+released at once, and its answer, when it comes, is committed if nothing newer was committed
+meanwhile (R2 is kept), and discarded otherwise. R itself is never sent again by this provider:
+it is quarantined for the provider's lifetime, so the next renewal logs in. A refresh whose
+server never answers lingers until the server or the OS ends the socket; nothing waits for it.
+On a rotating endpoint a cancelled refresh can therefore force one interactive login.
+
+**What persistence is told.** Every `onTokens` call carries `refreshTokenDisposition`:
+`'replace'` (a new usable refresh token), `'keep'` (none returned, nothing discarded: the stored
+one stands) or `'clear'` (the held refresh token was refused, cut or quarantined: the stored one
+must go). A discarded refresh token is notified at once, with the held access token and
+`'clear'`, before the login that follows; a `'clear'` or `'replace'` whose `onTokens` failed is
+said again by the next notification until one succeeds. The quarantine lives in memory: a
+process that dies between a cut refresh and that `'clear'` reaching the store may send the stored
+R once after a restart.
+
+**Commits run one at a time.** Every effect of a renewal — the tokens, the pinned certificate,
+`onTokens` — is applied by a commit in one queue per provider, in order, never two at once; a
+late result of an aborted login changes nothing. An `onTokens` that never settles therefore
+blocks every later commit of that provider (each waiter still releasable by its own signal).
+
 ### Error Handling
 
 The package provides typed error classes for better error handling:

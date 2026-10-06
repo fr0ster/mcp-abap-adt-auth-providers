@@ -191,16 +191,19 @@ for (let i = 0; i < 3; i++) {
   c.abort();
   outcomes.push(await waiting);
 }
-const last = p.getTokens();
+let lastDone = false;
+const last = outcomeOf(p.getTokens()).then((o) => { lastDone = true; return o; });
 await settled();
 const callsBeforeRelease = calls;
 scopes[0].gate.resolve();
-await until(() => scopes.length === 2);
-scopes[1].deliver('code');
-scopes[1].gate.resolve();
-const tokens = await last;
+await until(() => scopes.length === 2 || lastDone);
+if (scopes.length === 2) {
+  scopes[1].deliver('code');
+  scopes[1].gate.resolve();
+}
+const lastOutcome = await last;
 token.close();
-report({ outcomes: outcomes.map((o) => o.outcome), callsBeforeRelease, calls, refresh: tokens.refreshToken, busy: failures.filter((f) => f.includes('already')) });
+report({ outcomes: outcomes.map((o) => o.outcome), callsBeforeRelease, calls, refresh: lastOutcome.value && lastOutcome.value.refreshToken, busy: failures.filter((f) => f.includes('already')) });
 `);
     expect(run.stderr).toBe('');
     expect(run.result).toEqual({

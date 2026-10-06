@@ -26,6 +26,7 @@ import { discoverOidc } from '../../auth/oidcDiscovery';
 import { clientSecretPost } from '../../clientAuthentication';
 import { AuthorizationCodeProvider } from '../../providers/AuthorizationCodeProvider';
 import { OidcDeviceFlowProvider } from '../../providers/OidcDeviceFlowProvider';
+import { OidcPasswordProvider } from '../../providers/OidcPasswordProvider';
 import { UaaPasscodeProvider } from '../../providers/UaaPasscodeProvider';
 import {
   type Deferred,
@@ -158,6 +159,60 @@ describe('discovery under an attempt (C6)', () => {
       token_endpoint: 'https://fresh/token',
     });
     expect(mockedAxios.get).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('discovery inside a renewal carries the attempt signal', () => {
+  const discovered = {
+    status: 200,
+    data: { token_endpoint: 'https://idp/token' },
+  };
+  const issued = {
+    status: 200,
+    data: { access_token: jwt('new'), refresh_token: 'R2' },
+  };
+
+  it('at login (the password grant) and at refresh, and the refresh request itself carries none', async () => {
+    mockedAxios.get.mockResolvedValue(discovered);
+    mockedAxios.post.mockResolvedValue(issued);
+    const login = new OidcPasswordProvider({
+      issuerUrl: `https://idp/login-${Math.random()}`,
+      clientId: 'cid',
+      username: 'u',
+      password: 'p',
+      logger: silent,
+    });
+    await login.getTokens({ signal: new AbortController().signal });
+    expect(
+      (mockedAxios.get.mock.calls[0]?.[1] as { signal?: unknown } | undefined)
+        ?.signal,
+    ).toBeInstanceOf(AbortSignal);
+    expect(
+      (mockedAxios.post.mock.calls[0]?.[2] as { signal?: unknown } | undefined)
+        ?.signal,
+    ).toBeInstanceOf(AbortSignal);
+
+    mockedAxios.get.mockClear();
+    mockedAxios.post.mockClear();
+    const refresh = new OidcPasswordProvider({
+      issuerUrl: `https://idp/refresh-${Math.random()}`,
+      clientId: 'cid',
+      username: 'u',
+      password: 'p',
+      accessToken: jwt('old', -3600),
+      refreshToken: 'R1',
+      logger: silent,
+    });
+    await refresh.getTokens({ signal: new AbortController().signal });
+    expect(
+      (mockedAxios.get.mock.calls[0]?.[1] as { signal?: unknown } | undefined)
+        ?.signal,
+    ).toBeInstanceOf(AbortSignal);
+    const sent = mockedAxios.post.mock.calls[0];
+    expect(new URLSearchParams(sent?.[1] as string).get('grant_type')).toBe(
+      'refresh_token',
+    );
+    expect(Object.hasOwn(sent?.[2] as object, 'signal')).toBe(false);
   });
 });
 
@@ -346,6 +401,30 @@ describe('the device poll stops at the abort', () => {
     only.abort();
     expect(isAborted(await first)).toBe(true);
     await jest.advanceTimersByTimeAsync(600_000);
+    await settle();
+    expect(polls).toHaveLength(1);
+  });
+
+  it('aborted in the same turn the interval ends: no poll after it (checked after every await)', async () => {
+    const polls: unknown[] = [];
+    mockedAxios.post.mockImplementation(async (url: unknown) => {
+      if (url === 'https://idp/device') return deviceAnswer;
+      polls.push(url);
+      throw Object.assign(new Error('pending'), {
+        isAxiosError: true,
+        response: { status: 400, data: { error: 'authorization_pending' } },
+      });
+    });
+    const provider = deviceProvider();
+    const only = new AbortController();
+    const first = rejectionOf(provider.getTokens({ signal: only.signal }));
+    while (polls.length === 0) await settle(1);
+    await settle();
+    // The server's interval ends — its timer fires synchronously here — and
+    // the abort lands before the loop resumes.
+    jest.advanceTimersByTime(1_000);
+    only.abort();
+    expect(isAborted(await first)).toBe(true);
     await settle();
     expect(polls).toHaveLength(1);
   });

@@ -397,6 +397,22 @@ describe('a login a moment starts waits on the attached parties', () => {
     await expect(outcome).resolves.toEqual({ ok: true });
   });
 
+  it("a detached party no longer holds a moment open: the remaining party's abort aborts it", async () => {
+    const strategy = waitingStrategy();
+    const a = new AbortController();
+    const b = new AbortController();
+    const p = provider(strategy);
+    const detach = p.attach(a.signal);
+    p.attach(b.signal);
+    detach();
+    const outcome = p.rejected(refused);
+    const call = await strategy.nth(1);
+    b.abort();
+    const answered = await outcome;
+    expect(isAborted(answered.ok ? undefined : answered.refusal)).toBe(true);
+    expect(call.signal?.aborted).toBe(true);
+  });
+
   it('attach of an aborted signal adds no listener', () => {
     const p = provider(waitingStrategy());
     const aborted = AbortSignal.abort();
