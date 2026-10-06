@@ -4,6 +4,7 @@
  * Exchanges SAMLResponse for OAuth2 access token.
  */
 
+import type { AttemptContext } from '@mcp-abap-adt/auth-errors';
 import type {
   AssertionContext,
   IAssertionValidator,
@@ -103,8 +104,11 @@ export class Saml2BearerProvider extends BaseTokenProvider {
     return AUTH_TYPE_SAML2_BEARER;
   }
 
-  protected async performLogin(): Promise<ITokenResult> {
-    const { payload, requestId, acsUrl } = await getSamlAssertion(this.config);
+  protected async performLogin(attempt: AttemptContext): Promise<ITokenResult> {
+    const { payload, requestId, acsUrl } = await getSamlAssertion(
+      this.config,
+      attempt,
+    );
     // Validation establishes trust before anything reaches the token
     // endpoint; it does not change what is sent beyond toBearerAssertion's
     // conversion below.
@@ -128,7 +132,7 @@ export class Saml2BearerProvider extends BaseTokenProvider {
       this.config.clientSecret,
       this.logger,
       await this.requestAuth(),
-      this.siteOptions(),
+      this.siteOptions(attempt.signal),
     );
 
     return asContract<ITokenResult>({
@@ -145,13 +149,16 @@ export class Saml2BearerProvider extends BaseTokenProvider {
    * thrown rather than handled: `BaseTokenProvider.getTokens()` drops the
    * refresh token and falls back to `performLogin()`.
    */
-  protected async performRefresh(): Promise<ITokenResult> {
-    if (!this.refreshToken) {
+  protected async performRefresh(
+    refreshToken: string,
+    _signal?: AbortSignal,
+  ): Promise<ITokenResult> {
+    if (!refreshToken) {
       throw refreshTokenRefused();
     }
 
     const tokens = await refreshSamlBearerToken(
-      this.refreshToken,
+      refreshToken,
       resolveTokenUrl(this.config),
       this.config.clientId,
       this.config.clientSecret,
@@ -162,7 +169,7 @@ export class Saml2BearerProvider extends BaseTokenProvider {
 
     return asContract<ITokenResult>({
       authorizationToken: tokens.accessToken,
-      refreshToken: tokens.refreshToken || this.refreshToken,
+      refreshToken: tokens.refreshToken || refreshToken,
       authType: AUTH_TYPE_SAML2_BEARER,
       expiresIn: tokens.expiresIn,
       tokenType: 'jwt',

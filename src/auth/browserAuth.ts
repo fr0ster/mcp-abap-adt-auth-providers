@@ -8,6 +8,7 @@ import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
 import axios from 'axios';
 import { loggedError } from './refusal';
 import {
+  attemptSite,
   legacyBasic,
   prepareTokenRequest,
   rejectMissingToken,
@@ -15,7 +16,6 @@ import {
   siteSecrets,
   type TokenRequestAuth,
   type TokenSiteOptions,
-  tokenSite,
 } from './tokenRequest';
 
 const BROWSER_MAP: Record<string, string | undefined | null> = {
@@ -143,7 +143,7 @@ export async function exchangeCodeForToken(
   // was, the word in a template — built only through legacyBasic, so its
   // secrets are named in the `authDebug` line's `sent`.
   const basic = prepared ? undefined : legacyBasic(clientid, `${clientsecret}`);
-  const sendAsToday = () =>
+  const sendAsToday = (signal: AbortSignal | undefined) =>
     axios({
       method: 'post',
       url: tokenUrl,
@@ -154,11 +154,13 @@ export async function exchangeCodeForToken(
       data: params.toString(),
       // A redirect would re-send the code and the secret: never followed.
       maxRedirects: 0,
+      // The attempt's abort cuts the exchange (spec §6b).
+      ...(signal === undefined ? {} : { signal }),
     });
 
   log?.info(`Exchanging code for token: ${prepared?.config.url ?? tokenUrl}`);
 
-  const site = tokenSite(
+  const site = attemptSite(
     'code-exchange',
     options,
     log,

@@ -19,6 +19,7 @@
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
 import axios from 'axios';
 import {
+  attemptSite,
   legacyBasic,
   logQuietly,
   prepareTokenRequest,
@@ -27,7 +28,6 @@ import {
   siteSecrets,
   type TokenRequestAuth,
   type TokenSiteOptions,
-  tokenSite,
 } from './tokenRequest';
 
 export interface PasscodeTokens {
@@ -77,7 +77,7 @@ export async function exchangePasscode(
   const basic = prepared
     ? undefined
     : legacyBasic(clientId, clientSecret ?? '');
-  const sendAsToday = () =>
+  const sendAsToday = (signal: AbortSignal | undefined) =>
     axios.post(tokenUrl, params.toString(), {
       headers: {
         'Content-Type': 'application/x-www-form-urlencoded',
@@ -86,12 +86,14 @@ export async function exchangePasscode(
       },
       // A redirect would re-send the passcode and the secret: never followed.
       maxRedirects: 0,
+      // The attempt's abort cuts the exchange (spec §6b).
+      ...(signal === undefined ? {} : { signal }),
     });
 
   // UAA says why in the body — "Invalid passcode" for a mistyped or already
   // spent code — which is never read: the failure carries the status and a
   // registered code only (`passcode-exchange`).
-  const site = tokenSite(
+  const site = attemptSite(
     'passcode-exchange',
     options,
     logger,

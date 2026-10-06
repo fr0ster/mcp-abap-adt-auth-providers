@@ -2,12 +2,14 @@
  * OIDC Device Flow Provider
  */
 
+import type { AttemptContext } from '@mcp-abap-adt/auth-errors';
 import type {
   ITokenResult,
   OAuth2GrantType,
 } from '@mcp-abap-adt/interfaces-auth';
 import { AUTH_TYPE_AUTHORIZATION_CODE } from '@mcp-abap-adt/interfaces-auth';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
+import { throwIfAborted, untilAborted } from '../auth/attempt';
 import { asContract } from '../auth/contractShape';
 import { discoverOidc, mtlsAlias } from '../auth/oidcDiscovery';
 import {
@@ -84,7 +86,18 @@ export class OidcDeviceFlowProvider extends BaseTokenProvider {
     return AUTH_TYPE_AUTHORIZATION_CODE;
   }
 
-  protected async performLogin(): Promise<ITokenResult> {
+  protected async performLogin(attempt: AttemptContext): Promise<ITokenResult> {
+    // The whole device flow — initiation, presentation, polling — is the
+    // attempt's exclusive work: it starts once the previous attempt's has
+    // settled (the drain, spec §6b), and its part of the drain settles at the
+    // abort itself, never when an outstanding poll answers.
+    return attempt.exclusive(() =>
+      untilAborted(this.deviceLogin(attempt.signal), attempt.signal),
+    );
+  }
+
+  /** The device flow under the attempt's signal. */
+  private async deviceLogin(signal: AbortSignal): Promise<ITokenResult> {
     // Each endpoint not given ('' included) comes from discovery: one given
     // beside one missing still needs the other.
     let discovery: Awaited<ReturnType<typeof discoverOidc>> | null = null;
@@ -95,7 +108,11 @@ export class OidcDeviceFlowProvider extends BaseTokenProvider {
       if (!this.config.issuerUrl) {
         throw new Error('OIDC issuerUrl is required when discovery is used');
       }
-      discovery = await discoverOidc(this.config.issuerUrl, this.logger);
+      discovery = await discoverOidc(
+        this.config.issuerUrl,
+        this.logger,
+        signal,
+      );
     }
     const deviceAuthorizationEndpoint =
       this.config.deviceAuthorizationEndpoint ||
@@ -128,9 +145,10 @@ export class OidcDeviceFlowProvider extends BaseTokenProvider {
           : mtlsAlias(discovery, 'device_authorization_endpoint'),
         tokenEndpoint,
       ),
-      this.siteOptions(),
+      this.siteOptions(signal),
     );
 
+    throwIfAborted(signal);
     try {
       await this.config.presenter.present({
         verificationUri: deviceFlow.verificationUri,
@@ -161,7 +179,7 @@ export class OidcDeviceFlowProvider extends BaseTokenProvider {
           ? undefined
           : mtlsAlias(discovery, 'token_endpoint'),
       ),
-      this.siteOptions(),
+      this.siteOptions(signal),
     );
 
     return asContract<ITokenResult>({
@@ -173,8 +191,11 @@ export class OidcDeviceFlowProvider extends BaseTokenProvider {
     });
   }
 
-  protected async performRefresh(): Promise<ITokenResult> {
-    if (!this.refreshToken) {
+  protected async performRefresh(
+    refreshToken: string,
+    signal?: AbortSignal,
+  ): Promise<ITokenResult> {
+    if (!refreshToken) {
       throw refreshTokenRefused();
     }
     if (!this.config.tokenEndpoint && !this.config.issuerUrl) {
@@ -186,7 +207,11 @@ export class OidcDeviceFlowProvider extends BaseTokenProvider {
       if (!this.config.issuerUrl) {
         throw new Error('OIDC issuerUrl is required when discovery is used');
       }
-      discovery = await discoverOidc(this.config.issuerUrl, this.logger);
+      discovery = await discoverOidc(
+        this.config.issuerUrl,
+        this.logger,
+        signal,
+      );
     }
     const tokenEndpoint =
       this.config.tokenEndpoint || discovery?.token_endpoint;
@@ -195,11 +220,14 @@ export class OidcDeviceFlowProvider extends BaseTokenProvider {
         'OIDC token endpoint is required (tokenEndpoint or discovery)',
       );
     }
+    // Nothing is sent once the attempt is aborted; once sent, the refresh
+    // runs on (spec §6b).
+    throwIfAborted(signal);
     const tokens = await refreshOidcToken(
       tokenEndpoint,
       this.config.clientId,
       this.config.clientSecret,
-      this.refreshToken,
+      refreshToken,
       this.logger,
       // The alias belongs to the discovered endpoint only.
       await this.requestAuth(
@@ -212,7 +240,7 @@ export class OidcDeviceFlowProvider extends BaseTokenProvider {
 
     return asContract<ITokenResult>({
       authorizationToken: tokens.accessToken,
-      refreshToken: tokens.refreshToken || this.refreshToken,
+      refreshToken: tokens.refreshToken || refreshToken,
       authType: AUTH_TYPE_AUTHORIZATION_CODE,
       expiresIn: tokens.expiresIn,
       tokenType: 'jwt',

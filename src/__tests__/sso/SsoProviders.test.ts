@@ -295,8 +295,13 @@ describe('SSO Providers', () => {
       undefined,
       // No client authentication configured: none given to the site.
       undefined,
-      // The provider's authDebug and grant, threaded to the site (Task 21).
-      { authDebug: false, grant: 'authorization_code_pkce' },
+      // The provider's authDebug and grant, threaded to the site (Task 21),
+      // and the attempt's signal — a login's request carries it (spec §6b).
+      {
+        authDebug: false,
+        grant: 'authorization_code_pkce',
+        signal: expect.any(AbortSignal),
+      },
     );
   });
 
@@ -886,7 +891,13 @@ describe('SSO Providers', () => {
       undefined,
       // No client authentication configured: none given to the site.
       undefined,
-      { authDebug: false, grant: 'saml2_bearer' },
+      // The exchange is the login's request: it carries the attempt's
+      // signal (spec §6b); the refresh below gets none.
+      {
+        authDebug: false,
+        grant: 'saml2_bearer',
+        signal: expect.any(AbortSignal),
+      },
     );
   });
 

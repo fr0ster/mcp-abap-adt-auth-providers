@@ -2,12 +2,14 @@
  * OIDC Password Grant Provider
  */
 
+import type { AttemptContext } from '@mcp-abap-adt/auth-errors';
 import type {
   ITokenResult,
   OAuth2GrantType,
 } from '@mcp-abap-adt/interfaces-auth';
 import { AUTH_TYPE_PASSWORD } from '@mcp-abap-adt/interfaces-auth';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
+import { throwIfAborted } from '../auth/attempt';
 import { asContract } from '../auth/contractShape';
 import { discoverOidc, mtlsAlias } from '../auth/oidcDiscovery';
 import { passwordGrant, refreshOidcToken } from '../auth/oidcToken';
@@ -59,7 +61,7 @@ export class OidcPasswordProvider extends BaseTokenProvider {
     return AUTH_TYPE_PASSWORD;
   }
 
-  protected async performLogin(): Promise<ITokenResult> {
+  protected async performLogin(attempt: AttemptContext): Promise<ITokenResult> {
     if (!this.config.tokenEndpoint && !this.config.issuerUrl) {
       throw new Error('OIDC issuerUrl is required when discovery is used');
     }
@@ -69,7 +71,11 @@ export class OidcPasswordProvider extends BaseTokenProvider {
       if (!this.config.issuerUrl) {
         throw new Error('OIDC issuerUrl is required when discovery is used');
       }
-      discovery = await discoverOidc(this.config.issuerUrl, this.logger);
+      discovery = await discoverOidc(
+        this.config.issuerUrl,
+        this.logger,
+        attempt.signal,
+      );
     }
     const tokenEndpoint =
       this.config.tokenEndpoint || discovery?.token_endpoint;
@@ -92,7 +98,7 @@ export class OidcPasswordProvider extends BaseTokenProvider {
           ? undefined
           : mtlsAlias(discovery, 'token_endpoint'),
       ),
-      this.siteOptions(),
+      this.siteOptions(attempt.signal),
     );
 
     return asContract<ITokenResult>({
@@ -104,8 +110,11 @@ export class OidcPasswordProvider extends BaseTokenProvider {
     });
   }
 
-  protected async performRefresh(): Promise<ITokenResult> {
-    if (!this.refreshToken) {
+  protected async performRefresh(
+    refreshToken: string,
+    signal?: AbortSignal,
+  ): Promise<ITokenResult> {
+    if (!refreshToken) {
       throw refreshTokenRefused();
     }
 
@@ -118,7 +127,11 @@ export class OidcPasswordProvider extends BaseTokenProvider {
       if (!this.config.issuerUrl) {
         throw new Error('OIDC issuerUrl is required when discovery is used');
       }
-      discovery = await discoverOidc(this.config.issuerUrl, this.logger);
+      discovery = await discoverOidc(
+        this.config.issuerUrl,
+        this.logger,
+        signal,
+      );
     }
     const tokenEndpoint =
       this.config.tokenEndpoint || discovery?.token_endpoint;
@@ -127,11 +140,14 @@ export class OidcPasswordProvider extends BaseTokenProvider {
         'OIDC token endpoint is required (tokenEndpoint or discovery)',
       );
     }
+    // Nothing is sent once the attempt is aborted; once sent, the refresh
+    // runs on (spec §6b).
+    throwIfAborted(signal);
     const tokens = await refreshOidcToken(
       tokenEndpoint,
       this.config.clientId,
       this.config.clientSecret,
-      this.refreshToken,
+      refreshToken,
       this.logger,
       // The alias belongs to the discovered endpoint only.
       await this.requestAuth(
@@ -144,7 +160,7 @@ export class OidcPasswordProvider extends BaseTokenProvider {
 
     return asContract<ITokenResult>({
       authorizationToken: tokens.accessToken,
-      refreshToken: tokens.refreshToken || this.refreshToken,
+      refreshToken: tokens.refreshToken || refreshToken,
       authType: AUTH_TYPE_PASSWORD,
       expiresIn: tokens.expiresIn,
       tokenType: 'jwt',

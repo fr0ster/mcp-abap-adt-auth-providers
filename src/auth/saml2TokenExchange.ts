@@ -8,6 +8,7 @@ import axios, { type AxiosResponse } from 'axios';
 import { ValidationError } from '../errors/TokenProviderErrors';
 import type { Operation } from './contractTransition';
 import {
+  attemptSite,
   type LegacyBasic,
   legacyBasic,
   logQuietly,
@@ -69,6 +70,7 @@ function sendAsToday(
   grant: URLSearchParams,
   clientId: string | undefined,
   basic: LegacyBasic | undefined,
+  signal: AbortSignal | undefined,
 ): Promise<AxiosResponse> {
   const params = new URLSearchParams(grant);
   if (clientId) {
@@ -82,7 +84,12 @@ function sendAsToday(
   }
   // A redirect would re-send the assertion or the refresh token, and the
   // secret: never followed.
-  return axios.post(tokenUrl, params.toString(), { headers, maxRedirects: 0 });
+  // The attempt's abort cuts the exchange; the refresh passes none (§6b).
+  return axios.post(tokenUrl, params.toString(), {
+    headers,
+    maxRedirects: 0,
+    ...(signal === undefined ? {} : { signal }),
+  });
 }
 
 /** A token endpoint's success body (RFC 6749 §5.1). */
@@ -103,6 +110,11 @@ interface SamlRequest {
   readonly logger: ILogger | undefined;
   readonly options: TokenSiteOptions | undefined;
   readonly prepared: PreparedTokenRequest | undefined;
+  /**
+   * `attempt` for the exchange, which carries the attempt's signal;
+   * `refresh` for the refresh, which never does (spec §6b).
+   */
+  readonly kind: 'attempt' | 'refresh';
 }
 
 /**
@@ -118,7 +130,7 @@ async function requestTokens(
 ): Promise<Saml2TokenExchangeResponse> {
   const { prepared, clientId, clientSecret, logger, operation } = request;
   const basic = todaysBasic(prepared, clientId, clientSecret);
-  const site = tokenSite(
+  const site = (request.kind === 'refresh' ? tokenSite : attemptSite)(
     operation,
     request.options,
     logger,
@@ -129,10 +141,12 @@ async function requestTokens(
   try {
     response = await sendTokenRequest<TokenResponseBody>(
       prepared,
-      () => sendAsToday(tokenUrl, grant, clientId, basic),
+      (signal) => sendAsToday(tokenUrl, grant, clientId, basic, signal),
       site,
     );
   } catch (error) {
+    // Cut by the attempt's own abort: nothing failed that a line could say.
+    if (site.signal?.aborted === true) throw error;
     // The safe facts only: the failure's words, kind and status.
     logQuietly(() =>
       logger?.error(request.failed, logFields(readFailure(error, operation))),
@@ -184,6 +198,7 @@ export async function exchangeSamlAssertion(
       logger,
       options,
       prepared,
+      kind: 'attempt',
     },
     tokenUrl,
     grant,
@@ -228,6 +243,7 @@ export async function refreshSamlBearerToken(
       logger,
       options,
       prepared,
+      kind: 'refresh',
     },
     tokenUrl,
     grant,

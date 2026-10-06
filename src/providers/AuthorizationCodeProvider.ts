@@ -5,8 +5,8 @@
  * Supports pre-built authorization URLs and automatic refresh.
  */
 
+import type { AttemptContext } from '@mcp-abap-adt/auth-errors';
 import type {
-  AuthorizationRequest,
   IAuthorizationStrategy,
   ITokenResult,
   OAuth2GrantType,
@@ -19,6 +19,7 @@ import {
   getJwtAuthorizationUrl,
 } from '../auth/browserAuth';
 import { asContract } from '../auth/contractShape';
+import type { SignalledAuthorizationRequest } from '../auth/signalledRequest';
 import { refreshJwtToken } from '../auth/tokenRefresher';
 import { logQuietly } from '../auth/tokenRequest';
 import { ValidationError } from '../errors/TokenProviderErrors';
@@ -136,10 +137,6 @@ export class AuthorizationCodeProvider extends BaseTokenProvider {
     }
   }
 
-  override async getTokens(): Promise<ITokenResult> {
-    return super.getTokens();
-  }
-
   /** The usual choice: a browser login answered on a local callback. */
   static inBrowser(
     config: Omit<AuthorizationCodeProviderConfig, 'authorization'>,
@@ -155,7 +152,7 @@ export class AuthorizationCodeProvider extends BaseTokenProvider {
     return AUTH_TYPE_AUTHORIZATION_CODE;
   }
 
-  protected async performLogin(): Promise<ITokenResult> {
+  protected async performLogin(attempt: AttemptContext): Promise<ITokenResult> {
     const authConfig: IAuthorizationConfig = {
       uaaUrl: this.config.uaaUrl,
       uaaClientId: this.config.clientId,
@@ -179,6 +176,8 @@ export class AuthorizationCodeProvider extends BaseTokenProvider {
     // a timeout that explains nothing.
     const request = {
       logger: this.logger,
+      // The attempt's signal: every waiter gone ends the login (spec §6b).
+      signal: attempt.signal,
       buildAuthorizationUrl: async (redirectUri: string): Promise<string> => {
         if (prebuilt) {
           if (declaredRedirect && declaredRedirect !== redirectUri) {
@@ -194,8 +193,10 @@ export class AuthorizationCodeProvider extends BaseTokenProvider {
 
     const strategy = this.config.authorization;
 
-    const outcome = await strategy.authorize(
-      asContract<AuthorizationRequest>(request),
+    // The strategy holds a socket or a reader: it starts only once the
+    // previous attempt has released its own (the drain, spec §6b).
+    const outcome = await attempt.exclusive(() =>
+      strategy.authorize(asContract<SignalledAuthorizationRequest>(request)),
     );
 
     // The second net. A strategy that never called the builder — `staticCodeStrategy`
@@ -220,7 +221,7 @@ export class AuthorizationCodeProvider extends BaseTokenProvider {
       outcome.redirectUri,
       this.logger,
       await this.requestAuth(),
-      this.siteOptions(),
+      this.siteOptions(attempt.signal),
     );
 
     return asContract<ITokenResult>({
@@ -231,8 +232,11 @@ export class AuthorizationCodeProvider extends BaseTokenProvider {
     });
   }
 
-  protected async performRefresh(): Promise<ITokenResult> {
-    if (!this.refreshToken) {
+  protected async performRefresh(
+    refreshToken: string,
+    _signal?: AbortSignal,
+  ): Promise<ITokenResult> {
+    if (!refreshToken) {
       throw refreshTokenRefused();
     }
 
@@ -241,7 +245,7 @@ export class AuthorizationCodeProvider extends BaseTokenProvider {
     );
     // A failure throws: the base decides the one login (rule 6).
     const result = await refreshJwtToken(
-      this.refreshToken,
+      refreshToken,
       this.config.uaaUrl,
       this.config.clientId,
       this.config.clientSecret,
@@ -256,7 +260,7 @@ export class AuthorizationCodeProvider extends BaseTokenProvider {
         hasRefreshToken: !!result.refreshToken,
         newAccessToken: this.formatToken(result.accessToken),
         newRefreshToken: this.formatToken(result.refreshToken),
-        oldRefreshToken: this.formatToken(this.refreshToken),
+        oldRefreshToken: this.formatToken(refreshToken),
       }),
     );
 
@@ -264,7 +268,7 @@ export class AuthorizationCodeProvider extends BaseTokenProvider {
 
     return asContract<ITokenResult>({
       authorizationToken: result.accessToken,
-      refreshToken: result.refreshToken || this.refreshToken, // Keep old if new not provided
+      refreshToken: result.refreshToken || refreshToken, // Keep old if new not provided
       authType: AUTH_TYPE_AUTHORIZATION_CODE,
       expiresIn,
     });

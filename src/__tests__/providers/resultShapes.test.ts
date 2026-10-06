@@ -109,12 +109,29 @@ function answering<T>(
   };
 }
 
-/** The protected moments, reached the way the base class reaches them. */
+/**
+ * The protected moments, reached the way the base class reaches them: the
+ * login with an attempt (Task 22a: its signal and its exclusive section),
+ * the refresh with the refresh token the base read.
+ */
 interface Moments {
-  performLogin(): Promise<ITokenResult>;
-  performRefresh(): Promise<ITokenResult>;
+  performLogin(attempt: {
+    signal: AbortSignal;
+    exclusive<R>(work: () => Promise<R>): Promise<R>;
+  }): Promise<ITokenResult>;
+  performRefresh(refreshToken: string): Promise<ITokenResult>;
 }
-const moments = (provider: unknown) => provider as Moments;
+const attempt = {
+  signal: new AbortController().signal,
+  exclusive: <R>(work: () => Promise<R>) => work(),
+};
+const moments = (provider: unknown) => {
+  const reached = provider as Moments;
+  return {
+    performLogin: () => reached.performLogin(attempt),
+    performRefresh: () => reached.performRefresh('rt'),
+  };
+};
 
 const sorted = (keys: string[]) => [...keys].sort();
 const OAUTH = sorted([

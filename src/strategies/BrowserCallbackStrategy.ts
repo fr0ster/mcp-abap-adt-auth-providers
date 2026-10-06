@@ -24,6 +24,7 @@ import type { OidcCallbackResult } from '../auth/oidcBrowserAuth';
 import { withOidcCallbackServer } from '../auth/oidcBrowserAuth';
 import { loggedError } from '../auth/refusal';
 import { withSamlCallbackServer } from '../auth/saml2Auth';
+import { signalOf } from '../auth/signalledRequest';
 import {
   BrowserAuthError,
   TokenProviderError,
@@ -132,11 +133,18 @@ export class BrowserCallbackStrategy<TResult>
     const controller = new AbortController();
     this.controller = controller;
     const relay = () => controller.abort();
+    // Either signal ends the login: the strategy's own option, and the
+    // request's — the attempt's, aborted when every waiter of the login has
+    // gone (spec §6b).
+    const requestSignal = signalOf(request);
     this.options.signal?.addEventListener('abort', relay, { once: true });
+    requestSignal?.addEventListener('abort', relay, { once: true });
     // A signal that was already aborted fires no event, so registering a
     // listener for it is not enough — the login would proceed as if nobody had
     // cancelled it.
-    if (this.options.signal?.aborted) controller.abort();
+    if (this.options.signal?.aborted || requestSignal?.aborted) {
+      controller.abort();
+    }
 
     const announce = announcer(request.logger);
     const browser = this.options.browser ?? 'none';
@@ -230,6 +238,7 @@ export class BrowserCallbackStrategy<TResult>
       );
     } finally {
       this.options.signal?.removeEventListener('abort', relay);
+      requestSignal?.removeEventListener('abort', relay);
       this.controller = null;
       this.inFlight = null;
     }

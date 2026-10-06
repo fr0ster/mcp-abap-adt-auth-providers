@@ -2,6 +2,7 @@
  * OIDC Token Exchange Provider
  */
 
+import type { AttemptContext } from '@mcp-abap-adt/auth-errors';
 import type {
   ITokenResult,
   OAuth2GrantType,
@@ -62,7 +63,7 @@ export class OidcTokenExchangeProvider extends BaseTokenProvider {
     return AUTH_TYPE_USER_TOKEN;
   }
 
-  protected async performLogin(): Promise<ITokenResult> {
+  protected async performLogin(attempt: AttemptContext): Promise<ITokenResult> {
     if (!this.config.tokenEndpoint && !this.config.issuerUrl) {
       throw new Error('OIDC issuerUrl is required when discovery is used');
     }
@@ -72,7 +73,11 @@ export class OidcTokenExchangeProvider extends BaseTokenProvider {
       if (!this.config.issuerUrl) {
         throw new Error('OIDC issuerUrl is required when discovery is used');
       }
-      discovery = await discoverOidc(this.config.issuerUrl, this.logger);
+      discovery = await discoverOidc(
+        this.config.issuerUrl,
+        this.logger,
+        attempt.signal,
+      );
     }
     const tokenEndpoint =
       this.config.tokenEndpoint || discovery?.token_endpoint;
@@ -97,7 +102,7 @@ export class OidcTokenExchangeProvider extends BaseTokenProvider {
           ? undefined
           : mtlsAlias(discovery, 'token_endpoint'),
       ),
-      this.siteOptions(),
+      this.siteOptions(attempt.signal),
     );
 
     return asContract<ITokenResult>({

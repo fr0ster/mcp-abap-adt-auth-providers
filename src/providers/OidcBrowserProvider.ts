@@ -2,19 +2,21 @@
  * OIDC Authorization Code Provider (with PKCE)
  */
 
+import type { AttemptContext } from '@mcp-abap-adt/auth-errors';
 import type {
-  AuthorizationRequest,
   IAuthorizationStrategy,
   ITokenResult,
   OAuth2GrantType,
 } from '@mcp-abap-adt/interfaces-auth';
 import { AUTH_TYPE_AUTHORIZATION_CODE_PKCE } from '@mcp-abap-adt/interfaces-auth';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
+import { throwIfAborted } from '../auth/attempt';
 import { asContract } from '../auth/contractShape';
 import type { OidcCallbackResult } from '../auth/oidcBrowserAuth';
 import { discoverOidc, mtlsAlias } from '../auth/oidcDiscovery';
 import { generatePkceChallenge, generatePkceVerifier } from '../auth/oidcPkce';
 import { exchangeAuthorizationCode, refreshOidcToken } from '../auth/oidcToken';
+import type { SignalledAuthorizationRequest } from '../auth/signalledRequest';
 import { ValidationError } from '../errors/TokenProviderErrors';
 import { oidcCallbackStrategy } from '../strategies';
 import {
@@ -80,7 +82,7 @@ export class OidcBrowserProvider extends BaseTokenProvider {
     return AUTH_TYPE_AUTHORIZATION_CODE_PKCE;
   }
 
-  protected async performLogin(): Promise<ITokenResult> {
+  protected async performLogin(attempt: AttemptContext): Promise<ITokenResult> {
     // One memoised discovery per login, started on first use rather than up
     // front: a strategy that already holds a code must not drag in a request —
     // nor the `issuerUrl` requirement that comes with it.
@@ -91,7 +93,11 @@ export class OidcBrowserProvider extends BaseTokenProvider {
         if (!this.config.issuerUrl) {
           throw new Error('OIDC issuerUrl is required when discovery is used');
         }
-        discovery = discoverOidc(this.config.issuerUrl, this.logger);
+        discovery = discoverOidc(
+          this.config.issuerUrl,
+          this.logger,
+          attempt.signal,
+        );
       }
       return discovery;
     };
@@ -106,6 +112,8 @@ export class OidcBrowserProvider extends BaseTokenProvider {
 
     const request = {
       logger: this.logger,
+      // The attempt's signal: every waiter gone ends the login (spec §6b).
+      signal: attempt.signal,
       buildAuthorizationUrl: async (redirectUri: string): Promise<string> => {
         const endpoint =
           this.config.authorizationEndpoint ||
@@ -129,8 +137,10 @@ export class OidcBrowserProvider extends BaseTokenProvider {
 
     const strategy = this.config.authorization;
 
-    const outcome = await strategy.authorize(
-      asContract<AuthorizationRequest>(request),
+    // The strategy holds a socket or a reader: it starts only once the
+    // previous attempt has released its own (the drain, spec §6b).
+    const outcome = await attempt.exclusive(() =>
+      strategy.authorize(asContract<SignalledAuthorizationRequest>(request)),
     );
 
     const discovered = this.config.tokenEndpoint ? null : await discover();
@@ -152,7 +162,7 @@ export class OidcBrowserProvider extends BaseTokenProvider {
       this.logger,
       // The alias belongs to the discovered endpoint only.
       await this.requestAuth(mtlsAlias(discovered, 'token_endpoint')),
-      this.siteOptions(),
+      this.siteOptions(attempt.signal),
     );
 
     return asContract<ITokenResult>({
@@ -164,8 +174,11 @@ export class OidcBrowserProvider extends BaseTokenProvider {
     });
   }
 
-  protected async performRefresh(): Promise<ITokenResult> {
-    if (!this.refreshToken) {
+  protected async performRefresh(
+    refreshToken: string,
+    signal?: AbortSignal,
+  ): Promise<ITokenResult> {
+    if (!refreshToken) {
       throw refreshTokenRefused();
     }
 
@@ -174,7 +187,11 @@ export class OidcBrowserProvider extends BaseTokenProvider {
       if (!this.config.issuerUrl) {
         throw new Error('OIDC issuerUrl is required when discovery is used');
       }
-      discovery = await discoverOidc(this.config.issuerUrl, this.logger);
+      discovery = await discoverOidc(
+        this.config.issuerUrl,
+        this.logger,
+        signal,
+      );
     }
     // An endpoint not given ('' included) is discovered — the same rule as the
     // login path above and as every OIDC provider, at login and at refresh, so
@@ -186,11 +203,14 @@ export class OidcBrowserProvider extends BaseTokenProvider {
         'OIDC token endpoint is required (tokenEndpoint or discovery)',
       );
     }
+    // Nothing is sent once the attempt is aborted; once sent, the refresh
+    // runs on (spec §6b).
+    throwIfAborted(signal);
     const tokens = await refreshOidcToken(
       tokenEndpoint,
       this.config.clientId,
       this.config.clientSecret,
-      this.refreshToken,
+      refreshToken,
       this.logger,
       // The alias belongs to the discovered endpoint only.
       await this.requestAuth(
@@ -203,7 +223,7 @@ export class OidcBrowserProvider extends BaseTokenProvider {
 
     return asContract<ITokenResult>({
       authorizationToken: tokens.accessToken,
-      refreshToken: tokens.refreshToken || this.refreshToken,
+      refreshToken: tokens.refreshToken || refreshToken,
       authType: AUTH_TYPE_AUTHORIZATION_CODE_PKCE,
       expiresIn: tokens.expiresIn,
       tokenType: 'jwt',

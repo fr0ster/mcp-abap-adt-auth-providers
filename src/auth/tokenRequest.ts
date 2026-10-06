@@ -24,6 +24,7 @@
  */
 
 import { Agent } from 'node:https';
+import { isPromise, isProxy } from 'node:util/types';
 import {
   AuthProviderFailure,
   authError,
@@ -41,6 +42,7 @@ import type {
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
 import axios, { type AxiosRequestConfig, type AxiosResponse } from 'axios';
 import { ClientAuthenticationResultError } from '../errors/ClientAuthenticationError';
+import { abortedFailure } from './attempt';
 import { assertNotExpired } from './certificateMaterial';
 import type { OAuth2GrantType, Operation } from './contractTransition';
 import {
@@ -371,15 +373,61 @@ export function prepareSecret(value: string, authDebug: boolean): string {
   return `${head}…${tail} ${marker}`;
 }
 
+const NativePromise = Promise;
+const PROMISE_PROTOTYPE = Promise.prototype;
+const SPECIES_GETTER = Reflect.getOwnPropertyDescriptor(
+  Promise,
+  Symbol.species,
+)?.get;
+const promiseThen = Function.prototype.call.bind(Promise.prototype.then) as (
+  promise: Promise<unknown>,
+  onFulfilled: undefined,
+  onRejected: () => void,
+) => Promise<unknown>;
+const ignoreRejection = (): void => undefined;
+
+/**
+ * Whether calling `then` on `value` runs no code but the engine's: a plain
+ * native promise — no Proxy, `Promise.prototype` its prototype, no own
+ * `constructor`, the built-in `constructor` and `Symbol.species` still in
+ * place (auth-errors' `relayOutcome` applies the same test). Never throws.
+ */
+function isPlainPromise(value: unknown): value is Promise<unknown> {
+  try {
+    if (!isPromise(value) || isProxy(value)) return false;
+    if (Object.getPrototypeOf(value) !== PROMISE_PROTOTYPE) return false;
+    if (Object.hasOwn(value, 'constructor')) return false;
+    const ctor = Reflect.getOwnPropertyDescriptor(
+      PROMISE_PROTOTYPE,
+      'constructor',
+    );
+    if (ctor === undefined || ctor.value !== NativePromise) return false;
+    const species = Reflect.getOwnPropertyDescriptor(
+      NativePromise,
+      Symbol.species,
+    );
+    return species !== undefined && species.get === SPECIES_GETTER;
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Runs a log call for a token site where a logger that throws must change
  * nothing: inside a catch, the failure the site rethrows — already replaced
  * by safe facts — must not be replaced by whatever the consumer's logger
- * threw.
+ * threw. A logger whose method answers a rejecting promise (an async
+ * logger) must not leave an unhandled rejection either: a plain native
+ * promise answered by `write` gets a no-op rejection handler, through the
+ * `then` captured at load. A foreign thenable, a Promise subclass or a
+ * Proxy gets none — handling it would run its code.
  */
-export function logQuietly(write: () => void): void {
+export function logQuietly(write: () => unknown): void {
   try {
-    write();
+    const answered = write();
+    if (isPlainPromise(answered)) {
+      promiseThen(answered, undefined, ignoreRejection);
+    }
   } catch {
     // The site's own outcome is what the caller needs.
   }
@@ -398,6 +446,13 @@ const WAITING = new Set(['authorization_pending', 'slow_down']);
 export interface TokenSiteOptions {
   readonly authDebug?: boolean | undefined;
   readonly grant?: OAuth2GrantType | undefined;
+  /**
+   * The signal of the attempt the request belongs to (spec §6b): its abort
+   * cuts the request. Read only by the sites of an attempt's own requests
+   * (`attemptSite`) — never by a refresh site (`tokenSite`), whose request
+   * runs on after an abort so that its answer can still be committed.
+   */
+  readonly signal?: AbortSignal | undefined;
 }
 
 /**
@@ -428,12 +483,20 @@ export interface TokenRequestSite {
    * `legacyBasic()` — never assembled by the site itself.
    */
   readonly basic?: LegacyBasic | undefined;
+  /**
+   * The attempt's signal, passed to axios as `signal` on both paths
+   * (spec §6b). Absent by construction at every refresh site.
+   */
+  readonly signal?: AbortSignal | undefined;
 }
 
 /**
  * A site's description from the provider's options: the operation, the
  * secrets and the Basic credential are the site's own; `authDebug` is on only
- * for `true` itself.
+ * for `true` itself. The options' `signal` is never read here: this is the
+ * refresh sites' constructor (UAA, SAML, OIDC refresh), whose request is
+ * never given the attempt's signal (spec §6b) — every other site is built by
+ * `attemptSite`.
  */
 export function tokenSite(
   operation: Operation,
@@ -450,6 +513,23 @@ export function tokenSite(
     secrets,
     ...(basic === undefined ? {} : { basic }),
   };
+}
+
+/**
+ * The site of an attempt's own request — every request but a refresh: the
+ * same as `tokenSite`, plus the attempt's `signal` from the options, so the
+ * attempt's abort cuts the request (spec §6b).
+ */
+export function attemptSite(
+  operation: Operation,
+  options: TokenSiteOptions | undefined,
+  logger: ILogger | null | undefined,
+  secrets: SentSecrets,
+  basic?: LegacyBasic,
+): TokenRequestSite {
+  const site = tokenSite(operation, options, logger, secrets, basic);
+  const signal = options?.signal;
+  return signal === undefined ? site : { ...site, signal };
 }
 
 /**
@@ -621,6 +701,9 @@ function failedRequest(
   site: TokenRequestSite,
   prepared: PreparedTokenRequest | undefined,
 ): AuthProviderFailure {
+  // The attempt's own abort cut the request: no refusal, no line — the
+  // attempt is over, and its waiters were already answered `aborted`.
+  if (site.signal?.aborted === true) return abortedFailure();
   const { lineStatus, oauthError, code, failure } = readRequestFailure(
     error,
     site,
@@ -639,17 +722,17 @@ function failedRequest(
         ...(oauthError === undefined ? {} : { error: oauthError }),
         ...(code === undefined ? {} : { code }),
       };
+      // Returned, so an async logger's rejection is handled (logQuietly).
       if (debugging(site)) {
-        logger.debug(`[${site.operation}] token endpoint said`, {
+        return logger.debug(`[${site.operation}] token endpoint said`, {
           ...safe,
           sent: sentOf(site, prepared),
         });
-      } else {
-        logger.debug(
-          `${phraseOf(site)}: the token endpoint refused the request`,
-          safe,
-        );
       }
+      return logger.debug(
+        `${phraseOf(site)}: the token endpoint refused the request`,
+        safe,
+      );
     });
   }
   return failure;
@@ -664,12 +747,20 @@ function failedRequest(
  */
 export async function sendTokenRequest<T>(
   prepared: PreparedTokenRequest | undefined,
-  asToday: () => Promise<AxiosResponse<T>>,
+  asToday: (signal: AbortSignal | undefined) => Promise<AxiosResponse<T>>,
   site: TokenRequestSite,
 ): Promise<TokenResponseSnapshot<T>> {
+  // The attempt's signal, on both paths (spec §6b); a refresh site has none.
+  const signal = site.signal;
   let response: unknown;
   try {
-    response = prepared ? await axios<T>(prepared.config) : await asToday();
+    response = prepared
+      ? await axios<T>(
+          signal === undefined
+            ? prepared.config
+            : { ...prepared.config, signal },
+        )
+      : await asToday(signal);
   } catch (error) {
     throw failedRequest(error, site, prepared);
   }
@@ -768,15 +859,15 @@ export function rejectMissingToken(
   if (logger) {
     logQuietly(() => {
       const message = `${missingTokenLead(site)}: status ${status}, error: ${error === undefined ? 'no error given' : JSON.stringify(error)}`;
+      // Returned, so an async logger's rejection is handled (logQuietly).
       if (debugging(site)) {
-        logger[level](message, {
+        return logger[level](message, {
           status,
           ...(error === undefined ? {} : { error }),
           sent: sentOf(site, prepared),
         });
-      } else {
-        logger[level](message);
       }
+      return logger[level](message);
     });
   }
   const httpCode = httpStatus(status);

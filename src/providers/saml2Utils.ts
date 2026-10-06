@@ -2,8 +2,8 @@
  * SAML2 provider shared helpers.
  */
 
+import type { AttemptContext } from '@mcp-abap-adt/auth-errors';
 import type {
-  AuthorizationRequest,
   IAssertionReplayStore,
   IAssertionValidator,
   IAuthorizationStrategy,
@@ -11,6 +11,7 @@ import type {
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
 import { asContract } from '../auth/contractShape';
 import { buildSamlAuthorizationUrl } from '../auth/saml2Auth';
+import type { SignalledAuthorizationRequest } from '../auth/signalledRequest';
 import { ValidationError } from '../errors/TokenProviderErrors';
 import { isShippedValidator } from '../validation/assertionValidator';
 
@@ -140,12 +141,15 @@ export interface SamlAssertionResult {
 
 export async function getSamlAssertion(
   config: Saml2CommonConfig,
+  attempt?: Pick<AttemptContext, 'signal' | 'exclusive'>,
 ): Promise<SamlAssertionResult> {
   const declaredAcs = config.acsUrl;
   let mintedRequestId: string | undefined;
 
   const request = {
     logger: config.logger,
+    // The attempt's signal: every waiter gone ends the login (spec §6b).
+    ...(attempt === undefined ? {} : { signal: attempt.signal }),
     buildAuthorizationUrl: async (redirectUri: string): Promise<string> => {
       // An IdP-initiated login sends no AuthnRequest, and without a pre-built
       // authorizationUrl the only URL this could produce is one carrying a
@@ -184,9 +188,11 @@ export async function getSamlAssertion(
   };
 
   const strategy = config.authorization;
-  const outcome = await strategy.authorize(
-    asContract<AuthorizationRequest>(request),
-  );
+  const authorize = () =>
+    strategy.authorize(asContract<SignalledAuthorizationRequest>(request));
+  // The strategy holds an exclusive resource (a socket, a reader): it starts
+  // only once the previous attempt has released its own (the drain).
+  const outcome = await (attempt ? attempt.exclusive(authorize) : authorize());
   // The second net, for a strategy that never called the builder and so
   // never met the check inside it.
   if (declaredAcs && declaredAcs !== outcome.redirectUri) {

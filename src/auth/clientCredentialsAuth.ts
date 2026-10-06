@@ -8,13 +8,13 @@
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
 import axios from 'axios';
 import {
+  attemptSite,
   prepareTokenRequest,
   rejectMissingToken,
   sendTokenRequest,
   siteSecrets,
   type TokenRequestAuth,
   type TokenSiteOptions,
-  tokenSite,
 } from './tokenRequest';
 
 export interface ClientCredentialsResult {
@@ -56,7 +56,7 @@ export async function getTokenWithClientCredentials(
       )
     : undefined;
   /** Today's request: the secret in the body. */
-  const sendAsToday = () => {
+  const sendAsToday = (signal: AbortSignal | undefined) => {
     const params = new URLSearchParams();
     params.append('grant_type', 'client_credentials');
     params.append('client_id', clientId);
@@ -71,12 +71,14 @@ export async function getTokenWithClientCredentials(
       // No timeout of this package's choosing: the consumer bounds a wait.
       // A redirect would re-send the secret: never followed.
       maxRedirects: 0,
+      // The attempt's abort cuts the request (spec §6b).
+      ...(signal === undefined ? {} : { signal }),
     });
   };
 
   // A failure — a TLS code, a refusal, no answer — is `client-credentials`'s,
   // with the safe facts only.
-  const site = tokenSite(
+  const site = attemptSite(
     'client-credentials',
     options,
     logger,

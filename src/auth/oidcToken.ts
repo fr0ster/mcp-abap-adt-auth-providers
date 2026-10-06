@@ -5,8 +5,10 @@
 import { readFailure } from '@mcp-abap-adt/auth-errors';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
 import axios, { type AxiosResponse } from 'axios';
+import { intervalWait, throwIfAborted, untilAborted } from './attempt';
 import type { Operation } from './contractTransition';
 import {
+  attemptSite,
   type LegacyBasic,
   legacyBasic,
   logQuietly,
@@ -49,6 +51,7 @@ function sendAsToday(
   endpoint: string,
   params: URLSearchParams,
   basic: LegacyBasic | undefined,
+  signal: AbortSignal | undefined,
 ): Promise<AxiosResponse> {
   return axios.post(endpoint, params.toString(), {
     headers: {
@@ -58,6 +61,8 @@ function sendAsToday(
     // A redirect would re-send the grant's secret (code, refresh token,
     // device code, password, subject token) and the client's: never followed.
     maxRedirects: 0,
+    // The attempt's abort cuts the request; a refresh site passes none.
+    ...(signal === undefined ? {} : { signal }),
   });
 }
 
@@ -89,6 +94,11 @@ interface OidcRequest {
   readonly clientId: string;
   readonly clientSecret: string | undefined;
   readonly grantType: string;
+  /**
+   * `attempt` for an attempt's own request, which carries its signal;
+   * `refresh` for a refresh, which never does (spec §6b).
+   */
+  readonly kind: 'attempt' | 'refresh';
 }
 
 /**
@@ -105,7 +115,7 @@ async function requestTokens(
     ? await prepareWith(auth, endpoint, clientId, request.grantType, params)
     : undefined;
   const basic = todaysBasic(prepared, clientId, clientSecret);
-  const site = tokenSite(
+  const site = (request.kind === 'refresh' ? tokenSite : attemptSite)(
     request.operation,
     request.options,
     request.logger,
@@ -114,7 +124,7 @@ async function requestTokens(
   );
   const response = await sendTokenRequest<TokenResponseBody>(
     prepared,
-    () => sendAsToday(endpoint, params, basic),
+    (signal) => sendAsToday(endpoint, params, basic, signal),
     site,
   );
   return mapTokenResponse(site, prepared, response);
@@ -180,6 +190,7 @@ export async function exchangeAuthorizationCode(
       clientId,
       clientSecret,
       grantType: 'authorization_code',
+      kind: 'attempt',
     },
     tokenEndpoint,
     params,
@@ -211,6 +222,7 @@ export async function refreshOidcToken(
       clientId,
       clientSecret,
       grantType: 'refresh_token',
+      kind: 'refresh',
     },
     tokenEndpoint,
     params,
@@ -265,7 +277,7 @@ export async function initiateDeviceAuthorization(
         params,
       )
     : undefined;
-  const site = tokenSite(
+  const site = attemptSite(
     'device-authorization',
     options,
     logger,
@@ -273,11 +285,13 @@ export async function initiateDeviceAuthorization(
   );
   const response = await sendTokenRequest<DeviceAuthorizationBody>(
     prepared,
-    () =>
+    (signal) =>
       axios.post(deviceEndpoint, params.toString(), {
         headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
         // Never followed, like every token request.
         maxRedirects: 0,
+        // The attempt's abort cuts the initiation (spec §6b).
+        ...(signal === undefined ? {} : { signal }),
       }),
     site,
   );
@@ -359,15 +373,27 @@ export async function pollDeviceTokens(
     clientId,
     clientSecret,
     grantType: 'urn:ietf:params:oauth:grant-type:device_code',
+    kind: 'attempt',
   };
   // The server's interval is the protocol, not a timeout of this package;
   // anything but a finite non-negative number is the RFC's default.
   let wait = serverInterval(interval) ?? DEFAULT_INTERVAL;
+  // The attempt's signal (spec §6b): checked before every poll and after
+  // every await — the request, the wait — so the loop never polls again
+  // once the attempt is aborted. Each poll carries it (the abort cuts the
+  // request), and the loop stops waiting for an outstanding poll at the
+  // abort itself (`untilAborted`), not when its answer arrives.
+  const signal = options?.signal;
   while (true) {
+    throwIfAborted(signal);
     // Authenticated anew per request: an assertion is never reused.
     try {
-      return await requestTokens(request, tokenEndpoint, params);
+      return await untilAborted(
+        requestTokens(request, tokenEndpoint, params),
+        signal,
+      );
     } catch (error) {
+      throwIfAborted(signal);
       const waiting = waitingAnswer(error);
       if (waiting === undefined) throw error;
       // RFC 8628 §3.5: slow_down adds 5 s for this and every later request.
@@ -375,7 +401,9 @@ export async function pollDeviceTokens(
       logQuietly(() =>
         logger?.debug('[OIDC] Device authorization pending', { wait }),
       );
-      await new Promise((resolve) => setTimeout(resolve, wait * 1000));
+      // The server's interval, not a timeout of this package; the abort
+      // ends it early.
+      await intervalWait(wait * 1000, signal);
     }
   }
 }
@@ -413,6 +441,7 @@ export async function passwordGrant(
       clientId,
       clientSecret,
       grantType: 'password',
+      kind: 'attempt',
     },
     tokenEndpoint,
     params,
@@ -467,6 +496,7 @@ export async function tokenExchange(
       clientId,
       clientSecret,
       grantType: 'urn:ietf:params:oauth:grant-type:token-exchange',
+      kind: 'attempt',
     },
     tokenEndpoint,
     params,

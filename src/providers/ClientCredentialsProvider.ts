@@ -5,6 +5,7 @@
  * No browser required, no refresh token provided.
  */
 
+import type { AttemptContext } from '@mcp-abap-adt/auth-errors';
 import type {
   ITokenResult,
   OAuth2GrantType,
@@ -64,22 +65,18 @@ export class ClientCredentialsProvider extends BaseTokenProvider {
     }
   }
 
-  override async getTokens(): Promise<ITokenResult> {
-    return super.getTokens();
-  }
-
   protected getAuthType(): OAuth2GrantType {
     return AUTH_TYPE_CLIENT_CREDENTIALS;
   }
 
-  protected async performLogin(): Promise<ITokenResult> {
+  protected async performLogin(attempt: AttemptContext): Promise<ITokenResult> {
     const result = await getTokenWithClientCredentials(
       this.config.uaaUrl,
       this.config.clientId,
       this.config.clientSecret,
       await this.requestAuth(),
       this.logger,
-      this.siteOptions(),
+      this.siteOptions(attempt.signal),
     );
 
     return asContract<ITokenResult>({

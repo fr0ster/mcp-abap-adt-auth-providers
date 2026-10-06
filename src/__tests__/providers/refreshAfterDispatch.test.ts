@@ -1,0 +1,297 @@
+/**
+ * A refresh aborted after dispatch is an uncertain outcome (spec §6b): the
+ * server may have consumed R and issued R2. On a real socket through real
+ * axios — a local token endpoint that rotates R → R2 and withholds its
+ * answer; never a mocked `sendTokenRequest`, since the point is what axios
+ * does with a request given a signal. The refresh request runs on; its
+ * waiters are released at once; R is quarantined for the provider's
+ * lifetime and never submitted again; a late answer is committed only when
+ * nothing newer was.
+ */
+
+import { afterEach, beforeEach, describe, expect, it } from '@jest/globals';
+import { readFailure } from '@mcp-abap-adt/auth-errors';
+import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
+import { AuthorizationCodeProvider } from '../../providers/AuthorizationCodeProvider';
+import type { TokenResultWithDisposition } from '../../providers/BaseTokenProvider';
+import {
+  type Deferred,
+  deferred,
+  type HeldRequest,
+  jwt,
+  rejectionOf,
+  settle,
+  startTokenServer,
+  type TokenServer,
+  type WaitingStrategy,
+  waitingStrategy,
+} from '../helpers/attemptHarness';
+
+const silent: ILogger = {
+  debug: () => undefined,
+  info: () => undefined,
+  warn: () => undefined,
+  error: () => undefined,
+};
+
+function isAborted(error: unknown): boolean {
+  const read = readFailure(error, 'unfamiliar-error');
+  return (
+    read.kind === 'interactive-login' &&
+    (read.facts as { outcome?: string }).outcome === 'aborted'
+  );
+}
+
+type Seen = [string, string | undefined, string | undefined];
+
+let server: TokenServer;
+/** Refresh requests the server holds, in arrival order. */
+let heldRefreshes: HeldRequest[];
+/** What each login's code exchange answers, by login number. */
+let loginAnswers: Map<number, object>;
+let loginCount: number;
+
+beforeEach(async () => {
+  heldRefreshes = [];
+  loginAnswers = new Map();
+  loginCount = 0;
+  server = await startTokenServer((request) => {
+    if (request.params.get('grant_type') === 'refresh_token') {
+      heldRefreshes.push(request);
+      return;
+    }
+    loginCount += 1;
+    request.answer(
+      200,
+      loginAnswers.get(loginCount) ?? {
+        access_token: jwt(`login-${loginCount}`),
+        refresh_token: `S-${loginCount}`,
+      },
+    );
+  });
+});
+afterEach(async () => {
+  await server.close();
+});
+
+/** The refresh tokens the server received, in order. */
+const submitted = () =>
+  server.requests
+    .filter((r) => r.params.get('grant_type') === 'refresh_token')
+    .map((r) => r.params.get('refresh_token'));
+
+function provider(
+  strategy: WaitingStrategy,
+  seeded: { access?: string; refresh?: string } = {},
+  onTokens?: (result: TokenResultWithDisposition) => Promise<void>,
+): { p: AuthorizationCodeProvider; seen: Seen[] } {
+  const seen: Seen[] = [];
+  const p = new AuthorizationCodeProvider({
+    uaaUrl: server.url,
+    clientId: 'cid',
+    clientSecret: 'sec',
+    authorization: strategy,
+    logger: silent,
+    ...(seeded.access ? { accessToken: seeded.access } : {}),
+    ...(seeded.refresh ? { refreshToken: seeded.refresh } : {}),
+    onTokens: async (result) => {
+      seen.push([
+        result.authorizationToken,
+        result.refreshToken,
+        result.refreshTokenDisposition,
+      ]);
+      await onTokens?.(result);
+    },
+  });
+  return { p, seen };
+}
+
+/** Starts a refresh of R through `getTokens({ signal })` and cuts it once the server holds it. */
+async function cutRefresh(
+  p: AuthorizationCodeProvider,
+  index: number,
+): Promise<HeldRequest> {
+  const only = new AbortController();
+  const cut = rejectionOf(p.getTokens({ signal: only.signal }));
+  const held = await waitForRefresh(index);
+  only.abort();
+  // The waiter is released at once, the server not having answered.
+  expect(isAborted(await cut)).toBe(true);
+  return held;
+}
+
+async function waitForRefresh(index: number): Promise<HeldRequest> {
+  while (heldRefreshes.length <= index) await settle(1);
+  return heldRefreshes[index] as HeldRequest;
+}
+
+const expired = (subject: string) => jwt(subject, -3600);
+
+describe('a refresh aborted after dispatch', () => {
+  it('the waiter is released at once; the request is not aborted; the next moment does not submit R and logs in', async () => {
+    const strategy = waitingStrategy();
+    const { p } = provider(strategy, {
+      access: expired('held'),
+      refresh: 'R',
+    });
+    const held = await cutRefresh(p, 0);
+    await settle();
+    // Not cut: the socket is still open, the server still holds it.
+    expect(held.aborted()).toBe(false);
+
+    // A replacement proceeds without waiting for the held refresh.
+    const next = p.getTokens();
+    const login = await strategy.nth(1);
+    login.answer('code-1');
+    await expect(next).resolves.toMatchObject({ refreshToken: 'S-1' });
+    expect(submitted()).toEqual(['R']);
+    expect(held.aborted()).toBe(false);
+    held.answer(200, { access_token: jwt('late'), refresh_token: 'R2' });
+  });
+
+  it('the withheld answer released later, nothing newer committed: R2 and its tokens adopted and persisted', async () => {
+    const strategy = waitingStrategy();
+    const T0 = expired('held');
+    const { p, seen } = provider(strategy, { access: T0, refresh: 'R' });
+    const held = await cutRefresh(p, 0);
+    const T2 = jwt('rotated');
+    held.answer(200, { access_token: T2, refresh_token: 'R2' });
+    await held.closed;
+    await settle();
+    expect(seen).toEqual([
+      [T0, undefined, 'clear'],
+      [T2, 'R2', 'replace'],
+    ]);
+    await expect(p.getTokens()).resolves.toMatchObject({
+      authorizationToken: T2,
+      refreshToken: 'R2',
+    });
+    expect(strategy.calls).toHaveLength(0);
+    expect(submitted()).toEqual(['R']);
+  });
+
+  it('a newer login committed first: the late R2 is discarded; the login stays, persisted last', async () => {
+    const strategy = waitingStrategy();
+    const T0 = expired('held');
+    const { p, seen } = provider(strategy, { access: T0, refresh: 'R' });
+    const held = await cutRefresh(p, 0);
+    const next = p.getTokens();
+    (await strategy.nth(1)).answer('code-1');
+    const login = await next;
+    expect(login.refreshToken).toBe('S-1');
+
+    held.answer(200, { access_token: jwt('late'), refresh_token: 'R2' });
+    await held.closed;
+    await settle();
+    expect(seen).toEqual([
+      [T0, undefined, 'clear'],
+      [login.authorizationToken, 'S-1', 'replace'],
+    ]);
+    await expect(p.getTokens()).resolves.toMatchObject({
+      authorizationToken: login.authorizationToken,
+      refreshToken: 'S-1',
+    });
+  });
+});
+
+describe('quarantine before the queue', () => {
+  it('a commit installs R and stalls in onTokens; a replacement reads R, refreshes, is cut; the next does not submit R and logs in', async () => {
+    const strategy = waitingStrategy();
+    const stall = deferred<void>();
+    let stalled = false;
+    // Login 1 answers an expired access token: the next need refreshes R.
+    loginAnswers.set(1, { access_token: expired('one'), refresh_token: 'R' });
+    const { p, seen } = provider(strategy, {}, async () => {
+      if (stalled) return;
+      stalled = true;
+      await stall.promise;
+    });
+    const a = new AbortController();
+    const first = rejectionOf(p.getTokens({ signal: a.signal }));
+    (await strategy.nth(1)).answer('code-1');
+    while (seen.length === 0) await settle(1);
+    // Commit A has installed R and is stalled in its onTokens.
+    a.abort();
+    expect(isAborted(await first)).toBe(true);
+
+    // Replacement B reads R, dispatches its refresh, and is cut.
+    await cutRefresh(p, 0);
+    expect(submitted()).toEqual(['R']);
+
+    // Replacement C: R is quarantined, so it logs in — while the queue is
+    // still held by A's onTokens, before any queued step has run.
+    const c = p.getTokens();
+    const login = await strategy.nth(2);
+    expect(submitted()).toEqual(['R']);
+    login.answer('code-2');
+    await settle();
+    expect(seen).toHaveLength(1);
+
+    // Release A: the queue drains — the cut's clearing, then C's commit.
+    stall.resolve();
+    await expect(c).resolves.toMatchObject({ refreshToken: 'S-2' });
+    expect(submitted()).toEqual(['R']);
+    expect(
+      seen.map(([, refresh, disposition]) => [refresh, disposition]),
+    ).toEqual([
+      ['R', 'replace'],
+      [undefined, 'clear'],
+      ['S-2', 'replace'],
+    ]);
+    heldRefreshes[0]?.answer(200, { access_token: jwt('late') });
+  });
+});
+
+describe('tombstones for life', () => {
+  it('R cut, S installed, a newer commit returns R: R is not installed, never submitted again, and the next renewal logs in', async () => {
+    const strategy = waitingStrategy();
+    const { p, seen } = provider(strategy, {
+      access: expired('held'),
+      refresh: 'R',
+    });
+    const held = await cutRefresh(p, 0);
+
+    // A login installs S.
+    loginAnswers.set(1, { access_token: expired('one'), refresh_token: 'S' });
+    const login = p.getTokens();
+    (await strategy.nth(1)).answer('code-1');
+    await expect(login).resolves.toMatchObject({ refreshToken: 'S' });
+
+    // A refresh of S whose answer returns R again.
+    const refreshS = p.getTokens();
+    const second = await waitForRefresh(1);
+    expect(second.params.get('refresh_token')).toBe('S');
+    const T2 = expired('two');
+    second.answer(200, { access_token: T2, refresh_token: 'R' });
+    const afterS = await refreshS;
+    expect(afterS.refreshToken).toBeUndefined();
+    expect(seen.at(-1)).toEqual([T2, undefined, 'clear']);
+
+    // The next renewal: no refresh token to send — a login.
+    const next = p.getTokens();
+    (await strategy.nth(2)).answer('code-2');
+    await expect(next).resolves.toMatchObject({ refreshToken: 'S-2' });
+    expect(submitted()).toEqual(['R', 'S']);
+    held.answer(200, { access_token: jwt('late') });
+  });
+
+  it('a late answer of a non-rotating endpoint returning R: its access token installed, R neither installed nor persisted as usable', async () => {
+    const strategy = waitingStrategy();
+    const T0 = expired('held');
+    const { p, seen } = provider(strategy, { access: T0, refresh: 'R' });
+    const held = await cutRefresh(p, 0);
+    const T2 = jwt('non-rotating');
+    // No refresh_token in the answer: the site keeps the one it sent, R.
+    held.answer(200, { access_token: T2 });
+    await held.closed;
+    await settle();
+    expect(seen).toEqual([
+      [T0, undefined, 'clear'],
+      [T2, undefined, 'clear'],
+    ]);
+    await expect(p.getTokens()).resolves.toMatchObject({
+      authorizationToken: T2,
+      refreshToken: undefined,
+    });
+  });
+});

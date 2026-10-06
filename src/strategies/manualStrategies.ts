@@ -14,6 +14,7 @@ import type {
   IAuthorizationStrategy,
 } from '@mcp-abap-adt/interfaces-auth';
 import { extractCode } from '../auth/browserAuth';
+import { signalOf } from '../auth/signalledRequest';
 import { BrowserAuthError } from '../errors/TokenProviderErrors';
 import { DEFAULT_CALLBACK_PORT } from './BrowserCallbackStrategy';
 
@@ -115,6 +116,12 @@ function boundedManual(
           { once: true },
         );
       });
+      // The request's signal — the attempt's (spec §6b) — ends the read too;
+      // relayed once `abandoned` listens, so an aborted one is honoured.
+      const requestSignal = signalOf(request);
+      const relay = () => controller.abort();
+      requestSignal?.addEventListener('abort', relay, { once: true });
+      if (requestSignal?.aborted) controller.abort();
       const working = run(request, (prompt) => read(prompt, controller.signal));
       working.catch(() => {}); // a loser of the race must not surface as unhandled
       const race = Promise.race([working, abandoned]);
@@ -123,6 +130,7 @@ function boundedManual(
         return await race;
       } finally {
         if (timer) clearTimeout(timer);
+        requestSignal?.removeEventListener('abort', relay);
         inFlight.delete(controller);
       }
     },

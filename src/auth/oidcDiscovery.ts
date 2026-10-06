@@ -5,6 +5,7 @@
 import { AuthProviderFailure, authError } from '@mcp-abap-adt/auth-errors';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
 import axios from 'axios';
+import { abortedFailure } from './attempt';
 import { readSafely } from './knownCodes';
 import { logQuietly, requestFailure } from './tokenRequest';
 
@@ -120,11 +121,14 @@ function discoverySnapshot(response: unknown): OidcDiscoveryDocument {
  * transport rejection becomes `tls` or `request-failed` of `oidc-discovery`;
  * an answer without `token_endpoint`, or one that cannot be read, becomes
  * `request-failed` `incomplete-response` with the operation only. A failed
- * discovery is not cached; it writes no failure line.
+ * discovery is not cached; it writes no failure line. With the attempt's
+ * `signal` (spec §6b), its abort cuts the request, and an aborted discovery
+ * — cut, or answered after the abort — ends `aborted` and is not cached.
  */
 export async function discoverOidc(
   issuerOrDiscoveryUrl: string,
   logger?: ILogger,
+  signal?: AbortSignal,
 ): Promise<OidcDiscoveryDocument> {
   const discoveryUrl = normalizeDiscoveryUrl(issuerOrDiscoveryUrl);
   const cached = discoveryCache.get(discoveryUrl);
@@ -142,13 +146,19 @@ export async function discoverOidc(
   try {
     response = await axios.get(discoveryUrl, {
       headers: { Accept: 'application/json' },
+      // The attempt's abort cuts the discovery (spec §6b, C6).
+      ...(signal === undefined ? {} : { signal }),
     });
   } catch (error) {
+    if (signal?.aborted === true) throw abortedFailure();
     // Whatever was thrown — the server's text through a consumer's
     // interceptor included — becomes the safe facts alone.
     throw requestFailure(error, 'oidc-discovery');
   }
 
+  // An answer that arrives after the abort is the aborted attempt's: not
+  // cached, so the next call fetches again.
+  if (signal?.aborted === true) throw abortedFailure();
   let document: OidcDiscoveryDocument;
   try {
     document = discoverySnapshot(response);

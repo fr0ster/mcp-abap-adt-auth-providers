@@ -4,6 +4,7 @@
  * Returns SAMLResponse as authorizationToken (non-JWT).
  */
 
+import type { AttemptContext } from '@mcp-abap-adt/auth-errors';
 import type {
   AssertionContext,
   IAssertionValidator,
@@ -95,8 +96,11 @@ export class Saml2PureProvider extends BaseTokenProvider {
     return AUTH_TYPE_USER_TOKEN;
   }
 
-  protected async performLogin(): Promise<ITokenResult> {
-    const { payload, requestId, acsUrl } = await getSamlAssertion(this.config);
+  protected async performLogin(attempt: AttemptContext): Promise<ITokenResult> {
+    const { payload, requestId, acsUrl } = await getSamlAssertion(
+      this.config,
+      attempt,
+    );
     // acsUrl is where the strategy actually listened — with an ephemeral port
     // the configured value is usually absent and never authoritative.
     const validated = await this.validator.validate(
