@@ -358,7 +358,7 @@ Publish dependency: U1 (5.4.2 published), G1, G2 (G3 is not needed to build auth
 | `getTokens(options?)` / `refreshTokens(options?)` and `attach` on top of the 4.x interfaces, and a local `SignalledAuthorizationRequest` (the 4.x `AuthorizationRequest` plus `signal?`) that the providers build and the shipped strategies read | 22a | — | Task 22a's cancellation suite | 27 (the local type replaced by 6.0.0's `AuthorizationRequest`) |
 | The 13 error classes and `callbackScopeError.ts` | today | their producers, 21–26 | `legacyLadder.test.ts` | 27 |
 
-- Task 27 flips the direct dependencies to 6.0.0 / 3.1.0 and removes everything in the table that is still there; after it no transition test remains (each case is covered by its Appendix A row test).
+- Task 27 flips the direct dependencies to 6.0.0 / 3.2.0 (`^6.0.0` / `^3.2.0`: 3.1.0 does not accept interfaces-auth 6) and removes everything in the table that is still there; after it no transition test remains (each case is covered by its Appendix A row test).
 
 ### Task 17: Start from 5.4.2; `auth-errors`
 

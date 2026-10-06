@@ -987,7 +987,7 @@ form of length N: N < 16 → `<redacted, N chars>`; N ≥ 16 → its first 4 and
 last 4 characters around the marker, `abcd…wxyz <redacted, N chars>` — never
 more than 8 characters of any form. Every recognised form is previewed on its
 own, from its own characters: as sent, form-encoded, `encodeURIComponent`'d,
-form-decoded (`echoedForms`, `oauthErrorBody.ts:35-42`), a Basic credential's
+form-decoded (`echoedValues`, `oauthErrorBody.ts:59`), a Basic credential's
 base64 and decoded secret (`basicSecrets`), and anything JWT-shaped
 (`JWT_SHAPE`, `oauthErrorBody.ts:18`). The replacement is the same single
 pass as today's redaction — one alternation, longest first, a marker never
@@ -1026,7 +1026,7 @@ refresh), `oidcToken.ts:26-37` (`toBasicAuth` / `buildAuthHeaders`: OIDC token
 request, device poll, password grant), `browserAuth.ts:113-121` (UAA code
 exchange), `tokenRefresher.ts:57-65` (UAA refresh), `passcodeAuth.ts:69-77`
 (passcode). The base64 credential is not any form of `clientSecret` the
-redaction knows (`echoedForms`, `oauthErrorBody.ts:35-42`), so a server
+redaction knows (`echoedValues`, `oauthErrorBody.ts:59`), so a server
 echoing the header would put a recoverable `id:secret` into what is kept.
 They all move to one helper, so a site cannot build the header without its
 secrets:
