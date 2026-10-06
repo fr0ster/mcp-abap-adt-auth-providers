@@ -294,9 +294,24 @@ export async function initiateDeviceAuthorization(
     userCode: data.user_code,
     verificationUri: data.verification_uri,
     verificationUriComplete: data.verification_uri_complete,
-    interval: data.interval,
+    interval: serverInterval(data.interval),
     expiresIn: data.expires_in,
   };
+}
+
+/** RFC 8628 §3.2: the poll interval when the server names none, in seconds. */
+const DEFAULT_INTERVAL = 5;
+
+/**
+ * The server's `interval` when it is a finite, non-negative JSON number;
+ * else undefined. A string — numeric or not — is no JSON number (RFC 8628
+ * §3.2), and NaN, a negative or an infinite value would make the poll hot
+ * or odd.
+ */
+function serverInterval(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0
+    ? value
+    : undefined;
 }
 
 /**
@@ -322,7 +337,7 @@ export async function pollDeviceTokens(
   clientId: string,
   clientSecret: string | undefined,
   deviceCode: string,
-  interval: number = 5,
+  interval: number = DEFAULT_INTERVAL,
   logger?: ILogger,
   auth?: TokenRequestAuth,
   options?: TokenSiteOptions,
@@ -341,6 +356,9 @@ export async function pollDeviceTokens(
     clientSecret,
     grantType: 'urn:ietf:params:oauth:grant-type:device_code',
   };
+  // The server's interval is the protocol, not a timeout of this package;
+  // anything but a finite non-negative number is the RFC's default.
+  let wait = serverInterval(interval) ?? DEFAULT_INTERVAL;
   while (true) {
     // Authenticated anew per request: an assertion is never reused.
     try {
@@ -348,8 +366,8 @@ export async function pollDeviceTokens(
     } catch (error) {
       const waiting = waitingAnswer(error);
       if (waiting === undefined) throw error;
-      // The server's interval is the protocol, not a timeout of this package.
-      const wait = waiting === 'slow_down' ? interval + 5 : interval;
+      // RFC 8628 §3.5: slow_down adds 5 s for this and every later request.
+      if (waiting === 'slow_down') wait += 5;
       logQuietly(() =>
         logger?.debug('[OIDC] Device authorization pending', { wait }),
       );

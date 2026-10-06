@@ -588,6 +588,19 @@ describe('a server echoing every secret in every form', () => {
       }
     },
   );
+
+  it.each([['authorization_pending'], ['slow_down']])(
+    '%s at another site than the device poll is a refusal: its safe-facts line',
+    async (code) => {
+      const { logger, lines } = recordingLogger();
+      await failureOf(
+        send(site({ logger }), rejection(400, echoingBody(code))),
+      );
+      expect(lines.map((line) => line.meta)).toEqual([
+        { status: 400, error: code },
+      ]);
+    },
+  );
 });
 
 describe('a failure without a response', () => {

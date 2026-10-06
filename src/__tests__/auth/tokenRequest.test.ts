@@ -559,12 +559,22 @@ describe('client authentication per request', () => {
     expect(strategy.drafts).toHaveLength(2);
   });
 
-  it('keeps the client_credentials timeout on the strategy path', async () => {
-    await getTokenWithClientCredentials('https://uaa', 'cid', undefined, {
-      strategy: clientSecretPost('sec'),
-    });
-    expect(sent().timeout).toBe(30000);
-  });
+  it.each(SITES)(
+    'no built-in timeout: $name sends no timeout, on either path',
+    async (site) => {
+      await site.run({ strategy: clientSecretPost('sec') });
+      await site.run();
+      const configs = [
+        ...mockedAxios.mock.calls.map((call) => call[0]),
+        ...mockedAxios.post.mock.calls.map((call) => call[2]),
+      ] as (Record<string, unknown> | undefined)[];
+      expect(configs.length).toBe(2);
+      for (const config of configs) {
+        expect(config).toBeDefined();
+        expect('timeout' in (config ?? {})).toBe(false);
+      }
+    },
+  );
 
   it('an http: endpoint is accepted when the configured endpoint is http: (a local server), without material', async () => {
     await getTokenWithClientCredentials(

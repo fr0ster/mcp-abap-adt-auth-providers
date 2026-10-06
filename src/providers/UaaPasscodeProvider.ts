@@ -72,7 +72,11 @@ export class UaaPasscodeProvider extends BaseTokenProvider {
   }
 
   private get baseUrl(): string {
-    return this.config.uaaUrl.replace(/\/+$/, '');
+    // Trailing slashes dropped by a backward scan, no regex.
+    const url = this.config.uaaUrl;
+    let end = url.length;
+    while (end > 0 && url[end - 1] === '/') end--;
+    return url.slice(0, end);
   }
 
   /** The usual choice: a passcode typed in a terminal; five minutes to paste it by default. */

@@ -43,7 +43,6 @@ export async function getTokenWithClientCredentials(
   options?: TokenSiteOptions,
 ): Promise<ClientCredentialsResult> {
   const tokenUrl = `${uaaUrl}/oauth/token`;
-  const timeout = 30000; // 30 seconds timeout to prevent hanging
   // Asked before the try: what the strategy throws is not a token-endpoint failure.
   const prepared = auth
     ? await prepareTokenRequest(
@@ -52,7 +51,6 @@ export async function getTokenWithClientCredentials(
           clientId,
           grantType: 'client_credentials',
           parameters: new URLSearchParams({ grant_type: 'client_credentials' }),
-          timeout,
         },
         auth,
       )
@@ -70,7 +68,7 @@ export async function getTokenWithClientCredentials(
         'Content-Type': 'application/x-www-form-urlencoded',
       },
       data: params.toString(),
-      timeout,
+      // No timeout of this package's choosing: the consumer bounds a wait.
       // A redirect would re-send the secret: never followed.
       maxRedirects: 0,
     });

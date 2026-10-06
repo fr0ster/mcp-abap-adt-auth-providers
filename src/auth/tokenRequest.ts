@@ -83,11 +83,10 @@ export interface GrantRequest {
   readonly parameters: URLSearchParams;
   /** The site's own headers besides Content-Type (passcode: Accept). */
   readonly headers?: Readonly<Record<string, string>> | undefined;
-  readonly timeout?: number | undefined;
 }
 
 export interface PreparedTokenRequest {
-  /** The whole axios config: url, method, headers, data, and httpsAgent / timeout when set. */
+  /** The whole axios config: url, method, headers, data, and httpsAgent when set; never a timeout. */
   readonly config: AxiosRequestConfig;
   /**
    * The secrets the strategy put on the request, by name: `client_secret`,
@@ -302,7 +301,6 @@ export async function prepareTokenRequest(
     // certificate, to wherever it points, past every check above.
     maxRedirects: 0,
   };
-  if (grant.timeout !== undefined) config.timeout = grant.timeout;
   if (auth.material) config.httpsAgent = agentFor(auth.material);
 
   const secrets: Record<string, string> = {};
@@ -628,7 +626,13 @@ function failedRequest(
     site,
   );
   const logger = site.logger;
-  if (logger && !(oauthError !== undefined && WAITING.has(oauthError))) {
+  // Only the device poll's own waiting answers — a 400 — are the protocol.
+  const waiting =
+    site.operation === 'device-poll' &&
+    lineStatus === 400 &&
+    oauthError !== undefined &&
+    WAITING.has(oauthError);
+  if (logger && !waiting) {
     logQuietly(() => {
       const safe = {
         status: lineStatus,

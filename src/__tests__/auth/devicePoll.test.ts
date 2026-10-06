@@ -23,7 +23,10 @@ import {
 import { isAuthProviderFailure, readFailure } from '@mcp-abap-adt/auth-errors';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
 import axios from 'axios';
-import { pollDeviceTokens } from '../../auth/oidcToken';
+import {
+  initiateDeviceAuthorization,
+  pollDeviceTokens,
+} from '../../auth/oidcToken';
 import type { TokenRequestAuth } from '../../auth/tokenRequest';
 import { clientSecretPost } from '../../clientAuthentication';
 
@@ -105,9 +108,9 @@ describe('pollDeviceTokens', () => {
 });
 
 /** A `400` of the token endpoint, with the body given (none: no `data`). */
-const refused = (body?: Record<string, unknown>) => ({
+const refused = (body?: Record<string, unknown>, status = 400) => ({
   isAxiosError: true,
-  response: { status: 400, ...(body === undefined ? {} : { data: body }) },
+  response: { status, ...(body === undefined ? {} : { data: body }) },
 });
 const TOKENS = { data: { access_token: 'at', expires_in: 60 } };
 
@@ -249,4 +252,148 @@ describe.each(PATHS)('device polling %s (spec §6)', (_path, auth, sender) => {
     await jest.advanceTimersByTimeAsync(1000);
     expect((await tokens).accessToken).toBe('at');
   });
+
+  it.each([
+    [401, 'authorization_pending'],
+    [401, 'slow_down'],
+    [500, 'authorization_pending'],
+    [500, 'slow_down'],
+  ])(
+    'a %s carrying %s ends the poll at once, with its safe-facts line',
+    async (status, code) => {
+      sender().mockImplementation(() =>
+        Promise.reject(refused({ error: code }, status)),
+      );
+      const { logger, lines } = recording();
+      const thrown = await poll(0, logger).catch((error: unknown) => error);
+      expect(sender()).toHaveBeenCalledTimes(1);
+      expect(readFailure(thrown, 'unfamiliar-error').facts).toEqual({
+        operation: 'device-poll',
+        problem: 'refused',
+        status,
+        oauthError: code,
+      });
+      // Only a 400 is the protocol's wait: anything else is a refusal, noted.
+      expect(lines.filter(([level]) => level === 'debug')).toEqual([
+        [
+          'debug',
+          'the device poll: the token endpoint refused the request',
+          { status, error: code },
+        ],
+      ]);
+    },
+  );
+
+  it.each<[string, unknown]>([
+    ['a non-numeric string', 'abc'],
+    ['a numeric string', '5'],
+    ['another numeric string', '7'],
+    ['NaN', Number.NaN],
+    ['a negative number', -3],
+    ['Infinity', Number.POSITIVE_INFINITY],
+  ])(
+    'an interval that is %s: the RFC default of 5 s, no hot loop',
+    async (_name, interval) => {
+      jest.useFakeTimers();
+      sender().mockImplementation(() =>
+        Promise.reject(refused({ error: 'authorization_pending' })),
+      );
+      const { logger, lines } = recording();
+      const ended = pollDeviceTokens(
+        'https://idp.example/token',
+        'client',
+        auth() ? undefined : 'secret',
+        'device-code',
+        interval as number,
+        logger,
+        auth(),
+      ).catch((error: unknown) => error);
+      // 20 s: the first poll and one every 5 s.
+      await jest.advanceTimersByTimeAsync(20_000);
+      expect(sender()).toHaveBeenCalledTimes(5);
+      expect(
+        lines.filter(([, message]) => message.includes('pending')),
+      ).toEqual(
+        Array.from({ length: 5 }, () => [
+          'debug',
+          '[OIDC] Device authorization pending',
+          { wait: 5 },
+        ]),
+      );
+      sender().mockImplementation(() =>
+        Promise.reject(refused({ error: 'access_denied' })),
+      );
+      await jest.advanceTimersByTimeAsync(5_000);
+      await ended;
+    },
+  );
+
+  it("a valid interval of 0 is the server's to choose: no wait", async () => {
+    sender()
+      .mockImplementationOnce(() =>
+        Promise.reject(refused({ error: 'authorization_pending' })),
+      )
+      .mockImplementationOnce(() => Promise.resolve(TOKENS));
+    const { logger, lines } = recording();
+    expect((await poll(0, logger)).accessToken).toBe('at');
+    expect(lines.filter(([level]) => level === 'debug')).toEqual([
+      ['debug', '[OIDC] Device authorization pending', { wait: 0 }],
+    ]);
+  });
+
+  it('slow_down is cumulative (RFC 8628 §3.5): +5 s for this and every later request', async () => {
+    jest.useFakeTimers();
+    sender()
+      .mockImplementationOnce(() =>
+        Promise.reject(refused({ error: 'slow_down' })),
+      )
+      .mockImplementationOnce(() =>
+        Promise.reject(refused({ error: 'slow_down' })),
+      )
+      .mockImplementationOnce(() =>
+        Promise.reject(refused({ error: 'authorization_pending' })),
+      )
+      .mockImplementationOnce(() => Promise.resolve(TOKENS));
+    const { logger, lines } = recording();
+    const tokens = poll(1, logger);
+    await jest.advanceTimersByTimeAsync(6_000 + 11_000 + 11_000);
+    expect((await tokens).accessToken).toBe('at');
+    expect(sender()).toHaveBeenCalledTimes(4);
+    expect(lines.filter(([level]) => level === 'debug')).toEqual([
+      ['debug', '[OIDC] Device authorization pending', { wait: 6 }],
+      ['debug', '[OIDC] Device authorization pending', { wait: 11 }],
+      ['debug', '[OIDC] Device authorization pending', { wait: 11 }],
+    ]);
+  });
+
+  it.each<[unknown, number | undefined]>([
+    [7, 7],
+    [0, 0],
+    ['5', undefined],
+    ['abc', undefined],
+    [-1, undefined],
+  ])(
+    'the device initiation keeps an interval of %p only as a finite non-negative number',
+    async (interval, expected) => {
+      sender().mockImplementation(() =>
+        Promise.resolve({
+          status: 200,
+          data: {
+            device_code: 'dc',
+            user_code: 'uc',
+            verification_uri: 'https://idp.example/verify',
+            interval,
+          },
+        }),
+      );
+      const started = await initiateDeviceAuthorization(
+        'https://idp.example/device',
+        'client',
+        undefined,
+        undefined,
+        auth(),
+      );
+      expect(started.interval).toBe(expected);
+    },
+  );
 });

@@ -67,30 +67,30 @@ function sentByPost(): Sent {
 }
 
 /** The request of `axios(config)`. */
-function sentByConfig(expectTimeout = false): Sent & { timeout?: number } {
+function sentByConfig(): Sent {
   expect(mockedAxios).toHaveBeenCalledTimes(1);
   const config = mockedAxios.mock.calls[0]![0] as {
     url: string;
     method: string;
     data: string;
     headers: Record<string, string>;
-    timeout?: number;
     maxRedirects: number;
   };
-  // The whole config object: any added key (httpsAgent, ...) fails, and
-  // `timeout` is present exactly where today's code sets it.
-  expect(Object.keys(config).sort()).toEqual(
-    expectTimeout
-      ? ['data', 'headers', 'maxRedirects', 'method', 'timeout', 'url']
-      : ['data', 'headers', 'maxRedirects', 'method', 'url'],
-  );
+  // The whole config object: any added key (httpsAgent, a timeout, ...)
+  // fails — no request carries a timeout of this package's choosing.
+  expect(Object.keys(config).sort()).toEqual([
+    'data',
+    'headers',
+    'maxRedirects',
+    'method',
+    'url',
+  ]);
   expect(config.maxRedirects).toBe(0);
   return {
     url: config.url,
     method: config.method,
     body: Object.fromEntries(new URLSearchParams(config.data)),
     headers: config.headers,
-    ...(config.timeout === undefined ? {} : { timeout: config.timeout }),
   };
 }
 
@@ -104,7 +104,7 @@ describe('token request shapes, as sent today', () => {
   describe('clientCredentialsAuth', () => {
     it('with a secret: client_id and client_secret in the body, no Authorization', async () => {
       await getTokenWithClientCredentials('https://uaa', 'cid', 'sec');
-      const sent = sentByConfig(true);
+      const sent = sentByConfig();
       expect(sent.url).toBe('https://uaa/oauth/token');
       expect(sent.method).toBe('post');
       expect(sent.body).toEqual({
@@ -114,7 +114,6 @@ describe('token request shapes, as sent today', () => {
       });
       expect(sent.headers).toEqual({ 'Content-Type': FORM });
       expect(sent.headers.Authorization).toBeUndefined();
-      expect(sent.timeout).toBe(30000);
     });
   });
 

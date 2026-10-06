@@ -614,7 +614,8 @@ export abstract class BaseTokenProvider
       }
 
       // Convert base64url to base64
-      const base64 = payload.replace(/-/g, '+').replace(/_/g, '/');
+      // Plain code, no regex: the token is foreign input.
+      const base64 = payload.split('-').join('+').split('_').join('/');
       // Add padding if needed
       const padded = base64 + '=='.substring(0, (4 - (base64.length % 4)) % 4);
 
