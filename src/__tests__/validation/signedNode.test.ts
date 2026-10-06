@@ -435,7 +435,7 @@ describe('resolveSignedElements', () => {
   // xml-crypto's loadSignature throws with document text in its message — a
   // Reference without DigestMethod is serialised whole. That text is the
   // sender's, and none of it reaches the error (F8, L7).
-  it('says nothing of what xml-crypto says about a malformed signature', () => {
+  it('F8 / L7: says nothing of what xml-crypto says about a malformed signature', () => {
     const key = generateKeyMaterial();
     const wrapped = RESPONSE(signXml(ASSERTION(), key)).replace(
       /<DigestMethod [^>]*\/>/,

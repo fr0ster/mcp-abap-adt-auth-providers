@@ -6,6 +6,7 @@ import type {
   IRequestTarget,
 } from '@mcp-abap-adt/interfaces-auth';
 import { AuthProviderBase } from '../auth/AuthProviderBase';
+import { markHandled } from '../auth/handled';
 import { refuseFor } from '../auth/rejection';
 
 /** A user and a password: a header over HTTP, logon parameters over RFC. */
@@ -43,9 +44,12 @@ export class BasicAuthProvider extends AuthProviderBase {
   }
 
   protected onAuthorize(request: IRequestTarget): AuthOutcome {
-    request.header(
-      'Authorization',
-      `Basic ${Buffer.from(`${this.username ?? ''}:${this.password ?? ''}`).toString('base64')}`,
+    // A target answering a rejecting promise raises nothing (rule 1).
+    markHandled(
+      request.header(
+        'Authorization',
+        `Basic ${Buffer.from(`${this.username ?? ''}:${this.password ?? ''}`).toString('base64')}`,
+      ),
     );
     return OK;
   }

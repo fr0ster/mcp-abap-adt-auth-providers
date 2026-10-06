@@ -25,6 +25,7 @@ import {
   validatePort,
   withBrowserCallbackServer,
 } from '../auth/callbackServer';
+import { markHandled } from '../auth/handled';
 import {
   abortedLogin,
   browserLaunchFailed,
@@ -179,6 +180,10 @@ export class BrowserCallbackStrategy<TResult>
           // Aborted while the URL was built: nothing is opened.
           if (controller.signal.aborted) throw abortedLogin('browser');
           const waiting = server.waitForResult();
+          // Held before it is awaited: a launcher that throws at once leaves
+          // it behind, and a consumer's server may not have marked it
+          // handled (controller addition after Task 23).
+          markHandled(waiting);
           // Built here, not earlier: the launcher's messages name the URI that is
           // actually bound, which with `port: 0` nothing knew until now.
           const open =

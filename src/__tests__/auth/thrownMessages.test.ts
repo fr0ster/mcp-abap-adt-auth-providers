@@ -243,8 +243,11 @@ describe('a token-endpoint failure keeps its safe facts', () => {
       }),
     );
     const lines: string[] = [];
-    const record = (level: string) => (m: string, meta?: unknown) =>
+    const metas: Array<[string, unknown]> = [];
+    const record = (level: string) => (m: string, meta?: unknown) => {
       lines.push(`${level} ${m} ${JSON.stringify(meta ?? {})}`);
+      if (level === 'error') metas.push([m, meta]);
+    };
     const provider = new AuthorizationCodeProvider({
       uaaUrl: 'https://uaa',
       clientId: 'cid',
@@ -431,8 +434,11 @@ describe('classify and logFields are total', () => {
 
   it('a provider answers Oops and logs a fixed line when a strategy throws one', async () => {
     const lines: string[] = [];
-    const record = (level: string) => (m: string, meta?: unknown) =>
+    const metas: Array<[string, unknown]> = [];
+    const record = (level: string) => (m: string, meta?: unknown) => {
       lines.push(`${level} ${m} ${JSON.stringify(meta ?? {})}`);
+      if (level === 'error') metas.push([m, meta]);
+    };
     const logger = {
       debug: record('debug'),
       info: record('info'),
@@ -480,7 +486,7 @@ describe('classify and logFields are total', () => {
 describe('the facts are re-checked wherever they are read', () => {
   const FOREIGN = 'REVIEW_TEST_FOREIGN_CODE_19be';
 
-  it('the SAML bearer exchange logs the facts, not the description', async () => {
+  it('H6: the SAML bearer exchange and refresh log logFields of the failure, not the description', async () => {
     jest.resetAllMocks();
     (
       axios as unknown as { isAxiosError: (e: unknown) => boolean }
@@ -500,8 +506,11 @@ describe('the facts are re-checked wherever they are read', () => {
       throw failure;
     }) as unknown as Mock;
     const lines: string[] = [];
-    const record = (level: string) => (m: string, meta?: unknown) =>
+    const metas: Array<[string, unknown]> = [];
+    const record = (level: string) => (m: string, meta?: unknown) => {
       lines.push(`${level} ${m} ${JSON.stringify(meta ?? {})}`);
+      if (level === 'error') metas.push([m, meta]);
+    };
     const logger = {
       debug: record('debug'),
       info: record('info'),
@@ -537,5 +546,24 @@ describe('the facts are re-checked wherever they are read', () => {
       expect(line).toContain('invalid_grant');
       expect(line).not.toContain(FOREIGN);
     }
+    // Exactly `logFields` of each site's failure: the words, kind, status.
+    expect(metas).toEqual([
+      [
+        '[SAML] Token exchange failed',
+        {
+          error: 'the SAML token exchange failed (HTTP 400, invalid_grant)',
+          kind: 'request-failed',
+          status: 400,
+        },
+      ],
+      [
+        '[SAML] Token refresh failed',
+        {
+          error: 'the SAML token refresh failed (HTTP 400, invalid_grant)',
+          kind: 'request-failed',
+          status: 400,
+        },
+      ],
+    ]);
   });
 });

@@ -458,6 +458,30 @@ describe('E12 — redirect mismatch', () => {
     });
     expectRow(await thrownBy(() => provider.getTokens()), E12);
   });
+
+  it('A11: a configuration failure inside a moment is the moment’s refusal, its case, fields and words kept', async () => {
+    const provider = new AuthorizationCodeProvider({
+      uaaUrl: 'http://127.0.0.1:9',
+      clientId: 'client',
+      clientSecret: 'secret',
+      authorizationUrl: PREBUILT,
+      authorization: holding(USED, 'code'),
+    });
+    const outcome = await provider.authorize({
+      header: () => undefined,
+      cookies: () => undefined,
+    });
+    expect(outcome.ok).toBe(false);
+    if (outcome.ok) return;
+    expect(isMinted(outcome.refusal)).toBe(true);
+    expect(outcome.refusal).toMatchObject({
+      kind: 'configuration',
+      facts: { case: E12.case, fields: E12.fields },
+      reason: E12.reason,
+      hint: E12.hint,
+      diagnostics: E12.diagnostics,
+    });
+  });
 });
 
 describe('an unparseable authorizationUrl (spec amendment pending)', () => {

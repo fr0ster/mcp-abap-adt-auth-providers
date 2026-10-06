@@ -89,7 +89,7 @@ const COVERAGE: ReadonlyArray<readonly [string, string, string]> = [
   [
     'ladder: TokenProviderError → unknown with the operation (A13)',
     'providers/tokenProviderFailures.test.ts',
-    '%s: unknown, wrapped',
+    'A13 / L11: %s: unknown, wrapped',
   ],
   [
     'ladder: AssertionValidationError → saml-assertion (A3)',

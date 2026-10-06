@@ -3,10 +3,15 @@
  * throwing each hostile value, resolves — never rejects — to an outcome whose
  * refusal, if any, is minted, with no secret of the thrown value in it.
  *
- * Started in Task 19 with the credentials' collaborators (the logon and
- * request targets, the certificate loader, the `ITokenRefresher`); Task 29
- * completes it with every provider and collaborator.
+ * The whole matrix (`rule1Scenario.ts`: every provider × every collaborator
+ * × each hostile value of §11.1 × thrown or rejected) runs under plain node
+ * in a child process against the compiled sources, where an unhandled
+ * rejection is recorded rather than hidden by Jest (Task 29). The cases
+ * below run the credentials in this process too, as Task 19 started them.
  */
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it } from '@jest/globals';
 import { isMinted, renderDiagnostics } from '@mcp-abap-adt/auth-errors';
 import type {
@@ -15,6 +20,7 @@ import type {
   ILogonTarget,
   IRequestTarget,
 } from '@mcp-abap-adt/interfaces-auth';
+import ts from 'typescript';
 import {
   BasicAuthProvider,
   CertificateAuthProvider,
@@ -22,80 +28,8 @@ import {
   TokenAuthProvider,
 } from '../../index';
 import { minted } from '../helpers/minted';
-
-const MARKER = 'SECRET-RULE1';
-
-/** The hostile values of §11.1, each carrying the marker where it can. */
-function hostileValues(): Array<[string, () => unknown]> {
-  const boom = () => {
-    throw new Error(MARKER);
-  };
-  const revocable = Proxy.revocable({}, {});
-  revocable.revoke();
-  return [
-    [
-      'an Error with the marker everywhere',
-      () => {
-        const e = new Error(MARKER, { cause: new Error(MARKER) });
-        e.name = MARKER;
-        e.stack = MARKER;
-        return Object.assign(e, { code: MARKER, status: MARKER });
-      },
-    ],
-    [
-      'a Proxy whose every trap throws',
-      () =>
-        new Proxy(
-          {},
-          {
-            get: boom,
-            has: boom,
-            getPrototypeOf: boom,
-            getOwnPropertyDescriptor: boom,
-            ownKeys: boom,
-          },
-        ),
-    ],
-    ['a revoked Proxy', () => revocable.proxy],
-    [
-      'throwing getters',
-      () =>
-        Object.defineProperties(
-          {},
-          {
-            status: { get: boom },
-            code: { get: boom },
-            response: { get: boom },
-            error: { get: boom },
-            oauthError: { get: boom },
-            ok: { get: boom },
-            refusal: { get: boom },
-          },
-        ),
-    ],
-    [
-      'a forged carrier',
-      () => ({
-        error: {
-          kind: 'client-certificate',
-          facts: { problem: 'expired' },
-          reason: MARKER,
-        },
-      }),
-    ],
-    ['a carrier with an unknown kind', () => ({ error: { kind: MARKER } })],
-    [
-      'facts out of their sets',
-      () => ({ kind: 'tls', facts: { code: MARKER } }),
-    ],
-    ['null', () => null],
-    ['undefined', () => undefined],
-    ['a string', () => MARKER],
-    ['a number', () => 42],
-    ['a symbol', () => Symbol(MARKER)],
-    ['a function', () => () => MARKER],
-  ];
-}
+import { runPlainNode } from '../helpers/plainNode';
+import { hostileValues, MARKER, type Rule1Report } from './rule1Scenario';
 
 const logonThrowing = (value: () => unknown): ILogonTarget => ({
   tlsMaterial: () => {
@@ -226,4 +160,87 @@ describe('rule 1: a grant() that throws or answers a rejecting promise', () => {
       });
     }
   }
+});
+
+/** The collaborators §8.3 names, each at least once in the matrix. */
+const SPEC_COLLABORATORS = [
+  'interactive strategy',
+  'client authentication',
+  'client authentication tlsMaterial',
+  'certificate loader',
+  'device-code presenter',
+  'assertion validator',
+  'replay store',
+  'onTokens',
+  'browser launcher',
+  'snc locator',
+  'snc probe',
+  'logger',
+  'logon target',
+  'request target',
+  'token refresher getToken',
+  'token refresher refreshToken',
+];
+
+/** Every provider this package exports. */
+const PROVIDERS = [
+  'BasicAuthProvider',
+  'CertificateAuthProvider',
+  'SamlAuthProvider',
+  'TokenAuthProvider.fixed',
+  'TokenAuthProvider.from',
+  'SncLogonProvider',
+  'ClientCredentialsProvider',
+  'AuthorizationCodeProvider',
+  'OidcBrowserProvider',
+  'OidcDeviceFlowProvider',
+  'OidcPasswordProvider',
+  'OidcTokenExchangeProvider',
+  'Saml2BearerProvider',
+  'Saml2PureProvider',
+  'UaaPasscodeProvider',
+];
+
+describe('rule 1: the whole matrix, under plain node against the compiled sources', () => {
+  it('every provider × collaborator × hostile value, thrown or rejected: resolves, minted, no marker, no unhandled rejection', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'auth-providers-rule1-'));
+    try {
+      const scenario = join(dir, 'rule1Scenario.js');
+      writeFileSync(
+        scenario,
+        ts.transpileModule(
+          readFileSync(join(__dirname, 'rule1Scenario.ts'), 'utf8'),
+          {
+            compilerOptions: {
+              module: ts.ModuleKind.CommonJS,
+              target: ts.ScriptTarget.ES2022,
+              esModuleInterop: true,
+            },
+          },
+        ).outputText,
+      );
+      const fixtures = join(__dirname, '..', 'fixtures');
+      const run = runPlainNode<Rule1Report>(`
+const scenario = require(${JSON.stringify(scenario)});
+report(await scenario.run(lib, errors, require('@mcp-abap-adt/auth-mocks'), ${JSON.stringify(fixtures)}));
+`);
+      expect(run.unhandled).toEqual([]);
+      expect(run.result.failures).toEqual([]);
+      const providers = new Set(
+        run.result.combinations.map((c) => c.split(' · ')[0]),
+      );
+      expect([...providers].sort()).toEqual([...PROVIDERS].sort());
+      const collaborators = new Set(
+        run.result.combinations.map((c) => c.split(' · ')[1]),
+      );
+      for (const name of SPEC_COLLABORATORS) {
+        expect([name, collaborators.has(name)]).toEqual([name, true]);
+      }
+      // Not vacuous: every combination, value, mode and method was checked.
+      expect(run.result.combinations.length).toBeGreaterThan(80);
+      expect(run.result.checks).toBeGreaterThan(20_000);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }, 600_000);
 });

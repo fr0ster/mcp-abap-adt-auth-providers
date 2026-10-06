@@ -13,6 +13,7 @@ import type {
 } from '@mcp-abap-adt/interfaces-auth';
 import { AUTH_TYPE_USER_TOKEN } from '@mcp-abap-adt/interfaces-auth';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
+import { markHandled } from '../auth/handled';
 import { samlCallbackStrategy } from '../strategies';
 import { createSignedResponseValidator } from '../validation/assertionValidator';
 import { defaultReplayStore } from '../validation/inMemoryReplayStore';
@@ -136,6 +137,7 @@ export class Saml2PureProvider extends BaseTokenProvider {
     request: IRequestTarget,
     result: ITokenResult,
   ): void {
-    request.cookies(result.authorizationToken);
+    // A target answering a rejecting promise raises nothing (rule 1).
+    markHandled(request.cookies(result.authorizationToken));
   }
 }

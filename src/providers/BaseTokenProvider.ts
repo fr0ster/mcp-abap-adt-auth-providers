@@ -46,6 +46,7 @@ import {
 } from '../auth/certificateMaterial';
 import { misconfigured } from '../auth/configuration';
 import { isGrant } from '../auth/grants';
+import { markHandled } from '../auth/handled';
 import { readRejection } from '../auth/rejection';
 import { readBinding, type TokenBinding } from '../auth/tokenBinding';
 import {
@@ -1420,7 +1421,10 @@ export abstract class BaseTokenProvider
 
   /** How this provider's token rides on a request. Bearer by default. */
   protected applyToken(request: IRequestTarget, result: ITokenResult): void {
-    request.header('Authorization', `Bearer ${result.authorizationToken}`);
+    // A target answering a rejecting promise raises nothing (rule 1).
+    markHandled(
+      request.header('Authorization', `Bearer ${result.authorizationToken}`),
+    );
   }
 }
 

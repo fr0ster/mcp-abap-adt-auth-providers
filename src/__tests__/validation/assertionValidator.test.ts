@@ -2105,7 +2105,7 @@ describe("the signed-Response validator (Saml2PureProvider's default)", () => {
   // F8 (spec A.6): the verification walk refuses at its own sites; anything
   // else it throws — never by design, so forced here — is the signature's
   // malformation, with nothing of what was thrown.
-  it('refuses anything else the verification walk throws as signature-malformed, saying nothing of it', async () => {
+  it('F8: refuses anything else the verification walk throws as signature-malformed, saying nothing of it', async () => {
     const spy = jest
       .spyOn(signedNode, 'resolveSignedElements')
       .mockImplementation(() => {

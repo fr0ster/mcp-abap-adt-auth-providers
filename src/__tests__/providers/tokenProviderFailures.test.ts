@@ -1054,21 +1054,76 @@ describe('L3 total (Task 27): every throw is an AuthProviderFailure, the former 
     }
   });
 
-  it.each(lookAlikes)('%s: unknown, wrapped', async (_name, make) => {
-    const original = make();
-    const p = new TestProvider();
-    p.login.mockRejectedValue(original);
-    for (const thrown of [
-      await rejectionOf(p.getTokens()),
-      await rejectionOf(p.refreshTokens()),
-    ]) {
-      expectFailure(thrown, original);
-      expect((thrown as AuthProviderFailure).error).toMatchObject({
-        kind: 'unknown',
-        facts: { operation: 'token-request', grant: 'client_credentials' },
+  it.each(lookAlikes)(
+    'A13 / L11: %s: unknown, wrapped',
+    async (_name, make) => {
+      const original = make();
+      const p = new TestProvider();
+      p.login.mockRejectedValue(original);
+      for (const thrown of [
+        await rejectionOf(p.getTokens()),
+        await rejectionOf(p.refreshTokens()),
+      ]) {
+        expectFailure(thrown, original);
+        expect((thrown as AuthProviderFailure).error).toMatchObject({
+          kind: 'unknown',
+          facts: { operation: 'token-request', grant: 'client_credentials' },
+        });
+      }
+    },
+  );
+});
+
+describe('A14 — a refused token request through a moment', () => {
+  it.each([
+    [
+      'with a registered error',
+      {
+        status: 401,
+        data: { error: 'invalid_client', error_description: MARKER },
+      },
+      'refused',
+      'the client credentials request failed (HTTP 401, invalid_client)',
+    ],
+    [
+      'with no registered error',
+      { status: 401, data: { error_description: MARKER } },
+      'refused',
+      'the client credentials request failed (HTTP 401)',
+    ],
+    [
+      'with no response',
+      undefined,
+      'no-response',
+      'the client credentials request failed (the token endpoint gave no reason)',
+    ],
+  ])(
+    'A14 (%s): authorize() answers request-failed, verbatim',
+    async (_name, response, problem, reason) => {
+      answer(async () => {
+        throw Object.assign(new Error(MARKER), {
+          isAxiosError: true,
+          ...(response === undefined ? {} : { response }),
+        });
       });
-    }
-  });
+      const provider = new ClientCredentialsProvider({
+        uaaUrl: 'https://uaa.example',
+        clientId: 'cid',
+        clientSecret: 's',
+      });
+      const { requestTarget, request } = recordingTargets();
+      const outcome = await provider.authorize(requestTarget);
+      const refusal = mintedRefusal(outcome);
+      expect(refusal.kind).toBe('request-failed');
+      expect(refusal.facts).toMatchObject({
+        operation: 'client-credentials',
+        problem,
+      });
+      expect(refusal.reason).toBe(reason);
+      expect(request.headers).toEqual({});
+      expect(JSON.stringify(outcome)).not.toContain(MARKER);
+    },
+  );
 });
 
 describe('the grant a failure names is read once, guarded', () => {
