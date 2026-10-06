@@ -21,6 +21,7 @@
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import { describe, expect, it } from '@jest/globals';
+import { testFiles, testTitles } from './helpers/testTitles';
 
 const TESTS = __dirname;
 
@@ -173,78 +174,6 @@ const COVERAGE: ReadonlyArray<readonly [string, string, string]> = [
     '§4.4: a renewal returns the result onTokens was told, its disposition included',
   ],
 ];
-
-function testFiles(dir: string): string[] {
-  return readdirSync(dir).flatMap((name) => {
-    const path = join(dir, name);
-    if (statSync(path).isDirectory()) return testFiles(path);
-    return name.endsWith('.ts') ? [path] : [];
-  });
-}
-
-/** A character that continues an identifier or a member access. */
-function isIdentifierPart(c: string): boolean {
-  return (
-    (c >= 'a' && c <= 'z') ||
-    (c >= 'A' && c <= 'Z') ||
-    (c >= '0' && c <= '9') ||
-    c === '_' ||
-    c === '$' ||
-    c === '.'
-  );
-}
-
-/** Characters that may sit between `it` / `it.each(…)` and the title's `(`. */
-const SPACE = new Set([' ', '\n', '\t', '\r']);
-
-/**
- * The literal titles of a test file's tests: the string literal (single or
- * double quoted) that opens the argument list of `it(` or of the call after
- * `it.each(…)`. Read by plain scanning of our own sources: a `describe` title
- * is not a test and is never collected.
- */
-function testTitles(source: string): Set<string> {
-  const titles = new Set<string>();
-  const openers: number[] = [];
-  let at = source.indexOf('it(');
-  while (at !== -1) {
-    if (at === 0 || !isIdentifierPart(source[at - 1] ?? '')) {
-      openers.push(at + 'it('.length);
-    }
-    at = source.indexOf('it(', at + 1);
-  }
-  at = source.indexOf('it.each(');
-  while (at !== -1) {
-    // Skip the table: the matching parenthesis, then the call's `(`.
-    let depth = 0;
-    let i = at + 'it.each'.length;
-    for (; i < source.length; i += 1) {
-      const c = source[i];
-      if (c === '(') depth += 1;
-      else if (c === ')') {
-        depth -= 1;
-        if (depth === 0) break;
-      }
-    }
-    if (source[i + 1] === '(') openers.push(i + 2);
-    at = source.indexOf('it.each(', at + 1);
-  }
-  for (const start of openers) {
-    let i = start;
-    while (SPACE.has(source[i] ?? '')) i += 1;
-    const quote = source[i];
-    if (quote !== "'" && quote !== '"') continue;
-    let title = '';
-    for (i += 1; i < source.length && source[i] !== quote; i += 1) {
-      if (source[i] === '\\') {
-        i += 1;
-      }
-      title += source[i];
-    }
-    titles.add(title);
-  }
-  return titles;
-}
 
 describe('R6: every deleted transition case has a counterpart test that exists', () => {
   const files = new Map(

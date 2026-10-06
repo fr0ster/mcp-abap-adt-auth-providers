@@ -922,6 +922,39 @@ describe('rule 8 on kinds: the remembered refusal', () => {
     expect(t.request.headers).toEqual({});
   });
 
+  it('a renewal that throws a foreign value while the token is held: remembered with its classified error — the very one getTokens() threw (C15, Task 29)', async () => {
+    const original = new Error(MARKER);
+    class Throwing extends OidcPasswordProvider {
+      protected override async performLogin(): Promise<ITokenResult> {
+        throw original;
+      }
+    }
+    const provider = new Throwing({
+      clientId: 'client',
+      username: 'user',
+      password: 'pw',
+      tokenEndpoint: 'https://idp.example/token',
+      accessToken: boundTo(THUMB_B),
+      clientAuthentication: {
+        authenticate: async (draft) => ({
+          parameters: { client_id: draft.clientId },
+        }),
+        tlsMaterial: async () => A,
+      },
+    });
+    const t = recordingTargets();
+    const thrown = await rejectionOf(provider.getTokens());
+    expectFailure(thrown, original);
+    const produced = (thrown as AuthProviderFailure).error;
+    expect(produced.kind).toBe('unknown');
+    // Classified once, in the renewal: authorize() answers that very object.
+    for (let i = 0; i < 2; i += 1) {
+      expect(refusalOf(await provider.authorize(t.requestTarget))).toBe(
+        produced,
+      );
+    }
+  });
+
   it("rejected() renews once more; its refusal is the renewal's very error, and authorize() answers the same object", async () => {
     refusingAll();
     const provider = rotating({ refreshToken: 'R1' });
