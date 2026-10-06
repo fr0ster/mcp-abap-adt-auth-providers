@@ -1572,6 +1572,62 @@ describe('Saml2 provider default validators', () => {
       'base64',
     );
 
+  /**
+   * An unsigned samlp:Response with `status` around the same Assertion,
+   * signed by the trusted key at the Assertion level only.
+   */
+  const unsignedResponseAround = (status: string) => {
+    const signed = buildResponseSignedAtResponseLevel();
+    const start = signed.indexOf('<saml:Assertion');
+    const end =
+      signed.indexOf('</saml:Assertion>') + '</saml:Assertion>'.length;
+    const assertion = signXml(signed.slice(start, end), KEY);
+    return Buffer.from(
+      `<samlp:Response xmlns:samlp="urn:oasis:names:tc:SAML:2.0:protocol" ` +
+        `xmlns:saml="urn:oasis:names:tc:SAML:2.0:assertion" ID="_r1" Destination="${ACS}">` +
+        `<samlp:Status><samlp:StatusCode Value="${status}"/></samlp:Status>` +
+        `${assertion}</samlp:Response>`,
+      'utf8',
+    ).toString('base64');
+  };
+
+  // An unsigned Status decides nothing (review, fix 1): the signed-Response
+  // validator reads Status only once the Response is the signed element.
+  it.each([
+    'urn:oasis:names:tc:SAML:2.0:status:Responder',
+    'urn:example:status:Forged',
+  ])(
+    "Saml2PureProvider's default refuses an unsigned Response with Status %s as response-not-signed",
+    async (status) => {
+      const cookieProvider = jest.fn(async (saml: string) => saml);
+      const error = await expectSamlRejection(
+        new Saml2PureProvider({
+          idpSsoUrl: 'https://idp/sso',
+          spEntityId: AUDIENCE,
+          acsUrl: ACS,
+          authnRequestId: REQUEST_ID,
+          idpEntityId: ISSUER,
+          authorization: staticCodeStrategy({
+            redirectUri: ACS,
+            payload: unsignedResponseAround(status),
+          }),
+          assertionValidator: createSignedResponseValidator({
+            idpCertificates: [KEY.certificatePem],
+            replayStore: createInMemoryReplayStore(),
+          }),
+          cookieProvider,
+        }).getTokens(),
+        'response-not-signed',
+      );
+      expect(error.facts).toEqual({
+        rule: 'response-not-signed',
+        check: 'signedNode',
+      });
+      expect(JSON.stringify(error)).not.toContain(status);
+      expect(cookieProvider).not.toHaveBeenCalled();
+    },
+  );
+
   beforeEach(() => {
     jest.clearAllMocks();
   });

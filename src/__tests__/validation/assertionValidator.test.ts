@@ -527,6 +527,31 @@ describe("the signed-Response validator (Saml2PureProvider's default)", () => {
   // Its signed Assertion moved into the unsigned Extensions: it still
   // verifies, the Response has no direct-child Assertion, and the Status —
   // outside any signature for this validator — is never read.
+  // Status is read only once the Response is known to be the signed
+  // element: an unsigned Response's Status is an attacker's and decides
+  // nothing — not the rule, not a fact, not a diagnostic (review, fix 1).
+  it.each([
+    ['a registered', RESPONDER],
+    ['an unregistered', 'urn:example:status:Forged'],
+  ])(
+    'refuses an unsigned Response with %s non-Success Status around a signed Assertion as response-not-signed',
+    async (_kind, status) => {
+      const xml = buildResponse({ signWhat: 'assertion', status });
+      expect(signedElementsOf(xml).map((e) => e.localName)).toEqual([
+        'Assertion',
+      ]);
+      const error = await expectSamlRejection(
+        validator().validate(encode(xml), context),
+        'response-not-signed',
+      );
+      expect(error.facts).toEqual({
+        rule: 'response-not-signed',
+        check: 'signedNode',
+      });
+      expect(JSON.stringify(error)).not.toContain(status);
+    },
+  );
+
   it('the assertion-only validator keeps its order: no direct Assertion is no-direct-assertion, whatever the Status', async () => {
     const original = buildResponse({
       signWhat: 'assertion',
