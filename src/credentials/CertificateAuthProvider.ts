@@ -1,5 +1,6 @@
-import { authError, relayOutcome } from '@mcp-abap-adt/auth-errors';
+import { authError, OK, relayOutcome } from '@mcp-abap-adt/auth-errors';
 import type {
+  AuthOutcome,
   IAuthRejection,
   ICertificateMaterial,
   ILogonTarget,
@@ -14,8 +15,6 @@ import {
   certificateNotAfter,
   checkCertificateMaterial,
 } from '../auth/certificateMaterial';
-import type { AnyOutcome } from '../auth/contractTransition';
-import { OK } from '../auth/refusal';
 import { refuseFor } from '../auth/rejection';
 import { FileCertificateMaterialLoader } from './FileCertificateMaterialLoader';
 
@@ -44,7 +43,7 @@ export class CertificateAuthProvider extends AuthProviderBase {
    * certificate's, or a damaged file is refused now, in fixed words — the
    * error's own text, which can name what it read, never reaches a refusal.
    */
-  protected async onPrepare(): Promise<AnyOutcome> {
+  protected async onPrepare(): Promise<AuthOutcome> {
     this.material = null;
     const material = await this.loader.load(this.config);
     const checked = checkCertificateMaterial(material);
@@ -55,7 +54,7 @@ export class CertificateAuthProvider extends AuthProviderBase {
   }
 
   /** No other way in: the wire's Oops is this provider's own. */
-  protected onEstablish(logon: ILogonTarget): AnyOutcome {
+  protected onEstablish(logon: ILogonTarget): AuthOutcome {
     const material = this.material;
     if (!material) {
       return {
@@ -89,12 +88,12 @@ export class CertificateAuthProvider extends AuthProviderBase {
     );
   }
 
-  protected onAuthorize(): AnyOutcome {
+  protected onAuthorize(): AuthOutcome {
     return OK;
   }
 
   /** Blames the certificate only when the system refused the credential. */
-  protected onRejected(rejection: IAuthRejection): AnyOutcome {
+  protected onRejected(rejection: IAuthRejection): AuthOutcome {
     return refuseFor(rejection, 'client-certificate');
   }
 }

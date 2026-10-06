@@ -1,11 +1,28 @@
 import { expect } from '@jest/globals';
 import {
+  classify,
   isAuthProviderFailure,
   isMinted,
   readFailure,
 } from '@mcp-abap-adt/auth-errors';
-import type { AuthOutcome, IAuthRefusal } from '@mcp-abap-adt/interfaces-auth';
-import type { IAuthProviderError } from '../../auth/contractTransition';
+import type {
+  AuthOutcome,
+  IAuthProviderError,
+  IAuthRefusal,
+  Operation,
+} from '@mcp-abap-adt/interfaces-auth';
+
+/**
+ * The refusal a thrown value becomes (spec §5.4): `classify` with the
+ * operation — the one reader of a thrown value since Task 27, the class
+ * ladder gone. A failure answers its own error, whatever the operation.
+ */
+export function refusedWith(
+  error: unknown,
+  operation: Operation = 'unfamiliar-error',
+): AuthOutcome {
+  return { ok: false, refusal: classify(error, operation) };
+}
 
 /**
  * The refusal of an outcome as the error auth-errors minted: fails the test
@@ -35,9 +52,8 @@ const REFUSAL_KEYS: readonly string[] = [
 
 /**
  * An outcome as 5.4.2's tests read it: `ok`, and the refusal's `reason` and
- * `hint` (only when it has one) — the words, without the 5.x `kind` and
- * `facts` the row tests assert (TRANSITION, Task 27 restates these tests on
- * kinds). The whole outcome is still checked: the outcome holds no key but
+ * `hint` (only when it has one) — the words, without the `kind` and `facts`
+ * the row tests assert. The whole outcome is still checked: the outcome holds no key but
  * `ok` and `refusal`, and the refusal none outside a minted error's keys, so
  * a stray field fails the test as the whole-outcome `toEqual` did.
  */

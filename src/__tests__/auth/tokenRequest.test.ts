@@ -29,7 +29,6 @@ import {
   refreshOidcToken,
 } from '../../auth/oidcToken';
 import { exchangePasscode } from '../../auth/passcodeAuth';
-import { refusalFrom } from '../../auth/refusal';
 import { exchangeSamlAssertion } from '../../auth/saml2TokenExchange';
 import { refreshJwtToken } from '../../auth/tokenRefresher';
 import {
@@ -38,7 +37,7 @@ import {
   privateKeyJwt,
   tlsClientCertificate,
 } from '../../clientAuthentication';
-import { wordsOf } from '../helpers/minted';
+import { refusedWith, wordsOf } from '../helpers/minted';
 import {
   OIDC,
   phrase,
@@ -250,7 +249,7 @@ describe.each(SITES)('$name with a client authentication', (site) => {
       const error = await failureOf(site.run({ strategy: returning(result) }));
       expect(mockedAxios).not.toHaveBeenCalled();
       expect(mockedAxios.post).not.toHaveBeenCalled();
-      expect(wordsOf(refusalFrom(error, 'the token request'))).toEqual({
+      expect(wordsOf(refusedWith(error, 'token-request'))).toEqual({
         ok: false,
         refusal: {
           reason:
@@ -273,7 +272,7 @@ describe.each(SITES)('$name with a client authentication', (site) => {
     );
     expect(mockedAxios).not.toHaveBeenCalled();
     expect(mockedAxios.post).not.toHaveBeenCalled();
-    const refusal = refusalFrom(error, 'the token request');
+    const refusal = refusedWith(error, 'token-request');
     expect(wordsOf(refusal)).toEqual({
       ok: false,
       refusal: { reason: 'the token request failed (unknown error)' },
@@ -288,7 +287,7 @@ describe.each(SITES)('$name with a client authentication', (site) => {
       }),
     );
     expect(mockedAxios).not.toHaveBeenCalled();
-    expect(wordsOf(refusalFrom(error, 'the token request'))).toEqual({
+    expect(wordsOf(refusedWith(error, 'token-request'))).toEqual({
       ok: false,
       refusal: {
         reason:
@@ -315,7 +314,7 @@ describe.each(SITES)('$name with a client authentication', (site) => {
       operation: site.operation,
       code: 'SELF_SIGNED_CERT_IN_CHAIN',
     });
-    const refusal = refusalFrom(error, 'the token request');
+    const refusal = refusedWith(error, 'token-request');
     expect(wordsOf(refusal)).toEqual({
       ok: false,
       refusal: {
@@ -342,8 +341,8 @@ describe.each(SITES)('$name with a client authentication', (site) => {
       site.run({ strategy: tlsClientCertificate({ material }), material }),
     );
     expect(messageOf(withMtls)).toBe(messageOf(today));
-    expect(refusalFrom(withMtls, 'the token request')).toEqual(
-      refusalFrom(today, 'the token request'),
+    expect(refusedWith(withMtls, 'token-request')).toEqual(
+      refusedWith(today, 'token-request'),
     );
   });
 
@@ -603,7 +602,7 @@ describe('client authentication per request', () => {
     );
     expect(mockedAxios).not.toHaveBeenCalled();
     // E11 (Task 26): the configuration case, not 5.4.2's A11 words.
-    expect(wordsOf(refusalFrom(error, 'the token request'))).toEqual({
+    expect(wordsOf(refusedWith(error, 'token-request'))).toEqual({
       ok: false,
       refusal: {
         reason: 'clientId is required with a client authentication',
@@ -620,9 +619,9 @@ describe('a TLS failure, by code', () => {
     'DEPTH_ZERO_SELF_SIGNED_CERT',
     'UNABLE_TO_GET_ISSUER_CERT_LOCALLY',
   ])('%s: fixed words, the hint naming NODE_EXTRA_CA_CERTS', (code) => {
-    const refusal = refusalFrom(
+    const refusal = refusedWith(
       Object.assign(new Error('SECRET-TEXT'), { code }),
-      'the token request',
+      'token-request',
     );
     expect(wordsOf(refusal)).toEqual({
       ok: false,
@@ -636,9 +635,9 @@ describe('a TLS failure, by code', () => {
   it('CERT_HAS_EXPIRED: the server certificate has expired — no NODE_EXTRA_CA_CERTS', () => {
     expect(
       wordsOf(
-        refusalFrom(
+        refusedWith(
           Object.assign(new Error('SECRET-TEXT'), { code: 'CERT_HAS_EXPIRED' }),
-          'the token request',
+          'token-request',
         ),
       ),
     ).toEqual({
@@ -654,11 +653,11 @@ describe('a TLS failure, by code', () => {
   it('ERR_TLS_CERT_ALTNAME_INVALID: the host is not in the server certificate — no NODE_EXTRA_CA_CERTS', () => {
     expect(
       wordsOf(
-        refusalFrom(
+        refusedWith(
           Object.assign(new Error('SECRET-TEXT'), {
             code: 'ERR_TLS_CERT_ALTNAME_INVALID',
           }),
-          'the token request',
+          'token-request',
         ),
       ),
     ).toEqual({
@@ -692,9 +691,9 @@ describe('a TLS failure, by code', () => {
   ])('%s: the server refused the client certificate', (code) => {
     expect(
       wordsOf(
-        refusalFrom(
+        refusedWith(
           Object.assign(new Error('SECRET-TEXT'), { code }),
-          'the token request',
+          'token-request',
         ),
       ),
     ).toEqual({
@@ -709,11 +708,11 @@ describe('a TLS failure, by code', () => {
   it('a handshake failure is not read as a refused certificate: it has other causes', () => {
     expect(
       wordsOf(
-        refusalFrom(
+        refusedWith(
           Object.assign(new Error('SECRET-TEXT'), {
             code: 'ERR_SSL_SSL/TLS_ALERT_HANDSHAKE_FAILURE',
           }),
-          'the token request',
+          'token-request',
         ),
       ),
     ).toEqual({
@@ -725,9 +724,9 @@ describe('a TLS failure, by code', () => {
   it('a code off the list stays unknown, and nothing of the message', () => {
     expect(
       wordsOf(
-        refusalFrom(
+        refusedWith(
           Object.assign(new Error('SECRET-TEXT'), { code: 'SECRET_CODE' }),
-          'the token request',
+          'token-request',
         ),
       ),
     ).toEqual({
@@ -747,7 +746,7 @@ describe('a TLS failure, by code', () => {
       () => getTokenWithClientCredentials('https://uaa', 'cid', 'sec'),
       () => refreshJwtToken('rt', 'https://uaa', 'cid', 'sec'),
     ]) {
-      const refusal = refusalFrom(await failureOf(run()), 'the token request');
+      const refusal = refusedWith(await failureOf(run()), 'token-request');
       expect(refusal.ok === false && refusal.refusal.hint).toContain(
         'NODE_EXTRA_CA_CERTS',
       );
@@ -799,7 +798,7 @@ describe('a TLS failure, by code', () => {
     ];
     for (const [subject, run] of runs) {
       expect(
-        wordsOf(refusalFrom(await failureOf(run()), 'the token request')),
+        wordsOf(refusedWith(await failureOf(run()), 'token-request')),
       ).toEqual({
         ok: false,
         refusal: {
@@ -1167,7 +1166,7 @@ describe('the server never reads back the password or the passcode', () => {
         operation: 'device-authorization',
         code: 'SELF_SIGNED_CERT_IN_CHAIN',
       });
-      expect(wordsOf(refusalFrom(thrown, 'the token request'))).toEqual({
+      expect(wordsOf(refusedWith(thrown, 'token-request'))).toEqual({
         ok: false,
         refusal: {
           reason:

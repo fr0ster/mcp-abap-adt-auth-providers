@@ -16,9 +16,7 @@ import type {
 } from '@mcp-abap-adt/interfaces-auth';
 import { AUTH_TYPE_PASSWORD } from '@mcp-abap-adt/interfaces-auth';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
-import { asContract } from '../auth/contractShape';
 import { exchangePasscode } from '../auth/passcodeAuth';
-import type { SignalledAuthorizationRequest } from '../auth/signalledRequest';
 import { refreshJwtToken } from '../auth/tokenRefresher';
 import { manualPasscodeStrategy } from '../strategies/manualStrategies';
 import {
@@ -99,13 +97,11 @@ export class UaaPasscodeProvider extends BaseTokenProvider {
     // strategy holds a reader: it starts once the previous attempt's is
     // released (the drain, spec §6b), and the attempt's signal ends it.
     const outcome = await attempt.exclusive(() =>
-      strategy.authorize(
-        asContract<SignalledAuthorizationRequest>({
-          logger: this.logger,
-          signal: attempt.signal,
-          buildAuthorizationUrl: async () => `${this.baseUrl}/passcode`,
-        }),
-      ),
+      strategy.authorize({
+        logger: this.logger,
+        signal: attempt.signal,
+        buildAuthorizationUrl: async () => `${this.baseUrl}/passcode`,
+      }),
     );
     const passcode = outcome.payload;
 
@@ -118,13 +114,13 @@ export class UaaPasscodeProvider extends BaseTokenProvider {
       await this.requestAuth(),
       this.siteOptions(attempt.signal),
     );
-    return asContract<ITokenResult>({
+    return {
       authorizationToken: tokens.accessToken,
       refreshToken: tokens.refreshToken,
       authType: AUTH_TYPE_PASSWORD,
       expiresIn: tokens.expiresIn,
       tokenType: 'jwt',
-    });
+    };
   }
 
   /**
@@ -147,12 +143,12 @@ export class UaaPasscodeProvider extends BaseTokenProvider {
       this.logger,
       this.siteOptions(),
     );
-    return asContract<ITokenResult>({
+    return {
       authorizationToken: result.accessToken,
       refreshToken: result.refreshToken || refreshToken,
       authType: AUTH_TYPE_PASSWORD,
       expiresIn: result.expiresIn,
       tokenType: 'jwt',
-    });
+    };
   }
 }

@@ -6,7 +6,6 @@ import type {
   ISapConfig,
 } from '@mcp-abap-adt/interfaces-auth-sap';
 import { misconfigured } from '../auth/configuration';
-import { asContract } from '../auth/contractShape';
 
 export class FileCertificateMaterialLoader
   implements ICertificateMaterialLoader
@@ -24,17 +23,17 @@ export class FileCertificateMaterialLoader
       );
     }
     if (hasPfx) {
-      return asContract<ICertificateMaterial>({
+      return {
         pfx: await readFile(config.certPfxPath as string),
         passphrase: config.certPassphrase,
-      });
+      };
     }
     if (config.certPath && config.certKeyPath) {
-      return asContract<ICertificateMaterial>({
+      return {
         cert: await readFile(config.certPath),
         key: await readFile(config.certKeyPath),
         passphrase: config.certPassphrase,
-      });
+      };
     }
     // E18.
     throw misconfigured(

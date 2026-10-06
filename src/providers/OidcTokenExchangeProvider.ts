@@ -10,7 +10,6 @@ import type {
 import { AUTH_TYPE_USER_TOKEN } from '@mcp-abap-adt/interfaces-auth';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
 import { oidcEndpointMissing, oidcIssuerRequired } from '../auth/configuration';
-import { asContract } from '../auth/contractShape';
 import { discoverOidc, mtlsAlias } from '../auth/oidcDiscovery';
 import { tokenExchange } from '../auth/oidcToken';
 import {
@@ -104,13 +103,13 @@ export class OidcTokenExchangeProvider extends BaseTokenProvider {
       this.siteOptions(attempt.signal),
     );
 
-    return asContract<ITokenResult>({
+    return {
       authorizationToken: tokens.accessToken,
       refreshToken: tokens.refreshToken,
       authType: AUTH_TYPE_USER_TOKEN,
       expiresIn: tokens.expiresIn,
       tokenType: 'jwt',
-    });
+    };
   }
 
   /** No refresh grant: the base logs in once instead of refreshing. */

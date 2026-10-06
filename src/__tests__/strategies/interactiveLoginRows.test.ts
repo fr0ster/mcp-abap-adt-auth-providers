@@ -30,7 +30,6 @@ import { readFromTerminal } from '../../strategies/manualStrategies';
 import { startTokenServer, type TokenServer } from '../helpers/attemptHarness';
 
 const PORT = 7877;
-const NO_BOUND = Number.POSITIVE_INFINITY;
 
 /** The row a thrown value is: its kind, facts and words. */
 function rowOf(thrown: unknown) {
@@ -161,7 +160,7 @@ describe('A.3 — browser login rows', () => {
       let ran = false;
       const thrown = await rejection(
         withBrowserCallbackServer(
-          { port: PORT, timeoutMs: NO_BOUND, signal: AbortSignal.abort() },
+          { port: PORT, signal: AbortSignal.abort() },
           async () => {
             ran = true;
             return 'unreachable';
@@ -245,7 +244,7 @@ describe('A.3 — browser login rows', () => {
 
   it('K8: waiting after the scope ended → callback-closed', async () => {
     const ended = await withBrowserCallbackServer(
-      { port: PORT, timeoutMs: NO_BOUND },
+      { port: PORT },
       async (srv) => srv,
     );
     expect(rowOf(await rejection(ended.waitForResult()))).toEqual({
@@ -258,13 +257,10 @@ describe('A.3 — browser login rows', () => {
 
   it('K8: a pending wait when the body returns → callback-closed', async () => {
     let dangling: Promise<string> | undefined;
-    await withBrowserCallbackServer(
-      { port: PORT, timeoutMs: NO_BOUND },
-      async (srv) => {
-        dangling = srv.waitForResult();
-        return 'returned without awaiting';
-      },
-    );
+    await withBrowserCallbackServer({ port: PORT }, async (srv) => {
+      dangling = srv.waitForResult();
+      return 'returned without awaiting';
+    });
     expect(rowOf(await rejection(dangling as Promise<string>)).facts).toEqual({
       outcome: 'callback-closed',
     });

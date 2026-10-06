@@ -2,7 +2,7 @@
  * Source tests for the SAML path (plan Task 24):
  * - `AssertionValidationError` is constructed nowhere in `src`: every SAML
  *   refusal is a minted `saml-assertion` error with its rule; the class
- *   stays, unconstructed, for the refusal ladder until Task 27;
+ *   itself is deleted (Task 27);
  * - `quoteUntrusted` is gone: a document value is a diagnostic admitted by
  *   the builder, never quoted into words (spec §5.3);
  * - no regular expression runs over document text: the SAMLResponse and

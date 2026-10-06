@@ -26,6 +26,7 @@ import type {
   AssertionContext,
   IAssertionReplayStore,
   IAssertionValidator,
+  SamlAssertionError,
   ValidatedAssertion,
 } from '@mcp-abap-adt/interfaces-auth';
 import {
@@ -35,8 +36,6 @@ import {
   XMLSerializer,
 } from '@xmldom/xmldom';
 import { misconfigured } from '../auth/configuration';
-import { asContract } from '../auth/contractShape';
-import type { SamlAssertionError } from '../auth/contractTransition';
 import { parseStrictXml } from '../auth/strictXml';
 import { findDuplicateId, readRequiredId } from './documentIds';
 import { refuse, type SamlRefusal, several } from './samlRefusal';
@@ -568,7 +567,7 @@ function createValidator(
       const nameId = subject
         ? (directChild(subject, SAML_NS, 'NameID')?.textContent ?? undefined)
         : undefined;
-      return asContract<ValidatedAssertion>({
+      return {
         expiresAt,
         assertionId,
         issuer,
@@ -577,7 +576,7 @@ function createValidator(
         // The signed element, not the response: this is what a consumer may
         // parse without re-deriving what the signature covered.
         signedXml: new XMLSerializer().serializeToString(signed),
-      });
+      };
     },
   };
 }

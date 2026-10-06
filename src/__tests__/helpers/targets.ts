@@ -5,7 +5,6 @@ import type {
   ILogonTarget,
   IRequestTarget,
 } from '@mcp-abap-adt/interfaces-auth';
-import { toLegacyOutcome } from '../../auth/contractTransition';
 
 export interface RecordingTargetsOptions {
   /** false: the wire has no parameter logon (HTTP). */
@@ -29,14 +28,15 @@ export function recordingTargets(options: RecordingTargetsOptions = {}) {
     if (options.throws) throw new Error('target exploded: SECRET-IN-TARGET');
   };
   // As connection's targets answer (spec §7): minted by auth-errors.
-  const refuse = (refused: 'tls-material' | 'logon-parameters'): AuthOutcome =>
-    toLegacyOutcome({
-      ok: false,
-      refusal: authError['logon-target']({
-        wire: refused === 'tls-material' ? 'rfc' : 'http',
-        refused,
-      }),
-    });
+  const refuse = (
+    refused: 'tls-material' | 'logon-parameters',
+  ): AuthOutcome => ({
+    ok: false,
+    refusal: authError['logon-target']({
+      wire: refused === 'tls-material' ? 'rfc' : 'http',
+      refused,
+    }),
+  });
   const logonTarget: ILogonTarget = {
     tlsMaterial(material) {
       broken();

@@ -367,6 +367,11 @@ describe('token result, through getTokens()', () => {
     expect(cached.authorizationToken).toBe(fresh.authorizationToken);
     expect(Object.hasOwn(cached, 'refreshToken')).toBe(true);
     expect(cached.refreshToken).toBeUndefined();
+
+    // Spec §4.4 (Task 27): every result this package produces sets its
+    // refresh-token disposition — none given, nothing cut: keep.
+    expect(fresh.refreshTokenDisposition).toBe('keep');
+    expect(cached.refreshTokenDisposition).toBe('keep');
   });
 });
 

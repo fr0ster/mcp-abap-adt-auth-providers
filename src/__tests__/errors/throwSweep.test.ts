@@ -6,7 +6,7 @@
  * site, or the rethrow of one; and no refusal is built from free words
  * (`oops(`, the last caller removed in Task 25).
  *
- * The classes themselves stay exported until Task 27.
+ * The classes themselves are deleted (Task 27; `transitionCoverage.test.ts`).
  */
 
 import { readdirSync, readFileSync, statSync } from 'node:fs';

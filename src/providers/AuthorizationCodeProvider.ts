@@ -7,6 +7,7 @@
 
 import { type AttemptContext, authError } from '@mcp-abap-adt/auth-errors';
 import type {
+  AuthorizationRequest,
   IAuthorizationStrategy,
   ITokenResult,
   OAuth2GrantType,
@@ -19,8 +20,6 @@ import {
   getJwtAuthorizationUrl,
 } from '../auth/browserAuth';
 import { misconfigured, requiredFieldsMissing } from '../auth/configuration';
-import { asContract } from '../auth/contractShape';
-import type { SignalledAuthorizationRequest } from '../auth/signalledRequest';
 import { refreshJwtToken } from '../auth/tokenRefresher';
 import { logQuietly } from '../auth/tokenRequest';
 import { browserCallbackStrategy } from '../strategies';
@@ -71,9 +70,10 @@ export interface AuthorizationCodeProviderConfig
 /**
  * The `redirect_uri` a pre-built `authorizationUrl` declares, or `null`. A URL
  * that does not parse is a configuration error naming `authorizationUrl` —
- * never the value. TRANSITION: interfaces-auth 6.0.0's `CONFIG_CASES` has no
- * "invalid value" case, so it is `required-fields-missing` (a usable
- * `authorizationUrl` is missing) until the spec's amendment names one.
+ * never the value. Known limit (Task 26 ruling): interfaces-auth 6.0.0's
+ * `CONFIG_CASES` has no "invalid value" case, so it is
+ * `required-fields-missing` (a usable `authorizationUrl` is missing) until a
+ * later interfaces-auth major names one.
  */
 function declaredRedirectOf(prebuilt: string): string | null {
   let url: URL;
@@ -192,7 +192,7 @@ export class AuthorizationCodeProvider extends BaseTokenProvider {
     // guard lives here rather than after the fact because a mismatched redirect
     // produces no callback at all — checking the outcome would mean waiting
     // for a callback that never comes.
-    const request = {
+    const request: AuthorizationRequest = {
       logger: this.logger,
       // The attempt's signal: every waiter gone ends the login (spec §6b).
       signal: attempt.signal,
@@ -211,9 +211,7 @@ export class AuthorizationCodeProvider extends BaseTokenProvider {
 
     // The strategy holds a socket or a reader: it starts only once the
     // previous attempt has released its own (the drain, spec §6b).
-    const outcome = await attempt.exclusive(() =>
-      strategy.authorize(asContract<SignalledAuthorizationRequest>(request)),
-    );
+    const outcome = await attempt.exclusive(() => strategy.authorize(request));
 
     // The second net. A strategy that never called the builder — `staticCodeStrategy`
     // holds its payload already — passed the first check by not participating in
@@ -238,12 +236,12 @@ export class AuthorizationCodeProvider extends BaseTokenProvider {
       this.siteOptions(attempt.signal),
     );
 
-    return asContract<ITokenResult>({
+    return {
       authorizationToken: result.accessToken,
       refreshToken: result.refreshToken,
       authType: AUTH_TYPE_AUTHORIZATION_CODE,
       expiresIn: this.calculateExpiresIn(result.accessToken),
-    });
+    };
   }
 
   protected async performRefresh(
@@ -280,11 +278,11 @@ export class AuthorizationCodeProvider extends BaseTokenProvider {
 
     const expiresIn = this.calculateExpiresIn(result.accessToken);
 
-    return asContract<ITokenResult>({
+    return {
       authorizationToken: result.accessToken,
       refreshToken: result.refreshToken || refreshToken, // Keep old if new not provided
       authType: AUTH_TYPE_AUTHORIZATION_CODE,
       expiresIn,
-    });
+    };
   }
 }

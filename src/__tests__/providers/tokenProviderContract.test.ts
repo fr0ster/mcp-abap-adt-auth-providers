@@ -1,14 +1,12 @@
 import { describe, expect, it, jest } from '@jest/globals';
+import { AuthProviderFailure, authError } from '@mcp-abap-adt/auth-errors';
 import type {
   ITokenResult,
   OAuth2GrantType,
 } from '@mcp-abap-adt/interfaces-auth';
 import {
-  BrowserAuthError,
-  RefreshError,
-} from '../../errors/TokenProviderErrors';
-import {
   BaseTokenProvider,
+  refreshTokenRefused,
   type TokenProviderHooks,
 } from '../../providers/BaseTokenProvider';
 import { Saml2PureProvider } from '../../providers/Saml2PureProvider';
@@ -159,7 +157,7 @@ describe('BaseTokenProvider as IAuthProvider', () => {
     p.login
       .mockResolvedValueOnce(result('T1', 'R1'))
       .mockResolvedValueOnce(result('T3', 'R3'));
-    p.refresh.mockRejectedValue(new RefreshError('refused'));
+    p.refresh.mockRejectedValue(refreshTokenRefused());
     await p.authorize(recordingTargets().requestTarget); // login #1, presents T1
     await expect(p.rejected(refused)).resolves.toEqual({ ok: true });
     expect(p.refresh).toHaveBeenCalledTimes(1);
@@ -169,8 +167,12 @@ describe('BaseTokenProvider as IAuthProvider', () => {
   it('login refused → Oops, no second refresh or login', async () => {
     const p = new TestProvider();
     await p.authorize(recordingTargets().requestTarget); // login #1, presents T1
-    p.refresh.mockRejectedValue(new RefreshError('refused'));
-    p.login.mockRejectedValue(new BrowserAuthError('SECRET-IDP-TEXT'));
+    p.refresh.mockRejectedValue(refreshTokenRefused());
+    p.login.mockRejectedValue(
+      new AuthProviderFailure(
+        authError['interactive-login']({ outcome: 'failed' }),
+      ),
+    );
     const outcome = await p.rejected(refused);
     expect(wordsOf(outcome)).toMatchObject({
       ok: false,
@@ -183,7 +185,7 @@ describe('BaseTokenProvider as IAuthProvider', () => {
 
   it('a failure is an Oops, never a throw, and nothing is retried', async () => {
     const p = new TestProvider();
-    p.login.mockRejectedValue(new RefreshError('refused'));
+    p.login.mockRejectedValue(refreshTokenRefused());
     await expect(p.prepare()).resolves.toMatchObject({ ok: false });
     expect(p.login).toHaveBeenCalledTimes(1);
   });

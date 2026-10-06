@@ -3,10 +3,10 @@
  */
 
 import { readFailure } from '@mcp-abap-adt/auth-errors';
+import type { Operation } from '@mcp-abap-adt/interfaces-auth';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
 import axios, { type AxiosResponse } from 'axios';
 import { intervalWait, throwIfAborted, untilAborted } from './attempt';
-import type { Operation } from './contractTransition';
 import {
   attemptSite,
   type LegacyBasic,

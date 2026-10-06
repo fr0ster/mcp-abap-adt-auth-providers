@@ -4,6 +4,7 @@
 
 import type { AttemptContext } from '@mcp-abap-adt/auth-errors';
 import type {
+  AuthorizationRequest,
   IAuthorizationStrategy,
   ITokenResult,
   OAuth2GrantType,
@@ -12,12 +13,10 @@ import { AUTH_TYPE_AUTHORIZATION_CODE_PKCE } from '@mcp-abap-adt/interfaces-auth
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
 import { throwIfAborted } from '../auth/attempt';
 import { oidcEndpointMissing, oidcIssuerRequired } from '../auth/configuration';
-import { asContract } from '../auth/contractShape';
 import type { OidcCallbackResult } from '../auth/oidcBrowserAuth';
 import { discoverOidc, mtlsAlias } from '../auth/oidcDiscovery';
 import { generatePkceChallenge, generatePkceVerifier } from '../auth/oidcPkce';
 import { exchangeAuthorizationCode, refreshOidcToken } from '../auth/oidcToken';
-import type { SignalledAuthorizationRequest } from '../auth/signalledRequest';
 import { oidcCallbackStrategy } from '../strategies';
 import {
   BaseTokenProvider,
@@ -111,7 +110,7 @@ export class OidcBrowserProvider extends BaseTokenProvider {
         : ['openid', 'profile', 'email']
     ).join(' ');
 
-    const request = {
+    const request: AuthorizationRequest = {
       logger: this.logger,
       // The attempt's signal: every waiter gone ends the login (spec §6b).
       signal: attempt.signal,
@@ -137,9 +136,7 @@ export class OidcBrowserProvider extends BaseTokenProvider {
 
     // The strategy holds a socket or a reader: it starts only once the
     // previous attempt has released its own (the drain, spec §6b).
-    const outcome = await attempt.exclusive(() =>
-      strategy.authorize(asContract<SignalledAuthorizationRequest>(request)),
-    );
+    const outcome = await attempt.exclusive(() => strategy.authorize(request));
 
     const discovered = this.config.tokenEndpoint ? null : await discover();
     const tokenEndpoint =
@@ -161,13 +158,13 @@ export class OidcBrowserProvider extends BaseTokenProvider {
       this.siteOptions(attempt.signal),
     );
 
-    return asContract<ITokenResult>({
+    return {
       authorizationToken: tokens.accessToken,
       refreshToken: tokens.refreshToken,
       authType: AUTH_TYPE_AUTHORIZATION_CODE_PKCE,
       expiresIn: tokens.expiresIn,
       tokenType: 'jwt',
-    });
+    };
   }
 
   protected async performRefresh(
@@ -215,12 +212,12 @@ export class OidcBrowserProvider extends BaseTokenProvider {
       this.siteOptions(),
     );
 
-    return asContract<ITokenResult>({
+    return {
       authorizationToken: tokens.accessToken,
       refreshToken: tokens.refreshToken || refreshToken,
       authType: AUTH_TYPE_AUTHORIZATION_CODE_PKCE,
       expiresIn: tokens.expiresIn,
       tokenType: 'jwt',
-    });
+    };
   }
 }

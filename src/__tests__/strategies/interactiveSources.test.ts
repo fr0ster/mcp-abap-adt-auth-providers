@@ -3,11 +3,12 @@
  * - none of `CallbackScopeError`, `AuthorizationRefusedError`,
  *   `BrowserAuthError`, `DeviceCodePresentationError` is constructed in
  *   `src` — every end of a login is an `AuthProviderFailure`; the classes
- *   stay, unconstructed, for the refusal ladder until Task 27 (K6, the
- *   callback port validation, became `configuration` in Task 26);
- * - no timer bounds a login: `runCallbackScope`'s module reads no
- *   `timeoutMs` (the 4.x field, Decision D6) and calls no `setTimeout`, and
- *   no strategy module calls one either.
+ *   themselves are deleted in Task 27 (K6, the callback port validation,
+ *   became `configuration` in Task 26);
+ * - no timer bounds a login: `runCallbackScope`'s module calls no
+ *   `setTimeout`, no strategy module calls one either, and no `timeoutMs`
+ *   is left anywhere in `src` — interfaces-auth 6.0.0 has no such field, so
+ *   Task 23's `Number.POSITIVE_INFINITY` placeholder went with it (Task 27).
  */
 
 import { readdirSync, readFileSync, statSync } from 'node:fs';
@@ -64,6 +65,15 @@ describe('no timer bounds a login', () => {
     const text = readFileSync(join(SRC, file), 'utf8');
     expect(text).not.toContain('setTimeout');
     expect(text).not.toContain('setInterval');
+  });
+
+  it('no timeoutMs and no "no bound" placeholder anywhere in src', () => {
+    for (const file of sourceFiles(SRC)) {
+      const text = readFileSync(file, 'utf8');
+      const name = relative(SRC, file);
+      expect([name, text.includes('timeoutMs')]).toEqual([name, false]);
+      expect([name, text.includes('POSITIVE_INFINITY')]).toEqual([name, false]);
+    }
   });
 
   it('no package default bound is left anywhere in src', () => {

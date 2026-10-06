@@ -222,7 +222,6 @@ describe('RF1: a browser login has no bound of its own', () => {
       const scope = (factory as CallbackServerFactory<unknown>)(
         {
           port: PORT,
-          timeoutMs: Number.POSITIVE_INFINITY,
           signal: consumer.signal,
         },
         async () => {
@@ -239,33 +238,6 @@ describe('RF1: a browser login has no bound of its own', () => {
       expect(await portIsFree(PORT)).toBe(true);
     },
   );
-
-  it('the 4.x bound field is ignored: a scope given timeoutMs 1 stays open until aborted', async () => {
-    const consumer = new AbortController();
-    let waiting = false;
-    fakeClock();
-    const scope = watch(
-      runCallbackScope<string, string>(
-        { port: PORT, timeoutMs: 1, signal: consumer.signal },
-        () => undefined,
-        async (srv) => {
-          waiting = true;
-          return await srv.waitForResult();
-        },
-      ),
-    );
-    while (!waiting) await turn();
-    jest.advanceTimersByTime(WELL_PAST);
-    await turns(5);
-    expect(scope.settled).toBe(false);
-    expect(await portIsFree(PORT)).toBe(false);
-    consumer.abort();
-    while (!scope.settled) await turn();
-    expect(factsOf(scope.error)).toEqual({
-      outcome: 'aborted',
-      strategy: 'browser',
-    });
-  });
 });
 
 describe('RF1: a manual login has no bound of its own', () => {

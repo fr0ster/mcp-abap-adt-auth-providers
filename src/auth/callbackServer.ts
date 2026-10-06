@@ -9,9 +9,8 @@
  *
  * No timer of this package's choosing bounds a scope (spec §6a): a login ends
  * on its result, the identity provider's refusal or the consumer's
- * `AbortSignal`. The 4.x `ICallbackServerOptions` still declares a bound in
- * milliseconds as required; the scope reads no such field (Decision D6,
- * removed from the call sites in Task 27).
+ * `AbortSignal` — `ICallbackServerOptions.signal`, the only way a scope ends
+ * without a result (interfaces-auth 6.0.0 declares no bound).
  */
 
 import * as http from 'node:http';

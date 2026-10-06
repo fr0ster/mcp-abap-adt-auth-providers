@@ -15,7 +15,6 @@ import { AUTH_TYPE_AUTHORIZATION_CODE } from '@mcp-abap-adt/interfaces-auth';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
 import { throwIfAborted, untilAborted } from '../auth/attempt';
 import { oidcEndpointMissing, oidcIssuerRequired } from '../auth/configuration';
-import { asContract } from '../auth/contractShape';
 import { loginFailure } from '../auth/interactiveLogin';
 import { discoverOidc, mtlsAlias } from '../auth/oidcDiscovery';
 import {
@@ -184,13 +183,13 @@ export class OidcDeviceFlowProvider extends BaseTokenProvider {
       this.siteOptions(signal),
     );
 
-    return asContract<ITokenResult>({
+    return {
       authorizationToken: tokens.accessToken,
       refreshToken: tokens.refreshToken,
       authType: AUTH_TYPE_AUTHORIZATION_CODE,
       expiresIn: tokens.expiresIn,
       tokenType: 'jwt',
-    });
+    };
   }
 
   protected async performRefresh(
@@ -238,12 +237,12 @@ export class OidcDeviceFlowProvider extends BaseTokenProvider {
       this.siteOptions(),
     );
 
-    return asContract<ITokenResult>({
+    return {
       authorizationToken: tokens.accessToken,
       refreshToken: tokens.refreshToken || refreshToken,
       authType: AUTH_TYPE_AUTHORIZATION_CODE,
       expiresIn: tokens.expiresIn,
       tokenType: 'jwt',
-    });
+    };
   }
 }

@@ -25,9 +25,6 @@ import type {
 import axios from 'axios';
 import { certificateThumbprint } from '../../auth/certificateMaterial';
 import { tlsClientCertificate } from '../../clientAuthentication/tlsClientCertificate';
-import { AssertionValidationError } from '../../errors/AssertionValidationError';
-import { CertificateMaterialError } from '../../errors/CertificateMaterialError';
-import { ValidationError } from '../../errors/TokenProviderErrors';
 import { AuthorizationCodeProvider } from '../../providers/AuthorizationCodeProvider';
 import {
   BaseTokenProvider,
@@ -700,10 +697,52 @@ describe('refresh-token disposition (spec §6b): a refused refresh token is disc
     expect(p.dispositions()).toEqual(['keep', 'replace', 'keep']);
   });
 
-  it('what getTokens() returns carries no disposition: only the notification does (resultShapes unchanged)', async () => {
+  // Spec §4.4 ("every result auth-providers 6.0.0 produces sets it"; Task 27
+  // decision — replaces Task 22's "the returned result carries none"): a
+  // renewal returns exactly what onTokens was told; a cache hit says what the
+  // logical state says.
+  it('§4.4: a renewal returns the result onTokens was told, its disposition included', async () => {
     const p = new TestProvider();
-    const returned = await p.getTokens();
-    expect(Object.hasOwn(returned, 'refreshTokenDisposition')).toBe(false);
+    const login = await p.getTokens();
+    expect(login.refreshTokenDisposition).toBe('replace');
+    p.expire();
+    const refreshed = await p.refreshTokens();
+    expect(refreshed.refreshTokenDisposition).toBe('replace');
+    expect(refreshed.refreshToken).toBe('R2');
+    const told = p.events.flatMap((event) =>
+      event.step === 'onTokens' ? [event.result] : [],
+    );
+    expect(told).toEqual([login, refreshed]);
+  });
+
+  it('§4.4: a cache hit carries replace with a usable refresh token, keep without one', async () => {
+    const withRefresh = new TestProvider();
+    await withRefresh.getTokens();
+    const cached = await withRefresh.getTokens();
+    expect(withRefresh.steps()).toEqual(['login', 'onTokens:replace']);
+    expect(cached.refreshToken).toBe('R1');
+    expect(cached.refreshTokenDisposition).toBe('replace');
+
+    const without = new TestProvider();
+    without.login.mockResolvedValue(result('T1'));
+    await without.getTokens();
+    const hit = await without.getTokens();
+    expect(Object.hasOwn(hit, 'refreshToken')).toBe(true);
+    expect(hit.refreshToken).toBeUndefined();
+    expect(hit.refreshTokenDisposition).toBe('keep');
+  });
+
+  it('§4.4: after a refused refresh and a login without one, the result and the cache hit both say clear', async () => {
+    const p = new TestProvider();
+    await p.getTokens(); // T1 / R1
+    p.expire();
+    p.refresh.mockRejectedValue(new Error('refused'));
+    p.login.mockResolvedValue(result('T3'));
+    const relogged = await p.getTokens();
+    expect(relogged.refreshTokenDisposition).toBe('clear');
+    const cached = await p.getTokens();
+    expect(cached.authorizationToken).toBe('T3');
+    expect(cached.refreshTokenDisposition).toBe('clear');
   });
 
   it('a refresh token refused by the server (a 400 invalid_grant) clears it, then logs in', async () => {
@@ -929,12 +968,49 @@ describe('rule 8 on kinds: the remembered refusal', () => {
   });
 });
 
-describe('TRANSITION (Task 27): the classes no site constructs any more are classified', () => {
-  // Task 26 ended A11's pass-through: every configuration throw is a minted
-  // `configuration` error with its case, and a ValidationError a consumer
-  // throws answers `required-fields-missing` with its known names (A11).
-  it('ValidationError no longer passes through: configuration, wrapped (A11, Task 26)', async () => {
-    const original = new ValidationError(MARKER, ['clientId', MARKER]);
+describe('L3 total (Task 27): every throw is an AuthProviderFailure, the former classes gone', () => {
+  // The 5.x classes are deleted (spec §6): nothing passes through as it is
+  // any more (`isUnmintedRung` and the A3/A11/A12 pass-through are gone), and
+  // `classify` alone reads a thrown value — never its class name, its
+  // `missingFields` (L12) or its `check`: a look-alike of a former class is
+  // `unknown` with the operation and the grant (L11, A13).
+  class ValidationError extends Error {
+    readonly missingFields = ['clientId', MARKER];
+    constructor() {
+      super(MARKER);
+      this.name = 'ValidationError';
+    }
+  }
+  const lookAlikes: [string, () => unknown][] = [
+    ['a ValidationError look-alike (A11)', () => new ValidationError()],
+    [
+      'an AssertionValidationError look-alike (A3)',
+      () =>
+        Object.assign(new Error(MARKER), {
+          name: 'AssertionValidationError',
+          check: 'status',
+        }),
+    ],
+    [
+      'a ServiceKeyError look-alike (A12, no producer)',
+      () =>
+        Object.assign(new Error(MARKER), {
+          name: 'ServiceKeyError',
+          missingFields: ['clientId'],
+        }),
+    ],
+    [
+      'a CertificateMaterialError look-alike (A4)',
+      () =>
+        Object.assign(new Error(MARKER), {
+          name: 'CertificateMaterialError',
+          incomplete: false,
+          expired: true,
+        }),
+    ],
+  ];
+  it.each(lookAlikes)('%s: unknown, wrapped', async (_name, make) => {
+    const original = make();
     const p = new TestProvider();
     p.login.mockRejectedValue(original);
     for (const thrown of [
@@ -943,38 +1019,10 @@ describe('TRANSITION (Task 27): the classes no site constructs any more are clas
     ]) {
       expectFailure(thrown, original);
       expect((thrown as AuthProviderFailure).error).toMatchObject({
-        kind: 'configuration',
-        facts: { case: 'required-fields-missing', fields: ['clientId'] },
+        kind: 'unknown',
+        facts: { operation: 'token-request', grant: 'client_credentials' },
       });
     }
-  });
-
-  // Task 24 ended A3's pass-through: every SAML site throws its minted
-  // `saml-assertion` rule, and the class — constructed by no site — is any
-  // other own class when a consumer throws one (A13: `unknown`).
-  it('AssertionValidationError no longer passes through: classified and wrapped (A3, Task 24)', async () => {
-    const original = new AssertionValidationError('status', MARKER);
-    const p = new TestProvider();
-    p.login.mockRejectedValue(original);
-    for (const thrown of [
-      await rejectionOf(p.getTokens()),
-      await rejectionOf(p.refreshTokens()),
-    ]) {
-      expectFailure(thrown, original);
-      expect((thrown as AuthProviderFailure).error.kind).toBe('unknown');
-    }
-  });
-
-  it('every other class of this package is classified and wrapped (CertificateMaterialError)', async () => {
-    const original = new CertificateMaterialError(false, true);
-    const p = new TestProvider();
-    p.login.mockRejectedValue(original);
-    const thrown = await rejectionOf(p.getTokens());
-    expectFailure(thrown, original);
-    expect((thrown as AuthProviderFailure).error).toMatchObject({
-      kind: 'client-certificate',
-      facts: { problem: 'expired' },
-    });
   });
 });
 

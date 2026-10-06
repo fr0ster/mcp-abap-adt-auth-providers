@@ -51,20 +51,17 @@ async function replies(
   paths: string[],
 ): Promise<Reply[]> {
   const pending: Promise<Reply>[] = [];
-  await factory(
-    { port: 0, timeoutMs: 5000 },
-    async (srv: ICallbackServerHandle<unknown>) => {
-      const result = srv.waitForResult();
-      void result.catch(() => undefined);
-      for (const path of paths) {
-        const reply = request(srv.port, path);
-        pending.push(reply);
-        await reply;
-      }
-      srv.fail(new Error('done'));
-      await result.catch(() => undefined);
-    },
-  ).catch(() => undefined);
+  await factory({ port: 0 }, async (srv: ICallbackServerHandle<unknown>) => {
+    const result = srv.waitForResult();
+    void result.catch(() => undefined);
+    for (const path of paths) {
+      const reply = request(srv.port, path);
+      pending.push(reply);
+      await reply;
+    }
+    srv.fail(new Error('done'));
+    await result.catch(() => undefined);
+  }).catch(() => undefined);
   return Promise.all(pending);
 }
 

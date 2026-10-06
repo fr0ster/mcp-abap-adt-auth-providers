@@ -1,19 +1,22 @@
 /**
- * Appendix A.1 rows A1 and A13–A16 through `refusalFrom`, and the closed
- * operation every `what` of this package maps to (A.8, L10).
+ * Appendix A.1 rows A1, A15 and A16 through auth-errors' `classify` — the one
+ * reader of a thrown value since Task 27 (`refusalFrom` and its class ladder
+ * are gone with the classes, spec §6) — and A.8: no `what` string is left in
+ * `src`, every site names a closed operation.
+ *
+ * A13 (another own class) and A14 (`TokenEndpointError`) went with their
+ * classes: a look-alike of a former class is `unknown`
+ * (`tokenProviderFailures.test.ts`, "L3 total"), and `request-failed` is
+ * built by `sendTokenRequest` itself (`tokenRequestSite.test.ts`).
  */
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from '@jest/globals';
-import { authError, isMinted } from '@mcp-abap-adt/auth-errors';
-import { operationFor, refusalFrom } from '../../auth/refusal';
-import { TokenEndpointError } from '../../errors/TokenEndpointError';
-import { TokenProviderError } from '../../errors/TokenProviderErrors';
-import { mintedRefusal } from '../helpers/minted';
+import { classify } from '@mcp-abap-adt/auth-errors';
 
 const MARKER = 'SECRET-MARKER';
 
-describe('A.1 — refusalFrom rows', () => {
+describe('A.1 — classify rows', () => {
   it('A1: a value whose reading throws → unknown with the operation, verbatim', () => {
     const boom = () => {
       throw new Error(MARKER);
@@ -29,9 +32,7 @@ describe('A.1 — refusalFrom rows', () => {
         ownKeys: boom,
       },
     );
-    const error = mintedRefusal(
-      refusalFrom(hostile, 'client_credentials token request'),
-    );
+    const error = classify(hostile, 'token-request', 'client_credentials');
     expect(error.kind).toBe('unknown');
     expect(error.facts).toEqual({
       operation: 'token-request',
@@ -43,78 +44,13 @@ describe('A.1 — refusalFrom rows', () => {
     expect(JSON.stringify(error)).not.toContain(MARKER);
   });
 
-  it('A13: another own error → unknown with the operation, its class label lost', () => {
-    const own = mintedRefusal(
-      refusalFrom(
-        new TokenProviderError(MARKER, 'CODE'),
-        'password token request',
-      ),
-    );
-    expect(own.kind).toBe('unknown');
-    expect(own.facts).toEqual({
-      operation: 'token-request',
-      grant: 'password',
-    });
-    expect(own.reason).toBe('password token request failed (unknown error)');
-    expect(JSON.stringify(own)).not.toContain('TokenProviderError');
-  });
-
-  it('A14: a TokenEndpointError → request-failed, verbatim with and without a response', () => {
-    const refused = mintedRefusal(
-      refusalFrom(
-        new TokenEndpointError(MARKER, {
-          status: 401,
-          oauthError: 'invalid_client',
-        }),
-        'client_credentials token request',
-      ),
-    );
-    expect(refused.kind).toBe('request-failed');
-    expect(refused.facts).toEqual({
-      operation: 'token-request',
-      grant: 'client_credentials',
-      problem: 'refused',
-      status: 401,
-      oauthError: 'invalid_client',
-    });
-    expect(refused.reason).toBe(
-      'client_credentials token request failed (HTTP 401, invalid_client)',
-    );
-
-    const silent = mintedRefusal(
-      refusalFrom(new TokenEndpointError(MARKER, {}), 'the token request'),
-    );
-    expect(silent.facts).toEqual({
-      operation: 'token-request',
-      problem: 'no-response',
-    });
-    expect(silent.reason).toBe(
-      'the token request failed (the token endpoint gave no reason)',
-    );
-
-    const reset = mintedRefusal(
-      refusalFrom(
-        new TokenEndpointError(MARKER, { code: 'ECONNRESET' }),
-        'the token request',
-      ),
-    );
-    expect(reset.facts).toEqual({
-      operation: 'token-request',
-      problem: 'no-response',
-      code: 'ECONNRESET',
-    });
-    expect(reset.reason).toBe('the token request failed (ECONNRESET)');
-    expect(JSON.stringify([refused, silent, reset])).not.toContain(MARKER);
-  });
-
   it('A15: a TLS failure code → tls, verbatim words and hint', () => {
-    const error = mintedRefusal(
-      refusalFrom(
-        Object.assign(new Error(MARKER), {
-          code: 'ERR_SSL_TLSV1_ALERT_UNKNOWN_CA',
-        }),
-        'authorization_code token request',
-      ),
+    const error = classify(
+      Object.assign(new Error(MARKER), {
+        code: 'ERR_SSL_TLSV1_ALERT_UNKNOWN_CA',
+      }),
+      'token-request',
+      'authorization_code',
     );
     expect(error.kind).toBe('tls');
     expect(error.facts).toEqual({
@@ -131,13 +67,11 @@ describe('A.1 — refusalFrom rows', () => {
   });
 
   it('A16: a foreign value → unknown with its allowlisted facts, verbatim', () => {
-    const answered = mintedRefusal(
-      refusalFrom(
-        Object.assign(new Error(MARKER), {
-          response: { status: 500, data: { error: 'server_error' } },
-        }),
-        'the SAML token exchange',
-      ),
+    const answered = classify(
+      Object.assign(new Error(MARKER), {
+        response: { status: 500, data: { error: 'server_error' } },
+      }),
+      'saml-token-exchange',
     );
     expect(answered.kind).toBe('unknown');
     expect(answered.facts).toEqual({
@@ -149,11 +83,9 @@ describe('A.1 — refusalFrom rows', () => {
       'the SAML token exchange failed (HTTP 500, server_error)',
     );
 
-    const unanswered = mintedRefusal(
-      refusalFrom(
-        { message: MARKER, key: 'SECRET_KEY', code: 'ENOENT' },
-        'loading the certificate',
-      ),
+    const unanswered = classify(
+      { message: MARKER, key: 'SECRET_KEY', code: 'ENOENT' },
+      'loading-certificate',
     );
     expect(unanswered.facts).toEqual({
       operation: 'loading-certificate',
@@ -163,7 +95,7 @@ describe('A.1 — refusalFrom rows', () => {
       'loading the certificate failed (unknown error, ENOENT)',
     );
 
-    const bare = mintedRefusal(refusalFrom(MARKER, 'onTokens'));
+    const bare = classify(MARKER, 'on-tokens-hook');
     expect(bare.facts).toEqual({ operation: 'on-tokens-hook' });
     expect(bare.reason).toBe('onTokens failed (unknown error)');
     expect(JSON.stringify([answered, unanswered, bare])).not.toContain(MARKER);
@@ -203,46 +135,12 @@ function whatLiterals(): string[] {
 describe('A.8 — every what of this package is a closed operation', () => {
   const literals = whatLiterals();
 
-  it('no call site is left: every what moved to a closed operation', () => {
+  it('no call site is left: every what moved to a closed operation (refusalFrom, loggedError, refusalWords gone in Task 27)', () => {
     // 'the probe' left with `logFields` (H5: Task 25).
     // 'opening the browser' and 'the presenter' left with `logFields`
     // (H7, H8, H3: Task 23).
     // 'the token request' left with `tokenEndpointError` (D2, H9: Task 21).
     // 'onTokens' and 'the refresh' left with `logFields` (H1, H2: Task 22).
     expect(literals).toEqual([]);
-  });
-
-  it('each what of the table → an operation whose words are its words (A1)', () => {
-    for (const what of ['the probe', 'the presenter', 'opening the browser']) {
-      const mapped = operationFor(what);
-      expect(mapped.operation).not.toBe('unfamiliar-error');
-      expect(authError.unknown(mapped).reason).toBe(
-        `${what} failed (unknown error)`,
-      );
-    }
-  });
-
-  it.each([
-    'authorization_code',
-    'authorization_code_pkce',
-    'password',
-    'client_credentials',
-    'user_token',
-    'client_x509',
-    'saml2_bearer',
-  ])('"%s token request" → token-request with that grant', (grant) => {
-    expect(operationFor(`${grant} token request`)).toEqual({
-      operation: 'token-request',
-      grant,
-    });
-  });
-
-  it('a what this package does not use → the unfamiliar operation (L10)', () => {
-    expect(operationFor('it')).toEqual({ operation: 'unfamiliar-error' });
-    expect(operationFor('nonsense token request')).toEqual({
-      operation: 'unfamiliar-error',
-    });
-    const error = refusalFrom(new Error(MARKER), 'it');
-    expect(!error.ok && isMinted(error.refusal)).toBe(true);
   });
 });

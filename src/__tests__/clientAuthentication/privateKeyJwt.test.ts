@@ -2,9 +2,8 @@ import { generateKeyPairSync, type KeyObject, verify } from 'node:crypto';
 import { describe, expect, it } from '@jest/globals';
 import { isAuthProviderFailure, readFailure } from '@mcp-abap-adt/auth-errors';
 import type { ITokenRequestDraft } from '@mcp-abap-adt/interfaces-auth';
-import { refusalFrom } from '../../auth/refusal';
 import { privateKeyJwt } from '../../clientAuthentication';
-import { wordsOf } from '../helpers/minted';
+import { refusedWith, wordsOf } from '../helpers/minted';
 
 const draft = {
   endpoint: 'https://uaa.example/oauth/token',
@@ -199,7 +198,7 @@ describe('privateKeyJwt — a key that does not fit', () => {
     const e = await privateKeyJwt({ key: pem, algorithm: 'RS256' })
       .authenticate(draft)
       .catch((x) => x);
-    const outcome = refusalFrom(e, 'x');
+    const outcome = refusedWith(e);
     expect(wordsOf(outcome)).toEqual({
       ok: false,
       refusal: {

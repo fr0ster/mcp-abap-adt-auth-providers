@@ -4,15 +4,14 @@
 
 import { type AttemptContext, authError } from '@mcp-abap-adt/auth-errors';
 import type {
+  AuthorizationRequest,
   IAssertionReplayStore,
   IAssertionValidator,
   IAuthorizationStrategy,
 } from '@mcp-abap-adt/interfaces-auth';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
 import { misconfigured, requiredFieldsMissing } from '../auth/configuration';
-import { asContract } from '../auth/contractShape';
 import { buildSamlAuthorizationUrl } from '../auth/saml2Auth';
-import type { SignalledAuthorizationRequest } from '../auth/signalledRequest';
 import { isShippedValidator } from '../validation/assertionValidator';
 
 export interface Saml2CommonConfig {
@@ -180,7 +179,7 @@ export async function getSamlAssertion(
   const declaredAcs = config.acsUrl;
   let mintedRequestId: string | undefined;
 
-  const request = {
+  const request: AuthorizationRequest = {
     logger: config.logger,
     // The attempt's signal: every waiter gone ends the login (spec §6b).
     ...(attempt === undefined ? {} : { signal: attempt.signal }),
@@ -217,8 +216,7 @@ export async function getSamlAssertion(
   };
 
   const strategy = config.authorization;
-  const authorize = () =>
-    strategy.authorize(asContract<SignalledAuthorizationRequest>(request));
+  const authorize = () => strategy.authorize(request);
   // The strategy holds an exclusive resource (a socket, a reader): it starts
   // only once the previous attempt has released its own (the drain).
   const outcome = await (attempt ? attempt.exclusive(authorize) : authorize());

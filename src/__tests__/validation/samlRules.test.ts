@@ -15,7 +15,7 @@ import {
   isAssertionCheck,
   isAssertionRule,
 } from '@mcp-abap-adt/auth-errors';
-import type { AssertionRule } from '../../auth/contractTransition';
+import type { AssertionRule } from '@mcp-abap-adt/interfaces-auth';
 import { refuse } from '../../validation/samlRefusal';
 import {
   expectSamlRefusal,

@@ -5,11 +5,14 @@
  * strategy's options or a static factory's options is a compile error, and
  * `DEFAULT_LOGIN_TIMEOUT_MS` is not exported. A consumer that wants a bound
  * composes `signal: AbortSignal.timeout(ms)`, which compiles everywhere.
- * (The `ICallbackServerOptions` assertion waits for Task 27: 4.x declares
- * the field required.)
+ * Nor does interfaces-auth 6.0.0's `ICallbackServerOptions` (§4.4): its
+ * `timeoutMs` is gone, `signal` is the only way a scope ends without a result.
  */
 
-import type { CallbackServerFactory } from '@mcp-abap-adt/interfaces-auth';
+import type {
+  CallbackServerFactory,
+  ICallbackServerOptions,
+} from '@mcp-abap-adt/interfaces-auth';
 import {
   AuthorizationCodeProvider,
   BrowserCallbackStrategy,
@@ -87,3 +90,12 @@ export const factories = [
   // @ts-expect-error no login bound on UaaPasscodeProvider.fromTerminal
   UaaPasscodeProvider.fromTerminal(passcode, { timeoutMs: 1000 }),
 ];
+
+// The callback server's options (interfaces-auth 6.0.0, spec §4.4).
+export const serverOptions: ICallbackServerOptions = { port: 0, signal };
+export const serverOptionsWithBound: ICallbackServerOptions = {
+  port: 0,
+  signal,
+  // @ts-expect-error no login bound on ICallbackServerOptions
+  timeoutMs: 1000,
+};

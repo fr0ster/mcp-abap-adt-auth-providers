@@ -1,12 +1,11 @@
 import { describe, expect, it } from '@jest/globals';
 import { isAuthProviderFailure, readFailure } from '@mcp-abap-adt/auth-errors';
-import { refusalFrom } from '../../auth/refusal';
 import {
   clientSecretBasic,
   clientSecretPost,
   noClientAuthentication,
 } from '../../clientAuthentication';
-import { wordsOf } from '../helpers/minted';
+import { refusedWith, wordsOf } from '../helpers/minted';
 
 const draft = {
   endpoint: 'https://uaa.example/oauth/token',
@@ -57,7 +56,7 @@ describe('clientSecretBasic', () => {
     // A7 (Task 26): an AuthProviderFailure, no longer BasicClientIdError.
     expect(isAuthProviderFailure(failure)).toBe(true);
     expect(String((failure as Error).message)).not.toContain('my:client');
-    expect(wordsOf(refusalFrom(failure, 'the token request'))).toEqual({
+    expect(wordsOf(refusedWith(failure, 'token-request'))).toEqual({
       ok: false,
       refusal: {
         reason: "the client id contains ':', which raw Basic cannot carry",
@@ -93,7 +92,7 @@ describe('clientSecretBasic', () => {
           allowed: 'basic-encoding',
         },
       });
-      expect(wordsOf(refusalFrom(thrown, 'the token request'))).toEqual({
+      expect(wordsOf(refusedWith(thrown, 'token-request'))).toEqual({
         ok: false,
         refusal: {
           reason: "clientSecretBasic needs encoding: 'raw' or 'form'",

@@ -38,12 +38,13 @@ import type {
   IClientAuthentication,
   ITokenRequestAuthentication,
   ITokenRequestDraft,
+  OAuth2GrantType,
+  Operation,
 } from '@mcp-abap-adt/interfaces-auth';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
 import axios, { type AxiosRequestConfig, type AxiosResponse } from 'axios';
 import { abortedFailure } from './attempt';
 import { assertNotExpired } from './certificateMaterial';
-import type { OAuth2GrantType, Operation } from './contractTransition';
 import {
   allowlistedCode,
   integerStatus,

@@ -14,7 +14,6 @@ import { AUTH_TYPE_CLIENT_CREDENTIALS } from '@mcp-abap-adt/interfaces-auth';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
 import { getTokenWithClientCredentials } from '../auth/clientCredentialsAuth';
 import { requiredFieldsMissing } from '../auth/configuration';
-import { asContract } from '../auth/contractShape';
 import {
   BaseTokenProvider,
   type ClientAuthenticationConfig,
@@ -76,12 +75,12 @@ export class ClientCredentialsProvider extends BaseTokenProvider {
       this.siteOptions(attempt.signal),
     );
 
-    return asContract<ITokenResult>({
+    return {
       authorizationToken: result.accessToken,
       refreshToken: undefined, // client_credentials doesn't provide refresh token
       authType: AUTH_TYPE_CLIENT_CREDENTIALS,
       expiresIn: result.expiresIn,
-    });
+    };
   }
 
   /** No refresh grant: the base logs in once instead of refreshing. */

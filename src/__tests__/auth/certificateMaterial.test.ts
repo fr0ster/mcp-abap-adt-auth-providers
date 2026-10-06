@@ -7,9 +7,7 @@ import {
   certificateThumbprint,
   checkCertificateMaterial,
 } from '../../auth/certificateMaterial';
-import { refusalFrom } from '../../auth/refusal';
-import { CertificateMaterialError } from '../../errors/CertificateMaterialError';
-import { wordsOf } from '../helpers/minted';
+import { refusedWith, wordsOf } from '../helpers/minted';
 
 const dir = join(__dirname, '..', 'fixtures', 'certificates');
 const read = (name: string) => readFileSync(join(dir, name));
@@ -95,7 +93,7 @@ describe('an expired client certificate', () => {
     ).toEqual(EXPIRED);
   });
 
-  it('throws a client-certificate failure, read by refusalFrom into the same words (A4)', () => {
+  it('throws a client-certificate failure, read by classify into the same words (A4)', () => {
     const e = thrown(() =>
       assertCertificateMaterial({
         cert: read('expired.crt'),
@@ -104,7 +102,7 @@ describe('an expired client certificate', () => {
     );
     // A4 (Task 26): a client-certificate failure, no longer the class.
     expect(isAuthProviderFailure(e)).toBe(true);
-    expect(wordsOf(refusalFrom(e, 'x'))).toEqual(EXPIRED);
+    expect(wordsOf(refusedWith(e))).toEqual(EXPIRED);
   });
 
   it('a certificate still valid is not refused', () => {
@@ -153,7 +151,7 @@ describe('certificateThumbprint', () => {
     const e = thrown(() => certificateThumbprint({ cert: read('client.crt') }));
     // A4 (Task 26): a client-certificate failure, no longer the class.
     expect(isAuthProviderFailure(e)).toBe(true);
-    expect(wordsOf(refusalFrom(e, 'x'))).toEqual({
+    expect(wordsOf(refusedWith(e))).toEqual({
       ok: false,
       refusal: {
         reason: 'the client certificate is incomplete',
@@ -171,7 +169,7 @@ describe('certificateThumbprint', () => {
     );
     // A4 (Task 26): a client-certificate failure, no longer the class.
     expect(isAuthProviderFailure(e)).toBe(true);
-    const out = refusalFrom(e, 'x');
+    const out = refusedWith(e);
     expect(wordsOf(out)).toEqual({
       ok: false,
       refusal: {
@@ -194,9 +192,15 @@ describe('certificateThumbprint', () => {
   });
 });
 
-describe('checkCertificateMaterial and a forged CertificateMaterialError', () => {
+// B14 (Task 27: the class is gone): a material getter throwing a look-alike
+// of the former CertificateMaterialError — its flags and its own `words` —
+// is a foreign throw: `client-certificate` `unusable`, its text nowhere.
+describe('checkCertificateMaterial and a material getter throwing a look-alike', () => {
   const forgedMaterial = (words: PropertyDescriptor) => {
-    const forged = new CertificateMaterialError(true);
+    const forged = Object.assign(new Error('MARK'), {
+      name: 'CertificateMaterialError',
+      incomplete: true,
+    });
     Object.defineProperty(forged, 'words', words);
     return {
       get pfx(): Buffer {
@@ -205,17 +209,18 @@ describe('checkCertificateMaterial and a forged CertificateMaterialError', () =>
     };
   };
 
-  it('own `words` carrying a marker → the fixed words', () => {
+  it('own `words` carrying a marker → the fixed unusable words', () => {
     const outcome = checkCertificateMaterial(
       forgedMaterial({ get: () => ({ reason: 'MARK', hint: 'MARK' }) }),
     );
     expect(wordsOf(outcome)).toEqual({
       ok: false,
       refusal: {
-        reason: 'the client certificate is incomplete',
-        hint: 'give a PFX, or a certificate together with its key',
+        reason: 'the client certificate could not be used',
+        hint: 'check the certificate, the key and the passphrase, and that a PFX uses current encryption (not legacy RC2)',
       },
     });
+    expect(JSON.stringify(outcome)).not.toContain('MARK');
   });
 
   it('a throwing `words` getter → fixed words, no throw', () => {

@@ -42,13 +42,13 @@ import {
   visit,
 } from '@mcp-abap-adt/auth-mocks';
 import type {
+  AssertionRule,
   IAssertionReplayStore,
   IAssertionValidator,
   ITokenResult,
   ValidatedAssertion,
 } from '@mcp-abap-adt/interfaces-auth';
 import { DOMParser } from '@xmldom/xmldom';
-import type { AssertionRule } from '../../auth/contractTransition';
 import { Saml2PureProvider } from '../../providers/Saml2PureProvider';
 import { samlCallbackStrategy } from '../../strategies';
 import {

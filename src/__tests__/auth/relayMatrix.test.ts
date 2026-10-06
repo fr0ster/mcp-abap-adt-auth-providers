@@ -15,7 +15,6 @@ import type {
   ILogonTarget,
 } from '@mcp-abap-adt/interfaces-auth';
 import { certificateThumbprint } from '../../auth/certificateMaterial';
-import { toLegacyOutcome } from '../../auth/contractTransition';
 import { BasicAuthProvider } from '../../credentials/BasicAuthProvider';
 import { CertificateAuthProvider } from '../../credentials/CertificateAuthProvider';
 import { OidcPasswordProvider } from '../../providers/OidcPasswordProvider';
@@ -36,10 +35,10 @@ const A: ICertificateMaterial = {
 };
 
 /** One minted refusal, the very object a target returns or throws. */
-const WIRE_REFUSAL = toLegacyOutcome({
+const WIRE_REFUSAL: AuthOutcome = {
   ok: false,
   refusal: authError['logon-target']({ wire: 'rfc', refused: 'tls-material' }),
-});
+};
 const GARBAGE = { ok: 'maybe', reason: MARKER };
 
 type Answer = 'returned' | 'thrown' | 'garbage returned' | 'garbage thrown';

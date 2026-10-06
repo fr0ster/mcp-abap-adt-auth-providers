@@ -10,7 +10,6 @@ export { AuthorizationCodeProvider } from './AuthorizationCodeProvider';
 export type {
   TokenProviderDebug,
   TokenProviderHooks,
-  TokenRequestOptions,
 } from './BaseTokenProvider';
 export { BaseTokenProvider } from './BaseTokenProvider';
 export type { ClientCredentialsProviderConfig } from './ClientCredentialsProvider';

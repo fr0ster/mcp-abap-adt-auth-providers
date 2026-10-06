@@ -12,10 +12,7 @@ import type {
   OAuth2GrantType,
 } from '@mcp-abap-adt/interfaces-auth';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
-import {
-  BaseTokenProvider,
-  type TokenResultWithDisposition,
-} from '../../providers/BaseTokenProvider';
+import { BaseTokenProvider } from '../../providers/BaseTokenProvider';
 import { Arrivals, type Deferred, deferred } from './attemptHarness';
 
 export interface ScriptedLogin {
@@ -29,7 +26,7 @@ export interface ScriptedRefresh {
 }
 
 export interface ScriptedConfig {
-  onTokens?: (result: TokenResultWithDisposition) => Promise<void>;
+  onTokens?: (result: ITokenResult) => Promise<void>;
   accessToken?: string;
   refreshToken?: string;
   /** The held token's expiry; default: from the JWT, else expired. */

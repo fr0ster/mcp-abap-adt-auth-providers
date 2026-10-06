@@ -22,10 +22,10 @@ import {
 import type {
   AuthorizationOutcome,
   IAuthorizationStrategy,
+  IAuthProviderError,
 } from '@mcp-abap-adt/interfaces-auth';
 import { getJwtAuthorizationUrl } from '../../auth/browserAuth';
 import { runCallbackScope } from '../../auth/callbackServer';
-import type { IAuthProviderError } from '../../auth/contractTransition';
 import { discoverOidc } from '../../auth/oidcDiscovery';
 import { exchangeSamlAssertion } from '../../auth/saml2TokenExchange';
 import { clientSecretBasic } from '../../clientAuthentication/clientSecret';

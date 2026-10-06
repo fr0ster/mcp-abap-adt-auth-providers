@@ -17,13 +17,6 @@ import {
 
 const PORT = 7871;
 
-/**
- * TRANSITION (Decision D6): the 4.x `ICallbackServerOptions` still requires
- * a bound in milliseconds; the scope reads none (spec §6a), so the value is
- * irrelevant — "none" says so. Task 27 drops the field.
- */
-const NO_BOUND = Number.POSITIVE_INFINITY;
-
 /** An abort the test fires once the scope is waiting. */
 function abortSoon(): AbortController {
   const ac = new AbortController();
@@ -83,7 +76,7 @@ afterEach(async () => {
 describe('withBrowserCallbackServer', () => {
   it('binds while the scope runs and yields the code', async () => {
     const code = await withBrowserCallbackServer(
-      { port: PORT, timeoutMs: NO_BOUND },
+      { port: PORT },
       async (srv) => {
         expect(srv.port).toBe(PORT);
         expect(srv.redirectUri).toBe(`http://localhost:${PORT}/callback`);
@@ -99,7 +92,7 @@ describe('withBrowserCallbackServer', () => {
   // The scope may return something other than the payload.
   it('resolves with whatever the body returned', async () => {
     const token = await withBrowserCallbackServer(
-      { port: PORT, timeoutMs: NO_BOUND },
+      { port: PORT },
       async (srv) => {
         const waiting = srv.waitForResult();
         void deliver('?code=raw');
@@ -114,7 +107,7 @@ describe('withBrowserCallbackServer', () => {
   it('releases the port when the login is abandoned', async () => {
     await expect(
       withBrowserCallbackServer(
-        { port: PORT, timeoutMs: NO_BOUND, signal: abortSoon().signal },
+        { port: PORT, signal: abortSoon().signal },
         async (srv) => await srv.waitForResult(),
       ),
     ).rejects.toThrow('the browser login was aborted');
@@ -124,7 +117,7 @@ describe('withBrowserCallbackServer', () => {
   it('releases the port when the body never settles', async () => {
     await expect(
       withBrowserCallbackServer(
-        { port: PORT, timeoutMs: NO_BOUND, signal: abortSoon().signal },
+        { port: PORT, signal: abortSoon().signal },
         () => new Promise<string>(() => undefined),
       ),
     ).rejects.toThrow('the browser login was aborted');
@@ -133,7 +126,7 @@ describe('withBrowserCallbackServer', () => {
   it('releases the port when cancelled', async () => {
     const ac = new AbortController();
     const scope = withBrowserCallbackServer(
-      { port: PORT, timeoutMs: NO_BOUND, signal: ac.signal },
+      { port: PORT, signal: ac.signal },
       async (srv) => await srv.waitForResult(),
     );
     setTimeout(() => ac.abort(), 100);
@@ -144,7 +137,7 @@ describe('withBrowserCallbackServer', () => {
     const ac = new AbortController();
     let ran = false;
     const scope = withBrowserCallbackServer(
-      { port: PORT, timeoutMs: NO_BOUND, signal: ac.signal },
+      { port: PORT, signal: ac.signal },
       async () => {
         ran = true;
         return 'unreachable';
@@ -157,37 +150,28 @@ describe('withBrowserCallbackServer', () => {
 
   it('releases the port when the body throws', async () => {
     await expect(
-      withBrowserCallbackServer(
-        { port: PORT, timeoutMs: NO_BOUND },
-        async () => {
-          throw new Error('boom');
-        },
-      ),
+      withBrowserCallbackServer({ port: PORT }, async () => {
+        throw new Error('boom');
+      }),
     ).rejects.toThrow('boom');
   }, 30000);
 
   it('releases the port when fail() ends the wait', async () => {
     await expect(
-      withBrowserCallbackServer(
-        { port: PORT, timeoutMs: NO_BOUND },
-        async (srv) => {
-          const waiting = srv.waitForResult();
-          srv.fail(new Error('browser launch failed'));
-          return await waiting;
-        },
-      ),
+      withBrowserCallbackServer({ port: PORT }, async (srv) => {
+        const waiting = srv.waitForResult();
+        srv.fail(new Error('browser launch failed'));
+        return await waiting;
+      }),
     ).rejects.toThrow('browser launch failed');
   }, 30000);
 
   it('rejects a pending wait when the scope ends', async () => {
     let dangling: Promise<string> | undefined;
-    await withBrowserCallbackServer(
-      { port: PORT, timeoutMs: NO_BOUND },
-      async (srv) => {
-        dangling = srv.waitForResult();
-        return 'returned without awaiting';
-      },
-    );
+    await withBrowserCallbackServer({ port: PORT }, async (srv) => {
+      dangling = srv.waitForResult();
+      return 'returned without awaiting';
+    });
     await expect(dangling).rejects.toThrow();
   }, 30000);
 
@@ -201,7 +185,7 @@ describe('withBrowserCallbackServer', () => {
     process.on('unhandledRejection', onUnhandled);
     try {
       const result = await withBrowserCallbackServer(
-        { port: PORT, timeoutMs: NO_BOUND },
+        { port: PORT },
         async (srv) => {
           void srv.waitForResult();
           return 'done';
@@ -217,7 +201,7 @@ describe('withBrowserCallbackServer', () => {
 
   it('returns the same promise from repeated waitForResult calls', async () => {
     const code = await withBrowserCallbackServer(
-      { port: PORT, timeoutMs: NO_BOUND },
+      { port: PORT },
       async (srv) => {
         const a = srv.waitForResult();
         const b = srv.waitForResult();
@@ -236,13 +220,10 @@ describe('withBrowserCallbackServer', () => {
       waitForResult: () => Promise<string>;
       fail: (e: Error) => void;
     };
-    await withBrowserCallbackServer(
-      { port: PORT, timeoutMs: NO_BOUND },
-      async (srv) => {
-        escaped = srv;
-        return 'done';
-      },
-    );
+    await withBrowserCallbackServer({ port: PORT }, async (srv) => {
+      escaped = srv;
+      return 'done';
+    });
     expect(() => escaped.fail(new Error('late'))).not.toThrow();
     await expect(escaped.waitForResult()).rejects.toThrow();
     expect(escaped.port).toBe(PORT);
@@ -256,7 +237,7 @@ describe('withBrowserCallbackServer', () => {
     });
     await expect(
       withBrowserCallbackServer(
-        { port: PORT, timeoutMs: NO_BOUND, signal: abortSoon().signal },
+        { port: PORT, signal: abortSoon().signal },
         async (srv) => {
           launcher.catch((e: Error) => srv.fail(e));
           return await srv.waitForResult();
@@ -271,17 +252,14 @@ describe('withBrowserCallbackServer', () => {
   // lands before the body returns.
   it('lets a fail before the body returns beat a delivered callback', async () => {
     await expect(
-      withBrowserCallbackServer(
-        { port: PORT, timeoutMs: NO_BOUND },
-        async (srv) => {
-          const waiting = srv.waitForResult();
-          void deliver('?code=first');
-          const value = await waiting;
-          srv.fail(new Error('too late for the payload'));
-          await new Promise((r) => setTimeout(r, 50));
-          return value;
-        },
-      ),
+      withBrowserCallbackServer({ port: PORT }, async (srv) => {
+        const waiting = srv.waitForResult();
+        void deliver('?code=first');
+        const value = await waiting;
+        srv.fail(new Error('too late for the payload'));
+        await new Promise((r) => setTimeout(r, 50));
+        return value;
+      }),
     ).rejects.toThrow('too late for the payload');
   }, 30000);
 
@@ -290,7 +268,7 @@ describe('withBrowserCallbackServer', () => {
     const ac = new AbortController();
     await expect(
       withBrowserCallbackServer(
-        { port: PORT, timeoutMs: NO_BOUND, signal: ac.signal },
+        { port: PORT, signal: ac.signal },
         async (srv) => {
           const waiting = srv.waitForResult();
           await deliver('');
@@ -306,16 +284,11 @@ describe('withBrowserCallbackServer', () => {
   it('reports an OAuth error immediately, without waiting for an abort', async () => {
     const started = Date.now();
     await expect(
-      withBrowserCallbackServer(
-        { port: PORT, timeoutMs: NO_BOUND },
-        async (srv) => {
-          const waiting = srv.waitForResult();
-          void deliver(
-            '?error=access_denied&error_description=User%20said%20no',
-          );
-          return await waiting;
-        },
-      ),
+      withBrowserCallbackServer({ port: PORT }, async (srv) => {
+        const waiting = srv.waitForResult();
+        void deliver('?error=access_denied&error_description=User%20said%20no');
+        return await waiting;
+      }),
     ).rejects.toThrow(/access_denied/);
     expect(Date.now() - started).toBeLessThan(5000);
   }, 30000);
@@ -324,7 +297,7 @@ describe('withBrowserCallbackServer', () => {
   // flushed, and do not destroy active connections in the first step.
   it('delivers the success page in full before releasing the port', async () => {
     const body = await withBrowserCallbackServer(
-      { port: PORT, timeoutMs: NO_BOUND },
+      { port: PORT },
       async (srv) => {
         const waiting = srv.waitForResult();
         const { status, body } = await httpGet('/callback?code=flushed');
@@ -342,7 +315,7 @@ describe('withBrowserCallbackServer', () => {
     try {
       await expect(
         withBrowserCallbackServer(
-          { port: PORT, timeoutMs: NO_BOUND, signal: abortSoon().signal },
+          { port: PORT, signal: abortSoon().signal },
           async (srv) => {
             await new Promise<void>((ready) => {
               http.get(
@@ -365,27 +338,8 @@ describe('withBrowserCallbackServer', () => {
   it('rejects a port that is not an integer in 0..65535, without binding', async () => {
     for (const bad of [-1, 65536, 3001.5]) {
       await expect(
-        withBrowserCallbackServer(
-          { port: bad, timeoutMs: NO_BOUND },
-          async () => 'unreachable',
-        ),
+        withBrowserCallbackServer({ port: bad }, async () => 'unreachable'),
       ).rejects.toThrow();
-    }
-  }, 30000);
-
-  // K7 gone (§6a, L14): the 4.x field is read by nobody, so no value of it
-  // is refused — each scope binds, delivers, and releases as any other.
-  it('accepts whatever the 4.x bound field carries, and reads none of it', async () => {
-    for (const any of [0, -1, Number.NaN, 1, 2_147_483_648]) {
-      const code = await withBrowserCallbackServer(
-        { port: PORT, timeoutMs: any },
-        async (srv) => {
-          const waiting = srv.waitForResult();
-          void deliver(`?code=bound-${String(any)}`);
-          return await waiting;
-        },
-      );
-      expect(code).toBe(`bound-${String(any)}`);
     }
   }, 30000);
 
@@ -394,13 +348,10 @@ describe('withBrowserCallbackServer', () => {
     ac.abort();
     let ran = false;
     await expect(
-      withBrowserCallbackServer(
-        { port: PORT, timeoutMs: NO_BOUND, signal: ac.signal },
-        async () => {
-          ran = true;
-          return 'unreachable';
-        },
-      ),
+      withBrowserCallbackServer({ port: PORT, signal: ac.signal }, async () => {
+        ran = true;
+        return 'unreachable';
+      }),
     ).rejects.toThrow();
     expect(ran).toBe(false);
   }, 30000);
@@ -413,7 +364,7 @@ describe('withBrowserCallbackServer', () => {
     let ran = false;
     try {
       const thrown = await withBrowserCallbackServer(
-        { port: PORT, timeoutMs: NO_BOUND },
+        { port: PORT },
         async () => {
           ran = true;
           return 'unreachable';
@@ -454,7 +405,7 @@ describe('withBrowserCallbackServer', () => {
     let settledAt = 0;
 
     const scope = runCallbackScope<string, string>(
-      { port: BIG_PORT, timeoutMs: NO_BOUND },
+      { port: BIG_PORT },
       (app, settle) => {
         app.get('/big', (_req, res) => {
           // Subscribed before end(), so the timestamp cannot be missed.
@@ -511,18 +462,15 @@ describe('withBrowserCallbackServer', () => {
   describe('ephemeral port', () => {
     it('reports the bound port and frees it when the scope ends', async () => {
       let observed = 0;
-      const code = await withBrowserCallbackServer(
-        { port: 0, timeoutMs: NO_BOUND },
-        async (srv) => {
-          observed = srv.port;
-          expect(observed).toBeGreaterThan(0);
-          expect(srv.redirectUri).toBe(`http://localhost:${observed}/callback`);
-          expect(await portIsFree(observed)).toBe(false);
-          const waiting = srv.waitForResult();
-          void httpGetOn(observed, '/callback?code=eph').catch(() => undefined);
-          return await waiting;
-        },
-      );
+      const code = await withBrowserCallbackServer({ port: 0 }, async (srv) => {
+        observed = srv.port;
+        expect(observed).toBeGreaterThan(0);
+        expect(srv.redirectUri).toBe(`http://localhost:${observed}/callback`);
+        expect(await portIsFree(observed)).toBe(false);
+        const waiting = srv.waitForResult();
+        void httpGetOn(observed, '/callback?code=eph').catch(() => undefined);
+        return await waiting;
+      });
       expect(code).toBe('eph');
       expect(await portIsFree(observed)).toBe(true);
     }, 30000);
@@ -531,7 +479,7 @@ describe('withBrowserCallbackServer', () => {
   describe('incomplete callbacks', () => {
     it('answers 400 and keeps waiting when neither code nor error arrived', async () => {
       const code = await withBrowserCallbackServer(
-        { port: PORT, timeoutMs: NO_BOUND },
+        { port: PORT },
         async (srv) => {
           const waiting = srv.waitForResult();
           const stray = await httpGet('/callback');
@@ -548,7 +496,7 @@ describe('withBrowserCallbackServer', () => {
     it('counts ignored requests in the aborted words', async () => {
       const ac = new AbortController();
       const attempt = withBrowserCallbackServer(
-        { port: PORT, timeoutMs: NO_BOUND, signal: ac.signal },
+        { port: PORT, signal: ac.signal },
         async (srv) => await srv.waitForResult(),
       );
       const rejected = expect(attempt).rejects.toThrow(
@@ -562,7 +510,7 @@ describe('withBrowserCallbackServer', () => {
 
     it('still ends the login at once on an explicit IdP error', async () => {
       const attempt = withBrowserCallbackServer(
-        { port: PORT, timeoutMs: NO_BOUND },
+        { port: PORT },
         async (srv) => await srv.waitForResult(),
       );
       void deliver('?error=access_denied&error_description=User%20said%20no');
@@ -581,7 +529,7 @@ describe('withBrowserCallbackServer', () => {
   describe('paste form', () => {
     it('serves a form at GET /', async () => {
       const code = await withBrowserCallbackServer(
-        { port: PORT, timeoutMs: NO_BOUND },
+        { port: PORT },
         async (srv) => {
           const waiting = srv.waitForResult();
           const { status, body } = await httpGet('/');
@@ -597,7 +545,7 @@ describe('withBrowserCallbackServer', () => {
 
     it('completes the login from a full redirected URL pasted at /submit', async () => {
       const code = await withBrowserCallbackServer(
-        { port: PORT, timeoutMs: NO_BOUND },
+        { port: PORT },
         async (srv) => {
           const waiting = srv.waitForResult();
           void httpGet(
@@ -615,7 +563,7 @@ describe('withBrowserCallbackServer', () => {
     // the form again, never a thrown URIError or Express's error page.
     it('re-renders the form on a paste with a malformed escape (code=%ZZ)', async () => {
       const code = await withBrowserCallbackServer(
-        { port: PORT, timeoutMs: NO_BOUND },
+        { port: PORT },
         async (srv) => {
           const waiting = srv.waitForResult();
           for (const input of [
@@ -639,7 +587,7 @@ describe('withBrowserCallbackServer', () => {
 
     it('re-renders the form (HTTP 400) on an unusable paste, without ending the login', async () => {
       const code = await withBrowserCallbackServer(
-        { port: PORT, timeoutMs: NO_BOUND },
+        { port: PORT },
         async (srv) => {
           const waiting = srv.waitForResult();
           const { status, body } = await httpGet(
@@ -676,7 +624,7 @@ describe('withBrowserCallbackServer', () => {
           string,
           { status: number; body: string }
         >(
-          { port: PORT, timeoutMs: NO_BOUND },
+          { port: PORT },
           (app) => {
             app.get('/boom', () => {
               throw new Error(`${SECRET} at ${process.cwd()}/x.ts`);
@@ -698,7 +646,7 @@ describe('withBrowserCallbackServer', () => {
 
     it('an unknown path: fixed text', async () => {
       const reply = await withBrowserCallbackServer(
-        { port: PORT, timeoutMs: NO_BOUND },
+        { port: PORT },
         async () => await httpGet('/nowhere/<b>'),
       );
       expect(reply).toEqual({ status: 404, body: 'Not found' });

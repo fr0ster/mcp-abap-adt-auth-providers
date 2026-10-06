@@ -15,7 +15,7 @@ import type {
   AssertionCheck,
   AssertionRule,
   SamlAssertionError,
-} from '../../auth/contractTransition';
+} from '@mcp-abap-adt/interfaces-auth';
 
 /** Each rule's check (Appendix B's first column). */
 export const RULE_CHECK: Readonly<Record<AssertionRule, AssertionCheck>> = {

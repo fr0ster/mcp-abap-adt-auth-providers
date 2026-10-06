@@ -59,8 +59,8 @@
   },
   "dependencies": {
     "@mcp-abap-adt/auth-errors": "^1.0.0",
-    "@mcp-abap-adt/interfaces-auth": "^4.0.0",
-    "@mcp-abap-adt/interfaces-auth-sap": "^3.0.0",
+    "@mcp-abap-adt/interfaces-auth": "^6.0.0",
+    "@mcp-abap-adt/interfaces-auth-sap": "^3.2.0",
     "@mcp-abap-adt/interfaces-utils": "^1.1.0",
     "@xmldom/xmldom": "^0.9.12",
     "axios": "^1.13.5",

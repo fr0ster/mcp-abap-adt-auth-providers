@@ -1,10 +1,10 @@
+import { OK } from '@mcp-abap-adt/auth-errors';
 import type {
+  AuthOutcome,
   IAuthRejection,
   IRequestTarget,
 } from '@mcp-abap-adt/interfaces-auth';
 import { AuthProviderBase } from '../auth/AuthProviderBase';
-import type { AnyOutcome } from '../auth/contractTransition';
-import { OK } from '../auth/refusal';
 import { refuseFor } from '../auth/rejection';
 
 /** A SAML session negotiated elsewhere and handed over as cookies. */
@@ -20,21 +20,21 @@ export class SamlAuthProvider extends AuthProviderBase {
     });
   }
 
-  protected onPrepare(): AnyOutcome {
+  protected onPrepare(): AuthOutcome {
     return OK;
   }
 
-  protected onEstablish(): AnyOutcome {
+  protected onEstablish(): AuthOutcome {
     return OK;
   }
 
-  protected onAuthorize(request: IRequestTarget): AnyOutcome {
+  protected onAuthorize(request: IRequestTarget): AuthOutcome {
     request.cookies(this.sessionCookies);
     return OK;
   }
 
   /** Blames the session only when the system refused the credential. */
-  protected onRejected(rejection: IAuthRejection): AnyOutcome {
+  protected onRejected(rejection: IAuthRejection): AuthOutcome {
     return refuseFor(rejection, 'saml-session');
   }
 }

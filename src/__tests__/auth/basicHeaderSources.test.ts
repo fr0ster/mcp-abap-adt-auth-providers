@@ -127,18 +127,16 @@ describe('shape rule 8 in src/auth and src/providers', () => {
 });
 
 /**
- * `TokenEndpointError` the class stays until Task 27 (the refusal ladder
- * still names it), but no site constructs it any more (Task 21).
+ * `TokenEndpointError` is gone with the classes (Task 27, spec §6): neither
+ * the class nor a construction of it is anywhere in src.
  */
 describe('TokenEndpointError', () => {
-  it('nothing in src constructs it', () => {
-    const constructing = files
-      .filter(({ text }) => text.includes('new TokenEndpointError('))
+  it('nothing in src declares or constructs it', () => {
+    const naming = files
+      .filter(({ text }) => text.includes('TokenEndpointError'))
       .map(({ name }) => name);
-    expect(constructing).toEqual([]);
-    // Not vacuous: the scan reads the class itself.
-    expect(
-      files.some(({ text }) => text.includes('class TokenEndpointError')),
-    ).toBe(true);
+    expect(naming).toEqual([]);
+    // Not vacuous: the scan reads src.
+    expect(files.length).toBeGreaterThan(10);
   });
 });

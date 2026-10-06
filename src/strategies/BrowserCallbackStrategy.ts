@@ -18,7 +18,6 @@ import type {
   AuthorizationRequest,
   CallbackServerFactory,
   IAuthorizationStrategy,
-  ICallbackServerOptions,
 } from '@mcp-abap-adt/interfaces-auth';
 import { announcer } from '../auth/announce';
 import { launchBrowser } from '../auth/browserAuth';
@@ -26,7 +25,6 @@ import {
   validatePort,
   withBrowserCallbackServer,
 } from '../auth/callbackServer';
-import { asContract } from '../auth/contractShape';
 import {
   abortedLogin,
   browserLaunchFailed,
@@ -45,15 +43,6 @@ import { logQuietly } from '../auth/tokenRequest';
  * never squats on it, and far from the 3001/3333 range application servers use.
  */
 export const DEFAULT_CALLBACK_PORT = 61001;
-
-/**
- * TRANSITION (Decision D6): interfaces-auth 4.x declares the callback
- * server's bound in milliseconds as required. No login has a bound of this
- * package's choosing (spec §6a) — `runCallbackScope` reads no such field —
- * so the value handed over is "none". Task 27 drops it with the 5.0.0
- * contract.
- */
-const NO_BOUND = Number.POSITIVE_INFINITY;
 
 export interface CallbackStrategyOptions<TResult = string> {
   /** `0` binds an ephemeral port. Unusable where the IdP has a registered URI. */
@@ -178,12 +167,11 @@ export class BrowserCallbackStrategy<TResult>
       await assertPortAvailable(port);
       if (controller.signal.aborted) throw abortedLogin('browser');
       return await this.options.callbackServer(
-        asContract<ICallbackServerOptions>({
+        {
           port,
-          timeoutMs: NO_BOUND,
           signal: controller.signal,
           logger: request.logger,
-        }),
+        },
         async (server) => {
           // Thrown before anything is opened: a redirect the provider cannot
           // honour must fail here, not as a callback that never arrives.

@@ -4,13 +4,14 @@
  * own `performRefresh` never logs in; the base decides the single login.
  * Concurrent renewals share one flight.
  */
+
 import { describe, expect, it, jest } from '@jest/globals';
+import { AuthProviderFailure, authError } from '@mcp-abap-adt/auth-errors';
 import type {
   IAuthorizationStrategy,
   ITokenResult,
   OAuth2GrantType,
 } from '@mcp-abap-adt/interfaces-auth';
-import { BrowserAuthError } from '../../errors/TokenProviderErrors';
 import { AuthorizationCodeProvider } from '../../providers/AuthorizationCodeProvider';
 import { BaseTokenProvider } from '../../providers/BaseTokenProvider';
 import { OidcTokenExchangeProvider } from '../../providers/OidcTokenExchangeProvider';
@@ -36,7 +37,10 @@ const refused = { at: 'request' as const, status: 401, error: {} };
 describe('AuthorizationCodeProvider: one renewal, one login', () => {
   it('a refused refresh and a failed login call the strategy exactly once', async () => {
     const authorize = jest.fn(async () => {
-      throw new BrowserAuthError('the user closed the window');
+      // What a shipped strategy throws when the login fails (K11).
+      throw new AuthProviderFailure(
+        authError['interactive-login']({ outcome: 'failed' }),
+      );
     });
     const strategy = { authorize } as unknown as IAuthorizationStrategy<string>;
     const provider = new AuthorizationCodeProvider({

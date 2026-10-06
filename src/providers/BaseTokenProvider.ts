@@ -12,20 +12,27 @@ import {
   type AttemptContext,
   AuthProviderFailure,
   authError,
+  classify,
   createParties,
   logFields,
+  OK,
   relayOutcome,
   sharedAttempt,
 } from '@mcp-abap-adt/auth-errors';
 import type {
+  AuthOutcome,
+  IAuthProviderError,
   IAuthRejection,
   ICertificateMaterial,
   IClientAuthentication,
   ILogonTarget,
   IRefreshableTokenProvider,
   IRequestTarget,
+  ITokenRequestOptions,
   ITokenResult,
   OAuth2GrantType,
+  Operation,
+  RefreshTokenDisposition,
 } from '@mcp-abap-adt/interfaces-auth';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
 import { AuthProviderBase } from '../auth/AuthProviderBase';
@@ -38,19 +45,7 @@ import {
   certificateThumbprint,
 } from '../auth/certificateMaterial';
 import { misconfigured } from '../auth/configuration';
-import { asContract } from '../auth/contractShape';
-import type {
-  AnyOutcome,
-  IAuthProviderError,
-  Operation,
-} from '../auth/contractTransition';
 import { isGrant } from '../auth/grants';
-import {
-  errorFor,
-  isUnmintedRung,
-  OK,
-  type OperationOf,
-} from '../auth/refusal';
 import { readRejection } from '../auth/rejection';
 import { readBinding, type TokenBinding } from '../auth/tokenBinding';
 import {
@@ -75,20 +70,13 @@ export interface TokenProviderDebug {
 }
 
 /**
- * What persistence is told of the refresh token (spec §6b): `'replace'` — the
- * result carries a new usable one; `'keep'` — none, and nothing was
- * discarded: the stored one stands; `'clear'` — the held one was discarded
- * (refused on refresh), so the stored one must go.
+ * The operation a failure names, with this provider's grant when it has one
+ * (`classify`'s second and third arguments).
  */
-export type RefreshTokenDisposition = 'keep' | 'replace' | 'clear';
-
-/**
- * TRANSITION (Decision D6, C3; replaced in Task 27 by interfaces-auth 6.0.0's
- * `ITokenResult`, which carries the field): what `onTokens` receives.
- */
-export type TokenResultWithDisposition = ITokenResult & {
-  readonly refreshTokenDisposition?: RefreshTokenDisposition | undefined;
-};
+interface OperationOf {
+  readonly operation: Operation;
+  readonly grant?: OAuth2GrantType;
+}
 
 /** What every token provider's config may carry beside its own fields. */
 export interface TokenProviderHooks extends TokenProviderDebug {
@@ -101,9 +89,7 @@ export interface TokenProviderHooks extends TokenProviderDebug {
    * disposition. Best effort: a failure is logged by its kind and fixed
    * words and does not fail the authentication.
    */
-  onTokens?:
-    | ((result: TokenResultWithDisposition) => Promise<void>)
-    | undefined;
+  onTokens?: ((result: ITokenResult) => Promise<void>) | undefined;
   /**
    * The first attached party (spec §6b), attached at construction — the same
    * as `attach(signal)` right after it. A login a moment starts (`prepare`,
@@ -112,21 +98,6 @@ export interface TokenProviderHooks extends TokenProviderDebug {
    * chose.
    */
   signal?: AbortSignal | undefined;
-}
-
-/**
- * What `getTokens()` / `refreshTokens()` take (spec §6b). TRANSITION
- * (Decision D6 table): interfaces-auth 6.0.0's `ITokenRequestOptions`, which
- * the 4.x interfaces lack, until Task 27.
- */
-export interface TokenRequestOptions {
-  /**
-   * This caller no longer needs the token: its abort releases this caller
-   * only, with an `AuthProviderFailure` of `interactive-login` `aborted`; the
-   * renewal itself is aborted once every caller waiting on it has aborted.
-   * Absent, the caller waits until the renewal ends — no built-in bound.
-   */
-  readonly signal?: AbortSignal | undefined;
 }
 
 /**
@@ -591,7 +562,7 @@ export abstract class BaseTokenProvider
   /**
    * The one login of a renewal. `attempt` is the renewal's: its `signal`
    * aborts when every waiter has gone — hand it on to the strategy
-   * (`SignalledAuthorizationRequest.signal`) and to every request the login
+   * (`AuthorizationRequest.signal`) and to every request the login
    * sends (`siteOptions(attempt.signal)`) — and `exclusive(work)` runs work
    * holding an exclusive local resource (the strategy's `authorize`, a
    * device-code flow) once the previous attempt has released its own (the
@@ -637,7 +608,7 @@ export abstract class BaseTokenProvider
    * @throws AuthProviderFailure — and nothing else: whatever the renewal, a
    *   strategy, a loader or a presenter threw, classified (spec §6, L3)
    */
-  async getTokens(options?: TokenRequestOptions): Promise<ITokenResult> {
+  async getTokens(options?: ITokenRequestOptions): Promise<ITokenResult> {
     try {
       return await this.cachedOrRenewed(options?.signal);
     } catch (error) {
@@ -685,16 +656,16 @@ export abstract class BaseTokenProvider
             : undefined,
         }),
       );
-      return asContract<ITokenResult>({
+      return {
         authorizationToken,
-        refreshToken: this.refreshToken,
+        ...this.heldRefresh(),
         authType: this.getAuthType(),
         tokenType: this.tokenType ?? 'jwt',
         expiresAt: this.expiresAt,
         expiresIn: this.expiresAt
           ? Math.floor((this.expiresAt - Date.now()) / 1000)
           : undefined,
-      });
+      };
     }
 
     return this.renewed(signal);
@@ -714,7 +685,7 @@ export abstract class BaseTokenProvider
    *
    * @throws AuthProviderFailure — and nothing else (spec §6, L3)
    */
-  async refreshTokens(options?: TokenRequestOptions): Promise<ITokenResult> {
+  async refreshTokens(options?: ITokenRequestOptions): Promise<ITokenResult> {
     try {
       return await this.renewed(options?.signal);
     } catch (error) {
@@ -769,14 +740,17 @@ export abstract class BaseTokenProvider
    * What getTokens() / refreshTokens() throw for anything caught (spec §6):
    * an AuthProviderFailure holding the classified error — the error a site
    * or a renewal already minted, as it is; never the value caught, nor its
-   * message (L3). TRANSITION: one of this package's own classes the ladder
-   * still answers unminted passes as it is (`isUnmintedRung`).
+   * message (L3). Every throw is one: nothing passes as it is.
    */
-  private thrownFor(error: unknown): unknown {
-    if (isUnmintedRung(error)) return error;
+  private thrownFor(error: unknown): AuthProviderFailure {
     return new AuthProviderFailure(
-      errorFor(error, this.operationOf('token-request')),
+      this.classified(error, this.operationOf('token-request')),
     );
+  }
+
+  /** `classify` with an operation and its grant. Total. */
+  private classified(error: unknown, of: OperationOf): IAuthProviderError {
+    return classify(error, of.operation, of.grant);
   }
 
   /**
@@ -804,7 +778,7 @@ export abstract class BaseTokenProvider
     } catch (thrown) {
       // The error the renewal produced, minted once: the one thrown and the
       // one remembered are the same object (C15).
-      const error = errorFor(thrown, this.operationOf('token-request'));
+      const error = this.classified(thrown, this.operationOf('token-request'));
       await this.commit(() => {
         if (
           !attempt.signal.aborted &&
@@ -816,9 +790,7 @@ export abstract class BaseTokenProvider
         }
       });
       return {
-        thrown: isUnmintedRung(thrown)
-          ? thrown
-          : new AuthProviderFailure(error),
+        thrown: new AuthProviderFailure(error),
       };
     } finally {
       attempt.signal.removeEventListener('abort', left);
@@ -903,7 +875,7 @@ export abstract class BaseTokenProvider
         logQuietly(() =>
           this.logger?.warn(
             '[BaseTokenProvider] Refresh failed',
-            logFields(errorFor(error, { operation: 'refresh' })),
+            logFields(classify(error, 'refresh')),
           ),
         );
         // Cut: the abort already spent it, and nobody waits for a login.
@@ -973,7 +945,7 @@ export abstract class BaseTokenProvider
       const tombstoned =
         typeof fresh === 'string' && fresh !== '' && this.quarantine.has(fresh);
       const accepted = tombstoned
-        ? asContract<ITokenResult>({ ...result, refreshToken: undefined })
+        ? { ...result, refreshToken: undefined }
         : result;
       if (tombstoned) {
         // A discarded refresh token: the stored one must go too.
@@ -995,8 +967,7 @@ export abstract class BaseTokenProvider
           },
         ),
       );
-      await this.obtained(accepted, heldBefore);
-      return accepted;
+      return await this.obtained(accepted, heldBefore);
     });
     // The step ran to its end, applied or discarded whole.
     if (outcome) outcome.applied = true;
@@ -1012,13 +983,38 @@ export abstract class BaseTokenProvider
   private heldResult(): ITokenResult | undefined {
     const authorizationToken = this.authorizationToken;
     if (authorizationToken === undefined) return undefined;
-    return asContract<ITokenResult>({
+    return {
       authorizationToken,
-      refreshToken: this.refreshToken,
+      ...this.heldRefresh(),
       authType: this.getAuthType(),
       tokenType: this.tokenType ?? 'jwt',
       expiresAt: this.expiresAt,
-    });
+    };
+  }
+
+  /**
+   * The refresh token held and its disposition (spec §4.4: every result this
+   * package produces sets it), for a result that is no new commit — a cache
+   * hit, or the credentials in place: a usable one is `'replace'` (what a
+   * 4.x reader infers from its presence, and the same token again); none is
+   * `'clear'` while the logical state is `cleared`, else `'keep'`. A
+   * quarantined one is not handed out: it is never submitted again (§6b).
+   */
+  private heldRefresh(): Pick<
+    ITokenResult,
+    'refreshToken' | 'refreshTokenDisposition'
+  > {
+    const held = this.refreshToken;
+    const usable =
+      typeof held === 'string' && held !== '' && !this.quarantine.has(held);
+    if (usable) {
+      return { refreshToken: held, refreshTokenDisposition: 'replace' };
+    }
+    return {
+      refreshToken: undefined,
+      refreshTokenDisposition:
+        this.refreshState === 'cleared' ? 'clear' : 'keep',
+    };
   }
 
   async validateToken(_token: string, _serviceUrl?: string): Promise<boolean> {
@@ -1166,12 +1162,14 @@ export abstract class BaseTokenProvider
    * A new result, told to persistence with its refresh-token disposition
    * (spec §6b), derived from the logical state: a new usable refresh token
    * is `'replace'` (state `held`); none is `'clear'` while `cleared`, else
-   * `'keep'`.
+   * `'keep'`. What `onTokens` is told is also what the renewal returns
+   * (spec §4.4: every result carries its disposition); the hook gets its
+   * own copy, so a hook changing it changes nothing returned.
    */
   private async obtained(
     result: ITokenResult,
     heldBefore: string | undefined,
-  ): Promise<void> {
+  ): Promise<ITokenResult> {
     const fresh = result.refreshToken;
     let refreshToken = fresh;
     let refreshTokenDisposition: RefreshTokenDisposition;
@@ -1192,13 +1190,12 @@ export abstract class BaseTokenProvider
     } else {
       refreshTokenDisposition = 'keep';
     }
-    const delivered = await this.notify(() =>
-      asContract<TokenResultWithDisposition>({
-        ...result,
-        refreshToken,
-        refreshTokenDisposition,
-      }),
-    );
+    const told: ITokenResult = {
+      ...result,
+      refreshToken,
+      refreshTokenDisposition,
+    };
+    const delivered = await this.notify(() => ({ ...told }));
     // Pending until one onTokens succeeds; a new 'replace' or 'clear'
     // supersedes it (a failed 'clear' stays in the logical state).
     if (delivered || refreshTokenDisposition === 'clear') {
@@ -1206,21 +1203,22 @@ export abstract class BaseTokenProvider
     } else if (refreshTokenDisposition === 'replace') {
       this.pendingReplace = true;
     }
+    return told;
   }
 
   /**
    * The clearing notification of a discarded refresh token: the held access
    * token unchanged (`''` for none), no refresh token, `'clear'`.
    */
-  private clearing(): TokenResultWithDisposition {
-    return asContract<TokenResultWithDisposition>({
+  private clearing(): ITokenResult {
+    return {
       authorizationToken: this.authorizationToken ?? '',
       refreshToken: undefined,
       authType: this.getAuthType(),
       tokenType: this.tokenType ?? 'jwt',
       expiresAt: this.expiresAt,
       refreshTokenDisposition: 'clear',
-    });
+    };
   }
 
   /**
@@ -1228,9 +1226,7 @@ export abstract class BaseTokenProvider
    * is told (`getAuthType()` is a subclass's) — is logged (H2) and the token
    * stands; the renewal goes on.
    */
-  private async notify(
-    build: () => TokenResultWithDisposition,
-  ): Promise<boolean> {
+  private async notify(build: () => ITokenResult): Promise<boolean> {
     if (!this.onTokens) return true;
     try {
       await this.onTokens(build());
@@ -1240,7 +1236,7 @@ export abstract class BaseTokenProvider
       logQuietly(() =>
         this.logger?.warn(
           '[BaseTokenProvider] onTokens failed; the token stands',
-          logFields(errorFor(error, { operation: 'on-tokens-hook' })),
+          logFields(classify(error, 'on-tokens-hook')),
         ),
       );
       return false;
@@ -1262,7 +1258,7 @@ export abstract class BaseTokenProvider
     return this.readGrant();
   }
 
-  protected async onPrepare(): Promise<AnyOutcome> {
+  protected async onPrepare(): Promise<AuthOutcome> {
     // Once per connect, a token renewed bound elsewhere — or whose renewal
     // failed — gets one more try.
     this.remembered = undefined;
@@ -1279,7 +1275,7 @@ export abstract class BaseTokenProvider
    * token presented will be the one authorize() obtains through the same
    * strategy and pinned material, and authorize() checks that one.
    */
-  protected async onEstablish(logon: ILogonTarget): Promise<AnyOutcome> {
+  protected async onEstablish(logon: ILogonTarget): Promise<AuthOutcome> {
     const pinned = await this.asMoment((signal) => this.presentable(signal));
     const held =
       !this.renewing && this.isTokenValid()
@@ -1315,7 +1311,7 @@ export abstract class BaseTokenProvider
    * another certificate than the pinned one — and the token actually sent is
    * the one checked.
    */
-  protected async onAuthorize(request: IRequestTarget): Promise<AnyOutcome> {
+  protected async onAuthorize(request: IRequestTarget): Promise<AuthOutcome> {
     // Pinned here too, so a token served from cache (seeded, restored) is
     // checked against the certificate like an obtained one.
     // One moment, one waiter: the attached parties, for the pin and the
@@ -1374,7 +1370,7 @@ export abstract class BaseTokenProvider
    * caller's. A renewal in flight is joined; a presented token already
    * superseded by a renewal answers Ok without renewing again.
    */
-  protected async onRejected(rejection: IAuthRejection): Promise<AnyOutcome> {
+  protected async onRejected(rejection: IAuthRejection): Promise<AuthOutcome> {
     // A 403, a redirect, a 5xx: a new token would be refused the same way.
     const read = readRejection(rejection);
     if (read.verdict === 'not-credential') {
@@ -1410,7 +1406,7 @@ export abstract class BaseTokenProvider
 }
 
 /** A17: a held token bound to a certificate while none is pinned. */
-function boundElsewhere(): AnyOutcome {
+function boundElsewhere(): AuthOutcome {
   return {
     ok: false,
     refusal: authError['token-binding']({ problem: 'bound-to-unpinned' }),

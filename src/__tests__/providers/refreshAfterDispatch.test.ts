@@ -11,9 +11,9 @@
 
 import { afterEach, beforeEach, describe, expect, it } from '@jest/globals';
 import { readFailure } from '@mcp-abap-adt/auth-errors';
+import type { ITokenResult } from '@mcp-abap-adt/interfaces-auth';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
 import { AuthorizationCodeProvider } from '../../providers/AuthorizationCodeProvider';
-import type { TokenResultWithDisposition } from '../../providers/BaseTokenProvider';
 import {
   Arrivals,
   type Deferred,
@@ -84,7 +84,7 @@ const submitted = () =>
 function provider(
   strategy: WaitingStrategy,
   seeded: { access?: string; refresh?: string } = {},
-  onTokens?: (result: TokenResultWithDisposition) => Promise<void>,
+  onTokens?: (result: ITokenResult) => Promise<void>,
 ): {
   p: AuthorizationCodeProvider;
   seen: Seen[];

@@ -1,8 +1,8 @@
 /**
- * The producers of rows A3–A7, A11 and H10 (spec Appendix A.1 and A.8; plan
- * Task 26, C10): each throws an `AuthProviderFailure` of its kind — never one
- * of this package's error classes — with the row's facts and verbatim words;
- * A11's class, still exported until Task 27, answers `configuration`; H10's
+ * The producers of rows A3–A7 and H10 (spec Appendix A.1 and A.8; plan
+ * Task 26, C10): each throws an `AuthProviderFailure` of its kind — the 5.x
+ * error classes are gone (Task 27; A11's `configuration` rows are in
+ * `configurationRows.test.ts`) — with the row's facts and verbatim words; H10's
  * line is the default safe-facts line, or with `authDebug` the
  * `token endpoint said` line.
  */
@@ -15,15 +15,16 @@ import {
   isMinted,
   readFailure,
 } from '@mcp-abap-adt/auth-errors';
-import type { ICertificateMaterial } from '@mcp-abap-adt/interfaces-auth';
+import type {
+  IAuthProviderError,
+  ICertificateMaterial,
+} from '@mcp-abap-adt/interfaces-auth';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
 import {
   assertCertificateMaterial,
   certificateThumbprint,
   checkCertificateMaterial,
 } from '../../auth/certificateMaterial';
-import type { IAuthProviderError } from '../../auth/contractTransition';
-import { refusalFrom } from '../../auth/refusal';
 import {
   prepareTokenRequest,
   sendTokenRequest,
@@ -31,7 +32,6 @@ import {
 } from '../../auth/tokenRequest';
 import { clientSecretBasic } from '../../clientAuthentication/clientSecret';
 import { privateKeyJwt } from '../../clientAuthentication/privateKeyJwt';
-import { ValidationError } from '../../errors/TokenProviderErrors';
 import { ClientCredentialsProvider } from '../../providers/ClientCredentialsProvider';
 import { createSignedResponseValidator } from '../../validation/assertionValidator';
 import { createInMemoryReplayStore } from '../../validation/inMemoryReplayStore';
@@ -225,28 +225,6 @@ describe('A5–A7 — client-authentication', () => {
       reason: "the client id contains ':', which raw Basic cannot carry",
       hint: "use encoding: 'form' or clientSecretPost",
     });
-  });
-});
-
-describe('A11 — the configuration refusal', () => {
-  it('A11: a ValidationError (exported until Task 27, constructed by no site) answers configuration, its known fields kept', () => {
-    const error = mintedRefusal(
-      refusalFrom(
-        new ValidationError(MARKER, ['clientId', MARKER, 'uaaUrl']),
-        'the token request',
-      ),
-    );
-    expect(error).toMatchObject({
-      kind: 'configuration',
-      variant: 'required-fields-missing',
-      facts: {
-        case: 'required-fields-missing',
-        fields: ['clientId', 'uaaUrl'],
-      },
-      reason: 'required configuration is missing: clientId, uaaUrl',
-      hint: 'check the provider configuration',
-    });
-    expect(JSON.stringify(error)).not.toContain(MARKER);
   });
 });
 

@@ -1,15 +1,16 @@
 import { createHash, X509Certificate } from 'node:crypto';
 import { createSecureContext, TLSSocket } from 'node:tls';
-import { AuthProviderFailure, authError } from '@mcp-abap-adt/auth-errors';
+import {
+  AuthProviderFailure,
+  authError,
+  classify,
+  OK,
+} from '@mcp-abap-adt/auth-errors';
 import type {
   AuthOutcome,
+  ClientCertificateProblem,
   ICertificateMaterial,
 } from '@mcp-abap-adt/interfaces-auth';
-import {
-  type ClientCertificateProblem,
-  toLegacyOutcome,
-} from './contractTransition';
-import { errorFor, OK } from './refusal';
 
 /**
  * A4: certificate material that cannot be presented — `incomplete`,
@@ -71,8 +72,8 @@ export function assertNotExpired(notAfter: number): void {
 /**
  * The same proof as an outcome (B14): the `client-certificate` error the
  * check threw. Reading the material may run a consumer's getter, which may
- * throw anything: the ladder reads this package's own class (until Task 27)
- * by its flags, never its `words`; anything else is `unusable`.
+ * throw anything: `classify` answers a failure's own error, and anything
+ * that is not a `client-certificate` error is `unusable`.
  */
 export function checkCertificateMaterial(
   material: ICertificateMaterial,
@@ -80,14 +81,14 @@ export function checkCertificateMaterial(
   try {
     assertCertificateMaterial(material);
   } catch (e) {
-    const error = errorFor(e, { operation: 'loading-certificate' });
-    return toLegacyOutcome({
+    const error = classify(e, 'loading-certificate');
+    return {
       ok: false,
       refusal:
         error.kind === 'client-certificate'
           ? error
           : authError['client-certificate']({ problem: 'unusable' }),
-    });
+    };
   }
   return OK;
 }

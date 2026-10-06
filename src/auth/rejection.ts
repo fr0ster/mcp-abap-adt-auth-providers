@@ -11,17 +11,16 @@
  * carries neither is `unknown`, and each provider decides what that means for
  * it.
  *
- * The refusals are minted by auth-errors and reach their 4.x-typed callers
- * through `toLegacyRefusal` — the minted error itself (Decision D6).
+ * The refusals are minted by auth-errors.
  */
 
 import { authError, httpStatus, isRfcKey } from '@mcp-abap-adt/auth-errors';
 import type {
   AuthOutcome,
+  CredentialKind,
   IAuthRefusal,
   IAuthRejection,
 } from '@mcp-abap-adt/interfaces-auth';
-import { type CredentialKind, toLegacyRefusal } from './contractTransition';
 import { readSafely } from './knownCodes';
 
 export type RejectionReading =
@@ -53,9 +52,7 @@ function fromStatus(status: number, at: Moment): RejectionReading {
           : 'other-status';
   return {
     verdict: 'not-credential',
-    refusal: toLegacyRefusal(
-      authError['system-refused']({ verdict, status: checked, at }),
-    ),
+    refusal: authError['system-refused']({ verdict, status: checked, at }),
   };
 }
 
@@ -77,13 +74,11 @@ export function readRejection(
     if (key === 'RFC_LOGON_FAILURE') return CREDENTIAL;
     return {
       verdict: 'not-credential',
-      refusal: toLegacyRefusal(
-        authError['system-refused']({
-          verdict: 'rfc-failure',
-          rfcKey: key,
-          at,
-        }),
-      ),
+      refusal: authError['system-refused']({
+        verdict: 'rfc-failure',
+        rfcKey: key,
+        at,
+      }),
     };
   }
   return UNKNOWN;
@@ -93,12 +88,10 @@ export function readRejection(
 export function unknownRefusal(
   rejection: IAuthRejection | undefined,
 ): IAuthRefusal {
-  return toLegacyRefusal(
-    authError['system-refused']({
-      verdict: 'unknown',
-      at: momentOf(rejection),
-    }),
-  );
+  return authError['system-refused']({
+    verdict: 'unknown',
+    at: momentOf(rejection),
+  });
 }
 
 /**
@@ -114,12 +107,10 @@ export function refuseFor(
   if (read.verdict === 'credential') {
     return {
       ok: false,
-      refusal: toLegacyRefusal(
-        authError['credential-refused']({
-          credential,
-          at: momentOf(rejection),
-        }),
-      ),
+      refusal: authError['credential-refused']({
+        credential,
+        at: momentOf(rejection),
+      }),
     };
   }
   if (read.verdict === 'not-credential') {

@@ -6,14 +6,12 @@
 
 import type { AttemptContext } from '@mcp-abap-adt/auth-errors';
 import type {
-  AssertionContext,
   IAssertionValidator,
   ITokenResult,
   OAuth2GrantType,
 } from '@mcp-abap-adt/interfaces-auth';
 import { AUTH_TYPE_SAML2_BEARER } from '@mcp-abap-adt/interfaces-auth';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
-import { asContract } from '../auth/contractShape';
 import {
   exchangeSamlAssertion,
   refreshSamlBearerToken,
@@ -114,17 +112,13 @@ export class Saml2BearerProvider extends BaseTokenProvider {
     // Validation establishes trust before anything reaches the token
     // endpoint; it does not change what is sent beyond toBearerAssertion's
     // conversion below.
-    await validateAssertion(
-      this.validator,
-      payload,
-      asContract<AssertionContext>({
-        expectedInResponseTo: requestId,
-        audience: this.config.spEntityId,
-        acsUrl,
-        expectedIssuer: this.config.idpEntityId,
-        logger: this.logger,
-      }),
-    );
+    await validateAssertion(this.validator, payload, {
+      expectedInResponseTo: requestId,
+      audience: this.config.spEntityId,
+      acsUrl,
+      expectedIssuer: this.config.idpEntityId,
+      logger: this.logger,
+    });
     const tokenUrl = resolveTokenUrl(this.config);
     // RFC 7522 takes one base64url Assertion; a login delivers the whole
     // Response in standard base64, which a conforming endpoint refuses.
@@ -138,13 +132,13 @@ export class Saml2BearerProvider extends BaseTokenProvider {
       this.siteOptions(attempt.signal),
     );
 
-    return asContract<ITokenResult>({
+    return {
       authorizationToken: tokens.accessToken,
       refreshToken: tokens.refreshToken,
       authType: AUTH_TYPE_SAML2_BEARER,
       expiresIn: tokens.expiresIn,
       tokenType: 'jwt',
-    });
+    };
   }
 
   /**
@@ -170,12 +164,12 @@ export class Saml2BearerProvider extends BaseTokenProvider {
       this.siteOptions(),
     );
 
-    return asContract<ITokenResult>({
+    return {
       authorizationToken: tokens.accessToken,
       refreshToken: tokens.refreshToken || refreshToken,
       authType: AUTH_TYPE_SAML2_BEARER,
       expiresIn: tokens.expiresIn,
       tokenType: 'jwt',
-    });
+    };
   }
 }

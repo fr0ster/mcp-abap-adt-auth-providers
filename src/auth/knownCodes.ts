@@ -7,7 +7,7 @@
  */
 
 import { isSystemCode, isTlsFailureCode } from '@mcp-abap-adt/auth-errors';
-import type { TlsFailureCode } from './contractTransition';
+import type { TlsFailureCode } from '@mcp-abap-adt/interfaces-auth';
 
 /**
  * One property of a foreign value, or undefined when reading it throws: a

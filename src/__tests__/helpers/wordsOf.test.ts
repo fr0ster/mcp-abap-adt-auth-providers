@@ -1,15 +1,14 @@
 import { describe, expect, it } from '@jest/globals';
 import { authError } from '@mcp-abap-adt/auth-errors';
 import type { AuthOutcome } from '@mcp-abap-adt/interfaces-auth';
-import { toLegacyOutcome } from '../../auth/contractTransition';
 import { wordsOf } from './minted';
 
 describe('wordsOf still checks the whole outcome', () => {
   it('a minted refusal reads as its words', () => {
-    const outcome = toLegacyOutcome({
+    const outcome: AuthOutcome = {
       ok: false,
       refusal: authError['client-certificate']({ problem: 'expired' }),
-    });
+    };
     expect(wordsOf(outcome)).toEqual({
       ok: false,
       refusal: {

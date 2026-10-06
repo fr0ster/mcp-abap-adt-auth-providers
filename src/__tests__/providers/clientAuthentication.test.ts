@@ -10,6 +10,7 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { beforeEach, describe, expect, it, jest } from '@jest/globals';
+import { authError } from '@mcp-abap-adt/auth-errors';
 import type {
   IAssertionValidator,
   IAuthorizationStrategy,
@@ -18,12 +19,9 @@ import type {
   ITokenRequestDraft,
 } from '@mcp-abap-adt/interfaces-auth';
 import axios from 'axios';
+import { certificateFailure } from '../../auth/certificateMaterial';
 import { toBearerAssertion } from '../../auth/samlBearerAssertion';
 import { clientSecretBasic } from '../../clientAuthentication';
-import {
-  CERTIFICATE_UNUSABLE,
-  CertificateMaterialError,
-} from '../../errors/CertificateMaterialError';
 import { AuthorizationCodeProvider } from '../../providers/AuthorizationCodeProvider';
 import { ClientCredentialsProvider } from '../../providers/ClientCredentialsProvider';
 import { OidcBrowserProvider } from '../../providers/OidcBrowserProvider';
@@ -34,6 +32,11 @@ import { Saml2BearerProvider } from '../../providers/Saml2BearerProvider';
 import { UaaPasscodeProvider } from '../../providers/UaaPasscodeProvider';
 import { configurationOf, wordsOf } from '../helpers/minted';
 import { recordingTargets } from '../helpers/targets';
+
+/** The words of `client-certificate` `unusable` (A4). */
+const CERTIFICATE_UNUSABLE = authError['client-certificate']({
+  problem: 'unusable',
+});
 
 // Automocked, but with axios's own error class: the sites throw it.
 jest.mock('axios', () => {
@@ -546,7 +549,7 @@ describe('one certificate, pinned', () => {
 
   it('material that fails to load: refused in fixed words, the stored refresh token kept and not sent; a later moment loads again', async () => {
     const { strategy, tlsCalls } = recording([
-      new CertificateMaterialError(false),
+      certificateFailure('unusable'),
       A,
     ]);
     const authorization = codeStrategy();
@@ -722,7 +725,7 @@ describe('an expired client certificate', () => {
     const held = sent.length;
     const now = jest.spyOn(Date, 'now').mockReturnValue(Date.UTC(2127, 0, 1));
     try {
-      // B14 / L3 (Task 22): the CertificateMaterialError is classified —
+      // B14 / L3 (Task 22): the expired material is classified —
       // client-certificate, expired — and thrown as an AuthProviderFailure.
       await expect(provider.refreshTokens()).rejects.toMatchObject({
         name: 'AuthProviderFailure',

@@ -45,7 +45,7 @@ afterEach(async () => {
 describe('withOidcCallbackServer', () => {
   it('ends the login at once when the IdP refuses', async () => {
     const attempt = withOidcCallbackServer(
-      { port: PORT, timeoutMs: 30000 },
+      { port: PORT },
       async (srv) => await srv.waitForResult(),
     );
     // Attach the expectation BEFORE delivering. The rejection lands as soon as
@@ -65,16 +65,13 @@ describe('withOidcCallbackServer', () => {
   }, 30000);
 
   it('answers 400 and keeps waiting for a request carrying neither', async () => {
-    const result = await withOidcCallbackServer(
-      { port: PORT, timeoutMs: 5000 },
-      async (srv) => {
-        const waiting = srv.waitForResult();
-        const stray = await httpGet('/callback');
-        expect(stray.status).toBe(400);
-        void httpGet('/callback?code=late&state=xyz').catch(() => undefined);
-        return await waiting;
-      },
-    );
+    const result = await withOidcCallbackServer({ port: PORT }, async (srv) => {
+      const waiting = srv.waitForResult();
+      const stray = await httpGet('/callback');
+      expect(stray.status).toBe(400);
+      void httpGet('/callback?code=late&state=xyz').catch(() => undefined);
+      return await waiting;
+    });
     expect(result).toEqual({ code: 'late', state: 'xyz' });
   }, 30000);
 });

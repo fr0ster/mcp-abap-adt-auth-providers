@@ -3,7 +3,7 @@
  * unknown one does not compile (`GrantTable`). interfaces-auth exports no
  * array of them.
  */
-import type { OAuth2GrantType } from './contractTransition';
+import type { OAuth2GrantType } from '@mcp-abap-adt/interfaces-auth';
 
 /** One entry per grant type: a missing or an unknown one does not compile. */
 export type GrantTable = { readonly [G in OAuth2GrantType]: true };

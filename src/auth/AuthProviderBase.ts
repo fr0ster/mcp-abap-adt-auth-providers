@@ -7,30 +7,20 @@
  * operations live in an ECMAScript private field, captured and validated
  * once at construction (a throwing getter or a value off the list is the
  * moment's fixed fallback); `grant()` and the `on…` dispatch are called
- * inside `guard`'s `try`.
- *
- * TRANSITION (Decision D6, removed in Task 27): `guard` is
- * `contractTransition`'s, typed for the 4.x `IAuthProvider`; `legacyBridge`
- * answers the class ladder's refusal for a body throwing one of this
- * package's error classes, which auth-errors' `classify` does not know.
+ * inside `guard`'s `try`, which reads the grant once and normalises the
+ * body's answer (`classifyOutcome`): an unminted refusal does not pass.
  */
 
-import { isOperation } from '@mcp-abap-adt/auth-errors';
+import { guard, isOperation } from '@mcp-abap-adt/auth-errors';
 import type {
   AuthOutcome,
   IAuthProvider,
   IAuthRejection,
   ILogonTarget,
   IRequestTarget,
+  OAuth2GrantType,
+  Operation,
 } from '@mcp-abap-adt/interfaces-auth';
-import {
-  type AnyOutcome,
-  guard,
-  type OAuth2GrantType,
-  type Operation,
-} from './contractTransition';
-import { isGrant } from './grants';
-import { isLadderClass, refusalFor } from './refusal';
 
 /** The four moments of the contract. */
 export type Moment = 'prepare' | 'establish' | 'authorize' | 'rejected';
@@ -72,29 +62,6 @@ function validatedMoments(moments: unknown): MomentOperations {
 }
 
 /**
- * TRANSITION (removed in Task 27): a body throwing one of this package's
- * error classes answers the ladder's refusal, inside the boundary; anything
- * else is rethrown to `guard`'s `classify`. `grant` is the guard's memoised
- * read: its value, never a second call of the provider's `grant()`.
- */
-async function legacyBridge(
-  body: () => AnyOutcome | Promise<AnyOutcome>,
-  operation: Operation,
-  grant: () => unknown,
-): Promise<AnyOutcome> {
-  try {
-    return await body();
-  } catch (error) {
-    if (!isLadderClass(error)) throw error;
-    const read = grant();
-    return refusalFor(error, {
-      operation,
-      ...(isGrant(read) ? { grant: read } : {}),
-    });
-  }
-}
-
-/**
  * The base every provider of this package extends, exported for a consumer
  * writing a provider of its own: it implements the four moments, a subclass
  * implements `on…`.
@@ -117,8 +84,7 @@ export abstract class AuthProviderBase implements IAuthProvider {
   prepare(): Promise<AuthOutcome> {
     return guard(
       this.#moments.prepare,
-      (grant) =>
-        legacyBridge(() => this.onPrepare(), this.#moments.prepare, grant),
+      () => this.onPrepare(),
       () => this.grant(),
     );
   }
@@ -126,12 +92,7 @@ export abstract class AuthProviderBase implements IAuthProvider {
   establish(logon: ILogonTarget): Promise<AuthOutcome> {
     return guard(
       this.#moments.establish,
-      (grant) =>
-        legacyBridge(
-          () => this.onEstablish(logon),
-          this.#moments.establish,
-          grant,
-        ),
+      () => this.onEstablish(logon),
       () => this.grant(),
     );
   }
@@ -139,12 +100,7 @@ export abstract class AuthProviderBase implements IAuthProvider {
   authorize(request: IRequestTarget): Promise<AuthOutcome> {
     return guard(
       this.#moments.authorize,
-      (grant) =>
-        legacyBridge(
-          () => this.onAuthorize(request),
-          this.#moments.authorize,
-          grant,
-        ),
+      () => this.onAuthorize(request),
       () => this.grant(),
     );
   }
@@ -152,24 +108,19 @@ export abstract class AuthProviderBase implements IAuthProvider {
   rejected(rejection: IAuthRejection): Promise<AuthOutcome> {
     return guard(
       this.#moments.rejected,
-      (grant) =>
-        legacyBridge(
-          () => this.onRejected(rejection),
-          this.#moments.rejected,
-          grant,
-        ),
+      () => this.onRejected(rejection),
       () => this.grant(),
     );
   }
 
-  protected abstract onPrepare(): AnyOutcome | Promise<AnyOutcome>;
+  protected abstract onPrepare(): AuthOutcome | Promise<AuthOutcome>;
   protected abstract onEstablish(
     logon: ILogonTarget,
-  ): AnyOutcome | Promise<AnyOutcome>;
+  ): AuthOutcome | Promise<AuthOutcome>;
   protected abstract onAuthorize(
     request: IRequestTarget,
-  ): AnyOutcome | Promise<AnyOutcome>;
+  ): AuthOutcome | Promise<AuthOutcome>;
   protected abstract onRejected(
     rejection: IAuthRejection,
-  ): AnyOutcome | Promise<AnyOutcome>;
+  ): AuthOutcome | Promise<AuthOutcome>;
 }

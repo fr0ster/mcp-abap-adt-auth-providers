@@ -23,7 +23,7 @@ const { withBrowserCallbackServer } = require(${JSON.stringify(join(out, 'auth',
   let port;
   let lingering;
   const result = await withBrowserCallbackServer(
-    { port: 0, timeoutMs: Number.POSITIVE_INFINITY },
+    { port: 0 },
     async (srv) => {
       port = srv.port;
       const waiting = srv.waitForResult();

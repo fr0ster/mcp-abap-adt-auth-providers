@@ -18,7 +18,7 @@ import {
   isConfigField,
   isMinted,
 } from '@mcp-abap-adt/auth-errors';
-import type { ConfigField } from './contractTransition';
+import type { ConfigField } from '@mcp-abap-adt/interfaces-auth';
 
 /**
  * What a site hands `misconfigured`: the builder's result, typed by its kind

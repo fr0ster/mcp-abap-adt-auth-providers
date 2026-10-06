@@ -46,12 +46,14 @@ import {
   logFields,
   readFailure,
 } from '@mcp-abap-adt/auth-errors';
-import type { IClientAuthentication } from '@mcp-abap-adt/interfaces-auth';
+import type {
+  IClientAuthentication,
+  Operation,
+} from '@mcp-abap-adt/interfaces-auth';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
 import axios, { type AxiosAdapter } from 'axios';
 import { exchangeCodeForToken } from '../../auth/browserAuth';
 import { getTokenWithClientCredentials } from '../../auth/clientCredentialsAuth';
-import type { Operation } from '../../auth/contractTransition';
 import {
   exchangeAuthorizationCode,
   initiateDeviceAuthorization,

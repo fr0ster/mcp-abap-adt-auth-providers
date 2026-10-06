@@ -18,10 +18,12 @@ import {
   createParties,
   isSncQop,
   logFields,
+  OK,
   readFailure,
   relayOutcome,
 } from '@mcp-abap-adt/auth-errors';
 import type {
+  AuthOutcome,
   IAuthRejection,
   ILogonTarget,
   IRequestTarget,
@@ -30,9 +32,7 @@ import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
 import { AuthProviderBase } from '../auth/AuthProviderBase';
 import { throwIfAborted } from '../auth/attempt';
 import { misconfigured } from '../auth/configuration';
-import type { AnyOutcome } from '../auth/contractTransition';
 import { readSafely } from '../auth/knownCodes';
-import { OK } from '../auth/refusal';
 import { readRejection } from '../auth/rejection';
 import { logQuietly } from '../auth/tokenRequest';
 import {
@@ -205,7 +205,7 @@ export class SncLogonProvider extends AuthProviderBase {
   }
 
   /** Resolve the library; note which probe applies. The product is not checked. */
-  protected async onPrepare(): Promise<AnyOutcome> {
+  protected async onPrepare(): Promise<AuthOutcome> {
     const waiter = this.parties.waiterSignal();
     try {
       return await this.resolve(waiter?.signal);
@@ -214,7 +214,7 @@ export class SncLogonProvider extends AuthProviderBase {
     }
   }
 
-  private async resolve(signal: AbortSignal | undefined): Promise<AnyOutcome> {
+  private async resolve(signal: AbortSignal | undefined): Promise<AuthOutcome> {
     let found: SncLibrary;
     try {
       found = await this.locator.locate(signal);
@@ -287,7 +287,7 @@ export class SncLogonProvider extends AuthProviderBase {
   }
 
   /** No other way in (rule 4): the wire's answer is this provider's own. */
-  protected onEstablish(logon: ILogonTarget): AnyOutcome {
+  protected onEstablish(logon: ILogonTarget): AuthOutcome {
     const library = this.library;
     if (!library) {
       // G9.
@@ -311,7 +311,7 @@ export class SncLogonProvider extends AuthProviderBase {
     ).outcome;
   }
 
-  protected onAuthorize(_request: IRequestTarget): AnyOutcome {
+  protected onAuthorize(_request: IRequestTarget): AuthOutcome {
     return OK;
   }
 
@@ -320,7 +320,7 @@ export class SncLogonProvider extends AuthProviderBase {
    * failures as a communication failure. Without one, a status or an RFC key
    * that is not about the credential gets the neutral words (rule 5).
    */
-  protected onRejected(rejection: IAuthRejection): AnyOutcome {
+  protected onRejected(rejection: IAuthRejection): AuthOutcome {
     const context = {
       library: this.library,
       secureLoginClient: this.secureLoginClient,

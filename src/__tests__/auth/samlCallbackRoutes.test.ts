@@ -62,7 +62,7 @@ afterEach(async () => {
 describe('withSamlCallbackServer', () => {
   it('answers 400 without the completion page on a POST with no SAMLResponse', async () => {
     const assertion = await withSamlCallbackServer(
-      { port: PORT, timeoutMs: 5000 },
+      { port: PORT },
       async (srv) => {
         const waiting = srv.waitForResult();
         const stray = await request('POST', '/callback', 'other=1');
@@ -79,7 +79,7 @@ describe('withSamlCallbackServer', () => {
 
   it('answers 400 without the completion page on a GET with no SAMLResponse', async () => {
     const assertion = await withSamlCallbackServer(
-      { port: PORT, timeoutMs: 5000 },
+      { port: PORT },
       async (srv) => {
         const waiting = srv.waitForResult();
         const stray = await request('GET', '/callback');
@@ -98,7 +98,7 @@ describe('withSamlCallbackServer', () => {
   it('releases the port when the login is abandoned', async () => {
     const ac = new AbortController();
     const scope = withSamlCallbackServer(
-      { port: PORT, timeoutMs: Number.POSITIVE_INFINITY, signal: ac.signal },
+      { port: PORT, signal: ac.signal },
       async (srv) => await srv.waitForResult(),
     );
     // Attached before anything can settle it — aborting first would leave

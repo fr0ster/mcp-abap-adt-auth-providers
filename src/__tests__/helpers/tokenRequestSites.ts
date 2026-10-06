@@ -4,10 +4,10 @@
  * property over all of them.
  */
 
+import type { Operation } from '@mcp-abap-adt/interfaces-auth';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
 import { exchangeCodeForToken } from '../../auth/browserAuth';
 import { getTokenWithClientCredentials } from '../../auth/clientCredentialsAuth';
-import type { Operation } from '../../auth/contractTransition';
 import {
   exchangeAuthorizationCode,
   initiateDeviceAuthorization,

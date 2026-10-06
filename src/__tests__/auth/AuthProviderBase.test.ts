@@ -6,7 +6,7 @@
  * outcome (a minted refusal on failure) and never rejects.
  */
 import { describe, expect, it } from '@jest/globals';
-import { isMinted } from '@mcp-abap-adt/auth-errors';
+import { isMinted, OK } from '@mcp-abap-adt/auth-errors';
 import type {
   AuthOutcome,
   IAuthProvider,
@@ -17,8 +17,6 @@ import {
   AuthProviderBase,
   type MomentOperations,
 } from '../../auth/AuthProviderBase';
-import { OK } from '../../auth/refusal';
-import { TokenEndpointError } from '../../errors/TokenEndpointError';
 import { BaseTokenProvider } from '../../index';
 import { recordingTargets } from '../helpers/targets';
 
@@ -276,7 +274,9 @@ describe('the grant is read once per moment, inside the boundary', () => {
     },
   );
 
-  it('a ladder class thrown by the body names the grant read once', async () => {
+  // Task 27: the ladder is gone; auth-errors' guard reads the grant once and
+  // classify names it beside the thrown value's allowlisted facts.
+  it('a foreign throw by the body names the grant read once', async () => {
     let calls = 0;
     class Ladder extends Throwing {
       protected override grant(): OAuth2GrantType | undefined {
@@ -284,14 +284,13 @@ describe('the grant is read once per moment, inside the boundary', () => {
         return 'password';
       }
       protected override onPrepare(): AuthOutcome {
-        throw new TokenEndpointError(MARKER, { status: 401 });
+        throw Object.assign(new Error(MARKER), { code: 'ECONNRESET' });
       }
     }
     expect(factsOf(await new Ladder().prepare())).toEqual({
       operation: 'loading-certificate',
       grant: 'password',
-      problem: 'refused',
-      status: 401,
+      code: 'ECONNRESET',
     });
     expect(calls).toBe(1);
   });

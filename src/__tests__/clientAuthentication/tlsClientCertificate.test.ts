@@ -3,9 +3,8 @@ import { join } from 'node:path';
 import { describe, expect, it, jest } from '@jest/globals';
 import { readFailure } from '@mcp-abap-adt/auth-errors';
 import type { ICertificateMaterial } from '@mcp-abap-adt/interfaces-auth';
-import { refusalFrom } from '../../auth/refusal';
 import { tlsClientCertificate } from '../../clientAuthentication';
-import { wordsOf } from '../helpers/minted';
+import { refusedWith, wordsOf } from '../helpers/minted';
 
 const dir = join(__dirname, '..', 'fixtures', 'certificates');
 const pem: ICertificateMaterial = {
@@ -85,7 +84,7 @@ describe('tlsClientCertificate — the material', () => {
       kind: 'client-certificate',
       facts: { problem: 'incomplete' },
     });
-    expect(wordsOf(refusalFrom(e, 'x'))).toEqual({
+    expect(wordsOf(refusedWith(e))).toEqual({
       ok: false,
       refusal: {
         reason: 'the client certificate is incomplete',
@@ -103,7 +102,7 @@ describe('tlsClientCertificate — the material', () => {
       kind: 'client-certificate',
       facts: { problem: 'unusable' },
     });
-    expect(refusalFrom(e, 'x')).toMatchObject({
+    expect(refusedWith(e)).toMatchObject({
       refusal: { reason: 'the client certificate could not be used' },
     });
   });

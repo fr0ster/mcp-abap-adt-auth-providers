@@ -18,7 +18,6 @@ import type {
   ILogonTarget,
   IRequestTarget,
 } from '@mcp-abap-adt/interfaces-auth';
-import { toLegacyOutcome } from '../../auth/contractTransition';
 import { DefaultSncLibraryLocator } from '../../snc/DefaultSncLibraryLocator';
 import { SecureLoginClientProbe } from '../../snc/SecureLoginClientProbe';
 import { SncLogonProvider } from '../../snc/SncLogonProvider';
@@ -587,13 +586,13 @@ describe('E20 / E21 — construction', () => {
 });
 
 describe('§7 — no other way in: the target answer is the provider’s own', () => {
-  const MINTED = toLegacyOutcome({
+  const MINTED: AuthOutcome = {
     ok: false,
     refusal: authError['logon-target']({
       wire: 'http',
       refused: 'logon-parameters',
     }),
-  });
+  };
   const mintedRefusalObject = () =>
     MINTED.ok ? undefined : (MINTED.refusal as unknown);
   const target = (respond: () => unknown): ILogonTarget => ({

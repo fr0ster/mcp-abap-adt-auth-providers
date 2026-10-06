@@ -4,7 +4,8 @@
  */
 
 import { describe, expect, it } from '@jest/globals';
-import type { AssertionCheck, ShippedValidatorOptions } from '../index';
+import type { AssertionCheck } from '@mcp-abap-adt/interfaces-auth';
+import type { ShippedValidatorOptions } from '../index';
 import * as surface from '../index';
 
 describe('public exports — SAML assertion validation', () => {
@@ -13,14 +14,14 @@ describe('public exports — SAML assertion validation', () => {
     'createSignedAssertionValidator',
     'createInMemoryReplayStore',
     'defaultReplayStore',
-    'AssertionValidationError',
   ])('exports %s', (name) => {
     expect((surface as Record<string, unknown>)[name]).toBeDefined();
   });
 
-  it('exports the types AssertionCheck and ShippedValidatorOptions', () => {
+  it("exports the type ShippedValidatorOptions; AssertionCheck is interfaces-auth's", () => {
     // Type-only exports vanish at runtime; this compiles only while they are
     // exported, since ts-jest type-checks the suite before running it.
+    // AssertionCheck moved to interfaces-auth (spec §6, 6.0.0).
     const check: AssertionCheck = 'replay';
     const options: ShippedValidatorOptions = {
       idpCertificates: [],
@@ -73,6 +74,38 @@ describe('public exports — 5.0.0', () => {
     'parseRegQuery',
     'SncLibraryNotFoundError',
   ])('does not export the internal %s', (name) => {
+    expect(name in surface).toBe(false);
+  });
+});
+
+// Task 27 (spec §6, Decision D7, Decision D6): the error classes, refusalWords
+// and every transition piece are gone from the surface — a consumer reads a
+// failure with auth-errors' readFailure and switches on its kind.
+describe('public exports — 6.0.0 removals', () => {
+  it.each([
+    'refusalWords',
+    'AssertionValidationError',
+    'CertificateMaterialError',
+    'BasicClientIdError',
+    'ClientAuthenticationError',
+    'ClientAuthenticationResultError',
+    'TokenEndpointError',
+    'BrowserAuthError',
+    'RefreshError',
+    'ServiceKeyError',
+    'SessionDataError',
+    'TokenProviderError',
+    'ValidationError',
+    'CallbackScopeError',
+    'AuthorizationRefusedError',
+    'DEFAULT_LOGIN_TIMEOUT_MS',
+    'legacyBasic',
+    'rejectMissingToken',
+    'asContract',
+    'toLegacyOutcome',
+    'toLegacyRefusal',
+    'loggedError',
+  ])('does not export %s', (name) => {
     expect(name in surface).toBe(false);
   });
 });

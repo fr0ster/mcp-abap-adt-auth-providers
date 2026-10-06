@@ -3,8 +3,8 @@
  * catches from getTokens(), refreshTokens() or a strategy is logged by
  * whoever catches it — the broker, a server — by its message. What a
  * collaborator or the network threw may hold a key, a passphrase or a token,
- * so the message is fixed words (the refusal's, `loggedError`); the original
- * is the `cause`, which a consumer reads only by choice.
+ * so what is thrown is an `AuthProviderFailure` whose message is its error's
+ * fixed words, with no `cause` (spec §6, L3).
  */
 
 import http from 'node:http';
@@ -13,21 +13,19 @@ import { beforeEach, describe, expect, it, jest } from '@jest/globals';
 import {
   AuthProviderFailure,
   authError,
+  classify,
   isAuthProviderFailure,
+  logFields,
   readFailure,
 } from '@mcp-abap-adt/auth-errors';
-import axios, { AxiosError } from 'axios';
-import { AuthorizationRefusedError } from '../../auth/callbackScopeError';
+import axios from 'axios';
 import { getTokenWithClientCredentials } from '../../auth/clientCredentialsAuth';
 import { refreshOidcToken } from '../../auth/oidcToken';
-import { loggedError, refusalFrom } from '../../auth/refusal';
 import {
   exchangeSamlAssertion,
   refreshSamlBearerToken,
 } from '../../auth/saml2TokenExchange';
 import { refreshJwtToken } from '../../auth/tokenRefresher';
-import { TokenEndpointError } from '../../errors/TokenEndpointError';
-import { BrowserAuthError } from '../../errors/TokenProviderErrors';
 import { AuthorizationCodeProvider } from '../../providers/AuthorizationCodeProvider';
 import { ClientCredentialsProvider } from '../../providers/ClientCredentialsProvider';
 import {
@@ -180,11 +178,11 @@ describe('a token-endpoint failure keeps its safe facts', () => {
         status: 401,
         oauthError: 'invalid_grant',
       });
-      const words = loggedError(error, 'the refresh').error;
+      const words = logFields(classify(error, 'refresh')).error;
       expect(words).toContain('HTTP 401');
       expect(words).toContain('invalid_grant');
       expect(words).not.toContain(DESCRIPTION);
-      const refusal = refusalFrom(error, 'the refresh');
+      const refusal = classify(error, 'refresh');
       expect(JSON.stringify(refusal)).toContain('invalid_grant');
       expect(JSON.stringify(refusal)).not.toContain(DESCRIPTION);
     },
@@ -199,7 +197,7 @@ describe('a token-endpoint failure keeps its safe facts', () => {
     expect(
       readFailure(error, 'unfamiliar-error').facts as Record<string, unknown>,
     ).not.toHaveProperty('oauthError');
-    const words = loggedError(error, 'the refresh').error;
+    const words = logFields(classify(error, 'refresh')).error;
     expect(words).toContain('HTTP 400');
     expect(words).not.toContain(UNREGISTERED);
   });
@@ -221,7 +219,7 @@ describe('a token-endpoint failure keeps its safe facts', () => {
     ).toBe(code);
     expect(text).toContain(code);
     expect(text).not.toContain(MARKER);
-    expect(loggedError(error, 'the refresh').error).toContain(code);
+    expect(logFields(classify(error, 'refresh')).error).toContain(code);
   });
 
   it('an unlisted code never reaches the message', async () => {
@@ -322,10 +320,10 @@ describe('an IdP refusal on the browser callback', () => {
       });
       expect(text).toContain('consent_required');
       expect(text).not.toContain(DESCRIPTION);
-      const refusal = JSON.stringify(refusalFrom(error, 'the login'));
+      const refusal = JSON.stringify(classify(error, 'browser-login'));
       expect(refusal).toContain('consent_required');
       expect(refusal).not.toContain(DESCRIPTION);
-      expect(loggedError(error, 'the login').error).toContain(
+      expect(logFields(classify(error, 'browser-login')).error).toContain(
         'consent_required',
       );
     },
@@ -342,7 +340,7 @@ describe('an IdP refusal on the browser callback', () => {
       }),
     );
     expect(text).not.toContain(DESCRIPTION);
-    expect(JSON.stringify(refusalFrom(error, 'the login'))).not.toContain(
+    expect(JSON.stringify(classify(error, 'browser-login'))).not.toContain(
       DESCRIPTION,
     );
     expect(text).toContain('refused');
@@ -416,18 +414,18 @@ const hostile = () =>
     },
   );
 
-describe('refusalFrom and loggedError are total', () => {
+describe('classify and logFields are total', () => {
   beforeEach(() => {
     jest.resetAllMocks();
   });
 
   it('a value whose every read throws is "unknown error", not an exception', () => {
-    expect(wordsOf(refusalFrom(hostile(), 'the token source'))).toEqual({
-      ok: false,
-      refusal: { reason: 'the token source failed (unknown error)' },
-    });
-    expect(loggedError(hostile(), 'the token source')).toEqual({
+    expect(classify(hostile(), 'token-source').reason).toBe(
+      'the token source failed (unknown error)',
+    );
+    expect(logFields(classify(hostile(), 'token-source'))).toEqual({
       error: 'the token source failed (unknown error)',
+      kind: 'unknown',
     });
   });
 
@@ -481,69 +479,6 @@ describe('refusalFrom and loggedError are total', () => {
 
 describe('the facts are re-checked wherever they are read', () => {
   const FOREIGN = 'REVIEW_TEST_FOREIGN_CODE_19be';
-
-  it('a mutated refusal code never reaches the refusal', () => {
-    const refused = new AuthorizationRefusedError('consent_required');
-    (refused as unknown as { oauthError: string }).oauthError = FOREIGN;
-    const outcome = refusalFrom(
-      new BrowserAuthError(refused.message, refused),
-      'the login',
-    );
-    expect(JSON.stringify(outcome)).not.toContain(FOREIGN);
-    expect(JSON.stringify(outcome)).toContain('refused the login');
-  });
-
-  it('TokenEndpointError keeps only allowlisted facts', () => {
-    const forged = new TokenEndpointError('m', {
-      status: 401.5,
-      code: FOREIGN,
-      oauthError: FOREIGN,
-    });
-    expect(forged.status).toBeUndefined();
-    expect(forged.code).toBeUndefined();
-    expect(forged.oauthError).toBeUndefined();
-    expect(JSON.stringify(forged)).not.toContain(FOREIGN);
-    const kept = new TokenEndpointError('m', {
-      status: 401,
-      code: 'ECONNRESET',
-      oauthError: 'invalid_grant',
-    });
-    expect([kept.status, kept.code, kept.oauthError]).toEqual([
-      401,
-      'ECONNRESET',
-      'invalid_grant',
-    ]);
-  });
-
-  it("loggedError's status field comes from a TokenEndpointError too", () => {
-    expect(
-      loggedError(new TokenEndpointError('m', { status: 401 }), 'x').status,
-    ).toBe(401);
-  });
-
-  it('a reduced AxiosError reads like a TokenEndpointError (the same words; its kind is unknown until Task 21 makes the site request-failed)', () => {
-    const facts = { status: 401, oauthError: 'invalid_grant' };
-    const axiosError = new AxiosError(
-      'Request failed with status code 401',
-      undefined,
-      undefined,
-      undefined,
-      {
-        status: 401,
-        statusText: '',
-        headers: {},
-        data: { error: 'invalid_grant' },
-      } as never,
-    );
-    const words = wordsOf(refusalFrom(axiosError, 'the refresh'));
-    expect(words).toEqual(
-      wordsOf(refusalFrom(new TokenEndpointError('m', facts), 'the refresh')),
-    );
-    expect(words).toEqual({
-      ok: false,
-      refusal: { reason: 'the refresh failed (HTTP 401, invalid_grant)' },
-    });
-  });
 
   it('the SAML bearer exchange logs the facts, not the description', async () => {
     jest.resetAllMocks();

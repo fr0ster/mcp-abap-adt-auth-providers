@@ -23,7 +23,11 @@ class FailingTokenProvider extends surface.BaseTokenProvider {
 }
 const throwingStrategy: IAuthorizationStrategy<string> = {
   authorize: async () => {
-    throw new surface.ValidationError('SECRET-MSG', ['SECRET-FIELD']);
+    // A look-alike of the former ValidationError (gone in 6.0.0).
+    throw Object.assign(new Error('SECRET-MSG'), {
+      name: 'ValidationError',
+      missingFields: ['SECRET-FIELD'],
+    });
   },
 };
 const SLC = 'C:\\Program Files\\SAP\\FrontEnd\\SecureLogin\\lib\\sapcrypto.dll';

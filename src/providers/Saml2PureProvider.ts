@@ -6,7 +6,6 @@
 
 import type { AttemptContext } from '@mcp-abap-adt/auth-errors';
 import type {
-  AssertionContext,
   IAssertionValidator,
   IRequestTarget,
   ITokenResult,
@@ -14,7 +13,6 @@ import type {
 } from '@mcp-abap-adt/interfaces-auth';
 import { AUTH_TYPE_USER_TOKEN } from '@mcp-abap-adt/interfaces-auth';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
-import { asContract } from '../auth/contractShape';
 import { samlCallbackStrategy } from '../strategies';
 import { createSignedResponseValidator } from '../validation/assertionValidator';
 import { defaultReplayStore } from '../validation/inMemoryReplayStore';
@@ -105,27 +103,23 @@ export class Saml2PureProvider extends BaseTokenProvider {
     );
     // acsUrl is where the strategy actually listened — with an ephemeral port
     // the configured value is usually absent and never authoritative.
-    const validated = await validateAssertion(
-      this.validator,
-      payload,
-      asContract<AssertionContext>({
-        expectedInResponseTo: requestId,
-        audience: this.config.spEntityId,
-        acsUrl,
-        expectedIssuer: this.config.idpEntityId,
-        logger: this.logger,
-      }),
-    );
+    const validated = await validateAssertion(this.validator, payload, {
+      expectedInResponseTo: requestId,
+      audience: this.config.spEntityId,
+      acsUrl,
+      expectedIssuer: this.config.idpEntityId,
+      logger: this.logger,
+    });
     const sessionCookies = await this.config.cookieProvider(payload);
 
-    return asContract<ITokenResult>({
+    return {
       authorizationToken: sessionCookies,
       authType: AUTH_TYPE_USER_TOKEN,
       tokenType: 'saml',
       // ITokenResult.expiresAt is an epoch-ms number, unlike
       // ValidatedAssertion.expiresAt, which is a Date.
       expiresAt: validated.expiresAt.getTime(),
-    });
+    };
   }
 
   /** No refresh grant: the base logs in once instead of refreshing. */

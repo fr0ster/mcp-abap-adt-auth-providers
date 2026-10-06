@@ -1,12 +1,11 @@
-import { authError } from '@mcp-abap-adt/auth-errors';
+import { authError, OK } from '@mcp-abap-adt/auth-errors';
 import type {
+  AuthOutcome,
   IAuthRejection,
   IRequestTarget,
   ITokenRefresher,
 } from '@mcp-abap-adt/interfaces-auth';
 import { AuthProviderBase } from '../auth/AuthProviderBase';
-import type { AnyOutcome } from '../auth/contractTransition';
-import { OK } from '../auth/refusal';
 import { momentOf, readRejection, unknownRefusal } from '../auth/rejection';
 
 /**
@@ -42,15 +41,15 @@ export class TokenAuthProvider extends AuthProviderBase {
     );
   }
 
-  protected onPrepare(): AnyOutcome {
+  protected onPrepare(): AuthOutcome {
     return OK;
   }
 
-  protected onEstablish(): AnyOutcome {
+  protected onEstablish(): AuthOutcome {
     return OK;
   }
 
-  protected async onAuthorize(request: IRequestTarget): Promise<AnyOutcome> {
+  protected async onAuthorize(request: IRequestTarget): Promise<AuthOutcome> {
     const token = await this.current();
     request.header('Authorization', `Bearer ${token}`);
     this.presented = token;
@@ -58,7 +57,7 @@ export class TokenAuthProvider extends AuthProviderBase {
   }
 
   /** Renews only a refused credential, or one the rejection cannot tell. */
-  protected async onRejected(rejection: IAuthRejection): Promise<AnyOutcome> {
+  protected async onRejected(rejection: IAuthRejection): Promise<AuthOutcome> {
     const read = readRejection(rejection);
     if (read.verdict === 'not-credential') {
       return { ok: false, refusal: read.refusal };

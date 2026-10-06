@@ -15,11 +15,7 @@ export {
 export { withBrowserCallbackServer } from './auth/callbackServer';
 export type { OidcCallbackResult } from './auth/oidcBrowserAuth';
 export { withOidcCallbackServer } from './auth/oidcBrowserAuth';
-export { refusalWords } from './auth/refusal';
 export { withSamlCallbackServer } from './auth/saml2Auth';
-// TRANSITION (Decision D6): the 4.x AuthorizationRequest plus the attempt's
-// signal, until interfaces-auth 6.0.0's AuthorizationRequest (Task 27).
-export type { SignalledAuthorizationRequest } from './auth/signalledRequest';
 // How a token provider's client authenticates to the authorization server.
 export * from './clientAuthentication';
 // Credentials the process delegates to — every one an IAuthProvider.
@@ -34,26 +30,6 @@ export {
   type DeviceCodePrompt,
   type IDeviceCodePresenter,
 } from './deviceCode/DeviceCodePresenter';
-// Errors
-export {
-  type AssertionCheck,
-  AssertionValidationError,
-} from './errors/AssertionValidationError';
-export { CertificateMaterialError } from './errors/CertificateMaterialError';
-export {
-  BasicClientIdError,
-  ClientAuthenticationError,
-  ClientAuthenticationResultError,
-} from './errors/ClientAuthenticationError';
-export { TokenEndpointError } from './errors/TokenEndpointError';
-export {
-  BrowserAuthError,
-  RefreshError,
-  ServiceKeyError,
-  SessionDataError,
-  TokenProviderError,
-  ValidationError,
-} from './errors/TokenProviderErrors';
 export type {
   AuthorizationCodeProviderConfig,
   ClientCredentialsProviderConfig,
@@ -66,7 +42,6 @@ export type {
   Saml2PureProviderConfig,
   TokenProviderDebug,
   TokenProviderHooks,
-  TokenRequestOptions,
   UaaPasscodeProviderConfig,
 } from './providers';
 // Token Providers (stateful providers with automatic token lifecycle)
