@@ -23,12 +23,12 @@ import { join } from 'node:path';
 import { beforeAll, describe, expect, it, jest } from '@jest/globals';
 import { signXml } from '@mcp-abap-adt/auth-mocks';
 import type { IAuthorizationStrategy } from '@mcp-abap-adt/interfaces-auth';
-import { AssertionValidationError } from '../../../errors/AssertionValidationError';
 import { Saml2BearerProvider } from '../../../providers/Saml2BearerProvider';
 import { UaaPasscodeProvider } from '../../../providers/UaaPasscodeProvider';
 import { staticCodeStrategy } from '../../../strategies';
 import { createSignedAssertionValidator } from '../../../validation/assertionValidator';
 import { defaultReplayStore } from '../../../validation/inMemoryReplayStore';
+import { expectSamlRejection } from '../../helpers/samlRefusal';
 
 const LOCAL = process.env.XSUAA_LOCAL;
 const PASSCODE = process.env.XSUAA_PASSCODE;
@@ -196,14 +196,14 @@ describeXsuaa('Providers against a real XSUAA', () => {
   it('Saml2BearerProvider: an assertion carrying InResponseTo is refused before XSUAA sees it', async () => {
     const { logger, messages, failures } = recordingLogger();
 
-    const refused = expect(
+    await expectSamlRejection(
       bearer(
         Buffer.from(assertion('_an-authn-request')).toString('base64url'),
         { logger },
       ).getTokens(),
-    ).rejects;
-    await refused.toBeInstanceOf(AssertionValidationError);
-    await refused.toMatchObject({ check: 'bearerConfirmation' });
+      'no-bearer-qualifies',
+      { facts: { candidates: [{ reason: 'in-response-to-unexpected' }] } },
+    );
 
     expect(messages).not.toContain(EXCHANGE_STARTED);
     expect(failures).toEqual([]);

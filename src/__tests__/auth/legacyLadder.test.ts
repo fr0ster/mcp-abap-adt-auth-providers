@@ -2,12 +2,14 @@
  * TRANSITION TEST — removed in Task 27 with the class ladder (Decision D6).
  *
  * `refusalFrom`'s ladder: each of this package's 13 error classes (A.1) →
- * its builder per Appendix A. Three rows cannot be built from what their
+ * its builder per Appendix A. Two rows cannot be built from what their
  * class carries, so they keep their 5.4.2 words, unminted, until their
- * producers move: A3 (`AssertionValidationError` carries a `check` but no
- * `rule`, which `saml-assertion` requires — Task 24), A11 (`ValidationError`
- * carries `missingFields` but no `case` — Task 26) and A12 (`ServiceKeyError`
- * / `SessionDataError`: no kind; no producer in this package — Task 27).
+ * producers move: A11 (`ValidationError` carries `missingFields` but no
+ * `case` — Task 26) and A12 (`ServiceKeyError` / `SessionDataError`: no
+ * kind; no producer in this package — Task 27). A3's producers moved in
+ * Task 24: every SAML site throws its minted `saml-assertion` rule, and
+ * `AssertionValidationError` — constructed by no site, carrying a `check`
+ * but no `rule` — is any other own class (A13).
  */
 import { describe, expect, it } from '@jest/globals';
 import { isMinted } from '@mcp-abap-adt/auth-errors';
@@ -162,23 +164,24 @@ describe('legacy ladder: each class of this package → its kind', () => {
     });
   });
 
-  it('AssertionValidationError keeps its 5.4.2 words, unminted, until Task 24 (A3)', () => {
-    const outcome = refusalFrom(
+  // A3 (Task 24): the class is constructed by no site; an instance a
+  // consumer throws carries no rule, so it is A13's `unknown` — minted, and
+  // its `check` (even a forged one) is never read.
+  it('AssertionValidationError is an own class without a rule: unknown, minted (A3, Task 24)', () => {
+    for (const thrown of [
       new AssertionValidationError('issuer', MARKER),
-      WHAT,
-    );
-    expect(outcome).toEqual({
-      ok: false,
-      refusal: { reason: 'the SAML assertion was refused (issuer)' },
-    });
-    expect(!outcome.ok && isMinted(outcome.refusal)).toBe(false);
-    const forged = Object.assign(new AssertionValidationError('issuer', 'x'), {
-      check: MARKER,
-    });
-    expect(refusalFrom(forged, WHAT)).toEqual({
-      ok: false,
-      refusal: { reason: 'the SAML assertion was refused' },
-    });
+      Object.assign(new AssertionValidationError('issuer', 'x'), {
+        check: MARKER,
+      }),
+    ]) {
+      const error = words(refusalFrom(thrown, WHAT));
+      expect(error.kind).toBe('unknown');
+      expect(error.facts).toEqual({
+        operation: 'token-request',
+        grant: 'client_credentials',
+      });
+      expect(JSON.stringify(error)).not.toContain(MARKER);
+    }
   });
 
   it('ValidationError keeps its 5.4.2 words, unminted, until Task 26 (A11)', () => {

@@ -58,13 +58,13 @@ describe('refusal', () => {
     });
   });
 
-  it('an assertion refusal names its check only when it is an AssertionCheck', () => {
+  // A3 (Task 24): no site constructs the class; one a consumer throws has
+  // no rule and is any other own class — its message and its `check`, even
+  // a forged one, reach nothing.
+  it('an AssertionValidationError says nothing of its message or check', () => {
     expect(
-      refusalFrom(new AssertionValidationError('issuer', 'SECRET'), 'it'),
-    ).toEqual({
-      ok: false,
-      refusal: { reason: 'the SAML assertion was refused (issuer)' },
-    });
+      text(refusalFrom(new AssertionValidationError('issuer', 'SECRET'), 'it')),
+    ).not.toMatch(/SECRET/);
     const forged = Object.assign(new AssertionValidationError('issuer', 'x'), {
       check: 'SECRET_CHECK',
     });

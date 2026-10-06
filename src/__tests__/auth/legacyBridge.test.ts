@@ -145,15 +145,18 @@ describe('legacyBridge: a ladder class thrown by a body keeps its kind', () => {
       'unknown',
       OPERATION,
     ],
-    // A3, A11, A12: the ladder's 5.4.2 words are unminted, and guard answers
-    // an unminted refusal with its own fallback — `unknown` with the
-    // operation and grant — until Tasks 24 / 26 / 27 (spec §8.1).
+    // A3: constructed by no site since Task 24 (every SAML site throws its
+    // minted rule); an instance a consumer throws is any other own class,
+    // A13's `unknown` with the operation and grant.
     [
-      'AssertionValidationError (A3, until Task 24)',
+      'AssertionValidationError (A3, an own class since Task 24)',
       () => new AssertionValidationError('issuer', MARKER),
       'unknown',
       OPERATION,
     ],
+    // A11, A12: the ladder's 5.4.2 words are unminted, and guard answers
+    // an unminted refusal with its own fallback — `unknown` with the
+    // operation and grant — until Tasks 26 / 27 (spec §8.1).
     [
       'ValidationError (A11, until Task 26)',
       () => new ValidationError(MARKER, ['clientId']),

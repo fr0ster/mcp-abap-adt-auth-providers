@@ -13,26 +13,90 @@
  * them, and pretending to cover them would be worse than saying so.
  */
 
-const SHAPE =
-  /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(\.\d+)?(Z|[+-]\d{2}:\d{2})$/;
+/** The ASCII digit at `at`, or -1: never `\\d` widened to other scripts. */
+function digitAt(value: string, at: number): number {
+  const c = value.charCodeAt(at);
+  return c >= 0x30 && c <= 0x39 ? c - 0x30 : -1;
+}
+
+/** The `width` ASCII digits starting at `at` as a number, or -1. */
+function numberAt(value: string, at: number, width: number): number {
+  let n = 0;
+  for (let i = 0; i < width; i += 1) {
+    const digit = digitAt(value, at + i);
+    if (digit < 0) return -1;
+    n = n * 10 + digit;
+  }
+  return n;
+}
+
+/** The lexical parts of `YYYY-MM-DDThh:mm:ss[.f+](Z|±hh:mm)`, or null. */
+interface Lexical {
+  readonly year: number;
+  readonly month: number;
+  readonly day: number;
+  readonly hour: number;
+  readonly minute: number;
+  readonly second: number;
+  /** The fraction's digits, without the point; empty when there is none. */
+  readonly fraction: string;
+  /** `Z`, or `+hh:mm` / `-hh:mm`. */
+  readonly zone: string;
+}
+
+/**
+ * The shape, read character by character — a value from a SAML document is
+ * untrusted, and no regular expression runs over it.
+ */
+function readLexical(value: string): Lexical | null {
+  // YYYY-MM-DDThh:mm:ss is 19 characters, fixed.
+  const separators: ReadonlyArray<readonly [number, string]> = [
+    [4, '-'],
+    [7, '-'],
+    [10, 'T'],
+    [13, ':'],
+    [16, ':'],
+  ];
+  if (value.length < 20) return null;
+  for (const [at, char] of separators) {
+    if (value[at] !== char) return null;
+  }
+  const year = numberAt(value, 0, 4);
+  const month = numberAt(value, 5, 2);
+  const day = numberAt(value, 8, 2);
+  const hour = numberAt(value, 11, 2);
+  const minute = numberAt(value, 14, 2);
+  const second = numberAt(value, 17, 2);
+  if ([year, month, day, hour, minute, second].includes(-1)) return null;
+
+  let at = 19;
+  let fraction = '';
+  if (value[at] === '.') {
+    at += 1;
+    const from = at;
+    while (digitAt(value, at) >= 0) at += 1;
+    if (at === from) return null;
+    fraction = value.slice(from, at);
+  }
+
+  const zone = value.slice(at);
+  if (zone !== 'Z') {
+    const sign = zone[0];
+    if (zone.length !== 6 || (sign !== '+' && sign !== '-')) return null;
+    if (zone[3] !== ':') return null;
+    if (numberAt(zone, 1, 2) < 0 || numberAt(zone, 4, 2) < 0) return null;
+  }
+  return { year, month, day, hour, minute, second, fraction, zone };
+}
 
 /** Returns the instant, or null when the value is not a valid xsd:dateTime. */
 export function parseXsdDateTime(
   value: string | null | undefined,
 ): Date | null {
   if (!value) return null;
-  const m = SHAPE.exec(value);
-  if (!m) return null;
-
-  const [, y, mo, d, h, mi, s, fraction, zone] = m;
-  // The zone group is not optional, so a match always carries one.
-  if (zone === undefined) return null;
-  const year = Number(y);
-  const month = Number(mo);
-  const day = Number(d);
-  const hour = Number(h);
-  const minute = Number(mi);
-  const second = Number(s);
+  const lexical = readLexical(value);
+  if (!lexical) return null;
+  const { year, month, day, hour, minute, second, fraction, zone } = lexical;
 
   if (month < 1 || month > 12) return null;
   if (hour > 23 || minute > 59 || second > 59) return null;
@@ -50,9 +114,7 @@ export function parseXsdDateTime(
 
   // Milliseconds from the fraction: pad to 3 digits and truncate extras.
   // Avoid floating-point multiplication: 0.57 * 1000 = 569.99999….
-  const ms = fraction
-    ? Number(fraction.slice(1).padEnd(3, '0').slice(0, 3))
-    : 0;
+  const ms = fraction ? Number(fraction.padEnd(3, '0').slice(0, 3)) : 0;
 
   // Offset in milliseconds. For zone Z it is 0. Otherwise apply the sign.
   let offsetMs = 0;

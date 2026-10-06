@@ -18,6 +18,7 @@ import { asContract } from '../auth/contractShape';
 import { samlCallbackStrategy } from '../strategies';
 import { createSignedResponseValidator } from '../validation/assertionValidator';
 import { defaultReplayStore } from '../validation/inMemoryReplayStore';
+import { validateAssertion } from '../validation/samlRefusal';
 import {
   BaseTokenProvider,
   refreshTokenRefused,
@@ -104,7 +105,8 @@ export class Saml2PureProvider extends BaseTokenProvider {
     );
     // acsUrl is where the strategy actually listened — with an ephemeral port
     // the configured value is usually absent and never authoritative.
-    const validated = await this.validator.validate(
+    const validated = await validateAssertion(
+      this.validator,
       payload,
       asContract<AssertionContext>({
         expectedInResponseTo: requestId,

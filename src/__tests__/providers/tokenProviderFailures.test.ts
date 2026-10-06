@@ -929,13 +929,8 @@ describe('rule 8 on kinds: the remembered refusal', () => {
   });
 });
 
-describe('TRANSITION (Tasks 24, 26, 27): the rungs still answering unminted words pass as they are', () => {
+describe('TRANSITION (Tasks 26, 27): the rungs still answering unminted words pass as they are', () => {
   it.each([
-    [
-      'AssertionValidationError (A3, Task 24)',
-      () =>
-        new AssertionValidationError('status', 'the status was not Success'),
-    ],
     [
       'ValidationError (A11, Task 26)',
       () => new ValidationError('clientId is required', ['clientId']),
@@ -946,6 +941,22 @@ describe('TRANSITION (Tasks 24, 26, 27): the rungs still answering unminted word
     p.login.mockRejectedValue(original);
     await expect(p.getTokens()).rejects.toBe(original);
     await expect(p.refreshTokens()).rejects.toBe(original);
+  });
+
+  // Task 24 ended A3's pass-through: every SAML site throws its minted
+  // `saml-assertion` rule, and the class — constructed by no site — is any
+  // other own class when a consumer throws one (A13: `unknown`).
+  it('AssertionValidationError no longer passes through: classified and wrapped (A3, Task 24)', async () => {
+    const original = new AssertionValidationError('status', MARKER);
+    const p = new TestProvider();
+    p.login.mockRejectedValue(original);
+    for (const thrown of [
+      await rejectionOf(p.getTokens()),
+      await rejectionOf(p.refreshTokens()),
+    ]) {
+      expectFailure(thrown, original);
+      expect((thrown as AuthProviderFailure).error.kind).toBe('unknown');
+    }
   });
 
   it('every other class of this package is classified and wrapped (CertificateMaterialError)', async () => {

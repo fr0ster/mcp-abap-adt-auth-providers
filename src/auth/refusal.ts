@@ -18,7 +18,6 @@ import {
   classify,
   classifyOutcome,
   httpStatus,
-  isAssertionCheck,
   isConfigField,
   isOAuthErrorCode,
   isSystemCode,
@@ -197,19 +196,19 @@ export function errorFor(error: unknown, of: OperationOf): IAuthProviderError {
 }
 
 /**
- * TRANSITION (removed as their producers move: A3 in Task 24, A11 in Task 26,
- * A12 with the classes in Task 27): the rungs whose ladder answer is still
- * 5.4.2's unminted words — `AssertionValidationError`, `ValidationError`,
- * `ServiceKeyError`, `SessionDataError`. Their messages are this package's
- * own fixed words (no consumer text), and the error a site will throw for
- * them needs facts their throw sites do not carry yet (`rule`, `case`), so
- * `getTokens()` / `refreshTokens()` let them through as they are until then;
- * every other value is an `AuthProviderFailure` (spec §6, L3). Total.
+ * TRANSITION (removed as their producers move: A11 in Task 26, A12 with the
+ * classes in Task 27; A3 went in Task 24, when every SAML site began to throw
+ * its `saml-assertion` rule): the rungs whose ladder answer is still 5.4.2's
+ * unminted words — `ValidationError`, `ServiceKeyError`, `SessionDataError`.
+ * Their messages are this package's own fixed words (no consumer text), and
+ * the error a site will throw for them needs facts their throw sites do not
+ * carry yet (`case`), so `getTokens()` / `refreshTokens()` let them through
+ * as they are until then; every other value is an `AuthProviderFailure`
+ * (spec §6, L3). Total.
  */
 export function isUnmintedRung(error: unknown): boolean {
   try {
     return (
-      error instanceof AssertionValidationError ||
       error instanceof ValidationError ||
       error instanceof ServiceKeyError ||
       error instanceof SessionDataError
@@ -247,21 +246,18 @@ export function isLadderClass(error: unknown): boolean {
 
 /**
  * Each class of this package, most specific first, to its builder (A.1); the
- * rest to `classify`. A3, A11 and A12 keep their 5.4.2 words unminted: their
- * class carries no `rule` / `case`, and A12 has no kind (removed in Task 27).
+ * rest to `classify`. A11 and A12 keep their 5.4.2 words unminted: their
+ * class carries no `case`, and A12 has no kind (removed in Task 27). A3's
+ * class is constructed by no site since Task 24 — every SAML refusal is a
+ * minted `saml-assertion` error with its rule — and an instance a consumer
+ * builds carries a `check` but no rule, so it is any other own class: A13's
+ * `unknown` with the operation.
  */
 function ladder(error: unknown, of: OperationOf): AuthOutcome {
   if (error instanceof DeviceCodePresentationError) {
     return refused(
       authError['interactive-login']({ outcome: 'device-code-not-shown' }),
     );
-  }
-  if (error instanceof AssertionValidationError) {
-    // Read once: a getter could answer an allowed value to the test and
-    // another to the interpolation.
-    const value = readSafely(error, 'check');
-    const check = isAssertionCheck(value) ? ` (${value})` : '';
-    return oops(`the SAML assertion was refused${check}`);
   }
   if (error instanceof CertificateMaterialError) {
     // Chosen from the two flags, never read from `words`: an instance (or an

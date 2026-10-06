@@ -174,16 +174,19 @@ describe('refusalWords', () => {
     expect(text(words)).not.toContain(MARKER);
   });
 
-  it('an assertion `check` getter is read once: allowed, then a marker → the allowed one', () => {
+  // A3 (Task 24): an assertion's `check` is no longer read at all — the
+  // class carries no rule and answers as any other own class.
+  it('an assertion `check` getter is never read', () => {
     const forged = new AssertionValidationError('signature', 'x');
     let reads = 0;
     Object.defineProperty(forged, 'check', {
-      get: () => (reads++ === 0 ? 'signature' : MARKER),
+      get: () => {
+        reads += 1;
+        return MARKER;
+      },
     });
     const words = refusalWords(forged, 'it');
-    expect(words).toEqual({
-      reason: 'the SAML assertion was refused (signature)',
-    });
+    expect(reads).toBe(0);
     expect(text(words)).not.toContain(MARKER);
   });
 

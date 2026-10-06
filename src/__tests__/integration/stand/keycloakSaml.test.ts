@@ -24,6 +24,10 @@
  *   (`createSignedResponseValidator`) accepts against the ID it minted.
  *   Turning it into session cookies is the consumer's cookieProvider and
  *   needs a real SAP system.
+ * - A declined login (plan Task 24, spec §12's "not measured"): Keycloak
+ *   answers a passive AuthnRequest with no session by declining it, and the
+ *   provider refuses with the `declined` rule — which StatusCode Keycloak
+ *   sends is measured here, and whether it arrives as a registered fact.
  *
  * Every provider trusts the signing certificate Keycloak publishes in its
  * SAML metadata, and the realm URL as the issuer.
@@ -32,7 +36,9 @@
  */
 
 import { inspect } from 'node:util';
+import { deflateRawSync, inflateRawSync } from 'node:zlib';
 import { beforeAll, describe, expect, it } from '@jest/globals';
+import { isSamlStatusCode } from '@mcp-abap-adt/auth-errors';
 import { DOMParser } from '@xmldom/xmldom';
 import { parseStrictXml } from '../../../auth/strictXml';
 import { Saml2BearerProvider } from '../../../providers/Saml2BearerProvider';
@@ -43,6 +49,7 @@ import {
   createSignedResponseValidator,
 } from '../../../validation/assertionValidator';
 import { defaultReplayStore } from '../../../validation/inMemoryReplayStore';
+import { expectSamlRejection } from '../../helpers/samlRefusal';
 import { FormBrowser, samlResponseByForm } from './formLogin';
 
 const UAA_URL = process.env.UAA_URL?.replace(/\/+$/, '');
@@ -381,6 +388,81 @@ describeBoth('SAML providers with Keycloak as the identity provider', () => {
     expect(tokens.expiresAt).toBe(
       Math.min(until('Conditions'), until('SubjectConfirmationData')),
     );
+  });
+
+  // Measured (Task 24, 2026-10-06): with no session and IsPassive="true",
+  // Keycloak must not show a login page, so it declines in a signed
+  // Response — with no Assertion. The validator counts the direct-child
+  // Assertion (3a) before it reads Status (4), so a real declined login is
+  // refused `no-direct-assertion`, never `declined` (an order kept from
+  // 5.4.2; raised in the Task 24 report). The StatusCode Keycloak sent is
+  // read here and checked against SAML_STATUS_CODES.
+  it('Saml2PureProvider: a passive login Keycloak declines carries no Assertion, and a registered StatusCode', async () => {
+    const delivered: string[] = [];
+    const acsUrl = 'http://localhost/sap/saml2/sp/acs';
+    const passive = (url: string): string => {
+      const parsed = new URL(url);
+      const request = inflateRawSync(
+        Buffer.from(parsed.searchParams.get('SAMLRequest') ?? '', 'base64'),
+      ).toString('utf8');
+      const open = request.indexOf('AuthnRequest ');
+      if (open < 0) throw new Error('no AuthnRequest in the URL');
+      const at = open + 'AuthnRequest '.length;
+      const edited = `${request.slice(0, at)}IsPassive="true" ${request.slice(at)}`;
+      parsed.searchParams.set(
+        'SAMLRequest',
+        deflateRawSync(Buffer.from(edited, 'utf8')).toString('base64'),
+      );
+      return parsed.toString();
+    };
+
+    const error = await expectSamlRejection(
+      new Saml2PureProvider({
+        idpSsoUrl: `${KEYCLOAK_URL}/protocol/saml`,
+        spEntityId: 'sap-sp',
+        acsUrl,
+        idpEntityId: idpEntityId(),
+        assertionValidator: createSignedResponseValidator({
+          idpCertificates,
+          replayStore: defaultReplayStore,
+        }),
+        authorization: externalCodeStrategy({
+          redirectUri: acsUrl,
+          provide: async (url) => {
+            // A fresh browser: no Keycloak session, so nothing to be passive about.
+            const page = await new FormBrowser().open(passive(url));
+            const value = /name="SAMLResponse" value="([^"]+)"/.exec(
+              page.html ?? '',
+            )?.[1];
+            if (!value) throw new Error(`no SAMLResponse from ${page.url}`);
+            delivered.push(value);
+            return value;
+          },
+        }),
+        cookieProvider: async () => 'unreachable',
+      }).getTokens(),
+      'no-direct-assertion',
+    );
+    expect(error.facts).toEqual({
+      rule: 'no-direct-assertion',
+      check: 'signedNode',
+    });
+    const doc = new DOMParser().parseFromString(
+      Buffer.from(delivered[0] ?? '', 'base64').toString('utf8'),
+      'text/xml',
+    );
+    const PROTOCOL = 'urn:oasis:names:tc:SAML:2.0:protocol';
+    const codes = Array.from(
+      doc.getElementsByTagNameNS(PROTOCOL, 'StatusCode'),
+      (code) => code.getAttribute('Value'),
+    );
+    process.stderr.write(
+      `[measured] Keycloak declined with ${JSON.stringify(codes)}\n`,
+    );
+    expect(doc.getElementsByTagNameNS(SAML_NS, 'Assertion')).toHaveLength(0);
+    // The top-level code is what `declined` would carry: a registered one.
+    expect(isSamlStatusCode(codes[0])).toBe(true);
+    expect(codes[0]).not.toBe('urn:oasis:names:tc:SAML:2.0:status:Success');
   });
 });
 

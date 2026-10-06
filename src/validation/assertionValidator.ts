@@ -16,6 +16,12 @@
  * can sign, and addressing rests on Recipient inside the signed assertion.
  */
 
+import {
+  AuthProviderFailure,
+  authError,
+  count,
+  isSamlStatusCode,
+} from '@mcp-abap-adt/auth-errors';
 import type {
   AssertionContext,
   IAssertionReplayStore,
@@ -29,13 +35,11 @@ import {
   XMLSerializer,
 } from '@xmldom/xmldom';
 import { asContract } from '../auth/contractShape';
+import type { SamlAssertionError } from '../auth/contractTransition';
 import { parseStrictXml } from '../auth/strictXml';
-import {
-  type AssertionCheck,
-  AssertionValidationError,
-} from '../errors/AssertionValidationError';
 import { findDuplicateId, readRequiredId } from './documentIds';
-import { quoteUntrusted, resolveSignedElements, toPem } from './signedNode';
+import { refuse, type SamlRefusal, several } from './samlRefusal';
+import { resolveSignedElements, toPem } from './signedNode';
 import { parseXsdDateTime } from './xsdDateTime';
 
 const SAML_NS = 'urn:oasis:names:tc:SAML:2.0:assertion';
@@ -82,10 +86,21 @@ export interface ShippedValidatorOptions {
  */
 type SignedElement = 'response' | 'assertion';
 
-/** How a refusal names the element each validator requires to be signed. */
-const REQUIRED_LABEL: Record<SignedElement, string> = {
-  response: 'samlp:Response',
-  assertion: 'saml:Assertion',
+/**
+ * The refusal when the signature does not cover the element each validator
+ * requires — a rule each, so the words name that element.
+ */
+const NOT_SIGNED: Record<SignedElement, () => SamlRefusal> = {
+  response: () =>
+    authError['saml-assertion']({
+      rule: 'response-not-signed',
+      check: 'signedNode',
+    }),
+  assertion: () =>
+    authError['saml-assertion']({
+      rule: 'assertion-not-signed',
+      check: 'signedNode',
+    }),
 };
 
 /**
@@ -156,21 +171,19 @@ function createValidator(
       // where parsers diverge — entity expansion, internal subsets — and this
       // document is parsed twice: by @xmldom/xmldom 0.9 here and by the 0.8
       // nested inside xml-crypto. Refused before either parse is trusted.
-      if (/<!DOCTYPE/i.test(xml)) {
-        return fail(
-          'document',
-          'the SAMLResponse carries a DOCTYPE declaration, which is never accepted',
+      if (carriesDoctype(xml)) {
+        return refuse(
+          authError['saml-assertion']({ rule: 'doctype', check: 'document' }),
         );
       }
-      let doc: Document;
-      try {
-        doc = parseStrictXml(xml);
-      } catch {
-        return fail('document', 'the SAMLResponse did not parse as XML');
-      }
+      // parseStrictXml refuses with `not-xml` itself (F7).
+      const doc: Document = parseStrictXml(xml);
       const root = doc.documentElement;
-      if (!root)
-        return fail('document', 'the SAMLResponse did not parse as XML');
+      if (!root) {
+        return refuse(
+          authError['saml-assertion']({ rule: 'not-xml', check: 'document' }),
+        );
+      }
       const rootIsResponse =
         root.localName === 'Response' && root.namespaceURI === PROTOCOL_NS;
       const rootIsAssertion =
@@ -179,20 +192,28 @@ function createValidator(
       // accepts: the saml2-bearer grant exchanges an Assertion, and 3.0.0
       // already takes one as Saml2BearerProvider's payload.
       if (!rootIsResponse && !(require === 'assertion' && rootIsAssertion)) {
-        return fail(
-          'document',
+        const rootElement = root.localName;
+        return refuse(
           require === 'assertion'
-            ? `expected a samlp:Response or a saml:Assertion, got ${quoteUntrusted(root.localName ?? '')}`
-            : `expected the document element to be a samlp:Response, got ${quoteUntrusted(root.localName ?? '')}`,
+            ? authError['saml-assertion'](
+                { rule: 'root-not-response-or-assertion', check: 'document' },
+                { rootElement },
+              )
+            : authError['saml-assertion'](
+                { rule: 'root-not-response', check: 'document' },
+                { rootElement },
+              ),
         );
       }
 
       // 1b. Unique IDs, before any reference is resolved.
       const duplicate = findDuplicateId(doc);
       if (duplicate) {
-        return fail(
-          'duplicateId',
-          `the document uses the ID ${quoteUntrusted(duplicate)} more than once, so which element is signed is ambiguous`,
+        return refuse(
+          authError['saml-assertion'](
+            { rule: 'duplicate-id', check: 'duplicateId' },
+            { id: duplicate },
+          ),
         );
       }
 
@@ -203,7 +224,16 @@ function createValidator(
       try {
         covered = resolveSignedElements(xml, doc, certificates);
       } catch (error) {
-        return fail('signature', (error as Error).message);
+        // Each rule of verification refuses at its site; anything else the
+        // walk throws is the signature's malformation (F8), with nothing of
+        // what was thrown.
+        if (error instanceof AuthProviderFailure) throw error;
+        return refuse(
+          authError['saml-assertion']({
+            rule: 'signature-malformed',
+            check: 'signature',
+          }),
+        );
       }
       // 3a. A Response carries exactly one direct-child Assertion, and a
       // refusal says which way the count failed. Checked once, here, for both
@@ -218,15 +248,20 @@ function createValidator(
       // inside it.
       const assertion = rootIsResponse ? direct[0] : root;
       if (assertion === undefined) {
-        return fail(
-          'signedNode',
-          'the response carries no direct-child saml:Assertion',
+        return refuse(
+          authError['saml-assertion']({
+            rule: 'no-direct-assertion',
+            check: 'signedNode',
+          }),
         );
       }
       if (direct.length > 1) {
-        return fail(
-          'signedNode',
-          `the response carries ${direct.length} direct-child saml:Assertion; exactly one is allowed`,
+        return refuse(
+          authError['saml-assertion']({
+            rule: 'several-direct-assertions',
+            check: 'signedNode',
+            ...several(direct.length),
+          }),
         );
       }
 
@@ -241,10 +276,7 @@ function createValidator(
         require === 'response' || rootIsAssertion ? root : assertion;
       const signed = covered.find((element) => element === target);
       if (!signed) {
-        return fail(
-          'signedNode',
-          `the signature does not cover the ${REQUIRED_LABEL[require]} this validator requires`,
-        );
+        return refuse(NOT_SIGNED[require]());
       }
 
       // 3d. Nothing assertion-shaped outside the one read. Wherever the
@@ -255,15 +287,19 @@ function createValidator(
       // whose subtree an enveloped signature leaves unsigned.
       const place = placeOfAssertions(doc, assertion);
       if (place === 'inSignature') {
-        return fail(
-          'signedNode',
-          'the document carries an Assertion or EncryptedAssertion inside a ds:Signature, which is never accepted',
+        return refuse(
+          authError['saml-assertion']({
+            rule: 'assertion-inside-signature',
+            check: 'signedNode',
+          }),
         );
       }
       if (place === 'outside') {
-        return fail(
-          'signedNode',
-          'the document carries an Assertion or EncryptedAssertion, SAML 2.0 or 1.x, outside the one the signature covers',
+        return refuse(
+          authError['saml-assertion']({
+            rule: 'assertion-outside-signed',
+            check: 'signedNode',
+          }),
         );
       }
 
@@ -275,34 +311,68 @@ function createValidator(
           root,
           PROTOCOL_NS,
           'Status',
-          'status',
-          'the response',
-          'samlp:Status',
+          () =>
+            authError['saml-assertion']({ rule: 'no-status', check: 'status' }),
+          (n) =>
+            authError['saml-assertion']({
+              rule: 'several-status',
+              check: 'status',
+              ...several(n),
+            }),
         );
         const code = requireOne(
           status,
           PROTOCOL_NS,
           'StatusCode',
-          'status',
-          'the samlp:Status',
-          'samlp:StatusCode',
+          () =>
+            authError['saml-assertion']({
+              rule: 'no-status-code',
+              check: 'status',
+            }),
+          (n) =>
+            authError['saml-assertion']({
+              rule: 'several-status-codes',
+              check: 'status',
+              ...several(n),
+            }),
         );
         const codeValue = code.getAttribute('Value');
         if (!codeValue) {
-          return fail('status', 'the samlp:StatusCode carries no Value');
+          return refuse(
+            authError['saml-assertion']({
+              rule: 'status-code-no-value',
+              check: 'status',
+            }),
+          );
         }
         if (codeValue !== SUCCESS) {
-          return fail(
-            'status',
-            `the identity provider declined the login: ${quoteUntrusted(codeValue)}`,
+          // A registered status is a fact, in the words; any other value is
+          // the diagnostic, admitted as printable ASCII or dropped.
+          return refuse(
+            isSamlStatusCode(codeValue)
+              ? authError['saml-assertion']({
+                  rule: 'declined',
+                  check: 'status',
+                  statusCode: codeValue,
+                })
+              : authError['saml-assertion'](
+                  { rule: 'declined', check: 'status' },
+                  { statusCode: codeValue },
+                ),
           );
         }
       }
 
       // 4b. The assertion's own ID.
       const assertionId = readRequiredId(assertion);
-      if (!assertionId)
-        return fail('assertionId', 'the assertion carries no ID');
+      if (!assertionId) {
+        return refuse(
+          authError['saml-assertion']({
+            rule: 'no-assertion-id',
+            check: 'assertionId',
+          }),
+        );
+      }
 
       // 5. The assertion's Issuer — inside the signature either way, so both
       // validators check it.
@@ -311,25 +381,39 @@ function createValidator(
           assertion,
           SAML_NS,
           'Issuer',
-          'issuer',
-          'the assertion',
-          'saml:Issuer',
+          () =>
+            authError['saml-assertion']({ rule: 'no-issuer', check: 'issuer' }),
+          (n) =>
+            authError['saml-assertion']({
+              rule: 'several-issuers',
+              check: 'issuer',
+              ...several(n),
+            }),
         ).textContent ?? '';
       if (!issuer) {
-        return fail('issuer', "the assertion's saml:Issuer is empty");
+        return refuse(
+          authError['saml-assertion']({
+            rule: 'empty-issuer',
+            check: 'issuer',
+          }),
+        );
       }
       // Fail closed: with nothing to compare against, any issuer whose key is
       // configured would pass, which is not what this validator promises.
       if (!context.expectedIssuer) {
-        return fail(
-          'issuer',
-          'no expectedIssuer was configured, so the assertion issuer cannot be trusted',
+        return refuse(
+          authError['saml-assertion']({
+            rule: 'no-expected-issuer',
+            check: 'issuer',
+          }),
         );
       }
       if (issuer !== context.expectedIssuer) {
-        return fail(
-          'issuer',
-          `the assertion was issued by ${quoteUntrusted(issuer)}, not the trusted issuer`,
+        return refuse(
+          authError['saml-assertion'](
+            { rule: 'untrusted-issuer', check: 'issuer' },
+            { issuer },
+          ),
         );
       }
       // 5b. The cross-check against the Response's Issuer belongs to the
@@ -340,9 +424,11 @@ function createValidator(
         // present must agree — empty included, since empty is not absent.
         const responseIssuers = directChildren(root, SAML_NS, 'Issuer');
         if (responseIssuers.length > 1) {
-          return fail(
-            'issuer',
-            'the response must carry at most one saml:Issuer',
+          return refuse(
+            authError['saml-assertion']({
+              rule: 'several-response-issuers',
+              check: 'issuer',
+            }),
           );
         }
         const [responseIssuer] = responseIssuers;
@@ -350,9 +436,11 @@ function createValidator(
           responseIssuer !== undefined &&
           (responseIssuer.textContent ?? '') !== issuer
         ) {
-          return fail(
-            'issuer',
-            'the response and the assertion name different issuers',
+          return refuse(
+            authError['saml-assertion']({
+              rule: 'issuers-differ',
+              check: 'issuer',
+            }),
           );
         }
       }
@@ -362,41 +450,65 @@ function createValidator(
         assertion,
         SAML_NS,
         'Conditions',
-        'conditions',
-        'the assertion',
-        'saml:Conditions',
+        () =>
+          authError['saml-assertion']({
+            rule: 'no-conditions',
+            check: 'conditions',
+          }),
+        (n) =>
+          authError['saml-assertion']({
+            rule: 'several-conditions',
+            check: 'conditions',
+            ...several(n),
+          }),
       );
 
       const notBeforeRaw = conditions.getAttribute('NotBefore');
       if (notBeforeRaw) {
         const notBefore = parseXsdDateTime(notBeforeRaw);
         if (!notBefore) {
-          return fail(
-            'notBefore',
-            `Conditions NotBefore is not a valid xsd:dateTime: ${quoteUntrusted(notBeforeRaw)}`,
+          return refuse(
+            authError['saml-assertion'](
+              { rule: 'not-before-invalid', check: 'notBefore' },
+              { notBefore: notBeforeRaw },
+            ),
           );
         }
         if (notBefore.getTime() - skew > Date.now()) {
-          return fail('notBefore', 'the assertion is not valid yet');
+          return refuse(
+            authError['saml-assertion']({
+              rule: 'not-yet-valid',
+              check: 'notBefore',
+            }),
+          );
         }
       }
 
       const notOnOrAfterRaw = conditions.getAttribute('NotOnOrAfter');
       if (!notOnOrAfterRaw) {
-        return fail(
-          'notOnOrAfter',
-          'Conditions carries no NotOnOrAfter, so the assertion states no lifetime',
+        return refuse(
+          authError['saml-assertion']({
+            rule: 'no-not-on-or-after',
+            check: 'notOnOrAfter',
+          }),
         );
       }
       const conditionsExpiry = parseXsdDateTime(notOnOrAfterRaw);
       if (!conditionsExpiry) {
-        return fail(
-          'notOnOrAfter',
-          `Conditions NotOnOrAfter is not a valid xsd:dateTime: ${quoteUntrusted(notOnOrAfterRaw)}`,
+        return refuse(
+          authError['saml-assertion'](
+            { rule: 'not-on-or-after-invalid', check: 'notOnOrAfter' },
+            { notOnOrAfter: notOnOrAfterRaw },
+          ),
         );
       }
       if (conditionsExpiry.getTime() + skew <= Date.now()) {
-        return fail('notOnOrAfter', 'the assertion has expired');
+        return refuse(
+          authError['saml-assertion']({
+            rule: 'expired',
+            check: 'notOnOrAfter',
+          }),
+        );
       }
 
       // 9. Every AudienceRestriction must name us; several Audience inside one
@@ -407,19 +519,31 @@ function createValidator(
         'AudienceRestriction',
       );
       if (restrictions.length === 0) {
-        return fail('audience', 'the assertion restricts no audience');
+        return refuse(
+          authError['saml-assertion']({
+            rule: 'no-audience-restriction',
+            check: 'audience',
+          }),
+        );
       }
       for (const restriction of restrictions) {
         const names = directChildren(restriction, SAML_NS, 'Audience').map(
           (a) => a.textContent ?? '',
         );
         if (names.length === 0) {
-          return fail('audience', 'an AudienceRestriction names no audience');
+          return refuse(
+            authError['saml-assertion']({
+              rule: 'audience-restriction-empty',
+              check: 'audience',
+            }),
+          );
         }
         if (!names.includes(context.audience)) {
-          return fail(
-            'audience',
-            'an AudienceRestriction on this assertion does not name us',
+          return refuse(
+            authError['saml-assertion']({
+              rule: 'audience-not-us',
+              check: 'audience',
+            }),
           );
         }
       }
@@ -434,12 +558,19 @@ function createValidator(
       if (require === 'response') {
         const destination = root.getAttribute('Destination');
         if (!destination) {
-          return fail('destination', 'the response carries no Destination');
+          return refuse(
+            authError['saml-assertion']({
+              rule: 'no-destination',
+              check: 'destination',
+            }),
+          );
         }
         if (destination !== context.acsUrl) {
-          return fail(
-            'destination',
-            `the response is addressed to ${quoteUntrusted(destination)}, not to us`,
+          return refuse(
+            authError['saml-assertion'](
+              { rule: 'destination-not-us', check: 'destination' },
+              { destination },
+            ),
           );
         }
       }
@@ -467,7 +598,9 @@ function createValidator(
         retainUntil,
       );
       if (!fresh) {
-        return fail('replay', 'this assertion has been presented before');
+        return refuse(
+          authError['saml-assertion']({ rule: 'replayed', check: 'replay' }),
+        );
       }
 
       // Subject, then NameID — no `?? assertion` fallback, which would read a
@@ -490,8 +623,27 @@ function createValidator(
   };
 }
 
-function fail(check: AssertionCheck, message: string): never {
-  throw new AssertionValidationError(check, message);
+/**
+ * Whether the document carries `<!DOCTYPE`, in any letter case — read as
+ * plain characters, since no regular expression runs over document text.
+ * Only ASCII letters fold, as the `/i` flag folded them.
+ */
+function carriesDoctype(xml: string): boolean {
+  const name = 'doctype';
+  for (let at = xml.indexOf('<!'); at >= 0; at = xml.indexOf('<!', at + 1)) {
+    let matched = true;
+    for (let i = 0; i < name.length; i += 1) {
+      const c = xml.charCodeAt(at + 2 + i);
+      // An ASCII capital folds to its small letter; nothing else changes.
+      const folded = c >= 0x41 && c <= 0x5a ? c + 0x20 : c;
+      if (folded !== name.charCodeAt(i)) {
+        matched = false;
+        break;
+      }
+    }
+    if (matched) return true;
+  }
+  return false;
 }
 
 /**
@@ -542,26 +694,21 @@ function directChild(
 
 /**
  * The single direct child with this name, or a refusal that says which way
- * the count failed: absent and more than one are different faults, and a
- * message that cannot tell them apart sends the reader to the wrong one.
+ * the count failed: absent and more than one are different rules, and a
+ * refusal that cannot tell them apart sends the reader to the wrong one.
+ * Each caller builds both refusals, so each names its own rule.
  */
 function requireOne(
   parent: Element,
   ns: string,
   local: string,
-  check: AssertionCheck,
-  holder: string,
-  label: string,
+  absent: () => SamlRefusal,
+  many: (found: number) => SamlRefusal,
 ): Element {
   const found = directChildren(parent, ns, local);
   const [first] = found;
-  if (first === undefined) return fail(check, `${holder} carries no ${label}`);
-  if (found.length > 1) {
-    return fail(
-      check,
-      `${holder} carries ${found.length} ${label}; exactly one is allowed`,
-    );
-  }
+  if (first === undefined) return refuse(absent());
+  if (found.length > 1) return refuse(many(found.length));
   return first;
 }
 
@@ -594,12 +741,24 @@ function placeOfAssertions(doc: Document, assertion: Element): AssertionPlace {
   return 'within';
 }
 
+/** One candidate's first failed sub-rule, as the `no-bearer-qualifies` fact. */
+type BearerCandidate = NonNullable<
+  Extract<
+    SamlAssertionError,
+    { variant: 'no-bearer-qualifies' }
+  >['facts']['candidates']
+>[number];
+
 /** A candidate's first failed non-temporal sub-rule, or the window it states. */
 type Candidate =
-  | { readonly reason: string }
+  | { readonly failed: BearerCandidate }
   | { readonly notOnOrAfter: Date; readonly notBefore: Date | null };
 
-/** How many candidates a bearerConfirmation refusal names before "and N more". */
+/**
+ * How many candidates a `no-bearer-qualifies` refusal lists; the rest are
+ * counted in `moreCandidates`, so the error stays bounded however many the
+ * document carries.
+ */
 const LISTED_CANDIDATES = 5;
 
 /**
@@ -629,27 +788,37 @@ function chooseBearerConfirmation(
     assertion,
     SAML_NS,
     'Subject',
-    'bearerConfirmation',
-    'the assertion',
-    'saml:Subject',
+    () =>
+      authError['saml-assertion']({
+        rule: 'no-subject',
+        check: 'bearerConfirmation',
+      }),
+    (n) =>
+      authError['saml-assertion']({
+        rule: 'several-subjects',
+        check: 'bearerConfirmation',
+        ...several(n),
+      }),
   );
   const confirmations = directChildren(subject, SAML_NS, 'SubjectConfirmation');
   if (confirmations.length === 0) {
-    return fail(
-      'bearerConfirmation',
-      'the saml:Subject holds no SubjectConfirmation',
+    return refuse(
+      authError['saml-assertion']({
+        rule: 'no-subject-confirmation',
+        check: 'bearerConfirmation',
+      }),
     );
   }
 
   const now = Date.now();
   let best: Date | null = null;
   let latest: Date | null = null;
-  const reasons: string[] = [];
+  const failures: BearerCandidate[] = [];
 
   for (const confirmation of confirmations) {
     const candidate = readConfirmation(confirmation, context);
-    if ('reason' in candidate) {
-      reasons.push(candidate.reason);
+    if ('failed' in candidate) {
+      failures.push(candidate.failed);
       continue;
     }
     const { notOnOrAfter, notBefore } = candidate;
@@ -661,11 +830,11 @@ function chooseBearerConfirmation(
 
     // 7, 8. Qualifies now: a candidate for the session's window.
     if (notOnOrAfter.getTime() + skew <= now) {
-      reasons.push('NotOnOrAfter has passed');
+      failures.push({ reason: 'not-on-or-after-passed' });
       continue;
     }
     if (notBefore && notBefore.getTime() - skew > now) {
-      reasons.push('NotBefore has not arrived');
+      failures.push({ reason: 'not-before-not-arrived' });
       continue;
     }
 
@@ -674,9 +843,17 @@ function chooseBearerConfirmation(
 
   // `latest` is set whenever `best` is: every qualifying confirmation was
   // counted towards it first. When nothing qualified, every candidate left
-  // exactly one reason, in document order.
+  // exactly one failure, in document order.
   if (best && latest) return { notOnOrAfter: best, latestNotOnOrAfter: latest };
-  return fail('bearerConfirmation', describeRefusals(reasons));
+  const more = count(failures.length - LISTED_CANDIDATES);
+  return refuse(
+    authError['saml-assertion']({
+      rule: 'no-bearer-qualifies',
+      check: 'bearerConfirmation',
+      candidates: failures.slice(0, LISTED_CANDIDATES),
+      ...(more === undefined || more === 0 ? {} : { moreCandidates: more }),
+    }),
+  );
 }
 
 /**
@@ -691,68 +868,48 @@ function readConfirmation(
 ): Candidate {
   // 1.
   if (confirmation.getAttribute('Method') !== BEARER) {
-    return { reason: 'Method is not bearer' };
+    return { failed: { reason: 'method-not-bearer' } };
   }
   // 2.
   const data = directChildren(confirmation, SAML_NS, 'SubjectConfirmationData');
   const [only] = data;
   if (only === undefined) {
-    return { reason: 'carries no SubjectConfirmationData' };
+    return { failed: { reason: 'no-confirmation-data' } };
   }
   if (data.length > 1) {
     return {
-      reason: `carries ${data.length} SubjectConfirmationData; exactly one is allowed`,
+      failed: { reason: 'several-confirmation-data', ...several(data.length) },
     };
   }
   // 3. Option B: an expected ID must be matched exactly; no expected ID — an
   // IdP-initiated login — means the attribute must not be there at all.
   if (context.expectedInResponseTo === undefined) {
     if (only.hasAttribute('InResponseTo')) {
-      return {
-        reason: 'InResponseTo is present, but this login sent no request',
-      };
+      return { failed: { reason: 'in-response-to-unexpected' } };
     }
   } else if (
     only.getAttribute('InResponseTo') !== context.expectedInResponseTo
   ) {
-    return { reason: 'InResponseTo does not answer our request' };
+    return { failed: { reason: 'in-response-to-mismatch' } };
   }
   // 4.
   if (only.getAttribute('Recipient') !== context.acsUrl) {
-    return { reason: 'Recipient is not the ACS' };
+    return { failed: { reason: 'recipient-not-acs' } };
   }
   // 5.
   const notOnOrAfterRaw = only.getAttribute('NotOnOrAfter');
   if (!notOnOrAfterRaw) {
-    return { reason: 'SubjectConfirmationData has no NotOnOrAfter' };
+    return { failed: { reason: 'no-not-on-or-after' } };
   }
   const notOnOrAfter = parseXsdDateTime(notOnOrAfterRaw);
   if (!notOnOrAfter) {
-    return {
-      reason:
-        'SubjectConfirmationData NotOnOrAfter is not a valid xsd:dateTime',
-    };
+    return { failed: { reason: 'not-on-or-after-invalid' } };
   }
   // 6.
   const notBeforeRaw = only.getAttribute('NotBefore');
   const notBefore = notBeforeRaw ? parseXsdDateTime(notBeforeRaw) : null;
   if (notBeforeRaw && !notBefore) {
-    return {
-      reason: 'SubjectConfirmationData NotBefore is not a valid xsd:dateTime',
-    };
+    return { failed: { reason: 'not-before-invalid' } };
   }
   return { notOnOrAfter, notBefore };
-}
-
-/**
- * `no bearer confirmation qualifies: #1 … | #2 …`, naming at most
- * LISTED_CANDIDATES candidates so the message stays bounded however many the
- * document carries.
- */
-function describeRefusals(reasons: readonly string[]): string {
-  const listed = reasons
-    .slice(0, LISTED_CANDIDATES)
-    .map((reason, index) => `#${index + 1} ${reason}`);
-  const more = reasons.length - listed.length;
-  return `no bearer confirmation qualifies: ${listed.join(' | ')}${more > 0 ? ` | and ${more} more` : ''}`;
 }

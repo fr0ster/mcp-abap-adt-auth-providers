@@ -40,6 +40,18 @@ export type OAuth2GrantType = NonNullable<Parameters<typeof classify>[2]>;
 /** interfaces-auth 6.0.0's `TlsFailureCode`, as the `tls` builder takes it. */
 export type TlsFailureCode = Parameters<AuthErrorBuilders['tls']>[0]['code'];
 
+/** interfaces-auth 6.0.0's `SamlAssertionError`: every `saml-assertion` variant. */
+export type SamlAssertionError = Extract<
+  IAuthProviderError,
+  { kind: 'saml-assertion' }
+>;
+
+/** interfaces-auth 6.0.0's `AssertionRule` (Appendix B's 56 rule ids). */
+export type AssertionRule = SamlAssertionError['variant'];
+
+/** interfaces-auth 6.0.0's `AssertionCheck`, fixed by each rule. */
+export type AssertionCheck = SamlAssertionError['facts']['check'];
+
 /** interfaces-auth 6.0.0's `CredentialKind`, as `credential-refused` takes it. */
 export type CredentialKind = Parameters<
   AuthErrorBuilders['credential-refused']

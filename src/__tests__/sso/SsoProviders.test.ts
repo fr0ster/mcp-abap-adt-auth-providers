@@ -1,5 +1,5 @@
 import { inflateRawSync } from 'node:zlib';
-import { AuthProviderFailure } from '@mcp-abap-adt/auth-errors';
+import { AuthProviderFailure, authError } from '@mcp-abap-adt/auth-errors';
 import { generateKeyMaterial, signXml } from '@mcp-abap-adt/auth-mocks';
 import type {
   IAssertionValidator,
@@ -32,7 +32,6 @@ import {
   consoleDeviceCodePresenter,
   type DeviceCodePrompt,
 } from '../../deviceCode/DeviceCodePresenter';
-import { AssertionValidationError } from '../../errors/AssertionValidationError';
 import { OidcBrowserProvider } from '../../providers/OidcBrowserProvider';
 import { OidcDeviceFlowProvider } from '../../providers/OidcDeviceFlowProvider';
 import { OidcPasswordProvider } from '../../providers/OidcPasswordProvider';
@@ -54,6 +53,7 @@ import {
   createSignedResponseValidator,
 } from '../../validation/assertionValidator';
 import { createInMemoryReplayStore } from '../../validation/inMemoryReplayStore';
+import { expectSamlRejection, rejectionOf } from '../helpers/samlRefusal';
 
 jest.mock('../../auth/oidcDiscovery', () => ({
   discoverOidc: jest.fn(),
@@ -1405,17 +1405,46 @@ describe('Saml2PureProvider assertion validation', () => {
       ...baseConfig,
       assertionValidator: {
         async validate() {
-          throw new AssertionValidationError('status', 'the IdP declined');
+          throw new Error('the IdP declined: SECRET-MARKER');
         },
       },
       cookieProvider,
     });
 
-    const tokensPromise = provider.getTokens();
-    const rejected = expect(tokensPromise).rejects.toMatchObject({
-      check: 'status',
+    // A custom validator's throw is classified with `validating-assertion`
+    // (spec A.8): its own error and message are not handed back (L3).
+    const thrown = await rejectionOf(provider.getTokens());
+    expect(thrown).toBeInstanceOf(AuthProviderFailure);
+    expect((thrown as AuthProviderFailure).error).toMatchObject({
+      kind: 'unknown',
+      facts: { operation: 'validating-assertion' },
     });
-    await rejected;
+    expect(JSON.stringify(thrown)).not.toContain('SECRET-MARKER');
+    expect(String(thrown)).not.toContain('SECRET-MARKER');
+    expect(cookieProvider).not.toHaveBeenCalled();
+  });
+
+  // A custom validator delegating to a shipped one rejects with its minted
+  // refusal: that error reaches the caller as it is, diagnostics included.
+  it("passes a custom validator's minted SAML refusal through as it is", async () => {
+    const refusal = authError['saml-assertion'](
+      { rule: 'untrusted-issuer', check: 'issuer' },
+      { issuer: 'urn:someone:else' },
+    );
+    const cookieProvider = jest.fn(async (saml: string) => saml);
+    const provider = new Saml2PureProvider({
+      ...baseConfig,
+      assertionValidator: {
+        async validate() {
+          throw new AuthProviderFailure(refusal);
+        },
+      },
+      cookieProvider,
+    });
+
+    const thrown = await rejectionOf(provider.getTokens());
+    expect(thrown).toBeInstanceOf(AuthProviderFailure);
+    expect((thrown as AuthProviderFailure).error).toBe(refusal);
     expect(cookieProvider).not.toHaveBeenCalled();
   });
 
@@ -1478,16 +1507,17 @@ describe('Saml2BearerProvider assertion validation', () => {
       }),
       assertionValidator: {
         async validate() {
-          throw new AssertionValidationError('status', 'the IdP declined');
+          throw new Error('the IdP declined: SECRET-MARKER');
         },
       },
     });
 
-    const tokensPromise = provider.getTokens();
-    const rejected = expect(tokensPromise).rejects.toMatchObject({
-      check: 'status',
+    const thrown = await rejectionOf(provider.getTokens());
+    expect((thrown as AuthProviderFailure).error).toMatchObject({
+      kind: 'unknown',
+      facts: { operation: 'validating-assertion' },
     });
-    await rejected;
+    expect(JSON.stringify(thrown)).not.toContain('SECRET-MARKER');
     expect(exchanged).toBe(false);
   });
 });
@@ -1587,12 +1617,7 @@ describe('Saml2 provider default validators', () => {
       }),
     });
 
-    await expect(provider.getTokens()).rejects.toMatchObject({
-      check: 'signedNode',
-      message: expect.stringContaining(
-        'does not cover the saml:Assertion this validator requires',
-      ),
-    });
+    await expectSamlRejection(provider.getTokens(), 'assertion-not-signed');
     expect(mockExchangeSaml).not.toHaveBeenCalled();
   });
 });

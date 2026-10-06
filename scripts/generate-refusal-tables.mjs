@@ -192,7 +192,104 @@ function refusalsTable() {
   return lines.join('\n');
 }
 
-export const TABLES = { rejected: rejectedTable, refusals: refusalsTable };
+/** The quoted prefix every `saml-assertion` reason starts with. */
+const samlPrefix = (check) => `the SAML assertion was refused (${check}): `;
+
+/**
+ * A rule's words with a count of two shown as `<n>`: rendered with and
+ * without the count, so only a rule whose words name it is rewritten.
+ */
+function samlRuleWords(rule, check) {
+  const plain = render('saml-assertion', { rule, check }).reason;
+  const counted = render('saml-assertion', { rule, check, count: 2 }).reason;
+  const words = counted === plain ? plain : counted.replace(' 2 ', ' <n> ');
+  const prefix = samlPrefix(check);
+  if (!words.startsWith(prefix)) {
+    throw new Error(`saml: unexpected words for ${rule}`);
+  }
+  return words.slice(prefix.length);
+}
+
+/**
+ * "Refusal messages": every rule of Appendix B (spec), in the allowlist's
+ * order — its check, its words after the common prefix, and the one
+ * diagnostic it may carry.
+ */
+function samlTable() {
+  const lines = [
+    '| `check` | `rule` | Words, after `the SAML assertion was refused (<check>): ` | Diagnostic |',
+    '|---|---|---|---|',
+  ];
+  for (const rule of contract.ASSERTION_RULES) {
+    // The check a rule fixes: the builder renders it from the rule alone,
+    // so the facts carry the one the words name.
+    const check = checkOf(rule);
+    let words = `\`${samlRuleWords(rule, check)}`;
+    if (rule === 'no-bearer-qualifies') {
+      words += ': #1 <reason> | #2 <reason> | …[ | and N more]';
+    }
+    words += '`';
+    if (rule === 'declined') {
+      words +=
+        ', followed by ` (<StatusCode>)` when the code is one of `SAML_STATUS_CODES`';
+    }
+    const field = contract.SAML_RULE_DIAGNOSTIC[rule];
+    const diagnostic =
+      field === null
+        ? '—'
+        : rule === 'declined'
+          ? '`statusCode`, when the code is not a registered one'
+          : `\`${field}\``;
+    lines.push(
+      `| \`${check}\` | \`${rule}\` | ${cell(words)} | ${diagnostic} |`,
+    );
+  }
+  return lines.join('\n');
+}
+
+/**
+ * A rule's check (Appendix B: fixed by the rule). auth-errors' words name
+ * the rule's own check whatever the facts say, so the first check whose
+ * prefix the words carry is that one — found, not copied here.
+ */
+function checkOf(rule) {
+  for (const check of contract.ASSERTION_CHECKS) {
+    const words = render('saml-assertion', { rule, check }).reason;
+    if (words.startsWith(samlPrefix(check))) return check;
+  }
+  throw new Error(`saml: no check renders ${rule}`);
+}
+
+/** The eleven bearer candidate reasons, in the order a candidate is tested. */
+function samlCandidatesTable() {
+  const lines = [
+    '| # | `reason` | Words |',
+    '|---|---|---|',
+  ];
+  const lead = `${samlPrefix('bearerConfirmation')}no bearer confirmation qualifies: #1 `;
+  contract.BEARER_CANDIDATE_REASONS.forEach((reason, index) => {
+    const candidate =
+      reason === 'several-confirmation-data' ? { reason, count: 2 } : { reason };
+    const words = render('saml-assertion', {
+      rule: 'no-bearer-qualifies',
+      check: 'bearerConfirmation',
+      candidates: [candidate],
+    }).reason;
+    if (!words.startsWith(lead)) {
+      throw new Error(`saml-candidates: unexpected words for ${reason}`);
+    }
+    const said = words.slice(lead.length).replace(' 2 ', ' <n> ');
+    lines.push(`| ${index + 1} | \`${reason}\` | ${cell(`\`${said}\``)} |`);
+  });
+  return lines.join('\n');
+}
+
+export const TABLES = {
+  rejected: rejectedTable,
+  refusals: refusalsTable,
+  saml: samlTable,
+  'saml-candidates': samlCandidatesTable,
+};
 
 /** The README with every generated region replaced. */
 export function generate(readme) {

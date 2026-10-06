@@ -1298,8 +1298,10 @@ does by default — satisfies either validator.
 
 #### What the validators check
 
-In this order; each refusal is an `AssertionValidationError` whose `check`
-names the row. Rows marked *(signed-Response only)* are not performed by
+In this order; each refusal is an `AuthProviderFailure` of kind
+`saml-assertion` whose `error.facts.check` names the row, and whose
+`error.facts.rule` names the rule within it (see
+[Refusal messages](#refusal-messages)). Rows marked *(signed-Response only)* are not performed by
 `createSignedAssertionValidator`.
 
 | # | Check | Refused when | `check` |
@@ -1395,97 +1397,123 @@ What the table compresses:
 
 #### Refusal messages
 
-Since 4.1.0 no two rules under one `check` share a message, and an element
-that must appear exactly once says which way it failed — absent, or more than
-one. Every value a message takes from the document is JSON-quoted and cut to
-64 characters, so a newline smuggled in as `&#10;` shows as `\n` and cannot
-forge a log line. Match on `check` in code; the message is for the person
-reading the log. `<n>` is a count of two or more; `"…"` is a quoted document
-value.
+A refused assertion is an `AuthProviderFailure` whose `error` is a minted
+`saml-assertion` error (from `@mcp-abap-adt/auth-errors`): `error.variant` and
+`error.facts.rule` name the rule, `error.facts.check` the check that rule
+belongs to (fixed by the rule), and a "carries <n>" rule carries the count as
+`facts.count`. Match on `rule` in code; the words are for the person reading
+the log. No two rules under one `check` share words, and an element that must
+appear exactly once says which way it failed — absent, or more than one.
 
-| `check` | message |
-|---|---|
-| `document` | `the SAMLResponse carries a DOCTYPE declaration, which is never accepted` |
-| `document` | `the SAMLResponse did not parse as XML` |
-| `document` | `expected a samlp:Response or a saml:Assertion, got "…"` |
-| `document` | `expected the document element to be a samlp:Response, got "…"` |
-| `duplicateId` | `the document uses the ID "…" more than once, so which element is signed is ambiguous` |
-| `signature` | `the document carries no signature` |
-| `signature` | `the signature element is malformed: "…"` |
-| `signature` | `the signature does not verify against any configured certificate` |
-| `signature` | `the signature carries no ds:Reference` |
-| `signature` | `the signature carries <n> ds:Reference; exactly one is allowed` |
-| `signature` | `the signature reference is not a same-document URI: "…"` |
-| `signature` | `the signature references "…", which is not in the document` |
-| `signature` | `the signature is not inside the element it references, so it does not envelope it` |
-| `signedNode` | `the response carries no direct-child saml:Assertion` |
-| `signedNode` | `the response carries <n> direct-child saml:Assertion; exactly one is allowed` |
-| `signedNode` | `the signature does not cover the samlp:Response this validator requires` |
-| `signedNode` | `the signature does not cover the saml:Assertion this validator requires` |
-| `signedNode` | `the document carries an Assertion or EncryptedAssertion, SAML 2.0 or 1.x, outside the one the signature covers` |
-| `signedNode` | `the document carries an Assertion or EncryptedAssertion inside a ds:Signature, which is never accepted` |
-| `status` | `the response carries no samlp:Status` |
-| `status` | `the response carries <n> samlp:Status; exactly one is allowed` |
-| `status` | `the samlp:Status carries no samlp:StatusCode` |
-| `status` | `the samlp:Status carries <n> samlp:StatusCode; exactly one is allowed` |
-| `status` | `the samlp:StatusCode carries no Value` |
-| `status` | `the identity provider declined the login: "…"` |
-| `assertionId` | `the assertion carries no ID` |
-| `issuer` | `the assertion carries no saml:Issuer` |
-| `issuer` | `the assertion carries <n> saml:Issuer; exactly one is allowed` |
-| `issuer` | `the assertion's saml:Issuer is empty` |
-| `issuer` | `no expectedIssuer was configured, so the assertion issuer cannot be trusted` |
-| `issuer` | `the assertion was issued by "…", not the trusted issuer` |
-| `issuer` | `the response must carry at most one saml:Issuer` |
-| `issuer` | `the response and the assertion name different issuers` |
-| `conditions` | `the assertion carries no saml:Conditions` |
-| `conditions` | `the assertion carries <n> saml:Conditions; exactly one is allowed` |
-| `notBefore` | `Conditions NotBefore is not a valid xsd:dateTime: "…"` |
-| `notBefore` | `the assertion is not valid yet` |
-| `notOnOrAfter` | `Conditions carries no NotOnOrAfter, so the assertion states no lifetime` |
-| `notOnOrAfter` | `Conditions NotOnOrAfter is not a valid xsd:dateTime: "…"` |
-| `notOnOrAfter` | `the assertion has expired` |
-| `audience` | `the assertion restricts no audience` |
-| `audience` | `an AudienceRestriction names no audience` |
-| `audience` | `an AudienceRestriction on this assertion does not name us` |
-| `bearerConfirmation` | `the assertion carries no saml:Subject` |
-| `bearerConfirmation` | `the assertion carries <n> saml:Subject; exactly one is allowed` |
-| `bearerConfirmation` | `the saml:Subject holds no SubjectConfirmation` |
-| `bearerConfirmation` | `no bearer confirmation qualifies: #1 <reason> \| #2 <reason> \| …` |
-| `destination` | `the response carries no Destination` |
-| `destination` | `the response is addressed to "…", not to us` |
-| `replay` | `this assertion has been presented before` |
+**No document value is in the words.** A value a rule may show — the root
+element's name, a duplicated `ID`, a reference URI, an unregistered
+`StatusCode`, the `Issuer`, an invalid `NotBefore` / `NotOnOrAfter`, the
+`Destination` — is the rule's one **diagnostic** (`error.diagnostics`, the
+table's last column; `renderDiagnostics(error)` prints it, `logFields(error)`
+carries it as its own field). It is admitted by its shape or dropped: a value
+holding a control, format, bidirectional or line-separator character (a
+newline smuggled in as `&#10;`) is dropped, not escaped, and the error is
+minted without it; a longer value or `ID` is cut at 64 code points with `…`
+(a root name longer than 64 characters, which a cut would misname, is
+dropped). Nothing a
+parser, `xml-crypto` or OpenSSL says reaches the error at all.
 
-A `bearerConfirmation` refusal naming candidates lists each one's first failed
-sub-rule, in document order, joined by ` | ` — not `; `, which a count reason
-such as `carries 2 SubjectConfirmationData; exactly one is allowed` contains
-itself; past five candidates it ends ` | and N more`, N being how many were
-not listed. The eleven reasons:
+The rules, in the order the validators check them; the last six are the
+bearer grant's conversion of a validated payload (`Saml2BearerProvider`),
+reachable only when a custom validator accepted a payload it cannot convert:
 
-| # | `<reason>`, in the order a candidate is tested |
-|---|---|
-| 1 | `Method is not bearer` |
-| 2 | `carries no SubjectConfirmationData` |
-| 3 | `carries <n> SubjectConfirmationData; exactly one is allowed` |
-| 4 | `InResponseTo is present, but this login sent no request` |
-| 5 | `InResponseTo does not answer our request` |
-| 6 | `Recipient is not the ACS` |
-| 7 | `SubjectConfirmationData has no NotOnOrAfter` |
-| 8 | `SubjectConfirmationData NotOnOrAfter is not a valid xsd:dateTime` |
-| 9 | `SubjectConfirmationData NotBefore is not a valid xsd:dateTime` |
-| 10 | `NotOnOrAfter has passed` |
-| 11 | `NotBefore has not arrived` |
+<!-- generated:refusal-table saml -->
+| `check` | `rule` | Words, after `the SAML assertion was refused (<check>): ` | Diagnostic |
+|---|---|---|---|
+| `document` | `doctype` | `the SAMLResponse carries a DOCTYPE declaration, which is never accepted` | — |
+| `document` | `not-xml` | `the SAMLResponse did not parse as XML` | — |
+| `document` | `root-not-response-or-assertion` | `expected a samlp:Response or a saml:Assertion` | `rootElement` |
+| `document` | `root-not-response` | `expected the document element to be a samlp:Response` | `rootElement` |
+| `duplicateId` | `duplicate-id` | `the document uses an ID more than once, so which element is signed is ambiguous` | `id` |
+| `signature` | `no-signature` | `the document carries no signature` | — |
+| `signature` | `signature-malformed` | `the signature element is malformed` | — |
+| `signature` | `signature-not-verified` | `the signature does not verify against any configured certificate` | — |
+| `signature` | `no-reference` | `the signature carries no ds:Reference` | — |
+| `signature` | `several-references` | `the signature carries <n> ds:Reference; exactly one is allowed` | — |
+| `signature` | `reference-not-same-document` | `the signature reference is not a same-document URI` | `referenceUri` |
+| `signature` | `reference-not-found` | `the signature references an element that is not in the document` | `referenceUri` |
+| `signature` | `signature-not-enveloped` | `the signature is not inside the element it references, so it does not envelope it` | — |
+| `signedNode` | `no-direct-assertion` | `the response carries no direct-child saml:Assertion` | — |
+| `signedNode` | `several-direct-assertions` | `the response carries <n> direct-child saml:Assertion; exactly one is allowed` | — |
+| `signedNode` | `response-not-signed` | `the signature does not cover the samlp:Response this validator requires` | — |
+| `signedNode` | `assertion-not-signed` | `the signature does not cover the saml:Assertion this validator requires` | — |
+| `signedNode` | `assertion-outside-signed` | `the document carries an Assertion or EncryptedAssertion, SAML 2.0 or 1.x, outside the one the signature covers` | — |
+| `signedNode` | `assertion-inside-signature` | `the document carries an Assertion or EncryptedAssertion inside a ds:Signature, which is never accepted` | — |
+| `status` | `no-status` | `the response carries no samlp:Status` | — |
+| `status` | `several-status` | `the response carries <n> samlp:Status; exactly one is allowed` | — |
+| `status` | `no-status-code` | `the samlp:Status carries no samlp:StatusCode` | — |
+| `status` | `several-status-codes` | `the samlp:Status carries <n> samlp:StatusCode; exactly one is allowed` | — |
+| `status` | `status-code-no-value` | `the samlp:StatusCode carries no Value` | — |
+| `status` | `declined` | `the identity provider declined the login`, followed by ` (<StatusCode>)` when the code is one of `SAML_STATUS_CODES` | `statusCode`, when the code is not a registered one |
+| `assertionId` | `no-assertion-id` | `the assertion carries no ID` | — |
+| `issuer` | `no-issuer` | `the assertion carries no saml:Issuer` | — |
+| `issuer` | `several-issuers` | `the assertion carries <n> saml:Issuer; exactly one is allowed` | — |
+| `issuer` | `empty-issuer` | `the assertion's saml:Issuer is empty` | — |
+| `issuer` | `no-expected-issuer` | `no expectedIssuer was configured, so the assertion issuer cannot be trusted` | — |
+| `issuer` | `untrusted-issuer` | `the assertion was not issued by the trusted issuer` | `issuer` |
+| `issuer` | `several-response-issuers` | `the response must carry at most one saml:Issuer` | — |
+| `issuer` | `issuers-differ` | `the response and the assertion name different issuers` | — |
+| `conditions` | `no-conditions` | `the assertion carries no saml:Conditions` | — |
+| `conditions` | `several-conditions` | `the assertion carries <n> saml:Conditions; exactly one is allowed` | — |
+| `notBefore` | `not-before-invalid` | `Conditions NotBefore is not a valid xsd:dateTime` | `notBefore` |
+| `notBefore` | `not-yet-valid` | `the assertion is not valid yet` | — |
+| `notOnOrAfter` | `no-not-on-or-after` | `Conditions carries no NotOnOrAfter, so the assertion states no lifetime` | — |
+| `notOnOrAfter` | `not-on-or-after-invalid` | `Conditions NotOnOrAfter is not a valid xsd:dateTime` | `notOnOrAfter` |
+| `notOnOrAfter` | `expired` | `the assertion has expired` | — |
+| `audience` | `no-audience-restriction` | `the assertion restricts no audience` | — |
+| `audience` | `audience-restriction-empty` | `an AudienceRestriction names no audience` | — |
+| `audience` | `audience-not-us` | `an AudienceRestriction on this assertion does not name us` | — |
+| `bearerConfirmation` | `no-subject` | `the assertion carries no saml:Subject` | — |
+| `bearerConfirmation` | `several-subjects` | `the assertion carries <n> saml:Subject; exactly one is allowed` | — |
+| `bearerConfirmation` | `no-subject-confirmation` | `the saml:Subject holds no SubjectConfirmation` | — |
+| `bearerConfirmation` | `no-bearer-qualifies` | `no bearer confirmation qualifies: #1 <reason> \| #2 <reason> \| …[ \| and N more]` | — |
+| `destination` | `no-destination` | `the response carries no Destination` | — |
+| `destination` | `destination-not-us` | `the response is not addressed to us` | `destination` |
+| `replay` | `replayed` | `this assertion has been presented before` | — |
+| `document` | `payload-not-base64-xml` | `SAML bearer payload is not base64-encoded XML` | — |
+| `document` | `payload-not-well-formed` | `SAML bearer payload is not well-formed XML` | — |
+| `document` | `payload-not-saml` | `SAML bearer payload is neither a SAML Response nor an Assertion` | — |
+| `document` | `only-encrypted-assertion` | `SAML Response carries only an EncryptedAssertion; encrypted Assertions are not supported` | — |
+| `document` | `no-assertion` | `SAML Response carries no Assertion` | — |
+| `document` | `several-assertions` | `SAML Response carries <n> Assertions; a bearer grant takes one` | — |
+<!-- /generated:refusal-table saml -->
 
-Two messages from outside a validator changed in 4.1.0 and carry no `check`.
-A provider configured with both `idpInitiated: true` and `authnRequestId`
-throws a `ValidationError` (`missingFields: ['idpInitiated']`) at
-construction: `SAML idpInitiated is true and authnRequestId is set: an
-IdP-initiated login sends no request, so the two describe different logins.
-Remove one of them.` And `Saml2BearerProvider`'s conversion of a validated
-payload into the bearer grant's Assertion throws a plain `Error` whose parser
-text is quoted the same way — reachable only when a custom validator accepted
-a payload that does not parse: `SAML bearer payload is not well-formed XML:
-"…"`.
+A `no-bearer-qualifies` refusal names each candidate's first failed sub-rule,
+in document order (`facts.candidates`, each a `reason` — with `count` for
+`several-confirmation-data`), joined by ` | ` — not `; `, which a count
+reason contains itself. Past five candidates the rest are counted in
+`facts.moreCandidates` and the words end ` | and N more`. The eleven
+reasons:
+
+<!-- generated:refusal-table saml-candidates -->
+| # | `reason` | Words |
+|---|---|---|
+| 1 | `method-not-bearer` | `Method is not bearer` |
+| 2 | `no-confirmation-data` | `carries no SubjectConfirmationData` |
+| 3 | `several-confirmation-data` | `carries <n> SubjectConfirmationData; exactly one is allowed` |
+| 4 | `in-response-to-unexpected` | `InResponseTo is present, but this login sent no request` |
+| 5 | `in-response-to-mismatch` | `InResponseTo does not answer our request` |
+| 6 | `recipient-not-acs` | `Recipient is not the ACS` |
+| 7 | `no-not-on-or-after` | `SubjectConfirmationData has no NotOnOrAfter` |
+| 8 | `not-on-or-after-invalid` | `SubjectConfirmationData NotOnOrAfter is not a valid xsd:dateTime` |
+| 9 | `not-before-invalid` | `SubjectConfirmationData NotBefore is not a valid xsd:dateTime` |
+| 10 | `not-on-or-after-passed` | `NotOnOrAfter has passed` |
+| 11 | `not-before-not-arrived` | `NotBefore has not arrived` |
+<!-- /generated:refusal-table saml-candidates -->
+
+A custom `assertionValidator` may throw anything: its throw is classified
+with the operation `validating-assertion` — a shipped validator's refusal it
+passes on stays as it is, diagnostics included; any other value is never
+handed back, nor its message. A provider configured with both
+`idpInitiated: true` and `authnRequestId` throws a `ValidationError`
+(`missingFields: ['idpInitiated']`) at construction: `SAML idpInitiated is
+true and authnRequestId is set: an IdP-initiated login sends no request, so
+the two describe different logins. Remove one of them.`
 
 **Expiry comes from the verified document.** A validated assertion's
 `expiresAt` is the earlier of `Conditions/@NotOnOrAfter` and the `NotOnOrAfter`
@@ -1636,10 +1664,10 @@ never refused),
 ```typescript
 import { readFileSync } from 'node:fs';
 import {
-  AssertionValidationError,
   createSignedResponseValidator,
   defaultReplayStore,
 } from '@mcp-abap-adt/auth-providers';
+import { readFailure, renderDiagnostics } from '@mcp-abap-adt/auth-errors';
 
 const validator = createSignedResponseValidator({
   idpCertificates: [readFileSync('idp-signing.pem', 'utf8')],
@@ -1654,11 +1682,13 @@ try {
     expectedIssuer: 'https://idp.example.com/metadata', // required — see below
   });
   console.error(validated.nameId, validated.expiresAt);
-} catch (error) {
-  if (error instanceof AssertionValidationError) {
-    console.error(`refused at ${error.check}: ${error.message}`);
+} catch (thrown) {
+  const error = readFailure(thrown, 'validating-assertion');
+  if (error.kind === 'saml-assertion') {
+    // error.variant === error.facts.rule, e.g. 'untrusted-issuer'
+    console.error(error.reason, renderDiagnostics(error) ?? '');
   }
-  throw error;
+  throw thrown;
 }
 ```
 
@@ -1674,7 +1704,7 @@ assertion must answer it; absent, the assertion must carry no `InResponseTo`.
 
 | Error | When |
 |---|---|
-| `AssertionValidationError` | an assertion was refused. `check` (type `AssertionCheck`) names the row above — tell "your IdP declined" (`status`) from "not addressed to us" (`audience`, `bearerConfirmation`, `destination`) without parsing the message. `code` is `'ASSERTION_VALIDATION_ERROR'` (`ASSERTION_ERROR_CODES.VALIDATION_ERROR` from `@mcp-abap-adt/interfaces-auth`) |
+| `AuthProviderFailure`, kind `saml-assertion` | an assertion was refused. `error.facts.rule` names the rule and `error.facts.check` the row above — tell "your IdP declined" (`declined`) from "not addressed to us" (`audience-not-us`, `no-bearer-qualifies`, `destination-not-us`) without parsing the words; the one document value a rule may show is `error.diagnostics` (see [Refusal messages](#refusal-messages)). Since 6.0.0 `AssertionValidationError` is thrown by nothing (it is removed in 6.0.0's final release) |
 | `ValidationError` | configuration: `idpEntityId` missing with a shipped validator supplied as `assertionValidator` (at construction); `idpInitiated` with no `authorizationUrl` and a strategy that calls `buildAuthorizationUrl` (inside the builder, before any URL is produced); `idpInitiated` combined with a declared `authnRequestId` (at construction); `authnRequestId` missing (at login, after the strategy returns and before the assertion is read). `missingFields` names the field |
 | `Error` | a certificate that is neither PEM nor base64 DER, or not a valid X.509 certificate; a `clockSkewMs` that is not a finite non-negative integer; and an empty `idpCertificates` (*"must not be empty"*) — all when the validator is built, which for `inBrowser` is when the provider is |
 
@@ -2119,21 +2149,16 @@ import {
   RefreshError,
   SessionDataError,
   ServiceKeyError,
-  AssertionValidationError,
   CertificateMaterialError,
   ClientAuthenticationError,
   ClientAuthenticationResultError,
 } from '@mcp-abap-adt/auth-providers';
-import { isAuthProviderFailure } from '@mcp-abap-adt/auth-errors';
+import { isAuthProviderFailure, readFailure } from '@mcp-abap-adt/auth-errors';
 
 try {
   const result = await provider.getTokens();
 } catch (error) {
-  if (error instanceof AssertionValidationError) {
-    // A SAML provider refused the assertion; `check` says which check failed
-    console.error('Assertion refused at:', error.check); // e.g. 'audience'
-    console.error('Error code:', error.code); // 'ASSERTION_VALIDATION_ERROR'
-  } else if (error instanceof ValidationError) {
+  if (error instanceof ValidationError) {
     // provider config validation failed
     console.error('Missing required fields:', error.missingFields);
     console.error('Error code:', error.code); // 'VALIDATION_ERROR'
@@ -2141,8 +2166,10 @@ try {
     // Since 6.0.0 an interactive login ends with an `interactive-login`
     // failure (`readFailure(error, operation).facts.outcome`: 'aborted',
     // 'port-in-use', 'identity-provider-refused', 'browser-launch-failed',
-    // 'failed', …); its message is the error's words.
-    console.error('Login failed:', error.message);
+    // 'failed', …), and a refused SAML assertion with a `saml-assertion`
+    // one (`facts.rule`: 'untrusted-issuer', 'expired', 'replayed', …).
+    const failure = readFailure(error, 'token-request');
+    console.error('Failed:', failure.kind, failure.reason);
   }
 }
 ```
@@ -2153,7 +2180,7 @@ try {
 - `BrowserAuthError` - exported, but thrown by nothing since 6.0.0 (removed in 6.0.0's final release): every end of an interactive login — the identity provider's refusal, a busy callback port, a browser that would not open, an abort, a disposed or busy strategy, an empty or unreadable paste — is an `AuthProviderFailure` of kind `interactive-login`, thrown by every shipped strategy. Its words keep this package's own ("Port N is already in use", `BrowserCallbackStrategy has been disposed`); the identity provider's refusal names only its registered code (`the identity provider refused the login (consent_required)`), never `error_description` or `error_uri`; anything else — a custom transport's error — is `the browser login failed (…)` naming only an HTTP status, a registered OAuth `error` and an allowlisted code, with no `cause`
 - `TokenEndpointError` - a token request failed at a site that wraps it (UAA refresh, client credentials, passcode, OIDC device initiation, password grant); a plain `Error`, not a `TokenProviderError`; carries `status`, `oauthError` (a registered OAuth / OIDC code only) and `code` (an allowlisted system or TLS code only); its `cause` is the safe `AxiosError` the request was reduced to, never what the request rejected with (since 5.4.2)
 - `RefreshError`, `SessionDataError`, `ServiceKeyError` - exported, but no provider throws them: a refused refresh falls back to a login inside `getTokens()`/`refreshTokens()`, and sessions and service keys are read by `@mcp-abap-adt/auth-stores`, not here
-- `AssertionValidationError` - a SAML assertion was refused, includes `check: AssertionCheck` naming the check that failed — see [SAML assertion validation](#errors)
+- `AssertionValidationError` - exported, but thrown by nothing since 6.0.0 (removed in 6.0.0's final release): a refused SAML assertion is an `AuthProviderFailure` of kind `saml-assertion` naming its `rule` and `check` — see [Refusal messages](#refusal-messages)
 - `CertificateMaterialError` - client certificate material cannot be used, includes `incomplete: boolean` (no PFX and not both a certificate and its key, versus material no TLS context accepts); its message is fixed and carries nothing of the material. Thrown by `tlsClientCertificate` and by a provider pinning a strategy's certificate. Its `words` getter is deprecated: use `refusalWords` (the package never reads `words` from a thrown value, since any object can carry its own)
 - `ClientAuthenticationError` - `privateKeyJwt`'s key is not a private key of its algorithm, or cannot sign; fixed message, nothing of the key
 - `ClientAuthenticationResultError` - what a client authentication strategy returned cannot be sent (a non-string value, a header with a line break, a parameter or header replacing the request's own, an endpoint that is not an absolute `https:` URL); thrown before anything is sent, fixed message

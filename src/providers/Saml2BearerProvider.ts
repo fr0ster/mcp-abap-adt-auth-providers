@@ -22,6 +22,7 @@ import { toBearerAssertion } from '../auth/samlBearerAssertion';
 import { samlCallbackStrategy } from '../strategies';
 import { createSignedAssertionValidator } from '../validation/assertionValidator';
 import { defaultReplayStore } from '../validation/inMemoryReplayStore';
+import { validateAssertion } from '../validation/samlRefusal';
 import {
   BaseTokenProvider,
   type ClientAuthenticationConfig,
@@ -113,7 +114,8 @@ export class Saml2BearerProvider extends BaseTokenProvider {
     // Validation establishes trust before anything reaches the token
     // endpoint; it does not change what is sent beyond toBearerAssertion's
     // conversion below.
-    await this.validator.validate(
+    await validateAssertion(
+      this.validator,
       payload,
       asContract<AssertionContext>({
         expectedInResponseTo: requestId,
