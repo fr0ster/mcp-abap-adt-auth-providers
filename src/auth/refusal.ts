@@ -16,6 +16,7 @@
 import {
   authError,
   classify,
+  classifyOutcome,
   httpStatus,
   isAssertionCheck,
   isConfigField,
@@ -177,6 +178,44 @@ export function refusalFor(error: unknown, of: OperationOf): AuthOutcome {
     return ladder(error, of);
   } catch {
     return refused(authError.unknown(of));
+  }
+}
+
+/**
+ * The minted error `refusalFor` answers, for a site that throws it (spec §6,
+ * "Where the throw is built"): the ladder first — this package's classes,
+ * which auth-errors' `classify` does not know — then `classify`. A carrier of
+ * a minted error (an `AuthProviderFailure`) answers that very error. A rung
+ * still answering 5.4.2's unminted words (A3, A11, A12) is `unknown` with the
+ * operation, as through a provider moment (TRANSITION, Task 27: `classify`
+ * alone). Total.
+ */
+export function errorFor(error: unknown, of: OperationOf): IAuthProviderError {
+  const fallback = authError.unknown(of);
+  const outcome = classifyOutcome(refusalFor(error, of), fallback);
+  return outcome.ok ? fallback : outcome.refusal;
+}
+
+/**
+ * TRANSITION (removed as their producers move: A3 in Task 24, A11 in Task 26,
+ * A12 with the classes in Task 27): the rungs whose ladder answer is still
+ * 5.4.2's unminted words — `AssertionValidationError`, `ValidationError`,
+ * `ServiceKeyError`, `SessionDataError`. Their messages are this package's
+ * own fixed words (no consumer text), and the error a site will throw for
+ * them needs facts their throw sites do not carry yet (`rule`, `case`), so
+ * `getTokens()` / `refreshTokens()` let them through as they are until then;
+ * every other value is an `AuthProviderFailure` (spec §6, L3). Total.
+ */
+export function isUnmintedRung(error: unknown): boolean {
+  try {
+    return (
+      error instanceof AssertionValidationError ||
+      error instanceof ValidationError ||
+      error instanceof ServiceKeyError ||
+      error instanceof SessionDataError
+    );
+  } catch {
+    return false;
   }
 }
 

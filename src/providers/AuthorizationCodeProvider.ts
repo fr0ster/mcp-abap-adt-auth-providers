@@ -25,6 +25,7 @@ import { browserCallbackStrategy } from '../strategies';
 import {
   BaseTokenProvider,
   type ClientAuthenticationConfig,
+  refreshTokenRefused,
   type TokenProviderHooks,
 } from './BaseTokenProvider';
 
@@ -223,7 +224,7 @@ export class AuthorizationCodeProvider extends BaseTokenProvider {
 
   protected async performRefresh(): Promise<ITokenResult> {
     if (!this.refreshToken) {
-      throw new Error('Refresh token is required for refresh');
+      throw refreshTokenRefused();
     }
 
     this.logger?.info('[AuthorizationCodeProvider] Refreshing token');

@@ -717,9 +717,12 @@ describe('an expired client certificate', () => {
     const held = sent.length;
     const now = jest.spyOn(Date, 'now').mockReturnValue(Date.UTC(2127, 0, 1));
     try {
-      await expect(provider.refreshTokens()).rejects.toBeInstanceOf(
-        CertificateMaterialError,
-      );
+      // B14 / L3 (Task 22): the CertificateMaterialError is classified —
+      // client-certificate, expired — and thrown as an AuthProviderFailure.
+      await expect(provider.refreshTokens()).rejects.toMatchObject({
+        name: 'AuthProviderFailure',
+        error: { kind: 'client-certificate', facts: { problem: 'expired' } },
+      });
     } finally {
       now.mockRestore();
     }

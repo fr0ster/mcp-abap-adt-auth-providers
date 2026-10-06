@@ -23,6 +23,7 @@ import { manualPasscodeStrategy } from '../strategies/manualStrategies';
 import {
   BaseTokenProvider,
   type ClientAuthenticationConfig,
+  refreshTokenRefused,
   type TokenProviderHooks,
 } from './BaseTokenProvider';
 
@@ -127,7 +128,7 @@ export class UaaPasscodeProvider extends BaseTokenProvider {
    */
   protected async performRefresh(): Promise<ITokenResult> {
     if (!this.refreshToken) {
-      throw new Error('Refresh token is required for refresh');
+      throw refreshTokenRefused();
     }
     const result = await refreshJwtToken(
       this.refreshToken,

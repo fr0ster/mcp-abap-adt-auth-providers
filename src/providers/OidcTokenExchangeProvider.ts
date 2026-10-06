@@ -11,10 +11,10 @@ import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
 import { asContract } from '../auth/contractShape';
 import { discoverOidc, mtlsAlias } from '../auth/oidcDiscovery';
 import { tokenExchange } from '../auth/oidcToken';
-import { RefreshError } from '../errors/TokenProviderErrors';
 import {
   BaseTokenProvider,
   type ClientAuthenticationConfig,
+  refreshTokenRefused,
   type TokenProviderHooks,
 } from './BaseTokenProvider';
 
@@ -115,6 +115,6 @@ export class OidcTokenExchangeProvider extends BaseTokenProvider {
   }
 
   protected async performRefresh(): Promise<ITokenResult> {
-    throw new RefreshError('token exchange has no refresh grant');
+    throw refreshTokenRefused();
   }
 }

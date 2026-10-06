@@ -1,4 +1,5 @@
 import { inflateRawSync } from 'node:zlib';
+import { AuthProviderFailure } from '@mcp-abap-adt/auth-errors';
 import { generateKeyMaterial, signXml } from '@mcp-abap-adt/auth-mocks';
 import type {
   IAssertionValidator,
@@ -1225,9 +1226,11 @@ describe('OidcBrowserProvider strategy lifecycle', () => {
       authorization: supplied,
     });
 
-    await expect(provider.getTokens()).rejects.toThrow(
-      /consumer flow cancelled/,
-    );
+    // L3 (spec §6, Task 22): the consumer's own error never comes back — an
+    // AuthProviderFailure holding the classified error, without its message.
+    const failed = provider.getTokens();
+    await expect(failed).rejects.toBeInstanceOf(AuthProviderFailure);
+    await expect(failed).rejects.not.toThrow(/consumer flow cancelled/);
     expect(dispose).not.toHaveBeenCalled();
   }, 30000);
 });
@@ -1303,9 +1306,11 @@ describe('SAML strategy lifecycle', () => {
       assertionValidator: acceptingSamlValidator(),
     });
 
-    await expect(provider.getTokens()).rejects.toThrow(
-      /consumer flow cancelled/,
-    );
+    // L3 (spec §6, Task 22): the consumer's own error never comes back — an
+    // AuthProviderFailure holding the classified error, without its message.
+    const failed = provider.getTokens();
+    await expect(failed).rejects.toBeInstanceOf(AuthProviderFailure);
+    await expect(failed).rejects.not.toThrow(/consumer flow cancelled/);
     expect(dispose).not.toHaveBeenCalled();
   }, 30000);
 });

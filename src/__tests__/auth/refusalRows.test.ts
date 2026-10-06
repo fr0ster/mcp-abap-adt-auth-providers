@@ -206,11 +206,11 @@ describe('A.8 — every what of this package is a closed operation', () => {
   it('the scan finds the call sites', () => {
     expect(literals).toEqual(
       expect.arrayContaining([
-        'onTokens',
         'opening the browser',
         'the presenter',
         'the probe',
         // 'the token request' left with `tokenEndpointError` (D2, H9: Task 21).
+        // 'onTokens' and 'the refresh' left with `logFields` (H1, H2: Task 22).
       ]),
     );
   });

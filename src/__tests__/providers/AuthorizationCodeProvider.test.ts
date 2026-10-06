@@ -1,3 +1,4 @@
+import { AuthProviderFailure } from '@mcp-abap-adt/auth-errors';
 /**
  * Integration tests for AuthorizationCodeProvider
  * Tests with real service keys and session files from test-config.yaml
@@ -525,7 +526,12 @@ describe('AuthorizationCodeProvider with strategies', () => {
       }),
     });
 
-    await expect(provider.getTokens()).rejects.toThrow(/timeout/i);
+    // L3 / A.3 (Task 22): the strategy's timeout reaches the caller as an
+    // interactive-login failure, not as the strategy's own message.
+    await expect(provider.getTokens()).rejects.toMatchObject({
+      name: 'AuthProviderFailure',
+      error: { kind: 'interactive-login', facts: { outcome: 'failed' } },
+    });
     expect(await portIsFree(PORT)).toBe(true);
   }, 30000);
 
@@ -670,9 +676,11 @@ describe('AuthorizationCodeProvider strategy lifecycle', () => {
       authorization: supplied,
     });
 
-    await expect(provider.getTokens()).rejects.toThrow(
-      /consumer flow cancelled/,
-    );
+    // L3 (spec §6, Task 22): the consumer's own error never comes back — an
+    // AuthProviderFailure holding the classified error, without its message.
+    const failed = provider.getTokens();
+    await expect(failed).rejects.toBeInstanceOf(AuthProviderFailure);
+    await expect(failed).rejects.not.toThrow(/consumer flow cancelled/);
     expect(dispose).not.toHaveBeenCalled();
   }, 30000);
 });

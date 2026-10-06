@@ -11,10 +11,10 @@ import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
 import { asContract } from '../auth/contractShape';
 import { discoverOidc, mtlsAlias } from '../auth/oidcDiscovery';
 import { passwordGrant, refreshOidcToken } from '../auth/oidcToken';
-import { RefreshError } from '../errors/TokenProviderErrors';
 import {
   BaseTokenProvider,
   type ClientAuthenticationConfig,
+  refreshTokenRefused,
   type TokenProviderHooks,
 } from './BaseTokenProvider';
 
@@ -106,7 +106,7 @@ export class OidcPasswordProvider extends BaseTokenProvider {
 
   protected async performRefresh(): Promise<ITokenResult> {
     if (!this.refreshToken) {
-      throw new RefreshError('Refresh token is required for refresh');
+      throw refreshTokenRefused();
     }
 
     if (!this.config.tokenEndpoint && !this.config.issuerUrl) {

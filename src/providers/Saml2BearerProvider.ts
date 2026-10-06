@@ -24,6 +24,7 @@ import { defaultReplayStore } from '../validation/inMemoryReplayStore';
 import {
   BaseTokenProvider,
   type ClientAuthenticationConfig,
+  refreshTokenRefused,
   type TokenProviderHooks,
 } from './BaseTokenProvider';
 import type {
@@ -146,7 +147,7 @@ export class Saml2BearerProvider extends BaseTokenProvider {
    */
   protected async performRefresh(): Promise<ITokenResult> {
     if (!this.refreshToken) {
-      throw new Error('Refresh token is required for refresh');
+      throw refreshTokenRefused();
     }
 
     const tokens = await refreshSamlBearerToken(

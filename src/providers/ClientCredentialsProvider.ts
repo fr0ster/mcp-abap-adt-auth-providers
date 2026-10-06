@@ -13,10 +13,10 @@ import { AUTH_TYPE_CLIENT_CREDENTIALS } from '@mcp-abap-adt/interfaces-auth';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
 import { getTokenWithClientCredentials } from '../auth/clientCredentialsAuth';
 import { asContract } from '../auth/contractShape';
-import { RefreshError } from '../errors/TokenProviderErrors';
 import {
   BaseTokenProvider,
   type ClientAuthenticationConfig,
+  refreshTokenRefused,
   type TokenProviderHooks,
 } from './BaseTokenProvider';
 
@@ -96,6 +96,6 @@ export class ClientCredentialsProvider extends BaseTokenProvider {
   }
 
   protected async performRefresh(): Promise<ITokenResult> {
-    throw new RefreshError('client_credentials has no refresh grant');
+    throw refreshTokenRefused();
   }
 }
