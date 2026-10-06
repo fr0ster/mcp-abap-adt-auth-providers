@@ -1160,6 +1160,30 @@ describe('A14 — a refused token request through a moment', () => {
 });
 
 describe('the grant a failure names is read once, guarded', () => {
+  it('getAuthType() answering a foreign thenable: its then is never called, the grant unusable (fail closed)', async () => {
+    let thenCalls = 0;
+    const thenable = {
+      // biome-ignore lint/suspicious/noThenProperty: a foreign thenable is the input under test
+      then() {
+        thenCalls += 1;
+      },
+    };
+    class Thenable extends TestProvider {
+      protected override getAuthType(): OAuth2GrantType {
+        return thenable as never;
+      }
+    }
+    const p = new Thenable();
+    p.login.mockRejectedValue(new Error(MARKER));
+    const thrown = await rejectionOf(p.getTokens());
+    expectFailure(thrown);
+    expect((thrown as AuthProviderFailure).error.facts).toEqual({
+      operation: 'token-request',
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(thenCalls).toBe(0);
+  });
+
   it('getAuthType() answering a rejecting promise: getTokens() rejects with a failure, no unhandled rejection, one read', async () => {
     let calls = 0;
     class Rejecting extends TestProvider {

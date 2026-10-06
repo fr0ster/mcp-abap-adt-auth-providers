@@ -712,9 +712,10 @@ export abstract class BaseTokenProvider
 
   /**
    * This provider's grant, read once for its lifetime: `getAuthType()` is a
-   * subclass's and may throw, or answer anything — a rejecting promise
-   * included, whose rejection is handled here, once. Only a grant on the
-   * list is kept.
+   * subclass's and may throw, or answer anything — a rejecting native
+   * promise included, whose rejection is marked handled here, once; any
+   * other thenable is never called (fail closed). Only a grant on the list
+   * is kept.
    */
   private readGrant(): OAuth2GrantType | undefined {
     if (!this.grantRead) {
@@ -722,7 +723,9 @@ export abstract class BaseTokenProvider
       try {
         const value: unknown = this.getAuthType();
         if (isGrant(value)) grant = value;
-        else if (isThenable(value)) Promise.resolve(value).catch(() => {});
+        // A plain native promise is marked handled; any other thenable is an
+        // unusable grant whose `then` is never called (fail closed).
+        else markHandled(value);
       } catch {
         // No grant: the failure names the operation alone.
       }
@@ -1434,19 +1437,6 @@ function boundElsewhere(): AuthOutcome {
     ok: false,
     refusal: authError['token-binding']({ problem: 'bound-to-unpinned' }),
   };
-}
-
-/** True for a value with a callable `then`; a throwing read is false. */
-function isThenable(value: unknown): value is PromiseLike<unknown> {
-  try {
-    return (
-      (typeof value === 'object' || typeof value === 'function') &&
-      value !== null &&
-      typeof (value as { then?: unknown }).then === 'function'
-    );
-  } catch {
-    return false;
-  }
 }
 
 /** A18: a renewed token still bound to another certificate. */

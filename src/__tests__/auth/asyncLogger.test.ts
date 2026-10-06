@@ -177,6 +177,12 @@ report(outcomes);
 
 describe('the interactive login with a consumer logger', () => {
   const expected = ['c1', 'browser-launch-failed', 'c2', 'shown'];
+  /**
+   * The test's own bound on the child (Task 29 ruling): a login that never
+   * ends — an unguarded H7 line throwing before `server.fail` — kills the
+   * child here and fails the test, instead of hanging it.
+   */
+  const BOUND_MS = 30_000;
 
   it('an async logger: no unhandled rejection, every outcome as without a logger', () => {
     const run = runPlainNode<string[]>(
@@ -186,7 +192,9 @@ describe('the interactive login with a consumer logger', () => {
         warn: async () => { throw new Error('async warn'); },
         error: async () => { throw new Error('async error'); },
       }`),
+      { boundMs: BOUND_MS },
     );
+    expect(run.timedOut).toBe(false);
     expect(run.result).toEqual(expected);
     expect(run.unhandled).toEqual([]);
     // Fix round 1 (item 8): a prompt whose info rejected is not lost — it
@@ -194,7 +202,7 @@ describe('the interactive login with a consumer logger', () => {
     expect(run.stderr).toContain('Open this URL to authenticate');
     expect(run.stderr).toContain('Enter code: UC-1');
     expect(run.stderr).not.toContain('async info');
-  });
+  }, 60_000);
 
   it('a throwing logger: the same outcomes, and the prompts reach stderr instead', () => {
     const run = runPlainNode<string[]>(
@@ -204,11 +212,13 @@ describe('the interactive login with a consumer logger', () => {
         warn: () => { throw new Error('warn threw'); },
         error: () => { throw new Error('error threw'); },
       }`),
+      { boundMs: BOUND_MS },
     );
+    expect(run.timedOut).toBe(false);
     expect(run.result).toEqual(expected);
     expect(run.unhandled).toEqual([]);
     expect(run.stderr).toContain('Open this URL to authenticate');
     expect(run.stderr).toContain('Enter code: UC-1');
     expect(run.stderr).not.toContain('threw');
-  });
+  }, 60_000);
 });

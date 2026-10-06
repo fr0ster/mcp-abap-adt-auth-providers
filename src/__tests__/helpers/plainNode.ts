@@ -58,6 +58,12 @@ export interface PlainNodeRun<T> {
   readonly unhandled: readonly string[];
   readonly status: number | null;
   readonly stderr: string;
+  /**
+   * Whether the child was killed at the test's own bound (`boundMs`): a
+   * scenario that never ends fails its test instead of hanging it. A test
+   * may bound itself; only the package may not.
+   */
+  readonly timedOut: boolean;
 }
 
 /**
@@ -66,7 +72,10 @@ export interface PlainNodeRun<T> {
  * child lets two macrotask turns pass so that a rejection left unhandled is
  * reported, then prints what it recorded.
  */
-export function runPlainNode<T>(body: string): PlainNodeRun<T> {
+export function runPlainNode<T>(
+  body: string,
+  options: { readonly boundMs?: number } = {},
+): PlainNodeRun<T> {
   const out = compiledSources();
   const dir = mkdtempSync(join(tmpdir(), 'auth-providers-scenario-'));
   const script = join(dir, 'scenario.js');
@@ -108,16 +117,24 @@ ${body}
       cwd: root,
       encoding: 'utf8',
       env: { ...process.env, NODE_PATH: join(root, 'node_modules') },
+      ...(options.boundMs === undefined
+        ? {}
+        : { timeout: options.boundMs, killSignal: 'SIGKILL' as const }),
     });
-    const parsed = JSON.parse(run.stdout || 'null') as {
-      result: T;
-      unhandled: string[];
-    } | null;
+    const timedOut =
+      (run.error as NodeJS.ErrnoException | undefined)?.code === 'ETIMEDOUT';
+    let parsed: { result: T; unhandled: string[] } | null = null;
+    try {
+      parsed = JSON.parse(run.stdout || 'null');
+    } catch {
+      parsed = null;
+    }
     return {
       result: parsed?.result as T,
       unhandled: parsed?.unhandled ?? ['<no report>'],
       status: run.status,
       stderr: run.stderr,
+      timedOut,
     };
   } finally {
     rmSync(dir, { recursive: true, force: true });
