@@ -2,22 +2,48 @@
  * OIDC discovery helper
  */
 
+import { AuthProviderFailure, authError } from '@mcp-abap-adt/auth-errors';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
-import axios, { AxiosError, type AxiosResponse } from 'axios';
-import { withoutRequest } from './tokenRequest';
+import axios from 'axios';
+import { readSafely } from './knownCodes';
+import { requestFailure } from './tokenRequest';
 
+/**
+ * The discovery snapshot (spec §6): the fields the providers and `mtlsAlias`
+ * read, nothing else — never the document the server sent, nor the object a
+ * consumer's response interceptor returned.
+ */
 export interface OidcDiscoveryDocument {
-  issuer: string;
-  authorization_endpoint?: string;
-  token_endpoint: string;
-  device_authorization_endpoint?: string;
-  jwks_uri?: string;
-  end_session_endpoint?: string;
+  readonly authorization_endpoint?: string | undefined;
+  readonly token_endpoint: string;
+  readonly device_authorization_endpoint?: string | undefined;
   /** RFC 8705 §5: the endpoints a client presenting a certificate uses instead. */
-  mtls_endpoint_aliases?: {
-    token_endpoint?: string;
-    device_authorization_endpoint?: string;
-  };
+  readonly mtls_endpoint_aliases?: MtlsEndpointAliases | undefined;
+}
+
+/** The two mTLS aliases a provider reads (RFC 8705 §5). */
+export interface MtlsEndpointAliases {
+  readonly token_endpoint?: string | undefined;
+  readonly device_authorization_endpoint?: string | undefined;
+}
+
+/** The endpoints a discovery snapshot keeps, beside `mtls_endpoint_aliases`. */
+const DISCOVERY_FIELDS = [
+  'authorization_endpoint',
+  'token_endpoint',
+  'device_authorization_endpoint',
+] as const;
+
+/** The aliases a snapshot keeps of `mtls_endpoint_aliases`. */
+const ALIAS_FIELDS = [
+  'token_endpoint',
+  'device_authorization_endpoint',
+] as const;
+
+/** A field read through `readSafely`, kept only as a non-empty string. */
+function nonEmptyString(value: unknown, key: string): string | undefined {
+  const read = readSafely(value, key);
+  return typeof read === 'string' && read !== '' ? read : undefined;
 }
 
 /**
@@ -29,10 +55,10 @@ export function mtlsAlias(
   document: OidcDiscoveryDocument | null | undefined,
   endpoint: 'token_endpoint' | 'device_authorization_endpoint',
 ): string | undefined {
-  const aliases: unknown = document?.mtls_endpoint_aliases;
-  if (!aliases || typeof aliases !== 'object') return undefined;
-  const alias = (aliases as Record<string, unknown>)[endpoint];
-  return typeof alias === 'string' && alias !== '' ? alias : undefined;
+  return nonEmptyString(
+    readSafely(document, 'mtls_endpoint_aliases'),
+    endpoint,
+  );
 }
 
 const discoveryCache = new Map<string, OidcDiscoveryDocument>();
@@ -46,6 +72,56 @@ function normalizeDiscoveryUrl(issuerOrDiscoveryUrl: string): string {
   return `${issuerOrDiscoveryUrl.slice(0, end)}/.well-known/openid-configuration`;
 }
 
+/** `request-failed` `incomplete-response` of discovery, the operation only (D6). */
+function incomplete(): AuthProviderFailure {
+  return new AuthProviderFailure(
+    authError['request-failed']({
+      operation: 'oidc-discovery',
+      problem: 'incomplete-response',
+    }),
+  );
+}
+
+/**
+ * The snapshot of a discovery answer: each of `DISCOVERY_FIELDS` read through
+ * `readSafely` and kept only as a non-empty string; `mtls_endpoint_aliases`
+ * rebuilt as a plain object of its two aliases, each kept the same way. A
+ * field that throws or is not a non-empty string is left out; without
+ * `token_endpoint` there is no snapshot. Nothing else is read — no `toJSON`,
+ * no other key.
+ */
+function discoverySnapshot(response: unknown): OidcDiscoveryDocument {
+  const document = readSafely(response, 'data');
+  const fields: Partial<Record<(typeof DISCOVERY_FIELDS)[number], string>> = {};
+  for (const field of DISCOVERY_FIELDS) {
+    const value = nonEmptyString(document, field);
+    if (value !== undefined) fields[field] = value;
+  }
+  const tokenEndpoint = fields.token_endpoint;
+  if (tokenEndpoint === undefined) throw incomplete();
+
+  const rawAliases = readSafely(document, 'mtls_endpoint_aliases');
+  const aliases: Partial<Record<(typeof ALIAS_FIELDS)[number], string>> = {};
+  for (const field of ALIAS_FIELDS) {
+    const value = nonEmptyString(rawAliases, field);
+    if (value !== undefined) aliases[field] = value;
+  }
+  return {
+    ...fields,
+    token_endpoint: tokenEndpoint,
+    ...(Object.keys(aliases).length === 0
+      ? {}
+      : { mtls_endpoint_aliases: aliases }),
+  };
+}
+
+/**
+ * Fetches the discovery document and answers its snapshot (spec §6, D6). A
+ * transport rejection becomes `tls` or `request-failed` of `oidc-discovery`;
+ * an answer without `token_endpoint`, or one that cannot be read, becomes
+ * `request-failed` `incomplete-response` with the operation only. A failed
+ * discovery is not cached; it writes no failure line.
+ */
 export async function discoverOidc(
   issuerOrDiscoveryUrl: string,
   logger?: ILogger,
@@ -60,34 +136,23 @@ export async function discoverOidc(
   // The one request that may follow a redirect: it sends no secret — no
   // credential, no grant, no client certificate — only a GET for public
   // metadata. Every token request sets `maxRedirects: 0`.
-  let response: AxiosResponse<OidcDiscoveryDocument>;
+  let response: unknown;
   try {
-    response = await axios.get<OidcDiscoveryDocument>(discoveryUrl, {
+    response = await axios.get(discoveryUrl, {
       headers: { Accept: 'application/json' },
     });
   } catch (error) {
     // Whatever was thrown — the server's text through a consumer's
-    // interceptor included — is replaced by the safe facts alone.
-    throw withoutRequest(error);
+    // interceptor included — becomes the safe facts alone.
+    throw requestFailure(error, 'oidc-discovery');
   }
 
-  // A plain copy of the document, never the object handed over: a consumer's
-  // response interceptor may return data whose getters, Proxy traps or
-  // `toJSON` throw the server's text. Whatever throws while copying is
-  // replaced by fixed words, with no cause.
   let document: OidcDiscoveryDocument;
   try {
-    const copy: unknown = JSON.parse(JSON.stringify(response.data ?? null));
-    document = (
-      copy && typeof copy === 'object' ? copy : {}
-    ) as OidcDiscoveryDocument;
+    document = discoverySnapshot(response);
   } catch {
-    throw new AxiosError('the OIDC discovery request failed');
+    throw incomplete();
   }
-  if (typeof document.token_endpoint !== 'string' || !document.token_endpoint) {
-    throw new Error('OIDC discovery document missing token_endpoint');
-  }
-
   discoveryCache.set(discoveryUrl, document);
   return document;
 }

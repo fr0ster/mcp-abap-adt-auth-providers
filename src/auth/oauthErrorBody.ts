@@ -53,8 +53,3 @@ export function registeredOAuthError(value: unknown): string | undefined {
     ? value
     : undefined;
 }
-
-/** What of an OAuth error body may stay on 5.4.2's reduced error: a registered `error`. */
-export interface OAuthErrorFields {
-  error?: string;
-}

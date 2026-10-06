@@ -32,7 +32,7 @@ import type { AnyOutcome } from '../auth/contractTransition';
 import { loggedError, OK, refusalFrom } from '../auth/refusal';
 import { readRejection } from '../auth/rejection';
 import { readBinding, type TokenBinding } from '../auth/tokenBinding';
-import type { TokenRequestAuth } from '../auth/tokenRequest';
+import type { TokenRequestAuth, TokenSiteOptions } from '../auth/tokenRequest';
 import { CertificateMaterialError } from '../errors/CertificateMaterialError';
 import { ValidationError } from '../errors/TokenProviderErrors';
 
@@ -146,7 +146,7 @@ export abstract class BaseTokenProvider
   protected readonly clientAuthentication?: IClientAuthentication | undefined;
   /**
    * `config.authDebug === true`, read once: what every token site of this
-   * provider is told (`TokenRequestSite.authDebug`, threaded in Task 21).
+   * provider is told (`TokenRequestSite.authDebug`, through `siteOptions()`).
    */
   protected readonly authDebug: boolean;
   /**
@@ -264,6 +264,15 @@ export abstract class BaseTokenProvider
       ...(mtlsEndpoint === undefined ? {} : { mtlsEndpoint }),
       ...(tokenEndpoint === undefined ? {} : { tokenEndpoint }),
     };
+  }
+
+  /**
+   * What every token site this provider calls is told (spec §6): the
+   * consumer's `authDebug`, read once at construction, and the grant its
+   * failures name (`getAuthType()`).
+   */
+  protected siteOptions(): TokenSiteOptions {
+    return { authDebug: this.authDebug, grant: this.getAuthType() };
   }
 
   /**

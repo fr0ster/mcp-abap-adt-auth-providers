@@ -39,14 +39,8 @@ import type {
   ITokenRequestDraft,
 } from '@mcp-abap-adt/interfaces-auth';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
-import axios, {
-  AxiosError,
-  type AxiosRequestConfig,
-  type AxiosResponse,
-  CanceledError,
-} from 'axios';
+import axios, { type AxiosRequestConfig, type AxiosResponse } from 'axios';
 import { ClientAuthenticationResultError } from '../errors/ClientAuthenticationError';
-import { TokenEndpointError } from '../errors/TokenEndpointError';
 import { assertNotExpired } from './certificateMaterial';
 import type { OAuth2GrantType, Operation } from './contractTransition';
 import {
@@ -55,8 +49,7 @@ import {
   readSafely,
   tlsFailureCode,
 } from './knownCodes';
-import { type OAuthErrorFields, registeredOAuthError } from './oauthErrorBody';
-import { loggedError } from './refusal';
+import { registeredOAuthError } from './oauthErrorBody';
 
 /** What a site is given to authenticate one request with a strategy. */
 export interface TokenRequestAuth {
@@ -343,6 +336,20 @@ export function grantSecrets(params: URLSearchParams): Record<string, string> {
   return out;
 }
 
+/**
+ * A site's own secrets, by name: the grant's (`grantSecrets`) and the
+ * configured client secret as `client_secret` when there is one.
+ */
+export function siteSecrets(
+  params: URLSearchParams,
+  clientSecret: string | undefined,
+): Record<string, string> {
+  return {
+    ...grantSecrets(params),
+    ...(clientSecret ? { client_secret: clientSecret } : {}),
+  };
+}
+
 /** Below this many characters a secret is shown by its length only. */
 const PREPARED_MIN = 16;
 /** How many characters of each end of a secret `authDebug` shows. */
@@ -366,123 +373,6 @@ export function prepareSecret(value: string, authDebug: boolean): string {
   return `${head}…${tail} ${marker}`;
 }
 
-/** What of a failed request a site's own handling reads. */
-export interface TokenRequestFailure extends Error {
-  isAxiosError?: true;
-  code?: string;
-  status?: number;
-  response?: {
-    status?: unknown;
-    statusText?: unknown;
-    data?: OAuthErrorFields;
-  };
-}
-
-/**
- * The failure without the request: an AxiosError carries its config (the
- * httpsAgent and its key, PFX and passphrase; the form body with an assertion,
- * a secret or a refresh token; the Authorization header) on itself, on
- * `request` and on `response.config`. What is rethrown is a new `AxiosError`
- * — `instanceof AxiosError` and `axios.isAxiosError` hold — built from what the
- * sites read and nothing else: a rebuilt `message` (axios's "Request failed
- * with status code N", or fixed words with the code), `code`, `status`, and a
- * response of `status`, an empty `statusText` (the reason phrase is the
- * server's text), empty `headers` and `data` reduced to the OAuth `error`
- * when it is a registered code — the server's free text (`error_description`,
- * `error_uri`) and an unregistered code are dropped: a server may echo the
- * request in them, in encodings no redaction can enumerate. They reach no
- * error and no log line. No `config`, `request` or
- * `cause` is set, so `toJSON()`, which reads `this.config`, serialises none.
- * Not only an axios failure: every rejection is replaced (`reduce`).
- */
-export function withoutRequest(error: unknown): AxiosError {
-  try {
-    return reduce(error);
-  } catch {
-    // Nothing of a value whose reading throws is kept.
-    return new AxiosError('the token request failed');
-  }
-}
-
-/**
- * Every rejection is replaced, whatever it is: an axios failure, or anything
- * else that reached the request's promise — a consumer's response
- * interceptor throwing the server's `error_description`, a primitive, a
- * Proxy, an object whose getters throw. Only facts read through `readSafely`
- * and validated survive: an integer status, an allowlisted code, a registered
- * OAuth `error`. The original is never kept, not even as `cause` (which
- * `util.inspect` prints).
- */
-/** axios's own error codes: its fixed words, kept on the replacement. */
-const AXIOS_CODES: ReadonlySet<string> = new Set([
-  AxiosError.ERR_FR_TOO_MANY_REDIRECTS,
-  AxiosError.ERR_BAD_OPTION_VALUE,
-  AxiosError.ERR_BAD_OPTION,
-  AxiosError.ERR_NETWORK,
-  AxiosError.ERR_DEPRECATED,
-  AxiosError.ERR_BAD_RESPONSE,
-  AxiosError.ERR_BAD_REQUEST,
-  AxiosError.ERR_NOT_SUPPORT,
-  AxiosError.ERR_INVALID_URL,
-  AxiosError.ERR_CANCELED,
-  AxiosError.ECONNABORTED,
-  AxiosError.ETIMEDOUT,
-]);
-
-function reduce(error: unknown): AxiosError {
-  // A cancellation stays one — `axios.isCancel` and `axios.isAxiosError`
-  // both hold — in fixed words, with nothing of the original.
-  if (readSafely(error, '__CANCEL__') === true) {
-    return new CanceledError('the token request was canceled');
-  }
-  const rawCode = readSafely(error, 'code');
-  const namedCode = allowlistedCode(rawCode);
-  const code =
-    namedCode ??
-    (typeof rawCode === 'string' && AXIOS_CODES.has(rawCode)
-      ? rawCode
-      : undefined);
-  const response = readSafely(error, 'response');
-  const hasResponse = !!response && typeof response === 'object';
-  const status =
-    integerStatus(readSafely(response, 'status')) ??
-    integerStatus(readSafely(error, 'status'));
-  // The message is rebuilt, never copied: axios's own words for a status, else
-  // fixed words with the code. Nothing of the server (a reason phrase, a body)
-  // or of the request (a URL) can be in it.
-  const message =
-    status !== undefined
-      ? `Request failed with status code ${status}`
-      : `the token request failed${namedCode ? ` (${namedCode})` : ''}`;
-  // AxiosResponse requires a config, and this one has none on purpose: the
-  // config carries the agent's key, the form body and Authorization.
-  const reduced = hasResponse
-    ? ({
-        status,
-        // The reason phrase is the server's free text: it may echo a secret.
-        statusText: '',
-        headers: {},
-        data: registeredOnly(readSafely(response, 'data')),
-      } as unknown as AxiosResponse)
-    : undefined;
-  const failure = new AxiosError(message, code, undefined, undefined, reduced);
-  if (failure.status === undefined && status !== undefined) {
-    failure.status = status;
-  }
-  return failure;
-}
-
-/**
- * What of an error body stays on a thrown error: the OAuth `error` when it is
- * a registered code (a consumer, and the device poll, read it), nothing else;
- * a body that is not an object becomes undefined.
- */
-function registeredOnly(data: unknown): OAuthErrorFields | undefined {
-  if (!data || typeof data !== 'object') return undefined;
-  const error = registeredOAuthError(readSafely(data, 'error'));
-  return error === undefined ? {} : { error };
-}
-
 /**
  * Runs a log call for a token site where a logger that throws must change
  * nothing: inside a catch, the failure the site rethrows — already replaced
@@ -497,51 +387,19 @@ export function logQuietly(write: () => void): void {
   }
 }
 
-/** Where a site's failed request is noted: one debug line of safe facts. */
-export interface TokenRequestDiagnostics {
-  /**
-   * TEMPORARY (removed with this interface in Task 21): never `'site'`, so
-   * `arm` alone tells 5.4.2's diagnostics from a `TokenRequestSite`.
-   */
-  readonly arm?: undefined;
-  /** The site's logger; without one, no line. */
-  readonly logger?: ILogger | null | undefined;
-  /** The site, naming the line. */
-  readonly label: string;
-}
-
 /** The device poll's answers while it waits: the protocol, not a failure. */
 const WAITING = new Set(['authorization_pending', 'slow_down']);
 
 /**
- * A failed request in one `debug` line through the site's logger: the HTTP
- * status and the OAuth `error` when it is a registered code — never the
- * server's free text (`error_description`, `error_uri`), which may echo any
- * secret of the request in an encoding no redaction can enumerate, nor an
- * unregistered code. No line for the device poll's waiting answers, none
- * without a logger; a logger that throws is ignored, so the failure the site
- * throws is never replaced.
+ * What a provider tells every token site it calls (spec §6): its
+ * `authDebug` — `true` itself, nothing else, read once by `BaseTokenProvider`
+ * from its configuration, never from the environment — and its grant, the
+ * `grant` fact of a failure. A site helper takes it as a parameter; without
+ * one, `authDebug` is off and no grant is named.
  */
-export function logRefusedRequest(
-  diagnostics: TokenRequestDiagnostics | undefined,
-  status: unknown,
-  data: unknown,
-): void {
-  const logger = diagnostics?.logger;
-  if (!logger) return;
-  try {
-    const error = registeredOAuthError(readSafely(data, 'error'));
-    if (error !== undefined && WAITING.has(error)) return;
-    logger.debug(
-      `${diagnostics.label}: the token endpoint refused the request`,
-      {
-        status: integerStatus(status),
-        ...(error === undefined ? {} : { error }),
-      },
-    );
-  } catch {
-    // The site's failure is what the caller needs.
-  }
+export interface TokenSiteOptions {
+  readonly authDebug?: boolean | undefined;
+  readonly grant?: OAuth2GrantType | undefined;
 }
 
 /**
@@ -552,12 +410,6 @@ export function logRefusedRequest(
  * never read for any site.
  */
 export interface TokenRequestSite {
-  /**
-   * TEMPORARY (Decision D6; removed in Task 21 with the legacy arm): the
-   * explicit discriminant `sendTokenRequest` dispatches on — never on which
-   * other properties an argument carries.
-   */
-  readonly arm: 'site';
   readonly operation: Operation;
   readonly grant?: OAuth2GrantType | undefined;
   /** The provider's logger; no logger → no line, nothing else changes. */
@@ -578,6 +430,28 @@ export interface TokenRequestSite {
    * `legacyBasic()` — never assembled by the site itself.
    */
   readonly basic?: LegacyBasic | undefined;
+}
+
+/**
+ * A site's description from the provider's options: the operation, the
+ * secrets and the Basic credential are the site's own; `authDebug` is on only
+ * for `true` itself.
+ */
+export function tokenSite(
+  operation: Operation,
+  options: TokenSiteOptions | undefined,
+  logger: ILogger | null | undefined,
+  secrets: SentSecrets,
+  basic?: LegacyBasic,
+): TokenRequestSite {
+  return {
+    operation,
+    ...(options?.grant === undefined ? {} : { grant: options.grant }),
+    logger,
+    authDebug: options?.authDebug === true,
+    secrets,
+    ...(basic === undefined ? {} : { basic }),
+  };
 }
 
 /**
@@ -618,7 +492,10 @@ function sentOf(
 const debugging = (site: TokenRequestSite): boolean => site.authDebug === true;
 
 /** The operation and grant of a site, as the facts of its failure. */
-function factsOf(site: TokenRequestSite): {
+function factsOf(site: {
+  readonly operation: Operation;
+  readonly grant?: OAuth2GrantType | undefined;
+}): {
   operation: Operation;
   grant?: OAuth2GrantType;
 } {
@@ -645,144 +522,143 @@ function phraseOf(site: TokenRequestSite): string {
     : 'the token request';
 }
 
+/** The facts of a failed request, each read once through `readSafely`. */
+interface RequestFacts {
+  /** The integer status as the line names it (5.4.2: any integer). */
+  readonly lineStatus: number | undefined;
+  readonly oauthError: string | undefined;
+  /** An allowlisted system or TLS code, as the line names it. */
+  readonly code: string | undefined;
+  readonly failure: AuthProviderFailure;
+}
+
 /**
- * A failed request on the new arm: its one line, then the failure (spec §6).
- * The facts are read once, each through `readSafely`: an integer status, a
- * registered OAuth `error`, an allowlisted code. By default the line is
- * 5.4.2's safe facts (`status`, `error` when registered) plus an allowlisted
- * `code` (a recorded addition); only with `authDebug`, instead, the line
- * `[<operation>] token endpoint said` with the same facts plus `sent`.
- * Nothing of the body is read beyond `error`, in either mode — never
+ * A failed request's facts and its failure (spec §6): `tls` for an
+ * allowlisted TLS code, else `request-failed` — `refused` with an HTTP
+ * status and a registered `oauthError`, `no-response` without a status, an
+ * allowlisted system code as `code`. Nothing of the body is read beyond a
+ * registered `error`; the failure carries no body, no cause, nothing of the
+ * request. Total: a value whose reading throws past `readSafely` becomes
+ * `request-failed` `no-response` with the operation only.
+ */
+function readRequestFailure(
+  error: unknown,
+  facts: {
+    readonly operation: Operation;
+    readonly grant?: OAuth2GrantType | undefined;
+  },
+): RequestFacts {
+  try {
+    const response = readSafely(error, 'response');
+    const rawStatus = readSafely(response, 'status');
+    const oauthError = registeredOAuthError(
+      readSafely(readSafely(response, 'data'), 'error'),
+    );
+    const rawCode = readSafely(error, 'code');
+    const tls = tlsFailureCode(error);
+    const systemCode = isSystemCode(rawCode) ? rawCode : undefined;
+    const status = httpStatus(rawStatus);
+    const failure =
+      tls !== undefined
+        ? new AuthProviderFailure(
+            authError.tls({ ...factsOf(facts), code: tls }),
+          )
+        : new AuthProviderFailure(
+            authError['request-failed']({
+              ...factsOf(facts),
+              ...(status === undefined
+                ? { problem: 'no-response' }
+                : {
+                    problem: 'refused',
+                    status,
+                    ...(isOAuthErrorCode(oauthError) ? { oauthError } : {}),
+                  }),
+              ...(systemCode === undefined ? {} : { code: systemCode }),
+            }),
+          );
+    return {
+      lineStatus: integerStatus(rawStatus),
+      oauthError,
+      code: allowlistedCode(rawCode),
+      failure,
+    };
+  } catch {
+    return {
+      lineStatus: undefined,
+      oauthError: undefined,
+      code: undefined,
+      failure: new AuthProviderFailure(
+        authError['request-failed']({
+          operation: facts.operation,
+          problem: 'no-response',
+        }),
+      ),
+    };
+  }
+}
+
+/**
+ * A rejected request that is not a token site's — OIDC discovery — as its
+ * failure: the same classification, no line (spec §6: discovery writes no
+ * failure line).
+ */
+export function requestFailure(
+  error: unknown,
+  operation: Operation,
+): AuthProviderFailure {
+  return readRequestFailure(error, { operation }).failure;
+}
+
+/**
+ * A failed request: its one line, then the failure (spec §6). By default the
+ * line is 5.4.2's safe facts (`status`, `error` when registered) plus an
+ * allowlisted `code` (a recorded addition); only with `authDebug`, instead,
+ * the line `[<operation>] token endpoint said` with the same facts plus
+ * `sent`. Nothing of the body is read beyond `error`, in either mode — never
  * `error_description` / `error_uri`. None for the device poll's waiting
- * answers, none without a logger, a throwing logger swallowed. The failure
- * is `tls` for an allowlisted TLS code, else `request-failed` — `refused`
- * with an HTTP status, `no-response` without one — and carries no body, no
- * cause, nothing of the request.
+ * answers, none without a logger, a throwing logger swallowed.
  */
 function failedRequest(
   error: unknown,
   site: TokenRequestSite,
   prepared: PreparedTokenRequest | undefined,
 ): AuthProviderFailure {
-  try {
-    const response = readSafely(error, 'response');
-    const body = readSafely(response, 'data');
-    const rawStatus = readSafely(response, 'status');
-    const oauthError = registeredOAuthError(readSafely(body, 'error'));
-    const rawCode = readSafely(error, 'code');
-    const tls = tlsFailureCode(error);
-    const code = allowlistedCode(rawCode);
-    const systemCode = isSystemCode(rawCode) ? rawCode : undefined;
-    const status = httpStatus(rawStatus);
-
-    const logger = site.logger;
-    if (logger && !(oauthError !== undefined && WAITING.has(oauthError))) {
-      logQuietly(() => {
-        const safe = {
-          status: integerStatus(rawStatus),
-          ...(oauthError === undefined ? {} : { error: oauthError }),
-          ...(code === undefined ? {} : { code }),
-        };
-        if (debugging(site)) {
-          logger.debug(`[${site.operation}] token endpoint said`, {
-            ...safe,
-            sent: sentOf(site, prepared),
-          });
-        } else {
-          logger.debug(
-            `${phraseOf(site)}: the token endpoint refused the request`,
-            safe,
-          );
-        }
-      });
-    }
-
-    if (tls !== undefined) {
-      return new AuthProviderFailure(
-        authError.tls({ ...factsOf(site), code: tls }),
-      );
-    }
-    return new AuthProviderFailure(
-      authError['request-failed']({
-        ...factsOf(site),
-        ...(status === undefined
-          ? { problem: 'no-response' }
-          : {
-              problem: 'refused',
-              status,
-              ...(isOAuthErrorCode(oauthError) ? { oauthError } : {}),
-            }),
-        ...(systemCode === undefined ? {} : { code: systemCode }),
-      }),
-    );
-  } catch {
-    return new AuthProviderFailure(
-      authError['request-failed']({
-        operation: site.operation,
-        problem: 'no-response',
-      }),
-    );
+  const { lineStatus, oauthError, code, failure } = readRequestFailure(
+    error,
+    site,
+  );
+  const logger = site.logger;
+  if (logger && !(oauthError !== undefined && WAITING.has(oauthError))) {
+    logQuietly(() => {
+      const safe = {
+        status: lineStatus,
+        ...(oauthError === undefined ? {} : { error: oauthError }),
+        ...(code === undefined ? {} : { code }),
+      };
+      if (debugging(site)) {
+        logger.debug(`[${site.operation}] token endpoint said`, {
+          ...safe,
+          sent: sentOf(site, prepared),
+        });
+      } else {
+        logger.debug(
+          `${phraseOf(site)}: the token endpoint refused the request`,
+          safe,
+        );
+      }
+    });
   }
+  return failure;
 }
 
 /**
  * Sends one request — the prepared one when a strategy was given, else the
- * site's own `asToday`.
- *
- * TEMPORARY two arms (Decision D6; the legacy arm goes in Task 21), told
- * apart by the explicit discriminant `arm`:
- * - a `TokenRequestSite` (`arm: 'site'`): every failure becomes an
- *   `AuthProviderFailure` after the site's one line (`failedRequest`); an
- *   answer becomes a `TokenResponseSnapshot`, one that cannot be read a
- *   `request-failed` `incomplete-response` failure with the operation only;
- * - 5.4.2's `TokenRequestDiagnostics`, or nothing: 5.4.2 exactly — the failure
- *   thrown without the request (`withoutRequest`), its safe facts noted
- *   (`logRefusedRequest`), the answer a snapshot (`snapshotOf`).
+ * site's own `asToday` — and answers a snapshot of it (spec §6). Every
+ * failure becomes an `AuthProviderFailure` after the site's one line
+ * (`failedRequest`); an answer that cannot be read becomes `request-failed`
+ * `incomplete-response` with the operation only.
  */
-export function sendTokenRequest<T>(
-  prepared: PreparedTokenRequest | undefined,
-  asToday: () => Promise<AxiosResponse<T>>,
-  site: TokenRequestSite,
-): Promise<TokenResponseSnapshot<T>>;
-export function sendTokenRequest<T>(
-  prepared: PreparedTokenRequest | undefined,
-  asToday: () => Promise<AxiosResponse<T>>,
-  diagnostics?: TokenRequestDiagnostics,
-): Promise<AxiosResponse<T>>;
 export async function sendTokenRequest<T>(
-  prepared: PreparedTokenRequest | undefined,
-  asToday: () => Promise<AxiosResponse<T>>,
-  third?: TokenRequestDiagnostics | TokenRequestSite,
-): Promise<AxiosResponse<T> | TokenResponseSnapshot<T>> {
-  if (third?.arm === 'site') {
-    return sendForSite<T>(prepared, asToday, third);
-  }
-  return sendAsLegacy<T>(prepared, asToday, third);
-}
-
-/** 5.4.2's `sendTokenRequest`, unchanged (the legacy arm). */
-async function sendAsLegacy<T>(
-  prepared: PreparedTokenRequest | undefined,
-  asToday: () => Promise<AxiosResponse<T>>,
-  diagnostics: TokenRequestDiagnostics | undefined,
-): Promise<AxiosResponse<T>> {
-  let response: unknown;
-  try {
-    response = prepared ? await axios<T>(prepared.config) : await asToday();
-  } catch (error) {
-    const response = readSafely(error, 'response');
-    logRefusedRequest(
-      diagnostics,
-      readSafely(response, 'status'),
-      readSafely(response, 'data'),
-    );
-    throw withoutRequest(error);
-  }
-  return snapshotOf<T>(response);
-}
-
-/** The new arm: a site's failure, or its snapshot. */
-async function sendForSite<T>(
   prepared: PreparedTokenRequest | undefined,
   asToday: () => Promise<AxiosResponse<T>>,
   site: TokenRequestSite,
@@ -825,28 +701,6 @@ const ANSWER_FIELDS = [
   'error',
 ] as const;
 
-/**
- * What a site may read of a successful answer: an integer status and a plain
- * object of the expected fields that are strings or numbers, each read
- * through `readSafely` — never the object axios (or a consumer's response
- * interceptor) handed over, whose getters, Proxy traps or `toJSON` could
- * throw the server's text into a site's parsing. A field whose read throws
- * reads as absent; anything that still throws here is replaced by a safe
- * error with no cause.
- */
-function snapshotOf<T>(response: unknown): AxiosResponse<T> {
-  try {
-    return {
-      status: integerStatus(readSafely(response, 'status')),
-      statusText: '',
-      headers: {},
-      data: answerData(readSafely(response, 'data')),
-    } as unknown as AxiosResponse<T>;
-  } catch {
-    throw new AxiosError('the token request failed');
-  }
-}
-
 /** The expected fields of an answer's body that are strings or numbers. */
 function answerData(raw: unknown): Record<string, string | number> {
   const data: Record<string, string | number> = {};
@@ -860,8 +714,11 @@ function answerData(raw: unknown): Record<string, string | number> {
 }
 
 /**
- * The new arm's snapshot: `snapshotOf`'s boundary — an integer status and
- * the expected fields only, never the server's text. May throw: the caller
+ * What a site may read of a successful answer: an integer status and a plain
+ * object of the expected fields that are strings or numbers, each read
+ * through `readSafely` — never the object axios (or a consumer's response
+ * interceptor) handed over, whose getters, Proxy traps or `toJSON` could
+ * throw the server's text into a site's parsing. May throw: the caller
  * replaces any throw.
  */
 function siteSnapshot<T>(response: unknown): TokenResponseSnapshot<T> {
@@ -925,40 +782,5 @@ export function rejectMissingToken(
       problem,
       ...(httpCode === undefined ? {} : { status: httpCode }),
     }),
-  );
-}
-
-/**
- * A failed token request as a site rethrows it: a `TokenEndpointError`
- * carrying the safe facts — the HTTP status, the OAuth `error` when it is a
- * registered code, an allowlisted system code — so a refusal and a log line
- * can name them. With a response, the message is `<label> (<status>)` and,
- * when the server gave a registered code, `: <code>`; the server's
- * description never.
- * Without one, `<label>: ` and fixed words (`loggedError`). The cause is
- * what `sendTokenRequest` threw: its safe replacement, never the original.
- */
-export function tokenEndpointError(
-  label: string,
-  error: unknown,
-): TokenEndpointError {
-  // Guarded reads: a getter or a Proxy reads as absent.
-  const response = readSafely(error, 'response');
-  const status = integerStatus(readSafely(response, 'status'));
-  if (status !== undefined) {
-    const oauthError = registeredOAuthError(
-      readSafely(readSafely(response, 'data'), 'error'),
-    );
-    return new TokenEndpointError(
-      `${label} (${status})${oauthError === undefined ? '' : `: ${oauthError}`}`,
-      { status, oauthError },
-      { cause: error },
-    );
-  }
-  const code = allowlistedCode(readSafely(error, 'code'));
-  return new TokenEndpointError(
-    `${label}: ${loggedError(error, 'the token request').error}`,
-    { code },
-    { cause: error },
   );
 }

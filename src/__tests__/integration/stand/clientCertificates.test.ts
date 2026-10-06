@@ -31,6 +31,7 @@ import { CertificateAuthProvider } from '../../../credentials/CertificateAuthPro
 import { ClientCredentialsProvider } from '../../../providers/ClientCredentialsProvider';
 import { OidcDeviceFlowProvider } from '../../../providers/OidcDeviceFlowProvider';
 import { OidcPasswordProvider } from '../../../providers/OidcPasswordProvider';
+import { wordsOf } from '../../helpers/minted';
 import { recordingTargets } from '../../helpers/targets';
 import { approveDevice } from './formLogin';
 
@@ -200,15 +201,17 @@ describeKeycloak(
           () => undefined,
           (error: unknown) => error as Error,
         );
-        expect(thrown?.message).toMatch(/\(401\): invalid_client$/);
+        // D1: the status and the registered code are the failure's facts.
+        expect(thrown?.message).toMatch(/\(HTTP 401, invalid_client\)$/);
         expect(inspect(thrown, { depth: null })).not.toContain(
           'Invalid client or Invalid client credentials',
         );
-        await expect(provider.prepare()).resolves.toEqual({
+        // D1: the client credentials request's own words (A.8).
+        expect(wordsOf(await provider.prepare())).toEqual({
           ok: false,
           refusal: {
             reason:
-              'client_credentials token request failed (HTTP 401, invalid_client)',
+              'the client credentials request failed (HTTP 401, invalid_client)',
           },
         });
       });
@@ -357,7 +360,8 @@ describeKeycloak(
           (error: unknown) => error as Error,
         );
         expect(thrown?.message).toBe(
-          'OIDC device authorization failed (400): invalid_client',
+          // D1
+          'the OIDC device authorization failed (HTTP 400, invalid_client)',
         );
         expect(inspect(thrown, { depth: null })).not.toContain(
           'Invalid token audience',

@@ -294,6 +294,8 @@ describe('SSO Providers', () => {
       undefined,
       // No client authentication configured: none given to the site.
       undefined,
+      // The provider's authDebug and grant, threaded to the site (Task 21).
+      { authDebug: false, grant: 'authorization_code_pkce' },
     );
   });
 
@@ -883,6 +885,7 @@ describe('SSO Providers', () => {
       undefined,
       // No client authentication configured: none given to the site.
       undefined,
+      { authDebug: false, grant: 'saml2_bearer' },
     );
   });
 
@@ -935,6 +938,7 @@ describe('SSO Providers', () => {
         undefined,
         // No client authentication configured: none given to the site.
         undefined,
+        { authDebug: false, grant: 'saml2_bearer' },
       );
       expect(tokens.authorizationToken).toBe(newAccess);
       expect(tokens.refreshToken).toBe('rotated-refresh');

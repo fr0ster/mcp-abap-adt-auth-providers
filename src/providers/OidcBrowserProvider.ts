@@ -151,6 +151,7 @@ export class OidcBrowserProvider extends BaseTokenProvider {
       this.logger,
       // The alias belongs to the discovered endpoint only.
       await this.requestAuth(mtlsAlias(discovered, 'token_endpoint')),
+      this.siteOptions(),
     );
 
     return asContract<ITokenResult>({
@@ -196,6 +197,7 @@ export class OidcBrowserProvider extends BaseTokenProvider {
           ? undefined
           : mtlsAlias(discovery, 'token_endpoint'),
       ),
+      this.siteOptions(),
     );
 
     return asContract<ITokenResult>({

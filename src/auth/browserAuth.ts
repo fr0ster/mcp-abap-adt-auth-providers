@@ -6,14 +6,16 @@ import * as child_process from 'node:child_process';
 import type { IAuthorizationConfig } from '@mcp-abap-adt/interfaces-auth-sap';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
 import axios from 'axios';
-import { readSafely } from './knownCodes';
-import { registeredOAuthError } from './oauthErrorBody';
 import { loggedError } from './refusal';
 import {
   legacyBasic,
   prepareTokenRequest,
+  rejectMissingToken,
   sendTokenRequest,
+  siteSecrets,
   type TokenRequestAuth,
+  type TokenSiteOptions,
+  tokenSite,
 } from './tokenRequest';
 
 const BROWSER_MAP: Record<string, string | undefined | null> = {
@@ -111,7 +113,8 @@ export async function exchangeCodeForToken(
   redirectUri: string,
   log?: ILogger | null,
   auth?: TokenRequestAuth,
-): Promise<{ accessToken: string; refreshToken?: string }> {
+  options?: TokenSiteOptions,
+): Promise<{ accessToken: string; refreshToken?: string | undefined }> {
   const {
     uaaUrl: url,
     uaaClientId: clientid,
@@ -138,7 +141,7 @@ export async function exchangeCodeForToken(
 
   // Today's request: Basic `id:secret` — an absent secret sent as it always
   // was, the word in a template — built only through legacyBasic, so its
-  // secrets join every redaction of the answer.
+  // secrets are named in the `authDebug` line's `sent`.
   const basic = prepared ? undefined : legacyBasic(clientid, `${clientsecret}`);
   const sendAsToday = () =>
     axios({
@@ -155,34 +158,32 @@ export async function exchangeCodeForToken(
 
   log?.info(`Exchanging code for token: ${prepared?.config.url ?? tokenUrl}`);
 
-  const diagnostics = { logger: log, label: 'Token exchange failed' };
-  const response = await sendTokenRequest(prepared, sendAsToday, diagnostics);
+  const site = tokenSite(
+    'code-exchange',
+    options,
+    log,
+    siteSecrets(params, clientsecret),
+    basic,
+  );
+  const response = await sendTokenRequest<{
+    access_token?: string;
+    refresh_token?: string;
+  }>(prepared, sendAsToday, site);
 
-  if (response.data?.access_token) {
-    const accessToken = response.data.access_token;
-    const refreshToken = response.data.refresh_token;
-
-    log?.info(
-      `Tokens received: accessToken(${accessToken.length} chars), refreshToken(${refreshToken?.length || 0} chars)`,
-    );
-
-    return {
-      accessToken,
-      refreshToken,
-    };
-  } else {
-    // The status and a registered code only: the server's own words reach
-    // no log line. A logger that throws does not replace the failure.
-    const code = registeredOAuthError(readSafely(response.data, 'error'));
-    try {
-      log?.error(
-        `Token exchange failed: status ${response.status}, error: ${code === undefined ? 'no error given' : JSON.stringify(code)}`,
-      );
-    } catch {
-      // The failure below is what the caller needs.
-    }
-    throw new Error('Response does not contain access_token');
+  const accessToken = response.data.access_token;
+  if (!accessToken) {
+    // 5.4.2's `error` line, the status and a registered code only: the
+    // server's own words reach no log line.
+    rejectMissingToken(site, prepared, response, 'no-access-token', 'error');
   }
+  const refreshToken = response.data.refresh_token;
+  log?.info(
+    `Tokens received: accessToken(${accessToken.length} chars), refreshToken(${refreshToken?.length || 0} chars)`,
+  );
+  return {
+    accessToken,
+    refreshToken,
+  };
 }
 
 /**

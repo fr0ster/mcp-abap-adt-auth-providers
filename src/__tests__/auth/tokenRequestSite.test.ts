@@ -9,8 +9,8 @@
  * `authDebug`. By default the line carries the safe facts only; with
  * `authDebug: true` it carries the same facts plus `sent`, each secret the
  * request carried by name through `prepareSecret`. Nothing scans text for
- * secrets. The sites move onto this in Task 21; here the helper is driven
- * directly, against a server echoing every secret in every form.
+ * secrets. Here the helper is driven directly, against a server echoing every
+ * secret in every form; the sites' own cases are in `tokenSites.test.ts`.
  */
 
 import { inspect } from 'node:util';
@@ -29,7 +29,6 @@ import {
 } from '@mcp-abap-adt/auth-errors';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
 import axios, { type AxiosResponse } from 'axios';
-import { exchangeCodeForToken } from '../../auth/browserAuth';
 import {
   legacyBasic,
   type PreparedTokenRequest,
@@ -40,6 +39,10 @@ import {
   type TokenRequestSite,
   type TokenResponseSnapshot,
 } from '../../auth/tokenRequest';
+import {
+  codeExchangeMissingTokenLine542,
+  logRefusedRequest542,
+} from '../helpers/v542';
 
 // Automocked, with axios's own error classes: the prepared path calls axios.
 jest.mock('axios', () => {
@@ -187,7 +190,6 @@ function echoingBody(error = 'invalid_grant'): Record<string, string> {
 
 function site(overrides: Partial<TokenRequestSite> = {}): TokenRequestSite {
   return {
-    arm: 'site',
     operation: 'token-refresh',
     grant: 'authorization_code',
     authDebug: false,
@@ -653,11 +655,11 @@ describe('a failure without a response', () => {
 });
 
 /**
- * Before / after against 5.4.2: the legacy arm is 5.4.2's code, run on the
- * same input — the new arm's line keeps every key and value it writes, the
- * only extra key `code`.
+ * Before / after against 5.4.2: 5.4.2's `logRefusedRequest`, copied verbatim
+ * as the oracle (`helpers/v542.ts`), run on the same input — the line keeps
+ * every key and value it writes, the only extra key `code` (H10).
  */
-describe("the new arm's line against 5.4.2's", () => {
+describe("the line against 5.4.2's", () => {
   it.each([
     ['a 400 with a registered error', () => rejection(400, echoingBody()), []],
     [
@@ -672,17 +674,19 @@ describe("the new arm's line against 5.4.2's", () => {
     ],
   ])('%s', async (_name, thrown, extra) => {
     const legacy = recordingLogger();
-    await failureOf(
-      sendTokenRequest(
-        undefined,
-        () => Promise.reject(thrown()) as Promise<AxiosResponse<unknown>>,
-        { logger: legacy.logger, label: 'Token refresh failed' },
-      ),
+    const input = thrown() as {
+      response?: { status?: unknown; data?: unknown };
+    };
+    logRefusedRequest542(
+      { logger: legacy.logger, label: 'Token refresh failed' },
+      input.response?.status,
+      input.response?.data,
     );
     const current = recordingLogger();
     await failureOf(send(site({ logger: current.logger }), thrown()));
     const before = legacy.lines[0]?.meta as Record<string, unknown>;
     const after = current.lines[0]?.meta as Record<string, unknown>;
+    expect(before).toBeDefined();
     for (const key of Object.keys(before))
       expect(after[key]).toEqual(before[key]);
     expect(Object.keys(after).filter((key) => !(key in before))).toEqual(extra);
@@ -692,9 +696,8 @@ describe("the new arm's line against 5.4.2's", () => {
 
 describe('a 200 without access_token (rejectMissingToken)', () => {
   /**
-   * At the UAA code exchange the default line is 5.4.2's own, verbatim: the
-   * 5.4.2 site (still on the legacy arm until Task 21) is run on the same
-   * answer, and the two `error` lines must be identical.
+   * At the UAA code exchange the default line is 5.4.2's own, verbatim: 5.4.2's
+   * formatting, copied as the oracle (`helpers/v542.ts`), on the same answer.
    */
   it.each([
     [
@@ -705,22 +708,6 @@ describe('a 200 without access_token (rejectMissingToken)', () => {
   ])(
     "the code exchange's line is 5.4.2's verbatim (%s)",
     async (_name, body) => {
-      const legacy = recordingLogger();
-      mockedAxios.mockResolvedValueOnce({ status: 200, data: body } as never);
-      await failureOf(
-        exchangeCodeForToken(
-          {
-            uaaUrl: 'https://uaa.example',
-            uaaClientId: 'client',
-            uaaClientSecret: CLIENT_SECRET,
-          },
-          'the-code',
-          'http://localhost:61001/callback',
-          legacy.logger,
-        ),
-      );
-      const before = legacy.lines.filter((line) => line.level === 'error');
-      expect(before).toHaveLength(1);
       const current = recordingLogger();
       const s = site({
         operation: 'code-exchange',
@@ -728,7 +715,15 @@ describe('a 200 without access_token (rejectMissingToken)', () => {
         logger: current.logger,
       });
       missing(s, await answered(s, body), 'error');
-      expect(current.lines).toEqual(before);
+      expect(current.lines).toEqual([
+        {
+          level: 'error',
+          message: codeExchangeMissingTokenLine542({ status: 200, data: body }),
+          meta: undefined,
+          // 5.4.2 passed the message alone.
+          args: 1,
+        },
+      ]);
     },
   );
 

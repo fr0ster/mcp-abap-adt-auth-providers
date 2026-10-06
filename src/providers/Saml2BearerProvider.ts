@@ -127,6 +127,7 @@ export class Saml2BearerProvider extends BaseTokenProvider {
       this.config.clientSecret,
       this.logger,
       await this.requestAuth(),
+      this.siteOptions(),
     );
 
     return asContract<ITokenResult>({
@@ -155,6 +156,7 @@ export class Saml2BearerProvider extends BaseTokenProvider {
       this.config.clientSecret,
       this.logger,
       await this.requestAuth(),
+      this.siteOptions(),
     );
 
     return asContract<ITokenResult>({

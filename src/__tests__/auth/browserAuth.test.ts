@@ -120,7 +120,10 @@ describe('browserAuth token exchange', () => {
           'http://localhost:3103/callback',
           logger,
         ),
-      ).rejects.toThrow('Response does not contain access_token');
+      ).rejects.toThrow(
+        // D4: request-failed no-access-token of the code exchange.
+        'the code exchange returned no access_token',
+      );
 
       // Verify error was logged (but not to console)
       expect(logger.error).toHaveBeenCalledWith(

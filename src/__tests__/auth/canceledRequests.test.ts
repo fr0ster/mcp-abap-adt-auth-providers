@@ -1,13 +1,17 @@
 /**
- * A canceled token request, or a canceled discovery, stays a cancellation
- * after its rejection is replaced by a safe error: `axios.isCancel` and
- * `axios.isAxiosError` both hold, so a consumer that aborts can tell an abort
- * from a failure. Nothing of the original is kept. Real axios, unmocked: the
- * request is aborted before it is sent, through `axios.defaults.signal`.
+ * A canceled token request, or a canceled discovery, is replaced like every
+ * other rejection (spec §6, D2; L3: the `AxiosError` identity, and with it
+ * `axios.isCancel`, is lost): an `AuthProviderFailure` of the site's
+ * operation, `request-failed` `no-response`, nothing of the original kept.
+ * TRANSITION: the abort's own kind and the consumer's signal are Task 22a's
+ * (spec §6b, C6); until then a cancellation reads as no response. Real axios,
+ * unmocked: the request is aborted before it is sent, through
+ * `axios.defaults.signal`.
  */
 
 import { inspect } from 'node:util';
 import { afterEach, beforeEach, describe, expect, it } from '@jest/globals';
+import { isAuthProviderFailure, readFailure } from '@mcp-abap-adt/auth-errors';
 import axios from 'axios';
 import { discoverOidc } from '../../auth/oidcDiscovery';
 import { refreshOidcToken } from '../../auth/oidcToken';
@@ -50,25 +54,30 @@ describe('an aborted request', () => {
           },
         ),
     ],
-  ])('%s: still a cancellation, in fixed words', async (_label, run) => {
-    let thrown: unknown;
-    const failed = expect(
-      run().catch((error: unknown) => {
-        thrown = error;
-        throw error;
-      }),
-    ).rejects.toBeDefined();
-    await failed;
-    expect(axios.isCancel(thrown)).toBe(true);
-    expect(axios.isAxiosError(thrown)).toBe(true);
-    const error = thrown as Error & { config?: unknown; cause?: unknown };
-    expect(error.message).toBe('the token request was canceled');
-    expect(error.config).toBeUndefined();
-    expect(error.cause).toBeUndefined();
-    expect(inspect(error, { depth: null })).not.toContain(NOWHERE);
-  });
+  ])(
+    '%s: an AuthProviderFailure, nothing of the original',
+    async (_label, run) => {
+      let thrown: unknown;
+      const failed = expect(
+        run().catch((error: unknown) => {
+          thrown = error;
+          throw error;
+        }),
+      ).rejects.toBeDefined();
+      await failed;
+      expect(isAuthProviderFailure(thrown)).toBe(true);
+      expect(axios.isAxiosError(thrown)).toBe(false);
+      const failure = readFailure(thrown, 'unfamiliar-error');
+      expect(failure.kind).toBe('request-failed');
+      expect(failure.facts).toMatchObject({ problem: 'no-response' });
+      const error = thrown as Error & { config?: unknown; cause?: unknown };
+      expect(error.config).toBeUndefined();
+      expect(error.cause).toBeUndefined();
+      expect(inspect(error, { depth: null })).not.toContain(NOWHERE);
+    },
+  );
 
-  it('a wrapping site keeps the cancellation as its safe cause', async () => {
+  it('a site that wrapped its errors: the same, no cause', async () => {
     let thrown: unknown;
     const failed = expect(
       refreshJwtToken('rt', NOWHERE, 'cid', 'secret').catch(
@@ -79,8 +88,11 @@ describe('an aborted request', () => {
       ),
     ).rejects.toBeDefined();
     await failed;
-    const cause = (thrown as { cause?: unknown }).cause;
-    expect(axios.isCancel(cause)).toBe(true);
+    expect(readFailure(thrown, 'unfamiliar-error').facts).toEqual({
+      operation: 'token-refresh',
+      problem: 'no-response',
+    });
+    expect((thrown as { cause?: unknown }).cause).toBeUndefined();
     expect(inspect(thrown, { depth: null })).not.toContain(NOWHERE);
   });
 });

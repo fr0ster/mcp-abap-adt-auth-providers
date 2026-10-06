@@ -127,6 +127,7 @@ export class OidcDeviceFlowProvider extends BaseTokenProvider {
           : mtlsAlias(discovery, 'device_authorization_endpoint'),
         tokenEndpoint,
       ),
+      this.siteOptions(),
     );
 
     try {
@@ -157,6 +158,7 @@ export class OidcDeviceFlowProvider extends BaseTokenProvider {
           ? undefined
           : mtlsAlias(discovery, 'token_endpoint'),
       ),
+      this.siteOptions(),
     );
 
     return asContract<ITokenResult>({
@@ -202,6 +204,7 @@ export class OidcDeviceFlowProvider extends BaseTokenProvider {
           ? undefined
           : mtlsAlias(discovery, 'token_endpoint'),
       ),
+      this.siteOptions(),
     );
 
     return asContract<ITokenResult>({

@@ -279,8 +279,8 @@ describeBoth('SAML providers with Keycloak as the identity provider', () => {
   });
 
   // Validation passes here — the assertion answers the ID the provider minted
-  // — so the refusal below is UAA's. The log names only the safe facts; UAA's
-  // reason is on the thrown error's reduced body (redacted OAuth fields).
+  // — so the refusal below is UAA's. The log names only the safe facts, and
+  // the thrown failure carries no body (D3).
   it('Saml2BearerProvider: UAA refuses the answer to the provider’s own AuthnRequest (InResponseTo)', async () => {
     const failures: unknown[] = [];
     const logger = {

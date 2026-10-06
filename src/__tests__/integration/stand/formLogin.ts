@@ -62,6 +62,24 @@ export class FormBrowser {
     url: string;
     html?: string;
   }): Promise<{ url: string; html?: string }> {
+    return this.answerConsent(page, 'accept');
+  }
+
+  /**
+   * Decline a consent page: submit the same form with its `cancel` button
+   * (Keycloak's "No"), with its hidden fields.
+   */
+  async declineConsent(page: {
+    url: string;
+    html?: string;
+  }): Promise<{ url: string; html?: string }> {
+    return this.answerConsent(page, 'cancel');
+  }
+
+  private async answerConsent(
+    page: { url: string; html?: string },
+    button: 'accept' | 'cancel',
+  ): Promise<{ url: string; html?: string }> {
     for (const match of (page.html ?? '').matchAll(
       /<form\b[^>]*>[\s\S]*?<\/form>/gi,
     )) {
@@ -70,7 +88,8 @@ export class FormBrowser {
         (m) => m[0],
       );
       const accept = inputs.find((i) => attribute(i, 'name') === 'accept');
-      if (!accept) continue;
+      const chosen = inputs.find((i) => attribute(i, 'name') === button);
+      if (!accept || !chosen) continue;
       const body = new URLSearchParams();
       for (const input of inputs) {
         const name = attribute(input, 'name');
@@ -78,7 +97,7 @@ export class FormBrowser {
           body.set(name, attribute(input, 'value') ?? '');
         }
       }
-      body.set('accept', attribute(accept, 'value') ?? 'Yes');
+      body.set(button, attribute(chosen, 'value') ?? 'Yes');
       const formTag = /<form\b[^>]*>/i.exec(formHtml)?.[0] ?? '';
       return this.follow(
         new URL(attribute(formTag, 'action') ?? '', page.url).toString(),
@@ -173,6 +192,20 @@ export async function approveDevice(
   const page = await browser.open(verificationUriComplete);
   const consent = await browser.submitLogin(page, credentials);
   await browser.acceptConsent(consent);
+}
+
+/**
+ * Deny a device authorization the way a user would: open the verification
+ * URI, log in, and refuse access on the consent page.
+ */
+export async function denyDevice(
+  verificationUriComplete: string,
+  credentials: Credentials,
+): Promise<void> {
+  const browser = new FormBrowser();
+  const page = await browser.open(verificationUriComplete);
+  const consent = await browser.submitLogin(page, credentials);
+  await browser.declineConsent(consent);
 }
 
 /**

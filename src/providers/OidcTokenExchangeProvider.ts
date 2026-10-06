@@ -97,6 +97,7 @@ export class OidcTokenExchangeProvider extends BaseTokenProvider {
           ? undefined
           : mtlsAlias(discovery, 'token_endpoint'),
       ),
+      this.siteOptions(),
     );
 
     return asContract<ITokenResult>({

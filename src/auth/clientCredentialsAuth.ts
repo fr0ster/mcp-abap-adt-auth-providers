@@ -6,18 +6,20 @@
  */
 
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
-import axios, { type AxiosResponse } from 'axios';
-import { tlsFailureCode } from './refusal';
+import axios from 'axios';
 import {
   prepareTokenRequest,
+  rejectMissingToken,
   sendTokenRequest,
+  siteSecrets,
   type TokenRequestAuth,
-  tokenEndpointError,
+  type TokenSiteOptions,
+  tokenSite,
 } from './tokenRequest';
 
 export interface ClientCredentialsResult {
   accessToken: string;
-  expiresIn?: number;
+  expiresIn?: number | undefined;
 }
 
 /**
@@ -27,7 +29,8 @@ export interface ClientCredentialsResult {
  * @param clientSecret UAA client secret; unused with `auth`
  * @param auth the client authentication and its pinned material; without it,
  *   `client_id` and `client_secret` go in the body, as always
- * @param logger where the server's own words about a failure go: one debug line
+ * @param logger where a failure's safe facts go: one debug line
+ * @param options the provider's `authDebug` and grant (`TokenSiteOptions`)
  * @returns Promise that resolves to access token
  * @internal - Internal function, not exported from package
  */
@@ -37,6 +40,7 @@ export async function getTokenWithClientCredentials(
   clientSecret: string | undefined,
   auth?: TokenRequestAuth,
   logger?: ILogger,
+  options?: TokenSiteOptions,
 ): Promise<ClientCredentialsResult> {
   const tokenUrl = `${uaaUrl}/oauth/token`;
   const timeout = 30000; // 30 seconds timeout to prevent hanging
@@ -72,27 +76,21 @@ export async function getTokenWithClientCredentials(
     });
   };
 
-  let response: AxiosResponse;
-  try {
-    response = await sendTokenRequest(prepared, sendAsToday, {
-      logger,
-      label: 'Client credentials authentication failed',
-    });
-  } catch (error: unknown) {
-    // Unwrapped, so the refusal can name the TLS code and its fixed hint.
-    if (tlsFailureCode(error) !== undefined) throw error;
-    // The safe facts as properties, never the server's description or the
-    // transport's text in a refusal or a log line; the cause is the safe replacement.
-    throw tokenEndpointError('Client credentials authentication failed', error);
-  }
-  // Outside the try: this package's own words, not a failure to wrap.
-  if (response.data?.access_token) {
-    return {
-      accessToken: response.data.access_token,
-      expiresIn: response.data.expires_in,
-    };
-  }
-  throw new Error(
-    'Client credentials authentication failed: Response does not contain access_token',
+  // A failure — a TLS code, a refusal, no answer — is `client-credentials`'s,
+  // with the safe facts only.
+  const site = tokenSite(
+    'client-credentials',
+    options,
+    logger,
+    siteSecrets(new URLSearchParams(), clientSecret),
   );
+  const response = await sendTokenRequest<{
+    access_token?: string;
+    expires_in?: number;
+  }>(prepared, sendAsToday, site);
+  const { access_token: accessToken, expires_in: expiresIn } = response.data;
+  if (!accessToken) {
+    rejectMissingToken(site, prepared, response, 'no-access-token', 'debug');
+  }
+  return { accessToken, expiresIn };
 }

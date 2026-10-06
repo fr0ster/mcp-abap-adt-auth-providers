@@ -210,7 +210,7 @@ describe('A.8 — every what of this package is a closed operation', () => {
         'opening the browser',
         'the presenter',
         'the probe',
-        'the token request',
+        // 'the token request' left with `tokenEndpointError` (D2, H9: Task 21).
       ]),
     );
   });

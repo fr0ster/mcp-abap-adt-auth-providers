@@ -101,10 +101,14 @@ describe('exchangePasscode', () => {
         'SPENT',
         logger,
       ),
-    ).rejects.toThrow(/^Passcode exchange failed \(401\)$/);
+    ).rejects.toThrow(
+      // D1: the operation's words and the status.
+      /^the passcode exchange failed \(HTTP 401\)$/,
+    );
     await failed;
+    // H10: 5.4.2's keys and values; the message leads with the operation's phrase.
     expect(debug).toHaveBeenCalledWith(
-      'Passcode exchange failed: the token endpoint refused the request',
+      'the passcode exchange: the token endpoint refused the request',
       { status: 401 },
     );
   });
@@ -113,6 +117,9 @@ describe('exchangePasscode', () => {
     mockedAxios.post.mockResolvedValue({ data: {} });
     await expect(
       exchangePasscode('https://uaa', 'c', 's', 'CODE'),
-    ).rejects.toThrow('Passcode exchange returned no access_token');
+    ).rejects.toThrow(
+      // D4
+      'the passcode exchange returned no access_token',
+    );
   });
 });

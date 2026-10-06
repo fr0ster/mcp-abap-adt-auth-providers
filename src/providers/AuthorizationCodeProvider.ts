@@ -210,6 +210,7 @@ export class AuthorizationCodeProvider extends BaseTokenProvider {
       outcome.redirectUri,
       this.logger,
       await this.requestAuth(),
+      this.siteOptions(),
     );
 
     return asContract<ITokenResult>({
@@ -234,6 +235,7 @@ export class AuthorizationCodeProvider extends BaseTokenProvider {
       this.config.clientSecret,
       await this.requestAuth(),
       this.logger,
+      this.siteOptions(),
     );
 
     this.logger?.info('[AuthorizationCodeProvider] Token refresh completed', {

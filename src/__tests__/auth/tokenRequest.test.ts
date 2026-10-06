@@ -12,6 +12,7 @@ import { Agent } from 'node:https';
 import { join } from 'node:path';
 import { inspect } from 'node:util';
 import { beforeEach, describe, expect, it, jest } from '@jest/globals';
+import { isAuthProviderFailure, readFailure } from '@mcp-abap-adt/auth-errors';
 import type {
   ICertificateMaterial,
   IClientAuthentication,
@@ -19,7 +20,7 @@ import type {
   ITokenRequestDraft,
 } from '@mcp-abap-adt/interfaces-auth';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
-import axios, { AxiosError } from 'axios';
+import axios from 'axios';
 import { getTokenWithClientCredentials } from '../../auth/clientCredentialsAuth';
 import {
   initiateDeviceAuthorization,
@@ -38,7 +39,12 @@ import {
   tlsClientCertificate,
 } from '../../clientAuthentication';
 import { wordsOf } from '../helpers/minted';
-import { OIDC, tokenReply as reply, SITES } from '../helpers/tokenRequestSites';
+import {
+  OIDC,
+  phrase,
+  tokenReply as reply,
+  SITES,
+} from '../helpers/tokenRequestSites';
 
 // Automocked, but with axios's own error class: the sites throw it.
 jest.mock('axios', () => {
@@ -302,15 +308,22 @@ describe.each(SITES)('$name with a client authentication', (site) => {
     const error = await failureOf(
       site.run({ strategy: tlsClientCertificate({ material }), material }),
     );
+    // D2: `tls` of the site's own operation (A.8), not "the token request".
+    const failure = readFailure(error, 'unfamiliar-error');
+    expect(failure.kind).toBe('tls');
+    expect(failure.facts).toEqual({
+      operation: site.operation,
+      code: 'SELF_SIGNED_CERT_IN_CHAIN',
+    });
     const refusal = refusalFrom(error, 'the token request');
     expect(wordsOf(refusal)).toEqual({
       ok: false,
       refusal: {
-        reason:
-          "the token request failed: the server's certificate is not trusted (SELF_SIGNED_CERT_IN_CHAIN)",
+        reason: `${phrase(site.operation)} failed: the server's certificate is not trusted (SELF_SIGNED_CERT_IN_CHAIN)`,
         hint: 'if the server uses a private CA, name its certificate in NODE_EXTRA_CA_CERTS',
       },
     });
+    expect(JSON.stringify(error)).not.toContain('SECRET-TLS-TEXT');
   });
 
   it('a 401 after mTLS: the same error, and the same refusal, as without a strategy', async () => {
@@ -729,7 +742,7 @@ describe('a TLS failure, by code', () => {
       );
     }
   });
-  it('with a strategy, every site that wraps its errors lets a refused client certificate through', async () => {
+  it('with a strategy, every site that wrapped its errors throws `tls` of its own operation (D2)', async () => {
     mockedAxios.mockRejectedValue(
       Object.assign(new Error('SECRET-TLS'), {
         code: 'ERR_SSL_TLSV1_ALERT_UNKNOWN_CA',
@@ -737,37 +750,49 @@ describe('a TLS failure, by code', () => {
       }),
     );
     const auth = { strategy: tlsClientCertificate({ material }), material };
-    for (const run of [
-      () =>
-        getTokenWithClientCredentials('https://uaa', 'cid', undefined, auth),
-      () => refreshJwtToken('rt', 'https://uaa', 'cid', undefined, auth),
-      () =>
-        passwordGrant(
-          'https://idp/token',
-          'cid',
-          undefined,
-          'u',
-          'p',
-          undefined,
-          undefined,
-          auth,
-        ),
-      () =>
-        initiateDeviceAuthorization(
-          'https://idp/device',
-          'cid',
-          undefined,
-          undefined,
-          auth,
-        ),
-    ]) {
+    const runs: [string, () => Promise<unknown>][] = [
+      [
+        'the client credentials request',
+        () =>
+          getTokenWithClientCredentials('https://uaa', 'cid', undefined, auth),
+      ],
+      [
+        'the token refresh',
+        () => refreshJwtToken('rt', 'https://uaa', 'cid', undefined, auth),
+      ],
+      [
+        'the OIDC password grant',
+        () =>
+          passwordGrant(
+            'https://idp/token',
+            'cid',
+            undefined,
+            'u',
+            'p',
+            undefined,
+            undefined,
+            auth,
+          ),
+      ],
+      [
+        'the OIDC device authorization',
+        () =>
+          initiateDeviceAuthorization(
+            'https://idp/device',
+            'cid',
+            undefined,
+            undefined,
+            auth,
+          ),
+      ],
+    ];
+    for (const [subject, run] of runs) {
       expect(
         wordsOf(refusalFrom(await failureOf(run()), 'the token request')),
       ).toEqual({
         ok: false,
         refusal: {
-          reason:
-            'the token request failed: the server refused the client certificate (ERR_SSL_TLSV1_ALERT_UNKNOWN_CA)',
+          reason: `${subject} failed: the server refused the client certificate (ERR_SSL_TLSV1_ALERT_UNKNOWN_CA)`,
           hint: "check that the server trusts the certificate's issuer and that the certificate is valid and not revoked",
         },
       });
@@ -833,39 +858,26 @@ const windowsOf = (secret: string, size = 8, stride = 1) => {
   return out;
 };
 
-/** The sites that rethrow the request's failure itself, not their own Error. */
-const RETHROWN_AS_IS = new Set([
-  'browserAuth.exchangeCodeForToken',
-  'oidcToken.exchangeAuthorizationCode',
-  'oidcToken.refreshOidcToken',
-  'oidcToken.pollDeviceTokens',
-  'oidcToken.tokenExchange',
-]);
-
 /**
- * A site that rethrows the request's failure as it is: an AxiosError again —
- * `instanceof`, `isAxiosError` — with no config, request or cause, and the
- * response's status and reduced body.
+ * Every site throws an `AuthProviderFailure` of its own operation (D1, D3):
+ * `request-failed` `refused` with the status and the registered code — no
+ * config, request, cause or body (the reduced `AxiosError` and
+ * `TokenEndpointError` left in Task 21, L3).
  */
-function expectReducedAxiosError(thrown: unknown): void {
-  expect(thrown).toBeInstanceOf(AxiosError);
-  expect(jest.requireActual<typeof axios>('axios').isAxiosError(thrown)).toBe(
-    true,
+function expectRefusedFailure(thrown: unknown, operation: string): void {
+  expect(isAuthProviderFailure(thrown)).toBe(true);
+  const failure = readFailure(thrown, 'unfamiliar-error');
+  expect(failure.kind).toBe('request-failed');
+  expect(failure.facts).toMatchObject({
+    operation,
+    problem: 'refused',
+    status: 400,
+    oauthError: 'invalid_client',
+  });
+  expect(Object.keys(thrown as object).sort()).toEqual(
+    ['error', 'message', 'name'].sort(),
   );
-  const error = thrown as AxiosError;
-  expect(error.name).toBe('AxiosError');
-  expect(error.code).toBe('ERR_BAD_REQUEST');
-  expect(error.config).toBeUndefined();
-  expect(error.request).toBeUndefined();
-  expect(error.cause).toBeUndefined();
-  expect(error.status).toBe(400);
-  expect(error.response?.status).toBe(400);
-  // The reason phrase is the server's text: never kept.
-  expect(error.response?.statusText).toBe('');
-  expect(error.response?.data).toEqual({ error: 'invalid_client' });
-  expect(error.response?.config).toBeUndefined();
-  expect(error.toJSON()).not.toHaveProperty('config.data');
-  expect((error.toJSON() as { config?: unknown }).config).toBeUndefined();
+  expect((thrown as { cause?: unknown }).cause).toBeUndefined();
 }
 
 const signingKey = generateKeyPairSync('rsa', { modulusLength: 2048 })
@@ -925,7 +937,7 @@ describe.each(SITES)('$name: the thrown error carries no request', (site) => {
       expect(needles.filter((needle) => text.includes(needle))).toEqual([]);
       // The status the sites report is still there.
       expect(String(thrown)).toContain('400');
-      if (RETHROWN_AS_IS.has(site.name)) expectReducedAxiosError(thrown);
+      expectRefusedFailure(thrown, site.operation);
     },
   );
 
@@ -939,7 +951,7 @@ describe.each(SITES)('$name: the thrown error carries no request', (site) => {
     expect(text).not.toContain('Authorization');
     expect(text).not.toContain(Buffer.from('cid:sec').toString('base64'));
     expect(text).not.toContain('old-rt');
-    if (RETHROWN_AS_IS.has(site.name)) expectReducedAxiosError(thrown);
+    expectRefusedFailure(thrown, site.operation);
   });
 });
 
@@ -1021,19 +1033,19 @@ describe('the server never reads back the password or the passcode', () => {
     return { logger, lines };
   };
   /**
-   * The message is the label and the status alone (the code is not a
-   * registered one); the server's words are in no line.
+   * The failure's words are the operation's and the status alone (the code
+   * is not a registered one, D1); the server's words are in no line (H10).
    */
   const expectRefusalNoted = (
     thrown: unknown,
-    label: string,
+    subject: string,
     lines: string[],
     secrets: string[],
   ) => {
-    expect(messageOf(thrown)).toBe(`${label} (401)`);
+    expect(messageOf(thrown)).toBe(`${subject} failed (HTTP 401)`);
     // One debug line of safe facts: the status; the code is not registered.
     expect(lines).toEqual([
-      `${label}: the token endpoint refused the request {"status":401}`,
+      `${subject}: the token endpoint refused the request {"status":401}`,
     ]);
     for (const secret of secrets) expect(lines[0]).not.toContain(secret);
   };
@@ -1055,7 +1067,7 @@ describe('the server never reads back the password or the passcode', () => {
         auth,
       ),
     );
-    expectRefusalNoted(thrown, 'Passcode exchange failed', lines, [
+    expectRefusalNoted(thrown, 'the passcode exchange', lines, [
       PASSCODE,
       CLIENT_SECRET,
     ]);
@@ -1080,7 +1092,7 @@ describe('the server never reads back the password or the passcode', () => {
         auth,
       ),
     );
-    expectRefusalNoted(thrown, 'OIDC password grant failed', lines, [
+    expectRefusalNoted(thrown, 'the OIDC password grant', lines, [
       PASSWORD,
       CLIENT_SECRET,
     ]);
@@ -1100,7 +1112,7 @@ describe('the server never reads back the password or the passcode', () => {
         },
       ),
     );
-    expectRefusalNoted(thrown, 'OIDC device authorization failed', lines, [
+    expectRefusalNoted(thrown, 'the OIDC device authorization', lines, [
       CLIENT_SECRET,
     ]);
   });
@@ -1110,7 +1122,9 @@ describe('the server never reads back the password or the passcode', () => {
     const thrown = await failureOf(
       initiateDeviceAuthorization('https://idp/device-auth', 'cid', 'openid'),
     );
-    expect(messageOf(thrown)).toBe('OIDC device authorization failed (401)');
+    expect(messageOf(thrown)).toBe(
+      'the OIDC device authorization failed (HTTP 401)',
+    );
   });
 
   it.each([
@@ -1138,14 +1152,15 @@ describe('the server never reads back the password or the passcode', () => {
           auth,
         ),
       );
-      expect((thrown as { code?: unknown }).code).toBe(
-        'SELF_SIGNED_CERT_IN_CHAIN',
-      );
+      expect(readFailure(thrown, 'unfamiliar-error').facts).toEqual({
+        operation: 'device-authorization',
+        code: 'SELF_SIGNED_CERT_IN_CHAIN',
+      });
       expect(wordsOf(refusalFrom(thrown, 'the token request'))).toEqual({
         ok: false,
         refusal: {
           reason:
-            "the token request failed: the server's certificate is not trusted (SELF_SIGNED_CERT_IN_CHAIN)",
+            "the OIDC device authorization failed: the server's certificate is not trusted (SELF_SIGNED_CERT_IN_CHAIN)",
           hint: 'if the server uses a private CA, name its certificate in NODE_EXTRA_CA_CERTS',
         },
       });
@@ -1164,7 +1179,7 @@ describe.each(SITES)('$name: the error body on the thrown object', (site) => {
       status: 400,
       data: {
         error: 'invalid_grant',
-        error_description: `refused ${echoed}`,
+        error_description: `SERVER-SAYS ${echoed}`,
         error_uri: 'https://docs.example/errors',
         access_token: LEAKED,
         extra: { nested: echoed },
@@ -1181,7 +1196,7 @@ describe.each(SITES)('$name: the error body on the thrown object', (site) => {
       expect(data).toEqual({ error: 'invalid_grant' });
     }
     const text = `${serialized(thrown)}\n${String(thrown)}\n${inspect(thrown, { depth: null })}`;
-    expect(text).not.toContain('refused');
+    expect(text).not.toContain('SERVER-SAYS');
     expect(text).not.toContain('docs.example');
   };
 
@@ -1344,10 +1359,16 @@ describe('a registered error code is never rewritten by redaction', () => {
         warn: () => {},
         error: () => {},
       } as ILogger;
-      const thrown = (await failureOf(
+      const thrown = await failureOf(
         pollDeviceTokens(OIDC, 'cid', secret, 'dc', 0, logger, auth),
-      )) as { response: { data: Record<string, string> } };
-      expect(thrown.response.data).toEqual({});
+      );
+      // D1: the failure names the status; no unregistered code, no body.
+      expect(readFailure(thrown, 'unfamiliar-error').facts).toEqual({
+        operation: 'device-poll',
+        problem: 'refused',
+        status: 400,
+      });
+      expect(serialized(thrown)).not.toContain('S3cr3t-value');
       // Safe facts only: the status; the unregistered code is dropped.
       expect(lines).toEqual([{ status: 400 }]);
     },
@@ -1362,8 +1383,9 @@ describe('a registered error code is never rewritten by redaction', () => {
         strategy: clientSecretPost('a'),
       }),
     );
+    // D1: the operation's words with the status and the registered code.
     expect(messageOf(error)).toBe(
-      'OIDC password grant failed (400): invalid_grant',
+      'the OIDC password grant failed (HTTP 400, invalid_grant)',
     );
   });
 
@@ -1371,7 +1393,7 @@ describe('a registered error code is never rewritten by redaction', () => {
     ['as today', 'sec', undefined],
     ['with a strategy', undefined, { strategy: clientSecretPost('sec') }],
   ])(
-    '%s: a consumer reading err.response.data.error still gets the registered code, and nothing else',
+    '%s: a consumer reading the failure still gets the registered code, and nothing else',
     async (_label, secret, auth) => {
       const body = failing({
         error: 'invalid_grant',
@@ -1380,11 +1402,19 @@ describe('a registered error code is never rewritten by redaction', () => {
       });
       mockedAxios.mockRejectedValueOnce(body);
       mockedAxios.post.mockRejectedValueOnce(body);
-      const thrown = (await failureOf(
+      const thrown = await failureOf(
         refreshOidcToken(OIDC, 'cid', secret, 'rt', undefined, auth),
-      )) as { response: { data: Record<string, string> } };
-      expect(thrown.response.data.error).toBe('invalid_grant');
-      expect(thrown.response.data).toEqual({ error: 'invalid_grant' });
+      );
+      // L3: the code is the failure's `oauthError` fact, not a body.
+      expect(readFailure(thrown, 'unfamiliar-error').facts).toEqual({
+        operation: 'oidc-token-request',
+        problem: 'refused',
+        status: 400,
+        oauthError: 'invalid_grant',
+      });
+      const text = serialized(thrown);
+      expect(text).not.toContain('refresh token expired');
+      expect(text).not.toContain('idp/err');
     },
   );
 });

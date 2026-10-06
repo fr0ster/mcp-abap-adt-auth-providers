@@ -2,30 +2,36 @@
  * SAML 2.0 bearer assertion exchange
  */
 
+import { logFields, readFailure } from '@mcp-abap-adt/auth-errors';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
 import axios, { type AxiosResponse } from 'axios';
 import { ValidationError } from '../errors/TokenProviderErrors';
-import { loggedError } from './refusal';
+import type { Operation } from './contractTransition';
 import {
   type LegacyBasic,
   legacyBasic,
   logQuietly,
   type PreparedTokenRequest,
   prepareTokenRequest,
+  rejectMissingToken,
   sendTokenRequest,
+  siteSecrets,
   type TokenRequestAuth,
+  type TokenResponseSnapshot,
+  type TokenSiteOptions,
+  tokenSite,
 } from './tokenRequest';
 
 export interface Saml2TokenExchangeResponse {
   accessToken: string;
-  refreshToken?: string;
-  expiresIn?: number;
-  tokenType?: string;
+  refreshToken?: string | undefined;
+  expiresIn?: number | undefined;
+  tokenType?: string | undefined;
 }
 
 /**
  * Today's Basic header, when a secret is known and there is no strategy —
- * built only through legacyBasic, so its secrets join every redaction.
+ * built only through legacyBasic, so its secrets are named in `sent`.
  */
 function todaysBasic(
   prepared: PreparedTokenRequest | undefined,
@@ -79,51 +85,63 @@ function sendAsToday(
   return axios.post(tokenUrl, params.toString(), { headers, maxRedirects: 0 });
 }
 
-export async function exchangeSamlAssertion(
-  samlResponse: string,
+/** A token endpoint's success body (RFC 6749 §5.1). */
+interface TokenResponseBody {
+  access_token?: string;
+  refresh_token?: string;
+  expires_in?: number;
+  token_type?: string;
+}
+
+/** What one SAML request is, beside its endpoint and grant. */
+interface SamlRequest {
+  readonly operation: Operation;
+  /** H6: the error line the site writes for any failure of its request. */
+  readonly failed: string;
+  readonly clientId: string | undefined;
+  readonly clientSecret: string | undefined;
+  readonly logger: ILogger | undefined;
+  readonly options: TokenSiteOptions | undefined;
+  readonly prepared: PreparedTokenRequest | undefined;
+}
+
+/**
+ * Sends one SAML request and maps the answer. A failed request is logged at
+ * `error` as `logFields` of its failure (H6) — inside `logQuietly`, so a
+ * logger that throws never replaces the failure — and rethrown as it is; a
+ * `2xx` without `access_token` is `rejectMissingToken`'s.
+ */
+async function requestTokens(
+  request: SamlRequest,
   tokenUrl: string,
-  clientId: string | undefined,
-  clientSecret: string | undefined,
-  logger?: ILogger,
-  auth?: TokenRequestAuth,
+  grant: URLSearchParams,
 ): Promise<Saml2TokenExchangeResponse> {
-  const grantType = 'urn:ietf:params:oauth:grant-type:saml2-bearer';
-  const grant = new URLSearchParams();
-  grant.append('grant_type', grantType);
-  grant.append('assertion', samlResponse);
-  const prepared = auth
-    ? await prepareWith(auth, tokenUrl, clientId, grantType, grant)
-    : undefined;
+  const { prepared, clientId, clientSecret, logger, operation } = request;
   const basic = todaysBasic(prepared, clientId, clientSecret);
-
-  logger?.info('[SAML] Exchanging assertion for token', {
-    tokenUrl: prepared?.config.url ?? tokenUrl,
-  });
-
-  let response: AxiosResponse;
+  const site = tokenSite(
+    operation,
+    request.options,
+    logger,
+    siteSecrets(grant, clientSecret),
+    basic,
+  );
+  let response: TokenResponseSnapshot<TokenResponseBody>;
   try {
-    response = await sendTokenRequest(
+    response = await sendTokenRequest<TokenResponseBody>(
       prepared,
       () => sendAsToday(tokenUrl, grant, clientId, basic),
-      { logger, label: '[SAML] Token exchange failed' },
+      site,
     );
   } catch (error) {
-    if (axios.isAxiosError(error)) {
-      // The safe facts only (status, a registered code, an allowlisted
-      // system code): not even a redacted description reaches the log.
-      // A logger that throws must not replace the safe rejection.
-      logQuietly(() =>
-        logger?.error(
-          '[SAML] Token exchange failed',
-          loggedError(error, 'the SAML token exchange'),
-        ),
-      );
-    }
+    // The safe facts only: the failure's words, kind and status.
+    logQuietly(() =>
+      logger?.error(request.failed, logFields(readFailure(error, operation))),
+    );
     throw error;
   }
   const data = response.data;
-  if (!data?.access_token) {
-    throw new Error('Token response missing access_token');
+  if (!data.access_token) {
+    rejectMissingToken(site, prepared, response, 'no-access-token', 'debug');
   }
 
   return {
@@ -132,6 +150,42 @@ export async function exchangeSamlAssertion(
     expiresIn: data.expires_in,
     tokenType: data.token_type,
   };
+}
+
+export async function exchangeSamlAssertion(
+  samlResponse: string,
+  tokenUrl: string,
+  clientId: string | undefined,
+  clientSecret: string | undefined,
+  logger?: ILogger,
+  auth?: TokenRequestAuth,
+  options?: TokenSiteOptions,
+): Promise<Saml2TokenExchangeResponse> {
+  const grantType = 'urn:ietf:params:oauth:grant-type:saml2-bearer';
+  const grant = new URLSearchParams();
+  grant.append('grant_type', grantType);
+  grant.append('assertion', samlResponse);
+  const prepared = auth
+    ? await prepareWith(auth, tokenUrl, clientId, grantType, grant)
+    : undefined;
+
+  logger?.info('[SAML] Exchanging assertion for token', {
+    tokenUrl: prepared?.config.url ?? tokenUrl,
+  });
+
+  return requestTokens(
+    {
+      operation: 'saml-token-exchange',
+      failed: '[SAML] Token exchange failed',
+      clientId,
+      clientSecret,
+      logger,
+      options,
+      prepared,
+    },
+    tokenUrl,
+    grant,
+  );
 }
 
 /**
@@ -148,6 +202,7 @@ export async function refreshSamlBearerToken(
   clientSecret?: string,
   logger?: ILogger,
   auth?: TokenRequestAuth,
+  options?: TokenSiteOptions,
 ): Promise<Saml2TokenExchangeResponse> {
   const grant = new URLSearchParams();
   grant.append('grant_type', 'refresh_token');
@@ -155,42 +210,22 @@ export async function refreshSamlBearerToken(
   const prepared = auth
     ? await prepareWith(auth, tokenUrl, clientId, 'refresh_token', grant)
     : undefined;
-  const basic = todaysBasic(prepared, clientId, clientSecret);
 
   logger?.info('[SAML] Refreshing token', {
     tokenUrl: prepared?.config.url ?? tokenUrl,
   });
 
-  let response: AxiosResponse;
-  try {
-    response = await sendTokenRequest(
+  return requestTokens(
+    {
+      operation: 'saml-token-refresh',
+      failed: '[SAML] Token refresh failed',
+      clientId,
+      clientSecret,
+      logger,
+      options,
       prepared,
-      () => sendAsToday(tokenUrl, grant, clientId, basic),
-      { logger, label: '[SAML] Token refresh failed' },
-    );
-  } catch (error) {
-    if (axios.isAxiosError(error)) {
-      // The safe facts only (status, a registered code, an allowlisted
-      // system code): not even a redacted description reaches the log.
-      // A logger that throws must not replace the safe rejection.
-      logQuietly(() =>
-        logger?.error(
-          '[SAML] Token refresh failed',
-          loggedError(error, 'the SAML token refresh'),
-        ),
-      );
-    }
-    throw error;
-  }
-  const data = response.data;
-  if (!data?.access_token) {
-    throw new Error('Refresh response missing access_token');
-  }
-
-  return {
-    accessToken: data.access_token,
-    refreshToken: data.refresh_token,
-    expiresIn: data.expires_in,
-    tokenType: data.token_type,
-  };
+    },
+    tokenUrl,
+    grant,
+  );
 }

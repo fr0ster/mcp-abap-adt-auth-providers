@@ -10,6 +10,7 @@
 import http from 'node:http';
 import { inspect } from 'node:util';
 import { beforeEach, describe, expect, it, jest } from '@jest/globals';
+import { isAuthProviderFailure, readFailure } from '@mcp-abap-adt/auth-errors';
 import axios, { AxiosError } from 'axios';
 import { AuthorizationRefusedError } from '../../auth/callbackScopeError';
 import { getTokenWithClientCredentials } from '../../auth/clientCredentialsAuth';
@@ -68,25 +69,31 @@ describe('a thrown error carries no foreign message', () => {
     [
       'client credentials',
       () => getTokenWithClientCredentials('https://uaa', 'cid', 'secret'),
-      'Client credentials authentication failed',
+      'the client credentials request failed (ECONNREFUSED)',
+      'client-credentials',
     ],
     [
       'UAA refresh',
       () => refreshJwtToken('rt', 'https://uaa', 'cid', 'secret'),
-      'Token refresh failed',
+      'the token refresh failed (ECONNREFUSED)',
+      'token-refresh',
     ],
   ])(
-    '%s: fixed words; the cause is a safe replacement, never the original',
-    async (_name, run, words) => {
+    '%s: fixed words; no cause at all, never the original',
+    async (_name, run, words, operation) => {
       const { error, text } = await thrownBy(run);
-      expect(text).toContain(words);
-      // The allowlisted code still says what happened.
-      expect(text).toContain('ECONNREFUSED');
+      // D2: `request-failed` `no-response` of the site's operation, the
+      // allowlisted code still saying what happened.
+      expect(error.message).toBe(words);
+      expect(readFailure(error, 'unfamiliar-error').facts).toEqual({
+        operation,
+        problem: 'no-response',
+        code: 'ECONNREFUSED',
+      });
       expect(text).not.toContain(MARKER);
-      // The original is replaced, even as cause: util.inspect prints causes.
-      expect(error.cause).not.toBe(original);
+      // L2: no cause — the original, nor a replacement (util.inspect prints causes).
+      expect(error.cause).toBeUndefined();
       expect(inspect(error, { depth: null })).not.toContain(MARKER);
-      expect((error.cause as { code?: unknown }).code).toBe('ECONNREFUSED');
     },
   );
 
@@ -157,10 +164,13 @@ describe('a token-endpoint failure keeps its safe facts', () => {
         }),
       );
       const { error } = await thrownBy(run);
-      expect(error).toBeInstanceOf(TokenEndpointError);
-      const failure = error as TokenEndpointError;
-      expect(failure.status).toBe(401);
-      expect(failure.oauthError).toBe('invalid_grant');
+      // D1: the status and the registered code are the failure's facts.
+      expect(isAuthProviderFailure(error)).toBe(true);
+      expect(readFailure(error, 'unfamiliar-error').facts).toMatchObject({
+        problem: 'refused',
+        status: 401,
+        oauthError: 'invalid_grant',
+      });
       const words = loggedError(error, 'the refresh').error;
       expect(words).toContain('HTTP 401');
       expect(words).toContain('invalid_grant');
@@ -176,7 +186,10 @@ describe('a token-endpoint failure keeps its safe facts', () => {
     const { error } = await thrownBy(() =>
       refreshJwtToken('rt', 'https://uaa', 'cid', 'secret'),
     );
-    expect((error as TokenEndpointError).oauthError).toBeUndefined();
+    // D1: an unregistered code is no fact.
+    expect(
+      readFailure(error, 'unfamiliar-error').facts as Record<string, unknown>,
+    ).not.toHaveProperty('oauthError');
     const words = loggedError(error, 'the refresh').error;
     expect(words).toContain('HTTP 400');
     expect(words).not.toContain(UNREGISTERED);
@@ -193,7 +206,10 @@ describe('a token-endpoint failure keeps its safe facts', () => {
     const { error, text } = await thrownBy(() =>
       refreshJwtToken('rt', 'https://uaa', 'cid', 'secret'),
     );
-    expect((error as TokenEndpointError).code).toBe(code);
+    // D2: the allowlisted code is the failure's `code` fact.
+    expect(
+      (readFailure(error, 'unfamiliar-error').facts as { code?: unknown }).code,
+    ).toBe(code);
     expect(text).toContain(code);
     expect(text).not.toContain(MARKER);
     expect(loggedError(error, 'the refresh').error).toContain(code);

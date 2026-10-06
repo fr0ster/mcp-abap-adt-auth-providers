@@ -3,20 +3,22 @@
  */
 
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
-import axios, { type AxiosResponse } from 'axios';
-import { tlsFailureCode } from './refusal';
+import axios from 'axios';
 import {
   legacyBasic,
   prepareTokenRequest,
+  rejectMissingToken,
   sendTokenRequest,
+  siteSecrets,
   type TokenRequestAuth,
-  tokenEndpointError,
+  type TokenSiteOptions,
+  tokenSite,
 } from './tokenRequest';
 
 export interface TokenRefreshResult {
   accessToken: string;
-  refreshToken?: string;
-  expiresIn?: number;
+  refreshToken?: string | undefined;
+  expiresIn?: number | undefined;
 }
 
 /**
@@ -27,7 +29,8 @@ export interface TokenRefreshResult {
  * @param clientSecret UAA client secret; unused with `auth`
  * @param auth the client authentication and its pinned material; without it,
  *   Basic `id:secret`, as always
- * @param logger where the server's own words about a failure go: one debug line
+ * @param logger where a failure's safe facts go: one debug line
+ * @param options the provider's `authDebug` and grant (`TokenSiteOptions`)
  * @returns Promise that resolves to new tokens
  * @internal - Internal function, not exported from package
  */
@@ -38,6 +41,7 @@ export async function refreshJwtToken(
   clientSecret: string | undefined,
   auth?: TokenRequestAuth,
   logger?: ILogger,
+  options?: TokenSiteOptions,
 ): Promise<TokenRefreshResult> {
   const tokenUrl = `${uaaUrl}/oauth/token`;
   const params = new URLSearchParams();
@@ -57,7 +61,7 @@ export async function refreshJwtToken(
     : undefined;
   // Today's request: Basic `id:secret` — an absent secret sent as it always
   // was, the word in a template — built only through legacyBasic, so its
-  // secrets join every redaction of the answer.
+  // secrets are named in the `authDebug` line's `sent`.
   const basic = prepared ? undefined : legacyBasic(clientId, `${clientSecret}`);
 
   const sendAsToday = () =>
@@ -73,28 +77,26 @@ export async function refreshJwtToken(
       maxRedirects: 0,
     });
 
-  let response: AxiosResponse;
-  try {
-    response = await sendTokenRequest(prepared, sendAsToday, {
-      logger,
-      label: 'Token refresh failed',
-    });
-  } catch (error: unknown) {
-    // Unwrapped, so the refusal can name the TLS code and its fixed hint.
-    if (tlsFailureCode(error) !== undefined) throw error;
-    // The safe facts as properties, never the server's description or the
-    // transport's text in a refusal or a log line; the cause is the safe replacement.
-    throw tokenEndpointError('Token refresh failed', error);
-  }
-  // Outside the try: this package's own words, not a failure to wrap.
-  if (response.data?.access_token) {
-    return {
-      accessToken: response.data.access_token,
-      refreshToken: response.data.refresh_token || refreshToken, // Use new refresh token if provided, otherwise keep old one
-      expiresIn: response.data.expires_in,
-    };
-  }
-  throw new Error(
-    'Token refresh failed: Response does not contain access_token',
+  const site = tokenSite(
+    'token-refresh',
+    options,
+    logger,
+    siteSecrets(params, clientSecret),
+    basic,
   );
+  const response = await sendTokenRequest<{
+    access_token?: string;
+    refresh_token?: string;
+    expires_in?: number;
+  }>(prepared, sendAsToday, site);
+  const data = response.data;
+  if (!data.access_token) {
+    rejectMissingToken(site, prepared, response, 'no-access-token', 'debug');
+  }
+  return {
+    accessToken: data.access_token,
+    // A new refresh token when the server sent one, else the one spent.
+    refreshToken: data.refresh_token || refreshToken,
+    expiresIn: data.expires_in,
+  };
 }

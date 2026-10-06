@@ -106,6 +106,7 @@ export class UaaPasscodeProvider extends BaseTokenProvider {
       passcode,
       this.logger,
       await this.requestAuth(),
+      this.siteOptions(),
     );
     return asContract<ITokenResult>({
       authorizationToken: tokens.accessToken,
@@ -131,6 +132,7 @@ export class UaaPasscodeProvider extends BaseTokenProvider {
       this.config.clientSecret ?? '',
       await this.requestAuth(),
       this.logger,
+      this.siteOptions(),
     );
     return asContract<ITokenResult>({
       authorizationToken: result.accessToken,
