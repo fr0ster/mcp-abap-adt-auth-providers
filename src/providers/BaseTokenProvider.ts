@@ -659,7 +659,7 @@ export abstract class BaseTokenProvider
       return {
         authorizationToken,
         ...this.heldRefresh(),
-        authType: this.getAuthType(),
+        authType: this.heldGrant(),
         tokenType: this.tokenType ?? 'jwt',
         expiresAt: this.expiresAt,
         expiresIn: this.expiresAt
@@ -986,34 +986,53 @@ export abstract class BaseTokenProvider
     return {
       authorizationToken,
       ...this.heldRefresh(),
-      authType: this.getAuthType(),
+      authType: this.heldGrant(),
       tokenType: this.tokenType ?? 'jwt',
       expiresAt: this.expiresAt,
     };
   }
 
   /**
+   * The grant a result built from what is held names: `getAuthType()` read
+   * once for the provider's lifetime (`readGrant`), like every other path.
+   * Unreadable or off the list: the request fails as `unknown`, naming the
+   * operation alone.
+   */
+  private heldGrant(): OAuth2GrantType {
+    const grant = this.readGrant();
+    if (grant === undefined) {
+      throw new AuthProviderFailure(
+        authError.unknown({ operation: 'token-request' }),
+      );
+    }
+    return grant;
+  }
+
+  /**
    * The refresh token held and its disposition (spec §4.4: every result this
    * package produces sets it), for a result that is no new commit — a cache
    * hit, or the credentials in place: a usable one is `'replace'` (what a
-   * 4.x reader infers from its presence, and the same token again); none is
-   * `'clear'` while the logical state is `cleared`, else `'keep'`. A
-   * quarantined one is not handed out: it is never submitted again (§6b).
+   * 4.x reader infers from its presence, and the same token again); a
+   * quarantined one is not handed out — it is never submitted again — and
+   * says `'clear'`, its clearing step queued or not (§6b); none is `'clear'`
+   * while the logical state is `cleared`, else `'keep'`.
    */
   private heldRefresh(): Pick<
     ITokenResult,
     'refreshToken' | 'refreshTokenDisposition'
   > {
     const held = this.refreshToken;
-    const usable =
-      typeof held === 'string' && held !== '' && !this.quarantine.has(held);
-    if (usable) {
+    const present = typeof held === 'string' && held !== '';
+    // Cut after its refresh was dispatched: its clearing step may still wait
+    // in the queue, but the token is already spent — `'clear'` (§6b).
+    const cut = present && this.quarantine.has(held);
+    if (present && !cut) {
       return { refreshToken: held, refreshTokenDisposition: 'replace' };
     }
     return {
       refreshToken: undefined,
       refreshTokenDisposition:
-        this.refreshState === 'cleared' ? 'clear' : 'keep',
+        cut || this.refreshState === 'cleared' ? 'clear' : 'keep',
     };
   }
 

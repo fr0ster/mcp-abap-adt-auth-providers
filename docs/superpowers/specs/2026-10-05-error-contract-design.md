@@ -521,9 +521,13 @@ in the place today's words put it.
   `refreshTokens()` return (decided in plan Task 27, 2026-10-06): a renewal
   returns exactly the result `onTokens` was told (the hook gets its own
   copy); a result that is no new commit — a cache hit, or the credentials in
-  place — carries `'replace'` with the held refresh token when it is usable
-  (not quarantined), else `refreshToken: undefined` with `'clear'` while the
-  logical state is `cleared` (§6b), else `'keep'`.
+  place — carries `'replace'` with the held refresh token when it is usable;
+  a quarantined one (cut after its refresh was dispatched, its clearing step
+  perhaps still queued) is not handed out and says `'clear'` — `refreshToken:
+  undefined` (§6b: a cut token is cleared); with none, `'clear'` while the
+  logical state is `cleared`, else `'keep'`. Its `authType` is the grant read
+  once through the provider's grant read, like every other path (Task 27
+  review).
 - **Cancelling a login (§6b).** `AuthorizationRequest` gains `readonly
   signal?: AbortSignal | undefined` — the provider's signal for this login,
   which a strategy must honour as it honours its own option signal. A new

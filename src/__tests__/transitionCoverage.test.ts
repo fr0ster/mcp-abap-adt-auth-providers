@@ -24,16 +24,20 @@ import { describe, expect, it } from '@jest/globals';
 
 const TESTS = __dirname;
 
-/** Deleted case → [file under src/__tests__, title that covers it now]. */
+/**
+ * Deleted case → [file under src/__tests__, the exact title of the test that
+ * covers it now]. A title is matched whole against the literal titles of the
+ * file's `it(…)` / `it.each(…)(…)` calls, never as a substring of its text,
+ * so a describe, a comment or a fragment does not count.
+ */
 const COVERAGE: ReadonlyArray<readonly [string, string, string]> = [
-  // legacyLadder.test.ts: each class → its kind (A.1).
   [
     'ladder: DeviceCodePresentationError → device-code-not-shown (A2)',
     'strategies/interactiveLoginRows.test.ts',
-    'K17 / A2: a presenter that throws → device-code-not-shown',
+    'K17 / A2: a presenter that throws → device-code-not-shown; H3 logs logFields only',
   ],
   [
-    'ladder: CertificateMaterialError → client-certificate (A4)',
+    'ladder: CertificateMaterialError incomplete (A4)',
     'auth/certificateMaterial.test.ts',
     'throws a client-certificate failure for incomplete material, with its words (A4)',
   ],
@@ -70,25 +74,25 @@ const COVERAGE: ReadonlyArray<readonly [string, string, string]> = [
   [
     'ladder: any other BrowserAuthError → failed (A9)',
     'strategies/interactiveLoginRows.test.ts',
-    'K11 / A9: anything else → failed',
+    'with a status and a registered error, verbatim, and A9’s new hint',
   ],
   [
     'ladder: RefreshError → credential-refused refresh-token (A10)',
     'providers/tokenProviderFailures.test.ts',
-    'D8 / A10: a provider without a refresh grant or token throws credential-refused refresh-token',
+    'A10: %s → credential-refused refresh-token',
   ],
   [
     'ladder: TokenEndpointError → request-failed (A14)',
     'auth/tokenSiteRows.test.ts',
-    'D1 — a wrapping site refused by the token endpoint',
+    '$name: request-failed refused, not the reduced AxiosError',
   ],
   [
     'ladder: TokenProviderError → unknown with the operation (A13)',
     'providers/tokenProviderFailures.test.ts',
-    'L3 total (Task 27): every throw is an AuthProviderFailure, the former classes gone',
+    '%s: unknown, wrapped',
   ],
   [
-    'ladder: AssertionValidationError → unknown (A3)',
+    'ladder: AssertionValidationError → saml-assertion (A3)',
     'errors/producerRows.test.ts',
     'A3: a shipped validator throws a minted saml-assertion failure with its rule',
   ],
@@ -100,25 +104,23 @@ const COVERAGE: ReadonlyArray<readonly [string, string, string]> = [
   [
     'ladder: ServiceKeyError / SessionDataError keep 5.4.2 words (A12, no producer)',
     'providers/tokenProviderFailures.test.ts',
-    "'a ServiceKeyError look-alike (A12, no producer)'",
+    'A12: ServiceKeyError / SessionDataError look-alikes are unknown, wrapped (no producer, no kind)',
   ],
   [
     'ladder: anything else reaches classify (A16)',
     'auth/refusalRows.test.ts',
     'A16: a foreign value → unknown with its allowlisted facts, verbatim',
   ],
-  // legacyBridge.test.ts: a class thrown by a body, through the four moments.
   [
     'bridge: a ladder class thrown by a body keeps its kind through the four moments',
-    'contract/rule1.test.ts',
-    'rule 1: the credentials, every collaborator throwing',
+    'auth/AuthProviderBase.test.ts',
+    'a body that throws → unknown with the moment its operation names',
   ],
   [
     "bridge: anything else still reaches guard's classify",
     'auth/AuthProviderBase.test.ts',
     'a foreign throw by the body names the grant read once',
   ],
-  // contractTransition.test.ts / .typecheck.ts: toLegacyRefusal, C1.
   [
     'toLegacyRefusal / toLegacyOutcome: the same minted object reaches the caller',
     'auth/relayMatrix.test.ts',
@@ -126,27 +128,20 @@ const COVERAGE: ReadonlyArray<readonly [string, string, string]> = [
   ],
   [
     'C1: a minted error is not a 4.x refusal (typecheck)',
-    'surface6.typecheck.ts',
-    'toLegacyOutcome',
+    'exports.test.ts',
+    'does not export %s',
   ],
-  // refusalWords.test.ts (Decision D7): refusalWords → classify.
   [
     'refusalWords: a hostile value → fixed words, no throw',
     'auth/thrownMessages.test.ts',
     'a value whose every read throws is "unknown error", not an exception',
   ],
-  [
-    'refusalWords: no longer exported',
-    'exports.test.ts',
-    'public exports — 6.0.0 removals',
-  ],
-  // AssertionValidationError.test.ts: the class itself.
+  ['refusalWords: no longer exported', 'exports.test.ts', 'does not export %s'],
   [
     'AssertionValidationError carries its check',
     'validation/samlRules.test.ts',
-    'AssertionRule',
+    'names 56 rules, each with a check of the allowlist',
   ],
-  // thrownMessages.test.ts: the class cases.
   [
     'a mutated AuthorizationRefusedError code never reaches the refusal',
     'strategies/interactiveLoginRows.test.ts',
@@ -155,25 +150,23 @@ const COVERAGE: ReadonlyArray<readonly [string, string, string]> = [
   [
     'TokenEndpointError keeps only allowlisted facts; loggedError reads its status',
     'auth/tokenSiteRows.test.ts',
-    'D1 — a wrapping site refused by the token endpoint',
+    '$name: request-failed refused, status and registered code; `<operation> failed (HTTP <n>, <oauth>)`',
   ],
   [
     'a reduced AxiosError reads like a TokenEndpointError',
     'auth/tokenSiteRows.test.ts',
-    'D2 — no response: request-failed no-response, or tls',
+    '$name: an allowlisted system code is the `code` fact',
   ],
-  // The 4.x ICallbackServerOptions.timeoutMs (Decision D6, Task 23).
   [
     'callbackServer: accepts whatever the 4.x bound field carries',
-    'strategies/noLoginTimeout.typecheck.ts',
-    'no login bound on ICallbackServerOptions',
+    'strategies/interactiveSources.test.ts',
+    'no timeoutMs and no "no bound" placeholder anywhere in src',
   ],
   [
     'noLoginTimeout: a scope given timeoutMs 1 stays open until aborted',
     'strategies/interactiveSources.test.ts',
     'no timeoutMs and no "no bound" placeholder anywhere in src',
   ],
-  // TokenResultWithDisposition (C3): the disposition on 6.0.0's ITokenResult.
   [
     'TokenResultWithDisposition: what onTokens receives',
     'providers/tokenProviderFailures.test.ts',
@@ -189,7 +182,71 @@ function testFiles(dir: string): string[] {
   });
 }
 
-describe('R6: every deleted transition case has a counterpart that exists', () => {
+/** A character that continues an identifier or a member access. */
+function isIdentifierPart(c: string): boolean {
+  return (
+    (c >= 'a' && c <= 'z') ||
+    (c >= 'A' && c <= 'Z') ||
+    (c >= '0' && c <= '9') ||
+    c === '_' ||
+    c === '$' ||
+    c === '.'
+  );
+}
+
+/** Characters that may sit between `it` / `it.each(…)` and the title's `(`. */
+const SPACE = new Set([' ', '\n', '\t', '\r']);
+
+/**
+ * The literal titles of a test file's tests: the string literal (single or
+ * double quoted) that opens the argument list of `it(` or of the call after
+ * `it.each(…)`. Read by plain scanning of our own sources: a `describe` title
+ * is not a test and is never collected.
+ */
+function testTitles(source: string): Set<string> {
+  const titles = new Set<string>();
+  const openers: number[] = [];
+  let at = source.indexOf('it(');
+  while (at !== -1) {
+    if (at === 0 || !isIdentifierPart(source[at - 1] ?? '')) {
+      openers.push(at + 'it('.length);
+    }
+    at = source.indexOf('it(', at + 1);
+  }
+  at = source.indexOf('it.each(');
+  while (at !== -1) {
+    // Skip the table: the matching parenthesis, then the call's `(`.
+    let depth = 0;
+    let i = at + 'it.each'.length;
+    for (; i < source.length; i += 1) {
+      const c = source[i];
+      if (c === '(') depth += 1;
+      else if (c === ')') {
+        depth -= 1;
+        if (depth === 0) break;
+      }
+    }
+    if (source[i + 1] === '(') openers.push(i + 2);
+    at = source.indexOf('it.each(', at + 1);
+  }
+  for (const start of openers) {
+    let i = start;
+    while (SPACE.has(source[i] ?? '')) i += 1;
+    const quote = source[i];
+    if (quote !== "'" && quote !== '"') continue;
+    let title = '';
+    for (i += 1; i < source.length && source[i] !== quote; i += 1) {
+      if (source[i] === '\\') {
+        i += 1;
+      }
+      title += source[i];
+    }
+    titles.add(title);
+  }
+  return titles;
+}
+
+describe('R6: every deleted transition case has a counterpart test that exists', () => {
   const files = new Map(
     testFiles(TESTS).map((path) => [
       relative(TESTS, path),
@@ -197,11 +254,22 @@ describe('R6: every deleted transition case has a counterpart that exists', () =
     ]),
   );
 
+  it('the title reader collects test titles, not describes or fragments', () => {
+    const titles = testTitles(
+      "describe('outer', () => {\n  it('one', () => {});\n  it.each([[1, (2)]])(\n    'two %s',\n    () => {},\n  );\n});",
+    );
+    expect(titles.has('one')).toBe(true);
+    expect(titles.has('two %s')).toBe(true);
+    expect(titles.has('outer')).toBe(false);
+    expect(titles.has('on')).toBe(false);
+  });
+
   it.each(COVERAGE)('%s → %s', (_deleted, file, title) => {
     expect(file).not.toBe('transitionCoverage.test.ts');
     const text = files.get(file);
     expect([file, text !== undefined]).toEqual([file, true]);
-    expect([file, title, text?.includes(title)]).toEqual([file, title, true]);
+    const titles = testTitles(text ?? '');
+    expect([file, title, titles.has(title)]).toEqual([file, title, true]);
   });
 
   it('the deleted transition test files are gone', () => {
@@ -218,10 +286,6 @@ describe('R6: every deleted transition case has a counterpart that exists', () =
   });
 });
 
-/**
- * The source side of the same removal: nothing of the Decision D6 table, the
- * 5.x classes or the removed interfaces-auth constants is left in `src`.
- */
 describe('Decision D6: no transition piece is left in src', () => {
   const SRC = join(__dirname, '..');
   const sources = (dir: string): string[] =>
@@ -259,7 +323,16 @@ describe('Decision D6: no transition piece is left in src', () => {
     'DeviceCodePresentationError',
     'CertificateMaterialError',
     'ClientAuthenticationError',
+    'ClientAuthenticationResultError',
     'BasicClientIdError',
+    'AssertionValidationError',
+    'RefreshError',
+    'BrowserAuthError',
+    'ServiceKeyError',
+    'SessionDataError',
+    'TokenEndpointError',
+    'SncLibraryNotFoundError',
+    'tokenEndpointError',
   ])('%s', (needle) => {
     const found = text
       .filter(([, source]) => source?.includes(needle))

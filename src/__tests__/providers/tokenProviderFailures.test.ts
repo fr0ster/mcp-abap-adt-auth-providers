@@ -476,18 +476,21 @@ describe('D8 / A10: a provider without a refresh grant or token throws credentia
     ],
   ];
 
-  it.each(sites)('%s', async (_name, build) => {
-    const thrown = await rejectionOf(refreshOf(build()));
-    expectFailure(thrown);
-    const error = (thrown as AuthProviderFailure).error;
-    expect(error.kind).toBe('credential-refused');
-    expect(error.facts).toEqual({ credential: 'refresh-token' });
-    // A10: 5.4.2's RefreshError words, verbatim.
-    expect(error.reason).toBe('the refresh token was refused');
-    expect(error.hint).toBe('log in again');
-    expect(mockedAxios).not.toHaveBeenCalled();
-    expect(mockedAxios.post).not.toHaveBeenCalled();
-  });
+  it.each(sites)(
+    'A10: %s → credential-refused refresh-token',
+    async (_name, build) => {
+      const thrown = await rejectionOf(refreshOf(build()));
+      expectFailure(thrown);
+      const error = (thrown as AuthProviderFailure).error;
+      expect(error.kind).toBe('credential-refused');
+      expect(error.facts).toEqual({ credential: 'refresh-token' });
+      // A10: 5.4.2's RefreshError words, verbatim.
+      expect(error.reason).toBe('the refresh token was refused');
+      expect(error.hint).toBe('log in again');
+      expect(mockedAxios).not.toHaveBeenCalled();
+      expect(mockedAxios.post).not.toHaveBeenCalled();
+    },
+  );
 
   it('there are nine such sites', () => {
     expect(sites).toHaveLength(9);
@@ -730,6 +733,29 @@ describe('refresh-token disposition (spec §6b): a refused refresh token is disc
     expect(Object.hasOwn(hit, 'refreshToken')).toBe(true);
     expect(hit.refreshToken).toBeUndefined();
     expect(hit.refreshTokenDisposition).toBe('keep');
+  });
+
+  // Task 27 review: a cache hit names its grant through readGrant, like
+  // every other path — getAuthType() read once, a throw a minted failure.
+  it('a cache hit reads getAuthType() once, through readGrant; a throwing one is an unknown failure', async () => {
+    let calls = 0;
+    class Throwing extends TestProvider {
+      protected override getAuthType(): OAuth2GrantType {
+        calls += 1;
+        throw new Error(MARKER);
+      }
+    }
+    const p = new Throwing();
+    await p.getTokens(); // the login result carries its own authType
+    for (let i = 0; i < 2; i += 1) {
+      const thrown = await rejectionOf(p.getTokens());
+      expectFailure(thrown);
+      expect((thrown as AuthProviderFailure).error).toMatchObject({
+        kind: 'unknown',
+        facts: { operation: 'token-request' },
+      });
+    }
+    expect(calls).toBe(1);
   });
 
   it('§4.4: after a refused refresh and a login without one, the result and the cache hit both say clear', async () => {
@@ -1009,6 +1035,25 @@ describe('L3 total (Task 27): every throw is an AuthProviderFailure, the former 
         }),
     ],
   ];
+  it('A12: ServiceKeyError / SessionDataError look-alikes are unknown, wrapped (no producer, no kind)', async () => {
+    for (const name of ['ServiceKeyError', 'SessionDataError']) {
+      const original = Object.assign(new Error(MARKER), {
+        name,
+        missingFields: ['uaaUrl', 'refreshToken'],
+      });
+      const p = new TestProvider();
+      p.login.mockRejectedValue(original);
+      const thrown = await rejectionOf(p.getTokens());
+      expectFailure(thrown, original);
+      expect((thrown as AuthProviderFailure).error).toEqual(
+        expect.objectContaining({
+          kind: 'unknown',
+          facts: { operation: 'token-request', grant: 'client_credentials' },
+        }),
+      );
+    }
+  });
+
   it.each(lookAlikes)('%s: unknown, wrapped', async (_name, make) => {
     const original = make();
     const p = new TestProvider();
