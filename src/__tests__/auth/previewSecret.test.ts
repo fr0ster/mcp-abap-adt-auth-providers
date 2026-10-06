@@ -240,3 +240,107 @@ describe('a whitespace-wrapped Basic credential is one preview', () => {
     });
   });
 });
+
+/**
+ * Review fix round 2, finding 1: a secret that is not base64 — a client
+ * secret, a JWT, a password, an assertion — wrapped by the server (CR, LF,
+ * a space, a tab, raw or escaped, an escape split by the wrap) is caught by
+ * the fail-closed net: the piece holding it becomes its length only.
+ */
+describe('a non-base64 secret wrapped by the server', () => {
+  const CLIENT_SECRET = 'se+cr%25et/x-0123456789-client';
+  const JWT = 'eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJ1c2VyIn0.c2lnbmF0dXJlLXg';
+  const PASSWORD = 'pw+7%/Qz-pass';
+  const ASSERTION = 'PHNhbWw+QXNzZXJ0aW9uPg==/assertion+payload';
+  const BASIC = Buffer.from(`client:id:${CLIENT_SECRET}`).toString('base64');
+  const SECRETS = [CLIENT_SECRET, JWT, PASSWORD, ASSERTION, BASIC];
+
+  const wrap = (text: string, width: number, breaker: string): string =>
+    (text.match(new RegExp(`.{1,${width}}`, 'g')) ?? []).join(breaker);
+
+  const unescaped = (text: string): string => {
+    let out = text;
+    for (let i = 0; i < 8; i++) {
+      out = out.replace(/%([0-9A-Fa-f]{2})/g, (_e, hex: string) =>
+        String.fromCharCode(Number.parseInt(hex, 16)),
+      );
+    }
+    return out;
+  };
+  const longestRunOf = (text: string, of: string): number => {
+    let best = 0;
+    for (let i = 0; i + best < of.length; i++) {
+      while (i + best < of.length && text.includes(of.slice(i, i + best + 1)))
+        best++;
+    }
+    return best;
+  };
+
+  const ECHOES: [string, (secret: string) => string][] = [
+    ['as sent', (s) => s],
+    ['escaped once', (s) => encodeURIComponent(s)],
+    ['escaped twice', (s) => encodeURIComponent(encodeURIComponent(s))],
+  ];
+
+  describe.each([
+    ['the client secret', CLIENT_SECRET],
+    ['a JWT', JWT],
+    ['a password', PASSWORD],
+    ['an assertion', ASSERTION],
+    ['a Basic credential', BASIC],
+  ])('%s', (_name, secret) => {
+    it.each(
+      ECHOES.flatMap(([how, echo]) =>
+        [3, 5, 8, 76].flatMap((width) =>
+          ['\r\n', '\n', ' ', '\t', '%0D%0A', '%20'].map(
+            (breaker) =>
+              [
+                `${how}, width ${width}, ${JSON.stringify(breaker)}`,
+                echo,
+                width,
+                breaker,
+              ] as const,
+          ),
+        ),
+      ),
+    )('%s: nothing of it is left', (_label, echo, width, breaker) => {
+      const echoed = wrap(echo(secret), width, breaker);
+      const out = described(`server said ${echoed} end`, SECRETS);
+      const flat = unescaped(out).replace(/\s+/g, '');
+      expect(longestRunOf(flat, secret)).toBeLessThanOrEqual(4);
+    });
+  });
+
+  it('the examples of the review: an escape split by the wrap', () => {
+    for (const [echoed, secret] of [
+      ['se%2Bcr\r\n%2525et\r\n/x-0123456789-client', CLIENT_SECRET],
+      [`${JWT.slice(0, 7)}\r\n${JWT.slice(7)}`, JWT],
+      ['pw%2B7%\r\n2FQz-pass', 'pw+7/Qz-pass'],
+    ] as const) {
+      const out = described(`a ${echoed} b`, [...SECRETS, 'pw+7/Qz-pass']);
+      expect(out).toMatch(/^<redacted, \d+ chars>$/);
+      expect(longestRunOf(unescaped(out), secret)).toBeLessThanOrEqual(4);
+    }
+  });
+});
+
+/**
+ * Review fix round 2, finding 2: decoding an escape at any depth is one
+ * step per escape — a 1 MB adversarial `%2525…2541` chain redacts quickly.
+ * A measured bound in the test, no timer in the code; nothing is cut before
+ * redaction.
+ */
+describe('decoding cost', () => {
+  it.each([
+    ['one chain', `%${'25'.repeat(500_000)}41`],
+    ['many chains', `%${'25'.repeat(1_000)}41 `.repeat(500)],
+    ['nested escapes of escapes', '%%32B'.repeat(200_000)],
+    ['nested escapes broken by spaces', '%%32B '.repeat(170_000)],
+  ])('%s of about 1 MB redacts in well under 2 s', (_name, text) => {
+    const started = performance.now();
+    oauthErrorFields({ error_description: text }, [
+      'se+cr%25et/x-0123456789-client',
+    ]);
+    expect(performance.now() - started).toBeLessThan(2_000);
+  });
+});

@@ -130,22 +130,44 @@ const BASE64_VALUE = /^[A-Za-z0-9+/_-]+={0,2}$/;
 const canonicalBase64 = (value: string): string =>
   value.replace(/-/g, '+').replace(/_/g, '/').replace(/=+$/, '');
 
+/** One escape at any depth (`%2B`, `%252B`, `%25252B`), its byte captured. */
+const ANY_DEPTH_ESCAPE = /%(?:25)*([0-9A-Fa-f]{2})/g;
+/** A run of such escapes, decoded together (a UTF-8 character spans bytes). */
+const ESCAPE_RUN = /(?:%(?:25)*[0-9A-Fa-f]{2})+/g;
+
 /**
- * A text with every percent-escape decoded, again and again until nothing
- * changes: an echo escaped at any depth reads as what was sent. Each round
- * that changes anything makes the text shorter, so it ends. The escaped
- * bytes are read as Latin-1 (the base64 pass: one character per byte) or
- * as UTF-8 (the fail-closed net: a secret's own characters).
+ * A text with every percent-escape decoded, whatever its depth: `%(?:25)*XX`
+ * is one step to its byte, so a chain `%2525…2541` costs its length once,
+ * never once per level. Repeated until nothing changes, for an escape built
+ * from escaped characters (`%%32B` → `%2B` → `+`): each such level costs a
+ * text about three times longer, so the rounds grow with the logarithm of
+ * the length, and each round that changes anything shortens the text. The
+ * escaped bytes are read as Latin-1 (the base64 pass: one character per
+ * byte) or as UTF-8 (the fail-closed net: a secret's own characters).
  */
+/** A run of escapes as text: ASCII bytes directly, anything else through a Buffer. */
+function decodedRun(run: string, bytesAs: 'latin1' | 'utf8'): string {
+  let ascii = '';
+  for (const found of run.matchAll(ANY_DEPTH_ESCAPE)) {
+    const byte = Number.parseInt(found[1] ?? '', 16);
+    if (byte >= 0x80) {
+      return Buffer.from(
+        run.replace(ANY_DEPTH_ESCAPE, (_escape, hex: string) => hex),
+        'hex',
+      ).toString(bytesAs);
+    }
+    ascii += String.fromCharCode(byte);
+  }
+  return ascii;
+}
+
 function unescapedFully(
   text: string,
   bytesAs: 'latin1' | 'utf8' = 'latin1',
 ): string {
   let current = text;
   for (;;) {
-    const next = current.replace(/(?:%[0-9A-Fa-f]{2})+/g, (run) =>
-      Buffer.from(run.replace(/%/g, ''), 'hex').toString(bytesAs),
-    );
+    const next = current.replace(ESCAPE_RUN, (run) => decodedRun(run, bytesAs));
     if (next === current) return current;
     current = next;
   }
@@ -159,6 +181,15 @@ interface KnownForms {
   readonly pattern: string;
   /** A base64 value by its canonical form: a run that is exactly one. */
   readonly base64: ReadonlyMap<string, string>;
+  /** The length of the shortest value: a decoding shorter than it holds none. */
+  readonly shortest: number;
+  /**
+   * The shortest run that can matter: a known base64 value's length, or the
+   * base64 length whose decoding can reach the shortest value (⌈4c/3⌉).
+   */
+  readonly shortestRun: number;
+  /** `pattern` compiled once, not global: what a decoded reading is tested with. */
+  readonly secret: RegExp;
 }
 
 function knownForms(secrets: readonly (string | undefined)[]): KnownForms {
@@ -179,12 +210,21 @@ function knownForms(secrets: readonly (string | undefined)[]): KnownForms {
     const canonical = canonicalBase64(value);
     if (!base64.has(canonical)) base64.set(canonical, value);
   }
+  const pattern = values
+    .map((value) => `(${[...value].map(characterPattern).join('')})`)
+    .join('|');
+  const shortest = Math.min(...values.map((value) => value.length));
+  const shortestRun = Math.min(
+    Math.ceil((shortest * 4) / 3),
+    ...[...base64.keys()].map((value) => value.length),
+  );
   return {
     values,
-    pattern: values
-      .map((value) => `(${[...value].map(characterPattern).join('')})`)
-      .join('|'),
+    pattern,
     base64,
+    shortest,
+    shortestRun,
+    secret: new RegExp(pattern),
   };
 }
 
@@ -271,8 +311,12 @@ function recognisedForm(run: string, forms: KnownForms): string | undefined {
     const value = forms.base64.get(plain);
     if (value !== undefined) return value;
   }
-  const secret = new RegExp(forms.pattern);
+  const secret = forms.secret;
   for (const plain of plains) {
+    // Too short to decode to the shortest value: nothing to decode (a value
+    // of c characters needs at least c bytes, and L base64 characters
+    // decode to at most ⌊3L/4⌋).
+    if (Math.floor((plain.length * 3) / 4) < forms.shortest) continue;
     for (let offset = 0; offset < 4 && offset < plain.length; offset++) {
       const decoded = Buffer.from(plain.slice(offset), 'base64').toString(
         'utf8',
@@ -346,7 +390,9 @@ function redactEncodedPiece(text: string, forms: KnownForms): Segment[] {
   for (const match of text.matchAll(BASE64_RUN)) {
     const run = match[0];
     const [, before = '', core = '', after = ''] = AROUND.exec(run) ?? [];
-    if (core.length < 2) continue;
+    // Too short to be a known base64 value or to decode to the shortest
+    // value (escapes only shorten a run): left as it is, undecoded.
+    if (core.length < 2 || core.length < forms.shortestRun) continue;
     segments.push({ text: text.slice(at, match.index) + before });
     segments.push(...redactRun(core, forms));
     segments.push({ text: after });
@@ -426,12 +472,25 @@ function errorCode(
  */
 function failClosed(piece: string, forms: KnownForms): Segment[] {
   if (forms.values.length === 0) return [{ text: piece }];
-  const secret = new RegExp(forms.pattern);
-  return secret.test(unescapedFully(piece, 'utf8')) ||
-    secret.test(unescapedFully(piece))
+  const secret = forms.secret;
+  // A server may also wrap a secret that is not base64 — a line break, a
+  // space or a tab inside it, raw or escaped at any depth, even inside an
+  // escape it split: every reading is tried with all of it removed too,
+  // before decoding and after.
+  const unwrapped = piece.replace(WRAPPING, '');
+  const readings = [...new Set([piece, unwrapped])].flatMap((text) =>
+    (text.includes('%')
+      ? [text, unescapedFully(text, 'utf8'), unescapedFully(text)]
+      : [text]
+    ).flatMap((reading) => [reading, reading.replace(/[ \t\r\n]+/g, '')]),
+  );
+  return readings.some((reading) => secret.test(reading))
     ? [{ preview: `<redacted, ${[...piece].length} chars>` }]
     : [{ text: piece }];
 }
+
+/** Whitespace a server wraps with, raw or escaped at any depth. */
+const WRAPPING = new RegExp(`(?:${WHITESPACE})+`, 'g');
 
 /** The JWT pass: anything JWT-shaped in the server's text, previewed. */
 function previewJwts(piece: string): Segment[] {
