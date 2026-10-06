@@ -20,7 +20,7 @@ import type { IClientAuthentication } from '@mcp-abap-adt/interfaces-auth';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
 import { exchangeCodeForToken } from '../../auth/browserAuth';
 import { getTokenWithClientCredentials } from '../../auth/clientCredentialsAuth';
-import { oauthErrorFields } from '../../auth/oauthErrorBody';
+import { oauthErrorFields, previewSecret } from '../../auth/oauthErrorBody';
 import {
   exchangeAuthorizationCode,
   initiateDeviceAuthorization,
@@ -628,6 +628,8 @@ describe('the redactor, line-wrapped base64', () => {
       { error_description: `bad ${echoed} here` },
       [SECRET],
     );
-    expect(fields?.error_description).toBe('bad <redacted> here');
+    // H10 / spec §6 "Recognition first": the whole span is one preview of
+    // the form it was recognised as — here the decoded secret.
+    expect(fields?.error_description).toBe(`bad ${previewSecret(SECRET)} here`);
   });
 });

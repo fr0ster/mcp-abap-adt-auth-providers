@@ -21,7 +21,7 @@ import type {
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
 import axios, { AxiosError } from 'axios';
 import { getTokenWithClientCredentials } from '../../auth/clientCredentialsAuth';
-import { oauthErrorFields } from '../../auth/oauthErrorBody';
+import { oauthErrorFields, previewSecret } from '../../auth/oauthErrorBody';
 import {
   initiateDeviceAuthorization,
   passwordGrant,
@@ -468,7 +468,7 @@ async function echoedOutput(
  * The server's description reaches no rendering of the thrown error and no
  * log line. The redactor — called by no site in 5.4.2, kept as defence in
  * depth — given the secrets the request carried, redacts the echo whole and
- * nothing else: the description reads exactly the prefix and `<redacted>` —
+ * nothing else: the description reads exactly the prefix and one preview —
  * no tail of the secret left after a prefix of it was redacted, no letter of
  * the prefix redacted for a short fragment of the secret.
  */
@@ -481,10 +481,18 @@ function expectRedactedWhole(
   expect(out.error).not.toContain(echoed);
   expect(out.logs).not.toContain(ECHO_PREFIX);
   expect(out.logs).not.toContain(echoed);
+  // H10 / spec §6 "The preview": the echo is one preview of the form it was
+  // recognised as — a secret or its form-decoding — and nothing else.
+  const formDecoded = (value: string): string =>
+    new URLSearchParams(`v=${value.replace(/&/g, '%26')}`).get('v') ?? value;
   expect(
+    secrets
+      .flatMap((secret) => [secret, formDecoded(secret)])
+      .map((form) => `${ECHO_PREFIX} ${previewSecret(form)}`),
+  ).toContain(
     oauthErrorFields({ error_description: `${ECHO_PREFIX} ${echoed}` }, secrets)
       ?.error_description,
-  ).toBe(`${ECHO_PREFIX} <redacted>`);
+  );
 }
 
 describe.each(SITES)(

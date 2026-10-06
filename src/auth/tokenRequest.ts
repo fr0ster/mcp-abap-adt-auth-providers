@@ -24,6 +24,14 @@
  */
 
 import { Agent } from 'node:https';
+import {
+  AuthProviderFailure,
+  authError,
+  httpStatus,
+  isOAuthErrorCode,
+  isSystemCode,
+  render,
+} from '@mcp-abap-adt/auth-errors';
 import type {
   ICertificateMaterial,
   IClientAuthentication,
@@ -40,8 +48,18 @@ import axios, {
 import { ClientAuthenticationResultError } from '../errors/ClientAuthenticationError';
 import { TokenEndpointError } from '../errors/TokenEndpointError';
 import { assertNotExpired } from './certificateMaterial';
-import { allowlistedCode, integerStatus, readSafely } from './knownCodes';
-import { type OAuthErrorFields, registeredOAuthError } from './oauthErrorBody';
+import type { OAuth2GrantType, Operation } from './contractTransition';
+import {
+  allowlistedCode,
+  integerStatus,
+  readSafely,
+  tlsFailureCode,
+} from './knownCodes';
+import {
+  type OAuthErrorFields,
+  oauthErrorFields,
+  registeredOAuthError,
+} from './oauthErrorBody';
 import { loggedError } from './refusal';
 
 /** What a site is given to authenticate one request with a strategy. */
@@ -187,8 +205,9 @@ export interface LegacyBasic {
 /**
  * The one place a site without a strategy builds its Basic header. Its
  * secrets come from the same `basicSecrets()` a strategy's Basic credential
- * goes through, for any redaction of what a server says back — 5.4.2 writes
- * none of the server's words anywhere, so nothing reads them yet.
+ * goes through: a site passes the result as `TokenRequestSite.basic`, so
+ * the `authDebug` line previews its credential in every form a server may
+ * echo it — wrapped, escaped or decoded (spec §6).
  */
 export function legacyBasic(
   clientId: string,
@@ -420,6 +439,11 @@ export function logQuietly(write: () => void): void {
 
 /** Where a site's failed request is noted: one debug line of safe facts. */
 export interface TokenRequestDiagnostics {
+  /**
+   * TEMPORARY (removed with this interface in Task 21): never `'site'`, so
+   * `arm` alone tells 5.4.2's diagnostics from a `TokenRequestSite`.
+   */
+  readonly arm?: undefined;
   /** The site's logger; without one, no line. */
   readonly logger?: ILogger | null | undefined;
   /** The site, naming the line. */
@@ -461,17 +485,243 @@ export function logRefusedRequest(
 }
 
 /**
- * Sends one request — the prepared one when a strategy was given, else the
- * site's own `asToday` — and on failure throws it without the request
- * (`withoutRequest`). The request itself is not changed on either path.
- *
- * @param diagnostics where the failure is noted (`logRefusedRequest`): safe
- *   facts only, like the thrown error.
+ * A token site, as the error contract's conversion point reads it (spec §6):
+ * what it was doing, through which grant, where its one line goes, whether
+ * its consumer opted into the server's text, and every secret its request
+ * carried — each passed by the site, never looked up.
  */
-export async function sendTokenRequest<T>(
+export interface TokenRequestSite {
+  /**
+   * TEMPORARY (Decision D6; removed in Task 21 with the legacy arm): the
+   * explicit discriminant `sendTokenRequest` dispatches on — never on which
+   * other properties an argument carries.
+   */
+  readonly arm: 'site';
+  readonly operation: Operation;
+  readonly grant?: OAuth2GrantType | undefined;
+  /** The provider's logger; no logger → no line, nothing else changes. */
+  readonly logger?: ILogger | null | undefined;
+  /**
+   * The consumer's `authDebug === true`; anything else → the safe-facts line
+   * only, and the server's text is never read.
+   */
+  readonly authDebug: boolean;
+  /** Every secret this request carried: grantSecrets(params) + the configured clientSecret. */
+  readonly secrets: readonly (string | undefined)[];
+  /**
+   * The site's own Basic header on the path without a strategy, as built by
+   * `legacyBasic()` — never assembled by the site itself.
+   */
+  readonly basic?: LegacyBasic | undefined;
+}
+
+/**
+ * What a site receives of a successful answer (spec §6): an integer status
+ * and a plain `data` of `ANSWER_FIELDS` — never the object axios handed over.
+ * `diagnostic` exists only for a site whose consumer set `authDebug`, and
+ * only `rejectMissingToken`'s line reads it: no site parses it, and it never
+ * enters a failure.
+ */
+export interface TokenResponseSnapshot<T = Record<string, string | number>> {
+  readonly status: number | undefined;
+  readonly data: T;
+  /** Only when `site.authDebug === true`: the server's text, plain strings. */
+  readonly diagnostic?: {
+    readonly error_description?: string;
+    readonly error_uri?: string;
+  };
+}
+
+/**
+ * Every secret a request carried, joined in one place for both readers of a
+ * server's answer (`sendTokenRequest` and `rejectMissingToken`), so the two
+ * cannot drift: the site's own (grant and configured client secret), its
+ * legacy Basic credential, and the strategy's.
+ */
+function requestSecrets(
+  site: TokenRequestSite,
+  prepared: PreparedTokenRequest | undefined,
+): (string | undefined)[] {
+  return [
+    ...site.secrets,
+    ...(site.basic?.secrets ?? []),
+    ...(prepared?.secrets ?? []),
+  ];
+}
+
+/** Whether the consumer opted into the server's text: `true` itself, nothing else. */
+const debugging = (site: TokenRequestSite): boolean => site.authDebug === true;
+
+/** The operation and grant of a site, as the facts of its failure. */
+function factsOf(site: TokenRequestSite): {
+  operation: Operation;
+  grant?: OAuth2GrantType;
+} {
+  return {
+    operation: site.operation,
+    ...(site.grant === undefined ? {} : { grant: site.grant }),
+  };
+}
+
+const INCOMPLETE = ' returned an incomplete response';
+
+/**
+ * The operation's phrase — auth-errors' own subject of its words
+ * (`the passcode exchange`, `authorization_code token request`), read from
+ * the words it renders, so a line and the failure name the operation alike.
+ */
+function phraseOf(site: TokenRequestSite): string {
+  const { reason } = render('request-failed', {
+    ...factsOf(site),
+    problem: 'incomplete-response',
+  });
+  return reason.endsWith(INCOMPLETE)
+    ? reason.slice(0, -INCOMPLETE.length)
+    : 'the token request';
+}
+
+/**
+ * The server's text with every secret previewed (`oauthErrorFields`): read
+ * only under `authDebug`, each field through `readSafely` and only when a
+ * string, so the redactor sees plain strings, never the foreign object.
+ */
+function previewedText(
+  body: unknown,
+  secrets: readonly (string | undefined)[],
+): { error_description?: string; error_uri?: string } {
+  const plain: Record<string, string> = {};
+  for (const field of ['error_description', 'error_uri'] as const) {
+    const value = readSafely(body, field);
+    if (typeof value === 'string') plain[field] = value;
+  }
+  const fields = oauthErrorFields(plain, secrets);
+  return {
+    ...(fields?.error_description === undefined
+      ? {}
+      : { error_description: fields.error_description }),
+    ...(fields?.error_uri === undefined ? {} : { error_uri: fields.error_uri }),
+  };
+}
+
+/**
+ * A failed request on the new arm: its one line, then the failure (spec §6).
+ * The facts are read once, each through `readSafely`: an integer status, a
+ * registered OAuth `error`, an allowlisted code. By default the line is
+ * 5.4.2's safe facts (`status`, `error` when registered) plus an allowlisted
+ * `code` (a recorded addition) — nothing of the body read beyond `error`;
+ * only with `authDebug` the same facts plus the previewed
+ * `error_description` / `error_uri`. None for the device poll's waiting
+ * answers, none without a logger, a throwing logger swallowed. The failure
+ * is `tls` for an allowlisted TLS code, else `request-failed` — `refused`
+ * with an HTTP status, `no-response` without one — and carries no body, no
+ * cause, nothing of the request.
+ */
+function failedRequest(
+  error: unknown,
+  site: TokenRequestSite,
+  prepared: PreparedTokenRequest | undefined,
+): AuthProviderFailure {
+  try {
+    const response = readSafely(error, 'response');
+    const body = readSafely(response, 'data');
+    const rawStatus = readSafely(response, 'status');
+    const oauthError = registeredOAuthError(readSafely(body, 'error'));
+    const rawCode = readSafely(error, 'code');
+    const tls = tlsFailureCode(error);
+    const code = allowlistedCode(rawCode);
+    const systemCode = isSystemCode(rawCode) ? rawCode : undefined;
+    const status = httpStatus(rawStatus);
+
+    const logger = site.logger;
+    if (logger && !(oauthError !== undefined && WAITING.has(oauthError))) {
+      logQuietly(() => {
+        const safe = {
+          status: integerStatus(rawStatus),
+          ...(oauthError === undefined ? {} : { error: oauthError }),
+          ...(code === undefined ? {} : { code }),
+        };
+        if (debugging(site)) {
+          logger.debug(`[${site.operation}] token endpoint said`, {
+            ...safe,
+            ...previewedText(body, requestSecrets(site, prepared)),
+          });
+        } else {
+          logger.debug(
+            `${phraseOf(site)}: the token endpoint refused the request`,
+            safe,
+          );
+        }
+      });
+    }
+
+    if (tls !== undefined) {
+      return new AuthProviderFailure(
+        authError.tls({ ...factsOf(site), code: tls }),
+      );
+    }
+    return new AuthProviderFailure(
+      authError['request-failed']({
+        ...factsOf(site),
+        ...(status === undefined
+          ? { problem: 'no-response' }
+          : {
+              problem: 'refused',
+              status,
+              ...(isOAuthErrorCode(oauthError) ? { oauthError } : {}),
+            }),
+        ...(systemCode === undefined ? {} : { code: systemCode }),
+      }),
+    );
+  } catch {
+    return new AuthProviderFailure(
+      authError['request-failed']({
+        operation: site.operation,
+        problem: 'no-response',
+      }),
+    );
+  }
+}
+
+/**
+ * Sends one request — the prepared one when a strategy was given, else the
+ * site's own `asToday`.
+ *
+ * TEMPORARY two arms (Decision D6; the legacy arm goes in Task 21), told
+ * apart by the explicit discriminant `arm`:
+ * - a `TokenRequestSite` (`arm: 'site'`): every failure becomes an
+ *   `AuthProviderFailure` after the site's one line (`failedRequest`); an
+ *   answer becomes a `TokenResponseSnapshot`, one that cannot be read a
+ *   `request-failed` `incomplete-response` failure with the operation only;
+ * - 5.4.2's `TokenRequestDiagnostics`, or nothing: 5.4.2 exactly — the failure
+ *   thrown without the request (`withoutRequest`), its safe facts noted
+ *   (`logRefusedRequest`), the answer a snapshot (`snapshotOf`).
+ */
+export function sendTokenRequest<T>(
+  prepared: PreparedTokenRequest | undefined,
+  asToday: () => Promise<AxiosResponse<T>>,
+  site: TokenRequestSite,
+): Promise<TokenResponseSnapshot<T>>;
+export function sendTokenRequest<T>(
   prepared: PreparedTokenRequest | undefined,
   asToday: () => Promise<AxiosResponse<T>>,
   diagnostics?: TokenRequestDiagnostics,
+): Promise<AxiosResponse<T>>;
+export async function sendTokenRequest<T>(
+  prepared: PreparedTokenRequest | undefined,
+  asToday: () => Promise<AxiosResponse<T>>,
+  third?: TokenRequestDiagnostics | TokenRequestSite,
+): Promise<AxiosResponse<T> | TokenResponseSnapshot<T>> {
+  if (third?.arm === 'site') {
+    return sendForSite<T>(prepared, asToday, third);
+  }
+  return sendAsLegacy<T>(prepared, asToday, third);
+}
+
+/** 5.4.2's `sendTokenRequest`, unchanged (the legacy arm). */
+async function sendAsLegacy<T>(
+  prepared: PreparedTokenRequest | undefined,
+  asToday: () => Promise<AxiosResponse<T>>,
+  diagnostics: TokenRequestDiagnostics | undefined,
 ): Promise<AxiosResponse<T>> {
   let response: unknown;
   try {
@@ -486,6 +736,30 @@ export async function sendTokenRequest<T>(
     throw withoutRequest(error);
   }
   return snapshotOf<T>(response);
+}
+
+/** The new arm: a site's failure, or its snapshot. */
+async function sendForSite<T>(
+  prepared: PreparedTokenRequest | undefined,
+  asToday: () => Promise<AxiosResponse<T>>,
+  site: TokenRequestSite,
+): Promise<TokenResponseSnapshot<T>> {
+  let response: unknown;
+  try {
+    response = prepared ? await axios<T>(prepared.config) : await asToday();
+  } catch (error) {
+    throw failedRequest(error, site, prepared);
+  }
+  try {
+    return siteSnapshot<T>(response, debugging(site));
+  } catch {
+    throw new AuthProviderFailure(
+      authError['request-failed']({
+        operation: site.operation,
+        problem: 'incomplete-response',
+      }),
+    );
+  }
 }
 
 /**
@@ -519,23 +793,116 @@ const ANSWER_FIELDS = [
  */
 function snapshotOf<T>(response: unknown): AxiosResponse<T> {
   try {
-    const raw = readSafely(response, 'data');
-    const data: Record<string, string | number> = {};
-    for (const field of ANSWER_FIELDS) {
-      const value = readSafely(raw, field);
-      if (typeof value === 'string' || typeof value === 'number') {
-        data[field] = value;
-      }
-    }
     return {
       status: integerStatus(readSafely(response, 'status')),
       statusText: '',
       headers: {},
-      data,
+      data: answerData(readSafely(response, 'data')),
     } as unknown as AxiosResponse<T>;
   } catch {
     throw new AxiosError('the token request failed');
   }
+}
+
+/** The expected fields of an answer's body that are strings or numbers. */
+function answerData(raw: unknown): Record<string, string | number> {
+  const data: Record<string, string | number> = {};
+  for (const field of ANSWER_FIELDS) {
+    const value = readSafely(raw, field);
+    if (typeof value === 'string' || typeof value === 'number') {
+      data[field] = value;
+    }
+  }
+  return data;
+}
+
+/**
+ * The new arm's snapshot: `snapshotOf`'s boundary, plus — only when the
+ * consumer set `authDebug` — the server's `error_description` and
+ * `error_uri` as plain strings, read through `readSafely`. Without it the
+ * two are never read. May throw: the caller replaces any throw.
+ */
+function siteSnapshot<T>(
+  response: unknown,
+  authDebug: boolean,
+): TokenResponseSnapshot<T> {
+  const raw = readSafely(response, 'data');
+  const snapshot = {
+    status: integerStatus(readSafely(response, 'status')),
+    data: answerData(raw) as unknown as T,
+  };
+  if (!authDebug) return snapshot;
+  const description = readSafely(raw, 'error_description');
+  const uri = readSafely(raw, 'error_uri');
+  return {
+    ...snapshot,
+    diagnostic: {
+      ...(typeof description === 'string'
+        ? { error_description: description }
+        : {}),
+      ...(typeof uri === 'string' ? { error_uri: uri } : {}),
+    },
+  };
+}
+
+/**
+ * The lead of the missing-token line: 5.4.2's own at the UAA code exchange
+ * (`browserAuth.ts:148-161` at 5.4.2, kept verbatim), else
+ * `<operation phrase> failed`.
+ */
+function missingTokenLead(site: TokenRequestSite): string {
+  return site.operation === 'code-exchange'
+    ? 'Token exchange failed'
+    : `${phraseOf(site)} failed`;
+}
+
+/**
+ * A 2xx that carries no usable token (spec §6, C8): one guarded line at the
+ * level the site passes — by default the safe facts only,
+ * `<lead>: status <n>, error: "<code>"` (or `no error given`; at the code
+ * exchange 5.4.2's `error` line verbatim) — and, with `authDebug`, the same
+ * line with the facts and the previewed `error_description` / `error_uri`
+ * of the snapshot's `diagnostic` beside it, the secrets joined exactly as
+ * `sendTokenRequest` joins them. Then `request-failed` with the status and
+ * the problem; nothing of the body enters it.
+ */
+export function rejectMissingToken(
+  site: TokenRequestSite,
+  prepared: PreparedTokenRequest | undefined,
+  snapshot: TokenResponseSnapshot<unknown>,
+  problem: 'no-access-token' | 'incomplete-response',
+  level: 'error' | 'debug',
+): never {
+  const status = integerStatus(readSafely(snapshot, 'status'));
+  const error = registeredOAuthError(
+    readSafely(readSafely(snapshot, 'data'), 'error'),
+  );
+  const logger = site.logger;
+  if (logger) {
+    logQuietly(() => {
+      const message = `${missingTokenLead(site)}: status ${status}, error: ${error === undefined ? 'no error given' : JSON.stringify(error)}`;
+      if (debugging(site)) {
+        logger[level](message, {
+          status,
+          ...(error === undefined ? {} : { error }),
+          ...previewedText(
+            readSafely(snapshot, 'diagnostic'),
+            requestSecrets(site, prepared),
+          ),
+        });
+      } else {
+        logger[level](message);
+      }
+    });
+  }
+  const httpCode = httpStatus(status);
+  throw new AuthProviderFailure(
+    authError['request-failed']({
+      ...factsOf(site),
+      problem,
+      ...(httpCode === undefined ? {} : { status: httpCode }),
+    }),
+  );
 }
 
 /**

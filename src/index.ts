@@ -60,6 +60,7 @@ export type {
   OidcTokenExchangeProviderConfig,
   Saml2BearerProviderConfig,
   Saml2PureProviderConfig,
+  TokenProviderDebug,
   TokenProviderHooks,
   UaaPasscodeProviderConfig,
 } from './providers';

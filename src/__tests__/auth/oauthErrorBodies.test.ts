@@ -8,7 +8,10 @@ import { beforeEach, describe, expect, it, jest } from '@jest/globals';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
 import axios from 'axios';
 import { getTokenWithClientCredentials } from '../../auth/clientCredentialsAuth';
-import { describeOAuthErrorBody } from '../../auth/oauthErrorBody';
+import {
+  describeOAuthErrorBody,
+  previewSecret,
+} from '../../auth/oauthErrorBody';
 import {
   exchangeSamlAssertion,
   refreshSamlBearerToken,
@@ -199,7 +202,8 @@ describe('OAuth error bodies stay out of logs and messages', () => {
       expect(text()).not.toContain(SENT_REFRESH);
       expect(text()).not.toContain('Invalid refresh token');
       expect(redactedBy([SENT_REFRESH, 'secret'])).toContain(
-        'Invalid refresh token (expired): <redacted>',
+        // H10 / spec §6 "The preview": the secret's preview, not `<redacted>`.
+        `Invalid refresh token (expired): ${previewSecret(SENT_REFRESH)}`,
       );
     });
 
@@ -220,7 +224,8 @@ describe('OAuth error bodies stay out of logs and messages', () => {
       expect(text()).toContain('HTTP 400, invalid_grant');
       expect(text()).not.toContain('is not acceptable');
       expect(redactedBy(['rt', 'client-secret-value'])).toContain(
-        'token <redacted jwt> is not acceptable',
+        // H10 / spec §6 "The preview": a JWT is previewed too.
+        `token ${previewSecret(JWT)} is not acceptable`,
       );
     });
 
@@ -247,7 +252,8 @@ describe('OAuth error bodies stay out of logs and messages', () => {
       expect(text()).toContain('HTTP 400, invalid_grant');
       expect(text()).not.toContain('could not parse assertion=');
       expect(redactedBy([assertion, 'client-secret-value'])).toContain(
-        'could not parse assertion=<redacted>',
+        // H10 / spec §6: the form it was recognised as, the assertion as sent.
+        `could not parse assertion=${previewSecret(assertion)}`,
       );
     });
 
@@ -271,7 +277,8 @@ describe('OAuth error bodies stay out of logs and messages', () => {
       expect(text()).not.toContain('XyZ9ab');
       expect(text()).not.toContain('is not valid for client');
       expect(redactedBy(['XyZ9ab'])).toContain(
-        'the client secret <redacted> is not valid for client',
+        // H10 / spec §6: under 16 characters, the length only.
+        `the client secret ${previewSecret('XyZ9ab')} is not valid for client`,
       );
     });
 
@@ -294,7 +301,8 @@ describe('OAuth error bodies stay out of logs and messages', () => {
       expect(text()).toContain('HTTP 400, invalid_grant');
       expect(text()).not.toContain('bad client');
       expect(redactedBy(['secret-value-xyz', assertion])).toContain(
-        'bad client <redacted> for <redacted>',
+        // H10 / spec §6 "The preview".
+        `bad client ${previewSecret('secret-value-xyz')} for ${previewSecret(assertion)}`,
       );
     });
   });
@@ -311,14 +319,17 @@ describe('a short secret inside a longer one', () => {
     );
     expect(text).not.toContain('opaque-');
     expect(text).not.toContain('-assertion-0123456789');
-    expect(text).toContain('refused <redacted>');
+    // H10 / spec §6 "The preview": the longer one previewed whole.
+    expect(text).toContain(`refused ${previewSecret(ASSERTION)}`);
   });
 });
 
 describe('every form is redacted in one pass', () => {
-  const MARKER = '<redacted>';
+  // H10 / spec §6 "The preview": the markers are previews now, each never
+  // scanned again.
+  const MARKER = /<redacted, \d+ chars>/g;
   /** What is left once every whole marker is taken out: no piece of one. */
-  const outsideMarkers = (text: string): string => text.split(MARKER).join('');
+  const outsideMarkers = (text: string): string => text.replace(MARKER, '');
 
   it('a short form is never replaced inside a marker another form left', () => {
     // `%65%64` form-decodes to `ed`, which every marker contains.
@@ -326,7 +337,7 @@ describe('every form is redacted in one pass', () => {
       { error_description: 'bad secret %65%64 here' },
       ['%65%64'],
     );
-    expect(text).toBe(`"bad secret ${MARKER} here"`);
+    expect(text).toBe(`"bad secret ${previewSecret('%65%64')} here"`);
   });
 
   it('the output stays bounded: one marker per match in the original text', () => {
@@ -343,7 +354,7 @@ describe('every form is redacted in one pass', () => {
     ]);
     expect(outsideMarkers(text)).toBe('"         "');
     expect(text.length).toBeLessThanOrEqual(
-      description.length * MARKER.length + 2,
+      description.length * previewSecret('a').length + 2,
     );
   });
 });

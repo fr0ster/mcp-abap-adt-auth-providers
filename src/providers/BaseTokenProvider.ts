@@ -36,8 +36,21 @@ import type { TokenRequestAuth } from '../auth/tokenRequest';
 import { CertificateMaterialError } from '../errors/CertificateMaterialError';
 import { ValidationError } from '../errors/TokenProviderErrors';
 
+/**
+ * The consumer's opt-in to the token endpoint's own text (spec §6): with
+ * `authDebug: true` — `true` itself, nothing else — a failed token request,
+ * or an answer without a token, writes its one debug line with the server's
+ * `error_description` / `error_uri`, every secret the request carried
+ * previewed (at most 4 + 4 characters, `<redacted, N chars>`). Without it
+ * that line carries the safe facts only. Never read from the environment,
+ * never defaulted on; no error ever carries the server's text either way.
+ */
+export interface TokenProviderDebug {
+  readonly authDebug?: boolean | undefined;
+}
+
 /** What every token provider's config may carry beside its own fields. */
-export interface TokenProviderHooks {
+export interface TokenProviderHooks extends TokenProviderDebug {
   /**
    * Called after every NEW token — a login or a refresh, never a cache hit —
    * and awaited before the provider answers. The broker persists through it.
@@ -66,6 +79,7 @@ export interface PinnedCertificate {
 
 /** What the base constructor reads of a provider's configuration. */
 type BaseConfig = TokenProviderHooks &
+  TokenProviderDebug &
   ClientAuthenticationConfig & { clientSecret?: unknown };
 
 /**
@@ -129,6 +143,11 @@ export abstract class BaseTokenProvider
   /** How the client authenticates to the authorization server, when configured. */
   protected readonly clientAuthentication?: IClientAuthentication | undefined;
   /**
+   * `config.authDebug === true`, read once: what every token site of this
+   * provider is told (`TokenRequestSite.authDebug`, threaded in Task 21).
+   */
+  protected readonly authDebug: boolean;
+  /**
    * The strategy's TLS material and its thumbprint: set on first need, never
    * replaced (spec §4). A certificate that rotates is a new provider.
    */
@@ -158,6 +177,8 @@ export abstract class BaseTokenProvider
       rejected: 'token-request',
     });
     this.onTokens = config.onTokens;
+    // `true` itself: `'true'`, `1` or an environment variable never opt in.
+    this.authDebug = config.authDebug === true;
     if (config.clientAuthentication && config.clientSecret !== undefined) {
       // Two ways of authenticating one client is a mistake, not a preference.
       throw new ValidationError(
