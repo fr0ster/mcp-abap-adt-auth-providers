@@ -57,6 +57,20 @@ export type CredentialKind = Parameters<
   AuthErrorBuilders['credential-refused']
 >[0]['credential'];
 
+/** interfaces-auth 6.0.0's `ConfigurationError`: every `configuration` case. */
+export type ConfigurationError = Extract<
+  IAuthProviderError,
+  { kind: 'configuration' }
+>;
+
+/** interfaces-auth 6.0.0's `ConfigField`: a field a configuration error names. */
+export type ConfigField = ConfigurationError['facts']['fields'][number];
+
+/** interfaces-auth 6.0.0's `ClientCertificateProblem`. */
+export type ClientCertificateProblem = Parameters<
+  AuthErrorBuilders['client-certificate']
+>[0]['problem'];
+
 /** What a body may answer while modules move: a 5.x outcome, or a 4.x one. */
 export type AnyOutcome = AuthOutcome | LegacyAuthOutcome;
 

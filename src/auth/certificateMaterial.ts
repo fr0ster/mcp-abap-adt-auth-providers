@@ -1,11 +1,26 @@
 import { createHash, X509Certificate } from 'node:crypto';
 import { createSecureContext, TLSSocket } from 'node:tls';
+import { AuthProviderFailure, authError } from '@mcp-abap-adt/auth-errors';
 import type {
   AuthOutcome,
   ICertificateMaterial,
 } from '@mcp-abap-adt/interfaces-auth';
-import { CertificateMaterialError } from '../errors/CertificateMaterialError';
-import { OK, refusalFrom } from './refusal';
+import {
+  type ClientCertificateProblem,
+  toLegacyOutcome,
+} from './contractTransition';
+import { errorFor, OK } from './refusal';
+
+/**
+ * A4: certificate material that cannot be presented — `incomplete`,
+ * `unusable` or `expired` — as a `client-certificate` failure. Its words are
+ * fixed; nothing of the material, nor of an error a check threw, is kept.
+ */
+export function certificateFailure(
+  problem: ClientCertificateProblem,
+): AuthProviderFailure {
+  return new AuthProviderFailure(authError['client-certificate']({ problem }));
+}
 
 function isIncomplete(material: ICertificateMaterial): boolean {
   // A TLS context accepts {}, a certificate alone or a key alone, and the
@@ -16,46 +31,48 @@ function isIncomplete(material: ICertificateMaterial): boolean {
 /**
  * Proves certificate material whole, usable and current: complete first, then
  * a TLS context built from it, then its leaf certificate not past `notAfter`.
- * Throws a CertificateMaterialError (`incomplete` and `expired` say which) —
+ * Throws a `client-certificate` failure (A4) whose `problem` says which —
  * its words are fixed; an error's own text never reaches them.
  */
 export function assertCertificateMaterial(
   material: ICertificateMaterial,
 ): void {
-  if (isIncomplete(material)) throw new CertificateMaterialError(true);
+  if (isIncomplete(material)) throw certificateFailure('incomplete');
   try {
     createSecureContext(material);
   } catch {
-    throw new CertificateMaterialError(false);
+    throw certificateFailure('unusable');
   }
   assertNotExpired(certificateNotAfter(material));
 }
 
 /**
  * When the leaf certificate stops being valid: its `notAfter`, in epoch
- * milliseconds. Throws a CertificateMaterialError when no leaf can be read.
+ * milliseconds. Throws `client-certificate` `unusable` when no leaf can be
+ * read (`incomplete` for material without one).
  */
 export function certificateNotAfter(material: ICertificateMaterial): number {
-  if (isIncomplete(material)) throw new CertificateMaterialError(true);
+  if (isIncomplete(material)) throw certificateFailure('incomplete');
   let notAfter: number;
   try {
     notAfter = Date.parse(new X509Certificate(leafDer(material)).validTo);
   } catch {
-    throw new CertificateMaterialError(false);
+    throw certificateFailure('unusable');
   }
-  if (!Number.isFinite(notAfter)) throw new CertificateMaterialError(false);
+  if (!Number.isFinite(notAfter)) throw certificateFailure('unusable');
   return notAfter;
 }
 
-/** Throws the "has expired" CertificateMaterialError once `notAfter` is reached. */
+/** Throws `client-certificate` `expired` once `notAfter` is reached. */
 export function assertNotExpired(notAfter: number): void {
-  if (Date.now() >= notAfter) throw new CertificateMaterialError(false, true);
+  if (Date.now() >= notAfter) throw certificateFailure('expired');
 }
 
 /**
- * The same proof as an outcome (B14): `client-certificate` with the problem
- * the thrown CertificateMaterialError's flags say — chosen by the ladder in
- * `refusalFrom`, never from `e.words`, which a consumer's loader may forge.
+ * The same proof as an outcome (B14): the `client-certificate` error the
+ * check threw. Reading the material may run a consumer's getter, which may
+ * throw anything: the ladder reads this package's own class (until Task 27)
+ * by its flags, never its `words`; anything else is `unusable`.
  */
 export function checkCertificateMaterial(
   material: ICertificateMaterial,
@@ -63,12 +80,14 @@ export function checkCertificateMaterial(
   try {
     assertCertificateMaterial(material);
   } catch (e) {
-    return refusalFrom(
-      e instanceof CertificateMaterialError
-        ? e
-        : new CertificateMaterialError(false),
-      'loading the certificate',
-    );
+    const error = errorFor(e, { operation: 'loading-certificate' });
+    return toLegacyOutcome({
+      ok: false,
+      refusal:
+        error.kind === 'client-certificate'
+          ? error
+          : authError['client-certificate']({ problem: 'unusable' }),
+    });
   }
   return OK;
 }
@@ -78,15 +97,15 @@ export function checkCertificateMaterial(
  * leaf of a PEM chain is its first certificate. It expects material that
  * already passed `checkCertificateMaterial` and does not prove it usable (a
  * PEM whose key is not the certificate's still yields a thumbprint). It
- * throws a CertificateMaterialError when the material is incomplete or no
- * leaf certificate can be read from it.
+ * throws `client-certificate` `incomplete` or `unusable` when the material is
+ * incomplete or no leaf certificate can be read from it.
  */
 export function certificateThumbprint(material: ICertificateMaterial): string {
-  if (isIncomplete(material)) throw new CertificateMaterialError(true);
+  if (isIncomplete(material)) throw certificateFailure('incomplete');
   try {
     return createHash('sha256').update(leafDer(material)).digest('base64url');
   } catch {
-    throw new CertificateMaterialError(false);
+    throw certificateFailure('unusable');
   }
 }
 
@@ -97,12 +116,12 @@ function leafDer(material: ICertificateMaterial): Buffer {
     });
     try {
       const leaf = socket.getCertificate() as { raw?: Buffer } | null;
-      if (!leaf?.raw) throw new Error('no leaf');
+      if (!leaf?.raw) throw certificateFailure('unusable');
       return leaf.raw;
     } finally {
       socket.destroy();
     }
   }
-  if (!material.cert) throw new Error('no leaf');
+  if (!material.cert) throw certificateFailure('incomplete');
   return new X509Certificate(material.cert).raw;
 }

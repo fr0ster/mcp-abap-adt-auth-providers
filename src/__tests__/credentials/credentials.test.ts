@@ -8,8 +8,7 @@ import { CertificateAuthProvider } from '../../credentials/CertificateAuthProvid
 import { FileCertificateMaterialLoader } from '../../credentials/FileCertificateMaterialLoader';
 import { SamlAuthProvider } from '../../credentials/SamlAuthProvider';
 import { TokenAuthProvider } from '../../credentials/TokenAuthProvider';
-import { ValidationError } from '../../errors/TokenProviderErrors';
-import { wordsOf } from '../helpers/minted';
+import { configurationOf, thrownFrom, wordsOf } from '../helpers/minted';
 import { recordingTargets } from '../helpers/targets';
 
 const refusal = { at: 'request' as const, status: 401, error: {} };
@@ -167,22 +166,23 @@ describe('CertificateAuthProvider', () => {
     expect(t.logon.tls).toEqual([{ cert, key }]);
   });
 
-  it("a loader ValidationError answers the moment's fallback until Task 26; a foreign one gives its code only", async () => {
+  it("the loader's configuration failure is the refusal (E17); a foreign one gives its code only", async () => {
     const own = new CertificateAuthProvider(
-      {
-        load: async () => {
-          throw new ValidationError('SECRET-MSG', ['certPath', 'certPfxPath']);
-        },
-      },
-      config,
+      new FileCertificateMaterialLoader(),
+      { ...config, certPath: 'SECRET-PATH', certPfxPath: 'SECRET-PFX' },
     );
-    // TRANSITION (A11): a ValidationError carries no `case`, so its 5.4.2
-    // words stay unminted and guard answers its own fallback — until Task 26
-    // gives this throw its `configuration` case (E17/E18).
-    expect(wordsOf(await own.prepare())).toEqual({
+    // E17 (Task 26): the loader's configuration case, once a ValidationError
+    // answered with the moment's fallback.
+    const refused = await own.prepare();
+    expect(wordsOf(refused)).toEqual({
       ok: false,
-      refusal: { reason: 'loading the certificate failed (unknown error)' },
+      refusal: {
+        reason:
+          'certificate auth: provide either PEM (certPath + certKeyPath) or certPfxPath, not both',
+        hint: 'check the provider configuration',
+      },
     });
+    expect(JSON.stringify(refused)).not.toContain('SECRET');
     const fsError = Object.assign(
       new Error("ENOENT: no such file 'C:\\\\SECRET\\\\key.pem'"),
       { code: 'ENOENT' },
@@ -247,18 +247,27 @@ describe('CertificateAuthProvider.fromFiles', () => {
 });
 
 describe('FileCertificateMaterialLoader', () => {
-  it('configuration errors are ValidationError', async () => {
+  // E17, E18 (Task 26): configuration failures, no longer ValidationError.
+  it('configuration errors are configuration failures (E17, E18)', async () => {
     const loader = new FileCertificateMaterialLoader();
-    await expect(
-      loader.load({
-        url: 'h',
-        authType: 'certificate',
-        certPath: 'a',
-        certPfxPath: 'b',
-      } as ISapConfig),
-    ).rejects.toBeInstanceOf(ValidationError);
-    await expect(
-      loader.load({ url: 'h', authType: 'certificate' } as ISapConfig),
-    ).rejects.toBeInstanceOf(ValidationError);
+    expect(
+      configurationOf(
+        await thrownFrom(() =>
+          loader.load({
+            url: 'h',
+            authType: 'certificate',
+            certPath: 'a',
+            certPfxPath: 'b',
+          } as ISapConfig),
+        ),
+      ).case,
+    ).toBe('certificate-pem-and-pfx');
+    expect(
+      configurationOf(
+        await thrownFrom(() =>
+          loader.load({ url: 'h', authType: 'certificate' } as ISapConfig),
+        ),
+      ).case,
+    ).toBe('certificate-files-missing');
   });
 });

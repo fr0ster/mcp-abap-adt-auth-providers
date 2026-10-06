@@ -11,6 +11,7 @@ import { X509Certificate } from 'node:crypto';
 import { authError } from '@mcp-abap-adt/auth-errors';
 import type { Document, Element } from '@xmldom/xmldom';
 import { SignedXml } from 'xml-crypto';
+import { misconfigured } from '../auth/configuration';
 import { refuse, several } from './samlRefusal';
 
 const DSIG_NS = 'http://www.w3.org/2000/09/xmldsig#';
@@ -36,31 +37,35 @@ const DSIG_NS = 'http://www.w3.org/2000/09/xmldsig#';
  * `asn1 encoding routines::wrong tag` — measured, not assumed. Called once per
  * certificate at construction, so the cost never falls on a login.
  */
+/**
+ * E26: a configured certificate that is neither PEM nor base64 DER, or not a
+ * certificate — both sentences of 5.4.2 are one case.
+ */
+function idpCertificateInvalid() {
+  return misconfigured(
+    authError.configuration({
+      case: 'idp-certificate-invalid',
+      fields: ['idpCertificates'],
+    }),
+  );
+}
+
 export function toPem(certificate: string): string {
   const trimmed = certificate.trim();
   const pem = trimmed.includes('-----BEGIN')
     ? trimmed
     : (() => {
         const body = withoutWhitespace(trimmed);
-        if (!isBase64(body)) {
-          throw new Error(
-            'a configured certificate is neither PEM nor base64 DER',
-          );
-        }
+        if (!isBase64(body)) throw idpCertificateInvalid();
         return `-----BEGIN CERTIFICATE-----\n${linesOf64(body)}\n-----END CERTIFICATE-----\n`;
       })();
 
   try {
     new X509Certificate(pem);
-  } catch (error) {
+  } catch {
     // Fixed words: OpenSSL's text is not this package's to repeat, and
-    // whoever catches this logs the message. The original is the cause.
-    throw new Error(
-      'a configured certificate is not a valid X.509 certificate',
-      {
-        cause: error,
-      },
-    );
+    // whoever catches this logs the message; the original is dropped (L2).
+    throw idpCertificateInvalid();
   }
   return pem;
 }

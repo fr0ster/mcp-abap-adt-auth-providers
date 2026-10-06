@@ -36,7 +36,6 @@ import { withOidcCallbackServer } from '../auth/oidcBrowserAuth';
 import { withSamlCallbackServer } from '../auth/saml2Auth';
 import { signalOf } from '../auth/signalledRequest';
 import { logQuietly } from '../auth/tokenRequest';
-import { TokenProviderError } from '../errors/TokenProviderErrors';
 
 /**
  * Above Linux's `ip_local_port_range` (32768–60999), so an outbound connection
@@ -226,9 +225,9 @@ export class BrowserCallbackStrategy<TResult>
       return await run;
     } catch (error) {
       // Everything that ends a browser login here is an `interactive-login`
-      // failure (K1–K5, K8, K10, K11). An error that already has a type (a
-      // ValidationError from building the URL) is not one of these.
-      if (error instanceof TokenProviderError) throw error;
+      // failure (K1–K5, K8, K10, K11) — or a failure already built, relayed
+      // as it is below (a configuration error from building the URL, E7,
+      // E8, E12).
       if (controller.signal.aborted) {
         // Disposal ended it (K2); else the consumer's or the attempt's abort
         // (K4) — the callback server's own failure keeps its tally.

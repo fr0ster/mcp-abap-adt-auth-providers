@@ -34,6 +34,7 @@ import {
   type Node,
   XMLSerializer,
 } from '@xmldom/xmldom';
+import { misconfigured } from '../auth/configuration';
 import { asContract } from '../auth/contractShape';
 import type { SamlAssertionError } from '../auth/contractTransition';
 import { parseStrictXml } from '../auth/strictXml';
@@ -145,13 +146,21 @@ function createValidator(
 ): IAssertionValidator {
   const skew = options.clockSkewMs ?? 0;
   if (!Number.isInteger(skew) || skew < 0) {
-    throw new Error(
-      `clockSkewMs must be a finite non-negative integer, got ${String(options.clockSkewMs)}`,
+    // E24: the value given is not echoed (L5).
+    throw misconfigured(
+      authError.configuration({
+        case: 'validator-clock-skew-invalid',
+        fields: ['clockSkewMs'],
+      }),
     );
   }
   if (options.idpCertificates.length === 0) {
-    throw new Error(
-      'idpCertificates must not be empty: nothing could be verified',
+    // E25.
+    throw misconfigured(
+      authError.configuration({
+        case: 'validator-no-certificates',
+        fields: ['idpCertificates'],
+      }),
     );
   }
   // Normalised and proved here, once, rather than inside verification. Three

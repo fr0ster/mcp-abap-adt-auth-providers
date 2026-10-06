@@ -1,5 +1,9 @@
 import { expect } from '@jest/globals';
-import { isMinted } from '@mcp-abap-adt/auth-errors';
+import {
+  isAuthProviderFailure,
+  isMinted,
+  readFailure,
+} from '@mcp-abap-adt/auth-errors';
 import type { AuthOutcome, IAuthRefusal } from '@mcp-abap-adt/interfaces-auth';
 import type { IAuthProviderError } from '../../auth/contractTransition';
 
@@ -54,4 +58,37 @@ export function wordsOf(
     ok: false,
     refusal: hint === undefined ? { reason } : { reason, hint },
   };
+}
+
+/**
+ * A thrown configuration failure (spec A.5) as its case and fields, else the
+ * test fails: an `AuthProviderFailure` holding a minted `configuration`
+ * error.
+ */
+export function configurationOf(thrown: unknown): {
+  readonly case: string;
+  readonly fields: readonly string[];
+  readonly reason: string;
+} {
+  expect(isAuthProviderFailure(thrown)).toBe(true);
+  const error = readFailure(thrown, 'unfamiliar-error');
+  expect(isMinted(error)).toBe(true);
+  if (error.kind !== 'configuration') {
+    throw new Error(`expected a configuration error, got ${error.kind}`);
+  }
+  return {
+    case: error.facts.case,
+    fields: error.facts.fields,
+    reason: error.reason,
+  };
+}
+
+/** What `run` throws, synchronously or as a rejection; fails when nothing. */
+export async function thrownFrom(run: () => unknown): Promise<unknown> {
+  try {
+    await run();
+  } catch (error) {
+    return error;
+  }
+  throw new Error('expected a throw');
 }

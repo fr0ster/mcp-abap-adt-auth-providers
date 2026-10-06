@@ -7,6 +7,7 @@ import { logFields, readFailure } from '@mcp-abap-adt/auth-errors';
 import type { IAuthorizationConfig } from '@mcp-abap-adt/interfaces-auth-sap';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
 import axios from 'axios';
+import { requiredFieldsMissing } from './configuration';
 import {
   attemptSite,
   legacyBasic,
@@ -112,7 +113,11 @@ export function getJwtAuthorizationUrl(
   const clientid = authConfig.uaaClientId;
 
   if (!oauthUrl || !clientid) {
-    throw new Error('Authorization config missing UAA URL or client ID');
+    // E22: the names of what is missing.
+    throw requiredFieldsMissing([
+      ...(oauthUrl ? [] : ['uaaUrl']),
+      ...(clientid ? [] : ['clientId']),
+    ]);
   }
 
   return `${oauthUrl}/oauth/authorize?client_id=${encodeURIComponent(clientid)}&redirect_uri=${encodeURIComponent(redirectUri)}&response_type=code`;

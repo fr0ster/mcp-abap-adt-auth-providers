@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from '@jest/globals';
+import { isAuthProviderFailure, readFailure } from '@mcp-abap-adt/auth-errors';
 import {
   assertCertificateMaterial,
   certificateThumbprint,
@@ -94,14 +95,15 @@ describe('an expired client certificate', () => {
     ).toEqual(EXPIRED);
   });
 
-  it('throws an allowlisted class, read by refusalFrom into the same words', () => {
+  it('throws a client-certificate failure, read by refusalFrom into the same words (A4)', () => {
     const e = thrown(() =>
       assertCertificateMaterial({
         cert: read('expired.crt'),
         key: read('client.key'),
       }),
     );
-    expect(e).toBeInstanceOf(CertificateMaterialError);
+    // A4 (Task 26): a client-certificate failure, no longer the class.
+    expect(isAuthProviderFailure(e)).toBe(true);
     expect(wordsOf(refusalFrom(e, 'x'))).toEqual(EXPIRED);
   });
 
@@ -147,9 +149,10 @@ describe('certificateThumbprint', () => {
     ).toBe(FIXTURE_THUMBPRINT);
   });
 
-  it('throws an allowlisted class for incomplete material, with its words', () => {
+  it('throws a client-certificate failure for incomplete material, with its words (A4)', () => {
     const e = thrown(() => certificateThumbprint({ cert: read('client.crt') }));
-    expect(e).toBeInstanceOf(CertificateMaterialError);
+    // A4 (Task 26): a client-certificate failure, no longer the class.
+    expect(isAuthProviderFailure(e)).toBe(true);
     expect(wordsOf(refusalFrom(e, 'x'))).toEqual({
       ok: false,
       refusal: {
@@ -159,14 +162,15 @@ describe('certificateThumbprint', () => {
     });
   });
 
-  it('throws an allowlisted class for unusable material, nothing of it in the refusal', () => {
+  it('throws a client-certificate failure for unusable material, nothing of it in the refusal (A4)', () => {
     const e = thrown(() =>
       certificateThumbprint({
         pfx: read('client.pfx'),
         passphrase: 'sEcReT-wrong',
       }),
     );
-    expect(e).toBeInstanceOf(CertificateMaterialError);
+    // A4 (Task 26): a client-certificate failure, no longer the class.
+    expect(isAuthProviderFailure(e)).toBe(true);
     const out = refusalFrom(e, 'x');
     expect(wordsOf(out)).toEqual({
       ok: false,
@@ -182,7 +186,11 @@ describe('certificateThumbprint', () => {
         key: read('client.key'),
       }),
     );
-    expect(garbage).toBeInstanceOf(CertificateMaterialError);
+    // A4 (Task 26): a client-certificate failure, no longer the class.
+    expect(readFailure(garbage, 'unfamiliar-error')).toMatchObject({
+      kind: 'client-certificate',
+      facts: { problem: 'unusable' },
+    });
   });
 });
 

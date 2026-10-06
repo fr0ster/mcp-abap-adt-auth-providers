@@ -33,6 +33,7 @@ describe('README refusal tables', () => {
       'the credential was accepted, but the user is not authorized (403)',
     ],
     ['refusals', '| the client certificate has expired |'],
+    ['configuration', '| staticCodeStrategy requires a payload |'],
   ])('a hand-edited row of the %s table fails the check', (_table, words) => {
     const dir = mkdtempSync(join(tmpdir(), 'refusal-tables-'));
     try {

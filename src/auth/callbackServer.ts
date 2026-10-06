@@ -16,6 +16,7 @@
 
 import * as http from 'node:http';
 import type { AddressInfo, Socket } from 'node:net';
+import { authError } from '@mcp-abap-adt/auth-errors';
 import type {
   CallbackServerFactory,
   ICallbackServerHandle,
@@ -23,7 +24,7 @@ import type {
 } from '@mcp-abap-adt/interfaces-auth';
 import express from 'express';
 import { extractCode } from './browserAuth';
-import { CallbackScopeError } from './callbackScopeError';
+import { misconfigured } from './configuration';
 import {
   abortedLogin,
   failedLogin,
@@ -57,7 +58,7 @@ export type RouteSetup<TResult> = (
   settle: Settle<TResult>,
 ) => void;
 
-/** K6 — converted to `configuration` `callback-port-invalid` in Task 26. */
+/** K6: a port no socket can bind — the value given is not echoed (L5). */
 function validatePort(port: unknown): void {
   if (
     typeof port !== 'number' ||
@@ -65,8 +66,11 @@ function validatePort(port: unknown): void {
     port < 0 ||
     port > 65535
   ) {
-    throw new CallbackScopeError(
-      `Invalid callback server port: ${String(port)}. Must be an integer in 0..65535.`,
+    throw misconfigured(
+      authError.configuration({
+        case: 'callback-port-invalid',
+        fields: ['port'],
+      }),
     );
   }
 }

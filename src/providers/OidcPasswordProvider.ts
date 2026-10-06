@@ -10,6 +10,7 @@ import type {
 import { AUTH_TYPE_PASSWORD } from '@mcp-abap-adt/interfaces-auth';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
 import { throwIfAborted } from '../auth/attempt';
+import { oidcEndpointMissing, oidcIssuerRequired } from '../auth/configuration';
 import { asContract } from '../auth/contractShape';
 import { discoverOidc, mtlsAlias } from '../auth/oidcDiscovery';
 import { passwordGrant, refreshOidcToken } from '../auth/oidcToken';
@@ -63,13 +64,13 @@ export class OidcPasswordProvider extends BaseTokenProvider {
 
   protected async performLogin(attempt: AttemptContext): Promise<ITokenResult> {
     if (!this.config.tokenEndpoint && !this.config.issuerUrl) {
-      throw new Error('OIDC issuerUrl is required when discovery is used');
+      throw oidcIssuerRequired();
     }
     let discovery: Awaited<ReturnType<typeof discoverOidc>> | null = null;
     // A token endpoint not given ('' included) comes from discovery.
     if (!this.config.tokenEndpoint) {
       if (!this.config.issuerUrl) {
-        throw new Error('OIDC issuerUrl is required when discovery is used');
+        throw oidcIssuerRequired();
       }
       discovery = await discoverOidc(
         this.config.issuerUrl,
@@ -80,9 +81,7 @@ export class OidcPasswordProvider extends BaseTokenProvider {
     const tokenEndpoint =
       this.config.tokenEndpoint || discovery?.token_endpoint;
     if (!tokenEndpoint) {
-      throw new Error(
-        'OIDC token endpoint is required (tokenEndpoint or discovery)',
-      );
+      throw oidcEndpointMissing('tokenEndpoint');
     }
     const scope = this.config.scopes?.join(' ');
     const tokens = await passwordGrant(
@@ -119,13 +118,13 @@ export class OidcPasswordProvider extends BaseTokenProvider {
     }
 
     if (!this.config.tokenEndpoint && !this.config.issuerUrl) {
-      throw new Error('OIDC issuerUrl is required when discovery is used');
+      throw oidcIssuerRequired();
     }
     let discovery: Awaited<ReturnType<typeof discoverOidc>> | null = null;
     // As at login: a token endpoint not given ('' included) is discovered.
     if (!this.config.tokenEndpoint) {
       if (!this.config.issuerUrl) {
-        throw new Error('OIDC issuerUrl is required when discovery is used');
+        throw oidcIssuerRequired();
       }
       discovery = await discoverOidc(
         this.config.issuerUrl,
@@ -136,9 +135,7 @@ export class OidcPasswordProvider extends BaseTokenProvider {
     const tokenEndpoint =
       this.config.tokenEndpoint || discovery?.token_endpoint;
     if (!tokenEndpoint) {
-      throw new Error(
-        'OIDC token endpoint is required (tokenEndpoint or discovery)',
-      );
+      throw oidcEndpointMissing('tokenEndpoint');
     }
     // Nothing is sent once the attempt is aborted; once sent, the refresh
     // runs on (spec §6b).

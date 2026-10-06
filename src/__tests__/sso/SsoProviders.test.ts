@@ -1,5 +1,9 @@
 import { inflateRawSync } from 'node:zlib';
-import { AuthProviderFailure, authError } from '@mcp-abap-adt/auth-errors';
+import {
+  AuthProviderFailure,
+  authError,
+  readFailure,
+} from '@mcp-abap-adt/auth-errors';
 import { generateKeyMaterial, signXml } from '@mcp-abap-adt/auth-mocks';
 import type {
   IAssertionValidator,
@@ -53,6 +57,7 @@ import {
   createSignedResponseValidator,
 } from '../../validation/assertionValidator';
 import { createInMemoryReplayStore } from '../../validation/inMemoryReplayStore';
+import { configurationOf } from '../helpers/minted';
 import { expectSamlRejection, rejectionOf } from '../helpers/samlRefusal';
 
 jest.mock('../../auth/oidcDiscovery', () => ({
@@ -150,15 +155,12 @@ function mintedIdFrom(authorizationUrl: string): string {
   return match[1]!;
 }
 
-/** Whatever `factory` throws, so its `message` and `missingFields` can be asserted on. */
-function constructionError(factory: () => unknown): {
-  message: string;
-  missingFields?: string[];
-} {
+/** Whatever `factory` throws, so it can be asserted on. */
+function constructionError(factory: () => unknown): unknown {
   try {
     factory();
   } catch (error) {
-    return error as { message: string; missingFields?: string[] };
+    return error;
   }
   throw new Error('expected construction to throw, but it did not');
 }
@@ -841,9 +843,12 @@ describe('SSO Providers', () => {
       ),
     });
 
-    await expect(provider.getTokens()).rejects.toThrow(
-      'OIDC authorization endpoint is required',
-    );
+    // E14 (Task 26): a configuration failure naming the endpoint.
+    const thrown = await provider.getTokens().catch((error: unknown) => error);
+    expect(configurationOf(thrown)).toMatchObject({
+      case: 'oidc-endpoint-missing',
+      fields: ['authorizationEndpoint'],
+    });
   });
 
   /**
@@ -1114,9 +1119,16 @@ describe('SSO Providers', () => {
       // Never reached: the ACS mismatch is thrown before validate() would run.
       assertionValidator: acceptingSamlValidator(),
     });
-    await expect(provider.getTokens()).rejects.toThrow(
-      /acsUrl is http:\/\/localhost:61001\/callback, but the authorization strategy used/i,
-    );
+    // E8 (Task 26): the two addresses are diagnostics, not words (L9).
+    const thrown = await provider.getTokens().catch((error: unknown) => error);
+    expect(configurationOf(thrown)).toMatchObject({
+      case: 'saml-acs-mismatch',
+      fields: ['acsUrl'],
+    });
+    expect(readFailure(thrown, 'unfamiliar-error').diagnostics).toEqual({
+      configuredUri: 'http://localhost:61001/callback',
+      strategyUri: 'http://localhost:5555/callback',
+    });
   });
 
   it('Saml2BearerProvider rejects a pre-built URL without a declared acsUrl', () => {
@@ -1147,9 +1159,16 @@ describe('SSO Providers', () => {
       // Never reached: the ACS mismatch is thrown before validate() would run.
       assertionValidator: acceptingSamlValidator(),
     });
-    await expect(provider.getTokens()).rejects.toThrow(
-      /acsUrl is https:\/\/sp\.example\/acs, but the authorization strategy is listening on http:\/\/localhost:61001\/callback/i,
-    );
+    // E8 (Task 26): refused inside the builder; the addresses as diagnostics.
+    const thrown = await provider.getTokens().catch((error: unknown) => error);
+    expect(configurationOf(thrown)).toMatchObject({
+      case: 'saml-acs-mismatch',
+      fields: ['acsUrl'],
+    });
+    expect(readFailure(thrown, 'unfamiliar-error').diagnostics).toEqual({
+      configuredUri: 'https://sp.example/acs',
+      strategyUri: 'http://localhost:61001/callback',
+    });
   });
 
   it('SsoProviderFactory should create configured providers', () => {
@@ -1860,26 +1879,32 @@ describe('Saml2 provider construction faults', () => {
     },
   );
 
-  it('Saml2PureProvider refuses construction when idpEntityId is missing', () => {
+  // E5 (Task 26): a configuration failure naming idpEntityId.
+  it('Saml2PureProvider refuses construction when idpEntityId is missing (E5)', () => {
     const error = constructionError(() =>
       Saml2PureProvider.inBrowser(
         { ...validPureConfig, idpEntityId: undefined },
         { idpCertificates: [CERT] },
       ),
     );
-    expect(error.message).toMatch(/idpEntityId/);
-    expect(error.missingFields).toContain('idpEntityId');
+    expect(configurationOf(error)).toMatchObject({
+      case: 'saml-shipped-validator-without-issuer',
+      fields: ['idpEntityId'],
+    });
   });
 
-  it('Saml2BearerProvider refuses construction when idpEntityId is missing', () => {
+  // E5 (Task 26): a configuration failure naming idpEntityId.
+  it('Saml2BearerProvider refuses construction when idpEntityId is missing (E5)', () => {
     const error = constructionError(() =>
       Saml2BearerProvider.inBrowser(
         { ...validBearerConfig, idpEntityId: undefined },
         { idpCertificates: [CERT] },
       ),
     );
-    expect(error.message).toMatch(/idpEntityId/);
-    expect(error.missingFields).toContain('idpEntityId');
+    expect(configurationOf(error)).toMatchObject({
+      case: 'saml-shipped-validator-without-issuer',
+      fields: ['idpEntityId'],
+    });
   });
 
   // Previously a provider-level check naming the field in `missingFields`

@@ -2,10 +2,10 @@
  * SAML 2.0 bearer assertion exchange
  */
 
-import { logFields, readFailure } from '@mcp-abap-adt/auth-errors';
+import { authError, logFields, readFailure } from '@mcp-abap-adt/auth-errors';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
 import axios, { type AxiosResponse } from 'axios';
-import { ValidationError } from '../errors/TokenProviderErrors';
+import { misconfigured } from './configuration';
 import type { Operation } from './contractTransition';
 import {
   attemptSite,
@@ -53,9 +53,12 @@ async function prepareWith(
   grant: URLSearchParams,
 ): Promise<PreparedTokenRequest> {
   if (!clientId) {
-    throw new ValidationError(
-      'clientId is required with a client authentication',
-      ['clientId'],
+    // E11: nothing is sent.
+    throw misconfigured(
+      authError.configuration({
+        case: 'client-id-required-with-client-authentication',
+        fields: ['clientId'],
+      }),
     );
   }
   return prepareTokenRequest(

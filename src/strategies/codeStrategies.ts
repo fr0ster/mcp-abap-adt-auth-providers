@@ -6,12 +6,14 @@
  * discovery that a static payload never required.
  */
 
+import { authError } from '@mcp-abap-adt/auth-errors';
 import type {
   AuthorizationOutcome,
   AuthorizationRequest,
   IAuthorizationStrategy,
 } from '@mcp-abap-adt/interfaces-auth';
 import { throwIfAborted, untilAborted } from '../auth/attempt';
+import { misconfigured } from '../auth/configuration';
 import { loginFailure } from '../auth/interactiveLogin';
 import { signalOf } from '../auth/signalledRequest';
 import { DEFAULT_CALLBACK_PORT } from './BrowserCallbackStrategy';
@@ -78,7 +80,13 @@ export function staticCodeStrategy(
 ): IAuthorizationStrategy<string> {
   const redirectUri = options.redirectUri ?? defaultRedirectUri();
   if (!options.payload) {
-    throw new Error('staticCodeStrategy requires a payload');
+    // E27.
+    throw misconfigured(
+      authError.configuration({
+        case: 'static-code-without-payload',
+        fields: ['payload'],
+      }),
+    );
   }
   return {
     async authorize(): Promise<AuthorizationOutcome<string>> {

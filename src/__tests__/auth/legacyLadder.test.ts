@@ -2,11 +2,11 @@
  * TRANSITION TEST — removed in Task 27 with the class ladder (Decision D6).
  *
  * `refusalFrom`'s ladder: each of this package's 13 error classes (A.1) →
- * its builder per Appendix A. Two rows cannot be built from what their
- * class carries, so they keep their 5.4.2 words, unminted, until their
- * producers move: A11 (`ValidationError` carries `missingFields` but no
- * `case` — Task 26) and A12 (`ServiceKeyError` / `SessionDataError`: no
- * kind; no producer in this package — Task 27). A3's producers moved in
+ * its builder per Appendix A. One row cannot be built from what its class
+ * carries, so it keeps its 5.4.2 words, unminted: A12 (`ServiceKeyError` /
+ * `SessionDataError`: no kind; no producer in this package — Task 27).
+ * A11's producers moved in Task 26: a `ValidationError`, constructed by no
+ * site, answers `required-fields-missing` with its names. A3's producers moved in
  * Task 24: every SAML site throws its minted `saml-assertion` rule, and
  * `AssertionValidationError` — constructed by no site, carrying a `check`
  * but no `rule` — is any other own class (A13).
@@ -184,19 +184,22 @@ describe('legacy ladder: each class of this package → its kind', () => {
     }
   });
 
-  it('ValidationError keeps its 5.4.2 words, unminted, until Task 26 (A11)', () => {
+  it('ValidationError → configuration required-fields-missing, its known names (A11, Task 26)', () => {
     const outcome = refusalFrom(
       new ValidationError(MARKER, ['clientId', MARKER]),
       WHAT,
     );
     expect(outcome).toEqual({
       ok: false,
-      refusal: {
-        reason: 'the provider configuration is incomplete or invalid: clientId',
+      refusal: expect.objectContaining({
+        kind: 'configuration',
+        facts: { case: 'required-fields-missing', fields: ['clientId'] },
+        reason: 'required configuration is missing: clientId',
         hint: 'check the provider configuration',
-      },
+      }),
     });
-    expect(!outcome.ok && isMinted(outcome.refusal)).toBe(false);
+    expect(!outcome.ok && isMinted(outcome.refusal)).toBe(true);
+    expect(JSON.stringify(outcome)).not.toContain(MARKER);
   });
 
   it.each([

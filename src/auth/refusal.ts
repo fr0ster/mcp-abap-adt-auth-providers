@@ -42,6 +42,7 @@ import {
 } from '../errors/TokenProviderErrors';
 import { AuthorizationRefusedError } from './callbackScopeError';
 import {
+  type ConfigField,
   type IAuthProviderError,
   type OAuth2GrantType,
   type Operation,
@@ -120,15 +121,21 @@ const MAX_FIELDS_READ = 64;
  * kept, and at most MAX_FIELDS_READ elements are read — a Proxy array may
  * claim any length.
  */
-function knownFields(missing: unknown): string {
-  if (!Array.isArray(missing)) return '';
+function configFields(missing: unknown): ConfigField[] {
+  if (!Array.isArray(missing)) return [];
   const length = readSafely(missing, 'length');
-  if (typeof length !== 'number' || !Number.isInteger(length)) return '';
-  const names: string[] = [];
+  if (typeof length !== 'number' || !Number.isInteger(length)) return [];
+  const names: ConfigField[] = [];
   for (let i = 0; i < Math.min(length, MAX_FIELDS_READ); i++) {
     const name = readSafely(missing, String(i));
     if (isConfigField(name) && !names.includes(name)) names.push(name);
   }
+  return names;
+}
+
+/** `configFields` as 5.4.2's words appended them: `: a, b`, or nothing. */
+function knownFields(missing: unknown): string {
+  const names = configFields(missing);
   return names.length ? `: ${names.join(', ')}` : '';
 }
 
@@ -185,7 +192,7 @@ export function refusalFor(error: unknown, of: OperationOf): AuthOutcome {
  * "Where the throw is built"): the ladder first — this package's classes,
  * which auth-errors' `classify` does not know — then `classify`. A carrier of
  * a minted error (an `AuthProviderFailure`) answers that very error. A rung
- * still answering 5.4.2's unminted words (A3, A11, A12) is `unknown` with the
+ * still answering 5.4.2's unminted words (A12) is `unknown` with the
  * operation, as through a provider moment (TRANSITION, Task 27: `classify`
  * alone). Total.
  */
@@ -196,22 +203,17 @@ export function errorFor(error: unknown, of: OperationOf): IAuthProviderError {
 }
 
 /**
- * TRANSITION (removed as their producers move: A11 in Task 26, A12 with the
- * classes in Task 27; A3 went in Task 24, when every SAML site began to throw
- * its `saml-assertion` rule): the rungs whose ladder answer is still 5.4.2's
- * unminted words — `ValidationError`, `ServiceKeyError`, `SessionDataError`.
- * Their messages are this package's own fixed words (no consumer text), and
- * the error a site will throw for them needs facts their throw sites do not
- * carry yet (`case`), so `getTokens()` / `refreshTokens()` let them through
- * as they are until then; every other value is an `AuthProviderFailure`
- * (spec §6, L3). Total.
+ * TRANSITION (removed with the classes in Task 27): the rungs whose ladder
+ * answer is still 5.4.2's unminted words — `ServiceKeyError` and
+ * `SessionDataError` (A12, no producer in this package). `getTokens()` /
+ * `refreshTokens()` let them through as they are until then; every other
+ * value is an `AuthProviderFailure` (spec §6, L3). A `ValidationError` is
+ * not one since Task 26: it answers `configuration` (A11). Total.
  */
 export function isUnmintedRung(error: unknown): boolean {
   try {
     return (
-      error instanceof ValidationError ||
-      error instanceof ServiceKeyError ||
-      error instanceof SessionDataError
+      error instanceof ServiceKeyError || error instanceof SessionDataError
     );
   } catch {
     return false;
@@ -246,8 +248,9 @@ export function isLadderClass(error: unknown): boolean {
 
 /**
  * Each class of this package, most specific first, to its builder (A.1); the
- * rest to `classify`. A11 and A12 keep their 5.4.2 words unminted: their
- * class carries no `case`, and A12 has no kind (removed in Task 27). A3's
+ * rest to `classify`. A12 keeps its 5.4.2 words unminted: it has no kind
+ * (removed in Task 27). A11's class answers `required-fields-missing` with
+ * the names it carries (no site constructs it since Task 26). A3's
  * class is constructed by no site since Task 24 — every SAML refusal is a
  * minted `saml-assertion` error with its rule — and an instance a consumer
  * builds carries a `check` but no rule, so it is any other own class: A13's
@@ -301,10 +304,16 @@ function ladder(error: unknown, of: OperationOf): AuthOutcome {
     );
   }
   if (error instanceof ValidationError) {
-    return oops(
-      `the provider configuration is incomplete or invalid${knownFields(readSafely(error, 'missingFields'))}`,
-      'check the provider configuration',
-    );
+    // A11: constructed by no site since Task 26 (each configuration throw is
+    // a minted `configuration` error with its case); an instance a consumer
+    // builds carries no case, only names — the missing fields it may name,
+    // each on the allowlist.
+    // Built apart: a union as the contextual type widens the case (One<C>).
+    const configuration = authError.configuration({
+      case: 'required-fields-missing',
+      fields: configFields(readSafely(error, 'missingFields')),
+    });
+    return refused(configuration);
   }
   if (error instanceof ServiceKeyError || error instanceof SessionDataError) {
     return oops(

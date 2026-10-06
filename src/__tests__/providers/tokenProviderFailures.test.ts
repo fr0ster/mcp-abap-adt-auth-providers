@@ -929,18 +929,24 @@ describe('rule 8 on kinds: the remembered refusal', () => {
   });
 });
 
-describe('TRANSITION (Tasks 26, 27): the rungs still answering unminted words pass as they are', () => {
-  it.each([
-    [
-      'ValidationError (A11, Task 26)',
-      () => new ValidationError('clientId is required', ['clientId']),
-    ],
-  ])('%s', async (_name, build) => {
-    const original = build();
+describe('TRANSITION (Task 27): the classes no site constructs any more are classified', () => {
+  // Task 26 ended A11's pass-through: every configuration throw is a minted
+  // `configuration` error with its case, and a ValidationError a consumer
+  // throws answers `required-fields-missing` with its known names (A11).
+  it('ValidationError no longer passes through: configuration, wrapped (A11, Task 26)', async () => {
+    const original = new ValidationError(MARKER, ['clientId', MARKER]);
     const p = new TestProvider();
     p.login.mockRejectedValue(original);
-    await expect(p.getTokens()).rejects.toBe(original);
-    await expect(p.refreshTokens()).rejects.toBe(original);
+    for (const thrown of [
+      await rejectionOf(p.getTokens()),
+      await rejectionOf(p.refreshTokens()),
+    ]) {
+      expectFailure(thrown, original);
+      expect((thrown as AuthProviderFailure).error).toMatchObject({
+        kind: 'configuration',
+        facts: { case: 'required-fields-missing', fields: ['clientId'] },
+      });
+    }
   });
 
   // Task 24 ended A3's pass-through: every SAML site throws its minted

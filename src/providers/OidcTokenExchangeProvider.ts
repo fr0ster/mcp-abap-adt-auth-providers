@@ -9,6 +9,7 @@ import type {
 } from '@mcp-abap-adt/interfaces-auth';
 import { AUTH_TYPE_USER_TOKEN } from '@mcp-abap-adt/interfaces-auth';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
+import { oidcEndpointMissing, oidcIssuerRequired } from '../auth/configuration';
 import { asContract } from '../auth/contractShape';
 import { discoverOidc, mtlsAlias } from '../auth/oidcDiscovery';
 import { tokenExchange } from '../auth/oidcToken';
@@ -65,13 +66,13 @@ export class OidcTokenExchangeProvider extends BaseTokenProvider {
 
   protected async performLogin(attempt: AttemptContext): Promise<ITokenResult> {
     if (!this.config.tokenEndpoint && !this.config.issuerUrl) {
-      throw new Error('OIDC issuerUrl is required when discovery is used');
+      throw oidcIssuerRequired();
     }
     let discovery: Awaited<ReturnType<typeof discoverOidc>> | null = null;
     // A token endpoint not given ('' included) comes from discovery.
     if (!this.config.tokenEndpoint) {
       if (!this.config.issuerUrl) {
-        throw new Error('OIDC issuerUrl is required when discovery is used');
+        throw oidcIssuerRequired();
       }
       discovery = await discoverOidc(
         this.config.issuerUrl,
@@ -82,9 +83,7 @@ export class OidcTokenExchangeProvider extends BaseTokenProvider {
     const tokenEndpoint =
       this.config.tokenEndpoint || discovery?.token_endpoint;
     if (!tokenEndpoint) {
-      throw new Error(
-        'OIDC token endpoint is required (tokenEndpoint or discovery)',
-      );
+      throw oidcEndpointMissing('tokenEndpoint');
     }
     const tokens = await tokenExchange(
       tokenEndpoint,

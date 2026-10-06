@@ -1,4 +1,6 @@
+import { authError } from '@mcp-abap-adt/auth-errors';
 import type { IRefreshableTokenProvider } from '@mcp-abap-adt/interfaces-auth';
+import { misconfigured } from '../auth/configuration';
 import { OidcBrowserProvider } from '../providers/OidcBrowserProvider';
 import { OidcDeviceFlowProvider } from '../providers/OidcDeviceFlowProvider';
 import { OidcPasswordProvider } from '../providers/OidcPasswordProvider';
@@ -38,9 +40,10 @@ export class SsoProviderFactory {
       }
     }
 
-    // Fixed words: the config holds the client secret, a password, tokens.
-    throw new Error(
-      'Unsupported SSO provider config: no provider for this protocol and flow',
+    // E23. Fixed words: the config holds the client secret, a password,
+    // tokens — and neither protocol nor flow is echoed.
+    throw misconfigured(
+      authError.configuration({ case: 'unsupported-sso-flow', fields: [] }),
     );
   }
 }

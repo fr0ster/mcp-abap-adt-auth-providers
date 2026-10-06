@@ -3,8 +3,8 @@
  * - none of `CallbackScopeError`, `AuthorizationRefusedError`,
  *   `BrowserAuthError`, `DeviceCodePresentationError` is constructed in
  *   `src` — every end of a login is an `AuthProviderFailure`; the classes
- *   stay, unconstructed, for the refusal ladder until Task 27. The one
- *   exception is K6 (the callback port validation), Task 26's row;
+ *   stay, unconstructed, for the refusal ladder until Task 27 (K6, the
+ *   callback port validation, became `configuration` in Task 26);
  * - no timer bounds a login: `runCallbackScope`'s module reads no
  *   `timeoutMs` (the 4.x field, Decision D6) and calls no `setTimeout`, and
  *   no strategy module calls one either.
@@ -38,22 +38,15 @@ function constructions(className: string): string[] {
 }
 
 describe('the four interactive classes are constructed nowhere in src', () => {
+  // K6 (Task 26): the port validation, the last CallbackScopeError, is a
+  // `configuration` failure now.
   it.each([
     'AuthorizationRefusedError',
     'BrowserAuthError',
+    'CallbackScopeError',
     'DeviceCodePresentationError',
   ])('%s', (className) => {
     expect(constructions(className)).toEqual([]);
-  });
-
-  it('CallbackScopeError — only K6, the port validation (Task 26)', () => {
-    const sites = constructions('CallbackScopeError');
-    expect(sites).toHaveLength(1);
-    expect(sites[0]).toMatch(/^auth[/\\]callbackServer\.ts:/);
-    const file = readFileSync(join(SRC, 'auth', 'callbackServer.ts'), 'utf8');
-    const line = file.split('\n')[Number(sites[0]?.split(':')[1]) - 1];
-    expect(line).toContain('new CallbackScopeError(');
-    expect(file).toContain('Invalid callback server port:');
   });
 });
 

@@ -14,6 +14,7 @@ import type {
 import { BaseTokenProvider } from '../../providers/BaseTokenProvider';
 import { SsoProviderFactory } from '../../sso/SsoProviderFactory';
 import type { SsoProviderConfig } from '../../sso/types';
+import { configurationOf } from '../helpers/minted';
 
 /** A JWT whose `exp` is `secondsFromNow` away: what `isTokenValid` reads. */
 function jwt(label: string, secondsFromNow: number): string {
@@ -180,11 +181,14 @@ describe('SsoProviderFactory', () => {
     } catch (error) {
       thrown = error;
     }
-    expect(thrown).toBeInstanceOf(Error);
+    // E23 (Task 26): a configuration failure, its words fixed.
+    expect(configurationOf(thrown)).toEqual({
+      case: 'unsupported-sso-flow',
+      fields: [],
+      reason:
+        'unsupported SSO provider config: no provider for this protocol and flow',
+    });
     const message = (thrown as Error).message;
-    expect(message).toBe(
-      'Unsupported SSO provider config: no provider for this protocol and flow',
-    );
     expect(message).not.toContain('CLIENT-SECRET-VALUE');
     expect(message).not.toContain('PASSWORD-VALUE');
   });

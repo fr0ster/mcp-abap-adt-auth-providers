@@ -154,15 +154,17 @@ describe('legacyBridge: a ladder class thrown by a body keeps its kind', () => {
       'unknown',
       OPERATION,
     ],
-    // A11, A12: the ladder's 5.4.2 words are unminted, and guard answers
-    // an unminted refusal with its own fallback — `unknown` with the
-    // operation and grant — until Tasks 26 / 27 (spec §8.1).
+    // A11 (Task 26): a ValidationError, constructed by no site, answers
+    // `configuration` `required-fields-missing` with its known names.
     [
-      'ValidationError (A11, until Task 26)',
+      'ValidationError (A11, configuration since Task 26)',
       () => new ValidationError(MARKER, ['clientId']),
-      'unknown',
-      OPERATION,
+      'configuration',
+      { case: 'required-fields-missing', fields: ['clientId'] },
     ],
+    // A12: the ladder's 5.4.2 words are unminted, and guard answers an
+    // unminted refusal with its own fallback — `unknown` with the operation
+    // and grant — until Task 27 (spec §8.1).
     [
       'ServiceKeyError (A12, until Task 27)',
       () => new ServiceKeyError(MARKER, ['uaaUrl']),

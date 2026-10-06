@@ -10,7 +10,12 @@
 import http from 'node:http';
 import { inspect } from 'node:util';
 import { beforeEach, describe, expect, it, jest } from '@jest/globals';
-import { isAuthProviderFailure, readFailure } from '@mcp-abap-adt/auth-errors';
+import {
+  AuthProviderFailure,
+  authError,
+  isAuthProviderFailure,
+  readFailure,
+} from '@mcp-abap-adt/auth-errors';
 import axios, { AxiosError } from 'axios';
 import { AuthorizationRefusedError } from '../../auth/callbackScopeError';
 import { getTokenWithClientCredentials } from '../../auth/clientCredentialsAuth';
@@ -22,10 +27,7 @@ import {
 } from '../../auth/saml2TokenExchange';
 import { refreshJwtToken } from '../../auth/tokenRefresher';
 import { TokenEndpointError } from '../../errors/TokenEndpointError';
-import {
-  BrowserAuthError,
-  ValidationError,
-} from '../../errors/TokenProviderErrors';
+import { BrowserAuthError } from '../../errors/TokenProviderErrors';
 import { AuthorizationCodeProvider } from '../../providers/AuthorizationCodeProvider';
 import { ClientCredentialsProvider } from '../../providers/ClientCredentialsProvider';
 import {
@@ -362,7 +364,9 @@ describe('an IdP refusal on the browser callback', () => {
     expect(text).not.toContain(DESCRIPTION);
   });
 
-  it('a ValidationError from building the URL passes through unchanged', async () => {
+  // E12 (Task 26): the configuration failure the URL builder throws, once a
+  // ValidationError, passes through as it is.
+  it('a configuration failure from building the URL passes through unchanged (E12)', async () => {
     const strategy = new BrowserCallbackStrategy<string>({
       callbackServer: async (_options, use) =>
         use({
@@ -373,9 +377,11 @@ describe('an IdP refusal on the browser callback', () => {
         }),
       openUrl: async () => undefined,
     });
-    const mismatch = new ValidationError('redirect mismatch', [
-      'authorizationUrl',
-    ]);
+    const configuration = authError.configuration({
+      case: 'redirect-mismatch',
+      fields: ['authorizationUrl'],
+    });
+    const mismatch = new AuthProviderFailure(configuration);
     const { error } = await thrownBy(() =>
       strategy.authorize({
         buildAuthorizationUrl: async () => {

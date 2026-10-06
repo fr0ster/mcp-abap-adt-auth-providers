@@ -1,9 +1,9 @@
 import { generateKeyPairSync, type KeyObject, verify } from 'node:crypto';
 import { describe, expect, it } from '@jest/globals';
+import { isAuthProviderFailure, readFailure } from '@mcp-abap-adt/auth-errors';
 import type { ITokenRequestDraft } from '@mcp-abap-adt/interfaces-auth';
 import { refusalFrom } from '../../auth/refusal';
 import { privateKeyJwt } from '../../clientAuthentication';
-import { ClientAuthenticationError } from '../../errors/ClientAuthenticationError';
 import { wordsOf } from '../helpers/minted';
 
 const draft = {
@@ -176,13 +176,19 @@ describe('privateKeyJwt — a key that does not fit', () => {
     ['a public key', rsa.publicKey, 'RS256'],
     ['garbage', 'not a key', 'RS256'],
   ];
+  // A6 (Task 26): an AuthProviderFailure of client-authentication, no
+  // longer a ClientAuthenticationError.
   it.each(cases)(
-    'refuses %s as ClientAuthenticationError',
+    'refuses %s as client-authentication signing-key-unusable (A6)',
     async (_n, key, algorithm) => {
       const e = await privateKeyJwt({ key, algorithm })
         .authenticate(draft)
         .catch((x) => x);
-      expect(e).toBeInstanceOf(ClientAuthenticationError);
+      expect(isAuthProviderFailure(e)).toBe(true);
+      expect(readFailure(e, 'unfamiliar-error')).toMatchObject({
+        kind: 'client-authentication',
+        facts: { problem: 'signing-key-unusable' },
+      });
     },
   );
   it('answers fixed words with no key bytes', async () => {

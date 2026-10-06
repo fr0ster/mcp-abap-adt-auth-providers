@@ -9,11 +9,11 @@
  * a private CA is `NODE_EXTRA_CA_CERTS`.
  *
  * Pinned material past its `notAfter` is refused first, before every request
- * (a `CertificateMaterialError`, "has expired"). What the strategy returned is
+ * (`client-certificate` `expired`). What the strategy returned is
  * checked before anything is sent: a value that
  * is not a string, a header with a line break, a parameter or header that
  * would replace one of the site's own, an endpoint that is not an absolute `https:` URL —
- * each throws a `ClientAuthenticationResultError`, whose words are fixed.
+ * each throws `client-authentication` `result-unsendable` (A5).
  * `http:` is accepted only where the configured endpoint is itself `http:` (a
  * local server, the provider stand's UAA), and never with material, which an
  * `http:` request would silently not present.
@@ -41,7 +41,6 @@ import type {
 } from '@mcp-abap-adt/interfaces-auth';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
 import axios, { type AxiosRequestConfig, type AxiosResponse } from 'axios';
-import { ClientAuthenticationResultError } from '../errors/ClientAuthenticationError';
 import { abortedFailure } from './attempt';
 import { assertNotExpired } from './certificateMaterial';
 import type { OAuth2GrantType, Operation } from './contractTransition';
@@ -114,8 +113,11 @@ const FORM = 'application/x-www-form-urlencoded';
  */
 const SECRET_PARAMETERS = ['client_secret', 'client_assertion'];
 
+/** A5: the strategy's result cannot be sent; nothing is. */
 function unusable(): never {
-  throw new ClientAuthenticationResultError();
+  throw new AuthProviderFailure(
+    authError['client-authentication']({ problem: 'result-unsendable' }),
+  );
 }
 
 function stringRecord(value: unknown): Record<string, string> {
@@ -240,8 +242,9 @@ export function legacyBasic(
 
 /**
  * Asks the strategy, checks what it returned, and assembles the request. Throws
- * — before anything is sent — whatever the strategy threw, or a
- * `ClientAuthenticationResultError` for a result that cannot be sent.
+ * — before anything is sent — whatever the strategy threw, or
+ * `client-authentication` `result-unsendable` for a result that cannot be
+ * sent.
  */
 export async function prepareTokenRequest(
   grant: GrantRequest,

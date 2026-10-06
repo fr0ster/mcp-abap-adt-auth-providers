@@ -1,12 +1,11 @@
 import { describe, expect, it } from '@jest/globals';
+import { isAuthProviderFailure, readFailure } from '@mcp-abap-adt/auth-errors';
 import { refusalFrom } from '../../auth/refusal';
 import {
   clientSecretBasic,
   clientSecretPost,
   noClientAuthentication,
 } from '../../clientAuthentication';
-import { BasicClientIdError } from '../../errors/ClientAuthenticationError';
-import { ValidationError } from '../../errors/TokenProviderErrors';
 import { wordsOf } from '../helpers/minted';
 
 const draft = {
@@ -55,7 +54,8 @@ describe('clientSecretBasic', () => {
         () => undefined,
         (error: unknown) => error,
       );
-    expect(failure).toBeInstanceOf(BasicClientIdError);
+    // A7 (Task 26): an AuthProviderFailure, no longer BasicClientIdError.
+    expect(isAuthProviderFailure(failure)).toBe(true);
     expect(String((failure as Error).message)).not.toContain('my:client');
     expect(wordsOf(refusalFrom(failure, 'the token request'))).toEqual({
       ok: false,
@@ -72,7 +72,7 @@ describe('clientSecretBasic', () => {
     ['another encoding', { encoding: 'utf8' }],
     ['a non-string encoding', { encoding: 1 }],
   ])(
-    '%s: a ValidationError naming encoding, at construction',
+    '%s: a configuration failure naming encoding, at construction (E19)',
     (_label, options) => {
       let thrown: unknown;
       try {
@@ -84,13 +84,19 @@ describe('clientSecretBasic', () => {
       } catch (error) {
         thrown = error;
       }
-      expect(thrown).toBeInstanceOf(ValidationError);
-      expect((thrown as ValidationError).missingFields).toEqual(['encoding']);
-      expect(refusalFrom(thrown, 'the token request')).toEqual({
+      // E19 (Task 26): the case, the field and the allowed set.
+      expect(readFailure(thrown, 'unfamiliar-error')).toMatchObject({
+        kind: 'configuration',
+        facts: {
+          case: 'basic-encoding-missing',
+          fields: ['encoding'],
+          allowed: 'basic-encoding',
+        },
+      });
+      expect(wordsOf(refusalFrom(thrown, 'the token request'))).toEqual({
         ok: false,
         refusal: {
-          reason:
-            'the provider configuration is incomplete or invalid: encoding',
+          reason: "clientSecretBasic needs encoding: 'raw' or 'form'",
           hint: 'check the provider configuration',
         },
       });

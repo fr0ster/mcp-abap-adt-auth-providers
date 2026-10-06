@@ -11,13 +11,13 @@ import type {
 import { AUTH_TYPE_AUTHORIZATION_CODE_PKCE } from '@mcp-abap-adt/interfaces-auth';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
 import { throwIfAborted } from '../auth/attempt';
+import { oidcEndpointMissing, oidcIssuerRequired } from '../auth/configuration';
 import { asContract } from '../auth/contractShape';
 import type { OidcCallbackResult } from '../auth/oidcBrowserAuth';
 import { discoverOidc, mtlsAlias } from '../auth/oidcDiscovery';
 import { generatePkceChallenge, generatePkceVerifier } from '../auth/oidcPkce';
 import { exchangeAuthorizationCode, refreshOidcToken } from '../auth/oidcToken';
 import type { SignalledAuthorizationRequest } from '../auth/signalledRequest';
-import { ValidationError } from '../errors/TokenProviderErrors';
 import { oidcCallbackStrategy } from '../strategies';
 import {
   BaseTokenProvider,
@@ -92,7 +92,7 @@ export class OidcBrowserProvider extends BaseTokenProvider {
     const discover = () => {
       if (!discovery) {
         if (!this.config.issuerUrl) {
-          throw new Error('OIDC issuerUrl is required when discovery is used');
+          throw oidcIssuerRequired();
         }
         discovery = discoverOidc(
           this.config.issuerUrl,
@@ -120,10 +120,7 @@ export class OidcBrowserProvider extends BaseTokenProvider {
           this.config.authorizationEndpoint ||
           (await discover()).authorization_endpoint;
         if (!endpoint) {
-          throw new ValidationError(
-            'OIDC authorization endpoint is required (authorizationEndpoint or discovery)',
-            ['authorizationEndpoint'],
-          );
+          throw oidcEndpointMissing('authorizationEndpoint');
         }
         const params = new URLSearchParams();
         params.append('response_type', 'code');
@@ -148,9 +145,7 @@ export class OidcBrowserProvider extends BaseTokenProvider {
     const tokenEndpoint =
       this.config.tokenEndpoint || discovered?.token_endpoint;
     if (!tokenEndpoint) {
-      throw new Error(
-        'OIDC token endpoint is required (tokenEndpoint or discovery)',
-      );
+      throw oidcEndpointMissing('tokenEndpoint');
     }
 
     const tokens = await exchangeAuthorizationCode(
@@ -186,7 +181,7 @@ export class OidcBrowserProvider extends BaseTokenProvider {
     let discovery: Awaited<ReturnType<typeof discoverOidc>> | null = null;
     if (!this.config.tokenEndpoint) {
       if (!this.config.issuerUrl) {
-        throw new Error('OIDC issuerUrl is required when discovery is used');
+        throw oidcIssuerRequired();
       }
       discovery = await discoverOidc(
         this.config.issuerUrl,
@@ -200,9 +195,7 @@ export class OidcBrowserProvider extends BaseTokenProvider {
     const tokenEndpoint =
       this.config.tokenEndpoint || discovery?.token_endpoint;
     if (!tokenEndpoint) {
-      throw new Error(
-        'OIDC token endpoint is required (tokenEndpoint or discovery)',
-      );
+      throw oidcEndpointMissing('tokenEndpoint');
     }
     // Nothing is sent once the attempt is aborted; once sent, the refresh
     // runs on (spec §6b).

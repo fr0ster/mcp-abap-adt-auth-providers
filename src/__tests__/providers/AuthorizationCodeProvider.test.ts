@@ -39,6 +39,7 @@ import {
   interactiveLoginEnabled,
   loadTestConfig,
 } from '../helpers/configHelpers';
+import { configurationOf } from '../helpers/minted';
 import { canListenOnLocalhost, getAvailablePort } from '../helpers/netHelpers';
 
 // Helper to create logger if DEBUG_PROVIDER is enabled
@@ -558,9 +559,12 @@ describe('AuthorizationCodeProvider with strategies', () => {
     });
 
     const started = Date.now();
-    await expect(provider.getTokens()).rejects.toThrow(
-      /redirect_uri.*does not match/i,
-    );
+    // E12 (Task 26): the configuration case; the URIs are diagnostics.
+    const thrown = await provider.getTokens().catch((error: unknown) => error);
+    expect(configurationOf(thrown)).toMatchObject({
+      case: 'redirect-mismatch',
+      fields: ['authorizationUrl'],
+    });
     // Not "eventually" — the point of building-time validation is that it does
     // not wait for a callback that can never arrive.
     expect(Date.now() - started).toBeLessThan(5000);
@@ -584,9 +588,12 @@ describe('AuthorizationCodeProvider with strategies', () => {
       }),
     });
 
-    await expect(provider.getTokens()).rejects.toThrow(
-      /redirect_uri.*but the authorization strategy used/i,
-    );
+    // E12 (Task 26): the second net, the same case.
+    const thrown = await provider.getTokens().catch((error: unknown) => error);
+    expect(configurationOf(thrown)).toMatchObject({
+      case: 'redirect-mismatch',
+      fields: ['authorizationUrl'],
+    });
   }, 30000);
 });
 

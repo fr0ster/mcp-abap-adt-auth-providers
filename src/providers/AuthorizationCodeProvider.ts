@@ -5,7 +5,7 @@
  * Supports pre-built authorization URLs and automatic refresh.
  */
 
-import type { AttemptContext } from '@mcp-abap-adt/auth-errors';
+import { type AttemptContext, authError } from '@mcp-abap-adt/auth-errors';
 import type {
   IAuthorizationStrategy,
   ITokenResult,
@@ -18,11 +18,11 @@ import {
   exchangeCodeForToken,
   getJwtAuthorizationUrl,
 } from '../auth/browserAuth';
+import { misconfigured, requiredFieldsMissing } from '../auth/configuration';
 import { asContract } from '../auth/contractShape';
 import type { SignalledAuthorizationRequest } from '../auth/signalledRequest';
 import { refreshJwtToken } from '../auth/tokenRefresher';
 import { logQuietly } from '../auth/tokenRequest';
-import { ValidationError } from '../errors/TokenProviderErrors';
 import { browserCallbackStrategy } from '../strategies';
 import {
   BaseTokenProvider,
@@ -99,12 +99,8 @@ export class AuthorizationCodeProvider extends BaseTokenProvider {
       missingFields.push('clientSecret');
     }
     if (missingFields.length > 0) {
-      const error = new Error(
-        `Missing required fields: ${missingFields.join(', ')}`,
-      ) as Error & { code: string; missingFields: string[] };
-      error.code = 'VALIDATION_ERROR';
-      error.missingFields = missingFields;
-      throw error;
+      // E1: the names of what is missing, never a value.
+      throw requiredFieldsMissing(missingFields);
     }
 
     // Initialize from provided tokens if available
@@ -166,10 +162,14 @@ export class AuthorizationCodeProvider extends BaseTokenProvider {
       ? new URL(prebuilt).searchParams.get('redirect_uri')
       : null;
 
-    const mismatch = (redirectUri: string): string =>
-      `Pre-built authorizationUrl declares redirect_uri ${declaredRedirect}, ` +
-      `but the authorization strategy used ${redirectUri}, which does not match. ` +
-      'An ephemeral port cannot be used with a pre-built URL.';
+    // E12: the two addresses are diagnostics, never in the words (L9).
+    const mismatch = (redirectUri: string) =>
+      misconfigured(
+        authError.configuration(
+          { case: 'redirect-mismatch', fields: ['authorizationUrl'] },
+          { configuredUri: declaredRedirect, strategyUri: redirectUri },
+        ),
+      );
 
     // The provider owns the URL; the strategy owns where it is answered. The
     // guard lives here rather than after the fact because a mismatched redirect
@@ -182,9 +182,7 @@ export class AuthorizationCodeProvider extends BaseTokenProvider {
       buildAuthorizationUrl: async (redirectUri: string): Promise<string> => {
         if (prebuilt) {
           if (declaredRedirect && declaredRedirect !== redirectUri) {
-            throw new ValidationError(mismatch(redirectUri), [
-              'authorizationUrl',
-            ]);
+            throw mismatch(redirectUri);
           }
           return prebuilt;
         }
@@ -205,9 +203,7 @@ export class AuthorizationCodeProvider extends BaseTokenProvider {
     // it, and would otherwise reach the exchange with a redirect_uri the
     // pre-built URL never advertised, earning an opaque `invalid_grant`.
     if (declaredRedirect && declaredRedirect !== outcome.redirectUri) {
-      throw new ValidationError(mismatch(outcome.redirectUri), [
-        'authorizationUrl',
-      ]);
+      throw mismatch(outcome.redirectUri);
     }
 
     logQuietly(() =>

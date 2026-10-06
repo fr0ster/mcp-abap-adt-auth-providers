@@ -24,7 +24,6 @@ import {
   CERTIFICATE_UNUSABLE,
   CertificateMaterialError,
 } from '../../errors/CertificateMaterialError';
-import { ValidationError } from '../../errors/TokenProviderErrors';
 import { AuthorizationCodeProvider } from '../../providers/AuthorizationCodeProvider';
 import { ClientCredentialsProvider } from '../../providers/ClientCredentialsProvider';
 import { OidcBrowserProvider } from '../../providers/OidcBrowserProvider';
@@ -33,7 +32,7 @@ import { OidcPasswordProvider } from '../../providers/OidcPasswordProvider';
 import { OidcTokenExchangeProvider } from '../../providers/OidcTokenExchangeProvider';
 import { Saml2BearerProvider } from '../../providers/Saml2BearerProvider';
 import { UaaPasscodeProvider } from '../../providers/UaaPasscodeProvider';
-import { wordsOf } from '../helpers/minted';
+import { configurationOf, wordsOf } from '../helpers/minted';
 import { recordingTargets } from '../helpers/targets';
 
 // Automocked, but with axios's own error class: the sites throw it.
@@ -421,16 +420,22 @@ describe('a strategy and a clientSecret together', () => {
     ],
   ];
 
-  it.each(both)('%s: a ValidationError naming clientSecret', (_name, make) => {
-    let thrown: unknown;
-    try {
-      make();
-    } catch (error) {
-      thrown = error;
-    }
-    expect(thrown).toBeInstanceOf(ValidationError);
-    expect((thrown as ValidationError).missingFields).toEqual(['clientSecret']);
-  });
+  // E2 (Task 26): a configuration failure naming clientSecret.
+  it.each(both)(
+    '%s: a configuration failure naming clientSecret (E2)',
+    (_name, make) => {
+      let thrown: unknown;
+      try {
+        make();
+      } catch (error) {
+        thrown = error;
+      }
+      expect(configurationOf(thrown)).toMatchObject({
+        case: 'client-secret-beside-client-authentication',
+        fields: ['clientSecret'],
+      });
+    },
+  );
 });
 
 describe('a strategy satisfies the clientSecret requirement', () => {

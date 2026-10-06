@@ -7,6 +7,7 @@ import {
 import { DOMParser, type Document, type Element } from '@xmldom/xmldom';
 import { SignedXml } from 'xml-crypto';
 import { resolveSignedElements, toPem } from '../../validation/signedNode';
+import { configurationOf, thrownFrom } from '../helpers/minted';
 import { expectSamlRefusal, thrownBy } from '../helpers/samlRefusal';
 
 const parse = (xml: string) =>
@@ -129,44 +130,50 @@ describe('resolveSignedElements', () => {
     for (const line of lines.slice(0, -1)) expect(line).toHaveLength(64);
   });
 
+  // E26 (Task 26): each is the configuration case idp-certificate-invalid —
+  // 5.4.2's two sentences are one case, nothing of OpenSSL kept (L2).
+  const E26 = {
+    case: 'idp-certificate-invalid',
+    fields: ['idpCertificates'],
+    reason:
+      'a configured IdP certificate is not a valid X.509 certificate in PEM or base64 DER',
+  };
+
   it.each([
     ['three padding characters', 'AAAA==='],
     ['only padding', '=='],
     ['a character outside the alphabet', 'AA-A'],
     ['padding inside', 'AA=AAAAA'],
-  ])('refuses base64 with %s as neither PEM nor base64', (_name, value) => {
-    expect(() => toPem(value)).toThrow('neither PEM nor base64 DER');
-  });
+  ])(
+    'refuses base64 with %s as neither PEM nor base64 (E26)',
+    async (_name, value) => {
+      expect(configurationOf(await thrownFrom(() => toPem(value)))).toEqual(
+        E26,
+      );
+    },
+  );
 
-  it('refuses a certificate that is neither PEM nor base64', () => {
-    expect(() => toPem('not a certificate!')).toThrow(
-      /neither PEM nor base64/i,
-    );
+  it('refuses a certificate that is neither PEM nor base64 (E26)', async () => {
+    expect(
+      configurationOf(await thrownFrom(() => toPem('not a certificate!'))),
+    ).toEqual(E26);
   });
 
   // Base64 syntax is not enough: this armours cleanly, and only OpenSSL knows
   // it is not a certificate. Without the X509Certificate parse it would reach
   // verification and be reported as a bad signature — the configuration
   // blamed on the assertion again.
-  it('refuses base64 that is not a certificate', () => {
-    expect(() => toPem('AAAA')).toThrow(/not a valid X.509 certificate/i);
+  it('refuses base64 that is not a certificate (E26)', async () => {
+    expect(configurationOf(await thrownFrom(() => toPem('AAAA')))).toEqual(E26);
   });
 
-  it("says so in fixed words; OpenSSL's text is only the cause", () => {
-    let thrown: (Error & { cause?: unknown }) | undefined;
-    try {
-      toPem('AAAA');
-    } catch (error) {
-      thrown = error as Error & { cause?: unknown };
-    }
-    expect(thrown?.message).toBe(
-      'a configured certificate is not a valid X.509 certificate',
-    );
+  it("says so in fixed words; nothing of OpenSSL's text, no cause (E26, L2)", async () => {
+    const thrown = (await thrownFrom(() => toPem('AAAA'))) as Error & {
+      cause?: unknown;
+    };
     expect(String(thrown)).not.toMatch(/asn1|routines/i);
-    // Node's error comes from another realm under Jest: read, not instanceof.
-    expect((thrown?.cause as Error | undefined)?.message).toMatch(
-      /asn1|routines|wrong tag/i,
-    );
+    expect(JSON.stringify(thrown)).not.toMatch(/asn1|routines/i);
+    expect(thrown.cause).toBeUndefined();
   });
 
   it('accepts a certificate later in the rotation list', () => {

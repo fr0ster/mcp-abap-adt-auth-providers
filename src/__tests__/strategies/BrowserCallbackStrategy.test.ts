@@ -8,14 +8,18 @@
 
 import netModule from 'node:net';
 import { describe, expect, it, jest } from '@jest/globals';
-import { isAuthProviderFailure, readFailure } from '@mcp-abap-adt/auth-errors';
+import {
+  AuthProviderFailure,
+  authError,
+  isAuthProviderFailure,
+  readFailure,
+} from '@mcp-abap-adt/auth-errors';
 import type {
   CallbackServerFactory,
   IAuthorizationStrategy,
   ICallbackServerHandle,
 } from '@mcp-abap-adt/interfaces-auth';
 import { withBrowserCallbackServer } from '../../auth/callbackServer';
-import { ValidationError } from '../../errors/TokenProviderErrors';
 import {
   BrowserCallbackStrategy,
   browserCallbackStrategy,
@@ -448,15 +452,19 @@ describe('the error a failed browser login is', () => {
     }
   });
 
-  it('leaves an error that already has a type as it is', async () => {
+  // E7 (Task 26): a configuration failure from building the URL, once a
+  // ValidationError, is relayed as it is.
+  it('leaves a failure already built as it is (E7)', async () => {
     const { factory } = fakeFactory({});
     const strategy = new BrowserCallbackStrategy<string>({
       callbackServer: factory,
       openUrl: async () => undefined,
     });
-    const invalid = new ValidationError('idp-initiated has no URL', [
-      'authorizationUrl',
-    ]);
+    const configuration = authError.configuration({
+      case: 'saml-idp-initiated-without-authorization-url',
+      fields: ['idpInitiated', 'authorizationUrl'],
+    });
+    const invalid = new AuthProviderFailure(configuration);
     const refusal = await strategy
       .authorize({
         buildAuthorizationUrl: async () => {

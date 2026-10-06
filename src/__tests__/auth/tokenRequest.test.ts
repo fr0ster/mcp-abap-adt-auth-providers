@@ -602,10 +602,11 @@ describe('client authentication per request', () => {
       ),
     );
     expect(mockedAxios).not.toHaveBeenCalled();
+    // E11 (Task 26): the configuration case, not 5.4.2's A11 words.
     expect(wordsOf(refusalFrom(error, 'the token request'))).toEqual({
       ok: false,
       refusal: {
-        reason: 'the provider configuration is incomplete or invalid: clientId',
+        reason: 'clientId is required with a client authentication',
         hint: 'check the provider configuration',
       },
     });

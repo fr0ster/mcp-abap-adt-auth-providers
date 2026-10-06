@@ -13,6 +13,7 @@ import type {
 import { AUTH_TYPE_CLIENT_CREDENTIALS } from '@mcp-abap-adt/interfaces-auth';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
 import { getTokenWithClientCredentials } from '../auth/clientCredentialsAuth';
+import { requiredFieldsMissing } from '../auth/configuration';
 import { asContract } from '../auth/contractShape';
 import {
   BaseTokenProvider,
@@ -56,12 +57,8 @@ export class ClientCredentialsProvider extends BaseTokenProvider {
       missingFields.push('clientSecret');
     }
     if (missingFields.length > 0) {
-      const error = new Error(
-        `Missing required fields: ${missingFields.join(', ')}`,
-      ) as Error & { code: string; missingFields: string[] };
-      error.code = 'VALIDATION_ERROR';
-      error.missingFields = missingFields;
-      throw error;
+      // E1: the names of what is missing, never a value.
+      throw requiredFieldsMissing(missingFields);
     }
   }
 

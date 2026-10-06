@@ -33,9 +33,11 @@ import { throwIfAborted } from '../auth/attempt';
 import {
   assertCertificateMaterial,
   assertNotExpired,
+  certificateFailure,
   certificateNotAfter,
   certificateThumbprint,
 } from '../auth/certificateMaterial';
+import { misconfigured } from '../auth/configuration';
 import { asContract } from '../auth/contractShape';
 import type {
   AnyOutcome,
@@ -56,8 +58,6 @@ import {
   type TokenRequestAuth,
   type TokenSiteOptions,
 } from '../auth/tokenRequest';
-import { CertificateMaterialError } from '../errors/CertificateMaterialError';
-import { ValidationError } from '../errors/TokenProviderErrors';
 
 /**
  * The consumer's opt-in to naming the request's secrets in its debug line
@@ -154,7 +154,7 @@ export function refreshTokenRefused(): AuthProviderFailure {
 /**
  * How the client authenticates to the authorization server (spec §3). Taken by
  * every provider that sends a request to one; never beside a `clientSecret` —
- * two ways of authenticating one client is a `ValidationError`.
+ * two ways of authenticating one client is a configuration error (E2).
  */
 export interface ClientAuthenticationConfig {
   clientAuthentication?: IClientAuthentication | undefined;
@@ -327,10 +327,13 @@ export abstract class BaseTokenProvider
     // `true` itself: `'true'`, `1` or an environment variable never opt in.
     this.authDebug = config.authDebug === true;
     if (config.clientAuthentication && config.clientSecret !== undefined) {
-      // Two ways of authenticating one client is a mistake, not a preference.
-      throw new ValidationError(
-        'clientSecret cannot be given beside clientAuthentication',
-        ['clientSecret'],
+      // Two ways of authenticating one client is a mistake, not a preference
+      // (E2).
+      throw misconfigured(
+        authError.configuration({
+          case: 'client-secret-beside-client-authentication',
+          fields: ['clientSecret'],
+        }),
       );
     }
     this.clientAuthentication = config.clientAuthentication;
@@ -412,7 +415,7 @@ export abstract class BaseTokenProvider
       const loaded = await strategy.tlsMaterial?.();
       // Nothing, or not an object: no certificate to present at all.
       if (!loaded || typeof loaded !== 'object') {
-        throw new CertificateMaterialError(true);
+        throw certificateFailure('incomplete');
       }
       const material = copyMaterial(loaded);
       assertCertificateMaterial(material);
@@ -438,7 +441,7 @@ export abstract class BaseTokenProvider
 
   /**
    * The pinned certificate, about to be presented: pinned if it is not yet,
-   * and refused — a CertificateMaterialError, "has expired" — once past its
+   * and refused — `client-certificate` `expired` — once past its
    * `notAfter`. Valid at pin time is not valid for life.
    */
   private async presentable(

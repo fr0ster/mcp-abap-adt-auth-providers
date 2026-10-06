@@ -18,18 +18,21 @@ import { authError } from '@mcp-abap-adt/auth-errors';
 import { DOMParser, type Document } from '@xmldom/xmldom';
 import { refuse } from '../validation/samlRefusal';
 
+/** F7: the `not-xml` rule, thrown. */
+function notXml(): never {
+  return refuse(
+    authError['saml-assertion']({ rule: 'not-xml', check: 'document' }),
+  );
+}
+
 export function parseStrictXml(xml: string): Document {
   try {
     return new DOMParser({
-      // Fixed words: xmldom wraps whatever this throws in a ParseError that
-      // quotes the document, and the catch below drops that error whole.
-      onError: () => {
-        throw new Error('the XML did not parse');
-      },
+      // xmldom may wrap whatever this throws in a ParseError that quotes the
+      // document; the catch below drops that error whole.
+      onError: notXml,
     }).parseFromString(xml, 'text/xml');
   } catch {
-    return refuse(
-      authError['saml-assertion']({ rule: 'not-xml', check: 'document' }),
-    );
+    return notXml();
   }
 }

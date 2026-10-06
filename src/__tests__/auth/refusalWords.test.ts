@@ -191,10 +191,11 @@ describe('refusalWords', () => {
   });
 
   it.each([
+    // A11 (Task 26): `configuration` `required-fields-missing`.
     [
       'ValidationError',
       () => new ValidationError('x', ['clientId']),
-      'the provider configuration is incomplete or invalid',
+      'required configuration is missing',
     ],
     [
       'ServiceKeyError',
@@ -233,8 +234,9 @@ describe('refusalWords', () => {
     const error = new ValidationError('x', []);
     (error as { missingFields: unknown }).missingFields = huge;
     const words = refusalWords(error, 'it');
+    // A11 (Task 26): the configuration words, the same bounded reading.
     expect(words.reason).toBe(
-      'the provider configuration is incomplete or invalid: clientId, scope',
+      'required configuration is missing: clientId, scope',
     );
     expect(reads).toBeLessThanOrEqual(64);
   });

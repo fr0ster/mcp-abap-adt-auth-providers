@@ -36,9 +36,10 @@ describe('refusal', () => {
       'the refresh token was refused',
       'log in again',
     ],
+    // A11 (Task 26): configuration required-fields-missing.
     [
       new ValidationError('SECRET-MSG', ['clientId']),
-      'the provider configuration is incomplete or invalid: clientId',
+      'required configuration is missing: clientId',
       'check the provider configuration',
     ],
     [
@@ -79,12 +80,18 @@ describe('refusal', () => {
   });
 
   it('a field name not in KNOWN_CONFIG_FIELDS is dropped', () => {
+    // A11 (Task 26): the configuration words, the allowlist kept.
     expect(
-      refusalFrom(new ValidationError('x', ['clientId', 'SECRET-FIELD']), 'it'),
+      wordsOf(
+        refusalFrom(
+          new ValidationError('x', ['clientId', 'SECRET-FIELD']),
+          'it',
+        ),
+      ),
     ).toEqual({
       ok: false,
       refusal: {
-        reason: 'the provider configuration is incomplete or invalid: clientId',
+        reason: 'required configuration is missing: clientId',
         hint: 'check the provider configuration',
       },
     });
@@ -92,7 +99,7 @@ describe('refusal', () => {
       refusalFrom(new ValidationError('x', ['SECRET-FIELD']), 'it'),
     ).toMatchObject({
       refusal: {
-        reason: 'the provider configuration is incomplete or invalid',
+        reason: 'required configuration is missing',
       },
     });
   });

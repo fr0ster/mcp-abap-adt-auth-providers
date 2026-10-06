@@ -1,6 +1,6 @@
+import { AuthProviderFailure, authError } from '@mcp-abap-adt/auth-errors';
 import type { IClientAuthentication } from '@mcp-abap-adt/interfaces-auth';
-import { BasicClientIdError } from '../errors/ClientAuthenticationError';
-import { ValidationError } from '../errors/TokenProviderErrors';
+import { misconfigured } from '../auth/configuration';
 
 /**
  * How `clientSecretBasic` writes the client id and secret before joining them.
@@ -30,10 +30,10 @@ const formEncoded = (value: string): string =>
 /**
  * `client_secret_basic`: `Authorization: Basic base64(id:secret)`, the id and
  * the secret written as `options.encoding` says. `encoding` is required: a
- * call without it, or with another value, is a `ValidationError` naming
- * `encoding`. With `'raw'`, a client id containing `:` cannot be carried
- * (RFC 7617): each request is refused with a `BasicClientIdError`, before
- * anything is sent.
+ * call without it, or with another value, is a `configuration` failure
+ * (`basic-encoding-missing`) naming `encoding`. With `'raw'`, a client id
+ * containing `:` cannot be carried (RFC 7617): each request is refused with
+ * `client-authentication` `basic-client-id-colon`, before anything is sent.
  */
 export function clientSecretBasic(
   secret: string,
@@ -41,16 +41,25 @@ export function clientSecretBasic(
 ): IClientAuthentication {
   const encoding = (options as { encoding?: unknown } | undefined)?.encoding;
   if (!ENCODINGS.has(encoding)) {
-    throw new ValidationError(
-      "clientSecretBasic needs encoding: 'raw' or 'form'",
-      ['encoding'],
+    // E19: the allowed values are named by their set, never the value given.
+    throw misconfigured(
+      authError.configuration({
+        case: 'basic-encoding-missing',
+        fields: ['encoding'],
+        allowed: 'basic-encoding',
+      }),
     );
   }
   const form = encoding === 'form';
   return {
     authenticate: async (draft) => {
       if (!form && draft.clientId.includes(':')) {
-        throw new BasicClientIdError();
+        // A7: refused before anything is sent.
+        throw new AuthProviderFailure(
+          authError['client-authentication']({
+            problem: 'basic-client-id-colon',
+          }),
+        );
       }
       const credential = form
         ? `${formEncoded(draft.clientId)}:${formEncoded(secret)}`
