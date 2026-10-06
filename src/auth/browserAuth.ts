@@ -53,14 +53,14 @@ export function extractCode(input: string): string | null {
     if (mark !== '?' && mark !== '&') continue;
     if (!trimmed.startsWith('code=', at + 1)) continue;
     const value = valueUntilBreak(trimmed, at + 6);
-    if (value !== '') return decodeURIComponent(value);
+    if (value !== '') return decodedOrNull(value);
   }
 
   // Bare `code=XYZ`
   if (trimmed.startsWith('code=')) {
     const value = valueUntilBreak(trimmed, 5);
     if (value !== '' && 5 + value.length === trimmed.length) {
-      return decodeURIComponent(value);
+      return decodedOrNull(value);
     }
   }
 
@@ -68,6 +68,20 @@ export function extractCode(input: string): string | null {
   // whitespace (clearly not a single code).
   if ([...trimmed].some(isWhitespace)) return null;
   return trimmed;
+}
+
+/**
+ * The value percent-decoded, or `null` when it holds a malformed escape
+ * (`%ZZ`): pasted or posted text is anyone's, and an unreadable code is K16
+ * (`unreadable-input`), never a thrown `URIError`.
+ */
+function decodedOrNull(value: string): string | null {
+  try {
+    const decoded = decodeURIComponent(value);
+    return decoded === '' ? null : decoded;
+  } catch {
+    return null;
+  }
 }
 
 /** Whitespace as `\s` reads it: what `trim()` removes. */

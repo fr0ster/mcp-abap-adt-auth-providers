@@ -482,6 +482,24 @@ describe('A.3 — manual and code strategy rows', () => {
     });
   });
 
+  it('K16: a paste with a malformed escape → unreadable-input, no URIError', async () => {
+    const write = jest
+      .spyOn(process.stderr, 'write')
+      .mockImplementation(() => true);
+    try {
+      for (const pasted of ['code=%ZZ', 'https://x/cb?code=%E0%A4%A&state=s']) {
+        const thrown = await rejection(
+          manualPasteStrategy({ read: async () => pasted }).authorize(
+            request(),
+          ),
+        );
+        expect(rowOf(thrown).facts).toEqual({ outcome: 'unreadable-input' });
+      }
+    } finally {
+      write.mockRestore();
+    }
+  });
+
   it('K16: an unreadable paste → unreadable-input', async () => {
     const write = jest
       .spyOn(process.stderr, 'write')

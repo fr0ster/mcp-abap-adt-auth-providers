@@ -69,6 +69,10 @@ function heldShutdown(scopes: Arrivals<Scope>): CallbackServerFactory<string> {
       server.listen(options.port, '127.0.0.1', () => resolve());
     });
     const result = deferred<string>();
+    // Handled at creation, as the shipped scope does: since Task 23's fix
+    // round the strategy may end before it ever waits (aborted while the URL
+    // was built), and an unawaited rejection would surface as unhandled.
+    void result.promise.catch(() => undefined);
     const gate = deferred<void>();
     const closed = deferred<void>();
     const onAbort = () => result.reject(new Error('aborted'));

@@ -173,8 +173,8 @@ export class AuthorizationCodeProvider extends BaseTokenProvider {
 
     // The provider owns the URL; the strategy owns where it is answered. The
     // guard lives here rather than after the fact because a mismatched redirect
-    // produces no callback at all — checking the outcome would mean waiting for
-    // a timeout that explains nothing.
+    // produces no callback at all — checking the outcome would mean waiting
+    // for a callback that never comes.
     const request = {
       logger: this.logger,
       // The attempt's signal: every waiter gone ends the login (spec §6b).

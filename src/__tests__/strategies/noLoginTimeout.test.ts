@@ -181,6 +181,35 @@ describe('RF1: a browser login has no bound of its own', () => {
     },
   );
 
+  it.each(browserKinds)(
+    '%s: an abort while the URL is built opens nothing (Task 23 fix round 1)',
+    async (_name, make) => {
+      const consumer = new AbortController();
+      let built!: (url: string) => void;
+      const opened = jest.fn(async () => undefined);
+      const login = make({
+        port: PORT,
+        signal: consumer.signal,
+        openUrl: opened,
+      }).authorize({
+        buildAuthorizationUrl: () =>
+          new Promise<string>((resolve) => {
+            built = resolve;
+          }),
+      });
+      while (!built) await turn();
+      consumer.abort();
+      built('https://idp.example/authorize');
+      expect(factsOf(await login.catch((e: unknown) => e))).toEqual({
+        outcome: 'aborted',
+        strategy: 'browser',
+      });
+      await turns(5);
+      expect(opened).toHaveBeenCalledTimes(0);
+      expect(await portIsFree(PORT)).toBe(true);
+    },
+  );
+
   it.each([
     ['browser', withBrowserCallbackServer],
     ['OIDC', withOidcCallbackServer],

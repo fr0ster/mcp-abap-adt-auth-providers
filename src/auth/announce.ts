@@ -7,29 +7,48 @@
  * under an MCP or LSP stdio transport.
  */
 
+import { isPromise, isProxy } from 'node:util/types';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
 import { logQuietly } from './tokenRequest';
 
+/** `Promise.prototype.then` as it was at load: never a value's own `then`. */
+const promiseThen = Promise.prototype.then;
+
 /**
- * The logger's `info`, or stderr without one. A logger that throws gets the
- * prompt on stderr instead — the prompt must not vanish — and one whose
- * `info` answers a rejecting promise (an async logger) changes nothing
- * (`logQuietly`).
+ * The logger's `info`, or stderr without one. The prompt must not vanish: a
+ * logger that throws gets it on stderr instead, and so does one whose `info`
+ * answers a plain native promise that rejects (an async logger that failed)
+ * — once the rejection arrives; the rejection itself is handled. Never
+ * stdout.
  */
 export function announcer(logger?: ILogger): (msg: string) => void {
-  return (msg: string) => {
-    if (logger) {
-      let shown = true;
-      logQuietly(() => {
-        try {
-          return logger.info(msg);
-        } catch (error) {
-          shown = false;
-          throw error;
-        }
-      });
-      if (shown) return;
-    }
+  const toStderr = (msg: string) => {
     process.stderr.write(`${msg}\n`);
+  };
+  return (msg: string) => {
+    if (!logger) {
+      toStderr(msg);
+      return;
+    }
+    let answered: unknown;
+    let threw = false;
+    logQuietly(() => {
+      try {
+        answered = logger.info(msg);
+        return answered;
+      } catch (error) {
+        threw = true;
+        throw error;
+      }
+    });
+    if (threw) {
+      toStderr(msg);
+      return;
+    }
+    // A plain native promise only: a foreign thenable's code is never run.
+    if (isPromise(answered) && !isProxy(answered)) {
+      if (Object.getPrototypeOf(answered) !== Promise.prototype) return;
+      promiseThen.call(answered, undefined, () => toStderr(msg));
+    }
   };
 }

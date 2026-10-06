@@ -180,6 +180,8 @@ export class BrowserCallbackStrategy<TResult>
           // Thrown before anything is opened: a redirect the provider cannot
           // honour must fail here, not as a callback that never arrives.
           const url = await request.buildAuthorizationUrl(server.redirectUri);
+          // Aborted while the URL was built: nothing is opened.
+          if (controller.signal.aborted) throw abortedLogin('browser');
           const waiting = server.waitForResult();
           // Built here, not earlier: the launcher's messages name the URI that is
           // actually bound, which with `port: 0` nothing knew until now.

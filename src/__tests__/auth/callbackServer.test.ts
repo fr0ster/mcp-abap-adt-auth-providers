@@ -8,7 +8,8 @@
 
 import http from 'node:http';
 import net from 'node:net';
-import { afterEach, describe, expect, it } from '@jest/globals';
+import { afterEach, describe, expect, it, jest } from '@jest/globals';
+import { readFailure } from '@mcp-abap-adt/auth-errors';
 import {
   runCallbackScope,
   withBrowserCallbackServer,
@@ -411,15 +412,23 @@ describe('withBrowserCallbackServer', () => {
     });
     let ran = false;
     try {
-      await expect(
-        withBrowserCallbackServer(
-          { port: PORT, timeoutMs: NO_BOUND },
-          async () => {
-            ran = true;
-            return 'unreachable';
-          },
-        ),
-      ).rejects.toThrow();
+      const thrown = await withBrowserCallbackServer(
+        { port: PORT, timeoutMs: NO_BOUND },
+        async () => {
+          ran = true;
+          return 'unreachable';
+        },
+      ).then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+      // K1 (Task 23 fix round 1): the scope's own EADDRINUSE is port-in-use
+      // with the port, in K1's words.
+      expect(readFailure(thrown, 'browser-login')).toMatchObject({
+        kind: 'interactive-login',
+        facts: { outcome: 'port-in-use', port: PORT },
+        reason: `Port ${PORT} is already in use. Please specify a different port or free the port.`,
+      });
       expect(ran).toBe(false);
     } finally {
       await new Promise<void>((r) => {
@@ -602,6 +611,32 @@ describe('withBrowserCallbackServer', () => {
       expect(code).toBe('pasted-code');
     }, 30000);
 
+    // K16 (Task 23 fix round 1): a malformed escape is an unreadable paste —
+    // the form again, never a thrown URIError or Express's error page.
+    it('re-renders the form on a paste with a malformed escape (code=%ZZ)', async () => {
+      const code = await withBrowserCallbackServer(
+        { port: PORT, timeoutMs: NO_BOUND },
+        async (srv) => {
+          const waiting = srv.waitForResult();
+          for (const input of [
+            'code=%ZZ',
+            'http://localhost/callback?code=%E0%A4%A',
+          ]) {
+            const { status, body } = await httpGet(
+              `/submit?input=${encodeURIComponent(input)}`,
+            );
+            expect(status).toBe(400);
+            expect(body).toContain('<form');
+            expect(body).not.toContain('URIError');
+            expect(body).not.toContain(process.cwd());
+          }
+          void deliver('?code=after-malformed');
+          return await waiting;
+        },
+      );
+      expect(code).toBe('after-malformed');
+    }, 30000);
+
     it('re-renders the form (HTTP 400) on an unusable paste, without ending the login', async () => {
       const code = await withBrowserCallbackServer(
         { port: PORT, timeoutMs: NO_BOUND },
@@ -618,6 +653,55 @@ describe('withBrowserCallbackServer', () => {
         },
       );
       expect(code).toBe('after-bad-paste');
+    }, 30000);
+  });
+
+  /**
+   * No answer of the scope comes from Express's defaults (Task 23 fix
+   * round 1): its error handler renders and prints the stack — absolute
+   * paths and the thrown text. A route that throws gets a fixed page and
+   * nothing is written anywhere; an unknown path gets fixed text.
+   */
+  describe("every answer is the scope's own", () => {
+    it('a route that throws: a fixed 500 page, nothing of the error, nothing printed', async () => {
+      const SECRET = 'REVIEW_TEST_ROUTE_SECRET_5e1';
+      const printed = jest
+        .spyOn(console, 'error')
+        .mockImplementation(() => undefined);
+      const written = jest
+        .spyOn(process.stderr, 'write')
+        .mockImplementation(() => true);
+      try {
+        const reply = await runCallbackScope<
+          string,
+          { status: number; body: string }
+        >(
+          { port: PORT, timeoutMs: NO_BOUND },
+          (app) => {
+            app.get('/boom', () => {
+              throw new Error(`${SECRET} at ${process.cwd()}/x.ts`);
+            });
+          },
+          async () => await httpGet('/boom'),
+        );
+        expect(reply.status).toBe(500);
+        expect(reply.body).toContain('The callback could not be handled.');
+        expect(reply.body).not.toContain(SECRET);
+        expect(reply.body).not.toContain(process.cwd());
+        expect(printed).not.toHaveBeenCalled();
+        expect(JSON.stringify(written.mock.calls)).not.toContain(SECRET);
+      } finally {
+        printed.mockRestore();
+        written.mockRestore();
+      }
+    }, 30000);
+
+    it('an unknown path: fixed text', async () => {
+      const reply = await withBrowserCallbackServer(
+        { port: PORT, timeoutMs: NO_BOUND },
+        async () => await httpGet('/nowhere/<b>'),
+      );
+      expect(reply).toEqual({ status: 404, body: 'Not found' });
     }, 30000);
   });
 });

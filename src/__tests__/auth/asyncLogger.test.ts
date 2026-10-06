@@ -189,7 +189,11 @@ describe('the interactive login with a consumer logger', () => {
     );
     expect(run.result).toEqual(expected);
     expect(run.unhandled).toEqual([]);
-    expect(run.stderr).toBe('');
+    // Fix round 1 (item 8): a prompt whose info rejected is not lost — it
+    // reaches stderr too; nothing of the rejection does.
+    expect(run.stderr).toContain('Open this URL to authenticate');
+    expect(run.stderr).toContain('Enter code: UC-1');
+    expect(run.stderr).not.toContain('async info');
   });
 
   it('a throwing logger: the same outcomes, and the prompts reach stderr instead', () => {

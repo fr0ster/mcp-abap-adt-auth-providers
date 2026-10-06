@@ -259,6 +259,27 @@ export async function runCallbackScope<TResult, TReturn>(
   };
 
   routes(app, settle);
+  // Every answer is one of this scope's own pages: an unknown path gets fixed
+  // text, and a route that throws gets a fixed page — never Express's default
+  // handler, which renders and prints the stack (absolute paths, the thrown
+  // text). Nothing of the error is logged.
+  app.use((_req: express.Request, res: express.Response) => {
+    sendText(res, 404, 'Not found');
+  });
+  app.use(
+    (
+      _error: unknown,
+      _req: express.Request,
+      res: express.Response,
+      _next: express.NextFunction,
+    ) => {
+      if (res.headersSent) {
+        res.end();
+        return;
+      }
+      sendHtml(res, 500, errorHtml('The callback could not be handled.'));
+    },
+  );
 
   signal?.addEventListener('abort', onAbort, { once: true });
 
@@ -302,13 +323,19 @@ const CALLBACK_CSP =
 
 /** `&`, `<`, `>`, `"` and `'` as entities: a value in a page is text, never markup. */
 export function escapeHtml(value: string): string {
-  return value
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;');
+  // Plain code, no regex: the value is callback text, anyone's.
+  let escaped = '';
+  for (const character of value) escaped += ENTITIES[character] ?? character;
+  return escaped;
 }
+
+const ENTITIES: Readonly<Record<string, string>> = {
+  '&': '&amp;',
+  '<': '&lt;',
+  '>': '&gt;',
+  '"': '&quot;',
+  "'": '&#39;',
+};
 
 /** An HTML page, said to be one, in UTF-8. */
 export function sendHtml(

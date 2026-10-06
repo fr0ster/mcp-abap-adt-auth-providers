@@ -184,7 +184,7 @@ A provider owns what it can compute: the authorization URL and the token exchang
 
 Ship-default strategies: `browserCallbackStrategy`, `oidcCallbackStrategy`, `samlCallbackStrategy`, `manualPasteStrategy`, `manualSamlResponseStrategy`, `externalCodeStrategy`, `staticCodeStrategy`.
 
-**Lifecycle: whoever constructs, disposes.** A consumer-supplied strategy is never disposed by a provider — the point of a long-lived receiver is to outlive one login. A default the provider constructed itself is disposed from a `finally`, and a `dispose` failure is logged rather than allowed to replace the error that made the login fail. `dispose()` disables a strategy permanently, which is why providers construct a fresh default per login.
+**Lifecycle: whoever constructs, disposes.** A provider builds no strategy of its own (rule 7) and disposes none: the strategy it is given — by the consumer, or composed by a static factory (`inBrowser`, `fromTerminal`) the consumer called — lives as long as the provider and is used for every login; the consumer owns it and disposes it when done, since the point of a long-lived receiver is to outlive one login. `dispose()` disables a strategy permanently and ends its logins in flight (`disposed`); an abort through `signal` ends only the login (`aborted`) and leaves the strategy usable.
 
 ### Cancellable shared attempts (spec §6b)
 
