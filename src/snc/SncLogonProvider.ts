@@ -48,9 +48,9 @@ import {
 import { nodeSncSystem } from './SncSystem';
 import { SECURE_LOGIN_CLIENT } from './secureLoginClient';
 import {
-  admittedLibraryPath,
   archsOf,
   foreignLocatorRefusal,
+  type GssRefusals,
   sncCause,
   sncRefusal,
 } from './sncRefusal';
@@ -110,6 +110,8 @@ export class SncLogonProvider extends AuthProviderBase {
   private readonly logger?: ILogger | undefined;
   private readonly parties = createParties();
   private library?: SncLibrary | undefined;
+  /** The GSS explanations carrying the library diagnostic, minted by `prepare()`. */
+  private explained?: GssRefusals | undefined;
   /** The shipped Secure Login Client probe applies — the one product a refusal may name. */
   private secureLoginClient = false;
 
@@ -267,15 +269,33 @@ export class SncLogonProvider extends AuthProviderBase {
       }
     }
     throwIfAborted(signal);
+    const secureLoginClient = applying instanceof SecureLoginClientProbe;
+    // The one extraction site of the `library` diagnostic (spec §3.3): the
+    // path the locator returned, trimmed here. `rejected()` relays these.
+    const libraryArchs = archsOf(library);
+    const withArchs = libraryArchs.length ? { libraryArchs } : {};
+    const diagnostics = { library: library.path };
+    const explained: GssRefusals = {
+      noCredential: authError.snc(
+        { problem: 'no-credential', secureLoginClient, ...withArchs },
+        diagnostics,
+      ),
+      initFailed: authError.snc(
+        { problem: 'library-init-failed', ...withArchs },
+        diagnostics,
+      ),
+    };
     this.library = library;
-    this.secureLoginClient = applying instanceof SecureLoginClientProbe;
+    this.secureLoginClient = secureLoginClient;
+    this.explained = explained;
+    const admitted = explained.initFailed.diagnostics?.library;
     // Fixed words; only admitted values as fields — the path through
     // LocalPath, the architectures from the closed set, and a product name
     // only when it is the shipped probe's. A consumer's text never reaches
     // the line, so a newline or a bidi control cannot forge one.
     const fields = {
-      library: admittedLibraryPath(library.path) ?? null,
-      archs: archsOf(library),
+      library: typeof admitted === 'string' ? admitted : null,
+      archs: libraryArchs,
       product: this.secureLoginClient
         ? SECURE_LOGIN_CLIENT
         : applying
@@ -322,8 +342,8 @@ export class SncLogonProvider extends AuthProviderBase {
    */
   protected onRejected(rejection: IAuthRejection): AuthOutcome {
     const context = {
-      library: this.library,
       secureLoginClient: this.secureLoginClient,
+      explained: this.explained,
     };
     const error = readSafely(rejection, 'error');
     const cause = sncCause(error, context);

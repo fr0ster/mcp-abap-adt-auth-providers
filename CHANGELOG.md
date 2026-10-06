@@ -9,6 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <!-- 6.0.0, in progress (PR #68); Task 30 writes the full entry. -->
 
+### Added
+
+- **The shape check in `lint:check`.** `tools/check-provider-shape.mjs` — a
+  byte-identical copy of the one `@mcp-abap-adt/auth-errors` publishes,
+  compared byte for byte by a test — runs after Biome with rules 1–8 and
+  `--base ./src/auth/AuthProviderBase#AuthProviderBase`: every provider
+  reaches `AuthProviderBase` and declares none of the four moments, no cast
+  to a contract type (`tools/assertion-sites.json` is empty), diagnostics
+  only at the approved extraction sites (`tools/diagnostic-sites.json`),
+  `guard` reads nothing before its boundary, and no `Basic ` value outside
+  `legacyBasic` / `clientSecretBasic`. The SNC `library` diagnostic is now
+  extracted at one site: `prepare()` mints the two GSS explanations with it,
+  and `rejected()` relays them.
+
 ### Removed
 
 - **The 5.x error classes and `refusalWords`.** `TokenProviderError`,

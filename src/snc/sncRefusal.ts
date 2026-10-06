@@ -13,10 +13,21 @@ import { readSafely } from '../auth/knownCodes';
 import type { SncLibrary } from './DefaultSncLibraryLocator';
 import type { SncArch } from './libraryArchitectures';
 
+/**
+ * The two GSS explanations, minted once by `prepare()` — the one site that
+ * extracts the `library` diagnostic (spec §3.3) — so `rejected()` relays them
+ * and builds no diagnostic of its own.
+ */
+export interface GssRefusals {
+  readonly noCredential: SncRefusal;
+  readonly initFailed: SncRefusal;
+}
+
 /** What `rejected()` knows when it explains a refusal. */
 export interface SncContext {
-  readonly library?: SncLibrary | undefined;
   readonly secureLoginClient: boolean;
+  /** Absent until `prepare()` resolved a library. */
+  readonly explained?: GssRefusals | undefined;
 }
 
 /** The SNC refusals: built here, minted by auth-errors. */
@@ -36,38 +47,19 @@ export function archsOf(library: SncLibrary | undefined): SncArch[] {
   return archs.filter((arch): arch is SncArch => isSncArch(arch));
 }
 
-/** The resolved library's path as the `library` diagnostic, when there is one. */
-function libraryDiagnostic(library: SncLibrary | undefined) {
-  return library === undefined ? {} : { library: library.path };
-}
-
-/**
- * `path` as the `library` diagnostic admits it (LocalPath), or `undefined`
- * when admission drops it — the one check, auth-errors', for a log field.
- */
-export function admittedLibraryPath(path: string): string | undefined {
-  const admitted = authError.snc(
-    { problem: 'library-init-failed' },
-    { library: path },
-  ).diagnostics?.library;
-  return typeof admitted === 'string' ? admitted : undefined;
-}
-
 /** The explanation of a GSS code in the error, when it carries one (G1, G2). */
 export function sncCause(
   error: unknown,
   context: SncContext,
 ): SncRefusal | undefined {
   const text = searchable(error);
-  const archs = archsOf(context.library);
   if (text.includes('A2200019')) {
-    return authError.snc(
-      {
+    return (
+      context.explained?.noCredential ??
+      authError.snc({
         problem: 'no-credential',
         secureLoginClient: context.secureLoginClient,
-        ...(archs.length ? { libraryArchs: archs } : {}),
-      },
-      libraryDiagnostic(context.library),
+      })
     );
   }
   const lower = text.toLowerCase();
@@ -75,12 +67,9 @@ export function sncCause(
     lower.includes('sncerr_init') ||
     lower.includes('gssapi library invalid/missing')
   ) {
-    return authError.snc(
-      {
-        problem: 'library-init-failed',
-        ...(archs.length ? { libraryArchs: archs } : {}),
-      },
-      libraryDiagnostic(context.library),
+    return (
+      context.explained?.initFailed ??
+      authError.snc({ problem: 'library-init-failed' })
     );
   }
   return undefined;
