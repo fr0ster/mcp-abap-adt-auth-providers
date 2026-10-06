@@ -235,6 +235,16 @@ function createValidator(
           }),
         );
       }
+      // 3 + 4. For the signed-Response validator: the Response itself must be
+      // signed, and then its Status is read before anything else — a
+      // declined login carries no Assertion to count (see checkStatus).
+      if (require === 'response') {
+        if (!covered.includes(root)) {
+          return refuse(NOT_SIGNED.response());
+        }
+        checkStatus(root);
+      }
+
       // 3a. A Response carries exactly one direct-child Assertion, and a
       // refusal says which way the count failed. Checked once, here, for both
       // validators: the signed-Response validator reads that assertion, and
@@ -301,66 +311,6 @@ function createValidator(
             check: 'signedNode',
           }),
         );
-      }
-
-      // 4. Status. Only when the Response is the signed element: otherwise it
-      // lies outside the signature, and checking a field an attacker sets is
-      // worse than not checking it — it reads like verification.
-      if (require === 'response') {
-        const status = requireOne(
-          root,
-          PROTOCOL_NS,
-          'Status',
-          () =>
-            authError['saml-assertion']({ rule: 'no-status', check: 'status' }),
-          (n) =>
-            authError['saml-assertion']({
-              rule: 'several-status',
-              check: 'status',
-              ...several(n),
-            }),
-        );
-        const code = requireOne(
-          status,
-          PROTOCOL_NS,
-          'StatusCode',
-          () =>
-            authError['saml-assertion']({
-              rule: 'no-status-code',
-              check: 'status',
-            }),
-          (n) =>
-            authError['saml-assertion']({
-              rule: 'several-status-codes',
-              check: 'status',
-              ...several(n),
-            }),
-        );
-        const codeValue = code.getAttribute('Value');
-        if (!codeValue) {
-          return refuse(
-            authError['saml-assertion']({
-              rule: 'status-code-no-value',
-              check: 'status',
-            }),
-          );
-        }
-        if (codeValue !== SUCCESS) {
-          // A registered status is a fact, in the words; any other value is
-          // the diagnostic, admitted as printable ASCII or dropped.
-          return refuse(
-            isSamlStatusCode(codeValue)
-              ? authError['saml-assertion']({
-                  rule: 'declined',
-                  check: 'status',
-                  statusCode: codeValue,
-                })
-              : authError['saml-assertion'](
-                  { rule: 'declined', check: 'status' },
-                  { statusCode: codeValue },
-                ),
-          );
-        }
       }
 
       // 4b. The assertion's own ID.
@@ -621,6 +571,72 @@ function createValidator(
       });
     },
   };
+}
+
+/**
+ * Step 4, Status — the signed-Response validator only, read as soon as the
+ * Response is known to be the signed element and before any Assertion is
+ * counted: a login the identity provider declined carries no Assertion
+ * (measured: Keycloak, Responder / NoPassive), and counting first would
+ * refuse it `no-direct-assertion`, hiding why. Either order refuses;
+ * nothing is accepted on the strength of Status. Outside the signed
+ * Response it is never read: a field an attacker sets is worse checked than
+ * not, since a check reads like verification.
+ */
+function checkStatus(root: Element): void {
+  const status = requireOne(
+    root,
+    PROTOCOL_NS,
+    'Status',
+    () => authError['saml-assertion']({ rule: 'no-status', check: 'status' }),
+    (n) =>
+      authError['saml-assertion']({
+        rule: 'several-status',
+        check: 'status',
+        ...several(n),
+      }),
+  );
+  const code = requireOne(
+    status,
+    PROTOCOL_NS,
+    'StatusCode',
+    () =>
+      authError['saml-assertion']({
+        rule: 'no-status-code',
+        check: 'status',
+      }),
+    (n) =>
+      authError['saml-assertion']({
+        rule: 'several-status-codes',
+        check: 'status',
+        ...several(n),
+      }),
+  );
+  const codeValue = code.getAttribute('Value');
+  if (!codeValue) {
+    refuse(
+      authError['saml-assertion']({
+        rule: 'status-code-no-value',
+        check: 'status',
+      }),
+    );
+  }
+  if (codeValue !== SUCCESS) {
+    // A registered status is a fact, in the words; any other value is
+    // the diagnostic, admitted as printable ASCII or dropped.
+    refuse(
+      isSamlStatusCode(codeValue)
+        ? authError['saml-assertion']({
+            rule: 'declined',
+            check: 'status',
+            statusCode: codeValue,
+          })
+        : authError['saml-assertion'](
+            { rule: 'declined', check: 'status' },
+            { statusCode: codeValue },
+          ),
+    );
+  }
 }
 
 /**

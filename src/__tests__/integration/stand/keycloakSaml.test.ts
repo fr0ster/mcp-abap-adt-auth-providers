@@ -392,12 +392,11 @@ describeBoth('SAML providers with Keycloak as the identity provider', () => {
 
   // Measured (Task 24, 2026-10-06): with no session and IsPassive="true",
   // Keycloak must not show a login page, so it declines in a signed
-  // Response — with no Assertion. The validator counts the direct-child
-  // Assertion (3a) before it reads Status (4), so a real declined login is
-  // refused `no-direct-assertion`, never `declined` (an order kept from
-  // 5.4.2; raised in the Task 24 report). The StatusCode Keycloak sent is
-  // read here and checked against SAML_STATUS_CODES.
-  it('Saml2PureProvider: a passive login Keycloak declines carries no Assertion, and a registered StatusCode', async () => {
+  // Response — with no Assertion, top-level StatusCode Responder, second
+  // level NoPassive. The signed-Response validator reads Status before it
+  // counts Assertions, so the login is refused `declined`, the registered
+  // status a fact.
+  it('Saml2PureProvider: a passive login Keycloak declines is refused declined, Responder a fact', async () => {
     const delivered: string[] = [];
     const acsUrl = 'http://localhost/sap/saml2/sp/acs';
     const passive = (url: string): string => {
@@ -441,11 +440,15 @@ describeBoth('SAML providers with Keycloak as the identity provider', () => {
         }),
         cookieProvider: async () => 'unreachable',
       }).getTokens(),
-      'no-direct-assertion',
+      'declined',
+      {
+        facts: { statusCode: 'urn:oasis:names:tc:SAML:2.0:status:Responder' },
+      },
     );
     expect(error.facts).toEqual({
-      rule: 'no-direct-assertion',
-      check: 'signedNode',
+      rule: 'declined',
+      check: 'status',
+      statusCode: 'urn:oasis:names:tc:SAML:2.0:status:Responder',
     });
     const doc = new DOMParser().parseFromString(
       Buffer.from(delivered[0] ?? '', 'base64').toString('utf8'),
@@ -460,9 +463,9 @@ describeBoth('SAML providers with Keycloak as the identity provider', () => {
       `[measured] Keycloak declined with ${JSON.stringify(codes)}\n`,
     );
     expect(doc.getElementsByTagNameNS(SAML_NS, 'Assertion')).toHaveLength(0);
-    // The top-level code is what `declined` would carry: a registered one.
+    // The top-level code is the one `declined` carries: a registered one.
     expect(isSamlStatusCode(codes[0])).toBe(true);
-    expect(codes[0]).not.toBe('urn:oasis:names:tc:SAML:2.0:status:Success');
+    expect(codes[0]).toBe(error.facts.statusCode);
   });
 });
 

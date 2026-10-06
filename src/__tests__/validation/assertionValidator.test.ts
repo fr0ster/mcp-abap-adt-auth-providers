@@ -475,6 +475,78 @@ describe("the signed-Response validator (Saml2PureProvider's default)", () => {
     );
   });
 
+  // The order (Task 24 ruling): under the signed-Response validator Status is
+  // read once the Response is the signed element and before any Assertion
+  // is counted, so a declined login — no Assertion, as Keycloak sends it —
+  // refuses `declined` with its status; a Success with no Assertion is still
+  // `no-direct-assertion`. Every case refuses: nothing is accepted on Status.
+  const RESPONDER = 'urn:oasis:names:tc:SAML:2.0:status:Responder';
+
+  it('refuses a declined Response carrying no Assertion as declined, with its status', async () => {
+    const xml = alteredResponse(
+      (u) => u.replace(/<saml:Assertion[\s\S]*<\/saml:Assertion>/, ''),
+      { status: RESPONDER },
+    );
+    expect(signedElementsOf(xml)[0]!.localName).toBe('Response');
+    await expectSamlRejection(
+      validator().validate(encode(xml), context),
+      'declined',
+      { facts: { statusCode: RESPONDER } },
+    );
+  });
+
+  it('still refuses a Success Response carrying no Assertion as no-direct-assertion', async () => {
+    const xml = alteredResponse((u) =>
+      u.replace(/<saml:Assertion[\s\S]*<\/saml:Assertion>/, ''),
+    );
+    await expectSamlRejection(
+      validator().validate(encode(xml), context),
+      'no-direct-assertion',
+    );
+  });
+
+  it('refuses a declined Response carrying an extra Assertion as declined, accepting nothing', async () => {
+    const xml = alteredResponse(
+      (u) => {
+        const assertion =
+          /<saml:Assertion[\s\S]*<\/saml:Assertion>/.exec(u)?.[0] ?? '';
+        return u.replace(
+          assertion,
+          `${assertion}${assertion.replace('ID="_a1"', 'ID="_a2"')}`,
+        );
+      },
+      { status: RESPONDER },
+    );
+    await expectSamlRejection(
+      validator().validate(encode(xml), context),
+      'declined',
+      { facts: { statusCode: RESPONDER } },
+    );
+  });
+
+  // Its signed Assertion moved into the unsigned Extensions: it still
+  // verifies, the Response has no direct-child Assertion, and the Status —
+  // outside any signature for this validator — is never read.
+  it('the assertion-only validator keeps its order: no direct Assertion is no-direct-assertion, whatever the Status', async () => {
+    const original = buildResponse({
+      signWhat: 'assertion',
+      status: RESPONDER,
+    });
+    const assertion =
+      /<saml:Assertion[\s\S]*<\/saml:Assertion>/.exec(original)?.[0] ?? '';
+    const xml = original
+      .replace(assertion, '')
+      .replace(
+        '<samlp:Status>',
+        `<samlp:Extensions>${assertion}</samlp:Extensions><samlp:Status>`,
+      );
+    expect(signedElementsOf(xml)[0]!.getAttribute('ID')).toBe('_a1');
+    await expectSamlRejection(
+      assertionValidator().validate(encode(xml), context),
+      'no-direct-assertion',
+    );
+  });
+
   it('refuses a Response with no Status', async () => {
     const xml = alteredResponse((u) =>
       u.replace(/<samlp:Status>[\s\S]*?<\/samlp:Status>/, ''),

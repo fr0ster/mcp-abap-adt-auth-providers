@@ -1302,7 +1302,13 @@ In this order; each refusal is an `AuthProviderFailure` of kind
 `saml-assertion` whose `error.facts.check` names the row, and whose
 `error.facts.rule` names the rule within it (see
 [Refusal messages](#refusal-messages)). Rows marked *(signed-Response only)* are not performed by
-`createSignedAssertionValidator`.
+`createSignedAssertionValidator`. One exception to the order, in the
+signed-Response validator: once every signature has verified (2) and the
+signature covers the `Response`, `Status` (4) is read **before** the rest of
+3 — a login the identity provider declined carries no `Assertion` (Keycloak
+answers a passive login with `Responder` / `NoPassive` and none), so it is
+refused `declined` with its status rather than "carries no direct-child
+saml:Assertion". Either order refuses; nothing is accepted on `Status`.
 
 | # | Check | Refused when | `check` |
 |---|---|---|---|
@@ -1418,7 +1424,9 @@ minted without it; a longer value or `ID` is cut at 64 code points with `…`
 dropped). Nothing a
 parser, `xml-crypto` or OpenSSL says reaches the error at all.
 
-The rules, in the order the validators check them; the last six are the
+The rules, in the order the validators check them — except that the
+signed-Response validator reads the `status` rules right after
+`response-not-signed`, before counting the `Assertion` (see above); the last six are the
 bearer grant's conversion of a validated payload (`Saml2BearerProvider`),
 reachable only when a custom validator accepted a payload it cannot convert:
 
