@@ -1673,11 +1673,15 @@ describe("the signed-Response validator (Saml2PureProvider's default)", () => {
       `NotOnOrAfter="${notOnOrAfter}"/></saml:SubjectConfirmation>`;
 
     it('refuses a replay at +200 s when a later confirmation still qualifies', async () => {
+      // Every time from the one `t0` (not `iso`, which reads the clock
+      // again): a millisecond boundary crossed between two reads made the
+      // `expiresAt` bound below fail under load (Task 26 fix round 1).
       const t0 = Date.now();
+      const at = (offsetMs: number) => new Date(t0 + offsetMs).toISOString();
       const payload = encode(
         buildResponse({
-          notOnOrAfter: iso(900_000),
-          confirmations: [bearer(iso(120_000)), bearer(iso(600_000))],
+          notOnOrAfter: at(900_000),
+          confirmations: [bearer(at(120_000)), bearer(at(600_000))],
         }),
       );
       const shared = validator();
@@ -1694,12 +1698,13 @@ describe("the signed-Response validator (Saml2PureProvider's default)", () => {
     // its NotBefore arrives, so it bounds retention too.
     it('refuses a replay once a confirmation that was not yet open qualifies', async () => {
       const t0 = Date.now();
+      const at = (offsetMs: number) => new Date(t0 + offsetMs).toISOString();
       const payload = encode(
         buildResponse({
-          notOnOrAfter: iso(900_000),
+          notOnOrAfter: at(900_000),
           confirmations: [
-            bearer(iso(120_000)),
-            bearer(iso(600_000), iso(150_000)),
+            bearer(at(120_000)),
+            bearer(at(600_000), at(150_000)),
           ],
         }),
       );

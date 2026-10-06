@@ -68,6 +68,23 @@ export interface AuthorizationCodeProviderConfig
  * Uses authorization_code grant type with browser-based OAuth2 flow.
  * Supports pre-built authorization URLs and automatic token refresh.
  */
+/**
+ * The `redirect_uri` a pre-built `authorizationUrl` declares, or `null`. A URL
+ * that does not parse is a configuration error naming `authorizationUrl` —
+ * never the value. TRANSITION: interfaces-auth 6.0.0's `CONFIG_CASES` has no
+ * "invalid value" case, so it is `required-fields-missing` (a usable
+ * `authorizationUrl` is missing) until the spec's amendment names one.
+ */
+function declaredRedirectOf(prebuilt: string): string | null {
+  let url: URL;
+  try {
+    url = new URL(prebuilt);
+  } catch {
+    throw requiredFieldsMissing(['authorizationUrl']);
+  }
+  return url.searchParams.get('redirect_uri');
+}
+
 export class AuthorizationCodeProvider extends BaseTokenProvider {
   private config: AuthorizationCodeProviderConfig;
 
@@ -102,6 +119,8 @@ export class AuthorizationCodeProvider extends BaseTokenProvider {
       // E1: the names of what is missing, never a value.
       throw requiredFieldsMissing(missingFields);
     }
+    // A pre-built URL that cannot be read is refused here, not at login.
+    if (config.authorizationUrl) declaredRedirectOf(config.authorizationUrl);
 
     // Initialize from provided tokens if available
     if (config.accessToken) {
@@ -158,9 +177,7 @@ export class AuthorizationCodeProvider extends BaseTokenProvider {
     };
 
     const prebuilt = this.config.authorizationUrl;
-    const declaredRedirect = prebuilt
-      ? new URL(prebuilt).searchParams.get('redirect_uri')
-      : null;
+    const declaredRedirect = prebuilt ? declaredRedirectOf(prebuilt) : null;
 
     // E12: the two addresses are diagnostics, never in the words (L9).
     const mismatch = (redirectUri: string) =>

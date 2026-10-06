@@ -22,7 +22,10 @@ import type {
 } from '@mcp-abap-adt/interfaces-auth';
 import { announcer } from '../auth/announce';
 import { launchBrowser } from '../auth/browserAuth';
-import { withBrowserCallbackServer } from '../auth/callbackServer';
+import {
+  validatePort,
+  withBrowserCallbackServer,
+} from '../auth/callbackServer';
 import { asContract } from '../auth/contractShape';
 import {
   abortedLogin,
@@ -124,7 +127,10 @@ export class BrowserCallbackStrategy<TResult>
 
   constructor(
     private readonly options: BrowserCallbackStrategyOptions<TResult>,
-  ) {}
+  ) {
+    // K6 at construction (a constructor may throw, spec §8.1).
+    if (options.port !== undefined) validatePort(options.port);
+  }
 
   /**
    * Settles only once the callback factory has settled — which the shipped
@@ -140,6 +146,9 @@ export class BrowserCallbackStrategy<TResult>
     if (this.inFlight) throw loginFailure({ outcome: 'busy' });
 
     const port = this.options.port ?? DEFAULT_CALLBACK_PORT;
+    // K6 again before the probe binds anything: the options object is the
+    // consumer's and may have changed since construction.
+    validatePort(port);
 
     const controller = new AbortController();
     this.controller = controller;

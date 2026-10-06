@@ -132,7 +132,11 @@ export function resolveTokenUrl(config: Saml2BearerExchangeConfig): string {
     return config.tokenUrl;
   }
   if (config.uaaUrl) {
-    return `${config.uaaUrl.replace(/\/+$/, '')}/oauth/token`;
+    // Trailing slashes dropped in plain code (no regex on configuration:
+    // `/\/+$/` was quadratic on a long run of slashes).
+    let end = config.uaaUrl.length;
+    while (end > 0 && config.uaaUrl[end - 1] === '/') end--;
+    return `${config.uaaUrl.slice(0, end)}/oauth/token`;
   }
   // E6.
   throw misconfigured(

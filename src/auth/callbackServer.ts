@@ -58,8 +58,13 @@ export type RouteSetup<TResult> = (
   settle: Settle<TResult>,
 ) => void;
 
-/** K6: a port no socket can bind — the value given is not echoed (L5). */
-function validatePort(port: unknown): void {
+/**
+ * K6: a port no socket can bind — an integer in 0..65535 only; a string is
+ * not a port (Node would bind a UNIX socket at that path). The value given is
+ * not echoed (L5). Checked before anything binds or probes: by the shipped
+ * strategy at construction and before its probe, and here.
+ */
+export function validatePort(port: unknown): void {
   if (
     typeof port !== 'number' ||
     !Number.isInteger(port) ||

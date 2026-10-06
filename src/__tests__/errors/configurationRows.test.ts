@@ -11,7 +11,7 @@
  * holding the same error.
  */
 
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { beforeEach, describe, expect, it, jest } from '@jest/globals';
 import {
@@ -48,6 +48,7 @@ import {
 } from '../../providers/saml2Utils';
 import { SsoProviderFactory } from '../../sso/SsoProviderFactory';
 import type { SsoProviderConfig } from '../../sso/types';
+import { browserCallbackStrategy } from '../../strategies/BrowserCallbackStrategy';
 import { staticCodeStrategy } from '../../strategies/codeStrategies';
 import { createSignedResponseValidator } from '../../validation/assertionValidator';
 import { createInMemoryReplayStore } from '../../validation/inMemoryReplayStore';
@@ -284,6 +285,17 @@ describe('E3–E10, E28 — SAML configuration', () => {
     });
   });
 
+  // Fix round 1: trailing slashes dropped in plain code, linear on a long run.
+  it('resolveTokenUrl drops trailing slashes of uaaUrl, linearly', () => {
+    expect(resolveTokenUrl({ uaaUrl: 'https://uaa.example///' })).toBe(
+      'https://uaa.example/oauth/token',
+    );
+    const long = `https://uaa.example${'/'.repeat(100_000)}x`;
+    const started = Date.now();
+    expect(resolveTokenUrl({ uaaUrl: long })).toBe(`${long}/oauth/token`);
+    expect(Date.now() - started).toBeLessThan(500);
+  });
+
   it('E7: idpInitiated without authorizationUrl, and a strategy asking for a URL', async () => {
     const strategy = asking('http://localhost:61001/callback', 'PAYLOAD');
     const thrown = await thrownBy(() =>
@@ -445,6 +457,45 @@ describe('E12 — redirect mismatch', () => {
       authorization: strategy(),
     });
     expectRow(await thrownBy(() => provider.getTokens()), E12);
+  });
+});
+
+describe('an unparseable authorizationUrl (spec amendment pending)', () => {
+  // Fix round 1: once `unknown` ("the authorization_code token request failed
+  // (unknown error)"); now a configuration error naming the field, never the
+  // value. interfaces-auth 6.0.0 has no "invalid value" case: interim
+  // `required-fields-missing`.
+  const row = {
+    case: 'required-fields-missing',
+    fields: ['authorizationUrl'],
+    reason: 'required configuration is missing: authorizationUrl',
+  };
+
+  it('is refused at construction', async () => {
+    const thrown = await thrownBy(
+      () =>
+        new AuthorizationCodeProvider({
+          uaaUrl: 'https://uaa.example',
+          clientId: 'client',
+          clientSecret: 'secret',
+          authorizationUrl: `not a url ${MARKER}`,
+          authorization: holding('http://localhost:61001/callback', 'code'),
+        }),
+    );
+    expectRow(thrown, row);
+  });
+
+  it('is refused at login when it changed after construction', async () => {
+    const provider = new AuthorizationCodeProvider({
+      uaaUrl: 'https://uaa.example',
+      clientId: 'client',
+      clientSecret: 'secret',
+      authorization: holding('http://localhost:61001/callback', 'code'),
+    });
+    (
+      provider as unknown as { config: { authorizationUrl: string } }
+    ).config.authorizationUrl = `not a url ${MARKER}`;
+    expectRow(await thrownBy(() => provider.getTokens()), row);
   });
 });
 
@@ -714,6 +765,41 @@ describe('E27 — staticCodeStrategy', () => {
 });
 
 describe('K6 — callback server port', () => {
+  const K6 = {
+    case: 'callback-port-invalid',
+    fields: ['port'],
+    reason: 'invalid callback server port: it must be an integer in 0..65535',
+  };
+
+  it.each([[70000], [-1], [1.5], [Number.NaN], ['k6sock'], ['61001']])(
+    'K6: browserCallbackStrategy({ port: %p }) refuses at construction',
+    async (port) => {
+      expectRow(
+        await thrownBy(() => browserCallbackStrategy({ port } as never)),
+        K6,
+      );
+    },
+  );
+
+  it.each([[70000], [-1], [1.5], [Number.NaN], ['k6sock']])(
+    'K6: a port changed after construction (%p) is refused before any probe — no socket file',
+    async (port) => {
+      const options: { port?: unknown } = { port: 61001 };
+      const strategy = browserCallbackStrategy(options as never);
+      options.port = port;
+      // The factory copies its options; mutate the strategy's own copy.
+      (strategy as unknown as { options: { port: unknown } }).options.port =
+        port;
+      const thrown = await thrownBy(() =>
+        strategy.authorize({
+          buildAuthorizationUrl: async () => 'https://idp.example/a',
+        } as never),
+      );
+      expectRow(thrown, K6);
+      expect(existsSync(join(process.cwd(), 'k6sock'))).toBe(false);
+    },
+  );
+
   it.each([[-1], [65536], [1.5], ['61001'], [Number.NaN]])(
     'K6: port %p, the value never in the words',
     async (port) => {

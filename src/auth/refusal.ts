@@ -100,6 +100,9 @@ const TOKEN_REQUEST = ' token request';
  * unfamiliar one, its free text lost (spec L10).
  */
 export function operationFor(what: string): OperationOf {
+  // `what` is required by the type; a JavaScript caller past it (no `what`,
+  // a number, an object) gets the unfamiliar operation, never a TypeError.
+  if (typeof what !== 'string') return { operation: 'unfamiliar-error' };
   if (what.endsWith(TOKEN_REQUEST)) {
     const grant = what.slice(0, -TOKEN_REQUEST.length);
     if (isGrant(grant)) return { operation: 'token-request', grant };

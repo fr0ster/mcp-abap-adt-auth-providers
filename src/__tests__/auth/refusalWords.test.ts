@@ -23,6 +23,30 @@ const MARKER = 'SECRET-MARKER';
 const text = (x: unknown) => JSON.stringify(x);
 
 describe('refusalWords', () => {
+  // Fix round 1: `what` is required by the type; a JavaScript caller past it
+  // gets the unfamiliar operation's words, never a TypeError (A19's totality).
+  it.each([[undefined], [42], [{}], [null]])(
+    'without a string `what` (%p): the unfamiliar words, no throw',
+    (what) => {
+      const call = refusalWords as (
+        error: unknown,
+        what?: unknown,
+      ) => {
+        reason: string;
+      };
+      expect(() => call(new Error('SECRET'), what)).not.toThrow();
+      expect(call(new Error('SECRET'), what).reason).toBe(
+        'an authentication error of a kind this version does not know',
+      );
+      expect(() =>
+        (loggedError as (e: unknown, w?: unknown) => unknown)(
+          new Error('SECRET'),
+          what,
+        ),
+      ).not.toThrow();
+    },
+  );
+
   it('is exported from the package index', () => {
     expect(typeof refusalWords).toBe('function');
   });
