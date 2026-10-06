@@ -11,6 +11,9 @@ import type {
   AuthorizationRequest,
   IAuthorizationStrategy,
 } from '@mcp-abap-adt/interfaces-auth';
+import { throwIfAborted, untilAborted } from '../auth/attempt';
+import { loginFailure } from '../auth/interactiveLogin';
+import { signalOf } from '../auth/signalledRequest';
 import { DEFAULT_CALLBACK_PORT } from './BrowserCallbackStrategy';
 
 const defaultRedirectUri = () =>
@@ -18,13 +21,27 @@ const defaultRedirectUri = () =>
 
 export interface ExternalCodeStrategyOptions {
   redirectUri?: string | undefined;
-  /** Receives the assembled URL — so the code returned matches its PKCE challenge. */
-  provide: (authorizationUrl: string) => Promise<string>;
+  /**
+   * Receives the assembled URL — so the code returned matches its PKCE
+   * challenge — and a signal that aborts when the login is aborted (this
+   * option's `signal` or the request's): the strategy settles at the abort
+   * itself, it holds nothing to release.
+   */
+  provide: (authorizationUrl: string, signal: AbortSignal) => Promise<string>;
+  /** Ends every login of this strategy `aborted`, beside the request's own signal. */
+  signal?: AbortSignal | undefined;
 }
 
 export interface StaticCodeStrategyOptions {
   redirectUri?: string | undefined;
   payload: string;
+}
+
+/** One signal that aborts when either given one does. */
+function combined(...signals: Array<AbortSignal | undefined>): AbortSignal {
+  return AbortSignal.any(
+    signals.filter((signal): signal is AbortSignal => signal !== undefined),
+  );
 }
 
 /** The consumer drives its own interactive flow and needs the URL to do it. */
@@ -36,10 +53,19 @@ export function externalCodeStrategy(
     async authorize(
       request: AuthorizationRequest,
     ): Promise<AuthorizationOutcome<string>> {
-      const url = await request.buildAuthorizationUrl(redirectUri);
-      const payload = await options.provide(url);
+      const signal = combined(options.signal, signalOf(request));
+      throwIfAborted(signal);
+      const url = await untilAborted(
+        Promise.resolve(request.buildAuthorizationUrl(redirectUri)),
+        signal,
+      );
+      throwIfAborted(signal);
+      const payload = await untilAborted(
+        Promise.resolve(options.provide(url, signal)),
+        signal,
+      );
       if (!payload) {
-        throw new Error('Authorization code provider returned an empty value');
+        throw loginFailure({ outcome: 'no-input' });
       }
       return { payload, redirectUri };
     },

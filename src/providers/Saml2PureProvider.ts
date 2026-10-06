@@ -24,6 +24,7 @@ import {
   storedExpiry,
   type TokenProviderHooks,
 } from './BaseTokenProvider';
+import type { LoginFactoryOptions } from './LoginFactoryOptions';
 import type { Saml2CommonConfig, SamlTrust } from './saml2Utils';
 import {
   checkAssertionValidator,
@@ -79,11 +80,11 @@ export class Saml2PureProvider extends BaseTokenProvider {
       'authorization' | 'assertionValidator'
     >,
     trust: SamlTrust,
-    options: { timeoutMs?: number } = {},
+    options: LoginFactoryOptions = {},
   ): Saml2PureProvider {
     return new Saml2PureProvider({
       ...config,
-      authorization: samlCallbackStrategy({ timeoutMs: options.timeoutMs }),
+      authorization: samlCallbackStrategy({ signal: options.signal }),
       assertionValidator: createSignedResponseValidator({
         idpCertificates: trust.idpCertificates,
         clockSkewMs: trust.clockSkewMs,

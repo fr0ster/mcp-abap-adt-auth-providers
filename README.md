@@ -266,7 +266,7 @@ Since 2.0.0 an interactive login is conducted by an **authorization strategy**
 (`IAuthorizationStrategy` from `@mcp-abap-adt/interfaces-auth`) passed as
 `authorization`. The provider owns what it can compute — the authorization URL
 and the token exchange; everything between them (reaching the URL, receiving
-what comes back, the port, the timeout) belongs to the strategy, which a
+what comes back, the port, how long to wait) belongs to the strategy, which a
 consumer may replace wholesale. See
 [Choosing an authorization strategy](#choosing-an-authorization-strategy).
 
@@ -398,12 +398,11 @@ Options common to the three callback strategies:
 | Option | Default | Meaning |
 |---|---|---|
 | `port` | `61001` (`DEFAULT_CALLBACK_PORT`) | Port to bind. `0` binds an ephemeral one — usable only where the identity provider accepts a loopback redirect on any port, never where a fixed redirect URI is registered |
-| `timeoutMs` | `30000` (`DEFAULT_LOGIN_TIMEOUT_MS`) | How long the login may wait for its callback |
 | `browser` | `'none'` | `'none'` / `'headless'` print the URL; `'system'`, `'auto'`, `'chrome'`, `'edge'`, `'firefox'` open it |
 | `callbackServer` | the one this package ships | Your own `CallbackServerFactory`, to reuse a server you already run |
 | `openUrl` | the built-in launcher | Receives `(url, browser, redirectUri)` |
 | `remoteHint` | the paste hint, only for the shipped UAA transport | Extra guidance printed in `'none'` / `'headless'` mode |
-| `signal` | — | `AbortSignal` cancelling the login |
+| `signal` | — | `AbortSignal` cancelling the login — the only bound there is (since 6.0.0 no login times out on its own): pass `AbortSignal.timeout(ms)` for a deadline |
 
 Note the `browser` default: **`'none'`, so nothing is opened unless you ask for
 it.** The URL is always shown, even with no logger — it falls back to `stderr`,
@@ -428,7 +427,7 @@ import { BrowserCallbackStrategy } from '@mcp-abap-adt/auth-providers';
 const strategy = new BrowserCallbackStrategy<MyPayload>({
   callbackServer: withMyOwnCallbackServer, // CallbackServerFactory<MyPayload>
   port: 61001,
-  timeoutMs: 30000,
+  signal: AbortSignal.timeout(300_000), // your bound, if you want one
 });
 ```
 
@@ -1893,11 +1892,11 @@ use, an error is thrown; specify a different port or free it before starting
 authentication. `port: 0` binds an ephemeral port, which works only where the
 identity provider accepts a loopback redirect on any port.
 
-**Port lifetime**: the callback port is held for the login and nothing longer. It is bound when the login window opens and released when the login ends — by success, by failure, by timeout, or by cancellation — and the returned promise settles only after the socket is actually free. An error therefore always means the port is already available, and the port is released *before* the authorization code is exchanged for a token, so a slow identity provider cannot hold it either.
+**Port lifetime**: the callback port is held for the login and nothing longer. It is bound when the login window opens and released when the login ends — by success, by the identity provider's refusal, by another failure, or by an abort — and the returned promise settles only after the listening socket is closed. No timer is involved: a connection still open is ended gracefully and let go, never waited for. An error therefore always means the port is already available, and the port is released *before* the authorization code is exchanged for a token, so a slow identity provider cannot hold it either.
 
-**Timeout**: an interactive login waits 30 seconds for its callback, adjustable with `timeoutMs`. This applies to the browser, OIDC and SAML flows alike; before 1.2.0 the OIDC and SAML flows had no timeout at all, so an abandoned login held its port for the life of the process.
+**No built-in timeout** (since 6.0.0): an interactive login — browser, OIDC, SAML, or a manual paste — waits until its result arrives, the identity provider refuses, or the consumer's `AbortSignal` aborts it; it then ends `interactive-login` `aborted` and the port is free. The `timeoutMs` options, `DEFAULT_LOGIN_TIMEOUT_MS` and the 30 s / 300 s defaults are gone: a consumer that passed `timeoutMs` passes `signal: AbortSignal.timeout(ms)` instead (to the strategy, or to `inBrowser` / `fromTerminal` as `{ signal }`); one that passed nothing now waits until it aborts.
 
-**Incomplete callbacks**: a `/callback` carrying neither a code nor an error no longer ends the login. It is answered, counted, and the tally is reported if the login later times out — so a browser prefetch or a stray probe cannot cancel a login the user is still completing.
+**Incomplete callbacks**: a `/callback` carrying neither a code nor an error no longer ends the login. It is answered, counted, and the tally is reported when the login is aborted (`the browser login was aborted; 2 incomplete request(s) reached /callback and were ignored`) — so a browser prefetch or a stray probe cannot cancel a login the user is still completing.
 
 **Cancellation**: pass `signal` to the strategy, or call `dispose()` on it. Both are honoured before the bind, during it, and while waiting; `dispose()` resolves only once the socket is free.
 
@@ -2081,7 +2080,8 @@ next moment starts a fresh, unbounded login and gets a token.
 `AuthorizationRequest` carrying `signal` (`SignalledAuthorizationRequest` until interfaces-auth
 6.0.0); the shipped strategies combine it with their own `signal` option, so either one ends the
 login. A replacement login waits until the aborted one's strategy has **settled** its `authorize`
-— its callback port closed, its stdin reader released — before it starts its own authorization
+— its callback port closed, its stdin reader released (a manual strategy's custom `read` gets
+the same signal, and the strategy settles only once that `read` has) — before it starts its own authorization
 (never `busy`, never `port-in-use`). A consumer strategy that ignores the signal never settles,
 and blocks the next login until it does; one that settles before releasing its socket lets the
 next login meet it. A request on the wire is never waited for: it holds nothing local.
@@ -2119,12 +2119,12 @@ import {
   RefreshError,
   SessionDataError,
   ServiceKeyError,
-  BrowserAuthError,
   AssertionValidationError,
   CertificateMaterialError,
   ClientAuthenticationError,
   ClientAuthenticationResultError,
 } from '@mcp-abap-adt/auth-providers';
+import { isAuthProviderFailure } from '@mcp-abap-adt/auth-errors';
 
 try {
   const result = await provider.getTokens();
@@ -2137,12 +2137,12 @@ try {
     // provider config validation failed
     console.error('Missing required fields:', error.missingFields);
     console.error('Error code:', error.code); // 'VALIDATION_ERROR'
-  } else if (error instanceof BrowserAuthError) {
-    // A browser login failed: timeout, the IdP's refusal, a busy callback
-    // port, a browser that would not open, an abort. The message is the
-    // original's, and the original is `cause`.
-    console.error('Browser auth failed:', error.message);
-    console.error('Error code:', error.code); // 'BROWSER_AUTH_ERROR'
+  } else if (isAuthProviderFailure(error)) {
+    // Since 6.0.0 an interactive login ends with an `interactive-login`
+    // failure (`readFailure(error, operation).facts.outcome`: 'aborted',
+    // 'port-in-use', 'identity-provider-refused', 'browser-launch-failed',
+    // 'failed', …); its message is the error's words.
+    console.error('Login failed:', error.message);
   }
 }
 ```
@@ -2150,7 +2150,7 @@ try {
 **Error Types**:
 - `TokenProviderError` - Base class with `code: string` property
 - `ValidationError` - provider config validation failed, includes `missingFields: string[]`
-- `BrowserAuthError` - a browser login failed (timeout, the identity provider's refusal, a busy callback port, a browser that would not open, an abort), includes `cause?: Error`; thrown by every browser strategy (`browserCallbackStrategy`, `oidcCallbackStrategy`, `samlCallbackStrategy`). Its message keeps this package's own words (the timeout, "Port N is already in use", an abort); the identity provider's refusal names only its registered code (`the identity provider refused the login (consent_required)`), never `error_description`; for anything else — a custom transport's or launcher's error — it is fixed words (`the browser login failed (unknown error)`, with an allowlisted code when there is one) and the original is `cause`, since the foreign text may hold a secret and the message is what gets logged
+- `BrowserAuthError` - exported, but thrown by nothing since 6.0.0 (removed in 6.0.0's final release): every end of an interactive login — the identity provider's refusal, a busy callback port, a browser that would not open, an abort, a disposed or busy strategy, an empty or unreadable paste — is an `AuthProviderFailure` of kind `interactive-login`, thrown by every shipped strategy. Its words keep this package's own ("Port N is already in use", `BrowserCallbackStrategy has been disposed`); the identity provider's refusal names only its registered code (`the identity provider refused the login (consent_required)`), never `error_description` or `error_uri`; anything else — a custom transport's error — is `the browser login failed (…)` naming only an HTTP status, a registered OAuth `error` and an allowlisted code, with no `cause`
 - `TokenEndpointError` - a token request failed at a site that wraps it (UAA refresh, client credentials, passcode, OIDC device initiation, password grant); a plain `Error`, not a `TokenProviderError`; carries `status`, `oauthError` (a registered OAuth / OIDC code only) and `code` (an allowlisted system or TLS code only); its `cause` is the safe `AxiosError` the request was reduced to, never what the request rejected with (since 5.4.2)
 - `RefreshError`, `SessionDataError`, `ServiceKeyError` - exported, but no provider throws them: a refused refresh falls back to a login inside `getTokens()`/`refreshTokens()`, and sessions and service keys are read by `@mcp-abap-adt/auth-stores`, not here
 - `AssertionValidationError` - a SAML assertion was refused, includes `check: AssertionCheck` naming the check that failed — see [SAML assertion validation](#errors)

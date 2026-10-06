@@ -27,6 +27,7 @@ import {
   refreshTokenRefused,
   type TokenProviderHooks,
 } from './BaseTokenProvider';
+import type { LoginFactoryOptions } from './LoginFactoryOptions';
 
 export interface UaaPasscodeProviderConfig
   extends TokenProviderHooks,
@@ -81,16 +82,14 @@ export class UaaPasscodeProvider extends BaseTokenProvider {
     return url.slice(0, end);
   }
 
-  /** The usual choice: a passcode typed in a terminal; five minutes to paste it by default. */
+  /** The usual choice: a passcode typed in a terminal, waited for until it arrives or `options.signal` aborts. */
   static fromTerminal(
     config: Omit<UaaPasscodeProviderConfig, 'authorization'>,
-    options: { timeoutMs?: number } = {},
+    options: LoginFactoryOptions = {},
   ): UaaPasscodeProvider {
     return new UaaPasscodeProvider({
       ...config,
-      authorization: manualPasscodeStrategy({
-        timeoutMs: options.timeoutMs ?? 300_000,
-      }),
+      authorization: manualPasscodeStrategy({ signal: options.signal }),
     });
   }
 

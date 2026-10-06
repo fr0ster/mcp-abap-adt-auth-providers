@@ -34,9 +34,10 @@ describe('manualPasscodeStrategy', () => {
     );
   });
 
+  // K14 (6.0.0): which input was empty is no longer named (minor loss).
   it('refuses an empty code', async () => {
     await expect(
       manualPasscodeStrategy({ read: async () => '   ' }).authorize(request()),
-    ).rejects.toThrow('No passcode was provided');
+    ).rejects.toThrow('no input was received');
   });
 });

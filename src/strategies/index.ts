@@ -7,7 +7,6 @@ export {
   BrowserCallbackStrategy,
   browserCallbackStrategy,
   DEFAULT_CALLBACK_PORT,
-  DEFAULT_LOGIN_TIMEOUT_MS,
   oidcCallbackStrategy,
   samlCallbackStrategy,
 } from './BrowserCallbackStrategy';

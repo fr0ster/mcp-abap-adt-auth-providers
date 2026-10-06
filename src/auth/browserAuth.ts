@@ -3,10 +3,10 @@
  */
 
 import * as child_process from 'node:child_process';
+import { logFields, readFailure } from '@mcp-abap-adt/auth-errors';
 import type { IAuthorizationConfig } from '@mcp-abap-adt/interfaces-auth-sap';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
 import axios from 'axios';
-import { loggedError } from './refusal';
 import {
   attemptSite,
   legacyBasic,
@@ -212,7 +212,7 @@ function _isDebugEnabled(): boolean {
  * Open the authorization URL, or tell the user how to do it.
  *
  * Never awaited on the critical path by the caller: a launcher that hangs must
- * not delay the login timeout or the release of the port. A launcher that fails
+ * not delay the result or the release of the port. A launcher that fails
  * is reported through the scope's `fail`, which is just another way for the
  * scope to end.
  */
@@ -257,7 +257,7 @@ export async function launchBrowser(
       // Fixed words only: what `open` threw is not this package's text.
       logQuietly(() =>
         log?.warn(
-          `⚠️  Could not open browser automatically: ${loggedError(error, 'opening the browser').error}`,
+          `⚠️  Could not open browser automatically: ${logFields(readFailure(error, 'opening-browser')).error}`,
         ),
       );
       announce('🔗 Please open this URL in your browser to authenticate:');
@@ -338,11 +338,12 @@ export async function launchBrowser(
     }
     child_process.exec(`${command} "${authorizationUrl}"`, (error) => {
       if (error) {
-        const { error: words } = loggedError(error, 'opening the browser');
+        // H8: `logFields` of the failure, and the URL already announced.
+        const fields = logFields(readFailure(error, 'opening-browser'));
         logQuietly(() =>
           log?.error(
-            `❌ Failed to open browser: ${words}. Please open manually: ${authorizationUrl}`,
-            { error: words, url: authorizationUrl },
+            `❌ Failed to open browser: ${fields.error}. Please open manually: ${authorizationUrl}`,
+            { ...fields, url: authorizationUrl },
           ),
         );
       }

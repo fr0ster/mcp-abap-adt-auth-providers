@@ -556,7 +556,6 @@ describe('no message of a thrown error in the logs', () => {
     const { logger, lines } = recordingLogger();
     const strategy = browserCallbackStrategy({
       port: 0,
-      timeoutMs: 2000,
       openUrl: async () => {
         throw new Error(MARKER);
       },

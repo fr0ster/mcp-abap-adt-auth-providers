@@ -107,7 +107,9 @@ describe('a thrown error carries no foreign message', () => {
     expect(text).not.toContain(MARKER);
   });
 
-  it('BrowserCallbackStrategy: a BrowserAuthError in fixed words, the original as cause', async () => {
+  // K11 (6.0.0): an `interactive-login` `failed` failure naming only the
+  // allowlisted code; no cause at all (L2), never the original.
+  it('BrowserCallbackStrategy: interactive-login failed in fixed words, no cause', async () => {
     const strategy = new BrowserCallbackStrategy<string>({
       callbackServer: async () => {
         throw original;
@@ -119,10 +121,15 @@ describe('a thrown error carries no foreign message', () => {
         buildAuthorizationUrl: async () => 'https://idp.example/a',
       }),
     );
-    expect(error).toBeInstanceOf(BrowserAuthError);
+    expect(isAuthProviderFailure(error)).toBe(true);
+    expect(readFailure(error, 'browser-login').facts).toEqual({
+      outcome: 'failed',
+      code: 'ECONNREFUSED',
+    });
     expect(text).toContain('ECONNREFUSED');
     expect(text).not.toContain(MARKER);
-    expect(error.cause).toBe(original);
+    expect(error.cause).toBeUndefined();
+    expect(inspect(error, { depth: null })).not.toContain(MARKER);
   });
 });
 
@@ -297,7 +304,6 @@ describe('an IdP refusal on the browser callback', () => {
         }
       )({
         port: 0,
-        timeoutMs: 5000,
         openUrl: refuse(
           `error=consent_required&error_description=${DESCRIPTION}`,
         ),
@@ -307,7 +313,11 @@ describe('an IdP refusal on the browser callback', () => {
           buildAuthorizationUrl: async () => 'https://idp.example/a',
         }),
       );
-      expect(error).toBeInstanceOf(BrowserAuthError);
+      // K10 / A8 (6.0.0): identity-provider-refused with the registered code.
+      expect(readFailure(error, 'browser-login').facts).toEqual({
+        outcome: 'identity-provider-refused',
+        oauthError: 'consent_required',
+      });
       expect(text).toContain('consent_required');
       expect(text).not.toContain(DESCRIPTION);
       const refusal = JSON.stringify(refusalFrom(error, 'the login'));
@@ -322,7 +332,6 @@ describe('an IdP refusal on the browser callback', () => {
   it('an unregistered code is dropped', async () => {
     const strategy = browserCallbackStrategy({
       port: 0,
-      timeoutMs: 5000,
       openUrl: refuse(`error=${DESCRIPTION}`),
     });
     const { error, text } = await thrownBy(() =>

@@ -7,13 +7,13 @@ import type {
   ICallbackServerHandle,
   ICallbackServerOptions,
 } from '@mcp-abap-adt/interfaces-auth';
-import { AuthorizationRefusedError } from './callbackScopeError';
 import {
   errorHtml,
   runCallbackScope,
   sendHtml,
   sendText,
 } from './callbackServer';
+import { identityProviderRefused } from './interactiveLogin';
 
 export interface OidcCallbackResult {
   code: string;
@@ -31,7 +31,7 @@ export const withOidcCallbackServer: CallbackServerFactory<
     (app, settle) => {
       app.get('/callback', (req, res) => {
         // An IdP that declines says so explicitly. That is a finished login,
-        // not a stray request, and it must not wait for the timeout.
+        // not a stray request: it ends the login at once.
         const { error, error_description } = req.query;
         if (error) {
           const message = error_description
@@ -41,7 +41,7 @@ export const withOidcCallbackServer: CallbackServerFactory<
           sendHtml(res, 400, errorHtml(message));
           // The registered code only: the description and error_uri are
           // anyone's text (a link to the local callback carries them).
-          settle.err(new AuthorizationRefusedError(error), res);
+          settle.err(identityProviderRefused(error), res);
           return;
         }
 

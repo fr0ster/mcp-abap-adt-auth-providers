@@ -160,7 +160,7 @@ async function login(
   const browse = options.browser ?? visit;
   const strategy = samlCallbackStrategy({
     port: stand.port,
-    timeoutMs: 10_000,
+    signal: AbortSignal.timeout(10_000),
     openUrl: async (url) => {
       await browse(url);
     },

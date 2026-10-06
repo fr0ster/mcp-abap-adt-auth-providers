@@ -28,6 +28,7 @@ import {
   refreshTokenRefused,
   type TokenProviderHooks,
 } from './BaseTokenProvider';
+import type { LoginFactoryOptions } from './LoginFactoryOptions';
 import type {
   Saml2BearerExchangeConfig,
   Saml2CommonConfig,
@@ -87,11 +88,11 @@ export class Saml2BearerProvider extends BaseTokenProvider {
       'authorization' | 'assertionValidator'
     >,
     trust: SamlTrust,
-    options: { timeoutMs?: number } = {},
+    options: LoginFactoryOptions = {},
   ): Saml2BearerProvider {
     return new Saml2BearerProvider({
       ...config,
-      authorization: samlCallbackStrategy({ timeoutMs: options.timeoutMs }),
+      authorization: samlCallbackStrategy({ signal: options.signal }),
       assertionValidator: createSignedAssertionValidator({
         idpCertificates: trust.idpCertificates,
         clockSkewMs: trust.clockSkewMs,

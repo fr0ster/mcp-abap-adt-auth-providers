@@ -1,6 +1,12 @@
 import { registeredOAuthError } from './oauthErrorBody';
 
 /**
+ * TRANSITION (removed in Task 27): since Task 23 constructed only for the
+ * callback port's validation (K6, converted in Task 26); every other end of
+ * a login is an `interactive-login` `AuthProviderFailure`
+ * (`interactiveLogin.ts`). `AuthorizationRefusedError` is constructed
+ * nowhere; both stay for the refusal ladder.
+ *
  * A browser login's own failure — the timeout, a port in use, an abort, a
  * scope that ended — whose message this package builds from fixed words and
  * configured numbers only (a port, a timeout, a count, the authorization URL

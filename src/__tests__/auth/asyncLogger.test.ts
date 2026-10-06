@@ -132,3 +132,79 @@ describe('the UAA code exchange with a consumer logger', () => {
     expect(run.unhandled).toEqual([]);
   });
 });
+
+/**
+ * The interactive login's log lines (Task 23): the prompt (`announce`), the
+ * callback server's ignored-request line, the launcher's failure line (H7)
+ * and the manual prompt — every one guarded. An async logger leaves no
+ * unhandled rejection; a throwing one changes no outcome, and a prompt it
+ * would have swallowed goes to stderr instead.
+ */
+const interactive = (logger: string) => `
+const http = require('node:http');
+const logger = ${logger};
+const get = (url) => new Promise((resolve) => {
+  const req = http.get(url, { agent: false }, (res) => { res.resume(); res.on('end', resolve); });
+  req.on('error', resolve);
+});
+const strategies = load('strategies/index.js');
+const { consoleDeviceCodePresenter } = load('deviceCode/DeviceCodePresenter.js');
+const outcomes = [];
+const settle = async (run) => {
+  try { outcomes.push(await run()); }
+  catch (error) { outcomes.push(errors.readFailure(error, 'unfamiliar-error').facts.outcome); }
+};
+await settle(async () => (await strategies.browserCallbackStrategy({
+  port: 0,
+  openUrl: async (_u, _b, redirectUri) => {
+    await get(redirectUri);
+    await get(redirectUri + '?code=c1');
+  },
+}).authorize({ buildAuthorizationUrl: async () => 'https://idp.example/a', logger })).payload);
+await settle(async () => (await strategies.browserCallbackStrategy({
+  port: 0,
+  openUrl: async () => { throw Object.assign(new Error('x'), { code: 'ENOENT' }); },
+}).authorize({ buildAuthorizationUrl: async () => 'https://idp.example/a', logger })).payload);
+await settle(async () => (await strategies.manualPasteStrategy({
+  read: async () => 'c2',
+}).authorize({ buildAuthorizationUrl: async () => 'https://idp.example/a', logger })).payload);
+await settle(async () => {
+  await consoleDeviceCodePresenter(logger).present({ verificationUri: 'https://idp.example/activate', userCode: 'UC-1' });
+  return 'shown';
+});
+report(outcomes);
+`;
+
+describe('the interactive login with a consumer logger', () => {
+  const expected = ['c1', 'browser-launch-failed', 'c2', 'shown'];
+
+  it('an async logger: no unhandled rejection, every outcome as without a logger', () => {
+    const run = runPlainNode<string[]>(
+      interactive(`{
+        debug: async () => { throw new Error('async debug'); },
+        info: async () => { throw new Error('async info'); },
+        warn: async () => { throw new Error('async warn'); },
+        error: async () => { throw new Error('async error'); },
+      }`),
+    );
+    expect(run.result).toEqual(expected);
+    expect(run.unhandled).toEqual([]);
+    expect(run.stderr).toBe('');
+  });
+
+  it('a throwing logger: the same outcomes, and the prompts reach stderr instead', () => {
+    const run = runPlainNode<string[]>(
+      interactive(`{
+        debug: () => { throw new Error('debug threw'); },
+        info: () => { throw new Error('info threw'); },
+        warn: () => { throw new Error('warn threw'); },
+        error: () => { throw new Error('error threw'); },
+      }`),
+    );
+    expect(run.result).toEqual(expected);
+    expect(run.unhandled).toEqual([]);
+    expect(run.stderr).toContain('Open this URL to authenticate');
+    expect(run.stderr).toContain('Enter code: UC-1');
+    expect(run.stderr).not.toContain('threw');
+  });
+});

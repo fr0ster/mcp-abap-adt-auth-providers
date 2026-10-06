@@ -57,6 +57,7 @@ export {
 export type {
   AuthorizationCodeProviderConfig,
   ClientCredentialsProviderConfig,
+  LoginFactoryOptions,
   OidcBrowserProviderConfig,
   OidcDeviceFlowProviderConfig,
   OidcPasswordProviderConfig,
@@ -114,7 +115,6 @@ export {
   BrowserCallbackStrategy,
   browserCallbackStrategy,
   DEFAULT_CALLBACK_PORT,
-  DEFAULT_LOGIN_TIMEOUT_MS,
   externalCodeStrategy,
   manualPasscodeStrategy,
   manualPasteStrategy,

@@ -2,7 +2,11 @@
  * OIDC Device Flow Provider
  */
 
-import type { AttemptContext } from '@mcp-abap-adt/auth-errors';
+import {
+  type AttemptContext,
+  logFields,
+  readFailure,
+} from '@mcp-abap-adt/auth-errors';
 import type {
   ITokenResult,
   OAuth2GrantType,
@@ -11,17 +15,16 @@ import { AUTH_TYPE_AUTHORIZATION_CODE } from '@mcp-abap-adt/interfaces-auth';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
 import { throwIfAborted, untilAborted } from '../auth/attempt';
 import { asContract } from '../auth/contractShape';
+import { loginFailure } from '../auth/interactiveLogin';
 import { discoverOidc, mtlsAlias } from '../auth/oidcDiscovery';
 import {
   initiateDeviceAuthorization,
   pollDeviceTokens,
   refreshOidcToken,
 } from '../auth/oidcToken';
-import { loggedError } from '../auth/refusal';
 import { logQuietly } from '../auth/tokenRequest';
 import {
   consoleDeviceCodePresenter,
-  DeviceCodePresentationError,
   type IDeviceCodePresenter,
 } from '../deviceCode/DeviceCodePresenter';
 import {
@@ -157,14 +160,16 @@ export class OidcDeviceFlowProvider extends BaseTokenProvider {
         expiresInSeconds: deviceFlow.expiresIn,
       });
     } catch (error) {
-      // The presenter's text may hold the code; the log gets fixed words only.
+      // H3: the presenter's text may hold the code; the log gets the
+      // `logFields` of its failure only.
       logQuietly(() =>
         this.logger?.warn(
           '[OidcDeviceFlowProvider] presenter failed',
-          loggedError(error, 'the presenter'),
+          logFields(readFailure(error, 'presenting-device-code')),
         ),
       );
-      throw new DeviceCodePresentationError();
+      // K17 / A2.
+      throw loginFailure({ outcome: 'device-code-not-shown' });
     }
 
     const tokens = await pollDeviceTokens(

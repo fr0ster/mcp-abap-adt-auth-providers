@@ -3,8 +3,15 @@
  *
  * One owner, one release point. The socket belongs to the scope, not to the
  * promise a caller happens to be awaiting: it is released on the first terminal
- * outcome — the body returning or throwing, an explicit failure, the timeout, or
- * an abort — and the factory settles only once it is actually free.
+ * outcome — the body returning or throwing, an explicit failure, the identity
+ * provider's refusal, or an abort — and the factory settles only once the
+ * listening socket is closed, so the port is free.
+ *
+ * No timer of this package's choosing bounds a scope (spec §6a): a login ends
+ * on its result, the identity provider's refusal or the consumer's
+ * `AbortSignal`. The 4.x `ICallbackServerOptions` still declares a bound in
+ * milliseconds as required; the scope reads no such field (Decision D6,
+ * removed from the call sites in Task 27).
  */
 
 import * as http from 'node:http';
@@ -16,16 +23,15 @@ import type {
 } from '@mcp-abap-adt/interfaces-auth';
 import express from 'express';
 import { extractCode } from './browserAuth';
+import { CallbackScopeError } from './callbackScopeError';
 import {
-  AuthorizationRefusedError,
-  CallbackScopeError,
-} from './callbackScopeError';
-
-/** Node's `setTimeout` takes a 32-bit signed delay; above this it fires in 1 ms. */
-const MAX_TIMEOUT_MS = 2_147_483_647;
-
-/** How long shutdown waits for `close` before destroying what is left. */
-const SHUTDOWN_GRACE_MS = 500;
+  abortedLogin,
+  failedLogin,
+  identityProviderRefused,
+  loginFailure,
+  portInUse,
+} from './interactiveLogin';
+import { logQuietly } from './tokenRequest';
 
 /**
  * How a route reports an outcome. Settling is deferred until the response has
@@ -39,8 +45,9 @@ export interface Settle<TResult> {
   err(error: Error, res?: express.Response): void;
   /**
    * This was not our redirect — a reloaded tab, a prefetch, a port scanner.
-   * Answered and counted; the login keeps waiting, bounded as ever by the
-   * timeout. Ends nothing.
+   * Answered and counted; the login keeps waiting until a result, the
+   * identity provider's refusal or an abort, whose words report the count.
+   * Ends nothing.
    */
   ignore(reason: string, res?: express.Response): void;
 }
@@ -50,23 +57,38 @@ export type RouteSetup<TResult> = (
   settle: Settle<TResult>,
 ) => void;
 
-function validate(options: ICallbackServerOptions): void {
-  const { port, timeoutMs } = options;
-  if (!Number.isInteger(port) || port < 0 || port > 65535) {
+/** K6 — converted to `configuration` `callback-port-invalid` in Task 26. */
+function validatePort(port: unknown): void {
+  if (
+    typeof port !== 'number' ||
+    !Number.isInteger(port) ||
+    port < 0 ||
+    port > 65535
+  ) {
     throw new CallbackScopeError(
       `Invalid callback server port: ${String(port)}. Must be an integer in 0..65535.`,
     );
   }
+}
+
+/** K8: the scope ended before a result arrived. */
+const callbackClosed = () => loginFailure({ outcome: 'callback-closed' });
+
+/**
+ * The bind failed: a port someone else holds is K1, with its words; any
+ * other failure names only its allowlisted code (K11).
+ */
+function bindFailure(error: unknown, port: number): Error {
   if (
-    !Number.isFinite(timeoutMs) ||
-    timeoutMs <= 0 ||
-    timeoutMs > MAX_TIMEOUT_MS
+    error !== null &&
+    typeof error === 'object' &&
+    'code' in error &&
+    error.code === 'EADDRINUSE' &&
+    port > 0
   ) {
-    throw new CallbackScopeError(
-      `Invalid callback server timeoutMs: ${String(timeoutMs)}. ` +
-        `Must be finite and within 1..${MAX_TIMEOUT_MS}.`,
-    );
+    return portInUse(port);
   }
+  return failedLogin(error);
 }
 
 /**
@@ -81,10 +103,9 @@ export async function runCallbackScope<TResult, TReturn>(
   routes: RouteSetup<TResult>,
   use: (server: ICallbackServerHandle<TResult>) => Promise<TReturn>,
 ): Promise<TReturn> {
-  validate(options);
-  if (options.signal?.aborted) {
-    throw new CallbackScopeError('Callback server aborted before it started');
-  }
+  const { port, signal, logger } = options;
+  validatePort(port);
+  if (signal?.aborted) throw abortedLogin('browser');
 
   const app = express();
   // Every response: no sniffing, and a policy that runs no script, loads
@@ -96,11 +117,25 @@ export async function runCallbackScope<TResult, TReturn>(
     next();
   });
   const server = http.createServer(app);
-  const sockets = new Set<Socket>();
+  /** Every open connection, and how many responses each is still writing. */
+  const sockets = new Map<Socket, number>();
+  let released = false;
   server.on('connection', (socket: Socket) => {
-    sockets.add(socket);
+    sockets.set(socket, 0);
     socket.on('close', () => sockets.delete(socket));
   });
+  server.on(
+    'request',
+    (req: http.IncomingMessage, res: http.ServerResponse) => {
+      const socket = req.socket;
+      sockets.set(socket, (sockets.get(socket) ?? 0) + 1);
+      res.once('close', () => {
+        const left = (sockets.get(socket) ?? 1) - 1;
+        if (sockets.has(socket)) sockets.set(socket, left);
+        if (released && left <= 0) letGo(socket);
+      });
+    },
+  );
 
   let resultSettled = false;
   let resolveResult!: (value: TResult) => void;
@@ -121,7 +156,6 @@ export async function runCallbackScope<TResult, TReturn>(
     rejectScope = rej;
   });
 
-  let timer: NodeJS.Timeout | null = null;
   let alive = false;
   let ignored = 0;
 
@@ -139,56 +173,41 @@ export async function runCallbackScope<TResult, TReturn>(
     if (scopeSettled) return;
     scopeSettled = true;
     alive = false;
-    if (timer) {
-      clearTimeout(timer);
-      timer = null;
-    }
-    options.signal?.removeEventListener('abort', onAbort);
-    settleResult({
-      error: new CallbackScopeError(
-        'Callback server closed before a result arrived',
-      ),
-    });
-    void shutdown().then(() => {
-      if ('value' in outcome) resolveScope(outcome.value);
-      else rejectScope(outcome.error);
-    });
+    signal?.removeEventListener('abort', onAbort);
+    settleResult({ error: callbackClosed() });
+    release();
+    if ('value' in outcome) resolveScope(outcome.value);
+    else rejectScope(outcome.error);
   };
 
   function onAbort(): void {
-    endScope({ error: new CallbackScopeError('Callback server aborted') });
+    endScope({ error: abortedLogin('browser', ignored) });
   }
 
   /**
-   * Stop accepting, end idle connections, wait for `close` under a grace, then
-   * destroy whatever is left. `closeAllConnections()` is deliberately not used
-   * in the first step: it destroys active connections too, and the one carrying
-   * the success page is active.
+   * A connection the scope no longer needs: ended gracefully — the client
+   * still reads what was written, which `destroy()` would cut off — and
+   * unreferenced, so a client that never closes its side holds neither the
+   * port (the listener is closed) nor the process.
    */
-  function shutdown(): Promise<void> {
-    return new Promise((done) => {
-      let finished = false;
-      const finish = (): void => {
-        if (finished) return;
-        finished = true;
-        done();
-      };
-      // `close()` alone, first. From Node 19 it ends idle connections itself,
-      // and it does so gracefully — the client still reads what was written.
-      // `closeIdleConnections()` destroys instead, which cuts the success page
-      // off mid-read: `finish` on the response means "handed to the OS", not
-      // "read by the client".
-      server.close(() => finish());
-      setTimeout(() => {
-        if (finished) return;
-        // Grace expired — an active connection may simply be stuck. Force it,
-        // bounded.
-        server.closeIdleConnections?.();
-        server.closeAllConnections?.();
-        for (const socket of sockets) socket.destroy();
-        finish();
-      }, SHUTDOWN_GRACE_MS).unref?.();
-    });
+  function letGo(socket: Socket): void {
+    socket.end();
+    socket.unref();
+  }
+
+  /**
+   * Close the listening socket — the port is free once it returns (the
+   * handle's descriptor is closed synchronously) — and let every connection
+   * go: at once when it is writing nothing, after its last response
+   * otherwise. Waits on no timer: a stuck client cannot hold the scope open,
+   * because nothing here waits for a connection to end.
+   */
+  function release(): void {
+    released = true;
+    if (server.listening) server.close();
+    for (const [socket, responding] of sockets) {
+      if (responding <= 0) letGo(socket);
+    }
   }
 
   /**
@@ -227,39 +246,30 @@ export async function runCallbackScope<TResult, TReturn>(
     },
     ignore(reason) {
       ignored += 1;
-      options.logger?.warn(
-        '[callbackServer] ignored an incomplete callback request',
-        { reason, ignored },
+      logQuietly(() =>
+        logger?.warn(
+          '[callbackServer] ignored an incomplete callback request',
+          {
+            reason,
+            ignored,
+          },
+        ),
       );
     },
   };
 
   routes(app, settle);
 
-  options.signal?.addEventListener('abort', onAbort, { once: true });
+  signal?.addEventListener('abort', onAbort, { once: true });
 
   server.once('error', (error: Error) => {
-    endScope({ error });
+    endScope({ error: bindFailure(error, port) });
   });
 
-  server.listen(options.port, () => {
-    if (scopeSettled) {
-      // Aborted while binding.
-      void shutdown();
-      return;
-    }
+  server.listen(port, () => {
+    // Aborted while binding: `release()` has closed the listener already.
+    if (scopeSettled) return;
     alive = true;
-    timer = setTimeout(() => {
-      const tally =
-        ignored > 0
-          ? ` ${ignored} incomplete request(s) reached /callback and were ignored.`
-          : '';
-      endScope({
-        error: new CallbackScopeError(
-          `Authentication timeout after ${options.timeoutMs / 1000} seconds. Please try again.${tally}`,
-        ),
-      });
-    }, options.timeoutMs);
 
     // The requested port may be 0, in which case only the OS knows the answer.
     const bound = (server.address() as AddressInfo).port;
@@ -267,11 +277,7 @@ export async function runCallbackScope<TResult, TReturn>(
       port: bound,
       redirectUri: `http://localhost:${bound}/callback`,
       waitForResult: () =>
-        alive
-          ? resultPromise
-          : Promise.reject(
-              new CallbackScopeError('Callback server scope has ended'),
-            ),
+        alive ? resultPromise : Promise.reject(callbackClosed()),
       // Silent no-op once the scope has ended: this is called fire-and-forget
       // from a browser launcher's .catch(), and a late rejection must not become
       // a fresh unhandled rejection.
@@ -393,7 +399,7 @@ export const withBrowserCallbackServer: CallbackServerFactory<string> = (
           sendHtml(res, 400, errorHtml(message));
           // The registered code only: the description and error_uri are
           // anyone's text (a link to the local callback carries them).
-          settle.err(new AuthorizationRefusedError(error), res);
+          settle.err(identityProviderRefused(error), res);
           return;
         }
 

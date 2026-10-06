@@ -8,23 +8,23 @@
 
 import netModule from 'node:net';
 import { describe, expect, it, jest } from '@jest/globals';
-import {
-  type CallbackServerFactory,
-  type IAuthorizationStrategy,
-  type ICallbackServerHandle,
-  TOKEN_PROVIDER_ERROR_CODES,
+import { isAuthProviderFailure, readFailure } from '@mcp-abap-adt/auth-errors';
+import type {
+  CallbackServerFactory,
+  IAuthorizationStrategy,
+  ICallbackServerHandle,
 } from '@mcp-abap-adt/interfaces-auth';
 import { withBrowserCallbackServer } from '../../auth/callbackServer';
-import {
-  BrowserAuthError,
-  ValidationError,
-} from '../../errors/TokenProviderErrors';
+import { ValidationError } from '../../errors/TokenProviderErrors';
 import {
   BrowserCallbackStrategy,
   browserCallbackStrategy,
   oidcCallbackStrategy,
   samlCallbackStrategy,
 } from '../../strategies/BrowserCallbackStrategy';
+
+/** The `interactive-login` facts a thrown value carries. */
+const factsOf = (error: unknown) => readFailure(error, 'browser-login').facts;
 
 /** A factory that hands over a handle whose result the test controls. */
 function fakeFactory<T = string>(opts: {
@@ -112,8 +112,8 @@ describe('BrowserCallbackStrategy', () => {
       openUrl,
     });
 
-    // A plain Error is foreign text: the message is fixed words, the
-    // original the cause.
+    // K11 (6.0.0): a plain Error is foreign text — `failed` in fixed words,
+    // and no cause at all (L2).
     const thrown = await strategy
       .authorize({
         buildAuthorizationUrl: async () => {
@@ -121,11 +121,10 @@ describe('BrowserCallbackStrategy', () => {
         },
       })
       .catch((e: Error & { cause?: Error }) => e);
-    expect(thrown).toBeInstanceOf(BrowserAuthError);
+    expect(isAuthProviderFailure(thrown)).toBe(true);
+    expect(factsOf(thrown)).toEqual({ outcome: 'failed' });
     expect((thrown as Error).message).not.toContain('redirect_uri mismatch');
-    expect((thrown as { cause?: Error }).cause?.message).toBe(
-      'redirect_uri mismatch',
-    );
+    expect((thrown as { cause?: Error }).cause).toBeUndefined();
     expect(openUrl).not.toHaveBeenCalled();
     expect(released()).toBe(true);
   });
@@ -203,7 +202,8 @@ describe('BrowserCallbackStrategy', () => {
     await strategy.dispose();
     await strategy.dispose(); // idempotent
 
-    expect(await settled).toMatch(/abort/i);
+    // K2 (6.0.0): ended by dispose() — `disposed`, strategy 'browser'.
+    expect(await settled).toBe('BrowserCallbackStrategy has been disposed');
     // Never entered: no socket was bound, so there was nothing to release.
     expect(released()).toBe(false);
   });
@@ -224,15 +224,14 @@ describe('BrowserCallbackStrategy', () => {
       // Never settles, so the scope is still open when dispose lands.
       buildAuthorizationUrl: () => new Promise<string>(() => undefined),
     });
-    // The fake transport's abort is foreign text: it is the cause.
-    const settled = inFlight.catch(
-      (e: Error & { cause?: Error }) => e.cause?.message,
-    );
+    // K2 (6.0.0): the fake transport's abort is foreign text; what the
+    // caller gets is `disposed`, strategy 'browser'.
+    const settled = inFlight.catch((e: unknown) => factsOf(e));
     await hasEntered;
 
     await strategy.dispose();
 
-    expect(await settled).toMatch(/abort/i);
+    expect(await settled).toEqual({ outcome: 'disposed', strategy: 'browser' });
     // Entered and left: dispose resolves only once the transport has settled,
     // which it does after releasing.
     expect(released()).toBe(true);
@@ -270,7 +269,9 @@ describe('BrowserCallbackStrategy', () => {
   it('offers the paste form only when it supplied the transport that has one', async () => {
     // Real transports here, not fakes: the claim under test is whether a `/`
     // route exists, which a fake cannot answer either way. Each binds an
-    // ephemeral port and waits; a short timeout is what ends it.
+    // ephemeral port and waits; the test's own abort, once the announcement
+    // is out, is what ends it (§6a: no bound of the package's choosing).
+    let ended = new AbortController();
     const announcedBy = async (
       strategy: IAuthorizationStrategy<unknown>,
     ): Promise<string> => {
@@ -279,6 +280,10 @@ describe('BrowserCallbackStrategy', () => {
         debug: () => undefined,
         info: (msg: string) => {
           infos.push(msg);
+          if (msg.includes('Waiting for callback')) {
+            const current = ended;
+            setImmediate(() => current.abort());
+          }
         },
         warn: () => undefined,
         error: () => undefined,
@@ -288,17 +293,19 @@ describe('BrowserCallbackStrategy', () => {
           buildAuthorizationUrl: async () => 'https://idp.example/authorize',
           logger,
         }),
-      ).rejects.toThrow(/timeout/i);
+      ).rejects.toThrow('the browser login was aborted');
+      ended = new AbortController();
       return infos.join('\n');
     };
 
-    const shared = { port: 0, browser: 'none', timeoutMs: 300 } as const;
+    const shared = () =>
+      ({ port: 0, browser: 'none', signal: ended.signal }) as const;
 
     // Ours, and it really serves a paste form. The address it names must be
     // reachable by the reader it addresses — someone on another machine — so
     // the host stays a placeholder and only the port is asserted. `localhost`
     // here would be an instruction that cannot work for its own audience.
-    const ourHint = await announcedBy(browserCallbackStrategy({ ...shared }));
+    const ourHint = await announcedBy(browserCallbackStrategy({ ...shared() }));
     expect(ourHint).toMatch(/paste it at http:\/\/<this-host>:\d+\//);
     expect(ourHint).not.toMatch(/paste it at http:\/\/localhost/);
 
@@ -309,7 +316,7 @@ describe('BrowserCallbackStrategy', () => {
     expect(
       await announcedBy(
         browserCallbackStrategy({
-          ...shared,
+          ...shared(),
           callbackServer: withBrowserCallbackServer,
         }),
       ),
@@ -319,7 +326,7 @@ describe('BrowserCallbackStrategy', () => {
     expect(
       await announcedBy(
         browserCallbackStrategy({
-          ...shared,
+          ...shared(),
           callbackServer: withBrowserCallbackServer,
           remoteHint: () => '   paste it at http://elsewhere.example/',
         }),
@@ -329,10 +336,10 @@ describe('BrowserCallbackStrategy', () => {
     // The OIDC and SAML transports have no `/` route at all, and the stdin
     // invitation is gone — that is `manualPasteStrategy`'s job now.
     for (const strategy of [
-      oidcCallbackStrategy({ ...shared }),
-      samlCallbackStrategy({ ...shared }),
+      () => oidcCallbackStrategy({ ...shared() }),
+      () => samlCallbackStrategy({ ...shared() }),
     ]) {
-      const text = await announcedBy(strategy);
+      const text = await announcedBy(strategy());
       expect(text).not.toMatch(/paste it at/i);
       expect(text).not.toMatch(/press Enter/i);
       expect(text).toMatch(/Waiting for callback on http:\/\/localhost:\d+\//);
@@ -393,28 +400,32 @@ describe('BrowserCallbackStrategy', () => {
 });
 
 describe('the error a failed browser login is', () => {
-  // BrowserAuthError was exported and thrown nowhere: a timeout, a busy port
-  // or the IdP's refusal reached the caller as a plain Error, so the one type
-  // a caller could catch for "the browser login failed" never arrived.
-  it('is a BrowserAuthError on timeout, with the text and the cause kept', async () => {
+  // K1–K4, K11 (6.0.0): every end of a browser login is an
+  // `interactive-login` failure — the rows are pinned verbatim in
+  // interactiveLoginRows.test.ts; these keep the strategy-level cases.
+  it('is aborted (strategy browser) when the consumer aborts, not a timeout', async () => {
+    const consumer = new AbortController();
     const strategy = browserCallbackStrategy({
       port: 0,
       browser: 'none',
-      timeoutMs: 200,
+      signal: consumer.signal,
+      openUrl: async () => {
+        consumer.abort();
+      },
     });
     const refusal = await strategy
       .authorize({ buildAuthorizationUrl: async () => 'https://idp.example/a' })
       .catch((error: unknown) => error);
 
-    expect(refusal).toBeInstanceOf(BrowserAuthError);
-    expect((refusal as BrowserAuthError).code).toBe(
-      TOKEN_PROVIDER_ERROR_CODES.BROWSER_AUTH_ERROR,
-    );
-    expect((refusal as Error).message).toMatch(/timeout/i);
-    expect((refusal as BrowserAuthError).cause).toBeInstanceOf(Error);
+    expect(isAuthProviderFailure(refusal)).toBe(true);
+    expect(factsOf(refusal)).toEqual({
+      outcome: 'aborted',
+      strategy: 'browser',
+    });
+    expect((refusal as Error).message).toBe('the browser login was aborted');
   });
 
-  it('is a BrowserAuthError when the callback port is taken', async () => {
+  it('is port-in-use when the callback port is taken', async () => {
     const squatter = netModule.createServer();
     await new Promise<void>((resolve) => squatter.listen(7874, resolve));
     try {
@@ -430,7 +441,7 @@ describe('the error a failed browser login is', () => {
         })
         .catch((error: unknown) => error);
 
-      expect(refusal).toBeInstanceOf(BrowserAuthError);
+      expect(factsOf(refusal)).toEqual({ outcome: 'port-in-use', port: 7874 });
       expect((refusal as Error).message).toMatch(/already in use/i);
     } finally {
       await new Promise<void>((resolve) => squatter.close(() => resolve()));

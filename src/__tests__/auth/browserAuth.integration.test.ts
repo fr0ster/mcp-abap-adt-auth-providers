@@ -81,12 +81,13 @@ describe('browserAuth Integration', () => {
 
     logger.info(`Starting browser authentication: ${authConfig.uaaUrl}`);
 
-    // The strategy owns the socket, the browser and the timeout; the exchange
+    // The strategy owns the socket and the browser, bounded by the signal the
+    // test composes (no bound of the package's choosing, spec §6a); the exchange
     // stays with the caller — the same split `AuthorizationCodeProvider` uses.
     const strategy = browserCallbackStrategy({
       browser: 'system', // Use the system default browser
       port,
-      timeoutMs: 290000,
+      signal: AbortSignal.timeout(290_000),
     });
     const outcome = await strategy.authorize({
       logger,

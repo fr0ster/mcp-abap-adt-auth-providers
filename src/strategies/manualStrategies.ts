@@ -13,9 +13,10 @@ import type {
   AuthorizationRequest,
   IAuthorizationStrategy,
 } from '@mcp-abap-adt/interfaces-auth';
+import { announcer } from '../auth/announce';
 import { extractCode } from '../auth/browserAuth';
+import { abortedLogin, loginFailure } from '../auth/interactiveLogin';
 import { signalOf } from '../auth/signalledRequest';
-import { BrowserAuthError } from '../errors/TokenProviderErrors';
 import { DEFAULT_CALLBACK_PORT } from './BrowserCallbackStrategy';
 
 export interface ManualStrategyOptions {
@@ -23,11 +24,18 @@ export interface ManualStrategyOptions {
   redirectUri?: string | undefined;
   /**
    * Where the pasted value comes from. Defaults to an interactive stdin read.
-   * The signal aborts when the timeout expires or the strategy is disposed.
+   * The signal aborts when the login is aborted or the strategy disposed; the
+   * reader must then stop and release what it holds — the strategy settles
+   * only once the reader has, so a reader that ignores it blocks the next
+   * login (spec §6b).
    */
   read?: ((prompt: string, signal: AbortSignal) => Promise<string>) | undefined;
-  /** Milliseconds before the read is abandoned. Absent: no deadline — the consumer's choice. */
-  timeoutMs?: number | undefined;
+  /**
+   * Ends every login of this strategy, beside the request's own signal (the
+   * attempt's): either one aborting ends it `aborted`. There is no other
+   * bound — compose `AbortSignal.timeout(ms)` for a deadline.
+   */
+  signal?: AbortSignal | undefined;
 }
 
 const defaultRedirectUri = () =>
@@ -38,27 +46,23 @@ const defaultRedirectUri = () =>
  *
  * The prompt goes to stderr, never stdout, and stdin is touched only when it is
  * a terminal: under a stdio RPC transport those streams carry the protocol.
- * Closes its `readline` when the signal aborts, so a timeout or dispose() ends
- * the wait at once instead of leaving stdin held open.
+ * Closes its `readline` when the signal aborts, and settles only once the
+ * interface has closed — its listeners gone from stdin — so the next login's
+ * reader never shares stdin with this one.
  */
-async function readFromTerminal(
+export async function readFromTerminal(
   prompt: string,
   signal: AbortSignal,
 ): Promise<string> {
-  // Aborted before the read began (the deadline passed while the URL was
-  // built): no readline, so stdin is never held for a line nobody awaits.
-  if (signal.aborted) {
-    throw new BrowserAuthError(
-      'the manual input was abandoned before it began',
-    );
-  }
-  if (!process.stdin.isTTY) {
-    throw new Error(
-      'Manual input needs an interactive terminal. Supply `read` to source the value elsewhere.',
-    );
-  }
+  // Aborted before the read began (while the URL was built): no readline, so
+  // stdin is never held for a line nobody awaits (K12).
+  if (signal.aborted) throw loginFailure({ outcome: 'input-abandoned' });
+  if (!process.stdin.isTTY) throw loginFailure({ outcome: 'no-terminal' });
   process.stderr.write(prompt);
   const rl = createInterface({ input: process.stdin });
+  const closed = new Promise<void>((resolve) => {
+    rl.once('close', () => resolve());
+  });
   const abort = () => rl.close();
   signal.addEventListener('abort', abort, { once: true });
   try {
@@ -66,21 +70,18 @@ async function readFromTerminal(
   } finally {
     signal.removeEventListener('abort', abort);
     rl.close();
+    await closed;
   }
-  throw new Error('No input received');
-}
-
-function announce(request: AuthorizationRequest, url: string): void {
-  const message = `Open this URL to authenticate:\n${url}`;
-  if (request.logger) request.logger.info(message);
-  else process.stderr.write(`${message}\n`);
+  throw loginFailure({ outcome: 'no-input' });
 }
 
 /**
- * A manual strategy with a deadline and a dispose(): the read gets a signal,
- * and the race settles even when a custom reader ignores it.
+ * A manual strategy with a `dispose()`: the read gets a signal that either
+ * signal — the strategy's option or the request's — or `dispose()` aborts.
+ * Settles only once the read has settled (the reader closed), never at the
+ * abort alone: the next login waits for that release (spec §6b).
  */
-function boundedManual(
+function manualStrategy(
   options: ManualStrategyOptions,
   run: (
     request: AuthorizationRequest,
@@ -91,57 +92,61 @@ function boundedManual(
   let disposed = false;
   // Every authorize in flight, not only the last: concurrent calls each hold a
   // read, and dispose() must end and await all of them.
-  const inFlight = new Map<
-    AbortController,
-    Promise<AuthorizationOutcome<string>>
-  >();
+  const inFlight = new Map<AbortController, Promise<void>>();
+  const disposedCalls = new WeakSet<AbortController>();
   return {
     async authorize(request) {
-      if (disposed)
-        throw new BrowserAuthError('the manual strategy was disposed');
+      if (disposed) {
+        throw loginFailure({ outcome: 'disposed', strategy: 'manual' });
+      }
       const controller = new AbortController();
-      const timer =
-        options.timeoutMs === undefined
-          ? undefined
-          : setTimeout(() => controller.abort(), options.timeoutMs);
-      const abandoned = new Promise<never>((_, reject) => {
-        controller.signal.addEventListener(
-          'abort',
-          () =>
-            reject(
-              new BrowserAuthError(
-                'the manual input did not arrive in time, or the strategy was disposed',
-              ),
-            ),
-          { once: true },
-        );
-      });
-      // The request's signal — the attempt's (spec §6b) — ends the read too;
-      // relayed once `abandoned` listens, so an aborted one is honoured.
+      // The request's signal — the attempt's (spec §6b) — and the strategy's
+      // own both end the read; an already-aborted one is honoured.
       const requestSignal = signalOf(request);
+      const signals = [options.signal, requestSignal];
       const relay = () => controller.abort();
-      requestSignal?.addEventListener('abort', relay, { once: true });
-      if (requestSignal?.aborted) controller.abort();
-      const working = run(request, (prompt) => read(prompt, controller.signal));
-      working.catch(() => {}); // a loser of the race must not surface as unhandled
-      const race = Promise.race([working, abandoned]);
-      inFlight.set(controller, race);
+      for (const signal of signals) {
+        signal?.addEventListener('abort', relay, { once: true });
+      }
+      if (signals.some((signal) => signal?.aborted)) controller.abort();
+      const working = (async () => {
+        if (controller.signal.aborted) throw abortedLogin('manual');
+        return await run(request, (prompt) => read(prompt, controller.signal));
+      })();
+      inFlight.set(
+        controller,
+        working.then(
+          () => undefined,
+          () => undefined,
+        ),
+      );
       try {
-        return await race;
+        const outcome = await working;
+        if (!controller.signal.aborted) return outcome;
+      } catch (error) {
+        if (!controller.signal.aborted) throw error;
       } finally {
-        if (timer) clearTimeout(timer);
-        requestSignal?.removeEventListener('abort', relay);
+        for (const signal of signals) {
+          signal?.removeEventListener('abort', relay);
+        }
         inFlight.delete(controller);
       }
+      // Aborted: by dispose() (K15), else by a signal (K4).
+      throw disposedCalls.has(controller) &&
+        !signals.some((signal) => signal?.aborted)
+        ? loginFailure({ outcome: 'disposed', strategy: 'manual' })
+        : abortedLogin('manual');
     },
     // Idempotent; ends every authorization in flight and resolves only once
-    // each call's own finally — timer, controller, and whatever the reader
-    // holds open — has actually run.
+    // each call's read has settled — whatever the reader holds released.
     async dispose() {
       disposed = true;
       const calls = [...inFlight];
-      for (const [controller] of calls) controller.abort();
-      await Promise.all(calls.map(([, race]) => race.catch(() => undefined)));
+      for (const [controller] of calls) {
+        disposedCalls.add(controller);
+        controller.abort();
+      }
+      await Promise.all(calls.map(([, done]) => done));
     },
   };
 }
@@ -151,15 +156,15 @@ export function manualPasteStrategy(
   options: ManualStrategyOptions = {},
 ): IAuthorizationStrategy<string> {
   const redirectUri = options.redirectUri ?? defaultRedirectUri();
-  return boundedManual(options, async (request, read) => {
+  return manualStrategy(options, async (request, read) => {
     const url = await request.buildAuthorizationUrl(redirectUri);
-    announce(request, url);
+    announcer(request.logger)(`Open this URL to authenticate:\n${url}`);
     const raw = await read(
       'Paste the authorization code (or the whole redirected URL): ',
     );
     const code = extractCode(raw);
     if (!code) {
-      throw new Error('Could not read an authorization code from that input');
+      throw loginFailure({ outcome: 'unreadable-input' });
     }
     return { payload: code, redirectUri };
   });
@@ -170,14 +175,14 @@ export function manualSamlResponseStrategy(
   options: ManualStrategyOptions = {},
 ): IAuthorizationStrategy<string> {
   const redirectUri = options.redirectUri ?? defaultRedirectUri();
-  return boundedManual(options, async (request, read) => {
+  return manualStrategy(options, async (request, read) => {
     const url = await request.buildAuthorizationUrl(redirectUri);
-    announce(request, url);
+    announcer(request.logger)(`Open this URL to authenticate:\n${url}`);
     const raw = await read(
       'Paste the SAMLResponse (from the POST body — it is not in the address bar): ',
     );
     const assertion = raw.trim();
-    if (!assertion) throw new Error('No SAMLResponse was provided');
+    if (!assertion) throw loginFailure({ outcome: 'no-input' });
     return { payload: assertion, redirectUri };
   });
 }
@@ -192,13 +197,13 @@ export function manualPasscodeStrategy(
   options: ManualStrategyOptions = {},
 ): IAuthorizationStrategy<string> {
   const redirectUri = options.redirectUri ?? defaultRedirectUri();
-  return boundedManual(options, async (request, read) => {
+  return manualStrategy(options, async (request, read) => {
     const url = await request.buildAuthorizationUrl(redirectUri);
-    announce(request, url);
+    announcer(request.logger)(`Open this URL to authenticate:\n${url}`);
     const code = (
       await read('Paste the Temporary Authentication Code (passcode): ')
     ).trim();
-    if (!code) throw new Error('No passcode was provided');
+    if (!code) throw loginFailure({ outcome: 'no-input' });
     return { payload: code, redirectUri };
   });
 }

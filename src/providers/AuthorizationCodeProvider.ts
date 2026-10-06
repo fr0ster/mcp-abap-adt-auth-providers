@@ -30,6 +30,7 @@ import {
   refreshTokenRefused,
   type TokenProviderHooks,
 } from './BaseTokenProvider';
+import type { LoginFactoryOptions } from './LoginFactoryOptions';
 
 export interface AuthorizationCodeProviderConfig
   extends TokenProviderHooks,
@@ -140,11 +141,11 @@ export class AuthorizationCodeProvider extends BaseTokenProvider {
   /** The usual choice: a browser login answered on a local callback. */
   static inBrowser(
     config: Omit<AuthorizationCodeProviderConfig, 'authorization'>,
-    options: { timeoutMs?: number } = {},
+    options: LoginFactoryOptions = {},
   ): AuthorizationCodeProvider {
     return new AuthorizationCodeProvider({
       ...config,
-      authorization: browserCallbackStrategy({ timeoutMs: options.timeoutMs }),
+      authorization: browserCallbackStrategy({ signal: options.signal }),
     });
   }
 

@@ -25,6 +25,7 @@ import {
   refreshTokenRefused,
   type TokenProviderHooks,
 } from './BaseTokenProvider';
+import type { LoginFactoryOptions } from './LoginFactoryOptions';
 
 export interface OidcBrowserProviderConfig
   extends TokenProviderHooks,
@@ -70,11 +71,11 @@ export class OidcBrowserProvider extends BaseTokenProvider {
   /** The usual choice: a browser login answered on a local callback. */
   static inBrowser(
     config: Omit<OidcBrowserProviderConfig, 'authorization'>,
-    options: { timeoutMs?: number } = {},
+    options: LoginFactoryOptions = {},
   ): OidcBrowserProvider {
     return new OidcBrowserProvider({
       ...config,
-      authorization: oidcCallbackStrategy({ timeoutMs: options.timeoutMs }),
+      authorization: oidcCallbackStrategy({ signal: options.signal }),
     });
   }
 

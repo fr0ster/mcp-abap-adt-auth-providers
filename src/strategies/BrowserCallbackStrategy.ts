@@ -8,6 +8,11 @@
  */
 
 import * as net from 'node:net';
+import {
+  isAuthProviderFailure,
+  logFields,
+  readFailure,
+} from '@mcp-abap-adt/auth-errors';
 import type {
   AuthorizationOutcome,
   AuthorizationRequest,
@@ -17,18 +22,21 @@ import type {
 } from '@mcp-abap-adt/interfaces-auth';
 import { announcer } from '../auth/announce';
 import { launchBrowser } from '../auth/browserAuth';
-import { CallbackScopeError } from '../auth/callbackScopeError';
 import { withBrowserCallbackServer } from '../auth/callbackServer';
 import { asContract } from '../auth/contractShape';
+import {
+  abortedLogin,
+  browserLaunchFailed,
+  failedLogin,
+  loginFailure,
+  portInUse,
+} from '../auth/interactiveLogin';
 import type { OidcCallbackResult } from '../auth/oidcBrowserAuth';
 import { withOidcCallbackServer } from '../auth/oidcBrowserAuth';
-import { loggedError } from '../auth/refusal';
 import { withSamlCallbackServer } from '../auth/saml2Auth';
 import { signalOf } from '../auth/signalledRequest';
-import {
-  BrowserAuthError,
-  TokenProviderError,
-} from '../errors/TokenProviderErrors';
+import { logQuietly } from '../auth/tokenRequest';
+import { TokenProviderError } from '../errors/TokenProviderErrors';
 
 /**
  * Above Linux's `ip_local_port_range` (32768–60999), so an outbound connection
@@ -36,13 +44,18 @@ import {
  */
 export const DEFAULT_CALLBACK_PORT = 61001;
 
-/** How long an interactive login may wait for its callback. */
-export const DEFAULT_LOGIN_TIMEOUT_MS = 30_000;
+/**
+ * TRANSITION (Decision D6): interfaces-auth 4.x declares the callback
+ * server's bound in milliseconds as required. No login has a bound of this
+ * package's choosing (spec §6a) — `runCallbackScope` reads no such field —
+ * so the value handed over is "none". Task 27 drops it with the 5.0.0
+ * contract.
+ */
+const NO_BOUND = Number.POSITIVE_INFINITY;
 
 export interface CallbackStrategyOptions<TResult = string> {
   /** `0` binds an ephemeral port. Unusable where the IdP has a registered URI. */
   port?: number | undefined;
-  timeoutMs?: number | undefined;
   /** 'none' | 'headless' print the URL; 'auto' | 'system' | 'chrome' | … open it. */
   browser?: string | undefined;
   /**
@@ -66,6 +79,12 @@ export interface CallbackStrategyOptions<TResult = string> {
    * behalf of an injected one.
    */
   remoteHint?: ((redirectUri: string) => string) | undefined;
+  /**
+   * Ends every login of this strategy, beside the request's own signal (the
+   * attempt's, spec §6b): either one aborting ends it `aborted`. There is no
+   * other bound — a login waits for its result, the identity provider's
+   * refusal or an abort; compose `AbortSignal.timeout(ms)` for a deadline.
+   */
   signal?: AbortSignal | undefined;
 }
 
@@ -74,22 +93,12 @@ export interface BrowserCallbackStrategyOptions<TResult>
   callbackServer: CallbackServerFactory<TResult>;
 }
 
-/** Fixed words for a foreign failure, and its HTTP status when it has one. */
-function browserLoginWords(error: unknown): string {
-  const { error: words, status } = loggedError(error, 'the browser login');
-  return status === undefined || words.includes(`HTTP ${status}`)
-    ? words
-    : `${words} (HTTP ${status})`;
-}
-
 /**
- * Kept for its wording, not its certainty.
- *
- * Its "already in use" is kept for any consumer that may match it to tell a
- * busy port from every other failure (the bind error Node raises says
- * `EADDRINUSE` instead). Skipped
- * entirely for an ephemeral port: there is nothing to check, and the answer
- * would be about a port we are not going to get.
+ * K1, kept for its wording, not its certainty: "already in use" stays for any
+ * consumer that may match it to tell a busy port from every other failure
+ * (the bind error Node raises says `EADDRINUSE` instead). Skipped entirely
+ * for an ephemeral port: there is nothing to check, and the answer would be
+ * about a port we are not going to get.
  */
 async function assertPortAvailable(port: number): Promise<void> {
   if (port === 0) return;
@@ -98,11 +107,13 @@ async function assertPortAvailable(port: number): Promise<void> {
     probe.once('error', () => resolve(false));
     probe.listen(port, () => probe.close(() => resolve(true)));
   });
-  if (!free) {
-    throw new CallbackScopeError(
-      `Port ${port} is already in use. Please specify a different port or free the port.`,
-    );
-  }
+  if (!free) throw portInUse(port);
+}
+
+/** Whether a thrown value is an `interactive-login` `aborted` failure. */
+function isAbortedFailure(error: unknown): boolean {
+  const read = readFailure(error, 'browser-login');
+  return read.kind === 'interactive-login' && read.facts.outcome === 'aborted';
 }
 
 export class BrowserCallbackStrategy<TResult>
@@ -116,17 +127,18 @@ export class BrowserCallbackStrategy<TResult>
     private readonly options: BrowserCallbackStrategyOptions<TResult>,
   ) {}
 
+  /**
+   * Settles only once the callback factory has settled — which the shipped
+   * one does once its socket is closed — so a login that follows never
+   * meets this one's port or its `inFlight` (spec §6b, drain handoff).
+   */
   async authorize(
     request: AuthorizationRequest,
   ): Promise<AuthorizationOutcome<TResult>> {
     if (this.disposed) {
-      throw new CallbackScopeError('BrowserCallbackStrategy has been disposed');
+      throw loginFailure({ outcome: 'disposed', strategy: 'browser' });
     }
-    if (this.inFlight) {
-      throw new CallbackScopeError(
-        'BrowserCallbackStrategy is already authorizing; it holds a single port',
-      );
-    }
+    if (this.inFlight) throw loginFailure({ outcome: 'busy' });
 
     const port = this.options.port ?? DEFAULT_CALLBACK_PORT;
 
@@ -156,15 +168,11 @@ export class BrowserCallbackStrategy<TResult>
     // then went on to bind a socket behind it.
     const run = (async (): Promise<AuthorizationOutcome<TResult>> => {
       await assertPortAvailable(port);
-      if (controller.signal.aborted) {
-        throw new CallbackScopeError(
-          'Authorization aborted before the callback server bound',
-        );
-      }
+      if (controller.signal.aborted) throw abortedLogin('browser');
       return await this.options.callbackServer(
         asContract<ICallbackServerOptions>({
           port,
-          timeoutMs: this.options.timeoutMs ?? DEFAULT_LOGIN_TIMEOUT_MS,
+          timeoutMs: NO_BOUND,
           signal: controller.signal,
           logger: request.logger,
         }),
@@ -186,24 +194,21 @@ export class BrowserCallbackStrategy<TResult>
                 request.logger ?? null,
                 this.options.remoteHint?.(redirectUri),
               ));
-          // Not awaited: a launcher that hangs must not delay the timeout or the
-          // release, and one that fails ends the scope through `fail`.
+          // Not awaited: a launcher that hangs must not delay the result or
+          // the release, and one that fails ends the scope through `fail`.
           void open(url, browser, server.redirectUri).catch(
             (error: unknown) => {
-              // Fixed words only: the launcher is the consumer's, its text foreign.
-              const { error: words } = loggedError(
-                error,
-                'opening the browser',
-              );
-              request.logger?.error(
-                `Failed to open browser: ${words}. Open manually: ${url}`,
-                { error: words, url },
-              );
-              server.fail(
-                new CallbackScopeError(
-                  `Browser opening failed. Open manually: ${url}`,
+              // H7: the launcher is the consumer's, its text foreign — the
+              // line carries `logFields` of its failure and the URL this
+              // strategy announces anyway.
+              const fields = logFields(readFailure(error, 'opening-browser'));
+              logQuietly(() =>
+                request.logger?.error(
+                  `Failed to open browser: ${fields.error}. Open manually: ${url}`,
+                  { ...fields, url },
                 ),
               );
+              server.fail(browserLaunchFailed(error));
             },
           );
           return {
@@ -218,30 +223,37 @@ export class BrowserCallbackStrategy<TResult>
     try {
       return await run;
     } catch (error) {
-      // Everything that ends a browser login here — the timeout, the identity
-      // provider's own refusal, a port in use, a browser that would not open,
-      // an abort — is a browser authentication failure, and the one type a
-      // caller can catch for it. It was exported and thrown nowhere: each of
-      // these reached the caller as a plain Error. Its message is fixed words
-      // (`loggedError`: an allowlisted code, else "unknown error") — the
-      // identity provider's text, or a consumer's transport, may hold a
-      // secret, and whoever catches this logs the message; the original is
-      // the cause. An error that already has a type (a ValidationError from
-      // building the URL) is not one of these.
+      // Everything that ends a browser login here is an `interactive-login`
+      // failure (K1–K5, K8, K10, K11). An error that already has a type (a
+      // ValidationError from building the URL) is not one of these.
       if (error instanceof TokenProviderError) throw error;
-      const cause = error instanceof Error ? error : new Error(String(error));
-      throw new BrowserAuthError(
-        error instanceof CallbackScopeError
-          ? error.message
-          : browserLoginWords(error),
-        cause,
-      );
+      if (controller.signal.aborted) {
+        // Disposal ended it (K2); else the consumer's or the attempt's abort
+        // (K4) — the callback server's own failure keeps its tally.
+        if (this.disposed && !this.signalled(requestSignal)) {
+          throw loginFailure({ outcome: 'disposed', strategy: 'browser' });
+        }
+        throw isAbortedFailure(error) ? error : abortedLogin('browser');
+      }
+      // A failure already built — this strategy's, the callback server's,
+      // or one the URL builder threw (OIDC discovery) — is relayed as it is.
+      if (isAuthProviderFailure(error)) throw error;
+      // Anything else — a consumer's transport, a foreign rejection — names
+      // only its status, a registered OAuth `error` and an allowlisted code.
+      throw failedLogin(error);
     } finally {
       this.options.signal?.removeEventListener('abort', relay);
       requestSignal?.removeEventListener('abort', relay);
       this.controller = null;
       this.inFlight = null;
     }
+  }
+
+  /** Whether one of the login's own signals — not `dispose()` — aborted. */
+  private signalled(requestSignal: AbortSignal | undefined): boolean {
+    return (
+      this.options.signal?.aborted === true || requestSignal?.aborted === true
+    );
   }
 
   /**

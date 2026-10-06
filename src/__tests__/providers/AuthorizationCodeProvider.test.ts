@@ -29,7 +29,6 @@ import { AuthorizationCodeProvider } from '../../providers/AuthorizationCodeProv
 import {
   BrowserCallbackStrategy,
   browserCallbackStrategy,
-  DEFAULT_LOGIN_TIMEOUT_MS,
   staticCodeStrategy,
 } from '../../strategies';
 import {
@@ -129,10 +128,12 @@ describe('AuthorizationCodeProvider', () => {
    * `INTERACTIVE_JEST_TIMEOUT_MS` is derived from it rather than written as
    * its own magic number, so the invariant this is protecting stays visible
    * instead of depending on two constants that happen to agree today: the
-   * strategy's own clock must expire strictly before Jest's. If Jest's
-   * timeout fired first, the case would fail with "Exceeded timeout of
-   * Xms" — which says nothing about authentication — instead of the
-   * strategy's own, legible "Authentication timeout after N seconds". The
+   * test's own bound — an `AbortSignal.timeout` it hands the strategy, as a
+   * consumer composes one (spec §6a: no login has a bound of the package's
+   * choosing) — must expire strictly before Jest's. If Jest's timeout fired
+   * first, the case would fail with "Exceeded timeout of Xms" — which says
+   * nothing about authentication — instead of the login's own, legible
+   * "the browser login was aborted". The
    * margin on top covers everything a login itself does not: loading the
    * service key, DNS, Scenario 3's deliberately-failed refresh, launching the
    * browser, the token exchange, assertions and cleanup.
@@ -215,7 +216,7 @@ describe('AuthorizationCodeProvider', () => {
             authorization: browserCallbackStrategy({
               browser: 'system',
               port: port1,
-              timeoutMs: HUMAN_LOGIN_TIMEOUT_MS,
+              signal: AbortSignal.timeout(HUMAN_LOGIN_TIMEOUT_MS),
             }),
             logger,
           });
@@ -240,13 +241,14 @@ describe('AuthorizationCodeProvider', () => {
             refreshToken: tokens1.refreshToken,
             accessToken: tokens1.authorizationToken, // Use token from Scenario 1
             // This provider exists to prove the Scenario 1 token is reused from
-            // cache — it must never need to log in. `DEFAULT_LOGIN_TIMEOUT_MS`
-            // (not the human budget) turns "it tried to open a browser anyway"
-            // into a fast, enforced failure instead of a five-minute wait.
+            // cache — it must never need to log in. A 30 s bound of the
+            // test's own (not the human budget) turns "it tried to open a
+            // browser anyway" into a fast, enforced failure instead of a
+            // five-minute wait.
             authorization: browserCallbackStrategy({
               browser: 'system',
               port: port2,
-              timeoutMs: DEFAULT_LOGIN_TIMEOUT_MS,
+              signal: AbortSignal.timeout(30_000),
             }),
             logger,
           });
@@ -329,7 +331,7 @@ describe('AuthorizationCodeProvider', () => {
           authorization: browserCallbackStrategy({
             browser: 'system',
             port: redirectPort,
-            timeoutMs: HUMAN_LOGIN_TIMEOUT_MS,
+            signal: AbortSignal.timeout(HUMAN_LOGIN_TIMEOUT_MS),
           }),
           logger,
         });
@@ -514,23 +516,29 @@ describe('AuthorizationCodeProvider with strategies', () => {
     });
   }
 
-  it('leaves the callback port free the moment a login times out', async () => {
+  // K4 / §6a (Task 23): no login times out on its own; the consumer's
+  // abort ends it `aborted` (strategy 'browser') and frees the port.
+  it('leaves the callback port free the moment a login is aborted', async () => {
+    const consumer = new AbortController();
     const provider = new AuthorizationCodeProvider({
       uaaUrl: 'http://127.0.0.1:9',
       clientId: 'client',
       clientSecret: 'secret',
       authorization: browserCallbackStrategy({
         port: PORT,
-        timeoutMs: 1000,
-        openUrl: async () => undefined,
+        signal: consumer.signal,
+        openUrl: async () => {
+          consumer.abort();
+        },
       }),
     });
 
-    // L3 / A.3 (Task 22): the strategy's timeout reaches the caller as an
-    // interactive-login failure, not as the strategy's own message.
     await expect(provider.getTokens()).rejects.toMatchObject({
       name: 'AuthProviderFailure',
-      error: { kind: 'interactive-login', facts: { outcome: 'failed' } },
+      error: {
+        kind: 'interactive-login',
+        facts: { outcome: 'aborted', strategy: 'browser' },
+      },
     });
     expect(await portIsFree(PORT)).toBe(true);
   }, 30000);
@@ -545,7 +553,6 @@ describe('AuthorizationCodeProvider with strategies', () => {
         'https://uaa.example/oauth/authorize?client_id=c&redirect_uri=http%3A%2F%2Flocalhost%3A3001%2Fcallback&response_type=code',
       authorization: browserCallbackStrategy({
         port: PORT,
-        timeoutMs: 30000,
         openUrl,
       }),
     });
