@@ -27,9 +27,17 @@ const JWT_SHAPE = /eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]*/g;
 const formDecoded = (value: string): string =>
   new URLSearchParams(`v=${value.replace(/&/g, '%26')}`).get('v') ?? value;
 
-/** `%XX` for one byte, either case of each hex digit. */
+/**
+ * The `%` of an escape at any depth: a server escaping its echo again turns
+ * `%2B` into `%252B`, then `%25252B` — the `%` escaped as `%25` each time.
+ * Unbounded on purpose: `(?:25)*` is linear to match, so no depth escapes
+ * recognition, and no bound needs a reason.
+ */
+const ESCAPE = '%(?:25)*';
+
+/** `%XX` for one byte at any escaping depth, either case of each hex digit. */
 const escapePattern = (byte: number): string =>
-  `%${[...byte.toString(16).toUpperCase().padStart(2, '0')]
+  `${ESCAPE}${[...byte.toString(16).toUpperCase().padStart(2, '0')]
     .map((digit) =>
       /[A-F]/.test(digit) ? `[${digit}${digit.toLowerCase()}]` : digit,
     )
@@ -47,7 +55,8 @@ function characterPattern(character: string): string {
   const escaped = [...Buffer.from(character, 'utf8')]
     .map(escapePattern)
     .join('');
-  const space = character === ' ' ? '|\\+' : '';
+  // A space form-encoded is `+`, and that `+` escaped again `%2B`.
+  const space = character === ' ' ? `|\\+|${ESCAPE}2[Bb]` : '';
   return `(?:${literal}|${escaped}${space})`;
 }
 
@@ -90,9 +99,6 @@ const PREVIEW_EDGE = 4;
  */
 type Segment = { readonly text: string } | { readonly preview: string };
 
-const joinSegments = (segments: readonly Segment[]): string =>
-  segments.map((s) => ('text' in s ? s.text : s.preview)).join('');
-
 /**
  * Applies a pass to the server's text only, leaving every preview as it is.
  * Adjacent text is joined first: a pass must see the server's text between
@@ -115,7 +121,7 @@ function onText(
 }
 
 /** Whitespace a server may break a value with, as itself or escaped. */
-const WHITESPACE = '[ \\t\\r\\n]|%(?:20|09|0[AaDd])';
+const WHITESPACE = `[ \\t\\r\\n]|${ESCAPE}(?:20|09|0[AaDd])`;
 
 /** A value made only of base64 characters (either alphabet), any padding. */
 const BASE64_VALUE = /^[A-Za-z0-9+/_-]+={0,2}$/;
@@ -123,6 +129,27 @@ const BASE64_VALUE = /^[A-Za-z0-9+/_-]+={0,2}$/;
 /** The value a base64 run stands for once its whitespace and escapes are gone. */
 const canonicalBase64 = (value: string): string =>
   value.replace(/-/g, '+').replace(/_/g, '/').replace(/=+$/, '');
+
+/**
+ * A text with every percent-escape decoded, again and again until nothing
+ * changes: an echo escaped at any depth reads as what was sent. Each round
+ * that changes anything makes the text shorter, so it ends. The escaped
+ * bytes are read as Latin-1 (the base64 pass: one character per byte) or
+ * as UTF-8 (the fail-closed net: a secret's own characters).
+ */
+function unescapedFully(
+  text: string,
+  bytesAs: 'latin1' | 'utf8' = 'latin1',
+): string {
+  let current = text;
+  for (;;) {
+    const next = current.replace(/(?:%[0-9A-Fa-f]{2})+/g, (run) =>
+      Buffer.from(run.replace(/%/g, ''), 'hex').toString(bytesAs),
+    );
+    if (next === current) return current;
+    current = next;
+  }
+}
 
 /** Every recognised value of the secrets, and how to find them. */
 interface KnownForms {
@@ -183,11 +210,7 @@ function matchedForm(
  * secret is long, and dropping a matching word from a diagnosis is the lesser
  * harm.
  */
-function redactKnownSecrets(
-  text: string,
-  secrets: readonly (string | undefined)[],
-): Segment[] {
-  const forms = knownForms(secrets);
+function redactKnownSecrets(text: string, forms: KnownForms): Segment[] {
   if (forms.values.length === 0) return [{ text }];
   // One pass over the original text: an alternation tries the longest value
   // first at each position, and a preview it writes is never scanned again —
@@ -210,10 +233,9 @@ function redactKnownSecrets(
  * whitespace — a space (a form-decoded `+`), a tab, a line break (a server
  * wrapping lines) — as itself or escaped (`%20`, `%09`, `%0A`, `%0D`).
  */
-const BASE64_ESCAPE =
-  '%(?:3[0-9]|4[1-9A-Fa-f]|5[0-9Aa]|6[1-9A-Fa-f]|7[0-9Aa]|2[BbDdFf]|5[Ff])';
+const BASE64_ESCAPE = `${ESCAPE}(?:3[0-9]|4[1-9A-Fa-f]|5[0-9Aa]|6[1-9A-Fa-f]|7[0-9Aa]|2[BbDdFf]|5[Ff])`;
 const BASE64_RUN = new RegExp(
-  `(?:[A-Za-z0-9+/_-]|${BASE64_ESCAPE}|${WHITESPACE})+(?:=|%3[Dd]){0,2}`,
+  `(?:[A-Za-z0-9+/_-]|${BASE64_ESCAPE}|${WHITESPACE})+(?:=|${ESCAPE}3[Dd]){0,2}`,
   'g',
 );
 /** Whitespace inside a run: where it is cut into pieces. */
@@ -231,11 +253,7 @@ const MAX_PIECES = 32;
  * (a form-decoded one).
  */
 function normalized(run: string): string[] {
-  const unescaped = canonicalBase64(
-    run.replace(/%([0-9A-Fa-f]{2})/g, (_escape, hex: string) =>
-      String.fromCharCode(Number.parseInt(hex, 16)),
-    ),
-  );
+  const unescaped = canonicalBase64(unescapedFully(run));
   return [
     unescaped.replace(/[ \t\r\n]/g, ''),
     unescaped.replace(/[\t\r\n]/g, '').replace(/ /g, '+'),
@@ -401,27 +419,72 @@ function errorCode(
 }
 
 /**
- * Previews what a server might echo back: every known secret, and any JWT —
- * the JWT pass, like the base64 one, reads the server's text between the
- * previews only.
+ * The fail-closed net, last: a piece of the server's text that, decoded at
+ * every depth, still holds a known secret in some way the passes above did
+ * not recognise (an escaping no pattern foresaw) is replaced whole by its
+ * length alone — over-redaction, never a secret.
+ */
+function failClosed(piece: string, forms: KnownForms): Segment[] {
+  if (forms.values.length === 0) return [{ text: piece }];
+  const secret = new RegExp(forms.pattern);
+  return secret.test(unescapedFully(piece, 'utf8')) ||
+    secret.test(unescapedFully(piece))
+    ? [{ preview: `<redacted, ${[...piece].length} chars>` }]
+    : [{ text: piece }];
+}
+
+/** The JWT pass: anything JWT-shaped in the server's text, previewed. */
+function previewJwts(piece: string): Segment[] {
+  const segments: Segment[] = [];
+  let at = 0;
+  for (const match of piece.matchAll(JWT_SHAPE)) {
+    segments.push({ text: piece.slice(at, match.index) });
+    segments.push({ preview: previewSecret(match[0]) });
+    at = match.index + match[0].length;
+  }
+  segments.push({ text: piece.slice(at) });
+  return segments;
+}
+
+/**
+ * At most `cap` characters (code points) of a redacted text, then `…`: the
+ * server's text is cut at a character, never inside a surrogate pair, and a
+ * preview is kept whole or left out whole, never cut — after redaction, so
+ * no cut can split a secret before it was recognised.
+ */
+function capped(segments: readonly Segment[], cap: number): string {
+  let out = '';
+  let left = cap;
+  for (const segment of segments) {
+    const characters = [
+      ...('text' in segment ? segment.text : segment.preview),
+    ];
+    if (characters.length <= left) {
+      out += characters.join('');
+      left -= characters.length;
+      continue;
+    }
+    if ('text' in segment) out += characters.slice(0, left).join('');
+    return `${out}…`;
+  }
+  return out;
+}
+
+/**
+ * Previews what a server might echo back: every known secret, at any depth
+ * of escaping, and any JWT — each pass reading the server's text between the
+ * previews only — then the fail-closed net, then the cap (5.4.2's 512).
  */
 function redact(
   text: string,
   secrets: readonly (string | undefined)[],
 ): string {
-  return joinSegments(
-    onText(redactKnownSecrets(text, secrets), (piece) => {
-      const segments: Segment[] = [];
-      let at = 0;
-      for (const match of piece.matchAll(JWT_SHAPE)) {
-        segments.push({ text: piece.slice(at, match.index) });
-        segments.push({ preview: previewSecret(match[0]) });
-        at = match.index + match[0].length;
-      }
-      segments.push({ text: piece.slice(at) });
-      return segments;
-    }),
+  const forms = knownForms(secrets);
+  const segments = onText(
+    onText(redactKnownSecrets(text, forms), previewJwts),
+    (piece) => failClosed(piece, forms),
   );
+  return capped(segments, DESCRIPTION_CAP);
 }
 
 /**

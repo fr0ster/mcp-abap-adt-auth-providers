@@ -111,10 +111,13 @@ const ALL_ECHOES: [string, string][] = [
 /** Every whole secret form an echo carried: none may survive anywhere. */
 const WHOLE_FORMS = [...new Set(ALL_ECHOES.flat())];
 
-const DESCRIPTION = `${SERVER_TEXT} ${ALL_ECHOES.map(([echo]) => echo).join(' | ')}`;
-const EXPECTED_DESCRIPTION = `${SERVER_TEXT} ${ALL_ECHOES.map(([, form]) => previewSecret(form)).join(' | ')}`;
-const URI = `${SERVER_URI}?c=${encodeURIComponent(CLIENT_SECRET)}`;
-const EXPECTED_URI = `${SERVER_URI}?c=${previewSecret(CLIENT_SECRET)}`;
+// Split over the two fields: each stays under the 512-character cap.
+const FIRST = ALL_ECHOES.slice(0, 11);
+const SECOND = ALL_ECHOES.slice(11);
+const DESCRIPTION = `${SERVER_TEXT} ${FIRST.map(([echo]) => echo).join(' | ')}`;
+const EXPECTED_DESCRIPTION = `${SERVER_TEXT} ${FIRST.map(([, form]) => previewSecret(form)).join(' | ')}`;
+const URI = `${SERVER_URI}?c=${encodeURIComponent(CLIENT_SECRET)} ${SECOND.map(([echo]) => echo).join(' | ')}`;
+const EXPECTED_URI = `${SERVER_URI}?c=${previewSecret(CLIENT_SECRET)} ${SECOND.map(([, form]) => previewSecret(form)).join(' | ')}`;
 
 function site(overrides: Partial<TokenRequestSite> = {}): TokenRequestSite {
   return {
@@ -214,19 +217,22 @@ function expectNothingOfTheServerOrASecret(text: string): void {
   for (const form of WHOLE_FORMS) expect(text).not.toContain(form);
 }
 
-/** Each preview at most 4 + 4 characters of its form, N its length. */
+/**
+ * Each preview at most 4 characters after its `…` and N ≥ 16 when it shows
+ * any, under 16 when it shows none. The head is not delimited from the text
+ * before it, so the 4-character bound on both ends is checked as "no run of
+ * a secret longer than 4" (`longestRunOf`) where it matters, and exactly by
+ * the expected strings elsewhere.
+ */
 function expectBoundedPreviews(text: string): void {
-  const previews = [
-    ...text.matchAll(/(?:([^\s=]*)…(\S*) )?<redacted, (\d+) chars>/gu),
-  ];
+  const previews = [...text.matchAll(/(?:…(\S*) )?<redacted, (\d+) chars>/gu)];
   expect(previews.length).toBeGreaterThan(0);
-  for (const [, head, tail, n] of previews) {
-    if (head === undefined) {
-      expect(Number(n)).toBeLessThan(16);
-    } else {
+  for (const [whole, tail, n] of previews) {
+    if (whole.startsWith('…')) {
       expect(Number(n)).toBeGreaterThanOrEqual(16);
-      expect([...head].length).toBeLessThanOrEqual(4);
       expect([...(tail ?? '')].length).toBeLessThanOrEqual(4);
+    } else {
+      expect(Number(n)).toBeLessThan(16);
     }
   }
 }
@@ -359,7 +365,8 @@ describe('a refused request (400) echoing every secret', () => {
           // are left: the join's third source is what the other case proves.
           expect(meta.error_description).toContain(SERVER_TEXT);
         }
-        expect(meta.error_uri).toBe(EXPECTED_URI);
+        if (prepared) expect(meta.error_uri).toBe(EXPECTED_URI);
+        else expect(meta.error_uri).toContain('SERVER-URI-PATH');
         const text = rendered(line as Line);
         if (prepared) {
           for (const form of WHOLE_FORMS) expect(text).not.toContain(form);
@@ -972,5 +979,265 @@ describe('a whitespace-wrapped Basic credential', () => {
         },
       );
     });
+  });
+});
+
+/**
+ * Review fix 1 (the user's rule: under authDebug a secret shows at most
+ * 4 + 4 characters): a server that escapes the echo again — `%252B`,
+ * `%2525`, a form body URL-encoded into `error_uri` — is recognised at any
+ * depth; without authDebug nothing of it is written at all.
+ */
+describe('a multiply-escaped echo', () => {
+  const once = (value: string): string => encodeURIComponent(value);
+  const twice = (value: string): string => once(once(value));
+  const thrice = (value: string): string => once(twice(value));
+  const formTwice = (value: string): string => formEncoded(formEncoded(value));
+
+  const decodedOf = (value: string): string =>
+    new URLSearchParams(`v=${value.replace(/&/g, '%26')}`).get('v') ?? value;
+
+  const SECRETS_UNDER_TEST: [
+    string,
+    string,
+    PreparedTokenRequest | undefined,
+  ][] = [
+    ['the client secret', CLIENT_SECRET, undefined],
+    ['the assertion', `${ASSERTION}+/=`, undefined],
+    ['the refresh token', `${REFRESH}/+`, undefined],
+    ['the legacy Basic credential', LEGACY_CREDENTIAL, undefined],
+    ["the strategy's Basic credential", STRATEGY_CREDENTIAL, PREPARED],
+  ];
+
+  const ESCAPINGS: [string, (value: string) => string][] = [
+    ['escaped twice (%252B, %2525)', twice],
+    ['escaped three times', thrice],
+    ['form-encoded twice', formTwice],
+    [
+      'a form body URL-encoded into error_uri',
+      // The parameter is named `p`: a name like `client_secret` would share a
+      // 5-character run ("client") with the secrets under test.
+      (value) => once(`p=${formEncoded(value)}&x=1`),
+    ],
+  ];
+
+  describe.each(SECRETS_UNDER_TEST)('%s', (_name, secret, prepared) => {
+    const s = (authDebug: boolean, logger: ILogger): TokenRequestSite =>
+      site({
+        authDebug,
+        logger,
+        secrets: [`${REFRESH}/+`, CLIENT_SECRET, `${ASSERTION}+/=`],
+      });
+
+    const lineFor = async (
+      authDebug: boolean,
+      status: 400 | 500 | 200,
+      echoed: string,
+    ): Promise<{ text: string; echoed: string; failure: unknown }> => {
+      const { logger, lines } = recordingLogger();
+      const body = {
+        error: 'invalid_client',
+        error_description: `got ${echoed} end`,
+        error_uri: `https://as.example/e?r=${echoed}`,
+      };
+      const failure =
+        status === 200
+          ? missing(
+              s(authDebug, logger),
+              await answered(s(authDebug, logger), body),
+              'debug',
+              prepared,
+            )
+          : await failureOf(
+              send(s(authDebug, logger), rejection(status, body), prepared),
+            );
+      expect(lines).toHaveLength(1);
+      // What became of the echo alone: the server's fields without the
+      // fixed words around it — a 5-character run is checked there, where
+      // no ordinary word ("client", "refresh") of the line can collide.
+      const meta = (lines[0]?.meta ?? {}) as Record<string, unknown>;
+      const echoedBack = [
+        String(meta.error_description ?? '')
+          .replace(/^got /, '')
+          .replace(/ end$/, ''),
+        String(meta.error_uri ?? '').replace('https://as.example/e?r=', ''),
+      ].join(' ');
+      return { text: rendered(lines[0] as Line), echoed: echoedBack, failure };
+    };
+
+    /** No whole form of the secret, at any depth of decoding. */
+    const expectNoWholeForm = (text: string): void => {
+      let decoded = text;
+      for (let round = 0; round < 6; round++) {
+        for (const form of [secret, decodedOf(secret)]) {
+          expect(decoded).not.toContain(form);
+        }
+        decoded = decoded.replace(/%([0-9A-Fa-f]{2})/g, (_e, hex: string) =>
+          String.fromCharCode(Number.parseInt(hex, 16)),
+        );
+      }
+    };
+
+    /** No whole form of the secret, nor any 5 characters of it, at any depth of decoding. */
+    const expectNoForm = (text: string): void => {
+      let flat = text;
+      for (let round = 0; round < 6; round++) {
+        flat = flat.replace(/%([0-9A-Fa-f]{2})/g, (_e, hex: string) =>
+          String.fromCharCode(Number.parseInt(hex, 16)),
+        );
+      }
+      for (const form of [secret, decodedOf(secret)]) {
+        let best = 0;
+        for (let i = 0; i + best < form.length; i++) {
+          while (
+            i + best < form.length &&
+            flat.includes(form.slice(i, i + best + 1))
+          )
+            best++;
+        }
+        expect(best).toBeLessThanOrEqual(4);
+      }
+      let decoded = text;
+      for (let round = 0; round < 6; round++) {
+        for (const form of [secret, decodedOf(secret)]) {
+          expect(decoded).not.toContain(form);
+        }
+        try {
+          decoded = decodeURIComponent(decoded);
+        } catch {
+          break;
+        }
+      }
+    };
+
+    describe.each([[400 as const], [500 as const], [200 as const]])(
+      'in a %i',
+      (status) => {
+        it.each(ESCAPINGS)(
+          '%s: authDebug — previews only',
+          async (_e, escapeOf) => {
+            const echoed = escapeOf(secret);
+            // Not vacuous: a credential without `+`, `/` or `=` escapes to itself.
+            if (/[+/=%]/.test(secret)) expect(echoed).not.toBe(secret);
+            const {
+              text,
+              echoed: back,
+              failure,
+            } = await lineFor(true, status, echoed);
+            expectNoForm(back);
+            expectNoWholeForm(text);
+            expect(text).toContain('<redacted, ');
+            expectBoundedPreviews(text);
+            expectNoWholeForm(renderingsOf(failure));
+          },
+        );
+
+        it.each(ESCAPINGS)(
+          '%s: without authDebug — nothing of it',
+          async (_e, escapeOf) => {
+            const { text, failure } = await lineFor(
+              false,
+              status,
+              escapeOf(secret),
+            );
+            expectNoWholeForm(text);
+            expect(text).not.toContain('got ');
+            expect(text).not.toContain('as.example');
+            expectNoWholeForm(renderingsOf(failure));
+          },
+        );
+      },
+    );
+  });
+});
+
+/**
+ * Review fix 2: the authDebug text is capped after redaction at 512
+ * characters (5.4.2's DESCRIPTION_CAP), never inside a preview or a
+ * surrogate pair.
+ */
+describe('the authDebug text is capped', () => {
+  const descriptionOf = async (description: string): Promise<string> => {
+    const { logger, lines } = recordingLogger();
+    await failureOf(
+      send(
+        site({ authDebug: true, logger }),
+        rejection(400, { error_description: description }),
+      ),
+    );
+    return metaOf(lines).error_description as string;
+  };
+
+  it('a long text is cut at 512 characters, with an ellipsis', async () => {
+    const out = await descriptionOf('x'.repeat(5000));
+    expect(out).toBe(`${'x'.repeat(512)}…`);
+  });
+
+  it('a text that fits is kept whole', async () => {
+    expect(await descriptionOf('y'.repeat(512))).toBe('y'.repeat(512));
+  });
+
+  it('never inside a preview: one that does not fit is left out whole', async () => {
+    const out = await descriptionOf(
+      `${'x'.repeat(500)}${REFRESH}${'z'.repeat(100)}`,
+    );
+    expect(out).toBe(`${'x'.repeat(500)}…`);
+    expect(out).not.toContain('refr');
+  });
+
+  it('a preview that fits is kept whole before the cut', async () => {
+    const preview = previewSecret(REFRESH);
+    const out = await descriptionOf(
+      `${'x'.repeat(400)}${REFRESH}${'z'.repeat(500)}`,
+    );
+    expect(out.startsWith(`${'x'.repeat(400)}${preview}`)).toBe(true);
+    expect([...out]).toHaveLength(513);
+  });
+
+  it('never inside a surrogate pair', async () => {
+    const out = await descriptionOf(`${'x'.repeat(511)}${'😀'.repeat(10)}`);
+    expect(out).toBe(`${'x'.repeat(511)}😀…`);
+    expect(out).not.toMatch(
+      /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/,
+    );
+  });
+});
+
+/**
+ * Review fix 3: the operation's phrase of every token site, pinned — a
+ * change in auth-errors' words fails here instead of falling back to
+ * `the token request`.
+ */
+describe("each token site's phrase", () => {
+  it.each([
+    ['code-exchange', undefined, 'the code exchange'],
+    ['token-refresh', undefined, 'the token refresh'],
+    ['client-credentials', undefined, 'the client credentials request'],
+    ['passcode-exchange', undefined, 'the passcode exchange'],
+    ['saml-token-exchange', undefined, 'the SAML token exchange'],
+    ['saml-token-refresh', undefined, 'the SAML token refresh'],
+    ['oidc-token-request', undefined, 'the OIDC token request'],
+    ['device-authorization', undefined, 'the OIDC device authorization'],
+    ['device-poll', undefined, 'the device poll'],
+    ['password-grant', undefined, 'the OIDC password grant'],
+    ['token-request', 'authorization_code', 'authorization_code token request'],
+  ] as const)('%s (grant %s): %s', async (operation, grant, phrase) => {
+    const { logger, lines } = recordingLogger();
+    await failureOf(
+      send(site({ operation, grant, logger }), rejection(400, {})),
+    );
+    expect(lines[0]?.message).toBe(
+      `${phrase}: the token endpoint refused the request`,
+    );
+    const quiet = recordingLogger();
+    const s = site({ operation, grant, logger: quiet.logger });
+    missing(s, await answered(s, {}), 'debug');
+    const expected =
+      operation === 'code-exchange'
+        ? 'Token exchange failed'
+        : `${phrase} failed`;
+    expect(quiet.lines[0]?.message).toBe(
+      `${expected}: status 200, error: no error given`,
+    );
   });
 });

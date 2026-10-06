@@ -119,6 +119,49 @@ describe('the redactor writes previews', () => {
 });
 
 /**
+ * Review fix 1: an echo escaped again at any depth is still the secret, and
+ * anything no pattern foresees fails closed — the piece of server text that
+ * decodes to hold a known secret becomes its length alone.
+ */
+describe('escaped at any depth', () => {
+  const SECRET = 'se+cr%25et/x-0123456789-depth';
+  const deeper = (value: string, times: number): string => {
+    let out = value;
+    for (let i = 0; i < times; i++) out = encodeURIComponent(out);
+    return out;
+  };
+
+  it.each([1, 2, 3, 5])(
+    'escaped %i time(s): one preview of the secret',
+    (times) => {
+      const echoed = deeper(SECRET, times);
+      expect(described(`a ${echoed} b`, [SECRET])).toBe(
+        `a ${previewSecret(SECRET)} b`,
+      );
+    },
+  );
+
+  it('an escaping no pattern foresees (`%%32B` for `+`) fails closed: the piece by its length only', () => {
+    const odd = `x=${SECRET.replace('+', '%%32B')}`;
+    expect(described(`a ${odd} b`, [SECRET])).toBe(
+      `<redacted, ${[...`a ${odd} b`].length} chars>`,
+    );
+  });
+
+  it('a UTF-8 secret escaped oddly fails closed too', () => {
+    const secret = 'пароль-секрет+0123456789';
+    const odd = encodeURIComponent(secret).replace('%2B', '%%32B');
+    expect(described(`a ${odd} b`, [secret])).toMatch(
+      /^<redacted, \d+ chars>$/,
+    );
+  });
+
+  it('text that decodes to no secret is kept', () => {
+    expect(described('a %%32B plain b', [SECRET])).toBe('a %%32B plain b');
+  });
+});
+
+/**
  * Recognition first (spec §6): a Basic credential echoed wrapped — by CRLF,
  * LF, a tab or spaces, as themselves or escaped — is one span, previewed
  * from the credential it was recognised as; no run of the credential longer
