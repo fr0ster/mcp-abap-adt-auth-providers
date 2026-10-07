@@ -32,7 +32,7 @@ const { withBrowserCallbackServer } = require(${JSON.stringify(join(out, 'auth',
       lingering.on('end', () => undefined);
       await new Promise((resolve) => lingering.once('connect', resolve));
       // Half a request: the connection is busy, not idle, to Node's close().
-      lingering.write('GET / HTTP/1.1\\r\\nHost: x\\r\\n');
+      lingering.write('GET / HTTP/1.1\\r\\nHost: 127.0.0.1:' + port + '\\r\\n');
       await new Promise((resolve) => setImmediate(resolve));
       // The client's own side holds nothing; only the server's could.
       lingering.unref();

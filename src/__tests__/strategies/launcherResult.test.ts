@@ -30,7 +30,7 @@ const factory = async (_options, use) => {
     },
   });
 };
-const strategy = new BrowserCallbackStrategy({ port: 0, callbackServer: factory, openUrl: ${openUrl} });
+const strategy = new BrowserCallbackStrategy({ port: 0, stateGate: false, callbackServer: factory, openUrl: ${openUrl} });
 let outcome;
 try {
   const answered = await strategy.authorize({

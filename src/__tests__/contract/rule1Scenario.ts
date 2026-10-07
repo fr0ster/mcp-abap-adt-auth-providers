@@ -319,6 +319,7 @@ function rows(lib: typeof Lib): Row[] {
     const factory = w.hostile('callback server factory');
     if (factory)
       return new lib.BrowserCallbackStrategy({
+        stateGate: false,
         port: 0,
         callbackServer: factory as never,
       }) as T;

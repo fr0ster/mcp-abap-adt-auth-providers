@@ -25,6 +25,7 @@ const factory = async (_options, use) =>
   });
 const strategy = new BrowserCallbackStrategy({
   port: 0,
+  stateGate: false,
   callbackServer: factory,
   openUrl: ${openUrl},
 });

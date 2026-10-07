@@ -114,6 +114,7 @@ describe('a thrown error carries no foreign message', () => {
   // allowlisted code; no cause at all (L2), never the original.
   it('BrowserCallbackStrategy: interactive-login failed in fixed words, no cause', async () => {
     const strategy = new BrowserCallbackStrategy<string>({
+      stateGate: false,
       callbackServer: async () => {
         throw original;
       },
@@ -355,6 +356,7 @@ describe('an IdP refusal on the browser callback', () => {
 
   it('a foreign failure with an HTTP status names the status', async () => {
     const strategy = new BrowserCallbackStrategy<string>({
+      stateGate: false,
       callbackServer: async () => {
         throw Object.assign(new Error(DESCRIPTION), { status: 503 });
       },
@@ -373,6 +375,7 @@ describe('an IdP refusal on the browser callback', () => {
   // ValidationError, passes through as it is.
   it('a configuration failure from building the URL passes through unchanged (E12)', async () => {
     const strategy = new BrowserCallbackStrategy<string>({
+      stateGate: false,
       callbackServer: async (_options, use) =>
         use({
           port: 1,

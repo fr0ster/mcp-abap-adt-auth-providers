@@ -191,8 +191,7 @@ describe('UAA paste route, gated', () => {
           ).status,
         ).toBe(400);
         expect(
-          (await get(`/submit?input=${pasted('')}&form_token=${token}`))
-            .status,
+          (await get(`/submit?input=${pasted('')}&form_token=${token}`)).status,
         ).toBe(400);
         expect(ignored()).toBe(4);
 

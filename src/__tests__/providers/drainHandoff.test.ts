@@ -119,6 +119,7 @@ async function setup() {
   const port = await getAvailablePort();
   const scopes = new Arrivals<Scope>();
   const inner = new BrowserCallbackStrategy<string>({
+    stateGate: false,
     port,
     browser: 'none',
     openUrl: async () => undefined,

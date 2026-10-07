@@ -63,6 +63,18 @@ const codeStrategy = <T>(payload: T): IAuthorizationStrategy<T> => ({
   }),
 });
 
+/**
+ * Builds the URL first, as a browser strategy does: the provider then holds
+ * this attempt's PKCE verifier and sends it (spec §6a1 — a code no URL was
+ * built for is exchanged without one).
+ */
+const buildingCodeStrategy = <T>(payload: T): IAuthorizationStrategy<T> => ({
+  authorize: async (request) => {
+    await request.buildAuthorizationUrl('http://localhost:61001/callback');
+    return { payload, redirectUri: 'http://localhost:61001/callback' };
+  },
+});
+
 const acceptingSamlValidator = (): IAssertionValidator => ({
   async validate(payload) {
     return {
@@ -164,7 +176,9 @@ const PROVIDERS: [string, Make, string, string, string][] = [
         clientSecret: SECRET,
         tokenEndpoint: 'https://idp/token',
         authorizationEndpoint: 'https://idp/auth',
-        authorization: codeStrategy({ code: 'the-authorization-code' }),
+        authorization: buildingCodeStrategy({
+          code: 'the-authorization-code',
+        }),
         ...extra,
       }),
     'oidc-token-request',

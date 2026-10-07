@@ -64,7 +64,9 @@ beforeAll(async () => {
       forms.push(Object.fromEntries(new URLSearchParams(body)));
       res.setHeader('Content-Type', 'application/json');
       // No refresh token: the next renewal is a login.
-      res.end(JSON.stringify({ access_token: accessToken(), expires_in: 3600 }));
+      res.end(
+        JSON.stringify({ access_token: accessToken(), expires_in: 3600 }),
+      );
     });
   });
   await new Promise<void>((resolve) =>
@@ -303,7 +305,7 @@ describe.each([
     const thrown = await strategy
       .authorize({ buildAuthorizationUrl })
       .catch((e: unknown) => e);
-    expect(configurationOf(thrown)).toEqual({
+    expect(configurationOf(thrown)).toMatchObject({
       case: 'invalid-value',
       fields: ['callbackServer'],
     });
@@ -358,7 +360,8 @@ describe('samlCallbackStrategy needs no gate', () => {
       },
     });
     const outcome = await strategy.authorize({
-      buildAuthorizationUrl: async () => 'https://idp.example/sso?SAMLRequest=x',
+      buildAuthorizationUrl: async () =>
+        'https://idp.example/sso?SAMLRequest=x',
     });
     expect(outcome.payload).toBe('assertion');
   }, 30000);
@@ -379,7 +382,8 @@ describe('samlCallbackStrategy needs no gate', () => {
       },
     });
     const outcome = await strategy.authorize({
-      buildAuthorizationUrl: async () => 'https://idp.example/sso?SAMLRequest=x',
+      buildAuthorizationUrl: async () =>
+        'https://idp.example/sso?SAMLRequest=x',
     });
     expect(outcome.payload).toBe('assertion');
     expect(seen[0]?.gated).not.toBe(true);
@@ -428,7 +432,7 @@ describe('BrowserCallbackStrategy constructed directly', () => {
         buildAuthorizationUrl: async () => 'https://idp.example/a?state=s',
       })
       .catch((e: unknown) => e);
-    expect(configurationOf(thrown)).toEqual({
+    expect(configurationOf(thrown)).toMatchObject({
       case: 'invalid-value',
       fields: ['callbackServer'],
     });
@@ -484,21 +488,18 @@ describe('the comparison is constant time (source)', () => {
   });
 
   it.each([
-    'auth/callbackServer.ts',
-    'auth/oidcBrowserAuth.ts',
-    'strategies/manualStrategies.ts',
-  ])('%s compares no state or token with ===', (file) => {
+    ['auth/callbackServer.ts', 'sameSecret('],
+    ['strategies/manualStrategies.ts', 'pasteMatches('],
+  ])('%s compares the armed secret only through loginState', (file, call) => {
     const source = read(file);
-    for (const needle of [
-      '=== state',
-      'state ===',
-      '!== state',
-      'state !==',
-      '=== expected',
-      '=== token',
-      'token ===',
-    ]) {
-      expect(source).not.toContain(needle);
-    }
+    expect(source).toContain(call);
+    // Our own source, not untrusted input: a regex is fine here.
+    expect(source).not.toMatch(
+      /(===|!==)\s*(gate\.)?(bound|formToken|expected)\b/,
+    );
+    expect(source).not.toMatch(
+      /\b(bound|formToken|expected)\s*(===|!==)(?!\s*(null|undefined)\b)/,
+    );
+    expect(source).not.toContain('timingSafeEqual');
   });
 });

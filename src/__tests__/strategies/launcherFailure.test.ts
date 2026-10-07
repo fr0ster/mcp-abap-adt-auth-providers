@@ -179,7 +179,8 @@ describe.each([
     );
     expect(await settled(login)).toBe(false);
     expect(prompts).toEqual(PROMPT);
-    await callback('error=access_denied');
+    // The IdP's refusal carries the request's state (RFC 6749 §4.1.2.1).
+    await callback('error=access_denied&state=S1');
     expect(readFailure(await rejected, 'browser-login').facts).toEqual({
       outcome: 'identity-provider-refused',
       oauthError: 'access_denied',

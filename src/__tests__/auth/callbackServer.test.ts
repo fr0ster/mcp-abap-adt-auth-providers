@@ -14,6 +14,7 @@ import {
   runCallbackScope,
   withBrowserCallbackServer,
 } from '../../auth/callbackServer';
+import { formTokenIn } from '../helpers/callbackHttp';
 
 const PORT = 7871;
 
@@ -548,10 +549,12 @@ describe('withBrowserCallbackServer', () => {
         { port: PORT },
         async (srv) => {
           const waiting = srv.waitForResult();
+          // The served form's token binds the paste to this login (§6a1).
+          const token = formTokenIn((await httpGet('/')).body);
           void httpGet(
             `/submit?input=${encodeURIComponent(
               `http://localhost:${PORT}/callback?code=pasted-code`,
-            )}`,
+            )}&form_token=${token}`,
           ).catch(() => undefined);
           return await waiting;
         },
@@ -566,12 +569,13 @@ describe('withBrowserCallbackServer', () => {
         { port: PORT },
         async (srv) => {
           const waiting = srv.waitForResult();
+          const token = formTokenIn((await httpGet('/')).body);
           for (const input of [
             'code=%ZZ',
             'http://localhost/callback?code=%E0%A4%A',
           ]) {
             const { status, body } = await httpGet(
-              `/submit?input=${encodeURIComponent(input)}`,
+              `/submit?input=${encodeURIComponent(input)}&form_token=${token}`,
             );
             expect(status).toBe(400);
             expect(body).toContain('<form');
@@ -590,8 +594,9 @@ describe('withBrowserCallbackServer', () => {
         { port: PORT },
         async (srv) => {
           const waiting = srv.waitForResult();
+          const token = formTokenIn((await httpGet('/')).body);
           const { status, body } = await httpGet(
-            `/submit?input=${encodeURIComponent('not a code')}`,
+            `/submit?input=${encodeURIComponent('not a code')}&form_token=${token}`,
           );
           expect(status).toBe(400);
           expect(body).toContain('<form');

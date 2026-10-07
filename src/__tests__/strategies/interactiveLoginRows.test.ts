@@ -419,6 +419,7 @@ describe('A.3 — browser login rows', () => {
     it('with a status and a registered error, verbatim, and A9’s new hint', async () => {
       const thrown = await rejection(
         new BrowserCallbackStrategy<string>({
+          stateGate: false,
           callbackServer: throwing(
             Object.assign(new Error('REVIEW_TEST_SERVER_TEXT'), {
               response: {
@@ -443,6 +444,7 @@ describe('A.3 — browser login rows', () => {
     it('with nothing safe to name → unknown error', async () => {
       const thrown = await rejection(
         new BrowserCallbackStrategy<string>({
+          stateGate: false,
           callbackServer: throwing(new Error('REVIEW_TEST_SERVER_TEXT')),
         }).authorize(request()),
       );

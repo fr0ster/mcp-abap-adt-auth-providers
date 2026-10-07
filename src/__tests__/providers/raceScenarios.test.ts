@@ -177,7 +177,7 @@ const factory = async (options, use) => {
   options.signal && options.signal.addEventListener('abort', onAbort, { once: true });
   scopes.push({ deliver: (code) => outcome.resolve(code), gate });
   try {
-    return await use({ port: options.port, redirectUri: 'http://localhost:' + options.port + '/callback', waitForResult: () => outcome.promise, fail: (e) => outcome.reject(e) });
+    return await use({ port: options.port, redirectUri: 'http://localhost:' + options.port + '/callback', waitForResult: () => outcome.promise, fail: (e) => outcome.reject(e), expectState: () => {} });
   } finally {
     await gate.promise;
     await new Promise((resolve) => server.close(resolve));

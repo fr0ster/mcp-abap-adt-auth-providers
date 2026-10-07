@@ -422,6 +422,7 @@ describe('the callback server options', () => {
       throw new Error('stop');
     };
     const strategy = new BrowserCallbackStrategy<string>({
+      stateGate: false,
       port: 0,
       callbackServer,
     });

@@ -213,7 +213,9 @@ describe('token request shapes, as sent today', () => {
           { state: 'the-state', codeChallenge: 'the-challenge' },
         ),
       );
-      expect(`${url.origin}${url.pathname}`).toBe('https://uaa/oauth/authorize');
+      expect(`${url.origin}${url.pathname}`).toBe(
+        'https://uaa/oauth/authorize',
+      );
       expect(Object.fromEntries(url.searchParams)).toEqual({
         client_id: 'cid',
         redirect_uri: 'http://localhost:61001/callback',

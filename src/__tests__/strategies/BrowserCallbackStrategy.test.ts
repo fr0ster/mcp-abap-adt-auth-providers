@@ -7,6 +7,7 @@
  */
 
 import netModule from 'node:net';
+import os from 'node:os';
 import { describe, expect, it, jest } from '@jest/globals';
 import {
   AuthProviderFailure,
@@ -54,6 +55,8 @@ function fakeFactory<T = string>(opts: {
       redirectUri: `http://localhost:${port}/callback`,
       waitForResult: () => result,
       fail: (e) => fail(e),
+      // Armable, like every transport an OAuth constructor accepts (§6a1).
+      expectState: () => undefined,
     };
     // An abort ends the scope without waiting for the body — an arbitrary async
     // function cannot be force-terminated, so the real `runCallbackScope`
@@ -89,6 +92,7 @@ describe('BrowserCallbackStrategy', () => {
     const { factory } = fakeFactory({ boundPort: 49999 });
     const openUrl = jest.fn(async () => undefined);
     const strategy = new BrowserCallbackStrategy<string>({
+      stateGate: false,
       callbackServer: factory,
       port: 0,
       openUrl,
@@ -112,6 +116,7 @@ describe('BrowserCallbackStrategy', () => {
     const { factory, released } = fakeFactory({});
     const openUrl = jest.fn(async () => undefined);
     const strategy = new BrowserCallbackStrategy<string>({
+      stateGate: false,
       callbackServer: factory,
       openUrl,
     });
@@ -136,6 +141,7 @@ describe('BrowserCallbackStrategy', () => {
   it('refuses an overlapping authorize', async () => {
     const { factory } = fakeFactory({});
     const strategy = new BrowserCallbackStrategy<string>({
+      stateGate: false,
       callbackServer: factory,
       openUrl: async () => undefined,
     });
@@ -156,6 +162,7 @@ describe('BrowserCallbackStrategy', () => {
     try {
       const { factory } = fakeFactory({});
       const strategy = new BrowserCallbackStrategy<string>({
+        stateGate: false,
         callbackServer: factory,
         port: 7873,
         openUrl: async () => undefined,
@@ -173,6 +180,7 @@ describe('BrowserCallbackStrategy', () => {
   it('skips the availability probe for an ephemeral port', async () => {
     const { factory } = fakeFactory({ boundPort: 49998 });
     const strategy = new BrowserCallbackStrategy<string>({
+      stateGate: false,
       callbackServer: factory,
       port: 0,
       openUrl: async () => undefined,
@@ -189,6 +197,7 @@ describe('BrowserCallbackStrategy', () => {
   it('disposes idempotently and aborts before the transport is entered', async () => {
     const { factory, released } = fakeFactory({});
     const strategy = new BrowserCallbackStrategy<string>({
+      stateGate: false,
       callbackServer: factory,
       port: 0,
       openUrl: async () => undefined,
@@ -219,6 +228,7 @@ describe('BrowserCallbackStrategy', () => {
     });
     const { factory, released } = fakeFactory({ deliver: () => entered() });
     const strategy = new BrowserCallbackStrategy<string>({
+      stateGate: false,
       callbackServer: factory,
       port: 0,
       openUrl: async () => undefined,
@@ -305,13 +315,38 @@ describe('BrowserCallbackStrategy', () => {
     const shared = () =>
       ({ port: 0, browser: 'none', signal: ended.signal }) as const;
 
-    // Ours, and it really serves a paste form. The address it names must be
-    // reachable by the reader it addresses — someone on another machine — so
-    // the host stays a placeholder and only the port is asserted. `localhost`
-    // here would be an instruction that cannot work for its own audience.
+    // Ours, and it really serves a paste form. Since 6.0.0 the transport
+    // answers only loopback and the consumer's allowedHosts (§6a1), so the
+    // reader on another machine is told the way that reaches it — an SSH
+    // tunnel to the bound port, arriving on loopback — never a guessed host.
     const ourHint = await announcedBy(browserCallbackStrategy({ ...shared() }));
-    expect(ourHint).toMatch(/paste it at http:\/\/<this-host>:\d+\//);
-    expect(ourHint).not.toMatch(/paste it at http:\/\/localhost/);
+    const port = /ssh -L (\d+):localhost:(\d+) /.exec(ourHint);
+    expect(port?.[1]).toEqual(expect.any(String));
+    expect(port?.[2]).toBe(port?.[1]);
+    expect(ourHint).toContain(`paste it at http://localhost:${port?.[1]}/`);
+    expect(ourHint).not.toContain('<this-host>');
+    expect(ourHint).not.toContain(os.hostname());
+
+    // With the consumer's allowedHosts, the hint names the first of them —
+    // with the bound port when the entry has none.
+    const allowedHint = await announcedBy(
+      browserCallbackStrategy({
+        ...shared(),
+        allowedHosts: ['not an authority', 'buildhost.example'],
+      }),
+    );
+    expect(allowedHint).toMatch(
+      /paste it at http:\/\/buildhost\.example:\d+\//,
+    );
+    expect(allowedHint).not.toContain('ssh -L');
+    expect(
+      await announcedBy(
+        browserCallbackStrategy({
+          ...shared(),
+          allowedHosts: ['buildhost.example:8443'],
+        }),
+      ),
+    ).toContain('paste it at http://buildhost.example:8443/');
 
     // The same transport — but supplied by the caller. The rule is about who
     // supplied it, not what it is: once a receiver is injected, the package no
@@ -388,6 +423,7 @@ describe('BrowserCallbackStrategy', () => {
   it('honours a signal that was already aborted', async () => {
     const { factory, released } = fakeFactory({});
     const strategy = new BrowserCallbackStrategy<string>({
+      stateGate: false,
       callbackServer: factory,
       port: 0,
       openUrl: async () => undefined,
@@ -435,6 +471,7 @@ describe('the error a failed browser login is', () => {
     try {
       const { factory } = fakeFactory({});
       const strategy = new BrowserCallbackStrategy<string>({
+        stateGate: false,
         callbackServer: factory,
         port: 7874,
         openUrl: async () => undefined,
@@ -457,6 +494,7 @@ describe('the error a failed browser login is', () => {
   it('leaves a failure already built as it is (E7)', async () => {
     const { factory } = fakeFactory({});
     const strategy = new BrowserCallbackStrategy<string>({
+      stateGate: false,
       callbackServer: factory,
       openUrl: async () => undefined,
     });

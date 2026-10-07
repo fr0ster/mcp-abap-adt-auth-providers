@@ -40,7 +40,9 @@ const { withSamlCallbackServer } = require(${JSON.stringify(join(out, 'auth', 's
         await new Promise((resolve) => stalled.once('connect', resolve));
         // Complete headers, a body promised and never finished.
         stalled.write(
-          'POST /callback HTTP/1.1\\r\\nHost: x\\r\\n' +
+          // A Host the transport answers for (spec §6a1): else it is
+          // refused before the body parser, and nothing stalls.
+          'POST /callback HTTP/1.1\\r\\nHost: 127.0.0.1:' + port + '\\r\\n' +
           'Content-Type: application/x-www-form-urlencoded\\r\\n' +
           'Content-Length: 1000\\r\\n\\r\\nSAMLResponse=abc',
         );
@@ -120,7 +122,7 @@ const { runCallbackScope, sendText } = require(${JSON.stringify(join(out, 'auth'
       client.on('data', (chunk) => { received += chunk.toString('latin1'); });
       client.on('error', () => undefined);
       await new Promise((resolve) => client.once('connect', resolve));
-      client.write('GET /slow HTTP/1.1\\r\\nHost: x\\r\\n\\r\\n');
+      client.write('GET /slow HTTP/1.1\\r\\nHost: 127.0.0.1:' + port + '\\r\\n\\r\\n');
       // The request is complete and the route has not answered.
       await new Promise((resolve) => setTimeout(resolve, 200));
       if (!${late}) client.unref();

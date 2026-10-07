@@ -81,12 +81,16 @@ describe('bind address', () => {
   it.each([
     ['OIDC', withOidcCallbackServer],
     ['SAML', withSamlCallbackServer],
-  ] as const)('%s binds loopback by default too', async (_name, factory) => {
-    await factory({ port: PORT }, async (srv: { port: number }) => {
-      expect(await connects('127.0.0.1', srv.port)).toBe(true);
-      if (EXTERNAL) expect(await connects(EXTERNAL, srv.port)).toBe(false);
-    });
-  }, 30000);
+  ] as const)(
+    '%s binds loopback by default too',
+    async (_name, factory) => {
+      await factory({ port: PORT }, async (srv: { port: number }) => {
+        expect(await connects('127.0.0.1', srv.port)).toBe(true);
+        if (EXTERNAL) expect(await connects(EXTERNAL, srv.port)).toBe(false);
+      });
+    },
+    30000,
+  );
 
   it('binds only the configured host when given', async () => {
     const ipv6 = await hasIpv6Loopback();
@@ -183,21 +187,18 @@ describe('Host check', () => {
   }, 30000);
 
   it('refuses a foreign Host on an ungated transport too', async () => {
-    const result = await withOidcCallbackServer(
-      { port: PORT },
-      async (srv) => {
-        const waiting = srv.waitForResult();
-        expect(
-          (
-            await callbackGet(PORT, '/callback?code=forged', {
-              host: `rebound.example:${PORT}`,
-            })
-          ).status,
-        ).toBe(400);
-        void callbackGet(PORT, '/callback?code=real');
-        return await waiting;
-      },
-    );
+    const result = await withOidcCallbackServer({ port: PORT }, async (srv) => {
+      const waiting = srv.waitForResult();
+      expect(
+        (
+          await callbackGet(PORT, '/callback?code=forged', {
+            host: `rebound.example:${PORT}`,
+          })
+        ).status,
+      ).toBe(400);
+      void callbackGet(PORT, '/callback?code=real');
+      return await waiting;
+    });
     expect(result).toEqual({ code: 'real', state: undefined });
   }, 30000);
 

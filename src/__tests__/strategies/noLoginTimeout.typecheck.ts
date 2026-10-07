@@ -46,11 +46,16 @@ const signal = AbortSignal.timeout(1000);
 // The strategies' options.
 export const strategyOptions: BrowserCallbackStrategyOptions<string> = {
   callbackServer,
+  stateGate: true,
   // @ts-expect-error no login bound on BrowserCallbackStrategyOptions
   timeoutMs: 1000,
 };
 export const browser = [
-  new BrowserCallbackStrategy<string>({ callbackServer, signal }),
+  new BrowserCallbackStrategy<string>({
+    callbackServer,
+    stateGate: true,
+    signal,
+  }),
   browserCallbackStrategy({ signal }),
   // @ts-expect-error no login bound on browserCallbackStrategy
   browserCallbackStrategy({ timeoutMs: 1000 }),
