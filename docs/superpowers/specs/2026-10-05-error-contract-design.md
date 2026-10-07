@@ -2066,8 +2066,14 @@ one call to `next`.
 
 **Tombstones.** Every discarded refresh token — by `sentRefreshToken:
 'discard'` or by `ifCut: 'discard'` — joins the provider's lifetime set
-(§6b's quarantine, renamed `discarded`); a dispatch never sends one, a
-commit never installs one and reports `'clear'` (R8). `canRefresh` is false
+(§6b's quarantine, renamed `discarded`); a dispatch never sends one and a
+commit never installs one (R8). A result carrying a discarded refresh token
+is read as a result carrying **none**, and nothing more: it does not by
+itself move the state to `cleared` (§6b's "a commit carrying a tombstoned
+refresh token … `'clear'`" is replaced). So if a usable refresh token S is
+held, S stays and the disposition follows from S (`'keep'`, or a pending
+`'replace'` with S); `'clear'` is reported only when no usable refresh
+token remains — the state already `cleared` by the discard itself. `canRefresh` is false
 while the held refresh token is in the set. `keep` adds nothing.
 
 **A kept refresh token survives a result without one** (R1's certain
@@ -2149,6 +2155,12 @@ Real sockets where the point is what was sent; every case load-bearing
   invalid decision → `unknown` `renewal-strategy`, the refresh token
   unchanged, no step taken; a strategy that throws, answers a foreign
   thenable (its `then` never called), or never settles until the abort.
+- Tombstoned result with a usable one held: R discarded → a commit
+  installs S → a later result carries R → S still held, `onTokens` told
+  `'keep'` (or `'replace'` with S when one was pending), never `'clear'`;
+  the next cache hit returns S with `'replace'`; the next refresh sends S.
+  With nothing usable held, the same result reports `'clear'`. §6b's
+  "tombstoned result → `cleared`" rule turns the first case red.
 - Keep through login: a sent refresh fails, the strategy answers `login`
   with `sentRefreshToken: 'keep'`, the login returns no refresh token → R
   still held, `onTokens` told `'keep'`, and the next renewal's refresh
