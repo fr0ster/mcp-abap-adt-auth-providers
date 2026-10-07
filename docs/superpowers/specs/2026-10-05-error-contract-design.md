@@ -1333,6 +1333,16 @@ PR's description; opening it is the user's decision.
   macOS, and on Windows `rundll32.exe url.dll,FileProtocolHandler <url>` or, for a
   named browser, `powershell.exe … Start-Process` with the URL only in the
   environment — both by absolute path under `%SystemRoot%\System32`.
+- **A launcher that fails does not end the login.** Where no browser can be
+  opened (an SSH session, a host without a desktop), the URL shown is the
+  only way to finish the login, and it works only while the callback still
+  listens with this attempt's `state` and PKCE verifier. So a launcher's
+  failure — a throw, or a rejection of what it answered — is logged in
+  fixed words (`logFields` of its failure) and the URL is prompted once
+  through `promptableUrl`; the login keeps waiting and ends as every login
+  does: its result, the IdP's refusal, or the consumer's signal. No timer is
+  added. The `browser-launch-failed` outcome is removed from
+  `INTERACTIVE_OUTCOMES` in interfaces-auth 7.0.0 (§6c.12).
 
 ## 6a. No built-in login timeouts
 
