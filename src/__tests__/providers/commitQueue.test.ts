@@ -16,6 +16,7 @@ import type {
   ITokenResult,
 } from '@mcp-abap-adt/interfaces-auth';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
+import type { BridgedTokenResult } from '../../providers/BaseTokenProvider';
 import {
   Arrivals,
   type Deferred,
@@ -44,7 +45,7 @@ type Seen = [string, string | undefined, string | undefined];
 function recorder() {
   const seen: Seen[] = [];
   const notified = new Arrivals<Seen>();
-  const onTokens = async (result: ITokenResult) => {
+  const onTokens = async (result: BridgedTokenResult) => {
     const one: Seen = [
       result.authorizationToken,
       result.refreshToken,

@@ -32,7 +32,6 @@ import type {
   ITokenResult,
   OAuth2GrantType,
   Operation,
-  RefreshTokenDisposition,
 } from '@mcp-abap-adt/interfaces-auth';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
 import { AuthProviderBase } from '../auth/AuthProviderBase';
@@ -79,6 +78,18 @@ interface OperationOf {
   readonly grant?: OAuth2GrantType;
 }
 
+/**
+ * Bridge until the persistence strategy (Task 30e): interfaces-auth 7.0.0
+ * removed `RefreshTokenDisposition` and `ITokenResult.refreshTokenDisposition`;
+ * the provider still keeps its disposition bookkeeping, typed here.
+ */
+export type RefreshTokenDisposition = 'replace' | 'keep' | 'clear';
+
+/** A token result with the bridge's disposition (Task 30e removes it). */
+export type BridgedTokenResult = ITokenResult & {
+  readonly refreshTokenDisposition?: RefreshTokenDisposition | undefined;
+};
+
 /** What every token provider's config may carry beside its own fields. */
 export interface TokenProviderHooks extends TokenProviderDebug {
   /**
@@ -90,7 +101,7 @@ export interface TokenProviderHooks extends TokenProviderDebug {
    * disposition. Best effort: a failure is logged by its kind and fixed
    * words and does not fail the authentication.
    */
-  onTokens?: ((result: ITokenResult) => Promise<void>) | undefined;
+  onTokens?: ((result: BridgedTokenResult) => Promise<void>) | undefined;
   /**
    * The first attached party (spec §6b), attached at construction — the same
    * as `attach(signal)` right after it. A login a moment starts (`prepare`,
@@ -207,7 +218,7 @@ export abstract class BaseTokenProvider
    * only that waiter, and every waiter's abort aborts the attempt.
    */
   private readonly renewals =
-    sharedAttempt<Settled<ITokenResult>>('token-request');
+    sharedAttempt<Settled<BridgedTokenResult>>('token-request');
   /**
    * The renewal attempt in the slot, while it is there: set when it starts,
    * cleared when it settles or is aborted (it leaves the slot at once).
@@ -611,7 +622,7 @@ export abstract class BaseTokenProvider
    * @throws AuthProviderFailure — and nothing else: whatever the renewal, a
    *   strategy, a loader or a presenter threw, classified (spec §6, L3)
    */
-  async getTokens(options?: ITokenRequestOptions): Promise<ITokenResult> {
+  async getTokens(options?: ITokenRequestOptions): Promise<BridgedTokenResult> {
     try {
       return await this.cachedOrRenewed(options?.signal);
     } catch (error) {
@@ -688,7 +699,9 @@ export abstract class BaseTokenProvider
    *
    * @throws AuthProviderFailure — and nothing else (spec §6, L3)
    */
-  async refreshTokens(options?: ITokenRequestOptions): Promise<ITokenResult> {
+  async refreshTokens(
+    options?: ITokenRequestOptions,
+  ): Promise<BridgedTokenResult> {
     try {
       return await this.renewed(options?.signal);
     } catch (error) {
@@ -1024,7 +1037,7 @@ export abstract class BaseTokenProvider
    * while the logical state is `cleared`, else `'keep'`.
    */
   private heldRefresh(): Pick<
-    ITokenResult,
+    BridgedTokenResult,
     'refreshToken' | 'refreshTokenDisposition'
   > {
     const held = this.refreshToken;
@@ -1215,7 +1228,7 @@ export abstract class BaseTokenProvider
     } else {
       refreshTokenDisposition = 'keep';
     }
-    const told: ITokenResult = {
+    const told: BridgedTokenResult = {
       ...result,
       refreshToken,
       refreshTokenDisposition,
@@ -1235,7 +1248,7 @@ export abstract class BaseTokenProvider
    * The clearing notification of a discarded refresh token: the held access
    * token unchanged (`''` for none), no refresh token, `'clear'`.
    */
-  private clearing(): ITokenResult {
+  private clearing(): BridgedTokenResult {
     return {
       authorizationToken: this.authorizationToken ?? '',
       refreshToken: undefined,
@@ -1251,7 +1264,7 @@ export abstract class BaseTokenProvider
    * is told (`getAuthType()` is a subclass's) — is logged (H2) and the token
    * stands; the renewal goes on.
    */
-  private async notify(build: () => ITokenResult): Promise<boolean> {
+  private async notify(build: () => BridgedTokenResult): Promise<boolean> {
     if (!this.onTokens) return true;
     try {
       await this.onTokens(build());
@@ -1261,7 +1274,7 @@ export abstract class BaseTokenProvider
       logQuietly(() =>
         this.logger?.warn(
           '[BaseTokenProvider] onTokens failed; the token stands',
-          logFields(classify(error, 'on-tokens-hook')),
+          logFields(classify(error, 'persisting-tokens')),
         ),
       );
       return false;

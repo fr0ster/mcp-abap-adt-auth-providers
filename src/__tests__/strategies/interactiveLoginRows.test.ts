@@ -207,7 +207,9 @@ describe('A.3 — browser login rows', () => {
     });
   });
 
-  it('K5: a launcher that fails → browser-launch-failed, its allowlisted code only', async () => {
+  // Bridge until Task 30h: interfaces-auth 7.0.0 removed the
+  // `browser-launch-failed` outcome; the launcher's failure is `failed`.
+  it('K5: a launcher that fails → failed, its allowlisted code only', async () => {
     const lines: unknown[][] = [];
     const prompts: unknown[][] = [];
     const logger: ILogger = {
@@ -232,9 +234,9 @@ describe('A.3 — browser login rows', () => {
     );
     expect(rowOf(thrown)).toEqual({
       kind: 'interactive-login',
-      facts: { outcome: 'browser-launch-failed', code: 'ENOENT' },
-      reason: 'the browser could not be opened (ENOENT)',
-      hint: 'open the authorization URL from the log by hand',
+      facts: { outcome: 'failed', code: 'ENOENT' },
+      reason: 'the browser login failed (unknown error, ENOENT)',
+      hint: 'complete the login, or abort it',
     });
     // H7: the URL is in neither the failure nor the error line.
     expect((thrown as Error).message).not.toContain('idp.example');
@@ -286,7 +288,7 @@ describe('A.3 — browser login rows', () => {
       stdout.mockRestore();
     }
     expect(readFailure(thrown, 'browser-login').facts).toEqual({
-      outcome: 'browser-launch-failed',
+      outcome: 'failed',
       code: 'ENOENT',
     });
     expect(err).toEqual([

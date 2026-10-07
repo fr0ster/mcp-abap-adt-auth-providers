@@ -176,7 +176,7 @@ report(outcomes);
 `;
 
 describe('the interactive login with a consumer logger', () => {
-  const expected = ['c1', 'browser-launch-failed', 'c2', 'shown'];
+  const expected = ['c1', 'failed', 'c2', 'shown'];
   /**
    * The test's own bound on the child (Task 29 ruling): a login that never
    * ends — an unguarded H7 line throwing before `server.fail` — kills the

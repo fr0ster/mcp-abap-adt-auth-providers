@@ -64,11 +64,15 @@ function systemCodeOf(error: unknown) {
   return isSystemCode(code) ? code : undefined;
 }
 
-/** K5: the browser launcher failed — its allowlisted code, nothing else. */
+/**
+ * K5: the browser launcher failed — its allowlisted code, nothing else.
+ * Bridge until Task 30h: interfaces-auth 7.0.0 removed the
+ * `browser-launch-failed` outcome, so the failure is `failed` with the code.
+ */
 export function browserLaunchFailed(error: unknown): AuthProviderFailure {
   const code = systemCodeOf(error);
   return loginFailure({
-    outcome: 'browser-launch-failed',
+    outcome: 'failed',
     ...(code === undefined ? {} : { code }),
   });
 }

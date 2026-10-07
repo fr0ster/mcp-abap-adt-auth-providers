@@ -95,9 +95,9 @@ describe('A.1 — classify rows', () => {
       'loading the certificate failed (unknown error, ENOENT)',
     );
 
-    const bare = classify(MARKER, 'on-tokens-hook');
-    expect(bare.facts).toEqual({ operation: 'on-tokens-hook' });
-    expect(bare.reason).toBe('onTokens failed (unknown error)');
+    const bare = classify(MARKER, 'persisting-tokens');
+    expect(bare.facts).toEqual({ operation: 'persisting-tokens' });
+    expect(bare.reason).toBe('persisting the tokens failed (unknown error)');
     expect(JSON.stringify([answered, unanswered, bare])).not.toContain(MARKER);
   });
 });

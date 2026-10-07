@@ -517,7 +517,10 @@ describe('no message of a thrown error in the logs', () => {
         }),
       {
         message: '[BaseTokenProvider] onTokens failed; the token stands',
-        fields: { error: 'onTokens failed (unknown error)', kind: 'unknown' },
+        fields: {
+          error: 'persisting the tokens failed (unknown error)',
+          kind: 'unknown',
+        },
       },
     ],
     [

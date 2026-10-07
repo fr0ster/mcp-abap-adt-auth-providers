@@ -55,13 +55,13 @@ describe('the launcher’s answer is adopted, whatever promise it is', () => {
       'a rejecting launcher, fail() throws',
       REJECTING,
       true,
-      { outcome: 'browser-launch-failed', thenCalls: 0, failCalls: 1 },
+      { outcome: 'failed', thenCalls: 0, failCalls: 1 },
     ],
     [
       'a rejecting launcher',
       REJECTING,
       false,
-      { outcome: 'browser-launch-failed', thenCalls: 0, failCalls: 1 },
+      { outcome: 'failed', thenCalls: 0, failCalls: 1 },
     ],
     [
       'a launcher answering a thenable that never settles',
@@ -73,19 +73,19 @@ describe('the launcher’s answer is adopted, whatever promise it is', () => {
       'a launcher answering a rejecting Promises/A+ thenable, fail() throws',
       APLUS_REJECTING,
       true,
-      { outcome: 'browser-launch-failed', thenCalls: 1, failCalls: 1 },
+      { outcome: 'failed', thenCalls: 1, failCalls: 1 },
     ],
     [
       'a launcher answering a thenable whose then throws',
       THEN_THROWS,
       false,
-      { outcome: 'browser-launch-failed', thenCalls: 1, failCalls: 1 },
+      { outcome: 'failed', thenCalls: 1, failCalls: 1 },
     ],
     [
       'a launcher throwing synchronously, fail() throws',
       `() => { throw new Error('sync: SECRET'); }`,
       true,
-      { outcome: 'browser-launch-failed', thenCalls: 0, failCalls: 1 },
+      { outcome: 'failed', thenCalls: 0, failCalls: 1 },
     ],
   ] as const)(
     '%s: no unhandled rejection, the login ends as it should',

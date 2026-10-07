@@ -574,7 +574,7 @@ describe('H1 / H2: the refresh and onTokens failure lines carry logFields', () =
       '[BaseTokenProvider] onTokens failed; the token stands',
     );
     expect(line?.fields).toEqual({
-      error: 'onTokens failed (unknown error)',
+      error: 'persisting the tokens failed (unknown error)',
       kind: 'unknown',
     });
     expect(JSON.stringify(calls)).not.toContain(MARKER);
