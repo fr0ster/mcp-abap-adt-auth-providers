@@ -146,7 +146,7 @@ describe('UAA paste route, gated', () => {
     const { logger, ignored } = ignoreCounter();
     await withBrowserCallbackServer(
       { port: PORT, gated: true, logger },
-      async (srv) => {
+      async () => {
         const page = await get('/');
         expect(page.status).toBe(400);
         expect(formTokenIn(page.body)).toBeUndefined();
