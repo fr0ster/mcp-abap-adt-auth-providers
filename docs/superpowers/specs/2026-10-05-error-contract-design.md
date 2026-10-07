@@ -2019,6 +2019,13 @@ is deleted. The `onTokens` field of the provider configs is deleted;
 is a choice, not a default: nothing is persisted (G1 — the provider builds
 no strategy).
 
+`renewal: IRenewalStrategy` is required in every token provider's config
+(rule 7). A missing one is refused at construction, `configuration`
+`required-fields-missing` with `fields: ['renewal']`, like any other required
+collaborator. `CONFIG_FIELDS` gains `renewal` and `persistence` in
+interfaces-auth 7.1.0 (additive; `onTokens` stays listed until the next
+major).
+
 ### 6c.4 Where a renewal starts
 
 | Call | When | `cause.trigger` | `moment` |
@@ -2057,7 +2064,9 @@ shared slot).
    - an unknown `next`;
    - a `refresh` without a valid `ifCut`, or with `canRefresh` false;
    - a `sentRefreshToken` where it must be absent, or missing where it is
-     required.
+     required;
+   - a `refresh` after a sent failure that discards the very refresh token
+     it would send.
 
    Steps already applied stay applied (G7).
 4. **Apply `sentRefreshToken`** first, through the commit queue: `discard`
@@ -2141,6 +2150,9 @@ never called. Nothing waits on it.
   rejection is marked handled, a throw is caught, either is logged in fixed
   words (`logFields(classify(error, 'persisting-tokens'))`), and the queue
   goes on. No later call ever receives it.
+- **A discard of a token no longer held** (replaced meanwhile) reports
+  nothing: the store already holds the newer state the replacing commit
+  reported.
 - **No repetition.** The provider never reports the same change twice. A
   strategy that wants a failed write delivered again keeps it itself.
 - **Values.** The persistence strategy is the one collaborator that receives
@@ -2169,9 +2181,26 @@ never called. Nothing waits on it.
 
 ### 6c.8 Default strategies — `src/renewal/`, `src/persistence/`
 
-**`refreshThenLogin()`** decides what the provider decides today, except
-that a refresh that failed before it was sent no longer clears the refresh
-token:
+**`refreshThenLogin()`** takes the steps the provider takes today. What a
+renewal *answers* changes where §6c.5 step 8 and §6c.7 say so — a renewal
+that cannot produce a usable credential throws, and the consumer decides what
+follows (log in again, give up):
+- a step that obtains a token still bound elsewhere: `getTokens()` throws
+  `renewed-bound-elsewhere` (it used to return the token);
+- a held token remembered as bound elsewhere: `getTokens()` throws the
+  remembered error (it used to return the token);
+- `rejected()` with a `401` whose renewal is still bound elsewhere: Oops
+  (it used to answer Ok);
+- a remembered expired certificate: refused again by the pin before the
+  strategy is asked — an equal refusal, no longer the same object;
+- a result carrying a discarded refresh token: the held one S stays, and
+  the next renewal refreshes S (it used to log in);
+- a `403` for a token a renewal has already replaced: Ok (what is presented
+  has changed);
+- a refresh that failed before it was sent no longer clears the refresh
+  token.
+
+Its decisions:
 
 | Situation | Decision |
 |---|---|
@@ -2353,6 +2382,7 @@ be load-bearing: break the rule, watch the test go red.
 
 | Package | Change | Version |
 |---|---|---|
+| interfaces-auth | `CONFIG_FIELDS` gains `renewal`, `persistence` (additive) | **7.1.0** |
 | interfaces-auth | `renewal.ts`, `persistence.ts`; kind `renewal-declined`; configuration case `invalid-value`; outcome `browser-launch-failed` removed; operations `renewal-strategy`, `persisting-tokens` (replacing `on-tokens-hook`); `refreshTokenDisposition` and `RefreshTokenDisposition` removed | **7.0.0** |
 | interfaces-auth-sap, -auth-broker | moved to 7.0.0 by PR #123's rule | per that rule |
 | auth-errors | words for the new kind and operations; moves to interfaces-auth 7 | **2.0.0** |
@@ -2367,6 +2397,9 @@ be load-bearing: break the rule, watch the test go red.
   the consumer gave; retrying is the consumer's. A provider never answers Ok
   without having changed what it presents."
 - **CLAUDE.md, rule 5:** gains "a reading the renewal strategy receives".
+- **CLAUDE.md, rule 8:** `getTokens()` no longer returns a token bound
+  elsewhere; `prepare()` no longer clears `remembered`; the remembered error
+  reaches the strategy as `lastRenewal`.
 - **README:** "Renewal strategy" and "Persistence strategy" sections (types,
   the defaults, writing one's own, the decision table).
 - **Migration note:** every token provider requires `renewal`;
