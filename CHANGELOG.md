@@ -12,10 +12,13 @@ and every throw of this package is now an error of one closed list of
 **kinds**, minted by `@mcp-abap-adt/auth-errors` from allowlisted facts —
 never a class to match with `instanceof`, never words to parse. Together with
 it, no login, request or registry query is bounded by a timeout of the
-package's choosing any more: the consumer's `AbortSignal` is the bound. See
-*Migrating to 6.0.0* in the README for what a 5.x consumer must now do. The
-surface changes below are taken from a diff of every exported declaration
-against the published 5.4.2.
+package's choosing any more: the consumer's `AbortSignal` is the bound. How a
+token provider renews, and what it tells a store, are now strategies the
+consumer gives (`renewal`, required; `persistence`, replacing `onTokens`).
+And a login is bound to its attempt (`state`, PKCE, a gated loopback
+callback). See *Migrating to 6.0.0* in the README for what a 5.x consumer must
+now do. The surface changes below are taken from a diff of every exported
+declaration against the published 5.4.2.
 
 ### Breaking
 
@@ -69,14 +72,19 @@ against the published 5.4.2.
   carries fixed words and admitted facts only, `authDebug` or not. The
   authorization URL and the device flow's verification URI still reach the
   user — in the **prompt**, and only as an `http:` / `https:` serialisation of
-  printable ASCII; one that cannot be shown so is named in fixed words. A
-  launcher that fails gets its fixed-words error line and the authorization
-  URL is prompted; the login keeps waiting on the same callback, so the URL
-  shown is live (there is no `browser-launch-failed` outcome).
+  printable ASCII; one that cannot be shown so is named in fixed words.
   `consoleDeviceCodePresenter` shows the user code only when it is printable
   ASCII and rejects without a showable URI and code (`device-code-not-shown`).
   The manual strategies' prompt is two lines, never one line with a line
   break inside it.
+- **A browser that does not open no longer ends the login.** A launcher
+  that throws or rejects (`openUrl`, or the built-in one) gets one log line
+  in fixed words and the authorization URL as a prompt, and the login keeps
+  waiting on the same callback, so the URL shown is live — the way to finish
+  where no browser can be opened. 5.4.2 ended the login with a
+  `BrowserAuthError`; there is no `browser-launch-failed` outcome either
+  (interfaces-auth 6.0.0 had one, 7 removed it). A consumer that matched a
+  launch failure must stop, and bounds the login with its `signal`.
 - **Token answers are read by type.** An answer's `access_token`,
   `refresh_token`, `id_token` and the device fields are kept only as
   non-empty strings, `expires_in` and `interval` only as finite non-negative
@@ -119,14 +127,19 @@ against the published 5.4.2.
   and `rejected()` and runs each inside auth-errors' `guard`; a subclass
   implements the protected `onPrepare()`, `onEstablish(logon)`,
   `onAuthorize(request)` and `onRejected(rejection)` instead of overriding
-  the four. `BaseTokenProvider`'s protected `performLogin()` is now
+  the four. `BaseTokenProvider`'s constructor takes its options as required
+  (`renewal` is in them). Its protected `performLogin()` is now
   `performLogin(attempt: AttemptContext)` — the strategy gets
   `attempt.signal` — and `performRefresh()` is
-  `performRefresh(refreshToken: string, signal)`: a subclass must send the
-  refresh token it is given; reading `this.refreshToken` bypasses the
-  quarantine of a refresh token whose refresh was cut. `pin()` takes an
-  optional `signal`; new protected members: `grant()`, `siteOptions(signal?)`,
-  `authDebug`.
+  `performRefresh(refreshToken: string, signal, dispatched: () => void)`: a
+  subclass must send the refresh token it is given (reading
+  `this.refreshToken` may send one the renewal strategy discarded), and must
+  call `dispatched()` right before the request leaves — the shipped sites do
+  it through the new protected `refreshSiteOptions(dispatched)`. A refresh
+  that never reports its dispatch counts as never sent, so an abort never
+  applies `ifCut` to its refresh token. `pin()` takes an optional `signal`;
+  new protected members: `grant()`, `siteOptions(signal?)`,
+  `refreshSiteOptions(dispatched)`, `authDebug`.
 - **Strategies honour the request's signal.** `externalCodeStrategy`'s
   `provide` is `(authorizationUrl, signal) => Promise<string>`. A manual
   strategy's custom `read(prompt, signal)` that ignores its signal now blocks
@@ -139,19 +152,78 @@ against the published 5.4.2.
   waits not at all. `authorization_pending` / `slow_down` keep the poll
   waiting only with status `400` — with any other status the poll ends with
   the failure.
-- **A cut refresh token is quarantined.** A refresh whose waiters all aborted
-  after it was sent runs on; its refresh token is never sent again by that
-  provider, so the next renewal may cost one login.
-- **`refreshTokenDisposition` on every token result** (interfaces-auth
-  6.0.0's `ITokenResult`): `'replace'`, `'keep'` or `'clear'`, on what
-  `onTokens` receives and on what `getTokens()` / `refreshTokens()` return
-  (after a renewal, what `onTokens` was told; a cache hit `'replace'` with a
-  usable refresh token, else `'clear'` after one was discarded, else
-  `'keep'`). `@mcp-abap-adt/auth-stores` 3.x refuses the key (`RefusedFieldsError` in
-  `saveSession`): pair 6.0.0 with auth-stores 4.0.0 and auth-broker 5.0.0,
-  which accept it.
-- **Requires `@mcp-abap-adt/connection` 12.0.0**, which reads the new
-  refusal; 11.x does not.
+- **Every token provider requires a renewal strategy.** `renewal:
+  IRenewalStrategy` (interfaces-auth 7) is a required field of every token
+  provider's config, and so of `inBrowser`, `fromTerminal`, `toConsole` and
+  `SsoProviderFactory.create`; there is no default. Missing, or with a `next`
+  that is not a function: `configuration` `required-fields-missing`,
+  `fields: ['renewal']`, at construction. The strategy is asked before every
+  step of every renewal — `refresh` (with a required `ifCut`), `login` or
+  `stop`, and after a refresh that failed once sent, a required
+  `sentRefreshToken: 'keep' | 'discard'` — and the provider takes no step it
+  did not ask for. **`refreshThenLogin()` takes 5.x's steps**: one refresh,
+  then one login when there is no refresh token or the refresh failed;
+  `refreshOnly()` never logs in. An unusable answer (a throw, an invalid
+  decision, a foreign thenable or a promise with its own `then`, never
+  called) ends the renewal `unknown` with the new operation
+  `renewal-strategy`; `next` is raced with the renewal's signal. The strategy
+  receives frozen copies of minted errors and allowlisted facts, never a
+  token; `aborted(observation)`, optional, is told of each aborted step,
+  never awaited.
+- **Rule 5 is a reading the renewal strategy receives.** `rejected()` no
+  longer returns early for a rejection that is not the credential's: it
+  starts a renewal with `cause.reading` `not-credential`, and the shipped
+  strategies stop at once with the neutral `system-refused` refusal, nothing
+  sent — the 5.x answer. A strategy of your own may renew there.
+- **A cut refresh: `ifCut` decides.** A refresh whose waiters all aborted
+  after it was sent runs on; its refresh token is discarded or kept as the
+  `ifCut` of the decision that started it says. The shipped strategies say
+  `'discard'` — that refresh token is never sent again by the provider, so
+  the next renewal may cost one login. A refresh aborted before it was sent
+  (OIDC discovery, a client-authentication strategy) touches no refresh
+  token.
+- **What a renewal answers, where it cannot produce a usable credential: it
+  throws** (with `refreshThenLogin()`): a renewal whose new token is still
+  bound to another certificate than the pinned one — `getTokens()` /
+  `refreshTokens()` throw `token-binding` `renewed-bound-elsewhere` (5.4.2
+  returned the token), `rejected()` with a `401` answers Oops (5.4.2: Ok); a
+  held token remembered as bound elsewhere — `getTokens()` throws the
+  remembered error (5.4.2 returned the token), and `prepare()` no longer
+  clears what is remembered but renews once more (the remembered error
+  reaches the strategy as `cause.lastRenewal`); a remembered expired
+  certificate is refused again by the pin, an equal refusal rather than the
+  same object. A credential a step obtained stays committed either way.
+- **New kind `renewal-declined`** (interfaces-auth 7, auth-errors 2): "the
+  renewal strategy declined to renew the credential", `facts.trigger` — a
+  strategy that stops before any step with no other refusal to answer
+  (`refreshOnly()` with an expired token and no refresh token, say). An
+  exhaustive switch over kinds must handle it.
+- **`onTokens` is replaced by `persistence`.** The config field
+  `onTokens?: (result) => Promise<void>` is removed; `persistence?:
+  ITokenPersistence` (interfaces-auth 7) receives one report per change of
+  the provider's credentials, from inside its commit queue in commit order —
+  `credential` (a new credential, with `refreshToken` `{ change: 'new',
+  value }` or `{ change: 'none' }`) or `refresh-token-discarded` (the
+  credential still held) — never for a cache hit, never twice. A report is
+  `awaited` while a caller of the renewal is still waiting: the provider
+  awaits it, and **its failure fails that call** (`unknown`,
+  `persisting-tokens`), the credentials staying committed and no login
+  following — where a failing `onTokens` was only logged. A detached report
+  is not awaited; its failure is logged once, `[BaseTokenProvider]
+  Persisting the tokens failed`. Without `persistence` nothing is persisted.
+  `refreshStatePersistence(write, { onWriteFailure: 'continue' })` is the
+  5.x `onTokens` behaviour. A `persistence` that is not an object with a
+  callable `report` is `configuration` `invalid-value` naming `persistence`.
+  `refreshTokenDisposition`, which interfaces-auth 6.0.0 had added to
+  `ITokenResult`, is removed in interfaces-auth 7 with
+  `RefreshTokenDisposition`; no release of this package carries it, and what
+  `getTokens()` / `refreshTokens()` return carries the refresh token held or
+  `refreshToken: undefined`.
+- **Requires `@mcp-abap-adt/connection` 13.0.0**, built on interfaces-auth 7
+  and auth-errors 2; 11.x reads the old refusal, and 12.0.0 (published only
+  under `next`) is built on interfaces-auth 6. Pair 6.0.0 with
+  `@mcp-abap-adt/auth-stores` 4.0.0 and `@mcp-abap-adt/auth-broker` 5.0.0,
+  and keep one copy each of interfaces-auth and auth-errors.
 - **Log lines about a thrown value** carry auth-errors' `logFields`:
   `{ error, kind, status?, diagnostics? }` instead of `{ error, status? }`.
 
@@ -192,6 +264,23 @@ against the published 5.4.2.
   ignores the argument still compiles.
 - **`LoginFactoryOptions`** — `{ signal? }`, what `inBrowser` and
   `fromTerminal` take.
+- **`refreshThenLogin()`, `refreshOnly()`** — the shipped renewal
+  strategies, stateless and synchronous (README, "Renewal strategy", with
+  their decision table).
+- **`refreshStatePersistence(write, { onWriteFailure, logger? })`**, with
+  the types `PersistedTokens` and `RefreshStatePersistenceOptions` — the
+  shipped persistence strategy, for a store that keeps its stored refresh
+  token when a write carries none. `write` gets `refreshToken` as a string
+  (write it), `null` (clear the stored one: the provider discarded it) or
+  `undefined` (leave it). It keeps a logical state (`held`, `cleared` after
+  a discard), writes one report at a time in report order — detached ones
+  included — and delivers a failed new refresh token again with the next
+  report until a write succeeds or something newer supersedes it; a failed
+  write is logged `[refreshStatePersistence] Writing the tokens failed`.
+  `onWriteFailure` is required, no default: `'continue'` never throws,
+  `'fail'` rethrows for an awaited report (so the call fails
+  `persisting-tokens`). Refused at construction as `configuration`
+  `invalid-value` naming `onWriteFailure` and/or `write`.
 
 ### Changed
 
@@ -204,10 +293,12 @@ against the published 5.4.2.
 - **`getTokens()` / `refreshTokens()`** take an optional
   `ITokenRequestOptions` (`{ signal }`).
 - **Collaborator answers are awaited normally.** What a consumer's own code
-  answers — a strategy, `onTokens`, a loader, a refresher, a validator, a
-  presenter, a replay store, `cookieProvider`, an SNC locator, probe or
-  system, a logger — is adopted like any `await` adopts it, so a native
-  promise, Bluebird, Q or any Promises/A+ thenable works. Values crossing a
+  answers — an authorization or persistence strategy, a loader, a refresher,
+  a validator, a presenter, a replay store, `cookieProvider`, an SNC locator,
+  probe or system, a logger — is adopted like any `await` adopts it, so a
+  native promise, Bluebird, Q or any Promises/A+ thenable works; a renewal
+  strategy's `next()` alone must answer a decision or a native promise of
+  one (above). Values crossing a
   trust boundary — a thrown value being classified, a target's answer —
   never have a foreign `then` called. A collaborator answer that never
   settles is bounded only by the consumer's `AbortSignal`;
@@ -218,13 +309,32 @@ against the published 5.4.2.
   Assertion — is refused `declined` with its status code rather than
   `no-direct-assertion`.
 - **Configuration is checked at construction where it can be.** An
-  unparseable `authorizationUrl` is `configuration`
-  `required-fields-missing` (`fields: ['authorizationUrl']`) at construction
-  and at login, as is a `myName` that is not a string on `SncLogonProvider`
-  — a known wording limit: interfaces-auth 6 has no invalid-value case, so the
-  words say "required configuration is missing" for a value that is present.
-  A callback `port` that is not an integer in 0..65535 is refused before any
-  socket is touched.
+  unparseable `authorizationUrl` is `configuration` `invalid-value` ("a
+  configured value cannot be used: authorizationUrl", interfaces-auth 7) at
+  construction and at login. A `myName` that is not a string on
+  `SncLogonProvider` is still `required-fields-missing` naming `myName` — a
+  known wording limit. A callback `port` that is not an integer in
+  0..65535 is refused before any socket is touched.
+- **The refresh token held survives a result without one.** A commit
+  installs a result's refresh token only when it is usable (non-empty, not
+  one the provider discarded); a refresh answered without a new refresh
+  token, or a login without one, leaves the one held in place — 5.4.2
+  dropped it. A refresh that failed before it was sent no longer drops the
+  refresh token (5.4.2 dropped it on any refresh failure).
+- **`rejected()` for a token a renewal already replaced** answers Ok before
+  reading the rejection — what is presented has changed — also for a `403`
+  (5.4.2 answered the neutral refusal).
+- **One `debug` line per renewal decision**, `[BaseTokenProvider] Renewal
+  step` with `{ trigger, moment, next }`.
+- **The callback server's release waits on nothing.** At release the
+  listener is closed (the port is free once the factory settles); an idle
+  connection is ended and unreferenced; one whose request body is unfinished
+  is destroyed; one whose complete request is still being answered is
+  unreferenced and its response goes on. Measured limits: Node's
+  `http.Server.close()` itself destroys a connection whose request was
+  parsed, even mid-flush of a large response to a client that does not read
+  (so that client may get a cut response), and a write still pending to such
+  a client would otherwise keep the process alive whatever `unref()` says.
 - **OIDC discovery keeps a snapshot** of the fields the providers read
   (`authorization_endpoint`, `token_endpoint`,
   `device_authorization_endpoint`, their mTLS aliases); an aborted or failed
@@ -257,6 +367,8 @@ against the published 5.4.2.
   included; an operation of the list keeps its words and hints.
 - **`DEFAULT_LOGIN_TIMEOUT_MS`** and every `timeoutMs` option (Breaking,
   above).
+- **`onTokens`** on every token provider's config and `TokenProviderHooks`
+  → `persistence` (Breaking, above).
 - **The redactor.** 5.4.2's redaction of the server's text
   (`oauthErrorFields`, `describeOAuthErrorBody`, the base64 and JWT passes)
   is deleted with every regular expression over server text: nothing of the
