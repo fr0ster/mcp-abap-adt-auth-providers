@@ -1318,10 +1318,9 @@ PR's description; opening it is the user's decision.
 ## 6a0. Configuration and browser launch as built (Task 26)
 
 - An **unparseable `authorizationUrl`** is a `configuration` error, case
-  `required-fields-missing`, `fields: ['authorizationUrl']`, at construction
-  and at login. Known wording limit: interfaces-auth 6 has no invalid-value
-  case, so the words say "required configuration is missing" for a value that
-  is present but unparseable; a proper case needs an interfaces-auth major.
+  `invalid-value`, `fields: ['authorizationUrl']`, at construction and at
+  login. The case is new in interfaces-auth 7.0.0 (§6c.12), with the facts
+  shape of `required-fields-missing`; its words are auth-errors 2.0.0's.
 - **K6 (`callback-port-invalid`) is validated before any probe:** `validatePort`
   runs in `BrowserCallbackStrategy`'s constructor and again at the start of
   `authorize()`, so no socket is touched for a bad port.
@@ -2354,7 +2353,7 @@ be load-bearing: break the rule, watch the test go red.
 
 | Package | Change | Version |
 |---|---|---|
-| interfaces-auth | `renewal.ts`, `persistence.ts`; kind `renewal-declined`; operations `renewal-strategy`, `persisting-tokens` (replacing `on-tokens-hook`); `refreshTokenDisposition` and `RefreshTokenDisposition` removed | **7.0.0** |
+| interfaces-auth | `renewal.ts`, `persistence.ts`; kind `renewal-declined`; configuration case `invalid-value`; outcome `browser-launch-failed` removed; operations `renewal-strategy`, `persisting-tokens` (replacing `on-tokens-hook`); `refreshTokenDisposition` and `RefreshTokenDisposition` removed | **7.0.0** |
 | interfaces-auth-sap, -auth-broker | moved to 7.0.0 by PR #123's rule | per that rule |
 | auth-errors | words for the new kind and operations; moves to interfaces-auth 7 | **2.0.0** |
 | connection | moves to interfaces-auth 7 and auth-errors 2; no behaviour change | **13.0.0** (12.0.0 is only on `next`) |

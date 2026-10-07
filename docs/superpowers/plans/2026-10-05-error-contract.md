@@ -553,7 +553,8 @@ Repository `mcp-abap-adt-interfaces`, one PR.
 added, `on-tokens-hook` renamed `persisting-tokens`); `ITokenResult`
 (`refreshTokenDisposition` removed) and `RefreshTokenDisposition` (deleted); `INTERACTIVE_OUTCOMES` loses
 `browser-launch-failed` (Task 30h: a launcher's failure no longer ends a
-login);
+login); `CONFIG_CASES` gains `invalid-value` (facts as
+`required-fields-missing`: the `fields` it names);
 the index; the siblings `interfaces-auth-sap` and `interfaces-auth-broker`
 moved by PR #123's rule.
 
@@ -586,7 +587,8 @@ Repository `mcp-abap-adt-auth-errors`, one PR. Publish dependency: G7.
   no hint; the two operations' phrases (`renewal-strategy`,
   `persisting-tokens`); the builder for the new kind; `classify` unchanged
   in shape. The `browser-launch-failed` outcome's words and hint go with
-  the outcome.
+  the outcome. `invalid-value`'s words: reason "a configured value cannot be
+  used: <fields>", no hint — reviewed with this task.
 - [ ] The shape-check script and fixtures unchanged unless the new kind
   needs a fixture; the providers' byte-identical copy refreshed in Task 30d
   if the script changes.
@@ -644,6 +646,10 @@ static factory (`renewal` required, rule 7); `src/index.ts`.
   step acts only after it; `ifCut` applied there synchronously.
 - [ ] `remembered` reaches the strategy as `lastRenewal`; `prepare()` no
   longer clears it.
+- [ ] An unparseable `authorizationUrl` throws `configuration` case
+  `invalid-value` (`fields: ['authorizationUrl']`) at construction and at
+  login, in place of `required-fields-missing` (spec §6a0); its tests and
+  the README's "Configuration errors" row follow.
 - [ ] The existing renewal suites construct `refreshThenLogin()` explicitly
   and stay green, except the pre-dispatch case, which now expects the
   refresh token kept.
