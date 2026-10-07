@@ -1925,7 +1925,7 @@ export interface RenewalSituation {
   readonly steps: readonly RenewalStepOutcome[];
 }
 
-type SentRefreshToken = 'keep' | 'discard';
+export type SentRefreshToken = 'keep' | 'discard';
 
 export type RenewalDecision =
   | {
