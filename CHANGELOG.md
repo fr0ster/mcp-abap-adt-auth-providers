@@ -195,9 +195,10 @@ against the published 5.4.2.
 
 ### Changed
 
-- **Dependencies:** `@mcp-abap-adt/interfaces-auth ^6.0.0` (was ^3.2.0),
-  `@mcp-abap-adt/interfaces-auth-sap ^3.2.0` (was ^2.0.0), and the new
-  `@mcp-abap-adt/auth-errors ^1.0.1`.
+- **Dependencies:** `@mcp-abap-adt/interfaces-auth ^7.3.0` (was ^3.2.0; 7.3.0
+  for the callback gate, `host` and `allowedHosts`),
+  `@mcp-abap-adt/interfaces-auth-sap ^3.3.0` (was ^2.0.0), and the new
+  `@mcp-abap-adt/auth-errors ^2.0.0`.
 - **`getTokens()` / `refreshTokens()`** take an optional
   `ITokenRequestOptions` (`{ signal }`).
 - **Collaborator answers are awaited normally.** What a consumer's own code
@@ -287,6 +288,51 @@ against the published 5.4.2.
   errors and the code exchange's log line, and 5.4.2 redacted it. 6.0.0 goes
   further: nothing the server wrote is kept at all, so no echo of the header
   reaches an error or a log line, with `authDebug` or without.
+
+### Security
+
+- **Login CSRF: a login is bound to its attempt.** Through 5.4.2 no provider
+  sent or checked the OAuth `state`: the UAA authorization URL carried
+  neither `state` nor PKCE, the OIDC one PKCE but no `state`, and the
+  callback server settled on the first `/callback` it got — so a page in the
+  user's browser could hand the waiting login a code of its own, and the
+  user ended up logged in as someone else (RFC 6749 §10.12, RFC 9700 §4.7).
+  Now:
+  - every URL `AuthorizationCodeProvider` and `OidcBrowserProvider` build
+    carries a fresh `state` (32 random bytes, base64url) and a PKCE pair
+    (S256) — new for UAA — whose verifier the exchange sends. A configured
+    `authorizationUrl` is used unchanged and a code no URL was built for
+    (`staticCodeStrategy`) is exchanged without a `code_verifier`: binding
+    those is the consumer's. Measured on the provider stand (2026-10-07):
+    Cloud Foundry UAA returns the `state`, accepts the verifier, and refuses
+    a code exchanged with another verifier or none. XSUAA is not yet
+    measured with PKCE (`docs/btp-setup.md`, Pending);
+  - `browserCallbackStrategy` and `oidcCallbackStrategy` open their
+    transport `gated` (interfaces-auth 7.3.0): closed from the bind on, armed
+    with the URL's `state` (`expectState`) before the browser opens, then
+    settling only a callback — code or `?error=` — with that `state`; every
+    other request is answered `400`, counted and ignored, and the login
+    keeps waiting. **Breaking:** a consumer's `callbackServer` for them must
+    implement `expectState`, or the login is refused before anything opens
+    (`configuration` `invalid-value`, `fields: ['callbackServer']`); a
+    direct `new BrowserCallbackStrategy` takes a required `stateGate`
+    (`samlCallbackStrategy` passes `false`: a SAML response is bound by
+    `InResponseTo`);
+  - **Breaking:** the shipped transports bind loopback (`127.0.0.1` and
+    `::1`) instead of every interface, and refuse a request whose `Host` is
+    not loopback with the bound port before serving anything (DNS
+    rebinding). New strategy options `host` (the bind address) and
+    `allowedHosts` (the authorities a browser on another machine may use)
+    open it up; an SSH tunnel to the port works with the default. The UAA
+    paste hint names the tunnel or the first allowed authority, never a
+    guessed host;
+  - **Breaking:** the UAA paste form carries a per-login token, and
+    `/submit` settles only with it — and a pasted redirected URL only with
+    this login's `state`. `manualPasteStrategy` asks again for a pasted URL
+    of another login; a bare code is taken as before;
+  - every comparison of a `state` or token is constant time
+    (`crypto.timingSafeEqual` over SHA-256 digests), and none of them is
+    logged.
 
 ## [5.4.2] - 2026-10-05
 

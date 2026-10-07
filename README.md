@@ -122,6 +122,21 @@ your `AbortSignal` is the bound. What a consumer on 5.x must now do:
   never ends the login; code that matched it must stop. Bound the login with a
   `signal` (`AbortSignal.timeout(ms)`), or it ends on its result, the
   identity provider's refusal or your abort.
+- **A login is bound to its attempt (login CSRF).** Every URL
+  `AuthorizationCodeProvider` and `OidcBrowserProvider` build carries `state`
+  (and, for UAA, a PKCE challenge, S256), and the shipped callback transports
+  settle only a callback — a code or an `?error=` — with that `state`. **A
+  consumer's `callbackServer` for `browserCallbackStrategy` /
+  `oidcCallbackStrategy` must implement `expectState`** (interfaces-auth
+  7.3.0), or the login is refused before anything opens (`configuration`
+  `invalid-value`, `fields: ['callbackServer']`); a consumer's redirect
+  strategy must check `state` itself. **The callback listens on loopback
+  only**, and answers only `Host: localhost` / `127.0.0.1` / `[::1]` with its
+  port: a browser on another machine reaches it through an SSH tunnel, or
+  through `host` and `allowedHosts` you set. The UAA paste form's `/submit`
+  needs the form's token. A direct `new BrowserCallbackStrategy` takes a
+  required `stateGate`. See [Login CSRF: `state`, PKCE and where the callback
+  listens](#login-csrf-state-pkce-and-where-the-callback-listens).
 - **Your strategies end on the request's signal.** Every
   `AuthorizationRequest` carries `signal`. `externalCodeStrategy`'s `provide`
   is `(authorizationUrl, signal)`, and a manual strategy's `read(prompt,
@@ -652,7 +667,9 @@ Options common to the three callback strategies:
 | `browser` | `'none'` | `'none'` / `'headless'` print the URL; `'system'`, `'auto'`, `'chrome'`, `'edge'`, `'firefox'` open it |
 | `callbackServer` | the one this package ships | Your own `CallbackServerFactory`, to reuse a server you already run |
 | `openUrl` | the built-in launcher | Receives `(url, browser, redirectUri)` |
-| `remoteHint` | the paste hint, only for the shipped UAA transport | Extra guidance printed in `'none'` / `'headless'` mode |
+| `remoteHint` | the paste hint, only for the shipped UAA transport | Extra guidance printed in `'none'` / `'headless'` mode. The default names an SSH tunnel to the bound port, or the first of `allowedHosts` — never a guessed hostname |
+| `host` | loopback (`127.0.0.1` and `::1`) | The address the transport binds (`ICallbackServerOptions.host`). A wildcard or an interface address makes it reachable from the network — name the authorities a browser will use in `allowedHosts` |
+| `allowedHosts` | none | Authorities (`host` or `host:port`; no port means the bound one) a browser may use besides loopback. Every other `Host` is refused before anything is served |
 | `signal` | — | `AbortSignal` cancelling the login — the only bound there is (since 6.0.0 no login times out on its own): pass `AbortSignal.timeout(ms)` for a deadline |
 
 Note the `browser` default: **`'none'`, so nothing is opened unless you ask for
@@ -671,14 +688,18 @@ For the three shipped flows, passing `callbackServer` to a ready constructor is
 the way to substitute a transport. The `BrowserCallbackStrategy` class behind
 them is exported as well, for the case the constructors cannot express: a
 receiver whose payload is none of the three shapes those flows deliver. Its
-options are the same, except `callbackServer` is required — there is no default
-transport to fall back on when the payload type is your own.
+options are the same, except `callbackServer` and `stateGate` are required —
+there is no default transport to fall back on when the payload type is your
+own, and the strategy does not guess whether its redirect is bound by `state`.
 
 ```typescript
 import { BrowserCallbackStrategy } from '@mcp-abap-adt/auth-providers';
 
 const strategy = new BrowserCallbackStrategy<MyPayload>({
   callbackServer: withMyOwnCallbackServer, // CallbackServerFactory<MyPayload>
+  // An OAuth redirect: true — the transport is opened `gated` and armed with
+  // the URL's `state`. false only for a redirect bound otherwise (SAML).
+  stateGate: true,
   port: 61001,
   signal: AbortSignal.timeout(300_000), // your bound, if you want one
 });
@@ -707,6 +728,21 @@ login, and is yours to dispose. `dispose()` disables a strategy for good and
 ends its logins in flight (`interactive-login` `disposed`); an abort of a
 login's signal ends only that login (`aborted`) and leaves the strategy usable.
 
+**Check `state` — the redirect is yours to bind.** The URL
+`buildAuthorizationUrl` returns carries a fresh `state` (and a PKCE challenge,
+whose verifier the provider keeps and sends in the exchange). A strategy that
+receives the redirect itself — `fromOurPortal` above, or your
+`externalCodeStrategy` `provide` — must accept a code only from a redirect
+whose `state` equals the one in that URL (compare in constant time), or a page
+in the user's browser can hand it a code of its own (RFC 6749 §10.12). A
+`callbackServer` you give `browserCallbackStrategy` or `oidcCallbackStrategy`
+must implement `ICallbackServerHandle.expectState`: honour `gated: true` (refuse
+every callback until armed), then settle only a callback — a code or an
+`?error=` — with the armed `state`, answering every other request `400` and
+waiting on; `expectState(null)` declares a URL without `state`. A transport
+without `expectState` is refused before anything opens (`configuration`
+`invalid-value`, `fields: ['callbackServer']`).
+
 **End on the request's signal.** Every `AuthorizationRequest` carries
 `signal`, aborted once no caller needs the login any more (see
 [Cancelling a login](#cancelling-a-login)). Your strategy must stop waiting
@@ -721,12 +757,16 @@ either of **two** channels — whichever finishes first wins:
 
 1. **Automatic callback** — `GET /callback?code=...` on the bound redirect URI.
    Works when the browser is on the same machine as the process.
-2. **Paste form** — open `http://<this-host>:<port>/` and paste the code (or the
-   whole redirected URL). Works when the browser is on a *different* machine,
-   since the callback server listens on all interfaces. In `'none'` /
-   `'headless'` mode the strategy prints this address for you — with the real
-   port and the host left for you to fill in, because the process cannot know
-   which of its addresses you can reach.
+2. **Paste form** — open the form on `/` and paste the code (or the whole
+   redirected URL). Works when the browser is on a *different* machine: the
+   transport listens on loopback only, so reach it through an SSH tunnel
+   (`ssh -L 61001:localhost:61001 <this machine>`, then
+   `http://localhost:61001/` in that browser), or set `host` and
+   `allowedHosts` to the address and names that browser will use. In
+   `'none'` / `'headless'` mode the strategy prints the way — the tunnel, or
+   the first of your `allowedHosts` — never a hostname it guessed. The form
+   carries a token minted for this login; `/submit` settles only with it, and
+   a pasted redirected URL only with this login's `state`.
 
 **The terminal-paste channel is gone.** In 1.x a third channel read the code
 from stdin when `process.stdin.isTTY`; `browserCallbackStrategy` has no such
@@ -774,6 +814,52 @@ redirect to; it is also the one sent to the token endpoint. It defaults to
 
 Both the paste form and `manualPasteStrategy` accept a bare code, `code=...`,
 or a full redirected URL — whichever you paste, the code is extracted from it.
+A pasted redirected URL must carry the `state` of the URL this login showed:
+`manualPasteStrategy` asks again on a mismatch, the paste form answers `400`.
+A bare code carries none and is taken — the user typed it.
+
+#### Login CSRF: `state`, PKCE and where the callback listens
+
+A page in the user's browser can call the local callback with a code of its
+own while a login waits, and the user ends up logged in as someone else
+(RFC 6749 §10.12; RFC 9700 §4.7). Since 6.0.0:
+
+- **The provider binds the URL it builds.** `AuthorizationCodeProvider` and
+  `OidcBrowserProvider` put a fresh `state` (32 random bytes, base64url) in
+  every authorization URL they build, and a PKCE pair (S256) — new for UAA in
+  6.0.0, as OIDC already had; the verifier of the last URL built is sent in
+  the exchange. Neither is logged.
+- **What you bring stays yours.** A configured `authorizationUrl` is used
+  unchanged — no `state`, no challenge, no `code_verifier` — and a code from
+  `staticCodeStrategy`, or from any strategy that never built the URL, is
+  exchanged without a `code_verifier`. Binding those is your job. To get
+  `state` and PKCE with your own receiver, let the provider build the URL
+  (`externalCodeStrategy` gets it, `state` included).
+- **The callback is closed until the URL exists.** `browserCallbackStrategy`
+  and `oidcCallbackStrategy` open their transport `gated`: from the bind on,
+  every callback is answered `400`, counted and ignored. Once the URL is
+  built, the strategy arms it with the URL's `state` (`expectState`) — before
+  the browser is opened — and from then on only a callback with that `state`,
+  a code or an `?error=`, settles the login; anything else is answered `400`,
+  counted, and the login keeps waiting. `samlCallbackStrategy` needs no gate:
+  a SAML response is bound by `InResponseTo` and the assertion validator.
+- **Loopback only, unless you say otherwise.** The shipped transports bind
+  `127.0.0.1` and `::1` (through 5.4.2 they bound every interface), and refuse
+  — before any page, form token or callback handling — a request whose `Host`
+  is not `localhost`, `127.0.0.1` or `[::1]` with the bound port, so a
+  DNS-rebound name reads and settles nothing. An SSH tunnel arrives on
+  loopback and works as it is. To serve another machine directly, set both:
+
+  ```typescript
+  browserCallbackStrategy({
+    host: '0.0.0.0',                          // the bind address
+    allowedHosts: ['buildhost.example:61001'], // what that browser sends as Host
+  });
+  ```
+
+  The bind address is not an authority — a browser never sends
+  `Host: 0.0.0.0` — so a wildcard bind without `allowedHosts` still answers
+  loopback only.
 
 > The `extractCode(input)` helper behind that leniency is internal; it is not
 > part of the package's exports, contrary to what the 1.1.0–1.2.0 README said.
@@ -2228,7 +2314,7 @@ const provider = new AuthorizationCodeProvider({
 const result = await provider.getTokens();
 ```
 
-In headless mode the authorization URL is shown — to the logger if there is one, to stderr otherwise — and the server waits for the user to complete authentication manually. The user can open the URL on any machine, and the callback reaches the server because it listens on all interfaces; the shipped UAA transport also prints where to paste the code if the redirect cannot reach back.
+In headless mode the authorization URL is shown — to the logger if there is one, to stderr otherwise — and the server waits for the user to complete authentication manually. The user can open the URL on any machine; the callback listens on loopback only (since 6.0.0), so a browser elsewhere reaches it through an SSH tunnel to the callback port, or through the `host` and `allowedHosts` you configure — the shipped UAA transport prints which, with where to paste the code if the redirect cannot reach back.
 
 **Browser Options** (`browserCallbackStrategy({ browser })`):
 - `'none'` (default): Shows the URL, waits for the callback or a paste
