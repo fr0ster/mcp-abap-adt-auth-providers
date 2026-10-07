@@ -551,7 +551,9 @@ Repository `mcp-abap-adt-interfaces`, one PR.
 `src/token/persistence.ts` (new; §6c.2, §6c.3); the error kinds and facts
 (`renewal-declined`, facts `{ trigger }`); `OPERATIONS` (`renewal-strategy`
 added, `on-tokens-hook` renamed `persisting-tokens`); `ITokenResult`
-(`refreshTokenDisposition` removed) and `RefreshTokenDisposition` (deleted);
+(`refreshTokenDisposition` removed) and `RefreshTokenDisposition` (deleted); `INTERACTIVE_OUTCOMES` loses
+`browser-launch-failed` (Task 30h: a launcher's failure no longer ends a
+login);
 the index; the siblings `interfaces-auth-sap` and `interfaces-auth-broker`
 moved by PR #123's rule.
 
@@ -564,7 +566,8 @@ moved by PR #123's rule.
 - [ ] The types and `as const` arrays, the kind and its facts, the two
   operations, the removals.
 - [ ] `surface-removed.txt` lists `refreshTokenDisposition`,
-  `RefreshTokenDisposition` and `on-tokens-hook`; the siblings' versions
+  `RefreshTokenDisposition`, `on-tokens-hook` and the
+  `browser-launch-failed` outcome; the siblings' versions
   decided by PR #123's rule and stated in the PR.
 - [ ] CHANGELOG and README of the packages that change.
 
@@ -582,7 +585,8 @@ Repository `mcp-abap-adt-auth-errors`, one PR. Publish dependency: G7.
 - [ ] Words: reason "the renewal strategy declined to renew the credential",
   no hint; the two operations' phrases (`renewal-strategy`,
   `persisting-tokens`); the builder for the new kind; `classify` unchanged
-  in shape.
+  in shape. The `browser-launch-failed` outcome's words and hint go with
+  the outcome.
 - [ ] The shape-check script and fixtures unchanged unless the new kind
   needs a fixture; the providers' byte-identical copy refreshed in Task 30d
   if the script changes.
@@ -705,9 +709,42 @@ Repository auth-providers, PR #68. Independent of 30d/30e.
 **Load-bearing:** release only idle sockets, as today → the child-exit case
 red.
 
+### Task 30h: auth-providers — a browser that does not open keeps the login waiting
+
+Repository auth-providers, PR #68. After G7 (the outcome removed from
+interfaces-auth 7.0.0); independent of 30d–30f.
+
+Where a browser cannot be opened (an SSH session, a host without a desktop),
+the authorization URL shown to the user is the only way to finish the
+login, and it is usable only while the callback still listens with this
+attempt's `state` and PKCE verifier. Today `BrowserCallbackStrategy` shows
+it and then ends the login (`server.fail`), so the URL is dead when shown.
+
+**Steps:**
+- [ ] Tests first, on a real callback port:
+  - a launcher that throws (and, separately, one whose answer rejects): the
+    log line in fixed words, the URL prompted once through `promptableUrl`,
+    the login still waiting; a callback to the same port with the right
+    `state` → the login succeeds with that code;
+  - after the prompt, the consumer's signal aborts → `aborted`, and the test
+    binds the port afterwards;
+  - after the prompt, the IdP's `?error=` → `identity-provider-refused`;
+  - the default launcher (`launchBrowser`) failing prompts the URL once, not
+    twice.
+- [ ] `launchFailed` logs and prompts, and no longer calls `server.fail`;
+  `browserLaunchFailed` and its outcome are deleted
+  (`interactiveLogin.ts`); no timer is added — the login ends on its
+  result, the IdP's refusal or the consumer's signal.
+- [ ] README: the browser-launch paragraph and the `interactive-login`
+  outcome list (no `browser-launch-failed`); "Migrating to 6.0.0": a launch
+  failure is no longer an error, bound the login with a signal.
+
+**Load-bearing:** restore `server.fail` after the prompt → the
+callback-after-prompt case red; drop the prompt → its case red.
+
 ### Task 30g: auth-providers — documentation of §6c
 
-Repository auth-providers, PR #68. After 30d–30f.
+Repository auth-providers, PR #68. After 30d–30f and 30h.
 
 **Steps:**
 - [ ] CLAUDE.md rules 5 and 6 as §6c.13 words them; the "Cancellable shared
