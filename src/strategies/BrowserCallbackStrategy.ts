@@ -79,6 +79,11 @@ export interface CallbackStrategyOptions<TResult = string> {
    * `::1`). Passed to the transport as `ICallbackServerOptions.host`. A
    * wildcard or an interface address makes the transport reachable from
    * the network — name the authorities a browser will use in `allowedHosts`.
+   *
+   * **Warning:** with `allowedHosts`, every client that can reach an allowed
+   * authority gets the paste page and its form token and can settle the
+   * login with a code of its own. Prefer an SSH tunnel to the loopback
+   * default (`ssh -L <port>:localhost:<port> <this machine>`).
    */
   host?: string | undefined;
   /**
@@ -86,6 +91,12 @@ export interface CallbackStrategyOptions<TResult = string> {
    * browser may use to reach the transport besides loopback — every other
    * `Host` is refused before anything is served. Passed to the transport as
    * `ICallbackServerOptions.allowedHosts`; the paste hint names the first.
+   * A loopback name (`localhost`, `127.0.0.1`, `[::1]`) is never an allowed
+   * authority: it counts only from a loopback peer, listed or not.
+   *
+   * **Warning:** every client that can reach an allowed authority gets the
+   * paste page and its form token and can settle the login with a code of
+   * its own. Prefer an SSH tunnel to the loopback default.
    */
   allowedHosts?: readonly string[] | undefined;
   /**

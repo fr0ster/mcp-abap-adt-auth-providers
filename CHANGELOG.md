@@ -329,8 +329,10 @@ against the published 5.4.2.
     authorities a browser on another machine may use) open it up — and
     every client that can reach an allowed authority can then settle the
     login with a code of its own (the README warns of it); an SSH tunnel to
-    the port works with the default and is the safe route. With `port: 0`,
-    a port taken on `::1` leaves the transport on `127.0.0.1` alone. The UAA
+    the port works with the default and is the safe route; a loopback name
+    listed in `allowedHosts` admits no network peer. A port not free on
+    `::1` — fixed, or the one the OS gave `127.0.0.1` for `port: 0` — fails
+    the login `port-in-use`, never leaving it on `127.0.0.1` alone. The UAA
     paste hint names the tunnel or the first allowed authority, never a
     guessed host;
   - **Breaking:** the UAA paste form carries a per-login token, and

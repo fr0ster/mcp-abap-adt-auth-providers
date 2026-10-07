@@ -670,8 +670,8 @@ Options common to the three callback strategies:
 | `callbackServer` | the one this package ships | Your own `CallbackServerFactory`, to reuse a server you already run |
 | `openUrl` | the built-in launcher | Receives `(url, browser, redirectUri)` |
 | `remoteHint` | the paste hint, only for the shipped UAA transport | Extra guidance printed in `'none'` / `'headless'` mode. The default names an SSH tunnel to the bound port, or the first of `allowedHosts` — never a guessed hostname |
-| `host` | loopback (`127.0.0.1` and `::1`) | The address the transport binds (`ICallbackServerOptions.host`). A wildcard or an interface address makes it reachable from the network — name the authorities a browser will use in `allowedHosts` |
-| `allowedHosts` | none | Authorities (`host` or `host:port`; no port means the bound one) a browser may use besides loopback. Every other `Host` is refused before anything is served |
+| `host` | loopback (`127.0.0.1` and `::1`) | The address the transport binds (`ICallbackServerOptions.host`). A wildcard or an interface address makes it reachable from the network — name the authorities a browser will use in `allowedHosts`. **Warning:** with `allowedHosts`, every client that can reach an allowed authority gets the paste page and its form token and can settle the login with a code of its own — prefer the SSH tunnel |
+| `allowedHosts` | none | Authorities (`host` or `host:port`; no port means the bound one) a browser may use besides loopback; a loopback name is never one. Every other `Host` is refused before anything is served. **Warning:** every client that can reach an allowed authority gets the paste page and its form token and can settle the login with a code of its own — prefer the SSH tunnel |
 | `signal` | — | `AbortSignal` cancelling the login — the only bound there is (since 6.0.0 no login times out on its own): pass `AbortSignal.timeout(ms)` for a deadline |
 
 Note the `browser` default: **`'none'`, so nothing is opened unless you ask for
@@ -856,11 +856,14 @@ own while a login waits, and the user ends up logged in as someone else
   DNS-rebound name reads and settles nothing. Those three names count only
   from a loopback peer (`127.0.0.0/8`, `::1`, `::ffff:127.x.y.z`): the header
   is the client's to choose, so a machine on the network sending
-  `Host: localhost` is refused too. With `port: 0`, when the port the OS gave
-  `127.0.0.1` is taken on `::1`, the transport stays on `127.0.0.1` alone
-  (logged in fixed words); a fixed port taken there fails the login. An SSH
-  tunnel arrives on loopback and works as it is. To serve another machine
-  directly, set both:
+  `Host: localhost` is refused too — and listing a loopback name in
+  `allowedHosts` changes nothing: it is never an allowed authority. When the
+  port is not free on `::1` — a fixed one, or the one the OS gave
+  `127.0.0.1` for `port: 0` — the login fails `port-in-use`: the redirect
+  URI says `localhost`, which resolves to `::1` first, so staying on
+  `127.0.0.1` alone would hand whoever holds `[::1]:<port>` the code and the
+  `state`. Retrying is yours. An SSH tunnel arrives on loopback and works as
+  it is. To serve another machine directly, set both:
 
   ```typescript
   browserCallbackStrategy({
