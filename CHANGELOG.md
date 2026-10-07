@@ -276,8 +276,9 @@ against the published 5.4.2.
   `xdg-open` or a named browser on Linux, `open` on macOS, and on Windows
   `%SystemRoot%\System32\rundll32.exe url.dll,FileProtocolHandler` or
   PowerShell's `Start-Process` reading the URL from an environment variable
-  — never `cmd`. The Windows launchers are reasoned, not yet measured on a
-  Windows host.
+  — never `cmd`. The Windows launchers were measured on Windows 11
+  (2026-10-07): the URL arrives unchanged, and no command interpreter is
+  started.
 - **The legacy Basic credential, as shipped in 5.4.2, carried forward.**
   Without a client-authentication strategy, every site that sends
   `Authorization: Basic base64(id:secret)` builds it only through one helper

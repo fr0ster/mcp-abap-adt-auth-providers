@@ -300,8 +300,11 @@ for each party sharing the provider; `prepare()` then ends Oops `aborted`
 it waits for `reg.exe`; bounding it is the consumer's decision
 (`AbortSignal.timeout(ms)`). A locator or probe of your own receives the same
 signal as `locate(signal)` / `appliesTo(path, signal)`. The abort is tested
-with a real child process on a POSIX system; on a Windows host — `reg.exe`
-killed, its real and localised output parsed — it is not measured yet.
+with a real child process on a POSIX system, and measured on a Windows host
+(2026-10-07, Windows 11 x64): the library found through the real `reg.exe`
+(`HKLM\Software\SAP\SecureLogin`, `InstallPath64`), and an abort answering
+`aborted` with the `reg.exe` child ended and none left running. Localised
+`reg.exe` output is not measured.
 
 The explicit assembly, for a different SNC product, or a locator/probe of
 your own (no implicit defaults — a constructor takes every collaborator):
@@ -398,10 +401,18 @@ error text (never returned; only fixed wording and an allowlisted key go out):
   library (`<archs>`) as its SNC library (SNCERR_INIT)", the path in
   `error.diagnostics.library`, no hint — usually the architecture mismatch
   above, if a mismatched library somehow reached this point.
-- anything else — variant `logon-refused`; reason "SNC logon refused", plus
-  the SDK's error key in parentheses (and as `facts.rfcKey`) when it is on the
-  RFC-key allowlist (`RFC_LOGON_FAILURE`, `RFC_COMMUNICATION_FAILURE`, …) —
-  never the underlying message or object.
+- `RFC_LOGON_FAILURE`, or a rejection with neither a status nor an RFC key —
+  variant `logon-refused`; reason "SNC logon refused", plus the key in
+  parentheses (and as `facts.rfcKey`) when there is one — never the
+  underlying message or object.
+- any other status or allowlisted RFC key (`RFC_CLOSED`,
+  `RFC_COMMUNICATION_FAILURE`, …) — the neutral `system-refused` /
+  `rfc-failure` of rule 5, not an `snc` refusal. Measured 2026-10-07
+  (Windows 11, Secure Login Client, Kerberos profile): a wrong partner name
+  failed the RFC open with `RFC_CLOSED` and no GSS code the provider
+  explains, and so did, once, a logon with the client stopped and no
+  credential to present; `rejected()` answered `system-refused` /
+  `rfc-failure` both times.
 
 The GSS codes are found by plain substring search, never a regular
 expression over the SDK's text. `establish()` before `prepare()` is
@@ -2193,7 +2204,7 @@ identity provider accepts a loopback redirect on any port.
 
 **Cross-Platform Browser Support**: The browser authentication works across Linux, macOS, and Windows:
 - **Linux**: Automatically sets `DISPLAY=:0` if neither `DISPLAY` nor `WAYLAND_DISPLAY` environment variables are set. Supports multiple browser executable names (`google-chrome`, `google-chrome-stable`, `chromium`, `chromium-browser` for Chrome; `firefox`, `firefox-esr` for Firefox).
-- **Windows**: the default browser through `%SystemRoot%\System32\rundll32.exe url.dll,FileProtocolHandler <url>` (absolute paths, never a program found in the current directory); a named one through PowerShell's `Start-Process`, which reads the URL from an environment variable. Never `cmd`, which parses `&`, `|`, `^` and `%` whatever the quoting. (Reasoned from the documented behaviour of both; not yet measured on a Windows host.)
+- **Windows**: the default browser through `%SystemRoot%\System32\rundll32.exe url.dll,FileProtocolHandler <url>` (absolute paths, never a program found in the current directory); a named one through PowerShell's `Start-Process`, which reads the URL from an environment variable. Never `cmd`, which parses `&`, `|`, `^` and `%` whatever the quoting. Measured 2026-10-07 (Windows 11 x64): the default browser through `rundll32`, Chrome and Edge through `Start-Process`, each delivered the URL's path and query (with `&` and a `%20`) unchanged, and no command interpreter was started by the launcher.
 - **macOS**: Uses native `open` / `open -a <app>`.
 - **No shell, anywhere** (since 6.0.0): only an `http:` / `https:` URL is opened, as its WHATWG serialisation; one whose serialisation still holds a space, a quote, `<`, `>`, `^`, `|`, a backslash or a control character, or whose host is not a valid host name or address, is not opened at all (nothing is repaired). Every launcher is started with an argument array, the URL one argument of it. Through 5.4.2 the fallback without the `open` package handed the URL to a shell inside double quotes, so a `$(…)` or a backtick in it — from an OIDC provider's discovery document, say — ran as a command.
 

@@ -225,8 +225,10 @@ recipe and no implicit default (Inference, design).
   its own: it waits for `reg.exe`, or for the provider's signal, whose abort
   kills it. That abort is tested with a real child process on a POSIX
   system, and the parsing of `reg.exe`'s output with written samples of it;
-  neither has run on a Windows host yet, and localised `reg.exe` output is
-  not covered (Inference until measured). See
+  both were measured on a Windows host (2026-10-07, Windows 11 x64, Secure
+  Login Client): the library found through the real `reg.exe`, and an abort
+  answering `aborted` with no `reg.exe` left running. Localised `reg.exe`
+  output is not covered (Inference until measured). See
   [the README](README.md#passwordless-rfc-logon-snc).
 
   **The product is named, not checked** (Measured, 2026-09-29, Windows,
@@ -240,7 +242,13 @@ recipe and no implicit default (Inference, design).
   With the client logged out, closing that window failed the open with
   `GSS-API(min): A2200019:Operation aborted by user or application`, and
   `rejected()` answered "the SNC library has no credential to present
-  (A2200019)" — the one place a missing credential is explained. The macOS
+  (A2200019)" — the one place a missing credential is explained. Measured
+  again 2026-10-07 (Windows 11, Kerberos profile), three runs with the client
+  exited: twice the library started it and the profile logged on by itself;
+  once the open failed with `RFC_CLOSED` and no GSS code, as a wrong partner
+  name does, and `rejected()` answered the neutral `system-refused` /
+  `rfc-failure` — A2200019 is explained only when the SDK's error carries
+  it. The macOS
   side (the app bundle as a candidate and as what the probe recognises) is
   built from the documented install path but has not been measured live.
 - **A — documentation only.** Describe passwordless login through IAS for
