@@ -1,6 +1,9 @@
 # Renewal strategy — goal and path
 
-**Status:** goal approved by the user 2026-10-07 (after four Codex adversarial passes). Decided by the user
+**Status:** approved by the user 2026-10-07 (after four Codex adversarial
+passes); **revised 2026-10-07 for the user's review** — what persistence is
+told becomes a persistence strategy of its own (invariant 8, decided by the
+user). Decided by the user
 2026-10-07, in 6.0.0 and by the process: goal → spec → plan, each reviewed,
 all in PR #68. This file is the anchor for the renewal part of 6.0.0; the
 error contract's goal (`2026-10-05-error-contract-goal.md`) still binds
@@ -12,9 +15,12 @@ everything else. If the spec or the plan needs to depart from anything under
 What a token provider does when its credential must be renewed — refresh,
 log in, give up, how many times, and what persistence is told about the
 refresh token — is decided by a **renewal strategy the consumer injects**,
-like every other pluggable decision in this package. The provider performs
-the steps it is asked for and reports what happened in facts; it decides
-nothing a consumer might reasonably want to decide differently.
+like every other pluggable decision in this package. What persistence is
+told about the tokens — when to write, what to clear, what to do when a
+write fails — is decided by a **persistence strategy the consumer injects**
+beside it, replacing the `onTokens` hook. The provider performs the steps it
+is asked for and reports what happened in facts; it decides nothing a
+consumer might reasonably want to decide differently.
 
 **Success:** no renewal policy is left in `BaseTokenProvider`. A consumer
 that wants today's behaviour composes it from a shipped, named factory; one
@@ -40,24 +46,42 @@ strategy. The defect Codex found is a symptom: a decision the provider
 should not make, made on facts it misread (a cut before dispatch is not a
 spent token).
 
+The persistence bookkeeping is the same pattern one level down. The logical
+`held` / `cleared` state, `refreshTokenDisposition`, and the re-sending of a
+`'clear'` or `'replace'` whose `onTokens` failed exist only because one
+consumer — the broker over auth-stores, which falls back to the stored
+refresh token on `'keep'` — persists that way. No OAuth document defines
+them (RFC 6749 §6 gives only "a new refresh token replaces the old; none
+issued, the old stands"; RFC 9700 §4.14.2's reuse detection is the
+server's). A consumer without a store needs none of it; one with another
+store would want other rules; and a failed `onTokens` is the consumer's own
+code failing. Living in `BaseTokenProvider`, it is the place four Codex
+passes over the spec kept finding memory and storage out of step.
+
 ## What changes, by repository
 
-1. **`@mcp-abap-adt/interfaces-auth`** — the renewal strategy's contract:
-   the facts a step reports, the decision a strategy returns, the strategy
-   interface. Types and constants only. Additive, so a minor (6.1.0) unless
-   the spec finds an existing type must change; released first.
+1. **`@mcp-abap-adt/interfaces-auth`** — the renewal strategy's contract
+   (the facts a step reports, the decision a strategy returns, the strategy
+   interface) and the persistence strategy's (the events the provider
+   reports, the strategy interface). Types and constants only. A major
+   (7.0.0, spec §6c.9): a new error kind, and `onTokens` replaced; released
+   first.
 2. **`@mcp-abap-adt/auth-providers` 6.0.0** — in this PR: every token
    provider takes the strategy (required, rule 7); `BaseTokenProvider`
    performs steps and reports facts; the policy now in it (rule 6's fixed
    order, §6b's quarantine and clearing, the logical refresh state) moves
-   into shipped factories or goes; rule 6, §6b, the README and the migration
+   into shipped factories or goes; the persistence bookkeeping (logical
+   refresh state, dispositions, re-delivery after a failed write) moves into
+   a shipped persistence factory; rule 6, §6b, the README and the migration
    notes are rewritten.
 3. **`@mcp-abap-adt/auth-broker` 5.0.0** (Task 34, already planned) — composes
-   a strategy for each provider it builds; its default is the shipped factory
-   that reproduces today's behaviour, unless the spec decides otherwise.
-4. **`@mcp-abap-adt/auth-stores` 4.0.0** (Task 33) — unchanged in scope:
-   it accepts `refreshTokenDisposition`; what writes `'clear'` changes, not
-   the field.
+   a renewal strategy for each provider it builds (its default the shipped
+   factory that reproduces today's behaviour) and a persistence strategy
+   over its stores (the shipped persistence factory, writing through the
+   broker's session store).
+4. **`@mcp-abap-adt/auth-stores` 4.0.0** (Task 33) — accepts what the
+   shipped persistence factory writes; whether that is still
+   `refreshTokenDisposition` the spec decides.
 
 ## Holds throughout
 
@@ -119,16 +143,27 @@ spent token).
    commit queue). Whether one strategy instance serves every attempt, and
    what state it may keep across them, the spec decides; the provider's
    guarantees above hold whatever the strategy keeps.
-8. **The refresh state is coherent everywhere, whoever chose it.** Choosing
-   to discard or replace a refresh token is policy; applying that choice
-   consistently is the provider's correctness. What the provider holds, what
-   it returns from `getTokens()` / `refreshTokens()`, and what it tells
-   persistence (`refreshTokenDisposition`) never disagree: a discarded
-   refresh token is never restored by a later `'keep'` (the broker falls back
-   to the stored one on `'keep'`), and a `'clear'` or `'replace'` whose
-   `onTokens` failed is delivered again, in order and generation-safe, with
-   the next notification (§6b's pending disposition) — for every strategy,
-   shipped or not.
+8. **The provider is coherent in itself; persistence is the persistence
+   strategy's** (revised 2026-10-07, decided by the user). Two halves:
+   - *The provider's own correctness.* What it holds and what it returns
+     from `getTokens()` / `refreshTokens()` never disagree: a kept refresh
+     token survives a result that carries none, a discarded one is never
+     installed or sent again, a late result never overwrites a newer one.
+     It reports every change of its credentials to the persistence strategy
+     as facts — a credential committed (the access token, and a new refresh
+     token or none), a refresh token discarded — once each, in commit order,
+     generation-safe, from the commit queue; a report the strategy fails is
+     logged (fixed words) and not repeated. The persistence strategy is the
+     one collaborator that receives token values: it is the consumer's
+     store.
+   - *The persistence strategy's decisions.* What is written, what is
+     cleared, how a store that falls back to a stored refresh token is kept
+     from restoring a discarded one, and what happens after a failed write
+     (retry, re-send with the next report, give up) are its own. The shipped
+     factory keeps today's guarantees for the broker's store: a discarded
+     refresh token is never restored by a later write, and a failed
+     `'clear'` or `'replace'` is delivered again with the next report.
+     Without a persistence strategy nothing is persisted.
 9. **Rule 5 is a reading, not a guard** (decided by the user 2026-10-07).
    The provider still reads every rejection by rule 5 — a `401` or
    `RFC_LOGON_FAILURE` is the credential's; a `403`, a redirect, a `5xx`,
@@ -163,8 +198,13 @@ spent token).
    `getTokens()`), an expired token, a held token bound elsewhere (rule 8),
    an explicit `refreshTokens()`, and a rejection.
 3. What of §6b's mechanisms goes: the lifetime tombstones become the
-   discard decision of invariant 7; the logical `cleared` state and the
-   pending disposition stay as invariant 8's mechanism — the spec says how.
+   discard decision of invariant 7 and stay in the provider; the logical
+   `cleared` state and the pending disposition move into the shipped
+   persistence factory (invariant 8).
+7. The persistence strategy's shape: the events and their fields, whether
+   it is awaited (the commit queue today awaits `onTokens`), and whether
+   `ITokenResult.refreshTokenDisposition` stays on what `getTokens()`
+   returns or goes with the bookkeeping.
 4. The shipped factories, by name and behaviour — at least one reproducing
    5.x (refresh, then on its failure one login) and one that never logs in.
 5. `TokenAuthProvider.from(refresher)`: whether its renewal takes the same
@@ -180,6 +220,6 @@ Order, not dates.
    replacing §6b's renewal rules and rule 6 — reviewed and approved.
 3. The plan — new tasks in `plans/2026-10-05-error-contract.md`, before
    Task 31 (the release) — reviewed and approved.
-4. interfaces-auth minor, released.
+4. interfaces-auth 7.0.0 (and the cascade of spec §6c.9), released.
 5. auth-providers: implementation in this PR, then Task 31 resumes.
 6. Tasks 32–35 as planned, the broker composing the strategy in Task 34.
