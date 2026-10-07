@@ -1456,7 +1456,14 @@ signal (or none). The rule, wherever an attempt is shared:
   that describes the server's state stays applied (a refresh token the server
   refused is spent, as today); nothing that arrives after the abort is —
   with the one exception of a refresh, below.
-- **A refresh aborted after dispatch is an uncertain outcome.** Once a
+- **A refresh aborted after dispatch is an uncertain outcome.**
+  *Superseded in part by §6c (2026-10-07): what is done with R after a cut
+  — tombstone or keep — is the renewal strategy's `ifCut`, applied only once
+  the request was dispatched; a refresh refused is cleared only by the
+  strategy's `sentRefreshToken: 'discard'`; and the login that follows is the
+  strategy's step, not rule 6's. The mechanics below — the synchronous
+  quarantine, the commit queue, the dispositions, the pending disposition —
+  are how those decisions are applied.* Once a
   refresh request carrying refresh token R has been dispatched, the server
   may have consumed R and issued R2. **A dispatched refresh request is never
   given the attempt's signal**: axios rejects an aborted request with
@@ -1812,6 +1819,319 @@ deferred-shutdown case red (`busy`); awaiting the outstanding request in the
 drain turns the held-poll case red; dropping the check after an await turns
 the no-further-poll case red.
 Broker tests: §10.6.
+
+## 6c. The renewal strategy
+
+Answers the renewal goal (`docs/superpowers/2026-10-07-renewal-strategy-goal.md`,
+approved 2026-10-07); its invariants are referred to as R1–R9. Where §6b or
+CLAUDE.md rule 6 says what a renewal does — one refresh, then on any failure
+one login; a refresh token cut after dispatch tombstoned; a refused one
+cleared — this section replaces it. Everything else in §6b stands: waiters
+and parties, `sharedAttempt`, the drain, the commit queue and its two
+watermarks, the refresh request that is never given the attempt's signal,
+the late refresh result offered to the queue.
+
+### 6c.1 What is decided here (the goal's open questions)
+
+1. **One call per step.** The strategy is asked before every step of a
+   renewal, with the facts of the steps already taken in it; it answers the
+   next step or stop. No plan for the whole renewal: a plan made before the
+   first step cannot depend on what the first step learned.
+2. **Triggers and moments are facts the strategy receives** (§6c.3), never
+   folded into one: why a renewal starts (`no-token`, `expired`,
+   `bound-elsewhere`, `explicit`, `rejected`) and which call started it
+   (`prepare`, `get-tokens`, `refresh-tokens`, `authorize`, `rejected`).
+3. **§6b's mechanisms, re-homed.** A tombstone is now how a *discard*
+   decision is applied, for every discard (refused or cut), not a rule the
+   provider applies on its own (R7, R8). The logical `cleared` state and the
+   pending disposition stay, unchanged, as R8's mechanism. `remembered`
+   (rule 8) stays as a fact store: what the last renewal of the held token
+   produced; whether to renew it again is the strategy's.
+4. **Two shipped factories**: `refreshThenLogin()` — today's behaviour, with
+   Codex's defect removed — and `refreshOnly()`, which never logs in
+   (§6c.6).
+5. **`TokenAuthProvider.from(refresher)` takes no strategy.** Its renewal is
+   the consumer's own refresher; the consumer's code is already the
+   decision.
+6. **The broker** takes an optional `renewal` strategy in its options and
+   hands the one given to every token provider it builds; without one it
+   composes `refreshThenLogin()`. The broker is a consumer: a default of its
+   own is its choice, not the provider's. Its CLI exposes nothing new.
+7. **A new kind, `renewal-declined`** (§6c.5), for a strategy that stops a
+   renewal in which nothing was tried and nothing else explains why. The
+   union is closed (error goal invariant 5), so this is a **major**:
+   interfaces-auth 7.0.0, not the goal's hoped-for minor (the goal allows
+   this: "unless the spec finds an existing type must change"). What that
+   costs is in §6c.9.
+
+### 6c.2 Types — `@mcp-abap-adt/interfaces-auth` 7.0.0 (`src/token/renewal.ts`)
+
+Types and constants only. Every list is an `as const` array and the union
+it gives, as in §4.3.
+
+```ts
+export const RENEWAL_TRIGGERS = ['no-token', 'expired', 'bound-elsewhere', 'explicit', 'rejected'] as const;
+export type RenewalTrigger = (typeof RENEWAL_TRIGGERS)[number];
+
+export const RENEWAL_MOMENTS = ['prepare', 'get-tokens', 'refresh-tokens', 'authorize', 'rejected'] as const;
+export type RenewalMoment = (typeof RENEWAL_MOMENTS)[number];
+
+/** What a rejection says about the credential, by rule 5. */
+export const REJECTION_READINGS = ['credential', 'not-credential', 'unknown'] as const;
+export type RejectionReading = (typeof REJECTION_READINGS)[number];
+
+export const RENEWAL_STEPS = ['refresh', 'login'] as const;
+export type RenewalStep = (typeof RENEWAL_STEPS)[number];
+
+/** Why a renewal started. */
+export type RenewalCause =
+  | { readonly trigger: 'no-token' | 'expired' | 'explicit' }
+  | {
+      readonly trigger: 'bound-elsewhere';
+      /** The last renewal of this held token, when one ran and did not make it usable. */
+      readonly lastRenewal?: IAuthProviderError | undefined;
+    }
+  | {
+      readonly trigger: 'rejected';
+      readonly reading: RejectionReading;
+      /** Rule 5's refusal for a `not-credential` reading — what a stop answers. */
+      readonly refusal?: IAuthProviderError | undefined;
+      readonly at: RejectionMoment;
+      readonly status?: HttpStatus | undefined;
+      readonly rfcKey?: RfcKey | undefined;
+    };
+
+/** How a step ended, when it did not end the renewal with a usable credential. */
+export type RenewalStepOutcome =
+  | {
+      readonly step: RenewalStep;
+      readonly outcome: 'failed';
+      /** False: nothing reached the server (discovery, a strategy, a loader failed first). */
+      readonly sent: boolean;
+      readonly error: IAuthProviderError;
+    }
+  | {
+      readonly step: RenewalStep;
+      /** A credential was obtained and committed, and is not the one wanted. */
+      readonly outcome: 'unchanged' | 'bound-elsewhere';
+    };
+
+export interface RenewalSituation {
+  readonly cause: RenewalCause;
+  readonly moment: RenewalMoment;
+  /** A refresh is possible now: a refresh grant, and a refresh token held and not discarded. */
+  readonly canRefresh: boolean;
+  /** The steps this renewal already took, in order; empty before the first. */
+  readonly steps: readonly RenewalStepOutcome[];
+}
+
+export type RenewalDecision =
+  | {
+      readonly next: 'refresh';
+      /** What to do with the refresh token sent if this renewal is cut after dispatch (R7). */
+      readonly ifCut: 'keep' | 'discard';
+      /** Only after a failed refresh: what becomes of the refresh token it sent. */
+      readonly sentRefreshToken?: 'keep' | 'discard' | undefined;
+    }
+  | { readonly next: 'login'; readonly sentRefreshToken?: 'keep' | 'discard' | undefined }
+  | { readonly next: 'stop'; readonly sentRefreshToken?: 'keep' | 'discard' | undefined };
+
+export interface IRenewalStrategy {
+  next(situation: RenewalSituation): RenewalDecision | Promise<RenewalDecision>;
+}
+```
+
+`sentRefreshToken` is read only on the decision that follows a refresh
+step that **failed after it was sent** (`sent: true`); anywhere else it must
+be absent, and present is an invalid decision (§6c.4). After such a step it
+is **required**: an uncertain refresh token is never kept or discarded by
+default (R1). `ifCut` is required on every `refresh`. A strategy receives
+minted errors and allowlisted facts only — never a token, a refresh token's
+value or any message (R5).
+
+`ITokenProviderOptions` / the provider configs gain `renewal: IRenewalStrategy`
+(required on every `BaseTokenProvider` subclass, rule 7). No other type of
+interfaces-auth changes except the new kind (§6c.5).
+
+### 6c.3 Where a renewal starts
+
+| Call | When | `cause.trigger` | `moment` |
+|---|---|---|---|
+| `getTokens()` | nothing held | `no-token` | `get-tokens` |
+| `getTokens()` | held token expired (`isTokenValid`, as today) | `expired` | `get-tokens` |
+| `getTokens()` | held token bound to another thumbprint than the pinned one | `bound-elsewhere` | `get-tokens` |
+| `prepare()` / `authorize()` | through `getTokens()`, as above | as above | `prepare` / `authorize` |
+| `refreshTokens()` | always | `explicit` | `refresh-tokens` |
+| `rejected()` | always (no early rule-5 return) | `rejected`, with rule 5's reading | `rejected` |
+
+What is **not** a renewal and stays the provider's (R4): a valid cached token
+answered by `getTokens()`; `rejected()` for a token already superseded by a
+renewal (Ok, nothing renewed — what the provider presents has changed);
+joining a renewal already in flight. `prepare()` no longer clears
+`remembered` on its own: `moment: 'prepare'` is the strategy's cue.
+
+### 6c.4 How a renewal runs
+
+`renewOnce` becomes a loop driven by the strategy, inside the existing
+attempt (`renewAttempt`, the shared slot, the generation):
+
+1. Pin first, as today (`presentable()`): unusable or expired material
+   refuses the renewal whole before the strategy is asked — material is the
+   provider's own correctness (rule 8), not a step.
+2. Build the situation; ask `next(situation)`. The call is raced against
+   the attempt's signal (`untilAborted`): an abort ends the renewal
+   `aborted` at once; the strategy's late answer is ignored. No timer (R3).
+3. Read the answer like any collaborator's (R6): a throw, a non-object, a
+   thenable that is not a native promise (never called — the
+   foreign-thenable rule), an unknown `next`, a `refresh` without a valid
+   `ifCut`, a `refresh` with `canRefresh` false, a `sentRefreshToken` where
+   it must be absent or missing where it is required → the renewal ends with
+   `unknown` of operation `renewal-strategy` (a new `OPERATIONS` value —
+   part of 7.0.0), the step not taken and nothing changed by it (R7's
+   narrowed clause). Steps already applied stay applied.
+4. Apply `sentRefreshToken` first, through the commit queue: `discard`
+   tombstones that refresh token and clears it if still held
+   (`discard(spent)`, as today, `'clear'` to persistence); `keep` leaves it.
+5. Run the step, checked again before dispatch: the attempt not aborted,
+   its generation still current (R7).
+   - **refresh** — `performRefresh(spent, signal, dispatched)`: the site
+     calls `dispatched()` synchronously right before the request leaves
+     (`sendTokenRequest` on both paths, before axios). The abort handler
+     installed for this step acts **only after `dispatched()`**: then it
+     applies `ifCut` — `discard` tombstones and queues the clearing step,
+     exactly §6b's synchronous quarantine; `keep` does nothing. An abort
+     before `dispatched()` touches no refresh token (Codex 2026-10-07,
+     finding 1). A success commits as today (late results included).
+   - **login** — `performLogin(attempt)` and its commit, as today.
+6. After a step: a usable new credential ends the renewal with it. A
+   credential that is `unchanged` (only when the cause names a refused
+   token: `rejected`) or still `bound-elsewhere` is committed (it is the
+   server's state; a new refresh token in it is kept) and recorded as that
+   outcome; a failure is recorded as `failed` with `sent` and its minted
+   error. Then back to 2.
+7. `stop` ends the renewal with (§6c.5): the last step's error or outcome
+   refusal if a step was taken; otherwise rule 5's `refusal` for a
+   `not-credential` rejection, the `lastRenewal` error for a
+   `bound-elsewhere` cause that carries one, else `renewal-declined`.
+
+No step runs that the strategy did not ask for, and nothing loops without
+asking it (R3). How many steps one renewal takes is the strategy's; each is
+one call to `next`.
+
+**Tombstones.** Every discarded refresh token — by `sentRefreshToken:
+'discard'` or by `ifCut: 'discard'` — joins the provider's lifetime set
+(§6b's quarantine, renamed `discarded`); a dispatch never sends one, a
+commit never installs one and reports `'clear'` (R8). `canRefresh` is false
+while the held refresh token is in the set. `keep` adds nothing.
+
+**Dispositions.** Unchanged from §6b: a result with a new usable refresh
+token → `'replace'`; the logical `cleared` state → `'clear'`; the pending
+disposition re-sent after a failed `onTokens`; otherwise `'keep'`. Only the
+reasons a token becomes `cleared` change: a discard decision, never the
+provider's own reading of a failure.
+
+### 6c.5 What a failed renewal answers
+
+- `getTokens()` / `refreshTokens()` throw an `AuthProviderFailure` holding
+  the error of §6c.4 step 7 (or `aborted`, or the strategy's `unknown`).
+- `authorize()`: as today, plus `remembered`: a renewal that ends while a
+  token bound elsewhere is held records `{ token, error }` (§6b, rule 8),
+  now including a `stop` — the next renewal of that token gets it as
+  `lastRenewal`.
+- `rejected()`: the renewal's error; Ok only when what is presented changed;
+  `renewal-unchanged` when the strategy stops on an `unchanged` outcome.
+- **`renewal-declined`** — new kind, facts `{ trigger: RenewalTrigger }`,
+  reason "the renewal strategy declined to renew the credential", no hint;
+  rendered by auth-errors 2.0.0. Used only for a stop with no step taken and
+  no other refusal that explains it (step 7).
+
+### 6c.6 Shipped factories — `src/renewal/`
+
+`refreshThenLogin()` — decides exactly what 6.0.0-before-this does, minus
+the defect:
+
+| Situation | Decision |
+|---|---|
+| `rejected`, reading `not-credential` | `stop` (rule 5's `system-refused`) |
+| `bound-elsewhere` with `lastRenewal`, moment not `prepare` / `rejected` | `stop` (the remembered refusal) |
+| no step yet, `canRefresh` | `refresh`, `ifCut: 'discard'` |
+| no step yet, no refresh | `login` |
+| last step a refresh that `failed` | `login`; `sentRefreshToken: 'discard'` when `sent`, nothing when not sent |
+| last step a refresh with outcome `unchanged` / `bound-elsewhere` | `stop` |
+| last step a login | `stop` |
+
+The one change in behaviour: a refresh that failed before it was sent
+(OIDC discovery failed or was aborted, a client-authentication strategy
+threw) no longer clears the refresh token. `refreshOnly()` — the same rows
+with `login` replaced by `stop`. Both are stateless; a consumer strategy may
+keep state of its own (R7: the provider's guarantees hold whatever it keeps;
+`next` may be called for a new renewal while an aborted one's call is still
+unsettled, and that late answer is ignored).
+
+### 6c.7 Logging
+
+One `debug` line per decision, fixed words: `[BaseTokenProvider] Renewal
+step` with `{ trigger, moment, next }` (allowlisted values only); a refused
+decision through `logFields(classify(...))` as every failure. No token, no
+refresh token, no `ifCut` reasoning text.
+
+### 6c.8 Tests (auth-providers)
+
+Real sockets where the point is what was sent; every case load-bearing
+(break it, watch it go red).
+- **Codex finding 1:** OIDC refresh with discovery held open, attempt
+  aborted → no token request reached the server, no `onTokens` `'clear'`,
+  the next renewal sends the same refresh token (asserted on the server).
+  Turning the `dispatched()` gate off turns it red.
+- Cut after dispatch with `ifCut: 'discard'` → §6b's quarantine cases, as
+  today; with `'keep'` → the replacement sends R again (asserted on the
+  server) and a late R2 still commits.
+- `sentRefreshToken` required after a sent failure, absent elsewhere: each
+  invalid decision → `unknown` `renewal-strategy`, the refresh token
+  unchanged, no step taken; a strategy that throws, answers a foreign
+  thenable (its `then` never called), or never settles until the abort.
+- Earlier steps stay applied: refresh commits R2 with outcome
+  `bound-elsewhere`, the strategy then throws → R2 held and persisted.
+- No hidden step: a strategy counting calls — every step preceded by one
+  `next`, none after `stop`; `refreshOnly()` never calls the authorization
+  strategy.
+- Rule 5 as a reading: a `403` with `refreshThenLogin()` → `system-refused`,
+  no token request; with a strategy that renews on `not-credential` → one
+  refresh sent.
+- `renewal-declined`: `refreshOnly()`, expired token, no refresh token →
+  thrown with `trigger: 'expired'`, nothing sent.
+- `refreshThenLogin()` reproduces the existing renewal suites unchanged
+  (they move to constructing it explicitly), except the pre-dispatch case.
+- The decision table of §6c.6, row by row, against the factory alone.
+
+### 6c.9 What it costs, by repository
+
+| Package | Change | Version |
+|---|---|---|
+| interfaces-auth | `renewal.ts`; kind `renewal-declined`; operation `renewal-strategy`; `renewal` in the provider configs | **7.0.0** (a kind and an allowlist value: closed unions) |
+| interfaces-auth-sap, -auth-broker | moved to 7.0.0 by PR #123's rule | per that rule |
+| auth-errors | words for `renewal-declined`, the new operation; moves to interfaces-auth 7 | **2.0.0** |
+| connection | moves to interfaces-auth 7 and auth-errors 2; no behaviour change | **13.0.0** (12.0.0 is on `next`, never `latest` — no consumer installed it) |
+| auth-providers | this section | 6.0.0 (unreleased) |
+| auth-stores | none beyond Task 33 | 4.0.0 |
+| auth-broker / CLI | `renewal` option, default `refreshThenLogin()` | 5.0.0 / 3.0.0 |
+
+The alternative that keeps interfaces-auth a minor: no new kind, a stop with
+nothing tried answering an existing kind. None fits — `credential-refused`
+says the system refused something it did not, `renewal-unchanged` says a
+renewal ran — so a wrong word would be the price. Recommended: the major.
+
+### 6c.10 Documentation
+
+CLAUDE.md rule 6 becomes: "`rejected()` renews through the renewal strategy
+the consumer gave; retrying is the consumer's. The strategy decides every
+step (§6c); a provider never answers Ok without having changed what it
+presents." Rule 5 gains "a reading the strategy receives". README: a
+"Renewal strategy" section (the types, the two factories, writing one's
+own, the decision table), the migration note (every token provider now
+requires `renewal`; `refreshThenLogin()` is the old behaviour), the
+cancellation text of §6b rewritten for `ifCut`.
+
 
 ## 7. Logon targets (connection) and rule 4
 
