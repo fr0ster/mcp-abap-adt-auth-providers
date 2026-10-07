@@ -913,3 +913,61 @@ describe('the strategy gets frozen copies; the provider reads back nothing it ha
     for (const value of seen) expect(Object.isFrozen(value)).toBe(true);
   });
 });
+
+describe('review M-2, M-3, M-4', () => {
+  function warnings() {
+    const lines: unknown[][] = [];
+    const logger: ILogger = {
+      debug: () => undefined,
+      info: () => undefined,
+      warn: (...args: unknown[]) => {
+        lines.push(args);
+      },
+      error: () => undefined,
+    };
+    return { lines, logger };
+  }
+
+  it('M-2: a refresh ended by the abort is not logged as "Refresh failed"', async () => {
+    const { lines, logger } = warnings();
+    const provider = seeded(refreshThenLogin(), { logger });
+    provider.holdDispatch = true;
+    const only = new AbortController();
+    const cut = rejectionOf(provider.getTokens({ signal: only.signal }));
+    const held = await provider.refreshes.nth(1);
+    only.abort();
+    await cut;
+    held.result.reject(new Error('not sent'));
+    await quiet();
+    expect(lines.map((line) => line[0])).not.toContain(
+      '[BaseTokenProvider] Refresh failed',
+    );
+  });
+
+  it('M-3: a refresh token in discarded is never dispatched, whatever canRefresh said', async () => {
+    const provider = seeded(refreshThenLogin());
+    const internals = provider as unknown as {
+      discarded: Set<string>;
+      canRefresh: () => boolean;
+    };
+    internals.discarded.add('R');
+    // A defect elsewhere that reported a refresh possible.
+    internals.canRefresh = () => true;
+    const error = errorOf(await rejectionOf(provider.getTokens()));
+    expect(error).toMatchObject({
+      kind: 'unknown',
+      facts: { operation: 'token-request' },
+    });
+    expect(provider.refreshes.items).toHaveLength(0);
+  });
+
+  it('M-4: a discard of a refresh token no longer held reports nothing (spec §6c.6)', async () => {
+    const { seen, onTokens } = recorder();
+    const provider = seeded(refreshThenLogin(), { onTokens });
+    await (
+      provider as unknown as { discard(spent: string): Promise<void> }
+    ).discard('replaced-meanwhile');
+    expect(seen).toEqual([]);
+    expect(provider.held().refresh).toBe('R');
+  });
+});

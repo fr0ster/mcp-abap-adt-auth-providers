@@ -1194,7 +1194,13 @@ export abstract class BaseTokenProvider
   ): Promise<StepEnd> {
     const { signal } = attempt;
     const spent = this.refreshToken;
-    if (typeof spent !== 'string' || spent === '') {
+    // The provider's own correctness, checked here whatever led to the step
+    // (G4): an empty or discarded refresh token is never dispatched.
+    if (
+      typeof spent !== 'string' ||
+      spent === '' ||
+      this.discarded.has(spent)
+    ) {
       // Unreachable: the decision was read against canRefresh.
       throw new AuthProviderFailure(
         authError.unknown(this.operationOf('token-request')),
@@ -1236,6 +1242,14 @@ export abstract class BaseTokenProvider
       try {
         result = await this.performRefresh(spent, signal, dispatched);
       } catch (thrown) {
+        // Cut: `ifCut` decided, and nobody waits for another step. An abort
+        // is the consumer's decision, not a failed refresh.
+        if (signal.aborted) {
+          logQuietly(() =>
+            this.logger?.info('[BaseTokenProvider] Refresh ended by the abort'),
+          );
+          throw abortedFailure();
+        }
         // H1: the failure's fixed words and kind, never its message.
         logQuietly(() =>
           this.logger?.warn(
@@ -1243,8 +1257,6 @@ export abstract class BaseTokenProvider
             logFields(classify(thrown, 'refresh')),
           ),
         );
-        // Cut: `ifCut` decided, and nobody waits for another step.
-        throwIfAborted(signal);
         const error = this.classified(
           thrown,
           this.operationOf('token-request'),
