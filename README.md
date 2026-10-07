@@ -141,6 +141,11 @@ your `AbortSignal` is the bound. What a consumer on 5.x must now do:
 - **A cut refresh may cost one login.** A refresh whose callers all aborted
   after it was sent runs on, and its refresh token is never sent again by
   that provider, so the next renewal logs in.
+- **A declined SAML login is refused `declined`.** The signed-Response
+  validator reads `Status` right after the signature checks, before counting
+  the `Assertion`, so a login the identity provider declined — which carries
+  no Assertion — is refused `declined` with its status code, where 5.x
+  refused it as carrying no direct-child Assertion (`no-direct-assertion`).
 - **Device polling follows RFC 8628.** `slow_down` adds 5 s to every later
   poll, cumulatively; an `interval` that is not a finite, non-negative number
   is 5 s; `authorization_pending` / `slow_down` keep the poll going only with
@@ -488,8 +493,10 @@ Since 2.0.0 an interactive login is conducted by an **authorization strategy**
 (`IAuthorizationStrategy` from `@mcp-abap-adt/interfaces-auth`) passed as
 `authorization`. The provider owns what it can compute — the authorization URL
 and the token exchange; everything between them (reaching the URL, receiving
-what comes back, the port, how long to wait) belongs to the strategy, which a
-consumer may replace wholesale. See
+what comes back, the port) belongs to the strategy, which a consumer may
+replace wholesale. How long to wait is no one's choice but the consumer's:
+a login ends on its result, the identity provider's refusal or the consumer's
+`AbortSignal`. See
 [Choosing an authorization strategy](#choosing-an-authorization-strategy).
 
 Since 5.3.0 a token provider's **client** may authenticate with a client
