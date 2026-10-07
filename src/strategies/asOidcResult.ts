@@ -11,7 +11,6 @@ import type {
   AuthorizationRequest,
   IAuthorizationStrategy,
 } from '@mcp-abap-adt/interfaces-auth';
-import { answered } from '../auth/handled';
 import type { OidcCallbackResult } from '../auth/oidcBrowserAuth';
 
 export function asOidcResult(
@@ -21,7 +20,7 @@ export function asOidcResult(
     async authorize(
       request: AuthorizationRequest,
     ): Promise<AuthorizationOutcome<OidcCallbackResult>> {
-      const { value: outcome } = await answered(inner.authorize(request));
+      const outcome = await inner.authorize(request);
       // No `state`: a value that never travelled through a redirect has none
       // to check.
       return {

@@ -15,7 +15,6 @@ import { AUTH_TYPE_AUTHORIZATION_CODE } from '@mcp-abap-adt/interfaces-auth';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
 import { throwIfAborted, untilAborted } from '../auth/attempt';
 import { oidcEndpointMissing, oidcIssuerRequired } from '../auth/configuration';
-import { answered } from '../auth/handled';
 import { loginFailure } from '../auth/interactiveLogin';
 import { discoverOidc, mtlsAlias } from '../auth/oidcDiscovery';
 import {
@@ -150,14 +149,12 @@ export class OidcDeviceFlowProvider extends BaseTokenProvider {
 
     throwIfAborted(signal);
     try {
-      await answered(
-        this.config.presenter.present({
-          verificationUri: deviceFlow.verificationUri,
-          verificationUriComplete: deviceFlow.verificationUriComplete,
-          userCode: deviceFlow.userCode,
-          expiresInSeconds: deviceFlow.expiresIn,
-        }),
-      );
+      await this.config.presenter.present({
+        verificationUri: deviceFlow.verificationUri,
+        verificationUriComplete: deviceFlow.verificationUriComplete,
+        userCode: deviceFlow.userCode,
+        expiresInSeconds: deviceFlow.expiresIn,
+      });
     } catch (error) {
       // H3: the presenter's text may hold the code; the log gets the
       // `logFields` of its failure only.

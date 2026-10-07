@@ -3,7 +3,6 @@ import type {
   IClientAuthentication,
 } from '@mcp-abap-adt/interfaces-auth';
 import { assertCertificateMaterial } from '../auth/certificateMaterial';
-import { answered } from '../auth/handled';
 
 export interface TlsClientCertificateConfig {
   /** The material, or a loader the consumer owns; read and checked once. */
@@ -22,7 +21,7 @@ export function tlsClientCertificate(
     const attempt = (async () => {
       const material =
         typeof config.material === 'function'
-          ? (await answered(config.material())).value
+          ? await config.material()
           : config.material;
       assertCertificateMaterial(material);
       return material;

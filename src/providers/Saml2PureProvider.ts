@@ -13,7 +13,7 @@ import type {
 } from '@mcp-abap-adt/interfaces-auth';
 import { AUTH_TYPE_USER_TOKEN } from '@mcp-abap-adt/interfaces-auth';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
-import { answered, markHandled } from '../auth/handled';
+import { markHandled } from '../auth/handled';
 import { samlCallbackStrategy } from '../strategies';
 import { createSignedResponseValidator } from '../validation/assertionValidator';
 import { defaultReplayStore } from '../validation/inMemoryReplayStore';
@@ -111,9 +111,7 @@ export class Saml2PureProvider extends BaseTokenProvider {
       expectedIssuer: this.config.idpEntityId,
       logger: this.logger,
     });
-    const { value: sessionCookies } = await answered(
-      this.config.cookieProvider(payload),
-    );
+    const sessionCookies = await this.config.cookieProvider(payload);
 
     return {
       authorizationToken: sessionCookies,

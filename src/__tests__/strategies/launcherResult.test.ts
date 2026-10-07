@@ -1,9 +1,12 @@
 /**
- * Task 29 review, item 1: what the launcher (`openUrl`) answers is never
- * handled through a foreign `then` / `catch`; only a plain native promise
- * gets a native rejection handler, and the consumer server's `fail()` runs
- * inside a try, so a `fail()` that throws raises no `unhandledRejection`.
- * Run under plain node in a child process, bounded by the test.
+ * Task 29 review, item 1, as the user decided on 2026-10-07: what the
+ * launcher (`openUrl`) answers is the consumer's own code — adopted as
+ * `await` would adopt it, so a native promise or any Promises/A+ thenable
+ * that rejects (or whose `then` throws) is a launch failure, and one that
+ * never settles is a launcher that succeeded. The consumer server's
+ * `fail()` runs inside a try, so a `fail()` that throws raises no
+ * `unhandledRejection`. Run under plain node in a child process, bounded by
+ * the test.
  */
 
 import { describe, expect, it } from '@jest/globals';
@@ -42,9 +45,11 @@ report({ outcome, ...seen });
 `;
 
 const REJECTING = `async () => { throw new Error('launch: SECRET'); }`;
-const THENABLE = `() => ({ then() { seen.thenCalls += 1; }, catch() { seen.thenCalls += 1; } })`;
+const NEVER = `() => ({ then() { seen.thenCalls += 1; } })`;
+const APLUS_REJECTING = `() => ({ then(_resolve, reject) { seen.thenCalls += 1; queueMicrotask(() => reject(new Error('launch: SECRET'))); } })`;
+const THEN_THROWS = `() => ({ then() { seen.thenCalls += 1; throw new Error('then: SECRET'); } })`;
 
-describe('the launcher’s answer is handled natively, or not at all', () => {
+describe('the launcher’s answer is adopted, whatever promise it is', () => {
   it.each([
     [
       'a rejecting launcher, fail() throws',
@@ -59,10 +64,22 @@ describe('the launcher’s answer is handled natively, or not at all', () => {
       { outcome: 'browser-launch-failed', thenCalls: 0, failCalls: 1 },
     ],
     [
-      'a launcher answering a foreign thenable',
-      THENABLE,
+      'a launcher answering a thenable that never settles',
+      NEVER,
       false,
-      { outcome: 'payload:code', thenCalls: 0, failCalls: 0 },
+      { outcome: 'payload:code', thenCalls: 1, failCalls: 0 },
+    ],
+    [
+      'a launcher answering a rejecting Promises/A+ thenable, fail() throws',
+      APLUS_REJECTING,
+      true,
+      { outcome: 'browser-launch-failed', thenCalls: 1, failCalls: 1 },
+    ],
+    [
+      'a launcher answering a thenable whose then throws',
+      THEN_THROWS,
+      false,
+      { outcome: 'browser-launch-failed', thenCalls: 1, failCalls: 1 },
     ],
     [
       'a launcher throwing synchronously, fail() throws',

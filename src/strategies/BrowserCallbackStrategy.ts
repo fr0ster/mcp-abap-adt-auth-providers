@@ -25,7 +25,7 @@ import {
   validatePort,
   withBrowserCallbackServer,
 } from '../auth/callbackServer';
-import { answered, markHandled, onNativeRejection } from '../auth/handled';
+import { markHandled, onAnswerRejection } from '../auth/handled';
 import {
   abortedLogin,
   browserLaunchFailed,
@@ -167,75 +167,73 @@ export class BrowserCallbackStrategy<TResult>
     const run = (async (): Promise<AuthorizationOutcome<TResult>> => {
       await assertPortAvailable(port);
       if (controller.signal.aborted) throw abortedLogin('browser');
-      const { value } = await answered(
-        this.options.callbackServer(
-          {
-            port,
-            signal: controller.signal,
-            logger: request.logger,
-          },
-          async (server) => {
-            // Thrown before anything is opened: a redirect the provider cannot
-            // honour must fail here, not as a callback that never arrives.
-            const url = await request.buildAuthorizationUrl(server.redirectUri);
-            // Aborted while the URL was built: nothing is opened.
-            if (controller.signal.aborted) throw abortedLogin('browser');
-            const waiting = server.waitForResult();
-            // Held before it is awaited: a launcher that throws at once leaves
-            // it behind, and a consumer's server may not have marked it
-            // handled (controller addition after Task 23).
-            markHandled(waiting);
-            // Built here, not earlier: the launcher's messages name the URI that is
-            // actually bound, which with `port: 0` nothing knew until now.
-            const open =
-              this.options.openUrl ??
-              ((u: string, which: string, redirectUri: string) =>
-                launchBrowser(
-                  u,
-                  which,
-                  redirectUri,
-                  announce,
-                  request.logger ?? null,
-                  this.options.remoteHint?.(redirectUri),
-                ));
-            // A launch failure: H7's line, then `fail` — the consumer's server's
-            // method, run inside a try: one that throws changes nothing here.
-            const launchFailed = (error: unknown) => {
-              // H7: the launcher is the consumer's, its text foreign — the
-              // line carries `logFields` of its failure and the URL this
-              // strategy announces anyway.
-              const fields = logFields(readFailure(error, 'opening-browser'));
-              logQuietly(() =>
-                request.logger?.error(
-                  `Failed to open browser: ${fields.error}. Open manually: ${url}`,
-                  { ...fields, url },
-                ),
-              );
-              try {
-                server.fail(browserLaunchFailed(error));
-              } catch {
-                // The server's own failure: it ends the scope or it does not.
-              }
-            };
-            // Not awaited: a launcher that hangs must not delay the result or
-            // the release. A synchronous throw is a launch failure; a rejection
-            // is read only from a plain native promise — a foreign thenable's
-            // `then` / `catch` is never called (Task 29 review).
-            let launched: unknown;
+      return await this.options.callbackServer(
+        {
+          port,
+          signal: controller.signal,
+          logger: request.logger,
+        },
+        async (server) => {
+          // Thrown before anything is opened: a redirect the provider cannot
+          // honour must fail here, not as a callback that never arrives.
+          const url = await request.buildAuthorizationUrl(server.redirectUri);
+          // Aborted while the URL was built: nothing is opened.
+          if (controller.signal.aborted) throw abortedLogin('browser');
+          const waiting = server.waitForResult();
+          // Held before it is awaited: a launcher that throws at once leaves
+          // it behind, and a consumer's server may not have marked it
+          // handled (controller addition after Task 23).
+          markHandled(waiting);
+          // Built here, not earlier: the launcher's messages name the URI that is
+          // actually bound, which with `port: 0` nothing knew until now.
+          const open =
+            this.options.openUrl ??
+            ((u: string, which: string, redirectUri: string) =>
+              launchBrowser(
+                u,
+                which,
+                redirectUri,
+                announce,
+                request.logger ?? null,
+                this.options.remoteHint?.(redirectUri),
+              ));
+          // A launch failure: H7's line, then `fail` — the consumer's server's
+          // method, run inside a try: one that throws changes nothing here.
+          const launchFailed = (error: unknown) => {
+            // H7: the launcher is the consumer's, its text foreign — the
+            // line carries `logFields` of its failure and the URL this
+            // strategy announces anyway.
+            const fields = logFields(readFailure(error, 'opening-browser'));
+            logQuietly(() =>
+              request.logger?.error(
+                `Failed to open browser: ${fields.error}. Open manually: ${url}`,
+                { ...fields, url },
+              ),
+            );
             try {
-              launched = open(url, browser, server.redirectUri);
-            } catch (error) {
-              launchFailed(error);
+              server.fail(browserLaunchFailed(error));
+            } catch {
+              // The server's own failure: it ends the scope or it does not.
             }
-            onNativeRejection(launched, launchFailed);
-            return {
-              payload: (await answered(waiting)).value,
-              redirectUri: server.redirectUri,
-            } satisfies AuthorizationOutcome<TResult>;
-          },
-        ),
+          };
+          // Not awaited: a launcher that hangs must not delay the result or
+          // the release. A synchronous throw is a launch failure, and so is a
+          // rejection of what the launcher answered — the consumer's own
+          // code, adopted as `await` would adopt it: a native promise or any
+          // Promises/A+ thenable (the user's decision, 2026-10-07).
+          let launched: unknown;
+          try {
+            launched = open(url, browser, server.redirectUri);
+          } catch (error) {
+            launchFailed(error);
+          }
+          onAnswerRejection(launched, launchFailed);
+          return {
+            payload: await waiting,
+            redirectUri: server.redirectUri,
+          } satisfies AuthorizationOutcome<TResult>;
+        },
       );
-      return value;
     })();
 
     this.inFlight = run;

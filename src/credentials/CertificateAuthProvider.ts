@@ -15,7 +15,6 @@ import {
   certificateNotAfter,
   checkCertificateMaterial,
 } from '../auth/certificateMaterial';
-import { answered } from '../auth/handled';
 import { refuseFor } from '../auth/rejection';
 import { FileCertificateMaterialLoader } from './FileCertificateMaterialLoader';
 
@@ -46,7 +45,7 @@ export class CertificateAuthProvider extends AuthProviderBase {
    */
   protected async onPrepare(): Promise<AuthOutcome> {
     this.material = null;
-    const { value: material } = await answered(this.loader.load(this.config));
+    const material = await this.loader.load(this.config);
     const checked = checkCertificateMaterial(material);
     if (!checked.ok) return checked;
     this.notAfter = certificateNotAfter(material);

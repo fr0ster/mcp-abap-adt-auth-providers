@@ -11,7 +11,6 @@ import type {
 } from '@mcp-abap-adt/interfaces-auth';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
 import { misconfigured, requiredFieldsMissing } from '../auth/configuration';
-import { answered } from '../auth/handled';
 import { buildSamlAuthorizationUrl } from '../auth/saml2Auth';
 import { isShippedValidator } from '../validation/assertionValidator';
 
@@ -217,12 +216,10 @@ export async function getSamlAssertion(
   };
 
   const strategy = config.authorization;
-  const authorize = () => answered(strategy.authorize(request));
+  const authorize = () => strategy.authorize(request);
   // The strategy holds an exclusive resource (a socket, a reader): it starts
   // only once the previous attempt has released its own (the drain).
-  const { value: outcome } = await (attempt
-    ? attempt.exclusive(authorize)
-    : authorize());
+  const outcome = await (attempt ? attempt.exclusive(authorize) : authorize());
   // The second net, for a strategy that never called the builder and so
   // never met the check inside it.
   if (declaredAcs && declaredAcs !== outcome.redirectUri) {

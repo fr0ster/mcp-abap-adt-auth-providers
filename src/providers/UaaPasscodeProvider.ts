@@ -16,7 +16,6 @@ import type {
 } from '@mcp-abap-adt/interfaces-auth';
 import { AUTH_TYPE_PASSWORD } from '@mcp-abap-adt/interfaces-auth';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
-import { answered } from '../auth/handled';
 import { exchangePasscode } from '../auth/passcodeAuth';
 import { refreshJwtToken } from '../auth/tokenRefresher';
 import { manualPasscodeStrategy } from '../strategies/manualStrategies';
@@ -97,14 +96,12 @@ export class UaaPasscodeProvider extends BaseTokenProvider {
     // The passcode page takes no redirect: the code travels by hand. The
     // strategy holds a reader: it starts once the previous attempt's is
     // released (the drain, spec §6b), and the attempt's signal ends it.
-    const { value: outcome } = await attempt.exclusive(() =>
-      answered(
-        strategy.authorize({
-          logger: this.logger,
-          signal: attempt.signal,
-          buildAuthorizationUrl: async () => `${this.baseUrl}/passcode`,
-        }),
-      ),
+    const outcome = await attempt.exclusive(() =>
+      strategy.authorize({
+        logger: this.logger,
+        signal: attempt.signal,
+        buildAuthorizationUrl: async () => `${this.baseUrl}/passcode`,
+      }),
     );
     const passcode = outcome.payload;
 

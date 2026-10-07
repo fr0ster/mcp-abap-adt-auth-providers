@@ -22,7 +22,6 @@ import type {
   IAssertionValidator,
   ValidatedAssertion,
 } from '@mcp-abap-adt/interfaces-auth';
-import { answered } from '../auth/handled';
 
 /**
  * What a site hands `refuse`: the builder's result, typed by its kind alone.
@@ -71,7 +70,7 @@ export async function validateAssertion(
   context: AssertionContext,
 ): Promise<ValidatedAssertion> {
   try {
-    return (await answered(validator.validate(payload, context))).value;
+    return await validator.validate(payload, context);
   } catch (error) {
     throw new AuthProviderFailure(classify(error, 'validating-assertion'));
   }

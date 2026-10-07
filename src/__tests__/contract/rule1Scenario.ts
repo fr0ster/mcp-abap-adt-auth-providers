@@ -29,8 +29,19 @@ import type * as Lib from '../../index';
 
 export const MARKER = 'SECRET-RULE1';
 
-/** Calls of any foreign thenable's `then` / `catch` — the package must make none. */
+/**
+ * Calls of the hostile thenable's `then` / `catch`. As a value the package
+ * classifies (thrown, a rejection reason, a target, a rejection) it crosses
+ * a trust boundary: the package must make none.
+ */
 export const thenCalls = { count: 0 };
+
+/**
+ * Calls of a collaborator's answer's `then`: the answer is the consumer's
+ * own code, awaited normally (the user's decision, 2026-10-07) — counted to
+ * prove it was followed, never refused.
+ */
+export const answerThenCalls = { count: 0 };
 
 /** A foreign thenable whose `then` / `catch` only count their calls. */
 function countingThenable(): object {
@@ -134,8 +145,10 @@ export interface Rule1Report {
 
 /**
  * How a collaborator fails: it throws, answers a rejecting native promise,
- * or answers a foreign thenable that would resolve with the value, reject
- * with it, or throw it from its `then` — whose `then` must never be called.
+ * or answers a foreign (Promises/A+ shaped) thenable that resolves with the
+ * value, rejects with it, or throws it from its `then`. The answer is the
+ * consumer's own code: awaited normally, the resolved value used, the
+ * rejection or the throw classified (the user's decision, 2026-10-07).
  */
 type Mode =
   | 'throws'
@@ -150,6 +163,18 @@ const MODES: readonly Mode[] = [
   'thenable rejecting',
   'thenable whose then throws',
 ];
+
+/**
+ * What the package never awaits: a logger's answer and a target's (a trust
+ * boundary — `markHandled` touches native promises only), and a target
+ * object, which is no answer at all.
+ */
+const NOT_AWAITED = new Set([
+  'logger',
+  'logon target',
+  'request target',
+  'target object',
+]);
 
 /** A collaborator's method: throws `value()` now, or answers its rejection. */
 type Failing = (...args: unknown[]) => never;
@@ -286,9 +311,9 @@ function rows(lib: typeof Lib): Row[] {
       return lib.browserCallbackStrategy({
         port: 0,
         openUrl: launcher,
-        // The test's own bound: a launcher answering a foreign thenable is
-        // never called, so its login waits for a browser that never comes —
-        // as a launcher that succeeded would. The consumer's abort ends it.
+        // The test's own bound: a launcher whose answer resolves has
+        // succeeded, so its login waits for a browser that never comes. The
+        // consumer's abort ends it.
         signal: AbortSignal.timeout(500),
       }) as T;
     const factory = w.hostile('callback server factory');
@@ -720,9 +745,16 @@ export async function run(
   const failures: string[] = [];
   let checks = 0;
 
+  /**
+   * `answered`: the collaborator answered the hostile value as its result
+   * (a thenable resolving) — data the provider uses, not a thrown value. A
+   * value the contract admits as a diagnostic (a registry path, say) may
+   * then appear there, and so in the outcome's JSON; never in the words.
+   */
   const checkOutcome = (
     where: string,
     result: Awaited<ReturnType<typeof settled>>,
+    answered = false,
   ) => {
     checks += 1;
     if (result.status !== 'fulfilled') {
@@ -738,7 +770,7 @@ export async function run(
       failures.push(`${where}: not an outcome`);
       return;
     }
-    if (json(outcome).includes(MARKER))
+    if (!answered && json(outcome).includes(MARKER))
       failures.push(`${where}: marker in JSON`);
     if (outcome.ok) return;
     const refusal = outcome.refusal;
@@ -749,7 +781,7 @@ export async function run(
     const rendered = [
       refusal.reason,
       refusal.hint ?? '',
-      errors.renderDiagnostics(refusal) ?? '',
+      answered ? '' : (errors.renderDiagnostics(refusal) ?? ''),
     ];
     if (rendered.some((text) => text.includes(MARKER))) {
       failures.push(`${where}: marker in reason, hint or diagnostics`);
@@ -818,7 +850,18 @@ export async function run(
         combinations.push(`${row.provider} · ${collaborator}`);
         for (const [valueName, value] of hostileValues()) {
           for (const mode of MODES) {
+            // The hostile thenable as what a collaborator's answer resolves
+            // with is adopted — the consumer's own code — and, its `then`
+            // calling nothing back, never settles: a never-settling answer,
+            // bounded by the consumer's AbortSignal, as any other
+            // (`collaboratorThenables.test.ts`). Not a row of this matrix.
+            if (
+              valueName === 'a foreign thenable' &&
+              mode === 'thenable resolving'
+            )
+              continue;
             const where = `${row.provider} · ${collaborator} · ${valueName} · ${mode}`;
+            const resolvedAnswer = mode === 'thenable resolving';
             let called = 0;
             const fail = ((..._args: unknown[]) => {
               called += 1;
@@ -830,7 +873,7 @@ export async function run(
                   resolve?: (v: unknown) => void,
                   reject?: (e: unknown) => void,
                 ) {
-                  thenCalls.count += 1;
+                  answerThenCalls.count += 1;
                   if (mode === 'thenable resolving') resolve?.(value());
                   else if (mode === 'thenable rejecting') reject?.(value());
                   else throw value();
@@ -883,14 +926,17 @@ export async function run(
             checkOutcome(
               `${where} · prepare`,
               await settled(() => provider.prepare()),
+              resolvedAnswer,
             );
             checkOutcome(
               `${where} · establish`,
               await settled(() => provider.establish(establishWith())),
+              resolvedAnswer,
             );
             checkOutcome(
               `${where} · authorize`,
               await settled(() => provider.authorize(authorizeWith())),
+              resolvedAnswer,
             );
             checkOutcome(
               `${where} · rejected 401`,
@@ -901,6 +947,7 @@ export async function run(
                   error: value(),
                 } as never),
               ),
+              resolvedAnswer,
             );
             checkOutcome(
               `${where} · rejected RFC_LOGON_FAILURE`,
@@ -910,14 +957,17 @@ export async function run(
                   error: { key: 'RFC_LOGON_FAILURE', message: MARKER },
                 } as never),
               ),
+              resolvedAnswer,
             );
             checkOutcome(
               `${where} · rejected with the value itself`,
               await settled(() => provider.rejected(value() as never)),
+              resolvedAnswer,
             );
             checkOutcome(
               `${where} · authorize again`,
               await settled(() => provider.authorize(authorizeWith())),
+              resolvedAnswer,
             );
             if (row.token) {
               const tokens = provider as unknown as {
@@ -930,10 +980,17 @@ export async function run(
             }
             if (thenCalls.count > 0) {
               failures.push(
-                `${where}: a foreign then was called ${thenCalls.count} time(s)`,
+                `${where}: a classified thenable's then was called ${thenCalls.count} time(s)`,
               );
               thenCalls.count = 0;
             }
+            if (
+              mode.startsWith('thenable') &&
+              !NOT_AWAITED.has(collaborator) &&
+              answerThenCalls.count === 0
+            )
+              failures.push(`${where}: the answer was never followed`);
+            answerThenCalls.count = 0;
             if (called === 0)
               failures.push(`${where}: collaborator never called`);
           }

@@ -30,9 +30,8 @@ import type {
 } from '@mcp-abap-adt/interfaces-auth';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
 import { AuthProviderBase } from '../auth/AuthProviderBase';
-import { throwIfAborted } from '../auth/attempt';
+import { throwIfAborted, untilAborted } from '../auth/attempt';
 import { misconfigured } from '../auth/configuration';
-import { answered } from '../auth/handled';
 import { readSafely } from '../auth/knownCodes';
 import { readRejection } from '../auth/rejection';
 import { logQuietly } from '../auth/tokenRequest';
@@ -220,7 +219,13 @@ export class SncLogonProvider extends AuthProviderBase {
   private async resolve(signal: AbortSignal | undefined): Promise<AuthOutcome> {
     let found: SncLibrary;
     try {
-      found = (await answered(this.locator.locate(signal))).value;
+      // The locator is the consumer's: its answer — any promise, Bluebird
+      // or Q included — is awaited as it is, and stops being waited for at
+      // the parties' abort, whether or not it honours the signal.
+      found = await untilAborted(
+        Promise.resolve(this.locator.locate(signal)),
+        signal,
+      );
     } catch (error) {
       throwIfAborted(signal);
       // G5–G7 only from the shipped locator (the approved source of the
@@ -252,7 +257,12 @@ export class SncLogonProvider extends AuthProviderBase {
     let applying: ISncProductProbe | undefined;
     for (const probe of this.probes) {
       try {
-        if ((await answered(probe.appliesTo(library.path, signal))).value) {
+        if (
+          await untilAborted(
+            Promise.resolve(probe.appliesTo(library.path, signal)),
+            signal,
+          )
+        ) {
           applying = probe;
           break;
         }

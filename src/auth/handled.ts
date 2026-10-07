@@ -1,10 +1,16 @@
 /**
- * Marking a promise this package holds — but may never await — handled,
- * without running a consumer's code (spec §8.3, rule 1; controller additions
- * after Tasks 22 and 23). A consumer's method may answer a rejecting promise
- * where none is expected: an async logger, a request target's `header` or
- * `cookies`, a callback server's `waitForResult()` the strategy never reaches
- * its `await` for. Left alone, it raises `unhandledRejection`.
+ * Marking a promise this package holds — but may never await — handled
+ * (spec §8.3, rule 1; controller additions after Tasks 22 and 23). A
+ * consumer's method may answer a rejecting promise where none is expected:
+ * an async logger, a request target's `header` or `cookies`, a callback
+ * server's `waitForResult()` the strategy never reaches its `await` for.
+ * Left alone, it raises `unhandledRejection`.
+ *
+ * Where a value crosses a trust boundary (a target's answer, a value being
+ * classified) a foreign `then` is never called: `markHandled` touches plain
+ * native promises only. A collaborator's answer that this package awaits is
+ * awaited normally (the user's decision, 2026-10-07): the consumer's own
+ * code, Bluebird or Q included, inside the guarded boundary.
  */
 
 import { isPromise, isProxy } from 'node:util/types';
@@ -21,12 +27,6 @@ const promiseThen = Function.prototype.call.bind(Promise.prototype.then) as (
   onRejected: (error: unknown) => void,
 ) => Promise<unknown>;
 const ignoreRejection = (): void => undefined;
-const promiseThen2 = Function.prototype.call.bind(Promise.prototype.then) as <
-  R,
->(
-  promise: Promise<unknown>,
-  onFulfilled: (value: unknown) => R,
-) => Promise<R>;
 
 /**
  * Whether calling `then` on `value` runs no code but the engine's: a plain
@@ -66,19 +66,22 @@ export function markHandled(value: unknown): void {
 }
 
 /**
- * Runs `handler` with the rejection of `value` when — and only when — it is a
- * plain native promise, through the `then` captured at load; anything else
- * (a foreign thenable, a subclass, a Proxy, a non-promise) is left alone and
- * its code never runs. A handler that throws is contained, and the derived
- * promise is marked handled: nothing here can raise `unhandledRejection`.
- * Never throws.
+ * Runs `handler` with the rejection of a collaborator's answer that this
+ * package does not await (the browser launcher's): the answer is the
+ * consumer's own code, so it is adopted as any `await` would adopt it — a
+ * native promise, a Promise subclass or any Promises/A+ thenable (Bluebird,
+ * Q) — through a native promise this module creates: its `then` is read
+ * here and called in a later job. A `then` that throws, or a `then`
+ * getter or Proxy trap that throws, is a rejection like any other. A handler
+ * that throws is contained, and the derived promise is marked handled:
+ * nothing here can raise `unhandledRejection`. Never throws.
  */
-export function onNativeRejection(
+export function onAnswerRejection(
   value: unknown,
   handler: (error: unknown) => void,
 ): void {
-  if (!isPlainPromise(value)) return;
-  const derived = promiseThen(value, undefined, (error) => {
+  const adopted = new NativePromise<unknown>((resolve) => resolve(value));
+  const derived = promiseThen(adopted, undefined, (error) => {
     try {
       handler(error);
     } catch {
@@ -86,73 +89,4 @@ export function onNativeRejection(
     }
   });
   markHandled(derived);
-}
-
-/**
- * A collaborator's answer, boxed: the box is a plain object with no
- * prototype, so resolving with it never reads a `then`.
- */
-export interface Answered<T> {
-  readonly value: T;
-}
-
-/**
- * What a refused answer rejects with: no `Error` and no words of its own —
- * whoever catches it classifies it with its own operation (`unknown`).
- */
-const FOREIGN_THENABLE = Object.freeze({ answer: 'foreign-thenable' });
-
-function box<T>(value: T): Answered<T> {
-  const answered = Object.create(null) as { value: T };
-  answered.value = value;
-  return answered;
-}
-
-/**
- * Whether reading or awaiting `value` could run a consumer's code as a
- * thenable: a Proxy (its traps run on any read), or an object or function
- * with a `then` — a getter or a function — anywhere on its prototype chain,
- * read by descriptor so no getter runs. Never throws (a throwing read is
- * "yes": fail closed).
- */
-function looksThenable(value: unknown): boolean {
-  try {
-    if (
-      (typeof value !== 'object' && typeof value !== 'function') ||
-      value === null
-    ) {
-      return false;
-    }
-    if (isProxy(value)) return true;
-    for (
-      let at: object | null = value;
-      at !== null;
-      at = Object.getPrototypeOf(at) as object | null
-    ) {
-      if (isProxy(at)) return true;
-      const then = Reflect.getOwnPropertyDescriptor(at, 'then');
-      if (then !== undefined) {
-        return then.get !== undefined || typeof then.value === 'function';
-      }
-    }
-    return false;
-  } catch {
-    return true;
-  }
-}
-
-/**
- * What a collaborator answered — a value or a promise of one — as a native
- * promise of a box (Task 29 review): a plain native promise is followed
- * through the `then` captured at load; any other thenable is refused with
- * fixed words, its `then` never called; a plain value is boxed as it is.
- * Awaiting the result runs no consumer code. A collaborator that throws
- * synchronously is the caller's to catch, as before.
- */
-export function answered<T>(value: T | PromiseLike<T>): Promise<Answered<T>> {
-  if (isPlainPromise(value)) {
-    return promiseThen2(value, (fulfilled) => box(fulfilled as T));
-  }
-  if (looksThenable(value)) return NativePromise.reject(FOREIGN_THENABLE);
-  return NativePromise.resolve(box(value as T));
 }

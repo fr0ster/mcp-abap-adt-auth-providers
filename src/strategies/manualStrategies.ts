@@ -15,7 +15,6 @@ import type {
 } from '@mcp-abap-adt/interfaces-auth';
 import { announcer } from '../auth/announce';
 import { extractCode } from '../auth/browserAuth';
-import { answered } from '../auth/handled';
 import { abortedLogin, loginFailure } from '../auth/interactiveLogin';
 import { signalOf } from '../auth/signalledRequest';
 import { DEFAULT_CALLBACK_PORT } from './BrowserCallbackStrategy';
@@ -112,11 +111,7 @@ function manualStrategy(
       if (signals.some((signal) => signal?.aborted)) controller.abort();
       const working = (async () => {
         if (controller.signal.aborted) throw abortedLogin('manual');
-        return await run(
-          request,
-          async (prompt) =>
-            (await answered(read(prompt, controller.signal))).value,
-        );
+        return await run(request, (prompt) => read(prompt, controller.signal));
       })();
       inFlight.set(
         controller,

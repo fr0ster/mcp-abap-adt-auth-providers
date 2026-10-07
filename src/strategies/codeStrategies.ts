@@ -14,7 +14,6 @@ import type {
 } from '@mcp-abap-adt/interfaces-auth';
 import { throwIfAborted, untilAborted } from '../auth/attempt';
 import { misconfigured } from '../auth/configuration';
-import { answered } from '../auth/handled';
 import { loginFailure } from '../auth/interactiveLogin';
 import { signalOf } from '../auth/signalledRequest';
 import { DEFAULT_CALLBACK_PORT } from './BrowserCallbackStrategy';
@@ -63,8 +62,8 @@ export function externalCodeStrategy(
         signal,
       );
       throwIfAborted(signal);
-      const { value: payload } = await untilAborted(
-        answered(options.provide(url, signal)),
+      const payload = await untilAborted(
+        Promise.resolve(options.provide(url, signal)),
         signal,
       );
       if (!payload) {

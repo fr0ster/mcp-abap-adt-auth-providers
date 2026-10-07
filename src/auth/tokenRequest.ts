@@ -44,7 +44,7 @@ import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
 import axios, { type AxiosRequestConfig, type AxiosResponse } from 'axios';
 import { abortedFailure } from './attempt';
 import { assertNotExpired } from './certificateMaterial';
-import { answered, markHandled } from './handled';
+import { markHandled } from './handled';
 import {
   allowlistedCode,
   integerStatus,
@@ -272,9 +272,8 @@ export async function prepareTokenRequest(
     clientId: grant.clientId,
     grantType: grant.grantType,
   };
-  const result: ITokenRequestAuthentication | null | undefined = (
-    await answered(auth.strategy.authenticate(draft))
-  ).value;
+  const result: ITokenRequestAuthentication | null | undefined =
+    await auth.strategy.authenticate(draft);
   if (!result || typeof result !== 'object') unusable();
 
   const parameters = stringRecord(result.parameters);
