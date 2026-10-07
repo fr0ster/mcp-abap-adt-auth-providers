@@ -1353,46 +1353,63 @@ own while a login waits, and the user ends up logged in as someone else
 (RFC 6749 §10.12; RFC 9700 §2.1, §4.7). A login that waits longer after a
 launcher failure (§6a0) widens that window.
 
-- **The provider mints `state`.** Every authorization URL a provider builds
-  (`AuthorizationCodeProvider`, `OidcBrowserProvider`) carries `state`:
-  32 random bytes from `node:crypto`, base64url, new for every attempt
-  (every call of `buildAuthorizationUrl`). It is never logged and never in a
-  refusal.
-- **The shipped callback strategies check it, before the callback counts.**
-  `BrowserCallbackStrategy` (browser, OIDC) reads the `state` of the URL it
-  was handed by `buildAuthorizationUrl` — so the contract between provider
-  and strategy does not change — and accepts a callback only when its
-  `state` equals that one, compared in constant time. A callback whose
-  `state` is missing or different is answered `400` with fixed words,
-  counted with the ignored callbacks (its `aborted` words report the count)
-  and ignored: the login keeps waiting for the real one, as for a callback
-  carrying neither payload nor error. An `?error=` from the IdP is
-  accepted as today only with the matching `state`; otherwise it is
-  ignored the same way, so a forged error cannot end the login either.
-- **Manual and static strategies.** `manualPasteStrategy` compares the
-  `state` when the user pastes a whole redirected URL that carries one, and
-  refuses the paste (fixed words, the reader asks again) when it differs; a
-  bare code carries none and is accepted — the user typed it, there is no
-  forged redirect. `staticCodeStrategy` / `externalCodeStrategy`: the
-  consumer's code is the decision. A consumer's own redirect strategy must
-  check `state` itself — the README says so beside the strategy contract.
-- **PKCE for UAA.** `AuthorizationCodeProvider` sends `code_challenge`
-  (S256) and `code_challenge_method` in the authorization URL and
-  `code_verifier` in the code exchange, as `OidcBrowserProvider` does —
-  independent of the strategy, so a forged code fails at the token endpoint
-  even under a consumer's strategy that skips the `state` check. UAA
-  supports PKCE (to be measured on the provider stand); XSUAA (Inference
-  until measured on the trial).
+- **The provider mints `state` and the PKCE pair — only for a URL it
+  builds.** Every authorization URL a provider builds itself
+  (`AuthorizationCodeProvider`, `OidcBrowserProvider`, in
+  `buildAuthorizationUrl`) carries `state` — 32 random bytes from
+  `node:crypto`, base64url, new for every call — and, for UAA too, a PKCE
+  pair (S256), as OIDC already does. The verifier is kept with that attempt
+  and sent in its code exchange. Neither is logged or in a refusal.
+- **What the consumer brings is the consumer's.** A configured
+  `authorizationUrl` is returned unchanged, as today: the provider adds no
+  `state` and no challenge it could not verify, and sends no
+  `code_verifier`. A code from `staticCodeStrategy` / `externalCodeStrategy`
+  that never called `buildAuthorizationUrl` is exchanged without a
+  `code_verifier`, as today. Binding such a code (its `state`, its PKCE) is
+  the consumer's; the README says so. (A consumer that wants PKCE with its
+  own URL lets the provider build the URL.)
+- **The transport checks `state` before anything settles.** The callback
+  transport is where a forged request must stop: the shipped OAuth servers
+  settle on the first callback, an `?error=` ends the scope, and
+  `waitForResult()` returns the same promise every time, so a check after
+  the wait cannot resume waiting. interfaces-auth 7.3.0 adds an optional
+  member to `ICallbackServerHandle`: `expectState(state: string): void`.
+  Once called, the shipped transports (`browserCallbackServer`,
+  `oidcCallbackServer`) accept a callback — a code or an `?error=` — only
+  when its `state` equals the expected one, compared in constant time
+  (`crypto.timingSafeEqual` over equal-length buffers); any other request
+  to the callback is answered `400` in fixed words, counted with the ignored
+  callbacks (the `aborted` words report the count) and ignored — the login
+  keeps waiting for the real one. `BrowserCallbackStrategy` reads the
+  `state` of the URL `buildAuthorizationUrl` returned (parsed with `URL`,
+  no regex) and, when it carries one, calls `expectState` before it opens
+  the browser.
+- **A consumer's transport without `expectState`.** When the URL carries a
+  `state` and the injected `callbackServer` handle has no `expectState`,
+  the strategy refuses to start the login — `configuration` `invalid-value`,
+  `fields: ['callbackServer']` — and opens nothing: it cannot keep the
+  promise that a forged callback is ignored, and it does not guess.
+  `CONFIG_FIELDS` gains `callbackServer` in 7.3.0. A URL without `state`
+  (a configured `authorizationUrl`) needs no gate.
+- **Manual paste.** `manualPasteStrategy` compares the `state` of a pasted
+  redirected URL with the one of the URL it showed, constant time, and asks
+  again on a mismatch (fixed words); a bare code carries none and is
+  accepted — the user typed it; no forged redirect reaches a reader.
 - **SAML** is out of this section: its request is bound by `InResponseTo`
   (or declared IdP-initiated), checked by the assertion validator.
 
-Tests: a callback with a missing, a different and a correct `state` on a
-real port (the first two `400` and ignored, the login then completes with
-the third); a forged `?error=` with a wrong `state` ignored; constant-time
-comparison used (source test); a fresh `state` per attempt; UAA's URL
-carries `state`, `code_challenge`, `code_challenge_method=S256`, and the
-exchange `code_verifier` (shape test and the stand); a forged code with a
-wrong verifier refused by the stand's UAA. Load-bearing: accept any `state`
+Tests: on a real port, through both shipped transports — a callback with a
+missing, a different and then the correct `state` (the first two `400`,
+counted, ignored; the login completes with the third); a forged `?error=`
+with a wrong `state` ignored, the real one then accepted; a consumer
+transport without `expectState` and a URL with `state` → refused before
+anything opens; a configured `authorizationUrl` → no `state`, no
+`code_verifier`, no gate (as today); `staticCodeStrategy` → exchange
+without `code_verifier`; a fresh `state` and verifier per attempt;
+constant-time comparison (source test); UAA's URL carries `state`,
+`code_challenge`, `code_challenge_method=S256` and the exchange
+`code_verifier` (shape test and the stand); the stand's UAA accepts the PKCE
+login and refuses a code exchanged with a wrong verifier. Load-bearing: accept any `state`
 → the forged-callback cases red; drop PKCE → the stand's wrong-verifier
 case red.
 
