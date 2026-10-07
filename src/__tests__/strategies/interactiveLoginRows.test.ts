@@ -243,8 +243,84 @@ describe('A.3 — browser login rows', () => {
       'Failed to open browser: opening the browser failed (unknown error, ENOENT)',
     );
     expect(JSON.stringify(lines)).not.toContain('idp.example');
-    expect(JSON.stringify(prompts)).not.toContain('idp.example');
     expect(JSON.stringify(lines)).not.toContain('SECRET-PATH');
+    // The URL reaches the user as a prompt (the announcer: the logger's
+    // `info`), so the hint names something the user can see.
+    expect(prompts).toEqual([
+      ['🔗 The browser could not be opened. The authorization URL:'],
+      ['   https://idp.example/authorize'],
+    ]);
+  });
+
+  it('K5 without a logger: the URL is prompted on stderr, nothing on stdout', async () => {
+    const err: string[] = [];
+    const out: string[] = [];
+    const stderr = jest
+      .spyOn(process.stderr, 'write')
+      .mockImplementation((chunk: unknown) => {
+        err.push(String(chunk));
+        return true;
+      });
+    const stdout = jest
+      .spyOn(process.stdout, 'write')
+      .mockImplementation((chunk: unknown) => {
+        out.push(String(chunk));
+        return true;
+      });
+    let thrown: unknown;
+    try {
+      thrown = await rejection(
+        browserCallbackStrategy({
+          port: PORT,
+          openUrl: () => {
+            throw Object.assign(new Error('spawn SECRET-PATH'), {
+              code: 'ENOENT',
+            });
+          },
+        }).authorize(
+          request(async (uri) => `https://idp.example/authorize?r=${uri}`),
+        ),
+      );
+    } finally {
+      stderr.mockRestore();
+      stdout.mockRestore();
+    }
+    expect(readFailure(thrown, 'browser-login').facts).toEqual({
+      outcome: 'browser-launch-failed',
+      code: 'ENOENT',
+    });
+    expect(err).toEqual([
+      '🔗 The browser could not be opened. The authorization URL:\n',
+      `   https://idp.example/authorize?r=http://localhost:${PORT}/callback\n`,
+    ]);
+    expect(out).toEqual([]);
+    expect(err.join('')).not.toContain('SECRET-PATH');
+  });
+
+  it('K5: a URL that is not promptable is named in fixed words, never shown', async () => {
+    const prompts: unknown[][] = [];
+    const logger: ILogger = {
+      debug: () => undefined,
+      info: (...args: unknown[]) => {
+        prompts.push(args);
+      },
+      warn: () => undefined,
+      error: () => undefined,
+    };
+    await rejection(
+      browserCallbackStrategy({
+        port: PORT,
+        openUrl: async () => {
+          throw new Error('nope');
+        },
+      }).authorize({
+        ...request(async () => 'javascript:alert(1)//SECRET'),
+        logger,
+      }),
+    );
+    expect(prompts).toEqual([
+      ['❌ The authorization URL is not an http(s) URL that can be shown.'],
+    ]);
   });
 
   it('K8: waiting after the scope ended → callback-closed', async () => {

@@ -697,7 +697,14 @@ describe('no message of a thrown error in the logs', () => {
       error: 'opening the browser failed (unknown error)',
       kind: 'unknown',
     });
-    expect(JSON.stringify(entries)).not.toContain('idp.example');
+    // The URL reaches no log line — only the prompt (the announcer's
+    // `info`), the two lines naming the URL to open by hand.
+    const prompts = entries.filter((e) => e.message.includes('idp.example'));
+    expect(prompts.map((e) => e.level)).toEqual(['info']);
+    expect(prompts[0]?.message).toMatch(
+      /^ {3}https:\/\/idp\.example\/authorize\?redirect_uri=http:\/\/localhost:\d+\/callback$/,
+    );
+    expect(JSON.stringify(line)).not.toContain('idp.example');
   });
 
   it('H8 — `open` that rejects, and the shell-free fallback that fails', async () => {

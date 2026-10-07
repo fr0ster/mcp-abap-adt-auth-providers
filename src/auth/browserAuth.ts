@@ -239,11 +239,11 @@ const OPEN_THIS_URL = '🔗 Open this URL in your browser to authenticate:';
  * ASCII — since it may come from discovery or configuration; one that is not
  * admitted is named in fixed words, never shown.
  */
-function promptForUrl(
+export function promptForUrl(
   announce: (msg: string) => void,
   lead: string,
   authorizationUrl: string,
-  callbackUri: string,
+  callbackUri: string | undefined,
 ): void {
   const shownUrl = promptableUrl(authorizationUrl);
   if (shownUrl === undefined) {
@@ -254,6 +254,8 @@ function promptForUrl(
     announce(lead);
     announce(`   ${shownUrl}`);
   }
+  // No callback: the login is about to end, so nothing waits for one.
+  if (callbackUri === undefined) return;
   const shownCallback = promptableUrl(callbackUri);
   announce(
     shownCallback === undefined

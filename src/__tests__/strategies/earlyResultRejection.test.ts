@@ -47,13 +47,16 @@ describe('a callback server whose result rejects early, never awaited', () => {
     [
       'a launcher that throws synchronously',
       `() => { throw new Error('sync'); }`,
+      // The launch failure's prompt (no logger: stderr) — and nothing else.
+      '🔗 The browser could not be opened. The authorization URL:\n' +
+        '   https://idp.example/a?r=http://127.0.0.1:1/callback\n',
     ],
-    ['a launcher that answers no promise', `() => undefined`],
-  ])('%s: no unhandled rejection', (_name, openUrl) => {
+    ['a launcher that answers no promise', `() => undefined`, ''],
+  ])('%s: no unhandled rejection', (_name, openUrl, stderr) => {
     const run = runPlainNode<{ kind: string; thenRan: boolean }>(
       scenario(openUrl, REJECTING),
     );
-    expect(run.stderr).toBe('');
+    expect(run.stderr).toBe(stderr);
     expect(run.result).toEqual({ kind: 'interactive-login', thenRan: false });
     expect(run.unhandled).toEqual([]);
   });

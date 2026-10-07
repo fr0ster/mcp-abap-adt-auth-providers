@@ -20,7 +20,7 @@ import type {
   IAuthorizationStrategy,
 } from '@mcp-abap-adt/interfaces-auth';
 import { announcer } from '../auth/announce';
-import { launchBrowser } from '../auth/browserAuth';
+import { launchBrowser, promptForUrl } from '../auth/browserAuth';
 import {
   validatePort,
   withBrowserCallbackServer,
@@ -204,14 +204,25 @@ export class BrowserCallbackStrategy<TResult>
           const launchFailed = (error: unknown) => {
             // H7: the launcher is the consumer's, its text foreign — the
             // line carries `logFields` of its failure and no URL (one from
-            // discovery or configuration is no fixed fact). The login ends
-            // here (`fail`), so there is nothing left to open by hand.
+            // discovery or configuration is no fixed fact).
             const fields = logFields(readFailure(error, 'opening-browser'));
             logQuietly(() =>
               request.logger?.error(
                 `Failed to open browser: ${fields.error}`,
                 fields,
               ),
+            );
+            // The URL goes to the user as a prompt — the announcer (the
+            // logger's `info`, else stderr; never stdout), only as
+            // `promptableUrl` admits it — before the login ends, so the
+            // failure's hint ("open the authorization URL by hand") names
+            // something the user can see. No callback is promised: the
+            // login ends here (`fail`).
+            promptForUrl(
+              announce,
+              '🔗 The browser could not be opened. The authorization URL:',
+              url,
+              undefined,
             );
             try {
               server.fail(browserLaunchFailed(error));

@@ -69,7 +69,10 @@ against the published 5.4.2.
   carries fixed words and admitted facts only, `authDebug` or not. The
   authorization URL and the device flow's verification URI still reach the
   user — in the **prompt**, and only as an `http:` / `https:` serialisation of
-  printable ASCII; one that cannot be shown so is named in fixed words.
+  printable ASCII; one that cannot be shown so is named in fixed words. A
+  launcher that fails (`browser-launch-failed`) gets its fixed-words error
+  line, and the authorization URL is prompted before the login ends, so the
+  failure's hint — open the URL by hand — names something the user can see.
   `consoleDeviceCodePresenter` shows the user code only when it is printable
   ASCII and rejects without a showable URI and code (`device-code-not-shown`).
   The manual strategies' prompt is two lines, never one line with a line
