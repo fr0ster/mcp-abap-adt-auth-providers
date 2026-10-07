@@ -11,6 +11,7 @@ import { join } from 'node:path';
 import { beforeEach, describe, expect, it, jest } from '@jest/globals';
 import { isAuthProviderFailure, readFailure } from '@mcp-abap-adt/auth-errors';
 import type {
+  AuthorizationRequest,
   IAssertionValidator,
   ICertificateMaterial,
   IClientAuthentication,
@@ -775,16 +776,23 @@ describe('no message of a thrown error in the logs', () => {
         throw new Error(MARKER);
       },
     });
-    const failure = await strategy
+    // A launcher that fails ends nothing (Task 30h): the login waits, and
+    // the test's own signal ends it once the line and the prompt are out.
+    const controller = new AbortController();
+    const login = strategy
       .authorize({
         buildAuthorizationUrl: async (redirectUri) =>
           `https://idp.example/authorize?redirect_uri=${redirectUri}`,
         logger,
-      })
+        signal: controller.signal,
+      } as AuthorizationRequest)
       .then(
         () => undefined,
         (error: unknown) => error,
       );
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    controller.abort();
+    const failure = await login;
     await strategy.dispose?.();
     expect(isAuthProviderFailure(failure)).toBe(true);
     expect(JSON.stringify(failure)).not.toContain(MARKER);
@@ -798,7 +806,8 @@ describe('no message of a thrown error in the logs', () => {
       kind: 'unknown',
     });
     // The URL reaches no log line — only the prompt (the announcer's
-    // `info`), the two lines naming the URL to open by hand.
+    // `info`), the line naming the URL to open by hand — the callback still
+    // listening for it.
     const prompts = entries.filter((e) => e.message.includes('idp.example'));
     expect(prompts.map((e) => e.level)).toEqual(['info']);
     expect(prompts[0]?.message).toMatch(

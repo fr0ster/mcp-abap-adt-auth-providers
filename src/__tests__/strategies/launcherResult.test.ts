@@ -3,8 +3,9 @@
  * launcher (`openUrl`) answers is the consumer's own code — adopted as
  * `await` would adopt it, so a native promise or any Promises/A+ thenable
  * that rejects (or whose `then` throws) is a launch failure, and one that
- * never settles is a launcher that succeeded. The consumer server's
- * `fail()` runs inside a try, so a `fail()` that throws raises no
+ * never settles is a launcher that succeeded. Since Task 30h a launch failure
+ * ends nothing: the server's `fail()` is never called, the login waits for
+ * its result (here the server's own, after 200 ms), and the failure raises no
  * `unhandledRejection`. Run under plain node in a child process, bounded by
  * the test.
  */
@@ -12,7 +13,7 @@
 import { describe, expect, it } from '@jest/globals';
 import { runPlainNode } from '../helpers/plainNode';
 
-const scenario = (openUrl: string, failThrows: boolean) => `
+const scenario = (openUrl: string) => `
 const { BrowserCallbackStrategy } = lib;
 const seen = { thenCalls: 0, failCalls: 0 };
 const factory = async (_options, use) => {
@@ -26,7 +27,6 @@ const factory = async (_options, use) => {
     fail: (error) => {
       seen.failCalls += 1;
       settle.reject(error);
-      if (${failThrows}) throw new Error('fail threw: SECRET');
     },
   });
 };
@@ -52,48 +52,36 @@ const THEN_THROWS = `() => ({ then() { seen.thenCalls += 1; throw new Error('the
 describe('the launcher’s answer is adopted, whatever promise it is', () => {
   it.each([
     [
-      'a rejecting launcher, fail() throws',
-      REJECTING,
-      true,
-      { outcome: 'failed', thenCalls: 0, failCalls: 1 },
-    ],
-    [
       'a rejecting launcher',
       REJECTING,
-      false,
-      { outcome: 'failed', thenCalls: 0, failCalls: 1 },
+      { outcome: 'payload:code', thenCalls: 0, failCalls: 0 },
     ],
     [
       'a launcher answering a thenable that never settles',
       NEVER,
-      false,
       { outcome: 'payload:code', thenCalls: 1, failCalls: 0 },
     ],
     [
-      'a launcher answering a rejecting Promises/A+ thenable, fail() throws',
+      'a launcher answering a rejecting Promises/A+ thenable',
       APLUS_REJECTING,
-      true,
-      { outcome: 'failed', thenCalls: 1, failCalls: 1 },
+      { outcome: 'payload:code', thenCalls: 1, failCalls: 0 },
     ],
     [
       'a launcher answering a thenable whose then throws',
       THEN_THROWS,
-      false,
-      { outcome: 'failed', thenCalls: 1, failCalls: 1 },
+      { outcome: 'payload:code', thenCalls: 1, failCalls: 0 },
     ],
     [
-      'a launcher throwing synchronously, fail() throws',
+      'a launcher throwing synchronously',
       `() => { throw new Error('sync: SECRET'); }`,
-      true,
-      { outcome: 'failed', thenCalls: 0, failCalls: 1 },
+      { outcome: 'payload:code', thenCalls: 0, failCalls: 0 },
     ],
   ] as const)(
-    '%s: no unhandled rejection, the login ends as it should',
-    (_name, openUrl, failThrows, expected) => {
-      const run = runPlainNode<Record<string, unknown>>(
-        scenario(openUrl, failThrows),
-        { boundMs: 30_000 },
-      );
+    '%s: no unhandled rejection, fail() never called, the login waits for its result',
+    (_name, openUrl, expected) => {
+      const run = runPlainNode<Record<string, unknown>>(scenario(openUrl), {
+        boundMs: 30_000,
+      });
       expect(run.timedOut).toBe(false);
       expect(run.result).toEqual(expected);
       expect(run.unhandled).toEqual([]);

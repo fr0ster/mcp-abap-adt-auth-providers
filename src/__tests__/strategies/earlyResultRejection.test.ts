@@ -47,9 +47,11 @@ describe('a callback server whose result rejects early, never awaited', () => {
     [
       'a launcher that throws synchronously',
       `() => { throw new Error('sync'); }`,
-      // The launch failure's prompt (no logger: stderr) — and nothing else.
+      // The launch failure's prompt (no logger: stderr), the callback still
+      // awaited — and nothing else.
       '🔗 The browser could not be opened. The authorization URL:\n' +
-        '   https://idp.example/a?r=http://127.0.0.1:1/callback\n',
+        '   https://idp.example/a?r=http://127.0.0.1:1/callback\n' +
+        '   Waiting for callback on http://127.0.0.1:1/callback ...\n',
     ],
     ['a launcher that answers no promise', `() => undefined`, ''],
   ])('%s: no unhandled rejection', (_name, openUrl, stderr) => {

@@ -29,7 +29,6 @@ import { ownOptions } from '../auth/configuration';
 import { markHandled, onAnswerRejection } from '../auth/handled';
 import {
   abortedLogin,
-  browserLaunchFailed,
   failedLogin,
   loginFailure,
   portInUse,
@@ -199,8 +198,11 @@ export class BrowserCallbackStrategy<TResult>
                 request.logger ?? null,
                 this.options.remoteHint?.(redirectUri),
               ));
-          // A launch failure: H7's line, then `fail` — the consumer's server's
-          // method, run inside a try: one that throws changes nothing here.
+          // A launch failure: H7's line, then the prompt — and the login
+          // goes on waiting (spec §6a0). Where no browser can be opened the
+          // URL shown is the only way to finish the login, so the callback
+          // must still listen for it; the login ends on its result, the
+          // IdP's refusal or the consumer's signal, never on this.
           const launchFailed = (error: unknown) => {
             // H7: the launcher is the consumer's, its text foreign — the
             // line carries `logFields` of its failure and no URL (one from
@@ -214,21 +216,13 @@ export class BrowserCallbackStrategy<TResult>
             );
             // The URL goes to the user as a prompt — the announcer (the
             // logger's `info`, else stderr; never stdout), only as
-            // `promptableUrl` admits it — before the login ends, so the
-            // failure's hint ("open the authorization URL by hand") names
-            // something the user can see. No callback is promised: the
-            // login ends here (`fail`).
+            // `promptableUrl` admits it — with the callback still waiting.
             promptForUrl(
               announce,
               '🔗 The browser could not be opened. The authorization URL:',
               url,
-              undefined,
+              server.redirectUri,
             );
-            try {
-              server.fail(browserLaunchFailed(error));
-            } catch {
-              // The server's own failure: it ends the scope or it does not.
-            }
           };
           // Not awaited: a launcher that hangs must not delay the result or
           // the release. A synchronous throw is a launch failure, and so is a

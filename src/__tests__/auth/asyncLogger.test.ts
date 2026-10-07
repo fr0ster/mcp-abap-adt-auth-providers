@@ -161,10 +161,17 @@ await settle(async () => (await strategies.browserCallbackStrategy({
     await get(redirectUri + '?code=c1');
   },
 }).authorize({ buildAuthorizationUrl: async () => 'https://idp.example/a', logger })).payload);
-await settle(async () => (await strategies.browserCallbackStrategy({
-  port: 0,
-  openUrl: async () => { throw Object.assign(new Error('x'), { code: 'ENOENT' }); },
-}).authorize({ buildAuthorizationUrl: async () => 'https://idp.example/a', logger })).payload);
+// A launcher that fails ends nothing (Task 30h): its line and prompt go
+// through the same logger, and the consumer's signal ends the login.
+await settle(async () => {
+  const controller = new AbortController();
+  const login = strategies.browserCallbackStrategy({
+    port: 0,
+    openUrl: async () => { throw Object.assign(new Error('x'), { code: 'ENOENT' }); },
+  }).authorize({ buildAuthorizationUrl: async () => 'https://idp.example/a', logger, signal: controller.signal });
+  setTimeout(() => controller.abort(), 200);
+  return (await login).payload;
+});
 await settle(async () => (await strategies.manualPasteStrategy({
   read: async () => 'c2',
 }).authorize({ buildAuthorizationUrl: async () => 'https://idp.example/a', logger })).payload);
@@ -176,10 +183,10 @@ report(outcomes);
 `;
 
 describe('the interactive login with a consumer logger', () => {
-  const expected = ['c1', 'failed', 'c2', 'shown'];
+  const expected = ['c1', 'aborted', 'c2', 'shown'];
   /**
    * The test's own bound on the child (Task 29 ruling): a login that never
-   * ends — an unguarded H7 line throwing before `server.fail` — kills the
+   * ends — an unguarded H7 line throwing before the prompt — kills the
    * child here and fails the test, instead of hanging it.
    */
   const BOUND_MS = 30_000;

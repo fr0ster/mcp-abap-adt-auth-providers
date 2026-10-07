@@ -65,6 +65,20 @@ function portIsFree(port: number): Promise<boolean> {
   });
 }
 
+/**
+ * Runs a login whose launcher fails: it keeps waiting (Task 30h), so the
+ * test's own signal ends it, once the prompt has been shown.
+ */
+async function endedByAbort(
+  start: (signal: AbortSignal) => Promise<unknown>,
+): Promise<unknown> {
+  const controller = new AbortController();
+  const ended = rejection(start(controller.signal));
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  controller.abort();
+  return await ended;
+}
+
 /** Opens the redirect with `query`, as a browser would. */
 const visit =
   (query: string) =>
@@ -208,9 +222,10 @@ describe('A.3 — browser login rows', () => {
     });
   });
 
-  // Bridge until Task 30h: interfaces-auth 7.0.0 removed the
-  // `browser-launch-failed` outcome; the launcher's failure is `failed`.
-  it('K5: a launcher that fails → failed, its allowlisted code only', async () => {
+  // Task 30h: a launcher that fails is no end of the login (interfaces-auth 7
+  // removed the `browser-launch-failed` outcome): its line and the prompt,
+  // then the login waits — here the test's own signal ends it.
+  it('K5: a launcher that fails → one fixed-words line, the URL prompted, the login still waiting', async () => {
     const lines: unknown[][] = [];
     const prompts: unknown[][] = [];
     const logger: ILogger = {
@@ -223,7 +238,7 @@ describe('A.3 — browser login rows', () => {
         lines.push(args);
       },
     };
-    const thrown = await rejection(
+    const thrown = await endedByAbort((signal) =>
       browserCallbackStrategy({
         port: PORT,
         openUrl: async () => {
@@ -231,13 +246,12 @@ describe('A.3 — browser login rows', () => {
             code: 'ENOENT',
           });
         },
-      }).authorize({ ...request(), logger }),
+      }).authorize({ ...request(), logger, signal } as AuthorizationRequest),
     );
-    expect(rowOf(thrown)).toEqual({
-      kind: 'interactive-login',
-      facts: { outcome: 'failed', code: 'ENOENT' },
-      reason: 'the browser login failed (unknown error, ENOENT)',
-      hint: 'complete the login, or abort it',
+    // Not the launcher's failure: the signal ended it.
+    expect(readFailure(thrown, 'browser-login').facts).toEqual({
+      outcome: 'aborted',
+      strategy: 'browser',
     });
     // H7: the URL is in neither the failure nor the error line.
     expect((thrown as Error).message).not.toContain('idp.example');
@@ -252,6 +266,7 @@ describe('A.3 — browser login rows', () => {
     expect(prompts).toEqual([
       ['🔗 The browser could not be opened. The authorization URL:'],
       ['   https://idp.example/authorize'],
+      [`   Waiting for callback on http://localhost:${PORT}/callback ...`],
     ]);
   });
 
@@ -270,9 +285,8 @@ describe('A.3 — browser login rows', () => {
         out.push(String(chunk));
         return true;
       });
-    let thrown: unknown;
     try {
-      thrown = await rejection(
+      await endedByAbort((signal) =>
         browserCallbackStrategy({
           port: PORT,
           openUrl: () => {
@@ -280,21 +294,19 @@ describe('A.3 — browser login rows', () => {
               code: 'ENOENT',
             });
           },
-        }).authorize(
-          request(async (uri) => `https://idp.example/authorize?r=${uri}`),
-        ),
+        }).authorize({
+          ...request(async (uri) => `https://idp.example/authorize?r=${uri}`),
+          signal,
+        } as AuthorizationRequest),
       );
     } finally {
       stderr.mockRestore();
       stdout.mockRestore();
     }
-    expect(readFailure(thrown, 'browser-login').facts).toEqual({
-      outcome: 'failed',
-      code: 'ENOENT',
-    });
     expect(err).toEqual([
       '🔗 The browser could not be opened. The authorization URL:\n',
       `   https://idp.example/authorize?r=http://localhost:${PORT}/callback\n`,
+      `   Waiting for callback on http://localhost:${PORT}/callback ...\n`,
     ]);
     expect(out).toEqual([]);
     expect(err.join('')).not.toContain('SECRET-PATH');
@@ -310,7 +322,7 @@ describe('A.3 — browser login rows', () => {
       warn: () => undefined,
       error: () => undefined,
     };
-    await rejection(
+    await endedByAbort((signal) =>
       browserCallbackStrategy({
         port: PORT,
         openUrl: async () => {
@@ -319,10 +331,12 @@ describe('A.3 — browser login rows', () => {
       }).authorize({
         ...request(async () => 'javascript:alert(1)//SECRET'),
         logger,
-      }),
+        signal,
+      } as AuthorizationRequest),
     );
     expect(prompts).toEqual([
       ['❌ The authorization URL is not an http(s) URL that can be shown.'],
+      [`   Waiting for callback on http://localhost:${PORT}/callback ...`],
     ]);
   });
 

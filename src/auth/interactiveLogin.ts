@@ -65,19 +65,6 @@ function systemCodeOf(error: unknown) {
 }
 
 /**
- * K5: the browser launcher failed — its allowlisted code, nothing else.
- * Bridge until Task 30h: interfaces-auth 7.0.0 removed the
- * `browser-launch-failed` outcome, so the failure is `failed` with the code.
- */
-export function browserLaunchFailed(error: unknown): AuthProviderFailure {
-  const code = systemCodeOf(error);
-  return loginFailure({
-    outcome: 'failed',
-    ...(code === undefined ? {} : { code }),
-  });
-}
-
-/**
  * K11: anything else that ends a browser login — a consumer's transport, a
  * foreign rejection: its integer HTTP status (own or its response's), a
  * registered OAuth `error` (own `oauthError`, or its response body's) and an
