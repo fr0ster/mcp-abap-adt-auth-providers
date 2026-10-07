@@ -1440,9 +1440,15 @@ launcher failure (§6a0) widens that window.
   `state` — so `…/callback&code=EVIL` cannot pass as a code that skips the
   check (`manualPasteStrategy` and `/submit` alike).
 - **`port: 0` and the second family.** The `::1` listener takes the port the
-  OS gave `127.0.0.1`; when that port is not free on `::1`, the transport
-  stays on `127.0.0.1` alone (logged in fixed words) rather than failing the
-  login.
+  OS gave `127.0.0.1`. When that port is not free on `::1`, the login fails
+  `port-in-use`, as for a fixed port — it never stays on `127.0.0.1` alone:
+  the redirect URI says `localhost`, which resolves to `::1` first, so the
+  process holding `[::1]:<port>` would receive the code and `state` (measured).
+  Retrying is the consumer's.
+- **A loopback name is never an allowed authority.** An `allowedHosts`
+  entry naming `localhost`, `127.0.0.1` or `[::1]` admits nothing from a
+  non-loopback peer — the loopback names count only from a loopback peer,
+  whatever the list says.
 
 - **The paste route of the UAA transport.** `browserCallbackServer` also
   settles through its paste page (`GET /` serves a form, `GET /submit?input=`
