@@ -756,8 +756,9 @@ callback-after-prompt case red; drop the prompt → its case red.
 ### Task 30i: auth-providers — `state` on every redirect, PKCE for UAA
 
 Repository auth-providers, PR #68. After 30h. Spec §6a1. Publish
-dependency: interfaces-auth 7.3.0 (`ICallbackServerHandle.expectState?`,
-`CONFIG_FIELDS` + `callbackServer`), released first, one PR in the
+dependency: interfaces-auth 7.3.0 (`ICallbackServerOptions.gated?`,
+`ICallbackServerHandle.expectState?(state | null)`, `CONFIG_FIELDS` +
+`callbackServer`), released first, one PR in the
 interfaces repository, merged/tagged/published by the user.
 
 **Steps:**
@@ -771,9 +772,10 @@ interfaces repository, merged/tagged/published by the user.
 - [ ] Providers mint `state` (and, for UAA, the PKCE pair) per attempt,
   only for a URL they build; a configured `authorizationUrl` and a static /
   external code stay unbound, as today. The shipped transports implement
-  `expectState` and gate every callback (code and `?error=`) before
-  settling; `BrowserCallbackStrategy` calls it, or refuses a transport
-  without it when the URL carries `state`; `manualPasteStrategy` compares a
+  `gated` (closed from the bind on) and `expectState`, gating every callback
+  (code and `?error=`) before settling; `BrowserCallbackStrategy` opens them
+  gated, arms them after building the URL and before opening the browser,
+  or refuses a transport without `expectState`; `manualPasteStrategy` compares a
   pasted URL's `state`. Constant time; nothing logs it.
 - [ ] README: the strategy contract (a consumer's redirect strategy must
   check `state`), the login CSRF note; CHANGELOG `Security`.

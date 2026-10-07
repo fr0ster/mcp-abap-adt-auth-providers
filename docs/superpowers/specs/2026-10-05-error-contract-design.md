@@ -1368,29 +1368,35 @@ launcher failure (§6a0) widens that window.
   `code_verifier`, as today. Binding such a code (its `state`, its PKCE) is
   the consumer's; the README says so. (A consumer that wants PKCE with its
   own URL lets the provider build the URL.)
-- **The transport checks `state` before anything settles.** The callback
+- **The transport is closed until the strategy arms it.** The callback
   transport is where a forged request must stop: the shipped OAuth servers
   settle on the first callback, an `?error=` ends the scope, and
   `waitForResult()` returns the same promise every time, so a check after
-  the wait cannot resume waiting. interfaces-auth 7.3.0 adds an optional
-  member to `ICallbackServerHandle`: `expectState(state: string): void`.
-  Once called, the shipped transports (`browserCallbackServer`,
-  `oidcCallbackServer`) accept a callback — a code or an `?error=` — only
-  when its `state` equals the expected one, compared in constant time
-  (`crypto.timingSafeEqual` over equal-length buffers); any other request
-  to the callback is answered `400` in fixed words, counted with the ignored
-  callbacks (the `aborted` words report the count) and ignored — the login
-  keeps waiting for the real one. `BrowserCallbackStrategy` reads the
-  `state` of the URL `buildAuthorizationUrl` returned (parsed with `URL`,
-  no regex) and, when it carries one, calls `expectState` before it opens
-  the browser.
-- **A consumer's transport without `expectState`.** When the URL carries a
-  `state` and the injected `callbackServer` handle has no `expectState`,
-  the strategy refuses to start the login — `configuration` `invalid-value`,
-  `fields: ['callbackServer']` — and opens nothing: it cannot keep the
-  promise that a forged callback is ignored, and it does not guess.
-  `CONFIG_FIELDS` gains `callbackServer` in 7.3.0. A URL without `state`
-  (a configured `authorizationUrl`) needs no gate.
+  the wait cannot resume waiting. And the socket listens before the URL
+  exists — `OidcBrowserProvider`'s builder may await discovery — so a gate
+  armed after `buildAuthorizationUrl` would leave that window open.
+  interfaces-auth 7.3.0 therefore adds, both optional:
+  - `ICallbackServerOptions.gated?: boolean` — `true`: from the bind on,
+    every request to the callback (a code or an `?error=`) is answered `400`
+    in fixed words, counted with the ignored callbacks and ignored, until
+    the strategy arms the gate;
+  - `ICallbackServerHandle.expectState?(state: string | null): void` — arms
+    it: a string accepts only callbacks whose `state` equals it, compared in
+    constant time (`crypto.timingSafeEqual` over equal-length buffers),
+    every other request still `400`, counted and ignored, the login waiting
+    for the real one; `null` declares an unbound URL (a configured
+    `authorizationUrl` without `state`) and accepts callbacks as today.
+  Without `gated` a transport behaves as before (an additive change).
+  `BrowserCallbackStrategy` always opens its transport with `gated: true`,
+  builds the URL, reads its `state` (parsed with `URL`, no regex), calls
+  `expectState(state ?? null)`, and only then opens the browser.
+- **A consumer's transport without `expectState`.** When the injected
+  `callbackServer` handle has no `expectState`, the strategy refuses the
+  login before opening anything — `configuration` `invalid-value`,
+  `fields: ['callbackServer']` — and uses no result that transport may have
+  settled meanwhile: it cannot keep the promise that a forged callback is
+  ignored, and it does not guess. `CONFIG_FIELDS` gains `callbackServer` in
+  7.3.0.
 - **Manual paste.** `manualPasteStrategy` compares the `state` of a pasted
   redirected URL with the one of the URL it showed, constant time, and asks
   again on a mismatch (fixed words); a bare code carries none and is
@@ -1398,8 +1404,11 @@ launcher failure (§6a0) widens that window.
 - **SAML** is out of this section: its request is bound by `InResponseTo`
   (or declared IdP-initiated), checked by the assertion validator.
 
-Tests: on a real port, through both shipped transports — a callback with a
-missing, a different and then the correct `state` (the first two `400`,
+Tests: on a real port, through both shipped transports — with
+`buildAuthorizationUrl` deliberately blocked, a forged code and a forged
+`?error=` sent before the gate is armed are `400`, counted and ignored, and
+the login then completes; a callback with a missing, a different and then
+the correct `state` (the first two `400`,
 counted, ignored; the login completes with the third); a forged `?error=`
 with a wrong `state` ignored, the real one then accepted; a consumer
 transport without `expectState` and a URL with `state` → refused before
