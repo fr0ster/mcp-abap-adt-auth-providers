@@ -152,17 +152,24 @@ passes over the spec kept finding memory and storage out of step.
      It reports every change of its credentials to the persistence strategy
      as facts — a credential committed (the access token, and a new refresh
      token or none), a refresh token discarded — once each, in commit order,
-     generation-safe, from the commit queue; a report the strategy fails is
-     logged (fixed words) and not repeated. The persistence strategy is the
-     one collaborator that receives token values: it is the consumer's
-     store.
+     generation-safe, from the commit queue, and never repeats a report on
+     its own. **A report the strategy fails fails the call that caused it:**
+     what it throws (or rejects with) is classified, like any collaborator's,
+     and is what that `getTokens()` / `refreshTokens()` / moment answers; the
+     committed credentials stay committed in memory (they are the server's
+     state). Best effort is not the provider's choice: a strategy that wants
+     to go on after a failed write catches its own failure. The persistence
+     strategy is the one collaborator that receives token values: it is the
+     consumer's store.
    - *The persistence strategy's decisions.* What is written, what is
      cleared, how a store that falls back to a stored refresh token is kept
      from restoring a discarded one, and what happens after a failed write
      (retry, re-send with the next report, give up) are its own. The shipped
-     factory keeps today's guarantees for the broker's store: a discarded
-     refresh token is never restored by a later write, and a failed
-     `'clear'` or `'replace'` is delivered again with the next report.
+     factory keeps today's guarantees for the broker's store: best effort
+     (it catches a failed write, logs it in fixed words and goes on, as
+     `onTokens` failures do today), a discarded refresh token never restored
+     by a later write, and a failed `'clear'` or `'replace'` delivered again
+     with the next report.
      Without a persistence strategy nothing is persisted.
 9. **Rule 5 is a reading, not a guard** (decided by the user 2026-10-07).
    The provider still reads every rejection by rule 5 — a `401` or
