@@ -984,13 +984,23 @@ export abstract class BaseTokenProvider
     // The refresh token the last step sent before it failed, if it did.
     let sentToken: string | undefined;
     for (;;) {
+      // The strategy gets frozen copies; the provider decides from its own
+      // `start` and `steps`, never from what it handed out.
+      const canRefresh = this.canRefresh();
       const situation: RenewalSituation = Object.freeze({
-        cause: start.cause,
+        cause: frozenCause(start.cause),
         moment: start.moment,
-        canRefresh: this.canRefresh(),
-        steps: Object.freeze([...steps]),
+        canRefresh,
+        steps: Object.freeze(steps.map(frozenOutcome)),
       });
-      const decision = await this.decide(situation, sentToken, signal);
+      const decision = await this.decide(situation, {
+        canRefresh,
+        sentRequired: needsSentDecision(steps),
+        sentToken,
+        trigger: start.cause.trigger,
+        moment: start.moment,
+        signal,
+      });
       // Apply `sentRefreshToken` first, through the commit queue.
       if (decision.sentRefreshToken === 'discard' && sentToken !== undefined) {
         const spent = sentToken;
@@ -1028,9 +1038,16 @@ export abstract class BaseTokenProvider
    */
   private async decide(
     situation: RenewalSituation,
-    sentToken: string | undefined,
-    signal: AbortSignal,
+    own: {
+      readonly canRefresh: boolean;
+      readonly sentRequired: boolean;
+      readonly sentToken: string | undefined;
+      readonly trigger: RenewalCause['trigger'];
+      readonly moment: RenewalMoment;
+      readonly signal: AbortSignal;
+    },
   ): Promise<RenewalDecision> {
+    const { sentToken, signal } = own;
     this.deliverObservations();
     throwIfAborted(signal);
     let answer: unknown;
@@ -1054,8 +1071,8 @@ export abstract class BaseTokenProvider
       throw this.strategyFailure();
     }
     const decision = readDecision(answer, {
-      canRefresh: situation.canRefresh,
-      sentRequired: needsSentDecision(situation.steps),
+      canRefresh: own.canRefresh,
+      sentRequired: own.sentRequired,
     });
     // A refresh of the very token this decision discards cannot run.
     if (
@@ -1067,8 +1084,8 @@ export abstract class BaseTokenProvider
       throw this.strategyFailure();
     }
     // Allowlisted values only (spec §6c.9).
-    const trigger = situation.cause.trigger;
-    const moment = situation.moment;
+    const trigger = own.trigger;
+    const moment = own.moment;
     const next = decision.next;
     logQuietly(() =>
       this.logger?.debug('[BaseTokenProvider] Renewal step', {
@@ -1126,7 +1143,12 @@ export abstract class BaseTokenProvider
    * first of a queued microtask or the start of the next `next()`.
    */
   private observe(observation: RenewalAbortObservation): void {
-    this.observations.push(Object.freeze(observation));
+    this.observations.push(
+      Object.freeze({
+        ...observation,
+        cause: frozenCause(observation.cause),
+      }),
+    );
     queueMicrotask(() => this.deliverObservations());
   }
 
@@ -1907,6 +1929,19 @@ export abstract class BaseTokenProvider
       request.header('Authorization', `Bearer ${result.authorizationToken}`),
     );
   }
+}
+
+/**
+ * A frozen copy of a cause, to hand to the strategy (review M-1). Its
+ * errors are minted, frozen already, and shared as they are.
+ */
+function frozenCause(cause: RenewalCause): RenewalCause {
+  return Object.freeze({ ...cause });
+}
+
+/** A frozen copy of a step outcome, to hand to the strategy. */
+function frozenOutcome(outcome: RenewalStepOutcome): RenewalStepOutcome {
+  return Object.freeze({ ...outcome });
 }
 
 /** A17: a held token bound to a certificate while none is pinned. */

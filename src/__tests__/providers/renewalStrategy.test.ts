@@ -824,3 +824,92 @@ describe('a refresh commit that fails (review I-2, spec §6c.6)', () => {
     expect(provider.held()).toMatchObject({ access: T1, refresh: 'S' });
   });
 });
+
+describe('the strategy gets frozen copies; the provider reads back nothing it handed out (review M-1)', () => {
+  /** Tries `change`; a frozen object refuses it, which the strategy ignores. */
+  const attempt = (change: () => void) => {
+    try {
+      change();
+    } catch {
+      // Frozen: the strategy carries on.
+    }
+  };
+
+  it('a strategy rewriting its cause changes nothing a stop answers', async () => {
+    const strategy: IRenewalStrategy = {
+      next: (situation) => {
+        const cause = situation.cause as unknown as Record<string, unknown>;
+        attempt(() => {
+          cause.trigger = 'rejected';
+        });
+        attempt(() => {
+          cause.refusal = { kind: 'unknown', reason: 'SECRET' };
+        });
+        return { next: 'stop' };
+      },
+    };
+    const provider = new ScriptedProvider({
+      renewal: strategy,
+      accessToken: jwt('held', -3600),
+    });
+    const error = errorOf(await rejectionOf(provider.getTokens()));
+    expect(error.kind).toBe('renewal-declined');
+    expect(error.facts).toEqual({ trigger: 'expired' });
+  });
+
+  it('a strategy rewriting the steps cannot bypass a required sentRefreshToken', async () => {
+    const strategy: IRenewalStrategy = {
+      next: (situation) => {
+        if (situation.steps.length === 0) {
+          return { next: 'refresh', ifCut: 'discard' };
+        }
+        const steps = situation.steps as unknown as Record<string, unknown>[];
+        attempt(() => {
+          (steps[0] as Record<string, unknown>).sent = false;
+        });
+        attempt(() => {
+          steps.length = 0;
+        });
+        return { next: 'login' };
+      },
+    };
+    const provider = seeded(strategy);
+    const thrown = rejectionOf(provider.getTokens());
+    (await provider.refreshes.nth(1)).result.reject(refused());
+    expectStrategyFailure(await thrown);
+    expect(provider.logins.items).toHaveLength(0);
+    expect(provider.held().refresh).toBe('R');
+  });
+
+  it('every object handed to next() and aborted() is frozen, deep', async () => {
+    const seen: unknown[] = [];
+    const strategy: IRenewalStrategy = {
+      next: (situation) => {
+        seen.push(
+          situation,
+          situation.cause,
+          situation.steps,
+          ...situation.steps,
+        );
+        return refreshThenLogin().next(situation);
+      },
+      aborted: (observation) => {
+        seen.push(observation, observation.cause);
+      },
+    };
+    const provider = seeded(strategy);
+    const first = provider.getTokens();
+    (await provider.refreshes.nth(1)).result.reject(refused());
+    (await provider.logins.nth(1)).result.resolve(tokens(jwt('in'), 'S'));
+    await first;
+    provider.expire();
+    const cut = new AbortController();
+    const second = rejectionOf(provider.getTokens({ signal: cut.signal }));
+    await provider.refreshes.nth(2);
+    cut.abort();
+    await second;
+    await quiet();
+    expect(seen.length).toBeGreaterThan(5);
+    for (const value of seen) expect(Object.isFrozen(value)).toBe(true);
+  });
+});
