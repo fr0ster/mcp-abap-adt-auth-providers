@@ -17,6 +17,7 @@ import {
   oidcIssuerRequired,
   ownOptions,
 } from '../auth/configuration';
+import { mintSecret } from '../auth/loginState';
 import type { OidcCallbackResult } from '../auth/oidcBrowserAuth';
 import { discoverOidc, mtlsAlias } from '../auth/oidcDiscovery';
 import { generatePkceChallenge, generatePkceVerifier } from '../auth/oidcPkce';
@@ -110,8 +111,9 @@ export class OidcBrowserProvider extends BaseTokenProvider {
       return discovery;
     };
 
-    const verifier = generatePkceVerifier();
-    const challenge = generatePkceChallenge(verifier);
+    // Login CSRF (spec §6a1): the PKCE verifier of the last URL this
+    // attempt built, sent in its exchange; none when no URL was built.
+    let codeVerifier: string | undefined;
     const scope = (
       this.config.scopes && this.config.scopes.length > 0
         ? this.config.scopes
@@ -129,13 +131,17 @@ export class OidcBrowserProvider extends BaseTokenProvider {
         if (!endpoint) {
           throw oidcEndpointMissing('authorizationEndpoint');
         }
+        // A fresh state and PKCE pair for every URL built.
+        const verifier = generatePkceVerifier();
         const params = new URLSearchParams();
         params.append('response_type', 'code');
         params.append('client_id', this.config.clientId);
         params.append('redirect_uri', redirectUri);
         params.append('scope', scope);
-        params.append('code_challenge', challenge);
+        params.append('state', mintSecret());
+        params.append('code_challenge', generatePkceChallenge(verifier));
         params.append('code_challenge_method', 'S256');
+        codeVerifier = verifier;
         return `${endpoint}?${params.toString()}`;
       },
     };
@@ -159,7 +165,7 @@ export class OidcBrowserProvider extends BaseTokenProvider {
       this.config.clientSecret,
       outcome.payload.code,
       outcome.redirectUri,
-      verifier,
+      codeVerifier,
       this.logger,
       // The alias belongs to the discovered endpoint only.
       await this.requestAuth(mtlsAlias(discovered, 'token_endpoint')),

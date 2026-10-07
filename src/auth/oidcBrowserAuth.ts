@@ -30,6 +30,9 @@ export const withOidcCallbackServer: CallbackServerFactory<
     options,
     (app, settle) => {
       app.get('/callback', (req, res) => {
+        // The gate first (spec §6a1): a forged code and a forged error alike
+        // stop here, answered 400, counted and ignored.
+        if (!settle.admit(req.query.state, res)) return;
         // An IdP that declines says so explicitly. That is a finished login,
         // not a stray request: it ends the login at once.
         const { error, error_description } = req.query;

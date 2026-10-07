@@ -106,14 +106,27 @@ function valueUntilBreak(text: string, start: number): string {
 }
 
 /**
+ * What binds a UAA login to its attempt (spec §6a1): the `state` the
+ * callback must carry and the PKCE challenge (S256) of the verifier its
+ * exchange sends. Minted per URL by the provider; never logged.
+ */
+export interface AuthorizationBinding {
+  readonly state: string;
+  readonly codeChallenge: string;
+}
+
+/**
  * Build the OAuth2 authorization URL for a redirect URI that is already known.
  *
  * The URI is a parameter rather than a port because the port may have been
  * chosen by the OS moments earlier — see `ICallbackServerOptions.port`.
+ * With a `binding`, the URL carries its `state`, `code_challenge` and
+ * `code_challenge_method=S256`.
  */
 export function getJwtAuthorizationUrl(
   authConfig: IAuthorizationConfig,
   redirectUri: string,
+  binding?: AuthorizationBinding,
 ): string {
   const oauthUrl = authConfig.uaaUrl;
   const clientid = authConfig.uaaClientId;
@@ -126,7 +139,10 @@ export function getJwtAuthorizationUrl(
     ]);
   }
 
-  return `${oauthUrl}/oauth/authorize?client_id=${encodeURIComponent(clientid)}&redirect_uri=${encodeURIComponent(redirectUri)}&response_type=code`;
+  const bound = binding
+    ? `&state=${encodeURIComponent(binding.state)}&code_challenge=${encodeURIComponent(binding.codeChallenge)}&code_challenge_method=S256`
+    : '';
+  return `${oauthUrl}/oauth/authorize?client_id=${encodeURIComponent(clientid)}&redirect_uri=${encodeURIComponent(redirectUri)}&response_type=code${bound}`;
 }
 
 /**
@@ -140,6 +156,8 @@ export async function exchangeCodeForToken(
   log?: ILogger | null,
   auth?: TokenRequestAuth,
   options?: TokenSiteOptions,
+  /** The PKCE verifier of the URL this code answers; none for a code the consumer brought. */
+  codeVerifier?: string,
 ): Promise<{ accessToken: string; refreshToken?: string | undefined }> {
   const {
     uaaUrl: url,
@@ -152,6 +170,7 @@ export async function exchangeCodeForToken(
   params.append('grant_type', 'authorization_code');
   params.append('code', code);
   params.append('redirect_uri', redirectUri);
+  if (codeVerifier !== undefined) params.append('code_verifier', codeVerifier);
 
   const prepared = auth
     ? await prepareTokenRequest(

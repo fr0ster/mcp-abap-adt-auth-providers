@@ -11,6 +11,13 @@
  * on its result, the identity provider's refusal or the consumer's
  * `AbortSignal` — `ICallbackServerOptions.signal`, the only way a scope ends
  * without a result (interfaces-auth 6.0.0 declares no bound).
+ *
+ * Login CSRF (spec §6a1). The scope listens on loopback unless the consumer
+ * names a `host`, and answers only a `Host` it serves for — loopback with the
+ * bound port, or one of the consumer's `allowedHosts` — before any route
+ * runs. Opened `gated`, it settles nothing until `expectState` arms it, and
+ * then only a callback carrying the armed `state`; every other request is
+ * answered `400`, counted and ignored, and the login keeps waiting.
  */
 
 import * as http from 'node:http';
@@ -31,6 +38,7 @@ import {
   loginFailure,
   portInUse,
 } from './interactiveLogin';
+import { mintSecret, pasteMatches, sameSecret } from './loginState';
 import { logQuietly } from './tokenRequest';
 
 /**
@@ -51,12 +59,34 @@ export interface Settle<TResult> {
    * is the only value of the request named in the warning line.
    */
   ignore(reason: IgnoredCallbackReason, res?: express.Response): void;
+  /**
+   * The gate (spec §6a1): whether a callback carrying `state` may settle
+   * anything — the gate open (not `gated`, or armed with `null`), or armed
+   * with exactly this `state` (constant time). When not, the request is
+   * answered `400` in fixed words, counted and ignored here, and the route
+   * returns. A payload and an explicit error pass through it alike.
+   */
+  admit(state: unknown, res: express.Response): boolean;
+  /** This login's paste-form token; `undefined` while the gate is closed. */
+  formToken(): string | undefined;
+  /** Whether `token` is this login's form token (constant time). */
+  admitsForm(token: unknown): boolean;
+  /**
+   * Whether a pasted input fits this login: a bare code always; a redirected
+   * URL only with the armed `state` (any, when armed with `null`).
+   */
+  pasteMatches(input: string): boolean;
 }
 
 /** Why a request to the callback was ignored: fixed words only. */
 export type IgnoredCallbackReason =
   | 'no code and no error in query'
-  | 'no SAMLResponse in the request';
+  | 'no SAMLResponse in the request'
+  | 'the login is not armed yet'
+  | 'the state is not this login’s'
+  | 'no form token of this login'
+  | 'the pasted URL is not from this login'
+  | 'a host this server does not answer for';
 
 export type RouteSetup<TResult> = (
   app: express.Express,
@@ -105,6 +135,138 @@ function bindFailure(error: unknown, port: number): Error {
   return failedLogin(error);
 }
 
+/** An authority (`host` or `host:port`), its host lowercased. */
+interface Authority {
+  readonly host: string;
+  readonly port: number | undefined;
+}
+
+/**
+ * Reads `host[:port]` or `[v6]:port` by plain code — a `Host` header is
+ * anyone's text. `undefined` for anything else: no host, a bare IPv6
+ * address, a port that is not 0..65535 in digits.
+ */
+export function parseAuthority(value: unknown): Authority | undefined {
+  if (typeof value !== 'string') return undefined;
+  const text = value.toLowerCase();
+  let host: string;
+  let rest: string;
+  if (text.startsWith('[')) {
+    const close = text.indexOf(']');
+    if (close < 0) return undefined;
+    host = text.slice(0, close + 1);
+    rest = text.slice(close + 1);
+  } else {
+    const colon = text.indexOf(':');
+    if (colon !== text.lastIndexOf(':')) return undefined;
+    host = colon < 0 ? text : text.slice(0, colon);
+    rest = colon < 0 ? '' : text.slice(colon);
+  }
+  if (!hostCharacters(host)) return undefined;
+  if (rest === '') return { host, port: undefined };
+  const digits = rest.slice(1);
+  if (
+    !rest.startsWith(':') ||
+    digits === '' ||
+    digits.length > 5 ||
+    [...digits].some((digit) => digit < '0' || digit > '9')
+  ) {
+    return undefined;
+  }
+  const port = Number(digits);
+  return port > 65535 ? undefined : { host, port };
+}
+
+/**
+ * A DNS name or IPv4 address (letters, digits, `.`, `-`), or a bracketed
+ * IPv6 address (hex digits, `:`, `.`): nothing else is a host here.
+ */
+function hostCharacters(host: string): boolean {
+  const bracketed = host.startsWith('[');
+  const inner = bracketed ? host.slice(1, -1) : host;
+  if (inner === '') return false;
+  for (const character of inner) {
+    const digit = character >= '0' && character <= '9';
+    const allowed = bracketed
+      ? digit ||
+        (character >= 'a' && character <= 'f') ||
+        character === ':' ||
+        character === '.'
+      : digit ||
+        (character >= 'a' && character <= 'z') ||
+        character === '.' ||
+        character === '-';
+    if (!allowed) return false;
+  }
+  return true;
+}
+
+/** The names a browser on this machine uses for the loopback transport. */
+const LOOPBACK_NAMES: readonly string[] = ['localhost', '127.0.0.1', '[::1]'];
+
+/**
+ * Whether a request's `Host` names this transport: a loopback name with the
+ * bound port, or one of the consumer's authorities (an entry without a port
+ * meaning the bound port). A `Host` without a port is port 80, as HTTP has
+ * it.
+ */
+function answersFor(
+  hostHeader: unknown,
+  boundPort: number,
+  allowed: readonly Authority[],
+): boolean {
+  const asked = parseAuthority(hostHeader);
+  if (!asked) return false;
+  const askedPort = asked.port ?? 80;
+  if (LOOPBACK_NAMES.includes(asked.host)) return askedPort === boundPort;
+  return allowed.some(
+    (entry) =>
+      entry.host === asked.host && (entry.port ?? boundPort) === askedPort,
+  );
+}
+
+/** The consumer's `allowedHosts`: entries that are not authorities match nothing. */
+function allowedAuthorities(value: unknown): Authority[] {
+  if (!Array.isArray(value)) return [];
+  const read: Authority[] = [];
+  for (const entry of value as unknown[]) {
+    const authority = parseAuthority(entry);
+    if (authority) read.push(authority);
+  }
+  return read;
+}
+
+/**
+ * Where the transport listens: the consumer's `host`, else loopback —
+ * `127.0.0.1` and `::1`, the two addresses `localhost` resolves to.
+ */
+function bindAddresses(host: unknown): {
+  first: string;
+  more: readonly string[];
+} {
+  return typeof host === 'string' && host !== ''
+    ? { first: host, more: [] }
+    : { first: '127.0.0.1', more: ['::1'] };
+}
+
+/** A machine without IPv6 loopback: the `::1` half is skipped, not fatal. */
+function unavailableAddress(error: unknown): boolean {
+  if (error === null || typeof error !== 'object' || !('code' in error)) {
+    return false;
+  }
+  return error.code === 'EADDRNOTAVAIL' || error.code === 'EAFNOSUPPORT';
+}
+
+/** The gate's state: closed until armed, then bound to a state or not. */
+type Gate =
+  | { readonly open: false }
+  | {
+      readonly open: true;
+      /** The armed `state`; `null` for an unbound URL. */
+      readonly bound: string | null;
+      readonly formToken: string;
+    };
+
 /**
  * Owns the socket for the duration of `use`.
  *
@@ -118,9 +280,18 @@ export async function runCallbackScope<TResult, TReturn>(
   use: (server: ICallbackServerHandle<TResult>) => Promise<TReturn>,
 ): Promise<TReturn> {
   // Read once as own data: a hostile object throws nothing of its own.
-  const { port, signal, logger } = ownOptions<ICallbackServerOptions>(options);
+  const { port, signal, logger, host, allowedHosts, gated } =
+    ownOptions<ICallbackServerOptions>(options);
   validatePort(port);
   if (signal?.aborted) throw abortedLogin('browser');
+  const allowed = allowedAuthorities(allowedHosts);
+  const addresses = bindAddresses(host);
+  /** The port the OS gave; `0` until bound (no request arrives before). */
+  let boundPort = 0;
+  let gate: Gate =
+    gated === true
+      ? { open: false }
+      : { open: true, bound: null, formToken: mintSecret() };
 
   const app = express();
   // Every response: no sniffing, and a policy that runs no script, loads
@@ -131,32 +302,38 @@ export async function runCallbackScope<TResult, TReturn>(
     res.setHeader('Content-Security-Policy', CALLBACK_CSP);
     next();
   });
-  const server = http.createServer(app);
+  /** One listener per bind address, all serving the same routes. */
+  const servers: http.Server[] = [];
   /** Every open connection, and how many responses each is still writing. */
   const sockets = new Map<Socket, number>();
   /** The request each connection is serving, to tell an unfinished body. */
   const requests = new Map<Socket, http.IncomingMessage>();
   let released = false;
-  server.on('connection', (socket: Socket) => {
-    sockets.set(socket, 0);
-    socket.on('close', () => {
-      sockets.delete(socket);
-      requests.delete(socket);
-    });
-  });
-  server.on(
-    'request',
-    (req: http.IncomingMessage, res: http.ServerResponse) => {
-      const socket = req.socket;
-      sockets.set(socket, (sockets.get(socket) ?? 0) + 1);
-      requests.set(socket, req);
-      res.once('close', () => {
-        const left = (sockets.get(socket) ?? 1) - 1;
-        if (sockets.has(socket)) sockets.set(socket, left);
-        if (released && left <= 0) letGo(socket);
+  const newServer = (): http.Server => {
+    const server = http.createServer(app);
+    server.on('connection', (socket: Socket) => {
+      sockets.set(socket, 0);
+      socket.on('close', () => {
+        sockets.delete(socket);
+        requests.delete(socket);
       });
-    },
-  );
+    });
+    server.on(
+      'request',
+      (req: http.IncomingMessage, res: http.ServerResponse) => {
+        const socket = req.socket;
+        sockets.set(socket, (sockets.get(socket) ?? 0) + 1);
+        requests.set(socket, req);
+        res.once('close', () => {
+          const left = (sockets.get(socket) ?? 1) - 1;
+          if (sockets.has(socket)) sockets.set(socket, left);
+          if (released && left <= 0) letGo(socket);
+        });
+      },
+    );
+    servers.push(server);
+    return server;
+  };
 
   let resultSettled = false;
   let resolveResult!: (value: TResult) => void;
@@ -189,6 +366,13 @@ export async function runCallbackScope<TResult, TReturn>(
     else rejectResult(outcome.error);
   };
 
+  /**
+   * Settles once every bind begun has finished: a listen still resolving
+   * its address when the scope ends completes afterwards, and is closed
+   * then — so a settled scope still means the port is free.
+   */
+  let binding: Promise<void> = Promise.resolve();
+
   /** The one place a scope ends. Everything after the first call is a no-op. */
   const endScope = (outcome: { value: TReturn } | { error: Error }): void => {
     if (scopeSettled) return;
@@ -197,8 +381,11 @@ export async function runCallbackScope<TResult, TReturn>(
     signal?.removeEventListener('abort', onAbort);
     settleResult({ error: callbackClosed() });
     release();
-    if ('value' in outcome) resolveScope(outcome.value);
-    else rejectScope(outcome.error);
+    void binding.then(() => {
+      release();
+      if ('value' in outcome) resolveScope(outcome.value);
+      else rejectScope(outcome.error);
+    });
   };
 
   function onAbort(): void {
@@ -225,7 +412,7 @@ export async function runCallbackScope<TResult, TReturn>(
    */
   function release(): void {
     released = true;
-    if (server.listening) server.close();
+    for (const server of servers) if (server.listening) server.close();
     for (const [socket, responding] of sockets) {
       if (responding <= 0) letGo(socket);
       else holdNothing(socket, requests.get(socket));
@@ -283,16 +470,44 @@ export async function runCallbackScope<TResult, TReturn>(
     ignore(reason) {
       ignored += 1;
       logQuietly(() =>
-        logger?.warn(
-          '[callbackServer] ignored an incomplete callback request',
-          {
-            reason,
-            ignored,
-          },
-        ),
+        logger?.warn('[callbackServer] ignored a callback request', {
+          reason,
+          ignored,
+        }),
       );
     },
+    admit(state, res) {
+      if (!gate.open) {
+        sendText(res, 400, NOT_THIS_LOGIN);
+        settle.ignore('the login is not armed yet', res);
+        return false;
+      }
+      if (gate.bound === null || sameSecret(gate.bound, state)) return true;
+      sendText(res, 400, NOT_THIS_LOGIN);
+      settle.ignore('the state is not this login’s', res);
+      return false;
+    },
+    formToken: () => (gate.open ? gate.formToken : undefined),
+    admitsForm: (token) => gate.open && sameSecret(gate.formToken, token),
+    pasteMatches: (input) => gate.open && pasteMatches(gate.bound, input),
   };
+
+  // Before any route, page or token: a request through a name this
+  // transport does not answer for (DNS rebinding) reads and settles nothing.
+  app.use(
+    (
+      req: express.Request,
+      res: express.Response,
+      next: express.NextFunction,
+    ) => {
+      if (answersFor(req.headers.host, boundPort, allowed)) {
+        next();
+        return;
+      }
+      sendText(res, 400, 'Error: this server does not answer for that host');
+      settle.ignore('a host this server does not answer for', res);
+    },
+  );
 
   routes(app, settle);
   // Every answer is one of this scope's own pages: an unknown path gets fixed
@@ -317,42 +532,94 @@ export async function runCallbackScope<TResult, TReturn>(
     },
   );
 
+  /** Listens on one address; settles once bound or refused. */
+  const listenOn = (address: string, onPort: number): Promise<void> =>
+    new Promise<void>((resolve, reject) => {
+      const server = newServer();
+      const refused = (error: Error) => {
+        servers.splice(servers.indexOf(server), 1);
+        reject(error);
+      };
+      server.once('error', refused);
+      server.listen({ port: onPort, host: address }, () => {
+        server.removeListener('error', refused);
+        // A listener's later failure ends the scope in fixed words.
+        server.on('error', (error: Error) => {
+          endScope({ error: failedLogin(error) });
+        });
+        resolve();
+      });
+    });
+
   signal?.addEventListener('abort', onAbort, { once: true });
 
-  server.once('error', (error: Error) => {
-    endScope({ error: bindFailure(error, port) });
-  });
-
-  server.listen(port, () => {
-    // Aborted while binding: `release()` has closed the listener already.
-    if (scopeSettled) return;
-    alive = true;
-
+  const bindAll = async (): Promise<number> => {
+    await listenOn(addresses.first, port);
     // The requested port may be 0, in which case only the OS knows the answer.
-    const bound = (server.address() as AddressInfo).port;
-    const handle: ICallbackServerHandle<TResult> = {
-      port: bound,
-      redirectUri: `http://localhost:${bound}/callback`,
-      waitForResult: () =>
-        alive ? resultPromise : Promise.reject(callbackClosed()),
-      // Silent no-op once the scope has ended: this is called fire-and-forget
-      // from a browser launcher's .catch(), and a late rejection must not become
-      // a fresh unhandled rejection.
-      fail: (error: Error) => {
-        if (!alive) return;
-        settleResult({ error });
-        endScope({ error });
-      },
-    };
+    const first = servers[0]?.address() as AddressInfo | null | undefined;
+    const onPort = first?.port ?? port;
+    for (const address of addresses.more) {
+      if (scopeSettled) break;
+      try {
+        await listenOn(address, onPort);
+      } catch (error) {
+        if (!unavailableAddress(error)) throw error;
+      }
+    }
+    return onPort;
+  };
 
-    void use(handle).then(
-      (value) => endScope({ value }),
-      (error: Error) => endScope({ error }),
-    );
-  });
+  const bindingPort = bindAll();
+  binding = bindingPort.then(
+    () => undefined,
+    () => undefined,
+  );
+
+  bindingPort.then(
+    (onPort) => {
+      // Aborted while binding: `endScope` closes what was bound.
+      if (scopeSettled) return;
+      alive = true;
+      boundPort = onPort;
+
+      const handle: ICallbackServerHandle<TResult> = {
+        port: onPort,
+        redirectUri: `http://localhost:${onPort}/callback`,
+        waitForResult: () =>
+          alive ? resultPromise : Promise.reject(callbackClosed()),
+        // Silent no-op once the scope has ended: this is called fire-and-forget
+        // from a browser launcher's .catch(), and a late rejection must not become
+        // a fresh unhandled rejection.
+        fail: (error: Error) => {
+          if (!alive) return;
+          settleResult({ error });
+          endScope({ error });
+        },
+        // Arms the gate (spec §6a1): a string binds every callback to it,
+        // `null` declares an unbound URL. A new form token each time. Read
+        // as the contract types it: anything else changes nothing.
+        expectState: (state: string | null) => {
+          if (!alive) return;
+          if (state !== null && typeof state !== 'string') return;
+          gate = { open: true, bound: state, formToken: mintSecret() };
+        },
+      };
+
+      void use(handle).then(
+        (value) => endScope({ value }),
+        (error: Error) => endScope({ error }),
+      );
+    },
+    (error: unknown) => {
+      endScope({ error: bindFailure(error, port) });
+    },
+  );
 
   return await scopePromise;
 }
+
+/** The fixed answer to a callback the gate does not admit. */
+const NOT_THIS_LOGIN = 'Error: not a callback of this login';
 
 const CALLBACK_CSP =
   "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'";
@@ -421,8 +688,13 @@ export const errorHtml = (message: string): string => `<!DOCTYPE html>
 
 // Manual paste form (GET /). Used when the automatic localhost callback cannot
 // reach this server (browser on another machine). Accepts a bare code or a full
-// redirected URL; re-renders with a message on a bad paste.
-const pasteFormHtml = (message?: string): string => `<!DOCTYPE html>
+// redirected URL; re-renders with a message on a bad paste. Carries this
+// login's form token (spec §6a1): `/submit` settles only with it, and another
+// origin cannot read the page (no CORS, the CSP) to learn it.
+const pasteFormHtml = (
+  formToken: string,
+  message?: string,
+): string => `<!DOCTYPE html>
 <html lang="en"><head><meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>SAP BTP Authentication — paste code</title>
@@ -433,6 +705,7 @@ ${message ? `<p class="msg">${escapeHtml(message)}</p>` : ''}
 <p>After signing in, copy the <code>code</code> from your browser's address bar
 (or paste the whole redirected URL) and submit it here.</p>
 <form action="/submit" method="get">
+<input type="hidden" name="form_token" value="${escapeHtml(formToken)}" />
 <input name="input" autofocus placeholder="code=... or http://localhost/callback?code=..." />
 <button type="submit">Submit</button>
 </form></div></body></html>`;
@@ -454,6 +727,8 @@ export const withBrowserCallbackServer: CallbackServerFactory<string> = (
     options,
     (app, settle) => {
       app.get('/callback', (req: express.Request, res: express.Response) => {
+        // The gate first: a forged code and a forged error alike stop here.
+        if (!settle.admit(req.query.state, res)) return;
         const { error, error_description } = req.query;
         if (error) {
           const message = error_description
@@ -478,17 +753,50 @@ export const withBrowserCallbackServer: CallbackServerFactory<string> = (
       });
 
       app.get('/', (_req: express.Request, res: express.Response) => {
-        sendHtml(res, 200, pasteFormHtml());
+        const formToken = settle.formToken();
+        if (formToken === undefined) {
+          // Closed until armed: no form, so no token, exists yet.
+          sendText(res, 400, 'Error: the login is not ready yet');
+          settle.ignore('the login is not armed yet', res);
+          return;
+        }
+        sendHtml(res, 200, pasteFormHtml(formToken));
       });
 
       app.get('/submit', (req: express.Request, res: express.Response) => {
+        const formToken = settle.formToken();
+        if (formToken === undefined) {
+          sendText(res, 400, NOT_THIS_LOGIN);
+          settle.ignore('the login is not armed yet', res);
+          return;
+        }
+        // A GET can be forged from any page; the served form's token cannot.
+        if (!settle.admitsForm(req.query.form_token)) {
+          sendText(res, 400, NOT_THIS_LOGIN);
+          settle.ignore('no form token of this login', res);
+          return;
+        }
         const raw = req.query.input ?? req.query.code;
-        const code = typeof raw === 'string' ? extractCode(raw) : null;
+        const input = typeof raw === 'string' ? raw : '';
+        if (!settle.pasteMatches(input)) {
+          sendHtml(
+            res,
+            400,
+            pasteFormHtml(
+              formToken,
+              'That URL is not from this login. Paste the code or URL this login returned.',
+            ),
+          );
+          settle.ignore('the pasted URL is not from this login', res);
+          return;
+        }
+        const code = extractCode(input);
         if (!code) {
           sendHtml(
             res,
             400,
             pasteFormHtml(
+              formToken,
               'Could not read an authorization code from that input. Try again.',
             ),
           );

@@ -84,6 +84,10 @@ export const withSamlCallbackServer: CallbackServerFactory<string> = <TReturn>(
       app.use(express.urlencoded({ extended: false, limit: '5mb' }));
 
       const handle = (samlResponse: unknown, res: express.Response): void => {
+        // A SAML response carries no `state`: bound by `InResponseTo` and
+        // the validator (spec §6a1). The gate still closes a transport
+        // opened `gated` until it is armed (with `null`).
+        if (!settle.admit(undefined, res)) return;
         // The response is decided after the payload is examined. Answering 200
         // first told a request that carried nothing that it had authenticated.
         if (typeof samlResponse === 'string' && samlResponse) {

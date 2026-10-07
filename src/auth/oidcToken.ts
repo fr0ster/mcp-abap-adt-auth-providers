@@ -163,7 +163,8 @@ export async function exchangeAuthorizationCode(
   clientSecret: string | undefined,
   code: string,
   redirectUri: string,
-  codeVerifier: string,
+  /** The PKCE verifier of the URL this code answers; none when no URL was built. */
+  codeVerifier: string | undefined,
   logger?: ILogger,
   auth?: TokenRequestAuth,
   options?: TokenSiteOptions,
@@ -172,7 +173,7 @@ export async function exchangeAuthorizationCode(
   params.append('grant_type', 'authorization_code');
   params.append('code', code);
   params.append('redirect_uri', redirectUri);
-  params.append('code_verifier', codeVerifier);
+  if (codeVerifier !== undefined) params.append('code_verifier', codeVerifier);
   params.append('client_id', clientId);
 
   logQuietly(() =>

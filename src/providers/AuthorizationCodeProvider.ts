@@ -24,6 +24,8 @@ import {
   ownOptions,
   requiredFieldsMissing,
 } from '../auth/configuration';
+import { mintSecret } from '../auth/loginState';
+import { generatePkceChallenge, generatePkceVerifier } from '../auth/oidcPkce';
 import { refreshJwtToken } from '../auth/tokenRefresher';
 import { logQuietly } from '../auth/tokenRequest';
 import { browserCallbackStrategy } from '../strategies';
@@ -200,6 +202,10 @@ export class AuthorizationCodeProvider extends BaseTokenProvider {
     // guard lives here rather than after the fact because a mismatched redirect
     // produces no callback at all — checking the outcome would mean waiting
     // for a callback that never comes.
+    // Login CSRF (spec §6a1): the PKCE verifier of the last URL this
+    // attempt built, sent in its exchange. None for a configured URL — the
+    // consumer's, unchanged — or a code no URL was built for.
+    let codeVerifier: string | undefined;
     const request: AuthorizationRequest = {
       logger: this.logger,
       // The attempt's signal: every waiter gone ends the login (spec §6b).
@@ -211,7 +217,14 @@ export class AuthorizationCodeProvider extends BaseTokenProvider {
           }
           return prebuilt;
         }
-        return getJwtAuthorizationUrl(authConfig, redirectUri);
+        // A fresh state and PKCE pair for every URL built.
+        const verifier = generatePkceVerifier();
+        const url = getJwtAuthorizationUrl(authConfig, redirectUri, {
+          state: mintSecret(),
+          codeChallenge: generatePkceChallenge(verifier),
+        });
+        codeVerifier = verifier;
+        return url;
       },
     };
 
@@ -240,6 +253,7 @@ export class AuthorizationCodeProvider extends BaseTokenProvider {
       this.logger,
       await this.requestAuth(),
       this.siteOptions(attempt.signal),
+      codeVerifier,
     );
 
     return {

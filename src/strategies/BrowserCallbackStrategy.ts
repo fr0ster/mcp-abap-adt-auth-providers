@@ -9,6 +9,7 @@
 
 import * as net from 'node:net';
 import {
+  authError,
   isAuthProviderFailure,
   logFields,
   readFailure,
@@ -22,10 +23,11 @@ import type {
 import { announcer } from '../auth/announce';
 import { launchBrowser, promptForUrl } from '../auth/browserAuth';
 import {
+  parseAuthority,
   validatePort,
   withBrowserCallbackServer,
 } from '../auth/callbackServer';
-import { ownOptions } from '../auth/configuration';
+import { misconfigured, ownOptions } from '../auth/configuration';
 import { markHandled, onAnswerRejection } from '../auth/handled';
 import {
   abortedLogin,
@@ -33,6 +35,7 @@ import {
   loginFailure,
   portInUse,
 } from '../auth/interactiveLogin';
+import { urlState } from '../auth/loginState';
 import type { OidcCallbackResult } from '../auth/oidcBrowserAuth';
 import { withOidcCallbackServer } from '../auth/oidcBrowserAuth';
 import { withSamlCallbackServer } from '../auth/saml2Auth';
@@ -72,6 +75,20 @@ export interface CallbackStrategyOptions<TResult = string> {
    */
   remoteHint?: ((redirectUri: string) => string) | undefined;
   /**
+   * The address the transport binds. Not given: loopback (`127.0.0.1`, and
+   * `::1`). Passed to the transport as `ICallbackServerOptions.host`. A
+   * wildcard or an interface address makes the transport reachable from
+   * the network — name the authorities a browser will use in `allowedHosts`.
+   */
+  host?: string | undefined;
+  /**
+   * The authorities (`host` or `host:port`; no port means the bound one) a
+   * browser may use to reach the transport besides loopback — every other
+   * `Host` is refused before anything is served. Passed to the transport as
+   * `ICallbackServerOptions.allowedHosts`; the paste hint names the first.
+   */
+  allowedHosts?: readonly string[] | undefined;
+  /**
    * Ends every login of this strategy, beside the request's own signal (the
    * attempt's, spec §6b): either one aborting ends it `aborted`. There is no
    * other bound — a login waits for its result, the identity provider's
@@ -83,6 +100,18 @@ export interface CallbackStrategyOptions<TResult = string> {
 export interface BrowserCallbackStrategyOptions<TResult>
   extends CallbackStrategyOptions<TResult> {
   callbackServer: CallbackServerFactory<TResult>;
+  /**
+   * Login CSRF (spec §6a1). `true` — an OAuth redirect, as
+   * `browserCallbackStrategy` and `oidcCallbackStrategy` build it: the
+   * transport is opened `gated`, armed with the URL's `state` (or `null`
+   * for a URL without one) once it is built and before the browser is
+   * opened, and a transport without `expectState` is refused before
+   * anything is opened (`configuration` `invalid-value`, `callbackServer`).
+   * `false` — a redirect bound otherwise, as `samlCallbackStrategy`'s is
+   * (by `InResponseTo` and the assertion validator): no gate. Required: the
+   * strategy does not guess which one a transport is.
+   */
+  stateGate: boolean;
 }
 
 /**
@@ -168,18 +197,53 @@ export class BrowserCallbackStrategy<TResult>
     const run = (async (): Promise<AuthorizationOutcome<TResult>> => {
       await assertPortAvailable(port);
       if (controller.signal.aborted) throw abortedLogin('browser');
+      // Anything but an explicit `false` (a JavaScript caller that left it
+      // out) keeps the gate.
+      const gate = this.options.stateGate !== false;
+      const { host, allowedHosts } = this.options;
       return await this.options.callbackServer(
         {
           port,
           signal: controller.signal,
           logger: request.logger,
+          ...(host === undefined ? {} : { host }),
+          ...(allowedHosts === undefined ? {} : { allowedHosts }),
+          // Closed from the bind on: nothing settles while the URL is built.
+          ...(gate ? { gated: true } : {}),
         },
         async (server) => {
+          // A transport that cannot be armed cannot keep forged callbacks
+          // out: refused before the URL is built or anything opened, and
+          // nothing it may have settled is used (spec §6a1).
+          const arm = server.expectState;
+          if (gate && typeof arm !== 'function') {
+            throw misconfigured(
+              authError.configuration({
+                case: 'invalid-value',
+                fields: ['callbackServer'],
+              }),
+            );
+          }
           // Thrown before anything is opened: a redirect the provider cannot
           // honour must fail here, not as a callback that never arrives.
           const url = await request.buildAuthorizationUrl(server.redirectUri);
           // Aborted while the URL was built: nothing is opened.
           if (controller.signal.aborted) throw abortedLogin('browser');
+          if (gate) {
+            // Parsed with `URL`: its `state`, or `null` for a URL without
+            // one (a configured URL, unbound). A URL that does not parse
+            // is not opened.
+            const state = urlState(url);
+            if (state === undefined) {
+              throw misconfigured(
+                authError.configuration({
+                  case: 'invalid-value',
+                  fields: ['authorizationUrl'],
+                }),
+              );
+            }
+            arm?.call(server, state);
+          }
           const waiting = server.waitForResult();
           // Held before it is awaited: a launcher that throws at once leaves
           // it behind, and a consumer's server may not have marked it
@@ -308,13 +372,33 @@ export class BrowserCallbackStrategy<TResult>
  * anywhere else, addressed to the one reader who is not here. The port is real
  * and is kept; the host is the reader's to fill in.
  */
-const uaaPasteHint = (redirectUri: string): string => {
-  const { protocol, port } = new URL(redirectUri);
-  return (
-    '   If your browser is on another machine, copy the `code` from the ' +
-    `address bar after login and paste it at ${protocol}//<this-host>:${port}/`
-  );
-};
+/**
+ * Since 6.0.0 the transport answers only loopback and the consumer's
+ * `allowedHosts` (spec §6a1), so the hint names one of those, never a
+ * guessed hostname: the consumer's first allowed authority (its port, or the
+ * bound one), else an SSH tunnel — which arrives on loopback and works with
+ * the default bind.
+ */
+const uaaPasteHint =
+  (allowedHosts: readonly string[] | undefined) =>
+  (redirectUri: string): string => {
+    const { protocol, port } = new URL(redirectUri);
+    const allowed = allowedHosts?.find(
+      (entry) => parseAuthority(entry) !== undefined,
+    );
+    const authority = allowed
+      ? parseAuthority(allowed)?.port === undefined
+        ? `${allowed}:${port}`
+        : allowed
+      : undefined;
+    return authority
+      ? '   If your browser is on another machine, copy the `code` from the ' +
+          `address bar after login and paste it at ${protocol}//${authority}/`
+      : '   If your browser is on another machine, open an SSH tunnel to this ' +
+          `one (ssh -L ${port}:localhost:${port} <this machine>), then copy ` +
+          'the `code` from the address bar after login and paste it at ' +
+          `${protocol}//localhost:${port}/`;
+  };
 
 export function browserCallbackStrategy(
   options: CallbackStrategyOptions<string> = {},
@@ -323,12 +407,15 @@ export function browserCallbackStrategy(
   return new BrowserCallbackStrategy<string>({
     ...own,
     callbackServer: own.callbackServer ?? withBrowserCallbackServer,
+    // An OAuth redirect: bound by `state` (spec §6a1).
+    stateGate: true,
     // An explicit hint always wins. Otherwise the default applies only when we
     // supplied the transport: an injected receiver may have no `/` route, and
     // the replaceable receiver is the whole point of this design, so assuming
     // one would advertise a 404 to exactly the consumers the design is for.
     remoteHint:
-      own.remoteHint ?? (own.callbackServer ? undefined : uaaPasteHint),
+      own.remoteHint ??
+      (own.callbackServer ? undefined : uaaPasteHint(own.allowedHosts)),
   });
 }
 
@@ -339,6 +426,8 @@ export function oidcCallbackStrategy(
   return new BrowserCallbackStrategy<OidcCallbackResult>({
     ...own,
     callbackServer: own.callbackServer ?? withOidcCallbackServer,
+    // An OAuth redirect: bound by `state` (spec §6a1).
+    stateGate: true,
   });
 }
 
@@ -349,5 +438,7 @@ export function samlCallbackStrategy(
   return new BrowserCallbackStrategy<string>({
     ...own,
     callbackServer: own.callbackServer ?? withSamlCallbackServer,
+    // Bound by `InResponseTo` and the assertion validator, not `state`.
+    stateGate: false,
   });
 }

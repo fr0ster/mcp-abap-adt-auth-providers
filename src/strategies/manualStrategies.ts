@@ -18,6 +18,7 @@ import { announcer, promptableUrl } from '../auth/announce';
 import { extractCode } from '../auth/browserAuth';
 import { ownOptions } from '../auth/configuration';
 import { abortedLogin, loginFailure } from '../auth/interactiveLogin';
+import { pasteMatches, urlState } from '../auth/loginState';
 import { signalOf } from '../auth/signalledRequest';
 import { DEFAULT_CALLBACK_PORT } from './BrowserCallbackStrategy';
 
@@ -178,10 +179,21 @@ export function manualPasteStrategy(
   const redirectUri = own.redirectUri ?? defaultRedirectUri();
   return manualStrategy(own, async (request, read) => {
     const url = await request.buildAuthorizationUrl(redirectUri);
+    // Login CSRF (spec §6a1): a pasted redirected URL must carry the
+    // `state` of the URL shown; `null` (a configured URL) binds nothing.
+    const expected = urlState(url);
     promptForUrl(request.logger, url);
-    const raw = await read(
+    let raw = await read(
       'Paste the authorization code (or the whole redirected URL): ',
     );
+    // A bare code carries no state and is taken: the user typed it. A URL
+    // from another login is not — asked again, in fixed words, until the
+    // right one or the login's abort.
+    while (!pasteMatches(expected, raw)) {
+      raw = await read(
+        'That URL is not from this login. Paste the code (or the URL) this login returned: ',
+      );
+    }
     const code = extractCode(raw);
     if (!code) {
       throw loginFailure({ outcome: 'unreadable-input' });
