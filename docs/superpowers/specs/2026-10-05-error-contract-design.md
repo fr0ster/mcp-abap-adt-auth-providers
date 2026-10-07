@@ -2201,6 +2201,13 @@ function refreshStatePersistence(
 ```
 
 It keeps, in itself, what the provider used to keep for this one consumer:
+- **One write at a time, in report order.** The provider awaits an awaited
+  report but not a detached one, so reports can overlap. The factory
+  serializes them internally: each report — detached included — is
+  processed, and its write made, only after the previous report's write has
+  settled. Its state (logical, pending) changes only inside that sequence.
+  So an older write never lands after a newer one. An awaited report's
+  promise settles when its own turn ends.
 - **The logical state.** `held`, or `cleared` after a
   `refresh-token-discarded`. A `credential` report with a `new` refresh
   token writes it and moves to `held`. With `none`, it writes `null` while
@@ -2296,6 +2303,10 @@ be load-bearing: break the rule, watch the test go red.
   that follows failing leaves the refresh token cleared.
 - `'fail'`: an awaited report rethrows a failed write, a detached one never
   throws, and the write is pending either way; `'continue'` never throws.
+- Serialized: a detached discard whose write is held open, then a newer
+  credential report — the newer write starts only after the held one
+  settles, and the final storage and pending state are the newer report's.
+  Processing reports concurrently turns it red.
 - `new` writes the token; `none` writes `undefined` while `held` and `null`
   after a discard.
 - A failed `null` is written as `null` by the next report.
@@ -2303,7 +2314,9 @@ be load-bearing: break the rule, watch the test go red.
   report; a newer `new` supersedes it.
 - **The broker** (Task 34): a failed session write makes the initiating
   `getToken()` fail while the writer's retries continue, and `flush()`
-  reports it.
+  reports it — for a provider the broker built (through the awaited report)
+  and for a consumer's provider, its cache hits included (through
+  `throwFailedWrite`, unchanged).
 
 ### 6c.11 The broker
 
@@ -2314,13 +2327,17 @@ be load-bearing: break the rule, watch the test go red.
   broker's). `null` writes `refreshToken: ''`, the store's clearing
   operation; `undefined` carries the stored one, as `writeSecret` does
   today.
-- The token API's "a failed write is this caller's too" now travels the
-  awaited report: the write's failure fails the provider's `getTokens()` /
+- **The broker-built providers.** The token API's "a failed write is this
+  caller's too" now travels the awaited report: the write's failure fails the provider's `getTokens()` /
   `refreshTokens()` (`persisting-tokens`), so the call that obtained the
   result fails — no correlation by result identity is needed, and
   `failedWrites` keyed by the result goes. The broker may map that failure
   to its own write error by checking its writer's outcome for the
   destination; the retries continue. A later cache hit succeeds, as today.
+- **A consumer's provider** (`obtainFromConsumer`) is unchanged: the broker
+  writes every answer itself, a cache hit included, through `SessionWriter`,
+  and `failedWrites` with `throwFailedWrite` stays for this path, so a failed
+  write still fails that call. No persistence report is involved.
 - Its CLI exposes nothing new. Detail in Task 34.
 
 ### 6c.12 Versions
