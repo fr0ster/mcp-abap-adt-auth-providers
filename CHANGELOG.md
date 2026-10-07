@@ -219,11 +219,14 @@ declaration against the published 5.4.2.
   `RefreshTokenDisposition`; no release of this package carries it, and what
   `getTokens()` / `refreshTokens()` return carries the refresh token held or
   `refreshToken: undefined`.
-- **Requires `@mcp-abap-adt/connection` 13.0.0**, built on interfaces-auth 7
-  and auth-errors 2; 11.x reads the old refusal, and 12.0.0 (published only
-  under `next`) is built on interfaces-auth 6. Pair 6.0.0 with
-  `@mcp-abap-adt/auth-stores` 4.0.0 and `@mcp-abap-adt/auth-broker` 5.0.0,
-  and keep one copy each of interfaces-auth and auth-errors.
+- **Consumers on the new contract follow this release.**
+  `@mcp-abap-adt/connection` 13.0.0 (built on interfaces-auth 7 and
+  auth-errors 2, its suites run against the published 6.0.0),
+  `@mcp-abap-adt/auth-stores` 4.0.0 and `@mcp-abap-adt/auth-broker` 5.0.0
+  are released after 6.0.0; until then no published connection reads these
+  providers' refusals — 11.x reads the old refusal, and 12.0.0 (published
+  only under `next`) is built on interfaces-auth 6. Keep one copy each of
+  interfaces-auth and auth-errors.
 - **Log lines about a thrown value** carry auth-errors' `logFields`:
   `{ error, kind, status?, diagnostics? }` instead of `{ error, status? }`.
 
