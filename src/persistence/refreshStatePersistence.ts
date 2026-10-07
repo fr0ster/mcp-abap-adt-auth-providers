@@ -35,7 +35,10 @@ export interface RefreshStatePersistenceOptions {
    * Required, no default: whether a failed write fails an awaited report —
    * and with it the call that caused it (`'fail'`) — or is only logged
    * (`'continue'`). Either way the write is delivered again by the next
-   * report.
+   * report. Missing or any other value: refused at construction,
+   * `configuration` `invalid-value` naming `persistence` — the provider
+   * option this strategy is given as (so is a `write` that is not a
+   * function).
    */
   readonly onWriteFailure: 'continue' | 'fail';
   /** Where a failed write is logged, in fixed words. */
@@ -77,7 +80,12 @@ function taken(report: PersistenceReport): Taken {
   };
 }
 
-/** Refused at construction: the one field naming this strategy. */
+/**
+ * Refused at construction: `onWriteFailure` missing or not `'continue'` /
+ * `'fail'`, or `write` not a function. The refusal names `persistence` —
+ * the provider option this strategy configures; neither of this factory's
+ * own option names is on `CONFIG_FIELDS` (coordinator's ruling, review M2).
+ */
 function unusable(): never {
   throw misconfigured(
     authError.configuration({ case: 'invalid-value', fields: ['persistence'] }),
@@ -127,13 +135,14 @@ export function refreshStatePersistence(
   /** One report's turn: decide, write, record — never two at once. */
   const process = async (report: Taken): Promise<void> => {
     let refreshToken: string | null | undefined;
+    // `pending` is read only while `held` and with no new token; the write
+    // below sets or clears it whenever a token is written, so a discard or a
+    // new token needs no reset of its own.
     if (report.event === 'refresh-token-discarded') {
       state = 'cleared';
-      pending = undefined;
       refreshToken = null;
     } else if (report.fresh !== undefined) {
       state = 'held';
-      pending = undefined;
       refreshToken = report.fresh;
     } else if (state === 'cleared') {
       refreshToken = null;
