@@ -198,7 +198,9 @@ against the published 5.4.2.
 - **Dependencies:** `@mcp-abap-adt/interfaces-auth ^7.3.0` (was ^3.2.0; 7.3.0
   for the callback gate, `host` and `allowedHosts`),
   `@mcp-abap-adt/interfaces-auth-sap ^3.3.0` (was ^2.0.0), and the new
-  `@mcp-abap-adt/auth-errors ^2.0.0`.
+  `@mcp-abap-adt/auth-errors ^2.0.1` (2.0.1: an aborted login's tally reads
+  `N request(s) to the callback server were refused and ignored`, since the
+  count now holds every refused request, not only incomplete callbacks).
 - **`getTokens()` / `refreshTokens()`** take an optional
   `ITokenRequestOptions` (`{ signal }`).
 - **Collaborator answers are awaited normally.** What a consumer's own code
