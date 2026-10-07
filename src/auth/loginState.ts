@@ -7,6 +7,7 @@
  */
 
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
+import { codeFromQuery, extractCode } from './browserAuth';
 
 /** 32 random bytes, base64url: a `state` or a form token, new every call. */
 export function mintSecret(): string {
@@ -40,29 +41,50 @@ export function urlState(url: string): string | null | undefined {
 }
 
 /**
- * What a pasted input says about `state`: a bare code (no `?`) carries none
- * and is not a redirect; anything with a query is a redirected URL, and its
- * query's `state` (or `null`) is what must match.
+ * What a pasted input yields (spec §6a1): a code, or why none is taken.
+ * `state` — a redirected URL whose `state` is not the expected one;
+ * `unreadable` — no code could be read.
  */
-export type PastedState =
-  | { readonly redirect: false }
-  | { readonly redirect: true; readonly state: string | null };
+export type PasteReading =
+  | { readonly code: string }
+  | { readonly refused: 'state' | 'unreadable' };
 
-export function pastedState(input: string): PastedState {
-  const trimmed = input.trim();
-  const query = trimmed.indexOf('?');
-  if (query < 0) return { redirect: false };
-  const fragment = trimmed.indexOf('#', query);
-  const search = trimmed.slice(query + 1, fragment < 0 ? undefined : fragment);
-  return { redirect: true, state: new URLSearchParams(search).get('state') };
-}
+/** A character that makes a pasted input more than a bare code. */
+const NOT_BARE = new Set(['?', '&', '=', '/', '#']);
 
-/** Whether a pasted input may be taken for a login whose URL had `expected`. */
-export function pasteMatches(
+/**
+ * Reads a pasted input for a login whose URL carried `expected` (`null` or
+ * `undefined`: no `state`, nothing to compare). A bare code — none of `?`,
+ * `&`, `=`, `/`, `#` — is taken as typed. Anything else is a redirected URL,
+ * parsed with `URL`: its query's `state` must be the expected one, and its
+ * code is read from the query alone (never a fragment). Only for a URL
+ * without `state` does the lenient reading of 5.x (`code=…` and the like)
+ * still apply.
+ */
+export function readPaste(
   expected: string | null | undefined,
   input: string,
-): boolean {
-  if (typeof expected !== 'string') return true;
-  const pasted = pastedState(input);
-  return !pasted.redirect || sameSecret(expected, pasted.state);
+): PasteReading {
+  const trimmed = input.trim();
+  if (![...trimmed].some((character) => NOT_BARE.has(character))) {
+    const code = extractCode(trimmed);
+    return code === null ? { refused: 'unreadable' } : { code };
+  }
+  let url: URL;
+  try {
+    // A relative paste (`/callback?code=…`, `?code=…`) resolves against a
+    // base that is never used for anything else.
+    url = new URL(trimmed, 'http://pasted.invalid/');
+  } catch {
+    return { refused: typeof expected === 'string' ? 'state' : 'unreadable' };
+  }
+  if (typeof expected === 'string') {
+    if (!sameSecret(expected, url.searchParams.get('state'))) {
+      return { refused: 'state' };
+    }
+    const code = codeFromQuery(url.search);
+    return typeof code === 'string' ? { code } : { refused: 'unreadable' };
+  }
+  const code = extractCode(trimmed);
+  return code === null ? { refused: 'unreadable' } : { code };
 }

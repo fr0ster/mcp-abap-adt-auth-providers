@@ -29,7 +29,6 @@ import type {
   ICallbackServerOptions,
 } from '@mcp-abap-adt/interfaces-auth';
 import express from 'express';
-import { extractCode } from './browserAuth';
 import { misconfigured, ownOptions } from './configuration';
 import {
   abortedLogin,
@@ -38,7 +37,12 @@ import {
   loginFailure,
   portInUse,
 } from './interactiveLogin';
-import { mintSecret, pasteMatches, sameSecret } from './loginState';
+import {
+  mintSecret,
+  type PasteReading,
+  readPaste,
+  sameSecret,
+} from './loginState';
 import { logQuietly } from './tokenRequest';
 
 /**
@@ -72,10 +76,11 @@ export interface Settle<TResult> {
   /** Whether `token` is this login's form token (constant time). */
   admitsForm(token: unknown): boolean;
   /**
-   * Whether a pasted input fits this login: a bare code always; a redirected
-   * URL only with the armed `state` (any, when armed with `null`).
+   * A pasted input read for this login (`readPaste`): a bare code as typed;
+   * a redirected URL only with the armed `state` (any, when armed with
+   * `null`). `undefined` while the gate is closed.
    */
-  pasteMatches(input: string): boolean;
+  readPaste(input: string): PasteReading | undefined;
 }
 
 /** Why a request to the callback was ignored: fixed words only. */
@@ -201,6 +206,25 @@ function hostCharacters(host: string): boolean {
   return true;
 }
 
+/**
+ * Whether a peer address is loopback: `127.0.0.0/8`, `::1`, or an
+ * IPv4-mapped `::ffff:127.x.y.z`. Plain code over the dotted quad.
+ */
+export function isLoopbackPeer(address: unknown): boolean {
+  if (typeof address !== 'string') return false;
+  if (address === '::1') return true;
+  const mapped = address.startsWith('::ffff:');
+  const v4 = mapped ? address.slice('::ffff:'.length) : address;
+  const parts = v4.split('.');
+  if (parts.length !== 4) return false;
+  for (const part of parts) {
+    if (part === '' || part.length > 3) return false;
+    for (const digit of part) if (digit < '0' || digit > '9') return false;
+    if (Number(part) > 255) return false;
+  }
+  return parts[0] === '127';
+}
+
 /** The names a browser on this machine uses for the loopback transport. */
 const LOOPBACK_NAMES: readonly string[] = ['localhost', '127.0.0.1', '[::1]'];
 
@@ -212,13 +236,23 @@ const LOOPBACK_NAMES: readonly string[] = ['localhost', '127.0.0.1', '[::1]'];
  */
 function answersFor(
   hostHeader: unknown,
+  peer: unknown,
   boundPort: number,
   allowed: readonly Authority[],
 ): boolean {
   const asked = parseAuthority(hostHeader);
   if (!asked) return false;
   const askedPort = asked.port ?? 80;
-  if (LOOPBACK_NAMES.includes(asked.host)) return askedPort === boundPort;
+  // A loopback name counts only from a loopback peer (spec §6a1): the
+  // header is the client's to choose, so a machine on the network sending
+  // `Host: localhost` to a wildcard bind is not this machine's browser.
+  if (
+    LOOPBACK_NAMES.includes(asked.host) &&
+    isLoopbackPeer(peer) &&
+    askedPort === boundPort
+  ) {
+    return true;
+  }
   return allowed.some(
     (entry) =>
       entry.host === asked.host && (entry.port ?? boundPort) === askedPort,
@@ -255,6 +289,16 @@ function unavailableAddress(error: unknown): boolean {
     return false;
   }
   return error.code === 'EADDRNOTAVAIL' || error.code === 'EAFNOSUPPORT';
+}
+
+/** The OS refused the address: it is in use. */
+function addressInUse(error: unknown): boolean {
+  return (
+    error !== null &&
+    typeof error === 'object' &&
+    'code' in error &&
+    error.code === 'EADDRINUSE'
+  );
 }
 
 /** The gate's state: closed until armed, then bound to a state or not. */
@@ -489,7 +533,8 @@ export async function runCallbackScope<TResult, TReturn>(
     },
     formToken: () => (gate.open ? gate.formToken : undefined),
     admitsForm: (token) => gate.open && sameSecret(gate.formToken, token),
-    pasteMatches: (input) => gate.open && pasteMatches(gate.bound, input),
+    readPaste: (input) =>
+      gate.open ? readPaste(gate.bound, input) : undefined,
   };
 
   // Before any route, page or token: a request through a name this
@@ -500,7 +545,14 @@ export async function runCallbackScope<TResult, TReturn>(
       res: express.Response,
       next: express.NextFunction,
     ) => {
-      if (answersFor(req.headers.host, boundPort, allowed)) {
+      if (
+        answersFor(
+          req.headers.host,
+          req.socket.remoteAddress,
+          boundPort,
+          allowed,
+        )
+      ) {
         next();
         return;
       }
@@ -563,7 +615,20 @@ export async function runCallbackScope<TResult, TReturn>(
       try {
         await listenOn(address, onPort);
       } catch (error) {
-        if (!unavailableAddress(error)) throw error;
+        if (unavailableAddress(error)) continue;
+        // An ephemeral port the OS gave 127.0.0.1 may be someone else's on
+        // ::1: stay on 127.0.0.1 alone rather than fail (spec §6a1). A
+        // fixed port taken there stays a failure — a squatter would get the
+        // browser's `localhost` request.
+        if (port === 0 && addressInUse(error)) {
+          logQuietly(() =>
+            logger?.warn(
+              '[callbackServer] the port is taken on ::1; listening on 127.0.0.1 only',
+            ),
+          );
+          continue;
+        }
+        throw error;
       }
     }
     return onPort;
@@ -778,7 +843,13 @@ export const withBrowserCallbackServer: CallbackServerFactory<string> = (
         }
         const raw = req.query.input ?? req.query.code;
         const input = typeof raw === 'string' ? raw : '';
-        if (!settle.pasteMatches(input)) {
+        const reading = settle.readPaste(input);
+        if (reading === undefined) {
+          sendText(res, 400, NOT_THIS_LOGIN);
+          settle.ignore('the login is not armed yet', res);
+          return;
+        }
+        if ('refused' in reading && reading.refused === 'state') {
           sendHtml(
             res,
             400,
@@ -790,8 +861,7 @@ export const withBrowserCallbackServer: CallbackServerFactory<string> = (
           settle.ignore('the pasted URL is not from this login', res);
           return;
         }
-        const code = extractCode(input);
-        if (!code) {
+        if (!('code' in reading)) {
           sendHtml(
             res,
             400,
@@ -802,6 +872,7 @@ export const withBrowserCallbackServer: CallbackServerFactory<string> = (
           );
           return;
         }
+        const { code } = reading;
         sendHtml(res, 200, successHtml);
         settle.ok(code, res);
       });

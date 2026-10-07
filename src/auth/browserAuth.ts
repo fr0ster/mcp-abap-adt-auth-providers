@@ -52,16 +52,9 @@ export function extractCode(input: string): string | null {
   const trimmed = input.trim();
   if (!trimmed) return null;
 
-  // Anywhere a `code=` query parameter appears (full URL or query string):
-  // the first `?code=` / `&code=` followed by at least one character up to
-  // `&` or whitespace. Plain string scanning, no regex (pasted input).
-  for (let at = 0; at < trimmed.length; at++) {
-    const mark = trimmed[at];
-    if (mark !== '?' && mark !== '&') continue;
-    if (!trimmed.startsWith('code=', at + 1)) continue;
-    const value = valueUntilBreak(trimmed, at + 6);
-    if (value !== '') return decodedOrNull(value);
-  }
+  // Anywhere a `code=` query parameter appears (full URL or query string).
+  const fromQuery = codeFromQuery(trimmed);
+  if (fromQuery !== undefined) return fromQuery;
 
   // Bare `code=XYZ`
   if (trimmed.startsWith('code=')) {
@@ -75,6 +68,23 @@ export function extractCode(input: string): string | null {
   // whitespace (clearly not a single code).
   if ([...trimmed].some(isWhitespace)) return null;
   return trimmed;
+}
+
+/**
+ * The code of the first `?code=` / `&code=` followed by at least one
+ * character up to `&` or whitespace, decoded; `null` for a malformed escape;
+ * `undefined` when there is none. Plain string scanning, no regex (pasted
+ * input). Given a URL's `search`, it reads the query alone.
+ */
+export function codeFromQuery(text: string): string | null | undefined {
+  for (let at = 0; at < text.length; at++) {
+    const mark = text[at];
+    if (mark !== '?' && mark !== '&') continue;
+    if (!text.startsWith('code=', at + 1)) continue;
+    const value = valueUntilBreak(text, at + 6);
+    if (value !== '') return decodedOrNull(value);
+  }
+  return undefined;
 }
 
 /**

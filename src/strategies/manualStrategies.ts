@@ -15,10 +15,9 @@ import type {
 } from '@mcp-abap-adt/interfaces-auth';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
 import { announcer, promptableUrl } from '../auth/announce';
-import { extractCode } from '../auth/browserAuth';
 import { ownOptions } from '../auth/configuration';
 import { abortedLogin, loginFailure } from '../auth/interactiveLogin';
-import { pasteMatches, urlState } from '../auth/loginState';
+import { readPaste, urlState } from '../auth/loginState';
 import { signalOf } from '../auth/signalledRequest';
 import { DEFAULT_CALLBACK_PORT } from './BrowserCallbackStrategy';
 
@@ -183,21 +182,27 @@ export function manualPasteStrategy(
     // `state` of the URL shown; `null` (a configured URL) binds nothing.
     const expected = urlState(url);
     promptForUrl(request.logger, url);
-    let raw = await read(
-      'Paste the authorization code (or the whole redirected URL): ',
+    let reading = readPaste(
+      expected,
+      await read(
+        'Paste the authorization code (or the whole redirected URL): ',
+      ),
     );
     // A bare code carries no state and is taken: the user typed it. A URL
     // from another login is not — asked again, in fixed words, until the
     // right one or the login's abort.
-    while (!pasteMatches(expected, raw)) {
-      raw = await read(
-        'That URL is not from this login. Paste the code (or the URL) this login returned: ',
+    while ('refused' in reading && reading.refused === 'state') {
+      reading = readPaste(
+        expected,
+        await read(
+          'That URL is not from this login. Paste the code (or the URL) this login returned: ',
+        ),
       );
     }
-    const code = extractCode(raw);
-    if (!code) {
+    if (!('code' in reading)) {
       throw loginFailure({ outcome: 'unreadable-input' });
     }
+    const code = reading.code;
     return { payload: code, redirectUri };
   });
 }
