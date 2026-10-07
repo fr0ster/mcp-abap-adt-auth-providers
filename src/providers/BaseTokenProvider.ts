@@ -114,8 +114,10 @@ export interface TokenProviderHooks extends TokenProviderDebug {
    * detached report is called and not awaited; its failure is logged in
    * fixed words and attributed to nothing. Nothing is reported twice.
    * Absent: nothing is persisted — a choice, not a default; the provider
-   * builds none (rule 7). `refreshStatePersistence(write, options)` is the
-   * behaviour of `onTokens` before 6.0.0.
+   * builds none (rule 7). Given, it must be an object whose `report` is a
+   * function, else it is refused at construction (`configuration`
+   * `invalid-value`, `persistence`). `refreshStatePersistence(write,
+   * options)` is the behaviour of `onTokens` before 6.0.0.
    */
   persistence?: ITokenPersistence | undefined;
   /**
@@ -367,8 +369,24 @@ export abstract class BaseTokenProvider
       authorize: 'token-request',
       rejected: 'token-request',
     });
-    // Absent is a choice: nothing is persisted (spec §6c.3).
-    this.persistence = config.persistence ?? undefined;
+    // Absent is a choice: nothing is persisted (spec §6c.3). Given, it must
+    // be an object whose `report` is a function, read without running a
+    // getter; anything else — `null` included — is refused here.
+    const persistence: unknown = config.persistence;
+    if (
+      persistence !== undefined &&
+      (persistence === null ||
+        typeof persistence !== 'object' ||
+        typeof readSafely(persistence, 'report') !== 'function')
+    ) {
+      throw misconfigured(
+        authError.configuration({
+          case: 'invalid-value',
+          fields: ['persistence'],
+        }),
+      );
+    }
+    this.persistence = persistence as ITokenPersistence | undefined;
     // Required, no default (rule 7, spec §6c.3): an object whose `next` is a
     // function, read without running a getter; anything else is refused here.
     const renewal: unknown = config.renewal;

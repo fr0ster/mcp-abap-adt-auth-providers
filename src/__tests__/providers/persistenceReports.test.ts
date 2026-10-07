@@ -376,10 +376,10 @@ describe('an awaited failure is the renewal’s', () => {
     expectPersistingFailure(await thrown);
   });
 
-  it('a strategy without a report function fails the awaited report', async () => {
-    const provider = seeded({
-      persistence: {} as never,
-    });
+  it('a strategy whose report is taken away after construction fails the awaited report (defence in depth)', async () => {
+    const persistence: { report?: unknown } = { report: () => undefined };
+    const provider = seeded({ persistence: persistence as never });
+    delete persistence.report;
     const thrown = rejectionOf(provider.getTokens());
     (await provider.refreshes.nth(1)).result.resolve(tokens(jwt('x'), 'R2'));
     expectPersistingFailure(await thrown);
