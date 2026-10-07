@@ -531,6 +531,229 @@ Publish dependency: U1 (5.4.2 published), G1, G2 (G3 is not needed to build auth
 
 **Gate:** standard; the generated-table test green.
 
+## Renewal and persistence strategies (spec §6c, before the release)
+
+Answers the renewal goal (`docs/superpowers/2026-10-07-renewal-strategy-goal.md`,
+G1–G9) through spec §6c. Its own order of releases runs before Task 31:
+interfaces-auth 7.0.0 → auth-errors 2.0.0 → connection 13.0.0 → the
+auth-providers tasks below. Each of the three earlier packages is one PR in
+its repository, merged, tagged and published by the user before the next
+step builds against it (registry only; after every install, no
+`"link": true` and no non-registry resolution in the lockfile). Every task
+ends with the standard gates and the two-stage review; each "Load-bearing"
+item is run as a deliberate break.
+
+### Task 30a: interfaces-auth 7.0.0
+
+Repository `mcp-abap-adt-interfaces`, one PR.
+
+**Files:** `packages/interfaces-auth/src/token/renewal.ts` and
+`src/token/persistence.ts` (new; §6c.2, §6c.3); the error kinds and facts
+(`renewal-declined`, facts `{ trigger }`); `OPERATIONS` (`renewal-strategy`
+added, `on-tokens-hook` renamed `persisting-tokens`); `ITokenResult`
+(`refreshTokenDisposition` removed) and `RefreshTokenDisposition` (deleted);
+the index; the siblings `interfaces-auth-sap` and `interfaces-auth-broker`
+moved by PR #123's rule.
+
+**Steps:**
+- [ ] Type tests first (`@ts-expect-error`, part of `test:check`): a
+  `refresh` decision without `ifCut` does not compile; a `RenewalCause` of
+  `rejected` without `reading` does not compile; a `PersistenceReport` of
+  either event without `credential` does not compile; the kind list's
+  exhaustiveness check fails until `renewal-declined` is handled.
+- [ ] The types and `as const` arrays, the kind and its facts, the two
+  operations, the removals.
+- [ ] `surface-removed.txt` lists `refreshTokenDisposition`,
+  `RefreshTokenDisposition` and `on-tokens-hook`; the siblings' versions
+  decided by PR #123's rule and stated in the PR.
+- [ ] CHANGELOG and README of the packages that change.
+
+**Gate:** standard + `check:surface`, `check:graph`.
+
+**G7 (user):** merge, tag, publish interfaces-auth 7.0.0 and the siblings.
+
+### Task 30b: auth-errors 2.0.0
+
+Repository `mcp-abap-adt-auth-errors`, one PR. Publish dependency: G7.
+
+**Steps:**
+- [ ] `interfaces-auth ^7.0.0`; the renderer's completeness check fails to
+  compile until `renewal-declined` has words — first.
+- [ ] Words: reason "the renewal strategy declined to renew the credential",
+  no hint; the two operations' phrases (`renewal-strategy`,
+  `persisting-tokens`); the builder for the new kind; `classify` unchanged
+  in shape.
+- [ ] The shape-check script and fixtures unchanged unless the new kind
+  needs a fixture; the providers' byte-identical copy refreshed in Task 30d
+  if the script changes.
+- [ ] CHANGELOG (a major: the dependency's major and a new kind), README's
+  kind table.
+
+**Gate:** standard.
+
+**G8 (user):** merge, tag, publish auth-errors 2.0.0.
+
+### Task 30c: connection 13.0.0
+
+Repository `mcp-abap-connection`, one PR (draft #72, SPNego, stays a draft
+beside it, as allowed for that repository). Publish dependency: G7, G8.
+
+**Steps:**
+- [ ] `interfaces-auth ^7.0.0`, `auth-errors ^2.0.0`; build and tests green
+  with no behaviour change; any exhaustive switch over kinds handles
+  `renewal-declined`.
+- [ ] CHANGELOG: a major for the dependency majors; 12.0.0 never reached
+  `latest`.
+
+**Gate:** standard.
+
+**G9 (user):** merge, tag, publish connection 13.0.0 (as `latest`).
+
+### Task 30d: auth-providers — the renewal strategy
+
+Repository auth-providers, PR #68. Publish dependency: G7, G8, G9.
+
+**Files:** `package.json` (the three new majors) and the lockfile;
+`src/renewal/` (new: `refreshThenLogin`, `refreshOnly`, the decision
+reader); `src/providers/BaseTokenProvider.ts` (the renewal loop, §6c.4–§6c.5;
+rule 6's fixed order and `onRejected`'s early rule-5 return removed);
+`src/auth/tokenRequest.ts` (`dispatched()` on both paths); every
+`performRefresh` (the `dispatched` parameter); every provider config and
+static factory (`renewal` required, rule 7); `src/index.ts`.
+
+**Steps:**
+- [ ] Tests first, from §6c.10 "Renewal": cut before dispatch (real
+  socket, discovery held open); cut after dispatch with `discard` and with
+  `keep`; every invalid decision, a throw, a foreign thenable, a strategy
+  that never settles; earlier steps stay applied; a generation per step
+  (refresh `bound-elsewhere` then login; two refreshes); keep through login
+  (both variants); a discarded token in a result; aborted steps observed
+  (delivery once, before the next `next`); no hidden step; rule 5 as a
+  reading; `renewal-declined`; each factory's table row by row.
+- [ ] The loop, as §6c.5 orders it: pin, deliver observations, ask, read,
+  apply `sentRefreshToken`, check and take the step's generation, run,
+  record, back to asking; `stop`'s answers in §6c.5's order.
+- [ ] The held refresh token: install only a usable one; a discarded token
+  in a result read as none; `quarantine` renamed `discarded` and fed only by
+  `sentRefreshToken` / `ifCut`.
+- [ ] `dispatched()` in `sendTokenRequest`; the abort handler of a refresh
+  step acts only after it; `ifCut` applied there synchronously.
+- [ ] `remembered` reaches the strategy as `lastRenewal`; `prepare()` no
+  longer clears it.
+- [ ] The existing renewal suites construct `refreshThenLogin()` explicitly
+  and stay green, except the pre-dispatch case, which now expects the
+  refresh token kept.
+- [ ] The `debug` line per decision (§6c.9); `logCallSources.test.ts` still
+  green.
+
+**Load-bearing:** remove the `dispatched()` gate → cut-before-dispatch red;
+one generation per attempt → refresh-then-login red; restore `updateTokens`'
+overwrite → keep-through-login red; accept a `refresh` without `ifCut` →
+its invalid-decision case red; call `next` from the abort handler → the
+observation case red (a strategy call during abort recorded); restore the
+early rule-5 return → the renew-on-403 case red.
+
+### Task 30e: auth-providers — the persistence strategy
+
+Repository auth-providers, PR #68. After Task 30d.
+
+**Files:** `src/persistence/` (new: `refreshStatePersistence`);
+`src/providers/BaseTokenProvider.ts` (`onTokens`, `obtained`, `clearing`,
+`notify`, `heldRefresh`'s disposition, `refreshState`, `pendingReplace`
+removed; reports from the commit queue, §6c.6); every provider config and
+factory (`persistence` replaces `onTokens`); `src/index.ts`.
+
+**Steps:**
+- [ ] Tests first, from §6c.10 "Persistence" and "`refreshStatePersistence`,
+  alone": one report per change in commit order, none for a cache hit or a
+  discarded commit; an awaited failure reaching both waiters, the token
+  still cached; a detached failure (plain node, the unhandled-rejection
+  recorder) logged once and attributed to nothing; no repetition; the
+  factory's logical state, pending delivery, `'fail'` / `'continue'`, a
+  discard before any credential report, and serialization with a held
+  write.
+- [ ] Reports: `credential` from the credential commit with
+  `ReportedCredential` and `ReportedRefreshToken`; `refresh-token-discarded`
+  from the clearing step with the held credential; `awaited` computed when
+  the report starts.
+- [ ] The factory, serializing every report and write internally.
+- [ ] Every result the provider returns carries the held refresh token or
+  none and no disposition (`resultShapes.test.ts` updated: the keys kept
+  present as `undefined` where they were).
+- [ ] `noTokensInLogs.test.ts` and `thrownMessages.test.ts` cover the
+  persistence strategy and the factory's logger.
+
+**Load-bearing:** process the factory's reports concurrently → the held-write
+case red; let a detached failure reach the queue's promise → the detached
+case red (unhandled rejection); write `undefined` after a discard → the
+fallback case red; repeat a failed report from the provider → the
+no-repetition case red.
+
+### Task 30f: auth-providers — callback sockets released on abort
+
+Repository auth-providers, PR #68. Independent of 30d/30e.
+
+**Steps:**
+- [ ] Test first, in a child process: a SAML POST with complete headers and
+  an unfinished body, the login aborted — the scope settles, the port is
+  bound by the test afterwards, and the child exits on its own (no socket
+  left referenced).
+- [ ] `release()` unrefs every socket and destroys a request whose body is
+  unfinished; a completed response still flushes (`callbackPages.test.ts`
+  and the release tests stay green).
+
+**Load-bearing:** release only idle sockets, as today → the child-exit case
+red.
+
+### Task 30g: auth-providers — documentation of §6c
+
+Repository auth-providers, PR #68. After 30d–30f.
+
+**Steps:**
+- [ ] CLAUDE.md rules 5 and 6 as §6c.13 words them; the "Cancellable shared
+  attempts" and token-provider paragraphs rewritten for the two strategies;
+  `onTokens` and `refreshTokenDisposition` gone from it.
+- [ ] README: "Renewal strategy" and "Persistence strategy" sections (the
+  types, the defaults and their decision table, writing one's own, the
+  write-failure choice); §6b's cancellation text rewritten for `ifCut`.
+- [ ] "Migrating to 6.0.0": `renewal` required (`refreshThenLogin()` is
+  the old behaviour), `onTokens` → `persistence`
+  (`refreshStatePersistence(write, { onWriteFailure })` is the old
+  behaviour; the choice is required), `refreshTokenDisposition` gone,
+  `renewal-declined` added, the three dependency majors.
+- [ ] CHANGELOG `[Unreleased]`: the surface diff against 5.4.2 regenerated;
+  the generated refusal tables regenerated (`npm run docs:tables`).
+
+**Gate:** standard; the generated-table test green.
+
+### Changes to the tasks after it
+
+- **Task 31:** a Codex adversarial pass on PR #68 at the head after 30g;
+  the PR description also carries the renewal goal's and §6c's decisions
+  and the 30d–30f load-bearing runs.
+- **Global Constraints, versions and order:** interfaces-auth 7.0.0 (and
+  siblings), auth-errors 2.0.0, connection 13.0.0 enter the chain before
+  auth-providers 6.0.0.
+- **Task 33 (auth-stores 4.0.0):** dependencies on interfaces-auth 7 and its
+  siblings; no `refreshTokenDisposition` to accept — `''` stays the clearing
+  operation, documented and pinned by a test per session store.
+- **Task 34 (auth-broker 5.0.0):** the `renewal` option, default
+  `refreshThenLogin()`; persistence through
+  `refreshStatePersistence(write, { onWriteFailure: 'fail' })` over
+  `SessionWriter` (`null` → `refreshToken: ''`, `undefined` → the stored
+  one carried); `failedWrites` keyed by result removed for the providers it
+  builds and kept, with `throwFailedWrite`, for `obtainFromConsumer`; tests:
+  a failed session write fails the initiating `getToken()` on both paths
+  (cache hits of a consumer's provider included) while retries continue and
+  `flush()` reports it.
+- **Task 35:** gate 4 installs the new majors; RF5 checks one deduplicated
+  copy of interfaces-auth 7 and auth-errors 2.
+
+**Decision (this plan):** the broker's write-failure mapping (its own error
+in place of `persisting-tokens` for the token API) is decided in Task 34
+from the broker's existing error types, not here.
+
+
 ### Task 31: Release preparation
 
 **Steps:**
