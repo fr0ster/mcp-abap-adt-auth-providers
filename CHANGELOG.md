@@ -61,6 +61,40 @@ against the published 5.4.2.
   without `access_token` keeps 5.4.2's `error`-level line, verbatim (status
   and registered code only). A consumer that read the server's description
   from an error or a log no longer finds it anywhere.
+- **No URL and no configured value in a log line.** 5.4.2 logged the token,
+  device-authorization and discovery endpoints, the UAA URL, the client id
+  and the redirect URI at `info`, and an authorization URL in a launcher's
+  error line — a discovered endpoint is the server's text (a newline in it
+  forged a line), a configured one may hold a credential. Every such line now
+  carries fixed words and admitted facts only, `authDebug` or not. The
+  authorization URL and the device flow's verification URI still reach the
+  user — in the **prompt**, and only as an `http:` / `https:` serialisation of
+  printable ASCII; one that cannot be shown so is named in fixed words.
+  `consoleDeviceCodePresenter` shows the user code only when it is printable
+  ASCII and rejects without a showable URI and code (`device-code-not-shown`).
+  The manual strategies' prompt is two lines, never one line with a line
+  break inside it.
+- **Token answers are read by type.** An answer's `access_token`,
+  `refresh_token`, `id_token` and the device fields are kept only as
+  non-empty strings, `expires_in` and `interval` only as finite non-negative
+  JSON numbers (RFC 6749 §5.1; a numeric string such as `"3600"` is not one).
+  An `access_token` of another type is no token: `request-failed`
+  `no-access-token`, nothing presented (5.4.2 handed `42` on as the token and
+  `"abc"` as `expiresIn`). A `refresh_token` or `expires_in` of another type
+  is absent.
+- **Options are read as own data.** Every exported constructor and factory
+  reads its options once as a plain snapshot of own data properties: a getter
+  is not run and reads as absent, and a throwing Proxy reads as absent — so a
+  hostile options object throws only the constructor's own `configuration`
+  failure, never its own text. **A consumer that defined an option by a
+  getter, or on a prototype, passes a plain object instead.** The shipped
+  validators now refuse at construction what 5.4.2 refused at the first
+  validation or with a `TypeError`: `idpCertificates` that is not an array
+  (`validator-no-certificates`), an entry that is not a string
+  (`idp-certificate-invalid`), a missing `replayStore`
+  (`required-fields-missing`, `replayStore`). A strategy, loader or presenter
+  called directly by the consumer, outside a moment, may still reject with
+  what its own collaborator threw (README, "Errors outside the moments").
 - **No built-in timeouts.** Removed: `DEFAULT_LOGIN_TIMEOUT_MS` (30 s);
   `timeoutMs` on `BrowserCallbackStrategyOptions`, `CallbackStrategyOptions`
   (`browserCallbackStrategy`, `oidcCallbackStrategy`, `samlCallbackStrategy`)

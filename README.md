@@ -2131,7 +2131,11 @@ export interface IDeviceCodePresenter {
 `presenter` is a required constructor field. The shipped one,
 `consoleDeviceCodePresenter(logger?)`, writes the prompt to the logger's
 `info`, or to **stderr** without one — never to stdout, which carries protocol
-traffic under an MCP or LSP stdio transport. `OidcDeviceFlowProvider.toConsole(config)`
+traffic under an MCP or LSP stdio transport. The prompt's values come from
+the authorization server, so it shows the verification URI only as an
+`http:` / `https:` serialisation of printable ASCII and the user code only
+when it is printable ASCII; without both it shows nothing and rejects, and
+the login ends `interactive-login` `device-code-not-shown`. `OidcDeviceFlowProvider.toConsole(config)`
 is the recipe that assembles it from `config.logger`:
 
 ```typescript
@@ -2191,7 +2195,7 @@ identity provider accepts a loopback redirect on any port.
 - **Linux**: Automatically sets `DISPLAY=:0` if neither `DISPLAY` nor `WAYLAND_DISPLAY` environment variables are set. Supports multiple browser executable names (`google-chrome`, `google-chrome-stable`, `chromium`, `chromium-browser` for Chrome; `firefox`, `firefox-esr` for Firefox).
 - **Windows**: the default browser through `%SystemRoot%\System32\rundll32.exe url.dll,FileProtocolHandler <url>` (absolute paths, never a program found in the current directory); a named one through PowerShell's `Start-Process`, which reads the URL from an environment variable. Never `cmd`, which parses `&`, `|`, `^` and `%` whatever the quoting. (Reasoned from the documented behaviour of both; not yet measured on a Windows host.)
 - **macOS**: Uses native `open` / `open -a <app>`.
-- **No shell, anywhere** (since 6.0.0): only an `http:` / `https:` URL is opened, as its serialisation (spaces and quotes percent-encoded), and every launcher is started with an argument array, the URL one argument of it. Through 5.4.2 the fallback without the `open` package handed the URL to a shell inside double quotes, so a `$(…)` or a backtick in it — from an OIDC provider's discovery document, say — ran as a command.
+- **No shell, anywhere** (since 6.0.0): only an `http:` / `https:` URL is opened, as its WHATWG serialisation; one whose serialisation still holds a space, a quote, `<`, `>`, `^`, `|`, a backslash or a control character, or whose host is not a valid host name or address, is not opened at all (nothing is repaired). Every launcher is started with an argument array, the URL one argument of it. Through 5.4.2 the fallback without the `open` package handed the URL to a shell inside double quotes, so a `$(…)` or a backtick in it — from an OIDC provider's discovery document, say — ran as a command.
 
 **Headless Mode (SSH/Remote)**: For environments without a display (SSH sessions, Docker, CI/CD), leave `browser` at its default or set it explicitly:
 
@@ -2425,6 +2429,26 @@ an `IAuthProviderError` (`@mcp-abap-adt/interfaces-auth` 6.0.0), minted by
   `message` is its `reason` (or `reason — hint`), and which has no `cause`.
   Nothing else is thrown — not a strategy's, loader's or presenter's own
   error, which is classified, and not an `AxiosError`.
+
+**Options are read as own data.** Every exported constructor and factory
+reads its options object once, as a plain snapshot of its own data
+properties: an accessor is never run (a getter reads as absent), and a Proxy
+or a revoked Proxy that throws reads as absent too — so a hostile options
+object makes it throw only its own `configuration` failure (the required
+field it then finds missing), never what the object threw. A value that is
+not an object reads as empty. Collaborators in the options (a strategy, a
+logger, a validator) are kept by reference and called inside a moment's
+boundary. Give options as a plain object; a field defined by a getter is not
+seen.
+
+**Errors outside the moments.** A strategy, a client-authentication
+strategy, a certificate loader or a presenter called **directly by you**,
+outside a provider's moments and `getTokens()` / `refreshTokens()`, is not
+behind that boundary: `authorize()`, `authenticate()`, `tlsMaterial()`,
+`load()` or `present()` may reject with what your own collaborator threw —
+a `read` callback, a loader's `material` function, a `provide` callback.
+Called by a provider, the same throw is classified and nothing of it
+crosses.
 
 An error is a frozen object: `kind` (one of a closed list), `variant` (the
 rule, problem or case of `saml-assertion`, `snc` and `configuration`),
@@ -3204,8 +3228,21 @@ const provider = new ClientCredentialsProvider({
 ```
 
 What else a provider logs, at `info` / `debug`: the stages of a token exchange
-(what is sent where, never a secret), token lengths and expiry, the browser
-and the authorization URL, a refresh that failed and the login that follows.
+(which exchange — never where, never a secret), token lengths and expiry, the
+browser launch, a refresh that failed and the login that follows. **No URL in
+any log line** (since 6.0.0): an endpoint is a free value — a discovered one
+is the server's, a configured one yours, and it may carry a credential or a
+query secret — so no line names a discovery URL, token, device or
+authorization endpoint, a UAA URL, a redirect URI, a client id or any other
+configured or server-supplied string; a line carries fixed words and
+admitted facts only (operation, grant, status, registered code). The one
+place a URL is shown is the **prompt** that sends a user to it — the
+authorization URL, the device flow's verification URI — and only as an
+`http:` / `https:` serialisation of printable ASCII: a URL that cannot be
+shown so is named in fixed words and not shown, and no control or bidi
+character reaches a prompt. `consoleDeviceCodePresenter` shows the user code
+only when it is printable ASCII; with no showable URI or code it shows
+nothing and the login ends `interactive-login` `device-code-not-shown`.
 
 The test suite's own logger (`src/__tests__/helpers/testLogger.ts`) is
 switched on by environment variables — this is for running the tests, not
@@ -3235,6 +3272,12 @@ AUTH_LOG_LEVEL=debug npm test        # debug, info, warn, error
   collaborator may throw text holding a key, a passphrase or a token.
   Diagnose a collaborator's failure where it throws, not from this package's
   log.
+- **No URL and no configured value in logs**: see above; a source test
+  (`logCallSources.test.ts`) fails when a log call takes a URL, an
+  endpoint, a client id or an error's message, and `endpointsInLogs.test.ts`
+  proves on a real socket — hostile discovery documents and configured
+  endpoints, `authDebug` absent, `false` and `true` — that no line holds
+  them or a control character.
 - **A throwing logger changes nothing**: every log call on a failure path is
   guarded, and a logger answering a rejecting promise is handled, so the
   failure the site throws is the one you get.
