@@ -1514,11 +1514,13 @@ export abstract class BaseTokenProvider
    * attempt that made the commit still has a live waiter. An awaited
    * report is awaited — a collaborator's answer, adopted as `await` adopts
    * it — and its throw or rejection is the renewal's failure (`unknown`,
-   * `persisting-tokens`); never a failed step, so a store write that fails
-   * starts no login. A detached one is called and not awaited: its throw or
+   * `persisting-tokens`), also logged as detached when every waiter left
+   * while it ran; never a failed step, so a store write that fails starts
+   * no login. A detached one is called and not awaited: its throw or
    * rejection is logged in fixed words and goes no further. `make` builds a
-   * fresh report each time — a strategy changing it changes nothing held —
-   * and building it (`getAuthType()` is a subclass's) is part of the report.
+   * fresh report each time — a strategy changing it changes nothing held.
+   * Building an awaited report (`getAuthType()` is a subclass's) is the
+   * provider's own work: its throw ends the renewal as it is.
    * The provider never reports the same change twice.
    */
   private async reportChange(
@@ -1538,9 +1540,16 @@ export abstract class BaseTokenProvider
       }
       return;
     }
+    // Built before the strategy is called: a fault of this provider (an
+    // unusable `getAuthType()`) ends the renewal with its own error, never
+    // blamed on persistence (G7).
+    const report = make(true);
     try {
-      await this.callReport(persistence, make(true));
+      await this.callReport(persistence, report);
     } catch (error) {
+      // Every waiter left while the report ran: nobody receives the
+      // renewal's failure, so it is logged as a detached one would be.
+      if (attempt.signal.aborted) this.detachedFailed(error);
       throw new AuthProviderFailure(this.persistingFailure(error));
     }
   }

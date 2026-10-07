@@ -436,6 +436,56 @@ describe('a detached failure is logged and attributed to nothing', () => {
   );
 });
 
+describe('an awaited report whose every waiter left while it ran (review M4)', () => {
+  it('fails after the abort: logged as a detached failure, once, in fixed words', async () => {
+    const { lines, logger } = recordingLogger();
+    const gate = deferred();
+    const { persistence } = reportRecorder(async () => {
+      await gate.promise;
+      throw new Error('SECRET-PERSIST-TEXT');
+    });
+    const provider = seeded({ persistence, logger });
+    const only = new AbortController();
+    const cut = rejectionOf(provider.getTokens({ signal: only.signal }));
+    (await provider.refreshes.nth(1)).result.resolve(tokens(jwt('one'), 'R1'));
+    await quiet();
+    only.abort();
+    await cut;
+    gate.resolve();
+    await quiet();
+    const failures = lines.filter(
+      (l) => l.message === '[BaseTokenProvider] Persisting the tokens failed',
+    );
+    expect(failures).toEqual([
+      {
+        level: 'warn',
+        message: '[BaseTokenProvider] Persisting the tokens failed',
+        meta: {
+          error: 'persisting the tokens failed (unknown error)',
+          kind: 'unknown',
+        },
+      },
+    ]);
+    expect(JSON.stringify(lines)).not.toContain('SECRET');
+  });
+
+  it('a waiter still there gets the failure, and nothing is logged as detached', async () => {
+    const { lines, logger } = recordingLogger();
+    const { persistence } = reportRecorder(() => {
+      throw new Error('SECRET');
+    });
+    const provider = seeded({ persistence, logger });
+    const thrown = rejectionOf(provider.getTokens());
+    (await provider.refreshes.nth(1)).result.resolve(tokens(jwt('one'), 'R1'));
+    expectPersistingFailure(await thrown);
+    expect(
+      lines.filter(
+        (l) => l.message === '[BaseTokenProvider] Persisting the tokens failed',
+      ),
+    ).toEqual([]);
+  });
+});
+
 describe('no repetition', () => {
   it('a report failed once is never made again by the provider', async () => {
     let failures = 1;

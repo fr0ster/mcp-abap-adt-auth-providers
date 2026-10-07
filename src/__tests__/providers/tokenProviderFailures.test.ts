@@ -692,7 +692,7 @@ describe('a refused refresh token is discarded explicitly (spec §6c.6, §6c.8)'
     expect(p.dispositions()).toEqual(['replace', 'clear', 'replace']);
   });
 
-  it('a clearing report that cannot be built (getAuthType() throwing) is an awaited report failing: the renewal fails persisting-tokens, no login', async () => {
+  it('a clearing report that cannot be built (getAuthType() throwing): the renewal fails with heldGrant()’s own error, not persisting-tokens, and no login (review M3)', async () => {
     let broken = false;
     class Breaking extends TestProvider {
       protected override getAuthType(): OAuth2GrantType {
@@ -711,9 +711,10 @@ describe('a refused refresh token is discarded explicitly (spec §6c.6, §6c.8)'
     p.login.mockResolvedValue(result('T3', 'R3'));
     const thrown = await rejectionOf(p.getTokens());
     expectFailure(thrown);
+    // The provider's fault, not the strategy's: heldGrant()'s own error.
     expect((thrown as AuthProviderFailure).error).toMatchObject({
       kind: 'unknown',
-      facts: { operation: 'persisting-tokens' },
+      facts: { operation: 'token-request' },
     });
     expect(p.steps()).toEqual(['login', 'write:replace', 'refresh']);
     // The discard itself stands: R1 is never sent again.
