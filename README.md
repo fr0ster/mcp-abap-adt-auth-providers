@@ -2557,12 +2557,11 @@ For an ACS or redirect mismatch the two addresses are in `diagnostics`
 (origin and path only), never in the words. A provider moment that meets one
 answers it as its refusal.
 
-**A known wording limit:** interfaces-auth 6 has no case for a value that is
-present but invalid, so an unparseable `authorizationUrl` and an
-`SncLogonProvider` `myName` that is not a string are reported as
-`required-fields-missing` naming the field — "required configuration is
-missing: authorizationUrl" — although a value was given. A proper case needs
-an interfaces-auth major.
+An unparseable `authorizationUrl` is `invalid-value` (interfaces-auth 7),
+naming the field — "a configured value cannot be used: authorizationUrl" —
+never the value. **A known wording limit:** an `SncLogonProvider` `myName`
+that is not a string is still reported as `required-fields-missing` naming
+the field, although a value was given.
 
 <!-- generated:refusal-table configuration -->
 | Thrown | `case` | `fields` | Reason | Hint |

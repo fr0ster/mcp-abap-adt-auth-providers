@@ -109,3 +109,16 @@ describe('public exports — 6.0.0 removals', () => {
     expect(name in surface).toBe(false);
   });
 });
+
+describe('public exports — renewal strategies (spec §6c.8)', () => {
+  it.each(['refreshThenLogin', 'refreshOnly'])('exports %s', (name) => {
+    expect(typeof (surface as Record<string, unknown>)[name]).toBe('function');
+  });
+
+  it.each(['readDecision', 'needsSentDecision'])(
+    'does not export the internal %s',
+    (name) => {
+      expect(name in surface).toBe(false);
+    },
+  );
+});
