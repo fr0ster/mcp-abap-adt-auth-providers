@@ -2575,6 +2575,783 @@ be load-bearing: break the rule, watch the test go red.
 - **§6b's cancellation text** is rewritten for `ifCut`.
 
 
+## 6d. Authorization strategies by composition
+
+Anchor: [`../2026-10-08-authorization-composition-goal.md`](../2026-10-08-authorization-composition-goal.md).
+Every "Holds throughout" invariant of that goal binds this section; §6d.13
+says how each is honoured. Line references are to `feat/error-contract` at
+`116bd71`.
+
+### 6d.0 Decided here
+
+The goal's "Open — for the spec", answered:
+
+1. **The three part contracts live in interfaces-auth**, as types only
+   (§6d.1): `IAuthorizationPresentation`, `IAnswerTransport`,
+   `IAuthorizationProtocol`, with the answer and verdict shapes between
+   them. A consumer that replaces one part writes against the contract
+   package, as for every other strategy here, never against
+   auth-providers. They are additive: **interfaces-auth 7.4.0**. The
+   implementations, the composer and the named compositions live in
+   auth-providers (§6d.2–§6d.7).
+2. **Shipped parts** (§6d.2): presentations `openInBrowser`, `showUrl`,
+   `consumerPresentation`; transports `loopback6`, `loopback4`, `loopback`,
+   `networkListener`, `terminalPaste`, `consumerAnswer`, and the pair
+   `consumerHandoff`; protocols `oauthCode`, `oidcCode`, `samlResponse`,
+   `passcode`. The composer is `composeAuthorization`. **Named
+   compositions** keep today's names, one to one (§6d.7):
+   `browserCallbackStrategy`, `oidcCallbackStrategy`,
+   `samlCallbackStrategy`, `manualPasteStrategy`,
+   `manualSamlResponseStrategy`, `manualPasscodeStrategy`,
+   `externalCodeStrategy`. `staticCodeStrategy` and `asOidcResult` stay as
+   they are: neither presents a URL nor waits for an answer.
+3. **Transport and protocol meet through an answer and a verdict**
+   (§6d.3). The transport hands the protocol one `AuthorizationAnswer` per
+   arrival: a redirect (`via: 'redirect'`, its method and its parameters),
+   or a text (`via: 'form' | 'terminal' | 'consumer'`). The protocol
+   answers one `AnswerVerdict`: `accept` (the payload), `refuse` (a reason
+   from a closed list; the transport answers it and keeps waiting) or `end`
+   (a minted error; the login ends). The protocol arms `state`: it reads
+   the expected one from the URL it is given. The composer never takes a
+   payload from a transport: it takes the one the protocol accepted.
+4. **The paste form belongs to the HTTP listener, its words to the
+   protocol** (§6d.3.4). The listener serves `/`, mints the per-attempt form
+   token when it is armed, embeds it and checks it on `/submit`: the token
+   is evidence of the channel ("submitted through the page this listener
+   served"), not of the payload. The protocol supplies the words of the
+   page and of the terminal prompt (`PasteWords`) and judges the pasted
+   text. That is how the listener serves a paste form without knowing what
+   is pasted.
+5. **`ICallbackServer` is deprecated, not removed** (§6d.8):
+   `ICallbackServerOptions`, `ICallbackServerHandle`,
+   `CallbackServerFactory`, `gated`, `expectState`, `host` and
+   `allowedHosts` stay in interfaces-auth 7.4.0 marked `@deprecated`, and
+   no package implements or reads them any more. They go in the next major
+   of interfaces-auth made for another reason. auth-providers 6.0.0 drops
+   every implementation and option of them: `withBrowserCallbackServer`,
+   `withOidcCallbackServer`, `withSamlCallbackServer`, `runCallbackScope`,
+   the `callbackServer` option, the `BrowserCallbackStrategy` class.
+6. **Migration** (§6d.10): `browserCallbackStrategy({ browser, port })` —
+   the form the server and the CLI use — compiles and behaves as today. What
+   changes: the `callbackServer`, `host` and `allowedHosts` options go
+   (`host` / `allowedHosts` never shipped: they are 6.0.0's own); a
+   non-loopback listener is `networkListener` and advertises the address
+   the consumer names; the terminal and consumer-code compositions of a
+   redirect protocol require `redirectUri`; `/submit` is a POST; every
+   composition refuses an overlapping `authorize` (`busy`).
+
+**Choices made between options** (each is the user's to overturn):
+
+- **C1. Versions: interfaces-auth 7.4.0, deprecating `ICallbackServer`,**
+  rather than 8.0.0 removing it. A major moves every sibling and every
+  consumer of interfaces-auth (connection 13, auth-stores 4, the broker)
+  for the removal of types nobody outside auth-providers uses (searched
+  2026-10-08: the broker, its CLI, the server, connection). The cost: dead
+  types stay published until the next major.
+- **C2. `networkListener` advertises the consumer's authority**, not
+  `localhost`. Today a wildcard bind with `allowedHosts` still advertises
+  `http://localhost:<port>/callback`; `0.0.0.0` binds IPv4 only, so
+  `[::1]:<port>` — where `localhost` resolves first — is not the
+  listener's, and the redirect reaches a socket that is not ours (goal
+  invariant 3). The alternative — keep `localhost` and add a loopback pair
+  beside the network bind — is one transport with two advertisements; it
+  is left to a consumer transport.
+- **C3. `loopback` keeps today's skip of an unavailable `::1`**
+  (`EADDRNOTAVAIL`, `EAFNOSUPPORT`): an address the machine does not have
+  can be nobody's, so `localhost` still reaches only the listener. The
+  alternative — refuse, so the consumer must pick `loopback4` — is
+  stricter and costs every IPv4-only container a configuration change.
+- **C4. A transport with no socket advertises no redirect of its own.**
+  `terminalPaste` and `consumerAnswer` take `redirectUri` from the
+  consumer and require it for a protocol that uses a redirect; the
+  `http://localhost:61001/callback` default of the manual and external
+  strategies goes. The redirect it named reached whatever held port 61001
+  (goal invariant 3). The alternative — keep the default — keeps
+  `manualPasteStrategy()` working without arguments.
+- **C5. Every shipped protocol has paste words**, so every HTTP listener
+  serves the paste page — OIDC and SAML included, which have no paste page
+  today. The alternative — paste words for `oauthCode` only, as today — is
+  one line per protocol to change.
+- **C6. `/submit` becomes a POST** (urlencoded, the 5 MB limit the SAML
+  route has today), so a `SAMLResponse` fits and no code lands in a URL.
+  The alternative — keep the GET — limits the form to codes.
+- **C7. An unbound configured `authorizationUrl` still admits a redirect
+  without `state`** (today's `expectState(null)`). Goal invariant 4 says
+  "no bare code on an unauthenticated HTTP request"; read here as the
+  paste route and every URL the provider builds, since a URL the consumer
+  configured is bound by the consumer (§6a1, "What the consumer brings").
+  The alternative — refuse every redirect without `state` — makes a
+  configured `authorizationUrl` unusable with a listener. Flagged for the
+  user.
+
+### 6d.1 The part contracts (interfaces-auth 7.4.0)
+
+New file `packages/interfaces-auth/src/auth/IAuthorizationParts.ts`,
+exported from the index. Types and `as const` arrays only (the interfaces
+package holds no logic).
+
+```ts
+import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
+import type { IAuthProviderError } from '../error/IAuthProviderError';
+import type { InteractiveLoginStrategy } from '../error/kinds';
+
+// ---- what travels between transport and protocol -----------------------
+
+/** Read-only parameters; `URLSearchParams` satisfies it. */
+export interface AnswerParameters {
+  getAll(name: string): string[];
+}
+
+/** One arrival, as the transport received it. */
+export type AuthorizationAnswer =
+  /** A request to the listener's callback route. */
+  | {
+      readonly via: 'redirect';
+      readonly method: 'GET' | 'POST';
+      /** The query of a GET; the urlencoded body of a POST. */
+      readonly params: AnswerParameters;
+    }
+  /**
+   * A text the user gave: through the listener's paste page, its form token
+   * already checked (`form`); typed into a terminal (`terminal`); returned
+   * by the consumer's code (`consumer`).
+   */
+  | {
+      readonly via: 'form' | 'terminal' | 'consumer';
+      readonly text: string;
+    };
+
+/** Why an answer is refused while the login keeps waiting. Fixed words. */
+export const ANSWER_REFUSALS = [
+  'not-armed',        // arrived before the channel was armed (transport)
+  'host',             // a Host the listener does not answer for (transport)
+  'form-token',       // no or another form token (transport)
+  'state',            // a redirect without this login's state (protocol)
+  'pasted-state',     // a pasted URL from another login (protocol)
+  'no-payload',       // nothing this protocol reads (protocol)
+  'unreadable',       // a text no payload could be read from (protocol)
+  'already-answered', // after the first accepted answer (composer)
+] as const;
+export type AnswerRefusal = (typeof ANSWER_REFUSALS)[number];
+
+/** The protocol's decision on one answer. */
+export type AnswerVerdict<TPayload> =
+  | { readonly verdict: 'accept'; readonly payload: TPayload }
+  | { readonly verdict: 'refuse'; readonly reason: AnswerRefusal }
+  | {
+      readonly verdict: 'end';
+      /** Minted through auth-errors; the composer re-mints anything else. */
+      readonly error: IAuthProviderError;
+      /**
+       * Text for the listener's escaped error page only (the IdP's
+       * `error` and `error_description`). Never logged, never in an error,
+       * never printed to a terminal.
+       */
+      readonly shown?: string | undefined;
+    };
+
+export type AnswerJudge<TPayload> = (
+  answer: AuthorizationAnswer,
+) => AnswerVerdict<TPayload>;
+
+/** The words a paste page and a terminal prompt show. The protocol's. */
+export interface PasteWords {
+  /** One line: the terminal prompt, and the page's field label. */
+  readonly prompt: string;
+  /** One paragraph on the page: where the user finds what to paste. */
+  readonly instructions: string;
+}
+
+// ---- protocol ------------------------------------------------------------
+
+/** What an answer is and how it is checked. Knows no socket, no terminal. */
+export interface IAuthorizationProtocol<TPayload> {
+  /**
+   * `required`: the authorization URL carries a redirect, so the
+   * transport must give one. `unused`: it does not (a passcode).
+   */
+  readonly redirect: 'required' | 'unused';
+  /** The methods its redirect arrives with; `[]` when it takes none. */
+  readonly callbackMethods: readonly ('GET' | 'POST')[];
+  /** Absent: no paste page, and a terminal cannot be used with it. */
+  readonly paste?: PasteWords | undefined;
+  /**
+   * One attempt: called once the URL is built, before anything is shown.
+   * Reads what binds an answer to it (the `state`) from the URL. Throws a
+   * minted `configuration` error for a URL it cannot read.
+   */
+  begin(authorizationUrl: string): AnswerJudge<TPayload>;
+}
+
+// ---- transport ---------------------------------------------------------
+
+export interface AnswerTransportOptions {
+  /** The composition's signal: aborts at the abort, the dispose. */
+  readonly signal: AbortSignal;
+  readonly logger?: ILogger | undefined;
+  /** From the protocol. */
+  readonly paste?: PasteWords | undefined;
+  /** From the protocol. */
+  readonly callbackMethods: readonly ('GET' | 'POST')[];
+}
+
+/** An open channel, valid inside `open`'s callback. */
+export interface IAnswerChannel {
+  /**
+   * The redirect this transport advertises: one that reaches only what it
+   * listens on (a listener), or the consumer's (`terminalPaste`,
+   * `consumerAnswer`); `undefined` when it has none.
+   */
+  readonly redirectUri: string | undefined;
+  /** Where a listener waits, for the "waiting on" line; else absent. */
+  readonly waitingOn?: string | undefined;
+  /** How a user elsewhere reaches this channel, fixed words; else absent. */
+  readonly routeHint?: string | undefined;
+  /**
+   * Arms the channel with this attempt's judge — once. Until then every
+   * arrival is refused (`not-armed`). Returns the wait.
+   */
+  arm(judge: AnswerJudge<unknown>): IArmedChannel;
+}
+
+export interface IArmedChannel {
+  /**
+   * Resolves once the judge accepted an answer — with nothing: the
+   * composer holds the payload. Rejects on an `end` verdict (with its
+   * error), on the signal, on a failure of the channel.
+   */
+  answer(): Promise<void>;
+}
+
+/** How the user's answer reaches us. Knows no payload. */
+export interface IAnswerTransport {
+  /** For the `aborted` / `disposed` facts. */
+  readonly label: InteractiveLoginStrategy;
+  /**
+   * Opens (binds, starts a reader), runs `use`, releases. Settles on the
+   * first terminal outcome — `use` returning or throwing, the signal — and
+   * only once released: a settled `open` means the port is free and the
+   * reader closed. Never stops a running `use`; a late settlement of an
+   * abandoned `use` is discarded.
+   */
+  open<TReturn>(
+    options: AnswerTransportOptions,
+    use: (channel: IAnswerChannel) => Promise<TReturn>,
+  ): Promise<TReturn>;
+}
+
+// ---- presentation ------------------------------------------------------
+
+export interface PresentationContext {
+  readonly redirectUri: string | undefined;
+  readonly waitingOn?: string | undefined;
+  readonly routeHint?: string | undefined;
+  readonly signal: AbortSignal;
+  /** For prompts. Absent: stderr — never stdout. */
+  readonly logger?: ILogger | undefined;
+}
+
+/** How the URL reaches the user. Knows no payload, no transport. */
+export interface IAuthorizationPresentation {
+  /**
+   * Not awaited by the composer. A synchronous throw, or a rejection of
+   * what it returns (a promise or any thenable), is a presentation
+   * failure: logged and answered by a prompt of the URL (§6d.5).
+   */
+  present(authorizationUrl: string, context: PresentationContext): unknown;
+}
+```
+
+Also in 7.4.0, all additive (new values of fact sets are minors, as in
+7.1.0):
+
+- `CONFIG_FIELDS` gains `host`, `authorities`, `redirectUri`,
+  `presentation`, `transport`, `protocol`, `provide`, `receive`, `show`.
+- `INTERACTIVE_LOGIN_STRATEGIES` gains `consumer` (the label of
+  `consumerAnswer`).
+- `OPERATIONS` gains `presenting-authorization-url` (the composer's
+  presentation failure) and `judging-answer` (a judge that threw).
+- `@deprecated` on `ICallbackServer.ts`'s four declarations and on
+  `CONFIG_FIELDS`' `callbackServer` (kept: removing a value is a major).
+
+`IAuthorizationStrategy` and `AuthorizationRequest` do not change (goal
+invariant 7). Its JSDoc's "See `ICallbackServer`" points at the parts.
+
+### 6d.2 The shipped parts (auth-providers)
+
+New directory `src/authorization/`: `presentation/`, `transport/`,
+`protocol/`, `compose.ts`, `answerWords.ts` (the fixed words per
+`AnswerRefusal`). `src/strategies/` keeps the named compositions only.
+Every factory reads its options once as own data (`ownOptions`), as today.
+No part has a default the consumer did not choose: every option a part
+needs is required, and the named compositions supply today's values.
+
+**Presentations** (`src/authorization/presentation/`):
+
+| Part | Does |
+|---|---|
+| `openInBrowser({ browser })` | `browser`: `'auto' \| 'system' \| 'chrome' \| 'msedge' \| 'firefox'`, required. `launchBrowser` as built (§6a0: no shell, `launchableUrl`, absolute paths on Windows). Its own fallback — no `open` module, a launcher exiting non-zero — prompts the URL itself and resolves, so the composer never prompts it twice. `'none'` / `'headless'` are refused (`configuration` `invalid-value`, `browser`): that is `showUrl`. |
+| `showUrl()` | Announces the URL through `promptForUrl` — the logger's `info`, else stderr, only as `promptableUrl` admits it — then `waitingOn` and `routeHint` when the channel has them. Synchronous. |
+| `consumerPresentation({ show })` | `show(url, { redirectUri, signal })` is the consumer's UI. A throw or a rejection is a presentation failure (§6d.5). |
+
+**Transports** (`src/authorization/transport/`). The four listeners are one
+implementation, `httpListener` (not exported), parameterised by where it
+binds, which `Host` it answers and what it advertises; it knows no
+payload.
+
+| Part | Binds | Answers `Host` | Advertises |
+|---|---|---|---|
+| `loopback6({ port })` | `::1` only | a loopback authority with the bound port, from a loopback peer | `http://[::1]:<port>/callback` |
+| `loopback4({ port })` | `127.0.0.1` only | the same | `http://127.0.0.1:<port>/callback` |
+| `loopback({ port })` | `127.0.0.1`, then `::1` on the same port (C3) | the same | `http://localhost:<port>/callback` |
+| `networkListener({ host, port, authorities })` | `host` | only `authorities`, from any peer; never a loopback name | `http://<authorities[0]>/callback` |
+| `terminalPaste({ redirectUri?, read? })` | nothing; reads stdin | — | `redirectUri` as given (C4) |
+| `consumerAnswer({ redirectUri?, receive })` | nothing | — | `redirectUri` as given (C4) |
+
+- `port` is required on every listener; `0` binds an ephemeral port. K6
+  (`callback-port-invalid`, `port`) at construction and again in `open`.
+  `DEFAULT_CALLBACK_PORT` (61001) stays exported; the named compositions
+  pass it.
+- No port probe before the bind: the bind's own `EADDRINUSE` is
+  `port-in-use` (K1's words kept). Today's probe bound `::` and could
+  report a port taken on a family the transport does not use.
+- `loopback`: the `::1` half takes the port the OS gave `127.0.0.1`; taken
+  there → `port-in-use`, never `127.0.0.1` alone (§6a1).
+- `networkListener`: `host` required, non-empty (`required-fields-missing`,
+  `host`); `authorities` required, at least one, each exactly an authority
+  (`parseAuthority`), not loopback, not unspecified, else `invalid-value`,
+  `authorities` — at construction, not silently matching nothing as
+  `allowedHosts` does today. An entry without a port means the bound port.
+  At `open` it logs one `warn` line in fixed words: "the callback listens
+  on a non-loopback address; every client that reaches it can answer this
+  login through its paste page". The README warns the same and recommends
+  `loopback` with an SSH tunnel. Plain HTTP: the listener serves no TLS.
+- `routeHint` (listeners with paste words only): `networkListener` names
+  its advertised authority's `/`; the loopback ones name the SSH tunnel to
+  their own address (`ssh -L <port>:<bound address>:<port> <this
+  machine>`) and its `/` — today's `uaaPasteHint`, its URLs only as
+  `promptableUrl` admits them.
+- `terminalPaste`: `read(prompt, signal)` defaults to `readFromTerminal`
+  (stderr prompt, stdin only when a TTY, `readline` closed on the signal,
+  settles once closed — §6b). Label `manual`.
+- `consumerAnswer`: `receive(signal) => Promise<string>` is the consumer's
+  code; `open` settles at the abort itself (`untilAborted`): it holds
+  nothing to release. Label `consumer`.
+- `consumerHandoff({ redirectUri?, provide })` returns
+  `{ presentation, transport }` built from one `provide(url, signal)`: the
+  presentation calls it, the transport awaits what it returned. For a
+  consumer whose UI shows the URL and returns the code in one call — today's
+  `externalCodeStrategy`.
+
+**Protocols** (`src/authorization/protocol/`):
+
+| Part | Payload | `redirect` | `callbackMethods` | Binds a redirect by |
+|---|---|---|---|---|
+| `oauthCode()` | `string` (the code) | required | GET | `state` |
+| `oidcCode()` | `OidcCallbackResult` (`{ code, state? }`) | required | GET | `state` |
+| `samlResponse()` | `string` (the `SAMLResponse`) | required | GET, POST | nothing here: `InResponseTo` and the validator (§6a1, Appendix B) |
+| `passcode()` | `string` | unused | none | takes no redirect |
+
+Each has its paste words (C5) — the code (or the whole redirected URL),
+the `SAMLResponse` from the POST body, the Temporary Authentication Code —
+today's prompt sentences.
+
+### 6d.3 How a transport and a protocol meet
+
+#### 6d.3.1 What the listener hands the protocol
+
+Per request, after the `Host` check and only once armed:
+
+- `GET /callback` → `{ via: 'redirect', method: 'GET', params }`, `params`
+  the raw query read with `URL` / `URLSearchParams` (no Express `qs`
+  objects, no regex).
+- `POST /callback` → `{ via: 'redirect', method: 'POST', params }`, the
+  urlencoded body (5 MB), only when `callbackMethods` has `POST`; else 404.
+- `POST /submit` → `{ via: 'form', text }`, only when the protocol has paste
+  words, and only after the form token check (§6d.3.4).
+
+Nothing else reaches the protocol: no header, no peer address, no path.
+**A parameter counts only when present exactly once** (`getAll(name).length
+=== 1`): a repeated `state` or `code` is no value — today's "an array is
+not the secret".
+
+#### 6d.3.2 The protocol's verdicts, and what each transport does with them
+
+| Verdict | Listener (`redirect`) | Listener (`form`) | `terminalPaste` | `consumerAnswer` |
+|---|---|---|---|---|
+| `accept` | the fixed success page, after flush; the wait resolves | the same | the wait resolves | the wait resolves |
+| `refuse` | `400` in fixed words per reason; counted, `warn`-logged with the reason, ignored; the login waits | the form again, `400`, the reason's words above it; counted, logged, ignored | the reason's words, then the prompt again | ends `unreadable-input` (it cannot ask again) |
+| `end` | the error page, `shown` escaped; the wait rejects with the error | the same | the wait rejects (`shown` dropped) | the wait rejects |
+
+The shipped judges:
+
+- **`oauthCode` / `oidcCode`**, `begin(url)`: `urlState(url)`; `undefined`
+  (the URL does not parse) → `configuration` `invalid-value`
+  `authorizationUrl`, before anything is shown; else `expected: string |
+  null`.
+  - `redirect`: first the binding — `expected` a string and the answer's
+    one `state` not equal to it (`sameSecret`, constant time) → `refuse
+    'state'`; so a forged `?error=` stops here too. Then `error` → `end`
+    with `identity-provider-refused` (registered code only), `shown` =
+    `error[: error_description]`. Then no one `code` → `refuse
+    'no-payload'`. Else `accept` (OIDC: `{ code, state }`).
+  - `form` / `terminal`: `readPaste(expected, text)` (§6a1: bare only
+    without `?`, `&`, `=`, `/`, `#`; a URL must carry `expected`). A code
+    → `accept`; `state` → `refuse 'pasted-state'`; unreadable → on `form`
+    `refuse 'unreadable'`, on `terminal` `end` `unreadable-input` (K16, as
+    today).
+  - `consumer`: the text as the code, verbatim (today's
+    `externalCodeStrategy`); empty → `end` `no-input`.
+- **`samlResponse`**: `redirect` with one non-empty `SAMLResponse` →
+  `accept`, else `refuse 'no-payload'`; a text, trimmed, non-empty →
+  `accept`; empty → `form` `refuse 'no-payload'`, else `end` `no-input`.
+- **`passcode`**: `redirect` → `refuse 'no-payload'`; a text as
+  `samlResponse`.
+
+A consumer protocol may answer differently; the transport's behaviour per
+verdict does not change.
+
+#### 6d.3.3 Who arms what
+
+- **The protocol arms `state`.** It reads the expected value from the URL
+  in `begin`; the transport never sees it. A provider keeps minting it
+  (§6a1).
+- **The composer arms the channel**, once the URL is built and `begin`
+  returned, before the URL is presented. Until then a listener refuses
+  every request to `/callback` and `/submit` (`not-armed`, `400`,
+  counted, ignored) and serves no form (`/` answers `400`: no token exists
+  yet). This is today's `gated`, now unconditional for every protocol and
+  every listener: no flag, and nothing for SAML to opt out of.
+
+#### 6d.3.4 The paste page and its form token
+
+- The listener owns `/` and `/submit`; both exist only when the protocol
+  gave paste words.
+- `arm` mints the form token (`mintSecret`: 32 random bytes, base64url),
+  one per attempt. `/` serves the form with it as a hidden field, the
+  protocol's words escaped, `form-action 'self'` in the CSP.
+- `POST /submit` carries `form_token` and `input`. The listener compares
+  the token (one value, `sameSecret`); none or another → `refuse
+  'form-token'`, `400`, counted, ignored — before the protocol sees
+  anything. Only then is `{ via: 'form', text: input }` judged.
+- So the channel's evidence (the page) is the listener's, and the
+  payload's (a pasted URL's `state`) is the protocol's.
+
+#### 6d.3.5 What the listener keeps from today
+
+One listener (`httpListener`, today's `runCallbackScope` without routes of
+its own kind) serves every protocol. It keeps, unchanged: the `Host` check
+before any route (§6a1); loopback names only from a loopback peer; the
+middleware with `nosniff` and the CSP; `sendHtml` / `sendText`;
+`escapeHtml` on every interpolated value; the fixed 404 and 500 pages;
+settling only after the response flushed; release on the first terminal
+outcome, unreferenced sockets and destroyed unfinished bodies (Task 30f);
+`ignoredCallbacks` in the `aborted` words. One success page for every
+protocol (today OAuth has a page, OIDC and SAML a text).
+
+### 6d.4 The composer
+
+```ts
+export interface ComposedAuthorization<TPayload> {
+  readonly presentation: IAuthorizationPresentation;
+  readonly transport: IAnswerTransport;
+  readonly protocol: IAuthorizationProtocol<TPayload>;
+  /** Ends every login of this strategy, beside the request's signal. */
+  readonly signal?: AbortSignal | undefined;
+}
+
+export function composeAuthorization<TPayload>(
+  parts: ComposedAuthorization<TPayload>,
+): IAuthorizationStrategy<TPayload> & { dispose(): Promise<void> };
+```
+
+At construction, a missing part → `configuration`
+`required-fields-missing`, naming `presentation`, `transport` or
+`protocol`.
+
+`authorize(request)`:
+
+1. Disposed → `disposed` (`strategy`: the transport's label). An
+   `authorize` in flight → `busy`, for every composition: a transport holds
+   a port or a reader, and two terminal readers on stdin are never right.
+2. One `AbortController` for the call, aborted by the option signal, the
+   request's signal (the attempt's, §6b) or `dispose()`; an already-aborted
+   one is honoured before anything opens.
+3. `transport.open({ signal, logger, paste, callbackMethods }, use)`, where
+   `use(channel)`:
+   1. a protocol with `redirect: 'required'` and a channel with no
+      `redirectUri` → `configuration` `required-fields-missing`
+      `redirectUri`, before the URL is built;
+   2. `url = await request.buildAuthorizationUrl(channel.redirectUri ??
+      '')` — the empty string only for `redirect: 'unused'`, which
+      `UaaPasscodeProvider` ignores; a builder's throw passes as it is
+      (E7, E8, E12, OIDC discovery);
+   3. aborted meanwhile → `aborted`, nothing shown;
+   4. `judge = protocol.begin(url)`;
+   5. `armed = channel.arm(wrapped)`, where `wrapped` calls `judge`,
+      keeps the first `accept`'s payload and the first `end`'s error in
+      the composer, and turns every answer after the first accept into
+      `refuse 'already-answered'`; a judge that throws becomes `end` with
+      the thrown value classified (`readFailure(…, 'judging-answer')`)
+      and a fixed 500 page;
+   6. presents the URL — not awaited (§6d.5);
+   7. `await armed.answer()`, then returns `{ payload, redirectUri:
+      channel.redirectUri ?? '' }` with **the payload the composer kept**.
+      `answer()` resolving with no kept payload → `failed`: a transport
+      cannot hand the provider a payload the protocol did not accept.
+4. Errors as today's `BrowserCallbackStrategy` maps them: aborted by
+   `dispose()` alone → `disposed`; by a signal → `aborted` (the
+   transport's label, its `ignoredCallbacks`); a kept `end` error → that
+   error, re-minted when not minted by this copy (as `relayOutcome`); a
+   minted failure → as it is; anything else → `failed` (`failedLogin`).
+5. `inFlight` is cleared in `finally`, after `open` settled — so
+   `authorize` settles only once the transport is released (§6b drain:
+   `attempt.exclusive` awaits exactly this).
+
+`dispose()`: idempotent; aborts the call in flight and resolves once its
+`authorize` has settled — the port free, the reader closed. A part has no
+`dispose`: a transport releases per `open`, and a consumer part that holds
+something longer is the consumer's to dispose (whoever constructs,
+disposes).
+
+**Late results change nothing.** After the composer's call has ended, the
+channel is released (a listener closed, a reader closed); a `use` still
+running is abandoned and its settlement discarded by `open`; a
+presentation that rejects later prompts nothing (the composer checks it
+ended); an accept after the first is refused.
+
+### 6d.5 Presentation failures (Task 30h, generalised)
+
+The composer owns 30h for every presentation. A presentation that throws,
+or whose answer rejects (adopted as `await` would: a native promise or any
+Promises/A+ thenable), while the call is running:
+
+- one `error` line, `Failed to present the authorization URL:` and
+  `logFields(readFailure(error, 'presenting-authorization-url'))` — fixed
+  words, no URL;
+- the URL prompted once through `promptForUrl` (`promptableUrl`, the
+  logger's `info` or stderr), with `waitingOn` when a listener waits;
+- the login keeps waiting. It ends on its result, the IdP's refusal or a
+  signal; no timer.
+
+`openInBrowser` prompts on its own internal fallback and then resolves, so
+a failed default launcher prompts once, not twice. `promptableUrl` and
+`announcer` are unchanged; nothing writes to stdout.
+
+### 6d.6 What `ICallbackServer` and today's options become
+
+| Today | 6.0.0 |
+|---|---|
+| `CallbackServerFactory`, `ICallbackServerOptions`, `ICallbackServerHandle` | deprecated in interfaces-auth 7.4.0, implemented by nothing (C1). A factory delivered payloads the strategy took as given; the protocol's judgement could not be enforced through it. |
+| `withBrowserCallbackServer`, `withOidcCallbackServer`, `withSamlCallbackServer`, `runCallbackScope` | removed; `httpListener` behind the listener transports, routes chosen by the protocol's descriptor |
+| `callbackServer` option | removed; a consumer's own receiver is an `IAnswerTransport` |
+| `gated` | gone: every listener is closed until armed |
+| `expectState(state)` | gone: `protocol.begin(url)` reads `state`; `channel.arm(judge)` opens |
+| `stateGate` | gone: whether a protocol binds by `state` is the protocol |
+| `host` | `networkListener({ host })` |
+| `allowedHosts` | `networkListener({ authorities })`, advertised (C2) |
+| `remoteHint` | the channel's `routeHint`; the named compositions keep a `remoteHint` option that replaces it |
+| `openUrl(url, browser, redirectUri)` | `consumerPresentation({ show })` |
+| `BrowserCallbackStrategy` class | removed; `composeAuthorization` |
+| `configuration` `invalid-value` `callbackServer` (a transport without `expectState`) | gone: no transport arms `state` |
+
+### 6d.7 Named compositions
+
+Each returns `composeAuthorization(…)`. Options not listed are gone.
+
+| Name | Options | Presentation | Transport | Protocol |
+|---|---|---|---|---|
+| `browserCallbackStrategy` | `port?`, `browser?`, `openUrl?`, `remoteHint?`, `signal?` | `openUrl` → `consumerPresentation`; `browser` `undefined` / `'none'` / `'headless'` → `showUrl()` (today's default `'none'`); else `openInBrowser({ browser })` | `loopback({ port: port ?? DEFAULT_CALLBACK_PORT })` | `oauthCode()` |
+| `oidcCallbackStrategy` | the same | the same | the same | `oidcCode()` |
+| `samlCallbackStrategy` | the same | the same | the same | `samlResponse()` |
+| `manualPasteStrategy` | `redirectUri` (required), `read?`, `signal?` | `showUrl()` | `terminalPaste({ redirectUri, read })` | `oauthCode()` |
+| `manualSamlResponseStrategy` | `redirectUri` (required — the ACS), `read?`, `signal?` | `showUrl()` | `terminalPaste(…)` | `samlResponse()` |
+| `manualPasscodeStrategy` | `read?`, `signal?` | `showUrl()` | `terminalPaste({ read })` | `passcode()` |
+| `externalCodeStrategy` | `redirectUri` (required), `provide`, `signal?` | `consumerHandoff({ redirectUri, provide })` | (the same pair) | `oauthCode()` |
+
+- A required `redirectUri` missing → `configuration`
+  `required-fields-missing` `redirectUri` at construction.
+- The static factories (`inBrowser`, `fromTerminal`) are unchanged: they
+  call these names with `{ signal }`.
+- `staticCodeStrategy` is not a composition: it calls no builder, so
+  composing it would drag in OIDC discovery for nothing. Unchanged.
+- `asOidcResult` stays for a consumer's own string strategy; an OIDC paste
+  is now `composeAuthorization({ presentation: showUrl(), transport:
+  terminalPaste({ redirectUri }), protocol: oidcCode() })`, which also
+  checks a pasted URL's `state`.
+
+### 6d.8 Errors
+
+Every failure is minted through auth-errors; no new kind, no new outcome.
+
+| Where | Kind, facts |
+|---|---|
+| listener bind, port held | `interactive-login` `port-in-use` (`port`) |
+| a part's option | `configuration`: `callback-port-invalid` (`port`); `required-fields-missing` (`host`, `authorities`, `redirectUri`, `presentation`, `transport`, `protocol`, `provide`, `receive`, `show`); `invalid-value` (`authorities`, `redirectUri` not an absolute http(s) URL, `browser`, `authorizationUrl`) |
+| abort, dispose, overlap | `aborted` (`strategy`, `ignoredCallbacks?`), `disposed` (`strategy`), `busy` |
+| the IdP's `?error=` | `identity-provider-refused` (`oauthError?`) |
+| terminal | `input-abandoned`, `no-terminal`, `no-input`; `unreadable-input` from the protocol |
+| channel closed before an answer | `callback-closed` |
+| anything else | `failed` (`code?`, `status?`, `oauthError?`) |
+
+New values in interfaces-auth 7.4.0 (§6d.1): the `CONFIG_FIELDS` names
+above, `INTERACTIVE_LOGIN_STRATEGIES` `consumer`, the two operations. Their
+words are auth-errors 2.1.0's: `aborted` with `strategy: 'consumer'` → "the
+login was aborted"; `disposed` → "the authorization strategy was disposed";
+the operations → "presenting the authorization URL", "judging an answer".
+
+**Logging.** Lines in fixed words only: the listener's `warn` for each
+refused answer (`{ reason, ignored }`, `reason` from `ANSWER_REFUSALS`), the
+`networkListener` warning, the presentation failure line. No line carries a
+code, a `state`, a form token, a pasted text, a `SAMLResponse`, a URL or
+the IdP's text. `shown` reaches only the escaped error page.
+
+### 6d.9 §6a1 guarantees, by new owner
+
+| §6a1 guarantee | Owner in 6.0.0 |
+|---|---|
+| `state` and PKCE minted per URL built; a configured URL unchanged | provider (unchanged) |
+| closed from the bind until armed — a forged code or `?error=` before the URL exists is `400`, counted, ignored | listener (unconditional) + composer (arms after `begin`, before presenting) |
+| only a callback with the armed `state` settles, constant time; `null` admits (C7) | protocol (`oauthCode`, `oidcCode`) |
+| a forged `?error=` with a wrong `state` ignored | protocol (binding checked before `error`) |
+| loopback by default | named compositions (`loopback`); the parts have no default |
+| `Host` checked before anything is served | listener |
+| loopback names only from a loopback peer | listener (loopback transports) |
+| a loopback name is never an allowed authority | `networkListener` (refused at construction) |
+| the risk of a network bind, stated | `networkListener` (`warn` line) + README |
+| a bare paste only without `?&=/#`; a pasted URL must carry `state` | protocol (`readPaste`), on `form` and `terminal` |
+| `/submit` bound by the per-attempt form token | listener |
+| `port: 0` and the second family → `port-in-use`, never `127.0.0.1` alone | `loopback` |
+| a transport that cannot be armed is refused | replaced: no payload passes without the protocol's `accept` (composer keeps the payload) |
+| manual paste: wrong `state` asks again | protocol (`refuse 'pasted-state'`) + `terminalPaste` (asks again) |
+| SAML bound by `InResponseTo`, not `state` | provider and validator (unchanged); `samlResponse` reads no `state` |
+| nothing of `state`, the token or a code logged | every part (§6d.8) |
+
+### 6d.10 Migration (auth-providers 6.0.0)
+
+- `browserCallbackStrategy` / `oidcCallbackStrategy` /
+  `samlCallbackStrategy` with `port`, `browser`, `signal`: no change.
+- `callbackServer: myFactory` → write an `IAnswerTransport` and compose:
+  `composeAuthorization({ presentation, transport: myTransport, protocol:
+  oauthCode() })`. The transport calls the judge per answer; it never
+  returns a payload.
+- `openUrl` → still accepted by the named compositions; or
+  `consumerPresentation({ show })`.
+- A non-loopback bind → `networkListener({ host, port, authorities })`.
+  The redirect is now `http://<authorities[0]>/callback`: register it with
+  the identity provider. Or keep `loopback` and tunnel
+  (`ssh -L <port>:localhost:<port>`).
+- `manualPasteStrategy()`, `manualSamlResponseStrategy()`,
+  `externalCodeStrategy({ provide })` without `redirectUri` → pass the
+  redirect registered with the IdP (the auth-broker CLI passes `acsUrl`
+  for SAML already; it must now always have one).
+  `manualPasscodeStrategy`'s `redirectUri` is gone (unused).
+- `BrowserCallbackStrategy`, `BrowserCallbackStrategyOptions`,
+  `with*CallbackServer` → `composeAuthorization` and the parts.
+- A paste page that `GET`s `/submit` → `POST`.
+- Two concurrent `authorize` calls on one manual strategy → the second is
+  `busy`.
+- A consumer's `IAuthorizationStrategy` written from scratch is unaffected.
+
+### 6d.11 Tests
+
+Behaviour, on real ports where a socket is the point (CLAUDE.md: "assert on
+the port"). Each §6a1 test moves with its guarantee (§6d.9) and runs per
+protocol it applies to.
+
+- **Matrix:** each shipped protocol over `loopback`, `loopback4`,
+  `loopback6` (skipped with a reason where the host has no `::1`), the
+  paste page, `terminalPaste` (an injected `read`) and `consumerAnswer`:
+  the right answer logs in; the wrong one is refused per §6d.3.2.
+- **Bind and advertise:** each listener's addresses (`server.address()`)
+  and its `redirectUri`; `loopback4` refuses a connection to `[::1]:<port>`,
+  `loopback6` one to `127.0.0.1:<port>`; `loopback` with `[::1]:<port>`
+  held by the test → `port-in-use`, nothing left bound.
+- **Gate:** with `buildAuthorizationUrl` blocked, a forged code, a forged
+  `?error=`, a `GET /` and a `POST /submit` are `400`, counted, ignored —
+  for every protocol, SAML included; then the login completes.
+- **State:** a callback with none, two, a wrong and then the right
+  `state`; a forged `?error=` with a wrong `state` ignored.
+- **Form:** `/submit` with no token, a wrong one, two; a pasted URL with a
+  wrong `state`; a right token with a bare code logs in; the token differs
+  per attempt; a foreign `Host` gets no token in its body.
+- **Host:** DNS-rebound `Host` refused; a non-loopback peer with `Host:
+  localhost` refused by a wildcard `networkListener`; `networkListener`
+  answers only its authorities and refuses loopback entries at
+  construction.
+- **Composer:** a consumer transport whose `answer()` resolves without an
+  accept → `failed`, no payload; one that calls the judge with a wrong
+  `state` and resolves → `failed`; overlap → `busy`; dispose during
+  `authorize` → `disposed`, port free; abort → `aborted` with
+  `ignoredCallbacks`, port bound by the test afterwards; a second accept →
+  `already-answered`; a judge that throws → `failed`, 500 page, no text of
+  it anywhere.
+- **Drain:** with a listener's close deferred (test hook), `authorize`
+  settles only after; the next login waits through `attempt.exclusive`
+  (§6b's case, rerun on the composer).
+- **Presentation (30h):** a `consumerPresentation` that throws, one that
+  rejects, the default launcher failing: one log line, one prompt, the
+  login still waiting; a callback then logs in; the signal then →
+  `aborted`, port free; a presentation rejecting after the end prompts
+  nothing.
+- **Logs:** every case above with a capturing logger: no code, `state`,
+  form token, pasted text, URL or IdP text in any line.
+- **Named compositions:** each maps to its parts (shape tests); the server's
+  and the CLI's calls compile unchanged (type tests, `@ts-expect-error` on
+  removed options).
+
+**Load-bearing** (break, watch red, revert):
+
+- the composer returns what `answer()` gives → the consumer-transport case
+  red;
+- arm before `begin`, or present before arming → the blocked-builder case
+  red;
+- accept any `state` → the state cases red;
+- skip the form token check → the form cases red;
+- `loopback4` binding `0.0.0.0`, or advertising `localhost` → the
+  bind/advertise case red;
+- `loopback` staying on `127.0.0.1` when `::1` is taken → its case red;
+- drop the `Host` middleware → the rebinding case red;
+- clear `inFlight` before `open` settles → the drain case red;
+- end the login on a presentation failure → the callback-after-prompt case
+  red;
+- read a repeated parameter as its first value → the two-`state` case red;
+- read `…/callback&code=X` as bare → its case red.
+
+### 6d.12 Versions
+
+| Package | Change | Version |
+|---|---|---|
+| interfaces-auth | the part contracts, `ANSWER_REFUSALS`; `CONFIG_FIELDS`, `INTERACTIVE_LOGIN_STRATEGIES`, `OPERATIONS` gain values; `ICallbackServer` and `callbackServer` deprecated (C1) | **7.4.0** |
+| interfaces-auth-sap, -auth-broker | none | — |
+| auth-errors | words for `consumer` and the two operations; `^7.4.0` | **2.1.0** |
+| auth-providers | this section | 6.0.0 (unreleased) |
+| auth-broker CLI | migrates in its 3.0.0: the SAML manual path always passes `acsUrl` | 3.0.0 (unreleased) |
+| connection, auth-stores, auth-broker, server | none | — |
+
+Order: interfaces-auth 7.4.0, then auth-errors 2.1.0, published by the
+user; auth-providers builds against them from the registry.
+
+### 6d.13 Goal invariants
+
+1. **The consumer composes:** every part is a strategy; the composer has no
+   default part; the parts have no default port, browser or redirect;
+   named compositions are the only place today's values live.
+2. **One responsibility per part:** the presentation receives a URL and a
+   context; the transport receives no payload, only answers and verdicts;
+   the protocol receives a URL and answers — no socket, no terminal.
+3. **A transport advertises only what it owns:** each listener advertises
+   only the addresses it binds (C2, C3); a socketless transport advertises
+   only the consumer's (C4).
+4. **Every channel as strongly as today:** §6d.9; the paste route keeps its
+   token, the redirect its `state`, the terminal its user (C7 flagged).
+5. **Everything decided stays:** §6d.9, §6d.3.5, §6d.5; no timer is added.
+6. **An authorization ends cleanly:** §6d.4 — `authorize` settles after
+   `open`, which settles after release; late results change nothing;
+   overlap refused.
+7. **The provider's contract does not change:** `IAuthorizationStrategy`
+   and `AuthorizationRequest` untouched; providers unchanged.
+
 ## 7. Logon targets (connection) and rule 4
 
 **How a target builds its refusal.** connection depends on `auth-errors` and
