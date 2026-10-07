@@ -7,7 +7,10 @@
 
 import { beforeEach, describe, expect, it, jest } from '@jest/globals';
 import axios from 'axios';
-import { exchangeCodeForToken } from '../../auth/browserAuth';
+import {
+  exchangeCodeForToken,
+  getJwtAuthorizationUrl,
+} from '../../auth/browserAuth';
 import { getTokenWithClientCredentials } from '../../auth/clientCredentialsAuth';
 import {
   exchangeAuthorizationCode,
@@ -193,6 +196,58 @@ describe('token request shapes, as sent today', () => {
       });
       expect(sent.headers).toEqual({
         Authorization: basic('cid:undefined'),
+        'Content-Type': FORM,
+      });
+    });
+  });
+
+  describe('browserAuth: the UAA login bound by state and PKCE (spec §6a1)', () => {
+    it('the URL it builds carries state, code_challenge and S256', () => {
+      const url = new URL(
+        getJwtAuthorizationUrl(
+          {
+            uaaUrl: 'https://uaa',
+            uaaClientId: 'cid',
+          } as Parameters<typeof getJwtAuthorizationUrl>[0],
+          'http://localhost:61001/callback',
+          { state: 'the-state', codeChallenge: 'the-challenge' },
+        ),
+      );
+      expect(`${url.origin}${url.pathname}`).toBe('https://uaa/oauth/authorize');
+      expect(Object.fromEntries(url.searchParams)).toEqual({
+        client_id: 'cid',
+        redirect_uri: 'http://localhost:61001/callback',
+        response_type: 'code',
+        state: 'the-state',
+        code_challenge: 'the-challenge',
+        code_challenge_method: 'S256',
+      });
+    });
+
+    it('the exchange sends the code_verifier, beside the Basic header', async () => {
+      await exchangeCodeForToken(
+        {
+          uaaUrl: 'https://uaa',
+          uaaClientId: 'cid',
+          uaaClientSecret: 'sec',
+        } as Parameters<typeof exchangeCodeForToken>[0],
+        'the-code',
+        'http://localhost:61001/callback',
+        undefined,
+        undefined,
+        undefined,
+        'the-verifier',
+      );
+      const sent = sentByConfig();
+      expect(sent.url).toBe('https://uaa/oauth/token');
+      expect(sent.body).toEqual({
+        grant_type: 'authorization_code',
+        code: 'the-code',
+        redirect_uri: 'http://localhost:61001/callback',
+        code_verifier: 'the-verifier',
+      });
+      expect(sent.headers).toEqual({
+        Authorization: basic('cid:sec'),
         'Content-Type': FORM,
       });
     });
@@ -399,6 +454,26 @@ describe('token request shapes, as sent today', () => {
         expect(sent.headers).toEqual({
           'Content-Type': FORM,
           Authorization: basic('cid:'),
+        });
+      });
+    });
+
+    describe('authorization code without a verifier (no URL was built, spec §6a1)', () => {
+      it('sends no code_verifier', async () => {
+        await exchangeAuthorizationCode(
+          endpoint,
+          'cid',
+          undefined,
+          'the-code',
+          'http://localhost:61001/callback',
+          undefined,
+        );
+        const sent = sentByPost();
+        expect(sent.body).toEqual({
+          grant_type: 'authorization_code',
+          code: 'the-code',
+          redirect_uri: 'http://localhost:61001/callback',
+          client_id: 'cid',
         });
       });
     });
