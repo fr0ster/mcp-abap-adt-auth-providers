@@ -22,7 +22,7 @@
 
 import * as http from 'node:http';
 import type { AddressInfo, Socket } from 'node:net';
-import { authError } from '@mcp-abap-adt/auth-errors';
+import { AuthProviderFailure, authError } from '@mcp-abap-adt/auth-errors';
 import type {
   CallbackServerFactory,
   ICallbackServerHandle,
@@ -128,6 +128,8 @@ const callbackClosed = () => loginFailure({ outcome: 'callback-closed' });
  * other failure names only its allowlisted code (K11).
  */
 function bindFailure(error: unknown, port: number): Error {
+  // Already decided (the second family's port taken): as it is.
+  if (error instanceof AuthProviderFailure) return error;
   if (
     error !== null &&
     typeof error === 'object' &&
@@ -234,7 +236,7 @@ const LOOPBACK_NAMES: readonly string[] = ['localhost', '127.0.0.1', '[::1]'];
  * meaning the bound port). A `Host` without a port is port 80, as HTTP has
  * it.
  */
-function answersFor(
+export function answersFor(
   hostHeader: unknown,
   peer: unknown,
   boundPort: number,
@@ -253,6 +255,11 @@ function answersFor(
   ) {
     return true;
   }
+  // A loopback name is never an allowed authority (spec §6a1): listed or
+  // not, it counts only from a loopback peer, above.
+  if (LOOPBACK_NAMES.includes(asked.host) || isLoopbackPeer(asked.host)) {
+    return false;
+  }
   return allowed.some(
     (entry) =>
       entry.host === asked.host && (entry.port ?? boundPort) === askedPort,
@@ -260,7 +267,7 @@ function answersFor(
 }
 
 /** The consumer's `allowedHosts`: entries that are not authorities match nothing. */
-function allowedAuthorities(value: unknown): Authority[] {
+export function allowedAuthorities(value: unknown): Authority[] {
   if (!Array.isArray(value)) return [];
   const read: Authority[] = [];
   for (const entry of value as unknown[]) {
@@ -616,18 +623,12 @@ export async function runCallbackScope<TResult, TReturn>(
         await listenOn(address, onPort);
       } catch (error) {
         if (unavailableAddress(error)) continue;
-        // An ephemeral port the OS gave 127.0.0.1 may be someone else's on
-        // ::1: stay on 127.0.0.1 alone rather than fail (spec §6a1). A
-        // fixed port taken there stays a failure — a squatter would get the
-        // browser's `localhost` request.
-        if (port === 0 && addressInUse(error)) {
-          logQuietly(() =>
-            logger?.warn(
-              '[callbackServer] the port is taken on ::1; listening on 127.0.0.1 only',
-            ),
-          );
-          continue;
-        }
+        // Taken on ::1 — an ephemeral port as much as a fixed one: the
+        // redirect URI says `localhost`, which resolves to ::1 first, so
+        // staying on 127.0.0.1 alone would hand its holder the code and the
+        // state. The login fails `port-in-use` (spec §6a1); retrying is the
+        // consumer's.
+        if (addressInUse(error)) throw portInUse(onPort);
         throw error;
       }
     }
