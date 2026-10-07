@@ -7,6 +7,14 @@
  */
 
 import { AuthProviderFailure, authError } from '@mcp-abap-adt/auth-errors';
+import { isPlainPromise } from './handled';
+
+/** `Promise.prototype.then`, bound: the engine's, never a value's own. */
+const engineThen = Function.prototype.call.bind(Promise.prototype.then) as <T>(
+  promise: Promise<T>,
+  onFulfilled: (value: T) => void,
+  onRejected: (error: unknown) => void,
+) => Promise<void>;
 
 /** `interactive-login` `aborted`: what an aborted attempt's work ends with. */
 export function abortedFailure(): AuthProviderFailure {
@@ -30,13 +38,23 @@ export function untilAborted<T>(
   work: Promise<T>,
   signal: AbortSignal | undefined,
 ): Promise<T> {
-  if (!signal) return work;
-  work.catch(() => undefined);
+  // Subscribed only through the engine's `then`, on a plain native promise:
+  // anything else is first adopted, once, as `await` would adopt it.
+  const plain: Promise<T> = isPlainPromise(work)
+    ? work
+    : new Promise<T>((resolve) => resolve(work));
+  if (!signal) return plain;
+  engineThen(
+    plain,
+    () => undefined,
+    () => undefined,
+  );
   if (signal.aborted) return Promise.reject(abortedFailure());
   return new Promise<T>((resolve, reject) => {
     const onAbort = () => reject(abortedFailure());
     signal.addEventListener('abort', onAbort, { once: true });
-    work.then(
+    engineThen(
+      plain,
       (value) => {
         signal.removeEventListener('abort', onAbort);
         resolve(value);

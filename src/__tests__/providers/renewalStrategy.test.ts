@@ -214,6 +214,24 @@ describe('invalid decisions end the renewal unknown renewal-strategy, no step ta
     expect(foreign.thenCalls).toBe(0);
   });
 
+  it('a native promise with its own then: refused, its then never called (G6)', async () => {
+    let thenCalls = 0;
+    const answer = Promise.resolve({ next: 'stop' });
+    Object.defineProperty(answer, 'then', {
+      value(...args: unknown[]) {
+        thenCalls += 1;
+        return Promise.prototype.then.apply(answer, args as never);
+      },
+    });
+    const { strategy } = scripted([() => answer]);
+    const provider = seeded(strategy);
+    expectStrategyFailure(await rejectionOf(provider.getTokens()));
+    await quiet();
+    expect(thenCalls).toBe(0);
+    expect(provider.refreshes.items).toHaveLength(0);
+    expect(provider.held().refresh).toBe('R');
+  });
+
   it('a refresh while no refresh is possible', async () => {
     const { strategy } = scripted([refresh()]);
     const provider = new ScriptedProvider({ renewal: strategy });

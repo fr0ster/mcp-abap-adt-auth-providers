@@ -17,6 +17,10 @@ import { isPromise, isProxy } from 'node:util/types';
 
 const NativePromise = Promise;
 const PROMISE_PROTOTYPE = Promise.prototype;
+const PROMISE_THEN = Reflect.getOwnPropertyDescriptor(
+  Promise.prototype,
+  'then',
+)?.value;
 const SPECIES_GETTER = Reflect.getOwnPropertyDescriptor(
   Promise,
   Symbol.species,
@@ -31,14 +35,20 @@ const ignoreRejection = (): void => undefined;
 /**
  * Whether calling `then` on `value` runs no code but the engine's: a plain
  * native promise — no Proxy, `Promise.prototype` its prototype, no own
- * `constructor`, the built-in `constructor` and `Symbol.species` still in
- * place (auth-errors' `relayOutcome` applies the same test). Never throws.
+ * `constructor`, `then` or `catch`, the built-in `then`, `constructor` and
+ * `Symbol.species` still in place (auth-errors' `relayOutcome` applies the
+ * same test). Never throws.
  */
 export function isPlainPromise(value: unknown): value is Promise<unknown> {
   try {
     if (!isPromise(value) || isProxy(value)) return false;
     if (Object.getPrototypeOf(value) !== PROMISE_PROTOTYPE) return false;
     if (Object.hasOwn(value, 'constructor')) return false;
+    if (Object.hasOwn(value, 'then') || Object.hasOwn(value, 'catch')) {
+      return false;
+    }
+    const then = Reflect.getOwnPropertyDescriptor(PROMISE_PROTOTYPE, 'then');
+    if (then === undefined || then.value !== PROMISE_THEN) return false;
     const ctor = Reflect.getOwnPropertyDescriptor(
       PROMISE_PROTOTYPE,
       'constructor',

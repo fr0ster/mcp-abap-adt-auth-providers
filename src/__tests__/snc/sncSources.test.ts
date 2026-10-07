@@ -74,7 +74,7 @@ describe('no package timer', () => {
   it('setTimeout only for the server’s poll interval; no setInterval', () => {
     expect(
       linesWith(sourceFiles(SRC), ['setTimeout(', 'setInterval(']),
-    ).toEqual(['auth/attempt.ts:66: const timer = setTimeout(() => {']);
+    ).toEqual(['auth/attempt.ts:84: const timer = setTimeout(() => {']);
   });
   it('no timeout option', () => {
     expect(linesWith(sourceFiles(SRC), ['timeout:', 'REG_TIMEOUT_MS'])).toEqual(
