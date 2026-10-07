@@ -1969,13 +1969,20 @@ export type ReportedRefreshToken =
   /** The result carried none: the refresh token held before, if any, is still held. */
   | { readonly change: 'none' };
 
+/** The credential held when the report is made. */
+export interface ReportedCredential {
+  /** '' when no access token is held (a seeded refresh token alone, say). */
+  readonly authorizationToken: string;
+  readonly tokenType: 'jwt' | 'saml' | 'opaque';
+  readonly authType: OAuth2GrantType;
+  readonly expiresAt?: number | undefined;
+}
+
 export type PersistenceReport =
   | {
       readonly event: 'credential';
-      readonly authorizationToken: string;
-      readonly tokenType: 'jwt' | 'saml' | 'opaque';
-      readonly authType: OAuth2GrantType;
-      readonly expiresAt?: number | undefined;
+      /** The credential the commit installed. */
+      readonly credential: ReportedCredential;
       readonly refreshToken: ReportedRefreshToken;
       /** True: a call waits for this report, and a failure is its answer. */
       readonly awaited: boolean;
@@ -1983,6 +1990,12 @@ export type PersistenceReport =
   | {
       /** The refresh token held was discarded by the renewal strategy's decision. */
       readonly event: 'refresh-token-discarded';
+      /**
+       * The credential still held, unchanged — what `clearing()` carries
+       * today — so a store can clear the refresh token without erasing the
+       * rest of the session, even before any `credential` report.
+       */
+      readonly credential: ReportedCredential;
       readonly awaited: boolean;
     };
 
@@ -2165,7 +2178,7 @@ token:
 **`refreshOnly()`** — the same rows with `login` replaced by `stop`. Both are
 stateless.
 
-**`refreshStatePersistence(write, { logger? })`** — today's guarantees for a
+**`refreshStatePersistence(write, options)`** — today's guarantees for a
 store that falls back to its stored refresh token, as the broker's does:
 
 ```ts
@@ -2179,7 +2192,11 @@ interface PersistedTokens {
 }
 function refreshStatePersistence(
   write: (tokens: PersistedTokens) => Promise<void>,
-  options?: { logger?: ILogger | undefined },
+  options: {
+    /** Required, no default: whether a failed write fails an awaited report. */
+    readonly onWriteFailure: 'continue' | 'fail';
+    readonly logger?: ILogger | undefined;
+  },
 ): ITokenPersistence;
 ```
 
@@ -2187,16 +2204,21 @@ It keeps, in itself, what the provider used to keep for this one consumer:
 - **The logical state.** `held`, or `cleared` after a
   `refresh-token-discarded`. A `credential` report with a `new` refresh
   token writes it and moves to `held`. With `none`, it writes `null` while
-  `cleared` and `undefined` while `held`. So a store's fallback to its
-  stored refresh token can never restore a discarded one.
-- **Pending delivery.** A write that fails is caught and logged in fixed
-  words — best effort, as `onTokens` failures are today. A failed `null`
+  `cleared` and `undefined` while `held`. A `refresh-token-discarded`
+  writes the reported (unchanged) credential with `null`. So a store's
+  fallback to its stored refresh token can never restore a discarded one,
+  and a discard before any credential report clears the refresh token
+  without erasing the session.
+- **Pending delivery.** A write that fails is logged in fixed words. A failed `null`
   stays in the logical state. A failed write of a new refresh token stays
   pending and is written again, with that token, by the next report, until
   one write succeeds or a newer `new` or a discard supersedes it.
-- **Its own failures.** It never throws, so an awaited report never fails a
-  renewal. A consumer that wants a failed write to fail the call writes its
-  own strategy, or a `write` that throws through a strategy of its own.
+- **Its own failures, by the consumer's choice.** `onWriteFailure:
+  'continue'` — best effort, as `onTokens` failures are today: `report`
+  never throws. `'fail'` — an awaited report rethrows the write's failure
+  after recording it as pending, so the call that caused it fails (§6c.6);
+  a detached report never throws (the provider would only log it). Either
+  way the pending write is delivered again by the next report.
 
 It holds the last new refresh token it saw, for pending delivery: it is
 part of the consumer's store.
@@ -2269,24 +2291,36 @@ be load-bearing: break the rule, watch the test go red.
   provider.
 
 **`refreshStatePersistence`, alone**
+- A discard before any credential report (a seeded provider): the write
+  carries the reported credential and `null`, nothing erased; the login
+  that follows failing leaves the refresh token cleared.
+- `'fail'`: an awaited report rethrows a failed write, a detached one never
+  throws, and the write is pending either way; `'continue'` never throws.
 - `new` writes the token; `none` writes `undefined` while `held` and `null`
   after a discard.
 - A failed `null` is written as `null` by the next report.
 - A failed new token is written again with that token by the next `none`
   report; a newer `new` supersedes it.
-- `write` failures never reach `report`'s caller.
+- **The broker** (Task 34): a failed session write makes the initiating
+  `getToken()` fail while the writer's retries continue, and `flush()`
+  reports it.
 
 ### 6c.11 The broker
 
 - `renewal?: IRenewalStrategy`, given to every token provider it builds.
   Default: `refreshThenLogin()`.
-- Persistence: `refreshStatePersistence(write)`, where `write` is its
-  `SessionWriter` path (retries and `flush()` stay the broker's). `null`
-  writes `refreshToken: ''`, the store's clearing operation; `undefined`
-  carries the stored one, as `writeSecret` does today.
-- The token API's "a failed write is this caller's too"
-  (`throwFailedWrite`) stays the broker's, recorded against the result as
+- Persistence: `refreshStatePersistence(write, { onWriteFailure: 'fail' })`,
+  where `write` is its `SessionWriter` path (retries and `flush()` stay the
+  broker's). `null` writes `refreshToken: ''`, the store's clearing
+  operation; `undefined` carries the stored one, as `writeSecret` does
   today.
+- The token API's "a failed write is this caller's too" now travels the
+  awaited report: the write's failure fails the provider's `getTokens()` /
+  `refreshTokens()` (`persisting-tokens`), so the call that obtained the
+  result fails — no correlation by result identity is needed, and
+  `failedWrites` keyed by the result goes. The broker may map that failure
+  to its own write error by checking its writer's outcome for the
+  destination; the retries continue. A later cache hit succeeds, as today.
 - Its CLI exposes nothing new. Detail in Task 34.
 
 ### 6c.12 Versions
