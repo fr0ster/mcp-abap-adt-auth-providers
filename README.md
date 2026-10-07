@@ -21,12 +21,14 @@ your `AbortSignal` is the bound. What a consumer on 5.x must now do:
 
 - **Install the contract it is read with.** `@mcp-abap-adt/auth-errors`
   (`^2.0.1`) to read errors; `@mcp-abap-adt/interfaces-auth` (`^7.3.0`) is
-  what every provider here implements. Hand the providers to a
-  `@mcp-abap-adt/connection` **13.0.0** process — 11.x reads the old refusal,
-  and 12.0.0 (published only under `next`) is built on interfaces-auth 6 —
-  and pair them with `@mcp-abap-adt/auth-stores` 4.0.0 and
-  `@mcp-abap-adt/auth-broker` 5.0.0, which move to the same contract. Keep
-  one copy of each: `npm ls @mcp-abap-adt/interfaces-auth` and
+  what every provider here implements. The consumers on the same contract
+  are **released after this 6.0.0, not yet available**:
+  `@mcp-abap-adt/connection` 13.0.0 (its suites run against the published
+  auth-providers 6.0.0), `@mcp-abap-adt/auth-stores` 4.0.0 and
+  `@mcp-abap-adt/auth-broker` 5.0.0. Until they are, no published connection
+  reads these providers' refusals: 11.x reads the old refusal, and 12.0.0
+  (published only under `next`) is built on interfaces-auth 6. Keep one copy
+  of each: `npm ls @mcp-abap-adt/interfaces-auth` and
   `npm ls @mcp-abap-adt/auth-errors` should show one deduplicated version.
 - **Every token provider requires `renewal`.** How a renewal proceeds —
   whether to refresh, whether to log in, when to stop, what becomes of a
@@ -243,10 +245,14 @@ your `AbortSignal` is the bound. What a consumer on 5.x must now do:
   characters — and never the server's text. See [Debug Logging](#debug-logging).
 - **A subclass of `BaseTokenProvider`.** `performLogin()` is now
   `performLogin(attempt)` — hand `attempt.signal` to whatever the login waits
-  on — and `performRefresh()` is `performRefresh(refreshToken, signal)`:
-  send the refresh token you are given. Reading `this.refreshToken` instead
-  may send a refresh token the renewal strategy discarded — a spent one. A
-  subclass's constructor passes `renewal` through its config like any other
+  on — and `performRefresh()` is `performRefresh(refreshToken, signal,
+  dispatched)`: send the refresh token you are given — reading
+  `this.refreshToken` instead may send one the renewal strategy discarded, a
+  spent one — and call `dispatched()` right before the request leaves (pass
+  `this.refreshSiteOptions(dispatched)` to a shipped token site, which does
+  it). A refresh that never calls `dispatched()` counts as never sent: an
+  abort then never applies the decision's `ifCut`, and its refresh token
+  stays held although the server may have spent it. A subclass's constructor passes `renewal` through its config like any other
   token provider. A provider of your own extends `AuthProviderBase` and
   implements `onPrepare()`, `onEstablish(logon)`, `onAuthorize(request)` and
   `onRejected(rejection)`; the base owns the four moments and runs each
@@ -566,8 +572,8 @@ const provider = AuthorizationCodeProvider.inBrowser({
   clientSecret: '...',
   renewal: refreshThenLogin(), // required: how every renewal proceeds
 });
-// A connection 13.0.0 process calls prepare() on connect, authorize() per
-// request, and rejected() on a 401: one renewal through the renewal
+// A process of connection 13.0.0 (released after this package's 6.0.0)
+// calls prepare() on connect, authorize() per request, and rejected() on a 401: one renewal through the renewal
 // strategy — with refreshThenLogin(), a refresh, else one login.
 ```
 
@@ -969,12 +975,16 @@ own while a login waits, and the user ends up logged in as someone else
   `allowedHosts` changes nothing: it is never an allowed one. `0.0.0.0` and
   `[::]` are never an authority, and an entry that is not exactly an
   authority (userinfo, a path, an empty or out-of-range port, a host the
-  parser refuses) matches nothing. When the
-  port is not free on `::1` — a fixed one, or the one the OS gave
-  `127.0.0.1` for `port: 0` — the login fails `port-in-use`: the redirect
-  URI says `localhost`, which resolves to `::1` first, so staying on
-  `127.0.0.1` alone would hand whoever holds `[::1]:<port>` the code and the
-  `state`. Retrying is yours. An SSH tunnel arrives on loopback and works as
+  parser refuses) matches nothing. `127.0.0.1` is bound first, then `::1`
+  on the same port. On a host without IPv6 loopback — the `::1` bind fails
+  `EADDRNOTAVAIL` or `EAFNOSUPPORT` — the `::1` half is skipped and the
+  transport listens on `127.0.0.1` alone. Only `EADDRINUSE` on `::1` — the
+  port, fixed or the one the OS gave `127.0.0.1` for `port: 0`, held by
+  someone else there — fails the login `port-in-use`: the redirect URI says
+  `localhost`, which resolves to `::1` first, so staying on `127.0.0.1` alone
+  would hand whoever holds `[::1]:<port>` the code and the `state`. Any other
+  bind error ends the login `failed`. Retrying is yours. With `host` set,
+  only that address is bound. An SSH tunnel arrives on loopback and works as
   it is. To serve another machine directly, set both:
 
   ```typescript
@@ -3830,8 +3840,15 @@ const provider = new ClientCredentialsProvider({
 
 What else a provider logs, at `info` / `debug`: the stages of a token exchange
 (which exchange — never where, never a secret), token lengths and expiry, the
-browser launch, a refresh that failed, each renewal decision (`[BaseTokenProvider] Renewal
-step`, `{ trigger, moment, next }`), a failed persistence report or write. **No URL in
+browser launch, and each renewal decision (`debug`, `[BaseTokenProvider] Renewal
+step`, `{ trigger, moment, next }`). At `warn`, each with `logFields` and nothing
+else: a refresh that failed (`[BaseTokenProvider] Refresh failed`); a renewal
+strategy that threw or answered something unusable (`[BaseTokenProvider] Renewal
+strategy refused`); a strategy's `aborted()` that threw (`[BaseTokenProvider]
+Renewal strategy failed to take an aborted step`); a persistence report that
+failed with no caller left to receive it (`[BaseTokenProvider] Persisting the
+tokens failed`); and `refreshStatePersistence`'s failed write
+(`[refreshStatePersistence] Writing the tokens failed`, to its own `logger`). **No URL in
 any log line** (since 6.0.0): an endpoint is a free value — a discovered one
 is the server's, a configured one yours, and it may carry a credential or a
 query secret — so no line names a discovery URL, token, device or
