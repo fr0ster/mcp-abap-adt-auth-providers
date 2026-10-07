@@ -12,6 +12,7 @@ import os from 'node:os';
 import { afterEach, describe, expect, it, jest } from '@jest/globals';
 import { readFailure } from '@mcp-abap-adt/auth-errors';
 import {
+  allowedAuthorities,
   answersFor,
   isLoopbackPeer,
   withBrowserCallbackServer,
@@ -442,7 +443,7 @@ describe('a loopback name is never an allowed authority (spec §6a1)', () => {
   );
 
   it('answersFor: a loopback name listed in allowedHosts counts only from a loopback peer', () => {
-    const allowed = LOOPBACK_ENTRIES(PORT);
+    const allowed = allowedAuthorities(LOOPBACK_ENTRIES(PORT));
     for (const host of [
       `localhost:${PORT}`,
       `127.0.0.1:${PORT}`,
@@ -454,10 +455,12 @@ describe('a loopback name is never an allowed authority (spec §6a1)', () => {
     }
     // A real authority in the same list still answers a network peer.
     expect(
-      answersFor(`buildhost.example:${PORT}`, '192.168.1.20', PORT, [
-        ...allowed,
-        'buildhost.example',
-      ]),
+      answersFor(
+        `buildhost.example:${PORT}`,
+        '192.168.1.20',
+        PORT,
+        allowedAuthorities([...LOOPBACK_ENTRIES(PORT), 'buildhost.example']),
+      ),
     ).toBe(true);
   });
 });
