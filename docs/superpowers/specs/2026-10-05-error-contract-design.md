@@ -1395,6 +1395,25 @@ launcher failure (§6a0) widens that window.
   the gate requirement — a SAML response is bound by `InResponseTo` (or a
   declared IdP-initiated login) and refused by the assertion validator, so
   its transports need no `expectState` and are not refused for lacking it.
+- **Where the transport listens is configurable, loopback by default.**
+  Today `runCallbackScope` calls `server.listen(port)` with no host, which
+  Node binds to every interface (`::`, measured), while the redirect URI says
+  `localhost` — the callback and its paste page are reachable from the
+  network. interfaces-auth 7.3.0 adds `ICallbackServerOptions.host?: string`
+  (the bind address). Not given, the shipped transports bind loopback:
+  `127.0.0.1`, and `::1` too when the redirect host is `localhost`. A
+  consumer that wants the paste page reachable from another machine without
+  an SSH tunnel passes `host` explicitly (e.g. `0.0.0.0` or an interface
+  address) through the strategy's options — its decision, never ours. An
+  SSH tunnel (`ssh -L 61001:localhost:61001`) arrives on loopback and works
+  with the default.
+- **`Host` is checked before anything is served.** Every request whose
+  `Host` header is not one the transport answers for — `localhost`,
+  `127.0.0.1` or `[::1]` with the bound port, plus the configured `host`
+  with that port when one is given — is answered `400` in fixed words before
+  any page, form token or callback handling: DNS rebinding (an attacker's
+  hostname resolved to loopback) cannot read the form or settle anything.
+  Counted and ignored like any other refused request.
 - **The paste route of the UAA transport.** `browserCallbackServer` also
   settles through its paste page (`GET /` serves a form, `GET /submit?input=`
   takes a bare code or a redirected URL) — the way a user on another machine
@@ -1430,7 +1449,9 @@ Tests: on a real port, through both shipped transports — with
 the login then completes; `/submit` with no form token, a wrong one, or a
 pasted URL with a wrong `state` is `400`, counted and ignored, before and
 after arming, and a bare code through the served form (right token) logs
-in; the shipped and an injected SAML transport
+in; the transport binds loopback by default (its address checked) and
+the configured `host` when given; a request with a foreign `Host` gets `400`
+before the form or any callback handling (no form token in its body); the shipped and an injected SAML transport
 without `expectState` still log in (no gate, no refusal); a callback with a missing, a different and then
 the correct `state` (the first two `400`,
 counted, ignored; the login completes with the third); a forged `?error=`
