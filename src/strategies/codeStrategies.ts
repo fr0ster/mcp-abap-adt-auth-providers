@@ -13,7 +13,7 @@ import type {
   IAuthorizationStrategy,
 } from '@mcp-abap-adt/interfaces-auth';
 import { throwIfAborted, untilAborted } from '../auth/attempt';
-import { misconfigured } from '../auth/configuration';
+import { misconfigured, ownOptions } from '../auth/configuration';
 import { loginFailure } from '../auth/interactiveLogin';
 import { signalOf } from '../auth/signalledRequest';
 import { DEFAULT_CALLBACK_PORT } from './BrowserCallbackStrategy';
@@ -50,12 +50,14 @@ function combined(...signals: Array<AbortSignal | undefined>): AbortSignal {
 export function externalCodeStrategy(
   options: ExternalCodeStrategyOptions,
 ): IAuthorizationStrategy<string> {
-  const redirectUri = options.redirectUri ?? defaultRedirectUri();
+  // Read once as own data: a hostile object throws nothing of its own.
+  const own = ownOptions<ExternalCodeStrategyOptions>(options);
+  const redirectUri = own.redirectUri ?? defaultRedirectUri();
   return {
     async authorize(
       request: AuthorizationRequest,
     ): Promise<AuthorizationOutcome<string>> {
-      const signal = combined(options.signal, signalOf(request));
+      const signal = combined(own.signal, signalOf(request));
       throwIfAborted(signal);
       const url = await untilAborted(
         Promise.resolve(request.buildAuthorizationUrl(redirectUri)),
@@ -63,7 +65,7 @@ export function externalCodeStrategy(
       );
       throwIfAborted(signal);
       const payload = await untilAborted(
-        Promise.resolve(options.provide(url, signal)),
+        Promise.resolve(own.provide(url, signal)),
         signal,
       );
       if (!payload) {
@@ -78,8 +80,10 @@ export function externalCodeStrategy(
 export function staticCodeStrategy(
   options: StaticCodeStrategyOptions,
 ): IAuthorizationStrategy<string> {
-  const redirectUri = options.redirectUri ?? defaultRedirectUri();
-  if (!options.payload) {
+  // Read once as own data: a hostile object throws nothing of its own.
+  const own = ownOptions<StaticCodeStrategyOptions>(options);
+  const redirectUri = own.redirectUri ?? defaultRedirectUri();
+  if (!own.payload) {
     // E27.
     throw misconfigured(
       authError.configuration({
@@ -90,7 +94,7 @@ export function staticCodeStrategy(
   }
   return {
     async authorize(): Promise<AuthorizationOutcome<string>> {
-      return { payload: options.payload, redirectUri };
+      return { payload: own.payload, redirectUri };
     },
   };
 }

@@ -11,6 +11,7 @@ import type {
   AuthorizationRequest,
   IAuthorizationStrategy,
 } from '@mcp-abap-adt/interfaces-auth';
+import { readSafely } from '../auth/knownCodes';
 import type { OidcCallbackResult } from '../auth/oidcBrowserAuth';
 
 export function asOidcResult(
@@ -32,7 +33,9 @@ export function asOidcResult(
   // Delegated, not reimplemented: the consumer holds only the adapter, so an
   // undelegated dispose would strand whatever the wrapped strategy owns. Absent
   // when the wrapped strategy has none, so optionality survives the wrapping.
-  if (inner.dispose) {
+  // Read guarded (a strategy's method lives on its prototype, so not as own
+  // data): a getter or Proxy that throws reads as no `dispose`.
+  if (typeof readSafely(inner, 'dispose') === 'function') {
     adapted.dispose = () => inner.dispose?.() ?? Promise.resolve();
   }
   return adapted;

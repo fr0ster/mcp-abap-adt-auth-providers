@@ -10,9 +10,17 @@ import type {
   IAuthorizationStrategy,
 } from '@mcp-abap-adt/interfaces-auth';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
-import { misconfigured, requiredFieldsMissing } from '../auth/configuration';
+import {
+  misconfigured,
+  ownOptions,
+  requiredFieldsMissing,
+} from '../auth/configuration';
 import { buildSamlAuthorizationUrl } from '../auth/saml2Auth';
-import { isShippedValidator } from '../validation/assertionValidator';
+import {
+  isShippedValidator,
+  type ShippedValidatorOptions,
+} from '../validation/assertionValidator';
+import { defaultReplayStore } from '../validation/inMemoryReplayStore';
 
 export interface Saml2CommonConfig {
   idpSsoUrl: string;
@@ -101,6 +109,21 @@ export interface SamlTrust {
   clockSkewMs?: number | undefined;
   /** Default in the recipe: the process-wide `defaultReplayStore`. */
   replayStore?: IAssertionReplayStore | undefined;
+}
+
+/**
+ * A recipe's `trust`, read once as own data (a hostile object throws nothing
+ * of its own), as the shipped validator's options: the replay store
+ * defaults to the process-wide `defaultReplayStore`. Whatever is missing or
+ * of the wrong type the validator refuses as configuration.
+ */
+export function samlTrustOf(trust: unknown): ShippedValidatorOptions {
+  const own = ownOptions<Partial<SamlTrust>>(trust);
+  return {
+    idpCertificates: own.idpCertificates ?? [],
+    clockSkewMs: own.clockSkewMs,
+    replayStore: own.replayStore ?? defaultReplayStore,
+  };
 }
 
 /**

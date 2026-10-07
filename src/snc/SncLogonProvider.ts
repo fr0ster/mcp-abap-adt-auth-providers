@@ -31,7 +31,7 @@ import type {
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
 import { AuthProviderBase } from '../auth/AuthProviderBase';
 import { throwIfAborted, untilAborted } from '../auth/attempt';
-import { misconfigured } from '../auth/configuration';
+import { misconfigured, ownOptions } from '../auth/configuration';
 import { readSafely } from '../auth/knownCodes';
 import { readRejection } from '../auth/rejection';
 import { logQuietly } from '../auth/tokenRequest';
@@ -168,11 +168,17 @@ export class SncLogonProvider extends AuthProviderBase {
       typeof myName.value === 'string'
         ? myName.value.trim() || undefined
         : undefined;
-    this.locator = config.locator;
-    this.probes = config.probes;
-    this.logger = config.logger;
+    // The collaborators, read once as own data: an accessor or a throwing
+    // Proxy reads as absent, and an absent locator or probe list is used
+    // only inside a moment, whose boundary answers it.
+    const collaborators = ownOptions<Partial<SncLogonProviderConfig>>(config);
+    this.locator = collaborators.locator as ISncLibraryLocator;
+    this.probes = collaborators.probes as ISncProductProbe[];
+    this.logger = collaborators.logger;
     // The config's signal is the first party; an aborted one adds nothing.
-    if (config.signal !== undefined) this.parties.attach(config.signal);
+    if (collaborators.signal !== undefined) {
+      this.parties.attach(collaborators.signal);
+    }
   }
 
   /** The usual choice: this machine, library discovery, the Secure Login Client probe. */
@@ -184,14 +190,17 @@ export class SncLogonProvider extends AuthProviderBase {
     logger?: ILogger;
     signal?: AbortSignal;
   }): SncLogonProvider {
+    // Read once as own data, like every option: a hostile object throws
+    // nothing of its own; the constructor refuses what is missing.
+    const own = ownOptions<Partial<typeof options>>(options);
     const system = nodeSncSystem();
     return new SncLogonProvider({
-      partnerName: options.partnerName,
-      qop: options.qop,
-      myName: options.myName,
-      logger: options.logger,
-      signal: options.signal,
-      locator: new DefaultSncLibraryLocator(system, options.sncLib),
+      partnerName: own.partnerName as string,
+      qop: own.qop,
+      myName: own.myName,
+      logger: own.logger,
+      signal: own.signal,
+      locator: new DefaultSncLibraryLocator(system, own.sncLib),
       probes: [new SecureLoginClientProbe(system)],
     });
   }

@@ -503,9 +503,10 @@ export function attemptSite(
 
 /**
  * What a site receives of a successful answer (spec §6): an integer status
- * and a plain `data` of `ANSWER_FIELDS` — never the object axios handed over,
- * and never the server's free text (`error_description`, `error_uri`), with
- * or without `authDebug`.
+ * and a plain `data` of the expected fields, each only of its protocol type
+ * (`answerData`) — never the object axios handed over, and never the
+ * server's free text (`error_description`, `error_uri`), with or without
+ * `authDebug`.
  */
 export interface TokenResponseSnapshot<T = Record<string, string | number>> {
   readonly status: number | undefined;
@@ -750,27 +751,41 @@ export async function sendTokenRequest<T>(
  * 6749 §5.1, OIDC Core §3.1.3.3), the device authorization response's (RFC
  * 8628 §3.2) and the OAuth `error`.
  */
-const ANSWER_FIELDS = [
+/** The expected fields of an answer's body that carry text. */
+const ANSWER_TEXT_FIELDS = [
   'access_token',
   'refresh_token',
   'id_token',
   'token_type',
-  'expires_in',
   'scope',
   'device_code',
   'user_code',
   'verification_uri',
   'verification_uri_complete',
-  'interval',
   'error',
 ] as const;
 
-/** The expected fields of an answer's body that are strings or numbers. */
+/** The expected fields that carry a number of seconds (RFC 6749, RFC 8628). */
+const ANSWER_NUMBER_FIELDS = ['expires_in', 'interval'] as const;
+
+/**
+ * The expected fields of an answer's body, each kept only with the type the
+ * protocol gives it: a text field as a non-empty string, a number of seconds
+ * as a finite non-negative JSON number (RFC 6749 §5.1 `expires_in` is a
+ * number; a numeric string is not one). Anything else is absent — so an
+ * `access_token` of `42` is no access token, and the site refuses the answer
+ * as it refuses one without (`no-access-token`), never handing a number on
+ * as a token.
+ */
 function answerData(raw: unknown): Record<string, string | number> {
   const data: Record<string, string | number> = {};
-  for (const field of ANSWER_FIELDS) {
+  for (const field of ANSWER_TEXT_FIELDS) {
     const value = readSafely(raw, field);
-    if (typeof value === 'string' || typeof value === 'number') {
+    if (typeof value === 'string' && value !== '') data[field] = value;
+  }
+  for (const field of ANSWER_NUMBER_FIELDS) {
+    const value = readSafely(raw, field);
+    if (typeof value === 'number' && Number.isFinite(value) && value >= 0) {
       data[field] = value;
     }
   }
@@ -827,16 +842,16 @@ export function rejectMissingToken(
   const logger = site.logger;
   if (logger) {
     logQuietly(() => {
-      const message = `${missingTokenLead(site)}: status ${status}, error: ${error === undefined ? 'no error given' : JSON.stringify(error)}`;
+      const line = `${missingTokenLead(site)}: status ${status}, error: ${error === undefined ? 'no error given' : JSON.stringify(error)}`;
       // Returned, so an async logger's rejection is handled (logQuietly).
       if (debugging(site)) {
-        return logger[level](message, {
+        return logger[level](line, {
           status,
           ...(error === undefined ? {} : { error }),
           sent: sentOf(site, prepared),
         });
       }
-      return logger[level](message);
+      return logger[level](line);
     });
   }
   const httpCode = httpStatus(status);

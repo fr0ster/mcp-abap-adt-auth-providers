@@ -19,7 +19,11 @@ import {
   exchangeCodeForToken,
   getJwtAuthorizationUrl,
 } from '../auth/browserAuth';
-import { misconfigured, requiredFieldsMissing } from '../auth/configuration';
+import {
+  misconfigured,
+  ownOptions,
+  requiredFieldsMissing,
+} from '../auth/configuration';
 import { refreshJwtToken } from '../auth/tokenRefresher';
 import { logQuietly } from '../auth/tokenRequest';
 import { browserCallbackStrategy } from '../strategies';
@@ -88,15 +92,15 @@ function declaredRedirectOf(prebuilt: string): string | null {
 export class AuthorizationCodeProvider extends BaseTokenProvider {
   private config: AuthorizationCodeProviderConfig;
 
-  constructor(config: AuthorizationCodeProviderConfig) {
+  constructor(options: AuthorizationCodeProviderConfig) {
+    // Read once as own data (a hostile object throws nothing of its own).
+    const config = ownOptions<AuthorizationCodeProviderConfig>(options);
     super(config);
     this.config = config;
     this.logger = config.logger;
 
     logQuietly(() =>
       this.logger?.info('[AuthorizationCodeProvider] Provider created', {
-        uaaUrl: config.uaaUrl,
-        clientId: config.clientId,
         hasAccessToken: !!config.accessToken,
         hasRefreshToken: !!config.refreshToken,
         accessToken: this.formatToken(config.accessToken),
@@ -159,8 +163,10 @@ export class AuthorizationCodeProvider extends BaseTokenProvider {
     options: LoginFactoryOptions = {},
   ): AuthorizationCodeProvider {
     return new AuthorizationCodeProvider({
-      ...config,
-      authorization: browserCallbackStrategy({ signal: options.signal }),
+      ...ownOptions<typeof config>(config),
+      authorization: browserCallbackStrategy({
+        signal: ownOptions<LoginFactoryOptions>(options).signal,
+      }),
     });
   }
 
@@ -222,9 +228,7 @@ export class AuthorizationCodeProvider extends BaseTokenProvider {
     }
 
     logQuietly(() =>
-      this.logger?.info('[AuthorizationCodeProvider] Code received', {
-        redirectUri: outcome.redirectUri,
-      }),
+      this.logger?.info('[AuthorizationCodeProvider] Code received'),
     );
 
     const result = await exchangeCodeForToken(

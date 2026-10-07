@@ -16,6 +16,7 @@ import type {
 } from '@mcp-abap-adt/interfaces-auth';
 import { AUTH_TYPE_PASSWORD } from '@mcp-abap-adt/interfaces-auth';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
+import { ownOptions } from '../auth/configuration';
 import { exchangePasscode } from '../auth/passcodeAuth';
 import { refreshJwtToken } from '../auth/tokenRefresher';
 import { manualPasscodeStrategy } from '../strategies/manualStrategies';
@@ -55,7 +56,9 @@ export interface UaaPasscodeProviderConfig
 export class UaaPasscodeProvider extends BaseTokenProvider {
   private readonly config: UaaPasscodeProviderConfig;
 
-  constructor(config: UaaPasscodeProviderConfig) {
+  constructor(options: UaaPasscodeProviderConfig) {
+    // Read once as own data (a hostile object throws nothing of its own).
+    const config = ownOptions<UaaPasscodeProviderConfig>(options);
     super(config);
     this.config = config;
     this.logger = config.logger;
@@ -86,8 +89,10 @@ export class UaaPasscodeProvider extends BaseTokenProvider {
     options: LoginFactoryOptions = {},
   ): UaaPasscodeProvider {
     return new UaaPasscodeProvider({
-      ...config,
-      authorization: manualPasscodeStrategy({ signal: options.signal }),
+      ...ownOptions<typeof config>(config),
+      authorization: manualPasscodeStrategy({
+        signal: ownOptions<LoginFactoryOptions>(options).signal,
+      }),
     });
   }
 

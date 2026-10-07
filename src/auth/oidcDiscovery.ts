@@ -136,9 +136,7 @@ export async function discoverOidc(
     return cached;
   }
 
-  logQuietly(() =>
-    logger?.info('[OIDC] Fetching discovery document', { discoveryUrl }),
-  );
+  logQuietly(() => logger?.info('[OIDC] Fetching discovery document'));
   // The one request that may follow a redirect: it sends no secret — no
   // credential, no grant, no client certificate — only a GET for public
   // metadata. Every token request sets `maxRedirects: 0`.

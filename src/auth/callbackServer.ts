@@ -23,7 +23,7 @@ import type {
 } from '@mcp-abap-adt/interfaces-auth';
 import express from 'express';
 import { extractCode } from './browserAuth';
-import { misconfigured } from './configuration';
+import { misconfigured, ownOptions } from './configuration';
 import {
   abortedLogin,
   failedLogin,
@@ -47,10 +47,16 @@ export interface Settle<TResult> {
    * This was not our redirect — a reloaded tab, a prefetch, a port scanner.
    * Answered and counted; the login keeps waiting until a result, the
    * identity provider's refusal or an abort, whose words report the count.
-   * Ends nothing.
+   * Ends nothing. The reason is one of this package's fixed sentences: it
+   * is the only value of the request named in the warning line.
    */
-  ignore(reason: string, res?: express.Response): void;
+  ignore(reason: IgnoredCallbackReason, res?: express.Response): void;
 }
+
+/** Why a request to the callback was ignored: fixed words only. */
+export type IgnoredCallbackReason =
+  | 'no code and no error in query'
+  | 'no SAMLResponse in the request';
 
 export type RouteSetup<TResult> = (
   app: express.Express,
@@ -111,7 +117,8 @@ export async function runCallbackScope<TResult, TReturn>(
   routes: RouteSetup<TResult>,
   use: (server: ICallbackServerHandle<TResult>) => Promise<TReturn>,
 ): Promise<TReturn> {
-  const { port, signal, logger } = options;
+  // Read once as own data: a hostile object throws nothing of its own.
+  const { port, signal, logger } = ownOptions<ICallbackServerOptions>(options);
   validatePort(port);
   if (signal?.aborted) throw abortedLogin('browser');
 

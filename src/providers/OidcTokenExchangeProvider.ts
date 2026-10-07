@@ -9,7 +9,11 @@ import type {
 } from '@mcp-abap-adt/interfaces-auth';
 import { AUTH_TYPE_USER_TOKEN } from '@mcp-abap-adt/interfaces-auth';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
-import { oidcEndpointMissing, oidcIssuerRequired } from '../auth/configuration';
+import {
+  oidcEndpointMissing,
+  oidcIssuerRequired,
+  ownOptions,
+} from '../auth/configuration';
 import { discoverOidc, mtlsAlias } from '../auth/oidcDiscovery';
 import { tokenExchange } from '../auth/oidcToken';
 import {
@@ -45,7 +49,9 @@ export interface OidcTokenExchangeProviderConfig
 export class OidcTokenExchangeProvider extends BaseTokenProvider {
   private config: OidcTokenExchangeProviderConfig;
 
-  constructor(config: OidcTokenExchangeProviderConfig) {
+  constructor(options: OidcTokenExchangeProviderConfig) {
+    // Read once as own data (a hostile object throws nothing of its own).
+    const config = ownOptions<OidcTokenExchangeProviderConfig>(options);
     super(config);
     this.config = config;
     this.logger = config.logger;

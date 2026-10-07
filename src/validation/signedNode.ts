@@ -50,7 +50,10 @@ function idpCertificateInvalid() {
   );
 }
 
-export function toPem(certificate: string): string {
+export function toPem(certificate: unknown): string {
+  // A JavaScript caller past the type: anything but a string is no
+  // certificate either.
+  if (typeof certificate !== 'string') throw idpCertificateInvalid();
   const trimmed = certificate.trim();
   const pem = trimmed.includes('-----BEGIN')
     ? trimmed

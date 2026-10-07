@@ -13,7 +13,7 @@ import type {
 import { AUTH_TYPE_CLIENT_CREDENTIALS } from '@mcp-abap-adt/interfaces-auth';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
 import { getTokenWithClientCredentials } from '../auth/clientCredentialsAuth';
-import { requiredFieldsMissing } from '../auth/configuration';
+import { ownOptions, requiredFieldsMissing } from '../auth/configuration';
 import {
   BaseTokenProvider,
   type ClientAuthenticationConfig,
@@ -40,7 +40,9 @@ export interface ClientCredentialsProviderConfig
 export class ClientCredentialsProvider extends BaseTokenProvider {
   private config: ClientCredentialsProviderConfig;
 
-  constructor(config: ClientCredentialsProviderConfig) {
+  constructor(options: ClientCredentialsProviderConfig) {
+    // Read once as own data (a hostile object throws nothing of its own).
+    const config = ownOptions<ClientCredentialsProviderConfig>(options);
     super(config);
     this.config = config;
     this.logger = config.logger;

@@ -176,9 +176,7 @@ export async function exchangeAuthorizationCode(
   params.append('client_id', clientId);
 
   logQuietly(() =>
-    logger?.info('[OIDC] Exchanging authorization code for tokens', {
-      tokenEndpoint,
-    }),
+    logger?.info('[OIDC] Exchanging authorization code for tokens'),
   );
 
   return requestTokens(
@@ -211,7 +209,7 @@ export async function refreshOidcToken(
   params.append('refresh_token', refreshToken);
   params.append('client_id', clientId);
 
-  logQuietly(() => logger?.info('[OIDC] Refreshing token', { tokenEndpoint }));
+  logQuietly(() => logger?.info('[OIDC] Refreshing token'));
 
   return requestTokens(
     {
@@ -262,9 +260,7 @@ export async function initiateDeviceAuthorization(
     params.append('scope', scope);
   }
 
-  logQuietly(() =>
-    logger?.info('[OIDC] Initiating device authorization', { deviceEndpoint }),
-  );
+  logQuietly(() => logger?.info('[OIDC] Initiating device authorization'));
 
   // RFC 8628 §3.1: a confidential client authenticates here too. Without a
   // strategy, today's request: client_id in the body, never Basic.
@@ -428,9 +424,7 @@ export async function passwordGrant(
     params.append('scope', scope);
   }
 
-  logQuietly(() =>
-    logger?.info('[OIDC] Performing password grant', { tokenEndpoint }),
-  );
+  logQuietly(() => logger?.info('[OIDC] Performing password grant'));
 
   return requestTokens(
     {
@@ -483,9 +477,7 @@ export async function tokenExchange(
     params.append('actor_token_type', actorTokenType);
   }
 
-  logQuietly(() =>
-    logger?.info('[OIDC] Performing token exchange', { tokenEndpoint }),
-  );
+  logQuietly(() => logger?.info('[OIDC] Performing token exchange'));
 
   return requestTokens(
     {

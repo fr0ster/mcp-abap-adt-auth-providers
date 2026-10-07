@@ -12,6 +12,7 @@ import type {
 } from '@mcp-abap-adt/interfaces-auth';
 import { AUTH_TYPE_SAML2_BEARER } from '@mcp-abap-adt/interfaces-auth';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
+import { ownOptions } from '../auth/configuration';
 import {
   exchangeSamlAssertion,
   refreshSamlBearerToken,
@@ -19,7 +20,6 @@ import {
 import { toBearerAssertion } from '../auth/samlBearerAssertion';
 import { samlCallbackStrategy } from '../strategies';
 import { createSignedAssertionValidator } from '../validation/assertionValidator';
-import { defaultReplayStore } from '../validation/inMemoryReplayStore';
 import { validateAssertion } from '../validation/samlRefusal';
 import {
   BaseTokenProvider,
@@ -37,6 +37,7 @@ import {
   checkAssertionValidator,
   getSamlAssertion,
   resolveTokenUrl,
+  samlTrustOf,
   validateSamlConfig,
 } from './saml2Utils';
 
@@ -59,7 +60,9 @@ export class Saml2BearerProvider extends BaseTokenProvider {
   private config: Saml2BearerProviderConfig;
   private readonly validator: IAssertionValidator;
 
-  constructor(config: Saml2BearerProviderConfig) {
+  constructor(options: Saml2BearerProviderConfig) {
+    // Read once as own data (a hostile object throws nothing of its own).
+    const config = ownOptions<Saml2BearerProviderConfig>(options);
     super(config);
     // A pre-built URL with no declared ACS cannot be verified against whatever
     // the strategy binds, so it is refused here rather than at login time.
@@ -89,13 +92,15 @@ export class Saml2BearerProvider extends BaseTokenProvider {
     trust: SamlTrust,
     options: LoginFactoryOptions = {},
   ): Saml2BearerProvider {
+    // Read once as own data, like every option (a hostile object throws
+    // nothing of its own).
     return new Saml2BearerProvider({
-      ...config,
-      authorization: samlCallbackStrategy({ signal: options.signal }),
+      ...ownOptions<typeof config>(config),
+      authorization: samlCallbackStrategy({
+        signal: ownOptions<LoginFactoryOptions>(options).signal,
+      }),
       assertionValidator: createSignedAssertionValidator({
-        idpCertificates: trust.idpCertificates,
-        clockSkewMs: trust.clockSkewMs,
-        replayStore: trust.replayStore ?? defaultReplayStore,
+        ...samlTrustOf(trust),
       }),
     });
   }

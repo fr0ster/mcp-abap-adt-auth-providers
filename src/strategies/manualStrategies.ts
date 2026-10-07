@@ -13,8 +13,10 @@ import type {
   AuthorizationRequest,
   IAuthorizationStrategy,
 } from '@mcp-abap-adt/interfaces-auth';
-import { announcer } from '../auth/announce';
+import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
+import { announcer, promptableUrl } from '../auth/announce';
 import { extractCode } from '../auth/browserAuth';
+import { ownOptions } from '../auth/configuration';
 import { abortedLogin, loginFailure } from '../auth/interactiveLogin';
 import { signalOf } from '../auth/signalledRequest';
 import { DEFAULT_CALLBACK_PORT } from './BrowserCallbackStrategy';
@@ -151,14 +153,32 @@ function manualStrategy(
   };
 }
 
+/**
+ * Sends the user to the authorization URL: shown only as `promptableUrl`
+ * admits it (it may come from discovery or configuration), else named in
+ * fixed words. One line per prompt: no line break inside a line.
+ */
+function promptForUrl(logger: ILogger | undefined, url: string): void {
+  const announce = announcer(logger);
+  const shownUrl = promptableUrl(url);
+  if (shownUrl === undefined) {
+    announce('The authorization URL is not an http(s) URL that can be shown.');
+    return;
+  }
+  announce('Open this URL to authenticate:');
+  announce(shownUrl);
+}
+
 /** The user copies the `code` out of the address bar after the redirect. */
 export function manualPasteStrategy(
   options: ManualStrategyOptions = {},
 ): IAuthorizationStrategy<string> {
-  const redirectUri = options.redirectUri ?? defaultRedirectUri();
-  return manualStrategy(options, async (request, read) => {
+  // Read once as own data: a hostile object throws nothing of its own.
+  const own = ownOptions<ManualStrategyOptions>(options);
+  const redirectUri = own.redirectUri ?? defaultRedirectUri();
+  return manualStrategy(own, async (request, read) => {
     const url = await request.buildAuthorizationUrl(redirectUri);
-    announcer(request.logger)(`Open this URL to authenticate:\n${url}`);
+    promptForUrl(request.logger, url);
     const raw = await read(
       'Paste the authorization code (or the whole redirected URL): ',
     );
@@ -174,10 +194,12 @@ export function manualPasteStrategy(
 export function manualSamlResponseStrategy(
   options: ManualStrategyOptions = {},
 ): IAuthorizationStrategy<string> {
-  const redirectUri = options.redirectUri ?? defaultRedirectUri();
-  return manualStrategy(options, async (request, read) => {
+  // Read once as own data: a hostile object throws nothing of its own.
+  const own = ownOptions<ManualStrategyOptions>(options);
+  const redirectUri = own.redirectUri ?? defaultRedirectUri();
+  return manualStrategy(own, async (request, read) => {
     const url = await request.buildAuthorizationUrl(redirectUri);
-    announcer(request.logger)(`Open this URL to authenticate:\n${url}`);
+    promptForUrl(request.logger, url);
     const raw = await read(
       'Paste the SAMLResponse (from the POST body — it is not in the address bar): ',
     );
@@ -196,10 +218,12 @@ export function manualSamlResponseStrategy(
 export function manualPasscodeStrategy(
   options: ManualStrategyOptions = {},
 ): IAuthorizationStrategy<string> {
-  const redirectUri = options.redirectUri ?? defaultRedirectUri();
-  return manualStrategy(options, async (request, read) => {
+  // Read once as own data: a hostile object throws nothing of its own.
+  const own = ownOptions<ManualStrategyOptions>(options);
+  const redirectUri = own.redirectUri ?? defaultRedirectUri();
+  return manualStrategy(own, async (request, read) => {
     const url = await request.buildAuthorizationUrl(redirectUri);
-    announcer(request.logger)(`Open this URL to authenticate:\n${url}`);
+    promptForUrl(request.logger, url);
     const code = (
       await read('Paste the Temporary Authentication Code (passcode): ')
     ).trim();

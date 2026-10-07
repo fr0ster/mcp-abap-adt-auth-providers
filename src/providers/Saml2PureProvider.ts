@@ -13,10 +13,10 @@ import type {
 } from '@mcp-abap-adt/interfaces-auth';
 import { AUTH_TYPE_USER_TOKEN } from '@mcp-abap-adt/interfaces-auth';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
+import { ownOptions } from '../auth/configuration';
 import { markHandled } from '../auth/handled';
 import { samlCallbackStrategy } from '../strategies';
 import { createSignedResponseValidator } from '../validation/assertionValidator';
-import { defaultReplayStore } from '../validation/inMemoryReplayStore';
 import { validateAssertion } from '../validation/samlRefusal';
 import {
   BaseTokenProvider,
@@ -29,6 +29,7 @@ import type { Saml2CommonConfig, SamlTrust } from './saml2Utils';
 import {
   checkAssertionValidator,
   getSamlAssertion,
+  samlTrustOf,
   validateSamlConfig,
 } from './saml2Utils';
 
@@ -55,7 +56,9 @@ export class Saml2PureProvider extends BaseTokenProvider {
   private config: Saml2PureProviderConfig;
   private readonly validator: IAssertionValidator;
 
-  constructor(config: Saml2PureProviderConfig) {
+  constructor(options: Saml2PureProviderConfig) {
+    // Read once as own data (a hostile object throws nothing of its own).
+    const config = ownOptions<Saml2PureProviderConfig>(options);
     super(config);
     // A pre-built URL with no declared ACS cannot be verified against whatever
     // the strategy binds, so it is refused here rather than at login time.
@@ -82,13 +85,15 @@ export class Saml2PureProvider extends BaseTokenProvider {
     trust: SamlTrust,
     options: LoginFactoryOptions = {},
   ): Saml2PureProvider {
+    // Read once as own data, like every option (a hostile object throws
+    // nothing of its own).
     return new Saml2PureProvider({
-      ...config,
-      authorization: samlCallbackStrategy({ signal: options.signal }),
+      ...ownOptions<typeof config>(config),
+      authorization: samlCallbackStrategy({
+        signal: ownOptions<LoginFactoryOptions>(options).signal,
+      }),
       assertionValidator: createSignedResponseValidator({
-        idpCertificates: trust.idpCertificates,
-        clockSkewMs: trust.clockSkewMs,
-        replayStore: trust.replayStore ?? defaultReplayStore,
+        ...samlTrustOf(trust),
       }),
     });
   }

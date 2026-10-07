@@ -35,7 +35,11 @@ import {
   type Node,
   XMLSerializer,
 } from '@xmldom/xmldom';
-import { misconfigured } from '../auth/configuration';
+import {
+  misconfigured,
+  ownOptions,
+  requiredFieldsMissing,
+} from '../auth/configuration';
 import { parseStrictXml } from '../auth/strictXml';
 import { findDuplicateId, readRequiredId } from './documentIds';
 import { refuse, type SamlRefusal, several } from './samlRefusal';
@@ -124,11 +128,19 @@ function brand(validator: IAssertionValidator): IAssertionValidator {
   return validator;
 }
 
-/** Whether this validator came from one of the two shipped factories. */
+/**
+ * Whether this validator came from one of the two shipped factories: the
+ * brand read as own data, guarded — a consumer's validator that is a
+ * throwing Proxy is simply not a shipped one. Total.
+ */
 export function isShippedValidator(validator: IAssertionValidator): boolean {
-  const branded: IAssertionValidator & { readonly [SHIPPED]?: unknown } =
-    validator;
-  return branded[SHIPPED] === true;
+  if (validator === null || typeof validator !== 'object') return false;
+  try {
+    const descriptor = Reflect.getOwnPropertyDescriptor(validator, SHIPPED);
+    return descriptor !== undefined && descriptor.value === true;
+  } catch {
+    return false;
+  }
 }
 
 export const createSignedResponseValidator = (
@@ -139,11 +151,29 @@ export const createSignedAssertionValidator = (
   options: ShippedValidatorOptions,
 ): IAssertionValidator => brand(createValidator('assertion', options));
 
+/**
+ * The configured certificates as a plain array, copied once; anything that
+ * is not an array, or cannot be read as one (a Proxy that throws), is an
+ * empty list — refused as no certificates.
+ */
+function certificateList(value: unknown): unknown[] {
+  if (!Array.isArray(value)) return [];
+  try {
+    return Array.from(value as unknown[]);
+  } catch {
+    return [];
+  }
+}
+
 function createValidator(
   require: SignedElement,
   options: ShippedValidatorOptions,
 ): IAssertionValidator {
-  const skew = options.clockSkewMs ?? 0;
+  // Read once as own data, like every option: a hostile object throws
+  // nothing of its own, and a JavaScript caller past the type gets the
+  // configuration failure its mistake is (README, "Configuration errors").
+  const own = ownOptions<Partial<ShippedValidatorOptions>>(options);
+  const skew = own.clockSkewMs ?? 0;
   if (!Number.isInteger(skew) || skew < 0) {
     // E24: the value given is not echoed (L5).
     throw misconfigured(
@@ -153,7 +183,8 @@ function createValidator(
       }),
     );
   }
-  if (options.idpCertificates.length === 0) {
+  const given = certificateList(own.idpCertificates);
+  if (given.length === 0) {
     // E25.
     throw misconfigured(
       authError.configuration({
@@ -168,8 +199,12 @@ function createValidator(
   // was tried; a constructor is where this package already refuses a bad
   // configuration; and a login happens after a human has used a browser, so a
   // formatting mistake found then wastes their work, not ours.
-  const certificates = options.idpCertificates.map(toPem);
-  const store = options.replayStore;
+  const certificates = given.map(toPem);
+  const store = own.replayStore;
+  if (store === null || typeof store !== 'object') {
+    // E22's generic case: the store is required (`defaultReplayStore`).
+    throw requiredFieldsMissing(['replayStore']);
+  }
 
   return {
     async validate(samlResponse, context): Promise<ValidatedAssertion> {

@@ -84,3 +84,37 @@ export function oidcEndpointMissing(
     authError.configuration({ case: 'oidc-endpoint-missing', fields: [field] }),
   );
 }
+
+/**
+ * A consumer's options object as a plain snapshot of its own data
+ * properties, each read once: an accessor is never run (it reads as
+ * absent), a Proxy trap or a revoked Proxy that throws reads as absent, and
+ * a value that is not an object is an empty snapshot. Every exported
+ * constructor and factory reads its options through this, so a hostile
+ * options object can make it throw nothing but its own `configuration`
+ * failure (a required field it then finds missing) — never what the object
+ * threw. Total. Collaborators in the options (a strategy, a logger) are
+ * copied by reference and only called inside a moment's boundary.
+ */
+export function ownOptions<T extends object>(options: unknown): T {
+  const own: Record<string, unknown> = {};
+  if (options === null || typeof options !== 'object') return own as T;
+  let keys: (string | symbol)[];
+  try {
+    keys = Reflect.ownKeys(options);
+  } catch {
+    return own as T;
+  }
+  for (const key of keys) {
+    if (typeof key !== 'string') continue;
+    try {
+      const descriptor = Reflect.getOwnPropertyDescriptor(options, key);
+      if (descriptor !== undefined && 'value' in descriptor) {
+        own[key] = descriptor.value;
+      }
+    } catch {
+      // Unreadable: absent.
+    }
+  }
+  return own as T;
+}

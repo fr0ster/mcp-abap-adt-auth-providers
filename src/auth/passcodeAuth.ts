@@ -65,11 +65,7 @@ export async function exchangePasscode(
       )
     : undefined;
 
-  logQuietly(() =>
-    logger?.info('[UAA] Exchanging passcode for token', {
-      tokenUrl: prepared?.config.url ?? tokenUrl,
-    }),
-  );
+  logQuietly(() => logger?.info('[UAA] Exchanging passcode for token'));
 
   // Today's request: Basic `id:secret` — a public client, `cf` among them,
   // authenticates with an empty secret — built only through legacyBasic, so

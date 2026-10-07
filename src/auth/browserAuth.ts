@@ -6,6 +6,7 @@ import { logFields, readFailure } from '@mcp-abap-adt/auth-errors';
 import type { IAuthorizationConfig } from '@mcp-abap-adt/interfaces-auth-sap';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
 import axios from 'axios';
+import { promptableUrl } from './announce';
 import {
   launchableUrl,
   launchCommands,
@@ -185,9 +186,7 @@ export async function exchangeCodeForToken(
 
   // Every line on the token path is guarded: a logger that throws, or an
   // async one that rejects, changes nothing (logQuietly).
-  logQuietly(() =>
-    log?.info(`Exchanging code for token: ${prepared?.config.url ?? tokenUrl}`),
-  );
+  logQuietly(() => log?.info('Exchanging code for token'));
 
   const site = attemptSite(
     'code-exchange',
@@ -232,6 +231,37 @@ function _isDebugEnabled(): boolean {
   );
 }
 
+const OPEN_THIS_URL = '🔗 Open this URL in your browser to authenticate:';
+
+/**
+ * The prompt that sends the user to the authorization URL. Each URL is shown
+ * only as `promptableUrl` admits it — an http(s) serialisation of printable
+ * ASCII — since it may come from discovery or configuration; one that is not
+ * admitted is named in fixed words, never shown.
+ */
+function promptForUrl(
+  announce: (msg: string) => void,
+  lead: string,
+  authorizationUrl: string,
+  callbackUri: string,
+): void {
+  const shownUrl = promptableUrl(authorizationUrl);
+  if (shownUrl === undefined) {
+    announce(
+      '❌ The authorization URL is not an http(s) URL that can be shown.',
+    );
+  } else {
+    announce(lead);
+    announce(`   ${shownUrl}`);
+  }
+  const shownCallback = promptableUrl(callbackUri);
+  announce(
+    shownCallback === undefined
+      ? '   Waiting for the callback ...'
+      : `   Waiting for callback on ${shownCallback} ...`,
+  );
+}
+
 /** The named browser a `BROWSER_MAP` value stands for, else the default. */
 function namedBrowser(app: string | undefined): NamedBrowser | undefined {
   return app === 'chrome' || app === 'msedge' || app === 'firefox'
@@ -265,9 +295,7 @@ export async function launchBrowser(
 
   // 'none' / 'headless': show the URL and wait. For SSH and remote sessions.
   if (browser === 'none' || browser === 'headless') {
-    announce('🔗 Open this URL in your browser to authenticate:');
-    announce(`   ${authorizationUrl}`);
-    announce(`   Waiting for callback on ${callbackUri} ...`);
+    promptForUrl(announce, OPEN_THIS_URL, authorizationUrl, callbackUri);
     if (remoteHint) announce(remoteHint);
     return;
   }
@@ -281,9 +309,7 @@ export async function launchBrowser(
         '❌ The authorization URL is not an http(s) URL; it is not opened.',
       ),
     );
-    announce('🔗 Open this URL in your browser to authenticate:');
-    announce(`   ${authorizationUrl}`);
-    announce(`   Waiting for callback on ${callbackUri} ...`);
+    promptForUrl(announce, OPEN_THIS_URL, authorizationUrl, callbackUri);
     return;
   }
 
@@ -306,9 +332,12 @@ export async function launchBrowser(
           `⚠️  Could not open browser automatically: ${logFields(readFailure(error, 'opening-browser')).error}`,
         ),
       );
-      announce('🔗 Please open this URL in your browser to authenticate:');
-      announce(`   ${authorizationUrl}`);
-      announce(`   Waiting for callback on ${callbackUri} ...`);
+      promptForUrl(
+        announce,
+        '🔗 Please open this URL in your browser to authenticate:',
+        authorizationUrl,
+        callbackUri,
+      );
     }
     return;
   }
@@ -355,13 +384,17 @@ export async function launchBrowser(
     runLaunchers(
       launchCommands(process.platform, namedBrowser(browserApp), href),
       (error) => {
-        // H8: `logFields` of the failure, and the URL already announced.
+        // H8: `logFields` of the failure — fixed words, no URL — then the
+        // prompt, which shows the URL only as `promptableUrl` admits it.
         const fields = logFields(readFailure(error, 'opening-browser'));
         logQuietly(() =>
-          log?.error(
-            `❌ Failed to open browser: ${fields.error}. Please open manually: ${authorizationUrl}`,
-            { ...fields, url: authorizationUrl },
-          ),
+          log?.error(`❌ Failed to open browser: ${fields.error}`, fields),
+        );
+        promptForUrl(
+          announce,
+          '🔗 Please open this URL in your browser to authenticate:',
+          authorizationUrl,
+          callbackUri,
         );
       },
     );

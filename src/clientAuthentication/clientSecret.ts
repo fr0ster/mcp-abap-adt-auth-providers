@@ -1,6 +1,6 @@
 import { AuthProviderFailure, authError } from '@mcp-abap-adt/auth-errors';
 import type { IClientAuthentication } from '@mcp-abap-adt/interfaces-auth';
-import { misconfigured } from '../auth/configuration';
+import { misconfigured, ownOptions } from '../auth/configuration';
 
 /**
  * How `clientSecretBasic` writes the client id and secret before joining them.
@@ -39,7 +39,8 @@ export function clientSecretBasic(
   secret: string,
   options: ClientSecretBasicOptions,
 ): IClientAuthentication {
-  const encoding = (options as { encoding?: unknown } | undefined)?.encoding;
+  // Read once as own data: a hostile object throws nothing of its own.
+  const { encoding } = ownOptions<Partial<ClientSecretBasicOptions>>(options);
   if (!ENCODINGS.has(encoding)) {
     // E19: the allowed values are named by their set, never the value given.
     throw misconfigured(

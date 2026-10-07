@@ -14,7 +14,11 @@ import type {
 import { AUTH_TYPE_AUTHORIZATION_CODE } from '@mcp-abap-adt/interfaces-auth';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
 import { throwIfAborted, untilAborted } from '../auth/attempt';
-import { oidcEndpointMissing, oidcIssuerRequired } from '../auth/configuration';
+import {
+  oidcEndpointMissing,
+  oidcIssuerRequired,
+  ownOptions,
+} from '../auth/configuration';
 import { loginFailure } from '../auth/interactiveLogin';
 import { discoverOidc, mtlsAlias } from '../auth/oidcDiscovery';
 import {
@@ -61,7 +65,9 @@ export interface OidcDeviceFlowProviderConfig
 export class OidcDeviceFlowProvider extends BaseTokenProvider {
   private config: OidcDeviceFlowProviderConfig;
 
-  constructor(config: OidcDeviceFlowProviderConfig) {
+  constructor(options: OidcDeviceFlowProviderConfig) {
+    // Read once as own data (a hostile object throws nothing of its own).
+    const config = ownOptions<OidcDeviceFlowProviderConfig>(options);
     super(config);
     this.config = config;
     this.logger = config.logger;
@@ -79,9 +85,11 @@ export class OidcDeviceFlowProvider extends BaseTokenProvider {
   static toConsole(
     config: Omit<OidcDeviceFlowProviderConfig, 'presenter'>,
   ): OidcDeviceFlowProvider {
+    const own =
+      ownOptions<Omit<OidcDeviceFlowProviderConfig, 'presenter'>>(config);
     return new OidcDeviceFlowProvider({
-      ...config,
-      presenter: consoleDeviceCodePresenter(config.logger),
+      ...own,
+      presenter: consoleDeviceCodePresenter(own.logger),
     });
   }
 

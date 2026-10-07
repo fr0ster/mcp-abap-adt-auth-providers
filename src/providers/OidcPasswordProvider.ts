@@ -10,7 +10,11 @@ import type {
 import { AUTH_TYPE_PASSWORD } from '@mcp-abap-adt/interfaces-auth';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
 import { throwIfAborted } from '../auth/attempt';
-import { oidcEndpointMissing, oidcIssuerRequired } from '../auth/configuration';
+import {
+  oidcEndpointMissing,
+  oidcIssuerRequired,
+  ownOptions,
+} from '../auth/configuration';
 import { discoverOidc, mtlsAlias } from '../auth/oidcDiscovery';
 import { passwordGrant, refreshOidcToken } from '../auth/oidcToken';
 import {
@@ -43,7 +47,9 @@ export interface OidcPasswordProviderConfig
 export class OidcPasswordProvider extends BaseTokenProvider {
   private config: OidcPasswordProviderConfig;
 
-  constructor(config: OidcPasswordProviderConfig) {
+  constructor(options: OidcPasswordProviderConfig) {
+    // Read once as own data (a hostile object throws nothing of its own).
+    const config = ownOptions<OidcPasswordProviderConfig>(options);
     super(config);
     this.config = config;
     this.logger = config.logger;

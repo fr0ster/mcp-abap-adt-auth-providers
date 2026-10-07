@@ -209,9 +209,12 @@ describe('A.3 — browser login rows', () => {
 
   it('K5: a launcher that fails → browser-launch-failed, its allowlisted code only', async () => {
     const lines: unknown[][] = [];
+    const prompts: unknown[][] = [];
     const logger: ILogger = {
       debug: () => undefined,
-      info: () => undefined,
+      info: (...args: unknown[]) => {
+        prompts.push(args);
+      },
       warn: () => undefined,
       error: (...args: unknown[]) => {
         lines.push(args);
@@ -233,12 +236,14 @@ describe('A.3 — browser login rows', () => {
       reason: 'the browser could not be opened (ENOENT)',
       hint: 'open the authorization URL from the log by hand',
     });
-    // H7: the URL stays in the strategy's own line, never in the failure.
+    // H7: the URL is in neither the failure nor the error line.
     expect((thrown as Error).message).not.toContain('idp.example');
     const [line] = lines;
-    expect(String(line?.[0])).toContain(
-      'Open manually: https://idp.example/authorize',
+    expect(String(line?.[0])).toBe(
+      'Failed to open browser: opening the browser failed (unknown error, ENOENT)',
     );
+    expect(JSON.stringify(lines)).not.toContain('idp.example');
+    expect(JSON.stringify(prompts)).not.toContain('idp.example');
     expect(JSON.stringify(lines)).not.toContain('SECRET-PATH');
   });
 

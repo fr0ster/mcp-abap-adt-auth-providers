@@ -25,6 +25,7 @@ import {
   validatePort,
   withBrowserCallbackServer,
 } from '../auth/callbackServer';
+import { ownOptions } from '../auth/configuration';
 import { markHandled, onAnswerRejection } from '../auth/handled';
 import {
   abortedLogin,
@@ -114,12 +115,14 @@ export class BrowserCallbackStrategy<TResult>
   private inFlight: Promise<AuthorizationOutcome<TResult>> | null = null;
   private controller: AbortController | null = null;
   private disposed = false;
+  private readonly options: BrowserCallbackStrategyOptions<TResult>;
 
-  constructor(
-    private readonly options: BrowserCallbackStrategyOptions<TResult>,
-  ) {
+  constructor(options: BrowserCallbackStrategyOptions<TResult>) {
+    // Read once as own data, like every option: a hostile object throws
+    // nothing of its own.
+    this.options = ownOptions<BrowserCallbackStrategyOptions<TResult>>(options);
     // K6 at construction (a constructor may throw, spec §8.1).
-    if (options.port !== undefined) validatePort(options.port);
+    if (this.options.port !== undefined) validatePort(this.options.port);
   }
 
   /**
@@ -136,8 +139,7 @@ export class BrowserCallbackStrategy<TResult>
     if (this.inFlight) throw loginFailure({ outcome: 'busy' });
 
     const port = this.options.port ?? DEFAULT_CALLBACK_PORT;
-    // K6 again before the probe binds anything: the options object is the
-    // consumer's and may have changed since construction.
+    // K6 again before the probe binds anything (the default included).
     validatePort(port);
 
     const controller = new AbortController();
@@ -201,13 +203,14 @@ export class BrowserCallbackStrategy<TResult>
           // method, run inside a try: one that throws changes nothing here.
           const launchFailed = (error: unknown) => {
             // H7: the launcher is the consumer's, its text foreign — the
-            // line carries `logFields` of its failure and the URL this
-            // strategy announces anyway.
+            // line carries `logFields` of its failure and no URL (one from
+            // discovery or configuration is no fixed fact). The login ends
+            // here (`fail`), so there is nothing left to open by hand.
             const fields = logFields(readFailure(error, 'opening-browser'));
             logQuietly(() =>
               request.logger?.error(
-                `Failed to open browser: ${fields.error}. Open manually: ${url}`,
-                { ...fields, url },
+                `Failed to open browser: ${fields.error}`,
+                fields,
               ),
             );
             try {
@@ -311,32 +314,35 @@ const uaaPasteHint = (redirectUri: string): string => {
 export function browserCallbackStrategy(
   options: CallbackStrategyOptions<string> = {},
 ): IAuthorizationStrategy<string> {
+  const own = ownOptions<CallbackStrategyOptions<string>>(options);
   return new BrowserCallbackStrategy<string>({
-    ...options,
-    callbackServer: options.callbackServer ?? withBrowserCallbackServer,
+    ...own,
+    callbackServer: own.callbackServer ?? withBrowserCallbackServer,
     // An explicit hint always wins. Otherwise the default applies only when we
     // supplied the transport: an injected receiver may have no `/` route, and
     // the replaceable receiver is the whole point of this design, so assuming
     // one would advertise a 404 to exactly the consumers the design is for.
     remoteHint:
-      options.remoteHint ?? (options.callbackServer ? undefined : uaaPasteHint),
+      own.remoteHint ?? (own.callbackServer ? undefined : uaaPasteHint),
   });
 }
 
 export function oidcCallbackStrategy(
   options: CallbackStrategyOptions<OidcCallbackResult> = {},
 ): IAuthorizationStrategy<OidcCallbackResult> {
+  const own = ownOptions<CallbackStrategyOptions<OidcCallbackResult>>(options);
   return new BrowserCallbackStrategy<OidcCallbackResult>({
-    ...options,
-    callbackServer: options.callbackServer ?? withOidcCallbackServer,
+    ...own,
+    callbackServer: own.callbackServer ?? withOidcCallbackServer,
   });
 }
 
 export function samlCallbackStrategy(
   options: CallbackStrategyOptions<string> = {},
 ): IAuthorizationStrategy<string> {
+  const own = ownOptions<CallbackStrategyOptions<string>>(options);
   return new BrowserCallbackStrategy<string>({
-    ...options,
-    callbackServer: options.callbackServer ?? withSamlCallbackServer,
+    ...own,
+    callbackServer: own.callbackServer ?? withSamlCallbackServer,
   });
 }

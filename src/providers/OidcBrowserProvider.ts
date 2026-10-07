@@ -12,7 +12,11 @@ import type {
 import { AUTH_TYPE_AUTHORIZATION_CODE_PKCE } from '@mcp-abap-adt/interfaces-auth';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
 import { throwIfAborted } from '../auth/attempt';
-import { oidcEndpointMissing, oidcIssuerRequired } from '../auth/configuration';
+import {
+  oidcEndpointMissing,
+  oidcIssuerRequired,
+  ownOptions,
+} from '../auth/configuration';
 import type { OidcCallbackResult } from '../auth/oidcBrowserAuth';
 import { discoverOidc, mtlsAlias } from '../auth/oidcDiscovery';
 import { generatePkceChallenge, generatePkceVerifier } from '../auth/oidcPkce';
@@ -53,7 +57,9 @@ export interface OidcBrowserProviderConfig
 export class OidcBrowserProvider extends BaseTokenProvider {
   private config: OidcBrowserProviderConfig;
 
-  constructor(config: OidcBrowserProviderConfig) {
+  constructor(options: OidcBrowserProviderConfig) {
+    // Read once as own data (a hostile object throws nothing of its own).
+    const config = ownOptions<OidcBrowserProviderConfig>(options);
     super(config);
     this.config = config;
     this.logger = config.logger;
@@ -73,8 +79,10 @@ export class OidcBrowserProvider extends BaseTokenProvider {
     options: LoginFactoryOptions = {},
   ): OidcBrowserProvider {
     return new OidcBrowserProvider({
-      ...config,
-      authorization: oidcCallbackStrategy({ signal: options.signal }),
+      ...ownOptions<typeof config>(config),
+      authorization: oidcCallbackStrategy({
+        signal: ownOptions<LoginFactoryOptions>(options).signal,
+      }),
     });
   }
 

@@ -667,7 +667,7 @@ describe('no message of a thrown error in the logs', () => {
     });
   });
 
-  it('H7 — a browser launcher that rejects: logFields and the URL the strategy announces', async () => {
+  it('H7 — a browser launcher that rejects: logFields, no URL', async () => {
     const { logger, entries } = recordingLogger();
     const strategy = browserCallbackStrategy({
       port: 0,
@@ -696,8 +696,8 @@ describe('no message of a thrown error in the logs', () => {
     expect(line?.meta).toEqual({
       error: 'opening the browser failed (unknown error)',
       kind: 'unknown',
-      url: expect.stringContaining('https://idp.example/authorize'),
     });
+    expect(JSON.stringify(entries)).not.toContain('idp.example');
   });
 
   it('H8 — `open` that rejects, and the shell-free fallback that fails', async () => {
@@ -758,8 +758,8 @@ describe('no message of a thrown error in the logs', () => {
     expect(line?.meta).toEqual({
       error: 'opening the browser failed (unknown error)',
       kind: 'unknown',
-      url: 'https://idp/a',
     });
+    expect(line?.meta).not.toHaveProperty('url');
   });
 
   it('H10 — a 200 without a token whose error echoes the secret and the code', async () => {
