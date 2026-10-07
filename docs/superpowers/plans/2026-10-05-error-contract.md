@@ -734,10 +734,21 @@ Repository auth-providers, PR #68. After 30d–30f.
 - **Global Constraints, versions and order:** interfaces-auth 7.0.0 (and
   siblings), auth-errors 2.0.0, connection 13.0.0 enter the chain before
   auth-providers 6.0.0.
+- **Task 32 (connection gate 7):** the corrective release, if one is
+  needed, is **connection 13.0.1** on the 13 line (dependencies
+  interfaces-auth 7, auth-errors 2, auth-providers 6), not 12.0.1; the
+  user merges, tags and publishes it before Tasks 33–34 proceed.
 - **Task 33 (auth-stores 4.0.0):** dependencies on interfaces-auth 7 and its
   siblings; no `refreshTokenDisposition` to accept — `''` stays the clearing
   operation, documented and pinned by a test per session store.
-- **Task 34 (auth-broker 5.0.0):** the `renewal` option, default
+- **Task 34 (auth-broker 5.0.0):** its dependency ranges and publish
+  prerequisites are replaced, for both workspace packages: interfaces-auth
+  `^7.0.0` and the siblings Task 30a released, auth-errors `^2.0.0` (the
+  CLI's `renderDiagnostics` dependency included), auth-providers `^6.0.0`,
+  auth-stores `^4.0.0`, connection `^13.0.0` where used; before G6,
+  `npm ls @mcp-abap-adt/interfaces-auth` and `npm ls @mcp-abap-adt/auth-errors`
+  show one deduplicated copy each, and an exhaustive kind switch in the
+  broker or CLI handles `renewal-declined`. Then the `renewal` option, default
   `refreshThenLogin()`; persistence through
   `refreshStatePersistence(write, { onWriteFailure: 'fail' })` over
   `SessionWriter` (`null` → `refreshToken: ''`, `undefined` → the stored
