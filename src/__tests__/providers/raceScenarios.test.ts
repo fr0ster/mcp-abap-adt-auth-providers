@@ -261,4 +261,32 @@ report({ olderOutcome, beforeRelease, order: hooks.map((h) => h.access), most, l
     });
     expect(run.unhandled).toEqual([]);
   });
+
+  it('an aborted() answering a rejecting native promise: marked handled, no unhandled rejection (review I-3d)', () => {
+    const run = runPlainNode<Record<string, unknown>>(`${PRELUDE}
+let told = 0;
+const p = new Scripted({
+  renewal: {
+    next: (situation) => lib.refreshThenLogin().next(situation),
+    aborted: () => { told += 1; return Promise.reject(new Error('aborted: SECRET')); },
+  },
+  access: jwt('held', -3600),
+  refresh: 'R',
+});
+const only = new AbortController();
+const cut = outcomeOf(p.getTokens({ signal: only.signal }));
+await until(() => p.refreshes.length === 1);
+only.abort();
+const cutOutcome = await cut;
+await settled(10);
+p.refreshes[0].d.reject(new Error('late'));
+await settled(10);
+report({ cutOutcome, told });
+`);
+    expect(run.result).toEqual({
+      cutOutcome: { kind: 'interactive-login', outcome: 'aborted' },
+      told: 1,
+    });
+    expect(run.unhandled).toEqual([]);
+  });
 });

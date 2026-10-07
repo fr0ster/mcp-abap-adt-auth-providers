@@ -146,7 +146,12 @@ describe('the server answers the token endpoint', () => {
   let refreshAnswer: ((request: HeldRequest) => void) | undefined;
   /** What each code exchange answers. */
   let codeAnswer: object;
+  /** Code exchanges held, when `holdCode` is set. */
+  let codes: Arrivals<HeldRequest>;
+  let holdCode: boolean;
   beforeEach(async () => {
+    codes = new Arrivals<HeldRequest>();
+    holdCode = false;
     refreshes = new Arrivals<HeldRequest>();
     refreshAnswer = undefined;
     codeAnswer = { access_token: jwt('login'), refresh_token: 'S' };
@@ -154,6 +159,10 @@ describe('the server answers the token endpoint', () => {
       if (request.params.get('grant_type') === 'refresh_token') {
         refreshes.push(request);
         refreshAnswer?.(request);
+        return;
+      }
+      if (holdCode) {
+        codes.push(request);
         return;
       }
       request.answer(200, codeAnswer);
@@ -318,6 +327,64 @@ describe('the server answers the token endpoint', () => {
         p.rejected({ at: 'request', status: 403, error: undefined }),
       ).resolves.toEqual({ ok: true });
       expect(submitted()).toEqual(['R']);
+    });
+  });
+
+  describe("a login step's sent, as its sites told it (review I-3c)", () => {
+    function loginOnly() {
+      const situations: RenewalSituation[] = [];
+      const { strategy, observed } = observing({
+        next: (situation) => {
+          situations.push(situation);
+          return refreshThenLogin().next(situation);
+        },
+      });
+      const authorization = waitingStrategy();
+      const p = new AuthorizationCodeProvider({
+        renewal: strategy,
+        uaaUrl: server.url,
+        clientId: 'cid',
+        clientSecret: 'sec',
+        authorization,
+        logger: silent,
+      });
+      return { p, authorization, observed, situations };
+    }
+
+    it('an abort after the code exchange was dispatched: sent true', async () => {
+      holdCode = true;
+      const { p, authorization, observed } = loginOnly();
+      const only = new AbortController();
+      const cut = rejectionOf(p.getTokens({ signal: only.signal }));
+      (await authorization.nth(1)).answer('code-1');
+      await codes.nth(1);
+      only.abort();
+      expectAborted(await cut);
+      await quiet();
+      expect(observed).toEqual([
+        {
+          cause: { trigger: 'no-token' },
+          moment: 'get-tokens',
+          step: 'login',
+          sent: true,
+        },
+      ]);
+    });
+
+    it('a login refused after its code exchange was sent: failed, sent true', async () => {
+      holdCode = true;
+      const { p, authorization, situations } = loginOnly();
+      const thrown = rejectionOf(p.getTokens());
+      (await authorization.nth(1)).answer('code-1');
+      (await codes.nth(1)).answer(400, { error: 'invalid_grant' });
+      await thrown;
+      expect(situations[1]?.steps).toEqual([
+        expect.objectContaining({
+          step: 'login',
+          outcome: 'failed',
+          sent: true,
+        }),
+      ]);
     });
   });
 });

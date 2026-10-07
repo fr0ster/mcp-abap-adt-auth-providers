@@ -971,3 +971,106 @@ describe('review M-2, M-3, M-4', () => {
     expect(provider.held().refresh).toBe('R');
   });
 });
+
+describe("stop's answer, in §6c.5 step 8's order (review I-3a)", () => {
+  it("a step's error comes before rule 5's refusal: a 403 renewed, the refresh refused, then stop", async () => {
+    const s = scripted([
+      refresh(),
+      () => ({ next: 'stop', sentRefreshToken: 'keep' }),
+    ]);
+    const provider = new ScriptedProvider({
+      renewal: s.strategy,
+      accessToken: jwt('valid'),
+      refreshToken: 'R',
+    });
+    const answered = provider.rejected({
+      at: 'request',
+      status: 403,
+      error: undefined,
+    });
+    (await provider.refreshes.nth(1)).result.reject(refused());
+    const outcome = await answered;
+    expect(outcome.ok).toBe(false);
+    if (outcome.ok) return;
+    // The refresh step's own error, not system-refused.
+    expect(outcome.refusal.kind).toBe('unknown');
+    expect(outcome.refusal.facts).toMatchObject({ operation: 'token-request' });
+  });
+
+  it("a step's error comes before the lastRenewal of a token bound elsewhere", async () => {
+    const elsewhere = boundTo(thumbprintOf(otherCertificate()), 'held');
+    const first = scripted([login()]);
+    const provider = new ScriptedProvider({
+      renewal: first.strategy,
+      clientAuthentication: pinning,
+      accessToken: elsewhere,
+      refreshToken: 'R',
+    });
+    // A first renewal fails: its error is remembered.
+    const failing = rejectionOf(provider.getTokens());
+    (await provider.logins.nth(1)).result.reject(new Error('failed'));
+    const remembered = errorOf(await failing);
+    // The next one renews despite lastRenewal; its refresh is refused.
+    (provider as unknown as { renewal: IRenewalStrategy }).renewal = scripted([
+      refresh(),
+      () => ({ next: 'stop', sentRefreshToken: 'keep' }),
+    ]).strategy;
+    const second = rejectionOf(provider.getTokens());
+    (await provider.refreshes.nth(1)).result.reject(refused());
+    const error = errorOf(await second);
+    expect(error).not.toBe(remembered);
+    expect(error.facts).toMatchObject({ operation: 'token-request' });
+  });
+
+  it("an outcome's refusal comes before rule 5's: a 403 renewed into the same token, then stop", async () => {
+    const token = jwt('valid');
+    const s = scripted([refresh()]);
+    const provider = new ScriptedProvider({
+      renewal: s.strategy,
+      accessToken: token,
+      refreshToken: 'R',
+    });
+    const answered = provider.rejected({
+      at: 'request',
+      status: 403,
+      error: undefined,
+    });
+    (await provider.refreshes.nth(1)).result.resolve(tokens(token, 'R2'));
+    const outcome = await answered;
+    expect(outcome.ok).toBe(false);
+    if (outcome.ok) return;
+    expect(outcome.refusal.kind).toBe('renewal-unchanged');
+  });
+});
+
+describe('pending observations are delivered before the next next() (review I-3b)', () => {
+  it('with the queued delivery not yet run, next() delivers first, and only once', async () => {
+    // ifCut keep: R stays, so the next renewal can refresh it again.
+    const s = scripted([refresh('keep'), refresh()]);
+    const provider = seeded(s.strategy);
+    const only = new AbortController();
+    const cut = rejectionOf(provider.getTokens({ signal: only.signal }));
+    await provider.refreshes.nth(1);
+    // Hold every microtask queued from here on: the delivery the abort
+    // handler queues does not run before the next renewal asks.
+    const held: Array<() => void> = [];
+    const original = globalThis.queueMicrotask;
+    globalThis.queueMicrotask = (task: () => void) => {
+      held.push(task);
+    };
+    let next: Promise<unknown>;
+    try {
+      only.abort();
+      await cut;
+      next = provider.getTokens();
+      await provider.refreshes.nth(2);
+    } finally {
+      globalThis.queueMicrotask = original;
+    }
+    expect(s.calls).toEqual(['next:0', 'aborted', 'next:1']);
+    for (const task of held) task();
+    expect(s.observed).toHaveLength(1);
+    (await provider.refreshes.nth(2)).result.resolve(tokens(jwt('in'), 'S'));
+    await next;
+  });
+});
