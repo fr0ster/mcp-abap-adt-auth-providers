@@ -2070,7 +2070,20 @@ one call to `next`.
 commit never installs one and reports `'clear'` (R8). `canRefresh` is false
 while the held refresh token is in the set. `keep` adds nothing.
 
-**Dispositions.** Unchanged from §6b: a result with a new usable refresh
+**A kept refresh token survives a result without one** (R1's certain
+case, R8). Today `updateTokens` sets `refreshToken` from the result, so a
+login that returns no refresh token drops the held one in memory while
+`onTokens` says `'keep'` and persistence retains it — memory and storage
+disagree, and a strategy's `keep` is silently undone. A credential commit
+therefore installs the result's refresh token only when it carries a usable
+one (non-empty, not discarded); otherwise the held refresh token stays —
+unless it was discarded (then the state is `cleared`, as below). What is
+held, what the result returned to the caller says (`heldRefresh()`: the
+kept token, `'replace'` — what a 4.x reader infers from its presence — or
+`'keep'` when the result is told to `onTokens`), and what persistence keeps
+then agree.
+
+**Dispositions.** Otherwise unchanged from §6b: a result with a new usable refresh
 token → `'replace'`; the logical `cleared` state → `'clear'`; the pending
 disposition re-sent after a failed `onTokens`; otherwise `'keep'`. Only the
 reasons a token becomes `cleared` change: a discard decision, never the
@@ -2136,6 +2149,12 @@ Real sockets where the point is what was sent; every case load-bearing
   invalid decision → `unknown` `renewal-strategy`, the refresh token
   unchanged, no step taken; a strategy that throws, answers a foreign
   thenable (its `then` never called), or never settles until the abort.
+- Keep through login: a sent refresh fails, the strategy answers `login`
+  with `sentRefreshToken: 'keep'`, the login returns no refresh token → R
+  still held, `onTokens` told `'keep'`, and the next renewal's refresh
+  sends R (asserted on the server); the same for a strategy that logs in
+  directly while R is held. Restoring `updateTokens`' overwrite turns both
+  red.
 - Per-step generations: a refresh commits R2 with outcome
   `bound-elsewhere`, the strategy asks `login`, the login's credentials are
   installed and persisted (one generation per attempt turns it red); two
