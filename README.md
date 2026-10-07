@@ -20,13 +20,100 @@ parse. And nothing is bounded by a timeout of the package's choosing any more:
 your `AbortSignal` is the bound. What a consumer on 5.x must now do:
 
 - **Install the contract it is read with.** `@mcp-abap-adt/auth-errors`
-  (`^1.0.1`) to read errors; `@mcp-abap-adt/interfaces-auth` 6.0.0 is what
-  every provider here implements. Hand the providers to a
-  `@mcp-abap-adt/connection` **12.0.0** process (11.x reads the old refusal),
+  (`^2.0.1`) to read errors; `@mcp-abap-adt/interfaces-auth` (`^7.3.0`) is
+  what every provider here implements. Hand the providers to a
+  `@mcp-abap-adt/connection` **13.0.0** process — 11.x reads the old refusal,
+  and 12.0.0 (published only under `next`) is built on interfaces-auth 6 —
   and pair them with `@mcp-abap-adt/auth-stores` 4.0.0 and
-  `@mcp-abap-adt/auth-broker` 5.0.0: every token result now carries
-  `refreshTokenDisposition`, which auth-stores 3.x refuses
-  (`RefusedFieldsError` from `saveSession`).
+  `@mcp-abap-adt/auth-broker` 5.0.0, which move to the same contract. Keep
+  one copy of each: `npm ls @mcp-abap-adt/interfaces-auth` and
+  `npm ls @mcp-abap-adt/auth-errors` should show one deduplicated version.
+- **Every token provider requires `renewal`.** How a renewal proceeds —
+  whether to refresh, whether to log in, when to stop, what becomes of a
+  refresh token that was sent — is now a strategy the consumer gives
+  (`renewal: IRenewalStrategy`). There is no default: a token provider (and
+  `inBrowser`, `fromTerminal`, `toConsole`, `SsoProviderFactory.create`)
+  constructed without one, or with one whose `next` is not a function, throws
+  `configuration` `required-fields-missing` with `fields: ['renewal']`.
+  **`renewal: refreshThenLogin()` takes the steps 5.x took** — one refresh,
+  then one login when there is no refresh token or the refresh failed;
+  `refreshOnly()` never logs in. See [Renewal strategy](#renewal-strategy).
+
+  ```typescript
+  import { ClientCredentialsProvider, refreshThenLogin } from '@mcp-abap-adt/auth-providers';
+
+  const provider = new ClientCredentialsProvider({
+    uaaUrl, clientId, clientSecret,
+    renewal: refreshThenLogin(),
+  });
+  ```
+- **`onTokens` is gone; pass `persistence`.** The config field `onTokens`
+  is replaced by `persistence?: ITokenPersistence`, which receives one report
+  per change of the provider's credentials (see
+  [Persistence strategy](#persistence-strategy)). **The 5.x behaviour of
+  `onTokens` — called with every new token, best effort — is
+  `refreshStatePersistence(write, { onWriteFailure: 'continue' })`**:
+
+  ```typescript
+  // 5.x
+  onTokens: async (result) => save(result),
+  // 6.0.0
+  persistence: refreshStatePersistence(
+    async ({ authorizationToken, refreshToken, expiresAt }) =>
+      save({ authorizationToken, refreshToken, expiresAt }),
+    { onWriteFailure: 'continue' },
+  ),
+  ```
+
+  `write`'s `refreshToken` is a string (a new one: write it), `undefined`
+  (the result carried none: leave the stored one, as a 5.x `onTokens`
+  result without a refresh token meant) or `null` — new — (the provider
+  discarded the refresh token: clear the stored one, so it is never sent
+  again after a restart). `onWriteFailure` is required, with no default: `'continue'`
+  logs a failed write and goes on, as `onTokens` failures did; `'fail'`
+  makes the call that caused the write fail with it. **A persistence strategy
+  of your own whose awaited report throws now fails that call**
+  (`getTokens()`, `refreshTokens()`, or the moment) — `unknown`, operation
+  `persisting-tokens` — where 5.x only logged a failing `onTokens`; the
+  credentials stay committed and the next `getTokens()` answers them.
+  Without `persistence` nothing is persisted.
+- **No `refreshTokenDisposition`.** interfaces-auth 6.0.0 added it to
+  `ITokenResult`; interfaces-auth 7 removed it again, with the type
+  `RefreshTokenDisposition`, and no release of this package carries it. What
+  `getTokens()` / `refreshTokens()` return carries the refresh token the
+  provider holds, or `refreshToken: undefined` — nothing more. A store learns
+  what became of the refresh token from the persistence reports.
+- **What a renewal answers changed where it could not produce a usable
+  credential** — it now throws, and what follows (log in again, give up) is
+  yours. With `refreshThenLogin()`:
+  - a renewal that obtains a token still bound to another certificate than
+    the pinned one: `getTokens()` / `refreshTokens()` throw `token-binding`
+    `renewed-bound-elsewhere` (5.x returned the token);
+  - a held token remembered as bound elsewhere: `getTokens()` throws the
+    remembered error (5.x returned the token); `prepare()` no longer clears
+    what is remembered — it renews once more;
+  - `rejected()` with a `401` whose renewal is still bound elsewhere: Oops
+    `renewed-bound-elsewhere` (5.x answered Ok);
+  - a remembered expired client certificate is refused again by the pin —
+    an equal refusal, no longer the same object;
+  - a result that carries no usable refresh token — a refresh answered
+    without a new one, a login without one — leaves the refresh token held
+    in place (5.x dropped it), so the next renewal can still refresh;
+  - a `403` for a token a renewal has already replaced: Ok, since what is
+    presented changed;
+  - a refresh that failed **before it was sent** (discovery, a
+    client-authentication strategy or a loader failed first) no longer
+    discards the refresh token.
+- **A new kind, `renewal-declined`** — "the renewal strategy declined to
+  renew the credential", `facts.trigger` — for a renewal strategy that stops
+  before taking any step, with no other refusal that explains it (for
+  instance `refreshOnly()` with an expired token and no refresh token). An
+  exhaustive `matchKind` / `unreachableKind` must handle it.
+- **`invalid-value` is a configuration case**, "a configured value cannot be
+  used: `<fields>`": an unparseable `authorizationUrl` (5.x
+  `required-fields-missing`), a `persistence` without a callable `report`,
+  `refreshStatePersistence`'s `onWriteFailure` or `write`, a `callbackServer`
+  without `expectState` (below).
 - **Catch with `readFailure`, never `instanceof`.** Every throw of this
   package — a constructor's configuration fault, a factory's, a loader's,
   `getTokens()` / `refreshTokens()` — is an `AuthProviderFailure`. Read what
@@ -75,7 +162,7 @@ your `AbortSignal` is the bound. What a consumer on 5.x must now do:
   | `AssertionValidationError` (`check`) | `saml-assertion` — `facts.rule`, `facts.check` ([Refusal messages](#refusal-messages)) |
   | `CertificateMaterialError` (`incomplete`, `expired`) | `client-certificate` — `facts.problem` (`incomplete`, `unusable`, `expired`) |
   | `ClientAuthenticationError`, `ClientAuthenticationResultError`, `BasicClientIdError` | `client-authentication` — `facts.problem` (`signing-key-unusable`, `result-unsendable`, `basic-client-id-colon`) |
-  | `RefreshError` | `credential-refused` `refresh-token` — and, as before, a refused refresh falls back to one login inside the provider |
+  | `RefreshError` | `credential-refused` `refresh-token` — with `refreshThenLogin()`, as before, a refused refresh falls back to one login inside the provider |
   | `SessionDataError`, `ServiceKeyError` | nothing: they had no producer |
   | `error.code` (`TOKEN_PROVIDER_ERROR_CODES`, `ASSERTION_ERROR_CODES`) | `kind` — the constants are gone from interfaces-auth 6.0.0 |
 - **`refusalWords(error, what)` → `classify(error, operation)`**
@@ -158,15 +245,21 @@ your `AbortSignal` is the bound. What a consumer on 5.x must now do:
   `performLogin(attempt)` — hand `attempt.signal` to whatever the login waits
   on — and `performRefresh()` is `performRefresh(refreshToken, signal)`:
   send the refresh token you are given. Reading `this.refreshToken` instead
-  bypasses the quarantine of a refresh token whose refresh was cut, and may
-  resend a spent one. A provider of your own extends `AuthProviderBase` and
+  may send a refresh token the renewal strategy discarded — a spent one. A
+  subclass's constructor passes `renewal` through its config like any other
+  token provider. A provider of your own extends `AuthProviderBase` and
   implements `onPrepare()`, `onEstablish(logon)`, `onAuthorize(request)` and
   `onRejected(rejection)`; the base owns the four moments and runs each
   inside auth-errors' `guard`. See
   [Writing a provider of your own](#writing-a-provider-of-your-own-authproviderbase).
-- **A cut refresh may cost one login.** A refresh whose callers all aborted
-  after it was sent runs on, and its refresh token is never sent again by
-  that provider, so the next renewal logs in.
+- **A cut refresh: the strategy decided before it was sent.** A refresh
+  whose callers all aborted after it was sent runs on; what becomes of the
+  refresh token it sent is the `ifCut` of the decision that started it.
+  `refreshThenLogin()` and `refreshOnly()` say `'discard'` — that refresh
+  token is never sent again by the provider, so with `refreshThenLogin()`
+  the next renewal may log in, as in 5.x; a strategy of your own may say
+  `'keep'`. A refresh aborted before it was sent touches no refresh token.
+  See [Cancelling a login](#cancelling-a-login).
 - **A declined SAML login is refused `declined`.** The signed-Response
   validator reads `Status` right after the signature checks, before counting
   the `Assertion`, so a login the identity provider declined — which carries
@@ -209,10 +302,10 @@ facts that remain are listed with it):
 
 ## Migrating to 5.0.0 — a migration, not an update
 
-*History: what 5.0.0 changed. Where 6.0.0 changed it again — the
-`timeoutMs` of the manual strategies, `BrowserAuthError`, the connection
-version — [Migrating to 6.0.0](#migrating-to-600--the-error-contract) is what
-holds.*
+*History: what 5.0.0 changed. Where 6.0.0 changed it again — `onTokens`
+(now `persistence`), the `timeoutMs` of the manual strategies,
+`BrowserAuthError`, the connection version —
+[Migrating to 6.0.0](#migrating-to-600--the-error-contract) is what holds.*
 
 5.0.0 is not an incremental release. Every provider here now implements
 `IAuthProvider` (`@mcp-abap-adt/interfaces-auth` 3.0.0) and can be handed to
@@ -457,7 +550,7 @@ npm install @mcp-abap-adt/auth-providers
 ## Overview
 
 Every provider here is an `IAuthProvider` (`@mcp-abap-adt/interfaces-auth`
-6.0.0) — `prepare()`, `establish()`, `authorize()`, `rejected()`, each answering
+7) — `prepare()`, `establish()`, `authorize()`, `rejected()`, each answering
 an `AuthOutcome` and never throwing — handed to the process as it is. An
 `AuthOutcome` is `{ ok: true }` or `{ ok: false, refusal }`, the refusal an
 `IAuthProviderError` minted by `@mcp-abap-adt/auth-errors`: its `kind` and
@@ -465,23 +558,29 @@ an `AuthOutcome` and never throwing — handed to the process as it is. An
 [Error Handling](#error-handling)):
 
 ```typescript
-import { AuthorizationCodeProvider } from '@mcp-abap-adt/auth-providers';
+import { AuthorizationCodeProvider, refreshThenLogin } from '@mcp-abap-adt/auth-providers';
 
 const provider = AuthorizationCodeProvider.inBrowser({
   uaaUrl: 'https://...',
   clientId: '...',
   clientSecret: '...',
+  renewal: refreshThenLogin(), // required: how every renewal proceeds
 });
-// A connection 12.0.0 process calls prepare() on connect, authorize() per
-// request, and rejected() on a 401: one renewal — a refresh, else one login.
+// A connection 13.0.0 process calls prepare() on connect, authorize() per
+// request, and rejected() on a 401: one renewal through the renewal
+// strategy — with refreshThenLogin(), a refresh, else one login.
 ```
 
 ### What `rejected()` answers
 
-A provider blames its credential — and a token provider renews — only when the
-rejection says the credential was refused: status `401`, or the RFC SDK's
-`RFC_LOGON_FAILURE`. Anything else is answered with a neutral refusal that
-names only the status or the SDK key, and nothing is renewed:
+A provider blames its credential only when the rejection says the credential
+was refused: status `401`, or the RFC SDK's `RFC_LOGON_FAILURE`. Anything else
+is answered with a neutral refusal that names only the status or the SDK key.
+For a token provider this is a **reading** its renewal strategy receives
+(`cause.reading`: `credential`, `not-credential`, `unknown`): the shipped
+strategies stop on `not-credential` without a step and answer the neutral
+refusal, so nothing is renewed; a strategy of your own may renew anyway (see
+[Renewal strategy](#renewal-strategy)):
 
 <!-- generated:refusal-table rejected -->
 | The rejection | Kind | Basic, certificate, SAML cookies, fixed token | Token providers, `TokenAuthProvider.from` |
@@ -619,11 +718,13 @@ import {
   AuthorizationCodeProvider,
   ClientCredentialsProvider,
   browserCallbackStrategy,
+  refreshThenLogin,
 } from '@mcp-abap-adt/auth-providers';
 
 // User token via authorization_code (browser flow)
 const authCodeBroker = new AuthBroker({
   tokenProvider: new AuthorizationCodeProvider({
+    renewal: refreshThenLogin(),
     uaaUrl: 'https://...',
     clientId: '...',
     clientSecret: '...',
@@ -634,6 +735,7 @@ const authCodeBroker = new AuthBroker({
 // Service token via client_credentials (no browser)
 const clientCredsBroker = new AuthBroker({
   tokenProvider: new ClientCredentialsProvider({
+    renewal: refreshThenLogin(),
     uaaUrl: 'https://...',
     clientId: '...',
     clientSecret: '...',
@@ -780,9 +882,11 @@ business consuming it. Reading a pasted code is now a strategy of its own:
 import {
   AuthorizationCodeProvider,
   manualPasteStrategy,
+  refreshThenLogin,
 } from '@mcp-abap-adt/auth-providers';
 
 const provider = new AuthorizationCodeProvider({
+  renewal: refreshThenLogin(),
   uaaUrl, clientId, clientSecret,
   // Binds no socket at all: prints the URL, then reads one line.
   // Defaults to stdin when it is a TTY — pass `read` to source it anywhere else.
@@ -975,10 +1079,12 @@ import {
   OidcPasswordProvider,
   privateKeyJwt,
   tlsClientCertificate,
+  refreshThenLogin,
 } from '@mcp-abap-adt/auth-providers';
 
 // A client certificate: the token request goes over mTLS, no secret anywhere.
 const service = new ClientCredentialsProvider({
+  renewal: refreshThenLogin(),
   uaaUrl: 'https://<idp>',
   clientId: 'my-client',
   clientAuthentication: tlsClientCertificate({
@@ -992,6 +1098,7 @@ const service = new ClientCredentialsProvider({
 
 // A signed client assertion instead of a secret.
 const user = new OidcPasswordProvider({
+  renewal: refreshThenLogin(),
   issuerUrl: 'https://<keycloak>/realms/<realm>',
   clientId: 'my-client',
   username: 'user',
@@ -1177,36 +1284,42 @@ that one.
 pinned one — restored from a store after the certificate was rotated, say —
 or whose `cnf` names no readable thumbprint, is unusable to this provider, and
 it treats it like an expired token: `getTokens()` and `authorize()` renew it
-once through the strategy and the pinned certificate — the refresh token when
-there is one, else (or when the refresh is refused) one login, no step twice —
-and the binding check then runs on the new token. Only when the new token is
-still bound elsewhere is it refused by `authorize()`, as *the new token is
-bound to a client certificate this provider does not present* — and
-remembered: later attempts do not renew it again, so a server that keeps
-binding to another certificate costs no token request (and no login) per
-request. `getTokens()` returns the remembered token; `authorize()` refuses it.
-A renewal that *fails* — the refresh and the login refused, the client
-certificate expired, the server unreachable — is remembered the same way, with
-its own refusal: later attempts answer those same words (*the client
-certificate has expired*, say), with no token request and no login (after a
-refused refresh every renewal is a login, interactive for a browser or device
-strategy), until the token changes. The words are always those of the latest
-renewal. Only a token held *bound elsewhere* is remembered: an expired token
-whose renewal fails is renewed again on the next attempt, as before. The next `prepare()` renews once more. `rejected()` renews once more when the
-refused token is the one held; a refused token that was already superseded is
-answered Ok without a renewal (rule 6, as before). `getTokens()` pins the
-certificate to compare thumbprints, so with a bound token held it may throw a
-`client-certificate` failure when the material is unusable or expired. `establish()` reads such a held
-token as unknown and presents the pinned certificate. With **no** certificate
-pinned there is nothing to renew it for: `getTokens()` returns the token, and
-`establish()` / `authorize()` refuse it.
+through the [renewal strategy](#renewal-strategy) (`cause.trigger:
+'bound-elsewhere'`) and the pinned certificate — with `refreshThenLogin()`,
+the refresh token when there is one, else (or when the refresh fails) one
+login, no step twice — and the binding check then runs on the new token. A
+new token still bound elsewhere is committed (it is the server's state) and
+recorded as the step's outcome `bound-elsewhere`; `refreshThenLogin()` stops
+there, and the renewal fails with *the new token is bound to a client
+certificate this provider does not present* (`token-binding`
+`renewed-bound-elsewhere`): `getTokens()` / `refreshTokens()` throw it and
+`authorize()` refuses with it. It is **remembered** with the held token: the
+next renewal of that token hands the strategy that error as
+`cause.lastRenewal`, and `refreshThenLogin()` / `refreshOnly()` stop on it at
+once in `getTokens()` and `authorize()` — the same error, no token request and
+no login — so a server that keeps binding to another certificate costs no
+request per call. A renewal that *fails* while such a token is held — the
+refresh and the login refused, the client certificate expired, the server
+unreachable — is remembered the same way, with its own error (*the client
+certificate has expired*, say), until the token changes; the error is always
+that of the latest renewal. Only a token held *bound elsewhere* is
+remembered: an expired token whose renewal fails is renewed again on the next
+attempt. `prepare()` (once per connect) and `rejected()` for the token held
+are the shipped strategies' cue to renew once more; a refused token that was
+already superseded by a renewal is answered Ok without one. `getTokens()` pins
+the certificate to compare thumbprints, so with a bound token held it may
+throw a `client-certificate` failure when the material is unusable or
+expired — refused by the pin before the strategy is asked. `establish()`
+reads such a held token as unknown and presents the pinned certificate. With
+**no** certificate pinned there is nothing to renew it for: `getTokens()`
+returns the token, and `establish()` / `authorize()` refuse it.
 
 | Token | Certificate pinned | `establish(logon)` | `authorize(request)` |
 |---|---|---|---|
 | unbound | none | presents nothing, Ok | Bearer, Ok |
 | unbound | yes | presents it; Ok even when the logon takes no TLS material (the Bearer carries the token) — a logon target that throws is Oops | Bearer, Ok |
 | bound to the pinned one | yes | presents it; a logon that takes no TLS material (RFC) is that logon's Oops | Bearer, Ok |
-| bound to another, or `cnf` without a readable thumbprint | yes | read as **unknown**: presents the pinned one (a logon that takes no TLS material is that logon's Oops) | renewed once through the pinned one, the new token checked: Bearer, Ok — or, bound elsewhere again, Oops, no header written |
+| bound to another, or `cnf` without a readable thumbprint | yes | read as **unknown**: presents the pinned one (a logon that takes no TLS material is that logon's Oops) | renewed through the renewal strategy and the pinned one, the new token checked: Bearer, Ok — or, bound elsewhere again, Oops, no header written |
 | bound | none | Oops, nothing presented | Oops, no header written |
 | unknown | yes | **treated as bound**: presents it, and a logon that takes no TLS material is that logon's Oops | Bearer, Ok |
 | unknown | none | presents nothing, Ok | Bearer, Ok |
@@ -1254,6 +1367,7 @@ maps those fields.
 import {
   ClientCredentialsProvider,
   tlsClientCertificate,
+  refreshThenLogin,
 } from '@mcp-abap-adt/auth-providers';
 
 // `credentials` as `cf service-key <instance> <key>` prints them.
@@ -1266,6 +1380,7 @@ declare const credentials: {
 };
 
 const provider = new ClientCredentialsProvider({
+  renewal: refreshThenLogin(),
   uaaUrl: credentials.url,
   clientId: credentials.clientid,
   // no clientSecret: the certificate authenticates the client
@@ -1324,12 +1439,14 @@ import { AuthBroker } from '@mcp-abap-adt/auth-broker';
 import {
   SsoProviderFactory,
   oidcCallbackStrategy,
+  refreshThenLogin,
 } from '@mcp-abap-adt/auth-providers';
 
 const tokenProvider = SsoProviderFactory.create({
   protocol: 'oidc',
   flow: 'browser',
   config: {
+    renewal: refreshThenLogin(),
     issuerUrl: 'https://example-idp/.well-known/openid-configuration',
     clientId: '...',
     clientSecret: '...',
@@ -1348,11 +1465,13 @@ import {
   OidcBrowserProvider,
   asOidcResult,
   staticCodeStrategy,
+  refreshThenLogin,
 } from '@mcp-abap-adt/auth-providers';
 
 const redirectUri = 'urn:ietf:wg:oauth:2.0:oob';
 
 const provider = new OidcBrowserProvider({
+  renewal: refreshThenLogin(),
   clientId: '...',
   tokenEndpoint: 'https://issuer/oauth/token',
   authorizationEndpoint: 'https://issuer/oauth/authorize',
@@ -1392,6 +1511,7 @@ import {
   Saml2BearerProvider,
   createSignedAssertionValidator,
   defaultReplayStore,
+  refreshThenLogin,
 } from '@mcp-abap-adt/auth-providers';
 
 // The Recipient the assertion names: the URI-binding assertion consumer
@@ -1410,6 +1530,7 @@ const fromSsoProxy: IAuthorizationStrategy<string> = {
 };
 
 const provider = new Saml2BearerProvider({
+  renewal: refreshThenLogin(),
   idpSsoUrl: 'https://idp.example.com/sso',
   spEntityId: 'uaa.example', // the entityID in that metadata: the Audience
   acsUrl,
@@ -1490,11 +1611,13 @@ import {
   createSignedResponseValidator,
   defaultReplayStore,
   manualSamlResponseStrategy,
+  refreshThenLogin,
 } from '@mcp-abap-adt/auth-providers';
 
 const acsUrl = 'https://sp.example.com/saml/acs';
 
 const provider = new Saml2PureProvider({
+  renewal: refreshThenLogin(),
   idpSsoUrl: 'https://idp.example.com/sso',
   spEntityId: 'my-sp-entity',
   acsUrl,
@@ -1519,8 +1642,8 @@ const broker = new AuthBroker({ tokenProvider: provider }, 'none');
 validated, and the session's `expiresAt` is the validated assertion's expiry.
 
 **Stored cookies.** Pass cookies a previous login obtained as `accessToken`,
-with the `expiresAt` they were obtained with (epoch ms — `onTokens` and
-`getTokens()` report it). Until `expiresAt`, less a one-minute buffer, the
+with the `expiresAt` they were obtained with (epoch ms — the persistence
+report and `getTokens()` carry it). Until `expiresAt`, less a one-minute buffer, the
 provider presents them and runs no login: no strategy, no validator, no
 `cookieProvider`. Past it — or with no `expiresAt`, since cookies carry no
 expiry of their own — the first `getTokens()` or `authorize()` logs in as
@@ -1616,11 +1739,13 @@ import {
   createSignedAssertionValidator,
   defaultReplayStore,
   samlCallbackStrategy,
+  refreshThenLogin,
 } from '@mcp-abap-adt/auth-providers';
 
 const idpCertificates = [readFileSync('idp-signing.pem', 'utf8')];
 
 const provider = new Saml2PureProvider({
+  renewal: refreshThenLogin(),
   idpSsoUrl: 'https://idp.example.com/sso',
   spEntityId: 'my-sp-entity',
   acsUrl: 'https://sp.example.com/saml/acs',
@@ -2107,6 +2232,7 @@ import {
   AuthorizationCodeProvider,
   ClientCredentialsProvider,
   browserCallbackStrategy,
+  refreshThenLogin,
 } from '@mcp-abap-adt/auth-providers';
 import { 
   XsuaaServiceKeyStore, 
@@ -2125,6 +2251,7 @@ const xsuaaBroker = new AuthBroker({
   serviceKeyStore: xsuaaServiceKeyStore,
   sessionStore: xsuaaSessionStore,
   tokenProvider: new ClientCredentialsProvider({
+    renewal: refreshThenLogin(),
     uaaUrl: 'https://...',
     clientId: '...',
     clientSecret: '...',
@@ -2139,6 +2266,7 @@ const btpBroker = new AuthBroker({
   serviceKeyStore: btpServiceKeyStore,
   sessionStore: btpSessionStore,
   tokenProvider: new AuthorizationCodeProvider({
+    renewal: refreshThenLogin(),
     uaaUrl: 'https://...',
     clientId: '...',
     clientSecret: '...',
@@ -2155,6 +2283,7 @@ const abapBroker = new AuthBroker({
   serviceKeyStore: abapServiceKeyStore,
   sessionStore: abapSessionStore,
   tokenProvider: new AuthorizationCodeProvider({
+    renewal: refreshThenLogin(),
     uaaUrl: 'https://...',
     clientId: '...',
     clientSecret: '...',
@@ -2173,9 +2302,11 @@ Uses browser-based OAuth2 flow or refresh token:
 import {
   AuthorizationCodeProvider,
   browserCallbackStrategy,
+  refreshThenLogin,
 } from '@mcp-abap-adt/auth-providers';
 
 const provider = new AuthorizationCodeProvider({
+  renewal: refreshThenLogin(),
   uaaUrl: 'https://...authentication...hana.ondemand.com',
   clientId: '...',
   clientSecret: '...',
@@ -2195,9 +2326,10 @@ const result = await provider.getTokens();
 Uses `client_credentials` grant type - no browser interaction required:
 
 ```typescript
-import { ClientCredentialsProvider } from '@mcp-abap-adt/auth-providers';
+import { ClientCredentialsProvider, refreshThenLogin } from '@mcp-abap-adt/auth-providers';
 
 const provider = new ClientCredentialsProvider({
+  renewal: refreshThenLogin(),
   uaaUrl: 'https://...authentication...hana.ondemand.com',
   clientId: '...',
   clientSecret: '...',
@@ -2225,9 +2357,10 @@ code is asked for again only when the refresh token is gone. It suits an MCP
 server on a remote machine, in a container, or behind SSH.
 
 ```typescript
-import { UaaPasscodeProvider, manualPasscodeStrategy } from '@mcp-abap-adt/auth-providers';
+import { UaaPasscodeProvider, manualPasscodeStrategy, refreshThenLogin } from '@mcp-abap-adt/auth-providers';
 
 const provider = new UaaPasscodeProvider({
+  renewal: refreshThenLogin(),
   uaaUrl: 'https://<subdomain>.authentication.<region>.hana.ondemand.com',
   clientId: '...', // a client allowed the `password` grant (and `refresh_token`)
   clientSecret: '...', // omit for a public client
@@ -2280,10 +2413,12 @@ is the recipe that assembles it from `config.logger`:
 import {
   OidcDeviceFlowProvider,
   type IDeviceCodePresenter,
+  refreshThenLogin,
 } from '@mcp-abap-adt/auth-providers';
 
 // The usual choice: logger or stderr.
 const provider = OidcDeviceFlowProvider.toConsole({
+  renewal: refreshThenLogin(),
   issuerUrl: 'https://idp.example.com/realms/sap',
   clientId: '...',
 });
@@ -2295,6 +2430,7 @@ const presenter: IDeviceCodePresenter = {
   },
 };
 const custom = new OidcDeviceFlowProvider({
+  renewal: refreshThenLogin(),
   issuerUrl: 'https://idp.example.com/realms/sap',
   clientId: '...',
   presenter,
@@ -2319,7 +2455,7 @@ in use. Please specify a different port or free the port.*, `facts.port`); a
 (`callback-port-invalid`) before any socket is touched. `port: 0` binds an ephemeral port, which works only where the
 identity provider accepts a loopback redirect on any port.
 
-**Port lifetime**: the callback port is held for the login and nothing longer. It is bound when the login window opens and released when the login ends — by success, by the identity provider's refusal, by another failure, or by an abort — and the returned promise settles only after the listening socket is closed. No timer is involved: a connection still open is ended gracefully and let go, never waited for. An error therefore always means the port is already available, and the port is released *before* the authorization code is exchanged for a token, so a slow identity provider cannot hold it either.
+**Port lifetime**: the callback port is held for the login and nothing longer. It is bound when the login window opens and released when the login ends — by success, by the identity provider's refusal, by another failure, or by an abort — and the returned promise settles only after the listening socket is closed. No timer is involved, and no connection is waited for: at the release an idle connection is ended and unreferenced; one whose request is still unfinished (a body that never completes) is destroyed, since nothing will answer it; one whose complete request is still being answered is unreferenced, so it cannot keep the process alive, and its response goes on. Two limits, measured: Node's `http.Server.close()` itself destroys a connection whose request was parsed, even while a large response is still flushing to a client that does not read, so such a client may get a cut response — and, were it not destroyed, a write still pending to a client that does not read would keep the process alive whatever `unref()` says. Neither holds the port. An error therefore always means the port is already available, and the port is released *before* the authorization code is exchanged for a token, so a slow identity provider cannot hold it either.
 
 **No built-in timeout** (since 6.0.0): an interactive login — browser, OIDC, SAML, or a manual paste — waits until its result arrives, the identity provider refuses, or the consumer's `AbortSignal` aborts it; it then ends `interactive-login` `aborted` and the port is free. The `timeoutMs` options, `DEFAULT_LOGIN_TIMEOUT_MS` and the 30 s / 300 s defaults are gone: a consumer that passed `timeoutMs` passes `signal: AbortSignal.timeout(ms)` instead (to the strategy, or to `inBrowser` / `fromTerminal` as `{ signal }`); one that passed nothing now waits until it aborts.
 
@@ -2339,6 +2475,7 @@ identity provider accepts a loopback redirect on any port.
 
 ```typescript
 const provider = new AuthorizationCodeProvider({
+  renewal: refreshThenLogin(),
   uaaUrl, clientId, clientSecret,
   authorization: browserCallbackStrategy({ browser: 'headless' }),
 });
@@ -2372,6 +2509,7 @@ const isValid = await provider.validateToken(token, serviceUrl);
 ```typescript
 // Local validation (no HTTP)
 const provider = new AuthorizationCodeProvider({
+  renewal: refreshThenLogin(),
   uaaUrl: 'https://...authentication...hana.ondemand.com',
   clientId: '...',
   clientSecret: '...',
@@ -2389,7 +2527,7 @@ This approach prevents unnecessary token refresh and browser authentication when
 ### Seeding a stored credential
 
 A token provider can start from a credential a previous run obtained — what
-`onTokens` reported, or what a session store kept — and use it until it
+its persistence strategy wrote, or what a session store kept — and use it until it
 expires instead of logging in. The seed is optional config; a provider without
 one logs in at the first `getTokens()`.
 
@@ -2412,15 +2550,20 @@ one logs in at the first `getTokens()`.
   from an unparsed file states no expiry. A numeric `exp`, `0` included, is
   the token's own. With neither, the seed counts as expired.
 - **Revoked before it expires.** A `401` on the seed is the credential's
-  (`rejected()`): the provider renews once, and a renewal that yields the seed
-  again is refused — *the renewal returned the credential that was refused*.
+  (`rejected()`): the provider renews through its renewal strategy, and a
+  renewal that yields the seed again is refused — *the renewal returned the
+  credential that was refused* (`renewal-unchanged`).
 - **Until then** `getTokens()` and `authorize()` answer the seed, less the
-  usual one-minute buffer; no request is made and `onTokens` is not called —
-  it reports only new tokens.
-- **After** the provider renews as usual: the `refreshToken` when there is one
-  and the grant has a refresh, else one login through the configured
-  strategy. What it obtains replaces the seed and goes to `onTokens`, with its
-  `expiresAt`.
+  usual one-minute buffer; no request is made and nothing is reported to
+  persistence — a cache hit is no change.
+- **After** the provider renews as usual, through its renewal strategy — with
+  `refreshThenLogin()`, the `refreshToken` when there is one and the grant has
+  a refresh, else one login through the configured authorization strategy.
+  What it obtains replaces the seed and is reported to persistence as a
+  `credential` report, with its `expiresAt`. A seeded refresh token the
+  renewal strategy discards is reported as `refresh-token-discarded`, with
+  the credential held (`authorizationToken: ''` when only the refresh token
+  was seeded).
 - `ClientCredentialsProvider` takes no seed: a new token costs one request and
   no user, so it obtains one.
 
@@ -2429,20 +2572,26 @@ const provider = new Saml2PureProvider({
   ...samlConfig,
   accessToken: stored.sessionCookies,
   expiresAt: stored.expiresAt,
-  onTokens: async ({ authorizationToken, expiresAt }) =>
-    save({ sessionCookies: authorizationToken, expiresAt }),
+  renewal: refreshThenLogin(), // SAML has no refresh: every renewal is a login
+  persistence: refreshStatePersistence(
+    async ({ authorizationToken, expiresAt }) =>
+      save({ sessionCookies: authorizationToken, expiresAt }),
+    { onWriteFailure: 'continue' },
+  ),
 });
 ```
 
 ### Token Refresh
 
-Providers handle refresh automatically inside `getTokens()`: while the cached token is valid it
-is returned, once it expires the refresh token is used, and a login follows when there is none or
-the refresh is refused.
+Providers renew automatically inside `getTokens()`: while the cached token is valid it is
+returned; once it expires the provider renews it through its [renewal strategy](#renewal-strategy)
+— with `refreshThenLogin()`, the refresh token is used, and a login follows when there is none or
+the refresh fails.
 
 The clock is not the only judge, though. When the server refuses a token the cache still
-considers valid — a 401 — ask for a new one with `refreshTokens()`. It skips the cache, takes the
-same refresh-then-login path, and replaces the cache with what it obtains:
+considers valid — a 401 — ask for a new one with `refreshTokens()`. It skips the cache, renews
+through the same strategy (`cause.trigger: 'explicit'`), and replaces the cache with what it
+obtains:
 
 ```typescript
 let { authorizationToken } = await provider.getTokens();
@@ -2469,11 +2618,316 @@ try {
 }
 ```
 
+### Renewal strategy
+
+Every token provider takes a **renewal strategy** — `renewal:
+IRenewalStrategy` (`@mcp-abap-adt/interfaces-auth` 7), required, no default
+(since 6.0.0). Whenever the provider needs a credential it does not hold, the
+strategy decides each step: refresh, log in, or stop, and what becomes of a
+refresh token that was sent. The provider takes no step the strategy did not
+ask for, and asks before every step.
+
+```typescript
+import { refreshOnly, refreshThenLogin } from '@mcp-abap-adt/auth-providers';
+
+new AuthorizationCodeProvider({ ...config, renewal: refreshThenLogin() }); // the 5.x behaviour
+new AuthorizationCodeProvider({ ...config, renewal: refreshOnly() });      // never logs in
+```
+
+**Where a renewal starts.**
+
+| Call | When | `cause.trigger` | `moment` |
+|---|---|---|---|
+| `getTokens()` | nothing held | `no-token` | `get-tokens` |
+| `getTokens()` | the held token expired | `expired` | `get-tokens` |
+| `getTokens()` | the held token is bound to another certificate than the pinned one ([A certificate-bound token](#a-certificate-bound-token-and-its-certificate)) | `bound-elsewhere`, with `lastRenewal` when an earlier renewal of that token did not make it usable | `get-tokens` |
+| `prepare()` / `authorize()` | through `getTokens()`, as above | as above | `prepare` / `authorize` |
+| `refreshTokens()` | always | `explicit` | `refresh-tokens` |
+| `rejected()` | always | `rejected`, with the rejection's `reading` (`credential`, `not-credential`, `unknown` — [What `rejected()` answers](#what-rejected-answers)), its `status` or `rfcKey`, and for `not-credential` the neutral `refusal` | `rejected` |
+
+Not a renewal, and never the strategy's: a valid cached token answered by
+`getTokens()`; `rejected()` for a token a renewal has already replaced (Ok —
+what is presented has changed); a caller joining a renewal already running
+(it shares that one).
+
+**How a renewal runs.** The provider pins its client certificate first (an
+unusable or expired one refuses the renewal before the strategy is asked),
+then loops:
+
+1. it calls `next(situation)` — `{ cause, moment, canRefresh, steps }`:
+   `canRefresh` is true when the grant has a refresh and a refresh token is
+   held and not discarded; `steps` lists the steps this renewal already took
+   that did not end it, each `failed` (with `sent` — whether the request
+   reached the wire — and the minted error) or, having obtained a credential
+   that is not the one wanted, `unchanged` (the refused credential again;
+   `rejected` only) or `bound-elsewhere`;
+2. it applies `sentRefreshToken` when the decision carries one, then runs
+   the step: `refresh` sends the held refresh token, `login` runs the
+   authorization strategy (or the grant's request);
+3. a usable new credential ends the renewal with it; anything else is
+   recorded in `steps`, and the loop goes on.
+
+`stop` ends the renewal with the last step's error (or, for `unchanged` /
+`bound-elsewhere`, `renewal-unchanged` / `token-binding`
+`renewed-bound-elsewhere`); with no step taken, with the neutral refusal of a
+`not-credential` rejection, else the `lastRenewal` of a `bound-elsewhere`
+cause, else **`renewal-declined`** — "the renewal strategy declined to renew
+the credential", `facts.trigger`. `getTokens()` / `refreshTokens()` throw
+that error, and a moment answers it as its refusal. A credential a step
+obtained stays committed even when the renewal then fails: it is the
+server's state.
+
+**The decision.**
+
+```typescript
+type RenewalDecision =
+  | { next: 'refresh'; ifCut: 'keep' | 'discard'; sentRefreshToken?: 'keep' | 'discard' }
+  | { next: 'login'; sentRefreshToken?: 'keep' | 'discard' }
+  | { next: 'stop'; sentRefreshToken?: 'keep' | 'discard' };
+```
+
+- `ifCut` is required on every `refresh`: what becomes of the refresh token
+  sent if every caller aborts after the request left (see
+  [Cancelling a login](#cancelling-a-login)). It is decided before the
+  request is sent and applied at the abort, without calling the strategy.
+- `sentRefreshToken` is required on the decision that follows a refresh that
+  **failed after it was sent** — the server may have spent that refresh
+  token, and nothing decides that by default — and must be absent anywhere
+  else. `'discard'` drops it for the provider's lifetime (reported to
+  persistence as `refresh-token-discarded`); `'keep'` leaves it held, and the
+  next refresh sends it.
+- A `refresh` needs `canRefresh`, and may not discard the refresh token it
+  would send.
+
+An answer that breaks one of these rules, a strategy that throws, or an
+answer that is neither a decision nor a native
+promise of one — a foreign thenable, a promise with its own `then` (its
+`then` is never called) — ends the renewal with `unknown`, operation
+`renewal-strategy` ("the renewal strategy failed (unknown error)"): the step
+is not taken, and the steps already taken stay applied. The call to `next` is
+raced with the renewal's signal, so a strategy that never answers is ended by
+the callers' abort (`interactive-login` `aborted`), never by a timer.
+
+**What the strategy sees.** Frozen copies: the cause, the moment and the
+steps, each error a minted `IAuthProviderError` — exactly what `getTokens()`
+would throw. Never a token, a refresh token's value, or the message, cause or
+body of anything thrown.
+
+**`aborted(observation)`**, optional: told of each step of this provider's
+renewals that ended by the callers' abort — `{ cause, moment, step, sent,
+refreshToken? }`, `refreshToken` saying for a refresh that was sent whether
+`ifCut` `'kept'` or `'discarded'` it. Each observation is delivered once,
+from a microtask after the abort or, at the latest, before the next `next()`
+call of the provider. Its answer is never awaited; a throw is logged and
+ignored.
+
+**The refresh token the provider holds.** A result's refresh token is
+installed only when it is usable — non-empty and not one the provider
+discarded; otherwise the refresh token held stays (a login that returns none
+after `sentRefreshToken: 'keep'` leaves the old one held). A discarded
+refresh token is never sent again by that provider.
+
+**The shipped strategies.** Both are stateless and answer synchronously.
+
+| Situation | `refreshThenLogin()` | `refreshOnly()` |
+|---|---|---|
+| `rejected`, reading `not-credential` | `stop` (the neutral refusal) | `stop` |
+| `bound-elsewhere` with `lastRenewal`, moment not `prepare` / `rejected` | `stop` (the remembered error) | `stop` |
+| no step yet, `canRefresh` | `refresh`, `ifCut: 'discard'` | `refresh`, `ifCut: 'discard'` |
+| no step yet, no refresh possible | `login` | `stop` |
+| last step a refresh that `failed`, sent | `login`, `sentRefreshToken: 'discard'` | `stop`, `sentRefreshToken: 'discard'` |
+| last step a refresh that `failed`, not sent | `login` | `stop` |
+| last step a refresh with outcome `unchanged` / `bound-elsewhere` | `stop` | `stop` |
+| last step a login | `stop` | `stop` |
+
+`refreshOnly()` suits a process with no one to log in. A provider whose grant
+has no refresh — `ClientCredentialsProvider`, `Saml2PureProvider`,
+`OidcTokenExchangeProvider` — can renew only by a login, so with
+`refreshOnly()` every renewal of it is declined: give those
+`refreshThenLogin()`.
+
+**Writing your own.** Any object with `next(situation)`. This one keeps the
+shipped rules but keeps the refresh token of a cut refresh, and counts the
+aborts:
+
+```typescript
+import type { IRenewalStrategy } from '@mcp-abap-adt/interfaces-auth';
+
+const keepOnCut: IRenewalStrategy = {
+  next({ cause, moment, canRefresh, steps }) {
+    const last = steps.at(-1);
+    if (last === undefined) {
+      // Rule 5: a new credential would be refused the same way.
+      if (cause.trigger === 'rejected' && cause.reading === 'not-credential') {
+        return { next: 'stop' };
+      }
+      if (
+        cause.trigger === 'bound-elsewhere' &&
+        cause.lastRenewal !== undefined &&
+        moment !== 'prepare' &&
+        moment !== 'rejected'
+      ) {
+        return { next: 'stop' };
+      }
+      return canRefresh ? { next: 'refresh', ifCut: 'keep' } : { next: 'login' };
+    }
+    if (last.step === 'refresh' && last.outcome === 'failed') {
+      return last.sent ? { next: 'login', sentRefreshToken: 'discard' } : { next: 'login' };
+    }
+    return { next: 'stop' };
+  },
+  aborted({ step, sent }) {
+    abortedSteps.inc({ step, sent: String(sent) });
+  },
+};
+```
+
+A strategy shared by several providers is told each provider's situation
+separately; one that keeps state keeps it per provider. Each decision is
+logged at `debug` as `[BaseTokenProvider] Renewal step` `{ trigger, moment,
+next }`.
+
+`TokenAuthProvider.from(refresher)` takes neither a renewal nor a
+persistence strategy: its renewal is your refresher, and it persists nothing.
+
+### Persistence strategy
+
+A token provider tells a **persistence strategy** — `persistence?:
+ITokenPersistence` (`@mcp-abap-adt/interfaces-auth` 7) — every change of its
+credentials, so a consumer can store them. It replaces `onTokens` (since
+6.0.0). Without it nothing is persisted; the provider builds none. Given, it
+must be an object whose `report` is a function, or the constructor throws
+`configuration` `invalid-value` naming `persistence`.
+
+```typescript
+interface ITokenPersistence {
+  report(report: PersistenceReport): void | Promise<void>;
+}
+
+type PersistenceReport =
+  | {
+      event: 'credential';                // a refresh or a login committed a new credential
+      credential: ReportedCredential;     // { authorizationToken, tokenType, authType, expiresAt? }
+      refreshToken: { change: 'new'; value: string } | { change: 'none' };
+      awaited: boolean;
+    }
+  | {
+      event: 'refresh-token-discarded';   // the renewal strategy discarded the refresh token held
+      credential: ReportedCredential;     // the credential still held; authorizationToken '' when none
+      awaited: boolean;
+    };
+```
+
+`{ change: 'none' }` means the result carried no usable refresh token: the
+one held before, if any, is still held.
+
+- **When.** One report per change, made by the commit that changed the
+  credentials, in commit order: a `credential` report for every new
+  credential a refresh or a login committed, a `refresh-token-discarded`
+  report when the renewal strategy discarded the refresh token held
+  (`sentRefreshToken: 'discard'`, or `ifCut: 'discard'` at an abort). A cache
+  hit reports nothing; a late result that a newer commit made obsolete
+  reports nothing; a discard of a refresh token already replaced reports
+  nothing. The provider never reports the same change twice — a strategy
+  that wants a failed write delivered again keeps it itself.
+- **Awaited or detached.** A report is `awaited: true` when, as it starts, the
+  renewal that made the commit still has a caller waiting. The provider then
+  awaits `report()` (a Promises/A+ thenable is adopted like any `await`), and
+  its throw or rejection is that renewal's failure — `unknown`, operation
+  `persisting-tokens` ("persisting the tokens failed (unknown error)"), the
+  strategy's own error never relayed — so every caller of that renewal gets
+  it. The credentials stay committed in memory, no login follows, and the
+  next `getTokens()` answers them from the cache. If every caller left while
+  the report ran, the failure is also logged, as below. A report is
+  `awaited: false` (**detached**) when no caller is waiting any more: a
+  discard at an abort, a late refresh result committed after its callers
+  left, a report whose callers all aborted before it started. The provider
+  calls it and does not wait; its failure is logged once at `warn` —
+  `[BaseTokenProvider] Persisting the tokens failed` with `logFields` — and
+  reaches no call.
+- **One at a time.** Reports run inside the provider's commit queue. A report
+  that never settles holds that queue — every later commit of the provider
+  waits — while each caller is still released by its own signal.
+- **Token values.** The persistence strategy is the one collaborator that
+  receives them. The report is a fresh object: changing it changes nothing
+  the provider holds.
+
+#### `refreshStatePersistence(write, { onWriteFailure, logger? })`
+
+The shipped strategy, for a store that keeps its stored refresh token when a
+write carries none: with `onWriteFailure: 'continue'` it is what `onTokens`
+was in 5.x, and it also clears a refresh token the provider discarded and
+delivers a failed write again.
+
+```typescript
+import { refreshStatePersistence, type PersistedTokens } from '@mcp-abap-adt/auth-providers';
+
+const persistence = refreshStatePersistence(
+  async (tokens: PersistedTokens) => {
+    // tokens.refreshToken: a string — write it; null — clear the stored one;
+    // undefined — leave the stored one as it is.
+    await store.save(tokens);
+  },
+  { onWriteFailure: 'fail', logger },
+);
+```
+
+`write` receives `{ authorizationToken, tokenType, authType?, expiresAt?,
+refreshToken }` — `authorizationToken` `''` when no access token is held. It
+keeps a logical state, `held` or `cleared`, and decides each write from it:
+
+| Report | State before | `refreshToken` written | State after |
+|---|---|---|---|
+| `credential`, `new` R | any | R | `held` |
+| `credential`, `none` | `held` | `undefined` — or a new refresh token whose write failed earlier (below) | `held` |
+| `credential`, `none` | `cleared` | `null` | `cleared` |
+| `refresh-token-discarded` | any | `null`, with the credential reported | `cleared` |
+
+So a store's fallback to its stored refresh token never restores a discarded
+one, and a discard before any credential report (a seeded provider) clears
+the stored refresh token without erasing the session.
+
+- **One write at a time, in report order.** The provider does not await a
+  detached report, so reports can overlap; the strategy queues them, each
+  write starting only after the previous one settled. An awaited report's
+  promise settles when its own write has.
+- **A failed write** is logged at `warn`, `[refreshStatePersistence] Writing
+  the tokens failed` with `logFields` (to `logger`; none without one) — never
+  the store's message or a token. A failed new refresh token is kept pending
+  and written again, with that token, by the next report, until a write
+  succeeds or a newer refresh token or a discard supersedes it; a failed
+  `null` is written again by the next report through the `cleared` state.
+- **`onWriteFailure` is required, with no default.** `'continue'`: `report`
+  never throws — the 5.x best effort. `'fail'`: an awaited report rethrows
+  the write's failure, so the call that caused it fails `persisting-tokens`;
+  a detached report never throws. Either way the failed write is delivered
+  again by the next report.
+- Refused at construction, `configuration` `invalid-value`: `onWriteFailure`
+  missing or not `'continue'` / `'fail'` (naming `onWriteFailure`), `write`
+  not a function (naming `write`), both when both.
+
+It holds the last new refresh token it could not write — it is part of your
+store.
+
+**Writing your own.** Any object with `report(report)`. One that stores
+nothing but a refresh token, for a process that restarts with a seed:
+
+```typescript
+import type { ITokenPersistence } from '@mcp-abap-adt/interfaces-auth';
+
+const refreshTokenOnly: ITokenPersistence = {
+  async report(report) {
+    if (report.event === 'refresh-token-discarded') return vault.delete('refresh');
+    if (report.refreshToken.change === 'new') return vault.put('refresh', report.refreshToken.value);
+  },
+};
+```
+
 ### Cancelling a login
 
 There is no built-in bound on a login: it ends on a result, the identity provider's refusal, or
-your `AbortSignal`. A renewal — one refresh, then at most one login — is shared by everyone who
-needs a token at the same time, and each of them is a **waiter** with a signal of its own:
+your `AbortSignal`. A renewal — the steps its [renewal strategy](#renewal-strategy) asks for — is
+shared by everyone who needs a token at the same time, and each of them is a **waiter** with a signal of its own:
 
 ```typescript
 // This caller no longer needs the token (an MCP request cancelled, say):
@@ -2507,7 +2961,7 @@ that joined the same login through its own moment gets Oops `aborted` for that m
 next moment starts a fresh, unbounded login and gets a token.
 
 **A strategy must honour the request's signal.** Every login hands its strategy an
-`AuthorizationRequest` carrying `signal` (interfaces-auth 6.0.0); the shipped strategies combine it
+`AuthorizationRequest` carrying `signal` (since interfaces-auth 6.0.0); the shipped strategies combine it
 with their own `signal` option, so either one ends the login. A replacement login waits until the aborted one's strategy has **settled** its `authorize`
 — its callback port closed, its stdin reader released (a manual strategy's custom `read` gets
 the same signal, and the strategy settles only once that `read` has) — before it starts its own authorization
@@ -2515,32 +2969,36 @@ the same signal, and the strategy settles only once that `read` has) — before 
 and blocks the next login until it does; one that settles before releasing its socket lets the
 next login meet it. A request on the wire is never waited for: it holds nothing local.
 
-**A refresh is never cut.** Once a refresh request carrying refresh token R is sent, the server
-may have spent R and issued R2, so the request runs on whatever its waiters do — they are
-released at once, and its answer, when it comes, is committed if nothing newer was committed
-meanwhile (R2 is kept), and discarded otherwise. R itself is never sent again by this provider:
-it is quarantined for the provider's lifetime, so the next renewal logs in. A refresh whose
-server never answers lingers until the server or the OS ends the socket; nothing waits for it.
-On a rotating endpoint a cancelled refresh can therefore force one interactive login.
-
-**What persistence is told.** Every `onTokens` call carries `refreshTokenDisposition`:
-`'replace'` (a new usable refresh token), `'keep'` (none returned, nothing discarded: the stored
-one stands) or `'clear'` (the held refresh token was refused, cut or quarantined: the stored one
-must go). A discarded refresh token is notified at once, with the held access token and
-`'clear'`, before the login that follows; a `'clear'` or `'replace'` whose `onTokens` failed is
-said again by the next notification until one succeeds. A re-sent `'replace'` may carry a refresh token the provider no longer holds in memory — the one persistence never heard of, after a later result without a refresh token replaced the in-memory one. The quarantine lives in memory: a
-process that dies between a cut refresh and that `'clear'` reaching the store may send the stored
-R once after a restart.
+**A refresh is never cut once sent; what becomes of its refresh token was decided before.**
+Once a refresh request carrying refresh token R is sent, the server may have spent R and issued
+R2, so the request runs on whatever its waiters do — they are released at once, and its answer,
+when it comes, is committed if nothing newer was committed meanwhile (R2 is kept and reported
+to persistence, detached), and discarded otherwise. What becomes of R is the `ifCut` of the
+decision that started the refresh, applied at the abort without calling the strategy:
+`'discard'` — what `refreshThenLogin()` and `refreshOnly()` say — drops R for the provider's
+lifetime and reports `refresh-token-discarded` (detached), so with `refreshThenLogin()` the next
+renewal logs in unless R2 arrived first; `'keep'` leaves R held, and the next refresh sends it
+again. An abort **before** the request left — during OIDC discovery, say, or a
+client-authentication strategy's `authenticate()` — touches no refresh token: nothing reached the server. The
+strategy's `aborted()` is told which it was (`sent`, `refreshToken: 'kept' | 'discarded'`). A
+refresh whose server never answers lingers until the server or the OS ends the socket; nothing
+waits for it. On a rotating endpoint a cancelled refresh can therefore force one interactive
+login. A discard lives in memory: a process that dies before its `refresh-token-discarded` report
+reaches the store may send the stored R once after a restart.
 
 **Commits run one at a time.** Every effect of a renewal — the tokens, the pinned certificate,
-`onTokens` — is applied by a commit in one queue per provider, in order, never two at once; a
-late result of an aborted login changes nothing. An `onTokens` that never settles therefore
-blocks every later commit of that provider (each waiter still releasable by its own signal).
+the persistence report — is applied by a commit in one queue per provider, in order, never two
+at once; a late result of an aborted login changes nothing. A persistence report that never
+settles therefore blocks every later commit of that provider (each waiter still releasable by
+its own signal). See [Persistence strategy](#persistence-strategy).
 
-**Your collaborators are awaited like any `await`.** What your own code answers — a strategy,
-`onTokens`, a certificate loader, a refresher, a validator, a presenter, a replay store,
-`cookieProvider`, an SNC locator, probe or system, a logger — is adopted as `await` adopts it, so
-a native promise, Bluebird, Q or any Promises/A+ thenable works. A collaborator answer that never
+**Your collaborators are awaited like any `await`.** What your own code answers — an
+authorization strategy, a persistence strategy, a certificate loader, a refresher, a validator, a
+presenter, a replay store, `cookieProvider`, an SNC locator, probe or system, a logger — is
+adopted as `await` adopts it, so a native promise, Bluebird, Q or any Promises/A+ thenable works.
+The one exception is the **renewal strategy**: its `next()` answers a decision or a native
+promise of one, and anything else that has a `then` is refused without calling it (see
+[Renewal strategy](#renewal-strategy)). A collaborator answer that never
 settles is bounded only by your `AbortSignal`, through the parties above. `CertificateAuthProvider`
 and `TokenAuthProvider.from` take no signal: a loader or refresher of theirs that never settles
 hangs their moment, and bounding it is yours (inside the loader or refresher). Values that cross a
@@ -2555,7 +3013,7 @@ server's.
 ### Error Handling
 
 An error reaches you in one of two places, and it is the same thing in both:
-an `IAuthProviderError` (`@mcp-abap-adt/interfaces-auth` 6.0.0), minted by
+an `IAuthProviderError` (`@mcp-abap-adt/interfaces-auth` 7), minted by
 `@mcp-abap-adt/auth-errors`.
 
 - **A refusal.** A moment — `prepare()`, `establish()`, `authorize()`,
@@ -2651,12 +3109,13 @@ README, generated from what the package renders):
 | `interactive-login` | every end of a login that is not a result — `facts.outcome`: `aborted`, `port-in-use`, `identity-provider-refused` (with a registered `oauthError`), `busy`, `disposed`, `callback-closed`, `no-terminal`, `no-input`, `unreadable-input`, `input-abandoned`, `device-code-not-shown`, `failed` |
 | `saml-assertion` | an assertion refused — `facts.rule`, `facts.check` ([Refusal messages](#refusal-messages)) |
 | `snc` | SNC: no credential, the library refused or not found, the logon refused ([Passwordless RFC logon](#passwordless-rfc-logon-snc)) |
-| `credential-refused`, `system-refused` | what `rejected()` read in the rejection ([What `rejected()` answers](#what-rejected-answers)); `credential-refused` `refresh-token` is a refused refresh, which falls back to one login |
+| `credential-refused`, `system-refused` | what `rejected()` read in the rejection ([What `rejected()` answers](#what-rejected-answers)); `credential-refused` `refresh-token` is a refused refresh — with `refreshThenLogin()` a login follows |
 | `renewal-unchanged` | a renewal returned the credential that was refused |
+| `renewal-declined` | the renewal strategy stopped before taking any step, and no other refusal explains it — `facts.trigger` ([Renewal strategy](#renewal-strategy)) |
 | `token-binding` | a certificate-bound token and no matching certificate ([A certificate-bound token](#a-certificate-bound-token-and-its-certificate)) |
 | `not-prepared` | `establish()` before `prepare()` (certificate, SNC) |
 | `logon-target` | a logon target that broke its contract, relayed |
-| `unknown` | anything else, naming only the operation and, when there are any, an integer status, a registered OAuth code and an allowlisted system code |
+| `unknown` | anything else, naming only the operation and, when there are any, an integer status, a registered OAuth code and an allowlisted system code — among them `renewal-strategy` (a renewal strategy that threw or answered something unusable) and `persisting-tokens` (an awaited persistence report that failed) |
 
 **What never reaches an error, a refusal or a log line**: an error's
 `message`, `cause`, `stack` or body; a token endpoint's `error_description`
@@ -2684,17 +3143,20 @@ For an ACS or redirect mismatch the two addresses are in `diagnostics`
 (origin and path only), never in the words. A provider moment that meets one
 answers it as its refusal.
 
-An unparseable `authorizationUrl` is `invalid-value` (interfaces-auth 7),
-naming the field — "a configured value cannot be used: authorizationUrl" —
-never the value. **A known wording limit:** an `SncLogonProvider` `myName`
+A value given but unusable is `invalid-value` (interfaces-auth 7), naming the
+field — "a configured value cannot be used: authorizationUrl" — never the
+value: an unparseable `authorizationUrl`, a malformed `persistence`,
+`refreshStatePersistence`'s `onWriteFailure` or `write`, a `callbackServer`
+without `expectState`. A missing or unusable `renewal` is
+`required-fields-missing` naming `renewal`. **A known wording limit:** an `SncLogonProvider` `myName`
 that is not a string is still reported as `required-fields-missing` naming
 the field, although a value was given.
 
 <!-- generated:refusal-table configuration -->
 | Thrown | `case` | `fields` | Reason | Hint |
 |---|---|---|---|---|
-| a required field or collaborator is missing (`ClientCredentialsProvider`, `AuthorizationCodeProvider`, a SAML provider without `assertionValidator`) | `required-fields-missing` | `<fields>` | required configuration is missing: `<fields>` | check the provider configuration |
-| an `authorizationUrl` that does not parse (`AuthorizationCodeProvider`, at construction and at login) | `invalid-value` | `authorizationUrl` | a configured value cannot be used: authorizationUrl |  |
+| a required field or collaborator is missing: every token provider (and `inBrowser`, `fromTerminal`, `toConsole`, `SsoProviderFactory.create`) without a usable `renewal`, `ClientCredentialsProvider` and `AuthorizationCodeProvider` without `uaaUrl`, `clientId`, or `clientSecret` and no `clientAuthentication`, a SAML provider without `assertionValidator`, a shipped validator without `replayStore`; also an `SncLogonProvider` `myName` that is not a string (a known wording limit) | `required-fields-missing` | `<fields>` | required configuration is missing: `<fields>` | check the provider configuration |
+| a configured value that cannot be used: an `authorizationUrl` that does not parse (`AuthorizationCodeProvider` at construction and at login, a callback strategy arming its gate); a `persistence` that is not an object with a callable `report` (every token provider); `refreshStatePersistence` with `onWriteFailure` missing or not `'continue'` / `'fail'`, or a `write` that is not a function (each named); a `callbackServer` without `expectState` for `browserCallbackStrategy` / `oidcCallbackStrategy` (`callbackServer`) | `invalid-value` | `<fields>` | a configured value cannot be used: `<fields>` |  |
 | a token provider constructed with both | `client-secret-beside-client-authentication` | `clientSecret` | clientSecret cannot be given beside clientAuthentication | give the secret to the clientAuthentication strategy, or drop the strategy |
 | a SAML provider constructed with `authorizationUrl` and no `acsUrl` | `saml-acs-required-with-authorization-url` | `acsUrl` | acsUrl is required when authorizationUrl is set: the ACS inside a pre-built SAML request cannot be read, so it must be declared | check the provider configuration |
 | a SAML provider constructed with `idpInitiated` and `authnRequestId` (`fields`: both), or a login that minted or declared a request ID (`fields`: `idpInitiated`) | `saml-idp-initiated-with-request-id` | `idpInitiated`, `authnRequestId` | SAML idpInitiated is true, but a request ID was also configured or minted: an IdP-initiated login sends no request | remove one of them |
@@ -3359,6 +3821,7 @@ It changes one thing — the line a token site writes when a request fails:
 
 ```typescript
 const provider = new ClientCredentialsProvider({
+  renewal: refreshThenLogin(),
   uaaUrl, clientId, clientSecret,
   logger,           // the lines go here, at `debug`
   authDebug: true,  // only while diagnosing: names prepared secrets in `sent`
@@ -3367,7 +3830,8 @@ const provider = new ClientCredentialsProvider({
 
 What else a provider logs, at `info` / `debug`: the stages of a token exchange
 (which exchange — never where, never a secret), token lengths and expiry, the
-browser launch, a refresh that failed and the login that follows. **No URL in
+browser launch, a refresh that failed, each renewal decision (`[BaseTokenProvider] Renewal
+step`, `{ trigger, moment, next }`), a failed persistence report or write. **No URL in
 any log line** (since 6.0.0): an endpoint is a free value — a discovered one
 is the server's, a configured one yours, and it may carry a credential or a
 query secret — so no line names a discovery URL, token, device or
@@ -3402,8 +3866,9 @@ AUTH_LOG_LEVEL=debug npm test        # debug, info, warn, error
   `error_uri` reach nothing (written nowhere since 5.4.2, read by nothing
   since 6.0.0).
 - **No error message in logs**: a line about a thrown value — a refresh that
-  failed, a strategy, loader, presenter, validator, `onTokens`, browser
-  launcher or SNC locator/probe that threw — carries `logFields(error)` of
+  failed, a strategy (authorization, renewal or persistence), loader,
+  presenter, validator, store write, browser launcher or SNC locator/probe
+  that threw — carries `logFields(error)` of
   its classification: the words its refusal would carry, its `kind`, an
   integer HTTP status and, for the three variant kinds, its admitted
   diagnostics; never the value's message, `cause` or stack: a consumer's
@@ -3422,9 +3887,9 @@ AUTH_LOG_LEVEL=debug npm test        # debug, info, warn, error
 
 ## Dependencies
 
-- `@mcp-abap-adt/interfaces-auth` (^6.0.0) - `IAuthProvider`, token provider, authorization, client-authentication and assertion-validation contracts (`ITokenProvider`, `IAuthorizationStrategy`, `IClientAuthentication`, `CallbackServerFactory`, `IAssertionValidator`, `IAssertionReplayStore`), and the error contract's types and allowlists (`IAuthProviderError`, its kinds, facts and `OPERATIONS`)
-- `@mcp-abap-adt/interfaces-auth-sap` (^3.2.0) - XSUAA authorization configuration (`IAuthorizationConfig`) and `ICertificateMaterialLoader`
-- `@mcp-abap-adt/auth-errors` (^1.0.1) - the error contract's runtime: the builders every error is minted with, `AuthProviderFailure`, `classify` / `readFailure`, `guard`, `logFields`, shared attempts and parties
+- `@mcp-abap-adt/interfaces-auth` (^7.3.0) - `IAuthProvider`, token provider, authorization, renewal, persistence, client-authentication and assertion-validation contracts (`ITokenProvider`, `IAuthorizationStrategy`, `IRenewalStrategy`, `ITokenPersistence`, `IClientAuthentication`, `CallbackServerFactory`, `IAssertionValidator`, `IAssertionReplayStore`), and the error contract's types and allowlists (`IAuthProviderError`, its kinds, facts and `OPERATIONS`)
+- `@mcp-abap-adt/interfaces-auth-sap` (^3.3.0) - XSUAA authorization configuration (`IAuthorizationConfig`) and `ICertificateMaterialLoader`
+- `@mcp-abap-adt/auth-errors` (^2.0.1) - the error contract's runtime: the builders every error is minted with, `AuthProviderFailure`, `classify` / `readFailure`, `guard`, `logFields`, shared attempts and parties
 - `@mcp-abap-adt/interfaces-utils` (^1.1.0) - `ILogger`
 - `@xmldom/xmldom` - XML parsing: SAML assertion validation, and taking the Assertion out of a SAMLResponse for the saml2-bearer grant
 - `xml-crypto` - XML-DSig signature verification for SAML assertion validation
