@@ -1424,6 +1424,26 @@ launcher failure (§6a0) widens that window.
   any page, form token or callback handling: DNS rebinding (an attacker's
   hostname resolved to loopback) cannot read the form or settle anything.
   Counted and ignored like any other refused request.
+  **The loopback names are accepted only from a loopback peer.** A `Host` of
+  `localhost`, `127.0.0.1` or `[::1]` counts only when the request's peer
+  address is loopback (`127.0.0.0/8`, `::1`, `::ffff:127.0.0.0/104`); from
+  any other peer only an `allowedHosts` authority is accepted. So binding a
+  wildcard address without `allowedHosts` really answers loopback only: a
+  machine on the network that sends `Host: localhost:<port>` is refused.
+  **What `allowedHosts` opens is the consumer's risk:** every client that
+  can reach that authority gets the paste page and its form token, and can
+  settle the login with a code of its own — the README warns of it and
+  recommends the SSH tunnel instead.
+- **A bare pasted code is a bare code.** A pasted input is read as a bare
+  code only when it carries none of `?`, `&`, `=`, `/`, `#`; anything else
+  is parsed as a redirected URL (with `URL`) and must carry the expected
+  `state` — so `…/callback&code=EVIL` cannot pass as a code that skips the
+  check (`manualPasteStrategy` and `/submit` alike).
+- **`port: 0` and the second family.** The `::1` listener takes the port the
+  OS gave `127.0.0.1`; when that port is not free on `::1`, the transport
+  stays on `127.0.0.1` alone (logged in fixed words) rather than failing the
+  login.
+
 - **The paste route of the UAA transport.** `browserCallbackServer` also
   settles through its paste page (`GET /` serves a form, `GET /submit?input=`
   takes a bare code or a redirected URL) — the way a user on another machine
@@ -1464,7 +1484,10 @@ the configured `host` when given; bound to a wildcard address with
 `allowedHosts: ['<non-loopback>:<port>']`, the paste page answers a request
 with that `Host` and refuses an unrelated one (real HTTP); a request with a
 foreign `Host` gets `400` before the form or any callback handling (no form
-token in its body); the shipped and an injected SAML transport
+token in its body); a non-loopback peer sending `Host: localhost:<port>` to a
+wildcard-bound transport without `allowedHosts` is refused (real socket from
+a non-loopback address, or the peer check unit-tested); a pasted
+`…/callback&code=X` is refused, not read as a bare code; the shipped and an injected SAML transport
 without `expectState` still log in (no gate, no refusal); a callback with a missing, a different and then
 the correct `state` (the first two `400`,
 counted, ignored; the login completes with the third); a forged `?error=`
