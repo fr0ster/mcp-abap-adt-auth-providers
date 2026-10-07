@@ -95,10 +95,17 @@
  *                      RFC_CLOSED with no GSS code the provider explains, so
  *                      rejected() is system-refused / rfc-failure (rule 5),
  *                      not an snc refusal.
- *   4c snc       SKIPPED  prepare() is Ok with the client stopped; the logon
- *                      succeeded because the library started the client by
- *                      itself. The no-credential refusal (A2200019) needs the
- *                      client's logon window closed, and was not measured.
+ *   4c snc       PARTIAL  Run twice interactively (the client exited from its
+ *                      tray, then Enter), with the same outcome both times.
+ *                      Measured: prepare() is Ok with the client stopped. Not
+ *                      reached: the no-credential refusal (A2200019). The
+ *                      logon succeeded, because the library started the client
+ *                      by itself and the Kerberos profile logged it on with no
+ *                      window to close. The script prints this as "SKIPPED —
+ *                      the logon succeeded"; it is not a failure. Reaching
+ *                      A2200019 needs a client that cannot log on (Inference:
+ *                      no valid Kerberos ticket); not tried, as it changes the
+ *                      machine's logon state.
  */
 
 import { once } from 'node:events';
