@@ -158,7 +158,15 @@ passes over the spec kept finding memory and storage out of step.
      and is what that `getTokens()` / `refreshTokens()` / moment answers; the
      committed credentials stay committed in memory (they are the server's
      state). Best effort is not the provider's choice: a strategy that wants
-     to go on after a failed write catches its own failure. The persistence
+     to go on after a failed write catches its own failure. **A report no
+     call waits for** — a discard queued at an abort, a late refresh result
+     committed after its waiters were released, a report whose waiters all
+     aborted while it ran — has no answer to fail: each report tells the
+     strategy whether a call waits for it, so the strategy, which is the
+     consumer's code and sees its own failure as it throws, handles a
+     detached one itself. The provider marks a detached report's rejection
+     handled, logs it in fixed words, lets the queue go on, and never
+     attributes it to a later call. The persistence
      strategy is the one collaborator that receives token values: it is the
      consumer's store.
    - *The persistence strategy's decisions.* What is written, what is
