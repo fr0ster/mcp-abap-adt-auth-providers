@@ -321,15 +321,22 @@ against the published 5.4.2.
   - **Breaking:** the shipped transports bind loopback (`127.0.0.1` and
     `::1`) instead of every interface, and refuse a request whose `Host` is
     not loopback with the bound port before serving anything (DNS
-    rebinding). New strategy options `host` (the bind address) and
-    `allowedHosts` (the authorities a browser on another machine may use)
-    open it up; an SSH tunnel to the port works with the default. The UAA
+    rebinding); a loopback name counts only from a loopback peer, so a
+    network client sending `Host: localhost` to a wildcard bind is refused.
+    New strategy options `host` (the bind address) and `allowedHosts` (the
+    authorities a browser on another machine may use) open it up — and
+    every client that can reach an allowed authority can then settle the
+    login with a code of its own (the README warns of it); an SSH tunnel to
+    the port works with the default and is the safe route. With `port: 0`,
+    a port taken on `::1` leaves the transport on `127.0.0.1` alone. The UAA
     paste hint names the tunnel or the first allowed authority, never a
     guessed host;
   - **Breaking:** the UAA paste form carries a per-login token, and
     `/submit` settles only with it — and a pasted redirected URL only with
     this login's `state`. `manualPasteStrategy` asks again for a pasted URL
-    of another login; a bare code is taken as before;
+    of another login. A bare code — no `?`, `&`, `=`, `/` or `#` — is taken
+    as before; anything else is a URL whose `state` must match and whose code
+    comes from the query alone (`…/callback&code=X` is refused);
   - every comparison of a `state` or token is constant time
     (`crypto.timingSafeEqual` over SHA-256 digests), and none of them is
     logged.

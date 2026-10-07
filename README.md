@@ -132,8 +132,10 @@ your `AbortSignal` is the bound. What a consumer on 5.x must now do:
   `invalid-value`, `fields: ['callbackServer']`); a consumer's redirect
   strategy must check `state` itself. **The callback listens on loopback
   only**, and answers only `Host: localhost` / `127.0.0.1` / `[::1]` with its
-  port: a browser on another machine reaches it through an SSH tunnel, or
-  through `host` and `allowedHosts` you set. The UAA paste form's `/submit`
+  port, the loopback names only from a loopback peer: a browser on another
+  machine reaches it through an SSH tunnel, or through `host` and
+  `allowedHosts` you set — which lets every client reaching that authority
+  finish the login with its own code. The UAA paste form's `/submit`
   needs the form's token. A direct `new BrowserCallbackStrategy` takes a
   required `stateGate`. See [Login CSRF: `state`, PKCE and where the callback
   listens](#login-csrf-state-pkce-and-where-the-callback-listens).
@@ -812,11 +814,15 @@ The `redirectUri` you give it must be the one the identity provider will
 redirect to; it is also the one sent to the token endpoint. It defaults to
 `http://localhost:61001/callback`.
 
-Both the paste form and `manualPasteStrategy` accept a bare code, `code=...`,
-or a full redirected URL — whichever you paste, the code is extracted from it.
-A pasted redirected URL must carry the `state` of the URL this login showed:
-`manualPasteStrategy` asks again on a mismatch, the paste form answers `400`.
-A bare code carries none and is taken — the user typed it.
+Both the paste form and `manualPasteStrategy` accept a bare code or a full
+redirected URL. A **bare code** is an input with none of `?`, `&`, `=`, `/`
+or `#`: it carries no `state` and is taken — the user typed it. Anything else
+is read as a redirected URL (parsed with `URL`): it must carry the `state` of
+the URL this login showed, and its code is taken from the query alone, never
+from a fragment — `manualPasteStrategy` asks again on a mismatch, the paste
+form answers `400`. So `…/callback&code=X` is not a code that skips the
+check. (For a URL without `state` — one you configured — the 5.x leniency
+stays: `code=...` and the like are read too.)
 
 #### Login CSRF: `state`, PKCE and where the callback listens
 
@@ -847,8 +853,14 @@ own while a login waits, and the user ends up logged in as someone else
   `127.0.0.1` and `::1` (through 5.4.2 they bound every interface), and refuse
   — before any page, form token or callback handling — a request whose `Host`
   is not `localhost`, `127.0.0.1` or `[::1]` with the bound port, so a
-  DNS-rebound name reads and settles nothing. An SSH tunnel arrives on
-  loopback and works as it is. To serve another machine directly, set both:
+  DNS-rebound name reads and settles nothing. Those three names count only
+  from a loopback peer (`127.0.0.0/8`, `::1`, `::ffff:127.x.y.z`): the header
+  is the client's to choose, so a machine on the network sending
+  `Host: localhost` is refused too. With `port: 0`, when the port the OS gave
+  `127.0.0.1` is taken on `::1`, the transport stays on `127.0.0.1` alone
+  (logged in fixed words); a fixed port taken there fails the login. An SSH
+  tunnel arrives on loopback and works as it is. To serve another machine
+  directly, set both:
 
   ```typescript
   browserCallbackStrategy({
@@ -858,8 +870,17 @@ own while a login waits, and the user ends up logged in as someone else
   ```
 
   The bind address is not an authority — a browser never sends
-  `Host: 0.0.0.0` — so a wildcard bind without `allowedHosts` still answers
-  loopback only.
+  `Host: 0.0.0.0` — and a loopback name from a network peer is refused, so a
+  wildcard bind without `allowedHosts` answers loopback peers only.
+
+  > **Warning — `allowedHosts` opens the login to everyone who can reach
+  > it.** Every client that can reach an allowed authority gets the paste
+  > page and its form token, and can settle the login with an authorization
+  > code of its own: the user then works as whoever that code belongs to.
+  > The form token stops a page in a browser, not a client on the network.
+  > Prefer the SSH tunnel (`ssh -L 61001:localhost:61001 <this machine>`),
+  > which needs no `host` and no `allowedHosts`; use `allowedHosts` only on a
+  > network where every machine that can reach the port is trusted.
 
 > The `extractCode(input)` helper behind that leniency is internal; it is not
 > part of the package's exports, contrary to what the 1.1.0–1.2.0 README said.
