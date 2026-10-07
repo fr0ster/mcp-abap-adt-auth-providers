@@ -192,7 +192,21 @@ describe('UAA paste route, gated', () => {
         expect(
           (await get(`/submit?input=${pasted('')}&form_token=${token}`)).status,
         ).toBe(400);
-        expect(ignored()).toBe(4);
+        // Not a bare code: `&`, `=` and `/` make it a URL, which needs the
+        // state — a code cannot be smuggled past it (spec §6a1).
+        for (const smuggled of [
+          `http://localhost:${PORT}/callback&code=forged`,
+          'junk&code=forged',
+        ]) {
+          expect(
+            (
+              await get(
+                `/submit?input=${encodeURIComponent(smuggled)}&form_token=${token}`,
+              )
+            ).status,
+          ).toBe(400);
+        }
+        expect(ignored()).toBe(6);
 
         // A bare code through the served form logs in.
         void get(`/submit?input=bare-code&form_token=${token}`);
@@ -200,7 +214,7 @@ describe('UAA paste route, gated', () => {
       },
     );
     expect(code).toBe('bare-code');
-    expect(ignored()).toBe(4);
+    expect(ignored()).toBe(6);
   }, 30000);
 
   it('accepts a pasted URL carrying this login’s state', async () => {

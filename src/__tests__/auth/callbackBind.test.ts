@@ -9,8 +9,12 @@
 
 import net from 'node:net';
 import os from 'node:os';
-import { afterEach, describe, expect, it } from '@jest/globals';
-import { withBrowserCallbackServer } from '../../auth/callbackServer';
+import { afterEach, describe, expect, it, jest } from '@jest/globals';
+import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
+import {
+  isLoopbackPeer,
+  withBrowserCallbackServer,
+} from '../../auth/callbackServer';
 import { withOidcCallbackServer } from '../../auth/oidcBrowserAuth';
 import { withSamlCallbackServer } from '../../auth/saml2Auth';
 import {
@@ -259,5 +263,138 @@ describe('Host check', () => {
         ).toBe(400);
       },
     );
+  }, 30000);
+});
+
+describe('loopback names count only from a loopback peer (spec §6a1)', () => {
+  // Over a real socket from this machine's own non-loopback address: the
+  // peer the server sees is that address, not loopback.
+  itWithExternal(
+    'a wildcard bind without allowedHosts refuses a network peer sending Host: localhost',
+    async () => {
+      const { logger, ignored } = ignoreCounter();
+      const code = await withBrowserCallbackServer(
+        { port: PORT, host: '0.0.0.0', gated: true, logger },
+        async (srv) => {
+          const waiting = srv.waitForResult();
+          srv.expectState?.(STATE);
+          const address = EXTERNAL as string;
+          for (const host of [
+            `localhost:${PORT}`,
+            `127.0.0.1:${PORT}`,
+            `[::1]:${PORT}`,
+          ]) {
+            const page = await callbackGet(PORT, '/', { address, host });
+            expect(page.status).toBe(400);
+            expect(formTokenIn(page.body)).toBeUndefined();
+            expect(page.body).not.toContain('form_token');
+            expect(
+              (
+                await callbackGet(
+                  PORT,
+                  `/callback?code=forged&state=${STATE}`,
+                  { address, host },
+                )
+              ).status,
+            ).toBe(400);
+          }
+          expect(ignored()).toBe(6);
+          // Nothing settled: the real callback, from loopback, still lands.
+          void callbackGet(PORT, `/callback?code=real&state=${STATE}`);
+          return await waiting;
+        },
+      );
+      expect(code).toBe('real');
+    },
+    30000,
+  );
+
+  it.each([
+    ['127.0.0.1', true],
+    ['127.8.9.10', true],
+    ['::1', true],
+    ['::ffff:127.0.0.1', true],
+    ['::ffff:127.255.0.1', true],
+    ['192.168.100.13', false],
+    ['10.0.0.1', false],
+    ['::ffff:192.168.1.1', false],
+    ['::', false],
+    ['0.0.0.0', false],
+    ['fe80::1', false],
+    ['128.0.0.1', false],
+    ['::ffff:128.0.0.1', false],
+    ['', false],
+    [undefined, false],
+  ])('isLoopbackPeer(%p) is %p', (address, expected) => {
+    expect(isLoopbackPeer(address)).toBe(expected);
+  });
+});
+
+describe('port 0 and the second family (spec §6a1)', () => {
+  it('stays on 127.0.0.1 alone, logged, when the OS-given port is taken on ::1', async () => {
+    if (!(await hasIpv6Loopback())) {
+      console.warn('no IPv6 loopback on this machine: case not run');
+      return;
+    }
+    const warnings: string[] = [];
+    const logger: ILogger = {
+      debug: () => undefined,
+      info: () => undefined,
+      error: () => undefined,
+      warn: (message: string) => {
+        warnings.push(message);
+      },
+    };
+    // Occupy the port the OS gave 127.0.0.1 on ::1 — just before the
+    // transport binds ::1 there.
+    const squatter = net.createServer();
+    const listen = net.Server.prototype.listen;
+    const spy = jest
+      .spyOn(net.Server.prototype, 'listen')
+      .mockImplementation(function (this: net.Server, ...args: unknown[]) {
+        const options = args[0] as { port?: number; host?: string };
+        if (options?.host === '::1' && !squatter.listening) {
+          listen.call(squatter, { port: options.port, host: '::1' }, () => {
+            listen.apply(this, args as never);
+          });
+          return this;
+        }
+        return listen.apply(this, args as never);
+      });
+    try {
+      const result = await withBrowserCallbackServer(
+        { port: 0, logger },
+        async (srv) => {
+          expect(squatter.listening).toBe(true);
+          expect((squatter.address() as net.AddressInfo).port).toBe(srv.port);
+          const waiting = srv.waitForResult();
+          void callbackGet(srv.port, '/callback?code=v4-only');
+          return await waiting;
+        },
+      );
+      expect(result).toBe('v4-only');
+      expect(warnings).toEqual([
+        '[callbackServer] the port is taken on ::1; listening on 127.0.0.1 only',
+      ]);
+    } finally {
+      spy.mockRestore();
+      await new Promise<void>((resolve) => squatter.close(() => resolve()));
+    }
+  }, 30000);
+
+  it('a fixed port taken on ::1 still fails the login: port in use', async () => {
+    if (!(await hasIpv6Loopback())) {
+      console.warn('no IPv6 loopback on this machine: case not run');
+      return;
+    }
+    const squatter = net.createServer();
+    await new Promise<void>((resolve) => squatter.listen(PORT, '::1', resolve));
+    try {
+      await expect(
+        withBrowserCallbackServer({ port: PORT }, async () => 'never'),
+      ).rejects.toThrow(/already in use/);
+    } finally {
+      await new Promise<void>((resolve) => squatter.close(() => resolve()));
+    }
   }, 30000);
 });

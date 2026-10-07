@@ -458,6 +458,33 @@ describe('manualPasteStrategy compares a pasted URL’s state', () => {
     expect(outcome.payload).toBe('pasted');
   });
 
+  it('reads anything with ?, &, =, / or # as a URL: a code smuggled past the state is refused', async () => {
+    const answers = [
+      'http://localhost:61001/callback&code=EVIL',
+      'junk&code=EVIL',
+      'code=EVIL',
+      'callback/EVIL',
+      pastedUrl('S'.repeat(43)),
+    ];
+    const read = jest.fn(async () => answers.shift() ?? '');
+    const outcome = await manualPasteStrategy({ read }).authorize({
+      buildAuthorizationUrl: async () => built,
+    });
+    expect(read).toHaveBeenCalledTimes(5);
+    expect(outcome.payload).toBe('pasted');
+  });
+
+  it('takes the code from the query, never from a fragment', async () => {
+    const thrown = await manualPasteStrategy({
+      read: async () =>
+        `http://localhost:61001/callback?state=${'S'.repeat(43)}#&code=EVIL`,
+    })
+      .authorize({ buildAuthorizationUrl: async () => built })
+      .catch((e: unknown) => e);
+    expect(String((thrown as Error).message)).not.toContain('EVIL');
+    expect(thrown).toBeInstanceOf(Error);
+  });
+
   it('accepts a bare code: the user typed it', async () => {
     // Bounded: a strategy that refused the bare code would ask forever.
     let asked = 0;
@@ -495,7 +522,7 @@ describe('the comparison is constant time (source)', () => {
 
   it.each([
     ['auth/callbackServer.ts', 'sameSecret('],
-    ['strategies/manualStrategies.ts', 'pasteMatches('],
+    ['strategies/manualStrategies.ts', 'readPaste('],
   ])('%s compares the armed secret only through loginState', (file, call) => {
     const source = read(file);
     expect(source).toContain(call);
