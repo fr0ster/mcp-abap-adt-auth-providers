@@ -1,6 +1,6 @@
 # Renewal strategy — goal and path
 
-**Status:** draft for the user's review (2026-10-07). Decided by the user
+**Status:** goal approved by the user 2026-10-07 (after four Codex adversarial passes). Decided by the user
 2026-10-07, in 6.0.0 and by the process: goal → spec → plan, each reviewed,
 all in PR #68. This file is the anchor for the renewal part of 6.0.0; the
 error contract's goal (`2026-10-05-error-contract-goal.md`) still binds
