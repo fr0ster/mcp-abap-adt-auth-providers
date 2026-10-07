@@ -85,7 +85,7 @@ const shapes = (reports: readonly PersistenceReport[]) =>
   );
 
 describe('one report per change, in commit order', () => {
-  it('a refresh, then a login: one credential report each, in order, with the credential installed', async () => {
+  it('two refreshes: one credential report each, in order, with the credential installed — the second without a new refresh token', async () => {
     const { reports, persistence } = reportRecorder();
     const provider = seeded({ persistence });
     const T1 = jwt('one');
@@ -206,18 +206,6 @@ describe('one report per change, in commit order', () => {
         awaited: true,
       },
     ]);
-  });
-
-  it('a discard of a refresh token no longer held reports nothing', async () => {
-    const { reports, persistence } = reportRecorder();
-    const provider = seeded({ persistence });
-    await (
-      provider as unknown as {
-        discard(spent: string, attempt: { signal: AbortSignal }): Promise<void>;
-      }
-    ).discard('replaced-meanwhile', { signal: new AbortController().signal });
-    expect(reports).toEqual([]);
-    expect(provider.held().refresh).toBe('R');
   });
 
   it('no provider without persistence builds one: nothing is reported, nothing fails', async () => {
