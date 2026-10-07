@@ -2078,10 +2078,10 @@ disagree, and a strategy's `keep` is silently undone. A credential commit
 therefore installs the result's refresh token only when it carries a usable
 one (non-empty, not discarded); otherwise the held refresh token stays —
 unless it was discarded (then the state is `cleared`, as below). What is
-held, what the result returned to the caller says (`heldRefresh()`: the
-kept token, `'replace'` — what a 4.x reader infers from its presence — or
-`'keep'` when the result is told to `onTokens`), and what persistence keeps
-then agree.
+held, what the renewal returns (the result as told to `onTokens`: no
+refresh token, `'keep'` — "the stored one stands"), what a later cache hit
+returns (`heldRefresh()`: the kept token, `'replace'`) and what persistence
+keeps then agree.
 
 **Dispositions.** Otherwise unchanged from §6b: a result with a new usable refresh
 token → `'replace'`; the logical `cleared` state → `'clear'`; the pending
