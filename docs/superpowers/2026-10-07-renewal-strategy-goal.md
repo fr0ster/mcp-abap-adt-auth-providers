@@ -117,6 +117,17 @@ spent token).
    `onTokens` failed is delivered again, in order and generation-safe, with
    the next notification (§6b's pending disposition) — for every strategy,
    shipped or not.
+9. **Rule 5 is a reading, not a guard** (decided by the user 2026-10-07).
+   The provider still reads every rejection by rule 5 — a `401` or
+   `RFC_LOGON_FAILURE` is the credential's; a `403`, a redirect, a `5xx`,
+   any other status or RFC key is not; neither is unknown — and hands that
+   reading to the strategy as a fact, beside the status or key it came
+   from. Whether to renew on it is the strategy's: the shipped factories
+   renew only on the credential's or an unknown rejection and answer the
+   rest with rule 5's `system-refused`, as today; a consumer's own strategy
+   may renew on a `403` (a system that answers an expired session so). The
+   refusal a moment answers when the strategy declines stays rule 5's
+   neutral one.
 
 ## Out of scope
 
