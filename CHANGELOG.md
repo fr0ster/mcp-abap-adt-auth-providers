@@ -49,7 +49,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Dependencies:** `@mcp-abap-adt/interfaces-auth ^6.0.0`,
   `@mcp-abap-adt/interfaces-auth-sap ^3.2.0`, `@mcp-abap-adt/auth-errors
-  ^1.0.0`.
+  ^1.0.1` (its shape check's rule 8 covers `src/clientAuthentication/`;
+  `tools/check-provider-shape.mjs` is its byte-identical copy).
 - **Every token result carries `refreshTokenDisposition`** (interfaces-auth
   6.0.0's `ITokenResult`): what `getTokens()` / `refreshTokens()` return
   after a renewal is what `onTokens` was told; a cache hit says `'replace'`
