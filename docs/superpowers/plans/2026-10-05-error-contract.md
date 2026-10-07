@@ -775,7 +775,9 @@ interfaces repository, merged/tagged/published by the user.
   `gated` (closed from the bind on) and `expectState`, gating every callback
   (code and `?error=`) before settling; `BrowserCallbackStrategy` opens them
   gated, arms them after building the URL and before opening the browser,
-  or refuses a transport without `expectState`; `manualPasteStrategy` compares a
+  or refuses a transport without `expectState`; the UAA transport's
+  `/submit` paste route is bound by a per-attempt form token from its served
+  form (and a pasted URL's `state`); `manualPasteStrategy` compares a
   pasted URL's `state`. Constant time; nothing logs it.
 - [ ] README: the strategy contract (a consumer's redirect strategy must
   check `state`), the login CSRF note; CHANGELOG `Security`.

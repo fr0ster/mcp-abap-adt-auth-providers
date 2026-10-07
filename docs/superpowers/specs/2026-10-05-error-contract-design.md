@@ -1395,6 +1395,21 @@ launcher failure (§6a0) widens that window.
   the gate requirement — a SAML response is bound by `InResponseTo` (or a
   declared IdP-initiated login) and refused by the assertion validator, so
   its transports need no `expectState` and are not refused for lacking it.
+- **The paste route of the UAA transport.** `browserCallbackServer` also
+  settles through its paste page (`GET /` serves a form, `GET /submit?input=`
+  takes a bare code or a redirected URL) — the way a user on another machine
+  finishes a login. A bare code carries no `state`, and a GET can be forged
+  from any page, so `/submit` is bound to the attempt too: the form the
+  transport serves carries a per-attempt form token (32 random bytes,
+  base64url, minted when the gate is armed, embedded in the form as a hidden
+  field, never logged), and `/submit` settles only when that token matches,
+  compared in constant time — another origin cannot read the form (no CORS,
+  the page's CSP), so it cannot forge the token. A pasted redirected URL
+  must also carry the expected `state`. A submission without the token, with
+  a wrong one, or with a wrong `state` is answered `400` in fixed words,
+  counted and ignored. Before the gate is armed, `/submit` is closed like
+  every other route. With `expectState(null)` (an unbound configured URL)
+  the form token still binds `/submit`.
 - **A consumer's OAuth transport without `expectState`.** When the injected
   `callbackServer` handle has no `expectState`, the strategy refuses the
   login before opening anything — `configuration` `invalid-value`,
@@ -1412,7 +1427,10 @@ launcher failure (§6a0) widens that window.
 Tests: on a real port, through both shipped transports — with
 `buildAuthorizationUrl` deliberately blocked, a forged code and a forged
 `?error=` sent before the gate is armed are `400`, counted and ignored, and
-the login then completes; the shipped and an injected SAML transport
+the login then completes; `/submit` with no form token, a wrong one, or a
+pasted URL with a wrong `state` is `400`, counted and ignored, before and
+after arming, and a bare code through the served form (right token) logs
+in; the shipped and an injected SAML transport
 without `expectState` still log in (no gate, no refusal); a callback with a missing, a different and then
 the correct `state` (the first two `400`,
 counted, ignored; the login completes with the third); a forged `?error=`
