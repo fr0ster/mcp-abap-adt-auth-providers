@@ -753,9 +753,31 @@ it and then ends the login (`server.fail`), so the URL is dead when shown.
 **Load-bearing:** restore `server.fail` after the prompt → the
 callback-after-prompt case red; drop the prompt → its case red.
 
+### Task 30i: auth-providers — `state` on every redirect, PKCE for UAA
+
+Repository auth-providers, PR #68. After 30h. Spec §6a1.
+
+**Steps:**
+- [ ] Tests first, from §6a1: forged callbacks (missing / different
+  `state`) answered `400`, counted, ignored, the login then completing with
+  the right one, on a real port; a forged `?error=` ignored; a fresh `state`
+  per attempt; the manual paste of a URL with a wrong `state` refused and
+  asked again, a bare code accepted; the UAA URL and exchange shapes
+  (`tokenRequestShapes.test.ts`); the stand: UAA accepts the PKCE login and
+  refuses a code exchanged with a wrong verifier.
+- [ ] Providers mint `state` (and, for UAA, the PKCE pair) per attempt;
+  `BrowserCallbackStrategy` and `manualPasteStrategy` check it, constant
+  time; nothing logs it.
+- [ ] README: the strategy contract (a consumer's redirect strategy must
+  check `state`), the login CSRF note; CHANGELOG `Security`.
+
+**Load-bearing:** accept any `state` → the forged-callback cases red; drop
+the UAA PKCE → the stand's wrong-verifier case red; reuse one `state`
+across attempts → the per-attempt case red.
+
 ### Task 30g: auth-providers — documentation of §6c
 
-Repository auth-providers, PR #68. After 30d–30f and 30h.
+Repository auth-providers, PR #68. After 30d–30f, 30h and 30i.
 
 **Steps:**
 - [ ] CLAUDE.md rules 5 and 6 as §6c.13 words them; the "Cancellable shared

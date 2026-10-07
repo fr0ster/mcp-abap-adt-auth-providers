@@ -1343,6 +1343,59 @@ PR's description; opening it is the user's decision.
   added. The `browser-launch-failed` outcome is removed from
   `INTERACTIVE_OUTCOMES` in interfaces-auth 7.0.0 (§6c.12).
 
+## 6a1. Login CSRF: `state` on every redirect, PKCE for UAA
+
+No provider sends or checks the OAuth `state` today: the UAA authorization
+code URL is `…/oauth/authorize?client_id=…&redirect_uri=…&response_type=code`
+(no `state`, no PKCE), and the OIDC one carries PKCE but no `state`. A page
+in the user's browser can then call the loopback callback with a code of its
+own while a login waits, and the user ends up logged in as someone else
+(RFC 6749 §10.12; RFC 9700 §2.1, §4.7). A login that waits longer after a
+launcher failure (§6a0) widens that window.
+
+- **The provider mints `state`.** Every authorization URL a provider builds
+  (`AuthorizationCodeProvider`, `OidcBrowserProvider`) carries `state`:
+  32 random bytes from `node:crypto`, base64url, new for every attempt
+  (every call of `buildAuthorizationUrl`). It is never logged and never in a
+  refusal.
+- **The shipped callback strategies check it, before the callback counts.**
+  `BrowserCallbackStrategy` (browser, OIDC) reads the `state` of the URL it
+  was handed by `buildAuthorizationUrl` — so the contract between provider
+  and strategy does not change — and accepts a callback only when its
+  `state` equals that one, compared in constant time. A callback whose
+  `state` is missing or different is answered `400` with fixed words,
+  counted with the ignored callbacks (its `aborted` words report the count)
+  and ignored: the login keeps waiting for the real one, as for a callback
+  carrying neither payload nor error. An `?error=` from the IdP is
+  accepted as today only with the matching `state`; otherwise it is
+  ignored the same way, so a forged error cannot end the login either.
+- **Manual and static strategies.** `manualPasteStrategy` compares the
+  `state` when the user pastes a whole redirected URL that carries one, and
+  refuses the paste (fixed words, the reader asks again) when it differs; a
+  bare code carries none and is accepted — the user typed it, there is no
+  forged redirect. `staticCodeStrategy` / `externalCodeStrategy`: the
+  consumer's code is the decision. A consumer's own redirect strategy must
+  check `state` itself — the README says so beside the strategy contract.
+- **PKCE for UAA.** `AuthorizationCodeProvider` sends `code_challenge`
+  (S256) and `code_challenge_method` in the authorization URL and
+  `code_verifier` in the code exchange, as `OidcBrowserProvider` does —
+  independent of the strategy, so a forged code fails at the token endpoint
+  even under a consumer's strategy that skips the `state` check. UAA
+  supports PKCE (to be measured on the provider stand); XSUAA (Inference
+  until measured on the trial).
+- **SAML** is out of this section: its request is bound by `InResponseTo`
+  (or declared IdP-initiated), checked by the assertion validator.
+
+Tests: a callback with a missing, a different and a correct `state` on a
+real port (the first two `400` and ignored, the login then completes with
+the third); a forged `?error=` with a wrong `state` ignored; constant-time
+comparison used (source test); a fresh `state` per attempt; UAA's URL
+carries `state`, `code_challenge`, `code_challenge_method=S256`, and the
+exchange `code_verifier` (shape test and the stand); a forged code with a
+wrong verifier refused by the stand's UAA. Load-bearing: accept any `state`
+→ the forged-callback cases red; drop PKCE → the stand's wrong-verifier
+case red.
+
 ## 6a. No built-in login timeouts
 
 Decided by the user 2026-10-05. In 6.0.0 an interactive login ends only on a
