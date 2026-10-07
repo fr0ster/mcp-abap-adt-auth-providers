@@ -113,6 +113,15 @@ your `AbortSignal` is the bound. What a consumer on 5.x must now do:
   passing nothing now waits until it aborts** — a login until its result or
   the identity provider's refusal, a request until the server or the OS ends
   it. See [Cancelling a login](#cancelling-a-login).
+- **A browser that does not open is no longer an error.** A launcher that
+  throws or rejects (`openUrl`, or the built-in one) gets one log line in
+  fixed words and the authorization URL as a prompt, and the login **keeps
+  waiting**: the callback still listens, so the URL shown — the only way to
+  finish where no browser can be opened (SSH, a host without a desktop) — is
+  live. The `browser-launch-failed` outcome is gone, and a launch failure
+  never ends the login; code that matched it must stop. Bound the login with a
+  `signal` (`AbortSignal.timeout(ms)`), or it ends on its result, the
+  identity provider's refusal or your abort.
 - **Your strategies end on the request's signal.** Every
   `AuthorizationRequest` carries `signal`. `externalCodeStrategy`'s `provide`
   is `(authorizationUrl, signal)`, and a manual strategy's `read(prompt,
@@ -159,8 +168,6 @@ facts that remain are listed with it):
 - a `cause` on any error, and the identity of a thrown value: a strategy's,
   loader's or presenter's own error reaches you classified, never as itself,
   and no `AxiosError` escapes;
-- the authorization URL in a failed browser launch's error (it stays in the
-  strategy's log line and announcement);
 - a rejected configuration value — the callback `port`, the SNC `qop`, a
   `clockSkewMs` (the field name stays, and for `qop` the allowed values);
 - each configuration error's own sentence, replaced by its case's fixed words;
@@ -649,7 +656,9 @@ Options common to the three callback strategies:
 | `signal` | — | `AbortSignal` cancelling the login — the only bound there is (since 6.0.0 no login times out on its own): pass `AbortSignal.timeout(ms)` for a deadline |
 
 Note the `browser` default: **`'none'`, so nothing is opened unless you ask for
-it.** The URL is always shown, even with no logger — it falls back to `stderr`,
+it.** A launcher that fails (yours, or the built-in one) does not end the
+login: it is logged once in fixed words, the URL is prompted, and the callback
+keeps waiting for it. The URL is always shown, even with no logger — it falls back to `stderr`,
 never stdout, so an MCP/LSP stdio transport is not corrupted. (1.x behaved the
 same way; the 1.x README claiming `system` was the default was wrong.)
 
@@ -2521,7 +2530,7 @@ README, generated from what the package renders):
 | `client-authentication` | a signing key that cannot sign, a strategy's result that cannot be sent, raw Basic with a `:` in the client id ([Refusals](#refusals)) |
 | `request-failed` | a token request, refresh, device authorization or poll, passcode exchange, OIDC discovery that failed — `facts.operation`, `facts.problem`, `facts.status`, `facts.oauthError`, `facts.code` |
 | `tls` | a TLS failure on the allowlist — `facts.code` ([Refusals](#refusals)) |
-| `interactive-login` | every end of a login that is not a result — `facts.outcome`: `aborted`, `port-in-use`, `identity-provider-refused` (with a registered `oauthError`), `busy`, `disposed`, `browser-launch-failed`, `callback-closed`, `no-terminal`, `no-input`, `unreadable-input`, `input-abandoned`, `device-code-not-shown`, `failed` |
+| `interactive-login` | every end of a login that is not a result — `facts.outcome`: `aborted`, `port-in-use`, `identity-provider-refused` (with a registered `oauthError`), `busy`, `disposed`, `callback-closed`, `no-terminal`, `no-input`, `unreadable-input`, `input-abandoned`, `device-code-not-shown`, `failed` |
 | `saml-assertion` | an assertion refused — `facts.rule`, `facts.check` ([Refusal messages](#refusal-messages)) |
 | `snc` | SNC: no credential, the library refused or not found, the logon refused ([Passwordless RFC logon](#passwordless-rfc-logon-snc)) |
 | `credential-refused`, `system-refused` | what `rejected()` read in the rejection ([What `rejected()` answers](#what-rejected-answers)); `credential-refused` `refresh-token` is a refused refresh, which falls back to one login |

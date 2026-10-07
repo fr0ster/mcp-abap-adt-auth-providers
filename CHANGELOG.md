@@ -70,9 +70,9 @@ against the published 5.4.2.
   authorization URL and the device flow's verification URI still reach the
   user — in the **prompt**, and only as an `http:` / `https:` serialisation of
   printable ASCII; one that cannot be shown so is named in fixed words. A
-  launcher that fails (`browser-launch-failed`) gets its fixed-words error
-  line, and the authorization URL is prompted before the login ends, so the
-  failure's hint — open the URL by hand — names something the user can see.
+  launcher that fails gets its fixed-words error line and the authorization
+  URL is prompted; the login keeps waiting on the same callback, so the URL
+  shown is live (there is no `browser-launch-failed` outcome).
   `consoleDeviceCodePresenter` shows the user code only when it is printable
   ASCII and rejects without a showable URI and code (`device-code-not-shown`).
   The manual strategies' prompt is two lines, never one line with a line
