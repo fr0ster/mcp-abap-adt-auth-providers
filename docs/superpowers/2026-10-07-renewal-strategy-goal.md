@@ -1,14 +1,9 @@
 # Renewal strategy — goal and path
 
-**Status:** approved by the user 2026-10-07 (after four Codex adversarial
-passes); **revised 2026-10-07 for the user's review** — what persistence is
-told becomes a persistence strategy of its own (invariant 8, decided by the
-user). Decided by the user
-2026-10-07, in 6.0.0 and by the process: goal → spec → plan, each reviewed,
-all in PR #68. This file is the anchor for the renewal part of 6.0.0; the
-error contract's goal (`2026-10-05-error-contract-goal.md`) still binds
-everything else. If the spec or the plan needs to depart from anything under
-*Holds throughout*, this file changes first — explicitly, in review.
+The renewal part of auth-providers 6.0.0. The error contract's goal
+(`2026-10-05-error-contract-goal.md`) binds everything else. The spec and
+the plan answer this file; if either needs to depart from anything under
+*Holds throughout*, this file changes first.
 
 ## Goal
 
@@ -27,24 +22,22 @@ that wants today's behaviour composes it from a shipped, named factory; one
 that wants another (never log in from a headless server, log in without
 refreshing, keep a refresh token after a `5xx`, discard it after a cut
 refresh on a rotating endpoint) writes or picks a strategy and changes no
-provider. Codex's finding of 2026-10-07 — a refresh cut during OIDC discovery,
-before anything was sent, quarantines the refresh token and tells
-persistence to clear it — cannot happen, because the provider no longer
-decides that a refresh token is spent.
+provider. A refresh cut during OIDC discovery, before anything was sent,
+can no longer quarantine the refresh token and tell persistence to clear
+it, because the provider no longer decides that a refresh token is spent.
 
 ## Why
 
-Rule 6 (5.0.0 spec, `7138d0d`, from the review of #55) fixed one policy in
-the provider: one refresh, then — on any refresh failure — one login. The
+Rule 6 fixes one policy in the provider: one refresh, then — on any refresh failure — one login. The
 error contract's §6b then added more policy on top: a refresh token cut after
 dispatch is tombstoned for the provider's lifetime, any discarded refresh
 token is cleared from persistence (`refreshTokenDisposition: 'clear'`), a
 failed notification is re-sent on the next commit. Each piece answers a real
-case, but each is the provider deciding for the consumer — the user's
-standing rule is that such decisions are the consumer's, made by injecting a
-strategy. The defect Codex found is a symptom: a decision the provider
-should not make, made on facts it misread (a cut before dispatch is not a
-spent token).
+case, but each is the provider deciding for the consumer, where this
+package's rule is that such decisions are the consumer's, made by injecting
+a strategy. Clearing a refresh token cut before it was sent is the symptom:
+a decision the provider should not make, made on facts it misread (a cut
+before dispatch is not a spent token).
 
 The persistence bookkeeping is the same pattern one level down. The logical
 `held` / `cleared` state, `refreshTokenDisposition`, and the re-sending of a
@@ -55,8 +48,8 @@ them (RFC 6749 §6 gives only "a new refresh token replaces the old; none
 issued, the old stands"; RFC 9700 §4.14.2's reuse detection is the
 server's). A consumer without a store needs none of it; one with another
 store would want other rules; and a failed `onTokens` is the consumer's own
-code failing. Living in `BaseTokenProvider`, it is the place four Codex
-passes over the spec kept finding memory and storage out of step.
+code failing. Living in `BaseTokenProvider`, it is where memory and
+storage drift out of step.
 
 ## What changes, by repository
 
@@ -102,8 +95,7 @@ passes over the spec kept finding memory and storage out of step.
 3. **No hidden step.** The provider never runs a refresh or a login the
    strategy did not ask for, and never runs more than it asked for. The
    strategy alone decides how many steps one renewal takes; the provider
-   carries no retry, no backoff and no timer of its own (the user's rule:
-   no built-in timeouts).
+   carries no retry, no backoff and no timer of its own.
 4. **What is the provider's own stays the provider's.** Correctness of its
    own state is not policy and is not delegated: shared attempts and their
    waiters, the serialized commit queue and its generations (a late result
@@ -144,7 +136,7 @@ passes over the spec kept finding memory and storage out of step.
    what state it may keep across them, the spec decides; the provider's
    guarantees above hold whatever the strategy keeps.
 8. **The provider is coherent in itself; persistence is the persistence
-   strategy's** (revised 2026-10-07, decided by the user). Two halves:
+   strategy's.** Two halves:
    - *The provider's own correctness.* What it holds and what it returns
      from `getTokens()` / `refreshTokens()` never disagree: a kept refresh
      token survives a result that carries none, a discarded one is never
@@ -179,7 +171,7 @@ passes over the spec kept finding memory and storage out of step.
      by a later write, and a failed `'clear'` or `'replace'` delivered again
      with the next report.
      Without a persistence strategy nothing is persisted.
-9. **Rule 5 is a reading, not a guard** (decided by the user 2026-10-07).
+9. **Rule 5 is a reading, not a guard.**
    The provider still reads every rejection by rule 5 — a `401` or
    `RFC_LOGON_FAILURE` is the credential's; a `403`, a redirect, a `5xx`,
    any other status or RFC key is not; neither is unknown — and hands that
@@ -198,9 +190,9 @@ passes over the spec kept finding memory and storage out of step.
   still performs it through the authorization strategy it was given.
 - Non-token credentials (`BasicAuthProvider`, `CertificateAuthProvider`,
   `SamlAuthProvider`, `SncLogonProvider`): nothing to renew.
-- Codex's second finding of 2026-10-07 (a callback socket with an unfinished
-  body kept referenced after an abort): resource release, the provider's own
-  (invariant 4); fixed in this PR on its own, not part of this goal.
+- A callback socket with an unfinished body kept referenced after an
+  abort: resource release, the provider's own (invariant 4), handled on its
+  own.
 
 ## Open — for the spec
 
@@ -230,11 +222,11 @@ passes over the spec kept finding memory and storage out of step.
 
 Order, not dates.
 
-1. This goal, reviewed and approved.
-2. The spec — a new section of `specs/2026-10-05-error-contract-design.md`
-   replacing §6b's renewal rules and rule 6 — reviewed and approved.
+1. This goal.
+2. The spec — a section of `specs/2026-10-05-error-contract-design.md`
+   replacing §6b's renewal rules and rule 6.
 3. The plan — new tasks in `plans/2026-10-05-error-contract.md`, before
-   Task 31 (the release) — reviewed and approved.
+   Task 31 (the release).
 4. interfaces-auth 7.0.0 (and the cascade of spec §6c.9), released.
 5. auth-providers: implementation in this PR, then Task 31 resumes.
 6. Tasks 32–35 as planned, the broker composing the strategy in Task 34.
