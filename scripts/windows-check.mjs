@@ -686,9 +686,25 @@ async function launchOnce(r, label, browser) {
     watch.stop();
     const below = descendants(watch.seen, roots);
     const names = [...new Set(below.map((p) => p.name.toLowerCase()))];
-    const interpreters = names.filter((n) => INTERPRETERS.has(n));
+    // Only the launcher's own children count: a browser starts interpreters
+    // of its own further down (native-messaging hosts of extensions run as
+    // `cmd /c`), which says nothing about how the launcher reached it.
+    const direct = [
+      ...new Set(
+        watch.seen
+          .filter((p) => roots.includes(p.ppid))
+          .map((p) => p.name.toLowerCase()),
+      ),
+    ];
+    const interpreters = direct.filter((n) => INTERPRETERS.has(n));
+    const deeper = names.filter(
+      (n) => INTERPRETERS.has(n) && !direct.includes(n),
+    );
     r.detail(
-      `${label}: processes started below the launcher: ${names.length ? names.join(', ') : 'none seen'} (sampled every ~50 ms)`,
+      `${label}: processes started below the launcher: ${names.length ? names.join(', ') : 'none seen'} (sampled every ~50 ms); direct children: ${direct.length ? direct.join(', ') : 'none seen'}` +
+        (deeper.length
+          ? `; interpreters deeper down (the browser's own, not counted): ${deeper.join(', ')}`
+          : ''),
     );
 
     const received = recorder.requests.filter((u) => u.startsWith(pathname));
@@ -710,7 +726,7 @@ async function launchOnce(r, label, browser) {
     }
     if (interpreters.length) {
       r.fail(
-        `${label}: a command interpreter ran below the launcher: ${interpreters.join(', ')}`,
+        `${label}: a command interpreter ran as a direct child of the launcher: ${interpreters.join(', ')}`,
       );
     }
   } finally {
