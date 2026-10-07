@@ -464,3 +464,126 @@ describe('a loopback name is never an allowed authority (spec §6a1)', () => {
     ).toBe(true);
   });
 });
+
+describe('authorities are compared canonically (spec §6a1)', () => {
+  /** Every other spelling of loopback, and the unspecified address. */
+  const SPELLINGS = (port: number) => [
+    `localhost.:${port}`,
+    `127.1:${port}`,
+    `127.0.0.2:${port}`,
+    `[0:0:0:0:0:0:0:1]:${port}`,
+    `[::ffff:127.0.0.1]:${port}`,
+    `[::ffff:7f00:1]:${port}`,
+    `0x7f.1:${port}`,
+    `0.0.0.0:${port}`,
+    `[::]:${port}`,
+  ];
+
+  itWithExternal(
+    'other spellings of loopback listed in allowedHosts admit no network peer; a real authority still does',
+    async () => {
+      const code = await withBrowserCallbackServer(
+        {
+          port: PORT,
+          host: '0.0.0.0',
+          allowedHosts: [
+            'localhost.',
+            '127.1',
+            '[0:0:0:0:0:0:0:1]',
+            '[::ffff:127.0.0.1]',
+            '0.0.0.0',
+            ...SPELLINGS(PORT),
+            'realhost.example',
+          ],
+          gated: true,
+        },
+        async (srv) => {
+          const waiting = srv.waitForResult();
+          srv.expectState?.(STATE);
+          const address = EXTERNAL as string;
+          for (const host of SPELLINGS(PORT)) {
+            const page = await callbackGet(PORT, '/', { address, host });
+            expect({ host, status: page.status }).toEqual({
+              host,
+              status: 400,
+            });
+            expect(formTokenIn(page.body)).toBeUndefined();
+          }
+          const real = await callbackGet(PORT, '/', {
+            address,
+            host: `realhost.example:${PORT}`,
+          });
+          expect(real.status).toBe(200);
+          expect(formTokenIn(real.body)).toEqual(expect.any(String));
+          void callbackGet(PORT, `/callback?code=real&state=${STATE}`);
+          return await waiting;
+        },
+      );
+      expect(code).toBe('real');
+    },
+    30000,
+  );
+
+  it('answersFor: from a loopback peer every canonical loopback authority with the bound port counts; from any other, none', () => {
+    const none = allowedAuthorities([]);
+    for (const host of [
+      `localhost:${PORT}`,
+      `localhost.:${PORT}`,
+      `127.0.0.1:${PORT}`,
+      `127.1:${PORT}`,
+      `127.0.0.2:${PORT}`,
+      `[::1]:${PORT}`,
+      `[0:0:0:0:0:0:0:1]:${PORT}`,
+      `[::ffff:127.0.0.1]:${PORT}`,
+    ]) {
+      expect({
+        host,
+        loopback: answersFor(host, '127.0.0.1', PORT, none),
+      }).toEqual({
+        host,
+        loopback: true,
+      });
+      expect({
+        host,
+        network: answersFor(
+          host,
+          '192.168.1.20',
+          PORT,
+          allowedAuthorities(SPELLINGS(PORT)),
+        ),
+      }).toEqual({ host, network: false });
+      expect(
+        answersFor(host.replace(`:${PORT}`, ':1'), '127.0.0.1', PORT, none),
+      ).toBe(false);
+    }
+    // The unspecified address is never an authority, from any peer.
+    for (const host of [`0.0.0.0:${PORT}`, `[::]:${PORT}`]) {
+      expect(
+        answersFor(host, '127.0.0.1', PORT, allowedAuthorities([host])),
+      ).toBe(false);
+    }
+  });
+
+  it('an entry the URL host parser cannot read, or that carries more than an authority, matches nothing', () => {
+    for (const entry of [
+      'a b',
+      'user@realhost.example',
+      'realhost.example/x',
+      'realhost.example:',
+      'realhost.example:99999',
+    ]) {
+      expect({ entry, read: allowedAuthorities([entry]) }).toEqual({
+        entry,
+        read: [],
+      });
+    }
+    expect(
+      answersFor(
+        'REALHOST.example.:80',
+        '192.168.1.20',
+        PORT,
+        allowedAuthorities(['realhost.example:80']),
+      ),
+    ).toBe(true);
+  });
+});
