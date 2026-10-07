@@ -171,7 +171,7 @@ const COVERAGE: ReadonlyArray<readonly [string, string, string]> = [
   [
     'TokenResultWithDisposition: what onTokens receives',
     'providers/tokenProviderFailures.test.ts',
-    '§4.4: a renewal returns the result onTokens was told, its disposition included',
+    '§6c.1: a renewal returns the result with the held refresh token, and no disposition',
   ],
 ];
 

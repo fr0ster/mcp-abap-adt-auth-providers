@@ -1,8 +1,9 @@
 /**
  * Token-provider failures (spec §6 "Where the throw is built", §6b, Task 22):
  * `getTokens()` / `refreshTokens()` throw an `AuthProviderFailure` and
- * nothing else; a refused refresh token is discarded explicitly
- * (`refreshTokenDisposition: 'clear'`); the remembered refusal of rule 8 is
+ * nothing else; a refused refresh token is discarded explicitly — reported
+ * `refresh-token-discarded`, so `refreshStatePersistence` writes `null`; the
+ * remembered refusal of rule 8 is
  * the very error the renewal produced. Rows A10, D7, D8, H1, H2; L3.
  */
 
@@ -22,14 +23,16 @@ import type {
   ITokenResult,
   OAuth2GrantType,
 } from '@mcp-abap-adt/interfaces-auth';
+import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
 import axios from 'axios';
 import { certificateThumbprint } from '../../auth/certificateMaterial';
 import { tlsClientCertificate } from '../../clientAuthentication/tlsClientCertificate';
-import { AuthorizationCodeProvider } from '../../providers/AuthorizationCodeProvider';
 import {
-  BaseTokenProvider,
-  type TokenProviderHooks,
-} from '../../providers/BaseTokenProvider';
+  type PersistedTokens,
+  refreshStatePersistence,
+} from '../../persistence';
+import { AuthorizationCodeProvider } from '../../providers/AuthorizationCodeProvider';
+import { BaseTokenProvider } from '../../providers/BaseTokenProvider';
 import { ClientCredentialsProvider } from '../../providers/ClientCredentialsProvider';
 import { OidcBrowserProvider } from '../../providers/OidcBrowserProvider';
 import { OidcDeviceFlowProvider } from '../../providers/OidcDeviceFlowProvider';
@@ -40,6 +43,7 @@ import { Saml2PureProvider } from '../../providers/Saml2PureProvider';
 import { UaaPasscodeProvider } from '../../providers/UaaPasscodeProvider';
 import { refreshThenLogin } from '../../renewal';
 import { mintedRefusal } from '../helpers/minted';
+import { seenOf, stateRecorder } from '../helpers/persistence';
 import { recordingTargets } from '../helpers/targets';
 
 // Automocked, but with axios's own error class: the sites throw it.
@@ -118,22 +122,38 @@ const result = (token: string, refresh?: string): ITokenResult =>
     expiresAt: inAnHour(),
   }) as ITokenResult;
 
-/** What happened, in order: logins, refreshes and onTokens calls. */
+/** What happened, in order: logins, refreshes and the persistence writes. */
 type Event =
   | { readonly step: 'login' | 'refresh' }
-  | { readonly step: 'onTokens'; readonly result: ITokenResult };
+  | { readonly step: 'write'; readonly tokens: PersistedTokens };
 
+/** What a test adds to the shipped persistence strategy's write. */
+interface TestHooks {
+  /** Runs inside each write, after it is recorded: may fail it. */
+  readonly write?: (tokens: PersistedTokens) => Promise<void>;
+  /** The persistence strategy's own logger. */
+  readonly persistenceLogger?: ILogger;
+}
+
+/**
+ * A provider whose persistence is `refreshStatePersistence(write, {
+ * onWriteFailure: 'continue' })` — the behaviour `onTokens` had before
+ * 6.0.0 — over a write that records each call.
+ */
 class TestProvider extends BaseTokenProvider {
   readonly events: Event[] = [];
   login = jest.fn(async () => result('T1', 'R1'));
   refresh = jest.fn(async () => result('T2', 'R2'));
-  constructor(hooks: TokenProviderHooks = { renewal: refreshThenLogin() }) {
+  constructor(hooks: TestHooks = {}) {
     super({
-      ...hooks,
-      onTokens: async (r: ITokenResult) => {
-        this.events.push({ step: 'onTokens', result: r });
-        await hooks.onTokens?.(r);
-      },
+      renewal: refreshThenLogin(),
+      persistence: refreshStatePersistence(
+        async (tokens) => {
+          this.events.push({ step: 'write', tokens });
+          await hooks.write?.(tokens);
+        },
+        { onWriteFailure: 'continue', logger: hooks.persistenceLogger },
+      ),
     });
   }
   protected performLogin() {
@@ -156,22 +176,18 @@ class TestProvider extends BaseTokenProvider {
   expire() {
     this.expiresAt = Date.now() - 1;
   }
-  /** The disposition of each onTokens call, in order. */
+  /**
+   * What each write did to the stored refresh token, in order: `replace`
+   * (a string), `clear` (`null`) or `keep` (`undefined`).
+   */
   dispositions(): unknown[] {
     return this.events.flatMap((event) =>
-      event.step === 'onTokens'
-        ? [
-            (event.result as { refreshTokenDisposition?: unknown })
-              .refreshTokenDisposition,
-          ]
-        : [],
+      event.step === 'write' ? [seenOf(event.tokens)[2]] : [],
     );
   }
   steps(): string[] {
     return this.events.map((event) =>
-      event.step === 'onTokens'
-        ? `onTokens:${String((event.result as { refreshTokenDisposition?: unknown }).refreshTokenDisposition)}`
-        : event.step,
+      event.step === 'write' ? `write:${seenOf(event.tokens)[2]}` : event.step,
     );
   }
 }
@@ -537,7 +553,7 @@ function recordingLogger() {
   };
 }
 
-describe('H1 / H2: the refresh and onTokens failure lines carry logFields', () => {
+describe('H1 / H2: the refresh and persistence failure lines carry logFields', () => {
   it('H1: Refresh failed — the failure the refresh threw, as logFields', async () => {
     const { calls, logger } = recordingLogger();
     const p = new TestProvider();
@@ -578,22 +594,21 @@ describe('H1 / H2: the refresh and onTokens failure lines carry logFields', () =
     });
   });
 
-  it('H2: onTokens failed — fixed words, the kind, no message', async () => {
+  it('H2: a failed write — the persistence strategy logs fixed words, the kind, no message; the token stands', async () => {
     const { calls, logger } = recordingLogger();
     const p = new TestProvider({
-      renewal: refreshThenLogin(),
-      onTokens: async () => {
+      write: async () => {
         throw new Error(`store down ${MARKER}`);
       },
+      persistenceLogger: logger,
     });
-    (p as unknown as { logger: unknown }).logger = logger;
     await expect(p.getTokens()).resolves.toMatchObject({
       authorizationToken: 'T1',
     });
-    const line = calls.find((c) => c.message.includes('onTokens failed'));
+    const line = calls.find((c) => c.message.includes('Writing the tokens'));
     expect(line?.level).toBe('warn');
     expect(line?.message).toBe(
-      '[BaseTokenProvider] onTokens failed; the token stands',
+      '[refreshStatePersistence] Writing the tokens failed',
     );
     expect(line?.fields).toEqual({
       error: 'persisting the tokens failed (unknown error)',
@@ -603,8 +618,8 @@ describe('H1 / H2: the refresh and onTokens failure lines carry logFields', () =
   });
 });
 
-describe('refresh-token disposition (spec §6b): a refused refresh token is discarded explicitly', () => {
-  it('a refused refresh: onTokens with the held access token and clear, before the login', async () => {
+describe('a refused refresh token is discarded explicitly (spec §6c.6, §6c.8)', () => {
+  it('a refused refresh: a write of the held access token and null, before the login', async () => {
     const p = new TestProvider();
     await p.getTokens(); // T1 / R1, replace
     p.expire();
@@ -615,22 +630,21 @@ describe('refresh-token disposition (spec §6b): a refused refresh token is disc
     });
     expect(p.steps()).toEqual([
       'login',
-      'onTokens:replace',
+      'write:replace',
       'refresh',
-      'onTokens:clear',
+      'write:clear',
       'login',
-      'onTokens:replace',
+      'write:replace',
     ]);
     const clearing = p.events[3];
-    expect(clearing?.step).toBe('onTokens');
-    const cleared = (clearing as { result: ITokenResult }).result;
+    expect(clearing?.step).toBe('write');
+    const cleared = (clearing as { tokens: PersistedTokens }).tokens;
     expect(cleared.authorizationToken).toBe('T1');
-    expect(cleared.refreshToken).toBeUndefined();
-    expect(Object.hasOwn(cleared, 'refreshToken')).toBe(true);
+    expect(cleared.refreshToken).toBeNull();
     expect(cleared.authType).toBe('client_credentials');
   });
 
-  it('the token-only login that follows notifies clear, not keep', async () => {
+  it('the token-only login that follows writes null, not undefined', async () => {
     const p = new TestProvider();
     await p.getTokens();
     p.expire();
@@ -644,7 +658,7 @@ describe('refresh-token disposition (spec §6b): a refused refresh token is disc
     expect(p.dispositions()).toEqual(['replace', 'clear', 'clear', 'clear']);
   });
 
-  it('a failing login leaves the clear notified', async () => {
+  it('a failing login leaves the clear written', async () => {
     const p = new TestProvider();
     await p.getTokens();
     p.expire();
@@ -653,18 +667,17 @@ describe('refresh-token disposition (spec §6b): a refused refresh token is disc
     expectFailure(await rejectionOf(p.getTokens()));
     expect(p.steps()).toEqual([
       'login',
-      'onTokens:replace',
+      'write:replace',
       'refresh',
-      'onTokens:clear',
+      'write:clear',
       'login',
     ]);
   });
 
-  it('a clearing onTokens that throws does not stop the login (best effort)', async () => {
+  it("a clearing write that fails does not stop the login (onWriteFailure 'continue')", async () => {
     let calls = 0;
     const p = new TestProvider({
-      renewal: refreshThenLogin(),
-      onTokens: async () => {
+      write: async () => {
         calls += 1;
         if (calls === 2) throw new Error('store down');
       },
@@ -679,7 +692,7 @@ describe('refresh-token disposition (spec §6b): a refused refresh token is disc
     expect(p.dispositions()).toEqual(['replace', 'clear', 'replace']);
   });
 
-  it('a clearing notification that cannot be built (getAuthType() throwing) does not stop the login', async () => {
+  it('a clearing report that cannot be built (getAuthType() throwing) is an awaited report failing: the renewal fails persisting-tokens, no login', async () => {
     let broken = false;
     class Breaking extends TestProvider {
       protected override getAuthType(): OAuth2GrantType {
@@ -690,26 +703,27 @@ describe('refresh-token disposition (spec §6b): a refused refresh token is disc
     const { calls, logger } = recordingLogger();
     const p = new Breaking();
     (p as unknown as { logger: unknown }).logger = logger;
+    // The login's report names the result's own grant: getAuthType() unread.
     await p.getTokens();
     p.expire();
     broken = true;
     p.refresh.mockRejectedValue(new Error('refused'));
     p.login.mockResolvedValue(result('T3', 'R3'));
-    await expect(p.getTokens()).resolves.toMatchObject({
-      authorizationToken: 'T3',
+    const thrown = await rejectionOf(p.getTokens());
+    expectFailure(thrown);
+    expect((thrown as AuthProviderFailure).error).toMatchObject({
+      kind: 'unknown',
+      facts: { operation: 'persisting-tokens' },
     });
-    expect(p.steps()).toEqual([
-      'login',
-      'onTokens:replace',
-      'refresh',
-      'login',
-      'onTokens:replace',
-    ]);
-    expect(calls.some((c) => c.message.includes('onTokens failed'))).toBe(true);
+    expect(p.steps()).toEqual(['login', 'write:replace', 'refresh']);
+    // The discard itself stands: R1 is never sent again.
+    expect(
+      (p as unknown as { refreshToken?: string }).refreshToken,
+    ).toBeUndefined();
     expect(JSON.stringify(calls)).not.toContain(MARKER);
   });
 
-  it('a refresh returning a new refresh token: replace; a result with none and nothing cut: keep', async () => {
+  it('a refresh returning a new refresh token: written; a result with none and nothing cut: undefined', async () => {
     const p = new TestProvider();
     p.login.mockResolvedValue(result('T1'));
     await p.getTokens();
@@ -723,31 +737,30 @@ describe('refresh-token disposition (spec §6b): a refused refresh token is disc
     expect(p.dispositions()).toEqual(['keep', 'replace', 'keep']);
   });
 
-  // Spec §4.4 ("every result auth-providers 6.0.0 produces sets it"; Task 27
-  // decision — replaces Task 22's "the returned result carries none"): a
-  // renewal returns exactly what onTokens was told; a cache hit says what the
-  // logical state says.
-  it('§4.4: a renewal returns the result onTokens was told, its disposition included', async () => {
+  // Spec §6c.1 (4): what getTokens() returns carries the held refresh token
+  // or none, nothing more — no disposition; the key is kept when absent.
+  it('§6c.1: a renewal returns the result with the held refresh token, and no disposition', async () => {
     const p = new TestProvider();
     const login = await p.getTokens();
-    expect(login.refreshTokenDisposition).toBe('replace');
+    expect(login.refreshToken).toBe('R1');
+    expect(Object.hasOwn(login, 'refreshTokenDisposition')).toBe(false);
     p.expire();
     const refreshed = await p.refreshTokens();
-    expect(refreshed.refreshTokenDisposition).toBe('replace');
     expect(refreshed.refreshToken).toBe('R2');
-    const told = p.events.flatMap((event) =>
-      event.step === 'onTokens' ? [event.result] : [],
+    expect(Object.hasOwn(refreshed, 'refreshTokenDisposition')).toBe(false);
+    const written = p.events.flatMap((event) =>
+      event.step === 'write' ? [event.tokens.refreshToken] : [],
     );
-    expect(told).toEqual([login, refreshed]);
+    expect(written).toEqual(['R1', 'R2']);
   });
 
-  it('§4.4: a cache hit carries replace with a usable refresh token, keep without one', async () => {
+  it('§6c.1: a cache hit carries the usable refresh token held, or none', async () => {
     const withRefresh = new TestProvider();
     await withRefresh.getTokens();
     const cached = await withRefresh.getTokens();
-    expect(withRefresh.steps()).toEqual(['login', 'onTokens:replace']);
+    expect(withRefresh.steps()).toEqual(['login', 'write:replace']);
     expect(cached.refreshToken).toBe('R1');
-    expect(cached.refreshTokenDisposition).toBe('replace');
+    expect(Object.hasOwn(cached, 'refreshTokenDisposition')).toBe(false);
 
     const without = new TestProvider();
     without.login.mockResolvedValue(result('T1'));
@@ -755,7 +768,7 @@ describe('refresh-token disposition (spec §6b): a refused refresh token is disc
     const hit = await without.getTokens();
     expect(Object.hasOwn(hit, 'refreshToken')).toBe(true);
     expect(hit.refreshToken).toBeUndefined();
-    expect(hit.refreshTokenDisposition).toBe('keep');
+    expect(Object.hasOwn(hit, 'refreshTokenDisposition')).toBe(false);
   });
 
   // Task 27 review: a cache hit names its grant through readGrant, like
@@ -781,17 +794,19 @@ describe('refresh-token disposition (spec §6b): a refused refresh token is disc
     expect(calls).toBe(1);
   });
 
-  it('§4.4: after a refused refresh and a login without one, the result and the cache hit both say clear', async () => {
+  it('after a refused refresh and a login without one, the result and the cache hit carry no refresh token, and null was written', async () => {
     const p = new TestProvider();
     await p.getTokens(); // T1 / R1
     p.expire();
     p.refresh.mockRejectedValue(new Error('refused'));
     p.login.mockResolvedValue(result('T3'));
     const relogged = await p.getTokens();
-    expect(relogged.refreshTokenDisposition).toBe('clear');
+    expect(Object.hasOwn(relogged, 'refreshToken')).toBe(true);
+    expect(relogged.refreshToken).toBeUndefined();
     const cached = await p.getTokens();
     expect(cached.authorizationToken).toBe('T3');
-    expect(cached.refreshTokenDisposition).toBe('clear');
+    expect(cached.refreshToken).toBeUndefined();
+    expect(p.dispositions()).toEqual(['replace', 'clear', 'clear']);
   });
 
   it('a refresh token refused by the server (a 400 invalid_grant) clears it, then logs in', async () => {
@@ -807,7 +822,7 @@ describe('refresh-token disposition (spec §6b): a refused refresh token is disc
         data: { access_token: 'NEW', expires_in: 3600 },
       };
     });
-    const seen: ITokenResult[] = [];
+    const { seen, persistence } = stateRecorder();
     const provider = new OidcPasswordProvider({
       renewal: refreshThenLogin(),
       clientId: 'cid',
@@ -816,21 +831,14 @@ describe('refresh-token disposition (spec §6b): a refused refresh token is disc
       password: 'p',
       accessToken: 'OLD',
       refreshToken: 'R1',
-      onTokens: async (r) => {
-        seen.push(r);
-      },
+      persistence,
     });
     await expect(provider.getTokens()).resolves.toMatchObject({
       authorizationToken: 'NEW',
     });
-    expect(
-      seen.map((r) => [
-        r.authorizationToken,
-        (r as { refreshTokenDisposition?: unknown }).refreshTokenDisposition,
-      ]),
-    ).toEqual([
-      ['OLD', 'clear'],
-      ['NEW', 'clear'],
+    expect(seen).toEqual([
+      ['OLD', undefined, 'clear'],
+      ['NEW', undefined, 'clear'],
     ]);
   });
 });
@@ -1315,26 +1323,26 @@ describe('a throwing logger changes nothing on the token paths (spec §6 guards)
     });
     expect(p.steps()).toEqual([
       'login',
-      'onTokens:replace',
+      'write:replace',
       'refresh',
-      'onTokens:clear',
+      'write:clear',
       'login',
-      'onTokens:clear',
+      'write:clear',
     ]);
     expect(
       (p as unknown as { refreshToken?: string }).refreshToken,
     ).toBeUndefined();
   });
 
-  it('H2: a throwing clearing onTokens and a throwing logger: the login still runs', async () => {
+  it('H2: a failing clearing write and throwing loggers: the login still runs', async () => {
     let calls = 0;
     const p = withLogger(
       new TestProvider({
-        renewal: refreshThenLogin(),
-        onTokens: async () => {
+        write: async () => {
           calls += 1;
           if (calls === 2) throw new Error(`store down ${MARKER}`);
         },
+        persistenceLogger: throwingLogger() as ILogger,
       }),
       throwingLogger(),
     );
@@ -1348,13 +1356,13 @@ describe('a throwing logger changes nothing on the token paths (spec §6 guards)
     expect(p.dispositions()).toEqual(['replace', 'clear', 'replace']);
   });
 
-  it('H2: a throwing onTokens after a login and a throwing logger: the token stands', async () => {
+  it('H2: a failing write after a login and throwing loggers: the token stands', async () => {
     const p = withLogger(
       new TestProvider({
-        renewal: refreshThenLogin(),
-        onTokens: async () => {
+        write: async () => {
           throw new Error('store down');
         },
+        persistenceLogger: throwingLogger() as ILogger,
       }),
       throwingLogger(),
     );
@@ -1385,13 +1393,13 @@ describe('a throwing logger changes nothing on the token paths (spec §6 guards)
       });
       expect(p.steps()).toEqual([
         'login',
-        'onTokens:replace',
+        'write:replace',
         'refresh',
-        'onTokens:replace',
+        'write:replace',
         'refresh',
-        'onTokens:clear',
+        'write:clear',
         'login',
-        'onTokens:replace',
+        'write:replace',
       ]);
       await expect(p.validateToken('opaque')).resolves.toBe(true);
     },
@@ -1502,7 +1510,7 @@ describe('a throwing logger changes nothing on the token paths (spec §6 guards)
 });
 
 describe('the logical refresh state returns to held', () => {
-  it('refused refresh → a login with a refresh token (replace) → a token-only refresh says keep, not clear', async () => {
+  it('refused refresh → a login with a refresh token (written) → a token-only refresh writes undefined, not null', async () => {
     const p = new TestProvider();
     await p.getTokens();
     p.expire();

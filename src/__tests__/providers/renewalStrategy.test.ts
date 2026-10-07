@@ -17,7 +17,6 @@ import type {
   RenewalSituation,
 } from '@mcp-abap-adt/interfaces-auth';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
-import type { BridgedTokenResult } from '../../providers/BaseTokenProvider';
 import { refreshOnly, refreshThenLogin } from '../../renewal';
 import { jwt, quiet, rejectionOf } from '../helpers/attemptHarness';
 import {
@@ -25,6 +24,7 @@ import {
   otherCertificate,
   thumbprintOf,
 } from '../helpers/certificates';
+import { reportRecorder, stateRecorder } from '../helpers/persistence';
 import { ScriptedProvider, tokens } from '../helpers/scriptedProvider';
 
 const b64url = (value: object) =>
@@ -55,20 +55,6 @@ function expectAborted(thrown: unknown): void {
   const error = errorOf(thrown);
   expect(error.kind).toBe('interactive-login');
   expect(error.facts).toMatchObject({ outcome: 'aborted' });
-}
-
-/** What onTokens saw: access token, refresh token, disposition. */
-type Seen = [string, string | undefined, string | undefined];
-function recorder() {
-  const seen: Seen[] = [];
-  const onTokens = async (result: BridgedTokenResult) => {
-    seen.push([
-      result.authorizationToken,
-      result.refreshToken,
-      result.refreshTokenDisposition,
-    ]);
-  };
-  return { seen, onTokens };
 }
 
 /**
@@ -336,7 +322,7 @@ describe('invalid decisions end the renewal unknown renewal-strategy, no step ta
 
 describe('earlier steps stay applied (G7)', () => {
   it('a refresh commits R2 bound elsewhere, then the strategy throws: R2 is held and was reported', async () => {
-    const { seen, onTokens } = recorder();
+    const { seen, persistence } = stateRecorder();
     const { strategy } = scripted([
       refresh(),
       () => {
@@ -344,7 +330,7 @@ describe('earlier steps stay applied (G7)', () => {
       },
     ]);
     const provider = seeded(strategy, {
-      onTokens,
+      persistence,
       clientAuthentication: pinning,
     });
     const thrown = rejectionOf(provider.getTokens());
@@ -358,10 +344,10 @@ describe('earlier steps stay applied (G7)', () => {
 
 describe('a credential generation per step', () => {
   it('a refresh bound elsewhere, then a login: the login is installed and reported', async () => {
-    const { seen, onTokens } = recorder();
+    const { seen, persistence } = stateRecorder();
     const { strategy, situations } = scripted([refresh(), login()]);
     const provider = seeded(strategy, {
-      onTokens,
+      persistence,
       clientAuthentication: pinning,
     });
     const renewed = provider.getTokens();
@@ -384,10 +370,10 @@ describe('a credential generation per step', () => {
   });
 
   it('two refreshes in one attempt: both committed, in order; the second sends the first one’s refresh token', async () => {
-    const { seen, onTokens } = recorder();
+    const { seen, persistence } = stateRecorder();
     const { strategy } = scripted([refresh(), refresh()]);
     const provider = seeded(strategy, {
-      onTokens,
+      persistence,
       clientAuthentication: pinning,
     });
     const renewed = provider.getTokens();
@@ -407,8 +393,8 @@ describe('a credential generation per step', () => {
 
 describe('a discarded refresh token in a result is read as none', () => {
   it('R discarded, S installed, then a result carrying R: S stays held, the result reported without a refresh token', async () => {
-    const { seen, onTokens } = recorder();
-    const provider = seeded(refreshThenLogin(), { onTokens });
+    const { seen, persistence } = stateRecorder();
+    const provider = seeded(refreshThenLogin(), { persistence });
     const first = provider.getTokens();
     (await provider.refreshes.nth(1)).result.reject(refused());
     const T1 = jwt('one', -3600);
@@ -432,9 +418,9 @@ describe('a discarded refresh token in a result is read as none', () => {
 
 describe('aborted steps observed', () => {
   it('an abort before dispatch: aborted() once with sent false, R untouched, the gate sends nothing; the next next() sees it delivered', async () => {
-    const { seen, onTokens } = recorder();
+    const { seen, persistence } = stateRecorder();
     const s = scripted([refresh(), refresh()]);
-    const provider = seeded(s.strategy, { onTokens });
+    const provider = seeded(s.strategy, { persistence });
     provider.holdDispatch = true;
     const only = new AbortController();
     const cut = rejectionOf(provider.getTokens({ signal: only.signal }));
@@ -792,21 +778,22 @@ describe('logging (spec §6c.9)', () => {
 });
 
 describe('a refresh commit that fails (review I-2, spec §6c.6)', () => {
-  /** Replaces the commit's persistence seam with one that throws. */
-  function failingPersist(provider: ScriptedProvider): void {
-    (provider as unknown as { persist: () => Promise<never> }).persist =
-      async () => {
-        throw new Error('SECRET store unavailable');
-      };
-  }
+  /** A persistence strategy whose every report fails. */
+  const failing = () =>
+    reportRecorder(() => {
+      throw new Error('SECRET store unavailable');
+    }).persistence;
 
-  it('a failure after the install — the persistence seam — ends the renewal: no login, the credentials stay committed', async () => {
-    const provider = seeded(refreshThenLogin());
-    failingPersist(provider);
+  it('a failure after the install — the awaited report — ends the renewal: no login, the credentials stay committed', async () => {
+    const provider = seeded(refreshThenLogin(), { persistence: failing() });
     const thrown = rejectionOf(provider.getTokens());
     const T2 = jwt('rotated');
     (await provider.refreshes.nth(1)).result.resolve(tokens(T2, 'R2'));
     const error = errorOf(await thrown);
+    expect(error).toMatchObject({
+      kind: 'unknown',
+      facts: { operation: 'persisting-tokens' },
+    });
     expect(JSON.stringify(error)).not.toContain('SECRET');
     await quiet();
     expect(provider.logins.items).toHaveLength(0);
@@ -819,8 +806,10 @@ describe('a refresh commit that fails (review I-2, spec §6c.6)', () => {
   });
 
   it('the same after a login: the renewal fails, nothing more', async () => {
-    const provider = new ScriptedProvider({ renewal: refreshThenLogin() });
-    failingPersist(provider);
+    const provider = new ScriptedProvider({
+      renewal: refreshThenLogin(),
+      persistence: failing(),
+    });
     const thrown = rejectionOf(provider.getTokens());
     const T1 = jwt('login');
     (await provider.logins.nth(1)).result.resolve(tokens(T1, 'S'));
@@ -968,12 +957,14 @@ describe('review M-2, M-3, M-4', () => {
   });
 
   it('M-4: a discard of a refresh token no longer held reports nothing (spec §6c.6)', async () => {
-    const { seen, onTokens } = recorder();
-    const provider = seeded(refreshThenLogin(), { onTokens });
+    const { reports, persistence } = reportRecorder();
+    const provider = seeded(refreshThenLogin(), { persistence });
     await (
-      provider as unknown as { discard(spent: string): Promise<void> }
-    ).discard('replaced-meanwhile');
-    expect(seen).toEqual([]);
+      provider as unknown as {
+        discard(spent: string, attempt: { signal: AbortSignal }): Promise<void>;
+      }
+    ).discard('replaced-meanwhile', { signal: new AbortController().signal });
+    expect(reports).toEqual([]);
     expect(provider.held().refresh).toBe('R');
   });
 });

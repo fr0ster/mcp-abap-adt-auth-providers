@@ -3,7 +3,9 @@ import { AuthProviderFailure, authError } from '@mcp-abap-adt/auth-errors';
 import type {
   ITokenResult,
   OAuth2GrantType,
+  PersistenceReport,
 } from '@mcp-abap-adt/interfaces-auth';
+import { refreshStatePersistence } from '../../persistence';
 import {
   BaseTokenProvider,
   refreshTokenRefused,
@@ -211,24 +213,28 @@ describe('BaseTokenProvider as IAuthProvider', () => {
     });
   });
 
-  it('onTokens after a login and after a refresh, never on a cache hit', async () => {
-    const onTokens = jest.fn(async (_: ITokenResult) => {});
-    const p = new TestProvider({ renewal: refreshThenLogin(), onTokens });
+  it('a report after a login and after a refresh, never on a cache hit', async () => {
+    const report = jest.fn(async (_: PersistenceReport) => {});
+    const p = new TestProvider({
+      renewal: refreshThenLogin(),
+      persistence: { report },
+    });
     await p.prepare();
     await p.authorize(recordingTargets().requestTarget); // cache hit
     await p.rejected(refused);
-    expect(onTokens.mock.calls.map(([r]) => r.authorizationToken)).toEqual([
-      'T1',
-      'T2',
-    ]);
+    expect(
+      report.mock.calls.map(([r]) => r.credential.authorizationToken),
+    ).toEqual(['T1', 'T2']);
   });
 
-  it('a failing onTokens does not fail authentication and logs no message', async () => {
+  it('a failing awaited report fails the moment with persisting-tokens, and logs no message', async () => {
     const warn = jest.fn();
     const p = new TestProvider({
       renewal: refreshThenLogin(),
-      onTokens: async () => {
-        throw new Error('store down: SECRET-T1');
+      persistence: {
+        report: async () => {
+          throw new Error('store down: SECRET-T1');
+        },
       },
     });
     (p as unknown as { logger: unknown }).logger = {
@@ -237,7 +243,35 @@ describe('BaseTokenProvider as IAuthProvider', () => {
       info: jest.fn(),
       error: jest.fn(),
     };
+    const outcome = await p.prepare();
+    expect(outcome).toMatchObject({
+      ok: false,
+      refusal: { kind: 'unknown', facts: { operation: 'persisting-tokens' } },
+    });
+    expect(JSON.stringify(outcome)).not.toMatch(/SECRET/);
+    expect(JSON.stringify(warn.mock.calls)).not.toMatch(/SECRET/);
+  });
+
+  it("a failing write under refreshStatePersistence 'continue' does not fail authentication, and logs no message", async () => {
+    const warn = jest.fn();
+    const logger = {
+      warn,
+      debug: jest.fn(),
+      info: jest.fn(),
+      error: jest.fn(),
+    };
+    const p = new TestProvider({
+      renewal: refreshThenLogin(),
+      persistence: refreshStatePersistence(
+        async () => {
+          throw new Error('store down: SECRET-T1');
+        },
+        { onWriteFailure: 'continue', logger },
+      ),
+    });
+    (p as unknown as { logger: unknown }).logger = logger;
     await expect(p.prepare()).resolves.toEqual({ ok: true });
+    expect(warn).toHaveBeenCalled();
     expect(JSON.stringify(warn.mock.calls)).not.toMatch(/SECRET/);
   });
 

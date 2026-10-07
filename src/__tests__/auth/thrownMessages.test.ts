@@ -26,6 +26,7 @@ import {
   refreshSamlBearerToken,
 } from '../../auth/saml2TokenExchange';
 import { refreshJwtToken } from '../../auth/tokenRefresher';
+import { refreshStatePersistence } from '../../persistence';
 import { AuthorizationCodeProvider } from '../../providers/AuthorizationCodeProvider';
 import { ClientCredentialsProvider } from '../../providers/ClientCredentialsProvider';
 import { refreshThenLogin } from '../../renewal';
@@ -419,6 +420,103 @@ const hostile = () =>
       },
     },
   );
+
+describe('a persistence strategy’s failure carries no foreign message', () => {
+  beforeEach(() => {
+    jest.resetAllMocks();
+    mockedAxios.mockResolvedValue({
+      status: 200,
+      data: { access_token: 'the-access-token', expires_in: 3600 },
+    });
+  });
+
+  const provider = (
+    persistence: ConstructorParameters<
+      typeof ClientCredentialsProvider
+    >[0]['persistence'],
+    logger?: ReturnType<typeof recording>['logger'],
+  ) =>
+    new ClientCredentialsProvider({
+      renewal: refreshThenLogin(),
+      uaaUrl: 'https://uaa',
+      clientId: 'cid',
+      clientSecret: 'secret',
+      persistence,
+      ...(logger ? { logger } : {}),
+    });
+
+  function recording() {
+    const lines: string[] = [];
+    const at = (level: string) => (m: string, meta?: unknown) => {
+      lines.push(`${level} ${m} ${JSON.stringify(meta ?? {})}`);
+    };
+    return {
+      lines,
+      logger: {
+        debug: at('debug'),
+        info: at('info'),
+        warn: at('warn'),
+        error: at('error'),
+      },
+    };
+  }
+
+  it.each([
+    ['an Error', () => new Error(MARKER)],
+    ['a string', () => MARKER],
+    ['a hostile value', () => hostile()],
+  ])(
+    'a report that throws %s: getTokens() throws persisting-tokens in fixed words, no cause',
+    async (_name, make) => {
+      const { lines, logger } = recording();
+      const p = provider(
+        {
+          report: () => {
+            throw make();
+          },
+        },
+        logger,
+      );
+      const { error, text } = await thrownBy(() => p.getTokens());
+      expect(isAuthProviderFailure(error)).toBe(true);
+      expect(readFailure(error, 'token-request')).toMatchObject({
+        kind: 'unknown',
+        reason: 'persisting the tokens failed (unknown error)',
+        facts: { operation: 'persisting-tokens' },
+      });
+      expect(text).not.toContain(MARKER);
+      expect(error.cause).toBeUndefined();
+      expect(inspect(error, { depth: null })).not.toContain(MARKER);
+      expect(lines.join('\n')).not.toContain(MARKER);
+    },
+  );
+
+  it("refreshStatePersistence 'fail': a write's failure fails getTokens() in fixed words; its logger writes no message", async () => {
+    const { lines, logger } = recording();
+    const p = provider(
+      refreshStatePersistence(
+        async () => {
+          throw new Error(MARKER);
+        },
+        { onWriteFailure: 'fail', logger },
+      ),
+      logger,
+    );
+    const { error, text } = await thrownBy(() => p.getTokens());
+    expect(readFailure(error, 'token-request')).toMatchObject({
+      kind: 'unknown',
+      reason: 'persisting the tokens failed (unknown error)',
+      facts: { operation: 'persisting-tokens' },
+    });
+    expect(text).not.toContain(MARKER);
+    expect(error.cause).toBeUndefined();
+    const all = lines.join('\n');
+    expect(all).toContain(
+      '[refreshStatePersistence] Writing the tokens failed',
+    );
+    expect(all).not.toContain(MARKER);
+  });
+});
 
 describe('classify and logFields are total', () => {
   beforeEach(() => {

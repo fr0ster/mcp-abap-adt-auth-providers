@@ -38,6 +38,7 @@ class Scripted extends lib.BaseTokenProvider {
     this.refreshes = [];
     if (config.access) { this.authorizationToken = config.access; this.expiresAt = Date.now() - 1; }
     if (config.refresh) this.refreshToken = config.refresh;
+    if (config.logger) this.logger = config.logger;
   }
   performLogin(attempt) { const d = deferred(); this.logins.push({ attempt, d }); return d.promise; }
   performRefresh(refreshToken, _signal, dispatched) { dispatched(); const d = deferred(); this.refreshes.push({ refreshToken, d }); return d.promise; }
@@ -46,13 +47,16 @@ class Scripted extends lib.BaseTokenProvider {
   expire() { this.expiresAt = Date.now() - 1; }
 }
 const result = (access, refresh) => ({ authorizationToken: access, refreshToken: refresh, authType: 'authorization_code', expiresIn: 3600 });
+// What refreshStatePersistence writes, in the 5.x disposition's words.
+const how = (t) => typeof t.refreshToken === 'string' ? 'replace' : t.refreshToken === null ? 'clear' : 'keep';
+const writing = (record) => lib.refreshStatePersistence(async (t) => { record(t); }, { onWriteFailure: 'continue' });
 `;
 
 describe('the races of spec §6b, under plain node', () => {
   it('the doomed join: a fresh attempt wins, the late login changes nothing', () => {
     const run = runPlainNode<Record<string, unknown>>(`${PRELUDE}
 const seen = [];
-const p = new Scripted({ renewal: lib.refreshThenLogin(), onTokens: async (r) => { seen.push([r.authorizationToken, r.refreshToken, r.refreshTokenDisposition]); } });
+const p = new Scripted({ renewal: lib.refreshThenLogin(), persistence: writing((t) => { seen.push([t.authorizationToken, t.refreshToken, how(t)]); }) });
 const only = new AbortController();
 const doomed = outcomeOf(p.getTokens({ signal: only.signal }));
 await until(() => p.logins.length === 1);
@@ -118,7 +122,7 @@ const p = new lib.AuthorizationCodeProvider({ renewal: lib.refreshThenLogin(),
   uaaUrl: url, clientId: 'cid', clientSecret: 'sec', logger: silent,
   authorization: { authorize: async () => { throw new Error('no login expected'); } },
   accessToken: jwt('held', -3600), refreshToken: 'R',
-  onTokens: async (r) => { seen.push([r.refreshToken, r.refreshTokenDisposition]); },
+  persistence: writing((t) => { seen.push([t.refreshToken ?? null, how(t)]); }),
 });
 const only = new AbortController();
 const cut = outcomeOf(p.getTokens({ signal: only.signal }));
@@ -224,13 +228,13 @@ report({ outcomes: outcomes.map((o) => o.outcome), callsBeforeRelease, calls, re
 const hooks = [];
 let active = 0;
 let most = 0;
-const p = new Scripted({ renewal: lib.refreshThenLogin(), onTokens: async (r) => {
+const p = new Scripted({ renewal: lib.refreshThenLogin(), persistence: { report: async (r) => {
   active += 1; most = Math.max(most, active);
   const done = deferred();
-  hooks.push({ access: r.authorizationToken, done });
+  hooks.push({ access: r.credential.authorizationToken, done });
   await done.promise;
   active -= 1;
-} });
+} } });
 const first = new AbortController();
 const older = outcomeOf(p.getTokens({ signal: first.signal }));
 await until(() => p.logins.length === 1);
@@ -259,6 +263,69 @@ report({ olderOutcome, beforeRelease, order: hooks.map((h) => h.access), most, l
       latest: 'T2',
       held: { access: 'T2', refresh: 'R2' },
     });
+    expect(run.unhandled).toEqual([]);
+  });
+
+  it('a detached report that fails — a throw, a rejecting promise — leaves no unhandled rejection, one log line, and fails no later call (spec §6c.6)', () => {
+    const run = runPlainNode<Record<string, unknown>>(`${PRELUDE}
+const outcomes = {};
+for (const mode of ['throw', 'reject']) {
+  const lines = [];
+  const reports = [];
+  const logger = { debug() {}, info() {}, error() {},
+    warn(message, meta) { lines.push([message, meta]); } };
+  const p = new Scripted({
+    renewal: lib.refreshThenLogin(),
+    access: jwt('held', -3600),
+    refresh: 'R',
+    logger,
+    persistence: { report(r) {
+      reports.push([r.event, r.awaited]);
+      if (r.awaited) return undefined;
+      if (mode === 'throw') throw new Error('detached: SECRET');
+      return Promise.reject(new Error('detached: SECRET'));
+    } },
+  });
+  const only = new AbortController();
+  const cut = outcomeOf(p.getTokens({ signal: only.signal }));
+  await until(() => p.refreshes.length === 1);
+  only.abort();
+  const cutOutcome = await cut;
+  await until(() => reports.length === 1);
+  await settled(10);
+  // The next call: a login (R was discarded), reported awaited, and it succeeds.
+  const next = outcomeOf(p.getTokens());
+  await until(() => p.logins.length === 1);
+  p.logins[0].d.resolve(result(jwt('login'), 'S'));
+  const nextOutcome = await next;
+  await settled(10);
+  outcomes[mode] = {
+    cutOutcome,
+    reports,
+    failureLines: lines.filter((l) => l[0] === '[BaseTokenProvider] Persisting the tokens failed').map((l) => l[1]),
+    secret: JSON.stringify(lines).includes('SECRET'),
+    next: nextOutcome.value ? nextOutcome.value.refreshToken : nextOutcome,
+  };
+}
+report(outcomes);
+`);
+    expect(run.stderr).toBe('');
+    const expected = {
+      cutOutcome: { kind: 'interactive-login', outcome: 'aborted' },
+      reports: [
+        ['refresh-token-discarded', false],
+        ['credential', true],
+      ],
+      failureLines: [
+        {
+          error: 'persisting the tokens failed (unknown error)',
+          kind: 'unknown',
+        },
+      ],
+      secret: false,
+      next: 'S',
+    };
+    expect(run.result).toEqual({ throw: expected, reject: expected });
     expect(run.unhandled).toEqual([]);
   });
 

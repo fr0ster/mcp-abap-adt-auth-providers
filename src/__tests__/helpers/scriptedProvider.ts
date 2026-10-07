@@ -1,7 +1,7 @@
 /**
  * A token provider whose every login and refresh is a promise the test
  * settles (spec §6b's races): the base class's renewal, commit queue,
- * quarantine and dispositions run as shipped; only the two grant calls are
+ * quarantine and persistence reports run as shipped; only the two grant calls are
  * scripted.
  */
 
@@ -9,14 +9,12 @@ import type { AttemptContext } from '@mcp-abap-adt/auth-errors';
 import type {
   IClientAuthentication,
   IRenewalStrategy,
+  ITokenPersistence,
   ITokenResult,
   OAuth2GrantType,
 } from '@mcp-abap-adt/interfaces-auth';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
-import {
-  BaseTokenProvider,
-  type BridgedTokenResult,
-} from '../../providers/BaseTokenProvider';
+import { BaseTokenProvider } from '../../providers/BaseTokenProvider';
 import { refreshThenLogin } from '../../renewal';
 import { Arrivals, type Deferred, deferred } from './attemptHarness';
 
@@ -35,7 +33,7 @@ export interface ScriptedRefresh {
 export interface ScriptedConfig {
   /** Required, as on every token provider (rule 7). */
   renewal: IRenewalStrategy;
-  onTokens?: (result: BridgedTokenResult) => Promise<void>;
+  persistence?: ITokenPersistence;
   accessToken?: string;
   refreshToken?: string;
   /** The held token's expiry; default: from the JWT, else expired. */
@@ -59,10 +57,13 @@ export class ScriptedProvider extends BaseTokenProvider {
   readonly refreshes = new Arrivals<ScriptedRefresh>();
   /** True: a refresh waits for the test's `dispatch()` before it is sent. */
   holdDispatch = false;
+  /** The access token the provider was seeded with, if any. */
+  readonly seededToken: string | undefined;
 
   constructor(config: ScriptedConfig) {
     super(config);
     this.logger = config.logger;
+    this.seededToken = config.accessToken;
     if (config.accessToken !== undefined) {
       this.authorizationToken = config.accessToken;
       this.expiresAt = this.seededExpiry(config.accessToken, config.expiresAt);

@@ -11,8 +11,8 @@
 
 import { afterEach, beforeEach, describe, expect, it } from '@jest/globals';
 import { readFailure } from '@mcp-abap-adt/auth-errors';
-import type { ITokenResult } from '@mcp-abap-adt/interfaces-auth';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
+import { refreshStatePersistence } from '../../persistence';
 import { AuthorizationCodeProvider } from '../../providers/AuthorizationCodeProvider';
 import { refreshThenLogin } from '../../renewal';
 import {
@@ -28,6 +28,7 @@ import {
   type WaitingStrategy,
   waitingStrategy,
 } from '../helpers/attemptHarness';
+import { type Seen, seenOf } from '../helpers/persistence';
 
 const silent: ILogger = {
   debug: () => undefined,
@@ -43,8 +44,6 @@ function isAborted(error: unknown): boolean {
     (read.facts as { outcome?: string }).outcome === 'aborted'
   );
 }
-
-type Seen = [string, string | undefined, string | undefined];
 
 let server: TokenServer;
 /** Refresh requests the server holds, in arrival order. */
@@ -85,7 +84,8 @@ const submitted = () =>
 function provider(
   strategy: WaitingStrategy,
   seeded: { access?: string; refresh?: string } = {},
-  onTokens?: (result: ITokenResult) => Promise<void>,
+  /** Runs inside each write, after it is recorded: may hold it. */
+  during?: () => Promise<void>,
 ): {
   p: AuthorizationCodeProvider;
   seen: Seen[];
@@ -102,16 +102,16 @@ function provider(
     logger: silent,
     ...(seeded.access ? { accessToken: seeded.access } : {}),
     ...(seeded.refresh ? { refreshToken: seeded.refresh } : {}),
-    onTokens: async (result) => {
-      const one: Seen = [
-        result.authorizationToken,
-        result.refreshToken,
-        result.refreshTokenDisposition,
-      ];
-      seen.push(one);
-      notified.push(one);
-      await onTokens?.(result);
-    },
+    // The behaviour onTokens had before 6.0.0: the shipped strategy.
+    persistence: refreshStatePersistence(
+      async (written) => {
+        const one = seenOf(written);
+        seen.push(one);
+        notified.push(one);
+        await during?.();
+      },
+      { onWriteFailure: 'continue' },
+    ),
   });
   return { p, seen, notified };
 }
@@ -211,7 +211,7 @@ describe('a refresh aborted after dispatch', () => {
 });
 
 describe('quarantine before the queue', () => {
-  it('a commit installs R and stalls in onTokens; a replacement reads R, refreshes, is cut; the next does not submit R and logs in', async () => {
+  it('a commit installs R and stalls in its report; a replacement reads R, refreshes, is cut; the next does not submit R and logs in', async () => {
     const strategy = waitingStrategy();
     const stall = deferred<void>();
     let stalled = false;
@@ -226,7 +226,7 @@ describe('quarantine before the queue', () => {
     const first = rejectionOf(p.getTokens({ signal: a.signal }));
     (await strategy.nth(1)).answer('code-1');
     await notified.nth(1);
-    // Commit A has installed R and is stalled in its onTokens.
+    // Commit A has installed R and is stalled in its report.
     a.abort();
     expect(isAborted(await first)).toBe(true);
 
@@ -235,7 +235,7 @@ describe('quarantine before the queue', () => {
     expect(submitted()).toEqual(['R']);
 
     // Replacement C: R is quarantined, so it logs in — while the queue is
-    // still held by A's onTokens, before any queued step has run.
+    // still held by A's report, before any queued step has run.
     const c = p.getTokens();
     const login = await strategy.nth(2);
     expect(submitted()).toEqual(['R']);
@@ -323,14 +323,14 @@ describe('tombstones for life', () => {
 
 describe('a refresh answered, then cut while its outcome waits in the queue', () => {
   /**
-   * Z refreshes R0 → R1, its commit stalls in onTokens, its waiter aborts.
+   * Z refreshes R0 → R1, its commit stalls in its report, its waiter aborts.
    * W refreshes R1; the server answers W; W's outcome (a commit, or a
    * clearing step) waits behind Z; then W's waiter aborts. The next renewal
    * must not send R1 again: it is quarantined until W's outcome is applied.
    */
   async function answeredThenCut(answerW: (held: HeldRequest) => void) {
     const strategy = waitingStrategy();
-    // Z's onTokens stalls; every later one passes.
+    // Z's report stalls; every later one passes.
     const stall = deferred<void>();
     const stalled = deferred<void>();
     let first = true;
@@ -367,7 +367,7 @@ describe('a refresh answered, then cut while its outcome waits in the queue', ()
     s1.abort();
     expect(isAborted(await w)).toBe(true);
 
-    // X: a new renewal, while the queue is still held by Z's onTokens.
+    // X: a new renewal, while the queue is still held by Z's report.
     const x = p.refreshTokens();
     const login = await strategy.nth(1);
     expect(submitted()).toEqual(['R0', 'R1']);

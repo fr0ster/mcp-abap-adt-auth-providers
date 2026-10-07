@@ -114,9 +114,10 @@ interface Row {
   /** Whether the provider takes a consumer's AbortSignal. */
   readonly signalled: boolean;
   /**
-   * The collaborator's failure is best effort by contract — `onTokens`
-   * (logged, the token stands), an SNC product probe (logged, the library
-   * stands) — so the moment stays Ok.
+   * The collaborator's failure is best effort by contract — an SNC product
+   * probe (logged, the library stands) — so the moment stays Ok. (A
+   * persistence strategy's awaited report is not: its failure is the
+   * renewal's, spec §6c.6.)
    */
   readonly failureStands?: boolean;
 }
@@ -139,17 +140,16 @@ const ROWS: Row[] = [
       }),
   },
   {
-    name: 'ClientCredentialsProvider · onTokens',
+    name: 'ClientCredentialsProvider · persistence report',
     moment: 'authorize',
     signalled: true,
-    failureStands: true,
     make: (how, signal) =>
       new ClientCredentialsProvider({
         renewal: refreshThenLogin(),
         uaaUrl: base,
         clientId: 'cid',
         clientSecret: 's',
-        onTokens: () => answer(how, undefined) as never,
+        persistence: { report: () => answer(how, undefined) as never },
         ...(signal ? { signal } : {}),
       }),
   },

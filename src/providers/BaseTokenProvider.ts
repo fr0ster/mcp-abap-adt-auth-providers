@@ -29,10 +29,12 @@ import type {
   IRefreshableTokenProvider,
   IRenewalStrategy,
   IRequestTarget,
+  ITokenPersistence,
   ITokenRequestOptions,
   ITokenResult,
   OAuth2GrantType,
   Operation,
+  PersistenceReport,
   RenewalAbortObservation,
   RenewalCause,
   RenewalDecision,
@@ -40,6 +42,7 @@ import type {
   RenewalSituation,
   RenewalStep,
   RenewalStepOutcome,
+  ReportedCredential,
   SentRefreshToken,
 } from '@mcp-abap-adt/interfaces-auth';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
@@ -58,7 +61,11 @@ import {
   requiredFieldsMissing,
 } from '../auth/configuration';
 import { isGrant } from '../auth/grants';
-import { isPlainPromise, markHandled } from '../auth/handled';
+import {
+  isPlainPromise,
+  markHandled,
+  onAnswerRejection,
+} from '../auth/handled';
 import { readSafely } from '../auth/knownCodes';
 import { rejectionCause } from '../auth/rejection';
 import { readBinding, type TokenBinding } from '../auth/tokenBinding';
@@ -93,30 +100,24 @@ interface OperationOf {
   readonly grant?: OAuth2GrantType;
 }
 
-/**
- * Bridge until the persistence strategy (Task 30e): interfaces-auth 7.0.0
- * removed `RefreshTokenDisposition` and `ITokenResult.refreshTokenDisposition`;
- * the provider still keeps its disposition bookkeeping, typed here.
- */
-export type RefreshTokenDisposition = 'replace' | 'keep' | 'clear';
-
-/** A token result with the bridge's disposition (Task 30e removes it). */
-export type BridgedTokenResult = ITokenResult & {
-  readonly refreshTokenDisposition?: RefreshTokenDisposition | undefined;
-};
-
 /** What every token provider's config may carry beside its own fields. */
 export interface TokenProviderHooks extends TokenProviderDebug {
   /**
-   * Called after every NEW token — a login or a refresh, never a cache hit —
-   * and awaited before the provider answers. The broker persists through it.
-   * Also called, with the held access token (or `''` for none) and
-   * `refreshTokenDisposition: 'clear'`, as soon as a refresh token is
-   * discarded — before the login that follows. Every call carries the
-   * disposition. Best effort: a failure is logged by its kind and fixed
-   * words and does not fail the authentication.
+   * What this provider tells persistence (spec §6c.3, §6c.6): one report per
+   * change of its credentials, made from inside the commit queue in commit
+   * order — `credential` for every new token a refresh or a login committed
+   * (never a cache hit), `refresh-token-discarded` when the renewal
+   * strategy's decision discarded the refresh token held. A report is
+   * `awaited` while the attempt that made the commit still has a live
+   * waiter: the commit awaits it, and its failure is the renewal's
+   * (`unknown`, `persisting-tokens`), the credentials staying committed. A
+   * detached report is called and not awaited; its failure is logged in
+   * fixed words and attributed to nothing. Nothing is reported twice.
+   * Absent: nothing is persisted — a choice, not a default; the provider
+   * builds none (rule 7). `refreshStatePersistence(write, options)` is the
+   * behaviour of `onTokens` before 6.0.0.
    */
-  onTokens?: ((result: BridgedTokenResult) => Promise<void>) | undefined;
+  persistence?: ITokenPersistence | undefined;
   /**
    * The first attached party (spec §6b), attached at construction — the same
    * as `attach(signal)` right after it. A login a moment starts (`prepare`,
@@ -151,7 +152,7 @@ interface RenewalStart {
  * the refresh token it sent when it failed after sending.
  */
 type StepEnd =
-  | { readonly usable: BridgedTokenResult }
+  | { readonly usable: ITokenResult }
   | {
       readonly outcome: RenewalStepOutcome;
       readonly refusal: IAuthProviderError;
@@ -161,8 +162,8 @@ type StepEnd =
 /**
  * A step's result could not be installed (a subclass's `updateTokens`
  * threw): carried out of the commit so that a refresh step can tell it from
- * a failure after the install — the persistence seam (spec §6c.6), which
- * ends the renewal instead. Never thrown out of the provider: the step
+ * a failure after the install — the awaited persistence report (spec
+ * §6c.6), which ends the renewal instead. Never thrown out of the provider: the step
  * unwraps `thrown`.
  */
 class InstallFailed {
@@ -267,7 +268,8 @@ export abstract class BaseTokenProvider
   protected expiresAt?: number | undefined; // timestamp in milliseconds
   protected tokenType?: 'jwt' | 'saml' | 'opaque';
   protected logger?: ILogger | undefined;
-  private readonly onTokens?: TokenProviderHooks['onTokens'] | undefined;
+  /** The consumer's persistence strategy; absent, nothing is persisted. */
+  private readonly persistence?: ITokenPersistence | undefined;
   /** The token last put on a request, so rejected() can tell a renewal from a repeat. */
   private presented?: string | undefined;
   /**
@@ -276,7 +278,7 @@ export abstract class BaseTokenProvider
    * only that waiter, and every waiter's abort aborts the attempt.
    */
   private readonly renewals =
-    sharedAttempt<Settled<BridgedTokenResult>>('token-request');
+    sharedAttempt<Settled<ITokenResult>>('token-request');
   /**
    * The renewal attempt in the slot, while it is there: set when it starts,
    * cleared when it settles or is aborted (it leaves the slot at once).
@@ -301,8 +303,8 @@ export abstract class BaseTokenProvider
     sharedAttempt<Settled<PinnedCertificate>>('token-request');
   /**
    * The commit queue (spec §6b): every effect of an attempt — the pinned
-   * material, the tokens, `remembered`, `onTokens` — runs here, one commit
-   * after another, never two at once, in arrival order.
+   * material, the tokens, `remembered`, the persistence reports — runs here,
+   * one commit after another, never two at once, in arrival order.
    */
   private commits: Promise<void> = Promise.resolve();
   /**
@@ -337,14 +339,6 @@ export abstract class BaseTokenProvider
    */
   private readonly loginDispatch = new WeakMap<AbortSignal, () => void>();
   /**
-   * A `'replace'` whose `onTokens` failed: until one `onTokens` succeeds, or
-   * a new `'replace'` / `'clear'` supersedes it, a notification without a
-   * new refresh token says `'replace'` with the held one, never `'keep'`. A
-   * failed `'clear'` needs no flag: the logical state stays `cleared`, and
-   * every later notification says `'clear'` from it.
-   */
-  private pendingReplace = false;
-  /**
    * A held token bound elsewhere than the pinned certificate that a renewal
    * did not make usable, with the refusal that renewal produced: a renewal
    * that obtained it still bound elsewhere ("the new token is bound to …"),
@@ -360,12 +354,6 @@ export abstract class BaseTokenProvider
   private remembered?:
     | { readonly token: string; readonly error: IAuthProviderError }
     | undefined;
-  /**
-   * The logical refresh state (spec §6b): `held` — a usable refresh token,
-   * or none ever known; `cleared` — one was discarded, so every later
-   * notification without a new one says `'clear'`, never `'keep'`.
-   */
-  private refreshState: 'held' | 'cleared' = 'held';
   /** `getAuthType()`, read once (`readGrant`). */
   private grantRead?: { readonly grant: OAuth2GrantType | undefined };
 
@@ -379,7 +367,8 @@ export abstract class BaseTokenProvider
       authorize: 'token-request',
       rejected: 'token-request',
     });
-    this.onTokens = config.onTokens;
+    // Absent is a choice: nothing is persisted (spec §6c.3).
+    this.persistence = config.persistence ?? undefined;
     // Required, no default (rule 7, spec §6c.3): an object whose `next` is a
     // function, read without running a getter; anything else is refused here.
     const renewal: unknown = config.renewal;
@@ -437,7 +426,7 @@ export abstract class BaseTokenProvider
 
   /**
    * Queues one commit step: it starts once every earlier step — its
-   * `onTokens` included — has settled.
+   * awaited persistence report included — has settled.
    */
   private commit<T>(step: () => T | Promise<T>): Promise<T> {
     const run = this.commits.then(step);
@@ -719,7 +708,7 @@ export abstract class BaseTokenProvider
    * @throws AuthProviderFailure — and nothing else: whatever the renewal, a
    *   strategy, a loader or a presenter threw, classified (spec §6, L3)
    */
-  async getTokens(options?: ITokenRequestOptions): Promise<BridgedTokenResult> {
+  async getTokens(options?: ITokenRequestOptions): Promise<ITokenResult> {
     return this.tokensFor(options?.signal, 'get-tokens');
   }
 
@@ -727,7 +716,7 @@ export abstract class BaseTokenProvider
   private async tokensFor(
     signal: AbortSignal | undefined,
     moment: RenewalMoment,
-  ): Promise<BridgedTokenResult> {
+  ): Promise<ITokenResult> {
     try {
       return await this.cachedOrRenewed(signal, moment);
     } catch (error) {
@@ -739,7 +728,7 @@ export abstract class BaseTokenProvider
   private async cachedOrRenewed(
     signal: AbortSignal | undefined,
     moment: RenewalMoment,
-  ): Promise<BridgedTokenResult> {
+  ): Promise<ITokenResult> {
     logQuietly(() =>
       this.logger?.debug('[BaseTokenProvider] getTokens called', {
         hasToken: !!this.authorizationToken,
@@ -789,7 +778,7 @@ export abstract class BaseTokenProvider
       );
       return {
         authorizationToken,
-        ...this.heldRefresh(),
+        refreshToken: this.heldRefresh(),
         authType: this.heldGrant(),
         tokenType: this.tokenType ?? 'jwt',
         expiresAt: this.expiresAt,
@@ -839,9 +828,7 @@ export abstract class BaseTokenProvider
    *
    * @throws AuthProviderFailure — and nothing else (spec §6, L3)
    */
-  async refreshTokens(
-    options?: ITokenRequestOptions,
-  ): Promise<BridgedTokenResult> {
+  async refreshTokens(options?: ITokenRequestOptions): Promise<ITokenResult> {
     try {
       return await this.renewed(options?.signal, () => ({
         cause: { trigger: 'explicit' },
@@ -861,7 +848,7 @@ export abstract class BaseTokenProvider
   private async renewed(
     signal: AbortSignal | undefined,
     start: () => RenewalStart,
-  ): Promise<BridgedTokenResult> {
+  ): Promise<ITokenResult> {
     const settled = await this.renewals.join(
       (attempt) => this.renewAttempt(attempt, start()),
       signal,
@@ -929,7 +916,7 @@ export abstract class BaseTokenProvider
   private async renewAttempt(
     attempt: AttemptContext,
     start: RenewalStart,
-  ): Promise<Settled<BridgedTokenResult>> {
+  ): Promise<Settled<ITokenResult>> {
     this.renewing = attempt;
     // Aborted, the attempt has left its slot: no longer the one in flight.
     const left = () => {
@@ -983,7 +970,7 @@ export abstract class BaseTokenProvider
   private async renewOnce(
     attempt: AttemptContext,
     start: RenewalStart,
-  ): Promise<BridgedTokenResult> {
+  ): Promise<ITokenResult> {
     const { signal } = attempt;
     // Before anything is asked or sent: material that cannot be loaded, or
     // has expired, refuses the renewal whole — the refresh token is neither
@@ -1018,7 +1005,7 @@ export abstract class BaseTokenProvider
       if (decision.sentRefreshToken === 'discard' && sentToken !== undefined) {
         const spent = sentToken;
         this.discarded.add(spent);
-        await this.commit(() => this.discard(spent));
+        await this.commit(() => this.discard(spent, attempt));
       }
       sentToken = undefined;
       if (decision.next === 'stop') {
@@ -1194,7 +1181,7 @@ export abstract class BaseTokenProvider
    * One refresh step. Once dispatched it runs on whatever its waiters do
    * (spec §6b): the abort handler acts only after `dispatched()` — it
    * records the observation, then applies `ifCut` (`discard` adds the token
-   * to `discarded` synchronously and queues its clearing step; `keep` does
+   * to `discarded` synchronously and queues its clearing step and report; `keep` does
    * nothing). An abort before dispatch touches no refresh token. The answer,
    * when it comes, is still offered to the commit queue under this step's
    * generation.
@@ -1237,7 +1224,9 @@ export abstract class BaseTokenProvider
     const cut = () => {
       if (sent && ifCut === 'discard') {
         this.discarded.add(spent);
-        void this.commit(() => this.discard(spent));
+        // Detached (the attempt has aborted): it never rejects; marked
+        // handled all the same.
+        markHandled(this.commit(() => this.discard(spent, attempt)));
       }
       this.observe({
         cause: start.cause,
@@ -1282,7 +1271,7 @@ export abstract class BaseTokenProvider
       }
       // Committed even when the attempt was aborted meanwhile, if nothing
       // newer was (spec §6b, rule 2): losing R2 would strand the family.
-      let committed: BridgedTokenResult;
+      let committed: ITokenResult;
       try {
         committed = await this.commitCredentials(
           result,
@@ -1294,7 +1283,7 @@ export abstract class BaseTokenProvider
         // Only the install's own failure is the step's: the server answered,
         // so `spent` was sent and may be rotated away — a refresh that failed
         // after it was sent, and the strategy decides. Anything after the
-        // install (persistence) ends the renewal (§6c.6).
+        // install (the awaited persistence report) ends the renewal (§6c.6).
         if (!(failure instanceof InstallFailed)) throw failure;
         throwIfAborted(signal);
         const error = this.classified(
@@ -1356,7 +1345,7 @@ export abstract class BaseTokenProvider
       // A login's install failure ends the renewal, as any commit failure
       // does: unlike a refresh, no refresh token is left in doubt, so there
       // is nothing for the strategy to decide.
-      let committed: BridgedTokenResult;
+      let committed: ITokenResult;
       try {
         committed = await this.commitCredentials(
           result,
@@ -1382,7 +1371,7 @@ export abstract class BaseTokenProvider
    * server's state.
    */
   private judged(
-    committed: BridgedTokenResult,
+    committed: ITokenResult,
     step: RenewalStep,
     start: RenewalStart,
   ): StepEnd {
@@ -1410,17 +1399,23 @@ export abstract class BaseTokenProvider
    * The queued step that discards a refresh token — by the renewal
    * strategy's `sentRefreshToken` or `ifCut`: it clears `refreshToken` only
    * if it still holds that one (never a token something else stored
-   * meanwhile), moves the logical state to `cleared`, and tells persistence
-   * `'clear'`. It advances no watermark, so the same attempt's late answer
-   * can still be committed after it.
+   * meanwhile) and reports `refresh-token-discarded` with the credential
+   * still held. A token no longer held reports nothing: the store already
+   * holds the newer state the replacing commit reported (spec §6c.6). It
+   * advances no watermark, so the same attempt's late answer can still be
+   * committed after it.
    */
-  private async discard(spent: string): Promise<void> {
+  private async discard(spent: string, attempt: AttemptContext): Promise<void> {
     if (this.refreshToken !== spent) return;
     this.refreshToken = undefined;
-    this.refreshState = 'cleared';
-    // A new 'clear' supersedes a pending 'replace'.
-    this.pendingReplace = false;
-    await this.notify(() => this.clearing());
+    await this.reportChange(
+      (awaited) => ({
+        event: 'refresh-token-discarded',
+        credential: this.reportedCredential(),
+        awaited,
+      }),
+      attempt,
+    );
   }
 
   /**
@@ -1431,32 +1426,33 @@ export abstract class BaseTokenProvider
    * installed only when it is usable — non-empty and not discarded;
    * otherwise the one held stays. Then, in order: the tokens,
    * `markIfElsewhere` against the pinned thumbprint current now, the
-   * progress line, and `onTokens` with the disposition.
+   * progress line, and the `credential` report. A commit discarded by the
+   * watermark reports nothing.
    */
   private async commitCredentials(
     result: ITokenResult,
     generation: number,
     attempt: AttemptContext,
     obtained: Obtained,
-  ): Promise<BridgedTokenResult> {
+  ): Promise<ITokenResult> {
     const applied = await this.commit(async () => {
       if (obtained === 'login' && attempt.signal.aborted) return undefined;
       if (generation <= this.credentialWatermark) return undefined;
       this.credentialWatermark = generation;
       const fresh = result.refreshToken;
       // A discarded refresh token in a result is read as none, nothing more.
-      const accepted =
+      const usable =
         typeof fresh === 'string' && fresh !== '' && !this.discarded.has(fresh)
-          ? result
-          : { ...result, refreshToken: undefined };
-      const heldBefore = this.refreshToken;
+          ? fresh
+          : undefined;
+      const accepted: ITokenResult = { ...result, refreshToken: usable };
       try {
         this.updateTokens(accepted);
       } catch (thrown) {
         throw new InstallFailed(thrown);
       }
       this.markIfElsewhere(accepted.authorizationToken);
-      // Written once the commit applied its tokens, before onTokens (H2).
+      // Written once the commit applied its tokens, before the report (H2).
       logQuietly(() =>
         this.logger?.info(
           obtained === 'refresh'
@@ -1464,18 +1460,27 @@ export abstract class BaseTokenProvider
             : '[BaseTokenProvider] Login completed',
           {
             newToken: this.formatToken(accepted.authorizationToken),
-            newRefreshToken: this.formatToken(accepted.refreshToken),
+            newRefreshToken: this.formatToken(usable),
           },
         ),
       );
       // A failure from here on is not the step's: the credentials are
       // committed, and it ends the renewal (§6c.6).
-      const told = await this.persist(accepted, heldBefore);
-      // What it returns carries the refresh token held (G4).
-      const held = this.heldRefresh().refreshToken;
-      return held === undefined || told.refreshToken !== undefined
-        ? told
-        : { ...told, refreshToken: held };
+      await this.reportChange(
+        (awaited) => ({
+          event: 'credential',
+          // The grant the result names, as `onTokens` was told before 6.0.0.
+          credential: this.reportedCredential(accepted.authType),
+          refreshToken:
+            usable === undefined
+              ? { change: 'none' }
+              : { change: 'new', value: usable },
+          awaited,
+        }),
+        attempt,
+      );
+      // What it returns carries the refresh token held, or none (G4).
+      return { ...accepted, refreshToken: this.heldRefresh() };
     });
     if (applied !== undefined) return applied;
     // Discarded: an aborted attempt has no waiter left to answer. A live
@@ -1486,16 +1491,93 @@ export abstract class BaseTokenProvider
   }
 
   /**
-   * The commit's persistence seam, after the install: today the bridged
-   * `onTokens` notification (Task 30e routes the persistence strategy's
-   * awaited report here). Its failure is the renewal's failure, never a
-   * failed step: a store write that fails does not start a login (§6c.6).
+   * One report to the persistence strategy, from inside a commit (spec
+   * §6c.6). `awaited` is decided now, as the report starts: true while the
+   * attempt that made the commit still has a live waiter. An awaited
+   * report is awaited — a collaborator's answer, adopted as `await` adopts
+   * it — and its throw or rejection is the renewal's failure (`unknown`,
+   * `persisting-tokens`); never a failed step, so a store write that fails
+   * starts no login. A detached one is called and not awaited: its throw or
+   * rejection is logged in fixed words and goes no further. `make` builds a
+   * fresh report each time — a strategy changing it changes nothing held —
+   * and building it (`getAuthType()` is a subclass's) is part of the report.
+   * The provider never reports the same change twice.
    */
-  private persist(
-    accepted: ITokenResult,
-    heldBefore: string | undefined,
-  ): Promise<BridgedTokenResult> {
-    return this.obtained(accepted, heldBefore);
+  private async reportChange(
+    make: (awaited: boolean) => PersistenceReport,
+    attempt: AttemptContext,
+  ): Promise<void> {
+    const persistence = this.persistence;
+    if (persistence === undefined) return;
+    const awaited = !attempt.signal.aborted;
+    if (!awaited) {
+      try {
+        onAnswerRejection(this.callReport(persistence, make(false)), (error) =>
+          this.detachedFailed(error),
+        );
+      } catch (error) {
+        this.detachedFailed(error);
+      }
+      return;
+    }
+    try {
+      await this.callReport(persistence, make(true));
+    } catch (error) {
+      throw new AuthProviderFailure(this.persistingFailure(error));
+    }
+  }
+
+  /** `persistence.report(report)`, read without running a getter. */
+  private callReport(
+    persistence: ITokenPersistence,
+    report: PersistenceReport,
+  ): unknown {
+    const method = readSafely(persistence, 'report');
+    if (typeof method !== 'function') {
+      throw new AuthProviderFailure(
+        authError.unknown(this.operationOf('persisting-tokens')),
+      );
+    }
+    return Reflect.apply(method, persistence, [report]);
+  }
+
+  /**
+   * What an awaited report's failure ends the renewal with: `unknown`,
+   * `persisting-tokens`, with an allowlisted status or code the thrown
+   * value carries — never anything the strategy minted, relayed as itself
+   * (G6).
+   */
+  private persistingFailure(error: unknown): IAuthProviderError {
+    const of = this.operationOf('persisting-tokens');
+    const classified = this.classified(error, of);
+    return classified.kind === 'unknown' &&
+      classified.facts.operation === 'persisting-tokens'
+      ? classified
+      : authError.unknown(of);
+  }
+
+  /** A detached report failed: logged in fixed words, attributed to nothing. */
+  private detachedFailed(error: unknown): void {
+    logQuietly(() =>
+      this.logger?.warn(
+        '[BaseTokenProvider] Persisting the tokens failed',
+        logFields(classify(error, 'persisting-tokens')),
+      ),
+    );
+  }
+
+  /**
+   * The credential held, as a report carries it: `''` for no access token;
+   * the grant `named` when it is one on the list (a committed result's own),
+   * else this provider's (`readGrant`).
+   */
+  private reportedCredential(named?: unknown): ReportedCredential {
+    return {
+      authorizationToken: this.authorizationToken ?? '',
+      tokenType: this.tokenType ?? 'jwt',
+      authType: isGrant(named) ? named : this.heldGrant(),
+      expiresAt: this.expiresAt,
+    };
   }
 
   /** The credentials held, as a result; undefined without a token. */
@@ -1504,7 +1586,7 @@ export abstract class BaseTokenProvider
     if (authorizationToken === undefined) return undefined;
     return {
       authorizationToken,
-      ...this.heldRefresh(),
+      refreshToken: this.heldRefresh(),
       authType: this.heldGrant(),
       tokenType: this.tokenType ?? 'jwt',
       expiresAt: this.expiresAt,
@@ -1528,31 +1610,16 @@ export abstract class BaseTokenProvider
   }
 
   /**
-   * The refresh token held and its disposition (spec §4.4: every result this
-   * package produces sets it), for a result that is no new commit — a cache
-   * hit, or the credentials in place: a usable one is `'replace'` (what a
-   * 4.x reader infers from its presence, and the same token again); a
-   * discarded one is not handed out — it is never submitted again — and
-   * says `'clear'`, its clearing step queued or not (§6b); none is `'clear'`
-   * while the logical state is `cleared`, else `'keep'`.
+   * The refresh token held, for a result this provider returns (spec
+   * §6c.1, G4): a usable one, else none. A discarded one is not handed out
+   * — it is never submitted again — even while its clearing step still
+   * waits in the queue.
    */
-  private heldRefresh(): Pick<
-    BridgedTokenResult,
-    'refreshToken' | 'refreshTokenDisposition'
-  > {
+  private heldRefresh(): string | undefined {
     const held = this.refreshToken;
-    const present = typeof held === 'string' && held !== '';
-    // Cut after its refresh was dispatched: its clearing step may still wait
-    // in the queue, but the token is already spent — `'clear'` (§6b).
-    const cut = present && this.discarded.has(held);
-    if (present && !cut) {
-      return { refreshToken: held, refreshTokenDisposition: 'replace' };
-    }
-    return {
-      refreshToken: undefined,
-      refreshTokenDisposition:
-        cut || this.refreshState === 'cleared' ? 'clear' : 'keep',
-    };
+    return typeof held === 'string' && held !== '' && !this.discarded.has(held)
+      ? held
+      : undefined;
   }
 
   async validateToken(_token: string, _serviceUrl?: string): Promise<boolean> {
@@ -1698,91 +1765,6 @@ export abstract class BaseTokenProvider
     const now = Date.now();
     const expiresIn = Math.floor((expiresAt - now) / 1000);
     return expiresIn > 0 ? expiresIn : undefined;
-  }
-
-  /**
-   * A new result, told to persistence with its refresh-token disposition
-   * (spec §6b), derived from the logical state: a new usable refresh token
-   * is `'replace'` (state `held`); none is `'clear'` while `cleared`, else
-   * `'keep'`. What `onTokens` is told is also what the renewal returns
-   * (spec §4.4: every result carries its disposition); the hook gets its
-   * own copy, so a hook changing it changes nothing returned.
-   */
-  private async obtained(
-    result: ITokenResult,
-    heldBefore: string | undefined,
-  ): Promise<ITokenResult> {
-    const fresh = result.refreshToken;
-    let refreshToken = fresh;
-    let refreshTokenDisposition: RefreshTokenDisposition;
-    if (typeof fresh === 'string' && fresh !== '') {
-      refreshTokenDisposition = 'replace';
-      this.refreshState = 'held';
-    } else if (this.refreshState === 'cleared') {
-      refreshTokenDisposition = 'clear';
-    } else if (
-      this.pendingReplace &&
-      typeof heldBefore === 'string' &&
-      heldBefore !== '' &&
-      !this.discarded.has(heldBefore)
-    ) {
-      // A 'replace' persistence never heard: said again, with the held one.
-      refreshTokenDisposition = 'replace';
-      refreshToken = heldBefore;
-    } else {
-      refreshTokenDisposition = 'keep';
-    }
-    const told: BridgedTokenResult = {
-      ...result,
-      refreshToken,
-      refreshTokenDisposition,
-    };
-    const delivered = await this.notify(() => ({ ...told }));
-    // Pending until one onTokens succeeds; a new 'replace' or 'clear'
-    // supersedes it (a failed 'clear' stays in the logical state).
-    if (delivered || refreshTokenDisposition === 'clear') {
-      this.pendingReplace = false;
-    } else if (refreshTokenDisposition === 'replace') {
-      this.pendingReplace = true;
-    }
-    return told;
-  }
-
-  /**
-   * The clearing notification of a discarded refresh token: the held access
-   * token unchanged (`''` for none), no refresh token, `'clear'`.
-   */
-  private clearing(): BridgedTokenResult {
-    return {
-      authorizationToken: this.authorizationToken ?? '',
-      refreshToken: undefined,
-      authType: this.getAuthType(),
-      tokenType: this.tokenType ?? 'jwt',
-      expiresAt: this.expiresAt,
-      refreshTokenDisposition: 'clear',
-    };
-  }
-
-  /**
-   * onTokens, best effort: a failure — of the hook, or of building what it
-   * is told (`getAuthType()` is a subclass's) — is logged (H2) and the token
-   * stands; the renewal goes on.
-   */
-  private async notify(build: () => BridgedTokenResult): Promise<boolean> {
-    if (!this.onTokens) return true;
-    try {
-      await this.onTokens(build());
-      return true;
-    } catch (error) {
-      // Fixed words only: the hook holds the tokens, its message is foreign text.
-      logQuietly(() =>
-        this.logger?.warn(
-          '[BaseTokenProvider] onTokens failed; the token stands',
-          logFields(classify(error, 'persisting-tokens')),
-        ),
-      );
-      return false;
-    }
   }
 
   // ---- IAuthProvider: the process calls these, the same for every provider.

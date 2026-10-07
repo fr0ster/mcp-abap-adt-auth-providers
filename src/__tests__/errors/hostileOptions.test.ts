@@ -282,7 +282,7 @@ describe('hostile collaborators never make a constructor throw them', () => {
     'presenter',
     'logger',
     'replayStore',
-    'onTokens',
+    'persistence',
     'signal',
     'cookieProvider',
     'locator',

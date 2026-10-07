@@ -9,12 +9,12 @@ import { afterEach, beforeEach, describe, expect, it } from '@jest/globals';
 import { readFailure } from '@mcp-abap-adt/auth-errors';
 import type {
   IRenewalStrategy,
+  ITokenPersistence,
   RenewalAbortObservation,
   RenewalSituation,
 } from '@mcp-abap-adt/interfaces-auth';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
 import { AuthorizationCodeProvider } from '../../providers/AuthorizationCodeProvider';
-import type { BridgedTokenResult } from '../../providers/BaseTokenProvider';
 import { OidcPasswordProvider } from '../../providers/OidcPasswordProvider';
 import { refreshOnly, refreshThenLogin } from '../../renewal';
 import {
@@ -27,6 +27,7 @@ import {
   type TokenServer,
   waitingStrategy,
 } from '../helpers/attemptHarness';
+import { stateRecorder } from '../helpers/persistence';
 
 const silent: ILogger = {
   debug: () => undefined,
@@ -39,19 +40,6 @@ function expectAborted(thrown: unknown): void {
   const error = readFailure(thrown, 'unfamiliar-error');
   expect(error.kind).toBe('interactive-login');
   expect(error.facts).toMatchObject({ outcome: 'aborted' });
-}
-
-type Seen = [string, string | undefined, string | undefined];
-function recorder() {
-  const seen: Seen[] = [];
-  const onTokens = async (result: BridgedTokenResult) => {
-    seen.push([
-      result.authorizationToken,
-      result.refreshToken,
-      result.refreshTokenDisposition,
-    ]);
-  };
-  return { seen, onTokens };
 }
 
 /** `inner`'s decisions, with every observation recorded. */
@@ -96,7 +84,7 @@ describe('a refresh cut before dispatch (OIDC, discovery held open)', () => {
   });
 
   it('nothing reached the token endpoint, R is not discarded, and the next renewal sends R', async () => {
-    const { seen, onTokens } = recorder();
+    const { seen, persistence } = stateRecorder();
     const { strategy, observed } = observing(refreshThenLogin());
     const provider = new OidcPasswordProvider({
       renewal: strategy,
@@ -107,7 +95,7 @@ describe('a refresh cut before dispatch (OIDC, discovery held open)', () => {
       accessToken: expired('held'),
       refreshToken: 'R',
       logger: silent,
-      onTokens,
+      persistence,
     });
     const only = new AbortController();
     const cut = rejectionOf(provider.getTokens({ signal: only.signal }));
@@ -171,7 +159,7 @@ describe('the server answers the token endpoint', () => {
 
   function codeProvider(
     renewal: IRenewalStrategy,
-    extra: { onTokens?: (r: BridgedTokenResult) => Promise<void> } = {},
+    extra: { persistence?: ITokenPersistence } = {},
     strategy = waitingStrategy(),
   ) {
     const p = new AuthorizationCodeProvider({
@@ -189,7 +177,7 @@ describe('the server answers the token endpoint', () => {
   }
 
   it('a refresh cut after dispatch with ifCut keep: the replacement sends R again, and a late R2 still commits', async () => {
-    const { seen, onTokens } = recorder();
+    const { seen, persistence } = stateRecorder();
     const keep: IRenewalStrategy = {
       next: (situation: RenewalSituation) =>
         situation.steps.length === 0 && situation.canRefresh
@@ -199,7 +187,7 @@ describe('the server answers the token endpoint', () => {
             : { next: 'stop', sentRefreshToken: 'keep' },
     };
     const { strategy, observed } = observing(keep);
-    const { p } = codeProvider(strategy, { onTokens });
+    const { p } = codeProvider(strategy, { persistence });
     const only = new AbortController();
     const cut = rejectionOf(p.getTokens({ signal: only.signal }));
     const late = await refreshes.nth(1);
@@ -238,7 +226,7 @@ describe('the server answers the token endpoint', () => {
           : request.answer(200, { access_token: jwt('again') });
       const LOGIN = expired('login');
       codeAnswer = { access_token: LOGIN };
-      const { seen, onTokens } = recorder();
+      const { seen, persistence } = stateRecorder();
       const keepThenLogin: IRenewalStrategy = {
         next: (situation) => {
           const last = situation.steps.at(-1);
@@ -249,7 +237,7 @@ describe('the server answers the token endpoint', () => {
           return { next: 'stop' };
         },
       };
-      const { p, strategy } = codeProvider(keepThenLogin, { onTokens });
+      const { p, strategy } = codeProvider(keepThenLogin, { persistence });
       const first = p.getTokens();
       (await strategy.nth(1)).answer('code-1');
       await expect(first).resolves.toMatchObject({ refreshToken: 'R' });

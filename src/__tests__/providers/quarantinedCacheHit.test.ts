@@ -1,12 +1,13 @@
 /**
- * Spec §4.4 / §6b (Task 27 review): a cache hit while a refresh token is
+ * Spec §6b / §6c.1 (Task 27 review): a cache hit while a refresh token is
  * quarantined — cut after its refresh was dispatched, its clearing step still
- * queued behind a stalled `onTokens` — never hands that refresh token out,
- * and says `'clear'`: the token was cut, so a stored copy must go.
+ * queued behind a stalled persistence report — never hands that refresh
+ * token out; once the queue drains, the discard is reported, and the shipped
+ * strategy writes `null`: the token was cut, so a stored copy must go.
  *
  * Scenario (the reviewer's q.cjs):
  *   1. a login installs R0; a refresh of R0 answers T1 / R1, and that
- *      commit's `onTokens` stalls;
+ *      commit's report stalls;
  *   2. the first refresh's waiter aborts;
  *   3. a second refresh dispatches R1 (it never answers) and its waiter
  *      aborts: R1 is quarantined, `discard(R1)` waits in the queue;
@@ -18,6 +19,7 @@ import type {
   ITokenResult,
   OAuth2GrantType,
 } from '@mcp-abap-adt/interfaces-auth';
+import { refreshStatePersistence } from '../../persistence';
 import { BaseTokenProvider } from '../../providers/BaseTokenProvider';
 import { refreshThenLogin } from '../../renewal';
 
@@ -36,15 +38,18 @@ class Stalling extends BaseTokenProvider {
   constructor() {
     super({
       renewal: refreshThenLogin(),
-      onTokens: async (r) => {
-        this.told.push(`${r.refreshTokenDisposition}:${r.refreshToken}`);
-        if (this.stall) {
-          this.stall = false;
-          await new Promise<void>((resolve) => {
-            this.release = resolve;
-          });
-        }
-      },
+      persistence: refreshStatePersistence(
+        async (written) => {
+          this.told.push(String(written.refreshToken));
+          if (this.stall) {
+            this.stall = false;
+            await new Promise<void>((resolve) => {
+              this.release = resolve;
+            });
+          }
+        },
+        { onWriteFailure: 'continue' },
+      ),
     });
   }
   protected getAuthType(): OAuth2GrantType {
@@ -76,7 +81,7 @@ class Stalling extends BaseTokenProvider {
 }
 
 describe('a cache hit while the held refresh token is quarantined', () => {
-  it('hands out no refresh token and says clear, before and after the queue drains', async () => {
+  it('hands out no refresh token, before and after the queue drains; the drained discard writes null', async () => {
     const p = new Stalling();
     await p.getTokens(); // R0 held
     p.stall = true;
@@ -94,13 +99,13 @@ describe('a cache hit while the held refresh token is quarantined', () => {
     const hit = await p.getTokens();
     expect(Object.hasOwn(hit, 'refreshToken')).toBe(true);
     expect(hit.refreshToken).toBeUndefined();
-    expect(hit.refreshTokenDisposition).toBe('clear');
+    // Not yet reported: the clearing step waits behind the stalled report.
+    expect(p.told).toEqual(['R0', 'R1']);
 
     p.release?.();
     await turns(10);
     const drained = await p.getTokens();
     expect(drained.refreshToken).toBeUndefined();
-    expect(drained.refreshTokenDisposition).toBe('clear');
-    expect(p.told).toContain('clear:undefined');
+    expect(p.told).toEqual(['R0', 'R1', 'null']);
   });
 });

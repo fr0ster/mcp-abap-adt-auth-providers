@@ -277,7 +277,7 @@ function rows(lib: typeof Lib): Row[] {
       ? { debug: fail, info: fail, warn: fail, error: fail }
       : undefined;
   };
-  const onTokens = (w: Wiring) => w.hostile('onTokens');
+  const report = (w: Wiring) => w.hostile('persistence report');
   const clientAuthentication = (w: Wiring) => {
     const authenticate = w.hostile('client authentication');
     if (authenticate) return { authenticate };
@@ -299,7 +299,7 @@ function rows(lib: typeof Lib): Row[] {
     return auth ? { clientAuthentication: auth } : { clientSecret: 's' };
   };
   const hooks = (w: Wiring) => ({
-    ...(onTokens(w) ? { onTokens: onTokens(w) } : {}),
+    ...(report(w) ? { persistence: { report: report(w) } } : {}),
     ...(logger(w) ? { logger: logger(w) } : {}),
   });
   /** The interactive strategy, or a browser strategy with a hostile part. */
@@ -326,7 +326,7 @@ function rows(lib: typeof Lib): Row[] {
   };
   const TOKEN_COMMON = [
     'logger',
-    'onTokens',
+    'persistence report',
     'logon target',
     'request target',
     'target object',

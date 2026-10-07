@@ -171,7 +171,7 @@ const SPEC_COLLABORATORS = [
   'device-code presenter',
   'assertion validator',
   'replay store',
-  'onTokens',
+  'persistence report',
   'browser launcher',
   'snc locator',
   'snc probe',

@@ -2,10 +2,10 @@
  * What an attempt commits (spec §6b): one serialized commit queue per
  * provider, two watermarks (pin, credential), a late result of an aborted
  * attempt changing nothing — but a refresh's answer, which is the server's
- * state, committed when nothing newer was — the refresh-token disposition
- * every credential notification carries, and a failed notification kept
- * pending. The grant calls are scripted promises the test settles; the base
- * class runs as shipped.
+ * state, committed when nothing newer was — and what the shipped
+ * persistence strategy (`refreshStatePersistence`) writes for the reports
+ * the commits make, a failed write kept pending. The grant calls are
+ * scripted promises the test settles; the base class runs as shipped.
  */
 
 import { describe, expect, it, jest } from '@jest/globals';
@@ -16,7 +16,7 @@ import type {
   ITokenResult,
 } from '@mcp-abap-adt/interfaces-auth';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
-import type { BridgedTokenResult } from '../../providers/BaseTokenProvider';
+import { refreshStatePersistence } from '../../persistence';
 import { refreshThenLogin } from '../../renewal';
 import {
   Arrivals,
@@ -31,6 +31,7 @@ import {
   otherCertificate,
   thumbprintOf,
 } from '../helpers/certificates';
+import { type Seen, seenOf } from '../helpers/persistence';
 import { ScriptedProvider, tokens } from '../helpers/scriptedProvider';
 
 /**
@@ -54,21 +55,25 @@ function isAborted(error: unknown): boolean {
   );
 }
 
-/** What onTokens saw: access token, refresh token, disposition. */
-type Seen = [string, string | undefined, string | undefined];
-function recorder() {
+/**
+ * `refreshStatePersistence` over a write that records what it was told
+ * (`Seen`), then runs `during` — which may hold the write or fail it.
+ */
+function recorder(
+  during: (one: Seen) => Promise<void> | void = () => undefined,
+) {
   const seen: Seen[] = [];
   const notified = new Arrivals<Seen>();
-  const onTokens = async (result: BridgedTokenResult) => {
-    const one: Seen = [
-      result.authorizationToken,
-      result.refreshToken,
-      result.refreshTokenDisposition,
-    ];
-    seen.push(one);
-    notified.push(one);
-  };
-  return { seen, notified, onTokens };
+  const persistence = refreshStatePersistence(
+    async (written) => {
+      const one = seenOf(written);
+      seen.push(one);
+      notified.push(one);
+      await during(one);
+    },
+    { onWriteFailure: 'continue' },
+  );
+  return { seen, notified, persistence };
 }
 
 const b64url = (value: object) =>
@@ -82,10 +87,10 @@ const boundTo = (thumbprint: string, subject: string) =>
 
 describe('the doomed-join window', () => {
   it('every waiter aborts while the login is outstanding: a new caller starts afresh; the late result changes nothing', async () => {
-    const { seen, onTokens } = recorder();
+    const { seen, persistence } = recorder();
     const provider = new ScriptedProvider({
       renewal: refreshThenLogin(),
-      onTokens,
+      persistence,
     });
     const only = new AbortController();
     const doomed = rejectionOf(provider.getTokens({ signal: only.signal }));
@@ -187,19 +192,21 @@ describe('the doomed-join window, alone', () => {
 });
 
 describe('the commit queue', () => {
-  it('commits run one at a time, in order: a renewal whose onTokens is held delays the next one; the newest is persisted last', async () => {
+  it('commits run one at a time, in order: a renewal whose report is held delays the next one; the newest is persisted last', async () => {
     const hooks = new Arrivals<{ access: string; done: Deferred<void> }>();
     let active = 0;
     let most = 0;
     const provider = new ScriptedProvider({
       renewal: refreshThenLogin(),
-      onTokens: async (result) => {
-        active += 1;
-        most = Math.max(most, active);
-        const done = deferred();
-        hooks.push({ access: result.authorizationToken, done });
-        await done.promise;
-        active -= 1;
+      persistence: {
+        report: async (report) => {
+          active += 1;
+          most = Math.max(most, active);
+          const done = deferred();
+          hooks.push({ access: report.credential.authorizationToken, done });
+          await done.promise;
+          active -= 1;
+        },
       },
     });
     const first = new AbortController();
@@ -207,7 +214,7 @@ describe('the commit queue', () => {
     const login1 = await provider.logins.nth(1);
     const T1 = jwt('one');
     login1.result.resolve(tokens(T1, 'R1'));
-    // The first commit has begun: it is in its onTokens.
+    // The first commit has begun: it is in its report.
     await hooks.nth(1);
     expect(hooks.items.map((h) => h.access)).toEqual([T1]);
     first.abort();
@@ -233,7 +240,7 @@ describe('the commit queue', () => {
   });
 
   it('an older-generation commit arriving after a newer one is discarded whole', async () => {
-    const { seen, onTokens } = recorder();
+    const { seen, persistence } = recorder();
     const lines: string[] = [];
     const logger: ILogger = {
       debug: () => undefined,
@@ -246,7 +253,7 @@ describe('the commit queue', () => {
     const T0 = jwt('zero', -3600);
     const provider = new ScriptedProvider({
       renewal: refreshThenLogin(),
-      onTokens,
+      persistence,
       logger,
       accessToken: T0,
       refreshToken: 'R0',
@@ -264,7 +271,7 @@ describe('the commit queue', () => {
     login.result.resolve(tokens(T2, 'R2'));
     await expect(newer).resolves.toMatchObject({ authorizationToken: T2 });
 
-    // The older refresh answers late: discarded, nothing applied, no hook.
+    // The older refresh answers late: discarded, nothing applied, no report.
     refresh.result.resolve(tokens(jwt('late'), 'R1'));
     await quiet();
     expect(provider.held()).toMatchObject({ access: T2, refresh: 'R2' });
@@ -280,7 +287,7 @@ describe('the commit queue', () => {
     expect(lines.filter((l) => l.includes('Tokens updated'))).toHaveLength(1);
   });
 
-  it('an applied refresh writes its progress lines once, after the tokens and before onTokens', async () => {
+  it('an applied refresh writes its progress lines once, after the tokens and before the report', async () => {
     const order: string[] = [];
     const logger: ILogger = {
       debug: () => undefined,
@@ -295,8 +302,10 @@ describe('the commit queue', () => {
       logger,
       accessToken: jwt('old', -3600),
       refreshToken: 'R0',
-      onTokens: async () => {
-        order.push('onTokens');
+      persistence: {
+        report: () => {
+          order.push('report');
+        },
       },
     });
     const renewed = provider.getTokens();
@@ -304,14 +313,14 @@ describe('the commit queue', () => {
     await renewed;
     const relevant = order.filter(
       (l) =>
-        l === 'onTokens' ||
+        l === 'report' ||
         l.includes('Tokens updated') ||
         l.includes('Token refreshed successfully'),
     );
     expect(relevant).toEqual([
       '[BaseTokenProvider] Tokens updated',
       '[BaseTokenProvider] Token refreshed successfully',
-      'onTokens',
+      'report',
     ]);
   });
 });
@@ -327,11 +336,11 @@ describe('separate watermarks: the pin commit and the credential commit', () => 
   };
 
   it('a first login on an unpinned provider: tokens persisted once, material pinned once, markIfElsewhere sees that pin', async () => {
-    const { seen, onTokens } = recorder();
+    const { seen, persistence } = recorder();
     const { reads, strategy } = pinningStrategy();
     const provider = new ScriptedProvider({
       renewal: refreshThenLogin(),
-      onTokens,
+      persistence,
       clientAuthentication: strategy,
     });
     const renewed = rejectionOf(provider.getTokens());
@@ -358,11 +367,11 @@ describe('separate watermarks: the pin commit and the credential commit', () => 
   });
 
   it('a refresh of a seeded token on an unpinned provider: the same', async () => {
-    const { seen, onTokens } = recorder();
+    const { seen, persistence } = recorder();
     const { reads, strategy } = pinningStrategy();
     const provider = new ScriptedProvider({
       renewal: refreshThenLogin(),
-      onTokens,
+      persistence,
       clientAuthentication: strategy,
       accessToken: jwt('seeded', -3600),
       refreshToken: 'R0',
@@ -387,12 +396,12 @@ describe('separate watermarks: the pin commit and the credential commit', () => 
   });
 });
 
-describe('dispositions', () => {
-  it("a refresh returning a new token: 'replace'", async () => {
-    const { seen, onTokens } = recorder();
+describe('what refreshStatePersistence writes', () => {
+  it('a refresh returning a new token: written', async () => {
+    const { seen, persistence } = recorder();
     const provider = new ScriptedProvider({
       renewal: refreshThenLogin(),
-      onTokens,
+      persistence,
       accessToken: jwt('old', -3600),
       refreshToken: 'R0',
     });
@@ -403,11 +412,11 @@ describe('dispositions', () => {
     expect(seen).toEqual([[T1, 'R1', 'replace']]);
   });
 
-  it("a result with none and nothing cut: 'keep'", async () => {
-    const { seen, onTokens } = recorder();
+  it('a result with none and nothing cut: the stored one left (undefined)', async () => {
+    const { seen, persistence } = recorder();
     const provider = new ScriptedProvider({
       renewal: refreshThenLogin(),
-      onTokens,
+      persistence,
     });
     const renewed = provider.getTokens();
     const T1 = jwt('token-only');
@@ -416,12 +425,12 @@ describe('dispositions', () => {
     expect(seen).toEqual([[T1, undefined, 'keep']]);
   });
 
-  it("the queued clearing step of a cut: onTokens once with 'clear' and the held access token", async () => {
-    const { seen, notified, onTokens } = recorder();
+  it('the queued clearing step of a cut: one write of null with the held access token', async () => {
+    const { seen, notified, persistence } = recorder();
     const T0 = jwt('held', -3600);
     const provider = new ScriptedProvider({
       renewal: refreshThenLogin(),
-      onTokens,
+      persistence,
       accessToken: T0,
       refreshToken: 'R0',
     });
@@ -438,26 +447,21 @@ describe('dispositions', () => {
   });
 });
 
-describe('a failed notification stays pending', () => {
-  it("the clearing step's onTokens throws: the next token-only commit says 'clear' again, not 'keep'", async () => {
-    const seen: Seen[] = [];
+describe('a failed write stays pending', () => {
+  it("the clearing step's write fails: the next token-only commit writes null again, not undefined", async () => {
     let fail = true;
+    const { seen, persistence } = recorder(() => {
+      if (fail) {
+        fail = false;
+        throw new Error('store unavailable');
+      }
+    });
     const T0 = jwt('held', -3600);
     const provider = new ScriptedProvider({
       renewal: refreshThenLogin(),
       accessToken: T0,
       refreshToken: 'R0',
-      onTokens: async (result) => {
-        seen.push([
-          result.authorizationToken,
-          result.refreshToken,
-          result.refreshTokenDisposition,
-        ]);
-        if (fail) {
-          fail = false;
-          throw new Error('store unavailable');
-        }
-      },
+      persistence,
     });
     const only = new AbortController();
     const cut = rejectionOf(provider.getTokens({ signal: only.signal }));
@@ -474,24 +478,19 @@ describe('a failed notification stays pending', () => {
     ]);
   });
 
-  it("a failed 'replace' is sent again as 'replace' with the held token", async () => {
-    const seen: Seen[] = [];
+  it('a failed new refresh token is written again with that token', async () => {
     let fail = true;
+    const { seen, persistence } = recorder(() => {
+      if (fail) {
+        fail = false;
+        throw new Error('store unavailable');
+      }
+    });
     const provider = new ScriptedProvider({
       renewal: refreshThenLogin(),
       accessToken: jwt('held', -3600),
       refreshToken: 'R0',
-      onTokens: async (result) => {
-        seen.push([
-          result.authorizationToken,
-          result.refreshToken,
-          result.refreshTokenDisposition,
-        ]);
-        if (fail) {
-          fail = false;
-          throw new Error('store unavailable');
-        }
-      },
+      persistence,
     });
     const T1 = jwt('one');
     const first = provider.getTokens();
@@ -511,25 +510,20 @@ describe('a failed notification stays pending', () => {
     ]);
   });
 
-  it("a new 'replace' supersedes a pending 'clear'", async () => {
-    const seen: Seen[] = [];
+  it('a new refresh token supersedes a pending clear', async () => {
     let fail = true;
+    const { seen, persistence } = recorder(() => {
+      if (fail) {
+        fail = false;
+        throw new Error('store unavailable');
+      }
+    });
     const T0 = jwt('held', -3600);
     const provider = new ScriptedProvider({
       renewal: refreshThenLogin(),
       accessToken: T0,
       refreshToken: 'R0',
-      onTokens: async (result) => {
-        seen.push([
-          result.authorizationToken,
-          result.refreshToken,
-          result.refreshTokenDisposition,
-        ]);
-        if (fail) {
-          fail = false;
-          throw new Error('store unavailable');
-        }
-      },
+      persistence,
     });
     const only = new AbortController();
     const cut = rejectionOf(provider.getTokens({ signal: only.signal }));
@@ -552,25 +546,20 @@ describe('a failed notification stays pending', () => {
     ]);
   });
 
-  it("a refused refresh's clearing step runs through the queue, after a held earlier commit; the token-only login after it says 'clear'", async () => {
-    const seen: Seen[] = [];
+  it("a refused refresh's clearing step runs through the queue, after a held earlier commit; the token-only login after it writes null", async () => {
     const firstCall = deferred<void>();
     const held = deferred();
     let holdFirst = true;
+    const { seen, persistence } = recorder(async () => {
+      firstCall.resolve();
+      if (holdFirst) {
+        holdFirst = false;
+        await held.promise;
+      }
+    });
     const provider = new ScriptedProvider({
       renewal: refreshThenLogin(),
-      onTokens: async (result) => {
-        firstCall.resolve();
-        seen.push([
-          result.authorizationToken,
-          result.refreshToken,
-          result.refreshTokenDisposition,
-        ]);
-        if (holdFirst) {
-          holdFirst = false;
-          await held.promise;
-        }
-      },
+      persistence,
     });
     const first = new AbortController();
     const older = rejectionOf(provider.getTokens({ signal: first.signal }));

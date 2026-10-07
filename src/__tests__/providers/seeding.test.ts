@@ -10,6 +10,7 @@ import type {
   IAuthorizationStrategy,
   IAuthRejection,
   ITokenResult,
+  PersistenceReport,
 } from '@mcp-abap-adt/interfaces-auth';
 import { AuthorizationCodeProvider } from '../../providers/AuthorizationCodeProvider';
 import type { BaseTokenProvider } from '../../providers/BaseTokenProvider';
@@ -56,7 +57,7 @@ function samlPure(
     expiresAt: new Date(loginExpiresAt),
   }));
   const cookieProvider = jest.fn(async () => loginCookies);
-  const onTokens = jest.fn(async (_result: ITokenResult) => {});
+  const report = jest.fn(async (_report: PersistenceReport) => {});
   const provider = new Saml2PureProvider({
     renewal: refreshThenLogin(),
     idpSsoUrl: 'https://idp/sso',
@@ -65,10 +66,10 @@ function samlPure(
     authorization: { authorize },
     assertionValidator: { validate } as unknown as IAssertionValidator,
     cookieProvider,
-    onTokens,
+    persistence: { report },
     ...seed,
   });
-  return { provider, authorize, cookieProvider, onTokens, loginExpiresAt };
+  return { provider, authorize, cookieProvider, report, loginExpiresAt };
 }
 
 describe('Saml2PureProvider seeded with stored cookies', () => {
@@ -169,27 +170,31 @@ describe('Saml2PureProvider seeded with stored cookies', () => {
     expect(tokens.authorizationToken).toBe(NEW_COOKIES);
   });
 
-  it('onTokens after the login carries the new cookies and their expiresAt', async () => {
-    const { provider, onTokens, loginExpiresAt } = samlPure({
+  it('the report after the login carries the new cookies and their expiresAt', async () => {
+    const { provider, report, loginExpiresAt } = samlPure({
       accessToken: STORED_COOKIES,
       expiresAt: Date.now() - 1,
     });
     await provider.getTokens();
-    expect(onTokens).toHaveBeenCalledTimes(1);
-    expect(onTokens.mock.calls[0]![0]).toMatchObject({
-      authorizationToken: NEW_COOKIES,
-      tokenType: 'saml',
-      expiresAt: loginExpiresAt,
+    expect(report).toHaveBeenCalledTimes(1);
+    expect(report.mock.calls[0]![0]).toMatchObject({
+      event: 'credential',
+      credential: {
+        authorizationToken: NEW_COOKIES,
+        tokenType: 'saml',
+        expiresAt: loginExpiresAt,
+      },
+      awaited: true,
     });
   });
 
-  it('a seed is not new: onTokens is not called while the stored cookies are reused', async () => {
-    const { provider, onTokens } = samlPure({
+  it('a seed is not new: nothing is reported while the stored cookies are reused', async () => {
+    const { provider, report } = samlPure({
       accessToken: STORED_COOKIES,
       expiresAt: Date.now() + HOUR,
     });
     await provider.getTokens();
-    expect(onTokens).not.toHaveBeenCalled();
+    expect(report).not.toHaveBeenCalled();
   });
 });
 

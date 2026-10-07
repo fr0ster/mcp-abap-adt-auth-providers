@@ -24,6 +24,7 @@ import {
   privateKeyJwt,
   tlsClientCertificate,
 } from '../../clientAuthentication';
+import { refreshStatePersistence } from '../../persistence';
 import { AuthorizationCodeProvider } from '../../providers/AuthorizationCodeProvider';
 import { OidcDeviceFlowProvider } from '../../providers/OidcDeviceFlowProvider';
 import { Saml2BearerProvider } from '../../providers/Saml2BearerProvider';
@@ -31,6 +32,8 @@ import { Saml2PureProvider } from '../../providers/Saml2PureProvider';
 import { refreshThenLogin } from '../../renewal';
 import { SncLogonProvider } from '../../snc/SncLogonProvider';
 import { browserCallbackStrategy, staticCodeStrategy } from '../../strategies';
+import { jwt, quiet, rejectionOf } from '../helpers/attemptHarness';
+import { ScriptedProvider, tokens } from '../helpers/scriptedProvider';
 import { SITES, tokenReply } from '../helpers/tokenRequestSites';
 
 // Automocked, but with axios's own error class: the sites throw it.
@@ -136,6 +139,44 @@ describe('no token in the logs', () => {
     }
     // What is logged instead says a token was there, and how long it was.
     expect(all).toContain(`<redacted, ${REFRESH_TOKEN.length} chars>`);
+  });
+
+  it('the tokens persistence is handed reach no log line — the provider’s, or the shipped strategy’s on a failed write', async () => {
+    const { logger, lines } = recordingLogger();
+    const NEW_ACCESS = jwt('new-access-token-value');
+    const NEW_REFRESH = 'f9e8d7c6b5a4f3e2d1c0b9a8f7e6d5c4-n';
+    let failures = 2;
+    const provider = new ScriptedProvider({
+      renewal: refreshThenLogin(),
+      accessToken: jwt('held', -3600),
+      refreshToken: REFRESH_TOKEN,
+      logger,
+      persistence: refreshStatePersistence(
+        async () => {
+          if (failures-- > 0) throw new Error('store unavailable');
+        },
+        { onWriteFailure: 'continue', logger },
+      ),
+    });
+    const first = provider.getTokens();
+    (await provider.refreshes.nth(1)).result.resolve(
+      tokens(NEW_ACCESS, NEW_REFRESH),
+    );
+    await first;
+    // The next report delivers the pending refresh token again, and fails.
+    provider.expire();
+    const second = provider.getTokens();
+    (await provider.refreshes.nth(2)).result.resolve(tokens(jwt('third')));
+    await second;
+    const all = lines.join('\n');
+    expect(all).toContain(
+      '[refreshStatePersistence] Writing the tokens failed',
+    );
+    for (const secret of [NEW_ACCESS, NEW_REFRESH, REFRESH_TOKEN]) {
+      for (const window of windows(secret)) {
+        expect(all).not.toContain(window);
+      }
+    }
   });
 
   it('logs no part of seeded cookies, or of an opaque token seeded with expiresAt', async () => {
@@ -337,8 +378,8 @@ describe('no secret of a client authentication in the logs', () => {
  * No message of a thrown value reaches a log line (spec A.8, rows H1–H8,
  * H10). A collaborator the consumer supplies — a client-authentication
  * strategy, a certificate loader, the interactive strategy, a device-code
- * presenter, a SAML validator, `onTokens`, a browser launcher, an SNC locator
- * or probe — may throw an error whose text holds a key, a passphrase or a
+ * presenter, a SAML validator, a persistence strategy (and the shipped one's
+ * `write`), a browser launcher, an SNC locator or probe — may throw an error whose text holds a key, a passphrase or a
  * token, and so may a network failure. A line about a failure carries
  * `logFields` of its classified error — `{ error: reason, kind, status?,
  * diagnostics? }` — and nothing else of it: never its message.
@@ -513,15 +554,30 @@ describe('no message of a thrown error in the logs', () => {
       },
     ],
     [
-      'H2 — onTokens that throws',
+      'H2 — a persistence strategy whose awaited report throws',
       (logger, kind) =>
         codeProvider(logger, {
-          onTokens: async () => {
-            throw thrown(kind);
+          persistence: {
+            report: async () => {
+              throw thrown(kind);
+            },
           },
         }),
+      undefined,
+    ],
+    [
+      "H2 — refreshStatePersistence whose write throws, logging to the provider's logger",
+      (logger, kind) =>
+        codeProvider(logger, {
+          persistence: refreshStatePersistence(
+            async () => {
+              throw thrown(kind);
+            },
+            { onWriteFailure: 'fail', logger },
+          ),
+        }),
       {
-        message: '[BaseTokenProvider] onTokens failed; the token stands',
+        message: '[refreshStatePersistence] Writing the tokens failed',
         fields: {
           error: 'persisting the tokens failed (unknown error)',
           kind: 'unknown',
@@ -630,6 +686,40 @@ describe('no message of a thrown error in the logs', () => {
       }
     });
   });
+
+  it.each(['Error', 'string'] as const)(
+    'H2 — a detached report that throws %s: one line of logFields, no marker',
+    async (kind) => {
+      const { logger, entries } = recordingLogger();
+      const provider = new ScriptedProvider({
+        renewal: refreshThenLogin(),
+        accessToken: jwt('held', -3600),
+        refreshToken: REFRESH_TOKEN,
+        logger,
+        persistence: {
+          report: (report) => {
+            if (!report.awaited) throw thrown(kind);
+          },
+        },
+      });
+      const only = new AbortController();
+      const cut = rejectionOf(provider.getTokens({ signal: only.signal }));
+      await provider.refreshes.nth(1);
+      only.abort();
+      await cut;
+      await quiet();
+      expectOnlyLogFields(entries);
+      const failed = entries.filter(
+        (e) => e.message === '[BaseTokenProvider] Persisting the tokens failed',
+      );
+      expect(failed.map((e) => e.meta)).toEqual([
+        {
+          error: 'persisting the tokens failed (unknown error)',
+          kind: 'unknown',
+        },
+      ]);
+    },
+  );
 
   it('H4, H5 — an SNC locator and probe that throw', async () => {
     const { logger, entries } = recordingLogger();
