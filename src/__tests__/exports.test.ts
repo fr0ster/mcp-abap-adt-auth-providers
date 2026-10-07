@@ -122,3 +122,11 @@ describe('public exports — renewal strategies (spec §6c.8)', () => {
     },
   );
 });
+
+describe('public exports — the persistence strategy (spec §6c.8)', () => {
+  it('exports refreshStatePersistence', () => {
+    expect(
+      typeof (surface as Record<string, unknown>).refreshStatePersistence,
+    ).toBe('function');
+  });
+});

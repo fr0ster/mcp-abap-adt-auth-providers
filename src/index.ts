@@ -30,6 +30,12 @@ export {
   type DeviceCodePrompt,
   type IDeviceCodePresenter,
 } from './deviceCode/DeviceCodePresenter';
+// The persistence strategy — or bring your own ITokenPersistence.
+export {
+  type PersistedTokens,
+  type RefreshStatePersistenceOptions,
+  refreshStatePersistence,
+} from './persistence';
 export type {
   AuthorizationCodeProviderConfig,
   ClientCredentialsProviderConfig,
