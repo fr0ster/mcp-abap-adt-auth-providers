@@ -142,70 +142,85 @@ function bindFailure(error: unknown, port: number): Error {
   return failedLogin(error);
 }
 
-/** An authority (`host` or `host:port`), its host lowercased. */
+/**
+ * An authority (`host` or `host:port`) in canonical form: the hostname as
+ * the WHATWG URL host parser gives it (lowercased, `127.1` → `127.0.0.1`,
+ * `[0:0:0:0:0:0:0:1]` → `[::1]`, IDNA applied), one trailing dot dropped.
+ */
 interface Authority {
   readonly host: string;
+  /** `undefined` when the text named no port. */
   readonly port: number | undefined;
+  /** `localhost`, `127.0.0.0/8`, `[::1]` or `[::ffff:127.x.y.z]`. */
+  readonly loopback: boolean;
+  /** `0.0.0.0` or `[::]`: a bind address, never an authority. */
+  readonly unspecified: boolean;
 }
 
+/** Characters that make a text more than an authority. */
+const NOT_AUTHORITY = new Set(['@', '/', '\\', '?', '#']);
+
 /**
- * Reads `host[:port]` or `[v6]:port` by plain code — a `Host` header is
- * anyone's text. `undefined` for anything else: no host, a bare IPv6
- * address, a port that is not 0..65535 in digits.
+ * Reads `host[:port]` through the WHATWG URL host parser — a `Host` header
+ * is anyone's text, so the platform's parser, never a regex, decides what
+ * host it names. `undefined` for anything that is not exactly an authority:
+ * userinfo, a path, a query or fragment, whitespace, an empty or
+ * out-of-range port, a host the parser refuses.
+ *
+ * @internal - Exported for the paste hint and for testing.
  */
 export function parseAuthority(value: unknown): Authority | undefined {
-  if (typeof value !== 'string') return undefined;
-  const text = value.toLowerCase();
-  let host: string;
-  let rest: string;
-  if (text.startsWith('[')) {
-    const close = text.indexOf(']');
-    if (close < 0) return undefined;
-    host = text.slice(0, close + 1);
-    rest = text.slice(close + 1);
-  } else {
-    const colon = text.indexOf(':');
-    if (colon !== text.lastIndexOf(':')) return undefined;
-    host = colon < 0 ? text : text.slice(0, colon);
-    rest = colon < 0 ? '' : text.slice(colon);
+  if (typeof value !== 'string' || value === '') return undefined;
+  for (const character of value) {
+    if (NOT_AUTHORITY.has(character) || character.trim() === '') {
+      return undefined;
+    }
   }
-  if (!hostCharacters(host)) return undefined;
-  if (rest === '') return { host, port: undefined };
-  const digits = rest.slice(1);
-  if (
-    !rest.startsWith(':') ||
-    digits === '' ||
-    digits.length > 5 ||
-    [...digits].some((digit) => digit < '0' || digit > '9')
-  ) {
+  let url: URL;
+  try {
+    url = new URL(`http://${value}`);
+  } catch {
     return undefined;
   }
-  const port = Number(digits);
-  return port > 65535 ? undefined : { host, port };
+  if (url.pathname !== '/' || url.username !== '' || url.password !== '') {
+    return undefined;
+  }
+  // Whether the text named a port: a `:` after the host (after `]` for a
+  // bracketed IPv6 address). The parser turns `:80` into no port at all.
+  const close = value.lastIndexOf(']');
+  const named = value.indexOf(':', close < 0 ? 0 : close) >= 0;
+  if (named && value.endsWith(':')) return undefined;
+  const port = named ? Number(url.port === '' ? 80 : url.port) : undefined;
+  const host = url.hostname.endsWith('.')
+    ? url.hostname.slice(0, -1)
+    : url.hostname;
+  if (host === '') return undefined;
+  return {
+    host,
+    port,
+    loopback: loopbackHost(host),
+    unspecified: host === '0.0.0.0' || host === '[::]',
+  };
 }
 
 /**
- * A DNS name or IPv4 address (letters, digits, `.`, `-`), or a bracketed
- * IPv6 address (hex digits, `:`, `.`): nothing else is a host here.
+ * Whether a canonical hostname is loopback: `localhost`, an IPv4 address in
+ * `127.0.0.0/8`, `[::1]`, or an IPv4-mapped `[::ffff:7fXX:XXXX]` (the
+ * parser's form of `::ffff:127.x.y.z`).
  */
-function hostCharacters(host: string): boolean {
-  const bracketed = host.startsWith('[');
-  const inner = bracketed ? host.slice(1, -1) : host;
-  if (inner === '') return false;
-  for (const character of inner) {
-    const digit = character >= '0' && character <= '9';
-    const allowed = bracketed
-      ? digit ||
-        (character >= 'a' && character <= 'f') ||
-        character === ':' ||
-        character === '.'
-      : digit ||
-        (character >= 'a' && character <= 'z') ||
-        character === '.' ||
-        character === '-';
-    if (!allowed) return false;
-  }
-  return true;
+function loopbackHost(host: string): boolean {
+  if (host === 'localhost' || host === '[::1]') return true;
+  if (isLoopbackPeer(host)) return true;
+  const mapped = '[::ffff:';
+  if (!host.startsWith(mapped) || !host.endsWith(']')) return false;
+  const groups = host.slice(mapped.length, -1).split(':');
+  const high = groups[0];
+  return (
+    groups.length === 2 &&
+    high !== undefined &&
+    high.length === 4 &&
+    high.startsWith('7f')
+  );
 }
 
 /**
@@ -227,14 +242,17 @@ export function isLoopbackPeer(address: unknown): boolean {
   return parts[0] === '127';
 }
 
-/** The names a browser on this machine uses for the loopback transport. */
-const LOOPBACK_NAMES: readonly string[] = ['localhost', '127.0.0.1', '[::1]'];
-
 /**
- * Whether a request's `Host` names this transport: a loopback name with the
- * bound port, or one of the consumer's authorities (an entry without a port
- * meaning the bound port). A `Host` without a port is port 80, as HTTP has
- * it.
+ * Whether a request's `Host` names this transport, both compared in
+ * canonical form. From a loopback peer, every loopback authority
+ * (`localhost`, `127.0.0.0/8`, `[::1]`, `[::ffff:127.x.y.z]`, any spelling
+ * the URL parser reads as one) with the bound port; from any other peer,
+ * none — listed in `allowedHosts` or not. Otherwise one of the consumer's
+ * authorities (an entry without a port meaning the bound port). The
+ * unspecified address is never an authority. A `Host` without a port is
+ * port 80, as HTTP has it.
+ *
+ * @internal - Exported for testing.
  */
 export function answersFor(
   hostHeader: unknown,
@@ -243,36 +261,33 @@ export function answersFor(
   allowed: readonly Authority[],
 ): boolean {
   const asked = parseAuthority(hostHeader);
-  if (!asked) return false;
+  if (!asked || asked.unspecified) return false;
   const askedPort = asked.port ?? 80;
-  // A loopback name counts only from a loopback peer (spec §6a1): the
+  // A loopback authority counts only from a loopback peer (spec §6a1): the
   // header is the client's to choose, so a machine on the network sending
   // `Host: localhost` to a wildcard bind is not this machine's browser.
-  if (
-    LOOPBACK_NAMES.includes(asked.host) &&
-    isLoopbackPeer(peer) &&
-    askedPort === boundPort
-  ) {
-    return true;
-  }
-  // A loopback name is never an allowed authority (spec §6a1): listed or
-  // not, it counts only from a loopback peer, above.
-  if (LOOPBACK_NAMES.includes(asked.host) || isLoopbackPeer(asked.host)) {
-    return false;
-  }
+  if (asked.loopback) return isLoopbackPeer(peer) && askedPort === boundPort;
   return allowed.some(
     (entry) =>
       entry.host === asked.host && (entry.port ?? boundPort) === askedPort,
   );
 }
 
-/** The consumer's `allowedHosts`: entries that are not authorities match nothing. */
+/**
+ * The consumer's `allowedHosts`, canonical: an entry that is not an
+ * authority, a loopback authority or the unspecified address matches
+ * nothing.
+ *
+ * @internal - Exported for testing.
+ */
 export function allowedAuthorities(value: unknown): Authority[] {
   if (!Array.isArray(value)) return [];
   const read: Authority[] = [];
   for (const entry of value as unknown[]) {
     const authority = parseAuthority(entry);
-    if (authority) read.push(authority);
+    if (authority && !authority.loopback && !authority.unspecified) {
+      read.push(authority);
+    }
   }
   return read;
 }

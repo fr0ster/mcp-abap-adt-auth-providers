@@ -395,9 +395,10 @@ const uaaPasteHint =
   (redirectUri: string): string => {
     const { protocol, port } = new URL(redirectUri);
     const allowed = Array.isArray(allowedHosts)
-      ? (allowedHosts as unknown[]).find(
-          (entry): entry is string => parseAuthority(entry) !== undefined,
-        )
+      ? (allowedHosts as unknown[]).find((entry): entry is string => {
+          const read = parseAuthority(entry);
+          return read !== undefined && !read.loopback && !read.unspecified;
+        })
       : undefined;
     const authority =
       allowed === undefined
