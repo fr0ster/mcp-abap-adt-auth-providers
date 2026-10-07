@@ -1949,9 +1949,10 @@ default (R1). `ifCut` is required on every `refresh`. A strategy receives
 minted errors and allowlisted facts only — never a token, a refresh token's
 value or any message (R5).
 
-`ITokenProviderOptions` / the provider configs gain `renewal: IRenewalStrategy`
-(required on every `BaseTokenProvider` subclass, rule 7). No other type of
-interfaces-auth changes except the new kind (§6c.5).
+The provider configs are auth-providers' own (`BaseConfig`): they gain
+`renewal: IRenewalStrategy`, required on every `BaseTokenProvider` subclass
+(rule 7). No other type of interfaces-auth changes except the new kind and
+operation (§6c.5, §6c.4).
 
 ### 6c.3 Where a renewal starts
 
@@ -2108,7 +2109,7 @@ Real sockets where the point is what was sent; every case load-bearing
 
 | Package | Change | Version |
 |---|---|---|
-| interfaces-auth | `renewal.ts`; kind `renewal-declined`; operation `renewal-strategy`; `renewal` in the provider configs | **7.0.0** (a kind and an allowlist value: closed unions) |
+| interfaces-auth | `renewal.ts`; kind `renewal-declined`; operation `renewal-strategy` | **7.0.0** (a kind and an allowlist value: closed unions) |
 | interfaces-auth-sap, -auth-broker | moved to 7.0.0 by PR #123's rule | per that rule |
 | auth-errors | words for `renewal-declined`, the new operation; moves to interfaces-auth 7 | **2.0.0** |
 | connection | moves to interfaces-auth 7 and auth-errors 2; no behaviour change | **13.0.0** (12.0.0 is on `next`, never `latest` — no consumer installed it) |
