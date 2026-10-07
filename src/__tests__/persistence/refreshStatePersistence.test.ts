@@ -376,7 +376,11 @@ describe('refreshStatePersistence — one write at a time, in report order', () 
 describe('refreshStatePersistence — construction', () => {
   const write = async (_tokens: PersistedTokens) => undefined;
 
-  const expectInvalid = (build: () => unknown) => {
+  /** The refusal `build` throws: invalid-value naming exactly `fields`. */
+  const expectInvalid = (
+    build: () => unknown,
+    fields: readonly string[],
+  ): void => {
     let thrown: unknown;
     try {
       build();
@@ -385,31 +389,55 @@ describe('refreshStatePersistence — construction', () => {
     }
     const error = readFailure(thrown, 'unfamiliar-error');
     expect(error.kind).toBe('configuration');
-    expect(error.facts).toEqual({
-      case: 'invalid-value',
-      fields: ['persistence'],
-    });
+    expect(error.facts).toEqual({ case: 'invalid-value', fields });
+    expect(error.reason).toBe(
+      `a configured value cannot be used: ${fields.join(', ')}`,
+    );
   };
 
-  it('onWriteFailure is required, with no default', () => {
-    expectInvalid(() =>
-      refreshStatePersistence(write, {} as never as { onWriteFailure: 'fail' }),
-    );
-    expectInvalid(() => refreshStatePersistence(write, undefined as never));
-    expectInvalid(() =>
-      refreshStatePersistence(write, {
-        onWriteFailure: 'retry',
-      } as never),
+  it.each([
+    ['missing', {}],
+    ['undefined', { onWriteFailure: undefined }],
+    ['null', { onWriteFailure: null }],
+    ['an unknown word', { onWriteFailure: 'retry' }],
+    ['a boolean', { onWriteFailure: true }],
+  ])(
+    'onWriteFailure %s: refused, naming onWriteFailure (no default)',
+    (_what, options) => {
+      expectInvalid(
+        () => refreshStatePersistence(write, options as never),
+        ['onWriteFailure'],
+      );
+    },
+  );
+
+  it('no options at all: refused, naming onWriteFailure', () => {
+    expectInvalid(
+      () => refreshStatePersistence(write, undefined as never),
+      ['onWriteFailure'],
     );
   });
 
-  it('write must be a function', () => {
-    expectInvalid(() =>
-      refreshStatePersistence('nope' as never, { onWriteFailure: 'fail' }),
+  it.each([
+    ['a string', 'nope'],
+    ['undefined', undefined],
+    ['null', null],
+    ['an object', {}],
+  ])('write %s: refused, naming write', (_what, given) => {
+    expectInvalid(
+      () => refreshStatePersistence(given as never, { onWriteFailure: 'fail' }),
+      ['write'],
     );
   });
 
-  it('an accessor on the options is never run', () => {
+  it('both unusable: refused, naming both', () => {
+    expectInvalid(
+      () => refreshStatePersistence('nope' as never, {} as never),
+      ['onWriteFailure', 'write'],
+    );
+  });
+
+  it('an accessor on the options is never run: onWriteFailure reads as missing', () => {
     let ran = false;
     const options = {};
     Object.defineProperty(options, 'onWriteFailure', {
@@ -419,7 +447,10 @@ describe('refreshStatePersistence — construction', () => {
       },
       enumerable: true,
     });
-    expectInvalid(() => refreshStatePersistence(write, options as never));
+    expectInvalid(
+      () => refreshStatePersistence(write, options as never),
+      ['onWriteFailure'],
+    );
     expect(ran).toBe(false);
   });
 });

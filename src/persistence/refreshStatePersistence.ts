@@ -36,9 +36,8 @@ export interface RefreshStatePersistenceOptions {
    * and with it the call that caused it (`'fail'`) — or is only logged
    * (`'continue'`). Either way the write is delivered again by the next
    * report. Missing or any other value: refused at construction,
-   * `configuration` `invalid-value` naming `persistence` — the provider
-   * option this strategy is given as (so is a `write` that is not a
-   * function).
+   * `configuration` `invalid-value` naming `onWriteFailure` (a `write` that
+   * is not a function is refused the same way, naming `write`).
    */
   readonly onWriteFailure: 'continue' | 'fail';
   /** Where a failed write is logged, in fixed words. */
@@ -81,14 +80,13 @@ function taken(report: PersistenceReport): Taken {
 }
 
 /**
- * Refused at construction: `onWriteFailure` missing or not `'continue'` /
- * `'fail'`, or `write` not a function. The refusal names `persistence` —
- * the provider option this strategy configures; neither of this factory's
- * own option names is on `CONFIG_FIELDS` (coordinator's ruling, review M2).
+ * Refused at construction, naming each option that cannot be used:
+ * `onWriteFailure` when it is missing or not `'continue'` / `'fail'`,
+ * `write` when it is not a function — both when both.
  */
-function unusable(): never {
+function unusable(fields: readonly ('onWriteFailure' | 'write')[]): never {
   throw misconfigured(
-    authError.configuration({ case: 'invalid-value', fields: ['persistence'] }),
+    authError.configuration({ case: 'invalid-value', fields: [...fields] }),
   );
 }
 
@@ -125,8 +123,12 @@ export function refreshStatePersistence(
   // Read once as own data: an accessor on the options is never run.
   const own = ownOptions<RefreshStatePersistenceOptions>(options);
   const { onWriteFailure, logger } = own;
-  if (onWriteFailure !== 'continue' && onWriteFailure !== 'fail') unusable();
-  if (typeof write !== 'function') unusable();
+  const wrong: ('onWriteFailure' | 'write')[] = [];
+  if (onWriteFailure !== 'continue' && onWriteFailure !== 'fail') {
+    wrong.push('onWriteFailure');
+  }
+  if (typeof write !== 'function') wrong.push('write');
+  if (wrong.length > 0) unusable(wrong);
 
   let state: 'held' | 'cleared' = 'held';
   let pending: string | undefined;
