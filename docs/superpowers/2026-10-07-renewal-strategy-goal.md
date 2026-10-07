@@ -102,7 +102,16 @@ spent token).
    and to the refresh token that attempt sent, identified without the
    strategy ever seeing its value; a decision about a cut refresh (discard
    the token it sent, or keep it) takes effect before any replacement attempt
-   can dispatch that token; and a decision or a late result of an older
+   can dispatch that token. **That decision is taken before dispatch, as part
+   of the decision to refresh** ("refresh; if cut after dispatch, keep or
+   discard what was sent"): at the abort the provider applies an answer it
+   already holds, synchronously, calling no foreign code — so a cut never
+   waits on a strategy, needs no timer, and has no undecided state. A
+   strategy that throws, answers no valid decision or never settles does so
+   before anything is sent: the refresh token stays as it was, nothing is
+   dispatched, and the renewal ends with the strategy's failure (classified,
+   invariant 6) or waits for the consumer's signal, like any collaborator;
+   and a decision or a late result of an older
    attempt never changes state a newer one committed (the generations of the
    commit queue). Whether one strategy instance serves every attempt, and
    what state it may keep across them, the spec decides; the provider's
