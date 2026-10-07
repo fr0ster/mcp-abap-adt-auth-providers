@@ -757,7 +757,7 @@ callback-after-prompt case red; drop the prompt → its case red.
 
 Repository auth-providers, PR #68. After 30h. Spec §6a1. Publish
 dependency: interfaces-auth 7.3.0 (`ICallbackServerOptions.gated?`,
-`ICallbackServerOptions.host?`,
+`ICallbackServerOptions.host?`, `ICallbackServerOptions.allowedHosts?`,
 `ICallbackServerHandle.expectState?(state | null)`, `CONFIG_FIELDS` +
 `callbackServer`), released first, one PR in the
 interfaces repository, merged/tagged/published by the user.
@@ -780,7 +780,9 @@ interfaces repository, merged/tagged/published by the user.
   `/submit` paste route is bound by a per-attempt form token from its served
   form (and a pasted URL's `state`);
   the transports bind loopback unless the consumer configures `host`, and
-  refuse a foreign `Host` before serving anything; `manualPasteStrategy` compares a
+  refuse any `Host` but loopback and the consumer's `allowedHosts` before
+  serving anything; `remoteHint` names the SSH tunnel or an allowed
+  authority; `manualPasteStrategy` compares a
   pasted URL's `state`. Constant time; nothing logs it.
 - [ ] README: the strategy contract (a consumer's redirect strategy must
   check `state`), the login CSRF note; CHANGELOG `Security`.

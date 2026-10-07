@@ -1399,18 +1399,28 @@ launcher failure (§6a0) widens that window.
   Today `runCallbackScope` calls `server.listen(port)` with no host, which
   Node binds to every interface (`::`, measured), while the redirect URI says
   `localhost` — the callback and its paste page are reachable from the
-  network. interfaces-auth 7.3.0 adds `ICallbackServerOptions.host?: string`
-  (the bind address). Not given, the shipped transports bind loopback:
-  `127.0.0.1`, and `::1` too when the redirect host is `localhost`. A
-  consumer that wants the paste page reachable from another machine without
-  an SSH tunnel passes `host` explicitly (e.g. `0.0.0.0` or an interface
-  address) through the strategy's options — its decision, never ours. An
-  SSH tunnel (`ssh -L 61001:localhost:61001`) arrives on loopback and works
-  with the default.
+  network. interfaces-auth 7.3.0 adds two options, both the consumer's,
+  passed through the strategy's options to its transport:
+  - `ICallbackServerOptions.host?: string` — the bind address. Not given,
+    the shipped transports bind loopback: `127.0.0.1`, and `::1` too when
+    the redirect host is `localhost`.
+  - `ICallbackServerOptions.allowedHosts?: readonly string[]` — the
+    authorities (`host` or `host:port`) a browser may use to reach the
+    transport besides loopback, e.g. `192.168.1.10:61001` or
+    `buildhost.example:61001`. The bind address is not an authority (a
+    browser never sends `Host: 0.0.0.0`), so binding a wildcard or an
+    interface address without listing the names a browser will use leaves
+    only loopback reachable — the provider does not guess them.
+  A consumer that wants the paste page reachable from another machine
+  without an SSH tunnel sets both. An SSH tunnel (`ssh -L
+  61001:localhost:61001`) arrives on loopback and works with the default.
+  The strategy's `remoteHint` describes the SSH tunnel, or names an allowed
+  authority when the consumer configured one — never a guessed hostname.
 - **`Host` is checked before anything is served.** Every request whose
   `Host` header is not one the transport answers for — `localhost`,
-  `127.0.0.1` or `[::1]` with the bound port, plus the configured `host`
-  with that port when one is given — is answered `400` in fixed words before
+  `127.0.0.1` or `[::1]` with the bound port, plus each of `allowedHosts`
+  (an entry without a port matches the bound port) — is answered `400` in
+  fixed words before
   any page, form token or callback handling: DNS rebinding (an attacker's
   hostname resolved to loopback) cannot read the form or settle anything.
   Counted and ignored like any other refused request.
@@ -1450,8 +1460,11 @@ the login then completes; `/submit` with no form token, a wrong one, or a
 pasted URL with a wrong `state` is `400`, counted and ignored, before and
 after arming, and a bare code through the served form (right token) logs
 in; the transport binds loopback by default (its address checked) and
-the configured `host` when given; a request with a foreign `Host` gets `400`
-before the form or any callback handling (no form token in its body); the shipped and an injected SAML transport
+the configured `host` when given; bound to a wildcard address with
+`allowedHosts: ['<non-loopback>:<port>']`, the paste page answers a request
+with that `Host` and refuses an unrelated one (real HTTP); a request with a
+foreign `Host` gets `400` before the form or any callback handling (no form
+token in its body); the shipped and an injected SAML transport
 without `expectState` still log in (no gate, no refusal); a callback with a missing, a different and then
 the correct `state` (the first two `400`,
 counted, ignored; the login completes with the third); a forged `?error=`
