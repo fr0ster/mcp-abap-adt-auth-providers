@@ -1936,10 +1936,37 @@ export type RenewalDecision =
   | { readonly next: 'login'; readonly sentRefreshToken?: 'keep' | 'discard' | undefined }
   | { readonly next: 'stop'; readonly sentRefreshToken?: 'keep' | 'discard' | undefined };
 
+/** A step of this provider's renewal that ended by the consumer's abort. */
+export interface RenewalAbortObservation {
+  readonly cause: RenewalCause;
+  readonly moment: RenewalMoment;
+  readonly step: RenewalStep;
+  /** True: the request reached the wire before the abort (a refresh: `ifCut` was applied). */
+  readonly sent: boolean;
+  /** For a refresh sent: what `ifCut` did to the refresh token it sent. */
+  readonly refreshToken?: 'kept' | 'discarded' | undefined;
+}
+
 export interface IRenewalStrategy {
   next(situation: RenewalSituation): RenewalDecision | Promise<RenewalDecision>;
+  /** Told of an aborted step (R2); optional; its answer is never awaited. */
+  aborted?(observation: RenewalAbortObservation): void;
 }
 ```
+
+**An aborted step is observed, never waited on.** R2 requires the strategy
+to learn whether an aborted step was sent. The abort handler records the
+observation (synchronously, with `ifCut` already applied) and calls no
+foreign code. The provider delivers each recorded observation **once**, to
+`aborted` when the strategy has it, at the first of: a microtask queued by
+the abort handler, or the start of any later `next()` call of this
+provider — delivered before that call, so a stateful strategy has always
+seen every earlier abort before it decides again. Delivery is guarded like
+any collaborator's call: a throw is logged (`logFields(classify(…,
+'renewal-strategy'))`) and ignored; a native promise answered has its
+rejection marked handled; any other thenable's `then` is never called.
+Nothing waits on it — not the aborted waiter, not the replacement attempt
+beyond the synchronous call itself.
 
 `sentRefreshToken` is read only on the decision that follows a refresh
 step that **failed after it was sent** (`sent: true`); anywhere else it must
@@ -1947,7 +1974,12 @@ be absent, and present is an invalid decision (§6c.4). After such a step it
 is **required**: an uncertain refresh token is never kept or discarded by
 default (R1). `ifCut` is required on every `refresh`. A strategy receives
 minted errors and allowlisted facts only — never a token, a refresh token's
-value or any message (R5).
+value, or the message, cause or body of any thrown value (R5). A minted
+error's `reason` / `hint` are the contract's own words, rendered from `kind`
+and `facts`, and its `diagnostics` are admitted by auth-errors (error goal
+invariant 3): the strategy sees exactly the error `getTokens()` would throw
+to the consumer, nothing more. (Codex 2026-10-07 read `reason` as a
+message; it is not one in this contract.)
 
 The provider configs are auth-providers' own (`BaseConfig`): they gain
 `renewal: IRenewalStrategy`, required on every `BaseTokenProvider` subclass
@@ -1974,7 +2006,20 @@ joining a renewal already in flight. `prepare()` no longer clears
 ### 6c.4 How a renewal runs
 
 `renewOnce` becomes a loop driven by the strategy, inside the existing
-attempt (`renewAttempt`, the shared slot, the generation):
+attempt (`renewAttempt`, the shared slot).
+
+**A credential generation per step, not per attempt.** §6b takes one
+credential generation when an attempt begins and applies a commit only if
+it is newer than the watermark; with several steps in one attempt, the first
+step's commit would make every later step's commit look old. So each step
+takes its own generation (`++credentialGeneration`) when it is dispatched —
+after the strategy's decision and the pre-dispatch check (step 5). Within
+one attempt the steps are sequential, so their generations increase in step
+order; a newer attempt's steps start after an older attempt left the slot,
+so they are newer than any step of it; a late result of an aborted
+attempt's refresh carries its own step's generation and is applied only if
+nothing newer was committed — §6b's rule, unchanged in meaning. The
+watermark checks of `commitCredentials` stay as they are.
 
 1. Pin first, as today (`presentable()`): unusable or expired material
    refuses the renewal whole before the strategy is asked — material is the
@@ -2091,6 +2136,15 @@ Real sockets where the point is what was sent; every case load-bearing
   invalid decision → `unknown` `renewal-strategy`, the refresh token
   unchanged, no step taken; a strategy that throws, answers a foreign
   thenable (its `then` never called), or never settles until the abort.
+- Per-step generations: a refresh commits R2 with outcome
+  `bound-elsewhere`, the strategy asks `login`, the login's credentials are
+  installed and persisted (one generation per attempt turns it red); two
+  successful refresh steps in one attempt, both committed in order.
+- Aborted steps observed: an abort during discovery → `aborted` called once
+  with `sent: false`; after dispatch → `sent: true`, `refreshToken` as
+  `ifCut` said; a replacement renewal's first `next` sees the observation
+  already delivered; `aborted` that throws or answers a foreign thenable
+  changes nothing.
 - Earlier steps stay applied: refresh commits R2 with outcome
   `bound-elsewhere`, the strategy then throws → R2 held and persisted.
 - No hidden step: a strategy counting calls — every step preceded by one
