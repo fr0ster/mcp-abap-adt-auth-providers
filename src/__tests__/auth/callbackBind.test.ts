@@ -15,6 +15,7 @@ import {
   allowedAuthorities,
   answersFor,
   isLoopbackPeer,
+  parseAuthority,
   withBrowserCallbackServer,
 } from '../../auth/callbackServer';
 import { withOidcCallbackServer } from '../../auth/oidcBrowserAuth';
@@ -556,7 +557,18 @@ describe('authorities are compared canonically (spec §6a1)', () => {
         answersFor(host.replace(`:${PORT}`, ':1'), '127.0.0.1', PORT, none),
       ).toBe(false);
     }
-    // The unspecified address is never an authority, from any peer.
+    // The unspecified address is never an authority, from any peer: the
+    // list drops it, and a Host naming it answers nothing even when a list
+    // (built by hand, past that filter) holds it.
+    expect(allowedAuthorities(['0.0.0.0', `[::]:${PORT}`])).toEqual([]);
+    const unfiltered = [
+      parseAuthority('0.0.0.0'),
+      parseAuthority('[::]'),
+    ].filter((entry) => entry !== undefined);
+    expect(unfiltered).toHaveLength(2);
+    for (const host of [`0.0.0.0:${PORT}`, `[::]:${PORT}`]) {
+      expect(answersFor(host, '127.0.0.1', PORT, unfiltered)).toBe(false);
+    }
     for (const host of [`0.0.0.0:${PORT}`, `[::]:${PORT}`]) {
       expect(
         answersFor(host, '127.0.0.1', PORT, allowedAuthorities([host])),
