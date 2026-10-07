@@ -155,9 +155,8 @@ describe('UAA paste route, gated', () => {
           (await get('/submit?input=forged&form_token=guessed')).status,
         ).toBe(400);
         expect(ignored()).toBe(3);
-        srv.fail(new Error('done'));
       },
-    ).catch(() => undefined);
+    );
   }, 30000);
 
   it('settles only with the served form token; a pasted URL needs this login’s state', async () => {
@@ -246,9 +245,8 @@ describe('UAA paste route, gated', () => {
         async (srv) => {
           srv.expectState?.(STATE);
           tokens.push(formTokenIn((await get('/')).body));
-          srv.fail(new Error('done'));
         },
-      ).catch(() => undefined);
+      );
     }
     expect(tokens[0]).toEqual(expect.any(String));
     expect(tokens[1]).toEqual(expect.any(String));

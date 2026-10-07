@@ -459,7 +459,13 @@ describe('manualPasteStrategy compares a pasted URL’s state', () => {
   });
 
   it('accepts a bare code: the user typed it', async () => {
-    const read = jest.fn(async () => 'bare-code');
+    // Bounded: a strategy that refused the bare code would ask forever.
+    let asked = 0;
+    const read = jest.fn(async () => {
+      asked += 1;
+      if (asked > 3) throw new Error('asked again for a bare code');
+      return 'bare-code';
+    });
     const outcome = await manualPasteStrategy({ read }).authorize({
       buildAuthorizationUrl: async () => built,
     });

@@ -65,6 +65,21 @@ function externalIpv4(): string | undefined {
   return undefined;
 }
 
+/** `GET /` with no `Host` header, over a raw socket: the whole answer. */
+function withoutHost(port: number): Promise<string> {
+  return new Promise((resolve, reject) => {
+    let answer = '';
+    const socket = net.connect({ host: '127.0.0.1', port });
+    socket.setEncoding('utf8');
+    socket.on('data', (chunk: string) => {
+      answer += chunk;
+    });
+    socket.on('end', () => resolve(answer));
+    socket.on('error', reject);
+    socket.write('GET / HTTP/1.0\r\n\r\n');
+  });
+}
+
 const EXTERNAL = externalIpv4();
 const itWithExternal = EXTERNAL ? it : it.skip;
 
@@ -140,17 +155,20 @@ describe('Host check', () => {
           `localhost:${PORT + 1}`,
           'localhost',
           `127.0.0.1.attacker.example:${PORT}`,
-          '',
         ]) {
           const page = await callbackGet(PORT, '/', { host });
           expect(page.status).toBe(400);
           expect(formTokenIn(page.body)).toBeUndefined();
           expect(page.body).not.toContain('form_token');
         }
+        // No Host at all (HTTP/1.0): answered for nothing either. Node's
+        // client fills an empty Host in, so this one goes over a raw socket.
+        const bare = await withoutHost(PORT);
+        expect(bare.startsWith('HTTP/1.1 400')).toBe(true);
+        expect(bare).not.toContain('form_token');
         expect(ignored()).toBe(6);
-        srv.fail(new Error('done'));
       },
-    ).catch(() => undefined);
+    );
   }, 30000);
 
   it('refuses a foreign Host before any callback handling', async () => {
@@ -222,9 +240,8 @@ describe('Host check', () => {
         });
         expect(unrelated.status).toBe(400);
         expect(formTokenIn(unrelated.body)).toBeUndefined();
-        srv.fail(new Error('done'));
       },
-    ).catch(() => undefined);
+    );
   }, 30000);
 
   it('matches an allowedHosts entry without a port to the bound port only', async () => {
@@ -240,8 +257,7 @@ describe('Host check', () => {
           (await callbackGet(PORT, '/', { host: 'buildhost.example:1234' }))
             .status,
         ).toBe(400);
-        srv.fail(new Error('done'));
       },
-    ).catch(() => undefined);
+    );
   }, 30000);
 });
