@@ -1387,10 +1387,15 @@ launcher failure (§6a0) widens that window.
     for the real one; `null` declares an unbound URL (a configured
     `authorizationUrl` without `state`) and accepts callbacks as today.
   Without `gated` a transport behaves as before (an additive change).
-  `BrowserCallbackStrategy` always opens its transport with `gated: true`,
-  builds the URL, reads its `state` (parsed with `URL`, no regex), calls
-  `expectState(state ?? null)`, and only then opens the browser.
-- **A consumer's transport without `expectState`.** When the injected
+  `BrowserCallbackStrategy`, as built by `browserCallbackStrategy` and
+  `oidcCallbackStrategy` (the OAuth constructors), always opens its
+  transport with `gated: true`, builds the URL, reads its `state` (parsed
+  with `URL`, no regex), calls `expectState(state ?? null)`, and only then
+  opens the browser. `samlCallbackStrategy` builds the same class without
+  the gate requirement — a SAML response is bound by `InResponseTo` (or a
+  declared IdP-initiated login) and refused by the assertion validator, so
+  its transports need no `expectState` and are not refused for lacking it.
+- **A consumer's OAuth transport without `expectState`.** When the injected
   `callbackServer` handle has no `expectState`, the strategy refuses the
   login before opening anything — `configuration` `invalid-value`,
   `fields: ['callbackServer']` — and uses no result that transport may have
@@ -1407,7 +1412,8 @@ launcher failure (§6a0) widens that window.
 Tests: on a real port, through both shipped transports — with
 `buildAuthorizationUrl` deliberately blocked, a forged code and a forged
 `?error=` sent before the gate is armed are `400`, counted and ignored, and
-the login then completes; a callback with a missing, a different and then
+the login then completes; the shipped and an injected SAML transport
+without `expectState` still log in (no gate, no refusal); a callback with a missing, a different and then
 the correct `state` (the first two `400`,
 counted, ignored; the login completes with the third); a forged `?error=`
 with a wrong `state` ignored, the real one then accepted; a consumer
