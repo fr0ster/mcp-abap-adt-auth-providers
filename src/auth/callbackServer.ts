@@ -134,16 +134,22 @@ export async function runCallbackScope<TResult, TReturn>(
   const server = http.createServer(app);
   /** Every open connection, and how many responses each is still writing. */
   const sockets = new Map<Socket, number>();
+  /** The request each connection is serving, to tell an unfinished body. */
+  const requests = new Map<Socket, http.IncomingMessage>();
   let released = false;
   server.on('connection', (socket: Socket) => {
     sockets.set(socket, 0);
-    socket.on('close', () => sockets.delete(socket));
+    socket.on('close', () => {
+      sockets.delete(socket);
+      requests.delete(socket);
+    });
   });
   server.on(
     'request',
     (req: http.IncomingMessage, res: http.ServerResponse) => {
       const socket = req.socket;
       sockets.set(socket, (sockets.get(socket) ?? 0) + 1);
+      requests.set(socket, req);
       res.once('close', () => {
         const left = (sockets.get(socket) ?? 1) - 1;
         if (sockets.has(socket)) sockets.set(socket, left);
@@ -222,7 +228,22 @@ export async function runCallbackScope<TResult, TReturn>(
     if (server.listening) server.close();
     for (const [socket, responding] of sockets) {
       if (responding <= 0) letGo(socket);
+      else holdNothing(socket, requests.get(socket));
     }
+  }
+
+  /**
+   * A connection still answering: referenced no longer, so it cannot keep the
+   * process alive; and when its request body is unfinished — nothing will ever
+   * answer it — destroyed. A finished request keeps its response, which
+   * `letGo` ends after the last byte.
+   */
+  function holdNothing(
+    socket: Socket,
+    request: http.IncomingMessage | undefined,
+  ): void {
+    socket.unref();
+    if (request && !request.complete) socket.destroy();
   }
 
   /**
