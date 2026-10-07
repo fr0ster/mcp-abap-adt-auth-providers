@@ -56,14 +56,23 @@ to show a URL — multiplies classes instead of adding one part.
    nothing of sockets or terminals.
 3. **A transport advertises only what it owns.** The redirect it hands out
    reaches only the addresses it listens on.
-4. **A protocol's checks hold on every transport.** Nothing a protocol
-   requires (a `state`, a form token, a payload's shape) is skipped because
-   of how the answer arrived.
+4. **Every way an answer can arrive is protected as strongly as today.**
+   The evidence differs by channel and stays: an answer that came through a
+   redirect is bound to its attempt's `state`; one submitted through an HTTP
+   paste page is bound to that page; one the user typed into a terminal is
+   accepted as the user's own. No composition lets an answer through a
+   channel with a weaker check than that channel has today — in particular,
+   no bare code is ever accepted on an unauthenticated HTTP request.
 5. **Everything already decided stays.** The login-CSRF protection, the
    loopback default, the `Host` check, no built-in timeouts, no secret or
    server text in a log line, the error contract — each moves to the part
    it belongs to and keeps its guarantees and tests.
-6. **The provider's contract does not change.** A provider builds the URL
+6. **An authorization still ends cleanly.** Whatever parts it is composed
+   of, an authorization honours the consumer's abort and its own disposal
+   while it is running, releases everything it holds — a listener, a
+   terminal reader — before it settles, and is never changed by a result
+   that arrives after it ended. The next login can rely on that.
+7. **The provider's contract does not change.** A provider builds the URL
    and exchanges the payload; how the payload is obtained stays the
    authorization strategy's.
 
