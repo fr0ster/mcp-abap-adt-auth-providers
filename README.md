@@ -671,7 +671,7 @@ Options common to the three callback strategies:
 | `openUrl` | the built-in launcher | Receives `(url, browser, redirectUri)` |
 | `remoteHint` | the paste hint, only for the shipped UAA transport | Extra guidance printed in `'none'` / `'headless'` mode. The default names an SSH tunnel to the bound port, or the first of `allowedHosts` — never a guessed hostname |
 | `host` | loopback (`127.0.0.1` and `::1`) | The address the transport binds (`ICallbackServerOptions.host`). A wildcard or an interface address makes it reachable from the network — name the authorities a browser will use in `allowedHosts`. **Warning:** with `allowedHosts`, every client that can reach an allowed authority gets the paste page and its form token and can settle the login with a code of its own — prefer the SSH tunnel |
-| `allowedHosts` | none | Authorities (`host` or `host:port`; no port means the bound one) a browser may use besides loopback; a loopback name is never one. Every other `Host` is refused before anything is served. **Warning:** every client that can reach an allowed authority gets the paste page and its form token and can settle the login with a code of its own — prefer the SSH tunnel |
+| `allowedHosts` | none | Authorities (`host` or `host:port`; no port means the bound one) a browser may use besides loopback, compared in the URL parser's canonical form; a loopback authority (any spelling of `localhost`, `127.0.0.0/8`, `[::1]`, `[::ffff:127.x.y.z]`), `0.0.0.0` and `[::]` are never one. Every other `Host` is refused before anything is served. **Warning:** every client that can reach an allowed authority gets the paste page and its form token and can settle the login with a code of its own — prefer the SSH tunnel |
 | `signal` | — | `AbortSignal` cancelling the login — the only bound there is (since 6.0.0 no login times out on its own): pass `AbortSignal.timeout(ms)` for a deadline |
 
 Note the `browser` default: **`'none'`, so nothing is opened unless you ask for
@@ -852,12 +852,20 @@ own while a login waits, and the user ends up logged in as someone else
 - **Loopback only, unless you say otherwise.** The shipped transports bind
   `127.0.0.1` and `::1` (through 5.4.2 they bound every interface), and refuse
   — before any page, form token or callback handling — a request whose `Host`
-  is not `localhost`, `127.0.0.1` or `[::1]` with the bound port, so a
-  DNS-rebound name reads and settles nothing. Those three names count only
-  from a loopback peer (`127.0.0.0/8`, `::1`, `::ffff:127.x.y.z`): the header
-  is the client's to choose, so a machine on the network sending
-  `Host: localhost` is refused too — and listing a loopback name in
-  `allowedHosts` changes nothing: it is never an allowed authority. When the
+  is not a loopback authority with the bound port, so a DNS-rebound name
+  reads and settles nothing. Every `Host`, and every `allowedHosts` entry, is
+  read through the WHATWG URL host parser and compared in that canonical
+  form, one trailing dot dropped. **Loopback** is then `localhost`, any IPv4
+  address in `127.0.0.0/8`, `[::1]` or `[::ffff:127.x.y.z]` — in whatever
+  spelling the parser reads as one (`localhost.`, `127.1`, `0x7f.1`,
+  `[0:0:0:0:0:0:0:1]`, `[::ffff:7f00:1]`, …). A loopback authority counts
+  only from a loopback peer (`127.0.0.0/8`, `::1`, `::ffff:127.x.y.z`): the
+  header is the client's to choose, so a machine on the network sending
+  `Host: localhost` is refused too — and listing a loopback authority in
+  `allowedHosts` changes nothing: it is never an allowed one. `0.0.0.0` and
+  `[::]` are never an authority, and an entry that is not exactly an
+  authority (userinfo, a path, an empty or out-of-range port, a host the
+  parser refuses) matches nothing. When the
   port is not free on `::1` — a fixed one, or the one the OS gave
   `127.0.0.1` for `port: 0` — the login fails `port-in-use`: the redirect
   URI says `localhost`, which resolves to `::1` first, so staying on
@@ -873,7 +881,7 @@ own while a login waits, and the user ends up logged in as someone else
   ```
 
   The bind address is not an authority — a browser never sends
-  `Host: 0.0.0.0` — and a loopback name from a network peer is refused, so a
+  `Host: 0.0.0.0` — and a loopback authority from a network peer is refused, so a
   wildcard bind without `allowedHosts` answers loopback peers only.
 
   > **Warning — `allowedHosts` opens the login to everyone who can reach

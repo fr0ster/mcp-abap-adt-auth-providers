@@ -91,8 +91,13 @@ export interface CallbackStrategyOptions<TResult = string> {
    * browser may use to reach the transport besides loopback — every other
    * `Host` is refused before anything is served. Passed to the transport as
    * `ICallbackServerOptions.allowedHosts`; the paste hint names the first.
-   * A loopback name (`localhost`, `127.0.0.1`, `[::1]`) is never an allowed
-   * authority: it counts only from a loopback peer, listed or not.
+   * Entries and `Host` are compared in the WHATWG URL host parser's
+   * canonical form. A loopback authority — `localhost`, `127.0.0.0/8`,
+   * `[::1]`, `[::ffff:127.x.y.z]`, in any spelling the parser reads as one —
+   * is never an allowed one: from a loopback peer every loopback authority
+   * with the bound port counts, from any other peer none, listed or not.
+   * `0.0.0.0` and `[::]` are never an authority; an entry that is not
+   * exactly an authority matches nothing.
    *
    * **Warning:** every client that can reach an allowed authority gets the
    * paste page and its form token and can settle the login with a code of

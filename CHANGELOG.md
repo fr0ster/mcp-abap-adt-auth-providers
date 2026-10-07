@@ -323,14 +323,18 @@ against the published 5.4.2.
   - **Breaking:** the shipped transports bind loopback (`127.0.0.1` and
     `::1`) instead of every interface, and refuse a request whose `Host` is
     not loopback with the bound port before serving anything (DNS
-    rebinding); a loopback name counts only from a loopback peer, so a
-    network client sending `Host: localhost` to a wildcard bind is refused.
+    rebinding). `Host` and `allowedHosts` are compared in the WHATWG URL
+    host parser's canonical form (one trailing dot dropped); a loopback
+    authority — `localhost`, `127.0.0.0/8`, `[::1]`, `[::ffff:127.x.y.z]`, in
+    any spelling the parser reads as one — counts only from a loopback peer,
+    so a network client sending `Host: localhost` to a wildcard bind is
+    refused; `0.0.0.0` and `[::]` are never an authority.
     New strategy options `host` (the bind address) and `allowedHosts` (the
     authorities a browser on another machine may use) open it up — and
     every client that can reach an allowed authority can then settle the
     login with a code of its own (the README warns of it); an SSH tunnel to
-    the port works with the default and is the safe route; a loopback name
-    listed in `allowedHosts` admits no network peer. A port not free on
+    the port works with the default and is the safe route; a loopback
+    authority listed in `allowedHosts` admits no network peer. A port not free on
     `::1` — fixed, or the one the OS gave `127.0.0.1` for `port: 0` — fails
     the login `port-in-use`, never leaving it on `127.0.0.1` alone. The UAA
     paste hint names the tunnel or the first allowed authority, never a
