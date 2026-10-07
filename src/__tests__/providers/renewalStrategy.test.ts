@@ -188,6 +188,7 @@ describe('invalid decisions end the renewal unknown renewal-strategy, no step ta
     [
       'a foreign thenable',
       () => ({
+        // biome-ignore lint/suspicious/noThenProperty: a foreign thenable is the hostile answer
         then() {
           foreign.thenCalls += 1;
         },
