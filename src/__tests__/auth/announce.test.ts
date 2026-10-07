@@ -92,11 +92,25 @@ describe('announcer', () => {
     expect(stdout).toEqual([]);
   });
 
-  it('a foreign thenable: its then never runs, nothing on stderr', async () => {
-    const then = jest.fn();
+  it('a foreign thenable is adopted: a fulfilling one leaves stderr empty', async () => {
+    const then = jest.fn((onFulfilled: (value: unknown) => void) =>
+      onFulfilled(undefined),
+    );
     announcer(loggerWith(() => ({ then })))(PROMPT);
     await turn();
-    expect(then).not.toHaveBeenCalled();
+    expect(then).toHaveBeenCalledTimes(1);
     expect(stderr).toEqual([]);
+  });
+
+  it('a foreign thenable that rejects: stderr once the rejection arrives', async () => {
+    announcer(
+      loggerWith(() => ({
+        // biome-ignore lint/suspicious/noThenProperty: a promise library's then is the point
+        then: (_f: unknown, onRejected: (error: unknown) => void) =>
+          onRejected(new Error('async info')),
+      })),
+    )(PROMPT);
+    await turn();
+    expect(stderr).toEqual([`${PROMPT}\n`]);
   });
 });

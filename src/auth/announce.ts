@@ -7,18 +7,16 @@
  * under an MCP or LSP stdio transport.
  */
 
-import { isPromise, isProxy } from 'node:util/types';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
+import { onAnswerRejection } from './handled';
 import { logQuietly } from './tokenRequest';
-
-/** `Promise.prototype.then` as it was at load: never a value's own `then`. */
-const promiseThen = Promise.prototype.then;
 
 /**
  * The logger's `info`, or stderr without one. The prompt must not vanish: a
  * logger that throws gets it on stderr instead, and so does one whose `info`
- * answers a plain native promise that rejects (an async logger that failed)
- * — once the rejection arrives; the rejection itself is handled. Never
+ * answers a promise or any Promises/A+ thenable that rejects (an async
+ * logger that failed; the logger is the consumer's own code, adopted like an
+ * await would) — once the rejection arrives; the rejection itself is handled. Never
  * stdout.
  */
 export function announcer(logger?: ILogger): (msg: string) => void {
@@ -35,7 +33,7 @@ export function announcer(logger?: ILogger): (msg: string) => void {
     logQuietly(() => {
       try {
         answered = logger.info(msg);
-        return answered;
+        return undefined;
       } catch (error) {
         threw = true;
         throw error;
@@ -45,10 +43,11 @@ export function announcer(logger?: ILogger): (msg: string) => void {
       toStderr(msg);
       return;
     }
-    // A plain native promise only: a foreign thenable's code is never run.
-    if (isPromise(answered) && !isProxy(answered)) {
-      if (Object.getPrototypeOf(answered) !== Promise.prototype) return;
-      promiseThen.call(answered, undefined, () => toStderr(msg));
+    if (
+      (answered !== null && typeof answered === 'object') ||
+      typeof answered === 'function'
+    ) {
+      onAnswerRejection(answered, () => toStderr(msg));
     }
   };
 }

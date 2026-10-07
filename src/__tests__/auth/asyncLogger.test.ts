@@ -50,7 +50,7 @@ describe('an async logger on a token site', () => {
     expect(run.unhandled).toEqual([]);
   });
 
-  it('a foreign thenable is never called: its then does not run', () => {
+  it('a thenable whose then throws: contained, outcome unchanged', () => {
     const run = runPlainNode<string[]>(
       scenario(`{
         debug: () => ({ then() { throw new Error('then ran'); } }),

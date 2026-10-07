@@ -44,7 +44,7 @@ import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
 import axios, { type AxiosRequestConfig, type AxiosResponse } from 'axios';
 import { abortedFailure } from './attempt';
 import { assertNotExpired } from './certificateMaterial';
-import { markHandled } from './handled';
+import { onAnswerRejection } from './handled';
 import {
   allowlistedCode,
   integerStatus,
@@ -382,15 +382,21 @@ export function prepareSecret(value: string, authDebug: boolean): string {
  * nothing: inside a catch, the failure the site rethrows — already replaced
  * by safe facts — must not be replaced by whatever the consumer's logger
  * threw. A logger whose method answers a rejecting promise (an async
- * logger) must not leave an unhandled rejection either: a plain native
- * promise answered by `write` gets a no-op rejection handler, through the
- * `then` captured at load. A foreign thenable, a Promise subclass or a
- * Proxy gets none — handling it would run its code.
+ * logger) must not leave an unhandled rejection either: the logger is the
+ * consumer's own code, so what `write` answers is adopted like any await
+ * would adopt it — a native promise or any Promises/A+ thenable — with a
+ * contained no-op rejection handler (`onAnswerRejection`). Never awaited:
+ * logging stays fire-and-forget.
  */
 export function logQuietly(write: () => unknown): void {
   try {
     const answered = write();
-    markHandled(answered);
+    if (
+      (answered !== null && typeof answered === 'object') ||
+      typeof answered === 'function'
+    ) {
+      onAnswerRejection(answered, () => undefined);
+    }
   } catch {
     // The site's own outcome is what the caller needs.
   }
