@@ -146,17 +146,29 @@ describeUaa('UAA providers against Cloud Foundry UAA', () => {
         expect(claims(tokens.accessToken).user_name).toBe('tester');
       });
 
+      // Through the provider, as a login runs: the strategy builds two URLs
+      // and answers the code of the first, so the provider exchanges it with
+      // the second one's verifier. Without PKCE that code would be taken.
       it('refuses the code exchanged with a wrong verifier', async () => {
-        const code = await codeFor(generatePkceVerifier());
-        const thrown = await exchangeCodeForToken(
-          config(),
-          code,
-          CALLBACK,
-          undefined,
-          undefined,
-          undefined,
-          generatePkceVerifier(),
-        ).catch((e: unknown) => e);
+        const thrown = await new AuthorizationCodeProvider({
+          renewal: refreshThenLogin(),
+          uaaUrl: UAA_URL as string,
+          clientId: 'authcode',
+          clientSecret: 'secret',
+          authorization: {
+            async authorize(request) {
+              const first = await request.buildAuthorizationUrl(CALLBACK);
+              await request.buildAuthorizationUrl(CALLBACK);
+              const back = await authorizeByForm(first, CALLBACK, USER);
+              return {
+                payload: back.searchParams.get('code') ?? '',
+                redirectUri: CALLBACK,
+              };
+            },
+          },
+        })
+          .getTokens()
+          .catch((e: unknown) => e);
         expect(readFailure(thrown, 'code-exchange')).toMatchObject({
           kind: 'request-failed',
           facts: { problem: 'refused' },
