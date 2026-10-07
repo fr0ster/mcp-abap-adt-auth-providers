@@ -107,11 +107,14 @@ spent token).
    discard what was sent"): at the abort the provider applies an answer it
    already holds, synchronously, calling no foreign code — so a cut never
    waits on a strategy, needs no timer, and has no undecided state. A
-   strategy that throws, answers no valid decision or never settles does so
-   before anything is sent: the refresh token stays as it was, nothing is
-   dispatched, and the renewal ends with the strategy's failure (classified,
-   invariant 6) or waits for the consumer's signal, like any collaborator;
-   and a decision or a late result of an older
+   strategy that throws, answers no valid decision or never settles while
+   being asked for the **next** step: that step sends nothing and changes no
+   credential, and the renewal ends with the strategy's failure (classified,
+   invariant 6) or waits for the consumer's signal, like any collaborator.
+   What earlier steps of the same renewal already applied through the commit
+   queue — an adopted rotated refresh token, a discard — stays applied; and
+   a decision that settles late is checked like any step before dispatch
+   (the attempt not aborted, its generation still current). And a decision or a late result of an older
    attempt never changes state a newer one committed (the generations of the
    commit queue). Whether one strategy instance serves every attempt, and
    what state it may keep across them, the spec decides; the provider's
