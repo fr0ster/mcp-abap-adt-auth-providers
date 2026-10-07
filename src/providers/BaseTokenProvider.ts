@@ -52,7 +52,11 @@ import {
   certificateNotAfter,
   certificateThumbprint,
 } from '../auth/certificateMaterial';
-import { misconfigured, ownOptions } from '../auth/configuration';
+import {
+  misconfigured,
+  ownOptions,
+  requiredFieldsMissing,
+} from '../auth/configuration';
 import { isGrant } from '../auth/grants';
 import { isPlainPromise, markHandled } from '../auth/handled';
 import { readSafely } from '../auth/knownCodes';
@@ -125,9 +129,10 @@ export interface TokenProviderHooks extends TokenProviderDebug {
    * How every renewal of this provider proceeds — whether to refresh,
    * whether to log in, when to stop, what becomes of a refresh token that
    * was sent (spec §6c). Required, no default (rule 7): `refreshThenLogin()`
-   * is the behaviour before 6.0.0, `refreshOnly()` never logs in. Given
-   * anything that is not a strategy, every renewal ends `unknown`
-   * `renewal-strategy` — the provider builds none of its own.
+   * is the behaviour before 6.0.0, `refreshOnly()` never logs in. A missing
+   * one, or one whose `next` is not a function, is refused at construction
+   * (`configuration` `required-fields-missing`, `renewal`) — the provider
+   * builds none of its own.
    */
   renewal: IRenewalStrategy;
 }
@@ -322,7 +327,7 @@ export abstract class BaseTokenProvider
    */
   private readonly discarded = new Set<string>();
   /** How every renewal proceeds: the consumer's strategy, never one of ours. */
-  private readonly renewal: IRenewalStrategy | undefined;
+  private readonly renewal: IRenewalStrategy;
   /** Steps ended by an abort, not yet handed to the strategy's `aborted`. */
   private readonly observations: RenewalAbortObservation[] = [];
   /**
@@ -375,9 +380,17 @@ export abstract class BaseTokenProvider
       rejected: 'token-request',
     });
     this.onTokens = config.onTokens;
-    // As given: a missing or unusable strategy fails each renewal that asks
-    // it (`renewal-strategy`), never replaced by a default (rule 7).
-    this.renewal = config.renewal;
+    // Required, no default (rule 7, spec §6c.3): an object whose `next` is a
+    // function, read without running a getter; anything else is refused here.
+    const renewal: unknown = config.renewal;
+    if (
+      renewal === null ||
+      typeof renewal !== 'object' ||
+      typeof readSafely(renewal, 'next') !== 'function'
+    ) {
+      throw requiredFieldsMissing(['renewal']);
+    }
+    this.renewal = renewal as IRenewalStrategy;
     // `true` itself: `'true'`, `1` or an environment variable never opt in.
     this.authDebug = config.authDebug === true;
     if (config.clientAuthentication && config.clientSecret !== undefined) {

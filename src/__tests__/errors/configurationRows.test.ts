@@ -157,8 +157,11 @@ function holding<T>(
   };
 }
 
-function samlConfig(extra: Partial<Saml2CommonConfig>): Saml2CommonConfig {
+function samlConfig(
+  extra: Partial<Saml2CommonConfig>,
+): Saml2CommonConfig & { renewal: ReturnType<typeof refreshThenLogin> } {
   return {
+    renewal: refreshThenLogin(),
     idpSsoUrl: 'https://idp.example/sso',
     spEntityId: 'sp',
     authorization: holding('http://localhost:61001/callback', 'PAYLOAD'),

@@ -463,6 +463,7 @@ describe('a strategy satisfies the clientSecret requirement', () => {
     expect(
       () =>
         new ClientCredentialsProvider({
+          renewal: refreshThenLogin(),
           uaaUrl: 'https://uaa',
           clientId: 'cid',
         } as never),
@@ -485,6 +486,7 @@ describe('a strategy satisfies the clientSecret requirement', () => {
     expect(
       () =>
         new AuthorizationCodeProvider({
+          renewal: refreshThenLogin(),
           uaaUrl: 'https://uaa',
           clientId: 'cid',
           authorization: codeStrategy(),

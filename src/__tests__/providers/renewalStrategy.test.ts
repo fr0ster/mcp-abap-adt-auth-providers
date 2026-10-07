@@ -293,11 +293,17 @@ describe('invalid decisions end the renewal unknown renewal-strategy, no step ta
     expect(provider.held().refresh).toBe('R');
   });
 
-  it('no strategy at all (an untyped consumer): unknown renewal-strategy, nothing built in its place', async () => {
-    const provider = seeded(undefined as unknown as IRenewalStrategy);
-    expectStrategyFailure(await rejectionOf(provider.getTokens()));
-    expect(provider.refreshes.items).toHaveLength(0);
-    expect(provider.logins.items).toHaveLength(0);
+  it('no strategy at all (an untyped consumer): refused at construction, nothing built in its place (renewalRequired.test.ts covers every provider)', () => {
+    let thrown: unknown;
+    try {
+      seeded(undefined as unknown as IRenewalStrategy);
+    } catch (error) {
+      thrown = error;
+    }
+    expect(errorOf(thrown)).toMatchObject({
+      kind: 'configuration',
+      facts: { case: 'required-fields-missing', fields: ['renewal'] },
+    });
   });
 
   it('a refused decision is logged in fixed words', async () => {

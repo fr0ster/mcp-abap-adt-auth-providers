@@ -397,6 +397,7 @@ describe('the static factories pass their signal to the strategy they compose', 
       (signal: AbortSignal) =>
         Saml2PureProvider.inBrowser(
           {
+            renewal: refreshThenLogin(),
             idpSsoUrl: 'https://idp.example/sso',
             spEntityId: 'sp',
             idpEntityId: 'idp',
