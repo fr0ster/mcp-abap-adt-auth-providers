@@ -784,3 +784,43 @@ describe('logging (spec §6c.9)', () => {
     ]);
   });
 });
+
+describe('a refresh commit that fails (review I-2, spec §6c.6)', () => {
+  /** Replaces the commit's persistence seam with one that throws. */
+  function failingPersist(provider: ScriptedProvider): void {
+    (provider as unknown as { persist: () => Promise<never> }).persist =
+      async () => {
+        throw new Error('SECRET store unavailable');
+      };
+  }
+
+  it('a failure after the install — the persistence seam — ends the renewal: no login, the credentials stay committed', async () => {
+    const provider = seeded(refreshThenLogin());
+    failingPersist(provider);
+    const thrown = rejectionOf(provider.getTokens());
+    const T2 = jwt('rotated');
+    (await provider.refreshes.nth(1)).result.resolve(tokens(T2, 'R2'));
+    const error = errorOf(await thrown);
+    expect(JSON.stringify(error)).not.toContain('SECRET');
+    await quiet();
+    expect(provider.logins.items).toHaveLength(0);
+    expect(provider.held()).toMatchObject({ access: T2, refresh: 'R2' });
+    // The committed credentials are the server's state: the cache answers.
+    await expect(provider.getTokens()).resolves.toMatchObject({
+      authorizationToken: T2,
+    });
+    expect(provider.refreshes.items).toHaveLength(1);
+  });
+
+  it('the same after a login: the renewal fails, nothing more', async () => {
+    const provider = new ScriptedProvider({ renewal: refreshThenLogin() });
+    failingPersist(provider);
+    const thrown = rejectionOf(provider.getTokens());
+    const T1 = jwt('login');
+    (await provider.logins.nth(1)).result.resolve(tokens(T1, 'S'));
+    await thrown;
+    await quiet();
+    expect(provider.logins.items).toHaveLength(1);
+    expect(provider.held()).toMatchObject({ access: T1, refresh: 'S' });
+  });
+});

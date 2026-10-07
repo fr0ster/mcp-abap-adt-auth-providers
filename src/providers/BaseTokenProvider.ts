@@ -154,6 +154,17 @@ type StepEnd =
     };
 
 /**
+ * A step's result could not be installed (a subclass's `updateTokens`
+ * threw): carried out of the commit so that a refresh step can tell it from
+ * a failure after the install — the persistence seam (spec §6c.6), which
+ * ends the renewal instead. Never thrown out of the provider: the step
+ * unwraps `thrown`.
+ */
+class InstallFailed {
+  constructor(readonly thrown: unknown) {}
+}
+
+/**
  * What a shared attempt answers its waiters: its value, or what it threw —
  * handed on as it is, so a failure the renewal built is the one thrown. A
  * plain object, never thenable (sharedAttempt's rule).
@@ -1232,12 +1243,15 @@ export abstract class BaseTokenProvider
           attempt,
           'refresh',
         );
-      } catch (thrown) {
-        // The server answered, so `spent` was sent and may be rotated away:
-        // a refresh that failed after it was sent — the strategy decides.
+      } catch (failure) {
+        // Only the install's own failure is the step's: the server answered,
+        // so `spent` was sent and may be rotated away — a refresh that failed
+        // after it was sent, and the strategy decides. Anything after the
+        // install (persistence) ends the renewal (§6c.6).
+        if (!(failure instanceof InstallFailed)) throw failure;
         throwIfAborted(signal);
         const error = this.classified(
-          thrown,
+          failure.thrown,
           this.operationOf('token-request'),
         );
         return {
@@ -1292,12 +1306,20 @@ export abstract class BaseTokenProvider
           refusal: error,
         };
       }
-      const committed = await this.commitCredentials(
-        result,
-        generation,
-        attempt,
-        'login',
-      );
+      // A login's install failure ends the renewal, as any commit failure
+      // does: unlike a refresh, no refresh token is left in doubt, so there
+      // is nothing for the strategy to decide.
+      let committed: BridgedTokenResult;
+      try {
+        committed = await this.commitCredentials(
+          result,
+          generation,
+          attempt,
+          'login',
+        );
+      } catch (failure) {
+        throw failure instanceof InstallFailed ? failure.thrown : failure;
+      }
       return this.judged(committed, 'login', start);
     } finally {
       signal.removeEventListener('abort', cut);
@@ -1381,7 +1403,11 @@ export abstract class BaseTokenProvider
           ? result
           : { ...result, refreshToken: undefined };
       const heldBefore = this.refreshToken;
-      this.updateTokens(accepted);
+      try {
+        this.updateTokens(accepted);
+      } catch (thrown) {
+        throw new InstallFailed(thrown);
+      }
       this.markIfElsewhere(accepted.authorizationToken);
       // Written once the commit applied its tokens, before onTokens (H2).
       logQuietly(() =>
@@ -1395,7 +1421,9 @@ export abstract class BaseTokenProvider
           },
         ),
       );
-      const told = await this.obtained(accepted, heldBefore);
+      // A failure from here on is not the step's: the credentials are
+      // committed, and it ends the renewal (§6c.6).
+      const told = await this.persist(accepted, heldBefore);
       // What it returns carries the refresh token held (G4).
       const held = this.heldRefresh().refreshToken;
       return held === undefined || told.refreshToken !== undefined
@@ -1408,6 +1436,19 @@ export abstract class BaseTokenProvider
     // were it, the credentials in place are the answer.
     throwIfAborted(attempt.signal);
     return this.heldResult() ?? result;
+  }
+
+  /**
+   * The commit's persistence seam, after the install: today the bridged
+   * `onTokens` notification (Task 30e routes the persistence strategy's
+   * awaited report here). Its failure is the renewal's failure, never a
+   * failed step: a store write that fails does not start a login (§6c.6).
+   */
+  private persist(
+    accepted: ITokenResult,
+    heldBefore: string | undefined,
+  ): Promise<BridgedTokenResult> {
+    return this.obtained(accepted, heldBefore);
   }
 
   /** The credentials held, as a result; undefined without a token. */
