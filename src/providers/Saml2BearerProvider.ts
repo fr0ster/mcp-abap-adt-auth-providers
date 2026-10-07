@@ -153,7 +153,8 @@ export class Saml2BearerProvider extends BaseTokenProvider {
    */
   protected async performRefresh(
     refreshToken: string,
-    _signal?: AbortSignal,
+    _signal: AbortSignal,
+    dispatched: () => void,
   ): Promise<ITokenResult> {
     if (!refreshToken) {
       throw refreshTokenRefused();
@@ -166,7 +167,7 @@ export class Saml2BearerProvider extends BaseTokenProvider {
       this.config.clientSecret,
       this.logger,
       await this.requestAuth(),
-      this.siteOptions(),
+      this.refreshSiteOptions(dispatched),
     );
 
     return {

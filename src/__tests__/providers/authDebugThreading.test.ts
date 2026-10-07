@@ -27,6 +27,7 @@ import { OidcPasswordProvider } from '../../providers/OidcPasswordProvider';
 import { OidcTokenExchangeProvider } from '../../providers/OidcTokenExchangeProvider';
 import { Saml2BearerProvider } from '../../providers/Saml2BearerProvider';
 import { UaaPasscodeProvider } from '../../providers/UaaPasscodeProvider';
+import { refreshThenLogin } from '../../renewal';
 import { phrase } from '../helpers/tokenRequestSites';
 
 jest.mock('axios', () => {
@@ -95,6 +96,7 @@ const PROVIDERS: [string, Make, string, string, string][] = [
     'ClientCredentialsProvider',
     (extra) =>
       new ClientCredentialsProvider({
+        renewal: refreshThenLogin(),
         uaaUrl: 'https://uaa',
         clientId: 'cid',
         clientSecret: SECRET,
@@ -108,6 +110,7 @@ const PROVIDERS: [string, Make, string, string, string][] = [
     'AuthorizationCodeProvider',
     (extra) =>
       new AuthorizationCodeProvider({
+        renewal: refreshThenLogin(),
         uaaUrl: 'https://uaa',
         clientId: 'cid',
         clientSecret: SECRET,
@@ -122,6 +125,7 @@ const PROVIDERS: [string, Make, string, string, string][] = [
     'UaaPasscodeProvider',
     (extra) =>
       new UaaPasscodeProvider({
+        renewal: refreshThenLogin(),
         uaaUrl: 'https://uaa',
         clientId: 'cf',
         clientSecret: SECRET,
@@ -136,6 +140,7 @@ const PROVIDERS: [string, Make, string, string, string][] = [
     'Saml2BearerProvider',
     (extra) =>
       new Saml2BearerProvider({
+        renewal: refreshThenLogin(),
         idpSsoUrl: 'https://idp/sso',
         spEntityId: 'sp-entity',
         uaaUrl: 'https://uaa',
@@ -154,6 +159,7 @@ const PROVIDERS: [string, Make, string, string, string][] = [
     'OidcBrowserProvider',
     (extra) =>
       new OidcBrowserProvider({
+        renewal: refreshThenLogin(),
         clientId: 'cid',
         clientSecret: SECRET,
         tokenEndpoint: 'https://idp/token',
@@ -169,6 +175,7 @@ const PROVIDERS: [string, Make, string, string, string][] = [
     'OidcDeviceFlowProvider',
     (extra) =>
       new OidcDeviceFlowProvider({
+        renewal: refreshThenLogin(),
         clientId: 'cid',
         clientSecret: SECRET,
         tokenEndpoint: 'https://idp/token',
@@ -185,6 +192,7 @@ const PROVIDERS: [string, Make, string, string, string][] = [
     'OidcPasswordProvider',
     (extra) =>
       new OidcPasswordProvider({
+        renewal: refreshThenLogin(),
         clientId: 'cid',
         clientSecret: SECRET,
         tokenEndpoint: 'https://idp/token',
@@ -200,6 +208,7 @@ const PROVIDERS: [string, Make, string, string, string][] = [
     'OidcTokenExchangeProvider',
     (extra) =>
       new OidcTokenExchangeProvider({
+        renewal: refreshThenLogin(),
         clientId: 'cid',
         clientSecret: SECRET,
         tokenEndpoint: 'https://idp/token',

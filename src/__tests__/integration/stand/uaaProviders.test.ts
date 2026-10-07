@@ -10,6 +10,7 @@ import { beforeAll, describe, expect, it, jest } from '@jest/globals';
 import type { IAuthorizationStrategy } from '@mcp-abap-adt/interfaces-auth';
 import { AuthorizationCodeProvider } from '../../../providers/AuthorizationCodeProvider';
 import { ClientCredentialsProvider } from '../../../providers/ClientCredentialsProvider';
+import { refreshThenLogin } from '../../../renewal';
 import { externalCodeStrategy } from '../../../strategies';
 import { authorizeByForm } from './formLogin';
 
@@ -44,6 +45,7 @@ const expiredJwt = (): string => {
 describeUaa('UAA providers against Cloud Foundry UAA', () => {
   it('ClientCredentialsProvider gets a client token', async () => {
     const tokens = await new ClientCredentialsProvider({
+      renewal: refreshThenLogin(),
       uaaUrl: UAA_URL as string,
       clientId: 'cc_client',
       clientSecret: 'secret',
@@ -67,6 +69,7 @@ describeUaa('UAA providers against Cloud Foundry UAA', () => {
 
     it('logs the user in through UAA’s login form', async () => {
       const tokens = await new AuthorizationCodeProvider({
+        renewal: refreshThenLogin(),
         uaaUrl: UAA_URL as string,
         clientId: 'authcode',
         clientSecret: 'secret',
@@ -82,6 +85,7 @@ describeUaa('UAA providers against Cloud Foundry UAA', () => {
 
     it('refreshes without logging in again', async () => {
       const first = await new AuthorizationCodeProvider({
+        renewal: refreshThenLogin(),
         uaaUrl: UAA_URL as string,
         clientId: 'authcode',
         clientSecret: 'secret',
@@ -94,6 +98,7 @@ describeUaa('UAA providers against Cloud Foundry UAA', () => {
         );
       });
       const refreshed = await new AuthorizationCodeProvider({
+        renewal: refreshThenLogin(),
         uaaUrl: UAA_URL as string,
         clientId: 'authcode',
         clientSecret: 'secret',

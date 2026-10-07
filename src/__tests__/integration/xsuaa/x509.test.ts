@@ -23,6 +23,7 @@ import {
   ClientCredentialsProvider,
   type ClientCredentialsProviderConfig,
 } from '../../../providers/ClientCredentialsProvider';
+import { refreshThenLogin } from '../../../renewal';
 
 const LOCAL = process.env.XSUAA_LOCAL;
 const describeXsuaa = LOCAL ? describe : describe.skip;
@@ -84,6 +85,7 @@ describeXsuaa(`An x509 service key against a real XSUAA${unlessSet}`, () => {
 
   it('ClientCredentialsProvider gets a client token over mTLS at certurl, with no secret anywhere', async () => {
     const config: ClientCredentialsProviderConfig = {
+      renewal: refreshThenLogin(),
       uaaUrl: x509.url,
       clientId: x509.clientid,
       // The provider's uaaUrl builds <url>/oauth/token, which takes a secret;

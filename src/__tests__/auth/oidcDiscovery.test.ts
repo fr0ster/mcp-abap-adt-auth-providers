@@ -18,6 +18,7 @@ import type {
 import axios from 'axios';
 import { discoverOidc, mtlsAlias } from '../../auth/oidcDiscovery';
 import { OidcPasswordProvider } from '../../providers/OidcPasswordProvider';
+import { refreshThenLogin } from '../../renewal';
 
 jest.mock('axios', () => {
   const mocked = jest.createMockFromModule<Record<string, unknown>>('axios');
@@ -122,6 +123,7 @@ describe('a successful discovery', () => {
       data: { access_token: 'at', expires_in: 60 },
     }));
     const provider = new OidcPasswordProvider({
+      renewal: refreshThenLogin(),
       issuerUrl: issuer,
       clientId: 'cid',
       username: 'u',

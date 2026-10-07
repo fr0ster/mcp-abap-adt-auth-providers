@@ -5,17 +5,24 @@ import { OidcBrowserProvider } from '../../providers/OidcBrowserProvider';
 import { Saml2BearerProvider } from '../../providers/Saml2BearerProvider';
 import { Saml2PureProvider } from '../../providers/Saml2PureProvider';
 import { UaaPasscodeProvider } from '../../providers/UaaPasscodeProvider';
+import { refreshThenLogin } from '../../renewal';
 import { BrowserCallbackStrategy } from '../../strategies/BrowserCallbackStrategy';
 import { isShippedValidator } from '../../validation/assertionValidator';
 
 const configOf = (p: unknown) =>
   (p as { config: Record<string, unknown> }).config;
-const uaa = { uaaUrl: 'https://uaa', clientId: 'c', clientSecret: 's' };
+const uaa = {
+  uaaUrl: 'https://uaa',
+  clientId: 'c',
+  clientSecret: 's',
+  renewal: refreshThenLogin(),
+};
 const saml = {
   idpSsoUrl: 'https://idp/sso',
   spEntityId: 'sp',
   idpEntityId: 'idp',
   cookieProvider: async () => 'c=1',
+  renewal: refreshThenLogin(),
 };
 // Not the brief's literal 'MIIB': that is too short to be a parseable X.509
 // certificate, and `toPem` proves the certificate before anything uses it
@@ -42,13 +49,19 @@ describe('no implicit defaults', () => {
       configOf(AuthorizationCodeProvider.inBrowser(uaa)).authorization,
     ).toBeInstanceOf(BrowserCallbackStrategy);
     expect(
-      configOf(OidcBrowserProvider.inBrowser({ clientId: 'c' })).authorization,
+      configOf(
+        OidcBrowserProvider.inBrowser({
+          renewal: refreshThenLogin(),
+          clientId: 'c',
+        }),
+      ).authorization,
     ).toBeInstanceOf(BrowserCallbackStrategy);
   });
 
   it('fromTerminal assembles a manual strategy with dispose()', () => {
     const strategy = configOf(
       UaaPasscodeProvider.fromTerminal({
+        renewal: refreshThenLogin(),
         uaaUrl: 'https://uaa',
         clientId: 'c',
       }),

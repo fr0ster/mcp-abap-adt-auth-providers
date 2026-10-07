@@ -30,6 +30,7 @@ jest.mock('../../auth/oidcToken', () => ({
 }));
 
 import { tokenExchange } from '../../auth/oidcToken';
+import { refreshThenLogin } from '../../renewal';
 import { wordsOf } from '../helpers/minted';
 
 const refused = { at: 'request' as const, status: 401, error: {} };
@@ -44,6 +45,7 @@ describe('AuthorizationCodeProvider: one renewal, one login', () => {
     });
     const strategy = { authorize } as unknown as IAuthorizationStrategy<string>;
     const provider = new AuthorizationCodeProvider({
+      renewal: refreshThenLogin(),
       uaaUrl: 'https://uaa.example',
       clientId: 'client',
       clientSecret: 'secret',
@@ -67,6 +69,7 @@ describe('a provider with no refresh grant', () => {
     const exchange = tokenExchange as jest.MockedFunction<typeof tokenExchange>;
     exchange.mockClear();
     const provider = new OidcTokenExchangeProvider({
+      renewal: refreshThenLogin(),
       tokenEndpoint: 'https://issuer.example/token',
       clientId: 'client',
       subjectToken: 'subject',
@@ -91,7 +94,7 @@ class RotatingProvider extends BaseTokenProvider {
   private spent = new Set<string>();
 
   constructor() {
-    super();
+    super({ renewal: refreshThenLogin() });
     this.authorizationToken = 'T1';
     this.refreshToken = 'R1';
     this.expiresAt = inAnHour();
@@ -117,7 +120,13 @@ class RotatingProvider extends BaseTokenProvider {
     };
   }
 
-  protected async performRefresh(): Promise<ITokenResult> {
+  protected async performRefresh(
+    _refreshToken: string,
+    _signal: AbortSignal,
+    dispatched: () => void,
+  ): Promise<ITokenResult> {
+    // The request leaves: the site would call this right before it.
+    dispatched();
     this.refreshes += 1;
     const presented = this.refreshToken as string;
     await new Promise((resolve) => setTimeout(resolve, 5));

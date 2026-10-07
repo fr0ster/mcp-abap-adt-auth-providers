@@ -19,6 +19,7 @@ import axios from 'axios';
 import { certificateThumbprint } from '../../auth/certificateMaterial';
 import { readBinding } from '../../auth/tokenBinding';
 import { OidcPasswordProvider } from '../../providers/OidcPasswordProvider';
+import { refreshThenLogin } from '../../renewal';
 import { wordsOf } from '../helpers/minted';
 import { recordingTargets } from '../helpers/targets';
 
@@ -98,6 +99,7 @@ function strategyWith(material?: ICertificateMaterial) {
 function seeded(token: string, material?: ICertificateMaterial) {
   const { strategy, tlsCalls } = strategyWith(material);
   const provider = new OidcPasswordProvider({
+    renewal: refreshThenLogin(),
     clientId: 'client',
     username: 'user',
     password: 'pw',
@@ -113,6 +115,7 @@ function seeded(token: string, material?: ICertificateMaterial) {
 function unseeded(material?: ICertificateMaterial) {
   const { strategy } = strategyWith(material);
   const provider = new OidcPasswordProvider({
+    renewal: refreshThenLogin(),
     clientId: 'client',
     username: 'user',
     password: 'pw',
@@ -146,6 +149,7 @@ function issuing(...tokens: string[]) {
 function rotating(options: { refreshToken?: string; token?: string } = {}) {
   const { strategy, tlsCalls } = strategyWith(A);
   const provider = new OidcPasswordProvider({
+    renewal: refreshThenLogin(),
     clientId: 'client',
     username: 'user',
     password: 'pw',
@@ -468,6 +472,7 @@ describe('establish decides on the token held, never fetching one', () => {
     mockedAxios.post.mockImplementation(() => pending);
     const { strategy } = strategyWith(A);
     const provider = new OidcPasswordProvider({
+      renewal: refreshThenLogin(),
       clientId: 'client',
       username: 'user',
       password: 'pw',
@@ -584,9 +589,19 @@ describe('a held token bound to another certificate, one pinned: renewed like an
         RENEWED_REFUSAL,
       );
     }
-    await expect(provider.getTokens()).resolves.toMatchObject({
-      authorizationToken: first,
-    });
+    // getTokens() answers the remembered refusal too (spec §6c.7); the
+    // token stays held, committed.
+    const thrown = await provider.getTokens().then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+    expect(
+      wordsOf({ ok: false, refusal: (thrown as { error: never }).error }),
+    ).toEqual(RENEWED_REFUSAL);
+    expect(
+      (provider as unknown as { authorizationToken?: string })
+        .authorizationToken,
+    ).toBe(first);
     expect(requests.map((r) => r.grant)).toEqual(['refresh_token']);
     expect(t.request.headers).toEqual({});
   });
@@ -606,9 +621,17 @@ describe('a held token bound to another certificate, one pinned: renewed like an
     const t = recordingTargets();
     await provider.authorize(t.requestTarget);
     expect(requests).toHaveLength(1);
-    await expect(
-      provider.rejected({ at: 'request', status: 401, error: undefined }),
-    ).resolves.toEqual({ ok: true });
+    // The new token is still bound elsewhere: what is presented did not
+    // change, so rejected() answers that refusal (spec §6c.7).
+    expect(
+      wordsOf(
+        await provider.rejected({
+          at: 'request',
+          status: 401,
+          error: undefined,
+        }),
+      ),
+    ).toEqual(RENEWED_REFUSAL);
     expect(requests).toHaveLength(2);
     expect(wordsOf(await provider.authorize(t.requestTarget))).toEqual(
       RENEWED_REFUSAL,

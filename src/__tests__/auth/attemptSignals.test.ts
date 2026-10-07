@@ -28,6 +28,7 @@ import { AuthorizationCodeProvider } from '../../providers/AuthorizationCodeProv
 import { OidcDeviceFlowProvider } from '../../providers/OidcDeviceFlowProvider';
 import { OidcPasswordProvider } from '../../providers/OidcPasswordProvider';
 import { UaaPasscodeProvider } from '../../providers/UaaPasscodeProvider';
+import { refreshThenLogin } from '../../renewal';
 import {
   Arrivals,
   type Deferred,
@@ -179,6 +180,7 @@ describe('discovery inside a renewal carries the attempt signal', () => {
     mockedAxios.get.mockResolvedValue(discovered);
     mockedAxios.post.mockResolvedValue(issued);
     const login = new OidcPasswordProvider({
+      renewal: refreshThenLogin(),
       issuerUrl: `https://idp/login-${Math.random()}`,
       clientId: 'cid',
       username: 'u',
@@ -198,6 +200,7 @@ describe('discovery inside a renewal carries the attempt signal', () => {
     mockedAxios.get.mockClear();
     mockedAxios.post.mockClear();
     const refresh = new OidcPasswordProvider({
+      renewal: refreshThenLogin(),
       issuerUrl: `https://idp/refresh-${Math.random()}`,
       clientId: 'cid',
       username: 'u',
@@ -222,6 +225,7 @@ describe('discovery inside a renewal carries the attempt signal', () => {
 /** A device flow provider on mocked endpoints. */
 function deviceProvider(logger: ILogger = silent) {
   return new OidcDeviceFlowProvider({
+    renewal: refreshThenLogin(),
     clientId: 'cid',
     deviceAuthorizationEndpoint: 'https://idp/device',
     tokenEndpoint: 'https://idp/token',
@@ -305,6 +309,7 @@ describe('the network never drains', () => {
       return answer.promise as Promise<unknown>;
     });
     const provider = new UaaPasscodeProvider({
+      renewal: refreshThenLogin(),
       uaaUrl: 'https://uaa',
       clientId: 'cf',
       authorization: strategy as IAuthorizationStrategy<string>,
@@ -326,6 +331,7 @@ describe('the network never drains', () => {
       return answer.promise as Promise<unknown>;
     });
     const provider = new AuthorizationCodeProvider({
+      renewal: refreshThenLogin(),
       uaaUrl: 'https://uaa',
       clientId: 'cid',
       clientSecret: 'sec',

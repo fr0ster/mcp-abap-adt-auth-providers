@@ -9,6 +9,7 @@
 import { describe, expect, it } from '@jest/globals';
 import { ClientCredentialsProvider } from '../../providers/ClientCredentialsProvider';
 import { UaaPasscodeProvider } from '../../providers/UaaPasscodeProvider';
+import { refreshThenLogin } from '../../renewal';
 import { staticCodeStrategy } from '../../strategies';
 
 /** The pre-6.0.0 parser, verbatim but for its name: the oracle. */
@@ -40,6 +41,7 @@ const jwtOf = (claims: object): string =>
 
 describe('parseExpirationFromJWT without a regex', () => {
   const probe = new Probe({
+    renewal: refreshThenLogin(),
     uaaUrl: 'https://uaa',
     clientId: 'cid',
     clientSecret: 'secret',
@@ -73,6 +75,7 @@ describe("UaaPasscodeProvider's base URL without a regex", () => {
     '',
   ])('%p: the same as the regex', (uaaUrl) => {
     const provider = new UaaPasscodeProvider({
+      renewal: refreshThenLogin(),
       uaaUrl,
       clientId: 'cf',
       authorization: staticCodeStrategy({ payload: 'p' }),

@@ -22,6 +22,7 @@ import {
   SamlAuthProvider,
   TokenAuthProvider,
 } from '../../index';
+import { refreshThenLogin } from '../../renewal';
 import { mintedRefusal } from '../helpers/minted';
 import { recordingTargets } from '../helpers/targets';
 
@@ -140,7 +141,7 @@ describe('A.2 — the credentials’ own refusals', () => {
         return 'client_credentials';
       }
     }
-    const p = new Same();
+    const p = new Same({ renewal: refreshThenLogin() });
     await p.authorize(recordingTargets().requestTarget);
     const error = refusal(await p.rejected(r401));
     expect(error.kind).toBe('renewal-unchanged');
@@ -258,7 +259,10 @@ describe('A.1 — the token binding refusals', () => {
       private readonly token: string,
       clientAuthentication?: IClientAuthentication,
     ) {
-      super(clientAuthentication ? { clientAuthentication } : {});
+      super({
+        renewal: refreshThenLogin(),
+        ...(clientAuthentication ? { clientAuthentication } : {}),
+      });
     }
     protected async performLogin(): Promise<ITokenResult> {
       return {

@@ -29,6 +29,7 @@ import { OidcDeviceFlowProvider } from '../../providers/OidcDeviceFlowProvider';
 import { OidcPasswordProvider } from '../../providers/OidcPasswordProvider';
 import { OidcTokenExchangeProvider } from '../../providers/OidcTokenExchangeProvider';
 import { UaaPasscodeProvider } from '../../providers/UaaPasscodeProvider';
+import { refreshThenLogin } from '../../renewal';
 import { asOidcResult } from '../../strategies/asOidcResult';
 import { staticCodeStrategy } from '../../strategies/codeStrategies';
 import {
@@ -197,6 +198,7 @@ const pasted = (code: string) =>
 const providers: Record<string, Build> = {
   'OIDC password, discovered endpoints': (logger, authDebug) =>
     new OidcPasswordProvider({
+      renewal: refreshThenLogin(),
       issuerUrl: issuer(),
       clientId: 'c',
       username: 'u',
@@ -206,6 +208,7 @@ const providers: Record<string, Build> = {
     }),
   'OIDC password, configured endpoint': (logger, authDebug) =>
     new OidcPasswordProvider({
+      renewal: refreshThenLogin(),
       tokenEndpoint: configured('token'),
       clientId: 'c',
       username: 'u',
@@ -215,6 +218,7 @@ const providers: Record<string, Build> = {
     }),
   'OIDC token exchange, discovered endpoints': (logger, authDebug) =>
     new OidcTokenExchangeProvider({
+      renewal: refreshThenLogin(),
       issuerUrl: issuer(),
       clientId: 'c',
       subjectToken: 's',
@@ -224,6 +228,7 @@ const providers: Record<string, Build> = {
     }),
   'OIDC token exchange, configured endpoint': (logger, authDebug) =>
     new OidcTokenExchangeProvider({
+      renewal: refreshThenLogin(),
       tokenEndpoint: configured('token'),
       clientId: 'c',
       subjectToken: 's',
@@ -233,6 +238,7 @@ const providers: Record<string, Build> = {
     }),
   'OIDC device flow, discovered endpoints': (logger, authDebug) =>
     new OidcDeviceFlowProvider({
+      renewal: refreshThenLogin(),
       issuerUrl: issuer(),
       clientId: 'c',
       presenter: consoleDeviceCodePresenter(logger),
@@ -241,6 +247,7 @@ const providers: Record<string, Build> = {
     }),
   'OIDC device flow, configured endpoints': (logger, authDebug) =>
     new OidcDeviceFlowProvider({
+      renewal: refreshThenLogin(),
       deviceAuthorizationEndpoint: configured('device'),
       tokenEndpoint: configured('token'),
       clientId: 'c',
@@ -250,6 +257,7 @@ const providers: Record<string, Build> = {
     }),
   'OIDC browser, discovered endpoints, URL prompted': (logger, authDebug) =>
     new OidcBrowserProvider({
+      renewal: refreshThenLogin(),
       issuerUrl: issuer(),
       clientId: 'c',
       authorization: asOidcResult(pasted('code-1')),
@@ -258,6 +266,7 @@ const providers: Record<string, Build> = {
     }),
   'OIDC browser, configured endpoints, URL prompted': (logger, authDebug) =>
     new OidcBrowserProvider({
+      renewal: refreshThenLogin(),
       authorizationEndpoint: `${base}/authorize?x=${CONTROLS}`,
       tokenEndpoint: configured('token'),
       clientId: 'c',
@@ -267,6 +276,7 @@ const providers: Record<string, Build> = {
     }),
   'client credentials, configured UAA URL': (logger, authDebug) =>
     new ClientCredentialsProvider({
+      renewal: refreshThenLogin(),
       uaaUrl: `${base}/uaa-${HOSTILE}`,
       clientId: 'c',
       clientSecret: 'client-secret-value',
@@ -275,6 +285,7 @@ const providers: Record<string, Build> = {
     }),
   'authorization code, configured UAA URL': (logger, authDebug) =>
     new AuthorizationCodeProvider({
+      renewal: refreshThenLogin(),
       uaaUrl: `${base}/uaa-${HOSTILE}`,
       clientId: 'c',
       clientSecret: 'client-secret-value',
@@ -284,6 +295,7 @@ const providers: Record<string, Build> = {
     }),
   'UAA passcode, configured UAA URL': (logger, authDebug) =>
     new UaaPasscodeProvider({
+      renewal: refreshThenLogin(),
       uaaUrl: `${base}/uaa-${HOSTILE}`,
       clientId: 'cf',
       authorization: staticCodeStrategy({ payload: 'pc-1' }),
@@ -295,6 +307,7 @@ const providers: Record<string, Build> = {
     authDebug,
   ) =>
     new AuthorizationCodeProvider({
+      renewal: refreshThenLogin(),
       uaaUrl: `${base}/uaa-${CONTROLS}`,
       clientId: 'c',
       clientSecret: 'client-secret-value',
@@ -304,6 +317,7 @@ const providers: Record<string, Build> = {
     }),
   'UAA passcode, UAA URL with controls, URL prompted': (logger, authDebug) =>
     new UaaPasscodeProvider({
+      renewal: refreshThenLogin(),
       uaaUrl: `${base}/uaa-${CONTROLS}`,
       clientId: 'cf',
       authorization: manualPasscodeStrategy({ read: async () => 'pc-1' }),

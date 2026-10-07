@@ -46,6 +46,7 @@ import {
   type Saml2CommonConfig,
   validateSamlConfig,
 } from '../../providers/saml2Utils';
+import { refreshThenLogin } from '../../renewal';
 import { SsoProviderFactory } from '../../sso/SsoProviderFactory';
 import type { SsoProviderConfig } from '../../sso/types';
 import { browserCallbackStrategy } from '../../strategies/BrowserCallbackStrategy';
@@ -175,6 +176,7 @@ describe('E1 — required fields missing (ClientCredentials, AuthorizationCode)'
     const thrown = await thrownBy(
       () =>
         new ClientCredentialsProvider({
+          renewal: refreshThenLogin(),
           uaaUrl: '',
           clientId: '',
         }),
@@ -191,6 +193,7 @@ describe('E1 — required fields missing (ClientCredentials, AuthorizationCode)'
     const thrown = await thrownBy(
       () =>
         new AuthorizationCodeProvider({
+          renewal: refreshThenLogin(),
           uaaUrl: '',
           clientId: MARKER,
           clientSecret: MARKER,
@@ -210,6 +213,7 @@ describe('E2 — clientSecret beside clientAuthentication', () => {
     const thrown = await thrownBy(
       () =>
         new ClientCredentialsProvider({
+          renewal: refreshThenLogin(),
           uaaUrl: 'https://uaa.example',
           clientId: 'client',
           // '' counts: decided on presence.
@@ -451,6 +455,7 @@ describe('E12 — redirect mismatch', () => {
     ['after the strategy returned', () => holding(USED, 'code')],
   ])('E12: %s, through getTokens()', async (_name, strategy) => {
     const provider = new AuthorizationCodeProvider({
+      renewal: refreshThenLogin(),
       uaaUrl: 'http://127.0.0.1:9',
       clientId: 'client',
       clientSecret: 'secret',
@@ -462,6 +467,7 @@ describe('E12 — redirect mismatch', () => {
 
   it('A11: a configuration failure inside a moment is the moment’s refusal, its case, fields and words kept', async () => {
     const provider = new AuthorizationCodeProvider({
+      renewal: refreshThenLogin(),
       uaaUrl: 'http://127.0.0.1:9',
       clientId: 'client',
       clientSecret: 'secret',
@@ -499,6 +505,7 @@ describe('an unparseable authorizationUrl (spec §6a0)', () => {
     const thrown = await thrownBy(
       () =>
         new AuthorizationCodeProvider({
+          renewal: refreshThenLogin(),
           uaaUrl: 'https://uaa.example',
           clientId: 'client',
           clientSecret: 'secret',
@@ -511,6 +518,7 @@ describe('an unparseable authorizationUrl (spec §6a0)', () => {
 
   it('is refused at login when it changed after construction', async () => {
     const provider = new AuthorizationCodeProvider({
+      renewal: refreshThenLogin(),
       uaaUrl: 'https://uaa.example',
       clientId: 'client',
       clientSecret: 'secret',
@@ -536,6 +544,7 @@ describe('E13–E16 — OIDC endpoints', () => {
   });
   const password = (extra: object = {}) =>
     new OidcPasswordProvider({
+      renewal: refreshThenLogin(),
       clientId: 'client',
       username: 'user',
       password: MARKER,
@@ -543,6 +552,7 @@ describe('E13–E16 — OIDC endpoints', () => {
     });
   const exchange = (extra: object = {}) =>
     new OidcTokenExchangeProvider({
+      renewal: refreshThenLogin(),
       clientId: 'client',
       subjectToken: MARKER,
       subjectTokenType: 'urn:ietf:params:oauth:token-type:access_token',
@@ -550,12 +560,14 @@ describe('E13–E16 — OIDC endpoints', () => {
     });
   const device = (extra: object = {}) =>
     new OidcDeviceFlowProvider({
+      renewal: refreshThenLogin(),
       clientId: 'client',
       presenter: { present: async () => undefined } as never,
       ...extra,
     });
   const browser = (extra: object = {}) =>
     new OidcBrowserProvider({
+      renewal: refreshThenLogin(),
       clientId: 'client',
       authorization: asking('http://localhost:61001/callback', {
         code: 'code',

@@ -20,6 +20,7 @@ import { OidcTokenExchangeProvider } from '../../providers/OidcTokenExchangeProv
 import { Saml2BearerProvider } from '../../providers/Saml2BearerProvider';
 import { Saml2PureProvider } from '../../providers/Saml2PureProvider';
 import { UaaPasscodeProvider } from '../../providers/UaaPasscodeProvider';
+import { refreshThenLogin } from '../../renewal';
 import { recordingTargets } from '../helpers/targets';
 
 const HOUR = 3600_000;
@@ -57,6 +58,7 @@ function samlPure(
   const cookieProvider = jest.fn(async () => loginCookies);
   const onTokens = jest.fn(async (_result: ITokenResult) => {});
   const provider = new Saml2PureProvider({
+    renewal: refreshThenLogin(),
     idpSsoUrl: 'https://idp/sso',
     spEntityId: 'sp',
     idpInitiated: true,
@@ -221,6 +223,7 @@ const jwtProviders: Array<[string, (seed: Seed) => BaseTokenProvider]> = [
     'AuthorizationCodeProvider',
     (seed) =>
       new AuthorizationCodeProvider({
+        renewal: refreshThenLogin(),
         uaaUrl: 'https://uaa',
         clientId: 'c',
         clientSecret: 's',
@@ -232,6 +235,7 @@ const jwtProviders: Array<[string, (seed: Seed) => BaseTokenProvider]> = [
     'UaaPasscodeProvider',
     (seed) =>
       new UaaPasscodeProvider({
+        renewal: refreshThenLogin(),
         uaaUrl: 'https://uaa',
         clientId: 'c',
         authorization: neverCalled,
@@ -242,6 +246,7 @@ const jwtProviders: Array<[string, (seed: Seed) => BaseTokenProvider]> = [
     'OidcBrowserProvider',
     (seed) =>
       new OidcBrowserProvider({
+        renewal: refreshThenLogin(),
         clientId: 'c',
         tokenEndpoint: 'https://idp/token',
         authorizationEndpoint: 'https://idp/auth',
@@ -253,6 +258,7 @@ const jwtProviders: Array<[string, (seed: Seed) => BaseTokenProvider]> = [
     'OidcDeviceFlowProvider',
     (seed) =>
       new OidcDeviceFlowProvider({
+        renewal: refreshThenLogin(),
         clientId: 'c',
         tokenEndpoint: 'https://idp/token',
         deviceAuthorizationEndpoint: 'https://idp/device',
@@ -268,6 +274,7 @@ const jwtProviders: Array<[string, (seed: Seed) => BaseTokenProvider]> = [
     'OidcPasswordProvider',
     (seed) =>
       new OidcPasswordProvider({
+        renewal: refreshThenLogin(),
         clientId: 'c',
         tokenEndpoint: 'https://idp/token',
         username: 'u',
@@ -279,6 +286,7 @@ const jwtProviders: Array<[string, (seed: Seed) => BaseTokenProvider]> = [
     'OidcTokenExchangeProvider',
     (seed) =>
       new OidcTokenExchangeProvider({
+        renewal: refreshThenLogin(),
         clientId: 'c',
         tokenEndpoint: 'https://idp/token',
         subjectToken: 'subject',
@@ -290,6 +298,7 @@ const jwtProviders: Array<[string, (seed: Seed) => BaseTokenProvider]> = [
     'Saml2BearerProvider',
     (seed) =>
       new Saml2BearerProvider({
+        renewal: refreshThenLogin(),
         ...saml,
         tokenUrl: 'https://uaa/oauth/token',
         clientId: 'c',

@@ -37,6 +37,7 @@ import { OidcTokenExchangeProvider } from '../../providers/OidcTokenExchangeProv
 import { Saml2BearerProvider } from '../../providers/Saml2BearerProvider';
 import { Saml2PureProvider } from '../../providers/Saml2PureProvider';
 import { UaaPasscodeProvider } from '../../providers/UaaPasscodeProvider';
+import { refreshThenLogin } from '../../renewal';
 import { DefaultSncLibraryLocator } from '../../snc/DefaultSncLibraryLocator';
 import { SecureLoginClientProbe } from '../../snc/SecureLoginClientProbe';
 import { SncLogonProvider } from '../../snc/SncLogonProvider';
@@ -143,7 +144,12 @@ const makers: Record<string, Make> = {
     AuthorizationCodeProvider.inBrowser(h(x)),
   'AuthorizationCodeProvider.inBrowser options': (x) =>
     AuthorizationCodeProvider.inBrowser(
-      { uaaUrl: 'https://uaa', clientId: 'c', clientSecret: 's' },
+      {
+        renewal: refreshThenLogin(),
+        uaaUrl: 'https://uaa',
+        clientId: 'c',
+        clientSecret: 's',
+      },
       h(x),
     ),
   'new OidcBrowserProvider': (x) => new OidcBrowserProvider(h(x)),

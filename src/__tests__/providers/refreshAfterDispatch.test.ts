@@ -14,6 +14,7 @@ import { readFailure } from '@mcp-abap-adt/auth-errors';
 import type { ITokenResult } from '@mcp-abap-adt/interfaces-auth';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
 import { AuthorizationCodeProvider } from '../../providers/AuthorizationCodeProvider';
+import { refreshThenLogin } from '../../renewal';
 import {
   Arrivals,
   type Deferred,
@@ -93,6 +94,7 @@ function provider(
   const seen: Seen[] = [];
   const notified = new Arrivals<Seen>();
   const p = new AuthorizationCodeProvider({
+    renewal: refreshThenLogin(),
     uaaUrl: server.url,
     clientId: 'cid',
     clientSecret: 'sec',
@@ -258,7 +260,9 @@ describe('quarantine before the queue', () => {
 });
 
 describe('tombstones for life', () => {
-  it('R cut, S installed, a newer commit returns R: R is not installed, never submitted again, and the next renewal logs in', async () => {
+  // Spec §6c.5: a result carrying a discarded refresh token is read as
+  // carrying none, nothing more — S, held before, stays held.
+  it('R cut, S installed, a newer commit returns R: R is not installed, never submitted again, and S stays held', async () => {
     const strategy = waitingStrategy();
     const { p, seen } = provider(strategy, {
       access: expired('held'),
@@ -279,14 +283,18 @@ describe('tombstones for life', () => {
     const T2 = expired('two');
     second.answer(200, { access_token: T2, refresh_token: 'R' });
     const afterS = await refreshS;
-    expect(afterS.refreshToken).toBeUndefined();
-    expect(seen.at(-1)).toEqual([T2, undefined, 'clear']);
+    expect(afterS.refreshToken).toBe('S');
+    // Told as a result with no refresh token: the one stored stands.
+    expect(seen.at(-1)).toEqual([T2, undefined, 'keep']);
 
-    // The next renewal: no refresh token to send — a login.
+    // The next renewal refreshes S again; R is never submitted again.
     const next = p.getTokens();
-    (await strategy.nth(2)).answer('code-2');
-    await expect(next).resolves.toMatchObject({ refreshToken: 'S-2' });
-    expect(submitted()).toEqual(['R', 'S']);
+    const third = await waitForRefresh(2);
+    expect(third.params.get('refresh_token')).toBe('S');
+    third.answer(200, { access_token: jwt('three'), refresh_token: 'S3' });
+    await expect(next).resolves.toMatchObject({ refreshToken: 'S3' });
+    expect(submitted()).toEqual(['R', 'S', 'S']);
+    expect(strategy.calls).toHaveLength(1);
     held.answer(200, { access_token: jwt('late') });
   });
 
@@ -388,7 +396,10 @@ describe('a refresh answered, then cut while its outcome waits in the queue', ()
 });
 
 describe('a refresh whose own commit step fails', () => {
-  it('after the server rotated R → R2, a throwing commit step: R is spent, the next renewal logs in and R reaches the server once', async () => {
+  // A commit step that throws after the server answered is a refresh that
+  // failed after it was sent (spec §6c.5): refreshThenLogin() discards R and
+  // logs in, within the same renewal.
+  it('after the server rotated R → R2, a throwing commit step: R is spent, the renewal logs in and R reaches the server once', async () => {
     class FailingOnce extends AuthorizationCodeProvider {
       fail = 1;
       protected override updateTokens(
@@ -403,6 +414,7 @@ describe('a refresh whose own commit step fails', () => {
     }
     const strategy = waitingStrategy();
     const p = new FailingOnce({
+      renewal: refreshThenLogin(),
       uaaUrl: server.url,
       clientId: 'cid',
       clientSecret: 'sec',
@@ -411,16 +423,17 @@ describe('a refresh whose own commit step fails', () => {
       accessToken: expired('held'),
       refreshToken: 'R',
     });
-    const failed = rejectionOf(p.getTokens());
+    const renewed = p.getTokens();
     (await waitForRefresh(0)).answer(200, {
       access_token: jwt('rotated'),
       refresh_token: 'R2',
     });
-    await failed;
-
-    const next = p.getTokens();
     (await strategy.nth(1)).answer('code-1');
-    await expect(next).resolves.toMatchObject({ refreshToken: 'S-1' });
+    await expect(renewed).resolves.toMatchObject({ refreshToken: 'S-1' });
+    await expect(p.getTokens()).resolves.toMatchObject({
+      refreshToken: 'S-1',
+    });
     expect(submitted()).toEqual(['R']);
+    expect(strategy.calls).toHaveLength(1);
   });
 });

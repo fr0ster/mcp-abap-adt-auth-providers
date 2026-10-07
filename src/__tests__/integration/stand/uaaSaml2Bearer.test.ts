@@ -22,6 +22,7 @@ import { beforeAll, describe, expect, it, jest } from '@jest/globals';
 import { signXml } from '@mcp-abap-adt/auth-mocks';
 import type { IAuthorizationStrategy } from '@mcp-abap-adt/interfaces-auth';
 import { Saml2BearerProvider } from '../../../providers/Saml2BearerProvider';
+import { refreshThenLogin } from '../../../renewal';
 import { staticCodeStrategy } from '../../../strategies';
 import { createSignedAssertionValidator } from '../../../validation/assertionValidator';
 import { defaultReplayStore } from '../../../validation/inMemoryReplayStore';
@@ -155,6 +156,7 @@ const delivered = (payload: string) =>
 describeUaa('Saml2BearerProvider against Cloud Foundry UAA', () => {
   it('exchanges a bearer assertion and receives a refresh token when the client may hold one', async () => {
     const tokens = await new Saml2BearerProvider({
+      renewal: refreshThenLogin(),
       ...baseConfig('saml_rt'),
       authorization: delivered(bearerAssertion()),
     }).getTokens();
@@ -165,6 +167,7 @@ describeUaa('Saml2BearerProvider against Cloud Foundry UAA', () => {
 
   it('spends that refresh token without running the authorization strategy', async () => {
     const first = await new Saml2BearerProvider({
+      renewal: refreshThenLogin(),
       ...baseConfig('saml_rt'),
       authorization: delivered(bearerAssertion()),
     }).getTokens();
@@ -173,6 +176,7 @@ describeUaa('Saml2BearerProvider against Cloud Foundry UAA', () => {
       throw new Error('the refresh must not reach the authorization strategy');
     });
     const refreshed = await new Saml2BearerProvider({
+      renewal: refreshThenLogin(),
       ...baseConfig('saml_rt'),
       accessToken: expiredJwt(),
       refreshToken: first.refreshToken,
@@ -189,6 +193,7 @@ describeUaa('Saml2BearerProvider against Cloud Foundry UAA', () => {
   // either encoding, so the provider has to take the Assertion out of it.
   it('exchanges the SAMLResponse an interactive login delivers', async () => {
     const tokens = await new Saml2BearerProvider({
+      renewal: refreshThenLogin(),
       ...baseConfig('saml_rt'),
       authorization: delivered(samlResponse()),
     }).getTokens();
@@ -199,6 +204,7 @@ describeUaa('Saml2BearerProvider against Cloud Foundry UAA', () => {
 
   it('receives no refresh token when the client may not hold one', async () => {
     const tokens = await new Saml2BearerProvider({
+      renewal: refreshThenLogin(),
       ...baseConfig('saml_nort'),
       authorization: delivered(bearerAssertion()),
     }).getTokens();

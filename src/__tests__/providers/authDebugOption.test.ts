@@ -20,6 +20,7 @@ import type {
   UaaPasscodeProviderConfig,
 } from '../../index';
 import { ClientCredentialsProvider } from '../../providers';
+import { refreshThenLogin } from '../../renewal';
 
 /** A provider showing what its base read. */
 class Probe extends ClientCredentialsProvider {
@@ -30,6 +31,7 @@ class Probe extends ClientCredentialsProvider {
 
 const make = (authDebug: unknown): Probe =>
   new Probe({
+    renewal: refreshThenLogin(),
     uaaUrl: 'https://uaa.example',
     clientId: 'client',
     clientSecret: 'secret',
@@ -64,6 +66,7 @@ describe('authDebug', () => {
 
   it('is read once, at construction', () => {
     const config: ClientCredentialsProviderConfig = {
+      renewal: refreshThenLogin(),
       uaaUrl: 'https://uaa.example',
       clientId: 'client',
       clientSecret: 'secret',

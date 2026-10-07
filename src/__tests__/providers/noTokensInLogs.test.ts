@@ -28,6 +28,7 @@ import { AuthorizationCodeProvider } from '../../providers/AuthorizationCodeProv
 import { OidcDeviceFlowProvider } from '../../providers/OidcDeviceFlowProvider';
 import { Saml2BearerProvider } from '../../providers/Saml2BearerProvider';
 import { Saml2PureProvider } from '../../providers/Saml2PureProvider';
+import { refreshThenLogin } from '../../renewal';
 import { SncLogonProvider } from '../../snc/SncLogonProvider';
 import { browserCallbackStrategy, staticCodeStrategy } from '../../strategies';
 import { SITES, tokenReply } from '../helpers/tokenRequestSites';
@@ -115,6 +116,7 @@ describe('no token in the logs', () => {
   it('logs neither the access token nor the refresh token, in whole or in part', async () => {
     const { logger, lines } = recordingLogger();
     const provider = new AuthorizationCodeProvider({
+      renewal: refreshThenLogin(),
       uaaUrl: 'https://uaa.example',
       clientId: 'client',
       clientSecret: 'secret',
@@ -143,6 +145,7 @@ describe('no token in the logs', () => {
     const { logger, lines } = recordingLogger();
     const expiresAt = Date.now() + 3600_000;
     const saml = new Saml2PureProvider({
+      renewal: refreshThenLogin(),
       idpSsoUrl: 'https://idp/sso',
       spEntityId: 'sp',
       idpInitiated: true,
@@ -155,6 +158,7 @@ describe('no token in the logs', () => {
     });
     await saml.getTokens();
     const code = new AuthorizationCodeProvider({
+      renewal: refreshThenLogin(),
       uaaUrl: 'https://uaa.example',
       clientId: 'client',
       clientSecret: 'secret',
@@ -401,6 +405,7 @@ describe('no message of a thrown error in the logs', () => {
     extra: Partial<ConstructorParameters<typeof AuthorizationCodeProvider>[0]>,
   ) =>
     new AuthorizationCodeProvider({
+      renewal: refreshThenLogin(),
       uaaUrl: 'https://uaa.example',
       clientId: 'client',
       accessToken: EXPIRED,
@@ -531,6 +536,7 @@ describe('no message of a thrown error in the logs', () => {
           throw refused400();
         });
         return new OidcDeviceFlowProvider({
+          renewal: refreshThenLogin(),
           clientId: 'cid',
           clientSecret: 'secret',
           tokenEndpoint: 'https://idp/token',
@@ -559,6 +565,7 @@ describe('no message of a thrown error in the logs', () => {
           throw refused400();
         });
         return new Saml2BearerProvider({
+          renewal: refreshThenLogin(),
           idpSsoUrl: 'https://idp/sso',
           spEntityId: 'sp',
           uaaUrl: 'https://uaa',

@@ -17,6 +17,7 @@ import type {
 } from '@mcp-abap-adt/interfaces-auth';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
 import type { BridgedTokenResult } from '../../providers/BaseTokenProvider';
+import { refreshThenLogin } from '../../renewal';
 import {
   Arrivals,
   type Deferred,
@@ -31,6 +32,19 @@ import {
   thumbprintOf,
 } from '../helpers/certificates';
 import { ScriptedProvider, tokens } from '../helpers/scriptedProvider';
+
+/**
+ * The `token-binding` `renewed-bound-elsewhere` failure: since 6.0.0 a
+ * renewal whose step obtained a token still bound elsewhere stops with it
+ * (`refreshThenLogin()`, spec §6c.5 step 8, §6c.7), committed all the same.
+ */
+function isRenewedBoundElsewhere(error: unknown): boolean {
+  const read = readFailure(error, 'unfamiliar-error');
+  return (
+    read.kind === 'token-binding' &&
+    (read.facts as { problem?: string }).problem === 'renewed-bound-elsewhere'
+  );
+}
 
 function isAborted(error: unknown): boolean {
   const read = readFailure(error, 'unfamiliar-error');
@@ -69,7 +83,10 @@ const boundTo = (thumbprint: string, subject: string) =>
 describe('the doomed-join window', () => {
   it('every waiter aborts while the login is outstanding: a new caller starts afresh; the late result changes nothing', async () => {
     const { seen, onTokens } = recorder();
-    const provider = new ScriptedProvider({ onTokens });
+    const provider = new ScriptedProvider({
+      renewal: refreshThenLogin(),
+      onTokens,
+    });
     const only = new AbortController();
     const doomed = rejectionOf(provider.getTokens({ signal: only.signal }));
     const first = await provider.logins.nth(1);
@@ -113,7 +130,10 @@ describe('the doomed-join window', () => {
         return read.promise;
       },
     };
-    const provider = new ScriptedProvider({ clientAuthentication });
+    const provider = new ScriptedProvider({
+      renewal: refreshThenLogin(),
+      clientAuthentication,
+    });
     const pin = (signal?: AbortSignal) =>
       (
         provider as unknown as {
@@ -144,6 +164,7 @@ describe('the doomed-join window, alone', () => {
   it('a pin whose only waiter aborted: its late loader read pins nothing', async () => {
     const read = deferred<ICertificateMaterial>();
     const provider = new ScriptedProvider({
+      renewal: refreshThenLogin(),
       clientAuthentication: {
         authenticate: async () => ({}),
         tlsMaterial: () => read.promise,
@@ -171,6 +192,7 @@ describe('the commit queue', () => {
     let active = 0;
     let most = 0;
     const provider = new ScriptedProvider({
+      renewal: refreshThenLogin(),
       onTokens: async (result) => {
         active += 1;
         most = Math.max(most, active);
@@ -223,6 +245,7 @@ describe('the commit queue', () => {
     };
     const T0 = jwt('zero', -3600);
     const provider = new ScriptedProvider({
+      renewal: refreshThenLogin(),
       onTokens,
       logger,
       accessToken: T0,
@@ -268,6 +291,7 @@ describe('the commit queue', () => {
       error: () => undefined,
     };
     const provider = new ScriptedProvider({
+      renewal: refreshThenLogin(),
       logger,
       accessToken: jwt('old', -3600),
       refreshToken: 'R0',
@@ -306,18 +330,17 @@ describe('separate watermarks: the pin commit and the credential commit', () => 
     const { seen, onTokens } = recorder();
     const { reads, strategy } = pinningStrategy();
     const provider = new ScriptedProvider({
+      renewal: refreshThenLogin(),
       onTokens,
       clientAuthentication: strategy,
     });
-    const renewed = provider.getTokens();
+    const renewed = rejectionOf(provider.getTokens());
     const login = await provider.logins.nth(1);
     // Bound elsewhere than the certificate this renewal pinned.
     const elsewhere = boundTo(thumbprintOf(otherCertificate()), 'login');
     login.result.resolve(tokens(elsewhere, 'R1'));
-    await expect(renewed).resolves.toMatchObject({
-      authorizationToken: elsewhere,
-      refreshToken: 'R1',
-    });
+    // Committed, and the renewal stops with the binding refusal (§6c.7).
+    expect(isRenewedBoundElsewhere(await renewed)).toBe(true);
     expect(seen).toEqual([[elsewhere, 'R1', 'replace']]);
     expect(reads).toHaveBeenCalledTimes(1);
     expect(provider.held()).toEqual({
@@ -325,10 +348,11 @@ describe('separate watermarks: the pin commit and the credential commit', () => 
       refresh: 'R1',
       pinned: thumbprintOf(certificate()),
     });
-    // markIfElsewhere saw the pin: the token is remembered, not renewed again.
-    await expect(provider.getTokens()).resolves.toMatchObject({
-      authorizationToken: elsewhere,
-    });
+    // markIfElsewhere saw the pin: the token is remembered, not renewed
+    // again — the strategy stops on its lastRenewal.
+    expect(
+      isRenewedBoundElsewhere(await rejectionOf(provider.getTokens())),
+    ).toBe(true);
     expect(provider.logins.items).toHaveLength(1);
     expect(provider.refreshes.items).toHaveLength(0);
   });
@@ -337,26 +361,28 @@ describe('separate watermarks: the pin commit and the credential commit', () => 
     const { seen, onTokens } = recorder();
     const { reads, strategy } = pinningStrategy();
     const provider = new ScriptedProvider({
+      renewal: refreshThenLogin(),
       onTokens,
       clientAuthentication: strategy,
       accessToken: jwt('seeded', -3600),
       refreshToken: 'R0',
     });
-    const renewed = provider.getTokens();
+    const renewed = rejectionOf(provider.getTokens());
     const refresh = await provider.refreshes.nth(1);
     expect(refresh.refreshToken).toBe('R0');
     const elsewhere = boundTo(thumbprintOf(otherCertificate()), 'refresh');
     refresh.result.resolve(tokens(elsewhere, 'R1'));
-    await expect(renewed).resolves.toMatchObject({
-      authorizationToken: elsewhere,
-      refreshToken: 'R1',
-    });
+    expect(isRenewedBoundElsewhere(await renewed)).toBe(true);
     expect(seen).toEqual([[elsewhere, 'R1', 'replace']]);
     expect(reads).toHaveBeenCalledTimes(1);
-    expect(provider.held().pinned).toBe(thumbprintOf(certificate()));
-    await expect(provider.getTokens()).resolves.toMatchObject({
-      authorizationToken: elsewhere,
+    expect(provider.held()).toEqual({
+      access: elsewhere,
+      refresh: 'R1',
+      pinned: thumbprintOf(certificate()),
     });
+    expect(
+      isRenewedBoundElsewhere(await rejectionOf(provider.getTokens())),
+    ).toBe(true);
     expect(provider.refreshes.items).toHaveLength(1);
   });
 });
@@ -365,6 +391,7 @@ describe('dispositions', () => {
   it("a refresh returning a new token: 'replace'", async () => {
     const { seen, onTokens } = recorder();
     const provider = new ScriptedProvider({
+      renewal: refreshThenLogin(),
       onTokens,
       accessToken: jwt('old', -3600),
       refreshToken: 'R0',
@@ -378,7 +405,10 @@ describe('dispositions', () => {
 
   it("a result with none and nothing cut: 'keep'", async () => {
     const { seen, onTokens } = recorder();
-    const provider = new ScriptedProvider({ onTokens });
+    const provider = new ScriptedProvider({
+      renewal: refreshThenLogin(),
+      onTokens,
+    });
     const renewed = provider.getTokens();
     const T1 = jwt('token-only');
     (await provider.logins.nth(1)).result.resolve(tokens(T1));
@@ -390,6 +420,7 @@ describe('dispositions', () => {
     const { seen, notified, onTokens } = recorder();
     const T0 = jwt('held', -3600);
     const provider = new ScriptedProvider({
+      renewal: refreshThenLogin(),
       onTokens,
       accessToken: T0,
       refreshToken: 'R0',
@@ -413,6 +444,7 @@ describe('a failed notification stays pending', () => {
     let fail = true;
     const T0 = jwt('held', -3600);
     const provider = new ScriptedProvider({
+      renewal: refreshThenLogin(),
       accessToken: T0,
       refreshToken: 'R0',
       onTokens: async (result) => {
@@ -446,6 +478,7 @@ describe('a failed notification stays pending', () => {
     const seen: Seen[] = [];
     let fail = true;
     const provider = new ScriptedProvider({
+      renewal: refreshThenLogin(),
       accessToken: jwt('held', -3600),
       refreshToken: 'R0',
       onTokens: async (result) => {
@@ -483,6 +516,7 @@ describe('a failed notification stays pending', () => {
     let fail = true;
     const T0 = jwt('held', -3600);
     const provider = new ScriptedProvider({
+      renewal: refreshThenLogin(),
       accessToken: T0,
       refreshToken: 'R0',
       onTokens: async (result) => {
@@ -524,6 +558,7 @@ describe('a failed notification stays pending', () => {
     const held = deferred();
     let holdFirst = true;
     const provider = new ScriptedProvider({
+      renewal: refreshThenLogin(),
       onTokens: async (result) => {
         firstCall.resolve();
         seen.push([
@@ -583,6 +618,7 @@ describe('an aborted renewal is never remembered (rule 8)', () => {
     // Held, valid, bound to another certificate than the one pinned.
     const elsewhere = boundTo(thumbprintOf(otherCertificate()), 'held');
     const provider = new ScriptedProvider({
+      renewal: refreshThenLogin(),
       clientAuthentication: strategy,
       accessToken: elsewhere,
     });
@@ -601,22 +637,28 @@ describe('an aborted renewal is never remembered (rule 8)', () => {
     await expect(next).resolves.toMatchObject({ authorizationToken: fresh });
   });
 
-  it('the same renewal not aborted is remembered: getTokens answers it without renewing', async () => {
+  it('the same renewal not aborted is remembered: getTokens answers its error without renewing', async () => {
     const strategy: IClientAuthentication = {
       authenticate: async () => ({}),
       tlsMaterial: async () => certificate(),
     };
     const elsewhere = boundTo(thumbprintOf(otherCertificate()), 'held');
     const provider = new ScriptedProvider({
+      renewal: refreshThenLogin(),
       clientAuthentication: strategy,
       accessToken: elsewhere,
     });
     const failing = rejectionOf(provider.getTokens());
     (await provider.logins.nth(1)).result.reject(new Error('failed'));
-    await failing;
-    await expect(provider.getTokens()).resolves.toMatchObject({
-      authorizationToken: elsewhere,
-    });
+    const first = readFailure(await failing, 'unfamiliar-error');
+    // The remembered error reaches the strategy as lastRenewal, and
+    // refreshThenLogin() stops with it (§6c.4, §6c.8): the same error, no step.
+    const again = readFailure(
+      await rejectionOf(provider.getTokens()),
+      'unfamiliar-error',
+    );
+    expect(again).toBe(first);
     expect(provider.logins.items).toHaveLength(1);
+    expect(provider.held().access).toBe(elsewhere);
   });
 });

@@ -22,6 +22,7 @@ import {
   getSamlAssertion,
   type Saml2CommonConfig,
 } from '../../providers/saml2Utils';
+import { refreshThenLogin } from '../../renewal';
 import {
   createSignedAssertionValidator,
   createSignedResponseValidator,
@@ -296,6 +297,7 @@ describe('checkAssertionValidator — a shipped validator still needs idpEntityI
         let thrown: unknown;
         try {
           new Saml2BearerProvider({
+            renewal: refreshThenLogin(),
             ...common,
             uaaUrl: 'https://uaa.example',
             authorization: unreachableAuthorization,
@@ -315,6 +317,7 @@ describe('checkAssertionValidator — a shipped validator still needs idpEntityI
         let thrown: unknown;
         try {
           new Saml2PureProvider({
+            renewal: refreshThenLogin(),
             ...common,
             cookieProvider: async () => 'cookie',
             authorization: unreachableAuthorization,
@@ -334,6 +337,7 @@ describe('checkAssertionValidator — a shipped validator still needs idpEntityI
         expect(
           () =>
             new Saml2PureProvider({
+              renewal: refreshThenLogin(),
               ...common,
               idpEntityId: 'urn:idp',
               cookieProvider: async () => 'cookie',
@@ -354,6 +358,7 @@ describe('checkAssertionValidator — a shipped validator still needs idpEntityI
     expect(
       () =>
         new Saml2BearerProvider({
+          renewal: refreshThenLogin(),
           ...common,
           uaaUrl: 'https://uaa.example',
           authorization: unreachableAuthorization,
@@ -363,6 +368,7 @@ describe('checkAssertionValidator — a shipped validator still needs idpEntityI
     expect(
       () =>
         new Saml2PureProvider({
+          renewal: refreshThenLogin(),
           ...common,
           cookieProvider: async () => 'cookie',
           authorization: unreachableAuthorization,
@@ -402,12 +408,14 @@ describe('idpInitiated with authnRequestId is refused at construction', () => {
   const construct = {
     Saml2BearerProvider: () =>
       new Saml2BearerProvider({
+        renewal: refreshThenLogin(),
         ...both,
         uaaUrl: 'https://uaa.example',
         authorization: unreachable,
       }),
     Saml2PureProvider: () =>
       new Saml2PureProvider({
+        renewal: refreshThenLogin(),
         ...both,
         cookieProvider: async () => 'cookie',
         authorization: unreachable,

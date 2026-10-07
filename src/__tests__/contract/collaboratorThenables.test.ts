@@ -29,6 +29,7 @@ import {
   TokenAuthProvider,
   UaaPasscodeProvider,
 } from '../../index';
+import { refreshThenLogin } from '../../renewal';
 import { APlusPromise } from '../helpers/aplusPromise';
 import { recordingTargets } from '../helpers/targets';
 
@@ -127,6 +128,7 @@ const ROWS: Row[] = [
     signalled: true,
     make: (how, signal) =>
       new ClientCredentialsProvider({
+        renewal: refreshThenLogin(),
         uaaUrl: base,
         clientId: 'cid',
         clientAuthentication: {
@@ -143,6 +145,7 @@ const ROWS: Row[] = [
     failureStands: true,
     make: (how, signal) =>
       new ClientCredentialsProvider({
+        renewal: refreshThenLogin(),
         uaaUrl: base,
         clientId: 'cid',
         clientSecret: 's',
@@ -156,6 +159,7 @@ const ROWS: Row[] = [
     signalled: true,
     make: (how, signal) =>
       new UaaPasscodeProvider({
+        renewal: refreshThenLogin(),
         uaaUrl: base,
         clientId: 'cid',
         clientSecret: 's',

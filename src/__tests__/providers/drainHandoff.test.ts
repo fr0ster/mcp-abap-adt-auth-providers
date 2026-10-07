@@ -18,6 +18,7 @@ import type {
 } from '@mcp-abap-adt/interfaces-auth';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
 import { AuthorizationCodeProvider } from '../../providers/AuthorizationCodeProvider';
+import { refreshThenLogin } from '../../renewal';
 import { BrowserCallbackStrategy } from '../../strategies/BrowserCallbackStrategy';
 import {
   Arrivals,
@@ -137,6 +138,7 @@ async function setup() {
     },
   };
   const provider = new AuthorizationCodeProvider({
+    renewal: refreshThenLogin(),
     uaaUrl: server.url,
     clientId: 'cid',
     clientSecret: 'sec',

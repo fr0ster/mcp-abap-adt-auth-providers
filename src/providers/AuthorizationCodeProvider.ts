@@ -252,7 +252,8 @@ export class AuthorizationCodeProvider extends BaseTokenProvider {
 
   protected async performRefresh(
     refreshToken: string,
-    _signal?: AbortSignal,
+    _signal: AbortSignal,
+    dispatched: () => void,
   ): Promise<ITokenResult> {
     if (!refreshToken) {
       throw refreshTokenRefused();
@@ -269,7 +270,7 @@ export class AuthorizationCodeProvider extends BaseTokenProvider {
       this.config.clientSecret,
       await this.requestAuth(),
       this.logger,
-      this.siteOptions(),
+      this.refreshSiteOptions(dispatched),
     );
 
     logQuietly(() =>

@@ -28,6 +28,7 @@ import {
 import { refreshJwtToken } from '../../auth/tokenRefresher';
 import { AuthorizationCodeProvider } from '../../providers/AuthorizationCodeProvider';
 import { ClientCredentialsProvider } from '../../providers/ClientCredentialsProvider';
+import { refreshThenLogin } from '../../renewal';
 import {
   BrowserCallbackStrategy,
   browserCallbackStrategy,
@@ -99,6 +100,7 @@ describe('a thrown error carries no foreign message', () => {
 
   it('through a provider: getTokens() throws no window of it', async () => {
     const provider = new ClientCredentialsProvider({
+      renewal: refreshThenLogin(),
       uaaUrl: 'https://uaa',
       clientId: 'cid',
       clientSecret: 'secret',
@@ -249,6 +251,7 @@ describe('a token-endpoint failure keeps its safe facts', () => {
       if (level === 'error') metas.push([m, meta]);
     };
     const provider = new AuthorizationCodeProvider({
+      renewal: refreshThenLogin(),
       uaaUrl: 'https://uaa',
       clientId: 'cid',
       clientSecret: 'secret',
@@ -451,6 +454,7 @@ describe('classify and logFields are total', () => {
       },
     };
     const credentials = new ClientCredentialsProvider({
+      renewal: refreshThenLogin(),
       uaaUrl: 'https://uaa',
       clientId: 'cid',
       clientAuthentication: strategy,
@@ -459,6 +463,7 @@ describe('classify and logFields are total', () => {
     const prepared = await credentials.prepare();
     expect(prepared.ok).toBe(false);
     const code = new AuthorizationCodeProvider({
+      renewal: refreshThenLogin(),
       uaaUrl: 'https://uaa',
       clientId: 'cid',
       refreshToken: 'rt-0123456789',

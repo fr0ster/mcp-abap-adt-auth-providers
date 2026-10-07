@@ -8,6 +8,7 @@
 import type { AttemptContext } from '@mcp-abap-adt/auth-errors';
 import type {
   IClientAuthentication,
+  IRenewalStrategy,
   ITokenResult,
   OAuth2GrantType,
 } from '@mcp-abap-adt/interfaces-auth';
@@ -16,6 +17,7 @@ import {
   BaseTokenProvider,
   type BridgedTokenResult,
 } from '../../providers/BaseTokenProvider';
+import { refreshThenLogin } from '../../renewal';
 import { Arrivals, type Deferred, deferred } from './attemptHarness';
 
 export interface ScriptedLogin {
@@ -26,9 +28,13 @@ export interface ScriptedLogin {
 export interface ScriptedRefresh {
   readonly refreshToken: string;
   readonly result: Deferred<ITokenResult>;
+  /** The site's `dispatched()`: already called unless `holdDispatch`. */
+  readonly dispatch: () => void;
 }
 
 export interface ScriptedConfig {
+  /** Required, as on every token provider (rule 7). */
+  renewal: IRenewalStrategy;
   onTokens?: (result: BridgedTokenResult) => Promise<void>;
   accessToken?: string;
   refreshToken?: string;
@@ -51,8 +57,10 @@ export function tokens(access: string, refresh?: string): ITokenResult {
 export class ScriptedProvider extends BaseTokenProvider {
   readonly logins = new Arrivals<ScriptedLogin>();
   readonly refreshes = new Arrivals<ScriptedRefresh>();
+  /** True: a refresh waits for the test's `dispatch()` before it is sent. */
+  holdDispatch = false;
 
-  constructor(config: ScriptedConfig = {}) {
+  constructor(config: ScriptedConfig) {
     super(config);
     this.logger = config.logger;
     if (config.accessToken !== undefined) {
@@ -70,9 +78,26 @@ export class ScriptedProvider extends BaseTokenProvider {
     return result.promise;
   }
 
-  protected performRefresh(refreshToken: string): Promise<ITokenResult> {
+  /**
+   * The refresh request leaves at once: `dispatched()` is called on entry,
+   * as a site calls it right before the request (an aborted attempt's gate
+   * throws, and nothing is sent). With `holdDispatch`, the test dispatches
+   * it itself (`ScriptedRefresh.dispatch()`).
+   */
+  protected performRefresh(
+    refreshToken: string,
+    _signal: AbortSignal,
+    dispatched: () => void,
+  ): Promise<ITokenResult> {
     const result = deferred<ITokenResult>();
-    this.refreshes.push({ refreshToken, result });
+    if (!this.holdDispatch) {
+      try {
+        dispatched();
+      } catch (error) {
+        return Promise.reject(error);
+      }
+    }
+    this.refreshes.push({ refreshToken, result, dispatch: dispatched });
     return result.promise;
   }
 

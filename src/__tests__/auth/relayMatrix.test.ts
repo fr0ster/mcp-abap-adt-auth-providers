@@ -18,6 +18,7 @@ import { certificateThumbprint } from '../../auth/certificateMaterial';
 import { BasicAuthProvider } from '../../credentials/BasicAuthProvider';
 import { CertificateAuthProvider } from '../../credentials/CertificateAuthProvider';
 import { OidcPasswordProvider } from '../../providers/OidcPasswordProvider';
+import { refreshThenLogin } from '../../renewal';
 
 jest.mock('axios', () => {
   const mocked = jest.createMockFromModule<Record<string, unknown>>('axios');
@@ -96,6 +97,7 @@ function tokenProvider(token: string) {
     tlsMaterial: async () => A,
   };
   return new OidcPasswordProvider({
+    renewal: refreshThenLogin(),
     clientId: 'client',
     username: 'user',
     password: 'pw',

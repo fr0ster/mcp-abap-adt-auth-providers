@@ -19,6 +19,7 @@ import { OidcBrowserProvider } from '../../../providers/OidcBrowserProvider';
 import { OidcDeviceFlowProvider } from '../../../providers/OidcDeviceFlowProvider';
 import { OidcPasswordProvider } from '../../../providers/OidcPasswordProvider';
 import { OidcTokenExchangeProvider } from '../../../providers/OidcTokenExchangeProvider';
+import { refreshThenLogin } from '../../../renewal';
 import { asOidcResult, externalCodeStrategy } from '../../../strategies';
 import { approveDevice, authorizeByForm, denyDevice } from './formLogin';
 
@@ -49,6 +50,7 @@ describeKeycloak('OIDC providers against Keycloak', () => {
   describe('OidcPasswordProvider', () => {
     it('logs in with the password grant, found through discovery', async () => {
       const tokens = await new OidcPasswordProvider({
+        renewal: refreshThenLogin(),
         issuerUrl: KEYCLOAK_URL,
         clientId: 'oidc-password',
         clientSecret: 'secret',
@@ -65,6 +67,7 @@ describeKeycloak('OIDC providers against Keycloak', () => {
 
     it('refreshes with the refresh token rather than the password', async () => {
       const first = await new OidcPasswordProvider({
+        renewal: refreshThenLogin(),
         issuerUrl: KEYCLOAK_URL,
         clientId: 'oidc-password',
         clientSecret: 'secret',
@@ -75,6 +78,7 @@ describeKeycloak('OIDC providers against Keycloak', () => {
       // A wrong password: a fall back to the password grant would fail, so
       // only a refresh can produce a token here.
       const refreshed = await new OidcPasswordProvider({
+        renewal: refreshThenLogin(),
         issuerUrl: KEYCLOAK_URL,
         clientId: 'oidc-password',
         clientSecret: 'secret',
@@ -95,6 +99,7 @@ describeKeycloak('OIDC providers against Keycloak', () => {
       // oidc-browser is a public client that Keycloak requires to use S256
       // PKCE: a missing or wrong verifier fails the exchange.
       const tokens = await new OidcBrowserProvider({
+        renewal: refreshThenLogin(),
         issuerUrl: KEYCLOAK_URL,
         clientId: 'oidc-browser',
         scopes: ['openid'],
@@ -131,6 +136,7 @@ describeKeycloak('OIDC providers against Keycloak', () => {
       });
 
       const tokens = await OidcDeviceFlowProvider.toConsole({
+        renewal: refreshThenLogin(),
         issuerUrl: KEYCLOAK_URL,
         clientId: 'oidc-device',
         scopes: ['openid'],
@@ -147,6 +153,7 @@ describeKeycloak('OIDC providers against Keycloak', () => {
   describe('OidcTokenExchangeProvider', () => {
     it('exchanges another client’s access token for its own (RFC 8693)', async () => {
       const subject = await new OidcPasswordProvider({
+        renewal: refreshThenLogin(),
         issuerUrl: KEYCLOAK_URL,
         clientId: 'te-subject',
         clientSecret: 'secret',
@@ -155,6 +162,7 @@ describeKeycloak('OIDC providers against Keycloak', () => {
       expect(claims(subject.authorizationToken).azp).toBe('te-subject');
 
       const exchanged = await new OidcTokenExchangeProvider({
+        renewal: refreshThenLogin(),
         issuerUrl: KEYCLOAK_URL,
         clientId: 'te-requester',
         clientSecret: 'secret',

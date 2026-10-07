@@ -11,6 +11,7 @@ import { inspect } from 'node:util';
 import { describe, expect, it, jest } from '@jest/globals';
 import type { IAuthorizationStrategy } from '@mcp-abap-adt/interfaces-auth';
 import { UaaPasscodeProvider } from '../../../providers/UaaPasscodeProvider';
+import { refreshThenLogin } from '../../../renewal';
 import { externalCodeStrategy, staticCodeStrategy } from '../../../strategies';
 import { FormBrowser } from './formLogin';
 
@@ -48,6 +49,7 @@ describeUaa('UaaPasscodeProvider against Cloud Foundry UAA', () => {
   it('sends the user to /passcode and exchanges the code they bring back', async () => {
     const seen: string[] = [];
     const tokens = await new UaaPasscodeProvider({
+      renewal: refreshThenLogin(),
       ...config(),
       authorization: externalCodeStrategy({
         provide: async (url) => {
@@ -66,6 +68,7 @@ describeUaa('UaaPasscodeProvider against Cloud Foundry UAA', () => {
 
   it('refreshes without asking the user for another code', async () => {
     const first = await new UaaPasscodeProvider({
+      renewal: refreshThenLogin(),
       ...config(),
       authorization: externalCodeStrategy({ provide: passcodeFrom }),
     }).getTokens();
@@ -74,6 +77,7 @@ describeUaa('UaaPasscodeProvider against Cloud Foundry UAA', () => {
       throw new Error('the refresh must not ask for a passcode');
     });
     const refreshed = await new UaaPasscodeProvider({
+      renewal: refreshThenLogin(),
       ...config(),
       accessToken: expiredJwt(),
       refreshToken: first.refreshToken,
@@ -88,6 +92,7 @@ describeUaa('UaaPasscodeProvider against Cloud Foundry UAA', () => {
   it('refuses a code that was already spent', async () => {
     const code = await passcodeFrom(`${UAA_URL}/passcode`);
     await new UaaPasscodeProvider({
+      renewal: refreshThenLogin(),
       ...config(),
       authorization: staticCodeStrategy({ payload: code }),
     }).getTokens();
@@ -96,6 +101,7 @@ describeUaa('UaaPasscodeProvider against Cloud Foundry UAA', () => {
     // and "Invalid passcode", its own text: since 5.4.2 the message names
     // the status alone, and UAA's words are written nowhere.
     const thrown = await new UaaPasscodeProvider({
+      renewal: refreshThenLogin(),
       ...config(),
       authorization: staticCodeStrategy({ payload: code }),
     })

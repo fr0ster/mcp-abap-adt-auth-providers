@@ -38,6 +38,7 @@ import { OidcTokenExchangeProvider } from '../../providers/OidcTokenExchangeProv
 import { Saml2BearerProvider } from '../../providers/Saml2BearerProvider';
 import { Saml2PureProvider } from '../../providers/Saml2PureProvider';
 import { UaaPasscodeProvider } from '../../providers/UaaPasscodeProvider';
+import { refreshThenLogin } from '../../renewal';
 import { mintedRefusal } from '../helpers/minted';
 import { recordingTargets } from '../helpers/targets';
 
@@ -126,7 +127,7 @@ class TestProvider extends BaseTokenProvider {
   readonly events: Event[] = [];
   login = jest.fn(async () => result('T1', 'R1'));
   refresh = jest.fn(async () => result('T2', 'R2'));
-  constructor(hooks: TokenProviderHooks = {}) {
+  constructor(hooks: TokenProviderHooks = { renewal: refreshThenLogin() }) {
     super({
       ...hooks,
       onTokens: async (r: ITokenResult) => {
@@ -139,7 +140,13 @@ class TestProvider extends BaseTokenProvider {
     this.events.push({ step: 'login' });
     return this.login();
   }
-  protected performRefresh() {
+  protected performRefresh(
+    _refreshToken: string,
+    _signal: AbortSignal,
+    dispatched: () => void,
+  ) {
+    // The request leaves: the site would call this right before it.
+    dispatched();
     this.events.push({ step: 'refresh' });
     return this.refresh();
   }
@@ -173,6 +180,7 @@ describe('L3: getTokens() / refreshTokens() throw an AuthProviderFailure, never 
   it("a consumer's authorization strategy throwing its own error", async () => {
     const original = new Error(`strategy down: ${MARKER}`);
     const provider = new OidcBrowserProvider({
+      renewal: refreshThenLogin(),
       clientId: 'cid',
       tokenEndpoint: 'https://idp.example/token',
       authorizationEndpoint: 'https://idp.example/auth',
@@ -196,6 +204,7 @@ describe('L3: getTokens() / refreshTokens() throw an AuthProviderFailure, never 
       code: 'ENOENT',
     });
     const provider = new ClientCredentialsProvider({
+      renewal: refreshThenLogin(),
       uaaUrl: 'https://uaa.example',
       clientId: 'cid',
       clientAuthentication: tlsClientCertificate({
@@ -234,6 +243,7 @@ describe('L3: getTokens() / refreshTokens() throw an AuthProviderFailure, never 
       },
     }));
     const provider = new OidcDeviceFlowProvider({
+      renewal: refreshThenLogin(),
       clientId: 'cid',
       tokenEndpoint: 'https://idp.example/token',
       deviceAuthorizationEndpoint: 'https://idp.example/device',
@@ -259,6 +269,7 @@ describe('L3: getTokens() / refreshTokens() throw an AuthProviderFailure, never 
   it("getTokens()' own path: a loader throwing while a valid token's binding is checked", async () => {
     const original = new Error(`loader down: ${MARKER}`);
     const provider = new OidcPasswordProvider({
+      renewal: refreshThenLogin(),
       clientId: 'cid',
       tokenEndpoint: 'https://idp.example/token',
       username: 'u',
@@ -330,6 +341,7 @@ describe('L3: getTokens() / refreshTokens() throw an AuthProviderFailure, never 
       });
     });
     const provider = new OidcPasswordProvider({
+      renewal: refreshThenLogin(),
       clientId: 'cid',
       tokenEndpoint: 'https://idp.example/token',
       username: 'u',
@@ -384,6 +396,7 @@ describe('D8 / A10: a provider without a refresh grant or token throws credentia
       'ClientCredentialsProvider (no refresh grant)',
       () =>
         new ClientCredentialsProvider({
+          renewal: refreshThenLogin(),
           uaaUrl: 'https://uaa.example',
           clientId: 'cid',
           clientSecret: 's',
@@ -393,6 +406,7 @@ describe('D8 / A10: a provider without a refresh grant or token throws credentia
       'OidcTokenExchangeProvider (no refresh grant)',
       () =>
         new OidcTokenExchangeProvider({
+          renewal: refreshThenLogin(),
           clientId: 'cid',
           tokenEndpoint: 'https://idp.example/token',
           subjectToken: 'subject',
@@ -403,6 +417,7 @@ describe('D8 / A10: a provider without a refresh grant or token throws credentia
       'Saml2PureProvider (no refresh grant)',
       () =>
         new Saml2PureProvider({
+          renewal: refreshThenLogin(),
           idpSsoUrl: 'https://idp.example/sso',
           spEntityId: 'sp-entity',
           idpInitiated: true,
@@ -415,6 +430,7 @@ describe('D8 / A10: a provider without a refresh grant or token throws credentia
       'OidcPasswordProvider (no refresh token)',
       () =>
         new OidcPasswordProvider({
+          renewal: refreshThenLogin(),
           clientId: 'cid',
           tokenEndpoint: 'https://idp.example/token',
           username: 'u',
@@ -425,6 +441,7 @@ describe('D8 / A10: a provider without a refresh grant or token throws credentia
       'OidcBrowserProvider (no refresh token)',
       () =>
         new OidcBrowserProvider({
+          renewal: refreshThenLogin(),
           clientId: 'cid',
           tokenEndpoint: 'https://idp.example/token',
           authorizationEndpoint: 'https://idp.example/auth',
@@ -435,6 +452,7 @@ describe('D8 / A10: a provider without a refresh grant or token throws credentia
       'OidcDeviceFlowProvider (no refresh token)',
       () =>
         new OidcDeviceFlowProvider({
+          renewal: refreshThenLogin(),
           clientId: 'cid',
           tokenEndpoint: 'https://idp.example/token',
           deviceAuthorizationEndpoint: 'https://idp.example/device',
@@ -445,6 +463,7 @@ describe('D8 / A10: a provider without a refresh grant or token throws credentia
       'UaaPasscodeProvider (no refresh token)',
       () =>
         new UaaPasscodeProvider({
+          renewal: refreshThenLogin(),
           uaaUrl: 'https://uaa.example',
           clientId: 'cf',
           clientSecret: 's',
@@ -455,6 +474,7 @@ describe('D8 / A10: a provider without a refresh grant or token throws credentia
       'Saml2BearerProvider (no refresh token)',
       () =>
         new Saml2BearerProvider({
+          renewal: refreshThenLogin(),
           idpSsoUrl: 'https://idp.example/sso',
           spEntityId: 'sp-entity',
           uaaUrl: 'https://uaa.example',
@@ -468,6 +488,7 @@ describe('D8 / A10: a provider without a refresh grant or token throws credentia
       'AuthorizationCodeProvider (no refresh token)',
       () =>
         new AuthorizationCodeProvider({
+          renewal: refreshThenLogin(),
           uaaUrl: 'https://uaa.example',
           clientId: 'cid',
           clientSecret: 's',
@@ -560,6 +581,7 @@ describe('H1 / H2: the refresh and onTokens failure lines carry logFields', () =
   it('H2: onTokens failed — fixed words, the kind, no message', async () => {
     const { calls, logger } = recordingLogger();
     const p = new TestProvider({
+      renewal: refreshThenLogin(),
       onTokens: async () => {
         throw new Error(`store down ${MARKER}`);
       },
@@ -641,6 +663,7 @@ describe('refresh-token disposition (spec §6b): a refused refresh token is disc
   it('a clearing onTokens that throws does not stop the login (best effort)', async () => {
     let calls = 0;
     const p = new TestProvider({
+      renewal: refreshThenLogin(),
       onTokens: async () => {
         calls += 1;
         if (calls === 2) throw new Error('store down');
@@ -786,6 +809,7 @@ describe('refresh-token disposition (spec §6b): a refused refresh token is disc
     });
     const seen: ITokenResult[] = [];
     const provider = new OidcPasswordProvider({
+      renewal: refreshThenLogin(),
       clientId: 'cid',
       tokenEndpoint: 'https://idp.example/token',
       username: 'u',
@@ -843,6 +867,7 @@ function rotating(options: { refreshToken?: string; token?: string } = {}) {
     tlsMaterial: async () => A,
   };
   return new OidcPasswordProvider({
+    renewal: refreshThenLogin(),
     clientId: 'client',
     username: 'user',
     password: 'pw',
@@ -914,10 +939,11 @@ describe('rule 8 on kinds: the remembered refusal', () => {
       expect(refusal).toBe(produced);
       expect(isMinted(refusal)).toBe(true);
     }
-    // getTokens() returns the remembered token without renewing again.
-    await expect(provider.getTokens()).resolves.toMatchObject({
-      authorizationToken: held,
-    });
+    // getTokens() throws the remembered error without renewing again: it
+    // reaches the strategy as lastRenewal, and refreshThenLogin() stops
+    // with it (spec §6c.4, §6c.7) — the very object.
+    const again = await rejectionOf(provider.getTokens());
+    expect((again as AuthProviderFailure).error).toBe(produced);
     expect(grants).toEqual(['refresh_token', 'password']);
     expect(t.request.headers).toEqual({});
   });
@@ -930,6 +956,7 @@ describe('rule 8 on kinds: the remembered refusal', () => {
       }
     }
     const provider = new Throwing({
+      renewal: refreshThenLogin(),
       clientId: 'client',
       username: 'user',
       password: 'pw',
@@ -973,7 +1000,7 @@ describe('rule 8 on kinds: the remembered refusal', () => {
     expect(grants.length).toBe(before + 1);
   });
 
-  it('prepare() clears the mark: one more renewal; its refusal is then the remembered one', async () => {
+  it('prepare() renews a remembered token once more (moment prepare, spec §6c.4); its refusal is then the remembered one', async () => {
     refusingAll();
     const provider = rotating({ refreshToken: 'R1' });
     const t = recordingTargets();
@@ -1013,10 +1040,13 @@ describe('rule 8 on kinds: the remembered refusal', () => {
       const produced = (thrown as AuthProviderFailure).error;
       expect(produced.kind).toBe('client-certificate');
       expect(produced.facts).toEqual({ problem: 'expired' });
+      // Pinned material is checked before the strategy is asked (spec
+      // §6c.5 step 1), so each renewal refuses it afresh: the same error,
+      // minted again, and still nothing sent.
       for (let i = 0; i < 2; i += 1) {
-        expect(refusalOf(await provider.authorize(t.requestTarget))).toBe(
-          produced,
-        );
+        expect(
+          refusalOf(await provider.authorize(t.requestTarget)),
+        ).toStrictEqual(produced);
       }
     } finally {
       now.mockRestore();
@@ -1140,6 +1170,7 @@ describe('A14 — a refused token request through a moment', () => {
         });
       });
       const provider = new ClientCredentialsProvider({
+        renewal: refreshThenLogin(),
         uaaUrl: 'https://uaa.example',
         clientId: 'cid',
         clientSecret: 's',
@@ -1299,6 +1330,7 @@ describe('a throwing logger changes nothing on the token paths (spec §6 guards)
     let calls = 0;
     const p = withLogger(
       new TestProvider({
+        renewal: refreshThenLogin(),
         onTokens: async () => {
           calls += 1;
           if (calls === 2) throw new Error(`store down ${MARKER}`);
@@ -1319,6 +1351,7 @@ describe('a throwing logger changes nothing on the token paths (spec §6 guards)
   it('H2: a throwing onTokens after a login and a throwing logger: the token stands', async () => {
     const p = withLogger(
       new TestProvider({
+        renewal: refreshThenLogin(),
         onTokens: async () => {
           throw new Error('store down');
         },
@@ -1391,6 +1424,7 @@ describe('a throwing logger changes nothing on the token paths (spec §6 guards)
       }));
       const provider = withLogger(
         new OidcPasswordProvider({
+          renewal: refreshThenLogin(),
           clientId: 'cid',
           issuerUrl: 'https://idp.example',
           username: 'u',
@@ -1417,6 +1451,7 @@ describe('a throwing logger changes nothing on the token paths (spec §6 guards)
       },
     }));
     const provider = new AuthorizationCodeProvider({
+      renewal: refreshThenLogin(),
       uaaUrl: 'https://uaa.example',
       clientId: 'cid',
       clientSecret: 's',
@@ -1446,6 +1481,7 @@ describe('a throwing logger changes nothing on the token paths (spec §6 guards)
       },
     }));
     const provider = new OidcDeviceFlowProvider({
+      renewal: refreshThenLogin(),
       clientId: 'cid',
       tokenEndpoint: 'https://idp.example/token',
       deviceAuthorizationEndpoint: 'https://idp.example/device',

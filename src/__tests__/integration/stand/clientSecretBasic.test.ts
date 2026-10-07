@@ -21,6 +21,7 @@ import { describe, expect, it } from '@jest/globals';
 import { clientSecretBasic } from '../../../clientAuthentication';
 import { ClientCredentialsProvider } from '../../../providers/ClientCredentialsProvider';
 import { OidcPasswordProvider } from '../../../providers/OidcPasswordProvider';
+import { refreshThenLogin } from '../../../renewal';
 import { wordsOf } from '../../helpers/minted';
 
 const UAA_URL = process.env.UAA_URL?.replace(/\/+$/, '');
@@ -48,6 +49,7 @@ describeUaa(
   () => {
     const provider = (clientId: string, encoding: 'raw' | 'form') =>
       new ClientCredentialsProvider({
+        renewal: refreshThenLogin(),
         uaaUrl: UAA_URL as string,
         clientId,
         clientAuthentication: clientSecretBasic(SECRET, { encoding }),
@@ -85,6 +87,7 @@ describeKeycloak(
   () => {
     const provider = (clientId: string, encoding: 'raw' | 'form') =>
       new OidcPasswordProvider({
+        renewal: refreshThenLogin(),
         issuerUrl: KEYCLOAK_URL as string,
         clientId,
         ...USER,

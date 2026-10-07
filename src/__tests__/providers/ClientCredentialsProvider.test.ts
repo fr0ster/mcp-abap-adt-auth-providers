@@ -15,6 +15,7 @@ import * as path from 'node:path';
 import { AbapServiceKeyStore } from '@mcp-abap-adt/auth-stores';
 import { AUTH_TYPE_CLIENT_CREDENTIALS } from '@mcp-abap-adt/interfaces-auth';
 import { ClientCredentialsProvider } from '../../providers/ClientCredentialsProvider';
+import { refreshThenLogin } from '../../renewal';
 import {
   getAbapDestination,
   getServiceKeysDir,
@@ -90,6 +91,7 @@ describe('ClientCredentialsProvider', () => {
 
       // Create provider with only service key (no cached token)
       const provider = new ClientCredentialsProvider({
+        renewal: refreshThenLogin(),
         uaaUrl: authConfig.uaaUrl!,
         clientId: authConfig.uaaClientId!,
         clientSecret: authConfig.uaaClientSecret!,
@@ -130,6 +132,7 @@ describe('ClientCredentialsProvider', () => {
       // Create provider with valid cached token
       const validToken = createValidJWT();
       const provider = new ClientCredentialsProvider({
+        renewal: refreshThenLogin(),
         uaaUrl: authConfig.uaaUrl!,
         clientId: authConfig.uaaClientId!,
         clientSecret: authConfig.uaaClientSecret!,
@@ -173,6 +176,7 @@ describe('ClientCredentialsProvider', () => {
       // Create provider with expired cached token
       const expiredToken = createExpiredJWT();
       const provider = new ClientCredentialsProvider({
+        renewal: refreshThenLogin(),
         uaaUrl: authConfig.uaaUrl!,
         clientId: authConfig.uaaClientId!,
         clientSecret: authConfig.uaaClientSecret!,
@@ -216,6 +220,7 @@ describe('ClientCredentialsProvider', () => {
       }
 
       const provider = new ClientCredentialsProvider({
+        renewal: refreshThenLogin(),
         uaaUrl: authConfig.uaaUrl!,
         clientId: authConfig.uaaClientId!,
         clientSecret: authConfig.uaaClientSecret!,
@@ -255,6 +260,7 @@ describe('ClientCredentialsProvider', () => {
       }
 
       const provider = new ClientCredentialsProvider({
+        renewal: refreshThenLogin(),
         uaaUrl: authConfig.uaaUrl!,
         clientId: authConfig.uaaClientId!,
         clientSecret: authConfig.uaaClientSecret!,

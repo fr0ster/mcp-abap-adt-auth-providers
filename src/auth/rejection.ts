@@ -20,6 +20,7 @@ import type {
   CredentialKind,
   IAuthRefusal,
   IAuthRejection,
+  RenewalCause,
 } from '@mcp-abap-adt/interfaces-auth';
 import { readSafely } from './knownCodes';
 
@@ -82,6 +83,33 @@ export function readRejection(
     };
   }
   return UNKNOWN;
+}
+
+/**
+ * A rejection as the cause of a renewal (spec §6c.2): rule 5's reading —
+ * `not-credential` with its `system-refused` refusal, what a `stop` answers —
+ * the moment, and the allowlisted status or RFC key. A reading the renewal
+ * strategy receives, not a guard (G9). Frozen: the strategy cannot change
+ * what the provider reads back.
+ */
+export function rejectionCause(
+  rejection: IAuthRejection | undefined,
+): RenewalCause {
+  const read = readRejection(rejection);
+  const status = readSafely(rejection, 'status');
+  const checked =
+    typeof status === 'number' && Number.isInteger(status)
+      ? httpStatus(status)
+      : undefined;
+  const key = readSafely(readSafely(rejection, 'error'), 'key');
+  return Object.freeze({
+    trigger: 'rejected',
+    reading: read.verdict,
+    ...(read.verdict === 'not-credential' ? { refusal: read.refusal } : {}),
+    at: momentOf(rejection),
+    ...(checked === undefined ? {} : { status: checked }),
+    ...(isRfcKey(key) ? { rfcKey: key } : {}),
+  });
 }
 
 /** The neutral refusal for a rejection that cannot be told: `system-refused` `unknown`. */

@@ -422,6 +422,12 @@ export interface TokenSiteOptions {
    * runs on after an abort so that its answer can still be committed.
    */
   readonly signal?: AbortSignal | undefined;
+  /**
+   * Called synchronously right before the request leaves (spec §6c.5): the
+   * renewal step learns that it was sent. It throws `aborted` instead when
+   * the attempt has aborted, and nothing is sent.
+   */
+  readonly dispatched?: (() => void) | undefined;
 }
 
 /**
@@ -457,6 +463,8 @@ export interface TokenRequestSite {
    * (spec §6b). Absent by construction at every refresh site.
    */
   readonly signal?: AbortSignal | undefined;
+  /** The options' `dispatched`: called right before the request leaves. */
+  readonly dispatched?: (() => void) | undefined;
 }
 
 /**
@@ -481,6 +489,9 @@ export function tokenSite(
     authDebug: options?.authDebug === true,
     secrets,
     ...(basic === undefined ? {} : { basic }),
+    ...(options?.dispatched === undefined
+      ? {}
+      : { dispatched: options.dispatched }),
   };
 }
 
@@ -722,6 +733,9 @@ export async function sendTokenRequest<T>(
 ): Promise<TokenResponseSnapshot<T>> {
   // The attempt's signal, on both paths (spec §6b); a refresh site has none.
   const signal = site.signal;
+  // Right before the request leaves, on both paths (spec §6c.5): an aborted
+  // attempt's renewal step throws here, and nothing is sent.
+  site.dispatched?.();
   let response: unknown;
   try {
     response = prepared

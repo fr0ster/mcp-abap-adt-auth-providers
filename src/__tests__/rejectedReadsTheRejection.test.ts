@@ -7,6 +7,7 @@ import type {
   OAuth2GrantType,
 } from '@mcp-abap-adt/interfaces-auth';
 import * as surface from '../index';
+import { refreshThenLogin } from '../renewal';
 import { minted } from './helpers/minted';
 import { recordingTargets } from './helpers/targets';
 import { fakeSystem, peLibrary } from './snc/fakeSystem';
@@ -140,7 +141,13 @@ class CountingTokenProvider extends surface.BaseTokenProvider {
   protected performLogin() {
     return this.login();
   }
-  protected performRefresh() {
+  protected performRefresh(
+    _refreshToken: string,
+    _signal: AbortSignal,
+    dispatched: () => void,
+  ) {
+    // The request leaves: the site would call this right before it.
+    dispatched();
     return this.refresh();
   }
   protected getAuthType(): OAuth2GrantType {
@@ -154,7 +161,7 @@ describe('BaseTokenProvider renews only a refused credential', () => {
     ['RFC_LOGON_FAILURE', logonRefused],
     ['an unknown logon failure', unknownLogon],
   ])('%s → one renewal → Ok', async (_, r) => {
-    const p = new CountingTokenProvider();
+    const p = new CountingTokenProvider({ renewal: refreshThenLogin() });
     await p.authorize(recordingTargets().requestTarget);
     await expect(p.rejected(r)).resolves.toEqual({ ok: true });
     expect(p.refresh).toHaveBeenCalledTimes(1);
@@ -166,7 +173,7 @@ describe('BaseTokenProvider renews only a refused credential', () => {
     ['503', r503, /failed \(503\)/],
     ['a network failure', network, /RFC_COMMUNICATION_FAILURE/],
   ])('%s → no renewal, a neutral refusal', async (_, r, reason) => {
-    const p = new CountingTokenProvider();
+    const p = new CountingTokenProvider({ renewal: refreshThenLogin() });
     await p.authorize(recordingTargets().requestTarget);
     const outcome = await p.rejected(r);
     expect(outcome.ok === false && outcome.refusal.reason).toMatch(reason);
@@ -217,7 +224,10 @@ describe('a neutral refusal is system-refused and never blames the credential', 
     ['basic', () => new surface.BasicAuthProvider('u', 'p')],
     ['saml cookies', () => new surface.SamlAuthProvider('MYSAPSSO2=x')],
     ['token fixed', () => surface.TokenAuthProvider.fixed('t')],
-    ['token provider', () => new CountingTokenProvider()],
+    [
+      'token provider',
+      () => new CountingTokenProvider({ renewal: refreshThenLogin() }),
+    ],
   ];
 
   it.each(

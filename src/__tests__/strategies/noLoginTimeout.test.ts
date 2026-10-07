@@ -29,6 +29,7 @@ import { OidcBrowserProvider } from '../../providers/OidcBrowserProvider';
 import { Saml2BearerProvider } from '../../providers/Saml2BearerProvider';
 import { Saml2PureProvider } from '../../providers/Saml2PureProvider';
 import { UaaPasscodeProvider } from '../../providers/UaaPasscodeProvider';
+import { refreshThenLogin } from '../../renewal';
 import * as browserStrategies from '../../strategies/BrowserCallbackStrategy';
 import {
   browserCallbackStrategy,
@@ -43,7 +44,6 @@ import {
   manualPasteStrategy,
   manualSamlResponseStrategy,
 } from '../../strategies/manualStrategies';
-
 import { certificate } from '../helpers/certificates';
 
 const PORT = 7878;
@@ -353,6 +353,7 @@ describe('the static factories pass their signal to the strategy they compose', 
     uaaUrl: 'https://uaa.example',
     clientId: 'cid',
     clientSecret: 'secret',
+    renewal: refreshThenLogin(),
   };
   const trust = { idpCertificates: [String(certificate().cert)] };
   const saml = {
@@ -376,6 +377,7 @@ describe('the static factories pass their signal to the strategy they compose', 
       (signal: AbortSignal) =>
         OidcBrowserProvider.inBrowser(
           {
+            renewal: refreshThenLogin(),
             clientId: 'cid',
             authorizationEndpoint: 'https://idp.example/authorize',
             tokenEndpoint: 'https://idp.example/token',
@@ -423,7 +425,12 @@ describe('the static factories pass their signal to the strategy they compose', 
     try {
       const signal = new AbortController().signal;
       UaaPasscodeProvider.fromTerminal(
-        { uaaUrl: 'https://uaa.example', clientId: 'cf', clientSecret: '' },
+        {
+          renewal: refreshThenLogin(),
+          uaaUrl: 'https://uaa.example',
+          clientId: 'cf',
+          clientSecret: '',
+        },
         { signal },
       );
       expect(spy).toHaveBeenCalledWith({ signal });

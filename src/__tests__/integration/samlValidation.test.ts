@@ -50,6 +50,7 @@ import type {
 } from '@mcp-abap-adt/interfaces-auth';
 import { DOMParser } from '@xmldom/xmldom';
 import { Saml2PureProvider } from '../../providers/Saml2PureProvider';
+import { refreshThenLogin } from '../../renewal';
 import { samlCallbackStrategy } from '../../strategies';
 import {
   createSignedAssertionValidator,
@@ -198,6 +199,7 @@ async function login(
 
   const received: string[] = [];
   const provider = new Saml2PureProvider({
+    renewal: refreshThenLogin(),
     idpSsoUrl: `${stand.idp.url}/sso`,
     spEntityId: AUDIENCE,
     idpEntityId: ISSUER,

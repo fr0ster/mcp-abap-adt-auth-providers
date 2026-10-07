@@ -43,6 +43,7 @@ import { DOMParser } from '@xmldom/xmldom';
 import { parseStrictXml } from '../../../auth/strictXml';
 import { Saml2BearerProvider } from '../../../providers/Saml2BearerProvider';
 import { Saml2PureProvider } from '../../../providers/Saml2PureProvider';
+import { refreshThenLogin } from '../../../renewal';
 import { externalCodeStrategy, staticCodeStrategy } from '../../../strategies';
 import {
   createSignedAssertionValidator,
@@ -271,6 +272,7 @@ describeBoth('SAML providers with Keycloak as the identity provider', () => {
     // AuthnRequest, so no ID is minted and none is expected.
     const payload = await unsolicitedSamlResponse(idpInitiatedUrl);
     const tokens = await new Saml2BearerProvider({
+      renewal: refreshThenLogin(),
       ...bearerConfig(),
       idpInitiated: true,
       authorization: staticCodeStrategy({ redirectUri: bearerAcs, payload }),
@@ -298,6 +300,7 @@ describeBoth('SAML providers with Keycloak as the identity provider', () => {
     };
 
     const thrown = await new Saml2BearerProvider({
+      renewal: refreshThenLogin(),
       ...bearerConfig(),
       logger,
       authorization: externalCodeStrategy({
@@ -331,6 +334,7 @@ describeBoth('SAML providers with Keycloak as the identity provider', () => {
     const received: string[] = [];
 
     const tokens = await new Saml2PureProvider({
+      renewal: refreshThenLogin(),
       idpSsoUrl: `${KEYCLOAK_URL}/protocol/saml`,
       spEntityId: 'sap-sp',
       acsUrl,
@@ -417,6 +421,7 @@ describeBoth('SAML providers with Keycloak as the identity provider', () => {
 
     const error = await expectSamlRejection(
       new Saml2PureProvider({
+        renewal: refreshThenLogin(),
         idpSsoUrl: `${KEYCLOAK_URL}/protocol/saml`,
         spEntityId: 'sap-sp',
         acsUrl,

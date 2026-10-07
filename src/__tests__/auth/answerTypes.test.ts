@@ -15,6 +15,7 @@ import { readFailure } from '@mcp-abap-adt/auth-errors';
 import { ClientCredentialsProvider } from '../../providers/ClientCredentialsProvider';
 import { OidcPasswordProvider } from '../../providers/OidcPasswordProvider';
 import { UaaPasscodeProvider } from '../../providers/UaaPasscodeProvider';
+import { refreshThenLogin } from '../../renewal';
 import { staticCodeStrategy } from '../../strategies/codeStrategies';
 
 let body: unknown;
@@ -37,12 +38,14 @@ afterAll(() => new Promise<void>((resolve) => server.close(() => resolve())));
 const providers = {
   'client credentials': () =>
     new ClientCredentialsProvider({
+      renewal: refreshThenLogin(),
       uaaUrl: base,
       clientId: 'c',
       clientSecret: 's',
     }),
   'OIDC password': () =>
     new OidcPasswordProvider({
+      renewal: refreshThenLogin(),
       tokenEndpoint: `${base}/token`,
       clientId: 'c',
       username: 'u',
@@ -50,6 +53,7 @@ const providers = {
     }),
   'UAA passcode': () =>
     new UaaPasscodeProvider({
+      renewal: refreshThenLogin(),
       uaaUrl: base,
       clientId: 'cf',
       authorization: staticCodeStrategy({ payload: 'pc' }),

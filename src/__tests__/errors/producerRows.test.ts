@@ -33,6 +33,7 @@ import {
 import { clientSecretBasic } from '../../clientAuthentication/clientSecret';
 import { privateKeyJwt } from '../../clientAuthentication/privateKeyJwt';
 import { ClientCredentialsProvider } from '../../providers/ClientCredentialsProvider';
+import { refreshThenLogin } from '../../renewal';
 import { createSignedResponseValidator } from '../../validation/assertionValidator';
 import { createInMemoryReplayStore } from '../../validation/inMemoryReplayStore';
 import { mintedRefusal } from '../helpers/minted';
@@ -150,6 +151,7 @@ describe('A4 — client-certificate', () => {
 
   it('A4: a strategy whose tlsMaterial() yields nothing — getTokens() throws incomplete', async () => {
     const provider = new ClientCredentialsProvider({
+      renewal: refreshThenLogin(),
       uaaUrl: 'https://uaa.example',
       clientId: 'client',
       clientAuthentication: {

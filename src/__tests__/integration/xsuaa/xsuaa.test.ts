@@ -25,6 +25,7 @@ import { signXml } from '@mcp-abap-adt/auth-mocks';
 import type { IAuthorizationStrategy } from '@mcp-abap-adt/interfaces-auth';
 import { Saml2BearerProvider } from '../../../providers/Saml2BearerProvider';
 import { UaaPasscodeProvider } from '../../../providers/UaaPasscodeProvider';
+import { refreshThenLogin } from '../../../renewal';
 import { staticCodeStrategy } from '../../../strategies';
 import { createSignedAssertionValidator } from '../../../validation/assertionValidator';
 import { defaultReplayStore } from '../../../validation/inMemoryReplayStore';
@@ -124,6 +125,7 @@ describeXsuaa('Providers against a real XSUAA', () => {
 
   const bearer = (payload: string, extra: object = {}) =>
     new Saml2BearerProvider({
+      renewal: refreshThenLogin(),
       idpSsoUrl: `https://${ORIGIN}.invalid/sso`,
       spEntityId: entityId,
       acsUrl: bearerAcs,
@@ -213,6 +215,7 @@ describeXsuaa('Providers against a real XSUAA', () => {
     'UaaPasscodeProvider: a code from /passcode is exchanged and refreshed',
     async () => {
       const first = await new UaaPasscodeProvider({
+        renewal: refreshThenLogin(),
         uaaUrl: credentials.url,
         clientId: credentials.clientid,
         clientSecret: credentials.clientsecret,
@@ -223,6 +226,7 @@ describeXsuaa('Providers against a real XSUAA', () => {
 
       const { authorize, strategy } = refuseStrategy();
       const refreshed = await new UaaPasscodeProvider({
+        renewal: refreshThenLogin(),
         uaaUrl: credentials.url,
         clientId: credentials.clientid,
         clientSecret: credentials.clientsecret,

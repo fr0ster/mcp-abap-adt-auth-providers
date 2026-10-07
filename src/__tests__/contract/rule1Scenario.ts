@@ -487,6 +487,7 @@ function rows(lib: typeof Lib): Row[] {
       token: true,
       make: (w) =>
         new lib.ClientCredentialsProvider({
+          renewal: lib.refreshThenLogin(),
           uaaUrl: w.base,
           clientId: 'cid',
           ...client(w),
@@ -499,6 +500,7 @@ function rows(lib: typeof Lib): Row[] {
       token: true,
       make: (w) =>
         new lib.AuthorizationCodeProvider({
+          renewal: lib.refreshThenLogin(),
           uaaUrl: w.base,
           clientId: 'cid',
           authorization: interactive(w, () => codeStrategy(() => 'code')),
@@ -512,6 +514,7 @@ function rows(lib: typeof Lib): Row[] {
       token: true,
       make: (w) =>
         new lib.OidcBrowserProvider({
+          renewal: lib.refreshThenLogin(),
           clientId: 'cid',
           authorizationEndpoint: `${w.base}/authorize`,
           tokenEndpoint: `${w.base}/token`,
@@ -533,6 +536,7 @@ function rows(lib: typeof Lib): Row[] {
       token: true,
       make: (w) =>
         new lib.OidcDeviceFlowProvider({
+          renewal: lib.refreshThenLogin(),
           clientId: 'cid',
           tokenEndpoint: `${w.base}/token`,
           deviceAuthorizationEndpoint: `${w.base}/device`,
@@ -553,6 +557,7 @@ function rows(lib: typeof Lib): Row[] {
       token: true,
       make: (w) =>
         new lib.OidcPasswordProvider({
+          renewal: lib.refreshThenLogin(),
           clientId: 'cid',
           username: 'u',
           password: 'p',
@@ -569,6 +574,7 @@ function rows(lib: typeof Lib): Row[] {
       token: true,
       make: (w) =>
         new lib.OidcTokenExchangeProvider({
+          renewal: lib.refreshThenLogin(),
           clientId: 'cid',
           subjectToken: 'subject',
           subjectTokenType: 'urn:ietf:params:oauth:token-type:access_token',
@@ -591,6 +597,7 @@ function rows(lib: typeof Lib): Row[] {
       token: true,
       make: (w) =>
         new lib.Saml2BearerProvider({
+          renewal: lib.refreshThenLogin(),
           ...saml(w, 'assertion'),
           tokenUrl: `${w.base}/token`,
           clientId: 'cid',
@@ -610,6 +617,7 @@ function rows(lib: typeof Lib): Row[] {
       token: true,
       make: (w) =>
         new lib.Saml2PureProvider({
+          renewal: lib.refreshThenLogin(),
           ...saml(w, 'response'),
           cookieProvider:
             (w.hostile('cookie provider') as never) ??
@@ -627,6 +635,7 @@ function rows(lib: typeof Lib): Row[] {
       token: true,
       make: (w) =>
         new lib.UaaPasscodeProvider({
+          renewal: lib.refreshThenLogin(),
           uaaUrl: w.base,
           clientId: 'cid',
           authorization: interactive(w, () => ({

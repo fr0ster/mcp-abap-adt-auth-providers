@@ -58,6 +58,8 @@ export {
   UaaPasscodeProvider,
 } from './providers';
 export type { SamlTrust } from './providers/saml2Utils';
+// Renewal strategies — or bring your own IRenewalStrategy.
+export { refreshOnly, refreshThenLogin } from './renewal';
 // SNC — passwordless RFC logon.
 export {
   DefaultSncLibraryLocator,

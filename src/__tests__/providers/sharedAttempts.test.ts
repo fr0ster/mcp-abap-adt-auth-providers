@@ -32,6 +32,7 @@ import type {
 } from '@mcp-abap-adt/interfaces-auth';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
 import { AuthorizationCodeProvider } from '../../providers/AuthorizationCodeProvider';
+import { refreshThenLogin } from '../../renewal';
 import { browserCallbackStrategy } from '../../strategies';
 import {
   deferred,
@@ -85,6 +86,7 @@ function provider(
   extra: { signal?: AbortSignal } = {},
 ): AuthorizationCodeProvider {
   return new AuthorizationCodeProvider({
+    renewal: refreshThenLogin(),
     uaaUrl: server.url,
     clientId: 'cid',
     clientSecret: 'sec',
@@ -471,6 +473,7 @@ describe('the pin attempt is shared the same way', () => {
       tlsMaterial: reads,
     };
     const p = new AuthorizationCodeProvider({
+      renewal: refreshThenLogin(),
       uaaUrl: server.url,
       clientId: 'cid',
       authorization: waitingStrategy(),

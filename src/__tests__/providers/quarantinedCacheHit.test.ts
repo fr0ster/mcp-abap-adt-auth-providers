@@ -19,6 +19,7 @@ import type {
   OAuth2GrantType,
 } from '@mcp-abap-adt/interfaces-auth';
 import { BaseTokenProvider } from '../../providers/BaseTokenProvider';
+import { refreshThenLogin } from '../../renewal';
 
 const b64 = (o: object) => Buffer.from(JSON.stringify(o)).toString('base64url');
 const jwt = (n: string) =>
@@ -34,6 +35,7 @@ class Stalling extends BaseTokenProvider {
   release: (() => void) | undefined;
   constructor() {
     super({
+      renewal: refreshThenLogin(),
       onTokens: async (r) => {
         this.told.push(`${r.refreshTokenDisposition}:${r.refreshToken}`);
         if (this.stall) {
@@ -55,7 +57,13 @@ class Stalling extends BaseTokenProvider {
       authType: 'authorization_code',
     };
   }
-  protected performRefresh(refreshToken: string): Promise<ITokenResult> {
+  protected performRefresh(
+    refreshToken: string,
+    _signal: AbortSignal,
+    dispatched: () => void,
+  ): Promise<ITokenResult> {
+    // The request leaves: the site would call this right before it.
+    dispatched();
     if (refreshToken === 'R0') {
       return Promise.resolve({
         authorizationToken: jwt('T1'),

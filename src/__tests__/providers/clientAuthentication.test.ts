@@ -30,6 +30,7 @@ import { OidcPasswordProvider } from '../../providers/OidcPasswordProvider';
 import { OidcTokenExchangeProvider } from '../../providers/OidcTokenExchangeProvider';
 import { Saml2BearerProvider } from '../../providers/Saml2BearerProvider';
 import { UaaPasscodeProvider } from '../../providers/UaaPasscodeProvider';
+import { refreshThenLogin } from '../../renewal';
 import { configurationOf, wordsOf } from '../helpers/minted';
 import { recordingTargets } from '../helpers/targets';
 
@@ -190,6 +191,7 @@ describe('the strategy reaches every request a provider sends', () => {
   it('ClientCredentialsProvider: the client_credentials request', async () => {
     const { strategy, drafts } = recording();
     const provider = new ClientCredentialsProvider({
+      renewal: refreshThenLogin(),
       uaaUrl: 'https://uaa',
       clientId: 'cid',
       clientAuthentication: strategy,
@@ -209,6 +211,7 @@ describe('the strategy reaches every request a provider sends', () => {
   it('AuthorizationCodeProvider: the code exchange and the refresh', async () => {
     const { strategy, drafts } = recording();
     const provider = new AuthorizationCodeProvider({
+      renewal: refreshThenLogin(),
       uaaUrl: 'https://uaa',
       clientId: 'cid',
       authorization: codeStrategy(),
@@ -226,6 +229,7 @@ describe('the strategy reaches every request a provider sends', () => {
   it('UaaPasscodeProvider: the passcode exchange and the refresh', async () => {
     const { strategy, drafts } = recording();
     const provider = new UaaPasscodeProvider({
+      renewal: refreshThenLogin(),
       uaaUrl: 'https://uaa',
       clientId: 'cf',
       authorization: codeStrategy('passcode'),
@@ -240,6 +244,7 @@ describe('the strategy reaches every request a provider sends', () => {
   it('Saml2BearerProvider: the assertion exchange and its refresh', async () => {
     const { strategy, drafts } = recording();
     const provider = new Saml2BearerProvider({
+      renewal: refreshThenLogin(),
       idpSsoUrl: 'https://idp/sso',
       spEntityId: 'sp-entity',
       uaaUrl: 'https://uaa',
@@ -262,6 +267,7 @@ describe('the strategy reaches every request a provider sends', () => {
   it('OidcBrowserProvider: the code exchange and the refresh', async () => {
     const { strategy, drafts } = recording();
     const provider = new OidcBrowserProvider({
+      renewal: refreshThenLogin(),
       clientId: 'cid',
       tokenEndpoint: 'https://idp/token',
       authorizationEndpoint: 'https://idp/auth',
@@ -277,6 +283,7 @@ describe('the strategy reaches every request a provider sends', () => {
   it('OidcDeviceFlowProvider: the device initiation, the poll and the refresh', async () => {
     const { strategy, drafts } = recording();
     const provider = new OidcDeviceFlowProvider({
+      renewal: refreshThenLogin(),
       clientId: 'cid',
       tokenEndpoint: 'https://idp/token',
       deviceAuthorizationEndpoint: 'https://idp/device',
@@ -300,6 +307,7 @@ describe('the strategy reaches every request a provider sends', () => {
   it('OidcPasswordProvider: the password grant and the refresh', async () => {
     const { strategy, drafts } = recording();
     const provider = new OidcPasswordProvider({
+      renewal: refreshThenLogin(),
       clientId: 'cid',
       tokenEndpoint: 'https://idp/token',
       username: 'u',
@@ -315,6 +323,7 @@ describe('the strategy reaches every request a provider sends', () => {
   it('OidcTokenExchangeProvider: the token exchange', async () => {
     const { strategy, drafts } = recording();
     const provider = new OidcTokenExchangeProvider({
+      renewal: refreshThenLogin(),
       clientId: 'cid',
       tokenEndpoint: 'https://idp/token',
       subjectToken: 'subject',
@@ -336,6 +345,7 @@ describe('a strategy and a clientSecret together', () => {
       'ClientCredentialsProvider',
       () =>
         new ClientCredentialsProvider({
+          renewal: refreshThenLogin(),
           uaaUrl: 'https://uaa',
           clientId: 'cid',
           clientSecret: 's',
@@ -346,6 +356,7 @@ describe('a strategy and a clientSecret together', () => {
       'AuthorizationCodeProvider',
       () =>
         new AuthorizationCodeProvider({
+          renewal: refreshThenLogin(),
           uaaUrl: 'https://uaa',
           clientId: 'cid',
           clientSecret: 's',
@@ -357,6 +368,7 @@ describe('a strategy and a clientSecret together', () => {
       'UaaPasscodeProvider',
       () =>
         new UaaPasscodeProvider({
+          renewal: refreshThenLogin(),
           uaaUrl: 'https://uaa',
           clientId: 'cf',
           clientSecret: 's',
@@ -368,6 +380,7 @@ describe('a strategy and a clientSecret together', () => {
       'Saml2BearerProvider',
       () =>
         new Saml2BearerProvider({
+          renewal: refreshThenLogin(),
           idpSsoUrl: 'https://idp/sso',
           spEntityId: 'sp-entity',
           uaaUrl: 'https://uaa',
@@ -383,6 +396,7 @@ describe('a strategy and a clientSecret together', () => {
       'OidcBrowserProvider',
       () =>
         new OidcBrowserProvider({
+          renewal: refreshThenLogin(),
           clientId: 'cid',
           clientSecret: 's',
           authorization: oidcCodeStrategy(),
@@ -393,6 +407,7 @@ describe('a strategy and a clientSecret together', () => {
       'OidcDeviceFlowProvider',
       () =>
         new OidcDeviceFlowProvider({
+          renewal: refreshThenLogin(),
           clientId: 'cid',
           clientSecret: 's',
           presenter: { present: async () => {} },
@@ -403,6 +418,7 @@ describe('a strategy and a clientSecret together', () => {
       'OidcPasswordProvider',
       () =>
         new OidcPasswordProvider({
+          renewal: refreshThenLogin(),
           clientId: 'cid',
           clientSecret: 's',
           username: 'u',
@@ -414,6 +430,7 @@ describe('a strategy and a clientSecret together', () => {
       'OidcTokenExchangeProvider',
       () =>
         new OidcTokenExchangeProvider({
+          renewal: refreshThenLogin(),
           clientId: 'cid',
           clientSecret: 's',
           subjectToken: 'subject',
@@ -456,6 +473,7 @@ describe('a strategy satisfies the clientSecret requirement', () => {
     expect(
       () =>
         new ClientCredentialsProvider({
+          renewal: refreshThenLogin(),
           uaaUrl: 'https://uaa',
           clientId: 'cid',
           clientAuthentication: recording().strategy,
@@ -478,6 +496,7 @@ describe('a strategy satisfies the clientSecret requirement', () => {
     expect(
       () =>
         new AuthorizationCodeProvider({
+          renewal: refreshThenLogin(),
           uaaUrl: 'https://uaa',
           clientId: 'cid',
           authorization: codeStrategy(),
@@ -491,6 +510,7 @@ describe('one certificate, pinned', () => {
   it('a strategy answering A, then B, is asked once; every request presents A', async () => {
     const { strategy, tlsCalls } = recording([A, B]);
     const provider = new AuthorizationCodeProvider({
+      renewal: refreshThenLogin(),
       uaaUrl: 'https://uaa',
       clientId: 'cid',
       authorization: codeStrategy(),
@@ -507,6 +527,7 @@ describe('one certificate, pinned', () => {
   it('concurrent prepare() calls share one load', async () => {
     const { strategy, tlsCalls } = recording([A, B]);
     const provider = new ClientCredentialsProvider({
+      renewal: refreshThenLogin(),
       uaaUrl: 'https://uaa',
       clientId: 'cid',
       clientAuthentication: strategy,
@@ -526,6 +547,7 @@ describe('one certificate, pinned', () => {
     }
     const { strategy, tlsCalls } = recording([A, B]);
     const provider = new TwoNeeds({
+      renewal: refreshThenLogin(),
       uaaUrl: 'https://uaa',
       clientId: 'cid',
       clientAuthentication: strategy,
@@ -539,6 +561,7 @@ describe('one certificate, pinned', () => {
   it('a strategy without tlsMaterial: no agent on the request', async () => {
     const { strategy } = recording();
     const provider = new ClientCredentialsProvider({
+      renewal: refreshThenLogin(),
       uaaUrl: 'https://uaa',
       clientId: 'cid',
       clientAuthentication: strategy,
@@ -554,6 +577,7 @@ describe('one certificate, pinned', () => {
     ]);
     const authorization = codeStrategy();
     const provider = new AuthorizationCodeProvider({
+      renewal: refreshThenLogin(),
       uaaUrl: 'https://uaa',
       clientId: 'cid',
       refreshToken: 'stored-refresh',
@@ -590,6 +614,7 @@ describe('one certificate, pinned', () => {
       A,
     ]);
     const provider = new ClientCredentialsProvider({
+      renewal: refreshThenLogin(),
       uaaUrl: 'https://uaa',
       clientId: 'cid',
       clientAuthentication: strategy,
@@ -619,6 +644,7 @@ describe('one certificate, pinned', () => {
     const original = Buffer.from(cert);
     const { strategy } = recording([{ cert, key }]);
     const provider = new ClientCredentialsProvider({
+      renewal: refreshThenLogin(),
       uaaUrl: 'https://uaa',
       clientId: 'cid',
       clientAuthentication: strategy,
@@ -637,6 +663,7 @@ describe('one certificate, pinned', () => {
     const original = Buffer.from(A.cert as Buffer);
     const { strategy } = recording([A]);
     const provider = new ClientCredentialsProvider({
+      renewal: refreshThenLogin(),
       uaaUrl: 'https://uaa',
       clientId: 'cid',
       clientAuthentication: strategy,
@@ -679,6 +706,7 @@ describe('an expired client certificate', () => {
   it('is refused at pin time: nothing sent, nothing pinned (fixture: 2020-01-01 to 2021-01-01)', async () => {
     const { strategy } = recording([expired]);
     const provider = new ClientCredentialsProvider({
+      renewal: refreshThenLogin(),
       uaaUrl: 'https://uaa',
       clientId: 'cid',
       clientAuthentication: strategy,
@@ -693,6 +721,7 @@ describe('an expired client certificate', () => {
   it('pinned while valid, then expired: refused before the next request presents it, and at the logon', async () => {
     const { strategy } = recording([A]);
     const provider = new ClientCredentialsProvider({
+      renewal: refreshThenLogin(),
       uaaUrl: 'https://uaa',
       clientId: 'cid',
       clientAuthentication: strategy,
@@ -715,6 +744,7 @@ describe('an expired client certificate', () => {
     const { strategy } = recording([A]);
     const authorization = codeStrategy();
     const provider = new AuthorizationCodeProvider({
+      renewal: refreshThenLogin(),
       uaaUrl: 'https://uaa',
       clientId: 'cid',
       authorization,
@@ -744,6 +774,7 @@ describe('an expired client certificate', () => {
   it('expired between two device polls: the next poll is not sent, and the login is refused in fixed words', async () => {
     const { strategy } = recording([A]);
     const provider = new OidcDeviceFlowProvider({
+      renewal: refreshThenLogin(),
       clientId: 'cid',
       tokenEndpoint: 'https://idp/token',
       deviceAuthorizationEndpoint: 'https://idp/device',
@@ -802,6 +833,7 @@ describe('OIDC discovery: mtls_endpoint_aliases', () => {
     });
     const { strategy, drafts } = recording();
     const provider = new OidcPasswordProvider({
+      renewal: refreshThenLogin(),
       issuerUrl: issuer,
       clientId: 'cid',
       username: 'u',
@@ -820,6 +852,7 @@ describe('OIDC discovery: mtls_endpoint_aliases', () => {
     const issuer = issuerWith({});
     const { strategy, drafts } = recording();
     const provider = new OidcPasswordProvider({
+      renewal: refreshThenLogin(),
       issuerUrl: issuer,
       clientId: 'cid',
       username: 'u',
@@ -840,6 +873,7 @@ describe('OIDC discovery: mtls_endpoint_aliases', () => {
     });
     const { strategy, drafts } = recording();
     const provider = new OidcDeviceFlowProvider({
+      renewal: refreshThenLogin(),
       issuerUrl: issuer,
       clientId: 'cid',
       presenter: { present: async () => {} },
@@ -867,6 +901,7 @@ describe('OIDC discovery: mtls_endpoint_aliases', () => {
     });
     const { strategy, drafts } = recording();
     await new OidcDeviceFlowProvider({
+      renewal: refreshThenLogin(),
       issuerUrl: issuer,
       clientId: 'cid',
       presenter: { present: async () => {} },
@@ -881,6 +916,7 @@ describe('OIDC discovery: mtls_endpoint_aliases', () => {
   it('the device initiation names a configured token endpoint as tokenEndpoint', async () => {
     const { strategy, drafts } = recording();
     await new OidcDeviceFlowProvider({
+      renewal: refreshThenLogin(),
       clientId: 'cid',
       tokenEndpoint: 'https://own/token',
       deviceAuthorizationEndpoint: 'https://own/device',
@@ -900,6 +936,7 @@ describe('OIDC discovery: mtls_endpoint_aliases', () => {
     });
     const browser = recording();
     await new OidcBrowserProvider({
+      renewal: refreshThenLogin(),
       issuerUrl: issuer,
       clientId: 'cid',
       authorization: oidcCodeStrategy(),
@@ -907,6 +944,7 @@ describe('OIDC discovery: mtls_endpoint_aliases', () => {
     }).getTokens();
     const exchange = recording();
     await new OidcTokenExchangeProvider({
+      renewal: refreshThenLogin(),
       issuerUrl: issuer,
       clientId: 'cid',
       subjectToken: 'subject',
@@ -926,6 +964,7 @@ describe('OIDC discovery: mtls_endpoint_aliases', () => {
     });
     const { strategy, drafts } = recording();
     await new OidcDeviceFlowProvider({
+      renewal: refreshThenLogin(),
       issuerUrl: issuer,
       clientId: 'cid',
       deviceAuthorizationEndpoint: 'https://own/device',
@@ -942,6 +981,7 @@ describe('OIDC discovery: mtls_endpoint_aliases', () => {
 describe('clientSecretBasic through a provider', () => {
   it("raw with a client id containing ':': prepare() refuses in fixed words, nothing sent", async () => {
     const provider = new ClientCredentialsProvider({
+      renewal: refreshThenLogin(),
       uaaUrl: 'https://uaa',
       clientId: 'my:client',
       clientAuthentication: clientSecretBasic('top-secret', {
@@ -960,6 +1000,7 @@ describe('clientSecretBasic through a provider', () => {
 
   it('form with the same client id: the request goes out, the id encoded', async () => {
     const provider = new ClientCredentialsProvider({
+      renewal: refreshThenLogin(),
       uaaUrl: 'https://uaa',
       clientId: 'my:client',
       clientAuthentication: clientSecretBasic('top-secret', {

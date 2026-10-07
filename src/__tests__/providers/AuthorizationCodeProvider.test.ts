@@ -26,6 +26,7 @@ import { AUTH_TYPE_AUTHORIZATION_CODE } from '@mcp-abap-adt/interfaces-auth';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
 import { DefaultLogger, LogLevel } from '@mcp-abap-adt/logger';
 import { AuthorizationCodeProvider } from '../../providers/AuthorizationCodeProvider';
+import { refreshThenLogin } from '../../renewal';
 import {
   BrowserCallbackStrategy,
   browserCallbackStrategy,
@@ -210,6 +211,7 @@ describe('AuthorizationCodeProvider', () => {
           const port1 = await getAvailablePort();
           const port2 = await getAvailablePort();
           const provider = new AuthorizationCodeProvider({
+            renewal: refreshThenLogin(),
             uaaUrl: authConfig.uaaUrl!,
             clientId: authConfig.uaaClientId!,
             clientSecret: authConfig.uaaClientSecret!,
@@ -236,6 +238,7 @@ describe('AuthorizationCodeProvider', () => {
 
           // Scenario 2: Use token from Scenario 1 - should use cached token
           const provider2 = new AuthorizationCodeProvider({
+            renewal: refreshThenLogin(),
             uaaUrl: authConfig.uaaUrl!,
             clientId: authConfig.uaaClientId!,
             clientSecret: authConfig.uaaClientSecret!,
@@ -323,6 +326,7 @@ describe('AuthorizationCodeProvider', () => {
         const expiredToken = createExpiredJWT();
         const redirectPort = await getAvailablePort();
         const provider = new AuthorizationCodeProvider({
+          renewal: refreshThenLogin(),
           uaaUrl: authConfig.uaaUrl!,
           clientId: authConfig.uaaClientId!,
           clientSecret: authConfig.uaaClientSecret!,
@@ -420,6 +424,7 @@ describe('AuthorizationCodeProvider', () => {
         return;
       }
       const provider = new AuthorizationCodeProvider({
+        renewal: refreshThenLogin(),
         uaaUrl: session.auth.uaaUrl!,
         clientId: session.auth.uaaClientId!,
         clientSecret: session.auth.uaaClientSecret!,
@@ -444,6 +449,7 @@ describe('AuthorizationCodeProvider', () => {
       }
       const expired = createExpiredJWT();
       const provider = new AuthorizationCodeProvider({
+        renewal: refreshThenLogin(),
         uaaUrl: session.auth.uaaUrl!,
         clientId: session.auth.uaaClientId!,
         clientSecret: session.auth.uaaClientSecret!,
@@ -480,6 +486,7 @@ describe('AuthorizationCodeProvider', () => {
 
       const logger = createTestLogger();
       const provider = new AuthorizationCodeProvider({
+        renewal: refreshThenLogin(),
         uaaUrl: authConfig.uaaUrl!,
         clientId: authConfig.uaaClientId!,
         clientSecret: authConfig.uaaClientSecret!,
@@ -522,6 +529,7 @@ describe('AuthorizationCodeProvider with strategies', () => {
   it('leaves the callback port free the moment a login is aborted', async () => {
     const consumer = new AbortController();
     const provider = new AuthorizationCodeProvider({
+      renewal: refreshThenLogin(),
       uaaUrl: 'http://127.0.0.1:9',
       clientId: 'client',
       clientSecret: 'secret',
@@ -547,6 +555,7 @@ describe('AuthorizationCodeProvider with strategies', () => {
   it('rejects a pre-built URL whose redirect does not match, before opening a browser', async () => {
     const openUrl = jest.fn(async () => undefined);
     const provider = new AuthorizationCodeProvider({
+      renewal: refreshThenLogin(),
       uaaUrl: 'http://127.0.0.1:9',
       clientId: 'client',
       clientSecret: 'secret',
@@ -574,6 +583,7 @@ describe('AuthorizationCodeProvider with strategies', () => {
 
   it('catches the mismatch even from a strategy that never builds a URL', async () => {
     const provider = new AuthorizationCodeProvider({
+      renewal: refreshThenLogin(),
       uaaUrl: 'http://127.0.0.1:9',
       clientId: 'client',
       clientSecret: 'secret',
@@ -658,6 +668,7 @@ describe('AuthorizationCodeProvider strategy lifecycle', () => {
 
     try {
       const provider = new AuthorizationCodeProvider({
+        renewal: refreshThenLogin(),
         uaaUrl: uaa.url,
         clientId: 'client',
         clientSecret: 'secret',
@@ -684,6 +695,7 @@ describe('AuthorizationCodeProvider strategy lifecycle', () => {
       dispose,
     };
     const provider = new AuthorizationCodeProvider({
+      renewal: refreshThenLogin(),
       uaaUrl: 'http://127.0.0.1:9',
       clientId: 'client',
       clientSecret: 'secret',

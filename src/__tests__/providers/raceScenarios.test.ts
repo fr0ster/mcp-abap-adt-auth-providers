@@ -32,7 +32,7 @@ const outcomeOf = (promise) => promise.then(
 );
 const silent = { debug() {}, info() {}, warn() {}, error() {} };
 class Scripted extends lib.BaseTokenProvider {
-  constructor(config = {}) {
+  constructor(config) {
     super(config);
     this.logins = [];
     this.refreshes = [];
@@ -40,7 +40,7 @@ class Scripted extends lib.BaseTokenProvider {
     if (config.refresh) this.refreshToken = config.refresh;
   }
   performLogin(attempt) { const d = deferred(); this.logins.push({ attempt, d }); return d.promise; }
-  performRefresh(refreshToken) { const d = deferred(); this.refreshes.push({ refreshToken, d }); return d.promise; }
+  performRefresh(refreshToken, _signal, dispatched) { dispatched(); const d = deferred(); this.refreshes.push({ refreshToken, d }); return d.promise; }
   getAuthType() { return 'authorization_code'; }
   held() { return { access: this.authorizationToken, refresh: this.refreshToken }; }
   expire() { this.expiresAt = Date.now() - 1; }
@@ -52,7 +52,7 @@ describe('the races of spec §6b, under plain node', () => {
   it('the doomed join: a fresh attempt wins, the late login changes nothing', () => {
     const run = runPlainNode<Record<string, unknown>>(`${PRELUDE}
 const seen = [];
-const p = new Scripted({ onTokens: async (r) => { seen.push([r.authorizationToken, r.refreshToken, r.refreshTokenDisposition]); } });
+const p = new Scripted({ renewal: lib.refreshThenLogin(), onTokens: async (r) => { seen.push([r.authorizationToken, r.refreshToken, r.refreshTokenDisposition]); } });
 const only = new AbortController();
 const doomed = outcomeOf(p.getTokens({ signal: only.signal }));
 await until(() => p.logins.length === 1);
@@ -79,7 +79,7 @@ report({ doomedOutcome, fresh: freshOutcome.value.authorizationToken, held: p.he
 
   it('the doomed join, the late login failing: no unhandled rejection', () => {
     const run = runPlainNode<Record<string, unknown>>(`${PRELUDE}
-const p = new Scripted();
+const p = new Scripted({ renewal: lib.refreshThenLogin() });
 const only = new AbortController();
 const doomed = outcomeOf(p.getTokens({ signal: only.signal }));
 await until(() => p.logins.length === 1);
@@ -114,7 +114,7 @@ const server = http.createServer((req, res) => {
 await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
 const url = 'http://127.0.0.1:' + server.address().port;
 const seen = [];
-const p = new lib.AuthorizationCodeProvider({
+const p = new lib.AuthorizationCodeProvider({ renewal: lib.refreshThenLogin(),
   uaaUrl: url, clientId: 'cid', clientSecret: 'sec', logger: silent,
   authorization: { authorize: async () => { throw new Error('no login expected'); } },
   accessToken: jwt('held', -3600), refreshToken: 'R',
@@ -182,7 +182,7 @@ const factory = async (options, use) => {
 const failures = [];
 let calls = 0;
 const inner = new lib.BrowserCallbackStrategy({ port, browser: 'none', openUrl: async () => {}, callbackServer: factory });
-const p = new lib.AuthorizationCodeProvider({
+const p = new lib.AuthorizationCodeProvider({ renewal: lib.refreshThenLogin(),
   uaaUrl: 'http://127.0.0.1:' + token.address().port, clientId: 'cid', clientSecret: 'sec', logger: silent,
   authorization: { authorize: async (request) => { calls += 1; try { return await inner.authorize(request); } catch (e) { failures.push(String(e && e.message)); throw e; } } },
 });
@@ -224,7 +224,7 @@ report({ outcomes: outcomes.map((o) => o.outcome), callsBeforeRelease, calls, re
 const hooks = [];
 let active = 0;
 let most = 0;
-const p = new Scripted({ onTokens: async (r) => {
+const p = new Scripted({ renewal: lib.refreshThenLogin(), onTokens: async (r) => {
   active += 1; most = Math.max(most, active);
   const done = deferred();
   hooks.push({ access: r.authorizationToken, done });

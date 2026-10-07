@@ -10,6 +10,7 @@ import {
   type TokenProviderHooks,
 } from '../../providers/BaseTokenProvider';
 import { Saml2PureProvider } from '../../providers/Saml2PureProvider';
+import { refreshThenLogin } from '../../renewal';
 import { wordsOf } from '../helpers/minted';
 import { recordingTargets } from '../helpers/targets';
 
@@ -27,13 +28,19 @@ const result = (token: string, refresh?: string): ITokenResult =>
 class TestProvider extends BaseTokenProvider {
   login = jest.fn(async () => result('T1', 'R1'));
   refresh = jest.fn(async () => result('T2', 'R2'));
-  constructor(hooks: TokenProviderHooks = {}) {
+  constructor(hooks: TokenProviderHooks = { renewal: refreshThenLogin() }) {
     super(hooks);
   }
   protected performLogin() {
     return this.login();
   }
-  protected performRefresh() {
+  protected performRefresh(
+    _refreshToken: string,
+    _signal: AbortSignal,
+    dispatched: () => void,
+  ) {
+    // The request leaves: the site would call this right before it.
+    dispatched();
     return this.refresh();
   }
   protected getAuthType(): OAuth2GrantType {
@@ -206,7 +213,7 @@ describe('BaseTokenProvider as IAuthProvider', () => {
 
   it('onTokens after a login and after a refresh, never on a cache hit', async () => {
     const onTokens = jest.fn(async (_: ITokenResult) => {});
-    const p = new TestProvider({ onTokens });
+    const p = new TestProvider({ renewal: refreshThenLogin(), onTokens });
     await p.prepare();
     await p.authorize(recordingTargets().requestTarget); // cache hit
     await p.rejected(refused);
@@ -219,6 +226,7 @@ describe('BaseTokenProvider as IAuthProvider', () => {
   it('a failing onTokens does not fail authentication and logs no message', async () => {
     const warn = jest.fn();
     const p = new TestProvider({
+      renewal: refreshThenLogin(),
       onTokens: async () => {
         throw new Error('store down: SECRET-T1');
       },

@@ -18,6 +18,7 @@ import type {
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
 import { withBrowserCallbackServer } from '../../auth/callbackServer';
 import { OidcDeviceFlowProvider } from '../../providers/OidcDeviceFlowProvider';
+import { refreshThenLogin } from '../../renewal';
 import {
   BrowserCallbackStrategy,
   browserCallbackStrategy,
@@ -619,6 +620,7 @@ describe('A.3 — the device code', () => {
     );
     const warnings: unknown[][] = [];
     const provider = new OidcDeviceFlowProvider({
+      renewal: refreshThenLogin(),
       clientId: 'cid',
       tokenEndpoint: `${server.url}/token`,
       deviceAuthorizationEndpoint: `${server.url}/device`,

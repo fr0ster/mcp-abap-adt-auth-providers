@@ -29,6 +29,7 @@ import { OidcTokenExchangeProvider } from '../../providers/OidcTokenExchangeProv
 import { Saml2BearerProvider } from '../../providers/Saml2BearerProvider';
 import { Saml2PureProvider } from '../../providers/Saml2PureProvider';
 import { UaaPasscodeProvider } from '../../providers/UaaPasscodeProvider';
+import { refreshThenLogin } from '../../renewal';
 import { BrowserCallbackStrategy } from '../../strategies/BrowserCallbackStrategy';
 
 // Automocked, but with axios's own error class: the sites throw it.
@@ -154,6 +155,7 @@ const providers: [
     'AuthorizationCodeProvider',
     (seeded, seen) =>
       new AuthorizationCodeProvider({
+        renewal: refreshThenLogin(),
         uaaUrl: 'https://uaa.example',
         clientId: 'cid',
         clientSecret: 's',
@@ -167,6 +169,7 @@ const providers: [
     'ClientCredentialsProvider',
     () =>
       new ClientCredentialsProvider({
+        renewal: refreshThenLogin(),
         uaaUrl: 'https://uaa.example',
         clientId: 'cid',
         clientSecret: 's',
@@ -178,6 +181,7 @@ const providers: [
     'OidcBrowserProvider',
     (seeded, seen) =>
       new OidcBrowserProvider({
+        renewal: refreshThenLogin(),
         clientId: 'cid',
         tokenEndpoint: 'https://idp.example/token',
         authorizationEndpoint: 'https://idp.example/auth',
@@ -191,6 +195,7 @@ const providers: [
     'OidcDeviceFlowProvider',
     (seeded) =>
       new OidcDeviceFlowProvider({
+        renewal: refreshThenLogin(),
         clientId: 'cid',
         tokenEndpoint: 'https://idp.example/token',
         deviceAuthorizationEndpoint: 'https://idp.example/device',
@@ -204,6 +209,7 @@ const providers: [
     'OidcPasswordProvider',
     (seeded) =>
       new OidcPasswordProvider({
+        renewal: refreshThenLogin(),
         clientId: 'cid',
         tokenEndpoint: 'https://idp.example/token',
         username: 'u',
@@ -217,6 +223,7 @@ const providers: [
     'OidcTokenExchangeProvider',
     () =>
       new OidcTokenExchangeProvider({
+        renewal: refreshThenLogin(),
         clientId: 'cid',
         tokenEndpoint: 'https://idp.example/token',
         subjectToken: 'subject',
@@ -229,6 +236,7 @@ const providers: [
     'Saml2BearerProvider',
     (seeded, seen) =>
       new Saml2BearerProvider({
+        renewal: refreshThenLogin(),
         idpSsoUrl: 'https://idp.example/sso',
         spEntityId: 'sp-entity',
         uaaUrl: 'https://uaa.example',
@@ -245,6 +253,7 @@ const providers: [
     'Saml2PureProvider',
     (_seeded, seen) =>
       new Saml2PureProvider({
+        renewal: refreshThenLogin(),
         idpSsoUrl: 'https://idp.example/sso',
         spEntityId: 'sp-entity',
         idpInitiated: true,
@@ -259,6 +268,7 @@ const providers: [
     'UaaPasscodeProvider',
     (seeded, seen) =>
       new UaaPasscodeProvider({
+        renewal: refreshThenLogin(),
         uaaUrl: 'https://uaa.example',
         clientId: 'cf',
         clientSecret: 's',
@@ -312,6 +322,7 @@ describe.each([
     'Saml2BearerProvider',
     (validator: IAssertionValidator) =>
       new Saml2BearerProvider({
+        renewal: refreshThenLogin(),
         idpSsoUrl: 'https://idp.example/sso',
         spEntityId: 'sp-entity',
         uaaUrl: 'https://uaa.example',
@@ -325,6 +336,7 @@ describe.each([
     'Saml2PureProvider',
     (validator: IAssertionValidator) =>
       new Saml2PureProvider({
+        renewal: refreshThenLogin(),
         idpSsoUrl: 'https://idp.example/sso',
         spEntityId: 'sp-entity',
         idpInitiated: true,
@@ -354,6 +366,7 @@ describe('token result, through getTokens()', () => {
     mockedAxios.mockResolvedValue(reply);
     mockedAxios.post.mockResolvedValue(reply);
     const provider = new ClientCredentialsProvider({
+      renewal: refreshThenLogin(),
       uaaUrl: 'https://uaa.example',
       clientId: 'client',
       clientSecret: 'secret',
@@ -387,6 +400,7 @@ describe('the request a strategy gets, through getTokens()', () => {
       },
     };
     const provider = new UaaPasscodeProvider({
+      renewal: refreshThenLogin(),
       uaaUrl: 'https://uaa.example',
       clientId: 'client',
       clientSecret: 'secret',

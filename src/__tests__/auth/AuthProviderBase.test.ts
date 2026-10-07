@@ -18,6 +18,7 @@ import {
   type MomentOperations,
 } from '../../auth/AuthProviderBase';
 import { BaseTokenProvider } from '../../index';
+import { refreshThenLogin } from '../../renewal';
 import { recordingTargets } from '../helpers/targets';
 
 const MARKER = 'SECRET-MARKER';
@@ -123,7 +124,9 @@ describe('AuthProviderBase (spec §8.1)', () => {
         return boom();
       }
     }
-    const got = await everyMoment(new ThrowingAuthType());
+    const got = await everyMoment(
+      new ThrowingAuthType({ renewal: refreshThenLogin() }),
+    );
     for (const outcome of [got.prepare, got.authorize, got.rejected]) {
       expect(factsOf(outcome)).toEqual({ operation: 'token-request' });
     }
@@ -309,7 +312,7 @@ describe('the grant is read once per moment, inside the boundary', () => {
         return Promise.reject(new Error(MARKER)) as never;
       }
     }
-    const p = new Rejecting();
+    const p = new Rejecting({ renewal: refreshThenLogin() });
     let outcome: AuthOutcome | undefined;
     const seen = await unhandledDuring(async () => {
       outcome = await p.prepare();

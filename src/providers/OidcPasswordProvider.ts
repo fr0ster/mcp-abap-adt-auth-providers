@@ -116,7 +116,8 @@ export class OidcPasswordProvider extends BaseTokenProvider {
 
   protected async performRefresh(
     refreshToken: string,
-    signal?: AbortSignal,
+    signal: AbortSignal,
+    dispatched: () => void,
   ): Promise<ITokenResult> {
     if (!refreshToken) {
       throw refreshTokenRefused();
@@ -157,7 +158,7 @@ export class OidcPasswordProvider extends BaseTokenProvider {
           ? undefined
           : mtlsAlias(discovery, 'token_endpoint'),
       ),
-      this.siteOptions(),
+      this.refreshSiteOptions(dispatched),
     );
 
     return {

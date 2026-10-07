@@ -8,6 +8,7 @@
 
 import { afterEach, describe, expect, it, jest } from '@jest/globals';
 import { readFailure } from '@mcp-abap-adt/auth-errors';
+import { refreshThenLogin } from '../../renewal';
 import { type FakeTerminal, fakeTerminal } from '../helpers/fakeTerminal';
 
 const turn = () => new Promise<void>((resolve) => setImmediate(resolve));
@@ -40,6 +41,7 @@ describe('drain handoff: a manual strategy', () => {
       '../../strategies/manualStrategies'
     );
     const provider = new UaaPasscodeProvider({
+      renewal: refreshThenLogin(),
       uaaUrl: 'https://uaa.example',
       clientId: 'cf',
       clientSecret: '',
