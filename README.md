@@ -10,7 +10,180 @@ is handed over directly to a connection, or through
 `@mcp-abap-adt/auth-broker` for the stateful token API
 (`getTokens()`/`refreshTokens()`).
 
+## Migrating to 6.0.0 — the error contract
+
+6.0.0 replaces how this package says what went wrong. Every refusal and every
+throw is now an **error of one closed list of kinds**, minted by
+[`@mcp-abap-adt/auth-errors`](https://www.npmjs.com/package/@mcp-abap-adt/auth-errors)
+from allowlisted facts — not a class to match with `instanceof`, not words to
+parse. And nothing is bounded by a timeout of the package's choosing any more:
+your `AbortSignal` is the bound. What a consumer on 5.x must now do:
+
+- **Install the contract it is read with.** `@mcp-abap-adt/auth-errors`
+  (`^1.0.1`) to read errors; `@mcp-abap-adt/interfaces-auth` 6.0.0 is what
+  every provider here implements. Hand the providers to a
+  `@mcp-abap-adt/connection` **12.0.0** process (11.x reads the old refusal),
+  and pair them with `@mcp-abap-adt/auth-stores` 4.0.0 and
+  `@mcp-abap-adt/auth-broker` 5.0.0: every token result now carries
+  `refreshTokenDisposition`, which auth-stores 3.x refuses
+  (`RefusedFieldsError` from `saveSession`).
+- **Catch with `readFailure`, never `instanceof`.** Every throw of this
+  package — a constructor's configuration fault, a factory's, a loader's,
+  `getTokens()` / `refreshTokens()` — is an `AuthProviderFailure`. Read what
+  you caught with `readFailure(thrown, operation)`, which answers an
+  `IAuthProviderError` for anything (a failure of another installed copy of
+  auth-errors included, a forged one rebuilt from its kind and facts); test
+  with `isAuthProviderFailure(value)` when you need a yes/no. An `instanceof`
+  answers false across two copies of the package and true for a forgery, so
+  it is never the test.
+
+  ```typescript
+  import { matchKind, readFailure } from '@mcp-abap-adt/auth-errors';
+
+  try {
+    await provider.getTokens({ signal });
+  } catch (thrown) {
+    const error = readFailure(thrown, 'token-request');
+    const advice = matchKind(error, {
+      configuration: (e) => `fix ${e.facts.fields.join(', ')}`,
+      'interactive-login': (e) => (e.facts.outcome === 'aborted' ? 'cancelled' : e.reason),
+      'request-failed': (e) => `${e.reason}${e.facts.oauthError ? ` [${e.facts.oauthError}]` : ''}`,
+      // … every kind: a missing handler does not compile …
+      unknown: (e) => e.reason,
+    });
+  }
+  ```
+
+  Switch on `kind` with one of auth-errors' two exhaustiveness patterns —
+  `matchKind(error, handlers)`, or a `switch` whose `default` calls
+  `unreachableKind(error)` — so that a kind added by a later major stops your
+  build instead of falling through at run time. A plain `switch` is not
+  checked.
+- **The classes are gone.** `TokenProviderError`, `ValidationError`,
+  `RefreshError`, `SessionDataError`, `ServiceKeyError`, `BrowserAuthError`,
+  `AssertionValidationError`, `CertificateMaterialError`,
+  `ClientAuthenticationError`, `ClientAuthenticationResultError`,
+  `BasicClientIdError` and `TokenEndpointError` are no longer exported, and
+  `AssertionCheck` is imported from `@mcp-abap-adt/interfaces-auth`. What each
+  carried is a kind and its facts:
+
+  | 5.x | 6.0.0 |
+  |---|---|
+  | `ValidationError` (`missingFields`) | `configuration` — `facts.case`, `facts.fields` ([Configuration errors](#configuration-errors)) |
+  | `BrowserAuthError` | `interactive-login` — `facts.outcome` (`aborted`, `port-in-use`, `identity-provider-refused`, `busy`, `disposed`, `no-terminal`, …) |
+  | `TokenEndpointError` (`status`, `oauthError`, `code`); the reduced `AxiosError` | `request-failed` — `facts.operation`, `facts.problem`, `facts.status`, `facts.oauthError`, `facts.code`; `tls` — `facts.code` |
+  | `AssertionValidationError` (`check`) | `saml-assertion` — `facts.rule`, `facts.check` ([Refusal messages](#refusal-messages)) |
+  | `CertificateMaterialError` (`incomplete`, `expired`) | `client-certificate` — `facts.problem` (`incomplete`, `unusable`, `expired`) |
+  | `ClientAuthenticationError`, `ClientAuthenticationResultError`, `BasicClientIdError` | `client-authentication` — `facts.problem` (`signing-key-unusable`, `result-unsendable`, `basic-client-id-colon`) |
+  | `RefreshError` | `credential-refused` `refresh-token` — and, as before, a refused refresh falls back to one login inside the provider |
+  | `SessionDataError`, `ServiceKeyError` | nothing: they had no producer |
+  | `error.code` (`TOKEN_PROVIDER_ERROR_CODES`, `ASSERTION_ERROR_CODES`) | `kind` — the constants are gone from interfaces-auth 6.0.0 |
+- **`refusalWords(error, what)` → `classify(error, operation)`**
+  (auth-errors), then `.reason` / `.hint`. `what` was free text; an operation
+  is one of the closed list `OPERATIONS` of interfaces-auth
+  (`'loading-certificate'`, `'token-request'`, …). A caller that passed a
+  `what` of its own and wants no operation's words passes
+  `'unfamiliar-error'`, which answers "an authentication error of a kind this
+  version does not know" and no hint — a TLS failure's `NODE_EXTRA_CA_CERTS`
+  hint included; an operation of the list keeps its words and hints. See
+  [Relaying a refusal](#relaying-a-refusal-classify).
+- **A refusal is frozen, and only a minted one is trusted.** `AuthOutcome`'s
+  refusal is the `IAuthProviderError` itself (`IAuthRefusal =
+  IAuthProviderError`): `refusal.reason` and `refusal.hint` read as before, and
+  `refusal.kind` / `refusal.facts` say what happened. Do not copy or edit one:
+  it is frozen, so a mutation throws in strict code, and a copy (`{ ...refusal }`,
+  a `structuredClone`, a JSON round-trip) is no longer minted — wherever it is
+  read again it is rebuilt from its `kind` and `facts`, its diagnostics
+  dropped; a provider of yours answering an outcome that is not one is
+  answered `unknown`. Build an error you need with auth-errors' `authError`
+  builders.
+- **The words changed; match on facts.** Every reason and hint is rendered
+  from the kind and its facts. A token request refused reads `the passcode
+  exchange failed (HTTP 401)` instead of `Passcode exchange failed (401)`; an
+  unfamiliar thrown value `loading the certificate failed (unknown error,
+  ENOENT)` instead of naming a class or your `what`; a SAML refusal names its
+  rule and no value of the document; the SNC library's path is a diagnostic,
+  not a word. Code that matched words must match `kind` and `facts` instead.
+- **No `timeoutMs` anywhere.** `DEFAULT_LOGIN_TIMEOUT_MS`, every strategy's
+  `timeoutMs`, the factories' `{ timeoutMs }` and the 30 s (browser) and 300 s
+  (passcode) defaults are removed, and so are the client credentials
+  request's 30 s timeout and the SNC registry query's 5 s. **A consumer
+  passing `timeoutMs` must pass `signal: AbortSignal.timeout(ms)` instead —
+  to the strategy, or to `inBrowser` / `fromTerminal` as `{ signal }`; one
+  passing nothing now waits until it aborts** — a login until its result or
+  the identity provider's refusal, a request until the server or the OS ends
+  it. See [Cancelling a login](#cancelling-a-login).
+- **Your strategies end on the request's signal.** Every
+  `AuthorizationRequest` carries `signal`. `externalCodeStrategy`'s `provide`
+  is `(authorizationUrl, signal)`, and a manual strategy's `read(prompt,
+  signal)` must settle when its signal aborts: one that ignores it now blocks
+  that strategy's `authorize` — and the next login, which waits for the
+  aborted one to settle — where 5.x settled through a race.
+- **The server's text is gone, also from logs.** A token endpoint's
+  `error_description` and `error_uri` are read by nothing, in errors and in
+  log lines, by default and with `authDebug`; only a registered OAuth `error`
+  survives, as `facts.oauthError` (5.4.2's `err.response.data.error`). A
+  consumer that read `error_description` from a log or an error no longer
+  finds it. `authDebug: true` on a token provider adds, to its one line for a
+  failed request, the secrets the request sent — each prepared: at most its
+  first 4 and last 4 characters plus its length, the length only below 16
+  characters — and never the server's text. See [Debug Logging](#debug-logging).
+- **A subclass of `BaseTokenProvider`.** `performLogin()` is now
+  `performLogin(attempt)` — hand `attempt.signal` to whatever the login waits
+  on — and `performRefresh()` is `performRefresh(refreshToken, signal)`:
+  send the refresh token you are given. Reading `this.refreshToken` instead
+  bypasses the quarantine of a refresh token whose refresh was cut, and may
+  resend a spent one. A provider of your own extends `AuthProviderBase` and
+  implements `onPrepare()`, `onEstablish(logon)`, `onAuthorize(request)` and
+  `onRejected(rejection)`; the base owns the four moments and runs each
+  inside auth-errors' `guard`. See
+  [Writing a provider of your own](#writing-a-provider-of-your-own-authproviderbase).
+- **A cut refresh may cost one login.** A refresh whose callers all aborted
+  after it was sent runs on, and its refresh token is never sent again by
+  that provider, so the next renewal logs in.
+- **Device polling follows RFC 8628.** `slow_down` adds 5 s to every later
+  poll, cumulatively; an `interval` that is not a finite, non-negative number
+  is 5 s; `authorization_pending` / `slow_down` keep the poll going only with
+  status `400`.
+
+**What is no longer available anywhere** (each decided with the change; the
+facts that remain are listed with it):
+
+- the token endpoint's `error_description` and `error_uri` (the registered
+  `error` stays, as `facts.oauthError`);
+- a `cause` on any error, and the identity of a thrown value: a strategy's,
+  loader's or presenter's own error reaches you classified, never as itself,
+  and no `AxiosError` escapes;
+- the authorization URL in a failed browser launch's error (it stays in the
+  strategy's log line and announcement);
+- a rejected configuration value — the callback `port`, the SNC `qop`, a
+  `clockSkewMs` (the field name stays, and for `qop` the allowed values);
+- each configuration error's own sentence, replaced by its case's fixed words;
+- the text of an exception inside a SAML refusal (xml-crypto's, the XML
+  parser's);
+- a document value that fails admission (a control, bidirectional or
+  line-separator character, or the wrong shape) — dropped, not escaped;
+- values moved from the words to `diagnostics` — the SNC library path, each
+  SNC candidate's path, the two URIs of an ACS or redirect mismatch: shown by
+  `renderDiagnostics(error)`, not by `reason` / `hint`;
+- your own `what` in a relayed refusal (an operation of the closed list
+  instead);
+- the class label in "`<what>` failed (`<Class>`)", and which of the abort
+  moments or empty inputs a login met;
+- `error.code`, `missingFields`, `check` as a property,
+  `CertificateMaterialError.incomplete` / `.expired` / `.words`,
+  `TokenEndpointError.status` / `.oauthError` / `.code` — each now a fact;
+- the diagnostics of an error that crosses another installed copy of
+  auth-errors, or that was not minted (its kind and facts stay);
+- every built-in login timeout and its message ("Authentication timeout
+  after N seconds", "did not arrive in time").
+
 ## Migrating to 5.0.0 — a migration, not an update
+
+*History: what 5.0.0 changed. Where 6.0.0 changed it again — the
+`timeoutMs` of the manual strategies, `BrowserAuthError`, the connection
+version — [Migrating to 6.0.0](#migrating-to-600--the-error-contract) is what
+holds.*
 
 5.0.0 is not an incremental release. Every provider here now implements
 `IAuthProvider` (`@mcp-abap-adt/interfaces-auth` 3.0.0) and can be handed to
@@ -121,7 +294,9 @@ for each party sharing the provider; `prepare()` then ends Oops `aborted`
 (`interactive-login`) once every attached party has aborted. With no signal
 it waits for `reg.exe`; bounding it is the consumer's decision
 (`AbortSignal.timeout(ms)`). A locator or probe of your own receives the same
-signal as `locate(signal)` / `appliesTo(path, signal)`.
+signal as `locate(signal)` / `appliesTo(path, signal)`. The abort is tested
+with a real child process on a POSIX system; on a Windows host — `reg.exe`
+killed, its real and localised output parsed — it is not measured yet.
 
 The explicit assembly, for a different SNC product, or a locator/probe of
 your own (no implicit defaults — a constructor takes every collaborator):
@@ -242,8 +417,12 @@ npm install @mcp-abap-adt/auth-providers
 ## Overview
 
 Every provider here is an `IAuthProvider` (`@mcp-abap-adt/interfaces-auth`
-3.1.0) — `prepare()`, `establish()`, `authorize()`, `rejected()`, each answering
-an `AuthOutcome` and never throwing — handed to the process as it is:
+6.0.0) — `prepare()`, `establish()`, `authorize()`, `rejected()`, each answering
+an `AuthOutcome` and never throwing — handed to the process as it is. An
+`AuthOutcome` is `{ ok: true }` or `{ ok: false, refusal }`, the refusal an
+`IAuthProviderError` minted by `@mcp-abap-adt/auth-errors`: its `kind` and
+`facts` say what happened, `reason` / `hint` say it in words (see
+[Error Handling](#error-handling)):
 
 ```typescript
 import { AuthorizationCodeProvider } from '@mcp-abap-adt/auth-providers';
@@ -253,7 +432,7 @@ const provider = AuthorizationCodeProvider.inBrowser({
   clientId: '...',
   clientSecret: '...',
 });
-// A connection 10.0.0 process calls prepare() on connect, authorize() per
+// A connection 12.0.0 process calls prepare() on connect, authorize() per
 // request, and rejected() on a 401: one renewal — a refresh, else one login.
 ```
 
@@ -295,7 +474,7 @@ The token providers also implement `IRefreshableTokenProvider` —
   (RFC 7522)
 - **Saml2PureProvider** — a SAML assertion exchanged for session cookies
 
-Providers are configured via constructor; `getTokens()` takes no parameters and handles refresh/login internally. `refreshTokens()` obtains a new token even while the cached one looks valid — what a caller holding a 401 needs.
+Providers are configured via constructor; `getTokens()` handles refresh/login internally and takes only an optional `{ signal }` — this caller's cancellation (see [Cancelling a login](#cancelling-a-login)). `refreshTokens()` obtains a new token even while the cached one looks valid — what a caller holding a 401 needs. Either throws only an `AuthProviderFailure`.
 
 A token is only half of it: whether ADT accepts it depends on the XSUAA client,
 the trust and the user configured on the SAP side. What each provider needs
@@ -325,6 +504,8 @@ provider to trust. This is a breaking change: a 3.x SAML configuration fails at
 construction. See [SAML assertion validation](#saml-assertion-validation).
 
 If you are on an earlier version, see
+[Migrating to 6.0.0](#migrating-to-600--the-error-contract),
+[Migrating to 5.0.0](#migrating-to-500--a-migration-not-an-update),
 [Upgrading from 4.0 to 4.1](#upgrading-from-40-to-41),
 [Migrating from 3.x to 4.0](#migrating-from-3x-to-40),
 [Migrating from 2.x to 3.0](#migrating-from-2x-to-30) and
@@ -380,10 +561,11 @@ This package is responsible for:
 
 This package interacts with external packages **ONLY through interfaces**:
 
-- **`@mcp-abap-adt/auth-broker`**: Uses interfaces (`ITokenProvider`, `IAuthorizationConfig`) - does not know about `AuthBroker` implementation
-- **`@mcp-abap-adt/logger`**: Uses `Logger` interface for logging - does not know about concrete logger implementation
-- **`@mcp-abap-adt/connection`**: Uses connection utilities for token validation - interacts through well-defined functions
-- **No direct dependencies on stores**: All interactions with stores happen through interfaces passed by consumers
+- **`@mcp-abap-adt/interfaces-auth`**: the contracts it implements and is handed — `IAuthProvider`, the token provider and strategy contracts, `IClientAuthentication`, the callback server, the assertion validator and replay store, and the error contract's types and allowlists (`IAuthProviderError`, its kinds and facts)
+- **`@mcp-abap-adt/interfaces-auth-sap`**: the XSUAA configuration and `ICertificateMaterialLoader`
+- **`@mcp-abap-adt/interfaces-utils`**: `ILogger` — the package logs only through the logger it is given, never through a concrete logger
+- **`@mcp-abap-adt/auth-errors`**: the one runtime dependency of the error contract — every refusal and every throw is minted there, and `guard` is the boundary of each moment (`AuthProviderBase`)
+- **No dependency on the broker, the stores or `@mcp-abap-adt/connection`**: they use this package through those contracts, never the reverse
 
 ## Usage
 
@@ -419,11 +601,12 @@ const clientCredsBroker = new AuthBroker({
 
 ### Choosing an authorization strategy
 
-`authorization` decides how an interactive login is conducted. Omit it and the
-provider builds the callback strategy for its own flow, on the default port —
-which is convenient, and is also the only case where the default port applies
-without you having chosen it. Every shipped strategy is a plain function
-returning `IAuthorizationStrategy`, so a consumer can pass its own instead.
+`authorization` decides how an interactive login is conducted, and it is
+required: a provider builds no strategy of its own (since 5.0.0). Pass one of
+the shipped strategies, or call a provider's static factory — `inBrowser`,
+`fromTerminal` — which composes the usual one. Every shipped strategy is a
+plain function returning `IAuthorizationStrategy`, so a consumer can pass its
+own instead.
 
 | Strategy | For | What it does |
 |---|---|---|
@@ -432,7 +615,7 @@ returning `IAuthorizationStrategy`, so a consumer can pass its own instead.
 | `samlCallbackStrategy(opts)` | `Saml2BearerProvider`, `Saml2PureProvider` | The same, receiving a posted `SAMLResponse` |
 | `manualPasteStrategy({ redirectUri, read })` | code flows | Shows the URL, reads the pasted code (stdin by default) |
 | `manualSamlResponseStrategy({ redirectUri, read })` | SAML flows | Shows the URL, reads the pasted `SAMLResponse` |
-| `externalCodeStrategy({ redirectUri, provide })` | either | Hands the assembled URL to your function, takes back the payload |
+| `externalCodeStrategy({ redirectUri, provide })` | either | Hands the assembled URL and the login's signal to your `provide(url, signal)`, takes back the payload |
 | `staticCodeStrategy({ redirectUri, payload })` | either | You already hold the payload; the URL is never built |
 | your own | any | Implement `IAuthorizationStrategy<TResult>` and pass it |
 
@@ -491,8 +674,18 @@ const fromOurPortal: IAuthorizationStrategy<string> = {
 ```
 
 `dispose` is optional, and whoever constructs a strategy disposes of it: a
-strategy you pass in is yours to dispose, one the provider defaulted to is
-disposed by the provider.
+provider builds none, so the strategy you pass in — or the one a static
+factory you called composed — lives as long as the provider, serves every
+login, and is yours to dispose. `dispose()` disables a strategy for good and
+ends its logins in flight (`interactive-login` `disposed`); an abort of a
+login's signal ends only that login (`aborted`) and leaves the strategy usable.
+
+**End on the request's signal.** Every `AuthorizationRequest` carries
+`signal`, aborted once no caller needs the login any more (see
+[Cancelling a login](#cancelling-a-login)). Your strategy must stop waiting
+and release what it holds when it aborts — `fromOurPortal` above would pass
+`request.signal` to `ourPortal.login`. One that ignores it never settles, and
+the next login waits for it.
 
 #### Manual paste over a callback server
 
@@ -531,16 +724,22 @@ const provider = new AuthorizationCodeProvider({
 ```
 
 `manualPasteStrategy` reads from stdin only when `process.stdin.isTTY`, and
-throws a clear error otherwise rather than consuming a protocol stream. Supply
-`read` to take the value from somewhere else entirely — a TUI prompt, an HTTP
-request, a file:
+otherwise fails the login (`interactive-login` `no-terminal`: "Manual input
+needs an interactive terminal. Supply `read` to source the value elsewhere.")
+rather than consuming a protocol stream. Supply `read` to take the value from
+somewhere else entirely — a TUI prompt, an HTTP request, a file:
 
 ```typescript
 authorization: manualPasteStrategy({
   redirectUri: 'http://localhost:61001/callback',
-  read: async (prompt) => askInOurUi(prompt),
+  read: (prompt, signal) => askInOurUi(prompt, signal),
 })
 ```
+
+`read` gets the login's signal: when the login is aborted or the strategy
+disposed, it must stop and release what it holds. The strategy settles only
+once `read` has, so a `read` that ignores its signal blocks that login — and
+the next one, which waits for it — until it returns.
 
 The `redirectUri` you give it must be the one the identity provider will
 redirect to; it is also the one sent to the token endpoint. It defaults to
@@ -556,7 +755,7 @@ or a full redirected URL — whichever you paste, the code is extracted from it.
 
 How the *client* proves itself to the authorization server — a secret, a
 client certificate, a signed assertion — is a strategy too:
-`IClientAuthentication` from `@mcp-abap-adt/interfaces-auth` (3.1.0), passed as
+`IClientAuthentication` from `@mcp-abap-adt/interfaces-auth`, passed as
 `clientAuthentication`. Eight token providers take it:
 `ClientCredentialsProvider`, `AuthorizationCodeProvider`, `UaaPasscodeProvider`,
 `Saml2BearerProvider`, `OidcBrowserProvider`, `OidcDeviceFlowProvider`,
@@ -615,26 +814,14 @@ public client that sends only `client_id`.
   URL — `http:` only when the configured endpoint is itself `http:` and no
   certificate is presented. Anything else is refused, `client-authentication`
   `result-unsendable`: *the client authentication returned a request that
-  cannot be sent*. Only `client_secret`,
-  `client_assertion` and a Basic credential are known to be secrets and
-  redacted from what the server said — which, since 5.4.2, the package
-  writes nowhere: not on a thrown error, not in a log line; the redaction
-  stays as defence in depth. Every secret is redacted as sent, encoded —
-  each character, unreserved ones included, as itself or percent-escaped in
-  either case, a space also as `+` — and form-decoded (the whole value: `&`
-  and `=` are part of it, a malformed `%` stays), and any base64 in the body
-  (either alphabet, any padding, escaped or not, broken by spaces, tabs or
-  line breaks) that decodes to text holding a secret is redacted too (since
-  5.4.2). Limits: an escape escaped again
-  (`%252F`) and an echo truncated inside a secret are not recognised, and a
-  secret of one or two characters is redacted wherever it appears, unrelated
-  words included — so with either `encoding`, and for a `clientSecret` sent without a
-  strategy, neither the original, the encoded secret nor what a decoding
-  server read survives its echo. Without a strategy, the Basic header a
-  provider builds from `clientId` and `clientSecret` is redacted the same way
-  — its base64 credential and its secret (since 5.4.2; earlier versions left
-  an echoed base64 credential, from which `id:secret` decodes). A secret your
-  strategy puts in any other parameter or header is not recognised as one.
+  cannot be sent*. Nothing of a request is ever logged or kept on an error —
+  no parameter, no header, nothing the server answered beyond its status and
+  a registered OAuth `error`. Only with the provider's `authDebug: true` does
+  a failed request's log line name the secrets it sent (`sent`, see
+  [Debug Logging](#debug-logging)): `client_secret`, `client_assertion` and a
+  Basic credential (`basic`, `basic_secret`) of a strategy, beside the grant's
+  own; a secret your strategy puts in any other parameter or header is not
+  named there — and is logged nowhere either way.
 
 ```typescript
 import { readFile } from 'node:fs/promises';
@@ -710,52 +897,51 @@ const user = new OidcPasswordProvider({
   `rejectUnauthorized` is never set and there is no `ca` option. A server
   behind a private CA is trusted the way Node offers, explicitly and
   process-wide: `NODE_EXTRA_CA_CERTS=/path/to/ca.pem`, read when Node starts,
-  which adds to Node's store rather than replacing it. A TLS failure is refused
-  naming its code, with fixed words per kind:
+  which adds to Node's store rather than replacing it. A TLS failure is an
+  error of kind `tls` naming its code (`facts.code`) and the operation, in
+  words fixed per kind of failure — an untrusted server certificate (hint:
+  `NODE_EXTRA_CA_CERTS`), an expired one, a host name not in it, and the
+  server's alert refusing the client certificate; the words are in the
+  [Refusals](#refusals) table.
 
-  | Code | Reason (*… failed: …*) | Hint |
-  |---|---|---|
-  | `UNABLE_TO_VERIFY_LEAF_SIGNATURE`, `SELF_SIGNED_CERT_IN_CHAIN`, `DEPTH_ZERO_SELF_SIGNED_CERT`, `UNABLE_TO_GET_ISSUER_CERT_LOCALLY` | the server's certificate is not trusted (`<code>`) | if the server uses a private CA, name its certificate in NODE_EXTRA_CA_CERTS |
-  | `CERT_HAS_EXPIRED` | the server's certificate has expired (`<code>`) | the server must renew its certificate; check also this machine's clock |
-  | `ERR_TLS_CERT_ALTNAME_INVALID` | the host name is not in the server's certificate (`<code>`) | use the host name the server's certificate is issued for |
-  | `ERR_SSL_TLSV13_ALERT_CERTIFICATE_REQUIRED`, `ERR_SSL_TLSV1_ALERT_UNKNOWN_CA`, and `ERR_SSL_SSL/TLS_ALERT_…` / `ERR_SSL_SSLV3_ALERT_…` for `BAD_CERTIFICATE`, `CERTIFICATE_UNKNOWN`, `CERTIFICATE_EXPIRED`, `CERTIFICATE_REVOKED`, `UNSUPPORTED_CERTIFICATE` | the server refused the client certificate (`<code>`) | check that the server trusts the certificate's issuer and that the certificate is valid and not revoked |
-
-  The last row is the alert a server sends when it refuses the client
+  The alert row is what a server sends when it refuses the client
   certificate in the handshake. Current OpenSSL — 3.5, bundled with Node 22
   and 24, and 3.6, both measured — spells the SSLv3-era alerts
   `SSL/TLS_ALERT_…`; older releases spelled them `SSLV3_ALERT_…`, so both are
   listed. Measured 2026-10-04 against `openssl s_server -Verify`:
   no certificate → `…CERTIFICATE_REQUIRED`, an issuer the server does not
   trust → `…UNKNOWN_CA`, an expired certificate →
-  `ERR_SSL_SSL/TLS_ALERT_CERTIFICATE_EXPIRED`. Any other code is
-  *unknown error*.
+  `ERR_SSL_SSL/TLS_ALERT_CERTIFICATE_EXPIRED`. Any other code is not a `tls`
+  error: an allowlisted system code (`ECONNREFUSED`, …) is the `code` of a
+  `request-failed`, anything else is *unknown error*.
 - **mTLS aliases (RFC 8705 §5).** An OIDC provider that discovers an endpoint
   hands the strategy the server's `mtls_endpoint_aliases` entry for it
   (`token_endpoint`, `device_authorization_endpoint`); `tlsClientCertificate`
   sends there unless it was given `endpoint`. An endpoint given in the
   configuration comes with no alias.
 - **A loader that fails with its own error** — a missing file, say — is
-  refused as *`<auth type>` token request failed (unknown error, ENOENT)*,
-  where `<auth type>` is the provider's `getAuthType()`. The refusal names the
-  error's code when it is on the package's allowlist, never its message.
-  That is by design (rule 2 of the contract); a loader that wants its own words
-  refused throws one of this package's classes.
-- **Thrown errors carry no request.** A failed token request rethrows without
-  the request it sent — no form body, no `Authorization` header, no TLS agent
-  with a key or a passphrase — on both paths, strategy or not. It is still an
-  `AxiosError` (`instanceof AxiosError` and `axios.isAxiosError()` hold), but
-  a new one built without `config`, `request` or `cause`, so its `toJSON()`
-  serialises no config: it keeps `code` and `status`, a rebuilt message
-  (`Request failed with status code N`, or `the token request failed (<code>)`
-  when no response came), and a `response` of `status`, an empty `statusText`
-  (the reason phrase is the server's free text), empty `headers` and the
-  server's body reduced to `error` when it is a registered OAuth code
-  (`err.response.data.error` still reads `invalid_grant`), and to `{}`
-  otherwise. Since 5.4.2 the server's `error_description` and `error_uri` go
-  nowhere — no thrown error, no log line: a hostile server can echo any
-  secret of the request in them. A failed request is noted in one `debug`
-  line through the provider's logger with the same safe facts (`<site>: the
-  token endpoint refused the request`, `{ status, error? }`).
+  refused as *`<grant>` token request failed (unknown error, ENOENT)*
+  (`client_credentials token request failed (unknown error, ENOENT)`), kind
+  `unknown`. The refusal names the error's code when it is on the allowlist
+  (`SYSTEM_CODES`), never its message. That is by design: a loader may throw
+  text holding a key or a passphrase. A loader that wants its own words
+  refused throws an `AuthProviderFailure` it built with auth-errors'
+  `authError` builders (a `client-certificate` error, say), which is answered
+  as it is.
+- **Thrown errors carry no request, and nothing of the server but facts.** A
+  failed token request throws an `AuthProviderFailure` built where the
+  request failed, on both paths, strategy or not: kind `tls` for an
+  allowlisted TLS code, else `request-failed` with the operation, the grant,
+  `problem` (`refused` with the HTTP `status`, `no-response` without one),
+  the OAuth `error` as `oauthError` when it is a registered code, and an
+  allowlisted system `code`. No `AxiosError` escapes, nothing keeps the form
+  body, the `Authorization` header or the TLS agent with its key, and there is
+  no `cause`. The server's `error_description` and `error_uri` are read by
+  nothing — a hostile server can echo any secret of the request in them. A
+  failed request is noted in one `debug` line through the provider's logger
+  with the same safe facts (`<operation>: the token endpoint refused the
+  request`, `{ status, error?, code? }`), none for the device poll's
+  `authorization_pending` / `slow_down` with status `400`.
 
 #### `clientSecretBasic`'s `encoding`
 
@@ -810,7 +996,8 @@ provider stand:
 - **Keycloak** (26.7) accepts the token endpoint (measured with the password
   grant and the whole device flow), but **not the device authorization
   endpoint**: an assertion whose `aud` is that endpoint is refused
-  *"invalid_client": "Invalid token audience"*. `OidcDeviceFlowProvider` on
+  *"invalid_client": "Invalid token audience"* (on the wire; the package
+  reports only `invalid_client`, as `facts.oauthError`). `OidcDeviceFlowProvider` on
   Keycloak therefore needs no `audience`: the default names the token endpoint
   for the device authorization too. (The issuer,
   `https://<keycloak>/realms/<realm>`, set as `audience` was also measured to
@@ -1198,18 +1385,17 @@ See [Seeding a stored credential](#seeding-a-stored-credential).
 **Read that `redirectUri` twice.** A SAML strategy defaults its redirect URI to
 `http://localhost:61001/callback`, and the provider requires the assertion
 consumer service the IdP posts to be exactly the one the strategy names. If you
-declare a real `acsUrl` and leave `redirectUri` off, the login fails with
-*"SAML acsUrl is … but the authorization strategy is listening on …"* before
-anything is opened. Declare neither and the default is used for both, which is
+declare a real `acsUrl` and leave `redirectUri` off, the login fails before
+anything is opened with a configuration error, `saml-acs-mismatch` — *SAML
+acsUrl and the address the authorization strategy used do not match* — whose
+two addresses are `diagnostics.configuredUri` and `diagnostics.strategyUri`
+(`renderDiagnostics(error)` prints them), not words. Declare neither and the default is used for both, which is
 consistent — and only reachable when the IdP will post to your localhost.
 
-Both SAML providers now reject at construction when `authorizationUrl` is set
-without `acsUrl`:
-
-```
-acsUrl is required when authorizationUrl is set: the ACS inside a pre-built
-SAML request cannot be read, so it must be declared.
-```
+Both SAML providers reject at construction when `authorizationUrl` is set
+without `acsUrl` — a configuration error, `saml-acs-required-with-authorization-url`:
+*acsUrl is required when authorizationUrl is set: the ACS inside a pre-built
+SAML request cannot be read, so it must be declared*.
 
 The ACS is buried in a deflated `SAMLRequest` this package did not build and
 cannot read, so it cannot be verified against whatever the strategy binds. 1.x
@@ -1760,9 +1946,9 @@ assertion must answer it; absent, the assertion must carry no `InResponseTo`.
 
 | Error | When |
 |---|---|
-| `AuthProviderFailure`, kind `saml-assertion` | an assertion was refused. `error.facts.rule` names the rule and `error.facts.check` the row above — tell "your IdP declined" (`declined`) from "not addressed to us" (`audience-not-us`, `no-bearer-qualifies`, `destination-not-us`) without parsing the words; the one document value a rule may show is `error.diagnostics` (see [Refusal messages](#refusal-messages)). Since 6.0.0 `AssertionValidationError` is thrown by nothing (it is removed in 6.0.0's final release) |
-| `AuthProviderFailure`, kind `configuration` | configuration: `idpEntityId` missing with a shipped validator supplied as `assertionValidator` (at construction, `saml-shipped-validator-without-issuer`); `idpInitiated` with no `authorizationUrl` and a strategy that calls `buildAuthorizationUrl` (inside the builder, before any URL is produced, `saml-idp-initiated-without-authorization-url`); `idpInitiated` combined with a declared `authnRequestId` (at construction, `saml-idp-initiated-with-request-id`); `authnRequestId` missing (at login, after the strategy returns and before the assertion is read, `saml-in-response-to-undeclared`). `facts.fields` names the fields — see [Configuration errors](#configuration-errors). Since 6.0.0 no SAML provider throws `ValidationError` |
-| `Error` | a certificate that is neither PEM nor base64 DER, or not a valid X.509 certificate; a `clockSkewMs` that is not a finite non-negative integer; and an empty `idpCertificates` (*"must not be empty"*) — all when the validator is built, which for `inBrowser` is when the provider is |
+| `AuthProviderFailure`, kind `saml-assertion` | an assertion was refused. `error.facts.rule` names the rule and `error.facts.check` the row above — tell "your IdP declined" (`declined`) from "not addressed to us" (`audience-not-us`, `no-bearer-qualifies`, `destination-not-us`) without parsing the words; the one document value a rule may show is `error.diagnostics` (see [Refusal messages](#refusal-messages)). `AssertionValidationError` is gone (6.0.0) |
+| `AuthProviderFailure`, kind `configuration` | configuration: `idpEntityId` missing with a shipped validator supplied as `assertionValidator` (at construction, `saml-shipped-validator-without-issuer`); `idpInitiated` with no `authorizationUrl` and a strategy that calls `buildAuthorizationUrl` (inside the builder, before any URL is produced, `saml-idp-initiated-without-authorization-url`); `idpInitiated` combined with a declared `authnRequestId` (at construction, `saml-idp-initiated-with-request-id`); `authnRequestId` missing (at login, after the strategy returns and before the assertion is read, `saml-in-response-to-undeclared`). `facts.fields` names the fields — see [Configuration errors](#configuration-errors) |
+| `AuthProviderFailure`, kind `configuration`, when the validator is built (for `inBrowser`, when the provider is) | a certificate that is neither PEM nor base64 DER, or not a valid X.509 certificate (`idp-certificate-invalid`); a `clockSkewMs` that is not a finite non-negative integer (`validator-clock-skew-invalid`, the value given not echoed); an empty `idpCertificates` (`validator-no-certificates`) |
 
 ### With Stores
 
@@ -1908,10 +2094,11 @@ const provider = new UaaPasscodeProvider({
 
 The exchange is the password grant with `passcode` instead of a username and
 password — a UAA extension, not an RFC. A code is single-use; a mistyped or
-spent one fails with `Passcode exchange failed (401)` — the message names the
-status, and the OAuth `error` only when it is a registered code (UAA's
-`unauthorized` is not). What UAA said (`"Invalid passcode"`) is written
-nowhere: the server's free text may echo the passcode or the client secret.
+spent one fails with `request-failed` — *the passcode exchange failed (HTTP
+401)* — naming the status, and the OAuth `error` (`facts.oauthError`) only
+when it is a registered code (UAA's `unauthorized` is not). What UAA said
+(`"Invalid passcode"`) is read by nothing: the server's free text may echo the
+passcode or the client secret.
 
 #### Device flow prompts
 
@@ -1965,17 +2152,22 @@ const custom = new OidcDeviceFlowProvider({
 });
 ```
 
-A presenter that throws makes `prepare()` / `rejected()` answer Oops with the
-fixed reason "showing the device code failed"; the device code is never part
-of a refusal.
+A presenter that throws makes the login fail — `interactive-login`
+`device-code-not-shown`, "showing the device code failed" — so `prepare()` /
+`rejected()` answer Oops with it and `getTokens()` throws it; the device code
+is never part of a refusal, and the presenter's own error reaches the log only
+as its `logFields` (kind and fixed words). A presenter that never settles is
+bounded only by the login's signal.
 
 #### Callback port and lifetime
 
 **Note**: the callback port is set on the strategy (`browserCallbackStrategy({ port })`
 and its OIDC/SAML siblings), not on the provider — the 1.x `redirectPort` field
 is gone. The default is **61001**, was 3001. If the requested port is already in
-use, an error is thrown; specify a different port or free it before starting
-authentication. `port: 0` binds an ephemeral port, which works only where the
+use, the login fails with `interactive-login` `port-in-use` (*Port N is already
+in use. Please specify a different port or free the port.*, `facts.port`); a
+`port` that is not an integer in 0..65535 is a configuration error
+(`callback-port-invalid`) before any socket is touched. `port: 0` binds an ephemeral port, which works only where the
 identity provider accepts a loopback redirect on any port.
 
 **Port lifetime**: the callback port is held for the login and nothing longer. It is bound when the login window opens and released when the login ends — by success, by the identity provider's refusal, by another failure, or by an abort — and the returned promise settles only after the listening socket is closed. No timer is involved: a connection still open is ended gracefully and let go, never waited for. An error therefore always means the port is already available, and the port is released *before* the authorization code is exchanged for a token, so a slow identity provider cannot hold it either.
@@ -1990,7 +2182,7 @@ identity provider accepts a loopback redirect on any port.
 
 **Cross-Platform Browser Support**: The browser authentication works across Linux, macOS, and Windows:
 - **Linux**: Automatically sets `DISPLAY=:0` if neither `DISPLAY` nor `WAYLAND_DISPLAY` environment variables are set. Supports multiple browser executable names (`google-chrome`, `google-chrome-stable`, `chromium`, `chromium-browser` for Chrome; `firefox`, `firefox-esr` for Firefox).
-- **Windows**: the default browser through `%SystemRoot%\System32\rundll32.exe url.dll,FileProtocolHandler <url>` (absolute paths, never a program found in the current directory); a named one through PowerShell's `Start-Process`, which reads the URL from an environment variable. Never `cmd`, which parses `&`, `|`, `^` and `%` whatever the quoting.
+- **Windows**: the default browser through `%SystemRoot%\System32\rundll32.exe url.dll,FileProtocolHandler <url>` (absolute paths, never a program found in the current directory); a named one through PowerShell's `Start-Process`, which reads the URL from an environment variable. Never `cmd`, which parses `&`, `|`, `^` and `%` whatever the quoting. (Reasoned from the documented behaviour of both; not yet measured on a Windows host.)
 - **macOS**: Uses native `open` / `open -a <app>`.
 - **No shell, anywhere** (since 6.0.0): only an `http:` / `https:` URL is opened, as its serialisation (spaces and quotes percent-encoded), and every launcher is started with an argument array, the URL one argument of it. Through 5.4.2 the fallback without the `open` package handed the URL to a shell inside double quotes, so a `$(…)` or a backtick in it — from an OIDC provider's discovery document, say — ran as a command.
 
@@ -2166,9 +2358,8 @@ that joined the same login through its own moment gets Oops `aborted` for that m
 next moment starts a fresh, unbounded login and gets a token.
 
 **A strategy must honour the request's signal.** Every login hands its strategy an
-`AuthorizationRequest` carrying `signal` (`SignalledAuthorizationRequest` until interfaces-auth
-6.0.0); the shipped strategies combine it with their own `signal` option, so either one ends the
-login. A replacement login waits until the aborted one's strategy has **settled** its `authorize`
+`AuthorizationRequest` carrying `signal` (interfaces-auth 6.0.0); the shipped strategies combine it
+with their own `signal` option, so either one ends the login. A replacement login waits until the aborted one's strategy has **settled** its `authorize`
 — its callback port closed, its stdin reader released (a manual strategy's custom `read` gets
 the same signal, and the strategy settles only once that `read` has) — before it starts its own authorization
 (never `busy`, never `port-in-use`). A consumer strategy that ignores the signal never settles,
@@ -2197,54 +2388,121 @@ R once after a restart.
 late result of an aborted login changes nothing. An `onTokens` that never settles therefore
 blocks every later commit of that provider (each waiter still releasable by its own signal).
 
+**Your collaborators are awaited like any `await`.** What your own code answers — a strategy,
+`onTokens`, a certificate loader, a refresher, a validator, a presenter, a replay store,
+`cookieProvider`, an SNC locator, probe or system, a logger — is adopted as `await` adopts it, so
+a native promise, Bluebird, Q or any Promises/A+ thenable works. A collaborator answer that never
+settles is bounded only by your `AbortSignal`, through the parties above. `CertificateAuthProvider`
+and `TokenAuthProvider.from` take no signal: a loader or refresher of theirs that never settles
+hangs their moment, and bounding it is yours (inside the loader or refresher). Values that cross a
+trust boundary — a thrown value being classified, a logon target's answer — never have a foreign
+`then` called.
+
+**No timer of the package's choosing.** Nothing here bounds a login, a token request, OIDC
+discovery or the SNC registry query with a timeout of its own; the only timer is the device poll's
+interval, which the server sets. A bound is your signal (`AbortSignal.timeout(ms)`) or the called
+server's.
+
 ### Error Handling
 
-The package provides typed error classes for better error handling:
+An error reaches you in one of two places, and it is the same thing in both:
+an `IAuthProviderError` (`@mcp-abap-adt/interfaces-auth` 6.0.0), minted by
+`@mcp-abap-adt/auth-errors`.
+
+- **A refusal.** A moment — `prepare()`, `establish()`, `authorize()`,
+  `rejected()` — never throws; it answers `{ ok: false, refusal }`, and the
+  refusal is the error.
+- **A throw.** A constructor, a factory or a loader with a configuration
+  fault, and `getTokens()` / `refreshTokens()`, throw an
+  `AuthProviderFailure`: an `Error` whose `error` is the error, whose
+  `message` is its `reason` (or `reason — hint`), and which has no `cause`.
+  Nothing else is thrown — not a strategy's, loader's or presenter's own
+  error, which is classified, and not an `AxiosError`.
+
+An error is a frozen object: `kind` (one of a closed list), `variant` (the
+rule, problem or case of `saml-assertion`, `snc` and `configuration`),
+`facts` (values from allowlists only — a status, a registered OAuth code, a
+field name, a rule id — never free text), `reason` and `hint?` (the default
+words, rendered from `kind` and `facts`), and `diagnostics?` (for the three
+variant kinds only: a value that helps a person — a library path, a SAML
+issuer, two URIs — admitted by its shape, never in the words). Branch on
+`kind` and `facts`; show `reason` / `hint`; print `diagnostics` only where a
+person reads them.
 
 ```typescript
-import { isAuthProviderFailure, readFailure } from '@mcp-abap-adt/auth-errors';
+import {
+  logFields,
+  readFailure,
+  renderDiagnostics,
+  unreachableKind,
+} from '@mcp-abap-adt/auth-errors';
 
 try {
   const provider = new ClientCredentialsProvider(config); // may throw too
-  const result = await provider.getTokens();
-} catch (error) {
-  if (isAuthProviderFailure(error)) {
-    // Since 6.0.0 every throw of this package is an `AuthProviderFailure`:
-    // a configuration fault (`kind: 'configuration'`, `facts.case` and
-    // `facts.fields` — see [Configuration errors](#configuration-errors)),
-    // a client certificate or client authentication that cannot be used,
-    // an interactive login's end (`facts.outcome`: 'aborted', 'port-in-use',
-    // 'identity-provider-refused', …), a refused SAML assertion
-    // (`facts.rule`), a refused token request.
-    const failure = readFailure(error, 'token-request');
-    console.error('Failed:', failure.kind, failure.reason);
+  await provider.getTokens({ signal });
+} catch (thrown) {
+  // Never `instanceof`: readFailure reads any copy's failure, and answers
+  // `unknown` for anything else — it never throws.
+  const error = readFailure(thrown, 'token-request');
+  logger.error('token request failed', logFields(error));
+  switch (error.kind) {
+    case 'configuration':
+      // what to fix: error.facts.case, error.facts.fields
+      break;
+    case 'request-failed':
+      // error.facts.status, error.facts.oauthError (a registered code only)
+      break;
+    case 'interactive-login':
+      // error.facts.outcome: 'aborted', 'port-in-use', 'identity-provider-refused', …
+      break;
+    // … every other kind …
+    default:
+      unreachableKind(error); // compiles only when every kind is handled
   }
+  console.error(error.reason, error.hint ?? '', renderDiagnostics(error) ?? '');
 }
 ```
 
-**Error Types**:
-- `TokenProviderError` - Base class with `code: string` property
-- `ValidationError` - exported until 6.0.0's final release, which removes it: no token provider, strategy, validator or loader throws it in 6.0.0 — a configuration fault is an `AuthProviderFailure` of kind `configuration` naming its `case` and `fields` — see [Configuration errors](#configuration-errors); a `ValidationError` a consumer throws is read as `required-fields-missing` with the known names of its `missingFields`
-- `BrowserAuthError` - exported, but thrown by nothing since 6.0.0 (removed in 6.0.0's final release): every end of an interactive login — the identity provider's refusal, a busy callback port, a browser that would not open, an abort, a disposed or busy strategy, an empty or unreadable paste — is an `AuthProviderFailure` of kind `interactive-login`, thrown by every shipped strategy. Its words keep this package's own ("Port N is already in use", `BrowserCallbackStrategy has been disposed`); the identity provider's refusal names only its registered code (`the identity provider refused the login (consent_required)`), never `error_description` or `error_uri`; anything else — a custom transport's error — is `the browser login failed (…)` naming only an HTTP status, a registered OAuth `error` and an allowlisted code, with no `cause`
-- `TokenEndpointError` - a token request failed at a site that wraps it (UAA refresh, client credentials, passcode, OIDC device initiation, password grant); a plain `Error`, not a `TokenProviderError`; carries `status`, `oauthError` (a registered OAuth / OIDC code only) and `code` (an allowlisted system or TLS code only); its `cause` is the safe `AxiosError` the request was reduced to, never what the request rejected with (since 5.4.2)
-- `RefreshError`, `SessionDataError`, `ServiceKeyError` - exported, but no provider throws them: a refused refresh falls back to a login inside `getTokens()`/`refreshTokens()`, and sessions and service keys are read by `@mcp-abap-adt/auth-stores`, not here
-- `AssertionValidationError` - exported, but thrown by nothing since 6.0.0 (removed in 6.0.0's final release): a refused SAML assertion is an `AuthProviderFailure` of kind `saml-assertion` naming its `rule` and `check` — see [Refusal messages](#refusal-messages)
-- `CertificateMaterialError` - exported, but thrown by nothing since 6.0.0 (removed in 6.0.0's final release): certificate material that cannot be used — from `tlsClientCertificate` or a provider pinning a strategy's certificate — is an `AuthProviderFailure` of kind `client-certificate`, `facts.problem` `incomplete`, `unusable` or `expired` (the [Refusals](#refusals) table); nothing of the material. One a consumer's loader throws is still read by its flags, never its `words`
-- `ClientAuthenticationError`, `ClientAuthenticationResultError`, `BasicClientIdError` - exported, but thrown by nothing since 6.0.0 (removed in 6.0.0's final release): a `privateKeyJwt` key that cannot sign, a strategy's result that cannot be sent (a non-string value, a header with a line break, a parameter or header replacing the request's own, an endpoint that is not an absolute `https:` URL) and raw `clientSecretBasic` with a client id containing `:` are each an `AuthProviderFailure` of kind `client-authentication` (`facts.problem` `signing-key-unusable`, `result-unsendable`, `basic-client-id-colon`), thrown before anything is sent; nothing of the key or the result
+A plain `switch` is not checked by the compiler; use `matchKind(error,
+handlers)` or a `default` that calls `unreachableKind(error)` (auth-errors,
+"Exhaustiveness: two patterns"), so that a kind added by a later major stops
+your build. In the `switch` form the cases before `default` see the value as
+you read it; `readFailure` already normalised it.
 
-A failed token request throws without the request it sent — no form body, no
-`Authorization` header, no TLS agent — and never with what its promise
-rejected with: anything that reached it (an axios failure, or what a global
-response interceptor of yours threw — the server's text, a primitive, an
-object with throwing getters) is replaced by a fresh `AxiosError` of fixed
-words, an integer status and an allowlisted code — an aborted request by a
-`CanceledError`, so `axios.isCancel` still holds — and a successful answer is
-read only as a snapshot of its expected string and number fields, so a
-response interceptor's hostile data cannot throw through either (since
-5.4.2); and with the server's body reduced to
-its `error` when that is a registered OAuth code; the server's
-`error_description` and `error_uri` go nowhere — no error, no log line
-(since 5.4.2).
+What this package produces, by kind (the words are in the tables of this
+README, generated from what the package renders):
+
+| Kind | When |
+|---|---|
+| `configuration` | a configuration fault — `facts.case`, `facts.fields` ([Configuration errors](#configuration-errors)) |
+| `client-certificate` | certificate material that cannot be used — `incomplete`, `unusable`, `expired` ([Refusals](#refusals)) |
+| `client-authentication` | a signing key that cannot sign, a strategy's result that cannot be sent, raw Basic with a `:` in the client id ([Refusals](#refusals)) |
+| `request-failed` | a token request, refresh, device authorization or poll, passcode exchange, OIDC discovery that failed — `facts.operation`, `facts.problem`, `facts.status`, `facts.oauthError`, `facts.code` |
+| `tls` | a TLS failure on the allowlist — `facts.code` ([Refusals](#refusals)) |
+| `interactive-login` | every end of a login that is not a result — `facts.outcome`: `aborted`, `port-in-use`, `identity-provider-refused` (with a registered `oauthError`), `busy`, `disposed`, `browser-launch-failed`, `callback-closed`, `no-terminal`, `no-input`, `unreadable-input`, `input-abandoned`, `device-code-not-shown`, `failed` |
+| `saml-assertion` | an assertion refused — `facts.rule`, `facts.check` ([Refusal messages](#refusal-messages)) |
+| `snc` | SNC: no credential, the library refused or not found, the logon refused ([Passwordless RFC logon](#passwordless-rfc-logon-snc)) |
+| `credential-refused`, `system-refused` | what `rejected()` read in the rejection ([What `rejected()` answers](#what-rejected-answers)); `credential-refused` `refresh-token` is a refused refresh, which falls back to one login |
+| `renewal-unchanged` | a renewal returned the credential that was refused |
+| `token-binding` | a certificate-bound token and no matching certificate ([A certificate-bound token](#a-certificate-bound-token-and-its-certificate)) |
+| `not-prepared` | `establish()` before `prepare()` (certificate, SNC) |
+| `logon-target` | a logon target that broke its contract, relayed |
+| `unknown` | anything else, naming only the operation and, when there are any, an integer status, a registered OAuth code and an allowlisted system code |
+
+**What never reaches an error, a refusal or a log line**: an error's
+`message`, `cause`, `stack` or body; a token endpoint's `error_description`
+and `error_uri`, which are read by nothing, `authDebug` or not (a hostile
+server can echo any secret of the request in them); a token, a secret or key
+material — a log line names a token only as `<redacted, N chars>`, and a
+secret only under `authDebug`, prepared (see [Debug Logging](#debug-logging)).
+A line about a thrown value carries `logFields(error)` — `{ error: reason,
+kind, status?, diagnostics? }` — never the value itself.
+
+**Serialising a failure carries its diagnostics.** `JSON.stringify`,
+`util.inspect` or a logger serialising an `AuthProviderFailure` includes
+`error.diagnostics` — admitted values such as a library path, but more than
+the words. Log `logFields(readFailure(thrown, operation))` and leave out its
+`diagnostics` field when they must not be written.
 
 #### Configuration errors
 
@@ -2256,6 +2514,13 @@ involved (names on the `CONFIG_FIELDS` allowlist only), never a value given.
 For an ACS or redirect mismatch the two addresses are in `diagnostics`
 (origin and path only), never in the words. A provider moment that meets one
 answers it as its refusal.
+
+**A known wording limit:** interfaces-auth 6 has no case for a value that is
+present but invalid, so an unparseable `authorizationUrl` and an
+`SncLogonProvider` `myName` that is not a string are reported as
+`required-fields-missing` naming the field — "required configuration is
+missing: authorizationUrl" — although a value was given. A proper case needs
+an interfaces-auth major.
 
 <!-- generated:refusal-table configuration -->
 | Thrown | `case` | `fields` | Reason | Hint |
@@ -2286,40 +2551,101 @@ answers it as its refusal.
 | a callback server port that is not an integer in 0..65535 | `callback-port-invalid` | `port` | invalid callback server port: it must be an integer in 0..65535 | check the provider configuration |
 <!-- /generated:refusal-table configuration -->
 
-#### Relaying a refusal: `refusalWords`
+#### Relaying a refusal: `classify`
 
 A consumer that catches an error from this package — a strategy's
 `tlsMaterial()` checked eagerly, say — and reports it in its own error should
 relay the words this package would refuse with, not copy them:
 
 ```typescript
-import { refusalWords, tlsClientCertificate } from '@mcp-abap-adt/auth-providers';
+import { classify } from '@mcp-abap-adt/auth-errors';
+import { tlsClientCertificate } from '@mcp-abap-adt/auth-providers';
 
 try {
   await tlsClientCertificate({ material: loader }).tlsMaterial?.();
-} catch (error) {
-  const { reason, hint } = refusalWords(error, 'loading the client certificate');
+} catch (thrown) {
+  const { reason, hint } = classify(thrown, 'loading-certificate');
   throw new MyConfigError(hint ? `${reason}: ${hint}` : reason);
 }
 ```
 
-`refusalWords(error: unknown, what: string): IAuthRefusal` answers exactly the
-`reason` and `hint` a provider's refusal would carry for that thrown value —
-for a `CertificateMaterialError`, its kind's words from the
-[Refusals](#refusals) table, hint included. The words are fixed per class of
-this package, decided by `instanceof`, plus allowlisted facts (a known config
-field, an HTTP status, a registered OAuth code, a system or TLS code); for
-anything else, `<what> failed (unknown error)`. Never an error's message,
-`cause` or body. It never throws: a Proxy or a throwing getter gets fixed
-words. `what` is the consumer's own description of what it was doing, and
-appears only in the words for an error this package has no fixed words for.
+`classify(thrown, operation, grant?)` (auth-errors; `readFailure` is the same
+for a caught value) answers the error a provider's refusal would carry for
+that value: this package's own failure as it is — for a certificate that
+cannot be used, its kind's words from the [Refusals](#refusals) table, hint
+included — and anything else as `unknown`, naming the operation and only
+allowlisted facts (an integer HTTP status, a registered OAuth code, a system
+or TLS code): `loading the certificate failed (unknown error, ENOENT)`. Never
+an error's message, `cause` or body. It never throws: a Proxy or a throwing
+getter gets fixed words. The operation is one of the closed list
+`OPERATIONS` of `@mcp-abap-adt/interfaces-auth`; `'unfamiliar-error'` answers
+"an authentication error of a kind this version does not know" for anything
+that is not an error of the contract.
 
 The guarantee covers what a thrown value carries and the package's public
 surface. Code running in the same process that patches built-ins (say
 `Map.prototype.get`) or imports `dist/` files directly can change anything the
 package computes; no library can defend against that from inside the process.
 
-The legacy classes' error codes are defined in `@mcp-abap-adt/interfaces-auth` as `TOKEN_PROVIDER_ERROR_CODES` — `CertificateMaterialError`'s is `CERTIFICATE_MATERIAL_ERROR`; `ClientAuthenticationError` and `ClientAuthenticationResultError` share `CLIENT_AUTHENTICATION_ERROR` — and `AssertionValidationError`'s as `ASSERTION_ERROR_CODES`; since 6.0.0 no site throws those classes, and the `kind` of an `AuthProviderFailure`'s error replaces the code.
+### Writing a provider of your own: `AuthProviderBase`
+
+Every provider here extends `AuthProviderBase`, exported for a consumer that
+writes its own. The base owns the four moments: each runs your `on…` body
+inside auth-errors' `guard`, so whatever the body, a collaborator or a target
+throws becomes a minted refusal, and no moment ever rejects. A body answers
+`OK` or a refusal built with auth-errors' `authError` builders — an outcome
+that is not minted is answered `unknown`. The constructor names the
+`Operation` each moment's refusals carry.
+
+```typescript
+import { authError, OK } from '@mcp-abap-adt/auth-errors';
+import { AuthProviderBase } from '@mcp-abap-adt/auth-providers';
+import type {
+  AuthOutcome,
+  IAuthRejection,
+  ILogonTarget,
+  IRequestTarget,
+} from '@mcp-abap-adt/interfaces-auth';
+
+class ApiKeyProvider extends AuthProviderBase {
+  readonly kind = 'api-key';
+
+  constructor(private readonly key: string) {
+    super({
+      prepare: 'preparing',
+      establish: 'establishing',
+      authorize: 'writing-authorization-header',
+      rejected: 'reading-rejection',
+    });
+  }
+
+  protected onPrepare(): AuthOutcome {
+    return OK;
+  }
+
+  protected onEstablish(_logon: ILogonTarget): AuthOutcome {
+    return OK;
+  }
+
+  protected onAuthorize(request: IRequestTarget): AuthOutcome {
+    request.header('X-Api-Key', this.key); // a throwing target is Oops, not a throw
+    return OK;
+  }
+
+  protected onRejected(_rejection: IAuthRejection): AuthOutcome {
+    return {
+      ok: false,
+      refusal: authError['credential-refused']({ credential: 'token', at: 'request' }),
+    };
+  }
+}
+```
+
+Do not override `prepare()`, `establish()`, `authorize()` or `rejected()`:
+the boundary is the base's. `@mcp-abap-adt/auth-errors` ships the shape check
+this package runs in `lint:check`
+(`@mcp-abap-adt/auth-errors/tools/check-provider-shape.mjs`), which refuses a
+provider that does not reach the base or declares one of the four.
 
 ## Upgrading from 4.0 to 4.1
 
@@ -2604,7 +2930,8 @@ Three more changes that are not fields:
   behaves the same way.)
 - **A `/callback` carrying neither a code nor an error no longer ends the
   login.** It is answered and counted, and the tally appears in the timeout
-  message if the login later expires.
+  message if the login later expires. (Since 6.0.0 there is no timeout: the
+  tally appears in the `aborted` words when the login is aborted.)
 
 ## Testing
 
@@ -2827,53 +3154,89 @@ provider not propagated to it gets a token and a 401 from ADT.
 
 ### Debug Logging
 
-To enable detailed logging during tests or runtime, set environment variables:
+**The package logs only through the `ILogger` you give a provider or a
+strategy** (`logger` in its config); without one it logs nothing, except the
+prompts a user must see (an authorization URL, a device code), which go to
+stderr — never stdout, which carries protocol traffic under an MCP or LSP
+stdio transport. It reads no environment variable to decide what to log.
+
+**`authDebug`** — an explicit option of every token provider
+(`TokenProviderDebug`, in each provider's config), **off by default** and on
+only for `authDebug: true` itself (`'true'` or `1` is off). It is **never read
+from the environment**: `DEBUG_AUTH_PROVIDERS` and its kin do not turn it on.
+It changes one thing — the line a token site writes when a request fails:
+
+- **Without it** (the default), a failed request writes 5.4.2's safe-facts
+  line at `debug`: `<operation>: the token endpoint refused the request`,
+  `{ status, error?, code? }` — the integer HTTP status (`undefined` without a
+  response), the OAuth `error` only when it is a registered code, an
+  allowlisted TLS or system code. None for the device poll's
+  `authorization_pending` / `slow_down` with status `400`, none without a
+  logger, and a logger that throws is ignored. A `200` without a token writes
+  one line of the same facts — at `error` for the UAA code exchange (5.4.2's
+  line, verbatim), at `debug` elsewhere.
+- **With it**, that line is instead `[<operation>] token endpoint said`,
+  `{ status, error?, code?, sent }` (and a `200` without a token adds `sent`
+  to its line). `sent` names each secret the request carried — the grant's
+  (`refresh_token`, `code`, `code_verifier`, `assertion`, `passcode`,
+  `password`, `device_code`, `subject_token`, `actor_token`), the configured
+  `client_secret`, a strategy's `client_secret` / `client_assertion`, and a
+  Basic credential as `basic` (the base64 credential) and `basic_secret` —
+  each **prepared at the point of logging**: its first 4 and last 4
+  characters around `<redacted, N chars>` (`abcd…wxyz <redacted, 43 chars>`),
+  and the length alone below 16 characters. Never more than 8 characters of a
+  secret, never the server's text: `error_description` and `error_uri` are
+  read by nothing, with `authDebug` or without.
+
+```typescript
+const provider = new ClientCredentialsProvider({
+  uaaUrl, clientId, clientSecret,
+  logger,           // the lines go here, at `debug`
+  authDebug: true,  // only while diagnosing: names prepared secrets in `sent`
+});
+```
+
+What else a provider logs, at `info` / `debug`: the stages of a token exchange
+(what is sent where, never a secret), token lengths and expiry, the browser
+and the authorization URL, a refresh that failed and the login that follows.
+
+The test suite's own logger (`src/__tests__/helpers/testLogger.ts`) is
+switched on by environment variables — this is for running the tests, not
+the package:
 
 ```bash
-# Enable logging for auth providers (short name)
-DEBUG_PROVIDER=true npm test
-
-# Or use long name (backward compatibility)
-DEBUG_AUTH_PROVIDERS=true npm test
-
-# Or enable via general DEBUG variable
-DEBUG=true npm test
-
-# Or include in DEBUG list
-DEBUG=provider npm test
-# Or
-DEBUG=auth-providers npm test
-
-# Set log level (debug, info, warn, error)
-LOG_LEVEL=debug npm test
+DEBUG_AUTH_PROVIDERS=true npm test   # or DEBUG_PROVIDER, DEBUG_BROWSER_AUTH, DEBUG=true, DEBUG=auth-providers
+AUTH_LOG_LEVEL=debug npm test        # debug, info, warn, error
 ```
 
-Logging uses `@mcp-abap-adt/logger` package with structured logging:
-- Token exchange stages (what we send, what we receive)
-- Token information (lengths, previews, expiration)
-- Token validation checks (expiration, validity)
-- Errors in fixed words (see below)
-
-Example output:
-```
-[INFO] ℹ️ [browserAuth] Exchanging code for token...
-[INFO] ℹ️ Tokens received: accessToken(2263 chars), refreshToken(34 chars)
-[DEBUG] 🐛 [BaseTokenProvider] Token validation check {"expiresAt":"2025-12-25 11:08:15 UTC","isValid":true}
-[INFO] ℹ️ [browserAuth] Authorization URL: https://.../oauth/authorize?...
-[INFO] ℹ️ [browserAuth] Browser: system
-```
-
-**Logging Features**:
-- **No tokens in logs**: a token the provider holds or sent is never logged, not even in part. A log line carries only `<redacted, N chars>` (since 4.1.2; earlier versions logged a short refresh token whole). Since 5.4.2 a token endpoint's error body contributes only a registered `error` code and the status — to a thrown error and to one `debug` line; its `error_description` and `error_uri` reach neither. An `error` that is a registered OAuth error code (`invalid_grant`, `authorization_pending`, `slow_down`, …) is kept verbatim: it is a protocol word, and the device poll reads it. Before 5.4.2, a new opaque token a server wrote into `error_description` could not be recognised and passed through; the description is now written nowhere.
-- **No error message in logs**: a log line about a thrown value — a refresh that failed, a strategy, loader, presenter, validator, `onTokens`, browser launcher or SNC locator/probe that threw — carries only the words its refusal would (fixed per error class, an allowlisted TLS or system code, else `unknown error`) and the HTTP status when there is one, never the error's message, `cause` or stack: a consumer's collaborator may throw text holding a key, a passphrase or a token. Diagnose a collaborator's failure where it throws, not from this package's log.
-- **Date Formatting**: Expiration dates are displayed in readable format (YYYY-MM-DD HH:MM:SS UTC) instead of ISO format
-- **Browser Information**: Logs browser type and authorization URL for debugging
-- **Token Lifecycle**: Detailed logging of token acquisition, validation, and refresh operations
+**Logging guarantees**:
+- **No tokens in logs**: a token the provider holds or sent is never logged,
+  not even in part — a line carries only `<redacted, N chars>` (since 4.1.2;
+  earlier versions logged a short refresh token whole). A secret of a request
+  appears only in `sent`, only under `authDebug`, prepared as above.
+- **No server text in logs**: a token endpoint's body contributes only its
+  status and a registered `error` code — a protocol word, which the device
+  poll reads — to an error and to the line above. Its `error_description` and
+  `error_uri` reach nothing (written nowhere since 5.4.2, read by nothing
+  since 6.0.0).
+- **No error message in logs**: a line about a thrown value — a refresh that
+  failed, a strategy, loader, presenter, validator, `onTokens`, browser
+  launcher or SNC locator/probe that threw — carries `logFields(error)` of
+  its classification: the words its refusal would carry, its `kind`, an
+  integer HTTP status and, for the three variant kinds, its admitted
+  diagnostics; never the value's message, `cause` or stack: a consumer's
+  collaborator may throw text holding a key, a passphrase or a token.
+  Diagnose a collaborator's failure where it throws, not from this package's
+  log.
+- **A throwing logger changes nothing**: every log call on a failure path is
+  guarded, and a logger answering a rejecting promise is handled, so the
+  failure the site throws is the one you get.
 
 ## Dependencies
 
-- `@mcp-abap-adt/interfaces-auth` (^3.1.0) - `IAuthProvider`, token provider, authorization, client-authentication and assertion-validation contracts (`ITokenProvider`, `IAuthorizationStrategy`, `IClientAuthentication`, `CallbackServerFactory`, `IAssertionValidator`, `IAssertionReplayStore`) and error code constants
-- `@mcp-abap-adt/interfaces-auth-sap` (^2.0.0) - XSUAA authorization configuration (`IAuthorizationConfig`) and `ICertificateMaterialLoader`
+- `@mcp-abap-adt/interfaces-auth` (^6.0.0) - `IAuthProvider`, token provider, authorization, client-authentication and assertion-validation contracts (`ITokenProvider`, `IAuthorizationStrategy`, `IClientAuthentication`, `CallbackServerFactory`, `IAssertionValidator`, `IAssertionReplayStore`), and the error contract's types and allowlists (`IAuthProviderError`, its kinds, facts and `OPERATIONS`)
+- `@mcp-abap-adt/interfaces-auth-sap` (^3.2.0) - XSUAA authorization configuration (`IAuthorizationConfig`) and `ICertificateMaterialLoader`
+- `@mcp-abap-adt/auth-errors` (^1.0.1) - the error contract's runtime: the builders every error is minted with, `AuthProviderFailure`, `classify` / `readFailure`, `guard`, `logFields`, shared attempts and parties
 - `@mcp-abap-adt/interfaces-utils` (^1.1.0) - `ILogger`
 - `@xmldom/xmldom` - XML parsing: SAML assertion validation, and taking the Assertion out of a SAMLResponse for the saml2-bearer grant
 - `xml-crypto` - XML-DSig signature verification for SAML assertion validation

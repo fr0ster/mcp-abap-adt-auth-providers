@@ -223,7 +223,10 @@ recipe and no implicit default (Inference, design).
   reason (missing, not a library, wrong architecture) in the words, its path
   as a diagnostic beside them (6.0.0). The registry lookup has no timeout of
   its own: it waits for `reg.exe`, or for the provider's signal, whose abort
-  kills it. See
+  kills it. That abort is tested with a real child process on a POSIX
+  system, and the parsing of `reg.exe`'s output with written samples of it;
+  neither has run on a Windows host yet, and localised `reg.exe` output is
+  not covered (Inference until measured). See
   [the README](README.md#passwordless-rfc-logon-snc).
 
   **The product is named, not checked** (Measured, 2026-09-29, Windows,

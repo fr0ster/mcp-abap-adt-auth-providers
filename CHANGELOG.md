@@ -7,55 +7,248 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-<!-- 6.0.0, in progress (PR #68); Task 30 writes the full entry. -->
+A migration, not an update: 6.0.0 replaces the error contract. Every refusal
+and every throw of this package is now an error of one closed list of
+**kinds**, minted by `@mcp-abap-adt/auth-errors` from allowlisted facts —
+never a class to match with `instanceof`, never words to parse. Together with
+it, no login, request or registry query is bounded by a timeout of the
+package's choosing any more: the consumer's `AbortSignal` is the bound. See
+*Migrating to 6.0.0* in the README for what a 5.x consumer must now do. The
+surface changes below are taken from a diff of every exported declaration
+against the published 5.4.2.
+
+### Breaking
+
+- **A refusal is an `IAuthProviderError`** (`@mcp-abap-adt/interfaces-auth`
+  6.0.0: `IAuthRefusal = IAuthProviderError`). `AuthOutcome` is `{ ok: true }`
+  or `{ ok: false, refusal }`, the refusal a frozen object of `kind`,
+  `variant` (for `saml-assertion`, `snc`, `configuration`), `facts`,
+  `reason`, `hint?` and `diagnostics?`. `refusal.reason` / `refusal.hint`
+  read as before; a refusal cannot be built from free words, copied or
+  mutated — an object that is not minted by `@mcp-abap-adt/auth-errors` is
+  rebuilt from its `kind` and `facts` (its diagnostics dropped) wherever it is
+  read, and a provider answering one is answered `unknown`.
+- **Every throw is an `AuthProviderFailure`** (`@mcp-abap-adt/auth-errors`):
+  an `Error` whose `error` is one minted `IAuthProviderError`, whose
+  `message` is `reason` or `reason — hint`, and which has no `cause`.
+  Constructors, factories and loaders throw it for a configuration fault
+  (kind `configuration`, `facts.case`, `facts.fields`); `getTokens()` and
+  `refreshTokens()` throw nothing else — a strategy's, loader's or
+  presenter's own error is classified, never rethrown as itself, and no
+  `AxiosError` escapes. Read what was thrown with `readFailure(thrown,
+  operation)`, test with `isAuthProviderFailure(value)`, never `instanceof`.
+- **The words changed.** Each kind renders its own words from its facts
+  (auth-errors' `render`). Notably: a refused token request reads
+  `<operation> failed (HTTP <status>[, <registered code>])` —
+  `the passcode exchange failed (HTTP 401)`, `the refresh failed (HTTP 400,
+  invalid_grant)` — instead of `TokenEndpointError`'s
+  `Passcode exchange failed (401)`; a TLS failure reads
+  `<operation> failed: <the kind's words> (<code>)`; an unfamiliar thrown
+  value `<operation> failed (unknown error[, CODE])` with an operation of a
+  closed list (`OPERATIONS`), never a class label; a SAML refusal names its
+  rule and carries no document value in the words (the value is a
+  diagnostic); the SNC library's path and each candidate's path are
+  diagnostics, not words; a configuration error says its case's fixed words.
+  Code matching on words must match on `kind` and `facts`. The README's
+  tables are generated from the words the package renders.
+- **No server text, in errors or logs, by default or with `authDebug`.** A
+  token endpoint's `error_description` and `error_uri` are read by nothing:
+  they reach no error, no failure, no response data and no log line. The
+  registered OAuth `error` survives as the fact `oauthError` (5.4.2's
+  reduced `err.response.data.error` is `failure.error.facts.oauthError`). A
+  failed request still writes 5.4.2's `debug` line of safe facts (`{ status,
+  error? }`, now with an allowlisted `code`); the UAA code exchange's `200`
+  without `access_token` keeps 5.4.2's `error`-level line, verbatim (status
+  and registered code only). A consumer that read the server's description
+  from an error or a log no longer finds it anywhere.
+- **No built-in timeouts.** Removed: `DEFAULT_LOGIN_TIMEOUT_MS` (30 s);
+  `timeoutMs` on `BrowserCallbackStrategyOptions`, `CallbackStrategyOptions`
+  (`browserCallbackStrategy`, `oidcCallbackStrategy`, `samlCallbackStrategy`)
+  and `ManualStrategyOptions`; the `{ timeoutMs }` options of
+  `AuthorizationCodeProvider.inBrowser`, `OidcBrowserProvider.inBrowser`,
+  `Saml2BearerProvider.inBrowser`, `Saml2PureProvider.inBrowser` and
+  `UaaPasscodeProvider.fromTerminal` (whose default was 300 s), now
+  `LoginFactoryOptions` (`{ signal }`); `ICallbackServerOptions.timeoutMs`
+  (interfaces-auth 6.0.0); the callback server's shutdown grace; the client
+  credentials request's 30 s timeout; the SNC registry query's 5 s timeout.
+  A login ends on its result, the identity provider's refusal or the
+  consumer's `AbortSignal`; a request ends when the server or the OS ends it,
+  or on the signal. **A consumer that passed `timeoutMs` passes
+  `signal: AbortSignal.timeout(ms)` instead; one that passed nothing now waits
+  until it aborts.** The "Authentication timeout after N seconds" and "did not
+  arrive in time" messages are gone with them.
+- **Subclassing a provider.** Every provider extends the new
+  `AuthProviderBase`, which owns `prepare()`, `establish()`, `authorize()`
+  and `rejected()` and runs each inside auth-errors' `guard`; a subclass
+  implements the protected `onPrepare()`, `onEstablish(logon)`,
+  `onAuthorize(request)` and `onRejected(rejection)` instead of overriding
+  the four. `BaseTokenProvider`'s protected `performLogin()` is now
+  `performLogin(attempt: AttemptContext)` — the strategy gets
+  `attempt.signal` — and `performRefresh()` is
+  `performRefresh(refreshToken: string, signal)`: a subclass must send the
+  refresh token it is given; reading `this.refreshToken` bypasses the
+  quarantine of a refresh token whose refresh was cut. `pin()` takes an
+  optional `signal`; new protected members: `grant()`, `siteOptions(signal?)`,
+  `authDebug`.
+- **Strategies honour the request's signal.** `externalCodeStrategy`'s
+  `provide` is `(authorizationUrl, signal) => Promise<string>`. A manual
+  strategy's custom `read(prompt, signal)` that ignores its signal now blocks
+  that strategy's `authorize` — and the next login, which waits for the
+  aborted one to settle — where 5.x settled through a race. A consumer's own
+  `IAuthorizationStrategy` must end on `request.signal`.
+- **Device polling follows RFC 8628 §3.5.** `slow_down` adds 5 s to the
+  interval for that poll and every later one (cumulative); the server's
+  `interval` counts only as a finite, non-negative number, else 5 s; `0`
+  waits not at all. `authorization_pending` / `slow_down` keep the poll
+  waiting only with status `400` — with any other status the poll ends with
+  the failure.
+- **A cut refresh token is quarantined.** A refresh whose waiters all aborted
+  after it was sent runs on; its refresh token is never sent again by that
+  provider, so the next renewal may cost one login.
+- **`refreshTokenDisposition` on every token result** (interfaces-auth
+  6.0.0's `ITokenResult`): `'replace'`, `'keep'` or `'clear'`, on what
+  `onTokens` receives and on what `getTokens()` / `refreshTokens()` return
+  (after a renewal, what `onTokens` was told; a cache hit `'replace'` with a
+  usable refresh token, else `'clear'` after one was discarded, else
+  `'keep'`). `@mcp-abap-adt/auth-stores` 3.x refuses the key (`RefusedFieldsError` in
+  `saveSession`): pair 6.0.0 with auth-stores 4.0.0 and auth-broker 5.0.0,
+  which accept it.
+- **Requires `@mcp-abap-adt/connection` 12.0.0**, which reads the new
+  refusal; 11.x does not.
+- **Log lines about a thrown value** carry auth-errors' `logFields`:
+  `{ error, kind, status?, diagnostics? }` instead of `{ error, status? }`.
 
 ### Added
 
-- **The shape check in `lint:check`.** `tools/check-provider-shape.mjs` — a
-  byte-identical copy of the one `@mcp-abap-adt/auth-errors` publishes,
-  compared byte for byte by a test — runs after Biome with rules 1–8 and
-  `--base ./src/auth/AuthProviderBase#AuthProviderBase`: every provider
-  reaches `AuthProviderBase` and declares none of the four moments, no cast
-  to a contract type (`tools/assertion-sites.json` is empty), diagnostics
-  only at the approved extraction sites (`tools/diagnostic-sites.json`),
-  `guard` reads nothing before its boundary, and no `Basic ` value outside
-  `legacyBasic` / `clientSecretBasic`. The SNC `library` diagnostic is now
-  extracted at one site: `prepare()` mints the two GSS explanations with it,
-  and `rejected()` relays them.
-
-### Removed
-
-- **The 5.x error classes and `refusalWords`.** `TokenProviderError`,
-  `ValidationError`, `RefreshError`, `SessionDataError`, `ServiceKeyError`,
-  `BrowserAuthError`, `AssertionValidationError` (and the `AssertionCheck`
-  re-export: import it from `@mcp-abap-adt/interfaces-auth`),
-  `CertificateMaterialError`, `ClientAuthenticationError`,
-  `ClientAuthenticationResultError`, `BasicClientIdError` and
-  `TokenEndpointError` are gone; every throw is `@mcp-abap-adt/auth-errors`'
-  `AuthProviderFailure`, read with `readFailure(thrown, operation)` and
-  switched on `kind`. `getTokens()` / `refreshTokens()` throw nothing else.
-  `SessionDataError` / `ServiceKeyError` had no producer and have no
-  replacement.
-- **`refusalWords(error, what)` → `classify(error, operation)`**
-  (auth-errors), `.reason` / `.hint`. A caller that passed its own `what`
-  must name a closed `Operation`: `'unfamiliar-error'` answers the
-  unfamiliar-error words ("an authentication error of a kind this version
-  does not know") and no hint — a TLS failure's `NODE_EXTRA_CA_CERTS` hint
-  included; an operation of the list keeps its words and hints.
-- **`ICallbackServerOptions.timeoutMs`** (interfaces-auth 6.0.0): pass
-  `signal: AbortSignal.timeout(ms)` for a bound.
+- **`AuthProviderBase`** (with the types `Moment` and `MomentOperations`):
+  the abstract base owning the four moments, exported for a consumer writing
+  a provider of its own. `lint:check` runs auth-errors' shape check
+  (`tools/check-provider-shape.mjs`, a byte-identical copy, rules 1–8 with
+  `--base ./src/auth/AuthProviderBase#AuthProviderBase`) over this package:
+  every provider reaches the base and declares none of the four moments, no
+  cast to a contract type, diagnostics only at the approved extraction sites
+  (`tools/diagnostic-sites.json`), `guard` reads nothing before its boundary,
+  and no `Basic ` value outside `legacyBasic` / `clientSecretBasic`.
+- **`authDebug`** (`TokenProviderDebug`, joined into `TokenProviderHooks` and
+  so into every token provider's config): off by default, `true` itself
+  only, never read from the environment. With it, a failed token request
+  writes `[<operation>] token endpoint said` with `{ status, error?, code?,
+  sent }` instead of the safe-facts line, and a `200` without a token adds
+  `sent` to its line: `sent` names each secret the request carried
+  (`client_secret`, `client_assertion`, `refresh_token`, `code`, `basic`,
+  `basic_secret`, …), each prepared at the point of logging — at most its
+  first 4 and last 4 characters around `<redacted, N chars>`, the length only
+  below 16 characters. Never the server's text.
+- **Cancellation.** `getTokens({ signal })` / `refreshTokens({ signal })`
+  (interfaces-auth 6.0.0's `ITokenRequestOptions`): one caller's abort
+  releases that caller (`interactive-login` `aborted`); the shared login is
+  aborted when every caller has. `attach(signal): () => void` on every token
+  provider and `SncLogonProvider`, and `signal` in every token provider's
+  config and in `SncLogonProviderConfig`: the parties a moment's login waits
+  on; with none live it runs unbounded. `signal` on `ManualStrategyOptions`,
+  `ExternalCodeStrategyOptions` and `LoginFactoryOptions` (the factories).
+- **SNC signal plumbing.** `SncLogonProvider.forSecureLoginClient({ …,
+  signal })`, and an optional `signal` on `ISncLibraryLocator.locate`,
+  `ISncProductProbe.appliesTo` and `SncSystem.readRegistryValue`: the
+  shipped ones pass it to `reg.exe`, whose query has no timeout — an abort
+  kills it and `prepare()` ends `aborted`. A locator or probe of your own that
+  ignores the argument still compiles.
+- **`LoginFactoryOptions`** — `{ signal? }`, what `inBrowser` and
+  `fromTerminal` take.
 
 ### Changed
 
-- **Dependencies:** `@mcp-abap-adt/interfaces-auth ^6.0.0`,
-  `@mcp-abap-adt/interfaces-auth-sap ^3.2.0`, `@mcp-abap-adt/auth-errors
-  ^1.0.1` (its shape check's rule 8 covers `src/clientAuthentication/`;
-  `tools/check-provider-shape.mjs` is its byte-identical copy).
-- **Every token result carries `refreshTokenDisposition`** (interfaces-auth
-  6.0.0's `ITokenResult`): what `getTokens()` / `refreshTokens()` return
-  after a renewal is what `onTokens` was told; a cache hit says `'replace'`
-  with a usable refresh token, else `'clear'` after one was discarded, else
-  `'keep'`.
+- **Dependencies:** `@mcp-abap-adt/interfaces-auth ^6.0.0` (was ^3.2.0),
+  `@mcp-abap-adt/interfaces-auth-sap ^3.2.0` (was ^2.0.0), and the new
+  `@mcp-abap-adt/auth-errors ^1.0.1`.
+- **`getTokens()` / `refreshTokens()`** take an optional
+  `ITokenRequestOptions` (`{ signal }`).
+- **Collaborator answers are awaited normally.** What a consumer's own code
+  answers — a strategy, `onTokens`, a loader, a refresher, a validator, a
+  presenter, a replay store, `cookieProvider`, an SNC locator, probe or
+  system, a logger — is adopted like any `await` adopts it, so a native
+  promise, Bluebird, Q or any Promises/A+ thenable works. Values crossing a
+  trust boundary — a thrown value being classified, a target's answer —
+  never have a foreign `then` called. A collaborator answer that never
+  settles is bounded only by the consumer's `AbortSignal`;
+  `CertificateAuthProvider` and `TokenAuthProvider.from` take no signal, so a
+  never-settling loader or refresher hangs their moment.
+- **The signed-Response validator reads `Status` before counting the
+  Assertion**, so a login the identity provider declined — which carries no
+  Assertion — is refused `declined` with its status code rather than
+  `no-direct-assertion`.
+- **Configuration is checked at construction where it can be.** An
+  unparseable `authorizationUrl` is `configuration`
+  `required-fields-missing` (`fields: ['authorizationUrl']`) at construction
+  and at login, as is a `myName` that is not a string on `SncLogonProvider`
+  — a known wording limit: interfaces-auth 6 has no invalid-value case, so the
+  words say "required configuration is missing" for a value that is present.
+  A callback `port` that is not an integer in 0..65535 is refused before any
+  socket is touched.
+- **OIDC discovery keeps a snapshot** of the fields the providers read
+  (`authorization_endpoint`, `token_endpoint`,
+  `device_authorization_endpoint`, their mTLS aliases); an aborted or failed
+  discovery is not cached.
+- **`DEFAULT_CALLBACK_PORT`** stays 61001; the default login wait is
+  unbounded (above).
+
+### Removed
+
+- **The error classes:** `TokenProviderError`, `ValidationError`,
+  `RefreshError`, `SessionDataError`, `ServiceKeyError`, `BrowserAuthError`,
+  `AssertionValidationError` (and the `AssertionCheck` re-export — import it
+  from `@mcp-abap-adt/interfaces-auth`), `CertificateMaterialError`,
+  `ClientAuthenticationError`, `ClientAuthenticationResultError`,
+  `BasicClientIdError` and `TokenEndpointError`. Their information is a kind
+  and its facts: `error.code` → `kind`; `missingFields` → `facts.fields`;
+  `check` → `facts.check` (with `facts.rule`);
+  `CertificateMaterialError.incomplete` / `.expired` / `.words` →
+  `client-certificate` `facts.problem`; `TokenEndpointError.status` /
+  `.oauthError` / `.code` → `request-failed` `facts.status` /
+  `.oauthError` / `.code`. `SessionDataError` and `ServiceKeyError` had no
+  producer and have no replacement. The error-code constants
+  (`TOKEN_PROVIDER_ERROR_CODES`, `ASSERTION_ERROR_CODES`) are gone from
+  interfaces-auth 6.0.0.
+- **`refusalWords(error, what)`** → auth-errors' `classify(error,
+  operation)`, `.reason` / `.hint`. A caller that passed its own `what` must
+  name an `Operation` of the closed list: `'unfamiliar-error'` answers the
+  unfamiliar-error words ("an authentication error of a kind this version
+  does not know") and no hint — a TLS failure's `NODE_EXTRA_CA_CERTS` hint
+  included; an operation of the list keeps its words and hints.
+- **`DEFAULT_LOGIN_TIMEOUT_MS`** and every `timeoutMs` option (Breaking,
+  above).
+- **The redactor.** 5.4.2's redaction of the server's text
+  (`oauthErrorFields`, `describeOAuthErrorBody`, the base64 and JWT passes)
+  is deleted with every regular expression over server text: nothing of the
+  server's text is kept, so there is nothing to redact. A secret reaches a log
+  line only through the secret preparer, under `authDebug`.
+- **Internal:** `asContract` (interfaces-auth 6.0.0 declares optional fields
+  `?: T | undefined`), `refusalFrom`, `loggedError`, `safely`, `oops`,
+  `withoutRequest`, `tokenEndpointError`, `CallbackScopeError`,
+  `AuthorizationRefusedError`, `DeviceCodePresentationError`,
+  `SncLibraryNotFoundError` and `src/errors/`.
+
+### Fixed
+
+- **Security: the browser was opened through a shell.** Through 5.4.2 the
+  fallback without the `open` package handed the authorization URL — which
+  may come from an OIDC discovery document — to a shell inside double
+  quotes, so a `$(…)` or a backtick in it ran as a command. Only an `http:` /
+  `https:` URL is opened now, as its serialisation (unsafe characters refused
+  or percent-encoded), and every launcher is started with an argument array:
+  `xdg-open` or a named browser on Linux, `open` on macOS, and on Windows
+  `%SystemRoot%\System32\rundll32.exe url.dll,FileProtocolHandler` or
+  PowerShell's `Start-Process` reading the URL from an environment variable
+  — never `cmd`. The Windows launchers are reasoned, not yet measured on a
+  Windows host.
+- **The legacy Basic credential, as shipped in 5.4.2, carried forward.**
+  Without a client-authentication strategy, every site that sends
+  `Authorization: Basic base64(id:secret)` builds it only through one helper
+  (`legacyBasic`), which names the credential's secrets (`basic`,
+  `basic_secret`) for `sent`; 5.4.1 left a server-echoed base64 credential in
+  errors and the code exchange's log line, and 5.4.2 redacted it. 6.0.0 goes
+  further: nothing the server wrote is kept at all, so no echo of the header
+  reaches an error or a log line, with `authDebug` or without.
 
 ## [5.4.2] - 2026-10-05
 
