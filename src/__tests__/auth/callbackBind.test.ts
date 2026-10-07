@@ -10,8 +10,9 @@
 import net from 'node:net';
 import os from 'node:os';
 import { afterEach, describe, expect, it, jest } from '@jest/globals';
-import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
+import { readFailure } from '@mcp-abap-adt/auth-errors';
 import {
+  answersFor,
   isLoopbackPeer,
   withBrowserCallbackServer,
 } from '../../auth/callbackServer';
@@ -331,20 +332,14 @@ describe('loopback names count only from a loopback peer (spec §6a1)', () => {
 });
 
 describe('port 0 and the second family (spec §6a1)', () => {
-  it('stays on 127.0.0.1 alone, logged, when the OS-given port is taken on ::1', async () => {
+  // The redirect URI says `localhost`, which resolves to ::1 first: staying
+  // on 127.0.0.1 alone would hand the ::1 holder the code and the state
+  // (measured in the re-review). Fail closed, as for a fixed port.
+  it('fails port-in-use when the OS-given port is taken on ::1 — never 127.0.0.1 alone', async () => {
     if (!(await hasIpv6Loopback())) {
       console.warn('no IPv6 loopback on this machine: case not run');
       return;
     }
-    const warnings: string[] = [];
-    const logger: ILogger = {
-      debug: () => undefined,
-      info: () => undefined,
-      error: () => undefined,
-      warn: (message: string) => {
-        warnings.push(message);
-      },
-    };
     // Occupy the port the OS gave 127.0.0.1 on ::1 — just before the
     // transport binds ::1 there.
     const squatter = net.createServer();
@@ -361,21 +356,25 @@ describe('port 0 and the second family (spec §6a1)', () => {
         }
         return listen.apply(this, args as never);
       });
+    let entered = false;
     try {
-      const result = await withBrowserCallbackServer(
-        { port: 0, logger },
-        async (srv) => {
-          expect(squatter.listening).toBe(true);
-          expect((squatter.address() as net.AddressInfo).port).toBe(srv.port);
-          const waiting = srv.waitForResult();
-          void callbackGet(srv.port, '/callback?code=v4-only');
-          return await waiting;
-        },
-      );
-      expect(result).toBe('v4-only');
-      expect(warnings).toEqual([
-        '[callbackServer] the port is taken on ::1; listening on 127.0.0.1 only',
-      ]);
+      const thrown = await withBrowserCallbackServer({ port: 0 }, async () => {
+        entered = true;
+        return 'never';
+      }).catch((e: unknown) => e);
+      const squatted = (squatter.address() as net.AddressInfo).port;
+      expect(readFailure(thrown, 'browser-login').facts).toEqual({
+        outcome: 'port-in-use',
+        port: squatted,
+      });
+      // Nothing was served: no URL could be built on a half-bound port.
+      expect(entered).toBe(false);
+      // The 127.0.0.1 half was released: binding it again succeeds.
+      await new Promise<void>((resolve, reject) => {
+        const probe = net.createServer();
+        probe.once('error', reject);
+        probe.listen(squatted, '127.0.0.1', () => probe.close(() => resolve()));
+      });
     } finally {
       spy.mockRestore();
       await new Promise<void>((resolve) => squatter.close(() => resolve()));
@@ -397,4 +396,68 @@ describe('port 0 and the second family (spec §6a1)', () => {
       await new Promise<void>((resolve) => squatter.close(() => resolve()));
     }
   }, 30000);
+});
+
+describe('a loopback name is never an allowed authority (spec §6a1)', () => {
+  const LOOPBACK_ENTRIES = (port: number) => [
+    `localhost:${port}`,
+    '127.0.0.1',
+    `[::1]:${port}`,
+    'LOCALHOST',
+  ];
+
+  itWithExternal(
+    'allowedHosts listing loopback names admits nothing from a network peer',
+    async () => {
+      const { logger, ignored } = ignoreCounter();
+      const code = await withBrowserCallbackServer(
+        {
+          port: PORT,
+          host: '0.0.0.0',
+          allowedHosts: LOOPBACK_ENTRIES(PORT),
+          gated: true,
+          logger,
+        },
+        async (srv) => {
+          const waiting = srv.waitForResult();
+          srv.expectState?.(STATE);
+          const address = EXTERNAL as string;
+          for (const host of [
+            `localhost:${PORT}`,
+            `127.0.0.1:${PORT}`,
+            `[::1]:${PORT}`,
+          ]) {
+            const page = await callbackGet(PORT, '/', { address, host });
+            expect(page.status).toBe(400);
+            expect(formTokenIn(page.body)).toBeUndefined();
+          }
+          expect(ignored()).toBe(3);
+          void callbackGet(PORT, `/callback?code=real&state=${STATE}`);
+          return await waiting;
+        },
+      );
+      expect(code).toBe('real');
+    },
+    30000,
+  );
+
+  it('answersFor: a loopback name listed in allowedHosts counts only from a loopback peer', () => {
+    const allowed = LOOPBACK_ENTRIES(PORT);
+    for (const host of [
+      `localhost:${PORT}`,
+      `127.0.0.1:${PORT}`,
+      `[::1]:${PORT}`,
+    ]) {
+      expect(answersFor(host, '192.168.1.20', PORT, allowed)).toBe(false);
+      expect(answersFor(host, '::ffff:10.0.0.1', PORT, allowed)).toBe(false);
+      expect(answersFor(host, '127.0.0.1', PORT, allowed)).toBe(true);
+    }
+    // A real authority in the same list still answers a network peer.
+    expect(
+      answersFor(`buildhost.example:${PORT}`, '192.168.1.20', PORT, [
+        ...allowed,
+        'buildhost.example',
+      ]),
+    ).toBe(true);
+  });
 });
