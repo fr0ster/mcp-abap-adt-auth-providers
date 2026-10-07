@@ -278,7 +278,7 @@ describe('withBrowserCallbackServer', () => {
         },
       ),
     ).rejects.toThrow(
-      'the browser login was aborted; 1 incomplete request(s) reached /callback and were ignored',
+      'the browser login was aborted; 1 request(s) to the callback server were refused and ignored',
     );
   }, 30000);
 
@@ -501,7 +501,7 @@ describe('withBrowserCallbackServer', () => {
         async (srv) => await srv.waitForResult(),
       );
       const rejected = expect(attempt).rejects.toThrow(
-        'the browser login was aborted; 2 incomplete request(s) reached /callback and were ignored',
+        'the browser login was aborted; 2 request(s) to the callback server were refused and ignored',
       );
       await httpGet('/callback');
       await httpGet('/callback');

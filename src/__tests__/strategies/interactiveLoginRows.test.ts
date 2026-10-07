@@ -203,7 +203,7 @@ describe('A.3 — browser login rows', () => {
         kind: 'interactive-login',
         facts: { outcome: 'aborted', strategy: 'browser', ignoredCallbacks: 2 },
         reason:
-          'the browser login was aborted; 2 incomplete request(s) reached /callback and were ignored',
+          'the browser login was aborted; 2 request(s) to the callback server were refused and ignored',
         hint: undefined,
       });
     });
