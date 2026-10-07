@@ -267,7 +267,9 @@ recipe and no implicit default (Inference, design).
 
 Session cookies declare no lifetime, so B and C need an expiry policy — a
 configured TTL or a probe request; refreshing means logging on again, which
-needs no user. Whether `@mcp-abap-adt/interfaces-auth` already has a contract
+needs no user — as a token provider, under the renewal strategy every token
+provider takes since 6.0.0 (with no refresh grant, `refreshThenLogin()`;
+`refreshOnly()` would decline every renewal). Whether `@mcp-abap-adt/interfaces-auth` already has a contract
 for a cookie result, as `Saml2PureProvider` returns, is to be checked before
 proposing one.
 

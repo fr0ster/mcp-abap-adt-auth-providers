@@ -43,7 +43,7 @@ Usable for ADT on:
 | Provider | Grant on the wire | (a) ABAP environment | (b) Trial | (c) On-premise | What decides it |
 |---|---|---|---|---|---|
 | `ClientCredentialsProvider` | `client_credentials` at XSUAA | **No** (Inference, Community) | **No**: 401 (Community) | No (Inference) | The token carries no user; ADT runs as a business user |
-| `AuthorizationCodeProvider` | `authorization_code` at XSUAA | **Yes**: the documented flow (SAP) | **Yes** (Community, Measured) | Only through Destination + Cloud Connector, reachable from inside CF only (Inference) | The user must exist as a business user |
+| `AuthorizationCodeProvider` | `authorization_code` at XSUAA | **Yes**: the documented flow (SAP) | **Yes** (Community; Measured before 6.0.0 — with its `state` and PKCE, Pending: [below](#authorizationcodeprovider)) | Only through Destination + Cloud Connector, reachable from inside CF only (Inference) | The user must exist as a business user |
 | `UaaPasscodeProvider` | `password` + `passcode` at XSUAA | **Yes** (Inference from the trial) | **Yes**: ADT discovery 200 (Measured) | As above | As above; an unprovisioned user gets a token and a 401 (Measured) |
 | `OidcBrowserProvider` | `authorization_code` + PKCE | **Only with XSUAA as the issuer** (Inference) | Same | No bearer path (Inference) | The ABAP environment trusts XSUAA tokens only |
 | `OidcDeviceFlowProvider` | RFC 8628 `device_code` | **No** (Inference) | No | No | Neither XSUAA nor IAS documents a device endpoint |
