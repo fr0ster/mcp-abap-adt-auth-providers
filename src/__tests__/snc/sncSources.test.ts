@@ -33,6 +33,13 @@ function linesWith(files: string[], needles: readonly string[]): string[] {
   );
 }
 
+/** `file:N: text` → `file: text`. */
+function withoutLineNumber(entry: string): string {
+  const first = entry.indexOf(':');
+  const second = entry.indexOf(':', first + 1);
+  return `${entry.slice(0, first)}:${entry.slice(second + 1)}`;
+}
+
 describe('src/snc reads untrusted text without regular expressions', () => {
   it('no RegExp, no regex literal method', () => {
     expect(
@@ -72,9 +79,19 @@ describe('src/snc has no timer and no timeout of its own', () => {
 
 describe('no package timer', () => {
   it('setTimeout only for the server’s poll interval; no setInterval', () => {
-    expect(
-      linesWith(sourceFiles(SRC), ['setTimeout(', 'setInterval(']),
-    ).toEqual(['auth/attempt.ts:84: const timer = setTimeout(() => {']);
+    // Pinned by file and text, not line number: an edit above it moves the
+    // line, but a second timer anywhere — or this one elsewhere — still fails.
+    const found = linesWith(sourceFiles(SRC), ['setTimeout(', 'setInterval(']);
+    expect(found.map(withoutLineNumber)).toEqual([
+      'auth/attempt.ts: const timer = setTimeout(() => {',
+    ]);
+    // The one timer is intervalWait's, the server's poll interval.
+    const source = readFileSync(join(SRC, 'auth', 'attempt.ts'), 'utf8');
+    const wait = source.indexOf('export function intervalWait(');
+    const timer = source.indexOf('const timer = setTimeout(');
+    expect(wait).toBeGreaterThan(-1);
+    expect(timer).toBeGreaterThan(wait);
+    expect(source.indexOf('export function', wait + 1)).toBe(-1);
   });
   it('no timeout option', () => {
     expect(linesWith(sourceFiles(SRC), ['timeout:', 'REG_TIMEOUT_MS'])).toEqual(
