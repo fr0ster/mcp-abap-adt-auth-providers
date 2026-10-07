@@ -534,11 +534,13 @@ Publish dependency: U1 (5.4.2 published), G1, G2 (G3 is not needed to build auth
 ## Renewal and persistence strategies (spec §6c, before the release)
 
 Answers the renewal goal (`docs/superpowers/2026-10-07-renewal-strategy-goal.md`,
-G1–G9) through spec §6c. Its own order of releases runs before Task 31:
-interfaces-auth 7.0.0 → auth-errors 2.0.0 → connection 13.0.0 → the
-auth-providers tasks below. Each of the three earlier packages is one PR in
-its repository, merged, tagged and published by the user before the next
-step builds against it (registry only; after every install, no
+G1–G9) through spec §6c. Its order of releases: interfaces-auth 7.0.0 →
+auth-errors 2.0.0 → the auth-providers tasks below and Task 31 (auth-providers
+6.0.0) → connection 13.0.0, whose PR (Task 30c) stays open until its tests run
+against the published auth-providers 6.0.0 (Task 32 folded into it). The
+providers do not depend on connection, so nothing of theirs waits for it.
+Each package is one PR in its repository, merged, tagged and published by the
+user before the next step builds against it (registry only; after every install, no
 `"link": true` and no non-registry resolution in the lockfile). Every task
 ends with the standard gates and the two-stage review; each "Load-bearing"
 item is run as a deliberate break.
@@ -601,8 +603,10 @@ Repository `mcp-abap-adt-auth-errors`, one PR. Publish dependency: G7.
 
 ### Task 30c: connection 13.0.0
 
-Repository `mcp-abap-connection`, one PR (draft #72, SPNego, stays a draft
-beside it, as allowed for that repository). Publish dependency: G7, G8.
+Repository `mcp-abap-connection`, one PR — #75 (draft #72, SPNego, stays a
+draft beside it, as allowed for that repository). Publish dependency: G7, G8
+for the dependency move; the PR is merged only after Task 32's steps are
+added to it, which need auth-providers 6.0.0 published (G4).
 
 **Steps:**
 - [ ] `interfaces-auth ^7.0.0`, `auth-errors ^2.0.0`; build and tests green
@@ -613,11 +617,12 @@ beside it, as allowed for that repository). Publish dependency: G7, G8.
 
 **Gate:** standard.
 
-**G9 (user):** merge, tag, publish connection 13.0.0 (as `latest`).
+**G9 (user), after G4 and Task 32 in this PR:** merge, tag, publish
+connection 13.0.0 (as `latest`).
 
 ### Task 30d: auth-providers — the renewal strategy
 
-Repository auth-providers, PR #68. Publish dependency: G7, G8, G9.
+Repository auth-providers, PR #68. Publish dependency: G7, G8.
 
 **Files:** `package.json` (the three new majors) and the lockfile;
 `src/renewal/` (new: `refreshThenLogin`, `refreshOnly`, the decision
@@ -775,12 +780,13 @@ Repository auth-providers, PR #68. After 30d–30f and 30h.
   the PR description also carries the renewal goal's and §6c's decisions
   and the 30d–30f load-bearing runs.
 - **Global Constraints, versions and order:** interfaces-auth 7.0.0 (and
-  siblings), auth-errors 2.0.0, connection 13.0.0 enter the chain before
-  auth-providers 6.0.0.
-- **Task 32 (connection gate 7):** the corrective release, if one is
-  needed, is **connection 13.0.1** on the 13 line (dependencies
-  interfaces-auth 7, auth-errors 2, auth-providers 6), not 12.0.1; the
-  user merges, tags and publishes it before Tasks 33–34 proceed.
+  siblings) and auth-errors 2.0.0 enter the chain before auth-providers
+  6.0.0; connection 13.0.0 follows auth-providers 6.0.0.
+- **Task 32 (connection gate 7)** is done inside PR #75 (Task 30c), before
+  connection 13.0.0 is released: devDependency `auth-providers ^6.0.0`, the
+  legacy adapter deleted, every suite against the real 6.0.0 providers;
+  any difference is fixed in the same PR. No separate PR and no 13.0.1.
+  Then G9; Tasks 33–34 follow it.
 - **Task 33 (auth-stores 4.0.0):** dependencies on interfaces-auth 7 and its
   siblings; no `refreshTokenDisposition` to accept — `''` stays the clearing
   operation, documented and pinned by a test per session store.
