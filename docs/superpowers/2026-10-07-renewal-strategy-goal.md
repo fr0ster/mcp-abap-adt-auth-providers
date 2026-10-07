@@ -63,9 +63,12 @@ spent token).
 
 1. **The consumer composes; the provider does not guess.** Every renewal
    decision — whether to refresh, whether and how often to log in, when to
-   stop, whether a refresh token is kept, replaced or cleared — is the
-   strategy's. No implicit default: the strategy is a constructor argument;
-   shipped factories name common recipes.
+   stop, whether a refresh token whose fate is uncertain (refused, cut after
+   dispatch, failed) is kept or discarded — is the strategy's. What is
+   certain is not a decision: a result carrying a new usable refresh token
+   replaces the held one, and a step that changed nothing keeps it. No
+   implicit default: the strategy is a constructor argument; shipped
+   factories name common recipes.
 2. **The provider reports facts, never a verdict it made up.** After each
    step the strategy learns what the provider knows for certain: whether a
    request was sent at all, what the server answered (an integer status, a
@@ -92,6 +95,28 @@ spent token).
 6. **A strategy is foreign code.** Whatever it throws or answers is read
    like any collaborator's: classified, never relayed as itself; a decision
    that is not one of the contract's is refused, not guessed at.
+7. **A decision applies to the attempt and the credential it concerns, and
+   to nothing newer.** A renewal can be cut while its refresh is on the wire,
+   its slot freed at once and a replacement started (§6b); the cut refresh's
+   answer may still arrive. So a strategy's decision is scoped to one attempt
+   and to the refresh token that attempt sent, identified without the
+   strategy ever seeing its value; a decision about a cut refresh (discard
+   the token it sent, or keep it) takes effect before any replacement attempt
+   can dispatch that token; and a decision or a late result of an older
+   attempt never changes state a newer one committed (the generations of the
+   commit queue). Whether one strategy instance serves every attempt, and
+   what state it may keep across them, the spec decides; the provider's
+   guarantees above hold whatever the strategy keeps.
+8. **The refresh state is coherent everywhere, whoever chose it.** Choosing
+   to discard or replace a refresh token is policy; applying that choice
+   consistently is the provider's correctness. What the provider holds, what
+   it returns from `getTokens()` / `refreshTokens()`, and what it tells
+   persistence (`refreshTokenDisposition`) never disagree: a discarded
+   refresh token is never restored by a later `'keep'` (the broker falls back
+   to the stored one on `'keep'`), and a `'clear'` or `'replace'` whose
+   `onTokens` failed is delivered again, in order and generation-safe, with
+   the next notification (§6b's pending disposition) — for every strategy,
+   shipped or not.
 
 ## Out of scope
 
@@ -110,21 +135,18 @@ spent token).
    out), or one call per renewal returning a plan; how a strategy is told
    which steps are possible for this provider (a refresh grant, a refresh
    token held, an interactive strategy or none).
-2. Which moments it governs — `getTokens()` on an expired token,
-   `refreshTokens()`, `authorize()`, `rejected()` — and whether `rejected()`
-   tells it the rejection's facts (a `401` against a `403`).
-3. Who decides `refreshTokenDisposition`: the strategy for every outcome, or
-   the provider for the certain ones (a new refresh token → `'replace'`) and
-   the strategy for the uncertain ones (refused, cut, failed).
-4. What of §6b goes and what stays: the lifetime tombstones, the logical
-   `cleared` state, the pending re-sent disposition after a failed
-   `onTokens` — each either a shipped strategy's choice, the provider's own
-   correctness (invariant 4), or gone.
-5. The shipped factories, by name and behaviour — at least one reproducing
+2. How each trigger is told to the strategy, as a sanitized fact so a
+   recipe cannot conflate them: no token yet (`prepare()`, first
+   `getTokens()`), an expired token, a held token bound elsewhere (rule 8),
+   an explicit `refreshTokens()`, and a rejection.
+3. What of §6b's mechanisms goes: the lifetime tombstones become the
+   discard decision of invariant 7; the logical `cleared` state and the
+   pending disposition stay as invariant 8's mechanism — the spec says how.
+4. The shipped factories, by name and behaviour — at least one reproducing
    5.x (refresh, then on its failure one login) and one that never logs in.
-6. `TokenAuthProvider.from(refresher)`: whether its renewal takes the same
+5. `TokenAuthProvider.from(refresher)`: whether its renewal takes the same
    strategy, or stays the refresher's own.
-7. How the broker composes it, and what its CLI exposes.
+6. How the broker composes it, and what its CLI exposes.
 
 ## Path
 
