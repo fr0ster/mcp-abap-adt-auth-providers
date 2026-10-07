@@ -73,18 +73,20 @@ export interface AuthorizationCodeProviderConfig
  */
 /**
  * The `redirect_uri` a pre-built `authorizationUrl` declares, or `null`. A URL
- * that does not parse is a configuration error naming `authorizationUrl` —
- * never the value. Known limit (Task 26 ruling): interfaces-auth 6.0.0's
- * `CONFIG_CASES` has no "invalid value" case, so it is
- * `required-fields-missing` (a usable `authorizationUrl` is missing) until a
- * later interfaces-auth major names one.
+ * that does not parse is a configuration error, case `invalid-value`, naming
+ * `authorizationUrl` — never the value (spec §6a0).
  */
 function declaredRedirectOf(prebuilt: string): string | null {
   let url: URL;
   try {
     url = new URL(prebuilt);
   } catch {
-    throw requiredFieldsMissing(['authorizationUrl']);
+    throw misconfigured(
+      authError.configuration({
+        case: 'invalid-value',
+        fields: ['authorizationUrl'],
+      }),
+    );
   }
   return url.searchParams.get('redirect_uri');
 }

@@ -85,7 +85,8 @@ interface Row {
   readonly case: string;
   readonly fields: readonly string[];
   readonly reason: string;
-  readonly hint?: string;
+  /** `null`: the case has no hint; absent: the shared configuration hint. */
+  readonly hint?: string | null;
   readonly allowed?: string;
   readonly diagnostics?: Readonly<Record<string, string>>;
 }
@@ -108,7 +109,7 @@ function expectRow(thrown: unknown, row: Row): IAuthProviderError {
     ...(row.allowed === undefined ? {} : { allowed: row.allowed }),
   });
   expect(error.reason).toBe(row.reason);
-  expect(error.hint).toBe(row.hint ?? CHECK);
+  expect(error.hint).toBe(row.hint === null ? undefined : (row.hint ?? CHECK));
   if (row.diagnostics === undefined) {
     expect(error.diagnostics).toBeUndefined();
   } else {
@@ -484,15 +485,14 @@ describe('E12 — redirect mismatch', () => {
   });
 });
 
-describe('an unparseable authorizationUrl (spec amendment pending)', () => {
-  // Fix round 1: once `unknown` ("the authorization_code token request failed
-  // (unknown error)"); now a configuration error naming the field, never the
-  // value. interfaces-auth 6.0.0 has no "invalid value" case: interim
-  // `required-fields-missing`.
+describe('an unparseable authorizationUrl (spec §6a0)', () => {
+  // A configuration error naming the field, never the value: case
+  // `invalid-value` (interfaces-auth 7.0.0), at construction and at login.
   const row = {
-    case: 'required-fields-missing',
+    case: 'invalid-value',
     fields: ['authorizationUrl'],
-    reason: 'required configuration is missing: authorizationUrl',
+    reason: 'a configured value cannot be used: authorizationUrl',
+    hint: null,
   };
 
   it('is refused at construction', async () => {

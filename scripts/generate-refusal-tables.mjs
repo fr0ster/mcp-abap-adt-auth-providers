@@ -296,8 +296,12 @@ function configurationTable() {
   ];
   const rows = {
     'required-fields-missing': [
-      'a required field or collaborator is missing (`ClientCredentialsProvider`, `AuthorizationCodeProvider`, the UAA authorization URL, a SAML provider without `assertionValidator`)',
+      'a required field or collaborator is missing (`ClientCredentialsProvider`, `AuthorizationCodeProvider`, a SAML provider without `assertionValidator`)',
       null,
+    ],
+    'invalid-value': [
+      'an `authorizationUrl` that does not parse (`AuthorizationCodeProvider`, at construction and at login)',
+      ['authorizationUrl'],
     ],
     'client-secret-beside-client-authentication': [
       'a token provider constructed with both',

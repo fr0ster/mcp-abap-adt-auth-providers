@@ -2567,7 +2567,8 @@ an interfaces-auth major.
 <!-- generated:refusal-table configuration -->
 | Thrown | `case` | `fields` | Reason | Hint |
 |---|---|---|---|---|
-| a required field or collaborator is missing (`ClientCredentialsProvider`, `AuthorizationCodeProvider`, the UAA authorization URL, a SAML provider without `assertionValidator`) | `required-fields-missing` | `<fields>` | required configuration is missing: `<fields>` | check the provider configuration |
+| a required field or collaborator is missing (`ClientCredentialsProvider`, `AuthorizationCodeProvider`, a SAML provider without `assertionValidator`) | `required-fields-missing` | `<fields>` | required configuration is missing: `<fields>` | check the provider configuration |
+| an `authorizationUrl` that does not parse (`AuthorizationCodeProvider`, at construction and at login) | `invalid-value` | `authorizationUrl` | a configured value cannot be used: authorizationUrl |  |
 | a token provider constructed with both | `client-secret-beside-client-authentication` | `clientSecret` | clientSecret cannot be given beside clientAuthentication | give the secret to the clientAuthentication strategy, or drop the strategy |
 | a SAML provider constructed with `authorizationUrl` and no `acsUrl` | `saml-acs-required-with-authorization-url` | `acsUrl` | acsUrl is required when authorizationUrl is set: the ACS inside a pre-built SAML request cannot be read, so it must be declared | check the provider configuration |
 | a SAML provider constructed with `idpInitiated` and `authnRequestId` (`fields`: both), or a login that minted or declared a request ID (`fields`: `idpInitiated`) | `saml-idp-initiated-with-request-id` | `idpInitiated`, `authnRequestId` | SAML idpInitiated is true, but a request ID was also configured or minted: an IdP-initiated login sends no request | remove one of them |
