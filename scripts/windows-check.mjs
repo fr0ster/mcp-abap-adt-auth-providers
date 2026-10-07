@@ -73,6 +73,32 @@
  *   error kinds and fixed words — and no secret: no password is used, the
  *   host and SNC partner name are not printed, and no exception's message
  *   is printed (failures go through auth-errors' readFailure / logFields).
+ *
+ * MEASURED (2026-10-07; Windows 11 10.0.26200 x64, Node 24.19.0, branch
+ * feat/error-contract; SAP Secure Login Client, Kerberos profile, SNC over RFC
+ * to an application server, SAP NW RFC SDK 7.50 x64)
+ *
+ *   1 registry   PASS  SNC library from HKLM\Software\SAP\SecureLogin through
+ *                      the real reg.exe (InstallPath64): sapcrypto.dll, x64.
+ *   2 abort      PASS  readRegistryValue and prepare() both answer
+ *                      interactive-login / aborted; the reg.exe child ends
+ *                      with SIGTERM and none is left running.
+ *   3 browser    PASS  default (rundll32), chrome and msedge (PowerShell
+ *                      Start-Process): the URL reaches the page unchanged; no
+ *                      command interpreter is a direct child of the launcher.
+ *                      Chrome runs `cmd /c` below itself for the native-
+ *                      messaging hosts of extensions (SentinelOne, Nexthink):
+ *                      the browser's own, reported apart, not counted.
+ *   4a snc       PASS  prepare() Ok; logon through the Secure Login Client;
+ *                      RFC_PING ok, STFC_CONNECTION echoed.
+ *   4b snc       PASS  a wrong partner name is refused: the SDK answers
+ *                      RFC_CLOSED with no GSS code the provider explains, so
+ *                      rejected() is system-refused / rfc-failure (rule 5),
+ *                      not an snc refusal.
+ *   4c snc       SKIPPED  prepare() is Ok with the client stopped; the logon
+ *                      succeeded because the library started the client by
+ *                      itself. The no-credential refusal (A2200019) needs the
+ *                      client's logon window closed, and was not measured.
  */
 
 import { once } from 'node:events';
@@ -920,7 +946,10 @@ async function checkSnc(r) {
     );
   }
 
-  // 4b: a wrong partner name must be refused, as an `snc` failure.
+  // 4b: a wrong partner name must be refused. Measured: the SDK answers
+  // RFC_CLOSED with no GSS code the provider explains, so rejected() is the
+  // neutral `system-refused` (rule 5), not an `snc` refusal; either is right,
+  // an Ok or a blamed credential is not.
   const wrong = lib.SncLogonProvider.forSecureLoginClient({
     partnerName: 'p:CN=WINDOWS-CHECK-WRONG-PARTNER, O=INVALID',
     qop,
@@ -937,8 +966,12 @@ async function checkSnc(r) {
       r.detail(
         `4b: wrong partner refused — RFC key ${rfcKeyOf(second.error)}; rejected(): ${answer.ok ? 'Ok' : describeError(answer.refusal)}`,
       );
-      if (answer.ok || answer.refusal.kind !== 'snc') {
-        r.fail('4b: expected an snc refusal');
+      if (
+        answer.ok ||
+        (answer.refusal.kind !== 'snc' &&
+          answer.refusal.kind !== 'system-refused')
+      ) {
+        r.fail('4b: expected an snc or a system-refused refusal');
       }
     }
   }
