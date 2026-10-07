@@ -20,7 +20,7 @@ import type {
   CallbackServerFactory,
   IAuthorizationStrategy,
 } from '@mcp-abap-adt/interfaces-auth';
-import { announcer } from '../auth/announce';
+import { announcer, promptableUrl } from '../auth/announce';
 import { launchBrowser, promptForUrl } from '../auth/browserAuth';
 import {
   parseAuthority,
@@ -380,24 +380,38 @@ export class BrowserCallbackStrategy<TResult>
  * the default bind.
  */
 const uaaPasteHint =
-  (allowedHosts: readonly string[] | undefined) =>
+  (allowedHosts: unknown) =>
   (redirectUri: string): string => {
     const { protocol, port } = new URL(redirectUri);
-    const allowed = allowedHosts?.find(
-      (entry) => parseAuthority(entry) !== undefined,
-    );
-    const authority = allowed
-      ? parseAuthority(allowed)?.port === undefined
-        ? `${allowed}:${port}`
-        : allowed
+    const allowed = Array.isArray(allowedHosts)
+      ? (allowedHosts as unknown[]).find(
+          (entry): entry is string => parseAuthority(entry) !== undefined,
+        )
       : undefined;
-    return authority
-      ? '   If your browser is on another machine, copy the `code` from the ' +
-          `address bar after login and paste it at ${protocol}//${authority}/`
-      : '   If your browser is on another machine, open an SSH tunnel to this ' +
-          `one (ssh -L ${port}:localhost:${port} <this machine>), then copy ` +
-          'the `code` from the address bar after login and paste it at ' +
-          `${protocol}//localhost:${port}/`;
+    const authority =
+      allowed === undefined
+        ? undefined
+        : parseAuthority(allowed)?.port === undefined
+          ? `${allowed}:${port}`
+          : allowed;
+    // Shown only as `promptableUrl` admits it, like every URL in a prompt.
+    const shownAllowed =
+      authority === undefined
+        ? undefined
+        : promptableUrl(`${protocol}//${authority}/`);
+    if (shownAllowed !== undefined) {
+      return (
+        '   If your browser is on another machine, copy the `code` from the ' +
+        `address bar after login and paste it at ${shownAllowed}`
+      );
+    }
+    const shownLocal = promptableUrl(`${protocol}//localhost:${port}/`);
+    return (
+      '   If your browser is on another machine, open an SSH tunnel to this ' +
+      `one (ssh -L ${port}:localhost:${port} <this machine>), then copy ` +
+      'the `code` from the address bar after login and paste it at ' +
+      `${shownLocal ?? 'the callback port on localhost'}`
+    );
   };
 
 export function browserCallbackStrategy(
