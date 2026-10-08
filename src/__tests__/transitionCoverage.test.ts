@@ -8,14 +8,13 @@
  * `tokenProviderFailures.test.ts`, and the 4.x `timeoutMs` cases of
  * `callbackServer.test.ts` and `noLoginTimeout.test.ts`).
  *
- * Each deleted case is mapped to the test that covers its behaviour now — an
- * row test of the kind the case produced, or the test of what
- * replaced the piece — named by a title that must appear, as written, in a
+ * Each deleted case is mapped to the test that covers its behaviour now — a
+ * row test of the kind the case produced, or the test of what replaced the
+ * piece — named by a title that must appear, as written, in a
  * file under `src/__tests__`. A missing counterpart fails this suite.
  *
- * `ServiceKeyError` / `SessionDataError`) had no producer and has no
- * kind: its counterpart is the case proving a look-alike lends
- * nothing.
+ * `ServiceKeyError` and `SessionDataError` had no producer and have no
+ * kind: their counterpart is the case proving a look-alike lends nothing.
  */
 
 import { readdirSync, readFileSync, statSync } from 'node:fs';

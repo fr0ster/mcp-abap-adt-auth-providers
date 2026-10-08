@@ -1,8 +1,9 @@
 /**
- * `renewal` is required in every token provider's configuration (rule 7): a missing or unusable one is refused at construction —
- * `configuration` `required-fields-missing`, `fields: ['renewal']` —
- * read as own data like every other required collaborator, through every
- * constructor and every static factory. Nothing is called, nothing sent.
+ * `renewal` is required in every token provider's configuration (rule 7): a
+ * missing or unusable one is refused at construction — `configuration`
+ * `required-fields-missing`, `fields: ['renewal']` — read as own data like
+ * every other required collaborator, through every constructor and every static
+ * factory. Nothing is called, nothing sent.
  */
 
 import { describe, expect, it, jest } from '@jest/globals';

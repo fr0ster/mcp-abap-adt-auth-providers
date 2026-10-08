@@ -109,7 +109,8 @@ describe('a thrown error carries no foreign message', () => {
         code: 'ECONNREFUSED',
       });
       expect(text).not.toContain(MARKER);
-      // No cause — the original, nor a replacement (util.inspect prints causes).
+      // No cause — the original, nor a replacement (util.inspect prints
+      // causes).
       expect(error.cause).toBeUndefined();
       expect(inspect(error, { depth: null })).not.toContain(MARKER);
     },

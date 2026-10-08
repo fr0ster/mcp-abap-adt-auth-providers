@@ -42,8 +42,7 @@ describe('explicit sncLib', () => {
       new DefaultSncLibraryLocator(fakeSystem({ files: FILES }), X64).locate(),
     ).resolves.toEqual({ path: X64, archs: ['x64'] });
   });
-  // The
-  // architectures are facts, the path a diagnostic.
+  // The architectures are facts, the path a diagnostic.
   it('wrong architecture fails, nothing else tried', async () => {
     const thrown = await new DefaultSncLibraryLocator(
       fakeSystem({ files: FILES, registry: REGISTRY }),

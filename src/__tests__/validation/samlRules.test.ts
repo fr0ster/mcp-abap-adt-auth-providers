@@ -1,10 +1,10 @@
 /**
- * The SAML rule set as a whole: every one of the 56 rules has a test at its site
- * (through `validate()`, `resolveSignedElements` or `toBearerAssertion`)
- * asserting its `rule`, its fixed `check`, its own words and its diagnostic
- * or the absence of one — `expectSamlRefusal` in `helpers/samlRefusal.ts`.
- * This file checks the set: the fragments are unique within a check, and
- * every rule is asserted by some test.
+ * The SAML rule set as a whole: every one of the 56 rules has a test at its
+ * site (through `validate()`, `resolveSignedElements` or `toBearerAssertion`)
+ * asserting its `rule`, its fixed `check`, its own words and its diagnostic or
+ * the absence of one — `expectSamlRefusal` in `helpers/samlRefusal.ts`. This
+ * file checks the set: the fragments are unique within a check, and every rule
+ * is asserted by some test.
  */
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';

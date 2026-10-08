@@ -59,9 +59,10 @@ export function several(n: number): { readonly count: Count } | object {
 }
 
 /**
- * The validator's answer, or its throw classified with `validating-assertion`: a shipped validator's refusal is this copy's minted error and
- * passes as it is, diagnostics included; anything a custom validator throws
- * becomes what `classify` makes of it — never its message.
+ * The validator's answer, or its throw classified with `validating-assertion`:
+ * a shipped validator's refusal is this copy's minted error and passes as it
+ * is, diagnostics included; anything a custom validator throws becomes what
+ * `classify` makes of it — never its message.
  */
 export async function validateAssertion(
   validator: IAssertionValidator,

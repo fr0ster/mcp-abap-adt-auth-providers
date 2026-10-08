@@ -1,7 +1,8 @@
 /**
- * What a transport rejects its wait with on an `end` verdict: a failure holding the verdict's error when this copy minted
- * it, else `failed` — the composer re-mints what it latched; a
- * transport never passes on a value it cannot vouch for.
+ * What a transport rejects its wait with on an `end` verdict: a failure holding
+ * the verdict's error when this copy minted it, else `failed` — the composer
+ * re-mints what it latched; a transport never passes on a value it cannot vouch
+ * for.
  */
 
 import { AuthProviderFailure, isMinted } from '@mcp-abap-adt/auth-errors';

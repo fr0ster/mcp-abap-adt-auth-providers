@@ -1,8 +1,8 @@
 /**
- * A token provider whose every login and refresh is a promise the test
- * settles (the races of the shared renewal): the base class's renewal, commit queue,
- * quarantine and persistence reports run as shipped; only the two grant calls are
- * scripted.
+ * A token provider whose every login and refresh is a promise the test settles
+ * (the races of the shared renewal): the base class's renewal, commit queue,
+ * quarantine and persistence reports run as shipped; only the two grant calls
+ * are scripted.
  */
 
 import type { AttemptContext } from '@mcp-abap-adt/auth-errors';

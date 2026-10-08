@@ -5,7 +5,7 @@
  * the broker and the CLI.
  *
  * A row is named when a test's full name holds the row id as a whole token
- * (`` is not found in ``): the literal title of an `it(…)` /
+ * (`A1` is not found in `A10`): the literal title of an `it(…)` /
  * `it.each(…)(…)` / `test(…)` call, or of a `describe(…)` block around tests
  * (Jest's full name begins with it), read by plain scanning. While the spec is in the tree
  * its Appendix A row ids must equal this list, so a row added there fails

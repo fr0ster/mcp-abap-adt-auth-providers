@@ -7,9 +7,9 @@
  * never called.
  *
  * `onAnswerRejection` reads a collaborator's answer — the consumer's own
- * code: it is adopted as `await` would
- * adopt it, so a Promises/A+ thenable's rejection, or its `then` throwing,
- * reaches the handler like a native rejection.
+ * code: it is adopted as `await` would adopt it, so a Promises/A+ thenable's
+ * rejection, or its `then` throwing, reaches the handler like a native
+ * rejection.
  */
 
 import { describe, expect, it } from '@jest/globals';

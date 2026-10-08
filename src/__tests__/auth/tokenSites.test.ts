@@ -1,5 +1,6 @@
 /**
- * Every token site on the error contract's conversion point: real socket, axios unmocked.
+ * Every token site on the error contract's conversion point: real socket, axios
+ * unmocked.
  *
  * A server echoes every secret the request carried — each body secret and
  * the `Authorization: Basic` header, in each form a server might echo it (as
@@ -11,9 +12,9 @@
  * `privateKeyJwt`), without `authDebug` and with it:
  *
  * - the failure is an `AuthProviderFailure` of the site's operation —
- *   `request-failed` `refused` with the status and the registered code, or the site's problem for a `2xx` without what it needs
- *   — and no rendering of it holds the server's text or any form
- *   of a secret;
+ *   `request-failed` `refused` with the status and the registered code, or
+ *   the site's problem for a `2xx` without what it needs — and no rendering
+ *   of it holds the server's text or any form of a secret;
  * - exactly one line of the site's (beside the SAML sites' `error` line): by
  *   default the safe-facts line — for a `400` with 5.4.2's keys and values
  *   (before/after against 5.4.2's `logRefusedRequest`, copied as the oracle),
@@ -735,11 +736,11 @@ describe.each(SITES)('$name', (site) => {
 });
 
 /**
- * The snapshot through the real flow: an axios adapter answers `200` without `access_token`;
- * `sendTokenRequest` → the site → `rejectMissingToken`. The server's text is
- * never read (a read-counting getter stays at 0, in both modes), and a
- * hostile body reaches the site only as an empty snapshot or a minted
- * failure — never a marker, never a foreign error.
+ * The snapshot through the real flow: an axios adapter answers `200` without
+ * `access_token`; `sendTokenRequest` → the site → `rejectMissingToken`. The
+ * server's text is never read (a read-counting getter stays at 0, in both
+ * modes), and a hostile body reaches the site only as an empty snapshot or a
+ * minted failure — never a marker, never a foreign error.
  */
 describe('a 200 without access_token through an axios adapter', () => {
   const MARKER = 'HOSTILE-MARKER-91b2';

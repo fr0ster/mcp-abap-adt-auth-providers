@@ -7,9 +7,10 @@
  * the installer's machine-wide x86 `SNC_LIB` must not hide the x64 library
  * the registry points at.
  *
- * Nothing usable is an `AuthProviderFailure` of `snc` `library-not-found`, built here — the one approved source of the
- * `candidatePaths` diagnostic: each candidate's source, reason
- * and architectures as facts, its path as a diagnostic, index for index.
+ * Nothing usable is an `AuthProviderFailure` of `snc` `library-not-found`,
+ * built here — the one approved source of the `candidatePaths` diagnostic: each
+ * candidate's source, reason and architectures as facts, its path as a
+ * diagnostic, index for index.
  */
 
 import { win32 } from 'node:path';

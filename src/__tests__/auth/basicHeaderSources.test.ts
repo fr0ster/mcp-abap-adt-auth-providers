@@ -82,12 +82,12 @@ describe('a Basic header is built only where its secrets are known', () => {
 });
 
 /**
- * Shape rule 8 (enforced again by the shape-check script), scoped to `src/auth` and `src/providers` only: outside
- * `legacyBasic`, no `Basic ` header value (any case, at the start of a
- * string or template) and no base64 encoding of a value whose expression
- * names a secret. `clientSecretBasic` lives outside the scope;
- * `BasicAuthProvider` presents a credential to the ABAP system, not a token
- * request, and is out of scope.
+ * Shape rule 8 (enforced again by the shape-check script), scoped to `src/auth`
+ * and `src/providers` only: outside `legacyBasic`, no `Basic ` header value
+ * (any case, at the start of a string or template) and no base64 encoding of a
+ * value whose expression names a secret. `clientSecretBasic` lives outside the
+ * scope; `BasicAuthProvider` presents a credential to the ABAP system, not a
+ * token request, and is out of scope.
  */
 describe('shape rule 8 in src/auth and src/providers', () => {
   const scoped = files.filter(

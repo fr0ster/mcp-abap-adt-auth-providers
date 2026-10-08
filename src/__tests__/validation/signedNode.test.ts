@@ -87,13 +87,13 @@ describe('resolveSignedElements', () => {
     expect(element!.localName).toBe('Assertion');
   });
 
-  // The documented contract is PEM or base64 DER, and metadata carries the latter.
-  // Measured: xml-crypto throws DECODER routines::unsupported on bare base64,
-  // and the same bytes armoured verify — so this is a real conversion, not a
-  // formatting preference. Normalising is the caller's job, not
-  // resolveSignedElements's: the validator (a later task) proves and
-  // normalises each certificate with toPem at construction, so
-  // resolveSignedElements itself only ever receives PEM.
+  // The documented contract is PEM or base64 DER, and metadata carries the
+  // latter. Measured: xml-crypto throws DECODER routines::unsupported on bare
+  // base64, and the same bytes armoured verify — so this is a real conversion,
+  // not a formatting preference. Normalising is the caller's job, not
+  // resolveSignedElements's: the validator (a later task) proves and normalises
+  // each certificate with toPem at construction, so resolveSignedElements
+  // itself only ever receives PEM.
   it('accepts a certificate given as bare base64 DER', () => {
     const key = generateKeyMaterial();
     const der = key.certificatePem

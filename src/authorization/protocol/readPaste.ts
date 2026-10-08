@@ -53,11 +53,11 @@ export type PasteReading =
 const NOT_BARE = new Set(['?', '&', '=', '/', '#']);
 
 /**
- * Reads a pasted input for a login whose URL carried `expected` (always
- * one, because a provider adds its own when a configured URL has none). A bare code — none of `?`, `&`, `=`, `/`, `#` — is taken as
- * typed. Anything else is a redirected URL, parsed with `URL`: its query
- * must carry the expected `state` exactly once, and its code is its query's
- * one `code` (never a fragment's).
+ * Reads a pasted input for a login whose URL carried `expected` (always one,
+ * because a provider adds its own when a configured URL has none). A bare code
+ * — none of `?`, `&`, `=`, `/`, `#` — is taken as typed. Anything else is a
+ * redirected URL, parsed with `URL`: its query must carry the expected `state`
+ * exactly once, and its code is its query's one `code` (never a fragment's).
  */
 export function readPaste(expected: string, input: string): PasteReading {
   const trimmed = input.trim();

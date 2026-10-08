@@ -1,16 +1,15 @@
 /**
  * Marking a promise this package holds — but may never await — handled
- * (rule 1). A
- * consumer's method may answer a rejecting promise where none is expected:
- * an async logger, a request target's `header` or `cookies`, a callback
- * server's `waitForResult()` the strategy never reaches its `await` for.
- * Left alone, it raises `unhandledRejection`.
+ * (rule 1). A consumer's method may answer a rejecting promise where none is
+ * expected: an async logger, a request target's `header` or `cookies`, a
+ * callback server's `waitForResult()` the strategy never reaches its `await`
+ * for. Left alone, it raises `unhandledRejection`.
  *
  * Where a value crosses a trust boundary (a target's answer, a value being
  * classified) a foreign `then` is never called: `markHandled` touches plain
  * native promises only. A collaborator's answer that this package awaits is
- * awaited normally: the consumer's own
- * code, Bluebird or Q included, inside the guarded boundary.
+ * awaited normally: the consumer's own code, Bluebird or Q included, inside
+ * the guarded boundary.
  */
 
 import { isPromise, isProxy } from 'node:util/types';

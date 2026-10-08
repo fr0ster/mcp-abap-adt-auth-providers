@@ -1,10 +1,10 @@
 /**
- * What a token provider reports to its persistence strategy: one report per change of its credentials, made
- * from inside the commit queue in commit order; `awaited` decided when the
- * report starts; an awaited failure is the renewal's, a detached one is
- * logged and attributed to nothing; nothing is ever reported twice. The
- * grant calls are scripted (`ScriptedProvider`); the base class runs as
- * shipped. The detached failure under plain node, with the
+ * What a token provider reports to its persistence strategy: one report per
+ * change of its credentials, made from inside the commit queue in commit order;
+ * `awaited` decided when the report starts; an awaited failure is the
+ * renewal's, a detached one is logged and attributed to nothing; nothing is
+ * ever reported twice. The grant calls are scripted (`ScriptedProvider`); the
+ * base class runs as shipped. The detached failure under plain node, with the
  * unhandled-rejection recorder, is in `raceScenarios.test.ts`.
  */
 

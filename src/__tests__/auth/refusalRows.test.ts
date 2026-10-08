@@ -1,13 +1,13 @@
 /**
  * The refusals read through auth-errors' `classify` — the one
  * reader of a thrown value (`refusalFrom` and its class ladder
- * are gone with the classes) — and: no `what` string is left in
- * `src`, every site names a closed operation.
+ * are gone with the classes) — and shows that no `what` string is left in
+ * `src`: every site names a closed operation.
  *
- * Another own class and `TokenEndpointError` went with their
- * classes: a look-alike of a former class is `unknown`
- * (`tokenProviderFailures.test.ts`, "every throw is an AuthProviderFailure"), and `request-failed` is
- * built by `sendTokenRequest` itself (`tokenRequestSite.test.ts`).
+ * Another own class and `TokenEndpointError` went with their classes: a
+ * look-alike of a former class is `unknown` (`tokenProviderFailures.test.ts`,
+ * "every throw is an AuthProviderFailure"), and `request-failed` is built by
+ * `sendTokenRequest` itself (`tokenRequestSite.test.ts`).
  */
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';

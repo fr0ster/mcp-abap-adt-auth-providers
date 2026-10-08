@@ -54,9 +54,9 @@ export function addressInUse(error: unknown): boolean {
 }
 
 /**
- * The bind failed: a port someone else holds is `port-in-use`, with its words; any
- * other failure names only its allowlisted code. A failure already
- * decided (the second family's port taken) passes as it is.
+ * The bind failed: a port someone else holds is `port-in-use`, with its words;
+ * any other failure names only its allowlisted code. A failure already decided
+ * (the second family's port taken) passes as it is.
  */
 export function bindFailure(error: unknown, port: number): Error {
   if (error instanceof AuthProviderFailure) return error;

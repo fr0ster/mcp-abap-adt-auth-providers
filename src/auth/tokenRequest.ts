@@ -360,12 +360,12 @@ const PREPARED_MIN = 16;
 const PREPARED_EDGE = 4;
 
 /**
- * The one way a secret reaches a log line: called at the point of logging with the secret as a
- * separate value, never applied to a finished line. Without `authDebug`,
- * `<redacted, N chars>`; with it, a secret under 16 characters the same,
- * else its first 4 and last 4 characters around the marker,
- * `abcd…wxyz <redacted, N chars>`. N and the edges count whole characters
- * (code points), so no surrogate pair is split. No regex.
+ * The one way a secret reaches a log line: called at the point of logging with
+ * the secret as a separate value, never applied to a finished line. Without
+ * `authDebug`, `<redacted, N chars>`; with it, a secret under 16 characters the
+ * same, else its first 4 and last 4 characters around the marker, `abcd…wxyz
+ * <redacted, N chars>`. N and the edges count whole characters (code points),
+ * so no surrogate pair is split. No regex.
  */
 export function prepareSecret(value: string, authDebug: boolean): string {
   const characters = [...value];
@@ -458,7 +458,8 @@ export interface TokenRequestSite {
    */
   readonly basic?: LegacyBasic | undefined;
   /**
-   * The attempt's signal, passed to axios as `signal` on both paths. Absent by construction at every refresh site.
+   * The attempt's signal, passed to axios as `signal` on both paths. Absent by
+   * construction at every refresh site.
    */
   readonly signal?: AbortSignal | undefined;
   /** The options' `dispatched`: called right before the request leaves. */

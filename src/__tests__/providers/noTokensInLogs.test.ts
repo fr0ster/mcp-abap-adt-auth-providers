@@ -370,13 +370,14 @@ describe('no secret of a client authentication in the logs', () => {
 });
 
 /**
- * No message of a thrown value reaches a log line. A collaborator the consumer supplies — a client-authentication
- * strategy, a certificate loader, the interactive strategy, a device-code
- * presenter, a SAML validator, a persistence strategy (and the shipped one's
- * `write`), a browser launcher, an SNC locator or probe — may throw an error whose text holds a key, a passphrase or a
- * token, and so may a network failure. A line about a failure carries
- * `logFields` of its classified error — `{ error: reason, kind, status?,
- * diagnostics? }` — and nothing else of it: never its message.
+ * No message of a thrown value reaches a log line. A collaborator the consumer
+ * supplies — a client-authentication strategy, a certificate loader, the
+ * interactive strategy, a device-code presenter, a SAML validator, a
+ * persistence strategy (and the shipped one's `write`), a browser launcher, an
+ * SNC locator or probe — may throw an error whose text holds a key, a
+ * passphrase or a token, and so may a network failure. A line about a failure
+ * carries `logFields` of its classified error — `{ error: reason, kind,
+ * status?, diagnostics? }` — and nothing else of it: never its message.
  */
 describe('no message of a thrown error in the logs', () => {
   const MARKER = 'REVIEW_TEST_PRIVATE_KEY_7f3a9c';

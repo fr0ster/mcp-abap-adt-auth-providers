@@ -1,7 +1,8 @@
 /**
- * The renewal strategy where the point is what reached the server: real sockets through real axios, a local token
- * endpoint that holds or answers each request, and every claim about a
- * refresh token asserted on what the server received.
+ * The renewal strategy where the point is what reached the server: real sockets
+ * through real axios, a local token endpoint that holds or answers each
+ * request, and every claim about a refresh token asserted on what the server
+ * received.
  */
 
 import { afterEach, beforeEach, describe, expect, it } from '@jest/globals';

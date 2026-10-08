@@ -1,7 +1,8 @@
 /**
- * The secrets that bind an answer to the login that asked for it: the OAuth `state` a provider mints and the paste form's
- * token a listener mints — minted here and compared here in constant time.
- * None of them is logged or put in an error.
+ * The secrets that bind an answer to the login that asked for it: the OAuth
+ * `state` a provider mints and the paste form's token a listener mints — minted
+ * here and compared here in constant time. None of them is logged or put in an
+ * error.
  */
 
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';

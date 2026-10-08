@@ -1,9 +1,9 @@
 /**
  * Configuration throws: every one is an `AuthProviderFailure` of kind
- * `configuration`, its `case` and `fields` as the row says, the words
- * rendered by auth-errors 1.0.0, `allowed` where the row
- * sets it, and — for the redirect mismatch only — the two URIs as diagnostics, never in
- * `reason` or `hint`. A configured value never reaches the words.
+ * `configuration`, its `case` and `fields` as the row says, the words rendered
+ * by auth-errors 1.0.0, `allowed` where the row sets it, and — for the redirect
+ * mismatch only — the two URIs as diagnostics, never in `reason` or `hint`. A
+ * configured value never reaches the words.
  *
  * A constructor may throw it (a constructor is not a moment of the contract);
  * a token provider's `getTokens()` throws it as a failure

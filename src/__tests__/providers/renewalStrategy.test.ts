@@ -777,7 +777,7 @@ describe('logging', () => {
   });
 });
 
-describe('a refresh commit that fails ', () => {
+describe('a refresh commit that fails: the persistence report of the commit', () => {
   /** A persistence strategy whose every report fails. */
   const failing = () =>
     reportRecorder(() => {

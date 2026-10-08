@@ -1049,8 +1049,9 @@ describe('rule 8 on kinds: the remembered refusal', () => {
       const produced = (thrown as AuthProviderFailure).error;
       expect(produced.kind).toBe('client-certificate');
       expect(produced.facts).toEqual({ problem: 'expired' });
-      // Pinned material is checked before the strategy is asked, so each renewal refuses it afresh: the same error,
-      // minted again, and still nothing sent.
+      // Pinned material is checked before the strategy is asked, so each
+      // renewal refuses it afresh: the same error, minted again, and still
+      // nothing sent.
       for (let i = 0; i < 2; i += 1) {
         expect(
           refusalOf(await provider.authorize(t.requestTarget)),

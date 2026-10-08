@@ -1,10 +1,10 @@
 /**
- * The transports where the consumer's code returns the answer: `consumerAnswer({ receive })`, and the pair
- * `consumerHandoff({ provide })` for a consumer whose one call shows the URL
- * and returns the answer. Neither binds anything nor advertises a redirect
- * of its own; `open` settles at the abort itself — it holds nothing to
- * release. A refusal ends `unreadable-input`: the consumer's code is not
- * asked twice.
+ * The transports where the consumer's code returns the answer:
+ * `consumerAnswer({ receive })`, and the pair `consumerHandoff({ provide })`
+ * for a consumer whose one call shows the URL and returns the answer. Neither
+ * binds anything nor advertises a redirect of its own; `open` settles at the
+ * abort itself — it holds nothing to release. A refusal ends
+ * `unreadable-input`: the consumer's code is not asked twice.
  */
 
 import { authError } from '@mcp-abap-adt/auth-errors';

@@ -1464,7 +1464,8 @@ describe('Saml2PureProvider assertion validation', () => {
       cookieProvider,
     });
 
-    // A custom validator's throw is classified with `validating-assertion`: its own error and message are not handed back.
+    // A custom validator's throw is classified with `validating-assertion`: its
+    // own error and message are not handed back.
     const thrown = await rejectionOf(provider.getTokens());
     expect(thrown).toBeInstanceOf(AuthProviderFailure);
     expect((thrown as AuthProviderFailure).error).toMatchObject({
@@ -1744,7 +1745,7 @@ describe('Saml2 provider default validators', () => {
  * unnoticed. `toMatchObject` would miss extra fields altogether.
  */
 describe('Saml2PureProvider validation context', () => {
-  it('passes exactly the context required', async () => {
+  it('passes exactly the validation context', async () => {
     const redirectUri = 'http://localhost:61001/callback';
     const payload = Buffer.from('<Assertion/>', 'utf8').toString('base64');
     const logger: ILogger = {
@@ -1804,7 +1805,7 @@ describe('Saml2BearerProvider validation context', () => {
     jest.clearAllMocks();
   });
 
-  it('passes exactly the context required', async () => {
+  it('passes exactly the validation context', async () => {
     mockExchangeSaml.mockResolvedValue({ accessToken: 'AT', expiresIn: 900 });
 
     const redirectUri = 'http://localhost:61001/callback';

@@ -64,7 +64,8 @@ export async function refreshJwtToken(
   // secrets are named in the `authDebug` line's `sent`.
   const basic = prepared ? undefined : legacyBasic(clientId, `${clientSecret}`);
 
-  // A refresh site: its request never carries the attempt's signal, so `sendTokenRequest` hands this adapter none.
+  // A refresh site: its request never carries the attempt's signal, so
+  // `sendTokenRequest` hands this adapter none.
   const sendAsToday = () =>
     axios({
       method: 'post',

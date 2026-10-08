@@ -1,8 +1,8 @@
 /**
- * What a foreign throw becomes (rule 2): `classify` alone — this package's classes and their ladder are gone, so
- * every thrown value a site or a collaborator produces is read the same way.
- * The class cases that lived here moved to their row tests
- * (`transitionCoverage.test.ts` maps each one).
+ * What a foreign throw becomes (rule 2): `classify` alone — this package's
+ * classes and their ladder are gone, so every thrown value a site or a
+ * collaborator produces is read the same way. The class cases that lived here
+ * moved to their row tests (`transitionCoverage.test.ts` maps each one).
  */
 
 import { describe, expect, it } from '@jest/globals';

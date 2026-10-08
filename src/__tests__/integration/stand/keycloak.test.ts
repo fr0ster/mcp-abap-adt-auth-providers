@@ -180,12 +180,12 @@ describeKeycloak('OIDC providers against Keycloak', () => {
 });
 
 /**
- * Device polling against Keycloak's own device endpoint: the poll reads the failure's classified facts —
- * `authorization_pending` and `slow_down` keep it waiting (`slow_down` adding
- * 5 s), anything else ends it with that failure. Where the stand can produce
- * the answer: pending, slow_down and access_denied; an expired device code
- * (600 s) and a 400 without a body are covered on the axios mock
- * (`devicePoll.test.ts`).
+ * Device polling against Keycloak's own device endpoint: the poll reads the
+ * failure's classified facts — `authorization_pending` and `slow_down` keep it
+ * waiting (`slow_down` adding 5 s), anything else ends it with that failure.
+ * Where the stand can produce the answer: pending, slow_down and access_denied;
+ * an expired device code (600 s) and a 400 without a body are covered on the
+ * axios mock (`devicePoll.test.ts`).
  */
 describeKeycloak('device polling against Keycloak', () => {
   /** A device authorization and a logger that approves (or denies) on the first wait. */

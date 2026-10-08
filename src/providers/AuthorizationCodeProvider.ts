@@ -84,9 +84,10 @@ const unusableAuthorizationUrl = () =>
 
 /**
  * The `redirect_uri` a pre-built `authorizationUrl` declares, or `null`. A URL
- * that does not parse — or carries surrounding whitespace, which the URL
- * parser would strip but the appended `state` would follow — is a configuration error,
- * case `invalid-value`, naming `authorizationUrl` — never the value: refused, not trimmed (the provider does not guess).
+ * that does not parse — or carries surrounding whitespace, which the URL parser
+ * would strip but the appended `state` would follow — is a configuration error,
+ * case `invalid-value`, naming `authorizationUrl` — never the value: refused,
+ * not trimmed (the provider does not guess).
  */
 function declaredRedirectOf(prebuilt: string): string | null {
   if (prebuilt !== prebuilt.trim()) throw unusableAuthorizationUrl();

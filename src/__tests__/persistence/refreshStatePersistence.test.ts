@@ -1,8 +1,8 @@
 /**
- * `refreshStatePersistence(write, options)` alone: the logical refresh state, pending
- * delivery of a failed new refresh token, `onWriteFailure`, and one write at
- * a time in report order — detached reports included. Reports are built by
- * hand; no provider runs here.
+ * `refreshStatePersistence(write, options)` alone: the logical refresh state,
+ * pending delivery of a failed new refresh token, `onWriteFailure`, and one
+ * write at a time in report order — detached reports included. Reports are
+ * built by hand; no provider runs here.
  */
 
 import { describe, expect, it } from '@jest/globals';

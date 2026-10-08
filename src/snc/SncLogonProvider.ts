@@ -6,10 +6,10 @@
  * It opens no connection and loads no SAP library. No collaborator is
  * defaulted: forSecureLoginClient is the recipe.
  *
- * Its four moments run inside `AuthProviderBase`'s boundary:
- * anything that escapes a body is `unknown` with the moment's SNC operation —
- * "the SNC provider failed while resolving the SNC library (unknown error)". Every refusal is minted; a library path is a diagnostic,
- * never a word.
+ * Its four moments run inside `AuthProviderBase`'s boundary: anything that
+ * escapes a body is `unknown` with the moment's SNC operation — "the SNC
+ * provider failed while resolving the SNC library (unknown error)". Every
+ * refusal is minted; a library path is a diagnostic, never a word.
  */
 
 import {
@@ -275,7 +275,8 @@ export class SncLogonProvider extends AuthProviderBase {
           break;
         }
       } catch (error) {
-        // An abort is the consumer's, not the probe's failure: no line is logged.
+        // An abort is the consumer's, not the probe's failure: no line is
+        // logged.
         throwIfAborted(signal);
         // A probe that cannot tell names nothing; the logon goes on.
         const fields = logFields(readFailure(error, 'probing-snc-product'));

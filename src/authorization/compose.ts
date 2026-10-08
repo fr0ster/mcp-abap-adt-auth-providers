@@ -301,7 +301,8 @@ export function composeAuthorization<TPayload>(
           }),
         );
       }
-      // A builder's throw passes as it is (a configuration failure, OIDC discovery).
+      // A builder's throw passes as it is (a configuration failure, OIDC
+      // discovery).
       const url: unknown = await request.buildAuthorizationUrl(
         redirectUri ?? '',
       );

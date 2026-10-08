@@ -1,11 +1,11 @@
 /**
- * Type test, compiled by `test:check` and run by nothing (load-bearing): at a SAML site the builder call is made inside `refuse`,
- * and the rule fixes both its check and the one diagnostic it may carry
- * (`SamlDiagnosticOf<R>`). `refuse` takes a type that
- * names no rule, so the rule is inferred from the literal at the site — were
- * it the union of every rule's error, the rule would widen and the compiler
- * would check nothing (each `@ts-expect-error` below would then be unused,
- * which fails the build).
+ * Type test, compiled by `test:check` and run by nothing (load-bearing): at a
+ * SAML site the builder call is made inside `refuse`, and the rule fixes both
+ * its check and the one diagnostic it may carry (`SamlDiagnosticOf<R>`).
+ * `refuse` takes a type that names no rule, so the rule is inferred from the
+ * literal at the site — were it the union of every rule's error, the rule would
+ * widen and the compiler would check nothing (each `@ts-expect-error` below
+ * would then be unused, which fails the build).
  */
 import { authError } from '@mcp-abap-adt/auth-errors';
 import { refuse } from '../../validation/samlRefusal';

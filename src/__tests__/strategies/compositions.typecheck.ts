@@ -1,12 +1,12 @@
 /**
- * Type test, compiled by `test:check` and run by nothing: the calls the server and the
- * auth-broker CLI make today compile unchanged; the options 6.0.0 removes
- * (`callbackServer`, `host`, `allowedHosts`, `stateGate`, `openUrl`, the
- * manual and external strategies' optional `redirectUri`,
- * `manualPasscodeStrategy`'s `redirectUri`) are compile errors; a browser is
- * an `IBrowser`, never a name (`browser: 'chrome'` is a compile error); `BrowserCallbackStrategy` and the
- * callback server factories are gone from the package root; the parts and
- * the composer are there.
+ * Type test, compiled by `test:check` and run by nothing: the calls the server
+ * and the auth-broker CLI make today compile unchanged; the options 6.0.0
+ * removes (`callbackServer`, `host`, `allowedHosts`, `stateGate`, `openUrl`,
+ * the manual and external strategies' optional `redirectUri`,
+ * `manualPasscodeStrategy`'s `redirectUri`) are compile errors; a browser is an
+ * `IBrowser`, never a name (`browser: 'chrome'` is a compile error);
+ * `BrowserCallbackStrategy` and the callback server factories are gone from the
+ * package root; the parts and the composer are there.
  */
 
 import type {

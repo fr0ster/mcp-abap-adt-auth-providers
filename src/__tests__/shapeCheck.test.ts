@@ -1,7 +1,7 @@
 /**
  * The shape check of the auth error contract, as
  * `lint:check` runs it here — rules 1–8, the base by declaration: its copy is
- * the canonical one (R1), each fixture is refused by exactly its own rule, a
+ * the canonical one, each fixture is refused by exactly its own rule, a
  * conforming provider and this package's own source pass, and every entry of
  * the diagnostic site list is an approved extraction site that is used.
  */

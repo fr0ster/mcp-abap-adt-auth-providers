@@ -1,12 +1,12 @@
 /**
  * What a presentation answers is the consumer's own code: adopted as `await`
- * would adopt it, so a native promise or any Promises/A+ thenable that
- * rejects (or whose `then` throws) is a presentation failure, and one that
- * never settles is a presentation that succeeded. A failure ends nothing:
- * the login waits for its answer (here the transport's, after 200 ms), and
- * nothing raises `unhandledRejection`. Also: a transport whose `answer()` rejects at once, the
- * presentation throwing synchronously, leaves no unhandled rejection. Run
- * under plain node in a child process, bounded by the test.
+ * would adopt it, so a native promise or any Promises/A+ thenable that rejects
+ * (or whose `then` throws) is a presentation failure, and one that never
+ * settles is a presentation that succeeded. A failure ends nothing: the login
+ * waits for its answer (here the transport's, after 200 ms), and nothing raises
+ * `unhandledRejection`. Also: a transport whose `answer()` rejects at once, the
+ * presentation throwing synchronously, leaves no unhandled rejection. Run under
+ * plain node in a child process, bounded by the test.
  */
 
 import { describe, expect, it } from '@jest/globals';

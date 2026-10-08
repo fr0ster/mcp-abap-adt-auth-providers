@@ -1799,7 +1799,7 @@ describe("the signed-Response validator (Saml2PureProvider's default)", () => {
 
   // Diagnostics: a document value a rule may show is
   // admitted by the builder or dropped — never quoted into the words. The
-  // characters that made quoting necessary (a newline smuggled in as &#10)
+  // characters that made quoting necessary (a newline smuggled in as &#10;)
   // are refused, not escaped, and the error is still minted.
 
   // Read before any signature is verified, so attacker-chosen.

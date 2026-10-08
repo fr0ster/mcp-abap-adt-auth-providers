@@ -1,10 +1,10 @@
 /**
- * The sweep of `src`: no `new Error(` and no construction of
- * any of this package's error classes — the thirteen of the old ladder and the two of
- * `callbackScopeError.ts`, and SNC's `SncLibraryNotFoundError` — is left.
- * Every throw is an `AuthProviderFailure` of its row's kind, built at its
- * site, or the rethrow of one; and no refusal is built from free words
- * (`oops(`, whose last caller is gone).
+ * The sweep of `src`: no `new Error(` and no construction of any of this
+ * package's error classes — the thirteen of the old ladder and the two of
+ * `callbackScopeError.ts`, and SNC's `SncLibraryNotFoundError` — is left. Every
+ * throw is an `AuthProviderFailure` of its row's kind, built at its site, or
+ * the rethrow of one; and no refusal is built from free words (`oops(`, whose
+ * last caller is gone).
  *
  * The classes themselves are deleted (`transitionCoverage.test.ts`).
  */

@@ -1,8 +1,9 @@
 /**
- * `authDebug` reaches the token sites through a real provider, constructed with `authDebug: true`
- * and with it absent, one site per provider. With it, the site's one line is
- * `[<operation>] token endpoint said` with `sent`; without it, the safe-facts
- * line. The provider's grant reaches the failure's facts the same way.
+ * `authDebug` reaches the token sites through a real provider, constructed with
+ * `authDebug: true` and with it absent, one site per provider. With it, the
+ * site's one line is `[<operation>] token endpoint said` with `sent`; without
+ * it, the safe-facts line. The provider's grant reaches the failure's facts the
+ * same way.
  *
  * axios is mocked at the module boundary, so every real site runs; the token
  * endpoint answers `400 invalid_grant`.

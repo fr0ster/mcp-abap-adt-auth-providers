@@ -1,9 +1,10 @@
 /**
- * The named compositions: each keeps today's name and options
- * and composes the parts the table names — checked by what each does on a
- * real port or an injected reader: the presentation (where the URL goes),
- * the transport (what it binds and advertises, what it reads), the protocol
- * (what it accepts). The manual and external ones require `redirectUri`; `manualPasscodeStrategy` takes none.
+ * The named compositions: each keeps today's name and options and composes the
+ * parts the table names — checked by what each does on a real port or an
+ * injected reader: the presentation (where the URL goes), the transport (what
+ * it binds and advertises, what it reads), the protocol (what it accepts). The
+ * manual and external ones require `redirectUri`; `manualPasscodeStrategy`
+ * takes none.
  */
 
 import {

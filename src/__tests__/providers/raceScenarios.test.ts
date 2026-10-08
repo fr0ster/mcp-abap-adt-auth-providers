@@ -1,9 +1,9 @@
 /**
- * The races of the shared renewal and the drain, run under plain node in a child process with an
- * unhandled-rejection recorder (Jest's own handlers would hide one): the
- * doomed join, a refresh cut after dispatch (real axios, real socket), the
- * drain chain, and the commit order. Each reports what it observed; every
- * one must leave no unhandled rejection behind.
+ * The races of the shared renewal and the drain, run under plain node in a
+ * child process with an unhandled-rejection recorder (Jest's own handlers would
+ * hide one): the doomed join, a refresh cut after dispatch (real axios, real
+ * socket), the drain chain, and the commit order. Each reports what it
+ * observed; every one must leave no unhandled rejection behind.
  */
 
 import { describe, expect, it } from '@jest/globals';

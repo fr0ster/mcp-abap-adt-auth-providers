@@ -1,8 +1,9 @@
 /**
- * How a callback listener lets go of its connections, with no timer of the package's choosing. Measured: a server's
- * `close()` destroys a parsed connection even mid-flush of a large response
- * to a client that does not read, and a pending write keeps the loop alive
- * whatever `unref()` says — so nothing here waits for a connection to end.
+ * How a callback listener lets go of its connections, with no timer of the
+ * package's choosing. Measured: a server's `close()` destroys a parsed
+ * connection even mid-flush of a large response to a client that does not read,
+ * and a pending write keeps the loop alive whatever `unref()` says — so nothing
+ * here waits for a connection to end.
  */
 
 import type * as http from 'node:http';

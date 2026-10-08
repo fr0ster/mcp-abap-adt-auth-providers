@@ -20,11 +20,12 @@ const DSIG_NS = 'http://www.w3.org/2000/09/xmldsig#';
  * PEM in, PEM out; bare base64 DER gets its armour — and the result is proved
  * to be a certificate before anything uses it.
  *
- * The documented contract is that `idpCertificates` accepts either, and a consumer copying
- * `<X509Certificate>` out of identity-provider metadata has bare base64 DER in
- * their hand — the armour is not in the metadata. `xml-crypto` accepts only
- * PEM or a Buffer: measured, a bare base64 certificate makes OpenSSL throw
- * `DECODER routines::unsupported`, while the same bytes re-armoured verify.
+ * The documented contract is that `idpCertificates` accepts either, and a
+ * consumer copying `<X509Certificate>` out of identity-provider metadata has
+ * bare base64 DER in their hand — the armour is not in the metadata.
+ * `xml-crypto` accepts only PEM or a Buffer: measured, a bare base64
+ * certificate makes OpenSSL throw `DECODER routines::unsupported`, while the
+ * same bytes re-armoured verify.
  *
  * Left unnormalised that throw would be swallowed by the verification loop and
  * reported as "the signature does not verify against any configured
@@ -171,7 +172,8 @@ function resolveOne(
       getCertFromKeyInfo: () => null,
     });
     // loadSignature throws for a malformed Signature. xml-crypto's message
-    // embeds the offending element — document text — and reaches nothing: the rule says what failed.
+    // embeds the offending element — document text — and reaches nothing: the
+    // rule says what failed.
     try {
       verifier.loadSignature(signatureNode);
     } catch {

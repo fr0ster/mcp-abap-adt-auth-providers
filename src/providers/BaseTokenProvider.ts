@@ -77,14 +77,14 @@ import {
 import { needsSentDecision, readDecision } from '../renewal/decision';
 
 /**
- * The consumer's opt-in to naming the request's secrets in its debug line: with `authDebug: true` — `true` itself, nothing else — a failed
- * token request, or an answer without a token, writes its one line with the
- * safe facts plus `sent`, each secret the request carried by name, at most
- * its first and last 4 characters (`abcd…wxyz <redacted, N chars>`; under 16
- * characters its length only). Without it the line carries the safe facts
- * only. The server's own text (`error_description`, `error_uri`) is never
- * read, logged or kept, either way. Never read from the environment, never
- * defaulted on.
+ * The consumer's opt-in to naming the request's secrets in its debug line: with
+ * `authDebug: true` — `true` itself, nothing else — a failed token request, or
+ * an answer without a token, writes its one line with the safe facts plus
+ * `sent`, each secret the request carried by name, at most its first and last 4
+ * characters (`abcd…wxyz <redacted, N chars>`; under 16 characters its length
+ * only). Without it the line carries the safe facts only. The server's own text
+ * (`error_description`, `error_uri`) is never read, logged or kept, either way.
+ * Never read from the environment, never defaulted on.
  */
 export interface TokenProviderDebug {
   readonly authDebug?: boolean | undefined;
@@ -161,10 +161,10 @@ type StepEnd =
     };
 
 /**
- * A step's result could not be installed (a subclass's `updateTokens`
- * threw): carried out of the commit so that a refresh step can tell it from
- * a failure after the install — the awaited persistence report, which ends the renewal instead. Never thrown out of the
- * provider: the step unwraps `thrown`.
+ * A step's result could not be installed (a subclass's `updateTokens` threw):
+ * carried out of the commit so that a refresh step can tell it from a failure
+ * after the install — the awaited persistence report, which ends the renewal
+ * instead. Never thrown out of the provider: the step unwraps `thrown`.
  */
 class InstallFailed {
   constructor(readonly thrown: unknown) {}
@@ -837,8 +837,8 @@ export abstract class BaseTokenProvider
    * holding a 401 — the server refused a token the clock still accepts — has
    * no other way to get a different one. What this obtains replaces the cache.
    *
-   * With `options.signal`, this call is one waiter of the shared renewal: its abort rejects this call only, `interactive-login`
-   * `aborted`.
+   * With `options.signal`, this call is one waiter of the shared renewal: its
+   * abort rejects this call only, `interactive-login` `aborted`.
    *
    * @throws AuthProviderFailure — and nothing else
    */
@@ -1192,12 +1192,12 @@ export abstract class BaseTokenProvider
   }
 
   /**
-   * One refresh step. Once dispatched it runs on whatever its waiters do: the abort handler acts only after `dispatched()` — it
-   * records the observation, then applies `ifCut` (`discard` adds the token
-   * to `discarded` synchronously and queues its clearing step and report; `keep` does
-   * nothing). An abort before dispatch touches no refresh token. The answer,
-   * when it comes, is still offered to the commit queue under this step's
-   * generation.
+   * One refresh step. Once dispatched it runs on whatever its waiters do: the
+   * abort handler acts only after `dispatched()` — it records the observation,
+   * then applies `ifCut` (`discard` adds the token to `discarded` synchronously
+   * and queues its clearing step and report; `keep` does nothing). An abort
+   * before dispatch touches no refresh token. The answer, when it comes, is
+   * still offered to the commit queue under this step's generation.
    */
   private async refreshStep(
     ifCut: SentRefreshToken,
@@ -1207,7 +1207,8 @@ export abstract class BaseTokenProvider
   ): Promise<StepEnd> {
     const { signal } = attempt;
     const spent = this.refreshToken;
-    // The provider's own correctness, checked here whatever led to the step: an empty or discarded refresh token is never dispatched.
+    // The provider's own correctness, checked here whatever led to the step: an
+    // empty or discarded refresh token is never dispatched.
     if (
       typeof spent !== 'string' ||
       spent === '' ||
@@ -1503,18 +1504,18 @@ export abstract class BaseTokenProvider
   }
 
   /**
-   * One report to the persistence strategy, from inside a commit. `awaited` is decided now, as the report starts: true while the
-   * attempt that made the commit still has a live waiter. An awaited
-   * report is awaited — a collaborator's answer, adopted as `await` adopts
-   * it — and its throw or rejection is the renewal's failure (`unknown`,
-   * `persisting-tokens`), also logged as detached when every waiter left
-   * while it ran; never a failed step, so a store write that fails starts
-   * no login. A detached one is called and not awaited: its throw or
-   * rejection is logged in fixed words and goes no further. `make` builds a
-   * fresh report each time — a strategy changing it changes nothing held.
-   * Building an awaited report (`getAuthType()` is a subclass's) is the
-   * provider's own work: its throw ends the renewal as it is.
-   * The provider never reports the same change twice.
+   * One report to the persistence strategy, from inside a commit. `awaited` is
+   * decided now, as the report starts: true while the attempt that made the
+   * commit still has a live waiter. An awaited report is awaited — a
+   * collaborator's answer, adopted as `await` adopts it — and its throw or
+   * rejection is the renewal's failure (`unknown`, `persisting-tokens`), also
+   * logged as detached when every waiter left while it ran; never a failed
+   * step, so a store write that fails starts no login. A detached one is called
+   * and not awaited: its throw or rejection is logged in fixed words and goes
+   * no further. `make` builds a fresh report each time — a strategy changing it
+   * changes nothing held. Building an awaited report (`getAuthType()` is a
+   * subclass's) is the provider's own work: its throw ends the renewal as it
+   * is. The provider never reports the same change twice.
    */
   private async reportChange(
     make: (awaited: boolean) => PersistenceReport,
@@ -1629,9 +1630,9 @@ export abstract class BaseTokenProvider
   }
 
   /**
-   * The refresh token held, for a result this provider returns: a usable one, else none. A discarded one is not handed out
-   * — it is never submitted again — even while its clearing step still
-   * waits in the queue.
+   * The refresh token held, for a result this provider returns: a usable one,
+   * else none. A discarded one is not handed out — it is never submitted again
+   * — even while its clearing step still waits in the queue.
    */
   private heldRefresh(): string | undefined {
     const held = this.refreshToken;

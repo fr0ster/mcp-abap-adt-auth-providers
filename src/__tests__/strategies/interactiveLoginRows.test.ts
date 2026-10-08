@@ -1,9 +1,8 @@
 /**
- * Every
- * end of an interactive login is an `AuthProviderFailure` of
- * `interactive-login`, thrown by its real producer here — kind, facts and
- * words (verbatim) per row. The port validation is a `configuration` case; the timeout options are gone with the
- * built-in timeout — their type tests are in
+ * Every end of an interactive login is an `AuthProviderFailure` of
+ * `interactive-login`, thrown by its real producer here — kind, facts and words
+ * (verbatim) per row. The port validation is a `configuration` case; the
+ * timeout options are gone with the built-in timeout — their type tests are in
  * noLoginTimeout.typecheck.ts.
  */
 

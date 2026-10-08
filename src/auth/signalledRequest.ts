@@ -1,9 +1,10 @@
 /**
- * The attempt's signal on an `AuthorizationRequest` (interfaces-auth 6.0.0): a token provider sets it for every login it hands a strategy;
- * the shipped strategies combine it with their own option signal, so either
- * one ends the login. A consumer's strategy must honour it too, and settle
- * its `authorize` only once it has released what it holds (a socket, a
- * reader): the next login waits for that.
+ * The attempt's signal on an `AuthorizationRequest` (interfaces-auth 6.0.0): a
+ * token provider sets it for every login it hands a strategy; the shipped
+ * strategies combine it with their own option signal, so either one ends the
+ * login. A consumer's strategy must honour it too, and settle its `authorize`
+ * only once it has released what it holds (a socket, a reader): the next login
+ * waits for that.
  */
 
 import { readSafely } from './knownCodes';

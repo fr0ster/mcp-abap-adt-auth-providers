@@ -1,6 +1,7 @@
 /**
- * The one HTTP listener behind `loopback6`, `loopback4` and `loopback`: payload-agnostic, parameterised by where it binds
- * and what it advertises. Not exported from the package.
+ * The one HTTP listener behind `loopback6`, `loopback4` and `loopback`:
+ * payload-agnostic, parameterised by where it binds and what it advertises. Not
+ * exported from the package.
  *
  * One owner, one release point. The sockets belong to one `open`: released
  * on the first terminal outcome — `use` returning or throwing, an `end`
