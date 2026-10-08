@@ -3146,8 +3146,15 @@ Promises/A+ thenable), while the call is running:
 - one `error` line, `Failed to present the authorization URL:` and
   `logFields(readFailure(error, 'presenting-authorization-url'))` — fixed
   words, no URL;
-- the URL prompted once, to stderr only (C8, `promptableUrl`), with
-  `waitingOn` when a listener waits; the logger gets the fixed line;
+- the fallback is the presentation's, not the composer's: `openInBrowser`
+  and `showUrl` prompt the URL once, to stderr only (C8, `promptableUrl`),
+  with `waitingOn` when a listener waits, the logger getting the fixed
+  line; `consumerPresentation` prints **no URL** — the consumer chose its
+  own UI because its stderr may be collected — and logs only the fixed
+  failure line; its optional `onFailure(url, context)` is the consumer's
+  own fallback, run once, its failure logged in fixed words and nothing
+  more. Tests: a `show` that throws and one that rejects, stderr and a
+  capturing logger both checked for the URL and its `state` — absent;
 - the login keeps waiting. It ends on its result, the IdP's refusal or a
   signal; no timer.
 
