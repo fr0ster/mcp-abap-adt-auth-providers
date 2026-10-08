@@ -20,8 +20,10 @@ parse. And nothing is bounded by a timeout of the package's choosing any more:
 your `AbortSignal` is the bound. What a consumer on 5.x must now do:
 
 - **Install the contract it is read with.** `@mcp-abap-adt/auth-errors`
-  (`^2.0.1`) to read errors; `@mcp-abap-adt/interfaces-auth` (`^7.3.0`) is
-  what every provider here implements. The consumers on the same contract
+  (`^2.1.1`) to read errors; `@mcp-abap-adt/interfaces-auth` (`^7.5.0`) is
+  what every provider here implements, and where the parts of an
+  authorization strategy (`IAuthorizationPresentation`, `IAnswerTransport`,
+  `IAuthorizationProtocol`, `IBrowser`) are declared. The consumers on the same contract
   are **released after this 6.0.0, not yet available**:
   `@mcp-abap-adt/connection` 13.0.0 (its suites run against the published
   auth-providers 6.0.0), `@mcp-abap-adt/auth-stores` 4.0.0 and
@@ -114,8 +116,8 @@ your `AbortSignal` is the bound. What a consumer on 5.x must now do:
 - **`invalid-value` is a configuration case**, "a configured value cannot be
   used: `<fields>`": an unparseable `authorizationUrl` (5.x
   `required-fields-missing`), a `persistence` without a callable `report`,
-  `refreshStatePersistence`'s `onWriteFailure` or `write`, a `callbackServer`
-  without `expectState` (below).
+  `refreshStatePersistence`'s `onWriteFailure` or `write`, a part of an
+  authorization strategy that cannot be used (below).
 - **Catch with `readFailure`, never `instanceof`.** Every throw of this
   package — a constructor's configuration fault, a factory's, a loader's,
   `getTokens()` / `refreshTokens()` — is an `AuthProviderFailure`. Read what
@@ -202,32 +204,30 @@ your `AbortSignal` is the bound. What a consumer on 5.x must now do:
   passing nothing now waits until it aborts** — a login until its result or
   the identity provider's refusal, a request until the server or the OS ends
   it. See [Cancelling a login](#cancelling-a-login).
-- **A browser that does not open is no longer an error.** A launcher that
-  throws or rejects (`openUrl`, or the built-in one) gets one log line in
-  fixed words and the authorization URL as a prompt, and the login **keeps
-  waiting**: the callback still listens, so the URL shown — the only way to
-  finish where no browser can be opened (SSH, a host without a desktop) — is
-  live. The `browser-launch-failed` outcome is gone, and a launch failure
-  never ends the login; code that matched it must stop. Bound the login with a
-  `signal` (`AbortSignal.timeout(ms)`), or it ends on its result, the
-  identity provider's refusal or your abort.
+- **A browser that does not open is no longer an error.** A browser that
+  throws or rejects (yours, or a shipped one) gets one log line in fixed
+  words and the authorization URL as a prompt on stderr, and the login
+  **keeps waiting**: the callback still listens, so the URL shown — the only
+  way to finish where no browser can be opened (SSH, a host without a
+  desktop) — is live. The `browser-launch-failed` outcome is gone, and a
+  launch failure never ends the login; code that matched it must stop. Bound
+  the login with a `signal` (`AbortSignal.timeout(ms)`), or it ends on its
+  result, the identity provider's refusal or your abort.
 - **A login is bound to its attempt (login CSRF).** Every URL
   `AuthorizationCodeProvider` and `OidcBrowserProvider` build carries `state`
-  (and, for UAA, a PKCE challenge, S256), and the shipped callback transports
-  settle only a callback — a code or an `?error=` — with that `state`. **A
-  consumer's `callbackServer` for `browserCallbackStrategy` /
-  `oidcCallbackStrategy` must implement `expectState`** (interfaces-auth
-  7.3.0), or the login is refused before anything opens (`configuration`
-  `invalid-value`, `fields: ['callbackServer']`); a consumer's redirect
-  strategy must check `state` itself. **The callback listens on loopback
-  only**, and answers only `Host: localhost` / `127.0.0.1` / `[::1]` with its
-  port, the loopback names only from a loopback peer: a browser on another
-  machine reaches it through an SSH tunnel, or through `host` and
-  `allowedHosts` you set — which lets every client reaching that authority
-  finish the login with its own code. The UAA paste form's `/submit`
-  needs the form's token. A direct `new BrowserCallbackStrategy` takes a
-  required `stateGate`. See [Login CSRF: `state`, PKCE and where the callback
-  listens](#login-csrf-state-pkce-and-where-the-callback-listens).
+  (and, for UAA, a PKCE challenge, S256); a configured `authorizationUrl`
+  without `state` gets the provider's, which the identity provider must echo.
+  The shipped protocols accept a redirect — a code or an `?error=` — only with
+  that `state`; a consumer's own strategy that receives the redirect itself
+  must check `state` itself. **The shipped listeners bind loopback only**,
+  and answer only `Host: localhost` / `127.0.0.1` / `[::1]` with their port,
+  from a loopback peer: a browser on another machine reaches them through an
+  SSH tunnel, or through a transport of your own. The paste page's `/submit`
+  needs the form's token. See [Login CSRF: `state`, PKCE and where the
+  callback listens](#login-csrf-state-pkce-and-where-the-callback-listens),
+  and [Interactive login: strategies by
+  composition](#interactive-login-strategies-by-composition) below for what
+  changed in the strategies.
 - **Your strategies end on the request's signal.** Every
   `AuthorizationRequest` carries `signal`. `externalCodeStrategy`'s `provide`
   is `(authorizationUrl, signal)`, and a manual strategy's `read(prompt,
@@ -304,9 +304,156 @@ facts that remain are listed with it):
 - the diagnostics of an error that crosses another installed copy of
   auth-errors, or that was not minted (its kind and facts stay);
 - every built-in login timeout and its message ("Authentication timeout
-  after N seconds", "did not arrive in time").
+  after N seconds", "did not arrive in time");
+- the authorization URL in a log line: it is prompted on stderr only, and
+  the logger gets "the authorization URL was shown";
+- the log lines of 5.x's `'auto'` browser, and the `DISPLAY=:0` it set: a
+  browser has no logger, and the package writes nothing into
+  `process.env`;
+- the `open` and `express` dependencies.
+
+### Interactive login: strategies by composition
+
+An authorization strategy is now **composed of three parts**, each a
+contract of `@mcp-abap-adt/interfaces-auth` 7.4.0: a **presentation** (how
+the URL reaches the user), a **transport** (how the user's answer comes
+back) and a **protocol** (what an answer is and how it is checked). The
+named strategies are compositions of the shipped parts, under the same
+names (see [Composing a strategy from parts](#composing-a-strategy-from-parts)).
+What a consumer on 5.x must now do:
+
+- **`browserCallbackStrategy` / `oidcCallbackStrategy` /
+  `samlCallbackStrategy` with `port`, `signal`, `remoteHint`: no change.**
+  `browser` is an `IBrowser`, no longer a string — no browser is named by a
+  string anywhere — and you pick it for the platform you run on:
+
+  | 5.x | Linux | macOS | Windows |
+  |---|---|---|---|
+  | `'system'`, `'auto'` | `linuxDefaultBrowser()` | `macDefaultBrowser()` | `windowsDefaultBrowser()` |
+  | `'chrome'` | `linuxBrowser('google-chrome')` | `macBrowser('Google Chrome')` | `windowsBrowser('chrome')` |
+  | `'edge'`, `'msedge'` | `linuxBrowser('microsoft-edge')` | `macBrowser('Microsoft Edge')` | `windowsBrowser('msedge')` |
+  | `'firefox'` | `linuxBrowser('firefox')` | `macBrowser('Firefox')` | `windowsBrowser('firefox')` |
+  | `'none'`, `'headless'`, absent | no `browser` | no `browser` | no `browser` |
+
+  ```typescript
+  // 5.x: browserCallbackStrategy({ browser: 'system' })
+  browserCallbackStrategy({ browser: linuxDefaultBrowser() })
+  ```
+
+  **There is no platform check:** each factory is one fixed launch, and run
+  on another OS it simply fails to start; the URL is then shown once on
+  stderr and the login waits. A consumer whose configuration holds a browser
+  name maps it itself.
+- **No fallback chain.** 5.x's Linux launcher tried `chromium` /
+  `chromium-browser`, `microsoft-edge-stable` and `firefox-esr` after the
+  first name. Now pass the executable that is installed —
+  `linuxBrowser('chromium')`, `linuxBrowser('/usr/bin/firefox-esr')` — a name
+  on `PATH` or an absolute path, as given.
+- **`'auto'` and `'system'` are one: the platform's default browser.** The
+  log lines 5.x's `'auto'` wrote while it tried launchers are gone (an
+  `IBrowser` has no logger); a browser that fails shows only as the
+  composer's fixed-words line `Failed to present the authorization URL: …`
+  and the URL prompted on stderr.
+- **No `DISPLAY=:0`.** 5.x set `DISPLAY=:0` on Linux when neither `DISPLAY`
+  nor `WAYLAND_DISPLAY` was set. The package now writes nothing into
+  `process.env`: without a display the launch fails, the URL is shown once on
+  stderr, and the login waits. A display of your choice — or a remote Chrome,
+  a console browser, WSL, an ssh-forwarded X — is a browser of your own
+  ([A browser of your own](#a-browser-of-your-own)).
+- **The `open` package is gone** (and `express`): every launch is the
+  package's own, a program started with an argument array, never a shell. A
+  shipped browser binary (`linuxBrowser`) resolves as soon as it has started;
+  a hand-off launcher (`xdg-open`, `open`, `rundll32`, PowerShell's
+  `Start-Process`) when it exits `0`.
+- **`openUrl` is gone.** One hook per decision: a callback that only opened
+  the URL becomes an `IBrowser`, passed as `browser`; one that needed the
+  redirect URI, or showed the URL in its own UI, becomes
+  `consumerPresentation({ show })`, composed with `composeAuthorization`
+  ([Where the URL is shown](#where-the-url-is-shown)).
+
+  ```typescript
+  // 5.x: browserCallbackStrategy({ browser: 'system', openUrl: (url) => myOpen(url) })
+  browserCallbackStrategy({ browser: { open: (url) => myOpen(url) } })
+  ```
+
+  In TypeScript `openUrl` no longer compiles. **From plain JavaScript it is
+  an unknown key, ignored without a word** — so a 5.x JavaScript consumer
+  that used `openUrl` to keep the URL (and the `state` it carries) off stderr
+  now gets them on stderr, unless it passes its own `IBrowser` or
+  presentation.
+- **`callbackServer` is gone.** A receiver of your own is an
+  `IAnswerTransport`, composed: `composeAuthorization({ presentation,
+  transport: myTransport, protocol: oauthCode(), endpoint: '/callback' })`.
+  The transport hands each answer to the protocol's judge and never returns
+  a payload: the composer takes only the payload the protocol accepted
+  ([A transport of your own](#a-transport-of-your-own)). The
+  `BrowserCallbackStrategy` class, `BrowserCallbackStrategyOptions`,
+  `withBrowserCallbackServer`, `withOidcCallbackServer` and
+  `withSamlCallbackServer` are removed — use `composeAuthorization` and the
+  parts. `CallbackServerFactory`, `ICallbackServerOptions` and
+  `ICallbackServerHandle` stay in interfaces-auth 7.4.0, deprecated and
+  implemented by nothing.
+- **A listener on another address is your own transport.** The shipped
+  listeners bind loopback only and advertise only what they bind. A
+  listener on a network address, a hostname, a wildcard, behind a proxy or a
+  translated port is an `IAnswerTransport` of yours, which builds its
+  redirect from its own origin and the endpoint path — or keep the loopback
+  listener and tunnel (`ssh -L <port>:localhost:<port> <this machine>`; see
+  [The SSH tunnel](#the-ssh-tunnel)). (The `host` and `allowedHosts` options
+  of the 6.0.0 prereleases never shipped.)
+- **The terminal and consumer-code strategies need `redirectUri`.**
+  `manualPasteStrategy()`, `manualSamlResponseStrategy()` and
+  `externalCodeStrategy({ provide })` without `redirectUri` throw
+  `configuration` `required-fields-missing` naming `redirectUri`: pass the
+  redirect registered with the identity provider (the ACS for SAML). Their
+  `http://localhost:61001/callback` default is gone — it reached whatever held
+  port 61001. `manualPasscodeStrategy`'s `redirectUri` is gone (it was
+  unused). `staticCodeStrategy` is unchanged.
+- **`externalCodeStrategy` takes OAuth codes only.** A SAML response or a
+  passcode handed over by your code composes `consumerHandoff` with
+  `samlResponse()` or `passcode()`:
+
+  ```typescript
+  const { presentation, transport } = consumerHandoff({
+    redirectUri: acsUrl,
+    provide: (url, signal) => ourSsoProxy.login(url, signal),
+  });
+  const strategy = composeAuthorization({
+    presentation, transport, protocol: samlResponse(), endpoint: '/callback',
+  });
+  ```
+- **The paste page's `/submit` is a `POST`** (urlencoded, `form_token` and
+  `input`, up to 5 MB), and every listener serves the paste page for its
+  protocol — OIDC and SAML too, which had none. A page of yours that `GET`s
+  `/submit` must `POST`.
+- **Overlap is `busy`.** A second `authorize` on one strategy while the
+  first runs is `interactive-login` `busy`, for every composition — two
+  terminal readers on one stdin are never right.
+- **Every redirect callback is closed until the URL exists**, the SAML one
+  included; there is no gate to opt out of.
+- **The authorization URL is prompted on stderr only.** 5.x wrote the prompt
+  to the logger's `info` when there was one. The URL carries `state`, and a
+  configured one may carry anything, so it reaches no log line: the logger
+  gets "the authorization URL was shown". Where the callback waits and the
+  SSH hint still go to the logger (stderr without one). A consumer whose
+  stderr is collected into its logs — an MCP server, say — shows the URL in
+  its own UI with `consumerPresentation`.
+- **A configured `authorizationUrl` without `state` gets one.** The provider
+  appends its minted `state` to it, so the identity provider must echo it
+  (RFC 6749 §4.1.2); a URL that already carries one `state` keeps it. No
+  redirect is accepted without this attempt's `state`.
+- **A strategy of your own written from scratch** (`IAuthorizationStrategy`)
+  is unaffected: `IAuthorizationStrategy` and `AuthorizationRequest` did not
+  change.
 
 ## Migrating to 5.0.0 — a migration, not an update
+
+> This section and the migrations after it describe earlier majors: their
+> code shows the API of the version they migrate to, and the version they
+> migrate from. Coming from one of them, apply them in order and then
+> [Migrating to 6.0.0](#migrating-to-600--the-error-contract) — above all
+> for `browser`, now an `IBrowser` rather than a name, and for the manual and
+> consumer-code strategies, which now require `redirectUri`.
 
 *History: what 5.0.0 changed. Where 6.0.0 changed it again — `onTokens`
 (now `persistence`), the `timeoutMs` of the manual strategies,
@@ -708,7 +855,7 @@ This package is responsible for:
 
 This package interacts with external packages **ONLY through interfaces**:
 
-- **`@mcp-abap-adt/interfaces-auth`**: the contracts it implements and is handed — `IAuthProvider`, the token provider and strategy contracts, `IClientAuthentication`, the callback server, the assertion validator and replay store, and the error contract's types and allowlists (`IAuthProviderError`, its kinds and facts)
+- **`@mcp-abap-adt/interfaces-auth`**: the contracts it implements and is handed — `IAuthProvider`, the token provider and strategy contracts (the authorization strategy's parts and `IBrowser` among them), `IClientAuthentication`, the assertion validator and replay store, and the error contract's types and allowlists (`IAuthProviderError`, its kinds and facts)
 - **`@mcp-abap-adt/interfaces-auth-sap`**: the XSUAA configuration and `ICertificateMaterialLoader`
 - **`@mcp-abap-adt/interfaces-utils`**: `ILogger` — the package logs only through the logger it is given, never through a concrete logger
 - **`@mcp-abap-adt/auth-errors`**: the one runtime dependency of the error contract — every refusal and every throw is minted there, and `guard` is the boundary of each moment (`AuthProviderBase`)
@@ -724,6 +871,7 @@ import {
   AuthorizationCodeProvider,
   ClientCredentialsProvider,
   browserCallbackStrategy,
+  linuxDefaultBrowser,
   refreshThenLogin,
 } from '@mcp-abap-adt/auth-providers';
 
@@ -734,7 +882,8 @@ const authCodeBroker = new AuthBroker({
     uaaUrl: 'https://...',
     clientId: '...',
     clientSecret: '...',
-    authorization: browserCallbackStrategy({ browser: 'system' }),
+    // Linux; macDefaultBrowser() on macOS, windowsDefaultBrowser() on Windows.
+    authorization: browserCallbackStrategy({ browser: linuxDefaultBrowser() }),
   }),
 });
 
@@ -753,67 +902,400 @@ const clientCredsBroker = new AuthBroker({
 
 `authorization` decides how an interactive login is conducted, and it is
 required: a provider builds no strategy of its own (since 5.0.0). Pass one of
-the shipped strategies, or call a provider's static factory — `inBrowser`,
-`fromTerminal` — which composes the usual one. Every shipped strategy is a
-plain function returning `IAuthorizationStrategy`, so a consumer can pass its
-own instead.
+the named strategies, compose one from the parts, or call a provider's static
+factory — `inBrowser`, `fromTerminal` — which uses the usual one
+(`inBrowser`'s callback strategy is given no `browser`: it shows the URL and
+waits; to open a browser, construct the provider with
+`browserCallbackStrategy({ browser })`). Every strategy is an
+`IAuthorizationStrategy`, so a consumer can pass its own instead.
 
 | Strategy | For | What it does |
 |---|---|---|
-| `browserCallbackStrategy(opts)` | `AuthorizationCodeProvider` | Binds a local callback server, opens the URL, waits for `?code=` |
+| `browserCallbackStrategy(opts)` | `AuthorizationCodeProvider` | Listens on loopback, shows the URL or opens it in `browser`, waits for `?code=` with this login's `state` |
 | `oidcCallbackStrategy(opts)` | `OidcBrowserProvider` | The same, yielding `{ code, state }` |
-| `samlCallbackStrategy(opts)` | `Saml2BearerProvider`, `Saml2PureProvider` | The same, receiving a posted `SAMLResponse` |
-| `manualPasteStrategy({ redirectUri, read })` | code flows | Shows the URL, reads the pasted code (stdin by default) |
-| `manualSamlResponseStrategy({ redirectUri, read })` | SAML flows | Shows the URL, reads the pasted `SAMLResponse` |
-| `externalCodeStrategy({ redirectUri, provide })` | either | Hands the assembled URL and the login's signal to your `provide(url, signal)`, takes back the payload |
-| `staticCodeStrategy({ redirectUri, payload })` | either | You already hold the payload; the URL is never built |
+| `samlCallbackStrategy(opts)` | `Saml2BearerProvider`, `Saml2PureProvider` | The same, receiving a `SAMLResponse` (posted, or in the query) |
+| `manualPasteStrategy({ redirectUri, read? })` | code flows | Shows the URL, reads the pasted code or redirected URL (stdin by default) |
+| `manualSamlResponseStrategy({ redirectUri, read? })` | SAML flows | Shows the URL, reads the pasted `SAMLResponse` |
+| `manualPasscodeStrategy({ read? })` | `UaaPasscodeProvider` | Shows the passcode page, reads the pasted passcode |
+| `externalCodeStrategy({ redirectUri, provide })` | code flows | Hands the assembled URL and the login's signal to your `provide(url, signal)`, takes back the code |
+| `staticCodeStrategy({ redirectUri?, payload })` | either | You already hold the payload; the URL is never built |
+| `composeAuthorization({ … })` | any | Your own composition of a presentation, a transport and a protocol ([below](#composing-a-strategy-from-parts)) |
 | your own | any | Implement `IAuthorizationStrategy<TResult>` and pass it |
 
-Options common to the three callback strategies:
+Each named strategy is a composition of the shipped parts — today's values
+live in these names and nowhere else; the parts have no default:
+
+| Strategy | Presentation | Transport | Protocol |
+|---|---|---|---|
+| `browserCallbackStrategy` | `browser` absent: `showUrl()`; else `openInBrowser({ browser })` | `loopback({ port: port ?? DEFAULT_CALLBACK_PORT })` | `oauthCode()` |
+| `oidcCallbackStrategy` | the same | the same | `oidcCode()` |
+| `samlCallbackStrategy` | the same | the same | `samlResponse()` |
+| `manualPasteStrategy` | `showUrl()` | `terminalPaste({ redirectUri, read })` | `oauthCode()` |
+| `manualSamlResponseStrategy` | `showUrl()` | `terminalPaste({ redirectUri, read })` | `samlResponse()` |
+| `manualPasscodeStrategy` | `showUrl()` | `terminalPaste({ read })` | `passcode()` |
+| `externalCodeStrategy` | `consumerHandoff({ redirectUri, provide })` | (the same pair) | `oauthCode()` |
+
+Every one answers at `/callback` (the composition's `endpoint`), and every
+one returns a strategy with `dispose()`. A missing required `redirectUri` is
+`configuration` `required-fields-missing` naming `redirectUri`, at
+construction.
+
+Options of the three callback strategies:
 
 | Option | Default | Meaning |
 |---|---|---|
 | `port` | `61001` (`DEFAULT_CALLBACK_PORT`) | Port to bind. `0` binds an ephemeral one — usable only where the identity provider accepts a loopback redirect on any port, never where a fixed redirect URI is registered |
-| `browser` | `'none'` | `'none'` / `'headless'` print the URL; `'system'`, `'auto'`, `'chrome'`, `'edge'`, `'firefox'` open it |
-| `callbackServer` | the one this package ships | Your own `CallbackServerFactory`, to reuse a server you already run |
-| `openUrl` | the built-in launcher | Receives `(url, browser, redirectUri)` |
-| `remoteHint` | the paste hint, only for the shipped UAA transport | Extra guidance printed in `'none'` / `'headless'` mode. The default names an SSH tunnel to the bound port, or the first of `allowedHosts` — never a guessed hostname |
-| `host` | loopback (`127.0.0.1` and `::1`) | The address the transport binds (`ICallbackServerOptions.host`). A wildcard or an interface address makes it reachable from the network — name the authorities a browser will use in `allowedHosts`. **Warning:** with `allowedHosts`, every client that can reach an allowed authority gets the paste page and its form token and can settle the login with a code of its own — prefer the SSH tunnel |
-| `allowedHosts` | none | Authorities (`host` or `host:port`; no port means the bound one) a browser may use besides loopback, compared in the URL parser's canonical form; a loopback authority (any spelling of `localhost`, `127.0.0.0/8`, `[::1]`, `[::ffff:127.x.y.z]`), `0.0.0.0` and `[::]` are never one. Every other `Host` is refused before anything is served. **Warning:** every client that can reach an allowed authority gets the paste page and its form token and can settle the login with a code of its own — prefer the SSH tunnel |
-| `signal` | — | `AbortSignal` cancelling the login — the only bound there is (since 6.0.0 no login times out on its own): pass `AbortSignal.timeout(ms)` for a deadline |
+| `browser` | none: the URL is shown on stderr | An `IBrowser` that opens the URL: one of the six below, or your own. Never a name |
+| `remoteHint` | the listener's SSH-tunnel hint | `(redirectUri) => string`: replaces the hint shown beside the URL for a user whose browser is elsewhere |
+| `signal` | — | `AbortSignal` cancelling the login — the only bound there is (no login times out on its own): pass `AbortSignal.timeout(ms)` for a deadline |
 
-Note the `browser` default: **`'none'`, so nothing is opened unless you ask for
-it.** A launcher that fails (yours, or the built-in one) does not end the
-login: it is logged once in fixed words, the URL is prompted, and the callback
-keeps waiting for it. The URL is always shown, even with no logger — it falls back to `stderr`,
-never stdout, so an MCP/LSP stdio transport is not corrupted. (1.x behaved the
-same way; the 1.x README claiming `system` was the default was wrong.)
+**Nothing is opened unless you pass a `browser`.** Without one the URL is
+shown on stderr — never stdout, so an MCP/LSP stdio transport is not
+corrupted — and the callback waits. A browser that fails (yours, or a
+shipped one) does not end the login: it is logged once in fixed words, the
+URL is prompted on stderr, and the callback keeps waiting for it.
 
-The three `CallbackServerFactory` implementations are exported too —
-`withBrowserCallbackServer`, `withOidcCallbackServer`, `withSamlCallbackServer`
-— so a consumer can keep the transport and replace everything around it, or the
-reverse.
+#### The six shipped browsers
 
-For the three shipped flows, passing `callbackServer` to a ready constructor is
-the way to substitute a transport. The `BrowserCallbackStrategy` class behind
-them is exported as well, for the case the constructors cannot express: a
-receiver whose payload is none of the three shapes those flows deliver. Its
-options are the same, except `callbackServer` and `stateGate` are required —
-there is no default transport to fall back on when the payload type is your
-own, and the strategy does not guess whether its redirect is bound by `state`.
+Each is **one fixed launch**: a program started with an argument array,
+never through a shell, the URL one argument of it, and only an `http:` /
+`https:` URL as its serialisation. There is no platform switch, no fallback
+chain and no platform check — **you pick the one for the machine you run
+on**. Run on another OS, a launch simply fails to start; the URL is then
+shown once on stderr and the login waits.
+
+| Factory | Launch | Settles |
+|---|---|---|
+| `linuxDefaultBrowser()` | `xdg-open <url>` | at its exit: `0` resolves, anything else rejects |
+| `linuxBrowser(executable)` | `<executable> <url>` — a name on `PATH` or an absolute path, as given (`'google-chrome'`, `'firefox'`, `'/opt/…/microsoft-edge'`) | once the browser has started; its exit is never awaited |
+| `macDefaultBrowser()` | `open <url>` | at its exit |
+| `macBrowser(app)` | `open -a <app> <url>` (`'Google Chrome'`, `'Microsoft Edge'`, `'Firefox'`) | at its exit |
+| `windowsDefaultBrowser()` | `%SystemRoot%\System32\rundll32.exe url.dll,FileProtocolHandler <url>` | at its exit |
+| `windowsBrowser(program)` | `%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe -NoProfile -NonInteractive -Command` with the fixed text `Start-Process -FilePath $env:MCP_ABAP_ADT_BROWSER_PROGRAM -ArgumentList $env:MCP_ABAP_ADT_AUTHORIZATION_URL` (`'chrome'`, `'msedge'`, `'firefox'`, or a path) | at its exit |
 
 ```typescript
-import { BrowserCallbackStrategy } from '@mcp-abap-adt/auth-providers';
+import {
+  AuthorizationCodeProvider,
+  browserCallbackStrategy,
+  linuxDefaultBrowser,
+  refreshThenLogin,
+} from '@mcp-abap-adt/auth-providers';
 
-const strategy = new BrowserCallbackStrategy<MyPayload>({
-  callbackServer: withMyOwnCallbackServer, // CallbackServerFactory<MyPayload>
-  // An OAuth redirect: true — the transport is opened `gated` and armed with
-  // the URL's `state`. false only for a redirect bound otherwise (SAML).
-  stateGate: true,
-  port: 61001,
-  signal: AbortSignal.timeout(300_000), // your bound, if you want one
+const provider = new AuthorizationCodeProvider({
+  renewal: refreshThenLogin(),
+  uaaUrl, clientId, clientSecret,
+  // macDefaultBrowser() on macOS, windowsDefaultBrowser() on Windows.
+  authorization: browserCallbackStrategy({ browser: linuxDefaultBrowser() }),
 });
 ```
+
+- **No environment is guessed or changed.** Nothing is written into
+  `process.env` — no `DISPLAY=:0`, as 5.x set. Without a display the launch
+  fails, and the URL is shown.
+- **On Windows** the launchers are the system's own, by absolute path under
+  `%SystemRoot%\System32`, never a program found in the current directory,
+  and never `cmd`, which parses `&`, `|`, `^` and `%` whatever the quoting.
+  `windowsBrowser` passes the program and the URL to PowerShell only in the
+  environment, never in its command text. A URL whose serialisation still
+  holds a space, a quote, `<`, `>`, `^`, `|`, a backslash or a control
+  character, or whose host is not a valid host name or address, is not
+  opened at all (nothing is repaired). Measured 2026-10-07 (Windows 11 x64):
+  the default browser through `rundll32`, Chrome and Edge through
+  `Start-Process`, each delivered the URL's path and query (with `&` and a
+  `%20`) unchanged, and no command interpreter was started.
+- A browser that could not be asked rejects with an `AuthProviderFailure`
+  (`unknown`, operation `opening-browser`, an allowlisted code only), or
+  `interactive-login` `aborted` on the login's signal. A browser that started
+  is never killed.
+
+Through 5.4.2 the fallback without the `open` package handed the URL to a
+shell inside double quotes, so a `$(…)` or a backtick in it — from an OIDC
+provider's discovery document, say — ran as a command. No launch goes
+through a shell now.
+
+#### A browser of your own
+
+Anything else — a display of your choice, a remote Chrome, a console
+browser, WSL, an ssh-forwarded X — is an `IBrowser` of yours:
+`open(url, signal)` resolves once the browser was asked to open the URL (not
+when the user finished), and rejects when it could not be — a presentation
+failure: the URL is prompted and the login keeps waiting.
+
+```typescript
+import { execFile } from 'node:child_process';
+import type { IBrowser } from '@mcp-abap-adt/interfaces-auth';
+
+// A browser on display :1 — the package sets no environment of its own.
+const onDisplayOne: IBrowser = {
+  open: (url, signal) =>
+    new Promise<void>((resolve, reject) => {
+      execFile(
+        'xdg-open',
+        [url],
+        { env: { ...process.env, DISPLAY: ':1' }, signal },
+        (error) => (error ? reject(error) : resolve()),
+      );
+    }),
+};
+
+const strategy = browserCallbackStrategy({ browser: onDisplayOne });
+```
+
+#### Composing a strategy from parts
+
+A strategy is three parts and the composer that joins them, each part a
+contract of `@mcp-abap-adt/interfaces-auth`:
+
+- a **presentation** (`IAuthorizationPresentation`) — how the authorization
+  URL reaches the user. It knows no payload and no transport;
+- a **transport** (`IAnswerTransport`) — how the user's answer comes back: a
+  listener, a terminal, the consumer's code. It knows no payload: it hands
+  each answer to the protocol's judge and acts on the verdict;
+- a **protocol** (`IAuthorizationProtocol`) — what an answer is and how it is
+  checked: it reads the expected `state` from the URL, accepts, refuses (the
+  login keeps waiting) or ends the login. It knows no socket and no
+  terminal.
+
+`composeAuthorization({ presentation, transport, protocol, endpoint,
+signal? })` runs one login in this order: open the transport; build the URL
+from the redirect the channel advertises; `begin` the protocol on that URL;
+arm the channel with the protocol's judge; present the URL (not awaited);
+wait. Until the channel is armed, every answer is refused. The payload the
+strategy returns is the one the protocol accepted — never anything a
+transport hands back — and the first accepted (or ending) answer wins: every
+later one is refused. `authorize` settles only once the transport is
+released (the port free, the reader closed); an overlapping `authorize` is
+`busy`; `dispose()` ends the login in flight and resolves once it has
+settled.
+
+`endpoint` is required — the named strategies pass `'/callback'` — and must
+survive URL parsing unchanged (no encoded dot segment, backslash, space,
+control character, `?` or `#`) and not be one of the listener's own routes
+(`/`, `/submit`), else `configuration` `invalid-value` naming `endpoint`. A
+missing part is `required-fields-missing` naming `presentation`,
+`transport` or `protocol`. A protocol whose URL carries a redirect, over a
+transport that advertises none, is `required-fields-missing` naming
+`redirectUri`.
+
+**Presentations:**
+
+| Part | Does |
+|---|---|
+| `openInBrowser({ browser })` | Calls `browser.open(url, signal)` with exactly the URL and the login's signal. A browser that throws or rejects: the URL is prompted once, on stderr, and the failure logged in fixed words |
+| `showUrl()` | Writes the URL to stderr only; the logger gets "the authorization URL was shown", then where the channel waits and its hint |
+| `consumerPresentation({ show, onFailure? })` | `show(url, { redirectUri, signal })` is your UI. A throw or rejection is logged in fixed words; **no URL is printed** — `onFailure(url, context)`, when given, is your own fallback, run once |
+
+**Transports:**
+
+| Part | Binds | Advertises |
+|---|---|---|
+| `loopback({ port })` | `127.0.0.1`, then `::1` on the same port (skipped where the machine has no `::1`) | `http://localhost:<port><endpoint>` |
+| `loopback4({ port })` | `127.0.0.1` only | `http://127.0.0.1:<port><endpoint>` |
+| `loopback6({ port })` | `::1` only | `http://[::1]:<port><endpoint>` |
+| `terminalPaste({ redirectUri?, read? })` | nothing; reads one line (`readFromTerminal` by default: prompt on stderr, stdin only when it is a TTY) | `redirectUri` as given |
+| `consumerAnswer({ redirectUri?, receive })` | nothing; `receive(signal)` is your code | `redirectUri` as given |
+| `consumerHandoff({ redirectUri?, provide })` | the pair `{ presentation, transport }` from one `provide(url, signal)` that shows the URL and returns the answer | `redirectUri` as given |
+
+`port` is required on every listener (`0` binds an ephemeral one; not an
+integer in 0..65535 is `callback-port-invalid`, before any socket is
+touched). A port already held is `interactive-login` `port-in-use`. A
+transport without a socket advertises no redirect of its own: a protocol
+that needs one needs your `redirectUri` — the one registered with the
+identity provider.
+
+**Protocols:**
+
+| Part | Payload | Redirect arrives with | A redirect binds by |
+|---|---|---|---|
+| `oauthCode()` | the code (`string`) | `GET` | `state` |
+| `oidcCode()` | `OidcCallbackResult` (`{ code, state }`) | `GET` | `state` |
+| `samlResponse()` | the `SAMLResponse` (`string`) | `GET`, `POST` | nothing here: `InResponseTo` and the assertion validator |
+| `passcode()` | the passcode (`string`) | takes no redirect | — |
+
+Each has its paste words: the prompt of a terminal, and the label and
+instructions of a listener's paste page.
+
+An OIDC login whose code the user pastes — the pasted URL's `state` checked:
+
+```typescript
+import {
+  OidcBrowserProvider,
+  composeAuthorization,
+  oidcCode,
+  refreshThenLogin,
+  showUrl,
+  terminalPaste,
+} from '@mcp-abap-adt/auth-providers';
+
+const provider = new OidcBrowserProvider({
+  renewal: refreshThenLogin(),
+  issuerUrl: 'https://idp.example.com/realms/sap',
+  clientId: '...',
+  authorization: composeAuthorization({
+    presentation: showUrl(),
+    transport: terminalPaste({ redirectUri: 'http://localhost:61001/callback' }),
+    protocol: oidcCode(),
+    endpoint: '/callback',
+  }),
+});
+```
+
+#### Where the URL is shown
+
+**The authorization URL never reaches a log line.** It carries the login's
+`state`, and a configured one may carry anything. `showUrl()` — and the
+prompt a failed browser falls back to — writes it to **stderr only**, never
+through the `ILogger`, never to stdout, and only as an `http:` / `https:`
+serialisation of printable ASCII; the logger gets the fixed line "the
+authorization URL was shown". Where the callback waits and the SSH hint
+carry no secret and go to the logger's `info` (stderr without one).
+
+A consumer whose stderr is collected into its logs — an MCP server, say —
+shows the URL in its own UI with `consumerPresentation`:
+
+```typescript
+import {
+  AuthorizationCodeProvider,
+  DEFAULT_CALLBACK_PORT,
+  composeAuthorization,
+  consumerPresentation,
+  loopback,
+  oauthCode,
+  refreshThenLogin,
+} from '@mcp-abap-adt/auth-providers';
+
+const provider = new AuthorizationCodeProvider({
+  renewal: refreshThenLogin(),
+  uaaUrl, clientId, clientSecret,
+  authorization: composeAuthorization({
+    presentation: consumerPresentation({
+      show: (url, { redirectUri }) => ourUi.showLogin(url, redirectUri),
+    }),
+    transport: loopback({ port: DEFAULT_CALLBACK_PORT }),
+    protocol: oauthCode(),
+    endpoint: '/callback',
+  }),
+});
+```
+
+A `show` that throws or rejects is logged in fixed words and prints no URL
+— you chose your own UI because stderr may be collected; pass `onFailure`
+for a fallback of your own. Either way the login keeps waiting.
+
+#### The SSH tunnel
+
+The shipped listeners bind loopback only. A browser on another machine
+reaches one through an SSH tunnel, which arrives on loopback and needs no
+option:
+
+```bash
+ssh -L 61001:localhost:61001 <this machine>
+```
+
+Then the redirect reaches the listener, and the paste page is at
+`http://localhost:61001/` in that browser. Without a `browser`, the listener
+prints that hint beside the URL (`remoteHint` replaces it). For `loopback4`
+/ `loopback6` the tunnel goes to `127.0.0.1` / `[::1]`.
+
+#### A transport of your own
+
+A listener on a network address, a hostname, a wildcard, behind a proxy or a
+translated port is not shipped: it is **your** `IAnswerTransport`, and its
+risk is yours. The composition gives it only the endpoint path; it builds
+the redirect from its own origin, so what it advertises is what it listens
+on. A minimal one, for the redirect alone:
+
+```typescript
+import { createServer } from 'node:http';
+import type { AnswerJudge, IAnswerTransport } from '@mcp-abap-adt/interfaces-auth';
+
+/**
+ * `origin` is what the browser elsewhere uses — `http://buildhost.example:61001`,
+ * say: the redirect is built from it.
+ */
+function networkListener(bindAddress: string, port: number, origin: string): IAnswerTransport {
+  return {
+    label: 'browser',
+    async open(options, use) {
+      let judge: AnswerJudge<unknown> | undefined;
+      let settle!: { resolve(): void; reject(error: unknown): void };
+      const answered = new Promise<void>((resolve, reject) => {
+        settle = { resolve, reject };
+      });
+      answered.catch(() => undefined); // awaited by the composer once armed
+
+      const server = createServer((req, res) => {
+        const url = new URL(req.url ?? '/', origin);
+        if (req.method !== 'GET' || url.pathname !== options.endpoint) {
+          res.writeHead(404).end();
+          return;
+        }
+        // Closed until armed: nothing settles before the URL exists.
+        if (judge === undefined) {
+          res.writeHead(400).end();
+          return;
+        }
+        // The protocol decides: it checks `state` and reads the code.
+        const verdict = judge({ via: 'redirect', method: 'GET', params: url.searchParams });
+        if (verdict.verdict === 'refuse') {
+          res.writeHead(400).end(); // ignored: the login keeps waiting
+          return;
+        }
+        res.writeHead(200, { 'content-type': 'text/plain' });
+        res.end(verdict.verdict === 'accept' ? 'Signed in. You can close this tab.' : 'The login was refused.');
+        if (verdict.verdict === 'accept') settle.resolve();
+        else settle.reject(verdict.error);
+      });
+
+      await new Promise<void>((resolve, reject) => {
+        server.once('error', reject);
+        server.listen(port, bindAddress, () => resolve());
+      });
+      const onAbort = () => settle.reject(options.signal.reason);
+      options.signal.addEventListener('abort', onAbort, { once: true });
+      try {
+        return await use({
+          redirectUri: `${origin}${options.endpoint}`,
+          arm(armedWith) {
+            judge = armedWith;
+            return { answer: () => answered };
+          },
+        });
+      } finally {
+        options.signal.removeEventListener('abort', onAbort);
+        // Settle only once released: the port is free when `open` settles.
+        const closed = new Promise<void>((resolve) => server.close(() => resolve()));
+        server.closeAllConnections();
+        await closed;
+      }
+    },
+  };
+}
+
+const strategy = composeAuthorization({
+  presentation: showUrl(),
+  transport: networkListener('0.0.0.0', 61001, 'http://buildhost.example:61001'),
+  protocol: oauthCode(),
+  endpoint: '/callback',
+});
+```
+
+> **Warning — a listener on the network is open to the network.** Every
+> machine that can reach it can send it requests while a login waits; the
+> code and the `state` cross the network in clear over plain HTTP; and what
+> the shipped listeners check before anything is served — the `Host` header
+> against DNS rebinding, a loopback name only from a loopback peer, the form
+> token of a paste page — is now yours to check or to leave out. A paste
+> page reachable from the network lets every client that can load it settle
+> the login with a code of its own, so the user then works as whoever that
+> code belongs to. Prefer the [SSH tunnel](#the-ssh-tunnel) to the loopback
+> listener; use a network listener only where every machine that can reach
+> the port is trusted, and behind TLS where the network is not.
+
+The transport hands the judge each answer and acts on its verdict — `accept`
+ends the wait, `refuse` is answered and ignored, `end` ends the login — and
+never returns a payload: the composer keeps the one the protocol accepted,
+and an `answer()` that resolves without one fails the login.
 
 #### Bringing your own
 
@@ -825,7 +1307,7 @@ const fromOurPortal: IAuthorizationStrategy<string> = {
     const redirectUri = 'https://portal.internal/oauth/callback';
     const url = await request.buildAuthorizationUrl(redirectUri);
     // The redirect URI you return is the one sent to the token endpoint.
-    return { payload: await ourPortal.login(url), redirectUri };
+    return { payload: await ourPortal.login(url, request.signal), redirectUri };
   },
   async dispose() { await ourPortal.close(); },
 };
@@ -841,48 +1323,39 @@ login's signal ends only that login (`aborted`) and leaves the strategy usable.
 **Check `state` — the redirect is yours to bind.** The URL
 `buildAuthorizationUrl` returns carries a fresh `state` (and a PKCE challenge,
 whose verifier the provider keeps and sends in the exchange). A strategy that
-receives the redirect itself — `fromOurPortal` above, or your
-`externalCodeStrategy` `provide` — must accept a code only from a redirect
-whose `state` equals the one in that URL (compare in constant time), or a page
-in the user's browser can hand it a code of its own (RFC 6749 §10.12). A
-`callbackServer` you give `browserCallbackStrategy` or `oidcCallbackStrategy`
-must implement `ICallbackServerHandle.expectState`: honour `gated: true` (refuse
-every callback until armed), then settle only a callback — a code or an
-`?error=` — with the armed `state`, answering every other request `400` and
-waiting on; `expectState(null)` declares a URL without `state`. A transport
-without `expectState` is refused before anything opens (`configuration`
-`invalid-value`, `fields: ['callbackServer']`).
+receives the redirect itself — `fromOurPortal` above — must accept a code
+only from a redirect whose `state` equals the one in that URL (compare in
+constant time), or a page in the user's browser can hand it a code of its own
+(RFC 6749 §10.12). A transport of your own composed with `oauthCode()` or
+`oidcCode()` gets that check from the protocol.
 
 **End on the request's signal.** Every `AuthorizationRequest` carries
 `signal`, aborted once no caller needs the login any more (see
 [Cancelling a login](#cancelling-a-login)). Your strategy must stop waiting
-and release what it holds when it aborts — `fromOurPortal` above would pass
+and release what it holds when it aborts — `fromOurPortal` above passes
 `request.signal` to `ourPortal.login`. One that ignores it never settles, and
 the next login waits for it.
 
-#### Manual paste over a callback server
+#### The paste page, and pasting at a terminal
 
-With `browserCallbackStrategy` (the UAA transport), login can complete through
-either of **two** channels — whichever finishes first wins:
+A shipped listener settles through either of **two** channels — whichever
+finishes first wins:
 
-1. **Automatic callback** — `GET /callback?code=...` on the bound redirect URI.
-   Works when the browser is on the same machine as the process.
-2. **Paste form** — open the form on `/` and paste the code (or the whole
-   redirected URL). Works when the browser is on a *different* machine: the
-   transport listens on loopback only, so reach it through an SSH tunnel
-   (`ssh -L 61001:localhost:61001 <this machine>`, then
-   `http://localhost:61001/` in that browser), or set `host` and
-   `allowedHosts` to the address and names that browser will use. In
-   `'none'` / `'headless'` mode the strategy prints the way — the tunnel, or
-   the first of your `allowedHosts` — never a hostname it guessed. The form
-   carries a token minted for this login; `/submit` settles only with it, and
-   a pasted redirected URL only with this login's `state`.
+1. **The redirect** — `GET /callback?code=…&state=…` (a `SAMLResponse`
+   posted or in the query for SAML) on the advertised redirect URI. Works
+   when the browser is on the same machine as the process.
+2. **The paste page** — `GET /` serves a form with the protocol's words, and
+   the user pastes the code (or the whole redirected URL, or the
+   `SAMLResponse`). Works when the browser is on a *different* machine and
+   the redirect cannot reach back: reach the page through
+   [the SSH tunnel](#the-ssh-tunnel). Every listener serves it, for every
+   protocol. The form posts `form_token` and `input` to `/submit`
+   (urlencoded, up to 5 MB); `/submit` settles only with this login's form
+   token, a pasted redirected URL only with this login's `state`.
 
-**The terminal-paste channel is gone.** In 1.x a third channel read the code
-from stdin when `process.stdin.isTTY`; `browserCallbackStrategy` has no such
-reader, and this is deliberate rather than an oversight — under an MCP or LSP
-stdio transport stdin carries the protocol, and an authorization library has no
-business consuming it. Reading a pasted code is now a strategy of its own:
+A listener never reads stdin: under an MCP or LSP stdio transport stdin
+carries the protocol, and an authorization library has no business
+consuming it. Reading a pasted answer at a terminal is a strategy of its own:
 
 ```typescript
 import {
@@ -895,9 +1368,9 @@ const provider = new AuthorizationCodeProvider({
   renewal: refreshThenLogin(),
   uaaUrl, clientId, clientSecret,
   // Binds no socket at all: prints the URL, then reads one line.
-  // Defaults to stdin when it is a TTY — pass `read` to source it anywhere else.
+  // Reads stdin when it is a TTY — pass `read` to source it anywhere else.
   authorization: manualPasteStrategy({
-    redirectUri: 'http://localhost:61001/callback',
+    redirectUri: 'http://localhost:61001/callback', // the one registered with the IdP
   }),
 });
 ```
@@ -918,97 +1391,90 @@ authorization: manualPasteStrategy({
 `read` gets the login's signal: when the login is aborted or the strategy
 disposed, it must stop and release what it holds. The strategy settles only
 once `read` has, so a `read` that ignores its signal blocks that login — and
-the next one, which waits for it — until it returns.
+the next one, which waits for it — until it returns. A pasted URL of
+another login gets fixed words and the prompt again; an input no code can be
+read from ends the login `interactive-login` `unreadable-input`.
 
-The `redirectUri` you give it must be the one the identity provider will
-redirect to; it is also the one sent to the token endpoint. It defaults to
-`http://localhost:61001/callback`.
+`redirectUri` is required: it must be the one the identity provider will
+redirect to, and it is also the one sent to the token endpoint. A strategy
+that binds no socket has no redirect of its own to offer.
 
-Both the paste form and `manualPasteStrategy` accept a bare code or a full
+Both the paste page and `manualPasteStrategy` accept a bare code or a full
 redirected URL. A **bare code** is an input with none of `?`, `&`, `=`, `/`
 or `#`: it carries no `state` and is taken — the user typed it. Anything else
 is read as a redirected URL (parsed with `URL`): it must carry the `state` of
 the URL this login showed, and its code is taken from the query alone, never
 from a fragment — `manualPasteStrategy` asks again on a mismatch, the paste
-form answers `400`. So `…/callback&code=X` is not a code that skips the
-check. (For a URL without `state` — one you configured — the 5.x leniency
-stays: `code=...` and the like are read too.)
+page answers `400` with the form again. So `…/callback&code=X` is not a code
+that skips the check.
 
 #### Login CSRF: `state`, PKCE and where the callback listens
 
 A page in the user's browser can call the local callback with a code of its
 own while a login waits, and the user ends up logged in as someone else
-(RFC 6749 §10.12; RFC 9700 §4.7). Since 6.0.0:
+(RFC 6749 §10.12; RFC 9700 §4.7). Since 6.0.0, each part keeps its share:
 
 - **The provider binds the URL it builds.** `AuthorizationCodeProvider` and
   `OidcBrowserProvider` put a fresh `state` (32 random bytes, base64url) in
   every authorization URL they build, and a PKCE pair (S256) — new for UAA in
   6.0.0, as OIDC already had; the verifier of the last URL built is sent in
   the exchange. Neither is logged.
-- **What you bring stays yours.** A configured `authorizationUrl` is used
-  unchanged — no `state`, no challenge, no `code_verifier` — and a code from
-  `staticCodeStrategy`, or from any strategy that never built the URL, is
-  exchanged without a `code_verifier`. Binding those is your job. To get
-  `state` and PKCE with your own receiver, let the provider build the URL
-  (`externalCodeStrategy` gets it, `state` included).
-- **The callback is closed until the URL exists.** `browserCallbackStrategy`
-  and `oidcCallbackStrategy` open their transport `gated`: from the bind on,
-  every callback is answered `400`, counted and ignored. Once the URL is
-  built, the strategy arms it with the URL's `state` (`expectState`) — before
-  the browser is opened — and from then on only a callback with that `state`,
-  a code or an `?error=`, settles the login; anything else is answered `400`,
-  counted, and the login keeps waiting. `samlCallbackStrategy` needs no gate:
-  a SAML response is bound by `InResponseTo` and the assertion validator.
-- **Loopback only, unless you say otherwise.** The shipped transports bind
-  `127.0.0.1` and `::1` (through 5.4.2 they bound every interface), and refuse
-  — before any page, form token or callback handling — a request whose `Host`
-  is not a loopback authority with the bound port, so a DNS-rebound name
-  reads and settles nothing. Every `Host`, and every `allowedHosts` entry, is
-  read through the WHATWG URL host parser and compared in that canonical
-  form, one trailing dot dropped. **Loopback** is then `localhost`, any IPv4
-  address in `127.0.0.0/8`, `[::1]` or `[::ffff:127.x.y.z]` — in whatever
-  spelling the parser reads as one (`localhost.`, `127.1`, `0x7f.1`,
-  `[0:0:0:0:0:0:0:1]`, `[::ffff:7f00:1]`, …). A loopback authority counts
-  only from a loopback peer (`127.0.0.0/8`, `::1`, `::ffff:127.x.y.z`): the
-  header is the client's to choose, so a machine on the network sending
-  `Host: localhost` is refused too — and listing a loopback authority in
-  `allowedHosts` changes nothing: it is never an allowed one. `0.0.0.0` and
-  `[::]` are never an authority, and an entry that is not exactly an
-  authority (userinfo, a path, an empty or out-of-range port, a host the
-  parser refuses) matches nothing. `127.0.0.1` is bound first, then `::1`
-  on the same port. On a host without IPv6 loopback — the `::1` bind fails
-  `EADDRNOTAVAIL` or `EAFNOSUPPORT` — the `::1` half is skipped and the
-  transport listens on `127.0.0.1` alone. Only `EADDRINUSE` on `::1` — the
-  port, fixed or the one the OS gave `127.0.0.1` for `port: 0`, held by
-  someone else there — fails the login `port-in-use`: the redirect URI says
-  `localhost`, which resolves to `::1` first, so staying on `127.0.0.1` alone
-  would hand whoever holds `[::1]:<port>` the code and the `state`. Any other
-  bind error ends the login `failed`. Retrying is yours. With `host` set,
-  only that address is bound. An SSH tunnel arrives on loopback and works as
-  it is. To serve another machine directly, set both:
+- **A configured URL gets a `state` too.** A configured `authorizationUrl`
+  that carries no `state` gets the provider's minted one, fresh for every
+  URL built, appended to its query as text before any fragment — and nothing
+  else: no PKCE challenge, no `code_verifier`. The identity provider must
+  echo it (RFC 6749 §4.1.2). One that carries one `state` keeps it and is
+  bound to it; an empty or a repeated `state` is refused (`configuration`
+  `invalid-value` naming `authorizationUrl`) before anything opens. A code
+  from `staticCodeStrategy`, which never builds the URL, is exchanged
+  without a `code_verifier`: binding it is yours.
+- **The protocol checks `state`.** `oauthCode()` and `oidcCode()` read the
+  expected `state` from the URL and accept a redirect — a code or an
+  `?error=` — only with exactly one `state` equal to it, compared in constant
+  time; anything else is answered `400`, counted, and the login keeps
+  waiting. A forged `?error=` therefore ends nothing. A parameter counts only
+  when present exactly once. `samlResponse()` reads no `state`: a SAML
+  response is bound by `InResponseTo` and the assertion validator.
+- **The listener is closed until the URL exists.** From the bind on, a
+  listener refuses every request to the callback and the paste page until
+  the composer arms it — after the URL is built and the protocol has read
+  it, before the URL is shown — for every protocol, SAML included.
+- **Loopback only.** The shipped listeners bind loopback (through 5.4.2 the
+  callback bound every interface) and refuse — before any page, form token or
+  callback handling — a request whose `Host` is not a loopback name with the
+  bound port (`localhost`, `127.0.0.1`, `[::1]`, in any spelling the WHATWG
+  URL host parser reads as one), so a DNS-rebound name reads and settles
+  nothing. A loopback name counts only from a loopback peer (`127.0.0.0/8`,
+  `::1`, `::ffff:127.x.y.z`): a machine on the network sending
+  `Host: localhost` is refused too. `loopback` binds `127.0.0.1` first, then
+  `::1` on the same port. On a host without IPv6 loopback — the `::1` bind
+  fails `EADDRNOTAVAIL` or `EAFNOSUPPORT` — the `::1` half is skipped and it
+  listens on `127.0.0.1` alone. Only `EADDRINUSE` on `::1` — the port, fixed
+  or the one the OS gave `127.0.0.1` for `port: 0`, held by someone else
+  there — fails the login `port-in-use`: the redirect URI says `localhost`,
+  which resolves to `::1` first, so staying on `127.0.0.1` alone would hand
+  whoever holds `[::1]:<port>` the code and the `state`. Any other bind error
+  ends the login `failed`. Retrying is yours. A browser elsewhere reaches a
+  listener through [the SSH tunnel](#the-ssh-tunnel); a listener on the
+  network is [a transport of your own](#a-transport-of-your-own), and its
+  risk is yours.
+- **The paste page is bound to the attempt.** Arming mints a form token (32
+  random bytes, base64url) for this login only, embedded in the page as a
+  hidden field and never logged; `/submit` without it, with another, or with
+  two is answered `400` before the protocol sees anything. Another origin
+  cannot read the page (no CORS, a CSP of `default-src 'none'` with
+  `form-action 'self'`), so it cannot learn the token.
+- **One answer per connection.** Every response carries
+  `Connection: close`, `X-Content-Type-Options: nosniff` and the CSP; every
+  value interpolated into a page is escaped. Routes are compared literally:
+  the endpoint, `/` and `/submit` as exact strings, anything else `404`.
 
-  ```typescript
-  browserCallbackStrategy({
-    host: '0.0.0.0',                          // the bind address
-    allowedHosts: ['buildhost.example:61001'], // what that browser sends as Host
-  });
-  ```
+Every refused request is answered `400`, counted, and **ignored**: the login
+keeps waiting, and its `aborted` words report how many there were.
 
-  The bind address is not an authority — a browser never sends
-  `Host: 0.0.0.0` — and a loopback authority from a network peer is refused, so a
-  wildcard bind without `allowedHosts` answers loopback peers only.
-
-  > **Warning — `allowedHosts` opens the login to everyone who can reach
-  > it.** Every client that can reach an allowed authority gets the paste
-  > page and its form token, and can settle the login with an authorization
-  > code of its own: the user then works as whoever that code belongs to.
-  > The form token stops a page in a browser, not a client on the network.
-  > Prefer the SSH tunnel (`ssh -L 61001:localhost:61001 <this machine>`),
-  > which needs no `host` and no `allowedHosts`; use `allowedHosts` only on a
-  > network where every machine that can reach the port is trusted.
-
-> The `extractCode(input)` helper behind that leniency is internal; it is not
-> part of the package's exports, contrary to what the 1.1.0–1.2.0 README said.
+> The `extractCode(input)` helper behind the paste parsing is internal; it is
+> not part of the package's exports, contrary to what the 1.1.0–1.2.0 README
+> said.
 
 ### Client authentication
 
@@ -1449,6 +1915,7 @@ import { AuthBroker } from '@mcp-abap-adt/auth-broker';
 import {
   SsoProviderFactory,
   oidcCallbackStrategy,
+  linuxDefaultBrowser,
   refreshThenLogin,
 } from '@mcp-abap-adt/auth-providers';
 
@@ -1461,7 +1928,7 @@ const tokenProvider = SsoProviderFactory.create({
     clientId: '...',
     clientSecret: '...',
     scopes: ['openid', 'profile', 'email'],
-    authorization: oidcCallbackStrategy({ browser: 'system' }),
+    authorization: oidcCallbackStrategy({ browser: linuxDefaultBrowser() }),
   },
 });
 
@@ -1497,7 +1964,11 @@ const provider = new OidcBrowserProvider({
 `string`; passing one directly does not type-check. The adapter wraps the code
 as `{ code }` — a value that never travelled through a redirect carries no
 `state` to check — and delegates `dispose`, so wrapping costs nothing in
-lifecycle terms.
+lifecycle terms. For a code the user pastes, compose `oidcCode()` instead
+(`composeAuthorization({ presentation: showUrl(), transport:
+terminalPaste({ redirectUri }), protocol: oidcCode(), endpoint: '/callback'
+})`, see [Composing a strategy from parts](#composing-a-strategy-from-parts)):
+it also checks a pasted URL's `state`.
 
 The redirect URI is no longer a provider field: it belongs to the strategy,
 because with an ephemeral port nothing knows it until the socket is bound. The
@@ -1578,13 +2049,13 @@ the IdP, answering no request. (4.0 refuses that case itself, at
 supply an IdP-initiated assertion, declare `idpInitiated: true`, and use a
 strategy that does not call
 `buildAuthorizationUrl`: `staticCodeStrategy`, or your own as above.
-`samlCallbackStrategy`, `manualSamlResponseStrategy` and `externalCodeStrategy`
-all call it, and with `idpInitiated: true` and no `authorizationUrl` the builder
-refuses: a configuration error
+`samlCallbackStrategy`, `manualSamlResponseStrategy` and a `consumerHandoff`
+composed with `samlResponse()` all call it, and with `idpInitiated: true` and
+no `authorizationUrl` the builder refuses: a configuration error
 (`saml-idp-initiated-without-authorization-url`) thrown before any URL is
 produced, so before a browser opens. (3.0's advice —
 `externalCodeStrategy` whose `provide` ignores the URL — no longer works for
-that reason.) See
+that reason; since 6.0.0 `externalCodeStrategy` takes OAuth codes only.) See
 [Where the expected request ID comes from](#where-the-expected-request-id-comes-from).
 
 The `redirectUri` your strategy reports is the ACS the assertion is checked
@@ -1660,14 +2131,18 @@ expiry of their own — the first `getTokens()` or `authorize()` logs in as
 above. There is no `refreshToken`: SAML has none, so renewal is a new login.
 See [Seeding a stored credential](#seeding-a-stored-credential).
 
-**Read that `redirectUri` twice.** A SAML strategy defaults its redirect URI to
-`http://localhost:61001/callback`, and the provider requires the assertion
-consumer service the IdP posts to be exactly the one the strategy names. If you
-declare a real `acsUrl` and leave `redirectUri` off, the login fails before
-anything is opened with a configuration error, `saml-acs-mismatch` — *SAML
-acsUrl and the address the authorization strategy used do not match* — whose
-two addresses are `diagnostics.configuredUri` and `diagnostics.strategyUri`
-(`renderDiagnostics(error)` prints them), not words. Declare neither and the default is used for both, which is
+**Read that `redirectUri` twice.** The provider requires the assertion
+consumer service the IdP posts to be exactly the redirect the strategy
+names. `samlCallbackStrategy` advertises its loopback listener,
+`http://localhost:61001/callback` by default; `manualSamlResponseStrategy`
+and a `consumerHandoff` advertise the `redirectUri` you give them, which
+`manualSamlResponseStrategy` requires. If you declare a real `acsUrl` and the
+strategy names another address, the login fails before anything is opened
+with a configuration error, `saml-acs-mismatch` — *SAML acsUrl and the
+address the authorization strategy used do not match* — whose two addresses
+are `diagnostics.configuredUri` and `diagnostics.strategyUri`
+(`renderDiagnostics(error)` prints them), not words. Declare no `acsUrl` with
+`samlCallbackStrategy` and its address is used for both, which is
 consistent — and only reachable when the IdP will post to your localhost.
 
 Both SAML providers reject at construction when `authorizationUrl` is set
@@ -2242,6 +2717,7 @@ import {
   AuthorizationCodeProvider,
   ClientCredentialsProvider,
   browserCallbackStrategy,
+  linuxDefaultBrowser,
   refreshThenLogin,
 } from '@mcp-abap-adt/auth-providers';
 import { 
@@ -2280,7 +2756,7 @@ const btpBroker = new AuthBroker({
     uaaUrl: 'https://...',
     clientId: '...',
     clientSecret: '...',
-    authorization: browserCallbackStrategy({ browser: 'system' }),
+    authorization: browserCallbackStrategy({ browser: linuxDefaultBrowser() }),
   }),
 });
 
@@ -2297,7 +2773,7 @@ const abapBroker = new AuthBroker({
     uaaUrl: 'https://...',
     clientId: '...',
     clientSecret: '...',
-    authorization: browserCallbackStrategy({ browser: 'system', port: 4001 }),
+    authorization: browserCallbackStrategy({ browser: linuxDefaultBrowser(), port: 4001 }),
   }),
 });
 ```
@@ -2312,6 +2788,7 @@ Uses browser-based OAuth2 flow or refresh token:
 import {
   AuthorizationCodeProvider,
   browserCallbackStrategy,
+  linuxDefaultBrowser,
   refreshThenLogin,
 } from '@mcp-abap-adt/auth-providers';
 
@@ -2320,7 +2797,7 @@ const provider = new AuthorizationCodeProvider({
   uaaUrl: 'https://...authentication...hana.ondemand.com',
   clientId: '...',
   clientSecret: '...',
-  authorization: browserCallbackStrategy({ browser: 'system' }),
+  authorization: browserCallbackStrategy({ browser: linuxDefaultBrowser() }),
 });
 
 // If refreshToken is provided here, uses refresh flow (no browser)
@@ -2465,42 +2942,29 @@ in use. Please specify a different port or free the port.*, `facts.port`); a
 (`callback-port-invalid`) before any socket is touched. `port: 0` binds an ephemeral port, which works only where the
 identity provider accepts a loopback redirect on any port.
 
-**Port lifetime**: the callback port is held for the login and nothing longer. It is bound when the login window opens and released when the login ends — by success, by the identity provider's refusal, by another failure, or by an abort — and the returned promise settles only after the listening socket is closed. No timer is involved, and no connection is waited for: at the release an idle connection is ended and unreferenced; one whose request is still unfinished (a body that never completes) is destroyed, since nothing will answer it; one whose complete request is still being answered is unreferenced, so it cannot keep the process alive, and its response goes on. Two limits, measured: Node's `http.Server.close()` itself destroys a connection whose request was parsed, even while a large response is still flushing to a client that does not read, so such a client may get a cut response — and, were it not destroyed, a write still pending to a client that does not read would keep the process alive whatever `unref()` says. Neither holds the port. An error therefore always means the port is already available, and the port is released *before* the authorization code is exchanged for a token, so a slow identity provider cannot hold it either.
+**Port lifetime**: the callback port is held for the login and nothing longer. It is bound when the login window opens and released when the login ends — by success, by the identity provider's refusal, by another failure, or by an abort — and the strategy's `authorize` settles only after every listening socket is closed. No timer is involved, and no connection is waited for: the response that ended the login has flushed before the release; at the release an idle connection is ended and unreferenced, and one still being answered — another request, its response unfinished, or a body that never completes — is destroyed, since a pending write would otherwise keep the process alive whatever `unref()` says. Every response carries `Connection: close`, so nothing pipelined is queued behind it. An error therefore always means the port is already available, and the port is released *before* the authorization code is exchanged for a token, so a slow identity provider cannot hold it either.
 
 **No built-in timeout** (since 6.0.0): an interactive login — browser, OIDC, SAML, or a manual paste — waits until its result arrives, the identity provider refuses, or the consumer's `AbortSignal` aborts it; it then ends `interactive-login` `aborted` and the port is free. The `timeoutMs` options, `DEFAULT_LOGIN_TIMEOUT_MS` and the 30 s / 300 s defaults are gone: a consumer that passed `timeoutMs` passes `signal: AbortSignal.timeout(ms)` instead (to the strategy, or to `inBrowser` / `fromTerminal` as `{ signal }`); one that passed nothing now waits until it aborts.
 
-**Refused requests**: a `/callback` carrying neither a code nor an error no longer ends the login, and neither does any request the transport refuses — a callback without this login's `state`, one before the gate is armed, a paste without the form token, a `Host` the transport does not answer for. Each is answered `400`, counted, and the tally is reported when the login is aborted (`the browser login was aborted; 2 request(s) to the callback server were refused and ignored`) — so a browser prefetch, a stray probe or a forged callback cannot end a login the user is still completing.
+**Refused requests**: a `/callback` carrying neither a code nor an error no longer ends the login, and neither does any request a listener or its protocol refuses — a callback without this login's `state`, one before the listener is armed, a paste without the form token, a `Host` the listener does not answer for. Each is answered `400` in fixed words, counted, logged at `warn` with its reason only, and the tally is reported when the login is aborted (`the browser login was aborted; 2 request(s) to the callback server were refused and ignored`) — so a browser prefetch, a stray probe or a forged callback cannot end a login the user is still completing.
 
 **Cancellation**: pass `signal` to the strategy, or call `dispose()` on it. Both are honoured before the bind, during it, and while waiting; `dispose()` resolves only once the socket is free.
 
-**Process termination**: the callback server no longer installs its own `SIGTERM` / `SIGINT` / `SIGHUP` / `exit` handlers. A terminating process releases its listening sockets to the operating system anyway — measured at 0-1 ms after the process disappears — and the handlers were part of the cleanup tangle removed in 1.2.0. If a client kills the process mid-login, the port comes back with the process.
+**Process termination**: the callback listener installs no `SIGTERM` / `SIGINT` / `SIGHUP` / `exit` handlers of its own. A terminating process releases its listening sockets to the operating system anyway — measured at 0-1 ms after the process disappears — and the handlers were part of the cleanup tangle removed in 1.2.0. If a client kills the process mid-login, the port comes back with the process.
 
-**Cross-Platform Browser Support**: The browser authentication works across Linux, macOS, and Windows:
-- **Linux**: Automatically sets `DISPLAY=:0` if neither `DISPLAY` nor `WAYLAND_DISPLAY` environment variables are set. Supports multiple browser executable names (`google-chrome`, `google-chrome-stable`, `chromium`, `chromium-browser` for Chrome; `firefox`, `firefox-esr` for Firefox).
-- **Windows**: the default browser through `%SystemRoot%\System32\rundll32.exe url.dll,FileProtocolHandler <url>` (absolute paths, never a program found in the current directory); a named one through PowerShell's `Start-Process`, which reads the URL from an environment variable. Never `cmd`, which parses `&`, `|`, `^` and `%` whatever the quoting. Measured 2026-10-07 (Windows 11 x64): the default browser through `rundll32`, Chrome and Edge through `Start-Process`, each delivered the URL's path and query (with `&` and a `%20`) unchanged, and no command interpreter was started by the launcher.
-- **macOS**: Uses native `open` / `open -a <app>`.
-- **No shell, anywhere** (since 6.0.0): only an `http:` / `https:` URL is opened, as its WHATWG serialisation; one whose serialisation still holds a space, a quote, `<`, `>`, `^`, `|`, a backslash or a control character, or whose host is not a valid host name or address, is not opened at all (nothing is repaired). Every launcher is started with an argument array, the URL one argument of it. Through 5.4.2 the fallback without the `open` package handed the URL to a shell inside double quotes, so a `$(…)` or a backtick in it — from an OIDC provider's discovery document, say — ran as a command.
-
-**Headless Mode (SSH/Remote)**: For environments without a display (SSH sessions, Docker, CI/CD), leave `browser` at its default or set it explicitly:
+**Opening a browser** is the `browser` you pass — one of [the six shipped browsers](#the-six-shipped-browsers), one fixed launch each for one platform, or [a browser of your own](#a-browser-of-your-own). **Without a display** (SSH sessions, Docker, CI/CD) pass no `browser`:
 
 ```typescript
 const provider = new AuthorizationCodeProvider({
   renewal: refreshThenLogin(),
   uaaUrl, clientId, clientSecret,
-  authorization: browserCallbackStrategy({ browser: 'headless' }),
+  authorization: browserCallbackStrategy(),
 });
 
 const result = await provider.getTokens();
 ```
 
-In headless mode the authorization URL is shown — to the logger if there is one, to stderr otherwise — and the server waits for the user to complete authentication manually. The user can open the URL on any machine; the callback listens on loopback only (since 6.0.0), so a browser elsewhere reaches it through an SSH tunnel to the callback port, or through the `host` and `allowedHosts` you configure — the shipped UAA transport prints which, with where to paste the code if the redirect cannot reach back.
-
-**Browser Options** (`browserCallbackStrategy({ browser })`):
-- `'none'` (default): Shows the URL, waits for the callback or a paste
-- `'headless'`: Same as `'none'`
-- `'system'`: Opens the system default browser
-- `'auto'`: Tries to open a browser; on failure the URL is shown and the login continues
-- `'chrome'`, `'edge'`, `'firefox'`: Opens a specific browser
+The authorization URL is then shown on stderr, and the listener waits for the user to complete the login. The user can open the URL on any machine; the listener binds loopback only, so a browser elsewhere reaches it through [the SSH tunnel](#the-ssh-tunnel) to the callback port — the hint printed beside the URL says how, and where to paste the code if the redirect cannot reach back. A shipped browser that cannot be started there (no display, another OS) does the same: the URL is shown once, and the login waits.
 
 ### Token Validation
 
@@ -2523,7 +2987,7 @@ const provider = new AuthorizationCodeProvider({
   uaaUrl: 'https://...authentication...hana.ondemand.com',
   clientId: '...',
   clientSecret: '...',
-  authorization: browserCallbackStrategy({ browser: 'system' }),
+  authorization: browserCallbackStrategy({ browser: linuxDefaultBrowser() }),
 });
 const isValid = await provider.validateToken(token);  // serviceUrl optional
 // Checks JWT exp claim locally, no network request
@@ -3156,8 +3620,9 @@ answers it as its refusal.
 A value given but unusable is `invalid-value` (interfaces-auth 7), naming the
 field — "a configured value cannot be used: authorizationUrl" — never the
 value: an unparseable `authorizationUrl`, a malformed `persistence`,
-`refreshStatePersistence`'s `onWriteFailure` or `write`, a `callbackServer`
-without `expectState`. A missing or unusable `renewal` is
+`refreshStatePersistence`'s `onWriteFailure` or `write`, a part of an
+authorization strategy that cannot be used (a browser name where an
+`IBrowser` belongs reads as `presentation`). A missing or unusable `renewal` is
 `required-fields-missing` naming `renewal`. **A known wording limit:** an `SncLogonProvider` `myName`
 that is not a string is still reported as `required-fields-missing` naming
 the field, although a value was given.
@@ -3165,8 +3630,8 @@ the field, although a value was given.
 <!-- generated:refusal-table configuration -->
 | Thrown | `case` | `fields` | Reason | Hint |
 |---|---|---|---|---|
-| a required field or collaborator is missing: every token provider (and `inBrowser`, `fromTerminal`, `toConsole`, `SsoProviderFactory.create`) without a usable `renewal`, `ClientCredentialsProvider` and `AuthorizationCodeProvider` without `uaaUrl`, `clientId`, or `clientSecret` and no `clientAuthentication`, a SAML provider without `assertionValidator`, a shipped validator without `replayStore`; also an `SncLogonProvider` `myName` that is not a string (a known wording limit) | `required-fields-missing` | `<fields>` | required configuration is missing: `<fields>` | check the provider configuration |
-| a configured value that cannot be used: an `authorizationUrl` that does not parse (`AuthorizationCodeProvider` at construction and at login, a callback strategy arming its gate); a `persistence` that is not an object with a callable `report` (every token provider); `refreshStatePersistence` with `onWriteFailure` missing or not `'continue'` / `'fail'`, or a `write` that is not a function (each named); a `callbackServer` without `expectState` for `browserCallbackStrategy` / `oidcCallbackStrategy` (`callbackServer`) | `invalid-value` | `<fields>` | a configured value cannot be used: `<fields>` |  |
+| a required field or collaborator is missing: every token provider (and `inBrowser`, `fromTerminal`, `toConsole`, `SsoProviderFactory.create`) without a usable `renewal`, `ClientCredentialsProvider` and `AuthorizationCodeProvider` without `uaaUrl`, `clientId`, or `clientSecret` and no `clientAuthentication`, a SAML provider without `assertionValidator`, a shipped validator without `replayStore`; an authorization strategy without a part or the redirect it needs — `manualPasteStrategy`, `manualSamlResponseStrategy` and `externalCodeStrategy` without `redirectUri`, a redirect protocol over a transport that advertises none (`redirectUri`), `composeAuthorization` without `presentation`, `transport`, `protocol` or `endpoint`, `openInBrowser` without `browser` (`presentation`), `consumerPresentation` without `show`, `consumerAnswer` without `receive`, `consumerHandoff` without `provide`; also an `SncLogonProvider` `myName` that is not a string (a known wording limit) | `required-fields-missing` | `<fields>` | required configuration is missing: `<fields>` | check the provider configuration |
+| a configured value that cannot be used: an `authorizationUrl` that does not parse (`AuthorizationCodeProvider` at construction and at login); a `persistence` that is not an object with a callable `report` (every token provider); `refreshStatePersistence` with `onWriteFailure` missing or not `'continue'` / `'fail'`, or a `write` that is not a function (each named); a part of an authorization strategy that cannot be used: an `endpoint` that URL parsing would change or that is `/` or `/submit` (`endpoint`), a `redirectUri` that is not an absolute `http(s)` URL (`redirectUri`), a `browser` without an `open` function — a browser name included (`presentation`), a part without its methods (`presentation`, `transport`, `protocol`), a `remoteHint` that is not a function (`transport`), a `read` that is not a function (`read`), an `onFailure` that is not a function (`show`), a terminal with a protocol that has no paste words (`protocol`); an authorization URL a protocol cannot read a `state` from — none, empty or repeated (`authorizationUrl`) | `invalid-value` | `<fields>` | a configured value cannot be used: `<fields>` |  |
 | a token provider constructed with both | `client-secret-beside-client-authentication` | `clientSecret` | clientSecret cannot be given beside clientAuthentication | give the secret to the clientAuthentication strategy, or drop the strategy |
 | a SAML provider constructed with `authorizationUrl` and no `acsUrl` | `saml-acs-required-with-authorization-url` | `acsUrl` | acsUrl is required when authorizationUrl is set: the ACS inside a pre-built SAML request cannot be read, so it must be declared | check the provider configuration |
 | a SAML provider constructed with `idpInitiated` and `authnRequestId` (`fields`: both), or a login that minted or declared a request ID (`fields`: `idpInitiated`) | `saml-idp-initiated-with-request-id` | `idpInitiated`, `authnRequestId` | SAML idpInitiated is true, but a request ID was also configured or minted: an IdP-initiated login sends no request | remove one of them |
@@ -3189,7 +3654,7 @@ the field, although a value was given.
 | a shipped validator with no `idpCertificates` | `validator-no-certificates` | `idpCertificates` | idpCertificates must not be empty: nothing could be verified | check the provider configuration |
 | a shipped validator with a certificate that is neither PEM nor base64 DER, or no certificate | `idp-certificate-invalid` | `idpCertificates` | a configured IdP certificate is not a valid X.509 certificate in PEM or base64 DER | check the provider configuration |
 | `staticCodeStrategy` without a payload | `static-code-without-payload` | `payload` | staticCodeStrategy requires a payload | check the provider configuration |
-| a callback server port that is not an integer in 0..65535 | `callback-port-invalid` | `port` | invalid callback server port: it must be an integer in 0..65535 | check the provider configuration |
+| a listener `port` (or a callback strategy's) that is not an integer in 0..65535, at construction and again when it opens | `callback-port-invalid` | `port` | invalid callback server port: it must be an integer in 0..65535 | check the provider configuration |
 <!-- /generated:refusal-table configuration -->
 
 #### Relaying a refusal: `classify`
@@ -3502,7 +3967,7 @@ foreign and says nothing about this package. Either register the new URI, or
 keep the old one with one line:
 
 ```ts
-authorization: browserCallbackStrategy({ browser: 'system', port: 3001 })
+authorization: browserCallbackStrategy({ browser: linuxDefaultBrowser(), port: 3001 })
 ```
 
 (61001 was chosen because it sits above Linux's `ip_local_port_range`, so an
@@ -3620,9 +4085,9 @@ Integration tests will skip if `test-config.yaml` is not configured or contains 
 
 **Note**: 
 - Integration tests use `AbapServiceKeyStore` and `AbapSessionStore` for loading service keys and sessions
-- Tests may open a browser for authentication if no refresh token is available. This is expected behavior.
+- With no refresh token available, an interactive case (`interactive_login: true` or `MCP_ABAP_ADT_INTERACTIVE=1`) waits for you to log in: open the URL it shows in a browser of your choice.
 - The interactive test asks the OS for a free port rather than pinning one, so it cannot collide with a running server
-- Tests use `browserCallbackStrategy({ browser: 'system' })` for interactive authentication (not `'none'`)
+- The interactive cases use `browserCallbackStrategy()` without a `browser`: no test opens a browser or starts any program it did not register (`src/__tests__/helpers/noRealBrowser.ts`); the URL is shown on stderr for the person running them
 
 ### Providers against real authorization servers (UAA and Keycloak)
 
@@ -3904,15 +4369,17 @@ AUTH_LOG_LEVEL=debug npm test        # debug, info, warn, error
 
 ## Dependencies
 
-- `@mcp-abap-adt/interfaces-auth` (^7.3.0) - `IAuthProvider`, token provider, authorization, renewal, persistence, client-authentication and assertion-validation contracts (`ITokenProvider`, `IAuthorizationStrategy`, `IRenewalStrategy`, `ITokenPersistence`, `IClientAuthentication`, `CallbackServerFactory`, `IAssertionValidator`, `IAssertionReplayStore`), and the error contract's types and allowlists (`IAuthProviderError`, its kinds, facts and `OPERATIONS`)
+- `@mcp-abap-adt/interfaces-auth` (^7.5.0) - `IAuthProvider`, token provider, authorization, renewal, persistence, client-authentication and assertion-validation contracts (`ITokenProvider`, `IAuthorizationStrategy` and its parts — `IAuthorizationPresentation`, `IAnswerTransport`, `IAuthorizationProtocol`, `IBrowser` —, `IRenewalStrategy`, `ITokenPersistence`, `IClientAuthentication`, `IAssertionValidator`, `IAssertionReplayStore`), and the error contract's types and allowlists (`IAuthProviderError`, its kinds, facts and `OPERATIONS`)
 - `@mcp-abap-adt/interfaces-auth-sap` (^3.3.0) - XSUAA authorization configuration (`IAuthorizationConfig`) and `ICertificateMaterialLoader`
-- `@mcp-abap-adt/auth-errors` (^2.0.1) - the error contract's runtime: the builders every error is minted with, `AuthProviderFailure`, `classify` / `readFailure`, `guard`, `logFields`, shared attempts and parties
+- `@mcp-abap-adt/auth-errors` (^2.1.1) - the error contract's runtime: the builders every error is minted with, `AuthProviderFailure`, `classify` / `readFailure`, `guard`, `logFields`, shared attempts and parties
 - `@mcp-abap-adt/interfaces-utils` (^1.1.0) - `ILogger`
 - `@xmldom/xmldom` - XML parsing: SAML assertion validation, and taking the Assertion out of a SAMLResponse for the saml2-bearer grant
 - `xml-crypto` - XML-DSig signature verification for SAML assertion validation
 - `axios` - HTTP client
-- `express` - OAuth2 callback server
-- `open` - Browser opening utility
+
+The callback listener is Node's own `node:http`, and every browser is started
+with `node:child_process` (an argument array, never a shell): there is no
+`express` and no `open` dependency since 6.0.0.
 
 Requires Node.js 22, 24 or 26 (`engines: "^22 || ^24 || ^26"`). 22 and 24 are
 what SAP BTP, Cloud Foundry's Node.js buildpack offers; 26 is supported as well,

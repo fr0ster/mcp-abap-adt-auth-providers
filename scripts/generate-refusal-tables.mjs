@@ -296,11 +296,11 @@ function configurationTable() {
   ];
   const rows = {
     'required-fields-missing': [
-      'a required field or collaborator is missing: every token provider (and `inBrowser`, `fromTerminal`, `toConsole`, `SsoProviderFactory.create`) without a usable `renewal`, `ClientCredentialsProvider` and `AuthorizationCodeProvider` without `uaaUrl`, `clientId`, or `clientSecret` and no `clientAuthentication`, a SAML provider without `assertionValidator`, a shipped validator without `replayStore`; also an `SncLogonProvider` `myName` that is not a string (a known wording limit)',
+      'a required field or collaborator is missing: every token provider (and `inBrowser`, `fromTerminal`, `toConsole`, `SsoProviderFactory.create`) without a usable `renewal`, `ClientCredentialsProvider` and `AuthorizationCodeProvider` without `uaaUrl`, `clientId`, or `clientSecret` and no `clientAuthentication`, a SAML provider without `assertionValidator`, a shipped validator without `replayStore`; an authorization strategy without a part or the redirect it needs — `manualPasteStrategy`, `manualSamlResponseStrategy` and `externalCodeStrategy` without `redirectUri`, a redirect protocol over a transport that advertises none (`redirectUri`), `composeAuthorization` without `presentation`, `transport`, `protocol` or `endpoint`, `openInBrowser` without `browser` (`presentation`), `consumerPresentation` without `show`, `consumerAnswer` without `receive`, `consumerHandoff` without `provide`; also an `SncLogonProvider` `myName` that is not a string (a known wording limit)',
       null,
     ],
     'invalid-value': [
-      'a configured value that cannot be used: an `authorizationUrl` that does not parse (`AuthorizationCodeProvider` at construction and at login, a callback strategy arming its gate); a `persistence` that is not an object with a callable `report` (every token provider); `refreshStatePersistence` with `onWriteFailure` missing or not `\'continue\'` / `\'fail\'`, or a `write` that is not a function (each named); a `callbackServer` without `expectState` for `browserCallbackStrategy` / `oidcCallbackStrategy` (`callbackServer`)',
+      'a configured value that cannot be used: an `authorizationUrl` that does not parse (`AuthorizationCodeProvider` at construction and at login); a `persistence` that is not an object with a callable `report` (every token provider); `refreshStatePersistence` with `onWriteFailure` missing or not `\'continue\'` / `\'fail\'`, or a `write` that is not a function (each named); a part of an authorization strategy that cannot be used: an `endpoint` that URL parsing would change or that is `/` or `/submit` (`endpoint`), a `redirectUri` that is not an absolute `http(s)` URL (`redirectUri`), a `browser` without an `open` function — a browser name included (`presentation`), a part without its methods (`presentation`, `transport`, `protocol`), a `remoteHint` that is not a function (`transport`), a `read` that is not a function (`read`), an `onFailure` that is not a function (`show`), a terminal with a protocol that has no paste words (`protocol`); an authorization URL a protocol cannot read a `state` from — none, empty or repeated (`authorizationUrl`)',
       null,
     ],
     'client-secret-beside-client-authentication': [
@@ -392,7 +392,7 @@ function configurationTable() {
       ['payload'],
     ],
     'callback-port-invalid': [
-      'a callback server port that is not an integer in 0..65535',
+      'a listener `port` (or a callback strategy\'s) that is not an integer in 0..65535, at construction and again when it opens',
       ['port'],
     ],
   };
