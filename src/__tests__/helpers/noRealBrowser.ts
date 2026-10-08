@@ -1,94 +1,91 @@
 /**
- * Jest setup (`setupFiles`): no test starts a real browser or URL launcher.
+ * Jest setup (`setupFiles`): no test starts a program it did not register —
+ * above all no real browser or URL launcher.
  *
- * A test that reaches a shipped `IBrowser` without mocking the spawn
- * boundary would hand the authorization URL to the machine's own
- * `xdg-open`, `open`, a browser binary, `rundll32` or PowerShell — a real
- * browser tab, a real request. So `child_process.spawn` / `execFile` refuse
- * any launcher of that name, wherever it is found (the `open` package's
- * bundled `xdg-open` included), unless it is an absolute path inside the
- * temporary directory (a test's own fake script) — or a person asked for
- * the interactive cases (`interactive_login: true` or
- * `MCP_ABAP_ADT_INTERACTIVE=1`).
+ * Deny by default. Every `child_process` entry point (`spawn`, `spawnSync`,
+ * `execFile`, `execFileSync`, `exec`, `execSync`, `fork`) throws unless:
+ *
+ * - the program is node itself (`process.execPath`) — the suites that run a
+ *   plain-node scenario, `tsc`, the shape check or the README generator;
+ * - or it is an exact path a test registered with `allowExecutable(path)`
+ *   (its own fake script: a fake `xdg-open`, a stand-in for `reg.exe`);
+ *
+ * and in either case no shell is asked for (`shell` in the options).
+ * `exec` / `execSync` (a whole command line for a shell) and `fork` are
+ * always refused: no suite uses them. There is no opt-in that lifts it: the
+ * interactive cases show the URL instead of opening a browser.
+ *
+ * Not covered: a plain-node child scenario (`plainNode.ts`) runs outside
+ * Jest's setup; those scenarios inject their own `IBrowser` only.
  */
 
-import { existsSync, readFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { basename, isAbsolute, join, resolve, sep } from 'node:path';
-import * as yaml from 'js-yaml';
-import { interactiveLoginEnabled, type TestConfig } from './configHelpers';
+import { resolve } from 'node:path';
 
 // The core module object itself (not an import wrapper): every importer,
-// the `open` package and `jest.requireActual` included, reads spawn from it.
+// the `open` package and `jest.requireActual` included, reads it.
 import childProcess = require('node:child_process');
 
-/** Every program a browser launch may start, lower-cased. */
-export const LAUNCHERS: ReadonlySet<string> = new Set([
-  'xdg-open',
-  'open',
-  'gio',
-  'sensible-browser',
-  'x-www-browser',
-  'www-browser',
-  'wslview',
-  'google-chrome',
-  'google-chrome-stable',
-  'chrome',
-  'chromium',
-  'chromium-browser',
-  'microsoft-edge',
-  'microsoft-edge-stable',
-  'msedge',
-  'firefox',
-  'firefox-esr',
-  'rundll32',
-  'rundll32.exe',
-  'powershell',
-  'powershell.exe',
-  'pwsh',
-  'cmd',
-  'cmd.exe',
-]);
+const GUARDED = Symbol.for('mcp-abap-adt.noRealBrowser');
+const ALLOWED = Symbol.for('mcp-abap-adt.noRealBrowser.allowed');
+const target = childProcess as unknown as Record<string | symbol, unknown>;
 
-/** A launcher name, outside the temporary directory: refused. */
-export function refusedLauncher(command: unknown): boolean {
-  if (typeof command !== 'string') return false;
-  // Windows paths too: the last segment after either separator.
-  const name = basename(command.split('\\').join('/')).toLowerCase();
-  if (!LAUNCHERS.has(name)) return false;
-  const temporary = resolve(tmpdir()) + sep;
-  return !(isAbsolute(command) && resolve(command).startsWith(temporary));
+/** The registered paths, shared by every load of this module in a worker. */
+function allowed(): Set<string> {
+  let set = target[ALLOWED] as Set<string> | undefined;
+  if (set === undefined) {
+    set = new Set();
+    target[ALLOWED] = set;
+  }
+  return set;
 }
 
 /**
- * Whether a person asked for the interactive cases — read quietly (no
- * console line in every test file): `tests/test-config.yaml`, when present.
+ * Lets a test start `path` — exactly that file, an absolute path — until the
+ * returned function is called.
  */
-function interactive(): boolean {
-  let config: TestConfig = {};
-  try {
-    const path = join(__dirname, '..', '..', '..', 'tests', 'test-config.yaml');
-    if (existsSync(path)) {
-      config = (yaml.load(readFileSync(path, 'utf8')) as TestConfig) ?? {};
-    }
-  } catch {
-    config = {};
-  }
-  return interactiveLoginEnabled({ env: process.env, config });
+export function allowExecutable(path: string): () => void {
+  const exact = resolve(path);
+  allowed().add(exact);
+  return () => {
+    allowed().delete(exact);
+  };
 }
 
-const GUARDED = Symbol.for('mcp-abap-adt.noRealBrowser');
-const target = childProcess as unknown as Record<string | symbol, unknown>;
+/** The options object of a call (`args` may be left out), if any. */
+function optionsOf(args: readonly unknown[]): unknown {
+  for (const value of args.slice(1)) {
+    if (value !== null && typeof value === 'object' && !Array.isArray(value)) {
+      return value;
+    }
+  }
+  return undefined;
+}
 
-if (target[GUARDED] !== true && !interactive()) {
-  for (const name of ['spawn', 'execFile'] as const) {
+/** Whether a `spawn` / `execFile`-shaped call may run. */
+function permitted(args: readonly unknown[]): boolean {
+  const program = args[0];
+  if (typeof program !== 'string' || program === '') return false;
+  const options = optionsOf(args) as { shell?: unknown } | undefined;
+  if (options?.shell !== undefined && options.shell !== false) return false;
+  if (program === process.execPath) return true;
+  // Exact, absolute: a bare name is a PATH lookup, never registered.
+  return program === resolve(program) && allowed().has(program);
+}
+
+function refusal(program: unknown): Error {
+  return new Error(
+    `a test tried to start a program it did not register (${String(program)}): mock the spawn boundary, inject an IBrowser or allowExecutable(path)`,
+  );
+}
+
+if (target[GUARDED] !== true) {
+  const wrap = (
+    name: string,
+    check: (args: readonly unknown[]) => boolean,
+  ): void => {
     const real = target[name] as (...args: unknown[]) => unknown;
     const guarded = function (this: unknown, ...args: unknown[]): unknown {
-      if (refusedLauncher(args[0])) {
-        throw new Error(
-          `a test tried to start a real browser launcher (${String(args[0])}): mock the spawn boundary or inject an IBrowser`,
-        );
-      }
+      if (!check(args)) throw refusal(args[0]);
       return real.apply(this, args);
     };
     try {
@@ -101,6 +98,12 @@ if (target[GUARDED] !== true && !interactive()) {
     } catch {
       target[name] = guarded;
     }
+  };
+  for (const name of ['spawn', 'spawnSync', 'execFile', 'execFileSync']) {
+    wrap(name, permitted);
+  }
+  for (const name of ['exec', 'execSync', 'fork']) {
+    wrap(name, () => false);
   }
   target[GUARDED] = true;
 }

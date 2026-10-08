@@ -12,6 +12,7 @@ import { join } from 'node:path';
 import { describe, expect, it } from '@jest/globals';
 import { isAuthProviderFailure, readFailure } from '@mcp-abap-adt/auth-errors';
 import { queryRegistry } from '../../snc/SncSystem';
+import { allowExecutable } from '../helpers/noRealBrowser';
 
 const posix = process.platform !== 'win32';
 const describePosix = posix ? describe : describe.skip;
@@ -40,6 +41,8 @@ describePosix('queryRegistry with a real child process', () => {
     'utf8',
   );
   chmodSync(standIn, 0o700);
+  // The suite's guard starts only registered programs: this stand-in.
+  allowExecutable(standIn);
 
   it('an abort kills the child: no process is left, the query rejects aborted', async () => {
     const controller = new AbortController();

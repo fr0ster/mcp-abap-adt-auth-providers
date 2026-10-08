@@ -52,16 +52,23 @@ type SpawnCall = { command: string; args: string[]; options: unknown };
 const spawned: SpawnCall[] = [];
 const realChildProcess =
   jest.requireActual<typeof import('node:child_process')>('node:child_process');
+type FakeChild = InstanceType<typeof import('node:events').EventEmitter> & {
+  unref(): void;
+};
 /**
- * How the recorded child ends: `0`, another exit code, or an error. Not
- * recording, a launcher runs for real as the fake program `real` names for
- * it — never the system's own (a launcher it does not name is refused).
+ * How the recorded child goes: an error before it starts; or it starts
+ * (`spawn`) and exits with a code; or it starts and keeps running
+ * (`'running'`, kept in `running` for the test to end). Not recording, a
+ * launcher runs for real as the fake program `real` names for it — never
+ * the system's own (a launcher it does not name is refused, and the suite's
+ * guard starts only registered paths).
  */
 const fakeChild: {
   record: boolean;
-  outcome: (index: number) => number | Error;
+  outcome: (index: number) => number | Error | 'running';
   real: Record<string, string>;
-} = { record: true, outcome: () => 0, real: {} };
+  running: FakeChild[];
+} = { record: true, outcome: () => 0, real: {}, running: [] };
 
 jest.mock('node:child_process', () => ({
   ...jest.requireActual<Record<string, unknown>>('node:child_process'),
@@ -80,16 +87,18 @@ jest.mock('node:child_process', () => ({
     spawned.push({ command, args, options });
     const { EventEmitter } =
       jest.requireActual<typeof import('node:events')>('node:events');
-    const child = new EventEmitter() as InstanceType<typeof EventEmitter> & {
-      unref(): void;
-    };
+    const child = new EventEmitter() as FakeChild;
     child.unref = () => undefined;
     const outcome = fakeChild.outcome(index);
-    setImmediate(() =>
-      outcome instanceof Error
-        ? child.emit('error', outcome)
-        : child.emit('exit', outcome),
-    );
+    setImmediate(() => {
+      if (outcome instanceof Error) {
+        child.emit('error', outcome);
+        return;
+      }
+      child.emit('spawn');
+      if (outcome === 'running') fakeChild.running.push(child);
+      else setImmediate(() => child.emit('exit', outcome));
+    });
     return child;
   },
   exec: () => {
@@ -118,11 +127,16 @@ jest.mock('open', () => ({
 import { launchableUrl, URL_VARIABLE } from '../../auth/browserLaunch';
 import {
   chromeBrowser,
+  composeAuthorization,
   edgeBrowser,
   firefoxBrowser,
+  loopback4,
+  oauthCode,
   openInBrowser,
   systemBrowser,
 } from '../../index';
+import { getAvailablePort } from '../helpers/netHelpers';
+import { allowExecutable } from '../helpers/noRealBrowser';
 
 /** `${IFS}` as text: a shell's word separator, no space for the URL to encode. */
 const IFS = ['$', '{IFS}'].join('');
@@ -152,6 +166,7 @@ beforeEach(() => {
   fakeChild.record = true;
   fakeChild.outcome = () => 0;
   fakeChild.real = {};
+  fakeChild.running = [];
   spawned.length = 0;
 });
 afterEach(() => {
@@ -269,11 +284,18 @@ describe('without the open package: an argument array, no shell', () => {
     ]);
   });
 
-  it('Linux: the next executable when one cannot start or exits non-zero; resolved on the first that runs', async () => {
+  it('Linux: the next executable only when one cannot start; every one failing rejects', async () => {
     onPlatform('linux');
-    fakeChild.outcome = (index) =>
-      index === 0 ? Object.assign(new Error('nope'), { code: 'ENOENT' }) : 1;
-    // google-chrome errors, chromium exits 1, chromium-browser exits 1: all fail.
+    const enoent = () => Object.assign(new Error('nope'), { code: 'ENOENT' });
+    fakeChild.outcome = (index) => (index === 0 ? enoent() : 'running');
+    await expect(chromeBrowser().open(HOSTILE, never)).resolves.toBe(undefined);
+    expect(spawned.map((call) => call.command)).toEqual([
+      'google-chrome',
+      'chromium',
+    ]);
+
+    spawned.length = 0;
+    fakeChild.outcome = enoent;
     const failed = await chromeBrowser()
       .open(HOSTILE, never)
       .catch((e: unknown) => e);
@@ -283,12 +305,56 @@ describe('without the open package: an argument array, no shell', () => {
       'chromium-browser',
     ]);
     expect(isAuthProviderFailure(failed)).toBe(true);
-
-    spawned.length = 0;
-    fakeChild.outcome = (index) => (index < 2 ? 1 : 0);
-    await expect(chromeBrowser().open(HOSTILE, never)).resolves.toBe(undefined);
-    expect(spawned).toHaveLength(3);
   });
+
+  // M2: `open` settles once the browser was asked (the IBrowser contract).
+  it.each<[Name]>([['chromeBrowser'], ['edgeBrowser'], ['firefoxBrowser']])(
+    'Linux, %s: a browser binary started directly resolves at its spawn and never waits for the browser to exit',
+    async (name) => {
+      onPlatform('linux');
+      fakeChild.outcome = () => 'running';
+      await expect(factories[name]().open(HOSTILE, never)).resolves.toBe(
+        undefined,
+      );
+      expect(spawned).toHaveLength(1);
+      expect(fakeChild.running).toHaveLength(1);
+    },
+  );
+
+  it('Linux: a browser binary that started and later exits non-zero was still asked; no next candidate', async () => {
+    onPlatform('linux');
+    fakeChild.outcome = () => 1;
+    await expect(chromeBrowser().open(HOSTILE, never)).resolves.toBe(undefined);
+    expect(spawned.map((call) => call.command)).toEqual(['google-chrome']);
+  });
+
+  it.each<[NodeJS.Platform, Name]>([
+    ['linux', 'systemBrowser'],
+    ['darwin', 'systemBrowser'],
+    ['darwin', 'chromeBrowser'],
+    ['win32', 'systemBrowser'],
+    ['win32', 'firefoxBrowser'],
+  ])(
+    '%s, %s: a hand-off launcher is awaited to its exit',
+    async (platform, name) => {
+      onPlatform(platform);
+      fakeChild.outcome = () => 'running';
+      let settled = false;
+      const opened = factories[name]()
+        .open(HOSTILE, never)
+        .finally(() => {
+          settled = true;
+        });
+      for (let i = 0; i < 20 && fakeChild.running.length === 0; i += 1) {
+        await new Promise((resolve) => setImmediate(resolve));
+      }
+      await new Promise((resolve) => setImmediate(resolve));
+      expect(fakeChild.running).toHaveLength(1);
+      expect(settled).toBe(false);
+      fakeChild.running[0]?.emit('exit', 0);
+      await expect(opened).resolves.toBe(undefined);
+    },
+  );
 
   it('every launcher failing rejects in fixed words, keeping an allowlisted code — no URL, no state, no launcher text', async () => {
     onPlatform('linux');
@@ -352,7 +418,7 @@ describe('without the open package: an argument array, no shell', () => {
     const controller = new AbortController();
     fakeChild.outcome = () => {
       controller.abort();
-      return 1;
+      return Object.assign(new Error('nope'), { code: 'ENOENT' });
     };
     await expect(
       chromeBrowser().open(HOSTILE, controller.signal),
@@ -360,13 +426,23 @@ describe('without the open package: an argument array, no shell', () => {
     expect(spawned.map((call) => call.command)).toEqual(['google-chrome']);
   });
 
-  it('Linux without a display: DISPLAY=:0 for the launcher (as today)', async () => {
-    onPlatform('linux');
-    delete process.env.DISPLAY;
-    delete process.env.WAYLAND_DISPLAY;
-    await systemBrowser().open(HOSTILE, never);
-    expect(process.env.DISPLAY).toBe(':0');
-  });
+  // The user's decision: no DISPLAY guessed — a display, a remote Chrome or
+  // a console browser is the consumer's own IBrowser.
+  it.each(Object.keys(factories) as Name[])(
+    'Linux without a display, %s: process.env is left as it was',
+    async (name) => {
+      onPlatform('linux');
+      delete process.env.DISPLAY;
+      delete process.env.WAYLAND_DISPLAY;
+      const before = { ...process.env };
+      await factories[name]().open(HOSTILE, never);
+      expect('DISPLAY' in process.env).toBe(false);
+      expect('WAYLAND_DISPLAY' in process.env).toBe(false);
+      expect({ ...process.env }).toEqual(before);
+      const call = spawned[0] as SpawnCall;
+      expect((call.options as { env?: unknown }).env).toBeUndefined();
+    },
+  );
 });
 
 describe('with the open package: today’s app names', () => {
@@ -477,6 +553,62 @@ describe('through openInBrowser: the failure in fixed words, the URL prompted on
   });
 });
 
+describe('no display is guessed: a launcher failing is the ordinary presentation failure', () => {
+  it('Linux, no DISPLAY: the URL on stderr once, the login waits, process.env untouched; the signal ends it', async () => {
+    onPlatform('linux');
+    delete process.env.DISPLAY;
+    delete process.env.WAYLAND_DISPLAY;
+    const before = { ...process.env };
+    fakeChild.outcome = () => 4;
+    const written: string[] = [];
+    const stderr = jest
+      .spyOn(process.stderr, 'write')
+      .mockImplementation((chunk: unknown) => {
+        written.push(String(chunk));
+        return true;
+      });
+    try {
+      const port = await getAvailablePort();
+      const controller = new AbortController();
+      const url = (redirectUri: string) =>
+        `https://idp.example/authorize?redirect_uri=${encodeURIComponent(redirectUri)}&state=${STATE}`;
+      let done = false;
+      const login = composeAuthorization({
+        presentation: openInBrowser({ browser: systemBrowser() }),
+        transport: loopback4({ port }),
+        protocol: oauthCode(),
+        endpoint: '/callback',
+      })
+        .authorize({
+          buildAuthorizationUrl: async (redirectUri) => url(redirectUri),
+          signal: controller.signal,
+        })
+        .then(
+          () => undefined,
+          (error: unknown) => error,
+        )
+        .finally(() => {
+          done = true;
+        });
+      const shown = url(`http://127.0.0.1:${port}/callback`);
+      for (let i = 0; i < 200 && !written.join('').includes(shown); i += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 5));
+      }
+      expect(spawned.map((call) => call.command)).toEqual(['xdg-open']);
+      expect(written.join('').split(shown).length - 1).toBe(1);
+      expect(done).toBe(false);
+      expect({ ...process.env }).toEqual(before);
+      controller.abort();
+      expect(readFailure(await login, 'browser-login').facts).toEqual({
+        outcome: 'aborted',
+        strategy: 'browser',
+      });
+    } finally {
+      stderr.mockRestore();
+    }
+  });
+});
+
 // Runs on Linux, where the launchers are found on PATH; skipped elsewhere.
 const onLinux = realPlatform === 'linux' ? it : it.skip;
 
@@ -485,6 +617,7 @@ describe('for real: a hostile URL runs nothing', () => {
     '%s reaches its launcher as one argument; no MARKER is created',
     async (name) => {
       fakeChild.record = false;
+      const unregister: (() => void)[] = [];
       const dir = mkdtempSync(join(tmpdir(), 'browser-'));
       const out = join(dir, 'argv.json');
       for (const program of ['xdg-open', 'google-chrome']) {
@@ -495,6 +628,7 @@ describe('for real: a hostile URL runs nothing', () => {
         );
         chmodSync(path, 0o755);
         fakeChild.real[program] = path;
+        unregister.push(allowExecutable(path));
       }
       const markers = () =>
         readdirSync(process.cwd()).filter((f) => f.startsWith('MARKER'));
@@ -512,6 +646,7 @@ describe('for real: a hostile URL runs nothing', () => {
         expect(JSON.parse(readFileSync(out, 'utf8'))).toEqual([href]);
       } finally {
         for (const marker of markers()) rmSync(marker, { force: true });
+        for (const close of unregister) close();
         rmSync(dir, { recursive: true, force: true });
       }
     },
