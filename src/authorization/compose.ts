@@ -234,6 +234,12 @@ export function composeAuthorization<TPayload>(
     if (optionSignal?.aborted || requestSignal?.aborted) controller.abort();
     const logger = loggerOf(request);
     let latched: Latched | undefined;
+    /**
+     * What `use` returned, once it has: the only outcome this call answers.
+     * Whatever `open` itself resolves with — a transport that never called
+     * `use`, or settled while it was still running — is never taken.
+     */
+    let kept: AuthorizationOutcome<TPayload> | undefined;
 
     /** The judge the channel gets: the first terminal verdict latched (C9). */
     const latching =
@@ -356,10 +362,12 @@ export function composeAuthorization<TPayload>(
       // Settled with what was latched, never with what `answer()` gave.
       if (latched?.kind === 'end') throw latched.error;
       if (latched?.kind !== 'accept') throw failedLogin(undefined);
-      return {
+      const outcome: AuthorizationOutcome<TPayload> = {
         payload: latched.payload as TPayload,
         redirectUri: redirectUri ?? '',
       };
+      kept = outcome;
+      return outcome;
     };
 
     const options: AnswerTransportOptions = Object.freeze({
@@ -374,9 +382,10 @@ export function composeAuthorization<TPayload>(
     const run = (async (): Promise<AuthorizationOutcome<TPayload>> => {
       // An already-aborted signal is honoured before anything opens.
       if (controller.signal.aborted) throw abortedLogin(strategy);
-      return (await adopt(() =>
-        open.call(transport, options, use),
-      )) as AuthorizationOutcome<TPayload>;
+      // Awaited for its settlement only: `open` settles once released.
+      await adopt(() => open.call(transport, options, use));
+      if (kept === undefined) throw failedLogin(undefined);
+      return kept;
     })();
     const call: Call = {
       controller,
