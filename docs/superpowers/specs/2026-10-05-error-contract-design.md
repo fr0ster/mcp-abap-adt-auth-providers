@@ -2937,7 +2937,14 @@ payload.
   `host`); `authorities` required, at least one, each exactly an authority
   (`parseAuthority`), not loopback, not unspecified, else `invalid-value`,
   `authorities` — at construction, not silently matching nothing as
-  `allowedHosts` does today. An entry without a port means the bound port.
+  `allowedHosts` does today. An entry without a port means the bound port;
+  an entry with a port must name **the bound port** — checked after the
+  bind (so `port: 0` too), and a mismatch releases the socket and ends the
+  login `configuration` `invalid-value`, `authorities`, before anything is
+  advertised. A listener behind a proxy or a translated port is a consumer
+  transport, which owns that mapping. Test: `authorities:
+  ['192.0.2.10:61002']` with `port: 61001` → refused, the port bound again
+  by the test.
   At `open` it logs one `warn` line in fixed words: "the callback listens
   on a non-loopback address; every client that reaches it can answer this
   login through its paste page". The README warns the same and recommends
