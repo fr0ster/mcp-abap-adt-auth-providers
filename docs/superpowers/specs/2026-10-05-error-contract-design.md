@@ -3223,7 +3223,7 @@ a failed default launcher prompts once, not twice. `promptableUrl` and
 | `host` | gone: a non-local listener is the consumer's transport (C2) |
 | `allowedHosts` | gone: the listener answers only the authority it advertises |
 | `remoteHint` | the channel's `routeHint`; the named compositions keep a `remoteHint` option that replaces it |
-| `openUrl(url, browser, redirectUri)` | `consumerPresentation({ show })` |
+| `openUrl(url, browser, redirectUri)` | gone: a consumer's way to open a URL is its `IBrowser` (`browser`), or its whole presentation (`consumerPresentation({ show })`) |
 | `BrowserCallbackStrategy` class | removed; `composeAuthorization` |
 | `configuration` `invalid-value` `callbackServer` (a transport without `expectState`) | gone: no transport arms `state` |
 
@@ -3233,7 +3233,7 @@ Each returns `composeAuthorization(…)`. Options not listed are gone.
 
 | Name | Options | Presentation | Transport | Protocol |
 |---|---|---|---|---|
-| `browserCallbackStrategy` | `port?`, `browser?: IBrowser`, `openUrl?`, `remoteHint?`, `signal?` | `openUrl` → `consumerPresentation`; `browser` absent → `showUrl()` (today's default); else `openInBrowser({ browser })` | `loopback({ port: port ?? DEFAULT_CALLBACK_PORT })` | `oauthCode()` |
+| `browserCallbackStrategy` | `port?`, `browser?: IBrowser`, `remoteHint?`, `signal?` | `browser` absent → `showUrl()` (today's default); else `openInBrowser({ browser })` | `loopback({ port: port ?? DEFAULT_CALLBACK_PORT })` | `oauthCode()` |
 | `oidcCallbackStrategy` | the same | the same | the same | `oidcCode()` |
 | `samlCallbackStrategy` | the same | the same | the same | `samlResponse()` |
 | `manualPasteStrategy` | `redirectUri` (required), `read?`, `signal?` | `showUrl()` | `terminalPaste({ redirectUri, read })` | `oauthCode()` |
@@ -3316,8 +3316,15 @@ the IdP's text. `shown` reaches only the escaped error page.
   `composeAuthorization({ presentation, transport: myTransport, protocol:
   oauthCode() })`. The transport calls the judge per answer; it never
   returns a payload.
-- `openUrl` → still accepted by the named compositions; or
-  `consumerPresentation({ show })`.
+- `openUrl(url, browser, redirectUri)` is gone from the named
+  compositions: one hook per decision. A callback that only opened the URL
+  becomes an `IBrowser` — `{ open: (url, signal) => myOpen(url) }` — passed
+  as `browser`; one that needed the redirect URI or showed the URL in its
+  own UI becomes `consumerPresentation({ show: (url, { redirectUri }) =>
+  … })`, composed with `composeAuthorization`. Tests: a consumer `IBrowser`
+  receives exactly the URL; a `consumerPresentation` receives the URL and
+  the channel's `redirectUri`; `openUrl` no longer compiles
+  (`@ts-expect-error`).
 - A non-loopback bind → the consumer's own `IAnswerTransport` (the README's
   example), which builds its redirect from its origin and the endpoint
   path. Or keep `loopback` and tunnel (`ssh -L <port>:localhost:<port>`).
