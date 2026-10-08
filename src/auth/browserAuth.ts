@@ -228,16 +228,3 @@ export async function exchangeCodeForToken(
     refreshToken,
   };
 }
-
-/**
- * Check if debug logging is enabled for auth providers
- */
-function _isDebugEnabled(): boolean {
-  return (
-    process.env.DEBUG_AUTH_PROVIDERS === 'true' ||
-    process.env.DEBUG_BROWSER_AUTH === 'true' ||
-    process.env.DEBUG === 'true' ||
-    process.env.DEBUG?.includes('auth-providers') === true ||
-    process.env.DEBUG?.includes('browser-auth') === true
-  );
-}
