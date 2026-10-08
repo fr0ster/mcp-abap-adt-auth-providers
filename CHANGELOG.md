@@ -592,8 +592,9 @@ every exported declaration against the published 5.4.2.
     Cloud Foundry UAA returns the `state`, accepts the verifier, and refuses
     a code exchanged with another verifier or none. On the trial XSUAA
     (2026-10-08) a login with `state` and PKCE gets a token and a refresh
-    token that open ADT; whether XSUAA refuses a wrong verifier is not yet
-    run (`docs/btp-setup.md`, Pending);
+    token that open ADT, and a code exchanged with another verifier is
+    refused `invalid_grant` (a code with no verifier is not yet run there:
+    `docs/btp-setup.md`, Pending);
   - every listener is closed from the bind until the composer arms it —
     after the URL is built and the protocol has read its `state`, before the
     URL is shown — for every protocol, SAML included; `oauthCode()` and
