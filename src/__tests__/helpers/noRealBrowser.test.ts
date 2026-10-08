@@ -6,7 +6,7 @@
  * exist, so even a broken guard starts nothing.
  */
 
-import { chmodSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
@@ -138,17 +138,20 @@ describe('no real program in a test', () => {
 
   // N2: `promisify(execFile)` goes through `util.promisify.custom`, which
   // must be kept (SncSystem destructures `{ stdout }`) and guarded too.
-  it('promisify(execFile) of a registered fake resolves { stdout, stderr }', async () => {
+  // Node itself runs a JS fixture: the same on every platform (no shebang).
+  it('promisify(execFile) of node with a fixture resolves { stdout, stderr }', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'guard-promisify-'));
-    const fake = join(dir, 'fake.sh');
-    writeFileSync(fake, '#!/bin/sh\necho out\necho err >&2\n');
-    chmodSync(fake, 0o700);
-    const unregister = guard().allowExecutable(fake);
+    const fixture = join(dir, 'fixture.js');
+    writeFileSync(
+      fixture,
+      "process.stdout.write('out\\n'); process.stderr.write('err\\n');\n",
+    );
     try {
-      const result = await promisify(childProcess.execFile)(fake, []);
+      const result = await promisify(childProcess.execFile)(process.execPath, [
+        fixture,
+      ]);
       expect(result).toEqual({ stdout: 'out\n', stderr: 'err\n' });
     } finally {
-      unregister();
       rmSync(dir, { recursive: true, force: true });
     }
   });
