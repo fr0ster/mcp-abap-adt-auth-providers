@@ -6,8 +6,10 @@
  * exist, so even a broken guard starts nothing.
  */
 
+import { chmodSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { promisify } from 'node:util';
 import { describe, expect, it, jest } from '@jest/globals';
 
 // The core module object itself: the one the guard wraps.
@@ -133,6 +135,39 @@ describe('no real program in a test', () => {
     }
     expect(() => childProcess.spawn(fake, [])).toThrow(REFUSED);
   });
+
+  // N2: `promisify(execFile)` goes through `util.promisify.custom`, which
+  // must be kept (SncSystem destructures `{ stdout }`) and guarded too.
+  it('promisify(execFile) of a registered fake resolves { stdout, stderr }', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'guard-promisify-'));
+    const fake = join(dir, 'fake.sh');
+    writeFileSync(fake, '#!/bin/sh\necho out\necho err >&2\n');
+    chmodSync(fake, 0o700);
+    const unregister = guard().allowExecutable(fake);
+    try {
+      const result = await promisify(childProcess.execFile)(fake, []);
+      expect(result).toEqual({ stdout: 'out\n', stderr: 'err\n' });
+    } finally {
+      unregister();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    ['execFile', () => promisify(childProcess.execFile)(nowhere('x'), [])],
+    ['exec', () => promisify(childProcess.exec)(`${nowhere('x')} y`)],
+  ])(
+    'promisify(%s) of an unregistered program is refused',
+    async (_n, call) => {
+      let thrown: unknown;
+      try {
+        await call();
+      } catch (error) {
+        thrown = error;
+      }
+      expect(String(thrown)).toContain(REFUSED);
+    },
+  );
 
   it('jest.requireActual sees the guard too', () => {
     const actual =

@@ -20,6 +20,7 @@
  */
 
 import { resolve } from 'node:path';
+import { promisify } from 'node:util';
 
 // The core module object itself (not an import wrapper): every importer,
 // the `open` package and `jest.requireActual` included, reads it.
@@ -83,11 +84,24 @@ if (target[GUARDED] !== true) {
     name: string,
     check: (args: readonly unknown[]) => boolean,
   ): void => {
-    const real = target[name] as (...args: unknown[]) => unknown;
+    const real = target[name] as ((...args: unknown[]) => unknown) &
+      Record<symbol, unknown>;
     const guarded = function (this: unknown, ...args: unknown[]): unknown {
       if (!check(args)) throw refusal(args[0]);
       return real.apply(this, args);
-    };
+    } as ((...args: unknown[]) => unknown) & Record<symbol, unknown>;
+    // `util.promisify` uses this (execFile / exec resolve `{ stdout,
+    // stderr }`); it closes over the real function, so it is guarded too.
+    const custom = real[promisify.custom];
+    if (typeof custom === 'function') {
+      guarded[promisify.custom] = function (
+        this: unknown,
+        ...args: unknown[]
+      ): unknown {
+        if (!check(args)) return Promise.reject(refusal(args[0]));
+        return (custom as (...a: unknown[]) => unknown).apply(this, args);
+      };
+    }
     try {
       Object.defineProperty(childProcess, name, {
         value: guarded,
