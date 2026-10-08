@@ -9,15 +9,11 @@
  * `timeoutMs` is gone, `signal` is the only way a scope ends without a result.
  */
 
-import type {
-  CallbackServerFactory,
-  ICallbackServerOptions,
-} from '@mcp-abap-adt/interfaces-auth';
+import type { ICallbackServerOptions } from '@mcp-abap-adt/interfaces-auth';
 import {
   AuthorizationCodeProvider,
-  BrowserCallbackStrategy,
-  type BrowserCallbackStrategyOptions,
   browserCallbackStrategy,
+  type ComposedAuthorization,
   // @ts-expect-error DEFAULT_LOGIN_TIMEOUT_MS is gone with the built-in bound
   DEFAULT_LOGIN_TIMEOUT_MS,
   type ManualStrategyOptions,
@@ -34,7 +30,7 @@ import {
 
 void DEFAULT_LOGIN_TIMEOUT_MS;
 
-declare const callbackServer: CallbackServerFactory<string>;
+declare const parts: ComposedAuthorization<string>;
 declare const uaa: Parameters<typeof AuthorizationCodeProvider.inBrowser>[0];
 declare const oidc: Parameters<typeof OidcBrowserProvider.inBrowser>[0];
 declare const bearer: Parameters<typeof Saml2BearerProvider.inBrowser>[0];
@@ -43,19 +39,14 @@ declare const trust: Parameters<typeof Saml2BearerProvider.inBrowser>[1];
 declare const passcode: Parameters<typeof UaaPasscodeProvider.fromTerminal>[0];
 const signal = AbortSignal.timeout(1000);
 
-// The strategies' options.
-export const strategyOptions: BrowserCallbackStrategyOptions<string> = {
-  callbackServer,
-  stateGate: true,
-  // @ts-expect-error no login bound on BrowserCallbackStrategyOptions
+// The composer's parts and the named compositions' options.
+export const composed: ComposedAuthorization<string> = {
+  ...parts,
+  signal,
+  // @ts-expect-error no login bound on ComposedAuthorization
   timeoutMs: 1000,
 };
 export const browser = [
-  new BrowserCallbackStrategy<string>({
-    callbackServer,
-    stateGate: true,
-    signal,
-  }),
   browserCallbackStrategy({ signal }),
   // @ts-expect-error no login bound on browserCallbackStrategy
   browserCallbackStrategy({ timeoutMs: 1000 }),
@@ -67,15 +58,18 @@ export const browser = [
   samlCallbackStrategy({ timeoutMs: 1000 }),
 ];
 export const manual = [
-  manualPasteStrategy({ signal }),
+  manualPasteStrategy({ redirectUri: 'http://localhost:1/cb', signal }),
   // @ts-expect-error no login bound on ManualStrategyOptions
-  manualPasteStrategy({ timeoutMs: 1000 }),
+  manualPasteStrategy({ redirectUri: 'http://localhost:1/cb', timeoutMs: 1 }),
   // @ts-expect-error no login bound on ManualStrategyOptions
-  manualSamlResponseStrategy({ timeoutMs: 1000 }),
-  // @ts-expect-error no login bound on ManualStrategyOptions
+  manualSamlResponseStrategy({ redirectUri: 'http://x/acs', timeoutMs: 1 }),
+  // @ts-expect-error no login bound on ManualPasscodeStrategyOptions
   manualPasscodeStrategy({ timeoutMs: 1000 }),
 ];
-export const manualOptions: ManualStrategyOptions = { signal };
+export const manualOptions: ManualStrategyOptions = {
+  redirectUri: 'http://localhost:1/cb',
+  signal,
+};
 
 // The static factories' options.
 export const factories = [

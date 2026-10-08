@@ -316,12 +316,13 @@ function rows(lib: typeof Lib): Row[] {
         // consumer's abort ends it.
         signal: AbortSignal.timeout(500),
       }) as T;
-    const factory = w.hostile('callback server factory');
-    if (factory)
-      return new lib.BrowserCallbackStrategy({
-        stateGate: false,
-        port: 0,
-        callbackServer: factory as never,
+    const open = w.hostile('answer transport');
+    if (open)
+      return lib.composeAuthorization({
+        presentation: lib.showUrl(),
+        transport: { label: 'browser', open } as never,
+        protocol: lib.oauthCode(),
+        endpoint: '/callback',
       }) as T;
     return good() as T;
   };
@@ -340,7 +341,7 @@ function rows(lib: typeof Lib): Row[] {
   const INTERACTIVE = [
     'interactive strategy',
     'browser launcher',
-    'callback server factory',
+    'answer transport',
   ];
   const TARGETS = ['logon target', 'request target', 'target object'];
   const saml = (w: Wiring, signWhat: 'response' | 'assertion') => {

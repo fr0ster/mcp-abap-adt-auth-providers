@@ -16,7 +16,6 @@ import {
   AUTH_TYPE_USER_TOKEN,
 } from '@mcp-abap-adt/interfaces-auth';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
-import type { OidcCallbackResult } from '../../auth/oidcBrowserAuth';
 import { discoverOidc } from '../../auth/oidcDiscovery';
 import { generatePkceChallenge } from '../../auth/oidcPkce';
 import {
@@ -32,6 +31,7 @@ import {
   refreshSamlBearerToken,
 } from '../../auth/saml2TokenExchange';
 import { toBearerAssertion } from '../../auth/samlBearerAssertion';
+import type { OidcCallbackResult } from '../../authorization/protocol';
 import {
   consoleDeviceCodePresenter,
   type DeviceCodePrompt,
@@ -46,7 +46,6 @@ import { refreshThenLogin } from '../../renewal';
 import { SsoProviderFactory } from '../../sso/SsoProviderFactory';
 import {
   asOidcResult,
-  BrowserCallbackStrategy,
   browserCallbackStrategy,
   externalCodeStrategy,
   oidcCallbackStrategy,
@@ -70,9 +69,6 @@ jest.mock('../../auth/oidcDiscovery', () => ({
     }
   ).mtlsAlias,
 }));
-// `oidcBrowserAuth` is deliberately NOT mocked: the provider's default strategy
-// takes its callback transport (`withOidcCallbackServer`) from that module, and
-// the lifecycle tests below exercise the real one.
 jest.mock('../../auth/oidcToken', () => ({
   exchangeAuthorizationCode: jest.fn(),
   refreshOidcToken: jest.fn(),
@@ -194,7 +190,10 @@ describe('SSO Providers', () => {
       clientId: 'client',
       clientSecret: 'secret',
       authorization: asOidcResult(
-        externalCodeStrategy({ provide: async () => 'auth-code' }),
+        externalCodeStrategy({
+          redirectUri: 'http://localhost:61001/callback',
+          provide: async () => 'auth-code',
+        }),
       ),
     });
 
@@ -219,7 +218,10 @@ describe('SSO Providers', () => {
       authorizationEndpoint: 'https://issuer/authorize',
       tokenEndpoint: 'https://issuer/token',
       authorization: asOidcResult(
-        externalCodeStrategy({ provide: async () => 'auth-code' }),
+        externalCodeStrategy({
+          redirectUri: 'http://localhost:61001/callback',
+          provide: async () => 'auth-code',
+        }),
       ),
     });
 
@@ -750,7 +752,10 @@ describe('SSO Providers', () => {
         authorizationEndpoint: '',
         tokenEndpoint: '',
         authorization: asOidcResult(
-          externalCodeStrategy({ provide: async () => 'auth-code' }),
+          externalCodeStrategy({
+            redirectUri: 'http://localhost:61001/callback',
+            provide: async () => 'auth-code',
+          }),
         ),
       });
 
@@ -864,7 +869,10 @@ describe('SSO Providers', () => {
       issuerUrl: 'https://issuer',
       clientId: 'client',
       authorization: asOidcResult(
-        externalCodeStrategy({ provide: async () => 'unreachable' }),
+        externalCodeStrategy({
+          redirectUri: 'http://localhost:61001/callback',
+          provide: async () => 'unreachable',
+        }),
       ),
     });
 
@@ -1248,12 +1256,6 @@ describe('OidcBrowserProvider strategy lifecycle', () => {
   });
 
   it('never disposes a strategy the consumer supplied', async () => {
-    // Nothing here should construct a default at all; the class-level spy says
-    // so without needing to mock the module the provider imports.
-    const defaultDispose = jest.spyOn(
-      BrowserCallbackStrategy.prototype,
-      'dispose',
-    );
     const dispose = jest.fn(async () => undefined);
     const redirectUri = 'http://localhost:61001/callback';
     const supplied: IAuthorizationStrategy<OidcCallbackResult> = {
@@ -1264,23 +1266,18 @@ describe('OidcBrowserProvider strategy lifecycle', () => {
       dispose,
     };
 
-    try {
-      const provider = new OidcBrowserProvider({
-        renewal: refreshThenLogin(),
-        clientId: 'client',
-        authorizationEndpoint: 'https://issuer/authorize',
-        tokenEndpoint: 'https://issuer/token',
-        authorization: supplied,
-      });
+    const provider = new OidcBrowserProvider({
+      renewal: refreshThenLogin(),
+      clientId: 'client',
+      authorizationEndpoint: 'https://issuer/authorize',
+      tokenEndpoint: 'https://issuer/token',
+      authorization: supplied,
+    });
 
-      const tokens = await provider.getTokens();
-      expect(tokens.authorizationToken).toBe('jwt.access.token');
-      // A receiver the consumer owns must survive the login it served.
-      expect(dispose).not.toHaveBeenCalled();
-      expect(defaultDispose).not.toHaveBeenCalled();
-    } finally {
-      defaultDispose.mockRestore();
-    }
+    const tokens = await provider.getTokens();
+    expect(tokens.authorizationToken).toBe('jwt.access.token');
+    // A receiver the consumer owns must survive the login it served.
+    expect(dispose).not.toHaveBeenCalled();
   }, 30000);
 
   it('leaves a supplied strategy alone when the login fails too', async () => {
@@ -1324,12 +1321,6 @@ describe('SAML strategy lifecycle', () => {
   });
 
   it('never disposes a strategy the consumer supplied', async () => {
-    // Nothing here should construct a default at all; the class-level spy says
-    // so without needing to mock the module the provider imports.
-    const defaultDispose = jest.spyOn(
-      BrowserCallbackStrategy.prototype,
-      'dispose',
-    );
     const dispose = jest.fn(async () => undefined);
     const redirectUri = 'http://localhost:61001/callback';
     const supplied: IAuthorizationStrategy<string> = {
@@ -1340,27 +1331,22 @@ describe('SAML strategy lifecycle', () => {
       dispose,
     };
 
-    try {
-      const provider = new Saml2PureProvider({
-        renewal: refreshThenLogin(),
-        idpSsoUrl: 'https://idp.example/sso',
-        spEntityId: 'sp',
-        acsUrl: redirectUri,
-        authorization: supplied,
-        cookieProvider: async (saml) => saml,
-        // This test is about the strategy lifecycle, not validation; the
-        // fixture above is not signed.
-        assertionValidator: acceptingSamlValidator(),
-      });
+    const provider = new Saml2PureProvider({
+      renewal: refreshThenLogin(),
+      idpSsoUrl: 'https://idp.example/sso',
+      spEntityId: 'sp',
+      acsUrl: redirectUri,
+      authorization: supplied,
+      cookieProvider: async (saml) => saml,
+      // This test is about the strategy lifecycle, not validation; the
+      // fixture above is not signed.
+      assertionValidator: acceptingSamlValidator(),
+    });
 
-      const tokens = await provider.getTokens();
-      expect(tokens.authorizationToken).toBe('PHNhbWw+');
-      // A receiver the consumer owns must survive the login it served.
-      expect(dispose).not.toHaveBeenCalled();
-      expect(defaultDispose).not.toHaveBeenCalled();
-    } finally {
-      defaultDispose.mockRestore();
-    }
+    const tokens = await provider.getTokens();
+    expect(tokens.authorizationToken).toBe('PHNhbWw+');
+    // A receiver the consumer owns must survive the login it served.
+    expect(dispose).not.toHaveBeenCalled();
   }, 30000);
 
   it('leaves a supplied strategy alone when the login fails too', async () => {

@@ -30,7 +30,8 @@ describe('manual strategies', () => {
         read: async () => 'pasted-code',
       });
       const outcome = await strategy.authorize({
-        buildAuthorizationUrl: async () => 'https://idp.example/authorize',
+        buildAuthorizationUrl: async () =>
+          'https://idp.example/authorize?state=x',
       });
       expect(outcome.payload).toBe('pasted-code');
     } finally {
@@ -41,16 +42,19 @@ describe('manual strategies', () => {
 
   it('accepts a full redirected URL as well as a bare code', async () => {
     const strategy = manualPasteStrategy({
+      redirectUri: 'http://localhost:61001/callback',
       read: async () => 'http://localhost:61001/callback?code=from-url&state=x',
     });
     const outcome = await strategy.authorize({
-      buildAuthorizationUrl: async () => 'https://idp.example/authorize',
+      buildAuthorizationUrl: async () =>
+        'https://idp.example/authorize?state=x',
     });
     expect(outcome.payload).toBe('from-url');
   });
 
   it('takes a SAMLResponse verbatim, since it never reaches a URL', async () => {
     const strategy = manualSamlResponseStrategy({
+      redirectUri: 'http://localhost:61001/callback',
       read: async () => '  PHNhbWw+  ',
     });
     const outcome = await strategy.authorize({
@@ -72,7 +76,7 @@ describe('code strategies', () => {
     });
     const outcome = await strategy.authorize({
       buildAuthorizationUrl: async (uri) =>
-        `https://idp.example/authorize?redirect_uri=${encodeURIComponent(uri)}&code_challenge=abc`,
+        `https://idp.example/authorize?redirect_uri=${encodeURIComponent(uri)}&code_challenge=abc&state=s`,
     });
     expect(seen[0]).toContain('code_challenge=abc');
     expect(outcome.payload).toBe('external-code');

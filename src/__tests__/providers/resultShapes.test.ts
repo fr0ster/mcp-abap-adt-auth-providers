@@ -9,16 +9,17 @@
 import { join } from 'node:path';
 import { beforeEach, describe, expect, it, jest } from '@jest/globals';
 import type {
+  AnswerTransportOptions,
   AssertionContext,
   AuthorizationRequest,
-  CallbackServerFactory,
   IAssertionValidator,
   IAuthorizationStrategy,
-  ICallbackServerOptions,
   ITokenResult,
 } from '@mcp-abap-adt/interfaces-auth';
 import type { ISapConfig } from '@mcp-abap-adt/interfaces-auth-sap';
 import axios from 'axios';
+import { composeAuthorization } from '../../authorization/compose';
+import { passcode } from '../../authorization/protocol';
 import { FileCertificateMaterialLoader } from '../../credentials/FileCertificateMaterialLoader';
 import { AuthorizationCodeProvider } from '../../providers/AuthorizationCodeProvider';
 import { ClientCredentialsProvider } from '../../providers/ClientCredentialsProvider';
@@ -30,7 +31,6 @@ import { Saml2BearerProvider } from '../../providers/Saml2BearerProvider';
 import { Saml2PureProvider } from '../../providers/Saml2PureProvider';
 import { UaaPasscodeProvider } from '../../providers/UaaPasscodeProvider';
 import { refreshThenLogin } from '../../renewal';
-import { BrowserCallbackStrategy } from '../../strategies/BrowserCallbackStrategy';
 
 // Automocked, but with axios's own error class: the sites throw it.
 jest.mock('axios', () => {
@@ -414,17 +414,20 @@ describe('the request a strategy gets, through getTokens()', () => {
   });
 });
 
-describe('the callback server options', () => {
-  it('carry logger as an own key, undefined, when the request has none', async () => {
-    const seen: ICallbackServerOptions[] = [];
-    const callbackServer: CallbackServerFactory<string> = async (options) => {
-      seen.push(options);
-      throw new Error('stop');
-    };
-    const strategy = new BrowserCallbackStrategy<string>({
-      stateGate: false,
-      port: 0,
-      callbackServer,
+describe('the answer transport options', () => {
+  it('carry logger and paste as own keys, undefined, when the request and the protocol have none', async () => {
+    const seen: AnswerTransportOptions[] = [];
+    const strategy = composeAuthorization({
+      presentation: { present: () => undefined },
+      transport: {
+        label: 'consumer',
+        open: async (options) => {
+          seen.push(options);
+          throw new Error('stop');
+        },
+      },
+      protocol: { ...passcode(), paste: undefined },
+      endpoint: '/callback',
     });
 
     await expect(
@@ -433,6 +436,8 @@ describe('the callback server options', () => {
     expect(seen).toHaveLength(1);
     expect(Object.hasOwn(seen[0]!, 'logger')).toBe(true);
     expect(seen[0]!.logger).toBeUndefined();
+    expect(Object.hasOwn(seen[0]!, 'paste')).toBe(true);
+    expect(seen[0]!.paste).toBeUndefined();
   });
 });
 

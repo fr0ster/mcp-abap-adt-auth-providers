@@ -27,11 +27,7 @@ import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
 import { DefaultLogger, LogLevel } from '@mcp-abap-adt/logger';
 import { AuthorizationCodeProvider } from '../../providers/AuthorizationCodeProvider';
 import { refreshThenLogin } from '../../renewal';
-import {
-  BrowserCallbackStrategy,
-  browserCallbackStrategy,
-  staticCodeStrategy,
-} from '../../strategies';
+import { browserCallbackStrategy, staticCodeStrategy } from '../../strategies';
 import {
   getDestination,
   getServiceKeysDir,
@@ -650,12 +646,6 @@ describe('AuthorizationCodeProvider strategy lifecycle', () => {
       access_token: createValidJWT(),
       refresh_token: 'refresh-from-stub',
     });
-    // Nothing here should construct a default at all; the class-level spy says
-    // so without needing to mock the module the provider imports.
-    const defaultDispose = jest.spyOn(
-      BrowserCallbackStrategy.prototype,
-      'dispose',
-    );
     const dispose = jest.fn(async () => undefined);
     const redirectUri = 'http://localhost:61001/callback';
     const supplied: IAuthorizationStrategy<string> = {
@@ -679,9 +669,7 @@ describe('AuthorizationCodeProvider strategy lifecycle', () => {
       expect(tokens.authorizationToken).toBeDefined();
       // A receiver the consumer owns must survive the login it served.
       expect(dispose).not.toHaveBeenCalled();
-      expect(defaultDispose).not.toHaveBeenCalled();
     } finally {
-      defaultDispose.mockRestore();
       await uaa.close();
     }
   }, 30000);

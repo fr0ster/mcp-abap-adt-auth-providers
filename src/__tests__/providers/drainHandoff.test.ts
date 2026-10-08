@@ -2,24 +2,30 @@
  * Drain handoff (spec §6b): an aborted attempt is non-joinable at once, but
  * not yet released — its strategy may still be closing its callback socket.
  * A replacement attempt waits for the release before it starts its own
- * authorization, raced only against its own signal. Here the callback
- * server's shutdown is held open by a test gate on a fixed port: without
- * the handoff the replacement would meet a strategy still authorizing
- * (`busy`) or a port still bound (`port-in-use`).
+ * authorization, raced only against its own signal (`attempt.exclusive`).
+ * Here a composed strategy's transport holds its release open by a test
+ * gate on a fixed port — the composer settles `authorize` only once `open`
+ * has (spec §6d.4): without the handoff the replacement would meet a
+ * strategy still authorizing (`busy`) or a port still bound
+ * (`port-in-use`).
  */
 
 import * as http from 'node:http';
 import { afterEach, beforeEach, describe, expect, it } from '@jest/globals';
 import { readFailure } from '@mcp-abap-adt/auth-errors';
 import type {
+  AnswerJudge,
+  AnswerTransportOptions,
   AuthorizationRequest,
-  CallbackServerFactory,
+  IAnswerChannel,
+  IAnswerTransport,
   IAuthorizationStrategy,
 } from '@mcp-abap-adt/interfaces-auth';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
+import { composeAuthorization } from '../../authorization/compose';
+import { oauthCode } from '../../authorization/protocol';
 import { AuthorizationCodeProvider } from '../../providers/AuthorizationCodeProvider';
 import { refreshThenLogin } from '../../renewal';
-import { BrowserCallbackStrategy } from '../../strategies/BrowserCallbackStrategy';
 import {
   Arrivals,
   type Deferred,
@@ -48,56 +54,66 @@ function isAborted(error: unknown): boolean {
   );
 }
 
-/** One scope of the held-shutdown callback server. */
+/** One open of the held-release transport. */
 interface Scope {
   /** Delivers the authorization code. */
   deliver(code: string): void;
-  /** Releases the socket's close, held after the scope ended. */
+  /** Releases the socket's close, held after the open ended. */
   readonly gate: Deferred<void>;
   /** Resolves once the socket is closed. */
   readonly closed: Promise<void>;
 }
 
 /**
- * A callback server factory that binds `port` for real and, once its scope
- * ends, keeps the socket open until the test opens the scope's gate.
+ * A transport that binds `port` for real and, once its `use` has ended,
+ * keeps the socket open until the test opens the scope's gate: `open`
+ * settles only after that (the drain's test hook).
  */
-function heldShutdown(scopes: Arrivals<Scope>): CallbackServerFactory<string> {
-  return (async (options, use) => {
-    const server = http.createServer((_req, res) => res.end('ok'));
-    await new Promise<void>((resolve, reject) => {
-      server.once('error', reject);
-      server.listen(options.port, '127.0.0.1', () => resolve());
-    });
-    const result = deferred<string>();
-    // Handled at creation, as the shipped scope does: since Task 23's fix
-    // round the strategy may end before it ever waits (aborted while the URL
-    // was built), and an unawaited rejection would surface as unhandled.
-    void result.promise.catch(() => undefined);
-    const gate = deferred<void>();
-    const closed = deferred<void>();
-    const onAbort = () => result.reject(new Error('aborted'));
-    options.signal?.addEventListener('abort', onAbort, { once: true });
-    if (options.signal?.aborted) onAbort();
-    scopes.push({
-      deliver: (code) => result.resolve(code),
-      gate,
-      closed: closed.promise,
-    });
-    try {
-      return await use({
-        port: options.port,
-        redirectUri: `http://localhost:${options.port}/callback`,
-        waitForResult: () => result.promise,
-        fail: (error) => result.reject(error),
+function heldRelease(port: number, scopes: Arrivals<Scope>): IAnswerTransport {
+  return {
+    label: 'browser',
+    async open<T>(
+      options: AnswerTransportOptions,
+      use: (channel: IAnswerChannel) => Promise<T>,
+    ): Promise<T> {
+      const server = http.createServer((_req, res) => res.end('ok'));
+      await new Promise<void>((resolve, reject) => {
+        server.once('error', reject);
+        server.listen(port, '127.0.0.1', () => resolve());
       });
-    } finally {
-      options.signal?.removeEventListener('abort', onAbort);
-      await gate.promise;
-      await new Promise<void>((resolve) => server.close(() => resolve()));
-      closed.resolve();
-    }
-  }) as CallbackServerFactory<string>;
+      const answer = deferred<void>();
+      void answer.promise.catch(() => undefined);
+      const gate = deferred<void>();
+      const closed = deferred<void>();
+      try {
+        return await new Promise<T>((resolve, reject) => {
+          const onAbort = () => reject(new Error('aborted'));
+          if (options.signal.aborted) onAbort();
+          options.signal.addEventListener('abort', onAbort, { once: true });
+          use({
+            redirectUri: `http://localhost:${port}/callback`,
+            arm(judge: AnswerJudge<unknown>) {
+              // Arrives once armed: a code delivered earlier would be
+              // judged by nobody.
+              scopes.push({
+                deliver: (code) => {
+                  judge({ via: 'consumer', text: code });
+                  answer.resolve();
+                },
+                gate,
+                closed: closed.promise,
+              });
+              return { answer: () => answer.promise };
+            },
+          }).then(resolve, reject);
+        });
+      } finally {
+        await gate.promise;
+        await new Promise<void>((resolve) => server.close(() => resolve()));
+        closed.resolve();
+      }
+    },
+  };
 }
 
 let server: TokenServer;
@@ -118,12 +134,11 @@ afterEach(async () => {
 async function setup() {
   const port = await getAvailablePort();
   const scopes = new Arrivals<Scope>();
-  const inner = new BrowserCallbackStrategy<string>({
-    stateGate: false,
-    port,
-    browser: 'none',
-    openUrl: async () => undefined,
-    callbackServer: heldShutdown(scopes),
+  const inner = composeAuthorization({
+    presentation: { present: () => undefined },
+    transport: heldRelease(port, scopes),
+    protocol: oauthCode(),
+    endpoint: '/callback',
   });
   const failures: unknown[] = [];
   let calls = 0;

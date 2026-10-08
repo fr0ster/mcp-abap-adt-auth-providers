@@ -25,9 +25,9 @@ import type {
   IAuthProviderError,
 } from '@mcp-abap-adt/interfaces-auth';
 import { getJwtAuthorizationUrl } from '../../auth/browserAuth';
-import { runCallbackScope } from '../../auth/callbackServer';
 import { discoverOidc } from '../../auth/oidcDiscovery';
 import { exchangeSamlAssertion } from '../../auth/saml2TokenExchange';
+import { loopback } from '../../authorization/transport';
 import { clientSecretBasic } from '../../clientAuthentication/clientSecret';
 import { noClientAuthentication } from '../../clientAuthentication/noClientAuthentication';
 import { FileCertificateMaterialLoader } from '../../credentials/FileCertificateMaterialLoader';
@@ -49,11 +49,12 @@ import {
 import { refreshThenLogin } from '../../renewal';
 import { SsoProviderFactory } from '../../sso/SsoProviderFactory';
 import type { SsoProviderConfig } from '../../sso/types';
-import { browserCallbackStrategy } from '../../strategies/BrowserCallbackStrategy';
+import { browserCallbackStrategy } from '../../strategies';
 import { staticCodeStrategy } from '../../strategies/codeStrategies';
 import { createSignedResponseValidator } from '../../validation/assertionValidator';
 import { createInMemoryReplayStore } from '../../validation/inMemoryReplayStore';
 import { toPem } from '../../validation/signedNode';
+import { getAvailablePort } from '../helpers/netHelpers';
 
 jest.mock('../../auth/oidcDiscovery', () => ({
   discoverOidc: jest.fn(),
@@ -821,20 +822,27 @@ describe('K6 — callback server port', () => {
   );
 
   it.each([[70000], [-1], [1.5], [Number.NaN], ['k6sock']])(
-    'K6: a port changed after construction (%p) is refused before any probe — no socket file',
+    'K6: a port changed after construction (%p) changes nothing — the options were read once; no socket file',
     async (port) => {
-      const options: { port?: unknown } = { port: 61001 };
+      const free = await getAvailablePort();
+      const options: { port?: unknown } = { port: free };
       const strategy = browserCallbackStrategy(options as never);
       options.port = port;
-      // The factory copies its options; mutate the strategy's own copy.
-      (strategy as unknown as { options: { port: unknown } }).options.port =
-        port;
-      const thrown = await thrownBy(() =>
-        strategy.authorize({
-          buildAuthorizationUrl: async () => 'https://idp.example/a',
-        } as never),
-      );
-      expectRow(thrown, K6);
+      const redirects: string[] = [];
+      const login = strategy
+        .authorize({
+          buildAuthorizationUrl: async (redirectUri: string) => {
+            redirects.push(redirectUri);
+            return 'https://idp.example/a?state=S';
+          },
+        } as never)
+        .catch(() => undefined);
+      while (redirects.length === 0) {
+        await new Promise((resolve) => setTimeout(resolve, 5));
+      }
+      expect(redirects).toEqual([`http://localhost:${free}/callback`]);
+      await strategy.dispose();
+      await login;
       expect(existsSync(join(process.cwd(), 'k6sock'))).toBe(false);
     },
   );
@@ -842,10 +850,7 @@ describe('K6 — callback server port', () => {
   it.each([[-1], [65536], [1.5], ['61001'], [Number.NaN]])(
     'K6: port %p, the value never in the words',
     async (port) => {
-      const use = jest.fn(async () => undefined);
-      const thrown = await thrownBy(() =>
-        runCallbackScope({ port } as never, () => undefined, use),
-      );
+      const thrown = await thrownBy(() => loopback({ port } as never));
       const error = expectRow(thrown, {
         case: 'callback-port-invalid',
         fields: ['port'],
@@ -853,7 +858,6 @@ describe('K6 — callback server port', () => {
           'invalid callback server port: it must be an integer in 0..65535',
       });
       expect(error.reason).not.toContain(String(port));
-      expect(use).not.toHaveBeenCalled();
     },
   );
 });

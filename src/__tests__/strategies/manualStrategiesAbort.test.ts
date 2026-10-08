@@ -75,7 +75,7 @@ describe('manual strategies end on an abort, never on a clock', () => {
     );
   });
 
-  it('K15: dispose() ends every concurrent authorize, not only the last one', async () => {
+  it('K15: a concurrent authorize is busy (one reader on stdin); dispose() ends the one in flight', async () => {
     const signals: AbortSignal[] = [];
     const strategy = manualPasscodeStrategy({
       read: (_prompt, signal) => {
@@ -85,32 +85,29 @@ describe('manual strategies end on an abort, never on a clock', () => {
         });
       },
     });
-    const settled = [false, false];
-    const calls = [0, 1].map((i) => {
-      const call = strategy.authorize(request);
-      call.then(
-        () => {
-          settled[i] = true;
-        },
-        () => {
-          settled[i] = true;
-        },
-      );
-      return call;
-    });
-    await turn(); // both reads begin
-    expect(signals).toHaveLength(2);
+    let settled = false;
+    const first = strategy.authorize(request);
+    first.then(
+      () => {
+        settled = true;
+      },
+      () => {
+        settled = true;
+      },
+    );
+    const second = strategy.authorize(request).catch((e: unknown) => e);
+    await turn(); // the first read begins
+    expect(signals).toHaveLength(1);
+    expect(factsOf(await second)).toEqual({ outcome: 'busy' });
 
     await strategy.dispose?.();
 
-    expect(signals.map((s) => s.aborted)).toEqual([true, true]);
-    expect(settled).toEqual([true, true]);
-    for (const call of calls) {
-      expect(factsOf(await call.catch((e) => e))).toEqual({
-        outcome: 'disposed',
-        strategy: 'manual',
-      });
-    }
+    expect(signals.map((s) => s.aborted)).toEqual([true]);
+    expect(settled).toBe(true);
+    expect(factsOf(await first.catch((e) => e))).toEqual({
+      outcome: 'disposed',
+      strategy: 'manual',
+    });
   });
 
   it('K15: a disposed strategy refuses the next authorize', async () => {

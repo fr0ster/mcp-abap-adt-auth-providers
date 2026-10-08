@@ -130,3 +130,52 @@ describe('public exports — the persistence strategy (spec §6c.8)', () => {
     ).toBe('function');
   });
 });
+
+// Spec §6d (Task 30n): the composer and its parts are public; the 5.x
+// class, its callback server factories and their scope are gone.
+describe('public exports — authorization by composition (spec §6d)', () => {
+  it.each([
+    'composeAuthorization',
+    'openInBrowser',
+    'showUrl',
+    'consumerPresentation',
+    'loopback',
+    'loopback4',
+    'loopback6',
+    'terminalPaste',
+    'consumerAnswer',
+    'consumerHandoff',
+    'oauthCode',
+    'oidcCode',
+    'samlResponse',
+    'passcode',
+    'readFromTerminal',
+    'browserCallbackStrategy',
+    'oidcCallbackStrategy',
+    'samlCallbackStrategy',
+    'manualPasteStrategy',
+    'manualSamlResponseStrategy',
+    'manualPasscodeStrategy',
+    'externalCodeStrategy',
+    'staticCodeStrategy',
+    'asOidcResult',
+  ])('exports %s', (name) => {
+    expect(typeof (surface as Record<string, unknown>)[name]).toBe('function');
+  });
+
+  it('exports DEFAULT_CALLBACK_PORT, 61001', () => {
+    expect(surface.DEFAULT_CALLBACK_PORT).toBe(61001);
+  });
+
+  it.each([
+    'BrowserCallbackStrategy',
+    'withBrowserCallbackServer',
+    'withOidcCallbackServer',
+    'withSamlCallbackServer',
+    'runCallbackScope',
+    'httpListener',
+    'openHttpListener',
+  ])('does not export %s', (name) => {
+    expect(name in surface).toBe(false);
+  });
+});

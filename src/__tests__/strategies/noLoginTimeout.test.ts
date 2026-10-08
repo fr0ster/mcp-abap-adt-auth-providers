@@ -14,32 +14,37 @@ import net from 'node:net';
 import { afterEach, describe, expect, it, jest } from '@jest/globals';
 import { readFailure } from '@mcp-abap-adt/auth-errors';
 import type {
+  AnswerTransportOptions,
   AuthorizationRequest,
-  CallbackServerFactory,
+  IAnswerChannel,
+  IAnswerTransport,
+  IAuthorizationProtocol,
   IAuthorizationStrategy,
 } from '@mcp-abap-adt/interfaces-auth';
+import { composeAuthorization } from '../../authorization/compose';
+import { consumerPresentation } from '../../authorization/presentation';
 import {
-  runCallbackScope,
-  withBrowserCallbackServer,
-} from '../../auth/callbackServer';
-import { withOidcCallbackServer } from '../../auth/oidcBrowserAuth';
-import { withSamlCallbackServer } from '../../auth/saml2Auth';
+  oauthCode,
+  oidcCode,
+  samlResponse,
+} from '../../authorization/protocol';
+import { loopback, loopback4 } from '../../authorization/transport';
 import { AuthorizationCodeProvider } from '../../providers/AuthorizationCodeProvider';
 import { OidcBrowserProvider } from '../../providers/OidcBrowserProvider';
 import { Saml2BearerProvider } from '../../providers/Saml2BearerProvider';
 import { Saml2PureProvider } from '../../providers/Saml2PureProvider';
 import { UaaPasscodeProvider } from '../../providers/UaaPasscodeProvider';
 import { refreshThenLogin } from '../../renewal';
-import * as browserStrategies from '../../strategies/BrowserCallbackStrategy';
+import * as browserStrategies from '../../strategies/callbackStrategies';
 import {
   browserCallbackStrategy,
   type CallbackStrategyOptions,
   oidcCallbackStrategy,
   samlCallbackStrategy,
-} from '../../strategies/BrowserCallbackStrategy';
+} from '../../strategies/callbackStrategies';
 import * as manualModule from '../../strategies/manualStrategies';
 import {
-  type ManualStrategyOptions,
+  type ManualPasscodeStrategyOptions,
   manualPasscodeStrategy,
   manualPasteStrategy,
   manualSamlResponseStrategy,
@@ -47,6 +52,7 @@ import {
 import { certificate } from '../helpers/certificates';
 
 const PORT = 7878;
+const REGISTERED = 'http://localhost:61001/callback';
 /** Past the old browser default (30 s) and the passcode default (300 s). */
 const WELL_PAST = 3_600_000;
 
@@ -89,8 +95,9 @@ function watch(promise: Promise<unknown>) {
   return state;
 }
 
+const URL_BUILT = 'https://idp.example/authorize?state=S1';
 const request = (): AuthorizationRequest => ({
-  buildAuthorizationUrl: async () => 'https://idp.example/authorize',
+  buildAuthorizationUrl: async () => URL_BUILT,
 });
 
 afterEach(async () => {
@@ -101,14 +108,12 @@ afterEach(async () => {
 const browserKinds: ReadonlyArray<
   readonly [
     string,
-    (
-      options: CallbackStrategyOptions<never>,
-    ) => IAuthorizationStrategy<unknown>,
+    (options: CallbackStrategyOptions) => IAuthorizationStrategy<unknown>,
   ]
 > = [
-  ['browser', (o) => browserCallbackStrategy(o as CallbackStrategyOptions)],
-  ['OIDC', (o) => oidcCallbackStrategy(o as never)],
-  ['SAML', (o) => samlCallbackStrategy(o as CallbackStrategyOptions)],
+  ['browser', browserCallbackStrategy],
+  ['OIDC', oidcCallbackStrategy],
+  ['SAML', samlCallbackStrategy],
 ];
 
 describe('RF1: a browser login has no bound of its own', () => {
@@ -199,7 +204,7 @@ describe('RF1: a browser login has no bound of its own', () => {
       });
       while (!built) await turn();
       consumer.abort();
-      built('https://idp.example/authorize');
+      built(URL_BUILT);
       expect(factsOf(await login.catch((e: unknown) => e))).toEqual({
         outcome: 'aborted',
         strategy: 'browser',
@@ -211,18 +216,18 @@ describe('RF1: a browser login has no bound of its own', () => {
   );
 
   it.each([
-    ['browser', withBrowserCallbackServer],
-    ['OIDC', withOidcCallbackServer],
-    ['SAML', withSamlCallbackServer],
+    ['loopback', loopback],
+    ['loopback4', loopback4],
   ] as const)(
-    '%s callback server: an abort right after the bind began releases the port',
-    async (_name, factory) => {
+    '%s: an abort right after the bind began releases the port',
+    async (_name, listener) => {
       const consumer = new AbortController();
       let ran = false;
-      const scope = (factory as CallbackServerFactory<unknown>)(
+      const scope = listener({ port: PORT }).open(
         {
-          port: PORT,
           signal: consumer.signal,
+          callbackMethods: ['GET'],
+          endpoint: '/callback',
         },
         async () => {
           ran = true;
@@ -241,11 +246,24 @@ describe('RF1: a browser login has no bound of its own', () => {
 });
 
 describe('RF1: a manual login has no bound of its own', () => {
-  const manualKinds = [
-    ['manualPasteStrategy', manualPasteStrategy],
-    ['manualSamlResponseStrategy', manualSamlResponseStrategy],
+  const manualKinds: ReadonlyArray<
+    readonly [
+      string,
+      (
+        options: ManualPasscodeStrategyOptions,
+      ) => IAuthorizationStrategy<string>,
+    ]
+  > = [
+    [
+      'manualPasteStrategy',
+      (o) => manualPasteStrategy({ redirectUri: REGISTERED, ...o }),
+    ],
+    [
+      'manualSamlResponseStrategy',
+      (o) => manualSamlResponseStrategy({ redirectUri: REGISTERED, ...o }),
+    ],
     ['manualPasscodeStrategy', manualPasscodeStrategy],
-  ] as const;
+  ];
 
   it.each(manualKinds)(
     '%s: stays open past the old defaults, then the abort ends it',
@@ -262,7 +280,7 @@ describe('RF1: a manual login has no bound of its own', () => {
             signal.addEventListener('abort', () => reject(new Error('gone')));
           });
         },
-      } satisfies ManualStrategyOptions);
+      } satisfies ManualPasscodeStrategyOptions);
       const stderr = jest
         .spyOn(process.stderr, 'write')
         .mockImplementation(() => true);
@@ -290,45 +308,52 @@ describe('RF1: a manual login has no bound of its own', () => {
 
 describe('settle after release (spec §6b): a held release holds the rejection', () => {
   it.each([
-    ['browser', browserCallbackStrategy, withBrowserCallbackServer],
-    ['OIDC', oidcCallbackStrategy, withOidcCallbackServer],
-    ['SAML', samlCallbackStrategy, withSamlCallbackServer],
+    ['oauthCode', oauthCode],
+    ['oidcCode', oidcCode],
+    ['samlResponse', samlResponse],
   ] as const)(
-    '%s: the rejection comes only after the factory has released, the port bindable',
-    async (_name, make, shipped) => {
+    'a composition over loopback (%s): the rejection comes only after the transport has released, the port bindable',
+    async (_name, protocol) => {
       let releaseGate!: () => void;
       const gate = new Promise<void>((resolve) => {
         releaseGate = resolve;
       });
-      let factorySettled = false;
+      let transportSettled = false;
       // The shipped transport, whose settle is held after its own release —
       // as a slow socket close would hold it.
-      const held: CallbackServerFactory<unknown> = async (options, use) => {
-        try {
-          return await (shipped as CallbackServerFactory<unknown>)(
-            options,
-            use,
-          );
-        } finally {
-          await gate;
-          factorySettled = true;
-        }
+      const shipped = loopback({ port: PORT });
+      const held: IAnswerTransport = {
+        label: shipped.label,
+        async open<T>(
+          options: AnswerTransportOptions,
+          use: (channel: IAnswerChannel) => Promise<T>,
+        ): Promise<T> {
+          try {
+            return await shipped.open(options, use);
+          } finally {
+            await gate;
+            transportSettled = true;
+          }
+        },
       };
       const consumer = new AbortController();
       let opened = false;
       let freeAtRejection: Promise<boolean> | undefined;
-      let factoryDoneAtRejection: boolean | undefined;
-      const login = (make as typeof browserCallbackStrategy)({
-        port: PORT,
+      let transportDoneAtRejection: boolean | undefined;
+      const login = composeAuthorization({
+        presentation: consumerPresentation({
+          show: async () => {
+            opened = true;
+          },
+        }),
+        transport: held,
+        protocol: (protocol as () => IAuthorizationProtocol<unknown>)(),
+        endpoint: '/callback',
         signal: consumer.signal,
-        callbackServer: held as CallbackServerFactory<string>,
-        openUrl: async () => {
-          opened = true;
-        },
       })
         .authorize(request())
         .catch((error: unknown) => {
-          factoryDoneAtRejection = factorySettled;
+          transportDoneAtRejection = transportSettled;
           // The bind is attempted in this very turn.
           freeAtRejection = portIsFree(PORT);
           return error;
@@ -342,7 +367,7 @@ describe('settle after release (spec §6b): a held release holds the rejection',
         outcome: 'aborted',
         strategy: 'browser',
       });
-      expect(factoryDoneAtRejection).toBe(true);
+      expect(transportDoneAtRejection).toBe(true);
       expect(await freeAtRejection).toBe(true);
     },
   );

@@ -6,11 +6,16 @@ import { Saml2BearerProvider } from '../../providers/Saml2BearerProvider';
 import { Saml2PureProvider } from '../../providers/Saml2PureProvider';
 import { UaaPasscodeProvider } from '../../providers/UaaPasscodeProvider';
 import { refreshThenLogin } from '../../renewal';
-import { BrowserCallbackStrategy } from '../../strategies/BrowserCallbackStrategy';
 import { isShippedValidator } from '../../validation/assertionValidator';
 
 const configOf = (p: unknown) =>
   (p as { config: Record<string, unknown> }).config;
+
+/** A named composition: a frozen strategy with `authorize` and `dispose`. */
+const composed = (strategy: unknown) =>
+  Object.isFrozen(strategy) &&
+  typeof (strategy as { authorize?: unknown }).authorize === 'function' &&
+  typeof (strategy as { dispose?: unknown }).dispose === 'function';
 const uaa = {
   uaaUrl: 'https://uaa',
   clientId: 'c',
@@ -71,16 +76,20 @@ describe('no implicit defaults', () => {
 
   it('inBrowser assembles a browser callback strategy', () => {
     expect(
-      configOf(AuthorizationCodeProvider.inBrowser(uaa)).authorization,
-    ).toBeInstanceOf(BrowserCallbackStrategy);
+      composed(
+        configOf(AuthorizationCodeProvider.inBrowser(uaa)).authorization,
+      ),
+    ).toBe(true);
     expect(
-      configOf(
-        OidcBrowserProvider.inBrowser({
-          renewal: refreshThenLogin(),
-          clientId: 'c',
-        }),
-      ).authorization,
-    ).toBeInstanceOf(BrowserCallbackStrategy);
+      composed(
+        configOf(
+          OidcBrowserProvider.inBrowser({
+            renewal: refreshThenLogin(),
+            clientId: 'c',
+          }),
+        ).authorization,
+      ),
+    ).toBe(true);
   });
 
   it('fromTerminal assembles a manual strategy with dispose()', () => {
@@ -107,7 +116,7 @@ describe('no implicit defaults', () => {
         { idpCertificates: [CERT] },
       ),
     ]) {
-      expect(configOf(p).authorization).toBeInstanceOf(BrowserCallbackStrategy);
+      expect(composed(configOf(p).authorization)).toBe(true);
       expect(isShippedValidator(configOf(p).assertionValidator as never)).toBe(
         true,
       );

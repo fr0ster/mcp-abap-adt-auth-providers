@@ -12,25 +12,32 @@ import net from 'node:net';
 import { afterEach, describe, expect, it, jest } from '@jest/globals';
 import { isAuthProviderFailure, readFailure } from '@mcp-abap-adt/auth-errors';
 import type {
+  AnswerTransportOptions,
   AuthorizationRequest,
-  CallbackServerFactory,
+  IAnswerChannel,
+  IAnswerTransport,
 } from '@mcp-abap-adt/interfaces-auth';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
-import { withBrowserCallbackServer } from '../../auth/callbackServer';
+import { composeAuthorization } from '../../authorization/compose';
+import { oauthCode } from '../../authorization/protocol';
+import { loopback4 } from '../../authorization/transport';
 import { OidcDeviceFlowProvider } from '../../providers/OidcDeviceFlowProvider';
 import { refreshThenLogin } from '../../renewal';
 import {
-  BrowserCallbackStrategy,
   browserCallbackStrategy,
   externalCodeStrategy,
   manualPasteStrategy,
   manualSamlResponseStrategy,
   oidcCallbackStrategy,
+  samlCallbackStrategy,
 } from '../../strategies';
 import { readFromTerminal } from '../../strategies/manualStrategies';
 import { startTokenServer, type TokenServer } from '../helpers/attemptHarness';
 
 const PORT = 7877;
+/** The state every URL here carries: the code protocols bind by it (C7). */
+const STATE = 'S1';
+const REGISTERED = 'http://localhost:61001/callback';
 
 /** The row a thrown value is: its kind, facts and words. */
 function rowOf(thrown: unknown) {
@@ -54,7 +61,7 @@ const rejection = (promise: Promise<unknown>): Promise<unknown> =>
 
 const request = (
   build: AuthorizationRequest['buildAuthorizationUrl'] = async () =>
-    'https://idp.example/authorize',
+    `https://idp.example/authorize?state=${STATE}`,
 ): AuthorizationRequest => ({ buildAuthorizationUrl: build });
 
 function portIsFree(port: number): Promise<boolean> {
@@ -79,9 +86,12 @@ async function endedByAbort(
   return await ended;
 }
 
-/** Opens the redirect with `query`, as a browser would. */
+/**
+ * Opens the redirect with `query`, as a browser would — with this login's
+ * `state` unless `bound` is false.
+ */
 const visit =
-  (query: string) =>
+  (query: string, bound = true) =>
   async (_url: string, _browser: string, redirectUri: string) => {
     await new Promise<void>((resolve) => {
       const req = http.get(
@@ -89,7 +99,7 @@ const visit =
           host: '127.0.0.1',
           port: new URL(redirectUri).port,
           agent: false,
-          path: `/callback?${query}`,
+          path: `/callback?${query}${bound ? `&state=${STATE}` : ''}`,
         },
         (res) => {
           res.resume();
@@ -171,11 +181,15 @@ describe('A.3 — browser login rows', () => {
       expect(rowOf(thrown)).toEqual(aborted);
     });
 
-    it('the callback server given an aborted signal never binds', async () => {
+    it('the listener given an aborted signal never binds', async () => {
       let ran = false;
       const thrown = await rejection(
-        withBrowserCallbackServer(
-          { port: PORT, signal: AbortSignal.abort() },
+        loopback4({ port: PORT }).open(
+          {
+            signal: AbortSignal.abort(),
+            callbackMethods: ['GET'],
+            endpoint: '/callback',
+          },
           async () => {
             ran = true;
             return 'unreachable';
@@ -193,8 +207,8 @@ describe('A.3 — browser login rows', () => {
           port: PORT,
           signal: consumer.signal,
           openUrl: async (url, browser, redirectUri) => {
-            await visit('')(url, browser, redirectUri);
-            await visit('state=only')(url, browser, redirectUri);
+            await visit('', false)(url, browser, redirectUri);
+            await visit('state=only', false)(url, browser, redirectUri);
             consumer.abort();
           },
         }).authorize(request()),
@@ -222,10 +236,11 @@ describe('A.3 — browser login rows', () => {
     });
   });
 
-  // Task 30h: a launcher that fails is no end of the login (interfaces-auth 7
-  // removed the `browser-launch-failed` outcome): its line and the prompt,
-  // then the login waits — here the test's own signal ends it.
-  it('K5: a launcher that fails → one fixed-words line, the URL prompted, the login still waiting', async () => {
+  // Task 30h, generalised (spec §6d.5, C8): a presentation that fails is no
+  // end of the login — one fixed-words line, and the consumer's own UI
+  // having failed, no URL anywhere; the login waits — here the test's own
+  // signal ends it.
+  it('K5: an openUrl that fails → one fixed-words line, no URL anywhere, the login still waiting', async () => {
     const lines: unknown[][] = [];
     const prompts: unknown[][] = [];
     const logger: ILogger = {
@@ -238,39 +253,48 @@ describe('A.3 — browser login rows', () => {
         lines.push(args);
       },
     };
-    const thrown = await endedByAbort((signal) =>
-      browserCallbackStrategy({
-        port: PORT,
-        openUrl: async () => {
-          throw Object.assign(new Error('spawn SECRET-PATH'), {
-            code: 'ENOENT',
-          });
-        },
-      }).authorize({ ...request(), logger, signal } as AuthorizationRequest),
-    );
-    // Not the launcher's failure: the signal ended it.
+    const err: string[] = [];
+    const stderr = jest
+      .spyOn(process.stderr, 'write')
+      .mockImplementation((chunk: unknown) => {
+        err.push(String(chunk));
+        return true;
+      });
+    let thrown: unknown;
+    try {
+      thrown = await endedByAbort((signal) =>
+        browserCallbackStrategy({
+          port: PORT,
+          openUrl: async () => {
+            throw Object.assign(new Error('spawn SECRET-PATH'), {
+              code: 'ENOENT',
+            });
+          },
+        }).authorize({ ...request(), logger, signal } as AuthorizationRequest),
+      );
+    } finally {
+      stderr.mockRestore();
+    }
+    // Not the presentation's failure: the signal ended it.
     expect(readFailure(thrown, 'browser-login').facts).toEqual({
       outcome: 'aborted',
       strategy: 'browser',
     });
-    // H7: the URL is in neither the failure nor the error line.
     expect((thrown as Error).message).not.toContain('idp.example');
-    const [line] = lines;
-    expect(String(line?.[0])).toBe(
-      'Failed to open browser: opening the browser failed (unknown error, ENOENT)',
-    );
-    expect(JSON.stringify(lines)).not.toContain('idp.example');
-    expect(JSON.stringify(lines)).not.toContain('SECRET-PATH');
-    // The URL reaches the user as a prompt (the announcer: the logger's
-    // `info`), so the hint names something the user can see.
-    expect(prompts).toEqual([
-      ['🔗 The browser could not be opened. The authorization URL:'],
-      ['   https://idp.example/authorize'],
-      [`   Waiting for callback on http://localhost:${PORT}/callback ...`],
+    expect(lines.map((line) => line[0])).toEqual([
+      'Failed to present the authorization URL: presenting the authorization URL failed (unknown error, ENOENT)',
     ]);
+    for (const surface of [
+      JSON.stringify(lines),
+      JSON.stringify(prompts),
+      err.join(''),
+    ]) {
+      expect(surface).not.toContain('idp.example');
+      expect(surface).not.toContain('SECRET-PATH');
+    }
   });
 
-  it('K5 without a logger: the URL is prompted on stderr, nothing on stdout', async () => {
+  it('K5 without a logger, showing the URL: stderr only, nothing on stdout', async () => {
     const err: string[] = [];
     const out: string[] = [];
     const stderr = jest
@@ -287,15 +311,11 @@ describe('A.3 — browser login rows', () => {
       });
     try {
       await endedByAbort((signal) =>
-        browserCallbackStrategy({
-          port: PORT,
-          openUrl: () => {
-            throw Object.assign(new Error('spawn SECRET-PATH'), {
-              code: 'ENOENT',
-            });
-          },
-        }).authorize({
-          ...request(async (uri) => `https://idp.example/authorize?r=${uri}`),
+        browserCallbackStrategy({ port: PORT }).authorize({
+          ...request(
+            async (uri) =>
+              `https://idp.example/authorize?r=${uri}&state=${STATE}`,
+          ),
           signal,
         } as AuthorizationRequest),
       );
@@ -303,13 +323,12 @@ describe('A.3 — browser login rows', () => {
       stderr.mockRestore();
       stdout.mockRestore();
     }
-    expect(err).toEqual([
-      '🔗 The browser could not be opened. The authorization URL:\n',
-      `   https://idp.example/authorize?r=http://localhost:${PORT}/callback\n`,
-      `   Waiting for callback on http://localhost:${PORT}/callback ...\n`,
+    expect(err.slice(0, 3)).toEqual([
+      '🔗 Open this URL in your browser to authenticate:\n',
+      `   https://idp.example/authorize?r=http://localhost:${PORT}/callback&state=${STATE}\n`,
+      `Waiting for callback on http://localhost:${PORT}/callback ...\n`,
     ]);
     expect(out).toEqual([]);
-    expect(err.join('')).not.toContain('SECRET-PATH');
   });
 
   it('K5: a URL that is not promptable is named in fixed words, never shown', async () => {
@@ -322,30 +341,48 @@ describe('A.3 — browser login rows', () => {
       warn: () => undefined,
       error: () => undefined,
     };
-    await endedByAbort((signal) =>
-      browserCallbackStrategy({
-        port: PORT,
-        openUrl: async () => {
-          throw new Error('nope');
-        },
-      }).authorize({
-        ...request(async () => 'javascript:alert(1)//SECRET'),
-        logger,
-        signal,
-      } as AuthorizationRequest),
-    );
-    expect(prompts).toEqual([
-      ['❌ The authorization URL is not an http(s) URL that can be shown.'],
-      [`   Waiting for callback on http://localhost:${PORT}/callback ...`],
+    const err: string[] = [];
+    const stderr = jest
+      .spyOn(process.stderr, 'write')
+      .mockImplementation((chunk: unknown) => {
+        err.push(String(chunk));
+        return true;
+      });
+    try {
+      // SAML: its URL carries no state to bind by.
+      await endedByAbort((signal) =>
+        samlCallbackStrategy({ port: PORT }).authorize({
+          ...request(async () => 'javascript:alert(1)//SECRET'),
+          logger,
+          signal,
+        } as AuthorizationRequest),
+      );
+    } finally {
+      stderr.mockRestore();
+    }
+    expect(prompts.slice(0, 2)).toEqual([
+      ['The authorization URL is not an http(s) URL that can be shown.'],
+      [`Waiting for callback on http://localhost:${PORT}/callback ...`],
     ]);
+    expect(`${JSON.stringify(prompts)}${err.join('')}`).not.toContain('SECRET');
   });
 
-  it('K8: waiting after the scope ended → callback-closed', async () => {
-    const ended = await withBrowserCallbackServer(
-      { port: PORT },
-      async (srv) => srv,
+  const listenerOptions: AnswerTransportOptions = {
+    signal: new AbortController().signal,
+    callbackMethods: ['GET'],
+    endpoint: '/callback',
+  };
+
+  it('K8: a channel armed after its open ended → callback-closed', async () => {
+    const ended = await loopback4({ port: PORT }).open(
+      listenerOptions,
+      async (channel: IAnswerChannel) => channel,
     );
-    expect(rowOf(await rejection(ended.waitForResult()))).toEqual({
+    const armed = ended.arm(() => ({
+      verdict: 'refuse',
+      reason: 'no-payload',
+    }));
+    expect(rowOf(await rejection(armed.answer()))).toEqual({
       kind: 'interactive-login',
       facts: { outcome: 'callback-closed' },
       reason: 'the callback server closed before a result arrived',
@@ -353,13 +390,15 @@ describe('A.3 — browser login rows', () => {
     });
   });
 
-  it('K8: a pending wait when the body returns → callback-closed', async () => {
-    let dangling: Promise<string> | undefined;
-    await withBrowserCallbackServer({ port: PORT }, async (srv) => {
-      dangling = srv.waitForResult();
+  it('K8: a pending wait when use returns → callback-closed', async () => {
+    let dangling: Promise<void> | undefined;
+    await loopback4({ port: PORT }).open(listenerOptions, async (channel) => {
+      dangling = channel
+        .arm(() => ({ verdict: 'refuse', reason: 'no-payload' }))
+        .answer();
       return 'returned without awaiting';
     });
-    expect(rowOf(await rejection(dangling as Promise<string>)).facts).toEqual({
+    expect(rowOf(await rejection(dangling as Promise<void>)).facts).toEqual({
       outcome: 'callback-closed',
     });
   });
@@ -410,25 +449,30 @@ describe('A.3 — browser login rows', () => {
   });
 
   describe('K11 / A9: anything else → failed', () => {
-    const throwing =
-      (value: unknown): CallbackServerFactory<string> =>
-      async () => {
-        throw value;
-      };
+    /** A composition whose transport's open throws `value`. */
+    const throwing = (value: unknown) =>
+      composeAuthorization({
+        presentation: { present: () => undefined },
+        transport: {
+          label: 'browser',
+          open: async () => {
+            throw value;
+          },
+        } as IAnswerTransport,
+        protocol: oauthCode(),
+        endpoint: '/callback',
+      });
 
     it('with a status and a registered error, verbatim, and A9’s new hint', async () => {
       const thrown = await rejection(
-        new BrowserCallbackStrategy<string>({
-          stateGate: false,
-          callbackServer: throwing(
-            Object.assign(new Error('REVIEW_TEST_SERVER_TEXT'), {
-              response: {
-                status: 400,
-                data: { error: 'invalid_grant', error_description: 'x' },
-              },
-            }),
-          ),
-        }).authorize(request()),
+        throwing(
+          Object.assign(new Error('REVIEW_TEST_SERVER_TEXT'), {
+            response: {
+              status: 400,
+              data: { error: 'invalid_grant', error_description: 'x' },
+            },
+          }),
+        ).authorize(request()),
       );
       expect(rowOf(thrown)).toEqual({
         kind: 'interactive-login',
@@ -443,10 +487,7 @@ describe('A.3 — browser login rows', () => {
 
     it('with nothing safe to name → unknown error', async () => {
       const thrown = await rejection(
-        new BrowserCallbackStrategy<string>({
-          stateGate: false,
-          callbackServer: throwing(new Error('REVIEW_TEST_SERVER_TEXT')),
-        }).authorize(request()),
+        throwing(new Error('REVIEW_TEST_SERVER_TEXT')).authorize(request()),
       );
       expect(rowOf(thrown)).toEqual({
         kind: 'interactive-login',
@@ -481,7 +522,7 @@ describe('A.3 — manual and code strategy rows', () => {
         .spyOn(process.stderr, 'write')
         .mockImplementation(() => true);
       const thrown = await rejection(
-        manualPasteStrategy().authorize(request()),
+        manualPasteStrategy({ redirectUri: REGISTERED }).authorize(request()),
       ).finally(() => write.mockRestore());
       expect(rowOf(thrown)).toEqual({
         kind: 'interactive-login',
@@ -501,11 +542,19 @@ describe('A.3 — manual and code strategy rows', () => {
   it.each([
     [
       'manualSamlResponseStrategy',
-      () => manualSamlResponseStrategy({ read: async () => '  ' }),
+      () =>
+        manualSamlResponseStrategy({
+          redirectUri: REGISTERED,
+          read: async () => '  ',
+        }),
     ],
     [
       'externalCodeStrategy',
-      () => externalCodeStrategy({ provide: async () => '' }),
+      () =>
+        externalCodeStrategy({
+          redirectUri: REGISTERED,
+          provide: async () => '',
+        }),
     ],
   ])('K14 (%s): an empty value → no-input', async (_name, make) => {
     const write = jest
@@ -524,7 +573,10 @@ describe('A.3 — manual and code strategy rows', () => {
   });
 
   it('K15: a disposed manual strategy → disposed, strategy manual', async () => {
-    const strategy = manualPasteStrategy({ read: async () => 'code' });
+    const strategy = manualPasteStrategy({
+      redirectUri: REGISTERED,
+      read: async () => 'code',
+    });
     await strategy.dispose?.();
     expect(rowOf(await rejection(strategy.authorize(request())))).toEqual({
       kind: 'interactive-login',
@@ -537,6 +589,7 @@ describe('A.3 — manual and code strategy rows', () => {
   it('K4 (manual): aborted → strategy manual, no tally', async () => {
     const consumer = new AbortController();
     const strategy = manualPasteStrategy({
+      redirectUri: REGISTERED,
       signal: consumer.signal,
       read: (_prompt, signal) =>
         new Promise<string>((_resolve, reject) => {
@@ -561,9 +614,10 @@ describe('A.3 — manual and code strategy rows', () => {
     }
   });
 
-  it('K4 (external code): aborted with no strategy → the authorization was aborted', async () => {
+  it('K4 (external code): aborted → strategy consumer, the login was aborted', async () => {
     const consumer = new AbortController();
     const strategy = externalCodeStrategy({
+      redirectUri: REGISTERED,
       signal: consumer.signal,
       provide: () => new Promise<string>(() => undefined),
     });
@@ -572,25 +626,22 @@ describe('A.3 — manual and code strategy rows', () => {
     consumer.abort();
     expect(rowOf(await pending)).toEqual({
       kind: 'interactive-login',
-      facts: { outcome: 'aborted' },
-      reason: 'the authorization was aborted',
+      facts: { outcome: 'aborted', strategy: 'consumer' },
+      reason: 'the login was aborted',
       hint: undefined,
     });
   });
 
-  it('K16: a paste with a malformed escape → unreadable-input, no URIError', async () => {
+  it('K16 is not a malformed escape: a pasted URL of this login takes its code as the parser reads it, no URIError', async () => {
     const write = jest
       .spyOn(process.stderr, 'write')
       .mockImplementation(() => true);
     try {
-      for (const pasted of ['code=%ZZ', 'https://x/cb?code=%E0%A4%A&state=s']) {
-        const thrown = await rejection(
-          manualPasteStrategy({ read: async () => pasted }).authorize(
-            request(),
-          ),
-        );
-        expect(rowOf(thrown).facts).toEqual({ outcome: 'unreadable-input' });
-      }
+      const outcome = await manualPasteStrategy({
+        redirectUri: REGISTERED,
+        read: async () => `https://x/cb?code=%ZZ&state=${STATE}`,
+      }).authorize(request());
+      expect(outcome.payload).toBe('%ZZ');
     } finally {
       write.mockRestore();
     }
@@ -602,9 +653,10 @@ describe('A.3 — manual and code strategy rows', () => {
       .mockImplementation(() => true);
     try {
       const thrown = await rejection(
-        manualPasteStrategy({ read: async () => 'no code here' }).authorize(
-          request(),
-        ),
+        manualPasteStrategy({
+          redirectUri: REGISTERED,
+          read: async () => 'no code here',
+        }).authorize(request()),
       );
       expect(rowOf(thrown)).toEqual({
         kind: 'interactive-login',

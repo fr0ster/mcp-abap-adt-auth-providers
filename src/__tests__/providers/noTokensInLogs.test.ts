@@ -768,7 +768,7 @@ describe('no message of a thrown error in the logs', () => {
     });
   });
 
-  it('H7 — a browser launcher that rejects: logFields, no URL', async () => {
+  it('H7 — a consumer presentation that rejects: logFields, no URL', async () => {
     const { logger, entries } = recordingLogger();
     const strategy = browserCallbackStrategy({
       port: 0,
@@ -782,7 +782,7 @@ describe('no message of a thrown error in the logs', () => {
     const login = strategy
       .authorize({
         buildAuthorizationUrl: async (redirectUri) =>
-          `https://idp.example/authorize?redirect_uri=${redirectUri}`,
+          `https://idp.example/authorize?redirect_uri=${redirectUri}&state=S1`,
         logger,
         signal: controller.signal,
       } as AuthorizationRequest)
@@ -799,19 +799,16 @@ describe('no message of a thrown error in the logs', () => {
     expect(JSON.stringify(failure)).not.toContain('idp.example');
     expectOnlyLogFields(entries);
     const line = entries.find((e) =>
-      e.message.startsWith('Failed to open browser: '),
+      e.message.startsWith('Failed to present the authorization URL: '),
     );
     expect(line?.meta).toEqual({
-      error: 'opening the browser failed (unknown error)',
+      error: 'presenting the authorization URL failed (unknown error)',
       kind: 'unknown',
     });
-    // The URL reaches no log line — only the prompt (the announcer's
-    // `info`), the line naming the URL to open by hand — the callback still
-    // listening for it.
-    const prompts = entries.filter((e) => e.message.includes('idp.example'));
-    expect(prompts.map((e) => e.level)).toEqual(['info']);
-    expect(prompts[0]?.message).toMatch(
-      /^ {3}https:\/\/idp\.example\/authorize\?redirect_uri=http:\/\/localhost:\d+\/callback$/,
+    // The URL reaches no log line, and — the consumer's own UI having
+    // failed — no prompt either (C8: its stderr may be collected).
+    expect(entries.filter((e) => e.message.includes('idp.example'))).toEqual(
+      [],
     );
     expect(JSON.stringify(line)).not.toContain('idp.example');
   });
@@ -821,13 +818,7 @@ describe('no message of a thrown error in the logs', () => {
     mockOpen.default = async () => {
       throw new Error(MARKER);
     };
-    await launchBrowser(
-      'https://idp/a',
-      'auto',
-      'http://localhost/cb',
-      () => {},
-      logger,
-    );
+    await launchBrowser('https://idp/a', 'auto', () => {}, logger);
     mockOpen.default = undefined;
     // Every candidate launcher fails to start, with a message holding the
     // marker; the failure line is written once, after the last.
@@ -851,13 +842,7 @@ describe('no message of a thrown error in the logs', () => {
         }
       }, 5);
     });
-    await launchBrowser(
-      'https://idp/a',
-      'chrome',
-      'http://localhost/cb',
-      () => {},
-      logger,
-    );
+    await launchBrowser('https://idp/a', 'chrome', () => {}, logger);
     await exited;
     expect(started).toBeGreaterThan(0);
     expectOnlyLogFields(entries);

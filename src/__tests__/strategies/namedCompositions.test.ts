@@ -7,7 +7,14 @@
  * (C4); `manualPasscodeStrategy` takes none.
  */
 
-import { afterEach, beforeEach, describe, expect, it, jest } from '@jest/globals';
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  jest,
+} from '@jest/globals';
 import { readFailure } from '@mcp-abap-adt/auth-errors';
 import type {
   AuthorizationRequest,
@@ -131,9 +138,9 @@ describe('the browser compositions: loopback, showUrl by default', () => {
     const port = await getAvailablePort();
     const strategy = browserCallbackStrategy({ port });
     const login = strategy.authorize(recordingRequest().request);
-    expect((await waitFor(() => send(port, '/callback?code=EVIL'))).status).toBe(
-      400,
-    );
+    expect(
+      (await waitFor(() => send(port, '/callback?code=EVIL'))).status,
+    ).toBe(400);
     await strategy.dispose?.();
     expect(factsOf(await login.catch((e: unknown) => e)).outcome).toBe(
       'disposed',
@@ -204,7 +211,8 @@ describe('the browser compositions: loopback, showUrl by default', () => {
     const { logger, lines } = capturingLogger();
     const strategy = browserCallbackStrategy({
       port,
-      remoteHint: (redirectUri) => `go through the bastion to ${redirectUri.length}`,
+      remoteHint: (redirectUri) =>
+        `go through the bastion to ${redirectUri.length}`,
     });
     const login = strategy.authorize(recordingRequest({ logger }).request);
     await waitFor(() => send(port, '/nothing'));
@@ -234,12 +242,17 @@ describe('the browser compositions: loopback, showUrl by default', () => {
     await login.catch(() => undefined);
   });
 
-  it.each([-1, 65536, 1.5])('a port of %p is callback-port-invalid at construction', (port) => {
-    expect(factsOf(thrownBy(() => browserCallbackStrategy({ port })))).toEqual({
-      case: 'callback-port-invalid',
-      fields: ['port'],
-    });
-  });
+  it.each([-1, 65536, 1.5])(
+    'a port of %p is callback-port-invalid at construction',
+    (port) => {
+      expect(
+        factsOf(thrownBy(() => browserCallbackStrategy({ port }))),
+      ).toEqual({
+        case: 'callback-port-invalid',
+        fields: ['port'],
+      });
+    },
+  );
 
   it('an unknown browser is refused at construction; edge is msedge', () => {
     expect(
@@ -303,12 +316,15 @@ describe('the terminal compositions: showUrl, terminalPaste', () => {
       'externalCodeStrategy',
       () => externalCodeStrategy({ provide: async () => 'c' } as never),
     ],
-  ])('%s without redirectUri: required-fields-missing redirectUri at construction (C4)', (_name, make) => {
-    expect(factsOf(thrownBy(make))).toEqual({
-      case: 'required-fields-missing',
-      fields: ['redirectUri'],
-    });
-  });
+  ])(
+    '%s without redirectUri: required-fields-missing redirectUri at construction (C4)',
+    (_name, make) => {
+      expect(factsOf(thrownBy(make))).toEqual({
+        case: 'required-fields-missing',
+        fields: ['redirectUri'],
+      });
+    },
+  );
 
   it('a second authorize while one reads is busy', async () => {
     const strategy = manualPasteStrategy({
@@ -321,7 +337,11 @@ describe('the terminal compositions: showUrl, terminalPaste', () => {
     const first = strategy.authorize(recordingRequest().request);
     await quiet();
     expect(
-      factsOf(await strategy.authorize(recordingRequest().request).catch((e: unknown) => e)),
+      factsOf(
+        await strategy
+          .authorize(recordingRequest().request)
+          .catch((e: unknown) => e),
+      ),
     ).toEqual({ outcome: 'busy' });
     await strategy.dispose?.();
     expect(factsOf(await first.catch((e: unknown) => e))).toEqual({
@@ -356,10 +376,18 @@ describe('the consumer’s code: externalCodeStrategy, staticCodeStrategy', () =
       provide: async () => '',
     });
     expect(
-      factsOf(await strategy.authorize(recordingRequest().request).catch((e: unknown) => e)),
+      factsOf(
+        await strategy
+          .authorize(recordingRequest().request)
+          .catch((e: unknown) => e),
+      ),
     ).toEqual({ outcome: 'no-input' });
     expect(
-      factsOf(thrownBy(() => externalCodeStrategy({ redirectUri: REGISTERED } as never))),
+      factsOf(
+        thrownBy(() =>
+          externalCodeStrategy({ redirectUri: REGISTERED } as never),
+        ),
+      ),
     ).toEqual({ case: 'required-fields-missing', fields: ['provide'] });
   });
 

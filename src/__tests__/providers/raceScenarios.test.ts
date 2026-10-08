@@ -168,24 +168,36 @@ await new Promise((resolve) => probe.listen(0, '127.0.0.1', resolve));
 const port = probe.address().port;
 await new Promise((resolve) => probe.close(resolve));
 const scopes = [];
-const factory = async (options, use) => {
-  const server = http.createServer((_q, s) => s.end('ok'));
-  await new Promise((resolve, reject) => { server.once('error', reject); server.listen(options.port, '127.0.0.1', resolve); });
-  const outcome = deferred();
-  const gate = deferred();
-  const onAbort = () => outcome.reject(new Error('aborted'));
-  options.signal && options.signal.addEventListener('abort', onAbort, { once: true });
-  scopes.push({ deliver: (code) => outcome.resolve(code), gate });
-  try {
-    return await use({ port: options.port, redirectUri: 'http://localhost:' + options.port + '/callback', waitForResult: () => outcome.promise, fail: (e) => outcome.reject(e), expectState: () => {} });
-  } finally {
-    await gate.promise;
-    await new Promise((resolve) => server.close(resolve));
-  }
+// A transport binding the port for real, its release held by a gate.
+const transport = {
+  label: 'browser',
+  async open(options, use) {
+    const server = http.createServer((_q, s) => s.end('ok'));
+    await new Promise((resolve, reject) => { server.once('error', reject); server.listen(port, '127.0.0.1', resolve); });
+    const answer = deferred();
+    const gate = deferred();
+    try {
+      return await new Promise((resolve, reject) => {
+        const onAbort = () => reject(new Error('aborted'));
+        if (options.signal.aborted) onAbort();
+        options.signal.addEventListener('abort', onAbort, { once: true });
+        use({
+          redirectUri: 'http://localhost:' + port + '/callback',
+          arm(judge) {
+            scopes.push({ deliver: (code) => { judge({ via: 'consumer', text: code }); answer.resolve(); }, gate });
+            return { answer: () => answer.promise };
+          },
+        }).then(resolve, reject);
+      });
+    } finally {
+      await gate.promise;
+      await new Promise((resolve) => server.close(resolve));
+    }
+  },
 };
 const failures = [];
 let calls = 0;
-const inner = new lib.BrowserCallbackStrategy({ port, browser: 'none', openUrl: async () => {}, callbackServer: factory });
+const inner = lib.composeAuthorization({ presentation: { present() {} }, transport, protocol: lib.oauthCode(), endpoint: '/callback' });
 const p = new lib.AuthorizationCodeProvider({ renewal: lib.refreshThenLogin(),
   uaaUrl: 'http://127.0.0.1:' + token.address().port, clientId: 'cid', clientSecret: 'sec', logger: silent,
   authorization: { authorize: async (request) => { calls += 1; try { return await inner.authorize(request); } catch (e) { failures.push(String(e && e.message)); throw e; } } },

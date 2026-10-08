@@ -5,8 +5,8 @@
  *   `src` — every end of a login is an `AuthProviderFailure`; the classes
  *   themselves are deleted in Task 27 (K6, the callback port validation,
  *   became `configuration` in Task 26);
- * - no timer bounds a login: `runCallbackScope`'s module calls no
- *   `setTimeout`, no strategy module calls one either, and no `timeoutMs`
+ * - no timer bounds a login: no module of the composer, its parts or the
+ *   named compositions calls `setTimeout`, and no `timeoutMs`
  *   is left anywhere in `src` — interfaces-auth 6.0.0 has no such field, so
  *   Task 23's `Number.POSITIVE_INFINITY` placeholder went with it (Task 27).
  */
@@ -52,15 +52,11 @@ describe('the four interactive classes are constructed nowhere in src', () => {
 });
 
 describe('no timer bounds a login', () => {
-  it('runCallbackScope reads no timeoutMs and calls no setTimeout', () => {
-    const file = readFileSync(join(SRC, 'auth', 'callbackServer.ts'), 'utf8');
-    expect(file).not.toContain('timeoutMs');
-    expect(file).not.toContain('setTimeout');
-    expect(file).not.toContain('setInterval');
-  });
-
   it.each(
-    sourceFiles(join(SRC, 'strategies')).map((file) => relative(SRC, file)),
+    [
+      ...sourceFiles(join(SRC, 'strategies')),
+      ...sourceFiles(join(SRC, 'authorization')),
+    ].map((file) => relative(SRC, file)),
   )('%s calls no setTimeout', (file) => {
     const text = readFileSync(join(SRC, file), 'utf8');
     expect(text).not.toContain('setTimeout');

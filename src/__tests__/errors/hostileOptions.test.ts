@@ -14,9 +14,19 @@ import { inspect } from 'node:util';
 import { describe, expect, it } from '@jest/globals';
 import { isAuthProviderFailure } from '@mcp-abap-adt/auth-errors';
 import { CONFIG_FIELDS } from '@mcp-abap-adt/interfaces-auth';
-import { withBrowserCallbackServer } from '../../auth/callbackServer';
-import { withOidcCallbackServer } from '../../auth/oidcBrowserAuth';
-import { withSamlCallbackServer } from '../../auth/saml2Auth';
+import { composeAuthorization } from '../../authorization/compose';
+import {
+  consumerPresentation,
+  openInBrowser,
+} from '../../authorization/presentation';
+import {
+  consumerAnswer,
+  consumerHandoff,
+  loopback,
+  loopback4,
+  loopback6,
+  terminalPaste,
+} from '../../authorization/transport';
 import {
   clientSecretBasic,
   clientSecretPost,
@@ -44,11 +54,10 @@ import { SncLogonProvider } from '../../snc/SncLogonProvider';
 import { SsoProviderFactory } from '../../sso/SsoProviderFactory';
 import { asOidcResult } from '../../strategies/asOidcResult';
 import {
-  BrowserCallbackStrategy,
   browserCallbackStrategy,
   oidcCallbackStrategy,
   samlCallbackStrategy,
-} from '../../strategies/BrowserCallbackStrategy';
+} from '../../strategies/callbackStrategies';
 import {
   externalCodeStrategy,
   staticCodeStrategy,
@@ -187,7 +196,15 @@ const makers: Record<string, Make> = {
   clientSecretPost: (x) => clientSecretPost(h(x)),
   tlsClientCertificate: (x) => tlsClientCertificate(h(x)),
   privateKeyJwt: (x) => privateKeyJwt(h(x)),
-  'new BrowserCallbackStrategy': (x) => new BrowserCallbackStrategy(h(x)),
+  composeAuthorization: (x) => composeAuthorization(h(x)),
+  openInBrowser: (x) => openInBrowser(h(x)),
+  consumerPresentation: (x) => consumerPresentation(h(x)),
+  loopback: (x) => loopback(h(x)),
+  loopback4: (x) => loopback4(h(x)),
+  loopback6: (x) => loopback6(h(x)),
+  terminalPaste: (x) => terminalPaste(h(x)),
+  consumerAnswer: (x) => consumerAnswer(h(x)),
+  consumerHandoff: (x) => consumerHandoff(h(x)),
   browserCallbackStrategy: (x) => browserCallbackStrategy(h(x)),
   oidcCallbackStrategy: (x) => oidcCallbackStrategy(h(x)),
   samlCallbackStrategy: (x) => samlCallbackStrategy(h(x)),
@@ -202,14 +219,14 @@ const makers: Record<string, Make> = {
   consoleDeviceCodePresenter: (x) => consoleDeviceCodePresenter(h(x)),
 };
 
-/** The callback-server factories: they answer a promise. */
-const servers: Record<string, Make> = {
-  withBrowserCallbackServer: (x) =>
-    withBrowserCallbackServer(h(x), async () => 'done'),
-  withOidcCallbackServer: (x) =>
-    withOidcCallbackServer(h(x), async () => 'done'),
-  withSamlCallbackServer: (x) =>
-    withSamlCallbackServer(h(x), async () => 'done'),
+/** A transport's `open`, given hostile options: it answers a promise. */
+const opens: Record<string, Make> = {
+  'loopback4 open': (x) =>
+    loopback4({ port: 0 }).open(h(x), async () => 'done'),
+  'terminalPaste open': (x) =>
+    terminalPaste({ read: async () => 'x' }).open(h(x), async () => 'done'),
+  'consumerAnswer open': (x) =>
+    consumerAnswer({ receive: async () => 'x' }).open(h(x), async () => 'done'),
 };
 
 /** What a call threw, or `undefined` when it returned. */
@@ -240,11 +257,8 @@ describe('hostile options never make a constructor or factory throw them', () =>
     }
   }
 
-  for (const [name, make] of Object.entries(servers)) {
+  for (const [name, make] of Object.entries(opens)) {
     for (const [label, hostile] of hostileVariants()) {
-      // Only the hostile objects: `undefined` and `{}` are a valid scope on
-      // the default port, which this suite does not bind.
-      if (label === 'undefined' || label === 'an empty object') continue;
       it(`${name} — ${label}`, async () => {
         let thrown: unknown;
         try {
@@ -287,6 +301,16 @@ describe('hostile collaborators never make a constructor throw them', () => {
     'cookieProvider',
     'locator',
     'probes',
+    'presentation',
+    'transport',
+    'protocol',
+    'show',
+    'onFailure',
+    'receive',
+    'provide',
+    'read',
+    'openUrl',
+    'remoteHint',
   ] as const;
   const base = {
     uaaUrl: 'https://uaa.example',
@@ -314,7 +338,12 @@ describe('hostile collaborators never make a constructor throw them', () => {
     Saml2PureProvider: (x) => new Saml2PureProvider(h(x)),
     UaaPasscodeProvider: (x) => new UaaPasscodeProvider(h(x)),
     SncLogonProvider: (x) => new SncLogonProvider(h(x)),
-    BrowserCallbackStrategy: (x) => new BrowserCallbackStrategy(h(x)),
+    composeAuthorization: (x) =>
+      composeAuthorization(h({ endpoint: '/callback', ...(x as object) })),
+    consumerPresentation: (x) => consumerPresentation(h(x)),
+    consumerHandoff: (x) => consumerHandoff(h(x)),
+    consumerAnswer: (x) => consumerAnswer(h(x)),
+    terminalPaste: (x) => terminalPaste(h(x)),
     browserCallbackStrategy: (x) => browserCallbackStrategy(h(x)),
     manualPasteStrategy: (x) => manualPasteStrategy(h(x)),
     externalCodeStrategy: (x) => externalCodeStrategy(h(x)),

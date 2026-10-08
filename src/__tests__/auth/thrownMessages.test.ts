@@ -18,6 +18,10 @@ import {
   logFields,
   readFailure,
 } from '@mcp-abap-adt/auth-errors';
+import type {
+  IAnswerChannel,
+  IAnswerTransport,
+} from '@mcp-abap-adt/interfaces-auth';
 import axios from 'axios';
 import { getTokenWithClientCredentials } from '../../auth/clientCredentialsAuth';
 import { refreshOidcToken } from '../../auth/oidcToken';
@@ -26,16 +30,26 @@ import {
   refreshSamlBearerToken,
 } from '../../auth/saml2TokenExchange';
 import { refreshJwtToken } from '../../auth/tokenRefresher';
+import { composeAuthorization } from '../../authorization/compose';
+import { oauthCode } from '../../authorization/protocol';
 import { refreshStatePersistence } from '../../persistence';
 import { AuthorizationCodeProvider } from '../../providers/AuthorizationCodeProvider';
 import { ClientCredentialsProvider } from '../../providers/ClientCredentialsProvider';
 import { refreshThenLogin } from '../../renewal';
 import {
-  BrowserCallbackStrategy,
   browserCallbackStrategy,
   oidcCallbackStrategy,
 } from '../../strategies';
 import { wordsOf } from '../helpers/minted';
+
+/** A composition whose transport is the test's `open`. */
+const composedOver = (open: IAnswerTransport['open']) =>
+  composeAuthorization({
+    presentation: { present: () => undefined },
+    transport: { label: 'browser', open },
+    protocol: oauthCode(),
+    endpoint: '/callback',
+  });
 
 jest.mock('axios', () => {
   const mocked = jest.createMockFromModule<Record<string, unknown>>('axios');
@@ -112,17 +126,13 @@ describe('a thrown error carries no foreign message', () => {
 
   // K11 (6.0.0): an `interactive-login` `failed` failure naming only the
   // allowlisted code; no cause at all (L2), never the original.
-  it('BrowserCallbackStrategy: interactive-login failed in fixed words, no cause', async () => {
-    const strategy = new BrowserCallbackStrategy<string>({
-      stateGate: false,
-      callbackServer: async () => {
-        throw original;
-      },
-      openUrl: async () => undefined,
+  it('a composed strategy: interactive-login failed in fixed words, no cause', async () => {
+    const strategy = composedOver(async () => {
+      throw original;
     });
     const { error, text } = await thrownBy(() =>
       strategy.authorize({
-        buildAuthorizationUrl: async () => 'https://idp.example/a',
+        buildAuthorizationUrl: async () => 'https://idp.example/a?state=S',
       }),
     );
     expect(isAuthProviderFailure(error)).toBe(true);
@@ -290,12 +300,17 @@ describe('an IdP refusal on the browser callback', () => {
 
   const refuse =
     (query: string) =>
-    async (_url: string, _browser: string, redirectUri: string) => {
+    async (url: string, _browser: string, redirectUri: string) => {
+      // The IdP's refusal carries the request's state (RFC 6749 §4.1.2.1).
+      const state = new URL(url).searchParams.get('state') ?? '';
       await new Promise<void>((resolve) => {
-        const req = http.get(`${redirectUri}?${query}`, (res) => {
-          res.resume();
-          res.on('end', () => resolve());
-        });
+        const req = http.get(
+          `${redirectUri}?${query}&state=${state}`,
+          (res) => {
+            res.resume();
+            res.on('end', () => resolve());
+          },
+        );
         req.on('error', () => resolve());
       });
     };
@@ -318,7 +333,7 @@ describe('an IdP refusal on the browser callback', () => {
       });
       const { error, text } = await thrownBy(() =>
         strategy.authorize({
-          buildAuthorizationUrl: async () => 'https://idp.example/a',
+          buildAuthorizationUrl: async () => 'https://idp.example/a?state=S',
         }),
       );
       // K10 / A8 (6.0.0): identity-provider-refused with the registered code.
@@ -344,7 +359,7 @@ describe('an IdP refusal on the browser callback', () => {
     });
     const { error, text } = await thrownBy(() =>
       strategy.authorize({
-        buildAuthorizationUrl: async () => 'https://idp.example/a',
+        buildAuthorizationUrl: async () => 'https://idp.example/a?state=S',
       }),
     );
     expect(text).not.toContain(DESCRIPTION);
@@ -355,16 +370,12 @@ describe('an IdP refusal on the browser callback', () => {
   });
 
   it('a foreign failure with an HTTP status names the status', async () => {
-    const strategy = new BrowserCallbackStrategy<string>({
-      stateGate: false,
-      callbackServer: async () => {
-        throw Object.assign(new Error(DESCRIPTION), { status: 503 });
-      },
-      openUrl: async () => undefined,
+    const strategy = composedOver(async () => {
+      throw Object.assign(new Error(DESCRIPTION), { status: 503 });
     });
     const { text } = await thrownBy(() =>
       strategy.authorize({
-        buildAuthorizationUrl: async () => 'https://idp.example/a',
+        buildAuthorizationUrl: async () => 'https://idp.example/a?state=S',
       }),
     );
     expect(text).toContain('HTTP 503');
@@ -374,17 +385,16 @@ describe('an IdP refusal on the browser callback', () => {
   // E12 (Task 26): the configuration failure the URL builder throws, once a
   // ValidationError, passes through as it is.
   it('a configuration failure from building the URL passes through unchanged (E12)', async () => {
-    const strategy = new BrowserCallbackStrategy<string>({
-      stateGate: false,
-      callbackServer: async (_options, use) =>
+    const strategy = composedOver(
+      async <T>(
+        _options: unknown,
+        use: (channel: IAnswerChannel) => Promise<T>,
+      ) =>
         use({
-          port: 1,
           redirectUri: 'http://localhost:1/callback',
-          waitForResult: () => new Promise<string>(() => undefined),
-          fail: () => undefined,
+          arm: () => ({ answer: () => new Promise<void>(() => undefined) }),
         }),
-      openUrl: async () => undefined,
-    });
+    );
     const configuration = authError.configuration({
       case: 'redirect-mismatch',
       fields: ['authorizationUrl'],

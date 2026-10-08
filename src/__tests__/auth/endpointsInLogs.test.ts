@@ -11,16 +11,16 @@
 
 import { createServer, type IncomingMessage, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { afterAll, beforeAll, describe, expect, it } from '@jest/globals';
+import { afterAll, beforeAll, describe, expect, it, jest } from '@jest/globals';
 import { readFailure } from '@mcp-abap-adt/auth-errors';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
 import { promptableText, promptableUrl } from '../../auth/announce';
-import { launchBrowser } from '../../auth/browserAuth';
 import { discoverOidc } from '../../auth/oidcDiscovery';
 import {
   exchangeSamlAssertion,
   refreshSamlBearerToken,
 } from '../../auth/saml2TokenExchange';
+import { showUrl } from '../../authorization/presentation';
 import { consoleDeviceCodePresenter } from '../../deviceCode/DeviceCodePresenter';
 import { AuthorizationCodeProvider } from '../../providers/AuthorizationCodeProvider';
 import { ClientCredentialsProvider } from '../../providers/ClientCredentialsProvider';
@@ -193,7 +193,10 @@ type Build = (
 };
 
 const pasted = (code: string) =>
-  manualPasteStrategy({ read: async () => code });
+  manualPasteStrategy({
+    redirectUri: 'http://localhost:61001/callback',
+    read: async () => code,
+  });
 
 const providers: Record<string, Build> = {
   'OIDC password, discovered endpoints': (logger, authDebug) =>
@@ -382,32 +385,45 @@ describe('no endpoint and no control character in any log line', () => {
     });
   }
 
-  it('the browser launcher prompts no hostile URL, in every mode that prompts', async () => {
-    for (const browser of ['none', 'headless']) {
-      const prompts: string[] = [];
+  it('showUrl prompts no hostile URL: the URL on stderr as admitted, the logger fixed words', async () => {
+    const written: string[] = [];
+    const spy = jest
+      .spyOn(process.stderr, 'write')
+      .mockImplementation((chunk: unknown) => {
+        written.push(String(chunk));
+        return true;
+      });
+    try {
       const { logger, lines } = recorder();
-      await launchBrowser(
-        `${base}/authorize?x=${CONTROLS}`,
-        browser,
-        `http://localhost:1/callback?${CONTROLS}`,
-        (msg) => prompts.push(msg),
+      showUrl().present(`${base}/authorize?x=${CONTROLS}`, {
+        redirectUri: `http://localhost:1/callback?${CONTROLS}`,
+        waitingOn: `http://localhost:1/callback?${CONTROLS}`,
+        routeHint: `tunnel${CONTROLS}`,
+        signal: new AbortController().signal,
         logger,
+      });
+      // One line per write: its own line break is the prompt's, not forged.
+      const shownLines = written.map((chunk) =>
+        chunk.endsWith('\n') ? chunk.slice(0, -1) : chunk,
       );
-      expectClean([prompts, ...lines]);
-      // The admitted serialisation still reaches the user.
-      expect(prompts.join('\n')).toContain(`${base}/authorize?x=`);
+      expectClean([shownLines, ...lines]);
+      // The admitted serialisation still reaches the user, on stderr only.
+      expect(written.join('')).toContain(`${base}/authorize?x=`);
+      expect(JSON.stringify(lines)).not.toContain('/authorize');
+      // A URL whose host the serialiser keeps hostile is not shown at all.
+      written.length = 0;
+      const second = recorder();
+      showUrl().present('javascript:alert(1)', {
+        redirectUri: undefined,
+        signal: new AbortController().signal,
+        logger: second.logger,
+      });
+      const all = `${written.join('')}${JSON.stringify(second.lines)}`;
+      expect(all).not.toContain('javascript');
+      expect(all).toContain('is not an http(s) URL');
+    } finally {
+      spy.mockRestore();
     }
-    // A URL whose host the serialiser keeps hostile is not shown at all.
-    const prompts: string[] = [];
-    await launchBrowser(
-      'javascript:alert(1)',
-      'none',
-      'http://localhost:1/callback',
-      (msg) => prompts.push(msg),
-      null,
-    );
-    expect(prompts.join('\n')).not.toContain('javascript');
-    expect(prompts.join('\n')).toContain('is not an http(s) URL');
   });
 });
 

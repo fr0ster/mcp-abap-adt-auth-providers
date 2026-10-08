@@ -135,7 +135,7 @@ describe('the UAA code exchange with a consumer logger', () => {
 
 /**
  * The interactive login's log lines (Task 23): the prompt (`announce`), the
- * callback server's ignored-request line, the launcher's failure line (H7)
+ * listener's refused-answer line, the presentation's failure line (H7)
  * and the manual prompt — every one guarded. An async logger leaves no
  * unhandled rejection; a throwing one changes no outcome, and a prompt it
  * would have swallowed goes to stderr instead.
@@ -158,9 +158,9 @@ await settle(async () => (await strategies.browserCallbackStrategy({
   port: 0,
   openUrl: async (_u, _b, redirectUri) => {
     await get(redirectUri);
-    await get(redirectUri + '?code=c1');
+    await get(redirectUri + '?code=c1&state=S');
   },
-}).authorize({ buildAuthorizationUrl: async () => 'https://idp.example/a', logger })).payload);
+}).authorize({ buildAuthorizationUrl: async () => 'https://idp.example/a?state=S', logger })).payload);
 // A launcher that fails ends nothing (Task 30h): its line and prompt go
 // through the same logger, and the consumer's signal ends the login.
 await settle(async () => {
@@ -168,13 +168,14 @@ await settle(async () => {
   const login = strategies.browserCallbackStrategy({
     port: 0,
     openUrl: async () => { throw Object.assign(new Error('x'), { code: 'ENOENT' }); },
-  }).authorize({ buildAuthorizationUrl: async () => 'https://idp.example/a', logger, signal: controller.signal });
+  }).authorize({ buildAuthorizationUrl: async () => 'https://idp.example/a?state=S', logger, signal: controller.signal });
   setTimeout(() => controller.abort(), 200);
   return (await login).payload;
 });
 await settle(async () => (await strategies.manualPasteStrategy({
+  redirectUri: 'http://localhost:61001/callback',
   read: async () => 'c2',
-}).authorize({ buildAuthorizationUrl: async () => 'https://idp.example/a', logger })).payload);
+}).authorize({ buildAuthorizationUrl: async () => 'https://idp.example/a?state=S', logger })).payload);
 await settle(async () => {
   await consoleDeviceCodePresenter(logger).present({ verificationUri: 'https://idp.example/activate', userCode: 'UC-1' });
   return 'shown';
@@ -205,8 +206,11 @@ describe('the interactive login with a consumer logger', () => {
     expect(run.result).toEqual(expected);
     expect(run.unhandled).toEqual([]);
     // Fix round 1 (item 8): a prompt whose info rejected is not lost — it
-    // reaches stderr too; nothing of the rejection does.
-    expect(run.stderr).toContain('Open this URL to authenticate');
+    // reaches stderr too; nothing of the rejection does. (The authorization
+    // URL goes to stderr only in any case, C8.)
+    expect(run.stderr).toContain(
+      'Open this URL in your browser to authenticate',
+    );
     expect(run.stderr).toContain('Enter code: UC-1');
     expect(run.stderr).not.toContain('async info');
   }, 60_000);
@@ -224,7 +228,9 @@ describe('the interactive login with a consumer logger', () => {
     expect(run.timedOut).toBe(false);
     expect(run.result).toEqual(expected);
     expect(run.unhandled).toEqual([]);
-    expect(run.stderr).toContain('Open this URL to authenticate');
+    expect(run.stderr).toContain(
+      'Open this URL in your browser to authenticate',
+    );
     expect(run.stderr).toContain('Enter code: UC-1');
     expect(run.stderr).not.toContain('threw');
   }, 60_000);

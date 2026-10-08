@@ -1,9 +1,11 @@
 /**
  * Spec §6a1, login CSRF: the providers mint `state` (and, for UAA, the PKCE
- * pair) for every URL they build; the OAuth browser strategies open their
- * transport gated, arm it with the URL's `state` before anything is opened,
- * and refuse a transport that cannot be armed; the manual paste compares a
- * pasted URL's `state`. A URL or code the consumer brings stays unbound.
+ * pair) for every URL they build — a configured URL without one gets the
+ * provider's (C7); the named browser compositions refuse every callback
+ * until the URL is built and the channel armed, then only this login's
+ * `state` settles one; the manual paste compares a pasted URL's `state`.
+ * The composer's order and the listener's gate are proven in
+ * `authorization/composer.test.ts` and `listenerTransports.test.ts`.
  */
 
 import { createHash } from 'node:crypto';
@@ -14,17 +16,12 @@ import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it, jest } from '@jest/globals';
 import type {
   AuthorizationRequest,
-  CallbackServerFactory,
   IAuthorizationStrategy,
-  ICallbackServerHandle,
-  ICallbackServerOptions,
 } from '@mcp-abap-adt/interfaces-auth';
-import { withSamlCallbackServer } from '../../auth/saml2Auth';
 import { AuthorizationCodeProvider } from '../../providers/AuthorizationCodeProvider';
 import { OidcBrowserProvider } from '../../providers/OidcBrowserProvider';
 import { refreshThenLogin } from '../../renewal';
 import {
-  BrowserCallbackStrategy,
   browserCallbackStrategy,
   oidcCallbackStrategy,
   samlCallbackStrategy,
@@ -429,77 +426,10 @@ describe.each([
     expect(statuses).toEqual([400, 400, 400]);
     expect(ignored()).toBe(5);
   }, 30000);
-
-  it('refuses a consumer transport without expectState before anything opens', async () => {
-    const buildAuthorizationUrl = jest.fn(
-      async () => 'https://idp.example/authorize?state=abc',
-    );
-    const openUrl = jest.fn(async () => undefined);
-    const seen: ICallbackServerOptions[] = [];
-    // Settles a result at once: the strategy must not use it.
-    const unarmable: CallbackServerFactory<unknown> = async (options, use) => {
-      seen.push(options);
-      const handle: ICallbackServerHandle<unknown> = {
-        port: 49990,
-        redirectUri: 'http://localhost:49990/callback',
-        waitForResult: async () => 'forged',
-        fail: () => undefined,
-      };
-      return await use(handle);
-    };
-    const strategy = (make as typeof browserCallbackStrategy)({
-      port: 0,
-      openUrl,
-      callbackServer: unarmable as CallbackServerFactory<string>,
-    });
-    const thrown = await strategy
-      .authorize({ buildAuthorizationUrl })
-      .catch((e: unknown) => e);
-    expect(configurationOf(thrown)).toMatchObject({
-      case: 'invalid-value',
-      fields: ['callbackServer'],
-    });
-    expect(buildAuthorizationUrl).not.toHaveBeenCalled();
-    expect(openUrl).not.toHaveBeenCalled();
-    expect(seen[0]?.gated).toBe(true);
-  });
-
-  it('arms the gate with the URL’s state — or null for a URL without one — before opening', async () => {
-    for (const [url, armed] of [
-      ['https://idp.example/authorize?state=abc&x=1', 'abc'],
-      ['https://idp.example/authorize?x=1', null],
-    ] as const) {
-      const order: string[] = [];
-      const transport: CallbackServerFactory<unknown> = async (
-        options,
-        use,
-      ) => {
-        expect(options.gated).toBe(true);
-        return await use({
-          port: 49991,
-          redirectUri: 'http://localhost:49991/callback',
-          waitForResult: async () => 'code',
-          fail: () => undefined,
-          expectState: (state) => {
-            order.push(`armed:${state}`);
-          },
-        });
-      };
-      const strategy = (make as typeof browserCallbackStrategy)({
-        port: 0,
-        callbackServer: transport as CallbackServerFactory<string>,
-        openUrl: async () => {
-          order.push('opened');
-        },
-      });
-      await strategy.authorize({ buildAuthorizationUrl: async () => url });
-      expect(order).toEqual([`armed:${armed}`, 'opened']);
-    }
-  });
 });
 
-describe('samlCallbackStrategy needs no gate', () => {
-  it('logs in through the shipped SAML transport without arming it', async () => {
+describe('samlCallbackStrategy: armed like every composition, bound by InResponseTo', () => {
+  it('logs in through the loopback listener on the real port; its URL carries no state', async () => {
     const strategy = samlCallbackStrategy({
       port: 0,
       openUrl: async (_url, _browser, redirectUri) => {
@@ -515,78 +445,6 @@ describe('samlCallbackStrategy needs no gate', () => {
     });
     expect(outcome.payload).toBe('assertion');
   }, 30000);
-
-  it('logs in through an injected SAML transport without expectState, not gated', async () => {
-    const seen: ICallbackServerOptions[] = [];
-    const strategy = samlCallbackStrategy({
-      port: 0,
-      openUrl: async () => undefined,
-      callbackServer: async (options, use) => {
-        seen.push(options);
-        return await use({
-          port: 49992,
-          redirectUri: 'http://localhost:49992/callback',
-          waitForResult: async () => 'assertion',
-          fail: () => undefined,
-        });
-      },
-    });
-    const outcome = await strategy.authorize({
-      buildAuthorizationUrl: async () =>
-        'https://idp.example/sso?SAMLRequest=x',
-    });
-    expect(outcome.payload).toBe('assertion');
-    expect(seen[0]?.gated).not.toBe(true);
-  });
-
-  it('the shipped SAML transport is reached on the real port', async () => {
-    const result = await withSamlCallbackServer({ port: 0 }, async (srv) => {
-      const waiting = srv.waitForResult();
-      void callbackGet(srv.port, '/callback?SAMLResponse=direct');
-      return await waiting;
-    });
-    expect(result).toBe('direct');
-  }, 30000);
-});
-
-describe('BrowserCallbackStrategy constructed directly', () => {
-  it('requires the gate only when told to', async () => {
-    const transport: CallbackServerFactory<string> = async (_options, use) =>
-      await use({
-        port: 49993,
-        redirectUri: 'http://localhost:49993/callback',
-        waitForResult: async () => 'code',
-        fail: () => undefined,
-      });
-    const open = new BrowserCallbackStrategy<string>({
-      callbackServer: transport,
-      stateGate: false,
-      port: 0,
-      openUrl: async () => undefined,
-    });
-    expect(
-      (
-        await open.authorize({
-          buildAuthorizationUrl: async () => 'https://idp.example/a?state=s',
-        })
-      ).payload,
-    ).toBe('code');
-    const gated = new BrowserCallbackStrategy<string>({
-      callbackServer: transport,
-      stateGate: true,
-      port: 0,
-      openUrl: async () => undefined,
-    });
-    const thrown = await gated
-      .authorize({
-        buildAuthorizationUrl: async () => 'https://idp.example/a?state=s',
-      })
-      .catch((e: unknown) => e);
-    expect(configurationOf(thrown)).toMatchObject({
-      case: 'invalid-value',
-      fields: ['callbackServer'],
-    });
-  });
 });
 
 describe('manualPasteStrategy compares a pasted URL’s state', () => {
@@ -601,7 +459,10 @@ describe('manualPasteStrategy compares a pasted URL’s state', () => {
       pastedUrl('S'.repeat(43)),
     ];
     const read = jest.fn(async () => answers.shift() ?? '');
-    const outcome = await manualPasteStrategy({ read }).authorize({
+    const outcome = await manualPasteStrategy({
+      redirectUri: CALLBACK,
+      read,
+    }).authorize({
       buildAuthorizationUrl: async () => built,
     });
     expect(read).toHaveBeenCalledTimes(3);
@@ -617,7 +478,10 @@ describe('manualPasteStrategy compares a pasted URL’s state', () => {
       pastedUrl('S'.repeat(43)),
     ];
     const read = jest.fn(async () => answers.shift() ?? '');
-    const outcome = await manualPasteStrategy({ read }).authorize({
+    const outcome = await manualPasteStrategy({
+      redirectUri: CALLBACK,
+      read,
+    }).authorize({
       buildAuthorizationUrl: async () => built,
     });
     expect(read).toHaveBeenCalledTimes(5);
@@ -626,6 +490,7 @@ describe('manualPasteStrategy compares a pasted URL’s state', () => {
 
   it('takes the code from the query, never from a fragment', async () => {
     const thrown = await manualPasteStrategy({
+      redirectUri: CALLBACK,
       read: async () =>
         `http://localhost:61001/callback?state=${'S'.repeat(43)}#&code=EVIL`,
     })
@@ -643,20 +508,28 @@ describe('manualPasteStrategy compares a pasted URL’s state', () => {
       if (asked > 3) throw new Error('asked again for a bare code');
       return 'bare-code';
     });
-    const outcome = await manualPasteStrategy({ read }).authorize({
+    const outcome = await manualPasteStrategy({
+      redirectUri: CALLBACK,
+      read,
+    }).authorize({
       buildAuthorizationUrl: async () => built,
     });
     expect(read).toHaveBeenCalledTimes(1);
     expect(outcome.payload).toBe('bare-code');
   });
 
-  it('compares nothing for a URL without state (one the consumer configured)', async () => {
-    const outcome = await manualPasteStrategy({
-      read: async () => pastedUrl('anything'),
-    }).authorize({
-      buildAuthorizationUrl: async () => 'https://idp.example/authorize',
+  it('refuses a URL without state before anything is read (C7: a provider always puts one there)', async () => {
+    const read = jest.fn(async () => pastedUrl('anything'));
+    const thrown = await manualPasteStrategy({ redirectUri: CALLBACK, read })
+      .authorize({
+        buildAuthorizationUrl: async () => 'https://idp.example/authorize',
+      })
+      .catch((e: unknown) => e);
+    expect(configurationOf(thrown)).toMatchObject({
+      case: 'invalid-value',
+      fields: ['authorizationUrl'],
     });
-    expect(outcome.payload).toBe('pasted');
+    expect(read).not.toHaveBeenCalled();
   });
 });
 
@@ -671,8 +544,7 @@ describe('the comparison is constant time (source)', () => {
   });
 
   it.each([
-    ['auth/callbackServer.ts', 'sameSecret('],
-    ['strategies/manualStrategies.ts', 'readPaste('],
+    ['authorization/transport/httpListener.ts', 'sameSecret('],
     ['authorization/protocol/readPaste.ts', 'sameSecret('],
     ['authorization/protocol/codeProtocols.ts', 'sameSecret('],
   ])('%s compares the armed secret only through sameSecret', (file, call) => {
