@@ -3077,9 +3077,12 @@ export interface ComposedAuthorization<TPayload> {
   readonly signal?: AbortSignal | undefined;
   /**
    * The endpoint path the redirect arrives at — required, no default; the
-   * named compositions pass `'/callback'`. An absolute path (`/` and at
-   * least one more character, no `?`, `#`, `..` or `//`), else
-   * `configuration` `invalid-value`, `endpoint`, at construction.
+   * named compositions pass `'/callback'`. It must survive URL parsing
+   * unchanged: `new URL(endpoint, 'http://localhost').pathname ===
+   * endpoint`, the origin unchanged, and it is not `/` — so encoded dot
+   * segments, backslashes, spaces, control characters, `?`, `#` are all
+   * refused (`configuration` `invalid-value`, `endpoint`, at construction).
+   * The listener registers and advertises that one string.
    */
   readonly endpoint: string;
 }
@@ -3313,7 +3316,9 @@ protocol it applies to.
   another endpoint path and checks the advertised redirect, that the
   redirect arrives at that path, and that `/callback` then answers 404); the
   composer hands a consumer transport the composition's `endpoint`; an
-  invalid `endpoint` is refused at construction.
+  `endpoint` that URL parsing would change — `/auth/%2e%2e/finish`,
+  `/auth\\finish`, `/auth path`, a control character, `?`, `#`, `/` alone —
+  is refused at construction.
 - **Composer:** a consumer transport whose `answer()` resolves without an
   accept → `failed`, no payload; one that calls the judge with a wrong
   `state` and resolves → `failed`; overlap → `busy`; dispose during
