@@ -233,8 +233,8 @@ recipe and no implicit default (Inference, design).
 
   **Measured on a Windows host, 2026-10-07** (Windows 11 10.0.26200 x64,
   Node 24.19.0; SAP Secure Login Client with a Kerberos profile; SNC over
-  RFC to an application server; SAP NW RFC SDK 7.50 x64;
-  `scripts/windows-check.mjs`):
+  RFC to an application server; SAP NW RFC SDK 7.50 x64; a hand-run check
+  script, removed after the run — it is in the git history):
   - *Registry* (Measured): the SNC library found through the real `reg.exe`
     under `HKLM\Software\SAP\SecureLogin`, value `InstallPath64`:
     `sapcrypto.dll`, x64.
