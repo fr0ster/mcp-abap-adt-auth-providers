@@ -18,10 +18,10 @@ import {
   oidcIssuerRequired,
   ownOptions,
 } from '../auth/configuration';
-import type { OidcCallbackResult } from '../auth/oidcBrowserAuth';
 import { discoverOidc, mtlsAlias } from '../auth/oidcDiscovery';
 import { generatePkceChallenge, generatePkceVerifier } from '../auth/oidcPkce';
 import { exchangeAuthorizationCode, refreshOidcToken } from '../auth/oidcToken';
+import type { OidcCallbackResult } from '../authorization/protocol';
 import { mintSecret } from '../authorization/secrets';
 import { oidcCallbackStrategy } from '../strategies';
 import {

@@ -12,7 +12,7 @@ import type {
   IAuthorizationStrategy,
 } from '@mcp-abap-adt/interfaces-auth';
 import { readSafely } from '../auth/knownCodes';
-import type { OidcCallbackResult } from '../auth/oidcBrowserAuth';
+import type { OidcCallbackResult } from '../authorization/protocol';
 
 export function asOidcResult(
   inner: IAuthorizationStrategy<string>,

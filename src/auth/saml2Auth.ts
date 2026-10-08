@@ -1,16 +1,9 @@
 /**
- * SAML 2.0 auth helpers
+ * SAML 2.0 auth helpers: the AuthnRequest and the URL that carries it
  */
 
 import { randomUUID } from 'node:crypto';
 import { deflateRawSync } from 'node:zlib';
-import type {
-  CallbackServerFactory,
-  ICallbackServerHandle,
-  ICallbackServerOptions,
-} from '@mcp-abap-adt/interfaces-auth';
-import express from 'express';
-import { runCallbackScope, sendText } from './callbackServer';
 
 export interface Saml2AuthConfig {
   idpSsoUrl: string;
@@ -73,43 +66,3 @@ export function buildSamlAuthorizationUrl(
     requestId,
   };
 }
-
-export const withSamlCallbackServer: CallbackServerFactory<string> = <TReturn>(
-  options: ICallbackServerOptions,
-  use: (server: ICallbackServerHandle<string>) => Promise<TReturn>,
-): Promise<TReturn> =>
-  runCallbackScope<string, TReturn>(
-    options,
-    (app, settle) => {
-      app.use(express.urlencoded({ extended: false, limit: '5mb' }));
-
-      const handle = (samlResponse: unknown, res: express.Response): void => {
-        // A SAML response carries no `state`: bound by `InResponseTo` and
-        // the validator (spec §6a1). The gate still closes a transport
-        // opened `gated` until it is armed (with `null`).
-        if (!settle.admit(undefined, res)) return;
-        // The response is decided after the payload is examined. Answering 200
-        // first told a request that carried nothing that it had authenticated.
-        if (typeof samlResponse === 'string' && samlResponse) {
-          sendText(
-            res,
-            200,
-            'SAML authentication complete. You can close this window.',
-          );
-          settle.ok(samlResponse, res);
-          return;
-        }
-        sendText(res, 400, 'Error: not a SAML assertion callback');
-        settle.ignore('no SAMLResponse in the request', res);
-      };
-
-      app.post('/callback', (req, res) => {
-        handle(req.body?.SAMLResponse, res);
-      });
-
-      app.get('/callback', (req, res) => {
-        handle(req.query.SAMLResponse, res);
-      });
-    },
-    use,
-  );

@@ -1,29 +1,36 @@
 /**
- * Strategies where a human moves the payload.
+ * The terminal compositions (spec §6d.7): the URL shown on stderr, the
+ * answer pasted at a prompt. Each returns `composeAuthorization(…)`.
  *
- * There are two because the payload is not acquired the same way. An
- * authorization code lands in the browser's address bar; a `SAMLResponse` does
- * not — our `AuthnRequest` declares the HTTP-POST binding, so the IdP posts it
- * in a form body and the user must lift it from there.
+ * | Name | Transport | Protocol |
+ * |---|---|---|
+ * | `manualPasteStrategy` | `terminalPaste({ redirectUri, read })` | `oauthCode()` |
+ * | `manualSamlResponseStrategy` | `terminalPaste({ redirectUri, read })` | `samlResponse()` |
+ * | `manualPasscodeStrategy` | `terminalPaste({ read })` | `passcode()` |
+ *
+ * A transport with no socket advertises no redirect of its own (C4): the
+ * code and SAML ones require the redirect registered with the identity
+ * provider; the passcode page takes none.
  */
 
-import type {
-  AuthorizationOutcome,
-  AuthorizationRequest,
-  IAuthorizationStrategy,
-} from '@mcp-abap-adt/interfaces-auth';
-import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
-import { announcer, promptableUrl } from '../auth/announce';
-import { ownOptions } from '../auth/configuration';
-import { abortedLogin, loginFailure } from '../auth/interactiveLogin';
-import { signalOf } from '../auth/signalledRequest';
-import { readPaste, urlState } from '../authorization/protocol/readPaste';
-import { readFromTerminal } from '../authorization/transport/terminalPaste';
-import { DEFAULT_CALLBACK_PORT } from './BrowserCallbackStrategy';
+import { ownOptions, requiredFieldsMissing } from '../auth/configuration';
+import { asAbortSignal } from '../auth/signalledRequest';
+import {
+  type ComposedStrategy,
+  composeAuthorization,
+} from '../authorization/compose';
+import { showUrl } from '../authorization/presentation';
+import { oauthCode, passcode, samlResponse } from '../authorization/protocol';
+import {
+  readFromTerminal,
+  type TerminalRead,
+  terminalPaste,
+} from '../authorization/transport';
+import { CALLBACK_ENDPOINT } from './defaults';
 
-export interface ManualStrategyOptions {
-  /** Must match what the authorization request advertises and the exchange sends. */
-  redirectUri?: string | undefined;
+export { readFromTerminal };
+
+export interface ManualPasscodeStrategyOptions {
   /**
    * Where the pasted value comes from. Defaults to an interactive stdin read.
    * The signal aborts when the login is aborted or the strategy disposed; the
@@ -31,7 +38,7 @@ export interface ManualStrategyOptions {
    * only once the reader has, so a reader that ignores it blocks the next
    * login (spec §6b).
    */
-  read?: ((prompt: string, signal: AbortSignal) => Promise<string>) | undefined;
+  read?: TerminalRead | undefined;
   /**
    * Ends every login of this strategy, beside the request's own signal (the
    * attempt's): either one aborting ends it `aborted`. There is no other
@@ -40,158 +47,59 @@ export interface ManualStrategyOptions {
   signal?: AbortSignal | undefined;
 }
 
-// One implementation, shared with `terminalPaste` until Task 30n.
-export { readFromTerminal };
-
-const defaultRedirectUri = () =>
-  `http://localhost:${DEFAULT_CALLBACK_PORT}/callback`;
-
-/**
- * A manual strategy with a `dispose()`: the read gets a signal that either
- * signal — the strategy's option or the request's — or `dispose()` aborts.
- * Settles only once the read has settled (the reader closed), never at the
- * abort alone: the next login waits for that release (spec §6b).
- */
-function manualStrategy(
-  options: ManualStrategyOptions,
-  run: (
-    request: AuthorizationRequest,
-    read: (prompt: string) => Promise<string>,
-  ) => Promise<AuthorizationOutcome<string>>,
-): IAuthorizationStrategy<string> {
-  const read = options.read ?? readFromTerminal;
-  let disposed = false;
-  // Every authorize in flight, not only the last: concurrent calls each hold a
-  // read, and dispose() must end and await all of them.
-  const inFlight = new Map<AbortController, Promise<void>>();
-  const disposedCalls = new WeakSet<AbortController>();
-  return {
-    async authorize(request) {
-      if (disposed) {
-        throw loginFailure({ outcome: 'disposed', strategy: 'manual' });
-      }
-      const controller = new AbortController();
-      // The request's signal — the attempt's (spec §6b) — and the strategy's
-      // own both end the read; an already-aborted one is honoured.
-      const requestSignal = signalOf(request);
-      const signals = [options.signal, requestSignal];
-      const relay = () => controller.abort();
-      for (const signal of signals) {
-        signal?.addEventListener('abort', relay, { once: true });
-      }
-      if (signals.some((signal) => signal?.aborted)) controller.abort();
-      const working = (async () => {
-        if (controller.signal.aborted) throw abortedLogin('manual');
-        return await run(request, (prompt) => read(prompt, controller.signal));
-      })();
-      inFlight.set(
-        controller,
-        working.then(
-          () => undefined,
-          () => undefined,
-        ),
-      );
-      try {
-        const outcome = await working;
-        if (!controller.signal.aborted) return outcome;
-      } catch (error) {
-        if (!controller.signal.aborted) throw error;
-      } finally {
-        for (const signal of signals) {
-          signal?.removeEventListener('abort', relay);
-        }
-        inFlight.delete(controller);
-      }
-      // Aborted: by dispose() (K15), else by a signal (K4).
-      throw disposedCalls.has(controller) &&
-        !signals.some((signal) => signal?.aborted)
-        ? loginFailure({ outcome: 'disposed', strategy: 'manual' })
-        : abortedLogin('manual');
-    },
-    // Idempotent; ends every authorization in flight and resolves only once
-    // each call's read has settled — whatever the reader holds released.
-    async dispose() {
-      disposed = true;
-      const calls = [...inFlight];
-      for (const [controller] of calls) {
-        disposedCalls.add(controller);
-        controller.abort();
-      }
-      await Promise.all(calls.map(([, done]) => done));
-    },
-  };
+export interface ManualStrategyOptions extends ManualPasscodeStrategyOptions {
+  /**
+   * Required: the redirect registered with the identity provider (the ACS
+   * for SAML) — the authorization request advertises it and the exchange
+   * sends it.
+   */
+  redirectUri: string;
 }
 
-/**
- * Sends the user to the authorization URL: shown only as `promptableUrl`
- * admits it (it may come from discovery or configuration), else named in
- * fixed words. One line per prompt: no line break inside a line.
- */
-function promptForUrl(logger: ILogger | undefined, url: string): void {
-  const announce = announcer(logger);
-  const shownUrl = promptableUrl(url);
-  if (shownUrl === undefined) {
-    announce('The authorization URL is not an http(s) URL that can be shown.');
-    return;
+type Own = Partial<Record<keyof ManualStrategyOptions, unknown>>;
+
+/** The consumer's redirect: required (C4). */
+function registeredRedirect(own: Own): string {
+  if (own.redirectUri === undefined) {
+    throw requiredFieldsMissing(['redirectUri']);
   }
-  announce('Open this URL to authenticate:');
-  announce(shownUrl);
+  return own.redirectUri as string;
 }
+
+const signalOf = (own: Own) => asAbortSignal(own.signal);
 
 /** The user copies the `code` out of the address bar after the redirect. */
 export function manualPasteStrategy(
-  options: ManualStrategyOptions = {},
-): IAuthorizationStrategy<string> {
+  options: ManualStrategyOptions,
+): ComposedStrategy<string> {
   // Read once as own data: a hostile object throws nothing of its own.
-  const own = ownOptions<ManualStrategyOptions>(options);
-  const redirectUri = own.redirectUri ?? defaultRedirectUri();
-  return manualStrategy(own, async (request, read) => {
-    const url = await request.buildAuthorizationUrl(redirectUri);
-    // Login CSRF (spec §6a1): a pasted redirected URL must carry the
-    // `state` of the URL shown; `null` (a configured URL) binds nothing.
-    const expected = urlState(url);
-    promptForUrl(request.logger, url);
-    let reading = readPaste(
-      expected,
-      await read(
-        'Paste the authorization code (or the whole redirected URL): ',
-      ),
-    );
-    // A bare code carries no state and is taken: the user typed it. A URL
-    // from another login is not — asked again, in fixed words, until the
-    // right one or the login's abort.
-    while ('refused' in reading && reading.refused === 'state') {
-      reading = readPaste(
-        expected,
-        await read(
-          'That URL is not from this login. Paste the code (or the URL) this login returned: ',
-        ),
-      );
-    }
-    if (!('code' in reading)) {
-      throw loginFailure({ outcome: 'unreadable-input' });
-    }
-    const code = reading.code;
-    return { payload: code, redirectUri };
+  const own = ownOptions<Own>(options);
+  return composeAuthorization({
+    presentation: showUrl(),
+    transport: terminalPaste({
+      redirectUri: registeredRedirect(own),
+      read: own.read as TerminalRead | undefined,
+    }),
+    protocol: oauthCode(),
+    endpoint: CALLBACK_ENDPOINT,
+    signal: signalOf(own),
   });
 }
 
 /** The user lifts `SAMLResponse` from the POST body — it never reaches the URL. */
 export function manualSamlResponseStrategy(
-  options: ManualStrategyOptions = {},
-): IAuthorizationStrategy<string> {
-  // Read once as own data: a hostile object throws nothing of its own.
-  const own = ownOptions<ManualStrategyOptions>(options);
-  const redirectUri = own.redirectUri ?? defaultRedirectUri();
-  return manualStrategy(own, async (request, read) => {
-    const url = await request.buildAuthorizationUrl(redirectUri);
-    promptForUrl(request.logger, url);
-    const raw = await read(
-      'Paste the SAMLResponse (from the POST body — it is not in the address bar): ',
-    );
-    const assertion = raw.trim();
-    if (!assertion) throw loginFailure({ outcome: 'no-input' });
-    return { payload: assertion, redirectUri };
+  options: ManualStrategyOptions,
+): ComposedStrategy<string> {
+  const own = ownOptions<Own>(options);
+  return composeAuthorization({
+    presentation: showUrl(),
+    transport: terminalPaste({
+      redirectUri: registeredRedirect(own),
+      read: own.read as TerminalRead | undefined,
+    }),
+    protocol: samlResponse(),
+    endpoint: CALLBACK_ENDPOINT,
+    signal: signalOf(own),
   });
 }
 
@@ -202,18 +110,14 @@ export function manualSamlResponseStrategy(
  * login works on a machine with no browser at all, as `cf login --sso` does.
  */
 export function manualPasscodeStrategy(
-  options: ManualStrategyOptions = {},
-): IAuthorizationStrategy<string> {
-  // Read once as own data: a hostile object throws nothing of its own.
-  const own = ownOptions<ManualStrategyOptions>(options);
-  const redirectUri = own.redirectUri ?? defaultRedirectUri();
-  return manualStrategy(own, async (request, read) => {
-    const url = await request.buildAuthorizationUrl(redirectUri);
-    promptForUrl(request.logger, url);
-    const code = (
-      await read('Paste the Temporary Authentication Code (passcode): ')
-    ).trim();
-    if (!code) throw loginFailure({ outcome: 'no-input' });
-    return { payload: code, redirectUri };
+  options: ManualPasscodeStrategyOptions = {},
+): ComposedStrategy<string> {
+  const own = ownOptions<Own>(options);
+  return composeAuthorization({
+    presentation: showUrl(),
+    transport: terminalPaste({ read: own.read as TerminalRead | undefined }),
+    protocol: passcode(),
+    endpoint: CALLBACK_ENDPOINT,
+    signal: signalOf(own),
   });
 }

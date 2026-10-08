@@ -3,33 +3,47 @@
  *
  * The two are separate because one needs the authorization URL and the other
  * does not — and asking for a URL that is not needed would drag in OIDC
- * discovery that a static payload never required.
+ * discovery that a static payload never required. `externalCodeStrategy` is
+ * a composition (spec §6d.7): `consumerHandoff({ redirectUri, provide })` as
+ * its presentation and transport, `oauthCode()` as its protocol.
+ * `staticCodeStrategy` presents no URL and waits for no answer: not one.
  */
 
 import { authError } from '@mcp-abap-adt/auth-errors';
 import type {
   AuthorizationOutcome,
-  AuthorizationRequest,
   IAuthorizationStrategy,
 } from '@mcp-abap-adt/interfaces-auth';
-import { throwIfAborted, untilAborted } from '../auth/attempt';
-import { misconfigured, ownOptions } from '../auth/configuration';
-import { loginFailure } from '../auth/interactiveLogin';
-import { signalOf } from '../auth/signalledRequest';
-import { DEFAULT_CALLBACK_PORT } from './BrowserCallbackStrategy';
+import {
+  misconfigured,
+  ownOptions,
+  requiredFieldsMissing,
+} from '../auth/configuration';
+import { asAbortSignal } from '../auth/signalledRequest';
+import {
+  type ComposedStrategy,
+  composeAuthorization,
+} from '../authorization/compose';
+import { oauthCode } from '../authorization/protocol';
+import {
+  consumerHandoff,
+  type ProvideAnswer,
+} from '../authorization/transport';
+import { CALLBACK_ENDPOINT, DEFAULT_CALLBACK_PORT } from './defaults';
 
 const defaultRedirectUri = () =>
-  `http://localhost:${DEFAULT_CALLBACK_PORT}/callback`;
+  `http://localhost:${DEFAULT_CALLBACK_PORT}${CALLBACK_ENDPOINT}`;
 
 export interface ExternalCodeStrategyOptions {
-  redirectUri?: string | undefined;
+  /** Required: the redirect registered with the identity provider (C4). */
+  redirectUri: string;
   /**
    * Receives the assembled URL — so the code returned matches its PKCE
-   * challenge — and a signal that aborts when the login is aborted (this
-   * option's `signal` or the request's): the strategy settles at the abort
-   * itself, it holds nothing to release.
+   * challenge — and a signal that aborts when the login ends (this option's
+   * `signal`, the request's, or `dispose()`): the strategy settles at the
+   * abort itself, it holds nothing to release.
    */
-  provide: (authorizationUrl: string, signal: AbortSignal) => Promise<string>;
+  provide: ProvideAnswer;
   /** Ends every login of this strategy `aborted`, beside the request's own signal. */
   signal?: AbortSignal | undefined;
 }
@@ -39,41 +53,29 @@ export interface StaticCodeStrategyOptions {
   payload: string;
 }
 
-/** One signal that aborts when either given one does. */
-function combined(...signals: Array<AbortSignal | undefined>): AbortSignal {
-  return AbortSignal.any(
-    signals.filter((signal): signal is AbortSignal => signal !== undefined),
-  );
-}
-
 /** The consumer drives its own interactive flow and needs the URL to do it. */
 export function externalCodeStrategy(
   options: ExternalCodeStrategyOptions,
-): IAuthorizationStrategy<string> {
+): ComposedStrategy<string> {
   // Read once as own data: a hostile object throws nothing of its own.
-  const own = ownOptions<ExternalCodeStrategyOptions>(options);
-  const redirectUri = own.redirectUri ?? defaultRedirectUri();
-  return {
-    async authorize(
-      request: AuthorizationRequest,
-    ): Promise<AuthorizationOutcome<string>> {
-      const signal = combined(own.signal, signalOf(request));
-      throwIfAborted(signal);
-      const url = await untilAborted(
-        Promise.resolve(request.buildAuthorizationUrl(redirectUri)),
-        signal,
-      );
-      throwIfAborted(signal);
-      const payload = await untilAborted(
-        Promise.resolve(own.provide(url, signal)),
-        signal,
-      );
-      if (!payload) {
-        throw loginFailure({ outcome: 'no-input' });
-      }
-      return { payload, redirectUri };
-    },
-  };
+  const own =
+    ownOptions<Partial<Record<keyof ExternalCodeStrategyOptions, unknown>>>(
+      options,
+    );
+  if (own.redirectUri === undefined) {
+    throw requiredFieldsMissing(['redirectUri']);
+  }
+  const { presentation, transport } = consumerHandoff({
+    redirectUri: own.redirectUri as string,
+    provide: own.provide as ProvideAnswer,
+  });
+  return composeAuthorization({
+    presentation,
+    transport,
+    protocol: oauthCode(),
+    endpoint: CALLBACK_ENDPOINT,
+    signal: asAbortSignal(own.signal),
+  });
 }
 
 /** The consumer already holds the payload; the builder is never called. */

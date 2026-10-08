@@ -1,25 +1,20 @@
 export { asOidcResult } from './asOidcResult';
-export type {
-  BrowserCallbackStrategyOptions,
-  CallbackStrategyOptions,
-} from './BrowserCallbackStrategy';
 export {
-  BrowserCallbackStrategy,
   browserCallbackStrategy,
-  DEFAULT_CALLBACK_PORT,
+  type CallbackStrategyOptions,
   oidcCallbackStrategy,
   samlCallbackStrategy,
-} from './BrowserCallbackStrategy';
-export type {
-  ExternalCodeStrategyOptions,
-  StaticCodeStrategyOptions,
-} from './codeStrategies';
+} from './callbackStrategies';
 export {
+  type ExternalCodeStrategyOptions,
   externalCodeStrategy,
+  type StaticCodeStrategyOptions,
   staticCodeStrategy,
 } from './codeStrategies';
-export type { ManualStrategyOptions } from './manualStrategies';
+export { DEFAULT_CALLBACK_PORT } from './defaults';
 export {
+  type ManualPasscodeStrategyOptions,
+  type ManualStrategyOptions,
   manualPasscodeStrategy,
   manualPasteStrategy,
   manualSamlResponseStrategy,

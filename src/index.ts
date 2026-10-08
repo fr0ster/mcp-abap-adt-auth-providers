@@ -11,11 +11,40 @@ export {
   type Moment,
   type MomentOperations,
 } from './auth/AuthProviderBase';
-// Callback server factories — "take the transport this package gives".
-export { withBrowserCallbackServer } from './auth/callbackServer';
-export type { OidcCallbackResult } from './auth/oidcBrowserAuth';
-export { withOidcCallbackServer } from './auth/oidcBrowserAuth';
-export { withSamlCallbackServer } from './auth/saml2Auth';
+// Authorization by composition (spec §6d): the composer and the parts —
+// presentations, transports, protocols — or bring your own of each.
+export {
+  type ComposedAuthorization,
+  type ComposedStrategy,
+  type ConsumerAnswerOptions,
+  type ConsumerHandoffOptions,
+  type ConsumerPresentationOptions,
+  composeAuthorization,
+  consumerAnswer,
+  consumerHandoff,
+  consumerPresentation,
+  type LoopbackOptions,
+  loopback,
+  loopback4,
+  loopback6,
+  type OidcCallbackResult,
+  type OpenableBrowser,
+  type OpenInBrowserOptions,
+  oauthCode,
+  oidcCode,
+  openInBrowser,
+  type ProvideAnswer,
+  passcode,
+  type ReceiveAnswer,
+  readFromTerminal,
+  type ShowAuthorizationUrl,
+  type ShowContext,
+  samlResponse,
+  showUrl,
+  type TerminalPasteOptions,
+  type TerminalRead,
+  terminalPaste,
+} from './authorization';
 // How a token provider's client authenticates to the authorization server.
 export * from './clientAuthentication';
 // Credentials the process delegates to — every one an IAuthProvider.
@@ -86,16 +115,16 @@ export { nodeSncSystem, type SncSystem } from './snc/SncSystem';
 export { SsoProviderFactory } from './sso/SsoProviderFactory';
 export type { SsoProviderConfig, SsoProviderInstance } from './sso/types';
 export type {
-  BrowserCallbackStrategyOptions,
   CallbackStrategyOptions,
   ExternalCodeStrategyOptions,
+  ManualPasscodeStrategyOptions,
   ManualStrategyOptions,
   StaticCodeStrategyOptions,
 } from './strategies';
-// Authorization strategies — or bring your own IAuthorizationStrategy.
+// The named compositions — today's names and options — and the strategies
+// that compose nothing; or bring your own IAuthorizationStrategy.
 export {
   asOidcResult,
-  BrowserCallbackStrategy,
   browserCallbackStrategy,
   DEFAULT_CALLBACK_PORT,
   externalCodeStrategy,
