@@ -94,7 +94,7 @@ of your own.
 |---|---|---|
 | `oauth2-configuration.token-validity` | 60–86400 s, default 43200 | SAP ([xs-security.json](https://help.sap.com/docs/BTP/65de2977205c403bbc107264b8eccf4b/517895a9612241259d6941dbf9ad81cb.html)) |
 | `refresh-token-validity` | 60–31536000 s, default 604800 | SAP (same) |
-| `redirect-uris` | An allow-list, wildcards allowed. For `AuthorizationCodeProvider` it must cover `http://localhost:61001/callback`, the default | SAP for the syntax; the value is this package's default |
+| `redirect-uris` | An allow-list, wildcards allowed. For `AuthorizationCodeProvider` it must cover the redirect its strategy advertises: `http://localhost:61001/callback` for `browserCallbackStrategy` (the `loopback` listener on its default port); `http://127.0.0.1:<port>/callback` or `http://[::1]:<port>/callback` for a strategy composed with `loopback4` / `loopback6`; the `redirectUri` given to `manualPasteStrategy` or `externalCodeStrategy` | SAP for the syntax; the values are what this package's listeners advertise |
 | `credential-types` | `binding-secret`, `x509` | SAP (same) |
 | An instance allowing both | With `credential-types: ["x509", "binding-secret"]`, the key's own `{"credential-type": …}` parameter decides what each key holds | Measured (trial, 2026-10-04) |
 | `grant-types` | **Not on SAP's syntax page.** A community blog says an absent key allows every supported grant, so listing `urn:ietf:params:oauth:grant-type:saml2-bearer` matters only when the list is restricted. `tests/xsuaa/xs-security.json` lists it explicitly | Community ([grant types](https://community.sap.com/t5/technology-blog-posts-by-sap/how-grant-types-keep-your-application-secure/ba-p/13523970)) |
