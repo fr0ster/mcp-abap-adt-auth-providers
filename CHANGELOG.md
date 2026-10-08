@@ -344,6 +344,16 @@ declaration against the published 5.4.2.
   discovery is not cached.
 - **`DEFAULT_CALLBACK_PORT`** stays 61001; the default login wait is
   unbounded (above).
+- **A pasted redirected URL's code is read as a redirect's is**: from its
+  query with `URLSearchParams`, form-decoded (`a+b` is `a b`), present
+  exactly once. A malformed `%` escape in it is no longer refused as
+  unreadable: the code goes to the token endpoint as the parser gives it,
+  and the endpoint refuses it (`request-failed`).
+- **A configured `authorizationUrl` with surrounding whitespace is refused**
+  at construction (`configuration` `invalid-value`, `fields:
+  ['authorizationUrl']`) instead of being stripped by the URL parser: the
+  provider appends its `state` to the configured text (C7, Security) and
+  does not guess what the URL was meant to be.
 
 ### Removed
 
@@ -405,6 +415,15 @@ declaration against the published 5.4.2.
   errors and the code exchange's log line, and 5.4.2 redacted it. 6.0.0 goes
   further: nothing the server wrote is kept at all, so no echo of the header
   reaches an error or a log line, with `authDebug` or without.
+- **`OidcBrowserProvider` with an `authorizationEndpoint` that carries a
+  query** (Azure AD B2C's `?p=…`, configured or discovered) built
+  `…?p=b2c_1_signin?response_type=code&…`: the endpoint's last parameter
+  swallowed `response_type`, and the identity provider refused the login.
+  The URL is now built with `URL` / `URLSearchParams` — the endpoint's
+  parameters kept, the login's added beside them. An endpoint with a
+  fragment (RFC 6749 §3.1), which put the whole query into the fragment, or
+  one that does not parse, is `configuration` `invalid-value`, `fields:
+  ['authorizationEndpoint']`, before anything is built or opened.
 
 ### Security
 
@@ -418,9 +437,13 @@ declaration against the published 5.4.2.
   - every URL `AuthorizationCodeProvider` and `OidcBrowserProvider` build
     carries a fresh `state` (32 random bytes, base64url) and a PKCE pair
     (S256) — new for UAA — whose verifier the exchange sends. A configured
-    `authorizationUrl` is used unchanged and a code no URL was built for
-    (`staticCodeStrategy`) is exchanged without a `code_verifier`: binding
-    those is the consumer's. Measured on the provider stand (2026-10-07):
+    `authorizationUrl` that carries no `state` gets the provider's minted
+    one — fresh for every URL built, appended to its query as text before
+    any fragment — and nothing else: no PKCE challenge, no `code_verifier`
+    (C7: no redirect is accepted without this attempt's `state`, so the
+    identity provider must echo it, RFC 6749 §4.1.2); one that carries a
+    `state` keeps it. A code no URL was built for (`staticCodeStrategy`) is
+    exchanged without a `code_verifier`: binding it is the consumer's. Measured on the provider stand (2026-10-07):
     Cloud Foundry UAA returns the `state`, accepts the verifier, and refuses
     a code exchanged with another verifier or none. XSUAA is not yet
     measured with PKCE (`docs/btp-setup.md`, Pending);
@@ -463,6 +486,14 @@ declaration against the published 5.4.2.
   - every comparison of a `state` or token is constant time
     (`crypto.timingSafeEqual` over SHA-256 digests), and none of them is
     logged.
+  - **A configured URL's `state` binds only when it is one non-empty
+    value.** A configured `authorizationUrl` with an empty `state` (`state=`)
+    armed the gate with `""`, which a forged `?state=&code=EVIL` matched; one
+    with a repeated `state` armed its first value. Both are now refused —
+    `configuration` `invalid-value`, `fields: ['authorizationUrl']` — before
+    anything opens, and a callback's or a pasted URL's `state` and `code`
+    count only when present exactly once (a repeated one is no value, never
+    its first).
 
 ## [5.4.2] - 2026-10-05
 
