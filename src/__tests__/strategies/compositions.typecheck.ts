@@ -2,9 +2,10 @@
  * Type test, compiled by `test:check` and run by nothing (spec §6d.7,
  * §6d.10, §6d.11 "Named compositions"): the calls the server and the
  * auth-broker CLI make today compile unchanged; the options 6.0.0 removes
- * (`callbackServer`, `host`, `allowedHosts`, `stateGate`, the manual and
- * external strategies' optional `redirectUri`, `manualPasscodeStrategy`'s
- * `redirectUri`) are compile errors; `BrowserCallbackStrategy` and the
+ * (`callbackServer`, `host`, `allowedHosts`, `stateGate`, `openUrl`, the
+ * manual and external strategies' optional `redirectUri`,
+ * `manualPasscodeStrategy`'s `redirectUri`) are compile errors; a browser is
+ * an `IBrowser`, never a name (`browser: 'chrome'` is a compile error); `BrowserCallbackStrategy` and the
  * callback server factories are gone from the package root; the parts and
  * the composer are there.
  */
@@ -12,6 +13,7 @@
 import type {
   IAnswerTransport,
   IAuthorizationStrategy,
+  IBrowser,
 } from '@mcp-abap-adt/interfaces-auth';
 import {
   AuthorizationCodeProvider,
@@ -19,12 +21,15 @@ import {
   browserCallbackStrategy,
   type ComposedAuthorization,
   type ComposedStrategy,
+  chromeBrowser,
   composeAuthorization,
   consumerAnswer,
   consumerHandoff,
   consumerPresentation,
   DEFAULT_CALLBACK_PORT,
+  edgeBrowser,
   externalCodeStrategy,
+  firefoxBrowser,
   loopback,
   loopback4,
   loopback6,
@@ -41,13 +46,15 @@ import {
   samlResponse,
   showUrl,
   staticCodeStrategy,
+  systemBrowser,
   terminalPaste,
   UaaPasscodeProvider,
 } from '../../index';
 
 type Surface = typeof import('../../index');
 
-declare const browser: string;
+declare const browser: IBrowser | undefined;
+declare const myOpen: (url: string) => Promise<void>;
 declare const redirectPort: number | undefined;
 declare const acsUrl: string;
 declare const readManualInput: (
@@ -56,14 +63,18 @@ declare const readManualInput: (
 ) => Promise<string>;
 const signal = AbortSignal.timeout(1000);
 
-// The server: `browserCallbackStrategy({ browser, port })`.
+// The server: `browserCallbackStrategy({ browser, port })`, its browser
+// name mapped to an IBrowser by the server itself (§6d.10).
 export const server: IAuthorizationStrategy<string> = browserCallbackStrategy({
   browser,
   port: redirectPort,
 });
 // The CLI's calls (auth-broker-cli 3.0.0, `timeoutMs` already gone).
 export const cli = [
-  browserCallbackStrategy({ browser: 'system' }),
+  browserCallbackStrategy({ browser: systemBrowser() }),
+  browserCallbackStrategy({ browser: chromeBrowser() }),
+  oidcCallbackStrategy({ browser: edgeBrowser() }),
+  samlCallbackStrategy({ browser: firefoxBrowser() }),
   browserCallbackStrategy({ browser, port: redirectPort }),
   oidcCallbackStrategy({ port: redirectPort, browser }),
   samlCallbackStrategy({ port: redirectPort, browser }),
@@ -77,8 +88,12 @@ export const cli = [
 ];
 export const oidcStrategy: IAuthorizationStrategy<OidcCallbackResult> =
   oidcCallbackStrategy({ signal });
-export const withOpenUrl = browserCallbackStrategy({
-  openUrl: async (_url, _browser, _redirectUri) => undefined,
+// A callback that only opened the URL becomes the consumer's IBrowser.
+export const ownBrowser: IBrowser = {
+  open: (url, _signal) => myOpen(url),
+};
+export const withOwnBrowser = browserCallbackStrategy({
+  browser: ownBrowser,
   remoteHint: (redirectUri) => `tunnel to ${redirectUri}`,
   signal,
 });
@@ -109,6 +124,14 @@ export const removed = [
   oidcCallbackStrategy({ allowedHosts: ['build.example'] }),
   // @ts-expect-error stateGate is gone: whether a protocol binds by state is the protocol
   samlCallbackStrategy({ stateGate: false }),
+  // @ts-expect-error openUrl is gone: an IBrowser, or consumerPresentation
+  browserCallbackStrategy({ openUrl: async () => undefined }),
+  // @ts-expect-error no browser by name: chromeBrowser()
+  browserCallbackStrategy({ browser: 'chrome' }),
+  // @ts-expect-error no browser by name: systemBrowser()
+  oidcCallbackStrategy({ browser: 'system' }),
+  // @ts-expect-error 'none' is no browser: leave browser out
+  samlCallbackStrategy({ browser: 'none' }),
   // @ts-expect-error manualPasteStrategy requires redirectUri (C4)
   manualPasteStrategy({}),
   // @ts-expect-error manualPasteStrategy requires its options
@@ -145,7 +168,7 @@ const parts: ComposedAuthorization<string> = {
 export const composed: ComposedStrategy<string> = composeAuthorization(parts);
 export const composedOidc: ComposedStrategy<OidcCallbackResult> =
   composeAuthorization({
-    presentation: openInBrowser({ browser: 'system' }),
+    presentation: openInBrowser({ browser: systemBrowser() }),
     transport: loopback({ port: DEFAULT_CALLBACK_PORT }),
     protocol: oidcCode(),
     endpoint: '/callback',
@@ -186,3 +209,8 @@ export const noEndpoint = composeAuthorization({
 export const noPort = loopback({});
 // @ts-expect-error openInBrowser does not take 'none': that is showUrl
 export const none = openInBrowser({ browser: 'none' });
+// @ts-expect-error no browser by name: chromeBrowser()
+export const named = openInBrowser({ browser: 'chrome' });
+export const own = openInBrowser({ browser: ownBrowser });
+// @ts-expect-error the 5.x browser names are gone with the strings
+export type R7 = import('../../index').OpenableBrowser;

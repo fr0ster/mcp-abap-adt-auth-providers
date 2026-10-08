@@ -19,6 +19,7 @@ import { readFailure } from '@mcp-abap-adt/auth-errors';
 import type {
   AuthorizationRequest,
   IAuthorizationStrategy,
+  IBrowser,
 } from '@mcp-abap-adt/interfaces-auth';
 import {
   browserCallbackStrategy,
@@ -163,45 +164,67 @@ describe('the browser compositions: loopback, showUrl by default', () => {
     await login.catch(() => undefined);
   });
 
-  it.each(['none', 'headless', undefined])(
-    'browser %s shows the URL (showUrl)',
-    async (browser) => {
+  it('without browser the URL is shown (showUrl)', async () => {
+    const port = await getAvailablePort();
+    const { logger, lines } = capturingLogger();
+    const strategy = browserCallbackStrategy({ port });
+    const login = strategy.authorize(recordingRequest({ logger }).request);
+    await waitFor(() => send(port, '/nothing'));
+    await quiet();
+    expect(stderr.join('')).toContain('https://idp.example/authorize');
+    expect(lines.map((line) => line.message)).toContain(
+      'the authorization URL was shown',
+    );
+    await strategy.dispose?.();
+    await login.catch(() => undefined);
+  });
+
+  it.each([
+    ['browserCallbackStrategy', browserCallbackStrategy],
+    ['oidcCallbackStrategy', oidcCallbackStrategy],
+    ['samlCallbackStrategy', samlCallbackStrategy],
+  ] as const)(
+    '%s: a consumer IBrowser is used as given — open on it, exactly the URL, the login’s signal; nothing printed',
+    async (_name, make) => {
       const port = await getAvailablePort();
-      const { logger, lines } = capturingLogger();
-      const strategy = browserCallbackStrategy({ port, browser });
-      const login = strategy.authorize(recordingRequest({ logger }).request);
+      const calls: { self: unknown; args: unknown[] }[] = [];
+      const browser: IBrowser = {
+        async open(...args: unknown[]) {
+          calls.push({ self: this, args });
+        },
+      };
+      const urls: string[] = [];
+      const strategy = make({ port, browser });
+      const login = strategy.authorize(
+        recordingRequest({
+          buildAuthorizationUrl: async (redirectUri) => {
+            const url = `https://idp.example/authorize?redirect_uri=${redirectUri}&state=${STATE}`;
+            urls.push(url);
+            return url;
+          },
+        }).request,
+      );
       await waitFor(() => send(port, '/nothing'));
       await quiet();
-      expect(stderr.join('')).toContain('https://idp.example/authorize');
-      expect(lines.map((line) => line.message)).toContain(
-        'the authorization URL was shown',
-      );
+      expect(urls).toHaveLength(1);
+      expect(calls).toHaveLength(1);
+      expect(calls[0]?.self).toBe(browser);
+      expect(calls[0]?.args).toEqual([urls[0], expect.any(AbortSignal)]);
+      expect(stderr.join('')).toBe('');
       await strategy.dispose?.();
       await login.catch(() => undefined);
     },
   );
 
-  it('openUrl is the consumer’s presentation: called with the URL, the browser and the bound redirect; nothing printed', async () => {
+  it('openUrl is gone: given at run time it is not called, and the URL is shown', async () => {
     const port = await getAvailablePort();
-    const calls: unknown[][] = [];
-    const strategy = browserCallbackStrategy({
-      port,
-      browser: 'system',
-      openUrl: async (...args) => {
-        calls.push(args);
-      },
-    });
+    const openUrl = jest.fn(async () => undefined);
+    const strategy = browserCallbackStrategy({ port, openUrl } as never);
     const login = strategy.authorize(recordingRequest().request);
     await waitFor(() => send(port, '/nothing'));
     await quiet();
-    expect(calls).toEqual([
-      [
-        expect.stringContaining('https://idp.example/authorize'),
-        'system',
-        `http://localhost:${port}/callback`,
-      ],
-    ]);
-    expect(stderr.join('')).toBe('');
+    expect(openUrl).not.toHaveBeenCalled();
+    expect(stderr.join('')).toContain('https://idp.example/authorize');
     await strategy.dispose?.();
     await login.catch(() => undefined);
   });
@@ -254,13 +277,27 @@ describe('the browser compositions: loopback, showUrl by default', () => {
     },
   );
 
-  it('an unknown browser is refused at construction; edge is msedge', () => {
-    expect(
-      factsOf(thrownBy(() => browserCallbackStrategy({ browser: 'lynx' }))),
-    ).toEqual({ case: 'invalid-value', fields: ['presentation'] });
-    expect(thrownBy(() => browserCallbackStrategy({ browser: 'edge' }))).toBe(
-      undefined,
-    );
+  it.each([
+    'chrome',
+    'system',
+    'auto',
+    'edge',
+    'none',
+    'headless',
+    42,
+    null,
+    {},
+  ])('a browser of %j (no IBrowser) is refused at construction', (browser) => {
+    for (const make of [
+      browserCallbackStrategy,
+      oidcCallbackStrategy,
+      samlCallbackStrategy,
+    ]) {
+      expect(factsOf(thrownBy(() => make({ browser } as never)))).toEqual({
+        case: 'invalid-value',
+        fields: ['presentation'],
+      });
+    }
   });
 });
 
