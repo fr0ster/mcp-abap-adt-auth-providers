@@ -972,9 +972,32 @@ with the transport's release deferred (a test hook), a second `authorize`
 on the same composition must be `busy` and open no second transport, and
 this break turns that case red.
 
+### Task 30p: the browser contract, and auth-errors words
+
+Spec §6d (`IBrowser`, §6d.10, §6d.12). Three PRs in order; each published by
+the user before the next builds against it.
+
+- [ ] **interfaces-auth 7.5.0** (interfaces repository): `IBrowser`
+  (`open(url, signal): Promise<void>`), exported; a type test; CHANGELOG.
+  **G12 (user)**: merge, tag, publish.
+- [ ] **auth-errors 2.1.1** (auth-errors repository): the `busy` and
+  `disposed` words no longer name `BrowserCallbackStrategy` or "a single
+  port" (they now cover every composition); tests; README; CHANGELOG.
+  **G13 (user)**: merge, tag, publish.
+- [ ] **auth-providers** (PR #68): `^7.5.0`, `^2.1.1`;
+  `systemBrowser()`, `chromeBrowser()`, `edgeBrowser()`, `firefoxBrowser()`
+  implementing `IBrowser` with today's launch; `openInBrowser({ browser:
+  IBrowser })` and the named compositions' `browser?: IBrowser`; every
+  string browser name removed (no run-time validation left); tests first —
+  each shipped browser launches through its argument array with no shell,
+  a rejecting `IBrowser` is a presentation failure (§6d.5), a consumer
+  `IBrowser` is used as given, `browser: 'chrome'` no longer compiles
+  (`@ts-expect-error`). Load-bearing: a shipped browser through a shell;
+  a string accepted at run time.
+
 ### Task 30o: auth-providers — documentation of §6d
 
-PR #68. After 30n.
+PR #68. After 30n and 30p.
 
 **Steps:**
 - [ ] README: the three parts, the shipped parts and named compositions, a

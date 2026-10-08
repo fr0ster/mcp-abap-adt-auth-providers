@@ -2883,7 +2883,32 @@ export interface IAuthorizationPresentation {
    */
   present(authorizationUrl: string, context: PresentationContext): unknown;
 }
+
+// ---- browser (interfaces-auth 7.5.0) ------------------------------------
+
+/**
+ * How a URL is opened in a browser. `openInBrowser` knows nothing else of
+ * browsers: names, paths and how to start one are the implementation's.
+ */
+export interface IBrowser {
+  /**
+   * Opens `url`. Resolves once the browser was asked to open it (not when
+   * the user finished); rejects when it could not be — a browser that is not
+   * installed, a launcher that failed. The rejection is a presentation
+   * failure (§6d.5); `signal` aborts a launch still in progress.
+   */
+  open(url: string, signal: AbortSignal): Promise<void>;
+}
 ```
+
+**The browser is a contract** (decided by the user, 2026-10-08).
+`IBrowser` lives in interfaces-auth 7.5.0 (additive, a minor). The package
+ships implementations — `systemBrowser()`, `chromeBrowser()`,
+`edgeBrowser()`, `firefoxBrowser()` — each with today's launch (no shell,
+an argument array, absolute System32 paths on Windows, `launchableUrl`); a
+consumer with another browser implements `IBrowser`. No browser is named by
+a string anywhere: an unknown name cannot exist, so nothing is validated at
+run time.
 
 Also in 7.4.0, all additive (new values of fact sets are minors, as in
 7.1.0):
@@ -2913,7 +2938,7 @@ needs is required, and the named compositions supply today's values.
 
 | Part | Does |
 |---|---|
-| `openInBrowser({ browser })` | `browser`: `'auto' \| 'system' \| 'chrome' \| 'msedge' \| 'firefox'`, required. `launchBrowser` as built (§6a0: no shell, `launchableUrl`, absolute paths on Windows). Its own fallback — no `open` module, a launcher exiting non-zero — prompts the URL itself and resolves, so the composer never prompts it twice. `'none'` / `'headless'` are refused (`configuration` `invalid-value`, `browser`): that is `showUrl`. |
+| `openInBrowser({ browser })` | `browser: IBrowser`, required (`systemBrowser()`, `chromeBrowser()`, `edgeBrowser()`, `firefoxBrowser()`, or the consumer's). Launches through it. `launchBrowser` as built (§6a0: no shell, `launchableUrl`, absolute paths on Windows). Its own fallback — no `open` module, a launcher exiting non-zero — prompts the URL itself and resolves, so the composer never prompts it twice. Showing the URL without a browser is `showUrl`. |
 | `showUrl()` | Writes the URL to **stderr only** (C8), only as `promptableUrl` admits it; the logger gets "the authorization URL was shown" — then `waitingOn` and `routeHint` when the channel has them. Synchronous. |
 | `consumerPresentation({ show })` | `show(url, { redirectUri, signal })` is the consumer's UI. A throw or a rejection is a presentation failure (§6d.5). |
 
@@ -3131,8 +3156,9 @@ At construction, a missing part → `configuration`
       `end` (its error) — synchronously in the composer, before any
       response is flushed, and turns every later answer into `refuse
       'already-answered'` (C9); a judge that throws becomes `end` with
-      the thrown value classified (`readFailure(…, 'judging-answer')`)
-      and a fixed 500 page;
+      `interactive-login` `failed` (no cause, nothing of the throw) and a
+      fixed 500 page — the same on every transport (the `judging-answer`
+      operation of 7.4.0 stays unused);
    6. presents the URL — not awaited (§6d.5);
    7. `await armed.answer()`, then returns `{ payload, redirectUri:
       channel.redirectUri ?? '' }` with **the payload the composer kept**.
@@ -3207,7 +3233,7 @@ Each returns `composeAuthorization(…)`. Options not listed are gone.
 
 | Name | Options | Presentation | Transport | Protocol |
 |---|---|---|---|---|
-| `browserCallbackStrategy` | `port?`, `browser?`, `openUrl?`, `remoteHint?`, `signal?` | `openUrl` → `consumerPresentation`; `browser` `undefined` / `'none'` / `'headless'` → `showUrl()` (today's default `'none'`); else `openInBrowser({ browser })` | `loopback({ port: port ?? DEFAULT_CALLBACK_PORT })` | `oauthCode()` |
+| `browserCallbackStrategy` | `port?`, `browser?: IBrowser`, `openUrl?`, `remoteHint?`, `signal?` | `openUrl` → `consumerPresentation`; `browser` absent → `showUrl()` (today's default); else `openInBrowser({ browser })` | `loopback({ port: port ?? DEFAULT_CALLBACK_PORT })` | `oauthCode()` |
 | `oidcCallbackStrategy` | the same | the same | the same | `oidcCode()` |
 | `samlCallbackStrategy` | the same | the same | the same | `samlResponse()` |
 | `manualPasteStrategy` | `redirectUri` (required), `read?`, `signal?` | `showUrl()` | `terminalPaste({ redirectUri, read })` | `oauthCode()` |
@@ -3276,7 +3302,16 @@ the IdP's text. `shown` reaches only the escaped error page.
 ### 6d.10 Migration (auth-providers 6.0.0)
 
 - `browserCallbackStrategy` / `oidcCallbackStrategy` /
-  `samlCallbackStrategy` with `port`, `browser`, `signal`: no change.
+  `samlCallbackStrategy` with `port`, `signal`: no change. `browser` is an
+  `IBrowser`, no longer a string: `browser: 'chrome'` → `browser:
+  chromeBrowser()` (`'system'` / `'auto'` → `systemBrowser()`, `'edge'` /
+  `'msedge'` → `edgeBrowser()`, `'firefox'` → `firefoxBrowser()`, `'none'` /
+  `'headless'` → no `browser`). A consumer whose configuration holds a
+  browser name maps it to an implementation itself; another browser is the
+  consumer's `IBrowser`.
+- `externalCodeStrategy` takes OAuth codes only (§6d.7); a SAML response or
+  a passcode handed over by the consumer's code composes `consumerHandoff`
+  with `samlResponse()` / `passcode()`.
 - `callbackServer: myFactory` → write an `IAnswerTransport` and compose:
   `composeAuthorization({ presentation, transport: myTransport, protocol:
   oauthCode() })`. The transport calls the judge per answer; it never
@@ -3373,6 +3408,8 @@ protocol it applies to.
 | Package | Change | Version |
 |---|---|---|
 | interfaces-auth | the part contracts, `ANSWER_REFUSALS`; `CONFIG_FIELDS`, `INTERACTIVE_LOGIN_STRATEGIES`, `OPERATIONS` gain values; `ICallbackServer` and `callbackServer` deprecated (C1) | **7.4.0** |
+| interfaces-auth | `IBrowser` (additive) | **7.5.0** |
+| auth-errors | `busy` / `disposed` words without the deleted `BrowserCallbackStrategy` class name ("the authorization is already in progress", "the authorization strategy was disposed") | **2.1.1** |
 | interfaces-auth-sap, -auth-broker | none | — |
 | auth-errors | words for `consumer` and the two operations; `^7.4.0` | **2.1.0** |
 | auth-providers | this section | 6.0.0 (unreleased) |
