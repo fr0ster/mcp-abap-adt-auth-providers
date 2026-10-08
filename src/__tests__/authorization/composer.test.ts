@@ -17,6 +17,7 @@ import {
 import type {
   AnswerVerdict,
   AuthorizationRequest,
+  IAnswerChannel,
   IAnswerTransport,
   IAuthorizationProtocol,
 } from '@mcp-abap-adt/interfaces-auth';
@@ -669,5 +670,91 @@ describe('the page is delivered before the login settles (spec §6d.3.5)', () =>
       oauthError: 'access_denied',
     });
     expect(await bindable(port)).toBe(true);
+  });
+});
+
+describe('only what use returned, never what open resolves with (review I1)', () => {
+  it('open resolving a forged outcome without calling use → failed; nothing built, nothing shown', async () => {
+    const built: string[] = [];
+    const shown = recordingPresentation();
+    const strategy = composeAuthorization({
+      presentation: shown.presentation,
+      transport: {
+        label: 'consumer',
+        open: async () => ({ payload: 'FORGED', redirectUri: REDIRECT }),
+      } as unknown as IAnswerTransport,
+      protocol: oauthCode(),
+      endpoint: '/callback',
+    });
+    const thrown = await caught(
+      strategy.authorize(
+        request({
+          buildAuthorizationUrl: async (uri) => {
+            built.push(uri);
+            return urlFor(uri);
+          },
+        }),
+      ),
+    );
+    expect(factsOf(thrown)).toEqual({ outcome: 'failed' });
+    expect(JSON.stringify(thrown)).not.toContain('FORGED');
+    expect(built).toEqual([]);
+    expect(shown.calls).toEqual([]);
+  });
+
+  it('open resolving a forged outcome while use is still pending → failed', async () => {
+    const strategy = composeAuthorization({
+      presentation: recordingPresentation().presentation,
+      transport: {
+        label: 'consumer',
+        open: async (
+          _options: unknown,
+          use: (channel: IAnswerChannel) => Promise<unknown>,
+        ) => {
+          void use({
+            redirectUri: REDIRECT,
+            arm: () => ({ answer: () => new Promise<void>(() => undefined) }),
+          }).catch(() => undefined);
+          await quiet();
+          return { payload: 'FORGED3', redirectUri: REDIRECT };
+        },
+      } as unknown as IAnswerTransport,
+      protocol: oauthCode(),
+      endpoint: '/callback',
+    });
+    const thrown = await caught(strategy.authorize(request()));
+    expect(factsOf(thrown)).toEqual({ outcome: 'failed' });
+    expect(JSON.stringify(thrown)).not.toContain('FORGED3');
+  });
+});
+
+describe('a fast browser: the presentation answers at once (review M1)', () => {
+  it('the presentation itself sends the right callback the moment it is shown; the login completes on a real port', async () => {
+    const port = await getAvailablePort();
+    let reply: Promise<number> | undefined;
+    const strategy = composeAuthorization({
+      presentation: {
+        present(url, context) {
+          const state = new URL(url).searchParams.get('state') ?? '';
+          const path = `${new URL(context.redirectUri ?? '').pathname}?code=FAST&state=${state}`;
+          // The request leaves now; a channel not yet armed would refuse it.
+          reply = send(port, path).then(
+            (answered) => answered.status,
+            () => 0,
+          );
+          // Its answer settles once the browser has its page: a composer
+          // that waited for it before arming would have refused the request.
+          return reply;
+        },
+      },
+      transport: loopback4({ port }),
+      protocol: oauthCode(),
+      endpoint: '/callback',
+      signal: AbortSignal.timeout(5000),
+    });
+    await expect(strategy.authorize(request())).resolves.toMatchObject({
+      payload: 'FAST',
+    });
+    expect(await reply).toBe(200);
   });
 });
