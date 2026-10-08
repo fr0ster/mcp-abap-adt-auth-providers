@@ -112,6 +112,11 @@ function unusable(fields: readonly ('onWriteFailure' | 'write')[]): never {
  * - **`onWriteFailure`.** `'continue'`: `report` never throws. `'fail'`: an
  *   awaited report rethrows the write's failure, after recording it as
  *   pending; a detached report never throws.
+ * - **The one throw that is not an `AuthProviderFailure`.** What `'fail'`
+ *   rethrows is the value `write` threw, as it is: the consumer's own error,
+ *   returned to the consumer. The provider, which is what calls `report`,
+ *   classifies it (`persisting-tokens`) before anything leaves the call; only
+ *   code of the consumer's that calls `report` itself gets it raw.
  *
  * It holds the last new refresh token it could not write: it is part of the
  * consumer's store.

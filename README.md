@@ -120,7 +120,8 @@ your `AbortSignal` is the bound. What a consumer on 5.x must now do:
   authorization strategy that cannot be used (below).
 - **Catch with `readFailure`, never `instanceof`.** Every throw of this
   package — a constructor's configuration fault, a factory's, a loader's,
-  `getTokens()` / `refreshTokens()` — is an `AuthProviderFailure`. Read what
+  `getTokens()` / `refreshTokens()` — is an `AuthProviderFailure` (one
+  exception, your own error: `refreshStatePersistence`'s `report()`, below). Read what
   you caught with `readFailure(thrown, operation)`, which answers an
   `IAuthProviderError` for anything (a failure of another installed copy of
   auth-errors included, a forged one rebuilt from its kind and facts); test
@@ -3451,6 +3452,13 @@ the stored refresh token without erasing the session.
   the write's failure, so the call that caused it fails `persisting-tokens`;
   a detached report never throws. Either way the failed write is delivered
   again by the next report.
+- **`report()` rethrows your own error as it is.** With `'fail'`, what an
+  awaited `report()` rejects with is the value your `write` threw — the one
+  throw of this package that is not an `AuthProviderFailure`, because it is
+  yours, returned to you. A token provider, which is what calls `report()`,
+  turns it into an `AuthProviderFailure` (`unknown`, `persisting-tokens`)
+  before `getTokens()` / `refreshTokens()` answer; only your own code calling
+  `report()` directly sees it raw.
 - Refused at construction, `configuration` `invalid-value`: `onWriteFailure`
   missing or not `'continue'` / `'fail'` (naming `onWriteFailure`), `write`
   not a function (naming `write`), both when both.

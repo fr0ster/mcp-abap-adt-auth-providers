@@ -34,7 +34,9 @@ every exported declaration against the published 5.4.2.
   mutated — an object that is not minted by `@mcp-abap-adt/auth-errors` is
   rebuilt from its `kind` and `facts` (its diagnostics dropped) wherever it is
   read, and a provider answering one is answered `unknown`.
-- **Every throw is an `AuthProviderFailure`** (`@mcp-abap-adt/auth-errors`):
+- **Every throw is an `AuthProviderFailure`** (`@mcp-abap-adt/auth-errors`),
+  but for `refreshStatePersistence`'s `report()` rejecting with the
+  consumer's own `write` error (below):
   an `Error` whose `error` is one minted `IAuthProviderError`, whose
   `message` is `reason` or `reason — hint`, and which has no `cause`.
   Constructors, factories and loaders throw it for a configuration fault
@@ -354,7 +356,10 @@ every exported declaration against the published 5.4.2.
   write is logged `[refreshStatePersistence] Writing the tokens failed`.
   `onWriteFailure` is required, no default: `'continue'` never throws,
   `'fail'` rethrows for an awaited report (so the call fails
-  `persisting-tokens`). Refused at construction as `configuration`
+  `persisting-tokens`). What it rethrows is the value `write` threw, as it
+  is — the consumer's own error, returned to it; the one throw of the
+  package that is not an `AuthProviderFailure`. A provider calling
+  `report()` classifies it before `getTokens()` / `refreshTokens()` answer. Refused at construction as `configuration`
   `invalid-value` naming `onWriteFailure` and/or `write`.
 - **`composeAuthorization({ presentation, transport, protocol, endpoint,
   signal? })`**, with the types `ComposedAuthorization` and
