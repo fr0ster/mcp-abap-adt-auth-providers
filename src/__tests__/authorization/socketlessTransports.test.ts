@@ -496,3 +496,29 @@ describe('consumerHandoff (spec §6d.2)', () => {
     });
   });
 });
+
+describe('a judge that throws (review m3)', () => {
+  const throwing: AnswerJudge<unknown> = () => {
+    throw new Error('judge secret text');
+  };
+  const run = (transport: IAnswerTransport) =>
+    transport
+      .open(optionsFor(passcode()), async (channel) => {
+        await channel.arm(throwing).answer();
+      })
+      .catch((error: unknown) => error);
+
+  it.each([
+    ['terminalPaste', () => terminalPaste({ read: scripted(['x']).read })],
+    ['consumerAnswer', () => consumerAnswer({ receive: async () => 'x' })],
+  ] as const)(
+    '%s: failed, nothing of the throw anywhere',
+    async (_name, make) => {
+      const thrown = await run(make());
+      expect(failureOf(thrown).facts).toEqual({ outcome: 'failed' });
+      expect(String(thrown)).not.toContain('judge secret text');
+      expect(JSON.stringify(thrown)).not.toContain('judge secret text');
+      expect((thrown as { cause?: unknown }).cause).toBeUndefined();
+    },
+  );
+});

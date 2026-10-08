@@ -120,4 +120,16 @@ describe('the composed listener lets go of its connections at the abort', () => 
         socket.write('GET / HTTP/1.1\\r\\nHost: 127.0.0.1:' + port + '\\r\\n');`);
     expect(report).toEqual({ outcome: 'aborted', free: true, closed: true });
   }, 60_000);
+
+  it('a paused client pipelining 10000 requests: its pending answers hold nothing; the process exits', () => {
+    // A pending write ignores unref(): only closing or destroying the
+    // connection lets the process go (review m1). The client reads nothing.
+    const report = run(`
+        socket.removeAllListeners('data');
+        socket.pause();
+        const one = 'GET / HTTP/1.1\\r\\nHost: 127.0.0.1:' + port + '\\r\\n\\r\\n';
+        socket.write(one.repeat(10000));`);
+    expect(report.outcome).toBe('aborted');
+    expect(report.free).toBe(true);
+  }, 60_000);
 });

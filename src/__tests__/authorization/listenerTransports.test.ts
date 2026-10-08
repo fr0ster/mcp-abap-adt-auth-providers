@@ -648,6 +648,11 @@ describe('the endpoint: literal dispatch (spec §6d.3.1)', () => {
           '/callback/x',
           '//callback',
           '/callback%2F',
+          // No dot-segment resolution: the raw target, compared as a string.
+          '/./callback',
+          '/x/../callback',
+          '/%2e/callback',
+          '/x/%2E%2E/callback',
         ]) {
           const reply = await send(port, `${path}${RIGHT.oauthCode?.redirect}`);
           expect([path, reply.status]).toEqual([path, 404]);
