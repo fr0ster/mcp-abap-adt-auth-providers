@@ -307,9 +307,9 @@ facts that remain are listed with it):
   after N seconds", "did not arrive in time");
 - the authorization URL in a log line: it is prompted on stderr only, and
   the logger gets "the authorization URL was shown";
-- the log lines of 5.x's `'auto'` browser, and the `DISPLAY=:0` it set: a
-  browser has no logger, and the package writes nothing into
-  `process.env`;
+- the log lines of 5.x's `'auto'` browser, and the `DISPLAY=:0` 5.x set for
+  `'system'` and a named browser: a browser has no logger, and the package
+  writes nothing into `process.env`;
 - the `open` and `express` dependencies.
 
 ### Interactive login: strategies by composition
@@ -331,8 +331,9 @@ What a consumer on 5.x must now do:
   |---|---|---|---|
   | `'system'`, `'auto'` | `linuxDefaultBrowser()` | `macDefaultBrowser()` | `windowsDefaultBrowser()` |
   | `'chrome'` | `linuxBrowser('google-chrome')` | `macBrowser('Google Chrome')` | `windowsBrowser('chrome')` |
-  | `'edge'`, `'msedge'` | `linuxBrowser('microsoft-edge')` | `macBrowser('Microsoft Edge')` | `windowsBrowser('msedge')` |
+  | `'edge'` | `linuxBrowser('microsoft-edge')` | `macBrowser('Microsoft Edge')` | `windowsBrowser('msedge')` |
   | `'firefox'` | `linuxBrowser('firefox')` | `macBrowser('Firefox')` | `windowsBrowser('firefox')` |
+  | any other name (`'msedge'` included) — 5.x opened the system default browser | `linuxDefaultBrowser()` | `macDefaultBrowser()` | `windowsDefaultBrowser()` |
   | `'none'`, `'headless'`, absent | no `browser` | no `browser` | no `browser` |
 
   ```typescript
@@ -344,18 +345,22 @@ What a consumer on 5.x must now do:
   on another OS it simply fails to start; the URL is then shown once on
   stderr and the login waits. A consumer whose configuration holds a browser
   name maps it itself.
-- **No fallback chain.** 5.x's Linux launcher tried `chromium` /
-  `chromium-browser`, `microsoft-edge-stable` and `firefox-esr` after the
-  first name. Now pass the executable that is installed —
-  `linuxBrowser('chromium')`, `linuxBrowser('/usr/bin/firefox-esr')` — a name
-  on `PATH` or an absolute path, as given.
+- **No list of candidates.** 5.x handed a named browser to the `open`
+  package, which on Linux took the first of `google-chrome`,
+  `google-chrome-stable`, `chromium`, `chromium-browser` (for `'chrome'`) or
+  `microsoft-edge`, `microsoft-edge-dev` (for `'edge'`) that was installed,
+  and `firefox` for `'firefox'`; only when `open` could not be loaded did a
+  shell fallback try its own list. Now pass the executable that is installed
+  — `linuxBrowser('google-chrome-stable')`, `linuxBrowser('chromium')`,
+  `linuxBrowser('/usr/bin/firefox-esr')` — a name on `PATH` or an absolute
+  path, as given.
 - **`'auto'` and `'system'` are one: the platform's default browser.** The
   log lines 5.x's `'auto'` wrote while it tried launchers are gone (an
   `IBrowser` has no logger); a browser that fails shows only as the
   composer's fixed-words line `Failed to present the authorization URL: …`
   and the URL prompted on stderr.
-- **No `DISPLAY=:0`.** 5.x set `DISPLAY=:0` on Linux when neither `DISPLAY`
-  nor `WAYLAND_DISPLAY` was set. The package now writes nothing into
+- **No `DISPLAY=:0`.** 5.x set `DISPLAY=:0` on Linux, for `'system'` and a
+  named browser, when neither `DISPLAY` nor `WAYLAND_DISPLAY` was set. The package now writes nothing into
   `process.env`: without a display the launch fails, the URL is shown once on
   stderr, and the login waits. A display of your choice — or a remote Chrome,
   a console browser, WSL, an ssh-forwarded X — is a browser of your own
@@ -1007,6 +1012,11 @@ const provider = new AuthorizationCodeProvider({
   (`unknown`, operation `opening-browser`, an allowlisted code only), or
   `interactive-login` `aborted` on the login's signal. A browser that started
   is never killed.
+- A hand-off launcher keeps the process alive until it exits, so an
+  `open()` awaited on its own, in a script that holds nothing else, still
+  settles at that exit; once the signal aborts, a launcher still running
+  holds the process no longer. A browser binary (`linuxBrowser`) holds it no
+  longer once it has started.
 
 Through 5.4.2 the fallback without the `open` package handed the URL to a
 shell inside double quotes, so a `$(…)` or a backtick in it — from an OIDC
@@ -1210,6 +1220,20 @@ import { createServer } from 'node:http';
 import type { AnswerJudge, IAnswerTransport } from '@mcp-abap-adt/interfaces-auth';
 
 /**
+ * The request target in origin form (`/path?query`), read literally: the path
+ * is the text up to the first `?`, the query is read by `URLSearchParams`.
+ * Anything else — an absolute-form target, `*`, an empty one — is none.
+ * Nothing here throws, whatever a client sends.
+ */
+function targetOf(raw: string | undefined): { path: string; query: URLSearchParams } | undefined {
+  if (raw === undefined || !raw.startsWith('/')) return undefined;
+  const mark = raw.indexOf('?');
+  return mark < 0
+    ? { path: raw, query: new URLSearchParams() }
+    : { path: raw.slice(0, mark), query: new URLSearchParams(raw.slice(mark + 1)) };
+}
+
+/**
  * `origin` is what the browser elsewhere uses — `http://buildhost.example:61001`,
  * say: the redirect is built from it.
  */
@@ -1225,26 +1249,46 @@ function networkListener(bindAddress: string, port: number, origin: string): IAn
       answered.catch(() => undefined); // awaited by the composer once armed
 
       const server = createServer((req, res) => {
-        const url = new URL(req.url ?? '/', origin);
-        if (req.method !== 'GET' || url.pathname !== options.endpoint) {
-          res.writeHead(404).end();
-          return;
+        // Every request is anyone's: nothing it carries may throw out of
+        // this handler, where it would end the process.
+        try {
+          const target = targetOf(req.url);
+          if (target === undefined) {
+            res.writeHead(400).end();
+            return;
+          }
+          if (req.method !== 'GET' || target.path !== options.endpoint) {
+            res.writeHead(404).end();
+            return;
+          }
+          // Closed until armed: nothing settles before the URL exists.
+          if (judge === undefined) {
+            res.writeHead(400).end();
+            return;
+          }
+          // The protocol decides: it checks `state` and reads the code.
+          let verdict: ReturnType<AnswerJudge<unknown>>;
+          try {
+            verdict = judge({ via: 'redirect', method: 'GET', params: target.query });
+          } catch (error) {
+            // A judge that throws has ended the login.
+            res.writeHead(500).end();
+            settle.reject(error);
+            return;
+          }
+          if (verdict.verdict === 'refuse') {
+            res.writeHead(400).end(); // ignored: the login keeps waiting
+            return;
+          }
+          res.writeHead(200, { 'content-type': 'text/plain' });
+          res.end(verdict.verdict === 'accept' ? 'Signed in. You can close this tab.' : 'The login was refused.');
+          if (verdict.verdict === 'accept') settle.resolve();
+          else settle.reject(verdict.error);
+        } catch {
+          // Fixed words only, and the login waits on.
+          if (!res.headersSent) res.writeHead(500);
+          res.end();
         }
-        // Closed until armed: nothing settles before the URL exists.
-        if (judge === undefined) {
-          res.writeHead(400).end();
-          return;
-        }
-        // The protocol decides: it checks `state` and reads the code.
-        const verdict = judge({ via: 'redirect', method: 'GET', params: url.searchParams });
-        if (verdict.verdict === 'refuse') {
-          res.writeHead(400).end(); // ignored: the login keeps waiting
-          return;
-        }
-        res.writeHead(200, { 'content-type': 'text/plain' });
-        res.end(verdict.verdict === 'accept' ? 'Signed in. You can close this tab.' : 'The login was refused.');
-        if (verdict.verdict === 'accept') settle.resolve();
-        else settle.reject(verdict.error);
       });
 
       await new Promise<void>((resolve, reject) => {
@@ -1295,7 +1339,12 @@ const strategy = composeAuthorization({
 The transport hands the judge each answer and acts on its verdict — `accept`
 ends the wait, `refuse` is answered and ignored, `end` ends the login — and
 never returns a payload: the composer keeps the one the protocol accepted,
-and an `answer()` that resolves without one fails the login.
+and an `answer()` that resolves without one fails the login. Its request
+handler is reachable by anyone before the channel is armed, so nothing a
+request carries may throw out of it: an exception in a Node `request`
+handler ends the process. Parse the target as text — `new URL(req.url,
+origin)` throws on a target such as `//[` — and contain every exception in
+fixed words, as above.
 
 #### Bringing your own
 
@@ -1425,7 +1474,8 @@ own while a login waits, and the user ends up logged in as someone else
   else: no PKCE challenge, no `code_verifier`. The identity provider must
   echo it (RFC 6749 §4.1.2). One that carries one `state` keeps it and is
   bound to it; an empty or a repeated `state` is refused (`configuration`
-  `invalid-value` naming `authorizationUrl`) before anything opens. A code
+  `invalid-value` naming `authorizationUrl`) before anything is shown or
+  opened — the listener is already bound by then. A code
   from `staticCodeStrategy`, which never builds the URL, is exchanged
   without a `code_verifier`: binding it is yours.
 - **The protocol checks `state`.** `oauthCode()` and `oidcCode()` read the
@@ -3967,7 +4017,7 @@ foreign and says nothing about this package. Either register the new URI, or
 keep the old one with one line:
 
 ```ts
-authorization: browserCallbackStrategy({ browser: linuxDefaultBrowser(), port: 3001 })
+authorization: browserCallbackStrategy({ browser: 'system', port: 3001 })
 ```
 
 (61001 was chosen because it sits above Linux's `ip_local_port_range`, so an
