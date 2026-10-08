@@ -310,7 +310,8 @@ function rows(lib: typeof Lib): Row[] {
     if (launcher)
       return lib.browserCallbackStrategy({
         port: 0,
-        openUrl: launcher,
+        // The consumer's IBrowser, its open the hostile part.
+        browser: { open: launcher } as never,
         // The test's own bound: a launcher whose answer resolves has
         // succeeded, so its login waits for a browser that never comes. The
         // consumer's abort ends it.

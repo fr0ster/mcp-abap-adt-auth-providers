@@ -17,6 +17,7 @@ import { afterAll, beforeAll, describe, expect, it, jest } from '@jest/globals';
 import type {
   AuthorizationRequest,
   IAuthorizationStrategy,
+  IBrowser,
 } from '@mcp-abap-adt/interfaces-auth';
 import { AuthorizationCodeProvider } from '../../providers/AuthorizationCodeProvider';
 import { OidcBrowserProvider } from '../../providers/OidcBrowserProvider';
@@ -30,6 +31,7 @@ import {
 import { manualPasteStrategy } from '../../strategies/manualStrategies';
 import { callbackGet, ignoreCounter } from '../helpers/callbackHttp';
 import { configurationOf } from '../helpers/minted';
+import { recordingBrowser } from '../helpers/recordingBrowser';
 
 const CALLBACK = 'http://localhost:61001/callback';
 
@@ -349,29 +351,35 @@ describe('OidcBrowserProvider: state beside its PKCE', () => {
   });
 });
 
-/** Answers each forged request, then the real callback, from `openUrl`. */
+/**
+ * The consumer's IBrowser: answers each forged request, then the real
+ * callback, on the port `portOf()` names (the one bound, read by the test).
+ */
 function forgeThenAnswer(
   forged: string[],
   real: (state: string) => string,
+  portOf: () => number,
 ): {
-  openUrl: (url: string, browser: string, redirectUri: string) => Promise<void>;
+  browser: IBrowser;
   statuses: number[];
 } {
   const statuses: number[] = [];
   return {
     statuses,
-    openUrl: async (url, _browser, redirectUri) => {
-      const port = Number(new URL(redirectUri).port);
-      const state = stateOf(url) as string;
-      void (async () => {
-        for (const path of forged) {
-          statuses.push(
-            (await callbackGet(port, path.replace('$STATE', state))).status,
-          );
-        }
-        await callbackGet(port, real(state));
-      })();
-    },
+    browser: recordingBrowser({
+      onOpen: async (url) => {
+        const port = portOf();
+        const state = stateOf(url) as string;
+        void (async () => {
+          for (const path of forged) {
+            statuses.push(
+              (await callbackGet(port, path.replace('$STATE', state))).status,
+            );
+          }
+          await callbackGet(port, real(state));
+        })();
+      },
+    }),
   };
 }
 
@@ -385,17 +393,19 @@ describe.each([
 ] as const)('%s on a real port', (_name, make, expected) => {
   it('refuses forged callbacks sent while the URL is built and after; the login completes', async () => {
     const { logger, ignored } = ignoreCounter();
-    const { openUrl, statuses } = forgeThenAnswer(
+    let bound = 0;
+    const { browser, statuses } = forgeThenAnswer(
       [
         '/callback?code=forged',
         '/callback?code=forged&state=another',
         '/callback?error=access_denied&state=another',
       ],
       (state) => `/callback?code=real&state=${state}`,
+      () => bound,
     );
     const strategy = (make as typeof browserCallbackStrategy)({
       port: 0,
-      openUrl,
+      browser,
     });
     let entered!: (redirectUri: string) => void;
     const building = new Promise<string>((resolve) => {
@@ -413,6 +423,7 @@ describe.each([
     });
     // The builder is blocked: the socket listens, the gate is closed.
     const port = Number(new URL(await building).port);
+    bound = port;
     expect((await callbackGet(port, '/callback?code=early')).status).toBe(400);
     expect(
       (await callbackGet(port, '/callback?error=access_denied')).status,
@@ -430,18 +441,20 @@ describe.each([
 
 describe('samlCallbackStrategy: armed like every composition, bound by InResponseTo', () => {
   it('logs in through the loopback listener on the real port; its URL carries no state', async () => {
+    let bound = 0;
     const strategy = samlCallbackStrategy({
       port: 0,
-      openUrl: async (_url, _browser, redirectUri) => {
-        void callbackGet(
-          Number(new URL(redirectUri).port),
-          '/callback?SAMLResponse=assertion',
-        );
-      },
+      browser: recordingBrowser({
+        onOpen: async () => {
+          void callbackGet(bound, '/callback?SAMLResponse=assertion');
+        },
+      }),
     });
     const outcome = await strategy.authorize({
-      buildAuthorizationUrl: async () =>
-        'https://idp.example/sso?SAMLRequest=x',
+      buildAuthorizationUrl: async (redirectUri) => {
+        bound = Number(new URL(redirectUri).port);
+        return 'https://idp.example/sso?SAMLRequest=x';
+      },
     });
     expect(outcome.payload).toBe('assertion');
   }, 30000);

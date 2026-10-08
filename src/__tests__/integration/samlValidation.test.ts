@@ -58,6 +58,7 @@ import {
 } from '../../validation/assertionValidator';
 import { createInMemoryReplayStore } from '../../validation/inMemoryReplayStore';
 import { getAvailablePort } from '../helpers/netHelpers';
+import { recordingBrowser } from '../helpers/recordingBrowser';
 import {
   expectSamlRejection,
   type SamlExpectation,
@@ -166,9 +167,12 @@ async function login(
   const strategy = samlCallbackStrategy({
     port: stand.port,
     signal: AbortSignal.timeout(10_000),
-    openUrl: async (url) => {
-      await browse(url);
-    },
+    // The consumer's IBrowser: the test's own visit, never a real browser.
+    browser: recordingBrowser({
+      onOpen: async (url) => {
+        await browse(url);
+      },
+    }),
   });
   // A supplied strategy is never disposed by the provider.
   cleanups.push(async () => strategy.dispose?.());

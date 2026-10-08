@@ -7,9 +7,8 @@
  * with an argument array, the URL one element of it, and only an http(s) URL
  * — as its serialisation — is launched.
  *
- * - `launchBrowser`'s fallback, with `spawn` recorded (nothing is started):
- *   each platform and browser gets the exact URL as one argument, no shell,
- *   no `cmd`.
+ * - `launchCommands`: no `cmd`, Windows' launchers by absolute path (each
+ *   shipped browser's exact argv: `shippedBrowsers.test.ts`).
  * - `runLaunchers` for real, with a node script as the launcher: a hostile
  *   URL reaches it as one argument and no MARKER file is created.
  */
@@ -58,10 +57,6 @@ jest.mock('node:child_process', () => ({
   },
 }));
 
-// Without the `open` package's default export the fallback runs.
-jest.mock('open', () => ({ __esModule: true, default: undefined }));
-
-import { launchBrowser, type OpenableBrowser } from '../../auth/browserAuth';
 import {
   launchableUrl,
   launchCommands,
@@ -132,52 +127,7 @@ describe('launchableUrl', () => {
   });
 });
 
-describe('launchBrowser fallback: no shell, the URL one argument', () => {
-  const href = launchableUrl(HOSTILE) as string;
-
-  it.each<[NodeJS.Platform, OpenableBrowser, string, string[]]>([
-    ['linux', 'system', 'xdg-open', [href]],
-    ['linux', 'chrome', 'google-chrome', [href]],
-    ['darwin', 'system', 'open', [href]],
-    ['darwin', 'firefox', 'open', ['-a', 'Firefox', href]],
-    [
-      'win32',
-      'system',
-      'C:\\Windows\\System32\\rundll32.exe',
-      ['url.dll,FileProtocolHandler', href],
-    ],
-  ])('%s, %s', async (platform, browser, command, args) => {
-    onPlatform(platform);
-    await launchBrowser(HOSTILE, browser, () => {}, null);
-    expect(spawned).toHaveLength(1);
-    const call = spawned[0] as SpawnCall;
-    expect(call.command).toBe(command);
-    expect(call.args).toEqual(args);
-    expect(call.args.filter((arg) => arg.includes('idp.example'))).toEqual([
-      href,
-    ]);
-    expect((call.options as { shell?: unknown }).shell).toBeUndefined();
-  });
-
-  it('win32, a named browser: PowerShell reads the URL from the environment, never its command line', async () => {
-    onPlatform('win32');
-    await launchBrowser(HOSTILE, 'chrome', () => {}, null);
-    const call = spawned[0] as SpawnCall;
-    expect(call.command).toBe(
-      'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe',
-    );
-    expect(call.args.join(' ')).not.toContain('idp.example');
-    expect(call.args.at(-1)).toBe(
-      `Start-Process -FilePath 'chrome' -ArgumentList $env:${URL_VARIABLE}`,
-    );
-    const options = call.options as {
-      shell?: unknown;
-      env?: Record<string, string>;
-    };
-    expect(options.shell).toBeUndefined();
-    expect(options.env?.[URL_VARIABLE]).toBe(href);
-  });
-
+describe('launchCommands: no cmd, System32 by absolute path', () => {
   // Re-review: a bare name is searched in the current directory first on
   // Windows; the system's own programs are named by absolute path.
   it('win32 launchers are absolute paths under SystemRoot (C:\\Windows without it)', () => {
@@ -211,12 +161,6 @@ describe('launchBrowser fallback: no shell, the URL one argument', () => {
       }
     }
   });
-
-  it('a URL that is not http(s) starts nothing', async () => {
-    onPlatform('linux');
-    await launchBrowser('javascript:alert(1)', 'system', () => {}, null);
-    expect(spawned).toEqual([]);
-  });
 });
 
 describe('runLaunchers, for real: a hostile URL runs nothing', () => {
@@ -237,8 +181,10 @@ describe('runLaunchers, for real: a hostile URL runs nothing', () => {
       let failed: unknown;
       runLaunchers(
         [{ command: process.execPath, args: [recorder, out, href] }],
-        (error) => {
-          failed = error ?? new Error('the launcher failed');
+        {
+          onFailure: (error) => {
+            failed = error ?? new Error('the launcher failed');
+          },
         },
       );
       // Until the launcher wrote its argv, or every launcher failed; then

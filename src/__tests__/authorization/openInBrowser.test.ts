@@ -5,7 +5,9 @@
  * rejects or throws is a presentation failure: the URL is prompted once, to
  * stderr only; the composer writes one line in fixed words; the login keeps
  * waiting on the same port and a callback then finishes it. No browser
- * opens: every `IBrowser` here is the test's.
+ * opens: every `IBrowser` here is the test's — `recordingBrowser()`, or a
+ * consumer-shaped one where the contract itself is under test (`this`, a
+ * synchronous throw, a getter).
  *
  * No browser is named by a string: a string (or anything without an `open`
  * function) is refused at construction, and `browser: 'chrome'` does not
@@ -31,6 +33,7 @@ import { oauthCode } from '../../authorization/protocol';
 import { loopback4 } from '../../authorization/transport';
 import { bindable, capturingLogger, send } from '../helpers/listenerHttp';
 import { getAvailablePort } from '../helpers/netHelpers';
+import { recordingBrowser } from '../helpers/recordingBrowser';
 
 const STATE = 'browser-state_abcdefghijklmnopqrstuvwxyz0123';
 const urlFor = (redirectUri: string) =>
@@ -90,13 +93,12 @@ function thrownBy(make: () => unknown): unknown {
   return undefined;
 }
 
-const failing = (): IBrowser => ({
-  open: async () => {
-    throw Object.assign(new Error(`spawn SECRET-PATH ${STATE}`), {
+const failing = () =>
+  recordingBrowser({
+    rejectWith: Object.assign(new Error(`spawn SECRET-PATH ${STATE}`), {
       code: 'ENOENT',
-    });
-  },
-});
+    }),
+  });
 
 describe('a consumer IBrowser is used as given', () => {
   it('open is called on it, once, with exactly the URL and the login’s signal; nothing printed', async () => {
@@ -217,12 +219,12 @@ describe('a browser that fails is a presentation failure (§6d.5)', () => {
   it('a browser that fails after the login ended prompts nothing', async () => {
     const port = await getAvailablePort();
     let rejectOpen!: (error: Error) => void;
-    const browser: IBrowser = {
-      open: () =>
+    const browser = recordingBrowser({
+      onOpen: () =>
         new Promise<void>((_resolve, reject) => {
           rejectOpen = reject;
         }),
-    };
+    });
     const { logger, lines } = capturingLogger();
     const login = composeAuthorization({
       presentation: openInBrowser({ browser }),

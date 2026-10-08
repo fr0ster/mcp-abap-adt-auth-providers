@@ -2,16 +2,9 @@
  * Browser authentication - OAuth2 flow for obtaining tokens
  */
 
-import { logFields, readFailure } from '@mcp-abap-adt/auth-errors';
 import type { IAuthorizationConfig } from '@mcp-abap-adt/interfaces-auth-sap';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
 import axios from 'axios';
-import {
-  launchableUrl,
-  launchCommands,
-  type NamedBrowser,
-  runLaunchers,
-} from './browserLaunch';
 import { requiredFieldsMissing } from './configuration';
 import {
   attemptSite,
@@ -247,120 +240,4 @@ function _isDebugEnabled(): boolean {
     process.env.DEBUG?.includes('auth-providers') === true ||
     process.env.DEBUG?.includes('browser-auth') === true
   );
-}
-
-/** The browsers `openInBrowser` opens: none means showing the URL instead. */
-export type OpenableBrowser = 'auto' | 'system' | NamedBrowser;
-
-/**
- * Open the authorization URL in `browser`.
- *
- * Never awaited on the critical path by the caller: a launcher that hangs must
- * not delay the result or the release of the port. Where this function falls
- * back on its own — `auto` whose `open` failed, no `open` module and a
- * launcher that exits non-zero, a URL that is not http(s) — it calls
- * `prompt` once with the lead line and resolves; a named browser or
- * `system` whose `open` rejects rejects, and the caller prompts.
- */
-export async function launchBrowser(
-  authorizationUrl: string,
-  browser: OpenableBrowser,
-  prompt: (lead: string) => void,
-  log: ILogger | null,
-): Promise<void> {
-  // Only an http(s) URL, as its serialisation, is ever launched: it may
-  // come from discovery or configuration (`browserLaunch.ts`).
-  const href = launchableUrl(authorizationUrl);
-  if (href === undefined) {
-    logQuietly(() =>
-      log?.error(
-        '❌ The authorization URL is not an http(s) URL; it is not opened.',
-      ),
-    );
-    prompt('🔗 Open this URL in your browser to authenticate:');
-    return;
-  }
-
-  if (browser === 'auto') {
-    logQuietly(() =>
-      log?.info('🌐 Attempting to open browser for authentication...'),
-    );
-    try {
-      const openModule = await import('open');
-      await openModule.default(href);
-      logQuietly(() =>
-        log?.info(
-          '✅ Browser opened successfully. Waiting for authentication...',
-        ),
-      );
-    } catch (error: unknown) {
-      // Fixed words only: what `open` threw is not this package's text.
-      logQuietly(() =>
-        log?.warn(
-          `⚠️  Could not open browser automatically: ${logFields(readFailure(error, 'opening-browser')).error}`,
-        ),
-      );
-      prompt('🔗 Please open this URL in your browser to authenticate:');
-    }
-    return;
-  }
-
-  const named = browser === 'system' ? undefined : browser;
-
-  // On Linux, ensure DISPLAY is set for X11 applications.
-  if (
-    process.platform === 'linux' &&
-    !process.env.DISPLAY &&
-    !process.env.WAYLAND_DISPLAY
-  ) {
-    process.env.DISPLAY = ':0';
-    logQuietly(() => log?.debug('DISPLAY not set, using fallback DISPLAY=:0'));
-  }
-
-  type OpenFn = (
-    url: string,
-    opts?: { app: { name: string | readonly string[] } },
-  ) => Promise<unknown>;
-  let open: OpenFn | null = null;
-  // `open`'s per-platform names for each common browser. An `app.name` is an
-  // executable name, and Chrome is no `chrome` on Linux (`google-chrome`,
-  // `google-chrome-stable`, …): handing `open` the bare name failed with ENOENT.
-  let appNames: Partial<
-    Record<NamedBrowser, string | readonly string[] | undefined>
-  > = {};
-  try {
-    const openModule = await import('open');
-    open = openModule.default;
-    const apps = (openModule as { apps?: Record<string, string | string[]> })
-      .apps;
-    if (apps)
-      appNames = {
-        chrome: apps.chrome,
-        msedge: apps.edge,
-        firefox: apps.firefox,
-      };
-  } catch {
-    open = null;
-  }
-
-  if (!open) {
-    // Fallback without the `open` package: a launcher started with an
-    // argument array, never a shell (`browserLaunch.ts`). Non-blocking.
-    runLaunchers(launchCommands(process.platform, named, href), (error) => {
-      // H8: `logFields` of the failure — fixed words, no URL — then the
-      // prompt, which shows the URL only as `promptableUrl` admits it.
-      const fields = logFields(readFailure(error, 'opening-browser'));
-      logQuietly(() =>
-        log?.error(`❌ Failed to open browser: ${fields.error}`, fields),
-      );
-      prompt('🔗 Please open this URL in your browser to authenticate:');
-    });
-    return;
-  }
-
-  if (named)
-    await open(href, {
-      app: { name: appNames[named] ?? named },
-    });
-  else await open(href);
 }

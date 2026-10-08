@@ -31,7 +31,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { delimiter, join } from 'node:path';
+import { join } from 'node:path';
 import {
   afterEach,
   beforeEach,
@@ -43,6 +43,7 @@ import {
 import {
   AuthProviderFailure,
   isAuthProviderFailure,
+  logFields,
   readFailure,
 } from '@mcp-abap-adt/auth-errors';
 import type { IBrowser } from '@mcp-abap-adt/interfaces-auth';
@@ -51,18 +52,26 @@ type SpawnCall = { command: string; args: string[]; options: unknown };
 const spawned: SpawnCall[] = [];
 const realChildProcess =
   jest.requireActual<typeof import('node:child_process')>('node:child_process');
-/** How the recorded child ends: `0`, another exit code, or an error. */
+/**
+ * How the recorded child ends: `0`, another exit code, or an error. Not
+ * recording, a launcher runs for real as the fake program `real` names for
+ * it — never the system's own (a launcher it does not name is refused).
+ */
 const fakeChild: {
   record: boolean;
   outcome: (index: number) => number | Error;
-} = { record: true, outcome: () => 0 };
+  real: Record<string, string>;
+} = { record: true, outcome: () => 0, real: {} };
 
 jest.mock('node:child_process', () => ({
   ...jest.requireActual<Record<string, unknown>>('node:child_process'),
   spawn: (command: string, args: string[], options: unknown) => {
     if (!fakeChild.record) {
+      const fake = fakeChild.real[command];
+      if (fake === undefined) throw new Error(`no fake for ${command}`);
+      // The options as given: a `shell` among them would reach the real spawn.
       return realChildProcess.spawn(
-        command,
+        fake,
         args,
         options as Parameters<typeof realChildProcess.spawn>[2],
       );
@@ -111,6 +120,7 @@ import {
   chromeBrowser,
   edgeBrowser,
   firefoxBrowser,
+  openInBrowser,
   systemBrowser,
 } from '../../index';
 
@@ -124,7 +134,11 @@ const STATE = 'browser-state_abcdefghijklmnopqrstuvwxyz0123';
 const HOSTILE = `https://idp.example/authorize?a=$(touch${IFS}MARKER1)&b=\`touch${IFS}MARKER2\`;touch${IFS}MARKER3&state=${STATE}`;
 const href = launchableUrl(HOSTILE) as string;
 const realPlatform = process.platform;
-const savedEnv = { ...process.env };
+/** The variables a test changes, restored key by key (`process.env` itself stays). */
+const ENV_KEYS = ['PATH', 'DISPLAY', 'WAYLAND_DISPLAY', 'SystemRoot'] as const;
+const savedEnv = Object.fromEntries(
+  ENV_KEYS.map((key) => [key, process.env[key]]),
+) as Record<(typeof ENV_KEYS)[number], string | undefined>;
 
 function onPlatform(platform: NodeJS.Platform): void {
   Object.defineProperty(process, 'platform', { value: platform });
@@ -137,11 +151,16 @@ beforeEach(() => {
   mockOpen.apps = undefined;
   fakeChild.record = true;
   fakeChild.outcome = () => 0;
+  fakeChild.real = {};
   spawned.length = 0;
 });
 afterEach(() => {
   onPlatform(realPlatform);
-  process.env = { ...savedEnv };
+  for (const key of ENV_KEYS) {
+    const value = savedEnv[key];
+    if (value === undefined) delete process.env[key];
+    else process.env[key] = value;
+  }
 });
 
 const factories = {
@@ -401,6 +420,63 @@ describe('with the open package: today’s app names', () => {
   });
 });
 
+describe('through openInBrowser: the failure in fixed words, the URL prompted once', () => {
+  it.each([
+    [
+      'open rejecting',
+      () => {
+        mockOpen.default = async () => {
+          throw Object.assign(new Error(`SECRET-PATH ${HOSTILE}`), {
+            code: 'ENOENT',
+          });
+        };
+      },
+      'opening the browser failed (unknown error, ENOENT)',
+    ],
+    [
+      'every launcher failing',
+      () => {
+        onPlatform('linux');
+        fakeChild.outcome = () => new Error(`SECRET-PATH ${HOSTILE}`);
+      },
+      'opening the browser failed (unknown error)',
+    ],
+  ] as const)('%s', async (_name, setUp, words) => {
+    setUp();
+    const written: string[] = [];
+    const stderr = jest
+      .spyOn(process.stderr, 'write')
+      .mockImplementation((chunk: unknown) => {
+        written.push(String(chunk));
+        return true;
+      });
+    try {
+      const presented = openInBrowser({ browser: systemBrowser() }).present(
+        HOSTILE,
+        {
+          signal: never,
+          redirectUri: undefined,
+          waitingOn: undefined,
+          routeHint: undefined,
+        },
+      );
+      const failure: unknown = await Promise.resolve(presented).then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+      const fields = logFields(
+        readFailure(failure, 'presenting-authorization-url'),
+      );
+      expect(fields).toEqual({ error: words, kind: 'unknown' });
+      expect(JSON.stringify(fields)).not.toContain('SECRET-PATH');
+      expect(written.join('').split(href).length - 1).toBe(1);
+      expect(written.join('')).not.toContain('SECRET-PATH');
+    } finally {
+      stderr.mockRestore();
+    }
+  });
+});
+
 // Runs on Linux, where the launchers are found on PATH; skipped elsewhere.
 const onLinux = realPlatform === 'linux' ? it : it.skip;
 
@@ -418,15 +494,20 @@ describe('for real: a hostile URL runs nothing', () => {
           `#!${process.execPath}\nrequire("fs").writeFileSync(${JSON.stringify(out)}, JSON.stringify(process.argv.slice(2)))\n`,
         );
         chmodSync(path, 0o755);
+        fakeChild.real[program] = path;
       }
-      process.env.PATH = `${dir}${delimiter}${savedEnv.PATH ?? ''}`;
       const markers = () =>
         readdirSync(process.cwd()).filter((f) => f.startsWith('MARKER'));
       try {
         await factories[name]().open(HOSTILE, never);
-        expect(existsSync(out)).toBe(true);
-        // Let anything a shell would have started finish.
+        // Until the fake wrote its argv (a shell would background it at the
+        // `&`), then let anything a shell would have started finish.
+        for (let i = 0; i < 100 && !existsSync(out); i += 1) {
+          await new Promise((resolve) => setTimeout(resolve, 20));
+        }
         await new Promise((resolve) => setTimeout(resolve, 300));
+        // First: nothing ran (with a shell, `$(…)`, the backticks and the
+        // `;` would have created these).
         expect(markers()).toEqual([]);
         expect(JSON.parse(readFileSync(out, 'utf8'))).toEqual([href]);
       } finally {

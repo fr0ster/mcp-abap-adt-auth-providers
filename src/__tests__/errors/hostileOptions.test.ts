@@ -84,7 +84,6 @@ const FIELDS = [
   'authDebug',
   'signal',
   'browser',
-  'openUrl',
   'callbackServer',
   'redirectUri',
   'remoteHint',
@@ -309,7 +308,6 @@ describe('hostile collaborators never make a constructor throw them', () => {
     'receive',
     'provide',
     'read',
-    'openUrl',
     'remoteHint',
   ] as const;
   const base = {

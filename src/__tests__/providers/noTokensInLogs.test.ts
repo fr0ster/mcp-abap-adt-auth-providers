@@ -18,7 +18,14 @@ import type {
 } from '@mcp-abap-adt/interfaces-auth';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
 import axios from 'axios';
-import { exchangeCodeForToken, launchBrowser } from '../../auth/browserAuth';
+import { exchangeCodeForToken } from '../../auth/browserAuth';
+import {
+  composeAuthorization,
+  consumerPresentation,
+  loopback,
+  oauthCode,
+  openInBrowser,
+} from '../../authorization';
 import {
   clientSecretBasic,
   clientSecretPost,
@@ -32,8 +39,9 @@ import { Saml2BearerProvider } from '../../providers/Saml2BearerProvider';
 import { Saml2PureProvider } from '../../providers/Saml2PureProvider';
 import { refreshThenLogin } from '../../renewal';
 import { SncLogonProvider } from '../../snc/SncLogonProvider';
-import { browserCallbackStrategy, staticCodeStrategy } from '../../strategies';
+import { staticCodeStrategy } from '../../strategies';
 import { jwt, quiet, rejectionOf } from '../helpers/attemptHarness';
+import { recordingBrowser } from '../helpers/recordingBrowser';
 import { ScriptedProvider, tokens } from '../helpers/scriptedProvider';
 import { SITES, tokenReply } from '../helpers/tokenRequestSites';
 
@@ -770,11 +778,15 @@ describe('no message of a thrown error in the logs', () => {
 
   it('H7 — a consumer presentation that rejects: logFields, no URL', async () => {
     const { logger, entries } = recordingLogger();
-    const strategy = browserCallbackStrategy({
-      port: 0,
-      openUrl: async () => {
-        throw new Error(MARKER);
-      },
+    const strategy = composeAuthorization({
+      presentation: consumerPresentation({
+        show: async () => {
+          throw new Error(MARKER);
+        },
+      }),
+      transport: loopback({ port: 0 }),
+      protocol: oauthCode(),
+      endpoint: '/callback',
     });
     // A launcher that fails ends nothing (Task 30h): the login waits, and
     // the test's own signal ends it once the line and the prompt are out.
@@ -813,54 +825,49 @@ describe('no message of a thrown error in the logs', () => {
     expect(JSON.stringify(line)).not.toContain('idp.example');
   });
 
-  it('H8 — `open` that rejects, and the shell-free fallback that fails', async () => {
+  it('H8 — a browser that rejects with a message holding a secret: logFields, no URL', async () => {
+    jest.spyOn(process.stderr, 'write').mockImplementation(() => true);
     const { logger, entries } = recordingLogger();
-    mockOpen.default = async () => {
-      throw new Error(MARKER);
-    };
-    await launchBrowser('https://idp/a', 'auto', () => {}, logger);
-    mockOpen.default = undefined;
-    // Every candidate launcher fails to start, with a message holding the
-    // marker; the failure line is written once, after the last.
-    let started = 0;
-    mockSpawn.run = () => {
-      started += 1;
-      const { EventEmitter } =
-        jest.requireActual<typeof import('node:events')>('node:events');
-      const child = new EventEmitter() as InstanceType<typeof EventEmitter> & {
-        unref(): void;
-      };
-      child.unref = () => undefined;
-      setImmediate(() => child.emit('error', new Error(MARKER)));
-      return child;
-    };
-    const exited = new Promise<void>((resolve) => {
-      const poll = setInterval(() => {
-        if (entries.some((e) => e.message.includes('Failed to open browser'))) {
-          clearInterval(poll);
-          resolve();
-        }
-      }, 5);
-    });
-    await launchBrowser('https://idp/a', 'chrome', () => {}, logger);
-    await exited;
-    expect(started).toBeGreaterThan(0);
+    const controller = new AbortController();
+    const login = composeAuthorization({
+      presentation: openInBrowser({
+        browser: recordingBrowser({
+          rejectWith: Object.assign(new Error(MARKER), { code: 'ENOENT' }),
+        }),
+      }),
+      transport: loopback({ port: 0 }),
+      protocol: oauthCode(),
+      endpoint: '/callback',
+    })
+      .authorize({
+        buildAuthorizationUrl: async (redirectUri) =>
+          `https://idp.example/authorize?redirect_uri=${redirectUri}&state=S1`,
+        logger,
+        signal: controller.signal,
+      } as AuthorizationRequest)
+      .catch((error: unknown) => error);
+    for (
+      let i = 0;
+      i < 200 &&
+      !entries.some((e) =>
+        e.message.startsWith('Failed to present the authorization URL: '),
+      );
+      i += 1
+    ) {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    controller.abort();
+    await login;
     expectOnlyLogFields(entries);
-    expect(
-      entries.some(
-        (e) =>
-          e.message ===
-          '⚠️  Could not open browser automatically: opening the browser failed (unknown error)',
-      ),
-    ).toBe(true);
     const line = entries.find((e) =>
-      e.message.startsWith('❌ Failed to open browser: '),
+      e.message.startsWith('Failed to present the authorization URL: '),
     );
     expect(line?.meta).toEqual({
-      error: 'opening the browser failed (unknown error)',
+      error: 'presenting the authorization URL failed (unknown error, ENOENT)',
       kind: 'unknown',
     });
-    expect(line?.meta).not.toHaveProperty('url');
+    expect(JSON.stringify(entries)).not.toContain(MARKER);
+    expect(JSON.stringify(entries)).not.toContain('idp.example');
   });
 
   it('H10 — a 200 without a token whose error echoes the secret and the code', async () => {

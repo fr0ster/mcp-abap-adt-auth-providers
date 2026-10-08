@@ -21,6 +21,7 @@ import {
 import type {
   IAnswerChannel,
   IAnswerTransport,
+  IBrowser,
 } from '@mcp-abap-adt/interfaces-auth';
 import axios from 'axios';
 import { getTokenWithClientCredentials } from '../../auth/clientCredentialsAuth';
@@ -41,6 +42,7 @@ import {
   oidcCallbackStrategy,
 } from '../../strategies';
 import { wordsOf } from '../helpers/minted';
+import { recordingBrowser } from '../helpers/recordingBrowser';
 
 /** A composition whose transport is the test's `open`. */
 const composedOver = (open: IAnswerTransport['open']) =>
@@ -298,22 +300,28 @@ describe('a token-endpoint failure keeps its safe facts', () => {
 describe('an IdP refusal on the browser callback', () => {
   const DESCRIPTION = 'REVIEW_TEST_IDP_DESCRIPTION_c5d2';
 
-  const refuse =
-    (query: string) =>
-    async (url: string, _browser: string, redirectUri: string) => {
-      // The IdP's refusal carries the request's state (RFC 6749 §4.1.2.1).
-      const state = new URL(url).searchParams.get('state') ?? '';
-      await new Promise<void>((resolve) => {
-        const req = http.get(
-          `${redirectUri}?${query}&state=${state}`,
-          (res) => {
-            res.resume();
-            res.on('end', () => resolve());
-          },
-        );
-        req.on('error', () => resolve());
-      });
-    };
+  /** The consumer's IBrowser playing the IdP: refuses on the redirect the URL names. */
+  const refuse = (query: string): IBrowser =>
+    recordingBrowser({
+      onOpen: async (url: string) => {
+        // The IdP's refusal carries the request's state (RFC 6749 §4.1.2.1).
+        const params = new URL(url).searchParams;
+        const state = params.get('state') ?? '';
+        const redirectUri = params.get('redirect_uri') ?? '';
+        await new Promise<void>((resolve) => {
+          const req = http.get(
+            `${redirectUri}?${query}&state=${state}`,
+            (res) => {
+              res.resume();
+              res.on('end', () => resolve());
+            },
+          );
+          req.on('error', () => resolve());
+        });
+      },
+    });
+  const urlFor = async (redirectUri: string) =>
+    `https://idp.example/a?state=S&redirect_uri=${encodeURIComponent(redirectUri)}`;
 
   it.each([
     ['UAA', browserCallbackStrategy],
@@ -327,14 +335,12 @@ describe('an IdP refusal on the browser callback', () => {
         }
       )({
         port: 0,
-        openUrl: refuse(
+        browser: refuse(
           `error=consent_required&error_description=${DESCRIPTION}`,
         ),
       });
       const { error, text } = await thrownBy(() =>
-        strategy.authorize({
-          buildAuthorizationUrl: async () => 'https://idp.example/a?state=S',
-        }),
+        strategy.authorize({ buildAuthorizationUrl: urlFor }),
       );
       // K10 / A8 (6.0.0): identity-provider-refused with the registered code.
       expect(readFailure(error, 'browser-login').facts).toEqual({
@@ -355,12 +361,10 @@ describe('an IdP refusal on the browser callback', () => {
   it('an unregistered code is dropped', async () => {
     const strategy = browserCallbackStrategy({
       port: 0,
-      openUrl: refuse(`error=${DESCRIPTION}`),
+      browser: refuse(`error=${DESCRIPTION}`),
     });
     const { error, text } = await thrownBy(() =>
-      strategy.authorize({
-        buildAuthorizationUrl: async () => 'https://idp.example/a?state=S',
-      }),
+      strategy.authorize({ buildAuthorizationUrl: urlFor }),
     );
     expect(text).not.toContain(DESCRIPTION);
     expect(JSON.stringify(classify(error, 'browser-login'))).not.toContain(

@@ -19,7 +19,6 @@ import { readFailure } from '@mcp-abap-adt/auth-errors';
 import type {
   AuthorizationRequest,
   IAuthorizationStrategy,
-  IBrowser,
 } from '@mcp-abap-adt/interfaces-auth';
 import {
   browserCallbackStrategy,
@@ -35,6 +34,7 @@ import {
 import { quiet } from '../helpers/attemptHarness';
 import { bindable, capturingLogger, send } from '../helpers/listenerHttp';
 import { getAvailablePort } from '../helpers/netHelpers';
+import { recordingBrowser } from '../helpers/recordingBrowser';
 
 const STATE = 'named-state_abcdefghijklmnopqrstuvwxyz012345';
 const REGISTERED = 'https://app.example/registered/callback';
@@ -184,15 +184,10 @@ describe('the browser compositions: loopback, showUrl by default', () => {
     ['oidcCallbackStrategy', oidcCallbackStrategy],
     ['samlCallbackStrategy', samlCallbackStrategy],
   ] as const)(
-    '%s: a consumer IBrowser is used as given — open on it, exactly the URL, the login’s signal; nothing printed',
+    '%s: the browser given is used — exactly the URL, the login’s signal; nothing printed',
     async (_name, make) => {
       const port = await getAvailablePort();
-      const calls: { self: unknown; args: unknown[] }[] = [];
-      const browser: IBrowser = {
-        async open(...args: unknown[]) {
-          calls.push({ self: this, args });
-        },
-      };
+      const browser = recordingBrowser();
       const urls: string[] = [];
       const strategy = make({ port, browser });
       const login = strategy.authorize(
@@ -207,9 +202,9 @@ describe('the browser compositions: loopback, showUrl by default', () => {
       await waitFor(() => send(port, '/nothing'));
       await quiet();
       expect(urls).toHaveLength(1);
-      expect(calls).toHaveLength(1);
-      expect(calls[0]?.self).toBe(browser);
-      expect(calls[0]?.args).toEqual([urls[0], expect.any(AbortSignal)]);
+      expect(browser.calls).toEqual([
+        { url: urls[0], signal: expect.any(AbortSignal) },
+      ]);
       expect(stderr.join('')).toBe('');
       await strategy.dispose?.();
       await login.catch(() => undefined);

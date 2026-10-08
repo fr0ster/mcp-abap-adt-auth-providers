@@ -137,6 +137,10 @@ describe('public exports — authorization by composition (spec §6d)', () => {
   it.each([
     'composeAuthorization',
     'openInBrowser',
+    'systemBrowser',
+    'chromeBrowser',
+    'edgeBrowser',
+    'firefoxBrowser',
     'showUrl',
     'consumerPresentation',
     'loopback',

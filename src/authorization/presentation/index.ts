@@ -4,13 +4,18 @@
  */
 
 export {
+  chromeBrowser,
+  edgeBrowser,
+  firefoxBrowser,
+  systemBrowser,
+} from './browsers';
+export {
   type ConsumerPresentationOptions,
   consumerPresentation,
   type ShowAuthorizationUrl,
   type ShowContext,
 } from './consumerPresentation';
 export {
-  type OpenableBrowser,
   type OpenInBrowserOptions,
   openInBrowser,
 } from './openInBrowser';

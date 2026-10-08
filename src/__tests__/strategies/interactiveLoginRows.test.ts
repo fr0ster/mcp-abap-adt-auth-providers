@@ -16,11 +16,13 @@ import type {
   AuthorizationRequest,
   IAnswerChannel,
   IAnswerTransport,
+  IBrowser,
 } from '@mcp-abap-adt/interfaces-auth';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
 import { composeAuthorization } from '../../authorization/compose';
+import { consumerPresentation } from '../../authorization/presentation';
 import { oauthCode } from '../../authorization/protocol';
-import { loopback4 } from '../../authorization/transport';
+import { loopback, loopback4 } from '../../authorization/transport';
 import { OidcDeviceFlowProvider } from '../../providers/OidcDeviceFlowProvider';
 import { refreshThenLogin } from '../../renewal';
 import {
@@ -33,6 +35,7 @@ import {
 } from '../../strategies';
 import { readFromTerminal } from '../../strategies/manualStrategies';
 import { startTokenServer, type TokenServer } from '../helpers/attemptHarness';
+import { recordingBrowser } from '../helpers/recordingBrowser';
 
 const PORT = 7877;
 /** The state every URL here carries: the code protocols bind by it (C7). */
@@ -87,28 +90,32 @@ async function endedByAbort(
 }
 
 /**
- * Opens the redirect with `query`, as a browser would — with this login's
- * `state` unless `bound` is false.
+ * Opens the redirect (on `PORT`) with `query`, as a browser would — with
+ * this login's `state` unless `bound` is false.
  */
-const visit =
-  (query: string, bound = true) =>
-  async (_url: string, _browser: string, redirectUri: string) => {
-    await new Promise<void>((resolve) => {
-      const req = http.get(
-        {
-          host: '127.0.0.1',
-          port: new URL(redirectUri).port,
-          agent: false,
-          path: `/callback?${query}${bound ? `&state=${STATE}` : ''}`,
-        },
-        (res) => {
-          res.resume();
-          res.on('end', () => resolve());
-        },
-      );
-      req.on('error', () => resolve());
-    });
-  };
+const visit = async (query: string, bound = true): Promise<void> => {
+  await new Promise<void>((resolve) => {
+    const req = http.get(
+      {
+        host: '127.0.0.1',
+        port: PORT,
+        agent: false,
+        path: `/callback?${query}${bound ? `&state=${STATE}` : ''}`,
+      },
+      (res) => {
+        res.resume();
+        res.on('end', () => resolve());
+      },
+    );
+    req.on('error', () => resolve());
+  });
+};
+
+/** The consumer's IBrowser playing the user's: opens the redirect with `query`. */
+const visiting = (query: string): IBrowser =>
+  recordingBrowser({
+    onOpen: () => visit(query),
+  });
 
 afterEach(async () => {
   expect(await portIsFree(PORT)).toBe(true);
@@ -139,7 +146,7 @@ describe('A.3 — browser login rows', () => {
     expect(rowOf(await rejection(strategy.authorize(request())))).toEqual({
       kind: 'interactive-login',
       facts: { outcome: 'disposed', strategy: 'browser' },
-      reason: 'BrowserCallbackStrategy has been disposed',
+      reason: 'the browser authorization strategy was disposed',
       hint: undefined,
     });
   });
@@ -149,14 +156,13 @@ describe('A.3 — browser login rows', () => {
     const strategy = browserCallbackStrategy({
       port: PORT,
       signal: consumer.signal,
-      openUrl: async () => undefined,
+      browser: recordingBrowser(),
     });
     const first = rejection(strategy.authorize(request()));
     expect(rowOf(await rejection(strategy.authorize(request())))).toEqual({
       kind: 'interactive-login',
       facts: { outcome: 'busy' },
-      reason:
-        'BrowserCallbackStrategy is already authorizing; it holds a single port',
+      reason: 'an authorization is already in progress with this strategy',
       hint: undefined,
     });
     consumer.abort();
@@ -206,11 +212,13 @@ describe('A.3 — browser login rows', () => {
         browserCallbackStrategy({
           port: PORT,
           signal: consumer.signal,
-          openUrl: async (url, browser, redirectUri) => {
-            await visit('', false)(url, browser, redirectUri);
-            await visit('state=only', false)(url, browser, redirectUri);
-            consumer.abort();
-          },
+          browser: recordingBrowser({
+            onOpen: async () => {
+              await visit('', false);
+              await visit('state=only', false);
+              consumer.abort();
+            },
+          }),
         }).authorize(request()),
       );
       expect(rowOf(thrown)).toEqual({
@@ -227,9 +235,11 @@ describe('A.3 — browser login rows', () => {
       const thrown = await rejection(
         browserCallbackStrategy({
           port: PORT,
-          openUrl: async () => {
-            attempt.abort();
-          },
+          browser: recordingBrowser({
+            onOpen: async () => {
+              attempt.abort();
+            },
+          }),
         }).authorize({ ...request(), signal: attempt.signal } as never),
       );
       expect(rowOf(thrown)).toEqual(aborted);
@@ -240,7 +250,7 @@ describe('A.3 — browser login rows', () => {
   // end of the login — one fixed-words line, and the consumer's own UI
   // having failed, no URL anywhere; the login waits — here the test's own
   // signal ends it.
-  it('K5: an openUrl that fails → one fixed-words line, no URL anywhere, the login still waiting', async () => {
+  it('K5: a consumer presentation that fails → one fixed-words line, no URL anywhere, the login still waiting', async () => {
     const lines: unknown[][] = [];
     const prompts: unknown[][] = [];
     const logger: ILogger = {
@@ -263,13 +273,17 @@ describe('A.3 — browser login rows', () => {
     let thrown: unknown;
     try {
       thrown = await endedByAbort((signal) =>
-        browserCallbackStrategy({
-          port: PORT,
-          openUrl: async () => {
-            throw Object.assign(new Error('spawn SECRET-PATH'), {
-              code: 'ENOENT',
-            });
-          },
+        composeAuthorization({
+          presentation: consumerPresentation({
+            show: async () => {
+              throw Object.assign(new Error('spawn SECRET-PATH'), {
+                code: 'ENOENT',
+              });
+            },
+          }),
+          transport: loopback({ port: PORT }),
+          protocol: oauthCode(),
+          endpoint: '/callback',
         }).authorize({ ...request(), logger, signal } as AuthorizationRequest),
       );
     } finally {
@@ -412,7 +426,7 @@ describe('A.3 — browser login rows', () => {
       const DESCRIPTION = 'REVIEW_TEST_IDP_TEXT_7a31';
       const strategy = (make as typeof browserCallbackStrategy)({
         port: PORT,
-        openUrl: visit(
+        browser: visiting(
           `error=access_denied&error_description=${DESCRIPTION}&error_uri=https%3A%2F%2F${DESCRIPTION}`,
         ),
       });
@@ -435,7 +449,7 @@ describe('A.3 — browser login rows', () => {
     const thrown = await rejection(
       browserCallbackStrategy({
         port: PORT,
-        openUrl: visit('error=REVIEW_TEST_NOT_A_CODE'),
+        browser: visiting('error=REVIEW_TEST_NOT_A_CODE'),
       }).authorize(request()),
     );
     expect(rowOf(thrown)).toEqual({

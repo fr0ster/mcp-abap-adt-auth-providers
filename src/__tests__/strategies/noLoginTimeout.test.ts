@@ -50,6 +50,7 @@ import {
   manualSamlResponseStrategy,
 } from '../../strategies/manualStrategies';
 import { certificate } from '../helpers/certificates';
+import { recordingBrowser } from '../helpers/recordingBrowser';
 
 const PORT = 7878;
 const REGISTERED = 'http://localhost:61001/callback';
@@ -125,9 +126,11 @@ describe('RF1: a browser login has no bound of its own', () => {
       const strategy = make({
         port: PORT,
         signal: consumer.signal,
-        openUrl: async () => {
-          opened = true;
-        },
+        browser: recordingBrowser({
+          onOpen: async () => {
+            opened = true;
+          },
+        }),
       });
       fakeClock();
       const login = watch(strategy.authorize(request()));
@@ -155,7 +158,7 @@ describe('RF1: a browser login has no bound of its own', () => {
       const login = make({
         port: PORT,
         signal: AbortSignal.abort(),
-        openUrl: opened,
+        browser: recordingBrowser({ onOpen: opened }),
       }).authorize(request());
       expect(factsOf(await login.catch((e: unknown) => e))).toEqual({
         outcome: 'aborted',
@@ -173,7 +176,7 @@ describe('RF1: a browser login has no bound of its own', () => {
       const login = make({
         port: PORT,
         signal: consumer.signal,
-        openUrl: opened,
+        browser: recordingBrowser({ onOpen: opened }),
       }).authorize(request());
       // Synchronously, while the port probe and the bind are under way.
       consumer.abort();
@@ -195,7 +198,7 @@ describe('RF1: a browser login has no bound of its own', () => {
       const login = make({
         port: PORT,
         signal: consumer.signal,
-        openUrl: opened,
+        browser: recordingBrowser({ onOpen: opened }),
       }).authorize({
         buildAuthorizationUrl: () =>
           new Promise<string>((resolve) => {

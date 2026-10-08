@@ -33,6 +33,7 @@ import {
   send,
 } from '../helpers/listenerHttp';
 import { getAvailablePort } from '../helpers/netHelpers';
+import { recordingBrowser } from '../helpers/recordingBrowser';
 
 const STATE = 'presentation-state_abcdefghijklmnopqrstuvwxyz';
 const urlFor = (redirectUri: string) =>
@@ -332,24 +333,6 @@ describe('construction', () => {
       'required-fields-missing',
       ['presentation'],
     ],
-    [
-      'openInBrowser({ browser: none })',
-      () => openInBrowser({ browser: 'none' as never }),
-      'invalid-value',
-      ['presentation'],
-    ],
-    [
-      'openInBrowser({ browser: headless })',
-      () => openInBrowser({ browser: 'headless' as never }),
-      'invalid-value',
-      ['presentation'],
-    ],
-    [
-      'openInBrowser({ browser: edge })',
-      () => openInBrowser({ browser: 'edge' as never }),
-      'invalid-value',
-      ['presentation'],
-    ],
   ] as const)('%s → configuration %s', (_name, make, outcome, fields) => {
     let thrown: unknown;
     try {
@@ -360,12 +343,11 @@ describe('construction', () => {
     expect(factsOf(thrown)).toEqual({ case: outcome, fields });
   });
 
-  it.each(['auto', 'system', 'chrome', 'msedge', 'firefox'] as const)(
-    'openInBrowser({ browser: %s }) is a presentation',
-    (browser) => {
-      expect(typeof openInBrowser({ browser }).present).toBe('function');
-    },
-  );
+  it('openInBrowser({ browser }) is a presentation', () => {
+    expect(typeof openInBrowser({ browser: recordingBrowser() }).present).toBe(
+      'function',
+    );
+  });
 });
 
 describe('nothing of an answer or the URL reaches a log line (spec §6d.8)', () => {

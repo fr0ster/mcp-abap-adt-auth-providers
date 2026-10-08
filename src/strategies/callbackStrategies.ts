@@ -10,11 +10,11 @@
  * | `oidcCallbackStrategy` | `oidcCode()` |
  * | `samlCallbackStrategy` | `samlResponse()` |
  *
- * Presentation: `openUrl` → `consumerPresentation`; `browser` absent,
- * `'none'` or `'headless'` → `showUrl()`; else `openInBrowser({ browser })`
- * (`'edge'` is `'msedge'`). Transport: `loopback({ port: port ??
- * DEFAULT_CALLBACK_PORT })`, its route hint replaced by `remoteHint` when
- * given.
+ * Presentation: `browser` absent → `showUrl()`; else `openInBrowser({
+ * browser })` — an `IBrowser`, never a name (`systemBrowser()`,
+ * `chromeBrowser()`, `edgeBrowser()`, `firefoxBrowser()`, or the
+ * consumer's). Transport: `loopback({ port: port ?? DEFAULT_CALLBACK_PORT
+ * })`, its route hint replaced by `remoteHint` when given.
  */
 
 import { authError } from '@mcp-abap-adt/auth-errors';
@@ -25,6 +25,7 @@ import type {
   IAnswerTransport,
   IAuthorizationPresentation,
   IAuthorizationProtocol,
+  IBrowser,
 } from '@mcp-abap-adt/interfaces-auth';
 import { misconfigured, ownOptions } from '../auth/configuration';
 import { readSafely } from '../auth/knownCodes';
@@ -33,12 +34,7 @@ import {
   type ComposedStrategy,
   composeAuthorization,
 } from '../authorization/compose';
-import {
-  consumerPresentation,
-  type OpenableBrowser,
-  openInBrowser,
-  showUrl,
-} from '../authorization/presentation';
+import { openInBrowser, showUrl } from '../authorization/presentation';
 import {
   type OidcCallbackResult,
   oauthCode,
@@ -55,18 +51,13 @@ export interface CallbackStrategyOptions {
    */
   port?: number | undefined;
   /**
-   * `'none'` / `'headless'` (or absent) show the URL on stderr; `'auto'`,
-   * `'system'`, `'chrome'`, `'edge'` / `'msedge'`, `'firefox'` open it.
-   * Anything else is refused at construction.
+   * The browser that opens the URL: `systemBrowser()`, `chromeBrowser()`,
+   * `edgeBrowser()`, `firefoxBrowser()`, or the consumer's own `IBrowser`.
+   * Absent: the URL is shown on stderr. One that rejects is a presentation
+   * failure — the URL is prompted and the login keeps waiting. A consumer
+   * that shows the URL in its own UI composes `consumerPresentation`.
    */
-  browser?: string | undefined;
-  /**
-   * The consumer's own way to show the URL — replaces `browser`. Receives
-   * the bound redirect too, since with `port: 0` nobody knew it earlier.
-   */
-  openUrl?:
-    | ((url: string, browser: string, redirectUri: string) => Promise<void>)
-    | undefined;
+  browser?: IBrowser | undefined;
   /**
    * Replaces the listener's route hint ("if your browser is elsewhere, do
    * this instead"), built from the redirect actually bound.
@@ -80,55 +71,14 @@ export interface CallbackStrategyOptions {
   signal?: AbortSignal | undefined;
 }
 
-/** Today's browser names, as `openInBrowser` takes them. */
-const OPENABLE: Readonly<Record<string, OpenableBrowser>> = Object.freeze({
-  auto: 'auto',
-  system: 'system',
-  chrome: 'chrome',
-  edge: 'msedge',
-  msedge: 'msedge',
-  firefox: 'firefox',
-});
-
 function presentationOf(
   own: Partial<Record<keyof CallbackStrategyOptions, unknown>>,
 ): IAuthorizationPresentation {
-  const { browser, openUrl } = own;
-  if (browser !== undefined && typeof browser !== 'string') {
-    throw misconfigured(
-      authError.configuration({
-        case: 'invalid-value',
-        fields: ['presentation'],
-      }),
-    );
-  }
-  if (openUrl !== undefined) {
-    if (typeof openUrl !== 'function') {
-      throw misconfigured(
-        authError.configuration({ case: 'invalid-value', fields: ['show'] }),
-      );
-    }
-    const open = openUrl as NonNullable<CallbackStrategyOptions['openUrl']>;
-    return consumerPresentation({
-      show: (url, context) =>
-        open(url, browser ?? 'none', context.redirectUri ?? ''),
-    });
-  }
-  if (browser === undefined || browser === 'none' || browser === 'headless') {
-    return showUrl();
-  }
-  const openable = Object.hasOwn(OPENABLE, browser)
-    ? OPENABLE[browser]
-    : undefined;
-  if (openable === undefined) {
-    throw misconfigured(
-      authError.configuration({
-        case: 'invalid-value',
-        fields: ['presentation'],
-      }),
-    );
-  }
-  return openInBrowser({ browser: openable });
+  const { browser } = own;
+  // `openInBrowser` refuses anything that is no IBrowser — a name included.
+  return browser === undefined
+    ? showUrl()
+    : openInBrowser({ browser: browser as IBrowser });
 }
 
 /**

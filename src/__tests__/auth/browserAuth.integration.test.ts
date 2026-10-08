@@ -85,7 +85,8 @@ describe('browserAuth Integration', () => {
     // test composes (no bound of the package's choosing, spec §6a); the exchange
     // stays with the caller — the same split `AuthorizationCodeProvider` uses.
     const strategy = browserCallbackStrategy({
-      browser: 'system', // Use the system default browser
+      // No browser is launched by a test: the URL is shown on stderr for
+      // the person running the interactive case.
       port,
       signal: AbortSignal.timeout(290_000),
     });

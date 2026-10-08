@@ -38,6 +38,7 @@ import {
 } from '../helpers/configHelpers';
 import { configurationOf } from '../helpers/minted';
 import { canListenOnLocalhost, getAvailablePort } from '../helpers/netHelpers';
+import { recordingBrowser } from '../helpers/recordingBrowser';
 
 // Helper to create logger if DEBUG_PROVIDER is enabled
 function createTestLogger(): ILogger | undefined {
@@ -211,9 +212,9 @@ describe('AuthorizationCodeProvider', () => {
             uaaUrl: authConfig.uaaUrl!,
             clientId: authConfig.uaaClientId!,
             clientSecret: authConfig.uaaClientSecret!,
-            // Use the system browser for authentication.
+            // No browser is launched by a test: the URL is shown on
+            // stderr for the person running the interactive case.
             authorization: browserCallbackStrategy({
-              browser: 'system',
               port: port1,
               signal: AbortSignal.timeout(HUMAN_LOGIN_TIMEOUT_MS),
             }),
@@ -246,7 +247,6 @@ describe('AuthorizationCodeProvider', () => {
             // browser anyway" into a fast, enforced failure instead of a
             // five-minute wait.
             authorization: browserCallbackStrategy({
-              browser: 'system',
               port: port2,
               signal: AbortSignal.timeout(30_000),
             }),
@@ -328,9 +328,9 @@ describe('AuthorizationCodeProvider', () => {
           clientSecret: authConfig.uaaClientSecret!,
           refreshToken: 'invalid-expired-refresh-token', // Invalid refresh token
           accessToken: expiredToken, // Expired token
-          // Use the system browser for authentication.
+          // No browser is launched by a test: the URL is shown on
+          // stderr for the person running the interactive case.
           authorization: browserCallbackStrategy({
-            browser: 'system',
             port: redirectPort,
             signal: AbortSignal.timeout(HUMAN_LOGIN_TIMEOUT_MS),
           }),
@@ -532,9 +532,11 @@ describe('AuthorizationCodeProvider with strategies', () => {
       authorization: browserCallbackStrategy({
         port: PORT,
         signal: consumer.signal,
-        openUrl: async () => {
-          consumer.abort();
-        },
+        browser: recordingBrowser({
+          onOpen: async () => {
+            consumer.abort();
+          },
+        }),
       }),
     });
 
@@ -549,7 +551,7 @@ describe('AuthorizationCodeProvider with strategies', () => {
   }, 30000);
 
   it('rejects a pre-built URL whose redirect does not match, before opening a browser', async () => {
-    const openUrl = jest.fn(async () => undefined);
+    const browser = recordingBrowser();
     const provider = new AuthorizationCodeProvider({
       renewal: refreshThenLogin(),
       uaaUrl: 'http://127.0.0.1:9',
@@ -559,7 +561,7 @@ describe('AuthorizationCodeProvider with strategies', () => {
         'https://uaa.example/oauth/authorize?client_id=c&redirect_uri=http%3A%2F%2Flocalhost%3A3001%2Fcallback&response_type=code',
       authorization: browserCallbackStrategy({
         port: PORT,
-        openUrl,
+        browser,
       }),
     });
 
@@ -573,7 +575,7 @@ describe('AuthorizationCodeProvider with strategies', () => {
     // Not "eventually" — the point of building-time validation is that it does
     // not wait for a callback that can never arrive.
     expect(Date.now() - started).toBeLessThan(5000);
-    expect(openUrl).not.toHaveBeenCalled();
+    expect(browser.calls).toEqual([]);
     expect(await portIsFree(PORT)).toBe(true);
   }, 30000);
 

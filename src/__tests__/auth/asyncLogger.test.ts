@@ -156,18 +156,19 @@ const settle = async (run) => {
 };
 await settle(async () => (await strategies.browserCallbackStrategy({
   port: 0,
-  openUrl: async (_u, _b, redirectUri) => {
+  browser: { open: async (url) => {
+    const redirectUri = new URL(url).searchParams.get('redirect_uri');
     await get(redirectUri);
     await get(redirectUri + '?code=c1&state=S');
-  },
-}).authorize({ buildAuthorizationUrl: async () => 'https://idp.example/a?state=S', logger })).payload);
+  } },
+}).authorize({ buildAuthorizationUrl: async (r) => 'https://idp.example/a?state=S&redirect_uri=' + encodeURIComponent(r), logger })).payload);
 // A launcher that fails ends nothing (Task 30h): its line and prompt go
 // through the same logger, and the consumer's signal ends the login.
 await settle(async () => {
   const controller = new AbortController();
   const login = strategies.browserCallbackStrategy({
     port: 0,
-    openUrl: async () => { throw Object.assign(new Error('x'), { code: 'ENOENT' }); },
+    browser: { open: async () => { throw Object.assign(new Error('x'), { code: 'ENOENT' }); } },
   }).authorize({ buildAuthorizationUrl: async () => 'https://idp.example/a?state=S', logger, signal: controller.signal });
   setTimeout(() => controller.abort(), 200);
   return (await login).payload;

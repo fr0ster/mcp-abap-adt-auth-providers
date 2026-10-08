@@ -45,6 +45,7 @@ import {
 } from '../helpers/attemptHarness';
 import { certificate } from '../helpers/certificates';
 import { getAvailablePort } from '../helpers/netHelpers';
+import { recordingBrowser } from '../helpers/recordingBrowser';
 
 const silent: ILogger = {
   debug: () => undefined,
@@ -101,8 +102,8 @@ async function browserOnPort() {
   const port = await getAvailablePort();
   const inner = browserCallbackStrategy({
     port,
-    browser: 'none',
-    openUrl: async () => undefined,
+    // The consumer's IBrowser that opens nothing: no prompt, no launcher.
+    browser: recordingBrowser(),
   });
   const settledCalls: Promise<void>[] = [];
   const signals: (AbortSignal | undefined)[] = [];

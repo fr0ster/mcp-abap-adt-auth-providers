@@ -1,5 +1,8 @@
 /**
- * Opening the authorization URL without the `open` package — no shell, ever.
+ * Opening the authorization URL — the `open` package when it loads, else a
+ * launcher of our own — no shell, ever. Every shipped `IBrowser`
+ * (`systemBrowser()`, `chromeBrowser()`, `edgeBrowser()`,
+ * `firefoxBrowser()`) launches through `launchBrowser`.
  *
  * The URL is not this package's to trust: an OIDC provider's
  * `authorization_endpoint` comes from its discovery document, and a
@@ -34,6 +37,9 @@
 
 import * as child_process from 'node:child_process';
 import { win32 } from 'node:path';
+import { AuthProviderFailure, classify } from '@mcp-abap-adt/auth-errors';
+import { abortedFailure, throwIfAborted, untilAborted } from './attempt';
+import { readSafely } from './knownCodes';
 
 /** One way to start a browser: a program and its arguments. */
 export interface LaunchCommand {
@@ -46,7 +52,7 @@ export interface LaunchCommand {
 /** The variable PowerShell reads the URL from (Windows, a named browser). */
 export const URL_VARIABLE = 'MCP_ABAP_ADT_AUTHORIZATION_URL';
 
-/** The browsers a consumer may name, per platform. */
+/** The browsers shipped as an `IBrowser` beside the system's default. */
 export type NamedBrowser = 'chrome' | 'msedge' | 'firefox';
 
 const MAC_APP: Readonly<Record<NamedBrowser, string>> = {
@@ -177,19 +183,31 @@ export function launchCommands(
     : LINUX_EXECUTABLES[browser].map((command) => ({ command, args: [href] }));
 }
 
+/** How `runLaunchers` reports, and when it stops trying. */
+export interface LaunchCallbacks {
+  /** Called once, with the last launcher's error (`undefined` for a non-zero exit), when none runs. */
+  readonly onFailure: (error: unknown) => void;
+  /** Called once when a launcher exits `0`. */
+  readonly onSuccess?: (() => void) | undefined;
+  /** Checked before each launcher: `true` starts no further one. */
+  readonly stopped?: (() => boolean) | undefined;
+}
+
 /**
  * Starts the first launcher that runs, without a shell. `onFailure` is
  * called once, with the last launcher's error (or `undefined` for a non-zero
- * exit), when none does. Never throws; the browser outlives nothing it
- * started (the child is unreferenced).
+ * exit), when none does — or when `stopped()` says to start no further one;
+ * `onSuccess` once when one exits `0`. Never throws; the browser outlives
+ * nothing it started (the child is unreferenced).
  */
 export function runLaunchers(
   commands: readonly LaunchCommand[],
-  onFailure: (error: unknown) => void,
+  callbacks: LaunchCallbacks,
 ): void {
+  const { onFailure, onSuccess, stopped } = callbacks;
   const attempt = (index: number, last: unknown): void => {
     const next = commands[index];
-    if (next === undefined) {
+    if (next === undefined || stopped?.() === true) {
       onFailure(last);
       return;
     }
@@ -209,8 +227,11 @@ export function runLaunchers(
       });
       child.once('error', fallThrough);
       child.once('exit', (code) => {
-        if (code === 0) settled = true;
-        else fallThrough(undefined);
+        if (code === 0) {
+          if (settled) return;
+          settled = true;
+          onSuccess?.();
+        } else fallThrough(undefined);
       });
       child.unref();
     } catch (error) {
@@ -218,4 +239,123 @@ export function runLaunchers(
     }
   };
   attempt(0, undefined);
+}
+
+/**
+ * A launch that could not happen, in fixed words: `unknown`
+ * `opening-browser`, with the launcher's code only when it is allowlisted —
+ * never its message, its `spawnargs` (the URL) or a path.
+ */
+function launchFailure(error: unknown): AuthProviderFailure {
+  return new AuthProviderFailure(classify(error, 'opening-browser'));
+}
+
+type OpenFunction = (
+  url: string,
+  options?: { app: { name: string | readonly string[] } },
+) => Promise<unknown>;
+
+/** `open`'s default export and its per-platform browser names, or nothing. */
+async function loadOpen(): Promise<
+  | {
+      open: OpenFunction;
+      apps: Partial<Record<NamedBrowser, string | readonly string[]>>;
+    }
+  | undefined
+> {
+  let loaded: unknown;
+  try {
+    loaded = await import('open');
+  } catch {
+    return undefined;
+  }
+  const open = readSafely(loaded, 'default');
+  if (typeof open !== 'function') return undefined;
+  // `open`'s per-platform names for each common browser. An `app.name` is an
+  // executable name, and Chrome is no `chrome` on Linux (`google-chrome`,
+  // `google-chrome-stable`, …): handing `open` the bare name failed with ENOENT.
+  const apps = readSafely(loaded, 'apps');
+  const name = (key: string): string | readonly string[] | undefined => {
+    const value = readSafely(apps, key);
+    return typeof value === 'string' || Array.isArray(value)
+      ? (value as string | readonly string[])
+      : undefined;
+  };
+  const names: Partial<Record<NamedBrowser, string | readonly string[]>> = {};
+  for (const [browser, key] of [
+    ['chrome', 'chrome'],
+    ['msedge', 'edge'],
+    ['firefox', 'firefox'],
+  ] as const) {
+    const value = name(key);
+    if (value !== undefined) names[browser] = value;
+  }
+  return { open: open as OpenFunction, apps: names };
+}
+
+/**
+ * Opens `url` in `browser` (the system's default when `undefined`) — the
+ * launch every shipped `IBrowser` makes (§6a0):
+ *
+ * - only an `http(s)` URL is launched, as its serialisation; anything else
+ *   starts nothing and rejects;
+ * - on Linux without `DISPLAY` or `WAYLAND_DISPLAY`, `DISPLAY` is set to `:0`;
+ * - the `open` package when it loads — a named browser under `open`'s own
+ *   per-platform names (`apps`), else its own name;
+ * - without it, `launchCommands` through `runLaunchers`: an argument array,
+ *   never a shell.
+ *
+ * Resolves once a launcher ran (or `open` resolved); rejects with an
+ * `AuthProviderFailure` — `opening-browser` in fixed words, or `aborted`
+ * when `signal` aborts first, which also starts no further launcher. A
+ * started browser is never killed.
+ */
+export async function launchBrowser(
+  browser: NamedBrowser | undefined,
+  url: string,
+  signal: AbortSignal,
+): Promise<void> {
+  throwIfAborted(signal);
+  // Only an http(s) URL, as its serialisation, is ever launched: it may
+  // come from discovery or configuration.
+  const href = launchableUrl(url);
+  if (href === undefined) throw launchFailure(undefined);
+
+  // On Linux, ensure DISPLAY is set for X11 applications.
+  if (
+    process.platform === 'linux' &&
+    !process.env.DISPLAY &&
+    !process.env.WAYLAND_DISPLAY
+  ) {
+    process.env.DISPLAY = ':0';
+  }
+
+  const loaded = await untilAborted(loadOpen(), signal);
+  throwIfAborted(signal);
+  if (loaded !== undefined) {
+    const { open, apps } = loaded;
+    const opened =
+      browser === undefined
+        ? open(href)
+        : open(href, { app: { name: apps[browser] ?? browser } });
+    try {
+      await untilAborted(opened, signal);
+    } catch (error) {
+      if (signal.aborted) throw abortedFailure();
+      throw launchFailure(error);
+    }
+    return;
+  }
+
+  // Without the `open` package: a launcher started with an argument array,
+  // never a shell.
+  const launched = new Promise<void>((resolve, reject) => {
+    runLaunchers(launchCommands(process.platform, browser, href), {
+      onSuccess: resolve,
+      onFailure: (error) =>
+        reject(signal.aborted ? abortedFailure() : launchFailure(error)),
+      stopped: () => signal.aborted,
+    });
+  });
+  await untilAborted(launched, signal);
 }
