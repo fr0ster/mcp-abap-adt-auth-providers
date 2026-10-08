@@ -550,8 +550,11 @@ every exported declaration against the published 5.4.2.
   (2026-10-07): through `rundll32` the URL arrives unchanged, and no
   command interpreter is started; so it did for Chrome and Edge through an
   earlier `Start-Process` command that named the program in its text.
-  Pending: the current `windowsBrowser` command (the program from
-  `$env:MCP_ABAP_ADT_BROWSER_PROGRAM`) has not yet run on a Windows host.
+  Measured on Windows 11 (2026-10-08) for the current `windowsBrowser`
+  command (the program from `$env:MCP_ABAP_ADT_BROWSER_PROGRAM`): Chrome
+  and Edge get the URL unchanged; a path with `[ab]` starts exactly that
+  file, not a wildcard match; a path with `*` and a program string with
+  quotes, `;` and a PowerShell command reject with nothing started.
 - **The legacy Basic credential, as shipped in 5.4.2, carried forward.**
   Without a client-authentication strategy, every site that sends
   `Authorization: Basic base64(id:secret)` builds it only through one helper

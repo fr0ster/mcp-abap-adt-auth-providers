@@ -1019,10 +1019,14 @@ const provider = new AuthorizationCodeProvider({
   unchanged and no command interpreter was a direct child of the launcher.
   Chrome itself runs `cmd /c` below itself for the native-messaging hosts of
   its extensions (seen for SentinelOne and Nexthink) — the browser's own
-  children, not the launcher's. **Pending:**
-  `windowsBrowser`'s current command — the program read from
-  `$env:MCP_ABAP_ADT_BROWSER_PROGRAM`, any program the consumer names — has
-  not yet been run on a Windows host.
+  children, not the launcher's. Measured 2026-10-08 (Windows 11 x64) for
+  `windowsBrowser`'s current command, the program read from
+  `$env:MCP_ABAP_ADT_BROWSER_PROGRAM`: Chrome and Edge got the URL
+  unchanged, with only `conhost.exe` below the launcher; a program path
+  holding `[ab]` started exactly that file and none of the files `[ab]`
+  would match as a wildcard; a path holding `*` (no file can have that
+  name) and a program string holding quotes, `;` and a PowerShell command
+  each rejected `opening-browser`, with nothing started.
 - A browser that could not be asked rejects with an `AuthProviderFailure`
   (`unknown`, operation `opening-browser`, an allowlisted code only), or
   `interactive-login` `aborted` on the login's signal. A browser that started

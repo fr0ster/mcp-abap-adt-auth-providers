@@ -50,8 +50,8 @@ export function abortedLogin(
 
 /**
  * The callback port is held by someone else — its words keep "already in use"
- * for any consumer that matches it. A value that is no port is a
- * `configuration` failure, thrown before any bind.
+ * for any consumer that matches it. A value that is no port names none:
+ * the login answers `failed`.
  */
 export function portInUse(port: number): AuthProviderFailure {
   const checked = portNumber(port);
