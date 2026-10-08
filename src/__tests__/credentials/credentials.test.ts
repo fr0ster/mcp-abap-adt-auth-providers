@@ -171,7 +171,7 @@ describe('CertificateAuthProvider', () => {
       new FileCertificateMaterialLoader(),
       { ...config, certPath: 'SECRET-PATH', certPfxPath: 'SECRET-PFX' },
     );
-    // E17 (Task 26): the loader's configuration case, once a ValidationError
+    // The loader's configuration case, once a ValidationError
     // answered with the moment's fallback.
     const refused = await own.prepare();
     expect(wordsOf(refused)).toEqual({
@@ -247,7 +247,7 @@ describe('CertificateAuthProvider.fromFiles', () => {
 });
 
 describe('FileCertificateMaterialLoader', () => {
-  // E17, E18 (Task 26): configuration failures, no longer ValidationError.
+  // Configuration failures, no longer ValidationError.
   it('configuration errors are configuration failures (E17, E18)', async () => {
     const loader = new FileCertificateMaterialLoader();
     expect(

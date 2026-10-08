@@ -1,9 +1,9 @@
 /**
- * The producers of rows A3–A7 and H10 (spec Appendix A.1 and A.8; plan
- * Task 26, C10): each throws an `AuthProviderFailure` of its kind — the 5.x
- * error classes are gone (Task 27; A11's `configuration` rows are in
- * `configurationRows.test.ts`) — with the row's facts and verbatim words; H10's
- * line is the default safe-facts line, or with `authDebug` the
+ * The producers of the client-authentication, certificate and debug-line
+ * refusals: each throws an `AuthProviderFailure` of its kind — the 5.x
+ * error classes are gone (the `configuration` cases are in
+ * `configurationRows.test.ts`) — with the row's facts and verbatim words; the
+ * debug line is the default safe-facts line, or with `authDebug` the
  * `token endpoint said` line.
  */
 

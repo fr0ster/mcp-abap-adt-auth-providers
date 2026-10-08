@@ -1,5 +1,5 @@
 /**
- * Spec §8.1: the base owns the four moments, each inside auth-errors'
+ * The base owns the four moments, each inside auth-errors'
  * `guard`. Whatever a subclass controls — `grant()`, `getAuthType()`, a
  * `moments` getter, the operations it hands the constructor — is read inside
  * the boundary or validated once at construction, so every moment answers an
@@ -73,7 +73,7 @@ function factsOf(outcome: AuthOutcome) {
   return (outcome.refusal as unknown as { kind: string; facts: object }).facts;
 }
 
-describe('AuthProviderBase (spec §8.1)', () => {
+describe('AuthProviderBase', () => {
   it('a body that throws → unknown with the moment its operation names', async () => {
     const got = await everyMoment(new Throwing());
     expect(factsOf(got.prepare)).toEqual({ operation: 'loading-certificate' });
@@ -277,7 +277,7 @@ describe('the grant is read once per moment, inside the boundary', () => {
     },
   );
 
-  // Task 27: the ladder is gone; auth-errors' guard reads the grant once and
+  // The ladder is gone; auth-errors' guard reads the grant once and
   // classify names it beside the thrown value's allowlisted facts.
   it('a foreign throw by the body names the grant read once', async () => {
     let calls = 0;

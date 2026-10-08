@@ -1,5 +1,5 @@
 /**
- * The one owner of a provider's four moments (spec §8.1, rule 1): each runs
+ * The one owner of a provider's four moments (rule 1): each runs
  * inside `guard`, so whatever a provider's body, a collaborator or a target
  * throws becomes a minted refusal, and no moment ever rejects.
  *

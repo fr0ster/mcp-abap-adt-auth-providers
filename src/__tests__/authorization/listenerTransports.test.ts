@@ -1,10 +1,10 @@
 /**
- * The loopback listener transports (spec §6d.2, §6d.3, §6d.9, §6d.11), on
+ * The loopback listener transports, on
  * real sockets: where each binds and what it advertises, literal dispatch
  * of the endpoint it was given, closed until armed, the paste page's form
  * token, the `Host` check with the loopback-peer rule, what each verdict
  * answers, and release before settle. Driven directly with the shipped
- * protocols' judges (the composer is Task 30n).
+ * protocols' judges (the composer is tested apart).
  */
 
 import net from 'node:net';
@@ -172,7 +172,7 @@ afterEach(async () => {
 
 const failureOf = (thrown: unknown) => readFailure(thrown, 'browser-login');
 
-describe('bind and advertise (spec §6d.2, §6d.11)', () => {
+describe('bind and advertise', () => {
   /** The host of every `listen` call made while `run` runs. */
   async function listenHosts(run: () => Promise<unknown>): Promise<string[]> {
     const hosts: string[] = [];
@@ -445,7 +445,7 @@ describe('bind and advertise (spec §6d.2, §6d.11)', () => {
   });
 });
 
-describe('the matrix: every protocol over every listener (spec §6d.11)', () => {
+describe('the matrix: every protocol over every listener', () => {
   for (const [name, factory, address] of LISTENERS) {
     for (const [protocolName, make] of PROTOCOLS) {
       const right = RIGHT[protocolName];
@@ -599,7 +599,7 @@ describe('the matrix: every protocol over every listener (spec §6d.11)', () => 
   });
 });
 
-describe('the endpoint: literal dispatch (spec §6d.3.1)', () => {
+describe('the endpoint: literal dispatch', () => {
   it.each(LISTENERS)(
     "%s's redirect is its origin plus the endpoint it was given, which alone receives it",
     async (_name, factory, address, host) => {
@@ -744,7 +744,7 @@ describe('the endpoint: literal dispatch (spec §6d.3.1)', () => {
   );
 });
 
-describe('closed until armed (spec §6d.3.3)', () => {
+describe('closed until armed', () => {
   it.each(PROTOCOLS)(
     '%s: a forged code, a forged ?error=, GET / and POST /submit before arming are 400, counted, ignored; then the login completes',
     async (protocolName, make) => {
@@ -827,7 +827,7 @@ describe('closed until armed (spec §6d.3.3)', () => {
   });
 });
 
-describe('the state binds a redirect (spec §6d.9, through the listener)', () => {
+describe('the state binds a redirect (through the listener)', () => {
   it.each([
     ['oauthCode', oauthCode],
     ['oidcCode', oidcCode],
@@ -863,7 +863,7 @@ describe('the state binds a redirect (spec §6d.9, through the listener)', () =>
   );
 });
 
-describe('the form token (spec §6d.3.4)', () => {
+describe('the form token', () => {
   it('no token, a wrong one and two are refused before the protocol sees anything; the right one with a bare code logs in', async () => {
     const { logger, reasons } = capturingLogger();
     const driven = await drive(
@@ -954,7 +954,7 @@ describe('the form token (spec §6d.3.4)', () => {
   });
 });
 
-describe('the Host check, before any route (spec §6a1)', () => {
+describe('the Host check, before any route', () => {
   it('a DNS-rebound Host, another port, none at all: 400, counted, no token, nothing judged', async () => {
     const { logger, reasons } = capturingLogger();
     const driven = await drive(
@@ -1271,7 +1271,7 @@ describe('what an end, a throwing judge and an abort answer', () => {
   });
 });
 
-describe('nothing of an answer reaches a log line (spec §6d.8)', () => {
+describe('nothing of an answer reaches a log line', () => {
   it('no code, state, form token, pasted text, SAMLResponse, URL or IdP text in any line', async () => {
     const { logger, lines, text } = capturingLogger();
     const secrets = [

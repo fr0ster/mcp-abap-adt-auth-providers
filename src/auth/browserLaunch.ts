@@ -299,8 +299,7 @@ function usableSignal(signal: unknown): AbortSignal {
 }
 
 /**
- * Opens `url` with one fixed launch — the one every shipped `IBrowser` makes
- * (§6a0):
+ * Opens `url` with one fixed launch — the one every shipped `IBrowser` makes:
  *
  * - only an `http(s)` URL is launched, as its serialisation; anything else
  *   starts nothing and rejects;

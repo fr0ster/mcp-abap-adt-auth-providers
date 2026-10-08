@@ -1,14 +1,14 @@
 /**
- * Source tests for the interactive login (plan Task 23; spec §6a):
+ * Source tests for the interactive login:
  * - none of `CallbackScopeError`, `AuthorizationRefusedError`,
  *   `BrowserAuthError`, `DeviceCodePresentationError` is constructed in
  *   `src` — every end of a login is an `AuthProviderFailure`; the classes
- *   themselves are deleted in Task 27 (K6, the callback port validation,
- *   became `configuration` in Task 26);
+ *   themselves are deleted (the callback port validation
+ *   became `configuration`);
  * - no timer bounds a login: no module of the composer, its parts or the
  *   named compositions calls `setTimeout`, and no `timeoutMs`
  *   is left anywhere in `src` — interfaces-auth 6.0.0 has no such field, so
- *   Task 23's `Number.POSITIVE_INFINITY` placeholder went with it (Task 27).
+ *   the `Number.POSITIVE_INFINITY` placeholder went with it.
  */
 
 import { readdirSync, readFileSync, statSync } from 'node:fs';
@@ -39,7 +39,7 @@ function constructions(className: string): string[] {
 }
 
 describe('the four interactive classes are constructed nowhere in src', () => {
-  // K6 (Task 26): the port validation, the last CallbackScopeError, is a
+  // The port validation, the last CallbackScopeError, is a
   // `configuration` failure now.
   it.each([
     'AuthorizationRefusedError',

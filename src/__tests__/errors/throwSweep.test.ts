@@ -1,12 +1,12 @@
 /**
- * The sweep of `src` (plan Task 26): no `new Error(` and no construction of
- * any of this package's error classes — A.1's thirteen and the two of
+ * The sweep of `src`: no `new Error(` and no construction of
+ * any of this package's error classes — the thirteen of the old ladder and the two of
  * `callbackScopeError.ts`, and SNC's `SncLibraryNotFoundError` — is left.
  * Every throw is an `AuthProviderFailure` of its row's kind, built at its
  * site, or the rethrow of one; and no refusal is built from free words
- * (`oops(`, the last caller removed in Task 25).
+ * (`oops(`, whose last caller is gone).
  *
- * The classes themselves are deleted (Task 27; `transitionCoverage.test.ts`).
+ * The classes themselves are deleted (`transitionCoverage.test.ts`).
  */
 
 import { readdirSync, readFileSync, statSync } from 'node:fs';

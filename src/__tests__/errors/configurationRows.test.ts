@@ -1,13 +1,12 @@
 /**
- * Configuration throws (spec Appendix A.5, E1–E19, E22–E28; A.3, K6; plan
- * Task 26): every one is an `AuthProviderFailure` of kind `configuration`,
- * its `case` and `fields` as the row says, the words of the plan's "Words
- * for review" table (rendered by auth-errors 1.0.0), `allowed` where the row
- * sets it, and — for E8 and E12 only — the two URIs as diagnostics, never in
- * `reason` or `hint` (L9). A configured value never reaches the words (L5).
+ * Configuration throws: every one is an `AuthProviderFailure` of kind
+ * `configuration`, its `case` and `fields` as the row says, the words
+ * rendered by auth-errors 1.0.0, `allowed` where the row
+ * sets it, and — for the redirect mismatch only — the two URIs as diagnostics, never in
+ * `reason` or `hint`. A configured value never reaches the words.
  *
- * A constructor may throw it (a constructor is not a moment of the contract,
- * spec §8.1); a token provider's `getTokens()` throws it as a failure
+ * A constructor may throw it (a constructor is not a moment of the contract);
+ * a token provider's `getTokens()` throws it as a failure
  * holding the same error.
  */
 
@@ -294,7 +293,7 @@ describe('E3–E10, E28 — SAML configuration', () => {
     });
   });
 
-  // Fix round 1: trailing slashes dropped in plain code, linear on a long run.
+  // Trailing slashes dropped in plain code, linear on a long run.
   it('resolveTokenUrl drops trailing slashes of uaaUrl, linearly', () => {
     expect(resolveTokenUrl({ uaaUrl: 'https://uaa.example///' })).toBe(
       'https://uaa.example/oauth/token',
@@ -495,7 +494,7 @@ describe('E12 — redirect mismatch', () => {
   });
 });
 
-describe('an unparseable authorizationUrl (spec §6a0)', () => {
+describe('an unparseable authorizationUrl', () => {
   // A configuration error naming the field, never the value: case
   // `invalid-value` (interfaces-auth 7.0.0), at construction and at login.
   const row = {

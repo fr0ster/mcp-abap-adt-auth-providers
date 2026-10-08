@@ -189,7 +189,7 @@ describe('SsoProviderFactory', () => {
     } catch (error) {
       thrown = error;
     }
-    // E23 (Task 26): a configuration failure, its words fixed.
+    // A configuration failure, its words fixed.
     expect(configurationOf(thrown)).toEqual({
       case: 'unsupported-sso-flow',
       fields: [],

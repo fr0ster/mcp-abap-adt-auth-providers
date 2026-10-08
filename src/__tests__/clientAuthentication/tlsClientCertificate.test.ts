@@ -79,7 +79,7 @@ describe('tlsClientCertificate — the material', () => {
   it('refuses incomplete material as incomplete, in the 5.2.3 words', async () => {
     const auth = tlsClientCertificate({ material: { cert: pem.cert! } });
     const e = await auth.authenticate(base).catch((x) => x);
-    // A4 (Task 26): a client-certificate failure, no longer the class.
+    // A client-certificate failure, no longer the class.
     expect(readFailure(e, 'unfamiliar-error')).toMatchObject({
       kind: 'client-certificate',
       facts: { problem: 'incomplete' },
@@ -97,7 +97,7 @@ describe('tlsClientCertificate — the material', () => {
       material: { pfx: pfx.pfx!, passphrase: 'wrong' },
     });
     const e = await auth.tlsMaterial?.().catch((x) => x);
-    // A4 (Task 26): a client-certificate failure, no longer the class.
+    // A client-certificate failure, no longer the class.
     expect(readFailure(e, 'unfamiliar-error')).toMatchObject({
       kind: 'client-certificate',
       facts: { problem: 'unusable' },
@@ -140,7 +140,7 @@ describe('tlsClientCertificate — the material', () => {
       .mockResolvedValueOnce({ cert: pem.cert! })
       .mockResolvedValue(pem);
     const auth = tlsClientCertificate({ material: loader });
-    // A4 (Task 26): a client-certificate failure, no longer the class.
+    // A client-certificate failure, no longer the class.
     await expect(auth.authenticate(base)).rejects.toMatchObject({
       error: { kind: 'client-certificate', facts: { problem: 'incomplete' } },
     });

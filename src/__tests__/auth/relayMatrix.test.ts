@@ -1,5 +1,5 @@
 /**
- * Spec §7: how a provider relays a logon target's answer (rule 4). The same
+ * How a provider relays a logon target's answer (rule 4). The same
  * minted refusal **returned** by the target means "the wire cannot take
  * this"; **thrown**, "the target is broken". Garbage returned is the
  * `logon-target` fallback; garbage thrown is `unknown` with the operation.

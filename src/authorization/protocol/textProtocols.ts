@@ -1,7 +1,7 @@
 /**
- * The protocols whose payload is a text (spec §6d.2, §6d.3.2):
+ * The protocols whose payload is a text:
  * `samlResponse` — bound not here but by `InResponseTo` and the assertion
- * validator (§6a1, Appendix B) — and `passcode`, which takes no redirect.
+ * validator — and `passcode`, which takes no redirect.
  */
 
 import type {

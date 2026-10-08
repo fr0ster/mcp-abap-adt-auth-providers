@@ -117,7 +117,7 @@ describe('browserAuth token exchange', () => {
           logger,
         ),
       ).rejects.toThrow(
-        // D4: request-failed no-access-token of the code exchange.
+        // `request-failed` `no-access-token` of the code exchange.
         'the code exchange returned no access_token',
       );
 

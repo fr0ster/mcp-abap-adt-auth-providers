@@ -1,5 +1,5 @@
 /**
- * `consumerPresentation({ show, onFailure? })` (spec §6d.2, §6d.5, C8):
+ * `consumerPresentation({ show, onFailure? })`:
  * the consumer's own UI shows the URL. A `show` that throws or rejects is
  * a presentation failure the composer logs in fixed words; this part
  * prints **no URL** — the consumer chose its own UI because its stderr may

@@ -1,13 +1,12 @@
 /**
- * The one HTTP listener behind `loopback6`, `loopback4` and `loopback`
- * (spec §6d.2, §6d.3): payload-agnostic, parameterised by where it binds
+ * The one HTTP listener behind `loopback6`, `loopback4` and `loopback`: payload-agnostic, parameterised by where it binds
  * and what it advertises. Not exported from the package.
  *
  * One owner, one release point. The sockets belong to one `open`: released
  * on the first terminal outcome — `use` returning or throwing, an `end`
  * verdict, the signal — and `open` settles only once every listening socket
  * is closed, so a settled `open` means the port is free. No timer of the
- * package's choosing bounds it (spec §6a).
+ * package's choosing bounds it.
  *
  * Per request, in this order: the `Host` check (a loopback authority with
  * the bound port, from a loopback peer); literal dispatch of the pathname
@@ -59,7 +58,7 @@ import { CALLBACK_CSP, errorHtml, pastePageHtml, successHtml } from './pages';
 /** One address a listener binds. */
 export interface ListenerBind {
   readonly address: string;
-  /** Skipped when the machine does not have the address (C3). */
+  /** Skipped when the machine does not have the address. */
   readonly ifAvailable: boolean;
 }
 
@@ -80,7 +79,7 @@ const FORM_LIMIT = 5 * 1024 * 1024;
 
 const REFUSALS: ReadonlySet<string> = new Set(ANSWER_REFUSALS);
 
-/** K8: the open ended before an answer was accepted. */
+/** The open ended before an answer was accepted. */
 const callbackClosed = () => loginFailure({ outcome: 'callback-closed' });
 
 /** The options a listener reads, once, as own data. */
@@ -355,7 +354,7 @@ export async function openHttpListener<TReturn>(
     refused(reason);
   };
 
-  /** The judge's verdict on one answer, answered per §6d.3.2. */
+  /** The judge's verdict on one answer, answered in fixed words. */
   const answerWith = (
     res: http.ServerResponse,
     current: Armed,
@@ -521,7 +520,7 @@ export async function openHttpListener<TReturn>(
         if (bind.ifAvailable && unavailableAddress(error)) continue;
         // Taken on the second family — an ephemeral port as much as a
         // fixed one: the advertised name resolves there too, so staying on
-        // the first alone would hand its holder the answer (spec §6a1).
+        // the first alone would hand its holder the answer.
         if (addressInUse(error)) throw portInUse(boundPort);
         throw error;
       }

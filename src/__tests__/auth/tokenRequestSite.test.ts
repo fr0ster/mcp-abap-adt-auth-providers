@@ -1,10 +1,10 @@
 /**
- * The token-request conversion point (spec §6; plan Task 20; H10, D1–D4):
+ * The token-request conversion point:
  * `sendTokenRequest` with a `TokenRequestSite` turns every failure into an
  * `AuthProviderFailure` after its one debug line, and `rejectMissingToken`
  * does the same for a 2xx without a token.
  *
- * The rule (spec §6, "The secret preparer, not a redactor", 2026-10-06): the
+ * The rule: the
  * server's text is never read, never logged, never kept — with or without
  * `authDebug`. By default the line carries the safe facts only; with
  * `authDebug: true` it carries the same facts plus `sent`, each secret the
@@ -643,7 +643,7 @@ describe('a failure without a response', () => {
     });
   });
 
-  // RF2: a status that is not an HTTP status is no response.
+  // A status that is not an HTTP status is no response.
   it.each([
     ['status 0', rejection(0, echoingBody())],
     ['status 999', rejection(999, echoingBody())],
@@ -670,7 +670,7 @@ describe('a failure without a response', () => {
 /**
  * Before / after against 5.4.2: 5.4.2's `logRefusedRequest`, copied verbatim
  * as the oracle (`helpers/v542.ts`), run on the same input — the line keeps
- * every key and value it writes, the only extra key `code` (H10).
+ * every key and value it writes, the only extra key `code`.
  */
 describe("the line against 5.4.2's", () => {
   it.each([

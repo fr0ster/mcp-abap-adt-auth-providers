@@ -1,6 +1,5 @@
 /**
- * Drain handoff with a manual strategy (spec §6b; plan Task 23, moved from
- * Task 22a, C7): with the old reader's close deliberately held, every waiter
+ * Drain handoff with a manual strategy: with the old reader's close deliberately held, every waiter
  * of a login aborts and a new attempt arrives at once — the new attempt's
  * reader opens only after the old one is closed. Never two readers on stdin,
  * asserted on stdin's listener count.

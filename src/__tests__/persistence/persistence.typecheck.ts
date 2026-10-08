@@ -1,8 +1,8 @@
 /**
- * Type test, compiled by `test:check` and run by nothing (spec §6c.3): the
+ * Type test, compiled by `test:check` and run by nothing: the
  * persistence strategy replaces `onTokens`, and the refresh-token
  * disposition is gone — from the configuration, from what the provider
- * returns, and from the module that bridged it until Task 30e.
+ * returns, and from the module that bridged it.
  */
 
 import type { ITokenResult } from '@mcp-abap-adt/interfaces-auth';

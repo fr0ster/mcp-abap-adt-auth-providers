@@ -1,5 +1,5 @@
 /**
- * Appendix B as a whole: every one of the 56 rules has a test at its site
+ * The SAML rule set as a whole: every one of the 56 rules has a test at its site
  * (through `validate()`, `resolveSignedElements` or `toBearerAssertion`)
  * asserting its `rule`, its fixed `check`, its own words and its diagnostic
  * or the absence of one — `expectSamlRefusal` in `helpers/samlRefusal.ts`.
@@ -37,7 +37,7 @@ const wordsOf = (rule: AssertionRule): string =>
     'unfamiliar-error',
   ).reason;
 
-describe('Appendix B — the rule set', () => {
+describe('the SAML rule set', () => {
   it('names 56 rules, each with a check of the allowlist', () => {
     expect(RULES).toHaveLength(56);
     expect(Object.keys(RULE_CHECK)).toHaveLength(56);
@@ -62,7 +62,7 @@ describe('Appendix B — the rule set', () => {
  * in the suites at the rule's site. Read from their source, so a rule whose
  * only test is deleted turns this red.
  */
-describe('Appendix B — every rule has a test at its site', () => {
+describe('every SAML rule has a test at its site', () => {
   const SUITES = [
     'validation/assertionValidator.test.ts',
     'validation/signedNode.test.ts',
@@ -97,7 +97,7 @@ describe('Appendix B — every rule has a test at its site', () => {
 });
 
 /**
- * Load-bearing (plan Task 24): the one diagnostic a rule may carry is
+ * Load-bearing: the one diagnostic a rule may carry is
  * decided twice — by the type at a TypeScript site
  * (`samlDiagnostics.typecheck.ts`), and at run time by the admission table
  * (interfaces-auth's `SAML_RULE_DIAGNOSTIC`, read by auth-errors' builder)

@@ -1,6 +1,6 @@
 /**
  * A token provider whose every login and refresh is a promise the test
- * settles (spec §6b's races): the base class's renewal, commit queue,
+ * settles (the races of the shared renewal): the base class's renewal, commit queue,
  * quarantine and persistence reports run as shipped; only the two grant calls are
  * scripted.
  */

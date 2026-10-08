@@ -96,7 +96,7 @@ interface OidcRequest {
   readonly grantType: string;
   /**
    * `attempt` for an attempt's own request, which carries its signal;
-   * `refresh` for a refresh, which never does (spec §6b).
+   * `refresh` for a refresh, which never does.
    */
   readonly kind: 'attempt' | 'refresh';
 }
@@ -287,7 +287,7 @@ export async function initiateDeviceAuthorization(
         headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
         // Never followed, like every token request.
         maxRedirects: 0,
-        // The attempt's abort cuts the initiation (spec §6b).
+        // The attempt's abort cuts the initiation.
         ...(signal === undefined ? {} : { signal }),
       }),
     site,
@@ -375,7 +375,7 @@ export async function pollDeviceTokens(
   // The server's interval is the protocol, not a timeout of this package;
   // anything but a finite non-negative number is the RFC's default.
   let wait = serverInterval(interval) ?? DEFAULT_INTERVAL;
-  // The attempt's signal (spec §6b): checked before every poll and after
+  // The attempt's signal: checked before every poll and after
   // every await — the request, the wait — so the loop never polls again
   // once the attempt is aborted. Each poll carries it (the abort cuts the
   // request), and the loop stops waiting for an outstanding poll at the

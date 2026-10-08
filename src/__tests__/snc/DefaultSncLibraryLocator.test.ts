@@ -3,7 +3,7 @@ import { isAuthProviderFailure, readFailure } from '@mcp-abap-adt/auth-errors';
 import { DefaultSncLibraryLocator } from '../../snc/DefaultSncLibraryLocator';
 import { fakeSystem, peLibrary } from './fakeSystem';
 
-/** G7: what the shipped locator throws, as its minted error. */
+/** What the shipped locator throws, as its minted error. */
 function notFound(thrown: unknown) {
   expect(isAuthProviderFailure(thrown)).toBe(true);
   const error = readFailure(thrown, 'resolving-snc-library');
@@ -42,7 +42,7 @@ describe('explicit sncLib', () => {
       new DefaultSncLibraryLocator(fakeSystem({ files: FILES }), X64).locate(),
     ).resolves.toEqual({ path: X64, archs: ['x64'] });
   });
-  // G7 (was: the message "built for ia32, this process is x64"): the
+  // The
   // architectures are facts, the path a diagnostic.
   it('wrong architecture fails, nothing else tried', async () => {
     const thrown = await new DefaultSncLibraryLocator(
@@ -62,7 +62,6 @@ describe('explicit sncLib', () => {
     });
     expect(error.diagnostics).toEqual({ candidatePaths: [X86] });
   });
-  // G7 (was: a ValidationError on sncLib naming "C:\nope.dll: not found").
   it('missing file fails naming sncLib, the path a diagnostic', async () => {
     const thrown = await new DefaultSncLibraryLocator(
       fakeSystem(),
@@ -144,7 +143,6 @@ describe('automatic discovery', () => {
       ).locate(),
     ).resolves.toEqual({ path: DYLIB, archs: ['x64', 'arm64'] });
   });
-  // G7 (was: the message "built for x64, this process is arm64").
   it('macOS: FAT_MAGIC_64 without it is skipped, naming what it holds', async () => {
     const thrown = await new DefaultSncLibraryLocator(
       fakeSystem({
@@ -161,7 +159,6 @@ describe('automatic discovery', () => {
     ]);
     expect(error.facts.processArch).toBe('arm64');
   });
-  // G7 (was: the multi-line message with each candidate's detail).
   it('nothing usable: one error listing every candidate, paths aligned', async () => {
     const thrown = await new DefaultSncLibraryLocator(
       fakeSystem({
@@ -177,7 +174,6 @@ describe('automatic discovery', () => {
     ]);
     expect(error.diagnostics).toEqual({ candidatePaths: [X86] });
   });
-  // G6 (was: "No candidate" in the message).
   it('no candidate at all says so', async () => {
     const thrown = await new DefaultSncLibraryLocator(
       fakeSystem({ platform: 'linux' }),
@@ -188,7 +184,7 @@ describe('automatic discovery', () => {
     expect(error.facts).toMatchObject({ searched: true, candidates: [] });
     expect((thrown as Error).message).toContain('no candidate');
   });
-  // RF4: a registry value ending in spaces and CR/LF reaches candidatePaths
+  // A registry value ending in spaces and CR/LF reaches candidatePaths
   // trimmed — untrimmed, LocalPath would drop it to null.
   it('RF4: the registry value is trimmed before it becomes a candidate path', async () => {
     const thrown = await new DefaultSncLibraryLocator(

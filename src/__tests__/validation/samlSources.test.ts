@@ -1,10 +1,10 @@
 /**
- * Source tests for the SAML path (plan Task 24):
+ * Source tests for the SAML path:
  * - `AssertionValidationError` is constructed nowhere in `src`: every SAML
  *   refusal is a minted `saml-assertion` error with its rule; the class
- *   itself is deleted (Task 27);
+ *   itself is deleted;
  * - `quoteUntrusted` is gone: a document value is a diagnostic admitted by
- *   the builder, never quoted into words (spec §5.3);
+ *   the builder, never quoted into words;
  * - no regular expression runs over document text: the SAMLResponse and
  *   every value read from it are untrusted (the user's rule), so the SAML
  *   path's modules hold no regular expression at all — the DOCTYPE probe,

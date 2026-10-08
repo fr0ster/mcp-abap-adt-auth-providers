@@ -20,7 +20,7 @@ const DSIG_NS = 'http://www.w3.org/2000/09/xmldsig#';
  * PEM in, PEM out; bare base64 DER gets its armour — and the result is proved
  * to be a certificate before anything uses it.
  *
- * The spec promises `idpCertificates` accepts either, and a consumer copying
+ * The documented contract is that `idpCertificates` accepts either, and a consumer copying
  * `<X509Certificate>` out of identity-provider metadata has bare base64 DER in
  * their hand — the armour is not in the metadata. `xml-crypto` accepts only
  * PEM or a Buffer: measured, a bare base64 certificate makes OpenSSL throw
@@ -38,7 +38,7 @@ const DSIG_NS = 'http://www.w3.org/2000/09/xmldsig#';
  * certificate at construction, so the cost never falls on a login.
  */
 /**
- * E26: a configured certificate that is neither PEM nor base64 DER, or not a
+ * A configured certificate that is neither PEM nor base64 DER, or not a
  * certificate — both sentences of 5.4.2 are one case.
  */
 function idpCertificateInvalid() {
@@ -67,7 +67,7 @@ export function toPem(certificate: unknown): string {
     new X509Certificate(pem);
   } catch {
     // Fixed words: OpenSSL's text is not this package's to repeat, and
-    // whoever catches this logs the message; the original is dropped (L2).
+    // whoever catches this logs the message; the original is dropped.
     throw idpCertificateInvalid();
   }
   return pem;
@@ -171,8 +171,7 @@ function resolveOne(
       getCertFromKeyInfo: () => null,
     });
     // loadSignature throws for a malformed Signature. xml-crypto's message
-    // embeds the offending element — document text — and reaches nothing
-    // (L7): the rule says what failed.
+    // embeds the offending element — document text — and reaches nothing: the rule says what failed.
     try {
       verifier.loadSignature(signatureNode);
     } catch {

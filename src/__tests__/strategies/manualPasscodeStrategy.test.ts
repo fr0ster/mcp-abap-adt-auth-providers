@@ -37,7 +37,7 @@ describe('manualPasscodeStrategy', () => {
     }
 
     expect(outcome.payload).toBe('abc123');
-    // The URL on stderr only (C8); the logger the fixed line.
+    // The URL on stderr only; the logger the fixed line.
     expect(written).toEqual([
       '🔗 Open this URL in your browser to authenticate:\n',
       '   https://uaa.example/passcode\n',
@@ -50,7 +50,7 @@ describe('manualPasscodeStrategy', () => {
     );
   });
 
-  // K14 (6.0.0): which input was empty is no longer named (minor loss).
+  // Which input was empty is no longer named (minor loss).
   it('refuses an empty code', async () => {
     await expect(
       manualPasscodeStrategy({ read: async () => '   ' }).authorize(request()),

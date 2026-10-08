@@ -1,11 +1,10 @@
 /**
- * Type test, compiled by `test:check` and run by nothing (spec §6a, §11.2;
- * they replace the "recorded as removed" notes for K7 and K9, R4): no option
+ * Type test, compiled by `test:check` and run by nothing: no option
  * this package owns takes a login bound any more — `timeoutMs` on a
  * strategy's options or a static factory's options is a compile error, and
  * `DEFAULT_LOGIN_TIMEOUT_MS` is not exported. A consumer that wants a bound
  * composes `signal: AbortSignal.timeout(ms)`, which compiles everywhere.
- * Nor does interfaces-auth 6.0.0's `ICallbackServerOptions` (§4.4): its
+ * Nor does interfaces-auth 6.0.0's `ICallbackServerOptions`: its
  * `timeoutMs` is gone, `signal` is the only way a scope ends without a result.
  */
 
@@ -90,7 +89,7 @@ export const factories = [
   UaaPasscodeProvider.fromTerminal(passcode, { timeoutMs: 1000 }),
 ];
 
-// The callback server's options (interfaces-auth 6.0.0, spec §4.4).
+// The callback server's options (interfaces-auth 6.0.0).
 export const serverOptions: ICallbackServerOptions = { port: 0, signal };
 export const serverOptionsWithBound: ICallbackServerOptions = {
   port: 0,

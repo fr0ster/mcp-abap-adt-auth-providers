@@ -21,7 +21,7 @@ describe('public exports — SAML assertion validation', () => {
   it("exports the type ShippedValidatorOptions; AssertionCheck is interfaces-auth's", () => {
     // Type-only exports vanish at runtime; this compiles only while they are
     // exported, since ts-jest type-checks the suite before running it.
-    // AssertionCheck moved to interfaces-auth (spec §6, 6.0.0).
+    // AssertionCheck moved to interfaces-auth (6.0.0).
     const check: AssertionCheck = 'replay';
     const options: ShippedValidatorOptions = {
       idpCertificates: [],
@@ -78,7 +78,7 @@ describe('public exports — 5.0.0', () => {
   });
 });
 
-// Task 27 (spec §6, Decision D7, Decision D6): the error classes, refusalWords
+// The error classes, refusalWords
 // and every transition piece are gone from the surface — a consumer reads a
 // failure with auth-errors' readFailure and switches on its kind.
 describe('public exports — 6.0.0 removals', () => {
@@ -110,7 +110,7 @@ describe('public exports — 6.0.0 removals', () => {
   });
 });
 
-describe('public exports — renewal strategies (spec §6c.8)', () => {
+describe('public exports — renewal strategies', () => {
   it.each(['refreshThenLogin', 'refreshOnly'])('exports %s', (name) => {
     expect(typeof (surface as Record<string, unknown>)[name]).toBe('function');
   });
@@ -123,7 +123,7 @@ describe('public exports — renewal strategies (spec §6c.8)', () => {
   );
 });
 
-describe('public exports — the persistence strategy (spec §6c.8)', () => {
+describe('public exports — the persistence strategy', () => {
   it('exports refreshStatePersistence', () => {
     expect(
       typeof (surface as Record<string, unknown>).refreshStatePersistence,
@@ -131,9 +131,9 @@ describe('public exports — the persistence strategy (spec §6c.8)', () => {
   });
 });
 
-// Spec §6d (Task 30n): the composer and its parts are public; the 5.x
+// The composer and its parts are public; the 5.x
 // class, its callback server factories and their scope are gone.
-describe('public exports — no universal browser (spec §6d)', () => {
+describe('public exports — no universal browser', () => {
   it.each(['systemBrowser', 'chromeBrowser', 'edgeBrowser', 'firefoxBrowser'])(
     '%s is not exported: the consumer picks the browser for its platform',
     (name) => {
@@ -142,7 +142,7 @@ describe('public exports — no universal browser (spec §6d)', () => {
   );
 });
 
-describe('public exports — authorization by composition (spec §6d)', () => {
+describe('public exports — authorization by composition', () => {
   it.each([
     'composeAuthorization',
     'openInBrowser',

@@ -1,5 +1,5 @@
 /**
- * Today's values (spec §6d.7, §6d.13 invariant 1): the parts have no
+ * Today's values: the parts have no
  * default port, browser or redirect; the named compositions are the only
  * place these live.
  */

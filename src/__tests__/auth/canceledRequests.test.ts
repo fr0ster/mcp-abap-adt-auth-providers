@@ -1,12 +1,12 @@
 /**
  * A canceled token request, or a canceled discovery, is replaced like every
- * other rejection (spec §6, D2; L3: the `AxiosError` identity, and with it
+ * other rejection (the `AxiosError` identity, and with it
  * `axios.isCancel`, is lost): an `AuthProviderFailure` of the site's
  * operation, `request-failed` `no-response`, nothing of the original kept.
  * A cancellation that is not the site's own attempt's (here a global
  * `axios.defaults.signal`) still reads as no response; an attempt's own
- * signal ends a request `interactive-login` `aborted` (spec §6b,
- * `attemptSignals.test.ts`). Real axios,
+ * signal ends a request `interactive-login` `aborted`
+ * (`attemptSignals.test.ts`). Real axios,
  * unmocked: the request is aborted before it is sent, through
  * `axios.defaults.signal`.
  */

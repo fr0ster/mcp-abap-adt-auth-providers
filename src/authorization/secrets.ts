@@ -1,6 +1,5 @@
 /**
- * The secrets that bind an answer to the login that asked for it (spec
- * §6a1, §6d.3): the OAuth `state` a provider mints and the paste form's
+ * The secrets that bind an answer to the login that asked for it: the OAuth `state` a provider mints and the paste form's
  * token a listener mints — minted here and compared here in constant time.
  * None of them is logged or put in an error.
  */

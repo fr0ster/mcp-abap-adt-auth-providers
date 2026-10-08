@@ -77,8 +77,7 @@ import {
 import { needsSentDecision, readDecision } from '../renewal/decision';
 
 /**
- * The consumer's opt-in to naming the request's secrets in its debug line
- * (spec §6): with `authDebug: true` — `true` itself, nothing else — a failed
+ * The consumer's opt-in to naming the request's secrets in its debug line: with `authDebug: true` — `true` itself, nothing else — a failed
  * token request, or an answer without a token, writes its one line with the
  * safe facts plus `sent`, each secret the request carried by name, at most
  * its first and last 4 characters (`abcd…wxyz <redacted, N chars>`; under 16
@@ -103,7 +102,7 @@ interface OperationOf {
 /** What every token provider's config may carry beside its own fields. */
 export interface TokenProviderHooks extends TokenProviderDebug {
   /**
-   * What this provider tells persistence (spec §6c.3, §6c.6): one report per
+   * What this provider tells persistence: one report per
    * change of its credentials, made from inside the commit queue in commit
    * order — `credential` for every new token a refresh or a login committed
    * (never a cache hit), `refresh-token-discarded` when the renewal
@@ -121,7 +120,7 @@ export interface TokenProviderHooks extends TokenProviderDebug {
    */
   persistence?: ITokenPersistence | undefined;
   /**
-   * The first attached party (spec §6b), attached at construction — the same
+   * The first attached party, attached at construction — the same
    * as `attach(signal)` right after it. A login a moment starts (`prepare`,
    * `authorize`, `rejected`, …) is aborted when every attached party has
    * aborted; with none live it runs unbounded, as an unsignalled consumer
@@ -131,7 +130,7 @@ export interface TokenProviderHooks extends TokenProviderDebug {
   /**
    * How every renewal of this provider proceeds — whether to refresh,
    * whether to log in, when to stop, what becomes of a refresh token that
-   * was sent (spec §6c). Required, no default (rule 7): `refreshThenLogin()`
+   * was sent. Required, no default (rule 7): `refreshThenLogin()`
    * is the behaviour before 6.0.0, `refreshOnly()` never logs in. A missing
    * one, or one whose `next` is not a function, is refused at construction
    * (`configuration` `required-fields-missing`, `renewal`) — the provider
@@ -164,9 +163,8 @@ type StepEnd =
 /**
  * A step's result could not be installed (a subclass's `updateTokens`
  * threw): carried out of the commit so that a refresh step can tell it from
- * a failure after the install — the awaited persistence report (spec
- * §6c.6), which ends the renewal instead. Never thrown out of the provider: the step
- * unwraps `thrown`.
+ * a failure after the install — the awaited persistence report, which ends the renewal instead. Never thrown out of the
+ * provider: the step unwraps `thrown`.
  */
 class InstallFailed {
   constructor(readonly thrown: unknown) {}
@@ -183,7 +181,7 @@ type Settled<T> = { readonly value: T } | { readonly thrown: unknown };
 type Obtained = 'refresh' | 'login';
 
 /**
- * D8 / A10: a provider with no refresh grant, or no refresh token to send —
+ * A provider with no refresh grant, or no refresh token to send —
  * the refresh token is the credential refused (`credential-refused`
  * `refresh-token`). The base never reaches it for a grant without refresh;
  * thrown before anything is sent, it is a refresh that failed unsent, and
@@ -196,9 +194,9 @@ export function refreshTokenRefused(): AuthProviderFailure {
 }
 
 /**
- * How the client authenticates to the authorization server (spec §3). Taken by
+ * How the client authenticates to the authorization server. Taken by
  * every provider that sends a request to one; never beside a `clientSecret` —
- * two ways of authenticating one client is a configuration error (E2).
+ * two ways of authenticating one client is a configuration error.
  */
 export interface ClientAuthenticationConfig {
   clientAuthentication?: IClientAuthentication | undefined;
@@ -275,7 +273,7 @@ export abstract class BaseTokenProvider
   /** The token last put on a request, so rejected() can tell a renewal from a repeat. */
   private presented?: string | undefined;
   /**
-   * The renewal slot (spec §6b): concurrent callers are waiters of one
+   * The renewal slot: concurrent callers are waiters of one
    * attempt — one refresh, at most one login; one waiter's abort releases
    * only that waiter, and every waiter's abort aborts the attempt.
    */
@@ -297,14 +295,14 @@ export abstract class BaseTokenProvider
   protected readonly authDebug: boolean;
   /**
    * The strategy's TLS material and its thumbprint: set on first need, never
-   * replaced (spec §4). A certificate that rotates is a new provider.
+   * replaced. A certificate that rotates is a new provider.
    */
   protected pinned?: PinnedCertificate;
   /** The pin slot; concurrent first needs are waiters of one attempt. */
   private readonly pins =
     sharedAttempt<Settled<PinnedCertificate>>('token-request');
   /**
-   * The commit queue (spec §6b): every effect of an attempt — the pinned
+   * The commit queue: every effect of an attempt — the pinned
    * material, the tokens, `remembered`, the persistence reports — runs here,
    * one commit after another, never two at once, in arrival order.
    */
@@ -324,7 +322,7 @@ export abstract class BaseTokenProvider
   /**
    * Every refresh token discarded by the renewal strategy — its
    * `sentRefreshToken: 'discard'`, or `ifCut: 'discard'` applied at the
-   * abort of a dispatched refresh (spec §6c.5): a tombstone for the
+   * abort of a dispatched refresh: a tombstone for the
    * provider's lifetime — no entry ever leaves, never persisted. A dispatch
    * never sends one (`canRefresh` is false while the held one is here), and
    * a commit never installs one.
@@ -349,7 +347,7 @@ export abstract class BaseTokenProvider
    * — otherwise every request attempt would cost a token request, or a login,
    * interactive for a browser or device strategy — and `authorize()` answers
    * that same refusal, so the cause stays visible. Cleared whenever the token
-   * changes. It reaches the renewal strategy as `lastRenewal` (spec §6c.4):
+   * changes. It reaches the renewal strategy as `lastRenewal`:
    * `refreshThenLogin()` renews it again only at `prepare` and on a
    * rejection, and the latest renewal's refusal is the one kept.
    */
@@ -362,14 +360,14 @@ export abstract class BaseTokenProvider
   constructor(options: BaseConfig) {
     // Read once as own data: a hostile object throws nothing of its own.
     const config = ownOptions<BaseConfig>(options);
-    // Every moment of a token provider is its token request (spec A.8).
+    // Every moment of a token provider is its token request.
     super({
       prepare: 'token-request',
       establish: 'token-request',
       authorize: 'token-request',
       rejected: 'token-request',
     });
-    // Absent is a choice: nothing is persisted (spec §6c.3). Given, it must
+    // Absent is a choice: nothing is persisted. Given, it must
     // be an object whose `report` is a function, read without running a
     // getter; anything else — `null` included — is refused here.
     const persistence: unknown = config.persistence;
@@ -387,7 +385,7 @@ export abstract class BaseTokenProvider
       );
     }
     this.persistence = persistence as ITokenPersistence | undefined;
-    // Required, no default (rule 7, spec §6c.3): an object whose `next` is a
+    // Required, no default (rule 7): an object whose `next` is a
     // function, read without running a getter; anything else is refused here.
     const renewal: unknown = config.renewal;
     if (
@@ -401,8 +399,7 @@ export abstract class BaseTokenProvider
     // `true` itself: `'true'`, `1` or an environment variable never opt in.
     this.authDebug = config.authDebug === true;
     if (config.clientAuthentication && config.clientSecret !== undefined) {
-      // Two ways of authenticating one client is a mistake, not a preference
-      // (E2).
+      // Two ways of authenticating one client is a mistake, not a preference.
       throw misconfigured(
         authError.configuration({
           case: 'client-secret-beside-client-authentication',
@@ -416,7 +413,7 @@ export abstract class BaseTokenProvider
   }
 
   /**
-   * Attaches a party sharing this provider (spec §6b): a login a moment
+   * Attaches a party sharing this provider: a login a moment
    * starts waits on the parties live at its start and any attached while it
    * runs, and is aborted when all of them have aborted. The same signal
    * twice is one party; an aborted one is not added. A party is released
@@ -551,7 +548,7 @@ export abstract class BaseTokenProvider
   }
 
   /**
-   * What every token site this provider calls is told (spec §6): the
+   * What every token site this provider calls is told: the
    * consumer's `authDebug`, read once at construction, and the grant its
    * failures name (`getAuthType()`).
    */
@@ -563,7 +560,7 @@ export abstract class BaseTokenProvider
       authDebug: this.authDebug,
       grant: this.getAuthType(),
       // The attempt's signal, read only by an attempt's own sites — a
-      // refresh site never reads it (spec §6b).
+      // refresh site never reads it.
       ...(signal === undefined ? {} : { signal }),
       ...(dispatched === undefined ? {} : { dispatched }),
     };
@@ -680,7 +677,7 @@ export abstract class BaseTokenProvider
    * request the login sends (`siteOptions(attempt.signal)`) — and
    * `exclusive(work)` runs work holding an exclusive local resource (the
    * strategy's `authorize`, a device-code flow) once the previous attempt
-   * has released its own (the drain, spec §6b). It returns the result; the
+   * has released its own (the drain). It returns the result; the
    * base commits it.
    */
   protected abstract performLogin(
@@ -694,9 +691,9 @@ export abstract class BaseTokenProvider
    * attempt's: what the refresh does before it sends (OIDC discovery)
    * carries it, and nothing is sent once it has aborted — but the refresh
    * request itself never carries it: once sent it runs on, and its answer
-   * is offered to the commit queue (spec §6b). `dispatched` goes to the
+   * is offered to the commit queue. `dispatched` goes to the
    * refresh site (`refreshSiteOptions(dispatched)`), which calls it
-   * synchronously right before the request leaves (spec §6c.5): it throws
+   * synchronously right before the request leaves: it throws
    * `aborted` instead when the attempt has aborted, so nothing is sent.
    */
   protected abstract performRefresh(
@@ -720,11 +717,11 @@ export abstract class BaseTokenProvider
    * Main method - handles token lifecycle
    *
    * The cached token while it is valid; otherwise a renewal, whose steps
-   * the renewal strategy decides (spec §6c.4).
+   * the renewal strategy decides.
    *
    * @returns Promise that resolves to token result
    * @throws AuthProviderFailure — and nothing else: whatever the renewal, a
-   *   strategy, a loader or a presenter threw, classified (spec §6, L3)
+   *   strategy, a loader or a presenter threw, classified
    */
   async getTokens(options?: ITokenRequestOptions): Promise<ITokenResult> {
     return this.tokensFor(options?.signal, 'get-tokens');
@@ -781,7 +778,7 @@ export abstract class BaseTokenProvider
     if (valid) {
       const authorizationToken = this.authorizationToken;
       if (!authorizationToken) {
-        // D7: unreachable — isTokenValid() checked the token.
+        // Unreachable — isTokenValid() checked the token.
         throw new AuthProviderFailure(
           authError.unknown(this.operationOf('token-request')),
         );
@@ -834,17 +831,16 @@ export abstract class BaseTokenProvider
 
   /**
    * A new token, never the cached one: a renewal whose steps the renewal
-   * strategy decides, its cause `explicit` (spec §6c.4).
+   * strategy decides, its cause `explicit`.
    *
    * `getTokens()` answers the cache while the token looks valid, so a caller
    * holding a 401 — the server refused a token the clock still accepts — has
    * no other way to get a different one. What this obtains replaces the cache.
    *
-   * With `options.signal`, this call is one waiter of the shared renewal
-   * (spec §6b): its abort rejects this call only, `interactive-login`
+   * With `options.signal`, this call is one waiter of the shared renewal: its abort rejects this call only, `interactive-login`
    * `aborted`.
    *
-   * @throws AuthProviderFailure — and nothing else (spec §6, L3)
+   * @throws AuthProviderFailure — and nothing else
    */
   async refreshTokens(options?: ITokenRequestOptions): Promise<ITokenResult> {
     try {
@@ -861,7 +857,7 @@ export abstract class BaseTokenProvider
    * Joins the renewal slot with `signal` — the active renewal, or a new one
    * started for `start()`'s cause and moment. The attempt is where a
    * renewal's failure is built: the one remembered and the one thrown hold
-   * the same error (C15).
+   * the same error.
    */
   private async renewed(
     signal: AbortSignal | undefined,
@@ -906,10 +902,10 @@ export abstract class BaseTokenProvider
   }
 
   /**
-   * What getTokens() / refreshTokens() throw for anything caught (spec §6):
+   * What getTokens() / refreshTokens() throw for anything caught:
    * an AuthProviderFailure holding the classified error — the error a site
    * or a renewal already minted, as it is; never the value caught, nor its
-   * message (L3). Every throw is one: nothing passes as it is.
+   * message. Every throw is one: nothing passes as it is.
    */
   private thrownFor(error: unknown): AuthProviderFailure {
     return new AuthProviderFailure(
@@ -945,7 +941,7 @@ export abstract class BaseTokenProvider
       return { value: await this.renewOnce(attempt, start) };
     } catch (thrown) {
       // The error the renewal produced, minted once: the one thrown and the
-      // one remembered are the same object (C15).
+      // one remembered are the same object.
       const error = this.classified(thrown, this.operationOf('token-request'));
       await this.commit(() => {
         const held = this.authorizationToken;
@@ -978,12 +974,12 @@ export abstract class BaseTokenProvider
   }
 
   /**
-   * The renewal (spec §6c.5): pin, then — step by step — deliver the
+   * The renewal: pin, then — step by step — deliver the
    * pending abort observations, ask the renewal strategy, read its answer,
    * apply its `sentRefreshToken`, take the step's credential generation,
    * run the step, record how it ended, and ask again. It ends with a usable
    * credential, a `stop`, an invalid answer, or the abort. No step runs that
-   * the strategy did not ask for (G3).
+   * the strategy did not ask for.
    */
   private async renewOnce(
     attempt: AttemptContext,
@@ -1048,7 +1044,7 @@ export abstract class BaseTokenProvider
   }
 
   /**
-   * Asks the renewal strategy for the next step (spec §6c.5, steps 2–3):
+   * Asks the renewal strategy for the next step:
    * the pending abort observations first, then `next(situation)`, raced
    * against the attempt's signal — an abort ends the renewal `aborted` at
    * once, a late answer is ignored. A throw, a foreign thenable (its `then`
@@ -1101,7 +1097,7 @@ export abstract class BaseTokenProvider
     ) {
       throw this.strategyFailure();
     }
-    // Allowlisted values only (spec §6c.9).
+    // Allowlisted values only.
     const trigger = own.trigger;
     const moment = own.moment;
     const next = decision.next;
@@ -1116,7 +1112,7 @@ export abstract class BaseTokenProvider
   }
 
   /**
-   * The renewal strategy failed (G6, G7): `unknown`, operation
+   * The renewal strategy failed: `unknown`, operation
    * `renewal-strategy`, logged in fixed words. Nothing it threw or answered
    * is relayed.
    */
@@ -1132,7 +1128,7 @@ export abstract class BaseTokenProvider
   }
 
   /**
-   * What a `stop` ends the renewal with (spec §6c.5, step 8): the last
+   * What a `stop` ends the renewal with: the last
    * step's error or its outcome's refusal; else rule 5's refusal of a
    * `not-credential` rejection; else the `lastRenewal` of a token bound
    * elsewhere; else `renewal-declined`.
@@ -1156,7 +1152,7 @@ export abstract class BaseTokenProvider
   }
 
   /**
-   * Records a step that ended by the abort (spec §6c.5): synchronously, in
+   * Records a step that ended by the abort: synchronously, in
    * the abort handler, calling no foreign code; delivered once, at the
    * first of a queued microtask or the start of the next `next()`.
    */
@@ -1196,8 +1192,7 @@ export abstract class BaseTokenProvider
   }
 
   /**
-   * One refresh step. Once dispatched it runs on whatever its waiters do
-   * (spec §6b): the abort handler acts only after `dispatched()` — it
+   * One refresh step. Once dispatched it runs on whatever its waiters do: the abort handler acts only after `dispatched()` — it
    * records the observation, then applies `ifCut` (`discard` adds the token
    * to `discarded` synchronously and queues its clearing step and report; `keep` does
    * nothing). An abort before dispatch touches no refresh token. The answer,
@@ -1212,8 +1207,7 @@ export abstract class BaseTokenProvider
   ): Promise<StepEnd> {
     const { signal } = attempt;
     const spent = this.refreshToken;
-    // The provider's own correctness, checked here whatever led to the step
-    // (G4): an empty or discarded refresh token is never dispatched.
+    // The provider's own correctness, checked here whatever led to the step: an empty or discarded refresh token is never dispatched.
     if (
       typeof spent !== 'string' ||
       spent === '' ||
@@ -1270,7 +1264,7 @@ export abstract class BaseTokenProvider
           );
           throw abortedFailure();
         }
-        // H1: the failure's fixed words and kind, never its message.
+        // The failure's fixed words and kind, never its message.
         logQuietly(() =>
           this.logger?.warn(
             '[BaseTokenProvider] Refresh failed',
@@ -1288,7 +1282,7 @@ export abstract class BaseTokenProvider
         };
       }
       // Committed even when the attempt was aborted meanwhile, if nothing
-      // newer was (spec §6b, rule 2): losing R2 would strand the family.
+      // newer was: losing R2 would strand the family.
       let committed: ITokenResult;
       try {
         committed = await this.commitCredentials(
@@ -1301,7 +1295,7 @@ export abstract class BaseTokenProvider
         // Only the install's own failure is the step's: the server answered,
         // so `spent` was sent and may be rotated away — a refresh that failed
         // after it was sent, and the strategy decides. Anything after the
-        // install (the awaited persistence report) ends the renewal (§6c.6).
+        // install (the awaited persistence report) ends the renewal.
         if (!(failure instanceof InstallFailed)) throw failure;
         throwIfAborted(signal);
         const error = this.classified(
@@ -1382,7 +1376,7 @@ export abstract class BaseTokenProvider
   }
 
   /**
-   * How a committed step ended (spec §6c.5, step 7): usable — the renewal
+   * How a committed step ended: usable — the renewal
    * ends with it; `unchanged` — a rejection's renewal obtained the token
    * refused; `bound-elsewhere` — still bound elsewhere than the pinned
    * certificate. Either of the last two stays committed: it is the
@@ -1419,7 +1413,7 @@ export abstract class BaseTokenProvider
    * if it still holds that one (never a token something else stored
    * meanwhile) and reports `refresh-token-discarded` with the credential
    * still held. A token no longer held reports nothing: the store already
-   * holds the newer state the replacing commit reported (spec §6c.6). It
+   * holds the newer state the replacing commit reported. It
    * advances no watermark, so the same attempt's late answer can still be
    * committed after it.
    */
@@ -1437,10 +1431,10 @@ export abstract class BaseTokenProvider
   }
 
   /**
-   * The credential commit of a step's result (spec §6b, §6c.5): applied
+   * The credential commit of a step's result: applied
    * only if the step's generation is newer than the credential watermark,
    * and — for a login — only if the attempt was not aborted (a refresh's
-   * answer is the server's state, rule 2). The result's refresh token is
+   * answer is the server's state). The result's refresh token is
    * installed only when it is usable — non-empty and not discarded;
    * otherwise the one held stays. Then, in order: the tokens,
    * `markIfElsewhere` against the pinned thumbprint current now, the
@@ -1470,7 +1464,7 @@ export abstract class BaseTokenProvider
         throw new InstallFailed(thrown);
       }
       this.markIfElsewhere(accepted.authorizationToken);
-      // Written once the commit applied its tokens, before the report (H2).
+      // Written once the commit applied its tokens, before the report.
       logQuietly(() =>
         this.logger?.info(
           obtained === 'refresh'
@@ -1483,7 +1477,7 @@ export abstract class BaseTokenProvider
         ),
       );
       // A failure from here on is not the step's: the credentials are
-      // committed, and it ends the renewal (§6c.6).
+      // committed, and it ends the renewal.
       await this.reportChange(
         (awaited) => ({
           event: 'credential',
@@ -1497,7 +1491,7 @@ export abstract class BaseTokenProvider
         }),
         attempt,
       );
-      // What it returns carries the refresh token held, or none (G4).
+      // What it returns carries the refresh token held, or none.
       return { ...accepted, refreshToken: this.heldRefresh() };
     });
     if (applied !== undefined) return applied;
@@ -1509,8 +1503,7 @@ export abstract class BaseTokenProvider
   }
 
   /**
-   * One report to the persistence strategy, from inside a commit (spec
-   * §6c.6). `awaited` is decided now, as the report starts: true while the
+   * One report to the persistence strategy, from inside a commit. `awaited` is decided now, as the report starts: true while the
    * attempt that made the commit still has a live waiter. An awaited
    * report is awaited — a collaborator's answer, adopted as `await` adopts
    * it — and its throw or rejection is the renewal's failure (`unknown`,
@@ -1542,7 +1535,7 @@ export abstract class BaseTokenProvider
     }
     // Built before the strategy is called: a fault of this provider (an
     // unusable `getAuthType()`) ends the renewal with its own error, never
-    // blamed on persistence (G7).
+    // blamed on persistence.
     const report = make(true);
     try {
       await this.callReport(persistence, report);
@@ -1571,8 +1564,7 @@ export abstract class BaseTokenProvider
   /**
    * What an awaited report's failure ends the renewal with: `unknown`,
    * `persisting-tokens`, with an allowlisted status or code the thrown
-   * value carries — never anything the strategy minted, relayed as itself
-   * (G6).
+   * value carries — never anything the strategy minted, relayed as itself.
    */
   private persistingFailure(error: unknown): IAuthProviderError {
     const of = this.operationOf('persisting-tokens');
@@ -1637,8 +1629,7 @@ export abstract class BaseTokenProvider
   }
 
   /**
-   * The refresh token held, for a result this provider returns (spec
-   * §6c.1, G4): a usable one, else none. A discarded one is not handed out
+   * The refresh token held, for a result this provider returns: a usable one, else none. A discarded one is not handed out
    * — it is never submitted again — even while its clearing step still
    * waits in the queue.
    */
@@ -1704,7 +1695,7 @@ export abstract class BaseTokenProvider
     this.remembered = undefined;
     const oldToken = this.formatToken(this.authorizationToken);
     this.authorizationToken = result.authorizationToken;
-    // Only a usable refresh token replaces the one held (spec §6c.5): a
+    // Only a usable refresh token replaces the one held: a
     // result without one leaves it held, and the next refresh sends it
     // (RFC 6749 §6).
     const fresh = result.refreshToken;
@@ -1811,15 +1802,15 @@ export abstract class BaseTokenProvider
 
   protected async onPrepare(): Promise<AuthOutcome> {
     // `remembered` stays: `moment: 'prepare'` is the renewal strategy's cue
-    // to try a token renewed bound elsewhere once more (spec §6c.4). A login
-    // this starts waits on the attached parties (spec §6b).
+    // to try a token renewed bound elsewhere once more. A login
+    // this starts waits on the attached parties.
     await this.asMoment((signal) => this.tokensFor(signal, 'prepare'));
     return OK;
   }
 
   /**
    * The token is presented per request; the logon carries the pinned
-   * certificate when the token may need it (spec §4's table). Decided on the
+   * certificate when the token may need it. Decided on the
    * token this provider HOLDS — a logon never obtains, refreshes or logs in.
    * No token, an expired one, or one being renewed reads as unknown: the
    * token presented will be the one authorize() obtains through the same
@@ -1865,7 +1856,7 @@ export abstract class BaseTokenProvider
     // Pinned here too, so a token served from cache (seeded, restored) is
     // checked against the certificate like an obtained one.
     // One moment, one waiter: the attached parties, for the pin and the
-    // renewal alike (spec §6b).
+    // renewal alike.
     const { pinned, result } = await this.asMoment(async (signal) => ({
       pinned: await this.pin(signal),
       result: await this.tokensFor(signal, 'authorize'),
@@ -1878,7 +1869,7 @@ export abstract class BaseTokenProvider
       if (!pinned) return boundElsewhere();
       const remembered = this.remembered;
       if (remembered && result.authorizationToken === remembered.token) {
-        // The very error the renewal produced, minted and frozen (C15).
+        // The very error the renewal produced, minted and frozen.
         return { ok: false, refusal: remembered.error };
       }
       return { ok: false, refusal: renewedBoundElsewhere() };
@@ -1901,7 +1892,7 @@ export abstract class BaseTokenProvider
   /**
    * False only for a bound token whose thumbprint is not the pinned one —
    * none pinned, another one, or a binding the token states unreadably.
-   * Unbound and unknown tokens may be presented (spec §4).
+   * Unbound and unknown tokens may be presented.
    */
   private presents(
     binding: TokenBinding,
@@ -1917,7 +1908,7 @@ export abstract class BaseTokenProvider
 
   /**
    * A new token, through the renewal strategy (rule 6): its cause
-   * `rejected`, with rule 5's reading — a reading, not a guard (G9): whether
+   * `rejected`, with rule 5's reading — a reading, not a guard: whether
    * to renew on a `403` is the strategy's. Ok only if what is presented
    * changed; retrying is the caller's. A renewal in flight is joined; a
    * presented token already superseded by a renewal answers Ok without
@@ -1966,7 +1957,7 @@ export abstract class BaseTokenProvider
 }
 
 /**
- * A frozen copy of a cause, to hand to the strategy (review M-1). Its
+ * A frozen copy of a cause, to hand to the strategy. Its
  * errors are minted, frozen already, and shared as they are.
  */
 function frozenCause(cause: RenewalCause): RenewalCause {
@@ -1978,7 +1969,7 @@ function frozenOutcome(outcome: RenewalStepOutcome): RenewalStepOutcome {
   return Object.freeze({ ...outcome });
 }
 
-/** A17: a held token bound to a certificate while none is pinned. */
+/** A held token bound to a certificate while none is pinned. */
 function boundElsewhere(): AuthOutcome {
   return {
     ok: false,
@@ -1986,7 +1977,7 @@ function boundElsewhere(): AuthOutcome {
   };
 }
 
-/** A18: a renewed token still bound to another certificate. */
+/** A renewed token still bound to another certificate. */
 function renewedBoundElsewhere(): IAuthProviderError {
   return authError['token-binding']({ problem: 'renewed-bound-elsewhere' });
 }

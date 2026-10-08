@@ -1,5 +1,5 @@
 /**
- * The verdicts a shipped protocol answers (spec §6d.1, §6d.3.2), built in
+ * The verdicts a shipped protocol answers, built in
  * one place: a refusal names a reason from `ANSWER_REFUSALS`, an end carries
  * an error minted through auth-errors — never a word of the answer.
  */

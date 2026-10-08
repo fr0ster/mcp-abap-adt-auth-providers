@@ -7,7 +7,7 @@
  * never called.
  *
  * `onAnswerRejection` reads a collaborator's answer — the consumer's own
- * code (the user's decision, 2026-10-07): it is adopted as `await` would
+ * code: it is adopted as `await` would
  * adopt it, so a Promises/A+ thenable's rejection, or its `then` throwing,
  * reaches the handler like a native rejection.
  */

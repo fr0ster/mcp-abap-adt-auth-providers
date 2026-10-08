@@ -1,5 +1,5 @@
 /**
- * The terminal compositions (spec §6d.7): the URL shown on stderr, the
+ * The terminal compositions: the URL shown on stderr, the
  * answer pasted at a prompt. Each returns `composeAuthorization(…)`.
  *
  * | Name | Transport | Protocol |
@@ -8,7 +8,7 @@
  * | `manualSamlResponseStrategy` | `terminalPaste({ redirectUri, read })` | `samlResponse()` |
  * | `manualPasscodeStrategy` | `terminalPaste({ read })` | `passcode()` |
  *
- * A transport with no socket advertises no redirect of its own (C4): the
+ * A transport with no socket advertises no redirect of its own: the
  * code and SAML ones require the redirect registered with the identity
  * provider; the passcode page takes none.
  */
@@ -36,7 +36,7 @@ export interface ManualPasscodeStrategyOptions {
    * The signal aborts when the login is aborted or the strategy disposed; the
    * reader must then stop and release what it holds — the strategy settles
    * only once the reader has, so a reader that ignores it blocks the next
-   * login (spec §6b).
+   * login.
    */
   read?: TerminalRead | undefined;
   /**
@@ -58,7 +58,7 @@ export interface ManualStrategyOptions extends ManualPasscodeStrategyOptions {
 
 type Own = Partial<Record<keyof ManualStrategyOptions, unknown>>;
 
-/** The consumer's redirect: required (C4). */
+/** The consumer's redirect: required. */
 function registeredRedirect(own: Own): string {
   if (own.redirectUri === undefined) {
     throw requiredFieldsMissing(['redirectUri']);

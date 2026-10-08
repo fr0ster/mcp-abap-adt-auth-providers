@@ -1,5 +1,5 @@
 /**
- * Reading what binds an answer to its login (spec §6a1, §6d.3.1): the
+ * Reading what binds an answer to its login: the
  * `state` of an authorization URL, one parameter of an answer, and a pasted
  * input — with `URL` / `URLSearchParams` and plain string code, never a
  * regular expression. Nothing read here is logged or put in an error.
@@ -11,7 +11,7 @@ import { sameSecret } from '../secrets';
 
 /**
  * The value of `name` when it is present exactly once; `undefined` when it
- * is absent or repeated (spec §6d.3.1: a repeated `state` or `code` is no
+ * is absent or repeated (a repeated `state` or `code` is no
  * value — never its first).
  */
 export function oneValue(
@@ -41,7 +41,7 @@ export function urlState(url: string): string | null | undefined {
 }
 
 /**
- * What a pasted input yields (spec §6a1): a code, or why none is taken.
+ * What a pasted input yields: a code, or why none is taken.
  * `state` — a redirected URL whose `state` is not the expected one;
  * `unreadable` — no code could be read.
  */
@@ -54,7 +54,7 @@ const NOT_BARE = new Set(['?', '&', '=', '/', '#']);
 
 /**
  * Reads a pasted input for a login whose URL carried `expected` (always
- * one: C7). A bare code — none of `?`, `&`, `=`, `/`, `#` — is taken as
+ * one, because a provider adds its own when a configured URL has none). A bare code — none of `?`, `&`, `=`, `/`, `#` — is taken as
  * typed. Anything else is a redirected URL, parsed with `URL`: its query
  * must carry the expected `state` exactly once, and its code is its query's
  * one `code` (never a fragment's).

@@ -1,6 +1,6 @@
 /**
  * A logger is the consumer's own code: what its methods answer is adopted
- * like an await would adopt it (the user's decision, 2026-10-07). A rejecting
+ * like an await would adopt it. A rejecting
  * Promises/A+ thenable, a `then` that throws and a rejecting native promise
  * leave no `unhandledRejection`, change no outcome, and are never awaited.
  * Run under plain node in a child process with an unhandled-rejection

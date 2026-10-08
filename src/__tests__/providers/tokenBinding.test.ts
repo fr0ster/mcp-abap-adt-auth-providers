@@ -1,5 +1,5 @@
 /**
- * A bound token at the resource (spec §4): before a token is presented —
+ * A bound token at the resource: before a token is presented —
  * `establish()` and `authorize()` — the provider reads what the token says
  * about its binding and answers by the table, one test per row.
  *
@@ -205,7 +205,7 @@ describe('readBinding', () => {
   });
 });
 
-describe('the binding table (spec §4)', () => {
+describe('the binding table', () => {
   // ---- unbound
   it('unbound, no material: establish presents nothing, Ok; authorize Bearer, Ok', async () => {
     const { provider } = seeded(UNBOUND);
@@ -589,7 +589,7 @@ describe('a held token bound to another certificate, one pinned: renewed like an
         RENEWED_REFUSAL,
       );
     }
-    // getTokens() answers the remembered refusal too (spec §6c.7); the
+    // getTokens() answers the remembered refusal too; the
     // token stays held, committed.
     const thrown = await provider.getTokens().then(
       () => undefined,
@@ -622,7 +622,7 @@ describe('a held token bound to another certificate, one pinned: renewed like an
     await provider.authorize(t.requestTarget);
     expect(requests).toHaveLength(1);
     // The new token is still bound elsewhere: what is presented did not
-    // change, so rejected() answers that refusal (spec §6c.7).
+    // change, so rejected() answers that refusal.
     expect(
       wordsOf(
         await provider.rejected({

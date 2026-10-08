@@ -1,5 +1,5 @@
 /**
- * The shipped persistence strategy (spec §6c.8): the guarantees `onTokens`
+ * The shipped persistence strategy: the guarantees `onTokens`
  * and the provider's refresh-token disposition gave before 6.0.0, kept here
  * for a store that falls back to its stored refresh token when a write
  * carries none — as the broker's does. The provider builds none of its own
@@ -91,7 +91,7 @@ function unusable(fields: readonly ('onWriteFailure' | 'write')[]): never {
 }
 
 /**
- * A persistence strategy over `write` (spec §6c.8):
+ * A persistence strategy over `write`:
  *
  * - **One write at a time, in report order.** Every report — a detached one
  *   too, which the provider does not await — is processed only after the

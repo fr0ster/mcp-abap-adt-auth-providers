@@ -1,5 +1,5 @@
 /**
- * How a test reads a SAML refusal (spec Appendix B): the thrown value is an
+ * How a test reads a SAML refusal: the thrown value is an
  * `AuthProviderFailure` whose minted `saml-assertion` error names its `rule`,
  * the `check` fixed by that rule, the rule's own words, and the one
  * diagnostic its row permits — or none.
@@ -17,7 +17,7 @@ import type {
   SamlAssertionError,
 } from '@mcp-abap-adt/interfaces-auth';
 
-/** Each rule's check (Appendix B's first column). */
+/** Each rule's check. */
 export const RULE_CHECK: Readonly<Record<AssertionRule, AssertionCheck>> = {
   doctype: 'document',
   'not-xml': 'document',

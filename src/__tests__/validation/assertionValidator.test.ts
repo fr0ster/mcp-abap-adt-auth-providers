@@ -475,7 +475,7 @@ describe("the signed-Response validator (Saml2PureProvider's default)", () => {
     );
   });
 
-  // The order (Task 24 ruling): under the signed-Response validator Status is
+  // The order: under the signed-Response validator Status is
   // read once the Response is the signed element and before any Assertion
   // is counted, so a declined login — no Assertion, as Keycloak sends it —
   // refuses `declined` with its status; a Success with no Assertion is still
@@ -1578,7 +1578,7 @@ describe("the signed-Response validator (Saml2PureProvider's default)", () => {
 
   // The fixed order: each row fails two adjacent sub-rules, and only the
   // earlier one may be reported.
-  // Each row: the order, the confirmation, the candidate fact (Appendix B's
+  // Each row: the order, the confirmation, the candidate fact (the
   // BEARER_CANDIDATE_REASONS) and its words, 5.4.2's verbatim.
   const FIRST_FAILED: Array<
     [string, string, Readonly<Record<string, unknown>>, string]
@@ -1675,7 +1675,7 @@ describe("the signed-Response validator (Saml2PureProvider's default)", () => {
     it('refuses a replay at +200 s when a later confirmation still qualifies', async () => {
       // Every time from the one `t0` (not `iso`, which reads the clock
       // again): a millisecond boundary crossed between two reads made the
-      // `expiresAt` bound below fail under load (Task 26 fix round 1).
+      // `expiresAt` bound below fail under load.
       const t0 = Date.now();
       const at = (offsetMs: number) => new Date(t0 + offsetMs).toISOString();
       const payload = encode(
@@ -1797,10 +1797,10 @@ describe("the signed-Response validator (Saml2PureProvider's default)", () => {
     );
   });
 
-  // Diagnostics (spec §3.3, §5.3): a document value a rule may show is
+  // Diagnostics: a document value a rule may show is
   // admitted by the builder or dropped — never quoted into the words. The
-  // characters that made quoting necessary (a newline smuggled in as &#10;)
-  // are refused, not escaped (L8), and the error is still minted.
+  // characters that made quoting necessary (a newline smuggled in as &#10)
+  // are refused, not escaped, and the error is still minted.
 
   // Read before any signature is verified, so attacker-chosen.
   it('drops a duplicated ID carrying a newline, and still refuses', async () => {
@@ -1879,7 +1879,7 @@ describe("the signed-Response validator (Saml2PureProvider's default)", () => {
     );
   });
 
-  // The plan's two cases (Task 24): an attacker Issuer with &#10; is dropped
+  // Two cases: an attacker Issuer with &#10; is dropped
   // and the error minted; an 80-character Issuer is cut at 64 code points.
   it('drops an untrusted issuer carrying a newline, and still refuses', async () => {
     const error = await expectSamlRejection(
@@ -2102,7 +2102,7 @@ describe("the signed-Response validator (Saml2PureProvider's default)", () => {
     }
   });
 
-  // F8 (spec A.6): the verification walk refuses at its own sites; anything
+  // The verification walk refuses at its own sites; anything
   // else it throws — never by design, so forced here — is the signature's
   // malformation, with nothing of what was thrown.
   it('F8: refuses anything else the verification walk throws as signature-malformed, saying nothing of it', async () => {

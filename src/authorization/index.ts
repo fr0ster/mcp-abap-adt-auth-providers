@@ -1,5 +1,5 @@
 /**
- * Authorization by composition (spec §6d): the parts — presentations,
+ * Authorization by composition: the parts — presentations,
  * transports, protocols — and the composer that joins them.
  */
 

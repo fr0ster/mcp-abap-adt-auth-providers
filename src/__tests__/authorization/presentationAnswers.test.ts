@@ -1,12 +1,10 @@
 /**
- * What a presentation answers is the consumer's own code (Task 29 review,
- * item 1, the user's decision 2026-10-07; spec §6d.5): adopted as `await`
+ * What a presentation answers is the consumer's own code: adopted as `await`
  * would adopt it, so a native promise or any Promises/A+ thenable that
  * rejects (or whose `then` throws) is a presentation failure, and one that
  * never settles is a presentation that succeeded. A failure ends nothing:
  * the login waits for its answer (here the transport's, after 200 ms), and
- * nothing raises `unhandledRejection`. Also (Task 23's controller
- * addition): a transport whose `answer()` rejects at once, the
+ * nothing raises `unhandledRejection`. Also: a transport whose `answer()` rejects at once, the
  * presentation throwing synchronously, leaves no unhandled rejection. Run
  * under plain node in a child process, bounded by the test.
  */

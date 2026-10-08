@@ -1,5 +1,5 @@
 /**
- * The shipped browsers (spec §6d): six `IBrowser` factories, each ONE fixed
+ * The shipped browsers: six `IBrowser` factories, each ONE fixed
  * launch — no platform switch, no fallback chain, no platform check. The
  * consumer picks the one for its machine; run on another OS a launch simply
  * fails to start and rejects. Every launch is a program started with an

@@ -42,7 +42,7 @@ export function clientSecretBasic(
   // Read once as own data: a hostile object throws nothing of its own.
   const { encoding } = ownOptions<Partial<ClientSecretBasicOptions>>(options);
   if (!ENCODINGS.has(encoding)) {
-    // E19: the allowed values are named by their set, never the value given.
+    // The allowed values are named by their set, never the value given.
     throw misconfigured(
       authError.configuration({
         case: 'basic-encoding-missing',
@@ -55,7 +55,7 @@ export function clientSecretBasic(
   return {
     authenticate: async (draft) => {
       if (!form && draft.clientId.includes(':')) {
-        // A7: refused before anything is sent.
+        // Refused before anything is sent.
         throw new AuthProviderFailure(
           authError['client-authentication']({
             problem: 'basic-client-id-colon',

@@ -24,7 +24,7 @@
  *   (`createSignedResponseValidator`) accepts against the ID it minted.
  *   Turning it into session cookies is the consumer's cookieProvider and
  *   needs a real SAP system.
- * - A declined login (plan Task 24, spec §12's "not measured"): Keycloak
+ * - A declined login: Keycloak
  *   answers a passive AuthnRequest with no session by declining it, and the
  *   provider refuses with the `declined` rule — which StatusCode Keycloak
  *   sends is measured here, and whether it arrives as a registered fact.
@@ -308,7 +308,7 @@ describeBoth('SAML providers with Keycloak as the identity provider', () => {
 
   // Validation passes here — the assertion answers the ID the provider minted
   // — so the refusal below is UAA's. The log names only the safe facts, and
-  // the thrown failure carries no body (D3).
+  // the thrown failure carries no body.
   it('Saml2BearerProvider: UAA refuses the answer to the provider’s own AuthnRequest (InResponseTo)', async () => {
     const failures: unknown[] = [];
     const logger = {
@@ -413,7 +413,7 @@ describeBoth('SAML providers with Keycloak as the identity provider', () => {
     );
   });
 
-  // Measured (Task 24, 2026-10-06): with no session and IsPassive="true",
+  // Measured (2026-10-06): with no session and IsPassive="true",
   // Keycloak must not show a login page, so it declines in a signed
   // Response — with no Assertion, top-level StatusCode Responder, second
   // level NoPassive. The signed-Response validator reads Status before it

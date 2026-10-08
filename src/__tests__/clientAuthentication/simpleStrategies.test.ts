@@ -53,7 +53,7 @@ describe('clientSecretBasic', () => {
         () => undefined,
         (error: unknown) => error,
       );
-    // A7 (Task 26): an AuthProviderFailure, no longer BasicClientIdError.
+    // An AuthProviderFailure, no longer BasicClientIdError.
     expect(isAuthProviderFailure(failure)).toBe(true);
     expect(String((failure as Error).message)).not.toContain('my:client');
     expect(wordsOf(refusedWith(failure, 'token-request'))).toEqual({
@@ -83,7 +83,7 @@ describe('clientSecretBasic', () => {
       } catch (error) {
         thrown = error;
       }
-      // E19 (Task 26): the case, the field and the allowed set.
+      // The case, the field and the allowed set.
       expect(readFailure(thrown, 'unfamiliar-error')).toMatchObject({
         kind: 'configuration',
         facts: {

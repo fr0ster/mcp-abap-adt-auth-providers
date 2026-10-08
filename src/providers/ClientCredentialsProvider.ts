@@ -58,7 +58,7 @@ export class ClientCredentialsProvider extends BaseTokenProvider {
       missingFields.push('clientSecret');
     }
     if (missingFields.length > 0) {
-      // E1: the names of what is missing, never a value.
+      // The names of what is missing, never a value.
       throw requiredFieldsMissing(missingFields);
     }
   }

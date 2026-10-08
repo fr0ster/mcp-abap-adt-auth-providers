@@ -53,7 +53,7 @@ async function prepareWith(
   grant: URLSearchParams,
 ): Promise<PreparedTokenRequest> {
   if (!clientId) {
-    // E11: nothing is sent.
+    // Nothing is sent.
     throw misconfigured(
       authError.configuration({
         case: 'client-id-required-with-client-authentication',
@@ -87,7 +87,7 @@ function sendAsToday(
   }
   // A redirect would re-send the assertion or the refresh token, and the
   // secret: never followed.
-  // The attempt's abort cuts the exchange; the refresh passes none (§6b).
+  // The attempt's abort cuts the exchange; the refresh passes none.
   return axios.post(tokenUrl, params.toString(), {
     headers,
     maxRedirects: 0,
@@ -106,7 +106,7 @@ interface TokenResponseBody {
 /** What one SAML request is, beside its endpoint and grant. */
 interface SamlRequest {
   readonly operation: Operation;
-  /** H6: the error line the site writes for any failure of its request. */
+  /** The error line the site writes for any failure of its request. */
   readonly failed: string;
   readonly clientId: string | undefined;
   readonly clientSecret: string | undefined;
@@ -115,14 +115,14 @@ interface SamlRequest {
   readonly prepared: PreparedTokenRequest | undefined;
   /**
    * `attempt` for the exchange, which carries the attempt's signal;
-   * `refresh` for the refresh, which never does (spec §6b).
+   * `refresh` for the refresh, which never does.
    */
   readonly kind: 'attempt' | 'refresh';
 }
 
 /**
  * Sends one SAML request and maps the answer. A failed request is logged at
- * `error` as `logFields` of its failure (H6) — inside `logQuietly`, so a
+ * `error` as `logFields` of its failure — inside `logQuietly`, so a
  * logger that throws never replaces the failure — and rethrown as it is; a
  * `2xx` without `access_token` is `rejectMissingToken`'s.
  */

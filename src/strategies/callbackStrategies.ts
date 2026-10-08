@@ -1,5 +1,5 @@
 /**
- * The browser compositions (spec §6d.7): a loopback listener on today's
+ * The browser compositions: a loopback listener on today's
  * port, the URL shown or opened, and the flow's protocol. Each returns
  * `composeAuthorization(…)`; the parts have no default — these names are
  * where today's values live.
@@ -67,7 +67,7 @@ export interface CallbackStrategyOptions {
   remoteHint?: ((redirectUri: string) => string) | undefined;
   /**
    * Ends every login of this strategy, beside the request's own signal (the
-   * attempt's, spec §6b): either one aborting ends it `aborted`. There is no
+   * attempt's): either one aborting ends it `aborted`. There is no
    * other bound — compose `AbortSignal.timeout(ms)` for a deadline.
    */
   signal?: AbortSignal | undefined;

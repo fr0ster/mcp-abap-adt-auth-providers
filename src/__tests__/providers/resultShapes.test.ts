@@ -112,7 +112,7 @@ function answering<T>(
 
 /**
  * The protected moments, reached the way the base class reaches them: the
- * login with an attempt (Task 22a: its signal and its exclusive section),
+ * login with an attempt (its signal and its exclusive section),
  * the refresh with the refresh token the base read.
  */
 interface Moments {
@@ -381,7 +381,7 @@ describe('token result, through getTokens()', () => {
     expect(Object.hasOwn(cached, 'refreshToken')).toBe(true);
     expect(cached.refreshToken).toBeUndefined();
 
-    // Spec §6c.1 (4): the held refresh token or none, nothing more — no
+    // The held refresh token or none, nothing more — no
     // refresh-token disposition on any result.
     expect(Object.hasOwn(fresh, 'refreshTokenDisposition')).toBe(false);
     expect(Object.hasOwn(cached, 'refreshTokenDisposition')).toBe(false);

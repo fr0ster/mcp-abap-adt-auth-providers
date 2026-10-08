@@ -304,13 +304,13 @@ describe('SSO Providers', () => {
       undefined,
       // No client authentication configured: none given to the site.
       undefined,
-      // The provider's authDebug and grant, threaded to the site (Task 21),
-      // and the attempt's signal — a login's request carries it (spec §6b).
+      // The provider's authDebug and grant, threaded to the site,
+      // and the attempt's signal — a login's request carries it.
       {
         authDebug: false,
         grant: 'authorization_code_pkce',
         signal: expect.any(AbortSignal),
-        // The login step's dispatch notice (spec §6c.5).
+        // The login step's dispatch notice.
         dispatched: expect.any(Function),
       },
     );
@@ -876,7 +876,7 @@ describe('SSO Providers', () => {
       ),
     });
 
-    // E14 (Task 26): a configuration failure naming the endpoint.
+    // A configuration failure naming the endpoint.
     const thrown = await provider.getTokens().catch((error: unknown) => error);
     expect(configurationOf(thrown)).toMatchObject({
       case: 'oidc-endpoint-missing',
@@ -931,12 +931,12 @@ describe('SSO Providers', () => {
       // No client authentication configured: none given to the site.
       undefined,
       // The exchange is the login's request: it carries the attempt's
-      // signal (spec §6b); the refresh below gets none.
+      // signal; the refresh below gets none.
       {
         authDebug: false,
         grant: 'saml2_bearer',
         signal: expect.any(AbortSignal),
-        // The login step's dispatch notice (spec §6c.5).
+        // The login step's dispatch notice.
         dispatched: expect.any(Function),
       },
     );
@@ -963,7 +963,7 @@ describe('SSO Providers', () => {
           // `authorize` above never calls the builder either.
           idpInitiated: true,
           authorization,
-          // The validator is resolved at construction (Task 11); these cases
+          // The validator is resolved at construction; these cases
           // are about the refresh path, not validation, and the fixture
           // payload above is not signed.
           assertionValidator: acceptingSamlValidator(),
@@ -995,7 +995,7 @@ describe('SSO Providers', () => {
         {
           authDebug: false,
           grant: 'saml2_bearer',
-          // The refresh step's dispatch gate (spec §6c.5).
+          // The refresh step's dispatch gate.
           dispatched: expect.any(Function),
         },
       );
@@ -1100,8 +1100,8 @@ describe('SSO Providers', () => {
     const tokens = await provider.getTokens();
     expect(tokens.authorizationToken).toBe('SAP_SESSION=abc123');
     expect(tokens.tokenType).toBe('saml');
-    // `parseSamlNotOnOrAfter` is gone (Task 9); `expiresAt` now comes from
-    // `ValidatedAssertion`, not an unverified regex (Task 11).
+    // `parseSamlNotOnOrAfter` is gone; `expiresAt` now comes from
+    // `ValidatedAssertion`, not an unverified regex.
     expect(tokens.expiresAt).toBe(validatedExpiresAt.getTime());
   });
 
@@ -1165,7 +1165,7 @@ describe('SSO Providers', () => {
       // Never reached: the ACS mismatch is thrown before validate() would run.
       assertionValidator: acceptingSamlValidator(),
     });
-    // E8 (Task 26): the two addresses are diagnostics, not words (L9).
+    // The two addresses are diagnostics, not words.
     const thrown = await provider.getTokens().catch((error: unknown) => error);
     expect(configurationOf(thrown)).toMatchObject({
       case: 'saml-acs-mismatch',
@@ -1207,7 +1207,7 @@ describe('SSO Providers', () => {
       // Never reached: the ACS mismatch is thrown before validate() would run.
       assertionValidator: acceptingSamlValidator(),
     });
-    // E8 (Task 26): refused inside the builder; the addresses as diagnostics.
+    // Refused inside the builder; the addresses as diagnostics.
     const thrown = await provider.getTokens().catch((error: unknown) => error);
     expect(configurationOf(thrown)).toMatchObject({
       case: 'saml-acs-mismatch',
@@ -1296,7 +1296,7 @@ describe('OidcBrowserProvider strategy lifecycle', () => {
       authorization: supplied,
     });
 
-    // L3 (spec §6, Task 22): the consumer's own error never comes back — an
+    // The consumer's own error never comes back — an
     // AuthProviderFailure holding the classified error, without its message.
     const failed = provider.getTokens();
     await expect(failed).rejects.toBeInstanceOf(AuthProviderFailure);
@@ -1367,7 +1367,7 @@ describe('SAML strategy lifecycle', () => {
       assertionValidator: acceptingSamlValidator(),
     });
 
-    // L3 (spec §6, Task 22): the consumer's own error never comes back — an
+    // The consumer's own error never comes back — an
     // AuthProviderFailure holding the classified error, without its message.
     const failed = provider.getTokens();
     await expect(failed).rejects.toBeInstanceOf(AuthProviderFailure);
@@ -1377,7 +1377,7 @@ describe('SAML strategy lifecycle', () => {
 });
 
 /**
- * Task 11: both providers run `assertionValidator` on every login. `idpCertificates`
+ * Both providers run `assertionValidator` on every login. `idpCertificates`
  * and `idpEntityId` no longer configure the provider directly — they belong to
  * building a validator (`SamlTrust`), assembled by the static factories — so a
  * missing one is now a fault at that assembly, surfacing before a provider is
@@ -1464,8 +1464,7 @@ describe('Saml2PureProvider assertion validation', () => {
       cookieProvider,
     });
 
-    // A custom validator's throw is classified with `validating-assertion`
-    // (spec A.8): its own error and message are not handed back (L3).
+    // A custom validator's throw is classified with `validating-assertion`: its own error and message are not handed back.
     const thrown = await rejectionOf(provider.getTokens());
     expect(thrown).toBeInstanceOf(AuthProviderFailure);
     expect((thrown as AuthProviderFailure).error).toMatchObject({
@@ -1745,7 +1744,7 @@ describe('Saml2 provider default validators', () => {
  * unnoticed. `toMatchObject` would miss extra fields altogether.
  */
 describe('Saml2PureProvider validation context', () => {
-  it('passes exactly the context the spec requires', async () => {
+  it('passes exactly the context required', async () => {
     const redirectUri = 'http://localhost:61001/callback';
     const payload = Buffer.from('<Assertion/>', 'utf8').toString('base64');
     const logger: ILogger = {
@@ -1805,7 +1804,7 @@ describe('Saml2BearerProvider validation context', () => {
     jest.clearAllMocks();
   });
 
-  it('passes exactly the context the spec requires', async () => {
+  it('passes exactly the context required', async () => {
     mockExchangeSaml.mockResolvedValue({ accessToken: 'AT', expiresIn: 900 });
 
     const redirectUri = 'http://localhost:61001/callback';
@@ -1923,7 +1922,7 @@ describe('Saml2 provider construction faults', () => {
     },
   );
 
-  // E5 (Task 26): a configuration failure naming idpEntityId.
+  // A configuration failure naming idpEntityId.
   it('Saml2PureProvider refuses construction when idpEntityId is missing (E5)', () => {
     const error = constructionError(() =>
       Saml2PureProvider.inBrowser(
@@ -1940,7 +1939,7 @@ describe('Saml2 provider construction faults', () => {
     });
   });
 
-  // E5 (Task 26): a configuration failure naming idpEntityId.
+  // A configuration failure naming idpEntityId.
   it('Saml2BearerProvider refuses construction when idpEntityId is missing (E5)', () => {
     const error = constructionError(() =>
       Saml2BearerProvider.inBrowser(

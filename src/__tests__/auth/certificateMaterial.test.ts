@@ -100,7 +100,7 @@ describe('an expired client certificate', () => {
         key: read('client.key'),
       }),
     );
-    // A4 (Task 26): a client-certificate failure, no longer the class.
+    // A client-certificate failure, no longer the class.
     expect(isAuthProviderFailure(e)).toBe(true);
     expect(wordsOf(refusedWith(e))).toEqual(EXPIRED);
   });
@@ -149,7 +149,7 @@ describe('certificateThumbprint', () => {
 
   it('throws a client-certificate failure for incomplete material, with its words (A4)', () => {
     const e = thrown(() => certificateThumbprint({ cert: read('client.crt') }));
-    // A4 (Task 26): a client-certificate failure, no longer the class.
+    // A client-certificate failure, no longer the class.
     expect(isAuthProviderFailure(e)).toBe(true);
     expect(wordsOf(refusedWith(e))).toEqual({
       ok: false,
@@ -167,7 +167,7 @@ describe('certificateThumbprint', () => {
         passphrase: 'sEcReT-wrong',
       }),
     );
-    // A4 (Task 26): a client-certificate failure, no longer the class.
+    // A client-certificate failure, no longer the class.
     expect(isAuthProviderFailure(e)).toBe(true);
     const out = refusedWith(e);
     expect(wordsOf(out)).toEqual({
@@ -184,7 +184,7 @@ describe('certificateThumbprint', () => {
         key: read('client.key'),
       }),
     );
-    // A4 (Task 26): a client-certificate failure, no longer the class.
+    // A client-certificate failure, no longer the class.
     expect(readFailure(garbage, 'unfamiliar-error')).toMatchObject({
       kind: 'client-certificate',
       facts: { problem: 'unusable' },
@@ -192,7 +192,7 @@ describe('certificateThumbprint', () => {
   });
 });
 
-// B14 (Task 27: the class is gone): a material getter throwing a look-alike
+// The class is gone: a material getter throwing a look-alike
 // of the former CertificateMaterialError — its flags and its own `words` —
 // is a foreign throw: `client-certificate` `unusable`, its text nowhere.
 describe('checkCertificateMaterial and a material getter throwing a look-alike', () => {

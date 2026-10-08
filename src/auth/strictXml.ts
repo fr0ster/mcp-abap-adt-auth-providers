@@ -8,8 +8,8 @@
  * back a repaired document instead of failing. Throwing from `onError` turns
  * every level into a refusal, silently.
  *
- * What is thrown is the `not-xml` rule (spec A.6, F7) and nothing of the
- * parser's message, which quotes the document (L7). A caller with a rule of
+ * What is thrown is the `not-xml` rule and nothing of the
+ * parser's message, which quotes the document. A caller with a rule of
  * its own — the bearer conversion's `payload-not-well-formed` — catches it
  * and refuses with that rule instead.
  */
@@ -18,7 +18,7 @@ import { authError } from '@mcp-abap-adt/auth-errors';
 import { DOMParser, type Document } from '@xmldom/xmldom';
 import { refuse } from '../validation/samlRefusal';
 
-/** F7: the `not-xml` rule, thrown. */
+/** The `not-xml` rule, thrown. */
 function notXml(): never {
   return refuse(
     authError['saml-assertion']({ rule: 'not-xml', check: 'document' }),

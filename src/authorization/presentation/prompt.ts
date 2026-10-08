@@ -1,5 +1,5 @@
 /**
- * The prompt of the authorization URL (C8): the URL goes to stderr only —
+ * The prompt of the authorization URL: the URL goes to stderr only —
  * never through `ILogger`, never to stdout — and only as `promptableUrl`
  * admits it; the logger gets the fixed line "the authorization URL was
  * shown". Where the channel waits and how a user elsewhere reaches it carry

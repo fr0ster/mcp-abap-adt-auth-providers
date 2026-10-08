@@ -82,8 +82,7 @@ describe('a Basic header is built only where its secrets are known', () => {
 });
 
 /**
- * Shape rule 8 (spec §8.2, C12; enforced again by the shape-check script in
- * Task 28), scoped to `src/auth` and `src/providers` only: outside
+ * Shape rule 8 (enforced again by the shape-check script), scoped to `src/auth` and `src/providers` only: outside
  * `legacyBasic`, no `Basic ` header value (any case, at the start of a
  * string or template) and no base64 encoding of a value whose expression
  * names a secret. `clientSecretBasic` lives outside the scope;
@@ -127,7 +126,7 @@ describe('shape rule 8 in src/auth and src/providers', () => {
 });
 
 /**
- * `TokenEndpointError` is gone with the classes (Task 27, spec §6): neither
+ * `TokenEndpointError` is gone with the classes: neither
  * the class nor a construction of it is anywhere in src.
  */
 describe('TokenEndpointError', () => {

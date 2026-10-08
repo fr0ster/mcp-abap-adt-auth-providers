@@ -1,9 +1,9 @@
 /**
- * Appendix A.3 (K1–K17) and A2, A8, A9 of the error-contract spec: every
+ * Every
  * end of an interactive login is an `AuthProviderFailure` of
  * `interactive-login`, thrown by its real producer here — kind, facts and
- * words (verbatim) per row. K6 is Task 26's; K7 and K9 are gone with the
- * built-in timeout (§6a) — their type tests are in
+ * words (verbatim) per row. The port validation is a `configuration` case; the timeout options are gone with the
+ * built-in timeout — their type tests are in
  * noLoginTimeout.typecheck.ts.
  */
 
@@ -38,7 +38,7 @@ import { startTokenServer, type TokenServer } from '../helpers/attemptHarness';
 import { recordingBrowser } from '../helpers/recordingBrowser';
 
 const PORT = 7877;
-/** The state every URL here carries: the code protocols bind by it (C7). */
+/** The state every URL here carries: the code protocols bind by it. */
 const STATE = 'S1';
 const REGISTERED = 'http://localhost:61001/callback';
 
@@ -76,7 +76,7 @@ function portIsFree(port: number): Promise<boolean> {
 }
 
 /**
- * Runs a login whose launcher fails: it keeps waiting (Task 30h), so the
+ * Runs a login whose launcher fails: it keeps waiting, so the
  * test's own signal ends it, once the prompt has been shown.
  */
 async function endedByAbort(
@@ -246,7 +246,7 @@ describe('A.3 — browser login rows', () => {
     });
   });
 
-  // Task 30h, generalised (spec §6d.5, C8): a presentation that fails is no
+  // A presentation that fails is no
   // end of the login — one fixed-words line, and the consumer's own UI
   // having failed, no URL anywhere; the login waits — here the test's own
   // signal ends it.

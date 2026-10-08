@@ -88,7 +88,7 @@ function valueLine(line: string): { name: string; data: string } | undefined {
 
 /**
  * The data of value `name` in `reg query` output, trimmed — a value ending in
- * spaces or a CR/LF would otherwise reach a candidate path (RF4).
+ * spaces or a CR/LF would otherwise reach a candidate path.
  */
 export function parseRegQuery(
   output: string,

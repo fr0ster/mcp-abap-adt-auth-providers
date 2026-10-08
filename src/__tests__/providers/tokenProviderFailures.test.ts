@@ -1,10 +1,10 @@
 /**
- * Token-provider failures (spec §6 "Where the throw is built", §6b, Task 22):
+ * Token-provider failures:
  * `getTokens()` / `refreshTokens()` throw an `AuthProviderFailure` and
  * nothing else; a refused refresh token is discarded explicitly — reported
  * `refresh-token-discarded`, so `refreshStatePersistence` writes `null`; the
  * remembered refusal of rule 8 is
- * the very error the renewal produced. Rows A10, D7, D8, H1, H2; L3.
+ * the very error the renewal produced.
  */
 
 import { readdirSync, readFileSync, statSync } from 'node:fs';
@@ -521,7 +521,7 @@ describe('D8 / A10: a provider without a refresh grant or token throws credentia
       const error = (thrown as AuthProviderFailure).error;
       expect(error.kind).toBe('credential-refused');
       expect(error.facts).toEqual({ credential: 'refresh-token' });
-      // A10: 5.4.2's RefreshError words, verbatim.
+      // 5.4.2's RefreshError words, verbatim.
       expect(error.reason).toBe('the refresh token was refused');
       expect(error.hint).toBe('log in again');
       expect(mockedAxios).not.toHaveBeenCalled();
@@ -618,7 +618,7 @@ describe('H1 / H2: the refresh and persistence failure lines carry logFields', (
   });
 });
 
-describe('a refused refresh token is discarded explicitly (spec §6c.6, §6c.8)', () => {
+describe('a refused refresh token is discarded explicitly', () => {
   it('a refused refresh: a write of the held access token and null, before the login', async () => {
     const p = new TestProvider();
     await p.getTokens(); // T1 / R1, replace
@@ -692,7 +692,7 @@ describe('a refused refresh token is discarded explicitly (spec §6c.6, §6c.8)'
     expect(p.dispositions()).toEqual(['replace', 'clear', 'replace']);
   });
 
-  it('a clearing report that cannot be built (getAuthType() throwing): the renewal fails with heldGrant()’s own error, not persisting-tokens, and no login (review M3)', async () => {
+  it('a clearing report that cannot be built (getAuthType() throwing): the renewal fails with heldGrant()’s own error, not persisting-tokens, and no login', async () => {
     let broken = false;
     class Breaking extends TestProvider {
       protected override getAuthType(): OAuth2GrantType {
@@ -738,9 +738,9 @@ describe('a refused refresh token is discarded explicitly (spec §6c.6, §6c.8)'
     expect(p.dispositions()).toEqual(['keep', 'replace', 'keep']);
   });
 
-  // Spec §6c.1 (4): what getTokens() returns carries the held refresh token
+  // What getTokens() returns carries the held refresh token
   // or none, nothing more — no disposition; the key is kept when absent.
-  it('§6c.1: a renewal returns the result with the held refresh token, and no disposition', async () => {
+  it('a renewal returns the result with the held refresh token, and no disposition', async () => {
     const p = new TestProvider();
     const login = await p.getTokens();
     expect(login.refreshToken).toBe('R1');
@@ -755,7 +755,7 @@ describe('a refused refresh token is discarded explicitly (spec §6c.6, §6c.8)'
     expect(written).toEqual(['R1', 'R2']);
   });
 
-  it('§6c.1: a cache hit carries the usable refresh token held, or none', async () => {
+  it('a cache hit carries the usable refresh token held, or none', async () => {
     const withRefresh = new TestProvider();
     await withRefresh.getTokens();
     const cached = await withRefresh.getTokens();
@@ -772,7 +772,7 @@ describe('a refused refresh token is discarded explicitly (spec §6c.6, §6c.8)'
     expect(Object.hasOwn(hit, 'refreshTokenDisposition')).toBe(false);
   });
 
-  // Task 27 review: a cache hit names its grant through readGrant, like
+  // A cache hit names its grant through readGrant, like
   // every other path — getAuthType() read once, a throw a minted failure.
   it('a cache hit reads getAuthType() once, through readGrant; a throwing one is an unknown failure', async () => {
     let calls = 0;
@@ -844,7 +844,7 @@ describe('a refused refresh token is discarded explicitly (spec §6c.6, §6c.8)'
   });
 });
 
-// ---- Rule 8's remembered refusal, on kinds (CLAUDE.md rule 8; C15).
+// ---- Rule 8's remembered refusal, on kinds (CLAUDE.md rule 8).
 
 const dir = join(__dirname, '..', 'fixtures', 'certificates');
 const readFixture = (name: string) => readFileSync(join(dir, name));
@@ -922,7 +922,7 @@ describe('rule 8 on kinds: the remembered refusal', () => {
     expect(first.kind).toBe('token-binding');
     expect(first.facts).toEqual({ problem: 'renewed-bound-elsewhere' });
     const again = refusalOf(await provider.authorize(t.requestTarget));
-    // C15: the same minted error, not a copy.
+    // The same minted error, not a copy.
     expect(again).toBe(first);
     expect(isMinted(again)).toBe(true);
     expect(grants).toEqual(['refresh_token']);
@@ -942,7 +942,7 @@ describe('rule 8 on kinds: the remembered refusal', () => {
       oauthError: 'invalid_grant',
     });
     expect(grants).toEqual(['refresh_token', 'password']);
-    // C15: authorize() answers that very object, minted, not a copy.
+    // authorize() answers that very object, minted, not a copy.
     for (let i = 0; i < 2; i += 1) {
       const refusal = refusalOf(await provider.authorize(t.requestTarget));
       expect(refusal).toBe(produced);
@@ -950,14 +950,14 @@ describe('rule 8 on kinds: the remembered refusal', () => {
     }
     // getTokens() throws the remembered error without renewing again: it
     // reaches the strategy as lastRenewal, and refreshThenLogin() stops
-    // with it (spec §6c.4, §6c.7) — the very object.
+    // with it — the very object.
     const again = await rejectionOf(provider.getTokens());
     expect((again as AuthProviderFailure).error).toBe(produced);
     expect(grants).toEqual(['refresh_token', 'password']);
     expect(t.request.headers).toEqual({});
   });
 
-  it('a renewal that throws a foreign value while the token is held: remembered with its classified error — the very one getTokens() threw (C15, Task 29)', async () => {
+  it('a renewal that throws a foreign value while the token is held: remembered with its classified error — the very one getTokens() threw', async () => {
     const original = new Error(MARKER);
     class Throwing extends OidcPasswordProvider {
       protected override async performLogin(): Promise<ITokenResult> {
@@ -1009,7 +1009,7 @@ describe('rule 8 on kinds: the remembered refusal', () => {
     expect(grants.length).toBe(before + 1);
   });
 
-  it('prepare() renews a remembered token once more (moment prepare, spec §6c.4); its refusal is then the remembered one', async () => {
+  it('prepare() renews a remembered token once more (moment prepare); its refusal is then the remembered one', async () => {
     refusingAll();
     const provider = rotating({ refreshToken: 'R1' });
     const t = recordingTargets();
@@ -1049,8 +1049,7 @@ describe('rule 8 on kinds: the remembered refusal', () => {
       const produced = (thrown as AuthProviderFailure).error;
       expect(produced.kind).toBe('client-certificate');
       expect(produced.facts).toEqual({ problem: 'expired' });
-      // Pinned material is checked before the strategy is asked (spec
-      // §6c.5 step 1), so each renewal refuses it afresh: the same error,
+      // Pinned material is checked before the strategy is asked, so each renewal refuses it afresh: the same error,
       // minted again, and still nothing sent.
       for (let i = 0; i < 2; i += 1) {
         expect(
@@ -1066,12 +1065,12 @@ describe('rule 8 on kinds: the remembered refusal', () => {
   });
 });
 
-describe('L3 total (Task 27): every throw is an AuthProviderFailure, the former classes gone', () => {
-  // The 5.x classes are deleted (spec §6): nothing passes through as it is
-  // any more (`isUnmintedRung` and the A3/A11/A12 pass-through are gone), and
+describe('every throw is an AuthProviderFailure, the former classes gone', () => {
+  // The 5.x classes are deleted: nothing passes through as it is
+  // any more (`isUnmintedRung` and the pass-through are gone), and
   // `classify` alone reads a thrown value — never its class name, its
-  // `missingFields` (L12) or its `check`: a look-alike of a former class is
-  // `unknown` with the operation and the grant (L11, A13).
+  // `missingFields` or its `check`: a look-alike of a former class is
+  // `unknown` with the operation and the grant.
   class ValidationError extends Error {
     readonly missingFields = ['clientId', MARKER];
     constructor() {
@@ -1311,7 +1310,7 @@ const withLogger = <T>(provider: T, logger: unknown): T => {
   return provider;
 };
 
-describe('a throwing logger changes nothing on the token paths (spec §6 guards)', () => {
+describe('a throwing logger changes nothing on the token paths (guarded)', () => {
   it('H1: a refused refresh with a throwing logger still clears, logs in, and holds no refused refresh token', async () => {
     const p = withLogger(new TestProvider(), throwingLogger());
     p.login.mockResolvedValueOnce(result('T1', 'R0'));

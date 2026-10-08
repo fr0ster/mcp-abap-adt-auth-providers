@@ -1,7 +1,7 @@
 /**
- * The authorization code protocols (spec §6d.2, §6d.3.2): `oauthCode` (the
+ * The authorization code protocols: `oauthCode` (the
  * code) and `oidcCode` (`{ code, state }`). Both bind a redirect by the
- * `state` of the URL they were given — always there (C7: a provider adds
+ * `state` of the URL they were given — always there (a provider adds
  * its own to a configured URL that has none) — compared in constant time,
  * before anything else of the answer is read: a forged `?error=` stops at
  * the binding too.
@@ -97,7 +97,7 @@ function codeProtocol<T>(
     callbackMethods: Object.freeze(['GET'] as const),
     paste: CODE_WORDS,
     begin(authorizationUrl: string): AnswerJudge<T> {
-      // C7: the URL always carries one `state`; one that does not parse,
+      // The URL always carries one `state`; one that does not parse,
       // carries none, or carries it repeated or empty binds nothing.
       const expected = urlState(authorizationUrl);
       if (typeof expected !== 'string') throw unreadableUrl();

@@ -1,5 +1,5 @@
 /**
- * Which `Host` a listener answers for (spec §6a1, §6d.3.5): the header is
+ * Which `Host` a listener answers for: the header is
  * read through the WHATWG URL host parser — anyone's text, so the
  * platform's parser decides what host it names, never a regex — and a
  * loopback name counts only from a loopback peer.
@@ -103,7 +103,7 @@ export function isLoopbackPeer(address: unknown): boolean {
 }
 
 /**
- * Whether a loopback listener answers a request (spec §6a1): its `Host`
+ * Whether a loopback listener answers a request: its `Host`
  * names a loopback authority (any spelling the URL parser reads as one)
  * with the bound port — a `Host` without a port is port 80, as HTTP has it
  * — and its peer is loopback. A machine on the network sending

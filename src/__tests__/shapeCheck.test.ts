@@ -1,5 +1,5 @@
 /**
- * The shape check of the auth error contract (spec §8.2, §11.3), as
+ * The shape check of the auth error contract, as
  * `lint:check` runs it here — rules 1–8, the base by declaration: its copy is
  * the canonical one (R1), each fixture is refused by exactly its own rule, a
  * conforming provider and this package's own source pass, and every entry of
@@ -48,7 +48,7 @@ function located(finding: string): [string, string] {
   return [file, finding.slice(at, finding.indexOf(':', at))];
 }
 
-/** The approved extraction sites of spec §3.3 — and nothing else. */
+/** The approved extraction sites — and nothing else. */
 const APPROVED = [
   ['src/snc/SncLogonProvider.ts', 'resolve', 'library'],
   ['src/snc/DefaultSncLibraryLocator.ts', 'libraryNotFound', 'candidatePaths'],

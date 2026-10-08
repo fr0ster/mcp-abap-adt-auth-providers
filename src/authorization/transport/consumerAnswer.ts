@@ -1,9 +1,8 @@
 /**
- * The transports where the consumer's code returns the answer (spec §6d.2,
- * §6d.3.2): `consumerAnswer({ receive })`, and the pair
+ * The transports where the consumer's code returns the answer: `consumerAnswer({ receive })`, and the pair
  * `consumerHandoff({ provide })` for a consumer whose one call shows the URL
  * and returns the answer. Neither binds anything nor advertises a redirect
- * of its own (C4); `open` settles at the abort itself — it holds nothing to
+ * of its own; `open` settles at the abort itself — it holds nothing to
  * release. A refusal ends `unreadable-input`: the consumer's code is not
  * asked twice.
  */

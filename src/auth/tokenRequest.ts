@@ -1,5 +1,5 @@
 /**
- * One token request authenticated by an `IClientAuthentication` (spec §3).
+ * One token request authenticated by an `IClientAuthentication`.
  *
  * The request is the grant's own parameters, plus what `authenticate(draft)`
  * returned: its parameters added to the body, its headers to the request, its
@@ -13,7 +13,7 @@
  * checked before anything is sent: a value that
  * is not a string, a header with a line break, a parameter or header that
  * would replace one of the site's own, an endpoint that is not an absolute `https:` URL —
- * each throws `client-authentication` `result-unsendable` (A5).
+ * each throws `client-authentication` `result-unsendable`.
  * `http:` is accepted only where the configured endpoint is itself `http:` (a
  * local server, the provider stand's UAA), and never with material, which an
  * `http:` request would silently not present.
@@ -114,7 +114,7 @@ const FORM = 'application/x-www-form-urlencoded';
  */
 const SECRET_PARAMETERS = ['client_secret', 'client_assertion'];
 
-/** A5: the strategy's result cannot be sent; nothing is. */
+/** The strategy's result cannot be sent; nothing is. */
 function unusable(): never {
   throw new AuthProviderFailure(
     authError['client-authentication']({ problem: 'result-unsendable' }),
@@ -231,7 +231,7 @@ export interface LegacyBasic {
  * The one place a site without a strategy builds its Basic header. Its
  * secrets come from the same `basicSecrets()` a strategy's Basic credential
  * goes through: a site passes the result as `TokenRequestSite.basic`, so
- * the `authDebug` line names it in `sent` (spec §6).
+ * the `authDebug` line names it in `sent`.
  */
 export function legacyBasic(
   clientId: string,
@@ -360,8 +360,7 @@ const PREPARED_MIN = 16;
 const PREPARED_EDGE = 4;
 
 /**
- * The one way a secret reaches a log line (spec §6, "The secret preparer,
- * not a redactor"): called at the point of logging with the secret as a
+ * The one way a secret reaches a log line: called at the point of logging with the secret as a
  * separate value, never applied to a finished line. Without `authDebug`,
  * `<redacted, N chars>`; with it, a secret under 16 characters the same,
  * else its first 4 and last 4 characters around the marker,
@@ -406,7 +405,7 @@ export function logQuietly(write: () => unknown): void {
 const WAITING = new Set(['authorization_pending', 'slow_down']);
 
 /**
- * What a provider tells every token site it calls (spec §6): its
+ * What a provider tells every token site it calls: its
  * `authDebug` — `true` itself, nothing else, read once by `BaseTokenProvider`
  * from its configuration, never from the environment — and its grant, the
  * `grant` fact of a failure. A site helper takes it as a parameter; without
@@ -416,14 +415,14 @@ export interface TokenSiteOptions {
   readonly authDebug?: boolean | undefined;
   readonly grant?: OAuth2GrantType | undefined;
   /**
-   * The signal of the attempt the request belongs to (spec §6b): its abort
+   * The signal of the attempt the request belongs to: its abort
    * cuts the request. Read only by the sites of an attempt's own requests
    * (`attemptSite`) — never by a refresh site (`tokenSite`), whose request
    * runs on after an abort so that its answer can still be committed.
    */
   readonly signal?: AbortSignal | undefined;
   /**
-   * Called synchronously right before the request leaves (spec §6c.5): the
+   * Called synchronously right before the request leaves: the
    * renewal step learns that it was sent. It throws `aborted` instead when
    * the attempt has aborted, and nothing is sent.
    */
@@ -431,7 +430,7 @@ export interface TokenSiteOptions {
 }
 
 /**
- * A token site, as the error contract's conversion point reads it (spec §6):
+ * A token site, as the error contract's conversion point reads it:
  * what it was doing, through which grant, where its one line goes, whether
  * its consumer opted into `sent` (`authDebug`), and every secret its request
  * carried — each passed by the site, never looked up. The server's text is
@@ -459,8 +458,7 @@ export interface TokenRequestSite {
    */
   readonly basic?: LegacyBasic | undefined;
   /**
-   * The attempt's signal, passed to axios as `signal` on both paths
-   * (spec §6b). Absent by construction at every refresh site.
+   * The attempt's signal, passed to axios as `signal` on both paths. Absent by construction at every refresh site.
    */
   readonly signal?: AbortSignal | undefined;
   /** The options' `dispatched`: called right before the request leaves. */
@@ -472,7 +470,7 @@ export interface TokenRequestSite {
  * secrets and the Basic credential are the site's own; `authDebug` is on only
  * for `true` itself. The options' `signal` is never read here: this is the
  * refresh sites' constructor (UAA, SAML, OIDC refresh), whose request is
- * never given the attempt's signal (spec §6b) — every other site is built by
+ * never given the attempt's signal — every other site is built by
  * `attemptSite`.
  */
 export function tokenSite(
@@ -498,7 +496,7 @@ export function tokenSite(
 /**
  * The site of an attempt's own request — every request but a refresh: the
  * same as `tokenSite`, plus the attempt's `signal` from the options, so the
- * attempt's abort cuts the request (spec §6b).
+ * attempt's abort cuts the request.
  */
 export function attemptSite(
   operation: Operation,
@@ -513,7 +511,7 @@ export function attemptSite(
 }
 
 /**
- * What a site receives of a successful answer (spec §6): an integer status
+ * What a site receives of a successful answer: an integer status
  * and a plain `data` of the expected fields, each only of its protocol type
  * (`answerData`) — never the object axios handed over, and never the
  * server's free text (`error_description`, `error_uri`), with or without
@@ -592,7 +590,7 @@ interface RequestFacts {
 }
 
 /**
- * A failed request's facts and its failure (spec §6): `tls` for an
+ * A failed request's facts and its failure: `tls` for an
  * allowlisted TLS code, else `request-failed` — `refused` with an HTTP
  * status and a registered `oauthError`, `no-response` without a status, an
  * allowlisted system code as `code`. Nothing of the body is read beyond a
@@ -658,7 +656,7 @@ function readRequestFailure(
 
 /**
  * A rejected request that is not a token site's — OIDC discovery — as its
- * failure: the same classification, no line (spec §6: discovery writes no
+ * failure: the same classification, no line (discovery writes no
  * failure line).
  */
 export function requestFailure(
@@ -669,7 +667,7 @@ export function requestFailure(
 }
 
 /**
- * A failed request: its one line, then the failure (spec §6). By default the
+ * A failed request: its one line, then the failure. By default the
  * line is 5.4.2's safe facts (`status`, `error` when registered) plus an
  * allowlisted `code` (a recorded addition); only with `authDebug`, instead,
  * the line `[<operation>] token endpoint said` with the same facts plus
@@ -721,7 +719,7 @@ function failedRequest(
 
 /**
  * Sends one request — the prepared one when a strategy was given, else the
- * site's own `asToday` — and answers a snapshot of it (spec §6). Every
+ * site's own `asToday` — and answers a snapshot of it. Every
  * failure becomes an `AuthProviderFailure` after the site's one line
  * (`failedRequest`); an answer that cannot be read becomes `request-failed`
  * `incomplete-response` with the operation only.
@@ -731,9 +729,9 @@ export async function sendTokenRequest<T>(
   asToday: (signal: AbortSignal | undefined) => Promise<AxiosResponse<T>>,
   site: TokenRequestSite,
 ): Promise<TokenResponseSnapshot<T>> {
-  // The attempt's signal, on both paths (spec §6b); a refresh site has none.
+  // The attempt's signal, on both paths; a refresh site has none.
   const signal = site.signal;
-  // Right before the request leaves, on both paths (spec §6c.5): an aborted
+  // Right before the request leaves, on both paths: an aborted
   // attempt's renewal step throws here, and nothing is sent.
   site.dispatched?.();
   let response: unknown;
@@ -833,7 +831,7 @@ function missingTokenLead(site: TokenRequestSite): string {
 }
 
 /**
- * A 2xx that carries no usable token (spec §6, C8): one guarded line at the
+ * A 2xx that carries no usable token: one guarded line at the
  * level the site passes — by default the safe facts only,
  * `<lead>: status <n>, error: "<code>"` (or `no error given`; at the code
  * exchange 5.4.2's `error` line verbatim) — and, with `authDebug`, the same

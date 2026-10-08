@@ -1,5 +1,5 @@
 /**
- * The shipped transports (spec §6d.2): how the user's answer reaches the
+ * The shipped transports: how the user's answer reaches the
  * protocol. Each knows no payload.
  */
 

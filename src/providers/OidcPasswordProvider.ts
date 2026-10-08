@@ -144,7 +144,7 @@ export class OidcPasswordProvider extends BaseTokenProvider {
       throw oidcEndpointMissing('tokenEndpoint');
     }
     // Nothing is sent once the attempt is aborted; once sent, the refresh
-    // runs on (spec §6b).
+    // runs on.
     throwIfAborted(signal);
     const tokens = await refreshOidcToken(
       tokenEndpoint,

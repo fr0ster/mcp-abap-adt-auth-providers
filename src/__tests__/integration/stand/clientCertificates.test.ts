@@ -204,12 +204,12 @@ describeKeycloak(
           () => undefined,
           (error: unknown) => error as Error,
         );
-        // D1: the status and the registered code are the failure's facts.
+        // The status and the registered code are the failure's facts.
         expect(thrown?.message).toMatch(/\(HTTP 401, invalid_client\)$/);
         expect(inspect(thrown, { depth: null })).not.toContain(
           'Invalid client or Invalid client credentials',
         );
-        // D1: the client credentials request's own words (A.8).
+        // The client credentials request's own words.
         expect(wordsOf(await provider.prepare())).toEqual({
           ok: false,
           refusal: {
@@ -368,7 +368,6 @@ describeKeycloak(
           (error: unknown) => error as Error,
         );
         expect(thrown?.message).toBe(
-          // D1
           'the OIDC device authorization failed (HTTP 400, invalid_client)',
         );
         expect(inspect(thrown, { depth: null })).not.toContain(

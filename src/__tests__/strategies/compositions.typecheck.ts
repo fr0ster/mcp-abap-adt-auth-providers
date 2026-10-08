@@ -1,6 +1,5 @@
 /**
- * Type test, compiled by `test:check` and run by nothing (spec §6d.7,
- * §6d.10, §6d.11 "Named compositions"): the calls the server and the
+ * Type test, compiled by `test:check` and run by nothing: the calls the server and the
  * auth-broker CLI make today compile unchanged; the options 6.0.0 removes
  * (`callbackServer`, `host`, `allowedHosts`, `stateGate`, `openUrl`, the
  * manual and external strategies' optional `redirectUri`,
@@ -66,7 +65,7 @@ declare const readManualInput: (
 const signal = AbortSignal.timeout(1000);
 
 // The server: `browserCallbackStrategy({ browser, port })`, its browser
-// name mapped to an IBrowser by the server itself (§6d.10).
+// name mapped to an IBrowser by the server itself.
 export const server: IAuthorizationStrategy<string> = browserCallbackStrategy({
   browser,
   port: redirectPort,
@@ -136,13 +135,13 @@ export const removed = [
   oidcCallbackStrategy({ browser: 'system' }),
   // @ts-expect-error 'none' is no browser: leave browser out
   samlCallbackStrategy({ browser: 'none' }),
-  // @ts-expect-error manualPasteStrategy requires redirectUri (C4)
+  // @ts-expect-error manualPasteStrategy requires redirectUri
   manualPasteStrategy({}),
   // @ts-expect-error manualPasteStrategy requires its options
   manualPasteStrategy(),
   // @ts-expect-error manualSamlResponseStrategy requires redirectUri (the ACS)
   manualSamlResponseStrategy({ read: readManualInput }),
-  // @ts-expect-error externalCodeStrategy requires redirectUri (C4)
+  // @ts-expect-error externalCodeStrategy requires redirectUri
   externalCodeStrategy({ provide: async () => 'code' }),
   // @ts-expect-error manualPasscodeStrategy takes no redirectUri (unused)
   manualPasscodeStrategy({ redirectUri: acsUrl }),

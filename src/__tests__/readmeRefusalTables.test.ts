@@ -1,5 +1,5 @@
 /**
- * The README's refusal tables are generated (spec §11.4): from auth-errors'
+ * The README's refusal tables are generated: from auth-errors'
  * `render` and the interfaces-auth allowlists, by
  * `scripts/generate-refusal-tables.mjs`. The committed README must equal
  * what the script generates; `npm run docs:tables` rewrites it.

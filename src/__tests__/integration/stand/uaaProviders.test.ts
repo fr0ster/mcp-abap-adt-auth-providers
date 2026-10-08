@@ -78,7 +78,7 @@ describeUaa('UAA providers against Cloud Foundry UAA', () => {
       });
 
     it('logs the user in through UAA’s login form', async () => {
-      // Spec §6a1: the URL the provider builds carries state and a PKCE
+      // The URL the provider builds carries state and a PKCE
       // challenge, UAA returns the state, and accepts the exchange's verifier.
       const states: Array<{ sent: string | null; back: string | null }> = [];
       const tokens = await new AuthorizationCodeProvider({
@@ -114,7 +114,7 @@ describeUaa('UAA providers against Cloud Foundry UAA', () => {
       expect(tokens.refreshToken).toEqual(expect.any(String));
     });
 
-    describe('PKCE (spec §6a1)', () => {
+    describe('PKCE', () => {
       const config = () =>
         ({
           uaaUrl: UAA_URL as string,

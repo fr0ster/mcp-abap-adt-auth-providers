@@ -1,5 +1,5 @@
 /**
- * `openInBrowser({ browser })` (spec §6d.2, §6d.5, C8): `browser` is an
+ * `openInBrowser({ browser })`: `browser` is an
  * `IBrowser` — a shipped one or the consumer's — used as given: `open` is
  * called on it with exactly the URL and the login's signal. A browser that
  * rejects or throws is a presentation failure: the URL is prompted once, to
@@ -136,7 +136,7 @@ describe('a consumer IBrowser is used as given', () => {
   });
 });
 
-describe('a browser that fails is a presentation failure (§6d.5)', () => {
+describe('a browser that fails is a presentation failure', () => {
   it.each([
     ['rejects', failing()],
     [

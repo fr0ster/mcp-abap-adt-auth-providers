@@ -1,6 +1,5 @@
 /**
- * Providers take a client authentication (spec §3) and pin one certificate
- * (spec §4, first paragraphs).
+ * Providers take a client authentication and pin one certificate.
  *
  * axios is mocked at the module boundary, so every real token-request site
  * runs: what is asserted is what the strategy was asked (its drafts) and what
@@ -34,7 +33,7 @@ import { refreshThenLogin } from '../../renewal';
 import { configurationOf, wordsOf } from '../helpers/minted';
 import { recordingTargets } from '../helpers/targets';
 
-/** The words of `client-certificate` `unusable` (A4). */
+/** The words of `client-certificate` `unusable`. */
 const CERTIFICATE_UNUSABLE = authError['client-certificate']({
   problem: 'unusable',
 });
@@ -440,7 +439,7 @@ describe('a strategy and a clientSecret together', () => {
     ],
   ];
 
-  // E2 (Task 26): a configuration failure naming clientSecret.
+  // A configuration failure naming clientSecret.
   it.each(both)(
     '%s: a configuration failure naming clientSecret (E2)',
     (_name, make) => {
@@ -540,7 +539,7 @@ describe('one certificate, pinned', () => {
   });
 
   it('concurrent first needs outside a renewal share one in-flight load', async () => {
-    // The renewal is shared already; a logon (spec §4) needs the pin on its
+    // The renewal is shared already; a logon needs the pin on its
     // own, so two needs at once must still read the strategy once.
     class TwoNeeds extends ClientCredentialsProvider {
       needBoth() {
@@ -757,7 +756,7 @@ describe('an expired client certificate', () => {
     const held = sent.length;
     const now = jest.spyOn(Date, 'now').mockReturnValue(Date.UTC(2127, 0, 1));
     try {
-      // B14 / L3 (Task 22): the expired material is classified —
+      // The expired material is classified —
       // client-certificate, expired — and thrown as an AuthProviderFailure.
       await expect(provider.refreshTokens()).rejects.toMatchObject({
         name: 'AuthProviderFailure',

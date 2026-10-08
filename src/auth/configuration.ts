@@ -1,9 +1,9 @@
 /**
- * Configuration throws (spec Appendix A.5, E1–E28; A.3, K6): each is an
+ * Configuration throws: each is an
  * `AuthProviderFailure` of kind `configuration` with its `case` and the
  * `fields` it names — field names only, from the `CONFIG_FIELDS` allowlist,
- * never a configured value (L5). A constructor may throw one (a constructor
- * is not a moment of the contract, spec §8.1); a site inside a moment throws
+ * never a configured value. A constructor may throw one (a constructor
+ * is not a moment of the contract); a site inside a moment throws
  * one and the moment's boundary answers it.
  *
  * The sites build their error with `authError.configuration(…)` and a literal
@@ -47,7 +47,7 @@ export function misconfigured(
 }
 
 /**
- * E1, E22, E28: the required fields that are missing, by name. A name not on
+ * The required fields that are missing, by name. A name not on
  * the `CONFIG_FIELDS` allowlist is never echoed (the builder would drop it;
  * it is dropped here first so the type holds).
  */
@@ -63,7 +63,7 @@ export function requiredFieldsMissing(
   );
 }
 
-/** E13: an OIDC endpoint must be discovered, and there is no issuer. */
+/** An OIDC endpoint must be discovered, and there is no issuer. */
 export function oidcIssuerRequired(): AuthProviderFailure {
   return misconfigured(
     authError.configuration({
@@ -73,7 +73,7 @@ export function oidcIssuerRequired(): AuthProviderFailure {
   );
 }
 
-/** E14–E16: an OIDC endpoint neither configured nor discovered. */
+/** An OIDC endpoint neither configured nor discovered. */
 export function oidcEndpointMissing(
   field:
     | 'authorizationEndpoint'

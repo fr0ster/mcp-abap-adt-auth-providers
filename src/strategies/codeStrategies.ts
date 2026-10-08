@@ -4,7 +4,7 @@
  * The two are separate because one needs the authorization URL and the other
  * does not — and asking for a URL that is not needed would drag in OIDC
  * discovery that a static payload never required. `externalCodeStrategy` is
- * a composition (spec §6d.7): `consumerHandoff({ redirectUri, provide })` as
+ * a composition: `consumerHandoff({ redirectUri, provide })` as
  * its presentation and transport, `oauthCode()` as its protocol.
  * `staticCodeStrategy` presents no URL and waits for no answer: not one.
  */
@@ -35,7 +35,7 @@ const defaultRedirectUri = () =>
   `http://localhost:${DEFAULT_CALLBACK_PORT}${CALLBACK_ENDPOINT}`;
 
 export interface ExternalCodeStrategyOptions {
-  /** Required: the redirect registered with the identity provider (C4). */
+  /** Required: the redirect registered with the identity provider. */
   redirectUri: string;
   /**
    * Receives the assembled URL — so the code returned matches its PKCE
@@ -86,7 +86,6 @@ export function staticCodeStrategy(
   const own = ownOptions<StaticCodeStrategyOptions>(options);
   const redirectUri = own.redirectUri ?? defaultRedirectUri();
   if (!own.payload) {
-    // E27.
     throw misconfigured(
       authError.configuration({
         case: 'static-code-without-payload',

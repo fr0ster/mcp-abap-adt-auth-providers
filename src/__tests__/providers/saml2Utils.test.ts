@@ -198,7 +198,7 @@ describe('getSamlAssertion — where the expected request ID comes from', () => 
       authorization: neverCallsBuilder('http://localhost:61001/callback'),
     };
 
-    // E10 (Task 26): the case, not 5.4.2's sentence.
+    // The case, not 5.4.2's sentence.
     expect(
       configurationOf(await thrownFrom(() => getSamlAssertion(config))).case,
     ).toBe('saml-in-response-to-undeclared');
@@ -229,7 +229,6 @@ describe('getSamlAssertion — where the expected request ID comes from', () => 
       authorization: strategy,
     };
 
-    // E7 (Task 26).
     expect(
       configurationOf(await thrownFrom(() => getSamlAssertion(config))),
     ).toMatchObject({
@@ -306,7 +305,6 @@ describe('checkAssertionValidator — a shipped validator still needs idpEntityI
         } catch (error) {
           thrown = error;
         }
-        // E5 (Task 26).
         expect(configurationOf(thrown)).toMatchObject({
           case: 'saml-shipped-validator-without-issuer',
           fields: ['idpEntityId'],
@@ -326,7 +324,6 @@ describe('checkAssertionValidator — a shipped validator still needs idpEntityI
         } catch (error) {
           thrown = error;
         }
-        // E5 (Task 26).
         expect(configurationOf(thrown)).toMatchObject({
           case: 'saml-shipped-validator-without-issuer',
           fields: ['idpEntityId'],
@@ -431,7 +428,6 @@ describe('idpInitiated with authnRequestId is refused at construction', () => {
       } catch (error) {
         thrown = error;
       }
-      // E4 (Task 26).
       expect(configurationOf(thrown)).toMatchObject({
         case: 'saml-idp-initiated-with-request-id',
         fields: ['idpInitiated', 'authnRequestId'],

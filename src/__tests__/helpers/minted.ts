@@ -13,9 +13,9 @@ import type {
 } from '@mcp-abap-adt/interfaces-auth';
 
 /**
- * The refusal a thrown value becomes (spec §5.4): `classify` with the
- * operation — the one reader of a thrown value since Task 27, the class
- * ladder gone. A failure answers its own error, whatever the operation.
+ * The refusal a thrown value becomes: `classify` with the
+ * operation — the one reader of a thrown value since the class
+ * ladder is gone. A failure answers its own error, whatever the operation.
  */
 export function refusedWith(
   error: unknown,
@@ -77,7 +77,7 @@ export function wordsOf(
 }
 
 /**
- * A thrown configuration failure (spec A.5) as its case and fields, else the
+ * A thrown configuration failure as its case and fields, else the
  * test fails: an `AuthProviderFailure` holding a minted `configuration`
  * error.
  */

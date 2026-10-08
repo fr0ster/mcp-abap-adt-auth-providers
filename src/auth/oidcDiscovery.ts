@@ -10,7 +10,7 @@ import { readSafely } from './knownCodes';
 import { logQuietly, requestFailure } from './tokenRequest';
 
 /**
- * The discovery snapshot (spec §6): the fields the providers and `mtlsAlias`
+ * The discovery snapshot: the fields the providers and `mtlsAlias`
  * read, nothing else — never the document the server sent, nor the object a
  * consumer's response interceptor returned.
  */
@@ -73,7 +73,7 @@ function normalizeDiscoveryUrl(issuerOrDiscoveryUrl: string): string {
   return `${issuerOrDiscoveryUrl.slice(0, end)}/.well-known/openid-configuration`;
 }
 
-/** `request-failed` `incomplete-response` of discovery, the operation only (D6). */
+/** `request-failed` `incomplete-response` of discovery, the operation only. */
 function incomplete(): AuthProviderFailure {
   return new AuthProviderFailure(
     authError['request-failed']({
@@ -117,12 +117,12 @@ function discoverySnapshot(response: unknown): OidcDiscoveryDocument {
 }
 
 /**
- * Fetches the discovery document and answers its snapshot (spec §6, D6). A
+ * Fetches the discovery document and answers its snapshot. A
  * transport rejection becomes `tls` or `request-failed` of `oidc-discovery`;
  * an answer without `token_endpoint`, or one that cannot be read, becomes
  * `request-failed` `incomplete-response` with the operation only. A failed
  * discovery is not cached; it writes no failure line. With the attempt's
- * `signal` (spec §6b), its abort cuts the request, and an aborted discovery
+ * `signal`, its abort cuts the request, and an aborted discovery
  * — cut, or answered after the abort — ends `aborted` and is not cached.
  */
 export async function discoverOidc(
@@ -144,7 +144,7 @@ export async function discoverOidc(
   try {
     response = await axios.get(discoveryUrl, {
       headers: { Accept: 'application/json' },
-      // The attempt's abort cuts the discovery (spec §6b, C6).
+      // The attempt's abort cuts the discovery.
       ...(signal === undefined ? {} : { signal }),
     });
   } catch (error) {

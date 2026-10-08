@@ -1,8 +1,7 @@
 /**
- * What a foreign throw becomes (spec §5.4, rule 2): `classify` alone since
- * Task 27 — this package's classes and their ladder are gone (spec §6), so
+ * What a foreign throw becomes (rule 2): `classify` alone — this package's classes and their ladder are gone, so
  * every thrown value a site or a collaborator produces is read the same way.
- * The class cases that lived here moved to their Appendix A row tests
+ * The class cases that lived here moved to their row tests
  * (`transitionCoverage.test.ts` maps each one).
  */
 

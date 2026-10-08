@@ -45,7 +45,7 @@ export function toBearerAssertion(payload: string): string {
   try {
     root = parseStrictXml(xml).documentElement;
   } catch {
-    // The conversion's own rule (F2); nothing of the parser's message (L7).
+    // The conversion's own rule; nothing of the parser's message.
     return refuse(
       authError['saml-assertion']({
         rule: 'payload-not-well-formed',

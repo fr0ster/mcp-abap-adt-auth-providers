@@ -1,5 +1,5 @@
 /**
- * The redirect a transport without a socket advertises (C4): the
+ * The redirect a transport without a socket advertises: the
  * consumer's, as given — the one registered with the identity provider —
  * or none. It is never made up here.
  */

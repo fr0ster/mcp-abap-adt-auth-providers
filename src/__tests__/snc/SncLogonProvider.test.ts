@@ -47,7 +47,6 @@ describe('construction', () => {
     locator: new DefaultSncLibraryLocator(s),
     probes: [],
   });
-  // E20 (was: a ValidationError).
   it('requires partnerName', () => {
     let thrown: unknown;
     try {
@@ -57,7 +56,6 @@ describe('construction', () => {
     }
     expect(configurationOf(thrown).case).toBe('snc-partner-name-missing');
   });
-  // E20 (was: the words with a closing period).
   it('names partnerName with an ASCII apostrophe', () => {
     expect(
       () => new SncLogonProvider({ partnerName: ' ', ...parts(machine()) }),
@@ -164,7 +162,6 @@ describe('the four moments', () => {
       ok: true,
     });
   });
-  // G6.
   it('no candidate at all → the refusal says so; the hint needs no logger', async () => {
     const outcome = await snc(fakeSystem({ platform: 'linux' })).prepare();
     expect(wordsOf(outcome)).toEqual({
@@ -176,7 +173,7 @@ describe('the four moments', () => {
       },
     });
   });
-  // G5 (L9: the path moved from the words to diagnostics).
+  // The path is in the diagnostics, not the words.
   it('explicit sncLib unusable → that one source and its reason', async () => {
     const outcome = await snc(machine(), {
       sncLib: 'C:\\nope\\sapcrypto.dll',
@@ -192,7 +189,7 @@ describe('the four moments', () => {
       candidatePaths: ['C:\\nope\\sapcrypto.dll'],
     });
   });
-  // G5 (L9: the paths moved from the words to diagnostics).
+  // The paths are in the diagnostics, not the words.
   it('automatic → every candidate, each with its fixed reason', async () => {
     const X86 =
       'C:\\Program Files (x86)\\SAP\\FrontEnd\\SecureLogin\\lib\\sapcrypto.dll';
@@ -254,7 +251,7 @@ describe('the four moments', () => {
     // A log sink that is down changes no answer.
     const usable = make(machine());
     await expect(usable.prepare()).resolves.toEqual({ ok: true });
-    // G5: the path is a diagnostic, never a word.
+    // The path is a diagnostic, never a word.
     await expect(
       make(machine(), 'C:\\nope.dll').prepare(),
     ).resolves.toMatchObject({
@@ -272,7 +269,7 @@ describe('the four moments', () => {
       logger: { debug() {}, info() {}, warn() {}, error() {} },
     });
     await expect(p.prepare()).resolves.toEqual({ ok: true });
-    // G2 (L9: the library is a diagnostic).
+    // The library is a diagnostic.
     await expect(
       p.rejected({ at: 'logon', error: 'SNCERR_INIT' }),
     ).resolves.toMatchObject({
@@ -305,7 +302,6 @@ describe('rejected', () => {
   it('A2200019 → the fixed reason, asserted', async () => {
     const p = snc(machine());
     await p.prepare();
-    // G1.
     expect(wordsOf(await p.rejected({ at: 'logon', error: sdkError }))).toEqual(
       {
         ok: false,
@@ -316,7 +312,6 @@ describe('rejected', () => {
       },
     );
   });
-  // G1.
   it('before prepare(): the generic hint, no throw', async () => {
     expect(
       wordsOf(await snc(machine()).rejected({ at: 'logon', error: sdkError })),
@@ -339,7 +334,7 @@ describe('rejected', () => {
     });
     await p.prepare();
     const outcome = await p.rejected({ at: 'logon', error: sdkError });
-    // G1 (L9: "the SNC library" in the hint, the path in diagnostics).
+    // "The SNC library" in the hint, the path in diagnostics.
     expect(outcome).toMatchObject({
       ok: false,
       refusal: {
@@ -366,7 +361,7 @@ describe('rejected', () => {
       },
     });
   });
-  // G1 (L9: the library is named in diagnostics, not in the words).
+  // The library is named in diagnostics, not in the words.
   it('another library: names it in diagnostics, not the Secure Login Client', async () => {
     const p = snc(machine(), { sncLib: KRB });
     await p.prepare();
@@ -378,7 +373,7 @@ describe('rejected', () => {
       /gsskrb5|Secure Login Client/,
     );
   });
-  // G2 (L9: the architecture stays a word, the path is a diagnostic).
+  // The architecture stays a word, the path is a diagnostic.
   it('SNCERR_INIT names the architecture; the library a diagnostic', async () => {
     const p = snc(machine());
     await p.prepare();
@@ -399,7 +394,6 @@ describe('rejected', () => {
   it('anything else: fixed reason, an allowlisted key only', async () => {
     const p = snc(machine());
     await p.prepare();
-    // G3.
     expect(
       wordsOf(
         await p.rejected({

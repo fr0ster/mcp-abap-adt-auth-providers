@@ -51,7 +51,7 @@ export interface Site {
     secret?: string,
     options?: TokenSiteOptions,
   ) => Promise<unknown>;
-  /** The site's operation (spec A.8): its failure's and its line's. */
+  /** The site's operation: its failure's and its line's. */
   operation: Operation;
   /** 5.4.2's label of the site's refused-request line. */
   label542: string;

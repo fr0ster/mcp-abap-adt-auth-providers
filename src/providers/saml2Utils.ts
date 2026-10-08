@@ -74,13 +74,12 @@ export interface Saml2BearerExchangeConfig {
 
 /** Throw at construction rather than half-verify at runtime. */
 export function validateSamlConfig(config: Saml2CommonConfig): void {
-  // E28: no validator is built for the consumer (rule 7); a JavaScript
+  // No validator is built for the consumer (rule 7); a JavaScript
   // caller past the type is told which collaborator is missing.
   if (!config.assertionValidator) {
     throw requiredFieldsMissing(['assertionValidator']);
   }
   if (config.authorizationUrl && !config.acsUrl) {
-    // E3.
     throw misconfigured(
       authError.configuration({
         case: 'saml-acs-required-with-authorization-url',
@@ -92,7 +91,7 @@ export function validateSamlConfig(config: Saml2CommonConfig): void {
   // of getSamlAssertion; through a provider this refuses first, before any
   // browser opens.
   if (config.idpInitiated && config.authnRequestId) {
-    // E4: an IdP-initiated login sends no request, so the two describe
+    // An IdP-initiated login sends no request, so the two describe
     // different logins.
     throw misconfigured(
       authError.configuration({
@@ -138,7 +137,6 @@ export function checkAssertionValidator(
   config: Saml2CommonConfig,
 ): IAssertionValidator {
   if (isShippedValidator(config.assertionValidator) && !config.idpEntityId) {
-    // E5.
     throw misconfigured(
       authError.configuration({
         case: 'saml-shipped-validator-without-issuer',
@@ -160,7 +158,6 @@ export function resolveTokenUrl(config: Saml2BearerExchangeConfig): string {
     while (end > 0 && config.uaaUrl[end - 1] === '/') end--;
     return `${config.uaaUrl.slice(0, end)}/oauth/token`;
   }
-  // E6.
   throw misconfigured(
     authError.configuration({
       case: 'saml-token-endpoint-missing',
@@ -170,9 +167,9 @@ export function resolveTokenUrl(config: Saml2BearerExchangeConfig): string {
 }
 
 /**
- * E8: the strategy listens, or listened, elsewhere than the declared ACS —
+ * The strategy listens, or listened, elsewhere than the declared ACS —
  * the two addresses are diagnostics (origin and path only), never in the
- * words (L9).
+ * words.
  */
 function acsMismatch(configured: string, used: string) {
   return misconfigured(
@@ -204,7 +201,7 @@ export async function getSamlAssertion(
 
   const request: AuthorizationRequest = {
     logger: config.logger,
-    // The attempt's signal: every waiter gone ends the login (spec §6b).
+    // The attempt's signal: every waiter gone ends the login.
     ...(attempt === undefined ? {} : { signal: attempt.signal }),
     buildAuthorizationUrl: async (redirectUri: string): Promise<string> => {
       // An IdP-initiated login sends no AuthnRequest, and without a pre-built
@@ -212,7 +209,7 @@ export async function getSamlAssertion(
       // freshly minted request. Refused here, before any URL exists, so the
       // mistake surfaces before a browser opens rather than after a login.
       if (config.idpInitiated && !config.authorizationUrl) {
-        // E7: the only URL this package can build carries an AuthnRequest.
+        // The only URL this package can build carries an AuthnRequest.
         throw misconfigured(
           authError.configuration({
             case: 'saml-idp-initiated-without-authorization-url',
@@ -259,7 +256,7 @@ export async function getSamlAssertion(
 }
 
 /**
- * The ID `InResponseTo` must answer, from the three sources the spec allows:
+ * The ID `InResponseTo` must answer, from the three sources allowed:
  * minted, declared, or none by explicit `idpInitiated: true`. Anything else —
  * no ID and no declaration, or `idpInitiated` combined with an ID from either
  * of the other two sources — is a configuration error, not a validation
@@ -273,7 +270,7 @@ function resolveExpectedRequestId(
 
   if (config.idpInitiated) {
     if (mintedRequestId || declaredRequestId) {
-      // E9: an ID minted (a strategy called buildAuthorizationUrl) or
+      // An ID minted (a strategy called buildAuthorizationUrl) or
       // declared means the configuration describes two different logins.
       throw misconfigured(
         authError.configuration({
@@ -287,7 +284,7 @@ function resolveExpectedRequestId(
 
   const requestId = mintedRequestId ?? declaredRequestId;
   if (!requestId) {
-    // E10: a pre-built authorizationUrl, or a strategy that supplies an
+    // A pre-built authorizationUrl, or a strategy that supplies an
     // assertion without asking for a URL.
     throw misconfigured(
       authError.configuration({

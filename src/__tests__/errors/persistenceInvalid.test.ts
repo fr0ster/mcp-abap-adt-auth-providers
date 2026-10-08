@@ -1,5 +1,5 @@
 /**
- * A `persistence` that is given must be usable (spec §6c.3, review M1): an
+ * A `persistence` that is given must be usable: an
  * object whose `report` is a function. Anything else — `null`, a non-object,
  * an object without a callable `report`, a Proxy or getter that throws — is
  * refused at construction, `configuration` `invalid-value`, `fields:

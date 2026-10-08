@@ -1,11 +1,11 @@
 /**
- * An attempt's requests carry its signal; a refresh never does (spec §6b).
+ * An attempt's requests carry its signal; a refresh never does.
  * `sendTokenRequest` passes `site.signal` to axios on both paths — the
  * strategy's prepared request and each site's own — for every site but the
  * three refresh sites, which never set it. The network is never part of a
  * drain: an outstanding device poll, passcode exchange or code exchange
  * whose answer is held does not keep a replacement attempt waiting, and its
- * late answer changes nothing. Discovery under an attempt (C6), and the
+ * late answer changes nothing. Discovery under an attempt, and the
  * device poll that stops at the abort (fake timers for the server's poll
  * interval only).
  */

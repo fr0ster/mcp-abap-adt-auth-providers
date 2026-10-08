@@ -87,7 +87,7 @@ describe('resolveSignedElements', () => {
     expect(element!.localName).toBe('Assertion');
   });
 
-  // The spec promises PEM or base64 DER, and metadata carries the latter.
+  // The documented contract is PEM or base64 DER, and metadata carries the latter.
   // Measured: xml-crypto throws DECODER routines::unsupported on bare base64,
   // and the same bytes armoured verify — so this is a real conversion, not a
   // formatting preference. Normalising is the caller's job, not
@@ -130,8 +130,8 @@ describe('resolveSignedElements', () => {
     for (const line of lines.slice(0, -1)) expect(line).toHaveLength(64);
   });
 
-  // E26 (Task 26): each is the configuration case idp-certificate-invalid —
-  // 5.4.2's two sentences are one case, nothing of OpenSSL kept (L2).
+  // Each is the configuration case idp-certificate-invalid —
+  // 5.4.2's two sentences are one case, nothing of OpenSSL kept.
   const E26 = {
     case: 'idp-certificate-invalid',
     fields: ['idpCertificates'],
@@ -434,7 +434,7 @@ describe('resolveSignedElements', () => {
 
   // xml-crypto's loadSignature throws with document text in its message — a
   // Reference without DigestMethod is serialised whole. That text is the
-  // sender's, and none of it reaches the error (F8, L7).
+  // sender's, and none of it reaches the error.
   it('F8 / L7: says nothing of what xml-crypto says about a malformed signature', () => {
     const key = generateKeyMaterial();
     const wrapped = RESPONSE(signXml(ASSERTION(), key)).replace(
@@ -471,7 +471,7 @@ describe('resolveSignedElements', () => {
       'reference-not-same-document',
       { diagnostics: { referenceUri: '_a1' } },
     );
-    // The value is the diagnostic's alone, never the words (spec §3.3).
+    // The value is the diagnostic's alone, never the words.
     expect(error.reason).not.toContain('_a1');
   });
 

@@ -1,8 +1,8 @@
 /**
- * The manual strategies have no deadline of their own (spec §6a): a read ends
+ * The manual strategies have no deadline of their own: a read ends
  * on its answer, the consumer's or the attempt's abort, or `dispose()` — and
- * the strategy settles only once the reader has released stdin (§6b, the
- * drain handoff). The words are the K12–K16 rows.
+ * the strategy settles only once the reader has released stdin (the
+ * drain handoff).
  */
 
 import { afterEach, describe, expect, it, jest } from '@jest/globals';

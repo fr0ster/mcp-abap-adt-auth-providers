@@ -180,8 +180,7 @@ describeKeycloak('OIDC providers against Keycloak', () => {
 });
 
 /**
- * Device polling against Keycloak's own device endpoint (spec §6, first row
- * of the reader table): the poll reads the failure's classified facts —
+ * Device polling against Keycloak's own device endpoint: the poll reads the failure's classified facts —
  * `authorization_pending` and `slow_down` keep it waiting (`slow_down` adding
  * 5 s), anything else ends it with that failure. Where the stand can produce
  * the answer: pending, slow_down and access_denied; an expired device code

@@ -1,6 +1,6 @@
 /**
  * Marking a promise this package holds — but may never await — handled
- * (spec §8.3, rule 1; controller additions after Tasks 22 and 23). A
+ * (rule 1). A
  * consumer's method may answer a rejecting promise where none is expected:
  * an async logger, a request target's `header` or `cookies`, a callback
  * server's `waitForResult()` the strategy never reaches its `await` for.
@@ -9,7 +9,7 @@
  * Where a value crosses a trust boundary (a target's answer, a value being
  * classified) a foreign `then` is never called: `markHandled` touches plain
  * native promises only. A collaborator's answer that this package awaits is
- * awaited normally (the user's decision, 2026-10-07): the consumer's own
+ * awaited normally: the consumer's own
  * code, Bluebird or Q included, inside the guarded boundary.
  */
 

@@ -1,6 +1,6 @@
 /**
- * Spec Appendix A.7 (G1–G10), A.8 (H4, H5), A.5 (E20, E21), plan RF4, §7's
- * relay matrix and §8.1's fixtures for `SncLogonProvider` — each refusal a
+ * The refusals of `SncLogonProvider`, with the relay matrix and the
+ * fixtures — each refusal a
  * minted `snc` (or `not-prepared`, `unknown`, `configuration`) error, its
  * words verbatim, every path a diagnostic and never a word.
  */
@@ -401,7 +401,7 @@ describe('G9 — establish before prepare', () => {
   });
 });
 
-describe('G10 / §8.1 — the outer boundary names the SNC operation', () => {
+describe('G10 — the outer boundary names the SNC operation', () => {
   class GrantThrows extends SncLogonProvider {
     protected override grant(): never {
       throw new Error(MARKER);
@@ -585,7 +585,7 @@ describe('E20 / E21 — construction', () => {
   );
 });
 
-describe('§7 — no other way in: the target answer is the provider’s own', () => {
+describe('no other way in: the target answer is the provider’s own', () => {
   const MINTED: AuthOutcome = {
     ok: false,
     refusal: authError['logon-target']({

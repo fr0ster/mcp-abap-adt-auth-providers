@@ -42,7 +42,7 @@ export class SsoProviderFactory {
       }
     }
 
-    // E23. Fixed words: the config holds the client secret, a password,
+    // Fixed words: the config holds the client secret, a password,
     // tokens — and neither protocol nor flow is echoed.
     throw misconfigured(
       authError.configuration({ case: 'unsupported-sso-flow', fields: [] }),

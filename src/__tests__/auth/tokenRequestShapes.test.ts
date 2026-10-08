@@ -201,7 +201,7 @@ describe('token request shapes, as sent today', () => {
     });
   });
 
-  describe('browserAuth: the UAA login bound by state and PKCE (spec §6a1)', () => {
+  describe('browserAuth: the UAA login bound by state and PKCE', () => {
     it('the URL it builds carries state, code_challenge and S256', () => {
       const url = new URL(
         getJwtAuthorizationUrl(
@@ -460,7 +460,7 @@ describe('token request shapes, as sent today', () => {
       });
     });
 
-    describe('authorization code without a verifier (no URL was built, spec §6a1)', () => {
+    describe('authorization code without a verifier (no URL was built)', () => {
       it('sends no code_verifier', async () => {
         await exchangeAuthorizationCode(
           endpoint,

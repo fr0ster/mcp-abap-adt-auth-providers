@@ -86,10 +86,10 @@ export function readRejection(
 }
 
 /**
- * A rejection as the cause of a renewal (spec §6c.2): rule 5's reading —
+ * A rejection as the cause of a renewal: rule 5's reading —
  * `not-credential` with its `system-refused` refusal, what a `stop` answers —
  * the moment, and the allowlisted status or RFC key. A reading the renewal
- * strategy receives, not a guard (G9). Frozen: the strategy cannot change
+ * strategy receives, not a guard. Frozen: the strategy cannot change
  * what the provider reads back.
  */
 export function rejectionCause(
@@ -124,7 +124,7 @@ export function unknownRefusal(
 
 /**
  * A provider that cannot renew: `credential-refused` naming its credential
- * and the moment when the credential was refused (B7, B9–B11), the neutral
+ * and the moment when the credential was refused, the neutral
  * `system-refused` error otherwise.
  */
 export function refuseFor(

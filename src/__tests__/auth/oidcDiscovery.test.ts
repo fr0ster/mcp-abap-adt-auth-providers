@@ -1,6 +1,5 @@
 /**
- * OIDC discovery keeps a snapshot, not the document (spec §6, "OIDC
- * discovery has its own snapshot"; row D6): the three endpoints the
+ * OIDC discovery keeps a snapshot, not the document: the three endpoints the
  * providers read, each a non-empty string read through `readSafely`, and the
  * two mTLS aliases rebuilt as a plain object. Nothing else reaches the
  * snapshot, the cache or a provider. A document without `token_endpoint`,

@@ -1,7 +1,7 @@
 /**
- * Spec §6a1, login CSRF: the providers mint `state` (and, for UAA, the PKCE
+ * Login CSRF: the providers mint `state` (and, for UAA, the PKCE
  * pair) for every URL they build — a configured URL without one gets the
- * provider's (C7); the named browser compositions refuse every callback
+ * provider's; the named browser compositions refuse every callback
  * until the URL is built and the channel armed, then only this login's
  * `state` settles one; the manual paste compares a pasted URL's `state`.
  * The composer's order and the listener's gate are proven in

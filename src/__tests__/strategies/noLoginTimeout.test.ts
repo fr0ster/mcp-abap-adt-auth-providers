@@ -1,5 +1,5 @@
 /**
- * RF1 (plan "Review Focus"; spec §6a): no interactive login has a bound of
+ * No interactive login has a bound of
  * the package's choosing. A browser, an OIDC and a SAML login, and each
  * manual strategy, stay open with fake timers advanced well past the old
  * 30 s and 300 s defaults — the scope observed still open, the port still
@@ -7,7 +7,7 @@
  * `aborted`, the port is bound by the test afterwards, and nothing is left
  * reading stdin. An abort before the bind, during it and while waiting each
  * end the same way. And each shipped strategy settles only once it has
- * released (spec §6b, the drain handoff).
+ * released (the drain handoff).
  */
 
 import net from 'node:net';
@@ -190,7 +190,7 @@ describe('RF1: a browser login has no bound of its own', () => {
   );
 
   it.each(browserKinds)(
-    '%s: an abort while the URL is built opens nothing (Task 23 fix round 1)',
+    '%s: an abort while the URL is built opens nothing',
     async (_name, make) => {
       const consumer = new AbortController();
       let built!: (url: string) => void;
@@ -309,7 +309,7 @@ describe('RF1: a manual login has no bound of its own', () => {
   );
 });
 
-describe('settle after release (spec §6b): a held release holds the rejection', () => {
+describe('settle after release: a held release holds the rejection', () => {
   it.each([
     ['oauthCode', oauthCode],
     ['oidcCode', oidcCode],

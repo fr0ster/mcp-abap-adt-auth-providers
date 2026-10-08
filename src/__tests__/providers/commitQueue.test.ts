@@ -1,5 +1,5 @@
 /**
- * What an attempt commits (spec §6b): one serialized commit queue per
+ * What an attempt commits: one serialized commit queue per
  * provider, two watermarks (pin, credential), a late result of an aborted
  * attempt changing nothing — but a refresh's answer, which is the server's
  * state, committed when nothing newer was — and what the shipped
@@ -37,7 +37,7 @@ import { ScriptedProvider, tokens } from '../helpers/scriptedProvider';
 /**
  * The `token-binding` `renewed-bound-elsewhere` failure: since 6.0.0 a
  * renewal whose step obtained a token still bound elsewhere stops with it
- * (`refreshThenLogin()`, spec §6c.5 step 8, §6c.7), committed all the same.
+ * (`refreshThenLogin()`), committed all the same.
  */
 function isRenewedBoundElsewhere(error: unknown): boolean {
   const read = readFailure(error, 'unfamiliar-error');
@@ -348,7 +348,7 @@ describe('separate watermarks: the pin commit and the credential commit', () => 
     // Bound elsewhere than the certificate this renewal pinned.
     const elsewhere = boundTo(thumbprintOf(otherCertificate()), 'login');
     login.result.resolve(tokens(elsewhere, 'R1'));
-    // Committed, and the renewal stops with the binding refusal (§6c.7).
+    // Committed, and the renewal stops with the binding refusal.
     expect(isRenewedBoundElsewhere(await renewed)).toBe(true);
     expect(seen).toEqual([[elsewhere, 'R1', 'replace']]);
     expect(reads).toHaveBeenCalledTimes(1);
@@ -641,7 +641,7 @@ describe('an aborted renewal is never remembered (rule 8)', () => {
     (await provider.logins.nth(1)).result.reject(new Error('failed'));
     const first = readFailure(await failing, 'unfamiliar-error');
     // The remembered error reaches the strategy as lastRenewal, and
-    // refreshThenLogin() stops with it (§6c.4, §6c.8): the same error, no step.
+    // refreshThenLogin() stops with it: the same error, no step.
     const again = readFailure(
       await rejectionOf(provider.getTokens()),
       'unfamiliar-error',

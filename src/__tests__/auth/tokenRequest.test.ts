@@ -307,7 +307,7 @@ describe.each(SITES)('$name with a client authentication', (site) => {
     const error = await failureOf(
       site.run({ strategy: tlsClientCertificate({ material }), material }),
     );
-    // D2: `tls` of the site's own operation (A.8), not "the token request".
+    // `tls` of the site's own operation, not "the token request".
     const failure = readFailure(error, 'unfamiliar-error');
     expect(failure.kind).toBe('tls');
     expect(failure.facts).toEqual({
@@ -478,8 +478,7 @@ async function echoedOutput(
 /**
  * The server's description, and the echoed secret, reach no rendering of
  * the thrown error and no log line. (The redactor these cases also checked
- * is deleted: nothing scans text for secrets — spec §6, "The secret
- * preparer, not a redactor".)
+ * is deleted: nothing scans text for secrets.)
  */
 function expectNoEcho(
   out: { error: string; logs: string; debug: string[] },
@@ -601,7 +600,7 @@ describe('client authentication per request', () => {
       ),
     );
     expect(mockedAxios).not.toHaveBeenCalled();
-    // E11 (Task 26): the configuration case, not 5.4.2's A11 words.
+    // The configuration case, not 5.4.2's words.
     expect(wordsOf(refusedWith(error, 'token-request'))).toEqual({
       ok: false,
       refusal: {
@@ -869,10 +868,10 @@ const windowsOf = (secret: string, size = 8, stride = 1) => {
 };
 
 /**
- * Every site throws an `AuthProviderFailure` of its own operation (D1, D3):
+ * Every site throws an `AuthProviderFailure` of its own operation:
  * `request-failed` `refused` with the status and the registered code — no
  * config, request, cause or body (the reduced `AxiosError` and
- * `TokenEndpointError` left in Task 21, L3).
+ * `TokenEndpointError` left).
  */
 function expectRefusedFailure(thrown: unknown, operation: string): void {
   expect(isAuthProviderFailure(thrown)).toBe(true);
@@ -1044,7 +1043,7 @@ describe('the server never reads back the password or the passcode', () => {
   };
   /**
    * The failure's words are the operation's and the status alone (the code
-   * is not a registered one, D1); the server's words are in no line (H10).
+   * is not a registered one); the server's words are in no line.
    */
   const expectRefusalNoted = (
     thrown: unknown,
@@ -1372,7 +1371,7 @@ describe('a registered error code is never rewritten by redaction', () => {
       const thrown = await failureOf(
         pollDeviceTokens(OIDC, 'cid', secret, 'dc', 0, logger, auth),
       );
-      // D1: the failure names the status; no unregistered code, no body.
+      // The failure names the status; no unregistered code, no body.
       expect(readFailure(thrown, 'unfamiliar-error').facts).toEqual({
         operation: 'device-poll',
         problem: 'refused',
@@ -1393,7 +1392,7 @@ describe('a registered error code is never rewritten by redaction', () => {
         strategy: clientSecretPost('a'),
       }),
     );
-    // D1: the operation's words with the status and the registered code.
+    // The operation's words with the status and the registered code.
     expect(messageOf(error)).toBe(
       'the OIDC password grant failed (HTTP 400, invalid_grant)',
     );
@@ -1415,7 +1414,7 @@ describe('a registered error code is never rewritten by redaction', () => {
       const thrown = await failureOf(
         refreshOidcToken(OIDC, 'cid', secret, 'rt', undefined, auth),
       );
-      // L3: the code is the failure's `oauthError` fact, not a body.
+      // The code is the failure's `oauthError` fact, not a body.
       expect(readFailure(thrown, 'unfamiliar-error').facts).toEqual({
         operation: 'oidc-token-request',
         problem: 'refused',

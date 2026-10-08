@@ -1,6 +1,5 @@
 /**
- * `authDebug` reaches the token sites (spec §6, "Where the option lives";
- * plan Task 21): through a real provider, constructed with `authDebug: true`
+ * `authDebug` reaches the token sites through a real provider, constructed with `authDebug: true`
  * and with it absent, one site per provider. With it, the site's one line is
  * `[<operation>] token endpoint said` with `sent`; without it, the safe-facts
  * line. The provider's grant reaches the failure's facts the same way.
@@ -65,7 +64,7 @@ const codeStrategy = <T>(payload: T): IAuthorizationStrategy<T> => ({
 
 /**
  * Builds the URL first, as a browser strategy does: the provider then holds
- * this attempt's PKCE verifier and sends it (spec §6a1 — a code no URL was
+ * this attempt's PKCE verifier and sends it (a code no URL was
  * built for is exchanged without one).
  */
 const buildingCodeStrategy = <T>(payload: T): IAuthorizationStrategy<T> => ({
@@ -266,8 +265,7 @@ describe.each(PROVIDERS)(
         ...(authDebug === undefined ? {} : { authDebug }),
       });
       const thrown = await provider.getTokens().catch((e: unknown) => e);
-      // The grant reaches the failure (`getTokens()` passes it through
-      // until Task 22).
+      // The grant reaches the failure (`getTokens()` passes it through).
       expect(readFailure(thrown, 'unfamiliar-error').facts).toEqual({
         operation,
         grant,

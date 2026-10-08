@@ -123,7 +123,7 @@ describeUaa('UaaPasscodeProvider against Cloud Foundry UAA', () => {
         () => undefined,
         (error: unknown) => error as Error,
       );
-    // D1: the operation's words and the status.
+    // The operation's words and the status.
     expect(thrown?.message).toBe('the passcode exchange failed (HTTP 401)');
     expect(inspect(thrown, { depth: null })).not.toContain('Invalid passcode');
   });

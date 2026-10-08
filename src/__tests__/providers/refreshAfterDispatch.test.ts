@@ -1,5 +1,5 @@
 /**
- * A refresh aborted after dispatch is an uncertain outcome (spec §6b): the
+ * A refresh aborted after dispatch is an uncertain outcome: the
  * server may have consumed R and issued R2. On a real socket through real
  * axios — a local token endpoint that rotates R → R2 and withholds its
  * answer; never a mocked `sendTokenRequest`, since the point is what axios
@@ -260,7 +260,7 @@ describe('quarantine before the queue', () => {
 });
 
 describe('tombstones for life', () => {
-  // Spec §6c.5: a result carrying a discarded refresh token is read as
+  // A result carrying a discarded refresh token is read as
   // carrying none, nothing more — S, held before, stays held.
   it('R cut, S installed, a newer commit returns R: R is not installed, never submitted again, and S stays held', async () => {
     const strategy = waitingStrategy();
@@ -397,7 +397,7 @@ describe('a refresh answered, then cut while its outcome waits in the queue', ()
 
 describe('a refresh whose own commit step fails', () => {
   // A commit step that throws after the server answered is a refresh that
-  // failed after it was sent (spec §6c.5): refreshThenLogin() discards R and
+  // failed after it was sent: refreshThenLogin() discards R and
   // logs in, within the same renewal.
   it('after the server rotated R → R2, a throwing commit step: R is spent, the renewal logs in and R reaches the server once', async () => {
     class FailingOnce extends AuthorizationCodeProvider {

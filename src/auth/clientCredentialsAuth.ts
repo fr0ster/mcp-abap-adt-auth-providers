@@ -71,7 +71,7 @@ export async function getTokenWithClientCredentials(
       // No timeout of this package's choosing: the consumer bounds a wait.
       // A redirect would re-send the secret: never followed.
       maxRedirects: 0,
-      // The attempt's abort cuts the request (spec §6b).
+      // The attempt's abort cuts the request.
       ...(signal === undefined ? {} : { signal }),
     });
   };

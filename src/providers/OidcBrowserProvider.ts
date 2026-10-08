@@ -134,7 +134,7 @@ export class OidcBrowserProvider extends BaseTokenProvider {
       return discovery;
     };
 
-    // Login CSRF (spec §6a1): the PKCE verifier of the last URL this
+    // Login CSRF: the PKCE verifier of the last URL this
     // attempt built, sent in its exchange; none when no URL was built.
     let codeVerifier: string | undefined;
     const scope = (
@@ -145,7 +145,7 @@ export class OidcBrowserProvider extends BaseTokenProvider {
 
     const request: AuthorizationRequest = {
       logger: this.logger,
-      // The attempt's signal: every waiter gone ends the login (spec §6b).
+      // The attempt's signal: every waiter gone ends the login.
       signal: attempt.signal,
       buildAuthorizationUrl: async (redirectUri: string): Promise<string> => {
         const endpoint =
@@ -176,7 +176,7 @@ export class OidcBrowserProvider extends BaseTokenProvider {
     const strategy = this.config.authorization;
 
     // The strategy holds a socket or a reader: it starts only once the
-    // previous attempt has released its own (the drain, spec §6b).
+    // previous attempt has released its own (the drain).
     const outcome = await attempt.exclusive(() => strategy.authorize(request));
 
     const discovered = this.config.tokenEndpoint ? null : await discover();
@@ -237,7 +237,7 @@ export class OidcBrowserProvider extends BaseTokenProvider {
       throw oidcEndpointMissing('tokenEndpoint');
     }
     // Nothing is sent once the attempt is aborted; once sent, the refresh
-    // runs on (spec §6b).
+    // runs on.
     throwIfAborted(signal);
     const tokens = await refreshOidcToken(
       tokenEndpoint,

@@ -1,13 +1,13 @@
 /**
- * Rule 1 (spec §8.3): every method of every provider, with every collaborator
+ * Rule 1: every method of every provider, with every collaborator
  * throwing each hostile value, resolves — never rejects — to an outcome whose
  * refusal, if any, is minted, with no secret of the thrown value in it.
  *
  * The whole matrix (`rule1Scenario.ts`: every provider × every collaborator
- * × each hostile value of §11.1 × thrown or rejected) runs under plain node
+ * × each hostile value × thrown or rejected) runs under plain node
  * in a child process against the compiled sources, where an unhandled
- * rejection is recorded rather than hidden by Jest (Task 29). The cases
- * below run the credentials in this process too, as Task 19 started them.
+ * rejection is recorded rather than hidden by Jest. The cases
+ * below run the credentials in this process too.
  */
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -162,7 +162,7 @@ describe('rule 1: a grant() that throws or answers a rejecting promise', () => {
   }
 });
 
-/** The collaborators §8.3 names, each at least once in the matrix. */
+/** The collaborators of the contract, each at least once in the matrix. */
 const SPEC_COLLABORATORS = [
   'interactive strategy',
   'client authentication',

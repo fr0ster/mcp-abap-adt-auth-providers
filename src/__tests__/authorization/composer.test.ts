@@ -1,5 +1,5 @@
 /**
- * The composer (spec §6d.4, §6d.11 "Composer", C9): the order of one
+ * The composer: the order of one
  * authorization — build the URL, `begin`, arm, present, wait — the payload
  * only the protocol accepted, the first terminal verdict latched, overlap
  * refused, abort and dispose, and `authorize` settling only once the
@@ -164,7 +164,7 @@ describe('construction', () => {
   );
 });
 
-describe('the order: build, begin, arm, present, wait (spec §6d.4)', () => {
+describe('the order: build, begin, arm, present, wait', () => {
   it('opens, builds the URL from the channel’s redirect, begins, arms, presents — then waits', async () => {
     const events: string[] = [];
     const scripted = scriptedTransport({ redirectUri: REDIRECT, events });
@@ -303,7 +303,7 @@ describe('the order: build, begin, arm, present, wait (spec §6d.4)', () => {
   });
 });
 
-describe('only what the protocol accepted is returned (spec §6d.4, §6d.11)', () => {
+describe('only what the protocol accepted is returned', () => {
   it('a consumer transport whose answer() resolves without an accept → failed, no payload', async () => {
     const scripted = scriptedTransport({ redirectUri: REDIRECT });
     const strategy = composeAuthorization({
@@ -436,7 +436,7 @@ async function waitFor<T>(run: () => Promise<T>): Promise<T> {
   }
 }
 
-describe('overlap, dispose, abort (spec §6d.4)', () => {
+describe('overlap, dispose, abort', () => {
   const compositions: ReadonlyArray<
     [string, (port: number) => IAnswerTransport]
   > = [
@@ -594,7 +594,7 @@ describe('overlap, dispose, abort (spec §6d.4)', () => {
   });
 });
 
-describe('authorize settles only once the transport is released (spec §6d.4 step 5, §6b)', () => {
+describe('authorize settles only once the transport is released', () => {
   it('with the release deferred, the aborted authorize stays pending, a second is busy and opens no second transport', async () => {
     const port = await getAvailablePort();
     const held = heldRelease(loopback4({ port }));
@@ -635,7 +635,7 @@ describe('authorize settles only once the transport is released (spec §6d.4 ste
   });
 });
 
-describe('the page is delivered before the login settles (spec §6d.3.5)', () => {
+describe('the page is delivered before the login settles', () => {
   it('a client that pauses before reading still gets the whole error page; then the login is refused and the port free', async () => {
     const port = await getAvailablePort();
     const strategy = composeAuthorization({
@@ -673,7 +673,7 @@ describe('the page is delivered before the login settles (spec §6d.3.5)', () =>
   });
 });
 
-describe('only what use returned, never what open resolves with (review I1)', () => {
+describe('only what use returned, never what open resolves with', () => {
   it('open resolving a forged outcome without calling use → failed; nothing built, nothing shown', async () => {
     const built: string[] = [];
     const shown = recordingPresentation();
@@ -728,7 +728,7 @@ describe('only what use returned, never what open resolves with (review I1)', ()
   });
 });
 
-describe('a fast browser: the presentation answers at once (review M1)', () => {
+describe('a fast browser: the presentation answers at once', () => {
   it('the presentation itself sends the right callback the moment it is shown; the login completes on a real port', async () => {
     const port = await getAvailablePort();
     let reply: Promise<number> | undefined;

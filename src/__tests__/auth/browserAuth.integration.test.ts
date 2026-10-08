@@ -83,7 +83,7 @@ describe('browserAuth Integration', () => {
     logger.info(`Starting browser authentication: ${authConfig.uaaUrl}`);
 
     // The strategy owns the socket and the browser, bounded by the signal the
-    // test composes (no bound of the package's choosing, spec §6a); the exchange
+    // test composes (no bound of the package's choosing); the exchange
     // stays with the caller — the same split `AuthorizationCodeProvider` uses.
     const strategy = browserCallbackStrategy({
       // No browser is launched by a test: the URL is shown on stderr for

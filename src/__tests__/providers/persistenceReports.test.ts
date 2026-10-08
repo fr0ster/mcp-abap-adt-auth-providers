@@ -1,6 +1,5 @@
 /**
- * What a token provider reports to its persistence strategy (spec §6c.6,
- * §6c.10 "Persistence"): one report per change of its credentials, made
+ * What a token provider reports to its persistence strategy: one report per change of its credentials, made
  * from inside the commit queue in commit order; `awaited` decided when the
  * report starts; an awaited failure is the renewal's, a detached one is
  * logged and attributed to nothing; nothing is ever reported twice. The
@@ -424,7 +423,7 @@ describe('a detached failure is logged and attributed to nothing', () => {
   );
 });
 
-describe('an awaited report whose every waiter left while it ran (review M4)', () => {
+describe('an awaited report whose every waiter left while it ran', () => {
   it('fails after the abort: logged as a detached failure, once, in fixed words', async () => {
     const { lines, logger } = recordingLogger();
     const gate = deferred();

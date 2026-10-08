@@ -7,9 +7,8 @@
  * the installer's machine-wide x86 `SNC_LIB` must not hide the x64 library
  * the registry points at.
  *
- * Nothing usable is an `AuthProviderFailure` of `snc` `library-not-found`
- * (spec A.7, G5–G7), built here — the one approved source of the
- * `candidatePaths` diagnostic (spec §3.3): each candidate's source, reason
+ * Nothing usable is an `AuthProviderFailure` of `snc` `library-not-found`, built here — the one approved source of the
+ * `candidatePaths` diagnostic: each candidate's source, reason
  * and architectures as facts, its path as a diagnostic, index for index.
  */
 
@@ -59,7 +58,7 @@ type Tried = Unusable & { source: SncCandidateSource; path: string };
 const shipped = new WeakSet<object>();
 
 /**
- * Whether `thrown` is a failure the shipped locator built (spec §3.3: the
+ * Whether `thrown` is a failure the shipped locator built (the
  * `candidatePaths` diagnostic is read only from the shipped locator). A
  * failure a consumer's locator throws — even one minted by this copy of
  * auth-errors — is not.
@@ -133,7 +132,7 @@ export class DefaultSncLibraryLocator implements ISncLibraryLocator {
     if (lib) found.push({ source: 'SNC_LIB', path: lib });
     if (system.platform === 'win32') {
       const name = is64 ? 'InstallPath64' : 'InstallPath32';
-      // Trimmed before it becomes a path (RF4): a value ending in spaces or
+      // Trimmed before it becomes a path: a value ending in spaces or
       // a CR/LF would make the whole candidate path inadmissible.
       const value = await system.readRegistryValue(
         SLC_REGISTRY_KEY,

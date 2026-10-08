@@ -1,5 +1,5 @@
 /**
- * Appendix A.2 rows B1–B6 (rejection reading) and B14 (certificate check):
+ * Rejection reading and the certificate check:
  * each answers its kind and facts in the verbatim words of 5.4.2.
  */
 import { readFileSync } from 'node:fs';

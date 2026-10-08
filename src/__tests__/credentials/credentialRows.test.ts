@@ -1,5 +1,5 @@
 /**
- * Appendix A.2 rows B7–B13 and B15, and A.1 rows A17 and A18: each provider's
+ * Each credential provider's
  * own refusals — kind, facts and the verbatim 5.4.2 words — and the
  * operation each credential's moments name.
  */

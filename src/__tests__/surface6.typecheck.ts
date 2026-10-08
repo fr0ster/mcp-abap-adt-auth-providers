@@ -1,9 +1,9 @@
 /**
- * Type test, compiled by `test:check` and run by nothing (plan Task 27): the
- * package root exports none of the names 6.0.0 deletes — the error classes
- * (spec §6), `refusalWords` (Decision D7: `classify` from auth-errors), the
- * transition pieces of Decision D6, the internals of the token sites, and
- * `DEFAULT_LOGIN_TIMEOUT_MS` (§6a). A consumer reads a failure with
+ * Type test, compiled by `test:check` and run by nothing: the
+ * package root exports none of the names 6.0.0 deletes — the error classes,
+ * `refusalWords` (`classify` from auth-errors), the
+ * transition pieces, the internals of the token sites, and
+ * `DEFAULT_LOGIN_TIMEOUT_MS`. A consumer reads a failure with
  * `readFailure` and switches on `kind`.
  *
  * Each name is read off the module's type, one line per name, rather than
@@ -61,7 +61,7 @@ export type V15 = Surface['CallbackScopeError'];
 // @ts-expect-error the internal class is gone: kind 'interactive-login'
 export type V16 = Surface['AuthorizationRefusedError'];
 
-// @ts-expect-error the built-in login bound is gone (spec §6a)
+// @ts-expect-error the built-in login bound is gone
 export type V17 = Surface['DEFAULT_LOGIN_TIMEOUT_MS'];
 
 // @ts-expect-error internal: the one legacy Basic header builder
@@ -70,13 +70,13 @@ export type V18 = Surface['legacyBasic'];
 // @ts-expect-error internal: an answer without a token
 export type V19 = Surface['rejectMissingToken'];
 
-// @ts-expect-error the transition bridge is gone (goal step 8)
+// @ts-expect-error the transition bridge is gone
 export type V20 = Surface['asContract'];
 
-// @ts-expect-error the transition bridge is gone (Decision D6)
+// @ts-expect-error the transition bridge is gone
 export type V21 = Surface['toLegacyOutcome'];
 
-// @ts-expect-error the transition bridge is gone (Decision D6)
+// @ts-expect-error the transition bridge is gone
 export type V22 = Surface['toLegacyRefusal'];
 
 // @ts-expect-error gone: logFields(classify(error, operation))

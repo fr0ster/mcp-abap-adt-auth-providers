@@ -1,9 +1,9 @@
 /**
- * Reading a renewal strategy's answer (spec §6c.5, step 3): the strategy is
+ * Reading a renewal strategy's answer: the strategy is
  * foreign code, so its answer is read like any collaborator's — every field
  * through `readSafely`, never trusted as it is. An answer that is not a
  * valid decision for the situation is refused (`undefined`), never guessed
- * at (G6).
+ * at.
  */
 
 import type {
@@ -24,7 +24,7 @@ export interface DecisionContext {
   readonly sentRequired: boolean;
 }
 
-/** True after a refresh that failed once it was sent (G1: no default). */
+/** True after a refresh that failed once it was sent (no default). */
 export function needsSentDecision(
   steps: readonly RenewalStepOutcome[],
 ): boolean {

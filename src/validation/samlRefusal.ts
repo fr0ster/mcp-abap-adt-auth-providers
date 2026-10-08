@@ -1,5 +1,5 @@
 /**
- * How a SAML refusal leaves its site (spec Appendix B, A.6): an
+ * How a SAML refusal leaves its site: an
  * `AuthProviderFailure` holding one minted `saml-assertion` error. The
  * builder call — `authError['saml-assertion']({ rule, check, … }, { … })` —
  * stays at each site, so the compiler checks that the rule fixes its check
@@ -7,8 +7,8 @@
  * only throws what the site built.
  *
  * No document value reaches `reason` / `hint`: a value a rule may show is a
- * diagnostic, admitted (or dropped) by the builder (spec §5.3). No message of
- * a parser, of xml-crypto or of OpenSSL reaches the error at all (L7).
+ * diagnostic, admitted (or dropped) by the builder. No message of
+ * a parser, of xml-crypto or of OpenSSL reaches the error at all.
  */
 
 import {
@@ -59,8 +59,7 @@ export function several(n: number): { readonly count: Count } | object {
 }
 
 /**
- * The validator's answer, or its throw classified with `validating-assertion`
- * (spec A.8): a shipped validator's refusal is this copy's minted error and
+ * The validator's answer, or its throw classified with `validating-assertion`: a shipped validator's refusal is this copy's minted error and
  * passes as it is, diagnostics included; anything a custom validator throws
  * becomes what `classify` makes of it — never its message.
  */

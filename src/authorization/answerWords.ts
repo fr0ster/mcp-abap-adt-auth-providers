@@ -1,5 +1,5 @@
 /**
- * The fixed words per refused answer (spec §6d.2, §6d.3.2): what a listener
+ * The fixed words per refused answer: what a listener
  * answers in its `400`, above the paste form, and what a terminal shows
  * before it asks again. Nothing of the answer is in them.
  */

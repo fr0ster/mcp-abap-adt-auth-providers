@@ -1,5 +1,5 @@
 /**
- * `showUrl()` (spec §6d.2, C8): the authorization URL to stderr only, the
+ * `showUrl()`: the authorization URL to stderr only, the
  * logger the fixed line "the authorization URL was shown", then where the
  * channel waits and its route hint. Synchronous; it never fails.
  */

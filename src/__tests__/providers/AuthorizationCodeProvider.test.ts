@@ -128,7 +128,7 @@ describe('AuthorizationCodeProvider', () => {
    * its own magic number, so the invariant this is protecting stays visible
    * instead of depending on two constants that happen to agree today: the
    * test's own bound — an `AbortSignal.timeout` it hands the strategy, as a
-   * consumer composes one (spec §6a: no login has a bound of the package's
+   * consumer composes one (no login has a bound of the package's
    * choosing) — must expire strictly before Jest's. If Jest's timeout fired
    * first, the case would fail with "Exceeded timeout of Xms" — which says
    * nothing about authentication — instead of the login's own, legible
@@ -520,7 +520,7 @@ describe('AuthorizationCodeProvider with strategies', () => {
     });
   }
 
-  // K4 / §6a (Task 23): no login times out on its own; the consumer's
+  // No login times out on its own; the consumer's
   // abort ends it `aborted` (strategy 'browser') and frees the port.
   it('leaves the callback port free the moment a login is aborted', async () => {
     const consumer = new AbortController();
@@ -566,7 +566,7 @@ describe('AuthorizationCodeProvider with strategies', () => {
     });
 
     const started = Date.now();
-    // E12 (Task 26): the configuration case; the URIs are diagnostics.
+    // The configuration case; the URIs are diagnostics.
     const thrown = await provider.getTokens().catch((error: unknown) => error);
     expect(configurationOf(thrown)).toMatchObject({
       case: 'redirect-mismatch',
@@ -596,7 +596,7 @@ describe('AuthorizationCodeProvider with strategies', () => {
       }),
     });
 
-    // E12 (Task 26): the second net, the same case.
+    // The second net, the same case.
     const thrown = await provider.getTokens().catch((error: unknown) => error);
     expect(configurationOf(thrown)).toMatchObject({
       case: 'redirect-mismatch',
@@ -692,7 +692,7 @@ describe('AuthorizationCodeProvider strategy lifecycle', () => {
       authorization: supplied,
     });
 
-    // L3 (spec §6, Task 22): the consumer's own error never comes back — an
+    // The consumer's own error never comes back — an
     // AuthProviderFailure holding the classified error, without its message.
     const failed = provider.getTokens();
     await expect(failed).rejects.toBeInstanceOf(AuthProviderFailure);

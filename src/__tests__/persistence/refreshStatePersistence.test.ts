@@ -1,6 +1,5 @@
 /**
- * `refreshStatePersistence(write, options)` alone (spec §6c.8, §6c.10
- * "`refreshStatePersistence`, alone"): the logical refresh state, pending
+ * `refreshStatePersistence(write, options)` alone: the logical refresh state, pending
  * delivery of a failed new refresh token, `onWriteFailure`, and one write at
  * a time in report order — detached reports included. Reports are built by
  * hand; no provider runs here.

@@ -1,5 +1,5 @@
 /**
- * Opening the authorization URL runs no shell (Task 26 fix round 1).
+ * Opening the authorization URL runs no shell.
  *
  * The URL may come from OIDC discovery or configuration. 5.4.2's fallback
  * handed it to `child_process.exec` inside double quotes, so `$(…)` or a

@@ -100,7 +100,7 @@ export class UaaPasscodeProvider extends BaseTokenProvider {
     const strategy = this.config.authorization;
     // The passcode page takes no redirect: the code travels by hand. The
     // strategy holds a reader: it starts once the previous attempt's is
-    // released (the drain, spec §6b), and the attempt's signal ends it.
+    // released (the drain), and the attempt's signal ends it.
     const outcome = await attempt.exclusive(() =>
       strategy.authorize({
         logger: this.logger,

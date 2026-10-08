@@ -38,7 +38,7 @@ const refused = { at: 'request' as const, status: 401, error: {} };
 describe('AuthorizationCodeProvider: one renewal, one login', () => {
   it('a refused refresh and a failed login call the strategy exactly once', async () => {
     const authorize = jest.fn(async () => {
-      // What a shipped strategy throws when the login fails (K11).
+      // What a shipped strategy throws when the login fails.
       throw new AuthProviderFailure(
         authError['interactive-login']({ outcome: 'failed' }),
       );

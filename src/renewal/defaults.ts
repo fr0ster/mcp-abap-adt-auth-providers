@@ -1,5 +1,5 @@
 /**
- * The shipped renewal strategies (spec §6c.8). The provider builds none of
+ * The shipped renewal strategies. The provider builds none of
  * its own (rule 7): the consumer gives one of these, or its own
  * `IRenewalStrategy`. Both are stateless and answer synchronously.
  */
@@ -18,7 +18,7 @@ const REFRESH: RenewalDecision = Object.freeze({
 });
 
 /**
- * The table of §6c.8. `login` is what the table answers where a login
+ * The table of defaults. `login` is what the table answers where a login
  * follows; `refreshOnly()` passes `stop` in its place, with the same
  * `sentRefreshToken`.
  */

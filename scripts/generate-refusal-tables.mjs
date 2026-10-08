@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * The README's refusal tables (spec §11.4), generated: every word comes from
+ * The README's refusal tables, generated: every word comes from
  * auth-errors' `render`, every row set from the allowlists of interfaces-auth
  * as auth-errors sees it — nothing here copies a sentence. A table that
  * meets a value it has no row text for throws, so a new problem or verdict
@@ -11,8 +11,8 @@
  *   … --readme <path>                                  # another file (tests)
  *
  * Each table lives between `<!-- generated:refusal-table NAME -->` and
- * `<!-- /generated:refusal-table NAME -->`. Tasks 18–26 regenerate the rows
- * of the refusals they change; Task 30 rewrites the prose around them.
+ * `<!-- /generated:refusal-table NAME -->`. The script regenerates the rows
+ * of the refusals; the prose around them is written by hand.
  */
 import { readFileSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
@@ -45,7 +45,7 @@ function each(values, rows, table) {
   });
 }
 
-/** "What `rejected()` answers": the verdicts of `system-refused` (B1–B6). */
+/** "What `rejected()` answers": the verdicts of `system-refused`. */
 function rejectedTable() {
   const own = [
     ['Basic', 'user-password'],
@@ -211,7 +211,7 @@ function samlRuleWords(rule, check) {
 }
 
 /**
- * "Refusal messages": every rule of Appendix B (spec), in the allowlist's
+ * "Refusal messages": every SAML validation rule, in the allowlist's
  * order — its check, its words after the common prefix, and the one
  * diagnostic it may carry.
  */
@@ -248,7 +248,7 @@ function samlTable() {
 }
 
 /**
- * A rule's check (Appendix B: fixed by the rule). auth-errors' words name
+ * A rule's check (fixed by the rule). auth-errors' words name
  * the rule's own check whatever the facts say, so the first check whose
  * prefix the words carry is that one — found, not copied here.
  */
@@ -285,7 +285,7 @@ function samlCandidatesTable() {
 }
 
 /**
- * "Configuration errors" (spec Appendix A.5, K6): each case, where it is
+ * "Configuration errors": each case, where it is
  * thrown and the fields it names. A case whose words list its fields is
  * rendered with one field and shown with `<fields>` in its place.
  */

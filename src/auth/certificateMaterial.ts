@@ -13,7 +13,7 @@ import type {
 } from '@mcp-abap-adt/interfaces-auth';
 
 /**
- * A4: certificate material that cannot be presented — `incomplete`,
+ * Certificate material that cannot be presented — `incomplete`,
  * `unusable` or `expired` — as a `client-certificate` failure. Its words are
  * fixed; nothing of the material, nor of an error a check threw, is kept.
  */
@@ -32,7 +32,7 @@ function isIncomplete(material: ICertificateMaterial): boolean {
 /**
  * Proves certificate material whole, usable and current: complete first, then
  * a TLS context built from it, then its leaf certificate not past `notAfter`.
- * Throws a `client-certificate` failure (A4) whose `problem` says which —
+ * Throws a `client-certificate` failure whose `problem` says which —
  * its words are fixed; an error's own text never reaches them.
  */
 export function assertCertificateMaterial(
@@ -70,7 +70,7 @@ export function assertNotExpired(notAfter: number): void {
 }
 
 /**
- * The same proof as an outcome (B14): the `client-certificate` error the
+ * The same proof as an outcome: the `client-certificate` error the
  * check threw. Reading the material may run a consumer's getter, which may
  * throw anything: `classify` answers a failure's own error, and anything
  * that is not a `client-certificate` error is `unusable`.

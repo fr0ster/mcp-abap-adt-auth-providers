@@ -296,7 +296,7 @@ function forgedAssertionFrom(xml: string): string {
     .replace('mock-user', 'attacker');
 }
 
-// Refused by both, for the same rule (spec Appendix B) and the same facts:
+// Refused by both, for the same rule and the same facts:
 // everything here is inside the assertion, or is the signature itself. The
 // rule fixes the check; the helper asserts both, the rule's own words, and
 // the diagnostic or its absence.

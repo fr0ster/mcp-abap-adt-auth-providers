@@ -1,6 +1,6 @@
 /**
  * A consumer's async logger — every method answers a rejecting promise —
- * on a token site's paths (controller addition after Task 22): `logQuietly`
+ * on a token site's paths: `logQuietly`
  * attaches a no-op rejection handler to a plain native promise, so no
  * `unhandledRejection` arrives. Run under plain node in a child process,
  * where an unhandled rejection is recorded rather than hidden by Jest.
@@ -134,8 +134,8 @@ describe('the UAA code exchange with a consumer logger', () => {
 });
 
 /**
- * The interactive login's log lines (Task 23): the prompt (`announce`), the
- * listener's refused-answer line, the presentation's failure line (H7)
+ * The interactive login's log lines: the prompt (`announce`), the
+ * listener's refused-answer line, the presentation's failure line
  * and the manual prompt — every one guarded. An async logger leaves no
  * unhandled rejection; a throwing one changes no outcome, and a prompt it
  * would have swallowed goes to stderr instead.
@@ -162,7 +162,7 @@ await settle(async () => (await strategies.browserCallbackStrategy({
     await get(redirectUri + '?code=c1&state=S');
   } },
 }).authorize({ buildAuthorizationUrl: async (r) => 'https://idp.example/a?state=S&redirect_uri=' + encodeURIComponent(r), logger })).payload);
-// A launcher that fails ends nothing (Task 30h): its line and prompt go
+// A launcher that fails ends nothing: its line and prompt go
 // through the same logger, and the consumer's signal ends the login.
 await settle(async () => {
   const controller = new AbortController();
@@ -187,8 +187,8 @@ report(outcomes);
 describe('the interactive login with a consumer logger', () => {
   const expected = ['c1', 'aborted', 'c2', 'shown'];
   /**
-   * The test's own bound on the child (Task 29 ruling): a login that never
-   * ends — an unguarded H7 line throwing before the prompt — kills the
+   * The test's own bound on the child: a login that never
+   * ends — an unguarded log line throwing before the prompt — kills the
    * child here and fails the test, instead of hanging it.
    */
   const BOUND_MS = 30_000;
@@ -206,9 +206,9 @@ describe('the interactive login with a consumer logger', () => {
     expect(run.timedOut).toBe(false);
     expect(run.result).toEqual(expected);
     expect(run.unhandled).toEqual([]);
-    // Fix round 1 (item 8): a prompt whose info rejected is not lost — it
+    // A prompt whose info rejected is not lost — it
     // reaches stderr too; nothing of the rejection does. (The authorization
-    // URL goes to stderr only in any case, C8.)
+    // URL goes to stderr only in any case.)
     expect(run.stderr).toContain(
       'Open this URL in your browser to authenticate',
     );

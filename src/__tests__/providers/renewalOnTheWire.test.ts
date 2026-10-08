@@ -1,6 +1,5 @@
 /**
- * The renewal strategy where the point is what reached the server (spec
- * §6c.10 "Renewal"): real sockets through real axios, a local token
+ * The renewal strategy where the point is what reached the server: real sockets through real axios, a local token
  * endpoint that holds or answers each request, and every claim about a
  * refresh token asserted on what the server received.
  */
@@ -318,7 +317,7 @@ describe('the server answers the token endpoint', () => {
     });
   });
 
-  describe("a login step's sent, as its sites told it (review I-3c)", () => {
+  describe("a login step's sent, as its sites told it", () => {
     function loginOnly() {
       const situations: RenewalSituation[] = [];
       const { strategy, observed } = observing({

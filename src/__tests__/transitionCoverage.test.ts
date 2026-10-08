@@ -1,5 +1,5 @@
 /**
- * R6 (plan Task 27): the transition tests of Decision D6 are deleted with the
+ * The transition tests are deleted with the
  * pieces they kept green — `legacyLadder.test.ts`, `legacyBridge.test.ts`,
  * `contractTransition.test.ts`, `contractTransition.typecheck.ts` — and with
  * them the tests of the deleted classes and helpers (`refusalWords.test.ts`,
@@ -9,12 +9,12 @@
  * `callbackServer.test.ts` and `noLoginTimeout.test.ts`).
  *
  * Each deleted case is mapped to the test that covers its behaviour now — an
- * Appendix A row test of the kind the case produced, or the test of what
+ * row test of the kind the case produced, or the test of what
  * replaced the piece — named by a title that must appear, as written, in a
  * file under `src/__tests__`. A missing counterpart fails this suite.
  *
- * A12 (`ServiceKeyError` / `SessionDataError`) had no producer and has no
- * kind (spec §6): its counterpart is the case proving a look-alike lends
+ * `ServiceKeyError` / `SessionDataError`) had no producer and has no
+ * kind: its counterpart is the case proving a look-alike lends
  * nothing.
  */
 
@@ -171,7 +171,7 @@ const COVERAGE: ReadonlyArray<readonly [string, string, string]> = [
   [
     'TokenResultWithDisposition: what onTokens receives',
     'providers/tokenProviderFailures.test.ts',
-    '§6c.1: a renewal returns the result with the held refresh token, and no disposition',
+    'a renewal returns the result with the held refresh token, and no disposition',
   ],
 ];
 
@@ -215,7 +215,7 @@ describe('R6: every deleted transition case has a counterpart test that exists',
   });
 });
 
-describe('Decision D6: no transition piece is left in src', () => {
+describe('no transition piece is left in src', () => {
   const SRC = join(__dirname, '..');
   const sources = (dir: string): string[] =>
     readdirSync(dir).flatMap((name) => {

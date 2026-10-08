@@ -1,5 +1,5 @@
 /**
- * The renewal strategy (spec §6c.5, §6c.10 "Renewal"): the provider asks the
+ * The renewal strategy: the provider asks the
  * consumer's strategy before every step, reads its answer as foreign code,
  * and performs only what it was asked for. The grant calls are scripted
  * promises (`ScriptedProvider`); the base class runs as shipped. The cases
@@ -698,7 +698,7 @@ describe('renewal-declined', () => {
   });
 });
 
-describe('where a renewal starts (spec §6c.4)', () => {
+describe('where a renewal starts', () => {
   it('causes and moments: no-token, expired, explicit, and the lastRenewal of a remembered token at get-tokens and at prepare', async () => {
     const s = scripted([]);
     const none = new ScriptedProvider({ renewal: s.strategy });
@@ -748,7 +748,7 @@ describe('where a renewal starts (spec §6c.4)', () => {
   });
 });
 
-describe('logging (spec §6c.9)', () => {
+describe('logging', () => {
   it('one debug line per decision, allowlisted values only', async () => {
     const lines: unknown[][] = [];
     const logger: ILogger = {
@@ -777,7 +777,7 @@ describe('logging (spec §6c.9)', () => {
   });
 });
 
-describe('a refresh commit that fails (review I-2, spec §6c.6)', () => {
+describe('a refresh commit that fails ', () => {
   /** A persistence strategy whose every report fails. */
   const failing = () =>
     reportRecorder(() => {
@@ -820,7 +820,7 @@ describe('a refresh commit that fails (review I-2, spec §6c.6)', () => {
   });
 });
 
-describe('the strategy gets frozen copies; the provider reads back nothing it handed out (review M-1)', () => {
+describe('the strategy gets frozen copies; the provider reads back nothing it handed out', () => {
   /** Tries `change`; a frozen object refuses it, which the strategy ignores. */
   const attempt = (change: () => void) => {
     try {
@@ -909,7 +909,7 @@ describe('the strategy gets frozen copies; the provider reads back nothing it ha
   });
 });
 
-describe('review M-2, M-3, M-4', () => {
+describe('edge cases of a refresh step and of the delivery order', () => {
   function warnings() {
     const lines: unknown[][] = [];
     const logger: ILogger = {
@@ -923,7 +923,7 @@ describe('review M-2, M-3, M-4', () => {
     return { lines, logger };
   }
 
-  it('M-2: a refresh ended by the abort is not logged as "Refresh failed"', async () => {
+  it('a refresh ended by the abort is not logged as "Refresh failed"', async () => {
     const { lines, logger } = warnings();
     const provider = seeded(refreshThenLogin(), { logger });
     provider.holdDispatch = true;
@@ -939,7 +939,7 @@ describe('review M-2, M-3, M-4', () => {
     );
   });
 
-  it('M-3: a refresh token in discarded is never dispatched, whatever canRefresh said', async () => {
+  it('a refresh token in discarded is never dispatched, whatever canRefresh said', async () => {
     const provider = seeded(refreshThenLogin());
     const internals = provider as unknown as {
       discarded: Set<string>;
@@ -956,7 +956,7 @@ describe('review M-2, M-3, M-4', () => {
     expect(provider.refreshes.items).toHaveLength(0);
   });
 
-  it('M-4: a discard of a refresh token no longer held reports nothing (spec §6c.6)', async () => {
+  it('a discard of a refresh token no longer held reports nothing', async () => {
     const { reports, persistence } = reportRecorder();
     const provider = seeded(refreshThenLogin(), { persistence });
     await (
@@ -969,7 +969,7 @@ describe('review M-2, M-3, M-4', () => {
   });
 });
 
-describe("stop's answer, in §6c.5 step 8's order (review I-3a)", () => {
+describe("stop's answer, in the order of the renewal", () => {
   it("a step's error comes before rule 5's refusal: a 403 renewed, the refresh refused, then stop", async () => {
     const s = scripted([
       refresh(),
@@ -1040,7 +1040,7 @@ describe("stop's answer, in §6c.5 step 8's order (review I-3a)", () => {
   });
 });
 
-describe('pending observations are delivered before the next next() (review I-3b)', () => {
+describe('pending observations are delivered before the next next()', () => {
   it('with the queued delivery not yet run, next() delivers first, and only once', async () => {
     // ifCut keep: R stays, so the next renewal can refresh it again.
     const s = scripted([refresh('keep'), refresh()]);

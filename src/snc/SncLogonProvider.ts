@@ -6,11 +6,10 @@
  * It opens no connection and loads no SAP library. No collaborator is
  * defaulted: forSecureLoginClient is the recipe.
  *
- * Its four moments run inside `AuthProviderBase`'s boundary (spec §8.1):
+ * Its four moments run inside `AuthProviderBase`'s boundary:
  * anything that escapes a body is `unknown` with the moment's SNC operation —
- * "the SNC provider failed while resolving the SNC library (unknown error)"
- * (G10). Every refusal is minted (spec A.7); a library path is a diagnostic,
- * never a word (L9).
+ * "the SNC provider failed while resolving the SNC library (unknown error)". Every refusal is minted; a library path is a diagnostic,
+ * never a word.
  */
 
 import {
@@ -68,7 +67,7 @@ export interface SncLogonProviderConfig {
   probes: ISncProductProbe[];
   logger?: ILogger | undefined;
   /**
-   * The first attached party (spec §6b), as `attach(signal)` right after
+   * The first attached party, as `attach(signal)` right after
    * construction. `prepare()` hands the locator and the probes a signal that
    * aborts when every attached party has aborted — the registry query is
    * killed then; with none live, `prepare()` waits for the machine. No
@@ -128,7 +127,6 @@ export class SncLogonProvider extends AuthProviderBase {
         ? given.value.trim()
         : '';
     if (!partnerName) {
-      // E20.
       throw misconfigured(
         authError.configuration({
           case: 'snc-partner-name-missing',
@@ -139,7 +137,7 @@ export class SncLogonProvider extends AuthProviderBase {
     const qopRead = ownData(config, 'qop');
     const qop = qopRead.readable ? (qopRead.value ?? '9') : undefined;
     if (!isSncQop(qop)) {
-      // E21: the value is never echoed (L5); `allowed` names the set.
+      // The value is never echoed; `allowed` names the set.
       throw misconfigured(
         authError.configuration({
           case: 'snc-qop-invalid',
@@ -206,7 +204,7 @@ export class SncLogonProvider extends AuthProviderBase {
   }
 
   /**
-   * Attaches a party sharing this provider (spec §6b): `prepare()` waits on
+   * Attaches a party sharing this provider: `prepare()` waits on
    * the parties live at its start and any attached while it runs, and ends
    * `aborted` when all of them have aborted. Released when its signal aborts
    * or by the returned `detach()`.
@@ -237,12 +235,13 @@ export class SncLogonProvider extends AuthProviderBase {
       );
     } catch (error) {
       throwIfAborted(signal);
-      // G5–G7 only from the shipped locator (the approved source of the
-      // paths); anything else a locator throws is G4's fixed sentence.
+      // A library's failure words and paths come only from the shipped locator
+      // (the approved source of the paths); anything else a locator throws is
+      // one fixed sentence.
       const refusal = isShippedLocatorFailure(error)
         ? readFailure(error, 'resolving-snc-library')
         : foreignLocatorRefusal();
-      // H4: the words; the paths only as the diagnostics field.
+      // The words; the paths only as the diagnostics field.
       const fields = logFields(refusal);
       logQuietly(() =>
         this.logger?.warn(`SNC library not found: ${fields.error}`, fields),
@@ -250,11 +249,11 @@ export class SncLogonProvider extends AuthProviderBase {
       return { ok: false, refusal };
     }
     throwIfAborted(signal);
-    // A getter that throws here is the boundary's (G10), as in 5.4.2.
+    // A getter that throws here is the boundary's, as in 5.4.2.
     const given: unknown = found?.path;
     const path = typeof given === 'string' ? given.trim() : '';
     if (!path) {
-      // G8. Built apart: a union as the contextual type widens the problem.
+      // Built apart: a union as the contextual type widens the problem.
       const refusal = authError.snc({ problem: 'locator-returned-no-path' });
       return { ok: false, refusal };
     }
@@ -276,9 +275,9 @@ export class SncLogonProvider extends AuthProviderBase {
           break;
         }
       } catch (error) {
-        // An abort is the consumer's, not the probe's failure: no H5 line.
+        // An abort is the consumer's, not the probe's failure: no line is logged.
         throwIfAborted(signal);
-        // H5: a probe that cannot tell names nothing; the logon goes on.
+        // A probe that cannot tell names nothing; the logon goes on.
         const fields = logFields(readFailure(error, 'probing-snc-product'));
         logQuietly(() =>
           this.logger?.warn(
@@ -290,7 +289,7 @@ export class SncLogonProvider extends AuthProviderBase {
     }
     throwIfAborted(signal);
     const secureLoginClient = applying instanceof SecureLoginClientProbe;
-    // The one extraction site of the `library` diagnostic (spec §3.3): the
+    // The one extraction site of the `library` diagnostic: the
     // path the locator returned, trimmed here. `rejected()` relays these.
     const libraryArchs = archsOf(library);
     const withArchs = libraryArchs.length ? { libraryArchs } : {};
@@ -330,7 +329,6 @@ export class SncLogonProvider extends AuthProviderBase {
   protected onEstablish(logon: ILogonTarget): AuthOutcome {
     const library = this.library;
     if (!library) {
-      // G9.
       return {
         ok: false,
         refusal: authError['not-prepared']({ provider: 'snc' }),

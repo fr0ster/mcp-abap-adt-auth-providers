@@ -1,6 +1,6 @@
 /**
  * A collaborator's answer is the consumer's own code, awaited normally
- * inside the guarded boundary (the user's decision, 2026-10-07): a
+ * inside the guarded boundary: a
  * Promises/A+ promise from another library (Bluebird, Q, …) must work.
  *
  * For each collaborator below, answered as an `APlusPromise`:
@@ -117,7 +117,7 @@ interface Row {
    * The collaborator's failure is best effort by contract — an SNC product
    * probe (logged, the library stands) — so the moment stays Ok. (A
    * persistence strategy's awaited report is not: its failure is the
-   * renewal's, spec §6c.6.)
+   * renewal's.)
    */
   readonly failureStands?: boolean;
 }
@@ -215,7 +215,7 @@ const ROWS: Row[] = [
     name: 'SncLogonProvider · product probe',
     moment: 'prepare',
     signalled: true,
-    // A probe only names the product for a hint: its failure is logged (H5)
+    // A probe only names the product for a hint: its failure is logged
     // and the library stands.
     failureStands: true,
     make: (how, signal) =>

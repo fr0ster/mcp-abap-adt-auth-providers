@@ -1,5 +1,5 @@
 /**
- * The composer (spec §6d.4): one authorization strategy from a
+ * The composer: one authorization strategy from a
  * presentation, a transport and a protocol. It has no default part and no
  * default endpoint — the named compositions are the only place today's
  * values live.
@@ -9,14 +9,14 @@
  * URL; arm the channel with the composer's judge; present the URL (not
  * awaited); wait. The judge the channel gets latches the first terminal
  * verdict — `accept` with its payload, or `end` with its error —
- * synchronously, before any response is flushed (C9): every later answer
+ * synchronously, before any response is flushed: every later answer
  * is refused `already-answered`, and the authorization settles with what
  * was latched. The payload returned is the one the protocol accepted, never
  * anything a transport hands back.
  *
  * `authorize` settles only once the transport's `open` has settled — the
  * port free, the reader closed — and only then is it free for the next
- * call: the drain (spec §6b, `attempt.exclusive`) waits for exactly this.
+ * call: the drain (`attempt.exclusive`) waits for exactly this.
  * An overlapping `authorize` is `busy`; `dispose()` ends the call in flight
  * and resolves once it has settled.
  */
@@ -241,7 +241,7 @@ export function composeAuthorization<TPayload>(
      */
     let kept: AuthorizationOutcome<TPayload> | undefined;
 
-    /** The judge the channel gets: the first terminal verdict latched (C9). */
+    /** The judge the channel gets: the first terminal verdict latched. */
     const latching =
       (judge: (answer: AuthorizationAnswer) => unknown): AnswerJudge<unknown> =>
       (answer) => {
@@ -301,7 +301,7 @@ export function composeAuthorization<TPayload>(
           }),
         );
       }
-      // A builder's throw passes as it is (E7, E8, E12, OIDC discovery).
+      // A builder's throw passes as it is (a configuration failure, OIDC discovery).
       const url: unknown = await request.buildAuthorizationUrl(
         redirectUri ?? '',
       );
@@ -321,7 +321,7 @@ export function composeAuthorization<TPayload>(
       const answer = readSafely(armed, 'answer');
       if (typeof answer !== 'function') throw failedLogin(undefined);
 
-      // Presented, not awaited (spec §6d.5): a failure is logged in fixed
+      // Presented, not awaited: a failure is logged in fixed
       // words and the login keeps waiting; the fallback is the
       // presentation's own. Once the call has ended, nothing.
       const failedPresentation = (error: unknown) => {

@@ -289,7 +289,7 @@ describe('a 400 from the token endpoint that echoes the request', () => {
       expect(lastBody.includes(REFRESH) || lastBody.includes(DEVICE)).toBe(
         true,
       );
-      // D3 (L3): no longer the reduced AxiosError — the failure of the
+      // No longer the reduced AxiosError — the failure of the
       // site's operation, its facts the status and the registered code.
       expect(isAuthProviderFailure(thrown)).toBe(true);
       expect(axios.isAxiosError(thrown)).toBe(false);

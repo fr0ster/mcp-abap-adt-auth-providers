@@ -136,7 +136,7 @@ describe('no real program in a test', () => {
     expect(() => childProcess.spawn(fake, [])).toThrow(REFUSED);
   });
 
-  // N2: `promisify(execFile)` goes through `util.promisify.custom`, which
+  // `promisify(execFile)` goes through `util.promisify.custom`, which
   // must be kept (SncSystem destructures `{ stdout }`) and guarded too.
   // Node itself runs a JS fixture: the same on every platform (no shebang).
   it('promisify(execFile) of node with a fixture resolves { stdout, stderr }', async () => {

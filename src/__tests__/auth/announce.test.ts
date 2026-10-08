@@ -1,6 +1,5 @@
 /**
- * A prompt must not vanish (CLAUDE.md "Nothing writes to process.stdout";
- * Task 23 fix round 1, item 8): `announcer` writes to the logger's `info`,
+ * A prompt must not vanish (CLAUDE.md "Nothing writes to process.stdout"): `announcer` writes to the logger's `info`,
  * and to stderr — never stdout — when there is no logger, when `info`
  * throws, or when `info` answers a native promise that rejects. A logger
  * that took the prompt gets no stderr copy, and a foreign thenable's code

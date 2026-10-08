@@ -1,8 +1,8 @@
 /**
- * Spec §6d.3.2: the shipped protocols' judges, per protocol and per `via`;
- * §6d.3.1: a parameter counts only when present exactly once; §6a1: a bare
+ * The shipped protocols' judges, per protocol and per `via`;
+ * a parameter counts only when present exactly once; a bare
  * paste only without `? & = / #`, a pasted URL must carry the expected
- * `state`. §6d.11 State and the protocol's rows of Form; Logs: no code,
+ * `state`. Also the protocol's rows of Form, and Logs: no code,
  * `state`, pasted text or `SAMLResponse` in a verdict's error or a thrown
  * one.
  */

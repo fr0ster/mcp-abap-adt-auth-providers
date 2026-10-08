@@ -42,7 +42,7 @@ function usableKey(config: PrivateKeyJwtConfig): KeyObject {
   throw signingKeyUnusable();
 }
 
-/** A6: the key cannot sign — nothing of it, nor of the error, is kept. */
+/** The key cannot sign — nothing of it, nor of the error, is kept. */
 function signingKeyUnusable(): AuthProviderFailure {
   return new AuthProviderFailure(
     authError['client-authentication']({ problem: 'signing-key-unusable' }),

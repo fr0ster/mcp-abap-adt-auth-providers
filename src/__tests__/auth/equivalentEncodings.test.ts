@@ -6,8 +6,7 @@
  * each secret strategy, no surface may hold anything from which a secret is
  * recovered.
  *
- * Nothing scans text for secrets any more (spec §6, "The secret preparer,
- * not a redactor"): no surface carries the server's text at all, and this
+ * Nothing scans text for secrets any more: no surface carries the server's text at all, and this
  * suite proves it with an oracle (`recoverable`) that
  * decodes every substring of every surface — percent-decoding, form-decoding
  * and base64 from every start offset in both alphabets — and looks for each

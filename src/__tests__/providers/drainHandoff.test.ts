@@ -1,11 +1,11 @@
 /**
- * Drain handoff (spec §6b): an aborted attempt is non-joinable at once, but
+ * Drain handoff: an aborted attempt is non-joinable at once, but
  * not yet released — its strategy may still be closing its callback socket.
  * A replacement attempt waits for the release before it starts its own
  * authorization, raced only against its own signal (`attempt.exclusive`).
  * Here a composed strategy's transport holds its release open by a test
  * gate on a fixed port — the composer settles `authorize` only once `open`
- * has (spec §6d.4): without the handoff the replacement would meet a
+ * has: without the handoff the replacement would meet a
  * strategy still authorizing (`busy`) or a port still bound
  * (`port-in-use`).
  */

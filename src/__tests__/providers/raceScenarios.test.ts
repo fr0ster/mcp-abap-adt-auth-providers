@@ -1,5 +1,5 @@
 /**
- * The races spec §6b names, run under plain node in a child process with an
+ * The races of the shared renewal and the drain, run under plain node in a child process with an
  * unhandled-rejection recorder (Jest's own handlers would hide one): the
  * doomed join, a refresh cut after dispatch (real axios, real socket), the
  * drain chain, and the commit order. Each reports what it observed; every
@@ -52,7 +52,7 @@ const how = (t) => typeof t.refreshToken === 'string' ? 'replace' : t.refreshTok
 const writing = (record) => lib.refreshStatePersistence(async (t) => { record(t); }, { onWriteFailure: 'continue' });
 `;
 
-describe('the races of spec §6b, under plain node', () => {
+describe('the races of the shared renewal, under plain node', () => {
   it('the doomed join: a fresh attempt wins, the late login changes nothing', () => {
     const run = runPlainNode<Record<string, unknown>>(`${PRELUDE}
 const seen = [];
@@ -278,7 +278,7 @@ report({ olderOutcome, beforeRelease, order: hooks.map((h) => h.access), most, l
     expect(run.unhandled).toEqual([]);
   });
 
-  it('a detached report that fails — a throw, a rejecting promise — leaves no unhandled rejection, one log line, and fails no later call (spec §6c.6)', () => {
+  it('a detached report that fails — a throw, a rejecting promise — leaves no unhandled rejection, one log line, and fails no later call', () => {
     const run = runPlainNode<Record<string, unknown>>(`${PRELUDE}
 const outcomes = {};
 for (const mode of ['throw', 'reject']) {
@@ -341,7 +341,7 @@ report(outcomes);
     expect(run.unhandled).toEqual([]);
   });
 
-  it('an aborted() answering a rejecting native promise: marked handled, no unhandled rejection (review I-3d)', () => {
+  it('an aborted() answering a rejecting native promise: marked handled, no unhandled rejection', () => {
     const run = runPlainNode<Record<string, unknown>>(`${PRELUDE}
 let told = 0;
 const p = new Scripted({

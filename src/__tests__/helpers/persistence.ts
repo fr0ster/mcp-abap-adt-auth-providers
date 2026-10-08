@@ -1,5 +1,5 @@
 /**
- * Persistence strategies for the suites (spec §6c.3, §6c.8): one that
+ * Persistence strategies for the suites: one that
  * records every report as the provider made it, and one that records what
  * `refreshStatePersistence` writes — the behaviour `onTokens` had before
  * 6.0.0, read back in its words.

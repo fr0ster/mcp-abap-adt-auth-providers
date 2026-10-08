@@ -1,6 +1,6 @@
 /**
- * Appendix A.4, rows D1–D6, one test per row: what each token site throws,
- * as kind, facts and verbatim words (spec §6; plan Task 21).
+ * One test per token site: what each token site throws,
+ * as kind, facts and verbatim words.
  */
 
 import { beforeEach, describe, expect, it, jest } from '@jest/globals';

@@ -333,7 +333,7 @@ describe('no secret of a client authentication in the logs', () => {
         try {
           await site.run(auth, logger);
         } catch (error) {
-          // Since 6.0.0 an AuthProviderFailure (L3): its message and every
+          // Since 6.0.0 an AuthProviderFailure: its message and every
           // rendering of it are its error's fixed words.
           expect(isAuthProviderFailure(error)).toBe(true);
           message = String((error as { message?: unknown }).message ?? error);
@@ -370,8 +370,7 @@ describe('no secret of a client authentication in the logs', () => {
 });
 
 /**
- * No message of a thrown value reaches a log line (spec A.8, rows H1–H8,
- * H10). A collaborator the consumer supplies — a client-authentication
+ * No message of a thrown value reaches a log line. A collaborator the consumer supplies — a client-authentication
  * strategy, a certificate loader, the interactive strategy, a device-code
  * presenter, a SAML validator, a persistence strategy (and the shipped one's
  * `write`), a browser launcher, an SNC locator or probe — may throw an error whose text holds a key, a passphrase or a
@@ -774,7 +773,7 @@ describe('no message of a thrown error in the logs', () => {
       protocol: oauthCode(),
       endpoint: '/callback',
     });
-    // A launcher that fails ends nothing (Task 30h): the login waits, and
+    // A launcher that fails ends nothing: the login waits, and
     // the test's own signal ends it once the line and the prompt are out.
     const controller = new AbortController();
     const login = strategy
@@ -804,7 +803,7 @@ describe('no message of a thrown error in the logs', () => {
       kind: 'unknown',
     });
     // The URL reaches no log line, and — the consumer's own UI having
-    // failed — no prompt either (C8: its stderr may be collected).
+    // failed — no prompt either (its stderr may be collected).
     expect(entries.filter((e) => e.message.includes('idp.example'))).toEqual(
       [],
     );

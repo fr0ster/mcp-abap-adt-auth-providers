@@ -1,5 +1,5 @@
 /**
- * `untilAborted` subscribes only through the engine's `then` (review I-1):
+ * `untilAborted` subscribes only through the engine's `then`:
  * a plain native promise is never asked for its own `then`, and anything
  * else is adopted once, as `await` adopts it — never subscribed twice.
  */

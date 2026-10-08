@@ -14,7 +14,6 @@ export class FileCertificateMaterialLoader
     const hasPem = !!(config.certPath || config.certKeyPath); // any PEM-style field present
     const hasPfx = !!config.certPfxPath;
     if (hasPem && hasPfx) {
-      // E17.
       throw misconfigured(
         authError.configuration({
           case: 'certificate-pem-and-pfx',
@@ -35,7 +34,6 @@ export class FileCertificateMaterialLoader
         passphrase: config.certPassphrase,
       };
     }
-    // E18.
     throw misconfigured(
       authError.configuration({
         case: 'certificate-files-missing',

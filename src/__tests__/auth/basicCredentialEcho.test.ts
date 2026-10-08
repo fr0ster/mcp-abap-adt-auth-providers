@@ -382,7 +382,7 @@ describe('the UAA code exchange logging a 200 without access_token', () => {
         'http://localhost:61001/callback',
         throwing,
       ),
-      // D4: `request-failed` `no-access-token` of the code exchange.
+      // `request-failed` `no-access-token` of the code exchange.
     ).rejects.toThrow('the code exchange returned no access_token');
     await failed;
   });
@@ -415,7 +415,7 @@ describe('the debug line never replaces the failure', () => {
     } as ILogger;
     const withThrowing = expect(
       refreshJwtToken('rt', base, 'cid', 'secret', undefined, throwing),
-      // D1: the operation's words, the status and the registered code.
+      // The operation's words, the status and the registered code.
     ).rejects.toThrow(
       /^the token refresh failed \(HTTP 400, invalid_client\)$/,
     );

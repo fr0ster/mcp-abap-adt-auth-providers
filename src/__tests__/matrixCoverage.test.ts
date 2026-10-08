@@ -1,11 +1,11 @@
 /**
- * Task 29: every row of the diagnostic compatibility matrix (spec Appendix A)
+ * Every row of the diagnostic compatibility matrix
  * that belongs to this package has a test named by its row id, or is listed
  * as removed with its reason. The I rows belong to connection, the J rows to
  * the broker and the CLI.
  *
  * A row is named when a test's full name holds the row id as a whole token
- * (`A1` is not found in `A10`): the literal title of an `it(…)` /
+ * (`` is not found in ``): the literal title of an `it(…)` /
  * `it.each(…)(…)` / `test(…)` call, or of a `describe(…)` block around tests
  * (Jest's full name begins with it), read by plain scanning. While the spec is in the tree
  * its Appendix A row ids must equal this list, so a row added there fails

@@ -1,5 +1,5 @@
 /**
- * The transports without a socket (spec §6d.2, §6d.3.2, C4):
+ * The transports without a socket:
  * `terminalPaste` (an injected `read`), `consumerAnswer` and the
  * `consumerHandoff` pair — what each advertises, what each does per
  * verdict, and how each ends at an abort. Driven with the shipped
@@ -93,7 +93,7 @@ function scripted(lines: readonly string[]) {
   return { read, prompts };
 }
 
-describe('terminalPaste (spec §6d.2)', () => {
+describe('terminalPaste', () => {
   it('advertises the consumer’s redirect, or none (C4); label manual', async () => {
     const given = terminalPaste({
       redirectUri: REDIRECT,
@@ -310,7 +310,7 @@ describe('terminalPaste (spec §6d.2)', () => {
   });
 });
 
-describe('consumerAnswer (spec §6d.2)', () => {
+describe('consumerAnswer', () => {
   it('requires receive; advertises the consumer’s redirect or none; label consumer', async () => {
     expect(configurationOf(() => consumerAnswer({} as never))).toMatchObject({
       kind: 'configuration',
@@ -402,7 +402,7 @@ describe('consumerAnswer (spec §6d.2)', () => {
   });
 });
 
-describe('consumerHandoff (spec §6d.2)', () => {
+describe('consumerHandoff', () => {
   it('requires provide', () => {
     expect(configurationOf(() => consumerHandoff({} as never))).toMatchObject({
       kind: 'configuration',

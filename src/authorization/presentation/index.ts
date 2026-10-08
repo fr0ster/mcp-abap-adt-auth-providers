@@ -1,5 +1,5 @@
 /**
- * The shipped presentations (spec §6d.2): how the authorization URL reaches
+ * The shipped presentations: how the authorization URL reaches
  * the user. Each knows no payload and no transport.
  */
 

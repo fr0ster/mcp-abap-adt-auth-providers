@@ -1,5 +1,5 @@
 /**
- * The shipped browsers (spec §6d): six factories, each ONE fixed launch —
+ * The shipped browsers: six factories, each ONE fixed launch —
  * no platform switch, no fallback chain, no platform check. Each runs
  * exactly its program; on another OS it does whatever a program of that
  * name does there — where there is none, the launch fails to start and
@@ -10,7 +10,7 @@
  * is the consumer's own `IBrowser`.
  *
  * Every launch is a program started with an argument array, never a shell
- * (§6a0, `src/auth/browserLaunch.ts`); a program or app name is passed as
+ * (`src/auth/browserLaunch.ts`); a program or app name is passed as
  * given; only an `http(s)` URL is launched, as its serialisation.
  * `open(url, signal)` resolves once the browser was asked — a hand-off
  * launcher at its exit `0`, a browser binary at its `spawn` — and rejects

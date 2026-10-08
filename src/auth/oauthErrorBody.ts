@@ -2,7 +2,7 @@
  * The one thing of an OAuth error body this package reads: its `error`, and
  * only when it is a registered code. Nothing scans a body for secrets — the
  * server's free text (`error_description`, `error_uri`) is never read, never
- * logged and never kept (spec §6, "The secret preparer, not a redactor"); a
+ * logged and never kept; a
  * secret reaches a log line only through `prepareSecret` (`tokenRequest.ts`).
  */
 

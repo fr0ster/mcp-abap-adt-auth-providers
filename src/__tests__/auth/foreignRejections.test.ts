@@ -382,7 +382,7 @@ describe('a consumer logger that throws while a site reports the failure', () =>
           }),
         ).rejects.toBeDefined();
         await failed;
-        // D3, H6 (spec §6, guarded failure-path logging): an
+        // Guarded failure-path logging: an
         // AuthProviderFailure of the site's operation, equal in kind and
         // facts to the one a working logger sees.
         expect(isAuthProviderFailure(thrown)).toBe(true);

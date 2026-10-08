@@ -1,5 +1,5 @@
 /**
- * The loopback listener transports (spec §6d.2, C2, C3): each binds only
+ * The loopback listener transports: each binds only
  * loopback and advertises only what it binds — the origin it listens on
  * plus the endpoint it is given. `port` is required; `0` binds an
  * ephemeral port. A listener on a network address is the consumer's own
@@ -59,8 +59,8 @@ export function loopback4(options: LoopbackOptions): IAnswerTransport {
 /**
  * `127.0.0.1`, then `::1` on the same port — the two addresses `localhost`
  * resolves to; advertises `http://localhost:<port><endpoint>`. `::1` taken
- * fails `port-in-use`, never `127.0.0.1` alone (spec §6a1); a machine
- * without `::1` listens on `127.0.0.1` alone (C3): an address the machine
+ * fails `port-in-use`, never `127.0.0.1` alone; a machine
+ * without `::1` listens on `127.0.0.1` alone: an address the machine
  * does not have is nobody's.
  */
 export function loopback(options: LoopbackOptions): IAnswerTransport {

@@ -1,7 +1,7 @@
 /**
  * 5.4.2's own log lines, copied verbatim from the published 5.4.2
  * (`b628c69`) as an oracle: 6.0.0 removed the code that wrote them, and the
- * tests that keep its lines (H10, spec §6 "The safe-facts line stays") compare
+ * tests that keep its lines compare
  * against these, not against a restatement.
  *
  * - `logRefusedRequest`: `src/auth/tokenRequest.ts:441-461` at 5.4.2.

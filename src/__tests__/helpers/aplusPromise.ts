@@ -3,8 +3,7 @@
  * (no subclass, its own prototype, its own job queue through
  * `queueMicrotask`): the shape of Bluebird, Q or any other promise library a
  * consumer's collaborator may answer with. A collaborator is the consumer's
- * own code, and its answer must work when awaited (the user's decision,
- * 2026-10-07).
+ * own code, and its answer must work when awaited.
  *
  * `then` calls are counted on the instance's class, so a test can prove the
  * package actually followed the answer.

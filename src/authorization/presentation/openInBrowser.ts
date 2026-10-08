@@ -1,5 +1,5 @@
 /**
- * `openInBrowser({ browser })` (spec §6d.2, §6d.5): opens the URL through
+ * `openInBrowser({ browser })`: opens the URL through
  * `browser`, an `IBrowser` — a shipped one (`linuxDefaultBrowser()`,
  * `linuxBrowser(executable)`, `macDefaultBrowser()`, `macBrowser(app)`,
  * `windowsDefaultBrowser()`, `windowsBrowser(program)`) or the consumer's —

@@ -100,7 +100,7 @@ export class OidcDeviceFlowProvider extends BaseTokenProvider {
   protected async performLogin(attempt: AttemptContext): Promise<ITokenResult> {
     // The whole device flow — initiation, presentation, polling — is the
     // attempt's exclusive work: it starts once the previous attempt's has
-    // settled (the drain, spec §6b), and its part of the drain settles at the
+    // settled (the drain), and its part of the drain settles at the
     // abort itself, never when an outstanding poll answers.
     return attempt.exclusive(() =>
       untilAborted(this.deviceLogin(attempt.signal), attempt.signal),
@@ -164,7 +164,7 @@ export class OidcDeviceFlowProvider extends BaseTokenProvider {
         expiresInSeconds: deviceFlow.expiresIn,
       });
     } catch (error) {
-      // H3: the presenter's text may hold the code; the log gets the
+      // The presenter's text may hold the code; the log gets the
       // `logFields` of its failure only.
       logQuietly(() =>
         this.logger?.warn(
@@ -172,7 +172,6 @@ export class OidcDeviceFlowProvider extends BaseTokenProvider {
           logFields(readFailure(error, 'presenting-device-code')),
         ),
       );
-      // K17 / A2.
       throw loginFailure({ outcome: 'device-code-not-shown' });
     }
 
@@ -229,7 +228,7 @@ export class OidcDeviceFlowProvider extends BaseTokenProvider {
       throw oidcEndpointMissing('tokenEndpoint');
     }
     // Nothing is sent once the attempt is aborted; once sent, the refresh
-    // runs on (spec §6b).
+    // runs on.
     throwIfAborted(signal);
     const tokens = await refreshOidcToken(
       tokenEndpoint,

@@ -1,11 +1,11 @@
 /**
- * What SNC refusals say (spec A.7, G1–G4). The RFC SDK reports both common
+ * What SNC refusals say. The RFC SDK reports both common
  * logon failures as a generic communication error; the cause is in the GSS
  * text. Measured: `A2200019` — no credential to present; `SNCERR_INIT` — the
  * library could not be loaded. The text is searched by plain code, never
  * copied and never matched by a regular expression: only the minted words,
  * the library's architectures and an allowlisted SDK key are facts; the
- * library this provider resolved is a diagnostic, never a word (L9).
+ * library this provider resolved is a diagnostic, never a word.
  */
 
 import { authError, isRfcKey, isSncArch } from '@mcp-abap-adt/auth-errors';
@@ -15,7 +15,7 @@ import type { SncArch } from './libraryArchitectures';
 
 /**
  * The two GSS explanations, minted once by `prepare()` — the one site that
- * extracts the `library` diagnostic (spec §3.3) — so `rejected()` relays them
+ * extracts the `library` diagnostic — so `rejected()` relays them
  * and builds no diagnostic of its own.
  */
 export interface GssRefusals {
@@ -47,7 +47,7 @@ export function archsOf(library: SncLibrary | undefined): SncArch[] {
   return archs.filter((arch): arch is SncArch => isSncArch(arch));
 }
 
-/** The explanation of a GSS code in the error, when it carries one (G1, G2). */
+/** The explanation of a GSS code in the error, when it carries one. */
 export function sncCause(
   error: unknown,
   context: SncContext,
@@ -75,7 +75,7 @@ export function sncCause(
   return undefined;
 }
 
-/** A GSS cause, else "SNC logon refused" with an allowlisted SDK key (G3). */
+/** A GSS cause, else "SNC logon refused" with an allowlisted SDK key. */
 export function sncRefusal(error: unknown, context: SncContext): SncRefusal {
   const cause = sncCause(error, context);
   if (cause) return cause;
@@ -87,7 +87,7 @@ export function sncRefusal(error: unknown, context: SncContext): SncRefusal {
   );
 }
 
-/** A locator's own failure: the fixed sentence alone (G4). */
+/** A locator's own failure: the fixed sentence alone. */
 export function foreignLocatorRefusal(): SncRefusal {
   return authError.snc({ problem: 'library-not-found' });
 }

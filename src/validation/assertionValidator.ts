@@ -1,5 +1,5 @@
 /**
- * The shipped assertion validator: the spec's check table, in order.
+ * The shipped assertion validator: its check table, in order.
  *
  * Two properties matter more than any individual check. First, the signature
  * is resolved to an element and every assertion-level field is read *from that
@@ -175,7 +175,7 @@ function createValidator(
   const own = ownOptions<Partial<ShippedValidatorOptions>>(options);
   const skew = own.clockSkewMs ?? 0;
   if (!Number.isInteger(skew) || skew < 0) {
-    // E24: the value given is not echoed (L5).
+    // The value given is not echoed.
     throw misconfigured(
       authError.configuration({
         case: 'validator-clock-skew-invalid',
@@ -185,7 +185,6 @@ function createValidator(
   }
   const given = certificateList(own.idpCertificates);
   if (given.length === 0) {
-    // E25.
     throw misconfigured(
       authError.configuration({
         case: 'validator-no-certificates',
@@ -202,7 +201,7 @@ function createValidator(
   const certificates = given.map(toPem);
   const store = own.replayStore;
   if (store === null || typeof store !== 'object') {
-    // E22's generic case: the store is required (`defaultReplayStore`).
+    // The store is required (`defaultReplayStore`).
     throw requiredFieldsMissing(['replayStore']);
   }
 
@@ -219,7 +218,7 @@ function createValidator(
           authError['saml-assertion']({ rule: 'doctype', check: 'document' }),
         );
       }
-      // parseStrictXml refuses with `not-xml` itself (F7).
+      // parseStrictXml refuses with `not-xml` itself.
       const doc: Document = parseStrictXml(xml);
       const root = doc.documentElement;
       if (!root) {
@@ -268,7 +267,7 @@ function createValidator(
         covered = resolveSignedElements(xml, doc, certificates);
       } catch (error) {
         // Each rule of verification refuses at its site; anything else the
-        // walk throws is the signature's malformation (F8), with nothing of
+        // walk throws is the signature's malformation, with nothing of
         // what was thrown.
         if (error instanceof AuthProviderFailure) throw error;
         return refuse(
@@ -916,7 +915,7 @@ function chooseBearerConfirmation(
 }
 
 /**
- * Sub-rules 1 to 6, in the spec's fixed order: the first one this candidate
+ * Sub-rules 1 to 6, in the fixed order: the first one this candidate
  * fails, or the window it states. The temporal sub-rules 7 and 8 are the
  * caller's, since a candidate failing only those still bounds replay
  * retention.

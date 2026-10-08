@@ -1,7 +1,6 @@
 /**
- * What a transport rejects its wait with on an `end` verdict (spec
- * §6d.3.2): a failure holding the verdict's error when this copy minted
- * it, else `failed` — the composer re-mints what it latched (§6d.4); a
+ * What a transport rejects its wait with on an `end` verdict: a failure holding the verdict's error when this copy minted
+ * it, else `failed` — the composer re-mints what it latched; a
  * transport never passes on a value it cannot vouch for.
  */
 

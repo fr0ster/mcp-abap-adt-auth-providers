@@ -27,7 +27,7 @@ export function recordingTargets(options: RecordingTargetsOptions = {}) {
   const broken = () => {
     if (options.throws) throw new Error('target exploded: SECRET-IN-TARGET');
   };
-  // As connection's targets answer (spec §7): minted by auth-errors.
+  // As connection's targets answer: minted by auth-errors.
   const refuse = (
     refused: 'tls-material' | 'logon-parameters',
   ): AuthOutcome => ({

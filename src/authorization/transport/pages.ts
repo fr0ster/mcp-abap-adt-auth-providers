@@ -1,5 +1,5 @@
 /**
- * The pages a callback listener serves (spec §6d.3.4, §6d.3.5): fixed
+ * The pages a callback listener serves: fixed
  * markup, every interpolated value through `escapeHtml`, and the policy
  * every response carries.
  */
@@ -54,7 +54,7 @@ export const errorHtml = (message: string): string => `<!DOCTYPE html>
 </div></body></html>`;
 
 /**
- * The paste page (spec §6d.3.4): the protocol's words, escaped, and this
+ * The paste page: the protocol's words, escaped, and this
  * attempt's form token as a hidden field. It posts to `/submit`; another
  * origin cannot read the page (no CORS, the CSP) to learn the token.
  */

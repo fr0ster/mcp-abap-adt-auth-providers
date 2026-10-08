@@ -175,7 +175,7 @@ describe('privateKeyJwt — a key that does not fit', () => {
     ['a public key', rsa.publicKey, 'RS256'],
     ['garbage', 'not a key', 'RS256'],
   ];
-  // A6 (Task 26): an AuthProviderFailure of client-authentication, no
+  // An AuthProviderFailure of client-authentication, no
   // longer a ClientAuthenticationError.
   it.each(cases)(
     'refuses %s as client-authentication signing-key-unusable (A6)',

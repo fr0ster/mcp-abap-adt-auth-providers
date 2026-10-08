@@ -1,5 +1,5 @@
 /**
- * The presentations (spec §6d.2, §6d.5, C8), through the composer on real
+ * The presentations, through the composer on real
  * loopback ports: `showUrl` writes the authorization URL to stderr only and
  * gives the logger fixed words; `consumerPresentation` is the consumer's
  * UI, and its failure prints no URL anywhere — one fixed log line, its
@@ -168,7 +168,7 @@ describe('showUrl (C8)', () => {
   });
 });
 
-describe('consumerPresentation (spec §6d.5)', () => {
+describe('consumerPresentation', () => {
   it('show receives the URL, the redirect and a signal aborted once the login ends', async () => {
     const port = await getAvailablePort();
     const seen: Array<{
@@ -350,7 +350,7 @@ describe('construction', () => {
   });
 });
 
-describe('nothing of an answer or the URL reaches a log line (spec §6d.8)', () => {
+describe('nothing of an answer or the URL reaches a log line', () => {
   it('a login with forged callbacks, a refused paste and the IdP’s text: no code, state, form token, pasted text, URL or IdP text', async () => {
     const port = await getAvailablePort();
     const { logger, text } = capturingLogger();

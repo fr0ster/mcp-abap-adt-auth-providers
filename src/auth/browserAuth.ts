@@ -71,8 +71,8 @@ export function codeFromQuery(text: string): string | null | undefined {
 
 /**
  * The value percent-decoded, or `null` when it holds a malformed escape
- * (`%ZZ`): pasted or posted text is anyone's, and an unreadable code is K16
- * (`unreadable-input`), never a thrown `URIError`.
+ * (`%ZZ`): pasted or posted text is anyone's, and an unreadable code is
+ * `unreadable-input`, never a thrown `URIError`.
  */
 function decodedOrNull(value: string): string | null {
   try {
@@ -98,7 +98,7 @@ function valueUntilBreak(text: string, start: number): string {
 }
 
 /**
- * What binds a UAA login to its attempt (spec §6a1): the `state` the
+ * What binds a UAA login to its attempt: the `state` the
  * callback must carry and the PKCE challenge (S256) of the verifier its
  * exchange sends. Minted per URL by the provider; never logged.
  */
@@ -124,7 +124,7 @@ export function getJwtAuthorizationUrl(
   const clientid = authConfig.uaaClientId;
 
   if (!oauthUrl || !clientid) {
-    // E22: the names of what is missing.
+    // The names of what is missing.
     throw requiredFieldsMissing([
       ...(oauthUrl ? [] : ['uaaUrl']),
       ...(clientid ? [] : ['clientId']),
@@ -191,7 +191,7 @@ export async function exchangeCodeForToken(
       data: params.toString(),
       // A redirect would re-send the code and the secret: never followed.
       maxRedirects: 0,
-      // The attempt's abort cuts the exchange (spec §6b).
+      // The attempt's abort cuts the exchange.
       ...(signal === undefined ? {} : { signal }),
     });
 

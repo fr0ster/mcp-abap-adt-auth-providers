@@ -1,7 +1,7 @@
 /**
- * What a listener's bind may end with (spec §6d.2, §6d.8): a port no socket
- * can bind (K6), a port someone else holds (K1), an address the machine
- * does not have (C3), anything else (K11).
+ * What a listener's bind may end with: a port no socket
+ * can bind, a port someone else holds, an address the machine
+ * does not have, anything else.
  */
 
 import { AuthProviderFailure, authError } from '@mcp-abap-adt/auth-errors';
@@ -9,9 +9,9 @@ import { misconfigured } from '../../auth/configuration';
 import { failedLogin, portInUse } from '../../auth/interactiveLogin';
 
 /**
- * K6: a port no socket can bind — an integer in 0..65535 only; a string is
+ * A port no socket can bind — an integer in 0..65535 only; a string is
  * not a port (Node would bind a UNIX socket at that path). The value given
- * is not echoed (L5). Checked before anything binds.
+ * is not echoed. Checked before anything binds.
  */
 export function validatePort(port: unknown): asserts port is number {
   if (
@@ -54,8 +54,8 @@ export function addressInUse(error: unknown): boolean {
 }
 
 /**
- * The bind failed: a port someone else holds is K1, with its words; any
- * other failure names only its allowlisted code (K11). A failure already
+ * The bind failed: a port someone else holds is `port-in-use`, with its words; any
+ * other failure names only its allowlisted code. A failure already
  * decided (the second family's port taken) passes as it is.
  */
 export function bindFailure(error: unknown, port: number): Error {

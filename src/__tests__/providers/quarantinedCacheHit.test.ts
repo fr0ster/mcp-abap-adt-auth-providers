@@ -1,5 +1,5 @@
 /**
- * Spec §6b / §6c.1 (Task 27 review): a cache hit while a refresh token is
+ * A cache hit while a refresh token is
  * quarantined — cut after its refresh was dispatched, its clearing step still
  * queued behind a stalled persistence report — never hands that refresh
  * token out; once the queue drains, the discard is reported, and the shipped

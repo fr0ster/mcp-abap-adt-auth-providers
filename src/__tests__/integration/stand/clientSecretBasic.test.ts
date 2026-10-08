@@ -65,7 +65,6 @@ describeUaa(
     it('raw: the same secret is refused by UAA with a 401', async () => {
       await expect(
         provider('basic_reserved', 'raw').getTokens(),
-        // D1
       ).rejects.toThrow('the client credentials request failed (HTTP 401');
     });
 
@@ -103,7 +102,6 @@ describeKeycloak(
     it('raw: the same secret is refused by Keycloak with a 401', async () => {
       await expect(
         provider('basic-reserved', 'raw').getTokens(),
-        // D1
       ).rejects.toThrow('the OIDC password grant failed (HTTP 401');
     });
 

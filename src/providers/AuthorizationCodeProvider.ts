@@ -85,9 +85,8 @@ const unusableAuthorizationUrl = () =>
 /**
  * The `redirect_uri` a pre-built `authorizationUrl` declares, or `null`. A URL
  * that does not parse — or carries surrounding whitespace, which the URL
- * parser would strip but C7 would append after — is a configuration error,
- * case `invalid-value`, naming `authorizationUrl` — never the value (spec
- * §6a0): refused, not trimmed (the provider does not guess).
+ * parser would strip but the appended `state` would follow — is a configuration error,
+ * case `invalid-value`, naming `authorizationUrl` — never the value: refused, not trimmed (the provider does not guess).
  */
 function declaredRedirectOf(prebuilt: string): string | null {
   if (prebuilt !== prebuilt.trim()) throw unusableAuthorizationUrl();
@@ -101,7 +100,7 @@ function declaredRedirectOf(prebuilt: string): string | null {
 }
 
 /**
- * C7 (spec §6d.0): a configured URL that carries no `state` gets the
+ * A configured URL that carries no `state` gets the
  * provider's own, minted for every URL built, and nothing else — no PKCE
  * challenge it did not build. It is appended to the query as text, before
  * any fragment, so nothing of the consumer's URL is reserialised. A URL
@@ -159,7 +158,7 @@ export class AuthorizationCodeProvider extends BaseTokenProvider {
       missingFields.push('clientSecret');
     }
     if (missingFields.length > 0) {
-      // E1: the names of what is missing, never a value.
+      // The names of what is missing, never a value.
       throw requiredFieldsMissing(missingFields);
     }
     // A pre-built URL that cannot be read is refused here, not at login.
@@ -224,7 +223,7 @@ export class AuthorizationCodeProvider extends BaseTokenProvider {
     const prebuilt = this.config.authorizationUrl;
     const declaredRedirect = prebuilt ? declaredRedirectOf(prebuilt) : null;
 
-    // E12: the two addresses are diagnostics, never in the words (L9).
+    // The two addresses are diagnostics, never in the words.
     const mismatch = (redirectUri: string) =>
       misconfigured(
         authError.configuration(
@@ -237,14 +236,14 @@ export class AuthorizationCodeProvider extends BaseTokenProvider {
     // guard lives here rather than after the fact because a mismatched redirect
     // produces no callback at all — checking the outcome would mean waiting
     // for a callback that never comes.
-    // Login CSRF (spec §6a1): the PKCE verifier of the last URL this
+    // Login CSRF: the PKCE verifier of the last URL this
     // attempt built, sent in its exchange. None for a configured URL — the
-    // consumer's, given only a `state` when it has none (C7) — or a code no
+    // consumer's, given only a `state` when it has none — or a code no
     // URL was built for.
     let codeVerifier: string | undefined;
     const request: AuthorizationRequest = {
       logger: this.logger,
-      // The attempt's signal: every waiter gone ends the login (spec §6b).
+      // The attempt's signal: every waiter gone ends the login.
       signal: attempt.signal,
       buildAuthorizationUrl: async (redirectUri: string): Promise<string> => {
         if (prebuilt) {
@@ -267,7 +266,7 @@ export class AuthorizationCodeProvider extends BaseTokenProvider {
     const strategy = this.config.authorization;
 
     // The strategy holds a socket or a reader: it starts only once the
-    // previous attempt has released its own (the drain, spec §6b).
+    // previous attempt has released its own (the drain).
     const outcome = await attempt.exclusive(() => strategy.authorize(request));
 
     // The second net. A strategy that never called the builder — `staticCodeStrategy`

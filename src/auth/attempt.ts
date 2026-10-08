@@ -1,6 +1,6 @@
 /**
  * The pieces of a cancellable attempt that the token sites and the device
- * poll share (spec §6b): the failure an aborted attempt ends with, a race
+ * poll share: the failure an aborted attempt ends with, a race
  * that settles at the abort itself, and the server's poll interval as an
  * abortable wait. No timer of this package's choosing: the only `setTimeout`
  * here is the interval the server asked for.

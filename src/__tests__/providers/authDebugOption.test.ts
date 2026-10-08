@@ -1,9 +1,9 @@
 /**
- * `authDebug` (spec §6, "Where the option lives"): a constructor option of
+ * `authDebug`: a constructor option of
  * every token provider (`TokenProviderDebug`, joined into every
  * `…ProviderConfig` through `TokenProviderHooks`), read once as
  * `config.authDebug === true` — `'true'`, `1` or an environment variable
- * never opt in. Threaded to the token sites in Task 21.
+ * never opt in. Threaded to the token sites.
  */
 
 import { afterEach, describe, expect, it } from '@jest/globals';

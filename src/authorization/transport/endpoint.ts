@@ -1,5 +1,5 @@
 /**
- * The endpoint path a redirect arrives at (spec §6d.3.1, §6d.4): the one
+ * The endpoint path a redirect arrives at: the one
  * string a listener serves the redirect at and advertises, so the two
  * cannot differ. It must survive URL parsing unchanged — no encoded dot
  * segment, backslash, space, control character, `?` or `#` — and it is

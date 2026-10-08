@@ -1,5 +1,5 @@
 /**
- * The two shipped renewal strategies (spec §6c.8), each against its table
+ * The two shipped renewal strategies, each against its table
  * alone, row by row: `refreshThenLogin()` decides what the provider decided
  * before 6.0.0 — except that a refresh which failed before it was sent no
  * longer discards the refresh token — and `refreshOnly()` is the same table
@@ -53,7 +53,7 @@ const failedUnsent: RenewalStepOutcome = {
   error: refused,
 };
 
-/** The table of §6c.8, with what each factory decides per row. */
+/** The table of defaults, with what each factory decides per row. */
 const ROWS: ReadonlyArray<{
   readonly row: string;
   readonly situation: RenewalSituation;
@@ -153,7 +153,7 @@ const ROWS: ReadonlyArray<{
   })),
 ];
 
-describe('refreshThenLogin(): the table of §6c.8, row by row', () => {
+describe('refreshThenLogin(): the table of defaults, row by row', () => {
   it.each(ROWS.map((r) => [r.row, r] as const))('%s', (_row, r) => {
     expect(refreshThenLogin().next(r.situation)).toEqual(r.refreshThenLogin);
   });

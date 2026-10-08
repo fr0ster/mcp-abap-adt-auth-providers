@@ -82,7 +82,7 @@ export async function exchangePasscode(
       },
       // A redirect would re-send the passcode and the secret: never followed.
       maxRedirects: 0,
-      // The attempt's abort cuts the exchange (spec §6b).
+      // The attempt's abort cuts the exchange.
       ...(signal === undefined ? {} : { signal }),
     });
 

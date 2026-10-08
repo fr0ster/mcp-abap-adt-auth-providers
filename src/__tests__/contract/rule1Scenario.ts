@@ -1,8 +1,8 @@
 /**
- * The rule 1 matrix (spec §8.3), run by `rule1.test.ts` under plain node in
+ * The rule 1 matrix, run by `rule1.test.ts` under plain node in
  * a child process against the compiled sources: every method of every
  * provider, with every collaborator throwing — synchronously, or as a
- * rejecting promise — each hostile value of §11.1.
+ * rejecting promise — each hostile value.
  *
  * Every moment must resolve (never reject, never hang) to an outcome whose
  * refusal, if any, is minted, with the marker in none of the outcome's JSON,
@@ -38,7 +38,7 @@ export const thenCalls = { count: 0 };
 
 /**
  * Calls of a collaborator's answer's `then`: the answer is the consumer's
- * own code, awaited normally (the user's decision, 2026-10-07) — counted to
+ * own code, awaited normally — counted to
  * prove it was followed, never refused.
  */
 export const answerThenCalls = { count: 0 };
@@ -52,7 +52,7 @@ function countingThenable(): object {
   return { then: count, catch: count, message: MARKER };
 }
 
-/** The hostile values of §11.1, each carrying the marker where it can. */
+/** The hostile values, each carrying the marker where it can. */
 export function hostileValues(): Array<[string, () => unknown]> {
   const boom = () => {
     throw new Error(MARKER);
@@ -148,7 +148,7 @@ export interface Rule1Report {
  * or answers a foreign (Promises/A+ shaped) thenable that resolves with the
  * value, rejects with it, or throws it from its `then`. The answer is the
  * consumer's own code: awaited normally, the resolved value used, the
- * rejection or the throw classified (the user's decision, 2026-10-07).
+ * rejection or the throw classified.
  */
 type Mode =
   | 'throws'
@@ -459,7 +459,7 @@ function rows(lib: typeof Lib): Row[] {
               ? new lib.DefaultSncLibraryLocator(system)
               : w.hostile('logger')
                 ? {
-                    // A plain failure: the H4 line is written, to the
+                    // A plain failure: the log line is written, to the
                     // hostile logger.
                     locate: async () => {
                       throw new Error('not found');

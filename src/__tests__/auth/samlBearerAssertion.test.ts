@@ -103,7 +103,6 @@ describe('toBearerAssertion', () => {
     expect(toBearerAssertion(value)).toBe(value);
   });
 
-  // F5 (spec A.6).
   it('F5: refuses a Response carrying no Assertion', () => {
     expectSamlRefusal(
       thrownBy(() => toBearerAssertion(b64(response('')))),
@@ -111,7 +110,7 @@ describe('toBearerAssertion', () => {
     );
   });
 
-  // F6: the count is a fact, and the words name it.
+  // The count is a fact, and the words name it.
   it('F6: refuses a Response carrying more than one Assertion', () => {
     const error = expectSamlRefusal(
       thrownBy(() =>
@@ -125,7 +124,6 @@ describe('toBearerAssertion', () => {
     );
   });
 
-  // F4.
   it('F4: refuses an encrypted Assertion rather than sending something UAA cannot read', () => {
     const encrypted = response(
       `<saml2:EncryptedAssertion><xenc:EncryptedData xmlns:xenc="http://www.w3.org/2001/04/xmlenc#"/></saml2:EncryptedAssertion>`,
@@ -137,7 +135,6 @@ describe('toBearerAssertion', () => {
     expect(error.reason).toContain('encrypted Assertions are not supported');
   });
 
-  // F3.
   it('F3: refuses a document that is neither a Response nor an Assertion', () => {
     expectSamlRefusal(
       thrownBy(() =>
@@ -151,7 +148,6 @@ describe('toBearerAssertion', () => {
     );
   });
 
-  // F1.
   it('F1: refuses a payload that is not base64-encoded XML', () => {
     expectSamlRefusal(
       thrownBy(() => toBearerAssertion('not-xml-at-all')),
@@ -166,7 +162,6 @@ describe('toBearerAssertion', () => {
     );
     try {
       const recoverable = `<saml:Assertion xmlns:saml="${ASSERTION_NS}" ID="_a">&bogus;</saml:Assertion>`;
-      // F2.
       expectSamlRefusal(
         thrownBy(() =>
           toBearerAssertion(
@@ -181,7 +176,7 @@ describe('toBearerAssertion', () => {
     }
   });
 
-  // F2, L7: the parser's message quotes the document — here an element
+  // The parser's message quotes the document — here an element
   // name — and none of it reaches the error: not the words, not a
   // diagnostic (the rule has none), not the failure's message.
   it('F2 / L7: says nothing of the parser message for XML that is not well-formed', () => {
@@ -200,7 +195,7 @@ describe('toBearerAssertion', () => {
   });
 });
 
-/** F7 (spec A.6): the strict parser's own refusal, with no parser text. */
+/** The strict parser's own refusal, with no parser text. */
 describe('parseStrictXml', () => {
   it.each([
     ['an unterminated document', '<a'],

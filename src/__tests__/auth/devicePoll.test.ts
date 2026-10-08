@@ -4,7 +4,7 @@
  * Proxy) does not break the poll — and, like every rejection of a token
  * request, it is replaced by an `AuthProviderFailure`, never rethrown.
  *
- * Device polling (spec §6, first row of the reader table): the poll reads
+ * Device polling: the poll reads
  * the failure's classified facts — `request-failed`, `status === 400` and a
  * registered `oauthError` of `authorization_pending` / `slow_down` keep
  * polling (`slow_down` adding 5 s to the server's interval); anything else
@@ -64,7 +64,7 @@ describe('pollDeviceTokens', () => {
       (error: unknown) => ({ thrown: error }),
     );
     expect(outcome.thrown).not.toBe(hostile);
-    // D2: `request-failed` `no-response` of the device poll, nothing of it.
+    // `request-failed` `no-response` of the device poll, nothing of it.
     expect(isAuthProviderFailure(outcome.thrown)).toBe(true);
     expect(readFailure(outcome.thrown, 'unfamiliar-error').facts).toEqual({
       operation: 'device-poll',
@@ -124,7 +124,7 @@ const PATHS: [string, () => TokenRequestAuth | undefined, () => Mock][] = [
   ],
 ];
 
-describe.each(PATHS)('device polling %s (spec §6)', (_path, auth, sender) => {
+describe.each(PATHS)('device polling %s', (_path, auth, sender) => {
   beforeEach(() => {
     jest.resetAllMocks();
   });

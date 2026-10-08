@@ -1,7 +1,7 @@
 /**
- * The terminal transport (spec §6d.2, §6d.3.2): the user pastes the answer
+ * The terminal transport: the user pastes the answer
  * at a prompt. It binds nothing and advertises only the consumer's
- * redirect (C4). A refused answer gets the reason's words and the prompt
+ * redirect. A refused answer gets the reason's words and the prompt
  * again; an `end` ends the wait (its `shown` dropped: nothing of the IdP is
  * printed). `open` settles only once the read in flight has settled — the
  * reader closed — so the next login never shares stdin with this one.
@@ -52,7 +52,7 @@ export async function readFromTerminal(
   signal: AbortSignal,
 ): Promise<string> {
   // Aborted before the read began: no readline, so stdin is never held for
-  // a line nobody awaits (K12).
+  // a line nobody awaits.
   if (signal.aborted) throw loginFailure({ outcome: 'input-abandoned' });
   if (!process.stdin.isTTY) throw loginFailure({ outcome: 'no-terminal' });
   process.stderr.write(prompt);

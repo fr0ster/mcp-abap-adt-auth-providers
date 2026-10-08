@@ -11,7 +11,7 @@ export {
   type Moment,
   type MomentOperations,
 } from './auth/AuthProviderBase';
-// Authorization by composition (spec §6d): the composer and the parts —
+// Authorization by composition: the composer and the parts —
 // presentations, transports, protocols — or bring your own of each.
 export {
   type ComposedAuthorization,

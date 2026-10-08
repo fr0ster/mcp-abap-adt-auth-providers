@@ -4,7 +4,7 @@
  * whoever catches it — the broker, a server — by its message. What a
  * collaborator or the network threw may hold a key, a passphrase or a token,
  * so what is thrown is an `AuthProviderFailure` whose message is its error's
- * fixed words, with no `cause` (spec §6, L3).
+ * fixed words, with no `cause`.
  */
 
 import http from 'node:http';
@@ -100,7 +100,7 @@ describe('a thrown error carries no foreign message', () => {
     '%s: fixed words; no cause at all, never the original',
     async (_name, run, words, operation) => {
       const { error, text } = await thrownBy(run);
-      // D2: `request-failed` `no-response` of the site's operation, the
+      // `request-failed` `no-response` of the site's operation, the
       // allowlisted code still saying what happened.
       expect(error.message).toBe(words);
       expect(readFailure(error, 'unfamiliar-error').facts).toEqual({
@@ -109,7 +109,7 @@ describe('a thrown error carries no foreign message', () => {
         code: 'ECONNREFUSED',
       });
       expect(text).not.toContain(MARKER);
-      // L2: no cause — the original, nor a replacement (util.inspect prints causes).
+      // No cause — the original, nor a replacement (util.inspect prints causes).
       expect(error.cause).toBeUndefined();
       expect(inspect(error, { depth: null })).not.toContain(MARKER);
     },
@@ -126,8 +126,8 @@ describe('a thrown error carries no foreign message', () => {
     expect(text).not.toContain(MARKER);
   });
 
-  // K11 (6.0.0): an `interactive-login` `failed` failure naming only the
-  // allowlisted code; no cause at all (L2), never the original.
+  // An `interactive-login` `failed` failure naming only the
+  // allowlisted code; no cause at all, never the original.
   it('a composed strategy: interactive-login failed in fixed words, no cause', async () => {
     const strategy = composedOver(async () => {
       throw original;
@@ -187,7 +187,7 @@ describe('a token-endpoint failure keeps its safe facts', () => {
         }),
       );
       const { error } = await thrownBy(run);
-      // D1: the status and the registered code are the failure's facts.
+      // The status and the registered code are the failure's facts.
       expect(isAuthProviderFailure(error)).toBe(true);
       expect(readFailure(error, 'unfamiliar-error').facts).toMatchObject({
         problem: 'refused',
@@ -209,7 +209,7 @@ describe('a token-endpoint failure keeps its safe facts', () => {
     const { error } = await thrownBy(() =>
       refreshJwtToken('rt', 'https://uaa', 'cid', 'secret'),
     );
-    // D1: an unregistered code is no fact.
+    // An unregistered code is no fact.
     expect(
       readFailure(error, 'unfamiliar-error').facts as Record<string, unknown>,
     ).not.toHaveProperty('oauthError');
@@ -229,7 +229,7 @@ describe('a token-endpoint failure keeps its safe facts', () => {
     const { error, text } = await thrownBy(() =>
       refreshJwtToken('rt', 'https://uaa', 'cid', 'secret'),
     );
-    // D2: the allowlisted code is the failure's `code` fact.
+    // The allowlisted code is the failure's `code` fact.
     expect(
       (readFailure(error, 'unfamiliar-error').facts as { code?: unknown }).code,
     ).toBe(code);
@@ -342,7 +342,7 @@ describe('an IdP refusal on the browser callback', () => {
       const { error, text } = await thrownBy(() =>
         strategy.authorize({ buildAuthorizationUrl: urlFor }),
       );
-      // K10 / A8 (6.0.0): identity-provider-refused with the registered code.
+      // `identity-provider-refused` with the registered code.
       expect(readFailure(error, 'browser-login').facts).toEqual({
         outcome: 'identity-provider-refused',
         oauthError: 'consent_required',
@@ -386,7 +386,7 @@ describe('an IdP refusal on the browser callback', () => {
     expect(text).not.toContain(DESCRIPTION);
   });
 
-  // E12 (Task 26): the configuration failure the URL builder throws, once a
+  // The configuration failure the URL builder throws, once a
   // ValidationError, passes through as it is.
   it('a configuration failure from building the URL passes through unchanged (E12)', async () => {
     const strategy = composedOver(

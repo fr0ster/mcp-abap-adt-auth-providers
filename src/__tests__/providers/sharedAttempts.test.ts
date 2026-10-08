@@ -1,5 +1,5 @@
 /**
- * Waiters, not owners (spec §6b): a renewal is a shared attempt; each caller
+ * Waiters, not owners: a renewal is a shared attempt; each caller
  * of `getTokens({ signal })` / `refreshTokens({ signal })` is a waiter with
  * its own signal, and a login a moment starts waits on the provider's
  * attached parties. One waiter's abort releases only that waiter; the

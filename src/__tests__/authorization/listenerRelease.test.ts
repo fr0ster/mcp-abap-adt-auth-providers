@@ -1,5 +1,5 @@
 /**
- * Release before settle (Task 30f's cases, spec §6d.3.5), for the composed
+ * Release before settle, for the composed
  * listener: an aborted login whose connections are still open lets the
  * process go — a POST whose body never finishes is destroyed, an idle
  * keep-alive connection or one with half a request is ended and

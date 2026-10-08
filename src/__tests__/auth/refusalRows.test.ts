@@ -1,12 +1,12 @@
 /**
- * Appendix A.1 rows A1, A15 and A16 through auth-errors' `classify` — the one
- * reader of a thrown value since Task 27 (`refusalFrom` and its class ladder
- * are gone with the classes, spec §6) — and A.8: no `what` string is left in
+ * The refusals read through auth-errors' `classify` — the one
+ * reader of a thrown value (`refusalFrom` and its class ladder
+ * are gone with the classes) — and: no `what` string is left in
  * `src`, every site names a closed operation.
  *
- * A13 (another own class) and A14 (`TokenEndpointError`) went with their
+ * Another own class and `TokenEndpointError` went with their
  * classes: a look-alike of a former class is `unknown`
- * (`tokenProviderFailures.test.ts`, "L3 total"), and `request-failed` is
+ * (`tokenProviderFailures.test.ts`, "every throw is an AuthProviderFailure"), and `request-failed` is
  * built by `sendTokenRequest` itself (`tokenRequestSite.test.ts`).
  */
 import { readdirSync, readFileSync, statSync } from 'node:fs';
@@ -102,7 +102,7 @@ describe('A.1 — classify rows', () => {
   });
 });
 
-/** Every string literal this package passes as a `what` (A.8). */
+/** Every string literal this package passes as a `what`. */
 function whatLiterals(): string[] {
   const root = join(__dirname, '..', '..');
   const files: string[] = [];
@@ -135,12 +135,11 @@ function whatLiterals(): string[] {
 describe('A.8 — every what of this package is a closed operation', () => {
   const literals = whatLiterals();
 
-  it('no call site is left: every what moved to a closed operation (refusalFrom, loggedError, refusalWords gone in Task 27)', () => {
-    // 'the probe' left with `logFields` (H5: Task 25).
-    // 'opening the browser' and 'the presenter' left with `logFields`
-    // (H7, H8, H3: Task 23).
-    // 'the token request' left with `tokenEndpointError` (D2, H9: Task 21).
-    // 'onTokens' and 'the refresh' left with `logFields` (H1, H2: Task 22).
+  it('no call site is left: every what moved to a closed operation (refusalFrom, loggedError, refusalWords gone)', () => {
+    // 'the probe' left with `logFields`.
+    // 'opening the browser' and 'the presenter' left with `logFields`.
+    // 'the token request' left with `tokenEndpointError`.
+    // 'onTokens' and 'the refresh' left with `logFields`.
     expect(literals).toEqual([]);
   });
 });

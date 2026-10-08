@@ -1,5 +1,5 @@
 /**
- * Shared pieces of the cancellation suites (spec §6b): controllable
+ * Shared pieces of the cancellation suites: controllable
  * promises, a real token server on loopback whose answers a test can hold
  * and release, and strategies that wait until answered or aborted. Nothing
  * here sleeps: every wait ends on an event the test controls.
