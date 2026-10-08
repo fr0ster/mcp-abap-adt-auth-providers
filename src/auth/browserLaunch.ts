@@ -2,7 +2,8 @@
  * Opening the authorization URL — no shell, ever. Each shipped `IBrowser`
  * (`browsers.ts`) is ONE fixed launch, built here from its `LaunchCommand`
  * and started by `launchBrowser`: no platform switch, no fallback chain, no
- * platform check (on another OS the launch simply fails to start).
+ * platform check — on another OS it runs whatever a program of that name is
+ * there, or fails to start where there is none.
  *
  * The URL is not this package's to trust: an OIDC provider's
  * `authorization_endpoint` comes from its discovery document, and a

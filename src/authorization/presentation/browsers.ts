@@ -1,8 +1,11 @@
 /**
  * The shipped browsers (spec §6d): six factories, each ONE fixed launch —
- * no platform switch, no fallback chain, no platform check. The consumer
- * picks the one for its machine; on another OS the launch fails to start
- * and rejects (the composer then shows the URL once and the login waits).
+ * no platform switch, no fallback chain, no platform check. Each runs
+ * exactly its program; on another OS it does whatever a program of that
+ * name does there — where there is none, the launch fails to start and
+ * rejects (the composer then shows the URL once and the login waits); where
+ * there is one (Debian's `/usr/bin/open` is `xdg-open` or `run-mailcap`),
+ * that program runs. The consumer picks the one for its platform.
  * Anything else — a remote Chrome, a console browser, WSL, a given DISPLAY —
  * is the consumer's own `IBrowser`.
  *
@@ -12,7 +15,11 @@
  * `open(url, signal)` resolves once the browser was asked — a hand-off
  * launcher at its exit `0`, a browser binary at its `spawn` — and rejects
  * with an `AuthProviderFailure` (`opening-browser` in fixed words, or
- * `aborted`). A started browser is never killed.
+ * `aborted`); no real `AbortSignal` rejects before anything starts. A
+ * started browser is never killed. Outside a composition the caller owns
+ * the signal: a hand-off launcher that never exits (`xdg-open` in its
+ * generic mode waits for the browser) keeps `open()` pending, and the
+ * process alive, until it exits or the signal aborts.
  */
 
 import type { IBrowser } from '@mcp-abap-adt/interfaces-auth';
