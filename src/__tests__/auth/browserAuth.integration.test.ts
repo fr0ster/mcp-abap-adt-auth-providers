@@ -37,7 +37,8 @@ describe('browserAuth Integration', () => {
   const serviceKeysDir = getServiceKeysDir(config);
 
   it('should exchange code for tokens with real OAuth flow', async () => {
-    // It opens the system browser for a person to log in: never by default.
+    // A person logs in at the URL shown on stderr (no browser is opened):
+    // never by default.
     if (!interactiveLoginEnabled({ env: process.env, config })) {
       console.warn(
         '⚠️  Skipping browser login - set interactive_login: true in tests/test-config.yaml, or MCP_ABAP_ADT_INTERACTIVE=1',

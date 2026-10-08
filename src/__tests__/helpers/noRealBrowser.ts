@@ -15,8 +15,12 @@
  * always refused: no suite uses them. There is no opt-in that lifts it: the
  * interactive cases show the URL instead of opening a browser.
  *
- * Not covered: a plain-node child scenario (`plainNode.ts`) runs outside
- * Jest's setup; those scenarios inject their own `IBrowser` only.
+ * Not covered: a child node process. The guard allows `process.execPath`,
+ * and a plain-node child (`plainNode.ts`, `browserSettlesAlone.test.ts`)
+ * runs outside Jest's setup, so nothing here stops what it starts. Such a
+ * child either injects its own `IBrowser`, or — `browserSettlesAlone` —
+ * runs a shipped browser with a `PATH` holding only its fake directory and
+ * fakes given by absolute path, so no system program can be found.
  */
 
 import { resolve } from 'node:path';

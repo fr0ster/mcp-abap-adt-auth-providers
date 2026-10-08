@@ -7,8 +7,11 @@
  * does not wait for the browser to close.
  *
  * Run under plain node in a child process, against fake programs written
- * here (the guard of this suite does not reach that child; no real program
- * is started). Linux and macOS only: the fakes are `#!` scripts.
+ * here before the child starts. Jest's guard does not reach that child (it
+ * allows `process.execPath`), so the child's `PATH` holds only the fake
+ * directory and `linuxBrowser` is given the fake by absolute path: no system
+ * program can be found, whatever factory is run. Linux and macOS only: the
+ * fakes are `#!` scripts.
  */
 
 import { spawnSync } from 'node:child_process';
@@ -56,7 +59,9 @@ b.${factory}.open('https://idp.example/authorize?state=s', new AbortController()
     env: {
       ...process.env,
       NODE_PATH: join(root, 'node_modules'),
-      PATH: `${dir}:${process.env.PATH ?? ''}`,
+      // Only the fake directory: no system program can ever be found, so a
+      // launcher the fakes do not cover fails to start (ENOENT).
+      PATH: dir,
     },
     encoding: 'utf8',
     // The test's own bound: a regression fails instead of hanging.
