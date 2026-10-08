@@ -74,7 +74,15 @@ const fakeChild: {
   real: Record<string, string>;
   running: FakeChild[];
   killed: number;
-} = { record: true, outcome: () => 0, real: {}, running: [], killed: 0 };
+  unrefs: number;
+} = {
+  record: true,
+  outcome: () => 0,
+  real: {},
+  running: [],
+  killed: 0,
+  unrefs: 0,
+};
 
 jest.mock('node:child_process', () => ({
   ...jest.requireActual<Record<string, unknown>>('node:child_process'),
@@ -94,7 +102,9 @@ jest.mock('node:child_process', () => ({
     const { EventEmitter } =
       jest.requireActual<typeof import('node:events')>('node:events');
     const child = new EventEmitter() as FakeChild;
-    child.unref = () => undefined;
+    child.unref = () => {
+      fakeChild.unrefs += 1;
+    };
     child.kill = () => {
       fakeChild.killed += 1;
       return true;
@@ -171,6 +181,7 @@ beforeEach(() => {
   fakeChild.real = {};
   fakeChild.running = [];
   fakeChild.killed = 0;
+  fakeChild.unrefs = 0;
   spawned.length = 0;
   delete process.env.SystemRoot;
 });
@@ -443,6 +454,30 @@ describe('settlement: a hand-off launcher at its exit, a browser binary at its s
       fakeChild.running[0]?.emit('exit', 0);
     },
   );
+
+  it.each(HAND_OFF)(
+    '%s: the launcher stays referenced while it runs; an abort unreferences it, never kills it',
+    async (name) => {
+      fakeChild.outcome = () => 'running';
+      const controller = new AbortController();
+      const opened = factories[name]().open(HOSTILE, controller.signal);
+      const rejected = expect(opened).rejects.toBeInstanceOf(
+        AuthProviderFailure,
+      );
+      await untilRunning();
+      expect(fakeChild.unrefs).toBe(0);
+      controller.abort();
+      await rejected;
+      expect(fakeChild.unrefs).toBe(1);
+      expect(fakeChild.killed).toBe(0);
+    },
+  );
+
+  it('linuxBrowser: unreferenced once started', async () => {
+    fakeChild.outcome = () => 'running';
+    await linuxBrowser('google-chrome').open(HOSTILE, never);
+    expect(fakeChild.unrefs).toBe(1);
+  });
 
   it('linuxBrowser: an abort while the browser starts rejects aborted; nothing is killed', async () => {
     const controller = new AbortController();
