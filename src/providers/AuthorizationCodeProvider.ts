@@ -73,22 +73,29 @@ export interface AuthorizationCodeProviderConfig
  * Uses authorization_code grant type with browser-based OAuth2 flow.
  * Supports pre-built authorization URLs and automatic token refresh.
  */
+/** A configured `authorizationUrl` that cannot be used: never its value. */
+const unusableAuthorizationUrl = () =>
+  misconfigured(
+    authError.configuration({
+      case: 'invalid-value',
+      fields: ['authorizationUrl'],
+    }),
+  );
+
 /**
  * The `redirect_uri` a pre-built `authorizationUrl` declares, or `null`. A URL
- * that does not parse is a configuration error, case `invalid-value`, naming
- * `authorizationUrl` — never the value (spec §6a0).
+ * that does not parse — or carries surrounding whitespace, which the URL
+ * parser would strip but C7 would append after — is a configuration error,
+ * case `invalid-value`, naming `authorizationUrl` — never the value (spec
+ * §6a0): refused, not trimmed (the provider does not guess).
  */
 function declaredRedirectOf(prebuilt: string): string | null {
+  if (prebuilt !== prebuilt.trim()) throw unusableAuthorizationUrl();
   let url: URL;
   try {
     url = new URL(prebuilt);
   } catch {
-    throw misconfigured(
-      authError.configuration({
-        case: 'invalid-value',
-        fields: ['authorizationUrl'],
-      }),
-    );
+    throw unusableAuthorizationUrl();
   }
   return url.searchParams.get('redirect_uri');
 }
@@ -107,12 +114,7 @@ function withMintedState(prebuilt: string): string {
   try {
     carriesState = new URL(prebuilt).searchParams.has('state');
   } catch {
-    throw misconfigured(
-      authError.configuration({
-        case: 'invalid-value',
-        fields: ['authorizationUrl'],
-      }),
-    );
+    throw unusableAuthorizationUrl();
   }
   if (carriesState) return prebuilt;
   const hashAt = prebuilt.indexOf('#');
