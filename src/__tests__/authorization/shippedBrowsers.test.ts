@@ -491,6 +491,27 @@ describe('settlement: a hand-off launcher at its exit, a browser binary at its s
   });
 
   it.each(NAMES)(
+    '%s: no signal, or no real AbortSignal, starts nothing and rejects in fixed words',
+    async (name) => {
+      const notSignals: unknown[] = [
+        undefined,
+        { aborted: false, addEventListener() {}, removeEventListener() {} },
+        Object.create(AbortSignal.prototype),
+      ];
+      for (const notSignal of notSignals) {
+        const failure = await factories[name]()
+          .open(HOSTILE, notSignal as AbortSignal)
+          .catch((e: unknown) => e);
+        expect(isAuthProviderFailure(failure)).toBe(true);
+        expect(readFailure(failure, 'opening-browser').facts).toEqual({
+          operation: 'opening-browser',
+        });
+      }
+      expect(spawned).toEqual([]);
+    },
+  );
+
+  it.each(NAMES)(
     '%s: an aborted signal starts nothing and rejects',
     async (name) => {
       const controller = new AbortController();
