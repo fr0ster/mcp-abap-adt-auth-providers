@@ -2,7 +2,8 @@
  * Release before settle (Task 30f's cases, spec §6d.3.5), for the composed
  * listener: an aborted login whose connections are still open lets the
  * process go — a POST whose body never finishes is destroyed, an idle
- * keep-alive connection is ended and unreferenced — the open settles, the
+ * keep-alive connection or one with half a request is ended and
+ * unreferenced — the open settles, the
  * port binds, and the child exits on its own. Run in a child process,
  * bounded only by this test's own timeout.
  */
@@ -110,6 +111,13 @@ describe('the composed listener lets go of its connections at the abort', () => 
           'GET /callback?RelayState=x HTTP/1.1\\r\\nHost: 127.0.0.1:' + port + '\\r\\n' +
           'Connection: keep-alive\\r\\n\\r\\n',
         );`);
+    expect(report).toEqual({ outcome: 'aborted', free: true, closed: true });
+  }, 60_000);
+
+  it('a lingering client with half a request (headers unfinished): ended and let go; the process exits', () => {
+    // Not idle to Node's own close(): only the listener's release ends it.
+    const report = run(`
+        socket.write('GET / HTTP/1.1\\r\\nHost: 127.0.0.1:' + port + '\\r\\n');`);
     expect(report).toEqual({ outcome: 'aborted', free: true, closed: true });
   }, 60_000);
 });

@@ -7,7 +7,6 @@
  * in a form body and the user must lift it from there.
  */
 
-import { createInterface } from 'node:readline';
 import type {
   AuthorizationOutcome,
   AuthorizationRequest,
@@ -19,6 +18,7 @@ import { ownOptions } from '../auth/configuration';
 import { abortedLogin, loginFailure } from '../auth/interactiveLogin';
 import { signalOf } from '../auth/signalledRequest';
 import { readPaste, urlState } from '../authorization/protocol/readPaste';
+import { readFromTerminal } from '../authorization/transport/terminalPaste';
 import { DEFAULT_CALLBACK_PORT } from './BrowserCallbackStrategy';
 
 export interface ManualStrategyOptions {
@@ -40,42 +40,11 @@ export interface ManualStrategyOptions {
   signal?: AbortSignal | undefined;
 }
 
+// One implementation, shared with `terminalPaste` until Task 30n.
+export { readFromTerminal };
+
 const defaultRedirectUri = () =>
   `http://localhost:${DEFAULT_CALLBACK_PORT}/callback`;
-
-/**
- * Reads one line from stdin.
- *
- * The prompt goes to stderr, never stdout, and stdin is touched only when it is
- * a terminal: under a stdio RPC transport those streams carry the protocol.
- * Closes its `readline` when the signal aborts, and settles only once the
- * interface has closed — its listeners gone from stdin — so the next login's
- * reader never shares stdin with this one.
- */
-export async function readFromTerminal(
-  prompt: string,
-  signal: AbortSignal,
-): Promise<string> {
-  // Aborted before the read began (while the URL was built): no readline, so
-  // stdin is never held for a line nobody awaits (K12).
-  if (signal.aborted) throw loginFailure({ outcome: 'input-abandoned' });
-  if (!process.stdin.isTTY) throw loginFailure({ outcome: 'no-terminal' });
-  process.stderr.write(prompt);
-  const rl = createInterface({ input: process.stdin });
-  const closed = new Promise<void>((resolve) => {
-    rl.once('close', () => resolve());
-  });
-  const abort = () => rl.close();
-  signal.addEventListener('abort', abort, { once: true });
-  try {
-    for await (const line of rl) return line.trim();
-  } finally {
-    signal.removeEventListener('abort', abort);
-    rl.close();
-    await closed;
-  }
-  throw loginFailure({ outcome: 'no-input' });
-}
 
 /**
  * A manual strategy with a `dispose()`: the read gets a signal that either

@@ -180,8 +180,12 @@ describe('bind and advertise (spec §6d.2, §6d.11)', () => {
     const spy = jest
       .spyOn(net.Server.prototype, 'listen')
       .mockImplementation(function (this: net.Server, ...args: unknown[]) {
-        const first = args[0] as { host?: unknown } | undefined;
-        hosts.push(String(first?.host));
+        const first = args[0];
+        // The listeners bind with an options object; a probe of the test's
+        // own (`listen(0, '::1')`) is not theirs.
+        if (first !== null && typeof first === 'object') {
+          hosts.push(String((first as { host?: unknown }).host));
+        }
         return listen.apply(this, args as never);
       });
     try {

@@ -17,13 +17,14 @@ import {
   isSystemCode,
   port as portNumber,
 } from '@mcp-abap-adt/auth-errors';
+import type { InteractiveLoginStrategy } from '@mcp-abap-adt/interfaces-auth';
 import { readSafely } from './knownCodes';
 
 /** The facts the `interactive-login` builder takes. */
 type InteractiveFacts = Parameters<AuthErrorBuilders['interactive-login']>[0];
 
-/** Which shipped strategy a login belongs to. */
-export type LoginStrategy = 'browser' | 'manual';
+/** Which strategy or transport a login belongs to. */
+export type LoginStrategy = InteractiveLoginStrategy;
 
 /** An `interactive-login` failure of these facts. */
 export function loginFailure(facts: InteractiveFacts): AuthProviderFailure {
