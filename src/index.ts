@@ -5,12 +5,51 @@
  * Provides token providers
  */
 
-// Callback server factories — "take the transport this package gives".
-export { withBrowserCallbackServer } from './auth/callbackServer';
-export type { OidcCallbackResult } from './auth/oidcBrowserAuth';
-export { withOidcCallbackServer } from './auth/oidcBrowserAuth';
-export { refusalWords } from './auth/refusal';
-export { withSamlCallbackServer } from './auth/saml2Auth';
+// The base every provider extends: the four moments, each inside guard.
+export {
+  AuthProviderBase,
+  type Moment,
+  type MomentOperations,
+} from './auth/AuthProviderBase';
+// Authorization by composition: the composer and the parts —
+// presentations, transports, protocols — or bring your own of each.
+export {
+  type ComposedAuthorization,
+  type ComposedStrategy,
+  type ConsumerAnswerOptions,
+  type ConsumerHandoffOptions,
+  type ConsumerPresentationOptions,
+  composeAuthorization,
+  consumerAnswer,
+  consumerHandoff,
+  consumerPresentation,
+  type LoopbackOptions,
+  linuxBrowser,
+  linuxDefaultBrowser,
+  loopback,
+  loopback4,
+  loopback6,
+  macBrowser,
+  macDefaultBrowser,
+  type OidcCallbackResult,
+  type OpenInBrowserOptions,
+  oauthCode,
+  oidcCode,
+  openInBrowser,
+  type ProvideAnswer,
+  passcode,
+  type ReceiveAnswer,
+  readFromTerminal,
+  type ShowAuthorizationUrl,
+  type ShowContext,
+  samlResponse,
+  showUrl,
+  type TerminalPasteOptions,
+  type TerminalRead,
+  terminalPaste,
+  windowsBrowser,
+  windowsDefaultBrowser,
+} from './authorization';
 // How a token provider's client authenticates to the authorization server.
 export * from './clientAuthentication';
 // Credentials the process delegates to — every one an IAuthProvider.
@@ -25,35 +64,23 @@ export {
   type DeviceCodePrompt,
   type IDeviceCodePresenter,
 } from './deviceCode/DeviceCodePresenter';
-// Errors
+// The persistence strategy — or bring your own ITokenPersistence.
 export {
-  type AssertionCheck,
-  AssertionValidationError,
-} from './errors/AssertionValidationError';
-export { CertificateMaterialError } from './errors/CertificateMaterialError';
-export {
-  BasicClientIdError,
-  ClientAuthenticationError,
-  ClientAuthenticationResultError,
-} from './errors/ClientAuthenticationError';
-export { TokenEndpointError } from './errors/TokenEndpointError';
-export {
-  BrowserAuthError,
-  RefreshError,
-  ServiceKeyError,
-  SessionDataError,
-  TokenProviderError,
-  ValidationError,
-} from './errors/TokenProviderErrors';
+  type PersistedTokens,
+  type RefreshStatePersistenceOptions,
+  refreshStatePersistence,
+} from './persistence';
 export type {
   AuthorizationCodeProviderConfig,
   ClientCredentialsProviderConfig,
+  LoginFactoryOptions,
   OidcBrowserProviderConfig,
   OidcDeviceFlowProviderConfig,
   OidcPasswordProviderConfig,
   OidcTokenExchangeProviderConfig,
   Saml2BearerProviderConfig,
   Saml2PureProviderConfig,
+  TokenProviderDebug,
   TokenProviderHooks,
   UaaPasscodeProviderConfig,
 } from './providers';
@@ -71,6 +98,8 @@ export {
   UaaPasscodeProvider,
 } from './providers';
 export type { SamlTrust } from './providers/saml2Utils';
+// Renewal strategies — or bring your own IRenewalStrategy.
+export { refreshOnly, refreshThenLogin } from './renewal';
 // SNC — passwordless RFC logon.
 export {
   DefaultSncLibraryLocator,
@@ -91,19 +120,18 @@ export { nodeSncSystem, type SncSystem } from './snc/SncSystem';
 export { SsoProviderFactory } from './sso/SsoProviderFactory';
 export type { SsoProviderConfig, SsoProviderInstance } from './sso/types';
 export type {
-  BrowserCallbackStrategyOptions,
   CallbackStrategyOptions,
   ExternalCodeStrategyOptions,
+  ManualPasscodeStrategyOptions,
   ManualStrategyOptions,
   StaticCodeStrategyOptions,
 } from './strategies';
-// Authorization strategies — or bring your own IAuthorizationStrategy.
+// The named compositions — today's names and options — and the strategies
+// that compose nothing; or bring your own IAuthorizationStrategy.
 export {
   asOidcResult,
-  BrowserCallbackStrategy,
   browserCallbackStrategy,
   DEFAULT_CALLBACK_PORT,
-  DEFAULT_LOGIN_TIMEOUT_MS,
   externalCodeStrategy,
   manualPasscodeStrategy,
   manualPasteStrategy,

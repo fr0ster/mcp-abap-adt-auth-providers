@@ -17,13 +17,17 @@
  */
 
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
-import axios, { type AxiosResponse } from 'axios';
+import axios from 'axios';
 import {
+  attemptSite,
   legacyBasic,
+  logQuietly,
   prepareTokenRequest,
+  rejectMissingToken,
   sendTokenRequest,
+  siteSecrets,
   type TokenRequestAuth,
-  tokenEndpointError,
+  type TokenSiteOptions,
 } from './tokenRequest';
 
 export interface PasscodeTokens {
@@ -39,8 +43,11 @@ export async function exchangePasscode(
   passcode: string,
   logger?: ILogger,
   auth?: TokenRequestAuth,
+  options?: TokenSiteOptions,
 ): Promise<PasscodeTokens> {
-  const tokenUrl = `${uaaUrl.replace(/\/+$/, '')}/oauth/token`;
+  let end = uaaUrl.length;
+  while (end > 0 && uaaUrl[end - 1] === '/') end--;
+  const tokenUrl = `${uaaUrl.slice(0, end)}/oauth/token`;
   const params = new URLSearchParams();
   params.append('grant_type', 'password');
   params.append('passcode', passcode);
@@ -58,17 +65,15 @@ export async function exchangePasscode(
       )
     : undefined;
 
-  logger?.info('[UAA] Exchanging passcode for token', {
-    tokenUrl: prepared?.config.url ?? tokenUrl,
-  });
+  logQuietly(() => logger?.info('[UAA] Exchanging passcode for token'));
 
   // Today's request: Basic `id:secret` — a public client, `cf` among them,
   // authenticates with an empty secret — built only through legacyBasic, so
-  // its secrets join every redaction of the answer.
+  // its secrets are named in the `authDebug` line's `sent`.
   const basic = prepared
     ? undefined
     : legacyBasic(clientId, clientSecret ?? '');
-  const sendAsToday = () =>
+  const sendAsToday = (signal: AbortSignal | undefined) =>
     axios.post(tokenUrl, params.toString(), {
       headers: {
         'Content-Type': 'application/x-www-form-urlencoded',
@@ -77,30 +82,28 @@ export async function exchangePasscode(
       },
       // A redirect would re-send the passcode and the secret: never followed.
       maxRedirects: 0,
+      // The attempt's abort cuts the exchange.
+      ...(signal === undefined ? {} : { signal }),
     });
 
-  let response: AxiosResponse<{
+  // UAA says why in the body — "Invalid passcode" for a mistyped or already
+  // spent code — which is never read: the failure carries the status and a
+  // registered code only (`passcode-exchange`).
+  const site = attemptSite(
+    'passcode-exchange',
+    options,
+    logger,
+    siteSecrets(params, clientSecret),
+    basic,
+  );
+  const response = await sendTokenRequest<{
     access_token?: string;
     refresh_token?: string;
     expires_in?: number;
-  }>;
-  try {
-    response = await sendTokenRequest(prepared, sendAsToday, {
-      logger,
-      label: 'Passcode exchange failed',
-    });
-  } catch (error) {
-    // UAA says why in the body — "Invalid passcode" for a mistyped or
-    // already spent code — which the debug line carries, redacted.
-    if (axios.isAxiosError(error) && error.response) {
-      // The safe facts only: the status and a registered code.
-      throw tokenEndpointError('Passcode exchange failed', error);
-    }
-    throw error;
-  }
+  }>(prepared, sendAsToday, site);
   const data = response.data;
-  if (!data?.access_token) {
-    throw new Error('Passcode exchange returned no access_token');
+  if (!data.access_token) {
+    rejectMissingToken(site, prepared, response, 'no-access-token', 'debug');
   }
   return {
     accessToken: data.access_token,

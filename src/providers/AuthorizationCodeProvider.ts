@@ -5,6 +5,7 @@
  * Supports pre-built authorization URLs and automatic refresh.
  */
 
+import { type AttemptContext, authError } from '@mcp-abap-adt/auth-errors';
 import type {
   AuthorizationRequest,
   IAuthorizationStrategy,
@@ -18,15 +19,23 @@ import {
   exchangeCodeForToken,
   getJwtAuthorizationUrl,
 } from '../auth/browserAuth';
-import { asContract } from '../auth/contractShape';
+import {
+  misconfigured,
+  ownOptions,
+  requiredFieldsMissing,
+} from '../auth/configuration';
+import { generatePkceChallenge, generatePkceVerifier } from '../auth/oidcPkce';
 import { refreshJwtToken } from '../auth/tokenRefresher';
-import { ValidationError } from '../errors/TokenProviderErrors';
+import { logQuietly } from '../auth/tokenRequest';
+import { mintSecret } from '../authorization/secrets';
 import { browserCallbackStrategy } from '../strategies';
 import {
   BaseTokenProvider,
   type ClientAuthenticationConfig,
+  refreshTokenRefused,
   type TokenProviderHooks,
 } from './BaseTokenProvider';
+import type { LoginFactoryOptions } from './LoginFactoryOptions';
 
 export interface AuthorizationCodeProviderConfig
   extends TokenProviderHooks,
@@ -64,22 +73,79 @@ export interface AuthorizationCodeProviderConfig
  * Uses authorization_code grant type with browser-based OAuth2 flow.
  * Supports pre-built authorization URLs and automatic token refresh.
  */
+/** A configured `authorizationUrl` that cannot be used: never its value. */
+const unusableAuthorizationUrl = () =>
+  misconfigured(
+    authError.configuration({
+      case: 'invalid-value',
+      fields: ['authorizationUrl'],
+    }),
+  );
+
+/**
+ * The `redirect_uri` a pre-built `authorizationUrl` declares, or `null`. A URL
+ * that does not parse — or carries surrounding whitespace, which the URL parser
+ * would strip but the appended `state` would follow — is a configuration error,
+ * case `invalid-value`, naming `authorizationUrl` — never the value: refused,
+ * not trimmed (the provider does not guess).
+ */
+function declaredRedirectOf(prebuilt: string): string | null {
+  if (prebuilt !== prebuilt.trim()) throw unusableAuthorizationUrl();
+  let url: URL;
+  try {
+    url = new URL(prebuilt);
+  } catch {
+    throw unusableAuthorizationUrl();
+  }
+  return url.searchParams.get('redirect_uri');
+}
+
+/**
+ * A configured URL that carries no `state` gets the
+ * provider's own, minted for every URL built, and nothing else — no PKCE
+ * challenge it did not build. It is appended to the query as text, before
+ * any fragment, so nothing of the consumer's URL is reserialised. A URL
+ * that carries a `state` — any, even repeated or empty — is kept as it is:
+ * the protocol judges it (it binds nothing, and is refused, unless it is one
+ * non-empty value).
+ */
+function withMintedState(prebuilt: string): string {
+  let carriesState: boolean;
+  try {
+    carriesState = new URL(prebuilt).searchParams.has('state');
+  } catch {
+    throw unusableAuthorizationUrl();
+  }
+  if (carriesState) return prebuilt;
+  const hashAt = prebuilt.indexOf('#');
+  const head = hashAt === -1 ? prebuilt : prebuilt.slice(0, hashAt);
+  const fragment = hashAt === -1 ? '' : prebuilt.slice(hashAt);
+  const joint = !head.includes('?')
+    ? '?'
+    : head.endsWith('?') || head.endsWith('&')
+      ? ''
+      : '&';
+  return `${head}${joint}state=${mintSecret()}${fragment}`;
+}
+
 export class AuthorizationCodeProvider extends BaseTokenProvider {
   private config: AuthorizationCodeProviderConfig;
 
-  constructor(config: AuthorizationCodeProviderConfig) {
+  constructor(options: AuthorizationCodeProviderConfig) {
+    // Read once as own data (a hostile object throws nothing of its own).
+    const config = ownOptions<AuthorizationCodeProviderConfig>(options);
     super(config);
     this.config = config;
     this.logger = config.logger;
 
-    this.logger?.info('[AuthorizationCodeProvider] Provider created', {
-      uaaUrl: config.uaaUrl,
-      clientId: config.clientId,
-      hasAccessToken: !!config.accessToken,
-      hasRefreshToken: !!config.refreshToken,
-      accessToken: this.formatToken(config.accessToken),
-      refreshToken: this.formatToken(config.refreshToken),
-    });
+    logQuietly(() =>
+      this.logger?.info('[AuthorizationCodeProvider] Provider created', {
+        hasAccessToken: !!config.accessToken,
+        hasRefreshToken: !!config.refreshToken,
+        accessToken: this.formatToken(config.accessToken),
+        refreshToken: this.formatToken(config.refreshToken),
+      }),
+    );
 
     const missingFields: string[] = [];
     if (!config.uaaUrl) {
@@ -93,53 +159,53 @@ export class AuthorizationCodeProvider extends BaseTokenProvider {
       missingFields.push('clientSecret');
     }
     if (missingFields.length > 0) {
-      const error = new Error(
-        `Missing required fields: ${missingFields.join(', ')}`,
-      ) as Error & { code: string; missingFields: string[] };
-      error.code = 'VALIDATION_ERROR';
-      error.missingFields = missingFields;
-      throw error;
+      // The names of what is missing, never a value.
+      throw requiredFieldsMissing(missingFields);
     }
+    // A pre-built URL that cannot be read is refused here, not at login.
+    if (config.authorizationUrl) declaredRedirectOf(config.authorizationUrl);
 
     // Initialize from provided tokens if available
     if (config.accessToken) {
       this.authorizationToken = config.accessToken;
       // The JWT's exp, else the stated expiresAt
       this.expiresAt = this.seededExpiry(config.accessToken, config.expiresAt);
-      this.logger?.info(
-        '[AuthorizationCodeProvider] Initialized with access token',
-        {
-          accessToken: this.formatToken(config.accessToken),
-          hasExpiresAt: !!this.expiresAt,
-          expiresAt: this.expiresAt
-            ? this.formatExpirationDate(this.expiresAt)
-            : undefined,
-        },
+      logQuietly(() =>
+        this.logger?.info(
+          '[AuthorizationCodeProvider] Initialized with access token',
+          {
+            accessToken: this.formatToken(config.accessToken),
+            hasExpiresAt: !!this.expiresAt,
+            expiresAt: this.expiresAt
+              ? this.formatExpirationDate(this.expiresAt)
+              : undefined,
+          },
+        ),
       );
     }
     if (config.refreshToken) {
       this.refreshToken = config.refreshToken;
-      this.logger?.info(
-        '[AuthorizationCodeProvider] Initialized with refresh token',
-        {
-          refreshToken: this.formatToken(config.refreshToken),
-        },
+      logQuietly(() =>
+        this.logger?.info(
+          '[AuthorizationCodeProvider] Initialized with refresh token',
+          {
+            refreshToken: this.formatToken(config.refreshToken),
+          },
+        ),
       );
     }
-  }
-
-  override async getTokens(): Promise<ITokenResult> {
-    return super.getTokens();
   }
 
   /** The usual choice: a browser login answered on a local callback. */
   static inBrowser(
     config: Omit<AuthorizationCodeProviderConfig, 'authorization'>,
-    options: { timeoutMs?: number } = {},
+    options: LoginFactoryOptions = {},
   ): AuthorizationCodeProvider {
     return new AuthorizationCodeProvider({
-      ...config,
-      authorization: browserCallbackStrategy({ timeoutMs: options.timeoutMs }),
+      ...ownOptions<typeof config>(config),
+      authorization: browserCallbackStrategy({
+        signal: ownOptions<LoginFactoryOptions>(options).signal,
+      }),
     });
   }
 
@@ -147,7 +213,7 @@ export class AuthorizationCodeProvider extends BaseTokenProvider {
     return AUTH_TYPE_AUTHORIZATION_CODE;
   }
 
-  protected async performLogin(): Promise<ITokenResult> {
+  protected async performLogin(attempt: AttemptContext): Promise<ITokenResult> {
     const authConfig: IAuthorizationConfig = {
       uaaUrl: this.config.uaaUrl,
       uaaClientId: this.config.clientId,
@@ -156,53 +222,65 @@ export class AuthorizationCodeProvider extends BaseTokenProvider {
     };
 
     const prebuilt = this.config.authorizationUrl;
-    const declaredRedirect = prebuilt
-      ? new URL(prebuilt).searchParams.get('redirect_uri')
-      : null;
+    const declaredRedirect = prebuilt ? declaredRedirectOf(prebuilt) : null;
 
-    const mismatch = (redirectUri: string): string =>
-      `Pre-built authorizationUrl declares redirect_uri ${declaredRedirect}, ` +
-      `but the authorization strategy used ${redirectUri}, which does not match. ` +
-      'An ephemeral port cannot be used with a pre-built URL.';
+    // The two addresses are diagnostics, never in the words.
+    const mismatch = (redirectUri: string) =>
+      misconfigured(
+        authError.configuration(
+          { case: 'redirect-mismatch', fields: ['authorizationUrl'] },
+          { configuredUri: declaredRedirect, strategyUri: redirectUri },
+        ),
+      );
 
     // The provider owns the URL; the strategy owns where it is answered. The
     // guard lives here rather than after the fact because a mismatched redirect
-    // produces no callback at all — checking the outcome would mean waiting for
-    // a timeout that explains nothing.
-    const request = {
+    // produces no callback at all — checking the outcome would mean waiting
+    // for a callback that never comes.
+    // Login CSRF: the PKCE verifier of the last URL this
+    // attempt built, sent in its exchange. None for a configured URL — the
+    // consumer's, given only a `state` when it has none — or a code no
+    // URL was built for.
+    let codeVerifier: string | undefined;
+    const request: AuthorizationRequest = {
       logger: this.logger,
+      // The attempt's signal: every waiter gone ends the login.
+      signal: attempt.signal,
       buildAuthorizationUrl: async (redirectUri: string): Promise<string> => {
         if (prebuilt) {
           if (declaredRedirect && declaredRedirect !== redirectUri) {
-            throw new ValidationError(mismatch(redirectUri), [
-              'authorizationUrl',
-            ]);
+            throw mismatch(redirectUri);
           }
-          return prebuilt;
+          return withMintedState(prebuilt);
         }
-        return getJwtAuthorizationUrl(authConfig, redirectUri);
+        // A fresh state and PKCE pair for every URL built.
+        const verifier = generatePkceVerifier();
+        const url = getJwtAuthorizationUrl(authConfig, redirectUri, {
+          state: mintSecret(),
+          codeChallenge: generatePkceChallenge(verifier),
+        });
+        codeVerifier = verifier;
+        return url;
       },
     };
 
     const strategy = this.config.authorization;
 
-    const outcome = await strategy.authorize(
-      asContract<AuthorizationRequest>(request),
-    );
+    // The strategy holds a socket or a reader: it starts only once the
+    // previous attempt has released its own (the drain).
+    const outcome = await attempt.exclusive(() => strategy.authorize(request));
 
     // The second net. A strategy that never called the builder — `staticCodeStrategy`
     // holds its payload already — passed the first check by not participating in
     // it, and would otherwise reach the exchange with a redirect_uri the
     // pre-built URL never advertised, earning an opaque `invalid_grant`.
     if (declaredRedirect && declaredRedirect !== outcome.redirectUri) {
-      throw new ValidationError(mismatch(outcome.redirectUri), [
-        'authorizationUrl',
-      ]);
+      throw mismatch(outcome.redirectUri);
     }
 
-    this.logger?.info('[AuthorizationCodeProvider] Code received', {
-      redirectUri: outcome.redirectUri,
-    });
+    logQuietly(() =>
+      this.logger?.info('[AuthorizationCodeProvider] Code received'),
+    );
 
     const result = await exchangeCodeForToken(
       authConfig,
@@ -210,47 +288,58 @@ export class AuthorizationCodeProvider extends BaseTokenProvider {
       outcome.redirectUri,
       this.logger,
       await this.requestAuth(),
+      this.siteOptions(attempt.signal),
+      codeVerifier,
     );
 
-    return asContract<ITokenResult>({
+    return {
       authorizationToken: result.accessToken,
       refreshToken: result.refreshToken,
       authType: AUTH_TYPE_AUTHORIZATION_CODE,
       expiresIn: this.calculateExpiresIn(result.accessToken),
-    });
+    };
   }
 
-  protected async performRefresh(): Promise<ITokenResult> {
-    if (!this.refreshToken) {
-      throw new Error('Refresh token is required for refresh');
+  protected async performRefresh(
+    refreshToken: string,
+    _signal: AbortSignal,
+    dispatched: () => void,
+  ): Promise<ITokenResult> {
+    if (!refreshToken) {
+      throw refreshTokenRefused();
     }
 
-    this.logger?.info('[AuthorizationCodeProvider] Refreshing token');
+    logQuietly(() =>
+      this.logger?.info('[AuthorizationCodeProvider] Refreshing token'),
+    );
     // A failure throws: the base decides the one login (rule 6).
     const result = await refreshJwtToken(
-      this.refreshToken,
+      refreshToken,
       this.config.uaaUrl,
       this.config.clientId,
       this.config.clientSecret,
       await this.requestAuth(),
       this.logger,
+      this.refreshSiteOptions(dispatched),
     );
 
-    this.logger?.info('[AuthorizationCodeProvider] Token refresh completed', {
-      hasAccessToken: !!result.accessToken,
-      hasRefreshToken: !!result.refreshToken,
-      newAccessToken: this.formatToken(result.accessToken),
-      newRefreshToken: this.formatToken(result.refreshToken),
-      oldRefreshToken: this.formatToken(this.refreshToken),
-    });
+    logQuietly(() =>
+      this.logger?.info('[AuthorizationCodeProvider] Token refresh completed', {
+        hasAccessToken: !!result.accessToken,
+        hasRefreshToken: !!result.refreshToken,
+        newAccessToken: this.formatToken(result.accessToken),
+        newRefreshToken: this.formatToken(result.refreshToken),
+        oldRefreshToken: this.formatToken(refreshToken),
+      }),
+    );
 
     const expiresIn = this.calculateExpiresIn(result.accessToken);
 
-    return asContract<ITokenResult>({
+    return {
       authorizationToken: result.accessToken,
-      refreshToken: result.refreshToken || this.refreshToken, // Keep old if new not provided
+      refreshToken: result.refreshToken || refreshToken, // Keep old if new not provided
       authType: AUTH_TYPE_AUTHORIZATION_CODE,
       expiresIn,
-    });
+    };
   }
 }

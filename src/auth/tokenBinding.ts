@@ -1,7 +1,7 @@
 /**
- * What a token says about its binding to a client certificate (spec §4,
- * RFC 8705 §3.1). Read before the token is presented; nothing is verified —
- * the token's signature is the resource's to check, not the client's.
+ * What a token says about its binding to a client certificate (RFC 8705 §3.1).
+ * Read before the token is presented; nothing is verified — the token's
+ * signature is the resource's to check, not the client's.
  */
 
 /**

@@ -3,35 +3,55 @@
  * catches from getTokens(), refreshTokens() or a strategy is logged by
  * whoever catches it — the broker, a server — by its message. What a
  * collaborator or the network threw may hold a key, a passphrase or a token,
- * so the message is fixed words (the refusal's, `loggedError`); the original
- * is the `cause`, which a consumer reads only by choice.
+ * so what is thrown is an `AuthProviderFailure` whose message is its error's
+ * fixed words, with no `cause`.
  */
 
 import http from 'node:http';
 import { inspect } from 'node:util';
 import { beforeEach, describe, expect, it, jest } from '@jest/globals';
-import axios, { AxiosError } from 'axios';
-import { AuthorizationRefusedError } from '../../auth/callbackScopeError';
+import {
+  AuthProviderFailure,
+  authError,
+  classify,
+  isAuthProviderFailure,
+  logFields,
+  readFailure,
+} from '@mcp-abap-adt/auth-errors';
+import type {
+  IAnswerChannel,
+  IAnswerTransport,
+  IBrowser,
+} from '@mcp-abap-adt/interfaces-auth';
+import axios from 'axios';
 import { getTokenWithClientCredentials } from '../../auth/clientCredentialsAuth';
 import { refreshOidcToken } from '../../auth/oidcToken';
-import { loggedError, refusalFrom } from '../../auth/refusal';
 import {
   exchangeSamlAssertion,
   refreshSamlBearerToken,
 } from '../../auth/saml2TokenExchange';
 import { refreshJwtToken } from '../../auth/tokenRefresher';
-import { TokenEndpointError } from '../../errors/TokenEndpointError';
-import {
-  BrowserAuthError,
-  ValidationError,
-} from '../../errors/TokenProviderErrors';
+import { composeAuthorization } from '../../authorization/compose';
+import { oauthCode } from '../../authorization/protocol';
+import { refreshStatePersistence } from '../../persistence';
 import { AuthorizationCodeProvider } from '../../providers/AuthorizationCodeProvider';
 import { ClientCredentialsProvider } from '../../providers/ClientCredentialsProvider';
+import { refreshThenLogin } from '../../renewal';
 import {
-  BrowserCallbackStrategy,
   browserCallbackStrategy,
   oidcCallbackStrategy,
 } from '../../strategies';
+import { wordsOf } from '../helpers/minted';
+import { recordingBrowser } from '../helpers/recordingBrowser';
+
+/** A composition whose transport is the test's `open`. */
+const composedOver = (open: IAnswerTransport['open']) =>
+  composeAuthorization({
+    presentation: { present: () => undefined },
+    transport: { label: 'browser', open },
+    protocol: oauthCode(),
+    endpoint: '/callback',
+  });
 
 jest.mock('axios', () => {
   const mocked = jest.createMockFromModule<Record<string, unknown>>('axios');
@@ -67,30 +87,38 @@ describe('a thrown error carries no foreign message', () => {
     [
       'client credentials',
       () => getTokenWithClientCredentials('https://uaa', 'cid', 'secret'),
-      'Client credentials authentication failed',
+      'the client credentials request failed (ECONNREFUSED)',
+      'client-credentials',
     ],
     [
       'UAA refresh',
       () => refreshJwtToken('rt', 'https://uaa', 'cid', 'secret'),
-      'Token refresh failed',
+      'the token refresh failed (ECONNREFUSED)',
+      'token-refresh',
     ],
   ])(
-    '%s: fixed words; the cause is a safe replacement, never the original',
-    async (_name, run, words) => {
+    '%s: fixed words; no cause at all, never the original',
+    async (_name, run, words, operation) => {
       const { error, text } = await thrownBy(run);
-      expect(text).toContain(words);
-      // The allowlisted code still says what happened.
-      expect(text).toContain('ECONNREFUSED');
+      // `request-failed` `no-response` of the site's operation, the
+      // allowlisted code still saying what happened.
+      expect(error.message).toBe(words);
+      expect(readFailure(error, 'unfamiliar-error').facts).toEqual({
+        operation,
+        problem: 'no-response',
+        code: 'ECONNREFUSED',
+      });
       expect(text).not.toContain(MARKER);
-      // The original is replaced, even as cause: util.inspect prints causes.
-      expect(error.cause).not.toBe(original);
+      // No cause — the original, nor a replacement (util.inspect prints
+      // causes).
+      expect(error.cause).toBeUndefined();
       expect(inspect(error, { depth: null })).not.toContain(MARKER);
-      expect((error.cause as { code?: unknown }).code).toBe('ECONNREFUSED');
     },
   );
 
   it('through a provider: getTokens() throws no window of it', async () => {
     const provider = new ClientCredentialsProvider({
+      renewal: refreshThenLogin(),
       uaaUrl: 'https://uaa',
       clientId: 'cid',
       clientSecret: 'secret',
@@ -99,22 +127,26 @@ describe('a thrown error carries no foreign message', () => {
     expect(text).not.toContain(MARKER);
   });
 
-  it('BrowserCallbackStrategy: a BrowserAuthError in fixed words, the original as cause', async () => {
-    const strategy = new BrowserCallbackStrategy<string>({
-      callbackServer: async () => {
-        throw original;
-      },
-      openUrl: async () => undefined,
+  // An `interactive-login` `failed` failure naming only the
+  // allowlisted code; no cause at all, never the original.
+  it('a composed strategy: interactive-login failed in fixed words, no cause', async () => {
+    const strategy = composedOver(async () => {
+      throw original;
     });
     const { error, text } = await thrownBy(() =>
       strategy.authorize({
-        buildAuthorizationUrl: async () => 'https://idp.example/a',
+        buildAuthorizationUrl: async () => 'https://idp.example/a?state=S',
       }),
     );
-    expect(error).toBeInstanceOf(BrowserAuthError);
+    expect(isAuthProviderFailure(error)).toBe(true);
+    expect(readFailure(error, 'browser-login').facts).toEqual({
+      outcome: 'failed',
+      code: 'ECONNREFUSED',
+    });
     expect(text).toContain('ECONNREFUSED');
     expect(text).not.toContain(MARKER);
-    expect(error.cause).toBe(original);
+    expect(error.cause).toBeUndefined();
+    expect(inspect(error, { depth: null })).not.toContain(MARKER);
   });
 });
 
@@ -156,15 +188,18 @@ describe('a token-endpoint failure keeps its safe facts', () => {
         }),
       );
       const { error } = await thrownBy(run);
-      expect(error).toBeInstanceOf(TokenEndpointError);
-      const failure = error as TokenEndpointError;
-      expect(failure.status).toBe(401);
-      expect(failure.oauthError).toBe('invalid_grant');
-      const words = loggedError(error, 'the refresh').error;
+      // The status and the registered code are the failure's facts.
+      expect(isAuthProviderFailure(error)).toBe(true);
+      expect(readFailure(error, 'unfamiliar-error').facts).toMatchObject({
+        problem: 'refused',
+        status: 401,
+        oauthError: 'invalid_grant',
+      });
+      const words = logFields(classify(error, 'refresh')).error;
       expect(words).toContain('HTTP 401');
       expect(words).toContain('invalid_grant');
       expect(words).not.toContain(DESCRIPTION);
-      const refusal = refusalFrom(error, 'the refresh');
+      const refusal = classify(error, 'refresh');
       expect(JSON.stringify(refusal)).toContain('invalid_grant');
       expect(JSON.stringify(refusal)).not.toContain(DESCRIPTION);
     },
@@ -175,8 +210,11 @@ describe('a token-endpoint failure keeps its safe facts', () => {
     const { error } = await thrownBy(() =>
       refreshJwtToken('rt', 'https://uaa', 'cid', 'secret'),
     );
-    expect((error as TokenEndpointError).oauthError).toBeUndefined();
-    const words = loggedError(error, 'the refresh').error;
+    // An unregistered code is no fact.
+    expect(
+      readFailure(error, 'unfamiliar-error').facts as Record<string, unknown>,
+    ).not.toHaveProperty('oauthError');
+    const words = logFields(classify(error, 'refresh')).error;
     expect(words).toContain('HTTP 400');
     expect(words).not.toContain(UNREGISTERED);
   });
@@ -192,10 +230,13 @@ describe('a token-endpoint failure keeps its safe facts', () => {
     const { error, text } = await thrownBy(() =>
       refreshJwtToken('rt', 'https://uaa', 'cid', 'secret'),
     );
-    expect((error as TokenEndpointError).code).toBe(code);
+    // The allowlisted code is the failure's `code` fact.
+    expect(
+      (readFailure(error, 'unfamiliar-error').facts as { code?: unknown }).code,
+    ).toBe(code);
     expect(text).toContain(code);
     expect(text).not.toContain(MARKER);
-    expect(loggedError(error, 'the refresh').error).toContain(code);
+    expect(logFields(classify(error, 'refresh')).error).toContain(code);
   });
 
   it('an unlisted code never reaches the message', async () => {
@@ -219,9 +260,13 @@ describe('a token-endpoint failure keeps its safe facts', () => {
       }),
     );
     const lines: string[] = [];
-    const record = (level: string) => (m: string, meta?: unknown) =>
+    const metas: Array<[string, unknown]> = [];
+    const record = (level: string) => (m: string, meta?: unknown) => {
       lines.push(`${level} ${m} ${JSON.stringify(meta ?? {})}`);
+      if (level === 'error') metas.push([m, meta]);
+    };
     const provider = new AuthorizationCodeProvider({
+      renewal: refreshThenLogin(),
       uaaUrl: 'https://uaa',
       clientId: 'cid',
       clientSecret: 'secret',
@@ -256,17 +301,28 @@ describe('a token-endpoint failure keeps its safe facts', () => {
 describe('an IdP refusal on the browser callback', () => {
   const DESCRIPTION = 'REVIEW_TEST_IDP_DESCRIPTION_c5d2';
 
-  const refuse =
-    (query: string) =>
-    async (_url: string, _browser: string, redirectUri: string) => {
-      await new Promise<void>((resolve) => {
-        const req = http.get(`${redirectUri}?${query}`, (res) => {
-          res.resume();
-          res.on('end', () => resolve());
+  /** The consumer's IBrowser playing the IdP: refuses on the redirect the URL names. */
+  const refuse = (query: string): IBrowser =>
+    recordingBrowser({
+      onOpen: async (url: string) => {
+        // The IdP's refusal carries the request's state (RFC 6749 §4.1.2.1).
+        const params = new URL(url).searchParams;
+        const state = params.get('state') ?? '';
+        const redirectUri = params.get('redirect_uri') ?? '';
+        await new Promise<void>((resolve) => {
+          const req = http.get(
+            `${redirectUri}?${query}&state=${state}`,
+            (res) => {
+              res.resume();
+              res.on('end', () => resolve());
+            },
+          );
+          req.on('error', () => resolve());
         });
-        req.on('error', () => resolve());
-      });
-    };
+      },
+    });
+  const urlFor = async (redirectUri: string) =>
+    `https://idp.example/a?state=S&redirect_uri=${encodeURIComponent(redirectUri)}`;
 
   it.each([
     ['UAA', browserCallbackStrategy],
@@ -280,23 +336,24 @@ describe('an IdP refusal on the browser callback', () => {
         }
       )({
         port: 0,
-        timeoutMs: 5000,
-        openUrl: refuse(
+        browser: refuse(
           `error=consent_required&error_description=${DESCRIPTION}`,
         ),
       });
       const { error, text } = await thrownBy(() =>
-        strategy.authorize({
-          buildAuthorizationUrl: async () => 'https://idp.example/a',
-        }),
+        strategy.authorize({ buildAuthorizationUrl: urlFor }),
       );
-      expect(error).toBeInstanceOf(BrowserAuthError);
+      // `identity-provider-refused` with the registered code.
+      expect(readFailure(error, 'browser-login').facts).toEqual({
+        outcome: 'identity-provider-refused',
+        oauthError: 'consent_required',
+      });
       expect(text).toContain('consent_required');
       expect(text).not.toContain(DESCRIPTION);
-      const refusal = JSON.stringify(refusalFrom(error, 'the login'));
+      const refusal = JSON.stringify(classify(error, 'browser-login'));
       expect(refusal).toContain('consent_required');
       expect(refusal).not.toContain(DESCRIPTION);
-      expect(loggedError(error, 'the login').error).toContain(
+      expect(logFields(classify(error, 'browser-login')).error).toContain(
         'consent_required',
       );
     },
@@ -305,51 +362,49 @@ describe('an IdP refusal on the browser callback', () => {
   it('an unregistered code is dropped', async () => {
     const strategy = browserCallbackStrategy({
       port: 0,
-      timeoutMs: 5000,
-      openUrl: refuse(`error=${DESCRIPTION}`),
+      browser: refuse(`error=${DESCRIPTION}`),
     });
     const { error, text } = await thrownBy(() =>
-      strategy.authorize({
-        buildAuthorizationUrl: async () => 'https://idp.example/a',
-      }),
+      strategy.authorize({ buildAuthorizationUrl: urlFor }),
     );
     expect(text).not.toContain(DESCRIPTION);
-    expect(JSON.stringify(refusalFrom(error, 'the login'))).not.toContain(
+    expect(JSON.stringify(classify(error, 'browser-login'))).not.toContain(
       DESCRIPTION,
     );
     expect(text).toContain('refused');
   });
 
   it('a foreign failure with an HTTP status names the status', async () => {
-    const strategy = new BrowserCallbackStrategy<string>({
-      callbackServer: async () => {
-        throw Object.assign(new Error(DESCRIPTION), { status: 503 });
-      },
-      openUrl: async () => undefined,
+    const strategy = composedOver(async () => {
+      throw Object.assign(new Error(DESCRIPTION), { status: 503 });
     });
     const { text } = await thrownBy(() =>
       strategy.authorize({
-        buildAuthorizationUrl: async () => 'https://idp.example/a',
+        buildAuthorizationUrl: async () => 'https://idp.example/a?state=S',
       }),
     );
     expect(text).toContain('HTTP 503');
     expect(text).not.toContain(DESCRIPTION);
   });
 
-  it('a ValidationError from building the URL passes through unchanged', async () => {
-    const strategy = new BrowserCallbackStrategy<string>({
-      callbackServer: async (_options, use) =>
+  // The configuration failure the URL builder throws, once a
+  // ValidationError, passes through as it is.
+  it('a configuration failure from building the URL passes through unchanged', async () => {
+    const strategy = composedOver(
+      async <T>(
+        _options: unknown,
+        use: (channel: IAnswerChannel) => Promise<T>,
+      ) =>
         use({
-          port: 1,
           redirectUri: 'http://localhost:1/callback',
-          waitForResult: () => new Promise<string>(() => undefined),
-          fail: () => undefined,
+          arm: () => ({ answer: () => new Promise<void>(() => undefined) }),
         }),
-      openUrl: async () => undefined,
+    );
+    const configuration = authError.configuration({
+      case: 'redirect-mismatch',
+      fields: ['authorizationUrl'],
     });
-    const mismatch = new ValidationError('redirect mismatch', [
-      'authorizationUrl',
-    ]);
+    const mismatch = new AuthProviderFailure(configuration);
     const { error } = await thrownBy(() =>
       strategy.authorize({
         buildAuthorizationUrl: async () => {
@@ -384,25 +439,125 @@ const hostile = () =>
     },
   );
 
-describe('refusalFrom and loggedError are total', () => {
+describe('a persistence strategy’s failure carries no foreign message', () => {
+  beforeEach(() => {
+    jest.resetAllMocks();
+    mockedAxios.mockResolvedValue({
+      status: 200,
+      data: { access_token: 'the-access-token', expires_in: 3600 },
+    });
+  });
+
+  const provider = (
+    persistence: ConstructorParameters<
+      typeof ClientCredentialsProvider
+    >[0]['persistence'],
+    logger?: ReturnType<typeof recording>['logger'],
+  ) =>
+    new ClientCredentialsProvider({
+      renewal: refreshThenLogin(),
+      uaaUrl: 'https://uaa',
+      clientId: 'cid',
+      clientSecret: 'secret',
+      persistence,
+      ...(logger ? { logger } : {}),
+    });
+
+  function recording() {
+    const lines: string[] = [];
+    const at = (level: string) => (m: string, meta?: unknown) => {
+      lines.push(`${level} ${m} ${JSON.stringify(meta ?? {})}`);
+    };
+    return {
+      lines,
+      logger: {
+        debug: at('debug'),
+        info: at('info'),
+        warn: at('warn'),
+        error: at('error'),
+      },
+    };
+  }
+
+  it.each([
+    ['an Error', () => new Error(MARKER)],
+    ['a string', () => MARKER],
+    ['a hostile value', () => hostile()],
+  ])(
+    'a report that throws %s: getTokens() throws persisting-tokens in fixed words, no cause',
+    async (_name, make) => {
+      const { lines, logger } = recording();
+      const p = provider(
+        {
+          report: () => {
+            throw make();
+          },
+        },
+        logger,
+      );
+      const { error, text } = await thrownBy(() => p.getTokens());
+      expect(isAuthProviderFailure(error)).toBe(true);
+      expect(readFailure(error, 'token-request')).toMatchObject({
+        kind: 'unknown',
+        reason: 'persisting the tokens failed (unknown error)',
+        facts: { operation: 'persisting-tokens' },
+      });
+      expect(text).not.toContain(MARKER);
+      expect(error.cause).toBeUndefined();
+      expect(inspect(error, { depth: null })).not.toContain(MARKER);
+      expect(lines.join('\n')).not.toContain(MARKER);
+    },
+  );
+
+  it("refreshStatePersistence 'fail': a write's failure fails getTokens() in fixed words; its logger writes no message", async () => {
+    const { lines, logger } = recording();
+    const p = provider(
+      refreshStatePersistence(
+        async () => {
+          throw new Error(MARKER);
+        },
+        { onWriteFailure: 'fail', logger },
+      ),
+      logger,
+    );
+    const { error, text } = await thrownBy(() => p.getTokens());
+    expect(readFailure(error, 'token-request')).toMatchObject({
+      kind: 'unknown',
+      reason: 'persisting the tokens failed (unknown error)',
+      facts: { operation: 'persisting-tokens' },
+    });
+    expect(text).not.toContain(MARKER);
+    expect(error.cause).toBeUndefined();
+    const all = lines.join('\n');
+    expect(all).toContain(
+      '[refreshStatePersistence] Writing the tokens failed',
+    );
+    expect(all).not.toContain(MARKER);
+  });
+});
+
+describe('classify and logFields are total', () => {
   beforeEach(() => {
     jest.resetAllMocks();
   });
 
   it('a value whose every read throws is "unknown error", not an exception', () => {
-    expect(refusalFrom(hostile(), 'the step')).toEqual({
-      ok: false,
-      refusal: { reason: 'the step failed (unknown error)' },
-    });
-    expect(loggedError(hostile(), 'the step')).toEqual({
-      error: 'the step failed (unknown error)',
+    expect(classify(hostile(), 'token-source').reason).toBe(
+      'the token source failed (unknown error)',
+    );
+    expect(logFields(classify(hostile(), 'token-source'))).toEqual({
+      error: 'the token source failed (unknown error)',
+      kind: 'unknown',
     });
   });
 
   it('a provider answers Oops and logs a fixed line when a strategy throws one', async () => {
     const lines: string[] = [];
-    const record = (level: string) => (m: string, meta?: unknown) =>
+    const metas: Array<[string, unknown]> = [];
+    const record = (level: string) => (m: string, meta?: unknown) => {
       lines.push(`${level} ${m} ${JSON.stringify(meta ?? {})}`);
+      if (level === 'error') metas.push([m, meta]);
+    };
     const logger = {
       debug: record('debug'),
       info: record('info'),
@@ -415,6 +570,7 @@ describe('refusalFrom and loggedError are total', () => {
       },
     };
     const credentials = new ClientCredentialsProvider({
+      renewal: refreshThenLogin(),
       uaaUrl: 'https://uaa',
       clientId: 'cid',
       clientAuthentication: strategy,
@@ -423,6 +579,7 @@ describe('refusalFrom and loggedError are total', () => {
     const prepared = await credentials.prepare();
     expect(prepared.ok).toBe(false);
     const code = new AuthorizationCodeProvider({
+      renewal: refreshThenLogin(),
       uaaUrl: 'https://uaa',
       clientId: 'cid',
       refreshToken: 'rt-0123456789',
@@ -450,70 +607,7 @@ describe('refusalFrom and loggedError are total', () => {
 describe('the facts are re-checked wherever they are read', () => {
   const FOREIGN = 'REVIEW_TEST_FOREIGN_CODE_19be';
 
-  it('a mutated refusal code never reaches the refusal', () => {
-    const refused = new AuthorizationRefusedError('consent_required');
-    (refused as unknown as { oauthError: string }).oauthError = FOREIGN;
-    const outcome = refusalFrom(
-      new BrowserAuthError(refused.message, refused),
-      'the login',
-    );
-    expect(JSON.stringify(outcome)).not.toContain(FOREIGN);
-    expect(JSON.stringify(outcome)).toContain('refused the login');
-  });
-
-  it('TokenEndpointError keeps only allowlisted facts', () => {
-    const forged = new TokenEndpointError('m', {
-      status: 401.5,
-      code: FOREIGN,
-      oauthError: FOREIGN,
-    });
-    expect(forged.status).toBeUndefined();
-    expect(forged.code).toBeUndefined();
-    expect(forged.oauthError).toBeUndefined();
-    expect(JSON.stringify(forged)).not.toContain(FOREIGN);
-    const kept = new TokenEndpointError('m', {
-      status: 401,
-      code: 'ECONNRESET',
-      oauthError: 'invalid_grant',
-    });
-    expect([kept.status, kept.code, kept.oauthError]).toEqual([
-      401,
-      'ECONNRESET',
-      'invalid_grant',
-    ]);
-  });
-
-  it("loggedError's status field comes from a TokenEndpointError too", () => {
-    expect(
-      loggedError(new TokenEndpointError('m', { status: 401 }), 'x').status,
-    ).toBe(401);
-  });
-
-  it('a reduced AxiosError reads like a TokenEndpointError', () => {
-    const facts = { status: 401, oauthError: 'invalid_grant' };
-    const axiosError = new AxiosError(
-      'Request failed with status code 401',
-      undefined,
-      undefined,
-      undefined,
-      {
-        status: 401,
-        statusText: '',
-        headers: {},
-        data: { error: 'invalid_grant' },
-      } as never,
-    );
-    const words = refusalFrom(axiosError, 'the refresh');
-    expect(words).toEqual(
-      refusalFrom(new TokenEndpointError('m', facts), 'the refresh'),
-    );
-    expect(words).toEqual({
-      ok: false,
-      refusal: { reason: 'the refresh failed (HTTP 401, invalid_grant)' },
-    });
-  });
-
-  it('the SAML bearer exchange logs the facts, not the description', async () => {
+  it('the SAML bearer exchange and refresh log logFields of the failure, not the description', async () => {
     jest.resetAllMocks();
     (
       axios as unknown as { isAxiosError: (e: unknown) => boolean }
@@ -533,8 +627,11 @@ describe('the facts are re-checked wherever they are read', () => {
       throw failure;
     }) as unknown as Mock;
     const lines: string[] = [];
-    const record = (level: string) => (m: string, meta?: unknown) =>
+    const metas: Array<[string, unknown]> = [];
+    const record = (level: string) => (m: string, meta?: unknown) => {
       lines.push(`${level} ${m} ${JSON.stringify(meta ?? {})}`);
+      if (level === 'error') metas.push([m, meta]);
+    };
     const logger = {
       debug: record('debug'),
       info: record('info'),
@@ -570,5 +667,24 @@ describe('the facts are re-checked wherever they are read', () => {
       expect(line).toContain('invalid_grant');
       expect(line).not.toContain(FOREIGN);
     }
+    // Exactly `logFields` of each site's failure: the words, kind, status.
+    expect(metas).toEqual([
+      [
+        '[SAML] Token exchange failed',
+        {
+          error: 'the SAML token exchange failed (HTTP 400, invalid_grant)',
+          kind: 'request-failed',
+          status: 400,
+        },
+      ],
+      [
+        '[SAML] Token refresh failed',
+        {
+          error: 'the SAML token refresh failed (HTTP 400, invalid_grant)',
+          kind: 'request-failed',
+          status: 400,
+        },
+      ],
+    ]);
   });
 });

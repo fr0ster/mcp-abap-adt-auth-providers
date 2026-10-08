@@ -8,8 +8,11 @@
  */
 
 import { X509Certificate } from 'node:crypto';
+import { authError } from '@mcp-abap-adt/auth-errors';
 import type { Document, Element } from '@xmldom/xmldom';
 import { SignedXml } from 'xml-crypto';
+import { misconfigured } from '../auth/configuration';
+import { refuse, several } from './samlRefusal';
 
 const DSIG_NS = 'http://www.w3.org/2000/09/xmldsig#';
 
@@ -17,11 +20,12 @@ const DSIG_NS = 'http://www.w3.org/2000/09/xmldsig#';
  * PEM in, PEM out; bare base64 DER gets its armour — and the result is proved
  * to be a certificate before anything uses it.
  *
- * The spec promises `idpCertificates` accepts either, and a consumer copying
- * `<X509Certificate>` out of identity-provider metadata has bare base64 DER in
- * their hand — the armour is not in the metadata. `xml-crypto` accepts only
- * PEM or a Buffer: measured, a bare base64 certificate makes OpenSSL throw
- * `DECODER routines::unsupported`, while the same bytes re-armoured verify.
+ * The documented contract is that `idpCertificates` accepts either, and a
+ * consumer copying `<X509Certificate>` out of identity-provider metadata has
+ * bare base64 DER in their hand — the armour is not in the metadata.
+ * `xml-crypto` accepts only PEM or a Buffer: measured, a bare base64
+ * certificate makes OpenSSL throw `DECODER routines::unsupported`, while the
+ * same bytes re-armoured verify.
  *
  * Left unnormalised that throw would be swallowed by the verification loop and
  * reported as "the signature does not verify against any configured
@@ -34,53 +38,85 @@ const DSIG_NS = 'http://www.w3.org/2000/09/xmldsig#';
  * `asn1 encoding routines::wrong tag` — measured, not assumed. Called once per
  * certificate at construction, so the cost never falls on a login.
  */
-export function toPem(certificate: string): string {
+/**
+ * A configured certificate that is neither PEM nor base64 DER, or not a
+ * certificate — both sentences of 5.4.2 are one case.
+ */
+function idpCertificateInvalid() {
+  return misconfigured(
+    authError.configuration({
+      case: 'idp-certificate-invalid',
+      fields: ['idpCertificates'],
+    }),
+  );
+}
+
+export function toPem(certificate: unknown): string {
+  // A JavaScript caller past the type: anything but a string is no
+  // certificate either.
+  if (typeof certificate !== 'string') throw idpCertificateInvalid();
   const trimmed = certificate.trim();
   const pem = trimmed.includes('-----BEGIN')
     ? trimmed
     : (() => {
-        const body = trimmed.replace(/\s+/g, '');
-        if (!/^[A-Za-z0-9+/]+={0,2}$/.test(body)) {
-          throw new Error(
-            'a configured certificate is neither PEM nor base64 DER',
-          );
-        }
-        const wrapped = body.replace(/(.{64})/g, '$1\n').trim();
-        return `-----BEGIN CERTIFICATE-----\n${wrapped}\n-----END CERTIFICATE-----\n`;
+        const body = withoutWhitespace(trimmed);
+        if (!isBase64(body)) throw idpCertificateInvalid();
+        return `-----BEGIN CERTIFICATE-----\n${linesOf64(body)}\n-----END CERTIFICATE-----\n`;
       })();
 
   try {
     new X509Certificate(pem);
-  } catch (error) {
+  } catch {
     // Fixed words: OpenSSL's text is not this package's to repeat, and
-    // whoever catches this logs the message. The original is the cause.
-    throw new Error(
-      'a configured certificate is not a valid X.509 certificate',
-      {
-        cause: error,
-      },
-    );
+    // whoever catches this logs the message; the original is dropped.
+    throw idpCertificateInvalid();
   }
   return pem;
 }
 
-/**
- * Quotes a value from the document, or a message quoting one, before
- * interpolating it into a refusal: JSON-quoted, so a newline smuggled in as
- * `&#10;` shows as `\n` rather than forging a line in a log, and cut to 64
- * characters, so an attacker cannot fill a log with it.
- */
-export function quoteUntrusted(value: string): string {
-  const limit = 64;
-  return JSON.stringify(
-    value.length > limit ? `${value.slice(0, limit)}…` : value,
-  );
+/** Whitespace as `\\s` matched it: removed, every other character kept. */
+function withoutWhitespace(value: string): string {
+  let out = '';
+  for (const char of value) {
+    if (char.trim() !== '') out += char;
+  }
+  return out;
+}
+
+/** The base64 alphabet, at least one character, then at most two `=`. */
+function isBase64(value: string): boolean {
+  let end = value.length;
+  let padding = 0;
+  while (end > 0 && value[end - 1] === '=' && padding < 2) {
+    end -= 1;
+    padding += 1;
+  }
+  if (end === 0) return false;
+  for (let i = 0; i < end; i += 1) {
+    const c = value.charCodeAt(i);
+    const ok =
+      (c >= 0x41 && c <= 0x5a) || // A-Z
+      (c >= 0x61 && c <= 0x7a) || // a-z
+      (c >= 0x30 && c <= 0x39) || // 0-9
+      c === 0x2b || // +
+      c === 0x2f; // /
+    if (!ok) return false;
+  }
+  return true;
+}
+
+/** The body cut into lines of 64 characters, PEM's armour. */
+function linesOf64(body: string): string {
+  const lines: string[] = [];
+  for (let i = 0; i < body.length; i += 64) lines.push(body.slice(i, i + 64));
+  return lines.join('\n');
 }
 
 /**
  * Verifies every signature in the document against the certificates and
- * returns the elements they reference. Throws when there is no signature, or
- * when any one of them fails a rule below.
+ * returns the elements they reference. Throws an `AuthProviderFailure` of
+ * `saml-assertion` naming the rule when there is no signature, or when any
+ * one of them fails a rule below.
  *
  * `doc` must be the parse of `xml`, and nothing else: signatures are found and
  * their references resolved in `doc`, while `xml-crypto` verifies the digests
@@ -98,7 +134,9 @@ export function resolveSignedElements(
 ): Element[] {
   const signatures = doc.getElementsByTagNameNS(DSIG_NS, 'Signature');
   if (signatures.length === 0) {
-    throw new Error('the document carries no signature');
+    refuse(
+      authError['saml-assertion']({ rule: 'no-signature', check: 'signature' }),
+    );
   }
   // Every signature is held to every rule: an extra signature that fails is
   // something that should not be there, not noise to skip. Two verifying
@@ -133,14 +171,17 @@ function resolveOne(
       publicCert: certificate,
       getCertFromKeyInfo: () => null,
     });
-    // loadSignature throws for a malformed Signature, and xml-crypto's
-    // message embeds the offending element: document text, so quoted.
+    // loadSignature throws for a malformed Signature. xml-crypto's message
+    // embeds the offending element — document text — and reaches nothing: the
+    // rule says what failed.
     try {
       verifier.loadSignature(signatureNode);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      throw new Error(
-        `the signature element is malformed: ${quoteUntrusted(message)}`,
+    } catch {
+      refuse(
+        authError['saml-assertion']({
+          rule: 'signature-malformed',
+          check: 'signature',
+        }),
       );
     }
     try {
@@ -155,8 +196,11 @@ function resolveOne(
     }
   }
   if (!verified) {
-    throw new Error(
-      'the signature does not verify against any configured certificate',
+    refuse(
+      authError['saml-assertion']({
+        rule: 'signature-not-verified',
+        check: 'signature',
+      }),
     );
   }
 
@@ -166,11 +210,17 @@ function resolveOne(
   const references = signatureNode.getElementsByTagNameNS(DSIG_NS, 'Reference');
   const reference = references.item(0);
   if (!reference) {
-    throw new Error('the signature carries no ds:Reference');
+    return refuse(
+      authError['saml-assertion']({ rule: 'no-reference', check: 'signature' }),
+    );
   }
   if (references.length > 1) {
-    throw new Error(
-      `the signature carries ${references.length} ds:Reference; exactly one is allowed`,
+    refuse(
+      authError['saml-assertion']({
+        rule: 'several-references',
+        check: 'signature',
+        ...several(references.length),
+      }),
     );
   }
   const uri = reference.getAttribute('URI') ?? '';
@@ -182,8 +232,11 @@ function resolveOne(
     // signature with an empty reference walks straight past that rule.
     referenced = doc.documentElement;
   } else if (!uri.startsWith('#')) {
-    throw new Error(
-      `the signature reference is not a same-document URI: ${quoteUntrusted(uri)}`,
+    refuse(
+      authError['saml-assertion'](
+        { rule: 'reference-not-same-document', check: 'signature' },
+        { referenceUri: uri },
+      ),
     );
   } else {
     const id = uri.slice(1);
@@ -197,8 +250,11 @@ function resolveOne(
   }
 
   if (!referenced) {
-    throw new Error(
-      `the signature references ${quoteUntrusted(uri)}, which is not in the document`,
+    return refuse(
+      authError['saml-assertion'](
+        { rule: 'reference-not-found', check: 'signature' },
+        { referenceUri: uri },
+      ),
     );
   }
 
@@ -209,8 +265,11 @@ function resolveOne(
   // absence made every response @mcp-abap-adt/auth-mocks produced
   // unacceptable to a real library until it was fixed there.
   if (signatureNode.parentNode !== referenced) {
-    throw new Error(
-      'the signature is not inside the element it references, so it does not envelope it',
+    refuse(
+      authError['saml-assertion']({
+        rule: 'signature-not-enveloped',
+        check: 'signature',
+      }),
     );
   }
 

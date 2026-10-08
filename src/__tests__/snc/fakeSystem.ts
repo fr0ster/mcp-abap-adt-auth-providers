@@ -8,6 +8,13 @@ export interface FakeSystemOptions {
   files?: Record<string, Buffer>;
   /** "<key>\\<name>" → value. */
   registry?: Record<string, string>;
+  /**
+   * Each registry read as it was asked for, with the signal it was given —
+   * so a test can see which signal reached the query.
+   */
+  registryReads?: { key: string; name: string; signal?: AbortSignal }[];
+  /** A registry read that answers only through this function. */
+  readRegistryValue?: SncSystem['readRegistryValue'];
 }
 
 export function fakeSystem(options: FakeSystemOptions = {}): SncSystem {
@@ -18,7 +25,15 @@ export function fakeSystem(options: FakeSystemOptions = {}): SncSystem {
     async readHead(path) {
       return options.files?.[path] ?? null;
     },
-    async readRegistryValue(key, name) {
+    async readRegistryValue(key, name, signal) {
+      options.registryReads?.push({
+        key,
+        name,
+        ...(signal === undefined ? {} : { signal }),
+      });
+      if (options.readRegistryValue) {
+        return options.readRegistryValue(key, name, signal);
+      }
       return options.registry?.[`${key}\\${name}`];
     },
   };

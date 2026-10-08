@@ -2,6 +2,7 @@
  * OIDC Authorization Code Provider (with PKCE)
  */
 
+import { type AttemptContext, authError } from '@mcp-abap-adt/auth-errors';
 import type {
   AuthorizationRequest,
   IAuthorizationStrategy,
@@ -10,18 +11,26 @@ import type {
 } from '@mcp-abap-adt/interfaces-auth';
 import { AUTH_TYPE_AUTHORIZATION_CODE_PKCE } from '@mcp-abap-adt/interfaces-auth';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
-import { asContract } from '../auth/contractShape';
-import type { OidcCallbackResult } from '../auth/oidcBrowserAuth';
+import { throwIfAborted } from '../auth/attempt';
+import {
+  misconfigured,
+  oidcEndpointMissing,
+  oidcIssuerRequired,
+  ownOptions,
+} from '../auth/configuration';
 import { discoverOidc, mtlsAlias } from '../auth/oidcDiscovery';
 import { generatePkceChallenge, generatePkceVerifier } from '../auth/oidcPkce';
 import { exchangeAuthorizationCode, refreshOidcToken } from '../auth/oidcToken';
-import { RefreshError, ValidationError } from '../errors/TokenProviderErrors';
+import type { OidcCallbackResult } from '../authorization/protocol';
+import { mintSecret } from '../authorization/secrets';
 import { oidcCallbackStrategy } from '../strategies';
 import {
   BaseTokenProvider,
   type ClientAuthenticationConfig,
+  refreshTokenRefused,
   type TokenProviderHooks,
 } from './BaseTokenProvider';
+import type { LoginFactoryOptions } from './LoginFactoryOptions';
 
 export interface OidcBrowserProviderConfig
   extends TokenProviderHooks,
@@ -47,10 +56,34 @@ export interface OidcBrowserProviderConfig
   logger?: ILogger | undefined;
 }
 
+/**
+ * The authorization endpoint — configured or discovered — as a `URL` to add
+ * this login's parameters to. One that does not parse, or carries a
+ * fragment (RFC 6749 §3.1), is `invalid-value` naming
+ * `authorizationEndpoint`, never its value: nothing is built or opened.
+ */
+function authorizationEndpointUrl(endpoint: string): URL {
+  const refused = () =>
+    misconfigured(
+      authError.configuration({
+        case: 'invalid-value',
+        fields: ['authorizationEndpoint'],
+      }),
+    );
+  if (endpoint.includes('#')) throw refused();
+  try {
+    return new URL(endpoint);
+  } catch {
+    throw refused();
+  }
+}
+
 export class OidcBrowserProvider extends BaseTokenProvider {
   private config: OidcBrowserProviderConfig;
 
-  constructor(config: OidcBrowserProviderConfig) {
+  constructor(options: OidcBrowserProviderConfig) {
+    // Read once as own data (a hostile object throws nothing of its own).
+    const config = ownOptions<OidcBrowserProviderConfig>(options);
     super(config);
     this.config = config;
     this.logger = config.logger;
@@ -67,11 +100,13 @@ export class OidcBrowserProvider extends BaseTokenProvider {
   /** The usual choice: a browser login answered on a local callback. */
   static inBrowser(
     config: Omit<OidcBrowserProviderConfig, 'authorization'>,
-    options: { timeoutMs?: number } = {},
+    options: LoginFactoryOptions = {},
   ): OidcBrowserProvider {
     return new OidcBrowserProvider({
-      ...config,
-      authorization: oidcCallbackStrategy({ timeoutMs: options.timeoutMs }),
+      ...ownOptions<typeof config>(config),
+      authorization: oidcCallbackStrategy({
+        signal: ownOptions<LoginFactoryOptions>(options).signal,
+      }),
     });
   }
 
@@ -79,7 +114,7 @@ export class OidcBrowserProvider extends BaseTokenProvider {
     return AUTH_TYPE_AUTHORIZATION_CODE_PKCE;
   }
 
-  protected async performLogin(): Promise<ITokenResult> {
+  protected async performLogin(attempt: AttemptContext): Promise<ITokenResult> {
     // One memoised discovery per login, started on first use rather than up
     // front: a strategy that already holds a code must not drag in a request —
     // nor the `issuerUrl` requirement that comes with it.
@@ -88,57 +123,67 @@ export class OidcBrowserProvider extends BaseTokenProvider {
     const discover = () => {
       if (!discovery) {
         if (!this.config.issuerUrl) {
-          throw new Error('OIDC issuerUrl is required when discovery is used');
+          throw oidcIssuerRequired();
         }
-        discovery = discoverOidc(this.config.issuerUrl, this.logger);
+        discovery = discoverOidc(
+          this.config.issuerUrl,
+          this.logger,
+          attempt.signal,
+        );
       }
       return discovery;
     };
 
-    const verifier = generatePkceVerifier();
-    const challenge = generatePkceChallenge(verifier);
+    // Login CSRF: the PKCE verifier of the last URL this
+    // attempt built, sent in its exchange; none when no URL was built.
+    let codeVerifier: string | undefined;
     const scope = (
       this.config.scopes && this.config.scopes.length > 0
         ? this.config.scopes
         : ['openid', 'profile', 'email']
     ).join(' ');
 
-    const request = {
+    const request: AuthorizationRequest = {
       logger: this.logger,
+      // The attempt's signal: every waiter gone ends the login.
+      signal: attempt.signal,
       buildAuthorizationUrl: async (redirectUri: string): Promise<string> => {
         const endpoint =
           this.config.authorizationEndpoint ||
           (await discover()).authorization_endpoint;
         if (!endpoint) {
-          throw new ValidationError(
-            'OIDC authorization endpoint is required (authorizationEndpoint or discovery)',
-            ['authorizationEndpoint'],
-          );
+          throw oidcEndpointMissing('authorizationEndpoint');
         }
-        const params = new URLSearchParams();
+        // RFC 6749 §3.1: the endpoint may carry a query of its own (Azure
+        // AD B2C's `?p=`), kept, and never a fragment. Built with `URL`, so
+        // its parameters and ours are each their own — no second `?`.
+        const url = authorizationEndpointUrl(endpoint);
+        // A fresh state and PKCE pair for every URL built.
+        const verifier = generatePkceVerifier();
+        const params = url.searchParams;
         params.append('response_type', 'code');
         params.append('client_id', this.config.clientId);
         params.append('redirect_uri', redirectUri);
         params.append('scope', scope);
-        params.append('code_challenge', challenge);
+        params.append('state', mintSecret());
+        params.append('code_challenge', generatePkceChallenge(verifier));
         params.append('code_challenge_method', 'S256');
-        return `${endpoint}?${params.toString()}`;
+        codeVerifier = verifier;
+        return url.href;
       },
     };
 
     const strategy = this.config.authorization;
 
-    const outcome = await strategy.authorize(
-      asContract<AuthorizationRequest>(request),
-    );
+    // The strategy holds a socket or a reader: it starts only once the
+    // previous attempt has released its own (the drain).
+    const outcome = await attempt.exclusive(() => strategy.authorize(request));
 
     const discovered = this.config.tokenEndpoint ? null : await discover();
     const tokenEndpoint =
       this.config.tokenEndpoint || discovered?.token_endpoint;
     if (!tokenEndpoint) {
-      throw new Error(
-        'OIDC token endpoint is required (tokenEndpoint or discovery)',
-      );
+      throw oidcEndpointMissing('tokenEndpoint');
     }
 
     const tokens = await exchangeAuthorizationCode(
@@ -147,32 +192,41 @@ export class OidcBrowserProvider extends BaseTokenProvider {
       this.config.clientSecret,
       outcome.payload.code,
       outcome.redirectUri,
-      verifier,
+      codeVerifier,
       this.logger,
       // The alias belongs to the discovered endpoint only.
       await this.requestAuth(mtlsAlias(discovered, 'token_endpoint')),
+      this.siteOptions(attempt.signal),
     );
 
-    return asContract<ITokenResult>({
+    return {
       authorizationToken: tokens.accessToken,
       refreshToken: tokens.refreshToken,
       authType: AUTH_TYPE_AUTHORIZATION_CODE_PKCE,
       expiresIn: tokens.expiresIn,
       tokenType: 'jwt',
-    });
+    };
   }
 
-  protected async performRefresh(): Promise<ITokenResult> {
-    if (!this.refreshToken) {
-      throw new RefreshError('Refresh token is required for refresh');
+  protected async performRefresh(
+    refreshToken: string,
+    signal: AbortSignal,
+    dispatched: () => void,
+  ): Promise<ITokenResult> {
+    if (!refreshToken) {
+      throw refreshTokenRefused();
     }
 
     let discovery: Awaited<ReturnType<typeof discoverOidc>> | null = null;
     if (!this.config.tokenEndpoint) {
       if (!this.config.issuerUrl) {
-        throw new Error('OIDC issuerUrl is required when discovery is used');
+        throw oidcIssuerRequired();
       }
-      discovery = await discoverOidc(this.config.issuerUrl, this.logger);
+      discovery = await discoverOidc(
+        this.config.issuerUrl,
+        this.logger,
+        signal,
+      );
     }
     // An endpoint not given ('' included) is discovered — the same rule as the
     // login path above and as every OIDC provider, at login and at refresh, so
@@ -180,15 +234,16 @@ export class OidcBrowserProvider extends BaseTokenProvider {
     const tokenEndpoint =
       this.config.tokenEndpoint || discovery?.token_endpoint;
     if (!tokenEndpoint) {
-      throw new Error(
-        'OIDC token endpoint is required (tokenEndpoint or discovery)',
-      );
+      throw oidcEndpointMissing('tokenEndpoint');
     }
+    // Nothing is sent once the attempt is aborted; once sent, the refresh
+    // runs on.
+    throwIfAborted(signal);
     const tokens = await refreshOidcToken(
       tokenEndpoint,
       this.config.clientId,
       this.config.clientSecret,
-      this.refreshToken,
+      refreshToken,
       this.logger,
       // The alias belongs to the discovered endpoint only.
       await this.requestAuth(
@@ -196,14 +251,15 @@ export class OidcBrowserProvider extends BaseTokenProvider {
           ? undefined
           : mtlsAlias(discovery, 'token_endpoint'),
       ),
+      this.refreshSiteOptions(dispatched),
     );
 
-    return asContract<ITokenResult>({
+    return {
       authorizationToken: tokens.accessToken,
-      refreshToken: tokens.refreshToken || this.refreshToken,
+      refreshToken: tokens.refreshToken || refreshToken,
       authType: AUTH_TYPE_AUTHORIZATION_CODE_PKCE,
       expiresIn: tokens.expiresIn,
       tokenType: 'jwt',
-    });
+    };
   }
 }

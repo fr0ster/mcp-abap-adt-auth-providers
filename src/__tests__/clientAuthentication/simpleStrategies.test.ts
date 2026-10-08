@@ -1,12 +1,11 @@
 import { describe, expect, it } from '@jest/globals';
-import { refusalFrom } from '../../auth/refusal';
+import { isAuthProviderFailure, readFailure } from '@mcp-abap-adt/auth-errors';
 import {
   clientSecretBasic,
   clientSecretPost,
   noClientAuthentication,
 } from '../../clientAuthentication';
-import { BasicClientIdError } from '../../errors/ClientAuthenticationError';
-import { ValidationError } from '../../errors/TokenProviderErrors';
+import { refusedWith, wordsOf } from '../helpers/minted';
 
 const draft = {
   endpoint: 'https://uaa.example/oauth/token',
@@ -54,9 +53,10 @@ describe('clientSecretBasic', () => {
         () => undefined,
         (error: unknown) => error,
       );
-    expect(failure).toBeInstanceOf(BasicClientIdError);
+    // An AuthProviderFailure, no longer BasicClientIdError.
+    expect(isAuthProviderFailure(failure)).toBe(true);
     expect(String((failure as Error).message)).not.toContain('my:client');
-    expect(refusalFrom(failure, 'the token request')).toEqual({
+    expect(wordsOf(refusedWith(failure, 'token-request'))).toEqual({
       ok: false,
       refusal: {
         reason: "the client id contains ':', which raw Basic cannot carry",
@@ -71,7 +71,7 @@ describe('clientSecretBasic', () => {
     ['another encoding', { encoding: 'utf8' }],
     ['a non-string encoding', { encoding: 1 }],
   ])(
-    '%s: a ValidationError naming encoding, at construction',
+    '%s: a configuration failure naming encoding, at construction (E19)',
     (_label, options) => {
       let thrown: unknown;
       try {
@@ -83,13 +83,19 @@ describe('clientSecretBasic', () => {
       } catch (error) {
         thrown = error;
       }
-      expect(thrown).toBeInstanceOf(ValidationError);
-      expect((thrown as ValidationError).missingFields).toEqual(['encoding']);
-      expect(refusalFrom(thrown, 'the token request')).toEqual({
+      // The case, the field and the allowed set.
+      expect(readFailure(thrown, 'unfamiliar-error')).toMatchObject({
+        kind: 'configuration',
+        facts: {
+          case: 'basic-encoding-missing',
+          fields: ['encoding'],
+          allowed: 'basic-encoding',
+        },
+      });
+      expect(wordsOf(refusedWith(thrown, 'token-request'))).toEqual({
         ok: false,
         refusal: {
-          reason:
-            'the provider configuration is incomplete or invalid: encoding',
+          reason: "clientSecretBasic needs encoding: 'raw' or 'form'",
           hint: 'check the provider configuration',
         },
       });

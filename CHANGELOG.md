@@ -5,7 +5,647 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [6.0.0] - 2026-10-08
+
+A migration, not an update: 6.0.0 replaces the error contract. Every refusal
+and every throw of this package is now an error of one closed list of
+**kinds**, minted by `@mcp-abap-adt/auth-errors` from allowlisted facts —
+never a class to match with `instanceof`, never words to parse. Together with
+it, no login, request or registry query is bounded by a timeout of the
+package's choosing any more: the consumer's `AbortSignal` is the bound. How a
+token provider renews, and what it tells a store, are now strategies the
+consumer gives (`renewal`, required; `persistence`, replacing `onTokens`).
+A login is bound to its attempt (`state`, PKCE, a loopback listener closed
+until armed). And an interactive authorization strategy is composed of three
+parts — a presentation, a transport and a protocol — with the named
+strategies kept as compositions of the shipped parts; a browser is an
+`IBrowser`, never a name. See *Migrating to 6.0.0* in the README for what a
+5.x consumer must now do. The surface changes below are taken from a diff of
+every exported declaration against the published 5.4.2.
+
+### Breaking
+
+- **A refusal is an `IAuthProviderError`** (`@mcp-abap-adt/interfaces-auth`
+  6.0.0: `IAuthRefusal = IAuthProviderError`). `AuthOutcome` is `{ ok: true }`
+  or `{ ok: false, refusal }`, the refusal a frozen object of `kind`,
+  `variant` (for `saml-assertion`, `snc`, `configuration`), `facts`,
+  `reason`, `hint?` and `diagnostics?`. `refusal.reason` / `refusal.hint`
+  read as before; a refusal cannot be built from free words, copied or
+  mutated — an object that is not minted by `@mcp-abap-adt/auth-errors` is
+  rebuilt from its `kind` and `facts` (its diagnostics dropped) wherever it is
+  read, and a provider answering one is answered `unknown`.
+- **Every throw is an `AuthProviderFailure`** (`@mcp-abap-adt/auth-errors`),
+  but for `refreshStatePersistence`'s `report()` rejecting with the
+  consumer's own `write` error (below):
+  an `Error` whose `error` is one minted `IAuthProviderError`, whose
+  `message` is `reason` or `reason — hint`, and which has no `cause`.
+  Constructors, factories and loaders throw it for a configuration fault
+  (kind `configuration`, `facts.case`, `facts.fields`); `getTokens()` and
+  `refreshTokens()` throw nothing else — a strategy's, loader's or
+  presenter's own error is classified, never rethrown as itself, and no
+  `AxiosError` escapes. Read what was thrown with `readFailure(thrown,
+  operation)`, test with `isAuthProviderFailure(value)`, never `instanceof`.
+- **The words changed.** Each kind renders its own words from its facts
+  (auth-errors' `render`). Notably: a refused token request reads
+  `<operation> failed (HTTP <status>[, <registered code>])` —
+  `the passcode exchange failed (HTTP 401)`, `the refresh failed (HTTP 400,
+  invalid_grant)` — instead of `TokenEndpointError`'s
+  `Passcode exchange failed (401)`; a TLS failure reads
+  `<operation> failed: <the kind's words> (<code>)`; an unfamiliar thrown
+  value `<operation> failed (unknown error[, CODE])` with an operation of a
+  closed list (`OPERATIONS`), never a class label; a SAML refusal names its
+  rule and carries no document value in the words (the value is a
+  diagnostic); the SNC library's path and each candidate's path are
+  diagnostics, not words; a configuration error says its case's fixed words.
+  Code matching on words must match on `kind` and `facts`. The README's
+  tables are generated from the words the package renders.
+- **No server text, in errors or logs, by default or with `authDebug`.** A
+  token endpoint's `error_description` and `error_uri` are read by nothing:
+  they reach no error, no failure, no response data and no log line. The
+  registered OAuth `error` survives as the fact `oauthError` (5.4.2's
+  reduced `err.response.data.error` is `failure.error.facts.oauthError`). A
+  failed request still writes 5.4.2's `debug` line of safe facts (`{ status,
+  error? }`, now with an allowlisted `code`); the UAA code exchange's `200`
+  without `access_token` keeps 5.4.2's `error`-level line, verbatim (status
+  and registered code only). A consumer that read the server's description
+  from an error or a log no longer finds it anywhere.
+- **No URL and no configured value in a log line.** 5.4.2 logged the token,
+  device-authorization and discovery endpoints, the UAA URL, the client id
+  and the redirect URI at `info`, and an authorization URL in a launcher's
+  error line — a discovered endpoint is the server's text (a newline in it
+  forged a line), a configured one may hold a credential. Every such line now
+  carries fixed words and admitted facts only, `authDebug` or not. The
+  authorization URL and the device flow's verification URI still reach the
+  user — in the **prompt**, and only as an `http:` / `https:` serialisation of
+  printable ASCII; one that cannot be shown so is named in fixed words.
+  `consoleDeviceCodePresenter` shows the user code only when it is printable
+  ASCII and rejects without a showable URI and code (`device-code-not-shown`).
+  The manual strategies' prompt is two lines, never one line with a line
+  break inside it.
+- **A browser that does not open no longer ends the login.** A browser
+  that throws or rejects (the consumer's `IBrowser`, or a shipped one) gets
+  one log line in fixed words (`Failed to present the authorization URL:`)
+  and the authorization URL prompted on stderr, and the login keeps waiting
+  on the same callback, so the URL shown is live — the way to finish where no
+  browser can be opened. 5.4.2 ended the login with a `BrowserAuthError`;
+  there is no `browser-launch-failed` outcome either (interfaces-auth 6.0.0
+  had one, 7 removed it). A consumer that matched a launch failure must
+  stop, and bounds the login with its `signal`.
+- **Authorization strategies are compositions.** `browserCallbackStrategy`,
+  `oidcCallbackStrategy`, `samlCallbackStrategy`, `manualPasteStrategy`,
+  `manualSamlResponseStrategy`, `manualPasscodeStrategy` and
+  `externalCodeStrategy` keep their names and now return
+  `composeAuthorization(…)` of the shipped parts — a `ComposedStrategy`
+  (`IAuthorizationStrategy` with a required `dispose()`). From the diff
+  against 5.4.2:
+  - `CallbackStrategyOptions` (no longer generic): `browser` is
+    `IBrowser | undefined` (was `string`); `callbackServer`, `openUrl` and
+    `timeoutMs` are removed; `port`, `remoteHint`, `signal` unchanged.
+    A 5.x name maps to one of the six shipped browsers per platform
+    (`'system'` / `'auto'` → `linuxDefaultBrowser()`, `macDefaultBrowser()`,
+    `windowsDefaultBrowser()`; `'chrome'` → `linuxBrowser('google-chrome')`,
+    `macBrowser('Google Chrome')`, `windowsBrowser('chrome')`; and so on —
+    the README's table; any other name, `'msedge'` included, opened the
+    system default browser in 5.4.2 and maps to the platform's default
+    one); `'none'` / `'headless'` → no `browser`. No string
+    is accepted anywhere: an object without an `open` function is
+    `configuration` `invalid-value` naming `presentation`.
+  - `openUrl(url, browser, redirectUri)` is removed: a callback that only
+    opened the URL is an `IBrowser`; one that needed the redirect or its own
+    UI is `consumerPresentation({ show })`, composed. From plain JavaScript
+    `openUrl` is an unknown key and ignored — a consumer that used it to keep
+    the URL off stderr now gets the URL on stderr unless it passes its own
+    `IBrowser` or presentation.
+  - `ManualStrategyOptions.redirectUri` and
+    `ExternalCodeStrategyOptions.redirectUri` are required (were optional,
+    defaulting to `http://localhost:61001/callback`): missing is
+    `configuration` `required-fields-missing` naming `redirectUri`, at
+    construction. `manualPasscodeStrategy` takes the new
+    `ManualPasscodeStrategyOptions` (`read?`, `signal?`), without
+    `redirectUri`. `StaticCodeStrategyOptions` and `staticCodeStrategy` are
+    unchanged.
+  - `externalCodeStrategy` takes OAuth codes only (its protocol is
+    `oauthCode()`); a SAML response or a passcode from the consumer's code is
+    `consumerHandoff` composed with `samlResponse()` / `passcode()`.
+  - The paste page's `/submit` is a `POST` (urlencoded `form_token` and
+    `input`, 5 MB), and every listener serves the paste page for its
+    protocol — OIDC and SAML included.
+  - An overlapping `authorize` on any composition is `interactive-login`
+    `busy`, the manual ones included.
+  - Every listener refuses every request until it is armed, for every
+    protocol — the SAML callback included.
+- **The authorization URL is prompted on stderr only.** `showUrl()` and the
+  fallback of a failed browser write it to stderr, never through the
+  `ILogger` and never to stdout; the logger gets the fixed line "the
+  authorization URL was shown". 5.4.2 wrote the prompt to the logger's
+  `info` when there was one. A consumer whose stderr is collected into its
+  logs uses `consumerPresentation`.
+- **The shipped browsers are one fixed launch each; nothing is guessed.**
+  No platform switch, no fallback chain, no platform check: each factory
+  runs exactly its program, and the consumer picks the one for its
+  platform. On another OS it does whatever a program of that name does
+  there: none, and the launch fails to start (the URL is shown and the login
+  waits); one, and it runs — on Debian and Ubuntu `/usr/bin/open` is
+  `xdg-open` or `run-mailcap`, so `macDefaultBrowser()` may open that
+  machine's default browser. 5.4.2 handed a named
+  browser to the `open` package, whose Linux candidates were
+  `google-chrome`, `google-chrome-stable`, `chromium`, `chromium-browser`
+  (Chrome), `microsoft-edge`, `microsoft-edge-dev` (Edge) and `firefox`
+  (with a shell fallback list only when `open` could not be loaded): pass
+  the executable installed. `DISPLAY=:0`, which 5.4.2 set on Linux for
+  `'system'` and a named browser without `DISPLAY` or `WAYLAND_DISPLAY`, is
+  no longer written: the package writes
+  nothing into `process.env`. `'auto'` and `'system'` are one (the platform's
+  default browser), and `'auto'`'s log lines are gone. `linuxBrowser`
+  resolves once the browser has started; the hand-off launchers at their
+  exit `0`.
+- **Token answers are read by type.** An answer's `access_token`,
+  `refresh_token`, `id_token` and the device fields are kept only as
+  non-empty strings, `expires_in` and `interval` only as finite non-negative
+  JSON numbers (RFC 6749 §5.1; a numeric string such as `"3600"` is not one).
+  An `access_token` of another type is no token: `request-failed`
+  `no-access-token`, nothing presented (5.4.2 handed `42` on as the token and
+  `"abc"` as `expiresIn`). A `refresh_token` or `expires_in` of another type
+  is absent.
+- **Options are read as own data.** Every exported constructor and factory
+  reads its options once as a plain snapshot of own data properties: a getter
+  is not run and reads as absent, and a throwing Proxy reads as absent — so a
+  hostile options object throws only the constructor's own `configuration`
+  failure, never its own text. **A consumer that defined an option by a
+  getter, or on a prototype, passes a plain object instead.** The shipped
+  validators now refuse at construction what 5.4.2 refused at the first
+  validation or with a `TypeError`: `idpCertificates` that is not an array
+  (`validator-no-certificates`), an entry that is not a string
+  (`idp-certificate-invalid`), a missing `replayStore`
+  (`required-fields-missing`, `replayStore`). A strategy, loader or presenter
+  called directly by the consumer, outside a moment, may still reject with
+  what its own collaborator threw (README, "Errors outside the moments").
+- **No built-in timeouts.** Removed: `DEFAULT_LOGIN_TIMEOUT_MS` (30 s);
+  `timeoutMs` on `BrowserCallbackStrategyOptions`, `CallbackStrategyOptions`
+  (`browserCallbackStrategy`, `oidcCallbackStrategy`, `samlCallbackStrategy`)
+  and `ManualStrategyOptions`; the `{ timeoutMs }` options of
+  `AuthorizationCodeProvider.inBrowser`, `OidcBrowserProvider.inBrowser`,
+  `Saml2BearerProvider.inBrowser`, `Saml2PureProvider.inBrowser` and
+  `UaaPasscodeProvider.fromTerminal` (whose default was 300 s), now
+  `LoginFactoryOptions` (`{ signal }`); `ICallbackServerOptions.timeoutMs`
+  (interfaces-auth 6.0.0); the callback server's shutdown grace; the client
+  credentials request's 30 s timeout; the SNC registry query's 5 s timeout.
+  A login ends on its result, the identity provider's refusal or the
+  consumer's `AbortSignal`; a request ends when the server or the OS ends it,
+  or on the signal. **A consumer that passed `timeoutMs` passes
+  `signal: AbortSignal.timeout(ms)` instead; one that passed nothing now waits
+  until it aborts.** The "Authentication timeout after N seconds" and "did not
+  arrive in time" messages are gone with them.
+- **Subclassing a provider.** Every provider extends the new
+  `AuthProviderBase`, which owns `prepare()`, `establish()`, `authorize()`
+  and `rejected()` and runs each inside auth-errors' `guard`; a subclass
+  implements the protected `onPrepare()`, `onEstablish(logon)`,
+  `onAuthorize(request)` and `onRejected(rejection)` instead of overriding
+  the four. `BaseTokenProvider`'s constructor takes its options as required
+  (`renewal` is in them). Its protected `performLogin()` is now
+  `performLogin(attempt: AttemptContext)` — the strategy gets
+  `attempt.signal` — and `performRefresh()` is
+  `performRefresh(refreshToken: string, signal, dispatched: () => void)`: a
+  subclass must send the refresh token it is given (reading
+  `this.refreshToken` may send one the renewal strategy discarded), and must
+  call `dispatched()` right before the request leaves — the shipped sites do
+  it through the new protected `refreshSiteOptions(dispatched)`. A refresh
+  that never reports its dispatch counts as never sent, so an abort never
+  applies `ifCut` to its refresh token. `pin()` takes an optional `signal`;
+  new protected members: `grant()`, `siteOptions(signal?)`,
+  `refreshSiteOptions(dispatched)`, `authDebug`.
+- **Strategies honour the request's signal.** `externalCodeStrategy`'s
+  `provide` is `(authorizationUrl, signal) => Promise<string>`. A manual
+  strategy's custom `read(prompt, signal)` that ignores its signal now blocks
+  that strategy's `authorize` — and the next login, which waits for the
+  aborted one to settle — where 5.x settled through a race. A consumer's own
+  `IAuthorizationStrategy` must end on `request.signal`.
+- **Device polling follows RFC 8628 §3.5.** `slow_down` adds 5 s to the
+  interval for that poll and every later one (cumulative); the server's
+  `interval` counts only as a finite, non-negative number, else 5 s; `0`
+  waits not at all. `authorization_pending` / `slow_down` keep the poll
+  waiting only with status `400` — with any other status the poll ends with
+  the failure.
+- **Every token provider requires a renewal strategy.** `renewal:
+  IRenewalStrategy` (interfaces-auth 7) is a required field of every token
+  provider's config, and so of `inBrowser`, `fromTerminal`, `toConsole` and
+  `SsoProviderFactory.create`; there is no default. Missing, or with a `next`
+  that is not a function: `configuration` `required-fields-missing`,
+  `fields: ['renewal']`, at construction. The strategy is asked before every
+  step of every renewal — `refresh` (with a required `ifCut`), `login` or
+  `stop`, and after a refresh that failed once sent, a required
+  `sentRefreshToken: 'keep' | 'discard'` — and the provider takes no step it
+  did not ask for. **`refreshThenLogin()` takes 5.x's steps**: one refresh,
+  then one login when there is no refresh token or the refresh failed;
+  `refreshOnly()` never logs in. An unusable answer (a throw, an invalid
+  decision, a foreign thenable or a promise with its own `then`, never
+  called) ends the renewal `unknown` with the new operation
+  `renewal-strategy`; `next` is raced with the renewal's signal. The strategy
+  receives frozen copies of minted errors and allowlisted facts, never a
+  token; `aborted(observation)`, optional, is told of each aborted step,
+  never awaited.
+- **Rule 5 is a reading the renewal strategy receives.** `rejected()` no
+  longer returns early for a rejection that is not the credential's: it
+  starts a renewal with `cause.reading` `not-credential`, and the shipped
+  strategies stop at once with the neutral `system-refused` refusal, nothing
+  sent — the 5.x answer. A strategy of your own may renew there.
+- **A cut refresh: `ifCut` decides.** A refresh whose waiters all aborted
+  after it was sent runs on; its refresh token is discarded or kept as the
+  `ifCut` of the decision that started it says. The shipped strategies say
+  `'discard'` — that refresh token is never sent again by the provider, so
+  the next renewal may cost one login. A refresh aborted before it was sent
+  (OIDC discovery, a client-authentication strategy) touches no refresh
+  token.
+- **What a renewal answers, where it cannot produce a usable credential: it
+  throws** (with `refreshThenLogin()`): a renewal whose new token is still
+  bound to another certificate than the pinned one — `getTokens()` /
+  `refreshTokens()` throw `token-binding` `renewed-bound-elsewhere` (5.4.2
+  returned the token), `rejected()` with a `401` answers Oops (5.4.2: Ok); a
+  held token remembered as bound elsewhere — `getTokens()` throws the
+  remembered error (5.4.2 returned the token), and `prepare()` no longer
+  clears what is remembered but renews once more (the remembered error
+  reaches the strategy as `cause.lastRenewal`); a remembered expired
+  certificate is refused again by the pin, an equal refusal rather than the
+  same object. A credential a step obtained stays committed either way.
+- **New kind `renewal-declined`** (interfaces-auth 7, auth-errors 2): "the
+  renewal strategy declined to renew the credential", `facts.trigger` — a
+  strategy that stops before any step with no other refusal to answer
+  (`refreshOnly()` with an expired token and no refresh token, say). An
+  exhaustive switch over kinds must handle it.
+- **`onTokens` is replaced by `persistence`.** The config field
+  `onTokens?: (result) => Promise<void>` is removed; `persistence?:
+  ITokenPersistence` (interfaces-auth 7) receives one report per change of
+  the provider's credentials, from inside its commit queue in commit order —
+  `credential` (a new credential, with `refreshToken` `{ change: 'new',
+  value }` or `{ change: 'none' }`) or `refresh-token-discarded` (the
+  credential still held) — never for a cache hit, never twice. A report is
+  `awaited` while a caller of the renewal is still waiting: the provider
+  awaits it, and **its failure fails that call** (`unknown`,
+  `persisting-tokens`), the credentials staying committed and no login
+  following — where a failing `onTokens` was only logged. A detached report
+  is not awaited; its failure is logged once, `[BaseTokenProvider]
+  Persisting the tokens failed`. Without `persistence` nothing is persisted.
+  `refreshStatePersistence(write, { onWriteFailure: 'continue' })` is the
+  5.x `onTokens` behaviour. A `persistence` that is not an object with a
+  callable `report` is `configuration` `invalid-value` naming `persistence`.
+  `refreshTokenDisposition`, which interfaces-auth 6.0.0 had added to
+  `ITokenResult`, is removed in interfaces-auth 7 with
+  `RefreshTokenDisposition`; no release of this package carries it, and what
+  `getTokens()` / `refreshTokens()` return carries the refresh token held or
+  `refreshToken: undefined`.
+- **Consumers on the new contract follow this release.**
+  `@mcp-abap-adt/connection` 13.0.0 (built on interfaces-auth 7 and
+  auth-errors 2, its suites run against the published 6.0.0),
+  `@mcp-abap-adt/auth-stores` 4.0.0 and `@mcp-abap-adt/auth-broker` 5.0.0
+  are released after 6.0.0; until then no published connection reads these
+  providers' refusals — 11.x reads the old refusal, and 12.0.0 (published
+  only under `next`) is built on interfaces-auth 6. Keep one copy each of
+  interfaces-auth and auth-errors.
+- **Log lines about a thrown value** carry auth-errors' `logFields`:
+  `{ error, kind, status?, diagnostics? }` instead of `{ error, status? }`.
+
+### Added
+
+- **`AuthProviderBase`** (with the types `Moment` and `MomentOperations`):
+  the abstract base owning the four moments, exported for a consumer writing
+  a provider of its own. `lint:check` runs auth-errors' shape check
+  (`tools/check-provider-shape.mjs`, a byte-identical copy, rules 1–8 with
+  `--base ./src/auth/AuthProviderBase#AuthProviderBase`) over this package:
+  every provider reaches the base and declares none of the four moments, no
+  cast to a contract type, diagnostics only at the approved extraction sites
+  (`tools/diagnostic-sites.json`), `guard` reads nothing before its boundary,
+  and no `Basic ` value outside `legacyBasic` / `clientSecretBasic`.
+- **`authDebug`** (`TokenProviderDebug`, joined into `TokenProviderHooks` and
+  so into every token provider's config): off by default, `true` itself
+  only, never read from the environment. With it, a failed token request
+  writes `[<operation>] token endpoint said` with `{ status, error?, code?,
+  sent }` instead of the safe-facts line, and a `200` without a token adds
+  `sent` to its line: `sent` names each secret the request carried
+  (`client_secret`, `client_assertion`, `refresh_token`, `code`, `basic`,
+  `basic_secret`, …), each prepared at the point of logging — at most its
+  first 4 and last 4 characters around `<redacted, N chars>`, the length only
+  below 16 characters. Never the server's text.
+- **Cancellation.** `getTokens({ signal })` / `refreshTokens({ signal })`
+  (interfaces-auth 6.0.0's `ITokenRequestOptions`): one caller's abort
+  releases that caller (`interactive-login` `aborted`); the shared login is
+  aborted when every caller has. `attach(signal): () => void` on every token
+  provider and `SncLogonProvider`, and `signal` in every token provider's
+  config and in `SncLogonProviderConfig`: the parties a moment's login waits
+  on; with none live it runs unbounded. `signal` on `ManualStrategyOptions`,
+  `ExternalCodeStrategyOptions` and `LoginFactoryOptions` (the factories).
+- **SNC signal plumbing.** `SncLogonProvider.forSecureLoginClient({ …,
+  signal })`, and an optional `signal` on `ISncLibraryLocator.locate`,
+  `ISncProductProbe.appliesTo` and `SncSystem.readRegistryValue`: the
+  shipped ones pass it to `reg.exe`, whose query has no timeout — an abort
+  kills it and `prepare()` ends `aborted`. A locator or probe of your own that
+  ignores the argument still compiles.
+- **`LoginFactoryOptions`** — `{ signal? }`, what `inBrowser` and
+  `fromTerminal` take.
+- **`refreshThenLogin()`, `refreshOnly()`** — the shipped renewal
+  strategies, stateless and synchronous (README, "Renewal strategy", with
+  their decision table).
+- **`refreshStatePersistence(write, { onWriteFailure, logger? })`**, with
+  the types `PersistedTokens` and `RefreshStatePersistenceOptions` — the
+  shipped persistence strategy, for a store that keeps its stored refresh
+  token when a write carries none. `write` gets `refreshToken` as a string
+  (write it), `null` (clear the stored one: the provider discarded it) or
+  `undefined` (leave it). It keeps a logical state (`held`, `cleared` after
+  a discard), writes one report at a time in report order — detached ones
+  included — and delivers a failed new refresh token again with the next
+  report until a write succeeds or something newer supersedes it; a failed
+  write is logged `[refreshStatePersistence] Writing the tokens failed`.
+  `onWriteFailure` is required, no default: `'continue'` never throws,
+  `'fail'` rethrows for an awaited report (so the call fails
+  `persisting-tokens`). What it rethrows is the value `write` threw, as it
+  is — the consumer's own error, returned to it; the one throw of the
+  package that is not an `AuthProviderFailure`. A provider calling
+  `report()` classifies it before `getTokens()` / `refreshTokens()` answer. Refused at construction as `configuration`
+  `invalid-value` naming `onWriteFailure` and/or `write`.
+- **`composeAuthorization({ presentation, transport, protocol, endpoint,
+  signal? })`**, with the types `ComposedAuthorization` and
+  `ComposedStrategy`: one authorization strategy from the three parts of
+  interfaces-auth 7.4.0. It opens the transport, builds the URL from the
+  redirect the channel advertises, begins the protocol on it, arms the
+  channel, presents the URL (not awaited) and waits; it latches the first
+  accepted or ending answer and refuses every later one
+  (`already-answered`), and returns only the payload the protocol accepted.
+  `authorize` settles once the transport is released; an overlapping one is
+  `busy`; `dispose()` ends the call in flight. `endpoint` is required (the
+  named strategies pass `'/callback'`) and must survive URL parsing
+  unchanged and not be `/` or `/submit`, else `configuration`
+  `invalid-value` naming `endpoint`; a missing part is
+  `required-fields-missing` naming it.
+- **Presentations:** `openInBrowser({ browser })` (`OpenInBrowserOptions`),
+  `showUrl()`, `consumerPresentation({ show, onFailure? })`
+  (`ConsumerPresentationOptions`, `ShowAuthorizationUrl`, `ShowContext`). A
+  presentation that throws or rejects is logged in fixed words and the
+  login keeps waiting; `openInBrowser` then prompts the URL once on stderr,
+  `consumerPresentation` prints no URL and runs `onFailure` once.
+- **Browsers** (`IBrowser`, interfaces-auth 7.5.0), one fixed launch each,
+  started with an argument array: `linuxDefaultBrowser()` (`xdg-open`),
+  `linuxBrowser(executable)`, `macDefaultBrowser()` (`open`),
+  `macBrowser(app)` (`open -a`), `windowsDefaultBrowser()` (`rundll32.exe
+  url.dll,FileProtocolHandler`), `windowsBrowser(program)` (PowerShell
+  `Start-Process`, the program and the URL only in the environment). A
+  failure rejects `unknown` with the operation `opening-browser`; an abort
+  rejects `aborted`; no real `AbortSignal` rejects before anything starts;
+  a started browser is never killed. A hand-off launcher
+  keeps the process alive until it exits (or the signal aborts), so an
+  `open()` awaited alone settles; a browser binary is unreferenced once
+  started. A caller of `open()` outside a composition owns the signal: a
+  launcher that never exits keeps `open()` pending until that signal
+  aborts.
+- **Transports:** `loopback({ port })` (`127.0.0.1`, then `::1` on the same
+  port; advertises `localhost`), `loopback4({ port })`, `loopback6({ port })`
+  (`LoopbackOptions`; `port` required), `terminalPaste({ redirectUri?, read?
+  })` (`TerminalPasteOptions`, `TerminalRead`, `readFromTerminal`),
+  `consumerAnswer({ redirectUri?, receive })` (`ConsumerAnswerOptions`,
+  `ReceiveAnswer`) and the pair `consumerHandoff({ redirectUri?, provide })`
+  (`ConsumerHandoffOptions`, `ProvideAnswer`). The three listeners are one
+  HTTP listener on `node:http`: the `Host` check before any route (a
+  loopback name with the bound port, from a loopback peer), literal dispatch
+  of the endpoint, `/` and `/submit`, closed until armed, the paste page
+  bound by a per-attempt form token, `Connection: close`,
+  `X-Content-Type-Options: nosniff` and the CSP on every response. A
+  transport without a socket advertises only the consumer's `redirectUri`.
+- **Protocols:** `oauthCode()`, `oidcCode()` (`OidcCallbackResult`), `samlResponse()`, `passcode()`. The code protocols
+  read the expected `state` from the URL — a URL with none, an empty or a
+  repeated one is `configuration` `invalid-value` naming `authorizationUrl`,
+  before anything is shown — and accept a redirect, a code or an `?error=`,
+  only with exactly that `state`; each protocol has paste words for a
+  terminal and a paste page.
+
+### Changed
+
+- **Dependencies:** `@mcp-abap-adt/interfaces-auth ^7.5.0` (was ^3.2.0;
+  7.4.0 for the authorization parts, 7.5.0 for `IBrowser`; the
+  `ICallbackServer` contracts are deprecated there and implemented by
+  nothing here), `@mcp-abap-adt/interfaces-auth-sap ^3.3.0` (was ^2.0.0),
+  and the new `@mcp-abap-adt/auth-errors ^2.1.1` (2.0.1: an aborted login's
+  tally reads `N request(s) to the callback server were refused and
+  ignored`, since the count holds every refused request; 2.1.0: words for
+  the `consumer` strategy and the `presenting-authorization-url` /
+  `judging-answer` operations; 2.1.1: `busy` and `disposed` no longer name a
+  removed class). `express` and `open` are no longer dependencies.
+- **`getTokens()` / `refreshTokens()`** take an optional
+  `ITokenRequestOptions` (`{ signal }`).
+- **Collaborator answers are awaited normally.** What a consumer's own code
+  answers — an authorization or persistence strategy, a loader, a refresher,
+  a validator, a presenter, a replay store, `cookieProvider`, an SNC locator,
+  probe or system, a logger — is adopted like any `await` adopts it, so a
+  native promise, Bluebird, Q or any Promises/A+ thenable works; a renewal
+  strategy's `next()` alone must answer a decision or a native promise of
+  one (above). Values crossing a
+  trust boundary — a thrown value being classified, a target's answer —
+  never have a foreign `then` called. A collaborator answer that never
+  settles is bounded only by the consumer's `AbortSignal`;
+  `CertificateAuthProvider` and `TokenAuthProvider.from` take no signal, so a
+  never-settling loader or refresher hangs their moment.
+- **The signed-Response validator reads `Status` before counting the
+  Assertion**, so a login the identity provider declined — which carries no
+  Assertion — is refused `declined` with its status code rather than
+  `no-direct-assertion`.
+- **Configuration is checked at construction where it can be.** An
+  unparseable `authorizationUrl` is `configuration` `invalid-value` ("a
+  configured value cannot be used: authorizationUrl", interfaces-auth 7) at
+  construction and at login. A `myName` that is not a string on
+  `SncLogonProvider` is still `required-fields-missing` naming `myName` — a
+  known wording limit. A callback `port` that is not an integer in
+  0..65535 is refused before any socket is touched.
+- **The refresh token held survives a result without one.** A commit
+  installs a result's refresh token only when it is usable (non-empty, not
+  one the provider discarded); a refresh answered without a new refresh
+  token, or a login without one, leaves the one held in place — 5.4.2
+  dropped it. A refresh that failed before it was sent no longer drops the
+  refresh token (5.4.2 dropped it on any refresh failure).
+- **`rejected()` for a token a renewal already replaced** answers Ok before
+  reading the rejection — what is presented has changed — also for a `403`
+  (5.4.2 answered the neutral refusal).
+- **One `debug` line per renewal decision**, `[BaseTokenProvider] Renewal
+  step` with `{ trigger, moment, next }`.
+- **The callback listener's release waits on nothing.** At release every
+  listening socket is closed (the port is free once the strategy's
+  `authorize` settles); the response that ended the login has flushed
+  first; an idle connection is ended and unreferenced; one still being
+  answered — another request, or a body that never completes — is
+  destroyed, since a pending write would keep the process alive whatever
+  `unref()` says. Every response carries `Connection: close`. A port held
+  is found by the bind itself (`port-in-use`), with no probe before it.
+- **OIDC discovery keeps a snapshot** of the fields the providers read
+  (`authorization_endpoint`, `token_endpoint`,
+  `device_authorization_endpoint`, their mTLS aliases); an aborted or failed
+  discovery is not cached.
+- **`DEFAULT_CALLBACK_PORT`** stays 61001; the default login wait is
+  unbounded (above).
+- **A pasted redirected URL's code is read as a redirect's is**: from its
+  query with `URLSearchParams`, form-decoded (`a+b` is `a b`), present
+  exactly once. A malformed `%` escape in it is no longer refused as
+  unreadable: the code goes to the token endpoint as the parser gives it,
+  and the endpoint refuses it (`request-failed`).
+- **A configured `authorizationUrl` with surrounding whitespace is refused**
+  at construction (`configuration` `invalid-value`, `fields:
+  ['authorizationUrl']`) instead of being stripped by the URL parser: the
+  provider appends its `state` to the configured text (C7, Security) and
+  does not guess what the URL was meant to be.
+
+### Removed
+
+- **The error classes:** `TokenProviderError`, `ValidationError`,
+  `RefreshError`, `SessionDataError`, `ServiceKeyError`, `BrowserAuthError`,
+  `AssertionValidationError` (and the `AssertionCheck` re-export — import it
+  from `@mcp-abap-adt/interfaces-auth`), `CertificateMaterialError`,
+  `ClientAuthenticationError`, `ClientAuthenticationResultError`,
+  `BasicClientIdError` and `TokenEndpointError`. Their information is a kind
+  and its facts: `error.code` → `kind`; `missingFields` → `facts.fields`;
+  `check` → `facts.check` (with `facts.rule`);
+  `CertificateMaterialError.incomplete` / `.expired` / `.words` →
+  `client-certificate` `facts.problem`; `TokenEndpointError.status` /
+  `.oauthError` / `.code` → `request-failed` `facts.status` /
+  `.oauthError` / `.code`. `SessionDataError` and `ServiceKeyError` had no
+  producer and have no replacement. The error-code constants
+  (`TOKEN_PROVIDER_ERROR_CODES`, `ASSERTION_ERROR_CODES`) are gone from
+  interfaces-auth 6.0.0.
+- **`refusalWords(error, what)`** → auth-errors' `classify(error,
+  operation)`, `.reason` / `.hint`. A caller that passed its own `what` must
+  name an `Operation` of the closed list: `'unfamiliar-error'` answers the
+  unfamiliar-error words ("an authentication error of a kind this version
+  does not know") and no hint — a TLS failure's `NODE_EXTRA_CA_CERTS` hint
+  included; an operation of the list keeps its words and hints.
+- **`DEFAULT_LOGIN_TIMEOUT_MS`** and every `timeoutMs` option (Breaking,
+  above).
+- **The callback server and its strategy class:** `BrowserCallbackStrategy`,
+  `BrowserCallbackStrategyOptions`, `withBrowserCallbackServer`,
+  `withOidcCallbackServer`, `withSamlCallbackServer` (and the internal
+  `runCallbackScope`), and the strategy options `callbackServer` and
+  `openUrl` → `composeAuthorization` and the parts (Breaking, above). A
+  receiver of the consumer's own is an `IAnswerTransport`; a listener on a
+  network address is one too — the package ships loopback listeners only.
+  The `host` / `allowedHosts` options and the `gated` / `expectState` gate of
+  the 6.0.0 prereleases never shipped. `CallbackServerFactory`,
+  `ICallbackServerOptions` and `ICallbackServerHandle` stay in
+  interfaces-auth 7.4.0, deprecated.
+- **Browser names, the `open` and `express` dependencies, the lists of
+  candidate executables and the `DISPLAY=:0` fallback** (Breaking, above).
+- **`onTokens`** on every token provider's config and `TokenProviderHooks`
+  → `persistence` (Breaking, above).
+- **The redactor.** 5.4.2's redaction of the server's text
+  (`oauthErrorFields`, `describeOAuthErrorBody`, the base64 and JWT passes)
+  is deleted with every regular expression over server text: nothing of the
+  server's text is kept, so there is nothing to redact. A secret reaches a log
+  line only through the secret preparer, under `authDebug`.
+- **Internal:** `asContract` (interfaces-auth 6.0.0 declares optional fields
+  `?: T | undefined`), `refusalFrom`, `loggedError`, `safely`, `oops`,
+  `withoutRequest`, `tokenEndpointError`, `CallbackScopeError`,
+  `AuthorizationRefusedError`, `DeviceCodePresentationError`,
+  `SncLibraryNotFoundError` and `src/errors/`.
+
+### Fixed
+
+- **Security: the browser was opened through a shell.** Through 5.4.2 the
+  fallback without the `open` package handed the authorization URL — which
+  may come from an OIDC discovery document — to a shell inside double
+  quotes, so a `$(…)` or a backtick in it ran as a command. Only an `http:` /
+  `https:` URL is opened now, as its serialisation (unsafe characters refused
+  or percent-encoded), and every launcher is started with an argument array:
+  each of the six shipped browsers is one fixed program — `xdg-open` or the
+  given executable on Linux, `open` / `open -a` on macOS, and on Windows
+  `%SystemRoot%\System32\rundll32.exe url.dll,FileProtocolHandler` or
+  PowerShell's `Start-Process` reading the program and the URL from
+  environment variables — never `cmd`. Measured on Windows 11
+  (2026-10-07): through `rundll32` the URL arrives unchanged, and no
+  command interpreter is started; so it did for Chrome and Edge through an
+  earlier `Start-Process` command that named the program in its text.
+  Measured on Windows 11 (2026-10-08) for the current `windowsBrowser`
+  command (the program from `$env:MCP_ABAP_ADT_BROWSER_PROGRAM`): Chrome
+  and Edge get the URL unchanged; a path with `[ab]` starts exactly that
+  file, not a wildcard match; a path with `*` and a program string with
+  quotes, `;` and a PowerShell command reject with nothing started.
+- **The legacy Basic credential, as shipped in 5.4.2, carried forward.**
+  Without a client-authentication strategy, every site that sends
+  `Authorization: Basic base64(id:secret)` builds it only through one helper
+  (`legacyBasic`), which names the credential's secrets (`basic`,
+  `basic_secret`) for `sent`; 5.4.1 left a server-echoed base64 credential in
+  errors and the code exchange's log line, and 5.4.2 redacted it. 6.0.0 goes
+  further: nothing the server wrote is kept at all, so no echo of the header
+  reaches an error or a log line, with `authDebug` or without.
+- **`OidcBrowserProvider` with an `authorizationEndpoint` that carries a
+  query** (Azure AD B2C's `?p=…`, configured or discovered) built
+  `…?p=b2c_1_signin?response_type=code&…`: the endpoint's last parameter
+  swallowed `response_type`, and the identity provider refused the login.
+  The URL is now built with `URL` / `URLSearchParams` — the endpoint's
+  parameters kept, the login's added beside them. An endpoint with a
+  fragment (RFC 6749 §3.1), which put the whole query into the fragment, or
+  one that does not parse, is `configuration` `invalid-value`, `fields:
+  ['authorizationEndpoint']`, before anything is built or opened.
+
+### Security
+
+- **Login CSRF: a login is bound to its attempt.** Through 5.4.2 no provider
+  sent or checked the OAuth `state`: the UAA authorization URL carried
+  neither `state` nor PKCE, the OIDC one PKCE but no `state`, and the
+  callback server settled on the first `/callback` it got — so a page in the
+  user's browser could hand the waiting login a code of its own, and the
+  user ended up logged in as someone else (RFC 6749 §10.12, RFC 9700 §4.7).
+  Now:
+  - every URL `AuthorizationCodeProvider` and `OidcBrowserProvider` build
+    carries a fresh `state` (32 random bytes, base64url) and a PKCE pair
+    (S256) — new for UAA — whose verifier the exchange sends. A configured
+    `authorizationUrl` that carries no `state` gets the provider's minted
+    one — fresh for every URL built, appended to its query as text before
+    any fragment — and nothing else: no PKCE challenge, no `code_verifier`
+    (C7: no redirect is accepted without this attempt's `state`, so the
+    identity provider must echo it, RFC 6749 §4.1.2); one that carries a
+    `state` keeps it. A code no URL was built for (`staticCodeStrategy`) is
+    exchanged without a `code_verifier`: binding it is the consumer's. Measured on the provider stand (2026-10-07):
+    Cloud Foundry UAA returns the `state`, accepts the verifier, and refuses
+    a code exchanged with another verifier or none. On the trial XSUAA
+    (2026-10-08) a login with `state` and PKCE gets a token and a refresh
+    token that open ADT, and a code exchanged with another verifier is
+    refused `invalid_grant` (a code with no verifier is not yet run there:
+    `docs/btp-setup.md`, Pending);
+  - every listener is closed from the bind until the composer arms it —
+    after the URL is built and the protocol has read its `state`, before the
+    URL is shown — for every protocol, SAML included; `oauthCode()` and
+    `oidcCode()` then accept a redirect — code or `?error=` — only with
+    exactly one `state` equal to the URL's, the binding checked before the
+    error, so a forged `?error=` ends nothing; every other request is
+    answered `400`, counted and ignored, and the login keeps waiting. The
+    payload a strategy returns is the one the protocol accepted, never one a
+    transport hands back;
+  - **Breaking:** the shipped listeners bind loopback only — `loopback`
+    `127.0.0.1` and `::1`, `loopback4` / `loopback6` one of them — instead
+    of every interface, advertise only what they bind, and refuse a request
+    whose `Host` is not a loopback name with the bound port before serving
+    anything (DNS rebinding); a loopback name counts only from a loopback
+    peer, so a network client sending `Host: localhost` is refused. A port
+    not free on `::1` — fixed, or the one the OS gave `127.0.0.1` for
+    `port: 0` — fails the login `port-in-use`, never leaving it on
+    `127.0.0.1` alone; a host without IPv6 loopback listens on `127.0.0.1`
+    alone. A browser elsewhere reaches a listener through an SSH tunnel
+    (the hint beside the URL names it); a listener on the network is the
+    consumer's own transport, and its risk the consumer's (the README warns
+    of it);
+  - **Breaking:** the paste page carries a per-attempt form token, and
+    `/submit` (a `POST`) settles only with it — and a pasted redirected URL
+    only with this login's `state`. `manualPasteStrategy` asks again for a
+    pasted URL of another login. A bare code — no `?`, `&`, `=`, `/` or `#`
+    — is taken as before; anything else is a URL whose `state` must match
+    and whose code comes from the query alone (`…/callback&code=X` is
+    refused);
+  - the listener compares the request path literally — the endpoint, `/`,
+    `/submit`, nothing else — so no endpoint shares a handler with
+    `/submit`;
+  - every comparison of a `state` or token is constant time
+    (`crypto.timingSafeEqual` over SHA-256 digests), and none of them is
+    logged.
+  - **A configured URL's `state` binds only when it is one non-empty
+    value.** A configured `authorizationUrl` with an empty `state`
+    (`state=`), which a forged `?state=&code=EVIL` would match, or with a
+    repeated `state`, binds nothing. Both are refused —
+    `configuration` `invalid-value`, `fields: ['authorizationUrl']` — before
+    anything is shown (the listener is already bound), and a callback's or a pasted URL's `state` and `code`
+    count only when present exactly once (a repeated one is no value, never
+    its first).
 
 ## [5.4.2] - 2026-10-05
 

@@ -23,12 +23,13 @@ import { join } from 'node:path';
 import { beforeAll, describe, expect, it, jest } from '@jest/globals';
 import { signXml } from '@mcp-abap-adt/auth-mocks';
 import type { IAuthorizationStrategy } from '@mcp-abap-adt/interfaces-auth';
-import { AssertionValidationError } from '../../../errors/AssertionValidationError';
 import { Saml2BearerProvider } from '../../../providers/Saml2BearerProvider';
 import { UaaPasscodeProvider } from '../../../providers/UaaPasscodeProvider';
+import { refreshThenLogin } from '../../../renewal';
 import { staticCodeStrategy } from '../../../strategies';
 import { createSignedAssertionValidator } from '../../../validation/assertionValidator';
 import { defaultReplayStore } from '../../../validation/inMemoryReplayStore';
+import { expectSamlRejection } from '../../helpers/samlRefusal';
 
 const LOCAL = process.env.XSUAA_LOCAL;
 const PASSCODE = process.env.XSUAA_PASSCODE;
@@ -124,6 +125,7 @@ describeXsuaa('Providers against a real XSUAA', () => {
 
   const bearer = (payload: string, extra: object = {}) =>
     new Saml2BearerProvider({
+      renewal: refreshThenLogin(),
       idpSsoUrl: `https://${ORIGIN}.invalid/sso`,
       spEntityId: entityId,
       acsUrl: bearerAcs,
@@ -196,14 +198,14 @@ describeXsuaa('Providers against a real XSUAA', () => {
   it('Saml2BearerProvider: an assertion carrying InResponseTo is refused before XSUAA sees it', async () => {
     const { logger, messages, failures } = recordingLogger();
 
-    const refused = expect(
+    await expectSamlRejection(
       bearer(
         Buffer.from(assertion('_an-authn-request')).toString('base64url'),
         { logger },
       ).getTokens(),
-    ).rejects;
-    await refused.toBeInstanceOf(AssertionValidationError);
-    await refused.toMatchObject({ check: 'bearerConfirmation' });
+      'no-bearer-qualifies',
+      { facts: { candidates: [{ reason: 'in-response-to-unexpected' }] } },
+    );
 
     expect(messages).not.toContain(EXCHANGE_STARTED);
     expect(failures).toEqual([]);
@@ -213,6 +215,7 @@ describeXsuaa('Providers against a real XSUAA', () => {
     'UaaPasscodeProvider: a code from /passcode is exchanged and refreshed',
     async () => {
       const first = await new UaaPasscodeProvider({
+        renewal: refreshThenLogin(),
         uaaUrl: credentials.url,
         clientId: credentials.clientid,
         clientSecret: credentials.clientsecret,
@@ -223,6 +226,7 @@ describeXsuaa('Providers against a real XSUAA', () => {
 
       const { authorize, strategy } = refuseStrategy();
       const refreshed = await new UaaPasscodeProvider({
+        renewal: refreshThenLogin(),
         uaaUrl: credentials.url,
         clientId: credentials.clientid,
         clientSecret: credentials.clientsecret,

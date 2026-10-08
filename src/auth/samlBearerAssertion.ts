@@ -21,8 +21,9 @@
  * would any unsigned one.
  */
 
+import { authError } from '@mcp-abap-adt/auth-errors';
 import { type Element, XMLSerializer } from '@xmldom/xmldom';
-import { quoteUntrusted } from '../validation/signedNode';
+import { refuse, several } from '../validation/samlRefusal';
 import { parseStrictXml } from './strictXml';
 
 const SAML_ASSERTION_NS = 'urn:oasis:names:tc:SAML:2.0:assertion';
@@ -32,17 +33,24 @@ export function toBearerAssertion(payload: string): string {
   // Node's base64 decoder accepts both alphabets, so this reads either.
   const xml = Buffer.from(payload.trim(), 'base64').toString('utf8');
   if (!xml.trimStart().startsWith('<')) {
-    throw new Error('SAML bearer payload is not base64-encoded XML');
+    refuse(
+      authError['saml-assertion']({
+        rule: 'payload-not-base64-xml',
+        check: 'document',
+      }),
+    );
   }
 
   let root: Element | null;
   try {
     root = parseStrictXml(xml).documentElement;
-  } catch (error) {
-    // The parser quotes the document (an element name, for one), so its
-    // message is quoted and cut like any other document value in a message.
-    throw new Error(
-      `SAML bearer payload is not well-formed XML: ${quoteUntrusted(error instanceof Error ? error.message : String(error))}`,
+  } catch {
+    // The conversion's own rule; nothing of the parser's message.
+    return refuse(
+      authError['saml-assertion']({
+        rule: 'payload-not-well-formed',
+        check: 'document',
+      }),
     );
   }
 
@@ -50,8 +58,11 @@ export function toBearerAssertion(payload: string): string {
     return Buffer.from(xml, 'utf8').toString('base64url');
   }
   if (!isElement(root, SAML_PROTOCOL_NS, 'Response')) {
-    throw new Error(
-      'SAML bearer payload is neither a SAML Response nor an Assertion',
+    return refuse(
+      authError['saml-assertion']({
+        rule: 'payload-not-saml',
+        check: 'document',
+      }),
     );
   }
 
@@ -66,15 +77,24 @@ export function toBearerAssertion(payload: string): string {
         isElement(e, SAML_ASSERTION_NS, 'EncryptedAssertion'),
       )
     ) {
-      throw new Error(
-        'SAML Response carries only an EncryptedAssertion; encrypted Assertions are not supported',
+      refuse(
+        authError['saml-assertion']({
+          rule: 'only-encrypted-assertion',
+          check: 'document',
+        }),
       );
     }
-    throw new Error('SAML Response carries no Assertion');
+    return refuse(
+      authError['saml-assertion']({ rule: 'no-assertion', check: 'document' }),
+    );
   }
   if (assertions.length > 1) {
-    throw new Error(
-      `SAML Response carries ${assertions.length} Assertions; a bearer grant takes one`,
+    refuse(
+      authError['saml-assertion']({
+        rule: 'several-assertions',
+        check: 'document',
+        ...several(assertions.length),
+      }),
     );
   }
 

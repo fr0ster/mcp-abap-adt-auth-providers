@@ -15,6 +15,7 @@ import netModule from 'node:net';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { jest } from '@jest/globals';
+import { AuthProviderFailure } from '@mcp-abap-adt/auth-errors';
 import {
   AbapServiceKeyStore,
   AbapSessionStore,
@@ -25,12 +26,8 @@ import { AUTH_TYPE_AUTHORIZATION_CODE } from '@mcp-abap-adt/interfaces-auth';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
 import { DefaultLogger, LogLevel } from '@mcp-abap-adt/logger';
 import { AuthorizationCodeProvider } from '../../providers/AuthorizationCodeProvider';
-import {
-  BrowserCallbackStrategy,
-  browserCallbackStrategy,
-  DEFAULT_LOGIN_TIMEOUT_MS,
-  staticCodeStrategy,
-} from '../../strategies';
+import { refreshThenLogin } from '../../renewal';
+import { browserCallbackStrategy, staticCodeStrategy } from '../../strategies';
 import {
   getDestination,
   getServiceKeysDir,
@@ -39,7 +36,9 @@ import {
   interactiveLoginEnabled,
   loadTestConfig,
 } from '../helpers/configHelpers';
+import { configurationOf } from '../helpers/minted';
 import { canListenOnLocalhost, getAvailablePort } from '../helpers/netHelpers';
+import { recordingBrowser } from '../helpers/recordingBrowser';
 
 // Helper to create logger if DEBUG_PROVIDER is enabled
 function createTestLogger(): ILogger | undefined {
@@ -128,10 +127,12 @@ describe('AuthorizationCodeProvider', () => {
    * `INTERACTIVE_JEST_TIMEOUT_MS` is derived from it rather than written as
    * its own magic number, so the invariant this is protecting stays visible
    * instead of depending on two constants that happen to agree today: the
-   * strategy's own clock must expire strictly before Jest's. If Jest's
-   * timeout fired first, the case would fail with "Exceeded timeout of
-   * Xms" — which says nothing about authentication — instead of the
-   * strategy's own, legible "Authentication timeout after N seconds". The
+   * test's own bound — an `AbortSignal.timeout` it hands the strategy, as a
+   * consumer composes one (no login has a bound of the package's
+   * choosing) — must expire strictly before Jest's. If Jest's timeout fired
+   * first, the case would fail with "Exceeded timeout of Xms" — which says
+   * nothing about authentication — instead of the login's own, legible
+   * "the browser login was aborted". The
    * margin on top covers everything a login itself does not: loading the
    * service key, DNS, Scenario 3's deliberately-failed refresh, launching the
    * browser, the token exchange, assertions and cleanup.
@@ -207,14 +208,15 @@ describe('AuthorizationCodeProvider', () => {
           const port1 = await getAvailablePort();
           const port2 = await getAvailablePort();
           const provider = new AuthorizationCodeProvider({
+            renewal: refreshThenLogin(),
             uaaUrl: authConfig.uaaUrl!,
             clientId: authConfig.uaaClientId!,
             clientSecret: authConfig.uaaClientSecret!,
-            // Use the system browser for authentication.
+            // No browser is launched by a test: the URL is shown on
+            // stderr for the person running the interactive case.
             authorization: browserCallbackStrategy({
-              browser: 'system',
               port: port1,
-              timeoutMs: HUMAN_LOGIN_TIMEOUT_MS,
+              signal: AbortSignal.timeout(HUMAN_LOGIN_TIMEOUT_MS),
             }),
             logger,
           });
@@ -233,19 +235,20 @@ describe('AuthorizationCodeProvider', () => {
 
           // Scenario 2: Use token from Scenario 1 - should use cached token
           const provider2 = new AuthorizationCodeProvider({
+            renewal: refreshThenLogin(),
             uaaUrl: authConfig.uaaUrl!,
             clientId: authConfig.uaaClientId!,
             clientSecret: authConfig.uaaClientSecret!,
             refreshToken: tokens1.refreshToken,
             accessToken: tokens1.authorizationToken, // Use token from Scenario 1
             // This provider exists to prove the Scenario 1 token is reused from
-            // cache — it must never need to log in. `DEFAULT_LOGIN_TIMEOUT_MS`
-            // (not the human budget) turns "it tried to open a browser anyway"
-            // into a fast, enforced failure instead of a five-minute wait.
+            // cache — it must never need to log in. A 30 s bound of the
+            // test's own (not the human budget) turns "it tried to open a
+            // browser anyway" into a fast, enforced failure instead of a
+            // five-minute wait.
             authorization: browserCallbackStrategy({
-              browser: 'system',
               port: port2,
-              timeoutMs: DEFAULT_LOGIN_TIMEOUT_MS,
+              signal: AbortSignal.timeout(30_000),
             }),
             logger,
           });
@@ -319,16 +322,17 @@ describe('AuthorizationCodeProvider', () => {
         const expiredToken = createExpiredJWT();
         const redirectPort = await getAvailablePort();
         const provider = new AuthorizationCodeProvider({
+          renewal: refreshThenLogin(),
           uaaUrl: authConfig.uaaUrl!,
           clientId: authConfig.uaaClientId!,
           clientSecret: authConfig.uaaClientSecret!,
           refreshToken: 'invalid-expired-refresh-token', // Invalid refresh token
           accessToken: expiredToken, // Expired token
-          // Use the system browser for authentication.
+          // No browser is launched by a test: the URL is shown on
+          // stderr for the person running the interactive case.
           authorization: browserCallbackStrategy({
-            browser: 'system',
             port: redirectPort,
-            timeoutMs: HUMAN_LOGIN_TIMEOUT_MS,
+            signal: AbortSignal.timeout(HUMAN_LOGIN_TIMEOUT_MS),
           }),
           logger,
         });
@@ -416,6 +420,7 @@ describe('AuthorizationCodeProvider', () => {
         return;
       }
       const provider = new AuthorizationCodeProvider({
+        renewal: refreshThenLogin(),
         uaaUrl: session.auth.uaaUrl!,
         clientId: session.auth.uaaClientId!,
         clientSecret: session.auth.uaaClientSecret!,
@@ -440,6 +445,7 @@ describe('AuthorizationCodeProvider', () => {
       }
       const expired = createExpiredJWT();
       const provider = new AuthorizationCodeProvider({
+        renewal: refreshThenLogin(),
         uaaUrl: session.auth.uaaUrl!,
         clientId: session.auth.uaaClientId!,
         clientSecret: session.auth.uaaClientSecret!,
@@ -476,6 +482,7 @@ describe('AuthorizationCodeProvider', () => {
 
       const logger = createTestLogger();
       const provider = new AuthorizationCodeProvider({
+        renewal: refreshThenLogin(),
         uaaUrl: authConfig.uaaUrl!,
         clientId: authConfig.uaaClientId!,
         clientSecret: authConfig.uaaClientSecret!,
@@ -513,25 +520,40 @@ describe('AuthorizationCodeProvider with strategies', () => {
     });
   }
 
-  it('leaves the callback port free the moment a login times out', async () => {
+  // No login times out on its own; the consumer's
+  // abort ends it `aborted` (strategy 'browser') and frees the port.
+  it('leaves the callback port free the moment a login is aborted', async () => {
+    const consumer = new AbortController();
     const provider = new AuthorizationCodeProvider({
+      renewal: refreshThenLogin(),
       uaaUrl: 'http://127.0.0.1:9',
       clientId: 'client',
       clientSecret: 'secret',
       authorization: browserCallbackStrategy({
         port: PORT,
-        timeoutMs: 1000,
-        openUrl: async () => undefined,
+        signal: consumer.signal,
+        browser: recordingBrowser({
+          onOpen: async () => {
+            consumer.abort();
+          },
+        }),
       }),
     });
 
-    await expect(provider.getTokens()).rejects.toThrow(/timeout/i);
+    await expect(provider.getTokens()).rejects.toMatchObject({
+      name: 'AuthProviderFailure',
+      error: {
+        kind: 'interactive-login',
+        facts: { outcome: 'aborted', strategy: 'browser' },
+      },
+    });
     expect(await portIsFree(PORT)).toBe(true);
   }, 30000);
 
   it('rejects a pre-built URL whose redirect does not match, before opening a browser', async () => {
-    const openUrl = jest.fn(async () => undefined);
+    const browser = recordingBrowser();
     const provider = new AuthorizationCodeProvider({
+      renewal: refreshThenLogin(),
       uaaUrl: 'http://127.0.0.1:9',
       clientId: 'client',
       clientSecret: 'secret',
@@ -539,24 +561,27 @@ describe('AuthorizationCodeProvider with strategies', () => {
         'https://uaa.example/oauth/authorize?client_id=c&redirect_uri=http%3A%2F%2Flocalhost%3A3001%2Fcallback&response_type=code',
       authorization: browserCallbackStrategy({
         port: PORT,
-        timeoutMs: 30000,
-        openUrl,
+        browser,
       }),
     });
 
     const started = Date.now();
-    await expect(provider.getTokens()).rejects.toThrow(
-      /redirect_uri.*does not match/i,
-    );
+    // The configuration case; the URIs are diagnostics.
+    const thrown = await provider.getTokens().catch((error: unknown) => error);
+    expect(configurationOf(thrown)).toMatchObject({
+      case: 'redirect-mismatch',
+      fields: ['authorizationUrl'],
+    });
     // Not "eventually" — the point of building-time validation is that it does
     // not wait for a callback that can never arrive.
     expect(Date.now() - started).toBeLessThan(5000);
-    expect(openUrl).not.toHaveBeenCalled();
+    expect(browser.calls).toEqual([]);
     expect(await portIsFree(PORT)).toBe(true);
   }, 30000);
 
   it('catches the mismatch even from a strategy that never builds a URL', async () => {
     const provider = new AuthorizationCodeProvider({
+      renewal: refreshThenLogin(),
       uaaUrl: 'http://127.0.0.1:9',
       clientId: 'client',
       clientSecret: 'secret',
@@ -571,9 +596,12 @@ describe('AuthorizationCodeProvider with strategies', () => {
       }),
     });
 
-    await expect(provider.getTokens()).rejects.toThrow(
-      /redirect_uri.*but the authorization strategy used/i,
-    );
+    // The second net, the same case.
+    const thrown = await provider.getTokens().catch((error: unknown) => error);
+    expect(configurationOf(thrown)).toMatchObject({
+      case: 'redirect-mismatch',
+      fields: ['authorizationUrl'],
+    });
   }, 30000);
 });
 
@@ -620,12 +648,6 @@ describe('AuthorizationCodeProvider strategy lifecycle', () => {
       access_token: createValidJWT(),
       refresh_token: 'refresh-from-stub',
     });
-    // Nothing here should construct a default at all; the class-level spy says
-    // so without needing to mock the module the provider imports.
-    const defaultDispose = jest.spyOn(
-      BrowserCallbackStrategy.prototype,
-      'dispose',
-    );
     const dispose = jest.fn(async () => undefined);
     const redirectUri = 'http://localhost:61001/callback';
     const supplied: IAuthorizationStrategy<string> = {
@@ -638,6 +660,7 @@ describe('AuthorizationCodeProvider strategy lifecycle', () => {
 
     try {
       const provider = new AuthorizationCodeProvider({
+        renewal: refreshThenLogin(),
         uaaUrl: uaa.url,
         clientId: 'client',
         clientSecret: 'secret',
@@ -648,9 +671,7 @@ describe('AuthorizationCodeProvider strategy lifecycle', () => {
       expect(tokens.authorizationToken).toBeDefined();
       // A receiver the consumer owns must survive the login it served.
       expect(dispose).not.toHaveBeenCalled();
-      expect(defaultDispose).not.toHaveBeenCalled();
     } finally {
-      defaultDispose.mockRestore();
       await uaa.close();
     }
   }, 30000);
@@ -664,15 +685,18 @@ describe('AuthorizationCodeProvider strategy lifecycle', () => {
       dispose,
     };
     const provider = new AuthorizationCodeProvider({
+      renewal: refreshThenLogin(),
       uaaUrl: 'http://127.0.0.1:9',
       clientId: 'client',
       clientSecret: 'secret',
       authorization: supplied,
     });
 
-    await expect(provider.getTokens()).rejects.toThrow(
-      /consumer flow cancelled/,
-    );
+    // The consumer's own error never comes back — an
+    // AuthProviderFailure holding the classified error, without its message.
+    const failed = provider.getTokens();
+    await expect(failed).rejects.toBeInstanceOf(AuthProviderFailure);
+    await expect(failed).rejects.not.toThrow(/consumer flow cancelled/);
     expect(dispose).not.toHaveBeenCalled();
   }, 30000);
 });

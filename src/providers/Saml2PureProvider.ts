@@ -4,8 +4,8 @@
  * Returns SAMLResponse as authorizationToken (non-JWT).
  */
 
+import type { AttemptContext } from '@mcp-abap-adt/auth-errors';
 import type {
-  AssertionContext,
   IAssertionValidator,
   IRequestTarget,
   ITokenResult,
@@ -13,20 +13,23 @@ import type {
 } from '@mcp-abap-adt/interfaces-auth';
 import { AUTH_TYPE_USER_TOKEN } from '@mcp-abap-adt/interfaces-auth';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
-import { asContract } from '../auth/contractShape';
-import { RefreshError } from '../errors/TokenProviderErrors';
+import { ownOptions } from '../auth/configuration';
+import { markHandled } from '../auth/handled';
 import { samlCallbackStrategy } from '../strategies';
 import { createSignedResponseValidator } from '../validation/assertionValidator';
-import { defaultReplayStore } from '../validation/inMemoryReplayStore';
+import { validateAssertion } from '../validation/samlRefusal';
 import {
   BaseTokenProvider,
+  refreshTokenRefused,
   storedExpiry,
   type TokenProviderHooks,
 } from './BaseTokenProvider';
+import type { LoginFactoryOptions } from './LoginFactoryOptions';
 import type { Saml2CommonConfig, SamlTrust } from './saml2Utils';
 import {
   checkAssertionValidator,
   getSamlAssertion,
+  samlTrustOf,
   validateSamlConfig,
 } from './saml2Utils';
 
@@ -53,7 +56,9 @@ export class Saml2PureProvider extends BaseTokenProvider {
   private config: Saml2PureProviderConfig;
   private readonly validator: IAssertionValidator;
 
-  constructor(config: Saml2PureProviderConfig) {
+  constructor(options: Saml2PureProviderConfig) {
+    // Read once as own data (a hostile object throws nothing of its own).
+    const config = ownOptions<Saml2PureProviderConfig>(options);
     super(config);
     // A pre-built URL with no declared ACS cannot be verified against whatever
     // the strategy binds, so it is refused here rather than at login time.
@@ -78,15 +83,17 @@ export class Saml2PureProvider extends BaseTokenProvider {
       'authorization' | 'assertionValidator'
     >,
     trust: SamlTrust,
-    options: { timeoutMs?: number } = {},
+    options: LoginFactoryOptions = {},
   ): Saml2PureProvider {
+    // Read once as own data, like every option (a hostile object throws
+    // nothing of its own).
     return new Saml2PureProvider({
-      ...config,
-      authorization: samlCallbackStrategy({ timeoutMs: options.timeoutMs }),
+      ...ownOptions<typeof config>(config),
+      authorization: samlCallbackStrategy({
+        signal: ownOptions<LoginFactoryOptions>(options).signal,
+      }),
       assertionValidator: createSignedResponseValidator({
-        idpCertificates: trust.idpCertificates,
-        clockSkewMs: trust.clockSkewMs,
-        replayStore: trust.replayStore ?? defaultReplayStore,
+        ...samlTrustOf(trust),
       }),
     });
   }
@@ -95,30 +102,30 @@ export class Saml2PureProvider extends BaseTokenProvider {
     return AUTH_TYPE_USER_TOKEN;
   }
 
-  protected async performLogin(): Promise<ITokenResult> {
-    const { payload, requestId, acsUrl } = await getSamlAssertion(this.config);
+  protected async performLogin(attempt: AttemptContext): Promise<ITokenResult> {
+    const { payload, requestId, acsUrl } = await getSamlAssertion(
+      this.config,
+      attempt,
+    );
     // acsUrl is where the strategy actually listened — with an ephemeral port
     // the configured value is usually absent and never authoritative.
-    const validated = await this.validator.validate(
-      payload,
-      asContract<AssertionContext>({
-        expectedInResponseTo: requestId,
-        audience: this.config.spEntityId,
-        acsUrl,
-        expectedIssuer: this.config.idpEntityId,
-        logger: this.logger,
-      }),
-    );
+    const validated = await validateAssertion(this.validator, payload, {
+      expectedInResponseTo: requestId,
+      audience: this.config.spEntityId,
+      acsUrl,
+      expectedIssuer: this.config.idpEntityId,
+      logger: this.logger,
+    });
     const sessionCookies = await this.config.cookieProvider(payload);
 
-    return asContract<ITokenResult>({
+    return {
       authorizationToken: sessionCookies,
       authType: AUTH_TYPE_USER_TOKEN,
       tokenType: 'saml',
       // ITokenResult.expiresAt is an epoch-ms number, unlike
       // ValidatedAssertion.expiresAt, which is a Date.
       expiresAt: validated.expiresAt.getTime(),
-    });
+    };
   }
 
   /** No refresh grant: the base logs in once instead of refreshing. */
@@ -127,7 +134,7 @@ export class Saml2PureProvider extends BaseTokenProvider {
   }
 
   protected async performRefresh(): Promise<ITokenResult> {
-    throw new RefreshError('SAML2 pure has no refresh grant');
+    throw refreshTokenRefused();
   }
 
   /** Its "token" is the SAML session's cookies (tokenType 'saml'). */
@@ -135,6 +142,7 @@ export class Saml2PureProvider extends BaseTokenProvider {
     request: IRequestTarget,
     result: ITokenResult,
   ): void {
-    request.cookies(result.authorizationToken);
+    // A target answering a rejecting promise raises nothing (rule 1).
+    markHandled(request.cookies(result.authorizationToken));
   }
 }

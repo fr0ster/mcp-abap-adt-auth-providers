@@ -31,6 +31,8 @@ import { CertificateAuthProvider } from '../../../credentials/CertificateAuthPro
 import { ClientCredentialsProvider } from '../../../providers/ClientCredentialsProvider';
 import { OidcDeviceFlowProvider } from '../../../providers/OidcDeviceFlowProvider';
 import { OidcPasswordProvider } from '../../../providers/OidcPasswordProvider';
+import { refreshThenLogin } from '../../../renewal';
+import { wordsOf } from '../../helpers/minted';
 import { recordingTargets } from '../../helpers/targets';
 import { approveDevice } from './formLogin';
 
@@ -165,6 +167,7 @@ describeKeycloak(
         // The endpoint is named, as a consumer names XSUAA's certurl: the
         // provider's uaaUrl would build UAA's path, which Keycloak does not serve.
         const tokens = await new ClientCredentialsProvider({
+          renewal: refreshThenLogin(),
           uaaUrl: issuer,
           clientId: 'mtls',
           clientAuthentication: tlsClientCertificate({
@@ -181,6 +184,7 @@ describeKeycloak(
 
       it('a token request presenting client-b is refused, in the fixed words', async () => {
         const provider = new ClientCredentialsProvider({
+          renewal: refreshThenLogin(),
           uaaUrl: issuer,
           clientId: 'mtls',
           clientAuthentication: tlsClientCertificate({
@@ -200,15 +204,17 @@ describeKeycloak(
           () => undefined,
           (error: unknown) => error as Error,
         );
-        expect(thrown?.message).toMatch(/\(401\): invalid_client$/);
+        // The status and the registered code are the failure's facts.
+        expect(thrown?.message).toMatch(/\(HTTP 401, invalid_client\)$/);
         expect(inspect(thrown, { depth: null })).not.toContain(
           'Invalid client or Invalid client credentials',
         );
-        await expect(provider.prepare()).resolves.toEqual({
+        // The client credentials request's own words.
+        expect(wordsOf(await provider.prepare())).toEqual({
           ok: false,
           refusal: {
             reason:
-              'client_credentials token request failed (HTTP 401, invalid_client)',
+              'the client credentials request failed (HTTP 401, invalid_client)',
           },
         });
       });
@@ -222,6 +228,7 @@ describeKeycloak(
           // A user token with `openid`: userinfo answers 403 to a token
           // without that scope before it looks at the binding.
           const provider = new OidcPasswordProvider({
+            renewal: refreshThenLogin(),
             issuerUrl: issuer,
             clientId: 'mtls',
             ...USER,
@@ -281,6 +288,7 @@ describeKeycloak(
 
       it('OidcPasswordProvider refreshes over mTLS, and the new token is bound to the same certificate', async () => {
         const first = await new OidcPasswordProvider({
+          renewal: refreshThenLogin(),
           issuerUrl: issuer,
           clientId: 'mtls',
           ...USER,
@@ -292,6 +300,7 @@ describeKeycloak(
         // A wrong password: a fall back to the password grant would fail, so
         // only a refresh can produce a token here.
         const refreshed = await new OidcPasswordProvider({
+          renewal: refreshThenLogin(),
           issuerUrl: issuer,
           clientId: 'mtls',
           username: 'tester',
@@ -315,6 +324,7 @@ describeKeycloak(
     describe('private_key_jwt (client `jwt`, the stand’s signing key)', () => {
       it('OidcPasswordProvider gets a token with the default audience, the token endpoint', async () => {
         const tokens = await new OidcPasswordProvider({
+          renewal: refreshThenLogin(),
           issuerUrl: issuer,
           clientId: 'jwt',
           ...USER,
@@ -338,6 +348,7 @@ describeKeycloak(
       it('Keycloak refuses an assertion whose audience is the device endpoint', async () => {
         expect(deviceEndpoint).toMatch(/^https:/);
         const provider = OidcDeviceFlowProvider.toConsole({
+          renewal: refreshThenLogin(),
           issuerUrl: issuer,
           clientId: 'jwt',
           scopes: ['openid'],
@@ -357,7 +368,7 @@ describeKeycloak(
           (error: unknown) => error as Error,
         );
         expect(thrown?.message).toBe(
-          'OIDC device authorization failed (400): invalid_client',
+          'the OIDC device authorization failed (HTTP 400, invalid_client)',
         );
         expect(inspect(thrown, { depth: null })).not.toContain(
           'Invalid token audience',
@@ -374,6 +385,7 @@ describeKeycloak(
         });
 
         const tokens = await OidcDeviceFlowProvider.toConsole({
+          renewal: refreshThenLogin(),
           issuerUrl: issuer,
           clientId: 'jwt',
           scopes: ['openid'],
@@ -479,6 +491,7 @@ describeUaa(
 
     it('ClientCredentialsProvider gets a client token with no secret', async () => {
       const tokens = await new ClientCredentialsProvider({
+        renewal: refreshThenLogin(),
         uaaUrl: UAA_URL as string,
         clientId: 'jwt_client',
         clientAuthentication: privateKeyJwt({

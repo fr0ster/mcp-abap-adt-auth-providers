@@ -1,0 +1,16 @@
+[
+  { "file": "src/snc/SncLogonProvider.ts", "function": "resolve", "field": "library" },
+  { "file": "src/snc/DefaultSncLibraryLocator.ts", "function": "libraryNotFound", "field": "candidatePaths" },
+  { "file": "src/validation/assertionValidator.ts", "function": "validate", "field": "rootElement" },
+  { "file": "src/validation/assertionValidator.ts", "function": "validate", "field": "id" },
+  { "file": "src/validation/signedNode.ts", "function": "resolveOne", "field": "referenceUri" },
+  { "file": "src/validation/assertionValidator.ts", "function": "checkStatus", "field": "statusCode" },
+  { "file": "src/validation/assertionValidator.ts", "function": "validate", "field": "issuer" },
+  { "file": "src/validation/assertionValidator.ts", "function": "validate", "field": "notBefore" },
+  { "file": "src/validation/assertionValidator.ts", "function": "validate", "field": "notOnOrAfter" },
+  { "file": "src/validation/assertionValidator.ts", "function": "validate", "field": "destination" },
+  { "file": "src/providers/saml2Utils.ts", "function": "acsMismatch", "field": "configuredUri" },
+  { "file": "src/providers/saml2Utils.ts", "function": "acsMismatch", "field": "strategyUri" },
+  { "file": "src/providers/AuthorizationCodeProvider.ts", "function": "mismatch", "field": "configuredUri" },
+  { "file": "src/providers/AuthorizationCodeProvider.ts", "function": "mismatch", "field": "strategyUri" }
+]

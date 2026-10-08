@@ -50,6 +50,12 @@ describe('readRejection — only a refused credential is the credential', () => 
     expect(read).toEqual({
       verdict: 'not-credential',
       refusal: {
+        kind: 'system-refused',
+        facts: {
+          verdict: 'rfc-failure',
+          rfcKey: 'RFC_COMMUNICATION_FAILURE',
+          at: 'logon',
+        },
         reason:
           'the RFC logon failed (RFC_COMMUNICATION_FAILURE), not as a credential refusal',
       },

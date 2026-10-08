@@ -1,6 +1,6 @@
 {
   "name": "@mcp-abap-adt/auth-providers",
-  "version": "5.4.2",
+  "version": "6.0.0",
   "description": "Every IAuthProvider for SAP ABAP ADT: the credentials a process delegates to, and the token providers behind them",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -41,12 +41,13 @@
     "chrono": "./tools/version-stats.sh",
     "clean": "rm -rf dist tsconfig.tsbuildinfo tsconfig.build.tsbuildinfo",
     "lint": "npx biome check --write src",
-    "lint:check": "npx biome check --error-on-warnings src",
+    "lint:check": "npx biome check --error-on-warnings src && node tools/check-provider-shape.mjs --rules 1,2,3,4,5,6,7,8 --base ./src/auth/AuthProviderBase#AuthProviderBase",
     "format": "npx biome format --write src",
     "build": "npm run --silent clean && npx biome check src --diagnostic-level=error && npx tsc -p tsconfig.build.json",
     "build:fast": "npx tsc -p tsconfig.build.json",
     "test": "NODE_OPTIONS=--experimental-vm-modules jest",
     "test:check": "npx tsc --noEmit",
+    "docs:tables": "node scripts/generate-refusal-tables.mjs",
     "prepublishOnly": "npm run build",
     "stand:up": "tests/stand/up.sh",
     "stand:down": "tests/stand/down.sh",
@@ -57,13 +58,12 @@
     "node": "^22 || ^24 || ^26"
   },
   "dependencies": {
-    "@mcp-abap-adt/interfaces-auth": "^3.2.0",
-    "@mcp-abap-adt/interfaces-auth-sap": "^2.0.0",
+    "@mcp-abap-adt/auth-errors": "^2.1.1",
+    "@mcp-abap-adt/interfaces-auth": "^7.5.0",
+    "@mcp-abap-adt/interfaces-auth-sap": "^3.3.0",
     "@mcp-abap-adt/interfaces-utils": "^1.1.0",
     "@xmldom/xmldom": "^0.9.12",
     "axios": "^1.13.5",
-    "express": "^5.1.0",
-    "open": "^11.0.0",
     "xml-crypto": "^6.1.2"
   },
   "devDependencies": {
@@ -72,7 +72,6 @@
     "@mcp-abap-adt/auth-mocks": "^0.3.0",
     "@mcp-abap-adt/auth-stores": "^3.1.0",
     "@mcp-abap-adt/logger": "^0.4.0",
-    "@types/express": "^5.0.5",
     "@types/jest": "^30.0.0",
     "@types/js-yaml": "^4.0.9",
     "@types/node": "^25.2.3",

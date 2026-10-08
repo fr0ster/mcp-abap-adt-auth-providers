@@ -1,91 +1,93 @@
 /**
- * What SNC refusals say. The RFC SDK reports both common logon failures as a
- * generic communication error; the cause is in the GSS text. Measured:
- * `A2200019` — no credential to present; `SNCERR_INIT` — the library could not
- * be loaded. The text is searched, never copied: only fixed wording, the
- * library this provider resolved, and an allowlisted SDK key go out (rule 2).
+ * What SNC refusals say. The RFC SDK reports both common
+ * logon failures as a generic communication error; the cause is in the GSS
+ * text. Measured: `A2200019` — no credential to present; `SNCERR_INIT` — the
+ * library could not be loaded. The text is searched by plain code, never
+ * copied and never matched by a regular expression: only the minted words,
+ * the library's architectures and an allowlisted SDK key are facts; the
+ * library this provider resolved is a diagnostic, never a word.
  */
 
-import type { IAuthRefusal } from '@mcp-abap-adt/interfaces-auth';
-import { KNOWN_RFC_KEYS } from '../auth/refusal';
-import {
-  SNC_CANDIDATE_SOURCES,
-  SNC_UNUSABLE_REASONS,
-  type SncLibrary,
-  SncLibraryNotFoundError,
-} from './DefaultSncLibraryLocator';
+import { authError, isRfcKey, isSncArch } from '@mcp-abap-adt/auth-errors';
+import { readSafely } from '../auth/knownCodes';
+import type { SncLibrary } from './DefaultSncLibraryLocator';
+import type { SncArch } from './libraryArchitectures';
+
+/**
+ * The two GSS explanations, minted once by `prepare()` — the one site that
+ * extracts the `library` diagnostic — so `rejected()` relays them
+ * and builds no diagnostic of its own.
+ */
+export interface GssRefusals {
+  readonly noCredential: SncRefusal;
+  readonly initFailed: SncRefusal;
+}
+
+/** What `rejected()` knows when it explains a refusal. */
+export interface SncContext {
+  readonly secureLoginClient: boolean;
+  /** Absent until `prepare()` resolved a library. */
+  readonly explained?: GssRefusals | undefined;
+}
+
+/** The SNC refusals: built here, minted by auth-errors. */
+export type SncRefusal = ReturnType<typeof authError.snc>;
 
 /** The text to search for GSS codes — never returned. */
 function searchable(error: unknown): string {
-  if (error instanceof Error) return error.message;
   if (typeof error === 'string') return error;
-  const text = (error as { message?: unknown } | null)?.message;
+  const text = readSafely(error, 'message');
   return typeof text === 'string' ? text : '';
 }
 
-function sdkKey(error: unknown): string {
-  const key = (error as { key?: unknown } | null)?.key;
-  return typeof key === 'string' && KNOWN_RFC_KEYS.has(key) ? ` (${key})` : '';
-}
-
-function describeLibrary(library?: SncLibrary): string {
-  if (!library) return 'the SNC library';
-  const archs = Array.isArray(library.archs) ? library.archs.join('/') : '';
-  return archs ? `${library.path} (${archs})` : library.path;
+/** The library's architectures, each on the allowlist; none when unknown. */
+export function archsOf(library: SncLibrary | undefined): SncArch[] {
+  const archs = library?.archs;
+  if (!Array.isArray(archs)) return [];
+  return archs.filter((arch): arch is SncArch => isSncArch(arch));
 }
 
 /** The explanation of a GSS code in the error, when it carries one. */
 export function sncCause(
   error: unknown,
-  context: { library?: SncLibrary | undefined; secureLoginClient: boolean },
-): IAuthRefusal | undefined {
+  context: SncContext,
+): SncRefusal | undefined {
   const text = searchable(error);
-  const library = describeLibrary(context.library);
-  if (/A2200019/.test(text)) {
-    return {
-      reason: 'the SNC library has no credential to present (A2200019)',
-      hint: context.secureLoginClient
-        ? 'log on in the Secure Login Client, to the profile used for SAP applications'
-        : `make sure the SNC product behind ${library} is logged on`,
-    };
+  if (text.includes('A2200019')) {
+    return (
+      context.explained?.noCredential ??
+      authError.snc({
+        problem: 'no-credential',
+        secureLoginClient: context.secureLoginClient,
+      })
+    );
   }
-  if (/SNCERR_INIT|gssapi library invalid\/missing/i.test(text)) {
-    return {
-      reason: `the RFC SDK could not initialise ${library} as its SNC library (SNCERR_INIT)`,
-    };
+  const lower = text.toLowerCase();
+  if (
+    lower.includes('sncerr_init') ||
+    lower.includes('gssapi library invalid/missing')
+  ) {
+    return (
+      context.explained?.initFailed ??
+      authError.snc({ problem: 'library-init-failed' })
+    );
   }
   return undefined;
 }
 
-export function sncRefusal(
-  error: unknown,
-  context: { library?: SncLibrary | undefined; secureLoginClient: boolean },
-): IAuthRefusal {
-  return (
-    sncCause(error, context) ?? { reason: `SNC logon refused${sdkKey(error)}` }
+/** A GSS cause, else "SNC logon refused" with an allowlisted SDK key. */
+export function sncRefusal(error: unknown, context: SncContext): SncRefusal {
+  const cause = sncCause(error, context);
+  if (cause) return cause;
+  const key = readSafely(error, 'key');
+  return authError.snc(
+    isRfcKey(key)
+      ? { problem: 'logon-refused', rfcKey: key }
+      : { problem: 'logon-refused' },
   );
 }
 
-const LOCATE_HINT = 'set sncLib to the SNC (GSS) library of your SNC product';
-
-/**
- * Why no library could be used: each candidate's source, path and fixed reason
- * — built only from those parts, and only when they are the package's own
- * values; anything else a locator throws gets the fixed sentence alone.
- */
-export function locateRefusal(error: unknown): IAuthRefusal {
-  const reason = 'no usable SNC library was found';
-  if (!(error instanceof SncLibraryNotFoundError)) {
-    return { reason, hint: LOCATE_HINT };
-  }
-  const tried = error.tried.filter(
-    (t) =>
-      SNC_CANDIDATE_SOURCES.has(t.source) &&
-      SNC_UNUSABLE_REASONS.has(t.reason) &&
-      typeof t.path === 'string',
-  );
-  const detail = tried.length
-    ? tried.map((t) => `${t.source} ${t.path} (${t.reason})`).join('; ')
-    : 'no candidate (SNC_LIB_64 and SNC_LIB are unset and no Secure Login Client installation was found)';
-  return { reason: `${reason}: ${detail}`, hint: LOCATE_HINT };
+/** A locator's own failure: the fixed sentence alone. */
+export function foreignLocatorRefusal(): SncRefusal {
+  return authError.snc({ problem: 'library-not-found' });
 }

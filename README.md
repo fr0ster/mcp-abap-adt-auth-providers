@@ -10,7 +10,463 @@ is handed over directly to a connection, or through
 `@mcp-abap-adt/auth-broker` for the stateful token API
 (`getTokens()`/`refreshTokens()`).
 
+## Migrating to 6.0.0 — the error contract
+
+6.0.0 replaces how this package says what went wrong. Every refusal and every
+throw is now an **error of one closed list of kinds**, minted by
+[`@mcp-abap-adt/auth-errors`](https://www.npmjs.com/package/@mcp-abap-adt/auth-errors)
+from allowlisted facts — not a class to match with `instanceof`, not words to
+parse. And nothing is bounded by a timeout of the package's choosing any more:
+your `AbortSignal` is the bound. What a consumer on 5.x must now do:
+
+- **Install the contract it is read with.** `@mcp-abap-adt/auth-errors`
+  (`^2.1.1`) to read errors; `@mcp-abap-adt/interfaces-auth` (`^7.5.0`) is
+  what every provider here implements, and where the parts of an
+  authorization strategy (`IAuthorizationPresentation`, `IAnswerTransport`,
+  `IAuthorizationProtocol`, `IBrowser`) are declared. The consumers on the same contract
+  are **released after this 6.0.0, not yet available**:
+  `@mcp-abap-adt/connection` 13.0.0 (its suites run against the published
+  auth-providers 6.0.0), `@mcp-abap-adt/auth-stores` 4.0.0 and
+  `@mcp-abap-adt/auth-broker` 5.0.0. Until they are, no published connection
+  reads these providers' refusals: 11.x reads the old refusal, and 12.0.0
+  (published only under `next`) is built on interfaces-auth 6. Keep one copy
+  of each: `npm ls @mcp-abap-adt/interfaces-auth` and
+  `npm ls @mcp-abap-adt/auth-errors` should show one deduplicated version.
+- **Every token provider requires `renewal`.** How a renewal proceeds —
+  whether to refresh, whether to log in, when to stop, what becomes of a
+  refresh token that was sent — is now a strategy the consumer gives
+  (`renewal: IRenewalStrategy`). There is no default: a token provider (and
+  `inBrowser`, `fromTerminal`, `toConsole`, `SsoProviderFactory.create`)
+  constructed without one, or with one whose `next` is not a function, throws
+  `configuration` `required-fields-missing` with `fields: ['renewal']`.
+  **`renewal: refreshThenLogin()` takes the steps 5.x took** — one refresh,
+  then one login when there is no refresh token or the refresh failed;
+  `refreshOnly()` never logs in. See [Renewal strategy](#renewal-strategy).
+
+  ```typescript
+  import { ClientCredentialsProvider, refreshThenLogin } from '@mcp-abap-adt/auth-providers';
+
+  const provider = new ClientCredentialsProvider({
+    uaaUrl, clientId, clientSecret,
+    renewal: refreshThenLogin(),
+  });
+  ```
+- **`onTokens` is gone; pass `persistence`.** The config field `onTokens`
+  is replaced by `persistence?: ITokenPersistence`, which receives one report
+  per change of the provider's credentials (see
+  [Persistence strategy](#persistence-strategy)). **The 5.x behaviour of
+  `onTokens` — called with every new token, best effort — is
+  `refreshStatePersistence(write, { onWriteFailure: 'continue' })`**:
+
+  ```typescript
+  // 5.x
+  onTokens: async (result) => save(result),
+  // 6.0.0
+  persistence: refreshStatePersistence(
+    async ({ authorizationToken, refreshToken, expiresAt }) =>
+      save({ authorizationToken, refreshToken, expiresAt }),
+    { onWriteFailure: 'continue' },
+  ),
+  ```
+
+  `write`'s `refreshToken` is a string (a new one: write it), `undefined`
+  (the result carried none: leave the stored one, as a 5.x `onTokens`
+  result without a refresh token meant) or `null` — new — (the provider
+  discarded the refresh token: clear the stored one, so it is never sent
+  again after a restart). `onWriteFailure` is required, with no default: `'continue'`
+  logs a failed write and goes on, as `onTokens` failures did; `'fail'`
+  makes the call that caused the write fail with it. **A persistence strategy
+  of your own whose awaited report throws now fails that call**
+  (`getTokens()`, `refreshTokens()`, or the moment) — `unknown`, operation
+  `persisting-tokens` — where 5.x only logged a failing `onTokens`; the
+  credentials stay committed and the next `getTokens()` answers them.
+  Without `persistence` nothing is persisted.
+- **No `refreshTokenDisposition`.** interfaces-auth 6.0.0 added it to
+  `ITokenResult`; interfaces-auth 7 removed it again, with the type
+  `RefreshTokenDisposition`, and no release of this package carries it. What
+  `getTokens()` / `refreshTokens()` return carries the refresh token the
+  provider holds, or `refreshToken: undefined` — nothing more. A store learns
+  what became of the refresh token from the persistence reports.
+- **What a renewal answers changed where it could not produce a usable
+  credential** — it now throws, and what follows (log in again, give up) is
+  yours. With `refreshThenLogin()`:
+  - a renewal that obtains a token still bound to another certificate than
+    the pinned one: `getTokens()` / `refreshTokens()` throw `token-binding`
+    `renewed-bound-elsewhere` (5.x returned the token);
+  - a held token remembered as bound elsewhere: `getTokens()` throws the
+    remembered error (5.x returned the token); `prepare()` no longer clears
+    what is remembered — it renews once more;
+  - `rejected()` with a `401` whose renewal is still bound elsewhere: Oops
+    `renewed-bound-elsewhere` (5.x answered Ok);
+  - a remembered expired client certificate is refused again by the pin —
+    an equal refusal, no longer the same object;
+  - a result that carries no usable refresh token — a refresh answered
+    without a new one, a login without one — leaves the refresh token held
+    in place (5.x dropped it), so the next renewal can still refresh;
+  - a `403` for a token a renewal has already replaced: Ok, since what is
+    presented changed;
+  - a refresh that failed **before it was sent** (discovery, a
+    client-authentication strategy or a loader failed first) no longer
+    discards the refresh token.
+- **A new kind, `renewal-declined`** — "the renewal strategy declined to
+  renew the credential", `facts.trigger` — for a renewal strategy that stops
+  before taking any step, with no other refusal that explains it (for
+  instance `refreshOnly()` with an expired token and no refresh token). An
+  exhaustive `matchKind` / `unreachableKind` must handle it.
+- **`invalid-value` is a configuration case**, "a configured value cannot be
+  used: `<fields>`": an unparseable `authorizationUrl` (5.x
+  `required-fields-missing`), a `persistence` without a callable `report`,
+  `refreshStatePersistence`'s `onWriteFailure` or `write`, a part of an
+  authorization strategy that cannot be used (below).
+- **Catch with `readFailure`, never `instanceof`.** Every throw of this
+  package — a constructor's configuration fault, a factory's, a loader's,
+  `getTokens()` / `refreshTokens()` — is an `AuthProviderFailure` (one
+  exception, your own error: `refreshStatePersistence`'s `report()`, below). Read what
+  you caught with `readFailure(thrown, operation)`, which answers an
+  `IAuthProviderError` for anything (a failure of another installed copy of
+  auth-errors included, a forged one rebuilt from its kind and facts); test
+  with `isAuthProviderFailure(value)` when you need a yes/no. An `instanceof`
+  answers false across two copies of the package and true for a forgery, so
+  it is never the test.
+
+  ```typescript
+  import { matchKind, readFailure } from '@mcp-abap-adt/auth-errors';
+
+  try {
+    await provider.getTokens({ signal });
+  } catch (thrown) {
+    const error = readFailure(thrown, 'token-request');
+    const advice = matchKind(error, {
+      configuration: (e) => `fix ${e.facts.fields.join(', ')}`,
+      'interactive-login': (e) => (e.facts.outcome === 'aborted' ? 'cancelled' : e.reason),
+      'request-failed': (e) => `${e.reason}${e.facts.oauthError ? ` [${e.facts.oauthError}]` : ''}`,
+      // … every kind: a missing handler does not compile …
+      unknown: (e) => e.reason,
+    });
+  }
+  ```
+
+  Switch on `kind` with one of auth-errors' two exhaustiveness patterns —
+  `matchKind(error, handlers)`, or a `switch` whose `default` calls
+  `unreachableKind(error)` — so that a kind added by a later major stops your
+  build instead of falling through at run time. A plain `switch` is not
+  checked.
+- **The classes are gone.** `TokenProviderError`, `ValidationError`,
+  `RefreshError`, `SessionDataError`, `ServiceKeyError`, `BrowserAuthError`,
+  `AssertionValidationError`, `CertificateMaterialError`,
+  `ClientAuthenticationError`, `ClientAuthenticationResultError`,
+  `BasicClientIdError` and `TokenEndpointError` are no longer exported, and
+  `AssertionCheck` is imported from `@mcp-abap-adt/interfaces-auth`. What each
+  carried is a kind and its facts:
+
+  | 5.x | 6.0.0 |
+  |---|---|
+  | `ValidationError` (`missingFields`) | `configuration` — `facts.case`, `facts.fields` ([Configuration errors](#configuration-errors)) |
+  | `BrowserAuthError` | `interactive-login` — `facts.outcome` (`aborted`, `port-in-use`, `identity-provider-refused`, `busy`, `disposed`, `no-terminal`, …) |
+  | `TokenEndpointError` (`status`, `oauthError`, `code`); the reduced `AxiosError` | `request-failed` — `facts.operation`, `facts.problem`, `facts.status`, `facts.oauthError`, `facts.code`; `tls` — `facts.code` |
+  | `AssertionValidationError` (`check`) | `saml-assertion` — `facts.rule`, `facts.check` ([Refusal messages](#refusal-messages)) |
+  | `CertificateMaterialError` (`incomplete`, `expired`) | `client-certificate` — `facts.problem` (`incomplete`, `unusable`, `expired`) |
+  | `ClientAuthenticationError`, `ClientAuthenticationResultError`, `BasicClientIdError` | `client-authentication` — `facts.problem` (`signing-key-unusable`, `result-unsendable`, `basic-client-id-colon`) |
+  | `RefreshError` | `credential-refused` `refresh-token` — with `refreshThenLogin()`, as before, a refused refresh falls back to one login inside the provider |
+  | `SessionDataError`, `ServiceKeyError` | nothing: they had no producer |
+  | `error.code` (`TOKEN_PROVIDER_ERROR_CODES`, `ASSERTION_ERROR_CODES`) | `kind` — the constants are gone from interfaces-auth 6.0.0 |
+- **`refusalWords(error, what)` → `classify(error, operation)`**
+  (auth-errors), then `.reason` / `.hint`. `what` was free text; an operation
+  is one of the closed list `OPERATIONS` of interfaces-auth
+  (`'loading-certificate'`, `'token-request'`, …). A caller that passed a
+  `what` of its own and wants no operation's words passes
+  `'unfamiliar-error'`, which answers "an authentication error of a kind this
+  version does not know" and no hint — a TLS failure's `NODE_EXTRA_CA_CERTS`
+  hint included; an operation of the list keeps its words and hints. See
+  [Relaying a refusal](#relaying-a-refusal-classify).
+- **A refusal is frozen, and only a minted one is trusted.** `AuthOutcome`'s
+  refusal is the `IAuthProviderError` itself (`IAuthRefusal =
+  IAuthProviderError`): `refusal.reason` and `refusal.hint` read as before, and
+  `refusal.kind` / `refusal.facts` say what happened. Do not copy or edit one:
+  it is frozen, so a mutation throws in strict code, and a copy (`{ ...refusal }`,
+  a `structuredClone`, a JSON round-trip) is no longer minted — wherever it is
+  read again it is rebuilt from its `kind` and `facts`, its diagnostics
+  dropped; a provider of yours answering an outcome that is not one is
+  answered `unknown`. Build an error you need with auth-errors' `authError`
+  builders.
+- **The words changed; match on facts.** Every reason and hint is rendered
+  from the kind and its facts. A token request refused reads `the passcode
+  exchange failed (HTTP 401)` instead of `Passcode exchange failed (401)`; an
+  unfamiliar thrown value `loading the certificate failed (unknown error,
+  ENOENT)` instead of naming a class or your `what`; a SAML refusal names its
+  rule and no value of the document; the SNC library's path is a diagnostic,
+  not a word. Code that matched words must match `kind` and `facts` instead.
+- **No `timeoutMs` anywhere.** `DEFAULT_LOGIN_TIMEOUT_MS`, every strategy's
+  `timeoutMs`, the factories' `{ timeoutMs }` and the 30 s (browser) and 300 s
+  (passcode) defaults are removed, and so are the client credentials
+  request's 30 s timeout and the SNC registry query's 5 s. **A consumer
+  passing `timeoutMs` must pass `signal: AbortSignal.timeout(ms)` instead —
+  to the strategy, or to `inBrowser` / `fromTerminal` as `{ signal }`; one
+  passing nothing now waits until it aborts** — a login until its result or
+  the identity provider's refusal, a request until the server or the OS ends
+  it. See [Cancelling a login](#cancelling-a-login).
+- **A browser that does not open is no longer an error.** A browser that
+  throws or rejects (yours, or a shipped one) gets one log line in fixed
+  words and the authorization URL as a prompt on stderr, and the login
+  **keeps waiting**: the callback still listens, so the URL shown — the only
+  way to finish where no browser can be opened (SSH, a host without a
+  desktop) — is live. The `browser-launch-failed` outcome is gone, and a
+  launch failure never ends the login; code that matched it must stop. Bound
+  the login with a `signal` (`AbortSignal.timeout(ms)`), or it ends on its
+  result, the identity provider's refusal or your abort.
+- **A login is bound to its attempt (login CSRF).** Every URL
+  `AuthorizationCodeProvider` and `OidcBrowserProvider` build carries `state`
+  (and, for UAA, a PKCE challenge, S256); a configured `authorizationUrl`
+  without `state` gets the provider's, which the identity provider must echo.
+  The shipped protocols accept a redirect — a code or an `?error=` — only with
+  that `state`; a consumer's own strategy that receives the redirect itself
+  must check `state` itself. **The shipped listeners bind loopback only**,
+  and answer only `Host: localhost` / `127.0.0.1` / `[::1]` with their port,
+  from a loopback peer: a browser on another machine reaches them through an
+  SSH tunnel, or through a transport of your own. The paste page's `/submit`
+  needs the form's token. See [Login CSRF: `state`, PKCE and where the
+  callback listens](#login-csrf-state-pkce-and-where-the-callback-listens),
+  and [Interactive login: strategies by
+  composition](#interactive-login-strategies-by-composition) below for what
+  changed in the strategies.
+- **Your strategies end on the request's signal.** Every
+  `AuthorizationRequest` carries `signal`. `externalCodeStrategy`'s `provide`
+  is `(authorizationUrl, signal)`, and a manual strategy's `read(prompt,
+  signal)` must settle when its signal aborts: one that ignores it now blocks
+  that strategy's `authorize` — and the next login, which waits for the
+  aborted one to settle — where 5.x settled through a race.
+- **The server's text is gone, also from logs.** A token endpoint's
+  `error_description` and `error_uri` are read by nothing, in errors and in
+  log lines, by default and with `authDebug`; only a registered OAuth `error`
+  survives, as `facts.oauthError` (5.4.2's `err.response.data.error`). A
+  consumer that read `error_description` from a log or an error no longer
+  finds it. `authDebug: true` on a token provider adds, to its one line for a
+  failed request, the secrets the request sent — each prepared: at most its
+  first 4 and last 4 characters plus its length, the length only below 16
+  characters — and never the server's text. See [Debug Logging](#debug-logging).
+- **A subclass of `BaseTokenProvider`.** `performLogin()` is now
+  `performLogin(attempt)` — hand `attempt.signal` to whatever the login waits
+  on — and `performRefresh()` is `performRefresh(refreshToken, signal,
+  dispatched)`: send the refresh token you are given — reading
+  `this.refreshToken` instead may send one the renewal strategy discarded, a
+  spent one — and call `dispatched()` right before the request leaves (pass
+  `this.refreshSiteOptions(dispatched)` to a shipped token site, which does
+  it). A refresh that never calls `dispatched()` counts as never sent: an
+  abort then never applies the decision's `ifCut`, and its refresh token
+  stays held although the server may have spent it. A subclass's constructor passes `renewal` through its config like any other
+  token provider. A provider of your own extends `AuthProviderBase` and
+  implements `onPrepare()`, `onEstablish(logon)`, `onAuthorize(request)` and
+  `onRejected(rejection)`; the base owns the four moments and runs each
+  inside auth-errors' `guard`. See
+  [Writing a provider of your own](#writing-a-provider-of-your-own-authproviderbase).
+- **A cut refresh: the strategy decided before it was sent.** A refresh
+  whose callers all aborted after it was sent runs on; what becomes of the
+  refresh token it sent is the `ifCut` of the decision that started it.
+  `refreshThenLogin()` and `refreshOnly()` say `'discard'` — that refresh
+  token is never sent again by the provider, so with `refreshThenLogin()`
+  the next renewal may log in, as in 5.x; a strategy of your own may say
+  `'keep'`. A refresh aborted before it was sent touches no refresh token.
+  See [Cancelling a login](#cancelling-a-login).
+- **A declined SAML login is refused `declined`.** The signed-Response
+  validator reads `Status` right after the signature checks, before counting
+  the `Assertion`, so a login the identity provider declined — which carries
+  no Assertion — is refused `declined` with its status code, where 5.x
+  refused it as carrying no direct-child Assertion (`no-direct-assertion`).
+- **Device polling follows RFC 8628.** `slow_down` adds 5 s to every later
+  poll, cumulatively; an `interval` that is not a finite, non-negative number
+  is 5 s; `authorization_pending` / `slow_down` keep the poll going only with
+  status `400`.
+
+**What is no longer available anywhere** (each decided with the change; the
+facts that remain are listed with it):
+
+- the token endpoint's `error_description` and `error_uri` (the registered
+  `error` stays, as `facts.oauthError`);
+- a `cause` on any error, and the identity of a thrown value: a strategy's,
+  loader's or presenter's own error reaches you classified, never as itself,
+  and no `AxiosError` escapes;
+- a rejected configuration value — the callback `port`, the SNC `qop`, a
+  `clockSkewMs` (the field name stays, and for `qop` the allowed values);
+- each configuration error's own sentence, replaced by its case's fixed words;
+- the text of an exception inside a SAML refusal (xml-crypto's, the XML
+  parser's);
+- a document value that fails admission (a control, bidirectional or
+  line-separator character, or the wrong shape) — dropped, not escaped;
+- values moved from the words to `diagnostics` — the SNC library path, each
+  SNC candidate's path, the two URIs of an ACS or redirect mismatch: shown by
+  `renderDiagnostics(error)`, not by `reason` / `hint`;
+- your own `what` in a relayed refusal (an operation of the closed list
+  instead);
+- the class label in "`<what>` failed (`<Class>`)", and which of the abort
+  moments or empty inputs a login met;
+- `error.code`, `missingFields`, `check` as a property,
+  `CertificateMaterialError.incomplete` / `.expired` / `.words`,
+  `TokenEndpointError.status` / `.oauthError` / `.code` — each now a fact;
+- the diagnostics of an error that crosses another installed copy of
+  auth-errors, or that was not minted (its kind and facts stay);
+- every built-in login timeout and its message ("Authentication timeout
+  after N seconds", "did not arrive in time");
+- the authorization URL in a log line: it is prompted on stderr only, and
+  the logger gets "the authorization URL was shown";
+- the log lines of 5.x's `'auto'` browser, and the `DISPLAY=:0` 5.x set for
+  `'system'` and a named browser: a browser has no logger, and the package
+  writes nothing into `process.env`;
+- the `open` and `express` dependencies.
+
+### Interactive login: strategies by composition
+
+An authorization strategy is now **composed of three parts**, each a
+contract of `@mcp-abap-adt/interfaces-auth` 7.4.0 (`IBrowser` is 7.5.0's): a **presentation** (how
+the URL reaches the user), a **transport** (how the user's answer comes
+back) and a **protocol** (what an answer is and how it is checked). The
+named strategies are compositions of the shipped parts, under the same
+names (see [Composing a strategy from parts](#composing-a-strategy-from-parts)).
+What a consumer on 5.x must now do:
+
+- **`browserCallbackStrategy` / `oidcCallbackStrategy` /
+  `samlCallbackStrategy` with `port`, `signal`, `remoteHint`: no change.**
+  `browser` is an `IBrowser`, no longer a string — no browser is named by a
+  string anywhere — and you pick it for the platform you run on:
+
+  | 5.x | Linux | macOS | Windows |
+  |---|---|---|---|
+  | `'system'`, `'auto'` | `linuxDefaultBrowser()` | `macDefaultBrowser()` | `windowsDefaultBrowser()` |
+  | `'chrome'` | `linuxBrowser('google-chrome')` | `macBrowser('Google Chrome')` | `windowsBrowser('chrome')` |
+  | `'edge'` | `linuxBrowser('microsoft-edge')` | `macBrowser('Microsoft Edge')` | `windowsBrowser('msedge')` |
+  | `'firefox'` | `linuxBrowser('firefox')` | `macBrowser('Firefox')` | `windowsBrowser('firefox')` |
+  | any other name (`'msedge'` included) — 5.x opened the system default browser | `linuxDefaultBrowser()` | `macDefaultBrowser()` | `windowsDefaultBrowser()` |
+  | `'none'`, `'headless'`, absent | no `browser` | no `browser` | no `browser` |
+
+  ```typescript
+  // 5.x: browserCallbackStrategy({ browser: 'system' })
+  browserCallbackStrategy({ browser: linuxDefaultBrowser() })
+  ```
+
+  **There is no platform check:** each factory runs exactly its program,
+  and on another OS it does whatever a program of that name does there —
+  see [The six shipped browsers](#the-six-shipped-browsers). Pick the one
+  for your platform. A consumer whose configuration holds a browser name
+  maps it itself.
+- **No list of candidates.** 5.x handed a named browser to the `open`
+  package, which on Linux took the first of `google-chrome`,
+  `google-chrome-stable`, `chromium`, `chromium-browser` (for `'chrome'`) or
+  `microsoft-edge`, `microsoft-edge-dev` (for `'edge'`) that was installed,
+  and `firefox` for `'firefox'`; only when `open` could not be loaded did a
+  shell fallback try its own list. Now pass the executable that is installed
+  — `linuxBrowser('google-chrome-stable')`, `linuxBrowser('chromium')`,
+  `linuxBrowser('/usr/bin/firefox-esr')` — a name on `PATH` or an absolute
+  path, as given.
+- **`'auto'` and `'system'` are one: the platform's default browser.** The
+  log lines 5.x's `'auto'` wrote while it tried launchers are gone (an
+  `IBrowser` has no logger); a browser that fails shows only as the
+  composer's fixed-words line `Failed to present the authorization URL: …`
+  and the URL prompted on stderr.
+- **No `DISPLAY=:0`.** 5.x set `DISPLAY=:0` on Linux, for `'system'` and a
+  named browser, when neither `DISPLAY` nor `WAYLAND_DISPLAY` was set. The package now writes nothing into
+  `process.env`: without a display the launcher does what it does there
+  (`xdg-open` fails, or starts a console browser it finds); a launch that
+  fails has the URL shown once on stderr while the login waits. A display of your choice — or a remote Chrome,
+  a console browser, WSL, an ssh-forwarded X — is a browser of your own
+  ([A browser of your own](#a-browser-of-your-own)).
+- **The `open` package is gone** (and `express`): every launch is the
+  package's own, a program started with an argument array, never a shell. A
+  shipped browser binary (`linuxBrowser`) resolves as soon as it has started;
+  a hand-off launcher (`xdg-open`, `open`, `rundll32`, PowerShell's
+  `Start-Process`) when it exits `0`.
+- **`openUrl` is gone.** One hook per decision: a callback that only opened
+  the URL becomes an `IBrowser`, passed as `browser`; one that needed the
+  redirect URI, or showed the URL in its own UI, becomes
+  `consumerPresentation({ show })`, composed with `composeAuthorization`
+  ([Where the URL is shown](#where-the-url-is-shown)).
+
+  ```typescript
+  // 5.x: browserCallbackStrategy({ browser: 'system', openUrl: (url) => myOpen(url) })
+  browserCallbackStrategy({ browser: { open: (url) => myOpen(url) } })
+  ```
+
+  In TypeScript `openUrl` no longer compiles. **From plain JavaScript it is
+  an unknown key, ignored without a word** — so a 5.x JavaScript consumer
+  that used `openUrl` to keep the URL (and the `state` it carries) off stderr
+  now gets them on stderr, unless it passes its own `IBrowser` or
+  presentation.
+- **`callbackServer` is gone.** A receiver of your own is an
+  `IAnswerTransport`, composed: `composeAuthorization({ presentation,
+  transport: myTransport, protocol: oauthCode(), endpoint: '/callback' })`.
+  The transport hands each answer to the protocol's judge and never returns
+  a payload: the composer takes only the payload the protocol accepted
+  ([A transport of your own](#a-transport-of-your-own)). The
+  `BrowserCallbackStrategy` class, `BrowserCallbackStrategyOptions`,
+  `withBrowserCallbackServer`, `withOidcCallbackServer` and
+  `withSamlCallbackServer` are removed — use `composeAuthorization` and the
+  parts. `CallbackServerFactory`, `ICallbackServerOptions` and
+  `ICallbackServerHandle` stay in interfaces-auth 7.4.0, deprecated and
+  implemented by nothing.
+- **A listener on another address is your own transport.** The shipped
+  listeners bind loopback only and advertise only what they bind. A
+  listener on a network address, a hostname, a wildcard, behind a proxy or a
+  translated port is an `IAnswerTransport` of yours, which builds its
+  redirect from its own origin and the endpoint path — or keep the loopback
+  listener and tunnel (`ssh -L <port>:localhost:<port> <this machine>`; see
+  [The SSH tunnel](#the-ssh-tunnel)). (The `host` and `allowedHosts` options
+  of the 6.0.0 prereleases never shipped.)
+- **The terminal and consumer-code strategies need `redirectUri`.**
+  `manualPasteStrategy()`, `manualSamlResponseStrategy()` and
+  `externalCodeStrategy({ provide })` without `redirectUri` throw
+  `configuration` `required-fields-missing` naming `redirectUri`: pass the
+  redirect registered with the identity provider (the ACS for SAML). Their
+  `http://localhost:61001/callback` default is gone — it reached whatever held
+  port 61001. `manualPasscodeStrategy`'s `redirectUri` is gone (it was
+  unused). `staticCodeStrategy` is unchanged.
+- **`externalCodeStrategy` takes OAuth codes only.** A SAML response or a
+  passcode handed over by your code composes `consumerHandoff` with
+  `samlResponse()` or `passcode()`:
+
+  ```typescript
+  const { presentation, transport } = consumerHandoff({
+    redirectUri: acsUrl,
+    provide: (url, signal) => ourSsoProxy.login(url, signal),
+  });
+  const strategy = composeAuthorization({
+    presentation, transport, protocol: samlResponse(), endpoint: '/callback',
+  });
+  ```
+- **The paste page's `/submit` is a `POST`** (urlencoded, `form_token` and
+  `input`, up to 5 MB), and every listener serves the paste page for its
+  protocol — OIDC and SAML too, which had none. A page of yours that `GET`s
+  `/submit` must `POST`.
+- **Overlap is `busy`.** A second `authorize` on one strategy while the
+  first runs is `interactive-login` `busy`, for every composition — two
+  terminal readers on one stdin are never right.
+- **Every redirect callback is closed until the URL exists**, the SAML one
+  included; there is no gate to opt out of.
+- **The authorization URL is prompted on stderr only.** 5.x wrote the prompt
+  to the logger's `info` when there was one. The URL carries `state`, and a
+  configured one may carry anything, so it reaches no log line: the logger
+  gets "the authorization URL was shown". Where the callback waits and the
+  SSH hint still go to the logger (stderr without one). A consumer whose
+  stderr is collected into its logs — an MCP server, say — shows the URL in
+  its own UI with `consumerPresentation`.
+- **A configured `authorizationUrl` without `state` gets one.** The provider
+  appends its minted `state` to it, so the identity provider must echo it
+  (RFC 6749 §4.1.2); a URL that already carries one `state` keeps it. No
+  redirect is accepted without this attempt's `state`.
+- **A strategy of your own written from scratch** (`IAuthorizationStrategy`)
+  is unaffected: `IAuthorizationStrategy` and `AuthorizationRequest` did not
+  change.
+
 ## Migrating to 5.0.0 — a migration, not an update
+
+> This section and the migrations after it describe earlier majors: their
+> code shows the API of the version they migrate to, and the version they
+> migrate from. Coming from one of them, apply them in order and then
+> [Migrating to 6.0.0](#migrating-to-600--the-error-contract) — above all
+> for `browser`, now an `IBrowser` rather than a name, and for the manual and
+> consumer-code strategies, which now require `redirectUri`.
+
+*History: what 5.0.0 changed. Where 6.0.0 changed it again — `onTokens`
+(now `persistence`), the `timeoutMs` of the manual strategies,
+`BrowserAuthError`, the connection version —
+[Migrating to 6.0.0](#migrating-to-600--the-error-contract) is what holds.*
 
 5.0.0 is not an incremental release. Every provider here now implements
 `IAuthProvider` (`@mcp-abap-adt/interfaces-auth` 3.0.0) and can be handed to
@@ -106,7 +562,27 @@ const provider = SncLogonProvider.forSecureLoginClient({
 `DefaultSncLibraryLocator(system, sncLib)` and `[SecureLoginClientProbe(system)]`
 — "this machine, library discovery, the Secure Login Client probe". `qop`
 defaults to `'9'` (maximum, one of `'1' | '2' | '3' | '8' | '9'`), and
-`myName` is sent only when set.
+`myName` is sent only when set. A missing `partnerName` or another `qop` is
+thrown by the constructor as an `AuthProviderFailure` of kind `configuration`
+(`snc-partner-name-missing`, `snc-qop-invalid` — see the configuration errors
+table); the rejected `qop` value is never echoed.
+
+**No timeout of its own.** `prepare()` may wait on the machine: on Windows the
+locator and the Secure Login Client probe read the registry through
+`reg.exe` (by its absolute path under `%SystemRoot%\System32`, no shell).
+Since 6.0.0 that query has no built-in timeout — it runs until `reg.exe`
+answers, or until the provider's signal aborts, which kills the child. Pass
+`signal` (in the config, or to `forSecureLoginClient`) or `attach(signal)`
+for each party sharing the provider; `prepare()` then ends Oops `aborted`
+(`interactive-login`) once every attached party has aborted. With no signal
+it waits for `reg.exe`; bounding it is the consumer's decision
+(`AbortSignal.timeout(ms)`). A locator or probe of your own receives the same
+signal as `locate(signal)` / `appliesTo(path, signal)`. The abort is tested
+with a real child process on a POSIX system, and measured on a Windows host
+(2026-10-07, Windows 11 x64): the library found through the real `reg.exe`
+(`HKLM\Software\SAP\SecureLogin`, `InstallPath64`), and an abort answering
+`aborted` with the `reg.exe` child ended and none left running. Localised
+`reg.exe` output is not measured.
 
 The explicit assembly, for a different SNC product, or a locator/probe of
 your own (no implicit defaults — a constructor takes every collaborator):
@@ -135,16 +611,30 @@ process) plus `lib\sapcrypto.dll`, then the macOS bundle `/Applications/Secure
 Login Client.app/Contents/MacOS/lib/libsapcrypto.dylib`. An unusable
 candidate — missing, not a recognised library, or built for the wrong
 architecture — is **skipped**, its reason kept, rather than failing the whole
-search; empty or whitespace environment variables count as unset. Nothing
-usable → `prepare()` is Oops listing every candidate tried, each as its source,
-its path and its reason, e.g. "no usable SNC library was found: SNC_LIB
-`<path>` (wrong architecture); registry `<path>` (missing)" — the source is one
+search; empty or whitespace environment variables count as unset, and the
+registry value is trimmed before it becomes a path. Nothing usable →
+`prepare()` is Oops, kind `snc`, variant `library-not-found`, listing every
+candidate tried by its source and its reason, e.g. "no usable SNC library was
+found: SNC_LIB (wrong architecture); registry (missing)" — the source is one
 of `SNC_LIB_64`, `SNC_LIB`, `registry`, `macOS bundle`, and the reason one of
-`missing`, `not a library`, `wrong architecture`; no error message is ever
-part of it, and it needs no logger. An **explicit** `sncLib` is the only
-candidate: unusable, and the Oops names that one — "no usable SNC library was
-found: sncLib `<path>` (missing)" — with no fallback to automatic discovery.
-The hint is always "set sncLib to the SNC (GSS) library of your SNC product".
+`missing`, `not a library`, `wrong architecture`. **Since 6.0.0 the paths are
+not in the words** (they are local values, kept apart so a logger can drop
+them): `error.facts.candidates[i]` holds each source, reason and — for a wrong
+architecture — the architectures the file was built for, `facts.processArch`
+this process's, and `error.diagnostics.candidatePaths[i]` the path tried,
+index for index (`null` for a path the admission check refused, e.g. one
+holding a control character). `renderDiagnostics(error)` prints them as
+`candidates: SNC_LIB "C:\\…\\sapcrypto.dll" (wrong architecture); registry
+"C:\\…\\sapcrypto.dll" (missing)`. No error message is ever part of it, and it
+needs no logger. An **explicit** `sncLib` is the only candidate: unusable,
+and the Oops names that one — "no usable SNC library was found: sncLib
+(missing)", the path in diagnostics — with no fallback to automatic
+discovery. With no candidate at all: "no usable SNC library was found: no
+candidate (SNC_LIB_64 and SNC_LIB are unset and no Secure Login Client
+installation was found)". A locator of your own that throws gets "no usable
+SNC library was found" alone: the candidate facts and paths are read only
+from `DefaultSncLibraryLocator`'s own failure. The hint is always "set sncLib
+to the SNC (GSS) library of your SNC product".
 Architecture comes from the
 file header — PE `Machine`; Mach-O thin and universal (`FAT_MAGIC` /
 `FAT_MAGIC_64`); ELF `e_machine` — because the trap this guards against is
@@ -175,20 +665,42 @@ product in the log, never in a refusal.
 as a generic communication error, so the cause is found by searching the GSS
 error text (never returned; only fixed wording and an allowlisted key go out):
 
-- **`A2200019`** — reason "the SNC library has no credential to present
-  (A2200019)"; hint "log on in the Secure Login Client, to the profile used
-  for SAP applications" when the Secure Login Client probe applied, otherwise
-  "make sure the SNC product behind `<library>` is logged on". Measured
+- **`A2200019`** — kind `snc`, variant `no-credential`; reason "the SNC
+  library has no credential to present (A2200019)"; hint "log on in the
+  Secure Login Client, to the profile used for SAP applications" when the
+  Secure Login Client probe applied, otherwise "make sure the SNC product
+  behind the SNC library is logged on" (since 6.0.0 the library's path is
+  `error.diagnostics.library`, not a word). Measured
   2026-09-29: with the client logged out, closing its logon window failed the
   RFC open with `GSS-API(min): A2200019:Operation aborted by user or
   application`, and `rejected()` answered with this reason.
-- **`SNCERR_INIT`** (or "gssapi library invalid/missing") — reason "the RFC
-  SDK could not initialise `<library>` as its SNC library (SNCERR_INIT)", no
-  hint — usually the architecture mismatch above, if a mismatched library
-  somehow reached this point.
-- anything else — reason "SNC logon refused", plus the SDK's error key in
-  parentheses when it is on the RFC-key allowlist (`RFC_LOGON_FAILURE`,
-  `RFC_COMMUNICATION_FAILURE`, …) — never the underlying message or object.
+- **`SNCERR_INIT`** (or "gssapi library invalid/missing") — variant
+  `library-init-failed`; reason "the RFC SDK could not initialise the SNC
+  library (`<archs>`) as its SNC library (SNCERR_INIT)", the path in
+  `error.diagnostics.library`, no hint — usually the architecture mismatch
+  above, if a mismatched library somehow reached this point.
+- `RFC_LOGON_FAILURE`, or a rejection with neither a status nor an RFC key —
+  variant `logon-refused`; reason "SNC logon refused", plus the key in
+  parentheses (and as `facts.rfcKey`) when there is one — never the
+  underlying message or object.
+- any other status or allowlisted RFC key (`RFC_CLOSED`,
+  `RFC_COMMUNICATION_FAILURE`, …) — the neutral `system-refused` /
+  `rfc-failure` of rule 5, not an `snc` refusal. Measured 2026-10-07
+  (Windows 11, Secure Login Client, Kerberos profile): a wrong partner name
+  failed the RFC open with `RFC_CLOSED` and no GSS code the provider
+  explains, and so did, once, a logon with the client stopped and no
+  credential to present; `rejected()` answered `system-refused` /
+  `rfc-failure` both times.
+
+The GSS codes are found by plain substring search, never a regular
+expression over the SDK's text. `establish()` before `prepare()` is
+`not-prepared` ("the SNC provider is not prepared" — "connect() prepares it
+first"); a locator that answers no path is "no usable SNC library was found:
+the locator returned no path"; anything else escaping a moment is `unknown`,
+"the SNC provider failed while `<moment>` (unknown error)". A product probe
+that throws is logged ("an SNC product probe failed: the probe failed (unknown
+error)") and names nothing; "SNC library not found: `<reason>`" is logged with
+the paths only as the line's `diagnostics` field.
 
 ## Installation
 
@@ -199,37 +711,49 @@ npm install @mcp-abap-adt/auth-providers
 ## Overview
 
 Every provider here is an `IAuthProvider` (`@mcp-abap-adt/interfaces-auth`
-3.1.0) — `prepare()`, `establish()`, `authorize()`, `rejected()`, each answering
-an `AuthOutcome` and never throwing — handed to the process as it is:
+7) — `prepare()`, `establish()`, `authorize()`, `rejected()`, each answering
+an `AuthOutcome` and never throwing — handed to the process as it is. An
+`AuthOutcome` is `{ ok: true }` or `{ ok: false, refusal }`, the refusal an
+`IAuthProviderError` minted by `@mcp-abap-adt/auth-errors`: its `kind` and
+`facts` say what happened, `reason` / `hint` say it in words (see
+[Error Handling](#error-handling)):
 
 ```typescript
-import { AuthorizationCodeProvider } from '@mcp-abap-adt/auth-providers';
+import { AuthorizationCodeProvider, refreshThenLogin } from '@mcp-abap-adt/auth-providers';
 
 const provider = AuthorizationCodeProvider.inBrowser({
   uaaUrl: 'https://...',
   clientId: '...',
   clientSecret: '...',
+  renewal: refreshThenLogin(), // required: how every renewal proceeds
 });
-// A connection 10.0.0 process calls prepare() on connect, authorize() per
-// request, and rejected() on a 401: one renewal — a refresh, else one login.
+// A process of connection 13.0.0 (released after this package's 6.0.0)
+// calls prepare() on connect, authorize() per request, and rejected() on a 401: one renewal through the renewal
+// strategy — with refreshThenLogin(), a refresh, else one login.
 ```
 
 ### What `rejected()` answers
 
-A provider blames its credential — and a token provider renews — only when the
-rejection says the credential was refused: status `401`, or the RFC SDK's
-`RFC_LOGON_FAILURE`. Anything else is answered with a neutral refusal that
-names only the status or the SDK key, and nothing is renewed:
+A provider blames its credential only when the rejection says the credential
+was refused: status `401`, or the RFC SDK's `RFC_LOGON_FAILURE`. Anything else
+is answered with a neutral refusal that names only the status or the SDK key.
+For a token provider this is a **reading** its renewal strategy receives
+(`cause.reading`: `credential`, `not-credential`, `unknown`): the shipped
+strategies stop on `not-credential` without a step and answer the neutral
+refusal, so nothing is renewed; a strategy of your own may renew anyway (see
+[Renewal strategy](#renewal-strategy)):
 
-| The rejection | Basic, certificate, SAML cookies, fixed token | Token providers, `TokenAuthProvider.from` |
-|---|---|---|
-| `401`, `RFC_LOGON_FAILURE` | their own refusal ("the user or password was refused", …) | one renewal; Ok only if the credential changed |
-| `403` | "the credential was accepted, but the user is not authorized (403)" | the same, no renewal |
-| `3xx` | "the system redirected instead of accepting the credential (3xx)" | the same, no renewal |
-| `5xx` | "the system failed (5xx), not the credential" | the same, no renewal |
-| any other status | "the system answered N, which is not a credential refusal" | the same, no renewal |
-| another RFC key | "the RFC logon failed (KEY), not as a credential refusal" | the same, no renewal |
-| neither a status nor a known key | "the logon failed (unknown error)" | one renewal — the rejection cannot tell |
+<!-- generated:refusal-table rejected -->
+| The rejection | Kind | Basic, certificate, SAML cookies, fixed token | Token providers, `TokenAuthProvider.from` |
+|---|---|---|---|
+| `401`, `RFC_LOGON_FAILURE` | `credential-refused` | their own refusal: Basic "the user or password was refused"; certificate "the client certificate was refused"; SAML cookies "the SAML session was refused or has expired"; fixed token "the token was refused" | one renewal; Ok only if the credential changed |
+| `403` | `system-refused` `not-authorized` | "the credential was accepted, but the user is not authorized (403)" — "check the user's authorizations in the system" | the same, no renewal |
+| `3xx`, e.g. `302` | `system-refused` `redirected` | "the system redirected instead of accepting the credential (302)" — "the service may require another logon procedure (single sign-on, an identity provider)" | the same, no renewal |
+| `5xx`, e.g. `503` | `system-refused` `system-failed` | "the system failed (503), not the credential" — "try again later" | the same, no renewal |
+| any other status, e.g. `404` | `system-refused` `other-status` | "the system answered 404, which is not a credential refusal" | the same, no renewal |
+| another RFC key, e.g. `RFC_COMMUNICATION_FAILURE` | `system-refused` `rfc-failure` | at a logon "the RFC logon failed (RFC_COMMUNICATION_FAILURE), not as a credential refusal"; at a request "the RFC call failed (RFC_COMMUNICATION_FAILURE), not as a credential refusal" | the same, no renewal |
+| neither a status nor a known key | `system-refused` `unknown` | at a logon "the logon failed (unknown error)"; at a request "the request was refused (unknown error)" | one renewal — the rejection cannot tell |
+<!-- /generated:refusal-table rejected -->
 
 `SncLogonProvider` explains a GSS code in the error first (`A2200019`,
 `SNCERR_INIT`) — the SDK reports SNC logon failures as a communication
@@ -250,7 +774,7 @@ The token providers also implement `IRefreshableTokenProvider` —
   (RFC 7522)
 - **Saml2PureProvider** — a SAML assertion exchanged for session cookies
 
-Providers are configured via constructor; `getTokens()` takes no parameters and handles refresh/login internally. `refreshTokens()` obtains a new token even while the cached one looks valid — what a caller holding a 401 needs.
+Providers are configured via constructor; `getTokens()` handles refresh/login internally and takes only an optional `{ signal }` — this caller's cancellation (see [Cancelling a login](#cancelling-a-login)). `refreshTokens()` obtains a new token even while the cached one looks valid — what a caller holding a 401 needs. Either throws only an `AuthProviderFailure`.
 
 A token is only half of it: whether ADT accepts it depends on the XSUAA client,
 the trust and the user configured on the SAP side. What each provider needs
@@ -264,8 +788,10 @@ Since 2.0.0 an interactive login is conducted by an **authorization strategy**
 (`IAuthorizationStrategy` from `@mcp-abap-adt/interfaces-auth`) passed as
 `authorization`. The provider owns what it can compute — the authorization URL
 and the token exchange; everything between them (reaching the URL, receiving
-what comes back, the port, the timeout) belongs to the strategy, which a
-consumer may replace wholesale. See
+what comes back, the port) belongs to the strategy, which a consumer may
+replace wholesale. How long to wait is no one's choice but the consumer's:
+a login ends on its result, the identity provider's refusal or the consumer's
+`AbortSignal`. See
 [Choosing an authorization strategy](#choosing-an-authorization-strategy).
 
 Since 5.3.0 a token provider's **client** may authenticate with a client
@@ -280,6 +806,8 @@ provider to trust. This is a breaking change: a 3.x SAML configuration fails at
 construction. See [SAML assertion validation](#saml-assertion-validation).
 
 If you are on an earlier version, see
+[Migrating to 6.0.0](#migrating-to-600--the-error-contract),
+[Migrating to 5.0.0](#migrating-to-500--a-migration-not-an-update),
 [Upgrading from 4.0 to 4.1](#upgrading-from-40-to-41),
 [Migrating from 3.x to 4.0](#migrating-from-3x-to-40),
 [Migrating from 2.x to 3.0](#migrating-from-2x-to-30) and
@@ -335,10 +863,11 @@ This package is responsible for:
 
 This package interacts with external packages **ONLY through interfaces**:
 
-- **`@mcp-abap-adt/auth-broker`**: Uses interfaces (`ITokenProvider`, `IAuthorizationConfig`) - does not know about `AuthBroker` implementation
-- **`@mcp-abap-adt/logger`**: Uses `Logger` interface for logging - does not know about concrete logger implementation
-- **`@mcp-abap-adt/connection`**: Uses connection utilities for token validation - interacts through well-defined functions
-- **No direct dependencies on stores**: All interactions with stores happen through interfaces passed by consumers
+- **`@mcp-abap-adt/interfaces-auth`**: the contracts it implements and is handed — `IAuthProvider`, the token provider and strategy contracts (the authorization strategy's parts and `IBrowser` among them), `IClientAuthentication`, the assertion validator and replay store, and the error contract's types and allowlists (`IAuthProviderError`, its kinds and facts)
+- **`@mcp-abap-adt/interfaces-auth-sap`**: the XSUAA configuration and `ICertificateMaterialLoader`
+- **`@mcp-abap-adt/interfaces-utils`**: `ILogger` — the package logs only through the logger it is given, never through a concrete logger
+- **`@mcp-abap-adt/auth-errors`**: the one runtime dependency of the error contract — every refusal and every throw is minted there, and `guard` is the boundary of each moment (`AuthProviderBase`)
+- **No dependency on the broker, the stores or `@mcp-abap-adt/connection`**: they use this package through those contracts, never the reverse
 
 ## Usage
 
@@ -350,21 +879,26 @@ import {
   AuthorizationCodeProvider,
   ClientCredentialsProvider,
   browserCallbackStrategy,
+  linuxDefaultBrowser,
+  refreshThenLogin,
 } from '@mcp-abap-adt/auth-providers';
 
 // User token via authorization_code (browser flow)
 const authCodeBroker = new AuthBroker({
   tokenProvider: new AuthorizationCodeProvider({
+    renewal: refreshThenLogin(),
     uaaUrl: 'https://...',
     clientId: '...',
     clientSecret: '...',
-    authorization: browserCallbackStrategy({ browser: 'system' }),
+    // Linux; macDefaultBrowser() on macOS, windowsDefaultBrowser() on Windows.
+    authorization: browserCallbackStrategy({ browser: linuxDefaultBrowser() }),
   }),
 });
 
 // Service token via client_credentials (no browser)
 const clientCredsBroker = new AuthBroker({
   tokenProvider: new ClientCredentialsProvider({
+    renewal: refreshThenLogin(),
     uaaUrl: 'https://...',
     clientId: '...',
     clientSecret: '...',
@@ -374,61 +908,469 @@ const clientCredsBroker = new AuthBroker({
 
 ### Choosing an authorization strategy
 
-`authorization` decides how an interactive login is conducted. Omit it and the
-provider builds the callback strategy for its own flow, on the default port —
-which is convenient, and is also the only case where the default port applies
-without you having chosen it. Every shipped strategy is a plain function
-returning `IAuthorizationStrategy`, so a consumer can pass its own instead.
+`authorization` decides how an interactive login is conducted, and it is
+required: a provider builds no strategy of its own (since 5.0.0). Pass one of
+the named strategies, compose one from the parts, or call a provider's static
+factory — `inBrowser`, `fromTerminal` — which uses the usual one
+(`inBrowser`'s callback strategy is given no `browser`: it shows the URL and
+waits; to open a browser, construct the provider with
+`browserCallbackStrategy({ browser })`). Every strategy is an
+`IAuthorizationStrategy`, so a consumer can pass its own instead.
 
 | Strategy | For | What it does |
 |---|---|---|
-| `browserCallbackStrategy(opts)` | `AuthorizationCodeProvider` | Binds a local callback server, opens the URL, waits for `?code=` |
+| `browserCallbackStrategy(opts)` | `AuthorizationCodeProvider` | Listens on loopback, shows the URL or opens it in `browser`, waits for `?code=` with this login's `state` |
 | `oidcCallbackStrategy(opts)` | `OidcBrowserProvider` | The same, yielding `{ code, state }` |
-| `samlCallbackStrategy(opts)` | `Saml2BearerProvider`, `Saml2PureProvider` | The same, receiving a posted `SAMLResponse` |
-| `manualPasteStrategy({ redirectUri, read })` | code flows | Shows the URL, reads the pasted code (stdin by default) |
-| `manualSamlResponseStrategy({ redirectUri, read })` | SAML flows | Shows the URL, reads the pasted `SAMLResponse` |
-| `externalCodeStrategy({ redirectUri, provide })` | either | Hands the assembled URL to your function, takes back the payload |
-| `staticCodeStrategy({ redirectUri, payload })` | either | You already hold the payload; the URL is never built |
+| `samlCallbackStrategy(opts)` | `Saml2BearerProvider`, `Saml2PureProvider` | The same, receiving a `SAMLResponse` (posted, or in the query) |
+| `manualPasteStrategy({ redirectUri, read? })` | code flows | Shows the URL, reads the pasted code or redirected URL (stdin by default) |
+| `manualSamlResponseStrategy({ redirectUri, read? })` | SAML flows | Shows the URL, reads the pasted `SAMLResponse` |
+| `manualPasscodeStrategy({ read? })` | `UaaPasscodeProvider` | Shows the passcode page, reads the pasted passcode |
+| `externalCodeStrategy({ redirectUri, provide })` | code flows | Hands the assembled URL and the login's signal to your `provide(url, signal)`, takes back the code |
+| `staticCodeStrategy({ redirectUri?, payload })` | either | You already hold the payload; the URL is never built |
+| `composeAuthorization({ … })` | any | Your own composition of a presentation, a transport and a protocol ([below](#composing-a-strategy-from-parts)) |
 | your own | any | Implement `IAuthorizationStrategy<TResult>` and pass it |
 
-Options common to the three callback strategies:
+Each named strategy is a composition of the shipped parts — today's values
+live in these names and nowhere else; the parts have no default:
+
+| Strategy | Presentation | Transport | Protocol |
+|---|---|---|---|
+| `browserCallbackStrategy` | `browser` absent: `showUrl()`; else `openInBrowser({ browser })` | `loopback({ port: port ?? DEFAULT_CALLBACK_PORT })` | `oauthCode()` |
+| `oidcCallbackStrategy` | the same | the same | `oidcCode()` |
+| `samlCallbackStrategy` | the same | the same | `samlResponse()` |
+| `manualPasteStrategy` | `showUrl()` | `terminalPaste({ redirectUri, read })` | `oauthCode()` |
+| `manualSamlResponseStrategy` | `showUrl()` | `terminalPaste({ redirectUri, read })` | `samlResponse()` |
+| `manualPasscodeStrategy` | `showUrl()` | `terminalPaste({ read })` | `passcode()` |
+| `externalCodeStrategy` | `consumerHandoff({ redirectUri, provide })` | (the same pair) | `oauthCode()` |
+
+Every one answers at `/callback` (the composition's `endpoint`), and every
+one returns a strategy with `dispose()`. A missing required `redirectUri` is
+`configuration` `required-fields-missing` naming `redirectUri`, at
+construction.
+
+Options of the three callback strategies:
 
 | Option | Default | Meaning |
 |---|---|---|
 | `port` | `61001` (`DEFAULT_CALLBACK_PORT`) | Port to bind. `0` binds an ephemeral one — usable only where the identity provider accepts a loopback redirect on any port, never where a fixed redirect URI is registered |
-| `timeoutMs` | `30000` (`DEFAULT_LOGIN_TIMEOUT_MS`) | How long the login may wait for its callback |
-| `browser` | `'none'` | `'none'` / `'headless'` print the URL; `'system'`, `'auto'`, `'chrome'`, `'edge'`, `'firefox'` open it |
-| `callbackServer` | the one this package ships | Your own `CallbackServerFactory`, to reuse a server you already run |
-| `openUrl` | the built-in launcher | Receives `(url, browser, redirectUri)` |
-| `remoteHint` | the paste hint, only for the shipped UAA transport | Extra guidance printed in `'none'` / `'headless'` mode |
-| `signal` | — | `AbortSignal` cancelling the login |
+| `browser` | none: the URL is shown on stderr | An `IBrowser` that opens the URL: one of the six below, or your own. Never a name |
+| `remoteHint` | the listener's SSH-tunnel hint | `(redirectUri) => string`: replaces the hint shown beside the URL for a user whose browser is elsewhere |
+| `signal` | — | `AbortSignal` cancelling the login — the only bound there is (no login times out on its own): pass `AbortSignal.timeout(ms)` for a deadline |
 
-Note the `browser` default: **`'none'`, so nothing is opened unless you ask for
-it.** The URL is always shown, even with no logger — it falls back to `stderr`,
-never stdout, so an MCP/LSP stdio transport is not corrupted. (1.x behaved the
-same way; the 1.x README claiming `system` was the default was wrong.)
+**Nothing is opened unless you pass a `browser`.** Without one the URL is
+shown on stderr — never stdout, so an MCP/LSP stdio transport is not
+corrupted — and the callback waits. A browser that fails (yours, or a
+shipped one) does not end the login: it is logged once in fixed words, the
+URL is prompted on stderr, and the callback keeps waiting for it.
 
-The three `CallbackServerFactory` implementations are exported too —
-`withBrowserCallbackServer`, `withOidcCallbackServer`, `withSamlCallbackServer`
-— so a consumer can keep the transport and replace everything around it, or the
-reverse.
+#### The six shipped browsers
 
-For the three shipped flows, passing `callbackServer` to a ready constructor is
-the way to substitute a transport. The `BrowserCallbackStrategy` class behind
-them is exported as well, for the case the constructors cannot express: a
-receiver whose payload is none of the three shapes those flows deliver. Its
-options are the same, except `callbackServer` is required — there is no default
-transport to fall back on when the payload type is your own.
+Each is **one fixed launch**: a program started with an argument array,
+never through a shell, the URL one argument of it, and only an `http:` /
+`https:` URL as its serialisation. There is no platform switch, no fallback
+chain and no platform check — **you pick the one for the machine you run
+on**. Each runs exactly its program, with these arguments; on another OS it
+does whatever a program of that name does there. Where there is none, the
+launch fails to start: the URL is shown once on stderr and the login waits.
+Where there is one, it runs — on Debian and Ubuntu `/usr/bin/open` is an
+alternative for `xdg-open` or `run-mailcap`, so `macDefaultBrowser()` there
+may open that machine's default browser, and `macBrowser(app)` hands
+`xdg-open` an `-a` it was never meant to take.
+
+| Factory | Launch | Settles |
+|---|---|---|
+| `linuxDefaultBrowser()` | `xdg-open <url>` | at its exit: `0` resolves, anything else rejects |
+| `linuxBrowser(executable)` | `<executable> <url>` — a name on `PATH` or an absolute path, as given (`'google-chrome'`, `'firefox'`, `'/opt/…/microsoft-edge'`) | once the browser has started; its exit is never awaited |
+| `macDefaultBrowser()` | `open <url>` | at its exit |
+| `macBrowser(app)` | `open -a <app> <url>` (`'Google Chrome'`, `'Microsoft Edge'`, `'Firefox'`) | at its exit |
+| `windowsDefaultBrowser()` | `%SystemRoot%\System32\rundll32.exe url.dll,FileProtocolHandler <url>` | at its exit |
+| `windowsBrowser(program)` | `%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe -NoProfile -NonInteractive -Command` with the fixed text `Start-Process -FilePath $env:MCP_ABAP_ADT_BROWSER_PROGRAM -ArgumentList $env:MCP_ABAP_ADT_AUTHORIZATION_URL` (`'chrome'`, `'msedge'`, `'firefox'`, or a path) | at its exit |
 
 ```typescript
-import { BrowserCallbackStrategy } from '@mcp-abap-adt/auth-providers';
+import {
+  AuthorizationCodeProvider,
+  browserCallbackStrategy,
+  linuxDefaultBrowser,
+  refreshThenLogin,
+} from '@mcp-abap-adt/auth-providers';
 
-const strategy = new BrowserCallbackStrategy<MyPayload>({
-  callbackServer: withMyOwnCallbackServer, // CallbackServerFactory<MyPayload>
-  port: 61001,
-  timeoutMs: 30000,
+const provider = new AuthorizationCodeProvider({
+  renewal: refreshThenLogin(),
+  uaaUrl, clientId, clientSecret,
+  // macDefaultBrowser() on macOS, windowsDefaultBrowser() on Windows.
+  authorization: browserCallbackStrategy({ browser: linuxDefaultBrowser() }),
 });
 ```
+
+- **No environment is guessed or changed.** Nothing is written into
+  `process.env` — no `DISPLAY=:0`, as 5.x set. Without a display the
+  launcher does what it does there; a launch that fails has the URL shown.
+- **On Windows** the launchers are the system's own, by absolute path under
+  `%SystemRoot%\System32`, never a program found in the current directory,
+  and never `cmd`, which parses `&`, `|`, `^` and `%` whatever the quoting.
+  `windowsBrowser` passes the program and the URL to PowerShell only in the
+  environment, never in its command text. A URL whose serialisation still
+  holds a space, a quote, `<`, `>`, `^`, `|`, a backslash or a control
+  character, or whose host is not a valid host name or address, is not
+  opened at all (nothing is repaired). Measured 2026-10-07 (Windows 11 x64):
+  the default browser through `rundll32` delivered the URL's path and query
+  (with `&` and a `%20`) unchanged, and no command interpreter was started.
+  The same day Chrome and Edge, through an earlier `Start-Process` command
+  that named the program in its text, did the same: the URL reached the page
+  unchanged and no command interpreter was a direct child of the launcher.
+  Chrome itself runs `cmd /c` below itself for the native-messaging hosts of
+  its extensions (seen for SentinelOne and Nexthink) — the browser's own
+  children, not the launcher's. Measured 2026-10-08 (Windows 11 x64) for
+  `windowsBrowser`'s current command, the program read from
+  `$env:MCP_ABAP_ADT_BROWSER_PROGRAM`: Chrome and Edge got the URL
+  unchanged, with only `conhost.exe` below the launcher; a program path
+  holding `[ab]` started exactly that file and none of the files `[ab]`
+  would match as a wildcard; a path holding `*` (no file can have that
+  name) and a program string holding quotes, `;` and a PowerShell command
+  each rejected `opening-browser`, with nothing started.
+- A browser that could not be asked rejects with an `AuthProviderFailure`
+  (`unknown`, operation `opening-browser`, an allowlisted code only), or
+  `interactive-login` `aborted` on the login's signal. A browser that started
+  is never killed.
+- A hand-off launcher keeps the process alive until it exits, so an
+  `open()` awaited on its own, in a script that holds nothing else, still
+  settles at that exit; once the signal aborts, a launcher still running
+  holds the process no longer. A browser binary (`linuxBrowser`) holds it no
+  longer once it has started. Inside a composition the composer aborts the
+  signal when the login ends. **Calling `open(url, signal)` yourself, the
+  signal is yours:** a hand-off launcher that does not exit — `xdg-open` in
+  its generic mode runs the browser in the foreground and exits only when
+  the browser closes — keeps `open()` pending and the process alive until
+  it exits or your signal aborts, so pass a signal you abort when you stop
+  waiting.
+
+Through 5.4.2 the fallback without the `open` package handed the URL to a
+shell inside double quotes, so a `$(…)` or a backtick in it — from an OIDC
+provider's discovery document, say — ran as a command. No launch goes
+through a shell now.
+
+#### A browser of your own
+
+Anything else — a display of your choice, a remote Chrome, a console
+browser, WSL, an ssh-forwarded X — is an `IBrowser` of yours:
+`open(url, signal)` resolves once the browser was asked to open the URL (not
+when the user finished), and rejects when it could not be — a presentation
+failure: the URL is prompted and the login keeps waiting.
+
+```typescript
+import { execFile } from 'node:child_process';
+import type { IBrowser } from '@mcp-abap-adt/interfaces-auth';
+
+// A browser on display :1 — the package sets no environment of its own.
+const onDisplayOne: IBrowser = {
+  open: (url, signal) =>
+    new Promise<void>((resolve, reject) => {
+      execFile(
+        'xdg-open',
+        [url],
+        { env: { ...process.env, DISPLAY: ':1' }, signal },
+        (error) => (error ? reject(error) : resolve()),
+      );
+    }),
+};
+
+const strategy = browserCallbackStrategy({ browser: onDisplayOne });
+```
+
+#### Composing a strategy from parts
+
+A strategy is three parts and the composer that joins them, each part a
+contract of `@mcp-abap-adt/interfaces-auth`:
+
+- a **presentation** (`IAuthorizationPresentation`) — how the authorization
+  URL reaches the user. It knows no payload and no transport;
+- a **transport** (`IAnswerTransport`) — how the user's answer comes back: a
+  listener, a terminal, the consumer's code. It knows no payload: it hands
+  each answer to the protocol's judge and acts on the verdict;
+- a **protocol** (`IAuthorizationProtocol`) — what an answer is and how it is
+  checked: it reads the expected `state` from the URL, accepts, refuses (the
+  login keeps waiting) or ends the login. It knows no socket and no
+  terminal.
+
+`composeAuthorization({ presentation, transport, protocol, endpoint,
+signal? })` runs one login in this order: open the transport; build the URL
+from the redirect the channel advertises; `begin` the protocol on that URL;
+arm the channel with the protocol's judge; present the URL (not awaited);
+wait. Until the channel is armed, every answer is refused. The payload the
+strategy returns is the one the protocol accepted — never anything a
+transport hands back — and the first accepted (or ending) answer wins: every
+later one is refused. `authorize` settles only once the transport is
+released (the port free, the reader closed); an overlapping `authorize` is
+`busy`; `dispose()` ends the login in flight and resolves once it has
+settled.
+
+`endpoint` is required — the named strategies pass `'/callback'` — and must
+survive URL parsing unchanged (no encoded dot segment, backslash, space,
+control character, `?` or `#`) and not be one of the listener's own routes
+(`/`, `/submit`), else `configuration` `invalid-value` naming `endpoint`. A
+missing part is `required-fields-missing` naming `presentation`,
+`transport` or `protocol`. A protocol whose URL carries a redirect, over a
+transport that advertises none, is `required-fields-missing` naming
+`redirectUri`.
+
+**Presentations:**
+
+| Part | Does |
+|---|---|
+| `openInBrowser({ browser })` | Calls `browser.open(url, signal)` with exactly the URL and the login's signal. A browser that throws or rejects: the URL is prompted once, on stderr, and the failure logged in fixed words |
+| `showUrl()` | Writes the URL to stderr only; the logger gets "the authorization URL was shown", then where the channel waits and its hint |
+| `consumerPresentation({ show, onFailure? })` | `show(url, { redirectUri, signal })` is your UI. A throw or rejection is logged in fixed words; **no URL is printed** — `onFailure(url, context)`, when given, is your own fallback, run once |
+
+**Transports:**
+
+| Part | Binds | Advertises |
+|---|---|---|
+| `loopback({ port })` | `127.0.0.1`, then `::1` on the same port (skipped where the machine has no `::1`) | `http://localhost:<port><endpoint>` |
+| `loopback4({ port })` | `127.0.0.1` only | `http://127.0.0.1:<port><endpoint>` |
+| `loopback6({ port })` | `::1` only | `http://[::1]:<port><endpoint>` |
+| `terminalPaste({ redirectUri?, read? })` | nothing; reads one line (`readFromTerminal` by default: prompt on stderr, stdin only when it is a TTY) | `redirectUri` as given |
+| `consumerAnswer({ redirectUri?, receive })` | nothing; `receive(signal)` is your code | `redirectUri` as given |
+| `consumerHandoff({ redirectUri?, provide })` | the pair `{ presentation, transport }` from one `provide(url, signal)` that shows the URL and returns the answer | `redirectUri` as given |
+
+`port` is required on every listener (`0` binds an ephemeral one; not an
+integer in 0..65535 is `callback-port-invalid`, before any socket is
+touched). A port already held is `interactive-login` `port-in-use`. A
+transport without a socket advertises no redirect of its own: a protocol
+that needs one needs your `redirectUri` — the one registered with the
+identity provider.
+
+**Protocols:**
+
+| Part | Payload | Redirect arrives with | A redirect binds by |
+|---|---|---|---|
+| `oauthCode()` | the code (`string`) | `GET` | `state` |
+| `oidcCode()` | `OidcCallbackResult` (`{ code, state }`) | `GET` | `state` |
+| `samlResponse()` | the `SAMLResponse` (`string`) | `GET`, `POST` | nothing here: `InResponseTo` and the assertion validator |
+| `passcode()` | the passcode (`string`) | takes no redirect | — |
+
+Each has its paste words: the prompt of a terminal, and the label and
+instructions of a listener's paste page.
+
+An OIDC login whose code the user pastes — the pasted URL's `state` checked:
+
+```typescript
+import {
+  OidcBrowserProvider,
+  composeAuthorization,
+  oidcCode,
+  refreshThenLogin,
+  showUrl,
+  terminalPaste,
+} from '@mcp-abap-adt/auth-providers';
+
+const provider = new OidcBrowserProvider({
+  renewal: refreshThenLogin(),
+  issuerUrl: 'https://idp.example.com/realms/sap',
+  clientId: '...',
+  authorization: composeAuthorization({
+    presentation: showUrl(),
+    transport: terminalPaste({ redirectUri: 'http://localhost:61001/callback' }),
+    protocol: oidcCode(),
+    endpoint: '/callback',
+  }),
+});
+```
+
+#### Where the URL is shown
+
+**The authorization URL never reaches a log line.** It carries the login's
+`state`, and a configured one may carry anything. `showUrl()` — and the
+prompt a failed browser falls back to — writes it to **stderr only**, never
+through the `ILogger`, never to stdout, and only as an `http:` / `https:`
+serialisation of printable ASCII; the logger gets the fixed line "the
+authorization URL was shown". Where the callback waits and the SSH hint
+carry no secret and go to the logger's `info` (stderr without one).
+
+A consumer whose stderr is collected into its logs — an MCP server, say —
+shows the URL in its own UI with `consumerPresentation`:
+
+```typescript
+import {
+  AuthorizationCodeProvider,
+  DEFAULT_CALLBACK_PORT,
+  composeAuthorization,
+  consumerPresentation,
+  loopback,
+  oauthCode,
+  refreshThenLogin,
+} from '@mcp-abap-adt/auth-providers';
+
+const provider = new AuthorizationCodeProvider({
+  renewal: refreshThenLogin(),
+  uaaUrl, clientId, clientSecret,
+  authorization: composeAuthorization({
+    presentation: consumerPresentation({
+      show: (url, { redirectUri }) => ourUi.showLogin(url, redirectUri),
+    }),
+    transport: loopback({ port: DEFAULT_CALLBACK_PORT }),
+    protocol: oauthCode(),
+    endpoint: '/callback',
+  }),
+});
+```
+
+A `show` that throws or rejects is logged in fixed words and prints no URL
+— you chose your own UI because stderr may be collected; pass `onFailure`
+for a fallback of your own. Either way the login keeps waiting.
+
+#### The SSH tunnel
+
+The shipped listeners bind loopback only. A browser on another machine
+reaches one through an SSH tunnel, which arrives on loopback and needs no
+option:
+
+```bash
+ssh -L 61001:localhost:61001 <this machine>
+```
+
+Then the redirect reaches the listener, and the paste page is at
+`http://localhost:61001/` in that browser. Without a `browser`, the listener
+prints that hint beside the URL (`remoteHint` replaces it). For `loopback4`
+/ `loopback6` the tunnel goes to `127.0.0.1` / `[::1]`.
+
+#### A transport of your own
+
+A listener on a network address, a hostname, a wildcard, behind a proxy or a
+translated port is not shipped: it is **your** `IAnswerTransport`, and its
+risk is yours. The composition gives it only the endpoint path; it builds
+the redirect from its own origin, so what it advertises is what it listens
+on. A minimal one, for the redirect alone:
+
+```typescript
+import { createServer } from 'node:http';
+import type { AnswerJudge, IAnswerTransport } from '@mcp-abap-adt/interfaces-auth';
+
+/**
+ * The request target in origin form (`/path?query`), read literally: the path
+ * is the text up to the first `?`, the query is read by `URLSearchParams`.
+ * Anything else — an absolute-form target, `*`, an empty one — is none.
+ * Nothing here throws, whatever a client sends.
+ */
+function targetOf(raw: string | undefined): { path: string; query: URLSearchParams } | undefined {
+  if (raw === undefined || !raw.startsWith('/')) return undefined;
+  const mark = raw.indexOf('?');
+  return mark < 0
+    ? { path: raw, query: new URLSearchParams() }
+    : { path: raw.slice(0, mark), query: new URLSearchParams(raw.slice(mark + 1)) };
+}
+
+/**
+ * `origin` is what the browser elsewhere uses — `http://buildhost.example:61001`,
+ * say: the redirect is built from it.
+ */
+function networkListener(bindAddress: string, port: number, origin: string): IAnswerTransport {
+  return {
+    label: 'browser',
+    async open(options, use) {
+      let judge: AnswerJudge<unknown> | undefined;
+      let settle!: { resolve(): void; reject(error: unknown): void };
+      const answered = new Promise<void>((resolve, reject) => {
+        settle = { resolve, reject };
+      });
+      answered.catch(() => undefined); // awaited by the composer once armed
+
+      const server = createServer((req, res) => {
+        // Every request is anyone's: nothing it carries may throw out of
+        // this handler, where it would end the process.
+        try {
+          const target = targetOf(req.url);
+          if (target === undefined) {
+            res.writeHead(400).end();
+            return;
+          }
+          if (req.method !== 'GET' || target.path !== options.endpoint) {
+            res.writeHead(404).end();
+            return;
+          }
+          // Closed until armed: nothing settles before the URL exists.
+          if (judge === undefined) {
+            res.writeHead(400).end();
+            return;
+          }
+          // The protocol decides: it checks `state` and reads the code.
+          let verdict: ReturnType<AnswerJudge<unknown>>;
+          try {
+            verdict = judge({ via: 'redirect', method: 'GET', params: target.query });
+          } catch (error) {
+            // A judge that throws has ended the login.
+            res.writeHead(500).end();
+            settle.reject(error);
+            return;
+          }
+          if (verdict.verdict === 'refuse') {
+            res.writeHead(400).end(); // ignored: the login keeps waiting
+            return;
+          }
+          res.writeHead(200, { 'content-type': 'text/plain' });
+          res.end(verdict.verdict === 'accept' ? 'Signed in. You can close this tab.' : 'The login was refused.');
+          if (verdict.verdict === 'accept') settle.resolve();
+          else settle.reject(verdict.error);
+        } catch {
+          // Fixed words only, and the login waits on.
+          if (!res.headersSent) res.writeHead(500);
+          res.end();
+        }
+      });
+
+      await new Promise<void>((resolve, reject) => {
+        server.once('error', reject);
+        server.listen(port, bindAddress, () => resolve());
+      });
+      const onAbort = () => settle.reject(options.signal.reason);
+      options.signal.addEventListener('abort', onAbort, { once: true });
+      try {
+        return await use({
+          redirectUri: `${origin}${options.endpoint}`,
+          arm(armedWith) {
+            judge = armedWith;
+            return { answer: () => answered };
+          },
+        });
+      } finally {
+        options.signal.removeEventListener('abort', onAbort);
+        // Settle only once released: the port is free when `open` settles.
+        const closed = new Promise<void>((resolve) => server.close(() => resolve()));
+        server.closeAllConnections();
+        await closed;
+      }
+    },
+  };
+}
+
+const strategy = composeAuthorization({
+  presentation: showUrl(),
+  transport: networkListener('0.0.0.0', 61001, 'http://buildhost.example:61001'),
+  protocol: oauthCode(),
+  endpoint: '/callback',
+});
+```
+
+> **Warning — a listener on the network is open to the network.** Every
+> machine that can reach it can send it requests while a login waits; the
+> code and the `state` cross the network in clear over plain HTTP; and what
+> the shipped listeners check before anything is served — the `Host` header
+> against DNS rebinding, a loopback name only from a loopback peer, the form
+> token of a paste page — is now yours to check or to leave out. A paste
+> page reachable from the network lets every client that can load it settle
+> the login with a code of its own, so the user then works as whoever that
+> code belongs to. Prefer the [SSH tunnel](#the-ssh-tunnel) to the loopback
+> listener; use a network listener only where every machine that can reach
+> the port is trusted, and behind TLS where the network is not.
+
+The transport hands the judge each answer and acts on its verdict — `accept`
+ends the wait, `refuse` is answered and ignored, `end` ends the login — and
+never returns a payload: the composer keeps the one the protocol accepted,
+and an `answer()` that resolves without one fails the login. Its request
+handler is reachable by anyone before the channel is armed, so nothing a
+request carries may throw out of it: an exception in a Node `request`
+handler ends the process. Parse the target as text — `new URL(req.url,
+origin)` throws on a target such as `//[` — and contain every exception in
+fixed words, as above.
 
 #### Bringing your own
 
@@ -440,79 +1382,181 @@ const fromOurPortal: IAuthorizationStrategy<string> = {
     const redirectUri = 'https://portal.internal/oauth/callback';
     const url = await request.buildAuthorizationUrl(redirectUri);
     // The redirect URI you return is the one sent to the token endpoint.
-    return { payload: await ourPortal.login(url), redirectUri };
+    return { payload: await ourPortal.login(url, request.signal), redirectUri };
   },
   async dispose() { await ourPortal.close(); },
 };
 ```
 
 `dispose` is optional, and whoever constructs a strategy disposes of it: a
-strategy you pass in is yours to dispose, one the provider defaulted to is
-disposed by the provider.
+provider builds none, so the strategy you pass in — or the one a static
+factory you called composed — lives as long as the provider, serves every
+login, and is yours to dispose. `dispose()` disables a strategy for good and
+ends its logins in flight (`interactive-login` `disposed`); an abort of a
+login's signal ends only that login (`aborted`) and leaves the strategy usable.
 
-#### Manual paste over a callback server
+**Check `state` — the redirect is yours to bind.** The URL
+`buildAuthorizationUrl` returns carries a fresh `state` (and a PKCE challenge,
+whose verifier the provider keeps and sends in the exchange). A strategy that
+receives the redirect itself — `fromOurPortal` above — must accept a code
+only from a redirect whose `state` equals the one in that URL (compare in
+constant time), or a page in the user's browser can hand it a code of its own
+(RFC 6749 §10.12). A transport of your own composed with `oauthCode()` or
+`oidcCode()` gets that check from the protocol.
 
-With `browserCallbackStrategy` (the UAA transport), login can complete through
-either of **two** channels — whichever finishes first wins:
+**End on the request's signal.** Every `AuthorizationRequest` carries
+`signal`, aborted once no caller needs the login any more (see
+[Cancelling a login](#cancelling-a-login)). Your strategy must stop waiting
+and release what it holds when it aborts — `fromOurPortal` above passes
+`request.signal` to `ourPortal.login`. One that ignores it never settles, and
+the next login waits for it.
 
-1. **Automatic callback** — `GET /callback?code=...` on the bound redirect URI.
-   Works when the browser is on the same machine as the process.
-2. **Paste form** — open `http://<this-host>:<port>/` and paste the code (or the
-   whole redirected URL). Works when the browser is on a *different* machine,
-   since the callback server listens on all interfaces. In `'none'` /
-   `'headless'` mode the strategy prints this address for you — with the real
-   port and the host left for you to fill in, because the process cannot know
-   which of its addresses you can reach.
+#### The paste page, and pasting at a terminal
 
-**The terminal-paste channel is gone.** In 1.x a third channel read the code
-from stdin when `process.stdin.isTTY`; `browserCallbackStrategy` has no such
-reader, and this is deliberate rather than an oversight — under an MCP or LSP
-stdio transport stdin carries the protocol, and an authorization library has no
-business consuming it. Reading a pasted code is now a strategy of its own:
+A shipped listener settles through either of **two** channels — whichever
+finishes first wins:
+
+1. **The redirect** — `GET /callback?code=…&state=…` (a `SAMLResponse`
+   posted or in the query for SAML) on the advertised redirect URI. Works
+   when the browser is on the same machine as the process.
+2. **The paste page** — `GET /` serves a form with the protocol's words, and
+   the user pastes the code (or the whole redirected URL, or the
+   `SAMLResponse`). Works when the browser is on a *different* machine and
+   the redirect cannot reach back: reach the page through
+   [the SSH tunnel](#the-ssh-tunnel). Every listener serves it, for every
+   protocol. The form posts `form_token` and `input` to `/submit`
+   (urlencoded, up to 5 MB); `/submit` settles only with this login's form
+   token, a pasted redirected URL only with this login's `state`.
+
+A listener never reads stdin: under an MCP or LSP stdio transport stdin
+carries the protocol, and an authorization library has no business
+consuming it. Reading a pasted answer at a terminal is a strategy of its own:
 
 ```typescript
 import {
   AuthorizationCodeProvider,
   manualPasteStrategy,
+  refreshThenLogin,
 } from '@mcp-abap-adt/auth-providers';
 
 const provider = new AuthorizationCodeProvider({
+  renewal: refreshThenLogin(),
   uaaUrl, clientId, clientSecret,
   // Binds no socket at all: prints the URL, then reads one line.
-  // Defaults to stdin when it is a TTY — pass `read` to source it anywhere else.
+  // Reads stdin when it is a TTY — pass `read` to source it anywhere else.
   authorization: manualPasteStrategy({
-    redirectUri: 'http://localhost:61001/callback',
+    redirectUri: 'http://localhost:61001/callback', // the one registered with the IdP
   }),
 });
 ```
 
 `manualPasteStrategy` reads from stdin only when `process.stdin.isTTY`, and
-throws a clear error otherwise rather than consuming a protocol stream. Supply
-`read` to take the value from somewhere else entirely — a TUI prompt, an HTTP
-request, a file:
+otherwise fails the login (`interactive-login` `no-terminal`: "Manual input
+needs an interactive terminal. Supply `read` to source the value elsewhere.")
+rather than consuming a protocol stream. Supply `read` to take the value from
+somewhere else entirely — a TUI prompt, an HTTP request, a file:
 
 ```typescript
 authorization: manualPasteStrategy({
   redirectUri: 'http://localhost:61001/callback',
-  read: async (prompt) => askInOurUi(prompt),
+  read: (prompt, signal) => askInOurUi(prompt, signal),
 })
 ```
 
-The `redirectUri` you give it must be the one the identity provider will
-redirect to; it is also the one sent to the token endpoint. It defaults to
-`http://localhost:61001/callback`.
+`read` gets the login's signal: when the login is aborted or the strategy
+disposed, it must stop and release what it holds. The strategy settles only
+once `read` has, so a `read` that ignores its signal blocks that login — and
+the next one, which waits for it — until it returns. A pasted URL of
+another login gets fixed words and the prompt again; an input no code can be
+read from ends the login `interactive-login` `unreadable-input`.
 
-Both the paste form and `manualPasteStrategy` accept a bare code, `code=...`,
-or a full redirected URL — whichever you paste, the code is extracted from it.
+`redirectUri` is required: it must be the one the identity provider will
+redirect to, and it is also the one sent to the token endpoint. A strategy
+that binds no socket has no redirect of its own to offer.
 
-> The `extractCode(input)` helper behind that leniency is internal; it is not
-> part of the package's exports, contrary to what the 1.1.0–1.2.0 README said.
+Both the paste page and `manualPasteStrategy` accept a bare code or a full
+redirected URL. A **bare code** is an input with none of `?`, `&`, `=`, `/`
+or `#`: it carries no `state` and is taken — the user typed it. Anything else
+is read as a redirected URL (parsed with `URL`): it must carry the `state` of
+the URL this login showed, and its code is taken from the query alone, never
+from a fragment — `manualPasteStrategy` asks again on a mismatch, the paste
+page answers `400` with the form again. So `…/callback&code=X` is not a code
+that skips the check.
+
+#### Login CSRF: `state`, PKCE and where the callback listens
+
+A page in the user's browser can call the local callback with a code of its
+own while a login waits, and the user ends up logged in as someone else
+(RFC 6749 §10.12; RFC 9700 §4.7). Since 6.0.0, each part keeps its share:
+
+- **The provider binds the URL it builds.** `AuthorizationCodeProvider` and
+  `OidcBrowserProvider` put a fresh `state` (32 random bytes, base64url) in
+  every authorization URL they build, and a PKCE pair (S256) — new for UAA in
+  6.0.0, as OIDC already had; the verifier of the last URL built is sent in
+  the exchange. Neither is logged.
+- **A configured URL gets a `state` too.** A configured `authorizationUrl`
+  that carries no `state` gets the provider's minted one, fresh for every
+  URL built, appended to its query as text before any fragment — and nothing
+  else: no PKCE challenge, no `code_verifier`. The identity provider must
+  echo it (RFC 6749 §4.1.2). One that carries one `state` keeps it and is
+  bound to it; an empty or a repeated `state` is refused (`configuration`
+  `invalid-value` naming `authorizationUrl`) before anything is shown or
+  opened — the listener is already bound by then. A code
+  from `staticCodeStrategy`, which never builds the URL, is exchanged
+  without a `code_verifier`: binding it is yours.
+- **The protocol checks `state`.** `oauthCode()` and `oidcCode()` read the
+  expected `state` from the URL and accept a redirect — a code or an
+  `?error=` — only with exactly one `state` equal to it, compared in constant
+  time; anything else is answered `400`, counted, and the login keeps
+  waiting. A forged `?error=` therefore ends nothing. A parameter counts only
+  when present exactly once. `samlResponse()` reads no `state`: a SAML
+  response is bound by `InResponseTo` and the assertion validator.
+- **The listener is closed until the URL exists.** From the bind on, a
+  listener refuses every request to the callback and the paste page until
+  the composer arms it — after the URL is built and the protocol has read
+  it, before the URL is shown — for every protocol, SAML included.
+- **Loopback only.** The shipped listeners bind loopback (through 5.4.2 the
+  callback bound every interface) and refuse — before any page, form token or
+  callback handling — a request whose `Host` is not a loopback name with the
+  bound port (`localhost`, `127.0.0.1`, `[::1]`, in any spelling the WHATWG
+  URL host parser reads as one), so a DNS-rebound name reads and settles
+  nothing. A loopback name counts only from a loopback peer (`127.0.0.0/8`,
+  `::1`, `::ffff:127.x.y.z`): a machine on the network sending
+  `Host: localhost` is refused too. `loopback` binds `127.0.0.1` first, then
+  `::1` on the same port. On a host without IPv6 loopback — the `::1` bind
+  fails `EADDRNOTAVAIL` or `EAFNOSUPPORT` — the `::1` half is skipped and it
+  listens on `127.0.0.1` alone. Only `EADDRINUSE` on `::1` — the port, fixed
+  or the one the OS gave `127.0.0.1` for `port: 0`, held by someone else
+  there — fails the login `port-in-use`: the redirect URI says `localhost`,
+  which resolves to `::1` first, so staying on `127.0.0.1` alone would hand
+  whoever holds `[::1]:<port>` the code and the `state`. Any other bind error
+  ends the login `failed`. Retrying is yours. A browser elsewhere reaches a
+  listener through [the SSH tunnel](#the-ssh-tunnel); a listener on the
+  network is [a transport of your own](#a-transport-of-your-own), and its
+  risk is yours.
+- **The paste page is bound to the attempt.** Arming mints a form token (32
+  random bytes, base64url) for this login only, embedded in the page as a
+  hidden field and never logged; `/submit` without it, with another, or with
+  two is answered `400` before the protocol sees anything. Another origin
+  cannot read the page (no CORS, a CSP of `default-src 'none'` with
+  `form-action 'self'`), so it cannot learn the token.
+- **One answer per connection.** Every response carries
+  `Connection: close`, `X-Content-Type-Options: nosniff` and the CSP; every
+  value interpolated into a page is escaped. Routes are compared literally:
+  the endpoint, `/` and `/submit` as exact strings, anything else `404`.
+
+Every refused request is answered `400`, counted, and **ignored**: the login
+keeps waiting, and its `aborted` words report how many there were.
+
+> The `extractCode(input)` helper behind the paste parsing is internal; it is
+> not part of the package's exports, contrary to what the 1.1.0–1.2.0 README
+> said.
 
 ### Client authentication
 
 How the *client* proves itself to the authorization server — a secret, a
 client certificate, a signed assertion — is a strategy too:
-`IClientAuthentication` from `@mcp-abap-adt/interfaces-auth` (3.1.0), passed as
+`IClientAuthentication` from `@mcp-abap-adt/interfaces-auth`, passed as
 `clientAuthentication`. Eight token providers take it:
 `ClientCredentialsProvider`, `AuthorizationCodeProvider`, `UaaPasscodeProvider`,
 `Saml2BearerProvider`, `OidcBrowserProvider`, `OidcDeviceFlowProvider`,
@@ -569,28 +1613,16 @@ public client that sends only `client_id`.
   line break; no parameter or header replacing one of the request's own
   (`grant_type`, `Content-Type`, …); an endpoint that is an absolute `https:`
   URL — `http:` only when the configured endpoint is itself `http:` and no
-  certificate is presented. Anything else is a
-  `ClientAuthenticationResultError`, refused as *the client authentication
-  returned a request that cannot be sent*. Only `client_secret`,
-  `client_assertion` and a Basic credential are known to be secrets and
-  redacted from what the server said — which, since 5.4.2, the package
-  writes nowhere: not on a thrown error, not in a log line; the redaction
-  stays as defence in depth. Every secret is redacted as sent, encoded —
-  each character, unreserved ones included, as itself or percent-escaped in
-  either case, a space also as `+` — and form-decoded (the whole value: `&`
-  and `=` are part of it, a malformed `%` stays), and any base64 in the body
-  (either alphabet, any padding, escaped or not, broken by spaces, tabs or
-  line breaks) that decodes to text holding a secret is redacted too (since
-  5.4.2). Limits: an escape escaped again
-  (`%252F`) and an echo truncated inside a secret are not recognised, and a
-  secret of one or two characters is redacted wherever it appears, unrelated
-  words included — so with either `encoding`, and for a `clientSecret` sent without a
-  strategy, neither the original, the encoded secret nor what a decoding
-  server read survives its echo. Without a strategy, the Basic header a
-  provider builds from `clientId` and `clientSecret` is redacted the same way
-  — its base64 credential and its secret (since 5.4.2; earlier versions left
-  an echoed base64 credential, from which `id:secret` decodes). A secret your
-  strategy puts in any other parameter or header is not recognised as one.
+  certificate is presented. Anything else is refused, `client-authentication`
+  `result-unsendable`: *the client authentication returned a request that
+  cannot be sent*. Nothing of a request is ever logged or kept on an error —
+  no parameter, no header, nothing the server answered beyond its status and
+  a registered OAuth `error`. Only with the provider's `authDebug: true` does
+  a failed request's log line name the secrets it sent (`sent`, see
+  [Debug Logging](#debug-logging)): `client_secret`, `client_assertion` and a
+  Basic credential (`basic`, `basic_secret`) of a strategy, beside the grant's
+  own; a secret your strategy puts in any other parameter or header is not
+  named there — and is logged nowhere either way.
 
 ```typescript
 import { readFile } from 'node:fs/promises';
@@ -599,10 +1631,12 @@ import {
   OidcPasswordProvider,
   privateKeyJwt,
   tlsClientCertificate,
+  refreshThenLogin,
 } from '@mcp-abap-adt/auth-providers';
 
 // A client certificate: the token request goes over mTLS, no secret anywhere.
 const service = new ClientCredentialsProvider({
+  renewal: refreshThenLogin(),
   uaaUrl: 'https://<idp>',
   clientId: 'my-client',
   clientAuthentication: tlsClientCertificate({
@@ -616,6 +1650,7 @@ const service = new ClientCredentialsProvider({
 
 // A signed client assertion instead of a secret.
 const user = new OidcPasswordProvider({
+  renewal: refreshThenLogin(),
   issuerUrl: 'https://<keycloak>/realms/<realm>',
   clientId: 'my-client',
   username: 'user',
@@ -629,8 +1664,9 @@ const user = new OidcPasswordProvider({
 
 #### Rules a provider keeps
 
-- **`clientSecret` and a strategy together are a `ValidationError`** naming
-  `clientSecret`, thrown by the constructor: two ways of authenticating one
+- **`clientSecret` and a strategy together are a configuration error**
+  (`client-secret-beside-client-authentication`) naming `clientSecret`,
+  thrown by the constructor: two ways of authenticating one
   client is a mistake, not a preference. The check is for presence, not value
   — `clientSecret: ''` beside a strategy is refused too, so a consumer mapping
   a service key without a secret must leave `clientSecret` out rather than set
@@ -665,52 +1701,51 @@ const user = new OidcPasswordProvider({
   `rejectUnauthorized` is never set and there is no `ca` option. A server
   behind a private CA is trusted the way Node offers, explicitly and
   process-wide: `NODE_EXTRA_CA_CERTS=/path/to/ca.pem`, read when Node starts,
-  which adds to Node's store rather than replacing it. A TLS failure is refused
-  naming its code, with fixed words per kind:
+  which adds to Node's store rather than replacing it. A TLS failure is an
+  error of kind `tls` naming its code (`facts.code`) and the operation, in
+  words fixed per kind of failure — an untrusted server certificate (hint:
+  `NODE_EXTRA_CA_CERTS`), an expired one, a host name not in it, and the
+  server's alert refusing the client certificate; the words are in the
+  [Refusals](#refusals) table.
 
-  | Code | Reason (*… failed: …*) | Hint |
-  |---|---|---|
-  | `UNABLE_TO_VERIFY_LEAF_SIGNATURE`, `SELF_SIGNED_CERT_IN_CHAIN`, `DEPTH_ZERO_SELF_SIGNED_CERT`, `UNABLE_TO_GET_ISSUER_CERT_LOCALLY` | the server's certificate is not trusted (`<code>`) | if the server uses a private CA, name its certificate in NODE_EXTRA_CA_CERTS |
-  | `CERT_HAS_EXPIRED` | the server's certificate has expired (`<code>`) | the server must renew its certificate; check also this machine's clock |
-  | `ERR_TLS_CERT_ALTNAME_INVALID` | the host name is not in the server's certificate (`<code>`) | use the host name the server's certificate is issued for |
-  | `ERR_SSL_TLSV13_ALERT_CERTIFICATE_REQUIRED`, `ERR_SSL_TLSV1_ALERT_UNKNOWN_CA`, and `ERR_SSL_SSL/TLS_ALERT_…` / `ERR_SSL_SSLV3_ALERT_…` for `BAD_CERTIFICATE`, `CERTIFICATE_UNKNOWN`, `CERTIFICATE_EXPIRED`, `CERTIFICATE_REVOKED`, `UNSUPPORTED_CERTIFICATE` | the server refused the client certificate (`<code>`) | check that the server trusts the certificate's issuer and that the certificate is valid and not revoked |
-
-  The last row is the alert a server sends when it refuses the client
+  The alert row is what a server sends when it refuses the client
   certificate in the handshake. Current OpenSSL — 3.5, bundled with Node 22
   and 24, and 3.6, both measured — spells the SSLv3-era alerts
   `SSL/TLS_ALERT_…`; older releases spelled them `SSLV3_ALERT_…`, so both are
   listed. Measured 2026-10-04 against `openssl s_server -Verify`:
   no certificate → `…CERTIFICATE_REQUIRED`, an issuer the server does not
   trust → `…UNKNOWN_CA`, an expired certificate →
-  `ERR_SSL_SSL/TLS_ALERT_CERTIFICATE_EXPIRED`. Any other code is
-  *unknown error*.
+  `ERR_SSL_SSL/TLS_ALERT_CERTIFICATE_EXPIRED`. Any other code is not a `tls`
+  error: an allowlisted system code (`ECONNREFUSED`, …) is the `code` of a
+  `request-failed`, anything else is *unknown error*.
 - **mTLS aliases (RFC 8705 §5).** An OIDC provider that discovers an endpoint
   hands the strategy the server's `mtls_endpoint_aliases` entry for it
   (`token_endpoint`, `device_authorization_endpoint`); `tlsClientCertificate`
   sends there unless it was given `endpoint`. An endpoint given in the
   configuration comes with no alias.
 - **A loader that fails with its own error** — a missing file, say — is
-  refused as *`<auth type>` token request failed (unknown error, ENOENT)*,
-  where `<auth type>` is the provider's `getAuthType()`. The refusal names the
-  error's code when it is on the package's allowlist, never its message.
-  That is by design (rule 2 of the contract); a loader that wants its own words
-  refused throws one of this package's classes.
-- **Thrown errors carry no request.** A failed token request rethrows without
-  the request it sent — no form body, no `Authorization` header, no TLS agent
-  with a key or a passphrase — on both paths, strategy or not. It is still an
-  `AxiosError` (`instanceof AxiosError` and `axios.isAxiosError()` hold), but
-  a new one built without `config`, `request` or `cause`, so its `toJSON()`
-  serialises no config: it keeps `code` and `status`, a rebuilt message
-  (`Request failed with status code N`, or `the token request failed (<code>)`
-  when no response came), and a `response` of `status`, an empty `statusText`
-  (the reason phrase is the server's free text), empty `headers` and the
-  server's body reduced to `error` when it is a registered OAuth code
-  (`err.response.data.error` still reads `invalid_grant`), and to `{}`
-  otherwise. Since 5.4.2 the server's `error_description` and `error_uri` go
-  nowhere — no thrown error, no log line: a hostile server can echo any
-  secret of the request in them. A failed request is noted in one `debug`
-  line through the provider's logger with the same safe facts (`<site>: the
-  token endpoint refused the request`, `{ status, error? }`).
+  refused as *`<grant>` token request failed (unknown error, ENOENT)*
+  (`client_credentials token request failed (unknown error, ENOENT)`), kind
+  `unknown`. The refusal names the error's code when it is on the allowlist
+  (`SYSTEM_CODES`), never its message. That is by design: a loader may throw
+  text holding a key or a passphrase. A loader that wants its own words
+  refused throws an `AuthProviderFailure` it built with auth-errors'
+  `authError` builders (a `client-certificate` error, say), which is answered
+  as it is.
+- **Thrown errors carry no request, and nothing of the server but facts.** A
+  failed token request throws an `AuthProviderFailure` built where the
+  request failed, on both paths, strategy or not: kind `tls` for an
+  allowlisted TLS code, else `request-failed` with the operation, the grant,
+  `problem` (`refused` with the HTTP `status`, `no-response` without one),
+  the OAuth `error` as `oauthError` when it is a registered code, and an
+  allowlisted system `code`. No `AxiosError` escapes, nothing keeps the form
+  body, the `Authorization` header or the TLS agent with its key, and there is
+  no `cause`. The server's `error_description` and `error_uri` are read by
+  nothing — a hostile server can echo any secret of the request in them. A
+  failed request is noted in one `debug` line through the provider's logger
+  with the same safe facts (`<operation>: the token endpoint refused the
+  request`, `{ status, error?, code? }`), none for the device poll's
+  `authorization_pending` / `slow_down` with status `400`.
 
 #### `clientSecretBasic`'s `encoding`
 
@@ -744,8 +1779,9 @@ Where neither fits, `clientSecretPost` sends both in the body. With `'raw'`, a c
 containing `:` cannot be carried at all (RFC 7617 splits at the first colon):
 each request is refused before anything is sent, *the client id contains ':',
 which raw Basic cannot carry*, hint *use encoding: 'form' or
-clientSecretPost*. A missing or other `encoding` is a `ValidationError` naming
-`encoding`, thrown by `clientSecretBasic` itself. A `401` is reported as the
+clientSecretPost*. A missing or other `encoding` is a configuration error
+(`basic-encoding-missing`, `allowed: 'basic-encoding'`) naming `encoding`,
+thrown by `clientSecretBasic` itself. A `401` is reported as the
 server's `401`: nothing is inferred from the secret's characters.
 
 #### `privateKeyJwt`'s `audience`
@@ -764,7 +1800,8 @@ provider stand:
 - **Keycloak** (26.7) accepts the token endpoint (measured with the password
   grant and the whole device flow), but **not the device authorization
   endpoint**: an assertion whose `aud` is that endpoint is refused
-  *"invalid_client": "Invalid token audience"*. `OidcDeviceFlowProvider` on
+  *"invalid_client": "Invalid token audience"* (on the wire; the package
+  reports only `invalid_client`, as `facts.oauthError`). `OidcDeviceFlowProvider` on
   Keycloak therefore needs no `audience`: the default names the token endpoint
   for the device authorization too. (The issuer,
   `https://<keycloak>/realms/<realm>`, set as `audience` was also measured to
@@ -799,36 +1836,42 @@ that one.
 pinned one — restored from a store after the certificate was rotated, say —
 or whose `cnf` names no readable thumbprint, is unusable to this provider, and
 it treats it like an expired token: `getTokens()` and `authorize()` renew it
-once through the strategy and the pinned certificate — the refresh token when
-there is one, else (or when the refresh is refused) one login, no step twice —
-and the binding check then runs on the new token. Only when the new token is
-still bound elsewhere is it refused by `authorize()`, as *the new token is
-bound to a client certificate this provider does not present* — and
-remembered: later attempts do not renew it again, so a server that keeps
-binding to another certificate costs no token request (and no login) per
-request. `getTokens()` returns the remembered token; `authorize()` refuses it.
-A renewal that *fails* — the refresh and the login refused, the client
-certificate expired, the server unreachable — is remembered the same way, with
-its own refusal: later attempts answer those same words (*the client
-certificate has expired*, say), with no token request and no login (after a
-refused refresh every renewal is a login, interactive for a browser or device
-strategy), until the token changes. The words are always those of the latest
-renewal. Only a token held *bound elsewhere* is remembered: an expired token
-whose renewal fails is renewed again on the next attempt, as before. The next `prepare()` renews once more. `rejected()` renews once more when the
-refused token is the one held; a refused token that was already superseded is
-answered Ok without a renewal (rule 6, as before). `getTokens()` pins the
-certificate to compare thumbprints, so with a bound token held it may throw a
-`CertificateMaterialError` when the material is unusable or expired. `establish()` reads such a held
-token as unknown and presents the pinned certificate. With **no** certificate
-pinned there is nothing to renew it for: `getTokens()` returns the token, and
-`establish()` / `authorize()` refuse it.
+through the [renewal strategy](#renewal-strategy) (`cause.trigger:
+'bound-elsewhere'`) and the pinned certificate — with `refreshThenLogin()`,
+the refresh token when there is one, else (or when the refresh fails) one
+login, no step twice — and the binding check then runs on the new token. A
+new token still bound elsewhere is committed (it is the server's state) and
+recorded as the step's outcome `bound-elsewhere`; `refreshThenLogin()` stops
+there, and the renewal fails with *the new token is bound to a client
+certificate this provider does not present* (`token-binding`
+`renewed-bound-elsewhere`): `getTokens()` / `refreshTokens()` throw it and
+`authorize()` refuses with it. It is **remembered** with the held token: the
+next renewal of that token hands the strategy that error as
+`cause.lastRenewal`, and `refreshThenLogin()` / `refreshOnly()` stop on it at
+once in `getTokens()` and `authorize()` — the same error, no token request and
+no login — so a server that keeps binding to another certificate costs no
+request per call. A renewal that *fails* while such a token is held — the
+refresh and the login refused, the client certificate expired, the server
+unreachable — is remembered the same way, with its own error (*the client
+certificate has expired*, say), until the token changes; the error is always
+that of the latest renewal. Only a token held *bound elsewhere* is
+remembered: an expired token whose renewal fails is renewed again on the next
+attempt. `prepare()` (once per connect) and `rejected()` for the token held
+are the shipped strategies' cue to renew once more; a refused token that was
+already superseded by a renewal is answered Ok without one. `getTokens()` pins
+the certificate to compare thumbprints, so with a bound token held it may
+throw a `client-certificate` failure when the material is unusable or
+expired — refused by the pin before the strategy is asked. `establish()`
+reads such a held token as unknown and presents the pinned certificate. With
+**no** certificate pinned there is nothing to renew it for: `getTokens()`
+returns the token, and `establish()` / `authorize()` refuse it.
 
 | Token | Certificate pinned | `establish(logon)` | `authorize(request)` |
 |---|---|---|---|
 | unbound | none | presents nothing, Ok | Bearer, Ok |
 | unbound | yes | presents it; Ok even when the logon takes no TLS material (the Bearer carries the token) — a logon target that throws is Oops | Bearer, Ok |
 | bound to the pinned one | yes | presents it; a logon that takes no TLS material (RFC) is that logon's Oops | Bearer, Ok |
-| bound to another, or `cnf` without a readable thumbprint | yes | read as **unknown**: presents the pinned one (a logon that takes no TLS material is that logon's Oops) | renewed once through the pinned one, the new token checked: Bearer, Ok — or, bound elsewhere again, Oops, no header written |
+| bound to another, or `cnf` without a readable thumbprint | yes | read as **unknown**: presents the pinned one (a logon that takes no TLS material is that logon's Oops) | renewed through the renewal strategy and the pinned one, the new token checked: Bearer, Ok — or, bound elsewhere again, Oops, no header written |
 | bound | none | Oops, nothing presented | Oops, no header written |
 | unknown | yes | **treated as bound**: presents it, and a logon that takes no TLS material is that logon's Oops | Bearer, Ok |
 | unknown | none | presents nothing, Ok | Bearer, Ok |
@@ -876,6 +1919,7 @@ maps those fields.
 import {
   ClientCredentialsProvider,
   tlsClientCertificate,
+  refreshThenLogin,
 } from '@mcp-abap-adt/auth-providers';
 
 // `credentials` as `cf service-key <instance> <key>` prints them.
@@ -888,6 +1932,7 @@ declare const credentials: {
 };
 
 const provider = new ClientCredentialsProvider({
+  renewal: refreshThenLogin(),
   uaaUrl: credentials.url,
   clientId: credentials.clientid,
   // no clientSecret: the certificate authenticates the client
@@ -910,16 +1955,22 @@ client is outside the ABAP system's `xsappname`. See
 
 #### Refusals
 
-| When | Reason | Hint |
-|---|---|---|
-| material without a PFX or without both certificate and key | the client certificate is incomplete | give a PFX, or a certificate together with its key |
-| material no TLS context accepts | the client certificate could not be used | check the certificate, the key and the passphrase, and that a PFX uses current encryption (not legacy RC2) |
-| a client certificate past its `notAfter`, when pinned or before a request or logon presents it | the client certificate has expired | renew the certificate; a token provider pins its certificate for life, so give the renewed one to a new provider |
-| a signing key that is not a private key of the algorithm | the client signing key could not be used | check the private key and that it matches the algorithm |
-| a strategy's result that cannot be sent | the client authentication returned a request that cannot be sent | check the client authentication strategy |
-| a bound token held, and no certificate pinned | the token is bound to a client certificate this provider does not present | give the provider a clientAuthentication that presents the certificate the token was issued for |
-| a token renewed because it was bound to another certificate, and the new one is bound elsewhere too | the new token is bound to a client certificate this provider does not present | the authorization server bound the new token to another certificate: check the certificate registered for this client |
-| the server refused the client certificate in the handshake | `<what>` failed: the server refused the client certificate (`<code>`) | check that the server trusts the certificate's issuer and that the certificate is valid and not revoked |
+<!-- generated:refusal-table refusals -->
+| When | Kind | Reason | Hint |
+|---|---|---|---|
+| material without a PFX or without both certificate and key | `client-certificate` `incomplete` | the client certificate is incomplete | give a PFX, or a certificate together with its key |
+| material no TLS context accepts | `client-certificate` `unusable` | the client certificate could not be used | check the certificate, the key and the passphrase, and that a PFX uses current encryption (not legacy RC2) |
+| a client certificate past its `notAfter`, when pinned or before a request or logon presents it | `client-certificate` `expired` | the client certificate has expired | renew the certificate; a token provider pins its certificate for life, so give the renewed one to a new provider |
+| a signing key that is not a private key of the algorithm | `client-authentication` `signing-key-unusable` | the client signing key could not be used | check the private key and that it matches the algorithm |
+| a strategy's result that cannot be sent | `client-authentication` `result-unsendable` | the client authentication returned a request that cannot be sent | check the client authentication strategy |
+| raw `clientSecretBasic` with a client id containing ':' | `client-authentication` `basic-client-id-colon` | the client id contains ':', which raw Basic cannot carry | use encoding: 'form' or clientSecretPost |
+| a bound token held, and no certificate pinned | `token-binding` `bound-to-unpinned` | the token is bound to a client certificate this provider does not present | give the provider a clientAuthentication that presents the certificate the token was issued for |
+| a token renewed because it was bound to another certificate, and the new one is bound elsewhere too | `token-binding` `renewed-bound-elsewhere` | the new token is bound to a client certificate this provider does not present | the authorization server bound the new token to another certificate: check the certificate registered for this client |
+| a TLS failure: `UNABLE_TO_VERIFY_LEAF_SIGNATURE`, `SELF_SIGNED_CERT_IN_CHAIN`, `DEPTH_ZERO_SELF_SIGNED_CERT`, `UNABLE_TO_GET_ISSUER_CERT_LOCALLY` | `tls` | `<operation>` failed: the server's certificate is not trusted (`<code>`) | if the server uses a private CA, name its certificate in NODE_EXTRA_CA_CERTS |
+| a TLS failure: `CERT_HAS_EXPIRED` | `tls` | `<operation>` failed: the server's certificate has expired (`<code>`) | the server must renew its certificate; check also this machine's clock |
+| a TLS failure: `ERR_TLS_CERT_ALTNAME_INVALID` | `tls` | `<operation>` failed: the host name is not in the server's certificate (`<code>`) | use the host name the server's certificate is issued for |
+| a TLS failure: `ERR_SSL_TLSV13_ALERT_CERTIFICATE_REQUIRED`, `ERR_SSL_TLSV1_ALERT_UNKNOWN_CA`, `ERR_SSL_SSL/TLS_ALERT_BAD_CERTIFICATE`, `ERR_SSL_SSLV3_ALERT_BAD_CERTIFICATE`, `ERR_SSL_SSL/TLS_ALERT_CERTIFICATE_UNKNOWN`, `ERR_SSL_SSLV3_ALERT_CERTIFICATE_UNKNOWN`, `ERR_SSL_SSL/TLS_ALERT_CERTIFICATE_EXPIRED`, `ERR_SSL_SSLV3_ALERT_CERTIFICATE_EXPIRED`, `ERR_SSL_SSL/TLS_ALERT_CERTIFICATE_REVOKED`, `ERR_SSL_SSLV3_ALERT_CERTIFICATE_REVOKED`, `ERR_SSL_SSL/TLS_ALERT_UNSUPPORTED_CERTIFICATE`, `ERR_SSL_SSLV3_ALERT_UNSUPPORTED_CERTIFICATE` | `tls` | `<operation>` failed: the server refused the client certificate (`<code>`) | check that the server trusts the certificate's issuer and that the certificate is valid and not revoked |
+<!-- /generated:refusal-table refusals -->
 
 ### SSO Providers
 
@@ -940,17 +1991,20 @@ import { AuthBroker } from '@mcp-abap-adt/auth-broker';
 import {
   SsoProviderFactory,
   oidcCallbackStrategy,
+  linuxDefaultBrowser,
+  refreshThenLogin,
 } from '@mcp-abap-adt/auth-providers';
 
 const tokenProvider = SsoProviderFactory.create({
   protocol: 'oidc',
   flow: 'browser',
   config: {
+    renewal: refreshThenLogin(),
     issuerUrl: 'https://example-idp/.well-known/openid-configuration',
     clientId: '...',
     clientSecret: '...',
     scopes: ['openid', 'profile', 'email'],
-    authorization: oidcCallbackStrategy({ browser: 'system' }),
+    authorization: oidcCallbackStrategy({ browser: linuxDefaultBrowser() }),
   },
 });
 
@@ -964,11 +2018,13 @@ import {
   OidcBrowserProvider,
   asOidcResult,
   staticCodeStrategy,
+  refreshThenLogin,
 } from '@mcp-abap-adt/auth-providers';
 
 const redirectUri = 'urn:ietf:wg:oauth:2.0:oob';
 
 const provider = new OidcBrowserProvider({
+  renewal: refreshThenLogin(),
   clientId: '...',
   tokenEndpoint: 'https://issuer/oauth/token',
   authorizationEndpoint: 'https://issuer/oauth/authorize',
@@ -984,7 +2040,11 @@ const provider = new OidcBrowserProvider({
 `string`; passing one directly does not type-check. The adapter wraps the code
 as `{ code }` — a value that never travelled through a redirect carries no
 `state` to check — and delegates `dispose`, so wrapping costs nothing in
-lifecycle terms.
+lifecycle terms. For a code the user pastes, compose `oidcCode()` instead
+(`composeAuthorization({ presentation: showUrl(), transport:
+terminalPaste({ redirectUri }), protocol: oidcCode(), endpoint: '/callback'
+})`, see [Composing a strategy from parts](#composing-a-strategy-from-parts)):
+it also checks a pasted URL's `state`.
 
 The redirect URI is no longer a provider field: it belongs to the strategy,
 because with an ephemeral port nothing knows it until the socket is bound. The
@@ -1008,6 +2068,7 @@ import {
   Saml2BearerProvider,
   createSignedAssertionValidator,
   defaultReplayStore,
+  refreshThenLogin,
 } from '@mcp-abap-adt/auth-providers';
 
 // The Recipient the assertion names: the URI-binding assertion consumer
@@ -1026,6 +2087,7 @@ const fromSsoProxy: IAuthorizationStrategy<string> = {
 };
 
 const provider = new Saml2BearerProvider({
+  renewal: refreshThenLogin(),
   idpSsoUrl: 'https://idp.example.com/sso',
   spEntityId: 'uaa.example', // the entityID in that metadata: the Audience
   acsUrl,
@@ -1063,12 +2125,13 @@ the IdP, answering no request. (4.0 refuses that case itself, at
 supply an IdP-initiated assertion, declare `idpInitiated: true`, and use a
 strategy that does not call
 `buildAuthorizationUrl`: `staticCodeStrategy`, or your own as above.
-`samlCallbackStrategy`, `manualSamlResponseStrategy` and `externalCodeStrategy`
-all call it, and with `idpInitiated: true` and no `authorizationUrl` the builder
-refuses: a `ValidationError` (`missingFields: ['authorizationUrl']`) thrown
-before any URL is produced, so before a browser opens. (3.0's advice —
+`samlCallbackStrategy`, `manualSamlResponseStrategy` and a `consumerHandoff`
+composed with `samlResponse()` all call it, and with `idpInitiated: true` and
+no `authorizationUrl` the builder refuses: a configuration error
+(`saml-idp-initiated-without-authorization-url`) thrown before any URL is
+produced, so before a browser opens. (3.0's advice —
 `externalCodeStrategy` whose `provide` ignores the URL — no longer works for
-that reason.) See
+that reason; since 6.0.0 `externalCodeStrategy` takes OAuth codes only.) See
 [Where the expected request ID comes from](#where-the-expected-request-id-comes-from).
 
 The `redirectUri` your strategy reports is the ACS the assertion is checked
@@ -1105,11 +2168,13 @@ import {
   createSignedResponseValidator,
   defaultReplayStore,
   manualSamlResponseStrategy,
+  refreshThenLogin,
 } from '@mcp-abap-adt/auth-providers';
 
 const acsUrl = 'https://sp.example.com/saml/acs';
 
 const provider = new Saml2PureProvider({
+  renewal: refreshThenLogin(),
   idpSsoUrl: 'https://idp.example.com/sso',
   spEntityId: 'my-sp-entity',
   acsUrl,
@@ -1134,29 +2199,32 @@ const broker = new AuthBroker({ tokenProvider: provider }, 'none');
 validated, and the session's `expiresAt` is the validated assertion's expiry.
 
 **Stored cookies.** Pass cookies a previous login obtained as `accessToken`,
-with the `expiresAt` they were obtained with (epoch ms — `onTokens` and
-`getTokens()` report it). Until `expiresAt`, less a one-minute buffer, the
+with the `expiresAt` they were obtained with (epoch ms — the persistence
+report and `getTokens()` carry it). Until `expiresAt`, less a one-minute buffer, the
 provider presents them and runs no login: no strategy, no validator, no
 `cookieProvider`. Past it — or with no `expiresAt`, since cookies carry no
 expiry of their own — the first `getTokens()` or `authorize()` logs in as
 above. There is no `refreshToken`: SAML has none, so renewal is a new login.
 See [Seeding a stored credential](#seeding-a-stored-credential).
 
-**Read that `redirectUri` twice.** A SAML strategy defaults its redirect URI to
-`http://localhost:61001/callback`, and the provider requires the assertion
-consumer service the IdP posts to be exactly the one the strategy names. If you
-declare a real `acsUrl` and leave `redirectUri` off, the login fails with
-*"SAML acsUrl is … but the authorization strategy is listening on …"* before
-anything is opened. Declare neither and the default is used for both, which is
+**Read that `redirectUri` twice.** The provider requires the assertion
+consumer service the IdP posts to be exactly the redirect the strategy
+names. `samlCallbackStrategy` advertises its loopback listener,
+`http://localhost:61001/callback` by default; `manualSamlResponseStrategy`
+and a `consumerHandoff` advertise the `redirectUri` you give them, which
+`manualSamlResponseStrategy` requires. If you declare a real `acsUrl` and the
+strategy names another address, the login fails before anything is opened
+with a configuration error, `saml-acs-mismatch` — *SAML acsUrl and the
+address the authorization strategy used do not match* — whose two addresses
+are `diagnostics.configuredUri` and `diagnostics.strategyUri`
+(`renderDiagnostics(error)` prints them), not words. Declare no `acsUrl` with
+`samlCallbackStrategy` and its address is used for both, which is
 consistent — and only reachable when the IdP will post to your localhost.
 
-Both SAML providers now reject at construction when `authorizationUrl` is set
-without `acsUrl`:
-
-```
-acsUrl is required when authorizationUrl is set: the ACS inside a pre-built
-SAML request cannot be read, so it must be declared.
-```
+Both SAML providers reject at construction when `authorizationUrl` is set
+without `acsUrl` — a configuration error, `saml-acs-required-with-authorization-url`:
+*acsUrl is required when authorizationUrl is set: the ACS inside a pre-built
+SAML request cannot be read, so it must be declared*.
 
 The ACS is buried in a deflated `SAMLRequest` this package did not build and
 cannot read, so it cannot be verified against whatever the strategy binds. 1.x
@@ -1178,7 +2246,8 @@ took its session lifetime from a regular expression over the unverified XML.
 as `assertionValidator` — a shipped one built from the identity provider's
 certificates, or your own — and omitting it does not compile. A shipped
 validator supplied without `idpEntityId` fails at construction — a
-`ValidationError` whose `missingFields` names it — before any browser opens or
+configuration error (`saml-shipped-validator-without-issuer`) naming it —
+before any browser opens or
 any request is sent. `inBrowser(config, trust)` is the recipe that builds the
 shipped validator from a `SamlTrust`.
 
@@ -1231,11 +2300,13 @@ import {
   createSignedAssertionValidator,
   defaultReplayStore,
   samlCallbackStrategy,
+  refreshThenLogin,
 } from '@mcp-abap-adt/auth-providers';
 
 const idpCertificates = [readFileSync('idp-signing.pem', 'utf8')];
 
 const provider = new Saml2PureProvider({
+  renewal: refreshThenLogin(),
   idpSsoUrl: 'https://idp.example.com/sso',
   spEntityId: 'my-sp-entity',
   acsUrl: 'https://sp.example.com/saml/acs',
@@ -1291,9 +2362,17 @@ does by default — satisfies either validator.
 
 #### What the validators check
 
-In this order; each refusal is an `AssertionValidationError` whose `check`
-names the row. Rows marked *(signed-Response only)* are not performed by
-`createSignedAssertionValidator`.
+In this order; each refusal is an `AuthProviderFailure` of kind
+`saml-assertion` whose `error.facts.check` names the row, and whose
+`error.facts.rule` names the rule within it (see
+[Refusal messages](#refusal-messages)). Rows marked *(signed-Response only)* are not performed by
+`createSignedAssertionValidator`. One exception to the order, in the
+signed-Response validator: once every signature has verified (2) and the
+signature covers the `Response`, `Status` (4) is read **before** the rest of
+3 — a login the identity provider declined carries no `Assertion` (Keycloak
+answers a passive login with `Responder` / `NoPassive` and none), so it is
+refused `declined` with its status rather than "carries no direct-child
+saml:Assertion". Either order refuses; nothing is accepted on `Status`.
 
 | # | Check | Refused when | `check` |
 |---|---|---|---|
@@ -1388,97 +2467,126 @@ What the table compresses:
 
 #### Refusal messages
 
-Since 4.1.0 no two rules under one `check` share a message, and an element
-that must appear exactly once says which way it failed — absent, or more than
-one. Every value a message takes from the document is JSON-quoted and cut to
-64 characters, so a newline smuggled in as `&#10;` shows as `\n` and cannot
-forge a log line. Match on `check` in code; the message is for the person
-reading the log. `<n>` is a count of two or more; `"…"` is a quoted document
-value.
+A refused assertion is an `AuthProviderFailure` whose `error` is a minted
+`saml-assertion` error (from `@mcp-abap-adt/auth-errors`): `error.variant` and
+`error.facts.rule` name the rule, `error.facts.check` the check that rule
+belongs to (fixed by the rule), and a "carries <n>" rule carries the count as
+`facts.count`. Match on `rule` in code; the words are for the person reading
+the log. No two rules under one `check` share words, and an element that must
+appear exactly once says which way it failed — absent, or more than one.
 
-| `check` | message |
-|---|---|
-| `document` | `the SAMLResponse carries a DOCTYPE declaration, which is never accepted` |
-| `document` | `the SAMLResponse did not parse as XML` |
-| `document` | `expected a samlp:Response or a saml:Assertion, got "…"` |
-| `document` | `expected the document element to be a samlp:Response, got "…"` |
-| `duplicateId` | `the document uses the ID "…" more than once, so which element is signed is ambiguous` |
-| `signature` | `the document carries no signature` |
-| `signature` | `the signature element is malformed: "…"` |
-| `signature` | `the signature does not verify against any configured certificate` |
-| `signature` | `the signature carries no ds:Reference` |
-| `signature` | `the signature carries <n> ds:Reference; exactly one is allowed` |
-| `signature` | `the signature reference is not a same-document URI: "…"` |
-| `signature` | `the signature references "…", which is not in the document` |
-| `signature` | `the signature is not inside the element it references, so it does not envelope it` |
-| `signedNode` | `the response carries no direct-child saml:Assertion` |
-| `signedNode` | `the response carries <n> direct-child saml:Assertion; exactly one is allowed` |
-| `signedNode` | `the signature does not cover the samlp:Response this validator requires` |
-| `signedNode` | `the signature does not cover the saml:Assertion this validator requires` |
-| `signedNode` | `the document carries an Assertion or EncryptedAssertion, SAML 2.0 or 1.x, outside the one the signature covers` |
-| `signedNode` | `the document carries an Assertion or EncryptedAssertion inside a ds:Signature, which is never accepted` |
-| `status` | `the response carries no samlp:Status` |
-| `status` | `the response carries <n> samlp:Status; exactly one is allowed` |
-| `status` | `the samlp:Status carries no samlp:StatusCode` |
-| `status` | `the samlp:Status carries <n> samlp:StatusCode; exactly one is allowed` |
-| `status` | `the samlp:StatusCode carries no Value` |
-| `status` | `the identity provider declined the login: "…"` |
-| `assertionId` | `the assertion carries no ID` |
-| `issuer` | `the assertion carries no saml:Issuer` |
-| `issuer` | `the assertion carries <n> saml:Issuer; exactly one is allowed` |
-| `issuer` | `the assertion's saml:Issuer is empty` |
-| `issuer` | `no expectedIssuer was configured, so the assertion issuer cannot be trusted` |
-| `issuer` | `the assertion was issued by "…", not the trusted issuer` |
-| `issuer` | `the response must carry at most one saml:Issuer` |
-| `issuer` | `the response and the assertion name different issuers` |
-| `conditions` | `the assertion carries no saml:Conditions` |
-| `conditions` | `the assertion carries <n> saml:Conditions; exactly one is allowed` |
-| `notBefore` | `Conditions NotBefore is not a valid xsd:dateTime: "…"` |
-| `notBefore` | `the assertion is not valid yet` |
-| `notOnOrAfter` | `Conditions carries no NotOnOrAfter, so the assertion states no lifetime` |
-| `notOnOrAfter` | `Conditions NotOnOrAfter is not a valid xsd:dateTime: "…"` |
-| `notOnOrAfter` | `the assertion has expired` |
-| `audience` | `the assertion restricts no audience` |
-| `audience` | `an AudienceRestriction names no audience` |
-| `audience` | `an AudienceRestriction on this assertion does not name us` |
-| `bearerConfirmation` | `the assertion carries no saml:Subject` |
-| `bearerConfirmation` | `the assertion carries <n> saml:Subject; exactly one is allowed` |
-| `bearerConfirmation` | `the saml:Subject holds no SubjectConfirmation` |
-| `bearerConfirmation` | `no bearer confirmation qualifies: #1 <reason> \| #2 <reason> \| …` |
-| `destination` | `the response carries no Destination` |
-| `destination` | `the response is addressed to "…", not to us` |
-| `replay` | `this assertion has been presented before` |
+**No document value is in the words.** A value a rule may show — the root
+element's name, a duplicated `ID`, a reference URI, an unregistered
+`StatusCode`, the `Issuer`, an invalid `NotBefore` / `NotOnOrAfter`, the
+`Destination` — is the rule's one **diagnostic** (`error.diagnostics`, the
+table's last column; `renderDiagnostics(error)` prints it, `logFields(error)`
+carries it as its own field). It is admitted by its shape or dropped: a value
+holding a control, format, bidirectional or line-separator character (a
+newline smuggled in as `&#10;`) is dropped, not escaped, and the error is
+minted without it; a longer value or `ID` is cut at 64 code points with `…`
+(a root name longer than 64 characters, which a cut would misname, is
+dropped). Nothing a
+parser, `xml-crypto` or OpenSSL says reaches the error at all.
 
-A `bearerConfirmation` refusal naming candidates lists each one's first failed
-sub-rule, in document order, joined by ` | ` — not `; `, which a count reason
-such as `carries 2 SubjectConfirmationData; exactly one is allowed` contains
-itself; past five candidates it ends ` | and N more`, N being how many were
-not listed. The eleven reasons:
+The rules, in the order the validators check them — except that the
+signed-Response validator reads the `status` rules right after
+`response-not-signed`, before counting the `Assertion` (see above); the last six are the
+bearer grant's conversion of a validated payload (`Saml2BearerProvider`),
+reachable only when a custom validator accepted a payload it cannot convert:
 
-| # | `<reason>`, in the order a candidate is tested |
-|---|---|
-| 1 | `Method is not bearer` |
-| 2 | `carries no SubjectConfirmationData` |
-| 3 | `carries <n> SubjectConfirmationData; exactly one is allowed` |
-| 4 | `InResponseTo is present, but this login sent no request` |
-| 5 | `InResponseTo does not answer our request` |
-| 6 | `Recipient is not the ACS` |
-| 7 | `SubjectConfirmationData has no NotOnOrAfter` |
-| 8 | `SubjectConfirmationData NotOnOrAfter is not a valid xsd:dateTime` |
-| 9 | `SubjectConfirmationData NotBefore is not a valid xsd:dateTime` |
-| 10 | `NotOnOrAfter has passed` |
-| 11 | `NotBefore has not arrived` |
+<!-- generated:refusal-table saml -->
+| `check` | `rule` | Words, after `the SAML assertion was refused (<check>): ` | Diagnostic |
+|---|---|---|---|
+| `document` | `doctype` | `the SAMLResponse carries a DOCTYPE declaration, which is never accepted` | — |
+| `document` | `not-xml` | `the SAMLResponse did not parse as XML` | — |
+| `document` | `root-not-response-or-assertion` | `expected a samlp:Response or a saml:Assertion` | `rootElement` |
+| `document` | `root-not-response` | `expected the document element to be a samlp:Response` | `rootElement` |
+| `duplicateId` | `duplicate-id` | `the document uses an ID more than once, so which element is signed is ambiguous` | `id` |
+| `signature` | `no-signature` | `the document carries no signature` | — |
+| `signature` | `signature-malformed` | `the signature element is malformed` | — |
+| `signature` | `signature-not-verified` | `the signature does not verify against any configured certificate` | — |
+| `signature` | `no-reference` | `the signature carries no ds:Reference` | — |
+| `signature` | `several-references` | `the signature carries <n> ds:Reference; exactly one is allowed` | — |
+| `signature` | `reference-not-same-document` | `the signature reference is not a same-document URI` | `referenceUri` |
+| `signature` | `reference-not-found` | `the signature references an element that is not in the document` | `referenceUri` |
+| `signature` | `signature-not-enveloped` | `the signature is not inside the element it references, so it does not envelope it` | — |
+| `signedNode` | `no-direct-assertion` | `the response carries no direct-child saml:Assertion` | — |
+| `signedNode` | `several-direct-assertions` | `the response carries <n> direct-child saml:Assertion; exactly one is allowed` | — |
+| `signedNode` | `response-not-signed` | `the signature does not cover the samlp:Response this validator requires` | — |
+| `signedNode` | `assertion-not-signed` | `the signature does not cover the saml:Assertion this validator requires` | — |
+| `signedNode` | `assertion-outside-signed` | `the document carries an Assertion or EncryptedAssertion, SAML 2.0 or 1.x, outside the one the signature covers` | — |
+| `signedNode` | `assertion-inside-signature` | `the document carries an Assertion or EncryptedAssertion inside a ds:Signature, which is never accepted` | — |
+| `status` | `no-status` | `the response carries no samlp:Status` | — |
+| `status` | `several-status` | `the response carries <n> samlp:Status; exactly one is allowed` | — |
+| `status` | `no-status-code` | `the samlp:Status carries no samlp:StatusCode` | — |
+| `status` | `several-status-codes` | `the samlp:Status carries <n> samlp:StatusCode; exactly one is allowed` | — |
+| `status` | `status-code-no-value` | `the samlp:StatusCode carries no Value` | — |
+| `status` | `declined` | `the identity provider declined the login`, followed by ` (<StatusCode>)` when the code is one of `SAML_STATUS_CODES` | `statusCode`, when the code is not a registered one |
+| `assertionId` | `no-assertion-id` | `the assertion carries no ID` | — |
+| `issuer` | `no-issuer` | `the assertion carries no saml:Issuer` | — |
+| `issuer` | `several-issuers` | `the assertion carries <n> saml:Issuer; exactly one is allowed` | — |
+| `issuer` | `empty-issuer` | `the assertion's saml:Issuer is empty` | — |
+| `issuer` | `no-expected-issuer` | `no expectedIssuer was configured, so the assertion issuer cannot be trusted` | — |
+| `issuer` | `untrusted-issuer` | `the assertion was not issued by the trusted issuer` | `issuer` |
+| `issuer` | `several-response-issuers` | `the response must carry at most one saml:Issuer` | — |
+| `issuer` | `issuers-differ` | `the response and the assertion name different issuers` | — |
+| `conditions` | `no-conditions` | `the assertion carries no saml:Conditions` | — |
+| `conditions` | `several-conditions` | `the assertion carries <n> saml:Conditions; exactly one is allowed` | — |
+| `notBefore` | `not-before-invalid` | `Conditions NotBefore is not a valid xsd:dateTime` | `notBefore` |
+| `notBefore` | `not-yet-valid` | `the assertion is not valid yet` | — |
+| `notOnOrAfter` | `no-not-on-or-after` | `Conditions carries no NotOnOrAfter, so the assertion states no lifetime` | — |
+| `notOnOrAfter` | `not-on-or-after-invalid` | `Conditions NotOnOrAfter is not a valid xsd:dateTime` | `notOnOrAfter` |
+| `notOnOrAfter` | `expired` | `the assertion has expired` | — |
+| `audience` | `no-audience-restriction` | `the assertion restricts no audience` | — |
+| `audience` | `audience-restriction-empty` | `an AudienceRestriction names no audience` | — |
+| `audience` | `audience-not-us` | `an AudienceRestriction on this assertion does not name us` | — |
+| `bearerConfirmation` | `no-subject` | `the assertion carries no saml:Subject` | — |
+| `bearerConfirmation` | `several-subjects` | `the assertion carries <n> saml:Subject; exactly one is allowed` | — |
+| `bearerConfirmation` | `no-subject-confirmation` | `the saml:Subject holds no SubjectConfirmation` | — |
+| `bearerConfirmation` | `no-bearer-qualifies` | `no bearer confirmation qualifies: #1 <reason> \| #2 <reason> \| …[ \| and N more]` | — |
+| `destination` | `no-destination` | `the response carries no Destination` | — |
+| `destination` | `destination-not-us` | `the response is not addressed to us` | `destination` |
+| `replay` | `replayed` | `this assertion has been presented before` | — |
+| `document` | `payload-not-base64-xml` | `SAML bearer payload is not base64-encoded XML` | — |
+| `document` | `payload-not-well-formed` | `SAML bearer payload is not well-formed XML` | — |
+| `document` | `payload-not-saml` | `SAML bearer payload is neither a SAML Response nor an Assertion` | — |
+| `document` | `only-encrypted-assertion` | `SAML Response carries only an EncryptedAssertion; encrypted Assertions are not supported` | — |
+| `document` | `no-assertion` | `SAML Response carries no Assertion` | — |
+| `document` | `several-assertions` | `SAML Response carries <n> Assertions; a bearer grant takes one` | — |
+<!-- /generated:refusal-table saml -->
 
-Two messages from outside a validator changed in 4.1.0 and carry no `check`.
-A provider configured with both `idpInitiated: true` and `authnRequestId`
-throws a `ValidationError` (`missingFields: ['idpInitiated']`) at
-construction: `SAML idpInitiated is true and authnRequestId is set: an
-IdP-initiated login sends no request, so the two describe different logins.
-Remove one of them.` And `Saml2BearerProvider`'s conversion of a validated
-payload into the bearer grant's Assertion throws a plain `Error` whose parser
-text is quoted the same way — reachable only when a custom validator accepted
-a payload that does not parse: `SAML bearer payload is not well-formed XML:
-"…"`.
+A `no-bearer-qualifies` refusal names each candidate's first failed sub-rule,
+in document order (`facts.candidates`, each a `reason` — with `count` for
+`several-confirmation-data`), joined by ` | ` — not `; `, which a count
+reason contains itself. Past five candidates the rest are counted in
+`facts.moreCandidates` and the words end ` | and N more`. The eleven
+reasons:
+
+<!-- generated:refusal-table saml-candidates -->
+| # | `reason` | Words |
+|---|---|---|
+| 1 | `method-not-bearer` | `Method is not bearer` |
+| 2 | `no-confirmation-data` | `carries no SubjectConfirmationData` |
+| 3 | `several-confirmation-data` | `carries <n> SubjectConfirmationData; exactly one is allowed` |
+| 4 | `in-response-to-unexpected` | `InResponseTo is present, but this login sent no request` |
+| 5 | `in-response-to-mismatch` | `InResponseTo does not answer our request` |
+| 6 | `recipient-not-acs` | `Recipient is not the ACS` |
+| 7 | `no-not-on-or-after` | `SubjectConfirmationData has no NotOnOrAfter` |
+| 8 | `not-on-or-after-invalid` | `SubjectConfirmationData NotOnOrAfter is not a valid xsd:dateTime` |
+| 9 | `not-before-invalid` | `SubjectConfirmationData NotBefore is not a valid xsd:dateTime` |
+| 10 | `not-on-or-after-passed` | `NotOnOrAfter has passed` |
+| 11 | `not-before-not-arrived` | `NotBefore has not arrived` |
+<!-- /generated:refusal-table saml-candidates -->
+
+A custom `assertionValidator` may throw anything: its throw is classified
+with the operation `validating-assertion` — a shipped validator's refusal it
+passes on stays as it is, diagnostics included; any other value is never
+handed back, nor its message. A provider configured with both
+`idpInitiated: true` and `authnRequestId` throws a configuration error
+(`saml-idp-initiated-with-request-id`, `fields: ['idpInitiated',
+'authnRequestId']`) at construction: `SAML idpInitiated is true, but a
+request ID was also configured or minted: an IdP-initiated login sends no
+request` — `remove one of them`.
 
 **Expiry comes from the verified document.** A validated assertion's
 `expiresAt` is the earlier of `Conditions/@NotOnOrAfter` and the `NotOnOrAfter`
@@ -1515,8 +2623,8 @@ and the login is not declared IdP-initiated. Two flows trigger it:
 - a strategy that returns a payload without calling `buildAuthorizationUrl` —
   `staticCodeStrategy`, or your own — after a request you sent some other way.
 
-Without it, the login fails with a `ValidationError` (`missingFields:
-['authnRequestId']`) after the strategy returns and before the assertion is
+Without it, the login fails with a configuration error
+(`saml-in-response-to-undeclared`) after the strategy returns and before the assertion is
 read — as a configuration fault, not a refusal blamed on the assertion. A
 strategy that merely forgot to call the builder must not silently switch the
 provider into accepting unsolicited responses.
@@ -1535,12 +2643,12 @@ assertion without `InResponseTo` does not make a login IdP-initiated; only
 
 `idpInitiated: true` together with a request ID is a configuration error too:
 the two describe different logins. With a declared `authnRequestId` the
-provider refuses at construction — a `ValidationError` (`missingFields:
-['idpInitiated']`) — before any browser opens. A strategy that calls
+provider refuses at construction — a configuration error
+(`saml-idp-initiated-with-request-id`) — before any browser opens. A strategy that calls
 `buildAuthorizationUrl` with no
 `authorizationUrl` configured is refused inside the builder, before a URL — and
-so a request ID — exists: a `ValidationError` with `missingFields:
-['authorizationUrl']`. Use a strategy that does not call the builder, and leave
+so a request ID — exists: a configuration error
+(`saml-idp-initiated-without-authorization-url`). Use a strategy that does not call the builder, and leave
 `authnRequestId` unset; or configure the identity provider's IdP-initiated SSO
 URL as `authorizationUrl`, which the builder hands over without minting
 anything.
@@ -1629,10 +2737,10 @@ never refused),
 ```typescript
 import { readFileSync } from 'node:fs';
 import {
-  AssertionValidationError,
   createSignedResponseValidator,
   defaultReplayStore,
 } from '@mcp-abap-adt/auth-providers';
+import { readFailure, renderDiagnostics } from '@mcp-abap-adt/auth-errors';
 
 const validator = createSignedResponseValidator({
   idpCertificates: [readFileSync('idp-signing.pem', 'utf8')],
@@ -1647,11 +2755,13 @@ try {
     expectedIssuer: 'https://idp.example.com/metadata', // required — see below
   });
   console.error(validated.nameId, validated.expiresAt);
-} catch (error) {
-  if (error instanceof AssertionValidationError) {
-    console.error(`refused at ${error.check}: ${error.message}`);
+} catch (thrown) {
+  const error = readFailure(thrown, 'validating-assertion');
+  if (error.kind === 'saml-assertion') {
+    // error.variant === error.facts.rule, e.g. 'untrusted-issuer'
+    console.error(error.reason, renderDiagnostics(error) ?? '');
   }
-  throw error;
+  throw thrown;
 }
 ```
 
@@ -1667,9 +2777,9 @@ assertion must answer it; absent, the assertion must carry no `InResponseTo`.
 
 | Error | When |
 |---|---|
-| `AssertionValidationError` | an assertion was refused. `check` (type `AssertionCheck`) names the row above — tell "your IdP declined" (`status`) from "not addressed to us" (`audience`, `bearerConfirmation`, `destination`) without parsing the message. `code` is `'ASSERTION_VALIDATION_ERROR'` (`ASSERTION_ERROR_CODES.VALIDATION_ERROR` from `@mcp-abap-adt/interfaces-auth`) |
-| `ValidationError` | configuration: `idpEntityId` missing with a shipped validator supplied as `assertionValidator` (at construction); `idpInitiated` with no `authorizationUrl` and a strategy that calls `buildAuthorizationUrl` (inside the builder, before any URL is produced); `idpInitiated` combined with a declared `authnRequestId` (at construction); `authnRequestId` missing (at login, after the strategy returns and before the assertion is read). `missingFields` names the field |
-| `Error` | a certificate that is neither PEM nor base64 DER, or not a valid X.509 certificate; a `clockSkewMs` that is not a finite non-negative integer; and an empty `idpCertificates` (*"must not be empty"*) — all when the validator is built, which for `inBrowser` is when the provider is |
+| `AuthProviderFailure`, kind `saml-assertion` | an assertion was refused. `error.facts.rule` names the rule and `error.facts.check` the row above — tell "your IdP declined" (`declined`) from "not addressed to us" (`audience-not-us`, `no-bearer-qualifies`, `destination-not-us`) without parsing the words; the one document value a rule may show is `error.diagnostics` (see [Refusal messages](#refusal-messages)). `AssertionValidationError` is gone (6.0.0) |
+| `AuthProviderFailure`, kind `configuration` | configuration: `idpEntityId` missing with a shipped validator supplied as `assertionValidator` (at construction, `saml-shipped-validator-without-issuer`); `idpInitiated` with no `authorizationUrl` and a strategy that calls `buildAuthorizationUrl` (inside the builder, before any URL is produced, `saml-idp-initiated-without-authorization-url`); `idpInitiated` combined with a declared `authnRequestId` (at construction, `saml-idp-initiated-with-request-id`); `authnRequestId` missing (at login, after the strategy returns and before the assertion is read, `saml-in-response-to-undeclared`). `facts.fields` names the fields — see [Configuration errors](#configuration-errors) |
+| `AuthProviderFailure`, kind `configuration`, when the validator is built (for `inBrowser`, when the provider is) | a certificate that is neither PEM nor base64 DER, or not a valid X.509 certificate (`idp-certificate-invalid`); a `clockSkewMs` that is not a finite non-negative integer (`validator-clock-skew-invalid`, the value given not echoed); an empty `idpCertificates` (`validator-no-certificates`) |
 
 ### With Stores
 
@@ -1683,6 +2793,8 @@ import {
   AuthorizationCodeProvider,
   ClientCredentialsProvider,
   browserCallbackStrategy,
+  linuxDefaultBrowser,
+  refreshThenLogin,
 } from '@mcp-abap-adt/auth-providers';
 import { 
   XsuaaServiceKeyStore, 
@@ -1701,6 +2813,7 @@ const xsuaaBroker = new AuthBroker({
   serviceKeyStore: xsuaaServiceKeyStore,
   sessionStore: xsuaaSessionStore,
   tokenProvider: new ClientCredentialsProvider({
+    renewal: refreshThenLogin(),
     uaaUrl: 'https://...',
     clientId: '...',
     clientSecret: '...',
@@ -1715,10 +2828,11 @@ const btpBroker = new AuthBroker({
   serviceKeyStore: btpServiceKeyStore,
   sessionStore: btpSessionStore,
   tokenProvider: new AuthorizationCodeProvider({
+    renewal: refreshThenLogin(),
     uaaUrl: 'https://...',
     clientId: '...',
     clientSecret: '...',
-    authorization: browserCallbackStrategy({ browser: 'system' }),
+    authorization: browserCallbackStrategy({ browser: linuxDefaultBrowser() }),
   }),
 });
 
@@ -1731,10 +2845,11 @@ const abapBroker = new AuthBroker({
   serviceKeyStore: abapServiceKeyStore,
   sessionStore: abapSessionStore,
   tokenProvider: new AuthorizationCodeProvider({
+    renewal: refreshThenLogin(),
     uaaUrl: 'https://...',
     clientId: '...',
     clientSecret: '...',
-    authorization: browserCallbackStrategy({ browser: 'system', port: 4001 }),
+    authorization: browserCallbackStrategy({ browser: linuxDefaultBrowser(), port: 4001 }),
   }),
 });
 ```
@@ -1749,13 +2864,16 @@ Uses browser-based OAuth2 flow or refresh token:
 import {
   AuthorizationCodeProvider,
   browserCallbackStrategy,
+  linuxDefaultBrowser,
+  refreshThenLogin,
 } from '@mcp-abap-adt/auth-providers';
 
 const provider = new AuthorizationCodeProvider({
+  renewal: refreshThenLogin(),
   uaaUrl: 'https://...authentication...hana.ondemand.com',
   clientId: '...',
   clientSecret: '...',
-  authorization: browserCallbackStrategy({ browser: 'system' }),
+  authorization: browserCallbackStrategy({ browser: linuxDefaultBrowser() }),
 });
 
 // If refreshToken is provided here, uses refresh flow (no browser)
@@ -1771,9 +2889,10 @@ const result = await provider.getTokens();
 Uses `client_credentials` grant type - no browser interaction required:
 
 ```typescript
-import { ClientCredentialsProvider } from '@mcp-abap-adt/auth-providers';
+import { ClientCredentialsProvider, refreshThenLogin } from '@mcp-abap-adt/auth-providers';
 
 const provider = new ClientCredentialsProvider({
+  renewal: refreshThenLogin(),
   uaaUrl: 'https://...authentication...hana.ondemand.com',
   clientId: '...',
   clientSecret: '...',
@@ -1801,9 +2920,10 @@ code is asked for again only when the refresh token is gone. It suits an MCP
 server on a remote machine, in a container, or behind SSH.
 
 ```typescript
-import { UaaPasscodeProvider, manualPasscodeStrategy } from '@mcp-abap-adt/auth-providers';
+import { UaaPasscodeProvider, manualPasscodeStrategy, refreshThenLogin } from '@mcp-abap-adt/auth-providers';
 
 const provider = new UaaPasscodeProvider({
+  renewal: refreshThenLogin(),
   uaaUrl: 'https://<subdomain>.authentication.<region>.hana.ondemand.com',
   clientId: '...', // a client allowed the `password` grant (and `refresh_token`)
   clientSecret: '...', // omit for a public client
@@ -1815,10 +2935,11 @@ const provider = new UaaPasscodeProvider({
 
 The exchange is the password grant with `passcode` instead of a username and
 password — a UAA extension, not an RFC. A code is single-use; a mistyped or
-spent one fails with `Passcode exchange failed (401)` — the message names the
-status, and the OAuth `error` only when it is a registered code (UAA's
-`unauthorized` is not). What UAA said (`"Invalid passcode"`) is written
-nowhere: the server's free text may echo the passcode or the client secret.
+spent one fails with `request-failed` — *the passcode exchange failed (HTTP
+401)* — naming the status, and the OAuth `error` (`facts.oauthError`) only
+when it is a registered code (UAA's `unauthorized` is not). What UAA said
+(`"Invalid passcode"`) is read by nothing: the server's free text may echo the
+passcode or the client secret.
 
 #### Device flow prompts
 
@@ -1844,17 +2965,23 @@ export interface IDeviceCodePresenter {
 `presenter` is a required constructor field. The shipped one,
 `consoleDeviceCodePresenter(logger?)`, writes the prompt to the logger's
 `info`, or to **stderr** without one — never to stdout, which carries protocol
-traffic under an MCP or LSP stdio transport. `OidcDeviceFlowProvider.toConsole(config)`
+traffic under an MCP or LSP stdio transport. The prompt's values come from
+the authorization server, so it shows the verification URI only as an
+`http:` / `https:` serialisation of printable ASCII and the user code only
+when it is printable ASCII; without both it shows nothing and rejects, and
+the login ends `interactive-login` `device-code-not-shown`. `OidcDeviceFlowProvider.toConsole(config)`
 is the recipe that assembles it from `config.logger`:
 
 ```typescript
 import {
   OidcDeviceFlowProvider,
   type IDeviceCodePresenter,
+  refreshThenLogin,
 } from '@mcp-abap-adt/auth-providers';
 
 // The usual choice: logger or stderr.
 const provider = OidcDeviceFlowProvider.toConsole({
+  renewal: refreshThenLogin(),
   issuerUrl: 'https://idp.example.com/realms/sap',
   clientId: '...',
 });
@@ -1866,59 +2993,54 @@ const presenter: IDeviceCodePresenter = {
   },
 };
 const custom = new OidcDeviceFlowProvider({
+  renewal: refreshThenLogin(),
   issuerUrl: 'https://idp.example.com/realms/sap',
   clientId: '...',
   presenter,
 });
 ```
 
-A presenter that throws makes `prepare()` / `rejected()` answer Oops with the
-fixed reason "showing the device code failed"; the device code is never part
-of a refusal.
+A presenter that throws makes the login fail — `interactive-login`
+`device-code-not-shown`, "showing the device code failed" — so `prepare()` /
+`rejected()` answer Oops with it and `getTokens()` throws it; the device code
+is never part of a refusal, and the presenter's own error reaches the log only
+as its `logFields` (kind and fixed words). A presenter that never settles is
+bounded only by the login's signal.
 
 #### Callback port and lifetime
 
 **Note**: the callback port is set on the strategy (`browserCallbackStrategy({ port })`
 and its OIDC/SAML siblings), not on the provider — the 1.x `redirectPort` field
 is gone. The default is **61001**, was 3001. If the requested port is already in
-use, an error is thrown; specify a different port or free it before starting
-authentication. `port: 0` binds an ephemeral port, which works only where the
+use, the login fails with `interactive-login` `port-in-use` (*Port N is already
+in use. Please specify a different port or free the port.*, `facts.port`); a
+`port` that is not an integer in 0..65535 is a configuration error
+(`callback-port-invalid`) before any socket is touched. `port: 0` binds an ephemeral port, which works only where the
 identity provider accepts a loopback redirect on any port.
 
-**Port lifetime**: the callback port is held for the login and nothing longer. It is bound when the login window opens and released when the login ends — by success, by failure, by timeout, or by cancellation — and the returned promise settles only after the socket is actually free. An error therefore always means the port is already available, and the port is released *before* the authorization code is exchanged for a token, so a slow identity provider cannot hold it either.
+**Port lifetime**: the callback port is held for the login and nothing longer. It is bound when the login window opens and released when the login ends — by success, by the identity provider's refusal, by another failure, or by an abort — and the strategy's `authorize` settles only after every listening socket is closed. No timer is involved, and no connection is waited for: the response that ended the login has flushed before the release; at the release an idle connection is ended and unreferenced, and one still being answered — another request, its response unfinished, or a body that never completes — is destroyed, since a pending write would otherwise keep the process alive whatever `unref()` says. Every response carries `Connection: close`, so nothing pipelined is queued behind it. An error therefore always means the port is already available, and the port is released *before* the authorization code is exchanged for a token, so a slow identity provider cannot hold it either.
 
-**Timeout**: an interactive login waits 30 seconds for its callback, adjustable with `timeoutMs`. This applies to the browser, OIDC and SAML flows alike; before 1.2.0 the OIDC and SAML flows had no timeout at all, so an abandoned login held its port for the life of the process.
+**No built-in timeout** (since 6.0.0): an interactive login — browser, OIDC, SAML, or a manual paste — waits until its result arrives, the identity provider refuses, or the consumer's `AbortSignal` aborts it; it then ends `interactive-login` `aborted` and the port is free. The `timeoutMs` options, `DEFAULT_LOGIN_TIMEOUT_MS` and the 30 s / 300 s defaults are gone: a consumer that passed `timeoutMs` passes `signal: AbortSignal.timeout(ms)` instead (to the strategy, or to `inBrowser` / `fromTerminal` as `{ signal }`); one that passed nothing now waits until it aborts.
 
-**Incomplete callbacks**: a `/callback` carrying neither a code nor an error no longer ends the login. It is answered, counted, and the tally is reported if the login later times out — so a browser prefetch or a stray probe cannot cancel a login the user is still completing.
+**Refused requests**: a `/callback` carrying neither a code nor an error no longer ends the login, and neither does any request a listener or its protocol refuses — a callback without this login's `state`, one before the listener is armed, a paste without the form token, a `Host` the listener does not answer for. Each is answered `400` in fixed words, counted, logged at `warn` with its reason only, and the tally is reported when the login is aborted (`the browser login was aborted; 2 request(s) to the callback server were refused and ignored`) — so a browser prefetch, a stray probe or a forged callback cannot end a login the user is still completing.
 
 **Cancellation**: pass `signal` to the strategy, or call `dispose()` on it. Both are honoured before the bind, during it, and while waiting; `dispose()` resolves only once the socket is free.
 
-**Process termination**: the callback server no longer installs its own `SIGTERM` / `SIGINT` / `SIGHUP` / `exit` handlers. A terminating process releases its listening sockets to the operating system anyway — measured at 0-1 ms after the process disappears — and the handlers were part of the cleanup tangle removed in 1.2.0. If a client kills the process mid-login, the port comes back with the process.
+**Process termination**: the callback listener installs no `SIGTERM` / `SIGINT` / `SIGHUP` / `exit` handlers of its own. A terminating process releases its listening sockets to the operating system anyway — measured at 0-1 ms after the process disappears — and the handlers were part of the cleanup tangle removed in 1.2.0. If a client kills the process mid-login, the port comes back with the process.
 
-**Cross-Platform Browser Support**: The browser authentication works across Linux, macOS, and Windows:
-- **Linux**: Automatically sets `DISPLAY=:0` if neither `DISPLAY` nor `WAYLAND_DISPLAY` environment variables are set. Supports multiple browser executable names (`google-chrome`, `google-chrome-stable`, `chromium`, `chromium-browser` for Chrome; `firefox`, `firefox-esr` for Firefox).
-- **Windows**: Uses proper `cmd /c start ""` syntax for reliable browser opening.
-- **macOS**: Uses native `open -a` command.
-
-**Headless Mode (SSH/Remote)**: For environments without a display (SSH sessions, Docker, CI/CD), leave `browser` at its default or set it explicitly:
+**Opening a browser** is the `browser` you pass — one of [the six shipped browsers](#the-six-shipped-browsers), one fixed launch each for one platform, or [a browser of your own](#a-browser-of-your-own). **Without a display** (SSH sessions, Docker, CI/CD) pass no `browser`:
 
 ```typescript
 const provider = new AuthorizationCodeProvider({
+  renewal: refreshThenLogin(),
   uaaUrl, clientId, clientSecret,
-  authorization: browserCallbackStrategy({ browser: 'headless' }),
+  authorization: browserCallbackStrategy(),
 });
 
 const result = await provider.getTokens();
 ```
 
-In headless mode the authorization URL is shown — to the logger if there is one, to stderr otherwise — and the server waits for the user to complete authentication manually. The user can open the URL on any machine, and the callback reaches the server because it listens on all interfaces; the shipped UAA transport also prints where to paste the code if the redirect cannot reach back.
-
-**Browser Options** (`browserCallbackStrategy({ browser })`):
-- `'none'` (default): Shows the URL, waits for the callback or a paste
-- `'headless'`: Same as `'none'`
-- `'system'`: Opens the system default browser
-- `'auto'`: Tries to open a browser; on failure the URL is shown and the login continues
-- `'chrome'`, `'edge'`, `'firefox'`: Opens a specific browser
+The authorization URL is then shown on stderr, and the listener waits for the user to complete the login. The user can open the URL on any machine; the listener binds loopback only, so a browser elsewhere reaches it through [the SSH tunnel](#the-ssh-tunnel) to the callback port — the hint printed beside the URL says how, and where to paste the code if the redirect cannot reach back. A shipped browser that fails there (no display, no such program) does the same: the URL is shown once, and the login waits.
 
 ### Token Validation
 
@@ -1937,10 +3059,11 @@ const isValid = await provider.validateToken(token, serviceUrl);
 ```typescript
 // Local validation (no HTTP)
 const provider = new AuthorizationCodeProvider({
+  renewal: refreshThenLogin(),
   uaaUrl: 'https://...authentication...hana.ondemand.com',
   clientId: '...',
   clientSecret: '...',
-  authorization: browserCallbackStrategy({ browser: 'system' }),
+  authorization: browserCallbackStrategy({ browser: linuxDefaultBrowser() }),
 });
 const isValid = await provider.validateToken(token);  // serviceUrl optional
 // Checks JWT exp claim locally, no network request
@@ -1954,7 +3077,7 @@ This approach prevents unnecessary token refresh and browser authentication when
 ### Seeding a stored credential
 
 A token provider can start from a credential a previous run obtained — what
-`onTokens` reported, or what a session store kept — and use it until it
+its persistence strategy wrote, or what a session store kept — and use it until it
 expires instead of logging in. The seed is optional config; a provider without
 one logs in at the first `getTokens()`.
 
@@ -1977,15 +3100,20 @@ one logs in at the first `getTokens()`.
   from an unparsed file states no expiry. A numeric `exp`, `0` included, is
   the token's own. With neither, the seed counts as expired.
 - **Revoked before it expires.** A `401` on the seed is the credential's
-  (`rejected()`): the provider renews once, and a renewal that yields the seed
-  again is refused — *the renewal returned the credential that was refused*.
+  (`rejected()`): the provider renews through its renewal strategy, and a
+  renewal that yields the seed again is refused — *the renewal returned the
+  credential that was refused* (`renewal-unchanged`).
 - **Until then** `getTokens()` and `authorize()` answer the seed, less the
-  usual one-minute buffer; no request is made and `onTokens` is not called —
-  it reports only new tokens.
-- **After** the provider renews as usual: the `refreshToken` when there is one
-  and the grant has a refresh, else one login through the configured
-  strategy. What it obtains replaces the seed and goes to `onTokens`, with its
-  `expiresAt`.
+  usual one-minute buffer; no request is made and nothing is reported to
+  persistence — a cache hit is no change.
+- **After** the provider renews as usual, through its renewal strategy — with
+  `refreshThenLogin()`, the `refreshToken` when there is one and the grant has
+  a refresh, else one login through the configured authorization strategy.
+  What it obtains replaces the seed and is reported to persistence as a
+  `credential` report, with its `expiresAt`. A seeded refresh token the
+  renewal strategy discards is reported as `refresh-token-discarded`, with
+  the credential held (`authorizationToken: ''` when only the refresh token
+  was seeded).
 - `ClientCredentialsProvider` takes no seed: a new token costs one request and
   no user, so it obtains one.
 
@@ -1994,20 +3122,26 @@ const provider = new Saml2PureProvider({
   ...samlConfig,
   accessToken: stored.sessionCookies,
   expiresAt: stored.expiresAt,
-  onTokens: async ({ authorizationToken, expiresAt }) =>
-    save({ sessionCookies: authorizationToken, expiresAt }),
+  renewal: refreshThenLogin(), // SAML has no refresh: every renewal is a login
+  persistence: refreshStatePersistence(
+    async ({ authorizationToken, expiresAt }) =>
+      save({ sessionCookies: authorizationToken, expiresAt }),
+    { onWriteFailure: 'continue' },
+  ),
 });
 ```
 
 ### Token Refresh
 
-Providers handle refresh automatically inside `getTokens()`: while the cached token is valid it
-is returned, once it expires the refresh token is used, and a login follows when there is none or
-the refresh is refused.
+Providers renew automatically inside `getTokens()`: while the cached token is valid it is
+returned; once it expires the provider renews it through its [renewal strategy](#renewal-strategy)
+— with `refreshThenLogin()`, the refresh token is used, and a login follows when there is none or
+the refresh fails.
 
 The clock is not the only judge, though. When the server refuses a token the cache still
-considers valid — a 401 — ask for a new one with `refreshTokens()`. It skips the cache, takes the
-same refresh-then-login path, and replaces the cache with what it obtains:
+considers valid — a 401 — ask for a new one with `refreshTokens()`. It skips the cache, renews
+through the same strategy (`cause.trigger: 'explicit'`), and replaces the cache with what it
+obtains:
 
 ```typescript
 let { authorizationToken } = await provider.getTokens();
@@ -2023,113 +3157,684 @@ try {
   const result = await provider.getTokens();
   // Returns new access token and refresh token (if available)
 } catch (error) {
-  if (error instanceof ValidationError) {
-    console.error('Missing fields:', error.missingFields);
-  } else if (error instanceof BrowserAuthError) {
-    // the login timed out, the IdP refused, the port was taken, ...
-    console.error('Browser auth failed:', error.message, error.cause);
+  if (isAuthProviderFailure(error)) {
+    const failure = readFailure(error, 'token-request');
+    if (failure.kind === 'configuration') {
+      // what to fix: failure.facts.case, failure.facts.fields
+    }
+    // the login was aborted, the IdP refused, the port was taken, ...
+    console.error('Failed:', failure.kind, failure.reason);
   }
 }
 ```
+
+### Renewal strategy
+
+Every token provider takes a **renewal strategy** — `renewal:
+IRenewalStrategy` (`@mcp-abap-adt/interfaces-auth` 7), required, no default
+(since 6.0.0). Whenever the provider needs a credential it does not hold, the
+strategy decides each step: refresh, log in, or stop, and what becomes of a
+refresh token that was sent. The provider takes no step the strategy did not
+ask for, and asks before every step.
+
+```typescript
+import { refreshOnly, refreshThenLogin } from '@mcp-abap-adt/auth-providers';
+
+new AuthorizationCodeProvider({ ...config, renewal: refreshThenLogin() }); // the 5.x behaviour
+new AuthorizationCodeProvider({ ...config, renewal: refreshOnly() });      // never logs in
+```
+
+**Where a renewal starts.**
+
+| Call | When | `cause.trigger` | `moment` |
+|---|---|---|---|
+| `getTokens()` | nothing held | `no-token` | `get-tokens` |
+| `getTokens()` | the held token expired | `expired` | `get-tokens` |
+| `getTokens()` | the held token is bound to another certificate than the pinned one ([A certificate-bound token](#a-certificate-bound-token-and-its-certificate)) | `bound-elsewhere`, with `lastRenewal` when an earlier renewal of that token did not make it usable | `get-tokens` |
+| `prepare()` / `authorize()` | through `getTokens()`, as above | as above | `prepare` / `authorize` |
+| `refreshTokens()` | always | `explicit` | `refresh-tokens` |
+| `rejected()` | always | `rejected`, with the rejection's `reading` (`credential`, `not-credential`, `unknown` — [What `rejected()` answers](#what-rejected-answers)), its `status` or `rfcKey`, and for `not-credential` the neutral `refusal` | `rejected` |
+
+Not a renewal, and never the strategy's: a valid cached token answered by
+`getTokens()`; `rejected()` for a token a renewal has already replaced (Ok —
+what is presented has changed); a caller joining a renewal already running
+(it shares that one).
+
+**How a renewal runs.** The provider pins its client certificate first (an
+unusable or expired one refuses the renewal before the strategy is asked),
+then loops:
+
+1. it calls `next(situation)` — `{ cause, moment, canRefresh, steps }`:
+   `canRefresh` is true when the grant has a refresh and a refresh token is
+   held and not discarded; `steps` lists the steps this renewal already took
+   that did not end it, each `failed` (with `sent` — whether the request
+   reached the wire — and the minted error) or, having obtained a credential
+   that is not the one wanted, `unchanged` (the refused credential again;
+   `rejected` only) or `bound-elsewhere`;
+2. it applies `sentRefreshToken` when the decision carries one, then runs
+   the step: `refresh` sends the held refresh token, `login` runs the
+   authorization strategy (or the grant's request);
+3. a usable new credential ends the renewal with it; anything else is
+   recorded in `steps`, and the loop goes on.
+
+`stop` ends the renewal with the last step's error (or, for `unchanged` /
+`bound-elsewhere`, `renewal-unchanged` / `token-binding`
+`renewed-bound-elsewhere`); with no step taken, with the neutral refusal of a
+`not-credential` rejection, else the `lastRenewal` of a `bound-elsewhere`
+cause, else **`renewal-declined`** — "the renewal strategy declined to renew
+the credential", `facts.trigger`. `getTokens()` / `refreshTokens()` throw
+that error, and a moment answers it as its refusal. A credential a step
+obtained stays committed even when the renewal then fails: it is the
+server's state.
+
+**The decision.**
+
+```typescript
+type RenewalDecision =
+  | { next: 'refresh'; ifCut: 'keep' | 'discard'; sentRefreshToken?: 'keep' | 'discard' }
+  | { next: 'login'; sentRefreshToken?: 'keep' | 'discard' }
+  | { next: 'stop'; sentRefreshToken?: 'keep' | 'discard' };
+```
+
+- `ifCut` is required on every `refresh`: what becomes of the refresh token
+  sent if every caller aborts after the request left (see
+  [Cancelling a login](#cancelling-a-login)). It is decided before the
+  request is sent and applied at the abort, without calling the strategy.
+- `sentRefreshToken` is required on the decision that follows a refresh that
+  **failed after it was sent** — the server may have spent that refresh
+  token, and nothing decides that by default — and must be absent anywhere
+  else. `'discard'` drops it for the provider's lifetime (reported to
+  persistence as `refresh-token-discarded`); `'keep'` leaves it held, and the
+  next refresh sends it.
+- A `refresh` needs `canRefresh`, and may not discard the refresh token it
+  would send.
+
+An answer that breaks one of these rules, a strategy that throws, or an
+answer that is neither a decision nor a native
+promise of one — a foreign thenable, a promise with its own `then` (its
+`then` is never called) — ends the renewal with `unknown`, operation
+`renewal-strategy` ("the renewal strategy failed (unknown error)"): the step
+is not taken, and the steps already taken stay applied. The call to `next` is
+raced with the renewal's signal, so a strategy that never answers is ended by
+the callers' abort (`interactive-login` `aborted`), never by a timer.
+
+**What the strategy sees.** Frozen copies: the cause, the moment and the
+steps, each error a minted `IAuthProviderError` — exactly what `getTokens()`
+would throw. Never a token, a refresh token's value, or the message, cause or
+body of anything thrown.
+
+**`aborted(observation)`**, optional: told of each step of this provider's
+renewals that ended by the callers' abort — `{ cause, moment, step, sent,
+refreshToken? }`, `refreshToken` saying for a refresh that was sent whether
+`ifCut` `'kept'` or `'discarded'` it. Each observation is delivered once,
+from a microtask after the abort or, at the latest, before the next `next()`
+call of the provider. Its answer is never awaited; a throw is logged and
+ignored.
+
+**The refresh token the provider holds.** A result's refresh token is
+installed only when it is usable — non-empty and not one the provider
+discarded; otherwise the refresh token held stays (a login that returns none
+after `sentRefreshToken: 'keep'` leaves the old one held). A discarded
+refresh token is never sent again by that provider.
+
+**The shipped strategies.** Both are stateless and answer synchronously.
+
+| Situation | `refreshThenLogin()` | `refreshOnly()` |
+|---|---|---|
+| `rejected`, reading `not-credential` | `stop` (the neutral refusal) | `stop` |
+| `bound-elsewhere` with `lastRenewal`, moment not `prepare` / `rejected` | `stop` (the remembered error) | `stop` |
+| no step yet, `canRefresh` | `refresh`, `ifCut: 'discard'` | `refresh`, `ifCut: 'discard'` |
+| no step yet, no refresh possible | `login` | `stop` |
+| last step a refresh that `failed`, sent | `login`, `sentRefreshToken: 'discard'` | `stop`, `sentRefreshToken: 'discard'` |
+| last step a refresh that `failed`, not sent | `login` | `stop` |
+| last step a refresh with outcome `unchanged` / `bound-elsewhere` | `stop` | `stop` |
+| last step a login | `stop` | `stop` |
+
+`refreshOnly()` suits a process with no one to log in. A provider whose grant
+has no refresh — `ClientCredentialsProvider`, `Saml2PureProvider`,
+`OidcTokenExchangeProvider` — can renew only by a login, so with
+`refreshOnly()` every renewal of it is declined: give those
+`refreshThenLogin()`.
+
+**Writing your own.** Any object with `next(situation)`. This one keeps the
+shipped rules but keeps the refresh token of a cut refresh, and counts the
+aborts:
+
+```typescript
+import type { IRenewalStrategy } from '@mcp-abap-adt/interfaces-auth';
+
+const keepOnCut: IRenewalStrategy = {
+  next({ cause, moment, canRefresh, steps }) {
+    const last = steps.at(-1);
+    if (last === undefined) {
+      // Rule 5: a new credential would be refused the same way.
+      if (cause.trigger === 'rejected' && cause.reading === 'not-credential') {
+        return { next: 'stop' };
+      }
+      if (
+        cause.trigger === 'bound-elsewhere' &&
+        cause.lastRenewal !== undefined &&
+        moment !== 'prepare' &&
+        moment !== 'rejected'
+      ) {
+        return { next: 'stop' };
+      }
+      return canRefresh ? { next: 'refresh', ifCut: 'keep' } : { next: 'login' };
+    }
+    if (last.step === 'refresh' && last.outcome === 'failed') {
+      return last.sent ? { next: 'login', sentRefreshToken: 'discard' } : { next: 'login' };
+    }
+    return { next: 'stop' };
+  },
+  aborted({ step, sent }) {
+    abortedSteps.inc({ step, sent: String(sent) });
+  },
+};
+```
+
+A strategy shared by several providers is told each provider's situation
+separately; one that keeps state keeps it per provider. Each decision is
+logged at `debug` as `[BaseTokenProvider] Renewal step` `{ trigger, moment,
+next }`.
+
+`TokenAuthProvider.from(refresher)` takes neither a renewal nor a
+persistence strategy: its renewal is your refresher, and it persists nothing.
+
+### Persistence strategy
+
+A token provider tells a **persistence strategy** — `persistence?:
+ITokenPersistence` (`@mcp-abap-adt/interfaces-auth` 7) — every change of its
+credentials, so a consumer can store them. It replaces `onTokens` (since
+6.0.0). Without it nothing is persisted; the provider builds none. Given, it
+must be an object whose `report` is a function, or the constructor throws
+`configuration` `invalid-value` naming `persistence`.
+
+```typescript
+interface ITokenPersistence {
+  report(report: PersistenceReport): void | Promise<void>;
+}
+
+type PersistenceReport =
+  | {
+      event: 'credential';                // a refresh or a login committed a new credential
+      credential: ReportedCredential;     // { authorizationToken, tokenType, authType, expiresAt? }
+      refreshToken: { change: 'new'; value: string } | { change: 'none' };
+      awaited: boolean;
+    }
+  | {
+      event: 'refresh-token-discarded';   // the renewal strategy discarded the refresh token held
+      credential: ReportedCredential;     // the credential still held; authorizationToken '' when none
+      awaited: boolean;
+    };
+```
+
+`{ change: 'none' }` means the result carried no usable refresh token: the
+one held before, if any, is still held.
+
+- **When.** One report per change, made by the commit that changed the
+  credentials, in commit order: a `credential` report for every new
+  credential a refresh or a login committed, a `refresh-token-discarded`
+  report when the renewal strategy discarded the refresh token held
+  (`sentRefreshToken: 'discard'`, or `ifCut: 'discard'` at an abort). A cache
+  hit reports nothing; a late result that a newer commit made obsolete
+  reports nothing; a discard of a refresh token already replaced reports
+  nothing. The provider never reports the same change twice — a strategy
+  that wants a failed write delivered again keeps it itself.
+- **Awaited or detached.** A report is `awaited: true` when, as it starts, the
+  renewal that made the commit still has a caller waiting. The provider then
+  awaits `report()` (a Promises/A+ thenable is adopted like any `await`), and
+  its throw or rejection is that renewal's failure — `unknown`, operation
+  `persisting-tokens` ("persisting the tokens failed (unknown error)"), the
+  strategy's own error never relayed — so every caller of that renewal gets
+  it. The credentials stay committed in memory, no login follows, and the
+  next `getTokens()` answers them from the cache. If every caller left while
+  the report ran, the failure is also logged, as below. A report is
+  `awaited: false` (**detached**) when no caller is waiting any more: a
+  discard at an abort, a late refresh result committed after its callers
+  left, a report whose callers all aborted before it started. The provider
+  calls it and does not wait; its failure is logged once at `warn` —
+  `[BaseTokenProvider] Persisting the tokens failed` with `logFields` — and
+  reaches no call.
+- **One at a time.** Reports run inside the provider's commit queue. A report
+  that never settles holds that queue — every later commit of the provider
+  waits — while each caller is still released by its own signal.
+- **Token values.** The persistence strategy is the one collaborator that
+  receives them. The report is a fresh object: changing it changes nothing
+  the provider holds.
+
+#### `refreshStatePersistence(write, { onWriteFailure, logger? })`
+
+The shipped strategy, for a store that keeps its stored refresh token when a
+write carries none: with `onWriteFailure: 'continue'` it is what `onTokens`
+was in 5.x, and it also clears a refresh token the provider discarded and
+delivers a failed write again.
+
+```typescript
+import { refreshStatePersistence, type PersistedTokens } from '@mcp-abap-adt/auth-providers';
+
+const persistence = refreshStatePersistence(
+  async (tokens: PersistedTokens) => {
+    // tokens.refreshToken: a string — write it; null — clear the stored one;
+    // undefined — leave the stored one as it is.
+    await store.save(tokens);
+  },
+  { onWriteFailure: 'fail', logger },
+);
+```
+
+`write` receives `{ authorizationToken, tokenType, authType?, expiresAt?,
+refreshToken }` — `authorizationToken` `''` when no access token is held. It
+keeps a logical state, `held` or `cleared`, and decides each write from it:
+
+| Report | State before | `refreshToken` written | State after |
+|---|---|---|---|
+| `credential`, `new` R | any | R | `held` |
+| `credential`, `none` | `held` | `undefined` — or a new refresh token whose write failed earlier (below) | `held` |
+| `credential`, `none` | `cleared` | `null` | `cleared` |
+| `refresh-token-discarded` | any | `null`, with the credential reported | `cleared` |
+
+So a store's fallback to its stored refresh token never restores a discarded
+one, and a discard before any credential report (a seeded provider) clears
+the stored refresh token without erasing the session.
+
+- **One write at a time, in report order.** The provider does not await a
+  detached report, so reports can overlap; the strategy queues them, each
+  write starting only after the previous one settled. An awaited report's
+  promise settles when its own write has.
+- **A failed write** is logged at `warn`, `[refreshStatePersistence] Writing
+  the tokens failed` with `logFields` (to `logger`; none without one) — never
+  the store's message or a token. A failed new refresh token is kept pending
+  and written again, with that token, by the next report, until a write
+  succeeds or a newer refresh token or a discard supersedes it; a failed
+  `null` is written again by the next report through the `cleared` state.
+- **`onWriteFailure` is required, with no default.** `'continue'`: `report`
+  never throws — the 5.x best effort. `'fail'`: an awaited report rethrows
+  the write's failure, so the call that caused it fails `persisting-tokens`;
+  a detached report never throws. Either way the failed write is delivered
+  again by the next report.
+- **`report()` rethrows your own error as it is.** With `'fail'`, what an
+  awaited `report()` rejects with is the value your `write` threw — the one
+  throw of this package that is not an `AuthProviderFailure`, because it is
+  yours, returned to you. A token provider, which is what calls `report()`,
+  turns it into an `AuthProviderFailure` (`unknown`, `persisting-tokens`)
+  before `getTokens()` / `refreshTokens()` answer; only your own code calling
+  `report()` directly sees it raw.
+- Refused at construction, `configuration` `invalid-value`: `onWriteFailure`
+  missing or not `'continue'` / `'fail'` (naming `onWriteFailure`), `write`
+  not a function (naming `write`), both when both.
+
+It holds the last new refresh token it could not write — it is part of your
+store.
+
+**Writing your own.** Any object with `report(report)`. One that stores
+nothing but a refresh token, for a process that restarts with a seed:
+
+```typescript
+import type { ITokenPersistence } from '@mcp-abap-adt/interfaces-auth';
+
+const refreshTokenOnly: ITokenPersistence = {
+  async report(report) {
+    if (report.event === 'refresh-token-discarded') return vault.delete('refresh');
+    if (report.refreshToken.change === 'new') return vault.put('refresh', report.refreshToken.value);
+  },
+};
+```
+
+### Cancelling a login
+
+There is no built-in bound on a login: it ends on a result, the identity provider's refusal, or
+your `AbortSignal`. A renewal — the steps its [renewal strategy](#renewal-strategy) asks for — is
+shared by everyone who needs a token at the same time, and each of them is a **waiter** with a signal of its own:
+
+```typescript
+// This caller no longer needs the token (an MCP request cancelled, say):
+const tokens = await provider.getTokens({ signal: request.signal });
+await provider.refreshTokens({ signal: request.signal });
+```
+
+- One waiter's abort releases only that waiter: its call rejects with an `AuthProviderFailure` of
+  kind `interactive-login`, outcome `aborted`. The login runs on for the others.
+- A waiter without a signal never aborts, so a login it waits on runs to its end.
+- When every waiter has aborted, the login itself is aborted: the strategy's request signal
+  aborts, the callback socket is released, the device-code polling stops, every request the
+  login has on the wire is cut — and the next caller starts a fresh login.
+
+**A login a moment starts** (`prepare`, `authorize`, `rejected`, …) has no per-call signal. It
+waits on the provider's **attached parties**: the `signal` in the provider's config, and every
+`attach(signal)` after it (`attach` returns a `detach()`; the same signal twice is one party; an
+aborted signal is not added; a party leaves when its signal aborts or it is detached). Such a
+login is aborted when every party live at its start, and every party attached while it runs, has
+aborted. **With no live party — none attached, or all of them gone — it runs unbounded**, as a
+consumer that gave no signal chose.
+
+```typescript
+const provider = new AuthorizationCodeProvider({ ...config, signal: session.signal });
+const detach = provider.attach(otherSession.signal);
+```
+
+The limit: a moment cannot tell which session called it. A login started while a signalled
+session is attached is bounded by that session; if it closes mid-login, an unsignalled session
+that joined the same login through its own moment gets Oops `aborted` for that moment — and its
+next moment starts a fresh, unbounded login and gets a token.
+
+**A strategy must honour the request's signal.** Every login hands its strategy an
+`AuthorizationRequest` carrying `signal` (since interfaces-auth 6.0.0); the shipped strategies combine it
+with their own `signal` option, so either one ends the login. A replacement login waits until the aborted one's strategy has **settled** its `authorize`
+— its callback port closed, its stdin reader released (a manual strategy's custom `read` gets
+the same signal, and the strategy settles only once that `read` has) — before it starts its own authorization
+(never `busy`, never `port-in-use`). A consumer strategy that ignores the signal never settles,
+and blocks the next login until it does; one that settles before releasing its socket lets the
+next login meet it. A request on the wire is never waited for: it holds nothing local.
+
+**A refresh is never cut once sent; what becomes of its refresh token was decided before.**
+Once a refresh request carrying refresh token R is sent, the server may have spent R and issued
+R2, so the request runs on whatever its waiters do — they are released at once, and its answer,
+when it comes, is committed if nothing newer was committed meanwhile (R2 is kept and reported
+to persistence, detached), and discarded otherwise. What becomes of R is the `ifCut` of the
+decision that started the refresh, applied at the abort without calling the strategy:
+`'discard'` — what `refreshThenLogin()` and `refreshOnly()` say — drops R for the provider's
+lifetime and reports `refresh-token-discarded` (detached), so with `refreshThenLogin()` the next
+renewal logs in unless R2 arrived first; `'keep'` leaves R held, and the next refresh sends it
+again. An abort **before** the request left — during OIDC discovery, say, or a
+client-authentication strategy's `authenticate()` — touches no refresh token: nothing reached the server. The
+strategy's `aborted()` is told which it was (`sent`, `refreshToken: 'kept' | 'discarded'`). A
+refresh whose server never answers lingers until the server or the OS ends the socket; nothing
+waits for it. On a rotating endpoint a cancelled refresh can therefore force one interactive
+login. A discard lives in memory: a process that dies before its `refresh-token-discarded` report
+reaches the store may send the stored R once after a restart.
+
+**Commits run one at a time.** Every effect of a renewal — the tokens, the pinned certificate,
+the persistence report — is applied by a commit in one queue per provider, in order, never two
+at once; a late result of an aborted login changes nothing. A persistence report that never
+settles therefore blocks every later commit of that provider (each waiter still releasable by
+its own signal). See [Persistence strategy](#persistence-strategy).
+
+**Your collaborators are awaited like any `await`.** What your own code answers — an
+authorization strategy, a persistence strategy, a certificate loader, a refresher, a validator, a
+presenter, a replay store, `cookieProvider`, an SNC locator, probe or system, a logger — is
+adopted as `await` adopts it, so a native promise, Bluebird, Q or any Promises/A+ thenable works.
+The one exception is the **renewal strategy**: its `next()` answers a decision or a native
+promise of one, and anything else that has a `then` is refused without calling it (see
+[Renewal strategy](#renewal-strategy)). A collaborator answer that never
+settles is bounded only by your `AbortSignal`, through the parties above. `CertificateAuthProvider`
+and `TokenAuthProvider.from` take no signal: a loader or refresher of theirs that never settles
+hangs their moment, and bounding it is yours (inside the loader or refresher). Values that cross a
+trust boundary — a thrown value being classified, a logon target's answer — never have a foreign
+`then` called.
+
+**No timer of the package's choosing.** Nothing here bounds a login, a token request, OIDC
+discovery or the SNC registry query with a timeout of its own; the only timer is the device poll's
+interval, which the server sets. A bound is your signal (`AbortSignal.timeout(ms)`) or the called
+server's.
 
 ### Error Handling
 
-The package provides typed error classes for better error handling:
+An error reaches you in one of two places, and it is the same thing in both:
+an `IAuthProviderError` (`@mcp-abap-adt/interfaces-auth` 7), minted by
+`@mcp-abap-adt/auth-errors`.
+
+- **A refusal.** A moment — `prepare()`, `establish()`, `authorize()`,
+  `rejected()` — never throws; it answers `{ ok: false, refusal }`, and the
+  refusal is the error.
+- **A throw.** A constructor, a factory or a loader with a configuration
+  fault, and `getTokens()` / `refreshTokens()`, throw an
+  `AuthProviderFailure`: an `Error` whose `error` is the error, whose
+  `message` is its `reason` (or `reason — hint`), and which has no `cause`.
+  Nothing else is thrown — not a strategy's, loader's or presenter's own
+  error, which is classified, and not an `AxiosError`.
+
+**Options are read as own data.** Every exported constructor and factory
+reads its options object once, as a plain snapshot of its own data
+properties: an accessor is never run (a getter reads as absent), and a Proxy
+or a revoked Proxy that throws reads as absent too — so a hostile options
+object makes it throw only its own `configuration` failure (the required
+field it then finds missing), never what the object threw. A value that is
+not an object reads as empty. Collaborators in the options (a strategy, a
+logger, a validator) are kept by reference and called inside a moment's
+boundary. Give options as a plain object; a field defined by a getter is not
+seen.
+
+**Errors outside the moments.** A strategy, a client-authentication
+strategy, a certificate loader or a presenter called **directly by you**,
+outside a provider's moments and `getTokens()` / `refreshTokens()`, is not
+behind that boundary: `authorize()`, `authenticate()`, `tlsMaterial()`,
+`load()` or `present()` may reject with what your own collaborator threw —
+a `read` callback, a loader's `material` function, a `provide` callback.
+Called by a provider, the same throw is classified and nothing of it
+crosses.
+
+An error is a frozen object: `kind` (one of a closed list), `variant` (the
+rule, problem or case of `saml-assertion`, `snc` and `configuration`),
+`facts` (values from allowlists only — a status, a registered OAuth code, a
+field name, a rule id — never free text), `reason` and `hint?` (the default
+words, rendered from `kind` and `facts`), and `diagnostics?` (for the three
+variant kinds only: a value that helps a person — a library path, a SAML
+issuer, two URIs — admitted by its shape, never in the words). Branch on
+`kind` and `facts`; show `reason` / `hint`; print `diagnostics` only where a
+person reads them.
 
 ```typescript
 import {
-  TokenProviderError,
-  ValidationError,
-  RefreshError,
-  SessionDataError,
-  ServiceKeyError,
-  BrowserAuthError,
-  AssertionValidationError,
-  CertificateMaterialError,
-  ClientAuthenticationError,
-  ClientAuthenticationResultError,
-} from '@mcp-abap-adt/auth-providers';
+  logFields,
+  readFailure,
+  renderDiagnostics,
+  unreachableKind,
+} from '@mcp-abap-adt/auth-errors';
 
 try {
-  const result = await provider.getTokens();
-} catch (error) {
-  if (error instanceof AssertionValidationError) {
-    // A SAML provider refused the assertion; `check` says which check failed
-    console.error('Assertion refused at:', error.check); // e.g. 'audience'
-    console.error('Error code:', error.code); // 'ASSERTION_VALIDATION_ERROR'
-  } else if (error instanceof ValidationError) {
-    // provider config validation failed
-    console.error('Missing required fields:', error.missingFields);
-    console.error('Error code:', error.code); // 'VALIDATION_ERROR'
-  } else if (error instanceof BrowserAuthError) {
-    // A browser login failed: timeout, the IdP's refusal, a busy callback
-    // port, a browser that would not open, an abort. The message is the
-    // original's, and the original is `cause`.
-    console.error('Browser auth failed:', error.message);
-    console.error('Error code:', error.code); // 'BROWSER_AUTH_ERROR'
+  const provider = new ClientCredentialsProvider(config); // may throw too
+  await provider.getTokens({ signal });
+} catch (thrown) {
+  // Never `instanceof`: readFailure reads any copy's failure, and answers
+  // `unknown` for anything else — it never throws.
+  const error = readFailure(thrown, 'token-request');
+  logger.error('token request failed', logFields(error));
+  switch (error.kind) {
+    case 'configuration':
+      // what to fix: error.facts.case, error.facts.fields
+      break;
+    case 'request-failed':
+      // error.facts.status, error.facts.oauthError (a registered code only)
+      break;
+    case 'interactive-login':
+      // error.facts.outcome: 'aborted', 'port-in-use', 'identity-provider-refused', …
+      break;
+    // … every other kind …
+    default:
+      unreachableKind(error); // compiles only when every kind is handled
   }
+  console.error(error.reason, error.hint ?? '', renderDiagnostics(error) ?? '');
 }
 ```
 
-**Error Types**:
-- `TokenProviderError` - Base class with `code: string` property
-- `ValidationError` - provider config validation failed, includes `missingFields: string[]`
-- `BrowserAuthError` - a browser login failed (timeout, the identity provider's refusal, a busy callback port, a browser that would not open, an abort), includes `cause?: Error`; thrown by every browser strategy (`browserCallbackStrategy`, `oidcCallbackStrategy`, `samlCallbackStrategy`). Its message keeps this package's own words (the timeout, "Port N is already in use", an abort); the identity provider's refusal names only its registered code (`the identity provider refused the login (consent_required)`), never `error_description`; for anything else — a custom transport's or launcher's error — it is fixed words (`the browser login failed (unknown error)`, with an allowlisted code when there is one) and the original is `cause`, since the foreign text may hold a secret and the message is what gets logged
-- `TokenEndpointError` - a token request failed at a site that wraps it (UAA refresh, client credentials, passcode, OIDC device initiation, password grant); a plain `Error`, not a `TokenProviderError`; carries `status`, `oauthError` (a registered OAuth / OIDC code only) and `code` (an allowlisted system or TLS code only); its `cause` is the safe `AxiosError` the request was reduced to, never what the request rejected with (since 5.4.2)
-- `RefreshError`, `SessionDataError`, `ServiceKeyError` - exported, but no provider throws them: a refused refresh falls back to a login inside `getTokens()`/`refreshTokens()`, and sessions and service keys are read by `@mcp-abap-adt/auth-stores`, not here
-- `AssertionValidationError` - a SAML assertion was refused, includes `check: AssertionCheck` naming the check that failed — see [SAML assertion validation](#errors)
-- `CertificateMaterialError` - client certificate material cannot be used, includes `incomplete: boolean` (no PFX and not both a certificate and its key, versus material no TLS context accepts); its message is fixed and carries nothing of the material. Thrown by `tlsClientCertificate` and by a provider pinning a strategy's certificate. Its `words` getter is deprecated: use `refusalWords` (the package never reads `words` from a thrown value, since any object can carry its own)
-- `ClientAuthenticationError` - `privateKeyJwt`'s key is not a private key of its algorithm, or cannot sign; fixed message, nothing of the key
-- `ClientAuthenticationResultError` - what a client authentication strategy returned cannot be sent (a non-string value, a header with a line break, a parameter or header replacing the request's own, an endpoint that is not an absolute `https:` URL); thrown before anything is sent, fixed message
+A plain `switch` is not checked by the compiler; use `matchKind(error,
+handlers)` or a `default` that calls `unreachableKind(error)` (auth-errors,
+"Exhaustiveness: two patterns"), so that a kind added by a later major stops
+your build. In the `switch` form the cases before `default` see the value as
+you read it; `readFailure` already normalised it.
 
-A failed token request throws without the request it sent — no form body, no
-`Authorization` header, no TLS agent — and never with what its promise
-rejected with: anything that reached it (an axios failure, or what a global
-response interceptor of yours threw — the server's text, a primitive, an
-object with throwing getters) is replaced by a fresh `AxiosError` of fixed
-words, an integer status and an allowlisted code — an aborted request by a
-`CanceledError`, so `axios.isCancel` still holds — and a successful answer is
-read only as a snapshot of its expected string and number fields, so a
-response interceptor's hostile data cannot throw through either (since
-5.4.2); and with the server's body reduced to
-its `error` when that is a registered OAuth code; the server's
-`error_description` and `error_uri` go nowhere — no error, no log line
-(since 5.4.2).
+What this package produces, by kind (the words are in the tables of this
+README, generated from what the package renders):
 
-#### Relaying a refusal: `refusalWords`
+| Kind | When |
+|---|---|
+| `configuration` | a configuration fault — `facts.case`, `facts.fields` ([Configuration errors](#configuration-errors)) |
+| `client-certificate` | certificate material that cannot be used — `incomplete`, `unusable`, `expired` ([Refusals](#refusals)) |
+| `client-authentication` | a signing key that cannot sign, a strategy's result that cannot be sent, raw Basic with a `:` in the client id ([Refusals](#refusals)) |
+| `request-failed` | a token request, refresh, device authorization or poll, passcode exchange, OIDC discovery that failed — `facts.operation`, `facts.problem`, `facts.status`, `facts.oauthError`, `facts.code` |
+| `tls` | a TLS failure on the allowlist — `facts.code` ([Refusals](#refusals)) |
+| `interactive-login` | every end of a login that is not a result — `facts.outcome`: `aborted`, `port-in-use`, `identity-provider-refused` (with a registered `oauthError`), `busy`, `disposed`, `callback-closed`, `no-terminal`, `no-input`, `unreadable-input`, `input-abandoned`, `device-code-not-shown`, `failed` |
+| `saml-assertion` | an assertion refused — `facts.rule`, `facts.check` ([Refusal messages](#refusal-messages)) |
+| `snc` | SNC: no credential, the library refused or not found, the logon refused ([Passwordless RFC logon](#passwordless-rfc-logon-snc)) |
+| `credential-refused`, `system-refused` | what `rejected()` read in the rejection ([What `rejected()` answers](#what-rejected-answers)); `credential-refused` `refresh-token` is a refused refresh — with `refreshThenLogin()` a login follows |
+| `renewal-unchanged` | a renewal returned the credential that was refused |
+| `renewal-declined` | the renewal strategy stopped before taking any step, and no other refusal explains it — `facts.trigger` ([Renewal strategy](#renewal-strategy)) |
+| `token-binding` | a certificate-bound token and no matching certificate ([A certificate-bound token](#a-certificate-bound-token-and-its-certificate)) |
+| `not-prepared` | `establish()` before `prepare()` (certificate, SNC) |
+| `logon-target` | a logon target that broke its contract, relayed |
+| `unknown` | anything else, naming only the operation and, when there are any, an integer status, a registered OAuth code and an allowlisted system code — among them `renewal-strategy` (a renewal strategy that threw or answered something unusable) and `persisting-tokens` (an awaited persistence report that failed) |
+
+**What never reaches an error, a refusal or a log line**: an error's
+`message`, `cause`, `stack` or body; a token endpoint's `error_description`
+and `error_uri`, which are read by nothing, `authDebug` or not (a hostile
+server can echo any secret of the request in them); a token, a secret or key
+material — a log line names a token only as `<redacted, N chars>`, and a
+secret only under `authDebug`, prepared (see [Debug Logging](#debug-logging)).
+A line about a thrown value carries `logFields(error)` — `{ error: reason,
+kind, status?, diagnostics? }` — never the value itself.
+
+**Serialising a failure carries its diagnostics.** `JSON.stringify`,
+`util.inspect` or a logger serialising an `AuthProviderFailure` includes
+`error.diagnostics` — admitted values such as a library path, but more than
+the words. Log `logFields(readFailure(thrown, operation))` and leave out its
+`diagnostics` field when they must not be written.
+
+#### Configuration errors
+
+A configuration fault is thrown — by a constructor (a constructor is not one
+of the four moments, so it may throw), by a strategy factory, by a loader, or
+inside a login — as an `AuthProviderFailure` of kind `configuration`:
+`facts.case` says which, `facts.fields` names the configuration fields
+involved (names on the `CONFIG_FIELDS` allowlist only), never a value given.
+For an ACS or redirect mismatch the two addresses are in `diagnostics`
+(origin and path only), never in the words. A provider moment that meets one
+answers it as its refusal.
+
+A value given but unusable is `invalid-value` (interfaces-auth 7), naming the
+field — "a configured value cannot be used: authorizationUrl" — never the
+value: an unparseable `authorizationUrl`, a malformed `persistence`,
+`refreshStatePersistence`'s `onWriteFailure` or `write`, a part of an
+authorization strategy that cannot be used (a browser name where an
+`IBrowser` belongs reads as `presentation`). A missing or unusable `renewal` is
+`required-fields-missing` naming `renewal`. **A known wording limit:** an `SncLogonProvider` `myName`
+that is not a string is still reported as `required-fields-missing` naming
+the field, although a value was given.
+
+<!-- generated:refusal-table configuration -->
+| Thrown | `case` | `fields` | Reason | Hint |
+|---|---|---|---|---|
+| a required field or collaborator is missing: every token provider (and `inBrowser`, `fromTerminal`, `toConsole`, `SsoProviderFactory.create`) without a usable `renewal`, `ClientCredentialsProvider` and `AuthorizationCodeProvider` without `uaaUrl`, `clientId`, or `clientSecret` and no `clientAuthentication`, a SAML provider without `assertionValidator`, a shipped validator without `replayStore`; an authorization strategy without a part or the redirect it needs — `manualPasteStrategy`, `manualSamlResponseStrategy` and `externalCodeStrategy` without `redirectUri`, a redirect protocol over a transport that advertises none (`redirectUri`), `composeAuthorization` without `presentation`, `transport`, `protocol` or `endpoint`, `openInBrowser` without `browser` (`presentation`), `consumerPresentation` without `show`, `consumerAnswer` without `receive`, `consumerHandoff` without `provide`; also an `SncLogonProvider` `myName` that is not a string (a known wording limit) | `required-fields-missing` | `<fields>` | required configuration is missing: `<fields>` | check the provider configuration |
+| a configured value that cannot be used: an `authorizationUrl` that does not parse (`AuthorizationCodeProvider` at construction and at login); a `persistence` that is not an object with a callable `report` (every token provider); `refreshStatePersistence` with `onWriteFailure` missing or not `'continue'` / `'fail'`, or a `write` that is not a function (each named); a part of an authorization strategy that cannot be used: an `endpoint` that URL parsing would change or that is `/` or `/submit` (`endpoint`), a `redirectUri` that is not an absolute `http(s)` URL (`redirectUri`), a `browser` without an `open` function — a browser name included (`presentation`), a part without its methods (`presentation`, `transport`, `protocol`), a `remoteHint` that is not a function (`transport`), a `read` that is not a function (`read`), an `onFailure` that is not a function (`show`), a terminal with a protocol that has no paste words (`protocol`); an authorization URL a protocol cannot read a `state` from — none, empty or repeated (`authorizationUrl`) | `invalid-value` | `<fields>` | a configured value cannot be used: `<fields>` |  |
+| a token provider constructed with both | `client-secret-beside-client-authentication` | `clientSecret` | clientSecret cannot be given beside clientAuthentication | give the secret to the clientAuthentication strategy, or drop the strategy |
+| a SAML provider constructed with `authorizationUrl` and no `acsUrl` | `saml-acs-required-with-authorization-url` | `acsUrl` | acsUrl is required when authorizationUrl is set: the ACS inside a pre-built SAML request cannot be read, so it must be declared | check the provider configuration |
+| a SAML provider constructed with `idpInitiated` and `authnRequestId` (`fields`: both), or a login that minted or declared a request ID (`fields`: `idpInitiated`) | `saml-idp-initiated-with-request-id` | `idpInitiated`, `authnRequestId` | SAML idpInitiated is true, but a request ID was also configured or minted: an IdP-initiated login sends no request | remove one of them |
+| a SAML provider constructed with a shipped validator and no `idpEntityId` | `saml-shipped-validator-without-issuer` | `idpEntityId` | the supplied assertionValidator is a shipped one, which refuses every assertion without an expected issuer: idpEntityId is missing | check the provider configuration |
+| the SAML bearer exchange without `tokenUrl` or `uaaUrl` | `saml-token-endpoint-missing` | `tokenUrl`, `uaaUrl` | the SAML bearer exchange needs tokenUrl or uaaUrl | check the provider configuration |
+| a strategy asks for the URL of an `idpInitiated` login without `authorizationUrl` | `saml-idp-initiated-without-authorization-url` | `idpInitiated`, `authorizationUrl` | SAML idpInitiated is true and no authorizationUrl is configured, but the authorization strategy asked for an authorization URL | configure the IdP-initiated SSO URL as authorizationUrl, or use a strategy that does not call buildAuthorizationUrl |
+| the strategy listens, or listened, elsewhere than `acsUrl`; the two addresses are `diagnostics.configuredUri` / `strategyUri` | `saml-acs-mismatch` | `acsUrl` | SAML acsUrl and the address the authorization strategy used do not match | they must match |
+| a SAML login with no request ID minted, declared or declared absent | `saml-in-response-to-undeclared` | `authnRequestId`, `idpInitiated` | cannot validate InResponseTo: this login did not build its own AuthnRequest | configure authnRequestId, or idpInitiated: true if the identity provider starts this login itself |
+| a SAML exchange or refresh with a `clientAuthentication` and no `clientId` | `client-id-required-with-client-authentication` | `clientId` | clientId is required with a client authentication | check the provider configuration |
+| a pre-built `authorizationUrl` whose `redirect_uri` the strategy did not use; the two addresses are `diagnostics.configuredUri` / `strategyUri` | `redirect-mismatch` | `authorizationUrl` | the pre-built authorizationUrl declares a redirect_uri the authorization strategy did not use | an ephemeral port cannot be used with a pre-built URL |
+| an OIDC endpoint to discover and no `issuerUrl` | `oidc-discovery-needs-issuer` | `issuerUrl` | OIDC issuerUrl is required when discovery is used | check the provider configuration |
+| an OIDC endpoint neither configured nor discovered (`authorizationEndpoint`, `tokenEndpoint` or `deviceAuthorizationEndpoint`) | `oidc-endpoint-missing` | `<fields>` | OIDC `<fields>` is required (configure it, or use discovery) | check the provider configuration |
+| `FileCertificateMaterialLoader`: PEM and PFX paths both given | `certificate-pem-and-pfx` | `certPath`, `certPfxPath` | certificate auth: provide either PEM (certPath + certKeyPath) or certPfxPath, not both | check the provider configuration |
+| `FileCertificateMaterialLoader`: neither a PFX nor a whole PEM pair | `certificate-files-missing` | `certPfxPath`, `certPath`, `certKeyPath` | certificate auth requires certPfxPath, or certPath and certKeyPath | check the provider configuration |
+| `clientSecretBasic` without `encoding: 'raw' \| 'form'` (`allowed: 'basic-encoding'`) | `basic-encoding-missing` | `encoding` | clientSecretBasic needs encoding: 'raw' or 'form' | check the provider configuration |
+| `SncLogonProvider` without `partnerName` | `snc-partner-name-missing` | `partnerName` | SncLogonProvider needs partnerName — the system's SNC name | check the provider configuration |
+| `SncLogonProvider` with another `qop` (`allowed: 'snc-qop'`) | `snc-qop-invalid` | `qop` | SncLogonProvider: qop must be one of 1, 2, 3, 8, 9 | check the provider configuration |
+| `SsoProviderFactory.create` with no provider for the protocol and flow | `unsupported-sso-flow` | — | unsupported SSO provider config: no provider for this protocol and flow | check the provider configuration |
+| a shipped validator with a `clockSkewMs` that is not a non-negative integer | `validator-clock-skew-invalid` | `clockSkewMs` | clockSkewMs must be a finite non-negative integer | check the provider configuration |
+| a shipped validator with no `idpCertificates` | `validator-no-certificates` | `idpCertificates` | idpCertificates must not be empty: nothing could be verified | check the provider configuration |
+| a shipped validator with a certificate that is neither PEM nor base64 DER, or no certificate | `idp-certificate-invalid` | `idpCertificates` | a configured IdP certificate is not a valid X.509 certificate in PEM or base64 DER | check the provider configuration |
+| `staticCodeStrategy` without a payload | `static-code-without-payload` | `payload` | staticCodeStrategy requires a payload | check the provider configuration |
+| a listener `port` (or a callback strategy's) that is not an integer in 0..65535, at construction and again when it opens | `callback-port-invalid` | `port` | invalid callback server port: it must be an integer in 0..65535 | check the provider configuration |
+<!-- /generated:refusal-table configuration -->
+
+#### Relaying a refusal: `classify`
 
 A consumer that catches an error from this package — a strategy's
 `tlsMaterial()` checked eagerly, say — and reports it in its own error should
 relay the words this package would refuse with, not copy them:
 
 ```typescript
-import { refusalWords, tlsClientCertificate } from '@mcp-abap-adt/auth-providers';
+import { classify } from '@mcp-abap-adt/auth-errors';
+import { tlsClientCertificate } from '@mcp-abap-adt/auth-providers';
 
 try {
   await tlsClientCertificate({ material: loader }).tlsMaterial?.();
-} catch (error) {
-  const { reason, hint } = refusalWords(error, 'loading the client certificate');
+} catch (thrown) {
+  const { reason, hint } = classify(thrown, 'loading-certificate');
   throw new MyConfigError(hint ? `${reason}: ${hint}` : reason);
 }
 ```
 
-`refusalWords(error: unknown, what: string): IAuthRefusal` answers exactly the
-`reason` and `hint` a provider's refusal would carry for that thrown value —
-for a `CertificateMaterialError`, its kind's words from the
-[Refusals](#refusals) table, hint included. The words are fixed per class of
-this package, decided by `instanceof`, plus allowlisted facts (a known config
-field, an HTTP status, a registered OAuth code, a system or TLS code); for
-anything else, `<what> failed (unknown error)`. Never an error's message,
-`cause` or body. It never throws: a Proxy or a throwing getter gets fixed
-words. `what` is the consumer's own description of what it was doing, and
-appears only in the words for an error this package has no fixed words for.
+`classify(thrown, operation, grant?)` (auth-errors; `readFailure` is the same
+for a caught value) answers the error a provider's refusal would carry for
+that value: this package's own failure as it is — for a certificate that
+cannot be used, its kind's words from the [Refusals](#refusals) table, hint
+included — and anything else as `unknown`, naming the operation and only
+allowlisted facts (an integer HTTP status, a registered OAuth code, a system
+or TLS code): `loading the certificate failed (unknown error, ENOENT)`. Never
+an error's message, `cause` or body. It never throws: a Proxy or a throwing
+getter gets fixed words. The operation is one of the closed list
+`OPERATIONS` of `@mcp-abap-adt/interfaces-auth`; `'unfamiliar-error'` answers
+"an authentication error of a kind this version does not know" for anything
+that is not an error of the contract.
 
 The guarantee covers what a thrown value carries and the package's public
 surface. Code running in the same process that patches built-ins (say
 `Map.prototype.get`) or imports `dist/` files directly can change anything the
 package computes; no library can defend against that from inside the process.
 
-All error codes are defined in `@mcp-abap-adt/interfaces-auth` package as `TOKEN_PROVIDER_ERROR_CODES` — `CertificateMaterialError`'s is `CERTIFICATE_MATERIAL_ERROR`; `ClientAuthenticationError` and `ClientAuthenticationResultError` share `CLIENT_AUTHENTICATION_ERROR` — and `AssertionValidationError`'s as `ASSERTION_ERROR_CODES`.
+### Writing a provider of your own: `AuthProviderBase`
+
+Every provider here extends `AuthProviderBase`, exported for a consumer that
+writes its own. The base owns the four moments: each runs your `on…` body
+inside auth-errors' `guard`, so whatever the body, a collaborator or a target
+throws becomes a minted refusal, and no moment ever rejects. A body answers
+`OK` or a refusal built with auth-errors' `authError` builders — an outcome
+that is not minted is answered `unknown`. The constructor names the
+`Operation` each moment's refusals carry.
+
+```typescript
+import { authError, OK } from '@mcp-abap-adt/auth-errors';
+import { AuthProviderBase } from '@mcp-abap-adt/auth-providers';
+import type {
+  AuthOutcome,
+  IAuthRejection,
+  ILogonTarget,
+  IRequestTarget,
+} from '@mcp-abap-adt/interfaces-auth';
+
+class ApiKeyProvider extends AuthProviderBase {
+  readonly kind = 'api-key';
+
+  constructor(private readonly key: string) {
+    super({
+      prepare: 'preparing',
+      establish: 'establishing',
+      authorize: 'writing-authorization-header',
+      rejected: 'reading-rejection',
+    });
+  }
+
+  protected onPrepare(): AuthOutcome {
+    return OK;
+  }
+
+  protected onEstablish(_logon: ILogonTarget): AuthOutcome {
+    return OK;
+  }
+
+  protected onAuthorize(request: IRequestTarget): AuthOutcome {
+    request.header('X-Api-Key', this.key); // a throwing target is Oops, not a throw
+    return OK;
+  }
+
+  protected onRejected(_rejection: IAuthRejection): AuthOutcome {
+    return {
+      ok: false,
+      refusal: authError['credential-refused']({ credential: 'token', at: 'request' }),
+    };
+  }
+}
+```
+
+Do not override `prepare()`, `establish()`, `authorize()` or `rejected()`:
+the boundary is the base's. `@mcp-abap-adt/auth-errors` ships the shape check
+this package runs in `lint:check`
+(`@mcp-abap-adt/auth-errors/tools/check-provider-shape.mjs`), which refuses a
+provider that does not reach the base or declares one of the four.
 
 ## Upgrading from 4.0 to 4.1
 
@@ -2414,7 +4119,8 @@ Three more changes that are not fields:
   behaves the same way.)
 - **A `/callback` carrying neither a code nor an error no longer ends the
   login.** It is answered and counted, and the tally appears in the timeout
-  message if the login later expires.
+  message if the login later expires. (Since 6.0.0 there is no timeout: the
+  tally appears in the `aborted` words when the login is aborted.)
 
 ## Testing
 
@@ -2462,9 +4168,9 @@ Integration tests will skip if `test-config.yaml` is not configured or contains 
 
 **Note**: 
 - Integration tests use `AbapServiceKeyStore` and `AbapSessionStore` for loading service keys and sessions
-- Tests may open a browser for authentication if no refresh token is available. This is expected behavior.
+- With no refresh token available, an interactive case (`interactive_login: true` or `MCP_ABAP_ADT_INTERACTIVE=1`) waits for you to log in: open the URL it shows in a browser of your choice.
 - The interactive test asks the OS for a free port rather than pinning one, so it cannot collide with a running server
-- Tests use `browserCallbackStrategy({ browser: 'system' })` for interactive authentication (not `'none'`)
+- The interactive cases use `browserCallbackStrategy()` without a `browser`: no test opens a browser or starts any program it did not register (`src/__tests__/helpers/noRealBrowser.ts`); the URL is shown on stderr for the person running them
 
 ### Providers against real authorization servers (UAA and Keycloak)
 
@@ -2637,59 +4343,126 @@ provider not propagated to it gets a token and a 401 from ADT.
 
 ### Debug Logging
 
-To enable detailed logging during tests or runtime, set environment variables:
+**The package logs only through the `ILogger` you give a provider or a
+strategy** (`logger` in its config); without one it logs nothing, except the
+prompts a user must see (an authorization URL, a device code), which go to
+stderr — never stdout, which carries protocol traffic under an MCP or LSP
+stdio transport. It reads no environment variable to decide what to log.
+
+**`authDebug`** — an explicit option of every token provider
+(`TokenProviderDebug`, in each provider's config), **off by default** and on
+only for `authDebug: true` itself (`'true'` or `1` is off). It is **never read
+from the environment**: `DEBUG_AUTH_PROVIDERS` and its kin do not turn it on.
+It changes one thing — the line a token site writes when a request fails:
+
+- **Without it** (the default), a failed request writes 5.4.2's safe-facts
+  line at `debug`: `<operation>: the token endpoint refused the request`,
+  `{ status, error?, code? }` — the integer HTTP status (`undefined` without a
+  response), the OAuth `error` only when it is a registered code, an
+  allowlisted TLS or system code. None for the device poll's
+  `authorization_pending` / `slow_down` with status `400`, none without a
+  logger, and a logger that throws is ignored. A `200` without a token writes
+  one line of the same facts — at `error` for the UAA code exchange (5.4.2's
+  line, verbatim), at `debug` elsewhere.
+- **With it**, that line is instead `[<operation>] token endpoint said`,
+  `{ status, error?, code?, sent }` (and a `200` without a token adds `sent`
+  to its line). `sent` names each secret the request carried — the grant's
+  (`refresh_token`, `code`, `code_verifier`, `assertion`, `passcode`,
+  `password`, `device_code`, `subject_token`, `actor_token`), the configured
+  `client_secret`, a strategy's `client_secret` / `client_assertion`, and a
+  Basic credential as `basic` (the base64 credential) and `basic_secret` —
+  each **prepared at the point of logging**: its first 4 and last 4
+  characters around `<redacted, N chars>` (`abcd…wxyz <redacted, 43 chars>`),
+  and the length alone below 16 characters. Never more than 8 characters of a
+  secret, never the server's text: `error_description` and `error_uri` are
+  read by nothing, with `authDebug` or without.
+
+```typescript
+const provider = new ClientCredentialsProvider({
+  renewal: refreshThenLogin(),
+  uaaUrl, clientId, clientSecret,
+  logger,           // the lines go here, at `debug`
+  authDebug: true,  // only while diagnosing: names prepared secrets in `sent`
+});
+```
+
+What else a provider logs, at `info` / `debug`: the stages of a token exchange
+(which exchange — never where, never a secret), token lengths and expiry, the
+browser launch, and each renewal decision (`debug`, `[BaseTokenProvider] Renewal
+step`, `{ trigger, moment, next }`). At `warn`, each with `logFields` and nothing
+else: a refresh that failed (`[BaseTokenProvider] Refresh failed`); a renewal
+strategy that threw or answered something unusable (`[BaseTokenProvider] Renewal
+strategy refused`); a strategy's `aborted()` that threw (`[BaseTokenProvider]
+Renewal strategy failed to take an aborted step`); a persistence report that
+failed with no caller left to receive it (`[BaseTokenProvider] Persisting the
+tokens failed`); and `refreshStatePersistence`'s failed write
+(`[refreshStatePersistence] Writing the tokens failed`, to its own `logger`). **No URL in
+any log line** (since 6.0.0): an endpoint is a free value — a discovered one
+is the server's, a configured one yours, and it may carry a credential or a
+query secret — so no line names a discovery URL, token, device or
+authorization endpoint, a UAA URL, a redirect URI, a client id or any other
+configured or server-supplied string; a line carries fixed words and
+admitted facts only (operation, grant, status, registered code). The one
+place a URL is shown is the **prompt** that sends a user to it — the
+authorization URL, the device flow's verification URI — and only as an
+`http:` / `https:` serialisation of printable ASCII: a URL that cannot be
+shown so is named in fixed words and not shown, and no control or bidi
+character reaches a prompt. `consoleDeviceCodePresenter` shows the user code
+only when it is printable ASCII; with no showable URI or code it shows
+nothing and the login ends `interactive-login` `device-code-not-shown`.
+
+The test suite's own logger (`src/__tests__/helpers/testLogger.ts`) is
+switched on by environment variables — this is for running the tests, not
+the package:
 
 ```bash
-# Enable logging for auth providers (short name)
-DEBUG_PROVIDER=true npm test
-
-# Or use long name (backward compatibility)
-DEBUG_AUTH_PROVIDERS=true npm test
-
-# Or enable via general DEBUG variable
-DEBUG=true npm test
-
-# Or include in DEBUG list
-DEBUG=provider npm test
-# Or
-DEBUG=auth-providers npm test
-
-# Set log level (debug, info, warn, error)
-LOG_LEVEL=debug npm test
+DEBUG_AUTH_PROVIDERS=true npm test   # or DEBUG_PROVIDER, DEBUG_BROWSER_AUTH, DEBUG=true, DEBUG=auth-providers
+AUTH_LOG_LEVEL=debug npm test        # debug, info, warn, error
 ```
 
-Logging uses `@mcp-abap-adt/logger` package with structured logging:
-- Token exchange stages (what we send, what we receive)
-- Token information (lengths, previews, expiration)
-- Token validation checks (expiration, validity)
-- Errors in fixed words (see below)
-
-Example output:
-```
-[INFO] ℹ️ [browserAuth] Exchanging code for token...
-[INFO] ℹ️ Tokens received: accessToken(2263 chars), refreshToken(34 chars)
-[DEBUG] 🐛 [BaseTokenProvider] Token validation check {"expiresAt":"2025-12-25 11:08:15 UTC","isValid":true}
-[INFO] ℹ️ [browserAuth] Authorization URL: https://.../oauth/authorize?...
-[INFO] ℹ️ [browserAuth] Browser: system
-```
-
-**Logging Features**:
-- **No tokens in logs**: a token the provider holds or sent is never logged, not even in part. A log line carries only `<redacted, N chars>` (since 4.1.2; earlier versions logged a short refresh token whole). Since 5.4.2 a token endpoint's error body contributes only a registered `error` code and the status — to a thrown error and to one `debug` line; its `error_description` and `error_uri` reach neither. An `error` that is a registered OAuth error code (`invalid_grant`, `authorization_pending`, `slow_down`, …) is kept verbatim: it is a protocol word, and the device poll reads it. Before 5.4.2, a new opaque token a server wrote into `error_description` could not be recognised and passed through; the description is now written nowhere.
-- **No error message in logs**: a log line about a thrown value — a refresh that failed, a strategy, loader, presenter, validator, `onTokens`, browser launcher or SNC locator/probe that threw — carries only the words its refusal would (fixed per error class, an allowlisted TLS or system code, else `unknown error`) and the HTTP status when there is one, never the error's message, `cause` or stack: a consumer's collaborator may throw text holding a key, a passphrase or a token. Diagnose a collaborator's failure where it throws, not from this package's log.
-- **Date Formatting**: Expiration dates are displayed in readable format (YYYY-MM-DD HH:MM:SS UTC) instead of ISO format
-- **Browser Information**: Logs browser type and authorization URL for debugging
-- **Token Lifecycle**: Detailed logging of token acquisition, validation, and refresh operations
+**Logging guarantees**:
+- **No tokens in logs**: a token the provider holds or sent is never logged,
+  not even in part — a line carries only `<redacted, N chars>` (since 4.1.2;
+  earlier versions logged a short refresh token whole). A secret of a request
+  appears only in `sent`, only under `authDebug`, prepared as above.
+- **No server text in logs**: a token endpoint's body contributes only its
+  status and a registered `error` code — a protocol word, which the device
+  poll reads — to an error and to the line above. Its `error_description` and
+  `error_uri` reach nothing (written nowhere since 5.4.2, read by nothing
+  since 6.0.0).
+- **No error message in logs**: a line about a thrown value — a refresh that
+  failed, a strategy (authorization, renewal or persistence), loader,
+  presenter, validator, store write, browser launcher or SNC locator/probe
+  that threw — carries `logFields(error)` of
+  its classification: the words its refusal would carry, its `kind`, an
+  integer HTTP status and, for the three variant kinds, its admitted
+  diagnostics; never the value's message, `cause` or stack: a consumer's
+  collaborator may throw text holding a key, a passphrase or a token.
+  Diagnose a collaborator's failure where it throws, not from this package's
+  log.
+- **No URL and no configured value in logs**: see above; a source test
+  (`logCallSources.test.ts`) fails when a log call takes a URL, an
+  endpoint, a client id or an error's message, and `endpointsInLogs.test.ts`
+  proves on a real socket — hostile discovery documents and configured
+  endpoints, `authDebug` absent, `false` and `true` — that no line holds
+  them or a control character.
+- **A throwing logger changes nothing**: every log call on a failure path is
+  guarded, and a logger answering a rejecting promise is handled, so the
+  failure the site throws is the one you get.
 
 ## Dependencies
 
-- `@mcp-abap-adt/interfaces-auth` (^3.1.0) - `IAuthProvider`, token provider, authorization, client-authentication and assertion-validation contracts (`ITokenProvider`, `IAuthorizationStrategy`, `IClientAuthentication`, `CallbackServerFactory`, `IAssertionValidator`, `IAssertionReplayStore`) and error code constants
-- `@mcp-abap-adt/interfaces-auth-sap` (^2.0.0) - XSUAA authorization configuration (`IAuthorizationConfig`) and `ICertificateMaterialLoader`
+- `@mcp-abap-adt/interfaces-auth` (^7.5.0) - `IAuthProvider`, token provider, authorization, renewal, persistence, client-authentication and assertion-validation contracts (`ITokenProvider`, `IAuthorizationStrategy` and its parts — `IAuthorizationPresentation`, `IAnswerTransport`, `IAuthorizationProtocol`, `IBrowser` —, `IRenewalStrategy`, `ITokenPersistence`, `IClientAuthentication`, `IAssertionValidator`, `IAssertionReplayStore`), and the error contract's types and allowlists (`IAuthProviderError`, its kinds, facts and `OPERATIONS`)
+- `@mcp-abap-adt/interfaces-auth-sap` (^3.3.0) - XSUAA authorization configuration (`IAuthorizationConfig`) and `ICertificateMaterialLoader`
+- `@mcp-abap-adt/auth-errors` (^2.1.1) - the error contract's runtime: the builders every error is minted with, `AuthProviderFailure`, `classify` / `readFailure`, `guard`, `logFields`, shared attempts and parties
 - `@mcp-abap-adt/interfaces-utils` (^1.1.0) - `ILogger`
 - `@xmldom/xmldom` - XML parsing: SAML assertion validation, and taking the Assertion out of a SAMLResponse for the saml2-bearer grant
 - `xml-crypto` - XML-DSig signature verification for SAML assertion validation
 - `axios` - HTTP client
-- `express` - OAuth2 callback server
-- `open` - Browser opening utility
+
+The callback listener is Node's own `node:http`, and every browser is started
+with `node:child_process` (an argument array, never a shell): there is no
+`express` and no `open` dependency since 6.0.0.
 
 Requires Node.js 22, 24 or 26 (`engines: "^22 || ^24 || ^26"`). 22 and 24 are
 what SAP BTP, Cloud Foundry's Node.js buildpack offers; 26 is supported as well,

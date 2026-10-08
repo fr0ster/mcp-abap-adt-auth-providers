@@ -6,6 +6,7 @@ import type {
   OAuth2GrantType,
 } from '@mcp-abap-adt/interfaces-auth';
 import * as surface from '../index';
+import { refreshThenLogin } from '../renewal';
 import { recordingTargets } from './helpers/targets';
 import { fakeSystem, peLibrary } from './snc/fakeSystem';
 
@@ -14,7 +15,13 @@ class FailingTokenProvider extends surface.BaseTokenProvider {
   protected async performLogin(): Promise<ITokenResult> {
     throw new Error('login failed for SECRET-CLIENT');
   }
-  protected async performRefresh(): Promise<ITokenResult> {
+  protected async performRefresh(
+    _refreshToken: string,
+    _signal: AbortSignal,
+    dispatched: () => void,
+  ): Promise<ITokenResult> {
+    // The request leaves: the site would call this right before it.
+    dispatched();
     throw new Error('refresh failed for SECRET-REFRESH');
   }
   protected getAuthType(): OAuth2GrantType {
@@ -23,7 +30,11 @@ class FailingTokenProvider extends surface.BaseTokenProvider {
 }
 const throwingStrategy: IAuthorizationStrategy<string> = {
   authorize: async () => {
-    throw new surface.ValidationError('SECRET-MSG', ['SECRET-FIELD']);
+    // A look-alike of the former ValidationError (gone in 6.0.0).
+    throw Object.assign(new Error('SECRET-MSG'), {
+      name: 'ValidationError',
+      missingFields: ['SECRET-FIELD'],
+    });
   },
 };
 const SLC = 'C:\\Program Files\\SAP\\FrontEnd\\SecureLogin\\lib\\sapcrypto.dll';
@@ -63,10 +74,14 @@ const providers: [string, IAuthProvider][] = [
       { url: 'https://h', authType: 'certificate' },
     ),
   ],
-  ['token provider (failing)', new FailingTokenProvider()],
+  [
+    'token provider (failing)',
+    new FailingTokenProvider({ renewal: refreshThenLogin() }),
+  ],
   [
     'authorization code, throwing strategy',
     new surface.AuthorizationCodeProvider({
+      renewal: refreshThenLogin(),
       uaaUrl: 'https://uaa',
       clientId: 'c',
       clientSecret: 'SECRET-CS',

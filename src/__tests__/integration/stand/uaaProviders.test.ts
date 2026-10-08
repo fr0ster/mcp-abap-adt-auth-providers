@@ -7,9 +7,20 @@
  */
 
 import { beforeAll, describe, expect, it, jest } from '@jest/globals';
+import { readFailure } from '@mcp-abap-adt/auth-errors';
 import type { IAuthorizationStrategy } from '@mcp-abap-adt/interfaces-auth';
+import {
+  exchangeCodeForToken,
+  getJwtAuthorizationUrl,
+} from '../../../auth/browserAuth';
+import {
+  generatePkceChallenge,
+  generatePkceVerifier,
+} from '../../../auth/oidcPkce';
+import { mintSecret } from '../../../authorization/secrets';
 import { AuthorizationCodeProvider } from '../../../providers/AuthorizationCodeProvider';
 import { ClientCredentialsProvider } from '../../../providers/ClientCredentialsProvider';
+import { refreshThenLogin } from '../../../renewal';
 import { externalCodeStrategy } from '../../../strategies';
 import { authorizeByForm } from './formLogin';
 
@@ -44,6 +55,7 @@ const expiredJwt = (): string => {
 describeUaa('UAA providers against Cloud Foundry UAA', () => {
   it('ClientCredentialsProvider gets a client token', async () => {
     const tokens = await new ClientCredentialsProvider({
+      renewal: refreshThenLogin(),
       uaaUrl: UAA_URL as string,
       clientId: 'cc_client',
       clientSecret: 'secret',
@@ -66,12 +78,34 @@ describeUaa('UAA providers against Cloud Foundry UAA', () => {
       });
 
     it('logs the user in through UAA’s login form', async () => {
+      // The URL the provider builds carries state and a PKCE
+      // challenge, UAA returns the state, and accepts the exchange's verifier.
+      const states: Array<{ sent: string | null; back: string | null }> = [];
       const tokens = await new AuthorizationCodeProvider({
+        renewal: refreshThenLogin(),
         uaaUrl: UAA_URL as string,
         clientId: 'authcode',
         clientSecret: 'secret',
-        authorization: loginThroughUaa(),
+        authorization: externalCodeStrategy({
+          redirectUri: CALLBACK,
+          provide: async (url) => {
+            const sent = new URL(url);
+            expect(sent.searchParams.get('code_challenge_method')).toBe('S256');
+            expect(sent.searchParams.get('code_challenge')).toEqual(
+              expect.any(String),
+            );
+            const back = await authorizeByForm(url, CALLBACK, USER);
+            states.push({
+              sent: sent.searchParams.get('state'),
+              back: back.searchParams.get('state'),
+            });
+            return back.searchParams.get('code') ?? '';
+          },
+        }),
       }).getTokens();
+      expect(states).toHaveLength(1);
+      expect(states[0]?.sent).toEqual(expect.any(String));
+      expect(states[0]?.back).toBe(states[0]?.sent);
 
       const token = claims(tokens.authorizationToken);
       expect(token.iss).toBe(uaaIssuer);
@@ -80,8 +114,84 @@ describeUaa('UAA providers against Cloud Foundry UAA', () => {
       expect(tokens.refreshToken).toEqual(expect.any(String));
     });
 
+    describe('PKCE', () => {
+      const config = () =>
+        ({
+          uaaUrl: UAA_URL as string,
+          uaaClientId: 'authcode',
+          uaaClientSecret: 'secret',
+        }) as Parameters<typeof getJwtAuthorizationUrl>[0];
+
+      /** A code UAA issued for a URL bound to `verifier`'s challenge. */
+      const codeFor = async (verifier: string): Promise<string> => {
+        const url = getJwtAuthorizationUrl(config(), CALLBACK, {
+          state: mintSecret(),
+          codeChallenge: generatePkceChallenge(verifier),
+        });
+        const back = await authorizeByForm(url, CALLBACK, USER);
+        return back.searchParams.get('code') ?? '';
+      };
+
+      it('accepts the code with its own verifier', async () => {
+        const verifier = generatePkceVerifier();
+        const tokens = await exchangeCodeForToken(
+          config(),
+          await codeFor(verifier),
+          CALLBACK,
+          undefined,
+          undefined,
+          undefined,
+          verifier,
+        );
+        expect(claims(tokens.accessToken).user_name).toBe('tester');
+      });
+
+      // Through the provider, as a login runs: the strategy builds two URLs
+      // and answers the code of the first, so the provider exchanges it with
+      // the second one's verifier. Without PKCE that code would be taken.
+      it('refuses the code exchanged with a wrong verifier', async () => {
+        const thrown = await new AuthorizationCodeProvider({
+          renewal: refreshThenLogin(),
+          uaaUrl: UAA_URL as string,
+          clientId: 'authcode',
+          clientSecret: 'secret',
+          authorization: {
+            async authorize(request) {
+              const first = await request.buildAuthorizationUrl(CALLBACK);
+              await request.buildAuthorizationUrl(CALLBACK);
+              const back = await authorizeByForm(first, CALLBACK, USER);
+              return {
+                payload: back.searchParams.get('code') ?? '',
+                redirectUri: CALLBACK,
+              };
+            },
+          },
+        })
+          .getTokens()
+          .catch((e: unknown) => e);
+        expect(readFailure(thrown, 'code-exchange')).toMatchObject({
+          kind: 'request-failed',
+          facts: { problem: 'refused' },
+        });
+      });
+
+      it('refuses the code exchanged without a verifier', async () => {
+        const code = await codeFor(generatePkceVerifier());
+        const thrown = await exchangeCodeForToken(
+          config(),
+          code,
+          CALLBACK,
+        ).catch((e: unknown) => e);
+        expect(readFailure(thrown, 'code-exchange')).toMatchObject({
+          kind: 'request-failed',
+          facts: { problem: 'refused' },
+        });
+      });
+    });
+
     it('refreshes without logging in again', async () => {
       const first = await new AuthorizationCodeProvider({
+        renewal: refreshThenLogin(),
         uaaUrl: UAA_URL as string,
         clientId: 'authcode',
         clientSecret: 'secret',
@@ -94,6 +204,7 @@ describeUaa('UAA providers against Cloud Foundry UAA', () => {
         );
       });
       const refreshed = await new AuthorizationCodeProvider({
+        renewal: refreshThenLogin(),
         uaaUrl: UAA_URL as string,
         clientId: 'authcode',
         clientSecret: 'secret',

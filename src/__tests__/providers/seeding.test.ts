@@ -10,6 +10,7 @@ import type {
   IAuthorizationStrategy,
   IAuthRejection,
   ITokenResult,
+  PersistenceReport,
 } from '@mcp-abap-adt/interfaces-auth';
 import { AuthorizationCodeProvider } from '../../providers/AuthorizationCodeProvider';
 import type { BaseTokenProvider } from '../../providers/BaseTokenProvider';
@@ -20,6 +21,7 @@ import { OidcTokenExchangeProvider } from '../../providers/OidcTokenExchangeProv
 import { Saml2BearerProvider } from '../../providers/Saml2BearerProvider';
 import { Saml2PureProvider } from '../../providers/Saml2PureProvider';
 import { UaaPasscodeProvider } from '../../providers/UaaPasscodeProvider';
+import { refreshThenLogin } from '../../renewal';
 import { recordingTargets } from '../helpers/targets';
 
 const HOUR = 3600_000;
@@ -55,18 +57,19 @@ function samlPure(
     expiresAt: new Date(loginExpiresAt),
   }));
   const cookieProvider = jest.fn(async () => loginCookies);
-  const onTokens = jest.fn(async (_result: ITokenResult) => {});
+  const report = jest.fn(async (_report: PersistenceReport) => {});
   const provider = new Saml2PureProvider({
+    renewal: refreshThenLogin(),
     idpSsoUrl: 'https://idp/sso',
     spEntityId: 'sp',
     idpInitiated: true,
     authorization: { authorize },
     assertionValidator: { validate } as unknown as IAssertionValidator,
     cookieProvider,
-    onTokens,
+    persistence: { report },
     ...seed,
   });
-  return { provider, authorize, cookieProvider, onTokens, loginExpiresAt };
+  return { provider, authorize, cookieProvider, report, loginExpiresAt };
 }
 
 describe('Saml2PureProvider seeded with stored cookies', () => {
@@ -167,27 +170,31 @@ describe('Saml2PureProvider seeded with stored cookies', () => {
     expect(tokens.authorizationToken).toBe(NEW_COOKIES);
   });
 
-  it('onTokens after the login carries the new cookies and their expiresAt', async () => {
-    const { provider, onTokens, loginExpiresAt } = samlPure({
+  it('the report after the login carries the new cookies and their expiresAt', async () => {
+    const { provider, report, loginExpiresAt } = samlPure({
       accessToken: STORED_COOKIES,
       expiresAt: Date.now() - 1,
     });
     await provider.getTokens();
-    expect(onTokens).toHaveBeenCalledTimes(1);
-    expect(onTokens.mock.calls[0]![0]).toMatchObject({
-      authorizationToken: NEW_COOKIES,
-      tokenType: 'saml',
-      expiresAt: loginExpiresAt,
+    expect(report).toHaveBeenCalledTimes(1);
+    expect(report.mock.calls[0]![0]).toMatchObject({
+      event: 'credential',
+      credential: {
+        authorizationToken: NEW_COOKIES,
+        tokenType: 'saml',
+        expiresAt: loginExpiresAt,
+      },
+      awaited: true,
     });
   });
 
-  it('a seed is not new: onTokens is not called while the stored cookies are reused', async () => {
-    const { provider, onTokens } = samlPure({
+  it('a seed is not new: nothing is reported while the stored cookies are reused', async () => {
+    const { provider, report } = samlPure({
       accessToken: STORED_COOKIES,
       expiresAt: Date.now() + HOUR,
     });
     await provider.getTokens();
-    expect(onTokens).not.toHaveBeenCalled();
+    expect(report).not.toHaveBeenCalled();
   });
 });
 
@@ -221,6 +228,7 @@ const jwtProviders: Array<[string, (seed: Seed) => BaseTokenProvider]> = [
     'AuthorizationCodeProvider',
     (seed) =>
       new AuthorizationCodeProvider({
+        renewal: refreshThenLogin(),
         uaaUrl: 'https://uaa',
         clientId: 'c',
         clientSecret: 's',
@@ -232,6 +240,7 @@ const jwtProviders: Array<[string, (seed: Seed) => BaseTokenProvider]> = [
     'UaaPasscodeProvider',
     (seed) =>
       new UaaPasscodeProvider({
+        renewal: refreshThenLogin(),
         uaaUrl: 'https://uaa',
         clientId: 'c',
         authorization: neverCalled,
@@ -242,6 +251,7 @@ const jwtProviders: Array<[string, (seed: Seed) => BaseTokenProvider]> = [
     'OidcBrowserProvider',
     (seed) =>
       new OidcBrowserProvider({
+        renewal: refreshThenLogin(),
         clientId: 'c',
         tokenEndpoint: 'https://idp/token',
         authorizationEndpoint: 'https://idp/auth',
@@ -253,6 +263,7 @@ const jwtProviders: Array<[string, (seed: Seed) => BaseTokenProvider]> = [
     'OidcDeviceFlowProvider',
     (seed) =>
       new OidcDeviceFlowProvider({
+        renewal: refreshThenLogin(),
         clientId: 'c',
         tokenEndpoint: 'https://idp/token',
         deviceAuthorizationEndpoint: 'https://idp/device',
@@ -268,6 +279,7 @@ const jwtProviders: Array<[string, (seed: Seed) => BaseTokenProvider]> = [
     'OidcPasswordProvider',
     (seed) =>
       new OidcPasswordProvider({
+        renewal: refreshThenLogin(),
         clientId: 'c',
         tokenEndpoint: 'https://idp/token',
         username: 'u',
@@ -279,6 +291,7 @@ const jwtProviders: Array<[string, (seed: Seed) => BaseTokenProvider]> = [
     'OidcTokenExchangeProvider',
     (seed) =>
       new OidcTokenExchangeProvider({
+        renewal: refreshThenLogin(),
         clientId: 'c',
         tokenEndpoint: 'https://idp/token',
         subjectToken: 'subject',
@@ -290,6 +303,7 @@ const jwtProviders: Array<[string, (seed: Seed) => BaseTokenProvider]> = [
     'Saml2BearerProvider',
     (seed) =>
       new Saml2BearerProvider({
+        renewal: refreshThenLogin(),
         ...saml,
         tokenUrl: 'https://uaa/oauth/token',
         clientId: 'c',

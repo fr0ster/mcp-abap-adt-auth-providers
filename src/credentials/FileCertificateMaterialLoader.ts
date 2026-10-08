@@ -1,11 +1,11 @@
 import { readFile } from 'node:fs/promises';
+import { authError } from '@mcp-abap-adt/auth-errors';
 import type { ICertificateMaterial } from '@mcp-abap-adt/interfaces-auth';
 import type {
   ICertificateMaterialLoader,
   ISapConfig,
 } from '@mcp-abap-adt/interfaces-auth-sap';
-import { asContract } from '../auth/contractShape';
-import { ValidationError } from '../errors/TokenProviderErrors';
+import { misconfigured } from '../auth/configuration';
 
 export class FileCertificateMaterialLoader
   implements ICertificateMaterialLoader
@@ -14,27 +14,31 @@ export class FileCertificateMaterialLoader
     const hasPem = !!(config.certPath || config.certKeyPath); // any PEM-style field present
     const hasPfx = !!config.certPfxPath;
     if (hasPem && hasPfx) {
-      throw new ValidationError(
-        'Certificate auth: provide either PEM (certPath+certKeyPath) OR certPfxPath, not both.',
-        ['certPath', 'certPfxPath'],
+      throw misconfigured(
+        authError.configuration({
+          case: 'certificate-pem-and-pfx',
+          fields: ['certPath', 'certPfxPath'],
+        }),
       );
     }
     if (hasPfx) {
-      return asContract<ICertificateMaterial>({
+      return {
         pfx: await readFile(config.certPfxPath as string),
         passphrase: config.certPassphrase,
-      });
+      };
     }
     if (config.certPath && config.certKeyPath) {
-      return asContract<ICertificateMaterial>({
+      return {
         cert: await readFile(config.certPath),
         key: await readFile(config.certKeyPath),
         passphrase: config.certPassphrase,
-      });
+      };
     }
-    throw new ValidationError(
-      'Certificate auth requires certPfxPath OR (certPath AND certKeyPath).',
-      ['certPfxPath', 'certPath', 'certKeyPath'],
+    throw misconfigured(
+      authError.configuration({
+        case: 'certificate-files-missing',
+        fields: ['certPfxPath', 'certPath', 'certKeyPath'],
+      }),
     );
   }
 }

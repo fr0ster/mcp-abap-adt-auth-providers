@@ -2,20 +2,26 @@
  * OIDC token endpoint helpers
  */
 
+import { readFailure } from '@mcp-abap-adt/auth-errors';
+import type { Operation } from '@mcp-abap-adt/interfaces-auth';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
 import axios, { type AxiosResponse } from 'axios';
-import { readSafely } from './knownCodes';
-import { tlsFailureCode } from './refusal';
+import { intervalWait, throwIfAborted, untilAborted } from './attempt';
 import {
+  attemptSite,
   type LegacyBasic,
   legacyBasic,
   logQuietly,
   type PreparedTokenRequest,
   prepareTokenRequest,
+  rejectMissingToken,
   sendTokenRequest,
+  siteSecrets,
   type TokenRequestAuth,
-  type TokenRequestDiagnostics,
-  tokenEndpointError,
+  type TokenRequestSite,
+  type TokenResponseSnapshot,
+  type TokenSiteOptions,
+  tokenSite,
 } from './tokenRequest';
 
 export interface OidcTokenResponse {
@@ -28,7 +34,7 @@ export interface OidcTokenResponse {
 
 /**
  * Today's Basic header, when a secret is given and there is no strategy —
- * built only through legacyBasic, so its secrets join every redaction.
+ * built only through legacyBasic, so its secrets are named in `sent`.
  */
 function todaysBasic(
   prepared: PreparedTokenRequest | undefined,
@@ -45,6 +51,7 @@ function sendAsToday(
   endpoint: string,
   params: URLSearchParams,
   basic: LegacyBasic | undefined,
+  signal: AbortSignal | undefined,
 ): Promise<AxiosResponse> {
   return axios.post(endpoint, params.toString(), {
     headers: {
@@ -54,6 +61,8 @@ function sendAsToday(
     // A redirect would re-send the grant's secret (code, refresh token,
     // device code, password, subject token) and the client's: never followed.
     maxRedirects: 0,
+    // The attempt's abort cuts the request; a refresh site passes none.
+    ...(signal === undefined ? {} : { signal }),
   });
 }
 
@@ -76,25 +85,49 @@ function prepareWith(
   );
 }
 
-/** One request: through the strategy when there is one, else as today. */
-async function send(
-  diagnostics: TokenRequestDiagnostics,
-  auth: TokenRequestAuth | undefined,
+/** What one OIDC request is, beside its endpoint and parameters. */
+interface OidcRequest {
+  readonly operation: Operation;
+  readonly logger: ILogger | undefined;
+  readonly options: TokenSiteOptions | undefined;
+  readonly auth: TokenRequestAuth | undefined;
+  readonly clientId: string;
+  readonly clientSecret: string | undefined;
+  readonly grantType: string;
+  /**
+   * `attempt` for an attempt's own request, which carries its signal;
+   * `refresh` for a refresh, which never does.
+   */
+  readonly kind: 'attempt' | 'refresh';
+}
+
+/**
+ * One token request — through the strategy when there is one, else as today
+ * — mapped to tokens; a `2xx` without `access_token` is `rejectMissingToken`'s.
+ */
+async function requestTokens(
+  request: OidcRequest,
   endpoint: string,
-  clientId: string,
-  clientSecret: string | undefined,
-  grantType: string,
   params: URLSearchParams,
-): Promise<AxiosResponse> {
+): Promise<OidcTokenResponse> {
+  const { auth, clientId, clientSecret } = request;
   const prepared = auth
-    ? await prepareWith(auth, endpoint, clientId, grantType, params)
+    ? await prepareWith(auth, endpoint, clientId, request.grantType, params)
     : undefined;
   const basic = todaysBasic(prepared, clientId, clientSecret);
-  return sendTokenRequest(
-    prepared,
-    () => sendAsToday(endpoint, params, basic),
-    diagnostics,
+  const site = (request.kind === 'refresh' ? tokenSite : attemptSite)(
+    request.operation,
+    request.options,
+    request.logger,
+    siteSecrets(params, clientSecret),
+    basic,
   );
+  const response = await sendTokenRequest<TokenResponseBody>(
+    prepared,
+    (signal) => sendAsToday(endpoint, params, basic, signal),
+    site,
+  );
+  return mapTokenResponse(site, prepared, response);
 }
 
 /** A token endpoint's success body (RFC 6749 §5.1, OIDC Core §3.1.3.3). */
@@ -107,10 +140,13 @@ interface TokenResponseBody {
 }
 
 function mapTokenResponse(
-  data: TokenResponseBody | null | undefined,
+  site: TokenRequestSite,
+  prepared: PreparedTokenRequest | undefined,
+  response: TokenResponseSnapshot<TokenResponseBody>,
 ): OidcTokenResponse {
-  if (!data?.access_token) {
-    throw new Error('Token response missing access_token');
+  const data = response.data;
+  if (!data.access_token) {
+    rejectMissingToken(site, prepared, response, 'no-access-token', 'debug');
   }
   return {
     accessToken: data.access_token,
@@ -127,32 +163,37 @@ export async function exchangeAuthorizationCode(
   clientSecret: string | undefined,
   code: string,
   redirectUri: string,
-  codeVerifier: string,
+  /** The PKCE verifier of the URL this code answers; none when no URL was built. */
+  codeVerifier: string | undefined,
   logger?: ILogger,
   auth?: TokenRequestAuth,
+  options?: TokenSiteOptions,
 ): Promise<OidcTokenResponse> {
   const params = new URLSearchParams();
   params.append('grant_type', 'authorization_code');
   params.append('code', code);
   params.append('redirect_uri', redirectUri);
-  params.append('code_verifier', codeVerifier);
+  if (codeVerifier !== undefined) params.append('code_verifier', codeVerifier);
   params.append('client_id', clientId);
 
-  logger?.info('[OIDC] Exchanging authorization code for tokens', {
-    tokenEndpoint,
-  });
-
-  const response = await send(
-    { logger, label: 'OIDC authorization code exchange failed' },
-    auth,
-    tokenEndpoint,
-    clientId,
-    clientSecret,
-    'authorization_code',
-    params,
+  logQuietly(() =>
+    logger?.info('[OIDC] Exchanging authorization code for tokens'),
   );
 
-  return mapTokenResponse(response.data);
+  return requestTokens(
+    {
+      operation: 'oidc-token-request',
+      logger,
+      options,
+      auth,
+      clientId,
+      clientSecret,
+      grantType: 'authorization_code',
+      kind: 'attempt',
+    },
+    tokenEndpoint,
+    params,
+  );
 }
 
 export async function refreshOidcToken(
@@ -162,34 +203,48 @@ export async function refreshOidcToken(
   refreshToken: string,
   logger?: ILogger,
   auth?: TokenRequestAuth,
+  options?: TokenSiteOptions,
 ): Promise<OidcTokenResponse> {
   const params = new URLSearchParams();
   params.append('grant_type', 'refresh_token');
   params.append('refresh_token', refreshToken);
   params.append('client_id', clientId);
 
-  logger?.info('[OIDC] Refreshing token', { tokenEndpoint });
+  logQuietly(() => logger?.info('[OIDC] Refreshing token'));
 
-  const response = await send(
-    { logger, label: 'OIDC token refresh failed' },
-    auth,
+  return requestTokens(
+    {
+      operation: 'oidc-token-request',
+      logger,
+      options,
+      auth,
+      clientId,
+      clientSecret,
+      grantType: 'refresh_token',
+      kind: 'refresh',
+    },
     tokenEndpoint,
-    clientId,
-    clientSecret,
-    'refresh_token',
     params,
   );
-
-  return mapTokenResponse(response.data);
 }
 
 export interface OidcDeviceFlowInitResponse {
   deviceCode: string;
   userCode: string;
   verificationUri: string;
-  verificationUriComplete?: string;
+  verificationUriComplete?: string | undefined;
+  interval?: number | undefined;
+  expiresIn?: number | undefined;
+}
+
+/** The device authorization response (RFC 8628 §3.2). */
+interface DeviceAuthorizationBody {
+  device_code?: string;
+  user_code?: string;
+  verification_uri?: string;
+  verification_uri_complete?: string;
   interval?: number;
-  expiresIn?: number;
+  expires_in?: number;
 }
 
 export async function initiateDeviceAuthorization(
@@ -198,6 +253,7 @@ export async function initiateDeviceAuthorization(
   scope: string | undefined,
   logger?: ILogger,
   auth?: TokenRequestAuth,
+  options?: TokenSiteOptions,
 ): Promise<OidcDeviceFlowInitResponse> {
   const params = new URLSearchParams();
   params.append('client_id', clientId);
@@ -205,7 +261,7 @@ export async function initiateDeviceAuthorization(
     params.append('scope', scope);
   }
 
-  logger?.info('[OIDC] Initiating device authorization', { deviceEndpoint });
+  logQuietly(() => logger?.info('[OIDC] Initiating device authorization'));
 
   // RFC 8628 §3.1: a confidential client authenticates here too. Without a
   // strategy, today's request: client_id in the body, never Basic.
@@ -218,28 +274,34 @@ export async function initiateDeviceAuthorization(
         params,
       )
     : undefined;
-  let response: AxiosResponse;
-  try {
-    response = await sendTokenRequest(
-      prepared,
-      () =>
-        axios.post(deviceEndpoint, params.toString(), {
-          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-          // Never followed, like every token request.
-          maxRedirects: 0,
-        }),
-      { logger, label: 'OIDC device authorization failed' },
-    );
-  } catch (error: unknown) {
-    // Unwrapped, so the refusal can name the TLS code and its fixed hint.
-    if (tlsFailureCode(error) !== undefined) throw error;
-    // The safe facts only: the status and a registered code.
-    throw tokenEndpointError('OIDC device authorization failed', error);
-  }
+  const site = attemptSite(
+    'device-authorization',
+    options,
+    logger,
+    siteSecrets(params, undefined),
+  );
+  const response = await sendTokenRequest<DeviceAuthorizationBody>(
+    prepared,
+    (signal) =>
+      axios.post(deviceEndpoint, params.toString(), {
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        // Never followed, like every token request.
+        maxRedirects: 0,
+        // The attempt's abort cuts the initiation.
+        ...(signal === undefined ? {} : { signal }),
+      }),
+    site,
+  );
 
   const data = response.data;
-  if (!data?.device_code || !data?.user_code || !data?.verification_uri) {
-    throw new Error('Device authorization response missing required fields');
+  if (!data.device_code || !data.user_code || !data.verification_uri) {
+    rejectMissingToken(
+      site,
+      prepared,
+      response,
+      'incomplete-response',
+      'debug',
+    );
   }
 
   return {
@@ -247,9 +309,42 @@ export async function initiateDeviceAuthorization(
     userCode: data.user_code,
     verificationUri: data.verification_uri,
     verificationUriComplete: data.verification_uri_complete,
-    interval: data.interval,
+    interval: serverInterval(data.interval),
     expiresIn: data.expires_in,
   };
+}
+
+/** RFC 8628 §3.2: the poll interval when the server names none, in seconds. */
+const DEFAULT_INTERVAL = 5;
+
+/**
+ * The server's `interval` when it is a finite, non-negative JSON number;
+ * else undefined. A string — numeric or not — is no JSON number (RFC 8628
+ * §3.2), and NaN, a negative or an infinite value would make the poll hot
+ * or odd.
+ */
+function serverInterval(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0
+    ? value
+    : undefined;
+}
+
+/**
+ * True for the device poll's waiting answers (§6, RFC 8628 §3.5): a `400`
+ * whose registered `oauthError` is `authorization_pending` or `slow_down`,
+ * read from the failure's classified facts alone.
+ */
+function waitingAnswer(
+  error: unknown,
+): 'authorization_pending' | 'slow_down' | undefined {
+  const failure = readFailure(error, 'device-poll');
+  if (failure.kind !== 'request-failed' || failure.facts.status !== 400) {
+    return undefined;
+  }
+  const code = failure.facts.oauthError;
+  return code === 'authorization_pending' || code === 'slow_down'
+    ? code
+    : undefined;
 }
 
 export async function pollDeviceTokens(
@@ -257,50 +352,55 @@ export async function pollDeviceTokens(
   clientId: string,
   clientSecret: string | undefined,
   deviceCode: string,
-  interval: number = 5,
+  interval: number = DEFAULT_INTERVAL,
   logger?: ILogger,
   auth?: TokenRequestAuth,
+  options?: TokenSiteOptions,
 ): Promise<OidcTokenResponse> {
   const params = new URLSearchParams();
   params.append('grant_type', 'urn:ietf:params:oauth:grant-type:device_code');
   params.append('device_code', deviceCode);
   params.append('client_id', clientId);
 
+  const request: OidcRequest = {
+    operation: 'device-poll',
+    logger,
+    options,
+    auth,
+    clientId,
+    clientSecret,
+    grantType: 'urn:ietf:params:oauth:grant-type:device_code',
+    kind: 'attempt',
+  };
+  // The server's interval is the protocol, not a timeout of this package;
+  // anything but a finite non-negative number is the RFC's default.
+  let wait = serverInterval(interval) ?? DEFAULT_INTERVAL;
+  // The attempt's signal: checked before every poll and after
+  // every await — the request, the wait — so the loop never polls again
+  // once the attempt is aborted. Each poll carries it (the abort cuts the
+  // request), and the loop stops waiting for an outstanding poll at the
+  // abort itself (`untilAborted`), not when its answer arrives.
+  const signal = options?.signal;
   while (true) {
+    throwIfAborted(signal);
     // Authenticated anew per request: an assertion is never reused.
-    const prepared = auth
-      ? await prepareWith(
-          auth,
-          tokenEndpoint,
-          clientId,
-          'urn:ietf:params:oauth:grant-type:device_code',
-          params,
-        )
-      : undefined;
-    const basic = todaysBasic(prepared, clientId, clientSecret);
     try {
-      const response = await sendTokenRequest(
-        prepared,
-        () => sendAsToday(tokenEndpoint, params, basic),
-        { logger, label: 'OIDC device poll failed' },
+      return await untilAborted(
+        requestTokens(request, tokenEndpoint, params),
+        signal,
       );
-      return mapTokenResponse(response.data);
     } catch (error) {
-      const response = readSafely(error, 'response');
-      const status = readSafely(response, 'status');
-      const errorCode = readSafely(readSafely(response, 'data'), 'error');
-      if (
-        status === 400 &&
-        (errorCode === 'authorization_pending' || errorCode === 'slow_down')
-      ) {
-        const wait = errorCode === 'slow_down' ? interval + 5 : interval;
-        logQuietly(() =>
-          logger?.debug('[OIDC] Device authorization pending', { wait }),
-        );
-        await new Promise((resolve) => setTimeout(resolve, wait * 1000));
-        continue;
-      }
-      throw error;
+      throwIfAborted(signal);
+      const waiting = waitingAnswer(error);
+      if (waiting === undefined) throw error;
+      // RFC 8628 §3.5: slow_down adds 5 s for this and every later request.
+      if (waiting === 'slow_down') wait += 5;
+      logQuietly(() =>
+        logger?.debug('[OIDC] Device authorization pending', { wait }),
+      );
+      // The server's interval, not a timeout of this package; the abort
+      // ends it early.
+      await intervalWait(wait * 1000, signal);
     }
   }
 }
@@ -314,6 +414,7 @@ export async function passwordGrant(
   scope: string | undefined,
   logger?: ILogger,
   auth?: TokenRequestAuth,
+  options?: TokenSiteOptions,
 ): Promise<OidcTokenResponse> {
   const params = new URLSearchParams();
   params.append('grant_type', 'password');
@@ -324,26 +425,22 @@ export async function passwordGrant(
     params.append('scope', scope);
   }
 
-  logger?.info('[OIDC] Performing password grant', { tokenEndpoint });
+  logQuietly(() => logger?.info('[OIDC] Performing password grant'));
 
-  // Asked before the try: what the strategy throws is not a token-endpoint failure.
-  const prepared = auth
-    ? await prepareWith(auth, tokenEndpoint, clientId, 'password', params)
-    : undefined;
-  const basic = todaysBasic(prepared, clientId, clientSecret);
-  try {
-    const response = await sendTokenRequest(
-      prepared,
-      () => sendAsToday(tokenEndpoint, params, basic),
-      { logger, label: 'OIDC password grant failed' },
-    );
-    return mapTokenResponse(response.data);
-  } catch (error) {
-    // Unwrapped, so the refusal can name the TLS code and its fixed hint.
-    if (tlsFailureCode(error) !== undefined) throw error;
-    // The safe facts only: the status and a registered code.
-    throw tokenEndpointError('OIDC password grant failed', error);
-  }
+  return requestTokens(
+    {
+      operation: 'password-grant',
+      logger,
+      options,
+      auth,
+      clientId,
+      clientSecret,
+      grantType: 'password',
+      kind: 'attempt',
+    },
+    tokenEndpoint,
+    params,
+  );
 }
 
 export async function tokenExchange(
@@ -358,6 +455,7 @@ export async function tokenExchange(
   actorTokenType?: string,
   logger?: ILogger,
   auth?: TokenRequestAuth,
+  options?: TokenSiteOptions,
 ): Promise<OidcTokenResponse> {
   const params = new URLSearchParams();
   params.append(
@@ -380,17 +478,20 @@ export async function tokenExchange(
     params.append('actor_token_type', actorTokenType);
   }
 
-  logger?.info('[OIDC] Performing token exchange', { tokenEndpoint });
+  logQuietly(() => logger?.info('[OIDC] Performing token exchange'));
 
-  const response = await send(
-    { logger, label: 'OIDC token exchange failed' },
-    auth,
+  return requestTokens(
+    {
+      operation: 'oidc-token-request',
+      logger,
+      options,
+      auth,
+      clientId,
+      clientSecret,
+      grantType: 'urn:ietf:params:oauth:grant-type:token-exchange',
+      kind: 'attempt',
+    },
     tokenEndpoint,
-    clientId,
-    clientSecret,
-    'urn:ietf:params:oauth:grant-type:token-exchange',
     params,
   );
-
-  return mapTokenResponse(response.data);
 }

@@ -1,0 +1,238 @@
+/**
+ * A consumer's async logger — every method answers a rejecting promise —
+ * on a token site's paths: `logQuietly`
+ * attaches a no-op rejection handler to a plain native promise, so no
+ * `unhandledRejection` arrives. Run under plain node in a child process,
+ * where an unhandled rejection is recorded rather than hidden by Jest.
+ */
+
+import { describe, expect, it } from '@jest/globals';
+import { runPlainNode } from '../helpers/plainNode';
+
+const scenario = (logger: string) => `
+const http = require('node:http');
+const server = http.createServer((req, res) => {
+  req.resume();
+  req.on('end', () => {
+    res.writeHead(400, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ error: 'invalid_grant' }));
+  });
+});
+await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+const { port } = server.address();
+const logger = ${logger};
+const { passwordGrant } = load('auth/oidcToken.js');
+const outcomes = [];
+for (const authDebug of [false, true]) {
+  try {
+    await passwordGrant('http://127.0.0.1:' + port + '/token', 'cid', 'sec', 'u', 'p', undefined, logger, undefined, { authDebug });
+    outcomes.push('resolved');
+  } catch (error) {
+    outcomes.push(errors.readFailure(error, 'unfamiliar-error').kind);
+  }
+}
+server.close();
+report(outcomes);
+`;
+
+describe('an async logger on a token site', () => {
+  it('a rejecting promise from every logger method leaves no unhandled rejection', () => {
+    const run = runPlainNode<string[]>(
+      scenario(`{
+        debug: async () => { throw new Error('async debug'); },
+        info: async () => { throw new Error('async info'); },
+        warn: async () => { throw new Error('async warn'); },
+        error: async () => { throw new Error('async error'); },
+      }`),
+    );
+    expect(run.stderr).toBe('');
+    expect(run.result).toEqual(['request-failed', 'request-failed']);
+    expect(run.unhandled).toEqual([]);
+  });
+
+  it('a thenable whose then throws: contained, outcome unchanged', () => {
+    const run = runPlainNode<string[]>(
+      scenario(`{
+        debug: () => ({ then() { throw new Error('then ran'); } }),
+        info: () => ({ then() { throw new Error('then ran'); } }),
+        warn: () => undefined,
+        error: () => undefined,
+      }`),
+    );
+    expect(run.result).toEqual(['request-failed', 'request-failed']);
+    expect(run.unhandled).toEqual([]);
+  });
+});
+
+const codeExchange = (logger: string, answer: 'token' | 'refused-port') => `
+const http = require('node:http');
+const server = http.createServer((req, res) => {
+  req.resume();
+  req.on('end', () => {
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ access_token: 'at', refresh_token: 'rt' }));
+  });
+});
+await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+const { port } = server.address();
+if (${JSON.stringify(answer)} === 'refused-port') {
+  await new Promise((resolve) => server.close(resolve));
+}
+const logger = ${logger};
+const { exchangeCodeForToken } = load('auth/browserAuth.js');
+let outcome;
+try {
+  const tokens = await exchangeCodeForToken(
+    { uaaUrl: 'http://127.0.0.1:' + port, uaaClientId: 'cid', uaaClientSecret: 'sec' },
+    'code', 'http://localhost:61001/callback', logger,
+  );
+  outcome = { resolved: tokens.accessToken };
+} catch (error) {
+  const read = errors.readFailure(error, 'unfamiliar-error');
+  outcome = { kind: read.kind, problem: read.facts.problem };
+}
+if (${JSON.stringify(answer)} === 'token') server.close();
+report(outcome);
+`;
+
+describe('the UAA code exchange with a consumer logger', () => {
+  it('an async logger: a successful exchange leaves no unhandled rejection', () => {
+    const run = runPlainNode<Record<string, unknown>>(
+      codeExchange(
+        `{
+          debug: async () => { throw new Error('async debug'); },
+          info: async () => { throw new Error('async info'); },
+          warn: async () => { throw new Error('async warn'); },
+          error: async () => { throw new Error('async error'); },
+        }`,
+        'token',
+      ),
+    );
+    expect(run.stderr).toBe('');
+    expect(run.result).toEqual({ resolved: 'at' });
+    expect(run.unhandled).toEqual([]);
+  });
+
+  it('a throwing logger: a refused connection stays request-failed, not unknown', () => {
+    const run = runPlainNode<Record<string, unknown>>(
+      codeExchange(
+        `{
+          debug: () => { throw new Error('debug threw'); },
+          info: () => { throw new Error('info threw'); },
+          warn: () => { throw new Error('warn threw'); },
+          error: () => { throw new Error('error threw'); },
+        }`,
+        'refused-port',
+      ),
+    );
+    expect(run.result).toEqual({
+      kind: 'request-failed',
+      problem: 'no-response',
+    });
+    expect(run.unhandled).toEqual([]);
+  });
+});
+
+/**
+ * The interactive login's log lines: the prompt (`announce`), the
+ * listener's refused-answer line, the presentation's failure line
+ * and the manual prompt — every one guarded. An async logger leaves no
+ * unhandled rejection; a throwing one changes no outcome, and a prompt it
+ * would have swallowed goes to stderr instead.
+ */
+const interactive = (logger: string) => `
+const http = require('node:http');
+const logger = ${logger};
+const get = (url) => new Promise((resolve) => {
+  const req = http.get(url, { agent: false }, (res) => { res.resume(); res.on('end', resolve); });
+  req.on('error', resolve);
+});
+const strategies = load('strategies/index.js');
+const { consoleDeviceCodePresenter } = load('deviceCode/DeviceCodePresenter.js');
+const outcomes = [];
+const settle = async (run) => {
+  try { outcomes.push(await run()); }
+  catch (error) { outcomes.push(errors.readFailure(error, 'unfamiliar-error').facts.outcome); }
+};
+await settle(async () => (await strategies.browserCallbackStrategy({
+  port: 0,
+  browser: { open: async (url) => {
+    const redirectUri = new URL(url).searchParams.get('redirect_uri');
+    await get(redirectUri);
+    await get(redirectUri + '?code=c1&state=S');
+  } },
+}).authorize({ buildAuthorizationUrl: async (r) => 'https://idp.example/a?state=S&redirect_uri=' + encodeURIComponent(r), logger })).payload);
+// A launcher that fails ends nothing: its line and prompt go
+// through the same logger, and the consumer's signal ends the login.
+await settle(async () => {
+  const controller = new AbortController();
+  const login = strategies.browserCallbackStrategy({
+    port: 0,
+    browser: { open: async () => { throw Object.assign(new Error('x'), { code: 'ENOENT' }); } },
+  }).authorize({ buildAuthorizationUrl: async () => 'https://idp.example/a?state=S', logger, signal: controller.signal });
+  setTimeout(() => controller.abort(), 200);
+  return (await login).payload;
+});
+await settle(async () => (await strategies.manualPasteStrategy({
+  redirectUri: 'http://localhost:61001/callback',
+  read: async () => 'c2',
+}).authorize({ buildAuthorizationUrl: async () => 'https://idp.example/a?state=S', logger })).payload);
+await settle(async () => {
+  await consoleDeviceCodePresenter(logger).present({ verificationUri: 'https://idp.example/activate', userCode: 'UC-1' });
+  return 'shown';
+});
+report(outcomes);
+`;
+
+describe('the interactive login with a consumer logger', () => {
+  const expected = ['c1', 'aborted', 'c2', 'shown'];
+  /**
+   * The test's own bound on the child: a login that never
+   * ends — an unguarded log line throwing before the prompt — kills the
+   * child here and fails the test, instead of hanging it.
+   */
+  const BOUND_MS = 30_000;
+
+  it('an async logger: no unhandled rejection, every outcome as without a logger', () => {
+    const run = runPlainNode<string[]>(
+      interactive(`{
+        debug: async () => { throw new Error('async debug'); },
+        info: async () => { throw new Error('async info'); },
+        warn: async () => { throw new Error('async warn'); },
+        error: async () => { throw new Error('async error'); },
+      }`),
+      { boundMs: BOUND_MS },
+    );
+    expect(run.timedOut).toBe(false);
+    expect(run.result).toEqual(expected);
+    expect(run.unhandled).toEqual([]);
+    // A prompt whose info rejected is not lost — it
+    // reaches stderr too; nothing of the rejection does. (The authorization
+    // URL goes to stderr only in any case.)
+    expect(run.stderr).toContain(
+      'Open this URL in your browser to authenticate',
+    );
+    expect(run.stderr).toContain('Enter code: UC-1');
+    expect(run.stderr).not.toContain('async info');
+  }, 60_000);
+
+  it('a throwing logger: the same outcomes, and the prompts reach stderr instead', () => {
+    const run = runPlainNode<string[]>(
+      interactive(`{
+        debug: () => { throw new Error('debug threw'); },
+        info: () => { throw new Error('info threw'); },
+        warn: () => { throw new Error('warn threw'); },
+        error: () => { throw new Error('error threw'); },
+      }`),
+      { boundMs: BOUND_MS },
+    );
+    expect(run.timedOut).toBe(false);
+    expect(run.result).toEqual(expected);
+    expect(run.unhandled).toEqual([]);
+    expect(run.stderr).toContain(
+      'Open this URL in your browser to authenticate',
+    );
+    expect(run.stderr).toContain('Enter code: UC-1');
+    expect(run.stderr).not.toContain('threw');
+  }, 60_000);
+});

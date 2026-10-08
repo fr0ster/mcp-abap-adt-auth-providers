@@ -1,13 +1,13 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from '@jest/globals';
+import { isAuthProviderFailure, readFailure } from '@mcp-abap-adt/auth-errors';
 import {
   assertCertificateMaterial,
   certificateThumbprint,
   checkCertificateMaterial,
 } from '../../auth/certificateMaterial';
-import { refusalFrom } from '../../auth/refusal';
-import { CertificateMaterialError } from '../../errors/CertificateMaterialError';
+import { refusedWith, wordsOf } from '../helpers/minted';
 
 const dir = join(__dirname, '..', 'fixtures', 'certificates');
 const read = (name: string) => readFileSync(join(dir, name));
@@ -46,7 +46,7 @@ describe('checkCertificateMaterial', () => {
       { cert: read('client.crt') },
       { key: read('client.key') },
     ])
-      expect(checkCertificateMaterial(m)).toEqual({
+      expect(wordsOf(checkCertificateMaterial(m))).toEqual({
         ok: false,
         refusal: {
           reason: 'the client certificate is incomplete',
@@ -57,10 +57,12 @@ describe('checkCertificateMaterial', () => {
 
   it('refuses material a TLS context cannot be built from', () => {
     expect(
-      checkCertificateMaterial({
-        pfx: read('client.pfx'),
-        passphrase: 'wrong',
-      }),
+      wordsOf(
+        checkCertificateMaterial({
+          pfx: read('client.pfx'),
+          passphrase: 'wrong',
+        }),
+      ),
     ).toEqual({
       ok: false,
       refusal: {
@@ -82,22 +84,25 @@ describe('an expired client certificate', () => {
 
   it('is refused in fixed words (fixture: valid 2020-01-01 to 2021-01-01)', () => {
     expect(
-      checkCertificateMaterial({
-        cert: read('expired.crt'),
-        key: read('client.key'),
-      }),
+      wordsOf(
+        checkCertificateMaterial({
+          cert: read('expired.crt'),
+          key: read('client.key'),
+        }),
+      ),
     ).toEqual(EXPIRED);
   });
 
-  it('throws an allowlisted class, read by refusalFrom into the same words', () => {
+  it('throws a client-certificate failure, read by classify into the same words', () => {
     const e = thrown(() =>
       assertCertificateMaterial({
         cert: read('expired.crt'),
         key: read('client.key'),
       }),
     );
-    expect(e).toBeInstanceOf(CertificateMaterialError);
-    expect(refusalFrom(e, 'x')).toEqual(EXPIRED);
+    // A client-certificate failure, no longer the class.
+    expect(isAuthProviderFailure(e)).toBe(true);
+    expect(wordsOf(refusedWith(e))).toEqual(EXPIRED);
   });
 
   it('a certificate still valid is not refused', () => {
@@ -142,10 +147,11 @@ describe('certificateThumbprint', () => {
     ).toBe(FIXTURE_THUMBPRINT);
   });
 
-  it('throws an allowlisted class for incomplete material, with its words', () => {
+  it('throws a client-certificate failure for incomplete material, with its words', () => {
     const e = thrown(() => certificateThumbprint({ cert: read('client.crt') }));
-    expect(e).toBeInstanceOf(CertificateMaterialError);
-    expect(refusalFrom(e, 'x')).toEqual({
+    // A client-certificate failure, no longer the class.
+    expect(isAuthProviderFailure(e)).toBe(true);
+    expect(wordsOf(refusedWith(e))).toEqual({
       ok: false,
       refusal: {
         reason: 'the client certificate is incomplete',
@@ -154,16 +160,17 @@ describe('certificateThumbprint', () => {
     });
   });
 
-  it('throws an allowlisted class for unusable material, nothing of it in the refusal', () => {
+  it('throws a client-certificate failure for unusable material, nothing of it in the refusal', () => {
     const e = thrown(() =>
       certificateThumbprint({
         pfx: read('client.pfx'),
         passphrase: 'sEcReT-wrong',
       }),
     );
-    expect(e).toBeInstanceOf(CertificateMaterialError);
-    const out = refusalFrom(e, 'x');
-    expect(out).toEqual({
+    // A client-certificate failure, no longer the class.
+    expect(isAuthProviderFailure(e)).toBe(true);
+    const out = refusedWith(e);
+    expect(wordsOf(out)).toEqual({
       ok: false,
       refusal: {
         reason: 'the client certificate could not be used',
@@ -177,13 +184,23 @@ describe('certificateThumbprint', () => {
         key: read('client.key'),
       }),
     );
-    expect(garbage).toBeInstanceOf(CertificateMaterialError);
+    // A client-certificate failure, no longer the class.
+    expect(readFailure(garbage, 'unfamiliar-error')).toMatchObject({
+      kind: 'client-certificate',
+      facts: { problem: 'unusable' },
+    });
   });
 });
 
-describe('checkCertificateMaterial and a forged CertificateMaterialError', () => {
+// The class is gone: a material getter throwing a look-alike
+// of the former CertificateMaterialError — its flags and its own `words` —
+// is a foreign throw: `client-certificate` `unusable`, its text nowhere.
+describe('checkCertificateMaterial and a material getter throwing a look-alike', () => {
   const forgedMaterial = (words: PropertyDescriptor) => {
-    const forged = new CertificateMaterialError(true);
+    const forged = Object.assign(new Error('MARK'), {
+      name: 'CertificateMaterialError',
+      incomplete: true,
+    });
     Object.defineProperty(forged, 'words', words);
     return {
       get pfx(): Buffer {
@@ -192,17 +209,18 @@ describe('checkCertificateMaterial and a forged CertificateMaterialError', () =>
     };
   };
 
-  it('own `words` carrying a marker → the fixed words', () => {
+  it('own `words` carrying a marker → the fixed unusable words', () => {
     const outcome = checkCertificateMaterial(
       forgedMaterial({ get: () => ({ reason: 'MARK', hint: 'MARK' }) }),
     );
-    expect(outcome).toEqual({
+    expect(wordsOf(outcome)).toEqual({
       ok: false,
       refusal: {
-        reason: 'the client certificate is incomplete',
-        hint: 'give a PFX, or a certificate together with its key',
+        reason: 'the client certificate could not be used',
+        hint: 'check the certificate, the key and the passphrase, and that a PFX uses current encryption (not legacy RC2)',
       },
     });
+    expect(JSON.stringify(outcome)).not.toContain('MARK');
   });
 
   it('a throwing `words` getter → fixed words, no throw', () => {

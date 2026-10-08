@@ -5,17 +5,29 @@ import { OidcBrowserProvider } from '../../providers/OidcBrowserProvider';
 import { Saml2BearerProvider } from '../../providers/Saml2BearerProvider';
 import { Saml2PureProvider } from '../../providers/Saml2PureProvider';
 import { UaaPasscodeProvider } from '../../providers/UaaPasscodeProvider';
-import { BrowserCallbackStrategy } from '../../strategies/BrowserCallbackStrategy';
+import { refreshThenLogin } from '../../renewal';
 import { isShippedValidator } from '../../validation/assertionValidator';
 
 const configOf = (p: unknown) =>
   (p as { config: Record<string, unknown> }).config;
-const uaa = { uaaUrl: 'https://uaa', clientId: 'c', clientSecret: 's' };
+
+/** A named composition: a frozen strategy with `authorize` and `dispose`. */
+const composed = (strategy: unknown) =>
+  Object.isFrozen(strategy) &&
+  typeof (strategy as { authorize?: unknown }).authorize === 'function' &&
+  typeof (strategy as { dispose?: unknown }).dispose === 'function';
+const uaa = {
+  uaaUrl: 'https://uaa',
+  clientId: 'c',
+  clientSecret: 's',
+  renewal: refreshThenLogin(),
+};
 const saml = {
   idpSsoUrl: 'https://idp/sso',
   spEntityId: 'sp',
   idpEntityId: 'idp',
   cookieProvider: async () => 'c=1',
+  renewal: refreshThenLogin(),
 };
 // Not the brief's literal 'MIIB': that is too short to be a parseable X.509
 // certificate, and `toPem` proves the certificate before anything uses it
@@ -37,18 +49,53 @@ describe('no implicit defaults', () => {
     expect(() => new Saml2PureProvider({ ...saml })).toBeDefined();
   });
 
+  it('every token provider and static factory requires the renewal strategy (compile-time, rule 7)', () => {
+    const { renewal: _renewal, ...withoutRenewal } = uaa;
+    const strategy = {
+      authorize: async () => ({ payload: 'c', redirectUri: 'r' }),
+    };
+    const build = () =>
+      // @ts-expect-error renewal is required
+      new AuthorizationCodeProvider({
+        ...withoutRenewal,
+        authorization: strategy,
+      });
+    expect(build).toBeDefined();
+    const factory = () =>
+      // @ts-expect-error renewal is required
+      AuthorizationCodeProvider.inBrowser(withoutRenewal);
+    expect(factory).toBeDefined();
+    const oidc = () =>
+      // @ts-expect-error renewal is required
+      new OidcBrowserProvider({
+        clientId: 'c',
+        authorization: strategy as never,
+      });
+    expect(oidc).toBeDefined();
+  });
+
   it('inBrowser assembles a browser callback strategy', () => {
     expect(
-      configOf(AuthorizationCodeProvider.inBrowser(uaa)).authorization,
-    ).toBeInstanceOf(BrowserCallbackStrategy);
+      composed(
+        configOf(AuthorizationCodeProvider.inBrowser(uaa)).authorization,
+      ),
+    ).toBe(true);
     expect(
-      configOf(OidcBrowserProvider.inBrowser({ clientId: 'c' })).authorization,
-    ).toBeInstanceOf(BrowserCallbackStrategy);
+      composed(
+        configOf(
+          OidcBrowserProvider.inBrowser({
+            renewal: refreshThenLogin(),
+            clientId: 'c',
+          }),
+        ).authorization,
+      ),
+    ).toBe(true);
   });
 
   it('fromTerminal assembles a manual strategy with dispose()', () => {
     const strategy = configOf(
       UaaPasscodeProvider.fromTerminal({
+        renewal: refreshThenLogin(),
         uaaUrl: 'https://uaa',
         clientId: 'c',
       }),
@@ -69,7 +116,7 @@ describe('no implicit defaults', () => {
         { idpCertificates: [CERT] },
       ),
     ]) {
-      expect(configOf(p).authorization).toBeInstanceOf(BrowserCallbackStrategy);
+      expect(composed(configOf(p).authorization)).toBe(true);
       expect(isShippedValidator(configOf(p).assertionValidator as never)).toBe(
         true,
       );

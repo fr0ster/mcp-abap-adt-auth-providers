@@ -10,8 +10,12 @@
 import { inspect } from 'node:util';
 import { describe, expect, it, jest } from '@jest/globals';
 import type { IAuthorizationStrategy } from '@mcp-abap-adt/interfaces-auth';
+import { composeAuthorization } from '../../../authorization/compose';
+import { passcode } from '../../../authorization/protocol';
+import { consumerHandoff } from '../../../authorization/transport';
 import { UaaPasscodeProvider } from '../../../providers/UaaPasscodeProvider';
-import { externalCodeStrategy, staticCodeStrategy } from '../../../strategies';
+import { refreshThenLogin } from '../../../renewal';
+import { staticCodeStrategy } from '../../../strategies';
 import { FormBrowser } from './formLogin';
 
 const UAA_URL = process.env.UAA_URL?.replace(/\/+$/, '');
@@ -44,16 +48,27 @@ const config = () => ({
   clientSecret: 'secret',
 });
 
+/**
+ * The consumer's own code fetches the passcode from the URL it is handed:
+ * the passcode protocol over a handoff (the passcode page takes no
+ * redirect, so `externalCodeStrategy` — an OAuth code — does not fit).
+ */
+const handedOver = (provide: (url: string) => Promise<string>) =>
+  composeAuthorization({
+    ...consumerHandoff({ provide }),
+    protocol: passcode(),
+    endpoint: '/callback',
+  });
+
 describeUaa('UaaPasscodeProvider against Cloud Foundry UAA', () => {
   it('sends the user to /passcode and exchanges the code they bring back', async () => {
     const seen: string[] = [];
     const tokens = await new UaaPasscodeProvider({
+      renewal: refreshThenLogin(),
       ...config(),
-      authorization: externalCodeStrategy({
-        provide: async (url) => {
-          seen.push(url);
-          return passcodeFrom(url);
-        },
+      authorization: handedOver(async (url) => {
+        seen.push(url);
+        return passcodeFrom(url);
       }),
     }).getTokens();
 
@@ -66,14 +81,16 @@ describeUaa('UaaPasscodeProvider against Cloud Foundry UAA', () => {
 
   it('refreshes without asking the user for another code', async () => {
     const first = await new UaaPasscodeProvider({
+      renewal: refreshThenLogin(),
       ...config(),
-      authorization: externalCodeStrategy({ provide: passcodeFrom }),
+      authorization: handedOver(passcodeFrom),
     }).getTokens();
 
     const authorize = jest.fn(async () => {
       throw new Error('the refresh must not ask for a passcode');
     });
     const refreshed = await new UaaPasscodeProvider({
+      renewal: refreshThenLogin(),
       ...config(),
       accessToken: expiredJwt(),
       refreshToken: first.refreshToken,
@@ -88,6 +105,7 @@ describeUaa('UaaPasscodeProvider against Cloud Foundry UAA', () => {
   it('refuses a code that was already spent', async () => {
     const code = await passcodeFrom(`${UAA_URL}/passcode`);
     await new UaaPasscodeProvider({
+      renewal: refreshThenLogin(),
       ...config(),
       authorization: staticCodeStrategy({ payload: code }),
     }).getTokens();
@@ -96,6 +114,7 @@ describeUaa('UaaPasscodeProvider against Cloud Foundry UAA', () => {
     // and "Invalid passcode", its own text: since 5.4.2 the message names
     // the status alone, and UAA's words are written nowhere.
     const thrown = await new UaaPasscodeProvider({
+      renewal: refreshThenLogin(),
       ...config(),
       authorization: staticCodeStrategy({ payload: code }),
     })
@@ -104,7 +123,8 @@ describeUaa('UaaPasscodeProvider against Cloud Foundry UAA', () => {
         () => undefined,
         (error: unknown) => error as Error,
       );
-    expect(thrown?.message).toBe('Passcode exchange failed (401)');
+    // The operation's words and the status.
+    expect(thrown?.message).toBe('the passcode exchange failed (HTTP 401)');
     expect(inspect(thrown, { depth: null })).not.toContain('Invalid passcode');
   });
 });

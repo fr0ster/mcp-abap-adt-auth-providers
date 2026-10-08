@@ -1,107 +1,27 @@
+/**
+ * What a foreign throw becomes (rule 2): `classify` alone — this package's
+ * classes and their ladder are gone, so every thrown value a site or a
+ * collaborator produces is read the same way. The class cases that lived here
+ * moved to the row tests of the producers and sites.
+ */
+
 import { describe, expect, it } from '@jest/globals';
-import { OK, oops, refusalFrom, safely } from '../../auth/refusal';
-import { DeviceCodePresentationError } from '../../deviceCode/DeviceCodePresenter';
-import { AssertionValidationError } from '../../errors/AssertionValidationError';
-import {
-  BrowserAuthError,
-  RefreshError,
-  ServiceKeyError,
-  SessionDataError,
-  TokenProviderError,
-  ValidationError,
-} from '../../errors/TokenProviderErrors';
+import { classify, OK } from '@mcp-abap-adt/auth-errors';
+import { wordsOf } from '../helpers/minted';
 
 const text = (x: unknown) => JSON.stringify(x);
+const refused = (
+  error: unknown,
+  operation: Parameters<typeof classify>[1],
+) => ({
+  ok: false as const,
+  refusal: classify(error, operation),
+});
 
 describe('refusal', () => {
-  it('OK and oops build the two outcomes', () => {
+  it('OK is the one success outcome, frozen', () => {
     expect(OK).toEqual({ ok: true });
-    expect(oops('r', 'h')).toEqual({
-      ok: false,
-      refusal: { reason: 'r', hint: 'h' },
-    });
-    expect(oops('r')).toEqual({ ok: false, refusal: { reason: 'r' } });
-  });
-
-  it.each([
-    [
-      new BrowserAuthError('SECRET-MSG'),
-      'the interactive login did not complete',
-      "complete the login within the strategy's time",
-    ],
-    [
-      new RefreshError('SECRET-MSG'),
-      'the refresh token was refused',
-      'log in again',
-    ],
-    [
-      new ValidationError('SECRET-MSG', ['clientId']),
-      'the provider configuration is incomplete or invalid: clientId',
-      'check the provider configuration',
-    ],
-    [
-      new ServiceKeyError('SECRET-MSG', ['uaaUrl']),
-      'the service key or session data is incomplete: uaaUrl',
-      'check the service key or session data',
-    ],
-    [
-      new SessionDataError('SECRET-MSG', ['refreshToken']),
-      'the service key or session data is incomplete: refreshToken',
-      'check the service key or session data',
-    ],
-  ])('%p → fixed wording, never its message', (error, reason, hint) => {
-    expect(refusalFrom(error, 'it')).toEqual({
-      ok: false,
-      refusal: { reason, hint },
-    });
-  });
-
-  it('an assertion refusal names its check only when it is an AssertionCheck', () => {
-    expect(
-      refusalFrom(new AssertionValidationError('issuer', 'SECRET'), 'it'),
-    ).toEqual({
-      ok: false,
-      refusal: { reason: 'the SAML assertion was refused (issuer)' },
-    });
-    const forged = Object.assign(new AssertionValidationError('issuer', 'x'), {
-      check: 'SECRET_CHECK',
-    });
-    expect(text(refusalFrom(forged, 'it'))).not.toMatch(/SECRET/);
-  });
-
-  it('foreign callback text wrapped in BrowserAuthError stays out', () => {
-    const wrapped = new BrowserAuthError(
-      'access_denied: SECRET-IDP-DESCRIPTION (https://idp/SECRET-URI)',
-    );
-    expect(text(refusalFrom(wrapped, 'it'))).not.toMatch(/SECRET/);
-  });
-
-  it('a field name not in KNOWN_CONFIG_FIELDS is dropped', () => {
-    expect(
-      refusalFrom(new ValidationError('x', ['clientId', 'SECRET-FIELD']), 'it'),
-    ).toEqual({
-      ok: false,
-      refusal: {
-        reason: 'the provider configuration is incomplete or invalid: clientId',
-        hint: 'check the provider configuration',
-      },
-    });
-    expect(
-      refusalFrom(new ValidationError('x', ['SECRET-FIELD']), 'it'),
-    ).toMatchObject({
-      refusal: {
-        reason: 'the provider configuration is incomplete or invalid',
-      },
-    });
-  });
-
-  it('another own error: its class label, no message', () => {
-    expect(
-      refusalFrom(new TokenProviderError('SECRET', 'CODE'), 'x token request'),
-    ).toEqual({
-      ok: false,
-      refusal: { reason: 'x token request failed (TokenProviderError)' },
-    });
+    expect(Object.isFrozen(OK)).toBe(true);
   });
 
   it('a foreign error: "unknown error", plus an allowlisted code only', () => {
@@ -110,90 +30,54 @@ describe('refusal', () => {
       code: 'ECONNREFUSED',
       response: { data: 'SECRET' },
     });
-    expect(refusalFrom(axios, 'the token endpoint')).toEqual({
+    expect(wordsOf(refused(axios, 'token-request'))).toEqual({
       ok: false,
       refusal: {
-        reason: 'the token endpoint failed (unknown error, ECONNREFUSED)',
+        reason: 'the token request failed (unknown error, ECONNREFUSED)',
       },
     });
     const forged = Object.assign(new Error('x'), {
       name: 'SECRETError',
       code: 'ESECRET',
     });
-    expect(refusalFrom(forged, 'it')).toEqual({
+    expect(wordsOf(refused(forged, 'token-request'))).toEqual({
       ok: false,
-      refusal: { reason: 'it failed (unknown error)' },
+      refusal: { reason: 'the token request failed (unknown error)' },
     });
   });
 
   it('a thrown string or object lends nothing', () => {
-    expect(refusalFrom('SECRET-STRING', 'it')).toEqual({
+    expect(wordsOf(refused('SECRET-STRING', 'token-source'))).toEqual({
       ok: false,
-      refusal: { reason: 'it failed (unknown error)' },
+      refusal: { reason: 'the token source failed (unknown error)' },
     });
     expect(
       text(
-        refusalFrom(
+        refused(
           { message: 'SECRET', key: 'SECRET_KEY', code: 'ENOENT' },
-          'it',
+          'loading-certificate',
         ),
       ),
     ).toBe(
       text({
         ok: false,
-        refusal: { reason: 'it failed (unknown error, ENOENT)' },
+        refusal: {
+          kind: 'unknown',
+          facts: { operation: 'loading-certificate', code: 'ENOENT' },
+          reason: 'loading the certificate failed (unknown error, ENOENT)',
+        },
       }),
     );
   });
 
-  it('a presenter failure is the fixed device-code refusal', () => {
-    expect(
-      refusalFrom(new DeviceCodePresentationError(), 'x token request'),
-    ).toEqual({
-      ok: false,
-      refusal: { reason: 'showing the device code failed' },
+  it('a look-alike of a former class lends nothing: no message, no missingFields, no check', () => {
+    const lookAlike = Object.assign(new Error('SECRET-MSG'), {
+      name: 'ValidationError',
+      missingFields: ['clientId', 'SECRET-FIELD'],
+      check: 'SECRET_CHECK',
     });
-  });
-
-  it('safely: sync throw, async rejection and a returned outcome', async () => {
-    await expect(
-      safely('it', () => {
-        throw new Error('SECRET');
-      }),
-    ).resolves.toEqual({
-      ok: false,
-      refusal: { reason: 'it failed (unknown error)' },
-    });
-    await expect(
-      safely('it', async () => {
-        throw new RefreshError('SECRET');
-      }),
-    ).resolves.toMatchObject({
-      ok: false,
-      refusal: { reason: 'the refresh token was refused' },
-    });
-    await expect(safely('it', () => OK)).resolves.toEqual({ ok: true });
-  });
-});
-
-describe('shared word and outcome objects are frozen', () => {
-  it('every one a refusal, a log line or a provider hands out', async () => {
-    const certificate = await import('../../errors/CertificateMaterialError');
-    const client = await import('../../errors/ClientAuthenticationError');
-    const refusal = await import('../../auth/refusal');
-    const known = await import('../../auth/knownCodes');
-    const shared: object[] = [
-      certificate.CERTIFICATE_INCOMPLETE,
-      certificate.CERTIFICATE_UNUSABLE,
-      certificate.CERTIFICATE_EXPIRED,
-      client.CLIENT_KEY_UNUSABLE,
-      client.CLIENT_AUTHENTICATION_UNUSABLE,
-      client.BASIC_CLIENT_ID_UNUSABLE,
-      refusal.OK,
-      refusal.TOKEN_BOUND_ELSEWHERE,
-      refusal.TOKEN_RENEWED_BOUND_ELSEWHERE,
-      ...known.TLS_CODES.values(),
-    ];
-    for (const words of shared) expect(Object.isFrozen(words)).toBe(true);
+    const outcome = refused(lookAlike, 'token-request');
+    expect(outcome.refusal.kind).toBe('unknown');
+    expect(text(outcome)).not.toMatch(/SECRET/);
   });
 });

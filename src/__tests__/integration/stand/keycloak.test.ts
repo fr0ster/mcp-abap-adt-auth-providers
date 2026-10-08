@@ -8,13 +8,20 @@
  */
 
 import { describe, expect, it } from '@jest/globals';
+import { readFailure } from '@mcp-abap-adt/auth-errors';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
+import { discoverOidc } from '../../../auth/oidcDiscovery';
+import {
+  initiateDeviceAuthorization,
+  pollDeviceTokens,
+} from '../../../auth/oidcToken';
 import { OidcBrowserProvider } from '../../../providers/OidcBrowserProvider';
 import { OidcDeviceFlowProvider } from '../../../providers/OidcDeviceFlowProvider';
 import { OidcPasswordProvider } from '../../../providers/OidcPasswordProvider';
 import { OidcTokenExchangeProvider } from '../../../providers/OidcTokenExchangeProvider';
+import { refreshThenLogin } from '../../../renewal';
 import { asOidcResult, externalCodeStrategy } from '../../../strategies';
-import { approveDevice, authorizeByForm } from './formLogin';
+import { approveDevice, authorizeByForm, denyDevice } from './formLogin';
 
 const KEYCLOAK_URL = process.env.KEYCLOAK_URL?.replace(/\/+$/, '');
 const describeKeycloak = KEYCLOAK_URL ? describe : describe.skip;
@@ -43,6 +50,7 @@ describeKeycloak('OIDC providers against Keycloak', () => {
   describe('OidcPasswordProvider', () => {
     it('logs in with the password grant, found through discovery', async () => {
       const tokens = await new OidcPasswordProvider({
+        renewal: refreshThenLogin(),
         issuerUrl: KEYCLOAK_URL,
         clientId: 'oidc-password',
         clientSecret: 'secret',
@@ -59,6 +67,7 @@ describeKeycloak('OIDC providers against Keycloak', () => {
 
     it('refreshes with the refresh token rather than the password', async () => {
       const first = await new OidcPasswordProvider({
+        renewal: refreshThenLogin(),
         issuerUrl: KEYCLOAK_URL,
         clientId: 'oidc-password',
         clientSecret: 'secret',
@@ -69,6 +78,7 @@ describeKeycloak('OIDC providers against Keycloak', () => {
       // A wrong password: a fall back to the password grant would fail, so
       // only a refresh can produce a token here.
       const refreshed = await new OidcPasswordProvider({
+        renewal: refreshThenLogin(),
         issuerUrl: KEYCLOAK_URL,
         clientId: 'oidc-password',
         clientSecret: 'secret',
@@ -89,6 +99,7 @@ describeKeycloak('OIDC providers against Keycloak', () => {
       // oidc-browser is a public client that Keycloak requires to use S256
       // PKCE: a missing or wrong verifier fails the exchange.
       const tokens = await new OidcBrowserProvider({
+        renewal: refreshThenLogin(),
         issuerUrl: KEYCLOAK_URL,
         clientId: 'oidc-browser',
         scopes: ['openid'],
@@ -125,6 +136,7 @@ describeKeycloak('OIDC providers against Keycloak', () => {
       });
 
       const tokens = await OidcDeviceFlowProvider.toConsole({
+        renewal: refreshThenLogin(),
         issuerUrl: KEYCLOAK_URL,
         clientId: 'oidc-device',
         scopes: ['openid'],
@@ -141,6 +153,7 @@ describeKeycloak('OIDC providers against Keycloak', () => {
   describe('OidcTokenExchangeProvider', () => {
     it('exchanges another client’s access token for its own (RFC 8693)', async () => {
       const subject = await new OidcPasswordProvider({
+        renewal: refreshThenLogin(),
         issuerUrl: KEYCLOAK_URL,
         clientId: 'te-subject',
         clientSecret: 'secret',
@@ -149,6 +162,7 @@ describeKeycloak('OIDC providers against Keycloak', () => {
       expect(claims(subject.authorizationToken).azp).toBe('te-subject');
 
       const exchanged = await new OidcTokenExchangeProvider({
+        renewal: refreshThenLogin(),
         issuerUrl: KEYCLOAK_URL,
         clientId: 'te-requester',
         clientSecret: 'secret',
@@ -163,4 +177,88 @@ describeKeycloak('OIDC providers against Keycloak', () => {
       );
     });
   });
+});
+
+/**
+ * Device polling against Keycloak's own device endpoint: the poll reads the
+ * failure's classified facts — `authorization_pending` and `slow_down` keep it
+ * waiting (`slow_down` adding 5 s), anything else ends it with that failure.
+ * Where the stand can produce the answer: pending, slow_down and access_denied;
+ * an expired device code (600 s) and a 400 without a body are covered on the
+ * axios mock (`devicePoll.test.ts`).
+ */
+describeKeycloak('device polling against Keycloak', () => {
+  /** A device authorization and a logger that approves (or denies) on the first wait. */
+  async function polling(
+    answer: 'approve' | 'deny',
+    interval?: number,
+  ): Promise<{ result: Promise<unknown>; waits: number[] }> {
+    const discovery = await discoverOidc(KEYCLOAK_URL as string);
+    const deviceEndpoint = discovery.device_authorization_endpoint;
+    if (deviceEndpoint === undefined) throw new Error('no device endpoint');
+    const device = await initiateDeviceAuthorization(
+      deviceEndpoint,
+      'oidc-device',
+      'openid',
+    );
+    const complete = device.verificationUriComplete;
+    if (complete === undefined) throw new Error('no complete verification URI');
+    const waits: number[] = [];
+    let user: Promise<void> | undefined;
+    const logger: ILogger = {
+      info: () => {},
+      warn: () => {},
+      error: () => {},
+      debug: (message: string, meta?: unknown) => {
+        if (message !== '[OIDC] Device authorization pending') return;
+        waits.push((meta as { wait: number }).wait);
+        // The user acts once the poll has seen what the case is about.
+        const ready = interval === 0 ? waits.includes(5) : true;
+        if (ready && !user) {
+          user =
+            answer === 'approve'
+              ? approveDevice(complete, USER)
+              : denyDevice(complete, USER);
+        }
+      },
+    };
+    const result = pollDeviceTokens(
+      discovery.token_endpoint,
+      'oidc-device',
+      undefined,
+      device.deviceCode,
+      interval ?? device.interval ?? 5,
+      logger,
+    ).finally(() => user);
+    return { result, waits };
+  }
+
+  it('authorization_pending, then the user approves: a token', async () => {
+    const { result, waits } = await polling('approve');
+    const tokens = (await result) as { accessToken: string };
+    expect(claims(tokens.accessToken).azp).toBe('oidc-device');
+    expect(waits.length).toBeGreaterThan(0);
+  }, 60_000);
+
+  it('slow_down when polled faster than the interval: the next wait is 5 s longer', async () => {
+    const { result, waits } = await polling('approve', 0);
+    const tokens = (await result) as { accessToken: string };
+    expect(claims(tokens.accessToken).azp).toBe('oidc-device');
+    // Interval 0: pending waits 0; Keycloak's slow_down makes it 0 + 5.
+    expect(waits).toContain(5);
+  }, 60_000);
+
+  it('access_denied when the user refuses: request-failed carrying it, at once', async () => {
+    const { result } = await polling('deny');
+    const thrown = await result.then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+    expect(readFailure(thrown, 'unfamiliar-error').facts).toEqual({
+      operation: 'device-poll',
+      problem: 'refused',
+      status: 400,
+      oauthError: 'access_denied',
+    });
+  }, 60_000);
 });

@@ -6,10 +6,11 @@
  * each secret strategy, no surface may hold anything from which a secret is
  * recovered.
  *
- * The oracle (`recoverable`) is written independently of the redaction: it
- * decodes every substring of every surface — percent-decoding, form-decoding
- * and base64 from every start offset in both alphabets — and looks for each
- * secret the request carried.
+ * Nothing scans text for secrets any more: no surface carries the server's text
+ * at all, and this suite proves it with an oracle (`recoverable`) that decodes
+ * every substring of every surface — percent-decoding, form-decoding and base64
+ * from every start offset in both alphabets — and looks for each secret the
+ * request carried.
  */
 
 import { createServer, type Server } from 'node:http';
@@ -20,7 +21,6 @@ import type { IClientAuthentication } from '@mcp-abap-adt/interfaces-auth';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
 import { exchangeCodeForToken } from '../../auth/browserAuth';
 import { getTokenWithClientCredentials } from '../../auth/clientCredentialsAuth';
-import { oauthErrorFields } from '../../auth/oauthErrorBody';
 import {
   exchangeAuthorizationCode,
   initiateDeviceAuthorization,
@@ -115,7 +115,7 @@ const recoverable = (text: string, secret: string): boolean =>
   recovered(text, [secret]).length > 0;
 
 describe('the oracle', () => {
-  it('reads back what the redaction must remove (it is not blind)', () => {
+  it('reads back a secret in any equivalent form (it is not blind)', () => {
     const b64 = Buffer.from('id:se cr/t?').toString('base64');
     expect(recoverable(`x ${b64.replace(/=+$/, '')} y`, 'se cr/t?')).toBe(true);
     expect(recoverable(`x${b64.replace(/\+/g, '-')}`, 'se cr/t?')).toBe(true);
@@ -124,7 +124,9 @@ describe('the oracle', () => {
     expect(
       recoverable('%73%45%20%63%72%2f%74%3F', 'se cr/t?'.replace('e', 'E')),
     ).toBe(true);
-    expect(recoverable('nothing <redacted> here', 'se cr/t?')).toBe(false);
+    expect(recoverable('nothing <redacted, 8 chars> here', 'se cr/t?')).toBe(
+      false,
+    );
   });
 });
 
@@ -548,86 +550,3 @@ describe.each([400, 500, 200])(
     });
   },
 );
-
-/**
- * The redactor itself, given what each request carried: 5.4.2 writes none of
- * the server's words, but the redactor stays as defence in depth (6.0.0's
- * opt-in debug line uses it), so every echo above must leave nothing
- * recoverable in what it returns.
- */
-const formEncoded = (value: string): string =>
-  new URLSearchParams([['', value]]).toString().slice(1);
-
-describe.each(PATHS)('the redactor, $label', (path) => {
-  it.each(
-    CREDENTIALS.filter(
-      (c) => !(path.label.includes("'raw'") && c.id.includes(':')),
-    ),
-  )('id $id / $secret: nothing recoverable', (c) => {
-    const body = new URLSearchParams(
-      Object.entries({
-        refresh_token: GRANT.refresh,
-        code: GRANT.code,
-        code_verifier: GRANT.verifier,
-        password: GRANT.password,
-        passcode: GRANT.passcode,
-        assertion: GRANT.assertion,
-        device_code: GRANT.device,
-        subject_token: GRANT.subject,
-      }),
-    );
-    // What the request carried, as each path sends it, and the secrets the
-    // site would know: its own, its Basic header's, the strategy's.
-    let authorization: string | undefined;
-    const secrets: (string | undefined)[] = [...Object.values(GRANT)];
-    if (path.label === 'without a strategy') {
-      const basic = legacyBasic(c.id, c.secret);
-      authorization = basic.header;
-      secrets.push(c.secret, ...basic.secrets);
-    } else if (path.label === "clientSecretBasic 'raw'") {
-      const basic = legacyBasic(c.id, c.secret);
-      authorization = basic.header;
-      secrets.push(...basic.secrets);
-    } else if (path.label === "clientSecretBasic 'form'") {
-      const basic = legacyBasic(formEncoded(c.id), formEncoded(c.secret));
-      authorization = basic.header;
-      secrets.push(...basic.secrets);
-    } else {
-      body.append('client_secret', c.secret);
-      secrets.push(c.secret);
-    }
-    const echo = echoOf(authorization, body);
-    const fields = oauthErrorFields(
-      {
-        error: 'invalid_client',
-        error_description: `refused: ${echo}`,
-        error_uri: `https://idp.example/err?echo=${echo}`,
-      },
-      secrets,
-    );
-    const said = `${fields?.error_description ?? ''}\n${fields?.error_uri ?? ''}`;
-    // Not vacuous: the echo itself gives the secret away.
-    expect(recovered(echo, [c.secret])).toEqual([c.secret]);
-    expect(recovered(said, [c.secret, ...Object.values(GRANT)])).toEqual([]);
-  });
-});
-
-describe('the redactor, line-wrapped base64', () => {
-  const SECRET = 'supersecret';
-  it.each([
-    ['CRLF', 'c3Vw\r\nZXJzZWNyZXQ='],
-    ['LF', 'c3Vw\nZXJz\nZWNy\nZXQ='],
-    ['escaped CRLF', 'c3Vw%0D%0AZXJzZWNyZXQ%3D'],
-    ['escaped LF, lower case', 'c3Vw%0aZXJz%0aZWNyZXQ'],
-    ['tab', 'c3Vw\tZXJzZWNyZXQ='],
-    ['escaped tab', 'c3Vw%09ZXJzZWNyZXQ='],
-    ['CRLF, unpadded', 'c3Vw\r\nZXJz\r\nZWNy\r\nZXQ'],
-  ])('%s: the whole span is redacted', (_label, echoed) => {
-    expect(recoverable(echoed, SECRET)).toBe(true);
-    const fields = oauthErrorFields(
-      { error_description: `bad ${echoed} here` },
-      [SECRET],
-    );
-    expect(fields?.error_description).toBe('bad <redacted> here');
-  });
-});

@@ -18,6 +18,7 @@ import {
   expect,
   it,
 } from '@jest/globals';
+import { isAuthProviderFailure, readFailure } from '@mcp-abap-adt/auth-errors';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
 import axios, { type AxiosResponse } from 'axios';
 import { exchangeCodeForToken } from '../../auth/browserAuth';
@@ -333,49 +334,69 @@ describe('a consumer logger that throws while a site reports the failure', () =>
       throw new Error(`${MARKER} error`);
     },
   } as ILogger;
+  const quiet = {
+    info: () => {},
+    warn: () => {},
+    debug: () => {},
+    error: () => {},
+  } as ILogger;
 
   describe.each(PATHS)('%s', (_path, auth) => {
     it.each([
       [
         'SAML bearer exchange',
-        () =>
+        'saml-token-exchange',
+        (logger: ILogger) =>
           exchangeSamlAssertion(
             'A',
             `${base}/token`,
             'cid',
             auth() ? undefined : 'secret',
-            throwing,
+            logger,
             auth(),
           ),
       ],
       [
         'SAML bearer refresh',
-        () =>
+        'saml-token-refresh',
+        (logger: ILogger) =>
           refreshSamlBearerToken(
             'rt',
             `${base}/token`,
             'cid',
             auth() ? undefined : 'secret',
-            throwing,
+            logger,
             auth(),
           ),
       ],
     ])(
-      '%s: the safe rejection, not what the logger threw',
-      async (_site, run) => {
+      '%s: the same failure as with a working logger, not what the logger threw',
+      async (_site, operation, run) => {
         status = 400;
+        const working = await run(quiet).catch((error: unknown) => error);
         let thrown: unknown;
         const failed = expect(
-          run().catch((error: unknown) => {
+          run(throwing).catch((error: unknown) => {
             thrown = error;
             throw error;
           }),
         ).rejects.toBeDefined();
         await failed;
-        expect(axios.isAxiosError(thrown)).toBe(true);
-        expect((thrown as Error).message).toBe(
-          'Request failed with status code 400',
-        );
+        // Guarded failure-path logging: an
+        // AuthProviderFailure of the site's operation, equal in kind and
+        // facts to the one a working logger sees.
+        expect(isAuthProviderFailure(thrown)).toBe(true);
+        const failure = readFailure(thrown, 'unfamiliar-error');
+        expect(failure.kind).toBe('request-failed');
+        expect(failure.facts).toEqual({
+          operation,
+          problem: 'refused',
+          status: 400,
+          oauthError: 'invalid_grant',
+        });
+        const expected = readFailure(working, 'unfamiliar-error');
+        expect(failure.kind).toBe(expected.kind);
+        expect(failure.facts).toEqual(expected.facts);
         expect(renderings(thrown)).not.toContain(MARKER);
       },
     );

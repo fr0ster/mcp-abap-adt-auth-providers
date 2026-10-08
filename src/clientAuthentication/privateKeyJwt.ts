@@ -4,8 +4,8 @@ import {
   randomUUID,
   sign,
 } from 'node:crypto';
+import { AuthProviderFailure, authError } from '@mcp-abap-adt/auth-errors';
 import type { IClientAuthentication } from '@mcp-abap-adt/interfaces-auth';
-import { ClientAuthenticationError } from '../errors/ClientAuthenticationError';
 
 export interface PrivateKeyJwtConfig {
   /** A private key: PEM text or bytes, or a KeyObject. */
@@ -39,7 +39,14 @@ function usableKey(config: PrivateKeyJwtConfig): KeyObject {
   } catch {
     // fall through: the error's text can name what it read
   }
-  throw new ClientAuthenticationError();
+  throw signingKeyUnusable();
+}
+
+/** The key cannot sign — nothing of it, nor of the error, is kept. */
+function signingKeyUnusable(): AuthProviderFailure {
+  return new AuthProviderFailure(
+    authError['client-authentication']({ problem: 'signing-key-unusable' }),
+  );
 }
 
 const b64 = (value: unknown): string =>
@@ -78,7 +85,7 @@ export function privateKeyJwt(
             : key,
         );
       } catch {
-        throw new ClientAuthenticationError();
+        throw signingKeyUnusable();
       }
       return {
         parameters: {

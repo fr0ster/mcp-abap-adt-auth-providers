@@ -37,7 +37,8 @@ describe('browserAuth Integration', () => {
   const serviceKeysDir = getServiceKeysDir(config);
 
   it('should exchange code for tokens with real OAuth flow', async () => {
-    // It opens the system browser for a person to log in: never by default.
+    // A person logs in at the URL shown on stderr (no browser is opened):
+    // never by default.
     if (!interactiveLoginEnabled({ env: process.env, config })) {
       console.warn(
         '⚠️  Skipping browser login - set interactive_login: true in tests/test-config.yaml, or MCP_ABAP_ADT_INTERACTIVE=1',
@@ -81,12 +82,14 @@ describe('browserAuth Integration', () => {
 
     logger.info(`Starting browser authentication: ${authConfig.uaaUrl}`);
 
-    // The strategy owns the socket, the browser and the timeout; the exchange
+    // The strategy owns the socket and the browser, bounded by the signal the
+    // test composes (no bound of the package's choosing); the exchange
     // stays with the caller — the same split `AuthorizationCodeProvider` uses.
     const strategy = browserCallbackStrategy({
-      browser: 'system', // Use the system default browser
+      // No browser is launched by a test: the URL is shown on stderr for
+      // the person running the interactive case.
       port,
-      timeoutMs: 290000,
+      signal: AbortSignal.timeout(290_000),
     });
     const outcome = await strategy.authorize({
       logger,

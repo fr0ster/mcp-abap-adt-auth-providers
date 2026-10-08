@@ -42,14 +42,15 @@ import {
   visit,
 } from '@mcp-abap-adt/auth-mocks';
 import type {
+  AssertionRule,
   IAssertionReplayStore,
   IAssertionValidator,
   ITokenResult,
   ValidatedAssertion,
 } from '@mcp-abap-adt/interfaces-auth';
 import { DOMParser } from '@xmldom/xmldom';
-import type { AssertionCheck } from '../../errors/AssertionValidationError';
 import { Saml2PureProvider } from '../../providers/Saml2PureProvider';
+import { refreshThenLogin } from '../../renewal';
 import { samlCallbackStrategy } from '../../strategies';
 import {
   createSignedAssertionValidator,
@@ -57,6 +58,11 @@ import {
 } from '../../validation/assertionValidator';
 import { createInMemoryReplayStore } from '../../validation/inMemoryReplayStore';
 import { getAvailablePort } from '../helpers/netHelpers';
+import { recordingBrowser } from '../helpers/recordingBrowser';
+import {
+  expectSamlRejection,
+  type SamlExpectation,
+} from '../helpers/samlRefusal';
 
 jest.setTimeout(30_000);
 
@@ -160,10 +166,13 @@ async function login(
   const browse = options.browser ?? visit;
   const strategy = samlCallbackStrategy({
     port: stand.port,
-    timeoutMs: 10_000,
-    openUrl: async (url) => {
-      await browse(url);
-    },
+    signal: AbortSignal.timeout(10_000),
+    // The consumer's IBrowser: the test's own visit, never a real browser.
+    browser: recordingBrowser({
+      onOpen: async (url) => {
+        await browse(url);
+      },
+    }),
   });
   // A supplied strategy is never disposed by the provider.
   cleanups.push(async () => strategy.dispose?.());
@@ -194,6 +203,7 @@ async function login(
 
   const received: string[] = [];
   const provider = new Saml2PureProvider({
+    renewal: refreshThenLogin(),
     idpSsoUrl: `${stand.idp.url}/sso`,
     spEntityId: AUDIENCE,
     idpEntityId: ISSUER,
@@ -286,60 +296,80 @@ function forgedAssertionFrom(xml: string): string {
     .replace('mock-user', 'attacker');
 }
 
-// Refused by both, for the same check and the same reason: everything here is
-// inside the assertion, or is the signature itself.
-const REFUSED_BY_BOTH: Array<[SamlVariant, AssertionCheck, string]> = [
-  ['unsigned', 'signature', 'the document carries no signature'],
+// Refused by both, for the same rule and the same facts:
+// everything here is inside the assertion, or is the signature itself. The
+// rule fixes the check; the helper asserts both, the rule's own words, and
+// the diagnostic or its absence.
+const REFUSED_BY_BOTH: Array<[SamlVariant, AssertionRule, SamlExpectation]> = [
+  ['unsigned', 'no-signature', {}],
+  ['wrongKey', 'signature-not-verified', {}],
+  ['tamperedAfterSign', 'signature-not-verified', {}],
   [
-    'wrongKey',
-    'signature',
-    'does not verify against any configured certificate',
+    'wrongIssuer',
+    'untrusted-issuer',
+    { diagnostics: { issuer: expect.any(String) } },
   ],
-  [
-    'tamperedAfterSign',
-    'signature',
-    'does not verify against any configured certificate',
-  ],
-  ['wrongIssuer', 'issuer', 'not the trusted issuer'],
-  ['notYetValid', 'notBefore', 'the assertion is not valid yet'],
-  ['expired', 'notOnOrAfter', 'the assertion has expired'],
-  ['wrongAudience', 'audience', 'does not name us'],
+  ['notYetValid', 'not-yet-valid', {}],
+  ['expired', 'expired', {}],
+  ['wrongAudience', 'audience-not-us', {}],
   [
     'wrongInResponseTo',
-    'bearerConfirmation',
-    '#1 InResponseTo does not answer our request',
+    'no-bearer-qualifies',
+    { facts: { candidates: [{ reason: 'in-response-to-mismatch' }] } },
   ],
-  ['wrongRecipient', 'bearerConfirmation', '#1 Recipient is not the ACS'],
+  [
+    'wrongRecipient',
+    'no-bearer-qualifies',
+    { facts: { candidates: [{ reason: 'recipient-not-acs' }] } },
+  ],
 ];
 
 // Refused by the signed-Response validator, accepted by the other, which does
 // not read these fields. Both halves are asserted: a check silently dropped
 // and a check documented as absent look identical from outside.
-const RESPONSE_LEVEL: Array<[SamlVariant, AssertionCheck, string]> = [
-  ['statusFailure', 'status', 'the identity provider declined the login'],
-  ['wrongDestination', 'destination', 'not to us'],
+const RESPONSE_LEVEL: Array<[SamlVariant, AssertionRule, SamlExpectation]> = [
+  [
+    'statusFailure',
+    'declined',
+    {
+      facts: {
+        statusCode: expect.stringMatching(
+          /^urn:oasis:names:tc:SAML:2\.0:status:/,
+        ),
+      },
+    },
+  ],
+  [
+    'wrongDestination',
+    'destination-not-us',
+    { diagnostics: { destination: expect.any(String) } },
+  ],
 ];
 
 describe('SAML validation end to end against auth-mocks', () => {
   describe('every corruption variant, refused at its own check', () => {
-    for (const [variant, check, fragment] of REFUSED_BY_BOTH) {
-      it(`refuses ${variant} at ${check}, whichever validator`, async () => {
-        const refusal = { check, message: expect.stringContaining(fragment) };
-        await expect(loginWith('response', variant)).rejects.toMatchObject(
-          refusal,
+    for (const [variant, rule, expected] of REFUSED_BY_BOTH) {
+      it(`refuses ${variant} by ${rule}, whichever validator`, async () => {
+        await expectSamlRejection(
+          loginWith('response', variant),
+          rule,
+          expected,
         );
-        await expect(loginWith('assertion', variant)).rejects.toMatchObject(
-          refusal,
+        await expectSamlRejection(
+          loginWith('assertion', variant),
+          rule,
+          expected,
         );
       });
     }
 
-    for (const [variant, check, fragment] of RESPONSE_LEVEL) {
-      it(`refuses ${variant} at ${check} only when the Response is signed`, async () => {
-        await expect(loginWith('response', variant)).rejects.toMatchObject({
-          check,
-          message: expect.stringContaining(fragment),
-        });
+    for (const [variant, rule, expected] of RESPONSE_LEVEL) {
+      it(`refuses ${variant} by ${rule} only when the Response is signed`, async () => {
+        await expectSamlRejection(
+          loginWith('response', variant),
+          rule,
+          expected,
+        );
         await expect(loginWith('assertion', variant)).resolves.toBeDefined();
       });
     }
@@ -384,25 +414,17 @@ describe('SAML validation end to end against auth-mocks', () => {
 
   describe('the signature on the wrong element', () => {
     it('refuses a response-signed document under the assertion-only validator', async () => {
-      await expect(
+      await expectSamlRejection(
         login(standFor('response'), 'assertion'),
-      ).rejects.toMatchObject({
-        check: 'signedNode',
-        message: expect.stringContaining(
-          'does not cover the saml:Assertion this validator requires',
-        ),
-      });
+        'assertion-not-signed',
+      );
     });
 
     it('refuses an assertion-signed document under the signed-Response validator', async () => {
-      await expect(
+      await expectSamlRejection(
         login(standFor('assertion'), 'response'),
-      ).rejects.toMatchObject({
-        check: 'signedNode',
-        message: expect.stringContaining(
-          'does not cover the samlp:Response this validator requires',
-        ),
-      });
+        'response-not-signed',
+      );
     });
   });
 
@@ -434,10 +456,7 @@ describe('SAML validation end to end against auth-mocks', () => {
           ),
         },
       );
-      await expect(bySignedResponse).rejects.toMatchObject({
-        check: 'issuer',
-        message: expect.stringContaining('name different issuers'),
-      });
+      await expectSamlRejection(bySignedResponse, 'issuers-differ');
 
       const byAssertion = login(
         standFor('assertion', 'unsigned'),
@@ -461,12 +480,7 @@ describe('SAML validation end to end against auth-mocks', () => {
         const first = stand.idp.lastAssertionId();
 
         stand.idp.repeatLastAssertion();
-        await expect(login(stand, signWhat)).rejects.toMatchObject({
-          check: 'replay',
-          message: expect.stringContaining(
-            'this assertion has been presented before',
-          ),
-        });
+        await expectSamlRejection(login(stand, signWhat), 'replayed');
         // The mock really did send the same ID again.
         expect(stand.idp.lastAssertionId()).toBe(first);
       });
@@ -480,16 +494,13 @@ describe('SAML validation end to end against auth-mocks', () => {
         const signed = assertionOf(xml);
         return xml.replace(signed, `${forgedAssertionFrom(xml)}${signed}`);
       };
-      await expect(
+      await expectSamlRejection(
         login(standFor('assertion'), 'assertion', {
           browser: tamperingBrowser(wrap),
         }),
-      ).rejects.toMatchObject({
-        check: 'signedNode',
-        message: expect.stringContaining(
-          '2 direct-child saml:Assertion; exactly one is allowed',
-        ),
-      });
+        'several-direct-assertions',
+        { facts: { count: 2 } },
+      );
     });
 
     it('refuses a forged Response wrapping the genuinely signed one', async () => {
@@ -510,16 +521,12 @@ describe('SAML validation end to end against auth-mocks', () => {
           `${forgedAssertionFrom(xml)}</samlp:Response>`
         );
       };
-      await expect(
+      await expectSamlRejection(
         login(standFor('response'), 'response', {
           browser: tamperingBrowser(wrap),
         }),
-      ).rejects.toMatchObject({
-        check: 'signedNode',
-        message: expect.stringContaining(
-          'does not cover the samlp:Response this validator requires',
-        ),
-      });
+        'response-not-signed',
+      );
     });
   });
 

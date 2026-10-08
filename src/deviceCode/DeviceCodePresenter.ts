@@ -5,7 +5,8 @@
  */
 
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
-import { announcer } from '../auth/announce';
+import { announcer, promptableText, promptableUrl } from '../auth/announce';
+import { loginFailure } from '../auth/interactiveLogin';
 
 export interface DeviceCodePrompt {
   verificationUri: string;
@@ -20,30 +21,32 @@ export interface IDeviceCodePresenter {
 }
 
 /**
- * A presenter failed. Internal: carries no message and no cause on purpose,
- * so neither the device code nor the presenter's own text can reach a refusal.
+ * The logger's info, or stderr without one — never stdout. The prompt's
+ * values come from the authorization server: the verification URI is shown
+ * only as `promptableUrl` admits it, the user code only as `promptableText`
+ * does (printable ASCII), so no control character forges or reorders a line.
+ * Without an admitted URI or code nothing is shown and `present` rejects
+ * (`interactive-login`, `device-code-not-shown`); an inadmissible complete
+ * URI is left out.
  */
-export class DeviceCodePresentationError extends Error {
-  constructor() {
-    super('showing the device code failed');
-    this.name = 'DeviceCodePresentationError';
-    Object.setPrototypeOf(this, DeviceCodePresentationError.prototype);
-  }
-}
-
-/** The logger's info, or stderr without one — never stdout. */
 export function consoleDeviceCodePresenter(
   logger?: ILogger,
 ): IDeviceCodePresenter {
   const announce = announcer(logger);
   return {
     async present(prompt) {
-      announce('OIDC device authorization');
-      announce(`Go to: ${prompt.verificationUri}`);
-      if (prompt.verificationUriComplete) {
-        announce(`Or use: ${prompt.verificationUriComplete}`);
+      const shownUri = promptableUrl(prompt.verificationUri);
+      const shownCode = promptableText(prompt.userCode);
+      if (shownUri === undefined || shownCode === undefined) {
+        throw loginFailure({ outcome: 'device-code-not-shown' });
       }
-      announce(`Enter code: ${prompt.userCode}`);
+      const shownComplete = promptableUrl(prompt.verificationUriComplete);
+      announce('OIDC device authorization');
+      announce(`Go to: ${shownUri}`);
+      if (shownComplete !== undefined) {
+        announce(`Or use: ${shownComplete}`);
+      }
+      announce(`Enter code: ${shownCode}`);
     },
   };
 }

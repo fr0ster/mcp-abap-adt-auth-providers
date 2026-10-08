@@ -51,3 +51,17 @@ describe('the probe names, it does not check', () => {
     expect('check' in probe).toBe(false);
   });
 });
+
+describe('the moment’s signal', () => {
+  it('reaches each registry read', async () => {
+    const reads: { key: string; name: string; signal?: AbortSignal }[] = [];
+    const controller = new AbortController();
+    await new SecureLoginClientProbe(
+      fakeSystem({ registry: REGISTRY, registryReads: reads }),
+    ).appliesTo('C:\\x\\sapcrypto.dll', controller.signal);
+    expect(reads.map((r) => [r.name, r.signal])).toEqual([
+      ['InstallPath64', controller.signal],
+      ['InstallPath32', controller.signal],
+    ]);
+  });
+});

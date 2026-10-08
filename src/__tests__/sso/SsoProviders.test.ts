@@ -1,4 +1,9 @@
 import { inflateRawSync } from 'node:zlib';
+import {
+  AuthProviderFailure,
+  authError,
+  readFailure,
+} from '@mcp-abap-adt/auth-errors';
 import { generateKeyMaterial, signXml } from '@mcp-abap-adt/auth-mocks';
 import type {
   IAssertionValidator,
@@ -11,7 +16,6 @@ import {
   AUTH_TYPE_USER_TOKEN,
 } from '@mcp-abap-adt/interfaces-auth';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
-import type { OidcCallbackResult } from '../../auth/oidcBrowserAuth';
 import { discoverOidc } from '../../auth/oidcDiscovery';
 import { generatePkceChallenge } from '../../auth/oidcPkce';
 import {
@@ -27,21 +31,21 @@ import {
   refreshSamlBearerToken,
 } from '../../auth/saml2TokenExchange';
 import { toBearerAssertion } from '../../auth/samlBearerAssertion';
+import type { OidcCallbackResult } from '../../authorization/protocol';
 import {
   consoleDeviceCodePresenter,
   type DeviceCodePrompt,
 } from '../../deviceCode/DeviceCodePresenter';
-import { AssertionValidationError } from '../../errors/AssertionValidationError';
 import { OidcBrowserProvider } from '../../providers/OidcBrowserProvider';
 import { OidcDeviceFlowProvider } from '../../providers/OidcDeviceFlowProvider';
 import { OidcPasswordProvider } from '../../providers/OidcPasswordProvider';
 import { OidcTokenExchangeProvider } from '../../providers/OidcTokenExchangeProvider';
 import { Saml2BearerProvider } from '../../providers/Saml2BearerProvider';
 import { Saml2PureProvider } from '../../providers/Saml2PureProvider';
+import { refreshThenLogin } from '../../renewal';
 import { SsoProviderFactory } from '../../sso/SsoProviderFactory';
 import {
   asOidcResult,
-  BrowserCallbackStrategy,
   browserCallbackStrategy,
   externalCodeStrategy,
   oidcCallbackStrategy,
@@ -53,6 +57,8 @@ import {
   createSignedResponseValidator,
 } from '../../validation/assertionValidator';
 import { createInMemoryReplayStore } from '../../validation/inMemoryReplayStore';
+import { configurationOf } from '../helpers/minted';
+import { expectSamlRejection, rejectionOf } from '../helpers/samlRefusal';
 
 jest.mock('../../auth/oidcDiscovery', () => ({
   discoverOidc: jest.fn(),
@@ -63,9 +69,6 @@ jest.mock('../../auth/oidcDiscovery', () => ({
     }
   ).mtlsAlias,
 }));
-// `oidcBrowserAuth` is deliberately NOT mocked: the provider's default strategy
-// takes its callback transport (`withOidcCallbackServer`) from that module, and
-// the lifecycle tests below exercise the real one.
 jest.mock('../../auth/oidcToken', () => ({
   exchangeAuthorizationCode: jest.fn(),
   refreshOidcToken: jest.fn(),
@@ -149,15 +152,12 @@ function mintedIdFrom(authorizationUrl: string): string {
   return match[1]!;
 }
 
-/** Whatever `factory` throws, so its `message` and `missingFields` can be asserted on. */
-function constructionError(factory: () => unknown): {
-  message: string;
-  missingFields?: string[];
-} {
+/** Whatever `factory` throws, so it can be asserted on. */
+function constructionError(factory: () => unknown): unknown {
   try {
     factory();
   } catch (error) {
-    return error as { message: string; missingFields?: string[] };
+    return error;
   }
   throw new Error('expected construction to throw, but it did not');
 }
@@ -185,11 +185,15 @@ describe('SSO Providers', () => {
     });
 
     const provider = new OidcBrowserProvider({
+      renewal: refreshThenLogin(),
       issuerUrl: 'https://issuer',
       clientId: 'client',
       clientSecret: 'secret',
       authorization: asOidcResult(
-        externalCodeStrategy({ provide: async () => 'auth-code' }),
+        externalCodeStrategy({
+          redirectUri: 'http://localhost:61001/callback',
+          provide: async () => 'auth-code',
+        }),
       ),
     });
 
@@ -208,12 +212,16 @@ describe('SSO Providers', () => {
     });
 
     const provider = new OidcBrowserProvider({
+      renewal: refreshThenLogin(),
       issuerUrl: 'https://issuer',
       clientId: 'client',
       authorizationEndpoint: 'https://issuer/authorize',
       tokenEndpoint: 'https://issuer/token',
       authorization: asOidcResult(
-        externalCodeStrategy({ provide: async () => 'auth-code' }),
+        externalCodeStrategy({
+          redirectUri: 'http://localhost:61001/callback',
+          provide: async () => 'auth-code',
+        }),
       ),
     });
 
@@ -234,6 +242,7 @@ describe('SSO Providers', () => {
     });
 
     const provider = new OidcBrowserProvider({
+      renewal: refreshThenLogin(),
       clientId: 'cid',
       tokenEndpoint: 'https://idp.example/token',
       authorization: asOidcResult(
@@ -265,6 +274,7 @@ describe('SSO Providers', () => {
     });
 
     const provider = new OidcBrowserProvider({
+      renewal: refreshThenLogin(),
       clientId: 'cid',
       issuerUrl: 'https://idp.example',
       authorization: asOidcResult(
@@ -294,6 +304,15 @@ describe('SSO Providers', () => {
       undefined,
       // No client authentication configured: none given to the site.
       undefined,
+      // The provider's authDebug and grant, threaded to the site,
+      // and the attempt's signal — a login's request carries it.
+      {
+        authDebug: false,
+        grant: 'authorization_code_pkce',
+        signal: expect.any(AbortSignal),
+        // The login step's dispatch notice.
+        dispatched: expect.any(Function),
+      },
     );
   });
 
@@ -305,6 +324,7 @@ describe('SSO Providers', () => {
 
     let authorizationUrl = '';
     const provider = new OidcBrowserProvider({
+      renewal: refreshThenLogin(),
       clientId: 'cid',
       authorizationEndpoint: 'https://idp.example/authorize',
       tokenEndpoint: 'https://idp.example/token',
@@ -351,6 +371,7 @@ describe('SSO Providers', () => {
     });
 
     const provider = new OidcDeviceFlowProvider({
+      renewal: refreshThenLogin(),
       issuerUrl: 'https://issuer',
       clientId: 'client',
       presenter: consoleDeviceCodePresenter(),
@@ -375,6 +396,7 @@ describe('SSO Providers', () => {
     });
 
     const provider = new OidcDeviceFlowProvider({
+      renewal: refreshThenLogin(),
       issuerUrl: 'https://issuer',
       clientId: 'client',
       deviceAuthorizationEndpoint: 'https://issuer/device',
@@ -417,6 +439,7 @@ describe('SSO Providers', () => {
       });
 
       const provider = new OidcDeviceFlowProvider({
+        renewal: refreshThenLogin(),
         issuerUrl: 'https://issuer',
         clientId: 'client',
         presenter: consoleDeviceCodePresenter(),
@@ -467,6 +490,7 @@ describe('SSO Providers', () => {
       });
     try {
       const provider = OidcDeviceFlowProvider.toConsole({
+        renewal: refreshThenLogin(),
         issuerUrl: 'https://issuer',
         clientId: 'client',
         deviceAuthorizationEndpoint: 'https://issuer/device',
@@ -513,6 +537,7 @@ describe('SSO Providers', () => {
       });
     try {
       const provider = OidcDeviceFlowProvider.toConsole({
+        renewal: refreshThenLogin(),
         issuerUrl: 'https://issuer',
         clientId: 'client',
         deviceAuthorizationEndpoint: 'https://issuer/device',
@@ -545,6 +570,7 @@ describe('SSO Providers', () => {
     });
     const present = jest.fn(async (_: DeviceCodePrompt) => {});
     const p = new OidcDeviceFlowProvider({
+      renewal: refreshThenLogin(),
       clientId: 'c',
       deviceAuthorizationEndpoint: 'https://idp/device-auth',
       tokenEndpoint: 'https://idp/token',
@@ -576,6 +602,7 @@ describe('SSO Providers', () => {
         expiresIn: 1200,
       });
       const p = new OidcDeviceFlowProvider({
+        renewal: refreshThenLogin(),
         clientId: 'c',
         deviceAuthorizationEndpoint: 'https://idp/device-auth',
         tokenEndpoint: 'https://idp/token',
@@ -592,7 +619,11 @@ describe('SSO Providers', () => {
       // The whole outcome, exactly: no hint, no code, no presenter message.
       expect(outcome).toEqual({
         ok: false,
-        refusal: { reason: 'showing the device code failed' },
+        refusal: {
+          kind: 'interactive-login',
+          facts: { outcome: 'device-code-not-shown' },
+          reason: 'showing the device code failed',
+        },
       });
     },
   );
@@ -608,6 +639,7 @@ describe('SSO Providers', () => {
     });
 
     const provider = new OidcPasswordProvider({
+      renewal: refreshThenLogin(),
       issuerUrl: 'https://issuer',
       clientId: 'client',
       username: 'user',
@@ -627,6 +659,7 @@ describe('SSO Providers', () => {
     });
 
     const provider = new OidcPasswordProvider({
+      renewal: refreshThenLogin(),
       issuerUrl: 'https://issuer',
       clientId: 'client',
       username: 'user',
@@ -656,6 +689,7 @@ describe('SSO Providers', () => {
       });
       mockRefresh.mockResolvedValue(renewed);
       const provider = new OidcPasswordProvider({
+        renewal: refreshThenLogin(),
         issuerUrl: 'https://issuer',
         clientId: 'client',
         username: 'user',
@@ -686,6 +720,7 @@ describe('SSO Providers', () => {
       });
       mockRefresh.mockResolvedValue(renewed);
       const provider = new OidcDeviceFlowProvider({
+        renewal: refreshThenLogin(),
         issuerUrl: 'https://issuer',
         clientId: 'client',
         tokenEndpoint: '',
@@ -710,13 +745,17 @@ describe('SSO Providers', () => {
       });
       mockRefresh.mockResolvedValue(renewed);
       const provider = new OidcBrowserProvider({
+        renewal: refreshThenLogin(),
         issuerUrl: 'https://issuer',
         clientId: 'client',
         clientSecret: 'secret',
         authorizationEndpoint: '',
         tokenEndpoint: '',
         authorization: asOidcResult(
-          externalCodeStrategy({ provide: async () => 'auth-code' }),
+          externalCodeStrategy({
+            redirectUri: 'http://localhost:61001/callback',
+            provide: async () => 'auth-code',
+          }),
         ),
       });
 
@@ -739,6 +778,7 @@ describe('SSO Providers', () => {
     });
 
     const provider = new OidcPasswordProvider({
+      renewal: refreshThenLogin(),
       issuerUrl: 'https://issuer',
       clientId: 'client',
       username: 'user',
@@ -761,6 +801,7 @@ describe('SSO Providers', () => {
     });
 
     const provider = new OidcTokenExchangeProvider({
+      renewal: refreshThenLogin(),
       issuerUrl: 'https://issuer',
       clientId: 'client',
       subjectToken: 'subject',
@@ -783,6 +824,7 @@ describe('SSO Providers', () => {
     });
 
     const provider = new OidcTokenExchangeProvider({
+      renewal: refreshThenLogin(),
       issuerUrl: 'https://issuer',
       clientId: 'client',
       subjectToken: 'subject',
@@ -801,6 +843,7 @@ describe('SSO Providers', () => {
     });
 
     const provider = new OidcTokenExchangeProvider({
+      renewal: refreshThenLogin(),
       issuerUrl: 'https://issuer',
       clientId: 'client',
       subjectToken: 'subject',
@@ -822,16 +865,23 @@ describe('SSO Providers', () => {
     // that has nothing to do with endpoints. The default's own port behaviour is
     // covered in the lifecycle block below, which tolerates that failure.
     const provider = new OidcBrowserProvider({
+      renewal: refreshThenLogin(),
       issuerUrl: 'https://issuer',
       clientId: 'client',
       authorization: asOidcResult(
-        externalCodeStrategy({ provide: async () => 'unreachable' }),
+        externalCodeStrategy({
+          redirectUri: 'http://localhost:61001/callback',
+          provide: async () => 'unreachable',
+        }),
       ),
     });
 
-    await expect(provider.getTokens()).rejects.toThrow(
-      'OIDC authorization endpoint is required',
-    );
+    // A configuration failure naming the endpoint.
+    const thrown = await provider.getTokens().catch((error: unknown) => error);
+    expect(configurationOf(thrown)).toMatchObject({
+      case: 'oidc-endpoint-missing',
+      fields: ['authorizationEndpoint'],
+    });
   });
 
   /**
@@ -855,6 +905,7 @@ describe('SSO Providers', () => {
 
     const saml = samlResponseCarrying('_a1');
     const provider = new Saml2BearerProvider({
+      renewal: refreshThenLogin(),
       idpSsoUrl: 'https://idp/sso',
       spEntityId: 'sp-entity',
       uaaUrl: 'https://uaa',
@@ -879,6 +930,15 @@ describe('SSO Providers', () => {
       undefined,
       // No client authentication configured: none given to the site.
       undefined,
+      // The exchange is the login's request: it carries the attempt's
+      // signal; the refresh below gets none.
+      {
+        authDebug: false,
+        grant: 'saml2_bearer',
+        signal: expect.any(AbortSignal),
+        // The login step's dispatch notice.
+        dispatched: expect.any(Function),
+      },
     );
   });
 
@@ -892,6 +952,7 @@ describe('SSO Providers', () => {
       return {
         authorize,
         config: {
+          renewal: refreshThenLogin(),
           idpSsoUrl: 'https://idp/sso',
           spEntityId: 'sp-entity',
           uaaUrl: 'https://uaa',
@@ -902,7 +963,7 @@ describe('SSO Providers', () => {
           // `authorize` above never calls the builder either.
           idpInitiated: true,
           authorization,
-          // The validator is resolved at construction (Task 11); these cases
+          // The validator is resolved at construction; these cases
           // are about the refresh path, not validation, and the fixture
           // payload above is not signed.
           assertionValidator: acceptingSamlValidator(),
@@ -931,6 +992,12 @@ describe('SSO Providers', () => {
         undefined,
         // No client authentication configured: none given to the site.
         undefined,
+        {
+          authDebug: false,
+          grant: 'saml2_bearer',
+          // The refresh step's dispatch gate.
+          dispatched: expect.any(Function),
+        },
       );
       expect(tokens.authorizationToken).toBe(newAccess);
       expect(tokens.refreshToken).toBe('rotated-refresh');
@@ -1007,6 +1074,7 @@ describe('SSO Providers', () => {
     const validatedExpiresAt = new Date(Date.now() + 3600_000);
 
     const provider = new Saml2PureProvider({
+      renewal: refreshThenLogin(),
       cookieProvider: async () => 'SAP_SESSION=abc123',
       idpSsoUrl: 'https://idp/sso',
       spEntityId: 'sp-entity',
@@ -1032,8 +1100,8 @@ describe('SSO Providers', () => {
     const tokens = await provider.getTokens();
     expect(tokens.authorizationToken).toBe('SAP_SESSION=abc123');
     expect(tokens.tokenType).toBe('saml');
-    // `parseSamlNotOnOrAfter` is gone (Task 9); `expiresAt` now comes from
-    // `ValidatedAssertion`, not an unverified regex (Task 11).
+    // `parseSamlNotOnOrAfter` is gone; `expiresAt` now comes from
+    // `ValidatedAssertion`, not an unverified regex.
     expect(tokens.expiresAt).toBe(validatedExpiresAt.getTime());
   });
 
@@ -1041,6 +1109,7 @@ describe('SSO Providers', () => {
     expect(
       () =>
         new Saml2PureProvider({
+          renewal: refreshThenLogin(),
           idpSsoUrl: 'https://idp.example/sso',
           spEntityId: 'sp',
           authorizationUrl: 'https://idp.example/sso?SAMLRequest=abc',
@@ -1054,6 +1123,7 @@ describe('SSO Providers', () => {
   it('Saml2PureProvider takes an assertion from a strategy', async () => {
     const seen: string[] = [];
     const provider = new Saml2PureProvider({
+      renewal: refreshThenLogin(),
       idpSsoUrl: 'https://idp.example/sso',
       spEntityId: 'sp',
       acsUrl: 'http://localhost:61001/callback',
@@ -1081,6 +1151,7 @@ describe('SSO Providers', () => {
 
   it('Saml2PureProvider rejects an assertion delivered to the wrong ACS', async () => {
     const provider = new Saml2PureProvider({
+      renewal: refreshThenLogin(),
       idpSsoUrl: 'https://idp.example/sso',
       spEntityId: 'sp',
       acsUrl: 'http://localhost:61001/callback',
@@ -1094,15 +1165,23 @@ describe('SSO Providers', () => {
       // Never reached: the ACS mismatch is thrown before validate() would run.
       assertionValidator: acceptingSamlValidator(),
     });
-    await expect(provider.getTokens()).rejects.toThrow(
-      /acsUrl is http:\/\/localhost:61001\/callback, but the authorization strategy used/i,
-    );
+    // The two addresses are diagnostics, not words.
+    const thrown = await provider.getTokens().catch((error: unknown) => error);
+    expect(configurationOf(thrown)).toMatchObject({
+      case: 'saml-acs-mismatch',
+      fields: ['acsUrl'],
+    });
+    expect(readFailure(thrown, 'unfamiliar-error').diagnostics).toEqual({
+      configuredUri: 'http://localhost:61001/callback',
+      strategyUri: 'http://localhost:5555/callback',
+    });
   });
 
   it('Saml2BearerProvider rejects a pre-built URL without a declared acsUrl', () => {
     expect(
       () =>
         new Saml2BearerProvider({
+          renewal: refreshThenLogin(),
           idpSsoUrl: 'https://idp.example/sso',
           spEntityId: 'sp',
           authorizationUrl: 'https://idp.example/sso?SAMLRequest=abc',
@@ -1115,6 +1194,7 @@ describe('SSO Providers', () => {
 
   it('Saml2PureProvider refuses to open a browser at an ACS the IdP was never told about', async () => {
     const provider = new Saml2PureProvider({
+      renewal: refreshThenLogin(),
       idpSsoUrl: 'https://idp.example/sso',
       spEntityId: 'sp',
       acsUrl: 'https://sp.example/acs',
@@ -1127,9 +1207,16 @@ describe('SSO Providers', () => {
       // Never reached: the ACS mismatch is thrown before validate() would run.
       assertionValidator: acceptingSamlValidator(),
     });
-    await expect(provider.getTokens()).rejects.toThrow(
-      /acsUrl is https:\/\/sp\.example\/acs, but the authorization strategy is listening on http:\/\/localhost:61001\/callback/i,
-    );
+    // Refused inside the builder; the addresses as diagnostics.
+    const thrown = await provider.getTokens().catch((error: unknown) => error);
+    expect(configurationOf(thrown)).toMatchObject({
+      case: 'saml-acs-mismatch',
+      fields: ['acsUrl'],
+    });
+    expect(readFailure(thrown, 'unfamiliar-error').diagnostics).toEqual({
+      configuredUri: 'https://sp.example/acs',
+      strategyUri: 'http://localhost:61001/callback',
+    });
   });
 
   it('SsoProviderFactory should create configured providers', () => {
@@ -1137,6 +1224,7 @@ describe('SSO Providers', () => {
       protocol: 'oidc',
       flow: 'browser',
       config: {
+        renewal: refreshThenLogin(),
         issuerUrl: 'https://issuer',
         clientId: 'client',
         authorization: oidcCallbackStrategy(),
@@ -1168,12 +1256,6 @@ describe('OidcBrowserProvider strategy lifecycle', () => {
   });
 
   it('never disposes a strategy the consumer supplied', async () => {
-    // Nothing here should construct a default at all; the class-level spy says
-    // so without needing to mock the module the provider imports.
-    const defaultDispose = jest.spyOn(
-      BrowserCallbackStrategy.prototype,
-      'dispose',
-    );
     const dispose = jest.fn(async () => undefined);
     const redirectUri = 'http://localhost:61001/callback';
     const supplied: IAuthorizationStrategy<OidcCallbackResult> = {
@@ -1184,22 +1266,18 @@ describe('OidcBrowserProvider strategy lifecycle', () => {
       dispose,
     };
 
-    try {
-      const provider = new OidcBrowserProvider({
-        clientId: 'client',
-        authorizationEndpoint: 'https://issuer/authorize',
-        tokenEndpoint: 'https://issuer/token',
-        authorization: supplied,
-      });
+    const provider = new OidcBrowserProvider({
+      renewal: refreshThenLogin(),
+      clientId: 'client',
+      authorizationEndpoint: 'https://issuer/authorize',
+      tokenEndpoint: 'https://issuer/token',
+      authorization: supplied,
+    });
 
-      const tokens = await provider.getTokens();
-      expect(tokens.authorizationToken).toBe('jwt.access.token');
-      // A receiver the consumer owns must survive the login it served.
-      expect(dispose).not.toHaveBeenCalled();
-      expect(defaultDispose).not.toHaveBeenCalled();
-    } finally {
-      defaultDispose.mockRestore();
-    }
+    const tokens = await provider.getTokens();
+    expect(tokens.authorizationToken).toBe('jwt.access.token');
+    // A receiver the consumer owns must survive the login it served.
+    expect(dispose).not.toHaveBeenCalled();
   }, 30000);
 
   it('leaves a supplied strategy alone when the login fails too', async () => {
@@ -1211,15 +1289,18 @@ describe('OidcBrowserProvider strategy lifecycle', () => {
       dispose,
     };
     const provider = new OidcBrowserProvider({
+      renewal: refreshThenLogin(),
       clientId: 'client',
       authorizationEndpoint: 'https://issuer/authorize',
       tokenEndpoint: 'https://issuer/token',
       authorization: supplied,
     });
 
-    await expect(provider.getTokens()).rejects.toThrow(
-      /consumer flow cancelled/,
-    );
+    // The consumer's own error never comes back — an
+    // AuthProviderFailure holding the classified error, without its message.
+    const failed = provider.getTokens();
+    await expect(failed).rejects.toBeInstanceOf(AuthProviderFailure);
+    await expect(failed).rejects.not.toThrow(/consumer flow cancelled/);
     expect(dispose).not.toHaveBeenCalled();
   }, 30000);
 });
@@ -1240,12 +1321,6 @@ describe('SAML strategy lifecycle', () => {
   });
 
   it('never disposes a strategy the consumer supplied', async () => {
-    // Nothing here should construct a default at all; the class-level spy says
-    // so without needing to mock the module the provider imports.
-    const defaultDispose = jest.spyOn(
-      BrowserCallbackStrategy.prototype,
-      'dispose',
-    );
     const dispose = jest.fn(async () => undefined);
     const redirectUri = 'http://localhost:61001/callback';
     const supplied: IAuthorizationStrategy<string> = {
@@ -1256,26 +1331,22 @@ describe('SAML strategy lifecycle', () => {
       dispose,
     };
 
-    try {
-      const provider = new Saml2PureProvider({
-        idpSsoUrl: 'https://idp.example/sso',
-        spEntityId: 'sp',
-        acsUrl: redirectUri,
-        authorization: supplied,
-        cookieProvider: async (saml) => saml,
-        // This test is about the strategy lifecycle, not validation; the
-        // fixture above is not signed.
-        assertionValidator: acceptingSamlValidator(),
-      });
+    const provider = new Saml2PureProvider({
+      renewal: refreshThenLogin(),
+      idpSsoUrl: 'https://idp.example/sso',
+      spEntityId: 'sp',
+      acsUrl: redirectUri,
+      authorization: supplied,
+      cookieProvider: async (saml) => saml,
+      // This test is about the strategy lifecycle, not validation; the
+      // fixture above is not signed.
+      assertionValidator: acceptingSamlValidator(),
+    });
 
-      const tokens = await provider.getTokens();
-      expect(tokens.authorizationToken).toBe('PHNhbWw+');
-      // A receiver the consumer owns must survive the login it served.
-      expect(dispose).not.toHaveBeenCalled();
-      expect(defaultDispose).not.toHaveBeenCalled();
-    } finally {
-      defaultDispose.mockRestore();
-    }
+    const tokens = await provider.getTokens();
+    expect(tokens.authorizationToken).toBe('PHNhbWw+');
+    // A receiver the consumer owns must survive the login it served.
+    expect(dispose).not.toHaveBeenCalled();
   }, 30000);
 
   it('leaves a supplied strategy alone when the login fails too', async () => {
@@ -1287,6 +1358,7 @@ describe('SAML strategy lifecycle', () => {
       dispose,
     };
     const provider = new Saml2PureProvider({
+      renewal: refreshThenLogin(),
       idpSsoUrl: 'https://idp.example/sso',
       spEntityId: 'sp',
       authorization: supplied,
@@ -1295,15 +1367,17 @@ describe('SAML strategy lifecycle', () => {
       assertionValidator: acceptingSamlValidator(),
     });
 
-    await expect(provider.getTokens()).rejects.toThrow(
-      /consumer flow cancelled/,
-    );
+    // The consumer's own error never comes back — an
+    // AuthProviderFailure holding the classified error, without its message.
+    const failed = provider.getTokens();
+    await expect(failed).rejects.toBeInstanceOf(AuthProviderFailure);
+    await expect(failed).rejects.not.toThrow(/consumer flow cancelled/);
     expect(dispose).not.toHaveBeenCalled();
   }, 30000);
 });
 
 /**
- * Task 11: both providers run `assertionValidator` on every login. `idpCertificates`
+ * Both providers run `assertionValidator` on every login. `idpCertificates`
  * and `idpEntityId` no longer configure the provider directly — they belong to
  * building a validator (`SamlTrust`), assembled by the static factories — so a
  * missing one is now a fault at that assembly, surfacing before a provider is
@@ -1332,6 +1406,7 @@ describe('Saml2PureProvider assertion validation', () => {
     expect(() =>
       Saml2PureProvider.inBrowser(
         {
+          renewal: refreshThenLogin(),
           idpSsoUrl: baseConfig.idpSsoUrl,
           spEntityId: baseConfig.spEntityId,
           acsUrl: baseConfig.acsUrl,
@@ -1348,6 +1423,7 @@ describe('Saml2PureProvider assertion validation', () => {
     // A stub validator, to prove the provider uses what validation returned.
     const expiresAt = new Date(Date.now() + 111_000);
     const provider = new Saml2PureProvider({
+      renewal: refreshThenLogin(),
       ...baseConfig,
       assertionValidator: {
         async validate() {
@@ -1378,20 +1454,51 @@ describe('Saml2PureProvider assertion validation', () => {
   it('does not hand the assertion to the cookie provider when validation refuses it', async () => {
     const cookieProvider = jest.fn(async (saml: string) => saml);
     const provider = new Saml2PureProvider({
+      renewal: refreshThenLogin(),
       ...baseConfig,
       assertionValidator: {
         async validate() {
-          throw new AssertionValidationError('status', 'the IdP declined');
+          throw new Error('the IdP declined: SECRET-MARKER');
         },
       },
       cookieProvider,
     });
 
-    const tokensPromise = provider.getTokens();
-    const rejected = expect(tokensPromise).rejects.toMatchObject({
-      check: 'status',
+    // A custom validator's throw is classified with `validating-assertion`: its
+    // own error and message are not handed back.
+    const thrown = await rejectionOf(provider.getTokens());
+    expect(thrown).toBeInstanceOf(AuthProviderFailure);
+    expect((thrown as AuthProviderFailure).error).toMatchObject({
+      kind: 'unknown',
+      facts: { operation: 'validating-assertion' },
     });
-    await rejected;
+    expect(JSON.stringify(thrown)).not.toContain('SECRET-MARKER');
+    expect(String(thrown)).not.toContain('SECRET-MARKER');
+    expect(cookieProvider).not.toHaveBeenCalled();
+  });
+
+  // A custom validator delegating to a shipped one rejects with its minted
+  // refusal: that error reaches the caller as it is, diagnostics included.
+  it("passes a custom validator's minted SAML refusal through as it is", async () => {
+    const refusal = authError['saml-assertion'](
+      { rule: 'untrusted-issuer', check: 'issuer' },
+      { issuer: 'urn:someone:else' },
+    );
+    const cookieProvider = jest.fn(async (saml: string) => saml);
+    const provider = new Saml2PureProvider({
+      renewal: refreshThenLogin(),
+      ...baseConfig,
+      assertionValidator: {
+        async validate() {
+          throw new AuthProviderFailure(refusal);
+        },
+      },
+      cookieProvider,
+    });
+
+    const thrown = await rejectionOf(provider.getTokens());
+    expect(thrown).toBeInstanceOf(AuthProviderFailure);
+    expect((thrown as AuthProviderFailure).error).toBe(refusal);
     expect(cookieProvider).not.toHaveBeenCalled();
   });
 
@@ -1409,6 +1516,7 @@ describe('Saml2PureProvider assertion validation', () => {
     }));
     const cookieProvider = jest.fn(async () => 'cookie');
     const provider = new Saml2PureProvider({
+      renewal: refreshThenLogin(),
       idpSsoUrl: 'https://idp/sso',
       spEntityId: 'sp-entity',
       idpEntityId: 'urn:mock:idp',
@@ -1445,6 +1553,7 @@ describe('Saml2BearerProvider assertion validation', () => {
     });
 
     const provider = new Saml2BearerProvider({
+      renewal: refreshThenLogin(),
       idpSsoUrl: 'https://idp/sso',
       spEntityId: 'sp-entity',
       uaaUrl: 'https://uaa',
@@ -1454,16 +1563,17 @@ describe('Saml2BearerProvider assertion validation', () => {
       }),
       assertionValidator: {
         async validate() {
-          throw new AssertionValidationError('status', 'the IdP declined');
+          throw new Error('the IdP declined: SECRET-MARKER');
         },
       },
     });
 
-    const tokensPromise = provider.getTokens();
-    const rejected = expect(tokensPromise).rejects.toMatchObject({
-      check: 'status',
+    const thrown = await rejectionOf(provider.getTokens());
+    expect((thrown as AuthProviderFailure).error).toMatchObject({
+      kind: 'unknown',
+      facts: { operation: 'validating-assertion' },
     });
-    await rejected;
+    expect(JSON.stringify(thrown)).not.toContain('SECRET-MARKER');
     expect(exchanged).toBe(false);
   });
 });
@@ -1518,12 +1628,70 @@ describe('Saml2 provider default validators', () => {
       'base64',
     );
 
+  /**
+   * An unsigned samlp:Response with `status` around the same Assertion,
+   * signed by the trusted key at the Assertion level only.
+   */
+  const unsignedResponseAround = (status: string) => {
+    const signed = buildResponseSignedAtResponseLevel();
+    const start = signed.indexOf('<saml:Assertion');
+    const end =
+      signed.indexOf('</saml:Assertion>') + '</saml:Assertion>'.length;
+    const assertion = signXml(signed.slice(start, end), KEY);
+    return Buffer.from(
+      `<samlp:Response xmlns:samlp="urn:oasis:names:tc:SAML:2.0:protocol" ` +
+        `xmlns:saml="urn:oasis:names:tc:SAML:2.0:assertion" ID="_r1" Destination="${ACS}">` +
+        `<samlp:Status><samlp:StatusCode Value="${status}"/></samlp:Status>` +
+        `${assertion}</samlp:Response>`,
+      'utf8',
+    ).toString('base64');
+  };
+
+  // An unsigned Status decides nothing (review, fix 1): the signed-Response
+  // validator reads Status only once the Response is the signed element.
+  it.each([
+    'urn:oasis:names:tc:SAML:2.0:status:Responder',
+    'urn:example:status:Forged',
+  ])(
+    "Saml2PureProvider's default refuses an unsigned Response with Status %s as response-not-signed",
+    async (status) => {
+      const cookieProvider = jest.fn(async (saml: string) => saml);
+      const error = await expectSamlRejection(
+        new Saml2PureProvider({
+          renewal: refreshThenLogin(),
+          idpSsoUrl: 'https://idp/sso',
+          spEntityId: AUDIENCE,
+          acsUrl: ACS,
+          authnRequestId: REQUEST_ID,
+          idpEntityId: ISSUER,
+          authorization: staticCodeStrategy({
+            redirectUri: ACS,
+            payload: unsignedResponseAround(status),
+          }),
+          assertionValidator: createSignedResponseValidator({
+            idpCertificates: [KEY.certificatePem],
+            replayStore: createInMemoryReplayStore(),
+          }),
+          cookieProvider,
+        }).getTokens(),
+        'response-not-signed',
+      );
+      expect(error.facts).toEqual({
+        rule: 'response-not-signed',
+        check: 'signedNode',
+      });
+      expect(JSON.stringify(error)).not.toContain(status);
+      expect(cookieProvider).not.toHaveBeenCalled();
+    },
+  );
+
   beforeEach(() => {
     jest.clearAllMocks();
   });
 
   it("Saml2PureProvider's default accepts a Response signed at the Response level", async () => {
     const provider = new Saml2PureProvider({
+      renewal: refreshThenLogin(),
       idpSsoUrl: 'https://idp/sso',
       spEntityId: AUDIENCE,
       acsUrl: ACS,
@@ -1547,6 +1715,7 @@ describe('Saml2 provider default validators', () => {
 
   it("Saml2BearerProvider's default refuses the same Response, at signedNode", async () => {
     const provider = new Saml2BearerProvider({
+      renewal: refreshThenLogin(),
       idpSsoUrl: 'https://idp/sso',
       spEntityId: AUDIENCE,
       acsUrl: ACS,
@@ -1563,12 +1732,7 @@ describe('Saml2 provider default validators', () => {
       }),
     });
 
-    await expect(provider.getTokens()).rejects.toMatchObject({
-      check: 'signedNode',
-      message: expect.stringContaining(
-        'does not cover the saml:Assertion this validator requires',
-      ),
-    });
+    await expectSamlRejection(provider.getTokens(), 'assertion-not-signed');
     expect(mockExchangeSaml).not.toHaveBeenCalled();
   });
 });
@@ -1581,7 +1745,7 @@ describe('Saml2 provider default validators', () => {
  * unnoticed. `toMatchObject` would miss extra fields altogether.
  */
 describe('Saml2PureProvider validation context', () => {
-  it('passes exactly the context the spec requires', async () => {
+  it('passes exactly the validation context', async () => {
     const redirectUri = 'http://localhost:61001/callback';
     const payload = Buffer.from('<Assertion/>', 'utf8').toString('base64');
     const logger: ILogger = {
@@ -1609,6 +1773,7 @@ describe('Saml2PureProvider validation context', () => {
     };
 
     const provider = new Saml2PureProvider({
+      renewal: refreshThenLogin(),
       idpSsoUrl: 'https://idp/sso',
       spEntityId: 'sp-entity',
       idpEntityId: 'urn:mock:idp',
@@ -1640,7 +1805,7 @@ describe('Saml2BearerProvider validation context', () => {
     jest.clearAllMocks();
   });
 
-  it('passes exactly the context the spec requires', async () => {
+  it('passes exactly the validation context', async () => {
     mockExchangeSaml.mockResolvedValue({ accessToken: 'AT', expiresIn: 900 });
 
     const redirectUri = 'http://localhost:61001/callback';
@@ -1672,6 +1837,7 @@ describe('Saml2BearerProvider validation context', () => {
     };
 
     const provider = new Saml2BearerProvider({
+      renewal: refreshThenLogin(),
       idpSsoUrl: 'https://idp/sso',
       spEntityId: 'sp-entity',
       idpEntityId: 'urn:mock:idp',
@@ -1717,6 +1883,7 @@ describe('Saml2 provider construction faults', () => {
     spEntityId: 'sp-entity',
     idpEntityId: 'urn:mock:idp',
     cookieProvider: async (saml: string) => saml,
+    renewal: refreshThenLogin(),
   };
 
   const validBearerConfig = {
@@ -1724,6 +1891,7 @@ describe('Saml2 provider construction faults', () => {
     spEntityId: 'sp-entity',
     idpEntityId: 'urn:mock:idp',
     uaaUrl: 'https://uaa',
+    renewal: refreshThenLogin(),
   };
 
   // 5.4.0 read the brand with a plain property access, so an untyped
@@ -1755,26 +1923,38 @@ describe('Saml2 provider construction faults', () => {
     },
   );
 
+  // A configuration failure naming idpEntityId.
   it('Saml2PureProvider refuses construction when idpEntityId is missing', () => {
     const error = constructionError(() =>
       Saml2PureProvider.inBrowser(
-        { ...validPureConfig, idpEntityId: undefined },
+        {
+          ...validPureConfig,
+          idpEntityId: undefined,
+        },
         { idpCertificates: [CERT] },
       ),
     );
-    expect(error.message).toMatch(/idpEntityId/);
-    expect(error.missingFields).toContain('idpEntityId');
+    expect(configurationOf(error)).toMatchObject({
+      case: 'saml-shipped-validator-without-issuer',
+      fields: ['idpEntityId'],
+    });
   });
 
+  // A configuration failure naming idpEntityId.
   it('Saml2BearerProvider refuses construction when idpEntityId is missing', () => {
     const error = constructionError(() =>
       Saml2BearerProvider.inBrowser(
-        { ...validBearerConfig, idpEntityId: undefined },
+        {
+          ...validBearerConfig,
+          idpEntityId: undefined,
+        },
         { idpCertificates: [CERT] },
       ),
     );
-    expect(error.message).toMatch(/idpEntityId/);
-    expect(error.missingFields).toContain('idpEntityId');
+    expect(configurationOf(error)).toMatchObject({
+      case: 'saml-shipped-validator-without-issuer',
+      fields: ['idpEntityId'],
+    });
   });
 
   // Previously a provider-level check naming the field in `missingFields`

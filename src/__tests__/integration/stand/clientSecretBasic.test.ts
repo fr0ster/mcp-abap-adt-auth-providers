@@ -21,6 +21,8 @@ import { describe, expect, it } from '@jest/globals';
 import { clientSecretBasic } from '../../../clientAuthentication';
 import { ClientCredentialsProvider } from '../../../providers/ClientCredentialsProvider';
 import { OidcPasswordProvider } from '../../../providers/OidcPasswordProvider';
+import { refreshThenLogin } from '../../../renewal';
+import { wordsOf } from '../../helpers/minted';
 
 const UAA_URL = process.env.UAA_URL?.replace(/\/+$/, '');
 const KEYCLOAK_URL = process.env.KEYCLOAK_URL?.replace(/\/+$/, '');
@@ -47,6 +49,7 @@ describeUaa(
   () => {
     const provider = (clientId: string, encoding: 'raw' | 'form') =>
       new ClientCredentialsProvider({
+        renewal: refreshThenLogin(),
         uaaUrl: UAA_URL as string,
         clientId,
         clientAuthentication: clientSecretBasic(SECRET, { encoding }),
@@ -62,7 +65,7 @@ describeUaa(
     it('raw: the same secret is refused by UAA with a 401', async () => {
       await expect(
         provider('basic_reserved', 'raw').getTokens(),
-      ).rejects.toThrow('Client credentials authentication failed (401)');
+      ).rejects.toThrow('the client credentials request failed (HTTP 401');
     });
 
     it("form: a client id holding ':' gets a token", async () => {
@@ -71,7 +74,7 @@ describeUaa(
     });
 
     it("raw: a client id holding ':' is refused before anything is sent", async () => {
-      await expect(provider('basic:colon', 'raw').prepare()).resolves.toEqual(
+      expect(wordsOf(await provider('basic:colon', 'raw').prepare())).toEqual(
         COLON_REFUSAL,
       );
     });
@@ -83,6 +86,7 @@ describeKeycloak(
   () => {
     const provider = (clientId: string, encoding: 'raw' | 'form') =>
       new OidcPasswordProvider({
+        renewal: refreshThenLogin(),
         issuerUrl: KEYCLOAK_URL as string,
         clientId,
         ...USER,
@@ -98,7 +102,7 @@ describeKeycloak(
     it('raw: the same secret is refused by Keycloak with a 401', async () => {
       await expect(
         provider('basic-reserved', 'raw').getTokens(),
-      ).rejects.toThrow('OIDC password grant failed (401)');
+      ).rejects.toThrow('the OIDC password grant failed (HTTP 401');
     });
 
     it("form: a client id holding ':' gets a token", async () => {
@@ -107,7 +111,7 @@ describeKeycloak(
     });
 
     it("raw: a client id holding ':' is refused before anything is sent", async () => {
-      await expect(provider('basic:colon', 'raw').prepare()).resolves.toEqual(
+      expect(wordsOf(await provider('basic:colon', 'raw').prepare())).toEqual(
         COLON_REFUSAL,
       );
     });

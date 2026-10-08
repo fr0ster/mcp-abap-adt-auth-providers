@@ -1,0 +1,88 @@
+/**
+ * Source tests for the interactive login:
+ * - none of `CallbackScopeError`, `AuthorizationRefusedError`,
+ *   `BrowserAuthError`, `DeviceCodePresentationError` is constructed in
+ *   `src` — every end of a login is an `AuthProviderFailure`; the classes
+ *   themselves are deleted (the callback port validation
+ *   became `configuration`);
+ * - no timer bounds a login: no module of the composer, its parts or the
+ *   named compositions calls `setTimeout`, and no `timeoutMs`
+ *   is left anywhere in `src` — interfaces-auth 6.0.0 has no such field, so
+ *   the `Number.POSITIVE_INFINITY` placeholder went with it.
+ */
+
+import { readdirSync, readFileSync, statSync } from 'node:fs';
+import { join, relative } from 'node:path';
+import { describe, expect, it } from '@jest/globals';
+
+const SRC = join(__dirname, '..', '..');
+
+function sourceFiles(dir: string): string[] {
+  return readdirSync(dir).flatMap((name) => {
+    const path = join(dir, name);
+    if (name === '__tests__') return [];
+    if (statSync(path).isDirectory()) return sourceFiles(path);
+    return name.endsWith('.ts') ? [path] : [];
+  });
+}
+
+/** Every `new <Class>(` in `src`, as `file:line`. */
+function constructions(className: string): string[] {
+  const needle = `new ${className}(`;
+  return sourceFiles(SRC).flatMap((file) =>
+    readFileSync(file, 'utf8')
+      .split('\n')
+      .flatMap((line, i) =>
+        line.includes(needle) ? [`${relative(SRC, file)}:${i + 1}`] : [],
+      ),
+  );
+}
+
+describe('the four interactive classes are constructed nowhere in src', () => {
+  // The port validation, the last CallbackScopeError, is a
+  // `configuration` failure now.
+  it.each([
+    'AuthorizationRefusedError',
+    'BrowserAuthError',
+    'CallbackScopeError',
+    'DeviceCodePresentationError',
+  ])('%s', (className) => {
+    expect(constructions(className)).toEqual([]);
+  });
+});
+
+describe('no timer bounds a login', () => {
+  it.each(
+    [
+      ...sourceFiles(join(SRC, 'strategies')),
+      ...sourceFiles(join(SRC, 'authorization')),
+    ].map((file) => relative(SRC, file)),
+  )('%s calls no setTimeout', (file) => {
+    const text = readFileSync(join(SRC, file), 'utf8');
+    expect(text).not.toContain('setTimeout');
+    expect(text).not.toContain('setInterval');
+  });
+
+  it('no timeoutMs and no "no bound" placeholder anywhere in src', () => {
+    for (const file of sourceFiles(SRC)) {
+      const text = readFileSync(file, 'utf8');
+      const name = relative(SRC, file);
+      expect([name, text.includes('timeoutMs')]).toEqual([name, false]);
+      expect([name, text.includes('POSITIVE_INFINITY')]).toEqual([name, false]);
+    }
+  });
+
+  it('no package default bound is left anywhere in src', () => {
+    for (const file of sourceFiles(SRC)) {
+      const text = readFileSync(file, 'utf8');
+      expect([
+        relative(SRC, file),
+        text.includes('DEFAULT_LOGIN_TIMEOUT_MS'),
+      ]).toEqual([relative(SRC, file), false]);
+      expect([relative(SRC, file), text.includes('300_000')]).toEqual([
+        relative(SRC, file),
+        false,
+      ]);
+    }
+  });
+});

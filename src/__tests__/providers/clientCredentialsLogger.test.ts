@@ -7,6 +7,7 @@
 import { describe, expect, it, jest } from '@jest/globals';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
 import { ClientCredentialsProvider } from '../../providers/ClientCredentialsProvider';
+import { refreshThenLogin } from '../../renewal';
 
 const recording = () => {
   const lines: string[] = [];
@@ -29,6 +30,7 @@ describe('ClientCredentialsProvider logger', () => {
   it('logs its token lifecycle to the logger it is given', async () => {
     const { logger, lines } = recording();
     const provider = new ClientCredentialsProvider({
+      renewal: refreshThenLogin(),
       uaaUrl: 'https://uaa.example',
       clientId: 'client',
       clientSecret: 'secret',

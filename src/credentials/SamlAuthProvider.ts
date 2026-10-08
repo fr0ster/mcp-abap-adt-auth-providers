@@ -1,41 +1,42 @@
+import { OK } from '@mcp-abap-adt/auth-errors';
 import type {
   AuthOutcome,
-  IAuthProvider,
   IAuthRejection,
-  ILogonTarget,
   IRequestTarget,
 } from '@mcp-abap-adt/interfaces-auth';
-import { OK, safely } from '../auth/refusal';
+import { AuthProviderBase } from '../auth/AuthProviderBase';
+import { markHandled } from '../auth/handled';
 import { refuseFor } from '../auth/rejection';
 
 /** A SAML session negotiated elsewhere and handed over as cookies. */
-export class SamlAuthProvider implements IAuthProvider {
+export class SamlAuthProvider extends AuthProviderBase {
   readonly kind = 'saml';
 
-  constructor(private readonly sessionCookies: string) {}
-
-  async prepare(): Promise<AuthOutcome> {
-    return OK;
-  }
-
-  async establish(_logon: ILogonTarget): Promise<AuthOutcome> {
-    return OK;
-  }
-
-  async authorize(request: IRequestTarget): Promise<AuthOutcome> {
-    return safely('writing the session cookies', () => {
-      request.cookies(this.sessionCookies);
-      return OK;
+  constructor(private readonly sessionCookies: string) {
+    super({
+      prepare: 'preparing',
+      establish: 'establishing',
+      authorize: 'writing-session-cookies',
+      rejected: 'reading-rejection',
     });
   }
 
+  protected onPrepare(): AuthOutcome {
+    return OK;
+  }
+
+  protected onEstablish(): AuthOutcome {
+    return OK;
+  }
+
+  protected onAuthorize(request: IRequestTarget): AuthOutcome {
+    // A target answering a rejecting promise raises nothing (rule 1).
+    markHandled(request.cookies(this.sessionCookies));
+    return OK;
+  }
+
   /** Blames the session only when the system refused the credential. */
-  async rejected(rejection: IAuthRejection): Promise<AuthOutcome> {
-    return safely('reading the rejection', () =>
-      refuseFor(rejection, {
-        reason: 'the SAML session was refused or has expired',
-        hint: 'obtain a new SAML session',
-      }),
-    );
+  protected onRejected(rejection: IAuthRejection): AuthOutcome {
+    return refuseFor(rejection, 'saml-session');
   }
 }

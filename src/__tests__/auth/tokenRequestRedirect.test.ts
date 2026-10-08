@@ -9,7 +9,8 @@ import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { inspect } from 'node:util';
 import { afterAll, beforeAll, describe, expect, it } from '@jest/globals';
-import axios, { AxiosError } from 'axios';
+import { isAuthProviderFailure, readFailure } from '@mcp-abap-adt/auth-errors';
+import axios from 'axios';
 import { exchangeCodeForToken } from '../../auth/browserAuth';
 import { getTokenWithClientCredentials } from '../../auth/clientCredentialsAuth';
 import {
@@ -276,7 +277,7 @@ describe('a 400 from the token endpoint that echoes the request', () => {
         ),
     ],
   ])(
-    '%s: an AxiosError without the request, whose JSON and string hold no secret',
+    '%s: an AuthProviderFailure without the request, whose JSON and string hold no secret',
     async (_label, run) => {
       let thrown: unknown;
       try {
@@ -288,23 +289,19 @@ describe('a 400 from the token endpoint that echoes the request', () => {
       expect(lastBody.includes(REFRESH) || lastBody.includes(DEVICE)).toBe(
         true,
       );
-      expect(thrown).toBeInstanceOf(AxiosError);
-      expect(axios.isAxiosError(thrown)).toBe(true);
-      const error = thrown as AxiosError;
-      expect(error.name).toBe('AxiosError');
-      expect(error.status).toBe(400);
-      expect(error.response?.status).toBe(400);
-      // The reason phrase is the server's text: not kept (statusText '').
-      expect(error.response?.statusText).toBe('');
-      // Only the registered code: the server's free text stays off the error.
-      expect(error.response?.data).toEqual({ error: 'invalid_grant' });
-      expect(error.config).toBeUndefined();
-      expect(error.request).toBeUndefined();
-      expect(error.response?.config).toBeUndefined();
-      expect(error.response?.request).toBeUndefined();
+      // No longer the reduced AxiosError — the failure of the
+      // site's operation, its facts the status and the registered code.
+      expect(isAuthProviderFailure(thrown)).toBe(true);
+      expect(axios.isAxiosError(thrown)).toBe(false);
+      const error = thrown as Error;
+      expect(readFailure(thrown, 'unfamiliar-error').facts).toMatchObject({
+        problem: 'refused',
+        status: 400,
+        oauthError: 'invalid_grant',
+      });
+      expect(Object.keys(error).sort()).toEqual(['error', 'message', 'name']);
       expect(error.cause).toBeUndefined();
-      expect(JSON.stringify(error.toJSON())).not.toContain('"config":{');
-      const text = `${JSON.stringify(error)}\n${JSON.stringify(error.toJSON())}\n${String(error)}\n${error.stack}`;
+      const text = `${JSON.stringify(error)}\n${inspect(error, { depth: null })}\n${String(error)}\n${error.stack}`;
       const basic = Buffer.from(`cid:${SECRET}`).toString('base64');
       const needles = [
         ...windows(SECRET),

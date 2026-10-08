@@ -8,23 +8,25 @@
  * afterwards, so the user is asked again only when the refresh token is gone.
  */
 
+import type { AttemptContext } from '@mcp-abap-adt/auth-errors';
 import type {
-  AuthorizationRequest,
   IAuthorizationStrategy,
   ITokenResult,
   OAuth2GrantType,
 } from '@mcp-abap-adt/interfaces-auth';
 import { AUTH_TYPE_PASSWORD } from '@mcp-abap-adt/interfaces-auth';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
-import { asContract } from '../auth/contractShape';
+import { ownOptions } from '../auth/configuration';
 import { exchangePasscode } from '../auth/passcodeAuth';
 import { refreshJwtToken } from '../auth/tokenRefresher';
 import { manualPasscodeStrategy } from '../strategies/manualStrategies';
 import {
   BaseTokenProvider,
   type ClientAuthenticationConfig,
+  refreshTokenRefused,
   type TokenProviderHooks,
 } from './BaseTokenProvider';
+import type { LoginFactoryOptions } from './LoginFactoryOptions';
 
 export interface UaaPasscodeProviderConfig
   extends TokenProviderHooks,
@@ -54,7 +56,9 @@ export interface UaaPasscodeProviderConfig
 export class UaaPasscodeProvider extends BaseTokenProvider {
   private readonly config: UaaPasscodeProviderConfig;
 
-  constructor(config: UaaPasscodeProviderConfig) {
+  constructor(options: UaaPasscodeProviderConfig) {
+    // Read once as own data (a hostile object throws nothing of its own).
+    const config = ownOptions<UaaPasscodeProviderConfig>(options);
     super(config);
     this.config = config;
     this.logger = config.logger;
@@ -72,28 +76,35 @@ export class UaaPasscodeProvider extends BaseTokenProvider {
   }
 
   private get baseUrl(): string {
-    return this.config.uaaUrl.replace(/\/+$/, '');
+    // Trailing slashes dropped by a backward scan, no regex.
+    const url = this.config.uaaUrl;
+    let end = url.length;
+    while (end > 0 && url[end - 1] === '/') end--;
+    return url.slice(0, end);
   }
 
-  /** The usual choice: a passcode typed in a terminal; five minutes to paste it by default. */
+  /** The usual choice: a passcode typed in a terminal, waited for until it arrives or `options.signal` aborts. */
   static fromTerminal(
     config: Omit<UaaPasscodeProviderConfig, 'authorization'>,
-    options: { timeoutMs?: number } = {},
+    options: LoginFactoryOptions = {},
   ): UaaPasscodeProvider {
     return new UaaPasscodeProvider({
-      ...config,
+      ...ownOptions<typeof config>(config),
       authorization: manualPasscodeStrategy({
-        timeoutMs: options.timeoutMs ?? 300_000,
+        signal: ownOptions<LoginFactoryOptions>(options).signal,
       }),
     });
   }
 
-  protected async performLogin(): Promise<ITokenResult> {
+  protected async performLogin(attempt: AttemptContext): Promise<ITokenResult> {
     const strategy = this.config.authorization;
-    // The passcode page takes no redirect: the code travels by hand.
-    const outcome = await strategy.authorize(
-      asContract<AuthorizationRequest>({
+    // The passcode page takes no redirect: the code travels by hand. The
+    // strategy holds a reader: it starts once the previous attempt's is
+    // released (the drain), and the attempt's signal ends it.
+    const outcome = await attempt.exclusive(() =>
+      strategy.authorize({
         logger: this.logger,
+        signal: attempt.signal,
         buildAuthorizationUrl: async () => `${this.baseUrl}/passcode`,
       }),
     );
@@ -106,38 +117,44 @@ export class UaaPasscodeProvider extends BaseTokenProvider {
       passcode,
       this.logger,
       await this.requestAuth(),
+      this.siteOptions(attempt.signal),
     );
-    return asContract<ITokenResult>({
+    return {
       authorizationToken: tokens.accessToken,
       refreshToken: tokens.refreshToken,
       authType: AUTH_TYPE_PASSWORD,
       expiresIn: tokens.expiresIn,
       tokenType: 'jwt',
-    });
+    };
   }
 
   /**
    * A failure is thrown, not handled: BaseTokenProvider drops the refresh
    * token and asks for a new passcode through performLogin().
    */
-  protected async performRefresh(): Promise<ITokenResult> {
-    if (!this.refreshToken) {
-      throw new Error('Refresh token is required for refresh');
+  protected async performRefresh(
+    refreshToken: string,
+    _signal: AbortSignal,
+    dispatched: () => void,
+  ): Promise<ITokenResult> {
+    if (!refreshToken) {
+      throw refreshTokenRefused();
     }
     const result = await refreshJwtToken(
-      this.refreshToken,
+      refreshToken,
       this.baseUrl,
       this.config.clientId,
       this.config.clientSecret ?? '',
       await this.requestAuth(),
       this.logger,
+      this.refreshSiteOptions(dispatched),
     );
-    return asContract<ITokenResult>({
+    return {
       authorizationToken: result.accessToken,
-      refreshToken: result.refreshToken || this.refreshToken,
+      refreshToken: result.refreshToken || refreshToken,
       authType: AUTH_TYPE_PASSWORD,
       expiresIn: result.expiresIn,
       tokenType: 'jwt',
-    });
+    };
   }
 }

@@ -19,7 +19,6 @@ import { afterAll, beforeAll, describe, expect, it } from '@jest/globals';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
 import { exchangeCodeForToken } from '../../auth/browserAuth';
 import { getTokenWithClientCredentials } from '../../auth/clientCredentialsAuth';
-import { oauthErrorFields } from '../../auth/oauthErrorBody';
 import {
   exchangeAuthorizationCode,
   initiateDeviceAuthorization,
@@ -383,36 +382,24 @@ describe('the UAA code exchange logging a 200 without access_token', () => {
         'http://localhost:61001/callback',
         throwing,
       ),
-    ).rejects.toThrow('Response does not contain access_token');
+      // `request-failed` `no-access-token` of the code exchange.
+    ).rejects.toThrow('the code exchange returned no access_token');
     await failed;
   });
 });
 
 describe('legacyBasic carries its own secrets', () => {
-  // Nothing in 5.4.2 writes the server's words, so nothing redacts them; the
-  // redactor stays as defence in depth, and the header's own secrets alone
-  // must let it remove every form of the credential.
-  it.each(CREDENTIALS)(
-    '$label: the redactor given only legacyBasic secrets keeps no form of it',
-    (c) => {
-      const basic = legacyBasic(c.id, c.secret);
-      const echo = echoesOf(basic.header);
-      const fields = oauthErrorFields(
-        {
-          error_description: `refused: ${echo}`,
-          error_uri: `https://x/?e=${echo}`,
-        },
-        basic.secrets,
-      );
-      const text = JSON.stringify(fields);
-      for (const form of forbidden(c, basic.header)) {
-        expect({ form, found: text.includes(form) }).toEqual({
-          form,
-          found: false,
-        });
-      }
-    },
-  );
+  // They feed the authDebug line's `sent`, by name, each through
+  // prepareSecret: the base64 credential and the secret after its first colon.
+  it.each(CREDENTIALS)('$label: `basic` and `basic_secret`', (c) => {
+    const basic = legacyBasic(c.id, c.secret);
+    const credential = basic.header.slice('Basic '.length);
+    const decoded = Buffer.from(credential, 'base64').toString();
+    expect(basic.secrets).toEqual({
+      basic: credential,
+      basic_secret: decoded.slice(decoded.indexOf(':') + 1),
+    });
+  });
 });
 
 describe('the debug line never replaces the failure', () => {
@@ -428,11 +415,16 @@ describe('the debug line never replaces the failure', () => {
     } as ILogger;
     const withThrowing = expect(
       refreshJwtToken('rt', base, 'cid', 'secret', undefined, throwing),
-    ).rejects.toThrow(/^Token refresh failed \(400\): invalid_client$/);
+      // The operation's words, the status and the registered code.
+    ).rejects.toThrow(
+      /^the token refresh failed \(HTTP 400, invalid_client\)$/,
+    );
     await withThrowing;
     const withNone = expect(
       refreshJwtToken('rt', base, 'cid', 'secret'),
-    ).rejects.toThrow(/^Token refresh failed \(400\): invalid_client$/);
+    ).rejects.toThrow(
+      /^the token refresh failed \(HTTP 400, invalid_client\)$/,
+    );
     await withNone;
   });
 });

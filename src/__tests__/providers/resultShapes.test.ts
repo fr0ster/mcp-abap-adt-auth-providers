@@ -9,16 +9,17 @@
 import { join } from 'node:path';
 import { beforeEach, describe, expect, it, jest } from '@jest/globals';
 import type {
+  AnswerTransportOptions,
   AssertionContext,
   AuthorizationRequest,
-  CallbackServerFactory,
   IAssertionValidator,
   IAuthorizationStrategy,
-  ICallbackServerOptions,
   ITokenResult,
 } from '@mcp-abap-adt/interfaces-auth';
 import type { ISapConfig } from '@mcp-abap-adt/interfaces-auth-sap';
 import axios from 'axios';
+import { composeAuthorization } from '../../authorization/compose';
+import { passcode } from '../../authorization/protocol';
 import { FileCertificateMaterialLoader } from '../../credentials/FileCertificateMaterialLoader';
 import { AuthorizationCodeProvider } from '../../providers/AuthorizationCodeProvider';
 import { ClientCredentialsProvider } from '../../providers/ClientCredentialsProvider';
@@ -29,7 +30,7 @@ import { OidcTokenExchangeProvider } from '../../providers/OidcTokenExchangeProv
 import { Saml2BearerProvider } from '../../providers/Saml2BearerProvider';
 import { Saml2PureProvider } from '../../providers/Saml2PureProvider';
 import { UaaPasscodeProvider } from '../../providers/UaaPasscodeProvider';
-import { BrowserCallbackStrategy } from '../../strategies/BrowserCallbackStrategy';
+import { refreshThenLogin } from '../../renewal';
 
 // Automocked, but with axios's own error class: the sites throw it.
 jest.mock('axios', () => {
@@ -109,12 +110,29 @@ function answering<T>(
   };
 }
 
-/** The protected moments, reached the way the base class reaches them. */
+/**
+ * The protected moments, reached the way the base class reaches them: the
+ * login with an attempt (its signal and its exclusive section),
+ * the refresh with the refresh token the base read.
+ */
 interface Moments {
-  performLogin(): Promise<ITokenResult>;
-  performRefresh(): Promise<ITokenResult>;
+  performLogin(attempt: {
+    signal: AbortSignal;
+    exclusive<R>(work: () => Promise<R>): Promise<R>;
+  }): Promise<ITokenResult>;
+  performRefresh(refreshToken: string): Promise<ITokenResult>;
 }
-const moments = (provider: unknown) => provider as Moments;
+const attempt = {
+  signal: new AbortController().signal,
+  exclusive: <R>(work: () => Promise<R>) => work(),
+};
+const moments = (provider: unknown) => {
+  const reached = provider as Moments;
+  return {
+    performLogin: () => reached.performLogin(attempt),
+    performRefresh: () => reached.performRefresh('rt'),
+  };
+};
 
 const sorted = (keys: string[]) => [...keys].sort();
 const OAUTH = sorted([
@@ -137,6 +155,7 @@ const providers: [
     'AuthorizationCodeProvider',
     (seeded, seen) =>
       new AuthorizationCodeProvider({
+        renewal: refreshThenLogin(),
         uaaUrl: 'https://uaa.example',
         clientId: 'cid',
         clientSecret: 's',
@@ -150,6 +169,7 @@ const providers: [
     'ClientCredentialsProvider',
     () =>
       new ClientCredentialsProvider({
+        renewal: refreshThenLogin(),
         uaaUrl: 'https://uaa.example',
         clientId: 'cid',
         clientSecret: 's',
@@ -161,6 +181,7 @@ const providers: [
     'OidcBrowserProvider',
     (seeded, seen) =>
       new OidcBrowserProvider({
+        renewal: refreshThenLogin(),
         clientId: 'cid',
         tokenEndpoint: 'https://idp.example/token',
         authorizationEndpoint: 'https://idp.example/auth',
@@ -174,6 +195,7 @@ const providers: [
     'OidcDeviceFlowProvider',
     (seeded) =>
       new OidcDeviceFlowProvider({
+        renewal: refreshThenLogin(),
         clientId: 'cid',
         tokenEndpoint: 'https://idp.example/token',
         deviceAuthorizationEndpoint: 'https://idp.example/device',
@@ -187,6 +209,7 @@ const providers: [
     'OidcPasswordProvider',
     (seeded) =>
       new OidcPasswordProvider({
+        renewal: refreshThenLogin(),
         clientId: 'cid',
         tokenEndpoint: 'https://idp.example/token',
         username: 'u',
@@ -200,6 +223,7 @@ const providers: [
     'OidcTokenExchangeProvider',
     () =>
       new OidcTokenExchangeProvider({
+        renewal: refreshThenLogin(),
         clientId: 'cid',
         tokenEndpoint: 'https://idp.example/token',
         subjectToken: 'subject',
@@ -212,6 +236,7 @@ const providers: [
     'Saml2BearerProvider',
     (seeded, seen) =>
       new Saml2BearerProvider({
+        renewal: refreshThenLogin(),
         idpSsoUrl: 'https://idp.example/sso',
         spEntityId: 'sp-entity',
         uaaUrl: 'https://uaa.example',
@@ -228,6 +253,7 @@ const providers: [
     'Saml2PureProvider',
     (_seeded, seen) =>
       new Saml2PureProvider({
+        renewal: refreshThenLogin(),
         idpSsoUrl: 'https://idp.example/sso',
         spEntityId: 'sp-entity',
         idpInitiated: true,
@@ -242,6 +268,7 @@ const providers: [
     'UaaPasscodeProvider',
     (seeded, seen) =>
       new UaaPasscodeProvider({
+        renewal: refreshThenLogin(),
         uaaUrl: 'https://uaa.example',
         clientId: 'cf',
         clientSecret: 's',
@@ -295,6 +322,7 @@ describe.each([
     'Saml2BearerProvider',
     (validator: IAssertionValidator) =>
       new Saml2BearerProvider({
+        renewal: refreshThenLogin(),
         idpSsoUrl: 'https://idp.example/sso',
         spEntityId: 'sp-entity',
         uaaUrl: 'https://uaa.example',
@@ -308,6 +336,7 @@ describe.each([
     'Saml2PureProvider',
     (validator: IAssertionValidator) =>
       new Saml2PureProvider({
+        renewal: refreshThenLogin(),
         idpSsoUrl: 'https://idp.example/sso',
         spEntityId: 'sp-entity',
         idpInitiated: true,
@@ -337,6 +366,7 @@ describe('token result, through getTokens()', () => {
     mockedAxios.mockResolvedValue(reply);
     mockedAxios.post.mockResolvedValue(reply);
     const provider = new ClientCredentialsProvider({
+      renewal: refreshThenLogin(),
       uaaUrl: 'https://uaa.example',
       clientId: 'client',
       clientSecret: 'secret',
@@ -350,6 +380,11 @@ describe('token result, through getTokens()', () => {
     expect(cached.authorizationToken).toBe(fresh.authorizationToken);
     expect(Object.hasOwn(cached, 'refreshToken')).toBe(true);
     expect(cached.refreshToken).toBeUndefined();
+
+    // The held refresh token or none, nothing more — no
+    // refresh-token disposition on any result.
+    expect(Object.hasOwn(fresh, 'refreshTokenDisposition')).toBe(false);
+    expect(Object.hasOwn(cached, 'refreshTokenDisposition')).toBe(false);
   });
 });
 
@@ -365,6 +400,7 @@ describe('the request a strategy gets, through getTokens()', () => {
       },
     };
     const provider = new UaaPasscodeProvider({
+      renewal: refreshThenLogin(),
       uaaUrl: 'https://uaa.example',
       clientId: 'client',
       clientSecret: 'secret',
@@ -378,16 +414,20 @@ describe('the request a strategy gets, through getTokens()', () => {
   });
 });
 
-describe('the callback server options', () => {
-  it('carry logger as an own key, undefined, when the request has none', async () => {
-    const seen: ICallbackServerOptions[] = [];
-    const callbackServer: CallbackServerFactory<string> = async (options) => {
-      seen.push(options);
-      throw new Error('stop');
-    };
-    const strategy = new BrowserCallbackStrategy<string>({
-      port: 0,
-      callbackServer,
+describe('the answer transport options', () => {
+  it('carry logger and paste as own keys, undefined, when the request and the protocol have none', async () => {
+    const seen: AnswerTransportOptions[] = [];
+    const strategy = composeAuthorization({
+      presentation: { present: () => undefined },
+      transport: {
+        label: 'consumer',
+        open: async (options) => {
+          seen.push(options);
+          throw new Error('stop');
+        },
+      },
+      protocol: { ...passcode(), paste: undefined },
+      endpoint: '/callback',
     });
 
     await expect(
@@ -396,6 +436,8 @@ describe('the callback server options', () => {
     expect(seen).toHaveLength(1);
     expect(Object.hasOwn(seen[0]!, 'logger')).toBe(true);
     expect(seen[0]!.logger).toBeUndefined();
+    expect(Object.hasOwn(seen[0]!, 'paste')).toBe(true);
+    expect(seen[0]!.paste).toBeUndefined();
   });
 });
 

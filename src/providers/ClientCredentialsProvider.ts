@@ -5,6 +5,7 @@
  * No browser required, no refresh token provided.
  */
 
+import type { AttemptContext } from '@mcp-abap-adt/auth-errors';
 import type {
   ITokenResult,
   OAuth2GrantType,
@@ -12,11 +13,11 @@ import type {
 import { AUTH_TYPE_CLIENT_CREDENTIALS } from '@mcp-abap-adt/interfaces-auth';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
 import { getTokenWithClientCredentials } from '../auth/clientCredentialsAuth';
-import { asContract } from '../auth/contractShape';
-import { RefreshError } from '../errors/TokenProviderErrors';
+import { ownOptions, requiredFieldsMissing } from '../auth/configuration';
 import {
   BaseTokenProvider,
   type ClientAuthenticationConfig,
+  refreshTokenRefused,
   type TokenProviderHooks,
 } from './BaseTokenProvider';
 
@@ -39,7 +40,9 @@ export interface ClientCredentialsProviderConfig
 export class ClientCredentialsProvider extends BaseTokenProvider {
   private config: ClientCredentialsProviderConfig;
 
-  constructor(config: ClientCredentialsProviderConfig) {
+  constructor(options: ClientCredentialsProviderConfig) {
+    // Read once as own data (a hostile object throws nothing of its own).
+    const config = ownOptions<ClientCredentialsProviderConfig>(options);
     super(config);
     this.config = config;
     this.logger = config.logger;
@@ -55,38 +58,31 @@ export class ClientCredentialsProvider extends BaseTokenProvider {
       missingFields.push('clientSecret');
     }
     if (missingFields.length > 0) {
-      const error = new Error(
-        `Missing required fields: ${missingFields.join(', ')}`,
-      ) as Error & { code: string; missingFields: string[] };
-      error.code = 'VALIDATION_ERROR';
-      error.missingFields = missingFields;
-      throw error;
+      // The names of what is missing, never a value.
+      throw requiredFieldsMissing(missingFields);
     }
-  }
-
-  override async getTokens(): Promise<ITokenResult> {
-    return super.getTokens();
   }
 
   protected getAuthType(): OAuth2GrantType {
     return AUTH_TYPE_CLIENT_CREDENTIALS;
   }
 
-  protected async performLogin(): Promise<ITokenResult> {
+  protected async performLogin(attempt: AttemptContext): Promise<ITokenResult> {
     const result = await getTokenWithClientCredentials(
       this.config.uaaUrl,
       this.config.clientId,
       this.config.clientSecret,
       await this.requestAuth(),
       this.logger,
+      this.siteOptions(attempt.signal),
     );
 
-    return asContract<ITokenResult>({
+    return {
       authorizationToken: result.accessToken,
       refreshToken: undefined, // client_credentials doesn't provide refresh token
       authType: AUTH_TYPE_CLIENT_CREDENTIALS,
       expiresIn: result.expiresIn,
-    });
+    };
   }
 
   /** No refresh grant: the base logs in once instead of refreshing. */
@@ -95,6 +91,6 @@ export class ClientCredentialsProvider extends BaseTokenProvider {
   }
 
   protected async performRefresh(): Promise<ITokenResult> {
-    throw new RefreshError('client_credentials has no refresh grant');
+    throw refreshTokenRefused();
   }
 }

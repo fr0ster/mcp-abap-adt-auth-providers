@@ -4,13 +4,14 @@
  * own `performRefresh` never logs in; the base decides the single login.
  * Concurrent renewals share one flight.
  */
+
 import { describe, expect, it, jest } from '@jest/globals';
+import { AuthProviderFailure, authError } from '@mcp-abap-adt/auth-errors';
 import type {
   IAuthorizationStrategy,
   ITokenResult,
   OAuth2GrantType,
 } from '@mcp-abap-adt/interfaces-auth';
-import { BrowserAuthError } from '../../errors/TokenProviderErrors';
 import { AuthorizationCodeProvider } from '../../providers/AuthorizationCodeProvider';
 import { BaseTokenProvider } from '../../providers/BaseTokenProvider';
 import { OidcTokenExchangeProvider } from '../../providers/OidcTokenExchangeProvider';
@@ -29,16 +30,22 @@ jest.mock('../../auth/oidcToken', () => ({
 }));
 
 import { tokenExchange } from '../../auth/oidcToken';
+import { refreshThenLogin } from '../../renewal';
+import { wordsOf } from '../helpers/minted';
 
 const refused = { at: 'request' as const, status: 401, error: {} };
 
 describe('AuthorizationCodeProvider: one renewal, one login', () => {
   it('a refused refresh and a failed login call the strategy exactly once', async () => {
     const authorize = jest.fn(async () => {
-      throw new BrowserAuthError('the user closed the window');
+      // What a shipped strategy throws when the login fails.
+      throw new AuthProviderFailure(
+        authError['interactive-login']({ outcome: 'failed' }),
+      );
     });
     const strategy = { authorize } as unknown as IAuthorizationStrategy<string>;
     const provider = new AuthorizationCodeProvider({
+      renewal: refreshThenLogin(),
       uaaUrl: 'https://uaa.example',
       clientId: 'client',
       clientSecret: 'secret',
@@ -49,9 +56,9 @@ describe('AuthorizationCodeProvider: one renewal, one login', () => {
 
     const outcome = await provider.rejected(refused);
 
-    expect(outcome).toMatchObject({
+    expect(wordsOf(outcome)).toMatchObject({
       ok: false,
-      refusal: { reason: 'the interactive login did not complete' },
+      refusal: { reason: 'the browser login failed (unknown error)' },
     });
     expect(authorize).toHaveBeenCalledTimes(1);
   });
@@ -62,6 +69,7 @@ describe('a provider with no refresh grant', () => {
     const exchange = tokenExchange as jest.MockedFunction<typeof tokenExchange>;
     exchange.mockClear();
     const provider = new OidcTokenExchangeProvider({
+      renewal: refreshThenLogin(),
       tokenEndpoint: 'https://issuer.example/token',
       clientId: 'client',
       subjectToken: 'subject',
@@ -86,7 +94,7 @@ class RotatingProvider extends BaseTokenProvider {
   private spent = new Set<string>();
 
   constructor() {
-    super();
+    super({ renewal: refreshThenLogin() });
     this.authorizationToken = 'T1';
     this.refreshToken = 'R1';
     this.expiresAt = inAnHour();
@@ -112,7 +120,13 @@ class RotatingProvider extends BaseTokenProvider {
     };
   }
 
-  protected async performRefresh(): Promise<ITokenResult> {
+  protected async performRefresh(
+    _refreshToken: string,
+    _signal: AbortSignal,
+    dispatched: () => void,
+  ): Promise<ITokenResult> {
+    // The request leaves: the site would call this right before it.
+    dispatched();
     this.refreshes += 1;
     const presented = this.refreshToken as string;
     await new Promise((resolve) => setTimeout(resolve, 5));

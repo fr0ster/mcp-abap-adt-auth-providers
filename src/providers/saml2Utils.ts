@@ -2,6 +2,7 @@
  * SAML2 provider shared helpers.
  */
 
+import { type AttemptContext, authError } from '@mcp-abap-adt/auth-errors';
 import type {
   AuthorizationRequest,
   IAssertionReplayStore,
@@ -9,10 +10,17 @@ import type {
   IAuthorizationStrategy,
 } from '@mcp-abap-adt/interfaces-auth';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
-import { asContract } from '../auth/contractShape';
+import {
+  misconfigured,
+  ownOptions,
+  requiredFieldsMissing,
+} from '../auth/configuration';
 import { buildSamlAuthorizationUrl } from '../auth/saml2Auth';
-import { ValidationError } from '../errors/TokenProviderErrors';
-import { isShippedValidator } from '../validation/assertionValidator';
+import {
+  isShippedValidator,
+  type ShippedValidatorOptions,
+} from '../validation/assertionValidator';
+import { defaultReplayStore } from '../validation/inMemoryReplayStore';
 
 export interface Saml2CommonConfig {
   idpSsoUrl: string;
@@ -66,21 +74,30 @@ export interface Saml2BearerExchangeConfig {
 
 /** Throw at construction rather than half-verify at runtime. */
 export function validateSamlConfig(config: Saml2CommonConfig): void {
+  // No validator is built for the consumer (rule 7); a JavaScript
+  // caller past the type is told which collaborator is missing.
+  if (!config.assertionValidator) {
+    throw requiredFieldsMissing(['assertionValidator']);
+  }
   if (config.authorizationUrl && !config.acsUrl) {
-    throw new Error(
-      'acsUrl is required when authorizationUrl is set: the ACS inside a ' +
-        'pre-built SAML request cannot be read, so it must be declared.',
+    throw misconfigured(
+      authError.configuration({
+        case: 'saml-acs-required-with-authorization-url',
+        fields: ['acsUrl'],
+      }),
     );
   }
   // The runtime check in resolveExpectedRequestId stays for a direct caller
   // of getSamlAssertion; through a provider this refuses first, before any
   // browser opens.
   if (config.idpInitiated && config.authnRequestId) {
-    throw new ValidationError(
-      'SAML idpInitiated is true and authnRequestId is set: an IdP-initiated ' +
-        'login sends no request, so the two describe different logins. ' +
-        'Remove one of them.',
-      ['idpInitiated'],
+    // An IdP-initiated login sends no request, so the two describe
+    // different logins.
+    throw misconfigured(
+      authError.configuration({
+        case: 'saml-idp-initiated-with-request-id',
+        fields: ['idpInitiated', 'authnRequestId'],
+      }),
     );
   }
 }
@@ -91,6 +108,21 @@ export interface SamlTrust {
   clockSkewMs?: number | undefined;
   /** Default in the recipe: the process-wide `defaultReplayStore`. */
   replayStore?: IAssertionReplayStore | undefined;
+}
+
+/**
+ * A recipe's `trust`, read once as own data (a hostile object throws nothing
+ * of its own), as the shipped validator's options: the replay store
+ * defaults to the process-wide `defaultReplayStore`. Whatever is missing or
+ * of the wrong type the validator refuses as configuration.
+ */
+export function samlTrustOf(trust: unknown): ShippedValidatorOptions {
+  const own = ownOptions<Partial<SamlTrust>>(trust);
+  return {
+    idpCertificates: own.idpCertificates ?? [],
+    clockSkewMs: own.clockSkewMs,
+    replayStore: own.replayStore ?? defaultReplayStore,
+  };
 }
 
 /**
@@ -105,12 +137,11 @@ export function checkAssertionValidator(
   config: Saml2CommonConfig,
 ): IAssertionValidator {
   if (isShippedValidator(config.assertionValidator) && !config.idpEntityId) {
-    throw new ValidationError(
-      'The supplied assertionValidator is a shipped one ' +
-        '(createSignedResponseValidator or createSignedAssertionValidator), ' +
-        'which refuses every assertion without an expected issuer: missing ' +
-        'idpEntityId.',
-      ['idpEntityId'],
+    throw misconfigured(
+      authError.configuration({
+        case: 'saml-shipped-validator-without-issuer',
+        fields: ['idpEntityId'],
+      }),
     );
   }
   return config.assertionValidator;
@@ -121,9 +152,32 @@ export function resolveTokenUrl(config: Saml2BearerExchangeConfig): string {
     return config.tokenUrl;
   }
   if (config.uaaUrl) {
-    return `${config.uaaUrl.replace(/\/+$/, '')}/oauth/token`;
+    // Trailing slashes dropped in plain code (no regex on configuration:
+    // `/\/+$/` was quadratic on a long run of slashes).
+    let end = config.uaaUrl.length;
+    while (end > 0 && config.uaaUrl[end - 1] === '/') end--;
+    return `${config.uaaUrl.slice(0, end)}/oauth/token`;
   }
-  throw new Error('Missing tokenUrl or uaaUrl for SAML bearer exchange');
+  throw misconfigured(
+    authError.configuration({
+      case: 'saml-token-endpoint-missing',
+      fields: ['tokenUrl', 'uaaUrl'],
+    }),
+  );
+}
+
+/**
+ * The strategy listens, or listened, elsewhere than the declared ACS —
+ * the two addresses are diagnostics (origin and path only), never in the
+ * words.
+ */
+function acsMismatch(configured: string, used: string) {
+  return misconfigured(
+    authError.configuration(
+      { case: 'saml-acs-mismatch', fields: ['acsUrl'] },
+      { configuredUri: configured, strategyUri: used },
+    ),
+  );
 }
 
 /** What `getSamlAssertion` hands back: the wire payload, plus what it knows about the login. */
@@ -140,36 +194,34 @@ export interface SamlAssertionResult {
 
 export async function getSamlAssertion(
   config: Saml2CommonConfig,
+  attempt?: Pick<AttemptContext, 'signal' | 'exclusive'>,
 ): Promise<SamlAssertionResult> {
   const declaredAcs = config.acsUrl;
   let mintedRequestId: string | undefined;
 
-  const request = {
+  const request: AuthorizationRequest = {
     logger: config.logger,
+    // The attempt's signal: every waiter gone ends the login.
+    ...(attempt === undefined ? {} : { signal: attempt.signal }),
     buildAuthorizationUrl: async (redirectUri: string): Promise<string> => {
       // An IdP-initiated login sends no AuthnRequest, and without a pre-built
       // authorizationUrl the only URL this could produce is one carrying a
       // freshly minted request. Refused here, before any URL exists, so the
       // mistake surfaces before a browser opens rather than after a login.
       if (config.idpInitiated && !config.authorizationUrl) {
-        throw new ValidationError(
-          'SAML idpInitiated is true and no authorizationUrl is configured, ' +
-            'but the authorization strategy asked for an authorization URL: ' +
-            'the only one this package can build carries an AuthnRequest. ' +
-            'Configure the IdP-initiated SSO URL as authorizationUrl, or use a ' +
-            'strategy that does not call buildAuthorizationUrl.',
-          ['authorizationUrl'],
+        // The only URL this package can build carries an AuthnRequest.
+        throw misconfigured(
+          authError.configuration({
+            case: 'saml-idp-initiated-without-authorization-url',
+            fields: ['idpInitiated', 'authorizationUrl'],
+          }),
         );
       }
       // A declared ACS is registered with the IdP; the strategy must be
       // listening exactly there, and an ephemeral port cannot be.
       const acsUrl = declaredAcs ?? redirectUri;
       if (declaredAcs && declaredAcs !== redirectUri) {
-        throw new ValidationError(
-          `SAML acsUrl is ${declaredAcs}, but the authorization strategy is ` +
-            `listening on ${redirectUri}. They must match.`,
-          ['acsUrl'],
-        );
+        throw acsMismatch(declaredAcs, redirectUri);
       }
       const built = buildSamlAuthorizationUrl({
         idpSsoUrl: config.idpSsoUrl,
@@ -184,17 +236,14 @@ export async function getSamlAssertion(
   };
 
   const strategy = config.authorization;
-  const outcome = await strategy.authorize(
-    asContract<AuthorizationRequest>(request),
-  );
+  const authorize = () => strategy.authorize(request);
+  // The strategy holds an exclusive resource (a socket, a reader): it starts
+  // only once the previous attempt has released its own (the drain).
+  const outcome = await (attempt ? attempt.exclusive(authorize) : authorize());
   // The second net, for a strategy that never called the builder and so
   // never met the check inside it.
   if (declaredAcs && declaredAcs !== outcome.redirectUri) {
-    throw new ValidationError(
-      `SAML acsUrl is ${declaredAcs}, but the authorization strategy used ` +
-        `${outcome.redirectUri}. They must match.`,
-      ['acsUrl'],
-    );
+    throw acsMismatch(declaredAcs, outcome.redirectUri);
   }
 
   const requestId = resolveExpectedRequestId(config, mintedRequestId);
@@ -207,7 +256,7 @@ export async function getSamlAssertion(
 }
 
 /**
- * The ID `InResponseTo` must answer, from the three sources the spec allows:
+ * The ID `InResponseTo` must answer, from the three sources allowed:
  * minted, declared, or none by explicit `idpInitiated: true`. Anything else —
  * no ID and no declaration, or `idpInitiated` combined with an ID from either
  * of the other two sources — is a configuration error, not a validation
@@ -221,12 +270,13 @@ function resolveExpectedRequestId(
 
   if (config.idpInitiated) {
     if (mintedRequestId || declaredRequestId) {
-      throw new ValidationError(
-        'SAML idpInitiated is true, but a request ID was also minted or ' +
-          'configured (an authorization strategy called buildAuthorizationUrl, ' +
-          'or authnRequestId is set). An IdP-initiated login sends no request, ' +
-          'so an ID means the configuration describes two different logins.',
-        ['idpInitiated'],
+      // An ID minted (a strategy called buildAuthorizationUrl) or
+      // declared means the configuration describes two different logins.
+      throw misconfigured(
+        authError.configuration({
+          case: 'saml-idp-initiated-with-request-id',
+          fields: ['idpInitiated'],
+        }),
       );
     }
     return undefined;
@@ -234,13 +284,13 @@ function resolveExpectedRequestId(
 
   const requestId = mintedRequestId ?? declaredRequestId;
   if (!requestId) {
-    throw new ValidationError(
-      'Cannot validate InResponseTo: this login did not build its own AuthnRequest, ' +
-        'so authnRequestId must be configured — or, if the identity provider ' +
-        'starts this login itself, idpInitiated: true. This happens with a ' +
-        'pre-built authorizationUrl, or an authorization strategy that supplies an ' +
-        'assertion without asking for a URL.',
-      ['authnRequestId'],
+    // A pre-built authorizationUrl, or a strategy that supplies an
+    // assertion without asking for a URL.
+    throw misconfigured(
+      authError.configuration({
+        case: 'saml-in-response-to-undeclared',
+        fields: ['authnRequestId', 'idpInitiated'],
+      }),
     );
   }
   return requestId;

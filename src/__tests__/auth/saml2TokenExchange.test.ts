@@ -75,6 +75,6 @@ describe('refreshSamlBearerToken', () => {
 
     await expect(
       refreshSamlBearerToken('r', 'https://uaa/oauth/token', 'c', 's'),
-    ).rejects.toThrow('Refresh response missing access_token');
+    ).rejects.toThrow('the SAML token refresh returned no access_token');
   });
 });

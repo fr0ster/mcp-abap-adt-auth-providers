@@ -96,6 +96,37 @@ describe('parseXsdDateTime', () => {
     }
   });
 
+  // The shape, read character by character since the regular expression
+  // went (no regular expression over document text): each of these differs
+  // from a valid value in one place.
+  it.each([
+    ['a five-digit year', '20260-08-15T10:30:00Z'],
+    ['a three-digit year', '026-08-15T10:30:00Z'],
+    ['a one-digit month', '2026-8-15T10:30:00Z'],
+    ['a lower-case T', '2026-08-15t10:30:00Z'],
+    ['a space for T', '2026-08-15 10:30:00Z'],
+    ['a lower-case Z', '2026-08-15T10:30:00z'],
+    ['no zone', '2026-08-15T10:30:00'],
+    ['a fraction point without digits', '2026-08-15T10:30:00.Z'],
+    ['a comma for the fraction point', '2026-08-15T10:30:00,5Z'],
+    ['a non-ASCII digit', '2026-08-1\u0665T10:30:00Z'],
+    ['a full-width digit', '\uff12026-08-15T10:30:00Z'],
+    ['an offset without minutes', '2026-08-15T10:30:00+02'],
+    ['an offset without its colon', '2026-08-15T10:30:00+0200'],
+    ['trailing text', '2026-08-15T10:30:00Zx'],
+    ['a trailing newline', '2026-08-15T10:30:00Z\n'],
+    ['leading space', ' 2026-08-15T10:30:00Z'],
+    ['a sign before the year', '+2026-08-15T10:30:00Z'],
+  ])('refuses %s', (_name, value) => {
+    expect(parseXsdDateTime(value)).toBeNull();
+  });
+
+  it('accepts a long fraction, reading only its first three digits', () => {
+    expect(
+      parseXsdDateTime('2026-08-15T10:30:00.123456789012Z')?.toISOString(),
+    ).toBe('2026-08-15T10:30:00.123Z');
+  });
+
   it('refuses a missing value without throwing', () => {
     expect(parseXsdDateTime(null)).toBeNull();
     expect(parseXsdDateTime(undefined)).toBeNull();

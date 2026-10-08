@@ -1,6 +1,7 @@
 import { describe, expect, it, jest } from '@jest/globals';
 import { consoleDeviceCodePresenter } from '../../deviceCode/DeviceCodePresenter';
 import { OidcDeviceFlowProvider } from '../../providers/OidcDeviceFlowProvider';
+import { refreshThenLogin } from '../../renewal';
 
 const prompt = {
   verificationUri: 'https://idp/device',
@@ -40,7 +41,10 @@ describe('device-code presenter', () => {
   it('the provider requires a presenter and toConsole assembles one', () => {
     // @ts-expect-error presenter is required
     expect(() => new OidcDeviceFlowProvider({ clientId: 'c' })).toBeDefined();
-    const p = OidcDeviceFlowProvider.toConsole({ clientId: 'c' });
+    const p = OidcDeviceFlowProvider.toConsole({
+      renewal: refreshThenLogin(),
+      clientId: 'c',
+    });
     expect(
       typeof (p as unknown as { config: { presenter: { present: unknown } } })
         .config.presenter.present,

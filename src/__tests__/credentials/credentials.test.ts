@@ -8,7 +8,7 @@ import { CertificateAuthProvider } from '../../credentials/CertificateAuthProvid
 import { FileCertificateMaterialLoader } from '../../credentials/FileCertificateMaterialLoader';
 import { SamlAuthProvider } from '../../credentials/SamlAuthProvider';
 import { TokenAuthProvider } from '../../credentials/TokenAuthProvider';
-import { ValidationError } from '../../errors/TokenProviderErrors';
+import { configurationOf, thrownFrom, wordsOf } from '../helpers/minted';
 import { recordingTargets } from '../helpers/targets';
 
 const refusal = { at: 'request' as const, status: 401, error: {} };
@@ -166,23 +166,23 @@ describe('CertificateAuthProvider', () => {
     expect(t.logon.tls).toEqual([{ cert, key }]);
   });
 
-  it('a loader ValidationError gives the fixed wording with known field names; a foreign one gives its code only', async () => {
+  it("the loader's configuration failure is the refusal; a foreign one gives its code only", async () => {
     const own = new CertificateAuthProvider(
-      {
-        load: async () => {
-          throw new ValidationError('SECRET-MSG', ['certPath', 'certPfxPath']);
-        },
-      },
-      config,
+      new FileCertificateMaterialLoader(),
+      { ...config, certPath: 'SECRET-PATH', certPfxPath: 'SECRET-PFX' },
     );
-    await expect(own.prepare()).resolves.toEqual({
+    // The loader's configuration case, once a ValidationError
+    // answered with the moment's fallback.
+    const refused = await own.prepare();
+    expect(wordsOf(refused)).toEqual({
       ok: false,
       refusal: {
         reason:
-          'the provider configuration is incomplete or invalid: certPath, certPfxPath',
+          'certificate auth: provide either PEM (certPath + certKeyPath) or certPfxPath, not both',
         hint: 'check the provider configuration',
       },
     });
+    expect(JSON.stringify(refused)).not.toContain('SECRET');
     const fsError = Object.assign(
       new Error("ENOENT: no such file 'C:\\\\SECRET\\\\key.pem'"),
       { code: 'ENOENT' },
@@ -196,7 +196,7 @@ describe('CertificateAuthProvider', () => {
       config,
     );
     const outcome = await foreign.prepare();
-    expect(outcome).toEqual({
+    expect(wordsOf(outcome)).toEqual({
       ok: false,
       refusal: {
         reason: 'loading the certificate failed (unknown error, ENOENT)',
@@ -219,7 +219,7 @@ describe('CertificateAuthProvider', () => {
       p.establish(recordingTargets({ acceptsTls: false }).logonTarget),
     ).resolves.toMatchObject({
       ok: false,
-      refusal: { reason: 'this wire does not take TLS material' },
+      refusal: { reason: 'this wire carries no TLS material (RFC)' },
     });
     const outcome = await p.establish(broken().logonTarget);
     expect(outcome.ok).toBe(false);
@@ -247,18 +247,27 @@ describe('CertificateAuthProvider.fromFiles', () => {
 });
 
 describe('FileCertificateMaterialLoader', () => {
-  it('configuration errors are ValidationError', async () => {
+  // Configuration failures, no longer ValidationError.
+  it('configuration errors are configuration failures', async () => {
     const loader = new FileCertificateMaterialLoader();
-    await expect(
-      loader.load({
-        url: 'h',
-        authType: 'certificate',
-        certPath: 'a',
-        certPfxPath: 'b',
-      } as ISapConfig),
-    ).rejects.toBeInstanceOf(ValidationError);
-    await expect(
-      loader.load({ url: 'h', authType: 'certificate' } as ISapConfig),
-    ).rejects.toBeInstanceOf(ValidationError);
+    expect(
+      configurationOf(
+        await thrownFrom(() =>
+          loader.load({
+            url: 'h',
+            authType: 'certificate',
+            certPath: 'a',
+            certPfxPath: 'b',
+          } as ISapConfig),
+        ),
+      ).case,
+    ).toBe('certificate-pem-and-pfx');
+    expect(
+      configurationOf(
+        await thrownFrom(() =>
+          loader.load({ url: 'h', authType: 'certificate' } as ISapConfig),
+        ),
+      ).case,
+    ).toBe('certificate-files-missing');
   });
 });

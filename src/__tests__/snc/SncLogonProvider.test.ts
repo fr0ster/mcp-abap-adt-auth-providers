@@ -1,9 +1,9 @@
 import { describe, expect, it } from '@jest/globals';
-import { ValidationError } from '../../errors/TokenProviderErrors';
 import { DefaultSncLibraryLocator } from '../../snc/DefaultSncLibraryLocator';
 import { SecureLoginClientProbe } from '../../snc/SecureLoginClientProbe';
 import { SncLogonProvider } from '../../snc/SncLogonProvider';
 import type { SncSystem } from '../../snc/SncSystem';
+import { configurationOf, mintedRefusal, wordsOf } from '../helpers/minted';
 import { recordingTargets } from '../helpers/targets';
 import { fakeSystem, peLibrary } from './fakeSystem';
 
@@ -48,14 +48,18 @@ describe('construction', () => {
     probes: [],
   });
   it('requires partnerName', () => {
-    expect(
-      () => new SncLogonProvider({ partnerName: ' ', ...parts(machine()) }),
-    ).toThrow(ValidationError);
+    let thrown: unknown;
+    try {
+      new SncLogonProvider({ partnerName: ' ', ...parts(machine()) });
+    } catch (error) {
+      thrown = error;
+    }
+    expect(configurationOf(thrown).case).toBe('snc-partner-name-missing');
   });
   it('names partnerName with an ASCII apostrophe', () => {
     expect(
       () => new SncLogonProvider({ partnerName: ' ', ...parts(machine()) }),
-    ).toThrow("SncLogonProvider needs partnerName — the system's SNC name.");
+    ).toThrow("SncLogonProvider needs partnerName — the system's SNC name");
   });
   it.each(['0', '4', '5', '6', '7', '10', 'max', ''])(
     'refuses qop %p',
@@ -133,7 +137,7 @@ describe('the four moments', () => {
       ),
     ).resolves.toMatchObject({
       ok: false,
-      refusal: { reason: 'this wire does not take logon parameters' },
+      refusal: { reason: 'this wire takes no logon parameters (HTTP)' },
     });
   });
   it('a throwing target is an Oops', async () => {
@@ -160,7 +164,7 @@ describe('the four moments', () => {
   });
   it('no candidate at all → the refusal says so; the hint needs no logger', async () => {
     const outcome = await snc(fakeSystem({ platform: 'linux' })).prepare();
-    expect(outcome).toEqual({
+    expect(wordsOf(outcome)).toEqual({
       ok: false,
       refusal: {
         reason:
@@ -169,19 +173,23 @@ describe('the four moments', () => {
       },
     });
   });
-  it('explicit sncLib unusable → that one path and its reason', async () => {
+  // The path is in the diagnostics, not the words.
+  it('explicit sncLib unusable → that one source and its reason', async () => {
     const outcome = await snc(machine(), {
       sncLib: 'C:\\nope\\sapcrypto.dll',
     }).prepare();
-    expect(outcome).toEqual({
+    expect(wordsOf(outcome)).toEqual({
       ok: false,
       refusal: {
-        reason:
-          'no usable SNC library was found: sncLib C:\\nope\\sapcrypto.dll (missing)',
+        reason: 'no usable SNC library was found: sncLib (missing)',
         hint: 'set sncLib to the SNC (GSS) library of your SNC product',
       },
     });
+    expect(mintedRefusal(outcome).diagnostics).toEqual({
+      candidatePaths: ['C:\\nope\\sapcrypto.dll'],
+    });
   });
+  // The paths are in the diagnostics, not the words.
   it('automatic → every candidate, each with its fixed reason', async () => {
     const X86 =
       'C:\\Program Files (x86)\\SAP\\FrontEnd\\SecureLogin\\lib\\sapcrypto.dll';
@@ -196,8 +204,12 @@ describe('the four moments', () => {
     expect(outcome).toMatchObject({
       ok: false,
       refusal: {
-        reason: `no usable SNC library was found: SNC_LIB_64 ${TXT} (not a library); SNC_LIB ${X86} (wrong architecture); registry ${SLC} (missing)`,
+        reason:
+          'no usable SNC library was found: SNC_LIB_64 (not a library); SNC_LIB (wrong architecture); registry (missing)',
       },
+    });
+    expect(mintedRefusal(outcome).diagnostics).toEqual({
+      candidatePaths: [TXT, X86, SLC],
     });
   });
   it('a custom locator throwing a foreign error lends no message', async () => {
@@ -239,10 +251,14 @@ describe('the four moments', () => {
     // A log sink that is down changes no answer.
     const usable = make(machine());
     await expect(usable.prepare()).resolves.toEqual({ ok: true });
+    // The path is a diagnostic, never a word.
     await expect(
       make(machine(), 'C:\\nope.dll').prepare(),
     ).resolves.toMatchObject({
-      refusal: { reason: expect.stringMatching(/sncLib C:\\nope\.dll/) },
+      refusal: {
+        reason: 'no usable SNC library was found: sncLib (missing)',
+        diagnostics: { candidatePaths: ['C:\\nope.dll'] },
+      },
     });
   });
   it('a custom locator returning a library without archs does not throw', async () => {
@@ -253,11 +269,16 @@ describe('the four moments', () => {
       logger: { debug() {}, info() {}, warn() {}, error() {} },
     });
     await expect(p.prepare()).resolves.toEqual({ ok: true });
+    // The library is a diagnostic.
     await expect(
       p.rejected({ at: 'logon', error: 'SNCERR_INIT' }),
     ).resolves.toMatchObject({
       ok: false,
-      refusal: { reason: expect.stringMatching(/gsskrb5\.dll/) },
+      refusal: {
+        reason:
+          'the RFC SDK could not initialise the SNC library as its SNC library (SNCERR_INIT)',
+        diagnostics: { library: KRB },
+      },
     });
   });
   it('a probe that throws is skipped, not a refusal', async () => {
@@ -281,7 +302,7 @@ describe('rejected', () => {
   it('A2200019 → the fixed reason, asserted', async () => {
     const p = snc(machine());
     await p.prepare();
-    await expect(p.rejected({ at: 'logon', error: sdkError })).resolves.toEqual(
+    expect(wordsOf(await p.rejected({ at: 'logon', error: sdkError }))).toEqual(
       {
         ok: false,
         refusal: {
@@ -292,9 +313,9 @@ describe('rejected', () => {
     );
   });
   it('before prepare(): the generic hint, no throw', async () => {
-    await expect(
-      snc(machine()).rejected({ at: 'logon', error: sdkError }),
-    ).resolves.toEqual({
+    expect(
+      wordsOf(await snc(machine()).rejected({ at: 'logon', error: sdkError })),
+    ).toEqual({
       ok: false,
       refusal: {
         reason: 'the SNC library has no credential to present (A2200019)',
@@ -313,12 +334,12 @@ describe('rejected', () => {
     });
     await p.prepare();
     const outcome = await p.rejected({ at: 'logon', error: sdkError });
+    // "The SNC library" in the hint, the path in diagnostics.
     expect(outcome).toMatchObject({
       ok: false,
       refusal: {
-        hint: expect.stringMatching(
-          /^make sure the SNC product behind .*sapcrypto\.dll/,
-        ),
+        hint: 'make sure the SNC product behind the SNC library is logged on',
+        diagnostics: { library: SLC },
       },
     });
     expect(JSON.stringify(outcome)).not.toMatch(/SECRET|Secure Login Client/);
@@ -340,16 +361,20 @@ describe('rejected', () => {
       },
     });
   });
-  it('another library: names it, not the Secure Login Client', async () => {
+  // The library is named in diagnostics, not in the words.
+  it('another library: names it in diagnostics, not the Secure Login Client', async () => {
     const p = snc(machine(), { sncLib: KRB });
     await p.prepare();
-    const outcome = JSON.stringify(
+    const refused = mintedRefusal(
       await p.rejected({ at: 'logon', error: sdkError }),
     );
-    expect(outcome).toMatch(/gsskrb5\.dll/);
-    expect(outcome).not.toMatch(/Secure Login Client/);
+    expect(refused.diagnostics).toEqual({ library: KRB });
+    expect(`${refused.reason} ${refused.hint}`).not.toMatch(
+      /gsskrb5|Secure Login Client/,
+    );
   });
-  it('SNCERR_INIT names the library and its architecture', async () => {
+  // The architecture stays a word, the path is a diagnostic.
+  it('SNCERR_INIT names the architecture; the library a diagnostic', async () => {
     const p = snc(machine());
     await p.prepare();
     await expect(
@@ -359,33 +384,46 @@ describe('rejected', () => {
       }),
     ).resolves.toMatchObject({
       ok: false,
-      refusal: { reason: expect.stringMatching(/sapcrypto\.dll \(x64\)/) },
+      refusal: {
+        reason:
+          'the RFC SDK could not initialise the SNC library (x64) as its SNC library (SNCERR_INIT)',
+        diagnostics: { library: SLC },
+      },
     });
   });
   it('anything else: fixed reason, an allowlisted key only', async () => {
     const p = snc(machine());
     await p.prepare();
-    await expect(
-      p.rejected({
-        at: 'logon',
-        error: {
-          key: 'RFC_LOGON_FAILURE',
-          message: 'SECRET-SDK',
-          detail: 'SECRET',
-        },
-      }),
-    ).resolves.toEqual({
+    expect(
+      wordsOf(
+        await p.rejected({
+          at: 'logon',
+          error: {
+            key: 'RFC_LOGON_FAILURE',
+            message: 'SECRET-SDK',
+            detail: 'SECRET',
+          },
+        }),
+      ),
+    ).toEqual({
       ok: false,
       refusal: { reason: 'SNC logon refused (RFC_LOGON_FAILURE)' },
     });
-    await expect(
-      p.rejected({
-        at: 'logon',
-        error: { key: 'SECRET_TOKEN_KEY', message: 'x' },
-      }),
-    ).resolves.toEqual({ ok: false, refusal: { reason: 'SNC logon refused' } });
-    await expect(
-      p.rejected({ at: 'logon', error: new Error('SECRET-IN-MESSAGE') }),
-    ).resolves.toEqual({ ok: false, refusal: { reason: 'SNC logon refused' } });
+    expect(
+      wordsOf(
+        await p.rejected({
+          at: 'logon',
+          error: { key: 'SECRET_TOKEN_KEY', message: 'x' },
+        }),
+      ),
+    ).toEqual({ ok: false, refusal: { reason: 'SNC logon refused' } });
+    expect(
+      wordsOf(
+        await p.rejected({
+          at: 'logon',
+          error: new Error('SECRET-IN-MESSAGE'),
+        }),
+      ),
+    ).toEqual({ ok: false, refusal: { reason: 'SNC logon refused' } });
   });
 });

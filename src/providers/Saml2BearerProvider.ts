@@ -4,15 +4,15 @@
  * Exchanges SAMLResponse for OAuth2 access token.
  */
 
+import type { AttemptContext } from '@mcp-abap-adt/auth-errors';
 import type {
-  AssertionContext,
   IAssertionValidator,
   ITokenResult,
   OAuth2GrantType,
 } from '@mcp-abap-adt/interfaces-auth';
 import { AUTH_TYPE_SAML2_BEARER } from '@mcp-abap-adt/interfaces-auth';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
-import { asContract } from '../auth/contractShape';
+import { ownOptions } from '../auth/configuration';
 import {
   exchangeSamlAssertion,
   refreshSamlBearerToken,
@@ -20,12 +20,14 @@ import {
 import { toBearerAssertion } from '../auth/samlBearerAssertion';
 import { samlCallbackStrategy } from '../strategies';
 import { createSignedAssertionValidator } from '../validation/assertionValidator';
-import { defaultReplayStore } from '../validation/inMemoryReplayStore';
+import { validateAssertion } from '../validation/samlRefusal';
 import {
   BaseTokenProvider,
   type ClientAuthenticationConfig,
+  refreshTokenRefused,
   type TokenProviderHooks,
 } from './BaseTokenProvider';
+import type { LoginFactoryOptions } from './LoginFactoryOptions';
 import type {
   Saml2BearerExchangeConfig,
   Saml2CommonConfig,
@@ -35,6 +37,7 @@ import {
   checkAssertionValidator,
   getSamlAssertion,
   resolveTokenUrl,
+  samlTrustOf,
   validateSamlConfig,
 } from './saml2Utils';
 
@@ -57,7 +60,9 @@ export class Saml2BearerProvider extends BaseTokenProvider {
   private config: Saml2BearerProviderConfig;
   private readonly validator: IAssertionValidator;
 
-  constructor(config: Saml2BearerProviderConfig) {
+  constructor(options: Saml2BearerProviderConfig) {
+    // Read once as own data (a hostile object throws nothing of its own).
+    const config = ownOptions<Saml2BearerProviderConfig>(options);
     super(config);
     // A pre-built URL with no declared ACS cannot be verified against whatever
     // the strategy binds, so it is refused here rather than at login time.
@@ -85,15 +90,17 @@ export class Saml2BearerProvider extends BaseTokenProvider {
       'authorization' | 'assertionValidator'
     >,
     trust: SamlTrust,
-    options: { timeoutMs?: number } = {},
+    options: LoginFactoryOptions = {},
   ): Saml2BearerProvider {
+    // Read once as own data, like every option (a hostile object throws
+    // nothing of its own).
     return new Saml2BearerProvider({
-      ...config,
-      authorization: samlCallbackStrategy({ timeoutMs: options.timeoutMs }),
+      ...ownOptions<typeof config>(config),
+      authorization: samlCallbackStrategy({
+        signal: ownOptions<LoginFactoryOptions>(options).signal,
+      }),
       assertionValidator: createSignedAssertionValidator({
-        idpCertificates: trust.idpCertificates,
-        clockSkewMs: trust.clockSkewMs,
-        replayStore: trust.replayStore ?? defaultReplayStore,
+        ...samlTrustOf(trust),
       }),
     });
   }
@@ -102,21 +109,21 @@ export class Saml2BearerProvider extends BaseTokenProvider {
     return AUTH_TYPE_SAML2_BEARER;
   }
 
-  protected async performLogin(): Promise<ITokenResult> {
-    const { payload, requestId, acsUrl } = await getSamlAssertion(this.config);
+  protected async performLogin(attempt: AttemptContext): Promise<ITokenResult> {
+    const { payload, requestId, acsUrl } = await getSamlAssertion(
+      this.config,
+      attempt,
+    );
     // Validation establishes trust before anything reaches the token
     // endpoint; it does not change what is sent beyond toBearerAssertion's
     // conversion below.
-    await this.validator.validate(
-      payload,
-      asContract<AssertionContext>({
-        expectedInResponseTo: requestId,
-        audience: this.config.spEntityId,
-        acsUrl,
-        expectedIssuer: this.config.idpEntityId,
-        logger: this.logger,
-      }),
-    );
+    await validateAssertion(this.validator, payload, {
+      expectedInResponseTo: requestId,
+      audience: this.config.spEntityId,
+      acsUrl,
+      expectedIssuer: this.config.idpEntityId,
+      logger: this.logger,
+    });
     const tokenUrl = resolveTokenUrl(this.config);
     // RFC 7522 takes one base64url Assertion; a login delivers the whole
     // Response in standard base64, which a conforming endpoint refuses.
@@ -127,15 +134,16 @@ export class Saml2BearerProvider extends BaseTokenProvider {
       this.config.clientSecret,
       this.logger,
       await this.requestAuth(),
+      this.siteOptions(attempt.signal),
     );
 
-    return asContract<ITokenResult>({
+    return {
       authorizationToken: tokens.accessToken,
       refreshToken: tokens.refreshToken,
       authType: AUTH_TYPE_SAML2_BEARER,
       expiresIn: tokens.expiresIn,
       tokenType: 'jwt',
-    });
+    };
   }
 
   /**
@@ -143,26 +151,31 @@ export class Saml2BearerProvider extends BaseTokenProvider {
    * thrown rather than handled: `BaseTokenProvider.getTokens()` drops the
    * refresh token and falls back to `performLogin()`.
    */
-  protected async performRefresh(): Promise<ITokenResult> {
-    if (!this.refreshToken) {
-      throw new Error('Refresh token is required for refresh');
+  protected async performRefresh(
+    refreshToken: string,
+    _signal: AbortSignal,
+    dispatched: () => void,
+  ): Promise<ITokenResult> {
+    if (!refreshToken) {
+      throw refreshTokenRefused();
     }
 
     const tokens = await refreshSamlBearerToken(
-      this.refreshToken,
+      refreshToken,
       resolveTokenUrl(this.config),
       this.config.clientId,
       this.config.clientSecret,
       this.logger,
       await this.requestAuth(),
+      this.refreshSiteOptions(dispatched),
     );
 
-    return asContract<ITokenResult>({
+    return {
       authorizationToken: tokens.accessToken,
-      refreshToken: tokens.refreshToken || this.refreshToken,
+      refreshToken: tokens.refreshToken || refreshToken,
       authType: AUTH_TYPE_SAML2_BEARER,
       expiresIn: tokens.expiresIn,
       tokenType: 'jwt',
-    });
+    };
   }
 }

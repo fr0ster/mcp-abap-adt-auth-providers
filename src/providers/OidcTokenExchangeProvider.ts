@@ -2,19 +2,24 @@
  * OIDC Token Exchange Provider
  */
 
+import type { AttemptContext } from '@mcp-abap-adt/auth-errors';
 import type {
   ITokenResult,
   OAuth2GrantType,
 } from '@mcp-abap-adt/interfaces-auth';
 import { AUTH_TYPE_USER_TOKEN } from '@mcp-abap-adt/interfaces-auth';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
-import { asContract } from '../auth/contractShape';
+import {
+  oidcEndpointMissing,
+  oidcIssuerRequired,
+  ownOptions,
+} from '../auth/configuration';
 import { discoverOidc, mtlsAlias } from '../auth/oidcDiscovery';
 import { tokenExchange } from '../auth/oidcToken';
-import { RefreshError } from '../errors/TokenProviderErrors';
 import {
   BaseTokenProvider,
   type ClientAuthenticationConfig,
+  refreshTokenRefused,
   type TokenProviderHooks,
 } from './BaseTokenProvider';
 
@@ -44,7 +49,9 @@ export interface OidcTokenExchangeProviderConfig
 export class OidcTokenExchangeProvider extends BaseTokenProvider {
   private config: OidcTokenExchangeProviderConfig;
 
-  constructor(config: OidcTokenExchangeProviderConfig) {
+  constructor(options: OidcTokenExchangeProviderConfig) {
+    // Read once as own data (a hostile object throws nothing of its own).
+    const config = ownOptions<OidcTokenExchangeProviderConfig>(options);
     super(config);
     this.config = config;
     this.logger = config.logger;
@@ -62,24 +69,26 @@ export class OidcTokenExchangeProvider extends BaseTokenProvider {
     return AUTH_TYPE_USER_TOKEN;
   }
 
-  protected async performLogin(): Promise<ITokenResult> {
+  protected async performLogin(attempt: AttemptContext): Promise<ITokenResult> {
     if (!this.config.tokenEndpoint && !this.config.issuerUrl) {
-      throw new Error('OIDC issuerUrl is required when discovery is used');
+      throw oidcIssuerRequired();
     }
     let discovery: Awaited<ReturnType<typeof discoverOidc>> | null = null;
     // A token endpoint not given ('' included) comes from discovery.
     if (!this.config.tokenEndpoint) {
       if (!this.config.issuerUrl) {
-        throw new Error('OIDC issuerUrl is required when discovery is used');
+        throw oidcIssuerRequired();
       }
-      discovery = await discoverOidc(this.config.issuerUrl, this.logger);
+      discovery = await discoverOidc(
+        this.config.issuerUrl,
+        this.logger,
+        attempt.signal,
+      );
     }
     const tokenEndpoint =
       this.config.tokenEndpoint || discovery?.token_endpoint;
     if (!tokenEndpoint) {
-      throw new Error(
-        'OIDC token endpoint is required (tokenEndpoint or discovery)',
-      );
+      throw oidcEndpointMissing('tokenEndpoint');
     }
     const tokens = await tokenExchange(
       tokenEndpoint,
@@ -97,15 +106,16 @@ export class OidcTokenExchangeProvider extends BaseTokenProvider {
           ? undefined
           : mtlsAlias(discovery, 'token_endpoint'),
       ),
+      this.siteOptions(attempt.signal),
     );
 
-    return asContract<ITokenResult>({
+    return {
       authorizationToken: tokens.accessToken,
       refreshToken: tokens.refreshToken,
       authType: AUTH_TYPE_USER_TOKEN,
       expiresIn: tokens.expiresIn,
       tokenType: 'jwt',
-    });
+    };
   }
 
   /** No refresh grant: the base logs in once instead of refreshing. */
@@ -114,6 +124,6 @@ export class OidcTokenExchangeProvider extends BaseTokenProvider {
   }
 
   protected async performRefresh(): Promise<ITokenResult> {
-    throw new RefreshError('token exchange has no refresh grant');
+    throw refreshTokenRefused();
   }
 }

@@ -6,6 +6,8 @@
 import { describe, expect, it, jest } from '@jest/globals';
 import { DOMParser } from '@xmldom/xmldom';
 import { toBearerAssertion } from '../../auth/samlBearerAssertion';
+import { parseStrictXml } from '../../auth/strictXml';
+import { expectSamlRefusal, thrownBy } from '../helpers/samlRefusal';
 
 const ASSERTION_NS = 'urn:oasis:names:tc:SAML:2.0:assertion';
 
@@ -102,39 +104,54 @@ describe('toBearerAssertion', () => {
   });
 
   it('refuses a Response carrying no Assertion', () => {
-    expect(() => toBearerAssertion(b64(response('')))).toThrow(
-      'SAML Response carries no Assertion',
+    expectSamlRefusal(
+      thrownBy(() => toBearerAssertion(b64(response('')))),
+      'no-assertion',
     );
   });
 
+  // The count is a fact, and the words name it.
   it('refuses a Response carrying more than one Assertion', () => {
-    expect(() =>
-      toBearerAssertion(b64(response(assertion() + assertion()))),
-    ).toThrow('SAML Response carries 2 Assertions; a bearer grant takes one');
+    const error = expectSamlRefusal(
+      thrownBy(() =>
+        toBearerAssertion(b64(response(assertion() + assertion()))),
+      ),
+      'several-assertions',
+      { facts: { count: 2 } },
+    );
+    expect(error.reason).toContain(
+      'SAML Response carries 2 Assertions; a bearer grant takes one',
+    );
   });
 
   it('refuses an encrypted Assertion rather than sending something UAA cannot read', () => {
     const encrypted = response(
       `<saml2:EncryptedAssertion><xenc:EncryptedData xmlns:xenc="http://www.w3.org/2001/04/xmlenc#"/></saml2:EncryptedAssertion>`,
     );
-    expect(() => toBearerAssertion(b64(encrypted))).toThrow(
-      'encrypted Assertions are not supported',
+    const error = expectSamlRefusal(
+      thrownBy(() => toBearerAssertion(b64(encrypted))),
+      'only-encrypted-assertion',
     );
+    expect(error.reason).toContain('encrypted Assertions are not supported');
   });
 
   it('refuses a document that is neither a Response nor an Assertion', () => {
-    expect(() =>
-      toBearerAssertion(
-        b64(
-          '<samlp:LogoutRequest xmlns:samlp="urn:oasis:names:tc:SAML:2.0:protocol"/>',
+    expectSamlRefusal(
+      thrownBy(() =>
+        toBearerAssertion(
+          b64(
+            '<samlp:LogoutRequest xmlns:samlp="urn:oasis:names:tc:SAML:2.0:protocol"/>',
+          ),
         ),
       ),
-    ).toThrow('neither a SAML Response nor an Assertion');
+      'payload-not-saml',
+    );
   });
 
   it('refuses a payload that is not base64-encoded XML', () => {
-    expect(() => toBearerAssertion('not-xml-at-all')).toThrow(
-      'not base64-encoded XML',
+    expectSamlRefusal(
+      thrownBy(() => toBearerAssertion('not-xml-at-all')),
+      'payload-not-base64-xml',
     );
   });
   // Same parser rule as the validator: any XML fault is a refusal, and the
@@ -145,33 +162,51 @@ describe('toBearerAssertion', () => {
     );
     try {
       const recoverable = `<saml:Assertion xmlns:saml="${ASSERTION_NS}" ID="_a">&bogus;</saml:Assertion>`;
-      expect(() =>
-        toBearerAssertion(Buffer.from(recoverable, 'utf8').toString('base64')),
-      ).toThrow('not well-formed XML');
+      expectSamlRefusal(
+        thrownBy(() =>
+          toBearerAssertion(
+            Buffer.from(recoverable, 'utf8').toString('base64'),
+          ),
+        ),
+        'payload-not-well-formed',
+      );
       for (const spy of spies) expect(spy).not.toHaveBeenCalled();
     } finally {
       for (const spy of spies) spy.mockRestore();
     }
   });
 
-  // The parser's message quotes the document — here an element name — so it
-  // is quoted and cut like every other document value in a message.
-  it('quotes and cuts the parser message for XML that is not well-formed', () => {
+  // The parser's message quotes the document — here an element
+  // name — and none of it reaches the error: not the words, not a
+  // diagnostic (the rule has none), not the failure's message.
+  it('says nothing of the parser message for XML that is not well-formed', () => {
     const name = 'x'.repeat(100);
-    let thrown: Error | undefined;
-    try {
+    const thrown = thrownBy(() =>
       toBearerAssertion(
         Buffer.from(`<${name}><y></${name}>`, 'utf8').toString('base64'),
-      );
-    } catch (error) {
-      thrown = error as Error;
-    }
-    expect(
-      thrown?.message.startsWith(
-        'SAML bearer payload is not well-formed XML: "',
       ),
-    ).toBe(true);
-    expect(thrown?.message).toContain('…"');
-    expect(thrown?.message).not.toContain(name);
+    );
+    const error = expectSamlRefusal(thrown, 'payload-not-well-formed');
+    expect(error.reason).toBe(
+      'the SAML assertion was refused (document): SAML bearer payload is not well-formed XML',
+    );
+    expect(JSON.stringify(thrown)).not.toContain('xxxx');
+    expect(String(thrown)).not.toContain('xxxx');
+  });
+});
+
+/** The strict parser's own refusal, with no parser text. */
+describe('parseStrictXml', () => {
+  it.each([
+    ['an unterminated document', '<a'],
+    ['an undeclared entity the parser would repair', '<a>&secret-entity;</a>'],
+    ['a tag mismatch', '<abc></xyz>'],
+    ['no root element', 'not xml'],
+    ['a redefined attribute', '<a secret="1" secret="2"/>'],
+  ])('refuses %s with not-xml, naming nothing of it', (_name, xml) => {
+    const thrown = thrownBy(() => parseStrictXml(xml));
+    expectSamlRefusal(thrown, 'not-xml');
+    expect(JSON.stringify(thrown)).not.toMatch(/secret|xyz|abc|entity/);
+    expect(String(thrown)).not.toMatch(/secret|xyz|abc|entity/);
   });
 });

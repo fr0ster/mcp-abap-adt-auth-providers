@@ -7,7 +7,10 @@
 
 import { beforeEach, describe, expect, it, jest } from '@jest/globals';
 import axios from 'axios';
-import { exchangeCodeForToken } from '../../auth/browserAuth';
+import {
+  exchangeCodeForToken,
+  getJwtAuthorizationUrl,
+} from '../../auth/browserAuth';
 import { getTokenWithClientCredentials } from '../../auth/clientCredentialsAuth';
 import {
   exchangeAuthorizationCode,
@@ -67,30 +70,30 @@ function sentByPost(): Sent {
 }
 
 /** The request of `axios(config)`. */
-function sentByConfig(expectTimeout = false): Sent & { timeout?: number } {
+function sentByConfig(): Sent {
   expect(mockedAxios).toHaveBeenCalledTimes(1);
   const config = mockedAxios.mock.calls[0]![0] as {
     url: string;
     method: string;
     data: string;
     headers: Record<string, string>;
-    timeout?: number;
     maxRedirects: number;
   };
-  // The whole config object: any added key (httpsAgent, ...) fails, and
-  // `timeout` is present exactly where today's code sets it.
-  expect(Object.keys(config).sort()).toEqual(
-    expectTimeout
-      ? ['data', 'headers', 'maxRedirects', 'method', 'timeout', 'url']
-      : ['data', 'headers', 'maxRedirects', 'method', 'url'],
-  );
+  // The whole config object: any added key (httpsAgent, a timeout, ...)
+  // fails — no request carries a timeout of this package's choosing.
+  expect(Object.keys(config).sort()).toEqual([
+    'data',
+    'headers',
+    'maxRedirects',
+    'method',
+    'url',
+  ]);
   expect(config.maxRedirects).toBe(0);
   return {
     url: config.url,
     method: config.method,
     body: Object.fromEntries(new URLSearchParams(config.data)),
     headers: config.headers,
-    ...(config.timeout === undefined ? {} : { timeout: config.timeout }),
   };
 }
 
@@ -104,7 +107,7 @@ describe('token request shapes, as sent today', () => {
   describe('clientCredentialsAuth', () => {
     it('with a secret: client_id and client_secret in the body, no Authorization', async () => {
       await getTokenWithClientCredentials('https://uaa', 'cid', 'sec');
-      const sent = sentByConfig(true);
+      const sent = sentByConfig();
       expect(sent.url).toBe('https://uaa/oauth/token');
       expect(sent.method).toBe('post');
       expect(sent.body).toEqual({
@@ -114,7 +117,6 @@ describe('token request shapes, as sent today', () => {
       });
       expect(sent.headers).toEqual({ 'Content-Type': FORM });
       expect(sent.headers.Authorization).toBeUndefined();
-      expect(sent.timeout).toBe(30000);
     });
   });
 
@@ -194,6 +196,60 @@ describe('token request shapes, as sent today', () => {
       });
       expect(sent.headers).toEqual({
         Authorization: basic('cid:undefined'),
+        'Content-Type': FORM,
+      });
+    });
+  });
+
+  describe('browserAuth: the UAA login bound by state and PKCE', () => {
+    it('the URL it builds carries state, code_challenge and S256', () => {
+      const url = new URL(
+        getJwtAuthorizationUrl(
+          {
+            uaaUrl: 'https://uaa',
+            uaaClientId: 'cid',
+          } as Parameters<typeof getJwtAuthorizationUrl>[0],
+          'http://localhost:61001/callback',
+          { state: 'the-state', codeChallenge: 'the-challenge' },
+        ),
+      );
+      expect(`${url.origin}${url.pathname}`).toBe(
+        'https://uaa/oauth/authorize',
+      );
+      expect(Object.fromEntries(url.searchParams)).toEqual({
+        client_id: 'cid',
+        redirect_uri: 'http://localhost:61001/callback',
+        response_type: 'code',
+        state: 'the-state',
+        code_challenge: 'the-challenge',
+        code_challenge_method: 'S256',
+      });
+    });
+
+    it('the exchange sends the code_verifier, beside the Basic header', async () => {
+      await exchangeCodeForToken(
+        {
+          uaaUrl: 'https://uaa',
+          uaaClientId: 'cid',
+          uaaClientSecret: 'sec',
+        } as Parameters<typeof exchangeCodeForToken>[0],
+        'the-code',
+        'http://localhost:61001/callback',
+        undefined,
+        undefined,
+        undefined,
+        'the-verifier',
+      );
+      const sent = sentByConfig();
+      expect(sent.url).toBe('https://uaa/oauth/token');
+      expect(sent.body).toEqual({
+        grant_type: 'authorization_code',
+        code: 'the-code',
+        redirect_uri: 'http://localhost:61001/callback',
+        code_verifier: 'the-verifier',
+      });
+      expect(sent.headers).toEqual({
+        Authorization: basic('cid:sec'),
         'Content-Type': FORM,
       });
     });
@@ -400,6 +456,26 @@ describe('token request shapes, as sent today', () => {
         expect(sent.headers).toEqual({
           'Content-Type': FORM,
           Authorization: basic('cid:'),
+        });
+      });
+    });
+
+    describe('authorization code without a verifier (no URL was built)', () => {
+      it('sends no code_verifier', async () => {
+        await exchangeAuthorizationCode(
+          endpoint,
+          'cid',
+          undefined,
+          'the-code',
+          'http://localhost:61001/callback',
+          undefined,
+        );
+        const sent = sentByPost();
+        expect(sent.body).toEqual({
+          grant_type: 'authorization_code',
+          code: 'the-code',
+          redirect_uri: 'http://localhost:61001/callback',
+          client_id: 'cid',
         });
       });
     });

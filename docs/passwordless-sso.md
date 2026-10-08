@@ -219,9 +219,44 @@ recipe and no implicit default (Inference, design).
   product probe applies to it, and hands `RfcTransport` the logon
   parameters — it opens no connection itself and depends on neither
   `@mcp-abap-adt/sap-rfc-lite` nor `@mcp-abap-adt/connection`. An unusable
-  library is an Oops naming each candidate tried: its source, its path and
-  a fixed reason (missing, not a library, wrong architecture). See
+  library is an Oops naming each candidate tried: its source and a fixed
+  reason (missing, not a library, wrong architecture) in the words, its path
+  as a diagnostic beside them (6.0.0). The registry lookup has no timeout of
+  its own: it waits for `reg.exe`, or for the provider's signal, whose abort
+  kills it. That abort is tested with a real child process on a POSIX
+  system, and the parsing of `reg.exe`'s output with written samples of it;
+  both were measured on a Windows host (2026-10-07, Windows 11 x64, Secure
+  Login Client): the library found through the real `reg.exe`, and an abort
+  answering `aborted` with no `reg.exe` left running. Localised `reg.exe`
+  output is not covered (Inference until measured). See
   [the README](README.md#passwordless-rfc-logon-snc).
+
+  **Measured on a Windows host, 2026-10-07** (Windows 11 10.0.26200 x64,
+  Node 24.19.0; SAP Secure Login Client with a Kerberos profile; SNC over
+  RFC to an application server; SAP NW RFC SDK 7.50 x64; a hand-run check
+  script, removed after the run — it is in the git history):
+  - *Registry* (Measured): the SNC library found through the real `reg.exe`
+    under `HKLM\Software\SAP\SecureLogin`, value `InstallPath64`:
+    `sapcrypto.dll`, x64.
+  - *Abort* (Measured): aborted while `reg.exe` ran, both
+    `nodeSncSystem().readRegistryValue` and `prepare()` answered
+    `interactive-login` / `aborted`; the `reg.exe` child ended with
+    `SIGTERM`, and none was left running.
+  - *Logon* (Measured): `prepare()` Ok; the logon through the Secure Login
+    Client succeeded; `RFC_PING` answered and `STFC_CONNECTION` echoed its
+    text.
+  - *Wrong partner name* (Measured): refused — the SDK answered
+    `RFC_CLOSED` with no GSS code the provider explains, so `rejected()`
+    answered `system-refused` / `rfc-failure` (rule 5), not an `snc`
+    refusal.
+  - *Client stopped* (Measured; three interactive runs, the client exited
+    each time): `prepare()` Ok with the client stopped. Twice the library
+    started the client and the Kerberos profile logged it on by itself, so
+    the logon succeeded. Once the logon was refused for want of a
+    credential: `RFC_CLOSED`, as for a wrong partner, and `rejected()`
+    answered `system-refused` / `rfc-failure`. The documented no-credential
+    refusal (A2200019) was not seen in that run; the error's text was not
+    read, so that it carries no such code in this state is Inference.
 
   **The product is named, not checked** (Measured, 2026-09-29, Windows,
   Secure Login Client 3.0.3). With the client exited, the RFC open through
@@ -234,7 +269,13 @@ recipe and no implicit default (Inference, design).
   With the client logged out, closing that window failed the open with
   `GSS-API(min): A2200019:Operation aborted by user or application`, and
   `rejected()` answered "the SNC library has no credential to present
-  (A2200019)" — the one place a missing credential is explained. The macOS
+  (A2200019)" — the one place a missing credential is explained. Measured
+  again 2026-10-07 (Windows 11, Kerberos profile), three runs with the client
+  exited: twice the library started it and the profile logged on by itself;
+  once the open failed with `RFC_CLOSED` and no GSS code, as a wrong partner
+  name does, and `rejected()` answered the neutral `system-refused` /
+  `rfc-failure` — A2200019 is explained only when the SDK's error carries
+  it. The macOS
   side (the app bundle as a candidate and as what the probe recognises) is
   built from the documented install path but has not been measured live.
 - **A — documentation only.** Describe passwordless login through IAS for
@@ -253,7 +294,9 @@ recipe and no implicit default (Inference, design).
 
 Session cookies declare no lifetime, so B and C need an expiry policy — a
 configured TTL or a probe request; refreshing means logging on again, which
-needs no user. Whether `@mcp-abap-adt/interfaces-auth` already has a contract
+needs no user — as a token provider, under the renewal strategy every token
+provider takes since 6.0.0 (with no refresh grant, `refreshThenLogin()`;
+`refreshOnly()` would decline every renewal). Whether `@mcp-abap-adt/interfaces-auth` already has a contract
 for a cookie result, as `Saml2PureProvider` returns, is to be checked before
 proposing one.
 

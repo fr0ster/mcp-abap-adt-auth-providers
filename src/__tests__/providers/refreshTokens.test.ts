@@ -12,8 +12,10 @@ import type {
   OAuth2GrantType,
 } from '@mcp-abap-adt/interfaces-auth';
 import { BaseTokenProvider } from '../../providers/BaseTokenProvider';
+import { refreshThenLogin } from '../../renewal';
 import { SsoProviderFactory } from '../../sso/SsoProviderFactory';
 import type { SsoProviderConfig } from '../../sso/types';
+import { configurationOf } from '../helpers/minted';
 
 /** A JWT whose `exp` is `secondsFromNow` away: what `isTokenValid` reads. */
 function jwt(label: string, secondsFromNow: number): string {
@@ -29,7 +31,7 @@ class CountingProvider extends BaseTokenProvider {
   refuseRefresh = false;
 
   constructor(seed?: { token?: string; refreshToken?: string }) {
-    super();
+    super({ renewal: refreshThenLogin() });
     this.authorizationToken = seed?.token;
     this.refreshToken = seed?.refreshToken;
     // What `isTokenValid` reads: the seeded token's own `exp`.
@@ -49,7 +51,13 @@ class CountingProvider extends BaseTokenProvider {
     };
   }
 
-  protected async performRefresh(): Promise<ITokenResult> {
+  protected async performRefresh(
+    _refreshToken: string,
+    _signal: AbortSignal,
+    dispatched: () => void,
+  ): Promise<ITokenResult> {
+    // The request leaves: the site would call this right before it.
+    dispatched();
     this.refreshes += 1;
     if (this.refuseRefresh) throw new Error('invalid_grant');
     return {
@@ -152,6 +160,7 @@ describe('SsoProviderFactory', () => {
       protocol: 'oidc',
       flow: 'password',
       config: {
+        renewal: refreshThenLogin(),
         tokenEndpoint: 'https://issuer.example/token',
         clientId: 'client',
         username: 'user',
@@ -180,11 +189,14 @@ describe('SsoProviderFactory', () => {
     } catch (error) {
       thrown = error;
     }
-    expect(thrown).toBeInstanceOf(Error);
+    // A configuration failure, its words fixed.
+    expect(configurationOf(thrown)).toEqual({
+      case: 'unsupported-sso-flow',
+      fields: [],
+      reason:
+        'unsupported SSO provider config: no provider for this protocol and flow',
+    });
     const message = (thrown as Error).message;
-    expect(message).toBe(
-      'Unsupported SSO provider config: no provider for this protocol and flow',
-    );
     expect(message).not.toContain('CLIENT-SECRET-VALUE');
     expect(message).not.toContain('PASSWORD-VALUE');
   });

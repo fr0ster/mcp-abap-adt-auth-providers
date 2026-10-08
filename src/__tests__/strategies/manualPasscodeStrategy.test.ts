@@ -20,23 +20,40 @@ describe('manualPasscodeStrategy', () => {
       debug: jest.fn(),
     };
     const read = jest.fn(async (_prompt: string) => '  abc123  ');
-
-    const outcome = await manualPasscodeStrategy({ read }).authorize(
-      request(logger),
-    );
+    const written: string[] = [];
+    const stderr = jest
+      .spyOn(process.stderr, 'write')
+      .mockImplementation((chunk: unknown) => {
+        written.push(String(chunk));
+        return true;
+      });
+    let outcome: { payload: string };
+    try {
+      outcome = await manualPasscodeStrategy({ read }).authorize(
+        request(logger),
+      );
+    } finally {
+      stderr.mockRestore();
+    }
 
     expect(outcome.payload).toBe('abc123');
-    expect(String(info.mock.calls[0]![0])).toContain(
-      'https://uaa.example/passcode',
-    );
+    // The URL on stderr only; the logger the fixed line.
+    expect(written).toEqual([
+      '🔗 Open this URL in your browser to authenticate:\n',
+      '   https://uaa.example/passcode\n',
+    ]);
+    expect(info.mock.calls.map((call) => call[0])).toEqual([
+      'the authorization URL was shown',
+    ]);
     expect(String(read.mock.calls[0]![0])).toMatch(
       /passcode|Temporary Authentication Code/i,
     );
   });
 
+  // Which input was empty is no longer named (minor loss).
   it('refuses an empty code', async () => {
     await expect(
       manualPasscodeStrategy({ read: async () => '   ' }).authorize(request()),
-    ).rejects.toThrow('No passcode was provided');
+    ).rejects.toThrow('no input was received');
   });
 });

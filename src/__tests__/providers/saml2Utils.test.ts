@@ -16,18 +16,19 @@ import type {
   IAuthorizationStrategy,
 } from '@mcp-abap-adt/interfaces-auth';
 import { buildSamlAuthorizationUrl } from '../../auth/saml2Auth';
-import { ValidationError } from '../../errors/TokenProviderErrors';
 import { Saml2BearerProvider } from '../../providers/Saml2BearerProvider';
 import { Saml2PureProvider } from '../../providers/Saml2PureProvider';
 import {
   getSamlAssertion,
   type Saml2CommonConfig,
 } from '../../providers/saml2Utils';
+import { refreshThenLogin } from '../../renewal';
 import {
   createSignedAssertionValidator,
   createSignedResponseValidator,
 } from '../../validation/assertionValidator';
 import { createInMemoryReplayStore } from '../../validation/inMemoryReplayStore';
+import { configurationOf, thrownFrom } from '../helpers/minted';
 
 /** Never used at runtime by these tests: only here to satisfy the required field. */
 const unusedValidator: IAssertionValidator = {
@@ -175,18 +176,17 @@ describe('getSamlAssertion — where the expected request ID comes from', () => 
     expect(result.requestId).toBeUndefined();
   });
 
-  it('throws a ValidationError naming authnRequestId when no ID can be established', async () => {
+  it('throws a configuration failure naming authnRequestId when no ID can be established', async () => {
     const config: Saml2CommonConfig = {
       ...baseConfig,
       authorization: neverCallsBuilder('http://localhost:61001/callback'),
     };
 
-    const rejected = expect(getSamlAssertion(config)).rejects.toThrow(
-      ValidationError,
-    );
-    await rejected;
-    await expect(getSamlAssertion(config)).rejects.toMatchObject({
-      missingFields: ['authnRequestId'],
+    expect(
+      configurationOf(await thrownFrom(() => getSamlAssertion(config))),
+    ).toMatchObject({
+      case: 'saml-in-response-to-undeclared',
+      fields: ['authnRequestId', 'idpInitiated'],
     });
   });
 
@@ -198,9 +198,10 @@ describe('getSamlAssertion — where the expected request ID comes from', () => 
       authorization: neverCallsBuilder('http://localhost:61001/callback'),
     };
 
-    await expect(getSamlAssertion(config)).rejects.toThrow(
-      /authnRequestId must be configured/,
-    );
+    // The case, not 5.4.2's sentence.
+    expect(
+      configurationOf(await thrownFrom(() => getSamlAssertion(config))).case,
+    ).toBe('saml-in-response-to-undeclared');
   });
 
   // The builder refuses before any URL exists: an IdP-initiated login with no
@@ -228,14 +229,12 @@ describe('getSamlAssertion — where the expected request ID comes from', () => 
       authorization: strategy,
     };
 
-    const rejected = expect(getSamlAssertion(config)).rejects.toMatchObject({
-      message: expect.stringMatching(
-        /asked for an authorization URL: the only one this package can build carries an AuthnRequest/,
-      ),
-      missingFields: ['authorizationUrl'],
+    expect(
+      configurationOf(await thrownFrom(() => getSamlAssertion(config))),
+    ).toMatchObject({
+      case: 'saml-idp-initiated-without-authorization-url',
+      fields: ['idpInitiated', 'authorizationUrl'],
     });
-    await rejected;
-    await expect(getSamlAssertion(config)).rejects.toThrow(ValidationError);
     expect(produced).toEqual([]);
   });
 
@@ -255,7 +254,7 @@ describe('getSamlAssertion — where the expected request ID comes from', () => 
     expect(result.requestId).toBeUndefined();
   });
 
-  it('throws a ValidationError when idpInitiated is combined with a declared authnRequestId', async () => {
+  it('throws a configuration failure when idpInitiated is combined with a declared authnRequestId', async () => {
     const config: Saml2CommonConfig = {
       ...baseConfig,
       idpInitiated: true,
@@ -263,9 +262,11 @@ describe('getSamlAssertion — where the expected request ID comes from', () => 
       authorization: neverCallsBuilder('http://localhost:61001/callback'),
     };
 
-    await expect(getSamlAssertion(config)).rejects.toMatchObject({
-      message: expect.stringMatching(/two different logins/),
-      missingFields: ['idpInitiated'],
+    expect(
+      configurationOf(await thrownFrom(() => getSamlAssertion(config))),
+    ).toMatchObject({
+      case: 'saml-idp-initiated-with-request-id',
+      fields: ['idpInitiated'],
     });
   });
 });
@@ -295,6 +296,7 @@ describe('checkAssertionValidator — a shipped validator still needs idpEntityI
         let thrown: unknown;
         try {
           new Saml2BearerProvider({
+            renewal: refreshThenLogin(),
             ...common,
             uaaUrl: 'https://uaa.example',
             authorization: unreachableAuthorization,
@@ -303,10 +305,9 @@ describe('checkAssertionValidator — a shipped validator still needs idpEntityI
         } catch (error) {
           thrown = error;
         }
-        expect(thrown).toBeInstanceOf(ValidationError);
-        expect(thrown).toMatchObject({
-          missingFields: ['idpEntityId'],
-          message: expect.stringMatching(/assertionValidator is a shipped one/),
+        expect(configurationOf(thrown)).toMatchObject({
+          case: 'saml-shipped-validator-without-issuer',
+          fields: ['idpEntityId'],
         });
       });
 
@@ -314,6 +315,7 @@ describe('checkAssertionValidator — a shipped validator still needs idpEntityI
         let thrown: unknown;
         try {
           new Saml2PureProvider({
+            renewal: refreshThenLogin(),
             ...common,
             cookieProvider: async () => 'cookie',
             authorization: unreachableAuthorization,
@@ -322,10 +324,9 @@ describe('checkAssertionValidator — a shipped validator still needs idpEntityI
         } catch (error) {
           thrown = error;
         }
-        expect(thrown).toBeInstanceOf(ValidationError);
-        expect(thrown).toMatchObject({
-          missingFields: ['idpEntityId'],
-          message: expect.stringMatching(/assertionValidator is a shipped one/),
+        expect(configurationOf(thrown)).toMatchObject({
+          case: 'saml-shipped-validator-without-issuer',
+          fields: ['idpEntityId'],
         });
       });
 
@@ -333,6 +334,7 @@ describe('checkAssertionValidator — a shipped validator still needs idpEntityI
         expect(
           () =>
             new Saml2PureProvider({
+              renewal: refreshThenLogin(),
               ...common,
               idpEntityId: 'urn:idp',
               cookieProvider: async () => 'cookie',
@@ -353,6 +355,7 @@ describe('checkAssertionValidator — a shipped validator still needs idpEntityI
     expect(
       () =>
         new Saml2BearerProvider({
+          renewal: refreshThenLogin(),
           ...common,
           uaaUrl: 'https://uaa.example',
           authorization: unreachableAuthorization,
@@ -362,6 +365,7 @@ describe('checkAssertionValidator — a shipped validator still needs idpEntityI
     expect(
       () =>
         new Saml2PureProvider({
+          renewal: refreshThenLogin(),
           ...common,
           cookieProvider: async () => 'cookie',
           authorization: unreachableAuthorization,
@@ -401,12 +405,14 @@ describe('idpInitiated with authnRequestId is refused at construction', () => {
   const construct = {
     Saml2BearerProvider: () =>
       new Saml2BearerProvider({
+        renewal: refreshThenLogin(),
         ...both,
         uaaUrl: 'https://uaa.example',
         authorization: unreachable,
       }),
     Saml2PureProvider: () =>
       new Saml2PureProvider({
+        renewal: refreshThenLogin(),
         ...both,
         cookieProvider: async () => 'cookie',
         authorization: unreachable,
@@ -422,12 +428,9 @@ describe('idpInitiated with authnRequestId is refused at construction', () => {
       } catch (error) {
         thrown = error;
       }
-      expect(thrown).toBeInstanceOf(ValidationError);
-      expect(thrown).toMatchObject({
-        missingFields: ['idpInitiated'],
-        message: expect.stringMatching(
-          /idpInitiated is true and authnRequestId is set/,
-        ),
+      expect(configurationOf(thrown)).toMatchObject({
+        case: 'saml-idp-initiated-with-request-id',
+        fields: ['idpInitiated', 'authnRequestId'],
       });
     },
   );

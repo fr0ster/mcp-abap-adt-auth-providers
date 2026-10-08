@@ -24,6 +24,10 @@
  *   (`createSignedResponseValidator`) accepts against the ID it minted.
  *   Turning it into session cookies is the consumer's cookieProvider and
  *   needs a real SAP system.
+ * - A declined login: Keycloak
+ *   answers a passive AuthnRequest with no session by declining it, and the
+ *   provider refuses with the `declined` rule — which StatusCode Keycloak
+ *   sends is measured here, and whether it arrives as a registered fact.
  *
  * Every provider trusts the signing certificate Keycloak publishes in its
  * SAML metadata, and the realm URL as the issuer.
@@ -32,17 +36,40 @@
  */
 
 import { inspect } from 'node:util';
+import { deflateRawSync, inflateRawSync } from 'node:zlib';
 import { beforeAll, describe, expect, it } from '@jest/globals';
+import { isSamlStatusCode } from '@mcp-abap-adt/auth-errors';
 import { DOMParser } from '@xmldom/xmldom';
 import { parseStrictXml } from '../../../auth/strictXml';
+import { composeAuthorization } from '../../../authorization/compose';
+import { samlResponse } from '../../../authorization/protocol';
+import {
+  type ConsumerHandoffOptions,
+  consumerHandoff,
+} from '../../../authorization/transport';
 import { Saml2BearerProvider } from '../../../providers/Saml2BearerProvider';
 import { Saml2PureProvider } from '../../../providers/Saml2PureProvider';
-import { externalCodeStrategy, staticCodeStrategy } from '../../../strategies';
+import { refreshThenLogin } from '../../../renewal';
+import { staticCodeStrategy } from '../../../strategies';
+
+/**
+ * The consumer's own code obtains the SAMLResponse for the URL it is handed:
+ * the SAML protocol over a handoff (`externalCodeStrategy` is an OAuth code,
+ * bound by `state`, which a SAML URL does not carry).
+ */
+const samlHandedOver = (options: ConsumerHandoffOptions) =>
+  composeAuthorization({
+    ...consumerHandoff(options),
+    protocol: samlResponse(),
+    endpoint: '/callback',
+  });
+
 import {
   createSignedAssertionValidator,
   createSignedResponseValidator,
 } from '../../../validation/assertionValidator';
 import { defaultReplayStore } from '../../../validation/inMemoryReplayStore';
+import { expectSamlRejection } from '../../helpers/samlRefusal';
 import { FormBrowser, samlResponseByForm } from './formLogin';
 
 const UAA_URL = process.env.UAA_URL?.replace(/\/+$/, '');
@@ -264,6 +291,7 @@ describeBoth('SAML providers with Keycloak as the identity provider', () => {
     // AuthnRequest, so no ID is minted and none is expected.
     const payload = await unsolicitedSamlResponse(idpInitiatedUrl);
     const tokens = await new Saml2BearerProvider({
+      renewal: refreshThenLogin(),
       ...bearerConfig(),
       idpInitiated: true,
       authorization: staticCodeStrategy({ redirectUri: bearerAcs, payload }),
@@ -279,8 +307,8 @@ describeBoth('SAML providers with Keycloak as the identity provider', () => {
   });
 
   // Validation passes here — the assertion answers the ID the provider minted
-  // — so the refusal below is UAA's. The log names only the safe facts; UAA's
-  // reason is on the thrown error's reduced body (redacted OAuth fields).
+  // — so the refusal below is UAA's. The log names only the safe facts, and
+  // the thrown failure carries no body.
   it('Saml2BearerProvider: UAA refuses the answer to the provider’s own AuthnRequest (InResponseTo)', async () => {
     const failures: unknown[] = [];
     const logger = {
@@ -291,9 +319,10 @@ describeBoth('SAML providers with Keycloak as the identity provider', () => {
     };
 
     const thrown = await new Saml2BearerProvider({
+      renewal: refreshThenLogin(),
       ...bearerConfig(),
       logger,
-      authorization: externalCodeStrategy({
+      authorization: samlHandedOver({
         redirectUri: bearerAcs,
         provide: async (url) =>
           (await samlResponseByForm(url, USER)).samlResponse,
@@ -324,6 +353,7 @@ describeBoth('SAML providers with Keycloak as the identity provider', () => {
     const received: string[] = [];
 
     const tokens = await new Saml2PureProvider({
+      renewal: refreshThenLogin(),
       idpSsoUrl: `${KEYCLOAK_URL}/protocol/saml`,
       spEntityId: 'sap-sp',
       acsUrl,
@@ -334,7 +364,7 @@ describeBoth('SAML providers with Keycloak as the identity provider', () => {
         idpCertificates,
         replayStore: defaultReplayStore,
       }),
-      authorization: externalCodeStrategy({
+      authorization: samlHandedOver({
         redirectUri: acsUrl,
         provide: async (url) => {
           const posted = await samlResponseByForm(url, USER);
@@ -381,6 +411,85 @@ describeBoth('SAML providers with Keycloak as the identity provider', () => {
     expect(tokens.expiresAt).toBe(
       Math.min(until('Conditions'), until('SubjectConfirmationData')),
     );
+  });
+
+  // Measured (2026-10-06): with no session and IsPassive="true",
+  // Keycloak must not show a login page, so it declines in a signed
+  // Response — with no Assertion, top-level StatusCode Responder, second
+  // level NoPassive. The signed-Response validator reads Status before it
+  // counts Assertions, so the login is refused `declined`, the registered
+  // status a fact.
+  it('Saml2PureProvider: a passive login Keycloak declines is refused declined, Responder a fact', async () => {
+    const delivered: string[] = [];
+    const acsUrl = 'http://localhost/sap/saml2/sp/acs';
+    const passive = (url: string): string => {
+      const parsed = new URL(url);
+      const request = inflateRawSync(
+        Buffer.from(parsed.searchParams.get('SAMLRequest') ?? '', 'base64'),
+      ).toString('utf8');
+      const open = request.indexOf('AuthnRequest ');
+      if (open < 0) throw new Error('no AuthnRequest in the URL');
+      const at = open + 'AuthnRequest '.length;
+      const edited = `${request.slice(0, at)}IsPassive="true" ${request.slice(at)}`;
+      parsed.searchParams.set(
+        'SAMLRequest',
+        deflateRawSync(Buffer.from(edited, 'utf8')).toString('base64'),
+      );
+      return parsed.toString();
+    };
+
+    const error = await expectSamlRejection(
+      new Saml2PureProvider({
+        renewal: refreshThenLogin(),
+        idpSsoUrl: `${KEYCLOAK_URL}/protocol/saml`,
+        spEntityId: 'sap-sp',
+        acsUrl,
+        idpEntityId: idpEntityId(),
+        assertionValidator: createSignedResponseValidator({
+          idpCertificates,
+          replayStore: defaultReplayStore,
+        }),
+        authorization: samlHandedOver({
+          redirectUri: acsUrl,
+          provide: async (url) => {
+            // A fresh browser: no Keycloak session, so nothing to be passive about.
+            const page = await new FormBrowser().open(passive(url));
+            const value = /name="SAMLResponse" value="([^"]+)"/.exec(
+              page.html ?? '',
+            )?.[1];
+            if (!value) throw new Error(`no SAMLResponse from ${page.url}`);
+            delivered.push(value);
+            return value;
+          },
+        }),
+        cookieProvider: async () => 'unreachable',
+      }).getTokens(),
+      'declined',
+      {
+        facts: { statusCode: 'urn:oasis:names:tc:SAML:2.0:status:Responder' },
+      },
+    );
+    expect(error.facts).toEqual({
+      rule: 'declined',
+      check: 'status',
+      statusCode: 'urn:oasis:names:tc:SAML:2.0:status:Responder',
+    });
+    const doc = new DOMParser().parseFromString(
+      Buffer.from(delivered[0] ?? '', 'base64').toString('utf8'),
+      'text/xml',
+    );
+    const PROTOCOL = 'urn:oasis:names:tc:SAML:2.0:protocol';
+    const codes = Array.from(
+      doc.getElementsByTagNameNS(PROTOCOL, 'StatusCode'),
+      (code) => code.getAttribute('Value'),
+    );
+    process.stderr.write(
+      `[measured] Keycloak declined with ${JSON.stringify(codes)}\n`,
+    );
+    expect(doc.getElementsByTagNameNS(SAML_NS, 'Assertion')).toHaveLength(0);
+    // The top-level code is the one `declined` carries: a registered one.
+    expect(isSamlStatusCode(codes[0])).toBe(true);
+    expect(codes[0]).toBe(error.facts.statusCode);
   });
 });
 

@@ -1,4 +1,5 @@
 import { describe, expect, it, jest } from '@jest/globals';
+import { blamesCredential } from '@mcp-abap-adt/auth-errors';
 import type {
   IAuthProvider,
   IAuthRejection,
@@ -6,6 +7,8 @@ import type {
   OAuth2GrantType,
 } from '@mcp-abap-adt/interfaces-auth';
 import * as surface from '../index';
+import { refreshThenLogin } from '../renewal';
+import { minted } from './helpers/minted';
 import { recordingTargets } from './helpers/targets';
 import { fakeSystem, peLibrary } from './snc/fakeSystem';
 
@@ -138,7 +141,13 @@ class CountingTokenProvider extends surface.BaseTokenProvider {
   protected performLogin() {
     return this.login();
   }
-  protected performRefresh() {
+  protected performRefresh(
+    _refreshToken: string,
+    _signal: AbortSignal,
+    dispatched: () => void,
+  ) {
+    // The request leaves: the site would call this right before it.
+    dispatched();
     return this.refresh();
   }
   protected getAuthType(): OAuth2GrantType {
@@ -152,7 +161,7 @@ describe('BaseTokenProvider renews only a refused credential', () => {
     ['RFC_LOGON_FAILURE', logonRefused],
     ['an unknown logon failure', unknownLogon],
   ])('%s → one renewal → Ok', async (_, r) => {
-    const p = new CountingTokenProvider();
+    const p = new CountingTokenProvider({ renewal: refreshThenLogin() });
     await p.authorize(recordingTargets().requestTarget);
     await expect(p.rejected(r)).resolves.toEqual({ ok: true });
     expect(p.refresh).toHaveBeenCalledTimes(1);
@@ -164,7 +173,7 @@ describe('BaseTokenProvider renews only a refused credential', () => {
     ['503', r503, /failed \(503\)/],
     ['a network failure', network, /RFC_COMMUNICATION_FAILURE/],
   ])('%s → no renewal, a neutral refusal', async (_, r, reason) => {
-    const p = new CountingTokenProvider();
+    const p = new CountingTokenProvider({ renewal: refreshThenLogin() });
     await p.authorize(recordingTargets().requestTarget);
     const outcome = await p.rejected(r);
     expect(outcome.ok === false && outcome.refusal.reason).toMatch(reason);
@@ -208,4 +217,50 @@ describe('SncLogonProvider leaves a status that is not about the logon to the ne
       'the SNC library has no credential to present (A2200019)',
     );
   });
+});
+
+describe('a neutral refusal is system-refused and never blames the credential', () => {
+  const providers: ReadonlyArray<readonly [string, () => IAuthProvider]> = [
+    ['basic', () => new surface.BasicAuthProvider('u', 'p')],
+    ['saml cookies', () => new surface.SamlAuthProvider('MYSAPSSO2=x')],
+    ['token fixed', () => surface.TokenAuthProvider.fixed('t')],
+    [
+      'token provider',
+      () => new CountingTokenProvider({ renewal: refreshThenLogin() }),
+    ],
+  ];
+
+  it.each(
+    providers.flatMap(([name, make]) =>
+      (
+        [
+          ['403', r403, 'not-authorized'],
+          ['302', r302, 'redirected'],
+          ['503', r503, 'system-failed'],
+          ['a network failure', network, 'rfc-failure'],
+        ] as const
+      ).map(([what, r, verdict]) => [name, what, make, r, verdict] as const),
+    ),
+  )('%s, %s → system-refused %s', async (_n, _w, make, r, verdict) => {
+    const p = make();
+    await p.authorize(recordingTargets().requestTarget);
+    const error = minted(await refusal(p, r));
+    expect(error.kind).toBe('system-refused');
+    expect(error.facts).toMatchObject({ verdict, at: r.at });
+    expect(blamesCredential(error)).toBe(false);
+  });
+
+  it.each(
+    providers
+      .filter(([name]) => name !== 'token provider')
+      .map(([name, make]) => [name, make] as const),
+  )(
+    '%s, an unknown logon failure → system-refused unknown',
+    async (_, make) => {
+      const error = minted(await refusal(make(), unknownLogon));
+      expect(error.kind).toBe('system-refused');
+      expect(error.facts).toEqual({ verdict: 'unknown', at: 'logon' });
+      expect(blamesCredential(error)).toBe(false);
+    },
+  );
 });

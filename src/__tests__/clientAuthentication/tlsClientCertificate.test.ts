@@ -1,10 +1,10 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it, jest } from '@jest/globals';
+import { readFailure } from '@mcp-abap-adt/auth-errors';
 import type { ICertificateMaterial } from '@mcp-abap-adt/interfaces-auth';
-import { refusalFrom } from '../../auth/refusal';
 import { tlsClientCertificate } from '../../clientAuthentication';
-import { CertificateMaterialError } from '../../errors/CertificateMaterialError';
+import { refusedWith, wordsOf } from '../helpers/minted';
 
 const dir = join(__dirname, '..', 'fixtures', 'certificates');
 const pem: ICertificateMaterial = {
@@ -79,8 +79,12 @@ describe('tlsClientCertificate — the material', () => {
   it('refuses incomplete material as incomplete, in the 5.2.3 words', async () => {
     const auth = tlsClientCertificate({ material: { cert: pem.cert! } });
     const e = await auth.authenticate(base).catch((x) => x);
-    expect(e).toBeInstanceOf(CertificateMaterialError);
-    expect(refusalFrom(e, 'x')).toEqual({
+    // A client-certificate failure, no longer the class.
+    expect(readFailure(e, 'unfamiliar-error')).toMatchObject({
+      kind: 'client-certificate',
+      facts: { problem: 'incomplete' },
+    });
+    expect(wordsOf(refusedWith(e))).toEqual({
       ok: false,
       refusal: {
         reason: 'the client certificate is incomplete',
@@ -93,9 +97,12 @@ describe('tlsClientCertificate — the material', () => {
       material: { pfx: pfx.pfx!, passphrase: 'wrong' },
     });
     const e = await auth.tlsMaterial?.().catch((x) => x);
-    expect(e).toBeInstanceOf(CertificateMaterialError);
-    expect((e as CertificateMaterialError).incomplete).toBe(false);
-    expect(refusalFrom(e, 'x')).toMatchObject({
+    // A client-certificate failure, no longer the class.
+    expect(readFailure(e, 'unfamiliar-error')).toMatchObject({
+      kind: 'client-certificate',
+      facts: { problem: 'unusable' },
+    });
+    expect(refusedWith(e)).toMatchObject({
       refusal: { reason: 'the client certificate could not be used' },
     });
   });
@@ -133,9 +140,10 @@ describe('tlsClientCertificate — the material', () => {
       .mockResolvedValueOnce({ cert: pem.cert! })
       .mockResolvedValue(pem);
     const auth = tlsClientCertificate({ material: loader });
-    await expect(auth.authenticate(base)).rejects.toBeInstanceOf(
-      CertificateMaterialError,
-    );
+    // A client-certificate failure, no longer the class.
+    await expect(auth.authenticate(base)).rejects.toMatchObject({
+      error: { kind: 'client-certificate', facts: { problem: 'incomplete' } },
+    });
     await expect(auth.authenticate(base)).resolves.toBeDefined();
   });
 });
