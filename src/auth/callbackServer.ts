@@ -21,8 +21,7 @@
  */
 
 import * as http from 'node:http';
-import type { AddressInfo, Socket } from 'node:net';
-import { AuthProviderFailure, authError } from '@mcp-abap-adt/auth-errors';
+import type { AddressInfo } from 'node:net';
 import type {
   CallbackServerFactory,
   ICallbackServerHandle,
@@ -34,7 +33,28 @@ import {
   readPaste,
 } from '../authorization/protocol/readPaste';
 import { mintSecret, sameSecret } from '../authorization/secrets';
-import { misconfigured, ownOptions } from './configuration';
+import {
+  type Authority,
+  isLoopbackPeer,
+  parseAuthority,
+} from '../authorization/transport/authority';
+import {
+  addressInUse,
+  bindFailure,
+  unavailableAddress,
+  validatePort,
+} from '../authorization/transport/binding';
+import {
+  afterFlush,
+  trackConnections,
+} from '../authorization/transport/connections';
+import {
+  CALLBACK_CSP,
+  errorHtml,
+  escapeHtml,
+  successHtml,
+} from '../authorization/transport/pages';
+import { ownOptions } from './configuration';
 import {
   abortedLogin,
   failedLogin,
@@ -43,6 +63,10 @@ import {
   portInUse,
 } from './interactiveLogin';
 import { logQuietly } from './tokenRequest';
+
+// Moved to `src/authorization/transport/`, shared with the composed
+// listeners; re-exported here for the 5.x servers until Task 30n.
+export { errorHtml, escapeHtml, isLoopbackPeer, parseAuthority, validatePort };
 
 /**
  * How a route reports an outcome. Settling is deferred until the response has
@@ -97,149 +121,8 @@ export type RouteSetup<TResult> = (
   settle: Settle<TResult>,
 ) => void;
 
-/**
- * K6: a port no socket can bind — an integer in 0..65535 only; a string is
- * not a port (Node would bind a UNIX socket at that path). The value given is
- * not echoed (L5). Checked before anything binds or probes: by the shipped
- * strategy at construction and before its probe, and here.
- */
-export function validatePort(port: unknown): void {
-  if (
-    typeof port !== 'number' ||
-    !Number.isInteger(port) ||
-    port < 0 ||
-    port > 65535
-  ) {
-    throw misconfigured(
-      authError.configuration({
-        case: 'callback-port-invalid',
-        fields: ['port'],
-      }),
-    );
-  }
-}
-
 /** K8: the scope ended before a result arrived. */
 const callbackClosed = () => loginFailure({ outcome: 'callback-closed' });
-
-/**
- * The bind failed: a port someone else holds is K1, with its words; any
- * other failure names only its allowlisted code (K11).
- */
-function bindFailure(error: unknown, port: number): Error {
-  // Already decided (the second family's port taken): as it is.
-  if (error instanceof AuthProviderFailure) return error;
-  if (
-    error !== null &&
-    typeof error === 'object' &&
-    'code' in error &&
-    error.code === 'EADDRINUSE' &&
-    port > 0
-  ) {
-    return portInUse(port);
-  }
-  return failedLogin(error);
-}
-
-/**
- * An authority (`host` or `host:port`) in canonical form: the hostname as
- * the WHATWG URL host parser gives it (lowercased, `127.1` → `127.0.0.1`,
- * `[0:0:0:0:0:0:0:1]` → `[::1]`, IDNA applied), one trailing dot dropped.
- */
-interface Authority {
-  readonly host: string;
-  /** `undefined` when the text named no port. */
-  readonly port: number | undefined;
-  /** `localhost`, `127.0.0.0/8`, `[::1]` or `[::ffff:127.x.y.z]`. */
-  readonly loopback: boolean;
-  /** `0.0.0.0` or `[::]`: a bind address, never an authority. */
-  readonly unspecified: boolean;
-}
-
-/** Characters that make a text more than an authority. */
-const NOT_AUTHORITY = new Set(['@', '/', '\\', '?', '#']);
-
-/**
- * Reads `host[:port]` through the WHATWG URL host parser — a `Host` header
- * is anyone's text, so the platform's parser, never a regex, decides what
- * host it names. `undefined` for anything that is not exactly an authority:
- * userinfo, a path, a query or fragment, whitespace, an empty or
- * out-of-range port, a host the parser refuses.
- *
- * @internal - Exported for the paste hint and for testing.
- */
-export function parseAuthority(value: unknown): Authority | undefined {
-  if (typeof value !== 'string' || value === '') return undefined;
-  for (const character of value) {
-    if (NOT_AUTHORITY.has(character) || character.trim() === '') {
-      return undefined;
-    }
-  }
-  let url: URL;
-  try {
-    url = new URL(`http://${value}`);
-  } catch {
-    return undefined;
-  }
-  if (url.pathname !== '/' || url.username !== '' || url.password !== '') {
-    return undefined;
-  }
-  // Whether the text named a port: a `:` after the host (after `]` for a
-  // bracketed IPv6 address). The parser turns `:80` into no port at all.
-  const close = value.lastIndexOf(']');
-  const named = value.indexOf(':', close < 0 ? 0 : close) >= 0;
-  if (named && value.endsWith(':')) return undefined;
-  const port = named ? Number(url.port === '' ? 80 : url.port) : undefined;
-  const host = url.hostname.endsWith('.')
-    ? url.hostname.slice(0, -1)
-    : url.hostname;
-  if (host === '') return undefined;
-  return {
-    host,
-    port,
-    loopback: loopbackHost(host),
-    unspecified: host === '0.0.0.0' || host === '[::]',
-  };
-}
-
-/**
- * Whether a canonical hostname is loopback: `localhost`, an IPv4 address in
- * `127.0.0.0/8`, `[::1]`, or an IPv4-mapped `[::ffff:7fXX:XXXX]` (the
- * parser's form of `::ffff:127.x.y.z`).
- */
-function loopbackHost(host: string): boolean {
-  if (host === 'localhost' || host === '[::1]') return true;
-  if (isLoopbackPeer(host)) return true;
-  const mapped = '[::ffff:';
-  if (!host.startsWith(mapped) || !host.endsWith(']')) return false;
-  const groups = host.slice(mapped.length, -1).split(':');
-  const high = groups[0];
-  return (
-    groups.length === 2 &&
-    high !== undefined &&
-    high.length === 4 &&
-    high.startsWith('7f')
-  );
-}
-
-/**
- * Whether a peer address is loopback: `127.0.0.0/8`, `::1`, or an
- * IPv4-mapped `::ffff:127.x.y.z`. Plain code over the dotted quad.
- */
-export function isLoopbackPeer(address: unknown): boolean {
-  if (typeof address !== 'string') return false;
-  if (address === '::1') return true;
-  const mapped = address.startsWith('::ffff:');
-  const v4 = mapped ? address.slice('::ffff:'.length) : address;
-  const parts = v4.split('.');
-  if (parts.length !== 4) return false;
-  for (const part of parts) {
-    if (part === '' || part.length > 3) return false;
-    for (const digit of part) if (digit < '0' || digit > '9') return false;
-    if (Number(part) > 255) return false;
-  }
-  return parts[0] === '127';
-}
 
 /**
  * Whether a request's `Host` names this transport, both compared in
@@ -304,24 +187,6 @@ function bindAddresses(host: unknown): {
     : { first: '127.0.0.1', more: ['::1'] };
 }
 
-/** A machine without IPv6 loopback: the `::1` half is skipped, not fatal. */
-function unavailableAddress(error: unknown): boolean {
-  if (error === null || typeof error !== 'object' || !('code' in error)) {
-    return false;
-  }
-  return error.code === 'EADDRNOTAVAIL' || error.code === 'EAFNOSUPPORT';
-}
-
-/** The OS refused the address: it is in use. */
-function addressInUse(error: unknown): boolean {
-  return (
-    error !== null &&
-    typeof error === 'object' &&
-    'code' in error &&
-    error.code === 'EADDRINUSE'
-  );
-}
-
 /** The gate's state: closed until armed, then bound to a state or not. */
 type Gate =
   | { readonly open: false }
@@ -369,33 +234,10 @@ export async function runCallbackScope<TResult, TReturn>(
   });
   /** One listener per bind address, all serving the same routes. */
   const servers: http.Server[] = [];
-  /** Every open connection, and how many responses each is still writing. */
-  const sockets = new Map<Socket, number>();
-  /** The request each connection is serving, to tell an unfinished body. */
-  const requests = new Map<Socket, http.IncomingMessage>();
-  let released = false;
+  const connections = trackConnections();
   const newServer = (): http.Server => {
     const server = http.createServer(app);
-    server.on('connection', (socket: Socket) => {
-      sockets.set(socket, 0);
-      socket.on('close', () => {
-        sockets.delete(socket);
-        requests.delete(socket);
-      });
-    });
-    server.on(
-      'request',
-      (req: http.IncomingMessage, res: http.ServerResponse) => {
-        const socket = req.socket;
-        sockets.set(socket, (sockets.get(socket) ?? 0) + 1);
-        requests.set(socket, req);
-        res.once('close', () => {
-          const left = (sockets.get(socket) ?? 1) - 1;
-          if (sockets.has(socket)) sockets.set(socket, left);
-          if (released && left <= 0) letGo(socket);
-        });
-      },
-    );
+    connections.watch(server);
     servers.push(server);
     return server;
   };
@@ -457,70 +299,10 @@ export async function runCallbackScope<TResult, TReturn>(
     endScope({ error: abortedLogin('browser', ignored) });
   }
 
-  /**
-   * A connection the scope no longer needs: ended gracefully — the client
-   * still reads what was written, which `destroy()` would cut off — and
-   * unreferenced, so a client that never closes its side holds neither the
-   * port (the listener is closed) nor the process.
-   */
-  function letGo(socket: Socket): void {
-    socket.end();
-    socket.unref();
-  }
-
-  /**
-   * Close the listening socket — the port is free once it returns (the
-   * handle's descriptor is closed synchronously) — and let every connection
-   * go: at once when it is writing nothing, after its last response
-   * otherwise. Waits on no timer: a stuck client cannot hold the scope open,
-   * because nothing here waits for a connection to end.
-   */
+  /** Closes every listener and lets every connection go (Task 30f). */
   function release(): void {
-    released = true;
-    for (const server of servers) if (server.listening) server.close();
-    for (const [socket, responding] of sockets) {
-      if (responding <= 0) letGo(socket);
-      else holdNothing(socket, requests.get(socket));
-    }
+    connections.release();
   }
-
-  /**
-   * A connection still answering: referenced no longer, so it cannot keep the
-   * process alive; and when its request body is unfinished — nothing will ever
-   * answer it — destroyed. A finished request keeps its response, which
-   * `letGo` ends after the last byte.
-   */
-  function holdNothing(
-    socket: Socket,
-    request: http.IncomingMessage | undefined,
-  ): void {
-    socket.unref();
-    if (request && !request.complete) socket.destroy();
-  }
-
-  /**
-   * Settle only once the response has actually flushed, so shutdown cannot cut
-   * it off.
-   *
-   * The check is `writableFinished`, not `writableEnded`: the latter is true as
-   * soon as `end()` has been called and says nothing about the data having
-   * left. Measured on Node 25 with a paused client — an 800-byte body reports
-   * both flags true at once, but a 20 MB body reports `writableEnded` true and
-   * `writableFinished` false, with `finish` arriving 456 ms later. Keying off
-   * `writableEnded` therefore made this deferral a no-op on the very path it
-   * exists for.
-   */
-  const afterFlush = (
-    res: express.Response | undefined,
-    then: () => void,
-  ): void => {
-    if (!res || res.writableFinished) {
-      then();
-      return;
-    }
-    res.once('finish', then);
-    res.once('close', then);
-  };
 
   const settle: Settle<TResult> = {
     ok(value, res) {
@@ -701,25 +483,6 @@ export async function runCallbackScope<TResult, TReturn>(
 /** The fixed answer to a callback the gate does not admit. */
 const NOT_THIS_LOGIN = 'Error: not a callback of this login';
 
-const CALLBACK_CSP =
-  "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'";
-
-/** `&`, `<`, `>`, `"` and `'` as entities: a value in a page is text, never markup. */
-export function escapeHtml(value: string): string {
-  // Plain code, no regex: the value is callback text, anyone's.
-  let escaped = '';
-  for (const character of value) escaped += ENTITIES[character] ?? character;
-  return escaped;
-}
-
-const ENTITIES: Readonly<Record<string, string>> = {
-  '&': '&amp;',
-  '<': '&lt;',
-  '>': '&gt;',
-  '"': '&quot;',
-  "'": '&#39;',
-};
-
 /** An HTML page, said to be one, in UTF-8. */
 export function sendHtml(
   res: express.Response,
@@ -743,28 +506,6 @@ export function sendText(
     .setHeader('Content-Type', 'text/plain; charset=utf-8')
     .send(text);
 }
-
-const successHtml = `<!DOCTYPE html>
-<html lang="en"><head><meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>SAP BTP Authentication</title>
-<style>body{font-family:'Segoe UI',Tahoma,sans-serif;text-align:center;padding:50px 20px;background:linear-gradient(135deg,#0070f3,#00d4ff);color:#fff;min-height:100vh;display:flex;flex-direction:column;justify-content:center;align-items:center}.container{background:rgba(255,255,255,.1);border-radius:20px;padding:40px;max-width:500px}.success-icon{font-size:4rem;margin-bottom:20px;color:#4ade80}h1{font-weight:300}</style>
-</head><body><div class="container"><div class="success-icon">✓</div>
-<h1>Authentication Successful!</h1>
-<p>You have successfully authenticated with SAP BTP. You can close this window.</p>
-</div></body></html>`;
-
-/** `message` may be the IdP's (attacker-controllable) text: escaped here. */
-export const errorHtml = (message: string): string => `<!DOCTYPE html>
-<html lang="en"><head><meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Authentication Error</title>
-<style>body{font-family:'Segoe UI',Tahoma,sans-serif;text-align:center;padding:50px 20px;background:linear-gradient(135deg,#dc2626,#ef4444);color:#fff;min-height:100vh;display:flex;flex-direction:column;justify-content:center;align-items:center}.container{background:rgba(255,255,255,.1);border-radius:20px;padding:40px;max-width:500px}.error-icon{font-size:4rem;margin-bottom:20px;color:#fbbf24}h1{font-weight:300}</style>
-</head><body><div class="container"><div class="error-icon">✗</div>
-<h1>Authentication Failed</h1>
-<p>${escapeHtml(message)}</p>
-<p>Please check your service key configuration and try again.</p>
-</div></body></html>`;
 
 // Manual paste form (GET /). Used when the automatic localhost callback cannot
 // reach this server (browser on another machine). Accepts a bare code or a full
