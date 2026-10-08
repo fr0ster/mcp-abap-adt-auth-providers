@@ -3123,7 +3123,8 @@ before any route (§6a1); loopback names only from a loopback peer; the
 middleware with `nosniff` and the CSP; `sendHtml` / `sendText`;
 `escapeHtml` on every interpolated value; the fixed 404 and 500 pages;
 settling only after the response flushed; release on the first terminal
-outcome, unreferenced sockets and destroyed unfinished bodies (Task 30f);
+outcome, every connection still open destroyed at release (an answer in
+flight included) and destroyed unfinished bodies;
 `ignoredCallbacks` in the `aborted` words. One success page for every
 protocol (today OAuth has a page, OIDC and SAML a text).
 
@@ -3287,7 +3288,7 @@ Every failure is minted through auth-errors; no new kind, no new outcome.
 | Where | Kind, facts |
 |---|---|
 | listener bind, port held | `interactive-login` `port-in-use` (`port`) |
-| a part's option | `configuration`: `callback-port-invalid` (`port`); `required-fields-missing` (`redirectUri`, `presentation`, `transport`, `protocol`, `provide`, `receive`, `show`); `invalid-value` (`endpoint`, `redirectUri` not an absolute http(s) URL, `browser`, `authorizationUrl`) |
+| a part's option | `configuration`: `callback-port-invalid` (`port`); `required-fields-missing` (`redirectUri`, `presentation`, `transport`, `protocol`, `provide`, `receive`, `show`); `invalid-value` (`endpoint`, `redirectUri` not an absolute http(s) URL, `authorizationUrl`; `presentation` for an `openInBrowser` browser without an `open` function; `transport` for a `remoteHint` that is not a function; `read` for a `terminalPaste` reader that is not a function; `protocol` for a terminal given a protocol without paste words; `show` for a `consumerPresentation` `onFailure` that is not a function) |
 | abort, dispose, overlap | `aborted` (`strategy`, `ignoredCallbacks?`), `disposed` (`strategy`), `busy` |
 | the IdP's `?error=` | `identity-provider-refused` (`oauthError?`) |
 | terminal | `input-abandoned`, `no-terminal`, `no-input`; `unreadable-input` from the protocol |
