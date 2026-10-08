@@ -967,7 +967,10 @@ PR #68. After 30m.
 
 **Load-bearing:** return what `answer()` gives; present before arming;
 an `end` overtaken by a later `accept`; a presentation failure ending the
-login; the URL through `ILogger`.
+login; the URL through `ILogger`; clear `inFlight` before `open` settles —
+with the transport's release deferred (a test hook), a second `authorize`
+on the same composition must be `busy` and open no second transport, and
+this break turns that case red.
 
 ### Task 30o: auth-providers — documentation of §6d
 
