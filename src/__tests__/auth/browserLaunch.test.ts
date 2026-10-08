@@ -61,7 +61,7 @@ jest.mock('node:child_process', () => ({
 // Without the `open` package's default export the fallback runs.
 jest.mock('open', () => ({ __esModule: true, default: undefined }));
 
-import { launchBrowser } from '../../auth/browserAuth';
+import { launchBrowser, type OpenableBrowser } from '../../auth/browserAuth';
 import {
   launchableUrl,
   launchCommands,
@@ -135,7 +135,7 @@ describe('launchableUrl', () => {
 describe('launchBrowser fallback: no shell, the URL one argument', () => {
   const href = launchableUrl(HOSTILE) as string;
 
-  it.each<[NodeJS.Platform, string, string, string[]]>([
+  it.each<[NodeJS.Platform, OpenableBrowser, string, string[]]>([
     ['linux', 'system', 'xdg-open', [href]],
     ['linux', 'chrome', 'google-chrome', [href]],
     ['darwin', 'system', 'open', [href]],
@@ -148,7 +148,7 @@ describe('launchBrowser fallback: no shell, the URL one argument', () => {
     ],
   ])('%s, %s', async (platform, browser, command, args) => {
     onPlatform(platform);
-    await launchBrowser(HOSTILE, browser, CALLBACK, () => {}, null);
+    await launchBrowser(HOSTILE, browser, () => {}, null);
     expect(spawned).toHaveLength(1);
     const call = spawned[0] as SpawnCall;
     expect(call.command).toBe(command);
@@ -161,7 +161,7 @@ describe('launchBrowser fallback: no shell, the URL one argument', () => {
 
   it('win32, a named browser: PowerShell reads the URL from the environment, never its command line', async () => {
     onPlatform('win32');
-    await launchBrowser(HOSTILE, 'chrome', CALLBACK, () => {}, null);
+    await launchBrowser(HOSTILE, 'chrome', () => {}, null);
     const call = spawned[0] as SpawnCall;
     expect(call.command).toBe(
       'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe',
@@ -214,13 +214,7 @@ describe('launchBrowser fallback: no shell, the URL one argument', () => {
 
   it('a URL that is not http(s) starts nothing', async () => {
     onPlatform('linux');
-    await launchBrowser(
-      'javascript:alert(1)',
-      'system',
-      CALLBACK,
-      () => {},
-      null,
-    );
+    await launchBrowser('javascript:alert(1)', 'system', () => {}, null);
     expect(spawned).toEqual([]);
   });
 });

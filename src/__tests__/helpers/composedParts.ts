@@ -51,8 +51,7 @@ export function scriptedTransport(
   } = {},
 ): ScriptedTransport {
   const opens: ScriptedOpen[] = [];
-  const waiters: Array<{ n: number; resolve: (o: ScriptedOpen) => void }> =
-    [];
+  const waiters: Array<{ n: number; resolve: (o: ScriptedOpen) => void }> = [];
   const notify = () => {
     for (const waiter of [...waiters]) {
       const open = opens[waiter.n - 1];
@@ -169,8 +168,7 @@ export function heldRelease(inner: IAnswerTransport): {
 
 /** A presentation that records each call; `run` decides what it answers. */
 export function recordingPresentation(
-  run: (url: string, context: PresentationContext) => unknown = () =>
-    undefined,
+  run: (url: string, context: PresentationContext) => unknown = () => undefined,
   events?: string[],
 ): {
   readonly presentation: IAuthorizationPresentation;

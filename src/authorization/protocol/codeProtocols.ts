@@ -14,10 +14,15 @@ import type {
   AuthorizationAnswer,
   IAuthorizationProtocol,
 } from '@mcp-abap-adt/interfaces-auth';
-import type { OidcCallbackResult } from '../../auth/oidcBrowserAuth';
 import { sameSecret } from '../secrets';
 import { accept, endWith, refuse, unreadableUrl, words } from './answers';
 import { oneValue, readPaste, urlState } from './readPaste';
+
+/** What an OIDC login's strategy returns: the code, and a redirect's `state`. */
+export interface OidcCallbackResult {
+  code: string;
+  state?: string | undefined;
+}
 
 const CODE_WORDS = words(
   'Paste the authorization code (or the whole redirected URL): ',

@@ -23,14 +23,13 @@ jest.mock('open', () => ({
   apps,
 }));
 
-import { launchBrowser } from '../../auth/browserAuth';
+import { launchBrowser, type OpenableBrowser } from '../../auth/browserAuth';
 
 const URL = 'https://idp.example/oauth/authorize?client_id=x';
-const CALLBACK = 'http://localhost:61001/callback';
 
-async function appNameFor(browser: string): Promise<unknown> {
+async function appNameFor(browser: OpenableBrowser): Promise<unknown> {
   openMock.mockClear();
-  await launchBrowser(URL, browser, CALLBACK, () => {}, null);
+  await launchBrowser(URL, browser, () => {}, null);
   expect(openMock).toHaveBeenCalledTimes(1);
   const opts = openMock.mock.calls[0]![1] as { app?: { name?: unknown } };
   return opts?.app?.name;
@@ -41,8 +40,8 @@ describe('launchBrowser: a named browser', () => {
     expect(await appNameFor('chrome')).toEqual(apps.chrome);
   });
 
-  it('edge is handed to open as its per-platform names', async () => {
-    expect(await appNameFor('edge')).toEqual(apps.edge);
+  it('msedge is handed to open as its per-platform names', async () => {
+    expect(await appNameFor('msedge')).toEqual(apps.edge);
   });
 
   it('firefox is handed to open as its per-platform name', async () => {

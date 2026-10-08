@@ -7,6 +7,7 @@
  * loopback listeners where a port is ("assert on the port").
  */
 
+import net from 'node:net';
 import { describe, expect, it } from '@jest/globals';
 import {
   AuthProviderFailure,
@@ -140,23 +141,26 @@ describe('construction', () => {
     '/',
     '/submit',
     'callback',
-  ])('an endpoint URL parsing would change, or the listener’s own (%j), is invalid-value endpoint', (endpoint) => {
-    let thrown: unknown;
-    try {
-      composeAuthorization({
-        presentation: showUrl(),
-        transport: scriptedTransport({ redirectUri: REDIRECT }).transport,
-        protocol: oauthCode(),
-        endpoint,
+  ])(
+    'an endpoint URL parsing would change, or the listener’s own (%j), is invalid-value endpoint',
+    (endpoint) => {
+      let thrown: unknown;
+      try {
+        composeAuthorization({
+          presentation: showUrl(),
+          transport: scriptedTransport({ redirectUri: REDIRECT }).transport,
+          protocol: oauthCode(),
+          endpoint,
+        });
+      } catch (error) {
+        thrown = error;
+      }
+      expect(factsOf(thrown)).toEqual({
+        case: 'invalid-value',
+        fields: ['endpoint'],
       });
-    } catch (error) {
-      thrown = error;
-    }
-    expect(factsOf(thrown)).toEqual({
-      case: 'invalid-value',
-      fields: ['endpoint'],
-    });
-  });
+    },
+  );
 });
 
 describe('the order: build, begin, arm, present, wait (spec §6d.4)', () => {
@@ -227,12 +231,12 @@ describe('the order: build, begin, arm, present, wait (spec §6d.4)', () => {
   });
 
   it('a builder’s minted failure passes as it is; a foreign throw is failed, nothing of it kept; nothing presented', async () => {
-    const minted = new AuthProviderFailure(
-      authError.configuration({
-        case: 'saml-idp-initiated-without-authorization-url',
-        fields: ['idpInitiated', 'authorizationUrl'],
-      }),
-    );
+    // Built first: the constructor's parameter, a union, would widen the case.
+    const configuration = authError.configuration({
+      case: 'saml-idp-initiated-without-authorization-url',
+      fields: ['idpInitiated', 'authorizationUrl'],
+    });
+    const minted = new AuthProviderFailure(configuration);
     for (const [thrownByBuilder, check] of [
       [minted, (e: unknown) => expect(e).toBe(minted)],
       [
@@ -552,7 +556,10 @@ describe('overlap, dispose, abort (spec §6d.4)', () => {
     });
     const nextLogin = next.authorize(request());
     await quiet();
-    expect((await waitFor(() => send(port, `/callback?code=C2&state=${STATE}`))).status).toBe(200);
+    expect(
+      (await waitFor(() => send(port, `/callback?code=C2&state=${STATE}`)))
+        .status,
+    ).toBe(200);
     await expect(nextLogin).resolves.toMatchObject({ payload: 'C2' });
   });
 
@@ -624,5 +631,43 @@ describe('authorize settles only once the transport is released (spec §6d.4 ste
     ).toBe(200);
     await expect(third).resolves.toMatchObject({ payload: 'C3' });
     expect(held.opened()).toBe(2);
+  });
+});
+
+describe('the page is delivered before the login settles (spec §6d.3.5)', () => {
+  it('a client that pauses before reading still gets the whole error page; then the login is refused and the port free', async () => {
+    const port = await getAvailablePort();
+    const strategy = composeAuthorization({
+      presentation: recordingPresentation().presentation,
+      transport: loopback4({ port }),
+      protocol: oauthCode(),
+      endpoint: '/callback',
+    });
+    const login = caught(strategy.authorize(request()));
+    await waitFor(() => send(port, '/nothing'));
+    const description = `${'d'.repeat(12_000)}END-OF-DESCRIPTION`;
+    const page = await new Promise<string>((resolve, reject) => {
+      const socket = net.connect({ host: '127.0.0.1', port });
+      let text = '';
+      socket.setEncoding('utf8');
+      socket.pause();
+      socket.on('data', (chunk: string) => {
+        text += chunk;
+      });
+      socket.on('end', () => resolve(text));
+      socket.on('error', reject);
+      socket.write(
+        `GET /callback?error=access_denied&error_description=${description}&state=${STATE} HTTP/1.1\r\n` +
+          `Host: 127.0.0.1:${port}\r\nConnection: close\r\n\r\n`,
+      );
+      setTimeout(() => socket.resume(), 300);
+    });
+    expect(page).toContain('END-OF-DESCRIPTION');
+    expect(page).toContain('</html>');
+    expect(factsOf(await login)).toEqual({
+      outcome: 'identity-provider-refused',
+      oauthError: 'access_denied',
+    });
+    expect(await bindable(port)).toBe(true);
   });
 });

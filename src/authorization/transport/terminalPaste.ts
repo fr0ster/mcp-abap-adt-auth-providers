@@ -21,6 +21,7 @@ import { untilAborted } from '../../auth/attempt';
 import { misconfigured, ownOptions } from '../../auth/configuration';
 import { abortedLogin, loginFailure } from '../../auth/interactiveLogin';
 import { readSafely } from '../../auth/knownCodes';
+import { asAbortSignal } from '../../auth/signalledRequest';
 import { ANSWER_WORDS } from '../answerWords';
 import { consumerRedirect } from './consumerRedirect';
 import { endFailure, verdictOf } from './endVerdict';
@@ -105,8 +106,7 @@ export function terminalPaste(
       const given =
         ownOptions<Record<keyof AnswerTransportOptions, unknown>>(openOptions);
       const pastePrompt = promptOf(given.paste);
-      const signal =
-        given.signal instanceof AbortSignal ? given.signal : undefined;
+      const signal = asAbortSignal(given.signal);
       if (signal?.aborted) throw abortedLogin('manual');
       // The read stops at the signal and at the end of this open.
       const closing = new AbortController();

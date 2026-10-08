@@ -6,7 +6,14 @@
  * finishes it. `open` is mocked: no browser opens.
  */
 
-import { afterEach, beforeEach, describe, expect, it, jest } from '@jest/globals';
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  jest,
+} from '@jest/globals';
 import { readFailure } from '@mcp-abap-adt/auth-errors';
 import type { AuthorizationRequest } from '@mcp-abap-adt/interfaces-auth';
 
@@ -70,8 +77,7 @@ async function stillWaiting(promise: Promise<unknown>): Promise<boolean> {
   return !done;
 }
 
-const occurrences = (text: string, part: string) =>
-  text.split(part).length - 1;
+const occurrences = (text: string, part: string) => text.split(part).length - 1;
 
 describe('the default launcher failing', () => {
   it.each([

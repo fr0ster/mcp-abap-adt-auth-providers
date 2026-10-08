@@ -3,5 +3,5 @@
  * checked. Each knows no socket and no terminal.
  */
 
-export { oauthCode, oidcCode } from './codeProtocols';
+export { type OidcCallbackResult, oauthCode, oidcCode } from './codeProtocols';
 export { passcode, samlResponse } from './textProtocols';

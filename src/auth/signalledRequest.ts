@@ -15,6 +15,17 @@ import { readSafely } from './knownCodes';
  * is no signal.
  */
 export function signalOf(request: unknown): AbortSignal | undefined {
-  const signal = readSafely(request, 'signal');
-  return signal instanceof AbortSignal ? signal : undefined;
+  return asAbortSignal(readSafely(request, 'signal'));
+}
+
+/**
+ * `value` when it is a native `AbortSignal`, else `undefined` — total: a
+ * Proxy whose `getPrototypeOf` trap throws is no signal.
+ */
+export function asAbortSignal(value: unknown): AbortSignal | undefined {
+  try {
+    return value instanceof AbortSignal ? value : undefined;
+  } catch {
+    return undefined;
+  }
 }

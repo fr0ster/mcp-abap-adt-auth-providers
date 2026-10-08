@@ -22,6 +22,7 @@ import { untilAborted } from '../../auth/attempt';
 import { misconfigured, ownOptions } from '../../auth/configuration';
 import { abortedLogin, loginFailure } from '../../auth/interactiveLogin';
 import { readSafely } from '../../auth/knownCodes';
+import { asAbortSignal } from '../../auth/signalledRequest';
 import { consumerRedirect } from './consumerRedirect';
 import { endFailure, verdictOf } from './endVerdict';
 
@@ -93,8 +94,7 @@ function socketless(
     ): Promise<TReturn> {
       const given =
         ownOptions<Record<keyof AnswerTransportOptions, unknown>>(openOptions);
-      const signal =
-        given.signal instanceof AbortSignal ? given.signal : undefined;
+      const signal = asAbortSignal(given.signal);
       if (signal?.aborted) throw abortedLogin('consumer');
       const close = onOpen?.();
       let armed = false;
@@ -187,7 +187,7 @@ export function consumerHandoff(options: ConsumerHandoffOptions): {
       const answer = adopt(() =>
         (provide as ProvideAnswer)(
           authorizationUrl,
-          signal instanceof AbortSignal ? signal : never,
+          asAbortSignal(signal) ?? never,
         ),
       );
       void answer.catch(() => undefined);

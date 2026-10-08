@@ -39,6 +39,7 @@ import {
   portInUse,
 } from '../../auth/interactiveLogin';
 import { readSafely } from '../../auth/knownCodes';
+import { asAbortSignal } from '../../auth/signalledRequest';
 import { logQuietly } from '../../auth/tokenRequest';
 import { ANSWER_WORDS } from '../answerWords';
 import { oneValue } from '../protocol/readPaste';
@@ -119,7 +120,7 @@ function readOptions(options: AnswerTransportOptions): ListenerOptions {
   const { signal, logger } = own;
   return {
     endpoint: checkedEndpoint(own.endpoint),
-    signal: signal instanceof AbortSignal ? signal : undefined,
+    signal: asAbortSignal(signal),
     logger:
       logger !== null && typeof logger === 'object'
         ? (logger as ILogger)

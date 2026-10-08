@@ -7,7 +7,14 @@
  * stdout; no line carries the URL, its `state`, a code or the IdP's text.
  */
 
-import { afterEach, beforeEach, describe, expect, it, jest } from '@jest/globals';
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  jest,
+} from '@jest/globals';
 import { readFailure } from '@mcp-abap-adt/auth-errors';
 import type { AuthorizationRequest } from '@mcp-abap-adt/interfaces-auth';
 import { composeAuthorization } from '../../authorization/compose';
@@ -107,9 +114,9 @@ describe('showUrl (C8)', () => {
     ]);
     expect(text()).not.toContain('idp.example');
     expect(text()).not.toContain(STATE);
-    expect(
-      (await send(port, `/callback?code=C1&state=${STATE}`)).status,
-    ).toBe(200);
+    expect((await send(port, `/callback?code=C1&state=${STATE}`)).status).toBe(
+      200,
+    );
     await expect(login).resolves.toMatchObject({ payload: 'C1' });
     expect(await bindable(port)).toBe(true);
   });
@@ -148,8 +155,7 @@ describe('showUrl (C8)', () => {
     const login = strategy.authorize(
       request({
         logger,
-        buildAuthorizationUrl: async () =>
-          'https://idp.example/sso?x=‮evil\u0007',
+        buildAuthorizationUrl: async () => 'javascript:evil()//idp.example',
       }),
     );
     await waitFor(() => send(port, '/nothing'));
@@ -164,8 +170,11 @@ describe('showUrl (C8)', () => {
 describe('consumerPresentation (spec §6d.5)', () => {
   it('show receives the URL, the redirect and a signal aborted once the login ends', async () => {
     const port = await getAvailablePort();
-    const seen: Array<{ url: string; redirectUri: unknown; signal: AbortSignal }> =
-      [];
+    const seen: Array<{
+      url: string;
+      redirectUri: unknown;
+      signal: AbortSignal;
+    }> = [];
     const login = composeAuthorization({
       presentation: consumerPresentation({
         show: async (url, context) => {
@@ -311,11 +320,36 @@ describe('consumerPresentation (spec §6d.5)', () => {
 
 describe('construction', () => {
   it.each([
-    ['consumerPresentation without show', () => consumerPresentation({} as never), 'required-fields-missing', ['show']],
-    ['openInBrowser without browser', () => openInBrowser({} as never), 'required-fields-missing', ['presentation']],
-    ['openInBrowser({ browser: none })', () => openInBrowser({ browser: 'none' as never }), 'invalid-value', ['presentation']],
-    ['openInBrowser({ browser: headless })', () => openInBrowser({ browser: 'headless' as never }), 'invalid-value', ['presentation']],
-    ['openInBrowser({ browser: edge })', () => openInBrowser({ browser: 'edge' as never }), 'invalid-value', ['presentation']],
+    [
+      'consumerPresentation without show',
+      () => consumerPresentation({} as never),
+      'required-fields-missing',
+      ['show'],
+    ],
+    [
+      'openInBrowser without browser',
+      () => openInBrowser({} as never),
+      'required-fields-missing',
+      ['presentation'],
+    ],
+    [
+      'openInBrowser({ browser: none })',
+      () => openInBrowser({ browser: 'none' as never }),
+      'invalid-value',
+      ['presentation'],
+    ],
+    [
+      'openInBrowser({ browser: headless })',
+      () => openInBrowser({ browser: 'headless' as never }),
+      'invalid-value',
+      ['presentation'],
+    ],
+    [
+      'openInBrowser({ browser: edge })',
+      () => openInBrowser({ browser: 'edge' as never }),
+      'invalid-value',
+      ['presentation'],
+    ],
   ] as const)('%s → configuration %s', (_name, make, outcome, fields) => {
     let thrown: unknown;
     try {
