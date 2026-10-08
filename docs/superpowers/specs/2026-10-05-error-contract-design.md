@@ -1330,8 +1330,9 @@ PR's description; opening it is the user's decision.
   the URL is announced. Every launcher is `child_process.spawn(cmd, argv)`, never
   `shell: true` and never `cmd`: `xdg-open` / named browsers on Linux, `open` on
   macOS, and on Windows `rundll32.exe url.dll,FileProtocolHandler <url>` or, for a
-  named browser, `powershell.exe … Start-Process` with the URL only in the
-  environment — both by absolute path under `%SystemRoot%\System32`.
+  named program, `powershell.exe … Start-Process` with the program and the URL
+  only in the environment — both by absolute path under `%SystemRoot%\System32`.
+  Since Task 30p each is its own `IBrowser`, one launch each (§6d).
 - **A launcher that fails does not end the login.** Where no browser can be
   opened (an SSH session, a host without a desktop), the URL shown is the
   only way to finish the login, and it works only while the callback still
@@ -2902,31 +2903,36 @@ export interface IBrowser {
 ```
 
 **The browser is a contract** (decided by the user, 2026-10-08).
-`IBrowser` lives in interfaces-auth 7.5.0 (additive, a minor). The package
-ships implementations — `systemBrowser()`, `chromeBrowser()`,
-`edgeBrowser()`, `firefoxBrowser()` — each with today's launch (no shell,
-an argument array, absolute System32 paths on Windows, `launchableUrl`); a
-consumer with another browser implements `IBrowser`. No browser is named by
-a string anywhere: an unknown name cannot exist, so nothing is validated at
-run time.
+`IBrowser` lives in interfaces-auth 7.5.0 (additive, a minor). No browser is
+named by a string anywhere: an unknown name cannot exist, so nothing is
+validated at run time.
 
-How a shipped browser behaves (user's decisions, Task 30p fix round 1):
+**Six shipped browsers, one fixed launch each** (user's decision, Task 30p
+fix round 2). No universal browser, no platform switch, no fallback chain,
+no platform check: the consumer picks the one for its machine. Run on
+another OS a launch simply fails to start, rejects, and the composer shows
+the URL once on stderr while the login waits (§6d.5). Anything else — a
+remote Chrome, a console browser, WSL, a given `DISPLAY` — is the
+consumer's own `IBrowser`. There is no `open` package: every launch is the
+package's own.
 
+| Factory | Launch (an argument array, never a shell) | Settles |
+|---|---|---|
+| `linuxDefaultBrowser()` | `xdg-open <url>` | at its exit: `0` resolves; non-zero or an error rejects |
+| `linuxBrowser(executable)` | `<executable> <url>` — a name on `PATH` or an absolute path, as given | at the child's `spawn`; an error before it rejects; its exit is never awaited |
+| `macDefaultBrowser()` | `open <url>` | at its exit |
+| `macBrowser(app)` | `open -a <app> <url>` | at its exit |
+| `windowsDefaultBrowser()` | `%SystemRoot%\System32\rundll32.exe url.dll,FileProtocolHandler <url>` | at its exit |
+| `windowsBrowser(program)` | `%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe -NoProfile -NonInteractive -Command` with the fixed text `Start-Process -FilePath $env:MCP_ABAP_ADT_BROWSER_PROGRAM -ArgumentList $env:MCP_ABAP_ADT_AUTHORIZATION_URL` — the program and the URL only in the environment, never interpolated into the command text | at its exit |
+
+- A program or app name is passed as given (no shell anywhere, so no
+  quoting). Only an `http(s)` URL is launched, as its serialisation
+  (`launchableUrl`); anything else starts nothing and rejects.
 - **No environment is guessed or changed.** No `DISPLAY=:0` (or anything
-  else) is written into `process.env`: a given display, a remote Chrome, a
-  console browser or ssh-forwarded X is the consumer's own `IBrowser`.
-  Without a display the launcher fails like any other: the ordinary
-  presentation failure (§6d.5).
-- **`open(url, signal)` settles once the browser was asked.** A hand-off
-  launcher that exits by design (`xdg-open`, macOS `open`, `rundll32`,
-  PowerShell's `Start-Process`, the `open` package's own launch) is awaited
-  to its exit; a non-zero exit is a failure. A browser binary started
-  directly (Linux `google-chrome`, `chromium`, `microsoft-edge`, `firefox`,
-  …) resolves on the child's `spawn` event — an error before it rejects,
-  the next candidate tried — and its exit is never awaited.
+  else) is written into `process.env`.
 - A failure rejects with an `AuthProviderFailure` (`unknown`,
-  `opening-browser`, an allowlisted code only); an abort rejects `aborted`
-  and starts no further candidate. A started browser is never killed.
+  `opening-browser`, an allowlisted code only); an abort rejects `aborted`.
+  A started browser is never killed.
 - `openUrl` is gone entirely: the types are the contract; an unknown key
   from plain JavaScript is ignored like any other.
 
@@ -2958,7 +2964,7 @@ needs is required, and the named compositions supply today's values.
 
 | Part | Does |
 |---|---|
-| `openInBrowser({ browser })` | `browser: IBrowser`, required (`systemBrowser()`, `chromeBrowser()`, `edgeBrowser()`, `firefoxBrowser()`, or the consumer's). Calls `open` on it with exactly the URL and the login's signal. A browser that throws or rejects (a shipped one rejects when its launcher fails — §6a0's launch: no shell, `launchableUrl`, absolute paths on Windows) is a presentation failure: `openInBrowser` prompts the URL once, to stderr only, and rethrows; the composer logs its fixed-words line and prompts nothing. Showing the URL without a browser is `showUrl`. |
+| `openInBrowser({ browser })` | `browser: IBrowser`, required (one of the six shipped per platform — `linuxDefaultBrowser()`, `linuxBrowser(executable)`, `macDefaultBrowser()`, `macBrowser(app)`, `windowsDefaultBrowser()`, `windowsBrowser(program)` — or the consumer's). Calls `open` on it with exactly the URL and the login's signal. A browser that throws or rejects (a shipped one rejects when its launcher fails — §6a0's launch: no shell, `launchableUrl`, absolute paths on Windows) is a presentation failure: `openInBrowser` prompts the URL once, to stderr only, and rethrows; the composer logs its fixed-words line and prompts nothing. Showing the URL without a browser is `showUrl`. |
 | `showUrl()` | Writes the URL to **stderr only** (C8), only as `promptableUrl` admits it; the logger gets "the authorization URL was shown" — then `waitingOn` and `routeHint` when the channel has them. Synchronous. |
 | `consumerPresentation({ show })` | `show(url, { redirectUri, signal })` is the consumer's UI. A throw or a rejection is a presentation failure (§6d.5). |
 
@@ -3325,12 +3331,22 @@ the IdP's text. `shown` reaches only the escaped error page.
 
 - `browserCallbackStrategy` / `oidcCallbackStrategy` /
   `samlCallbackStrategy` with `port`, `signal`: no change. `browser` is an
-  `IBrowser`, no longer a string: `browser: 'chrome'` → `browser:
-  chromeBrowser()` (`'system'` / `'auto'` → `systemBrowser()`, `'edge'` /
-  `'msedge'` → `edgeBrowser()`, `'firefox'` → `firefoxBrowser()`, `'none'` /
-  `'headless'` → no `browser`). A consumer whose configuration holds a
-  browser name maps it to an implementation itself; another browser is the
-  consumer's `IBrowser`.
+  `IBrowser`, no longer a string, and the consumer picks it for its
+  platform:
+
+  | 5.x | Linux | macOS | Windows |
+  |---|---|---|---|
+  | `'system'`, `'auto'` | `linuxDefaultBrowser()` | `macDefaultBrowser()` | `windowsDefaultBrowser()` |
+  | `'chrome'` | `linuxBrowser('google-chrome')` | `macBrowser('Google Chrome')` | `windowsBrowser('chrome')` |
+  | `'edge'`, `'msedge'` | `linuxBrowser('microsoft-edge')` | `macBrowser('Microsoft Edge')` | `windowsBrowser('msedge')` |
+  | `'firefox'` | `linuxBrowser('firefox')` | `macBrowser('Firefox')` | `windowsBrowser('firefox')` |
+  | `'none'`, `'headless'` | no `browser` | no `browser` | no `browser` |
+
+  5.x's Linux fallback tried `chromium` / `chromium-browser`,
+  `microsoft-edge-stable` and `firefox-esr` after the first name; there is
+  no chain now — pass the executable installed. A consumer whose
+  configuration holds a browser name maps it itself; another browser
+  (remote, console, WSL) is the consumer's `IBrowser`.
 - `externalCodeStrategy` takes OAuth codes only (§6d.7); a SAML response or
   a passcode handed over by the consumer's code composes `consumerHandoff`
   with `samlResponse()` / `passcode()`.
