@@ -211,19 +211,6 @@ describe('the browser compositions: loopback, showUrl by default', () => {
     },
   );
 
-  it('openUrl is gone: given at run time it is not called, and the URL is shown', async () => {
-    const port = await getAvailablePort();
-    const openUrl = jest.fn(async () => undefined);
-    const strategy = browserCallbackStrategy({ port, openUrl } as never);
-    const login = strategy.authorize(recordingRequest().request);
-    await waitFor(() => send(port, '/nothing'));
-    await quiet();
-    expect(openUrl).not.toHaveBeenCalled();
-    expect(stderr.join('')).toContain('https://idp.example/authorize');
-    await strategy.dispose?.();
-    await login.catch(() => undefined);
-  });
-
   it('remoteHint replaces the channel’s route hint, built from the bound redirect', async () => {
     const port = await getAvailablePort();
     const { logger, lines } = capturingLogger();

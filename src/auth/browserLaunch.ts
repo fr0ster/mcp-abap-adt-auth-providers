@@ -45,6 +45,14 @@ import { readSafely } from './knownCodes';
 export interface LaunchCommand {
   readonly command: string;
   readonly args: readonly string[];
+  /**
+   * When the browser counts as asked: `'exit'` for a hand-off launcher that
+   * exits by design once it passed the URL on (`xdg-open`, `open`,
+   * `rundll32`, PowerShell's `Start-Process`) — a non-zero exit is a failure;
+   * `'spawn'` for a browser binary started directly, which runs until the
+   * user closes it — its start is the answer, its exit never awaited.
+   */
+  readonly settlesOn: 'exit' | 'spawn';
   /** Extra environment for the launcher (Windows' named browsers). */
   readonly env?: Readonly<Record<string, string>>;
 }
@@ -156,6 +164,7 @@ export function launchCommands(
         {
           command: system32('rundll32.exe'),
           args: ['url.dll,FileProtocolHandler', href],
+          settlesOn: 'exit',
         },
       ];
     }
@@ -170,24 +179,35 @@ export function launchCommands(
           `Start-Process -FilePath '${browser}' -ArgumentList $env:${URL_VARIABLE}`,
         ],
         env: { [URL_VARIABLE]: href },
+        settlesOn: 'exit',
       },
     ];
   }
   if (platform === 'darwin') {
     return browser === undefined
-      ? [{ command: 'open', args: [href] }]
-      : [{ command: 'open', args: ['-a', MAC_APP[browser], href] }];
+      ? [{ command: 'open', args: [href], settlesOn: 'exit' }]
+      : [
+          {
+            command: 'open',
+            args: ['-a', MAC_APP[browser], href],
+            settlesOn: 'exit',
+          },
+        ];
   }
   return browser === undefined
-    ? [{ command: 'xdg-open', args: [href] }]
-    : LINUX_EXECUTABLES[browser].map((command) => ({ command, args: [href] }));
+    ? [{ command: 'xdg-open', args: [href], settlesOn: 'exit' }]
+    : LINUX_EXECUTABLES[browser].map((command) => ({
+        command,
+        args: [href],
+        settlesOn: 'spawn' as const,
+      }));
 }
 
 /** How `runLaunchers` reports, and when it stops trying. */
 export interface LaunchCallbacks {
   /** Called once, with the last launcher's error (`undefined` for a non-zero exit), when none runs. */
   readonly onFailure: (error: unknown) => void;
-  /** Called once when a launcher exits `0`. */
+  /** Called once when a launcher answered: exited `0`, or started (`settlesOn: 'spawn'`). */
   readonly onSuccess?: (() => void) | undefined;
   /** Checked before each launcher: `true` starts no further one. */
   readonly stopped?: (() => boolean) | undefined;
@@ -197,8 +217,9 @@ export interface LaunchCallbacks {
  * Starts the first launcher that runs, without a shell. `onFailure` is
  * called once, with the last launcher's error (or `undefined` for a non-zero
  * exit), when none does — or when `stopped()` says to start no further one;
- * `onSuccess` once when one exits `0`. Never throws; the browser outlives
- * nothing it started (the child is unreferenced).
+ * `onSuccess` once when one answers: a hand-off launcher by exiting `0`, a
+ * browser binary by starting (its exit is never awaited). Never throws; the
+ * browser outlives nothing it started (the child is unreferenced).
  */
 export function runLaunchers(
   commands: readonly LaunchCommand[],
@@ -225,14 +246,20 @@ export function runLaunchers(
           ? {}
           : { env: { ...process.env, ...next.env } }),
       });
+      const succeed = () => {
+        if (settled) return;
+        settled = true;
+        onSuccess?.();
+      };
       child.once('error', fallThrough);
-      child.once('exit', (code) => {
-        if (code === 0) {
-          if (settled) return;
-          settled = true;
-          onSuccess?.();
-        } else fallThrough(undefined);
-      });
+      if (next.settlesOn === 'spawn') {
+        child.once('spawn', succeed);
+      } else {
+        child.once('exit', (code) => {
+          if (code === 0) succeed();
+          else fallThrough(undefined);
+        });
+      }
       child.unref();
     } catch (error) {
       fallThrough(error);
@@ -299,13 +326,16 @@ async function loadOpen(): Promise<
  *
  * - only an `http(s)` URL is launched, as its serialisation; anything else
  *   starts nothing and rejects;
- * - on Linux without `DISPLAY` or `WAYLAND_DISPLAY`, `DISPLAY` is set to `:0`;
+ * - nothing of the environment is guessed or changed: no `DISPLAY` is set
+ *   (a given display, a remote browser or a console one is the consumer's
+ *   own `IBrowser`);
  * - the `open` package when it loads — a named browser under `open`'s own
  *   per-platform names (`apps`), else its own name;
  * - without it, `launchCommands` through `runLaunchers`: an argument array,
  *   never a shell.
  *
- * Resolves once a launcher ran (or `open` resolved); rejects with an
+ * Resolves once the browser was asked: a hand-off launcher exited `0`, a
+ * browser binary started, or `open` resolved; rejects with an
  * `AuthProviderFailure` — `opening-browser` in fixed words, or `aborted`
  * when `signal` aborts first, which also starts no further launcher. A
  * started browser is never killed.
@@ -320,15 +350,6 @@ export async function launchBrowser(
   // come from discovery or configuration.
   const href = launchableUrl(url);
   if (href === undefined) throw launchFailure(undefined);
-
-  // On Linux, ensure DISPLAY is set for X11 applications.
-  if (
-    process.platform === 'linux' &&
-    !process.env.DISPLAY &&
-    !process.env.WAYLAND_DISPLAY
-  ) {
-    process.env.DISPLAY = ':0';
-  }
 
   const loaded = await untilAborted(loadOpen(), signal);
   throwIfAborted(signal);

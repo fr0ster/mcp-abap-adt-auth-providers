@@ -180,7 +180,13 @@ describe('runLaunchers, for real: a hostile URL runs nothing', () => {
     try {
       let failed: unknown;
       runLaunchers(
-        [{ command: process.execPath, args: [recorder, out, href] }],
+        [
+          {
+            command: process.execPath,
+            args: [recorder, out, href],
+            settlesOn: 'exit',
+          },
+        ],
         {
           onFailure: (error) => {
             failed = error ?? new Error('the launcher failed');
