@@ -103,7 +103,9 @@ every exported declaration against the published 5.4.2.
     (`'system'` / `'auto'` → `linuxDefaultBrowser()`, `macDefaultBrowser()`,
     `windowsDefaultBrowser()`; `'chrome'` → `linuxBrowser('google-chrome')`,
     `macBrowser('Google Chrome')`, `windowsBrowser('chrome')`; and so on —
-    the README's table); `'none'` / `'headless'` → no `browser`. No string
+    the README's table; any other name, `'msedge'` included, opened the
+    system default browser in 5.4.2 and maps to the platform's default
+    one); `'none'` / `'headless'` → no `browser`. No string
     is accepted anywhere: an object without an `open` function is
     `configuration` `invalid-value` naming `presentation`.
   - `openUrl(url, browser, redirectUri)` is removed: a callback that only
@@ -139,11 +141,14 @@ every exported declaration against the published 5.4.2.
 - **The shipped browsers are one fixed launch each; nothing is guessed.**
   No platform switch, no fallback chain, no platform check: the consumer
   picks the factory for its platform, and one run on another OS fails to
-  start, so the URL is shown and the login waits. 5.4.2's Linux chains
-  (`google-chrome || chromium || chromium-browser`, `microsoft-edge ||
-  microsoft-edge-stable`, `firefox || firefox-esr`) are gone: pass the
-  executable installed. `DISPLAY=:0`, which 5.4.2 set on Linux without
-  `DISPLAY` or `WAYLAND_DISPLAY`, is no longer written: the package writes
+  start, so the URL is shown and the login waits. 5.4.2 handed a named
+  browser to the `open` package, whose Linux candidates were
+  `google-chrome`, `google-chrome-stable`, `chromium`, `chromium-browser`
+  (Chrome), `microsoft-edge`, `microsoft-edge-dev` (Edge) and `firefox`
+  (with a shell fallback list only when `open` could not be loaded): pass
+  the executable installed. `DISPLAY=:0`, which 5.4.2 set on Linux for
+  `'system'` and a named browser without `DISPLAY` or `WAYLAND_DISPLAY`, is
+  no longer written: the package writes
   nothing into `process.env`. `'auto'` and `'system'` are one (the platform's
   default browser), and `'auto'`'s log lines are gone. `linuxBrowser`
   resolves once the browser has started; the hand-off launchers at their
@@ -374,7 +379,10 @@ every exported declaration against the published 5.4.2.
   url.dll,FileProtocolHandler`), `windowsBrowser(program)` (PowerShell
   `Start-Process`, the program and the URL only in the environment). A
   failure rejects `unknown` with the operation `opening-browser`; an abort
-  rejects `aborted`; a started browser is never killed.
+  rejects `aborted`; a started browser is never killed. A hand-off launcher
+  keeps the process alive until it exits (or the signal aborts), so an
+  `open()` awaited alone settles; a browser binary is unreferenced once
+  started.
 - **Transports:** `loopback({ port })` (`127.0.0.1`, then `::1` on the same
   port; advertises `localhost`), `loopback4({ port })`, `loopback6({ port })`
   (`LoopbackOptions`; `port` required), `terminalPaste({ redirectUri?, read?
@@ -504,8 +512,8 @@ every exported declaration against the published 5.4.2.
   the 6.0.0 prereleases never shipped. `CallbackServerFactory`,
   `ICallbackServerOptions` and `ICallbackServerHandle` stay in
   interfaces-auth 7.4.0, deprecated.
-- **Browser names, the `open` and `express` dependencies, the Linux
-  fallback chains and the `DISPLAY=:0` fallback** (Breaking, above).
+- **Browser names, the `open` and `express` dependencies, the lists of
+  candidate executables and the `DISPLAY=:0` fallback** (Breaking, above).
 - **`onTokens`** on every token provider's config and `TokenProviderHooks`
   → `persistence` (Breaking, above).
 - **The redactor.** 5.4.2's redaction of the server's text
@@ -614,7 +622,7 @@ every exported declaration against the published 5.4.2.
     (`state=`), which a forged `?state=&code=EVIL` would match, or with a
     repeated `state`, binds nothing. Both are refused —
     `configuration` `invalid-value`, `fields: ['authorizationUrl']` — before
-    anything opens, and a callback's or a pasted URL's `state` and `code`
+    anything is shown (the listener is already bound), and a callback's or a pasted URL's `state` and `code`
     count only when present exactly once (a repeated one is no value, never
     its first).
 

@@ -58,7 +58,7 @@ Every token provider that sends a request to an authorization server — all but
 - Reading a thrown value: auth-errors' `classify(error, operation, grant?)` alone — the 5.x error classes, their ladder, `refusalFrom`, `loggedError` and `refusalWords` are gone (6.0.0); a log line about a thrown value writes `logFields(classify(error, operation))`; `OK` comes from auth-errors
 - `src/auth/configuration.ts` — `misconfigured` and the shared configuration throws (`requiredFieldsMissing`, `oidcIssuerRequired`, `oidcEndpointMissing`): every configuration fault (the README's "Configuration errors" table) is an `AuthProviderFailure` of kind `configuration` with its `case` and the `fields` it names (`CONFIG_FIELDS` only, never a value); a constructor may throw one (it is not a moment). Each site builds its error with `authError.configuration({ case: '…', … })`; `misconfigured`'s parameter names no case, so the case is inferred from the literal (a union as contextual type widens it). `saml-acs-mismatch` and `redirect-mismatch` carry the two URIs as diagnostics. No `ValidationError`, `CertificateMaterialError`, `ClientAuthentication*Error`, `BasicClientIdError`, `CallbackScopeError` or `SncLibraryNotFoundError` (gone) is constructed in `src`, and no refusal is built from free words — `oops` is gone (`throwSweep.test.ts`)
 - `src/authorization/` — authorization by composition: `compose.ts` (`composeAuthorization`, `ComposedStrategy`), `presentation/` (`openInBrowser`, `showUrl`, `consumerPresentation`, the URL prompt in `prompt.ts`, and `browsers.ts`: the six shipped `IBrowser` factories), `transport/` (`loopback`, `loopback4`, `loopback6` over the one `httpListener`, not exported; `terminalPaste`, `consumerAnswer`, `consumerHandoff`), `protocol/` (`oauthCode`, `oidcCode`, `samlResponse`, `passcode`, `readPaste`), `answerWords.ts` (the fixed words per `AnswerRefusal`), `secrets.ts` (`mintSecret`, `sameSecret`). See "Authorization by composition"
-- `src/auth/browserLaunch.ts` — the launches behind the six shipped browsers, never through a shell: `launchableUrl` (http(s) only, its `href`), one `LaunchCommand` per factory (`linuxDefaultLaunch`, `linuxLaunch`, `macDefaultLaunch`, `macLaunch`, `windowsDefaultLaunch` — `rundll32 url.dll,FileProtocolHandler` —, `windowsLaunch` — PowerShell `Start-Process` reading the program and the URL from environment variables, never `cmd`), `launchBrowser` / `runLauncher` (`spawn` with an argument array, one launch: no platform switch, no fallback chain, no platform check, nothing written into `process.env`; settled at `spawn` for a browser binary, at exit `0` for a hand-off launcher). No `exec(`, `execSync(` or `shell:` in `src` (`browserLaunch.test.ts` proves a hostile URL runs nothing)
+- `src/auth/browserLaunch.ts` — the launches behind the six shipped browsers, never through a shell: `launchableUrl` (http(s) only, its `href`), one `LaunchCommand` per factory (`linuxDefaultLaunch`, `linuxLaunch`, `macDefaultLaunch`, `macLaunch`, `windowsDefaultLaunch` — `rundll32 url.dll,FileProtocolHandler` —, `windowsLaunch` — PowerShell `Start-Process` reading the program and the URL from environment variables, never `cmd`), `launchBrowser` / `runLauncher` (`spawn` with an argument array, one launch: no platform switch, no fallback chain, no platform check, nothing written into `process.env`; settled at `spawn` for a browser binary, which is then unreferenced, and at exit `0` for a hand-off launcher, which stays referenced until it exits or the signal aborts — so an `open()` awaited alone settles; `browserSettlesAlone.test.ts`). No `exec(`, `execSync(` or `shell:` in `src` (`browserLaunch.test.ts` proves a hostile URL runs nothing)
 - `src/auth/attempt.ts` — `abortedFailure`, `untilAborted`, `intervalWait`: what an aborted attempt ends with, a race that settles at the abort, the server's poll interval as an abortable wait
 - `src/auth/signalledRequest.ts` — `signalOf`: the attempt's `signal` read safely off interfaces-auth 6.0.0's `AuthorizationRequest`
 - `src/auth/rejection.ts` — `readRejection`, `refuseFor`, `unknownRefusal` — what a rejection says about the credential (rule 5)
@@ -137,22 +137,40 @@ src/
 │   ├── DefaultSncLibraryLocator.ts   # explicit sncLib, or SNC_LIB_64/SNC_LIB/registry/app-bundle in order
 │   ├── SecureLoginClientProbe.ts     # names the Secure Login Client when the library is inside its install path; checks nothing
 │   ├── SncSystem.ts           # the machine seam: env, file heads, registry (reg.exe by absolute path, no timeout, the moment's signal kills it) — nodeSncSystem()
+│   ├── secureLoginClient.ts   # what is known of the Secure Login Client's install (product name, registry key, macOS paths)
 │   ├── libraryArchitectures.ts  # PE / Mach-O (thin + FAT/FAT_64) / ELF header reader
 │   └── sncRefusal.ts          # the GSS error shapes → minted snc refusals
 ├── deviceCode/
 │   └── DeviceCodePresenter.ts  # IDeviceCodePresenter, DeviceCodePrompt, consoleDeviceCodePresenter
+├── renewal/                   # the shipped IRenewalStrategy implementations
+│   ├── index.ts
+│   ├── defaults.ts            # refreshThenLogin(), refreshOnly(): stateless, synchronous
+│   └── decision.ts            # readDecision, needsSentDecision: a strategy's answer read safely, a fresh frozen decision or refused
+├── persistence/               # the shipped ITokenPersistence
+│   ├── index.ts
+│   └── refreshStatePersistence.ts  # refreshStatePersistence(write, { onWriteFailure, logger? }), PersistedTokens
 ├── providers/                 # one file per grant type, all extending BaseTokenProvider
+│   ├── index.ts
+│   ├── BaseTokenProvider.ts   # renewal, pin, commit queue, shared attempts, persistence reports
+│   ├── AuthorizationCodeProvider.ts, ClientCredentialsProvider.ts, UaaPasscodeProvider.ts
+│   ├── OidcBrowserProvider.ts, OidcDeviceFlowProvider.ts, OidcPasswordProvider.ts, OidcTokenExchangeProvider.ts
+│   ├── Saml2BearerProvider.ts, Saml2PureProvider.ts
+│   ├── saml2Utils.ts          # the SAML providers' shared helpers, SamlTrust
+│   └── LoginFactoryOptions.ts # { signal? }, what inBrowser / fromTerminal take
 ├── authorization/             # an authorization strategy composed of three parts
+│   ├── index.ts
 │   ├── compose.ts             # composeAuthorization: open, build the URL, begin, arm, present, wait; latches the first verdict
 │   ├── answerWords.ts         # the fixed words per AnswerRefusal
 │   ├── secrets.ts             # mintSecret (32 random bytes, base64url), sameSecret (constant time)
 │   ├── presentation/          # how the URL reaches the user
+│   │   ├── index.ts
 │   │   ├── openInBrowser.ts   # IBrowser.open(url, signal); its failure prompts the URL once
 │   │   ├── browsers.ts        # the six IBrowser factories: linux/mac/windows × default/named, one fixed launch each
 │   │   ├── showUrl.ts         # the URL to stderr only
 │   │   ├── consumerPresentation.ts  # show(url, { redirectUri, signal }), onFailure; prints no URL
 │   │   └── prompt.ts          # promptAuthorizationUrl: stderr only; the logger gets "the authorization URL was shown"
 │   ├── transport/             # how the answer comes back; knows no payload
+│   │   ├── index.ts
 │   │   ├── loopback.ts        # loopback (127.0.0.1 + ::1, advertises localhost), loopback4, loopback6
 │   │   ├── httpListener.ts    # the one listener (not exported): Host check, literal dispatch, gate, form token, Connection: close
 │   │   ├── authority.ts       # answersLoopback: a loopback authority with the bound port, from a loopback peer
@@ -165,11 +183,13 @@ src/
 │   │   ├── consumerRedirect.ts  # a socketless transport advertises only the consumer's redirectUri
 │   │   └── endVerdict.ts      # an end verdict's error, re-minted when foreign
 │   └── protocol/              # what an answer is and how it is checked; knows no socket
+│       ├── index.ts
 │       ├── codeProtocols.ts   # oauthCode, oidcCode: the URL's state, constant time, before error
 │       ├── textProtocols.ts   # samlResponse, passcode
 │       ├── readPaste.ts       # a bare code only without ? & = / #; a pasted URL must carry the state
 │       └── answers.ts         # accept / refuse / end helpers, paste words
 ├── strategies/                # the named compositions, and the strategies that compose nothing
+│   ├── index.ts
 │   ├── callbackStrategies.ts  # browser/oidc/saml: loopback + showUrl or openInBrowser + the flow's protocol
 │   ├── manualStrategies.ts    # paste a code, a SAMLResponse (redirectUri required), a passcode: showUrl + terminalPaste
 │   ├── codeStrategies.ts      # externalCodeStrategy (consumerHandoff + oauthCode, redirectUri required) and staticCodeStrategy (not a composition)
@@ -192,7 +212,16 @@ src/
 │   ├── attempt.ts            # abortedFailure, untilAborted, intervalWait: how an aborted attempt ends
 │   ├── handled.ts            # markHandled: plain native promises only, never a foreign then
 │   ├── knownCodes.ts         # readSafely, tlsFailureCode, allowlistedCode, integerStatus
-│   └── …                     # oidcToken (device poll, RFC 8628 §3.5), oidcDiscovery (snapshot, mtlsAlias), oidcPkce, passcodeAuth, signalledRequest, grants, strictXml, …
+│   ├── signalledRequest.ts   # signalOf, asAbortSignal: a signal read safely
+│   ├── oidcToken.ts          # OIDC token requests, the device poll (RFC 8628 §3.5)
+│   ├── oidcDiscovery.ts      # discovery: a snapshot of the fields read, mtlsAlias
+│   ├── oidcPkce.ts           # PKCE verifier and S256 challenge
+│   ├── passcodeAuth.ts       # the UAA passcode exchange
+│   ├── clientCredentialsAuth.ts  # the client_credentials request
+│   ├── tokenRefresher.ts     # the UAA refresh request
+│   ├── saml2TokenExchange.ts # the saml2-bearer exchange and refresh
+│   ├── grants.ts             # the grant types, one entry each
+│   └── strictXml.ts          # parseStrictXml: every parser fault throws, nothing to the console
 ├── validation/
 │   ├── assertionValidator.ts   # createSignedResponseValidator / createSignedAssertionValidator: the check table
 │   ├── signedNode.ts           # verify every signature, resolve the element each covers
@@ -206,7 +235,9 @@ src/
 │   ├── clientSecret.ts            # clientSecretBasic (encoding raw | form), clientSecretPost
 │   ├── tlsClientCertificate.ts    # tls_client_auth: endpoint, else the mTLS alias, else the draft's; tlsMaterial()
 │   └── privateKeyJwt.ts           # a signed client assertion; client-authentication signing-key-unusable for an unusable key
-└── sso/                      # SsoProviderFactory
+└── sso/
+    ├── SsoProviderFactory.ts  # SsoProviderFactory.create
+    └── types.ts               # SsoProviderConfig, SsoProviderInstance
 ```
 
 ### How an interactive login works
@@ -261,8 +292,8 @@ An `IAuthorizationStrategy` is composed of three parts, each a contract of inter
 
 `httpListener` (`src/authorization/transport/httpListener.ts`, not exported) is the one listener behind `loopback`, `loopback4` and `loopback6`, parameterised by where it binds and what it advertises; it knows no payload. It owns its sockets for one `open`: released on the first terminal outcome — `use` returning or throwing, an `end` verdict, the signal — and `open` settles only once every listening socket is closed, so a settled `open` means the port is free. **No timer of the package's choosing** (the user's rule): no login timeout, no shutdown grace — the response that ended the login flushes first (`afterFlush`); at release an idle connection is ended and unreferenced, and one still answering or with an unfinished body is destroyed (`connections.ts`; a pending write keeps the loop alive whatever `unref()` says, measured). `signal` is the only way an `open` ends without a result, and no `timeoutMs` is left in `src` (`interactiveSources.test.ts`). Each composed strategy settles its `authorize` only after the transport's release — a listener's sockets closed, a terminal's `readline` closed and its stdin listeners gone — which the next login's drain waits for (see "Cancellable shared attempts").
 
-- **Loopback transports.** `loopback` binds `127.0.0.1`, then `::1` on the port the first got, and advertises `http://localhost:<port><endpoint>`; `EADDRINUSE` on `::1` fails `port-in-use`, `port: 0` included — never `127.0.0.1` alone — while a host without IPv6 loopback (`EADDRNOTAVAIL` / `EAFNOSUPPORT`) listens on `127.0.0.1` alone. `loopback4` / `loopback6` bind and advertise `127.0.0.1` / `[::1]` only. `port` is required on each (K6 `callback-port-invalid` at construction and again at `open`); no probe before the bind — the bind's own `EADDRINUSE` is `port-in-use`. The route hint names the SSH tunnel to the bound address (`ssh -L <port>:<address>:<port> <this machine>`).
-- **Per request, in this order:** the **`Host` check** before any route (`answersLoopback`, `authority.ts`: a loopback authority — `localhost`, `127.0.0.1`, `[::1]` in any spelling the WHATWG URL host parser reads as one — with the bound port, and only from a loopback peer: `127.0.0.0/8`, `::1`, `::ffff:127.x.y.z`); **literal dispatch** of the pathname read with `URL` to the `endpoint`, `/` and `/submit`, compared as strings (no route patterns, no case folding, no trailing-slash equivalence; anything else the fixed `404`); the **gate** (closed until armed: every request to the callback, `/` and `/submit` is `400` `not-armed`); on `/submit` the **form token**; only then the protocol's judge. `GET <endpoint>` hands `{ via: 'redirect', method: 'GET', params }` (the raw query through `URLSearchParams`), `POST <endpoint>` the urlencoded body (5 MB) only when the protocol takes `POST`.
+- **Loopback transports.** `loopback` binds `127.0.0.1`, then `::1` on the port the first got, and advertises `http://localhost:<port><endpoint>`; `EADDRINUSE` on `::1` fails `port-in-use`, `port: 0` included — never `127.0.0.1` alone — while a host without IPv6 loopback (`EADDRNOTAVAIL` / `EAFNOSUPPORT`) listens on `127.0.0.1` alone. `loopback4` / `loopback6` bind and advertise `127.0.0.1` / `[::1]` only. `port` is required on each (`callback-port-invalid` at construction and again at `open`); no probe before the bind — the bind's own `EADDRINUSE` is `port-in-use`. The route hint names the SSH tunnel to the bound address (`ssh -L <port>:<address>:<port> <this machine>`).
+- **Per request, in this order:** the **`Host` check** before any route (`answersLoopback`, `authority.ts`: a loopback authority — `localhost`, `127.0.0.1`, `[::1]` in any spelling the WHATWG URL host parser reads as one — with the bound port, and only from a loopback peer: `127.0.0.0/8`, `::1`, `::ffff:127.x.y.z`); **literal dispatch** of the raw target — the text up to the first `?`, nothing decoded or resolved; a target not starting with `/` is no route — to the `endpoint`, `/` and `/submit`, compared as strings (no route patterns, no case folding, no trailing-slash equivalence; anything else the fixed `404`); the **gate** (closed until armed: every request to the callback, `/` and `/submit` is `400` `not-armed`); on `/submit` the **form token**; only then the protocol's judge. `GET <endpoint>` hands `{ via: 'redirect', method: 'GET', params }` (the text after the first `?` through `URLSearchParams`), `POST <endpoint>` the urlencoded body (5 MB) only when the protocol takes `POST`.
 - **The paste page.** Served for every protocol (each has paste words): `/` serves the form with the protocol's words escaped and the attempt's **form token** — minted at `arm` (`mintSecret`, 32 random bytes, base64url), a hidden field, never logged; `POST /submit` carries `form_token` and `input`, and none, another or two tokens is `refuse 'form-token'` before the protocol sees anything (`sameSecret`, constant time). The token is evidence of the channel; a pasted URL's `state` is the protocol's.
 - **Every page is safe to render.** A value interpolated into a page goes through `escapeHtml` (the IdP's `error` / `error_description` are attacker-controllable; they reach only the escaped error page through the verdict's `shown`); every response carries `X-Content-Type-Options: nosniff`, a CSP of `default-src 'none'` (inline style, `form-action 'self'`, `base-uri 'none'`, `frame-ancestors 'none'`) and **`Connection: close`** — one answer per connection, nothing pipelined queued behind it (`listenerTransports.test.ts`). One success page for every protocol.
 - Every refused request — no payload, a wrong, missing or repeated `state`, before arming, no form token, a foreign `Host` — is answered `400` in fixed words (`ANSWER_WORDS`), `warn`-logged with its reason and the count only, and **ignored**; the login keeps waiting, and its `aborted` words report "N request(s) to the callback server were refused and ignored" (`ignoredCallbacks`). An explicit `error=` with the right `state` ends the login at once.
