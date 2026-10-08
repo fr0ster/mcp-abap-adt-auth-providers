@@ -2,7 +2,7 @@
  * The mock browser every test injects (`IBrowser`): it records each
  * `open(url, signal)` and resolves — or rejects, when told to — and never
  * launches anything. No test outside `shippedBrowsers.test.ts` gets a
- * shipped browser (`systemBrowser()` …); those are tested only there, at a
+ * shipped browser (`linuxDefaultBrowser()` …); those are tested only there, at a
  * mocked spawn / `open` boundary with fake executables.
  *
  * `onOpen` plays the user's browser where a test needs one: it runs on each

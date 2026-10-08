@@ -133,14 +133,25 @@ describe('public exports — the persistence strategy (spec §6c.8)', () => {
 
 // Spec §6d (Task 30n): the composer and its parts are public; the 5.x
 // class, its callback server factories and their scope are gone.
+describe('public exports — no universal browser (spec §6d)', () => {
+  it.each(['systemBrowser', 'chromeBrowser', 'edgeBrowser', 'firefoxBrowser'])(
+    '%s is not exported: the consumer picks the browser for its platform',
+    (name) => {
+      expect(name in (surface as Record<string, unknown>)).toBe(false);
+    },
+  );
+});
+
 describe('public exports — authorization by composition (spec §6d)', () => {
   it.each([
     'composeAuthorization',
     'openInBrowser',
-    'systemBrowser',
-    'chromeBrowser',
-    'edgeBrowser',
-    'firefoxBrowser',
+    'linuxDefaultBrowser',
+    'linuxBrowser',
+    'macDefaultBrowser',
+    'macBrowser',
+    'windowsDefaultBrowser',
+    'windowsBrowser',
     'showUrl',
     'consumerPresentation',
     'loopback',

@@ -21,18 +21,19 @@ import {
   browserCallbackStrategy,
   type ComposedAuthorization,
   type ComposedStrategy,
-  chromeBrowser,
   composeAuthorization,
   consumerAnswer,
   consumerHandoff,
   consumerPresentation,
   DEFAULT_CALLBACK_PORT,
-  edgeBrowser,
   externalCodeStrategy,
-  firefoxBrowser,
+  linuxBrowser,
+  linuxDefaultBrowser,
   loopback,
   loopback4,
   loopback6,
+  macBrowser,
+  macDefaultBrowser,
   manualPasscodeStrategy,
   manualPasteStrategy,
   manualSamlResponseStrategy,
@@ -46,9 +47,10 @@ import {
   samlResponse,
   showUrl,
   staticCodeStrategy,
-  systemBrowser,
   terminalPaste,
   UaaPasscodeProvider,
+  windowsBrowser,
+  windowsDefaultBrowser,
 } from '../../index';
 
 type Surface = typeof import('../../index');
@@ -71,10 +73,12 @@ export const server: IAuthorizationStrategy<string> = browserCallbackStrategy({
 });
 // The CLI's calls (auth-broker-cli 3.0.0, `timeoutMs` already gone).
 export const cli = [
-  browserCallbackStrategy({ browser: systemBrowser() }),
-  browserCallbackStrategy({ browser: chromeBrowser() }),
-  oidcCallbackStrategy({ browser: edgeBrowser() }),
-  samlCallbackStrategy({ browser: firefoxBrowser() }),
+  browserCallbackStrategy({ browser: linuxDefaultBrowser() }),
+  browserCallbackStrategy({ browser: linuxBrowser('google-chrome') }),
+  oidcCallbackStrategy({ browser: macDefaultBrowser() }),
+  oidcCallbackStrategy({ browser: macBrowser('Microsoft Edge') }),
+  samlCallbackStrategy({ browser: windowsDefaultBrowser() }),
+  samlCallbackStrategy({ browser: windowsBrowser('firefox') }),
   browserCallbackStrategy({ browser, port: redirectPort }),
   oidcCallbackStrategy({ port: redirectPort, browser }),
   samlCallbackStrategy({ port: redirectPort, browser }),
@@ -126,9 +130,9 @@ export const removed = [
   samlCallbackStrategy({ stateGate: false }),
   // @ts-expect-error openUrl is gone: an IBrowser, or consumerPresentation
   browserCallbackStrategy({ openUrl: async () => undefined }),
-  // @ts-expect-error no browser by name: chromeBrowser()
+  // @ts-expect-error no browser by name: linuxBrowser('google-chrome')
   browserCallbackStrategy({ browser: 'chrome' }),
-  // @ts-expect-error no browser by name: systemBrowser()
+  // @ts-expect-error no browser by name: the platform's *DefaultBrowser()
   oidcCallbackStrategy({ browser: 'system' }),
   // @ts-expect-error 'none' is no browser: leave browser out
   samlCallbackStrategy({ browser: 'none' }),
@@ -168,7 +172,7 @@ const parts: ComposedAuthorization<string> = {
 export const composed: ComposedStrategy<string> = composeAuthorization(parts);
 export const composedOidc: ComposedStrategy<OidcCallbackResult> =
   composeAuthorization({
-    presentation: openInBrowser({ browser: systemBrowser() }),
+    presentation: openInBrowser({ browser: macDefaultBrowser() }),
     transport: loopback({ port: DEFAULT_CALLBACK_PORT }),
     protocol: oidcCode(),
     endpoint: '/callback',
@@ -209,8 +213,12 @@ export const noEndpoint = composeAuthorization({
 export const noPort = loopback({});
 // @ts-expect-error openInBrowser does not take 'none': that is showUrl
 export const none = openInBrowser({ browser: 'none' });
-// @ts-expect-error no browser by name: chromeBrowser()
+// @ts-expect-error no browser by name: windowsBrowser('chrome')
 export const named = openInBrowser({ browser: 'chrome' });
 export const own = openInBrowser({ browser: ownBrowser });
+// @ts-expect-error no universal browser: the consumer picks one per platform
+export type R8 = Surface['systemBrowser'];
+// @ts-expect-error a browser factory takes its program
+export const noProgram = linuxBrowser();
 // @ts-expect-error the 5.x browser names are gone with the strings
 export type R7 = import('../../index').OpenableBrowser;
