@@ -53,19 +53,13 @@ export type PasteReading =
 const NOT_BARE = new Set(['?', '&', '=', '/', '#']);
 
 /**
- * Reads a pasted input for a login whose URL carried `expected` (`null` or
- * `undefined`: no `state`, nothing to compare — only the 5.x strategies,
- * until they are composed of the parts). A bare code — none of `?`, `&`,
- * `=`, `/`, `#` — is taken as typed. Anything else is a redirected URL,
- * parsed with `URL`: its query must carry the expected `state` exactly
- * once, and its code is its query's one `code` (never a fragment's). Only
- * for a URL without `state` does the lenient reading of 5.x (`code=…` and
- * the like) still apply.
+ * Reads a pasted input for a login whose URL carried `expected` (always
+ * one: C7). A bare code — none of `?`, `&`, `=`, `/`, `#` — is taken as
+ * typed. Anything else is a redirected URL, parsed with `URL`: its query
+ * must carry the expected `state` exactly once, and its code is its query's
+ * one `code` (never a fragment's).
  */
-export function readPaste(
-  expected: string | null | undefined,
-  input: string,
-): PasteReading {
+export function readPaste(expected: string, input: string): PasteReading {
   const trimmed = input.trim();
   if (![...trimmed].some((character) => NOT_BARE.has(character))) {
     const code = extractCode(trimmed);
@@ -77,17 +71,13 @@ export function readPaste(
     // base that is never used for anything else.
     url = new URL(trimmed, 'http://pasted.invalid/');
   } catch {
-    return { refused: typeof expected === 'string' ? 'state' : 'unreadable' };
+    return { refused: 'state' };
   }
-  if (typeof expected === 'string') {
-    if (!sameSecret(expected, oneValue(url.searchParams, 'state'))) {
-      return { refused: 'state' };
-    }
-    const code = oneValue(url.searchParams, 'code');
-    return code === undefined || code === ''
-      ? { refused: 'unreadable' }
-      : { code };
+  if (!sameSecret(expected, oneValue(url.searchParams, 'state'))) {
+    return { refused: 'state' };
   }
-  const code = extractCode(trimmed);
-  return code === null ? { refused: 'unreadable' } : { code };
+  const code = oneValue(url.searchParams, 'code');
+  return code === undefined || code === ''
+    ? { refused: 'unreadable' }
+    : { code };
 }
