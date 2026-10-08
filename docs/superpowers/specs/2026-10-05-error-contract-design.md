@@ -2979,6 +2979,16 @@ named compositions' `/callback`): it serves the redirect at exactly that
 path and advertises the same path, so the two cannot differ. The paste page
 and `/submit` are the listener's own paths beside it.
 
+**Dispatch is literal.** The listener reads the request's pathname with
+`URL` and compares it to its three paths (`endpoint`, `/`, `/submit`) as
+strings, exactly: no Express route patterns (no `:param`, no wildcards), no
+case folding, no trailing-slash equivalence. Anything else is the fixed
+404. So `/SUBMIT`, `/submit/` or `/:answer` as an endpoint can never share
+a handler with `/submit`, and a callback reaches only the exact advertised
+path. Tests: endpoints `/SUBMIT`, `/submit/`, `/:answer` — `POST /submit`
+still requires its form token, and each endpoint is reached only at its own
+exact path (`/callback/` and `/CALLBACK` answer 404 for `/callback`).
+
 - `GET <endpoint>` → `{ via: 'redirect', method: 'GET', params }`, `params`
   the raw query read with `URL` / `URLSearchParams` (no Express `qs`
   objects, no regex).
