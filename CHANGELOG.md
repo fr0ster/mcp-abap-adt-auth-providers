@@ -590,8 +590,10 @@ every exported declaration against the published 5.4.2.
     `state` keeps it. A code no URL was built for (`staticCodeStrategy`) is
     exchanged without a `code_verifier`: binding it is the consumer's. Measured on the provider stand (2026-10-07):
     Cloud Foundry UAA returns the `state`, accepts the verifier, and refuses
-    a code exchanged with another verifier or none. XSUAA is not yet
-    measured with PKCE (`docs/btp-setup.md`, Pending);
+    a code exchanged with another verifier or none. On the trial XSUAA
+    (2026-10-08) a login with `state` and PKCE gets a token and a refresh
+    token that open ADT; whether XSUAA refuses a wrong verifier is not yet
+    run (`docs/btp-setup.md`, Pending);
   - every listener is closed from the bind until the composer arms it —
     after the URL is built and the protocol has read its `state`, before the
     URL is shown — for every protocol, SAML included; `oauthCode()` and
