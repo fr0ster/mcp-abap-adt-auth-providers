@@ -29,6 +29,11 @@ import type {
   ICallbackServerOptions,
 } from '@mcp-abap-adt/interfaces-auth';
 import express from 'express';
+import {
+  type PasteReading,
+  readPaste,
+} from '../authorization/protocol/readPaste';
+import { mintSecret, sameSecret } from '../authorization/secrets';
 import { misconfigured, ownOptions } from './configuration';
 import {
   abortedLogin,
@@ -37,12 +42,6 @@ import {
   loginFailure,
   portInUse,
 } from './interactiveLogin';
-import {
-  mintSecret,
-  type PasteReading,
-  readPaste,
-  sameSecret,
-} from './loginState';
 import { logQuietly } from './tokenRequest';
 
 /**

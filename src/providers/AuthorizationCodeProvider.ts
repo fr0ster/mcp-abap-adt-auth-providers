@@ -24,10 +24,10 @@ import {
   ownOptions,
   requiredFieldsMissing,
 } from '../auth/configuration';
-import { mintSecret } from '../auth/loginState';
 import { generatePkceChallenge, generatePkceVerifier } from '../auth/oidcPkce';
 import { refreshJwtToken } from '../auth/tokenRefresher';
 import { logQuietly } from '../auth/tokenRequest';
+import { mintSecret } from '../authorization/secrets';
 import { browserCallbackStrategy } from '../strategies';
 import {
   BaseTokenProvider,

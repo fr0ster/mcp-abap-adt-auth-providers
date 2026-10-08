@@ -17,8 +17,8 @@ import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
 import { announcer, promptableUrl } from '../auth/announce';
 import { ownOptions } from '../auth/configuration';
 import { abortedLogin, loginFailure } from '../auth/interactiveLogin';
-import { readPaste, urlState } from '../auth/loginState';
 import { signalOf } from '../auth/signalledRequest';
+import { readPaste, urlState } from '../authorization/protocol/readPaste';
 import { DEFAULT_CALLBACK_PORT } from './BrowserCallbackStrategy';
 
 export interface ManualStrategyOptions {

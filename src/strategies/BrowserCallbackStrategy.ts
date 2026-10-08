@@ -35,12 +35,12 @@ import {
   loginFailure,
   portInUse,
 } from '../auth/interactiveLogin';
-import { urlState } from '../auth/loginState';
 import type { OidcCallbackResult } from '../auth/oidcBrowserAuth';
 import { withOidcCallbackServer } from '../auth/oidcBrowserAuth';
 import { withSamlCallbackServer } from '../auth/saml2Auth';
 import { signalOf } from '../auth/signalledRequest';
 import { logQuietly } from '../auth/tokenRequest';
+import { urlState } from '../authorization/protocol/readPaste';
 
 /**
  * Above Linux's `ip_local_port_range` (32768–60999), so an outbound connection

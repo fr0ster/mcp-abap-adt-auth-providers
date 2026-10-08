@@ -13,11 +13,11 @@ import {
   exchangeCodeForToken,
   getJwtAuthorizationUrl,
 } from '../../../auth/browserAuth';
-import { mintSecret } from '../../../auth/loginState';
 import {
   generatePkceChallenge,
   generatePkceVerifier,
 } from '../../../auth/oidcPkce';
+import { mintSecret } from '../../../authorization/secrets';
 import { AuthorizationCodeProvider } from '../../../providers/AuthorizationCodeProvider';
 import { ClientCredentialsProvider } from '../../../providers/ClientCredentialsProvider';
 import { refreshThenLogin } from '../../../renewal';
