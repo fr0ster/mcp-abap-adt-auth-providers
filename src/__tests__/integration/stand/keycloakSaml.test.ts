@@ -41,10 +41,29 @@ import { beforeAll, describe, expect, it } from '@jest/globals';
 import { isSamlStatusCode } from '@mcp-abap-adt/auth-errors';
 import { DOMParser } from '@xmldom/xmldom';
 import { parseStrictXml } from '../../../auth/strictXml';
+import { composeAuthorization } from '../../../authorization/compose';
+import { samlResponse } from '../../../authorization/protocol';
+import {
+  type ConsumerHandoffOptions,
+  consumerHandoff,
+} from '../../../authorization/transport';
 import { Saml2BearerProvider } from '../../../providers/Saml2BearerProvider';
 import { Saml2PureProvider } from '../../../providers/Saml2PureProvider';
 import { refreshThenLogin } from '../../../renewal';
-import { externalCodeStrategy, staticCodeStrategy } from '../../../strategies';
+import { staticCodeStrategy } from '../../../strategies';
+
+/**
+ * The consumer's own code obtains the SAMLResponse for the URL it is handed:
+ * the SAML protocol over a handoff (`externalCodeStrategy` is an OAuth code,
+ * bound by `state`, which a SAML URL does not carry).
+ */
+const samlHandedOver = (options: ConsumerHandoffOptions) =>
+  composeAuthorization({
+    ...consumerHandoff(options),
+    protocol: samlResponse(),
+    endpoint: '/callback',
+  });
+
 import {
   createSignedAssertionValidator,
   createSignedResponseValidator,
@@ -303,7 +322,7 @@ describeBoth('SAML providers with Keycloak as the identity provider', () => {
       renewal: refreshThenLogin(),
       ...bearerConfig(),
       logger,
-      authorization: externalCodeStrategy({
+      authorization: samlHandedOver({
         redirectUri: bearerAcs,
         provide: async (url) =>
           (await samlResponseByForm(url, USER)).samlResponse,
@@ -345,7 +364,7 @@ describeBoth('SAML providers with Keycloak as the identity provider', () => {
         idpCertificates,
         replayStore: defaultReplayStore,
       }),
-      authorization: externalCodeStrategy({
+      authorization: samlHandedOver({
         redirectUri: acsUrl,
         provide: async (url) => {
           const posted = await samlResponseByForm(url, USER);
@@ -430,7 +449,7 @@ describeBoth('SAML providers with Keycloak as the identity provider', () => {
           idpCertificates,
           replayStore: defaultReplayStore,
         }),
-        authorization: externalCodeStrategy({
+        authorization: samlHandedOver({
           redirectUri: acsUrl,
           provide: async (url) => {
             // A fresh browser: no Keycloak session, so nothing to be passive about.
