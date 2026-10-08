@@ -3288,7 +3288,7 @@ Every failure is minted through auth-errors; no new kind, no new outcome.
 | Where | Kind, facts |
 |---|---|
 | listener bind, port held | `interactive-login` `port-in-use` (`port`) |
-| a part's option | `configuration`: `callback-port-invalid` (`port`); `required-fields-missing` (`redirectUri`, `presentation`, `transport`, `protocol`, `provide`, `receive`, `show`); `invalid-value` (`endpoint`, `redirectUri` not an absolute http(s) URL, `authorizationUrl`; `presentation` for an `openInBrowser` browser without an `open` function; `transport` for a `remoteHint` that is not a function; `read` for a `terminalPaste` reader that is not a function; `protocol` for a terminal given a protocol without paste words; `show` for a `consumerPresentation` `onFailure` that is not a function) |
+| a part's option | `configuration`: `callback-port-invalid` (`port`); `required-fields-missing` (`redirectUri`, `presentation`, `transport`, `protocol`, `endpoint` — the composer given none —, `provide`, `receive`, `show`); `invalid-value` (`presentation`, `transport` or `protocol` for a part without its methods; `endpoint`, `redirectUri` not an absolute http(s) URL, `authorizationUrl`; `presentation` for an `openInBrowser` browser without an `open` function; `transport` for a `remoteHint` that is not a function; `read` for a `terminalPaste` reader that is not a function; `protocol` for a terminal given a protocol without paste words; `show` for a `consumerPresentation` `onFailure` that is not a function) |
 | abort, dispose, overlap | `aborted` (`strategy`, `ignoredCallbacks?`), `disposed` (`strategy`), `busy` |
 | the IdP's `?error=` | `identity-provider-refused` (`oauthError?`) |
 | terminal | `input-abandoned`, `no-terminal`, `no-input`; `unreadable-input` from the protocol |
@@ -3339,13 +3339,17 @@ the IdP's text. `shown` reaches only the escaped error page.
   |---|---|---|---|
   | `'system'`, `'auto'` | `linuxDefaultBrowser()` | `macDefaultBrowser()` | `windowsDefaultBrowser()` |
   | `'chrome'` | `linuxBrowser('google-chrome')` | `macBrowser('Google Chrome')` | `windowsBrowser('chrome')` |
-  | `'edge'`, `'msedge'` | `linuxBrowser('microsoft-edge')` | `macBrowser('Microsoft Edge')` | `windowsBrowser('msedge')` |
+  | `'edge'` | `linuxBrowser('microsoft-edge')` | `macBrowser('Microsoft Edge')` | `windowsBrowser('msedge')` |
   | `'firefox'` | `linuxBrowser('firefox')` | `macBrowser('Firefox')` | `windowsBrowser('firefox')` |
+  | any other name (`'msedge'` included: 5.4.2 opened the system default browser) | `linuxDefaultBrowser()` | `macDefaultBrowser()` | `windowsDefaultBrowser()` |
   | `'none'`, `'headless'` | no `browser` | no `browser` | no `browser` |
 
-  5.x's Linux fallback tried `chromium` / `chromium-browser`,
-  `microsoft-edge-stable` and `firefox-esr` after the first name; there is
-  no chain now — pass the executable installed. A consumer whose
+  5.4.2 handed a named browser to the `open` package, whose Linux
+  candidates were `google-chrome`, `google-chrome-stable`, `chromium`,
+  `chromium-browser` (Chrome), `microsoft-edge`, `microsoft-edge-dev` (Edge)
+  and `firefox`; a shell fallback with its own list ran only when `open`
+  could not be loaded. There is no list now — pass the executable
+  installed. A consumer whose
   configuration holds a browser name maps it itself; another browser
   (remote, console, WSL) is the consumer's `IBrowser`.
 - `externalCodeStrategy` takes OAuth codes only (§6d.7); a SAML response or
