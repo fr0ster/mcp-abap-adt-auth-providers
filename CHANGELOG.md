@@ -15,10 +15,13 @@ it, no login, request or registry query is bounded by a timeout of the
 package's choosing any more: the consumer's `AbortSignal` is the bound. How a
 token provider renews, and what it tells a store, are now strategies the
 consumer gives (`renewal`, required; `persistence`, replacing `onTokens`).
-And a login is bound to its attempt (`state`, PKCE, a gated loopback
-callback). See *Migrating to 6.0.0* in the README for what a 5.x consumer must
-now do. The surface changes below are taken from a diff of every exported
-declaration against the published 5.4.2.
+A login is bound to its attempt (`state`, PKCE, a loopback listener closed
+until armed). And an interactive authorization strategy is composed of three
+parts — a presentation, a transport and a protocol — with the named
+strategies kept as compositions of the shipped parts; a browser is an
+`IBrowser`, never a name. See *Migrating to 6.0.0* in the README for what a
+5.x consumer must now do. The surface changes below are taken from a diff of
+every exported declaration against the published 5.4.2.
 
 ### Breaking
 
@@ -77,14 +80,74 @@ declaration against the published 5.4.2.
   ASCII and rejects without a showable URI and code (`device-code-not-shown`).
   The manual strategies' prompt is two lines, never one line with a line
   break inside it.
-- **A browser that does not open no longer ends the login.** A launcher
-  that throws or rejects (`openUrl`, or the built-in one) gets one log line
-  in fixed words and the authorization URL as a prompt, and the login keeps
-  waiting on the same callback, so the URL shown is live — the way to finish
-  where no browser can be opened. 5.4.2 ended the login with a
-  `BrowserAuthError`; there is no `browser-launch-failed` outcome either
-  (interfaces-auth 6.0.0 had one, 7 removed it). A consumer that matched a
-  launch failure must stop, and bounds the login with its `signal`.
+- **A browser that does not open no longer ends the login.** A browser
+  that throws or rejects (the consumer's `IBrowser`, or a shipped one) gets
+  one log line in fixed words (`Failed to present the authorization URL:`)
+  and the authorization URL prompted on stderr, and the login keeps waiting
+  on the same callback, so the URL shown is live — the way to finish where no
+  browser can be opened. 5.4.2 ended the login with a `BrowserAuthError`;
+  there is no `browser-launch-failed` outcome either (interfaces-auth 6.0.0
+  had one, 7 removed it). A consumer that matched a launch failure must
+  stop, and bounds the login with its `signal`.
+- **Authorization strategies are compositions.** `browserCallbackStrategy`,
+  `oidcCallbackStrategy`, `samlCallbackStrategy`, `manualPasteStrategy`,
+  `manualSamlResponseStrategy`, `manualPasscodeStrategy` and
+  `externalCodeStrategy` keep their names and now return
+  `composeAuthorization(…)` of the shipped parts — a `ComposedStrategy`
+  (`IAuthorizationStrategy` with a required `dispose()`). From the diff
+  against 5.4.2:
+  - `CallbackStrategyOptions` (no longer generic): `browser` is
+    `IBrowser | undefined` (was `string`); `callbackServer`, `openUrl` and
+    `timeoutMs` are removed; `port`, `remoteHint`, `signal` unchanged.
+    A 5.x name maps to one of the six shipped browsers per platform
+    (`'system'` / `'auto'` → `linuxDefaultBrowser()`, `macDefaultBrowser()`,
+    `windowsDefaultBrowser()`; `'chrome'` → `linuxBrowser('google-chrome')`,
+    `macBrowser('Google Chrome')`, `windowsBrowser('chrome')`; and so on —
+    the README's table); `'none'` / `'headless'` → no `browser`. No string
+    is accepted anywhere: an object without an `open` function is
+    `configuration` `invalid-value` naming `presentation`.
+  - `openUrl(url, browser, redirectUri)` is removed: a callback that only
+    opened the URL is an `IBrowser`; one that needed the redirect or its own
+    UI is `consumerPresentation({ show })`, composed. From plain JavaScript
+    `openUrl` is an unknown key and ignored — a consumer that used it to keep
+    the URL off stderr now gets the URL on stderr unless it passes its own
+    `IBrowser` or presentation.
+  - `ManualStrategyOptions.redirectUri` and
+    `ExternalCodeStrategyOptions.redirectUri` are required (were optional,
+    defaulting to `http://localhost:61001/callback`): missing is
+    `configuration` `required-fields-missing` naming `redirectUri`, at
+    construction. `manualPasscodeStrategy` takes the new
+    `ManualPasscodeStrategyOptions` (`read?`, `signal?`), without
+    `redirectUri`. `StaticCodeStrategyOptions` and `staticCodeStrategy` are
+    unchanged.
+  - `externalCodeStrategy` takes OAuth codes only (its protocol is
+    `oauthCode()`); a SAML response or a passcode from the consumer's code is
+    `consumerHandoff` composed with `samlResponse()` / `passcode()`.
+  - The paste page's `/submit` is a `POST` (urlencoded `form_token` and
+    `input`, 5 MB), and every listener serves the paste page for its
+    protocol — OIDC and SAML included.
+  - An overlapping `authorize` on any composition is `interactive-login`
+    `busy`, the manual ones included.
+  - Every listener refuses every request until it is armed, for every
+    protocol — the SAML callback included.
+- **The authorization URL is prompted on stderr only.** `showUrl()` and the
+  fallback of a failed browser write it to stderr, never through the
+  `ILogger` and never to stdout; the logger gets the fixed line "the
+  authorization URL was shown". 5.4.2 wrote the prompt to the logger's
+  `info` when there was one. A consumer whose stderr is collected into its
+  logs uses `consumerPresentation`.
+- **The shipped browsers are one fixed launch each; nothing is guessed.**
+  No platform switch, no fallback chain, no platform check: the consumer
+  picks the factory for its platform, and one run on another OS fails to
+  start, so the URL is shown and the login waits. 5.4.2's Linux chains
+  (`google-chrome || chromium || chromium-browser`, `microsoft-edge ||
+  microsoft-edge-stable`, `firefox || firefox-esr`) are gone: pass the
+  executable installed. `DISPLAY=:0`, which 5.4.2 set on Linux without
+  `DISPLAY` or `WAYLAND_DISPLAY`, is no longer written: the package writes
+  nothing into `process.env`. `'auto'` and `'system'` are one (the platform's
+  default browser), and `'auto'`'s log lines are gone. `linuxBrowser`
+  resolves once the browser has started; the hand-off launchers at their
+  exit `0`.
 - **Token answers are read by type.** An answer's `access_token`,
   `refresh_token`, `id_token` and the device fields are kept only as
   non-empty strings, `expires_in` and `interval` only as finite non-negative
@@ -284,15 +347,66 @@ declaration against the published 5.4.2.
   `'fail'` rethrows for an awaited report (so the call fails
   `persisting-tokens`). Refused at construction as `configuration`
   `invalid-value` naming `onWriteFailure` and/or `write`.
+- **`composeAuthorization({ presentation, transport, protocol, endpoint,
+  signal? })`**, with the types `ComposedAuthorization` and
+  `ComposedStrategy`: one authorization strategy from the three parts of
+  interfaces-auth 7.4.0. It opens the transport, builds the URL from the
+  redirect the channel advertises, begins the protocol on it, arms the
+  channel, presents the URL (not awaited) and waits; it latches the first
+  accepted or ending answer and refuses every later one
+  (`already-answered`), and returns only the payload the protocol accepted.
+  `authorize` settles once the transport is released; an overlapping one is
+  `busy`; `dispose()` ends the call in flight. `endpoint` is required (the
+  named strategies pass `'/callback'`) and must survive URL parsing
+  unchanged and not be `/` or `/submit`, else `configuration`
+  `invalid-value` naming `endpoint`; a missing part is
+  `required-fields-missing` naming it.
+- **Presentations:** `openInBrowser({ browser })` (`OpenInBrowserOptions`),
+  `showUrl()`, `consumerPresentation({ show, onFailure? })`
+  (`ConsumerPresentationOptions`, `ShowAuthorizationUrl`, `ShowContext`). A
+  presentation that throws or rejects is logged in fixed words and the
+  login keeps waiting; `openInBrowser` then prompts the URL once on stderr,
+  `consumerPresentation` prints no URL and runs `onFailure` once.
+- **Browsers** (`IBrowser`, interfaces-auth 7.5.0), one fixed launch each,
+  started with an argument array: `linuxDefaultBrowser()` (`xdg-open`),
+  `linuxBrowser(executable)`, `macDefaultBrowser()` (`open`),
+  `macBrowser(app)` (`open -a`), `windowsDefaultBrowser()` (`rundll32.exe
+  url.dll,FileProtocolHandler`), `windowsBrowser(program)` (PowerShell
+  `Start-Process`, the program and the URL only in the environment). A
+  failure rejects `unknown` with the operation `opening-browser`; an abort
+  rejects `aborted`; a started browser is never killed.
+- **Transports:** `loopback({ port })` (`127.0.0.1`, then `::1` on the same
+  port; advertises `localhost`), `loopback4({ port })`, `loopback6({ port })`
+  (`LoopbackOptions`; `port` required), `terminalPaste({ redirectUri?, read?
+  })` (`TerminalPasteOptions`, `TerminalRead`, `readFromTerminal`),
+  `consumerAnswer({ redirectUri?, receive })` (`ConsumerAnswerOptions`,
+  `ReceiveAnswer`) and the pair `consumerHandoff({ redirectUri?, provide })`
+  (`ConsumerHandoffOptions`, `ProvideAnswer`). The three listeners are one
+  HTTP listener on `node:http`: the `Host` check before any route (a
+  loopback name with the bound port, from a loopback peer), literal dispatch
+  of the endpoint, `/` and `/submit`, closed until armed, the paste page
+  bound by a per-attempt form token, `Connection: close`,
+  `X-Content-Type-Options: nosniff` and the CSP on every response. A
+  transport without a socket advertises only the consumer's `redirectUri`.
+- **Protocols:** `oauthCode()`, `oidcCode()` (`OidcCallbackResult`), `samlResponse()`, `passcode()`. The code protocols
+  read the expected `state` from the URL — a URL with none, an empty or a
+  repeated one is `configuration` `invalid-value` naming `authorizationUrl`,
+  before anything is shown — and accept a redirect, a code or an `?error=`,
+  only with exactly that `state`; each protocol has paste words for a
+  terminal and a paste page.
 
 ### Changed
 
-- **Dependencies:** `@mcp-abap-adt/interfaces-auth ^7.3.0` (was ^3.2.0; 7.3.0
-  for the callback gate, `host` and `allowedHosts`),
-  `@mcp-abap-adt/interfaces-auth-sap ^3.3.0` (was ^2.0.0), and the new
-  `@mcp-abap-adt/auth-errors ^2.0.1` (2.0.1: an aborted login's tally reads
-  `N request(s) to the callback server were refused and ignored`, since the
-  count now holds every refused request, not only incomplete callbacks).
+- **Dependencies:** `@mcp-abap-adt/interfaces-auth ^7.5.0` (was ^3.2.0;
+  7.4.0 for the authorization parts, 7.5.0 for `IBrowser`; the
+  `ICallbackServer` contracts are deprecated there and implemented by
+  nothing here), `@mcp-abap-adt/interfaces-auth-sap ^3.3.0` (was ^2.0.0),
+  and the new `@mcp-abap-adt/auth-errors ^2.1.1` (2.0.1: an aborted login's
+  tally reads `N request(s) to the callback server were refused and
+  ignored`, since the count holds every refused request; 2.1.0: words for
+  the `consumer` strategy and the `presenting-authorization-url` /
+  `judging-answer` operations; 2.1.1: `busy` and `disposed` no longer name a
+  removed class). `express` and `open` are no longer dependencies.
 - **`getTokens()` / `refreshTokens()`** take an optional
   `ITokenRequestOptions` (`{ signal }`).
 - **Collaborator answers are awaited normally.** What a consumer's own code
@@ -329,15 +443,14 @@ declaration against the published 5.4.2.
   (5.4.2 answered the neutral refusal).
 - **One `debug` line per renewal decision**, `[BaseTokenProvider] Renewal
   step` with `{ trigger, moment, next }`.
-- **The callback server's release waits on nothing.** At release the
-  listener is closed (the port is free once the factory settles); an idle
-  connection is ended and unreferenced; one whose request body is unfinished
-  is destroyed; one whose complete request is still being answered is
-  unreferenced and its response goes on. Measured limits: Node's
-  `http.Server.close()` itself destroys a connection whose request was
-  parsed, even mid-flush of a large response to a client that does not read
-  (so that client may get a cut response), and a write still pending to such
-  a client would otherwise keep the process alive whatever `unref()` says.
+- **The callback listener's release waits on nothing.** At release every
+  listening socket is closed (the port is free once the strategy's
+  `authorize` settles); the response that ended the login has flushed
+  first; an idle connection is ended and unreferenced; one still being
+  answered — another request, or a body that never completes — is
+  destroyed, since a pending write would keep the process alive whatever
+  `unref()` says. Every response carries `Connection: close`. A port held
+  is found by the bind itself (`port-in-use`), with no probe before it.
 - **OIDC discovery keeps a snapshot** of the fields the providers read
   (`authorization_endpoint`, `token_endpoint`,
   `device_authorization_endpoint`, their mTLS aliases); an aborted or failed
@@ -380,6 +493,19 @@ declaration against the published 5.4.2.
   included; an operation of the list keeps its words and hints.
 - **`DEFAULT_LOGIN_TIMEOUT_MS`** and every `timeoutMs` option (Breaking,
   above).
+- **The callback server and its strategy class:** `BrowserCallbackStrategy`,
+  `BrowserCallbackStrategyOptions`, `withBrowserCallbackServer`,
+  `withOidcCallbackServer`, `withSamlCallbackServer` (and the internal
+  `runCallbackScope`), and the strategy options `callbackServer` and
+  `openUrl` → `composeAuthorization` and the parts (Breaking, above). A
+  receiver of the consumer's own is an `IAnswerTransport`; a listener on a
+  network address is one too — the package ships loopback listeners only.
+  The `host` / `allowedHosts` options and the `gated` / `expectState` gate of
+  the 6.0.0 prereleases never shipped. `CallbackServerFactory`,
+  `ICallbackServerOptions` and `ICallbackServerHandle` stay in
+  interfaces-auth 7.4.0, deprecated.
+- **Browser names, the `open` and `express` dependencies, the Linux
+  fallback chains and the `DISPLAY=:0` fallback** (Breaking, above).
 - **`onTokens`** on every token provider's config and `TokenProviderHooks`
   → `persistence` (Breaking, above).
 - **The redactor.** 5.4.2's redaction of the server's text
@@ -401,10 +527,11 @@ declaration against the published 5.4.2.
   quotes, so a `$(…)` or a backtick in it ran as a command. Only an `http:` /
   `https:` URL is opened now, as its serialisation (unsafe characters refused
   or percent-encoded), and every launcher is started with an argument array:
-  `xdg-open` or a named browser on Linux, `open` on macOS, and on Windows
+  each of the six shipped browsers is one fixed program — `xdg-open` or the
+  given executable on Linux, `open` / `open -a` on macOS, and on Windows
   `%SystemRoot%\System32\rundll32.exe url.dll,FileProtocolHandler` or
-  PowerShell's `Start-Process` reading the URL from an environment variable
-  — never `cmd`. The Windows launchers were measured on Windows 11
+  PowerShell's `Start-Process` reading the program and the URL from
+  environment variables — never `cmd`. The Windows launchers were measured on Windows 11
   (2026-10-07): the URL arrives unchanged, and no command interpreter is
   started.
 - **The legacy Basic credential, as shipped in 5.4.2, carried forward.**
@@ -447,49 +574,45 @@ declaration against the published 5.4.2.
     Cloud Foundry UAA returns the `state`, accepts the verifier, and refuses
     a code exchanged with another verifier or none. XSUAA is not yet
     measured with PKCE (`docs/btp-setup.md`, Pending);
-  - `browserCallbackStrategy` and `oidcCallbackStrategy` open their
-    transport `gated` (interfaces-auth 7.3.0): closed from the bind on, armed
-    with the URL's `state` (`expectState`) before the browser opens, then
-    settling only a callback — code or `?error=` — with that `state`; every
-    other request is answered `400`, counted and ignored, and the login
-    keeps waiting. **Breaking:** a consumer's `callbackServer` for them must
-    implement `expectState`, or the login is refused before anything opens
-    (`configuration` `invalid-value`, `fields: ['callbackServer']`); a
-    direct `new BrowserCallbackStrategy` takes a required `stateGate`
-    (`samlCallbackStrategy` passes `false`: a SAML response is bound by
-    `InResponseTo`);
-  - **Breaking:** the shipped transports bind loopback (`127.0.0.1` and
-    `::1`) instead of every interface, and refuse a request whose `Host` is
-    not loopback with the bound port before serving anything (DNS
-    rebinding). `Host` and `allowedHosts` are compared in the WHATWG URL
-    host parser's canonical form (one trailing dot dropped); a loopback
-    authority — `localhost`, `127.0.0.0/8`, `[::1]`, `[::ffff:127.x.y.z]`, in
-    any spelling the parser reads as one — counts only from a loopback peer,
-    so a network client sending `Host: localhost` to a wildcard bind is
-    refused; `0.0.0.0` and `[::]` are never an authority.
-    New strategy options `host` (the bind address) and `allowedHosts` (the
-    authorities a browser on another machine may use) open it up — and
-    every client that can reach an allowed authority can then settle the
-    login with a code of its own (the README warns of it); an SSH tunnel to
-    the port works with the default and is the safe route; a loopback
-    authority listed in `allowedHosts` admits no network peer. A port not free on
-    `::1` — fixed, or the one the OS gave `127.0.0.1` for `port: 0` — fails
-    the login `port-in-use`, never leaving it on `127.0.0.1` alone. The UAA
-    paste hint names the tunnel or the first allowed authority, never a
-    guessed host;
-  - **Breaking:** the UAA paste form carries a per-login token, and
-    `/submit` settles only with it — and a pasted redirected URL only with
-    this login's `state`. `manualPasteStrategy` asks again for a pasted URL
-    of another login. A bare code — no `?`, `&`, `=`, `/` or `#` — is taken
-    as before; anything else is a URL whose `state` must match and whose code
-    comes from the query alone (`…/callback&code=X` is refused);
+  - every listener is closed from the bind until the composer arms it —
+    after the URL is built and the protocol has read its `state`, before the
+    URL is shown — for every protocol, SAML included; `oauthCode()` and
+    `oidcCode()` then accept a redirect — code or `?error=` — only with
+    exactly one `state` equal to the URL's, the binding checked before the
+    error, so a forged `?error=` ends nothing; every other request is
+    answered `400`, counted and ignored, and the login keeps waiting. The
+    payload a strategy returns is the one the protocol accepted, never one a
+    transport hands back;
+  - **Breaking:** the shipped listeners bind loopback only — `loopback`
+    `127.0.0.1` and `::1`, `loopback4` / `loopback6` one of them — instead
+    of every interface, advertise only what they bind, and refuse a request
+    whose `Host` is not a loopback name with the bound port before serving
+    anything (DNS rebinding); a loopback name counts only from a loopback
+    peer, so a network client sending `Host: localhost` is refused. A port
+    not free on `::1` — fixed, or the one the OS gave `127.0.0.1` for
+    `port: 0` — fails the login `port-in-use`, never leaving it on
+    `127.0.0.1` alone; a host without IPv6 loopback listens on `127.0.0.1`
+    alone. A browser elsewhere reaches a listener through an SSH tunnel
+    (the hint beside the URL names it); a listener on the network is the
+    consumer's own transport, and its risk the consumer's (the README warns
+    of it);
+  - **Breaking:** the paste page carries a per-attempt form token, and
+    `/submit` (a `POST`) settles only with it — and a pasted redirected URL
+    only with this login's `state`. `manualPasteStrategy` asks again for a
+    pasted URL of another login. A bare code — no `?`, `&`, `=`, `/` or `#`
+    — is taken as before; anything else is a URL whose `state` must match
+    and whose code comes from the query alone (`…/callback&code=X` is
+    refused);
+  - the listener compares the request path literally — the endpoint, `/`,
+    `/submit`, nothing else — so no endpoint shares a handler with
+    `/submit`;
   - every comparison of a `state` or token is constant time
     (`crypto.timingSafeEqual` over SHA-256 digests), and none of them is
     logged.
   - **A configured URL's `state` binds only when it is one non-empty
-    value.** A configured `authorizationUrl` with an empty `state` (`state=`)
-    armed the gate with `""`, which a forged `?state=&code=EVIL` matched; one
-    with a repeated `state` armed its first value. Both are now refused —
+    value.** A configured `authorizationUrl` with an empty `state`
+    (`state=`), which a forged `?state=&code=EVIL` would match, or with a
+    repeated `state`, binds nothing. Both are refused —
     `configuration` `invalid-value`, `fields: ['authorizationUrl']` — before
     anything opens, and a callback's or a pasted URL's `state` and `code`
     count only when present exactly once (a repeated one is no value, never
