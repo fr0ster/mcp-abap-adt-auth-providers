@@ -2920,7 +2920,7 @@ payload.
 | `loopback6({ port })` | `::1` only | a loopback authority with the bound port, from a loopback peer | `http://[::1]:<port>/callback` |
 | `loopback4({ port })` | `127.0.0.1` only | the same | `http://127.0.0.1:<port>/callback` |
 | `loopback({ port })` | `127.0.0.1`, then `::1` on the same port (C3) | the same | `http://localhost:<port>/callback` |
-| `networkListener({ host, port, authorities })` | `host` | only `authorities`, from any peer; never a loopback name | `http://<authorities[0]>/callback` |
+| `networkListener({ host, port, authorities })` | `host` | only `authorities`, from any peer; never a loopback name | `http://<host of authorities[0]>:<bound port>/callback` — always with the bound port |
 | `terminalPaste({ redirectUri?, read? })` | nothing; reads stdin | — | `redirectUri` as given (C4) |
 | `consumerAnswer({ redirectUri?, receive })` | nothing | — | `redirectUri` as given (C4) |
 
@@ -2942,7 +2942,11 @@ payload.
   bind (so `port: 0` too), and a mismatch releases the socket and ends the
   login `configuration` `invalid-value`, `authorities`, before anything is
   advertised. A listener behind a proxy or a translated port is a consumer
-  transport, which owns that mapping. Test: `authorities:
+  transport, which owns that mapping. The advertised redirect and the
+  route hint serialise the canonical host **with the bound port**, whether
+  the entry named it or not (a portless `192.0.2.10` advertises
+  `http://192.0.2.10:<bound port>/callback`, never port 80); tests on a real
+  socket for a portless entry with a fixed and with an ephemeral port. Test: `authorities:
   ['192.0.2.10:61002']` with `port: 61001` → refused, the port bound again
   by the test.
   At `open` it logs one `warn` line in fixed words: "the callback listens
