@@ -25,6 +25,8 @@ export interface Send {
   readonly form?: Record<string, string | readonly string[]>;
   readonly body?: string;
   readonly contentType?: string;
+  /** More request headers. */
+  readonly headers?: Record<string, string>;
   /** The client's own address: a non-loopback one makes a network peer. */
   readonly localAddress?: string;
 }
@@ -54,6 +56,7 @@ export function send(
     options.form !== undefined ? formBody(options.form) : options.body;
   const headers: Record<string, string> = {
     Host: options.host ?? authorityOf(address, port),
+    ...options.headers,
   };
   if (body !== undefined) {
     headers['Content-Type'] =

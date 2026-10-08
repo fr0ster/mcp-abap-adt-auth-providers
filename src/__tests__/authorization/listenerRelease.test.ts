@@ -133,3 +133,51 @@ describe('the composed listener lets go of its connections at the abort', () => 
     expect(report.free).toBe(true);
   }, 60_000);
 });
+
+/**
+ * The tracker's own half (review m1), without the listener's
+ * `Connection: close`: a keep-alive server watched by the tracker, a paused
+ * client pipelining 10000 requests. `destroy` lets the process go; the
+ * 5.x servers' `unref` would not.
+ */
+const trackerScenario = (out: string) => `
+const net = require('node:net');
+const http = require('node:http');
+const { trackConnections } = require(${JSON.stringify(join(out, 'authorization', 'transport', 'connections.js'))});
+(async () => {
+  const connections = trackConnections('destroy');
+  const server = http.createServer((_req, res) => res.end('x'.repeat(4000)));
+  connections.watch(server);
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const port = server.address().port;
+  const socket = net.connect({ port, host: '127.0.0.1' });
+  socket.on('error', () => undefined);
+  await new Promise((resolve) => socket.once('connect', resolve));
+  socket.pause();
+  socket.write('GET / HTTP/1.1\\r\\nHost: x\\r\\n\\r\\n'.repeat(10000));
+  await new Promise((resolve) => setTimeout(resolve, 200));
+  socket.unref();
+  connections.release();
+  process.stdout.write('released');
+  // No process.exit: the child must end on its own.
+})();
+`;
+
+describe('the tracker destroys a connection still answering at release', () => {
+  it('a paused pipelining client on a keep-alive server holds nothing', () => {
+    const child = spawnSync(
+      process.execPath,
+      ['-e', trackerScenario(compiledSources())],
+      {
+        cwd: root,
+        encoding: 'utf8',
+        env: { ...process.env, NODE_PATH: join(root, 'node_modules') },
+        timeout: 15_000,
+        killSignal: 'SIGKILL',
+      },
+    );
+    expect(child.signal).toBeNull();
+    expect(child.status).toBe(0);
+    expect(child.stdout).toBe('released');
+  }, 60_000);
+});

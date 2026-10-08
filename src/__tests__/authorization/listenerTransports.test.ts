@@ -1055,17 +1055,24 @@ describe('the Host check, before any route (spec §6a1)', () => {
     },
   );
 
-  it('every response carries nosniff and the policy', async () => {
+  it('every response carries nosniff, the policy and Connection: close', async () => {
     const driven = await drive(
       loopback4({ port: 0 }),
       oauthCode(),
       async ({ port, arm }) => {
-        const replies = [await send(port, '/'), await send(port, '/nowhere')];
+        // Asked to keep the connection: answered `Connection: close` anyway.
+        const keep = { headers: { Connection: 'keep-alive' } };
+        const replies = [
+          await send(port, '/', keep),
+          await send(port, '/nowhere', keep),
+        ];
         arm();
         replies.push(await send(port, '/', { host: 'evil.example' }));
         replies.push(await send(port, `/callback${RIGHT.oauthCode?.redirect}`));
         for (const reply of replies) {
           expect(reply.headers['x-content-type-options']).toBe('nosniff');
+          // One answer per connection: nothing pipelined queues behind it.
+          expect(reply.headers.connection).toBe('close');
           expect(reply.headers['content-security-policy']).toContain(
             "default-src 'none'",
           );

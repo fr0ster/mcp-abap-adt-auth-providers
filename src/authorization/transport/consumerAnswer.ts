@@ -23,7 +23,7 @@ import { misconfigured, ownOptions } from '../../auth/configuration';
 import { abortedLogin, loginFailure } from '../../auth/interactiveLogin';
 import { readSafely } from '../../auth/knownCodes';
 import { consumerRedirect } from './consumerRedirect';
-import { endFailure } from './endVerdict';
+import { endFailure, verdictOf } from './endVerdict';
 
 /** The consumer's code: the answer, for the composition's signal. */
 export type ReceiveAnswer = (signal: AbortSignal) => Promise<string>;
@@ -64,7 +64,7 @@ const never = new AbortController().signal;
 function judgeOnce(judge: AnswerJudge<unknown>, text: unknown): void {
   // No string (absent, null, anything else): nothing was given.
   if (typeof text !== 'string') throw loginFailure({ outcome: 'no-input' });
-  const verdict = judge({ via: 'consumer', text });
+  const verdict = verdictOf(judge, { via: 'consumer', text });
   const kind = readSafely(verdict, 'verdict');
   if (kind === 'accept') return;
   if (kind === 'end') {

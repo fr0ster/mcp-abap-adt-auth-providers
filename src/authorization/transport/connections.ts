@@ -21,7 +21,18 @@ export interface ConnectionTracker {
   release(): void;
 }
 
-export function trackConnections(): ConnectionTracker {
+/**
+ * What a release does with a connection still answering (or with bytes
+ * still unwritten): `unref` lets its response go on (the 5.x servers);
+ * `destroy` cuts it — a pending write ignores `unref()`, so a client that
+ * pipelines requests and reads nothing would otherwise hold the process
+ * (review m1). Whatever ended the login has flushed before the release.
+ */
+export type AnsweringAtRelease = 'unref' | 'destroy';
+
+export function trackConnections(
+  answering: AnsweringAtRelease = 'unref',
+): ConnectionTracker {
   const servers: http.Server[] = [];
   /** Every open connection, and how many responses each is still writing. */
   const sockets = new Map<Socket, number>();
@@ -51,7 +62,9 @@ export function trackConnections(): ConnectionTracker {
     request: http.IncomingMessage | undefined,
   ): void => {
     socket.unref();
-    if (request && !request.complete) socket.destroy();
+    if (answering === 'destroy' || (request && !request.complete)) {
+      socket.destroy();
+    }
   };
 
   return {

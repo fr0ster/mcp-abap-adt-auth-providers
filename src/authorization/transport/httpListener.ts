@@ -129,19 +129,21 @@ function readOptions(options: AnswerTransportOptions): ListenerOptions {
   };
 }
 
-/** The request target's pathname and query, read with `URL`: origin-form only. */
+/** The request target's path and query: origin-form only. */
 function targetOf(
   url: string | undefined,
 ): { readonly pathname: string; readonly query: URLSearchParams } | undefined {
   if (url === undefined || !url.startsWith('/')) return undefined;
-  try {
-    // Appended to a fixed origin, never resolved against it: `//x/y` stays
-    // the path `//x/y`, which is no route.
-    const parsed = new URL(`http://listener.invalid${url}`);
-    return { pathname: parsed.pathname, query: parsed.searchParams };
-  } catch {
-    return undefined;
-  }
+  // The raw target up to the first `?`, as a string: no dot segment
+  // resolved, nothing decoded, so only the exact advertised path matches.
+  // The query alone is read with `URLSearchParams`.
+  const mark = url.indexOf('?');
+  return mark < 0
+    ? { pathname: url, query: new URLSearchParams() }
+    : {
+        pathname: url.slice(0, mark),
+        query: new URLSearchParams(url.slice(mark + 1)),
+      };
 }
 
 type Route = 'redirect-get' | 'redirect-post' | 'page' | 'submit';
@@ -288,7 +290,7 @@ export async function openHttpListener<TReturn>(
   let armed: Armed | undefined;
   let ignored = 0;
 
-  const connections = trackConnections();
+  const connections = trackConnections('destroy');
 
   let answerSettled = false;
   let resolveAnswer!: () => void;
@@ -403,6 +405,8 @@ export async function openHttpListener<TReturn>(
   ): Promise<void> => {
     res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader('Content-Security-Policy', CALLBACK_CSP);
+    // One answer per connection: nothing pipelined is queued behind it.
+    res.setHeader('Connection', 'close');
     // Before any route, page or token: a name this listener does not
     // answer for (DNS rebinding), or a peer off this machine.
     if (

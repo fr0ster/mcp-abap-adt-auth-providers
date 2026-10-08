@@ -23,7 +23,7 @@ import { abortedLogin, loginFailure } from '../../auth/interactiveLogin';
 import { readSafely } from '../../auth/knownCodes';
 import { ANSWER_WORDS } from '../answerWords';
 import { consumerRedirect } from './consumerRedirect';
-import { endFailure } from './endVerdict';
+import { endFailure, verdictOf } from './endVerdict';
 
 /** Reads one line for `prompt`; stops and releases what it holds at `signal`. */
 export type TerminalRead = (
@@ -137,7 +137,7 @@ export function terminalPaste(
         let prompt = pastePrompt;
         for (;;) {
           const text = await ask(prompt);
-          const verdict = judge({ via: 'terminal', text });
+          const verdict = verdictOf(judge, { via: 'terminal', text });
           const kind = readSafely(verdict, 'verdict');
           if (kind === 'accept') return;
           if (kind === 'end') {
