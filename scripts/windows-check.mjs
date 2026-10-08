@@ -1,4 +1,50 @@
 #!/usr/bin/env node
+/*
+ * RUN LOG — 2026-10-08, check 3 (browser) on a Windows 11 host:
+ *   npm ci && npm run build && node scripts/windows-check.mjs --only=browser --no-prompt
+ *
+ * Before the fix in launchOnce (the wait loop raced `watched` after open()
+ * had settled, so it never yielded to the event loop: the request was never
+ * read and recorder.changed() waiters piled up), every case whose launch
+ * succeeds — default, chrome, msedge, brackets — died within ~10-30 s:
+ *   FATAL ERROR: Ineffective mark-compacts near heap limit Allocation failed
+ *   - JavaScript heap out of memory
+ * star and injection (no launch expected) passed. After the fix:
+ *
+ * ===== SUMMARY (send this back) =====
+ * auth-providers 5.4.2 (373ac37); node v24.19.0; win32 10.0.26200 x64
+ * 1 registry: SKIPPED(not selected)
+ * 2 abort: SKIPPED(not selected)
+ * 3 browser: PASS
+ *     default: launcher "rundll32.exe" (pid 19856)
+ *     default: open() resolved after 211 ms
+ *     default: processes started below the launcher: none seen (sampled every ~50 ms); direct children: none seen
+ *     default: received "/launch-default?a=1&b=two%20words"
+ *     chrome: launcher "powershell.exe" (pid 39864)
+ *     chrome: open() resolved after 741 ms
+ *     chrome: processes started below the launcher: conhost.exe (sampled every ~50 ms); direct children: conhost.exe
+ *     chrome: received "/launch-chrome?a=1&b=two%20words"
+ *     msedge: launcher "powershell.exe" (pid 26680)
+ *     msedge: open() resolved after 1102 ms
+ *     msedge: processes started below the launcher: conhost.exe (sampled every ~50 ms); direct children: conhost.exe
+ *     msedge: received "/launch-msedge?a=1&b=two%20words"
+ *     brackets: launcher "powershell.exe" (pid 33204)
+ *     brackets: open() resolved after 914 ms
+ *     brackets: processes started below the launcher: conhost.exe, wc-[ab].exe (sampled every ~50 ms); direct children: conhost.exe, wc-[ab].exe
+ *     brackets: received "/launch-brackets?a=1&b=two%20words"
+ *     star: launcher "powershell.exe" (pid 12848)
+ *     star: open() rejected after 794 ms — kind=unknown words="opening the browser failed (unknown error)" facts={"operation":"opening-browser"}
+ *     star: processes started below the launcher: conhost.exe (sampled every ~50 ms); direct children: conhost.exe
+ *     star: a clear launch failure, nothing started
+ *     injection: launcher "powershell.exe" (pid 27848)
+ *     injection: open() rejected after 814 ms — kind=unknown words="opening the browser failed (unknown error)" facts={"operation":"opening-browser"}
+ *     injection: processes started below the launcher: conhost.exe (sampled every ~50 ms); direct children: conhost.exe
+ *     injection: a clear launch failure, nothing started
+ *     wildcard cases' temporary directory removed: yes
+ *     Close the browser tabs this check opened.
+ * 4 snc: SKIPPED(not selected)
+ * ===== END SUMMARY =====
+ */
 /**
  * windows-check.mjs — checks on a Windows host what the Linux test stand
  * cannot. Not shipped (not in package.json `files`); plain Node, no
@@ -837,9 +883,11 @@ async function launchOnce(r, label) {
       !(settled !== null && (arrived() || 'error' in settled)) &&
       !(settled !== null && chosen.expects === 'nothing')
     ) {
+      // Once open() has settled, `watched` would win every race at once and
+      // the loop would never yield to the event loop (the request never read).
       await Promise.race([
         recorder.changed(),
-        watched,
+        ...(settled === null ? [watched] : []),
         sleep(Math.max(0, Math.min(1_000, deadline - Date.now()))),
       ]);
     }
