@@ -3,6 +3,8 @@ module.exports = {
   testEnvironment: 'node',
   roots: ['<rootDir>/src'],
   testMatch: ['**/__tests__/**/*.test.ts'],
+  // No test may start a real browser launcher (see the file).
+  setupFiles: ['<rootDir>/src/__tests__/helpers/noRealBrowser.ts'],
   collectCoverageFrom: [
     'src/**/*.ts',
     '!src/**/*.d.ts',
