@@ -985,8 +985,10 @@ the user before the next builds against it.
   port" (they now cover every composition); tests; README; CHANGELOG.
   **G13 (user)**: merge, tag, publish.
 - [ ] **auth-providers** (PR #68): `^7.5.0`, `^2.1.1`;
-  `systemBrowser()`, `chromeBrowser()`, `edgeBrowser()`, `firefoxBrowser()`
-  implementing `IBrowser` with today's launch; `openInBrowser({ browser:
+  `linuxDefaultBrowser()`, `linuxBrowser(executable)`, `macDefaultBrowser()`,
+  `macBrowser(app)`, `windowsDefaultBrowser()`, `windowsBrowser(program)`
+  implementing `IBrowser`, one fixed launch each (no platform check, no
+  fallback chain, no `open` package); `openInBrowser({ browser:
   IBrowser })` and the named compositions' `browser?: IBrowser`; every
   string browser name removed (no run-time validation left); tests first —
   each shipped browser launches through its argument array with no shell,

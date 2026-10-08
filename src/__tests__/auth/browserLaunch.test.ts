@@ -9,7 +9,7 @@
  *
  * - each shipped browser's exact argv, System32 paths and no `cmd`:
  *   `shippedBrowsers.test.ts`.
- * - `runLaunchers` for real, with a node script as the launcher: a hostile
+ * - `runLauncher` for real, with a node script as the launcher: a hostile
  *   URL reaches it as one argument and no MARKER file is created.
  */
 
@@ -57,7 +57,7 @@ jest.mock('node:child_process', () => ({
   },
 }));
 
-import { launchableUrl, runLaunchers } from '../../auth/browserLaunch';
+import { launchableUrl, runLauncher } from '../../auth/browserLaunch';
 
 /** `${IFS}` as text: a shell's word separator, no space for the URL to encode. */
 const IFS = ['$', '{IFS}'].join('');
@@ -122,7 +122,7 @@ describe('launchableUrl', () => {
   });
 });
 
-describe('runLaunchers, for real: a hostile URL runs nothing', () => {
+describe('runLauncher, for real: a hostile URL runs nothing', () => {
   it('reaches the launcher as one argument; no MARKER is created', async () => {
     mode.record = false;
     const dir = mkdtempSync(join(tmpdir(), 'launch-'));
@@ -138,21 +138,19 @@ describe('runLaunchers, for real: a hostile URL runs nothing', () => {
       readdirSync(process.cwd()).filter((f) => f.startsWith('MARKER'));
     try {
       let failed: unknown;
-      runLaunchers(
-        [
-          {
-            command: process.execPath,
-            args: [recorder, out, href],
-            settlesOn: 'exit',
-          },
-        ],
+      runLauncher(
+        {
+          command: process.execPath,
+          args: [recorder, out, href],
+          settlesOn: 'exit',
+        },
         {
           onFailure: (error) => {
             failed = error ?? new Error('the launcher failed');
           },
         },
       );
-      // Until the launcher wrote its argv, or every launcher failed; then
+      // Until the launcher wrote its argv, or it failed; then
       // let anything a shell would have started finish.
       await new Promise<void>((resolve) => {
         const poll = setInterval(() => {

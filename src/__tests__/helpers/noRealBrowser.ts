@@ -23,7 +23,7 @@ import { resolve } from 'node:path';
 import { promisify } from 'node:util';
 
 // The core module object itself (not an import wrapper): every importer,
-// the `open` package and `jest.requireActual` included, reads it.
+// `jest.requireActual` included, reads it.
 import childProcess = require('node:child_process');
 
 const GUARDED = Symbol.for('mcp-abap-adt.noRealBrowser');

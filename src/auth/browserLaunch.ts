@@ -189,69 +189,63 @@ export const windowsLaunch =
     settlesOn: 'exit',
   });
 
-/** How `runLaunchers` reports, and when it stops trying. */
+/** How `runLauncher` reports, and whether it may still start. */
 export interface LaunchCallbacks {
-  /** Called once, with the last launcher's error (`undefined` for a non-zero exit), when none runs. */
+  /** Called once, with the launcher's error (`undefined` for a non-zero exit), when it did not answer. */
   readonly onFailure: (error: unknown) => void;
-  /** Called once when a launcher answered: exited `0`, or started (`settlesOn: 'spawn'`). */
+  /** Called once when the launcher answered: exited `0`, or started (`settlesOn: 'spawn'`). */
   readonly onSuccess?: (() => void) | undefined;
-  /** Checked before each launcher: `true` starts no further one. */
+  /** Checked before the start: `true` starts nothing and fails. */
   readonly stopped?: (() => boolean) | undefined;
 }
 
 /**
- * Starts the first launcher that runs, without a shell. `onFailure` is
- * called once, with the last launcher's error (or `undefined` for a non-zero
- * exit), when none does — or when `stopped()` says to start no further one;
- * `onSuccess` once when one answers: a hand-off launcher by exiting `0`, a
- * browser binary by starting (its exit is never awaited). Never throws; the
- * browser outlives nothing it started (the child is unreferenced).
+ * Starts ONE launcher, without a shell — there is no next candidate.
+ * `onSuccess` is called once when it answers: a hand-off launcher by
+ * exiting `0`, a browser binary by starting (its exit is never awaited);
+ * `onFailure` once otherwise — with its error when it could not start, or
+ * `undefined` for a non-zero exit — and at once, starting nothing, when
+ * `stopped()` says so. Never throws; the browser outlives nothing it started
+ * (the child is unreferenced, never killed).
  */
-export function runLaunchers(
-  commands: readonly LaunchCommand[],
+export function runLauncher(
+  launch: LaunchCommand,
   callbacks: LaunchCallbacks,
 ): void {
   const { onFailure, onSuccess, stopped } = callbacks;
-  const attempt = (index: number, last: unknown): void => {
-    const next = commands[index];
-    if (next === undefined || stopped?.() === true) {
-      onFailure(last);
-      return;
-    }
-    let settled = false;
-    const fallThrough = (error: unknown) => {
-      if (settled) return;
-      settled = true;
-      attempt(index + 1, error);
-    };
-    try {
-      const child = child_process.spawn(next.command, [...next.args], {
-        stdio: 'ignore',
-        windowsHide: true,
-        ...(next.env === undefined
-          ? {}
-          : { env: { ...process.env, ...next.env } }),
-      });
-      const succeed = () => {
-        if (settled) return;
-        settled = true;
-        onSuccess?.();
-      };
-      child.once('error', fallThrough);
-      if (next.settlesOn === 'spawn') {
-        child.once('spawn', succeed);
-      } else {
-        child.once('exit', (code) => {
-          if (code === 0) succeed();
-          else fallThrough(undefined);
-        });
-      }
-      child.unref();
-    } catch (error) {
-      fallThrough(error);
-    }
+  if (stopped?.() === true) {
+    onFailure(undefined);
+    return;
+  }
+  let settled = false;
+  const settle = (answer: () => void) => {
+    if (settled) return;
+    settled = true;
+    answer();
   };
-  attempt(0, undefined);
+  const fail = (error: unknown) => settle(() => onFailure(error));
+  try {
+    const child = child_process.spawn(launch.command, [...launch.args], {
+      stdio: 'ignore',
+      windowsHide: true,
+      ...(launch.env === undefined
+        ? {}
+        : { env: { ...process.env, ...launch.env } }),
+    });
+    const succeed = () => settle(() => onSuccess?.());
+    child.once('error', fail);
+    if (launch.settlesOn === 'spawn') {
+      child.once('spawn', succeed);
+    } else {
+      child.once('exit', (code) => {
+        if (code === 0) succeed();
+        else fail(undefined);
+      });
+    }
+    child.unref();
+  } catch (error) {
+    fail(error);
+  }
 }
 
 /**
@@ -291,7 +285,7 @@ export async function launchBrowser(
   if (href === undefined) throw launchFailure(undefined);
 
   const launched = new Promise<void>((resolve, reject) => {
-    runLaunchers([launch(href)], {
+    runLauncher(launch(href), {
       onSuccess: resolve,
       onFailure: (error) =>
         reject(signal.aborted ? abortedFailure() : launchFailure(error)),
