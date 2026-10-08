@@ -2888,7 +2888,7 @@ export interface IAuthorizationPresentation {
 Also in 7.4.0, all additive (new values of fact sets are minors, as in
 7.1.0):
 
-- `CONFIG_FIELDS` gains `redirectUri`,
+- `CONFIG_FIELDS` gains `endpoint`, `redirectUri`,
   `presentation`, `transport`, `protocol`, `provide`, `receive`, `show`.
 - `INTERACTIVE_LOGIN_STRATEGIES` gains `consumer` (the label of
   `consumerAnswer`).
@@ -2974,10 +2974,15 @@ today's prompt sentences.
 
 Per request, after the `Host` check and only once armed:
 
-- `GET /callback` → `{ via: 'redirect', method: 'GET', params }`, `params`
+Every listener route is derived from the one `endpoint` it was given (the
+named compositions' `/callback`): it serves the redirect at exactly that
+path and advertises the same path, so the two cannot differ. The paste page
+and `/submit` are the listener's own paths beside it.
+
+- `GET <endpoint>` → `{ via: 'redirect', method: 'GET', params }`, `params`
   the raw query read with `URL` / `URLSearchParams` (no Express `qs`
   objects, no regex).
-- `POST /callback` → `{ via: 'redirect', method: 'POST', params }`, the
+- `POST <endpoint>` → `{ via: 'redirect', method: 'POST', params }`, the
   urlencoded body (5 MB), only when `callbackMethods` has `POST`; else 404.
 - `POST /submit` → `{ via: 'form', text }`, only when the protocol has paste
   words, and only after the form token check (§6d.3.4).
@@ -3070,6 +3075,13 @@ export interface ComposedAuthorization<TPayload> {
   readonly protocol: IAuthorizationProtocol<TPayload>;
   /** Ends every login of this strategy, beside the request's signal. */
   readonly signal?: AbortSignal | undefined;
+  /**
+   * The endpoint path the redirect arrives at — required, no default; the
+   * named compositions pass `'/callback'`. An absolute path (`/` and at
+   * least one more character, no `?`, `#`, `..` or `//`), else
+   * `configuration` `invalid-value`, `endpoint`, at construction.
+   */
+  readonly endpoint: string;
 }
 
 export function composeAuthorization<TPayload>(
@@ -3089,7 +3101,7 @@ At construction, a missing part → `configuration`
 2. One `AbortController` for the call, aborted by the option signal, the
    request's signal (the attempt's, §6b) or `dispose()`; an already-aborted
    one is honoured before anything opens.
-3. `transport.open({ signal, logger, paste, callbackMethods }, use)`, where
+3. `transport.open({ signal, logger, paste, callbackMethods, endpoint }, use)`, where
    `use(channel)`:
    1. a protocol with `redirect: 'required'` and a channel with no
       `redirectUri` → `configuration` `required-fields-missing`
@@ -3207,7 +3219,7 @@ Every failure is minted through auth-errors; no new kind, no new outcome.
 | Where | Kind, facts |
 |---|---|
 | listener bind, port held | `interactive-login` `port-in-use` (`port`) |
-| a part's option | `configuration`: `callback-port-invalid` (`port`); `required-fields-missing` (`redirectUri`, `presentation`, `transport`, `protocol`, `provide`, `receive`, `show`); `invalid-value` (`redirectUri` not an absolute http(s) URL, `browser`, `authorizationUrl`) |
+| a part's option | `configuration`: `callback-port-invalid` (`port`); `required-fields-missing` (`redirectUri`, `presentation`, `transport`, `protocol`, `provide`, `receive`, `show`); `invalid-value` (`endpoint`, `redirectUri` not an absolute http(s) URL, `browser`, `authorizationUrl`) |
 | abort, dispose, overlap | `aborted` (`strategy`, `ignoredCallbacks?`), `disposed` (`strategy`), `busy` |
 | the IdP's `?error=` | `identity-provider-refused` (`oauthError?`) |
 | terminal | `input-abandoned`, `no-terminal`, `no-input`; `unreadable-input` from the protocol |
@@ -3298,7 +3310,10 @@ protocol it applies to.
 - **Host:** DNS-rebound `Host` refused; a non-loopback peer with `Host:
   localhost` refused (the loopback peer rule); every shipped listener's
   redirect is its origin plus the endpoint it was given (a test passes
-  another endpoint path and checks the advertised redirect and the route).
+  another endpoint path and checks the advertised redirect, that the
+  redirect arrives at that path, and that `/callback` then answers 404); the
+  composer hands a consumer transport the composition's `endpoint`; an
+  invalid `endpoint` is refused at construction.
 - **Composer:** a consumer transport whose `answer()` resolves without an
   accept → `failed`, no payload; one that calls the judge with a wrong
   `state` and resolves → `failed`; overlap → `busy`; dispose during
