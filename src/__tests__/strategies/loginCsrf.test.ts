@@ -144,13 +144,92 @@ describe('AuthorizationCodeProvider: state and PKCE for the URL it builds', () =
     );
   });
 
-  it('a configured authorizationUrl is used unchanged: no state, no code_verifier', async () => {
+  it('a configured authorizationUrl without state gets a minted state and nothing else; no code_verifier (C7)', async () => {
     forms.length = 0;
     const urls: string[] = [];
-    const configured = `https://uaa.example/oauth/authorize?client_id=cid&redirect_uri=${encodeURIComponent(CALLBACK)}&response_type=code`;
-    await uaaProvider(recordingStrategy(urls), configured).getTokens();
-    expect(urls).toEqual([configured]);
+    // Escapes and `~` a reserialisation would change: kept byte for byte.
+    const configured = `https://uaa.example/oauth/authorize?client_id=c%7Eid&redirect_uri=${encodeURIComponent(CALLBACK)}&scope=a%20b&response_type=code`;
+    const provider = uaaProvider(recordingStrategy(urls), configured);
+    await provider.getTokens();
+    await provider.refreshTokens();
+    expect(urls).toHaveLength(2);
+    for (const url of urls) {
+      expect(url.startsWith(`${configured}&state=`)).toBe(true);
+      const state = url.slice(`${configured}&state=`.length);
+      expect(state).toMatch(BASE64URL_32);
+      expect(new URL(url).searchParams.getAll('state')).toEqual([state]);
+      expect(new URL(url).searchParams.has('code_challenge')).toBe(false);
+    }
+    // Minted anew for every URL built.
+    expect(stateOf(urls[0] as string)).not.toBe(stateOf(urls[1] as string));
     expect(forms[0]).not.toHaveProperty('code_verifier');
+  });
+
+  it.each([
+    ['without a query', 'https://uaa.example/authorize', '?'],
+    ['with an empty query', 'https://uaa.example/authorize?', ''],
+    ['with a query ending in &', 'https://uaa.example/authorize?a=1&', ''],
+  ])(
+    'a configured URL %s gets its state appended in place',
+    async (_c, configured, joint) => {
+      const urls: string[] = [];
+      await uaaProvider(recordingStrategy(urls), configured).getTokens();
+      expect(urls[0]?.startsWith(`${configured}${joint}state=`)).toBe(true);
+      expect(stateOf(urls[0] as string)).toMatch(BASE64URL_32);
+    },
+  );
+
+  it('a configured URL with a fragment gets its state before the fragment', async () => {
+    const urls: string[] = [];
+    await uaaProvider(
+      recordingStrategy(urls),
+      'https://uaa.example/authorize?a=1#frag',
+    ).getTokens();
+    const url = new URL(urls[0] as string);
+    expect(url.hash).toBe('#frag');
+    expect(url.searchParams.get('a')).toBe('1');
+    expect(url.searchParams.get('state')).toMatch(BASE64URL_32);
+  });
+
+  it.each([
+    ['its own state', 'state=consumer-state', ['consumer-state']],
+    ['an empty state', 'state=', ['']],
+    ['two states', 'state=a&state=b', ['a', 'b']],
+  ])(
+    'a configured authorizationUrl with %s keeps it unchanged (C7)',
+    async (_c, query, states) => {
+      const urls: string[] = [];
+      const configured = `https://uaa.example/oauth/authorize?client_id=cid&${query}`;
+      await uaaProvider(recordingStrategy(urls), configured).getTokens();
+      expect(urls).toEqual([configured]);
+      expect(new URL(urls[0] as string).searchParams.getAll('state')).toEqual(
+        states,
+      );
+    },
+  );
+
+  it('no minted state reaches a log line', async () => {
+    const lines: string[] = [];
+    const record = (message: string, meta?: unknown) => {
+      lines.push(`${message} ${JSON.stringify(meta ?? null)}`);
+    };
+    const urls: string[] = [];
+    await new AuthorizationCodeProvider({
+      renewal: refreshThenLogin(),
+      uaaUrl: tokenBase,
+      clientId: 'cid',
+      clientSecret: 'sec',
+      authorization: recordingStrategy(urls),
+      authorizationUrl: 'https://uaa.example/authorize?client_id=cid',
+      logger: { debug: record, info: record, warn: record, error: record },
+    }).getTokens();
+    const state = stateOf(urls[0] as string) as string;
+    expect(state).toMatch(BASE64URL_32);
+    expect(lines.length).toBeGreaterThan(0);
+    for (const line of lines) {
+      expect(line).not.toContain(state);
+      expect(line).not.toContain('uaa.example');
+    }
   });
 
   it('a static code is exchanged without a code_verifier', async () => {
@@ -199,6 +278,14 @@ describe('OidcBrowserProvider: state beside its PKCE', () => {
         challengeOf(forms[i]?.code_verifier as string),
       );
     }
+  });
+
+  it('every URL it builds carries exactly one state (C7: never one without)', async () => {
+    const urls: string[] = [];
+    await oidcProvider(urls).getTokens();
+    expect(new URL(urls[0] as string).searchParams.getAll('state')).toEqual([
+      expect.stringMatching(BASE64URL_32),
+    ]);
   });
 });
 
@@ -514,8 +601,8 @@ describe('the comparison is constant time (source)', () => {
   const read = (file: string) =>
     readFileSync(path.join(__dirname, '../..', file), 'utf8');
 
-  it('loginState compares through timingSafeEqual over equal-length digests', () => {
-    const source = read('auth/loginState.ts');
+  it('secrets compares through timingSafeEqual over equal-length digests', () => {
+    const source = read('authorization/secrets.ts');
     expect(source).toContain('timingSafeEqual(');
     expect(source).toContain("createHash('sha256')");
   });
@@ -523,7 +610,9 @@ describe('the comparison is constant time (source)', () => {
   it.each([
     ['auth/callbackServer.ts', 'sameSecret('],
     ['strategies/manualStrategies.ts', 'readPaste('],
-  ])('%s compares the armed secret only through loginState', (file, call) => {
+    ['authorization/protocol/readPaste.ts', 'sameSecret('],
+    ['authorization/protocol/codeProtocols.ts', 'sameSecret('],
+  ])('%s compares the armed secret only through sameSecret', (file, call) => {
     const source = read(file);
     expect(source).toContain(call);
     // Our own source, not untrusted input: a regex is fine here.
@@ -531,7 +620,8 @@ describe('the comparison is constant time (source)', () => {
       /(===|!==)\s*(gate\.)?(bound|formToken|expected)\b/,
     );
     expect(source).not.toMatch(
-      /\b(bound|formToken|expected)\s*(===|!==)(?!\s*(null|undefined)\b)/,
+      // `typeof expected === 'string'` checks the type, not the secret.
+      /(?<!typeof )\b(bound|formToken|expected)\s*(===|!==)(?!\s*(null|undefined)\b)/,
     );
     expect(source).not.toContain('timingSafeEqual');
   });
