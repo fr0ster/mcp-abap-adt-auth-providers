@@ -1,22 +1,24 @@
 /**
  * The shipped browsers (spec §6d, §6a0): `systemBrowser()`, `chromeBrowser()`,
- * `edgeBrowser()`, `firefoxBrowser()` implement `IBrowser` with today's
- * launch — the `open` package when it loads, else a launcher started with an
- * argument array and no shell: `xdg-open` / the browser's executables on
+ * `edgeBrowser()`, `firefoxBrowser()` implement `IBrowser` through the
+ * package's own launchers on every platform (no `open` package), each
+ * started with an argument array and no shell: `xdg-open` / the browser's executables on
  * Linux, `open` (`-a <app>`) on macOS, and on Windows `rundll32` or
  * PowerShell's `Start-Process` (the URL only in the environment), both by
  * absolute path under `%SystemRoot%\System32`. Only an `http(s)` URL is
  * launched, as its serialisation.
  *
- * `open` resolves once the browser was asked to open the URL and rejects
- * when it could not be, with an `AuthProviderFailure` (`unknown`,
+ * `open` resolves once the browser was asked to open the URL — a hand-off
+ * launcher (`xdg-open`, `open(1)`, `rundll32`, `Start-Process`) at its exit
+ * `0`, a browser binary started directly at its `spawn` — and rejects when
+ * it could not be, with an `AuthProviderFailure` (`unknown`,
  * `opening-browser`, an allowlisted code) — no URL, no `state`, no
  * launcher text.
  *
  * - `spawn` recorded (nothing starts): each platform and browser gets the
  *   exact URL as one argument, no `shell` option, never `exec`;
- * - `open` mocked: each named browser reaches it under the per-platform
- *   names `open` ships;
+ * - settlement per launcher, through the mocked `child_process` boundary
+ *   only: there is no `open` package to mock;
  * - for real (Linux): a fake `xdg-open` and `google-chrome` on `PATH`; a
  *   hostile URL reaches them as one argument and no MARKER file is created.
  */
@@ -54,6 +56,7 @@ const realChildProcess =
   jest.requireActual<typeof import('node:child_process')>('node:child_process');
 type FakeChild = InstanceType<typeof import('node:events').EventEmitter> & {
   unref(): void;
+  kill(): boolean;
 };
 /**
  * How the recorded child goes: an error before it starts; or it starts
@@ -68,7 +71,8 @@ const fakeChild: {
   outcome: (index: number) => number | Error | 'running';
   real: Record<string, string>;
   running: FakeChild[];
-} = { record: true, outcome: () => 0, real: {}, running: [] };
+  killed: number;
+} = { record: true, outcome: () => 0, real: {}, running: [], killed: 0 };
 
 jest.mock('node:child_process', () => ({
   ...jest.requireActual<Record<string, unknown>>('node:child_process'),
@@ -89,6 +93,10 @@ jest.mock('node:child_process', () => ({
       jest.requireActual<typeof import('node:events')>('node:events');
     const child = new EventEmitter() as FakeChild;
     child.unref = () => undefined;
+    child.kill = () => {
+      fakeChild.killed += 1;
+      return true;
+    };
     const outcome = fakeChild.outcome(index);
     setImmediate(() => {
       if (outcome instanceof Error) {
@@ -106,21 +114,6 @@ jest.mock('node:child_process', () => ({
   },
   execSync: () => {
     throw new Error('execSync must never be called');
-  },
-}));
-
-type OpenFn = (url: string, options?: unknown) => Promise<unknown>;
-const mockOpen: {
-  default: OpenFn | undefined;
-  apps: Record<string, string | string[]> | undefined;
-} = { default: undefined, apps: undefined };
-jest.mock('open', () => ({
-  __esModule: true,
-  get default() {
-    return mockOpen.default;
-  },
-  get apps() {
-    return mockOpen.apps;
   },
 }));
 
@@ -161,12 +154,11 @@ function onPlatform(platform: NodeJS.Platform): void {
 const never = new AbortController().signal;
 
 beforeEach(() => {
-  mockOpen.default = undefined;
-  mockOpen.apps = undefined;
   fakeChild.record = true;
   fakeChild.outcome = () => 0;
   fakeChild.real = {};
   fakeChild.running = [];
+  fakeChild.killed = 0;
   spawned.length = 0;
 });
 afterEach(() => {
@@ -211,7 +203,7 @@ describe('each shipped browser is an IBrowser', () => {
   );
 });
 
-describe('without the open package: an argument array, no shell', () => {
+describe('every platform: an argument array, no shell', () => {
   const ps = 'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe';
   it.each<[NodeJS.Platform, Name, string, string[]]>([
     ['linux', 'systemBrowser', 'xdg-open', [href]],
@@ -392,14 +384,94 @@ describe('without the open package: an argument array, no shell', () => {
     'a URL that is not http(s) (%j) starts nothing and rejects',
     async (url) => {
       onPlatform('linux');
-      mockOpen.default = jest.fn(async () => undefined);
       const failure = await systemBrowser()
         .open(url, never)
         .catch((e: unknown) => e);
       expect(isAuthProviderFailure(failure)).toBe(true);
       expect(rendered(failure)).not.toContain(url);
       expect(spawned).toEqual([]);
-      expect(mockOpen.default).not.toHaveBeenCalled();
+    },
+  );
+
+  // Settlement per launcher, every platform (fix round 2).
+  const HAND_OFF: [NodeJS.Platform, Name][] = [
+    ['linux', 'systemBrowser'],
+    ['darwin', 'systemBrowser'],
+    ['darwin', 'chromeBrowser'],
+    ['darwin', 'edgeBrowser'],
+    ['darwin', 'firefoxBrowser'],
+    ['win32', 'systemBrowser'],
+    ['win32', 'chromeBrowser'],
+    ['win32', 'edgeBrowser'],
+    ['win32', 'firefoxBrowser'],
+  ];
+
+  it.each(HAND_OFF)(
+    '%s, %s: a hand-off launcher exiting non-zero after its spawn rejects (no next launcher)',
+    async (platform, name) => {
+      onPlatform(platform);
+      fakeChild.outcome = () => 1;
+      const failure = await factories[name]()
+        .open(HOSTILE, never)
+        .catch((e: unknown) => e);
+      expect(readFailure(failure, 'opening-browser').facts).toEqual({
+        operation: 'opening-browser',
+      });
+      expect(spawned).toHaveLength(1);
+    },
+  );
+
+  it.each(HAND_OFF)(
+    '%s, %s: a hand-off launcher failing before its spawn rejects',
+    async (platform, name) => {
+      onPlatform(platform);
+      fakeChild.outcome = () =>
+        Object.assign(new Error('nope'), { code: 'ENOENT' });
+      const failure = await factories[name]()
+        .open(HOSTILE, never)
+        .catch((e: unknown) => e);
+      expect(readFailure(failure, 'opening-browser').facts).toEqual({
+        operation: 'opening-browser',
+        code: 'ENOENT',
+      });
+    },
+  );
+
+  it.each(HAND_OFF)(
+    '%s, %s: an abort while the hand-off launcher runs rejects aborted; the child is not killed',
+    async (platform, name) => {
+      onPlatform(platform);
+      fakeChild.outcome = () => 'running';
+      const controller = new AbortController();
+      const opened = factories[name]()
+        .open(HOSTILE, controller.signal)
+        .catch((e: unknown) => e);
+      for (let i = 0; i < 20 && fakeChild.running.length === 0; i += 1) {
+        await new Promise((resolve) => setImmediate(resolve));
+      }
+      controller.abort();
+      expect(readFailure(await opened, 'browser-login').facts).toEqual({
+        outcome: 'aborted',
+      });
+      expect(fakeChild.killed).toBe(0);
+      // Its later exit changes nothing.
+      fakeChild.running[0]?.emit('exit', 0);
+    },
+  );
+
+  it.each<[Name]>([['chromeBrowser'], ['edgeBrowser'], ['firefoxBrowser']])(
+    'Linux, %s: an abort while a browser binary is starting rejects aborted; nothing is killed',
+    async (name) => {
+      onPlatform('linux');
+      const controller = new AbortController();
+      fakeChild.outcome = () => {
+        controller.abort();
+        return 'running';
+      };
+      await expect(
+        factories[name]().open(HOSTILE, controller.signal),
+      ).rejects.toBeInstanceOf(AuthProviderFailure);
+      expect(fakeChild.killed).toBe(0);
     },
   );
 
@@ -445,69 +517,26 @@ describe('without the open package: an argument array, no shell', () => {
   );
 });
 
-describe('with the open package: today’s app names', () => {
-  const apps = {
-    chrome: ['chrome-name-a', 'chrome-name-b'],
-    edge: ['edge-name-a'],
-    firefox: 'firefox-name',
-  };
-
-  it.each<[Name, unknown]>([
-    ['systemBrowser', undefined],
-    ['chromeBrowser', { app: { name: apps.chrome } }],
-    ['edgeBrowser', { app: { name: apps.edge } }],
-    ['firefoxBrowser', { app: { name: apps.firefox } }],
-  ])('%s: open(href, %j)', async (name, options) => {
-    const open = jest.fn<OpenFn>(async () => undefined);
-    mockOpen.default = open;
-    mockOpen.apps = apps;
-    await expect(factories[name]().open(HOSTILE, never)).resolves.toBe(
-      undefined,
-    );
-    expect(open).toHaveBeenCalledTimes(1);
-    expect(open.mock.calls[0]?.[0]).toBe(href);
-    expect(open.mock.calls[0]?.[1]).toEqual(options);
-    expect(spawned).toEqual([]);
-  });
-
-  it('without open’s apps a named browser goes by its own name', async () => {
-    const open = jest.fn<OpenFn>(async () => undefined);
-    mockOpen.default = open;
-    await edgeBrowser().open(HOSTILE, never);
-    expect(open.mock.calls[0]?.[1]).toEqual({ app: { name: 'msedge' } });
-  });
-
-  it('open rejecting rejects in fixed words, keeping an allowlisted code', async () => {
-    mockOpen.default = async () => {
-      throw Object.assign(new Error(`spawn SECRET-PATH ${HOSTILE}`), {
-        code: 'ENOENT',
-      });
-    };
-    const failure = await chromeBrowser()
-      .open(HOSTILE, never)
-      .catch((e: unknown) => e);
-    expect(readFailure(failure, 'opening-browser')).toMatchObject({
-      kind: 'unknown',
-      facts: { operation: 'opening-browser', code: 'ENOENT' },
-    });
-    const text = rendered(failure);
-    expect(text).not.toContain('idp.example');
-    expect(text).not.toContain('SECRET-PATH');
-  });
-});
-
 describe('through openInBrowser: the failure in fixed words, the URL prompted once', () => {
   it.each([
     [
-      'open rejecting',
+      'the launcher failing to start',
       () => {
-        mockOpen.default = async () => {
-          throw Object.assign(new Error(`SECRET-PATH ${HOSTILE}`), {
+        onPlatform('linux');
+        fakeChild.outcome = () =>
+          Object.assign(new Error(`SECRET-PATH ${HOSTILE}`), {
             code: 'ENOENT',
           });
-        };
       },
       'opening the browser failed (unknown error, ENOENT)',
+    ],
+    [
+      'the hand-off launcher exiting non-zero',
+      () => {
+        onPlatform('linux');
+        fakeChild.outcome = () => 2;
+      },
+      'opening the browser failed (unknown error)',
     ],
     [
       'every launcher failing',
