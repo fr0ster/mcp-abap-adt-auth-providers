@@ -197,6 +197,12 @@ export interface LaunchCallbacks {
   readonly onSuccess?: (() => void) | undefined;
   /** Checked before the start: `true` starts nothing and fails. */
   readonly stopped?: (() => boolean) | undefined;
+  /**
+   * Aborts when nobody awaits the launch any more: a hand-off launcher
+   * still running is then unreferenced (never killed), so it holds the
+   * process no longer.
+   */
+  readonly abandoned?: AbortSignal | undefined;
 }
 
 /**
@@ -205,14 +211,16 @@ export interface LaunchCallbacks {
  * exiting `0`, a browser binary by starting (its exit is never awaited);
  * `onFailure` once otherwise — with its error when it could not start, or
  * `undefined` for a non-zero exit — and at once, starting nothing, when
- * `stopped()` says so. Never throws; the browser outlives nothing it started
- * (the child is unreferenced, never killed).
+ * `stopped()` says so. Never throws, and kills nothing it started. A
+ * browser binary is unreferenced once started; a hand-off launcher stays
+ * referenced until it exits (or `abandoned` aborts), so the process waits
+ * for the answer it promised.
  */
 export function runLauncher(
   launch: LaunchCommand,
   callbacks: LaunchCallbacks,
 ): void {
-  const { onFailure, onSuccess, stopped } = callbacks;
+  const { onFailure, onSuccess, stopped, abandoned } = callbacks;
   if (stopped?.() === true) {
     onFailure(undefined);
     return;
@@ -235,14 +243,26 @@ export function runLauncher(
     const succeed = () => settle(() => onSuccess?.());
     child.once('error', fail);
     if (launch.settlesOn === 'spawn') {
-      child.once('spawn', succeed);
+      // A browser binary runs until the user closes it: once started it is
+      // the answer, and it holds the process no longer.
+      child.once('spawn', () => {
+        child.unref();
+        succeed();
+      });
     } else {
+      // A hand-off launcher stays referenced until it exits — its exit is
+      // the answer, so an `open()` awaited alone still settles — unless the
+      // launch is abandoned first.
+      const release = () => child.unref();
+      abandoned?.addEventListener('abort', release, { once: true });
+      const done = () => abandoned?.removeEventListener('abort', release);
+      child.once('error', done);
       child.once('exit', (code) => {
+        done();
         if (code === 0) succeed();
         else fail(undefined);
       });
     }
-    child.unref();
   } catch (error) {
     fail(error);
   }
@@ -290,6 +310,7 @@ export async function launchBrowser(
       onFailure: (error) =>
         reject(signal.aborted ? abortedFailure() : launchFailure(error)),
       stopped: () => signal.aborted,
+      abandoned: signal,
     });
   });
   await untilAborted(launched, signal);
