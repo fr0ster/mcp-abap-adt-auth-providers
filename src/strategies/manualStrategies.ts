@@ -106,8 +106,9 @@ export function manualSamlResponseStrategy(
 /**
  * The UAA passcode, typed in by the user: shows where to fetch it —
  * `<uaa>/passcode`, opened in any browser, on any machine — and reads the
- * code they copy from that page. The default for `UaaPasscodeProvider`, so a
- * login works on a machine with no browser at all, as `cf login --sso` does.
+ * code they copy from that page. `UaaPasscodeProvider.fromTerminal` composes
+ * it (no provider has a default strategy), so a login works on a machine with
+ * no browser at all, as `cf login --sso` does.
  */
 export function manualPasscodeStrategy(
   options: ManualPasscodeStrategyOptions = {},
