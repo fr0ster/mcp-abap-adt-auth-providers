@@ -93,6 +93,39 @@ function declaredRedirectOf(prebuilt: string): string | null {
   return url.searchParams.get('redirect_uri');
 }
 
+/**
+ * C7 (spec §6d.0): a configured URL that carries no `state` gets the
+ * provider's own, minted for every URL built, and nothing else — no PKCE
+ * challenge it did not build. It is appended to the query as text, before
+ * any fragment, so nothing of the consumer's URL is reserialised. A URL
+ * that carries a `state` — any, even repeated or empty — is kept as it is:
+ * the protocol judges it (it binds nothing, and is refused, unless it is one
+ * non-empty value).
+ */
+function withMintedState(prebuilt: string): string {
+  let carriesState: boolean;
+  try {
+    carriesState = new URL(prebuilt).searchParams.has('state');
+  } catch {
+    throw misconfigured(
+      authError.configuration({
+        case: 'invalid-value',
+        fields: ['authorizationUrl'],
+      }),
+    );
+  }
+  if (carriesState) return prebuilt;
+  const hashAt = prebuilt.indexOf('#');
+  const head = hashAt === -1 ? prebuilt : prebuilt.slice(0, hashAt);
+  const fragment = hashAt === -1 ? '' : prebuilt.slice(hashAt);
+  const joint = !head.includes('?')
+    ? '?'
+    : head.endsWith('?') || head.endsWith('&')
+      ? ''
+      : '&';
+  return `${head}${joint}state=${mintSecret()}${fragment}`;
+}
+
 export class AuthorizationCodeProvider extends BaseTokenProvider {
   private config: AuthorizationCodeProviderConfig;
 
@@ -204,7 +237,8 @@ export class AuthorizationCodeProvider extends BaseTokenProvider {
     // for a callback that never comes.
     // Login CSRF (spec §6a1): the PKCE verifier of the last URL this
     // attempt built, sent in its exchange. None for a configured URL — the
-    // consumer's, unchanged — or a code no URL was built for.
+    // consumer's, given only a `state` when it has none (C7) — or a code no
+    // URL was built for.
     let codeVerifier: string | undefined;
     const request: AuthorizationRequest = {
       logger: this.logger,
@@ -215,7 +249,7 @@ export class AuthorizationCodeProvider extends BaseTokenProvider {
           if (declaredRedirect && declaredRedirect !== redirectUri) {
             throw mismatch(redirectUri);
           }
-          return prebuilt;
+          return withMintedState(prebuilt);
         }
         // A fresh state and PKCE pair for every URL built.
         const verifier = generatePkceVerifier();
