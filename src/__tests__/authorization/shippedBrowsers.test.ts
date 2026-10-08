@@ -555,13 +555,13 @@ describe('through openInBrowser: the failure in fixed words, the URL prompted on
   it.each([
     [
       'the launcher failing to start',
-      () =>
+      (): Error =>
         Object.assign(new Error(`SECRET-PATH ${HOSTILE}`), { code: 'ENOENT' }),
       'opening the browser failed (unknown error, ENOENT)',
     ],
     [
       'the hand-off launcher exiting non-zero',
-      () => 2,
+      (): number => 2,
       'opening the browser failed (unknown error)',
     ],
   ] as const)('%s', async (_name, outcome, words) => {

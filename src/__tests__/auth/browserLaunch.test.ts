@@ -7,8 +7,8 @@
  * with an argument array, the URL one element of it, and only an http(s) URL
  * — as its serialisation — is launched.
  *
- * - `launchCommands`: no `cmd`, Windows' launchers by absolute path (each
- *   shipped browser's exact argv: `shippedBrowsers.test.ts`).
+ * - each shipped browser's exact argv, System32 paths and no `cmd`:
+ *   `shippedBrowsers.test.ts`.
  * - `runLaunchers` for real, with a node script as the launcher: a hostile
  *   URL reaches it as one argument and no MARKER file is created.
  */
@@ -57,12 +57,7 @@ jest.mock('node:child_process', () => ({
   },
 }));
 
-import {
-  launchableUrl,
-  launchCommands,
-  runLaunchers,
-  URL_VARIABLE,
-} from '../../auth/browserLaunch';
+import { launchableUrl, runLaunchers } from '../../auth/browserLaunch';
 
 /** `${IFS}` as text: a shell's word separator, no space for the URL to encode. */
 const IFS = ['$', '{IFS}'].join('');
@@ -124,42 +119,6 @@ describe('launchableUrl', () => {
   it('serialises an http(s) URL: no space and no double quote survive', () => {
     const href = launchableUrl('https://idp.example/a b?x="y z"#"f"');
     expect(href).toBe('https://idp.example/a%20b?x=%22y%20z%22#%22f%22');
-  });
-});
-
-describe('launchCommands: no cmd, System32 by absolute path', () => {
-  // Re-review: a bare name is searched in the current directory first on
-  // Windows; the system's own programs are named by absolute path.
-  it('win32 launchers are absolute paths under SystemRoot (C:\\Windows without it)', () => {
-    const saved = process.env.SystemRoot;
-    try {
-      process.env.SystemRoot = 'D:\\Win';
-      for (const browser of [undefined, 'chrome'] as const) {
-        const [only] = launchCommands('win32', browser, 'https://x/');
-        expect(only?.command.startsWith('D:\\Win\\System32\\')).toBe(true);
-      }
-      delete process.env.SystemRoot;
-      const [fallback] = launchCommands('win32', undefined, 'https://x/');
-      expect(fallback?.command).toBe('C:\\Windows\\System32\\rundll32.exe');
-    } finally {
-      if (saved === undefined) delete process.env.SystemRoot;
-      else process.env.SystemRoot = saved;
-    }
-  });
-
-  it('no launcher anywhere is cmd', () => {
-    for (const platform of ['win32', 'darwin', 'linux'] as const) {
-      for (const browser of [
-        undefined,
-        'chrome',
-        'msedge',
-        'firefox',
-      ] as const) {
-        for (const command of launchCommands(platform, browser, 'https://x/')) {
-          expect(command.command.toLowerCase()).not.toMatch(/^cmd(\.exe)?$/);
-        }
-      }
-    }
   });
 });
 

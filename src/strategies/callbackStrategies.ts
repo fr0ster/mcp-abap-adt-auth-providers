@@ -11,8 +11,8 @@
  * | `samlCallbackStrategy` | `samlResponse()` |
  *
  * Presentation: `browser` absent → `showUrl()`; else `openInBrowser({
- * browser })` — an `IBrowser`, never a name (`systemBrowser()`,
- * `chromeBrowser()`, `edgeBrowser()`, `firefoxBrowser()`, or the
+ * browser })` — an `IBrowser`, never a name (one of the six shipped per
+ * platform — `linuxDefaultBrowser()` … `windowsBrowser(program)` — or the
  * consumer's). Transport: `loopback({ port: port ?? DEFAULT_CALLBACK_PORT
  * })`, its route hint replaced by `remoteHint` when given.
  */
@@ -51,8 +51,10 @@ export interface CallbackStrategyOptions {
    */
   port?: number | undefined;
   /**
-   * The browser that opens the URL: `systemBrowser()`, `chromeBrowser()`,
-   * `edgeBrowser()`, `firefoxBrowser()`, or the consumer's own `IBrowser`.
+   * The browser that opens the URL: one of the six shipped for a platform
+   * (`linuxDefaultBrowser()`, `linuxBrowser(executable)`,
+   * `macDefaultBrowser()`, `macBrowser(app)`, `windowsDefaultBrowser()`,
+   * `windowsBrowser(program)`), or the consumer's own `IBrowser`.
    * Absent: the URL is shown on stderr. One that rejects is a presentation
    * failure — the URL is prompted and the login keeps waiting. A consumer
    * that shows the URL in its own UI composes `consumerPresentation`.

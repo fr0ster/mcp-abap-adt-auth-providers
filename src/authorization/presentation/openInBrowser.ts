@@ -1,7 +1,8 @@
 /**
  * `openInBrowser({ browser })` (spec §6d.2, §6d.5): opens the URL through
- * `browser`, an `IBrowser` — a shipped one (`systemBrowser()`,
- * `chromeBrowser()`, `edgeBrowser()`, `firefoxBrowser()`) or the consumer's —
+ * `browser`, an `IBrowser` — a shipped one (`linuxDefaultBrowser()`,
+ * `linuxBrowser(executable)`, `macDefaultBrowser()`, `macBrowser(app)`,
+ * `windowsDefaultBrowser()`, `windowsBrowser(program)`) or the consumer's —
  * used as given: its `open`, read once at construction, is called on it with
  * exactly the URL and the login's signal. A browser that throws or rejects
  * is a presentation failure: the URL is prompted once, to stderr only, and

@@ -4,10 +4,12 @@
  */
 
 export {
-  chromeBrowser,
-  edgeBrowser,
-  firefoxBrowser,
-  systemBrowser,
+  linuxBrowser,
+  linuxDefaultBrowser,
+  macBrowser,
+  macDefaultBrowser,
+  windowsBrowser,
+  windowsDefaultBrowser,
 } from './browsers';
 export {
   type ConsumerPresentationOptions,

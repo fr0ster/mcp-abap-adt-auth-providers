@@ -1,8 +1,8 @@
 /**
- * Opening the authorization URL through the package's own launchers on
- * every platform (no `open` package) — no shell, ever. Every shipped `IBrowser`
- * (`systemBrowser()`, `chromeBrowser()`, `edgeBrowser()`,
- * `firefoxBrowser()`) launches through `launchBrowser`.
+ * Opening the authorization URL — no shell, ever. Each shipped `IBrowser`
+ * (`browsers.ts`) is ONE fixed launch, built here from its `LaunchCommand`
+ * and started by `launchBrowser`: no platform switch, no fallback chain, no
+ * platform check (on another OS the launch simply fails to start).
  *
  * The URL is not this package's to trust: an OIDC provider's
  * `authorization_endpoint` comes from its discovery document, and a
@@ -14,9 +14,10 @@
  *   as its WHATWG serialisation (`href`) — spaces and quotes percent-encoded,
  *   so it is one argument to whatever receives it and can never begin with
  *   `-` (no browser flag smuggled in);
- * - every launcher is a program started with an argument array
+ * - every launch is a program started with an argument array
  *   (`child_process.spawn`, no `shell` option): the URL is one element of
- *   argv, which no shell parses;
+ *   argv, which no shell parses; a consumer's program or app name is passed
+ *   as given, also as one element;
  * - on Windows the launchers are the system's own, by absolute path under
  *   `%SystemRoot%\System32` (a bare name is searched in the current
  *   directory first), and the URL must hold no quote, space, `<`, `>`, `^`,
@@ -26,13 +27,10 @@
  *   `^` and `%` in its command line whatever the quoting. The default browser
  *   is opened by `rundll32 url.dll,FileProtocolHandler <url>`, which hands the
  *   rest of its command line to `ShellExecute` as the URL and runs no command
- *   interpreter. A named browser needs `ShellExecute`'s App Paths lookup
+ *   interpreter. A named program needs `ShellExecute`'s App Paths lookup
  *   (`chrome` is not on `PATH`), so it is started by PowerShell's
- *   `Start-Process` with a fixed command; the URL reaches it through an
- *   environment variable, never through PowerShell's parser.
- *
- * Candidates run in order, the next one when a launcher cannot be started or
- * exits non-zero — the `a || b || c` the shell fallback used to spell.
+ *   `Start-Process` with a fixed command text; the program and the URL reach
+ *   it through environment variables, never through PowerShell's parser.
  */
 
 import * as child_process from 'node:child_process';
@@ -52,27 +50,15 @@ export interface LaunchCommand {
    * user closes it — its start is the answer, its exit never awaited.
    */
   readonly settlesOn: 'exit' | 'spawn';
-  /** Extra environment for the launcher (Windows' named browsers). */
+  /** Extra environment for the launcher (`windowsBrowser`). */
   readonly env?: Readonly<Record<string, string>>;
 }
 
-/** The variable PowerShell reads the URL from (Windows, a named browser). */
+/** The variable PowerShell reads the URL from (`windowsBrowser`). */
 export const URL_VARIABLE = 'MCP_ABAP_ADT_AUTHORIZATION_URL';
 
-/** The browsers shipped as an `IBrowser` beside the system's default. */
-export type NamedBrowser = 'chrome' | 'msedge' | 'firefox';
-
-const MAC_APP: Readonly<Record<NamedBrowser, string>> = {
-  chrome: 'Google Chrome',
-  msedge: 'Microsoft Edge',
-  firefox: 'Firefox',
-};
-
-const LINUX_EXECUTABLES: Readonly<Record<NamedBrowser, readonly string[]>> = {
-  chrome: ['google-chrome', 'chromium', 'chromium-browser'],
-  msedge: ['microsoft-edge', 'microsoft-edge-stable'],
-  firefox: ['firefox', 'firefox-esr'],
-};
+/** The variable PowerShell reads the program from (`windowsBrowser`). */
+export const PROGRAM_VARIABLE = 'MCP_ABAP_ADT_BROWSER_PROGRAM';
 
 /**
  * The URL to launch: an `http:` or `https:` URL as its serialisation, else
@@ -151,56 +137,57 @@ function system32(...parts: string[]): string {
   );
 }
 
-/** The launchers to try, in order, for `href` (already `launchableUrl`). */
-export function launchCommands(
-  platform: NodeJS.Platform,
-  browser: NamedBrowser | undefined,
-  href: string,
-): LaunchCommand[] {
-  if (platform === 'win32') {
-    if (browser === undefined) {
-      return [
-        {
-          command: system32('rundll32.exe'),
-          args: ['url.dll,FileProtocolHandler', href],
-          settlesOn: 'exit',
-        },
-      ];
-    }
-    return [
-      {
-        command: system32('WindowsPowerShell', 'v1.0', 'powershell.exe'),
-        args: [
-          '-NoProfile',
-          '-NonInteractive',
-          '-Command',
-          // Fixed text: the URL is read from the environment at run time.
-          `Start-Process -FilePath '${browser}' -ArgumentList $env:${URL_VARIABLE}`,
-        ],
-        env: { [URL_VARIABLE]: href },
-        settlesOn: 'exit',
-      },
-    ];
-  }
-  if (platform === 'darwin') {
-    return browser === undefined
-      ? [{ command: 'open', args: [href], settlesOn: 'exit' }]
-      : [
-          {
-            command: 'open',
-            args: ['-a', MAC_APP[browser], href],
-            settlesOn: 'exit',
-          },
-        ];
-  }
-  return browser === undefined
-    ? [{ command: 'xdg-open', args: [href], settlesOn: 'exit' }]
-    : LINUX_EXECUTABLES[browser].map((command) => ({
-        command,
-        args: [href],
-        settlesOn: 'spawn' as const,
-      }));
-}
+/** One fixed launch for `href` (already `launchableUrl`). */
+export type LaunchFor = (href: string) => LaunchCommand;
+
+/** `xdg-open <url>`: a hand-off launcher. */
+export const linuxDefaultLaunch: LaunchFor = (href) => ({
+  command: 'xdg-open',
+  args: [href],
+  settlesOn: 'exit',
+});
+
+/** `<executable> <url>`: a browser binary, started directly. */
+export const linuxLaunch =
+  (executable: string): LaunchFor =>
+  (href) => ({ command: executable, args: [href], settlesOn: 'spawn' });
+
+/** `open <url>`: macOS's hand-off launcher. */
+export const macDefaultLaunch: LaunchFor = (href) => ({
+  command: 'open',
+  args: [href],
+  settlesOn: 'exit',
+});
+
+/** `open -a <app> <url>`. */
+export const macLaunch =
+  (app: string): LaunchFor =>
+  (href) => ({ command: 'open', args: ['-a', app, href], settlesOn: 'exit' });
+
+/** `System32\rundll32.exe url.dll,FileProtocolHandler <url>`. */
+export const windowsDefaultLaunch: LaunchFor = (href) => ({
+  command: system32('rundll32.exe'),
+  args: ['url.dll,FileProtocolHandler', href],
+  settlesOn: 'exit',
+});
+
+/**
+ * PowerShell's `Start-Process` with a fixed command text: the program and
+ * the URL are read from the environment at run time, never interpolated.
+ */
+export const windowsLaunch =
+  (program: string): LaunchFor =>
+  (href) => ({
+    command: system32('WindowsPowerShell', 'v1.0', 'powershell.exe'),
+    args: [
+      '-NoProfile',
+      '-NonInteractive',
+      '-Command',
+      `Start-Process -FilePath $env:${PROGRAM_VARIABLE} -ArgumentList $env:${URL_VARIABLE}`,
+    ],
+    env: { [PROGRAM_VARIABLE]: program, [URL_VARIABLE]: href },
+    settlesOn: 'exit',
+  });
 
 /** How `runLaunchers` reports, and when it stops trying. */
 export interface LaunchCallbacks {
@@ -277,25 +264,23 @@ function launchFailure(error: unknown): AuthProviderFailure {
 }
 
 /**
- * Opens `url` in `browser` (the system's default when `undefined`) — the
- * launch every shipped `IBrowser` makes (§6a0):
+ * Opens `url` with one fixed launch — the one every shipped `IBrowser` makes
+ * (§6a0):
  *
  * - only an `http(s)` URL is launched, as its serialisation; anything else
  *   starts nothing and rejects;
- * - nothing of the environment is guessed or changed: no `DISPLAY` is set
- *   (a given display, a remote browser or a console one is the consumer's
- *   own `IBrowser`);
- * - `launchCommands` through `runLaunchers` on every platform: an argument
- *   array, never a shell.
+ * - nothing of the environment is guessed or changed (a given display, a
+ *   remote browser or a console one is the consumer's own `IBrowser`);
+ * - one program, an argument array, never a shell; no next candidate.
  *
  * Resolves once the browser was asked: a hand-off launcher exited `0`, or a
- * browser binary started; rejects with an
- * `AuthProviderFailure` — `opening-browser` in fixed words, or `aborted`
- * when `signal` aborts first, which also starts no further launcher. A
- * started browser is never killed.
+ * browser binary started; rejects with an `AuthProviderFailure` —
+ * `opening-browser` in fixed words (a non-zero exit, an error before the
+ * start), or `aborted` when `signal` aborts first. A started browser is
+ * never killed.
  */
 export async function launchBrowser(
-  browser: NamedBrowser | undefined,
+  launch: LaunchFor,
   url: string,
   signal: AbortSignal,
 ): Promise<void> {
@@ -305,9 +290,8 @@ export async function launchBrowser(
   const href = launchableUrl(url);
   if (href === undefined) throw launchFailure(undefined);
 
-  // A launcher started with an argument array, never a shell.
   const launched = new Promise<void>((resolve, reject) => {
-    runLaunchers(launchCommands(process.platform, browser, href), {
+    runLaunchers([launch(href)], {
       onSuccess: resolve,
       onFailure: (error) =>
         reject(signal.aborted ? abortedFailure() : launchFailure(error)),
