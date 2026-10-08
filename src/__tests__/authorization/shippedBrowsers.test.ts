@@ -461,9 +461,8 @@ describe('settlement: a hand-off launcher at its exit, a browser binary at its s
       fakeChild.outcome = () => 'running';
       const controller = new AbortController();
       const opened = factories[name]().open(HOSTILE, controller.signal);
-      const rejected = expect(opened).rejects.toBeInstanceOf(
-        AuthProviderFailure,
-      );
+      const rejected =
+        expect(opened).rejects.toBeInstanceOf(AuthProviderFailure);
       await untilRunning();
       expect(fakeChild.unrefs).toBe(0);
       controller.abort();
