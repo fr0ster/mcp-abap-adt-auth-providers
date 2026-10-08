@@ -208,6 +208,26 @@ describe('AuthorizationCodeProvider: state and PKCE for the URL it builds', () =
     },
   );
 
+  it.each([
+    ['a leading space', ' https://uaa.example/authorize?client_id=cid'],
+    ['a trailing space', 'https://uaa.example/authorize?client_id=cid '],
+    ['a trailing newline', 'https://uaa.example/authorize?client_id=cid\n'],
+  ])(
+    'a configured authorizationUrl with %s is refused at construction (C7 never appends after it)',
+    (_c, configured) => {
+      let thrown: unknown;
+      try {
+        uaaProvider(recordingStrategy([]), configured);
+      } catch (error) {
+        thrown = error;
+      }
+      expect(configurationOf(thrown)).toMatchObject({
+        case: 'invalid-value',
+        fields: ['authorizationUrl'],
+      });
+    },
+  );
+
   it('no minted state reaches a log line', async () => {
     const lines: string[] = [];
     const record = (message: string, meta?: unknown) => {
@@ -246,11 +266,14 @@ describe('AuthorizationCodeProvider: state and PKCE for the URL it builds', () =
 });
 
 describe('OidcBrowserProvider: state beside its PKCE', () => {
-  const oidcProvider = (urls: string[]) =>
+  const oidcProvider = (
+    urls: string[],
+    authorizationEndpoint = 'https://idp.example/authorize',
+  ) =>
     new OidcBrowserProvider({
       renewal: refreshThenLogin(),
       clientId: 'cid',
-      authorizationEndpoint: 'https://idp.example/authorize',
+      authorizationEndpoint,
       tokenEndpoint: `${tokenBase}/token`,
       authorization: {
         async authorize(request: AuthorizationRequest) {
@@ -279,6 +302,46 @@ describe('OidcBrowserProvider: state beside its PKCE', () => {
       );
     }
   });
+
+  it('an endpoint with a query keeps its parameters and gets its own beside them', async () => {
+    const urls: string[] = [];
+    await oidcProvider(
+      urls,
+      'https://idp.example/tenant/authorize?p=b2c_1_signin',
+    ).getTokens();
+    const url = new URL(urls[0] as string);
+    expect(`${url.origin}${url.pathname}`).toBe(
+      'https://idp.example/tenant/authorize',
+    );
+    expect(url.searchParams.getAll('p')).toEqual(['b2c_1_signin']);
+    expect(url.searchParams.getAll('response_type')).toEqual(['code']);
+    expect(url.searchParams.getAll('client_id')).toEqual(['cid']);
+    expect(url.searchParams.getAll('redirect_uri')).toEqual([CALLBACK]);
+    expect(url.searchParams.getAll('state')).toEqual([
+      expect.stringMatching(BASE64URL_32),
+    ]);
+    expect(url.searchParams.getAll('code_challenge_method')).toEqual(['S256']);
+    expect((urls[0] as string).split('?')).toHaveLength(2);
+  });
+
+  it.each([
+    ['a fragment', 'https://idp.example/authorize#x'],
+    ['an empty fragment', 'https://idp.example/authorize?p=1#'],
+    ['no URL at all', 'not a url'],
+  ])(
+    'an endpoint with %s is refused (RFC 6749 §3.1), nothing opened',
+    async (_c, endpoint) => {
+      const urls: string[] = [];
+      const thrown = await oidcProvider(urls, endpoint)
+        .getTokens()
+        .catch((error: unknown) => error);
+      expect(configurationOf(thrown)).toMatchObject({
+        case: 'invalid-value',
+        fields: ['authorizationEndpoint'],
+      });
+      expect(urls).toEqual([]);
+    },
+  );
 
   it('every URL it builds carries exactly one state (C7: never one without)', async () => {
     const urls: string[] = [];
