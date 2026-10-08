@@ -231,6 +231,33 @@ recipe and no implicit default (Inference, design).
   output is not covered (Inference until measured). See
   [the README](README.md#passwordless-rfc-logon-snc).
 
+  **Measured on a Windows host, 2026-10-07** (Windows 11 10.0.26200 x64,
+  Node 24.19.0; SAP Secure Login Client with a Kerberos profile; SNC over
+  RFC to an application server; SAP NW RFC SDK 7.50 x64;
+  `scripts/windows-check.mjs`):
+  - *Registry* (Measured): the SNC library found through the real `reg.exe`
+    under `HKLM\Software\SAP\SecureLogin`, value `InstallPath64`:
+    `sapcrypto.dll`, x64.
+  - *Abort* (Measured): aborted while `reg.exe` ran, both
+    `nodeSncSystem().readRegistryValue` and `prepare()` answered
+    `interactive-login` / `aborted`; the `reg.exe` child ended with
+    `SIGTERM`, and none was left running.
+  - *Logon* (Measured): `prepare()` Ok; the logon through the Secure Login
+    Client succeeded; `RFC_PING` answered and `STFC_CONNECTION` echoed its
+    text.
+  - *Wrong partner name* (Measured): refused — the SDK answered
+    `RFC_CLOSED` with no GSS code the provider explains, so `rejected()`
+    answered `system-refused` / `rfc-failure` (rule 5), not an `snc`
+    refusal.
+  - *Client stopped* (Measured; three interactive runs, the client exited
+    each time): `prepare()` Ok with the client stopped. Twice the library
+    started the client and the Kerberos profile logged it on by itself, so
+    the logon succeeded. Once the logon was refused for want of a
+    credential: `RFC_CLOSED`, as for a wrong partner, and `rejected()`
+    answered `system-refused` / `rfc-failure`. The documented no-credential
+    refusal (A2200019) was not seen in that run; the error's text was not
+    read, so that it carries no such code in this state is Inference.
+
   **The product is named, not checked** (Measured, 2026-09-29, Windows,
   Secure Login Client 3.0.3). With the client exited, the RFC open through
   its `sapcrypto.dll` started the client, which logged on — silently through

@@ -1015,7 +1015,11 @@ const provider = new AuthorizationCodeProvider({
   the default browser through `rundll32` delivered the URL's path and query
   (with `&` and a `%20`) unchanged, and no command interpreter was started.
   The same day Chrome and Edge, through an earlier `Start-Process` command
-  that named the program in its text, did the same. **Pending:**
+  that named the program in its text, did the same: the URL reached the page
+  unchanged and no command interpreter was a direct child of the launcher.
+  Chrome itself runs `cmd /c` below itself for the native-messaging hosts of
+  its extensions (seen for SentinelOne and Nexthink) — the browser's own
+  children, not the launcher's. **Pending:**
   `windowsBrowser`'s current command — the program read from
   `$env:MCP_ABAP_ADT_BROWSER_PROGRAM`, any program the consumer names — has
   not yet been run on a Windows host.

@@ -1,29 +1,26 @@
 #!/usr/bin/env node
 /**
- * windows-check.mjs — measures on a Windows host what the Linux test stand
- * cannot, before @mcp-abap-adt/auth-providers 6.0.0 is released: the SNC
- * registry lookup through the real `reg.exe` (localised output included),
- * the kill of `reg.exe` on an abort, the browser launch through `rundll32`
- * and PowerShell `Start-Process`, and a live SNC logon through the Secure
- * Login Client.
+ * windows-check.mjs — checks on a Windows host what the Linux test stand
+ * cannot. Not shipped (not in package.json `files`); plain Node, no
+ * dependency beyond the built package and, for check 4 only,
+ * @mcp-abap-adt/sap-rfc-lite.
  *
- * Not shipped (not in package.json `files`); plain Node, no dependency
- * beyond the built package and, for check 4 only, @mcp-abap-adt/sap-rfc-lite.
+ * 1. PREPARE, in order
  *
- * PREREQUISITES, in order
- *
- *   1. A Windows host (x64 or arm64).
- *   2. SAP GUI for Windows and the SAP Secure Login Client installed; a
- *      Secure Login Client profile using Kerberos, logged on; SNC enabled
- *      for the target system's entry in SAP Logon (Properties → Network →
- *      "Activate Secure Network Communication"), and a logon from SAP Logon
- *      without a password working. Checks 1–3 need only the Secure Login
- *      Client installed (check 3 needs nothing SAP at all).
- *   3. The SAP NW RFC SDK 7.50 for Windows x64 unpacked (e.g. C:\nwrfcsdk);
- *      SAPNWRFC_HOME set to that folder (the one holding lib\ and include\);
- *      %SAPNWRFC_HOME%\lib on PATH. Open a NEW terminal after setting them.
- *      (Check 4 only.)
- *   4. Node.js 22, 24 or 26, and git. For check 4 also the C++ build tools
+ *   1. A Windows host (x64 or arm64), Windows 10 1803 or later (check 3's
+ *      wildcard cases use the system's own curl.exe and whoami.exe).
+ *   2. Checks 1, 2 and 4: SAP GUI for Windows and the SAP Secure Login
+ *      Client installed. Check 4 also: a Secure Login Client profile using
+ *      Kerberos, logged on; SNC enabled for the target system's entry in SAP
+ *      Logon (Properties → Network → "Activate Secure Network
+ *      Communication"); a logon from SAP Logon without a password working.
+ *      Check 3 needs nothing SAP; its chrome / msedge cases need that
+ *      browser installed (otherwise that case is SKIPPED).
+ *   3. Check 4 only: the SAP NW RFC SDK 7.50 for Windows x64 unpacked (e.g.
+ *      C:\nwrfcsdk); SAPNWRFC_HOME set to that folder (the one holding lib\
+ *      and include\); %SAPNWRFC_HOME%\lib on PATH. Open a NEW terminal after
+ *      setting them.
+ *   4. Node.js 22, 24 or 26, and git. Check 4 also: the C++ build tools
  *      node-gyp needs (Visual Studio Build Tools with "Desktop development
  *      with C++", and Python 3), since sap-rfc-lite is built on install.
  *   5. The package, built:
@@ -32,11 +29,11 @@
  *        git checkout feat/error-contract
  *        npm ci
  *        npm run build
- *   6. For the live SNC check (check 4) only:
+ *   6. Check 4 only:
  *        npm i --no-save @mcp-abap-adt/sap-rfc-lite
  *      Without it check 4 is SKIPPED; checks 1–3 still run.
- *   7. Inputs for check 4 — environment variables, or answered at the
- *      prompts when they are missing (no password is ever asked for):
+ *   7. Check 4's inputs — environment variables, or answered at the prompts
+ *      when they are missing (no password is ever asked for):
  *        SNC_CHECK_ASHOST    application server host     } one of the two
  *        SNC_CHECK_SYSNR     its system number (e.g. 00) }
  *        SNC_CHECK_MSHOST    message server host         } or a message
@@ -51,64 +48,69 @@
  *        SNC_CHECK_LANG      optional, default EN
  *      The host, partner name and client are used, never printed.
  *
- * HOW TO RUN (from the repository root)
+ * 2. RUN, from the repository root
  *
  *   node scripts/windows-check.mjs                  all checks
  *   node scripts/windows-check.mjs --only=1,3       only checks 1 and 3
  *   node scripts/windows-check.mjs --only=snc       by name: registry, abort, browser, snc
- *   node scripts/windows-check.mjs --browsers=default,msedge
- *                                                   which launches check 3 tries
- *                                                   (default: default,chrome,msedge)
+ *   node scripts/windows-check.mjs --browser-cases=default,brackets
+ *                                                   which cases check 3 runs (default:
+ *                                                   default,chrome,msedge,brackets,star,injection)
  *   node scripts/windows-check.mjs --no-prompt      never ask; missing input → SKIPPED
  *   node scripts/windows-check.mjs --show-reg-output
  *                                                   also print reg.exe's lines (paths only)
+ *   node scripts/windows-check.mjs --help           this list
  *
- *   Check 3 opens browser tabs on a local page (127.0.0.1); close them
- *   afterwards. Check 4 may show the Secure Login Client's logon window.
+ *   Check 3 opens browser tabs on a local page (127.0.0.1) and may flash
+ *   console windows; close the tabs afterwards. Check 4 may show the Secure
+ *   Login Client's logon window, and asks before its optional part 4c.
  *
- * WHAT TO SEND BACK
+ * 3. WHAT EACH CHECK DOES
+ *
+ *   1 registry  finds the SNC library through the real reg.exe
+ *               (HKLM\Software\SAP\SecureLogin), SNC_LIB / SNC_LIB_64 ignored.
+ *   2 abort     aborts while reg.exe runs — nodeSncSystem().readRegistryValue
+ *               and SncLogonProvider.prepare() must answer interactive-login /
+ *               aborted, and the reg.exe child must not be left running.
+ *   3 browser   opens a local recorder page through the public browsers'
+ *               open(url, signal); records whether the URL arrived unchanged,
+ *               whether a command interpreter was a direct child of the
+ *               launcher (process watch), and how open() settled:
+ *     default     windowsDefaultBrowser() — rundll32 url.dll,FileProtocolHandler.
+ *     chrome      windowsBrowser('chrome') — PowerShell Start-Process.
+ *     msedge      windowsBrowser('msedge') — the same, Edge.
+ *     brackets    windowsBrowser(%TEMP%\windows-check-XXXXXX\wc-[ab].exe), a copy of curl.exe
+ *                 that requests the page, beside decoys wc-a.exe / wc-b.exe
+ *                 (copies of whoami.exe) that [ab] matches as a wildcard. PASS:
+ *                 the copy of curl requested the page, or open() rejected and no
+ *                 decoy ran; FAIL: a decoy ran, or open() resolved and nothing
+ *                 requested the page.
+ *     star        windowsBrowser(%TEMP%\windows-check-XXXXXX\wc-[ab]*.exe): no file can have
+ *                 that name, so the launch must fail; FAIL if a decoy (or
+ *                 anything) started, or open() resolved.
+ *     injection   windowsBrowser(a program string with " and ' quotes and ;
+ *                 around an Invoke-WebRequest to the recorder): it must start
+ *                 nothing and fail to launch; FAIL if the recorder sees the
+ *                 injected request, anything started, or open() resolved.
+ *   4 snc       a live SNC logon through the Secure Login Client:
+ *     4a          prepare() Ok, the logon, RFC_PING and STFC_CONNECTION.
+ *     4b          a wrong partner name must be refused (snc or system-refused).
+ *     4c          optional: with the client exited, prepare() must be Ok; the
+ *                 logon either succeeds (the library starts the client) or is
+ *                 refused (snc or system-refused), never answered Ok.
+ *
+ * 4. SEND BACK
  *
  *   The SUMMARY block printed at the end (copy it whole). It carries the
  *   status of each check and short facts — library paths, process names,
  *   error kinds and fixed words — and no secret: no password is used, the
- *   host and SNC partner name are not printed, and no exception's message
- *   is printed (failures go through auth-errors' readFailure / logFields).
- *
- * MEASURED (2026-10-07; Windows 11 10.0.26200 x64, Node 24.19.0, branch
- * feat/error-contract; SAP Secure Login Client, Kerberos profile, SNC over RFC
- * to an application server, SAP NW RFC SDK 7.50 x64)
- *
- *   1 registry   PASS  SNC library from HKLM\Software\SAP\SecureLogin through
- *                      the real reg.exe (InstallPath64): sapcrypto.dll, x64.
- *   2 abort      PASS  readRegistryValue and prepare() both answer
- *                      interactive-login / aborted; the reg.exe child ends
- *                      with SIGTERM and none is left running.
- *   3 browser    PASS  default (rundll32), chrome and msedge (PowerShell
- *                      Start-Process): the URL reaches the page unchanged; no
- *                      command interpreter is a direct child of the launcher.
- *                      Chrome runs `cmd /c` below itself for the native-
- *                      messaging hosts of extensions (SentinelOne, Nexthink):
- *                      the browser's own, reported apart, not counted.
- *   4a snc       PASS  prepare() Ok; logon through the Secure Login Client;
- *                      RFC_PING ok, STFC_CONNECTION echoed.
- *   4b snc       PASS  a wrong partner name is refused: the SDK answers
- *                      RFC_CLOSED with no GSS code the provider explains, so
- *                      rejected() is system-refused / rfc-failure (rule 5),
- *                      not an snc refusal.
- *   4c snc       PASS  Run three times interactively (the client exited, then
- *                      Enter). prepare() is Ok with the client stopped. Twice
- *                      the library started the client and the Kerberos profile
- *                      logged it on by itself: the logon succeeded, printed as
- *                      "SKIPPED — the logon succeeded", not a failure. Once
- *                      the logon was refused for want of a credential: the SDK
- *                      answered RFC_CLOSED, as for a wrong partner, and
- *                      rejected() is system-refused / rfc-failure. The
- *                      documented no-credential refusal (A2200019) was not
- *                      seen in it (the error's text was not read, Inference:
- *                      it carries no such code in this state).
+ *   host and SNC partner name are not printed, no temporary path is printed,
+ *   and no exception's message is printed (failures go through auth-errors'
+ *   readFailure / logFields).
  */
 
 import { once } from 'node:events';
+import fs from 'node:fs';
 import http from 'node:http';
 import { createRequire } from 'node:module';
 import os from 'node:os';
@@ -126,14 +128,27 @@ const IS_WINDOWS = process.platform === 'win32';
 const CHECKS = [
   { id: 1, name: 'registry', title: 'SNC library from the registry' },
   { id: 2, name: 'abort', title: 'reg.exe killed on abort' },
-  { id: 3, name: 'browser', title: 'browser launch (rundll32 / PowerShell)' },
+  {
+    id: 3,
+    name: 'browser',
+    title: 'browser launch (windowsDefaultBrowser / windowsBrowser)',
+  },
   { id: 4, name: 'snc', title: 'live SNC logon' },
+];
+
+const BROWSER_CASES = [
+  'default',
+  'chrome',
+  'msedge',
+  'brackets',
+  'star',
+  'injection',
 ];
 
 function parseArgs(argv) {
   const options = {
     only: null,
-    browsers: ['default', 'chrome', 'msedge'],
+    browserCases: [...BROWSER_CASES],
     prompt: true,
     showRegOutput: false,
     help: false,
@@ -150,12 +165,21 @@ function parseArgs(argv) {
           .map((s) => s.trim().toLowerCase())
           .filter(Boolean),
       );
-    } else if (arg.startsWith('--browsers=')) {
-      options.browsers = arg
-        .slice('--browsers='.length)
+    } else if (arg.startsWith('--browser-cases=')) {
+      options.browserCases = arg
+        .slice('--browser-cases='.length)
         .split(',')
         .map((s) => s.trim().toLowerCase())
         .filter(Boolean);
+      const unknown = options.browserCases.filter(
+        (c) => !BROWSER_CASES.includes(c),
+      );
+      if (unknown.length) {
+        process.stderr.write(
+          `unknown browser case(s): ${unknown.join(', ')} (one of ${BROWSER_CASES.join(', ')})\n`,
+        );
+        process.exit(2);
+      }
     } else {
       process.stderr.write(`unknown argument: ${arg} (see --help)\n`);
       process.exit(2);
@@ -168,8 +192,10 @@ const options = parseArgs(process.argv.slice(2));
 if (options.help) {
   process.stdout.write(
     'node scripts/windows-check.mjs [--only=1,2,3,4|registry,abort,browser,snc]\n' +
-      '  [--browsers=default,chrome,msedge] [--no-prompt] [--show-reg-output]\n' +
-      'Prerequisites and inputs: see the comment at the top of this file.\n',
+      `  [--browser-cases=${BROWSER_CASES.join(',')}]\n` +
+      '  [--no-prompt] [--show-reg-output] [--help]\n' +
+      'What to prepare, what each check does and what to send back: see the\n' +
+      'comment at the top of this file.\n',
   );
   process.exit(0);
 }
@@ -178,7 +204,7 @@ if (options.help) {
 //
 // The package's own code starts the children; the script only learns their
 // PIDs. `SncSystem` promisifies `execFile` when it is loaded, so its custom
-// promisified form is wrapped here first; `browserLaunch` calls `spawn`.
+// promisified form is wrapped here first; the shipped browsers call `spawn`.
 
 const childProcess = require('node:child_process');
 const originalSpawn = childProcess.spawn;
@@ -215,12 +241,10 @@ childProcess.spawn = function spawnWrapper(...args) {
 // ── the package ────────────────────────────────────────────────────────────
 
 let lib;
-let launch;
 let sncSystemModule;
 let errors;
 try {
   lib = require(path.join(ROOT, 'dist', 'index.js'));
-  launch = require(path.join(ROOT, 'dist', 'auth', 'browserLaunch.js'));
   sncSystemModule = require(path.join(ROOT, 'dist', 'snc', 'SncSystem.js'));
   errors = require('@mcp-abap-adt/auth-errors');
 } catch {
@@ -666,57 +690,181 @@ async function startRecorder() {
   };
 }
 
-async function launchOnce(r, label, browser) {
+/**
+ * The program check 3 hands a case, and what the case expects:
+ * `url` — the browser (or the copy of curl) must request the page;
+ * `nothing` — nothing may start and the launch must fail.
+ */
+async function browserCase(label, recorderPort) {
+  switch (label) {
+    case 'default':
+      return { browser: lib.windowsDefaultBrowser(), expects: 'url' };
+    case 'chrome':
+    case 'msedge':
+      if (!(await appPathRegistered(`${label}.exe`))) {
+        return {
+          skip: 'not registered under App Paths — not installed?',
+        };
+      }
+      return { browser: lib.windowsBrowser(label), expects: 'url' };
+    case 'brackets':
+    case 'star': {
+      const dir = wildcardDirectory();
+      if (!dir) {
+        return {
+          skip: 'System32 curl.exe or whoami.exe missing, or the temporary directory could not be prepared',
+        };
+      }
+      // `wc-[ab]` as a wildcard matches `wc-a` / `wc-b` (the decoys), never
+      // the literal `wc-[ab]` (the intended copy of curl).
+      const program =
+        label === 'brackets'
+          ? path.win32.join(dir, 'wc-[ab].exe')
+          : path.win32.join(dir, 'wc-[ab]*.exe');
+      return {
+        browser: lib.windowsBrowser(program),
+        expects: label === 'brackets' ? 'url' : 'nothing',
+        decoys: ['wc-a.exe', 'wc-b.exe'],
+      };
+    }
+    case 'injection': {
+      // Quotes of both kinds and `;` around a command that would request
+      // the recorder's /injected page if it ever reached PowerShell's parser.
+      const injected = `http://127.0.0.1:${recorderPort}/injected`;
+      const program = `wc-no-such-program" ; Invoke-WebRequest -UseBasicParsing -Uri '${injected}' ; "' ; Invoke-WebRequest -UseBasicParsing -Uri "${injected}" ; '`;
+      return {
+        browser: lib.windowsBrowser(program),
+        expects: 'nothing',
+        injectedPath: '/injected',
+      };
+    }
+    default:
+      return { skip: 'unknown case' };
+  }
+}
+
+/** The temporary directory of the wildcard cases, made once; null when it cannot be. */
+let wildcard;
+function wildcardDirectory() {
+  if (wildcard !== undefined) return wildcard?.dir ?? null;
+  wildcard = null;
+  const curl = path.win32.join(SYSTEM32, 'curl.exe');
+  const whoami = path.win32.join(SYSTEM32, 'whoami.exe');
+  try {
+    if (!fs.existsSync(curl) || !fs.existsSync(whoami)) return null;
+    // The brackets are in the file names only: a directory named with them
+    // would, read as a wildcard, match no directory at all, and the decoys
+    // beside the intended program could never be reached.
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'windows-check-'));
+    const dir = root;
+    fs.copyFileSync(curl, path.join(dir, 'wc-[ab].exe'));
+    fs.copyFileSync(whoami, path.join(dir, 'wc-a.exe'));
+    fs.copyFileSync(whoami, path.join(dir, 'wc-b.exe'));
+    wildcard = { root, dir };
+    return dir;
+  } catch {
+    return null;
+  }
+}
+
+/** Removes the wildcard cases' directory; whether it is gone. */
+async function removeWildcardDirectory() {
+  if (!wildcard) return null;
+  for (let i = 0; i < 10; i += 1) {
+    try {
+      fs.rmSync(wildcard.root, { recursive: true, force: true });
+      if (!fs.existsSync(wildcard.root)) return true;
+    } catch {}
+    await sleep(500); // a copy may still be running
+  }
+  return false;
+}
+
+/** How `open()` settled, in fixed words only. */
+function settlement(settled, ms) {
+  if (settled === null) return 'not settled';
+  if ('value' in settled) return `resolved after ${ms} ms`;
+  return `rejected after ${ms} ms — ${describeError(errors.readFailure(settled.error, 'opening-browser'))}`;
+}
+
+async function launchOnce(r, label) {
   const recorder = await startRecorder();
   let watch = null;
+  const controller = new AbortController();
   try {
+    const chosen = await browserCase(label, recorder.port);
+    if (chosen.skip) {
+      r.detail(`${label}: SKIPPED (${chosen.skip})`);
+      return false;
+    }
     const pathname = `/launch-${label}`;
     const expected = `${pathname}?a=1&b=two%20words`;
     const url = `http://127.0.0.1:${recorder.port}${expected}#frag`;
-    const href = launch.launchableUrl(url);
-    if (href !== url) {
-      return r.fail(
-        `${label}: launchableUrl changed or refused the URL: ${shown(href)}`,
-      );
-    }
-    const commands = launch.launchCommands('win32', browser, href);
     watch = await startProcessWatch();
 
-    let launcherFailure = null;
-    let failed;
-    const failure = new Promise((resolve) => {
-      failed = resolve;
-    });
+    // open(url, signal), as a composition calls it; the launcher's PID is
+    // learnt through the spawn wrapper while open() runs.
     recorded.length = 0;
     recording = true;
+    const started = Date.now();
+    let settled = null;
+    let settledAt = 0;
+    let opened;
     try {
-      launch.runLaunchers(commands, (error) => {
-        launcherFailure = { error };
-        failed();
-      });
-    } finally {
-      recording = false;
+      opened = Promise.resolve(chosen.browser.open(url, controller.signal));
+    } catch (error) {
+      opened = Promise.reject(error);
     }
-    const roots = recorded.map((e) => e.child.pid).filter(Number.isInteger);
-    r.detail(
-      `${label}: launcher ${recorded.map((e) => shown(e.command)).join(', ') || 'none started'} (pid ${roots.join(',') || '-'})`,
+    const watched = opened.then(
+      (value) => {
+        settled = { value };
+        settledAt = Date.now();
+      },
+      (error) => {
+        settled = { error };
+        settledAt = Date.now();
+      },
     );
 
-    // The TEST's own bound for the browser's request: 60 s.
+    // The TEST's own bound for the request and the settlement: 60 s.
     const deadline = Date.now() + 60_000;
+    const arrived = () =>
+      recorder.requests.some((u) => u.startsWith(pathname)) ||
+      (chosen.injectedPath !== undefined &&
+        recorder.requests.some((u) => u.startsWith(chosen.injectedPath)));
     while (
-      !recorder.requests.some((u) => u.startsWith(pathname)) &&
-      !launcherFailure &&
-      Date.now() < deadline
+      Date.now() < deadline &&
+      !(settled !== null && (arrived() || 'error' in settled)) &&
+      !(settled !== null && chosen.expects === 'nothing')
     ) {
       await Promise.race([
         recorder.changed(),
-        failure,
-        sleep(Math.max(0, deadline - Date.now())),
+        watched,
+        sleep(Math.max(0, Math.min(1_000, deadline - Date.now()))),
       ]);
     }
-    await sleep(2_000); // let the launcher's children show up
+    let abortedByScript = false;
+    if (settled === null) {
+      abortedByScript = true;
+      controller.abort();
+      await within(
+        watched,
+        10_000,
+        'open() did not settle after the abort',
+      ).catch(() => undefined);
+    }
+    recording = false;
+    await sleep(2_000); // let the launcher's children (and a late request) show up
     watch.stop();
+
+    const roots = recorded.map((e) => e.child.pid).filter(Number.isInteger);
+    r.detail(
+      `${label}: launcher ${recorded.map((e) => shown(path.win32.basename(String(e.command)))).join(', ') || 'none started'} (pid ${roots.join(',') || '-'})`,
+    );
+    r.detail(
+      `${label}: open() ${abortedByScript ? 'did not settle within 60 s; the script aborted its signal, then it ' : ''}${settlement(settled, settledAt - started)}`,
+    );
+
     const below = descendants(watch.seen, roots);
     const names = [...new Set(below.map((p) => p.name.toLowerCase()))];
     // Only the launcher's own children count: a browser starts interpreters
@@ -739,30 +887,77 @@ async function launchOnce(r, label, browser) {
           ? `; interpreters deeper down (the browser's own, not counted): ${deeper.join(', ')}`
           : ''),
     );
-
-    const received = recorder.requests.filter((u) => u.startsWith(pathname));
-    if (launcherFailure) {
-      r.fail(
-        `${label}: the launcher failed — ${
-          launcherFailure.error === undefined
-            ? 'it exited non-zero'
-            : safe(launcherFailure.error, 'opening-browser')
-        }`,
-      );
-    } else if (received.length === 0) {
-      r.fail(`${label}: no request reached the page within 60 s`);
-    } else {
-      r.detail(`${label}: received ${received.map(shown).join(', ')}`);
-      if (!received.includes(expected)) {
-        r.fail(`${label}: expected exactly ${shown(expected)}`);
-      }
-    }
     if (interpreters.length) {
       r.fail(
         `${label}: a command interpreter ran as a direct child of the launcher: ${interpreters.join(', ')}`,
       );
     }
+
+    const received = recorder.requests.filter((u) => u.startsWith(pathname));
+    if (received.length) {
+      r.detail(`${label}: received ${received.map(shown).join(', ')}`);
+    }
+    const resolved = settled !== null && 'value' in settled;
+    const decoys = (chosen.decoys ?? []).filter((d) =>
+      watch.seen.some((p) => p.name.toLowerCase() === d),
+    );
+    if (decoys.length) {
+      r.fail(
+        `${label}: a different program started (a wildcard match): ${decoys.join(', ')}`,
+      );
+    }
+
+    if (chosen.expects === 'url') {
+      if (received.length) {
+        if (!received.includes(expected)) {
+          r.fail(`${label}: expected exactly ${shown(expected)}`);
+        }
+        if (!resolved) {
+          r.detail(
+            `${label}: the page was requested, but open() did not resolve`,
+          );
+          if (label !== 'brackets') r.fail(`${label}: open() did not resolve`);
+        }
+      } else if (label === 'brackets' && !resolved && !decoys.length) {
+        r.detail(
+          `${label}: a clear launch failure — the intended program did not start, and neither did a decoy`,
+        );
+      } else if (settled !== null && 'error' in settled) {
+        r.fail(`${label}: the launch failed (open() rejected)`);
+      } else {
+        r.fail(`${label}: no request reached the page within 60 s`);
+      }
+    } else {
+      const injected =
+        chosen.injectedPath === undefined
+          ? []
+          : recorder.requests.filter((u) => u.startsWith(chosen.injectedPath));
+      if (injected.length) {
+        r.fail(
+          `${label}: the program string altered the command — the injected request arrived`,
+        );
+      }
+      if (received.length) {
+        r.fail(`${label}: something requested the page`);
+      }
+      // conhost.exe hosts the launcher's own console; it is not a program
+      // the launcher started.
+      const startedHere = direct.filter((n) => n !== 'conhost.exe');
+      if (startedHere.length) {
+        r.fail(
+          `${label}: the launcher started ${startedHere.join(', ')} for a program that cannot exist`,
+        );
+      }
+      if (resolved) {
+        r.fail(`${label}: open() resolved — expected a launch failure`);
+      } else if (!injected.length && !received.length && !startedHere.length) {
+        r.detail(`${label}: a clear launch failure, nothing started`);
+      }
+    }
+    return true;
   } finally {
+    recording = false;
+    controller.abort();
     watch?.stop();
     await recorder.close();
   }
@@ -771,25 +966,23 @@ async function launchOnce(r, label, browser) {
 async function checkBrowser(r) {
   if (!IS_WINDOWS) return r.skip('not Windows');
   let ran = 0;
-  for (const label of options.browsers) {
-    if (label !== 'default' && label !== 'chrome' && label !== 'msedge') {
-      r.detail(`${label}: not one of default, chrome, msedge — ignored`);
-      continue;
+  try {
+    for (const label of options.browserCases) {
+      try {
+        if (await launchOnce(r, label)) ran += 1;
+      } catch (error) {
+        r.fail(`${label}: ${safe(error)}`);
+      }
     }
-    if (label !== 'default' && !(await appPathRegistered(`${label}.exe`))) {
+  } finally {
+    const removed = await removeWildcardDirectory();
+    if (removed !== null) {
       r.detail(
-        `${label}: SKIPPED (not registered under App Paths — not installed?)`,
+        `wildcard cases' temporary directory removed: ${removed ? 'yes' : 'NO — remove windows-check-* under %TEMP% by hand'}`,
       );
-      continue;
-    }
-    try {
-      await launchOnce(r, label, label === 'default' ? undefined : label);
-      ran += 1;
-    } catch (error) {
-      r.fail(`${label}: ${safe(error)}`);
     }
   }
-  if (ran === 0 && r.status === null) return r.skip('no browser to launch');
+  if (ran === 0 && r.status === null) return r.skip('no browser case ran');
   r.detail('Close the browser tabs this check opened.');
   r.pass();
 }
@@ -953,10 +1146,10 @@ async function checkSnc(r) {
     );
   }
 
-  // 4b: a wrong partner name must be refused. Measured: the SDK answers
-  // RFC_CLOSED with no GSS code the provider explains, so rejected() is the
-  // neutral `system-refused` (rule 5), not an `snc` refusal; either is right,
-  // an Ok or a blamed credential is not.
+  // 4b: a wrong partner name must be refused. The SDK may answer with a GSS
+  // code the provider explains (`snc`) or without one (the neutral
+  // `system-refused` of rule 5); either is right, an Ok or a blamed
+  // credential is not.
   const wrong = lib.SncLogonProvider.forSecureLoginClient({
     partnerName: 'p:CN=WINDOWS-CHECK-WRONG-PARTNER, O=INVALID',
     qop,
@@ -1015,9 +1208,9 @@ async function checkSnc(r) {
         r.detail(
           `4c: refused — RFC key ${rfcKeyOf(third.error)}; rejected(): ${answer.ok ? 'Ok' : describeError(answer.refusal)}`,
         );
-        // Measured: with no credential the SDK answers RFC_CLOSED, as for a
-        // wrong partner, so the refusal is neutral unless the error carries
-        // A2200019; either is right, an Ok is not.
+        // With no credential the SDK may answer without a GSS code (a
+        // neutral refusal) or with A2200019 (an snc one); either is right,
+        // an Ok is not.
         if (
           answer.ok ||
           (answer.refusal.kind !== 'snc' &&
