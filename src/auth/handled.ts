@@ -67,7 +67,7 @@ export function isPlainPromise(value: unknown): value is Promise<unknown> {
 /**
  * Marks `value` handled when it is a plain native promise, so that a
  * rejection of a promise this package holds but may never await (a
- * consumer's callback server's `waitForResult()`, say) raises no
+ * logon target's answer, or a renewal strategy's `aborted()`, say) raises no
  * `unhandledRejection`. A foreign thenable, a Promise subclass or a Proxy is
  * left alone — handling it would run its code. Never throws.
  */

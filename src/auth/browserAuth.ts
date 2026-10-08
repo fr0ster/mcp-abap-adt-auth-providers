@@ -111,7 +111,7 @@ export interface AuthorizationBinding {
  * Build the OAuth2 authorization URL for a redirect URI that is already known.
  *
  * The URI is a parameter rather than a port because the port may have been
- * chosen by the OS moments earlier — see `ICallbackServerOptions.port`.
+ * chosen by the OS moments earlier — a listener transport with `port: 0`.
  * With a `binding`, the URL carries its `state`, `code_challenge` and
  * `code_challenge_method=S256`.
  */
