@@ -2909,9 +2909,13 @@ validated at run time.
 
 **Six shipped browsers, one fixed launch each** (user's decision, Task 30p
 fix round 2). No universal browser, no platform switch, no fallback chain,
-no platform check: the consumer picks the one for its machine. Run on
-another OS a launch simply fails to start, rejects, and the composer shows
-the URL once on stderr while the login waits (§6d.5). Anything else — a
+no platform check: each runs exactly its program, and the consumer picks
+the one for its machine. On another OS it does whatever a program of that
+name does there: where there is none, the launch fails to start, rejects,
+and the composer shows the URL once on stderr while the login waits
+(§6d.5); where there is one, it runs (Debian's `/usr/bin/open` is
+`xdg-open` or `run-mailcap`, so `macDefaultBrowser()` may open the default
+browser there). Anything else — a
 remote Chrome, a console browser, WSL, a given `DISPLAY` — is the
 consumer's own `IBrowser`. There is no `open` package: every launch is the
 package's own.
@@ -2933,6 +2937,18 @@ package's own.
 - A failure rejects with an `AuthProviderFailure` (`unknown`,
   `opening-browser`, an allowlisted code only); an abort rejects `aborted`.
   A started browser is never killed.
+- **The signal is read before anything starts** (Task 30o fix round 2): no
+  signal, or no real `AbortSignal`, rejects `opening-browser` and launches
+  nothing.
+- **Referencing** (decided in Task 30o fix round 1): a launch settled at its
+  exit keeps its child referenced until it exits, so an `open()` awaited
+  alone settles; a launch settled at `spawn` (`linuxBrowser`) unrefs its
+  child once started; when the signal aborts, a hand-off launcher still
+  running is unreferenced. Nothing is killed. Through the composer the
+  presentation's signal aborts when the login ends; a caller of `open()`
+  outside a composition owns the signal, and a hand-off launcher that never
+  exits (`xdg-open` in its generic mode) keeps `open()` pending until it
+  exits or that signal aborts.
 - `openUrl` is gone entirely: the types are the contract; an unknown key
   from plain JavaScript is ignored like any other.
 
