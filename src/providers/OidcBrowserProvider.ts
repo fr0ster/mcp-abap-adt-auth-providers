@@ -2,7 +2,7 @@
  * OIDC Authorization Code Provider (with PKCE)
  */
 
-import type { AttemptContext } from '@mcp-abap-adt/auth-errors';
+import { type AttemptContext, authError } from '@mcp-abap-adt/auth-errors';
 import type {
   AuthorizationRequest,
   IAuthorizationStrategy,
@@ -13,6 +13,7 @@ import { AUTH_TYPE_AUTHORIZATION_CODE_PKCE } from '@mcp-abap-adt/interfaces-auth
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
 import { throwIfAborted } from '../auth/attempt';
 import {
+  misconfigured,
   oidcEndpointMissing,
   oidcIssuerRequired,
   ownOptions,
@@ -53,6 +54,28 @@ export interface OidcBrowserProviderConfig
    */
   expiresAt?: number | undefined;
   logger?: ILogger | undefined;
+}
+
+/**
+ * The authorization endpoint — configured or discovered — as a `URL` to add
+ * this login's parameters to. One that does not parse, or carries a
+ * fragment (RFC 6749 §3.1), is `invalid-value` naming
+ * `authorizationEndpoint`, never its value: nothing is built or opened.
+ */
+function authorizationEndpointUrl(endpoint: string): URL {
+  const refused = () =>
+    misconfigured(
+      authError.configuration({
+        case: 'invalid-value',
+        fields: ['authorizationEndpoint'],
+      }),
+    );
+  if (endpoint.includes('#')) throw refused();
+  try {
+    return new URL(endpoint);
+  } catch {
+    throw refused();
+  }
 }
 
 export class OidcBrowserProvider extends BaseTokenProvider {
@@ -131,9 +154,13 @@ export class OidcBrowserProvider extends BaseTokenProvider {
         if (!endpoint) {
           throw oidcEndpointMissing('authorizationEndpoint');
         }
+        // RFC 6749 §3.1: the endpoint may carry a query of its own (Azure
+        // AD B2C's `?p=`), kept, and never a fragment. Built with `URL`, so
+        // its parameters and ours are each their own — no second `?`.
+        const url = authorizationEndpointUrl(endpoint);
         // A fresh state and PKCE pair for every URL built.
         const verifier = generatePkceVerifier();
-        const params = new URLSearchParams();
+        const params = url.searchParams;
         params.append('response_type', 'code');
         params.append('client_id', this.config.clientId);
         params.append('redirect_uri', redirectUri);
@@ -142,7 +169,7 @@ export class OidcBrowserProvider extends BaseTokenProvider {
         params.append('code_challenge', generatePkceChallenge(verifier));
         params.append('code_challenge_method', 'S256');
         codeVerifier = verifier;
-        return `${endpoint}?${params.toString()}`;
+        return url.href;
       },
     };
 
