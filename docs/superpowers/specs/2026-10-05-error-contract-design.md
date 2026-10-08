@@ -1361,8 +1361,8 @@ launcher failure (§6a0) widens that window.
   pair (S256), as OIDC already does. The verifier is kept with that attempt
   and sent in its code exchange. Neither is logged or in a refusal.
 - **What the consumer brings is the consumer's.** A configured
-  `authorizationUrl` is returned unchanged, as today: the provider adds no
-  `state` and no challenge it could not verify, and sends no
+  `authorizationUrl` gets the provider's `state` when it carries none
+  (§6d, C7) and nothing else: no challenge it could not verify, no
   `code_verifier`. A code from `staticCodeStrategy` / `externalCodeStrategy`
   that never called `buildAuthorizationUrl` is exchanged without a
   `code_verifier`, as today. Binding such a code (its `state`, its PKCE) is
@@ -2675,14 +2675,30 @@ The goal's "Open — for the spec", answered:
 - **C6. `/submit` becomes a POST** (urlencoded, the 5 MB limit the SAML
   route has today), so a `SAMLResponse` fits and no code lands in a URL.
   The alternative — keep the GET — limits the form to codes.
-- **C7. An unbound configured `authorizationUrl` still admits a redirect
-  without `state`** (today's `expectState(null)`). Goal invariant 4 says
-  "no bare code on an unauthenticated HTTP request"; read here as the
-  paste route and every URL the provider builds, since a URL the consumer
-  configured is bound by the consumer (§6a1, "What the consumer brings").
-  The alternative — refuse every redirect without `state` — makes a
-  configured `authorizationUrl` unusable with a listener. Flagged for the
-  user.
+- **C7. No HTTP redirect is ever accepted without this attempt's
+  `state`** (decided by the user). A configured `authorizationUrl` that
+  carries no `state` gets one: the provider adds its own minted `state`
+  parameter to it (and nothing else — no PKCE challenge it did not build),
+  and the identity provider must echo it (RFC 6749 §4.1.2). A configured URL
+  that already carries a `state` keeps it and is bound to that one. So
+  `oauthCode` / `oidcCode` always have an expected `state`; `expected:
+  null` is gone, and a redirect without the expected `state` is `refuse
+  'state'`.
+- **C8. The authorization URL never reaches a log line** (decided by the
+  user). It carries `state` (and a configured URL may carry anything), and
+  no secret goes to a log line. A prompt that shows the URL — `showUrl`,
+  the presentation-failure fallback, `openInBrowser`'s own fallback — writes
+  it to **stderr only**, never through `ILogger`; the logger gets the fixed
+  line "the authorization URL was shown". A consumer whose stderr is
+  collected into its logs (an MCP server, say) uses
+  `consumerPresentation({ show })` to show the URL in its own UI; the
+  README says so. `announcer` keeps the logger for prompts that carry no
+  secret.
+- **C9. The first terminal verdict is latched.** The composer's wrapped
+  judge latches the first `accept` or `end` synchronously, before any
+  response is flushed; every later arrival is `refuse 'already-answered'`,
+  and the authorization settles with the latched verdict — an `end` can
+  never be overtaken by a later `accept` whose response flushes first.
 
 ### 6d.1 The part contracts (interfaces-auth 7.4.0)
 
@@ -2891,7 +2907,7 @@ needs is required, and the named compositions supply today's values.
 | Part | Does |
 |---|---|
 | `openInBrowser({ browser })` | `browser`: `'auto' \| 'system' \| 'chrome' \| 'msedge' \| 'firefox'`, required. `launchBrowser` as built (§6a0: no shell, `launchableUrl`, absolute paths on Windows). Its own fallback — no `open` module, a launcher exiting non-zero — prompts the URL itself and resolves, so the composer never prompts it twice. `'none'` / `'headless'` are refused (`configuration` `invalid-value`, `browser`): that is `showUrl`. |
-| `showUrl()` | Announces the URL through `promptForUrl` — the logger's `info`, else stderr, only as `promptableUrl` admits it — then `waitingOn` and `routeHint` when the channel has them. Synchronous. |
+| `showUrl()` | Writes the URL to **stderr only** (C8), only as `promptableUrl` admits it; the logger gets "the authorization URL was shown" — then `waitingOn` and `routeHint` when the channel has them. Synchronous. |
 | `consumerPresentation({ show })` | `show(url, { redirectUri, signal })` is the consumer's UI. A throw or a rejection is a presentation failure (§6d.5). |
 
 **Transports** (`src/authorization/transport/`). The four listeners are one
@@ -2987,11 +3003,11 @@ The shipped judges:
 
 - **`oauthCode` / `oidcCode`**, `begin(url)`: `urlState(url)`; `undefined`
   (the URL does not parse) → `configuration` `invalid-value`
-  `authorizationUrl`, before anything is shown; else `expected: string |
-  null`.
-  - `redirect`: first the binding — `expected` a string and the answer's
-    one `state` not equal to it (`sameSecret`, constant time) → `refuse
-    'state'`; so a forged `?error=` stops here too. Then `error` → `end`
+  `authorizationUrl`, before anything is shown; a URL with no `state` →
+  the same refusal (C7: the provider always puts one there); else
+  `expected: string`.
+  - `redirect`: first the binding — the answer's one `state` missing or not
+    equal to `expected` (`sameSecret`, constant time) → `refuse 'state'`; so a forged `?error=` stops here too. Then `error` → `end`
     with `identity-provider-refused` (registered code only), `shown` =
     `error[: error_description]`. Then no one `code` → `refuse
     'no-payload'`. Else `accept` (OIDC: `{ code, state }`).
@@ -3089,9 +3105,10 @@ At construction, a missing part → `configuration`
    3. aborted meanwhile → `aborted`, nothing shown;
    4. `judge = protocol.begin(url)`;
    5. `armed = channel.arm(wrapped)`, where `wrapped` calls `judge`,
-      keeps the first `accept`'s payload and the first `end`'s error in
-      the composer, and turns every answer after the first accept into
-      `refuse 'already-answered'`; a judge that throws becomes `end` with
+      latches the first terminal verdict — `accept` (its payload) or
+      `end` (its error) — synchronously in the composer, before any
+      response is flushed, and turns every later answer into `refuse
+      'already-answered'` (C9); a judge that throws becomes `end` with
       the thrown value classified (`readFailure(…, 'judging-answer')`)
       and a fixed 500 page;
    6. presents the URL — not awaited (§6d.5);
@@ -3129,8 +3146,8 @@ Promises/A+ thenable), while the call is running:
 - one `error` line, `Failed to present the authorization URL:` and
   `logFields(readFailure(error, 'presenting-authorization-url'))` — fixed
   words, no URL;
-- the URL prompted once through `promptForUrl` (`promptableUrl`, the
-  logger's `info` or stderr), with `waitingOn` when a listener waits;
+- the URL prompted once, to stderr only (C8, `promptableUrl`), with
+  `waitingOn` when a listener waits; the logger gets the fixed line;
 - the login keeps waiting. It ends on its result, the IdP's refusal or a
   signal; no timer.
 
@@ -3212,7 +3229,7 @@ the IdP's text. `shown` reaches only the escaped error page.
 |---|---|
 | `state` and PKCE minted per URL built; a configured URL unchanged | provider (unchanged) |
 | closed from the bind until armed — a forged code or `?error=` before the URL exists is `400`, counted, ignored | listener (unconditional) + composer (arms after `begin`, before presenting) |
-| only a callback with the armed `state` settles, constant time; `null` admits (C7) | protocol (`oauthCode`, `oidcCode`) |
+| only a callback with the armed `state` settles, constant time; there is always one (C7) | protocol (`oauthCode`, `oidcCode`) |
 | a forged `?error=` with a wrong `state` ignored | protocol (binding checked before `error`) |
 | loopback by default | named compositions (`loopback`); the parts have no default |
 | `Host` checked before anything is served | listener |
@@ -3344,7 +3361,8 @@ user; auth-providers builds against them from the registry.
    only the addresses it binds (C2, C3); a socketless transport advertises
    only the consumer's (C4).
 4. **Every channel as strongly as today:** §6d.9; the paste route keeps its
-   token, the redirect its `state`, the terminal its user (C7 flagged).
+   token, the redirect its `state` — always, a configured URL included
+   (C7) — and the terminal its user.
 5. **Everything decided stays:** §6d.9, §6d.3.5, §6d.5; no timer is added.
 6. **An authorization ends cleanly:** §6d.4 — `authorize` settles after
    `open`, which settles after release; late results change nothing;
