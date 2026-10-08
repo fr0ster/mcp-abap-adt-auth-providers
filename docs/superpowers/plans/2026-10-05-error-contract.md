@@ -793,7 +793,7 @@ across attempts → the per-attempt case red.
 
 ### Task 30g: auth-providers — documentation of §6c
 
-Repository auth-providers, PR #68. After 30d–30f, 30h and 30i.
+Repository auth-providers, PR #68. After 30d–30f, 30h and 30i (superseded in part by 30o for the strategy docs).
 
 **Steps:**
 - [ ] CLAUDE.md rules 5 and 6 as §6c.13 words them; the "Cancellable shared
@@ -851,6 +851,146 @@ Repository auth-providers, PR #68. After 30d–30f, 30h and 30i.
 in place of `persisting-tokens` for the token API) is decided in Task 34
 from the broker's existing error types, not here.
 
+
+## Authorization strategies by composition (spec §6d, before the release)
+
+Answers `docs/superpowers/2026-10-08-authorization-composition-goal.md`
+through spec §6d. Order: interfaces-auth 7.4.0 → auth-errors 2.1.0 (each one
+PR, merged, tagged and published by the user; registry only, no
+`"link": true`) → Tasks 30l–30o in PR #68 → Task 31. Every task ends with the
+standard gates and the two-stage review; each "Load-bearing" item is a
+deliberate break, each half separately. Tasks 30l–30n replace the code of
+Tasks 30f, 30h and 30i where §6d moves it; every guarantee and test of those
+tasks moves with it (§6d.9 is the checklist).
+
+### Task 30j: interfaces-auth 7.4.0
+
+Repository `mcp-abap-adt-interfaces`, one PR.
+
+**Steps:**
+- [ ] Type tests first: each part contract's required members; an
+  `AnswerVerdict` without `verdict`, an `AuthorizationAnswer` of an unknown
+  `via`, a `ComposedAuthorization`-shaped value without `endpoint` (if the
+  type lives here) do not compile; `ANSWER_REFUSALS` order pinned.
+- [ ] `src/auth/IAuthorizationParts.ts` (§6d.1); `CONFIG_FIELDS` gains the
+  §6d.1 / §6d.8 values (`endpoint`, `redirectUri`, `presentation`,
+  `transport`, `protocol`, `provide`, `receive`, `show`);
+  `INTERACTIVE_LOGIN_STRATEGIES` gains `consumer`; `OPERATIONS` gains
+  `presenting-authorization-url`, `judging-answer`; `@deprecated` on
+  `ICallbackServer`'s declarations and `callbackServer`.
+- [ ] CHANGELOG, README.
+
+**Gate:** standard + `check:surface`, `check:graph`, `check:packed`.
+
+**G10 (user):** merge, tag, publish interfaces-auth 7.4.0.
+
+### Task 30k: auth-errors 2.1.0
+
+Repository `mcp-abap-adt-auth-errors`, one PR. Publish dependency: G10.
+
+**Steps:**
+- [ ] `^7.4.0`; the renderer's completeness check fails until the new
+  strategy label and operations have words — first.
+- [ ] Words for `consumer` (aborted / disposed) and the two operations;
+  tests; README table; CHANGELOG.
+
+**Gate:** standard; `biome check .` clean.
+
+**G11 (user):** merge, tag, publish auth-errors 2.1.0.
+
+### Task 30l: auth-providers — protocols and the answer model
+
+PR #68. Publish dependency: G10, G11.
+
+**Steps:**
+- [ ] Dependencies `^7.4.0` / `^2.1.0`.
+- [ ] Tests first (§6d.3.2, §6d.11 State and the protocol rows of Form):
+  each protocol's judge on redirect / form / terminal / consumer answers;
+  a repeated parameter is no value; a configured URL without `state` gets
+  the provider's (C7) — at the provider; the first terminal verdict
+  latched (C9) is the composer's, Task 30n.
+- [ ] `src/authorization/protocol/` — `oauthCode`, `oidcCode`,
+  `samlResponse`, `passcode`, `readPaste`, the paste words; providers add
+  their minted `state` to a configured `authorizationUrl` that has none
+  (C7).
+
+**Load-bearing:** accept any `state`; read a repeated parameter as its
+first; read `…/callback&code=X` as bare; skip C7 for a configured URL.
+
+### Task 30m: auth-providers — transports
+
+PR #68. After 30l.
+
+**Steps:**
+- [ ] Tests first (§6d.11 Matrix rows for transports, Bind and advertise,
+  Gate, Form, Host, Drain): real sockets; `loopback6` / `loopback4` /
+  `loopback` bind and advertise exactly what they own; the endpoint flows
+  to route and redirect; literal pathname dispatch (`/SUBMIT`, `/submit/`,
+  `/:answer`, `/callback/`); an endpoint URL parsing would change refused;
+  closed until armed; the form token; `Host` and the loopback-peer rule;
+  release before settle (Task 30f's cases).
+- [ ] `src/authorization/transport/` — one payload-agnostic `httpListener`
+  behind `loopback6`, `loopback4`, `loopback`; `terminalPaste`,
+  `consumerAnswer`, `consumerHandoff`. Today's `callbackServer.ts`,
+  `oidcBrowserAuth.ts` and `saml2Auth.ts` servers are replaced, their
+  guarantees moved (§6d.9).
+
+**Load-bearing:** arm skipped; the form token check skipped; `Host`
+middleware dropped; `loopback4` binding `0.0.0.0` or advertising
+`localhost`; `loopback` staying on `127.0.0.1` with `::1` taken; Express
+route patterns instead of literal dispatch; release after settle.
+
+### Task 30n: auth-providers — presentations, the composer, named compositions
+
+PR #68. After 30m.
+
+**Steps:**
+- [ ] Tests first (§6d.11 Composer, Presentation, Logs, Named
+  compositions): the composer's order (build, begin, arm, present, wait);
+  the first terminal verdict latched (C9, `end` then `accept` with the first
+  flush deferred); overlap `busy`; dispose `disposed`, port free; abort
+  `aborted`; a consumer transport resolving without an accept → `failed`;
+  presentation failures — `openInBrowser` / `showUrl` prompt to stderr only,
+  `consumerPresentation` prints no URL (C8); no URL, `state`, code, token
+  or IdP text in any log line (a capturing logger and captured stderr); the
+  named compositions map to their parts and today's server / CLI calls
+  compile; the drain case on the composer.
+- [ ] `src/authorization/presentation/`, `compose.ts`; `src/strategies/`
+  keeps only the named compositions (`browserCallbackStrategy`, …,
+  `externalCodeStrategy`, `staticCodeStrategy`, `asOidcResult`); the
+  manual and external compositions require `redirectUri` (C4); providers'
+  static factories (`inBrowser`, `fromTerminal`) use them;
+  `BrowserCallbackStrategy`, `with*CallbackServer`, `runCallbackScope`, the
+  `callbackServer` / `stateGate` / `host` / `allowedHosts` options removed.
+- [ ] Every existing interactive-login suite moves to the compositions and
+  stays green; the stand (`test:stand`) green.
+
+**Load-bearing:** return what `answer()` gives; present before arming;
+an `end` overtaken by a later `accept`; a presentation failure ending the
+login; the URL through `ILogger`.
+
+### Task 30o: auth-providers — documentation of §6d
+
+PR #68. After 30n.
+
+**Steps:**
+- [ ] README: the three parts, the shipped parts and named compositions, a
+  minimal consumer transport (non-local) with its warning, the SSH tunnel,
+  stderr-only URL prompts and `consumerPresentation` for logged stderr; the
+  login-CSRF section rewritten on the parts; "Migrating to 6.0.0" (§6d.10).
+- [ ] CHANGELOG `[Unreleased]` (the surface diff regenerated), CLAUDE.md
+  (module structure, callback server section, rules naming the
+  strategies), `docs/btp-setup.md` where touched.
+
+**Gate:** standard; docs tests green.
+
+### Changes to the tasks after it (composition)
+
+- **Task 31:** Codex on PR #68 at the head after 30o; its earlier finding
+  (an explicit `host` advertising `localhost`) is closed by §6d — verify.
+- **Task 34:** the auth-broker CLI's manual SAML path always passes
+  `acsUrl` (C4); the broker's dependency ranges include interfaces-auth
+  `^7.4.0` and auth-errors `^2.1.0`.
 
 ### Task 31: Release preparation
 

@@ -3285,8 +3285,7 @@ the IdP's text. `shown` reaches only the escaped error page.
   `consumerPresentation({ show })`.
 - A non-loopback bind → the consumer's own `IAnswerTransport` (the README's
   example), which builds its redirect from its origin and the endpoint
-  path. Or keep `loopback` and tunnel. Or keep `loopback` and tunnel
-  (`ssh -L <port>:localhost:<port>`).
+  path. Or keep `loopback` and tunnel (`ssh -L <port>:localhost:<port>`).
 - `manualPasteStrategy()`, `manualSamlResponseStrategy()`,
   `externalCodeStrategy({ provide })` without `redirectUri` → pass the
   redirect registered with the IdP (the auth-broker CLI passes `acsUrl`
