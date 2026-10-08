@@ -2596,7 +2596,7 @@ The goal's "Open — for the spec", answered:
    auth-providers (§6d.2–§6d.7).
 2. **Shipped parts** (§6d.2): presentations `openInBrowser`, `showUrl`,
    `consumerPresentation`; transports `loopback6`, `loopback4`, `loopback`,
-   `networkListener`, `terminalPaste`, `consumerAnswer`, and the pair
+   `terminalPaste`, `consumerAnswer`, and the pair
    `consumerHandoff`; protocols `oauthCode`, `oidcCode`, `samlResponse`,
    `passcode`. The composer is `composeAuthorization`. **Named
    compositions** keep today's names, one to one (§6d.7):
@@ -2635,8 +2635,8 @@ The goal's "Open — for the spec", answered:
    the form the server and the CLI use — compiles and behaves as today. What
    changes: the `callbackServer`, `host` and `allowedHosts` options go
    (`host` / `allowedHosts` never shipped: they are 6.0.0's own); a
-   non-loopback listener is `networkListener` and advertises the address
-   the consumer names; the terminal and consumer-code compositions of a
+   non-loopback listener is the consumer's own transport, which builds its
+   redirect from its origin and the endpoint path; the terminal and consumer-code compositions of a
    redirect protocol require `redirectUri`; `/submit` is a POST; every
    composition refuses an overlapping `authorize` (`busy`).
 
@@ -2648,15 +2648,14 @@ The goal's "Open — for the spec", answered:
   for the removal of types nobody outside auth-providers uses (searched
   2026-10-08: the broker, its CLI, the server, connection). The cost: dead
   types stay published until the next major.
-- **C2. `networkListener` binds exactly the address it advertises.** It
-  takes one literal, non-loopback, non-unspecified IP address and a port,
-  binds exactly that, advertises `http://<address>:<bound port>/callback`
-  and answers only that authority. No hostname, no wildcard, no list of
-  authorities: each of those lets the advertised destination differ from
-  the socket (another address, another port, a name resolving elsewhere),
-  and goal invariant 3 forbids it. A consumer that needs a hostname, a
-  wildcard bind, a proxy or a translated port writes its own transport,
-  which owns that mapping.
+- **C2. The package ships loopback listeners only; a non-local listener is
+  the consumer's transport** (decided by the user). The composition gives a
+  transport only the endpoint path (`/callback`); the transport builds the
+  redirect from its own origin — scheme, address, port — so what it
+  advertises is what it listens on, by construction. A consumer that wants
+  a listener on a network address, a hostname, a wildcard, behind a proxy
+  or a translated port implements `IAnswerTransport` and owns that mapping
+  and its risk. The README shows a minimal one and its warning.
 - **C3. `loopback` keeps today's skip of an unavailable `::1`**
   (`EADDRNOTAVAIL`, `EAFNOSUPPORT`): an address the machine does not have
   can be nobody's, so `localhost` still reaches only the listener. The
@@ -2810,13 +2809,20 @@ export interface AnswerTransportOptions {
   readonly paste?: PasteWords | undefined;
   /** From the protocol. */
   readonly callbackMethods: readonly ('GET' | 'POST')[];
+  /**
+   * The endpoint path the redirect arrives at (`/callback`), from the
+   * composition. The transport owns everything else of the redirect —
+   * scheme, address, port, any prefix of its own — and builds it.
+   */
+  readonly endpoint: string;
 }
 
 /** An open channel, valid inside `open`'s callback. */
 export interface IAnswerChannel {
   /**
-   * The redirect this transport advertises: one that reaches only what it
-   * listens on (a listener), or the consumer's (`terminalPaste`,
+   * The redirect this transport advertises, built by the transport from its
+   * own origin and `endpoint`: it reaches only what this transport listens
+   * on (a listener), or is the consumer's (`terminalPaste`,
    * `consumerAnswer`); `undefined` when it has none.
    */
   readonly redirectUri: string | undefined;
@@ -2882,7 +2888,7 @@ export interface IAuthorizationPresentation {
 Also in 7.4.0, all additive (new values of fact sets are minors, as in
 7.1.0):
 
-- `CONFIG_FIELDS` gains `address`, `redirectUri`,
+- `CONFIG_FIELDS` gains `redirectUri`,
   `presentation`, `transport`, `protocol`, `provide`, `receive`, `show`.
 - `INTERACTIVE_LOGIN_STRATEGIES` gains `consumer` (the label of
   `consumerAnswer`).
@@ -2921,7 +2927,6 @@ payload.
 | `loopback6({ port })` | `::1` only | a loopback authority with the bound port, from a loopback peer | `http://[::1]:<port>/callback` |
 | `loopback4({ port })` | `127.0.0.1` only | the same | `http://127.0.0.1:<port>/callback` |
 | `loopback({ port })` | `127.0.0.1`, then `::1` on the same port (C3) | the same | `http://localhost:<port>/callback` |
-| `networkListener({ address, port })` | exactly `address` (a literal IP, not loopback, not unspecified) | only `<address>:<bound port>`, from any peer | `http://<address>:<bound port>/callback` |
 | `terminalPaste({ redirectUri?, read? })` | nothing; reads stdin | — | `redirectUri` as given (C4) |
 | `consumerAnswer({ redirectUri?, receive })` | nothing | — | `redirectUri` as given (C4) |
 
@@ -2934,20 +2939,7 @@ payload.
   report a port taken on a family the transport does not use.
 - `loopback`: the `::1` half takes the port the OS gave `127.0.0.1`; taken
   there → `port-in-use`, never `127.0.0.1` alone (§6a1).
-- `networkListener`: `address` required — a literal IPv4 or IPv6 address
-  (parsed with the WHATWG URL host parser, no regex), neither loopback nor
-  unspecified, else `configuration` `invalid-value`, `address`, at
-  construction. It binds exactly that address; the advertised redirect and
-  the route hint carry it with the bound port (so `port: 0` too); the `Host`
-  check answers that one authority. Tests on real sockets: a fixed and an
-  ephemeral port advertise what was bound; a hostname, `0.0.0.0`, `::`,
-  `127.0.0.1` are refused at construction.
-  At `open` it logs one `warn` line in fixed words: "the callback listens
-  on a non-loopback address; every client that reaches it can answer this
-  login through its paste page". The README warns the same and recommends
-  `loopback` with an SSH tunnel. Plain HTTP: the listener serves no TLS.
-- `routeHint` (listeners with paste words only): `networkListener` names
-  its advertised authority's `/`; the loopback ones name the SSH tunnel to
+- `routeHint` (listeners with paste words only): the loopback listeners name the SSH tunnel to
   their own address (`ssh -L <port>:<bound address>:<port> <this
   machine>`) and its `/` — today's `uaaPasteHint`, its URLs only as
   `promptableUrl` admits them.
@@ -3176,7 +3168,7 @@ a failed default launcher prompts once, not twice. `promptableUrl` and
 | `gated` | gone: every listener is closed until armed |
 | `expectState(state)` | gone: `protocol.begin(url)` reads `state`; `channel.arm(judge)` opens |
 | `stateGate` | gone: whether a protocol binds by `state` is the protocol |
-| `host` | `networkListener({ address })`, a literal IP it binds and advertises (C2) |
+| `host` | gone: a non-local listener is the consumer's transport (C2) |
 | `allowedHosts` | gone: the listener answers only the authority it advertises |
 | `remoteHint` | the channel's `routeHint`; the named compositions keep a `remoteHint` option that replaces it |
 | `openUrl(url, browser, redirectUri)` | `consumerPresentation({ show })` |
@@ -3215,7 +3207,7 @@ Every failure is minted through auth-errors; no new kind, no new outcome.
 | Where | Kind, facts |
 |---|---|
 | listener bind, port held | `interactive-login` `port-in-use` (`port`) |
-| a part's option | `configuration`: `callback-port-invalid` (`port`); `required-fields-missing` (`address`, `redirectUri`, `presentation`, `transport`, `protocol`, `provide`, `receive`, `show`); `invalid-value` (`address`, `redirectUri` not an absolute http(s) URL, `browser`, `authorizationUrl`) |
+| a part's option | `configuration`: `callback-port-invalid` (`port`); `required-fields-missing` (`redirectUri`, `presentation`, `transport`, `protocol`, `provide`, `receive`, `show`); `invalid-value` (`redirectUri` not an absolute http(s) URL, `browser`, `authorizationUrl`) |
 | abort, dispose, overlap | `aborted` (`strategy`, `ignoredCallbacks?`), `disposed` (`strategy`), `busy` |
 | the IdP's `?error=` | `identity-provider-refused` (`oauthError?`) |
 | terminal | `input-abandoned`, `no-terminal`, `no-input`; `unreadable-input` from the protocol |
@@ -3230,7 +3222,7 @@ the operations → "presenting the authorization URL", "judging an answer".
 
 **Logging.** Lines in fixed words only: the listener's `warn` for each
 refused answer (`{ reason, ignored }`, `reason` from `ANSWER_REFUSALS`), the
-`networkListener` warning, the presentation failure line. No line carries a
+presentation failure line. No line carries a
 code, a `state`, a form token, a pasted text, a `SAMLResponse`, a URL or
 the IdP's text. `shown` reaches only the escaped error page.
 
@@ -3245,8 +3237,8 @@ the IdP's text. `shown` reaches only the escaped error page.
 | loopback by default | named compositions (`loopback`); the parts have no default |
 | `Host` checked before anything is served | listener |
 | loopback names only from a loopback peer | listener (loopback transports) |
-| a loopback name is never an allowed authority | `networkListener` (a loopback `address` refused at construction) |
-| the risk of a network bind, stated | `networkListener` (`warn` line) + README |
+| a loopback name is never an allowed authority | moot: the shipped listeners are loopback only; a consumer transport owns its own |
+| the risk of a network bind, stated | README, beside the consumer-transport example |
 | a bare paste only without `?&=/#`; a pasted URL must carry `state` | protocol (`readPaste`), on `form` and `terminal` |
 | `/submit` bound by the per-attempt form token | listener |
 | `port: 0` and the second family → `port-in-use`, never `127.0.0.1` alone | `loopback` |
@@ -3265,10 +3257,9 @@ the IdP's text. `shown` reaches only the escaped error page.
   returns a payload.
 - `openUrl` → still accepted by the named compositions; or
   `consumerPresentation({ show })`.
-- A non-loopback bind → `networkListener({ address, port })` with a literal
-  IP. The redirect is now `http://<address>:<port>/callback`: register it
-  with the identity provider. A hostname, a wildcard or a proxy: the
-  consumer's own transport. Or keep `loopback` and tunnel
+- A non-loopback bind → the consumer's own `IAnswerTransport` (the README's
+  example), which builds its redirect from its origin and the endpoint
+  path. Or keep `loopback` and tunnel. Or keep `loopback` and tunnel
   (`ssh -L <port>:localhost:<port>`).
 - `manualPasteStrategy()`, `manualSamlResponseStrategy()`,
   `externalCodeStrategy({ provide })` without `redirectUri` → pass the
@@ -3305,9 +3296,9 @@ protocol it applies to.
   wrong `state`; a right token with a bare code logs in; the token differs
   per attempt; a foreign `Host` gets no token in its body.
 - **Host:** DNS-rebound `Host` refused; a non-loopback peer with `Host:
-  localhost` refused by a `networkListener`; `networkListener` answers only
-  `<address>:<bound port>` and refuses a loopback, unspecified or
-  non-literal `address` at construction.
+  localhost` refused (the loopback peer rule); every shipped listener's
+  redirect is its origin plus the endpoint it was given (a test passes
+  another endpoint path and checks the advertised redirect and the route).
 - **Composer:** a consumer transport whose `answer()` resolves without an
   accept → `failed`, no payload; one that calls the judge with a wrong
   `state` and resolves → `failed`; overlap → `busy`; dispose during
