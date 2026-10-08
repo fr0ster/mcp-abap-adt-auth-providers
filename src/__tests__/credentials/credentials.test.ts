@@ -166,7 +166,7 @@ describe('CertificateAuthProvider', () => {
     expect(t.logon.tls).toEqual([{ cert, key }]);
   });
 
-  it("the loader's configuration failure is the refusal (E17); a foreign one gives its code only", async () => {
+  it("the loader's configuration failure is the refusal; a foreign one gives its code only", async () => {
     const own = new CertificateAuthProvider(
       new FileCertificateMaterialLoader(),
       { ...config, certPath: 'SECRET-PATH', certPfxPath: 'SECRET-PFX' },
@@ -248,7 +248,7 @@ describe('CertificateAuthProvider.fromFiles', () => {
 
 describe('FileCertificateMaterialLoader', () => {
   // Configuration failures, no longer ValidationError.
-  it('configuration errors are configuration failures (E17, E18)', async () => {
+  it('configuration errors are configuration failures', async () => {
     const loader = new FileCertificateMaterialLoader();
     expect(
       configurationOf(

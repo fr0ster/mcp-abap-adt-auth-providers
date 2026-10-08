@@ -6,7 +6,8 @@
  * the rethrow of one; and no refusal is built from free words (`oops(`, whose
  * last caller is gone).
  *
- * The classes themselves are deleted (`transitionCoverage.test.ts`).
+ * The classes, the 5.x transition pieces and their modules are deleted from
+ * `src`: the second and third blocks keep it so.
  */
 
 import { readdirSync, readFileSync, statSync } from 'node:fs';
@@ -65,5 +66,65 @@ describe('nothing in src throws an unminted error', () => {
 
   it('no refusal of free words: no oops(', () => {
     expect(linesWith('oops(')).toEqual([]);
+  });
+});
+
+describe('no transition piece is left in src', () => {
+  it.each([
+    'contractTransition',
+    'toLegacyRefusal',
+    'toLegacyOutcome',
+    'legacyBridge',
+    'isUnmintedRung',
+    'errorFor(',
+    'refusalFrom',
+    'refusalWords',
+    'loggedError(',
+    'asContract',
+    'contractShape',
+    'TokenResultWithDisposition',
+    'SignalledAuthorizationRequest',
+    'TOKEN_PROVIDER_ERROR_CODES',
+    'ASSERTION_ERROR_CODES',
+    'TokenProviderError',
+    'ValidationError',
+    'CallbackScopeError',
+    'AuthorizationRefusedError',
+    'DeviceCodePresentationError',
+    'CertificateMaterialError',
+    'ClientAuthenticationError',
+    'ClientAuthenticationResultError',
+    'BasicClientIdError',
+    'AssertionValidationError',
+    'RefreshError',
+    'BrowserAuthError',
+    'ServiceKeyError',
+    'SessionDataError',
+    'TokenEndpointError',
+    'SncLibraryNotFoundError',
+    'tokenEndpointError',
+  ])('%s is named nowhere in src', (needle) => {
+    const found = sourceFiles(SRC)
+      .filter((file) => readFileSync(file, 'utf8').includes(needle))
+      .map((file) => relative(SRC, file));
+    expect(found).toEqual([]);
+  });
+
+  it('the deleted modules are gone', () => {
+    const names = new Set(sourceFiles(SRC).map((file) => relative(SRC, file)));
+    for (const gone of [
+      'auth/contractTransition.ts',
+      'auth/contractShape.ts',
+      'auth/refusal.ts',
+      'auth/callbackScopeError.ts',
+      'errors/TokenProviderErrors.ts',
+      'errors/AssertionValidationError.ts',
+      'errors/CertificateMaterialError.ts',
+      'errors/ClientAuthenticationError.ts',
+      'errors/TokenEndpointError.ts',
+    ]) {
+      expect([gone, names.has(gone)]).toEqual([gone, false]);
+    }
+    expect(names.size).toBeGreaterThan(10);
   });
 });

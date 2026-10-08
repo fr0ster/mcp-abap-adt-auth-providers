@@ -17,7 +17,7 @@ import { classify } from '@mcp-abap-adt/auth-errors';
 const MARKER = 'SECRET-MARKER';
 
 describe('A.1 — classify rows', () => {
-  it('A1: a value whose reading throws → unknown with the operation, verbatim', () => {
+  it('a value whose reading throws → unknown with the operation, verbatim', () => {
     const boom = () => {
       throw new Error(MARKER);
     };
@@ -44,7 +44,7 @@ describe('A.1 — classify rows', () => {
     expect(JSON.stringify(error)).not.toContain(MARKER);
   });
 
-  it('A15: a TLS failure code → tls, verbatim words and hint', () => {
+  it('a TLS failure code → tls, verbatim words and hint', () => {
     const error = classify(
       Object.assign(new Error(MARKER), {
         code: 'ERR_SSL_TLSV1_ALERT_UNKNOWN_CA',
@@ -66,7 +66,7 @@ describe('A.1 — classify rows', () => {
     );
   });
 
-  it('A16: a foreign value → unknown with its allowlisted facts, verbatim', () => {
+  it('a foreign value → unknown with its allowlisted facts, verbatim', () => {
     const answered = classify(
       Object.assign(new Error(MARKER), {
         response: { status: 500, data: { error: 'server_error' } },

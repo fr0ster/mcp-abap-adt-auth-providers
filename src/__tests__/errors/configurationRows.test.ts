@@ -174,8 +174,8 @@ beforeEach(() => {
   mockedDiscovery.mockReset();
 });
 
-describe('E1 — required fields missing (ClientCredentials, AuthorizationCode)', () => {
-  it('E1: ClientCredentialsProvider names each missing field', async () => {
+describe('required fields missing (ClientCredentials, AuthorizationCode)', () => {
+  it('ClientCredentialsProvider names each missing field', async () => {
     const thrown = await thrownBy(
       () =>
         new ClientCredentialsProvider({
@@ -192,7 +192,7 @@ describe('E1 — required fields missing (ClientCredentials, AuthorizationCode)'
     });
   });
 
-  it('E1: AuthorizationCodeProvider names only what is missing', async () => {
+  it('AuthorizationCodeProvider names only what is missing', async () => {
     const thrown = await thrownBy(
       () =>
         new AuthorizationCodeProvider({
@@ -211,8 +211,8 @@ describe('E1 — required fields missing (ClientCredentials, AuthorizationCode)'
   });
 });
 
-describe('E2 — clientSecret beside clientAuthentication', () => {
-  it('E2: the base constructor refuses both, naming clientSecret', async () => {
+describe('clientSecret beside clientAuthentication', () => {
+  it('the base constructor refuses both, naming clientSecret', async () => {
     const thrown = await thrownBy(
       () =>
         new ClientCredentialsProvider({
@@ -233,8 +233,8 @@ describe('E2 — clientSecret beside clientAuthentication', () => {
   });
 });
 
-describe('E3–E10, E28 — SAML configuration', () => {
-  it('E3: acsUrl is required with a pre-built authorizationUrl', async () => {
+describe('SAML configuration', () => {
+  it('acsUrl is required with a pre-built authorizationUrl', async () => {
     const thrown = await thrownBy(() =>
       validateSamlConfig(
         samlConfig({ authorizationUrl: `https://idp.example/${MARKER}` }),
@@ -248,7 +248,7 @@ describe('E3–E10, E28 — SAML configuration', () => {
     });
   });
 
-  it('E4: idpInitiated with a declared authnRequestId, at construction', async () => {
+  it('idpInitiated with a declared authnRequestId, at construction', async () => {
     const thrown = await thrownBy(
       () =>
         new Saml2PureProvider({
@@ -265,7 +265,7 @@ describe('E3–E10, E28 — SAML configuration', () => {
     });
   });
 
-  it('E5: a shipped validator supplied without idpEntityId', async () => {
+  it('a shipped validator supplied without idpEntityId', async () => {
     const thrown = await thrownBy(() =>
       checkAssertionValidator(
         samlConfig({
@@ -284,7 +284,7 @@ describe('E3–E10, E28 — SAML configuration', () => {
     });
   });
 
-  it('E6: the SAML bearer exchange without tokenUrl or uaaUrl', async () => {
+  it('the SAML bearer exchange without tokenUrl or uaaUrl', async () => {
     const thrown = await thrownBy(() => resolveTokenUrl({}));
     expectRow(thrown, {
       case: 'saml-token-endpoint-missing',
@@ -304,7 +304,7 @@ describe('E3–E10, E28 — SAML configuration', () => {
     expect(Date.now() - started).toBeLessThan(500);
   });
 
-  it('E7: idpInitiated without authorizationUrl, and a strategy asking for a URL', async () => {
+  it('idpInitiated without authorizationUrl, and a strategy asking for a URL', async () => {
     const strategy = asking('http://localhost:61001/callback', 'PAYLOAD');
     const thrown = await thrownBy(() =>
       getSamlAssertion(
@@ -331,7 +331,7 @@ describe('E3–E10, E28 — SAML configuration', () => {
     diagnostics: { configuredUri: ACS, strategyUri: LISTENING },
   } as const;
 
-  it('E8: the strategy listens elsewhere than acsUrl (inside the builder)', async () => {
+  it('the strategy listens elsewhere than acsUrl (inside the builder)', async () => {
     const thrown = await thrownBy(() =>
       getSamlAssertion(
         samlConfig({ acsUrl: ACS, authorization: asking(LISTENING, 'P') }),
@@ -340,7 +340,7 @@ describe('E3–E10, E28 — SAML configuration', () => {
     expectRow(thrown, E8);
   });
 
-  it('E8: the strategy used another address than acsUrl (after it returned)', async () => {
+  it('the strategy used another address than acsUrl (after it returned)', async () => {
     const thrown = await thrownBy(() =>
       getSamlAssertion(
         samlConfig({
@@ -353,7 +353,7 @@ describe('E3–E10, E28 — SAML configuration', () => {
     expectRow(thrown, E8);
   });
 
-  it('E8: a URI with a query keeps only its origin and path as a diagnostic', async () => {
+  it('a URI with a query keeps only its origin and path as a diagnostic', async () => {
     const thrown = await thrownBy(() =>
       getSamlAssertion(
         samlConfig({
@@ -367,7 +367,7 @@ describe('E3–E10, E28 — SAML configuration', () => {
     expect(JSON.stringify(error)).not.toContain(MARKER);
   });
 
-  it('E9: idpInitiated, and a request ID declared (a direct caller)', async () => {
+  it('idpInitiated, and a request ID declared (a direct caller)', async () => {
     const thrown = await thrownBy(() =>
       getSamlAssertion(
         samlConfig({ idpInitiated: true, authnRequestId: MARKER }),
@@ -382,7 +382,7 @@ describe('E3–E10, E28 — SAML configuration', () => {
     });
   });
 
-  it('E10: no request ID minted, declared or declared absent', async () => {
+  it('no request ID minted, declared or declared absent', async () => {
     const thrown = await thrownBy(() => getSamlAssertion(samlConfig({})));
     expectRow(thrown, {
       case: 'saml-in-response-to-undeclared',
@@ -403,7 +403,7 @@ describe('E3–E10, E28 — SAML configuration', () => {
       (config: object) => new Saml2PureProvider(config as never),
     ],
   ])(
-    'E28: %s without an assertionValidator names it, at construction',
+    '%s without an assertionValidator names it, at construction',
     async (_name, make) => {
       const { assertionValidator: _none, ...config } = samlConfig({});
       const thrown = await thrownBy(() =>
@@ -418,8 +418,8 @@ describe('E3–E10, E28 — SAML configuration', () => {
   );
 });
 
-describe('E11 — clientId with a client authentication', () => {
-  it('E11: the SAML exchange with a strategy and no clientId sends nothing', async () => {
+describe('clientId with a client authentication', () => {
+  it('the SAML exchange with a strategy and no clientId sends nothing', async () => {
     const thrown = await thrownBy(() =>
       exchangeSamlAssertion(
         'assertion',
@@ -440,7 +440,7 @@ describe('E11 — clientId with a client authentication', () => {
   });
 });
 
-describe('E12 — redirect mismatch', () => {
+describe('redirect mismatch', () => {
   const DECLARED = 'http://localhost:61001/callback';
   const USED = 'http://localhost:61002/callback';
   const PREBUILT = `https://uaa.example/oauth/authorize?client_id=c&redirect_uri=${encodeURIComponent(DECLARED)}&response_type=code`;
@@ -456,7 +456,7 @@ describe('E12 — redirect mismatch', () => {
   it.each([
     ['inside the builder', () => asking(USED, 'code')],
     ['after the strategy returned', () => holding(USED, 'code')],
-  ])('E12: %s, through getTokens()', async (_name, strategy) => {
+  ])('%s, through getTokens()', async (_name, strategy) => {
     const provider = new AuthorizationCodeProvider({
       renewal: refreshThenLogin(),
       uaaUrl: 'http://127.0.0.1:9',
@@ -468,7 +468,7 @@ describe('E12 — redirect mismatch', () => {
     expectRow(await thrownBy(() => provider.getTokens()), E12);
   });
 
-  it('A11: a configuration failure inside a moment is the moment’s refusal, its case, fields and words kept', async () => {
+  it('a configuration failure inside a moment is the moment’s refusal, its case, fields and words kept', async () => {
     const provider = new AuthorizationCodeProvider({
       renewal: refreshThenLogin(),
       uaaUrl: 'http://127.0.0.1:9',
@@ -534,7 +534,7 @@ describe('an unparseable authorizationUrl', () => {
   });
 });
 
-describe('E13–E16 — OIDC endpoints', () => {
+describe('OIDC endpoints', () => {
   const E13 = {
     case: 'oidc-discovery-needs-issuer',
     fields: ['issuerUrl'],
@@ -583,7 +583,7 @@ describe('E13–E16 — OIDC endpoints', () => {
     ['OidcTokenExchangeProvider', () => exchange()],
     ['OidcDeviceFlowProvider', () => device()],
     ['OidcBrowserProvider', () => browser()],
-  ])('E13: %s login without issuerUrl or endpoints', async (_name, make) => {
+  ])('%s login without issuerUrl or endpoints', async (_name, make) => {
     expectRow(await thrownBy(() => make().getTokens()), E13);
     expect(mockedDiscovery).not.toHaveBeenCalled();
   });
@@ -593,15 +593,12 @@ describe('E13–E16 — OIDC endpoints', () => {
     ['OidcTokenExchangeProvider', () => exchange({ refreshToken: 'r' })],
     ['OidcDeviceFlowProvider', () => device({ refreshToken: 'r' })],
     ['OidcBrowserProvider', () => browser({ refreshToken: 'r' })],
-  ])(
-    'E13: %s refresh without issuerUrl or tokenEndpoint',
-    async (_name, make) => {
-      const provider = make();
-      expectRow(await thrownBy(() => provider.refreshTokens()), E13);
-    },
-  );
+  ])('%s refresh without issuerUrl or tokenEndpoint', async (_name, make) => {
+    const provider = make();
+    expectRow(await thrownBy(() => provider.refreshTokens()), E13);
+  });
 
-  it('E14: no authorization endpoint configured or discovered', async () => {
+  it('no authorization endpoint configured or discovered', async () => {
     mockedDiscovery.mockResolvedValue({ token_endpoint: 'https://t' });
     const provider = browser({ issuerUrl: 'https://issuer.example' });
     expectRow(
@@ -627,7 +624,7 @@ describe('E13–E16 — OIDC endpoints', () => {
         browser({ issuerUrl: 'https://i', authorizationEndpoint: 'https://a' }),
     ],
   ])(
-    'E15: %s without a token endpoint configured or discovered',
+    '%s without a token endpoint configured or discovered',
     async (_name, make) => {
       mockedDiscovery.mockResolvedValue({});
       expectRow(
@@ -637,7 +634,7 @@ describe('E13–E16 — OIDC endpoints', () => {
     },
   );
 
-  it('E16: no device authorization endpoint configured or discovered', async () => {
+  it('no device authorization endpoint configured or discovered', async () => {
     mockedDiscovery.mockResolvedValue({ token_endpoint: 'https://t' });
     const provider = device({ issuerUrl: 'https://issuer.example' });
     expectRow(
@@ -647,8 +644,8 @@ describe('E13–E16 — OIDC endpoints', () => {
   });
 });
 
-describe('E17, E18 — certificate files', () => {
-  it('E17: PEM and PFX both given', async () => {
+describe('certificate files', () => {
+  it('PEM and PFX both given', async () => {
     const thrown = await thrownBy(() =>
       new FileCertificateMaterialLoader().load({
         certPath: `/${MARKER}.crt`,
@@ -663,7 +660,7 @@ describe('E17, E18 — certificate files', () => {
     });
   });
 
-  it('E18: neither a PFX nor a whole PEM pair', async () => {
+  it('neither a PFX nor a whole PEM pair', async () => {
     const thrown = await thrownBy(() =>
       new FileCertificateMaterialLoader().load({
         certPath: `/${MARKER}.crt`,
@@ -678,11 +675,11 @@ describe('E17, E18 — certificate files', () => {
   });
 });
 
-describe('E19 — clientSecretBasic encoding', () => {
+describe('clientSecretBasic encoding', () => {
   it.each([
     ['missing', {}],
     ['another value', { encoding: MARKER }],
-  ])('E19: encoding %s', async (_name, options) => {
+  ])('encoding %s', async (_name, options) => {
     const thrown = await thrownBy(() =>
       clientSecretBasic(MARKER, options as never),
     );
@@ -695,12 +692,12 @@ describe('E19 — clientSecretBasic encoding', () => {
   });
 });
 
-describe('E22 — UAA authorization URL', () => {
+describe('UAA authorization URL', () => {
   it.each([
     ['uaaUrl', { uaaUrl: '', uaaClientId: 'c' }, ['uaaUrl']],
     ['clientId', { uaaUrl: 'https://u', uaaClientId: '' }, ['clientId']],
     ['both', { uaaUrl: '', uaaClientId: '' }, ['uaaUrl', 'clientId']],
-  ])('E22: without %s', async (_name, config, fields) => {
+  ])('without %s', async (_name, config, fields) => {
     const thrown = await thrownBy(() =>
       getJwtAuthorizationUrl(
         config as never,
@@ -715,8 +712,8 @@ describe('E22 — UAA authorization URL', () => {
   });
 });
 
-describe('E23 — SSO factory', () => {
-  it('E23: no provider for this protocol and flow', async () => {
+describe('SSO factory', () => {
+  it('no provider for this protocol and flow', async () => {
     const thrown = await thrownBy(() =>
       SsoProviderFactory.create({
         protocol: 'oidc',
@@ -733,11 +730,11 @@ describe('E23 — SSO factory', () => {
   });
 });
 
-describe('E24–E26 — shipped validator construction', () => {
+describe('shipped validator construction', () => {
   const store = () => createInMemoryReplayStore();
 
   it.each([[-1], [1.5], [Number.NaN], [Number.POSITIVE_INFINITY]])(
-    'E24: clockSkewMs %p, the value never in the words',
+    'clockSkewMs %p, the value never in the words',
     async (clockSkewMs) => {
       const thrown = await thrownBy(() =>
         createSignedResponseValidator({
@@ -755,7 +752,7 @@ describe('E24–E26 — shipped validator construction', () => {
     },
   );
 
-  it('E25: no certificate to verify against', async () => {
+  it('no certificate to verify against', async () => {
     const thrown = await thrownBy(() =>
       createSignedResponseValidator({
         idpCertificates: [],
@@ -772,7 +769,7 @@ describe('E24–E26 — shipped validator construction', () => {
   it.each([
     ['neither PEM nor base64 DER', `${MARKER}!!`],
     ['base64 that is no certificate', 'AAAA'],
-  ])('E26: %s (toPem, and the validator built on it)', async (_name, value) => {
+  ])('%s (toPem, and the validator built on it)', async (_name, value) => {
     const row = {
       case: 'idp-certificate-invalid',
       fields: ['idpCertificates'],
@@ -792,8 +789,8 @@ describe('E24–E26 — shipped validator construction', () => {
   });
 });
 
-describe('E27 — staticCodeStrategy', () => {
-  it('E27: no payload', async () => {
+describe('staticCodeStrategy', () => {
+  it('no payload', async () => {
     const thrown = await thrownBy(() => staticCodeStrategy({ payload: '' }));
     expectRow(thrown, {
       case: 'static-code-without-payload',
@@ -803,7 +800,7 @@ describe('E27 — staticCodeStrategy', () => {
   });
 });
 
-describe('K6 — callback server port', () => {
+describe('callback server port', () => {
   const K6 = {
     case: 'callback-port-invalid',
     fields: ['port'],
@@ -811,7 +808,7 @@ describe('K6 — callback server port', () => {
   };
 
   it.each([[70000], [-1], [1.5], [Number.NaN], ['k6sock'], ['61001']])(
-    'K6: browserCallbackStrategy({ port: %p }) refuses at construction',
+    'browserCallbackStrategy({ port: %p }) refuses at construction',
     async (port) => {
       expectRow(
         await thrownBy(() => browserCallbackStrategy({ port } as never)),
@@ -821,7 +818,7 @@ describe('K6 — callback server port', () => {
   );
 
   it.each([[70000], [-1], [1.5], [Number.NaN], ['k6sock']])(
-    'K6: a port changed after construction (%p) changes nothing — the options were read once; no socket file',
+    'a port changed after construction (%p) changes nothing — the options were read once; no socket file',
     async (port) => {
       const free = await getAvailablePort();
       const options: { port?: unknown } = { port: free };
@@ -847,7 +844,7 @@ describe('K6 — callback server port', () => {
   );
 
   it.each([[-1], [65536], [1.5], ['61001'], [Number.NaN]])(
-    'K6: port %p, the value never in the words',
+    'port %p, the value never in the words',
     async (port) => {
       const thrown = await thrownBy(() => loopback({ port } as never));
       const error = expectRow(thrown, {

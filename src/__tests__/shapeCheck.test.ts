@@ -71,7 +71,7 @@ function readList(name: string): unknown {
 }
 
 describe('the shape check', () => {
-  it('R1: tools/ holds a byte-identical copy of the one auth-errors publishes', () => {
+  it('tools/ holds a byte-identical copy of the one auth-errors publishes', () => {
     const canonical = readFileSync(
       require.resolve(
         '@mcp-abap-adt/auth-errors/tools/check-provider-shape.mjs',

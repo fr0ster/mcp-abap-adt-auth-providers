@@ -59,7 +59,7 @@ function refusal(outcome: AuthOutcome) {
 }
 
 describe('A.2 — the credentials’ own refusals', () => {
-  it('B7: Basic, a refused credential → credential-refused user-password, verbatim', async () => {
+  it('Basic, a refused credential → credential-refused user-password, verbatim', async () => {
     const error = refusal(await new BasicAuthProvider('u', 'p').rejected(r401));
     expect(error.kind).toBe('credential-refused');
     expect(error.facts).toEqual({ credential: 'user-password', at: 'request' });
@@ -71,7 +71,7 @@ describe('A.2 — the credentials’ own refusals', () => {
     expect(logon.facts).toEqual({ credential: 'user-password', at: 'logon' });
   });
 
-  it('B8: Certificate, establish before prepare → not-prepared certificate, verbatim', async () => {
+  it('Certificate, establish before prepare → not-prepared certificate, verbatim', async () => {
     const p = new CertificateAuthProvider({ load: async () => A }, {} as never);
     const error = refusal(await p.establish(recordingTargets().logonTarget));
     expect(error.kind).toBe('not-prepared');
@@ -80,7 +80,7 @@ describe('A.2 — the credentials’ own refusals', () => {
     expect(error.hint).toBe('connect() prepares it first');
   });
 
-  it('B9: Certificate, a refused credential → credential-refused client-certificate, verbatim', async () => {
+  it('Certificate, a refused credential → credential-refused client-certificate, verbatim', async () => {
     const p = new CertificateAuthProvider({ load: async () => A }, {} as never);
     const error = refusal(await p.rejected(logonRefused));
     expect(error.kind).toBe('credential-refused');
@@ -94,7 +94,7 @@ describe('A.2 — the credentials’ own refusals', () => {
     );
   });
 
-  it('B10: SAML cookies, a refused credential → credential-refused saml-session, verbatim', async () => {
+  it('SAML cookies, a refused credential → credential-refused saml-session, verbatim', async () => {
     const error = refusal(await new SamlAuthProvider('S=x').rejected(r401));
     expect(error.kind).toBe('credential-refused');
     expect(error.facts).toEqual({ credential: 'saml-session', at: 'request' });
@@ -102,7 +102,7 @@ describe('A.2 — the credentials’ own refusals', () => {
     expect(error.hint).toBe('obtain a new SAML session');
   });
 
-  it('B11: a fixed token, a refused credential → credential-refused token, verbatim', async () => {
+  it('a fixed token, a refused credential → credential-refused token, verbatim', async () => {
     const error = refusal(await TokenAuthProvider.fixed('t').rejected(r401));
     expect(error.kind).toBe('credential-refused');
     expect(error.facts).toEqual({ credential: 'token', at: 'request' });
@@ -110,7 +110,7 @@ describe('A.2 — the credentials’ own refusals', () => {
     expect(error.hint).toBe('obtain a new token');
   });
 
-  it('B12: a token source renewing to the refused token → renewal-unchanged token-source, verbatim', async () => {
+  it('a token source renewing to the refused token → renewal-unchanged token-source, verbatim', async () => {
     const p = TokenAuthProvider.from({
       getToken: async () => 'SAME',
       refreshToken: async () => 'SAME',
@@ -125,7 +125,7 @@ describe('A.2 — the credentials’ own refusals', () => {
     expect(error.hint).toBe('the token source must issue a new token');
   });
 
-  it('B13: a token provider renewing to the refused token → renewal-unchanged token-provider, verbatim', async () => {
+  it('a token provider renewing to the refused token → renewal-unchanged token-provider, verbatim', async () => {
     class Same extends BaseTokenProvider {
       protected async performLogin(): Promise<ITokenResult> {
         return {
@@ -154,7 +154,7 @@ describe('A.2 — the credentials’ own refusals', () => {
     );
   });
 
-  describe('B15: the operation each credential moment names, verbatim words', () => {
+  describe('the operation each credential moment names, verbatim words', () => {
     it.each([
       [
         'Basic authorize',
@@ -279,7 +279,7 @@ describe('A.1 — the token binding refusals', () => {
     }
   }
 
-  it('A17: a bound token, nothing pinned → token-binding bound-to-unpinned, verbatim', async () => {
+  it('a bound token, nothing pinned → token-binding bound-to-unpinned, verbatim', async () => {
     const p = new Issuing(boundTo(A));
     const error = refusal(await p.authorize(recordingTargets().requestTarget));
     expect(error.kind).toBe('token-binding');
@@ -292,7 +292,7 @@ describe('A.1 — the token binding refusals', () => {
     );
   });
 
-  it('A18: A pinned, the renewed token bound to B → token-binding renewed-bound-elsewhere, verbatim', async () => {
+  it('A pinned, the renewed token bound to B → token-binding renewed-bound-elsewhere, verbatim', async () => {
     const strategy: IClientAuthentication = {
       authenticate: async () => ({}),
       tlsMaterial: async () => A,
@@ -311,7 +311,7 @@ describe('A.1 — the token binding refusals', () => {
     expect(t.request.headers).toEqual({});
   });
 
-  it('A18: the remembered refusal is answered itself — the same minted object every time', async () => {
+  it('the remembered refusal is answered itself — the same minted object every time', async () => {
     const strategy: IClientAuthentication = {
       authenticate: async () => ({}),
       tlsMaterial: async () => A,

@@ -683,7 +683,7 @@ describe('no message of a thrown error in the logs', () => {
   });
 
   it.each(['Error', 'string'] as const)(
-    'H2 — a detached report that throws %s: one line of logFields, no marker',
+    'a detached report that throws %s: one line of logFields, no marker',
     async (kind) => {
       const { logger, entries } = recordingLogger();
       const provider = new ScriptedProvider({
@@ -716,7 +716,7 @@ describe('no message of a thrown error in the logs', () => {
     },
   );
 
-  it('H4, H5 — an SNC locator and probe that throw', async () => {
+  it('an SNC locator and probe that throw', async () => {
     const { logger, entries } = recordingLogger();
     const failing = new SncLogonProvider({
       partnerName: 'p:CN=SID',
@@ -762,7 +762,7 @@ describe('no message of a thrown error in the logs', () => {
     });
   });
 
-  it('H7 — a consumer presentation that rejects: logFields, no URL', async () => {
+  it('a consumer presentation that rejects: logFields, no URL', async () => {
     const { logger, entries } = recordingLogger();
     const strategy = composeAuthorization({
       presentation: consumerPresentation({
@@ -811,7 +811,7 @@ describe('no message of a thrown error in the logs', () => {
     expect(JSON.stringify(line)).not.toContain('idp.example');
   });
 
-  it('H8 — a browser that rejects with a message holding a secret: logFields, no URL', async () => {
+  it('a browser that rejects with a message holding a secret: logFields, no URL', async () => {
     jest.spyOn(process.stderr, 'write').mockImplementation(() => true);
     const { logger, entries } = recordingLogger();
     const controller = new AbortController();
@@ -856,7 +856,7 @@ describe('no message of a thrown error in the logs', () => {
     expect(JSON.stringify(entries)).not.toContain('idp.example');
   });
 
-  it('H10 — a 200 without a token whose error echoes the secret and the code', async () => {
+  it('a 200 without a token whose error echoes the secret and the code', async () => {
     const { logger, lines } = recordingLogger();
     const SECRET = 'client-secret-9c41d2e7';
     const CODE = 'authorization-code-55aa13';

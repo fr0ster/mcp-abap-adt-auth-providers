@@ -192,7 +192,7 @@ class TestProvider extends BaseTokenProvider {
   }
 }
 
-describe('L3: getTokens() / refreshTokens() throw an AuthProviderFailure, never what a collaborator threw', () => {
+describe('getTokens() / refreshTokens() throw an AuthProviderFailure, never what a collaborator threw', () => {
   it("a consumer's authorization strategy throwing its own error", async () => {
     const original = new Error(`strategy down: ${MARKER}`);
     const provider = new OidcBrowserProvider({
@@ -372,7 +372,7 @@ describe('L3: getTokens() / refreshTokens() throw an AuthProviderFailure, never 
   });
 });
 
-describe('D7: the unreachable missing-token guard', () => {
+describe('the unreachable missing-token guard', () => {
   it('a valid-looking cache without a token throws unknown token-request, never a bare Error', async () => {
     class Hollow extends TestProvider {
       protected override isTokenValid(): boolean {
@@ -406,7 +406,7 @@ const validator = {
   },
 };
 
-describe('D8 / A10: a provider without a refresh grant or token throws credential-refused refresh-token', () => {
+describe('a provider without a refresh grant or token throws credential-refused refresh-token', () => {
   const sites: [string, () => unknown][] = [
     [
       'ClientCredentialsProvider (no refresh grant)',
@@ -514,7 +514,7 @@ describe('D8 / A10: a provider without a refresh grant or token throws credentia
   ];
 
   it.each(sites)(
-    'A10: %s → credential-refused refresh-token',
+    '%s → credential-refused refresh-token',
     async (_name, build) => {
       const thrown = await rejectionOf(refreshOf(build()));
       expectFailure(thrown);
@@ -553,8 +553,8 @@ function recordingLogger() {
   };
 }
 
-describe('H1 / H2: the refresh and persistence failure lines carry logFields', () => {
-  it('H1: Refresh failed — the failure the refresh threw, as logFields', async () => {
+describe('the refresh and persistence failure lines carry logFields', () => {
+  it('Refresh failed — the failure the refresh threw, as logFields', async () => {
     const { calls, logger } = recordingLogger();
     const p = new TestProvider();
     (p as unknown as { logger: unknown }).logger = logger;
@@ -572,7 +572,7 @@ describe('H1 / H2: the refresh and persistence failure lines carry logFields', (
     expect(JSON.stringify(calls)).not.toContain(MARKER);
   });
 
-  it("H1: a site's failure is logged by its own words, kind and status", async () => {
+  it("a site's failure is logged by its own words, kind and status", async () => {
     const { calls, logger } = recordingLogger();
     const p = new TestProvider();
     (p as unknown as { logger: unknown }).logger = logger;
@@ -594,7 +594,7 @@ describe('H1 / H2: the refresh and persistence failure lines carry logFields', (
     });
   });
 
-  it('H2: a failed write — the persistence strategy logs fixed words, the kind, no message; the token stands', async () => {
+  it('a failed write — the persistence strategy logs fixed words, the kind, no message; the token stands', async () => {
     const { calls, logger } = recordingLogger();
     const p = new TestProvider({
       write: async () => {
@@ -1107,7 +1107,7 @@ describe('every throw is an AuthProviderFailure, the former classes gone', () =>
         }),
     ],
   ];
-  it('A12: ServiceKeyError / SessionDataError look-alikes are unknown, wrapped (no producer, no kind)', async () => {
+  it('ServiceKeyError / SessionDataError look-alikes are unknown, wrapped (no producer, no kind)', async () => {
     for (const name of ['ServiceKeyError', 'SessionDataError']) {
       const original = Object.assign(new Error(MARKER), {
         name,
@@ -1126,27 +1126,24 @@ describe('every throw is an AuthProviderFailure, the former classes gone', () =>
     }
   });
 
-  it.each(lookAlikes)(
-    'A13 / L11: %s: unknown, wrapped',
-    async (_name, make) => {
-      const original = make();
-      const p = new TestProvider();
-      p.login.mockRejectedValue(original);
-      for (const thrown of [
-        await rejectionOf(p.getTokens()),
-        await rejectionOf(p.refreshTokens()),
-      ]) {
-        expectFailure(thrown, original);
-        expect((thrown as AuthProviderFailure).error).toMatchObject({
-          kind: 'unknown',
-          facts: { operation: 'token-request', grant: 'client_credentials' },
-        });
-      }
-    },
-  );
+  it.each(lookAlikes)('%s: unknown, wrapped', async (_name, make) => {
+    const original = make();
+    const p = new TestProvider();
+    p.login.mockRejectedValue(original);
+    for (const thrown of [
+      await rejectionOf(p.getTokens()),
+      await rejectionOf(p.refreshTokens()),
+    ]) {
+      expectFailure(thrown, original);
+      expect((thrown as AuthProviderFailure).error).toMatchObject({
+        kind: 'unknown',
+        facts: { operation: 'token-request', grant: 'client_credentials' },
+      });
+    }
+  });
 });
 
-describe('A14 — a refused token request through a moment', () => {
+describe('a refused token request through a moment', () => {
   it.each([
     [
       'with a registered error',
@@ -1170,7 +1167,7 @@ describe('A14 — a refused token request through a moment', () => {
       'the client credentials request failed (the token endpoint gave no reason)',
     ],
   ])(
-    'A14 (%s): authorize() answers request-failed, verbatim',
+    '%s: authorize() answers request-failed, verbatim',
     async (_name, response, problem, reason) => {
       answer(async () => {
         throw Object.assign(new Error(MARKER), {
@@ -1269,7 +1266,7 @@ describe('the grant a failure names is read once, guarded', () => {
   });
 });
 
-describe('D8: RefreshError is no longer constructed', () => {
+describe('RefreshError is no longer constructed', () => {
   it('no file in src constructs it, and no provider throws a bare Error for a missing refresh token', () => {
     const root = join(__dirname, '..', '..');
     const files: string[] = [];
@@ -1312,7 +1309,7 @@ const withLogger = <T>(provider: T, logger: unknown): T => {
 };
 
 describe('a throwing logger changes nothing on the token paths (guarded)', () => {
-  it('H1: a refused refresh with a throwing logger still clears, logs in, and holds no refused refresh token', async () => {
+  it('a refused refresh with a throwing logger still clears, logs in, and holds no refused refresh token', async () => {
     const p = withLogger(new TestProvider(), throwingLogger());
     p.login.mockResolvedValueOnce(result('T1', 'R0'));
     await p.getTokens();
@@ -1335,7 +1332,7 @@ describe('a throwing logger changes nothing on the token paths (guarded)', () =>
     ).toBeUndefined();
   });
 
-  it('H2: a failing clearing write and throwing loggers: the login still runs', async () => {
+  it('a failing clearing write and throwing loggers: the login still runs', async () => {
     let calls = 0;
     const p = withLogger(
       new TestProvider({
@@ -1357,7 +1354,7 @@ describe('a throwing logger changes nothing on the token paths (guarded)', () =>
     expect(p.dispositions()).toEqual(['replace', 'clear', 'replace']);
   });
 
-  it('H2: a failing write after a login and throwing loggers: the token stands', async () => {
+  it('a failing write after a login and throwing loggers: the token stands', async () => {
     const p = withLogger(
       new TestProvider({
         write: async () => {

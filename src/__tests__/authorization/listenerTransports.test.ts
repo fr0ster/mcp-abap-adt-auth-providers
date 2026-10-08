@@ -333,7 +333,7 @@ describe('bind and advertise', () => {
     }
   });
 
-  it('loopback on a machine without ::1 (EADDRNOTAVAIL) listens on 127.0.0.1 alone and still logs in (C3)', async () => {
+  it('loopback on a machine without ::1 (EADDRNOTAVAIL) listens on 127.0.0.1 alone and still logs in', async () => {
     const listen = net.Server.prototype.listen;
     const spy = jest
       .spyOn(net.Server.prototype, 'listen')
@@ -393,7 +393,7 @@ describe('bind and advertise', () => {
   });
 
   it.each([-1, 65536, 1.5, '61001', undefined, null, Number.NaN])(
-    'a port of %p is refused at construction (K6)',
+    'a port of %p is refused at construction',
     (port) => {
       for (const factory of [loopback, loopback4, loopback6]) {
         let thrown: unknown;

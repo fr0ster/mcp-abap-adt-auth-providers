@@ -178,7 +178,7 @@ describe('privateKeyJwt — a key that does not fit', () => {
   // An AuthProviderFailure of client-authentication, no
   // longer a ClientAuthenticationError.
   it.each(cases)(
-    'refuses %s as client-authentication signing-key-unusable (A6)',
+    'refuses %s as client-authentication signing-key-unusable',
     async (_n, key, algorithm) => {
       const e = await privateKeyJwt({ key, algorithm })
         .authenticate(draft)

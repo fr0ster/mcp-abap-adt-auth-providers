@@ -94,7 +94,7 @@ async function stillWaiting(promise: Promise<unknown>): Promise<boolean> {
   return !done;
 }
 
-describe('showUrl (C8)', () => {
+describe('showUrl', () => {
   it('the URL to stderr only; the logger gets the fixed line, where it waits and the route hint', async () => {
     const port = await getAvailablePort();
     const { logger, lines, text } = capturingLogger();

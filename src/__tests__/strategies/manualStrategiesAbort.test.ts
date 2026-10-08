@@ -21,7 +21,7 @@ const factsOf = (error: unknown) => readFailure(error, 'browser-login').facts;
 const turn = () => new Promise<void>((resolve) => setImmediate(resolve));
 
 describe('manual strategies end on an abort, never on a clock', () => {
-  it('K4: a reader that never answers ends `aborted` (manual) when the consumer aborts', async () => {
+  it('a reader that never answers ends `aborted` (manual) when the consumer aborts', async () => {
     let seen: AbortSignal | undefined;
     const consumer = new AbortController();
     const strategy = manualPasscodeStrategy({
@@ -47,7 +47,7 @@ describe('manual strategies end on an abort, never on a clock', () => {
     expect(seen?.aborted).toBe(true);
   });
 
-  it('K15: dispose() resolves only once the pending authorize has already settled', async () => {
+  it('dispose() resolves only once the pending authorize has already settled', async () => {
     let settled = false;
     const strategy = manualPasscodeStrategy({
       read: (_prompt, signal) =>
@@ -75,7 +75,7 @@ describe('manual strategies end on an abort, never on a clock', () => {
     );
   });
 
-  it('K15: a concurrent authorize is busy (one reader on stdin); dispose() ends the one in flight', async () => {
+  it('a concurrent authorize is busy (one reader on stdin); dispose() ends the one in flight', async () => {
     const signals: AbortSignal[] = [];
     const strategy = manualPasscodeStrategy({
       read: (_prompt, signal) => {
@@ -110,7 +110,7 @@ describe('manual strategies end on an abort, never on a clock', () => {
     });
   });
 
-  it('K15: a disposed strategy refuses the next authorize', async () => {
+  it('a disposed strategy refuses the next authorize', async () => {
     const strategy = manualPasscodeStrategy({ read: async () => 'code' });
     await strategy.dispose?.();
     await expect(strategy.authorize(request)).rejects.toThrow(
@@ -246,7 +246,7 @@ describe('the terminal reader', () => {
     expect(terminal?.readers).toHaveLength(0);
   });
 
-  it('K12: the reader itself, given an aborted signal, says the input was abandoned', async () => {
+  it('the reader itself, given an aborted signal, says the input was abandoned', async () => {
     const { readFromTerminal } = await freshStrategies();
     await expect(
       readFromTerminal('prompt', AbortSignal.abort()),
@@ -254,7 +254,7 @@ describe('the terminal reader', () => {
     expect(terminal?.readers).toHaveLength(0);
   });
 
-  it('K14: stdin ending without a line is no input', async () => {
+  it('stdin ending without a line is no input', async () => {
     const { manualPasscodeStrategy: fresh } = await freshStrategies();
     const authorizing = fresh().authorize(request);
     const rejected = expect(authorizing).rejects.toThrow(

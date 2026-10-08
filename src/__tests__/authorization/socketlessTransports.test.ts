@@ -94,7 +94,7 @@ function scripted(lines: readonly string[]) {
 }
 
 describe('terminalPaste', () => {
-  it('advertises the consumer’s redirect, or none (C4); label manual', async () => {
+  it('advertises the consumer’s redirect, or none; label manual', async () => {
     const given = terminalPaste({
       redirectUri: REDIRECT,
       read: scripted(['c']).read,

@@ -75,7 +75,7 @@ function recordingLogger() {
   };
 }
 
-describe('G1 — A2200019: no credential to present', () => {
+describe('A2200019: no credential to present', () => {
   it('Secure Login Client library → its hint; the path a diagnostic only', async () => {
     const p = snc(machine());
     await p.prepare();
@@ -95,7 +95,7 @@ describe('G1 — A2200019: no credential to present', () => {
       diagnostics: { library: SLC },
     });
   });
-  it('another product (L9): "the SNC library" in the hint, the path in diagnostics', async () => {
+  it('another product: "the SNC library" in the hint, the path in diagnostics', async () => {
     const p = snc(machine(), { sncLib: KRB });
     await p.prepare();
     const error = mintedRefusal(
@@ -138,7 +138,7 @@ describe('G1 — A2200019: no credential to present', () => {
   });
 });
 
-describe('G2 — SNCERR_INIT: the library could not be initialised', () => {
+describe('SNCERR_INIT: the library could not be initialised', () => {
   it.each([
     'SNCERR_INIT',
     'sncerr_init while loading',
@@ -178,7 +178,7 @@ describe('G2 — SNCERR_INIT: the library could not be initialised', () => {
   });
 });
 
-describe('G3 — SNC logon refused', () => {
+describe('SNC logon refused', () => {
   it('RFC_LOGON_FAILURE → the key as a fact', async () => {
     const p = snc(machine());
     await p.prepare();
@@ -209,7 +209,7 @@ describe('G3 — SNC logon refused', () => {
   });
 });
 
-describe('G4 — a locator that is not the shipped one', () => {
+describe('a locator that is not the shipped one', () => {
   it('a foreign error → the fixed sentence, no facts beyond the problem', async () => {
     const p = new SncLogonProvider({
       partnerName: 'p:CN=SID',
@@ -255,8 +255,8 @@ describe('G4 — a locator that is not the shipped one', () => {
   });
 });
 
-describe('G5 / G6 — what the shipped locator tried', () => {
-  it('G5 automatic: each source and reason in the words, each path a diagnostic', async () => {
+describe('what the shipped locator tried', () => {
+  it('automatic: each source and reason in the words, each path a diagnostic', async () => {
     const X86 =
       'C:\\Program Files (x86)\\SAP\\FrontEnd\\SecureLogin\\lib\\sapcrypto.dll';
     const TXT = 'D:\\readme.txt';
@@ -291,7 +291,7 @@ describe('G5 / G6 — what the shipped locator tried', () => {
       `candidates: SNC_LIB_64 ${JSON.stringify(TXT)} (not a library); SNC_LIB ${JSON.stringify(X86)} (wrong architecture); registry ${JSON.stringify(SLC)} (missing)`,
     );
   });
-  it('G5 explicit sncLib: that one candidate, its path a diagnostic', async () => {
+  it('explicit sncLib: that one candidate, its path a diagnostic', async () => {
     const NOPE = 'C:\\nope\\sapcrypto.dll';
     const error = mintedRefusal(
       await snc(machine(), { sncLib: NOPE }).prepare(),
@@ -302,7 +302,7 @@ describe('G5 / G6 — what the shipped locator tried', () => {
     expect(error.hint).toBe(HINT);
     expect(error.diagnostics).toEqual({ candidatePaths: [NOPE] });
   });
-  it('G6 no candidate: verbatim, candidates empty, no diagnostics', async () => {
+  it('no candidate: verbatim, candidates empty, no diagnostics', async () => {
     const error = mintedRefusal(
       await snc(fakeSystem({ platform: 'linux' })).prepare(),
     );
@@ -334,7 +334,7 @@ describe('G5 / G6 — what the shipped locator tried', () => {
   });
 });
 
-describe('G7 — the shipped locator throws a minted failure', () => {
+describe('the shipped locator throws a minted failure', () => {
   it('an AuthProviderFailure: facts with archs and the process arch, paths aligned', async () => {
     const X86 =
       'C:\\Program Files (x86)\\SAP\\FrontEnd\\SecureLogin\\lib\\sapcrypto.dll';
@@ -366,7 +366,7 @@ describe('G7 — the shipped locator throws a minted failure', () => {
   });
 });
 
-describe('G8 — the locator returned no path', () => {
+describe('the locator returned no path', () => {
   it.each([
     ['blank', { path: '  ', archs: ['x64'] }],
     ['not a string', { path: 42 }],
@@ -387,7 +387,7 @@ describe('G8 — the locator returned no path', () => {
   });
 });
 
-describe('G9 — establish before prepare', () => {
+describe('establish before prepare', () => {
   it('not-prepared, provider snc, verbatim', async () => {
     const t = recordingTargets();
     const error = mintedRefusal(await snc(machine()).establish(t.logonTarget));
@@ -401,7 +401,7 @@ describe('G9 — establish before prepare', () => {
   });
 });
 
-describe('G10 — the outer boundary names the SNC operation', () => {
+describe('the outer boundary names the SNC operation', () => {
   class GrantThrows extends SncLogonProvider {
     protected override grant(): never {
       throw new Error(MARKER);
@@ -482,8 +482,8 @@ describe('G10 — the outer boundary names the SNC operation', () => {
   });
 });
 
-describe('H4 / H5 — the log lines', () => {
-  it('H4: SNC library not found: <reason>, the paths as a field only', async () => {
+describe('the log lines', () => {
+  it('SNC library not found: <reason>, the paths as a field only', async () => {
     const NOPE = 'C:\\nope\\sapcrypto.dll';
     const { logger, lines } = recordingLogger();
     await snc(machine(), { sncLib: NOPE, logger }).prepare();
@@ -499,7 +499,7 @@ describe('H4 / H5 — the log lines', () => {
       diagnostics: `candidates: sncLib ${JSON.stringify(NOPE)} (missing)`,
     });
   });
-  it('H5: an SNC product probe failed: <words>, no message of the throw', async () => {
+  it('an SNC product probe failed: <words>, no message of the throw', async () => {
     const { logger, lines } = recordingLogger();
     const p = new SncLogonProvider({
       partnerName: 'p:CN=SID',
@@ -539,13 +539,13 @@ describe('H4 / H5 — the log lines', () => {
   });
 });
 
-describe('E20 / E21 — construction', () => {
+describe('construction', () => {
   const parts = () => ({
     locator: new DefaultSncLibraryLocator(machine()),
     probes: [],
   });
   it.each([' ', '', undefined, 42])(
-    'E20: partnerName %p → snc-partner-name-missing',
+    'partnerName %p → snc-partner-name-missing',
     (partnerName) => {
       let thrown: unknown;
       try {
@@ -561,7 +561,7 @@ describe('E20 / E21 — construction', () => {
     },
   );
   it.each(['0', '4', '10', 'max', '', ' 9', 9])(
-    'E21: qop %p → snc-qop-invalid, allowed snc-qop, the value never echoed',
+    'qop %p → snc-qop-invalid, allowed snc-qop, the value never echoed',
     (qop) => {
       let thrown: unknown;
       try {
@@ -935,12 +935,12 @@ describe('review round 1', () => {
       expect(JSON.stringify(thrown)).not.toContain(MARKER);
     },
   );
-  it('qop behind a throwing getter → E21, never the getter’s error', () => {
+  it('qop behind a throwing getter → snc-qop-invalid, never the getter’s error', () => {
     const thrown = construct({}, 'qop');
     expect(configurationOf(thrown).case).toBe('snc-qop-invalid');
     expect(JSON.stringify(thrown)).not.toContain(MARKER);
   });
-  it('partnerName behind a getter is not read: E20', () => {
+  it('partnerName behind a getter is not read: snc-partner-name-missing', () => {
     const thrown = construct({}, 'partnerName');
     expect(configurationOf(thrown).case).toBe('snc-partner-name-missing');
     expect(JSON.stringify(thrown)).not.toContain(MARKER);

@@ -53,7 +53,7 @@ const WRAPPED = new Set([
   'token-refresh',
 ]);
 
-describe('D1 — a wrapping site refused by the token endpoint', () => {
+describe('a wrapping site refused by the token endpoint', () => {
   it.each(SITES.filter((s) => WRAPPED.has(s.operation)))(
     '$name: request-failed refused, status and registered code; `<operation> failed (HTTP <n>, <oauth>)`',
     async (site) => {
@@ -82,7 +82,7 @@ describe('D1 — a wrapping site refused by the token endpoint', () => {
   );
 });
 
-describe('D2 — no response: request-failed no-response, or tls', () => {
+describe('no response: request-failed no-response, or tls', () => {
   it.each(SITES)(
     '$name: an allowlisted system code is the `code` fact',
     async (site) => {
@@ -116,7 +116,7 @@ describe('D2 — no response: request-failed no-response, or tls', () => {
   });
 });
 
-describe('D3 — a non-wrapping site refused by the token endpoint', () => {
+describe('a non-wrapping site refused by the token endpoint', () => {
   it.each(SITES.filter((s) => !WRAPPED.has(s.operation)))(
     '$name: request-failed refused, not the reduced AxiosError',
     async (site) => {
@@ -143,7 +143,7 @@ describe('D3 — a non-wrapping site refused by the token endpoint', () => {
   );
 });
 
-describe('D4 — a 2xx without access_token', () => {
+describe('a 2xx without access_token', () => {
   it.each(SITES.filter((s) => s.missingProblem === 'no-access-token'))(
     '$name: request-failed no-access-token, `<operation> returned no access_token`',
     async (site) => {
@@ -161,7 +161,7 @@ describe('D4 — a 2xx without access_token', () => {
   );
 });
 
-describe('D5 — a device authorization response without its fields', () => {
+describe('a device authorization response without its fields', () => {
   it.each([
     ['no device_code', { user_code: 'u', verification_uri: 'https://v' }],
     ['no user_code', { device_code: 'd', verification_uri: 'https://v' }],
@@ -182,7 +182,7 @@ describe('D5 — a device authorization response without its fields', () => {
   });
 });
 
-describe('D6 — a discovery document without token_endpoint', () => {
+describe('a discovery document without token_endpoint', () => {
   it('request-failed incomplete-response of oidc-discovery', async () => {
     mockedAxios.get.mockImplementation(async () => ({
       status: 200,

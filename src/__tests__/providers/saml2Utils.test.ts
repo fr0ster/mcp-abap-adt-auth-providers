@@ -176,7 +176,7 @@ describe('getSamlAssertion — where the expected request ID comes from', () => 
     expect(result.requestId).toBeUndefined();
   });
 
-  it('throws a configuration failure naming authnRequestId when no ID can be established (E10)', async () => {
+  it('throws a configuration failure naming authnRequestId when no ID can be established', async () => {
     const config: Saml2CommonConfig = {
       ...baseConfig,
       authorization: neverCallsBuilder('http://localhost:61001/callback'),
@@ -254,7 +254,7 @@ describe('getSamlAssertion — where the expected request ID comes from', () => 
     expect(result.requestId).toBeUndefined();
   });
 
-  it('throws a configuration failure when idpInitiated is combined with a declared authnRequestId (E9)', async () => {
+  it('throws a configuration failure when idpInitiated is combined with a declared authnRequestId', async () => {
     const config: Saml2CommonConfig = {
       ...baseConfig,
       idpInitiated: true,

@@ -145,7 +145,7 @@ describe('resolveSignedElements', () => {
     ['a character outside the alphabet', 'AA-A'],
     ['padding inside', 'AA=AAAAA'],
   ])(
-    'refuses base64 with %s as neither PEM nor base64 (E26)',
+    'refuses base64 with %s as neither PEM nor base64',
     async (_name, value) => {
       expect(configurationOf(await thrownFrom(() => toPem(value)))).toEqual(
         E26,
@@ -153,7 +153,7 @@ describe('resolveSignedElements', () => {
     },
   );
 
-  it('refuses a certificate that is neither PEM nor base64 (E26)', async () => {
+  it('refuses a certificate that is neither PEM nor base64', async () => {
     expect(
       configurationOf(await thrownFrom(() => toPem('not a certificate!'))),
     ).toEqual(E26);
@@ -163,11 +163,11 @@ describe('resolveSignedElements', () => {
   // it is not a certificate. Without the X509Certificate parse it would reach
   // verification and be reported as a bad signature — the configuration
   // blamed on the assertion again.
-  it('refuses base64 that is not a certificate (E26)', async () => {
+  it('refuses base64 that is not a certificate', async () => {
     expect(configurationOf(await thrownFrom(() => toPem('AAAA')))).toEqual(E26);
   });
 
-  it("says so in fixed words; nothing of OpenSSL's text, no cause (E26, L2)", async () => {
+  it("says so in fixed words; nothing of OpenSSL's text, no cause", async () => {
     const thrown = (await thrownFrom(() => toPem('AAAA'))) as Error & {
       cause?: unknown;
     };
@@ -435,7 +435,7 @@ describe('resolveSignedElements', () => {
   // xml-crypto's loadSignature throws with document text in its message — a
   // Reference without DigestMethod is serialised whole. That text is the
   // sender's, and none of it reaches the error.
-  it('F8 / L7: says nothing of what xml-crypto says about a malformed signature', () => {
+  it('says nothing of what xml-crypto says about a malformed signature', () => {
     const key = generateKeyMaterial();
     const wrapped = RESPONSE(signXml(ASSERTION(), key)).replace(
       /<DigestMethod [^>]*\/>/,

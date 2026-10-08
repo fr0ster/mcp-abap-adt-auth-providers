@@ -441,7 +441,7 @@ describe('a strategy and a clientSecret together', () => {
 
   // A configuration failure naming clientSecret.
   it.each(both)(
-    '%s: a configuration failure naming clientSecret (E2)',
+    '%s: a configuration failure naming clientSecret',
     (_name, make) => {
       let thrown: unknown;
       try {

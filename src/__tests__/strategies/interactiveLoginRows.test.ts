@@ -121,7 +121,7 @@ afterEach(async () => {
 });
 
 describe('A.3 — browser login rows', () => {
-  it('K1: a held port → port-in-use, "already in use" kept verbatim', async () => {
+  it('a held port → port-in-use, "already in use" kept verbatim', async () => {
     const squatter = net.createServer();
     await new Promise<void>((resolve) => squatter.listen(PORT, resolve));
     try {
@@ -139,7 +139,7 @@ describe('A.3 — browser login rows', () => {
     }
   });
 
-  it('K2: a disposed strategy → disposed, strategy browser', async () => {
+  it('a disposed strategy → disposed, strategy browser', async () => {
     const strategy = browserCallbackStrategy({ port: PORT });
     await strategy.dispose?.();
     expect(rowOf(await rejection(strategy.authorize(request())))).toEqual({
@@ -150,7 +150,7 @@ describe('A.3 — browser login rows', () => {
     });
   });
 
-  it('K3: an overlapping authorize → busy', async () => {
+  it('an overlapping authorize → busy', async () => {
     const consumer = new AbortController();
     const strategy = browserCallbackStrategy({
       port: PORT,
@@ -168,7 +168,7 @@ describe('A.3 — browser login rows', () => {
     await first;
   });
 
-  describe('K4: aborted, strategy browser — each of the three moments', () => {
+  describe('aborted, strategy browser — each of the three moments', () => {
     const aborted = {
       kind: 'interactive-login',
       facts: { outcome: 'aborted', strategy: 'browser' },
@@ -249,7 +249,7 @@ describe('A.3 — browser login rows', () => {
   // end of the login — one fixed-words line, and the consumer's own UI
   // having failed, no URL anywhere; the login waits — here the test's own
   // signal ends it.
-  it('K5: a consumer presentation that fails → one fixed-words line, no URL anywhere, the login still waiting', async () => {
+  it('a consumer presentation that fails → one fixed-words line, no URL anywhere, the login still waiting', async () => {
     const lines: unknown[][] = [];
     const prompts: unknown[][] = [];
     const logger: ILogger = {
@@ -307,7 +307,7 @@ describe('A.3 — browser login rows', () => {
     }
   });
 
-  it('K5 without a logger, showing the URL: stderr only, nothing on stdout', async () => {
+  it('without a logger, showing the URL: stderr only, nothing on stdout', async () => {
     const err: string[] = [];
     const out: string[] = [];
     const stderr = jest
@@ -344,7 +344,7 @@ describe('A.3 — browser login rows', () => {
     expect(out).toEqual([]);
   });
 
-  it('K5: a URL that is not promptable is named in fixed words, never shown', async () => {
+  it('a URL that is not promptable is named in fixed words, never shown', async () => {
     const prompts: unknown[][] = [];
     const logger: ILogger = {
       debug: () => undefined,
@@ -386,7 +386,7 @@ describe('A.3 — browser login rows', () => {
     endpoint: '/callback',
   };
 
-  it('K8: a channel armed after its open ended → callback-closed', async () => {
+  it('a channel armed after its open ended → callback-closed', async () => {
     const ended = await loopback4({ port: PORT }).open(
       listenerOptions,
       async (channel: IAnswerChannel) => channel,
@@ -403,7 +403,7 @@ describe('A.3 — browser login rows', () => {
     });
   });
 
-  it('K8: a pending wait when use returns → callback-closed', async () => {
+  it('a pending wait when use returns → callback-closed', async () => {
     let dangling: Promise<void> | undefined;
     await loopback4({ port: PORT }).open(listenerOptions, async (channel) => {
       dangling = channel
@@ -420,7 +420,7 @@ describe('A.3 — browser login rows', () => {
     ['UAA', browserCallbackStrategy],
     ['OIDC', oidcCallbackStrategy],
   ] as const)(
-    'K10 / A8 (%s): the IdP refuses with a registered code → identity-provider-refused',
+    '%s: the IdP refuses with a registered code → identity-provider-refused',
     async (_name, make) => {
       const DESCRIPTION = 'REVIEW_TEST_IDP_TEXT_7a31';
       const strategy = (make as typeof browserCallbackStrategy)({
@@ -444,7 +444,7 @@ describe('A.3 — browser login rows', () => {
     },
   );
 
-  it('K10: an unregistered code → no oauthError, its own words', async () => {
+  it('an unregistered code → no oauthError, its own words', async () => {
     const thrown = await rejection(
       browserCallbackStrategy({
         port: PORT,
@@ -461,7 +461,7 @@ describe('A.3 — browser login rows', () => {
     expect((thrown as Error).message).not.toContain('REVIEW_TEST_NOT_A_CODE');
   });
 
-  describe('K11 / A9: anything else → failed', () => {
+  describe('anything else → failed', () => {
     /** A composition whose transport's open throws `value`. */
     const throwing = (value: unknown) =>
       composeAuthorization({
@@ -476,7 +476,7 @@ describe('A.3 — browser login rows', () => {
         endpoint: '/callback',
       });
 
-    it('with a status and a registered error, verbatim, and A9’s new hint', async () => {
+    it('with a status and a registered error, verbatim, and the new hint', async () => {
       const thrown = await rejection(
         throwing(
           Object.assign(new Error('REVIEW_TEST_SERVER_TEXT'), {
@@ -513,7 +513,7 @@ describe('A.3 — browser login rows', () => {
 });
 
 describe('A.3 — manual and code strategy rows', () => {
-  it('K12: the terminal reader given an aborted signal → input-abandoned', async () => {
+  it('the terminal reader given an aborted signal → input-abandoned', async () => {
     expect(
       rowOf(await rejection(readFromTerminal('p', AbortSignal.abort()))),
     ).toEqual({
@@ -524,7 +524,7 @@ describe('A.3 — manual and code strategy rows', () => {
     });
   });
 
-  it('K13: no terminal → no-terminal', async () => {
+  it('no terminal → no-terminal', async () => {
     const tty = process.stdin.isTTY;
     Object.defineProperty(process.stdin, 'isTTY', {
       value: false,
@@ -585,7 +585,7 @@ describe('A.3 — manual and code strategy rows', () => {
     }
   });
 
-  it('K15: a disposed manual strategy → disposed, strategy manual', async () => {
+  it('a disposed manual strategy → disposed, strategy manual', async () => {
     const strategy = manualPasteStrategy({
       redirectUri: REGISTERED,
       read: async () => 'code',
@@ -599,7 +599,7 @@ describe('A.3 — manual and code strategy rows', () => {
     });
   });
 
-  it('K4 (manual): aborted → strategy manual, no tally', async () => {
+  it('manual strategy: aborted → strategy manual, no tally', async () => {
     const consumer = new AbortController();
     const strategy = manualPasteStrategy({
       redirectUri: REGISTERED,
@@ -627,7 +627,7 @@ describe('A.3 — manual and code strategy rows', () => {
     }
   });
 
-  it('K4 (external code): aborted → strategy consumer, the login was aborted', async () => {
+  it('external code strategy: aborted → strategy consumer, the login was aborted', async () => {
     const consumer = new AbortController();
     const strategy = externalCodeStrategy({
       redirectUri: REGISTERED,
@@ -645,7 +645,7 @@ describe('A.3 — manual and code strategy rows', () => {
     });
   });
 
-  it('K16 is not a malformed escape: a pasted URL of this login takes its code as the parser reads it, no URIError', async () => {
+  it('a pasted URL of this login is not a malformed escape: it takes its code as the parser reads it, no URIError', async () => {
     const write = jest
       .spyOn(process.stderr, 'write')
       .mockImplementation(() => true);
@@ -660,7 +660,7 @@ describe('A.3 — manual and code strategy rows', () => {
     }
   });
 
-  it('K16: an unreadable paste → unreadable-input', async () => {
+  it('an unreadable paste → unreadable-input', async () => {
     const write = jest
       .spyOn(process.stderr, 'write')
       .mockImplementation(() => true);
@@ -690,7 +690,7 @@ describe('A.3 — the device code', () => {
     server = undefined;
   });
 
-  it('K17 / A2: a presenter that throws → device-code-not-shown; H3 logs logFields only', async () => {
+  it('a presenter that throws → device-code-not-shown; the log line carries logFields only', async () => {
     server = await startTokenServer((held) =>
       held.answer(200, {
         device_code: 'dc',

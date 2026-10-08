@@ -103,7 +103,7 @@ describe('toBearerAssertion', () => {
     expect(toBearerAssertion(value)).toBe(value);
   });
 
-  it('F5: refuses a Response carrying no Assertion', () => {
+  it('refuses a Response carrying no Assertion', () => {
     expectSamlRefusal(
       thrownBy(() => toBearerAssertion(b64(response('')))),
       'no-assertion',
@@ -111,7 +111,7 @@ describe('toBearerAssertion', () => {
   });
 
   // The count is a fact, and the words name it.
-  it('F6: refuses a Response carrying more than one Assertion', () => {
+  it('refuses a Response carrying more than one Assertion', () => {
     const error = expectSamlRefusal(
       thrownBy(() =>
         toBearerAssertion(b64(response(assertion() + assertion()))),
@@ -124,7 +124,7 @@ describe('toBearerAssertion', () => {
     );
   });
 
-  it('F4: refuses an encrypted Assertion rather than sending something UAA cannot read', () => {
+  it('refuses an encrypted Assertion rather than sending something UAA cannot read', () => {
     const encrypted = response(
       `<saml2:EncryptedAssertion><xenc:EncryptedData xmlns:xenc="http://www.w3.org/2001/04/xmlenc#"/></saml2:EncryptedAssertion>`,
     );
@@ -135,7 +135,7 @@ describe('toBearerAssertion', () => {
     expect(error.reason).toContain('encrypted Assertions are not supported');
   });
 
-  it('F3: refuses a document that is neither a Response nor an Assertion', () => {
+  it('refuses a document that is neither a Response nor an Assertion', () => {
     expectSamlRefusal(
       thrownBy(() =>
         toBearerAssertion(
@@ -148,7 +148,7 @@ describe('toBearerAssertion', () => {
     );
   });
 
-  it('F1: refuses a payload that is not base64-encoded XML', () => {
+  it('refuses a payload that is not base64-encoded XML', () => {
     expectSamlRefusal(
       thrownBy(() => toBearerAssertion('not-xml-at-all')),
       'payload-not-base64-xml',
@@ -156,7 +156,7 @@ describe('toBearerAssertion', () => {
   });
   // Same parser rule as the validator: any XML fault is a refusal, and the
   // parser never writes to the console on its own.
-  it('F2: refuses XML the parser would recover from, and writes nothing to the console', () => {
+  it('refuses XML the parser would recover from, and writes nothing to the console', () => {
     const spies = (['error', 'warn', 'log'] as const).map((level) =>
       jest.spyOn(console, level).mockImplementation(() => undefined),
     );
@@ -179,7 +179,7 @@ describe('toBearerAssertion', () => {
   // The parser's message quotes the document — here an element
   // name — and none of it reaches the error: not the words, not a
   // diagnostic (the rule has none), not the failure's message.
-  it('F2 / L7: says nothing of the parser message for XML that is not well-formed', () => {
+  it('says nothing of the parser message for XML that is not well-formed', () => {
     const name = 'x'.repeat(100);
     const thrown = thrownBy(() =>
       toBearerAssertion(
@@ -203,7 +203,7 @@ describe('parseStrictXml', () => {
     ['a tag mismatch', '<abc></xyz>'],
     ['no root element', 'not xml'],
     ['a redefined attribute', '<a secret="1" secret="2"/>'],
-  ])('F7: refuses %s with not-xml, naming nothing of it', (_name, xml) => {
+  ])('refuses %s with not-xml, naming nothing of it', (_name, xml) => {
     const thrown = thrownBy(() => parseStrictXml(xml));
     expectSamlRefusal(thrown, 'not-xml');
     expect(JSON.stringify(thrown)).not.toMatch(/secret|xyz|abc|entity/);

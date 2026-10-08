@@ -89,7 +89,7 @@ describe.each(CODE_PROTOCOLS)('%s', (_name, make, payloadOf) => {
     expect(protocol.paste?.instructions).toEqual(expect.any(String));
   });
 
-  describe('begin: the URL must carry exactly one state (C7)', () => {
+  describe('begin: the URL must carry exactly one state', () => {
     it.each([
       ['a URL that does not parse', 'not a url'],
       ['a URL without state', 'https://uaa.example/oauth/authorize?a=1'],

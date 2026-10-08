@@ -200,7 +200,7 @@ describe('invalid decisions end the renewal unknown renewal-strategy, no step ta
     expect(foreign.thenCalls).toBe(0);
   });
 
-  it('a native promise with its own then: refused, its then never called (G6)', async () => {
+  it('a native promise with its own then: refused, its then never called', async () => {
     let thenCalls = 0;
     const answer = Promise.resolve({ next: 'stop' });
     Object.defineProperty(answer, 'then', {
@@ -320,7 +320,7 @@ describe('invalid decisions end the renewal unknown renewal-strategy, no step ta
   });
 });
 
-describe('earlier steps stay applied (G7)', () => {
+describe('earlier steps stay applied', () => {
   it('a refresh commits R2 bound elsewhere, then the strategy throws: R2 is held and was reported', async () => {
     const { seen, persistence } = stateRecorder();
     const { strategy } = scripted([
@@ -555,7 +555,7 @@ describe('aborted steps observed', () => {
   });
 });
 
-describe('no hidden step (G3)', () => {
+describe('no hidden step', () => {
   it('every step is preceded by one next(); none after stop', async () => {
     const asked: RenewalSituation[] = [];
     const strategy: IRenewalStrategy = {
@@ -591,7 +591,7 @@ describe('no hidden step (G3)', () => {
   });
 });
 
-describe('rule 5 as a reading (G9)', () => {
+describe('rule 5 as a reading', () => {
   const valid = () => jwt('valid');
   async function presented(provider: ScriptedProvider): Promise<void> {
     await provider.authorize({

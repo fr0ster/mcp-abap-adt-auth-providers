@@ -143,7 +143,7 @@ describe('AuthorizationCodeProvider: state and PKCE for the URL it builds', () =
     );
   });
 
-  it('a configured authorizationUrl without state gets a minted state and nothing else; no code_verifier (C7)', async () => {
+  it('a configured authorizationUrl without state gets a minted state and nothing else; no code_verifier', async () => {
     forms.length = 0;
     const urls: string[] = [];
     // Escapes and `~` a reserialisation would change: kept byte for byte.
@@ -195,7 +195,7 @@ describe('AuthorizationCodeProvider: state and PKCE for the URL it builds', () =
     ['an empty state', 'state=', ['']],
     ['two states', 'state=a&state=b', ['a', 'b']],
   ])(
-    'a configured authorizationUrl with %s keeps it unchanged (C7)',
+    'a configured authorizationUrl with %s keeps it unchanged',
     async (_c, query, states) => {
       const urls: string[] = [];
       const configured = `https://uaa.example/oauth/authorize?client_id=cid&${query}`;
@@ -212,7 +212,7 @@ describe('AuthorizationCodeProvider: state and PKCE for the URL it builds', () =
     ['a trailing space', 'https://uaa.example/authorize?client_id=cid '],
     ['a trailing newline', 'https://uaa.example/authorize?client_id=cid\n'],
   ])(
-    'a configured authorizationUrl with %s is refused at construction (C7 never appends after it)',
+    'a configured authorizationUrl with %s is refused at construction (never appended after it)',
     (_c, configured) => {
       let thrown: unknown;
       try {
@@ -342,7 +342,7 @@ describe('OidcBrowserProvider: state beside its PKCE', () => {
     },
   );
 
-  it('every URL it builds carries exactly one state (C7: never one without)', async () => {
+  it('every URL it builds carries exactly one state (never one without)', async () => {
     const urls: string[] = [];
     await oidcProvider(urls).getTokens();
     expect(new URL(urls[0] as string).searchParams.getAll('state')).toEqual([
@@ -531,7 +531,7 @@ describe('manualPasteStrategy compares a pasted URL’s state', () => {
     expect(outcome.payload).toBe('bare-code');
   });
 
-  it('refuses a URL without state before anything is read (C7: a provider always puts one there)', async () => {
+  it('refuses a URL without state before anything is read (a provider always puts one there)', async () => {
     const read = jest.fn(async () => pastedUrl('anything'));
     const thrown = await manualPasteStrategy({ redirectUri: CALLBACK, read })
       .authorize({

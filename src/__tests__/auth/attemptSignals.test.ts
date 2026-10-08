@@ -132,7 +132,7 @@ describe('sendTokenRequest passes the attempt signal to axios on both paths', ()
   });
 });
 
-describe('discovery under an attempt (C6)', () => {
+describe('discovery under an attempt', () => {
   it('an aborted discovery: its request signal aborted, nothing cached, the next call fetches again', async () => {
     const url = `https://idp.example/issuer-${Math.random()}`;
     const held = deferred<unknown>();

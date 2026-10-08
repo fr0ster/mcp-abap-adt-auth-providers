@@ -1924,7 +1924,7 @@ describe('Saml2 provider construction faults', () => {
   );
 
   // A configuration failure naming idpEntityId.
-  it('Saml2PureProvider refuses construction when idpEntityId is missing (E5)', () => {
+  it('Saml2PureProvider refuses construction when idpEntityId is missing', () => {
     const error = constructionError(() =>
       Saml2PureProvider.inBrowser(
         {
@@ -1941,7 +1941,7 @@ describe('Saml2 provider construction faults', () => {
   });
 
   // A configuration failure naming idpEntityId.
-  it('Saml2BearerProvider refuses construction when idpEntityId is missing (E5)', () => {
+  it('Saml2BearerProvider refuses construction when idpEntityId is missing', () => {
     const error = constructionError(() =>
       Saml2BearerProvider.inBrowser(
         {

@@ -22,7 +22,7 @@ function neutral(rejection: IAuthRejection | undefined) {
 }
 
 describe('A.2 — rejection reading', () => {
-  it('B1: 403 → system-refused not-authorized, verbatim', () => {
+  it('403 → system-refused not-authorized, verbatim', () => {
     const error = neutral(status(403));
     expect(error.kind).toBe('system-refused');
     expect(error.facts).toEqual({
@@ -36,7 +36,7 @@ describe('A.2 — rejection reading', () => {
     expect(error.hint).toBe("check the user's authorizations in the system");
   });
 
-  it('B2: a 3xx → system-refused redirected, verbatim', () => {
+  it('a 3xx → system-refused redirected, verbatim', () => {
     const error = neutral(status(302, 'logon'));
     expect(error.kind).toBe('system-refused');
     expect(error.facts).toEqual({
@@ -52,7 +52,7 @@ describe('A.2 — rejection reading', () => {
     );
   });
 
-  it('B3: a 5xx → system-refused system-failed, verbatim', () => {
+  it('a 5xx → system-refused system-failed, verbatim', () => {
     const error = neutral(status(503));
     expect(error.kind).toBe('system-refused');
     expect(error.facts).toEqual({
@@ -64,7 +64,7 @@ describe('A.2 — rejection reading', () => {
     expect(error.hint).toBe('try again later');
   });
 
-  it('B4: any other status → system-refused other-status, verbatim, no hint', () => {
+  it('any other status → system-refused other-status, verbatim, no hint', () => {
     const error = neutral(status(404));
     expect(error.kind).toBe('system-refused');
     expect(error.facts).toEqual({
@@ -78,7 +78,7 @@ describe('A.2 — rejection reading', () => {
     expect(Object.hasOwn(error, 'hint')).toBe(false);
   });
 
-  it('B5: another RFC key → system-refused rfc-failure, logon and call, verbatim', () => {
+  it('another RFC key → system-refused rfc-failure, logon and call, verbatim', () => {
     const logon = neutral({
       at: 'logon',
       error: { key: 'RFC_COMMUNICATION_FAILURE', message: 'SECRET' },
@@ -106,7 +106,7 @@ describe('A.2 — rejection reading', () => {
     );
   });
 
-  it('B6: neither a status nor a known key → system-refused unknown, per moment, verbatim', () => {
+  it('neither a status nor a known key → system-refused unknown, per moment, verbatim', () => {
     const request = minted(unknownRefusal({ at: 'request', error: {} }));
     expect(request.kind).toBe('system-refused');
     expect(request.facts).toEqual({ verdict: 'unknown', at: 'request' });
@@ -138,11 +138,11 @@ describe('A.2 — rejection reading', () => {
   });
 });
 
-describe('A.2 — B14: checkCertificateMaterial', () => {
+describe('checkCertificateMaterial', () => {
   const dir = join(__dirname, '..', 'fixtures', 'certificates');
   const read = (name: string) => readFileSync(join(dir, name));
 
-  it('B14: incomplete, unusable and expired material → client-certificate with its problem, verbatim', () => {
+  it('incomplete, unusable and expired material → client-certificate with its problem, verbatim', () => {
     const incomplete = mintedRefusal(checkCertificateMaterial({}));
     expect(incomplete.kind).toBe('client-certificate');
     expect(incomplete.facts).toEqual({ problem: 'incomplete' });

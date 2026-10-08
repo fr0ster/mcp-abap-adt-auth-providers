@@ -93,7 +93,7 @@ describe('an expired client certificate', () => {
     ).toEqual(EXPIRED);
   });
 
-  it('throws a client-certificate failure, read by classify into the same words (A4)', () => {
+  it('throws a client-certificate failure, read by classify into the same words', () => {
     const e = thrown(() =>
       assertCertificateMaterial({
         cert: read('expired.crt'),
@@ -147,7 +147,7 @@ describe('certificateThumbprint', () => {
     ).toBe(FIXTURE_THUMBPRINT);
   });
 
-  it('throws a client-certificate failure for incomplete material, with its words (A4)', () => {
+  it('throws a client-certificate failure for incomplete material, with its words', () => {
     const e = thrown(() => certificateThumbprint({ cert: read('client.crt') }));
     // A client-certificate failure, no longer the class.
     expect(isAuthProviderFailure(e)).toBe(true);
@@ -160,7 +160,7 @@ describe('certificateThumbprint', () => {
     });
   });
 
-  it('throws a client-certificate failure for unusable material, nothing of it in the refusal (A4)', () => {
+  it('throws a client-certificate failure for unusable material, nothing of it in the refusal', () => {
     const e = thrown(() =>
       certificateThumbprint({
         pfx: read('client.pfx'),

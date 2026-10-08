@@ -751,7 +751,7 @@ describe('a TLS failure, by code', () => {
       );
     }
   });
-  it('with a strategy, every site that wrapped its errors throws `tls` of its own operation (D2)', async () => {
+  it('with a strategy, every site that wrapped its errors throws `tls` of its own operation', async () => {
     mockedAxios.mockRejectedValue(
       Object.assign(new Error('SECRET-TLS'), {
         code: 'ERR_SSL_TLSV1_ALERT_UNKNOWN_CA',

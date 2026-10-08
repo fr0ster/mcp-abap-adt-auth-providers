@@ -68,8 +68,8 @@ const DRAFT = {
   grantType: 'client_credentials',
 };
 
-describe('A3 — the SAML refusal', () => {
-  it('A3: a shipped validator throws a minted saml-assertion failure with its rule', async () => {
+describe('the SAML refusal', () => {
+  it('a shipped validator throws a minted saml-assertion failure with its rule', async () => {
     const validator = createSignedResponseValidator({
       idpCertificates: [read('client.crt').toString('utf8')],
       replayStore: createInMemoryReplayStore(),
@@ -95,7 +95,7 @@ describe('A3 — the SAML refusal', () => {
   });
 });
 
-describe('A4 — client-certificate', () => {
+describe('client-certificate', () => {
   const CERTIFICATE_WORDS = {
     incomplete: {
       reason: 'the client certificate is incomplete',
@@ -123,7 +123,7 @@ describe('A4 — client-certificate', () => {
   ];
 
   it.each(cases)(
-    'A4: %s — assertCertificateMaterial throws the failure, checkCertificateMaterial answers it',
+    '%s — assertCertificateMaterial throws the failure, checkCertificateMaterial answers it',
     async (problem, material) => {
       const thrown = failureError(
         await thrownBy(() => assertCertificateMaterial(material())),
@@ -140,7 +140,7 @@ describe('A4 — client-certificate', () => {
     },
   );
 
-  it('A4: certificateThumbprint of incomplete material', async () => {
+  it('certificateThumbprint of incomplete material', async () => {
     expect(
       failureError(await thrownBy(() => certificateThumbprint({}))),
     ).toMatchObject({
@@ -149,7 +149,7 @@ describe('A4 — client-certificate', () => {
     });
   });
 
-  it('A4: a strategy whose tlsMaterial() yields nothing — getTokens() throws incomplete', async () => {
+  it('a strategy whose tlsMaterial() yields nothing — getTokens() throws incomplete', async () => {
     const provider = new ClientCredentialsProvider({
       renewal: refreshThenLogin(),
       uaaUrl: 'https://uaa.example',
@@ -169,8 +169,8 @@ describe('A4 — client-certificate', () => {
   });
 });
 
-describe('A5–A7 — client-authentication', () => {
-  it('A5: a strategy result that cannot be sent (a line break in a header)', async () => {
+describe('client-authentication', () => {
+  it('a strategy result that cannot be sent (a line break in a header)', async () => {
     const error = failureError(
       await thrownBy(() =>
         prepareTokenRequest(
@@ -212,7 +212,7 @@ describe('A5–A7 — client-authentication', () => {
     });
   });
 
-  it('A7: raw clientSecretBasic with a client id containing a colon', async () => {
+  it('raw clientSecretBasic with a client id containing a colon', async () => {
     const error = failureError(
       await thrownBy(() =>
         clientSecretBasic(MARKER, { encoding: 'raw' }).authenticate({
@@ -230,7 +230,7 @@ describe('A5–A7 — client-authentication', () => {
   });
 });
 
-describe('H10 — the debug line of a refused token request', () => {
+describe('the debug line of a refused token request', () => {
   const SECRET = 'abcdefghijklmnop-refresh-token';
 
   function recording(): { logger: ILogger; lines: unknown[][] } {
@@ -274,7 +274,7 @@ describe('H10 — the debug line of a refused token request', () => {
       },
     });
 
-  it('H10: by default, one debug line of the safe facts', async () => {
+  it('by default, one debug line of the safe facts', async () => {
     const { logger, lines } = recording();
     const thrown = await thrownBy(() =>
       sendTokenRequest(undefined, refused, site(logger, false)),
@@ -293,7 +293,7 @@ describe('H10 — the debug line of a refused token request', () => {
     expect(JSON.stringify(lines)).not.toContain(SECRET.slice(4, -4));
   });
 
-  it('H10: with authDebug, the token endpoint said line and the prepared secrets', async () => {
+  it('with authDebug, the token endpoint said line and the prepared secrets', async () => {
     const { logger, lines } = recording();
     await thrownBy(() =>
       sendTokenRequest(undefined, refused, site(logger, true)),

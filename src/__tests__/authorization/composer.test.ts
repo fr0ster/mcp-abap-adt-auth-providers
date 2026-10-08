@@ -364,7 +364,7 @@ describe('only what the protocol accepted is returned', () => {
     });
   });
 
-  it('C9: an end, then an accept whose response flushes first — the end wins', async () => {
+  it('an end, then an accept whose response flushes first — the end wins', async () => {
     const scripted = scriptedTransport({ redirectUri: REDIRECT });
     const strategy = composeAuthorization({
       presentation: recordingPresentation().presentation,

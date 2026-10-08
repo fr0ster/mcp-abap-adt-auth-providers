@@ -389,7 +389,7 @@ describe('an IdP refusal on the browser callback', () => {
 
   // The configuration failure the URL builder throws, once a
   // ValidationError, passes through as it is.
-  it('a configuration failure from building the URL passes through unchanged (E12)', async () => {
+  it('a configuration failure from building the URL passes through unchanged', async () => {
     const strategy = composedOver(
       async <T>(
         _options: unknown,
@@ -607,7 +607,7 @@ describe('classify and logFields are total', () => {
 describe('the facts are re-checked wherever they are read', () => {
   const FOREIGN = 'REVIEW_TEST_FOREIGN_CODE_19be';
 
-  it('H6: the SAML bearer exchange and refresh log logFields of the failure, not the description', async () => {
+  it('the SAML bearer exchange and refresh log logFields of the failure, not the description', async () => {
     jest.resetAllMocks();
     (
       axios as unknown as { isAxiosError: (e: unknown) => boolean }
