@@ -3079,7 +3079,8 @@ export interface ComposedAuthorization<TPayload> {
    * The endpoint path the redirect arrives at — required, no default; the
    * named compositions pass `'/callback'`. It must survive URL parsing
    * unchanged: `new URL(endpoint, 'http://localhost').pathname ===
-   * endpoint`, the origin unchanged, and it is not `/` — so encoded dot
+   * endpoint`, the origin unchanged, and it is not one of the listener's
+   * own routes (`/`, `/submit`) — so encoded dot
    * segments, backslashes, spaces, control characters, `?`, `#` are all
    * refused (`configuration` `invalid-value`, `endpoint`, at construction).
    * The listener registers and advertises that one string.
@@ -3318,7 +3319,7 @@ protocol it applies to.
   composer hands a consumer transport the composition's `endpoint`; an
   `endpoint` that URL parsing would change — `/auth/%2e%2e/finish`,
   `/auth\\finish`, `/auth path`, a control character, `?`, `#`, `/` alone —
-  is refused at construction.
+  and the listener's own `/submit` are refused at construction.
 - **Composer:** a consumer transport whose `answer()` resolves without an
   accept → `failed`, no payload; one that calls the judge with a wrong
   `state` and resolves → `failed`; overlap → `busy`; dispose during
