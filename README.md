@@ -315,7 +315,7 @@ facts that remain are listed with it):
 ### Interactive login: strategies by composition
 
 An authorization strategy is now **composed of three parts**, each a
-contract of `@mcp-abap-adt/interfaces-auth` 7.4.0: a **presentation** (how
+contract of `@mcp-abap-adt/interfaces-auth` 7.4.0 (`IBrowser` is 7.5.0's): a **presentation** (how
 the URL reaches the user), a **transport** (how the user's answer comes
 back) and a **protocol** (what an answer is and how it is checked). The
 named strategies are compositions of the shipped parts, under the same
@@ -341,10 +341,11 @@ What a consumer on 5.x must now do:
   browserCallbackStrategy({ browser: linuxDefaultBrowser() })
   ```
 
-  **There is no platform check:** each factory is one fixed launch, and run
-  on another OS it simply fails to start; the URL is then shown once on
-  stderr and the login waits. A consumer whose configuration holds a browser
-  name maps it itself.
+  **There is no platform check:** each factory runs exactly its program,
+  and on another OS it does whatever a program of that name does there —
+  see [The six shipped browsers](#the-six-shipped-browsers). Pick the one
+  for your platform. A consumer whose configuration holds a browser name
+  maps it itself.
 - **No list of candidates.** 5.x handed a named browser to the `open`
   package, which on Linux took the first of `google-chrome`,
   `google-chrome-stable`, `chromium`, `chromium-browser` (for `'chrome'`) or
@@ -361,8 +362,9 @@ What a consumer on 5.x must now do:
   and the URL prompted on stderr.
 - **No `DISPLAY=:0`.** 5.x set `DISPLAY=:0` on Linux, for `'system'` and a
   named browser, when neither `DISPLAY` nor `WAYLAND_DISPLAY` was set. The package now writes nothing into
-  `process.env`: without a display the launch fails, the URL is shown once on
-  stderr, and the login waits. A display of your choice — or a remote Chrome,
+  `process.env`: without a display the launcher does what it does there
+  (`xdg-open` fails, or starts a console browser it finds); a launch that
+  fails has the URL shown once on stderr while the login waits. A display of your choice — or a remote Chrome,
   a console browser, WSL, an ssh-forwarded X — is a browser of your own
   ([A browser of your own](#a-browser-of-your-own)).
 - **The `open` package is gone** (and `express`): every launch is the
@@ -966,8 +968,13 @@ Each is **one fixed launch**: a program started with an argument array,
 never through a shell, the URL one argument of it, and only an `http:` /
 `https:` URL as its serialisation. There is no platform switch, no fallback
 chain and no platform check — **you pick the one for the machine you run
-on**. Run on another OS, a launch simply fails to start; the URL is then
-shown once on stderr and the login waits.
+on**. Each runs exactly its program, with these arguments; on another OS it
+does whatever a program of that name does there. Where there is none, the
+launch fails to start: the URL is shown once on stderr and the login waits.
+Where there is one, it runs — on Debian and Ubuntu `/usr/bin/open` is an
+alternative for `xdg-open` or `run-mailcap`, so `macDefaultBrowser()` there
+may open that machine's default browser, and `macBrowser(app)` hands
+`xdg-open` an `-a` it was never meant to take.
 
 | Factory | Launch | Settles |
 |---|---|---|
@@ -995,8 +1002,8 @@ const provider = new AuthorizationCodeProvider({
 ```
 
 - **No environment is guessed or changed.** Nothing is written into
-  `process.env` — no `DISPLAY=:0`, as 5.x set. Without a display the launch
-  fails, and the URL is shown.
+  `process.env` — no `DISPLAY=:0`, as 5.x set. Without a display the
+  launcher does what it does there; a launch that fails has the URL shown.
 - **On Windows** the launchers are the system's own, by absolute path under
   `%SystemRoot%\System32`, never a program found in the current directory,
   and never `cmd`, which parses `&`, `|`, `^` and `%` whatever the quoting.
@@ -1005,9 +1012,13 @@ const provider = new AuthorizationCodeProvider({
   holds a space, a quote, `<`, `>`, `^`, `|`, a backslash or a control
   character, or whose host is not a valid host name or address, is not
   opened at all (nothing is repaired). Measured 2026-10-07 (Windows 11 x64):
-  the default browser through `rundll32`, Chrome and Edge through
-  `Start-Process`, each delivered the URL's path and query (with `&` and a
-  `%20`) unchanged, and no command interpreter was started.
+  the default browser through `rundll32` delivered the URL's path and query
+  (with `&` and a `%20`) unchanged, and no command interpreter was started.
+  The same day Chrome and Edge, through an earlier `Start-Process` command
+  that named the program in its text, did the same. **Pending:**
+  `windowsBrowser`'s current command — the program read from
+  `$env:MCP_ABAP_ADT_BROWSER_PROGRAM`, any program the consumer names — has
+  not yet been run on a Windows host.
 - A browser that could not be asked rejects with an `AuthProviderFailure`
   (`unknown`, operation `opening-browser`, an allowlisted code only), or
   `interactive-login` `aborted` on the login's signal. A browser that started
@@ -1016,7 +1027,13 @@ const provider = new AuthorizationCodeProvider({
   `open()` awaited on its own, in a script that holds nothing else, still
   settles at that exit; once the signal aborts, a launcher still running
   holds the process no longer. A browser binary (`linuxBrowser`) holds it no
-  longer once it has started.
+  longer once it has started. Inside a composition the composer aborts the
+  signal when the login ends. **Calling `open(url, signal)` yourself, the
+  signal is yours:** a hand-off launcher that does not exit — `xdg-open` in
+  its generic mode runs the browser in the foreground and exits only when
+  the browser closes — keeps `open()` pending and the process alive until
+  it exits or your signal aborts, so pass a signal you abort when you stop
+  waiting.
 
 Through 5.4.2 the fallback without the `open` package handed the URL to a
 shell inside double quotes, so a `$(…)` or a backtick in it — from an OIDC
@@ -3014,7 +3031,7 @@ const provider = new AuthorizationCodeProvider({
 const result = await provider.getTokens();
 ```
 
-The authorization URL is then shown on stderr, and the listener waits for the user to complete the login. The user can open the URL on any machine; the listener binds loopback only, so a browser elsewhere reaches it through [the SSH tunnel](#the-ssh-tunnel) to the callback port — the hint printed beside the URL says how, and where to paste the code if the redirect cannot reach back. A shipped browser that cannot be started there (no display, another OS) does the same: the URL is shown once, and the login waits.
+The authorization URL is then shown on stderr, and the listener waits for the user to complete the login. The user can open the URL on any machine; the listener binds loopback only, so a browser elsewhere reaches it through [the SSH tunnel](#the-ssh-tunnel) to the callback port — the hint printed beside the URL says how, and where to paste the code if the redirect cannot reach back. A shipped browser that fails there (no display, no such program) does the same: the URL is shown once, and the login waits.
 
 ### Token Validation
 

@@ -139,9 +139,13 @@ every exported declaration against the published 5.4.2.
   `info` when there was one. A consumer whose stderr is collected into its
   logs uses `consumerPresentation`.
 - **The shipped browsers are one fixed launch each; nothing is guessed.**
-  No platform switch, no fallback chain, no platform check: the consumer
-  picks the factory for its platform, and one run on another OS fails to
-  start, so the URL is shown and the login waits. 5.4.2 handed a named
+  No platform switch, no fallback chain, no platform check: each factory
+  runs exactly its program, and the consumer picks the one for its
+  platform. On another OS it does whatever a program of that name does
+  there: none, and the launch fails to start (the URL is shown and the login
+  waits); one, and it runs — on Debian and Ubuntu `/usr/bin/open` is
+  `xdg-open` or `run-mailcap`, so `macDefaultBrowser()` may open that
+  machine's default browser. 5.4.2 handed a named
   browser to the `open` package, whose Linux candidates were
   `google-chrome`, `google-chrome-stable`, `chromium`, `chromium-browser`
   (Chrome), `microsoft-edge`, `microsoft-edge-dev` (Edge) and `firefox`
@@ -379,10 +383,13 @@ every exported declaration against the published 5.4.2.
   url.dll,FileProtocolHandler`), `windowsBrowser(program)` (PowerShell
   `Start-Process`, the program and the URL only in the environment). A
   failure rejects `unknown` with the operation `opening-browser`; an abort
-  rejects `aborted`; a started browser is never killed. A hand-off launcher
+  rejects `aborted`; no real `AbortSignal` rejects before anything starts;
+  a started browser is never killed. A hand-off launcher
   keeps the process alive until it exits (or the signal aborts), so an
   `open()` awaited alone settles; a browser binary is unreferenced once
-  started.
+  started. A caller of `open()` outside a composition owns the signal: a
+  launcher that never exits keeps `open()` pending until that signal
+  aborts.
 - **Transports:** `loopback({ port })` (`127.0.0.1`, then `::1` on the same
   port; advertises `localhost`), `loopback4({ port })`, `loopback6({ port })`
   (`LoopbackOptions`; `port` required), `terminalPaste({ redirectUri?, read?
@@ -539,9 +546,12 @@ every exported declaration against the published 5.4.2.
   given executable on Linux, `open` / `open -a` on macOS, and on Windows
   `%SystemRoot%\System32\rundll32.exe url.dll,FileProtocolHandler` or
   PowerShell's `Start-Process` reading the program and the URL from
-  environment variables — never `cmd`. The Windows launchers were measured on Windows 11
-  (2026-10-07): the URL arrives unchanged, and no command interpreter is
-  started.
+  environment variables — never `cmd`. Measured on Windows 11
+  (2026-10-07): through `rundll32` the URL arrives unchanged, and no
+  command interpreter is started; so it did for Chrome and Edge through an
+  earlier `Start-Process` command that named the program in its text.
+  Pending: the current `windowsBrowser` command (the program from
+  `$env:MCP_ABAP_ADT_BROWSER_PROGRAM`) has not yet run on a Windows host.
 - **The legacy Basic credential, as shipped in 5.4.2, carried forward.**
   Without a client-authentication strategy, every site that sends
   `Authorization: Basic base64(id:secret)` builds it only through one helper
