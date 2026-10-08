@@ -52,20 +52,6 @@ jest.mock('axios', () => {
     jest.requireActual<Record<string, unknown>>('axios').AxiosError;
   return mocked;
 });
-// `open` and `spawn`, each replaceable per test: the browser launch logs
-// what a failed launch said. No launcher is ever really started.
-const mockOpen: { default?: unknown } = {};
-jest.mock('open', () => ({
-  __esModule: true,
-  get default() {
-    return mockOpen.default;
-  },
-}));
-const mockSpawn: { run?: (...args: unknown[]) => unknown } = {};
-jest.mock('node:child_process', () => ({
-  ...jest.requireActual<Record<string, unknown>>('node:child_process'),
-  spawn: (...args: unknown[]) => mockSpawn.run?.(...args),
-}));
 type Mock = jest.Mock<(...args: any[]) => Promise<unknown>>;
 const mockedAxios = axios as unknown as Mock & {
   post: Mock;

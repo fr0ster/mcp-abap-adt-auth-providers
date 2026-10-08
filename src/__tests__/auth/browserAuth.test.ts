@@ -20,10 +20,6 @@ jest.mock('axios', () => {
     jest.requireActual<Record<string, unknown>>('axios').AxiosError;
   return mocked;
 });
-jest.mock('open', () => ({
-  __esModule: true,
-  default: jest.fn(),
-}));
 
 const mockedAxios = axios as jest.Mocked<typeof axios>;
 
