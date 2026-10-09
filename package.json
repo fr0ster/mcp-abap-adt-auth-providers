@@ -69,8 +69,8 @@
   "devDependencies": {
     "@biomejs/biome": "^2.3.14",
     "@jest/globals": "^30.2.0",
-    "@mcp-abap-adt/auth-mocks": "^0.3.0",
-    "@mcp-abap-adt/auth-stores": "^3.1.0",
+    "@mcp-abap-adt/auth-mocks": "^0.4.0",
+    "@mcp-abap-adt/auth-stores": "^4.0.0",
     "@mcp-abap-adt/logger": "^0.4.0",
     "@types/jest": "^30.0.0",
     "@types/js-yaml": "^4.0.9",
