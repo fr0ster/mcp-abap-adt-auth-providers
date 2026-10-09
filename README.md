@@ -3833,9 +3833,10 @@ class ApiKeyProvider extends AuthProviderBase {
 
 Do not override `prepare()`, `establish()`, `authorize()` or `rejected()`:
 the boundary is the base's. `@mcp-abap-adt/auth-errors` ships the shape check
-this package runs in `lint:check`
-(`@mcp-abap-adt/auth-errors/tools/check-provider-shape.mjs`), which refuses a
-provider that does not reach the base or declares one of the four.
+(`@mcp-abap-adt/auth-errors/shape-check`), which refuses a provider that does
+not reach the base or declares one of the four; this package runs it from its
+own test suite (`src/__tests__/shapeCheck.test.ts`, `npm run test:shape`),
+and every publish runs it first.
 
 ## Upgrading from 4.0 to 4.1
 
