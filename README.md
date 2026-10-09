@@ -24,11 +24,10 @@ your `AbortSignal` is the bound. What a consumer on 5.x must now do:
   what every provider here implements, and where the parts of an
   authorization strategy (`IAuthorizationPresentation`, `IAnswerTransport`,
   `IAuthorizationProtocol`, `IBrowser`) are declared. The consumers on the same contract
-  are **released after this 6.0.0, not yet available**:
-  `@mcp-abap-adt/connection` 13.0.0 (its suites run against the published
-  auth-providers 6.0.0), `@mcp-abap-adt/auth-stores` 4.0.0 and
-  `@mcp-abap-adt/auth-broker` 5.0.0. Until they are, no published connection
-  reads these providers' refusals: 11.x reads the old refusal, and 12.0.0
+  are published: `@mcp-abap-adt/connection` 14.0.0,
+  `@mcp-abap-adt/auth-stores` 4.0.0, `@mcp-abap-adt/auth-broker` 5.0.0 and
+  `@mcp-abap-adt/auth-broker-cli` 3.0.0. An older connection does not read
+  these providers' refusals: 11.x reads the old refusal, and 12.0.0
   (published only under `next`) is built on interfaces-auth 6. Keep one copy
   of each: `npm ls @mcp-abap-adt/interfaces-auth` and
   `npm ls @mcp-abap-adt/auth-errors` should show one deduplicated version.
@@ -456,6 +455,8 @@ What a consumer on 5.x must now do:
 
 ## Migrating to 5.0.0 — a migration, not an update
 
+> History: the code and the error classes shown in this section are for that old version (5.0.0) and do not compile on 6.0.0. For 6.0.0, see [Migrating to 6.0.0 — the error contract](#migrating-to-600--the-error-contract).
+
 > This section and the migrations after it describe earlier majors: their
 > code shows the API of the version they migrate to, and the version they
 > migrate from. Coming from one of them, apply them in order and then
@@ -727,7 +728,7 @@ const provider = AuthorizationCodeProvider.inBrowser({
   clientSecret: '...',
   renewal: refreshThenLogin(), // required: how every renewal proceeds
 });
-// A process of connection 13.0.0 (released after this package's 6.0.0)
+// A process of connection 14.0.0
 // calls prepare() on connect, authorize() per request, and rejected() on a 401: one renewal through the renewal
 // strategy — with refreshThenLogin(), a refresh, else one login.
 ```
@@ -3838,6 +3839,8 @@ provider that does not reach the base or declares one of the four.
 
 ## Upgrading from 4.0 to 4.1
 
+> History: the code and the error classes shown in this section are for that old version (4.0 to 4.1) and do not compile on 6.0.0. For 6.0.0, see [Migrating to 6.0.0 — the error contract](#migrating-to-600--the-error-contract).
+
 4.1.0 changes no export, configuration field or error class. It closes what
 the 4.0.0 reviews deferred, and three refusals get stricter.
 
@@ -3884,6 +3887,8 @@ refused the same documents in 4.0; only its message is new.
   published.
 
 ## Migrating from 3.x to 4.0
+
+> History: the code and the error classes shown in this section are for that old version (3.x to 4.0) and do not compile on 6.0.0. For 6.0.0, see [Migrating to 6.0.0 — the error contract](#migrating-to-600--the-error-contract).
 
 4.0.0 changes nothing outside the two SAML providers. For those, it validates
 every assertion — see [SAML assertion validation](#saml-assertion-validation) —
@@ -3992,6 +3997,8 @@ new Saml2BearerProvider({
 
 ## Migrating from 2.x to 3.0
 
+> History: the code and the error classes shown in this section are for that old version (2.x to 3.0) and do not compile on 6.0.0. For 6.0.0, see [Migrating to 6.0.0 — the error contract](#migrating-to-600--the-error-contract).
+
 3.0.0 changes no provider's configuration, but it drops a provider, a command
 and the Node versions nothing supports any more.
 
@@ -4024,6 +4031,8 @@ and the Node versions nothing supports any more.
 - `@xmldom/xmldom` is a new runtime dependency, for that conversion.
 
 ## Migrating from 1.x to 2.0
+
+> History: the code and the error classes shown in this section are for that old version (1.x to 2.0) and do not compile on 6.0.0. For 6.0.0, see [Migrating to 6.0.0 — the error contract](#migrating-to-600--the-error-contract).
 
 Every field that described *how* an interactive login is conducted is gone from
 the provider configs, replaced by a single `authorization` strategy.
