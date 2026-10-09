@@ -221,4 +221,41 @@ describe('the shape check', () => {
       expect(SHAPE_CHECK.rules).toContain(rule);
     }
   });
+
+  describe('the publishing gate runs it', () => {
+    const scripts = (
+      JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8')) as {
+        scripts: Record<string, string>;
+      }
+    ).scripts;
+
+    it('test:shape runs this file', () => {
+      expect(scripts['test:shape']).toBe(
+        'npm test -- src/__tests__/shapeCheck.test.ts',
+      );
+    });
+
+    it('prepublishOnly builds, then runs test:shape', () => {
+      expect(scripts.prepublishOnly).toBe(
+        'npm run build && npm run test:shape',
+      );
+    });
+
+    it('the release workflow runs test:shape after the build', () => {
+      const workflow = readFileSync(
+        join(ROOT, '.github', 'workflows', 'release.yml'),
+        'utf8',
+      );
+      const build = workflow.indexOf('run: npm run build\n');
+      const shape = workflow.indexOf('run: npm run test:shape\n');
+      expect(build).toBeGreaterThanOrEqual(0);
+      expect(shape).toBeGreaterThan(build);
+    });
+
+    it('lint:check is Biome alone: it runs no checking script', () => {
+      expect(scripts['lint:check']).toBe(
+        'npx biome check --error-on-warnings src',
+      );
+    });
+  });
 });
