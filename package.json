@@ -48,7 +48,7 @@
     "test": "NODE_OPTIONS=--experimental-vm-modules jest",
     "test:check": "npx tsc --noEmit",
     "test:shape": "npm test -- src/__tests__/shapeCheck.test.ts",
-    "docs:tables": "node scripts/generate-refusal-tables.mjs",
+    "docs:tables": "WRITE_README_TABLES=1 npm test -- src/__tests__/readmeRefusalTables.test.ts",
     "prepublishOnly": "npm run build && npm run test:shape",
     "stand:up": "tests/stand/up.sh",
     "stand:down": "tests/stand/down.sh",
