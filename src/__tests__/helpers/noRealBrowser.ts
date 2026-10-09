@@ -6,7 +6,7 @@
  * `execFile`, `execFileSync`, `exec`, `execSync`, `fork`) throws unless:
  *
  * - the program is node itself (`process.execPath`) — the suites that run a
- *   plain-node scenario, `tsc`, the shape check or the README generator;
+ *   plain-node scenario or `tsc`;
  * - or it is an exact path a test registered with `allowExecutable(path)`
  *   (its own fake script: a fake `xdg-open`, a stand-in for `reg.exe`);
  *
