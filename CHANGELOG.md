@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [6.0.1] - 2026-10-09
+
+Documentation and development only; the code is the same as 6.0.0.
+
+### Changed
+- README: the consumers of 6.0.0 are published — connection 14.0.0,
+  auth-stores 4.0.0, auth-broker 5.0.0 and auth-broker-cli 3.0.0 — instead of
+  "not yet available"; each old migration section says its code is for that
+  version and does not compile on 6.0.0.
+- Development: the shape check and the README refusal tables run as Jest tests
+  from `@mcp-abap-adt/auth-errors` 2.2.0 (`test:shape` in `prepublishOnly`);
+  the copied script and the table generator are gone; dev dependencies
+  `@mcp-abap-adt/auth-mocks` ^0.4.0 (no node-forge) and
+  `@mcp-abap-adt/auth-stores` ^4.0.0.
+
 ## [6.0.0] - 2026-10-08
 
 A migration, not an update: 6.0.0 replaces the error contract. Every refusal
