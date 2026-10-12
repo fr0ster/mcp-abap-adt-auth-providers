@@ -20,13 +20,13 @@ parse. And nothing is bounded by a timeout of the package's choosing any more:
 your `AbortSignal` is the bound. What a consumer on 5.x must now do:
 
 - **Install the contract it is read with.** `@mcp-abap-adt/auth-errors`
-  (`^2.1.1`) to read errors; `@mcp-abap-adt/interfaces-auth` (`^7.5.0`) is
+  (`^2.2.0`) to read errors; `@mcp-abap-adt/interfaces-auth` (`^7.5.0`) is
   what every provider here implements, and where the parts of an
   authorization strategy (`IAuthorizationPresentation`, `IAnswerTransport`,
   `IAuthorizationProtocol`, `IBrowser`) are declared. The consumers on the same contract
-  are published: `@mcp-abap-adt/connection` 14.0.0,
-  `@mcp-abap-adt/auth-stores` 4.0.0, `@mcp-abap-adt/auth-broker` 5.0.0 and
-  `@mcp-abap-adt/auth-broker-cli` 3.0.0. An older connection does not read
+  are published: `@mcp-abap-adt/connection` 15.0.0,
+  `@mcp-abap-adt/auth-stores` 5.0.1, `@mcp-abap-adt/auth-broker` 5.0.5 and
+  `@mcp-abap-adt/auth-broker-cli` 3.1.1. An older connection does not read
   these providers' refusals: 11.x reads the old refusal, and 12.0.0
   (published only under `next`) is built on interfaces-auth 6. Keep one copy
   of each: `npm ls @mcp-abap-adt/interfaces-auth` and
@@ -4465,7 +4465,7 @@ AUTH_LOG_LEVEL=debug npm test        # debug, info, warn, error
 - `@mcp-abap-adt/interfaces-auth` (^7.5.0) - `IAuthProvider`, token provider, authorization, renewal, persistence, client-authentication and assertion-validation contracts (`ITokenProvider`, `IAuthorizationStrategy` and its parts — `IAuthorizationPresentation`, `IAnswerTransport`, `IAuthorizationProtocol`, `IBrowser` —, `IRenewalStrategy`, `ITokenPersistence`, `IClientAuthentication`, `IAssertionValidator`, `IAssertionReplayStore`), and the error contract's types and allowlists (`IAuthProviderError`, its kinds, facts and `OPERATIONS`)
 - `@mcp-abap-adt/interfaces-auth-sap` (^3.3.0) - XSUAA authorization configuration (`IAuthorizationConfig`) and `ICertificateMaterialLoader`
 - `@mcp-abap-adt/auth-errors` (^2.1.1) - the error contract's runtime: the builders every error is minted with, `AuthProviderFailure`, `classify` / `readFailure`, `guard`, `logFields`, shared attempts and parties
-- `@mcp-abap-adt/interfaces-utils` (^1.1.0) - `ILogger`
+- `@mcp-abap-adt/interfaces-utils` (^1.1.1) - `ILogger`
 - `@xmldom/xmldom` - XML parsing: SAML assertion validation, and taking the Assertion out of a SAMLResponse for the saml2-bearer grant
 - `xml-crypto` - XML-DSig signature verification for SAML assertion validation
 - `axios` - HTTP client
