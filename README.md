@@ -728,7 +728,7 @@ const provider = AuthorizationCodeProvider.inBrowser({
   clientSecret: '...',
   renewal: refreshThenLogin(), // required: how every renewal proceeds
 });
-// A process of connection 14.0.0
+// A process of connection 14 or 15
 // calls prepare() on connect, authorize() per request, and rejected() on a 401: one renewal through the renewal
 // strategy — with refreshThenLogin(), a refresh, else one login.
 ```
