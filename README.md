@@ -4464,7 +4464,7 @@ AUTH_LOG_LEVEL=debug npm test        # debug, info, warn, error
 
 - `@mcp-abap-adt/interfaces-auth` (^7.5.0) - `IAuthProvider`, token provider, authorization, renewal, persistence, client-authentication and assertion-validation contracts (`ITokenProvider`, `IAuthorizationStrategy` and its parts — `IAuthorizationPresentation`, `IAnswerTransport`, `IAuthorizationProtocol`, `IBrowser` —, `IRenewalStrategy`, `ITokenPersistence`, `IClientAuthentication`, `IAssertionValidator`, `IAssertionReplayStore`), and the error contract's types and allowlists (`IAuthProviderError`, its kinds, facts and `OPERATIONS`)
 - `@mcp-abap-adt/interfaces-auth-sap` (^3.3.0) - XSUAA authorization configuration (`IAuthorizationConfig`) and `ICertificateMaterialLoader`
-- `@mcp-abap-adt/auth-errors` (^2.1.1) - the error contract's runtime: the builders every error is minted with, `AuthProviderFailure`, `classify` / `readFailure`, `guard`, `logFields`, shared attempts and parties
+- `@mcp-abap-adt/auth-errors` (^2.2.0) - the error contract's runtime: the builders every error is minted with, `AuthProviderFailure`, `classify` / `readFailure`, `guard`, `logFields`, shared attempts and parties
 - `@mcp-abap-adt/interfaces-utils` (^1.1.1) - `ILogger`
 - `@xmldom/xmldom` - XML parsing: SAML assertion validation, and taking the Assertion out of a SAMLResponse for the saml2-bearer grant
 - `xml-crypto` - XML-DSig signature verification for SAML assertion validation
