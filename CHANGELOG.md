@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [6.0.2] - 2026-10-12
+
+The code is the same as 6.0.1.
+
+### Changed
+- Dependency `@mcp-abap-adt/interfaces-utils` `^1.1.1` (was `^1.1.0`), the current release of
+  the contract; its API is unchanged. The lockfile is refreshed from the registry.
+- Development: the dev dependency `@mcp-abap-adt/auth-stores` is `^5.0.0` (was `^4.0.0`).
+- README: the consumers on the same contract are named at their current releases
+  (connection 15.0.0, auth-stores 5.0.1, auth-broker 5.0.5, auth-broker-cli 3.1.1), and the
+  auth-errors range is `^2.2.0`, as `package.json` declares.
+
 ## [6.0.1] - 2026-10-09
 
 Documentation and development only; the code is the same as 6.0.0.
