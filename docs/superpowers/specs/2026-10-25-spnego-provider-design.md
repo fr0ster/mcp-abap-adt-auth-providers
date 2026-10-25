@@ -251,7 +251,11 @@ Added to `compose.yaml`, images built from committed Dockerfiles on a pinned
   answer — runs the source in a child `node` process given that environment
   (`KRB5CCNAME` of an empty cache; `KRB5_CONFIG` of a committed second file
   whose KDC is an address nothing listens on), never by writing the suite's
-  own `process.env`. The published auth-providers carries no native code and
+  own `process.env`. The child runs JavaScript: the container builds both
+  copied packages (`npm run build`, output inside the container) and the
+  child is a small committed harness that loads the two built packages,
+  composes the provider with the source, calls `prepare()` and prints the
+  refusal's `kind`, `variant` and `facts` as JSON for the suite to assert. The published auth-providers carries no native code and
   no install script, and does not depend on the system source.
 
 ### What the suite proves (each rule red when removed)
