@@ -319,10 +319,17 @@ recipe and no implicit default (Inference, design).
   - *No ticket on macOS* (Measured, GitHub arm64 runner, GSS.framework): the
     Kerberos mechanism answers `no-credential`; `spnego` answers
     `mechanism-unsupported`.
+  - *Windows Negotiate with no ticket* (Measured, 2026-10-25, GitHub Windows
+    x64 runner, no domain, SSPI): `spnego` does not fail — the binding returns
+    an NTLM token, a raw `NTLMSSP\0` NEGOTIATE message (type 1) of 56 base64
+    characters, not wrapped in SPNEGO. This is the fallback the provider's
+    check exists for: it is refused `ntlm-token` and no header is written.
+    `kerberos` raises `InitializeSecurityContext: No credentials are available
+    in the security package`, answered `no-credential`. NTLM *inside* a SPNEGO
+    token is still only built fixtures (Inference).
   - *Not run* (Pending): clock skew (one clock on the stand); an expired
     ticket; a real ticket on macOS and Windows (SSPI); Heimdal's other texts;
-    NTLM inside SPNEGO from a Windows Negotiate fallback (Inference — built
-    fixtures only); **any ABAP system**: whether `/sap/bc/adt/*` accepts the
+    **any ABAP system**: whether `/sap/bc/adt/*` accepts the
     `Negotiate` logon on a standard system, with the licence, `spnego/enable`,
     the keytab and the `SU01` mapping, is Inference until the second stage.
 

@@ -98,7 +98,10 @@ const PHRASES: ReadonlyArray<
       'Ticket expired', // KRB5KRB_AP_ERR_TKT_EXPIRED — To measure (not on the stand)
       'The referenced credential has expired', // GSS_S_CREDENTIALS_EXPIRED — To measure (not on the stand)
       'The referenced credentials have expired', // To measure (not on the stand)
-      'No credentials are available in the security package', // SEC_E_NO_CREDENTIALS — To measure (Windows)
+      // SEC_E_NO_CREDENTIALS. Measured 2026-10-25, Windows GitHub runner (no
+      // domain), `kerberos`: "InitializeSecurityContext: No credentials are
+      // available in the security package\r\n" (the Windows message ends in a line break).
+      'No credentials are available in the security package',
       // Measured 2026-10-25, macOS arm64 GitHub runner, GSS.framework
       // (Heimdal), no ticket cache: the text received for `kerberos` with
       // KRB5CCNAME at an absent file ("pricipal" is Heimdal's own spelling).

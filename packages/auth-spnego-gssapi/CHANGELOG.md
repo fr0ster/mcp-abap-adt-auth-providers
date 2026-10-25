@@ -16,6 +16,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `RangeError`. Each call builds a new client and takes one token; nothing is kept. Answers a
   token or a problem — `no-credential`, `service-unknown`, `kdc-unreachable`, `clock-skew`,
   `binding-unavailable`, `source-failed`, `mechanism-unsupported` — and no text of the binding's error.
+- Measured on a Windows x64 GitHub runner with no domain (2026-10-25): `kerberos` raises
+  `InitializeSecurityContext: No credentials are available in the security package` (`no-credential`);
+  `spnego` returns an NTLM token (Negotiate's fallback), not an error.
 - The identity is the process's default one (the ticket cache, the domain logon); no principal
   option.
 - The binding's texts for an unknown service and an unreachable KDC are measured on MIT krb5

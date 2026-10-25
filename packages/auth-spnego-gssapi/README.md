@@ -135,7 +135,11 @@ Received with no ticket (measured 2026-10-25), and what the source answers:
 | Linux, MIT krb5 1.20.1 (Debian bookworm, Docker) | `kerberos` | `No credentials were supplied, … : No Kerberos credentials available (default cache: …)` | `no-credential` |
 | macOS arm64 (GitHub runner), GSS.framework (Heimdal) | `kerberos` | ` Miscellaneous failure (see text): get-pricipal open(<cache file>): No such file or directory` | `no-credential` |
 | macOS arm64 (GitHub runner), GSS.framework (Heimdal) | `spnego` | ` An unsupported mechanism was requested: unknown mech-code 0 for mech unknown` | `mechanism-unsupported` |
+| Windows x64 (GitHub runner, no domain), SSPI | `kerberos` | `InitializeSecurityContext: No credentials are available in the security package` (ending in a line break) | `no-credential` |
+| Windows x64 (GitHub runner, no domain), SSPI | `spnego` | no error: a token of 56 base64 characters, an NTLM message (`NTLMSSP\0`, type 1, a Negotiate fallback) | the token — which `SpnegoAuthProvider` refuses as `ntlm-token` |
 
+On Windows, with no ticket, `spnego` does not fail: SSPI's Negotiate falls back to NTLM and the source
+returns that token; the provider's check (`readNegotiateToken`) refuses it, so no NTLM header is written.
 On macOS the source matches the texts received in that condition: `get-pricipal open(` (Heimdal's
 spelling) as `no-credential`, and `unknown mech-code 0 for mech unknown` as `mechanism-unsupported`.
 
@@ -155,6 +159,8 @@ and silently not on Windows. A consumer needing another identity supplies its ow
 
 - **Measured** (2026-10-25): a token accepted by Apache `mod_auth_gssapi` for both mechanisms,
   `service-unknown` and `kdc-unreachable` against a real MIT KDC, no ticket on MIT and on macOS.
+- **Measured** also (2026-10-25, Windows x64 GitHub runner, no domain): `kerberos` answers `no-credential`
+  (text above); `spnego` returns an NTLM token.
 - **Pending**: a real ticket on macOS and Windows (SSPI), an expired ticket, clock skew,
   Heimdal's and SSPI's other error texts, and any ABAP system — the second stage.
 
