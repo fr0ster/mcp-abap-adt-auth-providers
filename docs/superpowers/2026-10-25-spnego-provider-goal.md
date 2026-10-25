@@ -29,16 +29,23 @@ stand that proves it.
 
 ## What changes
 
-- A new provider, extending `AuthProviderBase`, answering the four moments of
-  `IAuthProvider` like every other provider here.
-- Where the token comes from is a strategy the consumer composes (a token
-  source behind an interface), with a named factory over a GSSAPI/SSPI binding
-  as the common recipe.
-- A refusal the error contract cannot express yet (no ticket, an NTLM token, a
-  continued negotiation) is added to interfaces-auth and auth-errors first,
-  published before this package uses it.
+- **`SpnegoAuthProvider`** in this package, extending `AuthProviderBase`,
+  answering the four moments of `IAuthProvider` like every other provider here.
+  It is named for the mechanism the service sees, as `SncLogonProvider` is.
+- **Where the token comes from is a strategy the consumer composes:** a token
+  source behind a contract in interfaces-auth, since both this package and a
+  consumer implement it.
+- **The recipe over a GSSAPI/SSPI binding is a package of its own,** built on
+  the `kerberos` npm package. This package stays free of native code and of
+  install scripts; only a consumer who installs that package takes the native
+  build, allowing its script knowingly. Its build is proved in its own CI on
+  Linux, macOS and Windows.
+- A refusal the error contract cannot express yet (no ticket, an NTLM token)
+  is added to interfaces-auth and auth-errors first, published before this
+  package uses it.
 - The stand gains the Kerberos services, its fixtures committed like the other
-  stand fixtures, and a suite that runs the provider against them; CI runs it.
+  stand fixtures, and a suite that runs the provider with the recipe against
+  them; CI runs it on Linux.
 - README, `docs/passwordless-sso.md` (the SPNego rows flip from Inference to
   Measured, with the date, only after the stand run) and the CHANGELOG.
 
@@ -54,18 +61,24 @@ stand that proves it.
   ticket or any key material.
 - **Nothing is guessed.** The service principal is stated by the consumer; it
   is not derived from a host the provider never sees. No fallback to another
-  mechanism: a token that is NTLM, not Kerberos, is refused.
+  mechanism: a token that is NTLM, not Kerberos, is refused. The provider does
+  not tell HTTP from RFC either: SPNego has nothing for a logon, so
+  `establish()` writes nothing and answers Ok (rule 3); an RFC logon without a
+  user is the system's to refuse, and the README says SPNego is for HTTP.
+- **A `401` is a `401`.** `rejected()` reads it as rule 5 does, the credential
+  refused. A service that continues the negotiation (`WWW-Authenticate:
+  Negotiate <token>` on a `401`) is not answered and reads the same; the README
+  says so.
 - **Where the ticket lives is the consumer's.** The provider holds no ticket
-  and keeps none: it asks its token source for a token. The shipped recipe
-  uses the system's own ticket cache — what `kinit` or the domain logon filled
-  — and may name the client principal in it; a consumer that keeps tickets
-  elsewhere, a store of its own included, supplies its own token source
-  through the same contract.
-- **The consumer composes.** No token source is built when none is given; the
-  binding the shipped recipe uses is loaded only when that recipe is used, so a
-  consumer without it installs nothing native.
-- **Supply chain.** A native binding with an install script enters only through
-  `allowScripts`, reviewed; dependencies come from the registry.
+  and keeps none: it asks its token source for a token. The recipe uses the
+  system's own ticket cache — what `kinit` or the domain logon filled — and may
+  name the client principal in it; a consumer that keeps tickets elsewhere, a
+  store of its own included, supplies its own token source through the same
+  contract.
+- **The consumer composes.** No token source is built when none is given.
+- **Supply chain.** The native binding enters only the recipe's package,
+  through `allowScripts`, reviewed and built from source; dependencies come
+  from the registry.
 - No timeouts and no retries of the package's choosing; nothing written to
   stdout.
 - The stand proves the rules on the wire: each rule gets a test that goes red
@@ -73,22 +86,10 @@ stand that proves it.
 
 ## Scope
 
-In: the provider, its token-source strategy and recipe, the stand, the suite,
-the docs.
+In: the token-source contract, the error contract's new refusals, the
+provider, the recipe's package, the stand, the suite, the docs.
 
-Out: the live run against an ABAP system (the second stage); SNC (built);
-NTLM; X.509 client certificates (built); a multi-leg exchange — a service that
-continues the negotiation is refused with its reason, not answered; verifying
-the service's mutual-authentication token; Windows on arm64.
-
-## Open questions
-
-1. The provider's name: `SpnegoAuthProvider` (the mechanism on the wire) or
-   `KerberosAuthProvider` (the credential).
-2. Where the shipped token source lives: in this package with the binding as
-   an optional peer dependency, or a package of its own so this one stays free
-   of native code.
-3. What the provider answers at `establish()` on a logon target that wants
-   logon parameters (RFC): SPNego has nothing to give there.
-4. How `rejected()` reads a `401` that carries a `Negotiate` continuation, as
-   against a plain refusal of the ticket.
+Out: the live run against an ABAP system and the manual runs on macOS and
+Windows with a real ticket (the second stage); SNC (built); NTLM; X.509 client
+certificates (built); answering a multi-leg exchange; verifying the service's
+mutual-authentication token; Windows on arm64.
