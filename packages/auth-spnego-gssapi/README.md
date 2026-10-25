@@ -111,6 +111,18 @@ against a KDC on the provider stand, Heimdal (macOS) and SSPI (Windows) on those
 SSPI texts are localised, so on a Windows that does not speak English, a failure other than an
 unloadable binding may answer `source-failed`.
 
+Received with no ticket, and each answered `no-credential` (measured 2026-10-25):
+
+| System | `mechanism` | Text the binding raised |
+|---|---|---|
+| Linux, MIT krb5 1.20.1 (Debian bookworm, Docker) | `spnego` | `No credentials were supplied, … : SPNEGO cannot find mechanisms to negotiate` |
+| Linux, MIT krb5 1.20.1 (Debian bookworm, Docker) | `kerberos` | `No credentials were supplied, … : No Kerberos credentials available (default cache: …)` |
+| macOS arm64 (GitHub runner), GSS.framework (Heimdal) | `spnego` | ` An unsupported mechanism was requested: unknown mech-code 0 for mech unknown` |
+| macOS arm64 (GitHub runner), GSS.framework (Heimdal) | `kerberos` | ` Miscellaneous failure (see text): get-pricipal open(<cache file>): No such file or directory` |
+
+On macOS the source matches `unknown mech-code 0 for mech unknown` and `get-pricipal open(`
+(Heimdal's spelling): the texts received in that condition, read as no ticket.
+
 ## Whose identity
 
 The token is for the **default identity of the process**: on Linux and macOS the default

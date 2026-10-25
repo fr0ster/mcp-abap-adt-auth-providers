@@ -18,6 +18,16 @@ describe('mapGssFailure', () => {
       'No credentials were supplied, or the credentials were unavailable or inaccessible: No Kerberos credentials available: Bad format in credentials cache (filename: /tmp/tmp.R2paXGqd8U/empty)',
       'no-credential',
     ],
+    // Measured 2026-10-25, macOS arm64 GitHub runner, GSS.framework (Heimdal),
+    // no ticket cache: the raw texts received, kerberos and spnego.
+    [
+      ' Miscellaneous failure (see text): get-pricipal open(/var/folders/n6/hn37q6pj7sj_9dmqqc2113800000gn/T/gssapi-no-ticket-8N5DhB/cc): No such file or directory',
+      'no-credential',
+    ],
+    [
+      ' An unsupported mechanism was requested: unknown mech-code 0 for mech unknown',
+      'no-credential',
+    ],
     // MIT krb5, no ticket cache / no ticket
     [
       'No credentials were supplied, or the credentials were unavailable or inaccessible: No Kerberos credentials available (default cache: FILE:/tmp/krb5cc_1000)',
@@ -114,6 +124,29 @@ describe('mapGssFailure', () => {
     ],
   ])('anything else is source-failed: %s', (_label, thrown) => {
     expect(mapGssFailure(thrown)).toBe('source-failed');
+  });
+
+  it('reads the macOS SPNEGO text only with its measured tail', () => {
+    expect(
+      mapGssFailure(new Error(' An unsupported mechanism was requested: ')),
+    ).toBe('source-failed');
+    expect(
+      mapGssFailure(
+        new Error(
+          'An unsupported mechanism was requested: unknown mech-code 5',
+        ),
+      ),
+    ).toBe('source-failed');
+  });
+
+  it('lets a specific cause win over the macOS no-ticket texts', () => {
+    expect(
+      mapGssFailure(
+        new Error(
+          'Server not found in Kerberos database: unknown mech-code 0 for mech unknown',
+        ),
+      ),
+    ).toBe('service-unknown');
   });
 
   it('never matches case-folded or partial phrases', () => {
