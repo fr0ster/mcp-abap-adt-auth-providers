@@ -18,12 +18,14 @@
     "check:packed": "node tools/check-packed.js",
     "check:publish": "node tools/test-publish-changed.js",
     "release:publish": "node tools/publish-changed.js",
-    "install:packages": "node tools/each-package.js ci --ignore-scripts"
+    "install:packages": "node tools/each-package.js ci --ignore-scripts",
+    "audit": "npm audit --audit=true --audit-level=moderate && node tools/each-package.js audit --audit=true --audit-level=moderate"
   },
   "engines": {
     "node": "^22 || ^24 || ^26"
   },
   "devDependencies": {
     "semver": "^7.8.5"
-  }
+  },
+  "allowScripts": {}
 }

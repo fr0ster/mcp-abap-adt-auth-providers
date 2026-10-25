@@ -35,6 +35,12 @@ jobs:
           npm ci --ignore-scripts
           npm run install:packages
 
+      # Gating: any advisory of moderate severity or above in the full tree of
+      # the root or of a package fails the job. audit=false in .npmrc only
+      # turns off the audit during install.
+      - name: Audit
+        run: npm run audit
+
       - name: Build
         run: npm run build
 

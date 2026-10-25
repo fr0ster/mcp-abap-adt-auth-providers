@@ -16,6 +16,12 @@ install scripts off. The one native build is `kerberos` in `packages/auth-spnego
 (`npm rebuild kerberos --build-from-source` there, allowed by its `allowScripts`); without it that
 package's tests replace the binding, and its load test is skipped.
 
+Install scripts are denied by default: each `.npmrc` sets `strict-allow-scripts=true` (npm 11.19 or
+later), and each `package.json` lists in `allowScripts` every dependency that has an install script,
+each decided (only `kerberos` is allowed). CI runs `npm run audit`, which fails on any advisory of
+moderate severity or above in the root and in each package; a fix is an update within the range, an
+advisory without a fix an `overrides` entry with its reason in the CHANGELOG. No release-age gate.
+
 ```bash
 npm ci --ignore-scripts          # the root's tools
 npm run install:packages         # each package's dependencies

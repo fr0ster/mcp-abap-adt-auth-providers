@@ -17,6 +17,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and the release tools, and the package in `packages/auth-providers`. Not npm workspaces: the
   package installs its own dependencies from the registry. The published content is unchanged.
   Tags are `auth-providers-v<version>`.
+- Script security: install scripts are denied unless `package.json` `allowScripts` allows them
+  (`strict-allow-scripts=true` in `.npmrc`, npm 11.19 or later; this package and the root). The
+  two dev-only packages with install scripts, `@parcel/watcher` and `unrs-resolver` (both under
+  Jest), are denied explicitly: Jest runs without their native parts. Every CI and release
+  install keeps `--ignore-scripts`, and CI runs `npm run audit` (root and each package,
+  `npm audit --audit-level=moderate`, gating). No advisory was open and no `overrides` entry is
+  needed. The published content is unchanged.
 
 ## [6.0.2] - 2026-10-12
 
