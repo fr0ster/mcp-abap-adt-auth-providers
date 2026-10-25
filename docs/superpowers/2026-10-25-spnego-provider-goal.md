@@ -55,6 +55,12 @@ stand that proves it.
 - **Nothing is guessed.** The service principal is stated by the consumer; it
   is not derived from a host the provider never sees. No fallback to another
   mechanism: a token that is NTLM, not Kerberos, is refused.
+- **Where the ticket lives is the consumer's.** The provider holds no ticket
+  and keeps none: it asks its token source for a token. The shipped recipe
+  uses the system's own ticket cache — what `kinit` or the domain logon filled
+  — and may name the client principal in it; a consumer that keeps tickets
+  elsewhere, a store of its own included, supplies its own token source
+  through the same contract.
 - **The consumer composes.** No token source is built when none is given; the
   binding the shipped recipe uses is loaded only when that recipe is used, so a
   consumer without it installs nothing native.
@@ -86,5 +92,3 @@ the service's mutual-authentication token.
    logon parameters (RFC): SPNego has nothing to give there.
 4. How `rejected()` reads a `401` that carries a `Negotiate` continuation, as
    against a plain refusal of the ticket.
-5. Which ticket cache the token source uses: the default one, or one the
-   consumer names.
