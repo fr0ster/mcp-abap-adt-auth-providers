@@ -200,7 +200,7 @@ needs the binding; every other install keeps `--ignore-scripts`.
     substring search of fixed GSS phrases (as `sncRefusal` does), never a
     regex; the table is built from the stand's failures (To measure: which
     shape the binding's error has); unmatched is `source-failed`.
-- CI, a job of its own: Linux, macOS and Windows (x64): `npm ci --ignore-scripts`, then the one
+- CI, a job of its own: Linux x64 (in a `node:24-bookworm` container, the headers installed inside it), macOS (the hosted arm64 runner) and Windows x64: `npm ci --ignore-scripts`, then the one
   allowed build `npm rebuild kerberos --build-from-source` (no prebuilt binary
   downloaded), then a test that loads the binding and gets
   `no-credential` from a machine with no ticket. Windows on arm64 is out.
