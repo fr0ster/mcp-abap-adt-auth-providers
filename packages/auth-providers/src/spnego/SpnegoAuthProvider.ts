@@ -9,7 +9,7 @@
  * refusal. Anything else a source does — a throw, a foreign thenable, an
  * answer of another shape — is `unknown` with the moment's operation, its
  * value read nowhere. A token is checked before it is written: NTLM (raw, or
- * inside a SPNEGO token, as Windows' Negotiate falls back) is `ntlm-token`,
+ * inside a SPNEGO token) is `ntlm-token`,
  * anything neither Kerberos nor NTLM `token-unreadable`.
  *
  * No collaborator is defaulted (rule 7): the consumer composes the source.

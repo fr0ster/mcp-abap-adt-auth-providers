@@ -19,7 +19,7 @@ import {
 const SPN = 'HTTP@sap.example.com';
 /** A distinct Kerberos token per `n`: the body's length differs. */
 const kerberos = (n = 0) => b64(gssKerberos(OID_KRB5, 64 + n));
-/** NTLM wrapped in SPNEGO: what Windows' Negotiate falls back to. */
+/** NTLM wrapped in SPNEGO (a built fixture). */
 const NTLM_IN_SPNEGO = b64(
   negTokenInit({ mechs: [OID_NTLM], mechToken: NTLM_NEGOTIATE }),
 );

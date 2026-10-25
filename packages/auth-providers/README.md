@@ -739,7 +739,7 @@ The four moments:
 
 | Moment | Does |
 |---|---|
-| `prepare()` | asks the source for one token, checks it and **drops** it: a missing ticket, an unknown principal or an NTLM fallback fails the connect before any request. Nothing is kept |
+| `prepare()` | asks the source for one token, checks it and **drops** it: a missing ticket, an unknown principal or an NTLM token fails the connect before any request. Nothing is kept |
 | `establish()` | writes nothing, answers Ok |
 | `authorize()` | asks the source for a **new** token, checks it, writes `Authorization: Negotiate <token>` through the target. Never the `prepare()` token or an earlier request's: a Kerberos authenticator is single-use against a service that checks for replay (measured: the replay cache refuses a token sent twice) |
 | `rejected()` | a `401` is `credential-refused` `kerberos-ticket`, with or without a `WWW-Authenticate: Negotiate <token>` continuation; anything else `system-refused` (rule 5). The provider does not follow a continuation or retry: the next `authorize()` brings a fresh token, retrying is the consumer's |
@@ -749,9 +749,10 @@ resolves `{ ok: true, token }` (base64, as it goes after `Negotiate `) or
 `{ ok: false, problem }` with a problem of a closed list; the provider mints the
 refusal, so no text a source holds can reach one. A source that throws, answers
 a foreign thenable or anything of another shape is `unknown` with the moment's
-operation. A source's token is **checked before it is written**: NTLM — raw, or
-inside a SPNEGO token, as Windows' Negotiate falls back when Kerberos fails —
-is `ntlm-token`, and a token that is neither Kerberos nor NTLM, or malformed
+operation. A source's token is **checked before it is written**: NTLM — raw
+(measured: a Windows runner with no domain and no ticket returns a raw NTLM
+NEGOTIATE message for `spnego`; that this is SSPI's fallback is Inference), or
+inside a SPNEGO token (Inference: built fixtures only) — is `ntlm-token`, and a token that is neither Kerberos nor NTLM, or malformed
 DER, is `token-unreadable`; no header is written for either. A source never
 caches a token (the contract), and a late answer after every party aborted is
 dropped and the moment ends `interactive-login` `aborted` (`facts.outcome`), no header written.
