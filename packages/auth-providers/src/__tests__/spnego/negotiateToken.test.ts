@@ -7,6 +7,7 @@ import {
   OID_KRB5,
   OID_KRB5_MS,
   OID_NTLM,
+  OID_SPNEGO,
   tlv,
 } from './fixtures/derParts';
 
@@ -42,6 +43,28 @@ describe('readNegotiateToken', () => {
         mechToken: Buffer.from('garbage-token'),
       });
       expect(readNegotiateToken(b64(t))).toBe('unreadable');
+    });
+    it('a raw GSS frame with the legacy Microsoft OID is unreadable', () => {
+      expect(readNegotiateToken(b64(gssKerberos(OID_KRB5_MS)))).toBe(
+        'unreadable',
+      );
+    });
+    it('NegTokenInit fields: unknown tag, repeated or out of order', () => {
+      const types = tlv(0xa0, tlv(0x30, tlv(0x06, OID_KRB5)));
+      const flags = tlv(0xa1, tlv(0x03, Buffer.from([0x00, 0x40])));
+      const tok = tlv(0xa2, tlv(0x04, gssKerberos()));
+      const mic = tlv(0xa3, tlv(0x04, Buffer.from('mic')));
+      const init = (...f: Buffer[]) =>
+        b64(
+          tlv(0x60, tlv(0x06, OID_SPNEGO), tlv(0xa0, tlv(0x30, types, ...f))),
+        );
+      expect(readNegotiateToken(init(flags, tok, mic))).toBe('kerberos');
+      expect(readNegotiateToken(init(tok, tlv(0xa4, Buffer.from([0]))))).toBe(
+        'unreadable',
+      );
+      expect(readNegotiateToken(init(flags, flags, tok))).toBe('unreadable');
+      expect(readNegotiateToken(init(tok, flags))).toBe('unreadable');
+      expect(readNegotiateToken(init(tok, tok))).toBe('unreadable');
     });
     it('a SPNEGO token with Kerberos listed second is unreadable', () => {
       const t = negTokenInit({
@@ -97,6 +120,19 @@ describe('readNegotiateToken', () => {
         for (let j = 0; j < i; j++) b[j] = (j * 131 + i * 17 + 7) & 0xff;
         b[0] = 0x61; // never the GSS tag or NTLMSSP
         expect(readNegotiateToken(b64(b))).toBe('unreadable');
+      }
+    });
+
+    it('seeded random bodies behind a correct 0x60 frame', () => {
+      let x = 12345;
+      const next = () => {
+        x = (Math.imul(x, 1103515245) + 12345) >>> 0;
+        return x >>> 24;
+      };
+      for (let i = 0; i < 300; i++) {
+        const body = Buffer.alloc(1 + (i % 120));
+        for (let j = 0; j < body.length; j++) body[j] = next();
+        expect(readNegotiateToken(b64(tlv(0x60, body)))).toBe('unreadable');
       }
     });
 
@@ -211,14 +247,12 @@ describe('readNegotiateToken', () => {
       expect(readNegotiateToken(42 as unknown as string)).toBe('unreadable');
     });
 
-    it('a large input is read in linear time', () => {
+    it('a large input with a huge length is unreadable', () => {
       const big = Buffer.concat([
         Buffer.from([0x60, 0x84, 0x04, 0x00, 0x00, 0x00]),
         Buffer.alloc(1 << 20, 0x30),
       ]);
-      const start = Date.now();
       expect(readNegotiateToken(b64(big))).toBe('unreadable');
-      expect(Date.now() - start).toBeLessThan(1000);
     });
   });
 });

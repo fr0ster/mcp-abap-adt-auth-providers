@@ -185,12 +185,22 @@ function readNegTokenInit(
   if (count === 0) return 'unreadable';
 
   // The remaining fields; [2] mechToken at most once.
+  // Only [1] reqFlags, [2] mechToken, [3] mechListMIC, each once, ascending.
   let token: Span | undefined;
+  let last = TAG_MECH_TYPES;
   for (let pos = typesField.end; pos < init.end; ) {
     const field = readTlv(bytes, pos, init.end);
     if (field === undefined) return 'unreadable';
+    if (
+      (field.tag !== 0xa1 &&
+        field.tag !== TAG_MECH_TOKEN &&
+        field.tag !== 0xa3) ||
+      field.tag <= last
+    ) {
+      return 'unreadable';
+    }
+    last = field.tag;
     if (field.tag === TAG_MECH_TOKEN) {
-      if (token !== undefined) return 'unreadable';
       token = filling(bytes, field.start, field.end, TAG_OCTET_STRING);
       if (token === undefined) return 'unreadable';
     }
@@ -209,7 +219,7 @@ function read(bytes: Buffer): NegotiateMechanism {
   if (startsWithNtlm(bytes, 0, bytes.length)) return 'ntlm';
   const frame = readFrame(bytes, 0, bytes.length);
   if (frame === undefined) return 'unreadable';
-  if (isKerberosOid(bytes, frame.oid)) {
+  if (equals(bytes, frame.oid, OID_KRB5)) {
     return frame.innerEnd - frame.innerStart >= 2 ? 'kerberos' : 'unreadable';
   }
   if (equals(bytes, frame.oid, OID_SPNEGO)) {
