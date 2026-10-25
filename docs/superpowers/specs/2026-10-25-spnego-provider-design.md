@@ -229,22 +229,30 @@ Added to `compose.yaml`, images built from committed Dockerfiles on a pinned
   `WWW-Authenticate: Negotiate <base64>` — a configured answer standing for a
   continuation, not a GSS exchange Apache produced; the suite asserts the
   status and the header before it tests `rejected()`.
-- Published on loopback ports: the KDC (`STAND_KDC_PORT`, UDP and TCP) and the
-  service (`STAND_NEGOTIATE_PORT`).
-- **The suite runs on the host**, like the other stand suites:
-  `tests/stand/kerberos/krb5.conf.template` (committed) names the realm, with
-  a placeholder for the KDC port; `run.sh` checks `STAND_KDC_PORT` is a port
-  number, writes the rendered `krb5.conf` (`kdc = 127.0.0.1:<port>`) into a
-  per-run temporary directory (removed at exit), and exports `KRB5_CONFIG` to
-  it and a per-run `KRB5CCNAME` beside it for the suite process and runs `kinit` there (the host
-  needs the MIT client tools and headers — CI installs them). The request
-  goes to `127.0.0.1:<port>`; the service principal is stated, so no DNS
-  name is needed — which is itself a test of §4.1.
+- **The suite runs in a container of the stand, not on the host**: the
+  stand's principle holds — a clone needs only Docker. A third service,
+  **`spnego-client`**, built from a committed Dockerfile on a pinned
+  `node:24-bookworm` with the MIT client tools and headers, joins the stand's
+  network, where the KDC and the service are reached by their names
+  (`kdc.stand.test`, `negotiate.stand.test`, `stale.stand.test`), so the
+  committed `tests/stand/kerberos/krb5.conf` is static (`kdc =
+  kdc.stand.test`) and nothing is rendered. The repository is mounted
+  read-only; the container copies the two packages (without `node_modules`)
+  into its own directory, installs each with `npm ci --ignore-scripts`,
+  builds the binding there (`npm rebuild kerberos --build-from-source`, the one
+  allowed script) and runs the suite — the host's `node_modules` are never
+  written. `run.sh` runs this service after the others are up and takes its
+  exit code. No Docker socket is mounted into it.
 - The suite is a test of the system source's package and imports the
-  provider from its sibling's source (test-only, no npm link); the stand job alone builds the native part (`npm rebuild kerberos
-  --build-from-source`, allowed by `allowScripts` for that one package). The
-  published auth-providers carries no native code and no install script, and
-  does not depend on the system source.
+  provider from its sibling's source (test-only, no npm link). Inside the
+  container it obtains tickets with `kinit` (the password fixture on stdin)
+  into a per-case `KRB5CCNAME` under its own temporary directory. A case that
+  needs another Kerberos environment — no ticket, or a KDC that does not
+  answer — runs the source in a child `node` process given that environment
+  (`KRB5CCNAME` of an empty cache; `KRB5_CONFIG` of a committed second file
+  whose KDC is an address nothing listens on), never by writing the suite's
+  own `process.env`. The published auth-providers carries no native code and
+  no install script, and does not depend on the system source.
 
 ### What the suite proves (each rule red when removed)
 
@@ -253,9 +261,9 @@ Added to `compose.yaml`, images built from committed Dockerfiles on a pinned
 | ticket for `alice`, `mechanism: 'spnego'` and `'kerberos'` | `200`, the service's `REMOTE_USER` is `alice` (To measure: which mechanisms Apache accepts) |
 | two requests | two different tokens; both `200` |
 | the token of the first request resent by hand | the service refuses it (replay cache) — the reason the provider never reuses one |
-| no ticket (`kdestroy`) | `prepare()` is `spnego` `no-credential`; nothing sent |
+| no ticket (an empty cache) | `prepare()` is `spnego` `no-credential`; the suite sends no request |
 | a principal the KDC does not know | `spnego` `service-unknown` |
-| the KDC stopped, with a cache of its own holding a valid TGT and no ticket for the service (asserted with `klist` first) | `spnego` `kdc-unreachable`; the KDC started again after |
+| a KDC that does not answer, with a cache holding a valid TGT and no ticket for the service (asserted with `klist` first) | `spnego` `kdc-unreachable` |
 | a ticket for `HTTP@stale.stand.test` (the service's keytab holds the old key) | `401` → `rejected()` is `credential-refused` `kerberos-ticket` |
 | the configured continuation path (`401`, `WWW-Authenticate: Negotiate <token>`, both asserted) | `credential-refused`, the same |
 | the token in every log line, error and refusal of every case | absent (the `noTokensInLogs` oracle) |
