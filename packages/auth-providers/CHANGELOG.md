@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [7.0.0] - 2026-10-25
+## [7.0.0] - 2026-10-26
 
 A major because a new error kind, `spnego`, exists: a consumer that switches exhaustively on
 `kind` must handle it. Nothing of 6.x is changed otherwise.
