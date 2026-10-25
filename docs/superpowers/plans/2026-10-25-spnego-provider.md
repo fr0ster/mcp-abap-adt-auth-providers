@@ -141,7 +141,7 @@ All paths below are under `packages/`. Rebase #76 on the restructured master fir
 ### Task C4: The Kerberos stand and the protocol suite
 
 **Files:**
-- Create: `tests/stand/kerberos/` (repo root, beside the moved stand — follow where Task 0 put `tests/stand`): `kdc/Dockerfile`, `kdc/start.sh`, `negotiate/Dockerfile`, `negotiate/site.conf`, `krb5.conf` (realm `STAND.TEST`, KDC at `127.0.0.1:${STAND_KDC_PORT}`)
+- Create: `tests/stand/kerberos/` (repo root, beside the moved stand — follow where Task 0 put `tests/stand`): `kdc/Dockerfile`, `kdc/start.sh`, `negotiate/Dockerfile`, `negotiate/site.conf`, `krb5.conf.template` (realm `STAND.TEST`, a placeholder for the KDC port — MIT does no variable substitution; `run.sh` checks the port is a number and renders the file into the run's temporary directory, removed at exit)
 - Modify: `tests/stand/compose.yaml` (services `kdc`, `negotiate`, a keytab volume; images on pinned `debian:bookworm-slim`); `run.sh` / `up.sh` / `down.sh` (ports `STAND_KDC_PORT`, `STAND_NEGOTIATE_PORT`; export `KRB5_CONFIG` and a per-run `KRB5CCNAME` to the suite; `kinit` from a password fixture through stdin; leave running servers as today)
 - Test: `auth-spnego-gssapi/src/__tests__/stand/spnego.test.ts` — imports `SpnegoAuthProvider` from `../../../../auth-providers/src` (test-only, no npm link), runs only when `STAND_NEGOTIATE_URL` is set, says where it runs otherwise
 - CI: the stand job installs `krb5-user libkrb5-dev`, builds `kerberos` from source in `packages/auth-spnego-gssapi`, runs `npm run test:stand`
@@ -150,7 +150,7 @@ All paths below are under `packages/`. Rebase #76 on the restructured master fir
 
 - [ ] **Step 1:** Bring the stand up; by hand once (temporary script in the scratchpad, deleted after): `kinit alice`, `curl --negotiate` the service → `200` and `alice`. Record in the PR what the binding's errors look like for no ticket, unknown principal, stopped KDC (their GSS major/minor codes and message shapes) — the input for `mapGssFailure`.
 - [ ] **Step 2: Suite cases** — exactly the spec's §6 table: `alice` with `mechanism: 'spnego'` and `'kerberos'` → `200`, `X-Remote-User` `alice` (whichever Apache refuses is recorded and the docs say so); two requests → two different tokens, both `200`; the first token resent by hand → refused; `kdestroy` → `prepare()` `spnego` `no-credential`, no request reaches the service (its access log); unknown principal → `service-unknown`; KDC outage: a fresh `KRB5CCNAME` of its own, `kinit alice`, `klist` asserted to hold the TGT and no `HTTP/negotiate.stand.test` ticket, then the `kdc` container stopped → `kdc-unreachable`, then started again (in a `finally`); a request to `stale.stand.test` with `servicePrincipal: 'HTTP@stale.stand.test'` → `401` → `credential-refused` `kerberos-ticket`; the continuation path → status `401` and a non-empty `Negotiate` token asserted first, then `credential-refused`; the token absent from every log line, error and refusal. Capture a real Kerberos and a SPNEGO token into C1's fixtures.
-- [ ] **Step 3:** `npm run test:stand` green locally and in CI.
+- [ ] **Step 3:** `npm run test:stand` green locally and in CI, and once with a non-default `STAND_KDC_PORT`.
 - [ ] **Step 4:** Commit.
 
 ### Task C5: Documentation and release preparation

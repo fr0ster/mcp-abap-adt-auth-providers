@@ -232,9 +232,11 @@ Added to `compose.yaml`, images built from committed Dockerfiles on a pinned
 - Published on loopback ports: the KDC (`STAND_KDC_PORT`, UDP and TCP) and the
   service (`STAND_NEGOTIATE_PORT`).
 - **The suite runs on the host**, like the other stand suites:
-  `tests/stand/kerberos/krb5.conf` (committed) points the realm at the
-  loopback KDC; `run.sh` exports `KRB5_CONFIG` and a per-run `KRB5CCNAME` in a
-  temporary directory for the suite process and runs `kinit` there (the host
+  `tests/stand/kerberos/krb5.conf.template` (committed) names the realm, with
+  a placeholder for the KDC port; `run.sh` checks `STAND_KDC_PORT` is a port
+  number, writes the rendered `krb5.conf` (`kdc = 127.0.0.1:<port>`) into a
+  per-run temporary directory (removed at exit), and exports `KRB5_CONFIG` to
+  it and a per-run `KRB5CCNAME` beside it for the suite process and runs `kinit` there (the host
   needs the MIT client tools and headers — CI installs them). The request
   goes to `127.0.0.1:<port>`; the service principal is stated, so no DNS
   name is needed — which is itself a test of §4.1.
