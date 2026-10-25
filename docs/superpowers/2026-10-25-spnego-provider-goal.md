@@ -35,18 +35,18 @@ stand that proves it.
 - **Where the token comes from is a strategy the consumer composes:** a token
   source behind a contract in interfaces-auth, since both this package and a
   consumer implement it.
-- **The recipe over a GSSAPI/SSPI binding is a package of its own,** built on
+- **A ready token source over a GSSAPI/SSPI binding is shipped in a package of its own,** built on
   the `kerberos` npm package. This package stays free of native code and of
   install scripts and does not depend on it; only a consumer who installs that
   package takes the native build, allowing its script knowingly. Both live in
   this repository, which becomes a multi-package repository, so the stand
-  proves them together before either is published. The recipe's build is
+  proves them together before either is published. The source's build is
   proved in CI on Linux, macOS and Windows.
 - A refusal the error contract cannot express yet (no ticket, an NTLM token)
   is added to interfaces-auth and auth-errors first, published before this
   package uses it.
 - The stand gains the Kerberos services, its fixtures committed like the other
-  stand fixtures, and a suite that runs the provider with the recipe against
+  stand fixtures, and a suite that runs the provider with the system source against
   them; CI runs it on Linux.
 - README, `docs/passwordless-sso.md` (the SPNego rows flip from Inference to
   Measured, with the date, only after the stand run) and the CHANGELOG.
@@ -72,13 +72,13 @@ stand that proves it.
   Negotiate <token>` on a `401`) is not answered and reads the same; the README
   says so.
 - **Where the ticket lives is the consumer's.** The provider holds no ticket
-  and keeps none: it asks its token source for a token. The recipe uses the
+  and keeps none: it asks its token source for a token. The system source uses the
   system's own ticket cache — what `kinit` or the domain logon filled — and may
   name the client principal in it; a consumer that keeps tickets elsewhere, a
   store of its own included, supplies its own token source through the same
   contract.
 - **The consumer composes.** No token source is built when none is given.
-- **Supply chain.** The native binding enters only the recipe's package,
+- **Supply chain.** The native binding enters only the system source's package,
   through `allowScripts`, reviewed and built from source; dependencies come
   from the registry.
 - No timeouts and no retries of the package's choosing; nothing written to
@@ -89,7 +89,7 @@ stand that proves it.
 ## Scope
 
 In: the token-source contract, the error contract's new refusals, the
-provider, the recipe's package, the stand, the suite, the docs.
+provider, the system source's package, the stand, the suite, the docs.
 
 Out: the live run against an ABAP system and the manual runs on macOS and
 Windows with a real ticket (the second stage); SNC (built); NTLM; X.509 client

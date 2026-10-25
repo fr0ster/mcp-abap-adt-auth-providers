@@ -18,7 +18,7 @@ second stage settles it before the claim is written as fact).
 1 and 2 are published before 3 depends on them; nothing builds against an
 unpublished version of another repository. Inside this repository the two
 packages are workspace siblings (the standing exception for packages of one
-repository): the stand suite runs the provider with the recipe linked, so the
+repository): the stand suite runs the provider with the system source linked, so the
 protocol is proved before either is published. Neither package depends on the
 other (§5); only the stand suite uses both.
 
@@ -48,7 +48,7 @@ type NegotiateTokenAnswer =
 ```
 
 - The source answers **facts, not errors**: a problem from a closed list; the
-  provider mints the refusal. So a source in another package — the recipe or a
+  provider mints the refusal. So a source in another package — the system source or a
   consumer's own — never has to mint, and no text it holds can reach a refusal.
   A source that throws, or answers anything else, is `unknown` with the
   operation (rule 1, rule 2).
@@ -68,7 +68,7 @@ type NegotiateTokenAnswer =
   | `service-unknown` | the KDC does not know the service principal (source) | check `servicePrincipal` against the service's registered principal |
   | `kdc-unreachable` | no KDC answered (source) | the Kerberos configuration's realm and KDC |
   | `clock-skew` | the clock differs from the KDC's beyond its tolerance (source) | the machine's time |
-  | `binding-unavailable` | the source's library cannot be loaded (source) | install the recipe's native part |
+  | `binding-unavailable` | the source's library cannot be loaded (source) | install the system source's native part |
   | `source-failed` | any other failure the source recognises as its own (source) | — |
   | `ntlm-token` | the token is NTLM, not Kerberos (provider, §4.3) | the service principal is not known to the domain; NTLM is not used |
   | `token-unreadable` | the token is empty, not base64, or neither Kerberos nor NTLM (provider) | — |
@@ -112,6 +112,10 @@ interface SpnegoAuthProviderConfig {
   from a URL: the provider sees none.
 - `tokenSource`: an object whose `token` is a function, read through
   `readSafely`; else `required-fields-missing`.
+- No static factory assembles the provider with the system source (§5): it
+  would import the native package. The consumer composes,
+  `new SpnegoAuthProvider({ servicePrincipal, tokenSource: gssapiTokenSource(…) })`,
+  or passes a source of its own.
 
 ### 4.2 The four moments
 
@@ -123,7 +127,7 @@ interface SpnegoAuthProviderConfig {
 | `rejected()` | `reading-rejection` | `refuseFor(rejection, 'kerberos-ticket')` (rule 5): a `401` is `credential-refused`, with or without a `Negotiate` continuation; anything else `system-refused`. Renewing is the next `authorize()`'s fresh token; retrying is the consumer's. |
 
 - The source is called with the attached parties' signal (`createParties`), so
-  an aborted connect is not held by a source that honours it; the recipe's
+  an aborted connect is not held by a source that honours it; the system source's
   library call cannot be cancelled (§5) — no timeout of the package's choosing.
 - A source answer of `{ ok: false, problem }` is minted `spnego` with that
   problem and the moment's operation. Anything else from the source — a throw,
@@ -158,7 +162,7 @@ Fixed words and facts only: the operation, the problem, the token's
 the service principal (configured, the consumer's text), or anything the
 source said. `logCallSources.test.ts` covers `src/spnego/`.
 
-## 5. The recipe's package
+## 5. The system source's package
 
 `@mcp-abap-adt/auth-spnego-gssapi` in `packages/auth-spnego-gssapi` of this
 repository (the name: decision for the owner). The repository's supply-chain
@@ -223,7 +227,7 @@ Added to `compose.yaml`, images built from committed Dockerfiles on a pinned
   siblings; the stand job alone builds the native part (`npm rebuild kerberos
   --build-from-source`, allowed by `allowScripts` for that one package). The
   published auth-providers carries no native code and no install script, and
-  does not depend on the recipe.
+  does not depend on the system source.
 
 ### What the suite proves (each rule red when removed)
 
@@ -256,7 +260,7 @@ handle).
 
 ## 8. Documentation
 
-README (the provider, its configuration, the recipe, "SPNego is for HTTP",
+README (the provider, its configuration, the system source, "SPNego is for HTTP",
 a `401` and a continuation, the refusal table rows rendered as the others),
 `docs/passwordless-sso.md` (SPNego rows: Measured on the stand with the date;
 against ABAP still Inference until the second stage), CLAUDE.md's provider
@@ -266,4 +270,4 @@ needs the `spnego` case).
 
 ## 9. Decisions for the owner
 
-1. The recipe's package name (§5): proposed `@mcp-abap-adt/auth-spnego-gssapi`.
+1. The system source's package name (§5): proposed `@mcp-abap-adt/auth-spnego-gssapi`.
