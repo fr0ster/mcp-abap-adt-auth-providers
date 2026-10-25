@@ -231,23 +231,31 @@ Added to `compose.yaml`, images built from committed Dockerfiles on a pinned
   continuation, not a GSS exchange Apache produced; the suite asserts the
   status and the header before it tests `rejected()`.
 - **The suite runs in a container of the stand, not on the host**: the
-  stand's principle holds — a clone needs only Docker. A third service,
+  owner's principle holds — whatever can run in Docker runs there, so a
+  clone needs only Docker. A third service,
   **`spnego-client`**, built from a committed Dockerfile on a pinned
   `node:24-bookworm` with the MIT client tools and headers, joins the stand's
   network, where the KDC and the service are reached by their names
   (`kdc.stand.test`, `negotiate.stand.test`, `stale.stand.test`), so the
   committed `tests/stand/kerberos/krb5.conf` is static (`kdc =
-  kdc.stand.test`) and nothing is rendered. The repository is mounted
-  read-only; the container copies the two packages (without `node_modules`)
-  into its own directory, installs each with `npm ci --ignore-scripts`,
+  kdc.stand.test`) and nothing is rendered. The container never sees the
+  working tree: `run.sh` exports only the tracked files of the two packages
+  (and what their build needs) into a temporary directory, removed at exit,
+  and mounts that read-only — no gitignored file (a test config, a key, an
+  `.env`) reaches code installed from the registry. The container copies the
+  two packages into its own directory, installs each with `npm ci --ignore-scripts`,
   builds the binding there (`npm rebuild kerberos --build-from-source`, the one
   allowed script) and runs the suite — the host's `node_modules` are never
   written. `run.sh` runs this service after the others are up and takes its
   exit code. No Docker socket is mounted into it.
 - The suite is a test of the system source's package and imports the
-  provider from its sibling's source (test-only, no npm link). Inside the
-  container it obtains tickets with `kinit` (the password fixture on stdin)
-  into a per-case `KRB5CCNAME` under its own temporary directory. A case that
+  provider from its sibling's source at run time (test-only, no npm link; a
+  typed import would cross the package's `rootDir`, so the provider's options
+  are checked by the stand run, not the compiler). Inside the container it
+  obtains tickets with `kinit` (the password fixture on stdin) into one
+  suite cache in its own temporary directory; a case whose verdict a cached
+  ticket could change (the dead KDC) and the cases that need another
+  Kerberos environment get caches of their own. A case that
   needs another Kerberos environment — no ticket, or a KDC that does not
   answer — runs the source in a child `node` process given that environment
   (`KRB5CCNAME` of an empty cache; `KRB5_CONFIG` of a committed second file
