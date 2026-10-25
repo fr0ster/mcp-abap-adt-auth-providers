@@ -120,8 +120,11 @@ jobs:
         run: npm test
 
   # The providers against real authorization servers — Cloud Foundry UAA and
-  # Keycloak — started in Docker by tests/stand/run.sh and stopped again when
-  # the suites end. On failure the script prints the servers' logs first.
+  # Keycloak — and SPNego against a real KDC and a Negotiate-only service (the
+  # Kerberos stand, whose suite runs in a container of its own), all started
+  # in Docker by tests/stand/run.sh and stopped again when the suites end. The
+  # runner needs Docker and nothing else for it. On failure the script prints
+  # the servers' logs first.
   provider-stand:
     runs-on: ubuntu-latest
     strategy:
@@ -144,6 +147,6 @@ jobs:
         working-directory: packages/auth-providers
         run: npm ci --ignore-scripts
 
-      - name: Test against UAA and Keycloak
+      - name: Test against UAA, Keycloak and the Kerberos stand
         working-directory: packages/auth-providers
         run: npm run test:stand
