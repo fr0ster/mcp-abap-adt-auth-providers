@@ -38,6 +38,7 @@ temp/
 
 # Test configuration (contains sensitive data)
 packages/auth-providers/tests/test-config.yaml
+tests/test-config.yaml
 
 # Git worktrees
 .worktrees/
