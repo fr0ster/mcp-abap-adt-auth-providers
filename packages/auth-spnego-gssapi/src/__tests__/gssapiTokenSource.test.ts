@@ -50,6 +50,20 @@ function loadWith(binding: FakeBinding | (() => never)): Factory {
   return mod.gssapiTokenSource;
 }
 
+/** Runs `fn` with `process.platform` reading `platform`, restored after. */
+async function onPlatform<T>(
+  platform: string,
+  fn: () => Promise<T>,
+): Promise<T> {
+  const saved = Object.getOwnPropertyDescriptor(process, 'platform');
+  Object.defineProperty(process, 'platform', { value: platform });
+  try {
+    return await fn();
+  } finally {
+    if (saved) Object.defineProperty(process, 'platform', saved);
+  }
+}
+
 afterEach(() => {
   jest.dontMock('kerberos');
 });
@@ -138,7 +152,10 @@ describe('gssapiTokenSource token()', () => {
     async (mechanism, oid) => {
       const binding = fakeBinding();
       const source = loadWith(binding)({ mechanism });
-      const answer = await source.token('HTTP@sap.example.com', {});
+      // The GSS-API form, as on Linux and macOS, whatever OS runs the test.
+      const answer = await onPlatform('linux', () =>
+        source.token('HTTP@sap.example.com', {}),
+      );
       expect(answer).toEqual({ ok: true, token: 'YIIBtoken' });
       expect(binding.initializeClient).toHaveBeenCalledTimes(1);
       expect(binding.initializeClient).toHaveBeenCalledWith(
