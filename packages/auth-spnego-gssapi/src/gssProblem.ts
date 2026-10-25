@@ -1,11 +1,17 @@
 import type { NegotiateSourceProblem } from '@mcp-abap-adt/interfaces-auth';
 
 /**
- * A phrase is a fixed text, or two fixed texts that must appear in that order
- * — for a message that names a value between them (a principal), read by
- * nothing.
+ * A phrase is a fixed text found anywhere, a fixed text the message ends
+ * with, or a message that ends with `before`, a name, then `after` — for a
+ * text that names a value (a principal), read by nothing. The name must be
+ * non-empty and hold no space and no quote, and `before` is the last one
+ * before it: a name of the user's choosing elsewhere in the message (an
+ * unknown client is quoted, `Client '…'`) cannot complete the pattern.
  */
-type Phrase = string | readonly [before: string, after: string];
+type Phrase =
+  | string
+  | { readonly endsWith: string }
+  | { readonly endsWithName: readonly [before: string, after: string] };
 
 /**
  * What the `kerberos` binding's failure says, as a problem from the closed
@@ -34,10 +40,16 @@ const PHRASES: ReadonlyArray<
       // KRB5KDC_ERR_S_PRINCIPAL_UNKNOWN, as MIT's extended message names the
       // principal: "...information: Server HTTP/x@REALM not found in Kerberos
       // database". Measured 2026-10-25, MIT krb5 1.20.1, stand (spnego and
-      // kerberos alike). The "Server " after the major text's ": " keeps the
-      // client's "Client '...' not found in Kerberos database" out.
-      [': Server ', ' not found in Kerberos database'],
-      'Server not found in Kerberos database', // the error table's own text (no principal) — To measure
+      // kerberos alike): the minor status is the end of the message, right
+      // after the major text's "Minor code may provide more information: ".
+      {
+        endsWithName: [
+          'Minor code may provide more information: Server ',
+          ' not found in Kerberos database',
+        ],
+      },
+      // the error table's own text (no principal) — To measure
+      { endsWith: ': Server not found in Kerberos database' },
       'The specified target is unknown or unreachable', // SEC_E_TARGET_UNKNOWN — To measure (Windows)
     ],
   ],
@@ -107,12 +119,22 @@ function messageOf(thrown: unknown): string | undefined {
   }
 }
 
-/** Plain, case-sensitive substring search; a pair in order. */
+/** A principal as MIT prints it: non-empty, no space, no quote. */
+function isBareName(name: string): boolean {
+  if (name === '') return false;
+  for (const c of name) if (c === ' ' || c === "'" || c === '"') return false;
+  return true;
+}
+
+/** Plain, case-sensitive string search; no regex. */
 function says(message: string, phrase: Phrase): boolean {
   if (typeof phrase === 'string') return message.includes(phrase);
-  const [before, after] = phrase;
-  const at = message.indexOf(before);
-  return at >= 0 && message.indexOf(after, at + before.length) >= 0;
+  if ('endsWith' in phrase) return message.endsWith(phrase.endsWith);
+  const [before, after] = phrase.endsWithName;
+  if (!message.endsWith(after)) return false;
+  const rest = message.slice(0, message.length - after.length);
+  const at = rest.lastIndexOf(before);
+  return at >= 0 && isBareName(rest.slice(at + before.length));
 }
 
 export function mapGssFailure(thrown: unknown): NegotiateSourceProblem {

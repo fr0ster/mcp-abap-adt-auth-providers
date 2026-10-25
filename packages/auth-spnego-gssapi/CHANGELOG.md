@@ -20,5 +20,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   option.
 - The binding's texts for an unknown service and an unreachable KDC are measured on MIT krb5
   1.20.1 against a real KDC (auth-providers' Kerberos stand): MIT names the principal inside the
-  unknown-service text, so it is matched as two fixed texts in order; an unknown client is not
-  `service-unknown`.
+  unknown-service text, so it is read only as the end of the message — the fixed text, a name
+  with no space or quote, the fixed tail; an unknown client is not `service-unknown`, whatever its
+  name holds.

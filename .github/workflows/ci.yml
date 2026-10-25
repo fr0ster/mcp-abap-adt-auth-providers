@@ -147,6 +147,10 @@ jobs:
         working-directory: packages/auth-providers
         run: npm ci --ignore-scripts
 
+      # The SPNego suite runs in its own container on its own Node, so one leg
+      # is enough; the host suites run on every leg.
       - name: Test against UAA, Keycloak and the Kerberos stand
         working-directory: packages/auth-providers
+        env:
+          STAND_SPNEGO: ${{ matrix.node-version == '24' && '1' || '0' }}
         run: npm run test:stand

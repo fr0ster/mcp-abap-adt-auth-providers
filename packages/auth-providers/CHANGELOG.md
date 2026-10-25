@@ -32,8 +32,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   mechanisms accepted (`200`, the user `alice`), a fresh token per request (a resent one refused
   by the replay cache), `no-credential`, `service-unknown`, `kdc-unreachable`, and a refused
   ticket and a `Negotiate` continuation both `credential-refused` `kerberos-ticket`. The host
-  needs only Docker; the container installs and builds its own copies, and the host's
-  `node_modules` are not touched. `readNegotiateToken`'s tests read Kerberos and SPNEGO tokens
+  needs only Docker; the container gets only the files git tracks of the two packages (exported
+  to a temporary directory, refused if it holds any path git ignores, mounted read-only),
+  installs and builds its own copies, and the host's `node_modules` are not touched;
+  `STAND_SPNEGO=0` leaves it out (CI runs it on one Node version). `readNegotiateToken`'s tests read Kerberos and SPNEGO tokens
   captured there. The published content is unchanged.
 
 ## [6.0.2] - 2026-10-12

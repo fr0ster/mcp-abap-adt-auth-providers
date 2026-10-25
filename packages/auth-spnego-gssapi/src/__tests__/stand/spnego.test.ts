@@ -115,6 +115,20 @@ const holdsToken = (text: string, token: string): boolean =>
 
 // ----------------------------------------------------------- the helpers
 
+/**
+ * The source as the provider sees it, every token it answers recorded — the
+ * ones prepare() obtains and drops included — for the oracle.
+ */
+function recordingSource(source: INegotiateTokenSource): INegotiateTokenSource {
+  return {
+    async token(servicePrincipal, options) {
+      const answer = await source.token(servicePrincipal, options);
+      if (answer.ok) issued.push(answer.token);
+      return answer;
+    },
+  };
+}
+
 function provider(
   mechanism: Mechanism,
   servicePrincipal = SERVICE,
@@ -126,7 +140,7 @@ function provider(
   };
   return new SpnegoAuthProvider({
     servicePrincipal,
-    tokenSource: gssapiTokenSource({ mechanism }),
+    tokenSource: recordingSource(gssapiTokenSource({ mechanism })),
     logger: recordingLogger(),
   });
 }
@@ -146,8 +160,7 @@ async function authorized(p: IAuthProvider): Promise<string> {
   expect(Object.keys(headers)).toEqual(['Authorization']);
   const value = headers.Authorization ?? '';
   expect(value.startsWith('Negotiate ')).toBe(true);
-  const token = value.slice('Negotiate '.length);
-  issued.push(token);
+  expect(issued).toContain(value.slice('Negotiate '.length));
   return value;
 }
 
@@ -414,7 +427,10 @@ describeStand(where, () => {
   });
 
   it('no token in any log line, error or refusal of any case', () => {
-    expect(issued.length).toBe(10);
+    // Per mechanism: prepare() and authorize() for alice, two authorize()s,
+    // prepare() and authorize() for the stale service, one for the
+    // continuation.
+    expect(issued.length).toBe(14);
     expect(surfaces.length).toBeGreaterThan(0);
     for (const token of issued)
       for (const surface of surfaces)

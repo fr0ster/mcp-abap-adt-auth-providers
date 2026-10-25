@@ -12,9 +12,10 @@
 # Negotiate-only Apache service, reached only on their own network by their
 # names — kdc.stand.test, negotiate.stand.test, stale.stand.test — and
 # published on no host port. spnego-client runs the SPNego suite inside that
-# network (run.sh runs it after the host suites): the repository mounted
-# read-only, the packages copied and installed inside the container, so the
-# host's node_modules are never written. No Docker socket is mounted. The
+# network (run.sh runs it after the host suites): run.sh's export of the
+# tracked files mounted read-only, the packages copied and installed inside
+# the container, so the host's node_modules are never written and no ignored
+# file reaches it. No Docker socket is mounted. The
 # keytabs live in their own volume, written by the KDC at every start; no
 # keytab or key is committed.
 services:
@@ -104,8 +105,15 @@ services:
         condition: service_healthy
     environment:
       KRB5_CONFIG: /repo/packages/auth-providers/tests/stand/kerberos/krb5.conf
+    # The tracked files run.sh exports (SPNEGO_SOURCE), read-only — never the
+    # working tree. Without the export the mount fails instead of falling back.
     volumes:
-      - ../../../..:/repo:ro
+      - type: bind
+        source: ${SPNEGO_SOURCE:-./kerberos/source-not-exported}
+        target: /repo
+        read_only: true
+        bind:
+          create_host_path: false
     command: ["bash", "/repo/packages/auth-providers/tests/stand/kerberos/client/run-suite.sh"]
 
 networks:

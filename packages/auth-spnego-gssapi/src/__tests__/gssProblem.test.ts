@@ -158,7 +158,7 @@ describe('mapGssFailure', () => {
     expect(
       mapGssFailure(
         new Error(
-          'Server not found in Kerberos database: get-pricipal open(/tmp/cc)',
+          'get-pricipal open(/tmp/cc): Minor code may provide more information: Server HTTP/a@B not found in Kerberos database',
         ),
       ),
     ).toBe('service-unknown');
@@ -175,14 +175,43 @@ describe('mapGssFailure', () => {
     ).toBe('source-failed');
   });
 
-  it('reads the two halves of the service-unknown text only in order', () => {
+  it('reads the service-unknown text only as the message ends', () => {
     expect(
       mapGssFailure(
-        new Error('x not found in Kerberos database: Server HTTP/a@STAND.TEST'),
+        new Error(
+          'Minor code may provide more information: Server HTTP/a@STAND.TEST not found in Kerberos database: more',
+        ),
       ),
     ).toBe('source-failed');
     expect(
-      mapGssFailure(new Error(': Server  not found in Kerberos database')),
+      mapGssFailure(
+        new Error(
+          'Minor code may provide more information: Server  not found in Kerberos database',
+        ),
+      ),
+    ).toBe('source-failed');
+  });
+
+  it.each([
+    // an unknown client whose name carries the service-unknown pattern
+    "Unspecified GSS failure.  Minor code may provide more information: Client 'x: Server HTTP/a@B' not found in Kerberos database",
+    "Unspecified GSS failure.  Minor code may provide more information: Client 'Minor code may provide more information: Server HTTP/a@B' not found in Kerberos database",
+    "Unspecified GSS failure.  Minor code may provide more information: Client 'Minor code may provide more information: Server a not found in Kerberos database' not found in Kerberos database",
+    "Unspecified GSS failure.  Minor code may provide more information: Client 'x: Server not found in Kerberos database' not found in Kerberos database",
+  ])(
+    'an unknown client named like a service is not service-unknown: %s',
+    (message) => {
+      expect(mapGssFailure(new Error(message))).toBe('source-failed');
+    },
+  );
+
+  it("reads the error table's own text only as the message ends", () => {
+    expect(
+      mapGssFailure(
+        new Error(
+          'Unspecified GSS failure.  Minor code may provide more information: Server not found in Kerberos database',
+        ),
+      ),
     ).toBe('service-unknown');
   });
 

@@ -3,7 +3,15 @@
 # Kerberos stand in Docker, run the tests against them, and stop them again —
 # the same locally and in CI. The host suites run first; then the SPNego suite
 # runs inside the stand (the spnego-client container, see compose.yaml), and
-# the run fails if either fails.
+# the run fails if either fails. STAND_SPNEGO=0 leaves the Kerberos stand out
+# (CI runs it on one Node version only).
+#
+# The SPNego container never sees the working tree: this script exports the
+# files git tracks of the two packages (and the root .gitignore their build
+# reads) into a temporary directory, refuses it if any path in it is one git
+# ignores, mounts it read-only, and removes it at exit. So an ignored secret —
+# tests/test-config.yaml, tests/xsuaa/.local/, an .env — never reaches a
+# container that runs registry code with network access.
 #
 # Whoever starts a server stops it, per service: one that was already running
 # (from `npm run stand:up`, or started by hand) is left running, and only the
@@ -18,7 +26,13 @@ cd "$HERE"
 PORT="${UAA_PORT:-8080}"
 KC_PORT="${KEYCLOAK_PORT:-8081}"
 KC_HTTPS_PORT="${KEYCLOAK_HTTPS_PORT:-8444}"
-SERVICES="uaa keycloak kdc negotiate"
+SPNEGO="${STAND_SPNEGO:-1}"
+if [ "$SPNEGO" = 1 ]; then
+  SERVICES="uaa keycloak kdc negotiate"
+else
+  SERVICES="uaa keycloak"
+fi
+SPNEGO_SOURCE=""
 
 wanted_address() { # service
   case "$1" in
@@ -67,6 +81,7 @@ done
 
 stop() {
   status=$?
+  if [ -n "$SPNEGO_SOURCE" ]; then rm -rf "$SPNEGO_SOURCE"; fi
   # On failure, print the servers' logs before anything removes the
   # containers — after `down` there is nothing left to read, locally or in CI.
   if [ "$status" -ne 0 ]; then
@@ -95,8 +110,10 @@ stop() {
 }
 trap stop EXIT
 
+# Only the services this run starts are built and started: a running one is
+# left as it is.
 UAA_PORT="$PORT" KEYCLOAK_PORT="$KC_PORT" KEYCLOAK_HTTPS_PORT="$KC_HTTPS_PORT" \
-  "$HERE/up.sh"
+  STAND_SERVICES="$started" "$HERE/up.sh"
 cd "$ROOT"
 # NODE_EXTRA_CA_CERTS: the suites trust Keycloak's HTTPS through the stand's
 # own CA, as a consumer trusts a private CA — no provider takes a `ca`.
@@ -111,8 +128,28 @@ UAA_URL="http://localhost:$PORT/uaa" \
 # packages from the read-only repository, installs and builds them there, and
 # exits with the suite's code (kerberos/client/run-suite.sh).
 spnego_status=0
-docker compose -f "$HERE/compose.yaml" run --rm --build spnego-client \
-  || spnego_status=$?
+if [ "$SPNEGO" = 1 ]; then
+  REPO="$(git -C "$HERE" rev-parse --show-toplevel)"
+  SPNEGO_SOURCE="$(mktemp -d)"
+  # Tracked files only, as they are in the working tree (a deleted one is
+  # skipped); nothing untracked, nothing ignored.
+  git -C "$REPO" ls-files -z -- .gitignore packages/auth-providers \
+    packages/auth-spnego-gssapi |
+    while IFS= read -r -d '' path; do
+      if [ -e "$REPO/$path" ]; then printf '%s\0' "$path"; fi
+    done |
+    tar -C "$REPO" --null -T - -cf - | tar -C "$SPNEGO_SOURCE" -xf -
+  # The check: no path of the export is one git ignores.
+  ignored="$(cd "$SPNEGO_SOURCE" && find . -print | sed -e 's|^\./||' -e '/^\.$/d' |
+    git -C "$REPO" check-ignore --no-index --stdin || true)"
+  if [ -n "$ignored" ]; then
+    echo "refusing the SPNego export: it holds paths git ignores:" >&2
+    echo "$ignored" >&2
+    exit 1
+  fi
+  SPNEGO_SOURCE="$SPNEGO_SOURCE" docker compose -f "$HERE/compose.yaml" \
+    run --rm --build --no-deps spnego-client || spnego_status=$?
+fi
 
 if [ "$host_status" -ne 0 ] || [ "$spnego_status" -ne 0 ]; then
   echo "stand suites failed: host $host_status, SPNego $spnego_status" >&2

@@ -122,9 +122,10 @@ same text for `spnego` and `kerberos`):
 | a service the KDC does not know | `Unspecified GSS failure. … : Server HTTP/<host>@<REALM> not found in Kerberos database` | `service-unknown` |
 | a TGT in the cache, no KDC answering | `Unspecified GSS failure. … : Cannot contact any KDC for realm '<REALM>'` | `kdc-unreachable` |
 
-The first names the principal between two fixed texts, so the source matches `: Server ` and
-` not found in Kerberos database` in that order; an unknown *client* (`Client '…' not found in
-Kerberos database`) is not `service-unknown`.
+The first names the principal between two fixed texts, so the source reads it only as the end of
+the message: `Minor code may provide more information: Server `, a name with no space and no quote,
+then ` not found in Kerberos database`. An unknown *client* (`Client '…' not found in Kerberos
+database`) is not `service-unknown`, whatever its name holds.
 
 Received with no ticket (measured 2026-10-25), and what the source answers:
 

@@ -4271,11 +4271,17 @@ The SPNego suite — a test of `@mcp-abap-adt/auth-spnego-gssapi`,
 `src/__tests__/stand/spnego.test.ts`, which loads this package's
 `SpnegoAuthProvider` from its source — runs inside the stand, in the
 `spnego-client` container (pinned `node:24-bookworm` with the MIT client tools),
-after the host suites: the repository is mounted read-only, both packages are
-copied into the container and installed there with `--ignore-scripts`, the
-`kerberos` binding is built from source and both packages are built
+after the host suites. The container never sees the working tree: `test:stand`
+exports the files git tracks of the two packages into a temporary directory,
+refuses it if any path in it is one git ignores (so `tests/test-config.yaml`,
+`tests/xsuaa/.local/` or an `.env` cannot reach a container running registry
+code), mounts it read-only and removes it at exit. Inside, both packages are
+copied and installed with `--ignore-scripts`, the `kerberos` binding is built
+from source against the image's own Node headers, and both packages are built
 (`tests/stand/kerberos/client/run-suite.sh`). The host's `node_modules` are not
-touched, and no Docker socket is mounted. Measured 2026-10-25 (MIT krb5 1.20.1,
+touched, and no Docker socket is mounted. A file not yet tracked by git is not
+in the export. `STAND_SPNEGO=0` leaves the Kerberos stand out; CI runs it on
+the Node 24 leg only. Measured 2026-10-25 (MIT krb5 1.20.1,
 `kerberos` 7.0.0):
 
 | case | result, `mechanism: 'spnego'` and `'kerberos'` alike |
