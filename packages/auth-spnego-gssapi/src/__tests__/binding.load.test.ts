@@ -111,14 +111,18 @@ describeBuilt(where, () => {
           KRB5CCNAME: `FILE:${path.join(dir, 'cc')}`,
         };
         const answer = askChild(mechanism, env);
-        if (
-          JSON.stringify(answer) !==
-          JSON.stringify({ ok: false, problem: 'no-credential' })
-        )
+        // macOS spnego answers source-failed: pending the no-mechanism problem
+        // (interfaces-auth 8.0.1). Its text was measured 2026-10-25:
+        // " An unsupported mechanism was requested: unknown mech-code 0 for mech unknown".
+        const expected =
+          process.platform === 'darwin' && mechanism === 'spnego'
+            ? { ok: false, problem: 'source-failed' }
+            : { ok: false, problem: 'no-credential' };
+        if (JSON.stringify(answer) !== JSON.stringify(expected))
           process.stderr.write(
             `${process.platform}, ${mechanism}, no ticket: answer ${JSON.stringify(answer)}; binding ${rawBindingMessage(mechanism, env)}\n`,
           );
-        expect(answer).toEqual({ ok: false, problem: 'no-credential' });
+        expect(answer).toEqual(expected);
       } finally {
         fs.rmSync(dir, { recursive: true, force: true });
       }

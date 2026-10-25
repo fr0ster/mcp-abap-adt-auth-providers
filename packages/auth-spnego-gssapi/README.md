@@ -111,17 +111,17 @@ against a KDC on the provider stand, Heimdal (macOS) and SSPI (Windows) on those
 SSPI texts are localised, so on a Windows that does not speak English, a failure other than an
 unloadable binding may answer `source-failed`.
 
-Received with no ticket, and each answered `no-credential` (measured 2026-10-25):
+Received with no ticket (measured 2026-10-25), and what the source answers:
 
-| System | `mechanism` | Text the binding raised |
-|---|---|---|
-| Linux, MIT krb5 1.20.1 (Debian bookworm, Docker) | `spnego` | `No credentials were supplied, … : SPNEGO cannot find mechanisms to negotiate` |
-| Linux, MIT krb5 1.20.1 (Debian bookworm, Docker) | `kerberos` | `No credentials were supplied, … : No Kerberos credentials available (default cache: …)` |
-| macOS arm64 (GitHub runner), GSS.framework (Heimdal) | `spnego` | ` An unsupported mechanism was requested: unknown mech-code 0 for mech unknown` |
-| macOS arm64 (GitHub runner), GSS.framework (Heimdal) | `kerberos` | ` Miscellaneous failure (see text): get-pricipal open(<cache file>): No such file or directory` |
+| System | `mechanism` | Text the binding raised | Answer |
+|---|---|---|---|
+| Linux, MIT krb5 1.20.1 (Debian bookworm, Docker) | `spnego` | `No credentials were supplied, … : SPNEGO cannot find mechanisms to negotiate` | `no-credential` |
+| Linux, MIT krb5 1.20.1 (Debian bookworm, Docker) | `kerberos` | `No credentials were supplied, … : No Kerberos credentials available (default cache: …)` | `no-credential` |
+| macOS arm64 (GitHub runner), GSS.framework (Heimdal) | `kerberos` | ` Miscellaneous failure (see text): get-pricipal open(<cache file>): No such file or directory` | `no-credential` |
+| macOS arm64 (GitHub runner), GSS.framework (Heimdal) | `spnego` | ` An unsupported mechanism was requested: unknown mech-code 0 for mech unknown` | `source-failed`, for now |
 
-On macOS the source matches `unknown mech-code 0 for mech unknown` and `get-pricipal open(`
-(Heimdal's spelling): the texts received in that condition, read as no ticket.
+On macOS the source matches `get-pricipal open(` (Heimdal's spelling), the text received in that
+condition. The SPNEGO text is not mapped yet: a problem of its own is pending in the contract.
 
 ## Whose identity
 

@@ -19,13 +19,9 @@ describe('mapGssFailure', () => {
       'no-credential',
     ],
     // Measured 2026-10-25, macOS arm64 GitHub runner, GSS.framework (Heimdal),
-    // no ticket cache: the raw texts received, kerberos and spnego.
+    // no ticket cache: the raw text received for kerberos.
     [
       ' Miscellaneous failure (see text): get-pricipal open(/var/folders/n6/hn37q6pj7sj_9dmqqc2113800000gn/T/gssapi-no-ticket-8N5DhB/cc): No such file or directory',
-      'no-credential',
-    ],
-    [
-      ' An unsupported mechanism was requested: unknown mech-code 0 for mech unknown',
       'no-credential',
     ],
     // MIT krb5, no ticket cache / no ticket
@@ -126,24 +122,24 @@ describe('mapGssFailure', () => {
     expect(mapGssFailure(thrown)).toBe('source-failed');
   });
 
-  it('reads the macOS SPNEGO text only with its measured tail', () => {
-    expect(
-      mapGssFailure(new Error(' An unsupported mechanism was requested: ')),
-    ).toBe('source-failed');
+  it('leaves the macOS SPNEGO no-ticket text source-failed for now', () => {
+    // Measured 2026-10-25, macOS arm64 GitHub runner, GSS.framework (Heimdal),
+    // no ticket cache, mechanism spnego. Pending the no-mechanism problem
+    // (interfaces-auth 8.0.1).
     expect(
       mapGssFailure(
         new Error(
-          'An unsupported mechanism was requested: unknown mech-code 5',
+          ' An unsupported mechanism was requested: unknown mech-code 0 for mech unknown',
         ),
       ),
     ).toBe('source-failed');
   });
 
-  it('lets a specific cause win over the macOS no-ticket texts', () => {
+  it('lets a specific cause win over the macOS no-ticket text', () => {
     expect(
       mapGssFailure(
         new Error(
-          'Server not found in Kerberos database: unknown mech-code 0 for mech unknown',
+          'Server not found in Kerberos database: get-pricipal open(/tmp/cc)',
         ),
       ),
     ).toBe('service-unknown');

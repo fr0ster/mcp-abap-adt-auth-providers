@@ -53,13 +53,10 @@ const PHRASES: ReadonlyArray<
       'The referenced credentials have expired', // To measure (stand)
       'No credentials are available in the security package', // SEC_E_NO_CREDENTIALS — To measure (Windows)
       // Measured 2026-10-25, macOS arm64 GitHub runner, GSS.framework
-      // (Heimdal), no ticket cache — the texts received in that condition:
-      // `kerberos` (KRB5CCNAME at an absent file; "pricipal" is Heimdal's own
-      // spelling) and `spnego` (the SPNEGO mechanism's answer with no
-      // Kerberos credential). Last in the table, so no more specific phrase
-      // is shadowed.
+      // (Heimdal), no ticket cache: the text received for `kerberos` with
+      // KRB5CCNAME at an absent file ("pricipal" is Heimdal's own spelling).
+      // Last in the table, so no more specific phrase is shadowed.
       'get-pricipal open(',
-      'unknown mech-code 0 for mech unknown',
     ],
   ],
 ];
