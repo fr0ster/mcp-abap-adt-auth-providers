@@ -3,7 +3,7 @@ name: Release
 on:
   push:
     tags:
-      - 'v*.*.*'  # Triggers on version tags like v1.1.0, v1.2.3, etc.
+      - 'auth-providers-v*.*.*'  # <package directory>-v<version>, as tools/publish-changed.js tags
 
 permissions:
   contents: write  # Required for creating releases
@@ -21,43 +21,48 @@ jobs:
         with:
           node-version: '22'
           cache: 'npm'
+          cache-dependency-path: '**/package-lock.json'
 
       - name: Tag matches package.json version
         run: |
-          TAG="${GITHUB_REF#refs/tags/v}"
-          VERSION="$(node -p "require('./package.json').version")"
+          TAG="${GITHUB_REF#refs/tags/auth-providers-v}"
+          VERSION="$(node -p "require('./packages/auth-providers/package.json').version")"
           if [ "$TAG" != "$VERSION" ]; then
-            echo "Tag v$TAG does not match package.json version $VERSION" >&2
+            echo "Tag auth-providers-v$TAG does not match package.json version $VERSION" >&2
             exit 1
           fi
 
       - name: Install dependencies
-        run: npm ci
+        working-directory: packages/auth-providers
+        run: npm ci --ignore-scripts
 
       - name: Build project
+        working-directory: packages/auth-providers
         run: npm run build
 
       - name: Shape check
+        working-directory: packages/auth-providers
         run: npm run test:shape
 
       - name: Create package
+        working-directory: packages/auth-providers
         run: npm pack
 
       - name: Get package filename
         id: package
         run: |
-          PACKAGE_FILE=$(ls mcp-abap-adt-auth-providers-*.tgz)
+          PACKAGE_FILE=$(cd packages/auth-providers && ls mcp-abap-adt-auth-providers-*.tgz)
           echo "filename=$PACKAGE_FILE" >> $GITHUB_OUTPUT
           echo "Package created: $PACKAGE_FILE"
 
       - name: Extract version from tag
         id: version
-        run: echo "version=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
+        run: echo "version=${GITHUB_REF#refs/tags/auth-providers-v}" >> $GITHUB_OUTPUT
 
       - name: Create Release
         uses: softprops/action-gh-release@v1
         with:
-          files: ${{ steps.package.outputs.filename }}
+          files: packages/auth-providers/${{ steps.package.outputs.filename }}
           generate_release_notes: true
           draft: false
           prerelease: false

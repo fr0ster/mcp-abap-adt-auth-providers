@@ -37,7 +37,7 @@ tmp/
 temp/
 
 # Test configuration (contains sensitive data)
-tests/test-config.yaml
+packages/auth-providers/tests/test-config.yaml
 
 # Git worktrees
 .worktrees/
@@ -46,7 +46,7 @@ tests/test-config.yaml
 .superpowers/
 
 # XSUAA trial checks: service-key secrets and the locally generated IdP key
-tests/xsuaa/.local/
+packages/auth-providers/tests/xsuaa/.local/
 
 # A service key once lived here; keep keys out of the repo
 mcp.json
@@ -58,14 +58,18 @@ mcp.json
 *.p12
 # Exceptions, file by file: throwaway stand fixtures, trusted by nothing but
 # the local provider stand (see their READMEs). Never add a real key here.
-!tests/stand/uaa/idp/idp.key
-!tests/stand/keycloak/tls/server.key
-!tests/stand/keycloak/tls/client-a.key
-!tests/stand/keycloak/tls/client-b.key
-!tests/stand/keycloak/tls/jwt.key
+!packages/auth-providers/tests/stand/uaa/idp/idp.key
+!packages/auth-providers/tests/stand/keycloak/tls/server.key
+!packages/auth-providers/tests/stand/keycloak/tls/client-a.key
+!packages/auth-providers/tests/stand/keycloak/tls/client-b.key
+!packages/auth-providers/tests/stand/keycloak/tls/jwt.key
 # Unit-test certificate fixtures: generated for the tests, trusted by nothing.
-!src/__tests__/fixtures/certificates/client.key
-!src/__tests__/fixtures/certificates/client-encrypted.key
-!src/__tests__/fixtures/certificates/other.key
-!src/__tests__/fixtures/certificates/client.pfx
-!src/__tests__/fixtures/certificates/client-chain.pfx
+!packages/auth-providers/src/__tests__/fixtures/certificates/client.key
+!packages/auth-providers/src/__tests__/fixtures/certificates/client-encrypted.key
+!packages/auth-providers/src/__tests__/fixtures/certificates/other.key
+!packages/auth-providers/src/__tests__/fixtures/certificates/client.pfx
+!packages/auth-providers/src/__tests__/fixtures/certificates/client-chain.pfx
+
+# A service key is a secret: never in the repository
+sk.json
+*service-key*.json
