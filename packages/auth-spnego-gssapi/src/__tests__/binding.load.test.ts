@@ -19,6 +19,7 @@ import { describe, expect, it } from '@jest/globals';
 
 const BUILT = process.env.KERBEROS_BINDING === 'built';
 const PROBLEMS = [
+  'mechanism-unsupported',
   'no-credential',
   'service-unknown',
   'kdc-unreachable',
@@ -111,12 +112,12 @@ describeBuilt(where, () => {
           KRB5CCNAME: `FILE:${path.join(dir, 'cc')}`,
         };
         const answer = askChild(mechanism, env);
-        // macOS spnego answers source-failed: pending the no-mechanism problem
-        // (interfaces-auth 8.0.1). Its text was measured 2026-10-25:
-        // " An unsupported mechanism was requested: unknown mech-code 0 for mech unknown".
+        // macOS (GSS.framework) answers spnego with no ticket by
+        // " An unsupported mechanism was requested: unknown mech-code 0 for
+        // mech unknown" (measured 2026-10-25).
         const expected =
           process.platform === 'darwin' && mechanism === 'spnego'
-            ? { ok: false, problem: 'source-failed' }
+            ? { ok: false, problem: 'mechanism-unsupported' }
             : { ok: false, problem: 'no-credential' };
         if (JSON.stringify(answer) !== JSON.stringify(expected))
           process.stderr.write(

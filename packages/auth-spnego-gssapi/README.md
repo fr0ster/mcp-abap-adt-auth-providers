@@ -99,6 +99,7 @@ not called — and again when it returns, the token then dropped; either answers
 | `service-unknown` | the KDC does not know the service principal |
 | `kdc-unreachable` | no KDC answered, or none is known for the realm |
 | `clock-skew` | the clock differs from the KDC's beyond its tolerance |
+| `mechanism-unsupported` | the mechanism asked for is not supported where it ran (measured: macOS's GSS.framework answering `spnego` with no ticket) |
 | `binding-unavailable` | `kerberos` could not be loaded (not built, or the system's Kerberos library missing) |
 | `source-failed` | anything else, an aborted signal included |
 
@@ -118,10 +119,10 @@ Received with no ticket (measured 2026-10-25), and what the source answers:
 | Linux, MIT krb5 1.20.1 (Debian bookworm, Docker) | `spnego` | `No credentials were supplied, … : SPNEGO cannot find mechanisms to negotiate` | `no-credential` |
 | Linux, MIT krb5 1.20.1 (Debian bookworm, Docker) | `kerberos` | `No credentials were supplied, … : No Kerberos credentials available (default cache: …)` | `no-credential` |
 | macOS arm64 (GitHub runner), GSS.framework (Heimdal) | `kerberos` | ` Miscellaneous failure (see text): get-pricipal open(<cache file>): No such file or directory` | `no-credential` |
-| macOS arm64 (GitHub runner), GSS.framework (Heimdal) | `spnego` | ` An unsupported mechanism was requested: unknown mech-code 0 for mech unknown` | `source-failed`, for now |
+| macOS arm64 (GitHub runner), GSS.framework (Heimdal) | `spnego` | ` An unsupported mechanism was requested: unknown mech-code 0 for mech unknown` | `mechanism-unsupported` |
 
-On macOS the source matches `get-pricipal open(` (Heimdal's spelling), the text received in that
-condition. The SPNEGO text is not mapped yet: a problem of its own is pending in the contract.
+On macOS the source matches the texts received in that condition: `get-pricipal open(` (Heimdal's
+spelling) as `no-credential`, and `unknown mech-code 0 for mech unknown` as `mechanism-unsupported`.
 
 ## Whose identity
 

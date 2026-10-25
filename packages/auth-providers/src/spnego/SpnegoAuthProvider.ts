@@ -134,6 +134,11 @@ function sourceRefusal(
         problem: 'source-failed',
         operation,
       });
+    case 'mechanism-unsupported':
+      return authError.spnego<'mechanism-unsupported'>({
+        problem: 'mechanism-unsupported',
+        operation,
+      });
   }
 }
 

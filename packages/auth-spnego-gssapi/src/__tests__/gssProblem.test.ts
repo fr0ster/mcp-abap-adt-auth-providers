@@ -122,16 +122,21 @@ describe('mapGssFailure', () => {
     expect(mapGssFailure(thrown)).toBe('source-failed');
   });
 
-  it('leaves the macOS SPNEGO no-ticket text source-failed for now', () => {
+  it('maps the macOS SPNEGO no-ticket text to mechanism-unsupported', () => {
     // Measured 2026-10-25, macOS arm64 GitHub runner, GSS.framework (Heimdal),
-    // no ticket cache, mechanism spnego. Pending the no-mechanism problem
-    // (interfaces-auth 8.0.1).
+    // no ticket cache, mechanism spnego — the text received.
     expect(
       mapGssFailure(
         new Error(
           ' An unsupported mechanism was requested: unknown mech-code 0 for mech unknown',
         ),
       ),
+    ).toBe('mechanism-unsupported');
+  });
+
+  it('reads the macOS SPNEGO text only with its measured tail', () => {
+    expect(
+      mapGssFailure(new Error(' An unsupported mechanism was requested: ')),
     ).toBe('source-failed');
   });
 

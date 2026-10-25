@@ -421,6 +421,32 @@ describe('authorize()', () => {
       expect(written).toEqual([]);
     },
   );
+  it.each(['prepare', 'authorize'] as const)(
+    '%s: a source answering mechanism-unsupported is spnego mechanism-unsupported with the moment’s operation',
+    async (moment) => {
+      const { source } = scriptedSource(async () => ({
+        ok: false,
+        problem: 'mechanism-unsupported',
+      }));
+      const { target, written } = recordingRequest();
+      const p = provider(source);
+      const outcome =
+        moment === 'prepare' ? await p.prepare() : await p.authorize(target);
+      const error = mintedRefusal(outcome);
+      expect(error).toMatchObject({
+        kind: 'spnego',
+        variant: 'mechanism-unsupported',
+        facts: {
+          problem: 'mechanism-unsupported',
+          operation:
+            moment === 'prepare'
+              ? 'obtaining-negotiate-token'
+              : 'presenting-negotiate-token',
+        },
+      });
+      expect(written).toEqual([]);
+    },
+  );
   it('a target whose header throws is Oops, its text nowhere', async () => {
     const { source } = freshSource();
     const { target } = recordingRequest({ throws: true });

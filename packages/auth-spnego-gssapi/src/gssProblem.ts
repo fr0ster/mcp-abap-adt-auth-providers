@@ -43,6 +43,14 @@ const PHRASES: ReadonlyArray<
     ],
   ],
   [
+    'mechanism-unsupported',
+    [
+      // Measured 2026-10-25, macOS arm64 GitHub runner, GSS.framework
+      // (Heimdal), no ticket cache — the text received for `spnego`.
+      'unknown mech-code 0 for mech unknown',
+    ],
+  ],
+  [
     'no-credential',
     [
       'No Kerberos credentials available', // MIT minor, no ticket cache — Measured 2026-10-25 (MIT 1.20.1, Docker)
