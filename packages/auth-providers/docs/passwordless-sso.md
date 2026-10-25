@@ -12,10 +12,15 @@ its source, with the same tags as [btp-setup.md](btp-setup.md):
 - **SAP** — SAP Help or other official SAP documentation, linked.
 - **Community** — an SAP Community post, linked.
 - **Inference** — reasoning from the facts above; no source states it.
+- **Measured** — run here; the date and the setup say where.
+- **Pending** — a check written or planned, not yet run.
 
-**SNC over RFC is now Measured and Built** — `SncLogonProvider`, see
-[Options for this package](#options-for-this-package). Everything else on
-this page has not been tried against a live system.
+**SNC over RFC is Measured and Built** — `SncLogonProvider`, see
+[Options for this package](#options-for-this-package). **SPNego is Built, and
+its protocol is Measured on a Kerberos stand** (2026-10-25: an MIT KDC and an
+Apache `mod_auth_gssapi`, not an ABAP system) — `SpnegoAuthProvider`; against
+an ABAP system it is Inference until the second stage. Everything else on this
+page has not been tried against a live system.
 
 ## Contents
 
@@ -154,7 +159,7 @@ not a way to log on by itself (Inference).
 | SNC through Secure Login, as in SAP GUI and Eclipse ADT | Yes (SAP) | No, browser logon (SAP) | No, browser logon (SAP) | **No**: RFC and DIAG only |
 | X.509 client certificate at ICF | Yes (SAP) | Not configurable for business users (Inference) | No (Inference) | **Yes** when the key is reachable (Inference) |
 | Short-lived Secure Login certificate over TLS | Yes, with trust and `CERTRULE` (Inference) | — | — | Only when the key can be reached (Inference) |
-| SPNego at ICF | Yes, licence required (SAP) | No (Inference) | No (Inference) | **Yes** with a Kerberos ticket on the corporate network (Inference) |
+| SPNego at ICF | Yes, licence required (SAP) | No (Inference) | No (Inference) | **Yes** with a Kerberos ticket on the corporate network: the token and the HTTP exchange Measured on a Kerberos stand (2026-10-25), against an ABAP system Inference |
 | IAS certificate or Kerberos → XSUAA | Where the system trusts IAS over SAML (SAP) | Yes, in the browser (SAP) | Yes, in the browser (SAP) | **Yes, today**, through the browser providers |
 
 ## From Node.js
@@ -170,9 +175,12 @@ not a way to log on by itself (Inference).
   — fragile and platform-specific) or a local helper that performs the TLS
   handshake (Inference).
 - **Kerberos**: the `kerberos` npm package wraps GSSAPI on Unix and SSPI on
-  Windows and can produce the `Negotiate` token, given a ticket (a domain
-  logon, or `kinit`) and a registered `HTTP/<fqdn>` service principal
-  (Inference; untested).
+  Windows and produces the `Negotiate` token, given a ticket (a domain
+  logon, or `kinit`) and a registered `HTTP/<fqdn>` service principal. Built as
+  `SpnegoAuthProvider` with `@mcp-abap-adt/auth-spnego-gssapi`; the token and
+  the HTTP exchange are Measured on a Kerberos stand (2026-10-25, Linux, MIT
+  krb5 1.20.1 and Apache `mod_auth_gssapi`; see below). Windows (SSPI), macOS
+  with a real ticket and an ABAP system are the second stage (Pending).
 - **RFC with SNC**: `@mcp-abap-adt/sap-rfc-lite` is what `@mcp-abap-adt/connection`'s
   `RfcTransport` uses (`node-rfc`, the earlier option, was archived by SAP on
   2026-05-28 with no successor named —
@@ -205,8 +213,8 @@ SAP does not describe these checks):
 
 ## Options for this package
 
-SNC over RFC is decided and built (below). For the HTTP mechanisms, nothing
-is decided yet; each would follow the package's rule that anything pluggable
+SNC over RFC and SPNego over HTTP are decided and built (below). For the other
+HTTP mechanisms, nothing is decided yet; each would follow the package's rule that anything pluggable
 is a collaborator the consumer injects, with a named factory as the usual
 recipe and no implicit default (Inference, design).
 
@@ -280,19 +288,53 @@ recipe and no implicit default (Inference, design).
   built from the documented install path but has not been measured live.
 - **A — documentation only.** Describe passwordless login through IAS for
   BTP and S/4HANA Cloud. No code, and it covers the cloud today.
-- **B — `SpnegoProvider`**, on-premise: sends `Authorization: Negotiate`,
-  follows the `401 WWW-Authenticate: Negotiate` round trip, and returns the
-  session cookies, as `Saml2PureProvider` does. The token source is a strategy;
-  the default uses `kerberos` as an optional peer dependency. Refuses
-  `http://`. A KDC in Docker could prove the wire contract, as the provider
-  stand proves OAuth.
+- **Built — SPNego over HTTP: `SpnegoAuthProvider`** (7.0.0). Sends
+  `Authorization: Negotiate <token>` on every request; the token comes from an
+  `INegotiateTokenSource` the consumer composes — `gssapiTokenSource` of
+  `@mcp-abap-adt/auth-spnego-gssapi` over the system's GSS-API, or its own. A
+  fresh token for every request (a Kerberos authenticator is single-use against
+  a service that checks for replay); NTLM, raw or inside a SPNEGO token, is
+  refused; a `401` is `credential-refused` `kerberos-ticket`. It does not follow
+  the `401 WWW-Authenticate: Negotiate` round trip, does not return session
+  cookies and does not refuse `http://` — it sees no URL; the connection that
+  carries it owns the transport, and SPNego "does not provide transport layer
+  security" (SAP), so HTTPS is the consumer's. Over RFC it writes nothing at
+  logon. See [the README](../README.md#spnego-kerberos-over-http).
+
+  **Measured on the Kerberos stand, 2026-10-25** (protocol conformance, not an
+  ABAP system): an MIT krb5 1.20.1 KDC (realm `STAND.TEST`) and Apache with
+  `mod_auth_gssapi` in Docker, `kerberos` 7.0.0 on Debian bookworm.
+  - *Both mechanisms accepted* (Measured): a ticket for `alice` gets `200` and
+    `X-Remote-User: alice` with `mechanism: 'spnego'` and with `'kerberos'`
+    (Apache with `GssapiAllowedMech krb5`).
+  - *A fresh token per request* (Measured): two requests, two different tokens,
+    both `200`; the first token sent again is refused `401` by the replay cache.
+  - *Refusals* (Measured): no ticket is `no-credential` at `prepare()` with no
+    request sent; an unknown service is `service-unknown`; a ticket cache with a
+    TGT and no KDC answering is `kdc-unreachable`; a ticket for a service whose
+    key changed after the keytab was exported is a `401`, `credential-refused`
+    `kerberos-ticket`; a configured `401` with a non-empty `Negotiate`
+    continuation is the same; no part of any token is in a log line, outcome or
+    refusal.
+  - *No ticket on macOS* (Measured, GitHub arm64 runner, GSS.framework): the
+    Kerberos mechanism answers `no-credential`; `spnego` answers
+    `mechanism-unsupported`.
+  - *Not run* (Pending): clock skew (one clock on the stand); an expired
+    ticket; a real ticket on macOS and Windows (SSPI); Heimdal's other texts;
+    NTLM inside SPNEGO from a Windows Negotiate fallback (Inference — built
+    fixtures only); **any ABAP system**: whether `/sap/bc/adt/*` accepts the
+    `Negotiate` logon on a standard system, with the licence, `spnego/enable`,
+    the keytab and the `SU01` mapping, is Inference until the second stage.
+
+  Session cookies are not part of it: whether a system hands out a session
+  after the `Negotiate` logon, and what the consumer does with it, is open.
 - **C — `X509CertificateProvider`**, on-premise: one request with the client
   certificate, returning the session cookies. The certificate source is a
   strategy: PEM or PFX from a file by default, a PKCS#11 or system-store
   source supplied by the consumer. Never logs the key, the certificate or the
   passphrase. Holding the key is the hard part.
 
-Session cookies declare no lifetime, so B and C need an expiry policy — a
+Session cookies declare no lifetime, so C (and a cookie-returning variant of SPNego, should the second stage want one) needs an expiry policy — a
 configured TTL or a probe request; refreshing means logging on again, which
 needs no user — as a token provider, under the renewal strategy every token
 provider takes since 6.0.0 (with no refresh grant, `refreshThenLogin()`;

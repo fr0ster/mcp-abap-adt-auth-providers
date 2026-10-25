@@ -44,6 +44,7 @@ function rejectedTable(): string {
       ['certificate', 'client-certificate'],
       ['SAML cookies', 'saml-session'],
       ['fixed token', 'token'],
+      ['SPNego', 'kerberos-ticket'],
     ] as const
   )
     .map(
@@ -74,7 +75,7 @@ function rejectedTable(): string {
     unknown: { rejection: 'neither a status nor a known key', facts: {} },
   };
   const lines = [
-    '| The rejection | Kind | Basic, certificate, SAML cookies, fixed token | Token providers, `TokenAuthProvider.from` |',
+    '| The rejection | Kind | Basic, certificate, SAML cookies, fixed token, SPNego | Token providers, `TokenAuthProvider.from` |',
     '|---|---|---|---|',
     `| \`401\`, \`RFC_LOGON_FAILURE\` | \`credential-refused\` | their own refusal: ${markdownCell(own)} | one renewal; Ok only if the credential changed |`,
   ];
@@ -304,11 +305,11 @@ const CONFIGURATION_ROWS: Record<
   readonly [string, readonly string[] | null]
 > = {
   'required-fields-missing': [
-    'a required field or collaborator is missing: every token provider (and `inBrowser`, `fromTerminal`, `toConsole`, `SsoProviderFactory.create`) without a usable `renewal`, `ClientCredentialsProvider` and `AuthorizationCodeProvider` without `uaaUrl`, `clientId`, or `clientSecret` and no `clientAuthentication`, a SAML provider without `assertionValidator`, a shipped validator without `replayStore`; an authorization strategy without a part or the redirect it needs — `manualPasteStrategy`, `manualSamlResponseStrategy` and `externalCodeStrategy` without `redirectUri`, a redirect protocol over a transport that advertises none (`redirectUri`), `composeAuthorization` without `presentation`, `transport`, `protocol` or `endpoint`, `openInBrowser` without `browser` (`presentation`), `consumerPresentation` without `show`, `consumerAnswer` without `receive`, `consumerHandoff` without `provide`; also an `SncLogonProvider` `myName` that is not a string (a known wording limit)',
+    'a required field or collaborator is missing: every token provider (and `inBrowser`, `fromTerminal`, `toConsole`, `SsoProviderFactory.create`) without a usable `renewal`, `ClientCredentialsProvider` and `AuthorizationCodeProvider` without `uaaUrl`, `clientId`, or `clientSecret` and no `clientAuthentication`, a SAML provider without `assertionValidator`, `SpnegoAuthProvider` without `servicePrincipal` or a `tokenSource` with a `token` function, a shipped validator without `replayStore`; an authorization strategy without a part or the redirect it needs — `manualPasteStrategy`, `manualSamlResponseStrategy` and `externalCodeStrategy` without `redirectUri`, a redirect protocol over a transport that advertises none (`redirectUri`), `composeAuthorization` without `presentation`, `transport`, `protocol` or `endpoint`, `openInBrowser` without `browser` (`presentation`), `consumerPresentation` without `show`, `consumerAnswer` without `receive`, `consumerHandoff` without `provide`; also an `SncLogonProvider` `myName` that is not a string (a known wording limit)',
     null,
   ],
   'invalid-value': [
-    "a configured value that cannot be used: an `authorizationUrl` that does not parse (`AuthorizationCodeProvider` at construction and at login); a `persistence` that is not an object with a callable `report` (every token provider); `refreshStatePersistence` with `onWriteFailure` missing or not `'continue'` / `'fail'`, or a `write` that is not a function (each named); a part of an authorization strategy that cannot be used: an `endpoint` that URL parsing would change or that is `/` or `/submit` (`endpoint`), a `redirectUri` that is not an absolute `http(s)` URL (`redirectUri`), a `browser` without an `open` function — a browser name included (`presentation`), a part without its methods (`presentation`, `transport`, `protocol`), a `remoteHint` that is not a function (`transport`), a `read` that is not a function (`read`), an `onFailure` that is not a function (`show`), a terminal with a protocol that has no paste words (`protocol`); an authorization URL a protocol cannot read a `state` from — none, empty or repeated (`authorizationUrl`)",
+    "a configured value that cannot be used: an `authorizationUrl` that does not parse (`AuthorizationCodeProvider` at construction and at login); a `persistence` that is not an object with a callable `report` (every token provider); a `servicePrincipal` that is not `service@host` (`SpnegoAuthProvider`: the Kerberos form `HTTP/host@REALM`, whitespace, non-ASCII or an empty side); `refreshStatePersistence` with `onWriteFailure` missing or not `'continue'` / `'fail'`, or a `write` that is not a function (each named); a part of an authorization strategy that cannot be used: an `endpoint` that URL parsing would change or that is `/` or `/submit` (`endpoint`), a `redirectUri` that is not an absolute `http(s)` URL (`redirectUri`), a `browser` without an `open` function — a browser name included (`presentation`), a part without its methods (`presentation`, `transport`, `protocol`), a `remoteHint` that is not a function (`transport`), a `read` that is not a function (`read`), an `onFailure` that is not a function (`show`), a terminal with a protocol that has no paste words (`protocol`); an authorization URL a protocol cannot read a `state` from — none, empty or repeated (`authorizationUrl`)",
     null,
   ],
   'client-secret-beside-client-authentication': [
@@ -441,15 +442,77 @@ function configurationTable(): string {
   return lines.join('\n');
 }
 
+/**
+ * "SPNego": each problem of `spnego`, who finds it, and its words and hint
+ * for the operation of the moment (`obtaining-negotiate-token` at
+ * `prepare()`, `presenting-negotiate-token` at `authorize()`; the words
+ * name the operation).
+ */
+function spnegoTable(): string {
+  const lines = [
+    '| `problem` | Found by | When | Reason | Hint |',
+    '|---|---|---|---|---|',
+  ];
+  for (const [problem, [by, when]] of rowsFor(
+    contract.SPNEGO_PROBLEMS,
+    {
+      'no-credential': ['source', 'no ticket, or an expired one'],
+      'service-unknown': [
+        'source',
+        'the KDC does not know the service principal',
+      ],
+      'kdc-unreachable': [
+        'source',
+        'no KDC answered, or none is known for the realm',
+      ],
+      'clock-skew': [
+        'source',
+        "the clock differs from the KDC's beyond its tolerance",
+      ],
+      'binding-unavailable': [
+        'source',
+        "the source's native library could not be loaded",
+      ],
+      'mechanism-unsupported': [
+        'source',
+        'the mechanism asked for is not supported where the source ran',
+      ],
+      'source-failed': [
+        'source',
+        'any other failure the source recognises as its own',
+      ],
+      'ntlm-token': [
+        'provider',
+        'the token is NTLM, raw or inside a SPNEGO token',
+      ],
+      'token-unreadable': [
+        'provider',
+        'the token is empty, not base64, or neither Kerberos nor NTLM',
+      ],
+    } as Record<string, readonly [string, string]>,
+    'spnego',
+  )) {
+    const words = renderFacts('spnego', {
+      problem,
+      operation: 'obtaining-negotiate-token',
+    });
+    lines.push(
+      `| \`${problem}\` | ${by} | ${when} | ${markdownCell(words.reason)} | ${markdownCell(words.hint ?? '')} |`,
+    );
+  }
+  return lines.join('\n');
+}
+
 const TABLES: readonly (readonly [string, () => string])[] = [
   ['rejected', rejectedTable],
   ['refusals', refusalsTable],
   ['saml', samlTable],
   ['saml-candidates', samlCandidatesTable],
   ['configuration', configurationTable],
+  ['spnego', spnegoTable],
 ];
 
-/** The README's five refusal tables, each as its generated region. */
+/** The README's six refusal tables, each as its generated region. */
 export function refusalTableRegions(): GeneratedRegion[] {
   return TABLES.map(([name, build]) => ({
     open: `<!-- generated:refusal-table ${name} -->`,

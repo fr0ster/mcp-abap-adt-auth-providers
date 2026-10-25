@@ -151,6 +151,13 @@ and always uses the logon credentials, so the option would select an identity on
 and silently not on Windows. A consumer needing another identity supplies its own
 `INegotiateTokenSource`.
 
+## Status of the claims
+
+- **Measured** (2026-10-25): a token accepted by Apache `mod_auth_gssapi` for both mechanisms,
+  `service-unknown` and `kdc-unreachable` against a real MIT KDC, no ticket on MIT and on macOS.
+- **Pending**: a real ticket on macOS and Windows (SSPI), an expired ticket, clock skew,
+  Heimdal's and SSPI's other error texts, and any ABAP system — the second stage.
+
 ## License
 
 LGPL-3.0-only — see `LICENSE` and `COPYING`.

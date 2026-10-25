@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [7.0.0] - 2026-10-25
+
+A major because a new error kind, `spnego`, exists: a consumer that switches exhaustively on
+`kind` must handle it. Nothing of 6.x is changed otherwise.
+
+### Migrating from 6.x
+- Add the `spnego` case to every exhaustive `switch (error.kind)` / `matchKind` /
+  `unreachableKind`. A consumer that never composes `SpnegoAuthProvider` never receives it, but
+  its switch must still compile.
+- Install `@mcp-abap-adt/interfaces-auth` `^8.0.1` and `@mcp-abap-adt/auth-errors` `^3.0.1`
+  (what this package now depends on) and keep one copy of each: `npm ls
+  @mcp-abap-adt/interfaces-auth` and `npm ls @mcp-abap-adt/auth-errors` should each show one
+  deduplicated version. See the README's "Migrating to 7.0.0".
+
+### Changed
+- Dependencies: `@mcp-abap-adt/interfaces-auth` `^8.0.1` (was `^7.5.0`),
+  `@mcp-abap-adt/auth-errors` `^3.0.1` (was `^2.2.0`), `@mcp-abap-adt/interfaces-auth-sap`
+  `^3.5.0` (was `^3.3.0`). The 6.x contracts of every provider are unchanged.
+- README: the Overview and Error Handling name interfaces-auth 8; the new "SPNego (Kerberos) over
+  HTTP" section and a rendered `spnego` refusal table (`npm run docs:tables`), the `spnego` row in
+  the kinds table and in "What `rejected()` answers"; the Dependencies list at the ranges above.
+  `docs/passwordless-sso.md`: SPNego is Built, its protocol Measured on the Kerberos stand
+  (2026-10-25), against an ABAP system still Inference.
+
 ### Added
 - `SpnegoAuthProvider`: SPNego (Kerberos) over HTTP from the consumer's `INegotiateTokenSource`,
   a fresh `Authorization: Negotiate` token per request; NTLM refused. A source's problem —

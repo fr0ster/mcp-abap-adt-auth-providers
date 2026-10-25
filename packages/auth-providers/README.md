@@ -4,8 +4,8 @@
 Every implementation of `IAuthProvider` for SAP ABAP ADT: the credential a
 process delegates to, and the token providers behind it.
 
-Token providers, the Basic/Certificate/SAML/Token credentials and passwordless
-SNC logon are each an `IAuthProvider` the process takes as it is — whether it
+Token providers, the Basic/Certificate/SAML/Token credentials, passwordless
+SNC logon and SPNego (Kerberos) over HTTP are each an `IAuthProvider` the process takes as it is — whether it
 is handed over directly to a connection, or through
 `@mcp-abap-adt/auth-broker` for the stateful token API
 (`getTokens()`/`refreshTokens()`).
@@ -703,6 +703,104 @@ that throws is logged ("an SNC product probe failed: the probe failed (unknown
 error)") and names nothing; "SNC library not found: `<reason>`" is logged with
 the paths only as the line's `diagnostics` field.
 
+## SPNego (Kerberos) over HTTP
+
+`SpnegoAuthProvider` sends `Authorization: Negotiate <token>` on every request,
+the token made afresh by a source the consumer composes. It is for **HTTP**: an
+ADT call to an on-premise system that has SPNego enabled (see
+[docs/passwordless-sso.md](docs/passwordless-sso.md)). Over RFC the system
+refuses a logon with no user, so `establish()` writes nothing and answers Ok
+(rule 3) — hand this provider to a connection that speaks HTTP.
+
+```typescript
+import { SpnegoAuthProvider } from '@mcp-abap-adt/auth-providers';
+import { gssapiTokenSource } from '@mcp-abap-adt/auth-spnego-gssapi';
+
+const provider = new SpnegoAuthProvider({
+  servicePrincipal: 'HTTP@sap.example.com', // service@host, the GSS host-based name
+  tokenSource: gssapiTokenSource({ mechanism: 'spnego' }),
+});
+```
+
+This package has no native code, no install script and **no dependency on
+`@mcp-abap-adt/auth-spnego-gssapi`**: the consumer composes the two, and may
+give a source of its own instead (`INegotiateTokenSource` of
+`@mcp-abap-adt/interfaces-auth` 8). No factory assembles the provider with the
+system source, and `tokenSource` has no default (rule 7).
+
+| Option | |
+|---|---|
+| `servicePrincipal` | required: the GSS host-based name `service@host`, nothing else — exactly one `@`, the service an ASCII letter then letters, digits or `-`, the host ASCII labels joined by single dots. `HTTP/host@REALM` (the Kerberos form), whitespace and non-ASCII are `configuration` `invalid-value` naming `servicePrincipal`, never the value, thrown at construction. How the source turns it into its library's form is the source's |
+| `tokenSource` | required: an object with a `token(servicePrincipal, { signal })` function, else `required-fields-missing` |
+| `logger?` | an `ILogger`; a line carries fixed words and `logFields` of a refusal, never a token or the principal |
+| `signal?` | the first party attached (`attach(signal)` adds more), as `SncLogonProvider`: the source is handed a signal that aborts when every attached party has aborted; with none live a moment waits for the source. No timeout of this package's choosing |
+
+The four moments:
+
+| Moment | Does |
+|---|---|
+| `prepare()` | asks the source for one token, checks it and **drops** it: a missing ticket, an unknown principal or an NTLM fallback fails the connect before any request. Nothing is kept |
+| `establish()` | writes nothing, answers Ok |
+| `authorize()` | asks the source for a **new** token, checks it, writes `Authorization: Negotiate <token>` through the target. Never the `prepare()` token or an earlier request's: a Kerberos authenticator is single-use against a service that checks for replay (measured: the replay cache refuses a token sent twice) |
+| `rejected()` | a `401` is `credential-refused` `kerberos-ticket`, with or without a `WWW-Authenticate: Negotiate <token>` continuation; anything else `system-refused` (rule 5). The provider does not follow a continuation or retry: the next `authorize()` brings a fresh token, retrying is the consumer's |
+
+**The source answers facts, not errors.** `INegotiateTokenSource.token()`
+resolves `{ ok: true, token }` (base64, as it goes after `Negotiate `) or
+`{ ok: false, problem }` with a problem of a closed list; the provider mints the
+refusal, so no text a source holds can reach one. A source that throws, answers
+a foreign thenable or anything of another shape is `unknown` with the moment's
+operation. A source's token is **checked before it is written**: NTLM — raw, or
+inside a SPNEGO token, as Windows' Negotiate falls back when Kerberos fails —
+is `ntlm-token`, and a token that is neither Kerberos nor NTLM, or malformed
+DER, is `token-unreadable`; no header is written for either. A source never
+caches a token (the contract), and a late answer after every party aborted is
+dropped and the moment ends `aborted`.
+
+**What it refuses** — kind `spnego`, `facts.problem` and `facts.operation`
+(`obtaining-negotiate-token` at `prepare()`, `presenting-negotiate-token` at
+`authorize()`), no diagnostics. The words are the ones for
+`obtaining-negotiate-token`; at `authorize()` the operation phrase differs:
+
+<!-- generated:refusal-table spnego -->
+| `problem` | Found by | When | Reason | Hint |
+|---|---|---|---|---|
+| `no-credential` | source | no ticket, or an expired one | obtaining the Negotiate token failed: there is no Kerberos ticket, or it has expired | obtain a ticket: kinit, or the domain logon |
+| `service-unknown` | source | the KDC does not know the service principal | obtaining the Negotiate token failed: the Kerberos server does not know the service principal | check servicePrincipal against the service's registered principal |
+| `kdc-unreachable` | source | no KDC answered, or none is known for the realm | obtaining the Negotiate token failed: no Kerberos server (KDC) answered | check the Kerberos configuration's realm and KDC |
+| `clock-skew` | source | the clock differs from the KDC's beyond its tolerance | obtaining the Negotiate token failed: this machine's clock differs from the Kerberos server's beyond its tolerance | check the machine's time |
+| `binding-unavailable` | source | the source's native library could not be loaded | obtaining the Negotiate token failed: the library of the system token source could not be loaded | install the system source's native part |
+| `source-failed` | source | any other failure the source recognises as its own | obtaining the Negotiate token failed: the token source failed |  |
+| `mechanism-unsupported` | source | the mechanism asked for is not supported where the source ran | obtaining the Negotiate token failed: the requested mechanism is not supported | check that the system's GSS library supports the mechanism the source was configured with |
+| `ntlm-token` | provider | the token is NTLM, raw or inside a SPNEGO token | obtaining the Negotiate token failed: the token is an NTLM token, not a Kerberos one | the service principal is not known to the domain; NTLM is not used |
+| `token-unreadable` | provider | the token is empty, not base64, or neither Kerberos nor NTLM | obtaining the Negotiate token failed: the token is empty, not base64, or neither a Kerberos nor an NTLM token |  |
+<!-- /generated:refusal-table spnego -->
+
+A `401` is the `credential-refused` row of
+[What `rejected()` answers](#what-rejected-answers).
+
+Measured on the Kerberos stand (2026-10-25, MIT krb5 1.20.1 and Apache
+`mod_auth_gssapi`, [Testing](#spnego-against-a-real-kdc-the-kerberos-stand)):
+both mechanisms accepted, a fresh token per request, and each refusal above
+that a KDC can produce except `clock-skew`. Against an ABAP system it is
+Inference until the second stage: [docs/passwordless-sso.md](docs/passwordless-sso.md)
+keeps the tags.
+
+### Migrating to 7.0.0
+
+7.0.0 is a major because a new error kind, `spnego`, exists, and a consumer
+that switches exhaustively on `kind` must handle it. What a consumer on 6.x must do:
+
+- **Add the `spnego` case** to every exhaustive `switch (error.kind)` /
+  `matchKind` / `unreachableKind` — the compiler says where, once the
+  contract packages below are installed. A consumer that never composes
+  `SpnegoAuthProvider` never receives it, but its switch must still compile.
+- **Install the contract it is read with:** `@mcp-abap-adt/interfaces-auth`
+  `^8.0.1` and `@mcp-abap-adt/auth-errors` `^3.0.1` (this package's ranges;
+  `@mcp-abap-adt/interfaces-auth-sap` is `^3.5.0`). Keep one copy of each:
+  `npm ls @mcp-abap-adt/interfaces-auth` and `npm ls @mcp-abap-adt/auth-errors`
+  should show one deduplicated version.
+- Nothing else changes: no provider, option or refusal of 6.x is changed.
+
 ## Installation
 
 ```bash
@@ -712,7 +810,7 @@ npm install @mcp-abap-adt/auth-providers
 ## Overview
 
 Every provider here is an `IAuthProvider` (`@mcp-abap-adt/interfaces-auth`
-7) — `prepare()`, `establish()`, `authorize()`, `rejected()`, each answering
+8) — `prepare()`, `establish()`, `authorize()`, `rejected()`, each answering
 an `AuthOutcome` and never throwing — handed to the process as it is. An
 `AuthOutcome` is `{ ok: true }` or `{ ok: false, refusal }`, the refusal an
 `IAuthProviderError` minted by `@mcp-abap-adt/auth-errors`: its `kind` and
@@ -745,9 +843,9 @@ refusal, so nothing is renewed; a strategy of your own may renew anyway (see
 [Renewal strategy](#renewal-strategy)):
 
 <!-- generated:refusal-table rejected -->
-| The rejection | Kind | Basic, certificate, SAML cookies, fixed token | Token providers, `TokenAuthProvider.from` |
+| The rejection | Kind | Basic, certificate, SAML cookies, fixed token, SPNego | Token providers, `TokenAuthProvider.from` |
 |---|---|---|---|
-| `401`, `RFC_LOGON_FAILURE` | `credential-refused` | their own refusal: Basic "the user or password was refused"; certificate "the client certificate was refused"; SAML cookies "the SAML session was refused or has expired"; fixed token "the token was refused" | one renewal; Ok only if the credential changed |
+| `401`, `RFC_LOGON_FAILURE` | `credential-refused` | their own refusal: Basic "the user or password was refused"; certificate "the client certificate was refused"; SAML cookies "the SAML session was refused or has expired"; fixed token "the token was refused"; SPNego "the Kerberos ticket was refused" | one renewal; Ok only if the credential changed |
 | `403` | `system-refused` `not-authorized` | "the credential was accepted, but the user is not authorized (403)" — "check the user's authorizations in the system" | the same, no renewal |
 | `3xx`, e.g. `302` | `system-refused` `redirected` | "the system redirected instead of accepting the credential (302)" — "the service may require another logon procedure (single sign-on, an identity provider)" | the same, no renewal |
 | `5xx`, e.g. `503` | `system-refused` `system-failed` | "the system failed (503), not the credential" — "try again later" | the same, no renewal |
@@ -3605,11 +3703,11 @@ Called by a provider, the same throw is classified and nothing of it
 crosses.
 
 An error is a frozen object: `kind` (one of a closed list), `variant` (the
-rule, problem or case of `saml-assertion`, `snc` and `configuration`),
+rule, problem or case of `saml-assertion`, `snc`, `spnego` and `configuration`),
 `facts` (values from allowlists only — a status, a registered OAuth code, a
 field name, a rule id — never free text), `reason` and `hint?` (the default
-words, rendered from `kind` and `facts`), and `diagnostics?` (for the three
-variant kinds only: a value that helps a person — a library path, a SAML
+words, rendered from `kind` and `facts`), and `diagnostics?` (for the variant
+kinds `saml-assertion`, `snc` and `configuration` only: a value that helps a person — a library path, a SAML
 issuer, two URIs — admitted by its shape, never in the words). Branch on
 `kind` and `facts`; show `reason` / `hint`; print `diagnostics` only where a
 person reads them.
@@ -3666,6 +3764,7 @@ README, generated from what the package renders):
 | `tls` | a TLS failure on the allowlist — `facts.code` ([Refusals](#refusals)) |
 | `interactive-login` | every end of a login that is not a result — `facts.outcome`: `aborted`, `port-in-use`, `identity-provider-refused` (with a registered `oauthError`), `busy`, `disposed`, `callback-closed`, `no-terminal`, `no-input`, `unreadable-input`, `input-abandoned`, `device-code-not-shown`, `failed` |
 | `saml-assertion` | an assertion refused — `facts.rule`, `facts.check` ([Refusal messages](#refusal-messages)) |
+| `spnego` | SPNego: a token source's problem, or a token that is NTLM or unreadable — `facts.problem`, `facts.operation` ([SPNego over HTTP](#spnego-kerberos-over-http)) |
 | `snc` | SNC: no credential, the library refused or not found, the logon refused ([Passwordless RFC logon](#passwordless-rfc-logon-snc)) |
 | `credential-refused`, `system-refused` | what `rejected()` read in the rejection ([What `rejected()` answers](#what-rejected-answers)); `credential-refused` `refresh-token` is a refused refresh — with `refreshThenLogin()` a login follows |
 | `renewal-unchanged` | a renewal returned the credential that was refused |
@@ -3714,8 +3813,8 @@ the field, although a value was given.
 <!-- generated:refusal-table configuration -->
 | Thrown | `case` | `fields` | Reason | Hint |
 |---|---|---|---|---|
-| a required field or collaborator is missing: every token provider (and `inBrowser`, `fromTerminal`, `toConsole`, `SsoProviderFactory.create`) without a usable `renewal`, `ClientCredentialsProvider` and `AuthorizationCodeProvider` without `uaaUrl`, `clientId`, or `clientSecret` and no `clientAuthentication`, a SAML provider without `assertionValidator`, a shipped validator without `replayStore`; an authorization strategy without a part or the redirect it needs — `manualPasteStrategy`, `manualSamlResponseStrategy` and `externalCodeStrategy` without `redirectUri`, a redirect protocol over a transport that advertises none (`redirectUri`), `composeAuthorization` without `presentation`, `transport`, `protocol` or `endpoint`, `openInBrowser` without `browser` (`presentation`), `consumerPresentation` without `show`, `consumerAnswer` without `receive`, `consumerHandoff` without `provide`; also an `SncLogonProvider` `myName` that is not a string (a known wording limit) | `required-fields-missing` | `<fields>` | required configuration is missing: `<fields>` | check the provider configuration |
-| a configured value that cannot be used: an `authorizationUrl` that does not parse (`AuthorizationCodeProvider` at construction and at login); a `persistence` that is not an object with a callable `report` (every token provider); `refreshStatePersistence` with `onWriteFailure` missing or not `'continue'` / `'fail'`, or a `write` that is not a function (each named); a part of an authorization strategy that cannot be used: an `endpoint` that URL parsing would change or that is `/` or `/submit` (`endpoint`), a `redirectUri` that is not an absolute `http(s)` URL (`redirectUri`), a `browser` without an `open` function — a browser name included (`presentation`), a part without its methods (`presentation`, `transport`, `protocol`), a `remoteHint` that is not a function (`transport`), a `read` that is not a function (`read`), an `onFailure` that is not a function (`show`), a terminal with a protocol that has no paste words (`protocol`); an authorization URL a protocol cannot read a `state` from — none, empty or repeated (`authorizationUrl`) | `invalid-value` | `<fields>` | a configured value cannot be used: `<fields>` |  |
+| a required field or collaborator is missing: every token provider (and `inBrowser`, `fromTerminal`, `toConsole`, `SsoProviderFactory.create`) without a usable `renewal`, `ClientCredentialsProvider` and `AuthorizationCodeProvider` without `uaaUrl`, `clientId`, or `clientSecret` and no `clientAuthentication`, a SAML provider without `assertionValidator`, `SpnegoAuthProvider` without `servicePrincipal` or a `tokenSource` with a `token` function, a shipped validator without `replayStore`; an authorization strategy without a part or the redirect it needs — `manualPasteStrategy`, `manualSamlResponseStrategy` and `externalCodeStrategy` without `redirectUri`, a redirect protocol over a transport that advertises none (`redirectUri`), `composeAuthorization` without `presentation`, `transport`, `protocol` or `endpoint`, `openInBrowser` without `browser` (`presentation`), `consumerPresentation` without `show`, `consumerAnswer` without `receive`, `consumerHandoff` without `provide`; also an `SncLogonProvider` `myName` that is not a string (a known wording limit) | `required-fields-missing` | `<fields>` | required configuration is missing: `<fields>` | check the provider configuration |
+| a configured value that cannot be used: an `authorizationUrl` that does not parse (`AuthorizationCodeProvider` at construction and at login); a `persistence` that is not an object with a callable `report` (every token provider); a `servicePrincipal` that is not `service@host` (`SpnegoAuthProvider`: the Kerberos form `HTTP/host@REALM`, whitespace, non-ASCII or an empty side); `refreshStatePersistence` with `onWriteFailure` missing or not `'continue'` / `'fail'`, or a `write` that is not a function (each named); a part of an authorization strategy that cannot be used: an `endpoint` that URL parsing would change or that is `/` or `/submit` (`endpoint`), a `redirectUri` that is not an absolute `http(s)` URL (`redirectUri`), a `browser` without an `open` function — a browser name included (`presentation`), a part without its methods (`presentation`, `transport`, `protocol`), a `remoteHint` that is not a function (`transport`), a `read` that is not a function (`read`), an `onFailure` that is not a function (`show`), a terminal with a protocol that has no paste words (`protocol`); an authorization URL a protocol cannot read a `state` from — none, empty or repeated (`authorizationUrl`) | `invalid-value` | `<fields>` | a configured value cannot be used: `<fields>` |  |
 | a token provider constructed with both | `client-secret-beside-client-authentication` | `clientSecret` | clientSecret cannot be given beside clientAuthentication | give the secret to the clientAuthentication strategy, or drop the strategy |
 | a SAML provider constructed with `authorizationUrl` and no `acsUrl` | `saml-acs-required-with-authorization-url` | `acsUrl` | acsUrl is required when authorizationUrl is set: the ACS inside a pre-built SAML request cannot be read, so it must be declared | check the provider configuration |
 | a SAML provider constructed with `idpInitiated` and `authnRequestId` (`fields`: both), or a login that minted or declared a request ID (`fields`: `idpInitiated`) | `saml-idp-initiated-with-request-id` | `idpInitiated`, `authnRequestId` | SAML idpInitiated is true, but a request ID was also configured or minted: an IdP-initiated login sends no request | remove one of them |
@@ -4494,7 +4593,7 @@ AUTH_LOG_LEVEL=debug npm test        # debug, info, warn, error
   presenter, validator, store write, browser launcher or SNC locator/probe
   that threw — carries `logFields(error)` of
   its classification: the words its refusal would carry, its `kind`, an
-  integer HTTP status and, for the three variant kinds, its admitted
+  integer HTTP status and, for the variant kinds that carry them, its admitted
   diagnostics; never the value's message, `cause` or stack: a consumer's
   collaborator may throw text holding a key, a passphrase or a token.
   Diagnose a collaborator's failure where it throws, not from this package's
@@ -4511,9 +4610,9 @@ AUTH_LOG_LEVEL=debug npm test        # debug, info, warn, error
 
 ## Dependencies
 
-- `@mcp-abap-adt/interfaces-auth` (^7.5.0) - `IAuthProvider`, token provider, authorization, renewal, persistence, client-authentication and assertion-validation contracts (`ITokenProvider`, `IAuthorizationStrategy` and its parts — `IAuthorizationPresentation`, `IAnswerTransport`, `IAuthorizationProtocol`, `IBrowser` —, `IRenewalStrategy`, `ITokenPersistence`, `IClientAuthentication`, `IAssertionValidator`, `IAssertionReplayStore`), and the error contract's types and allowlists (`IAuthProviderError`, its kinds, facts and `OPERATIONS`)
-- `@mcp-abap-adt/interfaces-auth-sap` (^3.3.0) - XSUAA authorization configuration (`IAuthorizationConfig`) and `ICertificateMaterialLoader`
-- `@mcp-abap-adt/auth-errors` (^2.2.0) - the error contract's runtime: the builders every error is minted with, `AuthProviderFailure`, `classify` / `readFailure`, `guard`, `logFields`, shared attempts and parties
+- `@mcp-abap-adt/interfaces-auth` (^8.0.1) - `IAuthProvider`, `INegotiateTokenSource`, token provider, authorization, renewal, persistence, client-authentication and assertion-validation contracts (`ITokenProvider`, `IAuthorizationStrategy` and its parts — `IAuthorizationPresentation`, `IAnswerTransport`, `IAuthorizationProtocol`, `IBrowser` —, `IRenewalStrategy`, `ITokenPersistence`, `IClientAuthentication`, `IAssertionValidator`, `IAssertionReplayStore`), and the error contract's types and allowlists (`IAuthProviderError`, its kinds, facts and `OPERATIONS`)
+- `@mcp-abap-adt/interfaces-auth-sap` (^3.5.0) - XSUAA authorization configuration (`IAuthorizationConfig`) and `ICertificateMaterialLoader`
+- `@mcp-abap-adt/auth-errors` (^3.0.1) - the error contract's runtime: the builders every error is minted with, `AuthProviderFailure`, `classify` / `readFailure`, `guard`, `logFields`, shared attempts and parties
 - `@mcp-abap-adt/interfaces-utils` (^1.1.1) - `ILogger`
 - `@xmldom/xmldom` - XML parsing: SAML assertion validation, and taking the Assertion out of a SAMLResponse for the saml2-bearer grant
 - `xml-crypto` - XML-DSig signature verification for SAML assertion validation
