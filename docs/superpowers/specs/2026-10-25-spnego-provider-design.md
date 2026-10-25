@@ -107,8 +107,12 @@ interface SpnegoAuthProviderConfig {
 }
 ```
 
-- Read through `ownOptions`. `servicePrincipal`: printable ASCII, no
-  whitespace, exactly one `@`, a non-empty service and host on either side —
+- Read through `ownOptions`. `servicePrincipal` is the GSS host-based form
+  `service@host` and nothing else: exactly one `@`; the service an ASCII
+  letter followed by ASCII letters, digits or `-`; the host one or more labels
+  of ASCII letters, digits or `-` (not starting or ending with `-`) joined by
+  single `.`, no leading or trailing `.`. So `/` (the Kerberos form
+  `HTTP/host@REALM`), whitespace, non-ASCII and an empty side are all refused —
   checked by plain code, no regex; else `invalid-value`. Nothing is derived
   from a URL: the provider sees none.
 - `tokenSource`: an object whose `token` is a function, read through
@@ -207,15 +211,21 @@ Added to `compose.yaml`, images built from committed Dockerfiles on a pinned
 
 - **`kdc`** — MIT krb5 KDC, realm `STAND.TEST`; at start creates the database,
   a user `alice` (password a committed fixture, trusted by nothing but the
-  stand), a user `bob` whose key is then changed (a ticket that the service
-  refuses), and the service principal `HTTP/negotiate.stand.test@STAND.TEST` (GSS name
-  `HTTP@negotiate.stand.test`) with its
-  keytab written to a volume. No keytab or key is committed.
+  stand), the service principal `HTTP/negotiate.stand.test@STAND.TEST` (GSS
+  name `HTTP@negotiate.stand.test`) with its keytab written to a volume, and a
+  second service principal `HTTP/stale.stand.test@STAND.TEST` whose keytab is
+  exported and whose key is then changed in the KDC (`cpw -randkey`) before
+  any ticket exists: every ticket for it is encrypted with a key the service's
+  keytab does not hold, so the service refuses it — a refused credential
+  without touching the user. No keytab or key is committed.
 - **`negotiate`** — Apache httpd with `mod_auth_gssapi`, keytab from the
   volume, one protected path answering `200` only to an accepted `Negotiate`
-  token; `GssapiAllowedMech krb5`; the replay cache on. A second location with
-  `GssapiNegotiateOnce Off` answers a continuation where the library produces
-  one (To measure).
+  token; `GssapiAllowedMech krb5`; the replay cache on. A second virtual host
+  `stale.stand.test` (selected by the `Host` header) protected with the stale
+  keytab. A third path answers every request `401` with a fixed, non-empty
+  `WWW-Authenticate: Negotiate <base64>` — a configured answer standing for a
+  continuation, not a GSS exchange Apache produced; the suite asserts the
+  status and the header before it tests `rejected()`.
 - Published on loopback ports: the KDC (`STAND_KDC_PORT`, UDP and TCP) and the
   service (`STAND_NEGOTIATE_PORT`).
 - **The suite runs on the host**, like the other stand suites:
@@ -241,8 +251,8 @@ Added to `compose.yaml`, images built from committed Dockerfiles on a pinned
 | no ticket (`kdestroy`) | `prepare()` is `spnego` `no-credential`; nothing sent |
 | a principal the KDC does not know | `spnego` `service-unknown` |
 | the KDC stopped | `spnego` `kdc-unreachable` |
-| `bob`'s ticket after his key changed | `401` → `rejected()` is `credential-refused` `kerberos-ticket` |
-| a continuation (`401` with `WWW-Authenticate: Negotiate …`) | `credential-refused`, the same |
+| a ticket for `HTTP@stale.stand.test` (the service's keytab holds the old key) | `401` → `rejected()` is `credential-refused` `kerberos-ticket` |
+| the configured continuation path (`401`, `WWW-Authenticate: Negotiate <token>`, both asserted) | `credential-refused`, the same |
 | the token in every log line, error and refusal of every case | absent (the `noTokensInLogs` oracle) |
 
 Clock skew is not on the stand (one clock; To measure by hand if wanted).
