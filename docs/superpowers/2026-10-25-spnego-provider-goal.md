@@ -79,7 +79,7 @@ the docs.
 Out: the live run against an ABAP system (the second stage); SNC (built);
 NTLM; X.509 client certificates (built); a multi-leg exchange — a service that
 continues the negotiation is refused with its reason, not answered; verifying
-the service's mutual-authentication token.
+the service's mutual-authentication token; Windows on arm64.
 
 ## Open questions
 
