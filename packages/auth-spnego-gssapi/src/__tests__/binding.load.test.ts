@@ -105,7 +105,7 @@ function classifyToken(token: string): 'ntlm' | 'kerberos' | 'other' {
 
 describeBuilt(where, () => {
   it.each(['spnego', 'kerberos'] as const)(
-    '%s: a machine with no ticket gets no token',
+    '%s: with no ticket, the answer measured on this platform',
     (mechanism) => {
       if (process.platform === 'win32') {
         const answer = askChild(mechanism, { ...process.env }) as {
@@ -127,10 +127,17 @@ describeBuilt(where, () => {
               .subarray(0, 12)
               .toString('hex')})\n`,
           );
-          expect(['ntlm', 'kerberos', 'other']).toContain(kind);
+          // Measured 2026-10-25 (Windows GitHub runner, no domain): a token
+          // whose bytes are an NTLM message.
+          expect(mechanism).toBe('spnego');
+          expect(kind).toBe('ntlm');
+          return;
         } else {
           expect(PROBLEMS).toContain(answer.problem);
           expect(answer.problem).not.toBe('binding-unavailable');
+          // Measured 2026-10-25: only `kerberos` fails, as no-credential.
+          expect(mechanism).toBe('kerberos');
+          expect(answer.problem).toBe('no-credential');
           process.stderr.write(
             `Windows, ${mechanism}, no ticket: ${rawBindingMessage(mechanism, { ...process.env })}\n`,
           );

@@ -18,7 +18,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `binding-unavailable`, `source-failed`, `mechanism-unsupported` — and no text of the binding's error.
 - Measured on a Windows x64 GitHub runner with no domain (2026-10-25): `kerberos` raises
   `InitializeSecurityContext: No credentials are available in the security package` (`no-credential`);
-  `spnego` returns an NTLM token (Negotiate's fallback), not an error.
+  `spnego` returns a token whose bytes are an NTLM NEGOTIATE message (type 1), not an error (that
+  this is SSPI's fallback is Inference).
 - The identity is the process's default one (the ticket cache, the domain logon); no principal
   option.
 - The binding's texts for an unknown service and an unreachable KDC are measured on MIT krb5

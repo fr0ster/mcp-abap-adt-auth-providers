@@ -322,8 +322,9 @@ recipe and no implicit default (Inference, design).
   - *Windows Negotiate with no ticket* (Measured, 2026-10-25, GitHub Windows
     x64 runner, no domain, SSPI): `spnego` does not fail — the binding returns
     an NTLM token, a raw `NTLMSSP\0` NEGOTIATE message (type 1) of 56 base64
-    characters, not wrapped in SPNEGO. This is the fallback the provider's
-    check exists for: it is refused `ntlm-token` and no header is written.
+    characters, not wrapped in SPNEGO. That this is SSPI's Negotiate falling
+    back to NTLM is Inference. The provider refuses it `ntlm-token` and writes no
+    header.
     `kerberos` raises `InitializeSecurityContext: No credentials are available
     in the security package`, answered `no-credential`. NTLM *inside* a SPNEGO
     token is still only built fixtures (Inference).

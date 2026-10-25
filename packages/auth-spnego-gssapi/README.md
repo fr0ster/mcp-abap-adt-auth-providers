@@ -98,7 +98,7 @@ not called — and again when it returns, the token then dropped; either answers
 | `no-credential` | no ticket (an expired one: Pending) |
 | `service-unknown` | the KDC does not know the service principal |
 | `kdc-unreachable` | no KDC answered (none known for the realm: Pending) |
-| `clock-skew` | the clock differs from the KDC's beyond its tolerance |
+| `clock-skew` | the clock differs from the KDC's beyond its tolerance (Pending) |
 | `mechanism-unsupported` | the mechanism asked for is not supported where it ran (measured: macOS's GSS.framework answering `spnego` with no ticket) |
 | `binding-unavailable` | `kerberos` could not be loaded (not built, or the system's Kerberos library missing) |
 | `source-failed` | anything else, an aborted signal included |
@@ -136,10 +136,10 @@ Received with no ticket (measured 2026-10-25), and what the source answers:
 | macOS arm64 (GitHub runner), GSS.framework (Heimdal) | `kerberos` | ` Miscellaneous failure (see text): get-pricipal open(<cache file>): No such file or directory` | `no-credential` |
 | macOS arm64 (GitHub runner), GSS.framework (Heimdal) | `spnego` | ` An unsupported mechanism was requested: unknown mech-code 0 for mech unknown` | `mechanism-unsupported` |
 | Windows x64 (GitHub runner, no domain), SSPI | `kerberos` | `InitializeSecurityContext: No credentials are available in the security package` (ending in a line break) | `no-credential` |
-| Windows x64 (GitHub runner, no domain), SSPI | `spnego` | no error: a token of 56 base64 characters, an NTLM message (`NTLMSSP\0`, type 1, a Negotiate fallback) | the token — which `SpnegoAuthProvider` refuses as `ntlm-token` |
+| Windows x64 (GitHub runner, no domain), SSPI | `spnego` | no error: a token of 56 base64 characters, bytes of an NTLM NEGOTIATE message (`NTLMSSP\0`, type 1) | the token — which `SpnegoAuthProvider` refuses as `ntlm-token` |
 
-On Windows, with no ticket, `spnego` does not fail: SSPI's Negotiate falls back to NTLM and the source
-returns that token; the provider's check (`readNegotiateToken`) refuses it, so no NTLM header is written.
+On Windows, with no ticket, `spnego` does not fail: the source returns a token whose bytes are an NTLM NEGOTIATE message (that this is
+SSPI's Negotiate falling back to NTLM is Inference); the provider's check (`readNegotiateToken`) refuses it, so no NTLM header is written.
 On macOS the source matches the texts received in that condition: `get-pricipal open(` (Heimdal's
 spelling) as `no-credential`, and `unknown mech-code 0 for mech unknown` as `mechanism-unsupported`.
 

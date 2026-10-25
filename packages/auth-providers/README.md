@@ -767,7 +767,7 @@ dropped and the moment ends `interactive-login` `aborted` (`facts.outcome`), no 
 | `no-credential` | source | no ticket (an expired one: Pending) | obtaining the Negotiate token failed: there is no Kerberos ticket, or it has expired | obtain a ticket: kinit, or the domain logon |
 | `service-unknown` | source | the KDC does not know the service principal | obtaining the Negotiate token failed: the Kerberos server does not know the service principal | check servicePrincipal against the service's registered principal |
 | `kdc-unreachable` | source | no KDC answered (none known for the realm: Pending) | obtaining the Negotiate token failed: no Kerberos server (KDC) answered | check the Kerberos configuration's realm and KDC |
-| `clock-skew` | source | the clock differs from the KDC's beyond its tolerance | obtaining the Negotiate token failed: this machine's clock differs from the Kerberos server's beyond its tolerance | check the machine's time |
+| `clock-skew` | source | the clock differs from the KDC's beyond its tolerance (Pending) | obtaining the Negotiate token failed: this machine's clock differs from the Kerberos server's beyond its tolerance | check the machine's time |
 | `binding-unavailable` | source | the source's native library could not be loaded | obtaining the Negotiate token failed: the library of the system token source could not be loaded | install the system source's native part |
 | `source-failed` | source | any other failure the source recognises as its own | obtaining the Negotiate token failed: the token source failed |  |
 | `mechanism-unsupported` | source | the mechanism asked for is not supported where the source ran | obtaining the Negotiate token failed: the requested mechanism is not supported | check that the system's GSS library supports the mechanism the source was configured with |
@@ -4301,11 +4301,10 @@ code, after printing the last 200 lines of each server's log. A full run takes
 a minute or two once the images are built. CI runs exactly this as its
 own job, on Node 22, 24 and 26. To keep the stand up between runs, start it
 yourself; `test:stand` then leaves it running. Ownership is per server, of the four (UAA, Keycloak, the KDC and the Negotiate
-service): the run starts only those not running and removes only those it
-started afterwards. It removes the Kerberos stand's keytab volume and network
-only when it started both the KDC and the Negotiate service; with
-`STAND_SPNEGO=0`, or any server already up, a hand-started server and its volume
-survive:
+service): a server already running is left running, and the run removes only
+the servers it started. The Kerberos stand's keytab volume and network are
+removed only when this run started both the KDC and the Negotiate service, and
+`docker compose down` runs only when it started all four:
 
 ```bash
 npm run stand:up      # start and keep running

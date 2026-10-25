@@ -467,7 +467,7 @@ function spnegoTable(): string {
       ],
       'clock-skew': [
         'source',
-        "the clock differs from the KDC's beyond its tolerance",
+        "the clock differs from the KDC's beyond its tolerance (Pending)",
       ],
       'binding-unavailable': [
         'source',
