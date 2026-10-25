@@ -69,3 +69,7 @@ mcp.json
 !packages/auth-providers/src/__tests__/fixtures/certificates/other.key
 !packages/auth-providers/src/__tests__/fixtures/certificates/client.pfx
 !packages/auth-providers/src/__tests__/fixtures/certificates/client-chain.pfx
+
+# A service key is a secret: never in the repository
+sk.json
+*service-key*.json
