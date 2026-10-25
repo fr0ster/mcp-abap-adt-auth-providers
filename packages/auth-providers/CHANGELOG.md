@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- `SpnegoAuthProvider`: SPNego (Kerberos) over HTTP from the consumer's `INegotiateTokenSource`,
+  a fresh `Authorization: Negotiate` token per request; NTLM refused. Depends on
+  `@mcp-abap-adt/interfaces-auth` ^8.0.0 and `@mcp-abap-adt/auth-errors` ^3.0.0.
+
 ### Repository
 - The repository is laid out as `mcp-abap-adt-interfaces` is: a private root with `publishOrder`
   and the release tools, and the package in `packages/auth-providers`. Not npm workspaces: the

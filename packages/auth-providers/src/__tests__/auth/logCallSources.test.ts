@@ -32,6 +32,8 @@ const FREE_NAMES = [
   'message',
   'stack',
   'cause',
+  // SPNego's configured service principal (`service@host`), the consumer's text.
+  'principal',
 ];
 
 const CALL_OPENERS = [
@@ -199,6 +201,12 @@ describe('log calls in src', () => {
     expect(offending).toEqual([]);
   });
 
+  it('scans src/spnego too', () => {
+    const scanned = sourceFiles(SRC).map((file) => relative(SRC, file));
+    expect(scanned).toContain(join('spnego', 'SpnegoAuthProvider.ts'));
+    expect(scanned).toContain(join('spnego', 'negotiateToken.ts'));
+  });
+
   it('every announcer is bound to a name before a prompt goes through it', () => {
     // `announcer(logger)(text)` would hide the prompt from the scan above.
     const unbound = sourceFiles(SRC).flatMap((file) => {
@@ -231,6 +239,11 @@ describe('log calls in src', () => {
     const raw = `announce(\`   ${open$}authorizationUrl}\`);`;
     expect(freeNameIn(argumentCode(raw, raw.indexOf('(')))).toBe(
       'authorizationUrl',
+    );
+    const spn =
+      "this.logger?.debug('token for', { spn: this.servicePrincipal });";
+    expect(freeNameIn(argumentCode(spn, spn.indexOf('(')))).toBe(
+      'servicePrincipal',
     );
   });
 });

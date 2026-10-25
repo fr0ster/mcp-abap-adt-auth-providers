@@ -39,6 +39,7 @@ import { Saml2BearerProvider } from '../../providers/Saml2BearerProvider';
 import { Saml2PureProvider } from '../../providers/Saml2PureProvider';
 import { refreshThenLogin } from '../../renewal';
 import { SncLogonProvider } from '../../snc/SncLogonProvider';
+import { SpnegoAuthProvider } from '../../spnego/SpnegoAuthProvider';
 import { staticCodeStrategy } from '../../strategies';
 import { jwt, quiet, rejectionOf } from '../helpers/attemptHarness';
 import { recordingBrowser } from '../helpers/recordingBrowser';
@@ -889,5 +890,117 @@ describe('no message of a thrown error in the logs', () => {
         expect(all).not.toContain(window);
       }
     }
+  });
+});
+
+describe('no SPNego token or service principal in the logs or refusals', () => {
+  const HOST = 'spn-secret-host7c2e.example';
+  const SPN = `HTTP@${HOST}`;
+  /** A GSS-framed Kerberos token whose body is a recognisable secret. */
+  const token = (marker: string) => {
+    const body = Buffer.from(`KRB-SECRET-${marker}-`.repeat(4));
+    const oid = Buffer.from([
+      0x2a, 0x86, 0x48, 0x86, 0xf7, 0x12, 0x01, 0x02, 0x02,
+    ]);
+    const inner = Buffer.concat([
+      Buffer.from([0x06, oid.length]),
+      oid,
+      Buffer.from([0x01, 0x00]),
+      body,
+    ]);
+    return Buffer.concat([Buffer.from([0x60, inner.length]), inner]).toString(
+      'base64',
+    );
+  };
+  const NTLM = Buffer.concat([
+    Buffer.from('NTLMSSP\0', 'latin1'),
+    Buffer.from('NTLM-SECRET-payload-0042'),
+  ]).toString('base64');
+
+  it('no window of a token, and not the service principal, in any log line, refusal word, fact or JSON', async () => {
+    const { logger, lines } = recordingLogger();
+    const answers: Array<() => unknown> = [
+      async () => ({ ok: true, token: token('a') }),
+      async () => ({ ok: true, token: token('b') }),
+      async () => ({ ok: true, token: NTLM }),
+      async () => ({ ok: true, token: `${token('c')}!` }),
+      async () => ({ ok: false, problem: 'no-credential' }),
+      async () => ({ ok: false, problem: 'service-unknown' }),
+      async () => ({ ok: false, problem: `${SPN} ${token('d')}` }),
+      () => {
+        throw new Error(`${SPN} ${token('e')}`);
+      },
+      async () => Promise.reject(new Error(`${SPN} ${token('f')}`)),
+    ];
+    let call = 0;
+    const tokenSource = {
+      token: () => {
+        const next = answers[call] ?? answers[0];
+        call += 1;
+        return next?.();
+      },
+    } as never;
+    const provider = new SpnegoAuthProvider({
+      servicePrincipal: SPN,
+      tokenSource,
+      logger,
+    });
+    const outcomes: unknown[] = [];
+    const written: string[] = [];
+    const target = {
+      header: (_name: string, value: string) => {
+        written.push(value);
+      },
+      cookies: () => undefined,
+    };
+    outcomes.push(await provider.prepare());
+    for (let i = 1; i < answers.length; i += 1) {
+      outcomes.push(await provider.authorize(target));
+    }
+    outcomes.push(
+      await provider.authorize({
+        header: () => {
+          throw new Error(`${SPN} ${token('g')}`);
+        },
+        cookies: () => undefined,
+      }),
+    );
+    outcomes.push(
+      await provider.rejected({
+        at: 'request',
+        status: 401,
+        error: { message: SPN },
+      }),
+    );
+    outcomes.push(
+      await provider.rejected({
+        at: 'request',
+        status: 500,
+        error: { message: SPN },
+      }),
+    );
+    // The one token presented went to the header and nowhere else.
+    expect(written).toEqual([`Negotiate ${token('b')}`]);
+    expect(lines.length).toBeGreaterThan(0);
+    const refusals = outcomes.filter((o) => !(o as { ok: boolean }).ok);
+    expect(refusals.length).toBe(outcomes.length - 2);
+    const all = [
+      ...lines,
+      ...refusals.map((o) => JSON.stringify(o)),
+      ...refusals.map((o) => {
+        const r = (o as { refusal: { reason: string; hint?: string } }).refusal;
+        return `${r.reason} ${r.hint ?? ''}`;
+      }),
+    ].join('\n');
+    expect(all).not.toContain(HOST);
+    expect(all).not.toContain('spn-secret');
+    for (const marker of ['a', 'b', 'c', 'd', 'e', 'f', 'g']) {
+      for (const window of windows(token(marker))) {
+        expect(all).not.toContain(window);
+      }
+      expect(all).not.toContain(`KRB-SECRET-${marker}`);
+    }
+    for (const window of windows(NTLM)) expect(all).not.toContain(window);
+    expect(all).not.toContain('NTLM-SECRET');
   });
 });
