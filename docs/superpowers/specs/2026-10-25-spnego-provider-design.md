@@ -177,15 +177,18 @@ needs the binding; every other install keeps `--ignore-scripts`.
 
 - Depends on `interfaces-auth` (types) and `kerberos` (7.x, registry). It
   mints nothing and does not depend on auth-errors.
-- `gssapiTokenSource({ mechanism, principal? })`:
+- `gssapiTokenSource({ mechanism })`:
   - `mechanism: 'spnego' | 'kerberos'`, **required, no default** — which one a
     service accepts is the service's (RFC 4559 names SPNEGO; servers that take
     a bare Kerberos token exist — Inference). Mapped to the binding's
     `GSS_MECH_OID_SPNEGO` / `GSS_MECH_OID_KRB5` (Doc).
-  - `principal?`: the client principal in the ticket cache, passed to
-    `initializeClient` (Doc). The cache is the process's default (`KRB5CCNAME`,
-    the domain logon); the binding takes no cache name (Doc), and nothing here
-    writes the environment.
+  - No client principal option: the binding's Windows (SSPI) path ignores a
+    principal and uses the logon credentials (Doc — its `kerberos_sspi.cc`),
+    so the option would select an identity on Linux and macOS and silently not
+    on Windows. The identity is the default one of the process's ticket cache
+    (`KRB5CCNAME`, the domain logon); the binding takes no cache name (Doc), and
+    nothing here writes the environment. A consumer needing another identity
+    supplies its own source.
   - `kerberos` is loaded with a dynamic import on the first `token()` call; a
     load failure answers `binding-unavailable`.
   - Each call: `initializeClient(servicePrincipal, …)`, one `step('')`, the
@@ -250,7 +253,7 @@ Added to `compose.yaml`, images built from committed Dockerfiles on a pinned
 | the token of the first request resent by hand | the service refuses it (replay cache) — the reason the provider never reuses one |
 | no ticket (`kdestroy`) | `prepare()` is `spnego` `no-credential`; nothing sent |
 | a principal the KDC does not know | `spnego` `service-unknown` |
-| the KDC stopped | `spnego` `kdc-unreachable` |
+| the KDC stopped, with a cache of its own holding a valid TGT and no ticket for the service (asserted with `klist` first) | `spnego` `kdc-unreachable`; the KDC started again after |
 | a ticket for `HTTP@stale.stand.test` (the service's keytab holds the old key) | `401` → `rejected()` is `credential-refused` `kerberos-ticket` |
 | the configured continuation path (`401`, `WWW-Authenticate: Negotiate <token>`, both asserted) | `credential-refused`, the same |
 | the token in every log line, error and refusal of every case | absent (the `noTokensInLogs` oracle) |

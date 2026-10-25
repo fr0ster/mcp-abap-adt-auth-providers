@@ -73,8 +73,8 @@ stand that proves it.
   says so.
 - **Where the ticket lives is the consumer's.** The provider holds no ticket
   and keeps none: it asks its token source for a token. The system source uses the
-  system's own ticket cache — what `kinit` or the domain logon filled — and may
-  name the client principal in it; a consumer that keeps tickets elsewhere, a
+  system's own ticket cache and the identity in it — what `kinit` or the domain
+  logon filled; a consumer that keeps tickets elsewhere, a
   store of its own included, supplies its own token source through the same
   contract.
 - **The consumer composes.** No token source is built when none is given.
