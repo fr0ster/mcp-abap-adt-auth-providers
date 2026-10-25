@@ -116,6 +116,8 @@ export {
   type SncLogonProviderConfig,
 } from './snc/SncLogonProvider';
 export { nodeSncSystem, type SncSystem } from './snc/SncSystem';
+// SPNego — Kerberos over HTTP, from the consumer's token source.
+export { SpnegoAuthProvider, type SpnegoAuthProviderConfig } from './spnego';
 // SSO factory
 export { SsoProviderFactory } from './sso/SsoProviderFactory';
 export type { SsoProviderConfig, SsoProviderInstance } from './sso/types';

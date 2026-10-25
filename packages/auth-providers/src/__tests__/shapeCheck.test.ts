@@ -255,9 +255,7 @@ describe('the shape check', () => {
     });
 
     it('lint:check is Biome alone: it runs no checking script', () => {
-      expect(scripts['lint:check']).toBe(
-        'npx biome check --error-on-warnings src',
-      );
+      expect(scripts['lint:check']).toBe('biome check --error-on-warnings src');
     });
   });
 });

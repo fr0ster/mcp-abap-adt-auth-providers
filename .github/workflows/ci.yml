@@ -35,6 +35,12 @@ jobs:
           npm ci --ignore-scripts
           npm run install:packages
 
+      # Gating: any advisory of moderate severity or above in the full tree of
+      # the root or of a package fails the job. audit=false in .npmrc only
+      # turns off the audit during install.
+      - name: Audit
+        run: npm run audit
+
       - name: Build
         run: npm run build
 
@@ -59,9 +65,66 @@ jobs:
       - name: Publish path
         run: npm run check:publish
 
+  # The system token source over the real `kerberos` binding, on each OS it
+  # supports: Linux x64 inside a node:24-bookworm container (whatever can run
+  # in Docker runs there), macOS on Apple silicon and Windows x64 on their
+  # hosted runners (Windows on arm64 is out). Every install keeps
+  # --ignore-scripts; the one build allowed is `kerberos`, from source (no
+  # prebuilt binary downloaded), which the package's allowScripts names. The
+  # load test then runs the built package against a machine with no ticket.
+  auth-spnego-gssapi:
+    runs-on: ${{ matrix.os }}
+    container: ${{ matrix.container }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            container: node:24-bookworm
+          - os: macos-latest
+          - os: windows-latest
+
+    defaults:
+      run:
+        working-directory: packages/auth-spnego-gssapi
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # The container brings Node 24 itself.
+      - name: Setup Node.js
+        if: runner.os != 'Linux'
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: 'npm'
+          cache-dependency-path: '**/package-lock.json'
+
+      - name: Kerberos headers (Linux container)
+        if: runner.os == 'Linux'
+        run: apt-get update && apt-get install -y libkrb5-dev
+
+      - name: Install dependencies
+        run: npm ci --ignore-scripts
+
+      - name: Build the kerberos binding from source
+        run: npm rebuild kerberos --build-from-source
+
+      - name: Build
+        run: npm run build
+
+      - name: Test, the built binding loaded
+        env:
+          KERBEROS_BINDING: built
+        run: npm test
+
   # The providers against real authorization servers — Cloud Foundry UAA and
-  # Keycloak — started in Docker by tests/stand/run.sh and stopped again when
-  # the suites end. On failure the script prints the servers' logs first.
+  # Keycloak — and SPNego against a real KDC and a Negotiate-only service (the
+  # Kerberos stand, whose suite runs in a container of its own), all started
+  # in Docker by tests/stand/run.sh and stopped again when the suites end. The
+  # runner needs Docker and nothing else for it. On failure the script prints
+  # the servers' logs first.
   provider-stand:
     runs-on: ubuntu-latest
     strategy:
@@ -84,6 +147,10 @@ jobs:
         working-directory: packages/auth-providers
         run: npm ci --ignore-scripts
 
-      - name: Test against UAA and Keycloak
+      # The SPNego suite runs in its own container on its own Node, so one leg
+      # is enough; the host suites run on every leg.
+      - name: Test against UAA, Keycloak and the Kerberos stand
         working-directory: packages/auth-providers
+        env:
+          STAND_SPNEGO: ${{ matrix.node-version == '24' && '1' || '0' }}
         run: npm run test:stand

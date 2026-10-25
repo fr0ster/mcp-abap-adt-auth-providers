@@ -7,11 +7,60 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [7.0.0] - 2026-10-26
+
+A major because a new error kind, `spnego`, exists: a consumer that switches exhaustively on
+`kind` must handle it. Nothing of 6.x is changed otherwise.
+
+### Migrating from 6.x
+- Add the `spnego` case to every exhaustive `switch (error.kind)` / `matchKind` /
+  `unreachableKind`. A consumer that never composes `SpnegoAuthProvider` never receives it, but
+  its switch must still compile.
+- Install `@mcp-abap-adt/interfaces-auth` `^8.0.1` and `@mcp-abap-adt/auth-errors` `^3.0.1`
+  (what this package now depends on) and keep one copy of each: `npm ls
+  @mcp-abap-adt/interfaces-auth` and `npm ls @mcp-abap-adt/auth-errors` should each show one
+  deduplicated version. See the README's "Migrating to 7.0.0".
+
+### Changed
+- Dependencies: `@mcp-abap-adt/interfaces-auth` `^8.0.1` (was `^7.5.0`),
+  `@mcp-abap-adt/auth-errors` `^3.0.1` (was `^2.2.0`), `@mcp-abap-adt/interfaces-auth-sap`
+  `^3.5.0` (was `^3.3.0`). The 6.x contracts of every provider are unchanged.
+- README: the Overview and Error Handling name interfaces-auth 8; the new "SPNego (Kerberos) over
+  HTTP" section and a rendered `spnego` refusal table (`npm run docs:tables`), the `spnego` row in
+  the kinds table and in "What `rejected()` answers"; the Dependencies list at the ranges above.
+  `docs/passwordless-sso.md`: SPNego is Built, its protocol Measured on the Kerberos stand
+  (2026-10-25), against an ABAP system still Inference.
+
+### Added
+- `SpnegoAuthProvider`: SPNego (Kerberos) over HTTP from the consumer's `INegotiateTokenSource`,
+  a fresh `Authorization: Negotiate` token per request; NTLM refused. A source's problem —
+  `mechanism-unsupported` included — is minted as `spnego` with that problem. Depends on
+  `@mcp-abap-adt/interfaces-auth` ^8.0.1 and `@mcp-abap-adt/auth-errors` ^3.0.1.
+
 ### Repository
 - The repository is laid out as `mcp-abap-adt-interfaces` is: a private root with `publishOrder`
   and the release tools, and the package in `packages/auth-providers`. Not npm workspaces: the
   package installs its own dependencies from the registry. The published content is unchanged.
   Tags are `auth-providers-v<version>`.
+- Script security: install scripts are denied unless `package.json` `allowScripts` allows them
+  (`strict-allow-scripts=true` in `.npmrc`, npm 11.19 or later; this package and the root). The
+  two dev-only packages with install scripts, `@parcel/watcher` and `unrs-resolver` (both under
+  Jest), are denied explicitly: Jest runs without their native parts. Every CI and release
+  install keeps `--ignore-scripts`, and CI runs `npm run audit` (root and each package,
+  `npm audit --audit-level=moderate`, gating). No advisory was open and no `overrides` entry is
+  needed. The published content is unchanged.
+- The provider stand gains a Kerberos stand (`tests/stand/kerberos`): an MIT KDC for the realm
+  `STAND.TEST` and a Negotiate-only Apache (`mod_auth_gssapi`) on their own Docker network, and
+  the SPNego suite run inside it in a `spnego-client` container after the host suites —
+  `SpnegoAuthProvider` with `@mcp-abap-adt/auth-spnego-gssapi`'s `gssapiTokenSource`, both
+  mechanisms accepted (`200`, the user `alice`), a fresh token per request (a resent one refused
+  by the replay cache), `no-credential`, `service-unknown`, `kdc-unreachable`, and a refused
+  ticket and a `Negotiate` continuation both `credential-refused` `kerberos-ticket`. The host
+  needs only Docker; the container gets only the files git tracks of the two packages (exported
+  to a temporary directory, refused if it holds any path git ignores, mounted read-only),
+  installs and builds its own copies, and the host's `node_modules` are not touched;
+  `STAND_SPNEGO=0` leaves it out (CI runs it on one Node version). `readNegotiateToken`'s tests read Kerberos and SPNEGO tokens
+  captured there. The published content is unchanged.
 
 ## [6.0.2] - 2026-10-12
 

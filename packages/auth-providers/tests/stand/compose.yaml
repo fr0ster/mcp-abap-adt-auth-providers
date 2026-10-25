@@ -7,6 +7,17 @@
 # keycloak/tls/: it asks for a client certificate (`request`, not `required`,
 # so a request without one still reaches it and is refused there) and trusts
 # only the stand's CA.
+#
+# The Kerberos stand (kerberos/): an MIT KDC for the realm STAND.TEST and a
+# Negotiate-only Apache service, reached only on their own network by their
+# names — kdc.stand.test, negotiate.stand.test, stale.stand.test — and
+# published on no host port. spnego-client runs the SPNego suite inside that
+# network (run.sh runs it after the host suites): run.sh's export of the
+# tracked files mounted read-only, the packages copied and installed inside
+# the container, so the host's node_modules are never written and no ignored
+# file reaches it. No Docker socket is mounted. The
+# keytabs live in their own volume, written by the KDC at every start; no
+# keytab or key is committed.
 services:
   uaa:
     image: docker.io/cfidentity/uaa:v79.7.0
@@ -36,3 +47,78 @@ services:
     volumes:
       - ./keycloak/realm-test.json:/opt/keycloak/data/import/realm-test.json:ro
       - ./keycloak/tls:/opt/keycloak/conf/tls:ro
+
+  kdc:
+    build:
+      context: ./kerberos
+      dockerfile: kdc/Dockerfile
+    image: auth-providers-stand-kdc:local
+    container_name: auth-providers-kdc
+    hostname: kdc.stand.test
+    networks:
+      kerberos:
+        aliases: [kdc.stand.test]
+    volumes:
+      - keytabs:/keytabs
+    healthcheck:
+      test: ["CMD-SHELL", "test -f /keytabs/ready && pidof krb5kdc >/dev/null"]
+      interval: 30s
+      timeout: 5s
+      start_period: 120s
+      start_interval: 1s
+
+  negotiate:
+    build:
+      context: ./kerberos
+      dockerfile: negotiate/Dockerfile
+    image: auth-providers-stand-negotiate:local
+    container_name: auth-providers-negotiate
+    hostname: negotiate.stand.test
+    networks:
+      kerberos:
+        aliases: [negotiate.stand.test, stale.stand.test]
+    volumes:
+      - keytabs:/keytabs:ro
+    depends_on:
+      kdc:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "test \"$$(curl -s -o /dev/null -w '%{http_code}' http://localhost/sap)\" = 401"]
+      interval: 30s
+      timeout: 5s
+      start_period: 120s
+      start_interval: 1s
+
+  # A one-off: `docker compose run --rm spnego-client` (run.sh). The profile
+  # keeps `up` from starting it.
+  spnego-client:
+    profiles: [spnego-suite]
+    build:
+      context: ./kerberos
+      dockerfile: client/Dockerfile
+    image: auth-providers-stand-spnego-client:local
+    networks: [kerberos]
+    depends_on:
+      kdc:
+        condition: service_healthy
+      negotiate:
+        condition: service_healthy
+    environment:
+      KRB5_CONFIG: /repo/packages/auth-providers/tests/stand/kerberos/krb5.conf
+    # The tracked files run.sh exports (SPNEGO_SOURCE), read-only — never the
+    # working tree. Without the export the mount fails instead of falling back.
+    volumes:
+      - type: bind
+        source: ${SPNEGO_SOURCE:-./kerberos/source-not-exported}
+        target: /repo
+        read_only: true
+        bind:
+          create_host_path: false
+    command: ["bash", "/repo/packages/auth-providers/tests/stand/kerberos/client/run-suite.sh"]
+
+networks:
+  kerberos: {}
+
+volumes:
+  keytabs:
+    name: auth-providers-keytabs

@@ -1,0 +1,74 @@
+{
+  "name": "@mcp-abap-adt/auth-spnego-gssapi",
+  "version": "0.1.0",
+  "description": "A negotiate token source for @mcp-abap-adt/auth-providers' SpnegoAuthProvider: SPNEGO or Kerberos tokens from the system's GSS-API (SSPI on Windows) through the kerberos binding",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": [
+    "dist",
+    "README.md",
+    "CHANGELOG.md",
+    "LICENSE",
+    "COPYING"
+  ],
+  "keywords": [
+    "abap",
+    "sap",
+    "adt",
+    "spnego",
+    "kerberos",
+    "gssapi",
+    "sspi",
+    "negotiate",
+    "authentication",
+    "mcp",
+    "abap-adt"
+  ],
+  "author": "Oleksii Kyslytsia <oleksij.kyslytsja@gmail.com>",
+  "license": "LGPL-3.0-only",
+  "homepage": "https://github.com/fr0ster/mcp-abap-adt-auth-providers/tree/master/packages/auth-spnego-gssapi#readme",
+  "bugs": {
+    "url": "https://github.com/fr0ster/mcp-abap-adt-auth-providers/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/fr0ster/mcp-abap-adt-auth-providers.git",
+    "directory": "packages/auth-spnego-gssapi"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "clean": "node -e \"for (const p of ['dist', 'tsconfig.tsbuildinfo', 'tsconfig.build.tsbuildinfo']) require('node:fs').rmSync(p, { recursive: true, force: true })\"",
+    "lint": "biome check --write src",
+    "lint:check": "biome check --error-on-warnings src",
+    "format": "biome format --write src",
+    "build": "npm run --silent clean && biome check src --diagnostic-level=error && tsc -p tsconfig.build.json",
+    "build:fast": "tsc -p tsconfig.build.json",
+    "test": "jest",
+    "test:check": "tsc --noEmit",
+    "prepublishOnly": "npm run build"
+  },
+  "engines": {
+    "node": "^22 || ^24 || ^26"
+  },
+  "dependencies": {
+    "@mcp-abap-adt/interfaces-auth": "^8.0.1",
+    "kerberos": "^7.0.0"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^2.5.15",
+    "@jest/globals": "^30.5.2",
+    "@types/jest": "^30.0.0",
+    "@types/node": "^25.9.9",
+    "jest": "^30.5.2",
+    "jest-util": "^30.5.1",
+    "ts-jest": "^29.4.14",
+    "typescript": "^5.9.3"
+  },
+  "allowScripts": {
+    "kerberos@7.0.0": true,
+    "@parcel/watcher": false,
+    "unrs-resolver": false
+  }
+}

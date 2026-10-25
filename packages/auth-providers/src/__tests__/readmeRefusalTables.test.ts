@@ -43,16 +43,21 @@ describe('README refusal tables', () => {
     expect(readFileSync(README, 'utf8')).toBe(expected);
   });
 
-  it('renders the five tables', () => {
+  it('renders the six tables', () => {
     expect(
       refusalTableRegions().map((region) => [region.open, region.close]),
     ).toStrictEqual(
-      ['rejected', 'refusals', 'saml', 'saml-candidates', 'configuration'].map(
-        (name) => [
-          `<!-- generated:refusal-table ${name} -->`,
-          `<!-- /generated:refusal-table ${name} -->`,
-        ],
-      ),
+      [
+        'rejected',
+        'refusals',
+        'saml',
+        'saml-candidates',
+        'configuration',
+        'spnego',
+      ].map((name) => [
+        `<!-- generated:refusal-table ${name} -->`,
+        `<!-- /generated:refusal-table ${name} -->`,
+      ]),
     );
   });
 

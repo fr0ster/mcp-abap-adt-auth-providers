@@ -51,6 +51,7 @@ import { refreshThenLogin } from '../../renewal';
 import { DefaultSncLibraryLocator } from '../../snc/DefaultSncLibraryLocator';
 import { SecureLoginClientProbe } from '../../snc/SecureLoginClientProbe';
 import { SncLogonProvider } from '../../snc/SncLogonProvider';
+import { SpnegoAuthProvider } from '../../spnego/SpnegoAuthProvider';
 import { SsoProviderFactory } from '../../sso/SsoProviderFactory';
 import { asOidcResult } from '../../strategies/asOidcResult';
 import {
@@ -187,6 +188,7 @@ const makers: Record<string, Make> = {
   'SncLogonProvider.forSecureLoginClient': (x) =>
     SncLogonProvider.forSecureLoginClient(h(x)),
   'new DefaultSncLibraryLocator': (x) => new DefaultSncLibraryLocator(h(x)),
+  'new SpnegoAuthProvider': (x) => new SpnegoAuthProvider(h(x)),
   'new SecureLoginClientProbe': (x) => new SecureLoginClientProbe(h(x)),
   'SsoProviderFactory.create': (x) => SsoProviderFactory.create(h(x)),
   'clientSecretBasic (secret)': (x) =>
@@ -309,6 +311,7 @@ describe('hostile collaborators never make a constructor throw them', () => {
     'provide',
     'read',
     'remoteHint',
+    'tokenSource',
   ] as const;
   const base = {
     uaaUrl: 'https://uaa.example',
@@ -324,6 +327,7 @@ describe('hostile collaborators never make a constructor throw them', () => {
     idpEntityId: 'idp',
     acsUrl: 'http://localhost:61001/callback',
     partnerName: 'p:CN=SAP',
+    servicePrincipal: 'HTTP@sap.example.com',
   };
   const complete: Record<string, Make> = {
     ClientCredentialsProvider: (x) => new ClientCredentialsProvider(h(x)),
@@ -336,6 +340,16 @@ describe('hostile collaborators never make a constructor throw them', () => {
     Saml2PureProvider: (x) => new Saml2PureProvider(h(x)),
     UaaPasscodeProvider: (x) => new UaaPasscodeProvider(h(x)),
     SncLogonProvider: (x) => new SncLogonProvider(h(x)),
+    // A usable source unless the field under test replaces it.
+    SpnegoAuthProvider: (x) =>
+      new SpnegoAuthProvider(
+        h({
+          tokenSource: {
+            token: async () => ({ ok: false, problem: 'no-credential' }),
+          },
+          ...(x as object),
+        }),
+      ),
     composeAuthorization: (x) =>
       composeAuthorization(h({ endpoint: '/callback', ...(x as object) })),
     consumerPresentation: (x) => consumerPresentation(h(x)),
