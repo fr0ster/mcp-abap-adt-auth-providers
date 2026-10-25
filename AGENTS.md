@@ -2,6 +2,8 @@
 
 ## Project Structure & Module Organization
 
+- The repository is a private root (`package.json` with `publishOrder`, `tools/` with the release scripts: `each-package.js`, `publish-changed.js`, `test-publish-changed.js`, `check-packed.js`) around the package in `packages/auth-providers/`. Every path below is relative to that directory, and the npm scripts below run there; the root scripts (`npm run build`, `check`, `release:publish`, …) run them for every package. Not npm workspaces: each package installs its own dependencies (`npm run install:packages` at the root).
+
 - `src/` contains TypeScript source; key areas include `src/providers/` for token providers, `src/strategies/` for the authorization strategies a consumer can replace, `src/auth/` for the OAuth/OIDC/SAML flow mechanics (`AuthProviderBase`, token requests, rejection reading), `src/authorization/` for authorization by composition (`presentation/`, `transport/` — the loopback callback listener lives here —, `protocol/`), `src/credentials/` for the non-token providers, `src/snc/` for `SncLogonProvider`, `src/renewal/` and `src/persistence/` for the shipped renewal and persistence strategies, `src/clientAuthentication/` for the client-authentication strategies, `src/validation/` for SAML assertion validation (the two shipped validators and the replay store), `src/sso/` for the provider factory. There are no error classes: every throw is an `AuthProviderFailure` from `@mcp-abap-adt/auth-errors`.
 - `src/__tests__/` holds Jest unit tests (`*.test.ts`).
 - `tests/` holds integration configuration templates like `tests/test-config.yaml.template`.

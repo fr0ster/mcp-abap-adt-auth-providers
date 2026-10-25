@@ -25,9 +25,15 @@ jobs:
         with:
           node-version: ${{ matrix.node-version }}
           cache: 'npm'
+          cache-dependency-path: '**/package-lock.json'
 
+      # The packages are not workspaces: the root installs the tools, and each
+      # package installs its own dependencies from the registry. Install
+      # scripts stay off.
       - name: Install dependencies
-        run: npm ci
+        run: |
+          npm ci --ignore-scripts
+          npm run install:packages
 
       - name: Build
         run: npm run build
@@ -40,6 +46,18 @@ jobs:
 
       - name: Test
         run: npm test
+
+      - name: Shape check
+        run: npm run test:shape
+
+      # Packs every package and installs the tarballs into a fresh project.
+      - name: Packed packages
+        run: npm run check:packed
+
+      # Runs the publish script against throwaway repositories with a fake
+      # npm: no registry credentials, nothing published.
+      - name: Publish path
+        run: npm run check:publish
 
   # The providers against real authorization servers — Cloud Foundry UAA and
   # Keycloak — started in Docker by tests/stand/run.sh and stopped again when
@@ -60,9 +78,12 @@ jobs:
         with:
           node-version: ${{ matrix.node-version }}
           cache: 'npm'
+          cache-dependency-path: '**/package-lock.json'
 
       - name: Install dependencies
-        run: npm ci
+        working-directory: packages/auth-providers
+        run: npm ci --ignore-scripts
 
       - name: Test against UAA and Keycloak
+        working-directory: packages/auth-providers
         run: npm run test:stand

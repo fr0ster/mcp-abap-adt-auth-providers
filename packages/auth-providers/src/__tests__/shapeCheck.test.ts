@@ -21,6 +21,8 @@ import {
 import * as typescript from 'typescript';
 
 const ROOT = resolve(__dirname, '../..');
+/** The repository root: the package lives in packages/auth-providers. */
+const REPO_ROOT = resolve(ROOT, '../..');
 const FIXTURES = join(ROOT, 'tools', '__fixtures__');
 const RULE8_ROOT = join(FIXTURES, 'rule8');
 
@@ -243,7 +245,7 @@ describe('the shape check', () => {
 
     it('the release workflow runs test:shape after the build', () => {
       const workflow = readFileSync(
-        join(ROOT, '.github', 'workflows', 'release.yml'),
+        join(REPO_ROOT, '.github', 'workflows', 'release.yml'),
         'utf8',
       );
       const build = workflow.indexOf('run: npm run build\n');
