@@ -16,10 +16,11 @@ second stage settles it before the claim is written as fact).
 | 3 | this repository, two packages | `@mcp-abap-adt/auth-providers` with `SpnegoAuthProvider` — **major** (7.0.0): it produces a new kind, on interfaces-auth 8; `@mcp-abap-adt/auth-spnego-gssapi` (§5), a token source over the `kerberos` npm package — first release; the stand and its suite | one release of the repository, `release:publish` publishing both |
 
 1 and 2 are published before 3 depends on them; nothing builds against an
-unpublished version of another repository. Inside this repository the two
-packages are workspace siblings (the standing exception for packages of one
-repository): the stand suite runs the provider with the system source linked, so the
-protocol is proved before either is published. Neither package depends on the
+unpublished version of another repository. Inside this repository each package
+installs its dependencies from the registry (the interfaces layout, no npm
+link); the stand suite, a test of the system source's package, imports the
+provider from its sibling's source, so the protocol is proved before either
+is published. Neither package depends on the
 other (§5); only the stand suite uses both.
 
 **Step 0 — this repository becomes a multi-package repository**, its own PR,
@@ -224,8 +225,8 @@ Added to `compose.yaml`, images built from committed Dockerfiles on a pinned
   needs the MIT client tools and headers — CI installs them). The request
   goes to `127.0.0.1:<port>`; the service principal is stated, so no DNS
   name is needed — which is itself a test of §4.1.
-- The suite lives with the stand and imports both packages as workspace
-  siblings; the stand job alone builds the native part (`npm rebuild kerberos
+- The suite is a test of the system source's package and imports the
+  provider from its sibling's source (test-only, no npm link); the stand job alone builds the native part (`npm rebuild kerberos
   --build-from-source`, allowed by `allowScripts` for that one package). The
   published auth-providers carries no native code and no install script, and
   does not depend on the system source.
