@@ -1,0 +1,15 @@
+# Every text file is checked out with LF on every OS — Biome's format check
+# (part of the build) refuses CRLF, and nothing here needs CRLF.
+* text=auto eol=lf
+
+# Binary files stay as they are.
+*.pfx binary
+*.p12 binary
+*.der binary
+*.png binary
+*.jpg binary
+*.gif binary
+*.ico binary
+*.tgz binary
+*.gz binary
+*.node binary

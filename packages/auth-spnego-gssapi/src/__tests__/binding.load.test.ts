@@ -54,6 +54,36 @@ gssapiTokenSource({ mechanism: ${JSON.stringify(mechanism)} })
   return JSON.parse((line ?? '').slice('ANSWER '.length));
 }
 
+/**
+ * A diagnostic for a mismatch only: the binding called directly, in the same
+ * environment, and its raw error message returned — on a CI machine with no
+ * ticket it names no secret, and it is the text a missing phrase needs.
+ */
+function rawBindingMessage(
+  mechanism: 'spnego' | 'kerberos',
+  env: NodeJS.ProcessEnv,
+): string {
+  const kerberos = path.resolve(__dirname, '../../node_modules/kerberos');
+  const script = `
+const k = require(${JSON.stringify(kerberos)});
+const oid = ${JSON.stringify(mechanism)} === 'spnego' ? k.GSS_MECH_OID_SPNEGO : k.GSS_MECH_OID_KRB5;
+k.initializeClient('HTTP@spnego.invalid', { mechOID: oid })
+  .then((c) => c.step(''))
+  .then(
+    () => process.stderr.write('RAW (a token, no error)\\n'),
+    (e) => process.stderr.write('RAW ' + JSON.stringify(String(e && e.message)) + '\\n'),
+  );
+`;
+  const run = spawnSync(process.execPath, ['-e', script], {
+    env,
+    encoding: 'utf8',
+  });
+  return (
+    run.stderr.split('\n').find((l) => l.startsWith('RAW ')) ??
+    `RAW (none; exit ${run.status})`
+  );
+}
+
 describeBuilt(where, () => {
   it.each(['spnego', 'kerberos'] as const)(
     '%s: a machine with no ticket gets no token',
@@ -76,10 +106,18 @@ describeBuilt(where, () => {
       }
       const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gssapi-no-ticket-'));
       try {
-        const answer = askChild(mechanism, {
+        const env = {
           ...process.env,
           KRB5CCNAME: `FILE:${path.join(dir, 'cc')}`,
-        });
+        };
+        const answer = askChild(mechanism, env);
+        if (
+          JSON.stringify(answer) !==
+          JSON.stringify({ ok: false, problem: 'no-credential' })
+        )
+          process.stderr.write(
+            `${process.platform}, ${mechanism}, no ticket: answer ${JSON.stringify(answer)}; binding ${rawBindingMessage(mechanism, env)}\n`,
+          );
         expect(answer).toEqual({ ok: false, problem: 'no-credential' });
       } finally {
         fs.rmSync(dir, { recursive: true, force: true });
