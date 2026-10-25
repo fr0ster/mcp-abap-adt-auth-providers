@@ -59,6 +59,52 @@ jobs:
       - name: Publish path
         run: npm run check:publish
 
+  # The system token source over the real `kerberos` binding, on each OS it
+  # supports (x64 Linux and Windows; macos-latest is Apple silicon, the binding
+  # builds universal there). Every install keeps --ignore-scripts; the one
+  # build allowed is `kerberos`, from source (no prebuilt binary downloaded),
+  # which the package's allowScripts names. The load test then runs the built
+  # package against a machine with no ticket.
+  auth-spnego-gssapi:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+
+    defaults:
+      run:
+        working-directory: packages/auth-spnego-gssapi
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: 'npm'
+          cache-dependency-path: '**/package-lock.json'
+
+      - name: Kerberos headers (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libkrb5-dev
+
+      - name: Install dependencies
+        run: npm ci --ignore-scripts
+
+      - name: Build the kerberos binding from source
+        run: npm rebuild kerberos --build-from-source
+
+      - name: Build
+        run: npm run build
+
+      - name: Test, the built binding loaded
+        env:
+          KERBEROS_BINDING: built
+        run: npm test
+
   # The providers against real authorization servers — Cloud Foundry UAA and
   # Keycloak — started in Docker by tests/stand/run.sh and stopped again when
   # the suites end. On failure the script prints the servers' logs first.
