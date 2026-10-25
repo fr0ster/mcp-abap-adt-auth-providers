@@ -105,10 +105,11 @@ not called — and again when it returns, the token then dropped; either answers
 The binding's error carries no status code, only text: the source reads it for fixed phrases of
 the Kerberos libraries' error tables (plain substring search, case-sensitive) and returns only the
 problem. Nothing of the text — which may name the ticket cache, the user or the realm — reaches
-an answer. The phrases for no ticket with MIT Kerberos are measured; the others follow the
-libraries' error tables and are checked against a KDC on the provider stand. Windows' SSPI texts
-are localised: on a Windows that does not speak English, a failure other than an unloadable
-binding may answer `source-failed`.
+an answer. Only the no-ticket phrases of MIT Kerberos are measured (2026-10-25, MIT krb5 1.20.1).
+The others are taken from the libraries' error tables and are Pending: the MIT ones will be checked
+against a KDC on the provider stand, Heimdal (macOS) and SSPI (Windows) on those systems. Windows'
+SSPI texts are localised, so on a Windows that does not speak English, a failure other than an
+unloadable binding may answer `source-failed`.
 
 ## Whose identity
 

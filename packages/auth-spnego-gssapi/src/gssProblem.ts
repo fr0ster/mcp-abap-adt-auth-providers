@@ -8,10 +8,10 @@ import type { NegotiateSourceProblem } from '@mcp-abap-adt/interfaces-auth';
  * message is searched for fixed phrases with a plain, case-sensitive
  * `includes` — never a regex — and nothing of it leaves this function.
  *
- * The phrases come from the libraries' own error tables; which ones a real
- * failure carries is measured on the Kerberos stand (MIT) and in the second
- * stage (macOS, Windows, whose SSPI texts are localised). Unmatched is
- * `source-failed`.
+ * The phrases come from the libraries' own error tables. Each is tagged:
+ * Measured (seen in a run, with the date) or To measure — the MIT ones on the
+ * Kerberos stand (Task C4), Heimdal on macOS and SSPI on Windows (whose texts
+ * are localised) in CI or the second stage. Unmatched is `source-failed`.
  *
  * Order matters: the specific causes (the minor status) are read before the
  * general "no credentials" major status that may accompany them.
@@ -22,36 +22,36 @@ const PHRASES: ReadonlyArray<
   [
     'service-unknown',
     [
-      'Server not found in Kerberos database', // KRB5KDC_ERR_S_PRINCIPAL_UNKNOWN
-      'The specified target is unknown or unreachable', // SEC_E_TARGET_UNKNOWN
+      'Server not found in Kerberos database', // KRB5KDC_ERR_S_PRINCIPAL_UNKNOWN — To measure (stand)
+      'The specified target is unknown or unreachable', // SEC_E_TARGET_UNKNOWN — To measure (Windows)
     ],
   ],
   [
     'kdc-unreachable',
     [
-      'Cannot contact any KDC', // KRB5_KDC_UNREACH
-      'Cannot find KDC for', // KRB5_REALM_UNKNOWN
-      'unable to reach any KDC', // Heimdal
-      'No authority could be contacted for authentication', // SEC_E_NO_AUTHORITY
+      'Cannot contact any KDC', // KRB5_KDC_UNREACH — To measure (stand)
+      'Cannot find KDC for', // KRB5_REALM_UNKNOWN — To measure (stand)
+      'unable to reach any KDC', // Heimdal — To measure (macOS)
+      'No authority could be contacted for authentication', // SEC_E_NO_AUTHORITY — To measure (Windows)
     ],
   ],
   [
     'clock-skew',
     [
-      'Clock skew too great', // KRB5KRB_AP_ERR_SKEW
-      'The clocks on the client and server machines are skewed', // SEC_E_TIME_SKEW
+      'Clock skew too great', // KRB5KRB_AP_ERR_SKEW — To measure (stand)
+      'The clocks on the client and server machines are skewed', // SEC_E_TIME_SKEW — To measure (Windows)
     ],
   ],
   [
     'no-credential',
     [
-      'No Kerberos credentials available', // MIT minor, no ticket cache
-      'No credentials cache found', // KRB5_FCC_NOFILE
-      'No credentials were supplied', // GSS_S_NO_CRED
-      'Ticket expired', // KRB5KRB_AP_ERR_TKT_EXPIRED
-      'The referenced credential has expired', // GSS_S_CREDENTIALS_EXPIRED
-      'The referenced credentials have expired',
-      'No credentials are available in the security package', // SEC_E_NO_CREDENTIALS
+      'No Kerberos credentials available', // MIT minor, no ticket cache — Measured 2026-10-25 (MIT 1.20.1, Docker)
+      'No credentials cache found', // KRB5_FCC_NOFILE — To measure (not seen in the Docker run)
+      'No credentials were supplied', // GSS_S_NO_CRED — Measured 2026-10-25 (MIT 1.20.1, Docker)
+      'Ticket expired', // KRB5KRB_AP_ERR_TKT_EXPIRED — To measure (stand)
+      'The referenced credential has expired', // GSS_S_CREDENTIALS_EXPIRED — To measure (stand)
+      'The referenced credentials have expired', // To measure (stand)
+      'No credentials are available in the security package', // SEC_E_NO_CREDENTIALS — To measure (Windows)
     ],
   ],
 ];

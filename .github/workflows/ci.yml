@@ -60,17 +60,23 @@ jobs:
         run: npm run check:publish
 
   # The system token source over the real `kerberos` binding, on each OS it
-  # supports (x64 Linux and Windows; macos-latest is Apple silicon, the binding
-  # builds universal there). Every install keeps --ignore-scripts; the one
-  # build allowed is `kerberos`, from source (no prebuilt binary downloaded),
-  # which the package's allowScripts names. The load test then runs the built
-  # package against a machine with no ticket.
+  # supports: Linux x64 inside a node:24-bookworm container (whatever can run
+  # in Docker runs there), macOS on Apple silicon and Windows x64 on their
+  # hosted runners (Windows on arm64 is out). Every install keeps
+  # --ignore-scripts; the one build allowed is `kerberos`, from source (no
+  # prebuilt binary downloaded), which the package's allowScripts names. The
+  # load test then runs the built package against a machine with no ticket.
   auth-spnego-gssapi:
     runs-on: ${{ matrix.os }}
+    container: ${{ matrix.container }}
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        include:
+          - os: ubuntu-latest
+            container: node:24-bookworm
+          - os: macos-latest
+          - os: windows-latest
 
     defaults:
       run:
@@ -80,16 +86,18 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      # The container brings Node 24 itself.
       - name: Setup Node.js
+        if: runner.os != 'Linux'
         uses: actions/setup-node@v4
         with:
           node-version: '24'
           cache: 'npm'
           cache-dependency-path: '**/package-lock.json'
 
-      - name: Kerberos headers (Linux)
+      - name: Kerberos headers (Linux container)
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y libkrb5-dev
+        run: apt-get update && apt-get install -y libkrb5-dev
 
       - name: Install dependencies
         run: npm ci --ignore-scripts
