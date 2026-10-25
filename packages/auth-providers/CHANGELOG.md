@@ -25,6 +25,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   install keeps `--ignore-scripts`, and CI runs `npm run audit` (root and each package,
   `npm audit --audit-level=moderate`, gating). No advisory was open and no `overrides` entry is
   needed. The published content is unchanged.
+- The provider stand gains a Kerberos stand (`tests/stand/kerberos`): an MIT KDC for the realm
+  `STAND.TEST` and a Negotiate-only Apache (`mod_auth_gssapi`) on their own Docker network, and
+  the SPNego suite run inside it in a `spnego-client` container after the host suites —
+  `SpnegoAuthProvider` with `@mcp-abap-adt/auth-spnego-gssapi`'s `gssapiTokenSource`, both
+  mechanisms accepted (`200`, the user `alice`), a fresh token per request (a resent one refused
+  by the replay cache), `no-credential`, `service-unknown`, `kdc-unreachable`, and a refused
+  ticket and a `Negotiate` continuation both `credential-refused` `kerberos-ticket`. The host
+  needs only Docker; the container installs and builds its own copies, and the host's
+  `node_modules` are not touched. `readNegotiateToken`'s tests read Kerberos and SPNEGO tokens
+  captured there. The published content is unchanged.
 
 ## [6.0.2] - 2026-10-12
 

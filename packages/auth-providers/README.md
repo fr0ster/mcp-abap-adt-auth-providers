@@ -4192,14 +4192,15 @@ server XSUAA is built from, and [Keycloak](https://www.keycloak.org/)
 system, no setup step:
 
 ```bash
-npm run test:stand    # start UAA and Keycloak, run the suites, stop both
+npm run test:stand    # start the stand, run the suites, stop it
 ```
 
-`test:stand` starts both containers with `docker compose`, waits until both
-answer, runs the suites, and stops the containers again — also when a test
-fails, with the suites' exit code, after printing the last 200 lines of each
-server's log. A full run takes well under a minute. CI runs exactly this as its
-own job, on Node 22 and 24. To keep the stand up between runs, start it
+`test:stand` starts the containers with `docker compose` — UAA, Keycloak and
+the Kerberos stand (below) —, waits until each answers, runs the suites, and
+stops the containers again — also when a test fails, with the suites' exit
+code, after printing the last 200 lines of each server's log. A full run takes
+a minute or two once the images are built. CI runs exactly this as its
+own job, on Node 22, 24 and 26. To keep the stand up between runs, start it
 yourself; `test:stand` then leaves it running. Ownership is per server: if only
 one of the two was running, the run starts the other and removes only that one
 afterwards:
@@ -4248,11 +4249,53 @@ server certificate, client certificates `client-a` (mapped) and `client-b`
 | `OidcDeviceFlowProvider` + `privateKeyJwt` | Keycloak HTTPS (client `jwt`) | the whole flow with the default audience, the token endpoint, and no `audience`; the device initiation refused with `audience` set to the device endpoint |
 | `CertificateAuthProvider` | Keycloak HTTPS (client `x509-login`) | the X.509 user logon, Keycloak's analogue of ABAP `CERTRULE`: the material the provider hands a logon logs on as the user `client-a`; `client-b` and no certificate refused |
 | `ClientCredentialsProvider` + `privateKeyJwt` | UAA (client `jwt_client`) | a client token with no secret, the assertion's audience UAA's issuer |
+| `SpnegoAuthProvider` + `gssapiTokenSource` | MIT KDC + Apache `mod_auth_gssapi` (the Kerberos stand) | see "SPNego against a real KDC" below |
+
+#### SPNego against a real KDC (the Kerberos stand)
+
+`tests/stand/kerberos/` holds an MIT krb5 KDC for the throwaway realm
+`STAND.TEST` and a Negotiate-only service, Apache httpd with
+`mod_auth_gssapi`, both built from committed Dockerfiles on a pinned Debian
+bookworm and reached only on their own Docker network as `kdc.stand.test`,
+`negotiate.stand.test` and `stale.stand.test` (no host port). The KDC makes its
+database afresh at every start: the user `alice` (password the committed
+fixture `alice.password`), `HTTP/negotiate.stand.test` with its keytab written
+to a volume, and `HTTP/stale.stand.test`, whose key is changed right after its
+keytab is exported, so the service refuses every ticket for it. No keytab or
+key is committed. The service protects `/sap` (Kerberos only, the replay cache
+on, the accepted user echoed in `X-Remote-User`), serves `stale.stand.test`
+from the stale keytab, and answers `/continuation` `401` with a fixed
+`WWW-Authenticate: Negotiate <token>`.
+
+The SPNego suite — a test of `@mcp-abap-adt/auth-spnego-gssapi`,
+`src/__tests__/stand/spnego.test.ts`, which loads this package's
+`SpnegoAuthProvider` from its source — runs inside the stand, in the
+`spnego-client` container (pinned `node:24-bookworm` with the MIT client tools),
+after the host suites: the repository is mounted read-only, both packages are
+copied into the container and installed there with `--ignore-scripts`, the
+`kerberos` binding is built from source and both packages are built
+(`tests/stand/kerberos/client/run-suite.sh`). The host's `node_modules` are not
+touched, and no Docker socket is mounted. Measured 2026-10-25 (MIT krb5 1.20.1,
+`kerberos` 7.0.0):
+
+| case | result, `mechanism: 'spnego'` and `'kerberos'` alike |
+|---|---|
+| a ticket for `alice` | `200`, `X-Remote-User: alice` — Apache with `GssapiAllowedMech krb5` accepts both the SPNEGO token and the bare Kerberos one |
+| two requests | two different tokens, both `200`; the first token sent again by hand is refused `401` (replay cache) |
+| no ticket (a missing or an empty cache file, a child process) | `prepare()` is `spnego` `no-credential`; no request sent |
+| a service the KDC does not know | `spnego` `service-unknown` |
+| a cache holding alice's TGT and no service ticket (checked with `klist`), a KDC that does not answer (a child process) | `spnego` `kdc-unreachable` |
+| a ticket for `HTTP@stale.stand.test` | `401` → `rejected()` is `credential-refused` `kerberos-ticket` |
+| the configured continuation (`401`, a non-empty `Negotiate` token, both checked) | `credential-refused` `kerberos-ticket` |
+| every log line, outcome and refusal of every case | holds no part of any token |
+
+Clock skew is not on the stand (one clock).
 
 The servers' configuration is committed as test fixtures —
 `tests/stand/uaa/config/uaa.yml`, `tests/stand/keycloak/realm-test.json`, the
-test identity provider's key in `tests/stand/uaa/idp/` and the TLS fixtures in
-`tests/stand/keycloak/tls/` — so every machine and CI
+test identity provider's key in `tests/stand/uaa/idp/`, the TLS fixtures in
+`tests/stand/keycloak/tls/` and the Kerberos stand's `tests/stand/kerberos/` —
+so every machine and CI
 run the same stand. The keys and passwords in them are trusted by nothing but
 that local stand; they are not secrets, and must not be reused.
 

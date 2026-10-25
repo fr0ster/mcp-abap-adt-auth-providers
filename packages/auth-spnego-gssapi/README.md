@@ -106,11 +106,25 @@ not called — and again when it returns, the token then dropped; either answers
 The binding's error carries no status code, only text: the source reads it for fixed phrases of
 the Kerberos libraries' error tables (plain substring search, case-sensitive) and returns only the
 problem. Nothing of the text — which may name the ticket cache, the user or the realm — reaches
-an answer. Only the no-ticket phrases of MIT Kerberos are measured (2026-10-25, MIT krb5 1.20.1).
-The others are taken from the libraries' error tables and are Pending: the MIT ones will be checked
-against a KDC on the provider stand, Heimdal (macOS) and SSPI (Windows) on those systems. Windows'
-SSPI texts are localised, so on a Windows that does not speak English, a failure other than an
+an answer. Measured (2026-10-25, MIT krb5 1.20.1): no ticket, an unknown service and an
+unreachable KDC on MIT — the last two against a real KDC on auth-providers' Kerberos stand
+(`tests/stand/kerberos`, whose suite is this package's `src/__tests__/stand/spnego.test.ts`) —
+and no ticket on macOS. The others — an expired ticket, clock skew, Heimdal's and SSPI's texts
+beyond no ticket — are taken from the libraries' error tables and are Pending. Windows' SSPI
+texts are localised, so on a Windows that does not speak English, a failure other than an
 unloadable binding may answer `source-failed`.
+
+Received on the Kerberos stand (measured 2026-10-25, MIT krb5 1.20.1, `kerberos` 7.0.0; the
+same text for `spnego` and `kerberos`):
+
+| Case | Text the binding raised | Answer |
+|---|---|---|
+| a service the KDC does not know | `Unspecified GSS failure. … : Server HTTP/<host>@<REALM> not found in Kerberos database` | `service-unknown` |
+| a TGT in the cache, no KDC answering | `Unspecified GSS failure. … : Cannot contact any KDC for realm '<REALM>'` | `kdc-unreachable` |
+
+The first names the principal between two fixed texts, so the source matches `: Server ` and
+` not found in Kerberos database` in that order; an unknown *client* (`Client '…' not found in
+Kerberos database`) is not `service-unknown`.
 
 Received with no ticket (measured 2026-10-25), and what the source answers:
 

@@ -24,6 +24,20 @@ describe('mapGssFailure', () => {
       ' Miscellaneous failure (see text): get-pricipal open(/var/folders/n6/hn37q6pj7sj_9dmqqc2113800000gn/T/gssapi-no-ticket-8N5DhB/cc): No such file or directory',
       'no-credential',
     ],
+    // Measured 2026-10-25 on the Kerberos stand, MIT krb5 1.20.1, kerberos
+    // 7.0.0 built from source; the same text for spnego and kerberos.
+    [
+      'Unspecified GSS failure.  Minor code may provide more information: Server HTTP/unknown.stand.test@STAND.TEST not found in Kerberos database',
+      'service-unknown',
+    ],
+    [
+      "Unspecified GSS failure.  Minor code may provide more information: Cannot contact any KDC for realm 'STAND.TEST'",
+      'kdc-unreachable',
+    ],
+    [
+      'No credentials were supplied, or the credentials were unavailable or inaccessible: No Kerberos credentials available (default cache: FILE:/tmp/tmp.B3bQM7xkdR/missing)',
+      'no-credential',
+    ],
     // MIT krb5, no ticket cache / no ticket
     [
       'No credentials were supplied, or the credentials were unavailable or inaccessible: No Kerberos credentials available (default cache: FILE:/tmp/krb5cc_1000)',
@@ -147,6 +161,28 @@ describe('mapGssFailure', () => {
           'Server not found in Kerberos database: get-pricipal open(/tmp/cc)',
         ),
       ),
+    ).toBe('service-unknown');
+  });
+
+  it('reads an unknown client as no service problem', () => {
+    // KRB5KDC_ERR_C_PRINCIPAL_UNKNOWN names the client, not the service.
+    expect(
+      mapGssFailure(
+        new Error(
+          "Unspecified GSS failure.  Minor code may provide more information: Client 'bob@STAND.TEST' not found in Kerberos database",
+        ),
+      ),
+    ).toBe('source-failed');
+  });
+
+  it('reads the two halves of the service-unknown text only in order', () => {
+    expect(
+      mapGssFailure(
+        new Error('x not found in Kerberos database: Server HTTP/a@STAND.TEST'),
+      ),
+    ).toBe('source-failed');
+    expect(
+      mapGssFailure(new Error(': Server  not found in Kerberos database')),
     ).toBe('service-unknown');
   });
 

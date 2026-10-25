@@ -1,4 +1,5 @@
 import { readNegotiateToken } from '../../spnego/negotiateToken';
+import { CAPTURED_KERBEROS, CAPTURED_SPNEGO } from './fixtures/capturedTokens';
 import {
   b64,
   gssKerberos,
@@ -11,20 +12,27 @@ import {
   tlv,
 } from './fixtures/derParts';
 
+// The Kerberos tokens are the ones captured on the Kerberos stand (MIT krb5);
+// the legacy Microsoft OID, which MIT does not produce, and NTLM are built.
+const KERBEROS = Buffer.from(CAPTURED_KERBEROS, 'base64');
+const SPNEGO = Buffer.from(CAPTURED_SPNEGO, 'base64');
+
 describe('readNegotiateToken', () => {
   describe('kerberos', () => {
-    it('a GSS-framed Kerberos token', () => {
-      expect(readNegotiateToken(b64(gssKerberos()))).toBe('kerberos');
+    it('a captured GSS-framed Kerberos token (mechanism kerberos)', () => {
+      // Its frame has a two-byte length: 0x60 0x82 <hi> <lo>.
+      expect(KERBEROS[0]).toBe(0x60);
+      expect(KERBEROS[1]).toBe(0x82);
+      expect(readNegotiateToken(CAPTURED_KERBEROS)).toBe('kerberos');
     });
-    it('a long GSS-framed Kerberos token (two-byte length)', () => {
-      expect(readNegotiateToken(b64(gssKerberos(OID_KRB5, 3000)))).toBe(
-        'kerberos',
-      );
+    it('a captured SPNEGO NegTokenInit (mechanism spnego)', () => {
+      expect(SPNEGO.subarray(4, 12).equals(tlv(0x06, OID_SPNEGO))).toBe(true);
+      expect(readNegotiateToken(CAPTURED_SPNEGO)).toBe('kerberos');
     });
-    it('a SPNEGO NegTokenInit with Kerberos first', () => {
+    it('a SPNEGO NegTokenInit built around the captured Kerberos token', () => {
       const t = negTokenInit({
         mechs: [OID_KRB5, OID_NTLM],
-        mechToken: gssKerberos(),
+        mechToken: KERBEROS,
         reqFlags: true,
       });
       expect(readNegotiateToken(b64(t))).toBe('kerberos');
@@ -52,7 +60,7 @@ describe('readNegotiateToken', () => {
     it('NegTokenInit fields: unknown tag, repeated or out of order', () => {
       const types = tlv(0xa0, tlv(0x30, tlv(0x06, OID_KRB5)));
       const flags = tlv(0xa1, tlv(0x03, Buffer.from([0x00, 0x40])));
-      const tok = tlv(0xa2, tlv(0x04, gssKerberos()));
+      const tok = tlv(0xa2, tlv(0x04, KERBEROS));
       const mic = tlv(0xa3, tlv(0x04, Buffer.from('mic')));
       const init = (...f: Buffer[]) =>
         b64(
@@ -69,7 +77,7 @@ describe('readNegotiateToken', () => {
     it('a SPNEGO token with Kerberos listed second is unreadable', () => {
       const t = negTokenInit({
         mechs: [OID_NTLM, OID_KRB5],
-        mechToken: gssKerberos(),
+        mechToken: KERBEROS,
       });
       expect(readNegotiateToken(b64(t))).toBe('unreadable');
     });
@@ -137,8 +145,10 @@ describe('readNegotiateToken', () => {
     });
 
     it('a GSS length past the end of the buffer', () => {
-      const t = Buffer.from(gssKerberos());
-      t[1] = t[1] === 0x7f ? 0x7e : (t[1] ?? 0) + 1;
+      const t = Buffer.from(KERBEROS);
+      const length = (((t[2] ?? 0) << 8) | (t[3] ?? 0)) + 1;
+      t[2] = length >> 8;
+      t[3] = length & 0xff;
       expect(readNegotiateToken(b64(t))).toBe('unreadable');
     });
 
@@ -170,30 +180,30 @@ describe('readNegotiateToken', () => {
     });
 
     it('an indefinite length inside a NegTokenInit', () => {
-      const good = negTokenInit({
-        mechs: [OID_KRB5],
-        mechToken: gssKerberos(),
-      });
-      // replace the inner SEQUENCE's length by 0x80: find the first 0x30
-      const i = good.indexOf(0x30, 10);
-      const t = Buffer.from(good);
-      t[i + 1] = 0x80;
+      // The captured token: 60 82 LL LL, the SPNEGO OID (8 bytes),
+      // a0 82 LL LL, then the NegTokenInit SEQUENCE at 16.
+      const t = Buffer.from(SPNEGO);
+      expect(t[12]).toBe(0xa0);
+      expect(t[16]).toBe(0x30);
+      t[17] = 0x80;
       expect(readNegotiateToken(b64(t))).toBe('unreadable');
     });
 
     it('trailing bytes after the framed token', () => {
-      const t = Buffer.concat([gssKerberos(), Buffer.from([0])]);
+      const t = Buffer.concat([KERBEROS, Buffer.from([0])]);
       expect(readNegotiateToken(b64(t))).toBe('unreadable');
     });
 
     it('a mechanism token longer than its container', () => {
       const t = Buffer.from(
-        negTokenInit({ mechs: [OID_KRB5], mechToken: gssKerberos() }),
+        negTokenInit({ mechs: [OID_KRB5], mechToken: KERBEROS }),
       );
-      // the OCTET STRING (0x04) of the mechToken: inflate its length byte
-      const i = t.lastIndexOf(0x04, t.length - 70);
-      expect(i).toBeGreaterThan(0);
-      t[i + 1] = 0x82;
+      // the OCTET STRING of the mechToken, 04 82 <hi> <lo>, right before it:
+      // inflate its length past what remains
+      const at = t.indexOf(KERBEROS);
+      expect(t[at - 4]).toBe(0x04);
+      expect(t[at - 3]).toBe(0x82);
+      t[at - 2] = 0x7f;
       expect(readNegotiateToken(b64(t))).toBe('unreadable');
     });
 
@@ -211,12 +221,13 @@ describe('readNegotiateToken', () => {
     });
 
     const valid: Array<[string, Buffer]> = [
-      ['GSS Kerberos', gssKerberos()],
+      ['captured GSS Kerberos', KERBEROS],
+      ['captured SPNEGO', SPNEGO],
       [
         'NegTokenInit Kerberos',
         negTokenInit({
           mechs: [OID_KRB5, OID_NTLM],
-          mechToken: gssKerberos(),
+          mechToken: KERBEROS,
           reqFlags: true,
           mic: true,
         }),

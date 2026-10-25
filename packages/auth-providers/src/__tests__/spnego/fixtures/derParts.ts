@@ -1,5 +1,8 @@
 // DER parts for building Negotiate tokens in tests (RFC 2743 §3.1, RFC 4178 §4.2).
-// Kerberos tokens built here are stand-ins until real captured ones replace them.
+// readNegotiateToken is tested on Kerberos tokens captured on the stand
+// (capturedTokens.ts); gssKerberos builds what MIT does not produce (the
+// legacy Microsoft OID) and the many distinct tokens the provider's unit tests
+// need.
 
 export function len(n: number): Buffer {
   if (n < 0x80) return Buffer.from([n]);

@@ -18,3 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `binding-unavailable`, `source-failed`, `mechanism-unsupported` — and no text of the binding's error.
 - The identity is the process's default one (the ticket cache, the domain logon); no principal
   option.
+- The binding's texts for an unknown service and an unreachable KDC are measured on MIT krb5
+  1.20.1 against a real KDC (auth-providers' Kerberos stand): MIT names the principal inside the
+  unknown-service text, so it is matched as two fixed texts in order; an unknown client is not
+  `service-unknown`.

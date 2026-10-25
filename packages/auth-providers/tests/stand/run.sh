@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
-# One command for the provider stand suites: start UAA and Keycloak in Docker,
-# run the tests against them, and stop them again — the same locally and in CI.
+# One command for the provider stand suites: start UAA, Keycloak and the
+# Kerberos stand in Docker, run the tests against them, and stop them again —
+# the same locally and in CI. The host suites run first; then the SPNego suite
+# runs inside the stand (the spnego-client container, see compose.yaml), and
+# the run fails if either fails.
 #
 # Whoever starts a server stops it, per service: one that was already running
 # (from `npm run stand:up`, or started by hand) is left running, and only the
@@ -15,7 +18,7 @@ cd "$HERE"
 PORT="${UAA_PORT:-8080}"
 KC_PORT="${KEYCLOAK_PORT:-8081}"
 KC_HTTPS_PORT="${KEYCLOAK_HTTPS_PORT:-8444}"
-SERVICES="uaa keycloak"
+SERVICES="uaa keycloak kdc negotiate"
 
 wanted_address() { # service
   case "$1" in
@@ -40,6 +43,8 @@ for service in $SERVICES; do
   case " $started " in
     *" $service "*) ;;
     *)
+      # The Kerberos stand publishes no port: nothing to compare.
+      case "$service" in kdc | negotiate) continue ;; esac
       actual="$(docker compose port "$service" 8080 2>/dev/null || true)"
       wanted="$(wanted_address "$service")"
       if [ "$actual" != "$wanted" ]; then
@@ -76,6 +81,14 @@ stop() {
       # shellcheck disable=SC2086
       docker compose -f "$HERE/compose.yaml" rm --stop --force $started \
         >/dev/null 2>&1 || echo "could not stop: $started" >&2
+      # The Kerberos stand's volume and network, once neither of its servers
+      # is left: both were this run's.
+      case " $started " in
+        *" kdc "*" negotiate "*)
+          docker volume rm auth-providers-keytabs >/dev/null 2>&1 || true
+          docker network rm stand_kerberos >/dev/null 2>&1 || true
+          ;;
+      esac
     fi
   fi
   exit "$status"
@@ -87,8 +100,21 @@ UAA_PORT="$PORT" KEYCLOAK_PORT="$KC_PORT" KEYCLOAK_HTTPS_PORT="$KC_HTTPS_PORT" \
 cd "$ROOT"
 # NODE_EXTRA_CA_CERTS: the suites trust Keycloak's HTTPS through the stand's
 # own CA, as a consumer trusts a private CA — no provider takes a `ca`.
+host_status=0
 UAA_URL="http://localhost:$PORT/uaa" \
   KEYCLOAK_URL="http://localhost:$KC_PORT/realms/test" \
   KEYCLOAK_HTTPS_URL="https://localhost:$KC_HTTPS_PORT/realms/test" \
   NODE_EXTRA_CA_CERTS="$HERE/keycloak/tls/ca.crt" \
-  npm test -- src/__tests__/integration/stand "$@"
+  npm test -- src/__tests__/integration/stand "$@" || host_status=$?
+
+# The SPNego suite, inside the stand's network: the container copies the
+# packages from the read-only repository, installs and builds them there, and
+# exits with the suite's code (kerberos/client/run-suite.sh).
+spnego_status=0
+docker compose -f "$HERE/compose.yaml" run --rm --build spnego-client \
+  || spnego_status=$?
+
+if [ "$host_status" -ne 0 ] || [ "$spnego_status" -ne 0 ]; then
+  echo "stand suites failed: host $host_status, SPNego $spnego_status" >&2
+  exit 1
+fi
