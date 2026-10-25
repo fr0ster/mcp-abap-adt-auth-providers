@@ -70,11 +70,12 @@ type NegotiateTokenAnswer =
   | `kdc-unreachable` | no KDC answered (source) | the Kerberos configuration's realm and KDC |
   | `clock-skew` | the clock differs from the KDC's beyond its tolerance (source) | the machine's time |
   | `binding-unavailable` | the source's library cannot be loaded (source) | install the system source's native part |
+  | `mechanism-unsupported` | the mechanism the source asked for is not supported where it ran (source; measured: GSS.framework on macOS with no ticket answers "An unsupported mechanism was requested" for SPNEGO) | check that the system's GSS library supports the configured mechanism |
   | `source-failed` | any other failure the source recognises as its own (source) | — |
   | `ntlm-token` | the token is NTLM, not Kerberos (provider, §4.3) | the service principal is not known to the domain; NTLM is not used |
   | `token-unreadable` | the token is empty, not base64, or neither Kerberos nor NTLM (provider) | — |
 
-  `NegotiateSourceProblem` is the first six. The facts are the problem and the
+  `NegotiateSourceProblem` is the source's seven (`mechanism-unsupported` added in interfaces-auth 8.0.1, a design fix). The facts are the problem and the
   operation; no diagnostic (no value from the source is admitted).
 - `OPERATIONS` gains `obtaining-negotiate-token` and
   `presenting-negotiate-token`; `CONFIG_FIELDS` gains `servicePrincipal` and
