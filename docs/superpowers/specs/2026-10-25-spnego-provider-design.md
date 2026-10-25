@@ -13,13 +13,22 @@ second stage settles it before the claim is written as fact).
 |---|---|---|---|
 | 1 | `@mcp-abap-adt/interfaces-auth` | the token-source contract; the `spnego` error kind; new operations, config fields and a credential kind | **major** (8.0.0): its CHANGELOG's rule — a new kind is a major |
 | 2 | `@mcp-abap-adt/auth-errors` | the `spnego` builder, its words and hints | major, following 1 |
-| 3 | the recipe's package (§5) | new: a token source over the `kerberos` npm package | first release |
-| 4 | `@mcp-abap-adt/auth-providers` | `SpnegoAuthProvider`; the stand and its suite | **major** (7.0.0): it produces a new kind, on interfaces-auth 8 |
+| 3 | this repository, two packages | `@mcp-abap-adt/auth-providers` with `SpnegoAuthProvider` — **major** (7.0.0): it produces a new kind, on interfaces-auth 8; `@mcp-abap-adt/auth-spnego-gssapi` (§5), a token source over the `kerberos` npm package — first release; the stand and its suite | one release of the repository, `release:publish` publishing both |
 
-Each is published before the next depends on it; nothing builds against an
-unpublished version. The stand suite of 4 is the protocol proof; 4 is not
-released before it passes. A defect it finds in 3 is a patch of 3, published
-before 4 is released.
+1 and 2 are published before 3 depends on them; nothing builds against an
+unpublished version of another repository. Inside this repository the two
+packages are workspace siblings (the standing exception for packages of one
+repository): the stand suite runs the provider with the recipe linked, so the
+protocol is proved before either is published. Neither package depends on the
+other (§5); only the stand suite uses both.
+
+**Step 0 — this repository becomes a multi-package repository**, its own PR,
+merged before this work goes on: a private workspace root and every package
+under `packages/` (`packages/auth-providers`, the package as it is today),
+mirroring `mcp-abap-adt-interfaces` whole — its root `package.json`,
+`tools/publish-changed.js`, `check:publish`, CI and release workflows. No
+change to what `@mcp-abap-adt/auth-providers` publishes, so no release of its
+own.
 
 Out of this design: wiring the provider into `connection`, the broker or
 `mcp-abap-adt` — a consumer composes it like any credential.
@@ -151,12 +160,10 @@ source said. `logCallSources.test.ts` covers `src/spnego/`.
 
 ## 5. The recipe's package
 
-**Name and repository: decision for the owner** — proposed
-`@mcp-abap-adt/auth-spnego-gssapi` in a new repository
-`mcp-abap-adt-auth-spnego-gssapi`, laid out like the other single-package
-repositories (and its supply-chain policy: `allowScripts` listing `kerberos`
-alone, `strict-allow-scripts=true`, `npm ci --ignore-scripts` in CI, a gating
-`npm audit`).
+`@mcp-abap-adt/auth-spnego-gssapi` in `packages/auth-spnego-gssapi` of this
+repository (the name: decision for the owner). The repository's supply-chain
+policy covers it: `allowScripts` lists `kerberos` alone, built only where a job
+needs the binding; every other install keeps `--ignore-scripts`.
 
 - Depends on `interfaces-auth` (types) and `kerberos` (7.x, registry). It
   mints nothing and does not depend on auth-errors.
@@ -180,7 +187,7 @@ alone, `strict-allow-scripts=true`, `npm ci --ignore-scripts` in CI, a gating
     substring search of fixed GSS phrases (as `sncRefusal` does), never a
     regex; the table is built from the stand's failures (To measure: which
     shape the binding's error has); unmatched is `source-failed`.
-- CI: Linux, macOS and Windows (x64): `npm ci --ignore-scripts`, then the one
+- CI, a job of its own: Linux, macOS and Windows (x64): `npm ci --ignore-scripts`, then the one
   allowed build `npm rebuild kerberos --build-from-source` (no prebuilt binary
   downloaded), then a test that loads the binding and gets
   `no-credential` from a machine with no ticket. Windows on arm64 is out.
@@ -212,10 +219,11 @@ Added to `compose.yaml`, images built from committed Dockerfiles on a pinned
   needs the MIT client tools and headers — CI installs them). The request
   goes to `127.0.0.1:<port>`; the service principal is stated, so no DNS
   name is needed — which is itself a test of §4.1.
-- The recipe's package is a devDependency of auth-providers, from the
-  registry; the stand job alone builds its native part (`npm rebuild kerberos
+- The suite lives with the stand and imports both packages as workspace
+  siblings; the stand job alone builds the native part (`npm rebuild kerberos
   --build-from-source`, allowed by `allowScripts` for that one package). The
-  published auth-providers carries no native code and no install script.
+  published auth-providers carries no native code and no install script, and
+  does not depend on the recipe.
 
 ### What the suite proves (each rule red when removed)
 
@@ -258,7 +266,4 @@ needs the `spnego` case).
 
 ## 9. Decisions for the owner
 
-1. The recipe's package name and its new repository (§5).
-2. The stand suite in auth-providers with the recipe as a devDependency built
-   in the stand job only (§6) — as against proving the protocol in the
-   recipe's repository, which would release the provider before its proof.
+1. The recipe's package name (§5): proposed `@mcp-abap-adt/auth-spnego-gssapi`.

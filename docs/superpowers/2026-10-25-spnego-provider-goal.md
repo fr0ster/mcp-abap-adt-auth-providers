@@ -37,9 +37,11 @@ stand that proves it.
   consumer implement it.
 - **The recipe over a GSSAPI/SSPI binding is a package of its own,** built on
   the `kerberos` npm package. This package stays free of native code and of
-  install scripts; only a consumer who installs that package takes the native
-  build, allowing its script knowingly. Its build is proved in its own CI on
-  Linux, macOS and Windows.
+  install scripts and does not depend on it; only a consumer who installs that
+  package takes the native build, allowing its script knowingly. Both live in
+  this repository, which becomes a multi-package repository, so the stand
+  proves them together before either is published. The recipe's build is
+  proved in CI on Linux, macOS and Windows.
 - A refusal the error contract cannot express yet (no ticket, an NTLM token)
   is added to interfaces-auth and auth-errors first, published before this
   package uses it.
