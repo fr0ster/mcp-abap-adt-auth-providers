@@ -165,7 +165,8 @@ source said. `logCallSources.test.ts` covers `src/spnego/`.
 ## 5. The system source's package
 
 `@mcp-abap-adt/auth-spnego-gssapi` in `packages/auth-spnego-gssapi` of this
-repository (the name: decision for the owner). The repository's supply-chain
+repository: `spnego` is what it produces, `gssapi` where the token comes
+from — the system's GSS-API (SSPI, its Windows counterpart). The repository's supply-chain
 policy covers it: `allowScripts` lists `kerberos` alone, built only where a job
 needs the binding; every other install keeps `--ignore-scripts`.
 
@@ -267,7 +268,3 @@ against ABAP still Inference until the second stage), CLAUDE.md's provider
 list and module structure (text for the owner's approval), CHANGELOG with a
 migration note for the major (the new kind: a consumer's exhaustive `switch`
 needs the `spnego` case).
-
-## 9. Decisions for the owner
-
-1. The system source's package name (§5): proposed `@mcp-abap-adt/auth-spnego-gssapi`.
