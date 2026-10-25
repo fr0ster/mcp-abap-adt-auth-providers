@@ -456,14 +456,14 @@ function spnegoTable(): string {
   for (const [problem, [by, when]] of rowsFor(
     contract.SPNEGO_PROBLEMS,
     {
-      'no-credential': ['source', 'no ticket, or an expired one'],
+      'no-credential': ['source', 'no ticket (an expired one: Pending)'],
       'service-unknown': [
         'source',
         'the KDC does not know the service principal',
       ],
       'kdc-unreachable': [
         'source',
-        'no KDC answered, or none is known for the realm',
+        'no KDC answered (none known for the realm: Pending)',
       ],
       'clock-skew': [
         'source',

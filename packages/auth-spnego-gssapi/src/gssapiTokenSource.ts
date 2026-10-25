@@ -58,15 +58,16 @@ async function loadBinding(): Promise<KerberosBinding | undefined> {
  * before any moment.
  */
 function readMechanism(options: unknown): GssapiMechanism {
+  if (options === null || typeof options !== 'object')
+    throw new RangeError('gssapiTokenSource: option "mechanism" is required');
   let keys: Array<string | symbol>;
   let descriptor: PropertyDescriptor | undefined;
   try {
-    if (options === null || typeof options !== 'object')
-      throw new RangeError('gssapiTokenSource: option "mechanism" is required');
     keys = Reflect.ownKeys(options);
     descriptor = Object.getOwnPropertyDescriptor(options, 'mechanism');
-  } catch (error) {
-    if (error instanceof RangeError) throw error;
+  } catch {
+    // Whatever inspecting the options threw — a RangeError included — is
+    // dropped: its message may hold anything.
     throw new RangeError('gssapiTokenSource: the options could not be read');
   }
   for (const key of keys) {

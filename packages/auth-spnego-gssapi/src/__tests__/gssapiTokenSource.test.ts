@@ -137,6 +137,36 @@ describe('gssapiTokenSource options', () => {
     expect(String((thrown as Error).message)).not.toContain('SECRET');
   });
 
+  it.each(['ownKeys', 'getOwnPropertyDescriptor', 'get', 'has'] as const)(
+    'a RangeError carrying a secret from the %s trap is not passed on',
+    (trap) => {
+      const secret = new RangeError(SECRET_TEXT);
+      const hostile = new Proxy(
+        { mechanism: 'spnego' },
+        {
+          [trap]() {
+            throw secret;
+          },
+        },
+      );
+      let thrown: unknown;
+      try {
+        factory(hostile);
+      } catch (e) {
+        thrown = e;
+      }
+      // A trap the factory never calls throws nothing; one it calls must not
+      // surface the consumer's error or its text.
+      if (thrown !== undefined) {
+        expect(thrown).not.toBe(secret);
+        expect(thrown).toBeInstanceOf(RangeError);
+        expect(String((thrown as Error).message)).not.toContain('SECRET');
+      }
+      if (trap === 'ownKeys' || trap === 'getOwnPropertyDescriptor')
+        expect(thrown).toBeInstanceOf(RangeError);
+    },
+  );
+
   it('accepts each mechanism', () => {
     expect(typeof factory({ mechanism: 'spnego' }).token).toBe('function');
     expect(typeof factory({ mechanism: 'kerberos' }).token).toBe('function');

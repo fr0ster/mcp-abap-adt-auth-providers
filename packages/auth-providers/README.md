@@ -754,7 +754,7 @@ inside a SPNEGO token, as Windows' Negotiate falls back when Kerberos fails —
 is `ntlm-token`, and a token that is neither Kerberos nor NTLM, or malformed
 DER, is `token-unreadable`; no header is written for either. A source never
 caches a token (the contract), and a late answer after every party aborted is
-dropped and the moment ends `aborted`.
+dropped and the moment ends `interactive-login` `aborted` (`facts.outcome`), no header written.
 
 **What it refuses** — kind `spnego`, `facts.problem` and `facts.operation`
 (`obtaining-negotiate-token` at `prepare()`, `presenting-negotiate-token` at
@@ -764,9 +764,9 @@ dropped and the moment ends `aborted`.
 <!-- generated:refusal-table spnego -->
 | `problem` | Found by | When | Reason | Hint |
 |---|---|---|---|---|
-| `no-credential` | source | no ticket, or an expired one | obtaining the Negotiate token failed: there is no Kerberos ticket, or it has expired | obtain a ticket: kinit, or the domain logon |
+| `no-credential` | source | no ticket (an expired one: Pending) | obtaining the Negotiate token failed: there is no Kerberos ticket, or it has expired | obtain a ticket: kinit, or the domain logon |
 | `service-unknown` | source | the KDC does not know the service principal | obtaining the Negotiate token failed: the Kerberos server does not know the service principal | check servicePrincipal against the service's registered principal |
-| `kdc-unreachable` | source | no KDC answered, or none is known for the realm | obtaining the Negotiate token failed: no Kerberos server (KDC) answered | check the Kerberos configuration's realm and KDC |
+| `kdc-unreachable` | source | no KDC answered (none known for the realm: Pending) | obtaining the Negotiate token failed: no Kerberos server (KDC) answered | check the Kerberos configuration's realm and KDC |
 | `clock-skew` | source | the clock differs from the KDC's beyond its tolerance | obtaining the Negotiate token failed: this machine's clock differs from the Kerberos server's beyond its tolerance | check the machine's time |
 | `binding-unavailable` | source | the source's native library could not be loaded | obtaining the Negotiate token failed: the library of the system token source could not be loaded | install the system source's native part |
 | `source-failed` | source | any other failure the source recognises as its own | obtaining the Negotiate token failed: the token source failed |  |
@@ -4295,14 +4295,17 @@ npm run test:stand    # start the stand, run the suites, stop it
 ```
 
 `test:stand` starts the containers with `docker compose` — UAA, Keycloak and
-the Kerberos stand (below) —, waits until each answers, runs the suites, and
+the Kerberos stand (below: the KDC and the Negotiate service) —, waits until each answers, runs the suites, and
 stops the containers again — also when a test fails, with the suites' exit
 code, after printing the last 200 lines of each server's log. A full run takes
 a minute or two once the images are built. CI runs exactly this as its
 own job, on Node 22, 24 and 26. To keep the stand up between runs, start it
-yourself; `test:stand` then leaves it running. Ownership is per server: if only
-one of the two was running, the run starts the other and removes only that one
-afterwards:
+yourself; `test:stand` then leaves it running. Ownership is per server, of the four (UAA, Keycloak, the KDC and the Negotiate
+service): the run starts only those not running and removes only those it
+started afterwards. It removes the Kerberos stand's keytab volume and network
+only when it started both the KDC and the Negotiate service; with
+`STAND_SPNEGO=0`, or any server already up, a hand-started server and its volume
+survive:
 
 ```bash
 npm run stand:up      # start and keep running
@@ -4310,7 +4313,7 @@ npm run test:stand    # as often as needed
 npm run stand:down    # stop
 ```
 
-`STAND_KEEP=1 npm run test:stand` keeps a stand the run started. `UAA_PORT`
+`STAND_KEEP=1 npm run test:stand` keeps the servers the run started. `UAA_PORT`
 (8080), `KEYCLOAK_PORT` (8081) and `KEYCLOAK_HTTPS_PORT` (8444) move the
 servers. A server that is already running is never changed: if it is published
 on another port than the one asked for, `test:stand` refuses and says so,

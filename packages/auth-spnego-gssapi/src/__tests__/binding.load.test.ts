@@ -68,7 +68,7 @@ function rawBindingMessage(
   const script = `
 const k = require(${JSON.stringify(kerberos)});
 const oid = ${JSON.stringify(mechanism)} === 'spnego' ? k.GSS_MECH_OID_SPNEGO : k.GSS_MECH_OID_KRB5;
-k.initializeClient('HTTP@spnego.invalid', { mechOID: oid })
+k.initializeClient(process.platform === 'win32' ? 'HTTP/spnego.invalid' : 'HTTP@spnego.invalid', { mechOID: oid })
   .then((c) => c.step(''))
   .then(
     () => process.stderr.write('RAW (a token, no error)\\n'),
@@ -85,6 +85,24 @@ k.initializeClient('HTTP@spnego.invalid', { mechOID: oid })
   );
 }
 
+/**
+ * What a token is, by bytes alone (this package may not import the
+ * provider's `readNegotiateToken` across its rootDir): `ntlm` when
+ * `NTLMSSP\0` appears anywhere in it (raw, or as a SPNEGO mechToken),
+ * `kerberos` when the Kerberos V5 mechanism OID (1.2.840.113554.1.2.2) does
+ * and it is not NTLM, else `other`. Only a classification for a printed
+ * measurement on the Windows runner — not a validator.
+ */
+function classifyToken(token: string): 'ntlm' | 'kerberos' | 'other' {
+  const bytes = Buffer.from(token, 'base64');
+  if (bytes.includes(Buffer.from('NTLMSSP\0', 'latin1'))) return 'ntlm';
+  const krb5 = Buffer.from([
+    0x06, 0x09, 0x2a, 0x86, 0x48, 0x86, 0xf7, 0x12, 0x01, 0x02, 0x02,
+  ]);
+  if (bytes.includes(krb5)) return 'kerberos';
+  return 'other';
+}
+
 describeBuilt(where, () => {
   it.each(['spnego', 'kerberos'] as const)(
     '%s: a machine with no ticket gets no token',
@@ -98,10 +116,24 @@ describeBuilt(where, () => {
         process.stderr.write(
           `Windows, ${mechanism}: ${answer.ok ? `ok, a token of ${answer.token?.length} chars` : `problem ${answer.problem}`}\n`,
         );
-        if (answer.ok) expect(typeof answer.token).toBe('string');
-        else {
+        if (answer.ok) {
+          expect(typeof answer.token).toBe('string');
+          const kind = classifyToken(answer.token ?? '');
+          process.stderr.write(
+            `Windows, ${mechanism}: the token is ${kind} (first bytes ${Buffer.from(
+              answer.token ?? '',
+              'base64',
+            )
+              .subarray(0, 12)
+              .toString('hex')})\n`,
+          );
+          expect(['ntlm', 'kerberos', 'other']).toContain(kind);
+        } else {
           expect(PROBLEMS).toContain(answer.problem);
           expect(answer.problem).not.toBe('binding-unavailable');
+          process.stderr.write(
+            `Windows, ${mechanism}, no ticket: ${rawBindingMessage(mechanism, { ...process.env })}\n`,
+          );
         }
         return;
       }

@@ -89,7 +89,11 @@ stop() {
     docker compose -f "$HERE/compose.yaml" logs --no-color --tail 200 >&2 || true
   fi
   if [ -n "$started" ] && [ "${STAND_KEEP:-0}" != 1 ]; then
-    if [ "$started" = "$SERVICES" ]; then
+    # down.sh (compose down --volumes) removes all four servers and the
+    # Kerberos volume: only when this run started all four. With
+    # STAND_SPNEGO=0, or any server already running, only the started ones go,
+    # so a hand-started kdc/negotiate and their volume survive.
+    if [ "$started" = "uaa keycloak kdc negotiate" ]; then
       "$HERE/down.sh" >/dev/null 2>&1 || echo "could not stop the stand" >&2
     else
       # Word splitting is intended: $started is a list of service names.

@@ -38,7 +38,7 @@ Windows on arm64 is not supported.
 
 ### Allowing the binding's install script
 
-npm 11 records which dependencies may run install scripts in `allowScripts` of the consumer's
+npm 11.19 or later records which dependencies may run install scripts in `allowScripts` of the consumer's
 `package.json`. Allow `kerberos` alone — npm writes the entry pinned to the version you reviewed:
 
 ```bash
@@ -95,9 +95,9 @@ not called — and again when it returns, the token then dropped; either answers
 
 | Problem | When |
 |---|---|
-| `no-credential` | no ticket, or an expired one |
+| `no-credential` | no ticket (an expired one: Pending) |
 | `service-unknown` | the KDC does not know the service principal |
-| `kdc-unreachable` | no KDC answered, or none is known for the realm |
+| `kdc-unreachable` | no KDC answered (none known for the realm: Pending) |
 | `clock-skew` | the clock differs from the KDC's beyond its tolerance |
 | `mechanism-unsupported` | the mechanism asked for is not supported where it ran (measured: macOS's GSS.framework answering `spnego` with no ticket) |
 | `binding-unavailable` | `kerberos` could not be loaded (not built, or the system's Kerberos library missing) |
