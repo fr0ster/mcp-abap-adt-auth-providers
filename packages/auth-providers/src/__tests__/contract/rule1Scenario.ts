@@ -148,18 +148,21 @@ export interface Rule1Report {
  * or answers a foreign (Promises/A+ shaped) thenable that resolves with the
  * value, rejects with it, or throws it from its `then`. The answer is the
  * consumer's own code: awaited normally, the resolved value used, the
- * rejection or the throw classified.
+ * rejection or the throw classified. A resolved hostile value breaks the
+ * answer's type: those rows prove no type defense — where using it as typed
+ * fails, it fails with a TypeError (or the value's own throw), which the
+ * boundary classifies like any other throw.
  */
 type Mode =
   | 'throws'
   | 'rejects'
-  | 'thenable resolving'
+  | 'thenable resolving a wrong-typed value — a TypeError the boundary classifies'
   | 'thenable rejecting'
   | 'thenable whose then throws';
 const MODES: readonly Mode[] = [
   'throws',
   'rejects',
-  'thenable resolving',
+  'thenable resolving a wrong-typed value — a TypeError the boundary classifies',
   'thenable rejecting',
   'thenable whose then throws',
 ];
@@ -871,7 +874,8 @@ export async function run(
             // (`collaboratorThenables.test.ts`). Not a row of this matrix.
             if (
               valueName === 'a foreign thenable' &&
-              mode === 'thenable resolving'
+              mode ===
+                'thenable resolving a wrong-typed value — a TypeError the boundary classifies'
             )
               continue;
             // A logger's and a request target's methods answer `void`: what
@@ -884,7 +888,9 @@ export async function run(
             )
               continue;
             const where = `${row.provider} · ${collaborator} · ${valueName} · ${mode}`;
-            const resolvedAnswer = mode === 'thenable resolving';
+            const resolvedAnswer =
+              mode ===
+              'thenable resolving a wrong-typed value — a TypeError the boundary classifies';
             let called = 0;
             const fail = ((..._args: unknown[]) => {
               called += 1;
@@ -897,7 +903,11 @@ export async function run(
                   reject?: (e: unknown) => void,
                 ) {
                   answerThenCalls.count += 1;
-                  if (mode === 'thenable resolving') resolve?.(value());
+                  if (
+                    mode ===
+                    'thenable resolving a wrong-typed value — a TypeError the boundary classifies'
+                  )
+                    resolve?.(value());
                   else if (mode === 'thenable rejecting') reject?.(value());
                   else throw value();
                 },

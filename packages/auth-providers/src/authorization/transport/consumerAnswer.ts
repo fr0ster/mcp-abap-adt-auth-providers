@@ -168,6 +168,8 @@ export function consumerHandoff(options: ConsumerHandoffOptions): {
       };
     },
   );
+  // A placeholder only, never consumed: every open replaces it (the open
+  // callback above) before the transport reads `handed`.
   let handed: Promise<string> = Promise.resolve('');
 
   const presentation: IAuthorizationPresentation = Object.freeze({

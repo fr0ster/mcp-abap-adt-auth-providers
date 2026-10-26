@@ -987,10 +987,26 @@ export abstract class BaseTokenProvider
       // One generation per step: a step's commit would otherwise make every
       // later step of the same attempt look old.
       const generation = ++this.credentialGeneration;
-      const ended =
-        decision.next === 'refresh'
-          ? await this.refreshStep(decision.ifCut, attempt, generation, start)
-          : await this.loginStep(attempt, generation, start);
+      let ended: StepEnd;
+      switch (decision.next) {
+        case 'refresh':
+          ended = await this.refreshStep(
+            decision.ifCut,
+            attempt,
+            generation,
+            start,
+          );
+          break;
+        case 'login':
+          ended = await this.loginStep(attempt, generation, start);
+          break;
+        default: {
+          // Exhaustive by the compiler: no step is guessed for another value.
+          const unreachable: never = decision;
+          void unreachable;
+          throw this.strategyFailure();
+        }
+      }
       if ('usable' in ended) return ended.usable;
       steps.push(ended.outcome);
       lastRefusal = ended.refusal;
@@ -1045,7 +1061,8 @@ export abstract class BaseTokenProvider
       throw this.strategyFailure();
     }
     if (decision === undefined) throw this.strategyFailure();
-    // Allowlisted values only.
+    // The typed values the provider holds — trigger, moment, next — and
+    // nothing else of the decision.
     const trigger = own.trigger;
     const moment = own.moment;
     const next = decision.next;

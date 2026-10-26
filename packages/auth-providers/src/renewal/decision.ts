@@ -45,18 +45,23 @@ export function checkDecision(
   decision: RenewalDecision,
   context: DecisionContext,
 ): RenewalDecision | undefined {
+  // Each field read exactly once, and every rule decided and every copy made
+  // from these locals: a getter answering differently on a second read cannot
+  // pass one rule and then be copied as another value. (`in` runs no getter.)
+  const next = decision.next;
+  const ifCut = 'ifCut' in decision ? decision.ifCut : undefined;
   const sent = decision.sentRefreshToken;
   if (context.sentRequired ? sent === undefined : sent !== undefined) {
     return undefined;
   }
   const sentPart = sent === undefined ? {} : { sentRefreshToken: sent };
-  if (decision.next === 'refresh') {
+  if (next === 'refresh') {
     if (!context.canRefresh) return undefined;
-    return Object.freeze({
-      next: decision.next,
-      ifCut: decision.ifCut,
-      ...sentPart,
-    });
+    // The type puts `ifCut` beside every `refresh`; the local read before
+    // `next` was known cannot carry that, so its absence is refused, never
+    // guessed.
+    if (ifCut === undefined) return undefined;
+    return Object.freeze({ next, ifCut, ...sentPart });
   }
-  return Object.freeze({ next: decision.next, ...sentPart });
+  return Object.freeze({ next, ...sentPart });
 }

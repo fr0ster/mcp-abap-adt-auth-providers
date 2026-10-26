@@ -178,16 +178,18 @@ export function composeAuthorization<TPayload>(
     // A transport holds a port or a reader: one authorization at a time.
     if (current !== undefined) throw loginFailure({ outcome: 'busy' });
 
+    // The request read before any listener is attached: a getter that throws
+    // here leaves nothing behind on the option signal.
+    const requestSignal = request.signal;
+    const logger: ILogger | undefined = request.logger;
     const controller = new AbortController();
     // Aborted once this call has ended: a presentation that answers later
     // prompts and logs nothing.
     const ended = new AbortController();
-    const requestSignal = request.signal;
     const relay = () => controller.abort();
     optionSignal?.addEventListener('abort', relay, { once: true });
     requestSignal?.addEventListener('abort', relay, { once: true });
     if (optionSignal?.aborted || requestSignal?.aborted) controller.abort();
-    const logger: ILogger | undefined = request.logger;
     let latched: Latched | undefined;
     /**
      * What `use` returned, once it has: the only outcome this call answers.

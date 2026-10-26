@@ -284,6 +284,44 @@ describe('invalid decisions end the renewal unknown renewal-strategy, no step ta
     },
   );
 
+  it('a decision whose next getter changes its answer is read once: no refresh dispatched where none is possible', async () => {
+    const reads = { next: 0, ifCut: 0, sentRefreshToken: 0 };
+    const shifting = () => {
+      const decision = {};
+      Object.defineProperty(decision, 'next', {
+        enumerable: true,
+        get() {
+          reads.next += 1;
+          return reads.next === 1 ? 'login' : 'refresh';
+        },
+      });
+      Object.defineProperty(decision, 'ifCut', {
+        enumerable: true,
+        get() {
+          reads.ifCut += 1;
+          return 'discard';
+        },
+      });
+      Object.defineProperty(decision, 'sentRefreshToken', {
+        enumerable: true,
+        get() {
+          reads.sentRefreshToken += 1;
+          return undefined;
+        },
+      });
+      return decision;
+    };
+    const { strategy } = scripted([shifting]);
+    // No refresh token held: a refresh is not possible.
+    const provider = new ScriptedProvider({ renewal: strategy });
+    const renewed = provider.getTokens();
+    (await provider.logins.nth(1)).result.resolve(tokens(jwt('in'), 'S'));
+    await renewed;
+    expect(provider.refreshes.items).toHaveLength(0);
+    expect(provider.logins.items).toHaveLength(1);
+    expect(reads).toEqual({ next: 1, ifCut: 1, sentRefreshToken: 1 });
+  });
+
   it('a refresh of the very token the same decision discards', async () => {
     const { strategy } = scripted([
       refresh(),
@@ -772,7 +810,7 @@ describe('where a renewal starts', () => {
 });
 
 describe('logging', () => {
-  it('one debug line per decision, allowlisted values only', async () => {
+  it('one debug line per decision: trigger, moment and next only', async () => {
     const lines: unknown[][] = [];
     const logger: ILogger = {
       debug: (...args: unknown[]) => {

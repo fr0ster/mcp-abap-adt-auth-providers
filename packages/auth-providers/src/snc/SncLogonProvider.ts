@@ -31,7 +31,6 @@ import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
 import { AuthProviderBase } from '../auth/AuthProviderBase';
 import { throwIfAborted, untilAborted } from '../auth/attempt';
 import { misconfigured } from '../auth/configuration';
-import { readSafely } from '../auth/knownCodes';
 import { readRejection } from '../auth/rejection';
 import { logQuietly } from '../auth/tokenRequest';
 import {
@@ -304,7 +303,9 @@ export class SncLogonProvider extends AuthProviderBase {
       secureLoginClient: this.secureLoginClient,
       explained: this.explained,
     };
-    const error = readSafely(rejection, 'error');
+    // Typed: read directly. The `error` value itself is `unknown`, read
+    // safely by the refusal mapping, as `readRejection` reads it.
+    const error = rejection.error;
     const cause = sncCause(error, context);
     if (cause) return { ok: false, refusal: cause };
     const read = readRejection(rejection);

@@ -14,6 +14,7 @@
  * throws.
  */
 
+import { getEventListeners } from 'node:events';
 import { inspect } from 'node:util';
 import { describe, expect, it, jest } from '@jest/globals';
 import { readFailure } from '@mcp-abap-adt/auth-errors';
@@ -380,8 +381,39 @@ describe('composer level: a protocol whose verdict throws', () => {
   });
 });
 
+describe('composer level: a request whose field throws', () => {
+  it('a logger getter that throws: authorize rejects, and no listener is left on the option signal', async () => {
+    const option = new AbortController();
+    const scripted = scriptedTransport({
+      redirectUri: 'http://localhost:61001/callback',
+      events: [],
+    });
+    const strategy = composeAuthorization({
+      presentation: recordingPresentation().presentation,
+      transport: scripted.transport,
+      protocol: {
+        redirect: 'required',
+        callbackMethods: ['GET'],
+        begin: () => hostileJudge,
+      },
+      endpoint: '/callback',
+      signal: option.signal,
+    });
+    const request: AuthorizationRequest = {
+      buildAuthorizationUrl: async () =>
+        'https://idp.example/authorize?state=s',
+      get logger(): ILogger {
+        throw new Error(SECRET);
+      },
+    };
+    const thrown = await caught(strategy.authorize(request));
+    expect(thrown).not.toBe('resolved');
+    expect(getEventListeners(option.signal, 'abort')).toHaveLength(0);
+  });
+});
+
 describe('provider level: an answer whose field throws', () => {
-  it('a strategy outcome whose payload throws: getTokens() throws a classified failure, no token request', async () => {
+  it('regression of the outer boundary — a strategy outcome whose payload throws: getTokens() throws a classified failure, no token request', async () => {
     mockedAxios.mockReset();
     mockedAxios.post.mockReset();
     const strategy: IAuthorizationStrategy<string> = {
