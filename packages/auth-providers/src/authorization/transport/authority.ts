@@ -48,7 +48,7 @@ export function parseAuthority(value: unknown): Authority | undefined {
   // Whether the text named a port: a `:` after the host (after `]` for a
   // bracketed IPv6 address). The parser turns `:80` into no port at all.
   const close = value.lastIndexOf(']');
-  const named = value.indexOf(':', close < 0 ? 0 : close) >= 0;
+  const named = value.indexOf(':', Math.max(close, 0)) >= 0;
   if (named && value.endsWith(':')) return undefined;
   const port = named ? Number(url.port === '' ? 80 : url.port) : undefined;
   const host = url.hostname.endsWith('.')
