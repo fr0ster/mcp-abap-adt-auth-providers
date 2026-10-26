@@ -70,7 +70,7 @@ import {
   type TokenRequestAuth,
   type TokenSiteOptions,
 } from '../auth/tokenRequest';
-import { needsSentDecision, readDecision } from '../renewal/decision';
+import { checkDecision, needsSentDecision } from '../renewal/decision';
 
 /**
  * The consumer's opt-in to naming the request's secrets in its debug line: with
@@ -1062,35 +1062,28 @@ export abstract class BaseTokenProvider
     const { sentToken, signal } = own;
     this.deliverObservations();
     throwIfAborted(signal);
-    // What the contract promises; `readDecision` still checks every field.
-    let answer: ReturnType<IRenewalStrategy['next']>;
+    // The call, the adoption of its answer and every read of the decision
+    // share one failure boundary: a throw at any of them is the strategy's.
+    let decision: RenewalDecision | undefined;
     try {
-      answer = this.renewal.next(situation);
-    } catch {
-      throw this.strategyFailure();
-    }
-    // A decision, a native promise or any thenable, adopted as `await`
-    // adopts it.
-    let decided: RenewalDecision;
-    try {
-      decided = await untilAborted(answer, signal);
+      decision = checkDecision(
+        await untilAborted(this.renewal.next(situation), signal),
+        { canRefresh: own.canRefresh, sentRequired: own.sentRequired },
+      );
+      // A refresh of the very token this decision discards cannot run.
+      if (
+        decision !== undefined &&
+        decision.next === 'refresh' &&
+        decision.sentRefreshToken === 'discard' &&
+        sentToken === this.refreshToken
+      ) {
+        decision = undefined;
+      }
     } catch {
       throwIfAborted(signal);
       throw this.strategyFailure();
     }
-    const decision = readDecision(decided, {
-      canRefresh: own.canRefresh,
-      sentRequired: own.sentRequired,
-    });
-    // A refresh of the very token this decision discards cannot run.
-    if (
-      decision === undefined ||
-      (decision.next === 'refresh' &&
-        decision.sentRefreshToken === 'discard' &&
-        sentToken === this.refreshToken)
-    ) {
-      throw this.strategyFailure();
-    }
+    if (decision === undefined) throw this.strategyFailure();
     // Allowlisted values only.
     const trigger = own.trigger;
     const moment = own.moment;

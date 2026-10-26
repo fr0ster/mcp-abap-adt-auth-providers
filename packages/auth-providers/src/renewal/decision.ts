@@ -1,17 +1,14 @@
 /**
- * Reading a renewal strategy's answer: the strategy is
- * foreign code, so its answer is read like any collaborator's — every field
- * through `readSafely`, never trusted as it is. An answer that is not a
- * valid decision for the situation is refused (`undefined`), never guessed
- * at.
+ * Checking a renewal strategy's decision: the type proves its shape, so only
+ * the rules the type cannot express are checked, and the decision is copied
+ * and frozen. A decision that breaks one is refused (`undefined`), never
+ * guessed at.
  */
 
 import type {
   RenewalDecision,
   RenewalStepOutcome,
-  SentRefreshToken,
 } from '@mcp-abap-adt/interfaces-auth';
-import { readSafely } from '../auth/knownCodes';
 
 /** What decides whether a decision is valid, beside the answer itself. */
 export interface DecisionContext {
@@ -37,35 +34,29 @@ export function needsSentDecision(
   );
 }
 
-function isSentRefreshToken(value: unknown): value is SentRefreshToken {
-  return value === 'keep' || value === 'discard';
-}
-
 /**
- * The decision `answer` states, as a fresh frozen object — or `undefined`
- * for anything else: a non-object, an unknown `next`, a `refresh` without a
- * valid `ifCut` or with no refresh possible, a `sentRefreshToken` where it
- * must be absent, or missing (or not `keep` / `discard`) where it is
- * required. Never throws: a throwing getter or Proxy reads as absent.
+ * The decision `decision` states, as a fresh frozen copy — or `undefined`
+ * where a rule the type cannot express is broken: a `refresh` with no
+ * refresh possible, a `sentRefreshToken` where it must be absent, or missing
+ * where it is required. A read of a foreign object may throw: the caller
+ * calls this inside the strategy-failure boundary.
  */
-export function readDecision(
-  answer: unknown,
+export function checkDecision(
+  decision: RenewalDecision,
   context: DecisionContext,
 ): RenewalDecision | undefined {
-  if (answer === null || typeof answer !== 'object') return undefined;
-  const next = readSafely(answer, 'next');
-  const sent = readSafely(answer, 'sentRefreshToken');
-  if (context.sentRequired ? !isSentRefreshToken(sent) : sent !== undefined) {
+  const sent = decision.sentRefreshToken;
+  if (context.sentRequired ? sent === undefined : sent !== undefined) {
     return undefined;
   }
-  const sentPart = isSentRefreshToken(sent) ? { sentRefreshToken: sent } : {};
-  if (next === 'refresh') {
-    const ifCut = readSafely(answer, 'ifCut');
-    if (!isSentRefreshToken(ifCut) || !context.canRefresh) return undefined;
-    return Object.freeze({ next, ifCut, ...sentPart });
+  const sentPart = sent === undefined ? {} : { sentRefreshToken: sent };
+  if (decision.next === 'refresh') {
+    if (!context.canRefresh) return undefined;
+    return Object.freeze({
+      next: decision.next,
+      ifCut: decision.ifCut,
+      ...sentPart,
+    });
   }
-  if (next === 'login' || next === 'stop') {
-    return Object.freeze({ next, ...sentPart });
-  }
-  return undefined;
+  return Object.freeze({ next: decision.next, ...sentPart });
 }

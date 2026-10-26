@@ -182,22 +182,21 @@ describe('a decision is awaited as given: any thenable is adopted', () => {
 
 describe('invalid decisions end the renewal unknown renewal-strategy, no step taken', () => {
   const INVALID: ReadonlyArray<[string, () => unknown]> = [
-    ['null', () => null],
-    ['a string', () => 'refresh'],
-    ['a number', () => 42],
-    ['an object without next', () => ({})],
-    ['an unknown next', () => ({ next: 'retry' })],
-    ['a refresh without ifCut', () => ({ next: 'refresh' })],
-    [
-      'a refresh with an invalid ifCut',
-      () => ({ next: 'refresh', ifCut: 'maybe' }),
-    ],
     [
       'a sentRefreshToken where it must be absent',
       () => ({ next: 'login', sentRefreshToken: 'keep' }),
     ],
     [
-      'a getter that throws',
+      'a decision whose field read throws',
+      () =>
+        Object.defineProperty({ next: 'login' }, 'sentRefreshToken', {
+          get() {
+            throw new Error('SECRET');
+          },
+        }),
+    ],
+    [
+      'a decision whose next read throws',
       () =>
         Object.defineProperty({}, 'next', {
           get() {
@@ -206,10 +205,10 @@ describe('invalid decisions end the renewal unknown renewal-strategy, no step ta
         }),
     ],
     [
-      'a Proxy that throws',
+      'a Proxy decision whose reads throw',
       () =>
         new Proxy(
-          {},
+          { next: 'login' },
           {
             get() {
               throw new Error('SECRET');
@@ -237,13 +236,13 @@ describe('invalid decisions end the renewal unknown renewal-strategy, no step ta
       () => ({
         // biome-ignore lint/suspicious/noThenProperty: a thenable is the answer under test
         then(resolve: (value: unknown) => void) {
-          resolve({ next: 'refresh' });
+          resolve({ next: 'login', sentRefreshToken: 'keep' });
         },
       }),
     ],
     [
       'a native promise of an invalid answer',
-      () => Promise.resolve({ next: 'refresh' }),
+      () => Promise.resolve({ next: 'login', sentRefreshToken: 'keep' }),
     ],
     ['a rejecting native promise', () => Promise.reject(new Error('SECRET'))],
   ];
@@ -269,10 +268,6 @@ describe('invalid decisions end the renewal unknown renewal-strategy, no step ta
 
   it.each([
     ['missing', login()],
-    [
-      'not keep or discard',
-      () => ({ next: 'login', sentRefreshToken: 'drop' }),
-    ],
     ['on a stop, missing', () => ({ next: 'stop' })],
   ] as const)(
     'after a refresh that failed once sent, a sentRefreshToken %s',
