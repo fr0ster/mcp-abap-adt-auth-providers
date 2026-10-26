@@ -98,7 +98,11 @@ implementation:
 - `@mcp-abap-adt/interfaces-auth`, `@mcp-abap-adt/interfaces-auth-sap`,
   `@mcp-abap-adt/interfaces-utils` — the types and allowlists it implements and
   is handed; never `interfaces-adt`;
-- `@mcp-abap-adt/auth-errors` — every refusal and every throw is minted there;
+- `@mcp-abap-adt/auth-errors` — every refusal and every throw is minted there,
+  with one exception: `refreshStatePersistence`'s `report()` with
+  `onWriteFailure: 'fail'` rejects with what the consumer's own `write`
+  threw, as it is; a provider calling `report()` classifies it before it goes
+  any further;
 - `axios`, `xml-crypto`, `@xmldom/xmldom` — HTTP and SAML.
 
 It talks to authorization servers itself — token requests, and OIDC discovery
