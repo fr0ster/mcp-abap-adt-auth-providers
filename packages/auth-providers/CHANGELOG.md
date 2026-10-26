@@ -24,7 +24,6 @@ answers are unchanged. Dependencies are unchanged.
   interfaces-auth's allowlist, so an exhaustive switch over `case` still compiles.
 - A request target, a logger or the renewal strategy's `aborted()` that answers a rejecting
   promise despite its `void` type now raises `unhandledRejection` in the consumer's process.
-- `clientSecretBasic` without `encoding` (a caller that breaks the type) behaves as raw.
 - See the README's "Migrating to 8.0.0".
 
 ### Removed
@@ -40,8 +39,9 @@ answers are unchanged. Dependencies are unchanged.
   `AbortSignal | undefined` is read directly.
 - `src/auth/handled.ts`: `isPlainPromise`, `markHandled`, `onAnswerRejection`. `untilAborted`
   adopts every value through `new Promise((resolve) => resolve(work))`; the commit queue's own
-  promise gets a plain `.catch`; a detached persistence report, `IBrowser.open()` and
-  `present()` get a rejection handler on the same adoption (`whenRejected`).
+  promise gets a plain `.catch`; a detached persistence report and a presentation's `present()`
+  get a rejection handler on the same adoption (`whenRejected`); `openInBrowser` adopts
+  `IBrowser.open()`'s answer the same way and awaits it inside its `try`.
 - `readDecision`: replaced by `checkDecision(decision: RenewalDecision, context)`. The shape checks
   (not an object, an unknown `next`, an `ifCut` outside its union) go; `refresh` needing
   `canRefresh`, `sentRefreshToken` required after a sent refresh that failed and absent elsewhere,
@@ -61,7 +61,7 @@ answers are unchanged. Dependencies are unchanged.
   - `required-fields-missing` naming `renewal` (every token provider, `inBrowser`,
     `fromTerminal`, `toConsole`, `SsoProviderFactory.create`), `servicePrincipal` or
     `tokenSource` (`SpnegoAuthProvider`), `presentation` / `transport` / `protocol` /
-    `endpoint` (`composeAuthorization`), `browser` (`openInBrowser`), `show`
+    `endpoint` (`composeAuthorization`), `presentation` (`openInBrowser` without `browser`), `show`
     (`consumerPresentation`), `receive` (`consumerAnswer`), `provide` (`consumerHandoff`),
     `redirectUri` (`manualPasteStrategy`, `manualSamlResponseStrategy`,
     `externalCodeStrategy`), `assertionValidator` (both SAML providers), `replayStore` (the
@@ -71,7 +71,8 @@ answers are unchanged. Dependencies are unchanged.
   - `invalid-value` naming `persistence` (no callable `report`), `write` / `onWriteFailure`
     (`refreshStatePersistence`), `presentation` / `transport` / `protocol` (a part without its
     methods, a `label` or `redirect` off its union, a browser name where an `IBrowser` belongs,
-    `remoteHint` or `onFailure` not a function), `read` (not a function), and the wrong-type half
+    `remoteHint` not a function), `show` (`consumerPresentation`'s `onFailure` not a function),
+    `read` (not a function), and the wrong-type half
     of `servicePrincipal` and `redirectUri`;
   - `snc-partner-name-missing` for a `partnerName` that is not a string,
     `validator-no-certificates` for `idpCertificates` absent or not an array,

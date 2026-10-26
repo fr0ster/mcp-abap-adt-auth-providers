@@ -153,7 +153,9 @@ the tests that hold it.
   options is kept by reference and read and called only inside a moment (or a
   composed strategy's `authorize`) — except the descriptors
   `composeAuthorization` reads when it composes: the transport's `label`, the
-  protocol's `redirect`, `callbackMethods` and `paste`, read as typed data.
+  protocol's `redirect`, `callbackMethods` and `paste`, read as typed data;
+  and the shipped-validator brand a SAML provider's constructor reads on its
+  `assertionValidator` (`isShippedValidator`, guarded).
 - **A throw is not a type question.** A typed value can still throw. A
   collaborator's call and every read of its answer share one failure
   boundary: a throw while reading takes the same classification, settling and
@@ -191,10 +193,11 @@ whether the provider calls it or adopts its answer.
 An answer typed `void` — a request target's `header()` / `cookies()`, every
 `ILogger` method, the renewal strategy's `aborted()` — is not an answer to
 adopt: the call stays inside its `try`, a throw is handled, and a returned
-value is ignored (8.0.0). An answer whose type admits a promise and that must
-not go unhandled — a persistence `report()` made detached, `IBrowser.open()`,
-a presentation's `present()` — is adopted the same way and given a rejection
-handler, whose own throw is contained.
+value is ignored (8.0.0). An answer whose type admits a promise and that is
+not awaited — a persistence `report()` made detached, a presentation's
+`present()` — is adopted the same way and given a rejection handler, whose
+own throw is contained; `IBrowser.open()`'s answer is adopted the same way and
+awaited inside `openInBrowser`'s `try`.
 
 What stays strict is a value that is not a collaborator's answer: a thrown
 value being classified (`classify`) and a logon target's answer

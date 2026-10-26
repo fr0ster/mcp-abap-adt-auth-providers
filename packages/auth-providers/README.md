@@ -34,15 +34,15 @@ What a consumer on 7.x must do:
 - **These configuration refusals are no longer produced.** The cases stay on
   interfaces-auth's allowlist, so an exhaustive switch over `case` still
   compiles:
-  - `basic-encoding-missing`: `clientSecretBasic` without `encoding`. A caller
-    that breaks the type and omits it gets raw encoding.
+  - `basic-encoding-missing`: `clientSecretBasic` without `encoding`.
   - `unsupported-sso-flow`: `SsoProviderFactory.create` switches exhaustively
     over its typed `flow`.
   - `required-fields-missing` for a field its type requires: `renewal` (every
     token provider, `inBrowser`, `fromTerminal`, `toConsole`,
     `SsoProviderFactory.create`); `servicePrincipal` and `tokenSource`
     (`SpnegoAuthProvider`); `presentation`, `transport`, `protocol` and
-    `endpoint` (`composeAuthorization`); `browser` (`openInBrowser`); `show`
+    `endpoint` (`composeAuthorization`); `presentation` (`openInBrowser`
+    without `browser`); `show`
     (`consumerPresentation`); `receive` (`consumerAnswer`); `provide`
     (`consumerHandoff`); `redirectUri` (`manualPasteStrategy`,
     `manualSamlResponseStrategy`, `externalCodeStrategy`);
@@ -55,7 +55,8 @@ What a consumer on 7.x must do:
     `onWriteFailure` not `'continue'` / `'fail'`; a part of an authorization
     strategy without its methods, a transport `label` or a protocol
     `redirect` off its union; a browser name where an `IBrowser` belongs;
-    `remoteHint`, `read` or `onFailure` not a function; a `servicePrincipal`
+    `remoteHint` or `read` not a function; `show` for `consumerPresentation`'s
+    `onFailure` not a function; a `servicePrincipal`
     or `redirectUri` that is not a string. A string that cannot be used is
     still refused.
   - `snc-partner-name-missing` for a `partnerName` that is not a string,
@@ -103,7 +104,8 @@ your `AbortSignal` is the bound. What a consumer on 5.x must now do:
   (`renewal: IRenewalStrategy`). There is no default: a token provider (and
   `inBrowser`, `fromTerminal`, `toConsole`, `SsoProviderFactory.create`)
   constructed without one, or with one whose `next` is not a function, throws
-  `configuration` `required-fields-missing` with `fields: ['renewal']`.
+  `configuration` `required-fields-missing` with `fields: ['renewal']` (until
+  8.0.0: see [Migrating to 8.0.0](#migrating-to-800--static-types-first)).
   **`renewal: refreshThenLogin()` takes the steps 5.x took** — one refresh,
   then one login when there is no refresh token or the refresh failed;
   `refreshOnly()` never logs in. See [Renewal strategy](#renewal-strategy).
@@ -182,7 +184,9 @@ your `AbortSignal` is the bound. What a consumer on 5.x must now do:
   used: `<fields>`": an unparseable `authorizationUrl` (5.x
   `required-fields-missing`), a `persistence` without a callable `report`,
   `refreshStatePersistence`'s `onWriteFailure` or `write`, a part of an
-  authorization strategy that cannot be used (below).
+  authorization strategy that cannot be used (below). Since 8.0.0 a value of
+  the wrong type is not refused: see
+  [Migrating to 8.0.0](#migrating-to-800--static-types-first).
 - **Catch with `readFailure`, never `instanceof`.** Every throw of this
   package — a constructor's configuration fault, a factory's, a loader's,
   `getTokens()` / `refreshTokens()` — is an `AuthProviderFailure` (one
@@ -477,7 +481,8 @@ What a consumer on 5.x must now do:
 - **The terminal and consumer-code strategies need `redirectUri`.**
   `manualPasteStrategy()`, `manualSamlResponseStrategy()` and
   `externalCodeStrategy({ provide })` without `redirectUri` throw
-  `configuration` `required-fields-missing` naming `redirectUri`: pass the
+  `configuration` `required-fields-missing` naming `redirectUri` (until 8.0.0,
+  where the type requires it): pass the
   redirect registered with the identity provider (the ACS for SAML). Their
   `http://localhost:61001/callback` default is gone — it reached whatever held
   port 61001. `manualPasscodeStrategy`'s `redirectUri` is gone (it was
@@ -3770,7 +3775,8 @@ Collaborators in the options (a strategy, a logger, a validator) are kept by
 reference, and read and called only inside a moment's boundary — except an
 authorization strategy's parts, whose descriptors `composeAuthorization`
 reads when it composes (the transport's `label`; the protocol's `redirect`,
-`callbackMethods` and `paste`).
+`callbackMethods` and `paste`), and a SAML provider's `assertionValidator`,
+whose shipped-validator brand the constructor reads, guarded.
 
 **Errors outside the moments.** A strategy, a client-authentication
 strategy, a certificate loader or a presenter called **directly by you**,
