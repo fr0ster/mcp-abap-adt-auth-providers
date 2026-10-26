@@ -264,8 +264,12 @@ the shipped locator's `WeakSet` and the shipped validators' symbol.
     value of the wrong type. The rows whose answer throws, whether from a
     getter, a Proxy trap or the method itself, stay: a throw is still
     handled (§3);
-  - `auth/handled.test.ts`;
-  - the `isPlainPromise` part of `auth/untilAborted.test.ts`;
+  - the `markHandled` and `isPlainPromise` cases of `auth/handled.test.ts`.
+    Its `onAnswerRejection` cases cover runtime throws: a `then` getter that
+    throws, a Proxy trap, a rejection handler that throws. Those cases move
+    to the detached-answer paths that replace the helper (§6): the detached
+    persistence report, `IBrowser.open()` and `present()`. Each still proves
+    that no `unhandledRejection` is raised;  - the `isPlainPromise` part of `auth/untilAborted.test.ts`;
   - `auth/attemptSignals.test.ts`' bad-signal cases;
   - the shape rows of `providers/renewalStrategy.test.ts` that hold a value
     of the wrong type (null, a string, a number). The getter and Proxy rows
