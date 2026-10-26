@@ -57,7 +57,7 @@
     "kerberos": "^7.0.0"
   },
   "devDependencies": {
-    "@biomejs/biome": "^2.5.15",
+    "@biomejs/biome": "^2.6.3",
     "@jest/globals": "^30.5.2",
     "@types/jest": "^30.0.0",
     "@types/node": "^25.9.9",
