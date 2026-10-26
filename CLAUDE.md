@@ -336,6 +336,6 @@ There are none in this package. Every throw is auth-errors' `AuthProviderFailure
 
 ## Plans and specs
 
-`docs/superpowers/` at the repository root is not part of any package; the package's `docs/` holds `btp-setup.md` and `passwordless-sso.md`.
+`docs/superpowers/` at the repository root is not part of any package; the package's `docs/` holds `btp-setup.md`, `passwordless-sso.md` and `architecture.md` (the package's parts, boundaries, principles and decisions).
 
 Everything under `docs/superpowers/` — specs, plans, goals, todo lists, any other working document — is kept in the tree only while active: not yet implemented and not cancelled. Once fully implemented OR cancelled, delete the file, at the latest before the release that ships the work. History lives in git; the directory holds only work in progress. What a deleted document still owes the future (next steps in other repositories, say) goes into the PR description first.
