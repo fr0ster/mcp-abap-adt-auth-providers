@@ -6,7 +6,6 @@
  */
 
 import { describe, expect, it } from '@jest/globals';
-import { readFailure } from '@mcp-abap-adt/auth-errors';
 import type {
   PersistenceReport,
   ReportedCredential,
@@ -374,67 +373,6 @@ describe('refreshStatePersistence — one write at a time, in report order', () 
 
 describe('refreshStatePersistence — construction', () => {
   const write = async (_tokens: PersistedTokens) => undefined;
-
-  /** The refusal `build` throws: invalid-value naming exactly `fields`. */
-  const expectInvalid = (
-    build: () => unknown,
-    fields: readonly string[],
-  ): void => {
-    let thrown: unknown;
-    try {
-      build();
-    } catch (error) {
-      thrown = error;
-    }
-    const error = readFailure(thrown, 'unfamiliar-error');
-    expect(error.kind).toBe('configuration');
-    expect(error.facts).toEqual({ case: 'invalid-value', fields });
-    expect(error.reason).toBe(
-      `a configured value cannot be used: ${fields.join(', ')}`,
-    );
-  };
-
-  it.each([
-    ['missing', {}],
-    ['undefined', { onWriteFailure: undefined }],
-    ['null', { onWriteFailure: null }],
-    ['an unknown word', { onWriteFailure: 'retry' }],
-    ['a boolean', { onWriteFailure: true }],
-  ])(
-    'onWriteFailure %s: refused, naming onWriteFailure (no default)',
-    (_what, options) => {
-      expectInvalid(
-        () => refreshStatePersistence(write, options as never),
-        ['onWriteFailure'],
-      );
-    },
-  );
-
-  it('no options at all: refused, naming onWriteFailure', () => {
-    expectInvalid(
-      () => refreshStatePersistence(write, undefined as never),
-      ['onWriteFailure'],
-    );
-  });
-
-  it.each([
-    ['a string', 'nope'],
-    ['undefined', undefined],
-    ['null', null],
-    ['an object', {}],
-  ])('write %s: refused, naming write', (_what, given) => {
-    expectInvalid(
-      () => refreshStatePersistence(given as never, { onWriteFailure: 'fail' }),
-      ['write'],
-    );
-  });
-
-  it('both unusable: refused, naming both', () => {
-    expectInvalid(
-      () => refreshStatePersistence('nope' as never, {} as never),
-      ['onWriteFailure', 'write'],
-    );
-  });
 
   it('an accessor on the options runs once, at creation', () => {
     let reads = 0;

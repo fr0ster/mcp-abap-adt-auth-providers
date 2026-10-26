@@ -13,7 +13,6 @@
  * provider; the passcode page takes none.
  */
 
-import { requiredFieldsMissing } from '../auth/configuration';
 import {
   type ComposedStrategy,
   composeAuthorization,
@@ -55,16 +54,6 @@ export interface ManualStrategyOptions extends ManualPasscodeStrategyOptions {
   redirectUri: string;
 }
 
-type Own = Partial<ManualStrategyOptions>;
-
-/** The consumer's redirect: required. */
-function registeredRedirect(own: Own): string {
-  if (own.redirectUri === undefined) {
-    throw requiredFieldsMissing(['redirectUri']);
-  }
-  return own.redirectUri;
-}
-
 /** The user copies the `code` out of the address bar after the redirect. */
 export function manualPasteStrategy(
   options: ManualStrategyOptions,
@@ -74,7 +63,7 @@ export function manualPasteStrategy(
   return composeAuthorization({
     presentation: showUrl(),
     transport: terminalPaste({
-      redirectUri: registeredRedirect(own),
+      redirectUri: own.redirectUri,
       read: own.read,
     }),
     protocol: oauthCode(),
@@ -91,7 +80,7 @@ export function manualSamlResponseStrategy(
   return composeAuthorization({
     presentation: showUrl(),
     transport: terminalPaste({
-      redirectUri: registeredRedirect(own),
+      redirectUri: own.redirectUri,
       read: own.read,
     }),
     protocol: samlResponse(),

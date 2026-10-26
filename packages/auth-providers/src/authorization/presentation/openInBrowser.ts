@@ -9,17 +9,15 @@
  * the failure goes to the composer's fixed line; the login keeps waiting.
  * Nothing is prompted once the login has ended.
  *
- * No browser is named by a string: anything without an `open` function is
- * refused at construction. Showing the URL without a browser is `showUrl`.
+ * No browser is named by a string. Showing the URL without a browser is
+ * `showUrl`.
  */
 
-import { authError } from '@mcp-abap-adt/auth-errors';
 import type {
   IAuthorizationPresentation,
   IBrowser,
   PresentationContext,
 } from '@mcp-abap-adt/interfaces-auth';
-import { misconfigured } from '../../auth/configuration';
 import { promptAuthorizationUrl, promptContext } from './prompt';
 
 export interface OpenInBrowserOptions {
@@ -32,28 +30,6 @@ export function openInBrowser(
 ): IAuthorizationPresentation {
   // A typed copy: the options are read once, here.
   const { browser } = { ...options };
-  if (browser === undefined) {
-    throw misconfigured(
-      authError.configuration({
-        case: 'required-fields-missing',
-        fields: ['presentation'],
-      }),
-    );
-  }
-  // No browser is named by a string: anything without an `open` method is
-  // refused here (kept for the configuration refusals' own change).
-  if (
-    browser === null ||
-    typeof browser !== 'object' ||
-    typeof browser.open !== 'function'
-  ) {
-    throw misconfigured(
-      authError.configuration({
-        case: 'invalid-value',
-        fields: ['presentation'],
-      }),
-    );
-  }
   return Object.freeze({
     async present(
       authorizationUrl: string,

@@ -35,7 +35,7 @@ import type {
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
 import { AuthProviderBase } from '../auth/AuthProviderBase';
 import { throwIfAborted, untilAborted } from '../auth/attempt';
-import { misconfigured, requiredFieldsMissing } from '../auth/configuration';
+import { misconfigured } from '../auth/configuration';
 import { markHandled } from '../auth/handled';
 import { refuseFor } from '../auth/rejection';
 import { logQuietly } from '../auth/tokenRequest';
@@ -155,22 +155,7 @@ export class SpnegoAuthProvider extends AuthProviderBase {
     // A typed copy: the options are read once, here.
     const own = { ...config };
     const servicePrincipal = own.servicePrincipal;
-    const tokenSource = own.tokenSource;
-    const missing: string[] = [];
-    if (servicePrincipal === undefined) missing.push('servicePrincipal');
-    // Kept for the configuration refusals' own change.
-    if (
-      tokenSource === null ||
-      typeof tokenSource !== 'object' ||
-      typeof tokenSource.token !== 'function'
-    ) {
-      missing.push('tokenSource');
-    }
-    if (missing.length > 0) throw requiredFieldsMissing(missing);
-    if (
-      typeof servicePrincipal !== 'string' ||
-      !isHostBasedName(servicePrincipal)
-    ) {
+    if (!isHostBasedName(servicePrincipal)) {
       // The value is never echoed: the field alone is named.
       throw misconfigured(
         authError.configuration({
@@ -180,7 +165,7 @@ export class SpnegoAuthProvider extends AuthProviderBase {
       );
     }
     this.servicePrincipal = servicePrincipal;
-    this.tokenSource = tokenSource;
+    this.tokenSource = own.tokenSource;
     this.logger = own.logger;
     // The config's signal is the first party; an aborted one adds nothing.
     if (own.signal !== undefined) {

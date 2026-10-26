@@ -60,7 +60,7 @@ import {
   certificateNotAfter,
   certificateThumbprint,
 } from '../auth/certificateMaterial';
-import { misconfigured, requiredFieldsMissing } from '../auth/configuration';
+import { misconfigured } from '../auth/configuration';
 import { isGrant } from '../auth/grants';
 import { markHandled } from '../auth/handled';
 import { rejectionCause } from '../auth/rejection';
@@ -109,10 +109,8 @@ export interface TokenProviderHooks extends TokenProviderDebug {
    * detached report is called and not awaited; its failure is logged in
    * fixed words and attributed to nothing. Nothing is reported twice.
    * Absent: nothing is persisted — a choice, not a default; the provider
-   * builds none (rule 7). Given, it must be an object whose `report` is a
-   * function, else it is refused at construction (`configuration`
-   * `invalid-value`, `persistence`). `refreshStatePersistence(write,
-   * options)` is the behaviour of `onTokens` before 6.0.0.
+   * builds none (rule 7). `refreshStatePersistence(write, options)` is the
+   * behaviour of `onTokens` before 6.0.0.
    */
   persistence?: ITokenPersistence | undefined;
   /**
@@ -127,10 +125,8 @@ export interface TokenProviderHooks extends TokenProviderDebug {
    * How every renewal of this provider proceeds — whether to refresh,
    * whether to log in, when to stop, what becomes of a refresh token that
    * was sent. Required, no default (rule 7): `refreshThenLogin()`
-   * is the behaviour before 6.0.0, `refreshOnly()` never logs in. A missing
-   * one, or one whose `next` is not a function, is refused at construction
-   * (`configuration` `required-fields-missing`, `renewal`) — the provider
-   * builds none of its own.
+   * is the behaviour before 6.0.0, `refreshOnly()` never logs in. The
+   * provider builds none of its own.
    */
   renewal: IRenewalStrategy;
 }
@@ -363,36 +359,10 @@ export abstract class BaseTokenProvider
       authorize: 'token-request',
       rejected: 'token-request',
     });
-    // Absent is a choice: nothing is persisted. Given, it must be an
-    // object whose `report` is a function; anything else — `null` included
-    // — is refused here (kept for the configuration refusals' own change).
-    const persistence = config.persistence;
-    if (
-      persistence !== undefined &&
-      (persistence === null ||
-        typeof persistence !== 'object' ||
-        typeof persistence.report !== 'function')
-    ) {
-      throw misconfigured(
-        authError.configuration({
-          case: 'invalid-value',
-          fields: ['persistence'],
-        }),
-      );
-    }
-    this.persistence = persistence;
-    // Required, no default (rule 7): an object whose `next` is a function;
-    // anything else is refused here (kept for the configuration refusals'
-    // own change).
-    const renewal = config.renewal;
-    if (
-      renewal === null ||
-      typeof renewal !== 'object' ||
-      typeof renewal.next !== 'function'
-    ) {
-      throw requiredFieldsMissing(['renewal']);
-    }
-    this.renewal = renewal;
+    // Absent is a choice: nothing is persisted.
+    this.persistence = config.persistence;
+    // Required, no default (rule 7).
+    this.renewal = config.renewal;
     // `true` itself: `'true'`, `1` or an environment variable never opt in.
     this.authDebug = config.authDebug === true;
     if (config.clientAuthentication && config.clientSecret !== undefined) {

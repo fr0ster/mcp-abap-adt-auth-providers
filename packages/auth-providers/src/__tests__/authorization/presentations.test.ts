@@ -320,29 +320,6 @@ describe('consumerPresentation', () => {
 });
 
 describe('construction', () => {
-  it.each([
-    [
-      'consumerPresentation without show',
-      () => consumerPresentation({} as never),
-      'required-fields-missing',
-      ['show'],
-    ],
-    [
-      'openInBrowser without browser',
-      () => openInBrowser({} as never),
-      'required-fields-missing',
-      ['presentation'],
-    ],
-  ] as const)('%s → configuration %s', (_name, make, outcome, fields) => {
-    let thrown: unknown;
-    try {
-      make();
-    } catch (error) {
-      thrown = error;
-    }
-    expect(factsOf(thrown)).toEqual({ case: outcome, fields });
-  });
-
   it('openInBrowser({ browser }) is a presentation', () => {
     expect(typeof openInBrowser({ browser: recordingBrowser() }).present).toBe(
       'function',

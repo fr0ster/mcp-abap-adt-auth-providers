@@ -46,11 +46,12 @@ export class ClientCredentialsProvider extends BaseTokenProvider {
     super(config);
     this.config = config;
     this.logger = config.logger;
+    // Required strings: an empty one is missing.
     const missingFields: string[] = [];
-    if (!config.uaaUrl) {
+    if (config.uaaUrl === '') {
       missingFields.push('uaaUrl');
     }
-    if (!config.clientId) {
+    if (config.clientId === '') {
       missingFields.push('clientId');
     }
     // A strategy authenticates the client instead (never both: the base).

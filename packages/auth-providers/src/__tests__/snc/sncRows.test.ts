@@ -547,12 +547,12 @@ describe('construction', () => {
     locator: new DefaultSncLibraryLocator(machine()),
     probes: [],
   });
-  it.each([' ', '', undefined, 42])(
+  it.each([' ', ''])(
     'partnerName %p → snc-partner-name-missing',
     (partnerName) => {
       let thrown: unknown;
       try {
-        new SncLogonProvider({ partnerName: partnerName as never, ...parts() });
+        new SncLogonProvider({ partnerName, ...parts() });
       } catch (error) {
         thrown = error;
       }
@@ -563,14 +563,14 @@ describe('construction', () => {
       });
     },
   );
-  it.each(['0', '4', '10', 'max', '', ' 9', 9])(
+  it.each(['0', '4', '10', 'max', '', ' 9'])(
     'qop %p → snc-qop-invalid, allowed snc-qop, the value never echoed',
     (qop) => {
       let thrown: unknown;
       try {
         new SncLogonProvider({
           partnerName: 'p:CN=SID',
-          qop: qop as never,
+          qop,
           ...parts(),
         });
       } catch (error) {
@@ -912,21 +912,6 @@ describe('review round 1', () => {
     }
     return undefined;
   };
-  it.each([
-    ['a number', { myName: 42 }],
-    ['an object', { myName: { toString: () => MARKER } }],
-  ])(
-    'myName as %s → configuration naming myName, never a TypeError',
-    (_, config) => {
-      const thrown = construct(config);
-      expect(configurationOf(thrown)).toEqual({
-        case: 'required-fields-missing',
-        fields: ['myName'],
-        reason: 'required configuration is missing: myName',
-      });
-      expect(JSON.stringify(thrown)).not.toContain(MARKER);
-    },
-  );
   it('a valid myName and an absent qop still construct', () => {
     expect(construct({ myName: ' p:CN=ME ' })).toBeUndefined();
     expect(construct({ qop: undefined })).toBeUndefined();

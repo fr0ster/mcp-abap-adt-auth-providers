@@ -117,11 +117,6 @@ export function terminalPaste(
   // A typed copy: the options are read once, here.
   const own = { ...options };
   const redirectUri = consumerRedirect(own.redirectUri);
-  if (own.read !== undefined && typeof own.read !== 'function') {
-    throw misconfigured(
-      authError.configuration({ case: 'invalid-value', fields: ['read'] }),
-    );
-  }
   const read = own.read ?? readFromTerminal;
   return Object.freeze({
     label: 'manual' as const,

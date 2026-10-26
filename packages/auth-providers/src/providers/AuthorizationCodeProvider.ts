@@ -143,11 +143,12 @@ export class AuthorizationCodeProvider extends BaseTokenProvider {
       }),
     );
 
+    // Required strings: an empty one is missing.
     const missingFields: string[] = [];
-    if (!config.uaaUrl) {
+    if (config.uaaUrl === '') {
       missingFields.push('uaaUrl');
     }
-    if (!config.clientId) {
+    if (config.clientId === '') {
       missingFields.push('clientId');
     }
     // A strategy authenticates the client instead (never both: the base).

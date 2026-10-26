@@ -14,8 +14,6 @@ import type {
 import { BaseTokenProvider } from '../../providers/BaseTokenProvider';
 import { refreshThenLogin } from '../../renewal';
 import { SsoProviderFactory } from '../../sso/SsoProviderFactory';
-import type { SsoProviderConfig } from '../../sso/types';
-import { configurationOf } from '../helpers/minted';
 
 /** A JWT whose `exp` is `secondsFromNow` away: what `isTokenValid` reads. */
 function jwt(label: string, secondsFromNow: number): string {
@@ -168,36 +166,5 @@ describe('SsoProviderFactory', () => {
       },
     });
     expect(typeof provider.refreshTokens).toBe('function');
-  });
-
-  // A consumer without types can name a flow no provider has. The refusal is
-  // fixed words: the config beside protocol and flow holds the client secret,
-  // the password, tokens — whoever catches the error logs its message.
-  it('refuses an unsupported protocol or flow without its config in the message', () => {
-    const config = {
-      protocol: 'oidc',
-      flow: 'implicit',
-      config: {
-        clientId: 'client',
-        clientSecret: 'CLIENT-SECRET-VALUE',
-        password: 'PASSWORD-VALUE',
-      },
-    } as unknown as SsoProviderConfig;
-    let thrown: unknown;
-    try {
-      SsoProviderFactory.create(config);
-    } catch (error) {
-      thrown = error;
-    }
-    // A configuration failure, its words fixed.
-    expect(configurationOf(thrown)).toEqual({
-      case: 'unsupported-sso-flow',
-      fields: [],
-      reason:
-        'unsupported SSO provider config: no provider for this protocol and flow',
-    });
-    const message = (thrown as Error).message;
-    expect(message).not.toContain('CLIENT-SECRET-VALUE');
-    expect(message).not.toContain('PASSWORD-VALUE');
   });
 });

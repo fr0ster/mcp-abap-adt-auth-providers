@@ -24,7 +24,6 @@
 import {
   authError,
   isAuthProviderFailure,
-  isInteractiveLoginStrategy,
   logFields,
   readFailure,
 } from '@mcp-abap-adt/auth-errors';
@@ -75,29 +74,6 @@ export type ComposedStrategy<TPayload> = IAuthorizationStrategy<TPayload> & {
   dispose(): Promise<void>;
 };
 
-type Part = 'presentation' | 'transport' | 'protocol';
-
-const requiredMissing = (field: Part | 'endpoint') =>
-  misconfigured(
-    authError.configuration({
-      case: 'required-fields-missing',
-      fields: [field],
-    }),
-  );
-
-const invalidPart = (field: Part) =>
-  misconfigured(
-    authError.configuration({ case: 'invalid-value', fields: [field] }),
-  );
-
-/**
- * A part without its method is unusable: refused at composition (kept for
- * the configuration refusals' own change).
- */
-function requireMethod(method: unknown, field: Part): void {
-  if (typeof method !== 'function') throw invalidPart(field);
-}
-
 /** The protocol's descriptor, read once, as typed. */
 interface ProtocolRead {
   readonly redirect: 'required' | 'unused';
@@ -109,10 +85,6 @@ function readProtocol<TPayload>(
   protocol: IAuthorizationProtocol<TPayload>,
 ): ProtocolRead {
   const { redirect, callbackMethods, paste } = protocol;
-  if (redirect !== 'required' && redirect !== 'unused') {
-    throw invalidPart('protocol');
-  }
-  requireMethod(protocol.begin, 'protocol');
   // Each method once, in the protocol's order.
   const methods = [...new Set(callbackMethods)];
   return {
@@ -194,19 +166,9 @@ export function composeAuthorization<TPayload>(
 ): ComposedStrategy<TPayload> {
   // A typed copy: the options are read once, here.
   const own = { ...parts };
-  for (const part of ['presentation', 'transport', 'protocol'] as const) {
-    if (own[part] === undefined || own[part] === null) {
-      throw requiredMissing(part);
-    }
-  }
-  if (own.endpoint === undefined) throw requiredMissing('endpoint');
   const endpoint = checkedEndpoint(own.endpoint);
   const { presentation, transport, protocol } = own;
-  requireMethod(presentation.present, 'presentation');
-  requireMethod(transport.open, 'transport');
-  const label = transport.label;
-  if (!isInteractiveLoginStrategy(label)) throw invalidPart('transport');
-  const strategy: InteractiveLoginStrategy = label;
+  const strategy: InteractiveLoginStrategy = transport.label;
   const described = readProtocol(protocol);
   const optionSignal = own.signal;
 

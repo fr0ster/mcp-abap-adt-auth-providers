@@ -10,7 +10,7 @@ import type {
   IAuthorizationStrategy,
 } from '@mcp-abap-adt/interfaces-auth';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
-import { misconfigured, requiredFieldsMissing } from '../auth/configuration';
+import { misconfigured } from '../auth/configuration';
 import { buildSamlAuthorizationUrl } from '../auth/saml2Auth';
 import {
   isShippedValidator,
@@ -70,11 +70,6 @@ export interface Saml2BearerExchangeConfig {
 
 /** Throw at construction rather than half-verify at runtime. */
 export function validateSamlConfig(config: Saml2CommonConfig): void {
-  // No validator is built for the consumer (rule 7); a JavaScript
-  // caller past the type is told which collaborator is missing.
-  if (!config.assertionValidator) {
-    throw requiredFieldsMissing(['assertionValidator']);
-  }
   if (config.authorizationUrl && !config.acsUrl) {
     throw misconfigured(
       authError.configuration({
@@ -108,13 +103,12 @@ export interface SamlTrust {
 
 /**
  * A recipe's `trust`, copied once, as the shipped validator's options: the replay store
- * defaults to the process-wide `defaultReplayStore`. Whatever is missing or
- * of the wrong type the validator refuses as configuration.
+ * defaults to the process-wide `defaultReplayStore`.
  */
 export function samlTrustOf(trust: SamlTrust): ShippedValidatorOptions {
   const own = { ...trust };
   return {
-    idpCertificates: own.idpCertificates ?? [],
+    idpCertificates: own.idpCertificates,
     clockSkewMs: own.clockSkewMs,
     replayStore: own.replayStore ?? defaultReplayStore,
   };

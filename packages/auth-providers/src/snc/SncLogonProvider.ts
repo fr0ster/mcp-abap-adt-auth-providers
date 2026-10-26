@@ -100,8 +100,7 @@ export class SncLogonProvider extends AuthProviderBase {
     });
     // A typed copy: the options are read once, here.
     const own = { ...config };
-    const partnerName =
-      typeof own.partnerName === 'string' ? own.partnerName.trim() : '';
+    const partnerName = own.partnerName.trim();
     if (!partnerName) {
       throw misconfigured(
         authError.configuration({
@@ -121,23 +120,9 @@ export class SncLogonProvider extends AuthProviderBase {
         }),
       );
     }
-    const myName = own.myName;
-    if (myName !== undefined && typeof myName !== 'string') {
-      // No snc case names myName (interfaces-auth's CONFIG_CASES): the
-      // generic case, naming the field — never the value or a getter's throw.
-      throw misconfigured(
-        authError.configuration({
-          case: 'required-fields-missing',
-          fields: ['myName'],
-        }),
-      );
-    }
     this.partnerName = partnerName;
     this.qop = qop;
-    this.myName =
-      typeof myName === 'string' ? myName.trim() || undefined : undefined;
-    // An absent locator or probe list is used only inside a moment, whose
-    // boundary answers it.
+    this.myName = own.myName?.trim() || undefined;
     this.locator = own.locator;
     this.probes = own.probes;
     this.logger = own.logger;

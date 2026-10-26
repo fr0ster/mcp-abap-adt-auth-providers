@@ -6,14 +6,13 @@
  * (rule 7): the consumer gives this, or its own `ITokenPersistence`.
  */
 
-import { authError, classify, logFields } from '@mcp-abap-adt/auth-errors';
+import { classify, logFields } from '@mcp-abap-adt/auth-errors';
 import type {
   ITokenPersistence,
   OAuth2GrantType,
   PersistenceReport,
 } from '@mcp-abap-adt/interfaces-auth';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
-import { misconfigured } from '../auth/configuration';
 import { logQuietly } from '../auth/tokenRequest';
 
 /** What one write hands the store. */
@@ -35,9 +34,7 @@ export interface RefreshStatePersistenceOptions {
    * Required, no default: whether a failed write fails an awaited report —
    * and with it the call that caused it (`'fail'`) — or is only logged
    * (`'continue'`). Either way the write is delivered again by the next
-   * report. Missing or any other value: refused at construction,
-   * `configuration` `invalid-value` naming `onWriteFailure` (a `write` that
-   * is not a function is refused the same way, naming `write`).
+   * report.
    */
   readonly onWriteFailure: 'continue' | 'fail';
   /** Where a failed write is logged, in fixed words. */
@@ -80,17 +77,6 @@ function taken(report: PersistenceReport): Taken {
 }
 
 /**
- * Refused at construction, naming each option that cannot be used:
- * `onWriteFailure` when it is missing or not `'continue'` / `'fail'`,
- * `write` when it is not a function — both when both.
- */
-function unusable(fields: readonly ('onWriteFailure' | 'write')[]): never {
-  throw misconfigured(
-    authError.configuration({ case: 'invalid-value', fields: [...fields] }),
-  );
-}
-
-/**
  * A persistence strategy over `write`:
  *
  * - **One write at a time, in report order.** Every report — a detached one
@@ -128,12 +114,6 @@ export function refreshStatePersistence(
   // A typed copy: an accessor on the options runs once, here.
   const own = { ...options };
   const { onWriteFailure, logger } = own;
-  const wrong: ('onWriteFailure' | 'write')[] = [];
-  if (onWriteFailure !== 'continue' && onWriteFailure !== 'fail') {
-    wrong.push('onWriteFailure');
-  }
-  if (typeof write !== 'function') wrong.push('write');
-  if (wrong.length > 0) unusable(wrong);
 
   let state: 'held' | 'cleared' = 'held';
   let pending: string | undefined;

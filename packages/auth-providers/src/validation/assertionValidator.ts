@@ -35,7 +35,7 @@ import {
   type Node,
   XMLSerializer,
 } from '@xmldom/xmldom';
-import { misconfigured, requiredFieldsMissing } from '../auth/configuration';
+import { misconfigured } from '../auth/configuration';
 import { parseStrictXml } from '../auth/strictXml';
 import { findDuplicateId, readRequiredId } from './documentIds';
 import { refuse, type SamlRefusal, several } from './samlRefusal';
@@ -147,26 +147,11 @@ export const createSignedAssertionValidator = (
   options: ShippedValidatorOptions,
 ): IAssertionValidator => brand(createValidator('assertion', options));
 
-/**
- * The configured certificates as a plain array, copied once; anything that
- * is not an array, or cannot be read as one (a Proxy that throws), is an
- * empty list — refused as no certificates.
- */
-function certificateList(value: unknown): unknown[] {
-  if (!Array.isArray(value)) return [];
-  try {
-    return Array.from(value as unknown[]);
-  } catch {
-    return [];
-  }
-}
-
 function createValidator(
   require: SignedElement,
   options: ShippedValidatorOptions,
 ): IAssertionValidator {
-  // A typed copy, read once; a JavaScript caller past the type gets the
-  // configuration failure its mistake is (README, "Configuration errors").
+  // A typed copy, read once.
   const own = { ...options };
   const skew = own.clockSkewMs ?? 0;
   if (!Number.isInteger(skew) || skew < 0) {
@@ -178,7 +163,9 @@ function createValidator(
       }),
     );
   }
-  const given = certificateList(own.idpCertificates);
+  // The list copied once: a later change to the consumer's array changes
+  // nothing.
+  const given = [...own.idpCertificates];
   if (given.length === 0) {
     throw misconfigured(
       authError.configuration({
@@ -195,10 +182,6 @@ function createValidator(
   // formatting mistake found then wastes their work, not ours.
   const certificates = given.map(toPem);
   const store = own.replayStore;
-  if (store === null || typeof store !== 'object') {
-    // The store is required (`defaultReplayStore`).
-    throw requiredFieldsMissing(['replayStore']);
-  }
 
   return {
     async validate(samlResponse, context): Promise<ValidatedAssertion> {

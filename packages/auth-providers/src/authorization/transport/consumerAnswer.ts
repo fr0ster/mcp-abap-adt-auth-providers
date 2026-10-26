@@ -7,7 +7,6 @@
  * `unreadable-input`: the consumer's code is not asked twice.
  */
 
-import { authError } from '@mcp-abap-adt/auth-errors';
 import type {
   AnswerJudge,
   AnswerTransportOptions,
@@ -18,7 +17,6 @@ import type {
   PresentationContext,
 } from '@mcp-abap-adt/interfaces-auth';
 import { untilAborted } from '../../auth/attempt';
-import { misconfigured } from '../../auth/configuration';
 import {
   abortedLogin,
   failedLogin,
@@ -50,14 +48,6 @@ export interface ConsumerHandoffOptions {
 /** A value adopted as `await` would, a synchronous throw as a rejection. */
 const adopt = <T>(run: () => T | Promise<T>): Promise<T> =>
   new Promise<T>((resolve) => resolve(run()));
-
-const required = (field: 'receive' | 'provide') =>
-  misconfigured(
-    authError.configuration({
-      case: 'required-fields-missing',
-      fields: [field],
-    }),
-  );
 
 /** A signal that never aborts, for an open given none. */
 const never = new AbortController().signal;
@@ -142,7 +132,6 @@ export function consumerAnswer(
   const own = { ...options };
   const redirectUri = consumerRedirect(own.redirectUri);
   const { receive } = own;
-  if (typeof receive !== 'function') throw required('receive');
   return socketless(redirectUri, (signal) => adopt(() => receive(signal)));
 }
 
@@ -158,7 +147,6 @@ export function consumerHandoff(options: ConsumerHandoffOptions): {
   const own = { ...options };
   const redirectUri = consumerRedirect(own.redirectUri);
   const { provide } = own;
-  if (typeof provide !== 'function') throw required('provide');
 
   /** The open in progress: where the presentation hands its answer. */
   let current: { readonly hand: (answer: Promise<string>) => void } | undefined;

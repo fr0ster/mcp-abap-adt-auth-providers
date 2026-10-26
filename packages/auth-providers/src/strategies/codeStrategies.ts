@@ -14,7 +14,7 @@ import type {
   AuthorizationOutcome,
   IAuthorizationStrategy,
 } from '@mcp-abap-adt/interfaces-auth';
-import { misconfigured, requiredFieldsMissing } from '../auth/configuration';
+import { misconfigured } from '../auth/configuration';
 import {
   type ComposedStrategy,
   composeAuthorization,
@@ -54,9 +54,6 @@ export function externalCodeStrategy(
 ): ComposedStrategy<string> {
   // A typed copy: the options are read once, here.
   const own = { ...options };
-  if (own.redirectUri === undefined) {
-    throw requiredFieldsMissing(['redirectUri']);
-  }
   const { presentation, transport } = consumerHandoff({
     redirectUri: own.redirectUri,
     provide: own.provide,

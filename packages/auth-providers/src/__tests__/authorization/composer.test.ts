@@ -45,7 +45,6 @@ const urlFor = (redirectUri: string) =>
 
 const factsOf = (error: unknown) =>
   readFailure(error, 'browser-login').facts as Record<string, unknown>;
-const kindOf = (error: unknown) => readFailure(error, 'browser-login').kind;
 
 const caught = (promise: Promise<unknown>): Promise<unknown> =>
   promise.then(
@@ -91,47 +90,6 @@ const rightCode = (code: string) => ({
 });
 
 describe('construction', () => {
-  it.each(['presentation', 'transport', 'protocol'] as const)(
-    'a missing %s is required-fields-missing naming it',
-    (part) => {
-      const parts: Record<string, unknown> = {
-        presentation: showUrl(),
-        transport: scriptedTransport({ redirectUri: REDIRECT }).transport,
-        protocol: oauthCode(),
-        endpoint: '/callback',
-      };
-      delete parts[part];
-      let thrown: unknown;
-      try {
-        composeAuthorization(parts as never);
-      } catch (error) {
-        thrown = error;
-      }
-      expect(kindOf(thrown)).toBe('configuration');
-      expect(factsOf(thrown)).toEqual({
-        case: 'required-fields-missing',
-        fields: [part],
-      });
-    },
-  );
-
-  it('a missing endpoint is required-fields-missing endpoint: no default', () => {
-    let thrown: unknown;
-    try {
-      composeAuthorization({
-        presentation: showUrl(),
-        transport: scriptedTransport({ redirectUri: REDIRECT }).transport,
-        protocol: oauthCode(),
-      } as never);
-    } catch (error) {
-      thrown = error;
-    }
-    expect(factsOf(thrown)).toEqual({
-      case: 'required-fields-missing',
-      fields: ['endpoint'],
-    });
-  });
-
   it.each([
     '/auth/%2e%2e/finish',
     '/auth\\finish',

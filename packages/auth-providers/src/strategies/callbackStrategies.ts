@@ -17,7 +17,6 @@
  * })`, its route hint replaced by `remoteHint` when given.
  */
 
-import { authError } from '@mcp-abap-adt/auth-errors';
 import type {
   AnswerJudge,
   AnswerTransportOptions,
@@ -27,7 +26,6 @@ import type {
   IAuthorizationProtocol,
   IBrowser,
 } from '@mcp-abap-adt/interfaces-auth';
-import { misconfigured } from '../auth/configuration';
 import {
   type ComposedStrategy,
   composeAuthorization,
@@ -122,11 +120,6 @@ function transportOf(own: CallbackStrategyOptions): IAnswerTransport {
   });
   const { remoteHint } = own;
   if (remoteHint === undefined) return listener;
-  if (typeof remoteHint !== 'function') {
-    throw misconfigured(
-      authError.configuration({ case: 'invalid-value', fields: ['transport'] }),
-    );
-  }
   return withRouteHint(listener, remoteHint);
 }
 

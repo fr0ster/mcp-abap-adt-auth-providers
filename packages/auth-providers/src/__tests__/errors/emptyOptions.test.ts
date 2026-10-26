@@ -1,20 +1,17 @@
 /**
- * An empty options object: every exported constructor and factory answers
- * with its own `configuration` failure (a required field it finds missing)
- * or returns. One row per maker, so a refusal removed later is pruned row by
- * row.
+ * An empty options object: a constructor or factory answers with its own
+ * `configuration` failure (a value rule or an optional field the
+ * configuration needs) or returns. One row per maker, so a refusal removed
+ * later is pruned row by row. A maker whose only refusal of `{}` was for a
+ * field its type requires has no row: what it does with a value that breaks
+ * its type is not stated.
  */
 import { inspect } from 'node:util';
 import { describe, expect, it } from '@jest/globals';
 import { isAuthProviderFailure } from '@mcp-abap-adt/auth-errors';
 import { composeAuthorization } from '../../authorization/compose';
 import {
-  consumerPresentation,
-  openInBrowser,
-} from '../../authorization/presentation';
-import {
   consumerAnswer,
-  consumerHandoff,
   loopback,
   loopback4,
   loopback6,
@@ -33,38 +30,17 @@ import { TokenAuthProvider } from '../../credentials/TokenAuthProvider';
 import { consoleDeviceCodePresenter } from '../../deviceCode/DeviceCodePresenter';
 import { AuthorizationCodeProvider } from '../../providers/AuthorizationCodeProvider';
 import { ClientCredentialsProvider } from '../../providers/ClientCredentialsProvider';
-import { OidcBrowserProvider } from '../../providers/OidcBrowserProvider';
-import { OidcDeviceFlowProvider } from '../../providers/OidcDeviceFlowProvider';
-import { OidcPasswordProvider } from '../../providers/OidcPasswordProvider';
-import { OidcTokenExchangeProvider } from '../../providers/OidcTokenExchangeProvider';
-import { Saml2BearerProvider } from '../../providers/Saml2BearerProvider';
-import { Saml2PureProvider } from '../../providers/Saml2PureProvider';
-import { UaaPasscodeProvider } from '../../providers/UaaPasscodeProvider';
 import { refreshThenLogin } from '../../renewal';
 import { DefaultSncLibraryLocator } from '../../snc/DefaultSncLibraryLocator';
 import { SecureLoginClientProbe } from '../../snc/SecureLoginClientProbe';
-import { SncLogonProvider } from '../../snc/SncLogonProvider';
-import { SpnegoAuthProvider } from '../../spnego/SpnegoAuthProvider';
-import { SsoProviderFactory } from '../../sso/SsoProviderFactory';
 import { asOidcResult } from '../../strategies/asOidcResult';
 import {
   browserCallbackStrategy,
   oidcCallbackStrategy,
   samlCallbackStrategy,
 } from '../../strategies/callbackStrategies';
-import {
-  externalCodeStrategy,
-  staticCodeStrategy,
-} from '../../strategies/codeStrategies';
-import {
-  manualPasscodeStrategy,
-  manualPasteStrategy,
-  manualSamlResponseStrategy,
-} from '../../strategies/manualStrategies';
-import {
-  createSignedAssertionValidator,
-  createSignedResponseValidator,
-} from '../../validation/assertionValidator';
+import { staticCodeStrategy } from '../../strategies/codeStrategies';
+import { manualPasscodeStrategy } from '../../strategies/manualStrategies';
 
 const SECRET = 'HOSTILE-OPTION-SECRET-41';
 
@@ -86,21 +62,6 @@ const makers: Record<string, Make> = {
       },
       h(x),
     ),
-  'new OidcBrowserProvider': (x) => new OidcBrowserProvider(h(x)),
-  'OidcBrowserProvider.inBrowser': (x) => OidcBrowserProvider.inBrowser(h(x)),
-  'new OidcDeviceFlowProvider': (x) => new OidcDeviceFlowProvider(h(x)),
-  'OidcDeviceFlowProvider.toConsole': (x) =>
-    OidcDeviceFlowProvider.toConsole(h(x)),
-  'new OidcPasswordProvider': (x) => new OidcPasswordProvider(h(x)),
-  'new OidcTokenExchangeProvider': (x) => new OidcTokenExchangeProvider(h(x)),
-  'new Saml2BearerProvider': (x) => new Saml2BearerProvider(h(x)),
-  'Saml2BearerProvider.inBrowser': (x) =>
-    Saml2BearerProvider.inBrowser(h(x), h(x)),
-  'new Saml2PureProvider': (x) => new Saml2PureProvider(h(x)),
-  'Saml2PureProvider.inBrowser': (x) => Saml2PureProvider.inBrowser(h(x), h(x)),
-  'new UaaPasscodeProvider': (x) => new UaaPasscodeProvider(h(x)),
-  'UaaPasscodeProvider.fromTerminal': (x) =>
-    UaaPasscodeProvider.fromTerminal(h(x)),
   'new BasicAuthProvider (user)': (x) => new BasicAuthProvider(h(x), 'p'),
   'new BasicAuthProvider (password)': (x) => new BasicAuthProvider('u', h(x)),
   'new CertificateAuthProvider': (x) => new CertificateAuthProvider(h(x), h(x)),
@@ -109,39 +70,24 @@ const makers: Record<string, Make> = {
   'new SamlAuthProvider': (x) => new SamlAuthProvider(h(x)),
   'TokenAuthProvider.fixed': (x) => TokenAuthProvider.fixed(h(x)),
   'TokenAuthProvider.from': (x) => TokenAuthProvider.from(h(x)),
-  'new SncLogonProvider': (x) => new SncLogonProvider(h(x)),
-  'SncLogonProvider.forSecureLoginClient': (x) =>
-    SncLogonProvider.forSecureLoginClient(h(x)),
   'new DefaultSncLibraryLocator': (x) => new DefaultSncLibraryLocator(h(x)),
-  'new SpnegoAuthProvider': (x) => new SpnegoAuthProvider(h(x)),
   'new SecureLoginClientProbe': (x) => new SecureLoginClientProbe(h(x)),
-  'SsoProviderFactory.create': (x) => SsoProviderFactory.create(h(x)),
   'clientSecretBasic (secret)': (x) =>
     clientSecretBasic(h(x), { encoding: 'raw' }),
-  'clientSecretBasic (options)': (x) => clientSecretBasic('s', h(x)),
   clientSecretPost: (x) => clientSecretPost(h(x)),
   tlsClientCertificate: (x) => tlsClientCertificate(h(x)),
   privateKeyJwt: (x) => privateKeyJwt(h(x)),
   composeAuthorization: (x) => composeAuthorization(h(x)),
-  openInBrowser: (x) => openInBrowser(h(x)),
-  consumerPresentation: (x) => consumerPresentation(h(x)),
   loopback: (x) => loopback(h(x)),
   loopback4: (x) => loopback4(h(x)),
   loopback6: (x) => loopback6(h(x)),
   terminalPaste: (x) => terminalPaste(h(x)),
-  consumerAnswer: (x) => consumerAnswer(h(x)),
-  consumerHandoff: (x) => consumerHandoff(h(x)),
   browserCallbackStrategy: (x) => browserCallbackStrategy(h(x)),
   oidcCallbackStrategy: (x) => oidcCallbackStrategy(h(x)),
   samlCallbackStrategy: (x) => samlCallbackStrategy(h(x)),
-  manualPasteStrategy: (x) => manualPasteStrategy(h(x)),
-  manualSamlResponseStrategy: (x) => manualSamlResponseStrategy(h(x)),
   manualPasscodeStrategy: (x) => manualPasscodeStrategy(h(x)),
-  externalCodeStrategy: (x) => externalCodeStrategy(h(x)),
   staticCodeStrategy: (x) => staticCodeStrategy(h(x)),
   asOidcResult: (x) => asOidcResult(h(x)),
-  createSignedResponseValidator: (x) => createSignedResponseValidator(h(x)),
-  createSignedAssertionValidator: (x) => createSignedAssertionValidator(h(x)),
   consoleDeviceCodePresenter: (x) => consoleDeviceCodePresenter(h(x)),
 };
 

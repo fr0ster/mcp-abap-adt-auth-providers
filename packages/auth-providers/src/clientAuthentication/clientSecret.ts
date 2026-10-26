@@ -1,6 +1,5 @@
 import { AuthProviderFailure, authError } from '@mcp-abap-adt/auth-errors';
 import type { IClientAuthentication } from '@mcp-abap-adt/interfaces-auth';
-import { misconfigured } from '../auth/configuration';
 
 /**
  * How `clientSecretBasic` writes the client id and secret before joining them.
@@ -21,17 +20,14 @@ export interface ClientSecretBasicOptions {
   readonly encoding: 'raw' | 'form';
 }
 
-const ENCODINGS: ReadonlySet<unknown> = new Set(['raw', 'form']);
-
 /** One component as `application/x-www-form-urlencoded` writes it. */
 const formEncoded = (value: string): string =>
   new URLSearchParams([['', value]]).toString().slice(1);
 
 /**
  * `client_secret_basic`: `Authorization: Basic base64(id:secret)`, the id and
- * the secret written as `options.encoding` says. `encoding` is required: a
- * call without it, or with another value, is a `configuration` failure
- * (`basic-encoding-missing`) naming `encoding`. With `'raw'`, a client id
+ * the secret written as `options.encoding` says, a required choice with no
+ * default. With `'raw'`, a client id
  * containing `:` cannot be carried (RFC 7617): each request is refused with
  * `client-authentication` `basic-client-id-colon`, before anything is sent.
  */
@@ -41,16 +37,6 @@ export function clientSecretBasic(
 ): IClientAuthentication {
   // A typed copy: the options are read once, here.
   const { encoding } = { ...options };
-  if (!ENCODINGS.has(encoding)) {
-    // The allowed values are named by their set, never the value given.
-    throw misconfigured(
-      authError.configuration({
-        case: 'basic-encoding-missing',
-        fields: ['encoding'],
-        allowed: 'basic-encoding',
-      }),
-    );
-  }
   const form = encoding === 'form';
   return {
     authenticate: async (draft) => {

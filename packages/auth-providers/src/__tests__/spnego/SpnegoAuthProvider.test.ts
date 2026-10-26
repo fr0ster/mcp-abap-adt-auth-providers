@@ -83,46 +83,6 @@ function thrownBy(make: () => unknown): unknown {
 
 describe('construction', () => {
   const { source } = freshSource();
-  it('requires servicePrincipal', () => {
-    const c = configurationOf(
-      thrownBy(() => new SpnegoAuthProvider({ tokenSource: source } as never)),
-    );
-    expect(c).toMatchObject({
-      case: 'required-fields-missing',
-      fields: ['servicePrincipal'],
-    });
-  });
-  it('requires tokenSource', () => {
-    const c = configurationOf(
-      thrownBy(
-        () => new SpnegoAuthProvider({ servicePrincipal: SPN } as never),
-      ),
-    );
-    expect(c).toMatchObject({
-      case: 'required-fields-missing',
-      fields: ['tokenSource'],
-    });
-  });
-  it.each([
-    ['an object without token', {}],
-    ['token not a function', { token: 'x' }],
-    ['a function', () => undefined],
-    ['a string', 'source'],
-  ])('a tokenSource that is %s is missing', (_label, tokenSource) => {
-    const c = configurationOf(
-      thrownBy(
-        () =>
-          new SpnegoAuthProvider({
-            servicePrincipal: SPN,
-            tokenSource: tokenSource as never,
-          }),
-      ),
-    );
-    expect(c).toMatchObject({
-      case: 'required-fields-missing',
-      fields: ['tokenSource'],
-    });
-  });
   it.each(['HTTP@sap.example.com', 'HTTP@h', 'host-2@a-b.c', 'HTTP@A1.b2-c.D'])(
     'accepts %p',
     (servicePrincipal) => {
@@ -168,21 +128,6 @@ describe('construction', () => {
     if (servicePrincipal !== '') {
       expect(c.reason).not.toContain(servicePrincipal);
     }
-  });
-  it.each([
-    ['a number', 42],
-    ['an object', {}],
-  ])('refuses a servicePrincipal that is %s as invalid-value', (_l, value) => {
-    const c = configurationOf(
-      thrownBy(
-        () =>
-          new SpnegoAuthProvider({
-            servicePrincipal: value as never,
-            tokenSource: source,
-          }),
-      ),
-    );
-    expect(c.case).toBe('invalid-value');
   });
   it('kind is spnego', () => {
     expect(provider(source).kind).toBe('spnego');

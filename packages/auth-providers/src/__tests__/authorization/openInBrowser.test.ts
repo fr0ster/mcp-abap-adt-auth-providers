@@ -84,15 +84,6 @@ const occurrences = (text: string, part: string) => text.split(part).length - 1;
 const factsOf = (error: unknown) =>
   readFailure(error, 'browser-login').facts as Record<string, unknown>;
 
-function thrownBy(make: () => unknown): unknown {
-  try {
-    make();
-  } catch (error) {
-    return error;
-  }
-  return undefined;
-}
-
 const failing = () =>
   recordingBrowser({
     rejectWith: Object.assign(new Error(`spawn SECRET-PATH ${STATE}`), {
@@ -271,32 +262,4 @@ describe('a browser that fails is a presentation failure', () => {
       lines.filter((line) => line.level === 'error' || line.level === 'warn'),
     ).toEqual([]);
   });
-});
-
-describe('construction: no browser by name', () => {
-  it('without browser → configuration required-fields-missing (presentation)', () => {
-    expect(factsOf(thrownBy(() => openInBrowser({} as never)))).toEqual({
-      case: 'required-fields-missing',
-      fields: ['presentation'],
-    });
-  });
-
-  it.each([
-    ['chrome'],
-    ['system'],
-    ['auto'],
-    ['none'],
-    [42],
-    [null],
-    [{}],
-    [{ open: 'chrome' }],
-    [() => undefined],
-  ])(
-    'browser %j is no IBrowser → configuration invalid-value (presentation)',
-    (browser) => {
-      expect(
-        factsOf(thrownBy(() => openInBrowser({ browser } as never))),
-      ).toEqual({ case: 'invalid-value', fields: ['presentation'] });
-    },
-  );
 });
