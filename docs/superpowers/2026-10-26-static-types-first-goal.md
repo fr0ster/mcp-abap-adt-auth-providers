@@ -118,10 +118,7 @@ Out of scope:
   `clientAuthentication`, the SAML `idpInitiated` combinations);
 - `packages/auth-spnego-gssapi`.
 
-Open questions for the spec:
-- The constructor of a caller that passes an object whose getter throws
-  now throws that error itself, not a `configuration` failure. Is that
-  stated as the contract of an untyped caller, or left unsaid?
-- A target or logger that breaks its `void` type and answers a rejecting
-  promise now raises `unhandledRejection`. Does the README say so in the
-  migration note?
+A caller that breaks the types gets no stated contract: what an object whose
+getter throws does to a constructor is left unsaid. The migration note says
+that a target, a logger or `aborted()` answering a rejecting promise despite
+its `void` type now raises `unhandledRejection`.
