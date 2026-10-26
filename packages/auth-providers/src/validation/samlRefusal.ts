@@ -13,13 +13,14 @@
 
 import {
   AuthProviderFailure,
+  type authError,
   classify,
   count,
-  isMinted,
 } from '@mcp-abap-adt/auth-errors';
 import type {
   AssertionContext,
   IAssertionValidator,
+  IAuthProviderError,
   ValidatedAssertion,
 } from '@mcp-abap-adt/interfaces-auth';
 
@@ -35,15 +36,18 @@ export interface SamlRefusal {
   readonly kind: 'saml-assertion';
 }
 
+/** What a builder's result is once a site holds it before passing it on. */
+export type MintedSaml = ReturnType<(typeof authError)['saml-assertion']>;
+
 /**
  * Throws the refusal a site built, as an `AuthProviderFailure`. Every caller
- * passes a builder's result, which this copy minted; anything else (never, by
- * construction) is classified rather than trusted.
+ * passes a builder's result, which this copy minted; the parameter type
+ * refuses anything else at compile time.
  */
-export function refuse(error: SamlRefusal): never {
-  throw new AuthProviderFailure(
-    isMinted(error) ? error : classify(error, 'validating-assertion'),
-  );
+export function refuse<E extends SamlRefusal>(
+  error: E extends IAuthProviderError ? E : never,
+): never {
+  throw new AuthProviderFailure(error);
 }
 
 /** A "carries N" count, branded by auth-errors' maker. */

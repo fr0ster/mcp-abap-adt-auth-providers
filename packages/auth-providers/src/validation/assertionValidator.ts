@@ -38,7 +38,7 @@ import {
 import { misconfigured } from '../auth/configuration';
 import { parseStrictXml } from '../auth/strictXml';
 import { findDuplicateId, readRequiredId } from './documentIds';
-import { refuse, type SamlRefusal, several } from './samlRefusal';
+import { type MintedSaml, refuse, several } from './samlRefusal';
 import { resolveSignedElements, toPem } from './signedNode';
 import { parseXsdDateTime } from './xsdDateTime';
 
@@ -90,7 +90,7 @@ type SignedElement = 'response' | 'assertion';
  * The refusal when the signature does not cover the element each validator
  * requires — a rule each, so the words name that element.
  */
-const NOT_SIGNED: Record<SignedElement, () => SamlRefusal> = {
+const NOT_SIGNED: Record<SignedElement, () => MintedSaml> = {
   response: () =>
     authError['saml-assertion']({
       rule: 'response-not-signed',
@@ -738,8 +738,8 @@ function requireOne(
   parent: Element,
   ns: string,
   local: string,
-  absent: () => SamlRefusal,
-  many: (found: number) => SamlRefusal,
+  absent: () => MintedSaml,
+  many: (found: number) => MintedSaml,
 ): Element {
   const found = directChildren(parent, ns, local);
   const [first] = found;

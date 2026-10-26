@@ -1152,7 +1152,8 @@ export abstract class BaseTokenProvider
     const { signal } = attempt;
     const spent = this.refreshToken;
     if (spent === undefined) {
-      // Narrowing only: the decision was read against canRefresh.
+      // Narrowing only: `canRefresh()` (read before the decision) is false
+      // without a usable refresh token, so this branch is unreachable.
       throw new AuthProviderFailure(
         authError.unknown(this.operationOf('token-request')),
       );

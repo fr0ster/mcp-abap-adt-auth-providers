@@ -14,11 +14,12 @@
 import {
   AuthProviderFailure,
   authError,
-  classify,
   isConfigField,
-  isMinted,
 } from '@mcp-abap-adt/auth-errors';
-import type { ConfigField } from '@mcp-abap-adt/interfaces-auth';
+import type {
+  ConfigField,
+  IAuthProviderError,
+} from '@mcp-abap-adt/interfaces-auth';
 
 /**
  * What a site hands `misconfigured`: the builder's result, typed by its kind
@@ -35,15 +36,13 @@ export interface ConfigurationRefusal {
 
 /**
  * A configuration error a site built, as an `AuthProviderFailure`. Every
- * caller passes a builder's result, which this copy minted; anything else
- * (never, by construction) is classified rather than trusted.
+ * caller passes a builder's result, which this copy minted; the parameter
+ * type refuses anything else at compile time.
  */
-export function misconfigured(
-  error: ConfigurationRefusal,
+export function misconfigured<E extends ConfigurationRefusal>(
+  error: E extends IAuthProviderError ? E : never,
 ): AuthProviderFailure {
-  return new AuthProviderFailure(
-    isMinted(error) ? error : classify(error, 'unfamiliar-error'),
-  );
+  return new AuthProviderFailure(error);
 }
 
 /**
