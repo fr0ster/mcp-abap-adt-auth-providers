@@ -258,8 +258,13 @@ the shipped locator's `WeakSet` and the shipped validators' symbol.
 ## 9. Tests
 
 - **Tests that prove only removed checks are deleted.** These are:
-  - `errors/hostileOptions.test.ts`, except its value-rule cases, which
-    move to the owning test files;
+  - `errors/hostileOptions.test.ts`'s cases of a hostile options object at
+    construction (Proxies, getters, revoked Proxies, primitives). What a
+    constructor does with them is not stated. Its other cases move to the
+    owning test files:
+    - its value-rule cases;
+    - its cases of a hostile collaborator that throws once called or read
+      inside a moment. A throw is still handled (§3);
   - the rows of `contract/rule1Scenario.ts` whose hostile answer holds a
     value of the wrong type. The rows whose answer throws, whether from a
     getter, a Proxy trap or the method itself, stay: a throw is still
@@ -269,7 +274,8 @@ the shipped locator's `WeakSet` and the shipped validators' symbol.
     throws, a Proxy trap, a rejection handler that throws. Those cases move
     to the detached-answer paths that replace the helper (§6): the detached
     persistence report, `IBrowser.open()` and `present()`. Each still proves
-    that no `unhandledRejection` is raised;  - the `isPlainPromise` part of `auth/untilAborted.test.ts`;
+    that no `unhandledRejection` is raised;
+  - the `isPlainPromise` part of `auth/untilAborted.test.ts`;
   - `auth/attemptSignals.test.ts`' bad-signal cases;
   - the shape rows of `providers/renewalStrategy.test.ts` that hold a value
     of the wrong type (null, a string, a number). The getter and Proxy rows
