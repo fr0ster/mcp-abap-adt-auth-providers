@@ -84,10 +84,29 @@ These go:
 - `typeof … === 'function'`;
 - `Reflect.apply`.
 
-An optional method is called with `?.()`. The call still sits where it sits
-today, inside a moment's `guard` or inside the site's `try`. A throw, a
-throwing getter included, is classified exactly as before. This is rule 1,
-and it holds unchanged.
+An optional method is called with `?.()`.
+
+**A throw is not a type question, so every throw stays handled.** A typed
+value can still throw. A getter is a valid implementation of a typed field,
+and a method may throw whatever it likes. `readSafely` used to make a read
+total wherever it sat, so some reads of a collaborator's answer sit outside
+any `try` today. One example is `httpListener`'s `judged()`, which catches
+only `judge(answer)` and reads the verdict's fields after its `try`. The
+composer's judge path in `compose.ts` has the same split.
+
+The rule is therefore: **the collaborator's call and every read of its
+answer share one failure boundary.** That boundary is the site's existing
+`try`, widened where needed, or the moment's `guard`. A throw while reading
+an answer takes the same path as a throw from the call:
+- the same classification, refusal or end;
+- the same settling of the attempt;
+- the same release of a socket, reader or scope.
+
+Every site where `readSafely` is removed is audited for this before its
+removal. The asynchronous callback paths come first: the listener's and the
+terminal's and the consumer transports' `judged`, the composer's judge, a
+strategy outcome, a token source's answer and a locator's answer. Rule 1
+holds unchanged.
 
 A collaborator's answer is used as its contract types it:
 - **Strategy answers.** A strategy outcome's `payload` and `redirectUri`,
@@ -234,8 +253,10 @@ the shipped locator's `WeakSet` and the shipped validators' symbol.
 - **Tests that prove only removed checks are deleted.** These are:
   - `errors/hostileOptions.test.ts`, except its value-rule cases, which
     move to the owning test files;
-  - the hostile Proxy and getter answer rows of `contract/rule1Scenario.ts`
-    (its throw rows stay);
+  - the rows of `contract/rule1Scenario.ts` whose hostile answer holds a
+    value of the wrong type. The rows whose answer throws, whether from a
+    getter, a Proxy trap or the method itself, stay: a throw is still
+    handled (§3);
   - `auth/handled.test.ts`;
   - the `isPlainPromise` part of `auth/untilAborted.test.ts`;
   - `auth/attemptSignals.test.ts`' bad-signal cases;
@@ -257,7 +278,11 @@ the shipped locator's `WeakSet` and the shipped validators' symbol.
   kept or fixed on its own merit.
 - **New tests:**
   - an options getter runs once, at creation (the spread);
-  - a `void` target or logger answer is ignored.
+  - a `void` target or logger answer is ignored;
+  - one per asynchronous callback path (§3), where a typed answer with a
+    getter that throws ends the login through its failure path: the attempt
+    settles, and the port, reader or scope is released. Each test binds the
+    port to prove the release.
 - **The type checks have no runtime test.** The compiler is their test:
   `test:check` covers it under `strict` and `exactOptionalPropertyTypes`.
 
