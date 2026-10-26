@@ -101,10 +101,14 @@ implementation:
 - `@mcp-abap-adt/auth-errors` — every refusal and every throw is minted there;
 - `axios`, `xml-crypto`, `@xmldom/xmldom` — HTTP and SAML.
 
-It does not store tokens (`auth-stores`), orchestrate authentication
-(`auth-broker`), load service keys, manage sessions, open a connection or speak
-RFC/HTTP to the ABAP system (`connection`, `sap-rfc-lite`), fetch identity
-provider metadata, or decide how a user reaches an authorization URL. Each of
+It talks to authorization servers itself — token requests, and OIDC discovery
+(`src/auth/oidcDiscovery.ts`: the discovery document fetched when an endpoint
+is not configured, and cached). It does not store tokens (`auth-stores`),
+orchestrate authentication (`auth-broker`), load service keys, manage
+sessions, open a connection or speak RFC/HTTP to the ABAP system
+(`connection`, `sap-rfc-lite`), fetch SAML identity provider metadata (the
+certificates and entity ID an assertion is checked against come from
+configuration), or decide how a user reaches an authorization URL. Each of
 those belongs to the consumer or to another package, which uses this one
 through its contracts — never the reverse.
 
@@ -130,8 +134,11 @@ the tests that hold it.
   explicit error, or the consumer's `AbortSignal`.
 - **Nothing writes to stdout.** Under a stdio transport stdout carries
   protocol traffic.
-- **Options and foreign values are read as own data.** A getter is never run,
-  a throwing Proxy reads as absent.
+- **Options are read as own data.** Every exported constructor and factory
+  snapshots its options' own data properties (`ownOptions`): an accessor is
+  never run. Other foreign values — a collaborator, a server's answer — are
+  read through `readSafely`, which does run a getter but turns a throw into
+  absent.
 - **No regular expression over input.** Input-facing code is plain string
   code, a bounded scanner or the platform's parser.
 - **Proved where it runs.** Wire contracts are proved on the Docker stands
@@ -145,14 +152,19 @@ the tests that hold it.
 
 A provider accepts an asynchronous answer from a collaborator its consumer
 supplied (a strategy, a source, a store, a loader, a validator, a presenter)
-only as a plain native `Promise`: its prototype is `Promise.prototype`, with no
-own `then` or `catch`. Anything else with a `then` — a promise library's
-object, a hand-written thenable, a native promise with its own `then` — is
-refused as an error of that call, and its `then` is never called.
+only as a plain native `Promise` (`isPlainPromise`): a real promise, not a
+Proxy, whose prototype is `Promise.prototype`, with no own `constructor`,
+`then` or `catch` and the built-in `then` in place. Anything else with a
+`then` — a promise library's object, a hand-written thenable, a native promise
+with its own `then` — is refused as an error of that call, and its `then` is
+never called.
 
-Why: awaiting a foreign thenable runs the consumer's code outside the
-provider's error boundary, where it can throw, settle twice, never settle, or
-hand back another thenable. A native promise runs nothing of the consumer's.
+Why: adopting a thenable calls its `then`, and any getter on the way — the
+consumer's code, run by the promise machinery rather than by a call the
+provider made. A throw there is still contained by the moment's boundary, but
+the provider no longer knows which of the consumer's code it ran. With a plain
+native promise, calling `then` runs nothing but the engine's code: the only
+consumer code the provider runs is the collaborator method it called.
 
 Scope: this package. Whether it suits other packages has not been assessed.
 
