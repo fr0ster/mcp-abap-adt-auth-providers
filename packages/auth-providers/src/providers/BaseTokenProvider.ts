@@ -61,8 +61,6 @@ import {
   certificateThumbprint,
 } from '../auth/certificateMaterial';
 import { misconfigured } from '../auth/configuration';
-import { isGrant } from '../auth/grants';
-import { markHandled } from '../auth/handled';
 import { rejectionCause } from '../auth/rejection';
 import { readBinding, type TokenBinding } from '../auth/tokenBinding';
 import {
@@ -839,20 +837,13 @@ export abstract class BaseTokenProvider
 
   /**
    * This provider's grant, read once for its lifetime: `getAuthType()` is a
-   * subclass's and may throw, or answer anything — a rejecting native
-   * promise included, whose rejection is marked handled here, once; any
-   * other thenable is never called (fail closed). Only a grant on the list
-   * is kept.
+   * subclass's, typed to answer a grant, and may throw.
    */
   private readGrant(): OAuth2GrantType | undefined {
     if (!this.grantRead) {
       let grant: OAuth2GrantType | undefined;
       try {
-        const value: unknown = this.getAuthType();
-        if (isGrant(value)) grant = value;
-        // A plain native promise is marked handled; any other thenable is an
-        // unusable grant whose `then` is never called (fail closed).
-        else markHandled(value);
+        grant = this.getAuthType();
       } catch {
         // No grant: the failure names the operation alone.
       }
@@ -1160,14 +1151,8 @@ export abstract class BaseTokenProvider
   ): Promise<StepEnd> {
     const { signal } = attempt;
     const spent = this.refreshToken;
-    // The provider's own correctness, checked here whatever led to the step: an
-    // empty or discarded refresh token is never dispatched.
-    if (
-      typeof spent !== 'string' ||
-      spent === '' ||
-      this.discarded.has(spent)
-    ) {
-      // Unreachable: the decision was read against canRefresh.
+    if (spent === undefined) {
+      // Narrowing only: the decision was read against canRefresh.
       throw new AuthProviderFailure(
         authError.unknown(this.operationOf('token-request')),
       );
@@ -1190,9 +1175,9 @@ export abstract class BaseTokenProvider
     const cut = () => {
       if (sent && ifCut === 'discard') {
         this.discarded.add(spent);
-        // Detached (the attempt has aborted): it never rejects; marked
-        // handled all the same.
-        markHandled(this.commit(() => this.discard(spent, attempt)));
+        // Detached (the attempt has aborted): the package's own promise, its
+        // failure is dropped here.
+        this.commit(() => this.discard(spent, attempt)).catch(() => undefined);
       }
       this.observe({
         cause: start.cause,
@@ -1535,14 +1520,14 @@ export abstract class BaseTokenProvider
 
   /**
    * The credential held, as a report carries it: `''` for no access token;
-   * the grant `named` when it is one on the list (a committed result's own),
+   * the grant `named` (a committed result's own),
    * else this provider's (`readGrant`).
    */
-  private reportedCredential(named?: unknown): ReportedCredential {
+  private reportedCredential(named?: OAuth2GrantType): ReportedCredential {
     return {
       authorizationToken: this.authorizationToken ?? '',
       tokenType: this.tokenType ?? 'jwt',
-      authType: isGrant(named) ? named : this.heldGrant(),
+      authType: named ?? this.heldGrant(),
       expiresAt: this.expiresAt,
     };
   }
@@ -1563,7 +1548,7 @@ export abstract class BaseTokenProvider
   /**
    * The grant a result built from what is held names: `getAuthType()` read
    * once for the provider's lifetime (`readGrant`), like every other path.
-   * Unreadable or off the list: the request fails as `unknown`, naming the
+   * Unreadable (it threw): the request fails as `unknown`, naming the
    * operation alone.
    */
   private heldGrant(): OAuth2GrantType {

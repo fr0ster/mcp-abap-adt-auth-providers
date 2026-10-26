@@ -19,15 +19,14 @@
 
 import * as http from 'node:http';
 import type { AddressInfo } from 'node:net';
-import {
-  ANSWER_REFUSALS,
-  type AnswerJudge,
-  type AnswerRefusal,
-  type AnswerTransportOptions,
-  type AuthorizationAnswer,
-  type IAnswerChannel,
-  type IArmedChannel,
-  type PasteWords,
+import type {
+  AnswerJudge,
+  AnswerRefusal,
+  AnswerTransportOptions,
+  AuthorizationAnswer,
+  IAnswerChannel,
+  IArmedChannel,
+  PasteWords,
 } from '@mcp-abap-adt/interfaces-auth';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
 import { promptableUrl } from '../../auth/announce';
@@ -74,8 +73,6 @@ export interface ListenerPlan {
 
 /** The urlencoded body of a POST: as the SAML route had it, 5 MB. */
 const FORM_LIMIT = 5 * 1024 * 1024;
-
-const REFUSALS: ReadonlySet<string> = new Set(ANSWER_REFUSALS);
 
 /** The open ended before an answer was accepted. */
 const callbackClosed = () => loginFailure({ outcome: 'callback-closed' });
@@ -227,14 +224,8 @@ function judged(
     const raw = judge(answer);
     const verdict = raw.verdict;
     if (verdict === 'accept') return { verdict };
-    if (verdict === 'refuse') {
-      const reason = raw.reason;
-      return REFUSALS.has(reason) ? { verdict, reason } : undefined;
-    }
-    if (verdict === 'end') {
-      return { verdict, error: raw.error, shown: raw.shown };
-    }
-    return undefined;
+    if (verdict === 'refuse') return { verdict, reason: raw.reason };
+    return { verdict, error: raw.error, shown: raw.shown };
   } catch {
     return undefined;
   }
@@ -337,7 +328,7 @@ export async function openHttpListener<TReturn>(
   ): void => {
     const verdict = judged(current.judge, answer);
     if (verdict === undefined) {
-      // A judge that throws or answers no verdict: a fixed page, nothing of
+      // A judge that throws: a fixed page, nothing of
       // it anywhere; the login fails.
       sendHtml(res, 500, errorHtml('The callback could not be handled.'));
       const error = failedLogin(undefined);

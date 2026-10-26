@@ -139,13 +139,9 @@ function readVerdict(verdict: AnswerVerdict<unknown>): {
       verdict: Object.freeze({ verdict: 'end', error: failure.error, shown }),
     };
   }
-  if (kind === 'refuse') {
-    return {
-      verdict: Object.freeze({ verdict: 'refuse', reason: verdict.reason }),
-    };
-  }
-  // No known verdict: the login fails, as for a throw.
-  throw failedLogin(undefined);
+  return {
+    verdict: Object.freeze({ verdict: 'refuse', reason: verdict.reason }),
+  };
 }
 
 /** One `authorize` in flight. */

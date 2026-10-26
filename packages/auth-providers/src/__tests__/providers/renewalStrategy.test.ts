@@ -962,23 +962,6 @@ describe('edge cases of a refresh step and of the delivery order', () => {
     );
   });
 
-  it('a refresh token in discarded is never dispatched, whatever canRefresh said', async () => {
-    const provider = seeded(refreshThenLogin());
-    const internals = provider as unknown as {
-      discarded: Set<string>;
-      canRefresh: () => boolean;
-    };
-    internals.discarded.add('R');
-    // A defect elsewhere that reported a refresh possible.
-    internals.canRefresh = () => true;
-    const error = errorOf(await rejectionOf(provider.getTokens()));
-    expect(error).toMatchObject({
-      kind: 'unknown',
-      facts: { operation: 'token-request' },
-    });
-    expect(provider.refreshes.items).toHaveLength(0);
-  });
-
   it('a discard of a refresh token no longer held reports nothing', async () => {
     const { reports, persistence } = reportRecorder();
     const provider = seeded(refreshThenLogin(), { persistence });

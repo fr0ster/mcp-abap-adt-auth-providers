@@ -104,11 +104,10 @@ function stepOf(judge: AnswerJudge<unknown>, text: string): TerminalStep {
     const kind = verdict.verdict;
     if (kind === 'accept') return { step: 'accept' };
     if (kind === 'end') return { step: 'end', error: verdict.error };
-    if (kind === 'refuse') return { step: 'refuse', reason: verdict.reason };
+    return { step: 'refuse', reason: verdict.reason };
   } catch {
     throw failedLogin(undefined);
   }
-  throw loginFailure({ outcome: 'failed' });
 }
 
 export function terminalPaste(
@@ -159,9 +158,6 @@ export function terminalPaste(
             throw endFailure(step.error);
           }
           const { reason } = step;
-          if (!Object.hasOwn(ANSWER_WORDS, reason)) {
-            throw loginFailure({ outcome: 'failed' });
-          }
           // The reason's words, then the prompt again.
           prompt = `${ANSWER_WORDS[reason]} ${pastePrompt}`;
         }

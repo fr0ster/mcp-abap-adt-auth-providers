@@ -59,21 +59,22 @@ const never = new AbortController().signal;
  * throw kept.
  */
 function judgeOnce(judge: AnswerJudge<unknown>, text: string): void {
-  let kind: string;
   let error: unknown;
+  let ended = false;
   try {
     const verdict = judge({ via: 'consumer', text });
-    kind = verdict.verdict;
-    if (verdict.verdict === 'end') error = verdict.error;
+    const kind = verdict.verdict;
+    if (kind === 'accept') return;
+    if (kind === 'end') {
+      ended = true;
+      error = verdict.error;
+    }
   } catch {
     throw failedLogin(undefined);
   }
-  if (kind === 'accept') return;
-  if (kind === 'end') throw endFailure(error);
+  if (ended) throw endFailure(error);
   // A refusal: it cannot ask again.
-  throw loginFailure({
-    outcome: kind === 'refuse' ? 'unreadable-input' : 'failed',
-  });
+  throw loginFailure({ outcome: 'unreadable-input' });
 }
 
 /**

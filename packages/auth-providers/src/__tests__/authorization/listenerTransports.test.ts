@@ -1120,11 +1120,6 @@ describe('what an end, a throwing judge and an abort answer', () => {
         throw new Error('judge secret text');
       }) as AnswerJudge<unknown>,
     ],
-    ['answers no verdict', (() => ({ verdict: 'maybe' })) as never],
-    [
-      'answers a refusal of no known reason',
-      (() => ({ verdict: 'refuse', reason: 'judge secret text' })) as never,
-    ],
   ])(
     'a judge that %s: a fixed 500 page, the login fails, no text of it anywhere',
     async (_how, judge) => {
