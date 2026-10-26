@@ -153,27 +153,24 @@ the tests that hold it.
 
 ## Decisions
 
-### Collaborator answers are native promises
+### Collaborator answers are awaited as given
 
-A provider accepts an asynchronous answer from a collaborator its consumer
-supplied (a strategy, a source, a store, a loader, a validator, a presenter)
-only as a plain native `Promise` (`isPlainPromise`): a real promise, not a
-Proxy, whose prototype is `Promise.prototype`, with no own `constructor`,
-`then` or `catch` and the built-in `then` in place. Anything else with a
-`then` — a promise library's object, a hand-written thenable, a native promise
-with its own `then` — is refused as an error of that call, and its `then` is
-never called.
+A provider awaits a collaborator's asynchronous answer normally: a native
+promise, a Promise subclass or any Promises/A+ thenable is adopted as `await`
+adopts it, inside the moment's boundary. A rejection, or a throw from its
+`then`, is a failure of that call, classified like any other.
 
-Why: adopting a thenable calls its `then`, and any getter on the way — the
-consumer's code, run by the promise machinery rather than by a call the
-provider made. A throw there is still contained by the moment's boundary, but
-the provider no longer knows which of the consumer's code it ran. With a plain
-native promise, calling `then` runs nothing but the engine's code: the only
-consumer code the provider runs is the collaborator method it called.
+Refusing every answer that is not a plain native promise (`isPlainPromise`)
+was considered and dropped. It guards nothing: a collaborator that wraps a
+thenable in an async function, or in `new Promise((r) => r(thenable))`,
+answers a plain native promise whose resolution calls the foreign `then` all
+the same (measured). The adoption `await` performs already gives what the
+provider relies on — one settlement, `then` called in a later job, a throw
+contained — and a collaborator's code is the consumer's, run with the
+consumer's rights whether the provider calls it or adopts its answer.
+
+What stays strict is a value that is not a collaborator's answer: a thrown
+value being classified and a target's answer. No `then` is called on either
+(`markHandled`, `relayOutcome`).
 
 Scope: this package. Whether it suits other packages has not been assessed.
-
-Status: enforced for the renewal strategy's `next()` and for
-`SpnegoAuthProvider`'s token source (`isPlainPromise`, `src/auth/handled.ts`).
-The other collaborators still await a Promises/A+ thenable until the change
-that brings them in line, a major release.

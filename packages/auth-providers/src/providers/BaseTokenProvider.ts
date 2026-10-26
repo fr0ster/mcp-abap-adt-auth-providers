@@ -61,11 +61,7 @@ import {
   requiredFieldsMissing,
 } from '../auth/configuration';
 import { isGrant } from '../auth/grants';
-import {
-  isPlainPromise,
-  markHandled,
-  onAnswerRejection,
-} from '../auth/handled';
+import { markHandled, onAnswerRejection } from '../auth/handled';
 import { readSafely } from '../auth/knownCodes';
 import { rejectionCause } from '../auth/rejection';
 import { readBinding, type TokenBinding } from '../auth/tokenBinding';
@@ -1047,8 +1043,10 @@ export abstract class BaseTokenProvider
    * Asks the renewal strategy for the next step:
    * the pending abort observations first, then `next(situation)`, raced
    * against the attempt's signal — an abort ends the renewal `aborted` at
-   * once, a late answer is ignored. A throw, a foreign thenable (its `then`
-   * never called) or an invalid answer ends it `unknown` `renewal-strategy`.
+   * once, a late answer is ignored. The answer — a decision, a native
+   * promise or any thenable of one — is adopted as `await` adopts it. A
+   * throw, a rejection or an invalid answer ends it `unknown`
+   * `renewal-strategy`.
    */
   private async decide(
     situation: RenewalSituation,
@@ -1064,7 +1062,8 @@ export abstract class BaseTokenProvider
     const { sentToken, signal } = own;
     this.deliverObservations();
     throwIfAborted(signal);
-    let answer: unknown;
+    // What the contract promises; `readDecision` still checks every field.
+    let answer: ReturnType<IRenewalStrategy['next']>;
     try {
       const strategy = this.renewal;
       const next = readSafely(strategy, 'next');
@@ -1073,18 +1072,16 @@ export abstract class BaseTokenProvider
     } catch {
       throw this.strategyFailure();
     }
-    if (isPlainPromise(answer)) {
-      try {
-        answer = await untilAborted(answer, signal);
-      } catch {
-        throwIfAborted(signal);
-        throw this.strategyFailure();
-      }
-    } else if (typeof readSafely(answer, 'then') === 'function') {
-      // A foreign thenable: its `then` is never called.
+    // A decision, a native promise or any thenable, adopted as `await`
+    // adopts it.
+    let decided: RenewalDecision;
+    try {
+      decided = await untilAborted(answer, signal);
+    } catch {
+      throwIfAborted(signal);
       throw this.strategyFailure();
     }
-    const decision = readDecision(answer, {
+    const decision = readDecision(decided, {
       canRefresh: own.canRefresh,
       sentRequired: own.sentRequired,
     });

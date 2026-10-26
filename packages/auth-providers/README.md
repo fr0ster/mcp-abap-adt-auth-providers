@@ -747,9 +747,10 @@ The four moments:
 **The source answers facts, not errors.** `INegotiateTokenSource.token()`
 resolves `{ ok: true, token }` (base64, as it goes after `Negotiate `) or
 `{ ok: false, problem }` with a problem of a closed list; the provider mints the
-refusal, so no text a source holds can reach one. A source that throws, answers
-a foreign thenable or anything of another shape is `unknown` with the moment's
-operation. A source's token is **checked before it is written**: NTLM — raw
+refusal, so no text a source holds can reach one. Its answer is awaited as
+`await` adopts it: a native promise, a promise library's or any thenable. A
+source that throws, rejects or answers anything of another shape is `unknown`
+with the moment's operation. A source's token is **checked before it is written**: NTLM — raw
 (measured: a Windows runner with no domain and no ticket returns a raw NTLM
 NEGOTIATE message for `spnego`; that this is SSPI's fallback is Inference), or
 inside a SPNEGO token (Inference: built fixtures only) — is `ntlm-token`, and a token that is neither Kerberos nor NTLM, or malformed
@@ -3351,10 +3352,10 @@ type RenewalDecision =
 - A `refresh` needs `canRefresh`, and may not discard the refresh token it
   would send.
 
-An answer that breaks one of these rules, a strategy that throws, or an
-answer that is neither a decision nor a native
-promise of one — a foreign thenable, a promise with its own `then` (its
-`then` is never called) — ends the renewal with `unknown`, operation
+`next` may answer a decision or a promise of one — a native promise, a
+promise library's or any thenable, adopted as `await` adopts it. An answer
+that breaks one of these rules, a strategy that throws, or a promise that
+rejects ends the renewal with `unknown`, operation
 `renewal-strategy` ("the renewal strategy failed (unknown error)"): the step
 is not taken, and the steps already taken stay applied. The call to `next` is
 raced with the renewal's signal, so a strategy that never answers is ended by

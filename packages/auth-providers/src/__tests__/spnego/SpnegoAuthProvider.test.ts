@@ -279,7 +279,15 @@ describe('prepare()', () => {
     ['ok not a boolean', async () => ({ ok: 'yes', token: kerberos() })],
     ['a non-object', async () => 'SOURCE-SECRET'],
     ['nothing', async () => undefined],
-    ['a synchronous non-promise', () => ({ ok: true, token: kerberos() })],
+    [
+      'a thenable whose then throws',
+      () => ({
+        // biome-ignore lint/suspicious/noThenProperty: a thenable is the answer under test
+        then() {
+          throw new Error('SOURCE-SECRET');
+        },
+      }),
+    ],
     [
       'an answer with throwing getters',
       async () =>
@@ -299,37 +307,36 @@ describe('prepare()', () => {
     });
     expect(JSON.stringify(error)).not.toContain('SOURCE-SECRET');
   });
-  it('a foreign thenable is unknown, its then never called', async () => {
-    let called = false;
+  it('a synchronous answer is read as it is', async () => {
+    const { source } = scriptedSource(() => ({ ok: true, token: kerberos() }));
+    await expect(provider(source).prepare()).resolves.toEqual({ ok: true });
+  });
+  it('a foreign thenable is adopted: its then called once', async () => {
+    let calls = 0;
     const { source } = scriptedSource(() => ({
-      // biome-ignore lint/suspicious/noThenProperty: the hostile case under test
+      // biome-ignore lint/suspicious/noThenProperty: a thenable is the answer under test
       then(resolve: (v: unknown) => void) {
-        called = true;
+        calls += 1;
         resolve({ ok: true, token: kerberos() });
       },
     }));
-    const error = mintedRefusal(await provider(source).prepare());
-    expect(error).toMatchObject({
-      kind: 'unknown',
-      facts: { operation: 'obtaining-negotiate-token' },
-    });
-    await new Promise((resolve) => setImmediate(resolve));
-    expect(called).toBe(false);
+    await expect(provider(source).prepare()).resolves.toEqual({ ok: true });
+    expect(calls).toBe(1);
   });
-  it('a native promise with an own then is unknown, its then never called', async () => {
-    let called = false;
+  it('a native promise with an own then is adopted through that then', async () => {
+    let calls = 0;
     const { source } = scriptedSource(() => {
       const p = Promise.resolve({ ok: true, token: kerberos() });
       Object.defineProperty(p, 'then', {
-        value: () => {
-          called = true;
+        value(...args: unknown[]) {
+          calls += 1;
+          return Promise.prototype.then.apply(p, args as never);
         },
       });
       return p;
     });
-    const error = mintedRefusal(await provider(source).prepare());
-    expect(error.kind).toBe('unknown');
-    expect(called).toBe(false);
+    await expect(provider(source).prepare()).resolves.toEqual({ ok: true });
+    expect(calls).toBe(1);
   });
   it('a source whose token turned into a non-function later is unknown', async () => {
     const source = { token: async () => ({ ok: true, token: kerberos() }) };

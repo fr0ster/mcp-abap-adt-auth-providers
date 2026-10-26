@@ -6,9 +6,10 @@
  *
  * The source answers facts, never errors (`INegotiateTokenSource`): a token,
  * or a problem from a closed list, which this provider mints into a `spnego`
- * refusal. Anything else a source does — a throw, a foreign thenable, an
- * answer of another shape — is `unknown` with the moment's operation, its
- * value read nowhere. A token is checked before it is written: NTLM (raw, or
+ * refusal. Its answer is awaited as `await` adopts it — a native promise,
+ * any thenable or a value. Anything else a source does — a throw, a
+ * rejection, an answer of another shape — is `unknown` with the moment's
+ * operation, its value read nowhere. A token is checked before it is written: NTLM (raw, or
  * inside a SPNEGO token) is `ntlm-token`,
  * anything neither Kerberos nor NTLM `token-unreadable`.
  *
@@ -30,6 +31,7 @@ import type {
   INegotiateTokenSource,
   IRequestTarget,
   NegotiateSourceProblem,
+  NegotiateTokenAnswer,
 } from '@mcp-abap-adt/interfaces-auth';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
 import { AuthProviderBase } from '../auth/AuthProviderBase';
@@ -39,7 +41,7 @@ import {
   ownOptions,
   requiredFieldsMissing,
 } from '../auth/configuration';
-import { isPlainPromise, markHandled } from '../auth/handled';
+import { markHandled } from '../auth/handled';
 import { readSafely } from '../auth/knownCodes';
 import { refuseFor } from '../auth/rejection';
 import { logQuietly } from '../auth/tokenRequest';
@@ -251,15 +253,18 @@ export class SpnegoAuthProvider extends AuthProviderBase {
   }
 
   /**
-   * The source's answer, or `undefined` when it threw, rejected or answered
-   * anything but a plain native promise (a foreign `then` is never called).
+   * The source's answer, awaited as `await` adopts it (a promise of any
+   * library, or a value), or `undefined` when it threw or rejected.
    * Settles at the abort, whether or not the source honours the signal.
    */
-  private async ask(signal: AbortSignal | undefined): Promise<unknown> {
+  private async ask(
+    signal: AbortSignal | undefined,
+  ): Promise<NegotiateTokenAnswer | undefined> {
     const source = this.tokenSource;
     const token = readSafely(source, 'token');
     if (typeof token !== 'function') return undefined;
-    let pending: unknown;
+    // What the contract promises; `read` still checks every field.
+    let pending: ReturnType<INegotiateTokenSource['token']>;
     try {
       pending = Reflect.apply(token, source, [
         this.servicePrincipal,
@@ -268,7 +273,6 @@ export class SpnegoAuthProvider extends AuthProviderBase {
     } catch {
       return undefined;
     }
-    if (!isPlainPromise(pending)) return undefined;
     try {
       return await untilAborted(pending, signal);
     } catch {

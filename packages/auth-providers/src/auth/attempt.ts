@@ -35,13 +35,14 @@ export function throwIfAborted(signal: AbortSignal | undefined): void {
  * unhandled. Without a signal, `work` itself.
  */
 export function untilAborted<T>(
-  work: Promise<T>,
+  work: T | PromiseLike<T>,
   signal: AbortSignal | undefined,
 ): Promise<T> {
   // Subscribed only through the engine's `then`, on a plain native promise:
-  // anything else is first adopted, once, as `await` would adopt it.
+  // anything else — a value, a Promise subclass, any thenable — is first
+  // adopted, once, as `await` would adopt it.
   const plain: Promise<T> = isPlainPromise(work)
-    ? work
+    ? (work as Promise<T>)
     : new Promise<T>((resolve) => resolve(work));
   if (!signal) return plain;
   engineThen(
