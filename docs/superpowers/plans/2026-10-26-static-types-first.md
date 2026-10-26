@@ -199,14 +199,23 @@ compiler and `grep`, never from line numbers in this plan.
   `authorization/throwingAnswers.test.ts`, one per asynchronous callback
   path. In each, a typed answer has one field as a getter that throws
   `new Error('SECRET')`:
-  - **the listener's verdict** (`loopback` + a protocol whose judge returns
-    a verdict with a throwing `kind` getter). Assert that `authorize`
-    rejects `interactive-login` `failed`, that `'SECRET'` appears nowhere,
-    and that the port is free (bind it);
-  - **the terminal transport's verdict**: the same assertions, and the
-    reader is closed (no stdin listeners);
-  - **`consumerAnswer` / `consumerHandoff`'s verdict**: settles `failed`;
-  - **the composer's judge verdict**: settles `failed`;
+  - **the listener's verdict** (`loopback` plus a protocol whose judge
+    returns a typed verdict with a `verdict` getter that throws, the
+    discriminator the listener reads). Assert three things: `authorize`
+    rejects `interactive-login` `failed`, `'SECRET'` appears nowhere, and
+    the port is free (bind it);
+  - **the terminal transport's verdict** (the same throwing `verdict`
+    getter). Assert the same, and also that the reader is closed: no
+    `data` / `end` listeners are left on the stdin stand-in;
+  - **`consumerAnswer` / `consumerHandoff`'s verdict** (the same throwing
+    `verdict` getter). Assert three things: the attempt settles `failed`,
+    the consumer's callback is not called again, and a second `authorize`
+    on the same strategy starts (it is not `busy`), which proves the scope
+    was released;
+  - **the composer's judge verdict** (the same throwing `verdict` getter,
+    through a recording transport). Assert three things: `authorize`
+    settles `failed`, the transport's `open` settled before `authorize`
+    did (its `use` returned), and a second `authorize` is not `busy`;
   - **a strategy outcome with a throwing `payload` getter, through a token
     provider**: `getTokens()` throws a classified failure, with no token
     request;
@@ -216,9 +225,13 @@ compiler and `grep`, never from line numbers in this plan.
     answers its fixed SNC refusal.
 
   Before the change, the first four pass because `readSafely` covers them.
-  So this step makes them load-bearing: run them now (PASS), then after
-  Step 3, for each site, temporarily move the read back outside its `try`
-  and see the test go red.
+  So this step makes them load-bearing: run them now (PASS). Then, after
+  Step 3, for each site, run two breaks and see the test go red after
+  each:
+  - move the `verdict` read back outside its `try`;
+  - bypass the release (skip the scope's or reader's cleanup on that path).
+
+  Restore both.
 - [ ] **Step 2:** Audit every site in the Files list. For each `readSafely`,
   `typeof … === 'function'`, `Reflect.apply`, `Array.isArray` or
   allowlist re-check on a typed collaborator or answer:
