@@ -202,7 +202,13 @@ the abort lands, which can be later.
 ## 6. Promises
 
 - **`untilAborted(work: T | PromiseLike<T>, signal)`.** It adopts `work`
-  with `Promise.resolve(work)`. `isPlainPromise` goes from it.
+  through a fresh native promise, `new Promise((resolve) => resolve(work))`,
+  for every value. This is the adoption `await` performs: a promise with
+  its own `then` is adopted through that `then`, as 7.1.0 promises and
+  `renewalStrategy.test.ts` checks. `Promise.resolve(work)` is not
+  equivalent, because it returns a native promise unchanged, and the
+  engine's `then` that `untilAborted` subscribes with would bypass that
+  promise's own `then`. `isPlainPromise` goes from it.
 - **Answers typed `void` are not handled as promises.** That covers
   `IRequestTarget.header()` / `cookies()`, `IRenewalStrategy.aborted?()`
   and every `ILogger` method. The call stays inside its `try`, and a throw
@@ -212,8 +218,9 @@ the abort lands, which can be later.
 - **Answers typed as promises keep a rejection handler.** These are
   `ITokenPersistence.report()` (`void | Promise<void>`, detached),
   `IBrowser.open()` and `present()` (typed `unknown` by its contract, so
-  it is outside the type system). Each gets its handler through
-  `Promise.resolve(answer).then(undefined, handler)`. The handler's own
+  it is outside the type system). Each gets its handler through the same
+  adoption, `new Promise((resolve) => resolve(answer))`, and then a handler
+  on that promise. The handler's own
   throw is contained, as `onAnswerRejection` does today.
 - **The package's own promises.** `markHandled(this.commit(…))` becomes a
   plain `.catch`. `getAuthType()` is the provider's own abstract method,
