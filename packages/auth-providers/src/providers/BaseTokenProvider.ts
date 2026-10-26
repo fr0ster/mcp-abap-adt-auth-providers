@@ -63,7 +63,6 @@ import {
 import { misconfigured, requiredFieldsMissing } from '../auth/configuration';
 import { isGrant } from '../auth/grants';
 import { markHandled } from '../auth/handled';
-import { readSafely } from '../auth/knownCodes';
 import { rejectionCause } from '../auth/rejection';
 import { readBinding, type TokenBinding } from '../auth/tokenBinding';
 import {
@@ -364,15 +363,15 @@ export abstract class BaseTokenProvider
       authorize: 'token-request',
       rejected: 'token-request',
     });
-    // Absent is a choice: nothing is persisted. Given, it must
-    // be an object whose `report` is a function, read without running a
-    // getter; anything else — `null` included — is refused here.
-    const persistence: unknown = config.persistence;
+    // Absent is a choice: nothing is persisted. Given, it must be an
+    // object whose `report` is a function; anything else — `null` included
+    // — is refused here (kept for the configuration refusals' own change).
+    const persistence = config.persistence;
     if (
       persistence !== undefined &&
       (persistence === null ||
         typeof persistence !== 'object' ||
-        typeof readSafely(persistence, 'report') !== 'function')
+        typeof persistence.report !== 'function')
     ) {
       throw misconfigured(
         authError.configuration({
@@ -381,18 +380,19 @@ export abstract class BaseTokenProvider
         }),
       );
     }
-    this.persistence = persistence as ITokenPersistence | undefined;
-    // Required, no default (rule 7): an object whose `next` is a
-    // function, read without running a getter; anything else is refused here.
-    const renewal: unknown = config.renewal;
+    this.persistence = persistence;
+    // Required, no default (rule 7): an object whose `next` is a function;
+    // anything else is refused here (kept for the configuration refusals'
+    // own change).
+    const renewal = config.renewal;
     if (
       renewal === null ||
       typeof renewal !== 'object' ||
-      typeof readSafely(renewal, 'next') !== 'function'
+      typeof renewal.next !== 'function'
     ) {
       throw requiredFieldsMissing(['renewal']);
     }
-    this.renewal = renewal as IRenewalStrategy;
+    this.renewal = renewal;
     // `true` itself: `'true'`, `1` or an environment variable never opt in.
     this.authDebug = config.authDebug === true;
     if (config.clientAuthentication && config.clientSecret !== undefined) {
@@ -481,10 +481,9 @@ export abstract class BaseTokenProvider
     const generation = ++this.pinGeneration;
     try {
       const loaded = await strategy.tlsMaterial?.();
-      // Nothing, or not an object: no certificate to present at all.
-      if (!loaded || typeof loaded !== 'object') {
-        throw certificateFailure('incomplete');
-      }
+      // No loader: no certificate to present at all. What a loader answers
+      // is checked for completeness below.
+      if (loaded === undefined) throw certificateFailure('incomplete');
       const material = copyMaterial(loaded);
       assertCertificateMaterial(material);
       const pinned: PinnedCertificate = {
@@ -1066,10 +1065,7 @@ export abstract class BaseTokenProvider
     // What the contract promises; `readDecision` still checks every field.
     let answer: ReturnType<IRenewalStrategy['next']>;
     try {
-      const strategy = this.renewal;
-      const next = readSafely(strategy, 'next');
-      if (typeof next !== 'function') throw this.strategyFailure();
-      answer = Reflect.apply(next, strategy, [situation]);
+      answer = this.renewal.next(situation);
     } catch {
       throw this.strategyFailure();
     }
@@ -1174,10 +1170,7 @@ export abstract class BaseTokenProvider
     const pending = this.observations.splice(0);
     for (const observation of pending) {
       try {
-        const strategy = this.renewal;
-        const aborted = readSafely(strategy, 'aborted');
-        if (typeof aborted !== 'function') continue;
-        markHandled(Reflect.apply(aborted, strategy, [observation]));
+        markHandled(this.renewal.aborted?.(observation));
       } catch (error) {
         logQuietly(() =>
           this.logger?.warn(
@@ -1546,18 +1539,12 @@ export abstract class BaseTokenProvider
     }
   }
 
-  /** `persistence.report(report)`, read without running a getter. */
+  /** `persistence.report(report)`, called as typed. */
   private callReport(
     persistence: ITokenPersistence,
     report: PersistenceReport,
   ): unknown {
-    const method = readSafely(persistence, 'report');
-    if (typeof method !== 'function') {
-      throw new AuthProviderFailure(
-        authError.unknown(this.operationOf('persisting-tokens')),
-      );
-    }
-    return Reflect.apply(method, persistence, [report]);
+    return persistence.report(report);
   }
 
   /**

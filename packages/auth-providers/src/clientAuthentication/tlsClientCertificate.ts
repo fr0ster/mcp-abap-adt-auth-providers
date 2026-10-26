@@ -25,9 +25,7 @@ export function tlsClientCertificate(
       // A loader is called as the consumer's object's method, as before.
       // None at all (absent) is incomplete material.
       const material: ICertificateMaterial =
-        (typeof given === 'function'
-          ? await Reflect.apply(given, options, [])
-          : given) ?? {};
+        (typeof given === 'function' ? await given.call(options) : given) ?? {};
       assertCertificateMaterial(material);
       return material;
     })();

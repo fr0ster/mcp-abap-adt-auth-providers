@@ -161,10 +161,10 @@ describe('SNCERR_INIT: the library could not be initialised', () => {
       expect(error).not.toHaveProperty('hint');
     },
   );
-  it('a custom locator without archs: the words without them', async () => {
+  it('a custom locator with no archs: the words without them', async () => {
     const p = new SncLogonProvider({
       partnerName: 'p:CN=SID',
-      locator: { locate: async () => ({ path: KRB }) as never },
+      locator: { locate: async () => ({ path: KRB, archs: [] }) },
       probes: [],
     });
     await expect(p.prepare()).resolves.toEqual({ ok: true });
@@ -225,6 +225,29 @@ describe('a locator that is not the shipped one', () => {
     expect(error).toMatchObject({
       kind: 'snc',
       facts: { problem: 'library-not-found' },
+      reason: 'no usable SNC library was found',
+      hint: HINT,
+    });
+    expect(error.facts).toEqual({ problem: 'library-not-found' });
+    expect(JSON.stringify(outcome)).not.toContain(MARKER);
+  });
+  it('an answer whose path getter throws → the locator failed: the fixed sentence', async () => {
+    const p = new SncLogonProvider({
+      partnerName: 'p:CN=SID',
+      locator: {
+        locate: async () => ({
+          get path(): string {
+            throw new Error(MARKER);
+          },
+          archs: [],
+        }),
+      },
+      probes: [],
+    });
+    const outcome = await p.prepare();
+    const error = mintedRefusal(outcome);
+    expect(error).toMatchObject({
+      kind: 'snc',
       reason: 'no usable SNC library was found',
       hint: HINT,
     });
@@ -367,24 +390,23 @@ describe('the shipped locator throws a minted failure', () => {
 });
 
 describe('the locator returned no path', () => {
-  it.each([
-    ['blank', { path: '  ', archs: ['x64'] }],
-    ['not a string', { path: 42 }],
-    ['nothing', undefined],
-  ])('%s → verbatim', async (_, found) => {
-    const p = new SncLogonProvider({
-      partnerName: 'p:CN=SID',
-      locator: { locate: async () => found as never },
-      probes: [],
-    });
-    const error = mintedRefusal(await p.prepare());
-    expect(error).toMatchObject({
-      kind: 'snc',
-      facts: { problem: 'locator-returned-no-path' },
-      reason: 'no usable SNC library was found: the locator returned no path',
-      hint: HINT,
-    });
-  });
+  it.each([['blank', { path: '  ', archs: ['x64'] }]])(
+    '%s → verbatim',
+    async (_, found) => {
+      const p = new SncLogonProvider({
+        partnerName: 'p:CN=SID',
+        locator: { locate: async () => found as never },
+        probes: [],
+      });
+      const error = mintedRefusal(await p.prepare());
+      expect(error).toMatchObject({
+        kind: 'snc',
+        facts: { problem: 'locator-returned-no-path' },
+        reason: 'no usable SNC library was found: the locator returned no path',
+        hint: HINT,
+      });
+    },
+  );
 });
 
 describe('establish before prepare', () => {
@@ -445,25 +467,6 @@ describe('the outer boundary names the SNC operation', () => {
     await expect(p.establish(recordingTargets().logonTarget)).resolves.toEqual({
       ok: true,
     });
-  });
-  it('a locator answer whose path getter throws → resolving the SNC library', async () => {
-    const p = new SncLogonProvider({
-      partnerName: 'p:CN=SID',
-      locator: {
-        locate: async () =>
-          ({
-            get path(): string {
-              throw new Error(MARKER);
-            },
-          }) as never,
-      },
-      probes: [],
-    });
-    const outcome = await p.prepare();
-    expect(mintedRefusal(outcome).reason).toBe(
-      'the SNC provider failed while resolving the SNC library (unknown error)',
-    );
-    expect(JSON.stringify(outcome)).not.toContain(MARKER);
   });
   it('a rejection whose error throws on every read → explaining the SNC refusal or neutral, never a rejection', async () => {
     const p = snc(machine());

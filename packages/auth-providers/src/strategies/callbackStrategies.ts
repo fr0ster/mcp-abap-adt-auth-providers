@@ -28,8 +28,6 @@ import type {
   IBrowser,
 } from '@mcp-abap-adt/interfaces-auth';
 import { misconfigured } from '../auth/configuration';
-import { readSafely } from '../auth/knownCodes';
-import { asAbortSignal } from '../auth/signalledRequest';
 import {
   type ComposedStrategy,
   composeAuthorization,
@@ -83,7 +81,7 @@ function presentationOf(
 
 /**
  * `transport` with its channel's route hint replaced by `remoteHint(redirect)`;
- * a hint that throws or is no string is none.
+ * a hint that throws is none.
  */
 function withRouteHint(
   transport: IAnswerTransport,
@@ -96,10 +94,9 @@ function withRouteHint(
       use: (channel: IAnswerChannel) => Promise<TReturn>,
     ): Promise<TReturn> {
       return transport.open(options, (channel) => {
-        const redirectUri = readSafely(channel, 'redirectUri');
-        const waitingOn = readSafely(channel, 'waitingOn');
-        let routeHint: unknown;
-        if (typeof redirectUri === 'string') {
+        const { redirectUri, waitingOn } = channel;
+        let routeHint: string | undefined;
+        if (redirectUri !== undefined) {
           try {
             routeHint = remoteHint(redirectUri);
           } catch {
@@ -108,10 +105,9 @@ function withRouteHint(
         }
         return use(
           Object.freeze({
-            redirectUri:
-              typeof redirectUri === 'string' ? redirectUri : undefined,
-            waitingOn: typeof waitingOn === 'string' ? waitingOn : undefined,
-            routeHint: typeof routeHint === 'string' ? routeHint : undefined,
+            redirectUri,
+            waitingOn,
+            routeHint,
             arm: (judge: AnswerJudge<unknown>) => channel.arm(judge),
           }),
         );
@@ -145,7 +141,7 @@ function callbackComposition<T>(
     transport: transportOf(own),
     protocol,
     endpoint: CALLBACK_ENDPOINT,
-    signal: asAbortSignal(own.signal),
+    signal: own.signal,
   });
 }
 

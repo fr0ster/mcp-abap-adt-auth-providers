@@ -214,14 +214,6 @@ describe('terminalPaste', () => {
     });
   });
 
-  it('a read answering no string ends no-input', async () => {
-    const read = async () => undefined as unknown as string;
-    const thrown = await answered(terminalPaste({ read }), passcode()).catch(
-      (error: unknown) => error,
-    );
-    expect(failureOf(thrown).facts).toEqual({ outcome: 'no-input' });
-  });
-
   it('a read’s own failure passes as it is (no terminal)', async () => {
     const { loginFailure } = await import('../../auth/interactiveLogin');
     const read = async () => {
@@ -365,12 +357,7 @@ describe('consumerAnswer', () => {
     expect(failureOf(empty).facts).toEqual({ outcome: 'no-input' });
   });
 
-  it('a receive answering no string ends no-input; one that rejects passes its rejection on', async () => {
-    const none = await answered(
-      consumerAnswer({ receive: async () => undefined as unknown as string }),
-      oauthCode(),
-    ).catch((error: unknown) => error);
-    expect(failureOf(none).facts).toEqual({ outcome: 'no-input' });
+  it('a receive that rejects passes its rejection on', async () => {
     const own = new Error('the consumer’s own');
     const rejected = await answered(
       consumerAnswer({

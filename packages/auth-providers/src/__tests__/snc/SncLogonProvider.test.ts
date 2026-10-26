@@ -261,10 +261,10 @@ describe('the four moments', () => {
       },
     });
   });
-  it('a custom locator returning a library without archs does not throw', async () => {
+  it('a custom locator returning a library with no archs does not throw', async () => {
     const p = new SncLogonProvider({
       partnerName: 'p:CN=SID',
-      locator: { locate: async () => ({ path: KRB }) as never },
+      locator: { locate: async () => ({ path: KRB, archs: [] }) },
       probes: [],
       logger: { debug() {}, info() {}, warn() {}, error() {} },
     });

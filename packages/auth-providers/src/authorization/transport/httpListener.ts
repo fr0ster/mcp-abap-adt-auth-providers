@@ -37,8 +37,6 @@ import {
   loginFailure,
   portInUse,
 } from '../../auth/interactiveLogin';
-import { readSafely } from '../../auth/knownCodes';
-import { asAbortSignal } from '../../auth/signalledRequest';
 import { logQuietly } from '../../auth/tokenRequest';
 import { ANSWER_WORDS } from '../answerWords';
 import { oneValue } from '../protocol/readPaste';
@@ -91,38 +89,22 @@ interface ListenerOptions {
   readonly endpoint: string;
 }
 
-/** Paste words that are strings, else none; read guarded. */
-function pasteWordsOf(value: unknown): PasteWords | undefined {
-  const prompt = readSafely(value, 'prompt');
-  const instructions = readSafely(value, 'instructions');
-  return typeof prompt === 'string' && typeof instructions === 'string'
-    ? Object.freeze({ prompt, instructions })
-    : undefined;
-}
-
-/** The methods a redirect arrives with: `GET` / `POST` only. */
-function methodsOf(value: unknown): ReadonlySet<'GET' | 'POST'> {
-  const methods = new Set<'GET' | 'POST'>();
-  if (!Array.isArray(value)) return methods;
-  try {
-    for (const method of value as unknown[]) {
-      if (method === 'GET' || method === 'POST') methods.add(method);
-    }
-  } catch {
-    // An unreadable list: no method.
-  }
-  return methods;
+/** Paste words, copied once. */
+function pasteWordsOf(value: PasteWords): PasteWords {
+  return Object.freeze({
+    prompt: value.prompt,
+    instructions: value.instructions,
+  });
 }
 
 function readOptions(options: AnswerTransportOptions): ListenerOptions {
-  const { signal, logger } = options;
+  const { signal, logger, paste } = options;
   return {
     endpoint: checkedEndpoint(options.endpoint),
-    signal: asAbortSignal(signal),
-    logger: logger !== null && typeof logger === 'object' ? logger : undefined,
-    paste:
-      options.paste === undefined ? undefined : pasteWordsOf(options.paste),
-    methods: methodsOf(options.callbackMethods),
+    signal,
+    logger,
+    paste: paste === undefined ? undefined : pasteWordsOf(paste),
+    methods: new Set(options.callbackMethods),
   };
 }
 
@@ -232,34 +214,30 @@ type ReadVerdict =
       readonly shown: string | undefined;
     };
 
-/** The judge's answer, each field read safely; `undefined` for a throw. */
+/**
+ * The judge's answer, every field read once; `undefined` for a throw. The
+ * judge's call and every read of its verdict share one boundary: a verdict
+ * whose field throws is a judge that throws.
+ */
 function judged(
   judge: AnswerJudge<unknown>,
   answer: AuthorizationAnswer,
 ): ReadVerdict | undefined {
-  let raw: unknown;
   try {
-    raw = judge(answer);
+    const raw = judge(answer);
+    const verdict = raw.verdict;
+    if (verdict === 'accept') return { verdict };
+    if (verdict === 'refuse') {
+      const reason = raw.reason;
+      return REFUSALS.has(reason) ? { verdict, reason } : undefined;
+    }
+    if (verdict === 'end') {
+      return { verdict, error: raw.error, shown: raw.shown };
+    }
+    return undefined;
   } catch {
     return undefined;
   }
-  const verdict = readSafely(raw, 'verdict');
-  if (verdict === 'accept') return { verdict };
-  if (verdict === 'refuse') {
-    const reason = readSafely(raw, 'reason');
-    return typeof reason === 'string' && REFUSALS.has(reason)
-      ? { verdict, reason: reason as AnswerRefusal }
-      : undefined;
-  }
-  if (verdict === 'end') {
-    const shown = readSafely(raw, 'shown');
-    return {
-      verdict,
-      error: readSafely(raw, 'error'),
-      shown: typeof shown === 'string' ? shown : undefined,
-    };
-  }
-  return undefined;
 }
 
 /** This attempt's judge and, with paste words, its form token. */
@@ -548,7 +526,7 @@ export async function openHttpListener<TReturn>(
               `this one (ssh -L ${port}:${plan.tunnelsTo}:${port} <this machine>), ` +
               `then paste the answer at ${shownPage ?? 'the callback port on localhost'}`,
         arm(judge: AnswerJudge<unknown>): IArmedChannel {
-          if (typeof judge !== 'function' || armed !== undefined) {
+          if (armed !== undefined) {
             throw loginFailure({ outcome: 'failed' });
           }
           // A new form token per attempt, minted only when the page exists.

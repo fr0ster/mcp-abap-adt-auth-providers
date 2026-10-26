@@ -10,39 +10,24 @@
 import type { PresentationContext } from '@mcp-abap-adt/interfaces-auth';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
 import { announcer, promptableText, promptableUrl } from '../../auth/announce';
-import { readSafely } from '../../auth/knownCodes';
-import { asAbortSignal } from '../../auth/signalledRequest';
 import { logQuietly } from '../../auth/tokenRequest';
 
 /** The fixed line the logger gets for a URL shown on stderr. */
 export const SHOWN_NOTICE = 'the authorization URL was shown';
 
-/** The context's fields a prompt reads, each guarded. */
+/** The context's fields a prompt reads. */
 export interface PromptContext {
   readonly logger: ILogger | undefined;
   readonly redirectUri: string | undefined;
   readonly waitingOn: string | undefined;
   readonly routeHint: string | undefined;
-  readonly signal: AbortSignal | undefined;
+  readonly signal: AbortSignal;
 }
 
-/** What a presentation reads of its context, once, guarded. */
+/** What a presentation reads of its context, once. */
 export function promptContext(context: PresentationContext): PromptContext {
-  const logger = readSafely(context, 'logger');
-  const redirectUri = readSafely(context, 'redirectUri');
-  const waitingOn = readSafely(context, 'waitingOn');
-  const routeHint = readSafely(context, 'routeHint');
-  const signal = readSafely(context, 'signal');
-  return {
-    logger:
-      logger !== null && typeof logger === 'object'
-        ? (logger as ILogger)
-        : undefined,
-    redirectUri: typeof redirectUri === 'string' ? redirectUri : undefined,
-    waitingOn: typeof waitingOn === 'string' ? waitingOn : undefined,
-    routeHint: typeof routeHint === 'string' ? routeHint : undefined,
-    signal: asAbortSignal(signal),
-  };
+  const { logger, redirectUri, waitingOn, routeHint, signal } = context;
+  return { logger, redirectUri, waitingOn, routeHint, signal };
 }
 
 /** One line to stderr: a write that throws is contained. */

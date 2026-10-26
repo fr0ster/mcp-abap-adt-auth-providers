@@ -15,7 +15,6 @@ import type {
   IAuthorizationStrategy,
 } from '@mcp-abap-adt/interfaces-auth';
 import { misconfigured, requiredFieldsMissing } from '../auth/configuration';
-import { asAbortSignal } from '../auth/signalledRequest';
 import {
   type ComposedStrategy,
   composeAuthorization,
@@ -67,7 +66,7 @@ export function externalCodeStrategy(
     transport,
     protocol: oauthCode(),
     endpoint: CALLBACK_ENDPOINT,
-    signal: asAbortSignal(own.signal),
+    signal: own.signal,
   });
 }
 

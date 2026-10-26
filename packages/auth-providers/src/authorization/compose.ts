@@ -30,10 +30,8 @@ import {
 } from '@mcp-abap-adt/auth-errors';
 import type {
   AnswerJudge,
-  AnswerRefusal,
   AnswerTransportOptions,
   AnswerVerdict,
-  AuthorizationAnswer,
   AuthorizationOutcome,
   AuthorizationRequest,
   IAnswerChannel,
@@ -53,8 +51,6 @@ import {
   failedLogin,
   loginFailure,
 } from '../auth/interactiveLogin';
-import { readSafely } from '../auth/knownCodes';
-import { asAbortSignal, signalOf } from '../auth/signalledRequest';
 import { logQuietly } from '../auth/tokenRequest';
 import { checkedEndpoint } from './transport/endpoint';
 import { endFailure } from './transport/endVerdict';
@@ -94,57 +90,41 @@ const invalidPart = (field: Part) =>
     authError.configuration({ case: 'invalid-value', fields: [field] }),
   );
 
-/** A function read off a part, guarded; else the part is unusable. */
-function methodOf(
-  part: unknown,
-  name: string,
-  field: Part,
-): (...args: unknown[]) => unknown {
-  const method = readSafely(part, name);
+/**
+ * A part without its method is unusable: refused at composition (kept for
+ * the configuration refusals' own change).
+ */
+function requireMethod(method: unknown, field: Part): void {
   if (typeof method !== 'function') throw invalidPart(field);
-  return method as (...args: unknown[]) => unknown;
 }
 
-/** The protocol's descriptor, read once, guarded. */
+/** The protocol's descriptor, read once, as typed. */
 interface ProtocolRead {
   readonly redirect: 'required' | 'unused';
   readonly callbackMethods: readonly ('GET' | 'POST')[];
   readonly paste: PasteWords | undefined;
-  readonly begin: (...args: unknown[]) => unknown;
 }
 
-function readProtocol(protocol: unknown): ProtocolRead {
-  const redirect = readSafely(protocol, 'redirect');
+function readProtocol<TPayload>(
+  protocol: IAuthorizationProtocol<TPayload>,
+): ProtocolRead {
+  const { redirect, callbackMethods, paste } = protocol;
   if (redirect !== 'required' && redirect !== 'unused') {
     throw invalidPart('protocol');
   }
-  const methods: ('GET' | 'POST')[] = [];
-  const listed = readSafely(protocol, 'callbackMethods');
-  if (Array.isArray(listed)) {
-    try {
-      for (const method of listed as unknown[]) {
-        if (
-          (method === 'GET' || method === 'POST') &&
-          !methods.includes(method)
-        ) {
-          methods.push(method);
-        }
-      }
-    } catch {
-      // An unreadable list: no method.
-    }
-  }
-  const paste = readSafely(protocol, 'paste');
-  const prompt = readSafely(paste, 'prompt');
-  const instructions = readSafely(paste, 'instructions');
+  requireMethod(protocol.begin, 'protocol');
+  // Each method once, in the protocol's order.
+  const methods = [...new Set(callbackMethods)];
   return {
     redirect,
     callbackMethods: Object.freeze(methods),
     paste:
-      typeof prompt === 'string' && typeof instructions === 'string'
-        ? Object.freeze({ prompt, instructions })
-        : undefined,
-    begin: methodOf(protocol, 'begin', 'protocol'),
+      paste === undefined
+        ? undefined
+        : Object.freeze({
+            prompt: paste.prompt,
+            instructions: paste.instructions,
+          }),
   };
 }
 
@@ -162,25 +142,45 @@ type Latched =
   | { readonly kind: 'accept'; readonly payload: unknown }
   | { readonly kind: 'end'; readonly error: unknown };
 
+/**
+ * A protocol's verdict, every field read once: what to latch, and the fresh
+ * frozen verdict the transport gets. May throw (a getter): the caller's
+ * boundary takes it as the judge's own throw.
+ */
+function readVerdict(verdict: AnswerVerdict<unknown>): {
+  readonly latch?: Latched;
+  readonly verdict: AnswerVerdict<unknown>;
+} {
+  const kind = verdict.verdict;
+  if (kind === 'accept') {
+    const payload = verdict.payload;
+    return {
+      latch: { kind: 'accept', payload },
+      verdict: Object.freeze({ verdict: 'accept', payload }),
+    };
+  }
+  if (kind === 'end') {
+    const failure = endFailure(verdict.error);
+    const shown = verdict.shown;
+    return {
+      latch: { kind: 'end', error: failure },
+      verdict: Object.freeze({ verdict: 'end', error: failure.error, shown }),
+    };
+  }
+  if (kind === 'refuse') {
+    return {
+      verdict: Object.freeze({ verdict: 'refuse', reason: verdict.reason }),
+    };
+  }
+  // No known verdict: the login fails, as for a throw.
+  throw failedLogin(undefined);
+}
+
 /** One `authorize` in flight. */
 interface Call {
   readonly controller: AbortController;
   /** Settles once the call has (after its transport's `open`). */
   readonly done: Promise<void>;
-}
-
-/** The logger a request carries, guarded. */
-function loggerOf(request: unknown): ILogger | undefined {
-  const logger = readSafely(request, 'logger');
-  return logger !== null && typeof logger === 'object'
-    ? (logger as ILogger)
-    : undefined;
-}
-
-/** A string field of a channel, guarded. */
-function channelText(channel: unknown, name: string): string | undefined {
-  const value = readSafely(channel, name);
-  return typeof value === 'string' ? value : undefined;
 }
 
 /** Whether a thrown value is an `interactive-login` `aborted` failure. */
@@ -202,13 +202,13 @@ export function composeAuthorization<TPayload>(
   if (own.endpoint === undefined) throw requiredMissing('endpoint');
   const endpoint = checkedEndpoint(own.endpoint);
   const { presentation, transport, protocol } = own;
-  const present = methodOf(presentation, 'present', 'presentation');
-  const open = methodOf(transport, 'open', 'transport');
-  const label = readSafely(transport, 'label');
+  requireMethod(presentation.present, 'presentation');
+  requireMethod(transport.open, 'transport');
+  const label = transport.label;
   if (!isInteractiveLoginStrategy(label)) throw invalidPart('transport');
   const strategy: InteractiveLoginStrategy = label;
   const described = readProtocol(protocol);
-  const optionSignal = asAbortSignal(own.signal);
+  const optionSignal = own.signal;
 
   let disposed = false;
   let current: Call | undefined;
@@ -224,12 +224,12 @@ export function composeAuthorization<TPayload>(
     // Aborted once this call has ended: a presentation that answers later
     // prompts and logs nothing.
     const ended = new AbortController();
-    const requestSignal = signalOf(request);
+    const requestSignal = request.signal;
     const relay = () => controller.abort();
     optionSignal?.addEventListener('abort', relay, { once: true });
     requestSignal?.addEventListener('abort', relay, { once: true });
     if (optionSignal?.aborted || requestSignal?.aborted) controller.abort();
-    const logger = loggerOf(request);
+    const logger: ILogger | undefined = request.logger;
     let latched: Latched | undefined;
     /**
      * What `use` returned, once it has: the only outcome this call answers.
@@ -240,14 +240,20 @@ export function composeAuthorization<TPayload>(
 
     /** The judge the channel gets: the first terminal verdict latched. */
     const latching =
-      (judge: (answer: AuthorizationAnswer) => unknown): AnswerJudge<unknown> =>
+      (judge: AnswerJudge<TPayload>): AnswerJudge<unknown> =>
       (answer) => {
         if (latched !== undefined || ended.signal.aborted) {
           return ALREADY_ANSWERED;
         }
-        let verdict: unknown;
+        // The judge's call and every read of its verdict share one
+        // boundary: a verdict whose field throws ends the login as a judge
+        // that throws does.
+        let read: {
+          readonly latch?: Latched;
+          readonly verdict: AnswerVerdict<unknown>;
+        };
         try {
-          verdict = judge(answer);
+          read = readVerdict(judge(answer));
         } catch (error) {
           // A judge that throws ends the login: the transport answers its
           // fixed 500 page; nothing of the throw goes anywhere.
@@ -257,38 +263,14 @@ export function composeAuthorization<TPayload>(
           };
           throw failedLogin(undefined);
         }
-        const kind = readSafely(verdict, 'verdict');
-        if (kind === 'accept') {
-          const payload = readSafely(verdict, 'payload');
-          latched = { kind: 'accept', payload };
-          return Object.freeze({ verdict: 'accept', payload });
-        }
-        if (kind === 'end') {
-          const failure = endFailure(readSafely(verdict, 'error'));
-          const shown = readSafely(verdict, 'shown');
-          latched = { kind: 'end', error: failure };
-          return Object.freeze({
-            verdict: 'end',
-            error: failure.error,
-            shown: typeof shown === 'string' ? shown : undefined,
-          });
-        }
-        if (kind === 'refuse') {
-          const reason = readSafely(verdict, 'reason');
-          return Object.freeze({
-            verdict: 'refuse',
-            reason: reason as AnswerRefusal,
-          });
-        }
-        // No readable verdict: the login fails, as for a throw.
-        latched = { kind: 'end', error: failedLogin(undefined) };
-        throw failedLogin(undefined);
+        if (read.latch !== undefined) latched = read.latch;
+        return read.verdict;
       };
 
     const use = async (
       channel: IAnswerChannel,
     ): Promise<AuthorizationOutcome<TPayload>> => {
-      const redirectUri = channelText(channel, 'redirectUri');
+      const redirectUri = channel.redirectUri;
       // A protocol whose URL carries a redirect needs one from the channel.
       if (described.redirect === 'required' && redirectUri === undefined) {
         throw misconfigured(
@@ -300,24 +282,13 @@ export function composeAuthorization<TPayload>(
       }
       // A builder's throw passes as it is (a configuration failure, OIDC
       // discovery).
-      const url: unknown = await request.buildAuthorizationUrl(
-        redirectUri ?? '',
-      );
+      const url = await request.buildAuthorizationUrl(redirectUri ?? '');
       // Aborted while the URL was built: nothing is armed or shown.
       if (controller.signal.aborted) throw abortedLogin(strategy);
-      if (typeof url !== 'string') throw failedLogin(undefined);
-      const judge = described.begin.call(protocol, url);
-      if (typeof judge !== 'function') throw failedLogin(undefined);
-      const arm = readSafely(channel, 'arm');
-      if (typeof arm !== 'function') throw failedLogin(undefined);
+      const judge = protocol.begin(url);
       // Armed after `begin`, before the URL is shown: until now the
       // channel refused every answer.
-      const armed: unknown = arm.call(
-        channel,
-        latching(judge as (answer: AuthorizationAnswer) => unknown),
-      );
-      const answer = readSafely(armed, 'answer');
-      if (typeof answer !== 'function') throw failedLogin(undefined);
+      const armed = channel.arm(latching(judge));
 
       // Presented, not awaited: a failure is logged in fixed
       // words and the login keeps waiting; the fallback is the
@@ -334,8 +305,7 @@ export function composeAuthorization<TPayload>(
           ),
         );
       };
-      const waitingOn = channelText(channel, 'waitingOn');
-      const routeHint = channelText(channel, 'routeHint');
+      const { waitingOn, routeHint } = channel;
       const context: PresentationContext = Object.freeze({
         redirectUri,
         waitingOn,
@@ -345,14 +315,14 @@ export function composeAuthorization<TPayload>(
       });
       let presented: unknown;
       try {
-        presented = present.call(presentation, url, context);
+        presented = presentation.present(url, context);
       } catch (error) {
         failedPresentation(error);
       }
       whenRejected(presented, failedPresentation);
 
       try {
-        await answer.call(armed);
+        await armed.answer();
       } catch (error) {
         if (latched?.kind === 'end') throw latched.error;
         throw error;
@@ -381,7 +351,7 @@ export function composeAuthorization<TPayload>(
       // An already-aborted signal is honoured before anything opens.
       if (controller.signal.aborted) throw abortedLogin(strategy);
       // Awaited for its settlement only: `open` settles once released.
-      await adopt(() => open.call(transport, options, use));
+      await adopt(() => transport.open(options, use));
       if (kept === undefined) throw failedLogin(undefined);
       return kept;
     })();

@@ -17,7 +17,6 @@ import {
   BUILDERS,
   own,
   presenter,
-  throwingProxy,
   validator,
 } from '../helpers/tokenProviderBuilders';
 
@@ -31,17 +30,6 @@ const UNUSABLE: ReadonlyArray<[string, () => object]> = [
   ['a function', () => ({ persistence: () => undefined })],
   ['an object without report', () => ({ persistence: {} })],
   ['report not a function', () => ({ persistence: { report: 'write' } })],
-  ['a throwing Proxy', () => ({ persistence: throwingProxy(SECRET) })],
-  [
-    'a report getter that throws',
-    () => ({
-      persistence: Object.defineProperty({}, 'report', {
-        get() {
-          throw new Error(SECRET);
-        },
-      }),
-    }),
-  ],
 ];
 
 const withRenewal = (extra: object): object =>

@@ -3,8 +3,8 @@
  * `browser`, an `IBrowser` — a shipped one (`linuxDefaultBrowser()`,
  * `linuxBrowser(executable)`, `macDefaultBrowser()`, `macBrowser(app)`,
  * `windowsDefaultBrowser()`, `windowsBrowser(program)`) or the consumer's —
- * used as given: its `open`, read once at construction, is called on it with
- * exactly the URL and the login's signal. A browser that throws or rejects
+ * used as given: its `open` is called on it with exactly the URL and the
+ * login's signal. A browser that throws or rejects
  * is a presentation failure: the URL is prompted once, to stderr only, and
  * the failure goes to the composer's fixed line; the login keeps waiting.
  * Nothing is prompted once the login has ended.
@@ -20,16 +20,12 @@ import type {
   PresentationContext,
 } from '@mcp-abap-adt/interfaces-auth';
 import { misconfigured } from '../../auth/configuration';
-import { readSafely } from '../../auth/knownCodes';
 import { promptAuthorizationUrl, promptContext } from './prompt';
 
 export interface OpenInBrowserOptions {
   /** Required: the browser that opens the URL. */
   readonly browser: IBrowser;
 }
-
-/** A signal that never aborts, for a context given none. */
-const never = new AbortController().signal;
 
 export function openInBrowser(
   options: OpenInBrowserOptions,
@@ -44,12 +40,13 @@ export function openInBrowser(
       }),
     );
   }
-  // Read once, guarded: a getter that throws reads as absent.
-  const open =
-    browser !== null && typeof browser === 'object'
-      ? readSafely(browser, 'open')
-      : undefined;
-  if (typeof open !== 'function') {
+  // No browser is named by a string: anything without an `open` method is
+  // refused here (kept for the configuration refusals' own change).
+  if (
+    browser === null ||
+    typeof browser !== 'object' ||
+    typeof browser.open !== 'function'
+  ) {
     throw misconfigured(
       authError.configuration({
         case: 'invalid-value',
@@ -66,12 +63,7 @@ export function openInBrowser(
       try {
         // A synchronous throw is a rejection; `await` adopts any thenable.
         await new Promise<unknown>((resolve) =>
-          resolve(
-            Reflect.apply(open, browser, [
-              authorizationUrl,
-              read.signal ?? never,
-            ]),
-          ),
+          resolve(browser.open(authorizationUrl, context.signal)),
         );
       } catch (error) {
         // The URL is the only way left to finish the login: prompted once,

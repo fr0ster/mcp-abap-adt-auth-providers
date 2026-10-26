@@ -14,7 +14,6 @@
  */
 
 import { requiredFieldsMissing } from '../auth/configuration';
-import { asAbortSignal } from '../auth/signalledRequest';
 import {
   type ComposedStrategy,
   composeAuthorization,
@@ -66,8 +65,6 @@ function registeredRedirect(own: Own): string {
   return own.redirectUri;
 }
 
-const signalOf = (own: Own) => asAbortSignal(own.signal);
-
 /** The user copies the `code` out of the address bar after the redirect. */
 export function manualPasteStrategy(
   options: ManualStrategyOptions,
@@ -82,7 +79,7 @@ export function manualPasteStrategy(
     }),
     protocol: oauthCode(),
     endpoint: CALLBACK_ENDPOINT,
-    signal: signalOf(own),
+    signal: own.signal,
   });
 }
 
@@ -99,7 +96,7 @@ export function manualSamlResponseStrategy(
     }),
     protocol: samlResponse(),
     endpoint: CALLBACK_ENDPOINT,
-    signal: signalOf(own),
+    signal: own.signal,
   });
 }
 
@@ -119,6 +116,6 @@ export function manualPasscodeStrategy(
     transport: terminalPaste({ read: own.read }),
     protocol: passcode(),
     endpoint: CALLBACK_ENDPOINT,
-    signal: signalOf(own),
+    signal: own.signal,
   });
 }

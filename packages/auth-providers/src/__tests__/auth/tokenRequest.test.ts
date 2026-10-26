@@ -216,8 +216,6 @@ describe.each(SITES)('$name with a client authentication', (site) => {
   );
 
   it.each<[string, unknown]>([
-    ['a non-string parameter', { parameters: { client_id: 42 } }],
-    ['a non-string header', { headers: { Authorization: { b: 1 } } }],
     [
       "a header that replaces the request's own",
       { headers: { 'content-type': 'text/plain' } },
@@ -240,9 +238,6 @@ describe.each(SITES)('$name with a client authentication', (site) => {
     ],
     ['an endpoint that is not a URL', { endpoint: 'alt.example/token' }],
     ['an endpoint of another scheme', { endpoint: 'ftp://alt.example/token' }],
-    ['a non-string endpoint', { endpoint: 7 }],
-    ['parameters that are not a record', { parameters: 'client_id=cid' }],
-    ['a result that is not an object', null],
   ])(
     'returning %s: a fixed refusal, no request sent',
     async (_label, result) => {

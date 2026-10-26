@@ -27,7 +27,6 @@ import { Saml2PureProvider } from '../../providers/Saml2PureProvider';
 import { UaaPasscodeProvider } from '../../providers/UaaPasscodeProvider';
 import { SncLogonProvider } from '../../snc/SncLogonProvider';
 import { SpnegoAuthProvider } from '../../spnego/SpnegoAuthProvider';
-import { asOidcResult } from '../../strategies/asOidcResult';
 import { browserCallbackStrategy } from '../../strategies/callbackStrategies';
 import { externalCodeStrategy } from '../../strategies/codeStrategies';
 import { manualPasteStrategy } from '../../strategies/manualStrategies';
@@ -145,7 +144,6 @@ describe('hostile collaborators never make a constructor throw them', () => {
     browserCallbackStrategy: (x) => browserCallbackStrategy(h(x)),
     manualPasteStrategy: (x) => manualPasteStrategy(h(x)),
     externalCodeStrategy: (x) => externalCodeStrategy(h(x)),
-    asOidcResult: () => asOidcResult(hostile() as never),
   };
   for (const [name, make] of Object.entries(complete)) {
     for (const field of collaborators) {

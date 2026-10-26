@@ -13,12 +13,10 @@ import {
   authorize,
   BUILDERS,
   presenter,
-  throwingProxy as proxyThrowing,
   validator,
 } from '../helpers/tokenProviderBuilders';
 
 const SECRET = 'RENEWAL-OPTION-SECRET-7';
-const throwingProxy = proxyThrowing(SECRET);
 
 /** What `renewal` is given, as extra fields — or as an accessor. */
 const UNUSABLE: ReadonlyArray<[string, () => object]> = [
@@ -28,17 +26,6 @@ const UNUSABLE: ReadonlyArray<[string, () => object]> = [
   ['a string', () => ({ renewal: 'refreshThenLogin' })],
   ['an object without next', () => ({ renewal: {} })],
   ['next not a function', () => ({ renewal: { next: 'refresh' } })],
-  ['a throwing Proxy', () => ({ renewal: throwingProxy })],
-  [
-    'a next getter that throws',
-    () => ({
-      renewal: Object.defineProperty({}, 'next', {
-        get() {
-          throw new Error(SECRET);
-        },
-      }),
-    }),
-  ],
 ];
 
 describe('a missing or unusable renewal is refused at construction', () => {

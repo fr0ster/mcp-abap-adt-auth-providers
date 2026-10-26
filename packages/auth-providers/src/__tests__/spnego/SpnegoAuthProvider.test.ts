@@ -123,22 +123,6 @@ describe('construction', () => {
       fields: ['tokenSource'],
     });
   });
-  it('a tokenSource whose token is a throwing getter is missing, its text nowhere', () => {
-    const tokenSource = Object.defineProperty({}, 'token', {
-      get() {
-        throw new Error('GETTER-SECRET');
-      },
-    });
-    const thrown = thrownBy(
-      () =>
-        new SpnegoAuthProvider({
-          servicePrincipal: SPN,
-          tokenSource: tokenSource as never,
-        }),
-    );
-    expect(configurationOf(thrown).fields).toEqual(['tokenSource']);
-    expect(JSON.stringify(thrown)).not.toContain('GETTER-SECRET');
-  });
   it.each(['HTTP@sap.example.com', 'HTTP@h', 'host-2@a-b.c', 'HTTP@A1.b2-c.D'])(
     'accepts %p',
     (servicePrincipal) => {
@@ -263,22 +247,6 @@ describe('prepare()', () => {
       },
     ],
     ['a rejection', async () => Promise.reject(new Error('SOURCE-SECRET'))],
-    ['{ ok: true } without a token', async () => ({ ok: true })],
-    [
-      '{ ok: true } with a non-string token',
-      async () => ({ ok: true, token: 42 }),
-    ],
-    [
-      'an unknown problem',
-      async () => ({ ok: false, problem: 'SOURCE-SECRET' }),
-    ],
-    [
-      'a problem only the provider names',
-      async () => ({ ok: false, problem: 'ntlm-token' }),
-    ],
-    ['ok not a boolean', async () => ({ ok: 'yes', token: kerberos() })],
-    ['a non-object', async () => 'SOURCE-SECRET'],
-    ['nothing', async () => undefined],
     [
       'a thenable whose then throws',
       () => ({
@@ -337,12 +305,6 @@ describe('prepare()', () => {
     });
     await expect(provider(source).prepare()).resolves.toEqual({ ok: true });
     expect(calls).toBe(1);
-  });
-  it('a source whose token turned into a non-function later is unknown', async () => {
-    const source = { token: async () => ({ ok: true, token: kerberos() }) };
-    const p = provider(source as INegotiateTokenSource);
-    (source as { token: unknown }).token = 'gone';
-    expect(mintedRefusal(await p.prepare()).kind).toBe('unknown');
   });
   it('calls token with the source as this', async () => {
     const source = {

@@ -42,9 +42,10 @@ function searchable(error: unknown): string {
 
 /** The library's architectures, each on the allowlist; none when unknown. */
 export function archsOf(library: SncLibrary | undefined): SncArch[] {
-  const archs = library?.archs;
-  if (!Array.isArray(archs)) return [];
-  return archs.filter((arch): arch is SncArch => isSncArch(arch));
+  // Only allowlisted architectures become facts (rule 2).
+  return (library?.archs ?? []).filter((arch): arch is SncArch =>
+    isSncArch(arch),
+  );
 }
 
 /** The explanation of a GSS code in the error, when it carries one. */

@@ -299,24 +299,4 @@ describe('construction: no browser by name', () => {
       ).toEqual({ case: 'invalid-value', fields: ['presentation'] });
     },
   );
-
-  it('an object whose open is a getter is read once, at construction, guarded', () => {
-    let reads = 0;
-    const browser = {
-      get open() {
-        reads += 1;
-        return async () => undefined;
-      },
-    };
-    expect(typeof openInBrowser({ browser }).present).toBe('function');
-    expect(reads).toBe(1);
-    const throwing = {
-      get open(): never {
-        throw new Error('SECRET');
-      },
-    };
-    expect(
-      factsOf(thrownBy(() => openInBrowser({ browser: throwing } as never))),
-    ).toEqual({ case: 'invalid-value', fields: ['presentation'] });
-  });
 });

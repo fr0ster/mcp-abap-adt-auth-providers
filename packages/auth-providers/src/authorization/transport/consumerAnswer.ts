@@ -19,11 +19,13 @@ import type {
 } from '@mcp-abap-adt/interfaces-auth';
 import { untilAborted } from '../../auth/attempt';
 import { misconfigured } from '../../auth/configuration';
-import { abortedLogin, loginFailure } from '../../auth/interactiveLogin';
-import { readSafely } from '../../auth/knownCodes';
-import { asAbortSignal } from '../../auth/signalledRequest';
+import {
+  abortedLogin,
+  failedLogin,
+  loginFailure,
+} from '../../auth/interactiveLogin';
 import { consumerRedirect } from './consumerRedirect';
-import { endFailure, verdictOf } from './endVerdict';
+import { endFailure } from './endVerdict';
 
 /** The consumer's code: the answer, for the composition's signal. */
 export type ReceiveAnswer = (signal: AbortSignal) => Promise<string>;
@@ -60,16 +62,24 @@ const required = (field: 'receive' | 'provide') =>
 /** A signal that never aborts, for an open given none. */
 const never = new AbortController().signal;
 
-/** One text, judged once: accept resolves, refuse and end reject. */
-function judgeOnce(judge: AnswerJudge<unknown>, text: unknown): void {
-  // No string (absent, null, anything else): nothing was given.
-  if (typeof text !== 'string') throw loginFailure({ outcome: 'no-input' });
-  const verdict = verdictOf(judge, { via: 'consumer', text });
-  const kind = readSafely(verdict, 'verdict');
-  if (kind === 'accept') return;
-  if (kind === 'end') {
-    throw endFailure(readSafely(verdict, 'error'));
+/**
+ * One text, judged once: accept resolves, refuse and end reject. The
+ * judge's call and every read of its verdict share one boundary: a verdict
+ * whose field throws is a judge that throws — `failed`, nothing of the
+ * throw kept.
+ */
+function judgeOnce(judge: AnswerJudge<unknown>, text: string): void {
+  let kind: string;
+  let error: unknown;
+  try {
+    const verdict = judge({ via: 'consumer', text });
+    kind = verdict.verdict;
+    if (verdict.verdict === 'end') error = verdict.error;
+  } catch {
+    throw failedLogin(undefined);
   }
+  if (kind === 'accept') return;
+  if (kind === 'end') throw endFailure(error);
   // A refusal: it cannot ask again.
   throw loginFailure({
     outcome: kind === 'refuse' ? 'unreadable-input' : 'failed',
@@ -82,7 +92,7 @@ function judgeOnce(judge: AnswerJudge<unknown>, text: unknown): void {
  */
 function socketless(
   redirectUri: string | undefined,
-  answerFor: (signal: AbortSignal) => Promise<unknown>,
+  answerFor: (signal: AbortSignal) => Promise<string>,
   onOpen?: () => () => void,
 ): IAnswerTransport {
   return Object.freeze({
@@ -91,14 +101,14 @@ function socketless(
       openOptions: AnswerTransportOptions,
       use: (channel: IAnswerChannel) => Promise<TReturn>,
     ): Promise<TReturn> {
-      const signal = asAbortSignal(openOptions.signal);
+      const signal: AbortSignal | undefined = openOptions.signal;
       if (signal?.aborted) throw abortedLogin('consumer');
       const close = onOpen?.();
       let armed = false;
       const channel: IAnswerChannel = Object.freeze({
         redirectUri,
         arm(judge: AnswerJudge<unknown>): IArmedChannel {
-          if (typeof judge !== 'function' || armed) {
+          if (armed) {
             throw loginFailure({ outcome: 'failed' });
           }
           armed = true;
@@ -151,17 +161,15 @@ export function consumerHandoff(options: ConsumerHandoffOptions): {
   if (typeof provide !== 'function') throw required('provide');
 
   /** The open in progress: where the presentation hands its answer. */
-  let current:
-    | { readonly hand: (answer: Promise<unknown>) => void }
-    | undefined;
+  let current: { readonly hand: (answer: Promise<string>) => void } | undefined;
 
   const transport = socketless(
     redirectUri,
     // The answer `provide` returned, once the presentation has called it.
     () => handed,
     () => {
-      let hand!: (answer: Promise<unknown>) => void;
-      handed = new Promise<unknown>((resolve) => {
+      let hand!: (answer: Promise<string>) => void;
+      handed = new Promise<string>((resolve) => {
         hand = (answer) => resolve(answer);
       });
       const opened = { hand };
@@ -171,19 +179,13 @@ export function consumerHandoff(options: ConsumerHandoffOptions): {
       };
     },
   );
-  let handed: Promise<unknown> = Promise.resolve(undefined);
+  let handed: Promise<string> = Promise.resolve('');
 
   const presentation: IAuthorizationPresentation = Object.freeze({
     present(authorizationUrl: string, context: PresentationContext): unknown {
       const opened = current;
       if (opened === undefined) return undefined;
-      const signal = readSafely(context, 'signal');
-      const answer = adopt(() =>
-        (provide as ProvideAnswer)(
-          authorizationUrl,
-          asAbortSignal(signal) ?? never,
-        ),
-      );
+      const answer = adopt(() => provide(authorizationUrl, context.signal));
       void answer.catch(() => undefined);
       opened.hand(answer);
       return undefined;

@@ -36,7 +36,7 @@ type Moment = 'logon' | 'request';
 
 /** The moment of a rejection; anything but a request reads as a logon, as in 5.4.2. */
 export function momentOf(rejection: IAuthRejection | undefined): Moment {
-  return readSafely(rejection, 'at') === 'request' ? 'request' : 'logon';
+  return rejection?.at === 'request' ? 'request' : 'logon';
 }
 
 function fromStatus(status: number, at: Moment): RejectionReading {
@@ -61,16 +61,18 @@ export function readRejection(
   rejection: IAuthRejection | undefined,
 ): RejectionReading {
   const at = momentOf(rejection);
-  const status = readSafely(rejection, 'status');
+  const status = rejection?.status;
+  // The status range rule: an integer HTTP status, else none.
   if (
-    typeof status === 'number' &&
+    status !== undefined &&
     Number.isInteger(status) &&
     status >= 100 &&
     status <= 599
   ) {
     return fromStatus(status, at);
   }
-  const key = readSafely(readSafely(rejection, 'error'), 'key');
+  // `error` is typed `unknown`: read guarded.
+  const key = readSafely(rejection?.error, 'key');
   if (isRfcKey(key)) {
     if (key === 'RFC_LOGON_FAILURE') return CREDENTIAL;
     return {
@@ -96,12 +98,12 @@ export function rejectionCause(
   rejection: IAuthRejection | undefined,
 ): RenewalCause {
   const read = readRejection(rejection);
-  const status = readSafely(rejection, 'status');
+  const status = rejection?.status;
   const checked =
-    typeof status === 'number' && Number.isInteger(status)
+    status !== undefined && Number.isInteger(status)
       ? httpStatus(status)
       : undefined;
-  const key = readSafely(readSafely(rejection, 'error'), 'key');
+  const key = readSafely(rejection?.error, 'key');
   return Object.freeze({
     trigger: 'rejected',
     reading: read.verdict,
