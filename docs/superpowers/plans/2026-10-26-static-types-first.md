@@ -212,12 +212,22 @@ compiler and `grep`, never from line numbers in this plan.
     whatever the transport's failure path is today for a judge that
     throws), that `open` settles, that `'SECRET'` appears in no response
     body, and that the port is free (bind it);
-  - **`terminalPaste`**: deliver one line on the stdin stand-in. Assert
-    that `answer()` and `open` settle and that no `data` / `end` listeners
-    are left;
-  - **`consumerAnswer` / `consumerHandoff`**: deliver through the
-    consumer's callback. Assert that `answer()` and `open` settle and that
-    the callback is not called again.
+  - **`terminalPaste`**, through a reader fixture (the transport's
+    `read` option) that records the abort of the signal it is given.
+    Deliver one line. Assert two things:
+    - `answer()` / `open` end with exactly the failure that a judge
+      throwing itself produces on this transport (same kind, same outcome),
+      and the original error, `'SECRET'`, is in no rendering of it;
+    - the reader's signal was aborted before `open` settled.
+  - **`consumerAnswer`**, delivering through `receive`. Assert the same
+    failure-equality and no-`'SECRET'` points. It holds no scope, so it has
+    no release mutation; its one break is the verdict read.
+  - **`consumerHandoff`**, delivering through `provide`. Assert the same
+    failure-equality and no-`'SECRET'` points. Then, after `open` has
+    settled, invoke its presentation once more and assert that `provide` is
+    not called again, which proves the scope was cleared.
+
+  For `loopback`, the failure-equality and no-`'SECRET'` points apply too.
 
   **Composer level** (`composeAuthorization` with a recording transport,
   and a protocol whose judge returns the throwing verdict). Assert three
