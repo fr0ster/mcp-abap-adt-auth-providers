@@ -138,9 +138,10 @@ the tests that hold it.
   explicit error, or the consumer's `AbortSignal`.
 - **Nothing writes to stdout.** Under a stdio transport stdout carries
   protocol traffic.
-- **Options are read as own data.** Every exported constructor and factory
-  snapshots its options' own data properties (`ownOptions`): an accessor is
-  never run. Other foreign values — a collaborator, a server's answer — are
+- **Options are read as own data.** A constructor or factory snapshots its
+  options' own data properties (`ownOptions`): an accessor is never run. Not
+  yet everywhere: `privateKeyJwt` and `tlsClientCertificate` keep their
+  configuration object and read it directly when they authenticate. Other foreign values — a collaborator, a server's answer — are
   read through `readSafely`, which does run a getter but turns a throw into
   absent.
 - **No regular expression over input.** Input-facing code is plain string
