@@ -39,16 +39,6 @@ const UNUSABLE: ReadonlyArray<[string, () => object]> = [
       }),
     }),
   ],
-  [
-    'an accessor on the options (never run)',
-    () =>
-      Object.defineProperty({}, 'renewal', {
-        enumerable: true,
-        get() {
-          throw new Error(SECRET);
-        },
-      }),
-  ],
 ];
 
 describe('a missing or unusable renewal is refused at construction', () => {

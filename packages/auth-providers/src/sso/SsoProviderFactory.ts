@@ -1,6 +1,6 @@
 import { authError } from '@mcp-abap-adt/auth-errors';
 import type { IRefreshableTokenProvider } from '@mcp-abap-adt/interfaces-auth';
-import { misconfigured, ownOptions } from '../auth/configuration';
+import { misconfigured } from '../auth/configuration';
 import { OidcBrowserProvider } from '../providers/OidcBrowserProvider';
 import { OidcDeviceFlowProvider } from '../providers/OidcDeviceFlowProvider';
 import { OidcPasswordProvider } from '../providers/OidcPasswordProvider';
@@ -16,8 +16,8 @@ import type { SsoProviderConfig } from './types';
  */
 export class SsoProviderFactory {
   static create(options: SsoProviderConfig): IRefreshableTokenProvider {
-    // Read once as own data: a hostile object throws nothing of its own.
-    const config = ownOptions<SsoProviderConfig>(options);
+    // A typed copy: the options are read once, here.
+    const config = { ...options };
     if (config.protocol === 'oidc') {
       if (config.flow === 'browser') {
         return new OidcBrowserProvider(config.config);

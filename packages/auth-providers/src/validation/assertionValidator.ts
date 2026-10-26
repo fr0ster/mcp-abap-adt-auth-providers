@@ -35,11 +35,7 @@ import {
   type Node,
   XMLSerializer,
 } from '@xmldom/xmldom';
-import {
-  misconfigured,
-  ownOptions,
-  requiredFieldsMissing,
-} from '../auth/configuration';
+import { misconfigured, requiredFieldsMissing } from '../auth/configuration';
 import { parseStrictXml } from '../auth/strictXml';
 import { findDuplicateId, readRequiredId } from './documentIds';
 import { refuse, type SamlRefusal, several } from './samlRefusal';
@@ -169,10 +165,9 @@ function createValidator(
   require: SignedElement,
   options: ShippedValidatorOptions,
 ): IAssertionValidator {
-  // Read once as own data, like every option: a hostile object throws
-  // nothing of its own, and a JavaScript caller past the type gets the
+  // A typed copy, read once; a JavaScript caller past the type gets the
   // configuration failure its mistake is (README, "Configuration errors").
-  const own = ownOptions<Partial<ShippedValidatorOptions>>(options);
+  const own = { ...options };
   const skew = own.clockSkewMs ?? 0;
   if (!Number.isInteger(skew) || skew < 0) {
     // The value given is not echoed.

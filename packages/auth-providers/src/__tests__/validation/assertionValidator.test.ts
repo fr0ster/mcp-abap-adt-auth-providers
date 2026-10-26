@@ -8,6 +8,7 @@ import {
 import { createInMemoryReplayStore } from '../../validation/inMemoryReplayStore';
 import * as signedNode from '../../validation/signedNode';
 import { resolveSignedElements, toPem } from '../../validation/signedNode';
+import { certificate } from '../helpers/certificates';
 import { expectSamlRejection } from '../helpers/samlRefusal';
 
 const KEY = generateKeyMaterial();
@@ -2121,4 +2122,62 @@ describe("the signed-Response validator (Saml2PureProvider's default)", () => {
       spy.mockRestore();
     }
   });
+});
+
+const boom = () => {
+  throw new Error('HOSTILE-OPTION-SECRET-41');
+};
+const h = (value: unknown): never => value as never;
+/** What a call threw, or `undefined` when it returned. */
+function thrownBy(make: () => unknown): unknown {
+  try {
+    make();
+    return undefined;
+  } catch (error) {
+    return error ?? new Error('threw a nullish value');
+  }
+}
+
+describe('the shipped validators refuse what a JavaScript caller passes', () => {
+  const store = { recordIfUnseen: async () => true };
+  const caseOf = (make: () => unknown) =>
+    (thrownBy(make) as { error?: { facts?: { case?: string } } } | undefined)
+      ?.error?.facts?.case;
+
+  for (const factory of [
+    createSignedResponseValidator,
+    createSignedAssertionValidator,
+  ]) {
+    it(`${factory.name}: no certificates, a non-array, a non-string entry, no store`, () => {
+      expect(caseOf(() => factory(h({})))).toBe('validator-no-certificates');
+      expect(
+        caseOf(() =>
+          factory(h({ idpCertificates: 'MIIB', replayStore: store })),
+        ),
+      ).toBe('validator-no-certificates');
+      expect(
+        caseOf(() => factory(h({ idpCertificates: [42], replayStore: store }))),
+      ).toBe('idp-certificate-invalid');
+      expect(
+        caseOf(() =>
+          factory(
+            h({
+              idpCertificates: new Proxy([], { get: boom, ownKeys: boom }),
+              replayStore: store,
+            }),
+          ),
+        ),
+      ).toBe('validator-no-certificates');
+      // A usable certificate, and no replay store: required, by name.
+      const pem = String(certificate().cert);
+      const thrown = thrownBy(() => factory(h({ idpCertificates: [pem] })));
+      expect(caseOf(() => factory(h({ idpCertificates: [pem] })))).toBe(
+        'required-fields-missing',
+      );
+      expect(
+        (thrown as { error: { facts: { fields: string[] } } }).error.facts
+          .fields,
+      ).toEqual(['replayStore']);
+    });
+  }
 });

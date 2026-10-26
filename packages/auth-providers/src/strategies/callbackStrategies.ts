@@ -27,7 +27,7 @@ import type {
   IAuthorizationProtocol,
   IBrowser,
 } from '@mcp-abap-adt/interfaces-auth';
-import { misconfigured, ownOptions } from '../auth/configuration';
+import { misconfigured } from '../auth/configuration';
 import { readSafely } from '../auth/knownCodes';
 import { asAbortSignal } from '../auth/signalledRequest';
 import {
@@ -74,13 +74,11 @@ export interface CallbackStrategyOptions {
 }
 
 function presentationOf(
-  own: Partial<Record<keyof CallbackStrategyOptions, unknown>>,
+  own: CallbackStrategyOptions,
 ): IAuthorizationPresentation {
   const { browser } = own;
   // `openInBrowser` refuses anything that is no IBrowser — a name included.
-  return browser === undefined
-    ? showUrl()
-    : openInBrowser({ browser: browser as IBrowser });
+  return browser === undefined ? showUrl() : openInBrowser({ browser });
 }
 
 /**
@@ -122,11 +120,9 @@ function withRouteHint(
   });
 }
 
-function transportOf(
-  own: Partial<Record<keyof CallbackStrategyOptions, unknown>>,
-): IAnswerTransport {
+function transportOf(own: CallbackStrategyOptions): IAnswerTransport {
   const listener = loopback({
-    port: (own.port ?? DEFAULT_CALLBACK_PORT) as number,
+    port: own.port ?? DEFAULT_CALLBACK_PORT,
   });
   const { remoteHint } = own;
   if (remoteHint === undefined) return listener;
@@ -135,18 +131,15 @@ function transportOf(
       authError.configuration({ case: 'invalid-value', fields: ['transport'] }),
     );
   }
-  return withRouteHint(listener, remoteHint as (redirectUri: string) => string);
+  return withRouteHint(listener, remoteHint);
 }
 
 function callbackComposition<T>(
   options: CallbackStrategyOptions,
   protocol: IAuthorizationProtocol<T>,
 ): ComposedStrategy<T> {
-  // Read once as own data: a hostile object throws nothing of its own.
-  const own =
-    ownOptions<Partial<Record<keyof CallbackStrategyOptions, unknown>>>(
-      options,
-    );
+  // A typed copy: the options are read once, here.
+  const own = { ...options };
   return composeAuthorization({
     presentation: presentationOf(own),
     transport: transportOf(own),

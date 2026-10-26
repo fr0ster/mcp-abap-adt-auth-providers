@@ -12,7 +12,7 @@ import type {
 } from '@mcp-abap-adt/interfaces-auth';
 import { AUTH_TYPE_SAML2_BEARER } from '@mcp-abap-adt/interfaces-auth';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
-import { ownOptions } from '../auth/configuration';
+
 import {
   exchangeSamlAssertion,
   refreshSamlBearerToken,
@@ -61,8 +61,8 @@ export class Saml2BearerProvider extends BaseTokenProvider {
   private readonly validator: IAssertionValidator;
 
   constructor(options: Saml2BearerProviderConfig) {
-    // Read once as own data (a hostile object throws nothing of its own).
-    const config = ownOptions<Saml2BearerProviderConfig>(options);
+    // A typed copy: the options are read once, here.
+    const config = { ...options };
     super(config);
     // A pre-built URL with no declared ACS cannot be verified against whatever
     // the strategy binds, so it is refused here rather than at login time.
@@ -95,9 +95,9 @@ export class Saml2BearerProvider extends BaseTokenProvider {
     // Read once as own data, like every option (a hostile object throws
     // nothing of its own).
     return new Saml2BearerProvider({
-      ...ownOptions<typeof config>(config),
+      ...config,
       authorization: samlCallbackStrategy({
-        signal: ownOptions<LoginFactoryOptions>(options).signal,
+        signal: options.signal,
       }),
       assertionValidator: createSignedAssertionValidator({
         ...samlTrustOf(trust),

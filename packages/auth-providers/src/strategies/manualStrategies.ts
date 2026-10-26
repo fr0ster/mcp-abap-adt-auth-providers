@@ -13,7 +13,7 @@
  * provider; the passcode page takes none.
  */
 
-import { ownOptions, requiredFieldsMissing } from '../auth/configuration';
+import { requiredFieldsMissing } from '../auth/configuration';
 import { asAbortSignal } from '../auth/signalledRequest';
 import {
   type ComposedStrategy,
@@ -56,14 +56,14 @@ export interface ManualStrategyOptions extends ManualPasscodeStrategyOptions {
   redirectUri: string;
 }
 
-type Own = Partial<Record<keyof ManualStrategyOptions, unknown>>;
+type Own = Partial<ManualStrategyOptions>;
 
 /** The consumer's redirect: required. */
 function registeredRedirect(own: Own): string {
   if (own.redirectUri === undefined) {
     throw requiredFieldsMissing(['redirectUri']);
   }
-  return own.redirectUri as string;
+  return own.redirectUri;
 }
 
 const signalOf = (own: Own) => asAbortSignal(own.signal);
@@ -72,13 +72,13 @@ const signalOf = (own: Own) => asAbortSignal(own.signal);
 export function manualPasteStrategy(
   options: ManualStrategyOptions,
 ): ComposedStrategy<string> {
-  // Read once as own data: a hostile object throws nothing of its own.
-  const own = ownOptions<Own>(options);
+  // A typed copy: the options are read once, here.
+  const own = { ...options };
   return composeAuthorization({
     presentation: showUrl(),
     transport: terminalPaste({
       redirectUri: registeredRedirect(own),
-      read: own.read as TerminalRead | undefined,
+      read: own.read,
     }),
     protocol: oauthCode(),
     endpoint: CALLBACK_ENDPOINT,
@@ -90,12 +90,12 @@ export function manualPasteStrategy(
 export function manualSamlResponseStrategy(
   options: ManualStrategyOptions,
 ): ComposedStrategy<string> {
-  const own = ownOptions<Own>(options);
+  const own = { ...options };
   return composeAuthorization({
     presentation: showUrl(),
     transport: terminalPaste({
       redirectUri: registeredRedirect(own),
-      read: own.read as TerminalRead | undefined,
+      read: own.read,
     }),
     protocol: samlResponse(),
     endpoint: CALLBACK_ENDPOINT,
@@ -113,10 +113,10 @@ export function manualSamlResponseStrategy(
 export function manualPasscodeStrategy(
   options: ManualPasscodeStrategyOptions = {},
 ): ComposedStrategy<string> {
-  const own = ownOptions<Own>(options);
+  const own = { ...options };
   return composeAuthorization({
     presentation: showUrl(),
-    transport: terminalPaste({ read: own.read as TerminalRead | undefined }),
+    transport: terminalPaste({ read: own.read }),
     protocol: passcode(),
     endpoint: CALLBACK_ENDPOINT,
     signal: signalOf(own),

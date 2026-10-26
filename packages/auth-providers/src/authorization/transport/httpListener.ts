@@ -31,7 +31,7 @@ import {
 } from '@mcp-abap-adt/interfaces-auth';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
 import { promptableUrl } from '../../auth/announce';
-import { ownOptions } from '../../auth/configuration';
+
 import {
   abortedLogin,
   failedLogin,
@@ -83,7 +83,7 @@ const REFUSALS: ReadonlySet<string> = new Set(ANSWER_REFUSALS);
 /** The open ended before an answer was accepted. */
 const callbackClosed = () => loginFailure({ outcome: 'callback-closed' });
 
-/** The options a listener reads, once, as own data. */
+/** The options a listener reads, once. */
 interface ListenerOptions {
   readonly signal: AbortSignal | undefined;
   readonly logger: ILogger | undefined;
@@ -92,11 +92,12 @@ interface ListenerOptions {
   readonly endpoint: string;
 }
 
-/** Paste words as own data strings, else none. */
+/** Paste words that are strings, else none; read guarded. */
 function pasteWordsOf(value: unknown): PasteWords | undefined {
-  const own = ownOptions<Partial<PasteWords>>(value);
-  return typeof own.prompt === 'string' && typeof own.instructions === 'string'
-    ? Object.freeze({ prompt: own.prompt, instructions: own.instructions })
+  const prompt = readSafely(value, 'prompt');
+  const instructions = readSafely(value, 'instructions');
+  return typeof prompt === 'string' && typeof instructions === 'string'
+    ? Object.freeze({ prompt, instructions })
     : undefined;
 }
 
@@ -115,18 +116,14 @@ function methodsOf(value: unknown): ReadonlySet<'GET' | 'POST'> {
 }
 
 function readOptions(options: AnswerTransportOptions): ListenerOptions {
-  const own =
-    ownOptions<Partial<Record<keyof AnswerTransportOptions, unknown>>>(options);
-  const { signal, logger } = own;
+  const { signal, logger } = options;
   return {
-    endpoint: checkedEndpoint(own.endpoint),
+    endpoint: checkedEndpoint(options.endpoint),
     signal: asAbortSignal(signal),
-    logger:
-      logger !== null && typeof logger === 'object'
-        ? (logger as ILogger)
-        : undefined,
-    paste: own.paste === undefined ? undefined : pasteWordsOf(own.paste),
-    methods: methodsOf(own.callbackMethods),
+    logger: logger !== null && typeof logger === 'object' ? logger : undefined,
+    paste:
+      options.paste === undefined ? undefined : pasteWordsOf(options.paste),
+    methods: methodsOf(options.callbackMethods),
   };
 }
 

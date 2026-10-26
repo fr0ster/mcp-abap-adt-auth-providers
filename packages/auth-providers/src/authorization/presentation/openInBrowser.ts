@@ -19,7 +19,7 @@ import type {
   IBrowser,
   PresentationContext,
 } from '@mcp-abap-adt/interfaces-auth';
-import { misconfigured, ownOptions } from '../../auth/configuration';
+import { misconfigured } from '../../auth/configuration';
 import { readSafely } from '../../auth/knownCodes';
 import { promptAuthorizationUrl, promptContext } from './prompt';
 
@@ -34,8 +34,8 @@ const never = new AbortController().signal;
 export function openInBrowser(
   options: OpenInBrowserOptions,
 ): IAuthorizationPresentation {
-  // Read once as own data: a hostile object throws nothing of its own.
-  const { browser } = ownOptions<{ browser?: unknown }>(options);
+  // A typed copy: the options are read once, here.
+  const { browser } = { ...options };
   if (browser === undefined) {
     throw misconfigured(
       authError.configuration({

@@ -3,7 +3,6 @@ import type {
   IClientAuthentication,
 } from '@mcp-abap-adt/interfaces-auth';
 import { assertCertificateMaterial } from '../auth/certificateMaterial';
-import { ownOptions } from '../auth/configuration';
 
 export interface TlsClientCertificateConfig {
   /** The material, or a loader the consumer owns; read and checked once. */
@@ -16,10 +15,9 @@ export interface TlsClientCertificateConfig {
 export function tlsClientCertificate(
   options: TlsClientCertificateConfig,
 ): IClientAuthentication {
-  // Read once as own data: the material (or its loader) and the endpoint are
-  // fixed here, and no accessor of the consumer's object runs.
-  const { material: given, endpoint } =
-    ownOptions<Partial<TlsClientCertificateConfig>>(options);
+  // A typed copy: the material (or its loader) and the endpoint are fixed
+  // here, read once.
+  const { material: given, endpoint } = { ...options };
   let checked: Promise<ICertificateMaterial> | undefined;
   const load = (): Promise<ICertificateMaterial> => {
     if (checked) return checked;

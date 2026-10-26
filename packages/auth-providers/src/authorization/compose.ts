@@ -47,7 +47,7 @@ import type {
 } from '@mcp-abap-adt/interfaces-auth';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
 import { whenRejected } from '../auth/attempt';
-import { misconfigured, ownOptions } from '../auth/configuration';
+import { misconfigured } from '../auth/configuration';
 import {
   abortedLogin,
   failedLogin,
@@ -192,11 +192,8 @@ function isAbortedFailure(error: unknown): boolean {
 export function composeAuthorization<TPayload>(
   parts: ComposedAuthorization<TPayload>,
 ): ComposedStrategy<TPayload> {
-  // Read once as own data: a hostile object throws nothing of its own.
-  const own =
-    ownOptions<Partial<Record<keyof ComposedAuthorization<TPayload>, unknown>>>(
-      parts,
-    );
+  // A typed copy: the options are read once, here.
+  const own = { ...parts };
   for (const part of ['presentation', 'transport', 'protocol'] as const) {
     if (own[part] === undefined || own[part] === null) {
       throw requiredMissing(part);

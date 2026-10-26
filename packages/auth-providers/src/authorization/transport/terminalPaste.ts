@@ -18,7 +18,7 @@ import type {
   IArmedChannel,
 } from '@mcp-abap-adt/interfaces-auth';
 import { untilAborted } from '../../auth/attempt';
-import { misconfigured, ownOptions } from '../../auth/configuration';
+import { misconfigured } from '../../auth/configuration';
 import { abortedLogin, loginFailure } from '../../auth/interactiveLogin';
 import { readSafely } from '../../auth/knownCodes';
 import { asAbortSignal } from '../../auth/signalledRequest';
@@ -88,25 +88,23 @@ function promptOf(value: unknown): string {
 export function terminalPaste(
   options: TerminalPasteOptions = {},
 ): IAnswerTransport {
-  // Read once as own data: a hostile object throws nothing of its own.
-  const own = ownOptions<Record<keyof TerminalPasteOptions, unknown>>(options);
+  // A typed copy: the options are read once, here.
+  const own = { ...options };
   const redirectUri = consumerRedirect(own.redirectUri);
   if (own.read !== undefined && typeof own.read !== 'function') {
     throw misconfigured(
       authError.configuration({ case: 'invalid-value', fields: ['read'] }),
     );
   }
-  const read = (own.read as TerminalRead | undefined) ?? readFromTerminal;
+  const read = own.read ?? readFromTerminal;
   return Object.freeze({
     label: 'manual' as const,
     async open<TReturn>(
       openOptions: AnswerTransportOptions,
       use: (channel: IAnswerChannel) => Promise<TReturn>,
     ): Promise<TReturn> {
-      const given =
-        ownOptions<Record<keyof AnswerTransportOptions, unknown>>(openOptions);
-      const pastePrompt = promptOf(given.paste);
-      const signal = asAbortSignal(given.signal);
+      const pastePrompt = promptOf(openOptions.paste);
+      const signal = asAbortSignal(openOptions.signal);
       if (signal?.aborted) throw abortedLogin('manual');
       // The read stops at the signal and at the end of this open.
       const closing = new AbortController();

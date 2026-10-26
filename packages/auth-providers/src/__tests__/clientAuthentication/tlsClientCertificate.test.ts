@@ -148,7 +148,7 @@ describe('tlsClientCertificate — the material', () => {
   });
 });
 
-describe('tlsClientCertificate — its configuration is read once, as own data', () => {
+describe('tlsClientCertificate — its configuration is read once, as a typed copy', () => {
   it('fixes the material and the endpoint at creation', async () => {
     const config: Parameters<typeof tlsClientCertificate>[0] = {
       material: pem,
@@ -173,7 +173,7 @@ describe('tlsClientCertificate — its configuration is read once, as own data',
       tlsClientCertificate(config).authenticate(base),
     ).resolves.toBeDefined();
   });
-  it('runs no accessor: an endpoint behind a getter is absent', async () => {
+  it('runs an endpoint getter once, at creation', async () => {
     let reads = 0;
     const config = {
       material: pem,
@@ -182,11 +182,13 @@ describe('tlsClientCertificate — its configuration is read once, as own data',
         return 'https://getter.example/token';
       },
     };
-    const sent = await tlsClientCertificate(config).authenticate(withAlias);
-    expect(reads).toBe(0);
-    expect(sent.endpoint).toBe(withAlias.mtlsEndpoint);
+    const auth = tlsClientCertificate(config);
+    expect(reads).toBe(1);
+    const sent = await auth.authenticate(withAlias);
+    expect(reads).toBe(1);
+    expect(sent.endpoint).toBe('https://getter.example/token');
   });
-  it('runs no accessor: material behind a getter is absent, so incomplete', async () => {
+  it('runs a material getter once, at creation', async () => {
     let reads = 0;
     const config = {
       get material() {
@@ -194,13 +196,10 @@ describe('tlsClientCertificate — its configuration is read once, as own data',
         return pem;
       },
     };
-    const e = await tlsClientCertificate(config)
-      .authenticate(base)
-      .catch((x) => x);
-    expect(reads).toBe(0);
-    expect(readFailure(e, 'unfamiliar-error')).toMatchObject({
-      kind: 'client-certificate',
-      facts: { problem: 'incomplete' },
-    });
+    const auth = tlsClientCertificate(config);
+    expect(reads).toBe(1);
+    await auth.authenticate(base);
+    await auth.authenticate(base);
+    expect(reads).toBe(1);
   });
 });

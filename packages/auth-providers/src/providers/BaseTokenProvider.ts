@@ -60,11 +60,7 @@ import {
   certificateNotAfter,
   certificateThumbprint,
 } from '../auth/certificateMaterial';
-import {
-  misconfigured,
-  ownOptions,
-  requiredFieldsMissing,
-} from '../auth/configuration';
+import { misconfigured, requiredFieldsMissing } from '../auth/configuration';
 import { isGrant } from '../auth/grants';
 import { markHandled } from '../auth/handled';
 import { readSafely } from '../auth/knownCodes';
@@ -359,8 +355,8 @@ export abstract class BaseTokenProvider
   private grantRead?: { readonly grant: OAuth2GrantType | undefined };
 
   constructor(options: BaseConfig) {
-    // Read once as own data: a hostile object throws nothing of its own.
-    const config = ownOptions<BaseConfig>(options);
+    // A typed copy: the options are read once, here.
+    const config = { ...options };
     // Every moment of a token provider is its token request.
     super({
       prepare: 'token-request',

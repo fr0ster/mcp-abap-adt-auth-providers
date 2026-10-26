@@ -30,7 +30,7 @@ import type {
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
 import { AuthProviderBase } from '../auth/AuthProviderBase';
 import { throwIfAborted, untilAborted } from '../auth/attempt';
-import { misconfigured, ownOptions } from '../auth/configuration';
+import { misconfigured } from '../auth/configuration';
 import { readSafely } from '../auth/knownCodes';
 import { readRejection } from '../auth/rejection';
 import { logQuietly } from '../auth/tokenRequest';
@@ -76,29 +76,6 @@ export interface SncLogonProviderConfig {
   signal?: AbortSignal | undefined;
 }
 
-/**
- * A configured field, read once as an own data property: an accessor (a
- * getter is never run), a Proxy trap that throws or a non-object config is
- * unreadable; an absent property reads as `undefined`.
- */
-function ownData(
-  object: unknown,
-  key: string,
-): { readable: true; value: unknown } | { readable: false } {
-  if (object === null || typeof object !== 'object') {
-    return { readable: false };
-  }
-  try {
-    const descriptor = Object.getOwnPropertyDescriptor(object, key);
-    if (descriptor === undefined) return { readable: true, value: undefined };
-    return 'value' in descriptor
-      ? { readable: true, value: descriptor.value }
-      : { readable: false };
-  } catch {
-    return { readable: false };
-  }
-}
-
 export class SncLogonProvider extends AuthProviderBase {
   readonly kind = 'snc';
   private readonly partnerName: string;
@@ -121,11 +98,10 @@ export class SncLogonProvider extends AuthProviderBase {
       authorize: 'authorizing-snc-request',
       rejected: 'explaining-snc-refusal',
     });
-    const given = ownData(config, 'partnerName');
+    // A typed copy: the options are read once, here.
+    const own = { ...config };
     const partnerName =
-      given.readable && typeof given.value === 'string'
-        ? given.value.trim()
-        : '';
+      typeof own.partnerName === 'string' ? own.partnerName.trim() : '';
     if (!partnerName) {
       throw misconfigured(
         authError.configuration({
@@ -134,8 +110,7 @@ export class SncLogonProvider extends AuthProviderBase {
         }),
       );
     }
-    const qopRead = ownData(config, 'qop');
-    const qop = qopRead.readable ? (qopRead.value ?? '9') : undefined;
+    const qop = own.qop ?? '9';
     if (!isSncQop(qop)) {
       // The value is never echoed; `allowed` names the set.
       throw misconfigured(
@@ -146,11 +121,8 @@ export class SncLogonProvider extends AuthProviderBase {
         }),
       );
     }
-    const myName = ownData(config, 'myName');
-    if (
-      !myName.readable ||
-      (myName.value !== undefined && typeof myName.value !== 'string')
-    ) {
+    const myName = own.myName;
+    if (myName !== undefined && typeof myName !== 'string') {
       // No snc case names myName (interfaces-auth's CONFIG_CASES): the
       // generic case, naming the field — never the value or a getter's throw.
       throw misconfigured(
@@ -163,20 +135,14 @@ export class SncLogonProvider extends AuthProviderBase {
     this.partnerName = partnerName;
     this.qop = qop;
     this.myName =
-      typeof myName.value === 'string'
-        ? myName.value.trim() || undefined
-        : undefined;
-    // The collaborators, read once as own data: an accessor or a throwing
-    // Proxy reads as absent, and an absent locator or probe list is used
-    // only inside a moment, whose boundary answers it.
-    const collaborators = ownOptions<Partial<SncLogonProviderConfig>>(config);
-    this.locator = collaborators.locator as ISncLibraryLocator;
-    this.probes = collaborators.probes as ISncProductProbe[];
-    this.logger = collaborators.logger;
+      typeof myName === 'string' ? myName.trim() || undefined : undefined;
+    // An absent locator or probe list is used only inside a moment, whose
+    // boundary answers it.
+    this.locator = own.locator;
+    this.probes = own.probes;
+    this.logger = own.logger;
     // The config's signal is the first party; an aborted one adds nothing.
-    if (collaborators.signal !== undefined) {
-      this.parties.attach(collaborators.signal);
-    }
+    if (own.signal !== undefined) this.parties.attach(own.signal);
   }
 
   /** The usual choice: this machine, library discovery, the Secure Login Client probe. */
@@ -188,12 +154,11 @@ export class SncLogonProvider extends AuthProviderBase {
     logger?: ILogger;
     signal?: AbortSignal;
   }): SncLogonProvider {
-    // Read once as own data, like every option: a hostile object throws
-    // nothing of its own; the constructor refuses what is missing.
-    const own = ownOptions<Partial<typeof options>>(options);
+    // A typed copy; the constructor refuses what is missing.
+    const own = { ...options };
     const system = nodeSncSystem();
     return new SncLogonProvider({
-      partnerName: own.partnerName as string,
+      partnerName: own.partnerName,
       qop: own.qop,
       myName: own.myName,
       logger: own.logger,

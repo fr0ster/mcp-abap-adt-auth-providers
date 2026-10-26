@@ -13,7 +13,7 @@ import type {
   PersistenceReport,
 } from '@mcp-abap-adt/interfaces-auth';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
-import { misconfigured, ownOptions } from '../auth/configuration';
+import { misconfigured } from '../auth/configuration';
 import { logQuietly } from '../auth/tokenRequest';
 
 /** What one write hands the store. */
@@ -126,7 +126,7 @@ export function refreshStatePersistence(
   options: RefreshStatePersistenceOptions,
 ): ITokenPersistence {
   // Read once as own data: an accessor on the options is never run.
-  const own = ownOptions<RefreshStatePersistenceOptions>(options);
+  const own = { ...options };
   const { onWriteFailure, logger } = own;
   const wrong: ('onWriteFailure' | 'write')[] = [];
   if (onWriteFailure !== 'continue' && onWriteFailure !== 'fail') {

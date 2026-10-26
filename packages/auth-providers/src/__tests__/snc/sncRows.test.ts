@@ -896,22 +896,12 @@ describe('review round 1', () => {
     locator: new DefaultSncLibraryLocator(machine()),
     probes: [],
   });
-  /** A config whose `getterKey` is an accessor that throws — set after the spread, so building it runs no getter. */
-  const construct = (config: object, getterKey?: string): unknown => {
+  const construct = (config: object): unknown => {
     const full: Record<string, unknown> = {
       partnerName: 'p:CN=SID',
       ...parts(),
       ...config,
     };
-    if (getterKey !== undefined) {
-      delete full[getterKey];
-      Object.defineProperty(full, getterKey, {
-        enumerable: true,
-        get() {
-          throw new Error(MARKER);
-        },
-      });
-    }
     try {
       new SncLogonProvider(full as never);
     } catch (error) {
@@ -920,13 +910,12 @@ describe('review round 1', () => {
     return undefined;
   };
   it.each([
-    ['a number', { myName: 42 }, undefined],
-    ['an object', { myName: { toString: () => MARKER } }, undefined],
-    ['a throwing getter', {}, 'myName'],
+    ['a number', { myName: 42 }],
+    ['an object', { myName: { toString: () => MARKER } }],
   ])(
     'myName as %s → configuration naming myName, never a TypeError',
-    (_, config, getterKey) => {
-      const thrown = construct(config, getterKey);
+    (_, config) => {
+      const thrown = construct(config);
       expect(configurationOf(thrown)).toEqual({
         case: 'required-fields-missing',
         fields: ['myName'],
@@ -935,16 +924,6 @@ describe('review round 1', () => {
       expect(JSON.stringify(thrown)).not.toContain(MARKER);
     },
   );
-  it('qop behind a throwing getter → snc-qop-invalid, never the getter’s error', () => {
-    const thrown = construct({}, 'qop');
-    expect(configurationOf(thrown).case).toBe('snc-qop-invalid');
-    expect(JSON.stringify(thrown)).not.toContain(MARKER);
-  });
-  it('partnerName behind a getter is not read: snc-partner-name-missing', () => {
-    const thrown = construct({}, 'partnerName');
-    expect(configurationOf(thrown).case).toBe('snc-partner-name-missing');
-    expect(JSON.stringify(thrown)).not.toContain(MARKER);
-  });
   it('a valid myName and an absent qop still construct', () => {
     expect(construct({ myName: ' p:CN=ME ' })).toBeUndefined();
     expect(construct({ qop: undefined })).toBeUndefined();

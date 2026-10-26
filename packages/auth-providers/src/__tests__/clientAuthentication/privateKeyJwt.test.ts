@@ -212,7 +212,7 @@ describe('privateKeyJwt — a key that does not fit', () => {
   });
 });
 
-describe('privateKeyJwt — its configuration is read once, as own data', () => {
+describe('privateKeyJwt — its configuration is read once, as a typed copy', () => {
   it('fixes the key, the algorithm and the audience at creation', async () => {
     const config: Parameters<typeof privateKeyJwt>[0] = {
       key: rsa.privateKey,
@@ -231,7 +231,7 @@ describe('privateKeyJwt — its configuration is read once, as own data', () => 
     expect(claims.aud).toBe('https://first.example/token');
     expect(verify('sha256', signingInput, rsa.publicKey, signature)).toBe(true);
   });
-  it('runs no accessor: an audience behind a getter is absent', async () => {
+  it('runs an audience getter once, at creation', async () => {
     let reads = 0;
     const config = {
       key: rsa.privateKey,
@@ -241,13 +241,15 @@ describe('privateKeyJwt — its configuration is read once, as own data', () => 
         return 'https://getter.example/token';
       },
     };
-    const sent = await privateKeyJwt(config).authenticate(draft);
-    expect(reads).toBe(0);
+    const auth = privateKeyJwt(config);
+    expect(reads).toBe(1);
+    const sent = await auth.authenticate(draft);
+    expect(reads).toBe(1);
     expect(parts(sent.parameters?.client_assertion as string).claims.aud).toBe(
-      draft.endpoint,
+      'https://getter.example/token',
     );
   });
-  it('runs no accessor: a key behind a getter is absent, so unusable', async () => {
+  it('runs a key getter once, at creation', async () => {
     let reads = 0;
     const config = {
       algorithm: 'RS256' as const,
@@ -256,13 +258,10 @@ describe('privateKeyJwt — its configuration is read once, as own data', () => 
         return rsa.privateKey;
       },
     };
-    const e = await privateKeyJwt(config)
-      .authenticate(draft)
-      .catch((x) => x);
-    expect(reads).toBe(0);
-    expect(readFailure(e, 'unfamiliar-error')).toMatchObject({
-      kind: 'client-authentication',
-      facts: { problem: 'signing-key-unusable' },
-    });
+    const auth = privateKeyJwt(config);
+    expect(reads).toBe(1);
+    await auth.authenticate(draft);
+    await auth.authenticate(draft);
+    expect(reads).toBe(1);
   });
 });

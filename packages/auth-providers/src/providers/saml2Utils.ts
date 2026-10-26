@@ -10,11 +10,7 @@ import type {
   IAuthorizationStrategy,
 } from '@mcp-abap-adt/interfaces-auth';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
-import {
-  misconfigured,
-  ownOptions,
-  requiredFieldsMissing,
-} from '../auth/configuration';
+import { misconfigured, requiredFieldsMissing } from '../auth/configuration';
 import { buildSamlAuthorizationUrl } from '../auth/saml2Auth';
 import {
   isShippedValidator,
@@ -111,13 +107,12 @@ export interface SamlTrust {
 }
 
 /**
- * A recipe's `trust`, read once as own data (a hostile object throws nothing
- * of its own), as the shipped validator's options: the replay store
+ * A recipe's `trust`, copied once, as the shipped validator's options: the replay store
  * defaults to the process-wide `defaultReplayStore`. Whatever is missing or
  * of the wrong type the validator refuses as configuration.
  */
-export function samlTrustOf(trust: unknown): ShippedValidatorOptions {
-  const own = ownOptions<Partial<SamlTrust>>(trust);
+export function samlTrustOf(trust: SamlTrust): ShippedValidatorOptions {
+  const own = { ...trust };
   return {
     idpCertificates: own.idpCertificates ?? [],
     clockSkewMs: own.clockSkewMs,

@@ -36,11 +36,7 @@ import type {
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
 import { AuthProviderBase } from '../auth/AuthProviderBase';
 import { throwIfAborted, untilAborted } from '../auth/attempt';
-import {
-  misconfigured,
-  ownOptions,
-  requiredFieldsMissing,
-} from '../auth/configuration';
+import { misconfigured, requiredFieldsMissing } from '../auth/configuration';
 import { markHandled } from '../auth/handled';
 import { readSafely } from '../auth/knownCodes';
 import { refuseFor } from '../auth/rejection';
@@ -158,10 +154,8 @@ export class SpnegoAuthProvider extends AuthProviderBase {
       authorize: 'presenting-negotiate-token',
       rejected: 'reading-rejection',
     });
-    const own =
-      ownOptions<Partial<Record<keyof SpnegoAuthProviderConfig, unknown>>>(
-        config,
-      );
+    // A typed copy: the options are read once, here.
+    const own = { ...config };
     const servicePrincipal = own.servicePrincipal;
     const tokenSource = own.tokenSource;
     const missing: string[] = [];
@@ -187,11 +181,11 @@ export class SpnegoAuthProvider extends AuthProviderBase {
       );
     }
     this.servicePrincipal = servicePrincipal;
-    this.tokenSource = tokenSource as INegotiateTokenSource;
-    this.logger = own.logger as ILogger | undefined;
+    this.tokenSource = tokenSource;
+    this.logger = own.logger;
     // The config's signal is the first party; an aborted one adds nothing.
     if (own.signal !== undefined) {
-      this.parties.attach(own.signal as AbortSignal);
+      this.parties.attach(own.signal);
     }
   }
 

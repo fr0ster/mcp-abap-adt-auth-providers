@@ -436,20 +436,17 @@ describe('refreshStatePersistence — construction', () => {
     );
   });
 
-  it('an accessor on the options is never run: onWriteFailure reads as missing', () => {
-    let ran = false;
+  it('an accessor on the options runs once, at creation', () => {
+    let reads = 0;
     const options = {};
     Object.defineProperty(options, 'onWriteFailure', {
       get() {
-        ran = true;
+        reads += 1;
         return 'fail';
       },
       enumerable: true,
     });
-    expectInvalid(
-      () => refreshStatePersistence(write, options as never),
-      ['onWriteFailure'],
-    );
-    expect(ran).toBe(false);
+    refreshStatePersistence(write, options as never);
+    expect(reads).toBe(1);
   });
 });

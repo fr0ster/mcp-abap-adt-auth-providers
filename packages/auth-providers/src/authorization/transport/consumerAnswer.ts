@@ -18,7 +18,7 @@ import type {
   PresentationContext,
 } from '@mcp-abap-adt/interfaces-auth';
 import { untilAborted } from '../../auth/attempt';
-import { misconfigured, ownOptions } from '../../auth/configuration';
+import { misconfigured } from '../../auth/configuration';
 import { abortedLogin, loginFailure } from '../../auth/interactiveLogin';
 import { readSafely } from '../../auth/knownCodes';
 import { asAbortSignal } from '../../auth/signalledRequest';
@@ -91,9 +91,7 @@ function socketless(
       openOptions: AnswerTransportOptions,
       use: (channel: IAnswerChannel) => Promise<TReturn>,
     ): Promise<TReturn> {
-      const given =
-        ownOptions<Record<keyof AnswerTransportOptions, unknown>>(openOptions);
-      const signal = asAbortSignal(given.signal);
+      const signal = asAbortSignal(openOptions.signal);
       if (signal?.aborted) throw abortedLogin('consumer');
       const close = onOpen?.();
       let armed = false;
@@ -130,14 +128,12 @@ function socketless(
 export function consumerAnswer(
   options: ConsumerAnswerOptions,
 ): IAnswerTransport {
-  // Read once as own data: a hostile object throws nothing of its own.
-  const own = ownOptions<Record<keyof ConsumerAnswerOptions, unknown>>(options);
+  // A typed copy: the options are read once, here.
+  const own = { ...options };
   const redirectUri = consumerRedirect(own.redirectUri);
   const { receive } = own;
   if (typeof receive !== 'function') throw required('receive');
-  return socketless(redirectUri, (signal) =>
-    adopt(() => (receive as ReceiveAnswer)(signal)),
-  );
+  return socketless(redirectUri, (signal) => adopt(() => receive(signal)));
 }
 
 /**
@@ -149,8 +145,7 @@ export function consumerHandoff(options: ConsumerHandoffOptions): {
   readonly presentation: IAuthorizationPresentation;
   readonly transport: IAnswerTransport;
 } {
-  const own =
-    ownOptions<Record<keyof ConsumerHandoffOptions, unknown>>(options);
+  const own = { ...options };
   const redirectUri = consumerRedirect(own.redirectUri);
   const { provide } = own;
   if (typeof provide !== 'function') throw required('provide');

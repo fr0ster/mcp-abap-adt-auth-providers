@@ -87,16 +87,6 @@ describe('an absent persistence is a choice, not a fault', () => {
   const ABSENT: ReadonlyArray<[string, () => object]> = [
     ['not given', () => ({})],
     ['undefined', () => ({ persistence: undefined })],
-    [
-      'an accessor on the options (never run, read as absent)',
-      () =>
-        Object.defineProperty({}, 'persistence', {
-          enumerable: true,
-          get() {
-            throw new Error(SECRET);
-          },
-        }),
-    ],
     ['usable', () => ({ persistence: { report: () => undefined } })],
   ];
   const cases = BUILDERS.flatMap(([builder, build]) =>
