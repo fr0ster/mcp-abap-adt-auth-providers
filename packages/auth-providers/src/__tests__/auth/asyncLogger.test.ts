@@ -36,7 +36,7 @@ report(outcomes);
 `;
 
 describe('an async logger on a token site', () => {
-  it('a thenable whose then throws: contained, outcome unchanged', () => {
+  it('a logger answering an object with a throwing then: the answer is ignored, outcome unchanged', () => {
     const run = runPlainNode<string[]>(
       scenario(`{
         debug: () => ({ then() { throw new Error('then ran'); } }),

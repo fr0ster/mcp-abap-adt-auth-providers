@@ -51,7 +51,6 @@ export class TokenAuthProvider extends AuthProviderBase {
 
   protected async onAuthorize(request: IRequestTarget): Promise<AuthOutcome> {
     const token = await this.current();
-    // A target answering a rejecting promise raises nothing (rule 1).
     request.header('Authorization', `Bearer ${token}`);
     this.presented = token;
     return OK;

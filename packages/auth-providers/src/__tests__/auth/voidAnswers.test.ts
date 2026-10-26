@@ -8,6 +8,7 @@
 
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
+import { inspect } from 'node:util';
 import { describe, expect, it } from '@jest/globals';
 import { readFailure } from '@mcp-abap-adt/auth-errors';
 import type {
@@ -21,6 +22,7 @@ import { logQuietly } from '../../auth/tokenRequest';
 import { BasicAuthProvider } from '../../credentials/BasicAuthProvider';
 import { SamlAuthProvider } from '../../credentials/SamlAuthProvider';
 import { TokenAuthProvider } from '../../credentials/TokenAuthProvider';
+import { Saml2PureProvider } from '../../providers/Saml2PureProvider';
 import { refreshThenLogin } from '../../renewal';
 import { SpnegoAuthProvider } from '../../spnego/SpnegoAuthProvider';
 import { jwt, quiet, rejectionOf } from '../helpers/attemptHarness';
@@ -90,6 +92,37 @@ describe('a request target answering a thenable', () => {
       } as never,
     });
     expect(await provider.authorize(target)).toEqual({ ok: true });
+    expect(state.thenCalls).toBe(0);
+  });
+
+  it('header() of a token provider (Bearer): ok, then never called', async () => {
+    const { answer, state } = neverSettling();
+    const target = {
+      header: () => answer,
+      cookies: () => undefined,
+    } as unknown as IRequestTarget;
+    const provider = new ScriptedProvider({
+      renewal: refreshThenLogin(),
+      accessToken: jwt('held', 3600),
+      refreshToken: 'R',
+    });
+    expect(await provider.authorize(target)).toEqual({ ok: true });
+    expect(state.thenCalls).toBe(0);
+  });
+
+  it('cookies() of Saml2PureProvider.applyToken: then never called', async () => {
+    const { answer, state } = neverSettling();
+    const target = {
+      header: () => undefined,
+      cookies: () => answer,
+    } as unknown as IRequestTarget;
+    const apply = (
+      Saml2PureProvider.prototype as unknown as {
+        applyToken(request: IRequestTarget, result: unknown): void;
+      }
+    ).applyToken;
+    apply.call({}, target, { authorizationToken: 'cookie=1' });
+    await quiet();
     expect(state.thenCalls).toBe(0);
   });
 
@@ -194,7 +227,9 @@ describe('a logger answering a thenable', () => {
         );
         const failure = readFailure(thrown, 'unfamiliar-error');
         expect(failure.kind).toBe('request-failed');
-        expect(JSON.stringify(failure.reason)).not.toContain('SECRET');
+        expect(inspect(failure, { showHidden: true, depth: 8 })).not.toContain(
+          'SECRET',
+        );
       }
     } finally {
       await new Promise((resolve) => server.close(resolve));

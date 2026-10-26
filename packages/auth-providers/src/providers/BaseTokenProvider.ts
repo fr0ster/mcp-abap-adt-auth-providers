@@ -1897,10 +1897,7 @@ export abstract class BaseTokenProvider
 
   /** How this provider's token rides on a request. Bearer by default. */
   protected applyToken(request: IRequestTarget, result: ITokenResult): void {
-    // A target answering a rejecting promise raises nothing (rule 1).
-    markHandled(
-      request.header('Authorization', `Bearer ${result.authorizationToken}`),
-    );
+    request.header('Authorization', `Bearer ${result.authorizationToken}`);
   }
 }
 
