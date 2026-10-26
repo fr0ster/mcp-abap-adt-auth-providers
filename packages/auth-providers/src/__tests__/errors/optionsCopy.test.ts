@@ -7,10 +7,7 @@
 
 import { generateKeyPairSync } from 'node:crypto';
 import { describe, expect, it } from '@jest/globals';
-import type {
-  INegotiateTokenSource,
-  IRequestTarget,
-} from '@mcp-abap-adt/interfaces-auth';
+import type { INegotiateTokenSource } from '@mcp-abap-adt/interfaces-auth';
 import { composeAuthorization } from '../../authorization/compose';
 import { oauthCode } from '../../authorization/protocol';
 import { privateKeyJwt } from '../../clientAuthentication/privateKeyJwt';
@@ -117,6 +114,5 @@ describe('options getter runs once, at creation', () => {
     expect(reads()).toBe(1);
     await provider.prepare();
     expect(reads()).toBe(1);
-    void (undefined as unknown as IRequestTarget);
   });
 });

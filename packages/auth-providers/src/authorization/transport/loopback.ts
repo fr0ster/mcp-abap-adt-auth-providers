@@ -11,7 +11,6 @@ import type {
   IAnswerChannel,
   IAnswerTransport,
 } from '@mcp-abap-adt/interfaces-auth';
-
 import { validatePort } from './binding';
 import { type ListenerPlan, openHttpListener } from './httpListener';
 

@@ -9,31 +9,13 @@
 import { inspect } from 'node:util';
 import { describe, expect, it } from '@jest/globals';
 import { isAuthProviderFailure } from '@mcp-abap-adt/auth-errors';
-import { CONFIG_FIELDS } from '@mcp-abap-adt/interfaces-auth';
 import { composeAuthorization } from '../../authorization/compose';
-import {
-  consumerPresentation,
-  openInBrowser,
-} from '../../authorization/presentation';
+import { consumerPresentation } from '../../authorization/presentation';
 import {
   consumerAnswer,
   consumerHandoff,
-  loopback,
-  loopback4,
-  loopback6,
   terminalPaste,
 } from '../../authorization/transport';
-import {
-  clientSecretBasic,
-  clientSecretPost,
-} from '../../clientAuthentication/clientSecret';
-import { privateKeyJwt } from '../../clientAuthentication/privateKeyJwt';
-import { tlsClientCertificate } from '../../clientAuthentication/tlsClientCertificate';
-import { BasicAuthProvider } from '../../credentials/BasicAuthProvider';
-import { CertificateAuthProvider } from '../../credentials/CertificateAuthProvider';
-import { SamlAuthProvider } from '../../credentials/SamlAuthProvider';
-import { TokenAuthProvider } from '../../credentials/TokenAuthProvider';
-import { consoleDeviceCodePresenter } from '../../deviceCode/DeviceCodePresenter';
 import { AuthorizationCodeProvider } from '../../providers/AuthorizationCodeProvider';
 import { ClientCredentialsProvider } from '../../providers/ClientCredentialsProvider';
 import { OidcBrowserProvider } from '../../providers/OidcBrowserProvider';
@@ -43,32 +25,12 @@ import { OidcTokenExchangeProvider } from '../../providers/OidcTokenExchangeProv
 import { Saml2BearerProvider } from '../../providers/Saml2BearerProvider';
 import { Saml2PureProvider } from '../../providers/Saml2PureProvider';
 import { UaaPasscodeProvider } from '../../providers/UaaPasscodeProvider';
-import { refreshThenLogin } from '../../renewal';
-import { DefaultSncLibraryLocator } from '../../snc/DefaultSncLibraryLocator';
-import { SecureLoginClientProbe } from '../../snc/SecureLoginClientProbe';
 import { SncLogonProvider } from '../../snc/SncLogonProvider';
 import { SpnegoAuthProvider } from '../../spnego/SpnegoAuthProvider';
-import { SsoProviderFactory } from '../../sso/SsoProviderFactory';
 import { asOidcResult } from '../../strategies/asOidcResult';
-import {
-  browserCallbackStrategy,
-  oidcCallbackStrategy,
-  samlCallbackStrategy,
-} from '../../strategies/callbackStrategies';
-import {
-  externalCodeStrategy,
-  staticCodeStrategy,
-} from '../../strategies/codeStrategies';
-import {
-  manualPasscodeStrategy,
-  manualPasteStrategy,
-  manualSamlResponseStrategy,
-} from '../../strategies/manualStrategies';
-import {
-  createSignedAssertionValidator,
-  createSignedResponseValidator,
-} from '../../validation/assertionValidator';
-import { certificate } from '../helpers/certificates';
+import { browserCallbackStrategy } from '../../strategies/callbackStrategies';
+import { externalCodeStrategy } from '../../strategies/codeStrategies';
+import { manualPasteStrategy } from '../../strategies/manualStrategies';
 
 const SECRET = 'HOSTILE-OPTION-SECRET-41';
 const boom = () => {

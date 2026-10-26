@@ -31,7 +31,6 @@ import {
 } from '@mcp-abap-adt/interfaces-auth';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
 import { promptableUrl } from '../../auth/announce';
-
 import {
   abortedLogin,
   failedLogin,

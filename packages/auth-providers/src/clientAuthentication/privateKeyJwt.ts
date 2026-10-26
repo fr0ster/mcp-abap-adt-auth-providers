@@ -56,8 +56,8 @@ const b64 = (value: unknown): string =>
 export function privateKeyJwt(
   options: PrivateKeyJwtConfig,
 ): IClientAuthentication {
-  // Read once as own data: the key, the algorithm and the audience are fixed
-  // together here, and no accessor of the consumer's object runs.
+  // A typed copy: the key, the algorithm and the audience are fixed together
+  // here, read once.
   const config = { ...options };
   let key: KeyObject | undefined;
   return {

@@ -125,7 +125,7 @@ export function refreshStatePersistence(
   write: (tokens: PersistedTokens) => Promise<void>,
   options: RefreshStatePersistenceOptions,
 ): ITokenPersistence {
-  // Read once as own data: an accessor on the options is never run.
+  // A typed copy: an accessor on the options runs once, here.
   const own = { ...options };
   const { onWriteFailure, logger } = own;
   const wrong: ('onWriteFailure' | 'write')[] = [];

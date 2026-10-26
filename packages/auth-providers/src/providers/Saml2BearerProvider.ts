@@ -12,7 +12,6 @@ import type {
 } from '@mcp-abap-adt/interfaces-auth';
 import { AUTH_TYPE_SAML2_BEARER } from '@mcp-abap-adt/interfaces-auth';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
-
 import {
   exchangeSamlAssertion,
   refreshSamlBearerToken,
@@ -92,8 +91,7 @@ export class Saml2BearerProvider extends BaseTokenProvider {
     trust: SamlTrust,
     options: LoginFactoryOptions = {},
   ): Saml2BearerProvider {
-    // Read once as own data, like every option (a hostile object throws
-    // nothing of its own).
+    // A typed copy, like every option: read once, here.
     return new Saml2BearerProvider({
       ...config,
       authorization: samlCallbackStrategy({

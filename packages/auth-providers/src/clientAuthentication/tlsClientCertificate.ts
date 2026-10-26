@@ -23,7 +23,7 @@ export function tlsClientCertificate(
     if (checked) return checked;
     const attempt = (async () => {
       // A loader is called as the consumer's object's method, as before.
-      // None at all (absent, or an accessor not run) is incomplete material.
+      // None at all (absent) is incomplete material.
       const material: ICertificateMaterial =
         (typeof given === 'function'
           ? await Reflect.apply(given, options, [])

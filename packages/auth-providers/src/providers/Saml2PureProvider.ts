@@ -13,7 +13,6 @@ import type {
 } from '@mcp-abap-adt/interfaces-auth';
 import { AUTH_TYPE_USER_TOKEN } from '@mcp-abap-adt/interfaces-auth';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
-
 import { markHandled } from '../auth/handled';
 import { samlCallbackStrategy } from '../strategies';
 import { createSignedResponseValidator } from '../validation/assertionValidator';
@@ -85,8 +84,7 @@ export class Saml2PureProvider extends BaseTokenProvider {
     trust: SamlTrust,
     options: LoginFactoryOptions = {},
   ): Saml2PureProvider {
-    // Read once as own data, like every option (a hostile object throws
-    // nothing of its own).
+    // A typed copy, like every option: read once, here.
     return new Saml2PureProvider({
       ...config,
       authorization: samlCallbackStrategy({
