@@ -267,8 +267,11 @@ the shipped locator's `WeakSet` and the shipped validators' symbol.
   - `auth/handled.test.ts`;
   - the `isPlainPromise` part of `auth/untilAborted.test.ts`;
   - `auth/attemptSignals.test.ts`' bad-signal cases;
-  - the shape rows of `providers/renewalStrategy.test.ts` (null, string,
-    number, getter, Proxy);
+  - the shape rows of `providers/renewalStrategy.test.ts` that hold a value
+    of the wrong type (null, a string, a number). The getter and Proxy rows
+    throw, so they stay, rewritten as typed `RenewalDecision` answers whose
+    reads throw: still `unknown` `renewal-strategy`, with no step taken.
+    `decide` reads the decision inside the strategy-failure boundary (§3);
   - `errors/renewalRequired.test.ts` and `errors/persistenceInvalid.test.ts`;
   - the `undefined`-collaborator cases in the SPNego, composer,
     `openInBrowser`, SNC and AuthProviderBase tests;
