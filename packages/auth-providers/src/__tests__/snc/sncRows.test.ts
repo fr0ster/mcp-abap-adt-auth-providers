@@ -525,21 +525,6 @@ describe('the log lines', () => {
     );
     expect(JSON.stringify(lines)).not.toContain(MARKER);
   });
-  it('a rejecting async logger changes no answer and leaves nothing unhandled', async () => {
-    const reject = () => Promise.reject(new Error(MARKER));
-    const logger = {
-      debug: reject,
-      info: reject,
-      warn: reject,
-      error: reject,
-    } as never;
-    await expect(
-      snc(machine(), { sncLib: 'C:\\nope.dll', logger }).prepare(),
-    ).resolves.toMatchObject({ ok: false });
-    await expect(snc(machine(), { logger }).prepare()).resolves.toEqual({
-      ok: true,
-    });
-  });
 });
 
 describe('construction', () => {

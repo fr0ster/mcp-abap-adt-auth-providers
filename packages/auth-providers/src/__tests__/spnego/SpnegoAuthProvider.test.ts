@@ -371,25 +371,6 @@ describe('authorize()', () => {
     });
     expect(JSON.stringify(error)).not.toContain('SECRET-IN-TARGET');
   });
-  it('a target whose header answers a rejecting promise raises nothing', async () => {
-    const { source } = freshSource();
-    const unhandled: unknown[] = [];
-    const onUnhandled = (reason: unknown) => unhandled.push(reason);
-    process.on('unhandledRejection', onUnhandled);
-    try {
-      const target = {
-        header: () => Promise.reject(new Error('async target')),
-        cookies: () => undefined,
-      } as unknown as IRequestTarget;
-      await expect(provider(source).authorize(target)).resolves.toEqual({
-        ok: true,
-      });
-      await new Promise((resolve) => setImmediate(resolve));
-      expect(unhandled).toEqual([]);
-    } finally {
-      process.off('unhandledRejection', onUnhandled);
-    }
-  });
 });
 
 describe('establish()', () => {

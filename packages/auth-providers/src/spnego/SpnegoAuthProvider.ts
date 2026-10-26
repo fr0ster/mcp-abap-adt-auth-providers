@@ -36,7 +36,6 @@ import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
 import { AuthProviderBase } from '../auth/AuthProviderBase';
 import { throwIfAborted, untilAborted } from '../auth/attempt';
 import { misconfigured } from '../auth/configuration';
-import { markHandled } from '../auth/handled';
 import { refuseFor } from '../auth/rejection';
 import { logQuietly } from '../auth/tokenRequest';
 import { readNegotiateToken } from './negotiateToken';
@@ -198,8 +197,7 @@ export class SpnegoAuthProvider extends AuthProviderBase {
   protected async onAuthorize(request: IRequestTarget): Promise<AuthOutcome> {
     const obtained = await this.obtain('presenting-negotiate-token');
     if (!obtained.ok) return { ok: false, refusal: obtained.refusal };
-    // A target answering a rejecting promise raises nothing (rule 1).
-    markHandled(request.header('Authorization', `Negotiate ${obtained.token}`));
+    request.header('Authorization', `Negotiate ${obtained.token}`);
     return OK;
   }
 

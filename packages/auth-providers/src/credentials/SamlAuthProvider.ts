@@ -5,7 +5,6 @@ import type {
   IRequestTarget,
 } from '@mcp-abap-adt/interfaces-auth';
 import { AuthProviderBase } from '../auth/AuthProviderBase';
-import { markHandled } from '../auth/handled';
 import { refuseFor } from '../auth/rejection';
 
 /** A SAML session negotiated elsewhere and handed over as cookies. */
@@ -30,8 +29,7 @@ export class SamlAuthProvider extends AuthProviderBase {
   }
 
   protected onAuthorize(request: IRequestTarget): AuthOutcome {
-    // A target answering a rejecting promise raises nothing (rule 1).
-    markHandled(request.cookies(this.sessionCookies));
+    request.cookies(this.sessionCookies);
     return OK;
   }
 

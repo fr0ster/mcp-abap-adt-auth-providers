@@ -1125,15 +1125,14 @@ export abstract class BaseTokenProvider
 
   /**
    * Hands every pending observation to the strategy's `aborted`, once each.
-   * Guarded: a throw is logged and ignored, a native promise answered has
-   * its rejection marked handled, a foreign thenable's `then` is never
-   * called. Nothing waits on it.
+   * Guarded: a throw is logged and ignored; the answer is `void` and is
+   * ignored. Nothing waits on it.
    */
   private deliverObservations(): void {
     const pending = this.observations.splice(0);
     for (const observation of pending) {
       try {
-        markHandled(this.renewal.aborted?.(observation));
+        this.renewal.aborted?.(observation);
       } catch (error) {
         logQuietly(() =>
           this.logger?.warn(
