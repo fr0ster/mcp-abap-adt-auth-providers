@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [7.1.1] - 2026-10-26
+
+### Documentation
+- README, "Your collaborators are awaited like any `await`": the paragraph still named the renewal
+  strategy as the one exception whose thenable is refused, contradicting 7.1.0 and the
+  "Renewal strategy" section. It now lists the renewal strategy and the SPNego token source among
+  the collaborators adopted as `await` adopts them.
+
 ## [7.1.0] - 2026-10-26
 
 ### Changed

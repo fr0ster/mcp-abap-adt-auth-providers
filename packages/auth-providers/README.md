@@ -3653,12 +3653,11 @@ settles therefore blocks every later commit of that provider (each waiter still 
 its own signal). See [Persistence strategy](#persistence-strategy).
 
 **Your collaborators are awaited like any `await`.** What your own code answers — an
-authorization strategy, a persistence strategy, a certificate loader, a refresher, a validator, a
-presenter, a replay store, `cookieProvider`, an SNC locator, probe or system, a logger — is
-adopted as `await` adopts it, so a native promise, Bluebird, Q or any Promises/A+ thenable works.
-The one exception is the **renewal strategy**: its `next()` answers a decision or a native
-promise of one, and anything else that has a `then` is refused without calling it (see
-[Renewal strategy](#renewal-strategy)). A collaborator answer that never
+authorization strategy, a renewal strategy, a persistence strategy, a certificate loader, a
+refresher, a validator, a presenter, a replay store, `cookieProvider`, an SNC locator, probe or
+system, an SPNego token source, a logger — is adopted as `await` adopts it, so a native promise,
+Bluebird, Q or any Promises/A+ thenable works (since 7.1.0 the renewal strategy and the SPNego
+token source too). A collaborator answer that never
 settles is bounded only by your `AbortSignal`, through the parties above. `CertificateAuthProvider`
 and `TokenAuthProvider.from` take no signal: a loader or refresher of theirs that never settles
 hangs their moment, and bounding it is yours (inside the loader or refresher). Values that cross a
