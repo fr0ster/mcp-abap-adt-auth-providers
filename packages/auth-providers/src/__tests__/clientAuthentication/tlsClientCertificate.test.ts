@@ -147,3 +147,60 @@ describe('tlsClientCertificate — the material', () => {
     await expect(auth.authenticate(base)).resolves.toBeDefined();
   });
 });
+
+describe('tlsClientCertificate — its configuration is read once, as own data', () => {
+  it('fixes the material and the endpoint at creation', async () => {
+    const config: Parameters<typeof tlsClientCertificate>[0] = {
+      material: pem,
+      endpoint: 'https://first.example/token',
+    };
+    const auth = tlsClientCertificate(config);
+    config.material = { cert: pem.cert! };
+    config.endpoint = 'https://second.example/token';
+    await expect(auth.authenticate(base)).resolves.toEqual({
+      endpoint: 'https://first.example/token',
+      parameters: { client_id: 'my-client' },
+    });
+  });
+  it('calls a loader as the configuration object’s method, as before', async () => {
+    const config = {
+      pem,
+      async material(this: { pem: ICertificateMaterial }) {
+        return this.pem;
+      },
+    };
+    await expect(
+      tlsClientCertificate(config).authenticate(base),
+    ).resolves.toBeDefined();
+  });
+  it('runs no accessor: an endpoint behind a getter is absent', async () => {
+    let reads = 0;
+    const config = {
+      material: pem,
+      get endpoint() {
+        reads += 1;
+        return 'https://getter.example/token';
+      },
+    };
+    const sent = await tlsClientCertificate(config).authenticate(withAlias);
+    expect(reads).toBe(0);
+    expect(sent.endpoint).toBe(withAlias.mtlsEndpoint);
+  });
+  it('runs no accessor: material behind a getter is absent, so incomplete', async () => {
+    let reads = 0;
+    const config = {
+      get material() {
+        reads += 1;
+        return pem;
+      },
+    };
+    const e = await tlsClientCertificate(config)
+      .authenticate(base)
+      .catch((x) => x);
+    expect(reads).toBe(0);
+    expect(readFailure(e, 'unfamiliar-error')).toMatchObject({
+      kind: 'client-certificate',
+      facts: { problem: 'incomplete' },
+    });
+  });
+});

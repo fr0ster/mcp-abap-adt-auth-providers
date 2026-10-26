@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [7.0.1] - 2026-10-26
+
+### Fixed
+- `privateKeyJwt(config)` and `tlsClientCertificate(config)` read their configuration once, at
+  creation, as own data (`ownOptions`), like every other constructor and factory: the key, the
+  algorithm, the audience, the material (or its loader) and the endpoint are fixed together, and
+  no accessor of the consumer's object runs. Before, both kept the object and read it on every
+  request, so a change after creation reached the next request, and `privateKeyJwt` could sign
+  with the first key under a later algorithm. A field behind a getter is now absent: a key is
+  `signing-key-unusable`, material `incomplete`, an audience or endpoint the default. A material
+  loader is still called as the configuration object's method.
+
+### Documentation
+- `docs/architecture.md`: the package's parts, boundaries, principles and decisions; the first
+  decision, collaborator answers are native promises (this package; enforced for the renewal
+  strategy and the SPNego token source so far).
+
+### Internal
+- Biome 2.6.3; `useMathMinMax` in the loopback `Host` check (`Math.max(close, 0)`, the same value).
+
 ## [7.0.0] - 2026-10-26
 
 A major because a new error kind, `spnego`, exists: a consumer that switches exhaustively on

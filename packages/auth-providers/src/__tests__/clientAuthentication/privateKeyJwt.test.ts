@@ -211,3 +211,58 @@ describe('privateKeyJwt — a key that does not fit', () => {
     expect((e as Error).message).not.toContain(body);
   });
 });
+
+describe('privateKeyJwt — its configuration is read once, as own data', () => {
+  it('fixes the key, the algorithm and the audience at creation', async () => {
+    const config: Parameters<typeof privateKeyJwt>[0] = {
+      key: rsa.privateKey,
+      algorithm: 'RS256',
+      audience: 'https://first.example/token',
+    };
+    const auth = privateKeyJwt(config);
+    config.key = ec.privateKey;
+    config.algorithm = 'ES256';
+    config.audience = 'https://second.example/token';
+    const sent = await auth.authenticate(draft);
+    const { header, claims, signingInput, signature } = parts(
+      sent.parameters?.client_assertion as string,
+    );
+    expect(header.alg).toBe('RS256');
+    expect(claims.aud).toBe('https://first.example/token');
+    expect(verify('sha256', signingInput, rsa.publicKey, signature)).toBe(true);
+  });
+  it('runs no accessor: an audience behind a getter is absent', async () => {
+    let reads = 0;
+    const config = {
+      key: rsa.privateKey,
+      algorithm: 'RS256' as const,
+      get audience() {
+        reads += 1;
+        return 'https://getter.example/token';
+      },
+    };
+    const sent = await privateKeyJwt(config).authenticate(draft);
+    expect(reads).toBe(0);
+    expect(parts(sent.parameters?.client_assertion as string).claims.aud).toBe(
+      draft.endpoint,
+    );
+  });
+  it('runs no accessor: a key behind a getter is absent, so unusable', async () => {
+    let reads = 0;
+    const config = {
+      algorithm: 'RS256' as const,
+      get key() {
+        reads += 1;
+        return rsa.privateKey;
+      },
+    };
+    const e = await privateKeyJwt(config)
+      .authenticate(draft)
+      .catch((x) => x);
+    expect(reads).toBe(0);
+    expect(readFailure(e, 'unfamiliar-error')).toMatchObject({
+      kind: 'client-authentication',
+      facts: { problem: 'signing-key-unusable' },
+    });
+  });
+});
