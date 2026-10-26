@@ -348,7 +348,7 @@ report(outcomes);
     expect(run.unhandled).toEqual([]);
   });
 
-  it('a detached report failing while the logger throws: contained, no unhandled rejection', () => {
+  it('a detached report failing while the logger throws: contained by logQuietly, no unhandled rejection', () => {
     const run = runPlainNode<Record<string, unknown>>(`${PRELUDE}
 let warned = 0;
 const logger = { debug() {}, info() {}, error() {},

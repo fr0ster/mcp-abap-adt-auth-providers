@@ -31,59 +31,88 @@ describe('untilAborted', () => {
   });
 });
 
+/** Collects `unhandledRejection` while `body` runs and a few turns after. */
+async function unhandledDuring(body: () => void): Promise<unknown[]> {
+  const seen: unknown[] = [];
+  const listener = (reason: unknown) => seen.push(reason);
+  process.on('unhandledRejection', listener);
+  try {
+    body();
+    for (let turn = 0; turn < 5; turn += 1) {
+      await new Promise((resolve) => setImmediate(resolve));
+    }
+  } finally {
+    process.off('unhandledRejection', listener);
+  }
+  return seen;
+}
+
 describe('whenRejected', () => {
-  it('a native and a Promises/A+ rejection reach the handler; a resolving answer does not', async () => {
+  it('a native and a Promises/A+ rejection reach the handler; a resolving answer does not; no unhandledRejection', async () => {
     const reasons: unknown[] = [];
-    whenRejected(Promise.reject('native'), (e) => reasons.push(e));
-    whenRejected(APlusPromise.reject('aplus'), (e) => reasons.push(e));
-    whenRejected(APlusPromise.resolve('fine'), (e) => reasons.push(e));
-    whenRejected('a plain value', (e) => reasons.push(e));
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    const seen = await unhandledDuring(() => {
+      whenRejected(Promise.reject('native'), (e) => reasons.push(e));
+      whenRejected(APlusPromise.reject('aplus'), (e) => reasons.push(e));
+      whenRejected(APlusPromise.resolve('fine'), (e) => reasons.push(e));
+      whenRejected('a plain value', (e) => reasons.push(e));
+    });
     expect(reasons.sort()).toEqual(['aplus', 'native']);
+    expect(seen).toEqual([]);
   });
 
-  it('a throwing then getter, then and Proxy trap are rejections; a throwing handler is contained; never throws', async () => {
+  it('a throwing then getter, then and Proxy trap are rejections; never throws', async () => {
     const reasons: unknown[] = [];
     const record = (e: unknown) => reasons.push(e);
-    expect(() => {
-      whenRejected(
-        {
-          // biome-ignore lint/suspicious/noThenProperty: the hostile answer under test
-          get then(): never {
-            throw 'getter threw';
-          },
-        },
-        record,
-      );
-      whenRejected(
-        {
-          // biome-ignore lint/suspicious/noThenProperty: the hostile answer under test
-          then() {
-            throw 'then threw';
-          },
-        },
-        record,
-      );
-      whenRejected(
-        new Proxy(
-          {},
+    const seen = await unhandledDuring(() => {
+      expect(() => {
+        whenRejected(
           {
-            get: () => {
-              throw 'trap threw';
+            // biome-ignore lint/suspicious/noThenProperty: the hostile answer under test
+            get then(): never {
+              throw 'getter threw';
             },
           },
-        ),
-        record,
-      );
-      whenRejected(Promise.reject('x'), () => {
-        throw new Error('handler threw');
-      });
-    }).not.toThrow();
-    await new Promise((resolve) => setTimeout(resolve, 20));
+          record,
+        );
+        whenRejected(
+          {
+            // biome-ignore lint/suspicious/noThenProperty: the hostile answer under test
+            then() {
+              throw 'then threw';
+            },
+          },
+          record,
+        );
+        whenRejected(
+          new Proxy(
+            {},
+            {
+              get: () => {
+                throw 'trap threw';
+              },
+            },
+          ),
+          record,
+        );
+      }).not.toThrow();
+    });
     expect(reasons.sort()).toEqual([
       'getter threw',
       'then threw',
       'trap threw',
     ]);
+    expect(seen).toEqual([]);
+  });
+
+  it('a handler that throws is contained: no unhandledRejection', async () => {
+    const seen = await unhandledDuring(() => {
+      whenRejected(Promise.reject(new Error('b')), () => {
+        throw new Error('handler threw');
+      });
+      whenRejected(APlusPromise.reject(new Error('b')), () => {
+        throw new Error('handler threw');
+      });
+    });
+    expect(seen).toEqual([]);
   });
 });

@@ -116,8 +116,8 @@ describe('a presentation’s answer is adopted, whatever promise it is', () => {
   );
 });
 
-describe('a failure line whose logger throws is contained', () => {
-  it('the handler throwing leaves no unhandled rejection and the login finishes', () => {
+describe('a logger that throws on the failure line is contained by logQuietly', () => {
+  it('no unhandled rejection and the login finishes', () => {
     const run = runPlainNode<Record<string, unknown>>(
       scenario(REJECTING).replace(
         'error() { seen.lines += 1; }',
