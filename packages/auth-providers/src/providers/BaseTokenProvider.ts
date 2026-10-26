@@ -47,7 +47,12 @@ import type {
 } from '@mcp-abap-adt/interfaces-auth';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
 import { AuthProviderBase } from '../auth/AuthProviderBase';
-import { abortedFailure, throwIfAborted, untilAborted } from '../auth/attempt';
+import {
+  abortedFailure,
+  throwIfAborted,
+  untilAborted,
+  whenRejected,
+} from '../auth/attempt';
 import {
   assertCertificateMaterial,
   assertNotExpired,
@@ -61,7 +66,7 @@ import {
   requiredFieldsMissing,
 } from '../auth/configuration';
 import { isGrant } from '../auth/grants';
-import { markHandled, onAnswerRejection } from '../auth/handled';
+import { markHandled } from '../auth/handled';
 import { readSafely } from '../auth/knownCodes';
 import { rejectionCause } from '../auth/rejection';
 import { readBinding, type TokenBinding } from '../auth/tokenBinding';
@@ -1523,7 +1528,7 @@ export abstract class BaseTokenProvider
     const awaited = !attempt.signal.aborted;
     if (!awaited) {
       try {
-        onAnswerRejection(this.callReport(persistence, make(false)), (error) =>
+        whenRejected(this.callReport(persistence, make(false)), (error) =>
           this.detachedFailed(error),
         );
       } catch (error) {

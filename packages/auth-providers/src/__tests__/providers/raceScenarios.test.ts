@@ -278,10 +278,10 @@ report({ olderOutcome, beforeRelease, order: hooks.map((h) => h.access), most, l
     expect(run.unhandled).toEqual([]);
   });
 
-  it('a detached report that fails — a throw, a rejecting promise — leaves no unhandled rejection, one log line, and fails no later call', () => {
+  it('a detached report that fails — a throw, a rejecting promise, a then getter or a Proxy trap that throws — leaves no unhandled rejection, one log line, and fails no later call', () => {
     const run = runPlainNode<Record<string, unknown>>(`${PRELUDE}
 const outcomes = {};
-for (const mode of ['throw', 'reject']) {
+for (const mode of ['throw', 'reject', 'getter', 'proxy']) {
   const lines = [];
   const reports = [];
   const logger = { debug() {}, info() {}, error() {},
@@ -295,6 +295,8 @@ for (const mode of ['throw', 'reject']) {
       reports.push([r.event, r.awaited]);
       if (r.awaited) return undefined;
       if (mode === 'throw') throw new Error('detached: SECRET');
+      if (mode === 'getter') return { get then() { throw new Error('detached: SECRET'); } };
+      if (mode === 'proxy') return new Proxy({}, { get() { throw new Error('detached: SECRET'); } });
       return Promise.reject(new Error('detached: SECRET'));
     } },
   });
@@ -337,7 +339,39 @@ report(outcomes);
       secret: false,
       next: 'S',
     };
-    expect(run.result).toEqual({ throw: expected, reject: expected });
+    expect(run.result).toEqual({
+      throw: expected,
+      reject: expected,
+      getter: expected,
+      proxy: expected,
+    });
+    expect(run.unhandled).toEqual([]);
+  });
+
+  it('a detached report failing while the logger throws: contained, no unhandled rejection', () => {
+    const run = runPlainNode<Record<string, unknown>>(`${PRELUDE}
+let warned = 0;
+const logger = { debug() {}, info() {}, error() {},
+  warn() { warned += 1; throw new Error('logger: SECRET'); } };
+const p = new Scripted({
+  renewal: lib.refreshThenLogin(),
+  access: jwt('held', -3600),
+  refresh: 'R',
+  logger,
+  persistence: { report(r) {
+    if (r.awaited) return undefined;
+    return Promise.reject(new Error('detached: SECRET'));
+  } },
+});
+const only = new AbortController();
+const cut = outcomeOf(p.getTokens({ signal: only.signal }));
+await until(() => p.refreshes.length === 1);
+only.abort();
+await cut;
+await settled(20);
+report({ warned });
+`);
+    expect(run.result).toEqual({ warned: 1 });
     expect(run.unhandled).toEqual([]);
   });
 

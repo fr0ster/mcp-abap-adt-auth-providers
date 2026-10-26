@@ -60,6 +60,8 @@ report({ outcome, ...seen });
 const REJECTING = `async () => { throw new Error('present: SECRET'); }`;
 const NEVER = `() => ({ then() { seen.thenCalls += 1; } })`;
 const APLUS_REJECTING = `() => ({ then(_resolve, reject) { seen.thenCalls += 1; queueMicrotask(() => reject(new Error('present: SECRET'))); } })`;
+const THEN_GETTER_THROWS = `() => ({ get then() { seen.thenCalls += 1; throw new Error('getter: SECRET'); } })`;
+const PROXY_TRAP_THROWS = `() => new Proxy({}, { get() { seen.thenCalls += 1; throw new Error('trap: SECRET'); } })`;
 const THEN_THROWS = `() => ({ then() { seen.thenCalls += 1; throw new Error('then: SECRET'); } })`;
 
 describe('a presentation’s answer is adopted, whatever promise it is', () => {
@@ -85,6 +87,16 @@ describe('a presentation’s answer is adopted, whatever promise it is', () => {
       { outcome: 'payload:code', thenCalls: 1, lines: 1 },
     ],
     [
+      'a presentation answering a thenable whose then getter throws',
+      THEN_GETTER_THROWS,
+      { outcome: 'payload:code', thenCalls: 1, lines: 1 },
+    ],
+    [
+      'a presentation answering a Proxy whose trap throws',
+      PROXY_TRAP_THROWS,
+      { outcome: 'payload:code', thenCalls: 1, lines: 1 },
+    ],
+    [
       'a presentation throwing synchronously',
       `() => { throw new Error('sync: SECRET'); }`,
       { outcome: 'payload:code', thenCalls: 0, lines: 1 },
@@ -102,6 +114,26 @@ describe('a presentation’s answer is adopted, whatever promise it is', () => {
     },
     60_000,
   );
+});
+
+describe('a failure line whose logger throws is contained', () => {
+  it('the handler throwing leaves no unhandled rejection and the login finishes', () => {
+    const run = runPlainNode<Record<string, unknown>>(
+      scenario(REJECTING).replace(
+        'error() { seen.lines += 1; }',
+        "error() { seen.lines += 1; throw new Error('logger: SECRET'); }",
+      ),
+      { boundMs: 30_000 },
+    );
+    expect(run.timedOut).toBe(false);
+    expect(run.result).toEqual({
+      outcome: 'payload:code',
+      thenCalls: 0,
+      lines: 1,
+    });
+    expect(run.unhandled).toEqual([]);
+    expect(run.stderr).not.toContain('SECRET');
+  }, 60_000);
 });
 
 const early = `

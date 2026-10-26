@@ -46,8 +46,8 @@ import type {
   PresentationContext,
 } from '@mcp-abap-adt/interfaces-auth';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
+import { whenRejected } from '../auth/attempt';
 import { misconfigured, ownOptions } from '../auth/configuration';
-import { onAnswerRejection } from '../auth/handled';
 import {
   abortedLogin,
   failedLogin,
@@ -352,7 +352,7 @@ export function composeAuthorization<TPayload>(
       } catch (error) {
         failedPresentation(error);
       }
-      onAnswerRejection(presented, failedPresentation);
+      whenRejected(presented, failedPresentation);
 
       try {
         await answer.call(armed);

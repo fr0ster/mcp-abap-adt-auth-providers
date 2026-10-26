@@ -149,6 +149,35 @@ describe('a browser that fails is a presentation failure', () => {
         },
       } as IBrowser,
     ],
+    [
+      'answers a thenable whose then getter throws',
+      {
+        open: () => ({
+          // biome-ignore lint/suspicious/noThenProperty: the hostile answer under test
+          get then(): never {
+            throw Object.assign(new Error(`SECRET-PATH ${STATE}`), {
+              code: 'ENOENT',
+            });
+          },
+        }),
+      } as unknown as IBrowser,
+    ],
+    [
+      'answers a Proxy whose trap throws',
+      {
+        open: () =>
+          new Proxy(
+            {},
+            {
+              get: () => {
+                throw Object.assign(new Error(`SECRET-PATH ${STATE}`), {
+                  code: 'ENOENT',
+                });
+              },
+            },
+          ),
+      } as unknown as IBrowser,
+    ],
   ] as const)(
     'a browser that %s: the URL prompted once on stderr, one failure line, the login waiting; a callback finishes it',
     async (_name, browser) => {
