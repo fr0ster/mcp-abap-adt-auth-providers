@@ -915,6 +915,8 @@ If you are on an earlier version, see
 
 ## Responsibilities and Design Principles
 
+The package's parts, boundaries, principles and the decisions behind them are described in [docs/architecture.md](docs/architecture.md).
+
 ### Core Development Principle
 
 **Interface-Only Communication**: This package follows a fundamental development principle: **all interactions with external dependencies happen ONLY through interfaces**. The code knows **NOTHING beyond what is defined in the interfaces**.
