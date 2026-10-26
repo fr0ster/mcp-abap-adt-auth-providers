@@ -9,6 +9,7 @@ import type { SsoProviderConfig } from './types';
 
 /** The `never` default of `create`'s switches: the compiler proves no protocol or flow is left. */
 function unreachable(config: never): never {
+  // The return exists only for the compiler: no typed call reaches it.
   return config;
 }
 
