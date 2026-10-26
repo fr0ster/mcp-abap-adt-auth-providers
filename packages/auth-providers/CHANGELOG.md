@@ -7,6 +7,116 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [8.0.0] - 2026-10-26
+
+Static types first: a value is checked at runtime only when it comes from outside the type
+system — a thrown value, a network answer, a JWT payload, a SAML or XML document, a file, the
+environment, registry output, terminal input, a callback request, GSS token bytes, a field a
+contract types `unknown`. Options, collaborators and their answers are trusted to match their
+types. Value rules a type cannot express stay, with their refusals unchanged. No refusal, kind,
+case or operation is new; every throw stays handled; rules 1–8 and `relayOutcome` on logon-target
+answers are unchanged. Dependencies are unchanged.
+
+### Migrating from 7.x
+- Pass options and collaborators that type-check; a TypeScript consumer that compiles against
+  8.0.0 needs nothing else. What a constructor does with a value of the wrong type is not stated.
+- The configuration refusals listed under Removed are no longer produced. Their cases stay on
+  interfaces-auth's allowlist, so an exhaustive switch over `case` still compiles.
+- A request target, a logger or the renewal strategy's `aborted()` that answers a rejecting
+  promise despite its `void` type now raises `unhandledRejection` in the consumer's process.
+- `clientSecretBasic` without `encoding` (a caller that breaks the type) behaves as raw.
+- See the README's "Migrating to 8.0.0".
+
+### Removed
+- `ownOptions`: options are no longer read as own data properties. A getter on the options runs
+  once, at creation; a Proxy, a revoked Proxy or a primitive in the options position is no longer
+  defended against. `SncLogonProvider`'s `ownData` accessor defense goes with it.
+- `readSafely` on typed values: on a collaborator before its call, on a collaborator's answer, on
+  the package's own objects (the token-response snapshot, the discovery document,
+  `PresentationContext`, `IAuthRejection.at` / `status`). It stays for thrown values, the network
+  answers and `IAuthRejection.error`. `typeof … === 'function'` and `Reflect.apply` before a
+  collaborator's call go too; an optional method is called with `?.()`.
+- `signalOf`, `asAbortSignal`, `usableSignal` and `src/auth/signalledRequest.ts`: a typed
+  `AbortSignal | undefined` is read directly.
+- `src/auth/handled.ts`: `isPlainPromise`, `markHandled`, `onAnswerRejection`. `untilAborted`
+  adopts every value through `new Promise((resolve) => resolve(work))`; the commit queue's own
+  promise gets a plain `.catch`; a detached persistence report, `IBrowser.open()` and
+  `present()` get a rejection handler on the same adoption (`whenRejected`).
+- `readDecision`: replaced by `checkDecision(decision: RenewalDecision, context)`. The shape checks
+  (not an object, an unknown `next`, an `ifCut` outside its union) go; `refresh` needing
+  `canRefresh`, `sentRefreshToken` required after a sent refresh that failed and absent elsewhere,
+  and a refresh that may not discard what it sends stay, each `unknown` `renewal-strategy`. The
+  decision is read inside the strategy's failure boundary.
+- `AuthProviderBase`'s `validatedMoments`: the protected constructor's typed `MomentOperations`
+  are copied once.
+- The `isMinted` checks in `misconfigured` and `refuse`: their parameters accept only a minted
+  error, by type. `endFailure`'s stays.
+- `readGrant`'s `isGrant`, the unreachable `refreshStep` guard, and the re-checks of a typed
+  verdict's kind or `AnswerRefusal` (`REFUSALS` / `ANSWER_WORDS` membership) in the composer, the
+  listener, the terminal and the consumer transports.
+- Configuration refusals for what a type already requires — no longer produced:
+  - `basic-encoding-missing` (`clientSecretBasic` without `encoding`);
+  - `unsupported-sso-flow` (`SsoProviderFactory.create` switches exhaustively over its typed
+    flow);
+  - `required-fields-missing` naming `renewal` (every token provider, `inBrowser`,
+    `fromTerminal`, `toConsole`, `SsoProviderFactory.create`), `servicePrincipal` or
+    `tokenSource` (`SpnegoAuthProvider`), `presentation` / `transport` / `protocol` /
+    `endpoint` (`composeAuthorization`), `browser` (`openInBrowser`), `show`
+    (`consumerPresentation`), `receive` (`consumerAnswer`), `provide` (`consumerHandoff`),
+    `redirectUri` (`manualPasteStrategy`, `manualSamlResponseStrategy`,
+    `externalCodeStrategy`), `assertionValidator` (both SAML providers), `replayStore` (the
+    shipped validators), `myName` (an `SncLogonProvider` `myName` that is not a string), an absent
+    `uaaUrl` / `clientId` (`ClientCredentialsProvider`, `AuthorizationCodeProvider`; an empty one
+    is still refused);
+  - `invalid-value` naming `persistence` (no callable `report`), `write` / `onWriteFailure`
+    (`refreshStatePersistence`), `presentation` / `transport` / `protocol` (a part without its
+    methods, a `label` or `redirect` off its union, a browser name where an `IBrowser` belongs,
+    `remoteHint` or `onFailure` not a function), `read` (not a function), and the wrong-type half
+    of `servicePrincipal` and `redirectUri`;
+  - `snc-partner-name-missing` for a `partnerName` that is not a string,
+    `validator-no-certificates` for `idpCertificates` absent or not an array,
+    `idp-certificate-invalid` for a certificate that is not a string.
+  Every value-rule refusal stays: an empty string, a URL that does not parse, a port out of range,
+  `oidc-issuer-required` / `oidc-endpoint-missing`, `saml-token-endpoint-missing`, the SAML and
+  client-secret cross-field cases, `saml-shipped-validator-without-issuer`,
+  `callback-port-invalid`, `locator-returned-no-path`, the SNC `partnerName` and `qop` value
+  rules, and everything a moment refuses.
+
+### Changed
+- Every exported constructor and factory takes its options typed and copies them once with a
+  shallow spread (`const own = { ...options }`); a later change to the consumer's object changes
+  nothing, as before. Configuration copied for later use (`privateKeyJwt`'s key,
+  `tlsClientCertificate`'s material or loader, the SAML trust) is read from the copy.
+- Collaborators are called directly through their typed methods, and their answers are used as
+  their contracts type them (a strategy outcome, a channel's descriptors, a judge's verdict, an
+  SNC locator's answer, the SPNego source's answer narrowed by `ok`, a client-authentication
+  result, `tlsMaterial()`'s answer). A collaborator's call and every read of its answer share one
+  failure boundary: a throw while reading — a getter of the answer — takes the same
+  classification, settling and release as a throw from the call (the listener's, the terminal's
+  and the consumer transports' judges, the composer's judge, a strategy outcome, a token
+  source's and a locator's answer). The value rules on those answers stay (CR/LF in a header, the
+  site's own names, an absolute `https:` endpoint, certificate completeness, Kerberos vs NTLM).
+- `composeAuthorization` reads its parts' descriptors once, at composition — the transport's
+  `label`; the protocol's `redirect`, `callbackMethods` and `paste` — as typed data; every other
+  collaborator is read and called only inside a moment or `authorize`.
+- Answers typed `void` are ignored: a request target's `header()` / `cookies()` (the Bearer write
+  included), every `ILogger` method and the renewal strategy's `aborted()`. The call stays inside
+  its `try`, a throw is handled as before; a returned promise is neither adopted nor handled.
+  `logQuietly` keeps only its `try/catch`; the announcer falls back to stderr when the logger
+  throws, and no longer when it answers a rejecting promise.
+- `untilAborted(work: T | PromiseLike<T>, signal)` adopts `work` through a fresh native promise
+  for every value, as `await` does.
+
+### Documentation
+- README: "Migrating to 8.0.0"; Error Handling's "Options are a typed copy" (was "Options are read
+  as own data") and "Your collaborators are awaited like any `await`" (answers typed `void`);
+  "Configuration errors"; the renewal decision rules; the persistence strategy; the SPNego
+  options and source answer; the composer's parts; `clientSecretBasic`'s `encoding`; the logger
+  passage; the generated configuration table loses the rows and cells no longer produced.
+- `docs/architecture.md`: the principles "Static types first", "Options are a typed copy" and "A
+  throw is not a type question"; the decision "Collaborator answers are awaited as given" names
+  the adoption through a fresh native promise and the answers typed `void`.
+
 ## [7.1.1] - 2026-10-26
 
 ### Documentation
