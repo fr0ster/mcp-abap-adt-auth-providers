@@ -319,7 +319,28 @@ describe('invalid decisions end the renewal unknown renewal-strategy, no step ta
     await renewed;
     expect(provider.refreshes.items).toHaveLength(0);
     expect(provider.logins.items).toHaveLength(1);
-    expect(reads).toEqual({ next: 1, ifCut: 1, sentRefreshToken: 1 });
+    // A login decision: its ifCut is never read.
+    expect(reads).toEqual({ next: 1, ifCut: 0, sentRefreshToken: 1 });
+  });
+
+  it('a type-valid login decision carrying a throwing ifCut getter: ifCut not read, the login taken', async () => {
+    let ifCutReads = 0;
+    const loginWithIfCut = () =>
+      Object.defineProperty({ next: 'login' }, 'ifCut', {
+        enumerable: true,
+        get() {
+          ifCutReads += 1;
+          throw new Error('SECRET');
+        },
+      });
+    const { strategy } = scripted([loginWithIfCut]);
+    const provider = new ScriptedProvider({ renewal: strategy });
+    const renewed = provider.getTokens();
+    (await provider.logins.nth(1)).result.resolve(tokens(jwt('in'), 'S'));
+    await renewed;
+    expect(ifCutReads).toBe(0);
+    expect(provider.refreshes.items).toHaveLength(0);
+    expect(provider.logins.items).toHaveLength(1);
   });
 
   it('a refresh of the very token the same decision discards', async () => {

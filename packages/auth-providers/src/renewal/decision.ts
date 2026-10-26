@@ -8,6 +8,7 @@
 import type {
   RenewalDecision,
   RenewalStepOutcome,
+  SentRefreshToken,
 } from '@mcp-abap-adt/interfaces-auth';
 
 /** What decides whether a decision is valid, beside the answer itself. */
@@ -45,23 +46,51 @@ export function checkDecision(
   decision: RenewalDecision,
   context: DecisionContext,
 ): RenewalDecision | undefined {
-  // Each field read exactly once, and every rule decided and every copy made
-  // from these locals: a getter answering differently on a second read cannot
-  // pass one rule and then be copied as another value. (`in` runs no getter.)
-  const next = decision.next;
-  const ifCut = 'ifCut' in decision ? decision.ifCut : undefined;
-  const sent = decision.sentRefreshToken;
+  // `next` is read once, as the switch's discriminant, which narrows
+  // `decision` itself; every other field is read at most once, only where it
+  // is used, and the copy is built from the values read — a getter answering
+  // differently on a second read cannot pass a rule and be copied as another
+  // value.
+  switch (decision.next) {
+    case 'refresh': {
+      const sent = checkedSent(decision.sentRefreshToken, context);
+      if (sent === false || !context.canRefresh) return undefined;
+      const ifCut = decision.ifCut;
+      return Object.freeze({ next: 'refresh', ifCut, ...sent });
+    }
+    case 'login': {
+      const sent = checkedSent(decision.sentRefreshToken, context);
+      if (sent === false) return undefined;
+      return Object.freeze({ next: 'login', ...sent });
+    }
+    case 'stop': {
+      const sent = checkedSent(decision.sentRefreshToken, context);
+      if (sent === false) return undefined;
+      return Object.freeze({ next: 'stop', ...sent });
+    }
+    default: {
+      // Exhaustive by the compiler; a value no member names is refused, as
+      // the dispatch would refuse it, never guessed at.
+      const unreachable: never = decision;
+      void unreachable;
+      return undefined;
+    }
+  }
+}
+
+/**
+ * The `sentRefreshToken` part of the copy, or `false` where the rule is
+ * broken: required after a refresh that failed once sent, absent elsewhere.
+ */
+function checkedSent(
+  sent: RenewalDecision['sentRefreshToken'],
+  context: DecisionContext,
+):
+  | { readonly sentRefreshToken: SentRefreshToken }
+  | Record<never, never>
+  | false {
   if (context.sentRequired ? sent === undefined : sent !== undefined) {
-    return undefined;
+    return false;
   }
-  const sentPart = sent === undefined ? {} : { sentRefreshToken: sent };
-  if (next === 'refresh') {
-    if (!context.canRefresh) return undefined;
-    // The type puts `ifCut` beside every `refresh`; the local read before
-    // `next` was known cannot carry that, so its absence is refused, never
-    // guessed.
-    if (ifCut === undefined) return undefined;
-    return Object.freeze({ next, ifCut, ...sentPart });
-  }
-  return Object.freeze({ next, ...sentPart });
+  return sent === undefined ? {} : { sentRefreshToken: sent };
 }
