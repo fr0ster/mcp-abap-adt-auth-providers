@@ -44,7 +44,6 @@ import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
 import axios, { type AxiosRequestConfig, type AxiosResponse } from 'axios';
 import { abortedFailure } from './attempt';
 import { assertNotExpired } from './certificateMaterial';
-import { onAnswerRejection } from './handled';
 import {
   allowlistedCode,
   integerStatus,
@@ -121,27 +120,22 @@ function unusable(): never {
   );
 }
 
-function stringRecord(value: unknown): Record<string, string> {
-  if (value === undefined) return {};
-  if (!value || typeof value !== 'object' || Array.isArray(value)) unusable();
-  const out: Record<string, string> = {};
-  for (const [name, item] of Object.entries(value)) {
-    if (typeof item !== 'string') unusable();
-    out[name] = item;
-  }
-  return out;
+/** A copy of the strategy's names and values, read once. */
+function recordOf(
+  value: Readonly<Record<string, string>> | undefined,
+): Record<string, string> {
+  return value === undefined ? {} : { ...value };
 }
 
 function targetUrl(
   configured: string,
-  named: unknown,
+  named: string | undefined,
   material: ICertificateMaterial | undefined,
 ): string {
   if (named === undefined) {
     if (material && !configured.startsWith('https:')) unusable();
     return configured;
   }
-  if (typeof named !== 'string') unusable();
   let url: URL;
   try {
     url = new URL(named);
@@ -272,12 +266,11 @@ export async function prepareTokenRequest(
     clientId: grant.clientId,
     grantType: grant.grantType,
   };
-  const result: ITokenRequestAuthentication | null | undefined =
+  const result: ITokenRequestAuthentication =
     await auth.strategy.authenticate(draft);
-  if (!result || typeof result !== 'object') unusable();
-
-  const parameters = stringRecord(result.parameters);
-  const added = stringRecord(result.headers);
+  // Read once: every value rule below runs on these copies.
+  const parameters = recordOf(result.parameters);
+  const added = recordOf(result.headers);
   const url = targetUrl(grant.endpoint, result.endpoint, auth.material);
 
   const body = new URLSearchParams(grant.parameters);
@@ -380,22 +373,12 @@ export function prepareSecret(value: string, authDebug: boolean): string {
  * Runs a log call for a token site where a logger that throws must change
  * nothing: inside a catch, the failure the site rethrows — already replaced
  * by safe facts — must not be replaced by whatever the consumer's logger
- * threw. A logger whose method answers a rejecting promise (an async
- * logger) must not leave an unhandled rejection either: the logger is the
- * consumer's own code, so what `write` answers is adopted like any await
- * would adopt it — a native promise or any Promises/A+ thenable — with a
- * contained no-op rejection handler (`onAnswerRejection`). Never awaited:
- * logging stays fire-and-forget.
+ * threw. A logger's methods answer `void`: what one returns is ignored,
+ * never followed.
  */
-export function logQuietly(write: () => unknown): void {
+export function logQuietly(write: () => void): void {
   try {
-    const answered = write();
-    if (
-      (answered !== null && typeof answered === 'object') ||
-      typeof answered === 'function'
-    ) {
-      onAnswerRejection(answered, () => undefined);
-    }
+    write();
   } catch {
     // The site's own outcome is what the caller needs.
   }
@@ -702,7 +685,6 @@ function failedRequest(
         ...(oauthError === undefined ? {} : { error: oauthError }),
         ...(code === undefined ? {} : { code }),
       };
-      // Returned, so an async logger's rejection is handled (logQuietly).
       if (debugging(site)) {
         return logger.debug(`[${site.operation}] token endpoint said`, {
           ...safe,
@@ -844,19 +826,18 @@ function missingTokenLead(site: TokenRequestSite): string {
 export function rejectMissingToken(
   site: TokenRequestSite,
   prepared: PreparedTokenRequest | undefined,
-  snapshot: TokenResponseSnapshot<unknown>,
+  snapshot: TokenResponseSnapshot<object>,
   problem: 'no-access-token' | 'incomplete-response',
   level: 'error' | 'debug',
 ): never {
-  const status = integerStatus(readSafely(snapshot, 'status'));
-  const error = registeredOAuthError(
-    readSafely(readSafely(snapshot, 'data'), 'error'),
-  );
+  const { status } = snapshot;
+  // The snapshot's own data: the expected fields only (`answerData`).
+  const { data } = snapshot;
+  const error = registeredOAuthError('error' in data ? data.error : undefined);
   const logger = site.logger;
   if (logger) {
     logQuietly(() => {
       const line = `${missingTokenLead(site)}: status ${status}, error: ${error === undefined ? 'no error given' : JSON.stringify(error)}`;
-      // Returned, so an async logger's rejection is handled (logQuietly).
       if (debugging(site)) {
         return logger[level](line, {
           status,

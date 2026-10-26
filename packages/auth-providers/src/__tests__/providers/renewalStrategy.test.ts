@@ -182,22 +182,21 @@ describe('a decision is awaited as given: any thenable is adopted', () => {
 
 describe('invalid decisions end the renewal unknown renewal-strategy, no step taken', () => {
   const INVALID: ReadonlyArray<[string, () => unknown]> = [
-    ['null', () => null],
-    ['a string', () => 'refresh'],
-    ['a number', () => 42],
-    ['an object without next', () => ({})],
-    ['an unknown next', () => ({ next: 'retry' })],
-    ['a refresh without ifCut', () => ({ next: 'refresh' })],
-    [
-      'a refresh with an invalid ifCut',
-      () => ({ next: 'refresh', ifCut: 'maybe' }),
-    ],
     [
       'a sentRefreshToken where it must be absent',
       () => ({ next: 'login', sentRefreshToken: 'keep' }),
     ],
     [
-      'a getter that throws',
+      'a decision whose field read throws',
+      () =>
+        Object.defineProperty({ next: 'login' }, 'sentRefreshToken', {
+          get() {
+            throw new Error('SECRET');
+          },
+        }),
+    ],
+    [
+      'a decision whose next read throws',
       () =>
         Object.defineProperty({}, 'next', {
           get() {
@@ -206,10 +205,10 @@ describe('invalid decisions end the renewal unknown renewal-strategy, no step ta
         }),
     ],
     [
-      'a Proxy that throws',
+      'a Proxy decision whose reads throw',
       () =>
         new Proxy(
-          {},
+          { next: 'login' },
           {
             get() {
               throw new Error('SECRET');
@@ -237,13 +236,13 @@ describe('invalid decisions end the renewal unknown renewal-strategy, no step ta
       () => ({
         // biome-ignore lint/suspicious/noThenProperty: a thenable is the answer under test
         then(resolve: (value: unknown) => void) {
-          resolve({ next: 'refresh' });
+          resolve({ next: 'login', sentRefreshToken: 'keep' });
         },
       }),
     ],
     [
       'a native promise of an invalid answer',
-      () => Promise.resolve({ next: 'refresh' }),
+      () => Promise.resolve({ next: 'login', sentRefreshToken: 'keep' }),
     ],
     ['a rejecting native promise', () => Promise.reject(new Error('SECRET'))],
   ];
@@ -269,10 +268,6 @@ describe('invalid decisions end the renewal unknown renewal-strategy, no step ta
 
   it.each([
     ['missing', login()],
-    [
-      'not keep or discard',
-      () => ({ next: 'login', sentRefreshToken: 'drop' }),
-    ],
     ['on a stop, missing', () => ({ next: 'stop' })],
   ] as const)(
     'after a refresh that failed once sent, a sentRefreshToken %s',
@@ -288,6 +283,65 @@ describe('invalid decisions end the renewal unknown renewal-strategy, no step ta
       expect(provider.refreshes.items).toHaveLength(1);
     },
   );
+
+  it('a decision whose next getter changes its answer is read once: no refresh dispatched where none is possible', async () => {
+    const reads = { next: 0, ifCut: 0, sentRefreshToken: 0 };
+    const shifting = () => {
+      const decision = {};
+      Object.defineProperty(decision, 'next', {
+        enumerable: true,
+        get() {
+          reads.next += 1;
+          return reads.next === 1 ? 'login' : 'refresh';
+        },
+      });
+      Object.defineProperty(decision, 'ifCut', {
+        enumerable: true,
+        get() {
+          reads.ifCut += 1;
+          return 'discard';
+        },
+      });
+      Object.defineProperty(decision, 'sentRefreshToken', {
+        enumerable: true,
+        get() {
+          reads.sentRefreshToken += 1;
+          return undefined;
+        },
+      });
+      return decision;
+    };
+    const { strategy } = scripted([shifting]);
+    // No refresh token held: a refresh is not possible.
+    const provider = new ScriptedProvider({ renewal: strategy });
+    const renewed = provider.getTokens();
+    (await provider.logins.nth(1)).result.resolve(tokens(jwt('in'), 'S'));
+    await renewed;
+    expect(provider.refreshes.items).toHaveLength(0);
+    expect(provider.logins.items).toHaveLength(1);
+    // A login decision: its ifCut is never read.
+    expect(reads).toEqual({ next: 1, ifCut: 0, sentRefreshToken: 1 });
+  });
+
+  it('a type-valid login decision carrying a throwing ifCut getter: ifCut not read, the login taken', async () => {
+    let ifCutReads = 0;
+    const loginWithIfCut = () =>
+      Object.defineProperty({ next: 'login' }, 'ifCut', {
+        enumerable: true,
+        get() {
+          ifCutReads += 1;
+          throw new Error('SECRET');
+        },
+      });
+    const { strategy } = scripted([loginWithIfCut]);
+    const provider = new ScriptedProvider({ renewal: strategy });
+    const renewed = provider.getTokens();
+    (await provider.logins.nth(1)).result.resolve(tokens(jwt('in'), 'S'));
+    await renewed;
+    expect(ifCutReads).toBe(0);
+    expect(provider.refreshes.items).toHaveLength(0);
+    expect(provider.logins.items).toHaveLength(1);
+  });
 
   it('a refresh of the very token the same decision discards', async () => {
     const { strategy } = scripted([
@@ -318,19 +372,6 @@ describe('invalid decisions end the renewal unknown renewal-strategy, no step ta
     expect(provider.refreshes.items).toHaveLength(0);
     expect(provider.logins.items).toHaveLength(0);
     expect(provider.held().refresh).toBe('R');
-  });
-
-  it('no strategy at all (an untyped consumer): refused at construction, nothing built in its place (renewalRequired.test.ts covers every provider)', () => {
-    let thrown: unknown;
-    try {
-      seeded(undefined as unknown as IRenewalStrategy);
-    } catch (error) {
-      thrown = error;
-    }
-    expect(errorOf(thrown)).toMatchObject({
-      kind: 'configuration',
-      facts: { case: 'required-fields-missing', fields: ['renewal'] },
-    });
   });
 
   it('a refused decision is logged in fixed words', async () => {
@@ -790,7 +831,7 @@ describe('where a renewal starts', () => {
 });
 
 describe('logging', () => {
-  it('one debug line per decision, allowlisted values only', async () => {
+  it('one debug line per decision: trigger, moment and next only', async () => {
     const lines: unknown[][] = [];
     const logger: ILogger = {
       debug: (...args: unknown[]) => {
@@ -978,23 +1019,6 @@ describe('edge cases of a refresh step and of the delivery order', () => {
     expect(lines.map((line) => line[0])).not.toContain(
       '[BaseTokenProvider] Refresh failed',
     );
-  });
-
-  it('a refresh token in discarded is never dispatched, whatever canRefresh said', async () => {
-    const provider = seeded(refreshThenLogin());
-    const internals = provider as unknown as {
-      discarded: Set<string>;
-      canRefresh: () => boolean;
-    };
-    internals.discarded.add('R');
-    // A defect elsewhere that reported a refresh possible.
-    internals.canRefresh = () => true;
-    const error = errorOf(await rejectionOf(provider.getTokens()));
-    expect(error).toMatchObject({
-      kind: 'unknown',
-      facts: { operation: 'token-request' },
-    });
-    expect(provider.refreshes.items).toHaveLength(0);
   });
 
   it('a discard of a refresh token no longer held reports nothing', async () => {

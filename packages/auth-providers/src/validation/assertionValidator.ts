@@ -35,14 +35,10 @@ import {
   type Node,
   XMLSerializer,
 } from '@xmldom/xmldom';
-import {
-  misconfigured,
-  ownOptions,
-  requiredFieldsMissing,
-} from '../auth/configuration';
+import { misconfigured } from '../auth/configuration';
 import { parseStrictXml } from '../auth/strictXml';
 import { findDuplicateId, readRequiredId } from './documentIds';
-import { refuse, type SamlRefusal, several } from './samlRefusal';
+import { type MintedSaml, refuse, several } from './samlRefusal';
 import { resolveSignedElements, toPem } from './signedNode';
 import { parseXsdDateTime } from './xsdDateTime';
 
@@ -94,7 +90,7 @@ type SignedElement = 'response' | 'assertion';
  * The refusal when the signature does not cover the element each validator
  * requires — a rule each, so the words name that element.
  */
-const NOT_SIGNED: Record<SignedElement, () => SamlRefusal> = {
+const NOT_SIGNED: Record<SignedElement, () => MintedSaml> = {
   response: () =>
     authError['saml-assertion']({
       rule: 'response-not-signed',
@@ -151,28 +147,12 @@ export const createSignedAssertionValidator = (
   options: ShippedValidatorOptions,
 ): IAssertionValidator => brand(createValidator('assertion', options));
 
-/**
- * The configured certificates as a plain array, copied once; anything that
- * is not an array, or cannot be read as one (a Proxy that throws), is an
- * empty list — refused as no certificates.
- */
-function certificateList(value: unknown): unknown[] {
-  if (!Array.isArray(value)) return [];
-  try {
-    return Array.from(value as unknown[]);
-  } catch {
-    return [];
-  }
-}
-
 function createValidator(
   require: SignedElement,
   options: ShippedValidatorOptions,
 ): IAssertionValidator {
-  // Read once as own data, like every option: a hostile object throws
-  // nothing of its own, and a JavaScript caller past the type gets the
-  // configuration failure its mistake is (README, "Configuration errors").
-  const own = ownOptions<Partial<ShippedValidatorOptions>>(options);
+  // A typed copy, read once.
+  const own = { ...options };
   const skew = own.clockSkewMs ?? 0;
   if (!Number.isInteger(skew) || skew < 0) {
     // The value given is not echoed.
@@ -183,7 +163,9 @@ function createValidator(
       }),
     );
   }
-  const given = certificateList(own.idpCertificates);
+  // The list copied once: a later change to the consumer's array changes
+  // nothing.
+  const given = [...own.idpCertificates];
   if (given.length === 0) {
     throw misconfigured(
       authError.configuration({
@@ -200,10 +182,6 @@ function createValidator(
   // formatting mistake found then wastes their work, not ours.
   const certificates = given.map(toPem);
   const store = own.replayStore;
-  if (store === null || typeof store !== 'object') {
-    // The store is required (`defaultReplayStore`).
-    throw requiredFieldsMissing(['replayStore']);
-  }
 
   return {
     async validate(samlResponse, context): Promise<ValidatedAssertion> {
@@ -760,8 +738,8 @@ function requireOne(
   parent: Element,
   ns: string,
   local: string,
-  absent: () => SamlRefusal,
-  many: (found: number) => SamlRefusal,
+  absent: () => MintedSaml,
+  many: (found: number) => MintedSaml,
 ): Element {
   const found = directChildren(parent, ns, local);
   const [first] = found;

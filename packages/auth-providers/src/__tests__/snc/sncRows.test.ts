@@ -161,10 +161,10 @@ describe('SNCERR_INIT: the library could not be initialised', () => {
       expect(error).not.toHaveProperty('hint');
     },
   );
-  it('a custom locator without archs: the words without them', async () => {
+  it('a custom locator with no archs: the words without them', async () => {
     const p = new SncLogonProvider({
       partnerName: 'p:CN=SID',
-      locator: { locate: async () => ({ path: KRB }) as never },
+      locator: { locate: async () => ({ path: KRB, archs: [] }) },
       probes: [],
     });
     await expect(p.prepare()).resolves.toEqual({ ok: true });
@@ -225,6 +225,29 @@ describe('a locator that is not the shipped one', () => {
     expect(error).toMatchObject({
       kind: 'snc',
       facts: { problem: 'library-not-found' },
+      reason: 'no usable SNC library was found',
+      hint: HINT,
+    });
+    expect(error.facts).toEqual({ problem: 'library-not-found' });
+    expect(JSON.stringify(outcome)).not.toContain(MARKER);
+  });
+  it('an answer whose path getter throws → the locator failed: the fixed sentence', async () => {
+    const p = new SncLogonProvider({
+      partnerName: 'p:CN=SID',
+      locator: {
+        locate: async () => ({
+          get path(): string {
+            throw new Error(MARKER);
+          },
+          archs: [],
+        }),
+      },
+      probes: [],
+    });
+    const outcome = await p.prepare();
+    const error = mintedRefusal(outcome);
+    expect(error).toMatchObject({
+      kind: 'snc',
       reason: 'no usable SNC library was found',
       hint: HINT,
     });
@@ -367,24 +390,23 @@ describe('the shipped locator throws a minted failure', () => {
 });
 
 describe('the locator returned no path', () => {
-  it.each([
-    ['blank', { path: '  ', archs: ['x64'] }],
-    ['not a string', { path: 42 }],
-    ['nothing', undefined],
-  ])('%s → verbatim', async (_, found) => {
-    const p = new SncLogonProvider({
-      partnerName: 'p:CN=SID',
-      locator: { locate: async () => found as never },
-      probes: [],
-    });
-    const error = mintedRefusal(await p.prepare());
-    expect(error).toMatchObject({
-      kind: 'snc',
-      facts: { problem: 'locator-returned-no-path' },
-      reason: 'no usable SNC library was found: the locator returned no path',
-      hint: HINT,
-    });
-  });
+  it.each([['blank', { path: '  ', archs: ['x64'] }]])(
+    '%s → verbatim',
+    async (_, found) => {
+      const p = new SncLogonProvider({
+        partnerName: 'p:CN=SID',
+        locator: { locate: async () => found as never },
+        probes: [],
+      });
+      const error = mintedRefusal(await p.prepare());
+      expect(error).toMatchObject({
+        kind: 'snc',
+        facts: { problem: 'locator-returned-no-path' },
+        reason: 'no usable SNC library was found: the locator returned no path',
+        hint: HINT,
+      });
+    },
+  );
 });
 
 describe('establish before prepare', () => {
@@ -446,25 +468,6 @@ describe('the outer boundary names the SNC operation', () => {
       ok: true,
     });
   });
-  it('a locator answer whose path getter throws → resolving the SNC library', async () => {
-    const p = new SncLogonProvider({
-      partnerName: 'p:CN=SID',
-      locator: {
-        locate: async () =>
-          ({
-            get path(): string {
-              throw new Error(MARKER);
-            },
-          }) as never,
-      },
-      probes: [],
-    });
-    const outcome = await p.prepare();
-    expect(mintedRefusal(outcome).reason).toBe(
-      'the SNC provider failed while resolving the SNC library (unknown error)',
-    );
-    expect(JSON.stringify(outcome)).not.toContain(MARKER);
-  });
   it('a rejection whose error throws on every read → explaining the SNC refusal or neutral, never a rejection', async () => {
     const p = snc(machine());
     await p.prepare();
@@ -522,21 +525,6 @@ describe('the log lines', () => {
     );
     expect(JSON.stringify(lines)).not.toContain(MARKER);
   });
-  it('a rejecting async logger changes no answer and leaves nothing unhandled', async () => {
-    const reject = () => Promise.reject(new Error(MARKER));
-    const logger = {
-      debug: reject,
-      info: reject,
-      warn: reject,
-      error: reject,
-    } as never;
-    await expect(
-      snc(machine(), { sncLib: 'C:\\nope.dll', logger }).prepare(),
-    ).resolves.toMatchObject({ ok: false });
-    await expect(snc(machine(), { logger }).prepare()).resolves.toEqual({
-      ok: true,
-    });
-  });
 });
 
 describe('construction', () => {
@@ -544,12 +532,12 @@ describe('construction', () => {
     locator: new DefaultSncLibraryLocator(machine()),
     probes: [],
   });
-  it.each([' ', '', undefined, 42])(
+  it.each([' ', ''])(
     'partnerName %p → snc-partner-name-missing',
     (partnerName) => {
       let thrown: unknown;
       try {
-        new SncLogonProvider({ partnerName: partnerName as never, ...parts() });
+        new SncLogonProvider({ partnerName, ...parts() });
       } catch (error) {
         thrown = error;
       }
@@ -560,14 +548,14 @@ describe('construction', () => {
       });
     },
   );
-  it.each(['0', '4', '10', 'max', '', ' 9', 9])(
+  it.each(['0', '4', '10', 'max', '', ' 9'])(
     'qop %p → snc-qop-invalid, allowed snc-qop, the value never echoed',
     (qop) => {
       let thrown: unknown;
       try {
         new SncLogonProvider({
           partnerName: 'p:CN=SID',
-          qop: qop as never,
+          qop,
           ...parts(),
         });
       } catch (error) {
@@ -896,22 +884,12 @@ describe('review round 1', () => {
     locator: new DefaultSncLibraryLocator(machine()),
     probes: [],
   });
-  /** A config whose `getterKey` is an accessor that throws — set after the spread, so building it runs no getter. */
-  const construct = (config: object, getterKey?: string): unknown => {
+  const construct = (config: object): unknown => {
     const full: Record<string, unknown> = {
       partnerName: 'p:CN=SID',
       ...parts(),
       ...config,
     };
-    if (getterKey !== undefined) {
-      delete full[getterKey];
-      Object.defineProperty(full, getterKey, {
-        enumerable: true,
-        get() {
-          throw new Error(MARKER);
-        },
-      });
-    }
     try {
       new SncLogonProvider(full as never);
     } catch (error) {
@@ -919,32 +897,6 @@ describe('review round 1', () => {
     }
     return undefined;
   };
-  it.each([
-    ['a number', { myName: 42 }, undefined],
-    ['an object', { myName: { toString: () => MARKER } }, undefined],
-    ['a throwing getter', {}, 'myName'],
-  ])(
-    'myName as %s → configuration naming myName, never a TypeError',
-    (_, config, getterKey) => {
-      const thrown = construct(config, getterKey);
-      expect(configurationOf(thrown)).toEqual({
-        case: 'required-fields-missing',
-        fields: ['myName'],
-        reason: 'required configuration is missing: myName',
-      });
-      expect(JSON.stringify(thrown)).not.toContain(MARKER);
-    },
-  );
-  it('qop behind a throwing getter → snc-qop-invalid, never the getter’s error', () => {
-    const thrown = construct({}, 'qop');
-    expect(configurationOf(thrown).case).toBe('snc-qop-invalid');
-    expect(JSON.stringify(thrown)).not.toContain(MARKER);
-  });
-  it('partnerName behind a getter is not read: snc-partner-name-missing', () => {
-    const thrown = construct({}, 'partnerName');
-    expect(configurationOf(thrown).case).toBe('snc-partner-name-missing');
-    expect(JSON.stringify(thrown)).not.toContain(MARKER);
-  });
   it('a valid myName and an absent qop still construct', () => {
     expect(construct({ myName: ' p:CN=ME ' })).toBeUndefined();
     expect(construct({ qop: undefined })).toBeUndefined();

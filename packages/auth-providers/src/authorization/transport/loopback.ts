@@ -11,7 +11,6 @@ import type {
   IAnswerChannel,
   IAnswerTransport,
 } from '@mcp-abap-adt/interfaces-auth';
-import { ownOptions } from '../../auth/configuration';
 import { validatePort } from './binding';
 import { type ListenerPlan, openHttpListener } from './httpListener';
 
@@ -24,8 +23,8 @@ function listenerTransport(
   options: LoopbackOptions,
   plan: Omit<ListenerPlan, 'port'>,
 ): IAnswerTransport {
-  // Read once as own data: a hostile object throws nothing of its own.
-  const { port } = ownOptions<{ port?: unknown }>(options);
+  // A typed copy: the options are read once, here.
+  const { port } = { ...options };
   validatePort(port);
   return Object.freeze({
     label: 'browser' as const,

@@ -56,10 +56,8 @@ export function mtlsAlias(
   document: OidcDiscoveryDocument | null | undefined,
   endpoint: 'token_endpoint' | 'device_authorization_endpoint',
 ): string | undefined {
-  return nonEmptyString(
-    readSafely(document, 'mtls_endpoint_aliases'),
-    endpoint,
-  );
+  // The snapshot keeps an alias only as a non-empty string.
+  return document?.mtls_endpoint_aliases?.[endpoint];
 }
 
 const discoveryCache = new Map<string, OidcDiscoveryDocument>();

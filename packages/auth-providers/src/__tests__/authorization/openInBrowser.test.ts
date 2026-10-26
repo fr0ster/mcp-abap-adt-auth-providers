@@ -84,15 +84,6 @@ const occurrences = (text: string, part: string) => text.split(part).length - 1;
 const factsOf = (error: unknown) =>
   readFailure(error, 'browser-login').facts as Record<string, unknown>;
 
-function thrownBy(make: () => unknown): unknown {
-  try {
-    make();
-  } catch (error) {
-    return error;
-  }
-  return undefined;
-}
-
 const failing = () =>
   recordingBrowser({
     rejectWith: Object.assign(new Error(`spawn SECRET-PATH ${STATE}`), {
@@ -148,6 +139,35 @@ describe('a browser that fails is a presentation failure', () => {
           });
         },
       } as IBrowser,
+    ],
+    [
+      'answers a thenable whose then getter throws',
+      {
+        open: () => ({
+          // biome-ignore lint/suspicious/noThenProperty: the hostile answer under test
+          get then(): never {
+            throw Object.assign(new Error(`SECRET-PATH ${STATE}`), {
+              code: 'ENOENT',
+            });
+          },
+        }),
+      } as unknown as IBrowser,
+    ],
+    [
+      'answers a Proxy whose trap throws',
+      {
+        open: () =>
+          new Proxy(
+            {},
+            {
+              get: () => {
+                throw Object.assign(new Error(`SECRET-PATH ${STATE}`), {
+                  code: 'ENOENT',
+                });
+              },
+            },
+          ),
+      } as unknown as IBrowser,
     ],
   ] as const)(
     'a browser that %s: the URL prompted once on stderr, one failure line, the login waiting; a callback finishes it',
@@ -241,53 +261,5 @@ describe('a browser that fails is a presentation failure', () => {
     expect(
       lines.filter((line) => line.level === 'error' || line.level === 'warn'),
     ).toEqual([]);
-  });
-});
-
-describe('construction: no browser by name', () => {
-  it('without browser → configuration required-fields-missing (presentation)', () => {
-    expect(factsOf(thrownBy(() => openInBrowser({} as never)))).toEqual({
-      case: 'required-fields-missing',
-      fields: ['presentation'],
-    });
-  });
-
-  it.each([
-    ['chrome'],
-    ['system'],
-    ['auto'],
-    ['none'],
-    [42],
-    [null],
-    [{}],
-    [{ open: 'chrome' }],
-    [() => undefined],
-  ])(
-    'browser %j is no IBrowser → configuration invalid-value (presentation)',
-    (browser) => {
-      expect(
-        factsOf(thrownBy(() => openInBrowser({ browser } as never))),
-      ).toEqual({ case: 'invalid-value', fields: ['presentation'] });
-    },
-  );
-
-  it('an object whose open is a getter is read once, at construction, guarded', () => {
-    let reads = 0;
-    const browser = {
-      get open() {
-        reads += 1;
-        return async () => undefined;
-      },
-    };
-    expect(typeof openInBrowser({ browser }).present).toBe('function');
-    expect(reads).toBe(1);
-    const throwing = {
-      get open(): never {
-        throw new Error('SECRET');
-      },
-    };
-    expect(
-      factsOf(thrownBy(() => openInBrowser({ browser: throwing } as never))),
-    ).toEqual({ case: 'invalid-value', fields: ['presentation'] });
   });
 });

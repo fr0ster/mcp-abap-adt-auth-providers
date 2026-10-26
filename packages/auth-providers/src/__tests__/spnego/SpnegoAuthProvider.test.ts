@@ -83,62 +83,6 @@ function thrownBy(make: () => unknown): unknown {
 
 describe('construction', () => {
   const { source } = freshSource();
-  it('requires servicePrincipal', () => {
-    const c = configurationOf(
-      thrownBy(() => new SpnegoAuthProvider({ tokenSource: source } as never)),
-    );
-    expect(c).toMatchObject({
-      case: 'required-fields-missing',
-      fields: ['servicePrincipal'],
-    });
-  });
-  it('requires tokenSource', () => {
-    const c = configurationOf(
-      thrownBy(
-        () => new SpnegoAuthProvider({ servicePrincipal: SPN } as never),
-      ),
-    );
-    expect(c).toMatchObject({
-      case: 'required-fields-missing',
-      fields: ['tokenSource'],
-    });
-  });
-  it.each([
-    ['an object without token', {}],
-    ['token not a function', { token: 'x' }],
-    ['a function', () => undefined],
-    ['a string', 'source'],
-  ])('a tokenSource that is %s is missing', (_label, tokenSource) => {
-    const c = configurationOf(
-      thrownBy(
-        () =>
-          new SpnegoAuthProvider({
-            servicePrincipal: SPN,
-            tokenSource: tokenSource as never,
-          }),
-      ),
-    );
-    expect(c).toMatchObject({
-      case: 'required-fields-missing',
-      fields: ['tokenSource'],
-    });
-  });
-  it('a tokenSource whose token is a throwing getter is missing, its text nowhere', () => {
-    const tokenSource = Object.defineProperty({}, 'token', {
-      get() {
-        throw new Error('GETTER-SECRET');
-      },
-    });
-    const thrown = thrownBy(
-      () =>
-        new SpnegoAuthProvider({
-          servicePrincipal: SPN,
-          tokenSource: tokenSource as never,
-        }),
-    );
-    expect(configurationOf(thrown).fields).toEqual(['tokenSource']);
-    expect(JSON.stringify(thrown)).not.toContain('GETTER-SECRET');
-  });
   it.each(['HTTP@sap.example.com', 'HTTP@h', 'host-2@a-b.c', 'HTTP@A1.b2-c.D'])(
     'accepts %p',
     (servicePrincipal) => {
@@ -184,21 +128,6 @@ describe('construction', () => {
     if (servicePrincipal !== '') {
       expect(c.reason).not.toContain(servicePrincipal);
     }
-  });
-  it.each([
-    ['a number', 42],
-    ['an object', {}],
-  ])('refuses a servicePrincipal that is %s as invalid-value', (_l, value) => {
-    const c = configurationOf(
-      thrownBy(
-        () =>
-          new SpnegoAuthProvider({
-            servicePrincipal: value as never,
-            tokenSource: source,
-          }),
-      ),
-    );
-    expect(c.case).toBe('invalid-value');
   });
   it('kind is spnego', () => {
     expect(provider(source).kind).toBe('spnego');
@@ -263,22 +192,6 @@ describe('prepare()', () => {
       },
     ],
     ['a rejection', async () => Promise.reject(new Error('SOURCE-SECRET'))],
-    ['{ ok: true } without a token', async () => ({ ok: true })],
-    [
-      '{ ok: true } with a non-string token',
-      async () => ({ ok: true, token: 42 }),
-    ],
-    [
-      'an unknown problem',
-      async () => ({ ok: false, problem: 'SOURCE-SECRET' }),
-    ],
-    [
-      'a problem only the provider names',
-      async () => ({ ok: false, problem: 'ntlm-token' }),
-    ],
-    ['ok not a boolean', async () => ({ ok: 'yes', token: kerberos() })],
-    ['a non-object', async () => 'SOURCE-SECRET'],
-    ['nothing', async () => undefined],
     [
       'a thenable whose then throws',
       () => ({
@@ -337,12 +250,6 @@ describe('prepare()', () => {
     });
     await expect(provider(source).prepare()).resolves.toEqual({ ok: true });
     expect(calls).toBe(1);
-  });
-  it('a source whose token turned into a non-function later is unknown', async () => {
-    const source = { token: async () => ({ ok: true, token: kerberos() }) };
-    const p = provider(source as INegotiateTokenSource);
-    (source as { token: unknown }).token = 'gone';
-    expect(mintedRefusal(await p.prepare()).kind).toBe('unknown');
   });
   it('calls token with the source as this', async () => {
     const source = {
@@ -463,25 +370,6 @@ describe('authorize()', () => {
       operation: 'presenting-negotiate-token',
     });
     expect(JSON.stringify(error)).not.toContain('SECRET-IN-TARGET');
-  });
-  it('a target whose header answers a rejecting promise raises nothing', async () => {
-    const { source } = freshSource();
-    const unhandled: unknown[] = [];
-    const onUnhandled = (reason: unknown) => unhandled.push(reason);
-    process.on('unhandledRejection', onUnhandled);
-    try {
-      const target = {
-        header: () => Promise.reject(new Error('async target')),
-        cookies: () => undefined,
-      } as unknown as IRequestTarget;
-      await expect(provider(source).authorize(target)).resolves.toEqual({
-        ok: true,
-      });
-      await new Promise((resolve) => setImmediate(resolve));
-      expect(unhandled).toEqual([]);
-    } finally {
-      process.off('unhandledRejection', onUnhandled);
-    }
   });
 });
 

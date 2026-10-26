@@ -258,29 +258,6 @@ describe('the browser compositions: loopback, showUrl by default', () => {
       });
     },
   );
-
-  it.each([
-    'chrome',
-    'system',
-    'auto',
-    'edge',
-    'none',
-    'headless',
-    42,
-    null,
-    {},
-  ])('a browser of %j (no IBrowser) is refused at construction', (browser) => {
-    for (const make of [
-      browserCallbackStrategy,
-      oidcCallbackStrategy,
-      samlCallbackStrategy,
-    ]) {
-      expect(factsOf(thrownBy(() => make({ browser } as never)))).toEqual({
-        case: 'invalid-value',
-        fields: ['presentation'],
-      });
-    }
-  });
 });
 
 describe('the terminal compositions: showUrl, terminalPaste', () => {
@@ -324,26 +301,6 @@ describe('the terminal compositions: showUrl, terminalPaste', () => {
     });
     expect(redirects).toEqual(['']);
   });
-
-  it.each([
-    ['manualPasteStrategy', () => manualPasteStrategy({} as never)],
-    [
-      'manualSamlResponseStrategy',
-      () => manualSamlResponseStrategy({} as never),
-    ],
-    [
-      'externalCodeStrategy',
-      () => externalCodeStrategy({ provide: async () => 'c' } as never),
-    ],
-  ])(
-    '%s without redirectUri: required-fields-missing redirectUri at construction (C4)',
-    (_name, make) => {
-      expect(factsOf(thrownBy(make))).toEqual({
-        case: 'required-fields-missing',
-        fields: ['redirectUri'],
-      });
-    },
-  );
 
   it('a second authorize while one reads is busy', async () => {
     const strategy = manualPasteStrategy({
@@ -389,7 +346,7 @@ describe('the consumer’s code: externalCodeStrategy, staticCodeStrategy', () =
     expect(stderr.join('')).toBe('');
   });
 
-  it('externalCodeStrategy: an empty code is no-input; no provide is required-fields-missing provide', async () => {
+  it('externalCodeStrategy: an empty code is no-input', async () => {
     const strategy = externalCodeStrategy({
       redirectUri: REGISTERED,
       provide: async () => '',
@@ -401,13 +358,6 @@ describe('the consumer’s code: externalCodeStrategy, staticCodeStrategy', () =
           .catch((e: unknown) => e),
       ),
     ).toEqual({ outcome: 'no-input' });
-    expect(
-      factsOf(
-        thrownBy(() =>
-          externalCodeStrategy({ redirectUri: REGISTERED } as never),
-        ),
-      ),
-    ).toEqual({ case: 'required-fields-missing', fields: ['provide'] });
   });
 
   it('staticCodeStrategy never calls the builder and keeps its default redirect', async () => {

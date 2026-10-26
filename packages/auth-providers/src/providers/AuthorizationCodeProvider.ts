@@ -19,11 +19,7 @@ import {
   exchangeCodeForToken,
   getJwtAuthorizationUrl,
 } from '../auth/browserAuth';
-import {
-  misconfigured,
-  ownOptions,
-  requiredFieldsMissing,
-} from '../auth/configuration';
+import { misconfigured, requiredFieldsMissing } from '../auth/configuration';
 import { generatePkceChallenge, generatePkceVerifier } from '../auth/oidcPkce';
 import { refreshJwtToken } from '../auth/tokenRefresher';
 import { logQuietly } from '../auth/tokenRequest';
@@ -132,8 +128,8 @@ export class AuthorizationCodeProvider extends BaseTokenProvider {
   private config: AuthorizationCodeProviderConfig;
 
   constructor(options: AuthorizationCodeProviderConfig) {
-    // Read once as own data (a hostile object throws nothing of its own).
-    const config = ownOptions<AuthorizationCodeProviderConfig>(options);
+    // A typed copy: the options are read once, here.
+    const config = { ...options };
     super(config);
     this.config = config;
     this.logger = config.logger;
@@ -147,11 +143,12 @@ export class AuthorizationCodeProvider extends BaseTokenProvider {
       }),
     );
 
+    // Required strings: an empty one is missing.
     const missingFields: string[] = [];
-    if (!config.uaaUrl) {
+    if (config.uaaUrl === '') {
       missingFields.push('uaaUrl');
     }
-    if (!config.clientId) {
+    if (config.clientId === '') {
       missingFields.push('clientId');
     }
     // A strategy authenticates the client instead (never both: the base).
@@ -202,9 +199,9 @@ export class AuthorizationCodeProvider extends BaseTokenProvider {
     options: LoginFactoryOptions = {},
   ): AuthorizationCodeProvider {
     return new AuthorizationCodeProvider({
-      ...ownOptions<typeof config>(config),
+      ...config,
       authorization: browserCallbackStrategy({
-        signal: ownOptions<LoginFactoryOptions>(options).signal,
+        signal: options.signal,
       }),
     });
   }

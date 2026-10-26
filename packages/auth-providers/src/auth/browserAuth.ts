@@ -123,11 +123,11 @@ export function getJwtAuthorizationUrl(
   const oauthUrl = authConfig.uaaUrl;
   const clientid = authConfig.uaaClientId;
 
-  if (!oauthUrl || !clientid) {
-    // The names of what is missing.
+  if (oauthUrl === '' || clientid === '') {
+    // The names of what is empty.
     throw requiredFieldsMissing([
-      ...(oauthUrl ? [] : ['uaaUrl']),
-      ...(clientid ? [] : ['clientId']),
+      ...(oauthUrl === '' ? ['uaaUrl'] : []),
+      ...(clientid === '' ? ['clientId'] : []),
     ]);
   }
 

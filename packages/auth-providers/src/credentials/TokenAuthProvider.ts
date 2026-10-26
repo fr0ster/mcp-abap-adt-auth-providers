@@ -6,7 +6,6 @@ import type {
   ITokenRefresher,
 } from '@mcp-abap-adt/interfaces-auth';
 import { AuthProviderBase } from '../auth/AuthProviderBase';
-import { markHandled } from '../auth/handled';
 import { momentOf, readRejection, unknownRefusal } from '../auth/rejection';
 
 /**
@@ -52,8 +51,7 @@ export class TokenAuthProvider extends AuthProviderBase {
 
   protected async onAuthorize(request: IRequestTarget): Promise<AuthOutcome> {
     const token = await this.current();
-    // A target answering a rejecting promise raises nothing (rule 1).
-    markHandled(request.header('Authorization', `Bearer ${token}`));
+    request.header('Authorization', `Bearer ${token}`);
     this.presented = token;
     return OK;
   }

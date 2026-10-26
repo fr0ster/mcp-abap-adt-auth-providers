@@ -47,7 +47,12 @@ import type {
 } from '@mcp-abap-adt/interfaces-auth';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
 import { AuthProviderBase } from '../auth/AuthProviderBase';
-import { abortedFailure, throwIfAborted, untilAborted } from '../auth/attempt';
+import {
+  abortedFailure,
+  throwIfAborted,
+  untilAborted,
+  whenRejected,
+} from '../auth/attempt';
 import {
   assertCertificateMaterial,
   assertNotExpired,
@@ -55,14 +60,7 @@ import {
   certificateNotAfter,
   certificateThumbprint,
 } from '../auth/certificateMaterial';
-import {
-  misconfigured,
-  ownOptions,
-  requiredFieldsMissing,
-} from '../auth/configuration';
-import { isGrant } from '../auth/grants';
-import { markHandled, onAnswerRejection } from '../auth/handled';
-import { readSafely } from '../auth/knownCodes';
+import { misconfigured } from '../auth/configuration';
 import { rejectionCause } from '../auth/rejection';
 import { readBinding, type TokenBinding } from '../auth/tokenBinding';
 import {
@@ -70,7 +68,7 @@ import {
   type TokenRequestAuth,
   type TokenSiteOptions,
 } from '../auth/tokenRequest';
-import { needsSentDecision, readDecision } from '../renewal/decision';
+import { checkDecision, needsSentDecision } from '../renewal/decision';
 
 /**
  * The consumer's opt-in to naming the request's secrets in its debug line: with
@@ -109,10 +107,8 @@ export interface TokenProviderHooks extends TokenProviderDebug {
    * detached report is called and not awaited; its failure is logged in
    * fixed words and attributed to nothing. Nothing is reported twice.
    * Absent: nothing is persisted — a choice, not a default; the provider
-   * builds none (rule 7). Given, it must be an object whose `report` is a
-   * function, else it is refused at construction (`configuration`
-   * `invalid-value`, `persistence`). `refreshStatePersistence(write,
-   * options)` is the behaviour of `onTokens` before 6.0.0.
+   * builds none (rule 7). `refreshStatePersistence(write, options)` is the
+   * behaviour of `onTokens` before 6.0.0.
    */
   persistence?: ITokenPersistence | undefined;
   /**
@@ -127,10 +123,8 @@ export interface TokenProviderHooks extends TokenProviderDebug {
    * How every renewal of this provider proceeds — whether to refresh,
    * whether to log in, when to stop, what becomes of a refresh token that
    * was sent. Required, no default (rule 7): `refreshThenLogin()`
-   * is the behaviour before 6.0.0, `refreshOnly()` never logs in. A missing
-   * one, or one whose `next` is not a function, is refused at construction
-   * (`configuration` `required-fields-missing`, `renewal`) — the provider
-   * builds none of its own.
+   * is the behaviour before 6.0.0, `refreshOnly()` never logs in. The
+   * provider builds none of its own.
    */
   renewal: IRenewalStrategy;
 }
@@ -354,8 +348,8 @@ export abstract class BaseTokenProvider
   private grantRead?: { readonly grant: OAuth2GrantType | undefined };
 
   constructor(options: BaseConfig) {
-    // Read once as own data: a hostile object throws nothing of its own.
-    const config = ownOptions<BaseConfig>(options);
+    // A typed copy: the options are read once, here.
+    const config = { ...options };
     // Every moment of a token provider is its token request.
     super({
       prepare: 'token-request',
@@ -363,35 +357,10 @@ export abstract class BaseTokenProvider
       authorize: 'token-request',
       rejected: 'token-request',
     });
-    // Absent is a choice: nothing is persisted. Given, it must
-    // be an object whose `report` is a function, read without running a
-    // getter; anything else — `null` included — is refused here.
-    const persistence: unknown = config.persistence;
-    if (
-      persistence !== undefined &&
-      (persistence === null ||
-        typeof persistence !== 'object' ||
-        typeof readSafely(persistence, 'report') !== 'function')
-    ) {
-      throw misconfigured(
-        authError.configuration({
-          case: 'invalid-value',
-          fields: ['persistence'],
-        }),
-      );
-    }
-    this.persistence = persistence as ITokenPersistence | undefined;
-    // Required, no default (rule 7): an object whose `next` is a
-    // function, read without running a getter; anything else is refused here.
-    const renewal: unknown = config.renewal;
-    if (
-      renewal === null ||
-      typeof renewal !== 'object' ||
-      typeof readSafely(renewal, 'next') !== 'function'
-    ) {
-      throw requiredFieldsMissing(['renewal']);
-    }
-    this.renewal = renewal as IRenewalStrategy;
+    // Absent is a choice: nothing is persisted.
+    this.persistence = config.persistence;
+    // Required, no default (rule 7).
+    this.renewal = config.renewal;
     // `true` itself: `'true'`, `1` or an environment variable never opt in.
     this.authDebug = config.authDebug === true;
     if (config.clientAuthentication && config.clientSecret !== undefined) {
@@ -480,10 +449,9 @@ export abstract class BaseTokenProvider
     const generation = ++this.pinGeneration;
     try {
       const loaded = await strategy.tlsMaterial?.();
-      // Nothing, or not an object: no certificate to present at all.
-      if (!loaded || typeof loaded !== 'object') {
-        throw certificateFailure('incomplete');
-      }
+      // No loader: no certificate to present at all. What a loader answers
+      // is checked for completeness below.
+      if (loaded === undefined) throw certificateFailure('incomplete');
       const material = copyMaterial(loaded);
       assertCertificateMaterial(material);
       const pinned: PinnedCertificate = {
@@ -869,20 +837,13 @@ export abstract class BaseTokenProvider
 
   /**
    * This provider's grant, read once for its lifetime: `getAuthType()` is a
-   * subclass's and may throw, or answer anything — a rejecting native
-   * promise included, whose rejection is marked handled here, once; any
-   * other thenable is never called (fail closed). Only a grant on the list
-   * is kept.
+   * subclass's, typed to answer a grant, and may throw.
    */
   private readGrant(): OAuth2GrantType | undefined {
     if (!this.grantRead) {
       let grant: OAuth2GrantType | undefined;
       try {
-        const value: unknown = this.getAuthType();
-        if (isGrant(value)) grant = value;
-        // A plain native promise is marked handled; any other thenable is an
-        // unusable grant whose `then` is never called (fail closed).
-        else markHandled(value);
+        grant = this.getAuthType();
       } catch {
         // No grant: the failure names the operation alone.
       }
@@ -1026,10 +987,26 @@ export abstract class BaseTokenProvider
       // One generation per step: a step's commit would otherwise make every
       // later step of the same attempt look old.
       const generation = ++this.credentialGeneration;
-      const ended =
-        decision.next === 'refresh'
-          ? await this.refreshStep(decision.ifCut, attempt, generation, start)
-          : await this.loginStep(attempt, generation, start);
+      let ended: StepEnd;
+      switch (decision.next) {
+        case 'refresh':
+          ended = await this.refreshStep(
+            decision.ifCut,
+            attempt,
+            generation,
+            start,
+          );
+          break;
+        case 'login':
+          ended = await this.loginStep(attempt, generation, start);
+          break;
+        default: {
+          // Exhaustive by the compiler: no step is guessed for another value.
+          const unreachable: never = decision;
+          void unreachable;
+          throw this.strategyFailure();
+        }
+      }
       if ('usable' in ended) return ended.usable;
       steps.push(ended.outcome);
       lastRefusal = ended.refusal;
@@ -1062,39 +1039,30 @@ export abstract class BaseTokenProvider
     const { sentToken, signal } = own;
     this.deliverObservations();
     throwIfAborted(signal);
-    // What the contract promises; `readDecision` still checks every field.
-    let answer: ReturnType<IRenewalStrategy['next']>;
+    // The call, the adoption of its answer and every read of the decision
+    // share one failure boundary: a throw at any of them is the strategy's.
+    let decision: RenewalDecision | undefined;
     try {
-      const strategy = this.renewal;
-      const next = readSafely(strategy, 'next');
-      if (typeof next !== 'function') throw this.strategyFailure();
-      answer = Reflect.apply(next, strategy, [situation]);
-    } catch {
-      throw this.strategyFailure();
-    }
-    // A decision, a native promise or any thenable, adopted as `await`
-    // adopts it.
-    let decided: RenewalDecision;
-    try {
-      decided = await untilAborted(answer, signal);
+      decision = checkDecision(
+        await untilAborted(this.renewal.next(situation), signal),
+        { canRefresh: own.canRefresh, sentRequired: own.sentRequired },
+      );
+      // A refresh of the very token this decision discards cannot run.
+      if (
+        decision !== undefined &&
+        decision.next === 'refresh' &&
+        decision.sentRefreshToken === 'discard' &&
+        sentToken === this.refreshToken
+      ) {
+        decision = undefined;
+      }
     } catch {
       throwIfAborted(signal);
       throw this.strategyFailure();
     }
-    const decision = readDecision(decided, {
-      canRefresh: own.canRefresh,
-      sentRequired: own.sentRequired,
-    });
-    // A refresh of the very token this decision discards cannot run.
-    if (
-      decision === undefined ||
-      (decision.next === 'refresh' &&
-        decision.sentRefreshToken === 'discard' &&
-        sentToken === this.refreshToken)
-    ) {
-      throw this.strategyFailure();
-    }
-    // Allowlisted values only.
+    if (decision === undefined) throw this.strategyFailure();
+    // The typed values the provider holds — trigger, moment, next — and
+    // nothing else of the decision.
     const trigger = own.trigger;
     const moment = own.moment;
     const next = decision.next;
@@ -1165,18 +1133,14 @@ export abstract class BaseTokenProvider
 
   /**
    * Hands every pending observation to the strategy's `aborted`, once each.
-   * Guarded: a throw is logged and ignored, a native promise answered has
-   * its rejection marked handled, a foreign thenable's `then` is never
-   * called. Nothing waits on it.
+   * Guarded: a throw is logged and ignored; the answer is `void` and is
+   * ignored. Nothing waits on it.
    */
   private deliverObservations(): void {
     const pending = this.observations.splice(0);
     for (const observation of pending) {
       try {
-        const strategy = this.renewal;
-        const aborted = readSafely(strategy, 'aborted');
-        if (typeof aborted !== 'function') continue;
-        markHandled(Reflect.apply(aborted, strategy, [observation]));
+        this.renewal.aborted?.(observation);
       } catch (error) {
         logQuietly(() =>
           this.logger?.warn(
@@ -1204,14 +1168,9 @@ export abstract class BaseTokenProvider
   ): Promise<StepEnd> {
     const { signal } = attempt;
     const spent = this.refreshToken;
-    // The provider's own correctness, checked here whatever led to the step: an
-    // empty or discarded refresh token is never dispatched.
-    if (
-      typeof spent !== 'string' ||
-      spent === '' ||
-      this.discarded.has(spent)
-    ) {
-      // Unreachable: the decision was read against canRefresh.
+    if (spent === undefined) {
+      // Narrowing only: `canRefresh()` (read before the decision) is false
+      // without a usable refresh token, so this branch is unreachable.
       throw new AuthProviderFailure(
         authError.unknown(this.operationOf('token-request')),
       );
@@ -1234,9 +1193,9 @@ export abstract class BaseTokenProvider
     const cut = () => {
       if (sent && ifCut === 'discard') {
         this.discarded.add(spent);
-        // Detached (the attempt has aborted): it never rejects; marked
-        // handled all the same.
-        markHandled(this.commit(() => this.discard(spent, attempt)));
+        // Detached (the attempt has aborted): the package's own promise, its
+        // failure is dropped here.
+        this.commit(() => this.discard(spent, attempt)).catch(() => undefined);
       }
       this.observe({
         cause: start.cause,
@@ -1523,7 +1482,7 @@ export abstract class BaseTokenProvider
     const awaited = !attempt.signal.aborted;
     if (!awaited) {
       try {
-        onAnswerRejection(this.callReport(persistence, make(false)), (error) =>
+        whenRejected(this.callReport(persistence, make(false)), (error) =>
           this.detachedFailed(error),
         );
       } catch (error) {
@@ -1545,18 +1504,12 @@ export abstract class BaseTokenProvider
     }
   }
 
-  /** `persistence.report(report)`, read without running a getter. */
+  /** `persistence.report(report)`, called as typed. */
   private callReport(
     persistence: ITokenPersistence,
     report: PersistenceReport,
   ): unknown {
-    const method = readSafely(persistence, 'report');
-    if (typeof method !== 'function') {
-      throw new AuthProviderFailure(
-        authError.unknown(this.operationOf('persisting-tokens')),
-      );
-    }
-    return Reflect.apply(method, persistence, [report]);
+    return persistence.report(report);
   }
 
   /**
@@ -1585,14 +1538,14 @@ export abstract class BaseTokenProvider
 
   /**
    * The credential held, as a report carries it: `''` for no access token;
-   * the grant `named` when it is one on the list (a committed result's own),
+   * the grant `named` (a committed result's own),
    * else this provider's (`readGrant`).
    */
-  private reportedCredential(named?: unknown): ReportedCredential {
+  private reportedCredential(named?: OAuth2GrantType): ReportedCredential {
     return {
       authorizationToken: this.authorizationToken ?? '',
       tokenType: this.tokenType ?? 'jwt',
-      authType: isGrant(named) ? named : this.heldGrant(),
+      authType: named ?? this.heldGrant(),
       expiresAt: this.expiresAt,
     };
   }
@@ -1613,7 +1566,7 @@ export abstract class BaseTokenProvider
   /**
    * The grant a result built from what is held names: `getAuthType()` read
    * once for the provider's lifetime (`readGrant`), like every other path.
-   * Unreadable or off the list: the request fails as `unknown`, naming the
+   * Unreadable (it threw): the request fails as `unknown`, naming the
    * operation alone.
    */
   private heldGrant(): OAuth2GrantType {
@@ -1947,10 +1900,7 @@ export abstract class BaseTokenProvider
 
   /** How this provider's token rides on a request. Bearer by default. */
   protected applyToken(request: IRequestTarget, result: ITokenResult): void {
-    // A target answering a rejecting promise raises nothing (rule 1).
-    markHandled(
-      request.header('Authorization', `Bearer ${result.authorizationToken}`),
-    );
+    request.header('Authorization', `Bearer ${result.authorizationToken}`);
   }
 }
 

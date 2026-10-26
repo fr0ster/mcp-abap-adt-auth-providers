@@ -19,27 +19,23 @@
 
 import * as http from 'node:http';
 import type { AddressInfo } from 'node:net';
-import {
-  ANSWER_REFUSALS,
-  type AnswerJudge,
-  type AnswerRefusal,
-  type AnswerTransportOptions,
-  type AuthorizationAnswer,
-  type IAnswerChannel,
-  type IArmedChannel,
-  type PasteWords,
+import type {
+  AnswerJudge,
+  AnswerRefusal,
+  AnswerTransportOptions,
+  AuthorizationAnswer,
+  IAnswerChannel,
+  IArmedChannel,
+  PasteWords,
 } from '@mcp-abap-adt/interfaces-auth';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
 import { promptableUrl } from '../../auth/announce';
-import { ownOptions } from '../../auth/configuration';
 import {
   abortedLogin,
   failedLogin,
   loginFailure,
   portInUse,
 } from '../../auth/interactiveLogin';
-import { readSafely } from '../../auth/knownCodes';
-import { asAbortSignal } from '../../auth/signalledRequest';
 import { logQuietly } from '../../auth/tokenRequest';
 import { ANSWER_WORDS } from '../answerWords';
 import { oneValue } from '../protocol/readPaste';
@@ -78,12 +74,10 @@ export interface ListenerPlan {
 /** The urlencoded body of a POST: as the SAML route had it, 5 MB. */
 const FORM_LIMIT = 5 * 1024 * 1024;
 
-const REFUSALS: ReadonlySet<string> = new Set(ANSWER_REFUSALS);
-
 /** The open ended before an answer was accepted. */
 const callbackClosed = () => loginFailure({ outcome: 'callback-closed' });
 
-/** The options a listener reads, once, as own data. */
+/** The options a listener reads, once. */
 interface ListenerOptions {
   readonly signal: AbortSignal | undefined;
   readonly logger: ILogger | undefined;
@@ -92,41 +86,22 @@ interface ListenerOptions {
   readonly endpoint: string;
 }
 
-/** Paste words as own data strings, else none. */
-function pasteWordsOf(value: unknown): PasteWords | undefined {
-  const own = ownOptions<Partial<PasteWords>>(value);
-  return typeof own.prompt === 'string' && typeof own.instructions === 'string'
-    ? Object.freeze({ prompt: own.prompt, instructions: own.instructions })
-    : undefined;
-}
-
-/** The methods a redirect arrives with: `GET` / `POST` only. */
-function methodsOf(value: unknown): ReadonlySet<'GET' | 'POST'> {
-  const methods = new Set<'GET' | 'POST'>();
-  if (!Array.isArray(value)) return methods;
-  try {
-    for (const method of value as unknown[]) {
-      if (method === 'GET' || method === 'POST') methods.add(method);
-    }
-  } catch {
-    // An unreadable list: no method.
-  }
-  return methods;
+/** Paste words, copied once. */
+function pasteWordsOf(value: PasteWords): PasteWords {
+  return Object.freeze({
+    prompt: value.prompt,
+    instructions: value.instructions,
+  });
 }
 
 function readOptions(options: AnswerTransportOptions): ListenerOptions {
-  const own =
-    ownOptions<Partial<Record<keyof AnswerTransportOptions, unknown>>>(options);
-  const { signal, logger } = own;
+  const { signal, logger, paste } = options;
   return {
-    endpoint: checkedEndpoint(own.endpoint),
-    signal: asAbortSignal(signal),
-    logger:
-      logger !== null && typeof logger === 'object'
-        ? (logger as ILogger)
-        : undefined,
-    paste: own.paste === undefined ? undefined : pasteWordsOf(own.paste),
-    methods: methodsOf(own.callbackMethods),
+    endpoint: checkedEndpoint(options.endpoint),
+    signal,
+    logger,
+    paste: paste === undefined ? undefined : pasteWordsOf(paste),
+    methods: new Set(options.callbackMethods),
   };
 }
 
@@ -236,34 +211,24 @@ type ReadVerdict =
       readonly shown: string | undefined;
     };
 
-/** The judge's answer, each field read safely; `undefined` for a throw. */
+/**
+ * The judge's answer, every field read once; `undefined` for a throw. The
+ * judge's call and every read of its verdict share one boundary: a verdict
+ * whose field throws is a judge that throws.
+ */
 function judged(
   judge: AnswerJudge<unknown>,
   answer: AuthorizationAnswer,
 ): ReadVerdict | undefined {
-  let raw: unknown;
   try {
-    raw = judge(answer);
+    const raw = judge(answer);
+    const verdict = raw.verdict;
+    if (verdict === 'accept') return { verdict };
+    if (verdict === 'refuse') return { verdict, reason: raw.reason };
+    return { verdict, error: raw.error, shown: raw.shown };
   } catch {
     return undefined;
   }
-  const verdict = readSafely(raw, 'verdict');
-  if (verdict === 'accept') return { verdict };
-  if (verdict === 'refuse') {
-    const reason = readSafely(raw, 'reason');
-    return typeof reason === 'string' && REFUSALS.has(reason)
-      ? { verdict, reason: reason as AnswerRefusal }
-      : undefined;
-  }
-  if (verdict === 'end') {
-    const shown = readSafely(raw, 'shown');
-    return {
-      verdict,
-      error: readSafely(raw, 'error'),
-      shown: typeof shown === 'string' ? shown : undefined,
-    };
-  }
-  return undefined;
 }
 
 /** This attempt's judge and, with paste words, its form token. */
@@ -363,7 +328,7 @@ export async function openHttpListener<TReturn>(
   ): void => {
     const verdict = judged(current.judge, answer);
     if (verdict === undefined) {
-      // A judge that throws or answers no verdict: a fixed page, nothing of
+      // A judge that throws: a fixed page, nothing of
       // it anywhere; the login fails.
       sendHtml(res, 500, errorHtml('The callback could not be handled.'));
       const error = failedLogin(undefined);
@@ -552,7 +517,7 @@ export async function openHttpListener<TReturn>(
               `this one (ssh -L ${port}:${plan.tunnelsTo}:${port} <this machine>), ` +
               `then paste the answer at ${shownPage ?? 'the callback port on localhost'}`,
         arm(judge: AnswerJudge<unknown>): IArmedChannel {
-          if (typeof judge !== 'function' || armed !== undefined) {
+          if (armed !== undefined) {
             throw loginFailure({ outcome: 'failed' });
           }
           // A new form token per attempt, minted only when the page exists.

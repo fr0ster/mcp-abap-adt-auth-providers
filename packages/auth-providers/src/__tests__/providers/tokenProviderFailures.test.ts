@@ -1197,59 +1197,6 @@ describe('a refused token request through a moment', () => {
 });
 
 describe('the grant a failure names is read once, guarded', () => {
-  it('getAuthType() answering a foreign thenable: its then is never called, the grant unusable (fail closed)', async () => {
-    let thenCalls = 0;
-    const thenable = {
-      // biome-ignore lint/suspicious/noThenProperty: a foreign thenable is the input under test
-      then() {
-        thenCalls += 1;
-      },
-    };
-    class Thenable extends TestProvider {
-      protected override getAuthType(): OAuth2GrantType {
-        return thenable as never;
-      }
-    }
-    const p = new Thenable();
-    p.login.mockRejectedValue(new Error(MARKER));
-    const thrown = await rejectionOf(p.getTokens());
-    expectFailure(thrown);
-    expect((thrown as AuthProviderFailure).error.facts).toEqual({
-      operation: 'token-request',
-    });
-    await new Promise((resolve) => setTimeout(resolve, 20));
-    expect(thenCalls).toBe(0);
-  });
-
-  it('getAuthType() answering a rejecting promise: getTokens() rejects with a failure, no unhandled rejection, one read', async () => {
-    let calls = 0;
-    class Rejecting extends TestProvider {
-      protected override getAuthType(): OAuth2GrantType {
-        calls += 1;
-        return Promise.reject(new Error(MARKER)) as never;
-      }
-    }
-    const seen: unknown[] = [];
-    const listener = (reason: unknown) => seen.push(reason);
-    process.on('unhandledRejection', listener);
-    try {
-      const p = new Rejecting();
-      p.login.mockRejectedValue(new Error(MARKER));
-      for (let i = 0; i < 2; i += 1) {
-        const thrown = await rejectionOf(p.getTokens());
-        expectFailure(thrown);
-        expect((thrown as AuthProviderFailure).error.facts).toEqual({
-          operation: 'token-request',
-        });
-      }
-      await new Promise((resolve) => setTimeout(resolve, 50));
-    } finally {
-      process.off('unhandledRejection', listener);
-    }
-    expect(seen).toEqual([]);
-    expect(calls).toBe(1);
-  });
-
   it('getAuthType() throwing: the failure names the operation alone', async () => {
     class Throwing extends TestProvider {
       protected override getAuthType(): OAuth2GrantType {

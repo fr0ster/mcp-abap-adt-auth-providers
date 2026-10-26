@@ -17,7 +17,6 @@
  * })`, its route hint replaced by `remoteHint` when given.
  */
 
-import { authError } from '@mcp-abap-adt/auth-errors';
 import type {
   AnswerJudge,
   AnswerTransportOptions,
@@ -27,9 +26,6 @@ import type {
   IAuthorizationProtocol,
   IBrowser,
 } from '@mcp-abap-adt/interfaces-auth';
-import { misconfigured, ownOptions } from '../auth/configuration';
-import { readSafely } from '../auth/knownCodes';
-import { asAbortSignal } from '../auth/signalledRequest';
 import {
   type ComposedStrategy,
   composeAuthorization,
@@ -74,18 +70,16 @@ export interface CallbackStrategyOptions {
 }
 
 function presentationOf(
-  own: Partial<Record<keyof CallbackStrategyOptions, unknown>>,
+  own: CallbackStrategyOptions,
 ): IAuthorizationPresentation {
   const { browser } = own;
   // `openInBrowser` refuses anything that is no IBrowser — a name included.
-  return browser === undefined
-    ? showUrl()
-    : openInBrowser({ browser: browser as IBrowser });
+  return browser === undefined ? showUrl() : openInBrowser({ browser });
 }
 
 /**
  * `transport` with its channel's route hint replaced by `remoteHint(redirect)`;
- * a hint that throws or is no string is none.
+ * a hint that throws is none.
  */
 function withRouteHint(
   transport: IAnswerTransport,
@@ -98,10 +92,9 @@ function withRouteHint(
       use: (channel: IAnswerChannel) => Promise<TReturn>,
     ): Promise<TReturn> {
       return transport.open(options, (channel) => {
-        const redirectUri = readSafely(channel, 'redirectUri');
-        const waitingOn = readSafely(channel, 'waitingOn');
-        let routeHint: unknown;
-        if (typeof redirectUri === 'string') {
+        const { redirectUri, waitingOn } = channel;
+        let routeHint: string | undefined;
+        if (redirectUri !== undefined) {
           try {
             routeHint = remoteHint(redirectUri);
           } catch {
@@ -110,10 +103,9 @@ function withRouteHint(
         }
         return use(
           Object.freeze({
-            redirectUri:
-              typeof redirectUri === 'string' ? redirectUri : undefined,
-            waitingOn: typeof waitingOn === 'string' ? waitingOn : undefined,
-            routeHint: typeof routeHint === 'string' ? routeHint : undefined,
+            redirectUri,
+            waitingOn,
+            routeHint,
             arm: (judge: AnswerJudge<unknown>) => channel.arm(judge),
           }),
         );
@@ -122,37 +114,27 @@ function withRouteHint(
   });
 }
 
-function transportOf(
-  own: Partial<Record<keyof CallbackStrategyOptions, unknown>>,
-): IAnswerTransport {
+function transportOf(own: CallbackStrategyOptions): IAnswerTransport {
   const listener = loopback({
-    port: (own.port ?? DEFAULT_CALLBACK_PORT) as number,
+    port: own.port ?? DEFAULT_CALLBACK_PORT,
   });
   const { remoteHint } = own;
   if (remoteHint === undefined) return listener;
-  if (typeof remoteHint !== 'function') {
-    throw misconfigured(
-      authError.configuration({ case: 'invalid-value', fields: ['transport'] }),
-    );
-  }
-  return withRouteHint(listener, remoteHint as (redirectUri: string) => string);
+  return withRouteHint(listener, remoteHint);
 }
 
 function callbackComposition<T>(
   options: CallbackStrategyOptions,
   protocol: IAuthorizationProtocol<T>,
 ): ComposedStrategy<T> {
-  // Read once as own data: a hostile object throws nothing of its own.
-  const own =
-    ownOptions<Partial<Record<keyof CallbackStrategyOptions, unknown>>>(
-      options,
-    );
+  // A typed copy: the options are read once, here.
+  const own = { ...options };
   return composeAuthorization({
     presentation: presentationOf(own),
     transport: transportOf(own),
     protocol,
     endpoint: CALLBACK_ENDPOINT,
-    signal: asAbortSignal(own.signal),
+    signal: own.signal,
   });
 }
 

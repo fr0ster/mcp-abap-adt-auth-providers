@@ -115,7 +115,7 @@ describe('public exports — renewal strategies', () => {
     expect(typeof (surface as Record<string, unknown>)[name]).toBe('function');
   });
 
-  it.each(['readDecision', 'needsSentDecision'])(
+  it.each(['readDecision', 'checkDecision', 'needsSentDecision'])(
     'does not export the internal %s',
     (name) => {
       expect(name in surface).toBe(false);

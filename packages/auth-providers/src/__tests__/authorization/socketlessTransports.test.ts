@@ -115,22 +115,12 @@ describe('terminalPaste', () => {
     ['not a URL', 'localhost:61001/callback'],
     ['not http(s)', 'ftp://localhost/callback'],
     ['relative', '/callback'],
-    ['not a string', 42],
   ])('a redirectUri %s is refused at construction', (_why, redirectUri) => {
     expect(
       configurationOf(() => terminalPaste({ redirectUri } as never)),
     ).toMatchObject({
       kind: 'configuration',
       facts: { case: 'invalid-value', fields: ['redirectUri'] },
-    });
-  });
-
-  it('a read that is not a function is refused at construction', () => {
-    expect(
-      configurationOf(() => terminalPaste({ read: 'stdin' } as never)),
-    ).toMatchObject({
-      kind: 'configuration',
-      facts: { case: 'invalid-value', fields: ['read'] },
     });
   });
 
@@ -212,14 +202,6 @@ describe('terminalPaste', () => {
       kind: 'configuration',
       facts: { case: 'invalid-value', fields: ['protocol'] },
     });
-  });
-
-  it('a read answering no string ends no-input', async () => {
-    const read = async () => undefined as unknown as string;
-    const thrown = await answered(terminalPaste({ read }), passcode()).catch(
-      (error: unknown) => error,
-    );
-    expect(failureOf(thrown).facts).toEqual({ outcome: 'no-input' });
   });
 
   it('a read’s own failure passes as it is (no terminal)', async () => {
@@ -311,11 +293,7 @@ describe('terminalPaste', () => {
 });
 
 describe('consumerAnswer', () => {
-  it('requires receive; advertises the consumer’s redirect or none; label consumer', async () => {
-    expect(configurationOf(() => consumerAnswer({} as never))).toMatchObject({
-      kind: 'configuration',
-      facts: { case: 'required-fields-missing', fields: ['receive'] },
-    });
+  it('advertises the consumer’s redirect or none; label consumer', async () => {
     const transport = consumerAnswer({
       redirectUri: REDIRECT,
       receive: async () => 'the-code',
@@ -365,12 +343,7 @@ describe('consumerAnswer', () => {
     expect(failureOf(empty).facts).toEqual({ outcome: 'no-input' });
   });
 
-  it('a receive answering no string ends no-input; one that rejects passes its rejection on', async () => {
-    const none = await answered(
-      consumerAnswer({ receive: async () => undefined as unknown as string }),
-      oauthCode(),
-    ).catch((error: unknown) => error);
-    expect(failureOf(none).facts).toEqual({ outcome: 'no-input' });
+  it('a receive that rejects passes its rejection on', async () => {
     const own = new Error('the consumer’s own');
     const rejected = await answered(
       consumerAnswer({
@@ -403,13 +376,6 @@ describe('consumerAnswer', () => {
 });
 
 describe('consumerHandoff', () => {
-  it('requires provide', () => {
-    expect(configurationOf(() => consumerHandoff({} as never))).toMatchObject({
-      kind: 'configuration',
-      facts: { case: 'required-fields-missing', fields: ['provide'] },
-    });
-  });
-
   it('the presentation calls provide with the URL and signal; the transport awaits what it returned', async () => {
     const controller = new AbortController();
     const calls: [string, AbortSignal][] = [];

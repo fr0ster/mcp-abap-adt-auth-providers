@@ -1,5 +1,5 @@
 import { describe, expect, it } from '@jest/globals';
-import { isAuthProviderFailure, readFailure } from '@mcp-abap-adt/auth-errors';
+import { isAuthProviderFailure } from '@mcp-abap-adt/auth-errors';
 import {
   clientSecretBasic,
   clientSecretPost,
@@ -64,43 +64,6 @@ describe('clientSecretBasic', () => {
       },
     });
   });
-
-  it.each<[string, unknown]>([
-    ['no options', undefined],
-    ['no encoding', {}],
-    ['another encoding', { encoding: 'utf8' }],
-    ['a non-string encoding', { encoding: 1 }],
-  ])(
-    '%s: a configuration failure naming encoding, at construction (E19)',
-    (_label, options) => {
-      let thrown: unknown;
-      try {
-        // A JavaScript caller can pass anything.
-        (clientSecretBasic as (s: string, o: unknown) => unknown)(
-          'top-secret',
-          options,
-        );
-      } catch (error) {
-        thrown = error;
-      }
-      // The case, the field and the allowed set.
-      expect(readFailure(thrown, 'unfamiliar-error')).toMatchObject({
-        kind: 'configuration',
-        facts: {
-          case: 'basic-encoding-missing',
-          fields: ['encoding'],
-          allowed: 'basic-encoding',
-        },
-      });
-      expect(wordsOf(refusedWith(thrown, 'token-request'))).toEqual({
-        ok: false,
-        refusal: {
-          reason: "clientSecretBasic needs encoding: 'raw' or 'form'",
-          hint: 'check the provider configuration',
-        },
-      });
-    },
-  );
 
   it('presents no TLS material', () => {
     expect(

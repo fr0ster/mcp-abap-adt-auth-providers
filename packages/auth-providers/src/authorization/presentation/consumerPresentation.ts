@@ -8,12 +8,11 @@
  * ended.
  */
 
-import { authError, logFields, readFailure } from '@mcp-abap-adt/auth-errors';
+import { logFields, readFailure } from '@mcp-abap-adt/auth-errors';
 import type {
   IAuthorizationPresentation,
   PresentationContext,
 } from '@mcp-abap-adt/interfaces-auth';
-import { misconfigured, ownOptions } from '../../auth/configuration';
 import { logQuietly } from '../../auth/tokenRequest';
 import { promptContext } from './prompt';
 
@@ -47,23 +46,8 @@ const never = new AbortController().signal;
 export function consumerPresentation(
   options: ConsumerPresentationOptions,
 ): IAuthorizationPresentation {
-  // Read once as own data: a hostile object throws nothing of its own.
-  const own = ownOptions<{ show?: unknown; onFailure?: unknown }>(options);
-  if (typeof own.show !== 'function') {
-    throw misconfigured(
-      authError.configuration({
-        case: 'required-fields-missing',
-        fields: ['show'],
-      }),
-    );
-  }
-  if (own.onFailure !== undefined && typeof own.onFailure !== 'function') {
-    throw misconfigured(
-      authError.configuration({ case: 'invalid-value', fields: ['show'] }),
-    );
-  }
-  const show = own.show as ShowAuthorizationUrl;
-  const onFailure = own.onFailure as ShowAuthorizationUrl | undefined;
+  // A typed copy: the options are read once, here.
+  const { show, onFailure } = { ...options };
   return Object.freeze({
     async present(
       authorizationUrl: string,

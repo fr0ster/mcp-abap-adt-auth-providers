@@ -10,6 +10,73 @@ is handed over directly to a connection, or through
 `@mcp-abap-adt/auth-broker` for the stateful token API
 (`getTokens()`/`refreshTokens()`).
 
+## Migrating to 8.0.0 — static types first
+
+8.0.0 checks at runtime only what the TypeScript types cannot say. Options
+and collaborators are trusted to match their types. What comes from outside
+the type system is checked as before: a thrown value, a server's answer, a
+JWT, a SAML document, a file, the environment, registry output, terminal
+input, a callback request, GSS token bytes, a field a contract types
+`unknown`. No refusal, kind, case or operation is new; every refusal still
+produced keeps its words, facts and kind; the dependencies are unchanged.
+What a consumer on 7.x must do:
+
+- **Pass options and collaborators that type-check.** A TypeScript consumer
+  whose code compiles against 8.0.0 needs nothing else. A JavaScript
+  consumer, or one that casts, no longer gets a configuration refusal for a
+  value of the wrong type; what a constructor does with such a value is not
+  stated.
+- **Options are a typed copy.** Each constructor and factory copies its
+  options once, with a shallow spread, instead of reading their own data
+  properties: a getter on the options runs once, at creation (7.x read it as
+  absent). A later change to your object still changes nothing. See
+  [Error Handling](#error-handling).
+- **These configuration refusals are no longer produced.** The cases stay on
+  interfaces-auth's allowlist, so an exhaustive switch over `case` still
+  compiles:
+  - `basic-encoding-missing`: `clientSecretBasic` without `encoding`.
+  - `unsupported-sso-flow`: `SsoProviderFactory.create` switches exhaustively
+    over its typed `flow`.
+  - `required-fields-missing` for a field its type requires: `renewal` (every
+    token provider, `inBrowser`, `fromTerminal`, `toConsole`,
+    `SsoProviderFactory.create`); `servicePrincipal` and `tokenSource`
+    (`SpnegoAuthProvider`); `presentation`, `transport`, `protocol` and
+    `endpoint` (`composeAuthorization`); `presentation` (`openInBrowser`
+    without `browser`); `show`
+    (`consumerPresentation`); `receive` (`consumerAnswer`); `provide`
+    (`consumerHandoff`); `redirectUri` (`manualPasteStrategy`,
+    `manualSamlResponseStrategy`, `externalCodeStrategy`);
+    `assertionValidator` (both SAML providers); `replayStore` (the shipped
+    validators); an absent `uaaUrl` or `clientId` (`ClientCredentialsProvider`,
+    `AuthorizationCodeProvider`); an `SncLogonProvider` `myName` that is not a
+    string. An empty `uaaUrl` or `clientId` is still refused.
+  - `invalid-value` for a value of the wrong type: a `persistence` without a
+    callable `report`; `refreshStatePersistence`'s `write` not a function or
+    `onWriteFailure` not `'continue'` / `'fail'`; a part of an authorization
+    strategy without its methods, a transport `label` or a protocol
+    `redirect` off its union; a browser name where an `IBrowser` belongs;
+    `remoteHint` or `read` not a function; `show` for `consumerPresentation`'s
+    `onFailure` not a function; a `servicePrincipal`
+    or `redirectUri` that is not a string. A string that cannot be used is
+    still refused.
+  - `snc-partner-name-missing` for a `partnerName` that is not a string,
+    `validator-no-certificates` for `idpCertificates` absent or not an
+    array, `idp-certificate-invalid` for a certificate that is not a string.
+    An empty or blank `partnerName`, an empty `idpCertificates` and a
+    malformed certificate are still refused.
+- **An answer typed `void` is ignored.** A request target's `header()` /
+  `cookies()`, every `ILogger` method and the renewal strategy's `aborted()`
+  are typed `void`; 7.x adopted what they returned and contained a
+  rejection. A throw from the call is still handled. A rejecting promise
+  returned despite the `void` type now raises `unhandledRejection` in your
+  process: return nothing, or handle your own promise.
+- **A collaborator's answer is used as typed.** It is still adopted as
+  `await` adopts it (a thenable works), then used as its contract types it.
+  A throw while it is read — a getter of the answer — is handled like a
+  throw from the call. An answer of another shape is no longer refused for
+  its shape (a renewal decision with an unknown `next`, say); what follows
+  is not stated.
+
 ## Migrating to 6.0.0 — the error contract
 
 6.0.0 replaces how this package says what went wrong. Every refusal and every
@@ -37,7 +104,8 @@ your `AbortSignal` is the bound. What a consumer on 5.x must now do:
   (`renewal: IRenewalStrategy`). There is no default: a token provider (and
   `inBrowser`, `fromTerminal`, `toConsole`, `SsoProviderFactory.create`)
   constructed without one, or with one whose `next` is not a function, throws
-  `configuration` `required-fields-missing` with `fields: ['renewal']`.
+  `configuration` `required-fields-missing` with `fields: ['renewal']` (until
+  8.0.0: see [Migrating to 8.0.0](#migrating-to-800--static-types-first)).
   **`renewal: refreshThenLogin()` takes the steps 5.x took** — one refresh,
   then one login when there is no refresh token or the refresh failed;
   `refreshOnly()` never logs in. See [Renewal strategy](#renewal-strategy).
@@ -116,7 +184,9 @@ your `AbortSignal` is the bound. What a consumer on 5.x must now do:
   used: `<fields>`": an unparseable `authorizationUrl` (5.x
   `required-fields-missing`), a `persistence` without a callable `report`,
   `refreshStatePersistence`'s `onWriteFailure` or `write`, a part of an
-  authorization strategy that cannot be used (below).
+  authorization strategy that cannot be used (below). Since 8.0.0 a value of
+  the wrong type is not refused: see
+  [Migrating to 8.0.0](#migrating-to-800--static-types-first).
 - **Catch with `readFailure`, never `instanceof`.** Every throw of this
   package — a constructor's configuration fault, a factory's, a loader's,
   `getTokens()` / `refreshTokens()` — is an `AuthProviderFailure` (one
@@ -411,7 +481,8 @@ What a consumer on 5.x must now do:
 - **The terminal and consumer-code strategies need `redirectUri`.**
   `manualPasteStrategy()`, `manualSamlResponseStrategy()` and
   `externalCodeStrategy({ provide })` without `redirectUri` throw
-  `configuration` `required-fields-missing` naming `redirectUri`: pass the
+  `configuration` `required-fields-missing` naming `redirectUri` (until 8.0.0,
+  where the type requires it): pass the
   redirect registered with the identity provider (the ACS for SAML). Their
   `http://localhost:61001/callback` default is gone — it reached whatever held
   port 61001. `manualPasscodeStrategy`'s `redirectUri` is gone (it was
@@ -563,7 +634,7 @@ const provider = SncLogonProvider.forSecureLoginClient({
 `DefaultSncLibraryLocator(system, sncLib)` and `[SecureLoginClientProbe(system)]`
 — "this machine, library discovery, the Secure Login Client probe". `qop`
 defaults to `'9'` (maximum, one of `'1' | '2' | '3' | '8' | '9'`), and
-`myName` is sent only when set. A missing `partnerName` or another `qop` is
+`myName` is sent only when set. An empty or blank `partnerName` or another `qop` is
 thrown by the constructor as an `AuthProviderFailure` of kind `configuration`
 (`snc-partner-name-missing`, `snc-qop-invalid` — see the configuration errors
 table); the rejected `qop` value is never echoed.
@@ -731,7 +802,7 @@ system source, and `tokenSource` has no default (rule 7).
 | Option | |
 |---|---|
 | `servicePrincipal` | required: the GSS host-based name `service@host`, nothing else — exactly one `@`, the service an ASCII letter then letters, digits or `-`, the host ASCII labels joined by single dots. `HTTP/host@REALM` (the Kerberos form), whitespace and non-ASCII are `configuration` `invalid-value` naming `servicePrincipal`, never the value, thrown at construction. How the source turns it into its library's form is the source's |
-| `tokenSource` | required: an object with a `token(servicePrincipal, { signal })` function, else `required-fields-missing` |
+| `tokenSource` | required: an `INegotiateTokenSource`, whose `token(servicePrincipal, { signal })` is called only inside a moment |
 | `logger?` | an `ILogger`; a line carries fixed words and `logFields` of a refusal, never a token or the principal |
 | `signal?` | the first party attached (`attach(signal)` adds more), as `SncLogonProvider`: the source is handed a signal that aborts when every attached party has aborted; with none live a moment waits for the source. No timeout of this package's choosing |
 
@@ -748,9 +819,9 @@ The four moments:
 resolves `{ ok: true, token }` (base64, as it goes after `Negotiate `) or
 `{ ok: false, problem }` with a problem of a closed list; the provider mints the
 refusal, so no text a source holds can reach one. Its answer is awaited as
-`await` adopts it: a native promise, a promise library's or any thenable. A
-source that throws, rejects or answers anything of another shape is `unknown`
-with the moment's operation. A source's token is **checked before it is written**: NTLM — raw
+`await` adopts it: a native promise, a promise library's or any thenable, and
+read as its type says, narrowed by `ok`. A source that throws, rejects, or
+throws while its answer is read is `unknown` with the moment's operation. A source's token is **checked before it is written**: NTLM — raw
 (measured: a Windows runner with no domain and no ticket returns a raw NTLM
 NEGOTIATE message for `spnego`; that this is SSPI's fallback is Inference), or
 inside a SPNEGO token (Inference: built fixtures only) — is `ntlm-token`, and a token that is neither Kerberos nor NTLM, or malformed
@@ -1047,9 +1118,9 @@ live in these names and nowhere else; the parts have no default:
 | `externalCodeStrategy` | `consumerHandoff({ redirectUri, provide })` | (the same pair) | `oauthCode()` |
 
 Every one answers at `/callback` (the composition's `endpoint`), and every
-one returns a strategy with `dispose()`. A missing required `redirectUri` is
-`configuration` `required-fields-missing` naming `redirectUri`, at
-construction.
+one returns a strategy with `dispose()`. Where the table names `redirectUri`,
+its options type requires it; one that is not an absolute `http(s)` URL is
+`configuration` `invalid-value` naming `redirectUri`, at construction.
 
 Options of the three callback strategies:
 
@@ -1210,11 +1281,13 @@ settled.
 `endpoint` is required — the named strategies pass `'/callback'` — and must
 survive URL parsing unchanged (no encoded dot segment, backslash, space,
 control character, `?` or `#`) and not be one of the listener's own routes
-(`/`, `/submit`), else `configuration` `invalid-value` naming `endpoint`. A
-missing part is `required-fields-missing` naming `presentation`,
-`transport` or `protocol`. A protocol whose URL carries a redirect, over a
-transport that advertises none, is `required-fields-missing` naming
-`redirectUri`.
+(`/`, `/submit`), else `configuration` `invalid-value` naming `endpoint`. The
+three parts are required by the options type and used as their contracts
+type them. The composer reads the parts' descriptors once, when it composes —
+the transport's `label`, the protocol's `redirect`, `callbackMethods` and
+`paste` — and calls every part's methods only inside `authorize`. A protocol
+whose URL carries a redirect, over a transport that advertises none, is
+`required-fields-missing` naming `redirectUri`.
 
 **Presentations:**
 
@@ -1882,9 +1955,8 @@ Where neither fits, `clientSecretPost` sends both in the body. With `'raw'`, a c
 containing `:` cannot be carried at all (RFC 7617 splits at the first colon):
 each request is refused before anything is sent, *the client id contains ':',
 which raw Basic cannot carry*, hint *use encoding: 'form' or
-clientSecretPost*. A missing or other `encoding` is a configuration error
-(`basic-encoding-missing`, `allowed: 'basic-encoding'`) naming `encoding`,
-thrown by `clientSecretBasic` itself. A `401` is reported as the
+clientSecretPost*. `encoding` is required by the options type
+(`'raw' | 'form'`) and has no default: choose it for your server. A `401` is reported as the
 server's `401`: nothing is inferred from the secret's characters.
 
 #### `privateKeyJwt`'s `audience`
@@ -3353,9 +3425,13 @@ type RenewalDecision =
   would send.
 
 `next` may answer a decision or a promise of one — a native promise, a
-promise library's or any thenable, adopted as `await` adopts it. An answer
-that breaks one of these rules, a strategy that throws, or a promise that
-rejects ends the renewal with `unknown`, operation
+promise library's or any thenable, adopted as `await` adopts it. The decision
+is read as `RenewalDecision` types it, so `next` and `ifCut` are the type's;
+what the type cannot say is checked. A decision that breaks one of the rules
+above — `sentRefreshToken` required or absent, a `refresh` without
+`canRefresh`, a refresh that would discard what it sends — a strategy that
+throws, a decision whose read throws, or a promise that rejects ends the
+renewal with `unknown`, operation
 `renewal-strategy` ("the renewal strategy failed (unknown error)"): the step
 is not taken, and the steps already taken stay applied. The call to `next` is
 raced with the renewal's signal, so a strategy that never answers is ended by
@@ -3448,9 +3524,7 @@ persistence strategy: its renewal is your refresher, and it persists nothing.
 A token provider tells a **persistence strategy** — `persistence?:
 ITokenPersistence` (`@mcp-abap-adt/interfaces-auth` 7) — every change of its
 credentials, so a consumer can store them. It replaces `onTokens` (since
-6.0.0). Without it nothing is persisted; the provider builds none. Given, it
-must be an object whose `report` is a function, or the constructor throws
-`configuration` `invalid-value` naming `persistence`.
+6.0.0). Without it nothing is persisted; the provider builds none.
 
 ```typescript
 interface ITokenPersistence {
@@ -3562,9 +3636,8 @@ the stored refresh token without erasing the session.
   turns it into an `AuthProviderFailure` (`unknown`, `persisting-tokens`)
   before `getTokens()` / `refreshTokens()` answer; only your own code calling
   `report()` directly sees it raw.
-- Refused at construction, `configuration` `invalid-value`: `onWriteFailure`
-  missing or not `'continue'` / `'fail'` (naming `onWriteFailure`), `write`
-  not a function (naming `write`), both when both.
+- `write` and `onWriteFailure` (`'continue' | 'fail'`) are required by the
+  options type; the options are copied once, at creation.
 
 It holds the last new refresh token it could not write — it is part of your
 store.
@@ -3655,14 +3728,18 @@ its own signal). See [Persistence strategy](#persistence-strategy).
 **Your collaborators are awaited like any `await`.** What your own code answers — an
 authorization strategy, a renewal strategy, a persistence strategy, a certificate loader, a
 refresher, a validator, a presenter, a replay store, `cookieProvider`, an SNC locator, probe or
-system, an SPNego token source, a logger — is adopted as `await` adopts it, so a native promise,
+system, an SPNego token source — is adopted as `await` adopts it, so a native promise,
 Bluebird, Q or any Promises/A+ thenable works (since 7.1.0 the renewal strategy and the SPNego
-token source too). A collaborator answer that never
+token source too), and is then used as its contract types it. A collaborator that throws — from
+its method, or from a getter of what it answers — is classified like any throw. A collaborator answer that never
 settles is bounded only by your `AbortSignal`, through the parties above. `CertificateAuthProvider`
 and `TokenAuthProvider.from` take no signal: a loader or refresher of theirs that never settles
-hangs their moment, and bounding it is yours (inside the loader or refresher). Values that cross a
-trust boundary — a thrown value being classified, a logon target's answer — never have a foreign
-`then` called.
+hangs their moment, and bounding it is yours (inside the loader or refresher). **An answer typed
+`void` is ignored** (since 8.0.0): a request target's `header()` / `cookies()`, every `ILogger`
+method and the renewal strategy's `aborted()`. A throw from the call is handled as before; a
+value returned is neither awaited nor given a handler, so a rejecting promise returned despite
+the `void` type raises `unhandledRejection` in your process. A thrown value being classified and a
+logon target's answer (`relayOutcome`) never have a foreign `then` called.
 
 **No timer of the package's choosing.** Nothing here bounds a login, a token request, OIDC
 discovery or the SNC registry query with a timeout of its own; the only timer is the device poll's
@@ -3685,16 +3762,21 @@ an `IAuthProviderError` (`@mcp-abap-adt/interfaces-auth` 7), minted by
   Nothing else is thrown — not a strategy's, loader's or presenter's own
   error, which is classified, and not an `AxiosError`.
 
-**Options are read as own data.** Every exported constructor and factory
-reads its options object once, as a plain snapshot of its own data
-properties: an accessor is never run (a getter reads as absent), and a Proxy
-or a revoked Proxy that throws reads as absent too — so a hostile options
-object makes it throw only its own `configuration` failure (the required
-field it then finds missing), never what the object threw. A value that is
-not an object reads as empty. Collaborators in the options (a strategy, a
-logger, a validator) are kept by reference and called inside a moment's
-boundary. Give options as a plain object; a field defined by a getter is not
-seen.
+**Options are a typed copy.** Every exported constructor and factory copies
+its options object once, at creation (a shallow spread: a getter runs once,
+there), and reads only the copy, so a later change to your object changes
+nothing. Options and collaborators are trusted to match their TypeScript
+types: what a type already says — a required field, a method, a member of a
+union — is not checked again at runtime. What a type cannot say is checked
+and refused with a `configuration` failure: an empty string, a URL that does
+not parse, a port out of range, one of several optional fields, a
+combination of fields ([Configuration errors](#configuration-errors)).
+Collaborators in the options (a strategy, a logger, a validator) are kept by
+reference, and read and called only inside a moment's boundary — except an
+authorization strategy's parts, whose descriptors `composeAuthorization`
+reads when it composes (the transport's `label`; the protocol's `redirect`,
+`callbackMethods` and `paste`), and a SAML provider's `assertionValidator`,
+whose shipped-validator brand the constructor reads, guarded.
 
 **Errors outside the moments.** A strategy, a client-authentication
 strategy, a certificate loader or a presenter called **directly by you**,
@@ -3805,19 +3887,19 @@ answers it as its refusal.
 
 A value given but unusable is `invalid-value` (interfaces-auth 7), naming the
 field — "a configured value cannot be used: authorizationUrl" — never the
-value: an unparseable `authorizationUrl`, a malformed `persistence`,
-`refreshStatePersistence`'s `onWriteFailure` or `write`, a part of an
-authorization strategy that cannot be used (a browser name where an
-`IBrowser` belongs reads as `presentation`). A missing or unusable `renewal` is
-`required-fields-missing` naming `renewal`. **A known wording limit:** an `SncLogonProvider` `myName`
-that is not a string is still reported as `required-fields-missing` naming
-the field, although a value was given.
+value: an unparseable `authorizationUrl`, a `servicePrincipal` that is not
+`service@host`, a composition `endpoint` or `redirectUri` that cannot be
+used, a terminal over a protocol with no paste words, an authorization URL
+with no single `state`. Only what a type cannot say is refused here: a field
+the options type requires, a method a collaborator's type declares, or a
+member of a union is not checked at runtime (since 8.0.0, see
+[Migrating to 8.0.0](#migrating-to-800--static-types-first)).
 
 <!-- generated:refusal-table configuration -->
 | Thrown | `case` | `fields` | Reason | Hint |
 |---|---|---|---|---|
-| a required field or collaborator is missing: every token provider (and `inBrowser`, `fromTerminal`, `toConsole`, `SsoProviderFactory.create`) without a usable `renewal`, `ClientCredentialsProvider` and `AuthorizationCodeProvider` without `uaaUrl`, `clientId`, or `clientSecret` and no `clientAuthentication`, a SAML provider without `assertionValidator`, `SpnegoAuthProvider` without `servicePrincipal` or a `tokenSource` with a `token` function, a shipped validator without `replayStore`; an authorization strategy without a part or the redirect it needs — `manualPasteStrategy`, `manualSamlResponseStrategy` and `externalCodeStrategy` without `redirectUri`, a redirect protocol over a transport that advertises none (`redirectUri`), `composeAuthorization` without `presentation`, `transport`, `protocol` or `endpoint`, `openInBrowser` without `browser` (`presentation`), `consumerPresentation` without `show`, `consumerAnswer` without `receive`, `consumerHandoff` without `provide`; also an `SncLogonProvider` `myName` that is not a string (a known wording limit) | `required-fields-missing` | `<fields>` | required configuration is missing: `<fields>` | check the provider configuration |
-| a configured value that cannot be used: an `authorizationUrl` that does not parse (`AuthorizationCodeProvider` at construction and at login); a `persistence` that is not an object with a callable `report` (every token provider); a `servicePrincipal` that is not `service@host` (`SpnegoAuthProvider`: the Kerberos form `HTTP/host@REALM`, whitespace, non-ASCII or an empty side); `refreshStatePersistence` with `onWriteFailure` missing or not `'continue'` / `'fail'`, or a `write` that is not a function (each named); a part of an authorization strategy that cannot be used: an `endpoint` that URL parsing would change or that is `/` or `/submit` (`endpoint`), a `redirectUri` that is not an absolute `http(s)` URL (`redirectUri`), a `browser` without an `open` function — a browser name included (`presentation`), a part without its methods (`presentation`, `transport`, `protocol`), a `remoteHint` that is not a function (`transport`), a `read` that is not a function (`read`), an `onFailure` that is not a function (`show`), a terminal with a protocol that has no paste words (`protocol`); an authorization URL a protocol cannot read a `state` from — none, empty or repeated (`authorizationUrl`) | `invalid-value` | `<fields>` | a configured value cannot be used: `<fields>` |  |
+| a field the configuration needs is missing or empty: `ClientCredentialsProvider` and `AuthorizationCodeProvider` with an empty `uaaUrl` or `clientId`, or without `clientSecret` and no `clientAuthentication`; a redirect protocol over a transport that advertises no redirect (`redirectUri`) | `required-fields-missing` | `<fields>` | required configuration is missing: `<fields>` | check the provider configuration |
+| a configured value that cannot be used: an `authorizationUrl` that does not parse (`AuthorizationCodeProvider` at construction and at login); a `servicePrincipal` that is not `service@host` (`SpnegoAuthProvider`: the Kerberos form `HTTP/host@REALM`, whitespace, non-ASCII or an empty side); a part of an authorization strategy that cannot be used: an `endpoint` that URL parsing would change or that is `/` or `/submit` (`endpoint`), a `redirectUri` that is not an absolute `http(s)` URL (`redirectUri`), a terminal with a protocol that has no paste words (`protocol`); an authorization URL a protocol cannot read a `state` from — none, empty or repeated (`authorizationUrl`) | `invalid-value` | `<fields>` | a configured value cannot be used: `<fields>` |  |
 | a token provider constructed with both | `client-secret-beside-client-authentication` | `clientSecret` | clientSecret cannot be given beside clientAuthentication | give the secret to the clientAuthentication strategy, or drop the strategy |
 | a SAML provider constructed with `authorizationUrl` and no `acsUrl` | `saml-acs-required-with-authorization-url` | `acsUrl` | acsUrl is required when authorizationUrl is set: the ACS inside a pre-built SAML request cannot be read, so it must be declared | check the provider configuration |
 | a SAML provider constructed with `idpInitiated` and `authnRequestId` (`fields`: both), or a login that minted or declared a request ID (`fields`: `idpInitiated`) | `saml-idp-initiated-with-request-id` | `idpInitiated`, `authnRequestId` | SAML idpInitiated is true, but a request ID was also configured or minted: an IdP-initiated login sends no request | remove one of them |
@@ -3832,10 +3914,8 @@ the field, although a value was given.
 | an OIDC endpoint neither configured nor discovered (`authorizationEndpoint`, `tokenEndpoint` or `deviceAuthorizationEndpoint`) | `oidc-endpoint-missing` | `<fields>` | OIDC `<fields>` is required (configure it, or use discovery) | check the provider configuration |
 | `FileCertificateMaterialLoader`: PEM and PFX paths both given | `certificate-pem-and-pfx` | `certPath`, `certPfxPath` | certificate auth: provide either PEM (certPath + certKeyPath) or certPfxPath, not both | check the provider configuration |
 | `FileCertificateMaterialLoader`: neither a PFX nor a whole PEM pair | `certificate-files-missing` | `certPfxPath`, `certPath`, `certKeyPath` | certificate auth requires certPfxPath, or certPath and certKeyPath | check the provider configuration |
-| `clientSecretBasic` without `encoding: 'raw' \| 'form'` (`allowed: 'basic-encoding'`) | `basic-encoding-missing` | `encoding` | clientSecretBasic needs encoding: 'raw' or 'form' | check the provider configuration |
-| `SncLogonProvider` without `partnerName` | `snc-partner-name-missing` | `partnerName` | SncLogonProvider needs partnerName — the system's SNC name | check the provider configuration |
+| `SncLogonProvider` with an empty or blank `partnerName` | `snc-partner-name-missing` | `partnerName` | SncLogonProvider needs partnerName — the system's SNC name | check the provider configuration |
 | `SncLogonProvider` with another `qop` (`allowed: 'snc-qop'`) | `snc-qop-invalid` | `qop` | SncLogonProvider: qop must be one of 1, 2, 3, 8, 9 | check the provider configuration |
-| `SsoProviderFactory.create` with no provider for the protocol and flow | `unsupported-sso-flow` | — | unsupported SSO provider config: no provider for this protocol and flow | check the provider configuration |
 | a shipped validator with a `clockSkewMs` that is not a non-negative integer | `validator-clock-skew-invalid` | `clockSkewMs` | clockSkewMs must be a finite non-negative integer | check the provider configuration |
 | a shipped validator with no `idpCertificates` | `validator-no-certificates` | `idpCertificates` | idpCertificates must not be empty: nothing could be verified | check the provider configuration |
 | a shipped validator with a certificate that is neither PEM nor base64 DER, or no certificate | `idp-certificate-invalid` | `idpCertificates` | a configured IdP certificate is not a valid X.509 certificate in PEM or base64 DER | check the provider configuration |
@@ -3887,7 +3967,8 @@ inside auth-errors' `guard`, so whatever the body, a collaborator or a target
 throws becomes a minted refusal, and no moment ever rejects. A body answers
 `OK` or a refusal built with auth-errors' `authError` builders — an outcome
 that is not minted is answered `unknown`. The constructor names the
-`Operation` each moment's refusals carry.
+`Operation` each moment's refusals carry (`MomentOperations`), copied once,
+as typed, when the provider is constructed.
 
 ```typescript
 import { authError, OK } from '@mcp-abap-adt/auth-errors';
@@ -4610,8 +4691,10 @@ AUTH_LOG_LEVEL=debug npm test        # debug, info, warn, error
   endpoints, `authDebug` absent, `false` and `true` — that no line holds
   them or a control character.
 - **A throwing logger changes nothing**: every log call on a failure path is
-  guarded, and a logger answering a rejecting promise is handled, so the
-  failure the site throws is the one you get.
+  guarded, so the failure the site throws is the one you get. A logger's
+  methods are typed `void`: what one returns is ignored, and a rejecting
+  promise returned despite that raises `unhandledRejection` in your process
+  (since 8.0.0).
 
 ## Dependencies
 

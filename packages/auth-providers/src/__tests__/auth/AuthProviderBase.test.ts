@@ -1,8 +1,8 @@
 /**
  * The base owns the four moments, each inside auth-errors'
  * `guard`. Whatever a subclass controls — `grant()`, `getAuthType()`, a
- * `moments` getter, the operations it hands the constructor — is read inside
- * the boundary or validated once at construction, so every moment answers an
+ * `moments` getter — is read inside the boundary, and the operations it hands
+ * the constructor are typed, so every moment answers an
  * outcome (a minted refusal on failure) and never rejects.
  */
 import { describe, expect, it } from '@jest/globals';
@@ -143,44 +143,6 @@ describe('AuthProviderBase', () => {
     expect(factsOf(got.rejected)).toEqual({ operation: 'reading-rejection' });
   });
 
-  it('a moments object whose establish getter throws → establishing, the rest kept', async () => {
-    const moments = {
-      prepare: 'loading-certificate',
-      get establish(): never {
-        return boom();
-      },
-      authorize: 'writing-authorization-header',
-      rejected: 'reading-rejection',
-    } as MomentOperations;
-    const got = await everyMoment(new Throwing(moments));
-    expect(factsOf(got.establish)).toEqual({ operation: 'establishing' });
-    expect(factsOf(got.prepare)).toEqual({ operation: 'loading-certificate' });
-  });
-
-  it('an operation off the list → the fallback of its moment', async () => {
-    const moments = {
-      prepare: 'not-an-operation',
-      establish: 'presenting-certificate',
-      authorize: 'writing-authorization-header',
-      rejected: 'reading-rejection',
-    } as unknown as MomentOperations;
-    const got = await everyMoment(new Throwing(moments));
-    expect(factsOf(got.prepare)).toEqual({ operation: 'preparing' });
-  });
-
-  it('a moments object that is not one, or whose every read throws → all four fallbacks', async () => {
-    const hostile = new Proxy({}, { get: boom, has: boom, ownKeys: boom });
-    for (const moments of [null, hostile, 'x']) {
-      const got = await everyMoment(
-        new Throwing(moments as unknown as MomentOperations),
-      );
-      expect(factsOf(got.prepare)).toEqual({ operation: 'preparing' });
-      expect(factsOf(got.establish)).toEqual({ operation: 'establishing' });
-      expect(factsOf(got.authorize)).toEqual({ operation: 'authorizing' });
-      expect(factsOf(got.rejected)).toEqual({ operation: 'reading-rejection' });
-    }
-  });
-
   it('the operations are captured at construction: changing the object later changes nothing', async () => {
     const moments = { ...OPERATIONS };
     const p = new Throwing(moments);
@@ -216,7 +178,6 @@ describe('the grant is read once per moment, inside the boundary', () => {
   }
 
   const grantAnswers: Array<[string, () => unknown]> = [
-    ['a rejecting promise', () => Promise.reject(new Error(MARKER))],
     [
       'a throw',
       () => {
@@ -266,13 +227,8 @@ describe('the grant is read once per moment, inside the boundary', () => {
       expect(seen).toEqual([]);
       expect(calls).toBe(4);
       for (const outcome of outcomes) {
-        // A throwing grant() refuses the moment; a rejecting promise is no
-        // grant, and the body decides.
-        if (body === 'throws' || answer === grantAnswers[1]?.[1]) {
-          expect(factsOf(outcome)).not.toHaveProperty('grant');
-        } else {
-          expect(outcome).toEqual({ ok: true });
-        }
+        // A throwing grant() refuses the moment, whatever the body does.
+        expect(factsOf(outcome)).not.toHaveProperty('grant');
       }
     },
   );

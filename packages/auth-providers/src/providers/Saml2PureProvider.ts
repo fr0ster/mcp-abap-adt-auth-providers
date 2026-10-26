@@ -13,8 +13,6 @@ import type {
 } from '@mcp-abap-adt/interfaces-auth';
 import { AUTH_TYPE_USER_TOKEN } from '@mcp-abap-adt/interfaces-auth';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
-import { ownOptions } from '../auth/configuration';
-import { markHandled } from '../auth/handled';
 import { samlCallbackStrategy } from '../strategies';
 import { createSignedResponseValidator } from '../validation/assertionValidator';
 import { validateAssertion } from '../validation/samlRefusal';
@@ -57,8 +55,8 @@ export class Saml2PureProvider extends BaseTokenProvider {
   private readonly validator: IAssertionValidator;
 
   constructor(options: Saml2PureProviderConfig) {
-    // Read once as own data (a hostile object throws nothing of its own).
-    const config = ownOptions<Saml2PureProviderConfig>(options);
+    // A typed copy: the options are read once, here.
+    const config = { ...options };
     super(config);
     // A pre-built URL with no declared ACS cannot be verified against whatever
     // the strategy binds, so it is refused here rather than at login time.
@@ -85,12 +83,11 @@ export class Saml2PureProvider extends BaseTokenProvider {
     trust: SamlTrust,
     options: LoginFactoryOptions = {},
   ): Saml2PureProvider {
-    // Read once as own data, like every option (a hostile object throws
-    // nothing of its own).
+    // A typed copy, like every option: read once, here.
     return new Saml2PureProvider({
-      ...ownOptions<typeof config>(config),
+      ...config,
       authorization: samlCallbackStrategy({
-        signal: ownOptions<LoginFactoryOptions>(options).signal,
+        signal: options.signal,
       }),
       assertionValidator: createSignedResponseValidator({
         ...samlTrustOf(trust),
@@ -142,7 +139,6 @@ export class Saml2PureProvider extends BaseTokenProvider {
     request: IRequestTarget,
     result: ITokenResult,
   ): void {
-    // A target answering a rejecting promise raises nothing (rule 1).
-    markHandled(request.cookies(result.authorizationToken));
+    request.cookies(result.authorizationToken);
   }
 }

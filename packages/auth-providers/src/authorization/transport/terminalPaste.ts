@@ -16,15 +16,18 @@ import type {
   IAnswerChannel,
   IAnswerTransport,
   IArmedChannel,
+  PasteWords,
 } from '@mcp-abap-adt/interfaces-auth';
 import { untilAborted } from '../../auth/attempt';
-import { misconfigured, ownOptions } from '../../auth/configuration';
-import { abortedLogin, loginFailure } from '../../auth/interactiveLogin';
-import { readSafely } from '../../auth/knownCodes';
-import { asAbortSignal } from '../../auth/signalledRequest';
+import { misconfigured } from '../../auth/configuration';
+import {
+  abortedLogin,
+  failedLogin,
+  loginFailure,
+} from '../../auth/interactiveLogin';
 import { ANSWER_WORDS } from '../answerWords';
 import { consumerRedirect } from './consumerRedirect';
-import { endFailure, verdictOf } from './endVerdict';
+import { endFailure } from './endVerdict';
 
 /** Reads one line for `prompt`; stops and releases what it holds at `signal`. */
 export type TerminalRead = (
@@ -77,36 +80,51 @@ const adopt = <T>(run: () => T | Promise<T>): Promise<T> =>
   new Promise<T>((resolve) => resolve(run()));
 
 /** The prompt of the protocol's paste words; without them, no terminal. */
-function promptOf(value: unknown): string {
-  const prompt = readSafely(value, 'prompt');
-  if (typeof prompt === 'string') return prompt;
+function promptOf(paste: PasteWords | undefined): string {
+  if (paste !== undefined) return paste.prompt;
   throw misconfigured(
     authError.configuration({ case: 'invalid-value', fields: ['protocol'] }),
   );
 }
 
+/** What the terminal does with one verdict. */
+type TerminalStep =
+  | { readonly step: 'accept' }
+  | { readonly step: 'end'; readonly error: unknown }
+  | { readonly step: 'refuse'; readonly reason: AnswerRefusal };
+
+/**
+ * The judge's verdict on one pasted line, every field read once. The call
+ * and every read of its verdict share one boundary: a verdict whose field
+ * throws is a judge that throws — `failed`, nothing of the throw kept.
+ */
+function stepOf(judge: AnswerJudge<unknown>, text: string): TerminalStep {
+  try {
+    const verdict = judge({ via: 'terminal', text });
+    const kind = verdict.verdict;
+    if (kind === 'accept') return { step: 'accept' };
+    if (kind === 'end') return { step: 'end', error: verdict.error };
+    return { step: 'refuse', reason: verdict.reason };
+  } catch {
+    throw failedLogin(undefined);
+  }
+}
+
 export function terminalPaste(
   options: TerminalPasteOptions = {},
 ): IAnswerTransport {
-  // Read once as own data: a hostile object throws nothing of its own.
-  const own = ownOptions<Record<keyof TerminalPasteOptions, unknown>>(options);
+  // A typed copy: the options are read once, here.
+  const own = { ...options };
   const redirectUri = consumerRedirect(own.redirectUri);
-  if (own.read !== undefined && typeof own.read !== 'function') {
-    throw misconfigured(
-      authError.configuration({ case: 'invalid-value', fields: ['read'] }),
-    );
-  }
-  const read = (own.read as TerminalRead | undefined) ?? readFromTerminal;
+  const read = own.read ?? readFromTerminal;
   return Object.freeze({
     label: 'manual' as const,
     async open<TReturn>(
       openOptions: AnswerTransportOptions,
       use: (channel: IAnswerChannel) => Promise<TReturn>,
     ): Promise<TReturn> {
-      const given =
-        ownOptions<Record<keyof AnswerTransportOptions, unknown>>(openOptions);
-      const pastePrompt = promptOf(given.paste);
-      const signal = asAbortSignal(given.signal);
+      const pastePrompt = promptOf(openOptions.paste);
+      const signal: AbortSignal | undefined = openOptions.signal;
       if (signal?.aborted) throw abortedLogin('manual');
       // The read stops at the signal and at the end of this open.
       const closing = new AbortController();
@@ -126,41 +144,29 @@ export function terminalPaste(
           () => undefined,
           () => undefined,
         );
-        const text = await line;
-        if (typeof text !== 'string') {
-          throw loginFailure({ outcome: 'no-input' });
-        }
-        return text;
+        return await line;
       };
 
       const wait = async (judge: AnswerJudge<unknown>): Promise<void> => {
         let prompt = pastePrompt;
         for (;;) {
           const text = await ask(prompt);
-          const verdict = verdictOf(judge, { via: 'terminal', text });
-          const kind = readSafely(verdict, 'verdict');
-          if (kind === 'accept') return;
-          if (kind === 'end') {
+          const step = stepOf(judge, text);
+          if (step.step === 'accept') return;
+          if (step.step === 'end') {
             // `shown` is for a listener's escaped page only: dropped here.
-            throw endFailure(readSafely(verdict, 'error'));
+            throw endFailure(step.error);
           }
-          const reason = readSafely(verdict, 'reason');
-          if (
-            kind !== 'refuse' ||
-            typeof reason !== 'string' ||
-            !Object.hasOwn(ANSWER_WORDS, reason)
-          ) {
-            throw loginFailure({ outcome: 'failed' });
-          }
+          const { reason } = step;
           // The reason's words, then the prompt again.
-          prompt = `${ANSWER_WORDS[reason as AnswerRefusal]} ${pastePrompt}`;
+          prompt = `${ANSWER_WORDS[reason]} ${pastePrompt}`;
         }
       };
 
       const channel: IAnswerChannel = Object.freeze({
         redirectUri,
         arm(judge: AnswerJudge<unknown>): IArmedChannel {
-          if (typeof judge !== 'function' || armed) {
+          if (armed) {
             throw loginFailure({ outcome: 'failed' });
           }
           armed = true;

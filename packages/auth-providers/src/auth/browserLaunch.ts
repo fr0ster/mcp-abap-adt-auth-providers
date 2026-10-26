@@ -38,7 +38,6 @@ import * as child_process from 'node:child_process';
 import { win32 } from 'node:path';
 import { AuthProviderFailure, classify } from '@mcp-abap-adt/auth-errors';
 import { abortedFailure, throwIfAborted, untilAborted } from './attempt';
-import { asAbortSignal } from './signalledRequest';
 
 /** One way to start a browser: a program and its arguments. */
 export interface LaunchCommand {
@@ -280,25 +279,6 @@ function launchFailure(error: unknown): AuthProviderFailure {
 }
 
 /**
- * `signal` when it is a real `AbortSignal` whose state and listeners can be
- * used, else `opening-browser` in fixed words. Total.
- */
-function usableSignal(signal: unknown): AbortSignal {
-  const live = asAbortSignal(signal);
-  if (live === undefined) throw launchFailure(undefined);
-  try {
-    // A real signal answers these; an object made from its prototype throws.
-    void live.aborted;
-    const probe = () => undefined;
-    live.addEventListener('abort', probe);
-    live.removeEventListener('abort', probe);
-  } catch {
-    throw launchFailure(undefined);
-  }
-  return live;
-}
-
-/**
  * Opens `url` with one fixed launch — the one every shipped `IBrowser` makes:
  *
  * - only an `http(s)` URL is launched, as its serialisation; anything else
@@ -318,11 +298,7 @@ export async function launchBrowser(
   url: string,
   signal: AbortSignal,
 ): Promise<void> {
-  // The signal is read before anything starts: no signal, or no real
-  // AbortSignal (a plain caller's object), is refused in fixed words, and
-  // nothing is launched.
-  const live = usableSignal(signal);
-  throwIfAborted(live);
+  throwIfAborted(signal);
   // Only an http(s) URL, as its serialisation, is ever launched: it may
   // come from discovery or configuration.
   const href = launchableUrl(url);
@@ -332,10 +308,10 @@ export async function launchBrowser(
     runLauncher(launch(href), {
       onSuccess: resolve,
       onFailure: (error) =>
-        reject(live.aborted ? abortedFailure() : launchFailure(error)),
-      stopped: () => live.aborted,
-      abandoned: live,
+        reject(signal.aborted ? abortedFailure() : launchFailure(error)),
+      stopped: () => signal.aborted,
+      abandoned: signal,
     });
   });
-  await untilAborted(launched, live);
+  await untilAborted(launched, signal);
 }

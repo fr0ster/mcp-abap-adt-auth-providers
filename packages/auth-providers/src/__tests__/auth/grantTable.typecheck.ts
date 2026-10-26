@@ -1,8 +1,7 @@
 /**
- * Type test, compiled by `test:check` and run by nothing: `GrantTable`, the
- * type `grants.ts`'s grant list satisfies, takes every grant type and no
- * other — a list missing one, or naming one that does not exist, does not
- * compile.
+ * Type test, compiled by `test:check` and run by nothing: `GrantTable`
+ * (`grants.ts`) takes every grant type and no other — a list missing one,
+ * or naming one that does not exist, does not compile.
  */
 import type { GrantTable } from '../../auth/grants';
 

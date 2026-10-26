@@ -30,8 +30,7 @@ import type {
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
 import { AuthProviderBase } from '../auth/AuthProviderBase';
 import { throwIfAborted, untilAborted } from '../auth/attempt';
-import { misconfigured, ownOptions } from '../auth/configuration';
-import { readSafely } from '../auth/knownCodes';
+import { misconfigured } from '../auth/configuration';
 import { readRejection } from '../auth/rejection';
 import { logQuietly } from '../auth/tokenRequest';
 import {
@@ -76,29 +75,6 @@ export interface SncLogonProviderConfig {
   signal?: AbortSignal | undefined;
 }
 
-/**
- * A configured field, read once as an own data property: an accessor (a
- * getter is never run), a Proxy trap that throws or a non-object config is
- * unreadable; an absent property reads as `undefined`.
- */
-function ownData(
-  object: unknown,
-  key: string,
-): { readable: true; value: unknown } | { readable: false } {
-  if (object === null || typeof object !== 'object') {
-    return { readable: false };
-  }
-  try {
-    const descriptor = Object.getOwnPropertyDescriptor(object, key);
-    if (descriptor === undefined) return { readable: true, value: undefined };
-    return 'value' in descriptor
-      ? { readable: true, value: descriptor.value }
-      : { readable: false };
-  } catch {
-    return { readable: false };
-  }
-}
-
 export class SncLogonProvider extends AuthProviderBase {
   readonly kind = 'snc';
   private readonly partnerName: string;
@@ -121,11 +97,9 @@ export class SncLogonProvider extends AuthProviderBase {
       authorize: 'authorizing-snc-request',
       rejected: 'explaining-snc-refusal',
     });
-    const given = ownData(config, 'partnerName');
-    const partnerName =
-      given.readable && typeof given.value === 'string'
-        ? given.value.trim()
-        : '';
+    // A typed copy: the options are read once, here.
+    const own = { ...config };
+    const partnerName = own.partnerName.trim();
     if (!partnerName) {
       throw misconfigured(
         authError.configuration({
@@ -134,8 +108,7 @@ export class SncLogonProvider extends AuthProviderBase {
         }),
       );
     }
-    const qopRead = ownData(config, 'qop');
-    const qop = qopRead.readable ? (qopRead.value ?? '9') : undefined;
+    const qop = own.qop ?? '9';
     if (!isSncQop(qop)) {
       // The value is never echoed; `allowed` names the set.
       throw misconfigured(
@@ -146,37 +119,14 @@ export class SncLogonProvider extends AuthProviderBase {
         }),
       );
     }
-    const myName = ownData(config, 'myName');
-    if (
-      !myName.readable ||
-      (myName.value !== undefined && typeof myName.value !== 'string')
-    ) {
-      // No snc case names myName (interfaces-auth's CONFIG_CASES): the
-      // generic case, naming the field — never the value or a getter's throw.
-      throw misconfigured(
-        authError.configuration({
-          case: 'required-fields-missing',
-          fields: ['myName'],
-        }),
-      );
-    }
     this.partnerName = partnerName;
     this.qop = qop;
-    this.myName =
-      typeof myName.value === 'string'
-        ? myName.value.trim() || undefined
-        : undefined;
-    // The collaborators, read once as own data: an accessor or a throwing
-    // Proxy reads as absent, and an absent locator or probe list is used
-    // only inside a moment, whose boundary answers it.
-    const collaborators = ownOptions<Partial<SncLogonProviderConfig>>(config);
-    this.locator = collaborators.locator as ISncLibraryLocator;
-    this.probes = collaborators.probes as ISncProductProbe[];
-    this.logger = collaborators.logger;
+    this.myName = own.myName?.trim() || undefined;
+    this.locator = own.locator;
+    this.probes = own.probes;
+    this.logger = own.logger;
     // The config's signal is the first party; an aborted one adds nothing.
-    if (collaborators.signal !== undefined) {
-      this.parties.attach(collaborators.signal);
-    }
+    if (own.signal !== undefined) this.parties.attach(own.signal);
   }
 
   /** The usual choice: this machine, library discovery, the Secure Login Client probe. */
@@ -188,12 +138,11 @@ export class SncLogonProvider extends AuthProviderBase {
     logger?: ILogger;
     signal?: AbortSignal;
   }): SncLogonProvider {
-    // Read once as own data, like every option: a hostile object throws
-    // nothing of its own; the constructor refuses what is missing.
-    const own = ownOptions<Partial<typeof options>>(options);
+    // A typed copy; the constructor refuses what is missing.
+    const own = { ...options };
     const system = nodeSncSystem();
     return new SncLogonProvider({
-      partnerName: own.partnerName as string,
+      partnerName: own.partnerName,
       qop: own.qop,
       myName: own.myName,
       logger: own.logger,
@@ -224,15 +173,16 @@ export class SncLogonProvider extends AuthProviderBase {
   }
 
   private async resolve(signal: AbortSignal | undefined): Promise<AuthOutcome> {
-    let found: SncLibrary;
+    let given: SncLibrary;
     try {
       // The locator is the consumer's: its answer — any promise, Bluebird
-      // or Q included — is awaited as it is, and stops being waited for at
-      // the parties' abort, whether or not it honours the signal.
-      found = await untilAborted(
-        Promise.resolve(this.locator.locate(signal)),
-        signal,
-      );
+      // or Q included — is adopted as `await` adopts it, and stops being
+      // waited for at the parties' abort, whether or not it honours the
+      // signal.
+      const found = await untilAborted(this.locator.locate(signal), signal);
+      // The call and every read of its answer share this boundary: a field
+      // that throws is the locator's failure. The answer is copied once.
+      given = { path: found.path, archs: [...found.archs] };
     } catch (error) {
       throwIfAborted(signal);
       // A library's failure words and paths come only from the shipped locator
@@ -249,28 +199,17 @@ export class SncLogonProvider extends AuthProviderBase {
       return { ok: false, refusal };
     }
     throwIfAborted(signal);
-    // A getter that throws here is the boundary's, as in 5.4.2.
-    const given: unknown = found?.path;
-    const path = typeof given === 'string' ? given.trim() : '';
+    const path = given.path.trim();
     if (!path) {
       // Built apart: a union as the contextual type widens the problem.
       const refusal = authError.snc({ problem: 'locator-returned-no-path' });
       return { ok: false, refusal };
     }
-    const archs: unknown = found.archs;
-    const library: SncLibrary = {
-      path,
-      archs: Array.isArray(archs) ? archs : [],
-    };
+    const library: SncLibrary = { path, archs: given.archs };
     let applying: ISncProductProbe | undefined;
     for (const probe of this.probes) {
       try {
-        if (
-          await untilAborted(
-            Promise.resolve(probe.appliesTo(library.path, signal)),
-            signal,
-          )
-        ) {
+        if (await untilAborted(probe.appliesTo(library.path, signal), signal)) {
           applying = probe;
           break;
         }
@@ -364,7 +303,9 @@ export class SncLogonProvider extends AuthProviderBase {
       secureLoginClient: this.secureLoginClient,
       explained: this.explained,
     };
-    const error = readSafely(rejection, 'error');
+    // Typed: read directly. The `error` value itself is `unknown`, read
+    // safely by the refusal mapping, as `readRejection` reads it.
+    const error = rejection.error;
     const cause = sncCause(error, context);
     if (cause) return { ok: false, refusal: cause };
     const read = readRejection(rejection);

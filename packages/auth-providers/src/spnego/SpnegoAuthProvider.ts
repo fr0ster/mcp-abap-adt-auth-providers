@@ -20,7 +20,6 @@
 import {
   authError,
   createParties,
-  isNegotiateSourceProblem,
   logFields,
   OK,
 } from '@mcp-abap-adt/auth-errors';
@@ -36,13 +35,7 @@ import type {
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
 import { AuthProviderBase } from '../auth/AuthProviderBase';
 import { throwIfAborted, untilAborted } from '../auth/attempt';
-import {
-  misconfigured,
-  ownOptions,
-  requiredFieldsMissing,
-} from '../auth/configuration';
-import { markHandled } from '../auth/handled';
-import { readSafely } from '../auth/knownCodes';
+import { misconfigured } from '../auth/configuration';
 import { refuseFor } from '../auth/rejection';
 import { logQuietly } from '../auth/tokenRequest';
 import { readNegotiateToken } from './negotiateToken';
@@ -158,26 +151,10 @@ export class SpnegoAuthProvider extends AuthProviderBase {
       authorize: 'presenting-negotiate-token',
       rejected: 'reading-rejection',
     });
-    const own =
-      ownOptions<Partial<Record<keyof SpnegoAuthProviderConfig, unknown>>>(
-        config,
-      );
+    // A typed copy: the options are read once, here.
+    const own = { ...config };
     const servicePrincipal = own.servicePrincipal;
-    const tokenSource = own.tokenSource;
-    const missing: string[] = [];
-    if (servicePrincipal === undefined) missing.push('servicePrincipal');
-    if (
-      tokenSource === null ||
-      typeof tokenSource !== 'object' ||
-      typeof readSafely(tokenSource, 'token') !== 'function'
-    ) {
-      missing.push('tokenSource');
-    }
-    if (missing.length > 0) throw requiredFieldsMissing(missing);
-    if (
-      typeof servicePrincipal !== 'string' ||
-      !isHostBasedName(servicePrincipal)
-    ) {
+    if (!isHostBasedName(servicePrincipal)) {
       // The value is never echoed: the field alone is named.
       throw misconfigured(
         authError.configuration({
@@ -187,11 +164,11 @@ export class SpnegoAuthProvider extends AuthProviderBase {
       );
     }
     this.servicePrincipal = servicePrincipal;
-    this.tokenSource = tokenSource as INegotiateTokenSource;
-    this.logger = own.logger as ILogger | undefined;
+    this.tokenSource = own.tokenSource;
+    this.logger = own.logger;
     // The config's signal is the first party; an aborted one adds nothing.
     if (own.signal !== undefined) {
-      this.parties.attach(own.signal as AbortSignal);
+      this.parties.attach(own.signal);
     }
   }
 
@@ -220,8 +197,7 @@ export class SpnegoAuthProvider extends AuthProviderBase {
   protected async onAuthorize(request: IRequestTarget): Promise<AuthOutcome> {
     const obtained = await this.obtain('presenting-negotiate-token');
     if (!obtained.ok) return { ok: false, refusal: obtained.refusal };
-    // A target answering a rejecting promise raises nothing (rule 1).
-    markHandled(request.header('Authorization', `Negotiate ${obtained.token}`));
+    request.header('Authorization', `Negotiate ${obtained.token}`);
     return OK;
   }
 
@@ -236,10 +212,7 @@ export class SpnegoAuthProvider extends AuthProviderBase {
     try {
       const signal = waiter?.signal;
       throwIfAborted(signal);
-      const answer = await this.ask(signal);
-      // A source that ignored the abort: its answer is dropped.
-      throwIfAborted(signal);
-      const obtained = this.read(answer, operation);
+      const obtained = await this.ask(signal, operation);
       if (!obtained.ok) {
         const fields = logFields(obtained.refusal);
         logQuietly(() =>
@@ -253,47 +226,40 @@ export class SpnegoAuthProvider extends AuthProviderBase {
   }
 
   /**
-   * The source's answer, awaited as `await` adopts it (a promise of any
-   * library, or a value), or `undefined` when it threw or rejected.
-   * Settles at the abort, whether or not the source honours the signal.
+   * The source asked and its answer read, in one failure boundary: a source
+   * that throws or rejects, and an answer whose field throws, are `unknown`
+   * with the operation. The answer is awaited as `await` adopts it (a
+   * promise of any library, or a value) and stops being waited for at the
+   * abort, whether or not the source honours the signal; an answer that
+   * arrives after the abort is dropped.
    */
   private async ask(
     signal: AbortSignal | undefined,
-  ): Promise<NegotiateTokenAnswer | undefined> {
-    const source = this.tokenSource;
-    const token = readSafely(source, 'token');
-    if (typeof token !== 'function') return undefined;
-    // What the contract promises; `read` still checks every field.
-    let pending: ReturnType<INegotiateTokenSource['token']>;
+    operation: TokenOperation,
+  ): Promise<Obtained> {
     try {
-      pending = Reflect.apply(token, source, [
-        this.servicePrincipal,
-        { signal },
-      ]);
-    } catch {
-      return undefined;
-    }
-    try {
-      return await untilAborted(pending, signal);
+      const answer = await untilAborted(
+        this.tokenSource.token(this.servicePrincipal, { signal }),
+        signal,
+      );
+      // A source that ignored the abort: its answer is dropped.
+      throwIfAborted(signal);
+      return this.read(answer, operation);
     } catch {
       throwIfAborted(signal);
-      return undefined;
+      return { ok: false, refusal: authError.unknown({ operation }) };
     }
   }
 
-  /** The answer field by field; the token checked before it is presented. */
-  private read(answer: unknown, operation: TokenOperation): Obtained {
-    const ok = readSafely(answer, 'ok');
-    if (ok === false) {
-      const problem = readSafely(answer, 'problem');
-      return isNegotiateSourceProblem(problem)
-        ? { ok: false, refusal: sourceRefusal(problem, operation) }
-        : { ok: false, refusal: authError.unknown({ operation }) };
+  /** The answer, narrowed by `ok`; the token checked before it is presented. */
+  private read(
+    answer: NegotiateTokenAnswer,
+    operation: TokenOperation,
+  ): Obtained {
+    if (!answer.ok) {
+      return { ok: false, refusal: sourceRefusal(answer.problem, operation) };
     }
-    const token = ok === true ? readSafely(answer, 'token') : undefined;
-    if (typeof token !== 'string') {
-      return { ok: false, refusal: authError.unknown({ operation }) };
-    }
+    const token = answer.token;
     switch (readNegotiateToken(token)) {
       case 'kerberos':
         return { ok: true, token };

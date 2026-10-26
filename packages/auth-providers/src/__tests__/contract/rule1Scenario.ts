@@ -148,26 +148,28 @@ export interface Rule1Report {
  * or answers a foreign (Promises/A+ shaped) thenable that resolves with the
  * value, rejects with it, or throws it from its `then`. The answer is the
  * consumer's own code: awaited normally, the resolved value used, the
- * rejection or the throw classified.
+ * rejection or the throw classified. A resolved hostile value breaks the
+ * answer's type: those rows prove no type defense — where using it as typed
+ * fails, it fails with a TypeError (or the value's own throw), which the
+ * boundary classifies like any other throw.
  */
 type Mode =
   | 'throws'
   | 'rejects'
-  | 'thenable resolving'
+  | 'thenable resolving a wrong-typed value — a TypeError the boundary classifies'
   | 'thenable rejecting'
   | 'thenable whose then throws';
 const MODES: readonly Mode[] = [
   'throws',
   'rejects',
-  'thenable resolving',
+  'thenable resolving a wrong-typed value — a TypeError the boundary classifies',
   'thenable rejecting',
   'thenable whose then throws',
 ];
 
 /**
- * What the package never awaits: a logger's answer and a target's (a trust
- * boundary — `markHandled` touches native promises only), and a target
- * object, which is no answer at all.
+ * What the package never awaits: a logger's answer and a target's (typed
+ * `void`, ignored), and a target object, which is no answer at all.
  */
 const NOT_AWAITED = new Set([
   'logger',
@@ -655,18 +657,21 @@ function rows(lib: typeof Lib): Row[] {
 }
 
 /** A logon or request target whose every method is `fail`, or a good one. */
-function targets(fail: Failing | undefined): {
+function targets(
+  logonFail: Failing | undefined,
+  requestFail: Failing | undefined,
+): {
   logon: ILogonTarget;
   request: IRequestTarget;
 } {
   return {
     logon: {
-      tlsMaterial: fail ?? (() => ({ ok: true })),
-      logonParameters: fail ?? (() => ({ ok: true })),
+      tlsMaterial: logonFail ?? (() => ({ ok: true })),
+      logonParameters: logonFail ?? (() => ({ ok: true })),
     } as ILogonTarget,
     request: {
-      header: fail ?? (() => undefined),
-      cookies: fail ?? (() => undefined),
+      header: requestFail ?? (() => undefined),
+      cookies: requestFail ?? (() => undefined),
     } as IRequestTarget,
   };
 }
@@ -838,7 +843,7 @@ export async function run(
           idpCertificate: key.certificatePem,
           certificate,
         });
-        const { logon, request } = targets(undefined);
+        const { logon, request } = targets(undefined, undefined);
         for (const [moment, call] of [
           ['prepare', () => provider.prepare()],
           ['establish', () => provider.establish(logon)],
@@ -869,11 +874,23 @@ export async function run(
             // (`collaboratorThenables.test.ts`). Not a row of this matrix.
             if (
               valueName === 'a foreign thenable' &&
-              mode === 'thenable resolving'
+              mode ===
+                'thenable resolving a wrong-typed value — a TypeError the boundary classifies'
+            )
+              continue;
+            // A logger's and a request target's methods answer `void`: what
+            // they return is ignored, so only a throw is a row
+            // (`voidAnswers.test.ts`).
+            if (
+              (collaborator === 'logger' ||
+                collaborator === 'request target') &&
+              mode !== 'throws'
             )
               continue;
             const where = `${row.provider} · ${collaborator} · ${valueName} · ${mode}`;
-            const resolvedAnswer = mode === 'thenable resolving';
+            const resolvedAnswer =
+              mode ===
+              'thenable resolving a wrong-typed value — a TypeError the boundary classifies';
             let called = 0;
             const fail = ((..._args: unknown[]) => {
               called += 1;
@@ -886,7 +903,11 @@ export async function run(
                   reject?: (e: unknown) => void,
                 ) {
                   answerThenCalls.count += 1;
-                  if (mode === 'thenable resolving') resolve?.(value());
+                  if (
+                    mode ===
+                    'thenable resolving a wrong-typed value — a TypeError the boundary classifies'
+                  )
+                    resolve?.(value());
                   else if (mode === 'thenable rejecting') reject?.(value());
                   else throw value();
                 },
@@ -906,12 +927,25 @@ export async function run(
               failures.push(`${where}: construction threw ${json(error)}`);
               continue;
             }
-            const targetFail =
-              collaborator === 'logon target' ||
+            // A request target that only throws: its answers are `void`.
+            const thrower = ((..._args: unknown[]) => {
+              called += 1;
+              throw value();
+            }) as Failing;
+            // The request target's methods answer `void`: only a throw of
+            // them is a row, and the logon target's answers are relayed.
+            const { logon, request } = targets(
+              collaborator === 'logon target'
+                ? fail
+                : collaborator === 'request target'
+                  ? thrower
+                  : undefined,
               collaborator === 'request target'
                 ? fail
-                : undefined;
-            const { logon, request } = targets(targetFail);
+                : collaborator === 'logon target'
+                  ? thrower
+                  : undefined,
+            );
             const asTarget = collaborator === 'target object';
             const establishWith = asTarget
               ? () => {

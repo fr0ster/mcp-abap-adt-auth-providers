@@ -13,7 +13,7 @@ import type {
 import { AUTH_TYPE_CLIENT_CREDENTIALS } from '@mcp-abap-adt/interfaces-auth';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
 import { getTokenWithClientCredentials } from '../auth/clientCredentialsAuth';
-import { ownOptions, requiredFieldsMissing } from '../auth/configuration';
+import { requiredFieldsMissing } from '../auth/configuration';
 import {
   BaseTokenProvider,
   type ClientAuthenticationConfig,
@@ -41,16 +41,17 @@ export class ClientCredentialsProvider extends BaseTokenProvider {
   private config: ClientCredentialsProviderConfig;
 
   constructor(options: ClientCredentialsProviderConfig) {
-    // Read once as own data (a hostile object throws nothing of its own).
-    const config = ownOptions<ClientCredentialsProviderConfig>(options);
+    // A typed copy: the options are read once, here.
+    const config = { ...options };
     super(config);
     this.config = config;
     this.logger = config.logger;
+    // Required strings: an empty one is missing.
     const missingFields: string[] = [];
-    if (!config.uaaUrl) {
+    if (config.uaaUrl === '') {
       missingFields.push('uaaUrl');
     }
-    if (!config.clientId) {
+    if (config.clientId === '') {
       missingFields.push('clientId');
     }
     // A strategy authenticates the client instead (never both: the base).

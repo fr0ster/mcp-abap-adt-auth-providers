@@ -36,21 +36,7 @@ report(outcomes);
 `;
 
 describe('an async logger on a token site', () => {
-  it('a rejecting promise from every logger method leaves no unhandled rejection', () => {
-    const run = runPlainNode<string[]>(
-      scenario(`{
-        debug: async () => { throw new Error('async debug'); },
-        info: async () => { throw new Error('async info'); },
-        warn: async () => { throw new Error('async warn'); },
-        error: async () => { throw new Error('async error'); },
-      }`),
-    );
-    expect(run.stderr).toBe('');
-    expect(run.result).toEqual(['request-failed', 'request-failed']);
-    expect(run.unhandled).toEqual([]);
-  });
-
-  it('a thenable whose then throws: contained, outcome unchanged', () => {
+  it('a logger answering an object with a throwing then: the answer is ignored, outcome unchanged', () => {
     const run = runPlainNode<string[]>(
       scenario(`{
         debug: () => ({ then() { throw new Error('then ran'); } }),
@@ -96,23 +82,6 @@ report(outcome);
 `;
 
 describe('the UAA code exchange with a consumer logger', () => {
-  it('an async logger: a successful exchange leaves no unhandled rejection', () => {
-    const run = runPlainNode<Record<string, unknown>>(
-      codeExchange(
-        `{
-          debug: async () => { throw new Error('async debug'); },
-          info: async () => { throw new Error('async info'); },
-          warn: async () => { throw new Error('async warn'); },
-          error: async () => { throw new Error('async error'); },
-        }`,
-        'token',
-      ),
-    );
-    expect(run.stderr).toBe('');
-    expect(run.result).toEqual({ resolved: 'at' });
-    expect(run.unhandled).toEqual([]);
-  });
-
   it('a throwing logger: a refused connection stays request-failed, not unknown', () => {
     const run = runPlainNode<Record<string, unknown>>(
       codeExchange(
@@ -192,29 +161,6 @@ describe('the interactive login with a consumer logger', () => {
    * child here and fails the test, instead of hanging it.
    */
   const BOUND_MS = 30_000;
-
-  it('an async logger: no unhandled rejection, every outcome as without a logger', () => {
-    const run = runPlainNode<string[]>(
-      interactive(`{
-        debug: async () => { throw new Error('async debug'); },
-        info: async () => { throw new Error('async info'); },
-        warn: async () => { throw new Error('async warn'); },
-        error: async () => { throw new Error('async error'); },
-      }`),
-      { boundMs: BOUND_MS },
-    );
-    expect(run.timedOut).toBe(false);
-    expect(run.result).toEqual(expected);
-    expect(run.unhandled).toEqual([]);
-    // A prompt whose info rejected is not lost — it
-    // reaches stderr too; nothing of the rejection does. (The authorization
-    // URL goes to stderr only in any case.)
-    expect(run.stderr).toContain(
-      'Open this URL in your browser to authenticate',
-    );
-    expect(run.stderr).toContain('Enter code: UC-1');
-    expect(run.stderr).not.toContain('async info');
-  }, 60_000);
 
   it('a throwing logger: the same outcomes, and the prompts reach stderr instead', () => {
     const run = runPlainNode<string[]>(

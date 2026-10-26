@@ -79,37 +79,4 @@ describe('announcer', () => {
     )(PROMPT);
     expect(stderr).toEqual([`${PROMPT}\n`]);
   });
-
-  it('an async logger whose info rejects: stderr once the rejection arrives', async () => {
-    announcer(
-      loggerWith(async () => {
-        throw new Error('async info');
-      }),
-    )(PROMPT);
-    await turn();
-    expect(stderr).toEqual([`${PROMPT}\n`]);
-    expect(stdout).toEqual([]);
-  });
-
-  it('a foreign thenable is adopted: a fulfilling one leaves stderr empty', async () => {
-    const then = jest.fn((onFulfilled: (value: unknown) => void) =>
-      onFulfilled(undefined),
-    );
-    announcer(loggerWith(() => ({ then })))(PROMPT);
-    await turn();
-    expect(then).toHaveBeenCalledTimes(1);
-    expect(stderr).toEqual([]);
-  });
-
-  it('a foreign thenable that rejects: stderr once the rejection arrives', async () => {
-    announcer(
-      loggerWith(() => ({
-        // biome-ignore lint/suspicious/noThenProperty: a promise library's then is the point
-        then: (_f: unknown, onRejected: (error: unknown) => void) =>
-          onRejected(new Error('async info')),
-      })),
-    )(PROMPT);
-    await turn();
-    expect(stderr).toEqual([`${PROMPT}\n`]);
-  });
 });

@@ -138,12 +138,28 @@ the tests that hold it.
   explicit error, or the consumer's `AbortSignal`.
 - **Nothing writes to stdout.** Under a stdio transport stdout carries
   protocol traffic.
-- **Options are read as own data.** Every exported constructor and factory
-  snapshots its options' own data properties once, at creation
-  (`ownOptions`): an accessor is never run, and a later change to the object
-  changes nothing. Other foreign values — a collaborator, a server's answer — are
-  read through `readSafely`, which does run a getter but turns a throw into
-  absent.
+- **Static types first.** A value is checked at runtime only when it comes
+  from outside the type system: a thrown value, a network answer, a JWT
+  payload, a SAML or XML document, a file, the environment, registry output,
+  terminal input, a callback HTTP request, GSS token bytes, a field a contract
+  types `unknown`. Options, collaborators, their answers and the package's own
+  objects are used as typed. What a type cannot express — the shape of a URL
+  or path, a range, a non-empty or printable string, CR/LF in a header, one of
+  several optional fields, a cross-field rule — is a value rule, checked and
+  refused as before.
+- **Options are a typed copy.** Every exported constructor and factory copies
+  its options once, at creation, with a shallow spread, and reads only the
+  copy: a later change to the object changes nothing. A collaborator in the
+  options is kept by reference and read and called only inside a moment (or a
+  composed strategy's `authorize`) — except the descriptors
+  `composeAuthorization` reads when it composes: the transport's `label`, the
+  protocol's `redirect`, `callbackMethods` and `paste`, read as typed data;
+  and the shipped-validator brand a SAML provider's constructor reads on its
+  `assertionValidator` (`isShippedValidator`, guarded).
+- **A throw is not a type question.** A typed value can still throw. A
+  collaborator's call and every read of its answer share one failure
+  boundary: a throw while reading takes the same classification, settling and
+  release as a throw from the call.
 - **No regular expression over input.** Input-facing code is plain string
   code, a bounded scanner or the platform's parser.
 - **Proved where it runs.** Wire contracts are proved on the Docker stands
@@ -157,20 +173,34 @@ the tests that hold it.
 
 A provider awaits a collaborator's asynchronous answer normally: a native
 promise, a Promise subclass or any Promises/A+ thenable is adopted as `await`
-adopts it, inside the moment's boundary. A rejection, or a throw from its
-`then`, is a failure of that call, classified like any other.
+adopts it, inside the moment's boundary, and then used as its contract types
+it. A rejection, a throw from its `then`, or a throw while its answer is read
+is a failure of that call, classified like any other. Where the package
+adopts an answer itself, it does so through a fresh native promise,
+`new Promise((resolve) => resolve(answer))`, which calls a promise's own
+`then` as `await` does; `Promise.resolve(answer)` would return a native
+promise unchanged and bypass it.
 
-Refusing every answer that is not a plain native promise (`isPlainPromise`)
-was considered and dropped. It guards nothing: a collaborator that wraps a
-thenable in an async function, or in `new Promise((r) => r(thenable))`,
-answers a plain native promise whose resolution calls the foreign `then` all
-the same (measured). The adoption `await` performs already gives what the
-provider relies on — one settlement, `then` called in a later job, a throw
-contained — and a collaborator's code is the consumer's, run with the
-consumer's rights whether the provider calls it or adopts its answer.
+Refusing every answer that is not a plain native promise was considered and
+dropped (7.1.0). It guards nothing: a collaborator that wraps a thenable in an
+async function, or in `new Promise((r) => r(thenable))`, answers a plain
+native promise whose resolution calls the foreign `then` all the same
+(measured). The adoption `await` performs already gives what the provider
+relies on — one settlement, `then` called in a later job, a throw contained —
+and a collaborator's code is the consumer's, run with the consumer's rights
+whether the provider calls it or adopts its answer.
+
+An answer typed `void` — a request target's `header()` / `cookies()`, every
+`ILogger` method, the renewal strategy's `aborted()` — is not an answer to
+adopt: the call stays inside its `try`, a throw is handled, and a returned
+value is ignored (8.0.0). An answer whose type admits a promise and that is
+not awaited — a persistence `report()` made detached, a presentation's
+`present()` — is adopted the same way and given a rejection handler, whose
+own throw is contained; `IBrowser.open()`'s answer is adopted the same way and
+awaited inside `openInBrowser`'s `try`.
 
 What stays strict is a value that is not a collaborator's answer: a thrown
-value being classified and a target's answer. No `then` is called on either
-(`markHandled`, `relayOutcome`).
+value being classified (`classify`) and a logon target's answer
+(`relayOutcome`). No `then` is called on either.
 
 Scope: this package. Whether it suits other packages has not been assessed.

@@ -14,12 +14,7 @@ import type {
   AuthorizationOutcome,
   IAuthorizationStrategy,
 } from '@mcp-abap-adt/interfaces-auth';
-import {
-  misconfigured,
-  ownOptions,
-  requiredFieldsMissing,
-} from '../auth/configuration';
-import { asAbortSignal } from '../auth/signalledRequest';
+import { misconfigured } from '../auth/configuration';
 import {
   type ComposedStrategy,
   composeAuthorization,
@@ -57,24 +52,18 @@ export interface StaticCodeStrategyOptions {
 export function externalCodeStrategy(
   options: ExternalCodeStrategyOptions,
 ): ComposedStrategy<string> {
-  // Read once as own data: a hostile object throws nothing of its own.
-  const own =
-    ownOptions<Partial<Record<keyof ExternalCodeStrategyOptions, unknown>>>(
-      options,
-    );
-  if (own.redirectUri === undefined) {
-    throw requiredFieldsMissing(['redirectUri']);
-  }
+  // A typed copy: the options are read once, here.
+  const own = { ...options };
   const { presentation, transport } = consumerHandoff({
-    redirectUri: own.redirectUri as string,
-    provide: own.provide as ProvideAnswer,
+    redirectUri: own.redirectUri,
+    provide: own.provide,
   });
   return composeAuthorization({
     presentation,
     transport,
     protocol: oauthCode(),
     endpoint: CALLBACK_ENDPOINT,
-    signal: asAbortSignal(own.signal),
+    signal: own.signal,
   });
 }
 
@@ -82,8 +71,8 @@ export function externalCodeStrategy(
 export function staticCodeStrategy(
   options: StaticCodeStrategyOptions,
 ): IAuthorizationStrategy<string> {
-  // Read once as own data: a hostile object throws nothing of its own.
-  const own = ownOptions<StaticCodeStrategyOptions>(options);
+  // A typed copy: the options are read once, here.
+  const own = { ...options };
   const redirectUri = own.redirectUri ?? defaultRedirectUri();
   if (!own.payload) {
     throw misconfigured(

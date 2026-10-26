@@ -16,7 +16,6 @@ import {
   misconfigured,
   oidcEndpointMissing,
   oidcIssuerRequired,
-  ownOptions,
 } from '../auth/configuration';
 import { discoverOidc, mtlsAlias } from '../auth/oidcDiscovery';
 import { generatePkceChallenge, generatePkceVerifier } from '../auth/oidcPkce';
@@ -82,8 +81,8 @@ export class OidcBrowserProvider extends BaseTokenProvider {
   private config: OidcBrowserProviderConfig;
 
   constructor(options: OidcBrowserProviderConfig) {
-    // Read once as own data (a hostile object throws nothing of its own).
-    const config = ownOptions<OidcBrowserProviderConfig>(options);
+    // A typed copy: the options are read once, here.
+    const config = { ...options };
     super(config);
     this.config = config;
     this.logger = config.logger;
@@ -103,9 +102,9 @@ export class OidcBrowserProvider extends BaseTokenProvider {
     options: LoginFactoryOptions = {},
   ): OidcBrowserProvider {
     return new OidcBrowserProvider({
-      ...ownOptions<typeof config>(config),
+      ...config,
       authorization: oidcCallbackStrategy({
-        signal: ownOptions<LoginFactoryOptions>(options).signal,
+        signal: options.signal,
       }),
     });
   }

@@ -27,7 +27,6 @@ import { getJwtAuthorizationUrl } from '../../auth/browserAuth';
 import { discoverOidc } from '../../auth/oidcDiscovery';
 import { exchangeSamlAssertion } from '../../auth/saml2TokenExchange';
 import { loopback } from '../../authorization/transport';
-import { clientSecretBasic } from '../../clientAuthentication/clientSecret';
 import { noClientAuthentication } from '../../clientAuthentication/noClientAuthentication';
 import { FileCertificateMaterialLoader } from '../../credentials/FileCertificateMaterialLoader';
 import { AuthorizationCodeProvider } from '../../providers/AuthorizationCodeProvider';
@@ -36,7 +35,6 @@ import { OidcBrowserProvider } from '../../providers/OidcBrowserProvider';
 import { OidcDeviceFlowProvider } from '../../providers/OidcDeviceFlowProvider';
 import { OidcPasswordProvider } from '../../providers/OidcPasswordProvider';
 import { OidcTokenExchangeProvider } from '../../providers/OidcTokenExchangeProvider';
-import { Saml2BearerProvider } from '../../providers/Saml2BearerProvider';
 import { Saml2PureProvider } from '../../providers/Saml2PureProvider';
 import {
   checkAssertionValidator,
@@ -46,8 +44,6 @@ import {
   validateSamlConfig,
 } from '../../providers/saml2Utils';
 import { refreshThenLogin } from '../../renewal';
-import { SsoProviderFactory } from '../../sso/SsoProviderFactory';
-import type { SsoProviderConfig } from '../../sso/types';
 import { browserCallbackStrategy } from '../../strategies';
 import { staticCodeStrategy } from '../../strategies/codeStrategies';
 import { createSignedResponseValidator } from '../../validation/assertionValidator';
@@ -392,30 +388,6 @@ describe('SAML configuration', () => {
       hint: 'configure authnRequestId, or idpInitiated: true if the identity provider starts this login itself',
     });
   });
-
-  it.each([
-    [
-      'Saml2BearerProvider',
-      (config: object) => new Saml2BearerProvider(config as never),
-    ],
-    [
-      'Saml2PureProvider',
-      (config: object) => new Saml2PureProvider(config as never),
-    ],
-  ])(
-    '%s without an assertionValidator names it, at construction',
-    async (_name, make) => {
-      const { assertionValidator: _none, ...config } = samlConfig({});
-      const thrown = await thrownBy(() =>
-        make({ ...config, cookieProvider: async () => ({ cookies: '' }) }),
-      );
-      expectRow(thrown, {
-        case: 'required-fields-missing',
-        fields: ['assertionValidator'],
-        reason: 'required configuration is missing: assertionValidator',
-      });
-    },
-  );
 });
 
 describe('clientId with a client authentication', () => {
@@ -675,23 +647,6 @@ describe('certificate files', () => {
   });
 });
 
-describe('clientSecretBasic encoding', () => {
-  it.each([
-    ['missing', {}],
-    ['another value', { encoding: MARKER }],
-  ])('encoding %s', async (_name, options) => {
-    const thrown = await thrownBy(() =>
-      clientSecretBasic(MARKER, options as never),
-    );
-    expectRow(thrown, {
-      case: 'basic-encoding-missing',
-      fields: ['encoding'],
-      allowed: 'basic-encoding',
-      reason: "clientSecretBasic needs encoding: 'raw' or 'form'",
-    });
-  });
-});
-
 describe('UAA authorization URL', () => {
   it.each([
     ['uaaUrl', { uaaUrl: '', uaaClientId: 'c' }, ['uaaUrl']],
@@ -708,24 +663,6 @@ describe('UAA authorization URL', () => {
       case: 'required-fields-missing',
       fields,
       reason: `required configuration is missing: ${fields.join(', ')}`,
-    });
-  });
-});
-
-describe('SSO factory', () => {
-  it('no provider for this protocol and flow', async () => {
-    const thrown = await thrownBy(() =>
-      SsoProviderFactory.create({
-        protocol: 'oidc',
-        flow: MARKER,
-        config: { clientSecret: MARKER },
-      } as unknown as SsoProviderConfig),
-    );
-    expectRow(thrown, {
-      case: 'unsupported-sso-flow',
-      fields: [],
-      reason:
-        'unsupported SSO provider config: no provider for this protocol and flow',
     });
   });
 });

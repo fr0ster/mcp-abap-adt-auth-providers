@@ -6,7 +6,6 @@ import {
 } from 'node:crypto';
 import { AuthProviderFailure, authError } from '@mcp-abap-adt/auth-errors';
 import type { IClientAuthentication } from '@mcp-abap-adt/interfaces-auth';
-import { ownOptions } from '../auth/configuration';
 
 export interface PrivateKeyJwtConfig {
   /** A private key: PEM text or bytes, or a KeyObject. */
@@ -57,9 +56,9 @@ const b64 = (value: unknown): string =>
 export function privateKeyJwt(
   options: PrivateKeyJwtConfig,
 ): IClientAuthentication {
-  // Read once as own data: the key, the algorithm and the audience are fixed
-  // together here, and no accessor of the consumer's object runs.
-  const config = ownOptions<PrivateKeyJwtConfig>(options);
+  // A typed copy: the key, the algorithm and the audience are fixed together
+  // here, read once.
+  const config = { ...options };
   let key: KeyObject | undefined;
   return {
     authenticate: async (draft) => {
