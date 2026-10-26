@@ -127,8 +127,60 @@ const refused = () =>
     response: { status: 400, data: { error: 'invalid_grant' } },
   });
 
+describe('a decision is awaited as given: any thenable is adopted', () => {
+  /** A thenable of `decision`, counting the calls of its own `then`. */
+  const thenableOf = (decision: unknown) => {
+    const calls = { thenCalls: 0 };
+    const answer = {
+      // biome-ignore lint/suspicious/noThenProperty: a thenable is the answer under test
+      then(resolve: (value: unknown) => void) {
+        calls.thenCalls += 1;
+        resolve(decision);
+      },
+    };
+    return { answer, calls };
+  };
+
+  it('a foreign thenable of a refresh: its then called once, the refresh taken', async () => {
+    const { answer, calls } = thenableOf({ next: 'refresh', ifCut: 'keep' });
+    const { strategy } = scripted([() => answer]);
+    const provider = seeded(strategy);
+    void rejectionOf(provider.getTokens());
+    await provider.refreshes.nth(1);
+    expect(calls.thenCalls).toBe(1);
+    expect(provider.refreshes.items).toHaveLength(1);
+    expect(provider.logins.items).toHaveLength(0);
+  });
+
+  it('a foreign thenable of a stop: read as the stop, not as a strategy failure', async () => {
+    const { answer, calls } = thenableOf({ next: 'stop' });
+    const { strategy } = scripted([() => answer]);
+    const provider = seeded(strategy);
+    const thrown = await rejectionOf(provider.getTokens());
+    expect(errorOf(thrown).kind).toBe('renewal-declined');
+    expect(calls.thenCalls).toBe(1);
+    expect(provider.refreshes.items).toHaveLength(0);
+  });
+
+  it('a native promise with its own then: adopted through that then', async () => {
+    let thenCalls = 0;
+    const answer = Promise.resolve({ next: 'refresh', ifCut: 'keep' });
+    Object.defineProperty(answer, 'then', {
+      value(...args: unknown[]) {
+        thenCalls += 1;
+        return Promise.prototype.then.apply(answer, args as never);
+      },
+    });
+    const { strategy } = scripted([() => answer]);
+    const provider = seeded(strategy);
+    void rejectionOf(provider.getTokens());
+    await provider.refreshes.nth(1);
+    expect(thenCalls).toBe(1);
+    expect(provider.refreshes.items).toHaveLength(1);
+  });
+});
+
 describe('invalid decisions end the renewal unknown renewal-strategy, no step taken', () => {
-  const foreign = { thenCalls: 0 };
   const INVALID: ReadonlyArray<[string, () => unknown]> = [
     ['null', () => null],
     ['a string', () => 'refresh'],
@@ -172,11 +224,20 @@ describe('invalid decisions end the renewal unknown renewal-strategy, no step ta
       },
     ],
     [
-      'a foreign thenable',
+      'a thenable whose then throws',
       () => ({
-        // biome-ignore lint/suspicious/noThenProperty: a foreign thenable is the hostile answer
+        // biome-ignore lint/suspicious/noThenProperty: a thenable is the answer under test
         then() {
-          foreign.thenCalls += 1;
+          throw new Error('SECRET');
+        },
+      }),
+    ],
+    [
+      'a thenable of an invalid answer',
+      () => ({
+        // biome-ignore lint/suspicious/noThenProperty: a thenable is the answer under test
+        then(resolve: (value: unknown) => void) {
+          resolve({ next: 'refresh' });
         },
       }),
     ],
@@ -188,7 +249,6 @@ describe('invalid decisions end the renewal unknown renewal-strategy, no step ta
   ];
 
   it.each(INVALID)('%s', async (_name, answer) => {
-    foreign.thenCalls = 0;
     const { strategy } = scripted([answer]);
     const provider = seeded(strategy);
     const thrown = await rejectionOf(provider.getTokens());
@@ -196,25 +256,6 @@ describe('invalid decisions end the renewal unknown renewal-strategy, no step ta
     expect(JSON.stringify(errorOf(thrown))).not.toContain('SECRET');
     expect(provider.refreshes.items).toHaveLength(0);
     expect(provider.logins.items).toHaveLength(0);
-    expect(provider.held().refresh).toBe('R');
-    expect(foreign.thenCalls).toBe(0);
-  });
-
-  it('a native promise with its own then: refused, its then never called', async () => {
-    let thenCalls = 0;
-    const answer = Promise.resolve({ next: 'stop' });
-    Object.defineProperty(answer, 'then', {
-      value(...args: unknown[]) {
-        thenCalls += 1;
-        return Promise.prototype.then.apply(answer, args as never);
-      },
-    });
-    const { strategy } = scripted([() => answer]);
-    const provider = seeded(strategy);
-    expectStrategyFailure(await rejectionOf(provider.getTokens()));
-    await quiet();
-    expect(thenCalls).toBe(0);
-    expect(provider.refreshes.items).toHaveLength(0);
     expect(provider.held().refresh).toBe('R');
   });
 

@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [7.1.0] - 2026-10-26
+
+### Changed
+- The renewal strategy's `next()` and `SpnegoAuthProvider`'s token source are awaited like every
+  other collaborator: a native promise, a promise library's, any Promises/A+ thenable or (for the
+  token source) a value is adopted as `await` adopts it. Before, both refused anything but a plain
+  native promise (`unknown` `renewal-strategy` / `unknown` with the moment's operation) and never
+  called a foreign `then`. Nothing that worked before changes; a thenable that was refused now
+  works. A throw, a rejection or an answer of another shape is refused as before.
+
+### Documentation
+- `docs/architecture.md`: the decision is now "Collaborator answers are awaited as given" — refusing
+  every answer that is not a plain native promise was dropped, since a collaborator wrapping a
+  thenable in an async function answers a plain native promise whose resolution calls the foreign
+  `then` all the same (measured). What stays strict: a thrown value being classified and a target's
+  answer. README: the renewal strategy's and the SPNego source's answers.
+
 ## [7.0.1] - 2026-10-26
 
 ### Fixed
