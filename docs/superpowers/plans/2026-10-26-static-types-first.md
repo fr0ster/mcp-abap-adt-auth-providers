@@ -199,23 +199,32 @@ compiler and `grep`, never from line numbers in this plan.
   `authorization/throwingAnswers.test.ts`, one per asynchronous callback
   path. In each, a typed answer has one field as a getter that throws
   `new Error('SECRET')`:
-  - **the listener's verdict** (`loopback` plus a protocol whose judge
-    returns a typed verdict with a `verdict` getter that throws, the
-    discriminator the listener reads). Assert three things: `authorize`
-    rejects `interactive-login` `failed`, `'SECRET'` appears nowhere, and
-    the port is free (bind it);
-  - **the terminal transport's verdict** (the same throwing `verdict`
-    getter). Assert the same, and also that the reader is closed: no
-    `data` / `end` listeners are left on the stdin stand-in;
-  - **`consumerAnswer` / `consumerHandoff`'s verdict** (the same throwing
-    `verdict` getter). Assert three things: the attempt settles `failed`,
-    the consumer's callback is not called again, and a second `authorize`
-    on the same strategy starts (it is not `busy`), which proves the scope
-    was released;
-  - **the composer's judge verdict** (the same throwing `verdict` getter,
-    through a recording transport). Assert three things: `authorize`
-    settles `failed`, the transport's `open` settled before `authorize`
-    did (its `use` returned), and a second `authorize` is not `busy`;
+  The composer's latching judge reads a protocol's verdict first and hands
+  the transport a fresh frozen one. So a transport's own boundary is
+  reachable only by a judge given to that transport directly. The tests
+  are therefore split.
+
+  **Transport level.** Call `transport.open(options, use)`. Inside `use`,
+  arm the channel with a judge that returns a typed verdict whose `verdict`
+  getter throws, deliver one answer, and await `channel.answer()`:
+  - **`loopback`**: deliver with an HTTP request to the bound callback.
+    Assert that `answer()` settles (rejects or resolves with no payload,
+    whatever the transport's failure path is today for a judge that
+    throws), that `open` settles, that `'SECRET'` appears in no response
+    body, and that the port is free (bind it);
+  - **`terminalPaste`**: deliver one line on the stdin stand-in. Assert
+    that `answer()` and `open` settle and that no `data` / `end` listeners
+    are left;
+  - **`consumerAnswer` / `consumerHandoff`**: deliver through the
+    consumer's callback. Assert that `answer()` and `open` settle and that
+    the callback is not called again.
+
+  **Composer level** (`composeAuthorization` with a recording transport,
+  and a protocol whose judge returns the throwing verdict). Assert three
+  things:
+  - `authorize` settles `interactive-login` `failed`;
+  - the transport's `open` settled before `authorize` did;
+  - a second `authorize` on the same strategy is not `busy`.
   - **a strategy outcome with a throwing `payload` getter, through a token
     provider**: `getTokens()` throws a classified failure, with no token
     request;
@@ -224,12 +233,13 @@ compiler and `grep`, never from line numbers in this plan.
   - **an SNC locator answer with a throwing `path` getter**: `prepare()`
     answers its fixed SNC refusal.
 
-  Before the change, the first four pass because `readSafely` covers them.
-  So this step makes them load-bearing: run them now (PASS). Then, after
-  Step 3, for each site, run two breaks and see the test go red after
-  each:
-  - move the `verdict` read back outside its `try`;
-  - bypass the release (skip the scope's or reader's cleanup on that path).
+  Before the change, the transport and composer tests pass, because
+  `readSafely` covers them. So this step makes them load-bearing: run them
+  now (PASS). Then, after Step 3, break each site twice and watch the
+  test for that site, and no other, go red:
+  - move that site's `verdict` read back outside its `try`;
+  - skip that site's release (the scope, reader or socket cleanup on that
+    path).
 
   Restore both.
 - [ ] **Step 2:** Audit every site in the Files list. For each `readSafely`,
