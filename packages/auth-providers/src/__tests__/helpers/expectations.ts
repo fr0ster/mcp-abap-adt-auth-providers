@@ -149,17 +149,31 @@ export type ThrownExpectation =
     ) => unknown);
 
 /**
- * A validator for `assert.throws` / `assert.rejects` that reads the thrown
- * value as Jest's `toThrow` did: a string is a fragment of its message, a
- * RegExp is tested on its message, an error is its message exactly, a class
- * is what it is an instance of; nothing expected accepts any throw.
+ * A validator for `assert.throws` / `assert.rejects`: a string is a fragment
+ * of the thrown Error's message, a RegExp is tested on it, an error is its
+ * message exactly — each only when what was thrown is an Error; a class is
+ * what it is an instance of; nothing expected accepts any throw.
  */
 export function thrown(
   expected?: ThrownExpectation,
 ): (error: unknown) => boolean {
   return (error) => {
     if (expected === undefined) return true;
-    const message = error instanceof Error ? error.message : String(error);
+    if (typeof expected === 'function') {
+      assert.ok(
+        error instanceof expected,
+        `expected an instance of ${expected.name}, got ${format('%o', error)}`,
+      );
+      return true;
+    }
+    // A message is expected: only an Error carries one. A primitive whose
+    // text matches is no match (a rejection with a bare string passes no
+    // message check).
+    assert.ok(
+      error instanceof Error,
+      `expected an Error, got ${format('%o', error)}`,
+    );
+    const { message } = error;
     if (typeof expected === 'string') {
       contains(message, expected);
       return true;
@@ -168,14 +182,7 @@ export function thrown(
       assert.match(message, expected);
       return true;
     }
-    if (expected instanceof Error) {
-      assert.equal(message, expected.message);
-      return true;
-    }
-    assert.ok(
-      error instanceof expected,
-      `expected an instance of ${expected.name}, got ${format('%o', error)}`,
-    );
+    assert.equal(message, expected.message);
     return true;
   };
 }
