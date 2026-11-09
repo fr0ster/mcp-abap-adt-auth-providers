@@ -10,18 +10,12 @@
  * interval only).
  */
 
-import {
-  afterEach,
-  beforeEach,
-  describe,
-  expect,
-  it,
-  jest,
-} from '@jest/globals';
+import '../helpers/axiosModuleMock';
+import assert from 'node:assert/strict';
+import { afterEach, beforeEach, describe, it } from 'node:test';
 import { readFailure } from '@mcp-abap-adt/auth-errors';
 import type { IAuthorizationStrategy } from '@mcp-abap-adt/interfaces-auth';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
-import axios from 'axios';
 import { discoverOidc } from '../../auth/oidcDiscovery';
 import { clientSecretPost } from '../../clientAuthentication';
 import { AuthorizationCodeProvider } from '../../providers/AuthorizationCodeProvider';
@@ -38,16 +32,16 @@ import {
   rejectionOf,
   waitingStrategy,
 } from '../helpers/attemptHarness';
+import { mockedAxios } from '../helpers/axiosModuleMock';
+import { matchObject } from '../helpers/expectations';
+import {
+  advanceTimersByTime,
+  advanceTimersByTimeAsync,
+  useFakeTimers,
+  useRealTimers,
+} from '../helpers/fakeTime';
+import { clearMock, once, resetMock } from '../helpers/mockOnce';
 import { SITES, tokenReply } from '../helpers/tokenRequestSites';
-
-jest.mock('axios', () => {
-  const mocked = jest.createMockFromModule<Record<string, unknown>>('axios');
-  mocked.AxiosError =
-    jest.requireActual<Record<string, unknown>>('axios').AxiosError;
-  return mocked;
-});
-type Mock = jest.Mock<(...args: any[]) => Promise<unknown>>;
-const mockedAxios = axios as unknown as Mock & { post: Mock; get: Mock };
 
 const silent: ILogger = {
   debug: () => undefined,
@@ -66,10 +60,10 @@ function isAborted(error: unknown): boolean {
 
 /** The config of the one request a site sent, by either path. */
 function sentConfig(): { signal?: unknown } {
-  const viaPost = mockedAxios.post.mock.calls[0];
-  const viaConfig = mockedAxios.mock.calls[0];
+  const viaPost = mockedAxios.post.mock.calls.map((call) => call.arguments)[0];
+  const viaConfig = mockedAxios.mock.calls.map((call) => call.arguments)[0];
   const config = viaPost ? viaPost[2] : viaConfig?.[0];
-  expect(config).toBeDefined();
+  assert.notEqual(config, undefined);
   return config as { signal?: unknown };
 }
 
@@ -80,9 +74,9 @@ const REFRESH_SITES = new Set([
 ]);
 
 beforeEach(() => {
-  mockedAxios.mockReset();
-  mockedAxios.post.mockReset();
-  mockedAxios.get.mockReset();
+  resetMock(mockedAxios);
+  resetMock(mockedAxios.post);
+  resetMock(mockedAxios.get);
 });
 
 describe('sendTokenRequest passes the attempt signal to axios on both paths', () => {
@@ -90,8 +84,8 @@ describe('sendTokenRequest passes the attempt signal to axios on both paths', ()
     const refresh = REFRESH_SITES.has(site.name);
     for (const path of ['without a strategy', 'with a strategy'] as const) {
       it(`${site.name}, ${path}: ${refresh ? 'no signal (a refresh)' : 'the attempt signal'}`, async () => {
-        mockedAxios.mockResolvedValue(tokenReply);
-        mockedAxios.post.mockResolvedValue(tokenReply);
+        mockedAxios.mock.mockImplementation(async () => tokenReply);
+        mockedAxios.post.mock.mockImplementation(async () => tokenReply);
         const signal = new AbortController().signal;
         const auth =
           path === 'with a strategy'
@@ -100,9 +94,9 @@ describe('sendTokenRequest passes the attempt signal to axios on both paths', ()
         await site.run(auth, undefined, undefined, { signal });
         const config = sentConfig();
         if (refresh) {
-          expect(Object.hasOwn(config, 'signal')).toBe(false);
+          assert.equal(Object.hasOwn(config, 'signal'), false);
         } else {
-          expect(config.signal).toBe(signal);
+          assert.equal(config.signal, signal);
         }
       });
     }
@@ -117,18 +111,19 @@ describe('sendTokenRequest passes the attempt signal to axios on both paths', ()
       },
     };
     const controller = new AbortController();
-    mockedAxios.post.mockImplementation(async () => {
+    mockedAxios.post.mock.mockImplementation(async () => {
       controller.abort();
-      throw new (jest.requireActual<typeof import('axios')>(
-        'axios',
-      ).CanceledError)();
+      throw new mockedAxios.CanceledError();
     });
     const site = SITES.find((s) => s.name === 'oidcToken.passwordGrant');
     const failure = await rejectionOf(
       site!.run(undefined, logger, undefined, { signal: controller.signal }),
     );
-    expect(isAborted(failure)).toBe(true);
-    expect(lines.filter((l) => l.includes('refused'))).toEqual([]);
+    assert.equal(isAborted(failure), true);
+    assert.deepEqual(
+      lines.filter((l) => l.includes('refused')),
+      [],
+    );
   });
 });
 
@@ -137,7 +132,7 @@ describe('discovery under an attempt', () => {
     const url = `https://idp.example/issuer-${Math.random()}`;
     const held = deferred<unknown>();
     const asked = deferred<void>();
-    mockedAxios.get.mockImplementationOnce(() => {
+    once(mockedAxios.get, () => {
       asked.resolve();
       return held.promise as Promise<unknown>;
     });
@@ -146,23 +141,25 @@ describe('discovery under an attempt', () => {
       discoverOidc(url, undefined, controller.signal),
     );
     await asked.promise;
-    const config = mockedAxios.get.mock.calls[0]?.[1] as {
+    const config = mockedAxios.get.mock.calls.map(
+      (call) => call.arguments,
+    )[0]?.[1] as {
       signal?: AbortSignal;
     };
-    expect(config.signal).toBe(controller.signal);
+    assert.equal(config.signal, controller.signal);
     controller.abort();
-    expect(config.signal?.aborted).toBe(true);
+    assert.equal(config.signal?.aborted, true);
     held.resolve({ status: 200, data: { token_endpoint: 'https://late' } });
-    expect(isAborted(await discovering)).toBe(true);
+    assert.equal(isAborted(await discovering), true);
 
-    mockedAxios.get.mockResolvedValueOnce({
+    once(mockedAxios.get, async () => ({
       status: 200,
       data: { token_endpoint: 'https://fresh/token' },
-    });
-    await expect(discoverOidc(url)).resolves.toMatchObject({
+    }));
+    matchObject(await discoverOidc(url), {
       token_endpoint: 'https://fresh/token',
     });
-    expect(mockedAxios.get).toHaveBeenCalledTimes(2);
+    assert.equal(mockedAxios.get.mock.callCount(), 2);
   });
 });
 
@@ -177,8 +174,8 @@ describe('discovery inside a renewal carries the attempt signal', () => {
   };
 
   it('at login (the password grant) and at refresh, and the refresh request itself carries none', async () => {
-    mockedAxios.get.mockResolvedValue(discovered);
-    mockedAxios.post.mockResolvedValue(issued);
+    mockedAxios.get.mock.mockImplementation(async () => discovered);
+    mockedAxios.post.mock.mockImplementation(async () => issued);
     const login = new OidcPasswordProvider({
       renewal: refreshThenLogin(),
       issuerUrl: `https://idp/login-${Math.random()}`,
@@ -188,17 +185,23 @@ describe('discovery inside a renewal carries the attempt signal', () => {
       logger: silent,
     });
     await login.getTokens({ signal: new AbortController().signal });
-    expect(
-      (mockedAxios.get.mock.calls[0]?.[1] as { signal?: unknown } | undefined)
-        ?.signal,
-    ).toBeInstanceOf(AbortSignal);
-    expect(
-      (mockedAxios.post.mock.calls[0]?.[2] as { signal?: unknown } | undefined)
-        ?.signal,
-    ).toBeInstanceOf(AbortSignal);
+    assert.ok(
+      (
+        mockedAxios.get.mock.calls.map((call) => call.arguments)[0]?.[1] as
+          | { signal?: unknown }
+          | undefined
+      )?.signal instanceof AbortSignal,
+    );
+    assert.ok(
+      (
+        mockedAxios.post.mock.calls.map((call) => call.arguments)[0]?.[2] as
+          | { signal?: unknown }
+          | undefined
+      )?.signal instanceof AbortSignal,
+    );
 
-    mockedAxios.get.mockClear();
-    mockedAxios.post.mockClear();
+    clearMock(mockedAxios.get);
+    clearMock(mockedAxios.post);
     const refresh = new OidcPasswordProvider({
       renewal: refreshThenLogin(),
       issuerUrl: `https://idp/refresh-${Math.random()}`,
@@ -210,15 +213,19 @@ describe('discovery inside a renewal carries the attempt signal', () => {
       logger: silent,
     });
     await refresh.getTokens({ signal: new AbortController().signal });
-    expect(
-      (mockedAxios.get.mock.calls[0]?.[1] as { signal?: unknown } | undefined)
-        ?.signal,
-    ).toBeInstanceOf(AbortSignal);
-    const sent = mockedAxios.post.mock.calls[0];
-    expect(new URLSearchParams(sent?.[1] as string).get('grant_type')).toBe(
+    assert.ok(
+      (
+        mockedAxios.get.mock.calls.map((call) => call.arguments)[0]?.[1] as
+          | { signal?: unknown }
+          | undefined
+      )?.signal instanceof AbortSignal,
+    );
+    const sent = mockedAxios.post.mock.calls.map((call) => call.arguments)[0];
+    assert.equal(
+      new URLSearchParams(sent?.[1] as string).get('grant_type'),
       'refresh_token',
     );
-    expect(Object.hasOwn(sent?.[2] as object, 'signal')).toBe(false);
+    assert.equal(Object.hasOwn(sent?.[2] as object, 'signal'), false);
   });
 });
 
@@ -251,19 +258,21 @@ function routeDevice() {
     answer: Deferred<unknown>;
   }>();
   const initiations = new Arrivals<number>();
-  mockedAxios.post.mockImplementation(async (url: unknown, _body, config) => {
-    if (url === 'https://idp/device') {
-      initiations.push(initiations.items.length + 1);
-      return deviceAnswer;
-    }
-    const answer = deferred<unknown>();
-    polls.push({
-      signal: (config as { signal?: AbortSignal }).signal,
-      answer,
-    });
-    // Held: the signal is not honoured here — only the test settles it.
-    return answer.promise;
-  });
+  mockedAxios.post.mock.mockImplementation(
+    async (url: unknown, _body, config) => {
+      if (url === 'https://idp/device') {
+        initiations.push(initiations.items.length + 1);
+        return deviceAnswer;
+      }
+      const answer = deferred<unknown>();
+      polls.push({
+        signal: (config as { signal?: AbortSignal }).signal,
+        answer,
+      });
+      // Held: the signal is not honoured here — only the test settles it.
+      return answer.promise;
+    },
+  );
   return { polls, initiations };
 }
 
@@ -275,8 +284,8 @@ describe('the network never drains', () => {
     const first = rejectionOf(provider.getTokens({ signal: only.signal }));
     const firstPoll = await polls.nth(1);
     only.abort();
-    expect(isAborted(await first)).toBe(true);
-    expect(firstPoll.signal?.aborted).toBe(true);
+    assert.equal(isAborted(await first), true);
+    assert.equal(firstPoll.signal?.aborted, true);
 
     // The replacement: a new initiation while the old poll is still held.
     const next = provider.getTokens();
@@ -285,7 +294,7 @@ describe('the network never drains', () => {
       status: 200,
       data: { access_token: jwt('fresh'), refresh_token: 'R2' },
     });
-    await expect(next).resolves.toMatchObject({ refreshToken: 'R2' });
+    matchObject(await next, { refreshToken: 'R2' });
 
     // The old poll answers at last: discarded, and no further poll.
     firstPoll.answer.resolve({
@@ -294,8 +303,8 @@ describe('the network never drains', () => {
     });
     // Nothing may follow it: no event exists for a poll that must not come.
     await quiet();
-    expect(polls.items).toHaveLength(2);
-    await expect(provider.getTokens()).resolves.toMatchObject({
+    assert.equal(polls.items.length, 2);
+    matchObject(await provider.getTokens(), {
       refreshToken: 'R2',
     });
   });
@@ -303,7 +312,7 @@ describe('the network never drains', () => {
   it('a held passcode exchange: the replacement strategy runs at once; the late answer changes nothing', async () => {
     const strategy = waitingStrategy();
     const exchanges = new Arrivals<Deferred<unknown>>();
-    mockedAxios.post.mockImplementation(() => {
+    mockedAxios.post.mock.mockImplementation(() => {
       const answer = deferred<unknown>();
       exchanges.push(answer);
       return answer.promise as Promise<unknown>;
@@ -316,16 +325,16 @@ describe('the network never drains', () => {
       logger: silent,
     });
     await heldExchangeCase(provider, strategy, exchanges, () =>
-      mockedAxios.post.mock.calls.map(
-        (call) => (call[2] as { signal?: AbortSignal }).signal,
-      ),
+      mockedAxios.post.mock.calls
+        .map((call) => call.arguments)
+        .map((call) => (call[2] as { signal?: AbortSignal }).signal),
     );
   });
 
   it('a held code exchange: the same', async () => {
     const strategy = waitingStrategy();
     const exchanges = new Arrivals<Deferred<unknown>>();
-    mockedAxios.mockImplementation(() => {
+    mockedAxios.mock.mockImplementation(() => {
       const answer = deferred<unknown>();
       exchanges.push(answer);
       return answer.promise as Promise<unknown>;
@@ -339,9 +348,9 @@ describe('the network never drains', () => {
       logger: silent,
     });
     await heldExchangeCase(provider, strategy, exchanges, () =>
-      mockedAxios.mock.calls.map(
-        (call) => (call[0] as { signal?: AbortSignal }).signal,
-      ),
+      mockedAxios.mock.calls
+        .map((call) => call.arguments)
+        .map((call) => (call[0] as { signal?: AbortSignal }).signal),
     );
   });
 });
@@ -357,8 +366,8 @@ async function heldExchangeCase(
   (await strategy.nth(1)).answer('code-1');
   const firstExchange = await exchanges.nth(1);
   only.abort();
-  expect(isAborted(await first)).toBe(true);
-  expect(signals()[0]?.aborted).toBe(true);
+  assert.equal(isAborted(await first), true);
+  assert.equal(signals()[0]?.aborted, true);
 
   const next = provider.getTokens();
   const second = await strategy.nth(2);
@@ -367,7 +376,7 @@ async function heldExchangeCase(
     status: 200,
     data: { access_token: jwt('fresh'), refresh_token: 'R2' },
   });
-  await expect(next).resolves.toMatchObject({ refreshToken: 'R2' });
+  matchObject(await next, { refreshToken: 'R2' });
 
   firstExchange.resolve({
     status: 200,
@@ -375,19 +384,17 @@ async function heldExchangeCase(
   });
   // The late answer must change nothing: no event exists for that.
   await quiet();
-  await expect(provider.getTokens()).resolves.toMatchObject({
+  matchObject(await provider.getTokens(), {
     refreshToken: 'R2',
   });
 }
 
 describe('the device poll stops at the abort', () => {
   beforeEach(() => {
-    jest.useFakeTimers({
-      doNotFake: ['setImmediate', 'nextTick', 'queueMicrotask'],
-    });
+    useFakeTimers();
   });
   afterEach(() => {
-    jest.useRealTimers();
+    useRealTimers();
   });
 
   /** A logger whose pending line — written just before the wait — is an event. */
@@ -408,7 +415,7 @@ describe('the device poll stops at the abort', () => {
 
   it('aborted while it waits for the server interval: no poll after the abort', async () => {
     const polls = new Arrivals<string>();
-    mockedAxios.post.mockImplementation(async (url: unknown) => {
+    mockedAxios.post.mock.mockImplementation(async (url: unknown) => {
       if (url === 'https://idp/device') return deviceAnswer;
       polls.push(String(url));
       const pending = Object.assign(new Error('pending'), {
@@ -424,16 +431,16 @@ describe('the device poll stops at the abort', () => {
     // In the wait between polls: the pending line precedes the wait.
     await waiting;
     only.abort();
-    expect(isAborted(await first)).toBe(true);
-    await jest.advanceTimersByTimeAsync(600_000);
+    assert.equal(isAborted(await first), true);
+    await advanceTimersByTimeAsync(600_000);
     // No poll may follow: no event exists for one that must not come.
     await quiet();
-    expect(polls.items).toHaveLength(1);
+    assert.equal(polls.items.length, 1);
   });
 
   it('aborted in the same turn the interval ends: no poll after it (checked after every await)', async () => {
     const polls = new Arrivals<string>();
-    mockedAxios.post.mockImplementation(async (url: unknown) => {
+    mockedAxios.post.mock.mockImplementation(async (url: unknown) => {
       if (url === 'https://idp/device') return deviceAnswer;
       polls.push(String(url));
       throw Object.assign(new Error('pending'), {
@@ -448,18 +455,18 @@ describe('the device poll stops at the abort', () => {
     await waiting;
     // The server's interval ends — its timer fires synchronously here — and
     // the abort lands before the loop resumes.
-    jest.advanceTimersByTime(1_000);
+    advanceTimersByTime(1_000);
     only.abort();
-    expect(isAborted(await first)).toBe(true);
+    assert.equal(isAborted(await first), true);
     // No poll may follow: no event exists for one that must not come.
     await quiet();
-    expect(polls.items).toHaveLength(1);
+    assert.equal(polls.items.length, 1);
   });
 
   it('aborted while a poll is outstanding: no wait and no poll after it answers', async () => {
     const held = deferred<unknown>();
     const polls = new Arrivals<string>();
-    mockedAxios.post.mockImplementation(async (url: unknown) => {
+    mockedAxios.post.mock.mockImplementation(async (url: unknown) => {
       if (url === 'https://idp/device') return deviceAnswer;
       polls.push(String(url));
       if (polls.items.length === 1) return held.promise;
@@ -471,16 +478,16 @@ describe('the device poll stops at the abort', () => {
     const first = rejectionOf(provider.getTokens({ signal: only.signal }));
     await polls.nth(1);
     only.abort();
-    expect(isAborted(await first)).toBe(true);
+    assert.equal(isAborted(await first), true);
     held.reject(
       Object.assign(new Error('pending'), {
         isAxiosError: true,
         response: { status: 400, data: { error: 'authorization_pending' } },
       }),
     );
-    await jest.advanceTimersByTimeAsync(600_000);
+    await advanceTimersByTimeAsync(600_000);
     // No poll may follow: no event exists for one that must not come.
     await quiet();
-    expect(polls.items).toHaveLength(1);
+    assert.equal(polls.items.length, 1);
   });
 });

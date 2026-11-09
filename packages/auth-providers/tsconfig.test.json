@@ -23,6 +23,7 @@
     "src/__tests__/auth/announce.test.ts",
     "src/__tests__/auth/answerTypes.test.ts",
     "src/__tests__/auth/asyncLogger.test.ts",
+    "src/__tests__/auth/attemptSignals.test.ts",
     "src/__tests__/auth/basicCredentialEcho.test.ts",
     "src/__tests__/auth/basicHeaderSources.test.ts",
     "src/__tests__/auth/browserAuth.integration.test.ts",

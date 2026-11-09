@@ -14,8 +14,8 @@
  *
  * `mockedAxios` is what every site calls: itself for `axios(config)`, its
  * `post` and `get` for those. Each answers `undefined` until a test gives it
- * an implementation, as Jest's automock did. `AxiosError` and
- * `isAxiosError` are axios's own: no site calls them (Code: src reads only
+ * an implementation, as Jest's automock did. `AxiosError`,
+ * `CanceledError` and `isAxiosError` are axios's own: no site calls them (Code: src reads only
  * `axios(…)`, `axios.post`, `axios.get`).
  */
 
@@ -46,6 +46,7 @@ export const mockedAxios = Object.assign(request, {
   get,
   // axios's own: no site reads them, the tests build and check errors with them.
   AxiosError: realAxios.AxiosError,
+  CanceledError: realAxios.CanceledError,
   isAxiosError: realAxios.isAxiosError,
 });
 
