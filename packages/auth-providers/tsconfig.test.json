@@ -96,6 +96,8 @@
     "src/__tests__/snc/libraryArchitectures.test.ts",
     "src/__tests__/snc/registryAbort.test.ts",
     "src/__tests__/snc/sncRows.test.ts",
-    "src/__tests__/snc/sncSources.test.ts"
+    "src/__tests__/snc/sncSources.test.ts",
+    "src/__tests__/spnego/SpnegoAuthProvider.test.ts",
+    "src/__tests__/spnego/negotiateToken.test.ts"
   ]
 }

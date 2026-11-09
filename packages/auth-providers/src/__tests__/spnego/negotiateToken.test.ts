@@ -1,4 +1,7 @@
+import assert from 'node:assert/strict';
+import { describe, it } from 'node:test';
 import { readNegotiateToken } from '../../spnego/negotiateToken';
+import { cases, caseTitle } from '../helpers/expectations';
 import { CAPTURED_KERBEROS, CAPTURED_SPNEGO } from './fixtures/capturedTokens';
 import {
   b64,
@@ -21,13 +24,13 @@ describe('readNegotiateToken', () => {
   describe('kerberos', () => {
     it('a captured GSS-framed Kerberos token (mechanism kerberos)', () => {
       // Its frame has a two-byte length: 0x60 0x82 <hi> <lo>.
-      expect(KERBEROS[0]).toBe(0x60);
-      expect(KERBEROS[1]).toBe(0x82);
-      expect(readNegotiateToken(CAPTURED_KERBEROS)).toBe('kerberos');
+      assert.equal(KERBEROS[0], 0x60);
+      assert.equal(KERBEROS[1], 0x82);
+      assert.equal(readNegotiateToken(CAPTURED_KERBEROS), 'kerberos');
     });
     it('a captured SPNEGO NegTokenInit (mechanism spnego)', () => {
-      expect(SPNEGO.subarray(4, 12).equals(tlv(0x06, OID_SPNEGO))).toBe(true);
-      expect(readNegotiateToken(CAPTURED_SPNEGO)).toBe('kerberos');
+      assert.equal(SPNEGO.subarray(4, 12).equals(tlv(0x06, OID_SPNEGO)), true);
+      assert.equal(readNegotiateToken(CAPTURED_SPNEGO), 'kerberos');
     });
     it('a SPNEGO NegTokenInit built around the captured Kerberos token', () => {
       const t = negTokenInit({
@@ -35,7 +38,7 @@ describe('readNegotiateToken', () => {
         mechToken: KERBEROS,
         reqFlags: true,
       });
-      expect(readNegotiateToken(b64(t))).toBe('kerberos');
+      assert.equal(readNegotiateToken(b64(t)), 'kerberos');
     });
     it('a SPNEGO NegTokenInit with the legacy Microsoft OID first', () => {
       const t = negTokenInit({
@@ -43,17 +46,18 @@ describe('readNegotiateToken', () => {
         mechToken: gssKerberos(OID_KRB5_MS),
         mic: true,
       });
-      expect(readNegotiateToken(b64(t))).toBe('kerberos');
+      assert.equal(readNegotiateToken(b64(t)), 'kerberos');
     });
     it('a SPNEGO token whose first mechanism is Kerberos but whose token is not GSS Kerberos is unreadable', () => {
       const t = negTokenInit({
         mechs: [OID_KRB5],
         mechToken: Buffer.from('garbage-token'),
       });
-      expect(readNegotiateToken(b64(t))).toBe('unreadable');
+      assert.equal(readNegotiateToken(b64(t)), 'unreadable');
     });
     it('a raw GSS frame with the legacy Microsoft OID is unreadable', () => {
-      expect(readNegotiateToken(b64(gssKerberos(OID_KRB5_MS)))).toBe(
+      assert.equal(
+        readNegotiateToken(b64(gssKerberos(OID_KRB5_MS))),
         'unreadable',
       );
     });
@@ -66,23 +70,25 @@ describe('readNegotiateToken', () => {
         b64(
           tlv(0x60, tlv(0x06, OID_SPNEGO), tlv(0xa0, tlv(0x30, types, ...f))),
         );
-      expect(readNegotiateToken(init(flags, tok, mic))).toBe('kerberos');
-      expect(readNegotiateToken(init(tok, tlv(0xa4, Buffer.from([0]))))).toBe(
+      assert.equal(readNegotiateToken(init(flags, tok, mic)), 'kerberos');
+      assert.equal(
+        readNegotiateToken(init(tok, tlv(0xa4, Buffer.from([0])))),
         'unreadable',
       );
-      expect(readNegotiateToken(init(flags, flags, tok))).toBe('unreadable');
-      expect(readNegotiateToken(init(tok, flags))).toBe('unreadable');
-      expect(readNegotiateToken(init(tok, tok))).toBe('unreadable');
+      assert.equal(readNegotiateToken(init(flags, flags, tok)), 'unreadable');
+      assert.equal(readNegotiateToken(init(tok, flags)), 'unreadable');
+      assert.equal(readNegotiateToken(init(tok, tok)), 'unreadable');
     });
     it('a SPNEGO token with Kerberos listed second is unreadable', () => {
       const t = negTokenInit({
         mechs: [OID_NTLM, OID_KRB5],
         mechToken: KERBEROS,
       });
-      expect(readNegotiateToken(b64(t))).toBe('unreadable');
+      assert.equal(readNegotiateToken(b64(t)), 'unreadable');
     });
     it('a SPNEGO token with no mechanism token is unreadable', () => {
-      expect(readNegotiateToken(b64(negTokenInit({ mechs: [OID_KRB5] })))).toBe(
+      assert.equal(
+        readNegotiateToken(b64(negTokenInit({ mechs: [OID_KRB5] }))),
         'unreadable',
       );
     });
@@ -90,27 +96,27 @@ describe('readNegotiateToken', () => {
 
   describe('ntlm', () => {
     it('a raw NTLM message', () => {
-      expect(readNegotiateToken(b64(NTLM_NEGOTIATE))).toBe('ntlm');
-      expect(readNegotiateToken('TlRMTVNTUAAB')).toBe('ntlm');
+      assert.equal(readNegotiateToken(b64(NTLM_NEGOTIATE)), 'ntlm');
+      assert.equal(readNegotiateToken('TlRMTVNTUAAB'), 'ntlm');
     });
     it('NTLM as the mechanism token inside a NegTokenInit', () => {
       const t = negTokenInit({
         mechs: [OID_NTLM],
         mechToken: NTLM_NEGOTIATE,
       });
-      expect(readNegotiateToken(b64(t))).toBe('ntlm');
+      assert.equal(readNegotiateToken(b64(t)), 'ntlm');
     });
     it('NTLM inside a NegTokenInit that lists Kerberos first', () => {
       const t = negTokenInit({
         mechs: [OID_KRB5, OID_NTLM],
         mechToken: NTLM_NEGOTIATE,
       });
-      expect(readNegotiateToken(b64(t))).toBe('ntlm');
+      assert.equal(readNegotiateToken(b64(t)), 'ntlm');
     });
   });
 
   describe('unreadable', () => {
-    it.each([
+    for (const [caseIndex, caseRow] of cases([
       ['empty', ''],
       ['not base64', 'not base64!!'],
       ['whitespace inside', 'TlRM TVNT'],
@@ -118,16 +124,19 @@ describe('readNegotiateToken', () => {
       ['padding in the middle', 'TlRM=VNTUAAB'],
       ['url-safe alphabet', 'TlRMTVNTUA-_'],
       ['one byte', 'YQ=='],
-    ])('%s', (_n, s) => {
-      expect(readNegotiateToken(s)).toBe('unreadable');
-    });
+    ]).entries()) {
+      const [_n, s] = caseRow;
+      it(caseTitle('%s', caseRow, caseIndex), () => {
+        assert.equal(readNegotiateToken(s), 'unreadable');
+      });
+    }
 
     it('random bytes', () => {
       for (let i = 1; i < 64; i++) {
         const b = Buffer.alloc(i);
         for (let j = 0; j < i; j++) b[j] = (j * 131 + i * 17 + 7) & 0xff;
         b[0] = 0x61; // never the GSS tag or NTLMSSP
-        expect(readNegotiateToken(b64(b))).toBe('unreadable');
+        assert.equal(readNegotiateToken(b64(b)), 'unreadable');
       }
     });
 
@@ -140,7 +149,7 @@ describe('readNegotiateToken', () => {
       for (let i = 0; i < 300; i++) {
         const body = Buffer.alloc(1 + (i % 120));
         for (let j = 0; j < body.length; j++) body[j] = next();
-        expect(readNegotiateToken(b64(tlv(0x60, body)))).toBe('unreadable');
+        assert.equal(readNegotiateToken(b64(tlv(0x60, body))), 'unreadable');
       }
     });
 
@@ -149,7 +158,7 @@ describe('readNegotiateToken', () => {
       const length = (((t[2] ?? 0) << 8) | (t[3] ?? 0)) + 1;
       t[2] = length >> 8;
       t[3] = length & 0xff;
-      expect(readNegotiateToken(b64(t))).toBe('unreadable');
+      assert.equal(readNegotiateToken(b64(t)), 'unreadable');
     });
 
     it('a length field of five bytes', () => {
@@ -162,7 +171,7 @@ describe('readNegotiateToken', () => {
         Buffer.from([0x60, 0x85, 0, 0, 0, 0, body.length]),
         body,
       ]);
-      expect(readNegotiateToken(b64(t))).toBe('unreadable');
+      assert.equal(readNegotiateToken(b64(t)), 'unreadable');
     });
 
     it('an indefinite length', () => {
@@ -176,22 +185,22 @@ describe('readNegotiateToken', () => {
         body,
         Buffer.from([0, 0]),
       ]);
-      expect(readNegotiateToken(b64(t))).toBe('unreadable');
+      assert.equal(readNegotiateToken(b64(t)), 'unreadable');
     });
 
     it('an indefinite length inside a NegTokenInit', () => {
       // The captured token: 60 82 LL LL, the SPNEGO OID (8 bytes),
       // a0 82 LL LL, then the NegTokenInit SEQUENCE at 16.
       const t = Buffer.from(SPNEGO);
-      expect(t[12]).toBe(0xa0);
-      expect(t[16]).toBe(0x30);
+      assert.equal(t[12], 0xa0);
+      assert.equal(t[16], 0x30);
       t[17] = 0x80;
-      expect(readNegotiateToken(b64(t))).toBe('unreadable');
+      assert.equal(readNegotiateToken(b64(t)), 'unreadable');
     });
 
     it('trailing bytes after the framed token', () => {
       const t = Buffer.concat([KERBEROS, Buffer.from([0])]);
-      expect(readNegotiateToken(b64(t))).toBe('unreadable');
+      assert.equal(readNegotiateToken(b64(t)), 'unreadable');
     });
 
     it('a mechanism token longer than its container', () => {
@@ -201,21 +210,22 @@ describe('readNegotiateToken', () => {
       // the OCTET STRING of the mechToken, 04 82 <hi> <lo>, right before it:
       // inflate its length past what remains
       const at = t.indexOf(KERBEROS);
-      expect(t[at - 4]).toBe(0x04);
-      expect(t[at - 3]).toBe(0x82);
+      assert.equal(t[at - 4], 0x04);
+      assert.equal(t[at - 3], 0x82);
       t[at - 2] = 0x7f;
-      expect(readNegotiateToken(b64(t))).toBe('unreadable');
+      assert.equal(readNegotiateToken(b64(t)), 'unreadable');
     });
 
     it('a NegTokenResp (not an init)', () => {
       const t = tlv(0xa1, tlv(0x30, tlv(0xa0, tlv(0x0a, Buffer.from([1])))));
-      expect(readNegotiateToken(b64(t))).toBe('unreadable');
+      assert.equal(readNegotiateToken(b64(t)), 'unreadable');
     });
 
     it('a deeply nested structure does not recurse', () => {
       let t: Buffer = Buffer.from([0x05, 0x00]);
       for (let i = 0; i < 2000; i++) t = tlv(0x30, t);
-      expect(readNegotiateToken(b64(tlv(0x60, tlv(0xa0, t))))).toBe(
+      assert.equal(
+        readNegotiateToken(b64(tlv(0x60, tlv(0xa0, t)))),
         'unreadable',
       );
     });
@@ -237,25 +247,30 @@ describe('readNegotiateToken', () => {
         negTokenInit({ mechs: [OID_NTLM], mechToken: NTLM_NEGOTIATE }),
       ],
     ];
-    it.each(valid)('every truncation of %s', (_n, t) => {
-      for (let n = 0; n < t.length; n++) {
-        expect(readNegotiateToken(b64(t.subarray(0, n)))).toBe('unreadable');
-      }
-    });
+    for (const [caseIndex, caseRow] of valid.entries()) {
+      const [_n, t] = caseRow;
+      it(caseTitle('every truncation of %s', caseRow, caseIndex), () => {
+        for (let n = 0; n < t.length; n++) {
+          assert.equal(readNegotiateToken(b64(t.subarray(0, n))), 'unreadable');
+        }
+      });
+    }
 
     it('every truncation of a raw NTLM message below its signature', () => {
       for (let n = 0; n < 8; n++) {
-        expect(readNegotiateToken(b64(NTLM_NEGOTIATE.subarray(0, n)))).toBe(
+        assert.equal(
+          readNegotiateToken(b64(NTLM_NEGOTIATE.subarray(0, n))),
           'unreadable',
         );
       }
     });
 
     it('never throws on a non-string', () => {
-      expect(readNegotiateToken(undefined as unknown as string)).toBe(
+      assert.equal(
+        readNegotiateToken(undefined as unknown as string),
         'unreadable',
       );
-      expect(readNegotiateToken(42 as unknown as string)).toBe('unreadable');
+      assert.equal(readNegotiateToken(42 as unknown as string), 'unreadable');
     });
 
     it('a large input with a huge length is unreadable', () => {
@@ -263,7 +278,7 @@ describe('readNegotiateToken', () => {
         Buffer.from([0x60, 0x84, 0x04, 0x00, 0x00, 0x00]),
         Buffer.alloc(1 << 20, 0x30),
       ]);
-      expect(readNegotiateToken(b64(big))).toBe('unreadable');
+      assert.equal(readNegotiateToken(b64(big)), 'unreadable');
     });
   });
 });

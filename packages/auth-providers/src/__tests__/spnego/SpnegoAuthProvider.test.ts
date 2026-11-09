@@ -1,4 +1,5 @@
-import { describe, expect, it } from '@jest/globals';
+import assert from 'node:assert/strict';
+import { describe, it } from 'node:test';
 import type {
   INegotiateTokenSource,
   IRequestTarget,
@@ -6,6 +7,12 @@ import type {
 } from '@mcp-abap-adt/interfaces-auth';
 import { NEGOTIATE_SOURCE_PROBLEMS } from '@mcp-abap-adt/interfaces-auth';
 import { SpnegoAuthProvider } from '../../spnego/SpnegoAuthProvider';
+import {
+  cases,
+  caseTitle,
+  matchObject,
+  notContains,
+} from '../helpers/expectations';
 import { configurationOf, mintedRefusal } from '../helpers/minted';
 import {
   b64,
@@ -83,15 +90,20 @@ function thrownBy(make: () => unknown): unknown {
 
 describe('construction', () => {
   const { source } = freshSource();
-  it.each(['HTTP@sap.example.com', 'HTTP@h', 'host-2@a-b.c', 'HTTP@A1.b2-c.D'])(
-    'accepts %p',
-    (servicePrincipal) => {
-      expect(
+  for (const [caseIndex, caseRow] of [
+    'HTTP@sap.example.com',
+    'HTTP@h',
+    'host-2@a-b.c',
+    'HTTP@A1.b2-c.D',
+  ].entries()) {
+    const servicePrincipal = caseRow;
+    it(caseTitle('accepts %p', caseRow, caseIndex), () => {
+      assert.doesNotThrow(
         () => new SpnegoAuthProvider({ servicePrincipal, tokenSource: source }),
-      ).not.toThrow();
-    },
-  );
-  it.each([
+      );
+    });
+  }
+  for (const [caseIndex, caseRow] of [
     '',
     ' HTTP@h',
     'HTTP@h ',
@@ -115,76 +127,93 @@ describe('construction', () => {
     'HTTP@h\tx',
     'HTTP\t@h',
     'HTTP@h\n',
-  ])('refuses %p as invalid-value', (servicePrincipal) => {
-    const c = configurationOf(
-      thrownBy(
-        () => new SpnegoAuthProvider({ servicePrincipal, tokenSource: source }),
-      ),
-    );
-    expect(c).toMatchObject({
-      case: 'invalid-value',
-      fields: ['servicePrincipal'],
+  ].entries()) {
+    const servicePrincipal = caseRow;
+    it(caseTitle('refuses %p as invalid-value', caseRow, caseIndex), () => {
+      const c = configurationOf(
+        thrownBy(
+          () =>
+            new SpnegoAuthProvider({ servicePrincipal, tokenSource: source }),
+        ),
+      );
+      matchObject(c, {
+        case: 'invalid-value',
+        fields: ['servicePrincipal'],
+      });
+      if (servicePrincipal !== '') {
+        notContains(c.reason, servicePrincipal);
+      }
     });
-    if (servicePrincipal !== '') {
-      expect(c.reason).not.toContain(servicePrincipal);
-    }
-  });
+  }
   it('kind is spnego', () => {
-    expect(provider(source).kind).toBe('spnego');
+    assert.equal(provider(source).kind, 'spnego');
   });
 });
 
 describe('prepare()', () => {
   it('asks the source once, with the service principal and a signal option', async () => {
     const { source, calls } = freshSource();
-    await expect(provider(source).prepare()).resolves.toEqual({ ok: true });
-    expect(calls).toHaveLength(1);
-    expect(calls[0]?.servicePrincipal).toBe(SPN);
-    expect(Object.keys(calls[0]?.options ?? {})).toEqual(['signal']);
+    assert.deepEqual(await provider(source).prepare(), { ok: true });
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0]?.servicePrincipal, SPN);
+    assert.deepEqual(Object.keys(calls[0]?.options ?? {}), ['signal']);
   });
   it('a SPNEGO token with Kerberos first is Ok', async () => {
     const token = b64(
       negTokenInit({ mechs: [OID_KRB5, OID_NTLM], mechToken: gssKerberos() }),
     );
     const { source } = scriptedSource(async () => ({ ok: true, token }));
-    await expect(provider(source).prepare()).resolves.toEqual({ ok: true });
+    assert.deepEqual(await provider(source).prepare(), { ok: true });
   });
-  it.each(NEGOTIATE_SOURCE_PROBLEMS)(
-    'a source problem %p is spnego with that problem',
-    async (problem) => {
-      const { source } = scriptedSource(async () => ({ ok: false, problem }));
-      const error = mintedRefusal(await provider(source).prepare());
-      expect(error).toMatchObject({
-        kind: 'spnego',
-        variant: problem,
-        facts: { problem, operation: 'obtaining-negotiate-token' },
-      });
-    },
-  );
-  it.each([
+  for (const [caseIndex, caseRow] of NEGOTIATE_SOURCE_PROBLEMS.entries()) {
+    const problem = caseRow;
+    it(
+      caseTitle(
+        'a source problem %p is spnego with that problem',
+        caseRow,
+        caseIndex,
+      ),
+      async () => {
+        const { source } = scriptedSource(async () => ({ ok: false, problem }));
+        const error = mintedRefusal(await provider(source).prepare());
+        matchObject(error, {
+          kind: 'spnego',
+          variant: problem,
+          facts: { problem, operation: 'obtaining-negotiate-token' },
+        });
+      },
+    );
+  }
+  for (const [caseIndex, caseRow] of cases([
     ['raw NTLM', b64(NTLM_NEGOTIATE)],
     ['NTLM inside SPNEGO', NTLM_IN_SPNEGO],
-  ])('%s is ntlm-token', async (_label, token) => {
-    const { source } = scriptedSource(async () => ({ ok: true, token }));
-    const error = mintedRefusal(await provider(source).prepare());
-    expect(error.facts).toEqual({
-      problem: 'ntlm-token',
-      operation: 'obtaining-negotiate-token',
+  ]).entries()) {
+    const [_label, token] = caseRow;
+    it(caseTitle('%s is ntlm-token', caseRow, caseIndex), async () => {
+      const { source } = scriptedSource(async () => ({ ok: true, token }));
+      const error = mintedRefusal(await provider(source).prepare());
+      assert.deepEqual(error.facts, {
+        problem: 'ntlm-token',
+        operation: 'obtaining-negotiate-token',
+      });
     });
-  });
-  it.each([
+  }
+  for (const [caseIndex, caseRow] of cases([
     ['garbage', 'not-base64!'],
     ['an empty token', ''],
     ['base64 of nothing known', b64(Buffer.from('hello world'))],
-  ])('%s is token-unreadable', async (_label, token) => {
-    const { source } = scriptedSource(async () => ({ ok: true, token }));
-    const error = mintedRefusal(await provider(source).prepare());
-    expect(error.facts).toEqual({
-      problem: 'token-unreadable',
-      operation: 'obtaining-negotiate-token',
+  ]).entries()) {
+    const [_label, token] = caseRow;
+    it(caseTitle('%s is token-unreadable', caseRow, caseIndex), async () => {
+      const { source } = scriptedSource(async () => ({ ok: true, token }));
+      const error = mintedRefusal(await provider(source).prepare());
+      assert.deepEqual(error.facts, {
+        problem: 'token-unreadable',
+        operation: 'obtaining-negotiate-token',
+      });
     });
-  });
-  it.each<[string, () => unknown]>([
+  }
+  for (const [caseIndex, caseRow] of cases([
     [
       'a throw',
       () => {
@@ -210,19 +239,25 @@ describe('prepare()', () => {
           },
         }),
     ],
-  ])('%s is unknown with the operation', async (_label, answer) => {
-    const { source } = scriptedSource(answer);
-    const outcome = await provider(source).prepare();
-    const error = mintedRefusal(outcome);
-    expect(error).toMatchObject({
-      kind: 'unknown',
-      facts: { operation: 'obtaining-negotiate-token' },
-    });
-    expect(JSON.stringify(error)).not.toContain('SOURCE-SECRET');
-  });
+  ]).entries()) {
+    const [_label, answer] = caseRow;
+    it(
+      caseTitle('%s is unknown with the operation', caseRow, caseIndex),
+      async () => {
+        const { source } = scriptedSource(answer);
+        const outcome = await provider(source).prepare();
+        const error = mintedRefusal(outcome);
+        matchObject(error, {
+          kind: 'unknown',
+          facts: { operation: 'obtaining-negotiate-token' },
+        });
+        notContains(JSON.stringify(error), 'SOURCE-SECRET');
+      },
+    );
+  }
   it('a synchronous answer is read as it is', async () => {
     const { source } = scriptedSource(() => ({ ok: true, token: kerberos() }));
-    await expect(provider(source).prepare()).resolves.toEqual({ ok: true });
+    assert.deepEqual(await provider(source).prepare(), { ok: true });
   });
   it('a foreign thenable is adopted: its then called once', async () => {
     let calls = 0;
@@ -233,8 +268,8 @@ describe('prepare()', () => {
         resolve({ ok: true, token: kerberos() });
       },
     }));
-    await expect(provider(source).prepare()).resolves.toEqual({ ok: true });
-    expect(calls).toBe(1);
+    assert.deepEqual(await provider(source).prepare(), { ok: true });
+    assert.equal(calls, 1);
   });
   it('a native promise with an own then is adopted through that then', async () => {
     let calls = 0;
@@ -248,8 +283,8 @@ describe('prepare()', () => {
       });
       return p;
     });
-    await expect(provider(source).prepare()).resolves.toEqual({ ok: true });
-    expect(calls).toBe(1);
+    assert.deepEqual(await provider(source).prepare(), { ok: true });
+    assert.equal(calls, 1);
   });
   it('calls token with the source as this', async () => {
     const source = {
@@ -260,7 +295,7 @@ describe('prepare()', () => {
       },
     };
     await provider(source).prepare();
-    expect(source.seen).toBe(source);
+    assert.equal(source.seen, source);
   });
 });
 
@@ -271,10 +306,10 @@ describe('authorize()', () => {
     await p.prepare();
     const { target, written } = recordingRequest();
     for (let i = 0; i < 3; i += 1) {
-      await expect(p.authorize(target)).resolves.toEqual({ ok: true });
+      assert.deepEqual(await p.authorize(target), { ok: true });
     }
-    expect(calls).toHaveLength(4);
-    expect(written).toEqual([
+    assert.equal(calls.length, 4);
+    assert.deepEqual(written, [
       ['Authorization', `Negotiate ${kerberos(2)}`],
       ['Authorization', `Negotiate ${kerberos(3)}`],
       ['Authorization', `Negotiate ${kerberos(4)}`],
@@ -286,14 +321,17 @@ describe('authorize()', () => {
     const { target, written } = recordingRequest();
     await p.authorize(target);
     await p.authorize(target);
-    expect(calls).toHaveLength(2);
-    expect(written.map(([, v]) => v)).toEqual([
-      `Negotiate ${kerberos(1)}`,
-      `Negotiate ${kerberos(2)}`,
-    ]);
-    expect(calls.every((c) => c.servicePrincipal === SPN)).toBe(true);
+    assert.equal(calls.length, 2);
+    assert.deepEqual(
+      written.map(([, v]) => v),
+      [`Negotiate ${kerberos(1)}`, `Negotiate ${kerberos(2)}`],
+    );
+    assert.equal(
+      calls.every((c) => c.servicePrincipal === SPN),
+      true,
+    );
   });
-  it.each<[string, () => unknown, Record<string, string>]>([
+  for (const [caseIndex, caseRow] of cases([
     [
       'a source problem',
       async () => ({ ok: false, problem: 'no-credential' }),
@@ -321,55 +359,71 @@ describe('authorize()', () => {
       },
       { kind: 'unknown' },
     ],
-  ])(
-    '%s: a refusal naming presenting-negotiate-token, nothing written',
-    async (_l, answer, expected) => {
-      const { source } = scriptedSource(answer);
-      const { target, written } = recordingRequest();
-      const error = mintedRefusal(await provider(source).authorize(target));
-      expect(error.kind).toBe(expected.kind);
-      expect(error.facts).toMatchObject({
-        operation: 'presenting-negotiate-token',
-        ...(expected.problem ? { problem: expected.problem } : {}),
-      });
-      expect(written).toEqual([]);
-    },
-  );
-  it.each(['prepare', 'authorize'] as const)(
-    '%s: a source answering mechanism-unsupported is spnego mechanism-unsupported with the moment’s operation',
-    async (moment) => {
-      const { source } = scriptedSource(async () => ({
-        ok: false,
-        problem: 'mechanism-unsupported',
-      }));
-      const { target, written } = recordingRequest();
-      const p = provider(source);
-      const outcome =
-        moment === 'prepare' ? await p.prepare() : await p.authorize(target);
-      const error = mintedRefusal(outcome);
-      expect(error).toMatchObject({
-        kind: 'spnego',
-        variant: 'mechanism-unsupported',
-        facts: {
+  ]).entries()) {
+    const [_l, answer, expected] = caseRow;
+    it(
+      caseTitle(
+        '%s: a refusal naming presenting-negotiate-token, nothing written',
+        caseRow,
+        caseIndex,
+      ),
+      async () => {
+        const { source } = scriptedSource(answer);
+        const { target, written } = recordingRequest();
+        const error = mintedRefusal(await provider(source).authorize(target));
+        assert.equal(error.kind, expected.kind);
+        matchObject(error.facts, {
+          operation: 'presenting-negotiate-token',
+          ...('problem' in expected ? { problem: expected.problem } : {}),
+        });
+        assert.deepEqual(written, []);
+      },
+    );
+  }
+  for (const [caseIndex, caseRow] of (
+    ['prepare', 'authorize'] as const
+  ).entries()) {
+    const moment = caseRow;
+    it(
+      caseTitle(
+        '%s: a source answering mechanism-unsupported is spnego mechanism-unsupported with the moment’s operation',
+        caseRow,
+        caseIndex,
+      ),
+      async () => {
+        const { source } = scriptedSource(async () => ({
+          ok: false,
           problem: 'mechanism-unsupported',
-          operation:
-            moment === 'prepare'
-              ? 'obtaining-negotiate-token'
-              : 'presenting-negotiate-token',
-        },
-      });
-      expect(written).toEqual([]);
-    },
-  );
+        }));
+        const { target, written } = recordingRequest();
+        const p = provider(source);
+        const outcome =
+          moment === 'prepare' ? await p.prepare() : await p.authorize(target);
+        const error = mintedRefusal(outcome);
+        matchObject(error, {
+          kind: 'spnego',
+          variant: 'mechanism-unsupported',
+          facts: {
+            problem: 'mechanism-unsupported',
+            operation:
+              moment === 'prepare'
+                ? 'obtaining-negotiate-token'
+                : 'presenting-negotiate-token',
+          },
+        });
+        assert.deepEqual(written, []);
+      },
+    );
+  }
   it('a target whose header throws is Oops, its text nowhere', async () => {
     const { source } = freshSource();
     const { target } = recordingRequest({ throws: true });
     const outcome = await provider(source).authorize(target);
     const error = mintedRefusal(outcome);
-    expect(error.facts).toMatchObject({
+    matchObject(error.facts, {
       operation: 'presenting-negotiate-token',
     });
-    expect(JSON.stringify(error)).not.toContain('SECRET-IN-TARGET');
+    notContains(JSON.stringify(error), 'SECRET-IN-TARGET');
   });
 });
 
@@ -386,11 +440,11 @@ describe('establish()', () => {
         },
       },
     );
-    await expect(provider(source).establish(logon as never)).resolves.toEqual({
+    assert.deepEqual(await provider(source).establish(logon as never), {
       ok: true,
     });
-    expect(touched).toEqual([]);
-    expect(calls).toHaveLength(0);
+    assert.deepEqual(touched, []);
+    assert.equal(calls.length, 0);
   });
 });
 
@@ -404,7 +458,7 @@ describe('rejected()', () => {
         error: undefined,
       }),
     );
-    expect(error).toMatchObject({
+    matchObject(error, {
       kind: 'credential-refused',
       facts: { credential: 'kerberos-ticket', at: 'request' },
     });
@@ -419,32 +473,35 @@ describe('rejected()', () => {
         },
       }),
     );
-    expect(error).toMatchObject({
+    matchObject(error, {
       kind: 'credential-refused',
       facts: { credential: 'kerberos-ticket' },
     });
   });
-  it.each([
+  for (const [caseIndex, caseRow] of cases([
     [403, 'not-authorized'],
     [500, 'system-failed'],
-  ])('%p is system-refused %p', async (status, verdict) => {
-    const error = mintedRefusal(
-      await provider(source).rejected({
-        at: 'request',
-        status,
-        error: undefined,
-      }),
-    );
-    expect(error).toMatchObject({
-      kind: 'system-refused',
-      facts: { verdict, status },
+  ]).entries()) {
+    const [status, verdict] = caseRow;
+    it(caseTitle('%p is system-refused %p', caseRow, caseIndex), async () => {
+      const error = mintedRefusal(
+        await provider(source).rejected({
+          at: 'request',
+          status,
+          error: undefined,
+        }),
+      );
+      matchObject(error, {
+        kind: 'system-refused',
+        facts: { verdict, status },
+      });
     });
-  });
+  }
   it('no status is system-refused unknown', async () => {
     const error = mintedRefusal(
       await provider(source).rejected({ at: 'request', error: undefined }),
     );
-    expect(error).toMatchObject({
+    matchObject(error, {
       kind: 'system-refused',
       facts: { verdict: 'unknown' },
     });
@@ -456,7 +513,7 @@ describe('rejected()', () => {
       status: 401,
       error: undefined,
     });
-    expect(fresh.calls).toHaveLength(0);
+    assert.equal(fresh.calls.length, 0);
   });
 });
 
@@ -472,29 +529,39 @@ describe('abort (no timeout of the package’s choosing)', () => {
     );
     return { ...held, release: (value: unknown) => release(value) };
   }
-  it.each(['prepare', 'authorize'] as const)(
-    'the parties’ signal reaches the source; its abort ends %s aborted and the late token is never written',
-    async (moment) => {
-      const controller = new AbortController();
-      const held = heldSource();
-      const p = provider(held.source, controller.signal);
-      const { target, written } = recordingRequest();
-      const outcome = moment === 'prepare' ? p.prepare() : p.authorize(target);
-      await new Promise((resolve) => setImmediate(resolve));
-      const given = held.calls[0]?.options.signal;
-      expect(given?.aborted).toBe(false);
-      controller.abort();
-      const error = mintedRefusal(await outcome);
-      expect(error).toMatchObject({
-        kind: 'interactive-login',
-        facts: { outcome: 'aborted' },
-      });
-      expect(given?.aborted).toBe(true);
-      held.release({ ok: true, token: kerberos() });
-      await new Promise((resolve) => setImmediate(resolve));
-      expect(written).toEqual([]);
-    },
-  );
+  for (const [caseIndex, caseRow] of (
+    ['prepare', 'authorize'] as const
+  ).entries()) {
+    const moment = caseRow;
+    it(
+      caseTitle(
+        'the parties’ signal reaches the source; its abort ends %s aborted and the late token is never written',
+        caseRow,
+        caseIndex,
+      ),
+      async () => {
+        const controller = new AbortController();
+        const held = heldSource();
+        const p = provider(held.source, controller.signal);
+        const { target, written } = recordingRequest();
+        const outcome =
+          moment === 'prepare' ? p.prepare() : p.authorize(target);
+        await new Promise((resolve) => setImmediate(resolve));
+        const given = held.calls[0]?.options.signal;
+        assert.equal(given?.aborted, false);
+        controller.abort();
+        const error = mintedRefusal(await outcome);
+        matchObject(error, {
+          kind: 'interactive-login',
+          facts: { outcome: 'aborted' },
+        });
+        assert.equal(given?.aborted, true);
+        held.release({ ok: true, token: kerberos() });
+        await new Promise((resolve) => setImmediate(resolve));
+        assert.deepEqual(written, []);
+      },
+    );
+  }
   it('an attached party: the moment ends when every party has aborted', async () => {
     const first = new AbortController();
     const second = new AbortController();
@@ -506,12 +573,14 @@ describe('abort (no timeout of the package’s choosing)', () => {
     await new Promise((resolve) => setImmediate(resolve));
     first.abort();
     await new Promise((resolve) => setImmediate(resolve));
-    expect(held.calls[0]?.options.signal?.aborted).toBe(false);
+    assert.equal(held.calls[0]?.options.signal?.aborted, false);
     second.abort();
-    expect(mintedRefusal(await outcome).facts).toEqual({ outcome: 'aborted' });
+    assert.deepEqual(mintedRefusal(await outcome).facts, {
+      outcome: 'aborted',
+    });
     held.release({ ok: true, token: kerberos() });
     await new Promise((resolve) => setImmediate(resolve));
-    expect(written).toEqual([]);
+    assert.deepEqual(written, []);
   });
   it('a source answering after an abort it ignored: aborted, not its answer', async () => {
     const controller = new AbortController();
@@ -522,11 +591,11 @@ describe('abort (no timeout of the package’s choosing)', () => {
     const error = mintedRefusal(
       await provider(source, controller.signal).prepare(),
     );
-    expect(error.facts).toEqual({ outcome: 'aborted' });
+    assert.deepEqual(error.facts, { outcome: 'aborted' });
   });
   it('without a party, the source is given no signal', async () => {
     const { source, calls } = freshSource();
     await provider(source).prepare();
-    expect(calls[0]?.options.signal).toBeUndefined();
+    assert.equal(calls[0]?.options.signal, undefined);
   });
 });
