@@ -1,16 +1,24 @@
 /**
- * The setup guard (`noRealBrowser.ts`): deny by default. In a test, every
- * `child_process` entry point refuses unless the program is node itself
- * (`process.execPath`) or an exact path a test registered as its fake —
- * and refuses any shell. Every refused program here is a path that does not
- * exist, so even a broken guard starts nothing.
+ * The child-process guard (`noRealBrowser.ts`): deny by default. In a test,
+ * every `child_process` entry point refuses unless the program is node
+ * itself (`process.execPath`) or an exact path a test registered as its
+ * fake — and refuses any shell. Every refused program here is a path that
+ * does not exist, so even a broken guard starts nothing.
+ *
+ * That the runner installs it in every file's process before the file loads
+ * is proved by `runner/guardPreload.test.ts`, over fixture files that never
+ * load it themselves.
  */
 
+import assert from 'node:assert/strict';
+// Another way in to the same module object: a namespace import.
+import * as childProcessNamespace from 'node:child_process';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { describe, it } from 'node:test';
 import { promisify } from 'node:util';
-import { describe, expect, it, jest } from '@jest/globals';
+import { allowExecutable } from './noRealBrowser';
 
 // The core module object itself: the one the guard wraps.
 import childProcess = require('node:child_process');
@@ -18,26 +26,23 @@ import childProcess = require('node:child_process');
 const REFUSED = 'a test tried to start a program it did not register';
 const nowhere = (name: string) => join('/nonexistent-launcher-dir', name);
 
-/** Loaded only after the first case: the import itself would install it. */
-const guard = () =>
-  jest.requireActual('./noRealBrowser') as {
-    allowExecutable: (path: string) => () => void;
-  };
+/** The guard's refusal. */
+const refused = (error: unknown): boolean =>
+  error instanceof Error && error.message.includes(REFUSED);
 
 describe('no real program in a test', () => {
-  // First, before this file loads the module: jest's setupFiles installed it.
-  it('the guard is installed for every test file (jest setupFiles)', () => {
-    expect(
-      (childProcess as unknown as Record<symbol, unknown>)[
-        Symbol.for('mcp-abap-adt.noRealBrowser')
-      ],
-    ).toBe(true);
-    expect(() => childProcess.spawn(nowhere('xdg-open'), ['u'])).toThrow(
-      REFUSED,
+  it('the guard is installed on the module object', () => {
+    assert.equal(
+      Reflect.get(childProcess, Symbol.for('mcp-abap-adt.noRealBrowser')),
+      true,
+    );
+    assert.throws(
+      () => childProcess.spawn(nowhere('xdg-open'), ['u']),
+      refused,
     );
   });
 
-  it.each([
+  for (const program of [
     // `open`'s fallback names, WSL paths and the .exe forms: no name list —
     // anything not registered is refused.
     nowhere('microsoft-edge-dev'),
@@ -49,13 +54,16 @@ describe('no real program in a test', () => {
     nowhere('osascript'),
     // A program under the temporary directory is no longer allowed by place.
     join(tmpdir(), 'nonexistent-browser-dir', 'xdg-open'),
-  ])('spawn(%s) is refused', (program) => {
-    expect(() => childProcess.spawn(program, ['https://x.invalid/'])).toThrow(
-      REFUSED,
-    );
-  });
+  ]) {
+    it(`spawn(${program}) is refused`, () => {
+      assert.throws(
+        () => childProcess.spawn(program, ['https://x.invalid/']),
+        refused,
+      );
+    });
+  }
 
-  it.each([
+  const entryPoints: [string, () => unknown][] = [
     [
       'spawnSync',
       () => childProcess.spawnSync(nowhere('xdg-open'), ['https://x.invalid/']),
@@ -72,11 +80,14 @@ describe('no real program in a test', () => {
     ['exec', () => childProcess.exec(`${nowhere('xdg-open')} https://x/`)],
     ['execSync', () => childProcess.execSync(`${nowhere('xdg-open')} x`)],
     ['fork', () => childProcess.fork(nowhere('module.js'))],
-  ])('%s is guarded', (_name, call) => {
-    expect(call).toThrow(REFUSED);
-  });
+  ];
+  for (const [name, call] of entryPoints) {
+    it(`${name} is guarded`, () => {
+      assert.throws(call, refused);
+    });
+  }
 
-  it.each([
+  const shells: [string, () => unknown][] = [
     [
       'a whole command string with shell: true',
       () =>
@@ -103,17 +114,18 @@ describe('no real program in a test', () => {
       'execFile with shell: true',
       () => childProcess.execFile(nowhere('xdg-open'), ['x'], { shell: true }),
     ],
-  ])('%s is refused', (_name, call) => {
-    expect(call).toThrow(REFUSED);
-  });
+  ];
+  for (const [name, call] of shells) {
+    it(`${name} is refused`, () => {
+      assert.throws(call, refused);
+    });
+  }
 
   it('the interactive opt-in no longer lifts it', () => {
     const saved = process.env.MCP_ABAP_ADT_INTERACTIVE;
     process.env.MCP_ABAP_ADT_INTERACTIVE = '1';
     try {
-      expect(() => childProcess.spawn(nowhere('xdg-open'), [])).toThrow(
-        REFUSED,
-      );
+      assert.throws(() => childProcess.spawn(nowhere('xdg-open'), []), refused);
     } finally {
       if (saved === undefined) delete process.env.MCP_ABAP_ADT_INTERACTIVE;
       else process.env.MCP_ABAP_ADT_INTERACTIVE = saved;
@@ -122,18 +134,19 @@ describe('no real program in a test', () => {
 
   it('a registered exact path is allowed, its neighbour is not; unregistering closes it', () => {
     const fake = join(tmpdir(), 'nonexistent-registered-dir', 'fake-launcher');
-    const unregister = guard().allowExecutable(fake);
+    const unregister = allowExecutable(fake);
     try {
       // Allowed: the real spawn reports ENOENT asynchronously, no throw.
       const child = childProcess.spawn(fake, [], { stdio: 'ignore' });
       child.on('error', () => undefined);
-      expect(() =>
-        childProcess.spawn(`${fake}-neighbour`, [], { stdio: 'ignore' }),
-      ).toThrow(REFUSED);
+      assert.throws(
+        () => childProcess.spawn(`${fake}-neighbour`, [], { stdio: 'ignore' }),
+        refused,
+      );
     } finally {
       unregister();
     }
-    expect(() => childProcess.spawn(fake, [])).toThrow(REFUSED);
+    assert.throws(() => childProcess.spawn(fake, []), refused);
   });
 
   // `promisify(execFile)` goes through `util.promisify.custom`, which
@@ -150,33 +163,34 @@ describe('no real program in a test', () => {
       const result = await promisify(childProcess.execFile)(process.execPath, [
         fixture,
       ]);
-      expect(result).toEqual({ stdout: 'out\n', stderr: 'err\n' });
+      assert.deepEqual(result, { stdout: 'out\n', stderr: 'err\n' });
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
   });
 
-  it.each([
+  const promisified: [string, () => Promise<unknown>][] = [
     ['execFile', () => promisify(childProcess.execFile)(nowhere('x'), [])],
     ['exec', () => promisify(childProcess.exec)(`${nowhere('x')} y`)],
-  ])(
-    'promisify(%s) of an unregistered program is refused',
-    async (_n, call) => {
+  ];
+  for (const [name, call] of promisified) {
+    it(`promisify(${name}) of an unregistered program is refused`, async () => {
       let thrown: unknown;
       try {
         await call();
       } catch (error) {
         thrown = error;
       }
-      expect(String(thrown)).toContain(REFUSED);
-    },
-  );
+      assert.ok(String(thrown).includes(REFUSED), String(thrown));
+    });
+  }
 
-  it('jest.requireActual sees the guard too', () => {
-    const actual =
-      jest.requireActual<typeof import('node:child_process')>(
-        'node:child_process',
-      );
-    expect(() => actual.spawn(nowhere('xdg-open'), [])).toThrow(REFUSED);
+  // Was "jest.requireActual sees the guard too": with no module registry of
+  // a runner in between, the other import of the module object is the case.
+  it('a namespace import of node:child_process sees the guard too', () => {
+    assert.throws(
+      () => childProcessNamespace.spawn(nowhere('xdg-open'), []),
+      refused,
+    );
   });
 });

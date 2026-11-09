@@ -12,13 +12,20 @@
 //   work on Windows.
 // - Every file runs in a process of its own (`node --test`'s process isolation), one file at
 //   a time, with no timeout: a file ends on its result.
+// - Every file's process loads the child-process guard before any test module
+//   (`--require`, the compiled `src/__tests__/helpers/noRealBrowser.ts`): no test starts a
+//   program it did not register.
 // - Every file's process may mock a module (`--experimental-test-module-mocks`): axios is
 //   mocked with `mock.module`.
 import { spawnSync } from 'node:child_process';
 import { existsSync, readdirSync, statSync } from 'node:fs';
 import { join, normalize, sep } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 const ROOT = '.test-build';
+const GUARD = fileURLToPath(
+  new URL('../.test-build/__tests__/helpers/noRealBrowser.js', import.meta.url),
+);
 const env = { ...process.env };
 const options = [];
 const paths = [];
@@ -86,10 +93,19 @@ for (const path of paths) {
   }
   files.push(...found);
 }
+if (!existsSync(GUARD)) {
+  console.error(
+    `run-tests: the child-process guard ${GUARD} does not exist — run the test build first`,
+  );
+  process.exit(1);
+}
+
 const run = spawnSync(
   process.execPath,
   [
     '--experimental-test-module-mocks',
+    '--require',
+    GUARD,
     '--test',
     '--test-concurrency=1',
     ...options,

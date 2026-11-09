@@ -9,9 +9,7 @@
     "declarationMap": false,
     "noEmitOnError": true
   },
-  "include": [
-    "src/**/*"
-  ],
+  "include": ["src/**/*"],
   "exclude": [
     "node_modules",
     "dist",
@@ -19,6 +17,8 @@
     "src/**/*.typecheck.ts"
   ],
   "files": [
+    "src/__tests__/helpers/noRealBrowser.test.ts",
+    "src/__tests__/runner/guardPreload.test.ts",
     "src/__tests__/runner/runTests.test.ts"
   ]
 }

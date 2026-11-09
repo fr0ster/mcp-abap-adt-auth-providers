@@ -1,6 +1,8 @@
 /**
- * Jest setup (`setupFiles`): no test starts a program it did not register —
- * above all no real browser or URL launcher.
+ * Loaded before any test module in every test process: by Jest as its setup
+ * (`setupFiles`), and by `tools/run-tests.mjs` as a preload (`node --test
+ * --require`, the compiled file) for every node:test file. No test starts a
+ * program it did not register — above all no real browser or URL launcher.
  *
  * Deny by default. Every `child_process` entry point (`spawn`, `spawnSync`,
  * `execFile`, `execFileSync`, `exec`, `execSync`, `fork`) throws unless:
@@ -17,7 +19,7 @@
  *
  * Not covered: a child node process. The guard allows `process.execPath`,
  * and a plain-node child (`plainNode.ts`, `browserSettlesAlone.test.ts`)
- * runs outside Jest's setup, so nothing here stops what it starts. Such a
+ * runs outside the test setup, so nothing here stops what it starts. Such a
  * child either injects its own `IBrowser`, or — `browserSettlesAlone` —
  * runs a shipped browser with a `PATH` holding only its fake directory and
  * fakes given by absolute path, so no system program can be found.
