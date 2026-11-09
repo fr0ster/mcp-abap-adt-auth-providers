@@ -2,9 +2,18 @@
  * Nothing in the package writes to process.stdout: under an MCP or LSP stdio
  * transport stdout carries the protocol, and a stray line corrupts it. The
  * rule is checked statically, over the TypeScript AST of every source file
- * (src, `__tests__` left out): no reference to `process.stdout`, however
- * written, and no call of the console methods that write to stdout
- * (`log`, `info`, `debug`, `dir`, `table`).
+ * (src, `__tests__` left out):
+ *
+ * - no `console` in any form: the package logs only through the `ILogger`
+ *   it is given and prompts on stderr, and it names `console` nowhere
+ *   (Measured: no production file reads it), so no console method — the
+ *   ones that write to stdout or any other — can be reached, however
+ *   written (`console.x`, `console['x']`, `const { log } = console`, an
+ *   alias, `globalThis.console`, an import of `node:console`);
+ * - no `stdout` of the process in any form: `process.stdout`,
+ *   `process['stdout']`, `const { stdout } = process`, through an alias of
+ *   `process` or `globalThis.process`, an import of `node:process`
+ *   (`import { stdout }`, a namespace or default import read for `stdout`).
  */
 
 import assert from 'node:assert/strict';
@@ -14,12 +23,13 @@ import { describe, it } from 'node:test';
 import ts from 'typescript';
 import { SRC } from './helpers/packagePaths';
 
-const STDOUT_CONSOLE: ReadonlySet<string> = new Set([
-  'log',
-  'info',
-  'debug',
-  'dir',
-  'table',
+const PROCESS_MODULES: ReadonlySet<string> = new Set([
+  'process',
+  'node:process',
+]);
+const CONSOLE_MODULES: ReadonlySet<string> = new Set([
+  'console',
+  'node:console',
 ]);
 
 /** The `.ts` sources under `dir`, `__tests__` left out. */
@@ -32,7 +42,7 @@ function sourceFiles(dir: string): string[] {
   });
 }
 
-/** `name` as an identifier, `.name` or `['name']`. */
+/** `name` as `.name` or `['name']`. */
 function memberName(node: ts.Node): string | undefined {
   if (ts.isPropertyAccessExpression(node)) return node.name.text;
   if (
@@ -51,10 +61,52 @@ function memberObject(node: ts.Node): ts.Expression | undefined {
   return undefined;
 }
 
-const isIdentifier = (node: ts.Node | undefined, name: string): boolean =>
-  node !== undefined && ts.isIdentifier(node) && node.text === name;
+/** `globalThis.name` or `globalThis['name']`. */
+function globalMember(node: ts.Node, name: string): boolean {
+  const object = memberObject(node);
+  return (
+    memberName(node) === name &&
+    object !== undefined &&
+    ts.isIdentifier(object) &&
+    object.text === 'globalThis'
+  );
+}
 
-/** Every line of `source` that writes to stdout, as `line: text`. */
+/** Whether a binding pattern takes `name` out of its object. */
+function takes(pattern: ts.ObjectBindingPattern, name: string): boolean {
+  return pattern.elements.some((element) => {
+    const key = element.propertyName ?? element.name;
+    return (
+      (ts.isIdentifier(key) || ts.isStringLiteral(key)) && key.text === name
+    );
+  });
+}
+
+/** The module a declaration imports, if any. */
+function importedModule(node: ts.Node): string | undefined {
+  if (ts.isImportDeclaration(node) && ts.isStringLiteral(node.moduleSpecifier))
+    return node.moduleSpecifier.text;
+  if (
+    ts.isImportEqualsDeclaration(node) &&
+    ts.isExternalModuleReference(node.moduleReference) &&
+    ts.isStringLiteral(node.moduleReference.expression)
+  ) {
+    return node.moduleReference.expression.text;
+  }
+  if (
+    ts.isCallExpression(node) &&
+    (node.expression.kind === ts.SyntaxKind.ImportKeyword ||
+      (ts.isIdentifier(node.expression) &&
+        node.expression.text === 'require')) &&
+    node.arguments[0] !== undefined &&
+    ts.isStringLiteral(node.arguments[0])
+  ) {
+    return node.arguments[0].text;
+  }
+  return undefined;
+}
+
+/** Every reference to `console` or to the process's stdout in `source`, as `line: text`. */
 function stdoutWrites(fileName: string, source: string): string[] {
   const file = ts.createSourceFile(
     fileName,
@@ -67,41 +119,93 @@ function stdoutWrites(fileName: string, source: string): string[] {
     const { line } = file.getLineAndCharacterOfPosition(node.getStart(file));
     found.push(`${line + 1}: ${node.getText(file)}`);
   };
-  const visit = (node: ts.Node): void => {
-    // process.stdout, process['stdout']
+
+  // The names that hold the process: `process` itself, and every alias.
+  const processNames = new Set(['process']);
+  const isProcess = (node: ts.Node | undefined): boolean =>
+    node !== undefined &&
+    ((ts.isIdentifier(node) && processNames.has(node.text)) ||
+      globalMember(node, 'process'));
+  const collectAliases = (node: ts.Node): void => {
     if (
-      memberName(node) === 'stdout' &&
-      isIdentifier(memberObject(node), 'process')
+      ts.isVariableDeclaration(node) &&
+      ts.isIdentifier(node.name) &&
+      isProcess(node.initializer)
     ) {
-      report(node);
+      processNames.add(node.name.text);
     }
-    // const { stdout } = process
+    const module = importedModule(node);
+    if (module !== undefined && PROCESS_MODULES.has(module)) {
+      if (ts.isImportDeclaration(node)) {
+        const clause = node.importClause;
+        if (clause?.name !== undefined) processNames.add(clause.name.text);
+        const bindings = clause?.namedBindings;
+        if (bindings !== undefined && ts.isNamespaceImport(bindings))
+          processNames.add(bindings.name.text);
+      }
+      if (ts.isImportEqualsDeclaration(node)) processNames.add(node.name.text);
+      if (ts.isCallExpression(node) && ts.isVariableDeclaration(node.parent)) {
+        if (ts.isIdentifier(node.parent.name))
+          processNames.add(node.parent.name.text);
+      }
+    }
+    ts.forEachChild(node, collectAliases);
+  };
+  // Twice: an alias of an alias declared later in the file.
+  collectAliases(file);
+  collectAliases(file);
+
+  const visit = (node: ts.Node): void => {
+    // console in any form: an identifier read as a value, or a member of globalThis.
+    if (
+      ts.isIdentifier(node) &&
+      node.text === 'console' &&
+      !(
+        ts.isPropertyAccessExpression(node.parent) && node.parent.name === node
+      ) &&
+      !(ts.isPropertyAssignment(node.parent) && node.parent.name === node) &&
+      !(ts.isPropertySignature(node.parent) && node.parent.name === node) &&
+      !(ts.isBindingElement(node.parent) && node.parent.propertyName === node)
+    ) {
+      report(node.parent);
+    }
+    if (globalMember(node, 'console')) report(node);
+    const module = importedModule(node);
+    if (module !== undefined && CONSOLE_MODULES.has(module)) report(node);
+    // process.stdout, process['stdout'], alias.stdout, globalThis.process.stdout
+    if (memberName(node) === 'stdout' && isProcess(memberObject(node)))
+      report(node);
+    // const { stdout } = process (or an alias)
     if (
       ts.isVariableDeclaration(node) &&
       ts.isObjectBindingPattern(node.name) &&
-      node.initializer !== undefined &&
-      isIdentifier(node.initializer, 'process') &&
-      node.name.elements.some(
-        (element) =>
-          (element.propertyName !== undefined &&
-            ts.isIdentifier(element.propertyName) &&
-            element.propertyName.text === 'stdout') ||
-          (element.propertyName === undefined &&
-            isIdentifier(element.name, 'stdout')),
+      isProcess(node.initializer) &&
+      takes(node.name, 'stdout')
+    ) {
+      report(node);
+    }
+    // import { stdout } from 'node:process'
+    if (
+      ts.isImportDeclaration(node) &&
+      module !== undefined &&
+      PROCESS_MODULES.has(module) &&
+      node.importClause?.namedBindings !== undefined &&
+      ts.isNamedImports(node.importClause.namedBindings) &&
+      node.importClause.namedBindings.elements.some(
+        (element) => (element.propertyName ?? element.name).text === 'stdout',
       )
     ) {
       report(node);
     }
-    // console.log(…), console['info'](…)
-    if (ts.isCallExpression(node)) {
-      const name = memberName(node.expression);
-      if (
-        name !== undefined &&
-        STDOUT_CONSOLE.has(name) &&
-        isIdentifier(memberObject(node.expression), 'console')
-      ) {
-        report(node);
-      }
+    // const { stdout } = require('node:process')
+    if (
+      ts.isVariableDeclaration(node) &&
+      ts.isObjectBindingPattern(node.name) &&
+      node.initializer !== undefined &&
+      PROCESS_MODULES.has(importedModule(node.initializer) ?? '') &&
+      takes(node.name, 'stdout')
+    ) {
+      report(node);
     }
     ts.forEachChild(node, visit);
   };
@@ -110,7 +214,7 @@ function stdoutWrites(fileName: string, source: string): string[] {
 }
 
 describe('nothing in src writes to stdout', () => {
-  it('no reference to process.stdout and no console.log/info/debug/dir/table', () => {
+  it('no console in any form, and no stdout of the process in any form', () => {
     const files = sourceFiles(SRC);
     // Not vacuous: the whole package is scanned.
     assert.ok(files.length > 50, `${files.length} files`);
@@ -122,26 +226,42 @@ describe('nothing in src writes to stdout', () => {
     assert.deepEqual(found, []);
   });
 
-  it('the scan sees each way of writing to stdout (not blind)', () => {
-    const source = [
+  it('the scan sees each form (not blind)', () => {
+    const forms = [
       "process.stdout.write('a');",
       "process['stdout'].write('b');",
       'const { stdout } = process;',
       'const { stdout: out } = process;',
-      "console.log('c');",
-      "console.info('d');",
-      "console.debug('e');",
-      'console.dir({});',
-      'console.table([]);',
-      "console['log']('f');",
-      // Not stdout: stderr and the console methods that write there.
-      "process.stderr.write('g');",
-      "console.error('h');",
-      "console.warn('i');",
+      "const p = process; p.stdout.write('c');",
+      "globalThis.process.stdout.write('d');",
+      "import { stdout } from 'node:process';",
+      "import { stdout as o } from 'process';",
+      "import * as proc from 'node:process'; proc.stdout.write('e');",
+      "import proc2 from 'node:process'; proc2.stdout.write('f');",
+      "const { stdout: s2 } = require('node:process');",
+      "console.log('g');",
+      "console.count('h');",
+      "console['info']('i');",
+      "const { log } = console; log('j');",
+      'const c = console;',
+      "globalThis.console.log('k');",
+      "console.error('l');",
+      "import { Console } from 'node:console';",
+    ];
+    for (const form of forms) {
+      assert.notDeepEqual(stdoutWrites('probe.ts', form), [], form);
+    }
+  });
+
+  it('what is not stdout is no finding', () => {
+    const clean = [
+      "process.stderr.write('a');",
+      'const home = process.env.HOME;',
+      'const { stdout } = await run(exe, []);',
+      'const result = { stdout: "x" }; result.stdout;',
+      '// console.log and process.stdout in a comment',
+      'type T = { console: number };',
     ].join('\n');
-    assert.deepEqual(
-      stdoutWrites('probe.ts', source).map((line) => line.split(':')[0]),
-      ['1', '2', '3', '4', '5', '6', '7', '8', '9', '10'],
-    );
+    assert.deepEqual(stdoutWrites('probe.ts', clean), []);
   });
 });
