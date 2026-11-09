@@ -1,7 +1,9 @@
-import { describe, expect, it, jest } from '@jest/globals';
+import assert from 'node:assert/strict';
+import { describe, it, mock } from 'node:test';
 import { consoleDeviceCodePresenter } from '../../deviceCode/DeviceCodePresenter';
 import { OidcDeviceFlowProvider } from '../../providers/OidcDeviceFlowProvider';
 import { refreshThenLogin } from '../../renewal';
+import { watchStdout } from '../helpers/stdoutWrites';
 
 const prompt = {
   verificationUri: 'https://idp/device',
@@ -12,42 +14,54 @@ const prompt = {
 
 describe('device-code presenter', () => {
   it('console presenter: to the logger when there is one, never stdout', async () => {
-    const info = jest.fn();
-    const out = jest.spyOn(process.stdout, 'write');
+    const info = mock.fn();
+    const out: string[] = [];
+    const stdout = watchStdout((text) => {
+      out.push(text);
+    });
     await consoleDeviceCodePresenter({
       info,
-      debug: jest.fn(),
-      warn: jest.fn(),
-      error: jest.fn(),
+      debug: mock.fn(),
+      warn: mock.fn(),
+      error: mock.fn(),
     } as never).present(prompt);
-    expect(info.mock.calls.flat().join('\n')).toMatch(
+    assert.match(
+      info.mock.calls.flatMap((call) => call.arguments).join('\n'),
       /https:\/\/idp\/device[\s\S]*AB-CD/,
     );
-    expect(out).not.toHaveBeenCalled();
-    out.mockRestore();
+    assert.deepEqual(out, []);
+    stdout.mock.restore();
   });
 
   it('console presenter: to stderr without a logger', async () => {
-    const err = jest
-      .spyOn(process.stderr, 'write')
-      .mockImplementation(() => true);
+    const err = mock.method(process.stderr, 'write', () => true);
     await consoleDeviceCodePresenter().present(prompt);
-    expect(err.mock.calls.map((c) => String(c[0])).join('')).toMatch(
+    assert.match(
+      err.mock.calls
+        .map((call) => call.arguments)
+        .map((c) => String(c[0]))
+        .join(''),
       /Enter code: AB-CD/,
     );
-    err.mockRestore();
+    err.mock.restore();
   });
 
   it('the provider requires a presenter and toConsole assembles one', () => {
-    // @ts-expect-error presenter is required
-    expect(() => new OidcDeviceFlowProvider({ clientId: 'c' })).toBeDefined();
+    // A compile-time check (`npm run test:check`): the config requires a
+    // presenter. It was `expect(() => …).toBeDefined()`, which held for any
+    // function and proved nothing at run time.
+    const withoutPresenter = () =>
+      // @ts-expect-error presenter is required
+      new OidcDeviceFlowProvider({ clientId: 'c' });
+    void withoutPresenter;
     const p = OidcDeviceFlowProvider.toConsole({
       renewal: refreshThenLogin(),
       clientId: 'c',
     });
-    expect(
+    assert.equal(
       typeof (p as unknown as { config: { presenter: { present: unknown } } })
         .config.presenter.present,
-    ).toBe('function');
+      'function',
+    );
   });
 });
