@@ -98,6 +98,15 @@
     "src/__tests__/snc/sncRows.test.ts",
     "src/__tests__/snc/sncSources.test.ts",
     "src/__tests__/spnego/SpnegoAuthProvider.test.ts",
-    "src/__tests__/spnego/negotiateToken.test.ts"
+    "src/__tests__/spnego/negotiateToken.test.ts",
+    "src/__tests__/strategies/asOidcResult.test.ts",
+    "src/__tests__/strategies/interactiveLoginRows.test.ts",
+    "src/__tests__/strategies/interactiveSources.test.ts",
+    "src/__tests__/strategies/loginCsrf.test.ts",
+    "src/__tests__/strategies/manualDrain.test.ts",
+    "src/__tests__/strategies/manualPasscodeStrategy.test.ts",
+    "src/__tests__/strategies/manualStrategies.test.ts",
+    "src/__tests__/strategies/manualStrategiesAbort.test.ts",
+    "src/__tests__/strategies/namedCompositions.test.ts"
   ]
 }

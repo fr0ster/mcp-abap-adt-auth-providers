@@ -8,12 +8,13 @@
  * `authorization/composer.test.ts` and `listenerTransports.test.ts`.
  */
 
+import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import http from 'node:http';
 import type { AddressInfo } from 'node:net';
 import path from 'node:path';
-import { afterAll, beforeAll, describe, expect, it, jest } from '@jest/globals';
+import { after, before, describe, it, mock } from 'node:test';
 import type {
   AuthorizationRequest,
   IAuthorizationStrategy,
@@ -30,7 +31,17 @@ import {
 } from '../../strategies';
 import { manualPasteStrategy } from '../../strategies/manualStrategies';
 import { callbackGet, ignoreCounter } from '../helpers/callbackHttp';
+import {
+  cases,
+  caseTitle,
+  contains,
+  hasProperty,
+  matchObject,
+  matchText,
+  notContains,
+} from '../helpers/expectations';
 import { configurationOf } from '../helpers/minted';
+import { SRC } from '../helpers/packagePaths';
 import { recordingBrowser } from '../helpers/recordingBrowser';
 
 const CALLBACK = 'http://localhost:61001/callback';
@@ -52,7 +63,7 @@ const accessToken = (): string => {
 let tokenServer: http.Server;
 let tokenBase = '';
 const forms: Array<Record<string, string>> = [];
-beforeAll(async () => {
+before(async () => {
   tokenServer = http.createServer((req, res) => {
     let body = '';
     req.setEncoding('utf8');
@@ -73,7 +84,7 @@ beforeAll(async () => {
   );
   tokenBase = `http://127.0.0.1:${(tokenServer.address() as AddressInfo).port}`;
 });
-afterAll(async () => {
+after(async () => {
   await new Promise<void>((resolve) => tokenServer.close(() => resolve()));
 });
 
@@ -111,11 +122,11 @@ describe('AuthorizationCodeProvider: state and PKCE for the URL it builds', () =
     const urls: string[] = [];
     await uaaProvider(recordingStrategy(urls)).getTokens();
     const url = new URL(urls[0] as string);
-    expect(url.searchParams.get('state')).toMatch(BASE64URL_32);
-    expect(url.searchParams.get('code_challenge_method')).toBe('S256');
+    matchText(url.searchParams.get('state'), BASE64URL_32);
+    assert.equal(url.searchParams.get('code_challenge_method'), 'S256');
     const verifier = forms[0]?.code_verifier as string;
-    expect(verifier).toMatch(BASE64URL_32);
-    expect(url.searchParams.get('code_challenge')).toBe(challengeOf(verifier));
+    matchText(verifier, BASE64URL_32);
+    assert.equal(url.searchParams.get('code_challenge'), challengeOf(verifier));
   });
 
   it('mints a fresh state and verifier for every attempt', async () => {
@@ -124,11 +135,12 @@ describe('AuthorizationCodeProvider: state and PKCE for the URL it builds', () =
     const provider = uaaProvider(recordingStrategy(urls));
     await provider.getTokens();
     await provider.refreshTokens();
-    expect(urls).toHaveLength(2);
-    expect(stateOf(urls[0] as string)).not.toBe(stateOf(urls[1] as string));
-    expect(forms).toHaveLength(2);
-    expect(forms[0]?.code_verifier).not.toBe(forms[1]?.code_verifier);
-    expect(new URL(urls[1] as string).searchParams.get('code_challenge')).toBe(
+    assert.equal(urls.length, 2);
+    assert.notEqual(stateOf(urls[0] as string), stateOf(urls[1] as string));
+    assert.equal(forms.length, 2);
+    assert.notEqual(forms[0]?.code_verifier, forms[1]?.code_verifier);
+    assert.equal(
+      new URL(urls[1] as string).searchParams.get('code_challenge'),
       challengeOf(forms[1]?.code_verifier as string),
     );
   });
@@ -137,8 +149,9 @@ describe('AuthorizationCodeProvider: state and PKCE for the URL it builds', () =
     forms.length = 0;
     const urls: string[] = [];
     await uaaProvider(recordingStrategy(urls, 2)).getTokens();
-    expect(stateOf(urls[0] as string)).not.toBe(stateOf(urls[1] as string));
-    expect(new URL(urls[1] as string).searchParams.get('code_challenge')).toBe(
+    assert.notEqual(stateOf(urls[0] as string), stateOf(urls[1] as string));
+    assert.equal(
+      new URL(urls[1] as string).searchParams.get('code_challenge'),
       challengeOf(forms[0]?.code_verifier as string),
     );
   });
@@ -151,32 +164,39 @@ describe('AuthorizationCodeProvider: state and PKCE for the URL it builds', () =
     const provider = uaaProvider(recordingStrategy(urls), configured);
     await provider.getTokens();
     await provider.refreshTokens();
-    expect(urls).toHaveLength(2);
+    assert.equal(urls.length, 2);
     for (const url of urls) {
-      expect(url.startsWith(`${configured}&state=`)).toBe(true);
+      assert.equal(url.startsWith(`${configured}&state=`), true);
       const state = url.slice(`${configured}&state=`.length);
-      expect(state).toMatch(BASE64URL_32);
-      expect(new URL(url).searchParams.getAll('state')).toEqual([state]);
-      expect(new URL(url).searchParams.has('code_challenge')).toBe(false);
+      matchText(state, BASE64URL_32);
+      assert.deepEqual(new URL(url).searchParams.getAll('state'), [state]);
+      assert.equal(new URL(url).searchParams.has('code_challenge'), false);
     }
     // Minted anew for every URL built.
-    expect(stateOf(urls[0] as string)).not.toBe(stateOf(urls[1] as string));
-    expect(forms[0]).not.toHaveProperty('code_verifier');
+    assert.notEqual(stateOf(urls[0] as string), stateOf(urls[1] as string));
+    assert.equal(hasProperty(forms[0], 'code_verifier'), false);
   });
 
-  it.each([
+  for (const [caseIndex, caseRow] of cases([
     ['without a query', 'https://uaa.example/authorize', '?'],
     ['with an empty query', 'https://uaa.example/authorize?', ''],
     ['with a query ending in &', 'https://uaa.example/authorize?a=1&', ''],
-  ])(
-    'a configured URL %s gets its state appended in place',
-    async (_c, configured, joint) => {
-      const urls: string[] = [];
-      await uaaProvider(recordingStrategy(urls), configured).getTokens();
-      expect(urls[0]?.startsWith(`${configured}${joint}state=`)).toBe(true);
-      expect(stateOf(urls[0] as string)).toMatch(BASE64URL_32);
-    },
-  );
+  ]).entries()) {
+    const [_c, configured, joint] = caseRow;
+    it(
+      caseTitle(
+        'a configured URL %s gets its state appended in place',
+        caseRow,
+        caseIndex,
+      ),
+      async () => {
+        const urls: string[] = [];
+        await uaaProvider(recordingStrategy(urls), configured).getTokens();
+        assert.equal(urls[0]?.startsWith(`${configured}${joint}state=`), true);
+        matchText(stateOf(urls[0] as string), BASE64URL_32);
+      },
+    );
+  }
 
   it('a configured URL with a fragment gets its state before the fragment', async () => {
     const urls: string[] = [];
@@ -185,47 +205,62 @@ describe('AuthorizationCodeProvider: state and PKCE for the URL it builds', () =
       'https://uaa.example/authorize?a=1#frag',
     ).getTokens();
     const url = new URL(urls[0] as string);
-    expect(url.hash).toBe('#frag');
-    expect(url.searchParams.get('a')).toBe('1');
-    expect(url.searchParams.get('state')).toMatch(BASE64URL_32);
+    assert.equal(url.hash, '#frag');
+    assert.equal(url.searchParams.get('a'), '1');
+    matchText(url.searchParams.get('state'), BASE64URL_32);
   });
 
-  it.each([
+  for (const [caseIndex, caseRow] of cases([
     ['its own state', 'state=consumer-state', ['consumer-state']],
     ['an empty state', 'state=', ['']],
     ['two states', 'state=a&state=b', ['a', 'b']],
-  ])(
-    'a configured authorizationUrl with %s keeps it unchanged',
-    async (_c, query, states) => {
-      const urls: string[] = [];
-      const configured = `https://uaa.example/oauth/authorize?client_id=cid&${query}`;
-      await uaaProvider(recordingStrategy(urls), configured).getTokens();
-      expect(urls).toEqual([configured]);
-      expect(new URL(urls[0] as string).searchParams.getAll('state')).toEqual(
-        states,
-      );
-    },
-  );
+  ]).entries()) {
+    const [_c, query, states] = caseRow;
+    it(
+      caseTitle(
+        'a configured authorizationUrl with %s keeps it unchanged',
+        caseRow,
+        caseIndex,
+      ),
+      async () => {
+        const urls: string[] = [];
+        const configured = `https://uaa.example/oauth/authorize?client_id=cid&${query}`;
+        await uaaProvider(recordingStrategy(urls), configured).getTokens();
+        assert.deepEqual(urls, [configured]);
+        assert.deepEqual(
+          new URL(urls[0] as string).searchParams.getAll('state'),
+          states,
+        );
+      },
+    );
+  }
 
-  it.each([
+  for (const [caseIndex, caseRow] of cases([
     ['a leading space', ' https://uaa.example/authorize?client_id=cid'],
     ['a trailing space', 'https://uaa.example/authorize?client_id=cid '],
     ['a trailing newline', 'https://uaa.example/authorize?client_id=cid\n'],
-  ])(
-    'a configured authorizationUrl with %s is refused at construction (never appended after it)',
-    (_c, configured) => {
-      let thrown: unknown;
-      try {
-        uaaProvider(recordingStrategy([]), configured);
-      } catch (error) {
-        thrown = error;
-      }
-      expect(configurationOf(thrown)).toMatchObject({
-        case: 'invalid-value',
-        fields: ['authorizationUrl'],
-      });
-    },
-  );
+  ]).entries()) {
+    const [_c, configured] = caseRow;
+    it(
+      caseTitle(
+        'a configured authorizationUrl with %s is refused at construction (never appended after it)',
+        caseRow,
+        caseIndex,
+      ),
+      () => {
+        let thrown: unknown;
+        try {
+          uaaProvider(recordingStrategy([]), configured);
+        } catch (error) {
+          thrown = error;
+        }
+        matchObject(configurationOf(thrown), {
+          case: 'invalid-value',
+          fields: ['authorizationUrl'],
+        });
+      },
+    );
+  }
 
   it('no minted state reaches a log line', async () => {
     const lines: string[] = [];
@@ -243,11 +278,11 @@ describe('AuthorizationCodeProvider: state and PKCE for the URL it builds', () =
       logger: { debug: record, info: record, warn: record, error: record },
     }).getTokens();
     const state = stateOf(urls[0] as string) as string;
-    expect(state).toMatch(BASE64URL_32);
-    expect(lines.length).toBeGreaterThan(0);
+    matchText(state, BASE64URL_32);
+    assert.ok(lines.length > 0, `${lines.length} > ${0}`);
     for (const line of lines) {
-      expect(line).not.toContain(state);
-      expect(line).not.toContain('uaa.example');
+      notContains(line, state);
+      notContains(line, 'uaa.example');
     }
   });
 
@@ -256,7 +291,7 @@ describe('AuthorizationCodeProvider: state and PKCE for the URL it builds', () =
     await uaaProvider(
       staticCodeStrategy({ payload: 'the-code', redirectUri: CALLBACK }),
     ).getTokens();
-    expect(forms[0]).toEqual({
+    assert.deepEqual(forms[0], {
       grant_type: 'authorization_code',
       code: 'the-code',
       redirect_uri: CALLBACK,
@@ -292,11 +327,12 @@ describe('OidcBrowserProvider: state beside its PKCE', () => {
     const provider = oidcProvider(urls);
     await provider.getTokens();
     await provider.refreshTokens();
-    expect(stateOf(urls[0] as string)).toMatch(BASE64URL_32);
-    expect(stateOf(urls[0] as string)).not.toBe(stateOf(urls[1] as string));
-    expect(forms[0]?.code_verifier).not.toBe(forms[1]?.code_verifier);
+    matchText(stateOf(urls[0] as string), BASE64URL_32);
+    assert.notEqual(stateOf(urls[0] as string), stateOf(urls[1] as string));
+    assert.notEqual(forms[0]?.code_verifier, forms[1]?.code_verifier);
     for (const [i, url] of urls.entries()) {
-      expect(new URL(url).searchParams.get('code_challenge')).toBe(
+      assert.equal(
+        new URL(url).searchParams.get('code_challenge'),
         challengeOf(forms[i]?.code_verifier as string),
       );
     }
@@ -309,45 +345,55 @@ describe('OidcBrowserProvider: state beside its PKCE', () => {
       'https://idp.example/tenant/authorize?p=b2c_1_signin',
     ).getTokens();
     const url = new URL(urls[0] as string);
-    expect(`${url.origin}${url.pathname}`).toBe(
+    assert.equal(
+      `${url.origin}${url.pathname}`,
       'https://idp.example/tenant/authorize',
     );
-    expect(url.searchParams.getAll('p')).toEqual(['b2c_1_signin']);
-    expect(url.searchParams.getAll('response_type')).toEqual(['code']);
-    expect(url.searchParams.getAll('client_id')).toEqual(['cid']);
-    expect(url.searchParams.getAll('redirect_uri')).toEqual([CALLBACK]);
-    expect(url.searchParams.getAll('state')).toEqual([
-      expect.stringMatching(BASE64URL_32),
+    assert.deepEqual(url.searchParams.getAll('p'), ['b2c_1_signin']);
+    assert.deepEqual(url.searchParams.getAll('response_type'), ['code']);
+    assert.deepEqual(url.searchParams.getAll('client_id'), ['cid']);
+    assert.deepEqual(url.searchParams.getAll('redirect_uri'), [CALLBACK]);
+    const states = url.searchParams.getAll('state');
+    assert.equal(states.length, 1);
+    matchText(states[0], BASE64URL_32);
+    assert.deepEqual(url.searchParams.getAll('code_challenge_method'), [
+      'S256',
     ]);
-    expect(url.searchParams.getAll('code_challenge_method')).toEqual(['S256']);
-    expect((urls[0] as string).split('?')).toHaveLength(2);
+    assert.equal((urls[0] as string).split('?').length, 2);
   });
 
-  it.each([
+  for (const [caseIndex, caseRow] of cases([
     ['a fragment', 'https://idp.example/authorize#x'],
     ['an empty fragment', 'https://idp.example/authorize?p=1#'],
     ['no URL at all', 'not a url'],
-  ])(
-    'an endpoint with %s is refused (RFC 6749 §3.1), nothing opened',
-    async (_c, endpoint) => {
-      const urls: string[] = [];
-      const thrown = await oidcProvider(urls, endpoint)
-        .getTokens()
-        .catch((error: unknown) => error);
-      expect(configurationOf(thrown)).toMatchObject({
-        case: 'invalid-value',
-        fields: ['authorizationEndpoint'],
-      });
-      expect(urls).toEqual([]);
-    },
-  );
+  ]).entries()) {
+    const [_c, endpoint] = caseRow;
+    it(
+      caseTitle(
+        'an endpoint with %s is refused (RFC 6749 §3.1), nothing opened',
+        caseRow,
+        caseIndex,
+      ),
+      async () => {
+        const urls: string[] = [];
+        const thrown = await oidcProvider(urls, endpoint)
+          .getTokens()
+          .catch((error: unknown) => error);
+        matchObject(configurationOf(thrown), {
+          case: 'invalid-value',
+          fields: ['authorizationEndpoint'],
+        });
+        assert.deepEqual(urls, []);
+      },
+    );
+  }
 
   it('every URL it builds carries exactly one state (never one without)', async () => {
     const urls: string[] = [];
     await oidcProvider(urls).getTokens();
-    expect(new URL(urls[0] as string).searchParams.getAll('state')).toEqual([
-      expect.stringMatching(BASE64URL_32),
-    ]);
+    const states = new URL(urls[0] as string).searchParams.getAll('state');
+    assert.equal(states.length, 1);
+    matchText(states[0], BASE64URL_32);
   });
 });
 
@@ -383,61 +429,67 @@ function forgeThenAnswer(
   };
 }
 
-describe.each([
-  ['browserCallbackStrategy', browserCallbackStrategy, 'real'],
+for (const [caseIndex, caseRow] of (
   [
-    'oidcCallbackStrategy',
-    oidcCallbackStrategy,
-    expect.objectContaining({ code: 'real' }),
-  ],
-] as const)('%s on a real port', (_name, make, expected) => {
-  it('refuses forged callbacks sent while the URL is built and after; the login completes', async () => {
-    const { logger, ignored } = ignoreCounter();
-    let bound = 0;
-    const { browser, statuses } = forgeThenAnswer(
-      [
-        '/callback?code=forged',
-        '/callback?code=forged&state=another',
-        '/callback?error=access_denied&state=another',
-      ],
-      (state) => `/callback?code=real&state=${state}`,
-      () => bound,
-    );
-    const strategy = (make as typeof browserCallbackStrategy)({
-      port: 0,
-      browser,
+    ['browserCallbackStrategy', browserCallbackStrategy, 'real'],
+    ['oidcCallbackStrategy', oidcCallbackStrategy, { code: 'real' }],
+  ] as const
+).entries()) {
+  const [_name, make, expected] = caseRow;
+  describe(caseTitle('%s on a real port', caseRow, caseIndex), () => {
+    it('refuses forged callbacks sent while the URL is built and after; the login completes', async () => {
+      const { logger, ignored } = ignoreCounter();
+      let bound = 0;
+      const { browser, statuses } = forgeThenAnswer(
+        [
+          '/callback?code=forged',
+          '/callback?code=forged&state=another',
+          '/callback?error=access_denied&state=another',
+        ],
+        (state) => `/callback?code=real&state=${state}`,
+        () => bound,
+      );
+      const strategy = (make as typeof browserCallbackStrategy)({
+        port: 0,
+        browser,
+      });
+      let entered!: (redirectUri: string) => void;
+      const building = new Promise<string>((resolve) => {
+        entered = resolve;
+      });
+      let release!: (url: string) => void;
+      const login = strategy.authorize({
+        logger,
+        buildAuthorizationUrl: (redirectUri) => {
+          entered(redirectUri);
+          return new Promise<string>((resolve) => {
+            release = resolve;
+          });
+        },
+      });
+      // The builder is blocked: the socket listens, the gate is closed.
+      const port = Number(new URL(await building).port);
+      bound = port;
+      assert.equal(
+        (await callbackGet(port, '/callback?code=early')).status,
+        400,
+      );
+      assert.equal(
+        (await callbackGet(port, '/callback?error=access_denied')).status,
+        400,
+      );
+      assert.equal(ignored(), 2);
+      release(
+        `https://idp.example/authorize?state=${'S'.repeat(43)}&response_type=code`,
+      );
+      const outcome = await login;
+      // A string payload equals; an object one holds the fields named.
+      matchObject(outcome.payload, expected);
+      assert.deepEqual(statuses, [400, 400, 400]);
+      assert.equal(ignored(), 5);
     });
-    let entered!: (redirectUri: string) => void;
-    const building = new Promise<string>((resolve) => {
-      entered = resolve;
-    });
-    let release!: (url: string) => void;
-    const login = strategy.authorize({
-      logger,
-      buildAuthorizationUrl: (redirectUri) => {
-        entered(redirectUri);
-        return new Promise<string>((resolve) => {
-          release = resolve;
-        });
-      },
-    });
-    // The builder is blocked: the socket listens, the gate is closed.
-    const port = Number(new URL(await building).port);
-    bound = port;
-    expect((await callbackGet(port, '/callback?code=early')).status).toBe(400);
-    expect(
-      (await callbackGet(port, '/callback?error=access_denied')).status,
-    ).toBe(400);
-    expect(ignored()).toBe(2);
-    release(
-      `https://idp.example/authorize?state=${'S'.repeat(43)}&response_type=code`,
-    );
-    const outcome = await login;
-    expect(outcome.payload).toEqual(expected);
-    expect(statuses).toEqual([400, 400, 400]);
-    expect(ignored()).toBe(5);
-  }, 30000);
-});
+  });
+}
 
 describe('samlCallbackStrategy: armed like every composition, bound by InResponseTo', () => {
   it('logs in through the loopback listener on the real port; its URL carries no state', async () => {
@@ -456,8 +508,8 @@ describe('samlCallbackStrategy: armed like every composition, bound by InRespons
         return 'https://idp.example/sso?SAMLRequest=x';
       },
     });
-    expect(outcome.payload).toBe('assertion');
-  }, 30000);
+    assert.equal(outcome.payload, 'assertion');
+  });
 });
 
 describe('manualPasteStrategy compares a pasted URL’s state', () => {
@@ -471,15 +523,15 @@ describe('manualPasteStrategy compares a pasted URL’s state', () => {
       'http://localhost:61001/callback?code=pasted',
       pastedUrl('S'.repeat(43)),
     ];
-    const read = jest.fn(async () => answers.shift() ?? '');
+    const read = mock.fn(async () => answers.shift() ?? '');
     const outcome = await manualPasteStrategy({
       redirectUri: CALLBACK,
       read,
     }).authorize({
       buildAuthorizationUrl: async () => built,
     });
-    expect(read).toHaveBeenCalledTimes(3);
-    expect(outcome.payload).toBe('pasted');
+    assert.equal(read.mock.callCount(), 3);
+    assert.equal(outcome.payload, 'pasted');
   });
 
   it('reads anything with ?, &, =, / or # as a URL: a code smuggled past the state is refused', async () => {
@@ -490,15 +542,15 @@ describe('manualPasteStrategy compares a pasted URL’s state', () => {
       'callback/EVIL',
       pastedUrl('S'.repeat(43)),
     ];
-    const read = jest.fn(async () => answers.shift() ?? '');
+    const read = mock.fn(async () => answers.shift() ?? '');
     const outcome = await manualPasteStrategy({
       redirectUri: CALLBACK,
       read,
     }).authorize({
       buildAuthorizationUrl: async () => built,
     });
-    expect(read).toHaveBeenCalledTimes(5);
-    expect(outcome.payload).toBe('pasted');
+    assert.equal(read.mock.callCount(), 5);
+    assert.equal(outcome.payload, 'pasted');
   });
 
   it('takes the code from the query, never from a fragment', async () => {
@@ -509,14 +561,14 @@ describe('manualPasteStrategy compares a pasted URL’s state', () => {
     })
       .authorize({ buildAuthorizationUrl: async () => built })
       .catch((e: unknown) => e);
-    expect(String((thrown as Error).message)).not.toContain('EVIL');
-    expect(thrown).toBeInstanceOf(Error);
+    notContains(String((thrown as Error).message), 'EVIL');
+    assert.ok(thrown instanceof Error);
   });
 
   it('accepts a bare code: the user typed it', async () => {
     // Bounded: a strategy that refused the bare code would ask forever.
     let asked = 0;
-    const read = jest.fn(async () => {
+    const read = mock.fn(async () => {
       asked += 1;
       if (asked > 3) throw new Error('asked again for a bare code');
       return 'bare-code';
@@ -527,50 +579,60 @@ describe('manualPasteStrategy compares a pasted URL’s state', () => {
     }).authorize({
       buildAuthorizationUrl: async () => built,
     });
-    expect(read).toHaveBeenCalledTimes(1);
-    expect(outcome.payload).toBe('bare-code');
+    assert.equal(read.mock.callCount(), 1);
+    assert.equal(outcome.payload, 'bare-code');
   });
 
   it('refuses a URL without state before anything is read (a provider always puts one there)', async () => {
-    const read = jest.fn(async () => pastedUrl('anything'));
+    const read = mock.fn(async () => pastedUrl('anything'));
     const thrown = await manualPasteStrategy({ redirectUri: CALLBACK, read })
       .authorize({
         buildAuthorizationUrl: async () => 'https://idp.example/authorize',
       })
       .catch((e: unknown) => e);
-    expect(configurationOf(thrown)).toMatchObject({
+    matchObject(configurationOf(thrown), {
       case: 'invalid-value',
       fields: ['authorizationUrl'],
     });
-    expect(read).not.toHaveBeenCalled();
+    assert.equal(read.mock.callCount(), 0);
   });
 });
 
 describe('the comparison is constant time (source)', () => {
-  const read = (file: string) =>
-    readFileSync(path.join(__dirname, '../..', file), 'utf8');
+  const read = (file: string) => readFileSync(path.join(SRC, file), 'utf8');
 
   it('secrets compares through timingSafeEqual over equal-length digests', () => {
     const source = read('authorization/secrets.ts');
-    expect(source).toContain('timingSafeEqual(');
-    expect(source).toContain("createHash('sha256')");
+    contains(source, 'timingSafeEqual(');
+    contains(source, "createHash('sha256')");
   });
 
-  it.each([
+  for (const [caseIndex, caseRow] of cases([
     ['authorization/transport/httpListener.ts', 'sameSecret('],
     ['authorization/protocol/readPaste.ts', 'sameSecret('],
     ['authorization/protocol/codeProtocols.ts', 'sameSecret('],
-  ])('%s compares the armed secret only through sameSecret', (file, call) => {
-    const source = read(file);
-    expect(source).toContain(call);
-    // Our own source, not untrusted input: a regex is fine here.
-    expect(source).not.toMatch(
-      /(===|!==)\s*(gate\.)?(bound|formToken|expected)\b/,
+  ]).entries()) {
+    const [file, call] = caseRow;
+    it(
+      caseTitle(
+        '%s compares the armed secret only through sameSecret',
+        caseRow,
+        caseIndex,
+      ),
+      () => {
+        const source = read(file);
+        contains(source, call);
+        // Our own source, not untrusted input: a regex is fine here.
+        assert.doesNotMatch(
+          source,
+          /(===|!==)\s*(gate\.)?(bound|formToken|expected)\b/,
+        );
+        assert.doesNotMatch(
+          source,
+          /(?<!typeof )\b(bound|formToken|expected)\s*(===|!==)(?!\s*(null|undefined)\b)/,
+        );
+        notContains(source, 'timingSafeEqual');
+      },
     );
-    expect(source).not.toMatch(
-      // `typeof expected === 'string'` checks the type, not the secret.
-      /(?<!typeof )\b(bound|formToken|expected)\s*(===|!==)(?!\s*(null|undefined)\b)/,
-    );
-    expect(source).not.toContain('timingSafeEqual');
-  });
+  }
 });

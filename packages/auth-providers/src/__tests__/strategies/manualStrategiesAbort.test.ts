@@ -5,10 +5,15 @@
  * drain handoff).
  */
 
-import { afterEach, describe, expect, it, jest } from '@jest/globals';
+import assert from 'node:assert/strict';
+
+import readline = require('node:readline');
+
+import { afterEach, describe, it, mock } from 'node:test';
 import { readFailure } from '@mcp-abap-adt/auth-errors';
 import type { AuthorizationRequest } from '@mcp-abap-adt/interfaces-auth';
 import { manualPasscodeStrategy } from '../../strategies/manualStrategies';
+import { matchObject, thrown } from '../helpers/expectations';
 import { type FakeTerminal, fakeTerminal } from '../helpers/fakeTerminal';
 
 const request = {
@@ -34,17 +39,18 @@ describe('manual strategies end on an abort, never on a clock', () => {
       },
     });
     const authorizing = strategy.authorize(request);
-    const rejected = expect(authorizing).rejects.toThrow(
-      'the manual login was aborted',
+    const rejected = assert.rejects(
+      authorizing,
+      thrown('the manual login was aborted'),
     );
     await turn();
     consumer.abort();
     await rejected;
-    expect(factsOf(await authorizing.catch((e) => e))).toEqual({
+    assert.deepEqual(factsOf(await authorizing.catch((e) => e)), {
       outcome: 'aborted',
       strategy: 'manual',
     });
-    expect(seen?.aborted).toBe(true);
+    assert.equal(seen?.aborted, true);
   });
 
   it('dispose() resolves only once the pending authorize has already settled', async () => {
@@ -65,13 +71,14 @@ describe('manual strategies end on an abort, never on a clock', () => {
       },
     );
     await turn();
-    expect(settled).toBe(false);
+    assert.equal(settled, false);
 
     await strategy.dispose?.();
 
-    expect(settled).toBe(true);
-    await expect(authorizing).rejects.toThrow(
-      'the manual strategy was disposed',
+    assert.equal(settled, true);
+    await assert.rejects(
+      authorizing,
+      thrown('the manual strategy was disposed'),
     );
   });
 
@@ -97,14 +104,17 @@ describe('manual strategies end on an abort, never on a clock', () => {
     );
     const second = strategy.authorize(request).catch((e: unknown) => e);
     await turn(); // the first read begins
-    expect(signals).toHaveLength(1);
-    expect(factsOf(await second)).toEqual({ outcome: 'busy' });
+    assert.equal(signals.length, 1);
+    assert.deepEqual(factsOf(await second), { outcome: 'busy' });
 
     await strategy.dispose?.();
 
-    expect(signals.map((s) => s.aborted)).toEqual([true]);
-    expect(settled).toBe(true);
-    expect(factsOf(await first.catch((e) => e))).toEqual({
+    assert.deepEqual(
+      signals.map((s) => s.aborted),
+      [true],
+    );
+    assert.equal(settled, true);
+    assert.deepEqual(factsOf(await first.catch((e) => e)), {
       outcome: 'disposed',
       strategy: 'manual',
     });
@@ -113,14 +123,15 @@ describe('manual strategies end on an abort, never on a clock', () => {
   it('a disposed strategy refuses the next authorize', async () => {
     const strategy = manualPasscodeStrategy({ read: async () => 'code' });
     await strategy.dispose?.();
-    await expect(strategy.authorize(request)).rejects.toThrow(
-      'the manual strategy was disposed',
+    await assert.rejects(
+      strategy.authorize(request),
+      thrown('the manual strategy was disposed'),
     );
   });
 
   it('without a signal there is no deadline — an answer still arrives', async () => {
     const strategy = manualPasscodeStrategy({ read: async () => ' 123456 ' });
-    await expect(strategy.authorize(request)).resolves.toMatchObject({
+    matchObject(await strategy.authorize(request), {
       payload: '123456',
     });
   });
@@ -150,35 +161,37 @@ describe('manual strategies end on an abort, never on a clock', () => {
     consumer.abort();
     await turn();
     await turn();
-    expect(settledAt).toBeUndefined();
+    assert.equal(settledAt, undefined);
     release();
-    expect(factsOf(await authorizing)).toEqual({
+    assert.deepEqual(factsOf(await authorizing), {
       outcome: 'aborted',
       strategy: 'manual',
     });
-    expect(settledAt).toBe(true);
+    assert.equal(settledAt, true);
   });
 });
 
 describe('the terminal reader', () => {
   let terminal: FakeTerminal | undefined;
-  let stderr: { mockRestore(): void } | undefined;
 
+  /**
+   * The strategies over the fake terminal. terminalPaste reads
+   * `createInterface` off the module object at each call, so the fake
+   * replaces it with no fresh module registry.
+   */
   async function freshStrategies(): Promise<
     typeof import('../../strategies/manualStrategies')
   > {
     terminal = fakeTerminal();
-    const mocked = terminal.module;
-    jest.resetModules();
-    jest.doMock('node:readline', () => mocked);
-    stderr = jest.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    mock.method(readline, 'createInterface', terminal.module.createInterface);
+    mock.method(process.stderr, 'write', () => true);
     return await import('../../strategies/manualStrategies');
   }
 
   afterEach(() => {
     terminal?.restore();
-    stderr?.mockRestore();
-    jest.dontMock('node:readline');
+    // The fake readline and the quiet stderr.
+    mock.restoreAll();
     terminal = undefined;
   });
 
@@ -187,15 +200,16 @@ describe('the terminal reader', () => {
     const { manualPasscodeStrategy: fresh } = await freshStrategies();
     const consumer = new AbortController();
     const authorizing = fresh({ signal: consumer.signal }).authorize(request);
-    const rejected = expect(authorizing).rejects.toThrow(
-      'the manual login was aborted',
+    const rejected = assert.rejects(
+      authorizing,
+      thrown('the manual login was aborted'),
     );
     await turn();
-    expect(process.stdin.listenerCount('end')).toBe(base + 1);
+    assert.equal(process.stdin.listenerCount('end'), base + 1);
     consumer.abort();
     await rejected;
-    expect(terminal?.readers[0]?.closed).toBe(true);
-    expect(process.stdin.listenerCount('end')).toBe(base);
+    assert.equal(terminal?.readers[0]?.closed, true);
+    assert.equal(process.stdin.listenerCount('end'), base);
   });
 
   it('settle after release: a held close holds the rejection exactly that long', async () => {
@@ -214,14 +228,14 @@ describe('the terminal reader', () => {
     await turn();
     consumer.abort();
     for (let i = 0; i < 5; i++) await turn();
-    expect(fake.readers[0]?.closeCalled).toBe(true);
-    expect(listenersAtSettle).toBeUndefined();
+    assert.equal(fake.readers[0]?.closeCalled, true);
+    assert.equal(listenersAtSettle, undefined);
     fake.releaseClose();
-    expect(factsOf(await authorizing)).toEqual({
+    assert.deepEqual(factsOf(await authorizing), {
       outcome: 'aborted',
       strategy: 'manual',
     });
-    expect(listenersAtSettle).toBe(base);
+    assert.equal(listenersAtSettle, base);
   });
 
   it('given an already-aborted signal opens no readline', async () => {
@@ -239,26 +253,28 @@ describe('the terminal reader', () => {
     await turn();
     consumer.abort();
     built();
-    expect(factsOf(await authorizing.catch((e) => e))).toEqual({
+    assert.deepEqual(factsOf(await authorizing.catch((e) => e)), {
       outcome: 'aborted',
       strategy: 'manual',
     });
-    expect(terminal?.readers).toHaveLength(0);
+    assert.equal(terminal?.readers.length, 0);
   });
 
   it('the reader itself, given an aborted signal, says the input was abandoned', async () => {
     const { readFromTerminal } = await freshStrategies();
-    await expect(
+    await assert.rejects(
       readFromTerminal('prompt', AbortSignal.abort()),
-    ).rejects.toThrow('the manual input was abandoned before it began');
-    expect(terminal?.readers).toHaveLength(0);
+      thrown('the manual input was abandoned before it began'),
+    );
+    assert.equal(terminal?.readers.length, 0);
   });
 
   it('stdin ending without a line is no input', async () => {
     const { manualPasscodeStrategy: fresh } = await freshStrategies();
     const authorizing = fresh().authorize(request);
-    const rejected = expect(authorizing).rejects.toThrow(
-      'no input was received',
+    const rejected = assert.rejects(
+      authorizing,
+      thrown('no input was received'),
     );
     await turn();
     // The terminal closes (Ctrl+D): the interface ends with no line.
@@ -271,7 +287,7 @@ describe('the terminal reader', () => {
     const authorizing = fresh().authorize(request);
     await turn();
     terminal?.readers[0]?.type('  654321  ');
-    await expect(authorizing).resolves.toMatchObject({ payload: '654321' });
-    expect(terminal?.readers[0]?.closed).toBe(true);
+    matchObject(await authorizing, { payload: '654321' });
+    assert.equal(terminal?.readers[0]?.closed, true);
   });
 });

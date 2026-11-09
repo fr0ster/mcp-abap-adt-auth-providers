@@ -1,4 +1,5 @@
-import { describe, expect, it, jest } from '@jest/globals';
+import assert from 'node:assert/strict';
+import { describe, it, mock } from 'node:test';
 import type { IAuthorizationStrategy } from '@mcp-abap-adt/interfaces-auth';
 import { asOidcResult } from '../../strategies/asOidcResult';
 
@@ -13,12 +14,12 @@ describe('asOidcResult', () => {
     const outcome = await asOidcResult(inner).authorize({
       buildAuthorizationUrl: async () => 'https://idp.example/authorize',
     });
-    expect(outcome.payload).toEqual({ code: 'the-code' });
-    expect(outcome.redirectUri).toBe('http://localhost:61001/callback');
+    assert.deepEqual(outcome.payload, { code: 'the-code' });
+    assert.equal(outcome.redirectUri, 'http://localhost:61001/callback');
   });
 
   it('delegates dispose', async () => {
-    const dispose = jest.fn(async () => undefined);
+    const dispose = mock.fn(async () => undefined);
     const inner: IAuthorizationStrategy<string> = {
       authorize: async () => ({ payload: 'c', redirectUri: 'u' }),
       dispose,
@@ -26,13 +27,13 @@ describe('asOidcResult', () => {
     const adapted = asOidcResult(inner);
     await adapted.dispose?.();
     await adapted.dispose?.();
-    expect(dispose).toHaveBeenCalledTimes(2);
+    assert.equal(dispose.mock.callCount(), 2);
   });
 
   it('has no dispose when the wrapped strategy has none', () => {
     const inner: IAuthorizationStrategy<string> = {
       authorize: async () => ({ payload: 'c', redirectUri: 'u' }),
     };
-    expect(asOidcResult(inner).dispose).toBeUndefined();
+    assert.equal(asOidcResult(inner).dispose, undefined);
   });
 });

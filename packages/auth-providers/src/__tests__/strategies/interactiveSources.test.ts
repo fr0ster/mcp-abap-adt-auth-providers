@@ -11,11 +11,12 @@
  *   the `Number.POSITIVE_INFINITY` placeholder went with it.
  */
 
+import assert from 'node:assert/strict';
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, relative } from 'node:path';
-import { describe, expect, it } from '@jest/globals';
-
-const SRC = join(__dirname, '..', '..');
+import { describe, it } from 'node:test';
+import { caseTitle, notContains } from '../helpers/expectations';
+import { SRC } from '../helpers/packagePaths';
 
 function sourceFiles(dir: string): string[] {
   return readdirSync(dir).flatMap((name) => {
@@ -41,48 +42,57 @@ function constructions(className: string): string[] {
 describe('the four interactive classes are constructed nowhere in src', () => {
   // The port validation, the last CallbackScopeError, is a
   // `configuration` failure now.
-  it.each([
+  for (const [caseIndex, caseRow] of [
     'AuthorizationRefusedError',
     'BrowserAuthError',
     'CallbackScopeError',
     'DeviceCodePresentationError',
-  ])('%s', (className) => {
-    expect(constructions(className)).toEqual([]);
-  });
+  ].entries()) {
+    const className = caseRow;
+    it(caseTitle('%s', caseRow, caseIndex), () => {
+      assert.deepEqual(constructions(className), []);
+    });
+  }
 });
 
 describe('no timer bounds a login', () => {
-  it.each(
-    [
-      ...sourceFiles(join(SRC, 'strategies')),
-      ...sourceFiles(join(SRC, 'authorization')),
-    ].map((file) => relative(SRC, file)),
-  )('%s calls no setTimeout', (file) => {
-    const text = readFileSync(join(SRC, file), 'utf8');
-    expect(text).not.toContain('setTimeout');
-    expect(text).not.toContain('setInterval');
-  });
+  for (const [caseIndex, caseRow] of [
+    ...sourceFiles(join(SRC, 'strategies')),
+    ...sourceFiles(join(SRC, 'authorization')),
+  ]
+    .map((file) => relative(SRC, file))
+    .entries()) {
+    const file = caseRow;
+    it(caseTitle('%s calls no setTimeout', caseRow, caseIndex), () => {
+      const text = readFileSync(join(SRC, file), 'utf8');
+      notContains(text, 'setTimeout');
+      notContains(text, 'setInterval');
+    });
+  }
 
   it('no timeoutMs and no "no bound" placeholder anywhere in src', () => {
     for (const file of sourceFiles(SRC)) {
       const text = readFileSync(file, 'utf8');
       const name = relative(SRC, file);
-      expect([name, text.includes('timeoutMs')]).toEqual([name, false]);
-      expect([name, text.includes('POSITIVE_INFINITY')]).toEqual([name, false]);
+      assert.deepEqual([name, text.includes('timeoutMs')], [name, false]);
+      assert.deepEqual(
+        [name, text.includes('POSITIVE_INFINITY')],
+        [name, false],
+      );
     }
   });
 
   it('no package default bound is left anywhere in src', () => {
     for (const file of sourceFiles(SRC)) {
       const text = readFileSync(file, 'utf8');
-      expect([
-        relative(SRC, file),
-        text.includes('DEFAULT_LOGIN_TIMEOUT_MS'),
-      ]).toEqual([relative(SRC, file), false]);
-      expect([relative(SRC, file), text.includes('300_000')]).toEqual([
-        relative(SRC, file),
-        false,
-      ]);
+      assert.deepEqual(
+        [relative(SRC, file), text.includes('DEFAULT_LOGIN_TIMEOUT_MS')],
+        [relative(SRC, file), false],
+      );
+      assert.deepEqual(
+        [relative(SRC, file), text.includes('300_000')],
+        [relative(SRC, file), false],
+      );
     }
   });
 });
