@@ -30,6 +30,7 @@
     "src/__tests__/auth/browserLaunch.test.ts",
     "src/__tests__/auth/canceledRequests.test.ts",
     "src/__tests__/auth/certificateMaterial.test.ts",
+    "src/__tests__/auth/devicePoll.test.ts",
     "src/__tests__/auth/endpointsInLogs.test.ts",
     "src/__tests__/auth/equivalentEncodings.test.ts",
     "src/__tests__/auth/foreignRejections.test.ts",
