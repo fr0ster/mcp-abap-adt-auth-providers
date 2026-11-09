@@ -13,27 +13,38 @@
  *   URL reaches it as one argument and no MARKER file is created.
  */
 
+import assert from 'node:assert/strict';
+import { EventEmitter } from 'node:events';
 import {
   existsSync,
   mkdtempSync,
   readdirSync,
   readFileSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, describe, expect, it, jest } from '@jest/globals';
+import { afterEach, describe, it, mock } from 'node:test';
+import { SRC } from '../helpers/packagePaths';
+
+import childProcess = require('node:child_process');
+
+import { cases, caseTitle } from '../helpers/expectations';
 
 type SpawnCall = { command: string; args: string[]; options: unknown };
 const spawned: SpawnCall[] = [];
-const realChildProcess =
-  jest.requireActual<typeof import('node:child_process')>('node:child_process');
+// The spawn the guard wrapped, kept before this file's mock replaces it.
+const realChildProcess = { spawn: childProcess.spawn };
 const mode: { record: boolean } = { record: true };
 
-jest.mock('node:child_process', () => ({
-  ...jest.requireActual<Record<string, unknown>>('node:child_process'),
-  spawn: (command: string, args: string[], options: unknown) => {
+// node:child_process's spawn (and exec) replaced on the module object for the
+// whole file: browserLaunch reads `child_process.spawn` at each call.
+mock.method(
+  childProcess,
+  'spawn',
+  (command: string, args: string[], options: unknown) => {
     if (!mode.record) {
       return realChildProcess.spawn(
         command,
@@ -43,8 +54,6 @@ jest.mock('node:child_process', () => ({
     }
     spawned.push({ command, args, options });
     // A fake child that exits 0 at once.
-    const { EventEmitter } =
-      jest.requireActual<typeof import('node:events')>('node:events');
     const child = new EventEmitter() as InstanceType<typeof EventEmitter> & {
       unref(): void;
     };
@@ -52,10 +61,10 @@ jest.mock('node:child_process', () => ({
     setImmediate(() => child.emit('exit', 0));
     return child;
   },
-  exec: () => {
-    throw new Error('exec must never be called');
-  },
-}));
+);
+mock.method(childProcess, 'exec', () => {
+  throw new Error('exec must never be called');
+});
 
 import { launchableUrl, runLauncher } from '../../auth/browserLaunch';
 
@@ -85,40 +94,56 @@ afterEach(() => {
 });
 
 describe('launchableUrl', () => {
-  it.each([
+  for (const [caseIndex, caseRow] of [
     'javascript:alert(1)',
     'file:///etc/passwd',
     '--renderer-cmd-prefix=calc',
     'not a url',
     '',
-  ])('refuses %j', (url) => {
-    expect(launchableUrl(url)).toBeUndefined();
-  });
+  ].entries()) {
+    const url = caseRow;
+    it(caseTitle('refuses %j', caseRow, caseIndex), () => {
+      assert.equal(launchableUrl(url), undefined);
+    });
+  }
 
   // Re-review: what the serialiser keeps but ShellExecute would split or
   // reinterpret is refused, and the host must be a host name or an address.
-  it.each([
+  for (const [caseIndex, caseRow] of [
     'http://a"b/',
     'https://idp.example/a?x=1^2',
     'https://idp.example/a?x=1|2',
     'http://a%20b/',
     'http://exa!mple/',
-  ])('refuses %j (left with a character ShellExecute would misread)', (url) => {
-    expect(launchableUrl(url)).toBeUndefined();
-  });
+  ].entries()) {
+    const url = caseRow;
+    it(
+      caseTitle(
+        'refuses %j (left with a character ShellExecute would misread)',
+        caseRow,
+        caseIndex,
+      ),
+      () => {
+        assert.equal(launchableUrl(url), undefined);
+      },
+    );
+  }
 
-  it.each([
+  for (const [caseIndex, caseRow] of cases([
     ['https://IDP.Example:8443/a?b=c#d', 'https://idp.example:8443/a?b=c#d'],
     ['http://127.0.0.1:61001/cb', 'http://127.0.0.1:61001/cb'],
     ['http://[::1]:61001/cb', 'http://[::1]:61001/cb'],
     ['https://my_host.local/x', 'https://my_host.local/x'],
-  ])('keeps %j', (url, href) => {
-    expect(launchableUrl(url)).toBe(href);
-  });
+  ]).entries()) {
+    const [url, href] = caseRow;
+    it(caseTitle('keeps %j', caseRow, caseIndex), () => {
+      assert.equal(launchableUrl(url), href);
+    });
+  }
 
   it('serialises an http(s) URL: no space and no double quote survive', () => {
     const href = launchableUrl('https://idp.example/a b?x="y z"#"f"');
-    expect(href).toBe('https://idp.example/a%20b?x=%22y%20z%22#%22f%22');
+    assert.equal(href, 'https://idp.example/a%20b?x=%22y%20z%22#%22f%22');
   });
 });
 
@@ -163,10 +188,10 @@ describe('runLauncher, for real: a hostile URL runs nothing', () => {
       await new Promise((resolve) => setTimeout(resolve, 300));
       // First: nothing ran (with a shell, `$(…)` and the backticks would
       // have created these).
-      expect(markers()).toEqual([]);
-      expect(failed).toBeUndefined();
-      expect(JSON.parse(readFileSync(out, 'utf8'))).toEqual([href]);
-      expect(readdirSync(dir).sort()).toEqual(['argv.json', 'recorder.js']);
+      assert.deepEqual(markers(), []);
+      assert.equal(failed, undefined);
+      assert.deepEqual(JSON.parse(readFileSync(out, 'utf8')), [href]);
+      assert.deepEqual(readdirSync(dir).sort(), ['argv.json', 'recorder.js']);
     } finally {
       for (const marker of markers()) rmSync(marker, { force: true });
       rmSync(dir, { recursive: true, force: true });
@@ -176,9 +201,8 @@ describe('runLauncher, for real: a hostile URL runs nothing', () => {
 
 describe('no shell in src', () => {
   it('no exec, execSync or shell option anywhere in src', () => {
-    const { readdirSync: list, statSync } =
-      jest.requireActual<typeof import('node:fs')>('node:fs');
-    const src = join(__dirname, '..', '..');
+    const list = readdirSync;
+    const src = SRC;
     const files = (dir: string): string[] =>
       list(dir).flatMap((name) => {
         const path = join(dir, name);
@@ -200,6 +224,6 @@ describe('no shell in src', () => {
         )
         .map((line) => `${file}: ${line.trim()}`),
     );
-    expect(hits).toEqual([]);
+    assert.deepEqual(hits, []);
   });
 });

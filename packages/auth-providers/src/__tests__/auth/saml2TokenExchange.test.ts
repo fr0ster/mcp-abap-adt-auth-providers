@@ -2,34 +2,29 @@
  * Tests for the SAML bearer token exchange and its refresh grant
  */
 
-import { jest } from '@jest/globals';
-import axios from 'axios';
+import '../helpers/axiosModuleMock';
+import assert from 'node:assert/strict';
+import { beforeEach, describe, it } from 'node:test';
 import { refreshSamlBearerToken } from '../../auth/saml2TokenExchange';
+import { clearAxiosMockCalls, mockedAxios } from '../helpers/axiosModuleMock';
+import { thrown } from '../helpers/expectations';
 
 // Automocked, but with axios's own error class: the sites throw it.
-jest.mock('axios', () => {
-  const mocked = jest.createMockFromModule<Record<string, unknown>>('axios');
-  mocked.AxiosError =
-    jest.requireActual<Record<string, unknown>>('axios').AxiosError;
-  return mocked;
-});
-
-const mockedAxios = axios as jest.Mocked<typeof axios>;
 
 describe('refreshSamlBearerToken', () => {
   beforeEach(() => {
-    jest.clearAllMocks();
+    clearAxiosMockCalls();
   });
 
   it('posts a refresh_token grant to the token URL with client credentials', async () => {
-    mockedAxios.post.mockResolvedValue({
+    mockedAxios.post.mock.mockImplementation(async () => ({
       data: {
         access_token: 'new-access',
         refresh_token: 'new-refresh',
         expires_in: 3600,
         token_type: 'bearer',
       },
-    });
+    }));
 
     const result = await refreshSamlBearerToken(
       'old-refresh',
@@ -38,43 +33,49 @@ describe('refreshSamlBearerToken', () => {
       'secret',
     );
 
-    expect(result).toEqual({
+    assert.deepEqual(result, {
       accessToken: 'new-access',
       refreshToken: 'new-refresh',
       expiresIn: 3600,
       tokenType: 'bearer',
     });
-    const [url, body, options] = mockedAxios.post.mock.calls[0] as [
-      string,
-      string,
-      { headers: Record<string, string> },
-    ];
-    expect(url).toBe('https://uaa/oauth/token');
+    const [url, body, options] = mockedAxios.post.mock.calls.map(
+      (call) => call.arguments,
+    )[0] as [string, string, { headers: Record<string, string> }];
+    assert.equal(url, 'https://uaa/oauth/token');
     const params = new URLSearchParams(body);
-    expect(params.get('grant_type')).toBe('refresh_token');
-    expect(params.get('refresh_token')).toBe('old-refresh');
-    expect(params.get('client_id')).toBe('client');
-    expect(options.headers.Authorization).toBe(
+    assert.equal(params.get('grant_type'), 'refresh_token');
+    assert.equal(params.get('refresh_token'), 'old-refresh');
+    assert.equal(params.get('client_id'), 'client');
+    assert.equal(
+      options.headers.Authorization,
       `Basic ${Buffer.from('client:secret').toString('base64')}`,
     );
   });
 
   it('sends no Authorization header without a client secret', async () => {
-    mockedAxios.post.mockResolvedValue({ data: { access_token: 'a' } });
+    mockedAxios.post.mock.mockImplementation(async () => ({
+      data: { access_token: 'a' },
+    }));
 
     await refreshSamlBearerToken('r', 'https://uaa/oauth/token', 'client');
 
-    const options = mockedAxios.post.mock.calls[0]![2] as {
+    const options = mockedAxios.post.mock.calls.map(
+      (call) => call.arguments,
+    )[0]![2] as {
       headers: Record<string, string>;
     };
-    expect(options.headers.Authorization).toBeUndefined();
+    assert.equal(options.headers.Authorization, undefined);
   });
 
   it('refuses a response without an access token', async () => {
-    mockedAxios.post.mockResolvedValue({ data: { refresh_token: 'r2' } });
+    mockedAxios.post.mock.mockImplementation(async () => ({
+      data: { refresh_token: 'r2' },
+    }));
 
-    await expect(
+    await assert.rejects(
       refreshSamlBearerToken('r', 'https://uaa/oauth/token', 'c', 's'),
-    ).rejects.toThrow('the SAML token refresh returned no access_token');
+      thrown('the SAML token refresh returned no access_token'),
+    );
   });
 });

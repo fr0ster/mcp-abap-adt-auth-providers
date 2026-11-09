@@ -9,14 +9,15 @@
  * endpoint answers `400 invalid_grant`.
  */
 
-import { beforeEach, describe, expect, it, jest } from '@jest/globals';
+import '../helpers/axiosModuleMock';
+import assert from 'node:assert/strict';
+import { beforeEach, describe, it } from 'node:test';
 import { readFailure } from '@mcp-abap-adt/auth-errors';
 import type {
   IAssertionValidator,
   IAuthorizationStrategy,
 } from '@mcp-abap-adt/interfaces-auth';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
-import axios from 'axios';
 import { prepareSecret } from '../../auth/tokenRequest';
 import { AuthorizationCodeProvider } from '../../providers/AuthorizationCodeProvider';
 import type { BaseTokenProvider } from '../../providers/BaseTokenProvider';
@@ -28,16 +29,9 @@ import { OidcTokenExchangeProvider } from '../../providers/OidcTokenExchangeProv
 import { Saml2BearerProvider } from '../../providers/Saml2BearerProvider';
 import { UaaPasscodeProvider } from '../../providers/UaaPasscodeProvider';
 import { refreshThenLogin } from '../../renewal';
+import { mockedAxios, resetAxiosMock } from '../helpers/axiosModuleMock';
+import { cases, caseTitle, contains } from '../helpers/expectations';
 import { phrase } from '../helpers/tokenRequestSites';
-
-jest.mock('axios', () => {
-  const mocked = jest.createMockFromModule<Record<string, unknown>>('axios');
-  mocked.AxiosError =
-    jest.requireActual<Record<string, unknown>>('axios').AxiosError;
-  return mocked;
-});
-type Mock = jest.Mock<(...args: any[]) => Promise<unknown>>;
-const mockedAxios = axios as unknown as Mock & { post: Mock };
 
 const SECRET = 'client-secret-0123456789';
 
@@ -47,11 +41,11 @@ const refused = () => ({
 });
 
 beforeEach(() => {
-  jest.resetAllMocks();
-  mockedAxios.mockImplementation(async () => {
+  resetAxiosMock();
+  mockedAxios.mock.mockImplementation(async () => {
     throw refused();
   });
-  mockedAxios.post.mockImplementation(async () => {
+  mockedAxios.post.mock.mockImplementation(async () => {
     throw refused();
   });
 });
@@ -253,50 +247,60 @@ function debugLines(): {
   };
 }
 
-describe.each(PROVIDERS)(
-  '%s threads authDebug and its grant to its site',
-  (_name, make, operation, grant, secretName) => {
-    it.each([
-      ['absent', undefined],
-      ['true', true],
-    ])('authDebug %s', async (_mode, authDebug) => {
-      const { logger, lines } = debugLines();
-      const provider = make({
-        logger,
-        ...(authDebug === undefined ? {} : { authDebug }),
-      });
-      const thrown = await provider.getTokens().catch((e: unknown) => e);
-      // The grant reaches the failure (`getTokens()` passes it through).
-      expect(readFailure(thrown, 'unfamiliar-error').facts).toEqual({
-        operation,
-        grant,
-        problem: 'refused',
-        status: 400,
-        oauthError: 'invalid_grant',
-      });
-      // The site's own line; the provider's other debug lines aside.
-      const siteLines = lines.filter(({ message }) =>
-        message.includes('token endpoint'),
-      );
-      expect(siteLines).toHaveLength(1);
-      const line = siteLines[0];
-      if (authDebug === true) {
-        expect(line?.message).toBe(`[${operation}] token endpoint said`);
-        const sent =
-          (line?.meta as { sent: Record<string, string> } | undefined)?.sent ??
-          {};
-        if (secretName !== '') {
-          expect(Object.keys(sent)).toContain(secretName);
-        }
-        if (operation !== 'device-authorization') {
-          expect(sent.client_secret).toBe(prepareSecret(SECRET, true));
-        }
-      } else {
-        expect(line).toEqual({
-          message: `${phrase(operation as never)}: the token endpoint refused the request`,
-          meta: { status: 400, error: 'invalid_grant' },
+for (const [caseIndex, caseRow] of PROVIDERS.entries()) {
+  const [_name, make, operation, grant, secretName] = caseRow;
+  describe(
+    caseTitle(
+      '%s threads authDebug and its grant to its site',
+      caseRow,
+      caseIndex,
+    ),
+    () => {
+      for (const [caseIndex, caseRow] of cases([
+        ['absent', undefined],
+        ['true', true],
+      ]).entries()) {
+        const [_mode, authDebug] = caseRow;
+        it(caseTitle('authDebug %s', caseRow, caseIndex), async () => {
+          const { logger, lines } = debugLines();
+          const provider = make({
+            logger,
+            ...(authDebug === undefined ? {} : { authDebug }),
+          });
+          const thrown = await provider.getTokens().catch((e: unknown) => e);
+          // The grant reaches the failure (`getTokens()` passes it through).
+          assert.deepEqual(readFailure(thrown, 'unfamiliar-error').facts, {
+            operation,
+            grant,
+            problem: 'refused',
+            status: 400,
+            oauthError: 'invalid_grant',
+          });
+          // The site's own line; the provider's other debug lines aside.
+          const siteLines = lines.filter(({ message }) =>
+            message.includes('token endpoint'),
+          );
+          assert.equal(siteLines.length, 1);
+          const line = siteLines[0];
+          if (authDebug === true) {
+            assert.equal(line?.message, `[${operation}] token endpoint said`);
+            const sent =
+              (line?.meta as { sent: Record<string, string> } | undefined)
+                ?.sent ?? {};
+            if (secretName !== '') {
+              contains(Object.keys(sent), secretName);
+            }
+            if (operation !== 'device-authorization') {
+              assert.equal(sent.client_secret, prepareSecret(SECRET, true));
+            }
+          } else {
+            assert.deepEqual(line, {
+              message: `${phrase(operation as never)}: the token endpoint refused the request`,
+              meta: { status: 400, error: 'invalid_grant' },
+            });
+          }
         });
       }
-    });
-  },
-);
+    },
+  );
+}

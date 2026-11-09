@@ -7,9 +7,11 @@
  * fixed words, with no `cause`.
  */
 
+import '../helpers/axiosModuleMock';
+import assert from 'node:assert/strict';
 import http from 'node:http';
+import { beforeEach, describe, it, mock } from 'node:test';
 import { inspect } from 'node:util';
-import { beforeEach, describe, expect, it, jest } from '@jest/globals';
 import {
   AuthProviderFailure,
   authError,
@@ -23,7 +25,6 @@ import type {
   IAnswerTransport,
   IBrowser,
 } from '@mcp-abap-adt/interfaces-auth';
-import axios from 'axios';
 import { getTokenWithClientCredentials } from '../../auth/clientCredentialsAuth';
 import { refreshOidcToken } from '../../auth/oidcToken';
 import {
@@ -41,6 +42,15 @@ import {
   browserCallbackStrategy,
   oidcCallbackStrategy,
 } from '../../strategies';
+import { mockedAxios, resetAxiosMock } from '../helpers/axiosModuleMock';
+import {
+  cases,
+  caseTitle,
+  contains,
+  hasProperty,
+  matchObject,
+  notContains,
+} from '../helpers/expectations';
 import { wordsOf } from '../helpers/minted';
 import { recordingBrowser } from '../helpers/recordingBrowser';
 
@@ -52,15 +62,6 @@ const composedOver = (open: IAnswerTransport['open']) =>
     protocol: oauthCode(),
     endpoint: '/callback',
   });
-
-jest.mock('axios', () => {
-  const mocked = jest.createMockFromModule<Record<string, unknown>>('axios');
-  mocked.AxiosError =
-    jest.requireActual<Record<string, unknown>>('axios').AxiosError;
-  return mocked;
-});
-type Mock = jest.Mock<(...args: any[]) => Promise<unknown>>;
-const mockedAxios = axios as unknown as Mock;
 
 const MARKER = 'REVIEW_TEST_PRIVATE_KEY_a41c07';
 
@@ -78,12 +79,14 @@ async function thrownBy(run: () => Promise<unknown>) {
 describe('a thrown error carries no foreign message', () => {
   let original: Error;
   beforeEach(() => {
-    jest.resetAllMocks();
+    resetAxiosMock();
     original = Object.assign(new Error(MARKER), { code: 'ECONNREFUSED' });
-    mockedAxios.mockRejectedValue(original);
+    mockedAxios.mock.mockImplementation(async () => {
+      throw original;
+    });
   });
 
-  it.each([
+  for (const [caseIndex, caseRow] of cases([
     [
       'client credentials',
       () => getTokenWithClientCredentials('https://uaa', 'cid', 'secret'),
@@ -96,25 +99,32 @@ describe('a thrown error carries no foreign message', () => {
       'the token refresh failed (ECONNREFUSED)',
       'token-refresh',
     ],
-  ])(
-    '%s: fixed words; no cause at all, never the original',
-    async (_name, run, words, operation) => {
-      const { error, text } = await thrownBy(run);
-      // `request-failed` `no-response` of the site's operation, the
-      // allowlisted code still saying what happened.
-      expect(error.message).toBe(words);
-      expect(readFailure(error, 'unfamiliar-error').facts).toEqual({
-        operation,
-        problem: 'no-response',
-        code: 'ECONNREFUSED',
-      });
-      expect(text).not.toContain(MARKER);
-      // No cause — the original, nor a replacement (util.inspect prints
-      // causes).
-      expect(error.cause).toBeUndefined();
-      expect(inspect(error, { depth: null })).not.toContain(MARKER);
-    },
-  );
+  ]).entries()) {
+    const [_name, run, words, operation] = caseRow;
+    it(
+      caseTitle(
+        '%s: fixed words; no cause at all, never the original',
+        caseRow,
+        caseIndex,
+      ),
+      async () => {
+        const { error, text } = await thrownBy(run);
+        // `request-failed` `no-response` of the site's operation, the
+        // allowlisted code still saying what happened.
+        assert.equal(error.message, words);
+        assert.deepEqual(readFailure(error, 'unfamiliar-error').facts, {
+          operation,
+          problem: 'no-response',
+          code: 'ECONNREFUSED',
+        });
+        notContains(text, MARKER);
+        // No cause — the original, nor a replacement (util.inspect prints
+        // causes).
+        assert.equal(error.cause, undefined);
+        notContains(inspect(error, { depth: null }), MARKER);
+      },
+    );
+  }
 
   it('through a provider: getTokens() throws no window of it', async () => {
     const provider = new ClientCredentialsProvider({
@@ -124,7 +134,7 @@ describe('a thrown error carries no foreign message', () => {
       clientSecret: 'secret',
     });
     const { text } = await thrownBy(() => provider.getTokens());
-    expect(text).not.toContain(MARKER);
+    notContains(text, MARKER);
   });
 
   // An `interactive-login` `failed` failure naming only the
@@ -138,15 +148,15 @@ describe('a thrown error carries no foreign message', () => {
         buildAuthorizationUrl: async () => 'https://idp.example/a?state=S',
       }),
     );
-    expect(isAuthProviderFailure(error)).toBe(true);
-    expect(readFailure(error, 'browser-login').facts).toEqual({
+    assert.equal(isAuthProviderFailure(error), true);
+    assert.deepEqual(readFailure(error, 'browser-login').facts, {
       outcome: 'failed',
       code: 'ECONNREFUSED',
     });
-    expect(text).toContain('ECONNREFUSED');
-    expect(text).not.toContain(MARKER);
-    expect(error.cause).toBeUndefined();
-    expect(inspect(error, { depth: null })).not.toContain(MARKER);
+    contains(text, 'ECONNREFUSED');
+    notContains(text, MARKER);
+    assert.equal(error.cause, undefined);
+    notContains(inspect(error, { depth: null }), MARKER);
   });
 });
 
@@ -166,10 +176,10 @@ describe('a token-endpoint failure keeps its safe facts', () => {
   });
 
   beforeEach(() => {
-    jest.resetAllMocks();
+    resetAxiosMock();
   });
 
-  it.each([
+  for (const [caseIndex, caseRow] of cases([
     [
       'UAA refresh',
       () => refreshJwtToken('rt', 'https://uaa', 'cid', 'secret'),
@@ -178,87 +188,110 @@ describe('a token-endpoint failure keeps its safe facts', () => {
       'client credentials',
       () => getTokenWithClientCredentials('https://uaa', 'cid', 'secret'),
     ],
-  ])(
-    '%s: status and the registered code, never the description',
-    async (_name, run) => {
-      mockedAxios.mockRejectedValue(
-        axiosFailure(401, {
-          error: 'invalid_grant',
-          error_description: DESCRIPTION,
-        }),
-      );
-      const { error } = await thrownBy(run);
-      // The status and the registered code are the failure's facts.
-      expect(isAuthProviderFailure(error)).toBe(true);
-      expect(readFailure(error, 'unfamiliar-error').facts).toMatchObject({
-        problem: 'refused',
-        status: 401,
-        oauthError: 'invalid_grant',
-      });
-      const words = logFields(classify(error, 'refresh')).error;
-      expect(words).toContain('HTTP 401');
-      expect(words).toContain('invalid_grant');
-      expect(words).not.toContain(DESCRIPTION);
-      const refusal = classify(error, 'refresh');
-      expect(JSON.stringify(refusal)).toContain('invalid_grant');
-      expect(JSON.stringify(refusal)).not.toContain(DESCRIPTION);
-    },
-  );
+  ]).entries()) {
+    const [_name, run] = caseRow;
+    it(
+      caseTitle(
+        '%s: status and the registered code, never the description',
+        caseRow,
+        caseIndex,
+      ),
+      async () => {
+        mockedAxios.mock.mockImplementation(async () => {
+          throw axiosFailure(401, {
+            error: 'invalid_grant',
+            error_description: DESCRIPTION,
+          });
+        });
+        const { error } = await thrownBy(run);
+        // The status and the registered code are the failure's facts.
+        assert.equal(isAuthProviderFailure(error), true);
+        matchObject(readFailure(error, 'unfamiliar-error').facts, {
+          problem: 'refused',
+          status: 401,
+          oauthError: 'invalid_grant',
+        });
+        const words = logFields(classify(error, 'refresh')).error;
+        contains(words, 'HTTP 401');
+        contains(words, 'invalid_grant');
+        notContains(words, DESCRIPTION);
+        const refusal = classify(error, 'refresh');
+        contains(JSON.stringify(refusal), 'invalid_grant');
+        notContains(JSON.stringify(refusal), DESCRIPTION);
+      },
+    );
+  }
 
   it('an unregistered error code is not kept', async () => {
-    mockedAxios.mockRejectedValue(axiosFailure(400, { error: UNREGISTERED }));
+    mockedAxios.mock.mockImplementation(async () => {
+      throw axiosFailure(400, { error: UNREGISTERED });
+    });
     const { error } = await thrownBy(() =>
       refreshJwtToken('rt', 'https://uaa', 'cid', 'secret'),
     );
     // An unregistered code is no fact.
-    expect(
-      readFailure(error, 'unfamiliar-error').facts as Record<string, unknown>,
-    ).not.toHaveProperty('oauthError');
+    assert.equal(
+      hasProperty(
+        readFailure(error, 'unfamiliar-error').facts as Record<string, unknown>,
+        'oauthError',
+      ),
+      false,
+    );
     const words = logFields(classify(error, 'refresh')).error;
-    expect(words).toContain('HTTP 400');
-    expect(words).not.toContain(UNREGISTERED);
+    contains(words, 'HTTP 400');
+    notContains(words, UNREGISTERED);
   });
 
-  it.each([
+  for (const [caseIndex, caseRow] of [
     'ECONNREFUSED',
     'ECONNABORTED',
     'ERR_NETWORK',
     'EPROTO',
     'ETIMEDOUT',
-  ])('a network failure with %s names the code', async (code) => {
-    mockedAxios.mockRejectedValue(Object.assign(new Error(MARKER), { code }));
-    const { error, text } = await thrownBy(() =>
-      refreshJwtToken('rt', 'https://uaa', 'cid', 'secret'),
+  ].entries()) {
+    const code = caseRow;
+    it(
+      caseTitle('a network failure with %s names the code', caseRow, caseIndex),
+      async () => {
+        mockedAxios.mock.mockImplementation(async () => {
+          throw Object.assign(new Error(MARKER), { code });
+        });
+        const { error, text } = await thrownBy(() =>
+          refreshJwtToken('rt', 'https://uaa', 'cid', 'secret'),
+        );
+        // The allowlisted code is the failure's `code` fact.
+        assert.equal(
+          (readFailure(error, 'unfamiliar-error').facts as { code?: unknown })
+            .code,
+          code,
+        );
+        contains(text, code);
+        notContains(text, MARKER);
+        contains(logFields(classify(error, 'refresh')).error, code);
+      },
     );
-    // The allowlisted code is the failure's `code` fact.
-    expect(
-      (readFailure(error, 'unfamiliar-error').facts as { code?: unknown }).code,
-    ).toBe(code);
-    expect(text).toContain(code);
-    expect(text).not.toContain(MARKER);
-    expect(logFields(classify(error, 'refresh')).error).toContain(code);
-  });
+  }
 
   it('an unlisted code never reaches the message', async () => {
-    mockedAxios.mockRejectedValue(
-      Object.assign(new Error(MARKER), { code: MARKER, config: {} }),
-    );
-    (axios as unknown as { post: Mock }).post = jest.fn(async () => {
+    mockedAxios.mock.mockImplementation(async () => {
       throw Object.assign(new Error(MARKER), { code: MARKER, config: {} });
-    }) as unknown as Mock;
+    });
+    mockedAxios.post.mock.mockImplementation(async () => {
+      throw Object.assign(new Error(MARKER), { code: MARKER, config: {} });
+    });
     const { text } = await thrownBy(() =>
       refreshOidcToken('https://idp/token', 'cid', 'secret', 'rt'),
     );
-    expect(text).not.toContain(MARKER);
+    notContains(text, MARKER);
   });
 
   it('the provider logs the facts when its refresh is refused', async () => {
-    mockedAxios.mockRejectedValue(
-      axiosFailure(401, {
+    mockedAxios.mock.mockImplementation(async () => {
+      throw axiosFailure(401, {
         error: 'invalid_grant',
         error_description: DESCRIPTION,
-      }),
-    );
+      });
+    });
     const lines: string[] = [];
     const metas: Array<[string, unknown]> = [];
     const record = (level: string) => (m: string, meta?: unknown) => {
@@ -285,10 +318,10 @@ describe('a token-endpoint failure keeps its safe facts', () => {
     });
     await provider.getTokens().catch(() => undefined);
     const refreshLine = lines.find((l) => l.includes('Refresh failed')) ?? '';
-    expect(refreshLine).toContain('HTTP 401');
-    expect(refreshLine).toContain('invalid_grant');
+    contains(refreshLine, 'HTTP 401');
+    contains(refreshLine, 'invalid_grant');
     // The server's description: in no line at all.
-    expect(lines.join('\n')).not.toContain(DESCRIPTION);
+    notContains(lines.join('\n'), DESCRIPTION);
   });
 });
 
@@ -324,40 +357,50 @@ describe('an IdP refusal on the browser callback', () => {
   const urlFor = async (redirectUri: string) =>
     `https://idp.example/a?state=S&redirect_uri=${encodeURIComponent(redirectUri)}`;
 
-  it.each([
-    ['UAA', browserCallbackStrategy],
-    ['OIDC', oidcCallbackStrategy],
-  ] as const)(
-    '%s: a registered code is kept, the description is not',
-    async (_name, make) => {
-      const strategy = (
-        make as (o: object) => {
-          authorize: (r: object) => Promise<unknown>;
-        }
-      )({
-        port: 0,
-        browser: refuse(
-          `error=consent_required&error_description=${DESCRIPTION}`,
-        ),
-      });
-      const { error, text } = await thrownBy(() =>
-        strategy.authorize({ buildAuthorizationUrl: urlFor }),
-      );
-      // `identity-provider-refused` with the registered code.
-      expect(readFailure(error, 'browser-login').facts).toEqual({
-        outcome: 'identity-provider-refused',
-        oauthError: 'consent_required',
-      });
-      expect(text).toContain('consent_required');
-      expect(text).not.toContain(DESCRIPTION);
-      const refusal = JSON.stringify(classify(error, 'browser-login'));
-      expect(refusal).toContain('consent_required');
-      expect(refusal).not.toContain(DESCRIPTION);
-      expect(logFields(classify(error, 'browser-login')).error).toContain(
-        'consent_required',
-      );
-    },
-  );
+  for (const [caseIndex, caseRow] of (
+    [
+      ['UAA', browserCallbackStrategy],
+      ['OIDC', oidcCallbackStrategy],
+    ] as const
+  ).entries()) {
+    const [_name, make] = caseRow;
+    it(
+      caseTitle(
+        '%s: a registered code is kept, the description is not',
+        caseRow,
+        caseIndex,
+      ),
+      async () => {
+        const strategy = (
+          make as (o: object) => {
+            authorize: (r: object) => Promise<unknown>;
+          }
+        )({
+          port: 0,
+          browser: refuse(
+            `error=consent_required&error_description=${DESCRIPTION}`,
+          ),
+        });
+        const { error, text } = await thrownBy(() =>
+          strategy.authorize({ buildAuthorizationUrl: urlFor }),
+        );
+        // `identity-provider-refused` with the registered code.
+        assert.deepEqual(readFailure(error, 'browser-login').facts, {
+          outcome: 'identity-provider-refused',
+          oauthError: 'consent_required',
+        });
+        contains(text, 'consent_required');
+        notContains(text, DESCRIPTION);
+        const refusal = JSON.stringify(classify(error, 'browser-login'));
+        contains(refusal, 'consent_required');
+        notContains(refusal, DESCRIPTION);
+        contains(
+          logFields(classify(error, 'browser-login')).error,
+          'consent_required',
+        );
+      },
+    );
+  }
 
   it('an unregistered code is dropped', async () => {
     const strategy = browserCallbackStrategy({
@@ -367,11 +410,9 @@ describe('an IdP refusal on the browser callback', () => {
     const { error, text } = await thrownBy(() =>
       strategy.authorize({ buildAuthorizationUrl: urlFor }),
     );
-    expect(text).not.toContain(DESCRIPTION);
-    expect(JSON.stringify(classify(error, 'browser-login'))).not.toContain(
-      DESCRIPTION,
-    );
-    expect(text).toContain('refused');
+    notContains(text, DESCRIPTION);
+    notContains(JSON.stringify(classify(error, 'browser-login')), DESCRIPTION);
+    contains(text, 'refused');
   });
 
   it('a foreign failure with an HTTP status names the status', async () => {
@@ -383,8 +424,8 @@ describe('an IdP refusal on the browser callback', () => {
         buildAuthorizationUrl: async () => 'https://idp.example/a?state=S',
       }),
     );
-    expect(text).toContain('HTTP 503');
-    expect(text).not.toContain(DESCRIPTION);
+    contains(text, 'HTTP 503');
+    notContains(text, DESCRIPTION);
   });
 
   // The configuration failure the URL builder throws, once a
@@ -412,7 +453,7 @@ describe('an IdP refusal on the browser callback', () => {
         },
       }),
     );
-    expect(error).toBe(mismatch);
+    assert.equal(error, mismatch);
   });
 });
 
@@ -441,11 +482,11 @@ const hostile = () =>
 
 describe('a persistence strategy’s failure carries no foreign message', () => {
   beforeEach(() => {
-    jest.resetAllMocks();
-    mockedAxios.mockResolvedValue({
+    resetAxiosMock();
+    mockedAxios.mock.mockImplementation(async () => ({
       status: 200,
       data: { access_token: 'the-access-token', expires_in: 3600 },
-    });
+    }));
   });
 
   const provider = (
@@ -479,35 +520,42 @@ describe('a persistence strategy’s failure carries no foreign message', () => 
     };
   }
 
-  it.each([
+  for (const [caseIndex, caseRow] of cases([
     ['an Error', () => new Error(MARKER)],
     ['a string', () => MARKER],
     ['a hostile value', () => hostile()],
-  ])(
-    'a report that throws %s: getTokens() throws persisting-tokens in fixed words, no cause',
-    async (_name, make) => {
-      const { lines, logger } = recording();
-      const p = provider(
-        {
-          report: () => {
-            throw make();
+  ]).entries()) {
+    const [_name, make] = caseRow;
+    it(
+      caseTitle(
+        'a report that throws %s: getTokens() throws persisting-tokens in fixed words, no cause',
+        caseRow,
+        caseIndex,
+      ),
+      async () => {
+        const { lines, logger } = recording();
+        const p = provider(
+          {
+            report: () => {
+              throw make();
+            },
           },
-        },
-        logger,
-      );
-      const { error, text } = await thrownBy(() => p.getTokens());
-      expect(isAuthProviderFailure(error)).toBe(true);
-      expect(readFailure(error, 'token-request')).toMatchObject({
-        kind: 'unknown',
-        reason: 'persisting the tokens failed (unknown error)',
-        facts: { operation: 'persisting-tokens' },
-      });
-      expect(text).not.toContain(MARKER);
-      expect(error.cause).toBeUndefined();
-      expect(inspect(error, { depth: null })).not.toContain(MARKER);
-      expect(lines.join('\n')).not.toContain(MARKER);
-    },
-  );
+          logger,
+        );
+        const { error, text } = await thrownBy(() => p.getTokens());
+        assert.equal(isAuthProviderFailure(error), true);
+        matchObject(readFailure(error, 'token-request'), {
+          kind: 'unknown',
+          reason: 'persisting the tokens failed (unknown error)',
+          facts: { operation: 'persisting-tokens' },
+        });
+        notContains(text, MARKER);
+        assert.equal(error.cause, undefined);
+        notContains(inspect(error, { depth: null }), MARKER);
+        notContains(lines.join('\n'), MARKER);
+      },
+    );
+  }
 
   it("refreshStatePersistence 'fail': a write's failure fails getTokens() in fixed words; its logger writes no message", async () => {
     const { lines, logger } = recording();
@@ -521,31 +569,30 @@ describe('a persistence strategy’s failure carries no foreign message', () => 
       logger,
     );
     const { error, text } = await thrownBy(() => p.getTokens());
-    expect(readFailure(error, 'token-request')).toMatchObject({
+    matchObject(readFailure(error, 'token-request'), {
       kind: 'unknown',
       reason: 'persisting the tokens failed (unknown error)',
       facts: { operation: 'persisting-tokens' },
     });
-    expect(text).not.toContain(MARKER);
-    expect(error.cause).toBeUndefined();
+    notContains(text, MARKER);
+    assert.equal(error.cause, undefined);
     const all = lines.join('\n');
-    expect(all).toContain(
-      '[refreshStatePersistence] Writing the tokens failed',
-    );
-    expect(all).not.toContain(MARKER);
+    contains(all, '[refreshStatePersistence] Writing the tokens failed');
+    notContains(all, MARKER);
   });
 });
 
 describe('classify and logFields are total', () => {
   beforeEach(() => {
-    jest.resetAllMocks();
+    resetAxiosMock();
   });
 
   it('a value whose every read throws is "unknown error", not an exception', () => {
-    expect(classify(hostile(), 'token-source').reason).toBe(
+    assert.equal(
+      classify(hostile(), 'token-source').reason,
       'the token source failed (unknown error)',
     );
-    expect(logFields(classify(hostile(), 'token-source'))).toEqual({
+    assert.deepEqual(logFields(classify(hostile(), 'token-source')), {
       error: 'the token source failed (unknown error)',
       kind: 'unknown',
     });
@@ -577,7 +624,7 @@ describe('classify and logFields are total', () => {
       logger,
     });
     const prepared = await credentials.prepare();
-    expect(prepared.ok).toBe(false);
+    assert.equal(prepared.ok, false);
     const code = new AuthorizationCodeProvider({
       renewal: refreshThenLogin(),
       uaaUrl: 'https://uaa',
@@ -597,10 +644,10 @@ describe('classify and logFields are total', () => {
       status: 401,
       error: undefined,
     });
-    expect(rejected.ok).toBe(false);
+    assert.equal(rejected.ok, false);
     await code.getTokens().catch(() => undefined);
-    expect(lines.join('\n')).toContain('Refresh failed');
-    expect(lines.join('\n')).not.toContain(MARKER);
+    contains(lines.join('\n'), 'Refresh failed');
+    notContains(lines.join('\n'), MARKER);
   });
 });
 
@@ -608,11 +655,7 @@ describe('the facts are re-checked wherever they are read', () => {
   const FOREIGN = 'REVIEW_TEST_FOREIGN_CODE_19be';
 
   it('the SAML bearer exchange and refresh log logFields of the failure, not the description', async () => {
-    jest.resetAllMocks();
-    (
-      axios as unknown as { isAxiosError: (e: unknown) => boolean }
-    ).isAxiosError = (e) =>
-      !!(e as { isAxiosError?: boolean } | null)?.isAxiosError;
+    resetAxiosMock();
     const failure = {
       isAxiosError: true,
       config: {},
@@ -622,10 +665,12 @@ describe('the facts are re-checked wherever they are read', () => {
         data: { error: 'invalid_grant', error_description: FOREIGN },
       },
     };
-    mockedAxios.mockRejectedValue(failure);
-    (axios as unknown as { post: Mock }).post = jest.fn(async () => {
+    mockedAxios.mock.mockImplementation(async () => {
       throw failure;
-    }) as unknown as Mock;
+    });
+    mockedAxios.post.mock.mockImplementation(async () => {
+      throw failure;
+    });
     const lines: string[] = [];
     const metas: Array<[string, unknown]> = [];
     const record = (level: string) => (m: string, meta?: unknown) => {
@@ -661,14 +706,14 @@ describe('the facts are re-checked wherever they are read', () => {
     const failed = lines.filter(
       (l) => l.includes('[SAML]') && l.startsWith('error'),
     );
-    expect(failed).toHaveLength(2);
+    assert.equal(failed.length, 2);
     for (const line of failed) {
-      expect(line).toContain('HTTP 400');
-      expect(line).toContain('invalid_grant');
-      expect(line).not.toContain(FOREIGN);
+      contains(line, 'HTTP 400');
+      contains(line, 'invalid_grant');
+      notContains(line, FOREIGN);
     }
     // Exactly `logFields` of each site's failure: the words, kind, status.
-    expect(metas).toEqual([
+    assert.deepEqual(metas, [
       [
         '[SAML] Token exchange failed',
         {

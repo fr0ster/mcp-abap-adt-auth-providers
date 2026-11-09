@@ -25,6 +25,8 @@
  * registered fake script for real).
  */
 
+import assert from 'node:assert/strict';
+import { EventEmitter } from 'node:events';
 import {
   chmodSync,
   existsSync,
@@ -36,14 +38,10 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import {
-  afterEach,
-  beforeEach,
-  describe,
-  expect,
-  it,
-  jest,
-} from '@jest/globals';
+import { afterEach, beforeEach, describe, it, mock } from 'node:test';
+
+import childProcess = require('node:child_process');
+
 import {
   AuthProviderFailure,
   isAuthProviderFailure,
@@ -51,11 +49,18 @@ import {
   readFailure,
 } from '@mcp-abap-adt/auth-errors';
 import type { IBrowser } from '@mcp-abap-adt/interfaces-auth';
+import {
+  cases,
+  caseTitle,
+  matchObject,
+  notContains,
+  thrown,
+} from '../helpers/expectations';
 
 type SpawnCall = { command: string; args: string[]; options: unknown };
 const spawned: SpawnCall[] = [];
-const realChildProcess =
-  jest.requireActual<typeof import('node:child_process')>('node:child_process');
+// The spawn the guard wrapped, kept before this file's mock replaces it.
+const realChildProcess = { spawn: childProcess.spawn };
 type FakeChild = InstanceType<typeof import('node:events').EventEmitter> & {
   unref(): void;
   kill(): boolean;
@@ -84,9 +89,12 @@ const fakeChild: {
   unrefs: 0,
 };
 
-jest.mock('node:child_process', () => ({
-  ...jest.requireActual<Record<string, unknown>>('node:child_process'),
-  spawn: (command: string, args: string[], options: unknown) => {
+// node:child_process's spawn (and exec) replaced on the module object for the
+// whole file: browserLaunch reads `child_process.spawn` at each call.
+mock.method(
+  childProcess,
+  'spawn',
+  (command: string, args: string[], options: unknown) => {
     if (!fakeChild.record) {
       const fake = fakeChild.real[command];
       if (fake === undefined) throw new Error(`no fake for ${command}`);
@@ -99,8 +107,6 @@ jest.mock('node:child_process', () => ({
     }
     const index = spawned.length;
     spawned.push({ command, args, options });
-    const { EventEmitter } =
-      jest.requireActual<typeof import('node:events')>('node:events');
     const child = new EventEmitter() as FakeChild;
     child.unref = () => {
       fakeChild.unrefs += 1;
@@ -121,13 +127,13 @@ jest.mock('node:child_process', () => ({
     });
     return child;
   },
-  exec: () => {
-    throw new Error('exec must never be called');
-  },
-  execSync: () => {
-    throw new Error('execSync must never be called');
-  },
-}));
+);
+mock.method(childProcess, 'exec', () => {
+  throw new Error('exec must never be called');
+});
+mock.method(childProcess, 'execSync', () => {
+  throw new Error('execSync must never be called');
+});
 
 import {
   launchableUrl,
@@ -227,43 +233,55 @@ async function untilRunning(): Promise<void> {
 }
 
 describe('each factory is an IBrowser', () => {
-  it.each(NAMES)('%s(): a frozen object whose only member is open', (name) => {
-    const browser: IBrowser = factories[name]();
-    expect(Object.keys(browser)).toEqual(['open']);
-    expect(typeof browser.open).toBe('function');
-    expect(Object.isFrozen(browser)).toBe(true);
-  });
+  for (const [caseIndex, caseRow] of NAMES.entries()) {
+    const name = caseRow;
+    it(
+      caseTitle(
+        '%s(): a frozen object whose only member is open',
+        caseRow,
+        caseIndex,
+      ),
+      () => {
+        const browser: IBrowser = factories[name]();
+        assert.deepEqual(Object.keys(browser), ['open']);
+        assert.equal(typeof browser.open, 'function');
+        assert.equal(Object.isFrozen(browser), true);
+      },
+    );
+  }
 });
 
 describe('one fixed launch each: an argument array, no shell', () => {
-  it.each<[Name, string, string[]]>([
+  for (const [caseIndex, caseRow] of cases<[Name, string, string[]]>([
     ['linuxDefaultBrowser', 'xdg-open', [href]],
     ['linuxBrowser', 'google-chrome', [href]],
     ['macDefaultBrowser', 'open', [href]],
     ['macBrowser', 'open', ['-a', 'Google Chrome', href]],
     ['windowsDefaultBrowser', RUNDLL32, ['url.dll,FileProtocolHandler', href]],
-  ])('%s: %s', async (name, command, args) => {
-    await expect(factories[name]().open(HOSTILE, never)).resolves.toBe(
-      undefined,
-    );
-    expect(spawned).toHaveLength(1);
-    const call = spawned[0] as SpawnCall;
-    expect(call.command).toBe(command);
-    expect(call.args).toEqual(args);
-    expect(call.args.filter((arg) => arg.includes('idp.example'))).toEqual([
-      href,
-    ]);
-    const options = call.options as { shell?: unknown; env?: unknown };
-    expect(options.shell).toBeUndefined();
-    expect(options.env).toBeUndefined();
-  });
+  ]).entries()) {
+    const [name, command, args] = caseRow;
+    it(caseTitle('%s: %s', caseRow, caseIndex), async () => {
+      assert.equal(await factories[name]().open(HOSTILE, never), undefined);
+      assert.equal(spawned.length, 1);
+      const call = spawned[0] as SpawnCall;
+      assert.equal(call.command, command);
+      assert.deepEqual(call.args, args);
+      assert.deepEqual(
+        call.args.filter((arg) => arg.includes('idp.example')),
+        [href],
+      );
+      const options = call.options as { shell?: unknown; env?: unknown };
+      assert.equal(options.shell, undefined);
+      assert.equal(options.env, undefined);
+    });
+  }
 
   it('windowsBrowser: PowerShell with fixed command text; the program and the URL only in the environment', async () => {
     await windowsBrowser('chrome').open(HOSTILE, never);
-    expect(spawned).toHaveLength(1);
+    assert.equal(spawned.length, 1);
     const call = spawned[0] as SpawnCall;
-    expect(call.command).toBe(POWERSHELL);
-    expect(call.args).toEqual([
+    assert.equal(call.command, POWERSHELL);
+    assert.deepEqual(call.args, [
       '-NoProfile',
       '-NonInteractive',
       '-Command',
@@ -273,38 +291,49 @@ describe('one fixed launch each: an argument array, no shell', () => {
       shell?: unknown;
       env?: Record<string, string>;
     };
-    expect(options.shell).toBeUndefined();
-    expect(options.env?.[URL_VARIABLE]).toBe(href);
-    expect(options.env?.[PROGRAM_VARIABLE]).toBe('chrome');
+    assert.equal(options.shell, undefined);
+    assert.equal(options.env?.[URL_VARIABLE], href);
+    assert.equal(options.env?.[PROGRAM_VARIABLE], 'chrome');
   });
 
-  it.each([
+  for (const [caseIndex, caseRow] of [
     `chrome'; Start-Process calc; '`,
     '$(Start-Process calc)',
     'chrome" -ArgumentList "x"; calc; "',
     '`calc`',
     'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
-  ])(
-    'windowsBrowser(%j): the program never appears in the command text',
-    async (program) => {
-      await windowsBrowser(program).open(HOSTILE, never);
-      const call = spawned[0] as SpawnCall;
-      expect(call.args).toEqual([
-        '-NoProfile',
-        '-NonInteractive',
-        '-Command',
-        START_PROCESS,
-      ]);
-      expect(call.args.some((arg) => arg.includes(program))).toBe(false);
-      expect(
-        (call.options as { env?: Record<string, string> }).env?.[
-          PROGRAM_VARIABLE
-        ],
-      ).toBe(program);
-    },
-  );
+  ].entries()) {
+    const program = caseRow;
+    it(
+      caseTitle(
+        'windowsBrowser(%j): the program never appears in the command text',
+        caseRow,
+        caseIndex,
+      ),
+      async () => {
+        await windowsBrowser(program).open(HOSTILE, never);
+        const call = spawned[0] as SpawnCall;
+        assert.deepEqual(call.args, [
+          '-NoProfile',
+          '-NonInteractive',
+          '-Command',
+          START_PROCESS,
+        ]);
+        assert.equal(
+          call.args.some((arg) => arg.includes(program)),
+          false,
+        );
+        assert.equal(
+          (call.options as { env?: Record<string, string> }).env?.[
+            PROGRAM_VARIABLE
+          ],
+          program,
+        );
+      },
+    );
+  }
 
-  it.each<[string, () => IBrowser, string, string[]]>([
+  for (const [caseIndex, caseRow] of cases([
     [
       'linuxBrowser, an absolute path with a space',
       () => linuxBrowser('/opt/my browser/bin/browser'),
@@ -323,159 +352,202 @@ describe('one fixed launch each: an argument array, no shell', () => {
       'open',
       ['-a', `My "App"; rm -rf ~`, href],
     ],
-  ])('%s: the string as given', async (_name, make, command, args) => {
-    await make().open(HOSTILE, never);
-    const call = spawned[0] as SpawnCall;
-    expect(call.command).toBe(command);
-    expect(call.args).toEqual(args);
-  });
+  ]).entries()) {
+    const [_name, make, command, args] = caseRow;
+    it(caseTitle('%s: the string as given', caseRow, caseIndex), async () => {
+      await make().open(HOSTILE, never);
+      const call = spawned[0] as SpawnCall;
+      assert.equal(call.command, command);
+      assert.deepEqual(call.args, args);
+    });
+  }
 
   it('the Windows launches sit under SystemRoot (C:\\Windows without it)', async () => {
     process.env.SystemRoot = 'D:\\Win';
     await windowsDefaultBrowser().open(HOSTILE, never);
     await windowsBrowser('chrome').open(HOSTILE, never);
-    expect(spawned.map((call) => call.command)).toEqual([
-      'D:\\Win\\System32\\rundll32.exe',
-      'D:\\Win\\System32\\WindowsPowerShell\\v1.0\\powershell.exe',
-    ]);
+    assert.deepEqual(
+      spawned.map((call) => call.command),
+      [
+        'D:\\Win\\System32\\rundll32.exe',
+        'D:\\Win\\System32\\WindowsPowerShell\\v1.0\\powershell.exe',
+      ],
+    );
   });
 
-  it.each<NodeJS.Platform>(['linux', 'darwin', 'win32'])(
-    'no platform check: on %s every factory makes its own launch, and none is cmd',
-    async (platform) => {
-      onPlatform(platform);
-      for (const name of NAMES) await factories[name]().open(HOSTILE, never);
-      expect(spawned.map((call) => call.command)).toEqual([
-        'xdg-open',
-        'google-chrome',
-        'open',
-        'open',
-        RUNDLL32,
-        POWERSHELL,
-      ]);
-      for (const call of spawned) {
-        const last = call.command.split('\\').pop()?.toLowerCase();
-        expect(last === 'cmd' || last === 'cmd.exe').toBe(false);
-      }
-    },
-  );
+  const platforms: NodeJS.Platform[] = ['linux', 'darwin', 'win32'];
+  for (const [caseIndex, caseRow] of platforms.entries()) {
+    const platform = caseRow;
+    it(
+      caseTitle(
+        'no platform check: on %s every factory makes its own launch, and none is cmd',
+        caseRow,
+        caseIndex,
+      ),
+      async () => {
+        onPlatform(platform);
+        for (const name of NAMES) await factories[name]().open(HOSTILE, never);
+        assert.deepEqual(
+          spawned.map((call) => call.command),
+          ['xdg-open', 'google-chrome', 'open', 'open', RUNDLL32, POWERSHELL],
+        );
+        for (const call of spawned) {
+          const last = call.command.split('\\').pop()?.toLowerCase();
+          assert.equal(last === 'cmd' || last === 'cmd.exe', false);
+        }
+      },
+    );
+  }
 });
 
 describe('settlement: a hand-off launcher at its exit, a browser binary at its spawn', () => {
-  it.each(HAND_OFF)(
-    '%s: awaited to its exit 0 — pending while the launcher runs',
-    async (name) => {
-      fakeChild.outcome = () => 'running';
-      let settled = false;
-      const opened = factories[name]()
-        .open(HOSTILE, never)
-        .finally(() => {
-          settled = true;
-        });
-      await untilRunning();
-      await new Promise((resolve) => setImmediate(resolve));
-      expect(fakeChild.running).toHaveLength(1);
-      expect(settled).toBe(false);
-      fakeChild.running[0]?.emit('exit', 0);
-      await expect(opened).resolves.toBe(undefined);
-    },
-  );
+  for (const [caseIndex, caseRow] of HAND_OFF.entries()) {
+    const name = caseRow;
+    it(
+      caseTitle(
+        '%s: awaited to its exit 0 — pending while the launcher runs',
+        caseRow,
+        caseIndex,
+      ),
+      async () => {
+        fakeChild.outcome = () => 'running';
+        let settled = false;
+        const opened = factories[name]()
+          .open(HOSTILE, never)
+          .finally(() => {
+            settled = true;
+          });
+        await untilRunning();
+        await new Promise((resolve) => setImmediate(resolve));
+        assert.equal(fakeChild.running.length, 1);
+        assert.equal(settled, false);
+        fakeChild.running[0]?.emit('exit', 0);
+        assert.equal(await opened, undefined);
+      },
+    );
+  }
 
-  it.each(HAND_OFF)(
-    '%s: a non-zero exit after its spawn rejects, with no code',
-    async (name) => {
-      fakeChild.outcome = () => 1;
-      const failure = await factories[name]()
-        .open(HOSTILE, never)
-        .catch((e: unknown) => e);
-      expect(readFailure(failure, 'opening-browser').facts).toEqual({
-        operation: 'opening-browser',
-      });
-      expect(spawned).toHaveLength(1);
-    },
-  );
-
-  it.each(NAMES)(
-    '%s: an error before its spawn rejects in fixed words, keeping an allowlisted code — no URL, no state, no launcher text',
-    async (name) => {
-      fakeChild.outcome = () =>
-        Object.assign(new Error(`spawn SECRET-PATH ${HOSTILE}`), {
-          code: 'ENOENT',
-          spawnargs: [HOSTILE],
+  for (const [caseIndex, caseRow] of HAND_OFF.entries()) {
+    const name = caseRow;
+    it(
+      caseTitle(
+        '%s: a non-zero exit after its spawn rejects, with no code',
+        caseRow,
+        caseIndex,
+      ),
+      async () => {
+        fakeChild.outcome = () => 1;
+        const failure = await factories[name]()
+          .open(HOSTILE, never)
+          .catch((e: unknown) => e);
+        assert.deepEqual(readFailure(failure, 'opening-browser').facts, {
+          operation: 'opening-browser',
         });
-      const failure = await factories[name]()
-        .open(HOSTILE, never)
-        .catch((e: unknown) => e);
-      expect(isAuthProviderFailure(failure)).toBe(true);
-      expect(readFailure(failure, 'opening-browser')).toMatchObject({
-        kind: 'unknown',
-        facts: { operation: 'opening-browser', code: 'ENOENT' },
-      });
-      const text = rendered(failure);
-      expect(text).not.toContain('idp.example');
-      expect(text).not.toContain(STATE);
-      expect(text).not.toContain('SECRET-PATH');
-      // One launch, no fallback chain.
-      expect(spawned).toHaveLength(1);
-    },
-  );
+        assert.equal(spawned.length, 1);
+      },
+    );
+  }
+
+  for (const [caseIndex, caseRow] of NAMES.entries()) {
+    const name = caseRow;
+    it(
+      caseTitle(
+        '%s: an error before its spawn rejects in fixed words, keeping an allowlisted code — no URL, no state, no launcher text',
+        caseRow,
+        caseIndex,
+      ),
+      async () => {
+        fakeChild.outcome = () =>
+          Object.assign(new Error(`spawn SECRET-PATH ${HOSTILE}`), {
+            code: 'ENOENT',
+            spawnargs: [HOSTILE],
+          });
+        const failure = await factories[name]()
+          .open(HOSTILE, never)
+          .catch((e: unknown) => e);
+        assert.equal(isAuthProviderFailure(failure), true);
+        matchObject(readFailure(failure, 'opening-browser'), {
+          kind: 'unknown',
+          facts: { operation: 'opening-browser', code: 'ENOENT' },
+        });
+        const text = rendered(failure);
+        notContains(text, 'idp.example');
+        notContains(text, STATE);
+        notContains(text, 'SECRET-PATH');
+        // One launch, no fallback chain.
+        assert.equal(spawned.length, 1);
+      },
+    );
+  }
 
   it('linuxBrowser: resolves at its spawn while the browser keeps running; its exit is never awaited', async () => {
     fakeChild.outcome = () => 'running';
-    await expect(
-      linuxBrowser('google-chrome').open(HOSTILE, never),
-    ).resolves.toBe(undefined);
-    expect(fakeChild.running).toHaveLength(1);
+    assert.equal(
+      await linuxBrowser('google-chrome').open(HOSTILE, never),
+      undefined,
+    );
+    assert.equal(fakeChild.running.length, 1);
   });
 
   it('linuxBrowser: a browser that started and later exits non-zero was still asked', async () => {
     fakeChild.outcome = () => 1;
-    await expect(linuxBrowser('firefox').open(HOSTILE, never)).resolves.toBe(
-      undefined,
-    );
-    expect(spawned).toHaveLength(1);
+    assert.equal(await linuxBrowser('firefox').open(HOSTILE, never), undefined);
+    assert.equal(spawned.length, 1);
   });
 
-  it.each(HAND_OFF)(
-    '%s: an abort while the launcher runs rejects aborted; the child is not killed',
-    async (name) => {
-      fakeChild.outcome = () => 'running';
-      const controller = new AbortController();
-      const opened = factories[name]()
-        .open(HOSTILE, controller.signal)
-        .catch((e: unknown) => e);
-      await untilRunning();
-      controller.abort();
-      expect(readFailure(await opened, 'browser-login').facts).toEqual({
-        outcome: 'aborted',
-      });
-      expect(fakeChild.killed).toBe(0);
-      // Its later exit changes nothing.
-      fakeChild.running[0]?.emit('exit', 0);
-    },
-  );
+  for (const [caseIndex, caseRow] of HAND_OFF.entries()) {
+    const name = caseRow;
+    it(
+      caseTitle(
+        '%s: an abort while the launcher runs rejects aborted; the child is not killed',
+        caseRow,
+        caseIndex,
+      ),
+      async () => {
+        fakeChild.outcome = () => 'running';
+        const controller = new AbortController();
+        const opened = factories[name]()
+          .open(HOSTILE, controller.signal)
+          .catch((e: unknown) => e);
+        await untilRunning();
+        controller.abort();
+        assert.deepEqual(readFailure(await opened, 'browser-login').facts, {
+          outcome: 'aborted',
+        });
+        assert.equal(fakeChild.killed, 0);
+        // Its later exit changes nothing.
+        fakeChild.running[0]?.emit('exit', 0);
+      },
+    );
+  }
 
-  it.each(HAND_OFF)(
-    '%s: the launcher stays referenced while it runs; an abort unreferences it, never kills it',
-    async (name) => {
-      fakeChild.outcome = () => 'running';
-      const controller = new AbortController();
-      const opened = factories[name]().open(HOSTILE, controller.signal);
-      const rejected =
-        expect(opened).rejects.toBeInstanceOf(AuthProviderFailure);
-      await untilRunning();
-      expect(fakeChild.unrefs).toBe(0);
-      controller.abort();
-      await rejected;
-      expect(fakeChild.unrefs).toBe(1);
-      expect(fakeChild.killed).toBe(0);
-    },
-  );
+  for (const [caseIndex, caseRow] of HAND_OFF.entries()) {
+    const name = caseRow;
+    it(
+      caseTitle(
+        '%s: the launcher stays referenced while it runs; an abort unreferences it, never kills it',
+        caseRow,
+        caseIndex,
+      ),
+      async () => {
+        fakeChild.outcome = () => 'running';
+        const controller = new AbortController();
+        const opened = factories[name]().open(HOSTILE, controller.signal);
+        const rejected = assert.rejects(opened, thrown(AuthProviderFailure));
+        await untilRunning();
+        assert.equal(fakeChild.unrefs, 0);
+        controller.abort();
+        await rejected;
+        assert.equal(fakeChild.unrefs, 1);
+        assert.equal(fakeChild.killed, 0);
+      },
+    );
+  }
 
   it('linuxBrowser: unreferenced once started', async () => {
     fakeChild.outcome = () => 'running';
     await linuxBrowser('google-chrome').open(HOSTILE, never);
-    expect(fakeChild.unrefs).toBe(1);
+    assert.equal(fakeChild.unrefs, 1);
   });
 
   it('linuxBrowser: an abort while the browser starts rejects aborted; nothing is killed', async () => {
@@ -484,52 +556,79 @@ describe('settlement: a hand-off launcher at its exit, a browser binary at its s
       controller.abort();
       return 'running';
     };
-    await expect(
+    await assert.rejects(
       linuxBrowser('google-chrome').open(HOSTILE, controller.signal),
-    ).rejects.toBeInstanceOf(AuthProviderFailure);
-    expect(fakeChild.killed).toBe(0);
+      thrown(AuthProviderFailure),
+    );
+    assert.equal(fakeChild.killed, 0);
   });
 
-  it.each(NAMES)(
-    '%s: an aborted signal starts nothing and rejects',
-    async (name) => {
-      const controller = new AbortController();
-      controller.abort();
-      await expect(
-        factories[name]().open(HOSTILE, controller.signal),
-      ).rejects.toBeInstanceOf(AuthProviderFailure);
-      expect(spawned).toEqual([]);
-    },
-  );
+  for (const [caseIndex, caseRow] of NAMES.entries()) {
+    const name = caseRow;
+    it(
+      caseTitle(
+        '%s: an aborted signal starts nothing and rejects',
+        caseRow,
+        caseIndex,
+      ),
+      async () => {
+        const controller = new AbortController();
+        controller.abort();
+        await assert.rejects(
+          factories[name]().open(HOSTILE, controller.signal),
+          thrown(AuthProviderFailure),
+        );
+        assert.deepEqual(spawned, []);
+      },
+    );
+  }
 
-  it.each(['javascript:alert(1)', 'file:///etc/passwd', 'not a url'])(
-    'a URL that is not http(s) (%j) starts nothing and rejects',
-    async (url) => {
-      for (const name of NAMES) {
-        const failure = await factories[name]()
-          .open(url, never)
-          .catch((e: unknown) => e);
-        expect(isAuthProviderFailure(failure)).toBe(true);
-        expect(rendered(failure)).not.toContain(url);
-      }
-      expect(spawned).toEqual([]);
-    },
-  );
+  for (const [caseIndex, caseRow] of [
+    'javascript:alert(1)',
+    'file:///etc/passwd',
+    'not a url',
+  ].entries()) {
+    const url = caseRow;
+    it(
+      caseTitle(
+        'a URL that is not http(s) (%j) starts nothing and rejects',
+        caseRow,
+        caseIndex,
+      ),
+      async () => {
+        for (const name of NAMES) {
+          const failure = await factories[name]()
+            .open(url, never)
+            .catch((e: unknown) => e);
+          assert.equal(isAuthProviderFailure(failure), true);
+          notContains(rendered(failure), url);
+        }
+        assert.deepEqual(spawned, []);
+      },
+    );
+  }
 });
 
 describe('no environment is guessed or changed', () => {
-  it.each(NAMES)(
-    '%s without a display: process.env is left as it was',
-    async (name) => {
-      delete process.env.DISPLAY;
-      delete process.env.WAYLAND_DISPLAY;
-      const before = { ...process.env };
-      await factories[name]().open(HOSTILE, never);
-      expect('DISPLAY' in process.env).toBe(false);
-      expect('WAYLAND_DISPLAY' in process.env).toBe(false);
-      expect({ ...process.env }).toEqual(before);
-    },
-  );
+  for (const [caseIndex, caseRow] of NAMES.entries()) {
+    const name = caseRow;
+    it(
+      caseTitle(
+        '%s without a display: process.env is left as it was',
+        caseRow,
+        caseIndex,
+      ),
+      async () => {
+        delete process.env.DISPLAY;
+        delete process.env.WAYLAND_DISPLAY;
+        const before = { ...process.env };
+        await factories[name]().open(HOSTILE, never);
+        assert.equal('DISPLAY' in process.env, false);
+        assert.equal('WAYLAND_DISPLAY' in process.env, false);
+        assert.deepEqual({ ...process.env }, before);
+      },
+    );
+  }
 
   it('a launcher failing is the ordinary presentation failure: the URL on stderr once, the login waits; the signal ends it', async () => {
     delete process.env.DISPLAY;
@@ -537,12 +636,10 @@ describe('no environment is guessed or changed', () => {
     const before = { ...process.env };
     fakeChild.outcome = () => 4;
     const written: string[] = [];
-    const stderr = jest
-      .spyOn(process.stderr, 'write')
-      .mockImplementation((chunk: unknown) => {
-        written.push(String(chunk));
-        return true;
-      });
+    const stderr = mock.method(process.stderr, 'write', (chunk: unknown) => {
+      written.push(String(chunk));
+      return true;
+    });
     try {
       const port = await getAvailablePort();
       const controller = new AbortController();
@@ -570,119 +667,131 @@ describe('no environment is guessed or changed', () => {
       for (let i = 0; i < 200 && !written.join('').includes(shown); i += 1) {
         await new Promise((resolve) => setTimeout(resolve, 5));
       }
-      expect(spawned.map((call) => call.command)).toEqual(['xdg-open']);
-      expect(written.join('').split(shown).length - 1).toBe(1);
-      expect(done).toBe(false);
-      expect({ ...process.env }).toEqual(before);
+      assert.deepEqual(
+        spawned.map((call) => call.command),
+        ['xdg-open'],
+      );
+      assert.equal(written.join('').split(shown).length - 1, 1);
+      assert.equal(done, false);
+      assert.deepEqual({ ...process.env }, before);
       controller.abort();
-      expect(readFailure(await login, 'browser-login').facts).toEqual({
+      assert.deepEqual(readFailure(await login, 'browser-login').facts, {
         outcome: 'aborted',
         strategy: 'browser',
       });
     } finally {
-      stderr.mockRestore();
+      stderr.mock.restore();
     }
   });
 });
 
 describe('through openInBrowser: the failure in fixed words, the URL prompted once', () => {
-  it.each([
+  for (const [caseIndex, caseRow] of (
     [
-      'the launcher failing to start',
-      (): Error =>
-        Object.assign(new Error(`SECRET-PATH ${HOSTILE}`), { code: 'ENOENT' }),
-      'opening the browser failed (unknown error, ENOENT)',
-    ],
-    [
-      'the hand-off launcher exiting non-zero',
-      (): number => 2,
-      'opening the browser failed (unknown error)',
-    ],
-  ] as const)('%s', async (_name, outcome, words) => {
-    fakeChild.outcome = outcome;
-    const written: string[] = [];
-    const stderr = jest
-      .spyOn(process.stderr, 'write')
-      .mockImplementation((chunk: unknown) => {
+      [
+        'the launcher failing to start',
+        (): Error =>
+          Object.assign(new Error(`SECRET-PATH ${HOSTILE}`), {
+            code: 'ENOENT',
+          }),
+        'opening the browser failed (unknown error, ENOENT)',
+      ],
+      [
+        'the hand-off launcher exiting non-zero',
+        (): number => 2,
+        'opening the browser failed (unknown error)',
+      ],
+    ] as const
+  ).entries()) {
+    const [_name, outcome, words] = caseRow;
+    it(caseTitle('%s', caseRow, caseIndex), async () => {
+      fakeChild.outcome = outcome;
+      const written: string[] = [];
+      const stderr = mock.method(process.stderr, 'write', (chunk: unknown) => {
         written.push(String(chunk));
         return true;
       });
-    try {
-      const presented = openInBrowser({
-        browser: linuxDefaultBrowser(),
-      }).present(HOSTILE, {
-        signal: never,
-        redirectUri: undefined,
-        waitingOn: undefined,
-        routeHint: undefined,
-      });
-      const failure: unknown = await Promise.resolve(presented).then(
-        () => undefined,
-        (error: unknown) => error,
-      );
-      const fields = logFields(
-        readFailure(failure, 'presenting-authorization-url'),
-      );
-      expect(fields).toEqual({ error: words, kind: 'unknown' });
-      expect(JSON.stringify(fields)).not.toContain('SECRET-PATH');
-      expect(written.join('').split(href).length - 1).toBe(1);
-      expect(written.join('')).not.toContain('SECRET-PATH');
-    } finally {
-      stderr.mockRestore();
-    }
-  });
+      try {
+        const presented = openInBrowser({
+          browser: linuxDefaultBrowser(),
+        }).present(HOSTILE, {
+          signal: never,
+          redirectUri: undefined,
+          waitingOn: undefined,
+          routeHint: undefined,
+        });
+        const failure: unknown = await Promise.resolve(presented).then(
+          () => undefined,
+          (error: unknown) => error,
+        );
+        const fields = logFields(
+          readFailure(failure, 'presenting-authorization-url'),
+        );
+        assert.deepEqual(fields, { error: words, kind: 'unknown' });
+        notContains(JSON.stringify(fields), 'SECRET-PATH');
+        assert.equal(written.join('').split(href).length - 1, 1);
+        notContains(written.join(''), 'SECRET-PATH');
+      } finally {
+        stderr.mock.restore();
+      }
+    });
+  }
 });
 
 // Runs on Linux, where a fake script can stand in; skipped elsewhere.
 const onLinux = realPlatform === 'linux' ? it : it.skip;
 
 describe('for real: a hostile URL runs nothing', () => {
-  onLinux.each<'linuxDefaultBrowser' | 'linuxBrowser'>([
-    'linuxDefaultBrowser',
-    'linuxBrowser',
-  ])(
-    '%s reaches its program as one argument; no MARKER is created',
-    async (name) => {
-      fakeChild.record = false;
-      const unregister: (() => void)[] = [];
-      const dir = mkdtempSync(join(tmpdir(), 'browser-'));
-      const out = join(dir, 'argv.json');
-      const fakeBrowser = join(dir, 'fake-browser');
-      for (const [command, path] of [
-        ['xdg-open', join(dir, 'xdg-open')],
-        [fakeBrowser, fakeBrowser],
-      ] as const) {
-        writeFileSync(
-          path,
-          `#!${process.execPath}\nrequire("fs").writeFileSync(${JSON.stringify(out)}, JSON.stringify(process.argv.slice(2)))\n`,
-        );
-        chmodSync(path, 0o755);
-        fakeChild.real[command] = path;
-        unregister.push(allowExecutable(path));
-      }
-      const browser =
-        name === 'linuxDefaultBrowser'
-          ? linuxDefaultBrowser()
-          : linuxBrowser(fakeBrowser);
-      const markers = () =>
-        readdirSync(process.cwd()).filter((f) => f.startsWith('MARKER'));
-      try {
-        await browser.open(HOSTILE, never);
-        // Until the fake wrote its argv, then let anything a shell would
-        // have started finish.
-        for (let i = 0; i < 100 && !existsSync(out); i += 1) {
-          await new Promise((resolve) => setTimeout(resolve, 20));
+  const linuxFactories: Name[] = ['linuxDefaultBrowser', 'linuxBrowser'];
+  for (const [caseIndex, name] of linuxFactories.entries()) {
+    onLinux(
+      caseTitle(
+        '%s reaches its program as one argument; no MARKER is created',
+        name,
+        caseIndex,
+      ),
+      async () => {
+        fakeChild.record = false;
+        const unregister: (() => void)[] = [];
+        const dir = mkdtempSync(join(tmpdir(), 'browser-'));
+        const out = join(dir, 'argv.json');
+        const fakeBrowser = join(dir, 'fake-browser');
+        for (const [command, path] of [
+          ['xdg-open', join(dir, 'xdg-open')],
+          [fakeBrowser, fakeBrowser],
+        ] as const) {
+          writeFileSync(
+            path,
+            `#!${process.execPath}\nrequire("fs").writeFileSync(${JSON.stringify(out)}, JSON.stringify(process.argv.slice(2)))\n`,
+          );
+          chmodSync(path, 0o755);
+          fakeChild.real[command] = path;
+          unregister.push(allowExecutable(path));
         }
-        await new Promise((resolve) => setTimeout(resolve, 300));
-        // First: nothing ran (with a shell, `$(…)`, the backticks and the
-        // `;` would have created these).
-        expect(markers()).toEqual([]);
-        expect(JSON.parse(readFileSync(out, 'utf8'))).toEqual([href]);
-      } finally {
-        for (const marker of markers()) rmSync(marker, { force: true });
-        for (const close of unregister) close();
-        rmSync(dir, { recursive: true, force: true });
-      }
-    },
-  );
+        const browser =
+          name === 'linuxDefaultBrowser'
+            ? linuxDefaultBrowser()
+            : linuxBrowser(fakeBrowser);
+        const markers = () =>
+          readdirSync(process.cwd()).filter((f) => f.startsWith('MARKER'));
+        try {
+          await browser.open(HOSTILE, never);
+          // Until the fake wrote its argv, then let anything a shell would
+          // have started finish.
+          for (let i = 0; i < 100 && !existsSync(out); i += 1) {
+            await new Promise((resolve) => setTimeout(resolve, 20));
+          }
+          await new Promise((resolve) => setTimeout(resolve, 300));
+          // First: nothing ran (with a shell, `$(…)`, the backticks and the
+          // `;` would have created these).
+          assert.deepEqual(markers(), []);
+          assert.deepEqual(JSON.parse(readFileSync(out, 'utf8')), [href]);
+        } finally {
+          for (const marker of markers()) rmSync(marker, { force: true });
+          for (const close of unregister) close();
+          rmSync(dir, { recursive: true, force: true });
+        }
+      },
+    );
+  }
 });

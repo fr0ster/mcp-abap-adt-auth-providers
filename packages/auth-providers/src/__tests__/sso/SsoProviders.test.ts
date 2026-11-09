@@ -1,3 +1,5 @@
+import assert from 'node:assert/strict';
+import { after, beforeEach, describe, it, mock } from 'node:test';
 import { inflateRawSync } from 'node:zlib';
 import {
   AuthProviderFailure,
@@ -57,42 +59,70 @@ import {
   createSignedResponseValidator,
 } from '../../validation/assertionValidator';
 import { createInMemoryReplayStore } from '../../validation/inMemoryReplayStore';
+import {
+  anyOf,
+  calledWith,
+  cases,
+  caseTitle,
+  contains,
+  matchObject,
+  notContains,
+  objectContaining,
+  thrown,
+} from '../helpers/expectations';
 import { configurationOf } from '../helpers/minted';
+import { clearMock } from '../helpers/mockOnce';
 import { expectSamlRejection, rejectionOf } from '../helpers/samlRefusal';
 
-jest.mock('../../auth/oidcDiscovery', () => ({
-  discoverOidc: jest.fn(),
-  // A pure reader of the document: the real one.
-  mtlsAlias: (
-    jest.requireActual('../../auth/oidcDiscovery') as {
-      mtlsAlias: unknown;
-    }
-  ).mtlsAlias,
-}));
-jest.mock('../../auth/oidcToken', () => ({
-  exchangeAuthorizationCode: jest.fn(),
-  refreshOidcToken: jest.fn(),
-  initiateDeviceAuthorization: jest.fn(),
-  pollDeviceTokens: jest.fn(),
-  passwordGrant: jest.fn(),
-  tokenExchange: jest.fn(),
-}));
-jest.mock('../../auth/saml2TokenExchange', () => ({
-  exchangeSamlAssertion: jest.fn(),
-  refreshSamlBearerToken: jest.fn(),
-}));
+import oidcDiscovery = require('../../auth/oidcDiscovery');
+import oidcToken = require('../../auth/oidcToken');
+import saml2TokenExchange = require('../../auth/saml2TokenExchange');
+
+// The sites replaced on their module objects for the whole file (what were
+// jest.mock factories; oidcDiscovery's mtlsAlias, a pure reader, stays
+// real): the providers read them off the module at each call. Each answers
+// `undefined` until a test gives it an implementation, as the automock did.
 // `saml2Utils` is deliberately NOT mocked: `getSamlAssertion` is the code that
 // drives the strategy, so stubbing it would stub away everything under test.
+const unanswered = async () => undefined;
+const mockDiscoverOidc = mock.method(oidcDiscovery, 'discoverOidc', unanswered);
+const mockExchangeCode = mock.method(
+  oidcToken,
+  'exchangeAuthorizationCode',
+  unanswered,
+);
+const mockRefresh = mock.method(oidcToken, 'refreshOidcToken', unanswered);
+const mockInitiateDevice = mock.method(
+  oidcToken,
+  'initiateDeviceAuthorization',
+  unanswered,
+);
+const mockPollDevice = mock.method(oidcToken, 'pollDeviceTokens', unanswered);
+const mockPasswordGrant = mock.method(oidcToken, 'passwordGrant', unanswered);
+const mockTokenExchange = mock.method(oidcToken, 'tokenExchange', unanswered);
+const mockExchangeSaml = mock.method(
+  saml2TokenExchange,
+  'exchangeSamlAssertion',
+  unanswered,
+);
+const mockRefreshSaml = mock.method(
+  saml2TokenExchange,
+  'refreshSamlBearerToken',
+  unanswered,
+);
 
-const mockDiscoverOidc = discoverOidc as jest.Mock;
-const mockExchangeCode = exchangeAuthorizationCode as jest.Mock;
-const mockRefresh = refreshOidcToken as jest.Mock;
-const mockInitiateDevice = initiateDeviceAuthorization as jest.Mock;
-const mockPollDevice = pollDeviceTokens as jest.Mock;
-const mockPasswordGrant = passwordGrant as jest.Mock;
-const mockTokenExchange = tokenExchange as jest.Mock;
-const mockExchangeSaml = exchangeSamlAssertion as jest.Mock;
-const mockRefreshSaml = refreshSamlBearerToken as jest.Mock;
+/** Every site mock's calls forgotten, its implementation kept: Jest's `clearAllMocks`. */
+function clearSiteMocks(): void {
+  clearMock(mockDiscoverOidc);
+  clearMock(mockExchangeCode);
+  clearMock(mockRefresh);
+  clearMock(mockInitiateDevice);
+  clearMock(mockPollDevice);
+  clearMock(mockPasswordGrant);
+  clearMock(mockTokenExchange);
+  clearMock(mockExchangeSaml);
+  clearMock(mockRefreshSaml);
+}
 
 /** An unsigned JWT whose `exp` is `secondsFromNow` away. */
 const jwtExpiringIn = (secondsFromNow: number): string => {
@@ -163,26 +193,26 @@ function constructionError(factory: () => unknown): unknown {
 }
 
 describe('SSO Providers', () => {
-  const consoleLogSpy = jest.spyOn(console, 'log').mockImplementation(() => {});
+  const consoleLogSpy = mock.method(console, 'log', () => {});
 
   beforeEach(() => {
-    jest.clearAllMocks();
+    clearSiteMocks();
   });
 
-  afterAll(() => {
-    consoleLogSpy.mockRestore();
+  after(() => {
+    consoleLogSpy.mock.restore();
   });
 
   it('OidcBrowserProvider should exchange code and return tokens', async () => {
-    mockDiscoverOidc.mockResolvedValue({
+    mockDiscoverOidc.mock.mockImplementation(async () => ({
       authorization_endpoint: 'https://issuer/authorize',
       token_endpoint: 'https://issuer/token',
-    });
-    mockExchangeCode.mockResolvedValue({
+    }));
+    mockExchangeCode.mock.mockImplementation(async () => ({
       accessToken: 'jwt.access.token',
       refreshToken: 'refresh',
       expiresIn: 3600,
-    });
+    }));
 
     const provider = new OidcBrowserProvider({
       renewal: refreshThenLogin(),
@@ -198,18 +228,18 @@ describe('SSO Providers', () => {
     });
 
     const tokens = await provider.getTokens();
-    expect(tokens.authorizationToken).toBe('jwt.access.token');
-    expect(tokens.refreshToken).toBe('refresh');
-    expect(tokens.authType).toBe(AUTH_TYPE_AUTHORIZATION_CODE_PKCE);
-    expect(tokens.tokenType).toBe('jwt');
+    assert.equal(tokens.authorizationToken, 'jwt.access.token');
+    assert.equal(tokens.refreshToken, 'refresh');
+    assert.equal(tokens.authType, AUTH_TYPE_AUTHORIZATION_CODE_PKCE);
+    assert.equal(tokens.tokenType, 'jwt');
   });
 
   it('OidcBrowserProvider should use explicit endpoints', async () => {
-    mockExchangeCode.mockResolvedValue({
+    mockExchangeCode.mock.mockImplementation(async () => ({
       accessToken: 'jwt.access.token',
       refreshToken: 'refresh',
       expiresIn: 3600,
-    });
+    }));
 
     const provider = new OidcBrowserProvider({
       renewal: refreshThenLogin(),
@@ -226,20 +256,20 @@ describe('SSO Providers', () => {
     });
 
     const tokens = await provider.getTokens();
-    expect(tokens.authorizationToken).toBe('jwt.access.token');
-    expect(mockDiscoverOidc).not.toHaveBeenCalled();
+    assert.equal(tokens.authorizationToken, 'jwt.access.token');
+    assert.equal(mockDiscoverOidc.mock.callCount(), 0);
   });
 
   it('OidcBrowserProvider performs no discovery when it holds a code and a token endpoint', async () => {
-    const discovery = jest.fn();
-    mockDiscoverOidc.mockImplementation(async (issuerUrl: string) => {
+    const discovery = mock.fn();
+    mockDiscoverOidc.mock.mockImplementation(async (issuerUrl: string) => {
       discovery(issuerUrl);
       throw new Error('discovery must not be attempted');
     });
-    mockExchangeCode.mockResolvedValue({
+    mockExchangeCode.mock.mockImplementation(async () => ({
       accessToken: 'AT',
       expiresIn: 3600,
-    });
+    }));
 
     const provider = new OidcBrowserProvider({
       renewal: refreshThenLogin(),
@@ -255,23 +285,23 @@ describe('SSO Providers', () => {
     });
 
     const tokens = await provider.getTokens();
-    expect(tokens.authorizationToken).toBe('AT');
-    expect(discovery).not.toHaveBeenCalled();
+    assert.equal(tokens.authorizationToken, 'AT');
+    assert.equal(discovery.mock.callCount(), 0);
   });
 
   it('OidcBrowserProvider discovers once when it needs both endpoints', async () => {
-    const discovery = jest.fn();
-    mockDiscoverOidc.mockImplementation(async (issuerUrl: string) => {
+    const discovery = mock.fn();
+    mockDiscoverOidc.mock.mockImplementation(async (issuerUrl: string) => {
       discovery(issuerUrl);
       return {
         authorization_endpoint: 'https://idp.example/authorize',
         token_endpoint: 'https://idp.example/token',
       };
     });
-    mockExchangeCode.mockResolvedValue({
+    mockExchangeCode.mock.mockImplementation(async () => ({
       accessToken: 'AT2',
       expiresIn: 3600,
-    });
+    }));
 
     const provider = new OidcBrowserProvider({
       renewal: refreshThenLogin(),
@@ -281,7 +311,7 @@ describe('SSO Providers', () => {
         externalCodeStrategy({
           redirectUri: 'http://localhost:61001/callback',
           provide: async (url) => {
-            expect(url).toContain('code_challenge=');
+            contains(url, 'code_challenge=');
             return 'external-code';
           },
         }),
@@ -289,18 +319,19 @@ describe('SSO Providers', () => {
     });
 
     const tokens = await provider.getTokens();
-    expect(tokens.authorizationToken).toBe('AT2');
-    expect(discovery).toHaveBeenCalledTimes(1);
+    assert.equal(tokens.authorizationToken, 'AT2');
+    assert.equal(discovery.mock.callCount(), 1);
     // The code the strategy returned reaches the exchange at the redirect the
     // strategy actually used, against the endpoint discovery supplied. The
     // verifier is only shape-checked here; the test below pins what it must be.
-    expect(mockExchangeCode).toHaveBeenCalledWith(
+    calledWith(
+      mockExchangeCode,
       'https://idp.example/token',
       'cid',
       undefined,
       'external-code',
       'http://localhost:61001/callback',
-      expect.any(String),
+      anyOf(String),
       undefined,
       // No client authentication configured: none given to the site.
       undefined,
@@ -309,18 +340,18 @@ describe('SSO Providers', () => {
       {
         authDebug: false,
         grant: 'authorization_code_pkce',
-        signal: expect.any(AbortSignal),
+        signal: anyOf(AbortSignal),
         // The login step's dispatch notice.
-        dispatched: expect.any(Function),
+        dispatched: anyOf(Function),
       },
     );
   });
 
   it('OidcBrowserProvider exchanges the verifier the challenge in the URL was derived from', async () => {
-    mockExchangeCode.mockResolvedValue({
+    mockExchangeCode.mock.mockImplementation(async () => ({
       accessToken: 'AT3',
       expiresIn: 3600,
-    });
+    }));
 
     let authorizationUrl = '';
     const provider = new OidcBrowserProvider({
@@ -341,34 +372,34 @@ describe('SSO Providers', () => {
 
     await provider.getTokens();
 
-    const verifier = mockExchangeCode.mock.calls[0][5] as string;
-    expect(verifier).toBeTruthy();
+    const verifier = mockExchangeCode.mock.calls[0]?.arguments[5];
+    assert.ok(verifier);
     // The pairing, not merely the presence, is the property. An implementation
     // that regenerated the verifier before the exchange would satisfy
     // `expect.any(String)` just as well — and that is precisely the defect the
     // old `authorizationCodeProvider` had, since it never saw the URL and so
     // could return a code minted against a challenge nobody could redeem.
     const params = new URL(authorizationUrl).searchParams;
-    expect(params.get('code_challenge')).toBe(generatePkceChallenge(verifier));
-    expect(params.get('code_challenge_method')).toBe('S256');
+    assert.equal(params.get('code_challenge'), generatePkceChallenge(verifier));
+    assert.equal(params.get('code_challenge_method'), 'S256');
   });
 
   it('OidcDeviceFlowProvider should poll device tokens', async () => {
-    mockDiscoverOidc.mockResolvedValue({
+    mockDiscoverOidc.mock.mockImplementation(async () => ({
       device_authorization_endpoint: 'https://issuer/device',
       token_endpoint: 'https://issuer/token',
-    });
-    mockInitiateDevice.mockResolvedValue({
+    }));
+    mockInitiateDevice.mock.mockImplementation(async () => ({
       deviceCode: 'dev-code',
       userCode: 'user-code',
       verificationUri: 'https://issuer/verify',
       interval: 1,
-    });
-    mockPollDevice.mockResolvedValue({
+    }));
+    mockPollDevice.mock.mockImplementation(async () => ({
       accessToken: 'jwt.device.token',
       refreshToken: 'refresh',
       expiresIn: 1200,
-    });
+    }));
 
     const provider = new OidcDeviceFlowProvider({
       renewal: refreshThenLogin(),
@@ -378,22 +409,22 @@ describe('SSO Providers', () => {
     });
 
     const tokens = await provider.getTokens();
-    expect(tokens.authorizationToken).toBe('jwt.device.token');
-    expect(tokens.tokenType).toBe('jwt');
+    assert.equal(tokens.authorizationToken, 'jwt.device.token');
+    assert.equal(tokens.tokenType, 'jwt');
   });
 
   it('OidcDeviceFlowProvider should use explicit endpoints', async () => {
-    mockInitiateDevice.mockResolvedValue({
+    mockInitiateDevice.mock.mockImplementation(async () => ({
       deviceCode: 'dev-code',
       userCode: 'user-code',
       verificationUri: 'https://issuer/verify',
       interval: 1,
-    });
-    mockPollDevice.mockResolvedValue({
+    }));
+    mockPollDevice.mock.mockImplementation(async () => ({
       accessToken: 'jwt.device.token',
       refreshToken: 'refresh',
       expiresIn: 1200,
-    });
+    }));
 
     const provider = new OidcDeviceFlowProvider({
       renewal: refreshThenLogin(),
@@ -405,11 +436,11 @@ describe('SSO Providers', () => {
     });
 
     const tokens = await provider.getTokens();
-    expect(tokens.authorizationToken).toBe('jwt.device.token');
-    expect(mockDiscoverOidc).not.toHaveBeenCalled();
+    assert.equal(tokens.authorizationToken, 'jwt.device.token');
+    assert.equal(mockDiscoverOidc.mock.callCount(), 0);
   });
 
-  it.each([
+  for (const [caseIndex, caseRow] of cases([
     [
       'the token endpoint',
       { deviceAuthorizationEndpoint: 'https://explicit/device' },
@@ -420,40 +451,53 @@ describe('SSO Providers', () => {
       { tokenEndpoint: 'https://explicit/token' },
       { device: 'https://issuer/device', token: 'https://explicit/token' },
     ],
-  ])(
-    'OidcDeviceFlowProvider discovers %s it was not given, beside one it was',
-    async (_missing, given, expected) => {
-      mockDiscoverOidc.mockResolvedValue({
-        device_authorization_endpoint: 'https://issuer/device',
-        token_endpoint: 'https://issuer/token',
-      });
-      mockInitiateDevice.mockResolvedValue({
-        deviceCode: 'dev-code',
-        userCode: 'user-code',
-        verificationUri: 'https://issuer/verify',
-        interval: 1,
-      });
-      mockPollDevice.mockResolvedValue({
-        accessToken: 'jwt.device.token',
-        expiresIn: 1200,
-      });
+  ]).entries()) {
+    const [_missing, given, expected] = caseRow;
+    it(
+      caseTitle(
+        'OidcDeviceFlowProvider discovers %s it was not given, beside one it was',
+        caseRow,
+        caseIndex,
+      ),
+      async () => {
+        mockDiscoverOidc.mock.mockImplementation(async () => ({
+          device_authorization_endpoint: 'https://issuer/device',
+          token_endpoint: 'https://issuer/token',
+        }));
+        mockInitiateDevice.mock.mockImplementation(async () => ({
+          deviceCode: 'dev-code',
+          userCode: 'user-code',
+          verificationUri: 'https://issuer/verify',
+          interval: 1,
+        }));
+        mockPollDevice.mock.mockImplementation(async () => ({
+          accessToken: 'jwt.device.token',
+          expiresIn: 1200,
+        }));
 
-      const provider = new OidcDeviceFlowProvider({
-        renewal: refreshThenLogin(),
-        issuerUrl: 'https://issuer',
-        clientId: 'client',
-        presenter: consoleDeviceCodePresenter(),
-        ...given,
-      });
+        const provider = new OidcDeviceFlowProvider({
+          renewal: refreshThenLogin(),
+          issuerUrl: 'https://issuer',
+          clientId: 'client',
+          presenter: consoleDeviceCodePresenter(),
+          ...given,
+        });
 
-      await expect(provider.getTokens()).resolves.toMatchObject({
-        authorizationToken: 'jwt.device.token',
-      });
-      expect(mockDiscoverOidc).toHaveBeenCalledTimes(1);
-      expect(mockInitiateDevice.mock.calls[0][0]).toBe(expected.device);
-      expect(mockPollDevice.mock.calls[0][0]).toBe(expected.token);
-    },
-  );
+        matchObject(await provider.getTokens(), {
+          authorizationToken: 'jwt.device.token',
+        });
+        assert.equal(mockDiscoverOidc.mock.callCount(), 1);
+        assert.equal(
+          mockInitiateDevice.mock.calls[0]?.arguments[0],
+          expected.device,
+        );
+        assert.equal(
+          mockPollDevice.mock.calls[0]?.arguments[0],
+          expected.token,
+        );
+      },
+    );
+  }
 
   /**
    * The device code and verification URI are prompts, not log lines — a user
@@ -462,32 +506,28 @@ describe('SSO Providers', () => {
    * carries protocol traffic under an MCP or LSP stdio transport.
    */
   it('OidcDeviceFlowProvider prompts on stderr and writes nothing to stdout', async () => {
-    mockInitiateDevice.mockResolvedValue({
+    mockInitiateDevice.mock.mockImplementation(async () => ({
       deviceCode: 'dev-code',
       userCode: 'USER-CODE-FIXTURE',
       verificationUri: 'https://verify.example',
       interval: 0,
-    });
-    mockPollDevice.mockResolvedValue({
+    }));
+    mockPollDevice.mock.mockImplementation(async () => ({
       accessToken: 'jwt.device.token',
       refreshToken: 'refresh',
       expiresIn: 1200,
-    });
+    }));
 
     const out: string[] = [];
     const err: string[] = [];
-    const outSpy = jest
-      .spyOn(process.stdout, 'write')
-      .mockImplementation((chunk: unknown) => {
-        out.push(String(chunk));
-        return true;
-      });
-    const errSpy = jest
-      .spyOn(process.stderr, 'write')
-      .mockImplementation((chunk: unknown) => {
-        err.push(String(chunk));
-        return true;
-      });
+    const outSpy = mock.method(process.stdout, 'write', (chunk: unknown) => {
+      out.push(String(chunk));
+      return true;
+    });
+    const errSpy = mock.method(process.stderr, 'write', (chunk: unknown) => {
+      err.push(String(chunk));
+      return true;
+    });
     try {
       const provider = OidcDeviceFlowProvider.toConsole({
         renewal: refreshThenLogin(),
@@ -498,26 +538,26 @@ describe('SSO Providers', () => {
       });
       await provider.getTokens();
     } finally {
-      outSpy.mockRestore();
-      errSpy.mockRestore();
+      outSpy.mock.restore();
+      errSpy.mock.restore();
     }
-    expect(out).toEqual([]);
-    expect(err.join('')).toContain('USER-CODE-FIXTURE');
-    expect(err.join('')).toContain('https://verify.example');
+    assert.deepEqual(out, []);
+    contains(err.join(''), 'USER-CODE-FIXTURE');
+    contains(err.join(''), 'https://verify.example');
   });
 
   it('OidcDeviceFlowProvider sends the prompt to the logger, and nothing to stderr, when one is supplied', async () => {
-    mockInitiateDevice.mockResolvedValue({
+    mockInitiateDevice.mock.mockImplementation(async () => ({
       deviceCode: 'dev-code',
       userCode: 'USER-CODE-FIXTURE',
       verificationUri: 'https://verify.example',
       interval: 0,
-    });
-    mockPollDevice.mockResolvedValue({
+    }));
+    mockPollDevice.mock.mockImplementation(async () => ({
       accessToken: 'jwt.device.token',
       refreshToken: 'refresh',
       expiresIn: 1200,
-    });
+    }));
 
     const infos: string[] = [];
     const logger: ILogger = {
@@ -529,12 +569,10 @@ describe('SSO Providers', () => {
       error: () => undefined,
     };
     const err: string[] = [];
-    const errSpy = jest
-      .spyOn(process.stderr, 'write')
-      .mockImplementation((chunk: unknown) => {
-        err.push(String(chunk));
-        return true;
-      });
+    const errSpy = mock.method(process.stderr, 'write', (chunk: unknown) => {
+      err.push(String(chunk));
+      return true;
+    });
     try {
       const provider = OidcDeviceFlowProvider.toConsole({
         renewal: refreshThenLogin(),
@@ -546,29 +584,29 @@ describe('SSO Providers', () => {
       });
       await provider.getTokens();
     } finally {
-      errSpy.mockRestore();
+      errSpy.mock.restore();
     }
-    expect(err).toEqual([]);
+    assert.deepEqual(err, []);
     const text = infos.join('\n');
-    expect(text).toContain('USER-CODE-FIXTURE');
-    expect(text).toContain('https://verify.example');
+    contains(text, 'USER-CODE-FIXTURE');
+    contains(text, 'https://verify.example');
   });
 
   it('hands the presenter the structured prompt', async () => {
-    mockInitiateDevice.mockResolvedValue({
+    mockInitiateDevice.mock.mockImplementation(async () => ({
       deviceCode: 'dc',
       userCode: 'SECRET-UC',
       verificationUri: 'https://idp/device',
       verificationUriComplete: 'https://idp/device?c=SECRET-UC',
       expiresIn: 600,
       interval: 1,
-    });
-    mockPollDevice.mockResolvedValue({
+    }));
+    mockPollDevice.mock.mockImplementation(async () => ({
       accessToken: 'jwt.device.token',
       refreshToken: 'refresh',
       expiresIn: 1200,
-    });
-    const present = jest.fn(async (_: DeviceCodePrompt) => {});
+    }));
+    const present = mock.fn(async (_: DeviceCodePrompt) => {});
     const p = new OidcDeviceFlowProvider({
       renewal: refreshThenLogin(),
       clientId: 'c',
@@ -577,7 +615,7 @@ describe('SSO Providers', () => {
       presenter: { present },
     });
     await p.prepare();
-    expect(present).toHaveBeenCalledWith({
+    calledWith(present, {
       verificationUri: 'https://idp/device',
       verificationUriComplete: 'https://idp/device?c=SECRET-UC',
       userCode: 'SECRET-UC',
@@ -585,58 +623,67 @@ describe('SSO Providers', () => {
     });
   });
 
-  it.each(['prepare', 'rejected'] as const)(
-    'a throwing presenter in %s → the fixed refusal, no code, no message',
-    async (moment) => {
-      mockInitiateDevice.mockResolvedValue({
-        deviceCode: 'dc',
-        userCode: 'SECRET-UC',
-        verificationUri: 'https://idp/device',
-        verificationUriComplete: 'https://idp/device?c=SECRET-UC',
-        expiresIn: 600,
-        interval: 1,
-      });
-      mockPollDevice.mockResolvedValue({
-        accessToken: 'jwt.device.token',
-        refreshToken: 'refresh',
-        expiresIn: 1200,
-      });
-      const p = new OidcDeviceFlowProvider({
-        renewal: refreshThenLogin(),
-        clientId: 'c',
-        deviceAuthorizationEndpoint: 'https://idp/device-auth',
-        tokenEndpoint: 'https://idp/token',
-        presenter: {
-          present: async () => {
-            throw new Error('UI down SECRET-UI');
+  for (const [caseIndex, caseRow] of (
+    ['prepare', 'rejected'] as const
+  ).entries()) {
+    const moment = caseRow;
+    it(
+      caseTitle(
+        'a throwing presenter in %s → the fixed refusal, no code, no message',
+        caseRow,
+        caseIndex,
+      ),
+      async () => {
+        mockInitiateDevice.mock.mockImplementation(async () => ({
+          deviceCode: 'dc',
+          userCode: 'SECRET-UC',
+          verificationUri: 'https://idp/device',
+          verificationUriComplete: 'https://idp/device?c=SECRET-UC',
+          expiresIn: 600,
+          interval: 1,
+        }));
+        mockPollDevice.mock.mockImplementation(async () => ({
+          accessToken: 'jwt.device.token',
+          refreshToken: 'refresh',
+          expiresIn: 1200,
+        }));
+        const p = new OidcDeviceFlowProvider({
+          renewal: refreshThenLogin(),
+          clientId: 'c',
+          deviceAuthorizationEndpoint: 'https://idp/device-auth',
+          tokenEndpoint: 'https://idp/token',
+          presenter: {
+            present: async () => {
+              throw new Error('UI down SECRET-UI');
+            },
           },
-        },
-      });
-      const outcome =
-        moment === 'prepare'
-          ? await p.prepare()
-          : await p.rejected({ at: 'request', status: 401, error: {} }); // no refresh token → one login → the presenter
-      // The whole outcome, exactly: no hint, no code, no presenter message.
-      expect(outcome).toEqual({
-        ok: false,
-        refusal: {
-          kind: 'interactive-login',
-          facts: { outcome: 'device-code-not-shown' },
-          reason: 'showing the device code failed',
-        },
-      });
-    },
-  );
+        });
+        const outcome =
+          moment === 'prepare'
+            ? await p.prepare()
+            : await p.rejected({ at: 'request', status: 401, error: {} }); // no refresh token → one login → the presenter
+        // The whole outcome, exactly: no hint, no code, no presenter message.
+        assert.deepEqual(outcome, {
+          ok: false,
+          refusal: {
+            kind: 'interactive-login',
+            facts: { outcome: 'device-code-not-shown' },
+            reason: 'showing the device code failed',
+          },
+        });
+      },
+    );
+  }
 
   it('OidcPasswordProvider should use password grant', async () => {
-    mockDiscoverOidc.mockResolvedValue({
+    mockDiscoverOidc.mock.mockImplementation(async () => ({
       token_endpoint: 'https://issuer/token',
-    });
-    mockPasswordGrant.mockResolvedValue({
+    }));
+    mockPasswordGrant.mock.mockImplementation(async () => ({
       accessToken: 'jwt.password.token',
       refreshToken: 'refresh',
       expiresIn: 600,
-    });
+    }));
 
     const provider = new OidcPasswordProvider({
       renewal: refreshThenLogin(),
@@ -647,16 +694,16 @@ describe('SSO Providers', () => {
     });
 
     const tokens = await provider.getTokens();
-    expect(tokens.authorizationToken).toBe('jwt.password.token');
-    expect(tokens.authType).toBe(AUTH_TYPE_PASSWORD);
+    assert.equal(tokens.authorizationToken, 'jwt.password.token');
+    assert.equal(tokens.authType, AUTH_TYPE_PASSWORD);
   });
 
   it('OidcPasswordProvider should use explicit token endpoint', async () => {
-    mockPasswordGrant.mockResolvedValue({
+    mockPasswordGrant.mock.mockImplementation(async () => ({
       accessToken: 'jwt.password.token',
       refreshToken: 'refresh',
       expiresIn: 600,
-    });
+    }));
 
     const provider = new OidcPasswordProvider({
       renewal: refreshThenLogin(),
@@ -668,8 +715,8 @@ describe('SSO Providers', () => {
     });
 
     const tokens = await provider.getTokens();
-    expect(tokens.authorizationToken).toBe('jwt.password.token');
-    expect(mockDiscoverOidc).not.toHaveBeenCalled();
+    assert.equal(tokens.authorizationToken, 'jwt.password.token');
+    assert.equal(mockDiscoverOidc.mock.callCount(), 0);
   });
 
   describe('an empty endpoint is none, at login and at refresh alike', () => {
@@ -681,13 +728,13 @@ describe('SSO Providers', () => {
     const renewed = { accessToken: 'jwt.renewed', expiresIn: 600 };
 
     it('OidcPasswordProvider refreshes at the discovered endpoint', async () => {
-      mockDiscoverOidc.mockResolvedValue(discovered);
-      mockPasswordGrant.mockResolvedValue({
+      mockDiscoverOidc.mock.mockImplementation(async () => discovered);
+      mockPasswordGrant.mock.mockImplementation(async () => ({
         accessToken: 'jwt.password.token',
         refreshToken: 'refresh',
         expiresIn: 600,
-      });
-      mockRefresh.mockResolvedValue(renewed);
+      }));
+      mockRefresh.mock.mockImplementation(async () => renewed);
       const provider = new OidcPasswordProvider({
         renewal: refreshThenLogin(),
         issuerUrl: 'https://issuer',
@@ -700,25 +747,28 @@ describe('SSO Providers', () => {
       await provider.getTokens();
       await provider.refreshTokens();
 
-      expect(mockRefresh).toHaveBeenCalledTimes(1);
-      expect(mockRefresh.mock.calls[0][0]).toBe('https://issuer/token');
-      expect(mockPasswordGrant).toHaveBeenCalledTimes(1);
+      assert.equal(mockRefresh.mock.callCount(), 1);
+      assert.equal(
+        mockRefresh.mock.calls[0]?.arguments[0],
+        'https://issuer/token',
+      );
+      assert.equal(mockPasswordGrant.mock.callCount(), 1);
     });
 
     it('OidcDeviceFlowProvider refreshes at the discovered endpoint — no second device prompt', async () => {
-      mockDiscoverOidc.mockResolvedValue(discovered);
-      mockInitiateDevice.mockResolvedValue({
+      mockDiscoverOidc.mock.mockImplementation(async () => discovered);
+      mockInitiateDevice.mock.mockImplementation(async () => ({
         deviceCode: 'dev-code',
         userCode: 'user-code',
         verificationUri: 'https://issuer/verify',
         interval: 1,
-      });
-      mockPollDevice.mockResolvedValue({
+      }));
+      mockPollDevice.mock.mockImplementation(async () => ({
         accessToken: 'jwt.device.token',
         refreshToken: 'refresh',
         expiresIn: 1200,
-      });
-      mockRefresh.mockResolvedValue(renewed);
+      }));
+      mockRefresh.mock.mockImplementation(async () => renewed);
       const provider = new OidcDeviceFlowProvider({
         renewal: refreshThenLogin(),
         issuerUrl: 'https://issuer',
@@ -731,19 +781,22 @@ describe('SSO Providers', () => {
       await provider.getTokens();
       await provider.refreshTokens();
 
-      expect(mockRefresh).toHaveBeenCalledTimes(1);
-      expect(mockRefresh.mock.calls[0][0]).toBe('https://issuer/token');
-      expect(mockInitiateDevice).toHaveBeenCalledTimes(1);
+      assert.equal(mockRefresh.mock.callCount(), 1);
+      assert.equal(
+        mockRefresh.mock.calls[0]?.arguments[0],
+        'https://issuer/token',
+      );
+      assert.equal(mockInitiateDevice.mock.callCount(), 1);
     });
 
     it('OidcBrowserProvider logs in and refreshes at the discovered endpoints', async () => {
-      mockDiscoverOidc.mockResolvedValue(discovered);
-      mockExchangeCode.mockResolvedValue({
+      mockDiscoverOidc.mock.mockImplementation(async () => discovered);
+      mockExchangeCode.mock.mockImplementation(async () => ({
         accessToken: 'jwt.access.token',
         refreshToken: 'refresh',
         expiresIn: 3600,
-      });
-      mockRefresh.mockResolvedValue(renewed);
+      }));
+      mockRefresh.mock.mockImplementation(async () => renewed);
       const provider = new OidcBrowserProvider({
         renewal: refreshThenLogin(),
         issuerUrl: 'https://issuer',
@@ -762,20 +815,26 @@ describe('SSO Providers', () => {
       await provider.getTokens();
       await provider.refreshTokens();
 
-      expect(mockExchangeCode.mock.calls[0][0]).toBe('https://issuer/token');
-      expect(mockRefresh).toHaveBeenCalledTimes(1);
-      expect(mockRefresh.mock.calls[0][0]).toBe('https://issuer/token');
+      assert.equal(
+        mockExchangeCode.mock.calls[0]?.arguments[0],
+        'https://issuer/token',
+      );
+      assert.equal(mockRefresh.mock.callCount(), 1);
+      assert.equal(
+        mockRefresh.mock.calls[0]?.arguments[0],
+        'https://issuer/token',
+      );
     });
   });
 
   it("OidcPasswordProvider takes '' as no token endpoint and discovers it", async () => {
-    mockDiscoverOidc.mockResolvedValue({
+    mockDiscoverOidc.mock.mockImplementation(async () => ({
       token_endpoint: 'https://issuer/token',
-    });
-    mockPasswordGrant.mockResolvedValue({
+    }));
+    mockPasswordGrant.mock.mockImplementation(async () => ({
       accessToken: 'jwt.password.token',
       expiresIn: 600,
-    });
+    }));
 
     const provider = new OidcPasswordProvider({
       renewal: refreshThenLogin(),
@@ -787,18 +846,21 @@ describe('SSO Providers', () => {
     });
 
     await provider.getTokens();
-    expect(mockDiscoverOidc).toHaveBeenCalledTimes(1);
-    expect(mockPasswordGrant.mock.calls[0][0]).toBe('https://issuer/token');
+    assert.equal(mockDiscoverOidc.mock.callCount(), 1);
+    assert.equal(
+      mockPasswordGrant.mock.calls[0]?.arguments[0],
+      'https://issuer/token',
+    );
   });
 
   it("OidcTokenExchangeProvider takes '' as no token endpoint and discovers it", async () => {
-    mockDiscoverOidc.mockResolvedValue({
+    mockDiscoverOidc.mock.mockImplementation(async () => ({
       token_endpoint: 'https://issuer/token',
-    });
-    mockTokenExchange.mockResolvedValue({
+    }));
+    mockTokenExchange.mock.mockImplementation(async () => ({
       accessToken: 'jwt.exchange.token',
       expiresIn: 300,
-    });
+    }));
 
     const provider = new OidcTokenExchangeProvider({
       renewal: refreshThenLogin(),
@@ -810,18 +872,21 @@ describe('SSO Providers', () => {
     });
 
     await provider.getTokens();
-    expect(mockDiscoverOidc).toHaveBeenCalledTimes(1);
-    expect(mockTokenExchange.mock.calls[0][0]).toBe('https://issuer/token');
+    assert.equal(mockDiscoverOidc.mock.callCount(), 1);
+    assert.equal(
+      mockTokenExchange.mock.calls[0]?.arguments[0],
+      'https://issuer/token',
+    );
   });
 
   it('OidcTokenExchangeProvider should exchange subject token', async () => {
-    mockDiscoverOidc.mockResolvedValue({
+    mockDiscoverOidc.mock.mockImplementation(async () => ({
       token_endpoint: 'https://issuer/token',
-    });
-    mockTokenExchange.mockResolvedValue({
+    }));
+    mockTokenExchange.mock.mockImplementation(async () => ({
       accessToken: 'jwt.exchange.token',
       expiresIn: 300,
-    });
+    }));
 
     const provider = new OidcTokenExchangeProvider({
       renewal: refreshThenLogin(),
@@ -832,15 +897,15 @@ describe('SSO Providers', () => {
     });
 
     const tokens = await provider.getTokens();
-    expect(tokens.authorizationToken).toBe('jwt.exchange.token');
-    expect(tokens.authType).toBe(AUTH_TYPE_USER_TOKEN);
+    assert.equal(tokens.authorizationToken, 'jwt.exchange.token');
+    assert.equal(tokens.authType, AUTH_TYPE_USER_TOKEN);
   });
 
   it('OidcTokenExchangeProvider should use explicit token endpoint', async () => {
-    mockTokenExchange.mockResolvedValue({
+    mockTokenExchange.mock.mockImplementation(async () => ({
       accessToken: 'jwt.exchange.token',
       expiresIn: 300,
-    });
+    }));
 
     const provider = new OidcTokenExchangeProvider({
       renewal: refreshThenLogin(),
@@ -852,12 +917,13 @@ describe('SSO Providers', () => {
     });
 
     const tokens = await provider.getTokens();
-    expect(tokens.authorizationToken).toBe('jwt.exchange.token');
-    expect(mockDiscoverOidc).not.toHaveBeenCalled();
+    assert.equal(tokens.authorizationToken, 'jwt.exchange.token');
+    assert.equal(mockDiscoverOidc.mock.callCount(), 0);
   });
 
   it('OidcBrowserProvider should throw when endpoints are missing', async () => {
-    mockDiscoverOidc.mockResolvedValue({});
+    // A parsed document without the fields: data from outside the types.
+    mockDiscoverOidc.mock.mockImplementation(async () => JSON.parse('{}'));
 
     // A strategy that needs the URL but binds no socket: the assertion here is
     // about the message, and the default strategy would have made it depend on
@@ -878,7 +944,7 @@ describe('SSO Providers', () => {
 
     // A configuration failure naming the endpoint.
     const thrown = await provider.getTokens().catch((error: unknown) => error);
-    expect(configurationOf(thrown)).toMatchObject({
+    matchObject(configurationOf(thrown), {
       case: 'oidc-endpoint-missing',
       fields: ['authorizationEndpoint'],
     });
@@ -897,11 +963,11 @@ describe('SSO Providers', () => {
   };
 
   it('Saml2BearerProvider should exchange assertion for token', async () => {
-    mockExchangeSaml.mockResolvedValue({
+    mockExchangeSaml.mock.mockImplementation(async () => ({
       accessToken: 'jwt.saml.token',
       refreshToken: 'refresh',
       expiresIn: 900,
-    });
+    }));
 
     const saml = samlResponseCarrying('_a1');
     const provider = new Saml2BearerProvider({
@@ -919,10 +985,11 @@ describe('SSO Providers', () => {
     });
 
     const tokens = await provider.getTokens();
-    expect(tokens.authorizationToken).toBe('jwt.saml.token');
-    expect(tokens.authType).toBe(AUTH_TYPE_SAML2_BEARER);
+    assert.equal(tokens.authorizationToken, 'jwt.saml.token');
+    assert.equal(tokens.authType, AUTH_TYPE_SAML2_BEARER);
     // RFC 7522: the Assertion alone, base64url — not the Response it arrived in.
-    expect(mockExchangeSaml).toHaveBeenCalledWith(
+    calledWith(
+      mockExchangeSaml,
       saml.bearer,
       'https://uaa/oauth/token',
       undefined,
@@ -935,16 +1002,16 @@ describe('SSO Providers', () => {
       {
         authDebug: false,
         grant: 'saml2_bearer',
-        signal: expect.any(AbortSignal),
+        signal: anyOf(AbortSignal),
         // The login step's dispatch notice.
-        dispatched: expect.any(Function),
+        dispatched: anyOf(Function),
       },
     );
   });
 
   describe('Saml2BearerProvider refresh', () => {
     const seededConfig = () => {
-      const authorize = jest.fn(async () => ({
+      const authorize = mock.fn(async () => ({
         payload: samlResponseCarrying('_fresh').payload,
         redirectUri: 'http://localhost:61001/callback',
       }));
@@ -973,18 +1040,19 @@ describe('SSO Providers', () => {
 
     it('spends the refresh token instead of running the authorization strategy', async () => {
       const newAccess = jwtExpiringIn(3600);
-      mockRefreshSaml.mockResolvedValue({
+      mockRefreshSaml.mock.mockImplementation(async () => ({
         accessToken: newAccess,
         refreshToken: 'rotated-refresh',
         expiresIn: 3600,
-      });
+      }));
       const { authorize, config } = seededConfig();
 
       const tokens = await new Saml2BearerProvider(config).getTokens();
 
-      expect(authorize).not.toHaveBeenCalled();
-      expect(mockExchangeSaml).not.toHaveBeenCalled();
-      expect(mockRefreshSaml).toHaveBeenCalledWith(
+      assert.equal(authorize.mock.callCount(), 0);
+      assert.equal(mockExchangeSaml.mock.callCount(), 0);
+      calledWith(
+        mockRefreshSaml,
         'seeded-refresh',
         'https://uaa/oauth/token',
         'client',
@@ -996,25 +1064,29 @@ describe('SSO Providers', () => {
           authDebug: false,
           grant: 'saml2_bearer',
           // The refresh step's dispatch gate.
-          dispatched: expect.any(Function),
+          dispatched: anyOf(Function),
         },
       );
-      expect(tokens.authorizationToken).toBe(newAccess);
-      expect(tokens.refreshToken).toBe('rotated-refresh');
-      expect(tokens.authType).toBe(AUTH_TYPE_SAML2_BEARER);
+      assert.equal(tokens.authorizationToken, newAccess);
+      assert.equal(tokens.refreshToken, 'rotated-refresh');
+      assert.equal(tokens.authType, AUTH_TYPE_SAML2_BEARER);
     });
 
     it('keeps the refresh token it spent when the grant returns none', async () => {
-      mockRefreshSaml.mockResolvedValue({ accessToken: jwtExpiringIn(3600) });
+      mockRefreshSaml.mock.mockImplementation(async () => ({
+        accessToken: jwtExpiringIn(3600),
+      }));
       const { config } = seededConfig();
 
       const tokens = await new Saml2BearerProvider(config).getTokens();
 
-      expect(tokens.refreshToken).toBe('seeded-refresh');
+      assert.equal(tokens.refreshToken, 'seeded-refresh');
     });
 
     it('refreshes against an explicit tokenUrl, not one derived from uaaUrl', async () => {
-      mockRefreshSaml.mockResolvedValue({ accessToken: jwtExpiringIn(3600) });
+      mockRefreshSaml.mock.mockImplementation(async () => ({
+        accessToken: jwtExpiringIn(3600),
+      }));
       const { config } = seededConfig();
 
       await new Saml2BearerProvider({
@@ -1022,29 +1094,33 @@ describe('SSO Providers', () => {
         tokenUrl: 'https://tokens.example/custom/token',
       }).getTokens();
 
-      expect(mockRefreshSaml.mock.calls[0][1]).toBe(
+      assert.equal(
+        mockRefreshSaml.mock.calls[0]?.arguments[1],
         'https://tokens.example/custom/token',
       );
     });
 
     it('falls back to a full login when the refresh grant is refused', async () => {
-      mockRefreshSaml.mockRejectedValue(new Error('invalid_grant'));
-      mockExchangeSaml.mockResolvedValue({
+      mockRefreshSaml.mock.mockImplementation(async () => {
+        throw new Error('invalid_grant');
+      });
+      mockExchangeSaml.mock.mockImplementation(async () => ({
         accessToken: 'jwt.after.login',
         refreshToken: 'login-refresh',
         expiresIn: 900,
-      });
+      }));
       const { authorize, config } = seededConfig();
 
       const tokens = await new Saml2BearerProvider(config).getTokens();
 
-      expect(mockRefreshSaml).toHaveBeenCalledTimes(1);
-      expect(authorize).toHaveBeenCalledTimes(1);
-      expect(mockExchangeSaml.mock.calls[0][0]).toBe(
+      assert.equal(mockRefreshSaml.mock.callCount(), 1);
+      assert.equal(authorize.mock.callCount(), 1);
+      assert.equal(
+        mockExchangeSaml.mock.calls[0]?.arguments[0],
         samlResponseCarrying('_fresh').bearer,
       );
-      expect(tokens.authorizationToken).toBe('jwt.after.login');
-      expect(tokens.refreshToken).toBe('login-refresh');
+      assert.equal(tokens.authorizationToken, 'jwt.after.login');
+      assert.equal(tokens.refreshToken, 'login-refresh');
     });
 
     /**
@@ -1054,16 +1130,18 @@ describe('SSO Providers', () => {
      * they all use a validator that accepts anything.
      */
     it('does not consult the validator on refresh', async () => {
-      mockRefreshSaml.mockResolvedValue({ accessToken: jwtExpiringIn(3600) });
+      mockRefreshSaml.mock.mockImplementation(async () => ({
+        accessToken: jwtExpiringIn(3600),
+      }));
       const { config } = seededConfig();
-      const validate = jest.fn();
+      const validate = mock.fn<IAssertionValidator['validate']>();
 
       await new Saml2BearerProvider({
         ...config,
         assertionValidator: { validate },
       }).getTokens();
 
-      expect(validate).not.toHaveBeenCalled();
+      assert.equal(validate.mock.callCount(), 0);
     });
   });
 
@@ -1098,15 +1176,15 @@ describe('SSO Providers', () => {
     });
 
     const tokens = await provider.getTokens();
-    expect(tokens.authorizationToken).toBe('SAP_SESSION=abc123');
-    expect(tokens.tokenType).toBe('saml');
+    assert.equal(tokens.authorizationToken, 'SAP_SESSION=abc123');
+    assert.equal(tokens.tokenType, 'saml');
     // `parseSamlNotOnOrAfter` is gone; `expiresAt` now comes from
     // `ValidatedAssertion`, not an unverified regex.
-    expect(tokens.expiresAt).toBe(validatedExpiresAt.getTime());
+    assert.equal(tokens.expiresAt, validatedExpiresAt.getTime());
   });
 
   it('Saml2PureProvider rejects a pre-built URL without a declared acsUrl', () => {
-    expect(
+    assert.throws(
       () =>
         new Saml2PureProvider({
           renewal: refreshThenLogin(),
@@ -1117,7 +1195,8 @@ describe('SSO Providers', () => {
           authorization: unusedAuthorization,
           assertionValidator: unusedValidator,
         }),
-    ).toThrow(/acsUrl is required/i);
+      thrown(/acsUrl is required/i),
+    );
   });
 
   it('Saml2PureProvider takes an assertion from a strategy', async () => {
@@ -1145,8 +1224,8 @@ describe('SSO Providers', () => {
       assertionValidator: acceptingSamlValidator(),
     });
     const tokens = await provider.getTokens();
-    expect(seen).toEqual(['PHNhbWw+']);
-    expect(tokens.authorizationToken).toBe('PHNhbWw+');
+    assert.deepEqual(seen, ['PHNhbWw+']);
+    assert.equal(tokens.authorizationToken, 'PHNhbWw+');
   });
 
   it('Saml2PureProvider rejects an assertion delivered to the wrong ACS', async () => {
@@ -1167,18 +1246,18 @@ describe('SSO Providers', () => {
     });
     // The two addresses are diagnostics, not words.
     const thrown = await provider.getTokens().catch((error: unknown) => error);
-    expect(configurationOf(thrown)).toMatchObject({
+    matchObject(configurationOf(thrown), {
       case: 'saml-acs-mismatch',
       fields: ['acsUrl'],
     });
-    expect(readFailure(thrown, 'unfamiliar-error').diagnostics).toEqual({
+    assert.deepEqual(readFailure(thrown, 'unfamiliar-error').diagnostics, {
       configuredUri: 'http://localhost:61001/callback',
       strategyUri: 'http://localhost:5555/callback',
     });
   });
 
   it('Saml2BearerProvider rejects a pre-built URL without a declared acsUrl', () => {
-    expect(
+    assert.throws(
       () =>
         new Saml2BearerProvider({
           renewal: refreshThenLogin(),
@@ -1189,7 +1268,8 @@ describe('SSO Providers', () => {
           authorization: unusedAuthorization,
           assertionValidator: unusedValidator,
         }),
-    ).toThrow(/acsUrl is required/i);
+      thrown(/acsUrl is required/i),
+    );
   });
 
   it('Saml2PureProvider refuses to open a browser at an ACS the IdP was never told about', async () => {
@@ -1209,11 +1289,11 @@ describe('SSO Providers', () => {
     });
     // Refused inside the builder; the addresses as diagnostics.
     const thrown = await provider.getTokens().catch((error: unknown) => error);
-    expect(configurationOf(thrown)).toMatchObject({
+    matchObject(configurationOf(thrown), {
       case: 'saml-acs-mismatch',
       fields: ['acsUrl'],
     });
-    expect(readFailure(thrown, 'unfamiliar-error').diagnostics).toEqual({
+    assert.deepEqual(readFailure(thrown, 'unfamiliar-error').diagnostics, {
       configuredUri: 'https://sp.example/acs',
       strategyUri: 'http://localhost:61001/callback',
     });
@@ -1231,7 +1311,7 @@ describe('SSO Providers', () => {
       },
     });
 
-    expect(provider).toBeInstanceOf(OidcBrowserProvider);
+    assert.ok(provider instanceof OidcBrowserProvider);
   });
 });
 
@@ -1246,17 +1326,18 @@ describe('SSO Providers', () => {
  */
 describe('OidcBrowserProvider strategy lifecycle', () => {
   beforeEach(() => {
-    jest.clearAllMocks();
-    mockDiscoverOidc.mockResolvedValue({});
-    mockExchangeCode.mockResolvedValue({
+    clearSiteMocks();
+    // A parsed document without the fields: data from outside the types.
+    mockDiscoverOidc.mock.mockImplementation(async () => JSON.parse('{}'));
+    mockExchangeCode.mock.mockImplementation(async () => ({
       accessToken: 'jwt.access.token',
       refreshToken: 'refresh',
       expiresIn: 3600,
-    });
+    }));
   });
 
   it('never disposes a strategy the consumer supplied', async () => {
-    const dispose = jest.fn(async () => undefined);
+    const dispose = mock.fn(async () => undefined);
     const redirectUri = 'http://localhost:61001/callback';
     const supplied: IAuthorizationStrategy<OidcCallbackResult> = {
       authorize: async (request) => {
@@ -1275,13 +1356,13 @@ describe('OidcBrowserProvider strategy lifecycle', () => {
     });
 
     const tokens = await provider.getTokens();
-    expect(tokens.authorizationToken).toBe('jwt.access.token');
+    assert.equal(tokens.authorizationToken, 'jwt.access.token');
     // A receiver the consumer owns must survive the login it served.
-    expect(dispose).not.toHaveBeenCalled();
-  }, 30000);
+    assert.equal(dispose.mock.callCount(), 0);
+  });
 
   it('leaves a supplied strategy alone when the login fails too', async () => {
-    const dispose = jest.fn(async () => undefined);
+    const dispose = mock.fn(async () => undefined);
     const supplied: IAuthorizationStrategy<OidcCallbackResult> = {
       authorize: async () => {
         throw new Error('consumer flow cancelled');
@@ -1299,10 +1380,14 @@ describe('OidcBrowserProvider strategy lifecycle', () => {
     // The consumer's own error never comes back — an
     // AuthProviderFailure holding the classified error, without its message.
     const failed = provider.getTokens();
-    await expect(failed).rejects.toBeInstanceOf(AuthProviderFailure);
-    await expect(failed).rejects.not.toThrow(/consumer flow cancelled/);
-    expect(dispose).not.toHaveBeenCalled();
-  }, 30000);
+    await assert.rejects(failed, thrown(AuthProviderFailure));
+    await assert.rejects(failed, (error) => {
+      assert.ok(error instanceof Error);
+      assert.doesNotMatch(error.message, /consumer flow cancelled/);
+      return true;
+    });
+    assert.equal(dispose.mock.callCount(), 0);
+  });
 });
 
 /**
@@ -1317,11 +1402,11 @@ describe('OidcBrowserProvider strategy lifecycle', () => {
  */
 describe('SAML strategy lifecycle', () => {
   beforeEach(() => {
-    jest.clearAllMocks();
+    clearSiteMocks();
   });
 
   it('never disposes a strategy the consumer supplied', async () => {
-    const dispose = jest.fn(async () => undefined);
+    const dispose = mock.fn(async () => undefined);
     const redirectUri = 'http://localhost:61001/callback';
     const supplied: IAuthorizationStrategy<string> = {
       authorize: async (request) => {
@@ -1344,13 +1429,13 @@ describe('SAML strategy lifecycle', () => {
     });
 
     const tokens = await provider.getTokens();
-    expect(tokens.authorizationToken).toBe('PHNhbWw+');
+    assert.equal(tokens.authorizationToken, 'PHNhbWw+');
     // A receiver the consumer owns must survive the login it served.
-    expect(dispose).not.toHaveBeenCalled();
-  }, 30000);
+    assert.equal(dispose.mock.callCount(), 0);
+  });
 
   it('leaves a supplied strategy alone when the login fails too', async () => {
-    const dispose = jest.fn(async () => undefined);
+    const dispose = mock.fn(async () => undefined);
     const supplied: IAuthorizationStrategy<string> = {
       authorize: async () => {
         throw new Error('consumer flow cancelled');
@@ -1370,10 +1455,14 @@ describe('SAML strategy lifecycle', () => {
     // The consumer's own error never comes back — an
     // AuthProviderFailure holding the classified error, without its message.
     const failed = provider.getTokens();
-    await expect(failed).rejects.toBeInstanceOf(AuthProviderFailure);
-    await expect(failed).rejects.not.toThrow(/consumer flow cancelled/);
-    expect(dispose).not.toHaveBeenCalled();
-  }, 30000);
+    await assert.rejects(failed, thrown(AuthProviderFailure));
+    await assert.rejects(failed, (error) => {
+      assert.ok(error instanceof Error);
+      assert.doesNotMatch(error.message, /consumer flow cancelled/);
+      return true;
+    });
+    assert.equal(dispose.mock.callCount(), 0);
+  });
 });
 
 /**
@@ -1403,20 +1492,22 @@ describe('Saml2PureProvider assertion validation', () => {
   };
 
   it('refuses assembling the shipped validator without idpCertificates (Saml2PureProvider.inBrowser)', () => {
-    expect(() =>
-      Saml2PureProvider.inBrowser(
-        {
-          renewal: refreshThenLogin(),
-          idpSsoUrl: baseConfig.idpSsoUrl,
-          spEntityId: baseConfig.spEntityId,
-          acsUrl: baseConfig.acsUrl,
-          idpInitiated: baseConfig.idpInitiated,
-          idpEntityId: baseConfig.idpEntityId,
-          cookieProvider: baseConfig.cookieProvider,
-        },
-        { idpCertificates: [] },
-      ),
-    ).toThrow(/idpCertificates/);
+    assert.throws(
+      () =>
+        Saml2PureProvider.inBrowser(
+          {
+            renewal: refreshThenLogin(),
+            idpSsoUrl: baseConfig.idpSsoUrl,
+            spEntityId: baseConfig.spEntityId,
+            acsUrl: baseConfig.acsUrl,
+            idpInitiated: baseConfig.idpInitiated,
+            idpEntityId: baseConfig.idpEntityId,
+            cookieProvider: baseConfig.cookieProvider,
+          },
+          { idpCertificates: [] },
+        ),
+      thrown(/idpCertificates/),
+    );
   });
 
   it('takes expiresAt from the validated assertion, not from a regex', async () => {
@@ -1441,7 +1532,7 @@ describe('Saml2PureProvider assertion validation', () => {
     const result = await provider.getTokens();
     // ITokenResult.expiresAt is an epoch-ms number, unlike
     // ValidatedAssertion.expiresAt, which is a Date.
-    expect(result.expiresAt).toBe(expiresAt.getTime());
+    assert.equal(result.expiresAt, expiresAt.getTime());
   });
 
   /**
@@ -1452,7 +1543,7 @@ describe('Saml2PureProvider assertion validation', () => {
    * provider before validate() runs.
    */
   it('does not hand the assertion to the cookie provider when validation refuses it', async () => {
-    const cookieProvider = jest.fn(async (saml: string) => saml);
+    const cookieProvider = mock.fn(async (saml: string) => saml);
     const provider = new Saml2PureProvider({
       renewal: refreshThenLogin(),
       ...baseConfig,
@@ -1467,14 +1558,14 @@ describe('Saml2PureProvider assertion validation', () => {
     // A custom validator's throw is classified with `validating-assertion`: its
     // own error and message are not handed back.
     const thrown = await rejectionOf(provider.getTokens());
-    expect(thrown).toBeInstanceOf(AuthProviderFailure);
-    expect((thrown as AuthProviderFailure).error).toMatchObject({
+    assert.ok(thrown instanceof AuthProviderFailure);
+    matchObject((thrown as AuthProviderFailure).error, {
       kind: 'unknown',
       facts: { operation: 'validating-assertion' },
     });
-    expect(JSON.stringify(thrown)).not.toContain('SECRET-MARKER');
-    expect(String(thrown)).not.toContain('SECRET-MARKER');
-    expect(cookieProvider).not.toHaveBeenCalled();
+    notContains(JSON.stringify(thrown), 'SECRET-MARKER');
+    notContains(String(thrown), 'SECRET-MARKER');
+    assert.equal(cookieProvider.mock.callCount(), 0);
   });
 
   // A custom validator delegating to a shipped one rejects with its minted
@@ -1484,7 +1575,7 @@ describe('Saml2PureProvider assertion validation', () => {
       { rule: 'untrusted-issuer', check: 'issuer' },
       { issuer: 'urn:someone:else' },
     );
-    const cookieProvider = jest.fn(async (saml: string) => saml);
+    const cookieProvider = mock.fn(async (saml: string) => saml);
     const provider = new Saml2PureProvider({
       renewal: refreshThenLogin(),
       ...baseConfig,
@@ -1497,9 +1588,9 @@ describe('Saml2PureProvider assertion validation', () => {
     });
 
     const thrown = await rejectionOf(provider.getTokens());
-    expect(thrown).toBeInstanceOf(AuthProviderFailure);
-    expect((thrown as AuthProviderFailure).error).toBe(refusal);
-    expect(cookieProvider).not.toHaveBeenCalled();
+    assert.ok(thrown instanceof AuthProviderFailure);
+    assert.equal((thrown as AuthProviderFailure).error, refusal);
+    assert.equal(cookieProvider.mock.callCount(), 0);
   });
 
   // This provider has no refresh grant: a renewal is the one login, and that
@@ -1507,14 +1598,14 @@ describe('Saml2PureProvider assertion validation', () => {
   // unverified assertion to cookieProvider.
   it('validates again when renewing', async () => {
     const payload = Buffer.from('<Assertion/>', 'utf8').toString('base64');
-    const validate = jest.fn(async () => ({
+    const validate = mock.fn(async () => ({
       expiresAt: new Date(Date.now() + 3600_000),
       assertionId: '_a1',
       issuer: 'urn:mock:idp',
       raw: payload,
       signedXml: payload,
     }));
-    const cookieProvider = jest.fn(async () => 'cookie');
+    const cookieProvider = mock.fn(async () => 'cookie');
     const provider = new Saml2PureProvider({
       renewal: refreshThenLogin(),
       idpSsoUrl: 'https://idp/sso',
@@ -1528,26 +1619,27 @@ describe('Saml2PureProvider assertion validation', () => {
 
     await provider.refreshTokens();
 
-    expect(validate).toHaveBeenCalledTimes(1);
-    expect(validate).toHaveBeenCalledWith(
+    assert.equal(validate.mock.callCount(), 1);
+    calledWith(
+      validate,
       payload,
-      expect.objectContaining({
+      objectContaining({
         audience: 'sp-entity',
         expectedIssuer: 'urn:mock:idp',
       }),
     );
-    expect(cookieProvider).toHaveBeenCalledWith(payload);
+    calledWith(cookieProvider, payload);
   });
 });
 
 describe('Saml2BearerProvider assertion validation', () => {
   beforeEach(() => {
-    jest.clearAllMocks();
+    clearSiteMocks();
   });
 
   it('does not reach the token endpoint when the assertion is refused', async () => {
     let exchanged = false;
-    mockExchangeSaml.mockImplementation(async () => {
+    mockExchangeSaml.mock.mockImplementation(async () => {
       exchanged = true;
       return { accessToken: 'unreachable', expiresIn: 900 };
     });
@@ -1569,12 +1661,12 @@ describe('Saml2BearerProvider assertion validation', () => {
     });
 
     const thrown = await rejectionOf(provider.getTokens());
-    expect((thrown as AuthProviderFailure).error).toMatchObject({
+    matchObject((thrown as AuthProviderFailure).error, {
       kind: 'unknown',
       facts: { operation: 'validating-assertion' },
     });
-    expect(JSON.stringify(thrown)).not.toContain('SECRET-MARKER');
-    expect(exchanged).toBe(false);
+    notContains(JSON.stringify(thrown), 'SECRET-MARKER');
+    assert.equal(exchanged, false);
   });
 });
 
@@ -1649,44 +1741,51 @@ describe('Saml2 provider default validators', () => {
 
   // An unsigned Status decides nothing (review, fix 1): the signed-Response
   // validator reads Status only once the Response is the signed element.
-  it.each([
+  for (const [caseIndex, caseRow] of [
     'urn:oasis:names:tc:SAML:2.0:status:Responder',
     'urn:example:status:Forged',
-  ])(
-    "Saml2PureProvider's default refuses an unsigned Response with Status %s as response-not-signed",
-    async (status) => {
-      const cookieProvider = jest.fn(async (saml: string) => saml);
-      const error = await expectSamlRejection(
-        new Saml2PureProvider({
-          renewal: refreshThenLogin(),
-          idpSsoUrl: 'https://idp/sso',
-          spEntityId: AUDIENCE,
-          acsUrl: ACS,
-          authnRequestId: REQUEST_ID,
-          idpEntityId: ISSUER,
-          authorization: staticCodeStrategy({
-            redirectUri: ACS,
-            payload: unsignedResponseAround(status),
-          }),
-          assertionValidator: createSignedResponseValidator({
-            idpCertificates: [KEY.certificatePem],
-            replayStore: createInMemoryReplayStore(),
-          }),
-          cookieProvider,
-        }).getTokens(),
-        'response-not-signed',
-      );
-      expect(error.facts).toEqual({
-        rule: 'response-not-signed',
-        check: 'signedNode',
-      });
-      expect(JSON.stringify(error)).not.toContain(status);
-      expect(cookieProvider).not.toHaveBeenCalled();
-    },
-  );
+  ].entries()) {
+    const status = caseRow;
+    it(
+      caseTitle(
+        "Saml2PureProvider's default refuses an unsigned Response with Status %s as response-not-signed",
+        caseRow,
+        caseIndex,
+      ),
+      async () => {
+        const cookieProvider = mock.fn(async (saml: string) => saml);
+        const error = await expectSamlRejection(
+          new Saml2PureProvider({
+            renewal: refreshThenLogin(),
+            idpSsoUrl: 'https://idp/sso',
+            spEntityId: AUDIENCE,
+            acsUrl: ACS,
+            authnRequestId: REQUEST_ID,
+            idpEntityId: ISSUER,
+            authorization: staticCodeStrategy({
+              redirectUri: ACS,
+              payload: unsignedResponseAround(status),
+            }),
+            assertionValidator: createSignedResponseValidator({
+              idpCertificates: [KEY.certificatePem],
+              replayStore: createInMemoryReplayStore(),
+            }),
+            cookieProvider,
+          }).getTokens(),
+          'response-not-signed',
+        );
+        assert.deepEqual(error.facts, {
+          rule: 'response-not-signed',
+          check: 'signedNode',
+        });
+        notContains(JSON.stringify(error), status);
+        assert.equal(cookieProvider.mock.callCount(), 0);
+      },
+    );
+  }
 
   beforeEach(() => {
-    jest.clearAllMocks();
+    clearSiteMocks();
   });
 
   it("Saml2PureProvider's default accepts a Response signed at the Response level", async () => {
@@ -1709,8 +1808,11 @@ describe('Saml2 provider default validators', () => {
     });
 
     const tokens = await provider.getTokens();
-    expect(tokens.authorizationToken).toBeDefined();
-    expect(tokens.expiresAt).toBeGreaterThan(Date.now());
+    assert.notEqual(tokens.authorizationToken, undefined);
+    assert.ok(
+      (tokens.expiresAt ?? 0) > Date.now(),
+      `${tokens.expiresAt} > ${Date.now()}`,
+    );
   });
 
   it("Saml2BearerProvider's default refuses the same Response, at signedNode", async () => {
@@ -1733,7 +1835,7 @@ describe('Saml2 provider default validators', () => {
     });
 
     await expectSamlRejection(provider.getTokens(), 'assertion-not-signed');
-    expect(mockExchangeSaml).not.toHaveBeenCalled();
+    assert.equal(mockExchangeSaml.mock.callCount(), 0);
   });
 });
 
@@ -1749,12 +1851,12 @@ describe('Saml2PureProvider validation context', () => {
     const redirectUri = 'http://localhost:61001/callback';
     const payload = Buffer.from('<Assertion/>', 'utf8').toString('base64');
     const logger: ILogger = {
-      debug: jest.fn(),
-      info: jest.fn(),
-      warn: jest.fn(),
-      error: jest.fn(),
+      debug: mock.fn(),
+      info: mock.fn(),
+      warn: mock.fn(),
+      error: mock.fn(),
     };
-    const validate = jest.fn(async () => ({
+    const validate = mock.fn(async () => ({
       expiresAt: new Date(Date.now() + 3600_000),
       assertionId: '_a1',
       issuer: 'urn:mock:idp',
@@ -1789,8 +1891,8 @@ describe('Saml2PureProvider validation context', () => {
     await provider.getTokens();
 
     const mintedId = mintedIdFrom(builtUrl);
-    expect(validate).toHaveBeenCalledTimes(1);
-    expect(validate).toHaveBeenCalledWith(payload, {
+    assert.equal(validate.mock.callCount(), 1);
+    calledWith(validate, payload, {
       expectedInResponseTo: mintedId,
       audience: 'sp-entity',
       acsUrl: redirectUri,
@@ -1802,11 +1904,14 @@ describe('Saml2PureProvider validation context', () => {
 
 describe('Saml2BearerProvider validation context', () => {
   beforeEach(() => {
-    jest.clearAllMocks();
+    clearSiteMocks();
   });
 
   it('passes exactly the validation context', async () => {
-    mockExchangeSaml.mockResolvedValue({ accessToken: 'AT', expiresIn: 900 });
+    mockExchangeSaml.mock.mockImplementation(async () => ({
+      accessToken: 'AT',
+      expiresIn: 900,
+    }));
 
     const redirectUri = 'http://localhost:61001/callback';
     // A bare Assertion, so `toBearerAssertion` (called after validate()
@@ -1816,12 +1921,12 @@ describe('Saml2BearerProvider validation context', () => {
       'utf8',
     ).toString('base64');
     const logger: ILogger = {
-      debug: jest.fn(),
-      info: jest.fn(),
-      warn: jest.fn(),
-      error: jest.fn(),
+      debug: mock.fn(),
+      info: mock.fn(),
+      warn: mock.fn(),
+      error: mock.fn(),
     };
-    const validate = jest.fn(async () => ({
+    const validate = mock.fn(async () => ({
       expiresAt: new Date(Date.now() + 3600_000),
       assertionId: '_a1',
       issuer: 'urn:mock:idp',
@@ -1850,8 +1955,8 @@ describe('Saml2BearerProvider validation context', () => {
     await provider.getTokens();
 
     const mintedId = mintedIdFrom(builtUrl);
-    expect(validate).toHaveBeenCalledTimes(1);
-    expect(validate).toHaveBeenCalledWith(payload, {
+    assert.equal(validate.mock.callCount(), 1);
+    calledWith(validate, payload, {
       expectedInResponseTo: mintedId,
       audience: 'sp-entity',
       acsUrl: redirectUri,
@@ -1897,31 +2002,38 @@ describe('Saml2 provider construction faults', () => {
   // 5.4.0 read the brand with a plain property access, so an untyped
   // consumer's non-object validator was taken for a custom one and the
   // provider constructed; it must not throw now either.
-  it.each([
+  for (const [caseIndex, caseRow] of cases([
     ['a string', 'str'],
     ['a number', 42],
-  ])(
-    'a non-object assertionValidator (%s) is not a shipped one: the provider constructs',
-    (_label, value) => {
-      const assertionValidator = value as unknown as IAssertionValidator;
-      expect(
-        () =>
-          new Saml2PureProvider({
-            ...validPureConfig,
-            authorization: unusedAuthorization,
-            assertionValidator,
-          }),
-      ).not.toThrow();
-      expect(
-        () =>
-          new Saml2BearerProvider({
-            ...validBearerConfig,
-            authorization: unusedAuthorization,
-            assertionValidator,
-          }),
-      ).not.toThrow();
-    },
-  );
+  ]).entries()) {
+    const [_label, value] = caseRow;
+    it(
+      caseTitle(
+        'a non-object assertionValidator (%s) is not a shipped one: the provider constructs',
+        caseRow,
+        caseIndex,
+      ),
+      () => {
+        const assertionValidator = value as unknown as IAssertionValidator;
+        assert.doesNotThrow(
+          () =>
+            new Saml2PureProvider({
+              ...validPureConfig,
+              authorization: unusedAuthorization,
+              assertionValidator,
+            }),
+        );
+        assert.doesNotThrow(
+          () =>
+            new Saml2BearerProvider({
+              ...validBearerConfig,
+              authorization: unusedAuthorization,
+              assertionValidator,
+            }),
+        );
+      },
+    );
+  }
 
   // A configuration failure naming idpEntityId.
   it('Saml2PureProvider refuses construction when idpEntityId is missing', () => {
@@ -1934,7 +2046,7 @@ describe('Saml2 provider construction faults', () => {
         { idpCertificates: [CERT] },
       ),
     );
-    expect(configurationOf(error)).toMatchObject({
+    matchObject(configurationOf(error), {
       case: 'saml-shipped-validator-without-issuer',
       fields: ['idpEntityId'],
     });
@@ -1951,7 +2063,7 @@ describe('Saml2 provider construction faults', () => {
         { idpCertificates: [CERT] },
       ),
     );
-    expect(configurationOf(error)).toMatchObject({
+    matchObject(configurationOf(error), {
       case: 'saml-shipped-validator-without-issuer',
       fields: ['idpEntityId'],
     });
@@ -1965,31 +2077,41 @@ describe('Saml2 provider construction faults', () => {
   // This is that assertion, moved: the factory's own plain Error, with no
   // `missingFields`, since the provider no longer intercepts it.
   it('refuses assembling the shipped validator when idpCertificates is an empty list (Saml2BearerProvider.inBrowser)', () => {
-    expect(() =>
-      Saml2BearerProvider.inBrowser(validBearerConfig, { idpCertificates: [] }),
-    ).toThrow(/idpCertificates must not be empty/);
+    assert.throws(
+      () =>
+        Saml2BearerProvider.inBrowser(validBearerConfig, {
+          idpCertificates: [],
+        }),
+      thrown(/idpCertificates must not be empty/),
+    );
   });
 
   it('refuses assembling the shipped validator when idpCertificates is an empty list (Saml2PureProvider.inBrowser)', () => {
-    expect(() =>
-      Saml2PureProvider.inBrowser(validPureConfig, { idpCertificates: [] }),
-    ).toThrow(/idpCertificates must not be empty/);
+    assert.throws(
+      () =>
+        Saml2PureProvider.inBrowser(validPureConfig, { idpCertificates: [] }),
+      thrown(/idpCertificates must not be empty/),
+    );
   });
 
   it('refuses assembling the shipped validator when a certificate is malformed', () => {
-    expect(() =>
-      Saml2PureProvider.inBrowser(validPureConfig, {
-        idpCertificates: ['not-a-cert'],
-      }),
-    ).toThrow(/certificate/i);
+    assert.throws(
+      () =>
+        Saml2PureProvider.inBrowser(validPureConfig, {
+          idpCertificates: ['not-a-cert'],
+        }),
+      thrown(/certificate/i),
+    );
   });
 
   it('refuses assembling the shipped validator when clockSkewMs is negative', () => {
-    expect(() =>
-      Saml2PureProvider.inBrowser(validPureConfig, {
-        idpCertificates: [CERT],
-        clockSkewMs: -1,
-      }),
-    ).toThrow(/clockSkewMs/);
+    assert.throws(
+      () =>
+        Saml2PureProvider.inBrowser(validPureConfig, {
+          idpCertificates: [CERT],
+          clockSkewMs: -1,
+        }),
+      thrown(/clockSkewMs/),
+    );
   });
 });

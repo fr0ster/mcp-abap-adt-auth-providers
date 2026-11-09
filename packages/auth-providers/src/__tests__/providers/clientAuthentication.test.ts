@@ -6,9 +6,12 @@
  * each request carried (its URL and its TLS agent's certificate).
  */
 
+import { CERTIFICATES } from '../helpers/packagePaths';
+import '../helpers/axiosModuleMock';
+import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { beforeEach, describe, expect, it, jest } from '@jest/globals';
+import { beforeEach, describe, it, type Mock, mock } from 'node:test';
 import { authError } from '@mcp-abap-adt/auth-errors';
 import type {
   IAssertionValidator,
@@ -17,7 +20,6 @@ import type {
   IClientAuthentication,
   ITokenRequestDraft,
 } from '@mcp-abap-adt/interfaces-auth';
-import axios from 'axios';
 import { certificateFailure } from '../../auth/certificateMaterial';
 import { toBearerAssertion } from '../../auth/samlBearerAssertion';
 import { clientSecretBasic } from '../../clientAuthentication';
@@ -30,6 +32,8 @@ import { OidcTokenExchangeProvider } from '../../providers/OidcTokenExchangeProv
 import { Saml2BearerProvider } from '../../providers/Saml2BearerProvider';
 import { UaaPasscodeProvider } from '../../providers/UaaPasscodeProvider';
 import { refreshThenLogin } from '../../renewal';
+import { clearAxiosMockCalls, mockedAxios } from '../helpers/axiosModuleMock';
+import { caseTitle, matchObject, thrown } from '../helpers/expectations';
 import { configurationOf, wordsOf } from '../helpers/minted';
 import { recordingTargets } from '../helpers/targets';
 
@@ -39,16 +43,8 @@ const CERTIFICATE_UNUSABLE = authError['client-certificate']({
 });
 
 // Automocked, but with axios's own error class: the sites throw it.
-jest.mock('axios', () => {
-  const mocked = jest.createMockFromModule<Record<string, unknown>>('axios');
-  mocked.AxiosError =
-    jest.requireActual<Record<string, unknown>>('axios').AxiosError;
-  return mocked;
-});
-type Mock = jest.Mock<(...args: any[]) => Promise<unknown>>;
-const mockedAxios = axios as unknown as Mock & { post: Mock; get: Mock };
 
-const dir = join(__dirname, '..', 'fixtures', 'certificates');
+const dir = CERTIFICATES;
 const read = (name: string) => readFileSync(join(dir, name));
 const A: ICertificateMaterial = {
   cert: read('client.crt'),
@@ -76,9 +72,9 @@ let sent: Sent[] = [];
 const discovery = new Map<string, unknown>();
 
 beforeEach(() => {
-  jest.clearAllMocks();
+  clearAxiosMockCalls();
   sent = [];
-  mockedAxios.mockImplementation(async (config: any) => {
+  mockedAxios.mock.mockImplementation(async (config: any) => {
     sent.push({
       url: config.url,
       body: Object.fromEntries(new URLSearchParams(config.data)),
@@ -103,10 +99,10 @@ beforeEach(() => {
       },
     };
   });
-  mockedAxios.post.mockImplementation(async () => {
+  mockedAxios.post.mock.mockImplementation(async () => {
     throw new Error('a request went out without the strategy');
   });
-  mockedAxios.get.mockImplementation(async (url: string) => {
+  mockedAxios.get.mock.mockImplementation(async (url: string) => {
     const doc = discovery.get(url);
     if (!doc) throw new Error(`no discovery document at ${url}`);
     return { data: doc };
@@ -136,8 +132,10 @@ function recording(materials?: Array<ICertificateMaterial | Error>) {
 
 const codeStrategy = (
   payload = 'the-code',
-): IAuthorizationStrategy<string> & { authorize: jest.Mock<any> } => ({
-  authorize: jest.fn(async () => ({
+): IAuthorizationStrategy<string> & {
+  authorize: Mock<IAuthorizationStrategy<string>['authorize']>;
+} => ({
+  authorize: mock.fn<IAuthorizationStrategy<string>['authorize']>(async () => ({
     payload,
     redirectUri: 'http://localhost:61001/callback',
   })),
@@ -195,8 +193,8 @@ describe('the strategy reaches every request a provider sends', () => {
       clientId: 'cid',
       clientAuthentication: strategy,
     });
-    expect(await provider.prepare()).toEqual({ ok: true });
-    expect(drafts).toEqual([
+    assert.deepEqual(await provider.prepare(), { ok: true });
+    assert.deepEqual(drafts, [
       {
         endpoint: 'https://uaa/oauth/token',
         tokenEndpoint: 'https://uaa/oauth/token',
@@ -204,7 +202,7 @@ describe('the strategy reaches every request a provider sends', () => {
         grantType: 'client_credentials',
       },
     ]);
-    expect(sent).toHaveLength(1);
+    assert.equal(sent.length, 1);
   });
 
   it('AuthorizationCodeProvider: the code exchange and the refresh', async () => {
@@ -218,11 +216,11 @@ describe('the strategy reaches every request a provider sends', () => {
     });
     await provider.getTokens();
     await provider.refreshTokens();
-    expect(grants(drafts)).toEqual(['authorization_code', 'refresh_token']);
-    expect(sent.map((s) => s.url)).toEqual([
-      'https://uaa/oauth/token',
-      'https://uaa/oauth/token',
-    ]);
+    assert.deepEqual(grants(drafts), ['authorization_code', 'refresh_token']);
+    assert.deepEqual(
+      sent.map((s) => s.url),
+      ['https://uaa/oauth/token', 'https://uaa/oauth/token'],
+    );
   });
 
   it('UaaPasscodeProvider: the passcode exchange and the refresh', async () => {
@@ -236,8 +234,8 @@ describe('the strategy reaches every request a provider sends', () => {
     });
     await provider.getTokens();
     await provider.refreshTokens();
-    expect(grants(drafts)).toEqual(['password', 'refresh_token']);
-    expect(sent).toHaveLength(2);
+    assert.deepEqual(grants(drafts), ['password', 'refresh_token']);
+    assert.equal(sent.length, 2);
   });
 
   it('Saml2BearerProvider: the assertion exchange and its refresh', async () => {
@@ -255,12 +253,12 @@ describe('the strategy reaches every request a provider sends', () => {
     });
     await provider.getTokens();
     await provider.refreshTokens();
-    expect(grants(drafts)).toEqual([
+    assert.deepEqual(grants(drafts), [
       'urn:ietf:params:oauth:grant-type:saml2-bearer',
       'refresh_token',
     ]);
-    expect(sent[0]!.body.assertion).toBe(toBearerAssertion(samlPayload()));
-    expect(sent).toHaveLength(2);
+    assert.equal(sent[0]!.body.assertion, toBearerAssertion(samlPayload()));
+    assert.equal(sent.length, 2);
   });
 
   it('OidcBrowserProvider: the code exchange and the refresh', async () => {
@@ -275,8 +273,8 @@ describe('the strategy reaches every request a provider sends', () => {
     });
     await provider.getTokens();
     await provider.refreshTokens();
-    expect(grants(drafts)).toEqual(['authorization_code', 'refresh_token']);
-    expect(sent).toHaveLength(2);
+    assert.deepEqual(grants(drafts), ['authorization_code', 'refresh_token']);
+    assert.equal(sent.length, 2);
   });
 
   it('OidcDeviceFlowProvider: the device initiation, the poll and the refresh', async () => {
@@ -291,16 +289,15 @@ describe('the strategy reaches every request a provider sends', () => {
     });
     await provider.getTokens();
     await provider.refreshTokens();
-    expect(grants(drafts)).toEqual([
+    assert.deepEqual(grants(drafts), [
       'device_authorization',
       'urn:ietf:params:oauth:grant-type:device_code',
       'refresh_token',
     ]);
-    expect(sent.map((s) => s.url)).toEqual([
-      'https://idp/device',
-      'https://idp/token',
-      'https://idp/token',
-    ]);
+    assert.deepEqual(
+      sent.map((s) => s.url),
+      ['https://idp/device', 'https://idp/token', 'https://idp/token'],
+    );
   });
 
   it('OidcPasswordProvider: the password grant and the refresh', async () => {
@@ -315,8 +312,8 @@ describe('the strategy reaches every request a provider sends', () => {
     });
     await provider.getTokens();
     await provider.refreshTokens();
-    expect(grants(drafts)).toEqual(['password', 'refresh_token']);
-    expect(sent).toHaveLength(2);
+    assert.deepEqual(grants(drafts), ['password', 'refresh_token']);
+    assert.equal(sent.length, 2);
   });
 
   it('OidcTokenExchangeProvider: the token exchange', async () => {
@@ -330,10 +327,10 @@ describe('the strategy reaches every request a provider sends', () => {
       clientAuthentication: strategy,
     });
     await provider.getTokens();
-    expect(grants(drafts)).toEqual([
+    assert.deepEqual(grants(drafts), [
       'urn:ietf:params:oauth:grant-type:token-exchange',
     ]);
-    expect(sent).toHaveLength(1);
+    assert.equal(sent.length, 1);
   });
 });
 
@@ -440,37 +437,45 @@ describe('a strategy and a clientSecret together', () => {
   ];
 
   // A configuration failure naming clientSecret.
-  it.each(both)(
-    '%s: a configuration failure naming clientSecret',
-    (_name, make) => {
-      let thrown: unknown;
-      try {
-        make();
-      } catch (error) {
-        thrown = error;
-      }
-      expect(configurationOf(thrown)).toMatchObject({
-        case: 'client-secret-beside-client-authentication',
-        fields: ['clientSecret'],
-      });
-    },
-  );
+  for (const [caseIndex, caseRow] of both.entries()) {
+    const [_name, make] = caseRow;
+    it(
+      caseTitle(
+        '%s: a configuration failure naming clientSecret',
+        caseRow,
+        caseIndex,
+      ),
+      () => {
+        let thrown: unknown;
+        try {
+          make();
+        } catch (error) {
+          thrown = error;
+        }
+        matchObject(configurationOf(thrown), {
+          case: 'client-secret-beside-client-authentication',
+          fields: ['clientSecret'],
+        });
+      },
+    );
+  }
 });
 
 describe('a strategy satisfies the clientSecret requirement', () => {
   it('ClientCredentialsProvider without a secret is still refused', () => {
-    expect(
+    assert.throws(
       () =>
         new ClientCredentialsProvider({
           renewal: refreshThenLogin(),
           uaaUrl: 'https://uaa',
           clientId: 'cid',
         } as never),
-    ).toThrow(/clientSecret/);
+      thrown(/clientSecret/),
+    );
   });
 
   it('ClientCredentialsProvider with a strategy and no secret', () => {
-    expect(
+    assert.doesNotThrow(
       () =>
         new ClientCredentialsProvider({
           renewal: refreshThenLogin(),
@@ -478,11 +483,11 @@ describe('a strategy satisfies the clientSecret requirement', () => {
           clientId: 'cid',
           clientAuthentication: recording().strategy,
         }),
-    ).not.toThrow();
+    );
   });
 
   it('AuthorizationCodeProvider without a secret is still refused', () => {
-    expect(
+    assert.throws(
       () =>
         new AuthorizationCodeProvider({
           renewal: refreshThenLogin(),
@@ -490,11 +495,12 @@ describe('a strategy satisfies the clientSecret requirement', () => {
           clientId: 'cid',
           authorization: codeStrategy(),
         } as never),
-    ).toThrow(/clientSecret/);
+      thrown(/clientSecret/),
+    );
   });
 
   it('AuthorizationCodeProvider with a strategy and no secret', () => {
-    expect(
+    assert.doesNotThrow(
       () =>
         new AuthorizationCodeProvider({
           renewal: refreshThenLogin(),
@@ -503,7 +509,7 @@ describe('a strategy satisfies the clientSecret requirement', () => {
           authorization: codeStrategy(),
           clientAuthentication: recording().strategy,
         }),
-    ).not.toThrow();
+    );
   });
 });
 
@@ -520,9 +526,9 @@ describe('one certificate, pinned', () => {
     await provider.getTokens();
     await provider.refreshTokens();
     await provider.refreshTokens();
-    expect(sent).toHaveLength(3);
-    for (const request of sent) expect(request.cert).toEqual(A.cert);
-    expect(tlsCalls()).toBe(1);
+    assert.equal(sent.length, 3);
+    for (const request of sent) assert.deepEqual(request.cert, A.cert);
+    assert.equal(tlsCalls(), 1);
   });
 
   it('concurrent prepare() calls share one load', async () => {
@@ -534,8 +540,8 @@ describe('one certificate, pinned', () => {
       clientAuthentication: strategy,
     });
     await Promise.all([provider.prepare(), provider.prepare()]);
-    expect(tlsCalls()).toBe(1);
-    for (const request of sent) expect(request.cert).toEqual(A.cert);
+    assert.equal(tlsCalls(), 1);
+    for (const request of sent) assert.deepEqual(request.cert, A.cert);
   });
 
   it('concurrent first needs outside a renewal share one in-flight load', async () => {
@@ -554,9 +560,9 @@ describe('one certificate, pinned', () => {
       clientAuthentication: strategy,
     });
     const [first, second] = await provider.needBoth();
-    expect(tlsCalls()).toBe(1);
-    expect(first?.material.cert).toEqual(A.cert);
-    expect(second?.material.cert).toEqual(A.cert);
+    assert.equal(tlsCalls(), 1);
+    assert.deepEqual(first?.material.cert, A.cert);
+    assert.deepEqual(second?.material.cert, A.cert);
   });
 
   it('a strategy without tlsMaterial: no agent on the request', async () => {
@@ -568,7 +574,7 @@ describe('one certificate, pinned', () => {
       clientAuthentication: strategy,
     });
     await provider.prepare();
-    expect(sent[0]!.cert).toBeUndefined();
+    assert.equal(sent[0]!.cert, undefined);
   });
 
   it('material that fails to load: refused in fixed words, the stored refresh token kept and not sent; a later moment loads again', async () => {
@@ -586,27 +592,27 @@ describe('one certificate, pinned', () => {
       clientAuthentication: strategy,
     });
 
-    expect(wordsOf(await provider.prepare())).toEqual({
+    assert.deepEqual(wordsOf(await provider.prepare()), {
       ok: false,
       refusal: {
         reason: CERTIFICATE_UNUSABLE.reason,
         hint: CERTIFICATE_UNUSABLE.hint,
       },
     });
-    expect(mockedAxios).not.toHaveBeenCalled();
-    expect(mockedAxios.post).not.toHaveBeenCalled();
-    expect(authorization.authorize).not.toHaveBeenCalled();
+    assert.equal(mockedAxios.mock.callCount(), 0);
+    assert.equal(mockedAxios.post.mock.callCount(), 0);
+    assert.equal(authorization.authorize.mock.callCount(), 0);
 
     // The next moment tries again; the refresh token it still holds is spent.
-    expect(await provider.prepare()).toEqual({ ok: true });
-    expect(tlsCalls()).toBe(2);
-    expect(sent).toHaveLength(1);
-    expect(sent[0]!.body).toMatchObject({
+    assert.deepEqual(await provider.prepare(), { ok: true });
+    assert.equal(tlsCalls(), 2);
+    assert.equal(sent.length, 1);
+    matchObject(sent[0]!.body, {
       grant_type: 'refresh_token',
       refresh_token: 'stored-refresh',
     });
-    expect(sent[0]!.cert).toEqual(A.cert);
-    expect(authorization.authorize).not.toHaveBeenCalled();
+    assert.deepEqual(sent[0]!.cert, A.cert);
+    assert.equal(authorization.authorize.mock.callCount(), 0);
   });
 
   it('material that is not usable is refused and not pinned; a later moment loads again', async () => {
@@ -620,23 +626,23 @@ describe('one certificate, pinned', () => {
       clientId: 'cid',
       clientAuthentication: strategy,
     });
-    expect(wordsOf(await provider.prepare())).toEqual({
+    assert.deepEqual(wordsOf(await provider.prepare()), {
       ok: false,
       refusal: {
         reason: CERTIFICATE_UNUSABLE.reason,
         hint: CERTIFICATE_UNUSABLE.hint,
       },
     });
-    expect(sent).toHaveLength(0);
+    assert.equal(sent.length, 0);
 
-    expect(await provider.prepare()).toEqual({ ok: true });
-    expect(tlsCalls()).toBe(2);
-    expect(sent).toHaveLength(1);
-    expect(sent[0]!.cert).toEqual(A.cert);
+    assert.deepEqual(await provider.prepare(), { ok: true });
+    assert.equal(tlsCalls(), 2);
+    assert.equal(sent.length, 1);
+    assert.deepEqual(sent[0]!.cert, A.cert);
     // Pinned now: a further request reads the strategy no more.
     await provider.refreshTokens();
-    expect(tlsCalls()).toBe(2);
-    expect(sent[1]!.cert).toEqual(A.cert);
+    assert.equal(tlsCalls(), 2);
+    assert.deepEqual(sent[1]!.cert, A.cert);
   });
 
   it("a change to the strategy's Buffer after pinning does not change what is presented", async () => {
@@ -654,9 +660,9 @@ describe('one certificate, pinned', () => {
     // The strategy overwrites the bytes it handed over, in place.
     cert.fill(0);
     await provider.refreshTokens();
-    expect(sent).toHaveLength(2);
+    assert.equal(sent.length, 2);
     for (const request of sent) {
-      expect(Buffer.from(request.cert as Buffer).equals(original)).toBe(true);
+      assert.equal(Buffer.from(request.cert as Buffer).equals(original), true);
     }
   });
 
@@ -680,13 +686,13 @@ describe('one certificate, pinned', () => {
         return { ok: true as const };
       },
     };
-    await expect(provider.establish(mutating)).resolves.toEqual({ ok: true });
+    assert.deepEqual(await provider.establish(mutating), { ok: true });
     await provider.prepare();
-    await expect(provider.establish(mutating)).resolves.toEqual({ ok: true });
+    assert.deepEqual(await provider.establish(mutating), { ok: true });
     await provider.refreshTokens();
-    expect(sent).toHaveLength(2);
+    assert.equal(sent.length, 2);
     for (const request of sent) {
-      expect(Buffer.from(request.cert as Buffer).equals(original)).toBe(true);
+      assert.equal(Buffer.from(request.cert as Buffer).equals(original), true);
     }
   });
 });
@@ -712,11 +718,11 @@ describe('an expired client certificate', () => {
       clientId: 'cid',
       clientAuthentication: strategy,
     });
-    expect(wordsOf(await provider.prepare())).toEqual(EXPIRED);
+    assert.deepEqual(wordsOf(await provider.prepare()), EXPIRED);
     const t = recordingTargets();
-    expect(wordsOf(await provider.establish(t.logonTarget))).toEqual(EXPIRED);
-    expect(t.logon.tls).toHaveLength(0);
-    expect(sent).toHaveLength(0);
+    assert.deepEqual(wordsOf(await provider.establish(t.logonTarget)), EXPIRED);
+    assert.equal(t.logon.tls.length, 0);
+    assert.equal(sent.length, 0);
   });
 
   it('pinned while valid, then expired: refused before the next request presents it, and at the logon', async () => {
@@ -727,18 +733,21 @@ describe('an expired client certificate', () => {
       clientId: 'cid',
       clientAuthentication: strategy,
     });
-    await expect(provider.prepare()).resolves.toEqual({ ok: true });
-    expect(sent).toHaveLength(1);
+    assert.deepEqual(await provider.prepare(), { ok: true });
+    assert.equal(sent.length, 1);
     // client.crt is valid until 2126: the clock is moved past it, not crypto.
-    const now = jest.spyOn(Date, 'now').mockReturnValue(Date.UTC(2127, 0, 1));
+    const now = mock.method(Date, 'now', () => Date.UTC(2127, 0, 1));
     try {
-      expect(wordsOf(await provider.prepare())).toEqual(EXPIRED);
-      expect(sent).toHaveLength(1);
+      assert.deepEqual(wordsOf(await provider.prepare()), EXPIRED);
+      assert.equal(sent.length, 1);
       const t = recordingTargets();
-      expect(wordsOf(await provider.establish(t.logonTarget))).toEqual(EXPIRED);
-      expect(t.logon.tls).toHaveLength(0);
+      assert.deepEqual(
+        wordsOf(await provider.establish(t.logonTarget)),
+        EXPIRED,
+      );
+      assert.equal(t.logon.tls.length, 0);
     } finally {
-      now.mockRestore();
+      now.mock.restore();
     }
   });
   it('an expired certificate refuses the renewal whole: the refresh token is neither sent nor dropped', async () => {
@@ -752,24 +761,27 @@ describe('an expired client certificate', () => {
       clientAuthentication: strategy,
     });
     await provider.getTokens();
-    expect(sent).toHaveLength(1);
+    assert.equal(sent.length, 1);
     const held = sent.length;
-    const now = jest.spyOn(Date, 'now').mockReturnValue(Date.UTC(2127, 0, 1));
+    const now = mock.method(Date, 'now', () => Date.UTC(2127, 0, 1));
     try {
       // The expired material is classified —
       // client-certificate, expired — and thrown as an AuthProviderFailure.
-      await expect(provider.refreshTokens()).rejects.toMatchObject({
-        name: 'AuthProviderFailure',
-        error: { kind: 'client-certificate', facts: { problem: 'expired' } },
+      await assert.rejects(provider.refreshTokens(), (error) => {
+        matchObject(error, {
+          name: 'AuthProviderFailure',
+          error: { kind: 'client-certificate', facts: { problem: 'expired' } },
+        });
+        return true;
       });
     } finally {
-      now.mockRestore();
+      now.mock.restore();
     }
-    expect(sent).toHaveLength(held);
-    expect(authorization.authorize).toHaveBeenCalledTimes(1);
+    assert.equal(sent.length, held);
+    assert.equal(authorization.authorize.mock.callCount(), 1);
     // The clock back: the refresh token it held is still there to send.
     await provider.refreshTokens();
-    expect(sent[held]!.body).toMatchObject({ grant_type: 'refresh_token' });
+    matchObject(sent[held]!.body, { grant_type: 'refresh_token' });
   });
 
   it('expired between two device polls: the next poll is not sent, and the login is refused in fixed words', async () => {
@@ -785,8 +797,8 @@ describe('an expired client certificate', () => {
     let polls = 0;
     // client.crt is valid until 2126: the first poll answers pending and the
     // clock then passes notAfter — the clock moves, not crypto.
-    const now = jest.spyOn(Date, 'now');
-    mockedAxios.mockImplementation(async (config: any) => {
+    const now = mock.method(Date, 'now');
+    mockedAxios.mock.mockImplementation(async (config: any) => {
       sent.push({
         url: config.url,
         body: Object.fromEntries(new URLSearchParams(config.data)),
@@ -808,22 +820,22 @@ describe('an expired client certificate', () => {
       if (polls > 1) {
         return { data: { access_token: jwt('late'), expires_in: 3600 } };
       }
-      now.mockReturnValue(Date.UTC(2127, 0, 1));
+      now.mock.mockImplementation(() => Date.UTC(2127, 0, 1));
       throw {
         isAxiosError: true,
         response: { status: 400, data: { error: 'authorization_pending' } },
       };
     });
     try {
-      expect(wordsOf(await provider.prepare())).toEqual(EXPIRED);
+      assert.deepEqual(wordsOf(await provider.prepare()), EXPIRED);
     } finally {
-      now.mockRestore();
+      now.mock.restore();
     }
-    expect(polls).toBe(1);
-    expect(sent.map((s) => s.url)).toEqual([
-      'https://idp/device',
-      'https://idp/token',
-    ]);
+    assert.equal(polls, 1);
+    assert.deepEqual(
+      sent.map((s) => s.url),
+      ['https://idp/device', 'https://idp/token'],
+    );
   });
 });
 
@@ -843,10 +855,10 @@ describe('OIDC discovery: mtls_endpoint_aliases', () => {
     });
     await provider.getTokens();
     await provider.refreshTokens();
-    expect(drafts.map((d) => d.mtlsEndpoint)).toEqual([
-      'https://mtls.idp/token',
-      'https://mtls.idp/token',
-    ]);
+    assert.deepEqual(
+      drafts.map((d) => d.mtlsEndpoint),
+      ['https://mtls.idp/token', 'https://mtls.idp/token'],
+    );
   });
 
   it('without aliases, leaves it absent', async () => {
@@ -861,8 +873,8 @@ describe('OIDC discovery: mtls_endpoint_aliases', () => {
       clientAuthentication: strategy,
     });
     await provider.getTokens();
-    expect(drafts).toHaveLength(1);
-    expect('mtlsEndpoint' in drafts[0]!).toBe(false);
+    assert.equal(drafts.length, 1);
+    assert.equal('mtlsEndpoint' in drafts[0]!, false);
   });
 
   it('the device initiation gets the device alias, the poll the token alias', async () => {
@@ -881,16 +893,17 @@ describe('OIDC discovery: mtls_endpoint_aliases', () => {
       clientAuthentication: strategy,
     });
     await provider.getTokens();
-    expect(
+    assert.deepEqual(
       drafts.map((d) => [d.grantType, d.endpoint, d.mtlsEndpoint]),
-    ).toEqual([
-      ['device_authorization', `${issuer}/device`, 'https://mtls.idp/device'],
       [
-        'urn:ietf:params:oauth:grant-type:device_code',
-        `${issuer}/token`,
-        'https://mtls.idp/token',
+        ['device_authorization', `${issuer}/device`, 'https://mtls.idp/device'],
+        [
+          'urn:ietf:params:oauth:grant-type:device_code',
+          `${issuer}/token`,
+          'https://mtls.idp/token',
+        ],
       ],
-    ]);
+    );
   });
 
   it('the device initiation names the discovered token endpoint, not its mTLS alias, as tokenEndpoint', async () => {
@@ -908,10 +921,13 @@ describe('OIDC discovery: mtls_endpoint_aliases', () => {
       presenter: { present: async () => {} },
       clientAuthentication: strategy,
     }).getTokens();
-    expect(drafts.map((d) => [d.grantType, d.tokenEndpoint])).toEqual([
-      ['device_authorization', `${issuer}/token`],
-      ['urn:ietf:params:oauth:grant-type:device_code', `${issuer}/token`],
-    ]);
+    assert.deepEqual(
+      drafts.map((d) => [d.grantType, d.tokenEndpoint]),
+      [
+        ['device_authorization', `${issuer}/token`],
+        ['urn:ietf:params:oauth:grant-type:device_code', `${issuer}/token`],
+      ],
+    );
   });
 
   it('the device initiation names a configured token endpoint as tokenEndpoint', async () => {
@@ -924,7 +940,7 @@ describe('OIDC discovery: mtls_endpoint_aliases', () => {
       presenter: { present: async () => {} },
       clientAuthentication: strategy,
     }).getTokens();
-    expect(drafts[0]).toMatchObject({
+    matchObject(drafts[0], {
       grantType: 'device_authorization',
       endpoint: 'https://own/device',
       tokenEndpoint: 'https://own/token',
@@ -952,8 +968,8 @@ describe('OIDC discovery: mtls_endpoint_aliases', () => {
       subjectTokenType: 'urn:ietf:params:oauth:token-type:access_token',
       clientAuthentication: exchange.strategy,
     }).getTokens();
-    expect(browser.drafts[0]!.mtlsEndpoint).toBe('https://mtls.idp/token');
-    expect(exchange.drafts[0]!.mtlsEndpoint).toBe('https://mtls.idp/token');
+    assert.equal(browser.drafts[0]!.mtlsEndpoint, 'https://mtls.idp/token');
+    assert.equal(exchange.drafts[0]!.mtlsEndpoint, 'https://mtls.idp/token');
   });
 
   it('an endpoint the configuration names takes no discovered alias', async () => {
@@ -972,10 +988,10 @@ describe('OIDC discovery: mtls_endpoint_aliases', () => {
       presenter: { present: async () => {} },
       clientAuthentication: strategy,
     }).getTokens();
-    expect(drafts.map((d) => d.mtlsEndpoint)).toEqual([
-      undefined,
-      'https://mtls.idp/token',
-    ]);
+    assert.deepEqual(
+      drafts.map((d) => d.mtlsEndpoint),
+      [undefined, 'https://mtls.idp/token'],
+    );
   });
 });
 
@@ -989,14 +1005,14 @@ describe('clientSecretBasic through a provider', () => {
         encoding: 'raw',
       }),
     });
-    expect(wordsOf(await provider.prepare())).toEqual({
+    assert.deepEqual(wordsOf(await provider.prepare()), {
       ok: false,
       refusal: {
         reason: "the client id contains ':', which raw Basic cannot carry",
         hint: "use encoding: 'form' or clientSecretPost",
       },
     });
-    expect(sent).toHaveLength(0);
+    assert.equal(sent.length, 0);
   });
 
   it('form with the same client id: the request goes out, the id encoded', async () => {
@@ -1008,7 +1024,7 @@ describe('clientSecretBasic through a provider', () => {
         encoding: 'form',
       }),
     });
-    expect(await provider.prepare()).toEqual({ ok: true });
-    expect(sent).toHaveLength(1);
+    assert.deepEqual(await provider.prepare(), { ok: true });
+    assert.equal(sent.length, 1);
   });
 });

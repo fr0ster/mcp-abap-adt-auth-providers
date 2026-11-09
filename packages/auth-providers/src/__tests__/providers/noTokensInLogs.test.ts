@@ -5,10 +5,13 @@
  * outright.
  */
 
+import { CERTIFICATES } from '../helpers/packagePaths';
+import '../helpers/axiosModuleMock';
+import assert from 'node:assert/strict';
 import { generateKeyPairSync } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { beforeEach, describe, expect, it, jest } from '@jest/globals';
+import { beforeEach, describe, it, mock } from 'node:test';
 import { isAuthProviderFailure, readFailure } from '@mcp-abap-adt/auth-errors';
 import type {
   AuthorizationRequest,
@@ -17,7 +20,6 @@ import type {
   IClientAuthentication,
 } from '@mcp-abap-adt/interfaces-auth';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
-import axios from 'axios';
 import { exchangeCodeForToken } from '../../auth/browserAuth';
 import {
   composeAuthorization,
@@ -42,22 +44,18 @@ import { SncLogonProvider } from '../../snc/SncLogonProvider';
 import { SpnegoAuthProvider } from '../../spnego/SpnegoAuthProvider';
 import { staticCodeStrategy } from '../../strategies';
 import { jwt, quiet, rejectionOf } from '../helpers/attemptHarness';
+import { mockedAxios, resetAxiosMock } from '../helpers/axiosModuleMock';
+import {
+  caseTitle,
+  contains,
+  matchObject,
+  notContains,
+} from '../helpers/expectations';
 import { recordingBrowser } from '../helpers/recordingBrowser';
 import { ScriptedProvider, tokens } from '../helpers/scriptedProvider';
 import { SITES, tokenReply } from '../helpers/tokenRequestSites';
 
 // Automocked, but with axios's own error class: the sites throw it.
-jest.mock('axios', () => {
-  const mocked = jest.createMockFromModule<Record<string, unknown>>('axios');
-  mocked.AxiosError =
-    jest.requireActual<Record<string, unknown>>('axios').AxiosError;
-  return mocked;
-});
-type Mock = jest.Mock<(...args: any[]) => Promise<unknown>>;
-const mockedAxios = axios as unknown as Mock & {
-  post: Mock;
-  isAxiosError: jest.Mock<(e: unknown) => boolean>;
-};
 
 const b64url = (value: object) =>
   Buffer.from(JSON.stringify(value)).toString('base64url');
@@ -126,15 +124,15 @@ describe('no token in the logs', () => {
     });
     await provider.getTokens();
 
-    expect(lines.length).toBeGreaterThan(0);
+    assert.ok(lines.length > 0, `${lines.length} > ${0}`);
     const all = lines.join('\n');
     for (const secret of [ACCESS_TOKEN, REFRESH_TOKEN]) {
       for (const window of windows(secret)) {
-        expect(all).not.toContain(window);
+        notContains(all, window);
       }
     }
     // What is logged instead says a token was there, and how long it was.
-    expect(all).toContain(`<redacted, ${REFRESH_TOKEN.length} chars>`);
+    contains(all, `<redacted, ${REFRESH_TOKEN.length} chars>`);
   });
 
   it('the tokens persistence is handed reach no log line — the provider’s, or the shipped strategy’s on a failed write', async () => {
@@ -165,12 +163,10 @@ describe('no token in the logs', () => {
     (await provider.refreshes.nth(2)).result.resolve(tokens(jwt('third')));
     await second;
     const all = lines.join('\n');
-    expect(all).toContain(
-      '[refreshStatePersistence] Writing the tokens failed',
-    );
+    contains(all, '[refreshStatePersistence] Writing the tokens failed');
     for (const secret of [NEW_ACCESS, NEW_REFRESH, REFRESH_TOKEN]) {
       for (const window of windows(secret)) {
-        expect(all).not.toContain(window);
+        notContains(all, window);
       }
     }
   });
@@ -208,18 +204,18 @@ describe('no token in the logs', () => {
 
     const all = lines.join('\n');
     // Both were answered from the seed, and said so.
-    expect(all).toContain(`<redacted, ${COOKIES.length} chars>`);
-    expect(all).toContain(`<redacted, ${OPAQUE.length} chars>`);
+    contains(all, `<redacted, ${COOKIES.length} chars>`);
+    contains(all, `<redacted, ${OPAQUE.length} chars>`);
     for (const secret of [COOKIES, OPAQUE]) {
       for (const window of windows(secret)) {
-        expect(all).not.toContain(window);
+        notContains(all, window);
       }
     }
   });
 });
 
 describe('no secret of a client authentication in the logs', () => {
-  const dir = join(__dirname, '..', 'fixtures', 'certificates');
+  const dir = CERTIFICATES;
   const PASSPHRASE = 'test-passphrase';
   const SECRET = 'Zq8vK2pX9wLm4rT7nB3c';
   const signingKey = generateKeyPairSync('rsa', { modulusLength: 2048 })
@@ -296,78 +292,89 @@ describe('no secret of a client authentication in the logs', () => {
   ];
 
   beforeEach(() => {
-    jest.resetAllMocks();
-    mockedAxios.isAxiosError.mockImplementation(
-      (e) => !!(e as { isAxiosError?: boolean } | null)?.isAxiosError,
-    );
+    resetAxiosMock();
   });
 
-  describe.each(STRATEGIES)('%s', (_name, make, material) => {
-    it.each(SITES.map((site) => [site.name, site] as const))(
-      '%s: neither on success nor in a failure whose body echoes what was sent',
-      async (_site, site) => {
-        const sent: string[] = [];
-        const { logger, lines } = recordingLogger();
-        const auth = { strategy: recordedFrom(make(), sent), material };
+  for (const [caseIndex, caseRow] of STRATEGIES.entries()) {
+    const [_name, make, material] = caseRow;
+    describe(caseTitle('%s', caseRow, caseIndex), () => {
+      for (const [caseIndex, caseRow] of SITES.map(
+        (site) => [site.name, site] as const,
+      ).entries()) {
+        const [_site, site] = caseRow;
+        it(
+          caseTitle(
+            '%s: neither on success nor in a failure whose body echoes what was sent',
+            caseRow,
+            caseIndex,
+          ),
+          async () => {
+            const sent: string[] = [];
+            const { logger, lines } = recordingLogger();
+            const auth = { strategy: recordedFrom(make(), sent), material };
 
-        mockedAxios.mockResolvedValue(tokenReply);
-        await site.run(auth, logger);
+            mockedAxios.mock.mockImplementation(async () => tokenReply);
+            await site.run(auth, logger);
 
-        // The server echoes what this request sent, not an earlier one.
-        const before = sent.length;
-        mockedAxios.mockImplementation(async () => {
-          const echoed = sent.slice(before).join(' ');
-          throw {
-            isAxiosError: true,
-            message: 'Request failed with status code 400',
-            response: {
-              status: 400,
-              data: {
-                error: `invalid_client ${echoed}`,
-                error_description: echoed,
-              },
-            },
-          };
-        });
-        let message = '';
-        let data = '';
-        try {
-          await site.run(auth, logger);
-        } catch (error) {
-          // Since 6.0.0 an AuthProviderFailure: its message and every
-          // rendering of it are its error's fixed words.
-          expect(isAuthProviderFailure(error)).toBe(true);
-          message = String((error as { message?: unknown }).message ?? error);
-          data = `${JSON.stringify(error)} ${JSON.stringify(
-            readFailure(error, 'unfamiliar-error'),
-          )}`;
-        }
+            // The server echoes what this request sent, not an earlier one.
+            const before = sent.length;
+            mockedAxios.mock.mockImplementation(async () => {
+              const echoed = sent.slice(before).join(' ');
+              throw {
+                isAxiosError: true,
+                message: 'Request failed with status code 400',
+                response: {
+                  status: 400,
+                  data: {
+                    error: `invalid_client ${echoed}`,
+                    error_description: echoed,
+                  },
+                },
+              };
+            });
+            let message = '';
+            let data = '';
+            try {
+              await site.run(auth, logger);
+            } catch (error) {
+              // Since 6.0.0 an AuthProviderFailure: its message and every
+              // rendering of it are its error's fixed words.
+              assert.equal(isAuthProviderFailure(error), true);
+              message = String(
+                (error as { message?: unknown }).message ?? error,
+              );
+              data = `${JSON.stringify(error)} ${JSON.stringify(
+                readFailure(error, 'unfamiliar-error'),
+              )}`;
+            }
 
-        expect(sent.length > 0 || material !== undefined).toBe(true);
-        const all = `${lines.join('\n')}\n${message}\n${data}`;
-        // The failure is not vacuous: the site failed on the 400. Nothing the
-        // server wrote reached the message, a log line or the reduced body —
-        // its `error` here is not a registered code, so not even that.
-        expect(message).toContain('400');
-        expect(all).not.toContain('invalid_client');
-        for (const secret of [SECRET, PASSPHRASE, ...sent]) {
-          for (const window of windows(secret)) {
-            expect(all).not.toContain(window);
-          }
-        }
-        for (const bytes of [
-          signingKey,
-          body(material?.cert),
-          body(material?.key),
-          body(material?.pfx),
-        ]) {
-          for (const window of longWindows(body(bytes))) {
-            expect(all).not.toContain(window);
-          }
-        }
-      },
-    );
-  });
+            assert.equal(sent.length > 0 || material !== undefined, true);
+            const all = `${lines.join('\n')}\n${message}\n${data}`;
+            // The failure is not vacuous: the site failed on the 400. Nothing the
+            // server wrote reached the message, a log line or the reduced body —
+            // its `error` here is not a registered code, so not even that.
+            contains(message, '400');
+            notContains(all, 'invalid_client');
+            for (const secret of [SECRET, PASSPHRASE, ...sent]) {
+              for (const window of windows(secret)) {
+                notContains(all, window);
+              }
+            }
+            for (const bytes of [
+              signingKey,
+              body(material?.cert),
+              body(material?.key),
+              body(material?.pfx),
+            ]) {
+              for (const window of longWindows(body(bytes))) {
+                notContains(all, window);
+              }
+            }
+          },
+        );
+      }
+    });
+  }
 });
 
 /**
@@ -402,17 +409,16 @@ describe('no message of a thrown error in the logs', () => {
   });
 
   beforeEach(() => {
-    jest.resetAllMocks();
-    mockedAxios.isAxiosError.mockImplementation(
-      (e) => !!(e as { isAxiosError?: boolean } | null)?.isAxiosError,
-    );
+    resetAxiosMock();
     answer(async () => tokenReply);
   });
 
   /** Both ways a site sends: `axios(config)` and `axios.post(url, …)`. */
   const answer = (reply: (url: string) => Promise<unknown>) => {
-    mockedAxios.mockImplementation(async (config: any) => reply(config.url));
-    mockedAxios.post.mockImplementation(async (url: any) => reply(url));
+    mockedAxios.mock.mockImplementation(async (config: any) =>
+      reply(config.url),
+    );
+    mockedAxios.post.mock.mockImplementation(async (url: any) => reply(url));
   };
 
   /**
@@ -428,9 +434,9 @@ describe('no message of a thrown error in the logs', () => {
       try {
         await run();
       } catch (error) {
-        expect(isAuthProviderFailure(error)).toBe(true);
-        expect(JSON.stringify(error)).not.toContain(MARKER);
-        expect(String(error)).not.toContain(MARKER);
+        assert.equal(isAuthProviderFailure(error), true);
+        notContains(JSON.stringify(error), MARKER);
+        notContains(String(error), MARKER);
       }
     }
     await provider.prepare();
@@ -652,70 +658,84 @@ describe('no message of a thrown error in the logs', () => {
    */
   function expectOnlyLogFields(lines: readonly Line[]): void {
     for (const line of lines) {
-      expect(`${line.message} ${JSON.stringify(line.meta)}`).not.toContain(
-        MARKER,
-      );
+      notContains(`${line.message} ${JSON.stringify(line.meta)}`, MARKER);
       if (line.meta === undefined || !('kind' in line.meta)) continue;
       const failure = Object.fromEntries(
         Object.entries(line.meta).filter(([key]) => key !== 'url'),
       );
       for (const key of Object.keys(failure)) {
-        expect([line.message, key, FIELDS.has(key)]).toEqual([
-          line.message,
-          key,
-          true,
-        ]);
+        assert.deepEqual(
+          [line.message, key, FIELDS.has(key)],
+          [line.message, key, true],
+        );
       }
-      expect(typeof failure.error).toBe('string');
+      assert.equal(typeof failure.error, 'string');
     }
   }
 
-  describe.each(['Error', 'string'] as const)('thrown as %s', (kind) => {
-    it.each(CASES)('%s', async (_name, make, expected) => {
-      const { logger, entries } = recordingLogger();
-      await exercise(make(logger, kind));
-      expectOnlyLogFields(entries);
-      if (expected !== undefined) {
-        // Not vacuous: the failure was logged, as its `logFields` exactly.
-        const line = entries.find((e) => e.message === expected.message);
-        expect(line?.meta).toEqual(expected.fields);
+  for (const [caseIndex, caseRow] of (['Error', 'string'] as const).entries()) {
+    const kind = caseRow;
+    describe(caseTitle('thrown as %s', caseRow, caseIndex), () => {
+      for (const [caseIndex, caseRow] of CASES.entries()) {
+        const [_name, make, expected] = caseRow;
+        it(caseTitle('%s', caseRow, caseIndex), async () => {
+          const { logger, entries } = recordingLogger();
+          await exercise(make(logger, kind));
+          expectOnlyLogFields(entries);
+          if (expected !== undefined) {
+            // Not vacuous: the failure was logged, as its `logFields` exactly.
+            const line = entries.find((e) => e.message === expected.message);
+            assert.deepEqual(line?.meta, expected.fields);
+          }
+        });
       }
     });
-  });
+  }
 
-  it.each(['Error', 'string'] as const)(
-    'a detached report that throws %s: one line of logFields, no marker',
-    async (kind) => {
-      const { logger, entries } = recordingLogger();
-      const provider = new ScriptedProvider({
-        renewal: refreshThenLogin(),
-        accessToken: jwt('held', -3600),
-        refreshToken: REFRESH_TOKEN,
-        logger,
-        persistence: {
-          report: (report) => {
-            if (!report.awaited) throw thrown(kind);
+  for (const [caseIndex, caseRow] of (['Error', 'string'] as const).entries()) {
+    const kind = caseRow;
+    it(
+      caseTitle(
+        'a detached report that throws %s: one line of logFields, no marker',
+        caseRow,
+        caseIndex,
+      ),
+      async () => {
+        const { logger, entries } = recordingLogger();
+        const provider = new ScriptedProvider({
+          renewal: refreshThenLogin(),
+          accessToken: jwt('held', -3600),
+          refreshToken: REFRESH_TOKEN,
+          logger,
+          persistence: {
+            report: (report) => {
+              if (!report.awaited) throw thrown(kind);
+            },
           },
-        },
-      });
-      const only = new AbortController();
-      const cut = rejectionOf(provider.getTokens({ signal: only.signal }));
-      await provider.refreshes.nth(1);
-      only.abort();
-      await cut;
-      await quiet();
-      expectOnlyLogFields(entries);
-      const failed = entries.filter(
-        (e) => e.message === '[BaseTokenProvider] Persisting the tokens failed',
-      );
-      expect(failed.map((e) => e.meta)).toEqual([
-        {
-          error: 'persisting the tokens failed (unknown error)',
-          kind: 'unknown',
-        },
-      ]);
-    },
-  );
+        });
+        const only = new AbortController();
+        const cut = rejectionOf(provider.getTokens({ signal: only.signal }));
+        await provider.refreshes.nth(1);
+        only.abort();
+        await cut;
+        await quiet();
+        expectOnlyLogFields(entries);
+        const failed = entries.filter(
+          (e) =>
+            e.message === '[BaseTokenProvider] Persisting the tokens failed',
+        );
+        assert.deepEqual(
+          failed.map((e) => e.meta),
+          [
+            {
+              error: 'persisting the tokens failed (unknown error)',
+              kind: 'unknown',
+            },
+          ],
+        );
+      },
+    );
+  }
 
   it('an SNC locator and probe that throw', async () => {
     const { logger, entries } = recordingLogger();
@@ -750,14 +770,14 @@ describe('no message of a thrown error in the logs', () => {
     const notFound = entries.find((e) =>
       e.message.startsWith('SNC library not found: '),
     );
-    expect(notFound?.meta).toEqual({
+    assert.deepEqual(notFound?.meta, {
       error: 'no usable SNC library was found',
       kind: 'snc',
     });
     const probe = entries.find((e) =>
       e.message.startsWith('an SNC product probe failed: '),
     );
-    expect(probe?.meta).toEqual({
+    assert.deepEqual(probe?.meta, {
       error: 'the probe failed (unknown error)',
       kind: 'unknown',
     });
@@ -793,27 +813,28 @@ describe('no message of a thrown error in the logs', () => {
     controller.abort();
     const failure = await login;
     await strategy.dispose?.();
-    expect(isAuthProviderFailure(failure)).toBe(true);
-    expect(JSON.stringify(failure)).not.toContain(MARKER);
-    expect(JSON.stringify(failure)).not.toContain('idp.example');
+    assert.equal(isAuthProviderFailure(failure), true);
+    notContains(JSON.stringify(failure), MARKER);
+    notContains(JSON.stringify(failure), 'idp.example');
     expectOnlyLogFields(entries);
     const line = entries.find((e) =>
       e.message.startsWith('Failed to present the authorization URL: '),
     );
-    expect(line?.meta).toEqual({
+    assert.deepEqual(line?.meta, {
       error: 'presenting the authorization URL failed (unknown error)',
       kind: 'unknown',
     });
     // The URL reaches no log line, and — the consumer's own UI having
     // failed — no prompt either (its stderr may be collected).
-    expect(entries.filter((e) => e.message.includes('idp.example'))).toEqual(
+    assert.deepEqual(
+      entries.filter((e) => e.message.includes('idp.example')),
       [],
     );
-    expect(JSON.stringify(line)).not.toContain('idp.example');
+    notContains(JSON.stringify(line), 'idp.example');
   });
 
   it('a browser that rejects with a message holding a secret: logFields, no URL', async () => {
-    jest.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    mock.method(process.stderr, 'write', () => true);
     const { logger, entries } = recordingLogger();
     const controller = new AbortController();
     const login = composeAuthorization({
@@ -849,12 +870,12 @@ describe('no message of a thrown error in the logs', () => {
     const line = entries.find((e) =>
       e.message.startsWith('Failed to present the authorization URL: '),
     );
-    expect(line?.meta).toEqual({
+    assert.deepEqual(line?.meta, {
       error: 'presenting the authorization URL failed (unknown error, ENOENT)',
       kind: 'unknown',
     });
-    expect(JSON.stringify(entries)).not.toContain(MARKER);
-    expect(JSON.stringify(entries)).not.toContain('idp.example');
+    notContains(JSON.stringify(entries), MARKER);
+    notContains(JSON.stringify(entries), 'idp.example');
   });
 
   it('a 200 without a token whose error echoes the secret and the code', async () => {
@@ -878,16 +899,16 @@ describe('no message of a thrown error in the logs', () => {
       () => undefined,
       (error: unknown) => error,
     );
-    expect(isAuthProviderFailure(failure)).toBe(true);
-    expect(readFailure(failure, 'code-exchange')).toMatchObject({
+    assert.equal(isAuthProviderFailure(failure), true);
+    matchObject(readFailure(failure, 'code-exchange'), {
       kind: 'request-failed',
       facts: { operation: 'code-exchange', problem: 'no-access-token' },
     });
     const all = `${lines.join('\n')}\n${JSON.stringify(failure)}`;
-    expect(all).toContain('Token exchange failed: status 200');
+    contains(all, 'Token exchange failed: status 200');
     for (const secret of [SECRET, CODE]) {
       for (const window of windows(secret)) {
-        expect(all).not.toContain(window);
+        notContains(all, window);
       }
     }
   });
@@ -980,10 +1001,10 @@ describe('no SPNego token or service principal in the logs or refusals', () => {
       }),
     );
     // The one token presented went to the header and nowhere else.
-    expect(written).toEqual([`Negotiate ${token('b')}`]);
-    expect(lines.length).toBeGreaterThan(0);
+    assert.deepEqual(written, [`Negotiate ${token('b')}`]);
+    assert.ok(lines.length > 0, `${lines.length} > ${0}`);
     const refusals = outcomes.filter((o) => !(o as { ok: boolean }).ok);
-    expect(refusals.length).toBe(outcomes.length - 2);
+    assert.equal(refusals.length, outcomes.length - 2);
     const all = [
       ...lines,
       ...refusals.map((o) => JSON.stringify(o)),
@@ -992,15 +1013,15 @@ describe('no SPNego token or service principal in the logs or refusals', () => {
         return `${r.reason} ${r.hint ?? ''}`;
       }),
     ].join('\n');
-    expect(all).not.toContain(HOST);
-    expect(all).not.toContain('spn-secret');
+    notContains(all, HOST);
+    notContains(all, 'spn-secret');
     for (const marker of ['a', 'b', 'c', 'd', 'e', 'f', 'g']) {
       for (const window of windows(token(marker))) {
-        expect(all).not.toContain(window);
+        notContains(all, window);
       }
-      expect(all).not.toContain(`KRB-SECRET-${marker}`);
+      notContains(all, `KRB-SECRET-${marker}`);
     }
-    for (const window of windows(NTLM)) expect(all).not.toContain(window);
-    expect(all).not.toContain('NTLM-SECRET');
+    for (const window of windows(NTLM)) notContains(all, window);
+    notContains(all, 'NTLM-SECRET');
   });
 });
