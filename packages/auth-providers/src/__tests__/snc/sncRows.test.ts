@@ -4,7 +4,11 @@
  * minted `snc` (or `not-prepared`, `unknown`, `configuration`) error, its
  * words verbatim, every path a diagnostic and never a word.
  */
-import { describe, expect, it, jest } from '@jest/globals';
+
+import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { dirname, join, sep } from 'node:path';
+import { describe, it, mock } from 'node:test';
 import {
   AuthProviderFailure,
   authError,
@@ -22,9 +26,39 @@ import { DefaultSncLibraryLocator } from '../../snc/DefaultSncLibraryLocator';
 import { SecureLoginClientProbe } from '../../snc/SecureLoginClientProbe';
 import { SncLogonProvider } from '../../snc/SncLogonProvider';
 import type { SncSystem } from '../../snc/SncSystem';
+import {
+  cases,
+  caseTitle,
+  contains,
+  hasProperty,
+  matchObject,
+  notContains,
+} from '../helpers/expectations';
 import { configurationOf, mintedRefusal } from '../helpers/minted';
+import { PACKAGE_ROOT } from '../helpers/packagePaths';
 import { recordingTargets } from '../helpers/targets';
 import { fakeSystem, peLibrary } from './fakeSystem';
+
+/**
+ * A second, separate copy of auth-errors, as another package's would be:
+ * its modules are loaded afresh through `require.cache`, and the cache is
+ * then given back the copy every other import of this file holds.
+ */
+function anotherCopyOfAuthErrors(): typeof import('@mcp-abap-adt/auth-errors') {
+  const root = `${dirname(require.resolve('@mcp-abap-adt/auth-errors/package.json'))}${sep}`;
+  const held = Object.entries(require.cache).filter(([path]) =>
+    path.startsWith(root),
+  );
+  for (const [path] of held) delete require.cache[path];
+  try {
+    return require('@mcp-abap-adt/auth-errors');
+  } finally {
+    for (const path of Object.keys(require.cache)) {
+      if (path.startsWith(root)) delete require.cache[path];
+    }
+    for (const [path, module] of held) require.cache[path] = module;
+  }
+}
 
 const SLC = 'C:\\Program Files\\SAP\\FrontEnd\\SecureLogin\\lib\\sapcrypto.dll';
 const KRB = 'C:\\Windows\\System32\\gsskrb5.dll';
@@ -82,7 +116,7 @@ describe('A2200019: no credential to present', () => {
     const error = mintedRefusal(
       await p.rejected({ at: 'logon', error: A2200019 }),
     );
-    expect(error).toMatchObject({
+    matchObject(error, {
       kind: 'snc',
       variant: 'no-credential',
       facts: {
@@ -101,28 +135,31 @@ describe('A2200019: no credential to present', () => {
     const error = mintedRefusal(
       await p.rejected({ at: 'logon', error: A2200019 }),
     );
-    expect(error.reason).toBe(
+    assert.equal(
+      error.reason,
       'the SNC library has no credential to present (A2200019)',
     );
-    expect(error.hint).toBe(
+    assert.equal(
+      error.hint,
       'make sure the SNC product behind the SNC library is logged on',
     );
-    expect(error.facts).toEqual({
+    assert.deepEqual(error.facts, {
       problem: 'no-credential',
       secureLoginClient: false,
       libraryArchs: ['x64'],
     });
-    expect(renderDiagnostics(error)).toBe(`library: ${JSON.stringify(KRB)}`);
-    expect(`${error.reason} ${error.hint}`).not.toContain('gsskrb5');
+    assert.equal(renderDiagnostics(error), `library: ${JSON.stringify(KRB)}`);
+    notContains(`${error.reason} ${error.hint}`, 'gsskrb5');
   });
   it('before prepare(): no library, no diagnostics', async () => {
     const error = mintedRefusal(
       await snc(machine()).rejected({ at: 'logon', error: A2200019 }),
     );
-    expect(error.hint).toBe(
+    assert.equal(
+      error.hint,
       'make sure the SNC product behind the SNC library is logged on',
     );
-    expect(error).not.toHaveProperty('diagnostics');
+    assert.equal(hasProperty(error, 'diagnostics'), false);
   });
   it('found in a string and in an Error, never copied', async () => {
     const p = snc(machine());
@@ -132,49 +169,57 @@ describe('A2200019: no credential to present', () => {
       new Error(`${MARKER} A2200019`),
     ]) {
       const outcome = await p.rejected({ at: 'logon', error });
-      expect(mintedRefusal(outcome).variant).toBe('no-credential');
-      expect(JSON.stringify(outcome)).not.toContain(MARKER);
+      assert.equal(mintedRefusal(outcome).variant, 'no-credential');
+      notContains(JSON.stringify(outcome), MARKER);
     }
   });
 });
 
 describe('SNCERR_INIT: the library could not be initialised', () => {
-  it.each([
+  for (const [caseIndex, caseRow] of [
     'SNCERR_INIT',
     'sncerr_init while loading',
     'GSSAPI LIBRARY INVALID/MISSING',
-  ])(
-    '%s → the architectures as a fact, the path a diagnostic',
-    async (text) => {
-      const p = snc(machine());
-      await p.prepare();
-      const error = mintedRefusal(
-        await p.rejected({ at: 'logon', error: new Error(text) }),
-      );
-      expect(error).toMatchObject({
-        kind: 'snc',
-        facts: { problem: 'library-init-failed', libraryArchs: ['x64'] },
-        reason:
-          'the RFC SDK could not initialise the SNC library (x64) as its SNC library (SNCERR_INIT)',
-        diagnostics: { library: SLC },
-      });
-      expect(error).not.toHaveProperty('hint');
-    },
-  );
+  ].entries()) {
+    const text = caseRow;
+    it(
+      caseTitle(
+        '%s → the architectures as a fact, the path a diagnostic',
+        caseRow,
+        caseIndex,
+      ),
+      async () => {
+        const p = snc(machine());
+        await p.prepare();
+        const error = mintedRefusal(
+          await p.rejected({ at: 'logon', error: new Error(text) }),
+        );
+        matchObject(error, {
+          kind: 'snc',
+          facts: { problem: 'library-init-failed', libraryArchs: ['x64'] },
+          reason:
+            'the RFC SDK could not initialise the SNC library (x64) as its SNC library (SNCERR_INIT)',
+          diagnostics: { library: SLC },
+        });
+        assert.equal(hasProperty(error, 'hint'), false);
+      },
+    );
+  }
   it('a custom locator with no archs: the words without them', async () => {
     const p = new SncLogonProvider({
       partnerName: 'p:CN=SID',
       locator: { locate: async () => ({ path: KRB, archs: [] }) },
       probes: [],
     });
-    await expect(p.prepare()).resolves.toEqual({ ok: true });
+    assert.deepEqual(await p.prepare(), { ok: true });
     const error = mintedRefusal(
       await p.rejected({ at: 'logon', error: 'SNCERR_INIT' }),
     );
-    expect(error.reason).toBe(
+    assert.equal(
+      error.reason,
       'the RFC SDK could not initialise the SNC library as its SNC library (SNCERR_INIT)',
     );
-    expect(error.diagnostics).toEqual({ library: KRB });
+    assert.deepEqual(error.diagnostics, { library: KRB });
   });
 });
 
@@ -188,25 +233,28 @@ describe('SNC logon refused', () => {
         error: { key: 'RFC_LOGON_FAILURE', message: MARKER },
       }),
     );
-    expect(error).toMatchObject({
+    matchObject(error, {
       kind: 'snc',
       facts: { problem: 'logon-refused', rfcKey: 'RFC_LOGON_FAILURE' },
       reason: 'SNC logon refused (RFC_LOGON_FAILURE)',
     });
-    expect(JSON.stringify(error)).not.toContain(MARKER);
+    notContains(JSON.stringify(error), MARKER);
   });
-  it.each([
+  for (const [caseIndex, caseRow] of cases([
     ['an unlisted key', { key: 'SECRET_KEY', message: 'x' }],
     ['an Error', new Error(MARKER)],
     ['nothing', undefined],
-  ])('%s → the words alone', async (_, error) => {
-    const p = snc(machine());
-    await p.prepare();
-    const refused = mintedRefusal(await p.rejected({ at: 'logon', error }));
-    expect(refused.facts).toEqual({ problem: 'logon-refused' });
-    expect(refused.reason).toBe('SNC logon refused');
-    expect(JSON.stringify(refused)).not.toContain(MARKER);
-  });
+  ]).entries()) {
+    const [_, error] = caseRow;
+    it(caseTitle('%s → the words alone', caseRow, caseIndex), async () => {
+      const p = snc(machine());
+      await p.prepare();
+      const refused = mintedRefusal(await p.rejected({ at: 'logon', error }));
+      assert.deepEqual(refused.facts, { problem: 'logon-refused' });
+      assert.equal(refused.reason, 'SNC logon refused');
+      notContains(JSON.stringify(refused), MARKER);
+    });
+  }
 });
 
 describe('a locator that is not the shipped one', () => {
@@ -222,14 +270,14 @@ describe('a locator that is not the shipped one', () => {
     });
     const outcome = await p.prepare();
     const error = mintedRefusal(outcome);
-    expect(error).toMatchObject({
+    matchObject(error, {
       kind: 'snc',
       facts: { problem: 'library-not-found' },
       reason: 'no usable SNC library was found',
       hint: HINT,
     });
-    expect(error.facts).toEqual({ problem: 'library-not-found' });
-    expect(JSON.stringify(outcome)).not.toContain(MARKER);
+    assert.deepEqual(error.facts, { problem: 'library-not-found' });
+    notContains(JSON.stringify(outcome), MARKER);
   });
   it('an answer whose path getter throws → the locator failed: the fixed sentence', async () => {
     const p = new SncLogonProvider({
@@ -246,13 +294,13 @@ describe('a locator that is not the shipped one', () => {
     });
     const outcome = await p.prepare();
     const error = mintedRefusal(outcome);
-    expect(error).toMatchObject({
+    matchObject(error, {
       kind: 'snc',
       reason: 'no usable SNC library was found',
       hint: HINT,
     });
-    expect(error.facts).toEqual({ problem: 'library-not-found' });
-    expect(JSON.stringify(outcome)).not.toContain(MARKER);
+    assert.deepEqual(error.facts, { problem: 'library-not-found' });
+    notContains(JSON.stringify(outcome), MARKER);
   });
   it('even a minted library-not-found with paths: not the approved source', async () => {
     const forged = authError.snc(
@@ -273,8 +321,8 @@ describe('a locator that is not the shipped one', () => {
       probes: [],
     });
     const error = mintedRefusal(await p.prepare());
-    expect(error.facts).toEqual({ problem: 'library-not-found' });
-    expect(JSON.stringify(error)).not.toContain(MARKER);
+    assert.deepEqual(error.facts, { problem: 'library-not-found' });
+    notContains(JSON.stringify(error), MARKER);
   });
 });
 
@@ -292,14 +340,14 @@ describe('what the shipped locator tried', () => {
         }),
       ).prepare(),
     );
-    expect(error).toMatchObject({
+    matchObject(error, {
       kind: 'snc',
       variant: 'library-not-found',
       reason:
         'no usable SNC library was found: SNC_LIB_64 (not a library); SNC_LIB (wrong architecture); registry (missing)',
       hint: HINT,
     });
-    expect(error.facts).toEqual({
+    assert.deepEqual(error.facts, {
       problem: 'library-not-found',
       searched: true,
       candidates: [
@@ -309,8 +357,9 @@ describe('what the shipped locator tried', () => {
       ],
       processArch: 'x64',
     });
-    expect(error.diagnostics).toEqual({ candidatePaths: [TXT, X86, SLC] });
-    expect(renderDiagnostics(error)).toBe(
+    assert.deepEqual(error.diagnostics, { candidatePaths: [TXT, X86, SLC] });
+    assert.equal(
+      renderDiagnostics(error),
       `candidates: SNC_LIB_64 ${JSON.stringify(TXT)} (not a library); SNC_LIB ${JSON.stringify(X86)} (wrong architecture); registry ${JSON.stringify(SLC)} (missing)`,
     );
   });
@@ -319,41 +368,36 @@ describe('what the shipped locator tried', () => {
     const error = mintedRefusal(
       await snc(machine(), { sncLib: NOPE }).prepare(),
     );
-    expect(error.reason).toBe(
+    assert.equal(
+      error.reason,
       'no usable SNC library was found: sncLib (missing)',
     );
-    expect(error.hint).toBe(HINT);
-    expect(error.diagnostics).toEqual({ candidatePaths: [NOPE] });
+    assert.equal(error.hint, HINT);
+    assert.deepEqual(error.diagnostics, { candidatePaths: [NOPE] });
   });
   it('no candidate: verbatim, candidates empty, no diagnostics', async () => {
     const error = mintedRefusal(
       await snc(fakeSystem({ platform: 'linux' })).prepare(),
     );
-    expect(error).toMatchObject({
+    matchObject(error, {
       reason:
         'no usable SNC library was found: no candidate (SNC_LIB_64 and SNC_LIB are unset and no Secure Login Client installation was found)',
       hint: HINT,
     });
-    expect(error.facts).toEqual({
+    assert.deepEqual(error.facts, {
       problem: 'library-not-found',
       searched: true,
       candidates: [],
       processArch: 'x64',
     });
-    expect(error).not.toHaveProperty('diagnostics');
+    assert.equal(hasProperty(error, 'diagnostics'), false);
   });
   it('docs/passwordless-sso.md quotes the A2200019 reason as it is', () => {
-    const { readFileSync } =
-      jest.requireActual<typeof import('node:fs')>('node:fs');
-    const { join } =
-      jest.requireActual<typeof import('node:path')>('node:path');
     const doc = readFileSync(
-      join(__dirname, '..', '..', '..', 'docs', 'passwordless-sso.md'),
+      join(PACKAGE_ROOT, 'docs', 'passwordless-sso.md'),
       'utf8',
     ).replace(/\s+/g, ' ');
-    expect(doc).toContain(
-      '"the SNC library has no credential to present (A2200019)"',
-    );
+    contains(doc, '"the SNC library has no credential to present (A2200019)"');
   });
 });
 
@@ -370,10 +414,10 @@ describe('the shipped locator throws a minted failure', () => {
     )
       .locate()
       .catch((e: unknown) => e);
-    expect(isAuthProviderFailure(thrown)).toBe(true);
+    assert.equal(isAuthProviderFailure(thrown), true);
     const error = readFailure(thrown, 'resolving-snc-library');
-    expect(isMinted(error)).toBe(true);
-    expect(error.facts).toEqual({
+    assert.equal(isMinted(error), true);
+    assert.deepEqual(error.facts, {
       problem: 'library-not-found',
       searched: true,
       candidates: [
@@ -381,45 +425,48 @@ describe('the shipped locator throws a minted failure', () => {
       ],
       processArch: 'arm64',
     });
-    expect(error.diagnostics).toEqual({ candidatePaths: [X86] });
+    assert.deepEqual(error.diagnostics, { candidatePaths: [X86] });
     // The message is the words: no path, no detail of the header.
-    expect((thrown as Error).message).toBe(
+    assert.equal(
+      (thrown as Error).message,
       `no usable SNC library was found: SNC_LIB_64 (wrong architecture) — ${HINT}`,
     );
   });
 });
 
 describe('the locator returned no path', () => {
-  it.each([['blank', { path: '  ', archs: ['x64'] }]])(
-    '%s → verbatim',
-    async (_, found) => {
+  for (const [caseIndex, caseRow] of cases([
+    ['blank', { path: '  ', archs: ['x64'] }],
+  ]).entries()) {
+    const [_, found] = caseRow;
+    it(caseTitle('%s → verbatim', caseRow, caseIndex), async () => {
       const p = new SncLogonProvider({
         partnerName: 'p:CN=SID',
         locator: { locate: async () => found as never },
         probes: [],
       });
       const error = mintedRefusal(await p.prepare());
-      expect(error).toMatchObject({
+      matchObject(error, {
         kind: 'snc',
         facts: { problem: 'locator-returned-no-path' },
         reason: 'no usable SNC library was found: the locator returned no path',
         hint: HINT,
       });
-    },
-  );
+    });
+  }
 });
 
 describe('establish before prepare', () => {
   it('not-prepared, provider snc, verbatim', async () => {
     const t = recordingTargets();
     const error = mintedRefusal(await snc(machine()).establish(t.logonTarget));
-    expect(error).toMatchObject({
+    matchObject(error, {
       kind: 'not-prepared',
       facts: { provider: 'snc' },
       reason: 'the SNC provider is not prepared',
       hint: 'connect() prepares it first',
     });
-    expect(t.logon.params).toEqual([]);
+    assert.deepEqual(t.logon.params, []);
   });
 });
 
@@ -452,19 +499,23 @@ describe('the outer boundary names the SNC operation', () => {
       (p) => p.rejected({ at: 'logon', error: A2200019 }),
     ],
   ];
-  it.each(moments)('grant() throws → %s', async (words, call) => {
-    const outcome = await call(new GrantThrows(config(machine())));
-    const error = mintedRefusal(outcome);
-    expect(error.kind).toBe('unknown');
-    expect(error.reason).toBe(
-      `the SNC provider failed while ${words} (unknown error)`,
-    );
-    expect(JSON.stringify(outcome)).not.toContain(MARKER);
-  });
+  for (const [caseIndex, caseRow] of moments.entries()) {
+    const [words, call] = caseRow;
+    it(caseTitle('grant() throws → %s', caseRow, caseIndex), async () => {
+      const outcome = await call(new GrantThrows(config(machine())));
+      const error = mintedRefusal(outcome);
+      assert.equal(error.kind, 'unknown');
+      assert.equal(
+        error.reason,
+        `the SNC provider failed while ${words} (unknown error)`,
+      );
+      notContains(JSON.stringify(outcome), MARKER);
+    });
+  }
   it('a moments getter on a subclass changes nothing', async () => {
     const p = new MomentsGetter(config(machine()));
-    await expect(p.prepare()).resolves.toEqual({ ok: true });
-    await expect(p.establish(recordingTargets().logonTarget)).resolves.toEqual({
+    assert.deepEqual(await p.prepare(), { ok: true });
+    assert.deepEqual(await p.establish(recordingTargets().logonTarget), {
       ok: true,
     });
   });
@@ -480,8 +531,8 @@ describe('the outer boundary names the SNC operation', () => {
       },
     );
     const outcome = await p.rejected({ at: 'logon', error: hostile });
-    expect(outcome.ok).toBe(false);
-    expect(JSON.stringify(outcome)).not.toContain(MARKER);
+    assert.equal(outcome.ok, false);
+    notContains(JSON.stringify(outcome), MARKER);
   });
 });
 
@@ -491,12 +542,13 @@ describe('the log lines', () => {
     const { logger, lines } = recordingLogger();
     await snc(machine(), { sncLib: NOPE, logger }).prepare();
     const line = lines.find((l) => l.message.startsWith('SNC library not'));
-    expect(line).toBeDefined();
-    expect(line?.level).toBe('warn');
-    expect(line?.message).toBe(
+    assert.notEqual(line, undefined);
+    assert.equal(line?.level, 'warn');
+    assert.equal(
+      line?.message,
       'SNC library not found: no usable SNC library was found: sncLib (missing)',
     );
-    expect(line?.meta).toEqual({
+    assert.deepEqual(line?.meta, {
       error: 'no usable SNC library was found: sncLib (missing)',
       kind: 'snc',
       diagnostics: `candidates: sncLib ${JSON.stringify(NOPE)} (missing)`,
@@ -517,13 +569,14 @@ describe('the log lines', () => {
       ],
       logger,
     });
-    await expect(p.prepare()).resolves.toEqual({ ok: true });
+    assert.deepEqual(await p.prepare(), { ok: true });
     const line = lines.find((l) => l.message.startsWith('an SNC product'));
-    expect(line?.level).toBe('warn');
-    expect(line?.message).toBe(
+    assert.equal(line?.level, 'warn');
+    assert.equal(
+      line?.message,
       'an SNC product probe failed: the probe failed (unknown error)',
     );
-    expect(JSON.stringify(lines)).not.toContain(MARKER);
+    notContains(JSON.stringify(lines), MARKER);
   });
 });
 
@@ -532,45 +585,66 @@ describe('construction', () => {
     locator: new DefaultSncLibraryLocator(machine()),
     probes: [],
   });
-  it.each([' ', ''])(
-    'partnerName %p → snc-partner-name-missing',
-    (partnerName) => {
-      let thrown: unknown;
-      try {
-        new SncLogonProvider({ partnerName, ...parts() });
-      } catch (error) {
-        thrown = error;
-      }
-      expect(configurationOf(thrown)).toEqual({
-        case: 'snc-partner-name-missing',
-        fields: ['partnerName'],
-        reason: "SncLogonProvider needs partnerName — the system's SNC name",
-      });
-    },
-  );
-  it.each(['0', '4', '10', 'max', '', ' 9'])(
-    'qop %p → snc-qop-invalid, allowed snc-qop, the value never echoed',
-    (qop) => {
-      let thrown: unknown;
-      try {
-        new SncLogonProvider({
-          partnerName: 'p:CN=SID',
-          qop,
-          ...parts(),
+  for (const [caseIndex, caseRow] of [' ', ''].entries()) {
+    const partnerName = caseRow;
+    it(
+      caseTitle(
+        'partnerName %p → snc-partner-name-missing',
+        caseRow,
+        caseIndex,
+      ),
+      () => {
+        let thrown: unknown;
+        try {
+          new SncLogonProvider({ partnerName, ...parts() });
+        } catch (error) {
+          thrown = error;
+        }
+        assert.deepEqual(configurationOf(thrown), {
+          case: 'snc-partner-name-missing',
+          fields: ['partnerName'],
+          reason: "SncLogonProvider needs partnerName — the system's SNC name",
         });
-      } catch (error) {
-        thrown = error;
-      }
-      expect(configurationOf(thrown)).toEqual({
-        case: 'snc-qop-invalid',
-        fields: ['qop'],
-        reason: 'SncLogonProvider: qop must be one of 1, 2, 3, 8, 9',
-      });
-      const error = readFailure(thrown, 'unfamiliar-error');
-      expect(error.facts).toMatchObject({ allowed: 'snc-qop' });
-      expect((thrown as Error).message).not.toContain(`'${String(qop)}'`);
-    },
-  );
+      },
+    );
+  }
+  for (const [caseIndex, caseRow] of [
+    '0',
+    '4',
+    '10',
+    'max',
+    '',
+    ' 9',
+  ].entries()) {
+    const qop = caseRow;
+    it(
+      caseTitle(
+        'qop %p → snc-qop-invalid, allowed snc-qop, the value never echoed',
+        caseRow,
+        caseIndex,
+      ),
+      () => {
+        let thrown: unknown;
+        try {
+          new SncLogonProvider({
+            partnerName: 'p:CN=SID',
+            qop,
+            ...parts(),
+          });
+        } catch (error) {
+          thrown = error;
+        }
+        assert.deepEqual(configurationOf(thrown), {
+          case: 'snc-qop-invalid',
+          fields: ['qop'],
+          reason: 'SncLogonProvider: qop must be one of 1, 2, 3, 8, 9',
+        });
+        const error = readFailure(thrown, 'unfamiliar-error');
+        matchObject(error.facts, { allowed: 'snc-qop' });
+        notContains((thrown as Error).message, `'${String(qop)}'`);
+      },
+    );
+  }
 });
 
 describe('no other way in: the target answer is the provider’s own', () => {
@@ -594,7 +668,7 @@ describe('no other way in: the target answer is the provider’s own', () => {
   };
   it('returned refusal → that refusal', async () => {
     const out = await (await prepared()).establish(target(() => MINTED));
-    expect(mintedRefusal(out)).toBe(mintedRefusalObject());
+    assert.equal(mintedRefusal(out), mintedRefusalObject());
   });
   it('thrown refusal → that refusal', async () => {
     const out = await (await prepared()).establish(
@@ -602,17 +676,17 @@ describe('no other way in: the target answer is the provider’s own', () => {
         throw mintedRefusalObject();
       }),
     );
-    expect(mintedRefusal(out)).toBe(mintedRefusalObject());
+    assert.equal(mintedRefusal(out), mintedRefusalObject());
   });
   it('garbage returned → the logon-target fallback', async () => {
     const out = await (await prepared()).establish(
       target(() => ({ ok: 'maybe', reason: MARKER })),
     );
-    expect(mintedRefusal(out)).toMatchObject({
+    matchObject(mintedRefusal(out), {
       kind: 'logon-target',
       facts: { wire: 'unknown', refused: 'logon-parameters' },
     });
-    expect(JSON.stringify(out)).not.toContain(MARKER);
+    notContains(JSON.stringify(out), MARKER);
   });
   it('garbage thrown → unknown, handing over the SNC logon parameters', async () => {
     const out = await (await prepared()).establish(
@@ -620,32 +694,26 @@ describe('no other way in: the target answer is the provider’s own', () => {
         throw new Error(MARKER);
       }),
     );
-    expect(mintedRefusal(out)).toMatchObject({
+    matchObject(mintedRefusal(out), {
       kind: 'unknown',
       facts: { operation: 'handing-over-snc-parameters' },
     });
-    expect(JSON.stringify(out)).not.toContain(MARKER);
+    notContains(JSON.stringify(out), MARKER);
   });
   it('another copy’s refusal returned → rebuilt by this copy, never the target’s object', async () => {
-    let foreign: unknown;
-    jest.isolateModules(() => {
-      const other = require('@mcp-abap-adt/auth-errors') as {
-        authError: typeof authError;
-        isMinted: typeof isMinted;
-      };
-      foreign = other.authError['logon-target']({
-        wire: 'rfc',
-        refused: 'logon-parameters',
-      });
-      expect(other.isMinted(foreign)).toBe(true);
+    const other = anotherCopyOfAuthErrors();
+    const foreign: unknown = other.authError['logon-target']({
+      wire: 'rfc',
+      refused: 'logon-parameters',
     });
-    expect(isMinted(foreign)).toBe(false);
+    assert.equal(other.isMinted(foreign), true);
+    assert.equal(isMinted(foreign), false);
     const out = await (await prepared()).establish(
       target(() => ({ ok: false, refusal: foreign })),
     );
     const error = mintedRefusal(out);
-    expect(error).not.toBe(foreign);
-    expect(error).toMatchObject({
+    assert.notEqual(error, foreign);
+    matchObject(error, {
       kind: 'logon-target',
       facts: { wire: 'rfc', refused: 'logon-parameters' },
       // Re-rendered by this copy: its own words for the same facts.
@@ -657,10 +725,10 @@ describe('no other way in: the target answer is the provider’s own', () => {
   });
   it('Ok → the SNC parameters were written', async () => {
     const t = recordingTargets();
-    await expect((await prepared()).establish(t.logonTarget)).resolves.toEqual({
+    assert.deepEqual(await (await prepared()).establish(t.logonTarget), {
       ok: true,
     });
-    expect(t.logon.params).toHaveLength(1);
+    assert.equal(t.logon.params.length, 1);
   });
 });
 
@@ -683,20 +751,21 @@ describe('RF4 — library paths as they occur on users’ machines', () => {
         }),
       ).prepare(),
     );
-    expect(error.diagnostics).toEqual({
+    assert.deepEqual(error.diagnostics, {
       candidatePaths: [CYRILLIC, UNC, X86],
     });
     const rendered = renderDiagnostics(error) ?? '';
     for (const path of [CYRILLIC, UNC, X86]) {
-      expect(rendered).toContain(JSON.stringify(path));
+      contains(rendered, JSON.stringify(path));
     }
   });
   it('macOS: the bundle path, spaces included', async () => {
     const error = mintedRefusal(
       await snc(fakeSystem({ platform: 'darwin', arch: 'arm64' })).prepare(),
     );
-    expect(error.diagnostics).toEqual({ candidatePaths: [BUNDLE] });
-    expect(renderDiagnostics(error)).toBe(
+    assert.deepEqual(error.diagnostics, { candidatePaths: [BUNDLE] });
+    assert.equal(
+      renderDiagnostics(error),
       `candidates: macOS bundle ${JSON.stringify(BUNDLE)} (missing)`,
     );
   });
@@ -707,14 +776,15 @@ describe('RF4 — library paths as they occur on users’ machines', () => {
         files: { [CYRILLIC]: peLibrary('x64') },
       }),
     );
-    await expect(p.prepare()).resolves.toEqual({ ok: true });
+    assert.deepEqual(await p.prepare(), { ok: true });
     const t = recordingTargets();
     await p.establish(t.logonTarget);
-    expect(t.logon.params[0]?.snc_lib).toBe(CYRILLIC);
+    assert.equal(t.logon.params[0]?.snc_lib, CYRILLIC);
     const error = mintedRefusal(
       await p.rejected({ at: 'logon', error: A2200019 }),
     );
-    expect(renderDiagnostics(error)).toBe(
+    assert.equal(
+      renderDiagnostics(error),
       `library: ${JSON.stringify(CYRILLIC)}`,
     );
   });
@@ -740,16 +810,16 @@ describe('cancelling prepare() (the user’s rule: no built-in timeout)', () => 
     });
     const outcome = p.prepare();
     await new Promise((resolve) => setImmediate(resolve));
-    expect(seen).toHaveLength(1);
-    expect(seen[0]?.aborted).toBe(false);
+    assert.equal(seen.length, 1);
+    assert.equal(seen[0]?.aborted, false);
     controller.abort();
     const error = mintedRefusal(await outcome);
-    expect(error).toMatchObject({
+    matchObject(error, {
       kind: 'interactive-login',
       facts: { outcome: 'aborted' },
     });
-    expect(seen[0]?.aborted).toBe(true);
-    expect(JSON.stringify(error)).not.toContain(MARKER);
+    assert.equal(seen[0]?.aborted, true);
+    notContains(JSON.stringify(error), MARKER);
   });
   it('an attached party: the moment ends when every party has aborted', async () => {
     const seen: (AbortSignal | undefined)[] = [];
@@ -763,9 +833,11 @@ describe('cancelling prepare() (the user’s rule: no built-in timeout)', () => 
     await new Promise((resolve) => setImmediate(resolve));
     first.abort();
     await new Promise((resolve) => setImmediate(resolve));
-    expect(seen[0]?.aborted).toBe(false);
+    assert.equal(seen[0]?.aborted, false);
     second.abort();
-    expect(mintedRefusal(await outcome).facts).toEqual({ outcome: 'aborted' });
+    assert.deepEqual(mintedRefusal(await outcome).facts, {
+      outcome: 'aborted',
+    });
   });
   it('without a party, the query is given no signal: it waits for reg.exe', async () => {
     const reads: { key: string; name: string; signal?: AbortSignal }[] = [];
@@ -776,8 +848,8 @@ describe('cancelling prepare() (the user’s rule: no built-in timeout)', () => 
         registryReads: reads,
       }),
     ).prepare();
-    expect(reads.length).toBeGreaterThan(0);
-    for (const read of reads) expect(read).not.toHaveProperty('signal');
+    assert.ok(reads.length > 0, `${reads.length} > ${0}`);
+    for (const read of reads) assert.equal(hasProperty(read, 'signal'), false);
   });
   it('a probe gets the moment’s signal too; an abort during the probe ends prepare() aborted', async () => {
     const controller = new AbortController();
@@ -798,21 +870,21 @@ describe('cancelling prepare() (the user’s rule: no built-in timeout)', () => 
       signal: controller.signal,
     });
     const error = mintedRefusal(await p.prepare());
-    expect(error.facts).toEqual({ outcome: 'aborted' });
-    expect(given[0]).toBeDefined();
+    assert.deepEqual(error.facts, { outcome: 'aborted' });
+    assert.notEqual(given[0], undefined);
   });
 });
 
 describe('the moments a request goes through', () => {
   it('authorize writes nothing and answers Ok', async () => {
-    const header = jest.fn();
-    const cookies = jest.fn();
+    const header = mock.fn();
+    const cookies = mock.fn();
     const request: IRequestTarget = { header, cookies };
-    await expect(snc(machine()).authorize(request)).resolves.toEqual({
+    assert.deepEqual(await snc(machine()).authorize(request), {
       ok: true,
     });
-    expect(header).not.toHaveBeenCalled();
-    expect(cookies).not.toHaveBeenCalled();
+    assert.equal(header.mock.callCount(), 0);
+    assert.equal(cookies.mock.callCount(), 0);
   });
 });
 
@@ -831,31 +903,34 @@ describe('review round 1', () => {
       probes: [{ product: 'P\nforged-product', appliesTo: async () => true }],
       logger,
     });
-    await expect(p.prepare()).resolves.toEqual({ ok: true });
+    assert.deepEqual(await p.prepare(), { ok: true });
     const debug = lines.filter((l) => l.level === 'debug');
-    expect(debug).toEqual([
+    assert.deepEqual(debug, [
       {
         level: 'debug',
         message: 'SNC library resolved',
         meta: { library: null, archs: ['x64'], product: 'a consumer probe' },
       },
     ]);
-    expect(JSON.stringify(lines)).not.toMatch(/forged|\u202e/);
+    assert.doesNotMatch(JSON.stringify(lines), /forged|\u202e/);
   });
   it('the debug line keeps an admitted path and names only the shipped product', async () => {
     const { logger, lines } = recordingLogger();
     await snc(machine(), { logger }).prepare();
-    expect(lines.filter((l) => l.level === 'debug')).toEqual([
-      {
-        level: 'debug',
-        message: 'SNC library resolved',
-        meta: {
-          library: SLC,
-          archs: ['x64'],
-          product: 'SAP Secure Login Client',
+    assert.deepEqual(
+      lines.filter((l) => l.level === 'debug'),
+      [
+        {
+          level: 'debug',
+          message: 'SNC library resolved',
+          meta: {
+            library: SLC,
+            archs: ['x64'],
+            product: 'SAP Secure Login Client',
+          },
         },
-      },
-    ]);
+      ],
+    );
   });
   it('an abort during a probe logs no "probe failed" line', async () => {
     const { logger, lines } = recordingLogger();
@@ -875,10 +950,13 @@ describe('review round 1', () => {
       signal: controller.signal,
       logger,
     });
-    expect(mintedRefusal(await p.prepare()).facts).toEqual({
+    assert.deepEqual(mintedRefusal(await p.prepare()).facts, {
       outcome: 'aborted',
     });
-    expect(lines.some((l) => l.message.includes('probe failed'))).toBe(false);
+    assert.equal(
+      lines.some((l) => l.message.includes('probe failed')),
+      false,
+    );
   });
   const parts = () => ({
     locator: new DefaultSncLibraryLocator(machine()),
@@ -898,7 +976,7 @@ describe('review round 1', () => {
     return undefined;
   };
   it('a valid myName and an absent qop still construct', () => {
-    expect(construct({ myName: ' p:CN=ME ' })).toBeUndefined();
-    expect(construct({ qop: undefined })).toBeUndefined();
+    assert.equal(construct({ myName: ' p:CN=ME ' }), undefined);
+    assert.equal(construct({ qop: undefined }), undefined);
   });
 });

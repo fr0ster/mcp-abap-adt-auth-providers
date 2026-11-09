@@ -1,5 +1,7 @@
-import { describe, expect, it } from '@jest/globals';
+import assert from 'node:assert/strict';
+import { describe, it } from 'node:test';
 import { SecureLoginClientProbe } from '../../snc/SecureLoginClientProbe';
+import { caseTitle } from '../helpers/expectations';
 import { fakeSystem } from './fakeSystem';
 
 const REGISTRY = {
@@ -11,44 +13,50 @@ const REGISTRY = {
 
 describe('appliesTo', () => {
   const probe = new SecureLoginClientProbe(fakeSystem({ registry: REGISTRY }));
-  it.each([
+  for (const [caseIndex, caseRow] of [
     'C:\\Program Files\\SAP\\FrontEnd\\SecureLogin\\lib\\sapcrypto.dll',
     'C:\\PROGRAM FILES\\SAP\\FrontEnd\\SecureLogin\\lib\\sapcrypto.dll',
     'C:\\Program Files (x86)\\SAP\\FrontEnd\\SecureLogin\\lib\\sapcrypto.dll',
-  ])('applies to %s', async (p) => {
-    await expect(probe.appliesTo(p)).resolves.toBe(true);
-  });
-  it.each([
+  ].entries()) {
+    const p = caseRow;
+    it(caseTitle('applies to %s', caseRow, caseIndex), async () => {
+      assert.equal(await probe.appliesTo(p), true);
+    });
+  }
+  for (const [caseIndex, caseRow] of [
     'C:\\Windows\\System32\\gsskrb5.dll',
     'C:\\Program Files\\SAP\\FrontEnd\\SecureLoginOther\\sapcrypto.dll',
-  ])('not to %s', async (p) => {
-    await expect(probe.appliesTo(p)).resolves.toBe(false);
-  });
+  ].entries()) {
+    const p = caseRow;
+    it(caseTitle('not to %s', caseRow, caseIndex), async () => {
+      assert.equal(await probe.appliesTo(p), false);
+    });
+  }
   it('to nothing when the client is not installed', async () => {
-    await expect(
-      new SecureLoginClientProbe(fakeSystem()).appliesTo(
+    assert.equal(
+      await new SecureLoginClientProbe(fakeSystem()).appliesTo(
         'C:\\Program Files\\SAP\\FrontEnd\\SecureLogin\\lib\\sapcrypto.dll',
       ),
-    ).resolves.toBe(false);
+      false,
+    );
   });
   it('to the app bundle on macOS', async () => {
     const mac = new SecureLoginClientProbe(fakeSystem({ platform: 'darwin' }));
-    await expect(
-      mac.appliesTo(
+    assert.equal(
+      await mac.appliesTo(
         '/Applications/Secure Login Client.app/Contents/MacOS/lib/libsapcrypto.dylib',
       ),
-    ).resolves.toBe(true);
-    await expect(mac.appliesTo('/usr/lib/libgssapi_krb5.dylib')).resolves.toBe(
-      false,
+      true,
     );
+    assert.equal(await mac.appliesTo('/usr/lib/libgssapi_krb5.dylib'), false);
   });
 });
 
 describe('the probe names, it does not check', () => {
   it('has no check()', () => {
     const probe = new SecureLoginClientProbe(fakeSystem());
-    expect(probe.product).toBe('SAP Secure Login Client');
-    expect('check' in probe).toBe(false);
+    assert.equal(probe.product, 'SAP Secure Login Client');
+    assert.equal('check' in probe, false);
   });
 });
 
@@ -59,9 +67,12 @@ describe('the moment’s signal', () => {
     await new SecureLoginClientProbe(
       fakeSystem({ registry: REGISTRY, registryReads: reads }),
     ).appliesTo('C:\\x\\sapcrypto.dll', controller.signal);
-    expect(reads.map((r) => [r.name, r.signal])).toEqual([
-      ['InstallPath64', controller.signal],
-      ['InstallPath32', controller.signal],
-    ]);
+    assert.deepEqual(
+      reads.map((r) => [r.name, r.signal]),
+      [
+        ['InstallPath64', controller.signal],
+        ['InstallPath32', controller.signal],
+      ],
+    );
   });
 });

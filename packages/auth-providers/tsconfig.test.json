@@ -89,6 +89,13 @@
     "src/__tests__/providers/tokenProviderContract.test.ts",
     "src/__tests__/renewal/defaults.test.ts",
     "src/__tests__/runner/guardPreload.test.ts",
-    "src/__tests__/runner/runTests.test.ts"
+    "src/__tests__/runner/runTests.test.ts",
+    "src/__tests__/snc/DefaultSncLibraryLocator.test.ts",
+    "src/__tests__/snc/SecureLoginClientProbe.test.ts",
+    "src/__tests__/snc/SncLogonProvider.test.ts",
+    "src/__tests__/snc/libraryArchitectures.test.ts",
+    "src/__tests__/snc/registryAbort.test.ts",
+    "src/__tests__/snc/sncRows.test.ts",
+    "src/__tests__/snc/sncSources.test.ts"
   ]
 }
