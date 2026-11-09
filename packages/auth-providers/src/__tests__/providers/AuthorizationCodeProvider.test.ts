@@ -125,24 +125,12 @@ describe('AuthorizationCodeProvider', () => {
    * Both interactive cases below build a strategy for a login a *person*
    * completes — typing a username, a password and a second factor — and five
    * minutes is the number chosen for that, not up for negotiation downward.
-   *
-   * `INTERACTIVE_JEST_TIMEOUT_MS` is derived from it rather than written as
-   * its own magic number, so the invariant this is protecting stays visible
-   * instead of depending on two constants that happen to agree today: the
-   * test's own bound — an `AbortSignal.timeout` it hands the strategy, as a
-   * consumer composes one (no login has a bound of the package's
-   * choosing) — must expire strictly before Jest's. If Jest's timeout fired
-   * first, the case would fail with "Exceeded timeout of Xms" — which says
-   * nothing about authentication — instead of the login's own, legible
-   * "the browser login was aborted". The
-   * margin on top covers everything a login itself does not: loading the
-   * service key, DNS, Scenario 3's deliberately-failed refresh, launching the
-   * browser, the token exchange, assertions and cleanup.
+   * It is the test's own bound, an `AbortSignal.timeout` it hands the
+   * strategy as a consumer composes one (no login has a bound of the
+   * package's choosing, and the runner has none): a login left too long ends
+   * with its own, legible "the browser login was aborted".
    */
   const HUMAN_LOGIN_TIMEOUT_MS = 5 * 60 * 1000;
-  const INTERACTIVE_JEST_MARGIN_MS = 60 * 1000;
-  const INTERACTIVE_JEST_TIMEOUT_MS =
-    HUMAN_LOGIN_TIMEOUT_MS + INTERACTIVE_JEST_MARGIN_MS;
 
   describe('Scenario 1 & 2: Token lifecycle', () => {
     it('should login via browser and reuse token from Scenario 1', async () => {

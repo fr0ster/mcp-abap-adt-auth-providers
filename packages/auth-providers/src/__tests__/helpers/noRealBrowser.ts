@@ -1,7 +1,6 @@
 /**
- * Loaded before any test module in every test process: by Jest as its setup
- * (`setupFiles`), and by `tools/run-tests.mjs` as a preload (`node --test
- * --require`, the compiled file) for every node:test file. No test starts a
+ * Loaded before any test module in every test process: `tools/run-tests.mjs`
+ * preloads the compiled file (`node --test --require`) for every test file. No test starts a
  * program it did not register — above all no real browser or URL launcher.
  *
  * Deny by default. Every `child_process` entry point (`spawn`, `spawnSync`,
@@ -29,7 +28,7 @@ import { resolve } from 'node:path';
 import { promisify } from 'node:util';
 
 // The core module object itself (not an import wrapper): every importer,
-// `jest.requireActual` included, reads it.
+// a module mock's fallback to the real one included, reads it.
 import childProcess = require('node:child_process');
 
 const GUARDED = Symbol.for('mcp-abap-adt.noRealBrowser');

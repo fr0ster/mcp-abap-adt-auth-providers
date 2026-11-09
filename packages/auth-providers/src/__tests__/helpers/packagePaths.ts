@@ -1,10 +1,9 @@
 /**
- * Where a test finds the package's files. A test runs from its source
- * (`src/__tests__/…`, under Jest) or from its compiled copy
- * (`.test-build/__tests__/…`, under node:test); this file sits at the same
- * depth in both, so the package root is three directories up either way,
- * and the sources and fixtures are always read from `src/`, never from the
- * compiled copy.
+ * Where a test finds the package's files. A test runs from its compiled
+ * copy (`.test-build/__tests__/…`), which sits at the same depth as its source
+ * (`src/__tests__/…`), so the package root is three directories up, and the
+ * sources and fixtures are always read from `src/`, never from the compiled
+ * copy.
  */
 
 import { join } from 'node:path';
