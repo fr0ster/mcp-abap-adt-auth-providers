@@ -141,11 +141,11 @@ function provider(
   mechanism: Mechanism,
   servicePrincipal = SERVICE,
 ): IAuthProvider {
-  // The sibling's source, loaded only here: off the stand nothing of it is
-  // compiled.
-  const { SpnegoAuthProvider } = require(path.join(PROVIDERS_DIR, 'src')) as {
-    SpnegoAuthProvider: SpnegoAuthProviderCtor;
-  };
+  // The sibling as built in the stand container (run-suite.sh builds it),
+  // loaded only here, as the child harness loads it: a test compiled to
+  // CommonJS cannot require the sibling's TypeScript sources.
+  const { SpnegoAuthProvider }: { SpnegoAuthProvider: SpnegoAuthProviderCtor } =
+    require(path.join(PROVIDERS_DIR, 'dist'));
   return new SpnegoAuthProvider({
     servicePrincipal,
     tokenSource: recordingSource(gssapiTokenSource({ mechanism })),
