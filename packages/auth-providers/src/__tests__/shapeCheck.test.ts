@@ -7,9 +7,12 @@
  * package's own source pass, and every entry of the diagnostic site list is
  * an approved extraction site that is used.
  */
+
+import assert from 'node:assert/strict';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
+import { describe, it } from 'node:test';
 import {
   checkProviderShape,
   reportLines,
@@ -19,8 +22,10 @@ import {
   type ShapeRule,
 } from '@mcp-abap-adt/auth-errors/shape-check';
 import * as typescript from 'typescript';
+import { caseTitle, contains } from './helpers/expectations';
+import { PACKAGE_ROOT } from './helpers/packagePaths';
 
-const ROOT = resolve(__dirname, '../..');
+const ROOT = PACKAGE_ROOT;
 /** The repository root: the package lives in packages/auth-providers. */
 const REPO_ROOT = resolve(ROOT, '../..');
 const FIXTURES = join(ROOT, 'tools', '__fixtures__');
@@ -35,9 +40,6 @@ const SHAPE_CHECK: ShapeCheckOptions = {
   sites: join(ROOT, 'tools'),
   base: './src/auth/AuthProviderBase#AuthProviderBase',
 };
-
-/** Each check type-checks the program: allow it the time it needs. */
-const RUN = 120_000;
 
 /** The findings of a report that checked; anything else fails with its lines. */
 function findingsOf(report: ShapeCheckReport): readonly ShapeFinding[] {
@@ -81,16 +83,12 @@ const FIXTURE_RULES: readonly (readonly [ShapeRule, string, number])[] = [
 ];
 
 describe('the shape check', () => {
-  it(
-    'the shape check finds nothing in this repository',
-    () => {
-      expect(reportLines(checkProviderShape(SHAPE_CHECK))).toEqual([]);
-    },
-    RUN,
-  );
+  it('the shape check finds nothing in this repository', () => {
+    assert.deepEqual(reportLines(checkProviderShape(SHAPE_CHECK)), []);
+  });
 
   it('the assertion site list is empty: no cast to a contract type anywhere', () => {
-    expect(readList('assertion-sites.json')).toStrictEqual([]);
+    assert.deepEqual(readList('assertion-sites.json'), []);
   });
 
   it('the diagnostic site list names exactly the approved extraction sites', () => {
@@ -99,128 +97,122 @@ describe('the shape check', () => {
       function: string;
       field: string;
     }[];
-    expect(
+    assert.deepEqual(
       list.map((site) => `${site.file}#${site.function}#${site.field}`).sort(),
-    ).toStrictEqual([...APPROVED].sort());
+      [...APPROVED].sort(),
+    );
   });
 
-  it(
-    'every listed site is used: without the list, each is reported, and nothing else',
-    () => {
-      const empty = mkdtempSync(join(tmpdir(), 'shape-sites-'));
-      try {
-        const findings = findingsOf(
-          checkProviderShape({ ...SHAPE_CHECK, rules: [6], sites: empty }),
-        );
-        expect(findings.length).toBeGreaterThan(0);
-        const reported = new Set<string>();
-        for (const finding of findings) {
-          expect(finding.rule).toBe(6);
-          // `… diagnostics (a, b) passed outside … (<file>, <function>)`
-          const what = finding.what;
-          const open = what.indexOf('diagnostics (') + 'diagnostics ('.length;
-          const fields = what.slice(open, what.indexOf(')', open));
-          const site = what.slice(
-            what.lastIndexOf('(') + 1,
-            what.lastIndexOf(')'),
-          );
-          const [file, fn] = site.split(', ');
-          expect(file).toBe(finding.file);
-          for (const field of fields.split(', ')) {
-            reported.add(`${file}#${fn}#${field}`);
-          }
-        }
-        expect([...reported].sort()).toStrictEqual([...APPROVED].sort());
-      } finally {
-        rmSync(empty, { recursive: true, force: true });
-      }
-    },
-    RUN,
-  );
-
-  it.each(FIXTURE_RULES)(
-    'rule %s: refuses %s, every finding its own rule',
-    (rule, fixture, count) => {
+  it('every listed site is used: without the list, each is reported, and nothing else', () => {
+    const empty = mkdtempSync(join(tmpdir(), 'shape-sites-'));
+    try {
       const findings = findingsOf(
-        checkProviderShape({
-          ...SHAPE_CHECK,
-          files: [join(FIXTURES, fixture)],
-        }),
+        checkProviderShape({ ...SHAPE_CHECK, rules: [6], sites: empty }),
       );
-      expect(findings).toHaveLength(count);
+      assert.ok(findings.length > 0, `${findings.length} > ${0}`);
+      const reported = new Set<string>();
       for (const finding of findings) {
-        expect([finding.file, finding.rule]).toStrictEqual([
-          `tools/__fixtures__/${fixture}`,
-          rule,
-        ]);
+        assert.equal(finding.rule, 6);
+        // `… diagnostics (a, b) passed outside … (<file>, <function>)`
+        const what = finding.what;
+        const open = what.indexOf('diagnostics (') + 'diagnostics ('.length;
+        const fields = what.slice(open, what.indexOf(')', open));
+        const site = what.slice(
+          what.lastIndexOf('(') + 1,
+          what.lastIndexOf(')'),
+        );
+        const [file, fn] = site.split(', ');
+        assert.equal(file, finding.file);
+        for (const field of fields.split(', ')) {
+          reported.add(`${file}#${fn}#${field}`);
+        }
       }
-    },
-    RUN,
-  );
+      assert.deepEqual([...reported].sort(), [...APPROVED].sort());
+    } finally {
+      rmSync(empty, { recursive: true, force: true });
+    }
+  });
 
-  it(
-    'rule 2: a subclass of AuthProviderBase declaring establish is reported',
-    () => {
-      const findings = findingsOf(
-        checkProviderShape({
-          ...SHAPE_CHECK,
-          files: [join(FIXTURES, 'rule2.ts')],
-        }),
-      );
-      expect(
-        findings.some(
-          (finding) =>
-            finding.rule === 2 &&
-            finding.what.includes(
-              'a class reaching AuthProviderBase declares establish',
-            ),
-        ),
-      ).toBe(true);
-    },
-    RUN,
-  );
-
-  it(
-    'rule 8: a Basic value and a base64 of a client secret in src/auth and src/providers; legacyBasic passes',
-    () => {
-      const findings = findingsOf(
-        checkProviderShape({
-          typescript,
-          rules: [8],
-          root: RULE8_ROOT,
-          project: join(RULE8_ROOT, 'tsconfig.json'),
-          sites: null,
-        }),
-      );
-      expect(
-        findings.map((finding) => [finding.file, finding.rule]),
-      ).toStrictEqual([
-        ['src/auth/basicHeader.ts', 8],
-        ['src/providers/secretBase64.ts', 8],
-      ]);
-    },
-    RUN,
-  );
-
-  it(
-    'passes a provider that extends the base and relays a minted refusal',
-    () => {
-      expect(
-        reportLines(
+  for (const [caseIndex, caseRow] of FIXTURE_RULES.entries()) {
+    const [rule, fixture, count] = caseRow;
+    it(
+      caseTitle(
+        'rule %s: refuses %s, every finding its own rule',
+        caseRow,
+        caseIndex,
+      ),
+      () => {
+        const findings = findingsOf(
           checkProviderShape({
             ...SHAPE_CHECK,
-            files: [join(FIXTURES, 'clean.ts')],
+            files: [join(FIXTURES, fixture)],
           }),
-        ),
-      ).toEqual([]);
-    },
-    RUN,
-  );
+        );
+        assert.equal(findings.length, count);
+        for (const finding of findings) {
+          assert.deepEqual(
+            [finding.file, finding.rule],
+            [`tools/__fixtures__/${fixture}`, rule],
+          );
+        }
+      },
+    );
+  }
+
+  it('rule 2: a subclass of AuthProviderBase declaring establish is reported', () => {
+    const findings = findingsOf(
+      checkProviderShape({
+        ...SHAPE_CHECK,
+        files: [join(FIXTURES, 'rule2.ts')],
+      }),
+    );
+    assert.equal(
+      findings.some(
+        (finding) =>
+          finding.rule === 2 &&
+          finding.what.includes(
+            'a class reaching AuthProviderBase declares establish',
+          ),
+      ),
+      true,
+    );
+  });
+
+  it('rule 8: a Basic value and a base64 of a client secret in src/auth and src/providers; legacyBasic passes', () => {
+    const findings = findingsOf(
+      checkProviderShape({
+        typescript,
+        rules: [8],
+        root: RULE8_ROOT,
+        project: join(RULE8_ROOT, 'tsconfig.json'),
+        sites: null,
+      }),
+    );
+    assert.deepEqual(
+      findings.map((finding) => [finding.file, finding.rule]),
+      [
+        ['src/auth/basicHeader.ts', 8],
+        ['src/providers/secretBase64.ts', 8],
+      ],
+    );
+  });
+
+  it('passes a provider that extends the base and relays a minted refusal', () => {
+    assert.deepEqual(
+      reportLines(
+        checkProviderShape({
+          ...SHAPE_CHECK,
+          files: [join(FIXTURES, 'clean.ts')],
+        }),
+      ),
+      [],
+    );
+  });
 
   it("every fixture's rule is one the configuration runs, rule 8 included", () => {
     const broken = [...FIXTURE_RULES.map(([rule]) => rule), 8];
     for (const rule of broken) {
-      expect(SHAPE_CHECK.rules).toContain(rule);
+      contains(SHAPE_CHECK.rules, rule);
     }
   });
 
@@ -232,13 +224,15 @@ describe('the shape check', () => {
     ).scripts;
 
     it('test:shape runs this file', () => {
-      expect(scripts['test:shape']).toBe(
-        'npm test -- src/__tests__/shapeCheck.test.ts',
+      assert.equal(
+        scripts['test:shape'],
+        'npm run --silent test:build && node tools/run-tests.mjs .test-build/__tests__/shapeCheck.test.js',
       );
     });
 
     it('prepublishOnly builds, then runs test:shape', () => {
-      expect(scripts.prepublishOnly).toBe(
+      assert.equal(
+        scripts.prepublishOnly,
         'npm run build && npm run test:shape',
       );
     });
@@ -250,12 +244,13 @@ describe('the shape check', () => {
       );
       const build = workflow.indexOf('run: npm run build\n');
       const shape = workflow.indexOf('run: npm run test:shape\n');
-      expect(build).toBeGreaterThanOrEqual(0);
-      expect(shape).toBeGreaterThan(build);
+      assert.ok(build >= 0, `${build} >= ${0}`);
+      assert.ok(shape > build, `${shape} > ${build}`);
     });
 
     it('lint:check is Biome alone: it runs no checking script', () => {
-      expect(scripts['lint:check']).toBe(
+      assert.equal(
+        scripts['lint:check'],
         'biome check --error-on-warnings src tools/remove.mjs tools/run-tests.mjs tools/node-test-arguments.mjs tools/node-test-arguments.d.mts',
       );
     });
