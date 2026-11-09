@@ -7,8 +7,9 @@
  * formLogin.ts.
  */
 
+import assert from 'node:assert/strict';
+import { describe, it, mock } from 'node:test';
 import { inspect } from 'node:util';
-import { describe, expect, it, jest } from '@jest/globals';
 import type { IAuthorizationStrategy } from '@mcp-abap-adt/interfaces-auth';
 import { composeAuthorization } from '../../../authorization/compose';
 import { passcode } from '../../../authorization/protocol';
@@ -16,6 +17,7 @@ import { consumerHandoff } from '../../../authorization/transport';
 import { UaaPasscodeProvider } from '../../../providers/UaaPasscodeProvider';
 import { refreshThenLogin } from '../../../renewal';
 import { staticCodeStrategy } from '../../../strategies';
+import { notContains } from '../../helpers/expectations';
 import { FormBrowser } from './formLogin';
 
 const UAA_URL = process.env.UAA_URL?.replace(/\/+$/, '');
@@ -72,11 +74,11 @@ describeUaa('UaaPasscodeProvider against Cloud Foundry UAA', () => {
       }),
     }).getTokens();
 
-    expect(seen).toEqual([`${UAA_URL}/passcode`]);
+    assert.deepEqual(seen, [`${UAA_URL}/passcode`]);
     const token = claims(tokens.authorizationToken);
-    expect(token.user_name).toBe('tester');
-    expect(token.grant_type).toBe('password');
-    expect(tokens.refreshToken).toEqual(expect.any(String));
+    assert.equal(token.user_name, 'tester');
+    assert.equal(token.grant_type, 'password');
+    assert.equal(typeof tokens.refreshToken, 'string');
   });
 
   it('refreshes without asking the user for another code', async () => {
@@ -86,7 +88,7 @@ describeUaa('UaaPasscodeProvider against Cloud Foundry UAA', () => {
       authorization: handedOver(passcodeFrom),
     }).getTokens();
 
-    const authorize = jest.fn(async () => {
+    const authorize = mock.fn(async () => {
       throw new Error('the refresh must not ask for a passcode');
     });
     const refreshed = await new UaaPasscodeProvider({
@@ -97,9 +99,9 @@ describeUaa('UaaPasscodeProvider against Cloud Foundry UAA', () => {
       authorization: { authorize } as unknown as IAuthorizationStrategy<string>,
     }).getTokens();
 
-    expect(authorize).not.toHaveBeenCalled();
-    expect(refreshed.authorizationToken).not.toBe(first.authorizationToken);
-    expect(claims(refreshed.authorizationToken).user_name).toBe('tester');
+    assert.equal(authorize.mock.callCount(), 0);
+    assert.notEqual(refreshed.authorizationToken, first.authorizationToken);
+    assert.equal(claims(refreshed.authorizationToken).user_name, 'tester');
   });
 
   it('refuses a code that was already spent', async () => {
@@ -124,7 +126,7 @@ describeUaa('UaaPasscodeProvider against Cloud Foundry UAA', () => {
         (error: unknown) => error as Error,
       );
     // The operation's words and the status.
-    expect(thrown?.message).toBe('the passcode exchange failed (HTTP 401)');
-    expect(inspect(thrown, { depth: null })).not.toContain('Invalid passcode');
+    assert.equal(thrown?.message, 'the passcode exchange failed (HTTP 401)');
+    notContains(inspect(thrown, { depth: null }), 'Invalid passcode');
   });
 });

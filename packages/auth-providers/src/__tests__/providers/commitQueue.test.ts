@@ -8,7 +8,8 @@
  * scripted promises the test settles; the base class runs as shipped.
  */
 
-import { describe, expect, it, jest } from '@jest/globals';
+import assert from 'node:assert/strict';
+import { describe, it, mock } from 'node:test';
 import { readFailure } from '@mcp-abap-adt/auth-errors';
 import type {
   ICertificateMaterial,
@@ -31,6 +32,7 @@ import {
   otherCertificate,
   thumbprintOf,
 } from '../helpers/certificates';
+import { matchObject } from '../helpers/expectations';
 import { type Seen, seenOf } from '../helpers/persistence';
 import { ScriptedProvider, tokens } from '../helpers/scriptedProvider';
 
@@ -96,33 +98,33 @@ describe('the doomed-join window', () => {
     const doomed = rejectionOf(provider.getTokens({ signal: only.signal }));
     const first = await provider.logins.nth(1);
     only.abort();
-    expect(isAborted(await doomed)).toBe(true);
-    expect(first.attempt.signal.aborted).toBe(true);
+    assert.equal(isAborted(await doomed), true);
+    assert.equal(first.attempt.signal.aborted, true);
 
     // Arriving before the first login answers: a fresh attempt.
     const fresh = provider.getTokens();
     const second = await provider.logins.nth(2);
-    expect(second.attempt).not.toBe(first.attempt);
+    assert.notEqual(second.attempt, first.attempt);
     const T2 = jwt('second');
     second.result.resolve(tokens(T2, 'R2'));
-    await expect(fresh).resolves.toMatchObject({
+    matchObject(await fresh, {
       authorizationToken: T2,
       refreshToken: 'R2',
     });
 
     first.result.resolve(tokens(jwt('first'), 'R1'));
     await quiet();
-    expect(provider.held()).toEqual({
+    assert.deepEqual(provider.held(), {
       access: T2,
       refresh: 'R2',
       pinned: undefined,
     });
-    expect(seen).toEqual([[T2, 'R2', 'replace']]);
+    assert.deepEqual(seen, [[T2, 'R2', 'replace']]);
     // Still the second login's: served from the cache, nothing renewed.
-    await expect(provider.getTokens()).resolves.toMatchObject({
+    matchObject(await provider.getTokens(), {
       authorizationToken: T2,
     });
-    expect(provider.logins.items).toHaveLength(2);
+    assert.equal(provider.logins.items.length, 2);
   });
 
   it('the same for pin: a loader read outstanding when its waiters abort changes nothing', async () => {
@@ -148,20 +150,20 @@ describe('the doomed-join window', () => {
     const only = new AbortController();
     // The pin attempt starts synchronously: its loader is called at once.
     const doomed = rejectionOf(pin(only.signal));
-    expect(reads).toHaveLength(1);
+    assert.equal(reads.length, 1);
     only.abort();
-    expect(isAborted(await doomed)).toBe(true);
+    assert.equal(isAborted(await doomed), true);
 
     const fresh = pin();
-    expect(reads).toHaveLength(2);
+    assert.equal(reads.length, 2);
     reads[1]?.resolve(otherCertificate());
-    await expect(fresh).resolves.toMatchObject({
+    matchObject(await fresh, {
       thumbprint: thumbprintOf(otherCertificate()),
     });
 
     reads[0]?.resolve(certificate());
     await quiet();
-    expect(provider.held().pinned).toBe(thumbprintOf(otherCertificate()));
+    assert.equal(provider.held().pinned, thumbprintOf(otherCertificate()));
   });
 });
 
@@ -184,10 +186,10 @@ describe('the doomed-join window, alone', () => {
       ).pin(only.signal),
     );
     only.abort();
-    expect(isAborted(await doomed)).toBe(true);
+    assert.equal(isAborted(await doomed), true);
     read.resolve(certificate());
     await quiet();
-    expect(provider.held().pinned).toBeUndefined();
+    assert.equal(provider.held().pinned, undefined);
   });
 });
 
@@ -216,27 +218,36 @@ describe('the commit queue', () => {
     login1.result.resolve(tokens(T1, 'R1'));
     // The first commit has begun: it is in its report.
     await hooks.nth(1);
-    expect(hooks.items.map((h) => h.access)).toEqual([T1]);
+    assert.deepEqual(
+      hooks.items.map((h) => h.access),
+      [T1],
+    );
     first.abort();
-    expect(isAborted(await older)).toBe(true);
+    assert.equal(isAborted(await older), true);
 
     // The held token is T1 now; force another renewal: a login.
     provider.expire();
     const T2 = jwt('two');
     const newer = provider.refreshTokens();
     const refresh = await provider.refreshes.nth(1);
-    expect(refresh.refreshToken).toBe('R1');
+    assert.equal(refresh.refreshToken, 'R1');
     refresh.result.resolve(tokens(T2, 'R2'));
     // Its commit waits for the first hook: not called yet.
     await quiet();
-    expect(hooks.items.map((h) => h.access)).toEqual([T1]);
+    assert.deepEqual(
+      hooks.items.map((h) => h.access),
+      [T1],
+    );
     hooks.items[0]?.done.resolve();
     await hooks.nth(2);
-    expect(hooks.items.map((h) => h.access)).toEqual([T1, T2]);
+    assert.deepEqual(
+      hooks.items.map((h) => h.access),
+      [T1, T2],
+    );
     hooks.items[1]?.done.resolve();
-    await expect(newer).resolves.toMatchObject({ authorizationToken: T2 });
-    expect(most).toBe(1);
-    expect(provider.held().access).toBe(T2);
+    matchObject(await newer, { authorizationToken: T2 });
+    assert.equal(most, 1);
+    assert.equal(provider.held().access, T2);
   });
 
   it('an older-generation commit arriving after a newer one is discarded whole', async () => {
@@ -262,29 +273,30 @@ describe('the commit queue', () => {
     const cut = rejectionOf(provider.getTokens({ signal: only.signal }));
     const refresh = await provider.refreshes.nth(1);
     only.abort();
-    expect(isAborted(await cut)).toBe(true);
+    assert.equal(isAborted(await cut), true);
 
     // A newer renewal logs in (R0 is quarantined) and commits first.
     const newer = provider.getTokens();
     const login = await provider.logins.nth(1);
     const T2 = jwt('login');
     login.result.resolve(tokens(T2, 'R2'));
-    await expect(newer).resolves.toMatchObject({ authorizationToken: T2 });
+    matchObject(await newer, { authorizationToken: T2 });
 
     // The older refresh answers late: discarded, nothing applied, no report.
     refresh.result.resolve(tokens(jwt('late'), 'R1'));
     await quiet();
-    expect(provider.held()).toMatchObject({ access: T2, refresh: 'R2' });
-    expect(seen).toEqual([
+    matchObject(provider.held(), { access: T2, refresh: 'R2' });
+    assert.deepEqual(seen, [
       [T0, undefined, 'clear'],
       [T2, 'R2', 'replace'],
     ]);
     // Progress lines: one per applied commit, none for the discarded one.
-    expect(lines.filter((l) => l.includes('Login completed'))).toHaveLength(1);
-    expect(
-      lines.filter((l) => l.includes('Token refreshed successfully')),
-    ).toHaveLength(0);
-    expect(lines.filter((l) => l.includes('Tokens updated'))).toHaveLength(1);
+    assert.equal(lines.filter((l) => l.includes('Login completed')).length, 1);
+    assert.equal(
+      lines.filter((l) => l.includes('Token refreshed successfully')).length,
+      0,
+    );
+    assert.equal(lines.filter((l) => l.includes('Tokens updated')).length, 1);
   });
 
   it('an applied refresh writes its progress lines once, after the tokens and before the report', async () => {
@@ -317,7 +329,7 @@ describe('the commit queue', () => {
         l.includes('Tokens updated') ||
         l.includes('Token refreshed successfully'),
     );
-    expect(relevant).toEqual([
+    assert.deepEqual(relevant, [
       '[BaseTokenProvider] Tokens updated',
       '[BaseTokenProvider] Token refreshed successfully',
       'report',
@@ -327,7 +339,7 @@ describe('the commit queue', () => {
 
 describe('separate watermarks: the pin commit and the credential commit', () => {
   const pinningStrategy = () => {
-    const reads = jest.fn(async () => certificate());
+    const reads = mock.fn(async () => certificate());
     const strategy: IClientAuthentication = {
       authenticate: async () => ({}),
       tlsMaterial: reads,
@@ -349,21 +361,22 @@ describe('separate watermarks: the pin commit and the credential commit', () => 
     const elsewhere = boundTo(thumbprintOf(otherCertificate()), 'login');
     login.result.resolve(tokens(elsewhere, 'R1'));
     // Committed, and the renewal stops with the binding refusal.
-    expect(isRenewedBoundElsewhere(await renewed)).toBe(true);
-    expect(seen).toEqual([[elsewhere, 'R1', 'replace']]);
-    expect(reads).toHaveBeenCalledTimes(1);
-    expect(provider.held()).toEqual({
+    assert.equal(isRenewedBoundElsewhere(await renewed), true);
+    assert.deepEqual(seen, [[elsewhere, 'R1', 'replace']]);
+    assert.equal(reads.mock.callCount(), 1);
+    assert.deepEqual(provider.held(), {
       access: elsewhere,
       refresh: 'R1',
       pinned: thumbprintOf(certificate()),
     });
     // markIfElsewhere saw the pin: the token is remembered, not renewed
     // again — the strategy stops on its lastRenewal.
-    expect(
+    assert.equal(
       isRenewedBoundElsewhere(await rejectionOf(provider.getTokens())),
-    ).toBe(true);
-    expect(provider.logins.items).toHaveLength(1);
-    expect(provider.refreshes.items).toHaveLength(0);
+      true,
+    );
+    assert.equal(provider.logins.items.length, 1);
+    assert.equal(provider.refreshes.items.length, 0);
   });
 
   it('a refresh of a seeded token on an unpinned provider: the same', async () => {
@@ -378,21 +391,22 @@ describe('separate watermarks: the pin commit and the credential commit', () => 
     });
     const renewed = rejectionOf(provider.getTokens());
     const refresh = await provider.refreshes.nth(1);
-    expect(refresh.refreshToken).toBe('R0');
+    assert.equal(refresh.refreshToken, 'R0');
     const elsewhere = boundTo(thumbprintOf(otherCertificate()), 'refresh');
     refresh.result.resolve(tokens(elsewhere, 'R1'));
-    expect(isRenewedBoundElsewhere(await renewed)).toBe(true);
-    expect(seen).toEqual([[elsewhere, 'R1', 'replace']]);
-    expect(reads).toHaveBeenCalledTimes(1);
-    expect(provider.held()).toEqual({
+    assert.equal(isRenewedBoundElsewhere(await renewed), true);
+    assert.deepEqual(seen, [[elsewhere, 'R1', 'replace']]);
+    assert.equal(reads.mock.callCount(), 1);
+    assert.deepEqual(provider.held(), {
       access: elsewhere,
       refresh: 'R1',
       pinned: thumbprintOf(certificate()),
     });
-    expect(
+    assert.equal(
       isRenewedBoundElsewhere(await rejectionOf(provider.getTokens())),
-    ).toBe(true);
-    expect(provider.refreshes.items).toHaveLength(1);
+      true,
+    );
+    assert.equal(provider.refreshes.items.length, 1);
   });
 });
 
@@ -409,7 +423,7 @@ describe('what refreshStatePersistence writes', () => {
     const T1 = jwt('new');
     (await provider.refreshes.nth(1)).result.resolve(tokens(T1, 'R1'));
     await renewed;
-    expect(seen).toEqual([[T1, 'R1', 'replace']]);
+    assert.deepEqual(seen, [[T1, 'R1', 'replace']]);
   });
 
   it('a result with none and nothing cut: the stored one left (undefined)', async () => {
@@ -422,7 +436,7 @@ describe('what refreshStatePersistence writes', () => {
     const T1 = jwt('token-only');
     (await provider.logins.nth(1)).result.resolve(tokens(T1));
     await renewed;
-    expect(seen).toEqual([[T1, undefined, 'keep']]);
+    assert.deepEqual(seen, [[T1, undefined, 'keep']]);
   });
 
   it('the queued clearing step of a cut: one write of null with the held access token', async () => {
@@ -438,12 +452,12 @@ describe('what refreshStatePersistence writes', () => {
     const cut = rejectionOf(provider.getTokens({ signal: only.signal }));
     await provider.refreshes.nth(1);
     only.abort();
-    expect(isAborted(await cut)).toBe(true);
+    assert.equal(isAborted(await cut), true);
     await notified.nth(1);
     // Once, and nothing after it.
     await quiet();
-    expect(seen).toEqual([[T0, undefined, 'clear']]);
-    expect(provider.held().refresh).toBeUndefined();
+    assert.deepEqual(seen, [[T0, undefined, 'clear']]);
+    assert.equal(provider.held().refresh, undefined);
   });
 });
 
@@ -472,7 +486,7 @@ describe('a failed write stays pending', () => {
     const T1 = jwt('token-only');
     (await provider.logins.nth(1)).result.resolve(tokens(T1));
     await next;
-    expect(seen).toEqual([
+    assert.deepEqual(seen, [
       [T0, undefined, 'clear'],
       [T1, undefined, 'clear'],
     ]);
@@ -500,11 +514,11 @@ describe('a failed write stays pending', () => {
     const T2 = jwt('two');
     const second = provider.getTokens();
     const refresh = await provider.refreshes.nth(2);
-    expect(refresh.refreshToken).toBe('R1');
+    assert.equal(refresh.refreshToken, 'R1');
     // A refresh answering an access token only, no refresh token.
     refresh.result.resolve(tokens(T2));
     await second;
-    expect(seen).toEqual([
+    assert.deepEqual(seen, [
       [T1, 'R1', 'replace'],
       [T2, 'R1', 'replace'],
     ]);
@@ -539,7 +553,7 @@ describe('a failed write stays pending', () => {
     const refreshed = provider.getTokens();
     (await provider.refreshes.nth(2)).result.resolve(tokens(T2));
     await refreshed;
-    expect(seen).toEqual([
+    assert.deepEqual(seen, [
       [T0, undefined, 'clear'],
       [T1, 'R1', 'replace'],
       [T2, undefined, 'keep'],
@@ -566,7 +580,7 @@ describe('a failed write stays pending', () => {
     const T1 = jwt('one');
     (await provider.logins.nth(1)).result.resolve(tokens(T1, 'R1'));
     await firstCall.promise;
-    expect(seen).toEqual([[T1, 'R1', 'replace']]);
+    assert.deepEqual(seen, [[T1, 'R1', 'replace']]);
     first.abort();
     await older;
 
@@ -575,22 +589,22 @@ describe('a failed write stays pending', () => {
     provider.expire();
     const next = provider.getTokens();
     const refresh = await provider.refreshes.nth(1);
-    expect(refresh.refreshToken).toBe('R1');
+    assert.equal(refresh.refreshToken, 'R1');
     refresh.result.reject(new Error('invalid_grant'));
     await quiet();
     // The clearing step waits behind the held commit.
-    expect(seen).toEqual([[T1, 'R1', 'replace']]);
-    expect(provider.logins.items).toHaveLength(1);
+    assert.deepEqual(seen, [[T1, 'R1', 'replace']]);
+    assert.equal(provider.logins.items.length, 1);
     held.resolve();
     const login = await provider.logins.nth(2);
-    expect(seen).toEqual([
+    assert.deepEqual(seen, [
       [T1, 'R1', 'replace'],
       [T1, undefined, 'clear'],
     ]);
     const T2 = jwt('two');
     login.result.resolve(tokens(T2));
     await next;
-    expect(seen).toEqual([
+    assert.deepEqual(seen, [
       [T1, 'R1', 'replace'],
       [T1, undefined, 'clear'],
       [T2, undefined, 'clear'],
@@ -615,7 +629,7 @@ describe('an aborted renewal is never remembered (rule 8)', () => {
     const doomed = rejectionOf(provider.getTokens({ signal: only.signal }));
     const first = await provider.logins.nth(1);
     only.abort();
-    expect(isAborted(await doomed)).toBe(true);
+    assert.equal(isAborted(await doomed), true);
     first.result.reject(new Error('the login failed'));
     await quiet();
 
@@ -623,7 +637,7 @@ describe('an aborted renewal is never remembered (rule 8)', () => {
     const second = await provider.logins.nth(2);
     const fresh = boundTo(thumbprintOf(certificate()), 'fresh');
     second.result.resolve(tokens(fresh, 'R1'));
-    await expect(next).resolves.toMatchObject({ authorizationToken: fresh });
+    matchObject(await next, { authorizationToken: fresh });
   });
 
   it('the same renewal not aborted is remembered: getTokens answers its error without renewing', async () => {
@@ -646,8 +660,8 @@ describe('an aborted renewal is never remembered (rule 8)', () => {
       await rejectionOf(provider.getTokens()),
       'unfamiliar-error',
     );
-    expect(again).toBe(first);
-    expect(provider.logins.items).toHaveLength(1);
-    expect(provider.held().access).toBe(elsewhere);
+    assert.equal(again, first);
+    assert.equal(provider.logins.items.length, 1);
+    assert.equal(provider.held().access, elsewhere);
   });
 });

@@ -9,10 +9,14 @@
  * "every throw is an AuthProviderFailure"), and `request-failed` is built by
  * `sendTokenRequest` itself (`tokenRequestSite.test.ts`).
  */
+
+import assert from 'node:assert/strict';
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
-import { describe, expect, it } from '@jest/globals';
+import { describe, it } from 'node:test';
 import { classify } from '@mcp-abap-adt/auth-errors';
+import { notContains } from '../helpers/expectations';
+import { SRC } from '../helpers/packagePaths';
 
 const MARKER = 'SECRET-MARKER';
 
@@ -33,15 +37,16 @@ describe('A.1 — classify rows', () => {
       },
     );
     const error = classify(hostile, 'token-request', 'client_credentials');
-    expect(error.kind).toBe('unknown');
-    expect(error.facts).toEqual({
+    assert.equal(error.kind, 'unknown');
+    assert.deepEqual(error.facts, {
       operation: 'token-request',
       grant: 'client_credentials',
     });
-    expect(error.reason).toBe(
+    assert.equal(
+      error.reason,
       'client_credentials token request failed (unknown error)',
     );
-    expect(JSON.stringify(error)).not.toContain(MARKER);
+    notContains(JSON.stringify(error), MARKER);
   });
 
   it('a TLS failure code → tls, verbatim words and hint', () => {
@@ -52,16 +57,18 @@ describe('A.1 — classify rows', () => {
       'token-request',
       'authorization_code',
     );
-    expect(error.kind).toBe('tls');
-    expect(error.facts).toEqual({
+    assert.equal(error.kind, 'tls');
+    assert.deepEqual(error.facts, {
       operation: 'token-request',
       grant: 'authorization_code',
       code: 'ERR_SSL_TLSV1_ALERT_UNKNOWN_CA',
     });
-    expect(error.reason).toBe(
+    assert.equal(
+      error.reason,
       'authorization_code token request failed: the server refused the client certificate (ERR_SSL_TLSV1_ALERT_UNKNOWN_CA)',
     );
-    expect(error.hint).toBe(
+    assert.equal(
+      error.hint,
       "check that the server trusts the certificate's issuer and that the certificate is valid and not revoked",
     );
   });
@@ -73,13 +80,14 @@ describe('A.1 — classify rows', () => {
       }),
       'saml-token-exchange',
     );
-    expect(answered.kind).toBe('unknown');
-    expect(answered.facts).toEqual({
+    assert.equal(answered.kind, 'unknown');
+    assert.deepEqual(answered.facts, {
       operation: 'saml-token-exchange',
       status: 500,
       oauthError: 'server_error',
     });
-    expect(answered.reason).toBe(
+    assert.equal(
+      answered.reason,
       'the SAML token exchange failed (HTTP 500, server_error)',
     );
 
@@ -87,24 +95,25 @@ describe('A.1 — classify rows', () => {
       { message: MARKER, key: 'SECRET_KEY', code: 'ENOENT' },
       'loading-certificate',
     );
-    expect(unanswered.facts).toEqual({
+    assert.deepEqual(unanswered.facts, {
       operation: 'loading-certificate',
       code: 'ENOENT',
     });
-    expect(unanswered.reason).toBe(
+    assert.equal(
+      unanswered.reason,
       'loading the certificate failed (unknown error, ENOENT)',
     );
 
     const bare = classify(MARKER, 'persisting-tokens');
-    expect(bare.facts).toEqual({ operation: 'persisting-tokens' });
-    expect(bare.reason).toBe('persisting the tokens failed (unknown error)');
-    expect(JSON.stringify([answered, unanswered, bare])).not.toContain(MARKER);
+    assert.deepEqual(bare.facts, { operation: 'persisting-tokens' });
+    assert.equal(bare.reason, 'persisting the tokens failed (unknown error)');
+    notContains(JSON.stringify([answered, unanswered, bare]), MARKER);
   });
 });
 
 /** Every string literal this package passes as a `what`. */
 function whatLiterals(): string[] {
-  const root = join(__dirname, '..', '..');
+  const root = SRC;
   const files: string[] = [];
   const walk = (dir: string) => {
     for (const name of readdirSync(dir)) {
@@ -140,6 +149,6 @@ describe('A.8 — every what of this package is a closed operation', () => {
     // 'opening the browser' and 'the presenter' left with `logFields`.
     // 'the token request' left with `tokenEndpointError`.
     // 'onTokens' and 'the refresh' left with `logFields`.
-    expect(literals).toEqual([]);
+    assert.deepEqual(literals, []);
   });
 });

@@ -7,14 +7,8 @@
  * takes none.
  */
 
-import {
-  afterEach,
-  beforeEach,
-  describe,
-  expect,
-  it,
-  jest,
-} from '@jest/globals';
+import assert from 'node:assert/strict';
+import { afterEach, beforeEach, describe, it, mock } from 'node:test';
 import { readFailure } from '@mcp-abap-adt/auth-errors';
 import type {
   AuthorizationRequest,
@@ -32,6 +26,12 @@ import {
   staticCodeStrategy,
 } from '../../strategies';
 import { quiet } from '../helpers/attemptHarness';
+import {
+  anyOf,
+  caseTitle,
+  contains,
+  deepEqualWith,
+} from '../helpers/expectations';
 import { bindable, capturingLogger, send } from '../helpers/listenerHttp';
 import { getAvailablePort } from '../helpers/netHelpers';
 import { recordingBrowser } from '../helpers/recordingBrowser';
@@ -45,16 +45,13 @@ const factsOf = (error: unknown) =>
 let stderr: string[];
 beforeEach(() => {
   stderr = [];
-  jest.spyOn(process.stderr, 'write').mockImplementation((chunk: unknown) => {
+  mock.method(process.stderr, 'write', (chunk: unknown) => {
     stderr.push(String(chunk));
     return true;
   });
-  jest.spyOn(process.stdout, 'write').mockImplementation(() => {
-    throw new Error('nothing writes to stdout');
-  });
 });
 afterEach(() => {
-  jest.restoreAllMocks();
+  mock.restoreAll();
 });
 
 function recordingRequest(overrides: Partial<AuthorizationRequest> = {}): {
@@ -95,55 +92,66 @@ function thrownBy(run: () => unknown): unknown {
 }
 
 describe('the browser compositions: loopback, showUrl by default', () => {
-  it.each([
+  for (const [caseIndex, caseRow] of (
     [
-      'browserCallbackStrategy',
-      (port: number) => browserCallbackStrategy({ port }),
-      `/callback?code=C1&state=${STATE}`,
-      'C1',
-    ],
-    [
-      'oidcCallbackStrategy',
-      (port: number) => oidcCallbackStrategy({ port }),
-      `/callback?code=C2&state=${STATE}`,
-      { code: 'C2', state: STATE },
-    ],
-    [
-      'samlCallbackStrategy',
-      (port: number) => samlCallbackStrategy({ port }),
-      '/callback?SAMLResponse=PHNhbWw%2B',
-      'PHNhbWw+',
-    ],
-  ] as const)(
-    '%s binds loopback on its port, advertises localhost, shows the URL on stderr, accepts its protocol’s answer',
-    async (_name, make, path, payload) => {
-      const port = await getAvailablePort();
-      const strategy = make(port) as IAuthorizationStrategy<unknown>;
-      const { request, redirects } = recordingRequest();
-      const login = strategy.authorize(request);
-      await waitFor(() => send(port, '/nothing'));
-      await quiet();
-      expect(redirects).toEqual([`http://localhost:${port}/callback`]);
-      expect(stderr.join('')).toContain('https://idp.example/authorize');
-      // A redirect to localhost reaches ::1 too, when the machine has it.
-      expect((await send(port, path)).status).toBe(200);
-      await expect(login).resolves.toEqual({
-        payload,
-        redirectUri: `http://localhost:${port}/callback`,
-      });
-      expect(await bindable(port)).toBe(true);
-    },
-  );
+      [
+        'browserCallbackStrategy',
+        (port: number) => browserCallbackStrategy({ port }),
+        `/callback?code=C1&state=${STATE}`,
+        'C1',
+      ],
+      [
+        'oidcCallbackStrategy',
+        (port: number) => oidcCallbackStrategy({ port }),
+        `/callback?code=C2&state=${STATE}`,
+        { code: 'C2', state: STATE },
+      ],
+      [
+        'samlCallbackStrategy',
+        (port: number) => samlCallbackStrategy({ port }),
+        '/callback?SAMLResponse=PHNhbWw%2B',
+        'PHNhbWw+',
+      ],
+    ] as const
+  ).entries()) {
+    const [_name, make, path, payload] = caseRow;
+    it(
+      caseTitle(
+        '%s binds loopback on its port, advertises localhost, shows the URL on stderr, accepts its protocol’s answer',
+        caseRow,
+        caseIndex,
+      ),
+      async () => {
+        const port = await getAvailablePort();
+        const strategy = make(port) as IAuthorizationStrategy<unknown>;
+        const { request, redirects } = recordingRequest();
+        const login = strategy.authorize(request);
+        await waitFor(() => send(port, '/nothing'));
+        await quiet();
+        assert.deepEqual(redirects, [`http://localhost:${port}/callback`]);
+        contains(stderr.join(''), 'https://idp.example/authorize');
+        // A redirect to localhost reaches ::1 too, when the machine has it.
+        assert.equal((await send(port, path)).status, 200);
+        assert.deepEqual(await login, {
+          payload,
+          redirectUri: `http://localhost:${port}/callback`,
+        });
+        assert.equal(await bindable(port), true);
+      },
+    );
+  }
 
   it('browserCallbackStrategy refuses a callback without this login’s state (oauthCode)', async () => {
     const port = await getAvailablePort();
     const strategy = browserCallbackStrategy({ port });
     const login = strategy.authorize(recordingRequest().request);
-    expect(
+    assert.equal(
       (await waitFor(() => send(port, '/callback?code=EVIL'))).status,
-    ).toBe(400);
+      400,
+    );
     await strategy.dispose?.();
-    expect(factsOf(await login.catch((e: unknown) => e)).outcome).toBe(
+    assert.equal(
+      factsOf(await login.catch((e: unknown) => e)).outcome,
       'disposed',
     );
   });
@@ -157,7 +165,7 @@ describe('the browser compositions: loopback, showUrl by default', () => {
     const strategy = browserCallbackStrategy();
     const login = strategy.authorize(request);
     await waitFor(() => send(DEFAULT_CALLBACK_PORT, '/nothing'));
-    expect(redirects).toEqual([
+    assert.deepEqual(redirects, [
       `http://localhost:${DEFAULT_CALLBACK_PORT}/callback`,
     ]);
     await strategy.dispose?.();
@@ -171,45 +179,55 @@ describe('the browser compositions: loopback, showUrl by default', () => {
     const login = strategy.authorize(recordingRequest({ logger }).request);
     await waitFor(() => send(port, '/nothing'));
     await quiet();
-    expect(stderr.join('')).toContain('https://idp.example/authorize');
-    expect(lines.map((line) => line.message)).toContain(
+    contains(stderr.join(''), 'https://idp.example/authorize');
+    contains(
+      lines.map((line) => line.message),
       'the authorization URL was shown',
     );
     await strategy.dispose?.();
     await login.catch(() => undefined);
   });
 
-  it.each([
-    ['browserCallbackStrategy', browserCallbackStrategy],
-    ['oidcCallbackStrategy', oidcCallbackStrategy],
-    ['samlCallbackStrategy', samlCallbackStrategy],
-  ] as const)(
-    '%s: the browser given is used — exactly the URL, the login’s signal; nothing printed',
-    async (_name, make) => {
-      const port = await getAvailablePort();
-      const browser = recordingBrowser();
-      const urls: string[] = [];
-      const strategy = make({ port, browser });
-      const login = strategy.authorize(
-        recordingRequest({
-          buildAuthorizationUrl: async (redirectUri) => {
-            const url = `https://idp.example/authorize?redirect_uri=${redirectUri}&state=${STATE}`;
-            urls.push(url);
-            return url;
-          },
-        }).request,
-      );
-      await waitFor(() => send(port, '/nothing'));
-      await quiet();
-      expect(urls).toHaveLength(1);
-      expect(browser.calls).toEqual([
-        { url: urls[0], signal: expect.any(AbortSignal) },
-      ]);
-      expect(stderr.join('')).toBe('');
-      await strategy.dispose?.();
-      await login.catch(() => undefined);
-    },
-  );
+  for (const [caseIndex, caseRow] of (
+    [
+      ['browserCallbackStrategy', browserCallbackStrategy],
+      ['oidcCallbackStrategy', oidcCallbackStrategy],
+      ['samlCallbackStrategy', samlCallbackStrategy],
+    ] as const
+  ).entries()) {
+    const [_name, make] = caseRow;
+    it(
+      caseTitle(
+        '%s: the browser given is used — exactly the URL, the login’s signal; nothing printed',
+        caseRow,
+        caseIndex,
+      ),
+      async () => {
+        const port = await getAvailablePort();
+        const browser = recordingBrowser();
+        const urls: string[] = [];
+        const strategy = make({ port, browser });
+        const login = strategy.authorize(
+          recordingRequest({
+            buildAuthorizationUrl: async (redirectUri) => {
+              const url = `https://idp.example/authorize?redirect_uri=${redirectUri}&state=${STATE}`;
+              urls.push(url);
+              return url;
+            },
+          }).request,
+        );
+        await waitFor(() => send(port, '/nothing'));
+        await quiet();
+        assert.equal(urls.length, 1);
+        deepEqualWith(browser.calls, [
+          { url: urls[0], signal: anyOf(AbortSignal) },
+        ]);
+        assert.equal(stderr.join(''), '');
+        await strategy.dispose?.();
+        await login.catch(() => undefined);
+      },
+    );
+  }
 
   it('remoteHint replaces the channel’s route hint, built from the bound redirect', async () => {
     const port = await getAvailablePort();
@@ -223,10 +241,14 @@ describe('the browser compositions: loopback, showUrl by default', () => {
     await waitFor(() => send(port, '/nothing'));
     await quiet();
     const messages = lines.map((line) => line.message);
-    expect(messages).toContain(
+    contains(
+      messages,
       `go through the bastion to ${`http://localhost:${port}/callback`.length}`,
     );
-    expect(messages.some((m) => m.includes('ssh -L'))).toBe(false);
+    assert.equal(
+      messages.some((m) => m.includes('ssh -L')),
+      false,
+    );
     await strategy.dispose?.();
     await login.catch(() => undefined);
   });
@@ -238,26 +260,35 @@ describe('the browser compositions: loopback, showUrl by default', () => {
     const login = strategy.authorize(recordingRequest({ logger }).request);
     await waitFor(() => send(port, '/nothing'));
     await quiet();
-    expect(
+    assert.equal(
       lines.some((line) =>
         line.message.includes(`ssh -L ${port}:localhost:${port}`),
       ),
-    ).toBe(true);
+      true,
+    );
     await strategy.dispose?.();
     await login.catch(() => undefined);
   });
 
-  it.each([-1, 65536, 1.5])(
-    'a port of %p is callback-port-invalid at construction',
-    (port) => {
-      expect(
-        factsOf(thrownBy(() => browserCallbackStrategy({ port }))),
-      ).toEqual({
-        case: 'callback-port-invalid',
-        fields: ['port'],
-      });
-    },
-  );
+  for (const [caseIndex, caseRow] of [-1, 65536, 1.5].entries()) {
+    const port = caseRow;
+    it(
+      caseTitle(
+        'a port of %p is callback-port-invalid at construction',
+        caseRow,
+        caseIndex,
+      ),
+      () => {
+        assert.deepEqual(
+          factsOf(thrownBy(() => browserCallbackStrategy({ port }))),
+          {
+            case: 'callback-port-invalid',
+            fields: ['port'],
+          },
+        );
+      },
+    );
+  }
 });
 
 describe('the terminal compositions: showUrl, terminalPaste', () => {
@@ -273,13 +304,13 @@ describe('the terminal compositions: showUrl, terminalPaste', () => {
       },
     });
     const { request, redirects } = recordingRequest();
-    await expect(strategy.authorize(request)).resolves.toEqual({
+    assert.deepEqual(await strategy.authorize(request), {
       payload: 'C5',
       redirectUri: REGISTERED,
     });
-    expect(redirects).toEqual([REGISTERED]);
-    expect(prompts).toHaveLength(2);
-    expect(stderr.join('')).toContain('https://idp.example/authorize');
+    assert.deepEqual(redirects, [REGISTERED]);
+    assert.equal(prompts.length, 2);
+    contains(stderr.join(''), 'https://idp.example/authorize');
   });
 
   it('manualSamlResponseStrategy: the ACS, a pasted SAMLResponse (samlResponse)', async () => {
@@ -287,19 +318,20 @@ describe('the terminal compositions: showUrl, terminalPaste', () => {
       redirectUri: REGISTERED,
       read: async () => '  PHNhbWw+  ',
     });
-    await expect(
-      strategy.authorize(recordingRequest().request),
-    ).resolves.toEqual({ payload: 'PHNhbWw+', redirectUri: REGISTERED });
+    assert.deepEqual(await strategy.authorize(recordingRequest().request), {
+      payload: 'PHNhbWw+',
+      redirectUri: REGISTERED,
+    });
   });
 
   it('manualPasscodeStrategy: no redirect, a pasted passcode (passcode)', async () => {
     const strategy = manualPasscodeStrategy({ read: async () => ' 123456 ' });
     const { request, redirects } = recordingRequest();
-    await expect(strategy.authorize(request)).resolves.toEqual({
+    assert.deepEqual(await strategy.authorize(request), {
       payload: '123456',
       redirectUri: '',
     });
-    expect(redirects).toEqual(['']);
+    assert.deepEqual(redirects, ['']);
   });
 
   it('a second authorize while one reads is busy', async () => {
@@ -312,15 +344,16 @@ describe('the terminal compositions: showUrl, terminalPaste', () => {
     });
     const first = strategy.authorize(recordingRequest().request);
     await quiet();
-    expect(
+    assert.deepEqual(
       factsOf(
         await strategy
           .authorize(recordingRequest().request)
           .catch((e: unknown) => e),
       ),
-    ).toEqual({ outcome: 'busy' });
+      { outcome: 'busy' },
+    );
     await strategy.dispose?.();
-    expect(factsOf(await first.catch((e: unknown) => e))).toEqual({
+    assert.deepEqual(factsOf(await first.catch((e: unknown) => e)), {
       outcome: 'disposed',
       strategy: 'manual',
     });
@@ -337,13 +370,14 @@ describe('the consumer’s code: externalCodeStrategy, staticCodeStrategy', () =
         return 'C7';
       },
     });
-    await expect(
-      strategy.authorize(recordingRequest().request),
-    ).resolves.toEqual({ payload: 'C7', redirectUri: REGISTERED });
-    expect(seen).toEqual([
+    assert.deepEqual(await strategy.authorize(recordingRequest().request), {
+      payload: 'C7',
+      redirectUri: REGISTERED,
+    });
+    assert.deepEqual(seen, [
       `https://idp.example/authorize?redirect_uri=${encodeURIComponent(REGISTERED)}&state=${STATE}`,
     ]);
-    expect(stderr.join('')).toBe('');
+    assert.equal(stderr.join(''), '');
   });
 
   it('externalCodeStrategy: an empty code is no-input', async () => {
@@ -351,23 +385,25 @@ describe('the consumer’s code: externalCodeStrategy, staticCodeStrategy', () =
       redirectUri: REGISTERED,
       provide: async () => '',
     });
-    expect(
+    assert.deepEqual(
       factsOf(
         await strategy
           .authorize(recordingRequest().request)
           .catch((e: unknown) => e),
       ),
-    ).toEqual({ outcome: 'no-input' });
+      { outcome: 'no-input' },
+    );
   });
 
   it('staticCodeStrategy never calls the builder and keeps its default redirect', async () => {
     const { request, redirects } = recordingRequest();
-    await expect(
-      staticCodeStrategy({ payload: 'held' }).authorize(request),
-    ).resolves.toEqual({
-      payload: 'held',
-      redirectUri: `http://localhost:${DEFAULT_CALLBACK_PORT}/callback`,
-    });
-    expect(redirects).toEqual([]);
+    assert.deepEqual(
+      await staticCodeStrategy({ payload: 'held' }).authorize(request),
+      {
+        payload: 'held',
+        redirectUri: `http://localhost:${DEFAULT_CALLBACK_PORT}/callback`,
+      },
+    );
+    assert.deepEqual(redirects, []);
   });
 });

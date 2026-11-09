@@ -8,25 +8,24 @@
  * `request-failed`.
  */
 
-import { beforeEach, describe, expect, it, jest } from '@jest/globals';
+import '../helpers/axiosModuleMock';
+import assert from 'node:assert/strict';
+import { beforeEach, describe, it, mock } from 'node:test';
 import { isAuthProviderFailure, readFailure } from '@mcp-abap-adt/auth-errors';
 import type {
   IClientAuthentication,
   ITokenRequestDraft,
 } from '@mcp-abap-adt/interfaces-auth';
-import axios from 'axios';
 import { discoverOidc, mtlsAlias } from '../../auth/oidcDiscovery';
 import { OidcPasswordProvider } from '../../providers/OidcPasswordProvider';
 import { refreshThenLogin } from '../../renewal';
-
-jest.mock('axios', () => {
-  const mocked = jest.createMockFromModule<Record<string, unknown>>('axios');
-  mocked.AxiosError =
-    jest.requireActual<Record<string, unknown>>('axios').AxiosError;
-  return mocked;
-});
-type Mock = jest.Mock<(...args: any[]) => Promise<unknown>>;
-const mockedAxios = axios as unknown as Mock & { get: Mock; post: Mock };
+import { mockedAxios, resetAxiosMock } from '../helpers/axiosModuleMock';
+import {
+  cases,
+  caseTitle,
+  matchObject,
+  notContains,
+} from '../helpers/expectations';
 
 let issuers = 0;
 /** A fresh issuer: discovery is cached per URL. */
@@ -48,10 +47,10 @@ const FULL = {
 };
 
 const answering = (data: unknown) =>
-  mockedAxios.get.mockImplementation(async () => ({ status: 200, data }));
+  mockedAxios.get.mock.mockImplementation(async () => ({ status: 200, data }));
 
 beforeEach(() => {
-  jest.resetAllMocks();
+  resetAxiosMock();
 });
 
 async function failureOf(p: Promise<unknown>): Promise<unknown> {
@@ -72,7 +71,7 @@ describe('a successful discovery', () => {
   it('the snapshot holds the three endpoints and the two aliases, nothing else', async () => {
     answering(FULL);
     const snapshot = await discoverOidc(freshIssuer());
-    expect(snapshot).toEqual({
+    assert.deepEqual(snapshot, {
       authorization_endpoint: 'https://idp.example/auth',
       token_endpoint: 'https://idp.example/token',
       device_authorization_endpoint: 'https://idp.example/device',
@@ -81,7 +80,7 @@ describe('a successful discovery', () => {
         device_authorization_endpoint: 'https://mtls.idp.example/device',
       },
     });
-    expect(snapshot.mtls_endpoint_aliases).not.toBe(FULL.mtls_endpoint_aliases);
+    assert.notEqual(snapshot.mtls_endpoint_aliases, FULL.mtls_endpoint_aliases);
   });
 
   it('the cache holds the snapshot: no field outside the list, one request', async () => {
@@ -89,17 +88,18 @@ describe('a successful discovery', () => {
     const issuer = freshIssuer();
     const first = await discoverOidc(issuer);
     const second = await discoverOidc(issuer);
-    expect(second).toBe(first);
-    expect(mockedAxios.get).toHaveBeenCalledTimes(1);
+    assert.equal(second, first);
+    assert.equal(mockedAxios.get.mock.callCount(), 1);
     for (const field of [
       'issuer',
       'jwks_uri',
       'end_session_endpoint',
       'extra_field',
     ]) {
-      expect(field in second).toBe(false);
+      assert.equal(field in second, false);
     }
-    expect('revocation_endpoint' in (second.mtls_endpoint_aliases ?? {})).toBe(
+    assert.equal(
+      'revocation_endpoint' in (second.mtls_endpoint_aliases ?? {}),
       false,
     );
   });
@@ -117,7 +117,7 @@ describe('a successful discovery', () => {
         return { parameters: { client_id: draft.clientId } };
       },
     };
-    mockedAxios.mockImplementation(async () => ({
+    mockedAxios.mock.mockImplementation(async () => ({
       status: 200,
       data: { access_token: 'at', expires_in: 60 },
     }));
@@ -130,7 +130,7 @@ describe('a successful discovery', () => {
       clientAuthentication: strategy,
     });
     await provider.getTokens();
-    expect(drafts[0]).toMatchObject({
+    matchObject(drafts[0], {
       endpoint: `${issuer}/token`,
       mtlsEndpoint: `${issuer}/mtls/token`,
     });
@@ -138,22 +138,23 @@ describe('a successful discovery', () => {
 
   it('a marker string in a kept field is that field’s value (public metadata)', async () => {
     answering({ token_endpoint: 'MARKER-token-endpoint' });
-    expect((await discoverOidc(freshIssuer())).token_endpoint).toBe(
+    assert.equal(
+      (await discoverOidc(freshIssuer())).token_endpoint,
       'MARKER-token-endpoint',
     );
   });
 
   it('a toJSON on the document is never invoked', async () => {
-    const toJSON = jest.fn(() => ({ token_endpoint: 'https://forged' }));
+    const toJSON = mock.fn(() => ({ token_endpoint: 'https://forged' }));
     answering({ token_endpoint: 'https://idp.example/token', toJSON });
     const snapshot = await discoverOidc(freshIssuer());
-    expect(toJSON).not.toHaveBeenCalled();
-    expect(snapshot).toEqual({ token_endpoint: 'https://idp.example/token' });
+    assert.equal(toJSON.mock.callCount(), 0);
+    assert.deepEqual(snapshot, { token_endpoint: 'https://idp.example/token' });
   });
 });
 
 describe('mTLS aliases', () => {
-  it.each<[string, unknown]>([
+  for (const [caseIndex, caseRow] of cases([
     ['a non-string alias', { token_endpoint: 42 }],
     ['an empty alias', { token_endpoint: '' }],
     ['aliases that are not an object', 'https://mtls.idp.example/token'],
@@ -166,23 +167,33 @@ describe('mTLS aliases', () => {
         },
       },
     ],
-  ])('%s: ignored, discovery succeeds', async (_name, aliases) => {
-    answering({
-      token_endpoint: 'https://idp.example/token',
-      mtls_endpoint_aliases: aliases,
-    });
-    const snapshot = await discoverOidc(freshIssuer());
-    expect(snapshot).toEqual({ token_endpoint: 'https://idp.example/token' });
-    expect(mtlsAlias(snapshot, 'token_endpoint')).toBeUndefined();
-  });
+  ]).entries()) {
+    const [_name, aliases] = caseRow;
+    it(
+      caseTitle('%s: ignored, discovery succeeds', caseRow, caseIndex),
+      async () => {
+        answering({
+          token_endpoint: 'https://idp.example/token',
+          mtls_endpoint_aliases: aliases,
+        });
+        const snapshot = await discoverOidc(freshIssuer());
+        assert.deepEqual(snapshot, {
+          token_endpoint: 'https://idp.example/token',
+        });
+        assert.equal(mtlsAlias(snapshot, 'token_endpoint'), undefined);
+      },
+    );
+  }
 
   it('a token and a device alias are each read', async () => {
     answering(FULL);
     const snapshot = await discoverOidc(freshIssuer());
-    expect(mtlsAlias(snapshot, 'token_endpoint')).toBe(
+    assert.equal(
+      mtlsAlias(snapshot, 'token_endpoint'),
       'https://mtls.idp.example/token',
     );
-    expect(mtlsAlias(snapshot, 'device_authorization_endpoint')).toBe(
+    assert.equal(
+      mtlsAlias(snapshot, 'device_authorization_endpoint'),
       'https://mtls.idp.example/device',
     );
   });
@@ -201,34 +212,40 @@ describe('field-only semantics on hostile documents', () => {
       },
     );
 
-  it.each([
+  for (const [caseIndex, caseRow] of cases([
     ['authorization_endpoint'],
     ['device_authorization_endpoint'],
     ['mtls_endpoint_aliases'],
-  ])('a throwing %s is ignored', async (field) => {
-    answering(throwingGetter(field));
-    expect(await discoverOidc(freshIssuer())).toEqual({
-      token_endpoint: 'https://idp.example/token',
+  ]).entries()) {
+    const [field] = caseRow;
+    it(caseTitle('a throwing %s is ignored', caseRow, caseIndex), async () => {
+      answering(throwingGetter(field));
+      assert.deepEqual(await discoverOidc(freshIssuer()), {
+        token_endpoint: 'https://idp.example/token',
+      });
     });
-  });
+  }
 
-  it.each<[string, unknown]>([
+  for (const [caseIndex, caseRow] of cases([
     ['an invalid authorization_endpoint', { authorization_endpoint: 7 }],
     [
       'an empty device_authorization_endpoint',
       { device_authorization_endpoint: '' },
     ],
-  ])('%s is ignored', async (_name, extra) => {
-    answering({
-      token_endpoint: 'https://idp.example/token',
-      ...(extra as object),
+  ]).entries()) {
+    const [_name, extra] = caseRow;
+    it(caseTitle('%s is ignored', caseRow, caseIndex), async () => {
+      answering({
+        token_endpoint: 'https://idp.example/token',
+        ...(extra as object),
+      });
+      assert.deepEqual(await discoverOidc(freshIssuer()), {
+        token_endpoint: 'https://idp.example/token',
+      });
     });
-    expect(await discoverOidc(freshIssuer())).toEqual({
-      token_endpoint: 'https://idp.example/token',
-    });
-  });
+  }
 
-  it.each<[string, () => unknown]>([
+  for (const [caseIndex, caseRow] of cases([
     ['no token_endpoint', () => ({ authorization_endpoint: 'https://a' })],
     ['an empty token_endpoint', () => ({ token_endpoint: '' })],
     ['a non-string token_endpoint', () => ({ token_endpoint: 1 })],
@@ -257,38 +274,45 @@ describe('field-only semantics on hostile documents', () => {
     ],
     ['a document that is not an object', () => 'MARKER'],
     ['no document', () => undefined],
-  ])(
-    '%s: request-failed incomplete-response, nothing cached',
-    async (_name, document) => {
-      answering(document());
-      const issuer = freshIssuer();
-      const thrown = await failureOf(discoverOidc(issuer));
-      expect(isAuthProviderFailure(thrown)).toBe(true);
-      const failure = readFailure(thrown, 'unfamiliar-error');
-      expect(failure.kind).toBe('request-failed');
-      expect(failure.facts).toEqual(INCOMPLETE);
-      expect(JSON.stringify(thrown)).not.toContain('MARKER');
-      // Not cached: the next call asks again.
-      answering(FULL);
-      await discoverOidc(issuer);
-      expect(mockedAxios.get).toHaveBeenCalledTimes(2);
-    },
-  );
+  ]).entries()) {
+    const [_name, document] = caseRow;
+    it(
+      caseTitle(
+        '%s: request-failed incomplete-response, nothing cached',
+        caseRow,
+        caseIndex,
+      ),
+      async () => {
+        answering(document());
+        const issuer = freshIssuer();
+        const thrown = await failureOf(discoverOidc(issuer));
+        assert.equal(isAuthProviderFailure(thrown), true);
+        const failure = readFailure(thrown, 'unfamiliar-error');
+        assert.equal(failure.kind, 'request-failed');
+        assert.deepEqual(failure.facts, INCOMPLETE);
+        notContains(JSON.stringify(thrown), 'MARKER');
+        // Not cached: the next call asks again.
+        answering(FULL);
+        await discoverOidc(issuer);
+        assert.equal(mockedAxios.get.mock.callCount(), 2);
+      },
+    );
+  }
 
   it('a response object whose data getter throws: incomplete-response', async () => {
-    mockedAxios.get.mockImplementation(async () => ({
+    mockedAxios.get.mock.mockImplementation(async () => ({
       status: 200,
       get data(): unknown {
         throw new Error('MARKER');
       },
     }));
     const thrown = await failureOf(discoverOidc(freshIssuer()));
-    expect(readFailure(thrown, 'unfamiliar-error').facts).toEqual(INCOMPLETE);
+    assert.deepEqual(readFailure(thrown, 'unfamiliar-error').facts, INCOMPLETE);
   });
 });
 
 describe('a failed discovery request', () => {
-  it.each<[string, unknown, Record<string, unknown>]>([
+  for (const [caseIndex, caseRow] of cases([
     [
       'a 404',
       {
@@ -324,21 +348,31 @@ describe('a failed discovery request', () => {
         },
       },
     ],
-  ])(
-    '%s: classified, nothing of it kept, not cached',
-    async (_name, rejection, expected) => {
-      mockedAxios.get.mockImplementation(async () => {
-        throw rejection;
-      });
-      const issuer = freshIssuer();
-      const thrown = await failureOf(discoverOidc(issuer));
-      const failure = readFailure(thrown, 'unfamiliar-error');
-      expect({ kind: failure.kind, facts: failure.facts }).toEqual(expected);
-      expect(JSON.stringify(thrown)).not.toContain('MARKER');
-      expect((thrown as { cause?: unknown }).cause).toBeUndefined();
-      answering(FULL);
-      await discoverOidc(issuer);
-      expect(mockedAxios.get).toHaveBeenCalledTimes(2);
-    },
-  );
+  ]).entries()) {
+    const [_name, rejection, expected] = caseRow;
+    it(
+      caseTitle(
+        '%s: classified, nothing of it kept, not cached',
+        caseRow,
+        caseIndex,
+      ),
+      async () => {
+        mockedAxios.get.mock.mockImplementation(async () => {
+          throw rejection;
+        });
+        const issuer = freshIssuer();
+        const thrown = await failureOf(discoverOidc(issuer));
+        const failure = readFailure(thrown, 'unfamiliar-error');
+        assert.deepEqual(
+          { kind: failure.kind, facts: failure.facts },
+          expected,
+        );
+        notContains(JSON.stringify(thrown), 'MARKER');
+        assert.equal((thrown as { cause?: unknown }).cause, undefined);
+        answering(FULL);
+        await discoverOidc(issuer);
+        assert.equal(mockedAxios.get.mock.callCount(), 2);
+      },
+    );
+  }
 });

@@ -2,26 +2,27 @@
  * Tests for browserAuth token retrieval
  */
 
-import { jest } from '@jest/globals';
+import '../helpers/axiosModuleMock';
+import assert from 'node:assert/strict';
+import { afterEach, beforeEach, describe, it, mock } from 'node:test';
 import type { IAuthorizationConfig } from '@mcp-abap-adt/interfaces-auth-sap';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
-import axios from 'axios';
 import {
   exchangeCodeForToken,
   extractCode,
   getJwtAuthorizationUrl,
 } from '../../auth/browserAuth';
+import { clearAxiosMockCalls, mockedAxios } from '../helpers/axiosModuleMock';
+import {
+  calledWith,
+  contains,
+  objectContaining,
+  stringContaining,
+  thrown,
+} from '../helpers/expectations';
 import { createTestLogger } from '../helpers/testLogger';
 
 // Automocked, but with axios's own error class: the sites throw it.
-jest.mock('axios', () => {
-  const mocked = jest.createMockFromModule<Record<string, unknown>>('axios');
-  mocked.AxiosError =
-    jest.requireActual<Record<string, unknown>>('axios').AxiosError;
-  return mocked;
-});
-
-const mockedAxios = axios as jest.Mocked<typeof axios>;
 
 describe('browserAuth token exchange', () => {
   const originalEnv = process.env;
@@ -32,7 +33,7 @@ describe('browserAuth token exchange', () => {
   };
 
   beforeEach(() => {
-    jest.clearAllMocks();
+    clearAxiosMockCalls();
   });
 
   afterEach(() => {
@@ -46,10 +47,10 @@ describe('browserAuth token exchange', () => {
         refresh_token: 'test-refresh-token-456',
       };
 
-      mockedAxios.mockResolvedValue({
+      mockedAxios.mock.mockImplementation(async () => ({
         status: 200,
         data: mockTokens,
-      });
+      }));
 
       const logger: ILogger = createTestLogger('AUTH');
       const result = await exchangeCodeForToken(
@@ -59,15 +60,16 @@ describe('browserAuth token exchange', () => {
         logger,
       );
 
-      expect(result.accessToken).toBe(mockTokens.access_token);
-      expect(result.refreshToken).toBe(mockTokens.refresh_token);
-      expect(mockedAxios).toHaveBeenCalledWith(
-        expect.objectContaining({
+      assert.equal(result.accessToken, mockTokens.access_token);
+      assert.equal(result.refreshToken, mockTokens.refresh_token);
+      calledWith(
+        mockedAxios,
+        objectContaining({
           method: 'post',
           url: `${authConfig.uaaUrl}/oauth/token`,
-          headers: expect.objectContaining({
+          headers: objectContaining({
             'Content-Type': 'application/x-www-form-urlencoded',
-            Authorization: expect.stringContaining('Basic'),
+            Authorization: stringContaining('Basic'),
           }),
         }),
       );
@@ -78,10 +80,10 @@ describe('browserAuth token exchange', () => {
         access_token: 'test-access-token-only',
       };
 
-      mockedAxios.mockResolvedValue({
+      mockedAxios.mock.mockImplementation(async () => ({
         status: 200,
         data: mockTokens,
-      });
+      }));
 
       const logger: ILogger = createTestLogger('TOKEN-ONLY');
       const result = await exchangeCodeForToken(
@@ -91,38 +93,38 @@ describe('browserAuth token exchange', () => {
         logger,
       );
 
-      expect(result.accessToken).toBe(mockTokens.access_token);
-      expect(result.refreshToken).toBeUndefined();
+      assert.equal(result.accessToken, mockTokens.access_token);
+      assert.equal(result.refreshToken, undefined);
     });
 
     it('should throw error when token exchange fails', async () => {
-      mockedAxios.mockResolvedValue({
+      mockedAxios.mock.mockImplementation(async () => ({
         status: 200,
         data: { error: 'invalid_grant' },
-      });
+      }));
 
       // Mock logger without console output for error test
+      const error = mock.fn<ILogger['error']>(); // Spy but don't output to console
       const logger: ILogger = {
-        info: jest.fn(),
-        debug: jest.fn(),
-        warn: jest.fn(),
-        error: jest.fn(), // Spy but don't output to console
+        info: mock.fn(),
+        debug: mock.fn(),
+        warn: mock.fn(),
+        error,
       };
 
-      await expect(
+      await assert.rejects(
         exchangeCodeForToken(
           authConfig,
           'invalid-code',
           'http://localhost:3103/callback',
           logger,
         ),
-      ).rejects.toThrow(
-        // `request-failed` `no-access-token` of the code exchange.
-        'the code exchange returned no access_token',
+        thrown('the code exchange returned no access_token'),
       );
 
       // Verify error was logged (but not to console)
-      expect(logger.error).toHaveBeenCalledWith(
+      calledWith(
+        error,
         'Token exchange failed: status 200, error: "invalid_grant"',
       );
     });
@@ -133,10 +135,10 @@ describe('browserAuth token exchange', () => {
         refresh_token: 'test-refresh',
       };
 
-      mockedAxios.mockResolvedValue({
+      mockedAxios.mock.mockImplementation(async () => ({
         status: 200,
         data: mockTokens,
-      });
+      }));
 
       await exchangeCodeForToken(
         authConfig,
@@ -145,48 +147,52 @@ describe('browserAuth token exchange', () => {
         undefined,
       );
 
-      const axiosCall = mockedAxios.mock.calls[0]?.[0] as any;
+      const axiosCall = mockedAxios.mock.calls.map(
+        (call) => call.arguments,
+      )[0]?.[0] as any;
       const expectedAuth = Buffer.from(
         `${authConfig.uaaClientId}:${authConfig.uaaClientSecret}`,
       ).toString('base64');
 
-      expect(axiosCall.headers.Authorization).toBe(`Basic ${expectedAuth}`);
+      assert.equal(axiosCall.headers.Authorization, `Basic ${expectedAuth}`);
     });
   });
 });
 
 describe('extractCode', () => {
   it('returns a bare code as-is', () => {
-    expect(extractCode('abc123')).toBe('abc123');
+    assert.equal(extractCode('abc123'), 'abc123');
   });
 
   it('parses `code=XYZ`', () => {
-    expect(extractCode('code=abc123')).toBe('abc123');
+    assert.equal(extractCode('code=abc123'), 'abc123');
   });
 
   it('parses a code from a full redirected URL', () => {
-    expect(
+    assert.equal(
       extractCode('http://localhost:7779/callback?code=abc123&state=s'),
-    ).toBe('abc123');
+      'abc123',
+    );
   });
 
   it('parses a code from a remote-host redirected URL', () => {
-    expect(
+    assert.equal(
       extractCode('http://10.0.0.5:7779/callback?state=s&code=abc%2D123'),
-    ).toBe('abc-123');
+      'abc-123',
+    );
   });
 
   it('trims surrounding whitespace', () => {
-    expect(extractCode('   abc123  ')).toBe('abc123');
+    assert.equal(extractCode('   abc123  '), 'abc123');
   });
 
   it('returns null for empty / whitespace-only input', () => {
-    expect(extractCode('')).toBeNull();
-    expect(extractCode('   ')).toBeNull();
+    assert.equal(extractCode(''), null);
+    assert.equal(extractCode('   '), null);
   });
 
   it('returns null when the input is clearly not a single code', () => {
-    expect(extractCode('hello world this is not a code')).toBeNull();
+    assert.equal(extractCode('hello world this is not a code'), null);
   });
 });
 
@@ -200,7 +206,8 @@ describe('redirect URI plumbing', () => {
       },
       'http://localhost:54321/callback',
     );
-    expect(url).toContain(
+    contains(
+      url,
       `redirect_uri=${encodeURIComponent('http://localhost:54321/callback')}`,
     );
   });

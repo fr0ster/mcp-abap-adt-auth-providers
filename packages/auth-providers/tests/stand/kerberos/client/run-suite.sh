@@ -33,6 +33,8 @@ npm run build
 
 # The suite's own ticket cache, in a temporary directory: the suite fills it
 # with kinit; a case needing another Kerberos environment runs in a child
-# process given that environment.
+# process given that environment. test:file compiles the tests into
+# .test-build/ here, from the exported files, and runs the stand directory
+# alone.
 KRB5CCNAME="FILE:$(mktemp -d)/alice" STAND_KERBEROS=1 \
-  npm test -- src/__tests__/stand
+  npm run test:file -- .test-build/__tests__/stand

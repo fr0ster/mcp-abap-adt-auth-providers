@@ -10,9 +10,10 @@
  * holding the same error.
  */
 
+import assert from 'node:assert/strict';
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { beforeEach, describe, expect, it, jest } from '@jest/globals';
+import { beforeEach, describe, it, mock } from 'node:test';
 import {
   isAuthProviderFailure,
   isMinted,
@@ -24,7 +25,6 @@ import type {
   IAuthProviderError,
 } from '@mcp-abap-adt/interfaces-auth';
 import { getJwtAuthorizationUrl } from '../../auth/browserAuth';
-import { discoverOidc } from '../../auth/oidcDiscovery';
 import { exchangeSamlAssertion } from '../../auth/saml2TokenExchange';
 import { loopback } from '../../authorization/transport';
 import { noClientAuthentication } from '../../clientAuthentication/noClientAuthentication';
@@ -49,22 +49,30 @@ import { staticCodeStrategy } from '../../strategies/codeStrategies';
 import { createSignedResponseValidator } from '../../validation/assertionValidator';
 import { createInMemoryReplayStore } from '../../validation/inMemoryReplayStore';
 import { toPem } from '../../validation/signedNode';
+import {
+  cases,
+  caseTitle,
+  matchObject,
+  notContains,
+} from '../helpers/expectations';
 import { getAvailablePort } from '../helpers/netHelpers';
+import { CERTIFICATES } from '../helpers/packagePaths';
 
-jest.mock('../../auth/oidcDiscovery', () => ({
-  discoverOidc: jest.fn(),
-  mtlsAlias: (
-    jest.requireActual('../../auth/oidcDiscovery') as { mtlsAlias: unknown }
-  ).mtlsAlias,
-}));
-const mockedDiscovery = discoverOidc as unknown as jest.Mock<
-  (...args: unknown[]) => Promise<Record<string, string>>
->;
+import oidcDiscovery = require('../../auth/oidcDiscovery');
 
-const CERT = readFileSync(
-  join(__dirname, '..', 'fixtures', 'certificates', 'client.crt'),
-  'utf8',
+/**
+ * discoverOidc replaced on its module object for each test (what was a
+ * jest.mock of the module, its mtlsAlias kept real): the providers read it
+ * off the module at each call. It answers `undefined` unless a test says
+ * otherwise, as the automock did.
+ */
+let mockedDiscovery = mock.method(
+  oidcDiscovery,
+  'discoverOidc',
+  async () => undefined,
 );
+
+const CERT = readFileSync(join(CERTIFICATES, 'client.crt'), 'utf8');
 const CHECK = 'check the provider configuration';
 const MARKER = 'CONFIGURED-VALUE-MARKER';
 
@@ -95,31 +103,31 @@ interface Row {
  * diagnostic or of the configured marker in the words.
  */
 function expectRow(thrown: unknown, row: Row): IAuthProviderError {
-  expect(isAuthProviderFailure(thrown)).toBe(true);
+  assert.equal(isAuthProviderFailure(thrown), true);
   const error = readFailure(thrown, 'unfamiliar-error');
-  expect(isMinted(error)).toBe(true);
-  expect(error.kind).toBe('configuration');
-  expect(error.variant).toBe(row.case);
-  expect(error.facts).toEqual({
+  assert.equal(isMinted(error), true);
+  assert.equal(error.kind, 'configuration');
+  assert.equal(error.variant, row.case);
+  assert.deepEqual(error.facts, {
     case: row.case,
     fields: row.fields,
     ...(row.allowed === undefined ? {} : { allowed: row.allowed }),
   });
-  expect(error.reason).toBe(row.reason);
-  expect(error.hint).toBe(row.hint === null ? undefined : (row.hint ?? CHECK));
+  assert.equal(error.reason, row.reason);
+  assert.equal(error.hint, row.hint === null ? undefined : (row.hint ?? CHECK));
   if (row.diagnostics === undefined) {
-    expect(error.diagnostics).toBeUndefined();
+    assert.equal(error.diagnostics, undefined);
   } else {
-    expect(error.diagnostics).toEqual(row.diagnostics);
+    assert.deepEqual(error.diagnostics, row.diagnostics);
     for (const value of Object.values(row.diagnostics)) {
-      expect(error.reason).not.toContain(value);
-      expect(error.hint ?? '').not.toContain(value);
+      notContains(error.reason, value);
+      notContains(error.hint ?? '', value);
     }
   }
   const words = `${error.reason} ${error.hint ?? ''}`;
-  expect(words).not.toContain(MARKER);
+  notContains(words, MARKER);
   // The thrown failure's own text is the words, never a configured value.
-  expect(String((thrown as Error).message)).not.toContain(MARKER);
+  notContains(String((thrown as Error).message), MARKER);
   return error;
 }
 
@@ -167,7 +175,12 @@ function samlConfig(
 }
 
 beforeEach(() => {
-  mockedDiscovery.mockReset();
+  mockedDiscovery.mock.restore();
+  mockedDiscovery = mock.method(
+    oidcDiscovery,
+    'discoverOidc',
+    async () => undefined,
+  );
 });
 
 describe('required fields missing (ClientCredentials, AuthorizationCode)', () => {
@@ -291,13 +304,14 @@ describe('SAML configuration', () => {
 
   // Trailing slashes dropped in plain code, linear on a long run.
   it('resolveTokenUrl drops trailing slashes of uaaUrl, linearly', () => {
-    expect(resolveTokenUrl({ uaaUrl: 'https://uaa.example///' })).toBe(
+    assert.equal(
+      resolveTokenUrl({ uaaUrl: 'https://uaa.example///' }),
       'https://uaa.example/oauth/token',
     );
     const long = `https://uaa.example${'/'.repeat(100_000)}x`;
     const started = Date.now();
-    expect(resolveTokenUrl({ uaaUrl: long })).toBe(`${long}/oauth/token`);
-    expect(Date.now() - started).toBeLessThan(500);
+    assert.equal(resolveTokenUrl({ uaaUrl: long }), `${long}/oauth/token`);
+    assert.ok(Date.now() - started < 500, `${Date.now() - started} < ${500}`);
   });
 
   it('idpInitiated without authorizationUrl, and a strategy asking for a URL', async () => {
@@ -360,7 +374,7 @@ describe('SAML configuration', () => {
       ),
     );
     const error = expectRow(thrown, E8);
-    expect(JSON.stringify(error)).not.toContain(MARKER);
+    notContains(JSON.stringify(error), MARKER);
   });
 
   it('idpInitiated, and a request ID declared (a direct caller)', async () => {
@@ -425,20 +439,23 @@ describe('redirect mismatch', () => {
     diagnostics: { configuredUri: DECLARED, strategyUri: USED },
   } as const;
 
-  it.each([
+  for (const [caseIndex, caseRow] of cases([
     ['inside the builder', () => asking(USED, 'code')],
     ['after the strategy returned', () => holding(USED, 'code')],
-  ])('%s, through getTokens()', async (_name, strategy) => {
-    const provider = new AuthorizationCodeProvider({
-      renewal: refreshThenLogin(),
-      uaaUrl: 'http://127.0.0.1:9',
-      clientId: 'client',
-      clientSecret: 'secret',
-      authorizationUrl: PREBUILT,
-      authorization: strategy(),
+  ]).entries()) {
+    const [_name, strategy] = caseRow;
+    it(caseTitle('%s, through getTokens()', caseRow, caseIndex), async () => {
+      const provider = new AuthorizationCodeProvider({
+        renewal: refreshThenLogin(),
+        uaaUrl: 'http://127.0.0.1:9',
+        clientId: 'client',
+        clientSecret: 'secret',
+        authorizationUrl: PREBUILT,
+        authorization: strategy(),
+      });
+      expectRow(await thrownBy(() => provider.getTokens()), E12);
     });
-    expectRow(await thrownBy(() => provider.getTokens()), E12);
-  });
+  }
 
   it('a configuration failure inside a moment is the moment’s refusal, its case, fields and words kept', async () => {
     const provider = new AuthorizationCodeProvider({
@@ -453,10 +470,10 @@ describe('redirect mismatch', () => {
       header: () => undefined,
       cookies: () => undefined,
     });
-    expect(outcome.ok).toBe(false);
+    assert.equal(outcome.ok, false);
     if (outcome.ok) return;
-    expect(isMinted(outcome.refusal)).toBe(true);
-    expect(outcome.refusal).toMatchObject({
+    assert.equal(isMinted(outcome.refusal), true);
+    matchObject(outcome.refusal, {
       kind: 'configuration',
       facts: { case: E12.case, fields: E12.fields },
       reason: E12.reason,
@@ -550,28 +567,46 @@ describe('OIDC endpoints', () => {
       ...extra,
     });
 
-  it.each([
+  for (const [caseIndex, caseRow] of cases([
     ['OidcPasswordProvider', () => password()],
     ['OidcTokenExchangeProvider', () => exchange()],
     ['OidcDeviceFlowProvider', () => device()],
     ['OidcBrowserProvider', () => browser()],
-  ])('%s login without issuerUrl or endpoints', async (_name, make) => {
-    expectRow(await thrownBy(() => make().getTokens()), E13);
-    expect(mockedDiscovery).not.toHaveBeenCalled();
-  });
+  ]).entries()) {
+    const [_name, make] = caseRow;
+    it(
+      caseTitle('%s login without issuerUrl or endpoints', caseRow, caseIndex),
+      async () => {
+        expectRow(await thrownBy(() => make().getTokens()), E13);
+        assert.equal(mockedDiscovery.mock.callCount(), 0);
+      },
+    );
+  }
 
-  it.each([
+  for (const [caseIndex, caseRow] of cases([
     ['OidcPasswordProvider', () => password({ refreshToken: 'r' })],
     ['OidcTokenExchangeProvider', () => exchange({ refreshToken: 'r' })],
     ['OidcDeviceFlowProvider', () => device({ refreshToken: 'r' })],
     ['OidcBrowserProvider', () => browser({ refreshToken: 'r' })],
-  ])('%s refresh without issuerUrl or tokenEndpoint', async (_name, make) => {
-    const provider = make();
-    expectRow(await thrownBy(() => provider.refreshTokens()), E13);
-  });
+  ]).entries()) {
+    const [_name, make] = caseRow;
+    it(
+      caseTitle(
+        '%s refresh without issuerUrl or tokenEndpoint',
+        caseRow,
+        caseIndex,
+      ),
+      async () => {
+        const provider = make();
+        expectRow(await thrownBy(() => provider.refreshTokens()), E13);
+      },
+    );
+  }
 
   it('no authorization endpoint configured or discovered', async () => {
-    mockedDiscovery.mockResolvedValue({ token_endpoint: 'https://t' });
+    mockedDiscovery.mock.mockImplementation(async () => ({
+      token_endpoint: 'https://t',
+    }));
     const provider = browser({ issuerUrl: 'https://issuer.example' });
     expectRow(
       await thrownBy(() => provider.getTokens()),
@@ -579,7 +614,7 @@ describe('OIDC endpoints', () => {
     );
   });
 
-  it.each([
+  for (const [caseIndex, caseRow] of cases([
     ['OidcPasswordProvider', () => password({ issuerUrl: 'https://i' })],
     ['OidcTokenExchangeProvider', () => exchange({ issuerUrl: 'https://i' })],
     [
@@ -595,19 +630,29 @@ describe('OIDC endpoints', () => {
       () =>
         browser({ issuerUrl: 'https://i', authorizationEndpoint: 'https://a' }),
     ],
-  ])(
-    '%s without a token endpoint configured or discovered',
-    async (_name, make) => {
-      mockedDiscovery.mockResolvedValue({});
-      expectRow(
-        await thrownBy(() => make().getTokens()),
-        endpoint('tokenEndpoint'),
-      );
-    },
-  );
+  ]).entries()) {
+    const [_name, make] = caseRow;
+    it(
+      caseTitle(
+        '%s without a token endpoint configured or discovered',
+        caseRow,
+        caseIndex,
+      ),
+      async () => {
+        // A parsed document without the field: data from outside the types.
+        mockedDiscovery.mock.mockImplementation(async () => JSON.parse('{}'));
+        expectRow(
+          await thrownBy(() => make().getTokens()),
+          endpoint('tokenEndpoint'),
+        );
+      },
+    );
+  }
 
   it('no device authorization endpoint configured or discovered', async () => {
-    mockedDiscovery.mockResolvedValue({ token_endpoint: 'https://t' });
+    mockedDiscovery.mock.mockImplementation(async () => ({
+      token_endpoint: 'https://t',
+    }));
     const provider = device({ issuerUrl: 'https://issuer.example' });
     expectRow(
       await thrownBy(() => provider.getTokens()),
@@ -648,46 +693,61 @@ describe('certificate files', () => {
 });
 
 describe('UAA authorization URL', () => {
-  it.each([
+  for (const [caseIndex, caseRow] of cases([
     ['uaaUrl', { uaaUrl: '', uaaClientId: 'c' }, ['uaaUrl']],
     ['clientId', { uaaUrl: 'https://u', uaaClientId: '' }, ['clientId']],
     ['both', { uaaUrl: '', uaaClientId: '' }, ['uaaUrl', 'clientId']],
-  ])('without %s', async (_name, config, fields) => {
-    const thrown = await thrownBy(() =>
-      getJwtAuthorizationUrl(
-        config as never,
-        'http://localhost:61001/callback',
-      ),
-    );
-    expectRow(thrown, {
-      case: 'required-fields-missing',
-      fields,
-      reason: `required configuration is missing: ${fields.join(', ')}`,
+  ]).entries()) {
+    const [_name, config, fields] = caseRow;
+    it(caseTitle('without %s', caseRow, caseIndex), async () => {
+      const thrown = await thrownBy(() =>
+        getJwtAuthorizationUrl(
+          config as never,
+          'http://localhost:61001/callback',
+        ),
+      );
+      expectRow(thrown, {
+        case: 'required-fields-missing',
+        fields,
+        reason: `required configuration is missing: ${fields.join(', ')}`,
+      });
     });
-  });
+  }
 });
 
 describe('shipped validator construction', () => {
   const store = () => createInMemoryReplayStore();
 
-  it.each([[-1], [1.5], [Number.NaN], [Number.POSITIVE_INFINITY]])(
-    'clockSkewMs %p, the value never in the words',
-    async (clockSkewMs) => {
-      const thrown = await thrownBy(() =>
-        createSignedResponseValidator({
-          idpCertificates: [CERT],
-          clockSkewMs,
-          replayStore: store(),
-        }),
-      );
-      const error = expectRow(thrown, {
-        case: 'validator-clock-skew-invalid',
-        fields: ['clockSkewMs'],
-        reason: 'clockSkewMs must be a finite non-negative integer',
-      });
-      expect(error.reason).not.toContain(String(clockSkewMs));
-    },
-  );
+  for (const [caseIndex, caseRow] of cases([
+    [-1],
+    [1.5],
+    [Number.NaN],
+    [Number.POSITIVE_INFINITY],
+  ]).entries()) {
+    const [clockSkewMs] = caseRow;
+    it(
+      caseTitle(
+        'clockSkewMs %p, the value never in the words',
+        caseRow,
+        caseIndex,
+      ),
+      async () => {
+        const thrown = await thrownBy(() =>
+          createSignedResponseValidator({
+            idpCertificates: [CERT],
+            clockSkewMs,
+            replayStore: store(),
+          }),
+        );
+        const error = expectRow(thrown, {
+          case: 'validator-clock-skew-invalid',
+          fields: ['clockSkewMs'],
+          reason: 'clockSkewMs must be a finite non-negative integer',
+        });
+        notContains(error.reason, String(clockSkewMs));
+      },
+    );
+  }
 
   it('no certificate to verify against', async () => {
     const thrown = await thrownBy(() =>
@@ -703,27 +763,37 @@ describe('shipped validator construction', () => {
     });
   });
 
-  it.each([
+  for (const [caseIndex, caseRow] of cases([
     ['neither PEM nor base64 DER', `${MARKER}!!`],
     ['base64 that is no certificate', 'AAAA'],
-  ])('%s (toPem, and the validator built on it)', async (_name, value) => {
-    const row = {
-      case: 'idp-certificate-invalid',
-      fields: ['idpCertificates'],
-      reason:
-        'a configured IdP certificate is not a valid X.509 certificate in PEM or base64 DER',
-    };
-    expectRow(await thrownBy(() => toPem(value)), row);
-    expectRow(
-      await thrownBy(() =>
-        createSignedResponseValidator({
-          idpCertificates: [CERT, value],
-          replayStore: store(),
-        }),
+  ]).entries()) {
+    const [_name, value] = caseRow;
+    it(
+      caseTitle(
+        '%s (toPem, and the validator built on it)',
+        caseRow,
+        caseIndex,
       ),
-      row,
+      async () => {
+        const row = {
+          case: 'idp-certificate-invalid',
+          fields: ['idpCertificates'],
+          reason:
+            'a configured IdP certificate is not a valid X.509 certificate in PEM or base64 DER',
+        };
+        expectRow(await thrownBy(() => toPem(value)), row);
+        expectRow(
+          await thrownBy(() =>
+            createSignedResponseValidator({
+              idpCertificates: [CERT, value],
+              replayStore: store(),
+            }),
+          ),
+          row,
+        );
+      },
     );
-  });
+  }
 });
 
 describe('staticCodeStrategy', () => {
@@ -744,53 +814,89 @@ describe('callback server port', () => {
     reason: 'invalid callback server port: it must be an integer in 0..65535',
   };
 
-  it.each([[70000], [-1], [1.5], [Number.NaN], ['k6sock'], ['61001']])(
-    'browserCallbackStrategy({ port: %p }) refuses at construction',
-    async (port) => {
-      expectRow(
-        await thrownBy(() => browserCallbackStrategy({ port } as never)),
-        K6,
-      );
-    },
-  );
+  for (const [caseIndex, caseRow] of cases([
+    [70000],
+    [-1],
+    [1.5],
+    [Number.NaN],
+    ['k6sock'],
+    ['61001'],
+  ]).entries()) {
+    const [port] = caseRow;
+    it(
+      caseTitle(
+        'browserCallbackStrategy({ port: %p }) refuses at construction',
+        caseRow,
+        caseIndex,
+      ),
+      async () => {
+        expectRow(
+          await thrownBy(() => browserCallbackStrategy({ port } as never)),
+          K6,
+        );
+      },
+    );
+  }
 
-  it.each([[70000], [-1], [1.5], [Number.NaN], ['k6sock']])(
-    'a port changed after construction (%p) changes nothing — the options were read once; no socket file',
-    async (port) => {
-      const free = await getAvailablePort();
-      const options: { port?: unknown } = { port: free };
-      const strategy = browserCallbackStrategy(options as never);
-      options.port = port;
-      const redirects: string[] = [];
-      const login = strategy
-        .authorize({
-          buildAuthorizationUrl: async (redirectUri: string) => {
-            redirects.push(redirectUri);
-            return 'https://idp.example/a?state=S';
-          },
-        } as never)
-        .catch(() => undefined);
-      while (redirects.length === 0) {
-        await new Promise((resolve) => setTimeout(resolve, 5));
-      }
-      expect(redirects).toEqual([`http://localhost:${free}/callback`]);
-      await strategy.dispose();
-      await login;
-      expect(existsSync(join(process.cwd(), 'k6sock'))).toBe(false);
-    },
-  );
+  for (const [caseIndex, caseRow] of cases([
+    [70000],
+    [-1],
+    [1.5],
+    [Number.NaN],
+    ['k6sock'],
+  ]).entries()) {
+    const [port] = caseRow;
+    it(
+      caseTitle(
+        'a port changed after construction (%p) changes nothing — the options were read once; no socket file',
+        caseRow,
+        caseIndex,
+      ),
+      async () => {
+        const free = await getAvailablePort();
+        const options: { port?: unknown } = { port: free };
+        const strategy = browserCallbackStrategy(options as never);
+        options.port = port;
+        const redirects: string[] = [];
+        const login = strategy
+          .authorize({
+            buildAuthorizationUrl: async (redirectUri: string) => {
+              redirects.push(redirectUri);
+              return 'https://idp.example/a?state=S';
+            },
+          } as never)
+          .catch(() => undefined);
+        while (redirects.length === 0) {
+          await new Promise((resolve) => setTimeout(resolve, 5));
+        }
+        assert.deepEqual(redirects, [`http://localhost:${free}/callback`]);
+        await strategy.dispose();
+        await login;
+        assert.equal(existsSync(join(process.cwd(), 'k6sock')), false);
+      },
+    );
+  }
 
-  it.each([[-1], [65536], [1.5], ['61001'], [Number.NaN]])(
-    'port %p, the value never in the words',
-    async (port) => {
-      const thrown = await thrownBy(() => loopback({ port } as never));
-      const error = expectRow(thrown, {
-        case: 'callback-port-invalid',
-        fields: ['port'],
-        reason:
-          'invalid callback server port: it must be an integer in 0..65535',
-      });
-      expect(error.reason).not.toContain(String(port));
-    },
-  );
+  for (const [caseIndex, caseRow] of cases([
+    [-1],
+    [65536],
+    [1.5],
+    ['61001'],
+    [Number.NaN],
+  ]).entries()) {
+    const [port] = caseRow;
+    it(
+      caseTitle('port %p, the value never in the words', caseRow, caseIndex),
+      async () => {
+        const thrown = await thrownBy(() => loopback({ port } as never));
+        const error = expectRow(thrown, {
+          case: 'callback-port-invalid',
+          fields: ['port'],
+          reason:
+            'invalid callback server port: it must be an integer in 0..65535',
+        });
+        notContains(error.reason, String(port));
+      },
+    );
+  }
 });

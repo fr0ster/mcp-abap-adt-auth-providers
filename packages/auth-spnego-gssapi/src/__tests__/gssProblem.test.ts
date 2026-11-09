@@ -1,5 +1,7 @@
-import { describe, expect, it } from '@jest/globals';
+import assert from 'node:assert/strict';
+import { describe, it } from 'node:test';
 import { mapGssFailure } from '../gssProblem';
+import { cases, caseTitle } from './helpers/expectations';
 
 // The shapes the binding builds (kerberos 7.0.0, src/unix/kerberos_gss.cc:
 // `<major>: <minor>` from gss_display_status; src/win32/kerberos_sspi.cc:
@@ -7,7 +9,7 @@ import { mapGssFailure } from '../gssProblem';
 // Windows. Which texts a real failure carries is measured on the Kerberos
 // stand (Task C4) and, for Windows, in the second stage.
 describe('mapGssFailure', () => {
-  it.each([
+  for (const [caseIndex, caseRow] of cases([
     // Measured 2026-10-25, MIT krb5 1.20.1 (Debian bookworm), kerberos 7.0.0
     // built from source, KRB5CCNAME at a missing / an empty cache file.
     [
@@ -90,23 +92,27 @@ describe('mapGssFailure', () => {
       'InitializeSecurityContext: The clocks on the client and server machines are skewed.\r\n',
       'clock-skew',
     ],
-  ])('%s → %s', (message, problem) => {
-    expect(mapGssFailure(new Error(message))).toBe(problem);
-  });
+  ]).entries()) {
+    const [message, problem] = caseRow;
+    it(caseTitle('%s → %s', caseRow, caseIndex), () => {
+      assert.equal(mapGssFailure(new Error(message)), problem);
+    });
+  }
 
   it('reads the specific minor status before the general major one', () => {
     // A missing ticket for the service may come with GSS_S_NO_CRED's major
     // text while the minor names the real cause.
-    expect(
+    assert.equal(
       mapGssFailure(
         new Error(
           'No credentials were supplied, or the credentials were unavailable or inaccessible: Cannot contact any KDC for realm',
         ),
       ),
-    ).toBe('kdc-unreachable');
+      'kdc-unreachable',
+    );
   });
 
-  it.each([
+  for (const [caseIndex, caseRow] of cases([
     ['an unmatched text', new Error('Ran out of memory encoding response')],
     ['an empty message', new Error('')],
     ['a primitive', 'No Kerberos credentials available'],
@@ -132,93 +138,114 @@ describe('mapGssFailure', () => {
         },
       ),
     ],
-  ])('anything else is source-failed: %s', (_label, thrown) => {
-    expect(mapGssFailure(thrown)).toBe('source-failed');
-  });
+  ]).entries()) {
+    const [_label, thrown] = caseRow;
+    it(
+      caseTitle('anything else is source-failed: %s', caseRow, caseIndex),
+      () => {
+        assert.equal(mapGssFailure(thrown), 'source-failed');
+      },
+    );
+  }
 
   it('maps the macOS SPNEGO no-ticket text to mechanism-unsupported', () => {
     // Measured 2026-10-25, macOS arm64 GitHub runner, GSS.framework (Heimdal),
     // no ticket cache, mechanism spnego — the text received.
-    expect(
+    assert.equal(
       mapGssFailure(
         new Error(
           ' An unsupported mechanism was requested: unknown mech-code 0 for mech unknown',
         ),
       ),
-    ).toBe('mechanism-unsupported');
+      'mechanism-unsupported',
+    );
   });
 
   it('reads the macOS SPNEGO text only with its measured tail', () => {
-    expect(
+    assert.equal(
       mapGssFailure(new Error(' An unsupported mechanism was requested: ')),
-    ).toBe('source-failed');
+      'source-failed',
+    );
   });
 
   it('lets a specific cause win over the macOS no-ticket text', () => {
-    expect(
+    assert.equal(
       mapGssFailure(
         new Error(
           'get-pricipal open(/tmp/cc): Minor code may provide more information: Server HTTP/a@B not found in Kerberos database',
         ),
       ),
-    ).toBe('service-unknown');
+      'service-unknown',
+    );
   });
 
   it('reads an unknown client as no service problem', () => {
     // KRB5KDC_ERR_C_PRINCIPAL_UNKNOWN names the client, not the service.
-    expect(
+    assert.equal(
       mapGssFailure(
         new Error(
           "Unspecified GSS failure.  Minor code may provide more information: Client 'bob@STAND.TEST' not found in Kerberos database",
         ),
       ),
-    ).toBe('source-failed');
+      'source-failed',
+    );
   });
 
   it('reads the service-unknown text only as the message ends', () => {
-    expect(
+    assert.equal(
       mapGssFailure(
         new Error(
           'Minor code may provide more information: Server HTTP/a@STAND.TEST not found in Kerberos database: more',
         ),
       ),
-    ).toBe('source-failed');
-    expect(
+      'source-failed',
+    );
+    assert.equal(
       mapGssFailure(
         new Error(
           'Minor code may provide more information: Server  not found in Kerberos database',
         ),
       ),
-    ).toBe('source-failed');
+      'source-failed',
+    );
   });
 
-  it.each([
+  for (const [caseIndex, caseRow] of [
     // an unknown client whose name carries the service-unknown pattern
     "Unspecified GSS failure.  Minor code may provide more information: Client 'x: Server HTTP/a@B' not found in Kerberos database",
     "Unspecified GSS failure.  Minor code may provide more information: Client 'Minor code may provide more information: Server HTTP/a@B' not found in Kerberos database",
     "Unspecified GSS failure.  Minor code may provide more information: Client 'Minor code may provide more information: Server a not found in Kerberos database' not found in Kerberos database",
     "Unspecified GSS failure.  Minor code may provide more information: Client 'x: Server not found in Kerberos database' not found in Kerberos database",
-  ])(
-    'an unknown client named like a service is not service-unknown: %s',
-    (message) => {
-      expect(mapGssFailure(new Error(message))).toBe('source-failed');
-    },
-  );
+  ].entries()) {
+    const message = caseRow;
+    it(
+      caseTitle(
+        'an unknown client named like a service is not service-unknown: %s',
+        caseRow,
+        caseIndex,
+      ),
+      () => {
+        assert.equal(mapGssFailure(new Error(message)), 'source-failed');
+      },
+    );
+  }
 
   it("reads the error table's own text only as the message ends", () => {
-    expect(
+    assert.equal(
       mapGssFailure(
         new Error(
           'Unspecified GSS failure.  Minor code may provide more information: Server not found in Kerberos database',
         ),
       ),
-    ).toBe('service-unknown');
+      'service-unknown',
+    );
   });
 
   it('never matches case-folded or partial phrases', () => {
-    expect(mapGssFailure(new Error('clock skew too great'))).toBe(
+    assert.equal(
+      mapGssFailure(new Error('clock skew too great')),
       'source-failed',
     );
-    expect(mapGssFailure(new Error('Server not found'))).toBe('source-failed');
+    assert.equal(mapGssFailure(new Error('Server not found')), 'source-failed');
   });
 });

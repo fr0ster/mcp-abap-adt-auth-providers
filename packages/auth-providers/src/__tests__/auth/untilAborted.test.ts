@@ -5,7 +5,8 @@
  * to a handler, whatever the answer is.
  */
 
-import { describe, expect, it } from '@jest/globals';
+import assert from 'node:assert/strict';
+import { describe, it } from 'node:test';
 import { untilAborted, whenRejected } from '../../auth/attempt';
 import { APlusPromise } from '../helpers/aplusPromise';
 
@@ -25,8 +26,8 @@ describe('untilAborted', () => {
   it('a native promise with its own then is adopted through that then, once, with or without a signal', async () => {
     for (const signal of [undefined, new AbortController().signal]) {
       const { promise, counter } = ownThen('value');
-      await expect(untilAborted(promise, signal)).resolves.toBe('value');
-      expect(counter.calls).toBe(1);
+      assert.equal(await untilAborted(promise, signal), 'value');
+      assert.equal(counter.calls, 1);
     }
   });
 });
@@ -56,15 +57,15 @@ describe('whenRejected', () => {
       whenRejected(APlusPromise.resolve('fine'), (e) => reasons.push(e));
       whenRejected('a plain value', (e) => reasons.push(e));
     });
-    expect(reasons.sort()).toEqual(['aplus', 'native']);
-    expect(seen).toEqual([]);
+    assert.deepEqual(reasons.sort(), ['aplus', 'native']);
+    assert.deepEqual(seen, []);
   });
 
   it('a throwing then getter, then and Proxy trap are rejections; never throws', async () => {
     const reasons: unknown[] = [];
     const record = (e: unknown) => reasons.push(e);
     const seen = await unhandledDuring(() => {
-      expect(() => {
+      assert.doesNotThrow(() => {
         whenRejected(
           {
             // biome-ignore lint/suspicious/noThenProperty: the hostile answer under test
@@ -94,14 +95,14 @@ describe('whenRejected', () => {
           ),
           record,
         );
-      }).not.toThrow();
+      });
     });
-    expect(reasons.sort()).toEqual([
+    assert.deepEqual(reasons.sort(), [
       'getter threw',
       'then threw',
       'trap threw',
     ]);
-    expect(seen).toEqual([]);
+    assert.deepEqual(seen, []);
   });
 
   it('a handler that throws is contained: no unhandledRejection', async () => {
@@ -113,6 +114,6 @@ describe('whenRejected', () => {
         throw new Error('handler threw');
       });
     });
-    expect(seen).toEqual([]);
+    assert.deepEqual(seen, []);
   });
 });

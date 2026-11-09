@@ -6,7 +6,8 @@
  * whose point is what reached the server are in `renewalOnTheWire.test.ts`.
  */
 
-import { describe, expect, it } from '@jest/globals';
+import assert from 'node:assert/strict';
+import { describe, it } from 'node:test';
 import { readFailure } from '@mcp-abap-adt/auth-errors';
 import type {
   IAuthProviderError,
@@ -24,6 +25,13 @@ import {
   otherCertificate,
   thumbprintOf,
 } from '../helpers/certificates';
+import {
+  caseTitle,
+  containsEqual,
+  matchObject,
+  notContains,
+  thrown,
+} from '../helpers/expectations';
 import { reportRecorder, stateRecorder } from '../helpers/persistence';
 import { ScriptedProvider, tokens } from '../helpers/scriptedProvider';
 
@@ -47,14 +55,14 @@ const errorOf = (thrown: unknown): IAuthProviderError =>
 
 function expectStrategyFailure(thrown: unknown): void {
   const error = errorOf(thrown);
-  expect(error.kind).toBe('unknown');
-  expect(error.facts).toMatchObject({ operation: 'renewal-strategy' });
+  assert.equal(error.kind, 'unknown');
+  matchObject(error.facts, { operation: 'renewal-strategy' });
 }
 
 function expectAborted(thrown: unknown): void {
   const error = errorOf(thrown);
-  expect(error.kind).toBe('interactive-login');
-  expect(error.facts).toMatchObject({ outcome: 'aborted' });
+  assert.equal(error.kind, 'interactive-login');
+  matchObject(error.facts, { outcome: 'aborted' });
 }
 
 /**
@@ -147,9 +155,9 @@ describe('a decision is awaited as given: any thenable is adopted', () => {
     const provider = seeded(strategy);
     void rejectionOf(provider.getTokens());
     await provider.refreshes.nth(1);
-    expect(calls.thenCalls).toBe(1);
-    expect(provider.refreshes.items).toHaveLength(1);
-    expect(provider.logins.items).toHaveLength(0);
+    assert.equal(calls.thenCalls, 1);
+    assert.equal(provider.refreshes.items.length, 1);
+    assert.equal(provider.logins.items.length, 0);
   });
 
   it('a foreign thenable of a stop: read as the stop, not as a strategy failure', async () => {
@@ -157,9 +165,9 @@ describe('a decision is awaited as given: any thenable is adopted', () => {
     const { strategy } = scripted([() => answer]);
     const provider = seeded(strategy);
     const thrown = await rejectionOf(provider.getTokens());
-    expect(errorOf(thrown).kind).toBe('renewal-declined');
-    expect(calls.thenCalls).toBe(1);
-    expect(provider.refreshes.items).toHaveLength(0);
+    assert.equal(errorOf(thrown).kind, 'renewal-declined');
+    assert.equal(calls.thenCalls, 1);
+    assert.equal(provider.refreshes.items.length, 0);
   });
 
   it('a native promise with its own then: adopted through that then', async () => {
@@ -175,8 +183,8 @@ describe('a decision is awaited as given: any thenable is adopted', () => {
     const provider = seeded(strategy);
     void rejectionOf(provider.getTokens());
     await provider.refreshes.nth(1);
-    expect(thenCalls).toBe(1);
-    expect(provider.refreshes.items).toHaveLength(1);
+    assert.equal(thenCalls, 1);
+    assert.equal(provider.refreshes.items.length, 1);
   });
 });
 
@@ -247,42 +255,54 @@ describe('invalid decisions end the renewal unknown renewal-strategy, no step ta
     ['a rejecting native promise', () => Promise.reject(new Error('SECRET'))],
   ];
 
-  it.each(INVALID)('%s', async (_name, answer) => {
-    const { strategy } = scripted([answer]);
-    const provider = seeded(strategy);
-    const thrown = await rejectionOf(provider.getTokens());
-    expectStrategyFailure(thrown);
-    expect(JSON.stringify(errorOf(thrown))).not.toContain('SECRET');
-    expect(provider.refreshes.items).toHaveLength(0);
-    expect(provider.logins.items).toHaveLength(0);
-    expect(provider.held().refresh).toBe('R');
-  });
+  for (const [caseIndex, caseRow] of INVALID.entries()) {
+    const [_name, answer] = caseRow;
+    it(caseTitle('%s', caseRow, caseIndex), async () => {
+      const { strategy } = scripted([answer]);
+      const provider = seeded(strategy);
+      const thrown = await rejectionOf(provider.getTokens());
+      expectStrategyFailure(thrown);
+      notContains(JSON.stringify(errorOf(thrown)), 'SECRET');
+      assert.equal(provider.refreshes.items.length, 0);
+      assert.equal(provider.logins.items.length, 0);
+      assert.equal(provider.held().refresh, 'R');
+    });
+  }
 
   it('a refresh while no refresh is possible', async () => {
     const { strategy } = scripted([refresh()]);
     const provider = new ScriptedProvider({ renewal: strategy });
     expectStrategyFailure(await rejectionOf(provider.getTokens()));
-    expect(provider.refreshes.items).toHaveLength(0);
-    expect(provider.logins.items).toHaveLength(0);
+    assert.equal(provider.refreshes.items.length, 0);
+    assert.equal(provider.logins.items.length, 0);
   });
 
-  it.each([
-    ['missing', login()],
-    ['on a stop, missing', () => ({ next: 'stop' })],
-  ] as const)(
-    'after a refresh that failed once sent, a sentRefreshToken %s',
-    async (_name, second) => {
-      const { strategy } = scripted([refresh(), second]);
-      const provider = seeded(strategy);
-      const thrown = rejectionOf(provider.getTokens());
-      (await provider.refreshes.nth(1)).result.reject(refused());
-      expectStrategyFailure(await thrown);
-      // The uncertain refresh token is neither kept nor discarded by default.
-      expect(provider.held().refresh).toBe('R');
-      expect(provider.logins.items).toHaveLength(0);
-      expect(provider.refreshes.items).toHaveLength(1);
-    },
-  );
+  for (const [caseIndex, caseRow] of (
+    [
+      ['missing', login()],
+      ['on a stop, missing', () => ({ next: 'stop' })],
+    ] as const
+  ).entries()) {
+    const [_name, second] = caseRow;
+    it(
+      caseTitle(
+        'after a refresh that failed once sent, a sentRefreshToken %s',
+        caseRow,
+        caseIndex,
+      ),
+      async () => {
+        const { strategy } = scripted([refresh(), second]);
+        const provider = seeded(strategy);
+        const thrown = rejectionOf(provider.getTokens());
+        (await provider.refreshes.nth(1)).result.reject(refused());
+        expectStrategyFailure(await thrown);
+        // The uncertain refresh token is neither kept nor discarded by default.
+        assert.equal(provider.held().refresh, 'R');
+        assert.equal(provider.logins.items.length, 0);
+        assert.equal(provider.refreshes.items.length, 1);
+      },
+    );
+  }
 
   it('a decision whose next getter changes its answer is read once: no refresh dispatched where none is possible', async () => {
     const reads = { next: 0, ifCut: 0, sentRefreshToken: 0 };
@@ -317,10 +337,10 @@ describe('invalid decisions end the renewal unknown renewal-strategy, no step ta
     const renewed = provider.getTokens();
     (await provider.logins.nth(1)).result.resolve(tokens(jwt('in'), 'S'));
     await renewed;
-    expect(provider.refreshes.items).toHaveLength(0);
-    expect(provider.logins.items).toHaveLength(1);
+    assert.equal(provider.refreshes.items.length, 0);
+    assert.equal(provider.logins.items.length, 1);
     // A login decision: its ifCut is never read.
-    expect(reads).toEqual({ next: 1, ifCut: 0, sentRefreshToken: 1 });
+    assert.deepEqual(reads, { next: 1, ifCut: 0, sentRefreshToken: 1 });
   });
 
   it('a type-valid login decision carrying a throwing ifCut getter: ifCut not read, the login taken', async () => {
@@ -338,9 +358,9 @@ describe('invalid decisions end the renewal unknown renewal-strategy, no step ta
     const renewed = provider.getTokens();
     (await provider.logins.nth(1)).result.resolve(tokens(jwt('in'), 'S'));
     await renewed;
-    expect(ifCutReads).toBe(0);
-    expect(provider.refreshes.items).toHaveLength(0);
-    expect(provider.logins.items).toHaveLength(1);
+    assert.equal(ifCutReads, 0);
+    assert.equal(provider.refreshes.items.length, 0);
+    assert.equal(provider.logins.items.length, 1);
   });
 
   it('a refresh of the very token the same decision discards', async () => {
@@ -356,8 +376,8 @@ describe('invalid decisions end the renewal unknown renewal-strategy, no step ta
     const thrown = rejectionOf(provider.getTokens());
     (await provider.refreshes.nth(1)).result.reject(refused());
     expectStrategyFailure(await thrown);
-    expect(provider.held().refresh).toBe('R');
-    expect(provider.refreshes.items).toHaveLength(1);
+    assert.equal(provider.held().refresh, 'R');
+    assert.equal(provider.refreshes.items.length, 1);
   });
 
   it('a strategy that never settles: the abort ends the renewal aborted at once, no step', async () => {
@@ -369,9 +389,9 @@ describe('invalid decisions end the renewal unknown renewal-strategy, no step ta
     only.abort();
     expectAborted(await thrown);
     await quiet();
-    expect(provider.refreshes.items).toHaveLength(0);
-    expect(provider.logins.items).toHaveLength(0);
-    expect(provider.held().refresh).toBe('R');
+    assert.equal(provider.refreshes.items.length, 0);
+    assert.equal(provider.logins.items.length, 0);
+    assert.equal(provider.held().refresh, 'R');
   });
 
   it('a refused decision is logged in fixed words', async () => {
@@ -390,7 +410,7 @@ describe('invalid decisions end the renewal unknown renewal-strategy, no step ta
       },
     ]);
     await rejectionOf(seeded(strategy, { logger }).getTokens());
-    expect(lines).toEqual([
+    assert.deepEqual(lines, [
       [
         '[BaseTokenProvider] Renewal strategy refused',
         {
@@ -419,8 +439,8 @@ describe('earlier steps stay applied', () => {
     const elsewhere = boundTo(thumbprintOf(otherCertificate()), 'r2');
     (await provider.refreshes.nth(1)).result.resolve(tokens(elsewhere, 'R2'));
     expectStrategyFailure(await thrown);
-    expect(provider.held()).toMatchObject({ access: elsewhere, refresh: 'R2' });
-    expect(seen).toEqual([[elsewhere, 'R2', 'replace']]);
+    matchObject(provider.held(), { access: elsewhere, refresh: 'R2' });
+    assert.deepEqual(seen, [[elsewhere, 'R2', 'replace']]);
   });
 });
 
@@ -437,16 +457,16 @@ describe('a credential generation per step', () => {
     (await provider.refreshes.nth(1)).result.resolve(tokens(elsewhere, 'R2'));
     const good = boundTo(thumbprintOf(certificate()), 'login');
     (await provider.logins.nth(1)).result.resolve(tokens(good, 'S'));
-    await expect(renewed).resolves.toMatchObject({
+    matchObject(await renewed, {
       authorizationToken: good,
       refreshToken: 'S',
     });
-    expect(provider.held()).toMatchObject({ access: good, refresh: 'S' });
-    expect(seen).toEqual([
+    matchObject(provider.held(), { access: good, refresh: 'S' });
+    assert.deepEqual(seen, [
       [elsewhere, 'R2', 'replace'],
       [good, 'S', 'replace'],
     ]);
-    expect(situations[1]?.steps).toEqual([
+    assert.deepEqual(situations[1]?.steps, [
       { step: 'refresh', outcome: 'bound-elsewhere' },
     ]);
   });
@@ -462,11 +482,11 @@ describe('a credential generation per step', () => {
     const elsewhere = boundTo(thumbprintOf(otherCertificate()), 'r2');
     (await provider.refreshes.nth(1)).result.resolve(tokens(elsewhere, 'R2'));
     const second = await provider.refreshes.nth(2);
-    expect(second.refreshToken).toBe('R2');
+    assert.equal(second.refreshToken, 'R2');
     const good = boundTo(thumbprintOf(certificate()), 'r3');
     second.result.resolve(tokens(good, 'R3'));
-    await expect(renewed).resolves.toMatchObject({ authorizationToken: good });
-    expect(seen).toEqual([
+    matchObject(await renewed, { authorizationToken: good });
+    assert.deepEqual(seen, [
       [elsewhere, 'R2', 'replace'],
       [good, 'R3', 'replace'],
     ]);
@@ -482,19 +502,19 @@ describe('a discarded refresh token in a result is read as none', () => {
     const T1 = jwt('one', -3600);
     (await provider.logins.nth(1)).result.resolve(tokens(T1, 'S'));
     await first;
-    expect(provider.held().refresh).toBe('S');
+    assert.equal(provider.held().refresh, 'S');
 
     const again = provider.refreshTokens();
     const refreshS = await provider.refreshes.nth(2);
-    expect(refreshS.refreshToken).toBe('S');
+    assert.equal(refreshS.refreshToken, 'S');
     const T2 = jwt('two');
     refreshS.result.resolve(tokens(T2, 'R'));
-    await expect(again).resolves.toMatchObject({
+    matchObject(await again, {
       authorizationToken: T2,
       refreshToken: 'S',
     });
-    expect(provider.held().refresh).toBe('S');
-    expect(seen.at(-1)).toEqual([T2, undefined, 'keep']);
+    assert.equal(provider.held().refresh, 'S');
+    assert.deepEqual(seen.at(-1), [T2, undefined, 'keep']);
   });
 });
 
@@ -510,11 +530,11 @@ describe('aborted steps observed', () => {
     s.abort(only);
     expectAborted(await cut);
     // The site's gate: an aborted attempt sends nothing.
-    expect(() => held.dispatch()).toThrow();
+    assert.throws(() => held.dispatch(), thrown());
     held.result.reject(new Error('not sent'));
     await quiet();
-    expect(s.state.callsInAbort).toBe(0);
-    expect(s.observed).toEqual([
+    assert.equal(s.state.callsInAbort, 0);
+    assert.deepEqual(s.observed, [
       {
         cause: { trigger: 'expired' },
         moment: 'get-tokens',
@@ -522,63 +542,72 @@ describe('aborted steps observed', () => {
         sent: false,
       },
     ]);
-    expect(provider.held().refresh).toBe('R');
-    expect(seen).toEqual([]);
+    assert.equal(provider.held().refresh, 'R');
+    assert.deepEqual(seen, []);
 
     provider.holdDispatch = false;
     const next = provider.getTokens();
     const second = await provider.refreshes.nth(2);
-    expect(second.refreshToken).toBe('R');
+    assert.equal(second.refreshToken, 'R');
     second.result.resolve(tokens(jwt('fresh'), 'R2'));
     await next;
     // Delivered once, before the replacement's first next().
-    expect(s.calls).toEqual(['next:0', 'aborted', 'next:1']);
+    assert.deepEqual(s.calls, ['next:0', 'aborted', 'next:1']);
   });
 
-  it.each([
-    ['discard', 'discarded', 'login'],
-    ['keep', 'kept', 'refresh of R'],
-  ] as const)(
-    'an abort after dispatch, ifCut %s: sent true, refreshToken %s; the next renewal is a %s',
-    async (ifCut, refreshToken, then) => {
-      const s = scripted([
-        refresh(ifCut),
-        // The next renewal: refresh when possible, else log in.
-        (situation) =>
-          situation.canRefresh
-            ? { next: 'refresh', ifCut: 'discard' }
-            : { next: 'login' },
-      ]);
-      const provider = seeded(s.strategy);
-      const only = new AbortController();
-      const cut = rejectionOf(provider.getTokens({ signal: only.signal }));
-      await provider.refreshes.nth(1);
-      s.abort(only);
-      expectAborted(await cut);
-      await quiet();
-      expect(s.state.callsInAbort).toBe(0);
-      expect(s.observed).toEqual([
-        {
-          cause: { trigger: 'expired' },
-          moment: 'get-tokens',
-          step: 'refresh',
-          sent: true,
-          refreshToken,
-        },
-      ]);
-      const next = provider.getTokens();
-      if (then === 'login') {
-        (await provider.logins.nth(1)).result.resolve(tokens(jwt('in'), 'S'));
-        expect(provider.refreshes.items).toHaveLength(1);
-      } else {
-        const second = await provider.refreshes.nth(2);
-        expect(second.refreshToken).toBe('R');
-        second.result.resolve(tokens(jwt('in'), 'R2'));
-        expect(provider.logins.items).toHaveLength(0);
-      }
-      await next;
-    },
-  );
+  for (const [caseIndex, caseRow] of (
+    [
+      ['discard', 'discarded', 'login'],
+      ['keep', 'kept', 'refresh of R'],
+    ] as const
+  ).entries()) {
+    const [ifCut, refreshToken, then] = caseRow;
+    it(
+      caseTitle(
+        'an abort after dispatch, ifCut %s: sent true, refreshToken %s; the next renewal is a %s',
+        caseRow,
+        caseIndex,
+      ),
+      async () => {
+        const s = scripted([
+          refresh(ifCut),
+          // The next renewal: refresh when possible, else log in.
+          (situation) =>
+            situation.canRefresh
+              ? { next: 'refresh', ifCut: 'discard' }
+              : { next: 'login' },
+        ]);
+        const provider = seeded(s.strategy);
+        const only = new AbortController();
+        const cut = rejectionOf(provider.getTokens({ signal: only.signal }));
+        await provider.refreshes.nth(1);
+        s.abort(only);
+        expectAborted(await cut);
+        await quiet();
+        assert.equal(s.state.callsInAbort, 0);
+        assert.deepEqual(s.observed, [
+          {
+            cause: { trigger: 'expired' },
+            moment: 'get-tokens',
+            step: 'refresh',
+            sent: true,
+            refreshToken,
+          },
+        ]);
+        const next = provider.getTokens();
+        if (then === 'login') {
+          (await provider.logins.nth(1)).result.resolve(tokens(jwt('in'), 'S'));
+          assert.equal(provider.refreshes.items.length, 1);
+        } else {
+          const second = await provider.refreshes.nth(2);
+          assert.equal(second.refreshToken, 'R');
+          second.result.resolve(tokens(jwt('in'), 'R2'));
+          assert.equal(provider.logins.items.length, 0);
+        }
+        await next;
+      },
+    );
+  }
 
   it('an abort during a login: aborted() with step login, sent as the sites told', async () => {
     const s = scripted([login()]);
@@ -589,7 +618,7 @@ describe('aborted steps observed', () => {
     s.abort(only);
     expectAborted(await cut);
     await quiet();
-    expect(s.observed).toEqual([
+    assert.deepEqual(s.observed, [
       {
         cause: { trigger: 'no-token' },
         moment: 'get-tokens',
@@ -622,8 +651,8 @@ describe('aborted steps observed', () => {
     only.abort();
     expectAborted(await cut);
     await quiet();
-    expect(JSON.stringify(lines)).not.toContain('SECRET');
-    expect(lines).toContainEqual([
+    notContains(JSON.stringify(lines), 'SECRET');
+    containsEqual(lines, [
       '[BaseTokenProvider] Renewal strategy failed to take an aborted step',
       {
         error: 'the renewal strategy failed (unknown error)',
@@ -633,7 +662,7 @@ describe('aborted steps observed', () => {
     // The renewal goes on as the strategy's next() decides.
     const next = provider.getTokens();
     (await provider.logins.nth(1)).result.resolve(tokens(jwt('in'), 'S'));
-    await expect(next).resolves.toMatchObject({ refreshToken: 'S' });
+    matchObject(await next, { refreshToken: 'S' });
   });
 });
 
@@ -652,9 +681,12 @@ describe('no hidden step', () => {
     (await provider.logins.nth(1)).result.reject(new Error('the login failed'));
     await thrown;
     await quiet();
-    expect(asked.map((s) => s.steps.length)).toEqual([0, 1, 2]);
-    expect(provider.refreshes.items).toHaveLength(1);
-    expect(provider.logins.items).toHaveLength(1);
+    assert.deepEqual(
+      asked.map((s) => s.steps.length),
+      [0, 1, 2],
+    );
+    assert.equal(provider.refreshes.items.length, 1);
+    assert.equal(provider.logins.items.length, 1);
   });
 
   it('refreshOnly(): a refused refresh stops, no login', async () => {
@@ -663,13 +695,13 @@ describe('no hidden step', () => {
     (await provider.refreshes.nth(1)).result.reject(refused());
     // The step's own error is what the stop answers (a scripted rejection
     // here, so `unknown` with the operation).
-    expect(errorOf(await thrown).facts).toMatchObject({
+    matchObject(errorOf(await thrown).facts, {
       operation: 'token-request',
     });
     await quiet();
-    expect(provider.logins.items).toHaveLength(0);
+    assert.equal(provider.logins.items.length, 0);
     // Discarded by its decision: sent and refused.
-    expect(provider.held().refresh).toBeUndefined();
+    assert.equal(provider.held().refresh, undefined);
   });
 });
 
@@ -694,15 +726,15 @@ describe('rule 5 as a reading', () => {
       status: 403,
       error: undefined,
     });
-    expect(outcome.ok).toBe(false);
+    assert.equal(outcome.ok, false);
     if (outcome.ok) return;
-    expect(outcome.refusal.kind).toBe('system-refused');
-    expect(outcome.refusal.facts).toMatchObject({
+    assert.equal(outcome.refusal.kind, 'system-refused');
+    matchObject(outcome.refusal.facts, {
       verdict: 'not-authorized',
       status: 403,
     });
-    expect(provider.refreshes.items).toHaveLength(0);
-    expect(provider.logins.items).toHaveLength(0);
+    assert.equal(provider.refreshes.items.length, 0);
+    assert.equal(provider.logins.items.length, 0);
   });
 
   it('a strategy that renews on not-credential: one refresh sent, the cause as read', async () => {
@@ -725,9 +757,9 @@ describe('rule 5 as a reading', () => {
       error: undefined,
     });
     (await provider.refreshes.nth(1)).result.resolve(tokens(jwt('new'), 'R2'));
-    await expect(answered).resolves.toEqual({ ok: true });
-    expect(provider.refreshes.items).toHaveLength(1);
-    expect(s.situations[0]).toMatchObject({
+    assert.deepEqual(await answered, { ok: true });
+    assert.equal(provider.refreshes.items.length, 1);
+    matchObject(s.situations[0], {
       cause: {
         trigger: 'rejected',
         reading: 'not-credential',
@@ -756,10 +788,10 @@ describe('rule 5 as a reading', () => {
     });
     (await provider.refreshes.nth(1)).result.resolve(tokens(token, 'R2'));
     const outcome = await answered;
-    expect(outcome.ok).toBe(false);
+    assert.equal(outcome.ok, false);
     if (outcome.ok) return;
-    expect(outcome.refusal.kind).toBe('renewal-unchanged');
-    expect(provider.logins.items).toHaveLength(0);
+    assert.equal(outcome.refusal.kind, 'renewal-unchanged');
+    assert.equal(provider.logins.items.length, 0);
   });
 });
 
@@ -770,13 +802,14 @@ describe('renewal-declined', () => {
       accessToken: jwt('held', -3600),
     });
     const error = errorOf(await rejectionOf(provider.getTokens()));
-    expect(error.kind).toBe('renewal-declined');
-    expect(error.facts).toEqual({ trigger: 'expired' });
-    expect(error.reason).toBe(
+    assert.equal(error.kind, 'renewal-declined');
+    assert.deepEqual(error.facts, { trigger: 'expired' });
+    assert.equal(
+      error.reason,
       'the renewal strategy declined to renew the credential',
     );
-    expect(provider.refreshes.items).toHaveLength(0);
-    expect(provider.logins.items).toHaveLength(0);
+    assert.equal(provider.refreshes.items.length, 0);
+    assert.equal(provider.logins.items.length, 0);
   });
 });
 
@@ -787,11 +820,14 @@ describe('where a renewal starts', () => {
     await rejectionOf(none.getTokens());
     await rejectionOf(seeded(s.strategy).getTokens());
     await rejectionOf(seeded(s.strategy).refreshTokens());
-    expect(s.situations.map((x) => [x.cause, x.moment])).toEqual([
-      [{ trigger: 'no-token' }, 'get-tokens'],
-      [{ trigger: 'expired' }, 'get-tokens'],
-      [{ trigger: 'explicit' }, 'refresh-tokens'],
-    ]);
+    assert.deepEqual(
+      s.situations.map((x) => [x.cause, x.moment]),
+      [
+        [{ trigger: 'no-token' }, 'get-tokens'],
+        [{ trigger: 'expired' }, 'get-tokens'],
+        [{ trigger: 'explicit' }, 'refresh-tokens'],
+      ],
+    );
 
     // A held token bound elsewhere, whose renewal failed: remembered.
     const elsewhere = boundTo(thumbprintOf(otherCertificate()), 'held');
@@ -807,16 +843,17 @@ describe('where a renewal starts', () => {
     await rejectionOf(provider.getTokens());
     await provider.prepare();
     // The first ask of each renewal (the failed login's renewal asks again).
-    expect(
+    assert.deepEqual(
       b.situations
         .filter((x) => x.steps.length === 0)
         .map((x) => [x.cause, x.moment]),
-    ).toEqual([
-      [{ trigger: 'bound-elsewhere', lastRenewal: undefined }, 'get-tokens'],
-      [{ trigger: 'bound-elsewhere', lastRenewal: remembered }, 'get-tokens'],
-      // prepare() no longer clears it: the moment is the strategy's cue.
-      [{ trigger: 'bound-elsewhere', lastRenewal: remembered }, 'prepare'],
-    ]);
+      [
+        [{ trigger: 'bound-elsewhere', lastRenewal: undefined }, 'get-tokens'],
+        [{ trigger: 'bound-elsewhere', lastRenewal: remembered }, 'get-tokens'],
+        // prepare() no longer clears it: the moment is the strategy's cue.
+        [{ trigger: 'bound-elsewhere', lastRenewal: remembered }, 'prepare'],
+      ],
+    );
   });
 
   it('a valid cached token asks nothing', async () => {
@@ -826,7 +863,7 @@ describe('where a renewal starts', () => {
       accessToken: jwt('valid'),
     });
     await provider.getTokens();
-    expect(s.situations).toHaveLength(0);
+    assert.equal(s.situations.length, 0);
   });
 });
 
@@ -846,7 +883,7 @@ describe('logging', () => {
     (await provider.refreshes.nth(1)).result.reject(refused());
     (await provider.logins.nth(1)).result.resolve(tokens(jwt('in'), 'S'));
     await renewed;
-    expect(lines).toEqual([
+    assert.deepEqual(lines, [
       [
         '[BaseTokenProvider] Renewal step',
         { trigger: 'expired', moment: 'get-tokens', next: 'refresh' },
@@ -872,19 +909,19 @@ describe('a refresh commit that fails: the persistence report of the commit', ()
     const T2 = jwt('rotated');
     (await provider.refreshes.nth(1)).result.resolve(tokens(T2, 'R2'));
     const error = errorOf(await thrown);
-    expect(error).toMatchObject({
+    matchObject(error, {
       kind: 'unknown',
       facts: { operation: 'persisting-tokens' },
     });
-    expect(JSON.stringify(error)).not.toContain('SECRET');
+    notContains(JSON.stringify(error), 'SECRET');
     await quiet();
-    expect(provider.logins.items).toHaveLength(0);
-    expect(provider.held()).toMatchObject({ access: T2, refresh: 'R2' });
+    assert.equal(provider.logins.items.length, 0);
+    matchObject(provider.held(), { access: T2, refresh: 'R2' });
     // The committed credentials are the server's state: the cache answers.
-    await expect(provider.getTokens()).resolves.toMatchObject({
+    matchObject(await provider.getTokens(), {
       authorizationToken: T2,
     });
-    expect(provider.refreshes.items).toHaveLength(1);
+    assert.equal(provider.refreshes.items.length, 1);
   });
 
   it('the same after a login: the renewal fails, nothing more', async () => {
@@ -897,8 +934,8 @@ describe('a refresh commit that fails: the persistence report of the commit', ()
     (await provider.logins.nth(1)).result.resolve(tokens(T1, 'S'));
     await thrown;
     await quiet();
-    expect(provider.logins.items).toHaveLength(1);
-    expect(provider.held()).toMatchObject({ access: T1, refresh: 'S' });
+    assert.equal(provider.logins.items.length, 1);
+    matchObject(provider.held(), { access: T1, refresh: 'S' });
   });
 });
 
@@ -930,8 +967,8 @@ describe('the strategy gets frozen copies; the provider reads back nothing it ha
       accessToken: jwt('held', -3600),
     });
     const error = errorOf(await rejectionOf(provider.getTokens()));
-    expect(error.kind).toBe('renewal-declined');
-    expect(error.facts).toEqual({ trigger: 'expired' });
+    assert.equal(error.kind, 'renewal-declined');
+    assert.deepEqual(error.facts, { trigger: 'expired' });
   });
 
   it('a strategy rewriting the steps cannot bypass a required sentRefreshToken', async () => {
@@ -954,8 +991,8 @@ describe('the strategy gets frozen copies; the provider reads back nothing it ha
     const thrown = rejectionOf(provider.getTokens());
     (await provider.refreshes.nth(1)).result.reject(refused());
     expectStrategyFailure(await thrown);
-    expect(provider.logins.items).toHaveLength(0);
-    expect(provider.held().refresh).toBe('R');
+    assert.equal(provider.logins.items.length, 0);
+    assert.equal(provider.held().refresh, 'R');
   });
 
   it('every object handed to next() and aborted() is frozen, deep', async () => {
@@ -986,8 +1023,8 @@ describe('the strategy gets frozen copies; the provider reads back nothing it ha
     cut.abort();
     await second;
     await quiet();
-    expect(seen.length).toBeGreaterThan(5);
-    for (const value of seen) expect(Object.isFrozen(value)).toBe(true);
+    assert.ok(seen.length > 5, `${seen.length} > ${5}`);
+    for (const value of seen) assert.equal(Object.isFrozen(value), true);
   });
 });
 
@@ -1016,7 +1053,8 @@ describe('edge cases of a refresh step and of the delivery order', () => {
     await cut;
     held.result.reject(new Error('not sent'));
     await quiet();
-    expect(lines.map((line) => line[0])).not.toContain(
+    notContains(
+      lines.map((line) => line[0]),
       '[BaseTokenProvider] Refresh failed',
     );
   });
@@ -1029,8 +1067,8 @@ describe('edge cases of a refresh step and of the delivery order', () => {
         discard(spent: string, attempt: { signal: AbortSignal }): Promise<void>;
       }
     ).discard('replaced-meanwhile', { signal: new AbortController().signal });
-    expect(reports).toEqual([]);
-    expect(provider.held().refresh).toBe('R');
+    assert.deepEqual(reports, []);
+    assert.equal(provider.held().refresh, 'R');
   });
 });
 
@@ -1052,11 +1090,11 @@ describe("stop's answer, in the order of the renewal", () => {
     });
     (await provider.refreshes.nth(1)).result.reject(refused());
     const outcome = await answered;
-    expect(outcome.ok).toBe(false);
+    assert.equal(outcome.ok, false);
     if (outcome.ok) return;
     // The refresh step's own error, not system-refused.
-    expect(outcome.refusal.kind).toBe('unknown');
-    expect(outcome.refusal.facts).toMatchObject({ operation: 'token-request' });
+    assert.equal(outcome.refusal.kind, 'unknown');
+    matchObject(outcome.refusal.facts, { operation: 'token-request' });
   });
 
   it("a step's error comes before the lastRenewal of a token bound elsewhere", async () => {
@@ -1080,8 +1118,8 @@ describe("stop's answer, in the order of the renewal", () => {
     const second = rejectionOf(provider.getTokens());
     (await provider.refreshes.nth(1)).result.reject(refused());
     const error = errorOf(await second);
-    expect(error).not.toBe(remembered);
-    expect(error.facts).toMatchObject({ operation: 'token-request' });
+    assert.notEqual(error, remembered);
+    matchObject(error.facts, { operation: 'token-request' });
   });
 
   it("an outcome's refusal comes before rule 5's: a 403 renewed into the same token, then stop", async () => {
@@ -1099,9 +1137,9 @@ describe("stop's answer, in the order of the renewal", () => {
     });
     (await provider.refreshes.nth(1)).result.resolve(tokens(token, 'R2'));
     const outcome = await answered;
-    expect(outcome.ok).toBe(false);
+    assert.equal(outcome.ok, false);
     if (outcome.ok) return;
-    expect(outcome.refusal.kind).toBe('renewal-unchanged');
+    assert.equal(outcome.refusal.kind, 'renewal-unchanged');
   });
 });
 
@@ -1129,9 +1167,9 @@ describe('pending observations are delivered before the next next()', () => {
     } finally {
       globalThis.queueMicrotask = original;
     }
-    expect(s.calls).toEqual(['next:0', 'aborted', 'next:1']);
+    assert.deepEqual(s.calls, ['next:0', 'aborted', 'next:1']);
     for (const task of held) task();
-    expect(s.observed).toHaveLength(1);
+    assert.equal(s.observed.length, 1);
     (await provider.refreshes.nth(2)).result.resolve(tokens(jwt('in'), 'S'));
     await next;
   });

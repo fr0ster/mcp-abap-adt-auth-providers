@@ -1,6 +1,7 @@
 /**
- * Jest setup (`setupFiles`): no test starts a program it did not register —
- * above all no real browser or URL launcher.
+ * Loaded before any test module in every test process: `tools/run-tests.mjs`
+ * preloads the compiled file (`node --test --require`) for every test file. No test starts a
+ * program it did not register — above all no real browser or URL launcher.
  *
  * Deny by default. Every `child_process` entry point (`spawn`, `spawnSync`,
  * `execFile`, `execFileSync`, `exec`, `execSync`, `fork`) throws unless:
@@ -17,7 +18,7 @@
  *
  * Not covered: a child node process. The guard allows `process.execPath`,
  * and a plain-node child (`plainNode.ts`, `browserSettlesAlone.test.ts`)
- * runs outside Jest's setup, so nothing here stops what it starts. Such a
+ * runs outside the test setup, so nothing here stops what it starts. Such a
  * child either injects its own `IBrowser`, or — `browserSettlesAlone` —
  * runs a shipped browser with a `PATH` holding only its fake directory and
  * fakes given by absolute path, so no system program can be found.
@@ -27,7 +28,7 @@ import { resolve } from 'node:path';
 import { promisify } from 'node:util';
 
 // The core module object itself (not an import wrapper): every importer,
-// `jest.requireActual` included, reads it.
+// a module mock's fallback to the real one included, reads it.
 import childProcess = require('node:child_process');
 
 const GUARDED = Symbol.for('mcp-abap-adt.noRealBrowser');

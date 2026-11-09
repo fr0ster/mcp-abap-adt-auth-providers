@@ -35,9 +35,10 @@
  * Runs only with both UAA_URL and KEYCLOAK_URL set (`npm run test:stand`).
  */
 
+import assert from 'node:assert/strict';
+import { before, describe, it } from 'node:test';
 import { inspect } from 'node:util';
 import { deflateRawSync, inflateRawSync } from 'node:zlib';
-import { beforeAll, describe, expect, it } from '@jest/globals';
 import { isSamlStatusCode } from '@mcp-abap-adt/auth-errors';
 import { DOMParser } from '@xmldom/xmldom';
 import { parseStrictXml } from '../../../auth/strictXml';
@@ -51,6 +52,7 @@ import { Saml2BearerProvider } from '../../../providers/Saml2BearerProvider';
 import { Saml2PureProvider } from '../../../providers/Saml2PureProvider';
 import { refreshThenLogin } from '../../../renewal';
 import { staticCodeStrategy } from '../../../strategies';
+import { contains } from '../../helpers/expectations';
 
 /**
  * The consumer's own code obtains the SAMLResponse for the URL it is handed:
@@ -261,7 +263,7 @@ describeBoth('SAML providers with Keycloak as the identity provider', () => {
   let bearerAcs = '';
   let idpInitiatedUrl = '';
   let idpCertificates: string[] = [];
-  beforeAll(async () => {
+  before(async () => {
     await trustKeycloakInUaa();
     bearerAcs = await uaaBearerAcs();
     idpInitiatedUrl = await idpInitiatedSsoTo(bearerAcs);
@@ -298,12 +300,13 @@ describeBoth('SAML providers with Keycloak as the identity provider', () => {
     }).getTokens();
 
     const token = claims(tokens.authorizationToken);
-    expect(token.grant_type).toBe(
+    assert.equal(
+      token.grant_type,
       'urn:ietf:params:oauth:grant-type:saml2-bearer',
     );
-    expect(token.origin).toBe('keycloak');
-    expect(token.user_name).toBe('tester');
-    expect(tokens.refreshToken).toEqual(expect.any(String));
+    assert.equal(token.origin, 'keycloak');
+    assert.equal(token.user_name, 'tester');
+    assert.equal(typeof tokens.refreshToken, 'string');
   });
 
   // Validation passes here — the assertion answers the ID the provider minted
@@ -336,15 +339,16 @@ describeBoth('SAML providers with Keycloak as the identity provider', () => {
     // UAA refuses with 401. Its reason (the InResponseTo it expects null)
     // was in the description, which since 5.4.2 is written nowhere: the
     // error keeps the status and a registered code at most.
-    expect(String(thrown)).toMatch(/401/);
-    expect(inspect(thrown, { depth: null })).not.toMatch(/InResponseTo/);
-    expect(
+    assert.match(String(thrown), /401/);
+    assert.doesNotMatch(inspect(thrown, { depth: null }), /InResponseTo/);
+    assert.deepEqual(
       Object.keys(
         (thrown?.response?.data ?? {}) as Record<string, unknown>,
       ).filter((key) => key !== 'error'),
-    ).toEqual([]);
-    expect(JSON.stringify(failures)).toContain('HTTP 401');
-    expect(JSON.stringify(failures)).not.toMatch(/InResponseTo/);
+      [],
+    );
+    contains(JSON.stringify(failures), 'HTTP 401');
+    assert.doesNotMatch(JSON.stringify(failures), /InResponseTo/);
   });
 
   it('Saml2PureProvider: Keycloak answers its AuthnRequest with a signed response for the SP', async () => {
@@ -379,11 +383,11 @@ describeBoth('SAML providers with Keycloak as the identity provider', () => {
       },
     }).getTokens();
 
-    expect(tokens.authorizationToken).toBe('SAP_SESSIONID=stand');
+    assert.equal(tokens.authorizationToken, 'SAP_SESSIONID=stand');
     // Keycloak posts to the ACS the provider's AuthnRequest named…
-    expect(delivered[0]!.acsUrl).toBe(acsUrl);
+    assert.equal(delivered[0]!.acsUrl, acsUrl);
     // …and the cookie provider gets exactly what Keycloak issued.
-    expect(received).toEqual([delivered[0]!.samlResponse]);
+    assert.deepEqual(received, [delivered[0]!.samlResponse]);
 
     const doc = new DOMParser().parseFromString(
       Buffer.from(received[0]!, 'base64').toString('utf8'),
@@ -391,15 +395,21 @@ describeBoth('SAML providers with Keycloak as the identity provider', () => {
     );
     const text = (name: string) =>
       doc.getElementsByTagNameNS(SAML_NS, name)[0]?.textContent;
-    expect(text('Issuer')).toBe(KEYCLOAK_URL);
-    expect(text('Audience')).toBe('sap-sp');
-    expect(text('NameID')).toBe('tester');
-    expect(
+    assert.equal(text('Issuer'), KEYCLOAK_URL);
+    assert.equal(text('Audience'), 'sap-sp');
+    assert.equal(text('NameID'), 'tester');
+    assert.ok(
       doc.getElementsByTagNameNS(
         'http://www.w3.org/2000/09/xmldsig#',
         'Signature',
-      ).length,
-    ).toBeGreaterThan(0);
+      ).length > 0,
+      `${
+        doc.getElementsByTagNameNS(
+          'http://www.w3.org/2000/09/xmldsig#',
+          'Signature',
+        ).length
+      } > ${0}`,
+    );
     // The lifetime comes from the validated assertion: the earlier of its
     // Conditions and its bearer confirmation.
     const until = (name: string) =>
@@ -408,7 +418,8 @@ describeBoth('SAML providers with Keycloak as the identity provider', () => {
           .getElementsByTagNameNS(SAML_NS, name)[0]
           ?.getAttribute('NotOnOrAfter') ?? '',
       );
-    expect(tokens.expiresAt).toBe(
+    assert.equal(
+      tokens.expiresAt,
       Math.min(until('Conditions'), until('SubjectConfirmationData')),
     );
   });
@@ -469,7 +480,7 @@ describeBoth('SAML providers with Keycloak as the identity provider', () => {
         facts: { statusCode: 'urn:oasis:names:tc:SAML:2.0:status:Responder' },
       },
     );
-    expect(error.facts).toEqual({
+    assert.deepEqual(error.facts, {
       rule: 'declined',
       check: 'status',
       statusCode: 'urn:oasis:names:tc:SAML:2.0:status:Responder',
@@ -486,10 +497,10 @@ describeBoth('SAML providers with Keycloak as the identity provider', () => {
     process.stderr.write(
       `[measured] Keycloak declined with ${JSON.stringify(codes)}\n`,
     );
-    expect(doc.getElementsByTagNameNS(SAML_NS, 'Assertion')).toHaveLength(0);
+    assert.equal(doc.getElementsByTagNameNS(SAML_NS, 'Assertion').length, 0);
     // The top-level code is the one `declined` carries: a registered one.
-    expect(isSamlStatusCode(codes[0])).toBe(true);
-    expect(codes[0]).toBe(error.facts.statusCode);
+    assert.equal(isSamlStatusCode(codes[0]), true);
+    assert.equal(codes[0], error.facts.statusCode);
   });
 });
 
@@ -507,28 +518,31 @@ describe('signingCertificates', () => {
     '</ds:X509Data></ds:KeyInfo></md:KeyDescriptor>';
 
   it('ignores an encryption key', () => {
-    expect(
+    assert.deepEqual(
       signingCertificates(
         entity(key('U0lHTg==', 'signing') + key('RU5D', 'encryption')),
       ),
-    ).toEqual(['U0lHTg==']);
+      ['U0lHTg=='],
+    );
   });
 
   // No use attribute means both uses in SAML metadata; only an explicit
   // signing key is trusted to sign.
   it('ignores a key that does not say it signs', () => {
-    expect(
+    assert.deepEqual(
       signingCertificates(entity(key('U0lHTg==', 'signing') + key('Qk9USA=='))),
-    ).toEqual(['U0lHTg==']);
+      ['U0lHTg=='],
+    );
   });
 
   it('strips whitespace and lists each certificate once', () => {
-    expect(
+    assert.deepEqual(
       signingCertificates(
         entity(
           key('\n  U0lH\n  Tg==\n', 'signing') + key('U0lHTg==', 'signing'),
         ),
       ),
-    ).toEqual(['U0lHTg==']);
+      ['U0lHTg=='],
+    );
   });
 });

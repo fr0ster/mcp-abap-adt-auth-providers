@@ -8,15 +8,17 @@
  * real socket, through providers and their sites.
  */
 
+import assert from 'node:assert/strict';
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { afterAll, beforeAll, describe, expect, it } from '@jest/globals';
+import { after, before, describe, it } from 'node:test';
 import { readFailure } from '@mcp-abap-adt/auth-errors';
 import { ClientCredentialsProvider } from '../../providers/ClientCredentialsProvider';
 import { OidcPasswordProvider } from '../../providers/OidcPasswordProvider';
 import { UaaPasscodeProvider } from '../../providers/UaaPasscodeProvider';
 import { refreshThenLogin } from '../../renewal';
 import { staticCodeStrategy } from '../../strategies/codeStrategies';
+import { matchObject } from '../helpers/expectations';
 
 let body: unknown;
 let base = '';
@@ -27,13 +29,13 @@ const server: Server = createServer((req, res) => {
     res.end(JSON.stringify(body));
   });
 });
-beforeAll(async () => {
+before(async () => {
   await new Promise<void>((resolve) =>
     server.listen(0, '127.0.0.1', () => resolve()),
   );
   base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
 });
-afterAll(() => new Promise<void>((resolve) => server.close(() => resolve())));
+after(() => new Promise<void>((resolve) => server.close(() => resolve())));
 
 const providers = {
   'client credentials': () =>
@@ -78,10 +80,8 @@ describe('an access_token that is not a non-empty string is no token', () => {
           (error: unknown) => error,
         );
         const failure = readFailure(thrown, 'token-request');
-        expect(failure.kind).toBe('request-failed');
-        expect(failure.facts).toEqual(
-          expect.objectContaining({ problem: 'no-access-token' }),
-        );
+        assert.equal(failure.kind, 'request-failed');
+        matchObject(failure.facts, { problem: 'no-access-token' });
         // Nothing is presented either.
         const headers: Record<string, string> = {};
         const outcome = await provider.authorize({
@@ -91,8 +91,8 @@ describe('an access_token that is not a non-empty string is no token', () => {
           },
           cookies: () => ({ ok: true }),
         } as never);
-        expect(outcome.ok).toBe(false);
-        expect(headers).toEqual({});
+        assert.equal(outcome.ok, false);
+        assert.deepEqual(headers, {});
       });
     }
   }
@@ -108,16 +108,16 @@ describe('expires_in and refresh_token of another type are absent', () => {
           expires_in: expiresIn,
         };
         const result = await build().getTokens();
-        expect(result.authorizationToken).toBe('opaque-token');
-        expect(result.expiresIn).toBeUndefined();
-        expect(result.refreshToken).toBeUndefined();
+        assert.equal(result.authorizationToken, 'opaque-token');
+        assert.equal(result.expiresIn, undefined);
+        assert.equal(result.refreshToken, undefined);
       });
     }
 
     it(`${name}: a finite non-negative expires_in is kept`, async () => {
       body = { access_token: 'opaque-token', expires_in: 3600 };
       const result = await build().getTokens();
-      expect(result.expiresIn).toBe(3600);
+      assert.equal(result.expiresIn, 3600);
     });
   }
 });

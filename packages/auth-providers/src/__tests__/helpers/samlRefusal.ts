@@ -9,13 +9,15 @@
  * under test proves nothing. `RULE_WORDS` is a `Record` over every rule, so a
  * rule without a fragment does not compile.
  */
-import { expect } from '@jest/globals';
+
+import assert from 'node:assert/strict';
 import { AuthProviderFailure, isMinted } from '@mcp-abap-adt/auth-errors';
 import type {
   AssertionCheck,
   AssertionRule,
   SamlAssertionError,
 } from '@mcp-abap-adt/interfaces-auth';
+import { contains, deepEqualWith, matchObject } from './expectations';
 
 /** Each rule's check. */
 export const RULE_CHECK: Readonly<Record<AssertionRule, AssertionCheck>> = {
@@ -162,26 +164,27 @@ export function expectSamlRefusal(
   rule: AssertionRule,
   expected: SamlExpectation = {},
 ): SamlAssertionError {
-  expect(thrown).toBeInstanceOf(AuthProviderFailure);
+  assert.ok(thrown instanceof AuthProviderFailure);
   if (!(thrown instanceof AuthProviderFailure)) throw new Error('unreachable');
   const error = thrown.error;
-  expect(isMinted(error)).toBe(true);
-  expect(error.kind).toBe('saml-assertion');
+  assert.equal(isMinted(error), true);
+  assert.equal(error.kind, 'saml-assertion');
   if (error.kind !== 'saml-assertion') throw new Error('unreachable');
-  expect(error.variant).toBe(rule);
-  expect(error.facts.rule).toBe(rule);
-  expect(error.facts.check).toBe(RULE_CHECK[rule]);
-  expect(error.reason).toContain(
+  assert.equal(error.variant, rule);
+  assert.equal(error.facts.rule, rule);
+  assert.equal(error.facts.check, RULE_CHECK[rule]);
+  contains(
+    error.reason,
     `the SAML assertion was refused (${RULE_CHECK[rule]}): `,
   );
-  expect(error.reason).toContain(RULE_WORDS[rule]);
+  contains(error.reason, RULE_WORDS[rule]);
   if (expected.facts !== undefined) {
-    expect(error.facts).toMatchObject(expected.facts);
+    matchObject(error.facts, expected.facts);
   }
   if (expected.diagnostics === undefined) {
-    expect('diagnostics' in error).toBe(false);
+    assert.equal('diagnostics' in error, false);
   } else {
-    expect(error.diagnostics).toEqual(expected.diagnostics);
+    deepEqualWith(error.diagnostics, expected.diagnostics);
   }
   return error;
 }

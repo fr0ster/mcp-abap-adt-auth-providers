@@ -6,9 +6,11 @@
  * file checks the set: the fragments are unique within a check, and every rule
  * is asserted by some test.
  */
+
+import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { describe, expect, it } from '@jest/globals';
+import { describe, it } from 'node:test';
 import {
   authError,
   classify,
@@ -17,6 +19,8 @@ import {
 } from '@mcp-abap-adt/auth-errors';
 import type { AssertionRule } from '@mcp-abap-adt/interfaces-auth';
 import { refuse } from '../../validation/samlRefusal';
+import { caseTitle, contains, notContains } from '../helpers/expectations';
+import { TESTS } from '../helpers/packagePaths';
 import {
   expectSamlRefusal,
   RULE_CHECK,
@@ -39,22 +43,30 @@ const wordsOf = (rule: AssertionRule): string =>
 
 describe('the SAML rule set', () => {
   it('names 56 rules, each with a check of the allowlist', () => {
-    expect(RULES).toHaveLength(56);
-    expect(Object.keys(RULE_CHECK)).toHaveLength(56);
+    assert.equal(RULES.length, 56);
+    assert.equal(Object.keys(RULE_CHECK).length, 56);
     for (const rule of RULES)
-      expect(isAssertionCheck(RULE_CHECK[rule])).toBe(true);
+      assert.equal(isAssertionCheck(RULE_CHECK[rule]), true);
   });
 
-  it.each(RULES)(
-    '%s: its fragment is in its words and in no neighbour’s',
-    (rule) => {
-      expect(wordsOf(rule)).toContain(RULE_WORDS[rule]);
-      for (const other of RULES) {
-        if (other === rule || RULE_CHECK[other] !== RULE_CHECK[rule]) continue;
-        expect(wordsOf(other)).not.toContain(RULE_WORDS[rule]);
-      }
-    },
-  );
+  for (const [caseIndex, caseRow] of RULES.entries()) {
+    const rule = caseRow;
+    it(
+      caseTitle(
+        '%s: its fragment is in its words and in no neighbour’s',
+        caseRow,
+        caseIndex,
+      ),
+      () => {
+        contains(wordsOf(rule), RULE_WORDS[rule]);
+        for (const other of RULES) {
+          if (other === rule || RULE_CHECK[other] !== RULE_CHECK[rule])
+            continue;
+          notContains(wordsOf(other), RULE_WORDS[rule]);
+        }
+      },
+    );
+  }
 });
 
 /**
@@ -70,7 +82,7 @@ describe('every SAML rule has a test at its site', () => {
   ];
   const asserted = new Set<string>();
   for (const suite of SUITES) {
-    const source = readFileSync(join(__dirname, '..', suite), 'utf8');
+    const source = readFileSync(join(TESTS, suite), 'utf8');
     for (const call of ['expectSamlRefusal(', 'expectSamlRejection(']) {
       let at = source.indexOf(call);
       while (at >= 0) {
@@ -91,9 +103,12 @@ describe('every SAML rule has a test at its site', () => {
     }
   }
 
-  it.each(RULES)('%s', (rule) => {
-    expect(asserted.has(rule)).toBe(true);
-  });
+  for (const [caseIndex, caseRow] of RULES.entries()) {
+    const rule = caseRow;
+    it(caseTitle('%s', caseRow, caseIndex), () => {
+      assert.equal(asserted.has(rule), true);
+    });
+  }
 });
 
 /**
@@ -122,7 +137,7 @@ describe('the admission table, through a JavaScript-typed call', () => {
       ),
       'destination-not-us',
     );
-    expect(JSON.stringify(error)).not.toContain('urn:attacker');
+    notContains(JSON.stringify(error), 'urn:attacker');
   });
 
   it('keeps the destination diagnostic the rule permits (the positive control)', () => {

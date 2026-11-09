@@ -1,6 +1,6 @@
 {
   "name": "@mcp-abap-adt/auth-spnego-gssapi",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "A negotiate token source for @mcp-abap-adt/auth-providers' SpnegoAuthProvider: SPNEGO or Kerberos tokens from the system's GSS-API (SSPI on Windows) through the kerberos binding",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -40,12 +40,14 @@
   },
   "scripts": {
     "clean": "node -e \"for (const p of ['dist', 'tsconfig.tsbuildinfo', 'tsconfig.build.tsbuildinfo']) require('node:fs').rmSync(p, { recursive: true, force: true })\"",
-    "lint": "biome check --write src",
-    "lint:check": "biome check --error-on-warnings src",
+    "lint": "biome check --write src tools/remove.mjs tools/run-tests.mjs tools/node-test-arguments.mjs tools/node-test-arguments.d.mts",
+    "lint:check": "biome check --error-on-warnings src tools/remove.mjs tools/run-tests.mjs tools/node-test-arguments.mjs tools/node-test-arguments.d.mts",
     "format": "biome format --write src",
     "build": "npm run --silent clean && biome check src --diagnostic-level=error && tsc -p tsconfig.build.json",
     "build:fast": "tsc -p tsconfig.build.json",
-    "test": "jest",
+    "test": "npm run --silent test:build && node tools/run-tests.mjs",
+    "test:build": "node tools/remove.mjs .test-build && tsc -p tsconfig.test.json",
+    "test:file": "npm run --silent test:build && node tools/run-tests.mjs",
     "test:check": "tsc --noEmit",
     "prepublishOnly": "npm run build"
   },
@@ -58,12 +60,7 @@
   },
   "devDependencies": {
     "@biomejs/biome": "^2.6.3",
-    "@jest/globals": "^30.5.2",
-    "@types/jest": "^30.0.0",
     "@types/node": "^25.9.9",
-    "jest": "^30.5.2",
-    "jest-util": "^30.5.1",
-    "ts-jest": "^29.4.14",
     "typescript": "^5.9.3"
   },
   "allowScripts": {

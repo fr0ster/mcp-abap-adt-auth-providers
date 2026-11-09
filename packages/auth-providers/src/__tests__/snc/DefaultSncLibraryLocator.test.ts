@@ -1,13 +1,15 @@
-import { describe, expect, it } from '@jest/globals';
+import assert from 'node:assert/strict';
+import { describe, it } from 'node:test';
 import { isAuthProviderFailure, readFailure } from '@mcp-abap-adt/auth-errors';
 import { DefaultSncLibraryLocator } from '../../snc/DefaultSncLibraryLocator';
+import { contains, matchObject, notContains } from '../helpers/expectations';
 import { fakeSystem, peLibrary } from './fakeSystem';
 
 /** What the shipped locator throws, as its minted error. */
 function notFound(thrown: unknown) {
-  expect(isAuthProviderFailure(thrown)).toBe(true);
+  assert.equal(isAuthProviderFailure(thrown), true);
   const error = readFailure(thrown, 'resolving-snc-library');
-  expect(error.kind).toBe('snc');
+  assert.equal(error.kind, 'snc');
   return error as unknown as {
     facts: Record<string, unknown>;
     diagnostics?: { candidatePaths?: (string | null)[] };
@@ -38,9 +40,13 @@ function fat64(cputypes: number[]): Buffer {
 
 describe('explicit sncLib', () => {
   it('returned when usable', async () => {
-    await expect(
-      new DefaultSncLibraryLocator(fakeSystem({ files: FILES }), X64).locate(),
-    ).resolves.toEqual({ path: X64, archs: ['x64'] });
+    assert.deepEqual(
+      await new DefaultSncLibraryLocator(
+        fakeSystem({ files: FILES }),
+        X64,
+      ).locate(),
+      { path: X64, archs: ['x64'] },
+    );
   });
   // The architectures are facts, the path a diagnostic.
   it('wrong architecture fails, nothing else tried', async () => {
@@ -51,7 +57,7 @@ describe('explicit sncLib', () => {
       .locate()
       .catch((e: unknown) => e);
     const error = notFound(thrown);
-    expect(error.facts).toEqual({
+    assert.deepEqual(error.facts, {
       problem: 'library-not-found',
       searched: true,
       candidates: [
@@ -59,7 +65,7 @@ describe('explicit sncLib', () => {
       ],
       processArch: 'x64',
     });
-    expect(error.diagnostics).toEqual({ candidatePaths: [X86] });
+    assert.deepEqual(error.diagnostics, { candidatePaths: [X86] });
   });
   it('missing file fails naming sncLib, the path a diagnostic', async () => {
     const thrown = await new DefaultSncLibraryLocator(
@@ -69,37 +75,39 @@ describe('explicit sncLib', () => {
       .locate()
       .catch((e: unknown) => e);
     const error = notFound(thrown);
-    expect(error.facts.candidates).toEqual([
+    assert.deepEqual(error.facts.candidates, [
       { source: 'sncLib', reason: 'missing' },
     ]);
-    expect(error.diagnostics).toEqual({ candidatePaths: ['C:\\nope.dll'] });
-    expect((thrown as Error).message).not.toContain('nope');
+    assert.deepEqual(error.diagnostics, { candidatePaths: ['C:\\nope.dll'] });
+    notContains((thrown as Error).message, 'nope');
   });
 });
 
 describe('automatic discovery', () => {
   it('the measured mix: no SNC_LIB_64, x86 SNC_LIB, x64 in the registry → the registry library', async () => {
-    await expect(
-      new DefaultSncLibraryLocator(
+    assert.deepEqual(
+      await new DefaultSncLibraryLocator(
         fakeSystem({ env: { SNC_LIB: X86 }, files: FILES, registry: REGISTRY }),
       ).locate(),
-    ).resolves.toEqual({ path: X64, archs: ['x64'] });
+      { path: X64, archs: ['x64'] },
+    );
   });
   it('prefers SNC_LIB_64 in a 64-bit process', async () => {
     const other = 'D:\\snc\\sapcrypto.dll';
-    await expect(
-      new DefaultSncLibraryLocator(
+    matchObject(
+      await new DefaultSncLibraryLocator(
         fakeSystem({
           env: { SNC_LIB_64: other, SNC_LIB: X86 },
           files: { ...FILES, [other]: peLibrary('x64') },
           registry: REGISTRY,
         }),
       ).locate(),
-    ).resolves.toMatchObject({ path: other });
+      { path: other },
+    );
   });
   it('ignores SNC_LIB_64 in a 32-bit process and takes InstallPath32', async () => {
-    await expect(
-      new DefaultSncLibraryLocator(
+    assert.deepEqual(
+      await new DefaultSncLibraryLocator(
         fakeSystem({
           arch: 'ia32',
           env: { SNC_LIB_64: X64 },
@@ -107,40 +115,44 @@ describe('automatic discovery', () => {
           registry: REGISTRY,
         }),
       ).locate(),
-    ).resolves.toEqual({ path: X86, archs: ['ia32'] });
+      { path: X86, archs: ['ia32'] },
+    );
   });
   it('empty or whitespace variables count as unset', async () => {
-    await expect(
-      new DefaultSncLibraryLocator(
+    matchObject(
+      await new DefaultSncLibraryLocator(
         fakeSystem({
           env: { SNC_LIB_64: '  ', SNC_LIB: '' },
           files: FILES,
           registry: REGISTRY,
         }),
       ).locate(),
-    ).resolves.toMatchObject({ path: X64 });
+      { path: X64 },
+    );
   });
   it('an absent registry value is skipped', async () => {
     const other = 'D:\\snc\\sapcrypto.dll';
-    await expect(
-      new DefaultSncLibraryLocator(
+    matchObject(
+      await new DefaultSncLibraryLocator(
         fakeSystem({
           env: { SNC_LIB: other },
           files: { [other]: peLibrary('x64') },
         }),
       ).locate(),
-    ).resolves.toMatchObject({ path: other });
+      { path: other },
+    );
   });
   it('macOS: FAT_MAGIC_64 holding the process architecture is accepted', async () => {
-    await expect(
-      new DefaultSncLibraryLocator(
+    assert.deepEqual(
+      await new DefaultSncLibraryLocator(
         fakeSystem({
           platform: 'darwin',
           arch: 'arm64',
           files: { [DYLIB]: fat64([0x01000007, 0x0100000c]) },
         }),
       ).locate(),
-    ).resolves.toEqual({ path: DYLIB, archs: ['x64', 'arm64'] });
+      { path: DYLIB, archs: ['x64', 'arm64'] },
+    );
   });
   it('macOS: FAT_MAGIC_64 without it is skipped, naming what it holds', async () => {
     const thrown = await new DefaultSncLibraryLocator(
@@ -153,10 +165,10 @@ describe('automatic discovery', () => {
       .locate()
       .catch((e: unknown) => e);
     const error = notFound(thrown);
-    expect(error.facts.candidates).toEqual([
+    assert.deepEqual(error.facts.candidates, [
       { source: 'macOS bundle', reason: 'wrong architecture', archs: ['x64'] },
     ]);
-    expect(error.facts.processArch).toBe('arm64');
+    assert.equal(error.facts.processArch, 'arm64');
   });
   it('nothing usable: one error listing every candidate, paths aligned', async () => {
     const thrown = await new DefaultSncLibraryLocator(
@@ -168,10 +180,10 @@ describe('automatic discovery', () => {
       .locate()
       .catch((e: unknown) => e);
     const error = notFound(thrown);
-    expect(error.facts.candidates).toEqual([
+    assert.deepEqual(error.facts.candidates, [
       { source: 'SNC_LIB', reason: 'wrong architecture', archs: ['ia32'] },
     ]);
-    expect(error.diagnostics).toEqual({ candidatePaths: [X86] });
+    assert.deepEqual(error.diagnostics, { candidatePaths: [X86] });
   });
   it('no candidate at all says so', async () => {
     const thrown = await new DefaultSncLibraryLocator(
@@ -180,8 +192,8 @@ describe('automatic discovery', () => {
       .locate()
       .catch((e: unknown) => e);
     const error = notFound(thrown);
-    expect(error.facts).toMatchObject({ searched: true, candidates: [] });
-    expect((thrown as Error).message).toContain('no candidate');
+    matchObject(error.facts, { searched: true, candidates: [] });
+    contains((thrown as Error).message, 'no candidate');
   });
   // A registry value ending in spaces and CR/LF reaches candidatePaths
   // trimmed — untrimmed, LocalPath would drop it to null.
@@ -196,7 +208,7 @@ describe('automatic discovery', () => {
     )
       .locate()
       .catch((e: unknown) => e);
-    expect(notFound(thrown).diagnostics).toEqual({ candidatePaths: [X86] });
+    assert.deepEqual(notFound(thrown).diagnostics, { candidatePaths: [X86] });
   });
   it('a path no LocalPath admits is null, indices aligned', async () => {
     const BAD = 'C:\\evil\u202e.dll';
@@ -206,11 +218,11 @@ describe('automatic discovery', () => {
       .locate()
       .catch((e: unknown) => e);
     const error = notFound(thrown);
-    expect(error.facts.candidates).toEqual([
+    assert.deepEqual(error.facts.candidates, [
       { source: 'SNC_LIB_64', reason: 'missing' },
       { source: 'SNC_LIB', reason: 'missing' },
     ]);
-    expect(error.diagnostics).toEqual({ candidatePaths: [null, X86] });
+    assert.deepEqual(error.diagnostics, { candidatePaths: [null, X86] });
   });
   it('passes its signal to each registry read', async () => {
     const reads: { key: string; name: string; signal?: AbortSignal }[] = [];
@@ -218,7 +230,7 @@ describe('automatic discovery', () => {
     await new DefaultSncLibraryLocator(
       fakeSystem({ files: FILES, registry: REGISTRY, registryReads: reads }),
     ).locate(controller.signal);
-    expect(reads).toEqual([
+    assert.deepEqual(reads, [
       {
         key: 'HKLM\\Software\\SAP\\SecureLogin',
         name: 'InstallPath64',

@@ -1,6 +1,8 @@
-import { describe, expect, it } from '@jest/globals';
+import assert from 'node:assert/strict';
+import { describe, it } from 'node:test';
 import { authError } from '@mcp-abap-adt/auth-errors';
 import type { AuthOutcome } from '@mcp-abap-adt/interfaces-auth';
+import { thrown } from './expectations';
 import { wordsOf } from './minted';
 
 describe('wordsOf still checks the whole outcome', () => {
@@ -9,14 +11,14 @@ describe('wordsOf still checks the whole outcome', () => {
       ok: false,
       refusal: authError['client-certificate']({ problem: 'expired' }),
     };
-    expect(wordsOf(outcome)).toEqual({
+    assert.deepEqual(wordsOf(outcome), {
       ok: false,
       refusal: {
         reason: 'the client certificate has expired',
         hint: 'renew the certificate; a token provider pins its certificate for life, so give the renewed one to a new provider',
       },
     });
-    expect(wordsOf({ ok: true })).toEqual({ ok: true });
+    assert.deepEqual(wordsOf({ ok: true }), { ok: true });
   });
 
   it('a stray key on the refusal fails', () => {
@@ -24,19 +26,26 @@ describe('wordsOf still checks the whole outcome', () => {
       ok: false,
       refusal: { reason: 'r', code: 'SECRET' },
     } as unknown as AuthOutcome;
-    expect(() => wordsOf(stray)).toThrow();
+    assert.throws(() => wordsOf(stray), thrown());
   });
 
   it('a stray key on the outcome fails', () => {
-    expect(() =>
-      wordsOf({ ok: true, refusal: { reason: 'r' } } as unknown as AuthOutcome),
-    ).toThrow();
-    expect(() =>
-      wordsOf({
-        ok: false,
-        refusal: { reason: 'r' },
-        cause: 'SECRET',
-      } as unknown as AuthOutcome),
-    ).toThrow();
+    assert.throws(
+      () =>
+        wordsOf({
+          ok: true,
+          refusal: { reason: 'r' },
+        } as unknown as AuthOutcome),
+      thrown(),
+    );
+    assert.throws(
+      () =>
+        wordsOf({
+          ok: false,
+          refusal: { reason: 'r' },
+          cause: 'SECRET',
+        } as unknown as AuthOutcome),
+      thrown(),
+    );
   });
 });

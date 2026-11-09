@@ -1,8 +1,17 @@
-import { describe, expect, it } from '@jest/globals';
+import assert from 'node:assert/strict';
+import { describe, it } from 'node:test';
 import { DefaultSncLibraryLocator } from '../../snc/DefaultSncLibraryLocator';
 import { SecureLoginClientProbe } from '../../snc/SecureLoginClientProbe';
 import { SncLogonProvider } from '../../snc/SncLogonProvider';
 import type { SncSystem } from '../../snc/SncSystem';
+import {
+  cases,
+  caseTitle,
+  hasProperty,
+  matchObject,
+  stringMatching,
+  thrown,
+} from '../helpers/expectations';
 import { configurationOf, mintedRefusal, wordsOf } from '../helpers/minted';
 import { recordingTargets } from '../helpers/targets';
 import { fakeSystem, peLibrary } from './fakeSystem';
@@ -54,60 +63,75 @@ describe('construction', () => {
     } catch (error) {
       thrown = error;
     }
-    expect(configurationOf(thrown).case).toBe('snc-partner-name-missing');
+    assert.equal(configurationOf(thrown).case, 'snc-partner-name-missing');
   });
   it('names partnerName with an ASCII apostrophe', () => {
-    expect(
+    assert.throws(
       () => new SncLogonProvider({ partnerName: ' ', ...parts(machine()) }),
-    ).toThrow("SncLogonProvider needs partnerName — the system's SNC name");
+      thrown("SncLogonProvider needs partnerName — the system's SNC name"),
+    );
   });
-  it.each(['0', '4', '5', '6', '7', '10', 'max', ''])(
-    'refuses qop %p',
-    (qop) => {
-      expect(
+  for (const [caseIndex, caseRow] of [
+    '0',
+    '4',
+    '5',
+    '6',
+    '7',
+    '10',
+    'max',
+    '',
+  ].entries()) {
+    const qop = caseRow;
+    it(caseTitle('refuses qop %p', caseRow, caseIndex), () => {
+      assert.throws(
         () =>
           new SncLogonProvider({
             partnerName: 'p:CN=SID',
             qop,
             ...parts(machine()),
           }),
-      ).toThrow(/qop/);
-    },
-  );
-  it.each(['1', '2', '3', '8', '9'])('accepts qop %p', (qop) => {
-    expect(
-      () =>
-        new SncLogonProvider({
-          partnerName: 'p:CN=SID',
-          qop,
-          ...parts(machine()),
-        }),
-    ).not.toThrow();
-  });
+        thrown(/qop/),
+      );
+    });
+  }
+  for (const [caseIndex, caseRow] of ['1', '2', '3', '8', '9'].entries()) {
+    const qop = caseRow;
+    it(caseTitle('accepts qop %p', caseRow, caseIndex), () => {
+      assert.doesNotThrow(
+        () =>
+          new SncLogonProvider({
+            partnerName: 'p:CN=SID',
+            qop,
+            ...parts(machine()),
+          }),
+      );
+    });
+  }
   it('locator and probes are required (compile-time)', () => {
-    expect(
+    assert.notEqual(
       () =>
         // @ts-expect-error locator and probes are required
         new SncLogonProvider({ partnerName: 'p:CN=SID' }),
-    ).toBeDefined();
+      undefined,
+    );
   });
   it('forSecureLoginClient assembles the locator and the Secure Login Client probe', () => {
     const p = SncLogonProvider.forSecureLoginClient({
       partnerName: 'p:CN=SID',
     }) as unknown as { locator: unknown; probes: unknown[] };
-    expect(p.locator).toBeInstanceOf(DefaultSncLibraryLocator);
-    expect(p.probes).toHaveLength(1);
-    expect(p.probes[0]).toBeInstanceOf(SecureLoginClientProbe);
+    assert.ok(p.locator instanceof DefaultSncLibraryLocator);
+    assert.equal(p.probes.length, 1);
+    assert.ok(p.probes[0] instanceof SecureLoginClientProbe);
   });
 });
 
 describe('the four moments', () => {
   it('prepare → establish writes the SNC parameters, no user or passwd', async () => {
     const p = snc(machine());
-    await expect(p.prepare()).resolves.toEqual({ ok: true });
+    assert.deepEqual(await p.prepare(), { ok: true });
     const t = recordingTargets();
-    await expect(p.establish(t.logonTarget)).resolves.toEqual({ ok: true });
-    expect(t.logon.params).toEqual([
+    assert.deepEqual(await p.establish(t.logonTarget), { ok: true });
+    assert.deepEqual(t.logon.params, [
       {
         snc_mode: '1',
         snc_partnername: 'p:CN=SID',
@@ -115,15 +139,15 @@ describe('the four moments', () => {
         snc_lib: SLC,
       },
     ]);
-    await expect(p.authorize(t.requestTarget)).resolves.toEqual({ ok: true });
-    expect(t.request).toEqual({ headers: {}, cookies: [] });
+    assert.deepEqual(await p.authorize(t.requestTarget), { ok: true });
+    assert.deepEqual(t.request, { headers: {}, cookies: [] });
   });
   it('snc_myname only when configured', async () => {
     const p = snc(machine(), { myName: 'p:CN=ME', qop: '8' });
     await p.prepare();
     const t = recordingTargets();
     await p.establish(t.logonTarget);
-    expect(t.logon.params[0]).toMatchObject({
+    matchObject(t.logon.params[0], {
       snc_myname: 'p:CN=ME',
       snc_qop: '8',
     });
@@ -131,14 +155,15 @@ describe('the four moments', () => {
   it('an HTTP wire: the target Oops is SNC’s own', async () => {
     const p = snc(machine());
     await p.prepare();
-    await expect(
-      p.establish(
+    matchObject(
+      await p.establish(
         recordingTargets({ acceptsLogonParameters: false }).logonTarget,
       ),
-    ).resolves.toMatchObject({
-      ok: false,
-      refusal: { reason: 'this wire takes no logon parameters (HTTP)' },
-    });
+      {
+        ok: false,
+        refusal: { reason: 'this wire takes no logon parameters (HTTP)' },
+      },
+    );
   });
   it('a throwing target is an Oops', async () => {
     const p = snc(machine());
@@ -146,25 +171,26 @@ describe('the four moments', () => {
     const outcome = await p.establish(
       recordingTargets({ throws: true }).logonTarget,
     );
-    expect(outcome.ok).toBe(false);
-    expect(JSON.stringify(outcome)).not.toMatch(/SECRET-IN-TARGET/);
+    assert.equal(outcome.ok, false);
+    assert.doesNotMatch(JSON.stringify(outcome), /SECRET-IN-TARGET/);
   });
   it('establish before prepare is an Oops', async () => {
-    await expect(
-      snc(machine()).establish(recordingTargets().logonTarget),
-    ).resolves.toMatchObject({ ok: false });
+    matchObject(
+      await snc(machine()).establish(recordingTargets().logonTarget),
+      { ok: false },
+    );
   });
   it('SLC library → Ok: the product is named, not checked', async () => {
-    await expect(snc(machine()).prepare()).resolves.toEqual({ ok: true });
+    assert.deepEqual(await snc(machine()).prepare(), { ok: true });
   });
   it('non-SLC library → Ok, no product named', async () => {
-    await expect(snc(machine(), { sncLib: KRB }).prepare()).resolves.toEqual({
+    assert.deepEqual(await snc(machine(), { sncLib: KRB }).prepare(), {
       ok: true,
     });
   });
   it('no candidate at all → the refusal says so; the hint needs no logger', async () => {
     const outcome = await snc(fakeSystem({ platform: 'linux' })).prepare();
-    expect(wordsOf(outcome)).toEqual({
+    assert.deepEqual(wordsOf(outcome), {
       ok: false,
       refusal: {
         reason:
@@ -178,14 +204,14 @@ describe('the four moments', () => {
     const outcome = await snc(machine(), {
       sncLib: 'C:\\nope\\sapcrypto.dll',
     }).prepare();
-    expect(wordsOf(outcome)).toEqual({
+    assert.deepEqual(wordsOf(outcome), {
       ok: false,
       refusal: {
         reason: 'no usable SNC library was found: sncLib (missing)',
         hint: 'set sncLib to the SNC (GSS) library of your SNC product',
       },
     });
-    expect(mintedRefusal(outcome).diagnostics).toEqual({
+    assert.deepEqual(mintedRefusal(outcome).diagnostics, {
       candidatePaths: ['C:\\nope\\sapcrypto.dll'],
     });
   });
@@ -201,14 +227,14 @@ describe('the four moments', () => {
         registry: REGISTRY,
       }),
     ).prepare();
-    expect(outcome).toMatchObject({
+    matchObject(outcome, {
       ok: false,
       refusal: {
         reason:
           'no usable SNC library was found: SNC_LIB_64 (not a library); SNC_LIB (wrong architecture); registry (missing)',
       },
     });
-    expect(mintedRefusal(outcome).diagnostics).toEqual({
+    assert.deepEqual(mintedRefusal(outcome).diagnostics, {
       candidatePaths: [TXT, X86, SLC],
     });
   });
@@ -222,7 +248,7 @@ describe('the four moments', () => {
       },
       probes: [],
     });
-    expect(JSON.stringify(await p.prepare())).not.toMatch(/SECRET/);
+    assert.doesNotMatch(JSON.stringify(await p.prepare()), /SECRET/);
   });
   it('a throwing logger never makes a method throw', async () => {
     const make = (system: SncSystem, sncLib?: string) =>
@@ -244,17 +270,15 @@ describe('the four moments', () => {
         await p.rejected({ at: 'logon', error: sdkError }),
       ];
       for (const outcome of outcomes) {
-        expect(outcome).toHaveProperty('ok');
-        expect(JSON.stringify(outcome)).not.toMatch(/SECRET/);
+        assert.equal(hasProperty(outcome, 'ok'), true);
+        assert.doesNotMatch(JSON.stringify(outcome), /SECRET/);
       }
     }
     // A log sink that is down changes no answer.
     const usable = make(machine());
-    await expect(usable.prepare()).resolves.toEqual({ ok: true });
+    assert.deepEqual(await usable.prepare(), { ok: true });
     // The path is a diagnostic, never a word.
-    await expect(
-      make(machine(), 'C:\\nope.dll').prepare(),
-    ).resolves.toMatchObject({
+    matchObject(await make(machine(), 'C:\\nope.dll').prepare(), {
       refusal: {
         reason: 'no usable SNC library was found: sncLib (missing)',
         diagnostics: { candidatePaths: ['C:\\nope.dll'] },
@@ -268,11 +292,9 @@ describe('the four moments', () => {
       probes: [],
       logger: { debug() {}, info() {}, warn() {}, error() {} },
     });
-    await expect(p.prepare()).resolves.toEqual({ ok: true });
+    assert.deepEqual(await p.prepare(), { ok: true });
     // The library is a diagnostic.
-    await expect(
-      p.rejected({ at: 'logon', error: 'SNCERR_INIT' }),
-    ).resolves.toMatchObject({
+    matchObject(await p.rejected({ at: 'logon', error: 'SNCERR_INIT' }), {
       ok: false,
       refusal: {
         reason:
@@ -294,7 +316,7 @@ describe('the four moments', () => {
         },
       ],
     });
-    await expect(p.prepare()).resolves.toEqual({ ok: true });
+    assert.deepEqual(await p.prepare(), { ok: true });
   });
 });
 
@@ -302,7 +324,8 @@ describe('rejected', () => {
   it('A2200019 → the fixed reason, asserted', async () => {
     const p = snc(machine());
     await p.prepare();
-    expect(wordsOf(await p.rejected({ at: 'logon', error: sdkError }))).toEqual(
+    assert.deepEqual(
+      wordsOf(await p.rejected({ at: 'logon', error: sdkError })),
       {
         ok: false,
         refusal: {
@@ -313,54 +336,78 @@ describe('rejected', () => {
     );
   });
   it('before prepare(): the generic hint, no throw', async () => {
-    expect(
+    assert.deepEqual(
       wordsOf(await snc(machine()).rejected({ at: 'logon', error: sdkError })),
-    ).toEqual({
-      ok: false,
-      refusal: {
-        reason: 'the SNC library has no credential to present (A2200019)',
-        hint: 'make sure the SNC product behind the SNC library is logged on',
+      {
+        ok: false,
+        refusal: {
+          reason: 'the SNC library has no credential to present (A2200019)',
+          hint: 'make sure the SNC product behind the SNC library is logged on',
+        },
       },
-    });
+    );
   });
-  it.each([
+  for (const [caseIndex, caseRow] of cases([
     ['a free-text name', 'SECRET-PRODUCT'],
     ['the shipped name, not the shipped probe', 'SAP Secure Login Client'],
-  ])('a consumer probe with %s → the generic hint', async (_, product) => {
-    const p = new SncLogonProvider({
-      partnerName: 'p:CN=SID',
-      locator: new DefaultSncLibraryLocator(machine(), SLC),
-      probes: [{ product, appliesTo: async () => true }],
-    });
-    await p.prepare();
-    const outcome = await p.rejected({ at: 'logon', error: sdkError });
-    // "The SNC library" in the hint, the path in diagnostics.
-    expect(outcome).toMatchObject({
-      ok: false,
-      refusal: {
-        hint: 'make sure the SNC product behind the SNC library is logged on',
-        diagnostics: { library: SLC },
+  ]).entries()) {
+    const [_, product] = caseRow;
+    it(
+      caseTitle(
+        'a consumer probe with %s → the generic hint',
+        caseRow,
+        caseIndex,
+      ),
+      async () => {
+        const p = new SncLogonProvider({
+          partnerName: 'p:CN=SID',
+          locator: new DefaultSncLibraryLocator(machine(), SLC),
+          probes: [{ product, appliesTo: async () => true }],
+        });
+        await p.prepare();
+        const outcome = await p.rejected({ at: 'logon', error: sdkError });
+        // "The SNC library" in the hint, the path in diagnostics.
+        matchObject(outcome, {
+          ok: false,
+          refusal: {
+            hint: 'make sure the SNC product behind the SNC library is logged on',
+            diagnostics: { library: SLC },
+          },
+        });
+        assert.doesNotMatch(
+          JSON.stringify(outcome),
+          /SECRET|Secure Login Client/,
+        );
       },
-    });
-    expect(JSON.stringify(outcome)).not.toMatch(/SECRET|Secure Login Client/);
-  });
-  it.each([
+    );
+  }
+  for (const [caseIndex, caseRow] of cases([
     ['the SDK object', sdkError],
     [
       'an Error',
       new Error(`Failed to open RFC connection: ${JSON.stringify(sdkError)}`),
     ],
     ['a string', 'GSS-API(min): A2200019:Operation aborted'],
-  ])('A2200019 in %s → log on in the Secure Login Client', async (_, error) => {
-    const p = snc(machine());
-    await p.prepare();
-    await expect(p.rejected({ at: 'logon', error })).resolves.toMatchObject({
-      ok: false,
-      refusal: {
-        hint: expect.stringMatching(/log on in the Secure Login Client/),
+  ]).entries()) {
+    const [_, error] = caseRow;
+    it(
+      caseTitle(
+        'A2200019 in %s → log on in the Secure Login Client',
+        caseRow,
+        caseIndex,
+      ),
+      async () => {
+        const p = snc(machine());
+        await p.prepare();
+        matchObject(await p.rejected({ at: 'logon', error }), {
+          ok: false,
+          refusal: {
+            hint: stringMatching(/log on in the Secure Login Client/),
+          },
+        });
       },
-    });
-  });
+    );
+  }
   // The library is named in diagnostics, not in the words.
   it('another library: names it in diagnostics, not the Secure Login Client', async () => {
     const p = snc(machine(), { sncLib: KRB });
@@ -368,8 +415,9 @@ describe('rejected', () => {
     const refused = mintedRefusal(
       await p.rejected({ at: 'logon', error: sdkError }),
     );
-    expect(refused.diagnostics).toEqual({ library: KRB });
-    expect(`${refused.reason} ${refused.hint}`).not.toMatch(
+    assert.deepEqual(refused.diagnostics, { library: KRB });
+    assert.doesNotMatch(
+      `${refused.reason} ${refused.hint}`,
       /gsskrb5|Secure Login Client/,
     );
   });
@@ -377,24 +425,25 @@ describe('rejected', () => {
   it('SNCERR_INIT names the architecture; the library a diagnostic', async () => {
     const p = snc(machine());
     await p.prepare();
-    await expect(
-      p.rejected({
+    matchObject(
+      await p.rejected({
         at: 'logon',
         error: new Error('SNCERR_INIT, gssapi library invalid/missing'),
       }),
-    ).resolves.toMatchObject({
-      ok: false,
-      refusal: {
-        reason:
-          'the RFC SDK could not initialise the SNC library (x64) as its SNC library (SNCERR_INIT)',
-        diagnostics: { library: SLC },
+      {
+        ok: false,
+        refusal: {
+          reason:
+            'the RFC SDK could not initialise the SNC library (x64) as its SNC library (SNCERR_INIT)',
+          diagnostics: { library: SLC },
+        },
       },
-    });
+    );
   });
   it('anything else: fixed reason, an allowlisted key only', async () => {
     const p = snc(machine());
     await p.prepare();
-    expect(
+    assert.deepEqual(
       wordsOf(
         await p.rejected({
           at: 'logon',
@@ -405,25 +454,28 @@ describe('rejected', () => {
           },
         }),
       ),
-    ).toEqual({
-      ok: false,
-      refusal: { reason: 'SNC logon refused (RFC_LOGON_FAILURE)' },
-    });
-    expect(
+      {
+        ok: false,
+        refusal: { reason: 'SNC logon refused (RFC_LOGON_FAILURE)' },
+      },
+    );
+    assert.deepEqual(
       wordsOf(
         await p.rejected({
           at: 'logon',
           error: { key: 'SECRET_TOKEN_KEY', message: 'x' },
         }),
       ),
-    ).toEqual({ ok: false, refusal: { reason: 'SNC logon refused' } });
-    expect(
+      { ok: false, refusal: { reason: 'SNC logon refused' } },
+    );
+    assert.deepEqual(
       wordsOf(
         await p.rejected({
           at: 'logon',
           error: new Error('SECRET-IN-MESSAGE'),
         }),
       ),
-    ).toEqual({ ok: false, refusal: { reason: 'SNC logon refused' } });
+      { ok: false, refusal: { reason: 'SNC logon refused' } },
+    );
   });
 });

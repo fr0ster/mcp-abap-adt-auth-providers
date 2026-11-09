@@ -9,7 +9,8 @@
  * nothing newer was.
  */
 
-import { afterEach, beforeEach, describe, expect, it } from '@jest/globals';
+import assert from 'node:assert/strict';
+import { afterEach, beforeEach, describe, it } from 'node:test';
 import { readFailure } from '@mcp-abap-adt/auth-errors';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
 import { refreshStatePersistence } from '../../persistence';
@@ -28,6 +29,7 @@ import {
   type WaitingStrategy,
   waitingStrategy,
 } from '../helpers/attemptHarness';
+import { containsEqual, matchObject } from '../helpers/expectations';
 import { type Seen, seenOf } from '../helpers/persistence';
 
 const silent: ILogger = {
@@ -126,7 +128,7 @@ async function cutRefresh(
   const held = await waitForRefresh(index);
   only.abort();
   // The waiter is released at once, the server not having answered.
-  expect(isAborted(await cut)).toBe(true);
+  assert.equal(isAborted(await cut), true);
   return held;
 }
 
@@ -147,15 +149,15 @@ describe('a refresh aborted after dispatch', () => {
     // The socket must stay open: no event exists for a cut that must not come.
     await quiet();
     // Not cut: the socket is still open, the server still holds it.
-    expect(held.aborted()).toBe(false);
+    assert.equal(held.aborted(), false);
 
     // A replacement proceeds without waiting for the held refresh.
     const next = p.getTokens();
     const login = await strategy.nth(1);
     login.answer('code-1');
-    await expect(next).resolves.toMatchObject({ refreshToken: 'S-1' });
-    expect(submitted()).toEqual(['R']);
-    expect(held.aborted()).toBe(false);
+    matchObject(await next, { refreshToken: 'S-1' });
+    assert.deepEqual(submitted(), ['R']);
+    assert.equal(held.aborted(), false);
     held.answer(200, { access_token: jwt('late'), refresh_token: 'R2' });
   });
 
@@ -170,16 +172,16 @@ describe('a refresh aborted after dispatch', () => {
     const T2 = jwt('rotated');
     held.answer(200, { access_token: T2, refresh_token: 'R2' });
     await notified.nth(2);
-    expect(seen).toEqual([
+    assert.deepEqual(seen, [
       [T0, undefined, 'clear'],
       [T2, 'R2', 'replace'],
     ]);
-    await expect(p.getTokens()).resolves.toMatchObject({
+    matchObject(await p.getTokens(), {
       authorizationToken: T2,
       refreshToken: 'R2',
     });
-    expect(strategy.calls).toHaveLength(0);
-    expect(submitted()).toEqual(['R']);
+    assert.equal(strategy.calls.length, 0);
+    assert.deepEqual(submitted(), ['R']);
   });
 
   it('a newer login committed first: the late R2 is discarded; the login stays, persisted last', async () => {
@@ -193,17 +195,17 @@ describe('a refresh aborted after dispatch', () => {
     const next = p.getTokens();
     (await strategy.nth(1)).answer('code-1');
     const login = await next;
-    expect(login.refreshToken).toBe('S-1');
+    assert.equal(login.refreshToken, 'S-1');
 
     held.answer(200, { access_token: jwt('late'), refresh_token: 'R2' });
     await held.closed;
     // The late answer must change nothing: no event exists for that.
     await quiet();
-    expect(seen).toEqual([
+    assert.deepEqual(seen, [
       [T0, undefined, 'clear'],
       [login.authorizationToken, 'S-1', 'replace'],
     ]);
-    await expect(p.getTokens()).resolves.toMatchObject({
+    matchObject(await p.getTokens(), {
       authorizationToken: login.authorizationToken,
       refreshToken: 'S-1',
     });
@@ -228,33 +230,34 @@ describe('quarantine before the queue', () => {
     await notified.nth(1);
     // Commit A has installed R and is stalled in its report.
     a.abort();
-    expect(isAborted(await first)).toBe(true);
+    assert.equal(isAborted(await first), true);
 
     // Replacement B reads R, dispatches its refresh, and is cut.
     await cutRefresh(p, 0);
-    expect(submitted()).toEqual(['R']);
+    assert.deepEqual(submitted(), ['R']);
 
     // Replacement C: R is quarantined, so it logs in — while the queue is
     // still held by A's report, before any queued step has run.
     const c = p.getTokens();
     const login = await strategy.nth(2);
-    expect(submitted()).toEqual(['R']);
+    assert.deepEqual(submitted(), ['R']);
     login.answer('code-2');
     // Nothing may be notified while A holds the queue: no event exists.
     await quiet();
-    expect(seen).toHaveLength(1);
+    assert.equal(seen.length, 1);
 
     // Release A: the queue drains — the cut's clearing, then C's commit.
     stall.resolve();
-    await expect(c).resolves.toMatchObject({ refreshToken: 'S-2' });
-    expect(submitted()).toEqual(['R']);
-    expect(
+    matchObject(await c, { refreshToken: 'S-2' });
+    assert.deepEqual(submitted(), ['R']);
+    assert.deepEqual(
       seen.map(([, refresh, disposition]) => [refresh, disposition]),
-    ).toEqual([
-      ['R', 'replace'],
-      [undefined, 'clear'],
-      ['S-2', 'replace'],
-    ]);
+      [
+        ['R', 'replace'],
+        [undefined, 'clear'],
+        ['S-2', 'replace'],
+      ],
+    );
     heldRefreshes.items[0]?.answer(200, { access_token: jwt('late') });
   });
 });
@@ -274,27 +277,27 @@ describe('tombstones for life', () => {
     loginAnswers.set(1, { access_token: expired('one'), refresh_token: 'S' });
     const login = p.getTokens();
     (await strategy.nth(1)).answer('code-1');
-    await expect(login).resolves.toMatchObject({ refreshToken: 'S' });
+    matchObject(await login, { refreshToken: 'S' });
 
     // A refresh of S whose answer returns R again.
     const refreshS = p.getTokens();
     const second = await waitForRefresh(1);
-    expect(second.params.get('refresh_token')).toBe('S');
+    assert.equal(second.params.get('refresh_token'), 'S');
     const T2 = expired('two');
     second.answer(200, { access_token: T2, refresh_token: 'R' });
     const afterS = await refreshS;
-    expect(afterS.refreshToken).toBe('S');
+    assert.equal(afterS.refreshToken, 'S');
     // Told as a result with no refresh token: the one stored stands.
-    expect(seen.at(-1)).toEqual([T2, undefined, 'keep']);
+    assert.deepEqual(seen.at(-1), [T2, undefined, 'keep']);
 
     // The next renewal refreshes S again; R is never submitted again.
     const next = p.getTokens();
     const third = await waitForRefresh(2);
-    expect(third.params.get('refresh_token')).toBe('S');
+    assert.equal(third.params.get('refresh_token'), 'S');
     third.answer(200, { access_token: jwt('three'), refresh_token: 'S3' });
-    await expect(next).resolves.toMatchObject({ refreshToken: 'S3' });
-    expect(submitted()).toEqual(['R', 'S', 'S']);
-    expect(strategy.calls).toHaveLength(1);
+    matchObject(await next, { refreshToken: 'S3' });
+    assert.deepEqual(submitted(), ['R', 'S', 'S']);
+    assert.equal(strategy.calls.length, 1);
     held.answer(200, { access_token: jwt('late') });
   });
 
@@ -310,11 +313,11 @@ describe('tombstones for life', () => {
     // No refresh_token in the answer: the site keeps the one it sent, R.
     held.answer(200, { access_token: T2 });
     await notified.nth(2);
-    expect(seen).toEqual([
+    assert.deepEqual(seen, [
       [T0, undefined, 'clear'],
       [T2, undefined, 'clear'],
     ]);
-    await expect(p.getTokens()).resolves.toMatchObject({
+    matchObject(await p.getTokens(), {
       authorizationToken: T2,
       refreshToken: undefined,
     });
@@ -352,12 +355,12 @@ describe('a refresh answered, then cut while its outcome waits in the queue', ()
     });
     await stalled.promise;
     a.abort();
-    expect(isAborted(await z)).toBe(true);
+    assert.equal(isAborted(await z), true);
 
     const s1 = new AbortController();
     const w = rejectionOf(p.refreshTokens({ signal: s1.signal }));
     const held = await waitForRefresh(1);
-    expect(held.params.get('refresh_token')).toBe('R1');
+    assert.equal(held.params.get('refresh_token'), 'R1');
     answerW(held);
     // W's answer has reached the client: its socket is done.
     await held.closed;
@@ -365,16 +368,16 @@ describe('a refresh answered, then cut while its outcome waits in the queue', ()
     // happens inside the provider, with no event a test can await.
     await quiet();
     s1.abort();
-    expect(isAborted(await w)).toBe(true);
+    assert.equal(isAborted(await w), true);
 
     // X: a new renewal, while the queue is still held by Z's report.
     const x = p.refreshTokens();
     const login = await strategy.nth(1);
-    expect(submitted()).toEqual(['R0', 'R1']);
+    assert.deepEqual(submitted(), ['R0', 'R1']);
     login.answer('code-1');
     stall.resolve();
     await x;
-    expect(submitted()).toEqual(['R0', 'R1']);
+    assert.deepEqual(submitted(), ['R0', 'R1']);
     return seen;
   }
 
@@ -382,10 +385,10 @@ describe('a refresh answered, then cut while its outcome waits in the queue', ()
     const seen = await answeredThenCut((held) =>
       held.answer(200, { access_token: jwt('W'), refresh_token: 'R2' }),
     );
-    expect(seen.map(([, refresh, how]) => [refresh, how])).toContainEqual([
-      'R2',
-      'replace',
-    ]);
+    containsEqual(
+      seen.map(([, refresh, how]) => [refresh, how]),
+      ['R2', 'replace'],
+    );
   });
 
   it('refused (400 invalid_grant): R1 is not sent again', async () => {
@@ -429,11 +432,11 @@ describe('a refresh whose own commit step fails', () => {
       refresh_token: 'R2',
     });
     (await strategy.nth(1)).answer('code-1');
-    await expect(renewed).resolves.toMatchObject({ refreshToken: 'S-1' });
-    await expect(p.getTokens()).resolves.toMatchObject({
+    matchObject(await renewed, { refreshToken: 'S-1' });
+    matchObject(await p.getTokens(), {
       refreshToken: 'S-1',
     });
-    expect(submitted()).toEqual(['R']);
-    expect(strategy.calls).toHaveLength(1);
+    assert.deepEqual(submitted(), ['R']);
+    assert.equal(strategy.calls.length, 1);
   });
 });

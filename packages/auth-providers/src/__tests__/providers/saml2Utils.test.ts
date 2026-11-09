@@ -7,7 +7,8 @@
  * what `getSamlAssertion` must thread through, or refuse to proceed without.
  */
 
-import { describe, expect, it } from '@jest/globals';
+import assert from 'node:assert/strict';
+import { describe, it } from 'node:test';
 import { generateKeyMaterial } from '@mcp-abap-adt/auth-mocks';
 import type {
   AuthorizationOutcome,
@@ -28,6 +29,12 @@ import {
   createSignedResponseValidator,
 } from '../../validation/assertionValidator';
 import { createInMemoryReplayStore } from '../../validation/inMemoryReplayStore';
+import {
+  caseTitle,
+  contains,
+  matchObject,
+  matchText,
+} from '../helpers/expectations';
 import { configurationOf, thrownFrom } from '../helpers/minted';
 
 /** Never used at runtime by these tests: only here to satisfy the required field. */
@@ -51,8 +58,8 @@ describe('buildSamlAuthorizationUrl', () => {
       spEntityId: 'urn:sp',
       acsUrl: 'http://localhost:61001/acs',
     });
-    expect(built.requestId).toMatch(/^_/);
-    expect(built.url).toContain('SAMLRequest=');
+    matchText(built.requestId, /^_/);
+    contains(built.url, 'SAMLRequest=');
   });
 
   it('puts the ID it reports into the request it builds', () => {
@@ -65,7 +72,7 @@ describe('buildSamlAuthorizationUrl', () => {
     const xml = require('node:zlib')
       .inflateRawSync(Buffer.from(encoded, 'base64'))
       .toString('utf8');
-    expect(xml).toContain(`ID="${built.requestId}"`);
+    contains(xml, `ID="${built.requestId}"`);
   });
 
   it('mints nothing for a pre-built authorization URL', () => {
@@ -75,8 +82,11 @@ describe('buildSamlAuthorizationUrl', () => {
       acsUrl: 'http://localhost:61001/acs',
       authorizationUrl: 'https://idp.example/preauthorized?SAMLRequest=xyz',
     });
-    expect(built.url).toBe('https://idp.example/preauthorized?SAMLRequest=xyz');
-    expect(built.requestId).toBeUndefined();
+    assert.equal(
+      built.url,
+      'https://idp.example/preauthorized?SAMLRequest=xyz',
+    );
+    assert.equal(built.requestId, undefined);
   });
 });
 
@@ -122,8 +132,8 @@ describe('getSamlAssertion — where the expected request ID comes from', () => 
 
     const result = await getSamlAssertion(config);
 
-    expect(result.requestId).toMatch(/^_/);
-    expect(result.payload).toBe('PHNhbWw+');
+    matchText(result.requestId, /^_/);
+    assert.equal(result.payload, 'PHNhbWw+');
   });
 
   it('reports outcome.redirectUri as acsUrl, not config.acsUrl', async () => {
@@ -134,7 +144,7 @@ describe('getSamlAssertion — where the expected request ID comes from', () => 
 
     const result = await getSamlAssertion(config);
 
-    expect(result.acsUrl).toBe('http://localhost:61001/callback');
+    assert.equal(result.acsUrl, 'http://localhost:61001/callback');
   });
 
   it('uses the declared authnRequestId when the builder was never called', async () => {
@@ -146,7 +156,7 @@ describe('getSamlAssertion — where the expected request ID comes from', () => 
 
     const result = await getSamlAssertion(config);
 
-    expect(result.requestId).toBe('_declared-id');
+    assert.equal(result.requestId, '_declared-id');
   });
 
   // Minted beats declared: the ID the package just put in the request is
@@ -160,8 +170,8 @@ describe('getSamlAssertion — where the expected request ID comes from', () => 
 
     const result = await getSamlAssertion(config);
 
-    expect(result.requestId).toMatch(/^_[0-9a-f-]{36}$/);
-    expect(result.requestId).not.toBe('_declared-id');
+    matchText(result.requestId, /^_[0-9a-f-]{36}$/);
+    assert.notEqual(result.requestId, '_declared-id');
   });
 
   it('yields requestId undefined when idpInitiated is declared and the builder was never called', async () => {
@@ -173,7 +183,7 @@ describe('getSamlAssertion — where the expected request ID comes from', () => 
 
     const result = await getSamlAssertion(config);
 
-    expect(result.requestId).toBeUndefined();
+    assert.equal(result.requestId, undefined);
   });
 
   it('throws a configuration failure naming authnRequestId when no ID can be established', async () => {
@@ -182,12 +192,13 @@ describe('getSamlAssertion — where the expected request ID comes from', () => 
       authorization: neverCallsBuilder('http://localhost:61001/callback'),
     };
 
-    expect(
+    matchObject(
       configurationOf(await thrownFrom(() => getSamlAssertion(config))),
-    ).toMatchObject({
-      case: 'saml-in-response-to-undeclared',
-      fields: ['authnRequestId', 'idpInitiated'],
-    });
+      {
+        case: 'saml-in-response-to-undeclared',
+        fields: ['authnRequestId', 'idpInitiated'],
+      },
+    );
   });
 
   it('never infers idpInitiated from a strategy that simply did not call the builder', async () => {
@@ -199,9 +210,10 @@ describe('getSamlAssertion — where the expected request ID comes from', () => 
     };
 
     // The case, not 5.4.2's sentence.
-    expect(
+    assert.equal(
       configurationOf(await thrownFrom(() => getSamlAssertion(config))).case,
-    ).toBe('saml-in-response-to-undeclared');
+      'saml-in-response-to-undeclared',
+    );
   });
 
   // The builder refuses before any URL exists: an IdP-initiated login with no
@@ -229,13 +241,14 @@ describe('getSamlAssertion — where the expected request ID comes from', () => 
       authorization: strategy,
     };
 
-    expect(
+    matchObject(
       configurationOf(await thrownFrom(() => getSamlAssertion(config))),
-    ).toMatchObject({
-      case: 'saml-idp-initiated-without-authorization-url',
-      fields: ['idpInitiated', 'authorizationUrl'],
-    });
-    expect(produced).toEqual([]);
+      {
+        case: 'saml-idp-initiated-without-authorization-url',
+        fields: ['idpInitiated', 'authorizationUrl'],
+      },
+    );
+    assert.deepEqual(produced, []);
   });
 
   // The other half: with a pre-built URL — the IdP-initiated SSO URL — the
@@ -251,7 +264,7 @@ describe('getSamlAssertion — where the expected request ID comes from', () => 
 
     const result = await getSamlAssertion(config);
 
-    expect(result.requestId).toBeUndefined();
+    assert.equal(result.requestId, undefined);
   });
 
   it('throws a configuration failure when idpInitiated is combined with a declared authnRequestId', async () => {
@@ -262,12 +275,13 @@ describe('getSamlAssertion — where the expected request ID comes from', () => 
       authorization: neverCallsBuilder('http://localhost:61001/callback'),
     };
 
-    expect(
+    matchObject(
       configurationOf(await thrownFrom(() => getSamlAssertion(config))),
-    ).toMatchObject({
-      case: 'saml-idp-initiated-with-request-id',
-      fields: ['idpInitiated'],
-    });
+      {
+        case: 'saml-idp-initiated-with-request-id',
+        fields: ['idpInitiated'],
+      },
+    );
   });
 });
 
@@ -283,68 +297,73 @@ describe('checkAssertionValidator — a shipped validator still needs idpEntityI
     createSignedAssertionValidator,
   };
 
-  describe.each(Object.keys(shipped) as (keyof typeof shipped)[])(
-    '%s supplied as assertionValidator',
-    (factory) => {
-      const assertionValidator = () =>
-        shipped[factory]({
-          idpCertificates: [certificate],
-          replayStore: createInMemoryReplayStore(),
-        });
-
-      it('refuses Saml2BearerProvider at construction without idpEntityId', () => {
-        let thrown: unknown;
-        try {
-          new Saml2BearerProvider({
-            renewal: refreshThenLogin(),
-            ...common,
-            uaaUrl: 'https://uaa.example',
-            authorization: unreachableAuthorization,
-            assertionValidator: assertionValidator(),
+  for (const [caseIndex, caseRow] of (
+    Object.keys(shipped) as (keyof typeof shipped)[]
+  ).entries()) {
+    const factory = caseRow;
+    describe(
+      caseTitle('%s supplied as assertionValidator', caseRow, caseIndex),
+      () => {
+        const assertionValidator = () =>
+          shipped[factory]({
+            idpCertificates: [certificate],
+            replayStore: createInMemoryReplayStore(),
           });
-        } catch (error) {
-          thrown = error;
-        }
-        expect(configurationOf(thrown)).toMatchObject({
-          case: 'saml-shipped-validator-without-issuer',
-          fields: ['idpEntityId'],
-        });
-      });
 
-      it('refuses Saml2PureProvider at construction without idpEntityId', () => {
-        let thrown: unknown;
-        try {
-          new Saml2PureProvider({
-            renewal: refreshThenLogin(),
-            ...common,
-            cookieProvider: async () => 'cookie',
-            authorization: unreachableAuthorization,
-            assertionValidator: assertionValidator(),
+        it('refuses Saml2BearerProvider at construction without idpEntityId', () => {
+          let thrown: unknown;
+          try {
+            new Saml2BearerProvider({
+              renewal: refreshThenLogin(),
+              ...common,
+              uaaUrl: 'https://uaa.example',
+              authorization: unreachableAuthorization,
+              assertionValidator: assertionValidator(),
+            });
+          } catch (error) {
+            thrown = error;
+          }
+          matchObject(configurationOf(thrown), {
+            case: 'saml-shipped-validator-without-issuer',
+            fields: ['idpEntityId'],
           });
-        } catch (error) {
-          thrown = error;
-        }
-        expect(configurationOf(thrown)).toMatchObject({
-          case: 'saml-shipped-validator-without-issuer',
-          fields: ['idpEntityId'],
         });
-      });
 
-      it('constructs with idpEntityId', () => {
-        expect(
-          () =>
+        it('refuses Saml2PureProvider at construction without idpEntityId', () => {
+          let thrown: unknown;
+          try {
             new Saml2PureProvider({
               renewal: refreshThenLogin(),
               ...common,
-              idpEntityId: 'urn:idp',
               cookieProvider: async () => 'cookie',
               authorization: unreachableAuthorization,
               assertionValidator: assertionValidator(),
-            }),
-        ).not.toThrow();
-      });
-    },
-  );
+            });
+          } catch (error) {
+            thrown = error;
+          }
+          matchObject(configurationOf(thrown), {
+            case: 'saml-shipped-validator-without-issuer',
+            fields: ['idpEntityId'],
+          });
+        });
+
+        it('constructs with idpEntityId', () => {
+          assert.doesNotThrow(
+            () =>
+              new Saml2PureProvider({
+                renewal: refreshThenLogin(),
+                ...common,
+                idpEntityId: 'urn:idp',
+                cookieProvider: async () => 'cookie',
+                authorization: unreachableAuthorization,
+                assertionValidator: assertionValidator(),
+              }),
+          );
+        });
+      },
+    );
+  }
 
   it('constructs both providers with a custom validator and no idpEntityId', () => {
     const custom: IAssertionValidator = {
@@ -352,7 +371,7 @@ describe('checkAssertionValidator — a shipped validator still needs idpEntityI
         throw new Error('never called');
       },
     };
-    expect(
+    assert.doesNotThrow(
       () =>
         new Saml2BearerProvider({
           renewal: refreshThenLogin(),
@@ -361,8 +380,8 @@ describe('checkAssertionValidator — a shipped validator still needs idpEntityI
           authorization: unreachableAuthorization,
           assertionValidator: custom,
         }),
-    ).not.toThrow();
-    expect(
+    );
+    assert.doesNotThrow(
       () =>
         new Saml2PureProvider({
           renewal: refreshThenLogin(),
@@ -371,7 +390,7 @@ describe('checkAssertionValidator — a shipped validator still needs idpEntityI
           authorization: unreachableAuthorization,
           assertionValidator: custom,
         }),
-    ).not.toThrow();
+    );
   });
 
   // The brand is not part of what a consumer sees: not enumerable, so it
@@ -381,8 +400,8 @@ describe('checkAssertionValidator — a shipped validator still needs idpEntityI
       idpCertificates: [certificate],
       replayStore: createInMemoryReplayStore(),
     });
-    expect(Object.keys(validator)).toEqual(['validate']);
-    expect(Object.getOwnPropertySymbols({ ...validator })).toHaveLength(0);
+    assert.deepEqual(Object.keys(validator), ['validate']);
+    assert.equal(Object.getOwnPropertySymbols({ ...validator }).length, 0);
   });
 });
 
@@ -419,19 +438,21 @@ describe('idpInitiated with authnRequestId is refused at construction', () => {
       }),
   };
 
-  it.each(Object.keys(construct) as (keyof typeof construct)[])(
-    'refuses %s',
-    (provider) => {
+  for (const [caseIndex, caseRow] of (
+    Object.keys(construct) as (keyof typeof construct)[]
+  ).entries()) {
+    const provider = caseRow;
+    it(caseTitle('refuses %s', caseRow, caseIndex), () => {
       let thrown: unknown;
       try {
         construct[provider]();
       } catch (error) {
         thrown = error;
       }
-      expect(configurationOf(thrown)).toMatchObject({
+      matchObject(configurationOf(thrown), {
         case: 'saml-idp-initiated-with-request-id',
         fields: ['idpInitiated', 'authnRequestId'],
       });
-    },
-  );
+    });
+  }
 });

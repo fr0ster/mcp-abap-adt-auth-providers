@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-11-09
+
+The tests run on Node's own runner, `node:test`, with `node:assert/strict`. No published contract
+changes: the package's code, its exports and its runtime dependencies are as in 0.1.0.
+
+### Changed
+- Tests: `npm test` compiles them with the package's own `tsc` (`tsconfig.test.json`, into
+  `.test-build/`) and runs every compiled file in a process of its own, one at a time, with no
+  timeout, through `tools/run-tests.mjs`; `npm run test:file -- <compiled path>` runs a file or a
+  directory. The Kerberos stand's suite runs through `test:file` inside its container.
+
+### Removed
+- `jest`, `ts-jest`, `jest-util`, `@jest/globals` and `@types/jest` from devDependencies, and
+  `jest.config.js`.
+
 ## [0.1.0] - 2026-10-26
 
 ### Added

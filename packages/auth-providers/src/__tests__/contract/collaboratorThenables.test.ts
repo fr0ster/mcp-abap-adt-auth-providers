@@ -12,10 +12,11 @@
  * And no `unhandledRejection` anywhere.
  */
 
+import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { createServer, type Server } from 'node:http';
 import { join } from 'node:path';
-import { afterAll, beforeAll, describe, expect, it } from '@jest/globals';
+import { after, before, describe, it } from 'node:test';
 import { isMinted } from '@mcp-abap-adt/auth-errors';
 import type {
   AuthOutcome,
@@ -31,15 +32,18 @@ import {
 } from '../../index';
 import { refreshThenLogin } from '../../renewal';
 import { APlusPromise } from '../helpers/aplusPromise';
+import {
+  caseTitle,
+  contains,
+  matchObject,
+  notContains,
+} from '../helpers/expectations';
+import { CERTIFICATES } from '../helpers/packagePaths';
 import { recordingTargets } from '../helpers/targets';
 
 const certificate: ICertificateMaterial = {
-  cert: readFileSync(
-    join(__dirname, '..', 'fixtures', 'certificates', 'client.crt'),
-  ),
-  key: readFileSync(
-    join(__dirname, '..', 'fixtures', 'certificates', 'client.key'),
-  ),
+  cert: readFileSync(join(CERTIFICATES, 'client.crt')),
+  key: readFileSync(join(CERTIFICATES, 'client.key')),
 };
 
 const b64url = (value: object) =>
@@ -53,7 +57,7 @@ const accessToken = () =>
 let server: Server;
 let base: string;
 
-beforeAll(async () => {
+before(async () => {
   server = createServer((req, res) => {
     req.resume();
     req.on('end', () => {
@@ -78,7 +82,7 @@ beforeAll(async () => {
   base = `http://127.0.0.1:${typeof address === 'object' && address ? address.port : 0}`;
 });
 
-afterAll(async () => {
+after(async () => {
   server.closeAllConnections();
   await new Promise((resolve) => server.close(resolve));
 });
@@ -260,41 +264,61 @@ async function run(
 }
 
 describe('a collaborator answering a Promises/A+ promise', () => {
-  describe.each(ROWS.map((row) => [row.name, row] as const))(
-    '%s',
-    (_name, row) => {
+  for (const [caseIndex, caseRow] of ROWS.map(
+    (row) => [row.name, row] as const,
+  ).entries()) {
+    const [_name, row] = caseRow;
+    describe(caseTitle('%s', caseRow, caseIndex), () => {
       it('resolving: the answer is followed and used — Ok', async () => {
         APlusPromise.thenCalls = 0;
         const { outcome, unhandled, headers } = await run(
           row,
           row.make('resolving'),
         );
-        expect(outcome).toEqual({ ok: true });
-        expect(APlusPromise.thenCalls).toBeGreaterThan(0);
+        assert.deepEqual(outcome, { ok: true });
+        assert.ok(
+          APlusPromise.thenCalls > 0,
+          `${APlusPromise.thenCalls} > ${0}`,
+        );
         if (row.moment === 'authorize')
-          expect(Object.keys(headers)).toContain('Authorization');
-        expect(unhandled).toEqual([]);
+          contains(Object.keys(headers), 'Authorization');
+        assert.deepEqual(unhandled, []);
       });
 
-      it.each(['rejecting', 'then throwing'] as const)(
-        '%s: a classified failure, no secret, no unhandled rejection',
-        async (how) => {
-          APlusPromise.thenCalls = 0;
-          const { outcome, unhandled } = await run(row, row.make(how));
-          expect(APlusPromise.thenCalls).toBeGreaterThan(0);
-          expect(unhandled).toEqual([]);
-          if (row.failureStands) {
-            expect(outcome).toEqual({ ok: true });
-            return;
-          }
-          expect(outcome.ok).toBe(false);
-          if (outcome.ok) return;
-          expect(isMinted(outcome.refusal)).toBe(true);
-          expect(JSON.stringify(outcome)).not.toContain('SECRET-A+');
-          expect(APlusPromise.thenCalls).toBeGreaterThan(0);
-          expect(unhandled).toEqual([]);
-        },
-      );
+      for (const [caseIndex, caseRow] of (
+        ['rejecting', 'then throwing'] as const
+      ).entries()) {
+        const how = caseRow;
+        it(
+          caseTitle(
+            '%s: a classified failure, no secret, no unhandled rejection',
+            caseRow,
+            caseIndex,
+          ),
+          async () => {
+            APlusPromise.thenCalls = 0;
+            const { outcome, unhandled } = await run(row, row.make(how));
+            assert.ok(
+              APlusPromise.thenCalls > 0,
+              `${APlusPromise.thenCalls} > ${0}`,
+            );
+            assert.deepEqual(unhandled, []);
+            if (row.failureStands) {
+              assert.deepEqual(outcome, { ok: true });
+              return;
+            }
+            assert.equal(outcome.ok, false);
+            if (outcome.ok) return;
+            assert.equal(isMinted(outcome.refusal), true);
+            notContains(JSON.stringify(outcome), 'SECRET-A+');
+            assert.ok(
+              APlusPromise.thenCalls > 0,
+              `${APlusPromise.thenCalls} > ${0}`,
+            );
+            assert.deepEqual(unhandled, []);
+          },
+        );
+      }
 
       if (row.signalled) {
         it('never settling: bounded by the consumer’s AbortSignal', async () => {
@@ -302,16 +326,16 @@ describe('a collaborator answering a Promises/A+ promise', () => {
             row,
             row.make('never settling', AbortSignal.timeout(200)),
           );
-          expect(outcome.ok).toBe(false);
+          assert.equal(outcome.ok, false);
           if (outcome.ok) return;
-          expect(isMinted(outcome.refusal)).toBe(true);
-          expect(outcome.refusal).toMatchObject({
+          assert.equal(isMinted(outcome.refusal), true);
+          matchObject(outcome.refusal, {
             kind: 'interactive-login',
             facts: { outcome: 'aborted' },
           });
-          expect(unhandled).toEqual([]);
-        }, 10_000);
+          assert.deepEqual(unhandled, []);
+        });
       }
-    },
-  );
+    });
+  }
 });

@@ -1,11 +1,13 @@
 /**
  * The non-browser strategies.
  *
- * The stdout assertion is the load-bearing one: under an MCP stdio transport a
- * stray prompt on stdout corrupts the protocol stream.
+ * Under an MCP stdio transport a stray prompt on stdout corrupts the
+ * protocol stream: that nothing in src writes to stdout is checked
+ * statically (noStdoutSources.test.ts); here, that the prompt reaches stderr.
  */
 
-import { describe, expect, it, jest } from '@jest/globals';
+import assert from 'node:assert/strict';
+import { describe, it, mock } from 'node:test';
 import {
   externalCodeStrategy,
   staticCodeStrategy,
@@ -14,16 +16,15 @@ import {
   manualPasteStrategy,
   manualSamlResponseStrategy,
 } from '../../strategies/manualStrategies';
+import { contains } from '../helpers/expectations';
 
 describe('manual strategies', () => {
-  it('prompts without writing a byte to stdout', async () => {
+  it('prompts on stderr', async () => {
     const written: string[] = [];
-    const spy = jest
-      .spyOn(process.stdout, 'write')
-      .mockImplementation((chunk: unknown) => {
-        written.push(String(chunk));
-        return true;
-      });
+    const spy = mock.method(process.stderr, 'write', (chunk: unknown) => {
+      written.push(String(chunk));
+      return true;
+    });
     try {
       const strategy = manualPasteStrategy({
         redirectUri: 'http://localhost:61001/callback',
@@ -33,11 +34,11 @@ describe('manual strategies', () => {
         buildAuthorizationUrl: async () =>
           'https://idp.example/authorize?state=x',
       });
-      expect(outcome.payload).toBe('pasted-code');
+      assert.equal(outcome.payload, 'pasted-code');
     } finally {
-      spy.mockRestore();
+      spy.mock.restore();
     }
-    expect(written).toEqual([]);
+    contains(written.join(''), 'https://idp.example/authorize?state=x');
   });
 
   it('accepts a full redirected URL as well as a bare code', async () => {
@@ -49,7 +50,7 @@ describe('manual strategies', () => {
       buildAuthorizationUrl: async () =>
         'https://idp.example/authorize?state=x',
     });
-    expect(outcome.payload).toBe('from-url');
+    assert.equal(outcome.payload, 'from-url');
   });
 
   it('takes a SAMLResponse verbatim, since it never reaches a URL', async () => {
@@ -60,7 +61,7 @@ describe('manual strategies', () => {
     const outcome = await strategy.authorize({
       buildAuthorizationUrl: async () => 'https://idp.example/sso',
     });
-    expect(outcome.payload).toBe('PHNhbWw+');
+    assert.equal(outcome.payload, 'PHNhbWw+');
   });
 });
 
@@ -78,13 +79,13 @@ describe('code strategies', () => {
       buildAuthorizationUrl: async (uri) =>
         `https://idp.example/authorize?redirect_uri=${encodeURIComponent(uri)}&code_challenge=abc&state=s`,
     });
-    expect(seen[0]).toContain('code_challenge=abc');
-    expect(outcome.payload).toBe('external-code');
-    expect(outcome.redirectUri).toBe('http://localhost:61001/callback');
+    contains(seen[0], 'code_challenge=abc');
+    assert.equal(outcome.payload, 'external-code');
+    assert.equal(outcome.redirectUri, 'http://localhost:61001/callback');
   });
 
   it('never calls the builder when the payload is already held', async () => {
-    const build = jest.fn(async () => 'https://idp.example/authorize');
+    const build = mock.fn(async () => 'https://idp.example/authorize');
     const strategy = staticCodeStrategy({
       redirectUri: 'http://localhost:61001/callback',
       payload: 'already-have-it',
@@ -92,7 +93,7 @@ describe('code strategies', () => {
     const outcome = await strategy.authorize({
       buildAuthorizationUrl: build,
     });
-    expect(build).not.toHaveBeenCalled();
-    expect(outcome.payload).toBe('already-have-it');
+    assert.equal(build.mock.callCount(), 0);
+    assert.equal(outcome.payload, 'already-have-it');
   });
 });

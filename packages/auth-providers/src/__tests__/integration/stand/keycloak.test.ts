@@ -7,7 +7,8 @@
  * login and consent pages by formLogin.ts, playing the user.
  */
 
-import { describe, expect, it } from '@jest/globals';
+import assert from 'node:assert/strict';
+import { describe, it } from 'node:test';
 import { readFailure } from '@mcp-abap-adt/auth-errors';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
 import { discoverOidc } from '../../../auth/oidcDiscovery';
@@ -21,6 +22,7 @@ import { OidcPasswordProvider } from '../../../providers/OidcPasswordProvider';
 import { OidcTokenExchangeProvider } from '../../../providers/OidcTokenExchangeProvider';
 import { refreshThenLogin } from '../../../renewal';
 import { asOidcResult, externalCodeStrategy } from '../../../strategies';
+import { contains } from '../../helpers/expectations';
 import { approveDevice, authorizeByForm, denyDevice } from './formLogin';
 
 const KEYCLOAK_URL = process.env.KEYCLOAK_URL?.replace(/\/+$/, '');
@@ -58,11 +60,12 @@ describeKeycloak('OIDC providers against Keycloak', () => {
         scopes: ['openid'],
       }).getTokens();
 
-      expect(claims(tokens.authorizationToken).iss).toBe(KEYCLOAK_URL);
-      expect(claims(tokens.authorizationToken).preferred_username).toBe(
+      assert.equal(claims(tokens.authorizationToken).iss, KEYCLOAK_URL);
+      assert.equal(
+        claims(tokens.authorizationToken).preferred_username,
         'tester',
       );
-      expect(tokens.refreshToken).toEqual(expect.any(String));
+      assert.equal(typeof tokens.refreshToken, 'string');
     });
 
     it('refreshes with the refresh token rather than the password', async () => {
@@ -89,8 +92,8 @@ describeKeycloak('OIDC providers against Keycloak', () => {
         refreshToken: first.refreshToken,
       }).getTokens();
 
-      expect(claims(refreshed.authorizationToken).iss).toBe(KEYCLOAK_URL);
-      expect(refreshed.authorizationToken).not.toBe(first.authorizationToken);
+      assert.equal(claims(refreshed.authorizationToken).iss, KEYCLOAK_URL);
+      assert.notEqual(refreshed.authorizationToken, first.authorizationToken);
     });
   });
 
@@ -107,9 +110,10 @@ describeKeycloak('OIDC providers against Keycloak', () => {
           externalCodeStrategy({
             redirectUri: CALLBACK,
             provide: async (url) => {
-              expect(
+              assert.equal(
                 new URL(url).searchParams.get('code_challenge_method'),
-              ).toBe('S256');
+                'S256',
+              );
               const back = await authorizeByForm(url, CALLBACK, USER);
               return back.searchParams.get('code') ?? '';
             },
@@ -117,9 +121,9 @@ describeKeycloak('OIDC providers against Keycloak', () => {
         ),
       }).getTokens();
 
-      expect(claims(tokens.authorizationToken).iss).toBe(KEYCLOAK_URL);
-      expect(claims(tokens.authorizationToken).azp).toBe('oidc-browser');
-      expect(tokens.refreshToken).toEqual(expect.any(String));
+      assert.equal(claims(tokens.authorizationToken).iss, KEYCLOAK_URL);
+      assert.equal(claims(tokens.authorizationToken).azp, 'oidc-browser');
+      assert.equal(typeof tokens.refreshToken, 'string');
     });
   });
 
@@ -144,10 +148,10 @@ describeKeycloak('OIDC providers against Keycloak', () => {
       }).getTokens();
 
       await approval;
-      expect(approval).toBeDefined();
-      expect(claims(tokens.authorizationToken).iss).toBe(KEYCLOAK_URL);
-      expect(claims(tokens.authorizationToken).azp).toBe('oidc-device');
-    }, 60_000);
+      assert.notEqual(approval, undefined);
+      assert.equal(claims(tokens.authorizationToken).iss, KEYCLOAK_URL);
+      assert.equal(claims(tokens.authorizationToken).azp, 'oidc-device');
+    });
   });
 
   describe('OidcTokenExchangeProvider', () => {
@@ -159,7 +163,7 @@ describeKeycloak('OIDC providers against Keycloak', () => {
         clientSecret: 'secret',
         ...USER,
       }).getTokens();
-      expect(claims(subject.authorizationToken).azp).toBe('te-subject');
+      assert.equal(claims(subject.authorizationToken).azp, 'te-subject');
 
       const exchanged = await new OidcTokenExchangeProvider({
         renewal: refreshThenLogin(),
@@ -170,9 +174,10 @@ describeKeycloak('OIDC providers against Keycloak', () => {
         subjectTokenType: 'urn:ietf:params:oauth:token-type:access_token',
       }).getTokens();
 
-      expect(claims(exchanged.authorizationToken).iss).toBe(KEYCLOAK_URL);
-      expect(claims(exchanged.authorizationToken).azp).toBe('te-requester');
-      expect(claims(exchanged.authorizationToken).preferred_username).toBe(
+      assert.equal(claims(exchanged.authorizationToken).iss, KEYCLOAK_URL);
+      assert.equal(claims(exchanged.authorizationToken).azp, 'te-requester');
+      assert.equal(
+        claims(exchanged.authorizationToken).preferred_username,
         'tester',
       );
     });
@@ -236,17 +241,17 @@ describeKeycloak('device polling against Keycloak', () => {
   it('authorization_pending, then the user approves: a token', async () => {
     const { result, waits } = await polling('approve');
     const tokens = (await result) as { accessToken: string };
-    expect(claims(tokens.accessToken).azp).toBe('oidc-device');
-    expect(waits.length).toBeGreaterThan(0);
-  }, 60_000);
+    assert.equal(claims(tokens.accessToken).azp, 'oidc-device');
+    assert.ok(waits.length > 0, `${waits.length} > ${0}`);
+  });
 
   it('slow_down when polled faster than the interval: the next wait is 5 s longer', async () => {
     const { result, waits } = await polling('approve', 0);
     const tokens = (await result) as { accessToken: string };
-    expect(claims(tokens.accessToken).azp).toBe('oidc-device');
+    assert.equal(claims(tokens.accessToken).azp, 'oidc-device');
     // Interval 0: pending waits 0; Keycloak's slow_down makes it 0 + 5.
-    expect(waits).toContain(5);
-  }, 60_000);
+    contains(waits, 5);
+  });
 
   it('access_denied when the user refuses: request-failed carrying it, at once', async () => {
     const { result } = await polling('deny');
@@ -254,11 +259,11 @@ describeKeycloak('device polling against Keycloak', () => {
       () => undefined,
       (error: unknown) => error,
     );
-    expect(readFailure(thrown, 'unfamiliar-error').facts).toEqual({
+    assert.deepEqual(readFailure(thrown, 'unfamiliar-error').facts, {
       operation: 'device-poll',
       problem: 'refused',
       status: 400,
       oauthError: 'access_denied',
     });
-  }, 60_000);
+  });
 });

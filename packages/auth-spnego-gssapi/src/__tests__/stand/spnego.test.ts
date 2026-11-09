@@ -15,13 +15,14 @@
 // environment; this suite never writes its own process.env. This package has
 // no no-real-program guard: kinit, klist and the children run by absolute
 // path.
+import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as http from 'node:http';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { before, describe, it } from 'node:test';
 import { inspect } from 'node:util';
-import { beforeAll, describe, expect, it } from '@jest/globals';
 import type {
   AuthOutcome,
   IAuthProvider,
@@ -29,6 +30,13 @@ import type {
   IRequestTarget,
 } from '@mcp-abap-adt/interfaces-auth';
 import { gssapiTokenSource } from '../../gssapiTokenSource';
+import {
+  cases,
+  caseTitle,
+  contains,
+  matchObject,
+  notContains,
+} from '../helpers/expectations';
 
 const ON = process.env.STAND_KERBEROS === '1';
 const describeStand = ON ? describe : describe.skip;
@@ -133,11 +141,11 @@ function provider(
   mechanism: Mechanism,
   servicePrincipal = SERVICE,
 ): IAuthProvider {
-  // The sibling's source, loaded only here: off the stand nothing of it is
-  // compiled.
-  const { SpnegoAuthProvider } = require(path.join(PROVIDERS_DIR, 'src')) as {
-    SpnegoAuthProvider: SpnegoAuthProviderCtor;
-  };
+  // The sibling as built in the stand container (run-suite.sh builds it),
+  // loaded only here, as the child harness loads it: a test compiled to
+  // CommonJS cannot require the sibling's TypeScript sources.
+  const { SpnegoAuthProvider }: { SpnegoAuthProvider: SpnegoAuthProviderCtor } =
+    require(path.join(PROVIDERS_DIR, 'dist'));
   return new SpnegoAuthProvider({
     servicePrincipal,
     tokenSource: recordingSource(gssapiTokenSource({ mechanism })),
@@ -156,11 +164,11 @@ async function authorized(p: IAuthProvider): Promise<string> {
       throw new Error('SPNego writes no cookie');
     },
   };
-  expect(seen(await p.authorize(target))).toEqual({ ok: true });
-  expect(Object.keys(headers)).toEqual(['Authorization']);
+  assert.deepEqual(seen(await p.authorize(target)), { ok: true });
+  assert.deepEqual(Object.keys(headers), ['Authorization']);
   const value = headers.Authorization ?? '';
-  expect(value.startsWith('Negotiate ')).toBe(true);
-  expect(issued).toContain(value.slice('Negotiate '.length));
+  assert.equal(value.startsWith('Negotiate '), true);
+  contains(issued, value.slice('Negotiate '.length));
   return value;
 }
 
@@ -206,12 +214,12 @@ function kinit(env: NodeJS.ProcessEnv): void {
     input: fs.readFileSync(PASSWORD),
     encoding: 'utf8',
   });
-  expect(run.status).toBe(0);
+  assert.equal(run.status, 0);
 }
 
 function klist(env: NodeJS.ProcessEnv): string {
   const run = spawnSync(KLIST, [], { env, encoding: 'utf8' });
-  expect(run.status).toBe(0);
+  assert.equal(run.status, 0);
   return run.stdout;
 }
 
@@ -235,7 +243,7 @@ function prepareInChild(
     { env, encoding: 'utf8' },
   );
   surfaces.push(run.stdout, run.stderr);
-  expect(run.status).toBe(0);
+  assert.equal(run.status, 0);
   const lines = run.stdout.trim().split('\n');
   return JSON.parse(lines.at(-1) ?? '') as ChildAnswer;
 }
@@ -247,10 +255,10 @@ function tempDir(label: string): string {
 /** A token's mechanism, from its GSS frame's OID (RFC 2743 §3.1). */
 function frameOid(token: string): string {
   const bytes = Buffer.from(token, 'base64');
-  expect(bytes[0]).toBe(0x60);
+  assert.equal(bytes[0], 0x60);
   const lengthBytes = (bytes[1] ?? 0) & 0x80 ? (bytes[1] ?? 0) & 0x7f : 0;
   const at = 2 + lengthBytes;
-  expect(bytes[at]).toBe(0x06);
+  assert.equal(bytes[at], 0x06);
   return bytes.subarray(at + 2, at + 2 + (bytes[at + 1] ?? 0)).toString('hex');
 }
 const OID_FOR: Record<Mechanism, string> = {
@@ -261,179 +269,204 @@ const OID_FOR: Record<Mechanism, string> = {
 // ------------------------------------------------------------- the cases
 
 describeStand(where, () => {
-  beforeAll(() => {
+  before(() => {
     // The suite's own cache, given by run-suite.sh; filled here with alice's
     // TGT for every in-process case.
     const cache = process.env.KRB5CCNAME ?? '';
-    expect(cache.startsWith(`FILE:${os.tmpdir()}`)).toBe(true);
+    assert.equal(cache.startsWith(`FILE:${os.tmpdir()}`), true);
     kinit(process.env);
-    expect(klist(process.env)).toContain('krbtgt/STAND.TEST@STAND.TEST');
+    contains(klist(process.env), 'krbtgt/STAND.TEST@STAND.TEST');
   });
 
-  describe.each(MECHANISMS)('mechanism %s', (mechanism) => {
-    it('a ticket for alice: 200, the service names alice', async () => {
-      const p = provider(mechanism);
-      expect(seen(await p.prepare())).toEqual({ ok: true });
-      const authorization = await authorized(p);
-      expect(frameOid(authorization.slice('Negotiate '.length))).toBe(
-        OID_FOR[mechanism],
-      );
-      const answer = await get('negotiate.stand.test', '/sap', authorization);
-      expect(answer.status).toBe(200);
-      expect(answer.headers['x-remote-user']).toBe('alice');
-    });
+  for (const [caseIndex, caseRow] of MECHANISMS.entries()) {
+    const mechanism = caseRow;
+    describe(caseTitle('mechanism %s', caseRow, caseIndex), () => {
+      it('a ticket for alice: 200, the service names alice', async () => {
+        const p = provider(mechanism);
+        assert.deepEqual(seen(await p.prepare()), { ok: true });
+        const authorization = await authorized(p);
+        assert.equal(
+          frameOid(authorization.slice('Negotiate '.length)),
+          OID_FOR[mechanism],
+        );
+        const answer = await get('negotiate.stand.test', '/sap', authorization);
+        assert.equal(answer.status, 200);
+        assert.equal(answer.headers['x-remote-user'], 'alice');
+      });
 
-    it('two requests: two different tokens, both 200; the first resent is refused', async () => {
-      const p = provider(mechanism);
-      const first = await authorized(p);
-      const second = await authorized(p);
-      expect(second).not.toBe(first);
-      expect((await get('negotiate.stand.test', '/sap', first)).status).toBe(
-        200,
-      );
-      expect((await get('negotiate.stand.test', '/sap', second)).status).toBe(
-        200,
-      );
-      // The first token by hand, once more: the service's replay cache
-      // refuses it — the reason the provider never reuses one.
-      expect((await get('negotiate.stand.test', '/sap', first)).status).toBe(
-        401,
-      );
-    });
+      it('two requests: two different tokens, both 200; the first resent is refused', async () => {
+        const p = provider(mechanism);
+        const first = await authorized(p);
+        const second = await authorized(p);
+        assert.notEqual(second, first);
+        assert.equal(
+          (await get('negotiate.stand.test', '/sap', first)).status,
+          200,
+        );
+        assert.equal(
+          (await get('negotiate.stand.test', '/sap', second)).status,
+          200,
+        );
+        // The first token by hand, once more: the service's replay cache
+        // refuses it — the reason the provider never reuses one.
+        assert.equal(
+          (await get('negotiate.stand.test', '/sap', first)).status,
+          401,
+        );
+      });
 
-    it.each([
-      ['a missing cache file', false],
-      ['an empty cache file', true],
-    ])(
-      'no ticket (%s): prepare() is spnego no-credential, no request sent',
-      (_label, empty) => {
-        const dir = tempDir('no-ticket');
+      for (const [caseIndex, caseRow] of cases([
+        ['a missing cache file', false],
+        ['an empty cache file', true],
+      ]).entries()) {
+        const [_label, empty] = caseRow;
+        it(
+          caseTitle(
+            'no ticket (%s): prepare() is spnego no-credential, no request sent',
+            caseRow,
+            caseIndex,
+          ),
+          () => {
+            const dir = tempDir('no-ticket');
+            try {
+              const cache = path.join(dir, 'cache');
+              if (empty) fs.writeFileSync(cache, '');
+              const answer = prepareInChild(mechanism, SERVICE, {
+                ...process.env,
+                KRB5CCNAME: `FILE:${cache}`,
+              });
+              matchObject(answer, {
+                ok: false,
+                kind: 'spnego',
+                variant: 'no-credential',
+                facts: {
+                  problem: 'no-credential',
+                  operation: 'obtaining-negotiate-token',
+                },
+              });
+            } finally {
+              fs.rmSync(dir, { recursive: true, force: true });
+            }
+          },
+        );
+      }
+
+      it('a principal the KDC does not know: spnego service-unknown', async () => {
+        const outcome = seen(await provider(mechanism, UNKNOWN).prepare());
+        assert.equal(outcome.ok, false);
+        if (outcome.ok) return;
+        matchObject(outcome.refusal, {
+          kind: 'spnego',
+          variant: 'service-unknown',
+          facts: {
+            problem: 'service-unknown',
+            operation: 'obtaining-negotiate-token',
+          },
+        });
+      });
+
+      it('a KDC that does not answer, a TGT and no service ticket: spnego kdc-unreachable', () => {
+        const dir = tempDir('dead-kdc');
         try {
-          const cache = path.join(dir, 'cache');
-          if (empty) fs.writeFileSync(cache, '');
-          const answer = prepareInChild(mechanism, SERVICE, {
+          const env = {
             ...process.env,
-            KRB5CCNAME: `FILE:${cache}`,
+            KRB5CCNAME: `FILE:${path.join(dir, 'cache')}`,
+          };
+          kinit(env);
+          const tickets = klist(env);
+          contains(tickets, 'krbtgt/STAND.TEST@STAND.TEST');
+          notContains(tickets, 'HTTP/negotiate.stand.test');
+          const answer = prepareInChild(mechanism, SERVICE, {
+            ...env,
+            KRB5_CONFIG: DEAD_KDC_CONF,
           });
-          expect(answer).toMatchObject({
+          matchObject(answer, {
             ok: false,
             kind: 'spnego',
-            variant: 'no-credential',
+            variant: 'kdc-unreachable',
             facts: {
-              problem: 'no-credential',
+              problem: 'kdc-unreachable',
               operation: 'obtaining-negotiate-token',
             },
           });
         } finally {
           fs.rmSync(dir, { recursive: true, force: true });
         }
-      },
-    );
-
-    it('a principal the KDC does not know: spnego service-unknown', async () => {
-      const outcome = seen(await provider(mechanism, UNKNOWN).prepare());
-      expect(outcome.ok).toBe(false);
-      if (outcome.ok) return;
-      expect(outcome.refusal).toMatchObject({
-        kind: 'spnego',
-        variant: 'service-unknown',
-        facts: {
-          problem: 'service-unknown',
-          operation: 'obtaining-negotiate-token',
-        },
       });
-    });
 
-    it('a KDC that does not answer, a TGT and no service ticket: spnego kdc-unreachable', () => {
-      const dir = tempDir('dead-kdc');
-      try {
-        const env = {
-          ...process.env,
-          KRB5CCNAME: `FILE:${path.join(dir, 'cache')}`,
-        };
-        kinit(env);
-        const tickets = klist(env);
-        expect(tickets).toContain('krbtgt/STAND.TEST@STAND.TEST');
-        expect(tickets).not.toContain('HTTP/negotiate.stand.test');
-        const answer = prepareInChild(mechanism, SERVICE, {
-          ...env,
-          KRB5_CONFIG: DEAD_KDC_CONF,
-        });
-        expect(answer).toMatchObject({
+      it('a ticket the service cannot read (stale keytab): 401, credential-refused kerberos-ticket', async () => {
+        const p = provider(mechanism, STALE);
+        assert.deepEqual(seen(await p.prepare()), { ok: true });
+        const answer = await get(
+          'stale.stand.test',
+          '/sap',
+          await authorized(p),
+        );
+        assert.equal(answer.status, 401);
+        const outcome = seen(
+          await p.rejected({ at: 'request', status: 401, error: undefined }),
+        );
+        matchObject(outcome, {
           ok: false,
-          kind: 'spnego',
-          variant: 'kdc-unreachable',
-          facts: {
-            problem: 'kdc-unreachable',
-            operation: 'obtaining-negotiate-token',
+          refusal: {
+            kind: 'credential-refused',
+            facts: { credential: 'kerberos-ticket', at: 'request' },
           },
         });
-      } finally {
-        fs.rmSync(dir, { recursive: true, force: true });
-      }
-    });
+      });
 
-    it('a ticket the service cannot read (stale keytab): 401, credential-refused kerberos-ticket', async () => {
-      const p = provider(mechanism, STALE);
-      expect(seen(await p.prepare())).toEqual({ ok: true });
-      const answer = await get('stale.stand.test', '/sap', await authorized(p));
-      expect(answer.status).toBe(401);
-      const outcome = seen(
-        await p.rejected({ at: 'request', status: 401, error: undefined }),
-      );
-      expect(outcome).toMatchObject({
-        ok: false,
-        refusal: {
-          kind: 'credential-refused',
-          facts: { credential: 'kerberos-ticket', at: 'request' },
-        },
+      it('the configured continuation (401, WWW-Authenticate: Negotiate <token>): credential-refused', async () => {
+        const p = provider(mechanism);
+        const answer = await get(
+          'negotiate.stand.test',
+          '/continuation',
+          await authorized(p),
+        );
+        assert.equal(answer.status, 401);
+        const challenge = answer.headers['www-authenticate'];
+        assert.equal(typeof challenge, 'string');
+        assert.equal(String(challenge).startsWith('Negotiate '), true);
+        assert.ok(
+          String(challenge).slice('Negotiate '.length).length > 0,
+          `${String(challenge).slice('Negotiate '.length).length} > ${0}`,
+        );
+        const outcome = seen(
+          await p.rejected({ at: 'request', status: 401, error: undefined }),
+        );
+        matchObject(outcome, {
+          ok: false,
+          refusal: {
+            kind: 'credential-refused',
+            facts: { credential: 'kerberos-ticket', at: 'request' },
+          },
+        });
       });
     });
-
-    it('the configured continuation (401, WWW-Authenticate: Negotiate <token>): credential-refused', async () => {
-      const p = provider(mechanism);
-      const answer = await get(
-        'negotiate.stand.test',
-        '/continuation',
-        await authorized(p),
-      );
-      expect(answer.status).toBe(401);
-      const challenge = answer.headers['www-authenticate'];
-      expect(typeof challenge).toBe('string');
-      expect(String(challenge).startsWith('Negotiate ')).toBe(true);
-      expect(
-        String(challenge).slice('Negotiate '.length).length,
-      ).toBeGreaterThan(0);
-      const outcome = seen(
-        await p.rejected({ at: 'request', status: 401, error: undefined }),
-      );
-      expect(outcome).toMatchObject({
-        ok: false,
-        refusal: {
-          kind: 'credential-refused',
-          facts: { credential: 'kerberos-ticket', at: 'request' },
-        },
-      });
-    });
-  });
+  }
 
   it('the oracle reads a token back (it is not blind)', () => {
     const token = issued[0] ?? '';
-    expect(token.length).toBeGreaterThan(0);
+    assert.ok(token.length > 0, `${token.length} > ${0}`);
     const bytes = Buffer.from(token, 'base64');
-    expect(holdsToken(`x ${token.slice(40, 60)} y`, token)).toBe(true);
-    expect(holdsToken(bytes.toString('base64url').slice(80), token)).toBe(true);
-    expect(holdsToken(bytes.toString('hex').slice(100, 140), token)).toBe(true);
+    assert.equal(holdsToken(`x ${token.slice(40, 60)} y`, token), true);
+    assert.equal(
+      holdsToken(bytes.toString('base64url').slice(80), token),
+      true,
+    );
+    assert.equal(
+      holdsToken(bytes.toString('hex').slice(100, 140), token),
+      true,
+    );
   });
 
   it('no token in any log line, error or refusal of any case', () => {
     // Per mechanism: prepare() and authorize() for alice, two authorize()s,
     // prepare() and authorize() for the stale service, one for the
     // continuation.
-    expect(issued.length).toBe(14);
-    expect(surfaces.length).toBeGreaterThan(0);
+    assert.equal(issued.length, 14);
+    assert.ok(surfaces.length > 0, `${surfaces.length} > ${0}`);
     for (const token of issued)
       for (const surface of surfaces)
-        expect(holdsToken(surface, token)).toBe(false);
+        assert.equal(holdsToken(surface, token), false);
   });
 });

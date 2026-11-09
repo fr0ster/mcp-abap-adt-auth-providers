@@ -7,9 +7,12 @@
  * the very error the renewal produced.
  */
 
+import { CERTIFICATES, SRC } from '../helpers/packagePaths';
+import '../helpers/axiosModuleMock';
+import assert from 'node:assert/strict';
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
-import { beforeEach, describe, expect, it, jest } from '@jest/globals';
+import { beforeEach, describe, it, mock } from 'node:test';
 import {
   AuthProviderFailure,
   isAuthProviderFailure,
@@ -24,7 +27,6 @@ import type {
   OAuth2GrantType,
 } from '@mcp-abap-adt/interfaces-auth';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
-import axios from 'axios';
 import { certificateThumbprint } from '../../auth/certificateMaterial';
 import { tlsClientCertificate } from '../../clientAuthentication/tlsClientCertificate';
 import {
@@ -42,19 +44,21 @@ import { Saml2BearerProvider } from '../../providers/Saml2BearerProvider';
 import { Saml2PureProvider } from '../../providers/Saml2PureProvider';
 import { UaaPasscodeProvider } from '../../providers/UaaPasscodeProvider';
 import { refreshThenLogin } from '../../renewal';
+import { mockedAxios, resetAxiosMock } from '../helpers/axiosModuleMock';
+import {
+  cases,
+  caseTitle,
+  matchObject,
+  notContains,
+  objectContaining,
+  stringContaining,
+} from '../helpers/expectations';
 import { mintedRefusal } from '../helpers/minted';
+import { once } from '../helpers/mockOnce';
 import { seenOf, stateRecorder } from '../helpers/persistence';
 import { recordingTargets } from '../helpers/targets';
 
 // Automocked, but with axios's own error class: the sites throw it.
-jest.mock('axios', () => {
-  const mocked = jest.createMockFromModule<Record<string, unknown>>('axios');
-  mocked.AxiosError =
-    jest.requireActual<Record<string, unknown>>('axios').AxiosError;
-  return mocked;
-});
-type Mock = jest.Mock<(...args: any[]) => Promise<unknown>>;
-const mockedAxios = axios as unknown as Mock & { post: Mock; get: Mock };
 
 const MARKER = 'MARKER-7f3a-SECRET';
 
@@ -68,16 +72,16 @@ function answer(
 ): void {
   const grantOf = (data: unknown) =>
     new URLSearchParams(String(data)).get('grant_type');
-  mockedAxios.mockImplementation(async (config: any) =>
+  mockedAxios.mock.mockImplementation(async (config: any) =>
     reply(String(config.url), grantOf(config.data)),
   );
-  mockedAxios.post.mockImplementation(async (url: unknown, data: unknown) =>
-    reply(String(url), grantOf(data)),
+  mockedAxios.post.mock.mockImplementation(
+    async (url: unknown, data: unknown) => reply(String(url), grantOf(data)),
   );
 }
 
 beforeEach(() => {
-  jest.resetAllMocks();
+  resetAxiosMock();
 });
 
 /** Every rendering of a thrown value a consumer could print or log. */
@@ -104,12 +108,12 @@ async function rejectionOf(promise: Promise<unknown>): Promise<unknown> {
 
 /** A thrown value is this copy's failure, not `original`, and carries no marker. */
 function expectFailure(thrown: unknown, original?: unknown): void {
-  expect(thrown).toBeInstanceOf(AuthProviderFailure);
-  expect(isAuthProviderFailure(thrown)).toBe(true);
-  if (original !== undefined) expect(thrown).not.toBe(original);
-  expect(Object.hasOwn(thrown as object, 'cause')).toBe(false);
-  for (const text of renderings(thrown)) expect(text).not.toContain(MARKER);
-  expect(isMinted((thrown as AuthProviderFailure).error)).toBe(true);
+  assert.ok(thrown instanceof AuthProviderFailure);
+  assert.equal(isAuthProviderFailure(thrown), true);
+  if (original !== undefined) assert.notEqual(thrown, original);
+  assert.equal(Object.hasOwn(thrown as object, 'cause'), false);
+  for (const text of renderings(thrown)) notContains(text, MARKER);
+  assert.equal(isMinted((thrown as AuthProviderFailure).error), true);
 }
 
 const inAnHour = () => Date.now() + 3600_000;
@@ -142,8 +146,8 @@ interface TestHooks {
  */
 class TestProvider extends BaseTokenProvider {
   readonly events: Event[] = [];
-  login = jest.fn(async () => result('T1', 'R1'));
-  refresh = jest.fn(async () => result('T2', 'R2'));
+  login = mock.fn(async () => result('T1', 'R1'));
+  refresh = mock.fn(async () => result('T2', 'R2'));
   constructor(hooks: TestHooks = {}) {
     super({
       renewal: refreshThenLogin(),
@@ -235,7 +239,7 @@ describe('getTokens() / refreshTokens() throw an AuthProviderFailure, never what
     ]) {
       const thrown = await rejectionOf(call());
       expectFailure(thrown, original);
-      expect((thrown as AuthProviderFailure).error).toMatchObject({
+      matchObject((thrown as AuthProviderFailure).error, {
         kind: 'unknown',
         facts: {
           operation: 'token-request',
@@ -244,7 +248,7 @@ describe('getTokens() / refreshTokens() throw an AuthProviderFailure, never what
         },
       });
     }
-    expect(mockedAxios).not.toHaveBeenCalled();
+    assert.equal(mockedAxios.mock.callCount(), 0);
   });
 
   it("a consumer's device-code presenter throwing its own error", async () => {
@@ -275,7 +279,7 @@ describe('getTokens() / refreshTokens() throw an AuthProviderFailure, never what
     ]) {
       const thrown = await rejectionOf(call());
       expectFailure(thrown, original);
-      expect((thrown as AuthProviderFailure).error).toMatchObject({
+      matchObject((thrown as AuthProviderFailure).error, {
         kind: 'interactive-login',
         facts: { outcome: 'device-code-not-shown' },
       });
@@ -303,21 +307,23 @@ describe('getTokens() / refreshTokens() throw an AuthProviderFailure, never what
     });
     const thrown = await rejectionOf(provider.getTokens());
     expectFailure(thrown, original);
-    expect((thrown as AuthProviderFailure).error).toMatchObject({
+    matchObject((thrown as AuthProviderFailure).error, {
       kind: 'unknown',
       facts: { operation: 'token-request', grant: 'password' },
     });
-    expect(mockedAxios).not.toHaveBeenCalled();
-    expect(mockedAxios.post).not.toHaveBeenCalled();
+    assert.equal(mockedAxios.mock.callCount(), 0);
+    assert.equal(mockedAxios.post.mock.callCount(), 0);
   });
 
   it('a performLogin throwing a bare Error: unknown, with the operation and the grant', async () => {
     const original = new Error(`login down: ${MARKER}`);
     const p = new TestProvider();
-    p.login.mockRejectedValue(original);
+    p.login.mock.mockImplementation(async () => {
+      throw original;
+    });
     const thrown = await rejectionOf(p.getTokens());
     expectFailure(thrown, original);
-    expect((thrown as AuthProviderFailure).error).toMatchObject({
+    matchObject((thrown as AuthProviderFailure).error, {
       kind: 'unknown',
       facts: { operation: 'token-request', grant: 'client_credentials' },
     });
@@ -343,7 +349,9 @@ describe('getTokens() / refreshTokens() throw an AuthProviderFailure, never what
     );
     for (const value of [MARKER, hostile]) {
       const p = new TestProvider();
-      p.login.mockRejectedValue(value);
+      p.login.mock.mockImplementation(async () => {
+        throw value;
+      });
       expectFailure(await rejectionOf(p.getTokens()));
       expectFailure(await rejectionOf(p.refreshTokens()));
     }
@@ -365,7 +373,7 @@ describe('getTokens() / refreshTokens() throw an AuthProviderFailure, never what
     });
     const thrown = await rejectionOf(provider.getTokens());
     expectFailure(thrown);
-    expect((thrown as AuthProviderFailure).error).toMatchObject({
+    matchObject((thrown as AuthProviderFailure).error, {
       kind: 'request-failed',
       facts: { status: 401, oauthError: 'invalid_client' },
     });
@@ -382,12 +390,12 @@ describe('the unreachable missing-token guard', () => {
     const thrown = await rejectionOf(new Hollow().getTokens());
     expectFailure(thrown);
     const error = (thrown as AuthProviderFailure).error;
-    expect(error.kind).toBe('unknown');
-    expect(error.facts).toEqual({
+    assert.equal(error.kind, 'unknown');
+    assert.deepEqual(error.facts, {
       operation: 'token-request',
       grant: 'client_credentials',
     });
-    expect((thrown as Error).message).not.toContain('Authorization token');
+    notContains((thrown as Error).message, 'Authorization token');
   });
 });
 
@@ -513,24 +521,27 @@ describe('a provider without a refresh grant or token throws credential-refused 
     ],
   ];
 
-  it.each(sites)(
-    '%s → credential-refused refresh-token',
-    async (_name, build) => {
-      const thrown = await rejectionOf(refreshOf(build()));
-      expectFailure(thrown);
-      const error = (thrown as AuthProviderFailure).error;
-      expect(error.kind).toBe('credential-refused');
-      expect(error.facts).toEqual({ credential: 'refresh-token' });
-      // 5.4.2's RefreshError words, verbatim.
-      expect(error.reason).toBe('the refresh token was refused');
-      expect(error.hint).toBe('log in again');
-      expect(mockedAxios).not.toHaveBeenCalled();
-      expect(mockedAxios.post).not.toHaveBeenCalled();
-    },
-  );
+  for (const [caseIndex, caseRow] of sites.entries()) {
+    const [_name, build] = caseRow;
+    it(
+      caseTitle('%s → credential-refused refresh-token', caseRow, caseIndex),
+      async () => {
+        const thrown = await rejectionOf(refreshOf(build()));
+        expectFailure(thrown);
+        const error = (thrown as AuthProviderFailure).error;
+        assert.equal(error.kind, 'credential-refused');
+        assert.deepEqual(error.facts, { credential: 'refresh-token' });
+        // 5.4.2's RefreshError words, verbatim.
+        assert.equal(error.reason, 'the refresh token was refused');
+        assert.equal(error.hint, 'log in again');
+        assert.equal(mockedAxios.mock.callCount(), 0);
+        assert.equal(mockedAxios.post.mock.callCount(), 0);
+      },
+    );
+  }
 
   it('there are nine such sites', () => {
-    expect(sites).toHaveLength(9);
+    assert.equal(sites.length, 9);
   });
 });
 
@@ -560,16 +571,18 @@ describe('the refresh and persistence failure lines carry logFields', () => {
     (p as unknown as { logger: unknown }).logger = logger;
     await p.getTokens();
     p.expire();
-    p.refresh.mockRejectedValue(new Error(MARKER));
+    p.refresh.mock.mockImplementation(async () => {
+      throw new Error(MARKER);
+    });
     await p.getTokens();
     const line = calls.find((c) => c.message.endsWith('Refresh failed'));
-    expect(line?.level).toBe('warn');
-    expect(line?.message).toBe('[BaseTokenProvider] Refresh failed');
-    expect(line?.fields).toEqual({
+    assert.equal(line?.level, 'warn');
+    assert.equal(line?.message, '[BaseTokenProvider] Refresh failed');
+    assert.deepEqual(line?.fields, {
       error: 'the refresh failed (unknown error)',
       kind: 'unknown',
     });
-    expect(JSON.stringify(calls)).not.toContain(MARKER);
+    notContains(JSON.stringify(calls), MARKER);
   });
 
   it("a site's failure is logged by its own words, kind and status", async () => {
@@ -584,10 +597,12 @@ describe('the refresh and persistence failure lines carry logFields', () => {
         'token-request',
       ),
     );
-    p.refresh.mockRejectedValue(failure);
+    p.refresh.mock.mockImplementation(async () => {
+      throw failure;
+    });
     await p.getTokens();
     const line = calls.find((c) => c.message.endsWith('Refresh failed'));
-    expect(line?.fields).toEqual({
+    assert.deepEqual(line?.fields, {
       error: failure.error.reason,
       kind: failure.error.kind,
       status: 400,
@@ -602,19 +617,20 @@ describe('the refresh and persistence failure lines carry logFields', () => {
       },
       persistenceLogger: logger,
     });
-    await expect(p.getTokens()).resolves.toMatchObject({
+    matchObject(await p.getTokens(), {
       authorizationToken: 'T1',
     });
     const line = calls.find((c) => c.message.includes('Writing the tokens'));
-    expect(line?.level).toBe('warn');
-    expect(line?.message).toBe(
+    assert.equal(line?.level, 'warn');
+    assert.equal(
+      line?.message,
       '[refreshStatePersistence] Writing the tokens failed',
     );
-    expect(line?.fields).toEqual({
+    assert.deepEqual(line?.fields, {
       error: 'persisting the tokens failed (unknown error)',
       kind: 'unknown',
     });
-    expect(JSON.stringify(calls)).not.toContain(MARKER);
+    notContains(JSON.stringify(calls), MARKER);
   });
 });
 
@@ -623,12 +639,14 @@ describe('a refused refresh token is discarded explicitly', () => {
     const p = new TestProvider();
     await p.getTokens(); // T1 / R1, replace
     p.expire();
-    p.refresh.mockRejectedValue(new Error('refused'));
-    p.login.mockResolvedValue(result('T3', 'R3'));
-    await expect(p.getTokens()).resolves.toMatchObject({
+    p.refresh.mock.mockImplementation(async () => {
+      throw new Error('refused');
+    });
+    p.login.mock.mockImplementation(async () => result('T3', 'R3'));
+    matchObject(await p.getTokens(), {
       authorizationToken: 'T3',
     });
-    expect(p.steps()).toEqual([
+    assert.deepEqual(p.steps(), [
       'login',
       'write:replace',
       'refresh',
@@ -637,35 +655,41 @@ describe('a refused refresh token is discarded explicitly', () => {
       'write:replace',
     ]);
     const clearing = p.events[3];
-    expect(clearing?.step).toBe('write');
+    assert.equal(clearing?.step, 'write');
     const cleared = (clearing as { tokens: PersistedTokens }).tokens;
-    expect(cleared.authorizationToken).toBe('T1');
-    expect(cleared.refreshToken).toBeNull();
-    expect(cleared.authType).toBe('client_credentials');
+    assert.equal(cleared.authorizationToken, 'T1');
+    assert.equal(cleared.refreshToken, null);
+    assert.equal(cleared.authType, 'client_credentials');
   });
 
   it('the token-only login that follows writes null, not undefined', async () => {
     const p = new TestProvider();
     await p.getTokens();
     p.expire();
-    p.refresh.mockRejectedValue(new Error('refused'));
-    p.login.mockResolvedValue(result('T3'));
+    p.refresh.mock.mockImplementation(async () => {
+      throw new Error('refused');
+    });
+    p.login.mock.mockImplementation(async () => result('T3'));
     await p.getTokens();
-    expect(p.dispositions()).toEqual(['replace', 'clear', 'clear']);
+    assert.deepEqual(p.dispositions(), ['replace', 'clear', 'clear']);
     // Still cleared: a later token-only result says clear again.
     p.expire();
     await p.getTokens();
-    expect(p.dispositions()).toEqual(['replace', 'clear', 'clear', 'clear']);
+    assert.deepEqual(p.dispositions(), ['replace', 'clear', 'clear', 'clear']);
   });
 
   it('a failing login leaves the clear written', async () => {
     const p = new TestProvider();
     await p.getTokens();
     p.expire();
-    p.refresh.mockRejectedValue(new Error('refused'));
-    p.login.mockRejectedValue(new Error('login refused'));
+    p.refresh.mock.mockImplementation(async () => {
+      throw new Error('refused');
+    });
+    p.login.mock.mockImplementation(async () => {
+      throw new Error('login refused');
+    });
     expectFailure(await rejectionOf(p.getTokens()));
-    expect(p.steps()).toEqual([
+    assert.deepEqual(p.steps(), [
       'login',
       'write:replace',
       'refresh',
@@ -684,12 +708,14 @@ describe('a refused refresh token is discarded explicitly', () => {
     });
     await p.getTokens();
     p.expire();
-    p.refresh.mockRejectedValue(new Error('refused'));
-    p.login.mockResolvedValue(result('T3', 'R3'));
-    await expect(p.getTokens()).resolves.toMatchObject({
+    p.refresh.mock.mockImplementation(async () => {
+      throw new Error('refused');
+    });
+    p.login.mock.mockImplementation(async () => result('T3', 'R3'));
+    matchObject(await p.getTokens(), {
       authorizationToken: 'T3',
     });
-    expect(p.dispositions()).toEqual(['replace', 'clear', 'replace']);
+    assert.deepEqual(p.dispositions(), ['replace', 'clear', 'replace']);
   });
 
   it('a clearing report that cannot be built (getAuthType() throwing): the renewal fails with heldGrant()’s own error, not persisting-tokens, and no login', async () => {
@@ -707,35 +733,38 @@ describe('a refused refresh token is discarded explicitly', () => {
     await p.getTokens();
     p.expire();
     broken = true;
-    p.refresh.mockRejectedValue(new Error('refused'));
-    p.login.mockResolvedValue(result('T3', 'R3'));
+    p.refresh.mock.mockImplementation(async () => {
+      throw new Error('refused');
+    });
+    p.login.mock.mockImplementation(async () => result('T3', 'R3'));
     const thrown = await rejectionOf(p.getTokens());
     expectFailure(thrown);
     // The provider's fault, not the strategy's: heldGrant()'s own error.
-    expect((thrown as AuthProviderFailure).error).toMatchObject({
+    matchObject((thrown as AuthProviderFailure).error, {
       kind: 'unknown',
       facts: { operation: 'token-request' },
     });
-    expect(p.steps()).toEqual(['login', 'write:replace', 'refresh']);
+    assert.deepEqual(p.steps(), ['login', 'write:replace', 'refresh']);
     // The discard itself stands: R1 is never sent again.
-    expect(
+    assert.equal(
       (p as unknown as { refreshToken?: string }).refreshToken,
-    ).toBeUndefined();
-    expect(JSON.stringify(calls)).not.toContain(MARKER);
+      undefined,
+    );
+    notContains(JSON.stringify(calls), MARKER);
   });
 
   it('a refresh returning a new refresh token: written; a result with none and nothing cut: undefined', async () => {
     const p = new TestProvider();
-    p.login.mockResolvedValue(result('T1'));
+    p.login.mock.mockImplementation(async () => result('T1'));
     await p.getTokens();
-    expect(p.dispositions()).toEqual(['keep']);
+    assert.deepEqual(p.dispositions(), ['keep']);
     (p as unknown as { refreshToken?: string }).refreshToken = 'R1';
     p.expire();
     await p.getTokens(); // refresh → T2 / R2
     p.expire();
-    p.refresh.mockResolvedValue(result('T4'));
+    p.refresh.mock.mockImplementation(async () => result('T4'));
     await p.getTokens();
-    expect(p.dispositions()).toEqual(['keep', 'replace', 'keep']);
+    assert.deepEqual(p.dispositions(), ['keep', 'replace', 'keep']);
   });
 
   // What getTokens() returns carries the held refresh token
@@ -743,33 +772,33 @@ describe('a refused refresh token is discarded explicitly', () => {
   it('a renewal returns the result with the held refresh token, and no disposition', async () => {
     const p = new TestProvider();
     const login = await p.getTokens();
-    expect(login.refreshToken).toBe('R1');
-    expect(Object.hasOwn(login, 'refreshTokenDisposition')).toBe(false);
+    assert.equal(login.refreshToken, 'R1');
+    assert.equal(Object.hasOwn(login, 'refreshTokenDisposition'), false);
     p.expire();
     const refreshed = await p.refreshTokens();
-    expect(refreshed.refreshToken).toBe('R2');
-    expect(Object.hasOwn(refreshed, 'refreshTokenDisposition')).toBe(false);
+    assert.equal(refreshed.refreshToken, 'R2');
+    assert.equal(Object.hasOwn(refreshed, 'refreshTokenDisposition'), false);
     const written = p.events.flatMap((event) =>
       event.step === 'write' ? [event.tokens.refreshToken] : [],
     );
-    expect(written).toEqual(['R1', 'R2']);
+    assert.deepEqual(written, ['R1', 'R2']);
   });
 
   it('a cache hit carries the usable refresh token held, or none', async () => {
     const withRefresh = new TestProvider();
     await withRefresh.getTokens();
     const cached = await withRefresh.getTokens();
-    expect(withRefresh.steps()).toEqual(['login', 'write:replace']);
-    expect(cached.refreshToken).toBe('R1');
-    expect(Object.hasOwn(cached, 'refreshTokenDisposition')).toBe(false);
+    assert.deepEqual(withRefresh.steps(), ['login', 'write:replace']);
+    assert.equal(cached.refreshToken, 'R1');
+    assert.equal(Object.hasOwn(cached, 'refreshTokenDisposition'), false);
 
     const without = new TestProvider();
-    without.login.mockResolvedValue(result('T1'));
+    without.login.mock.mockImplementation(async () => result('T1'));
     await without.getTokens();
     const hit = await without.getTokens();
-    expect(Object.hasOwn(hit, 'refreshToken')).toBe(true);
-    expect(hit.refreshToken).toBeUndefined();
-    expect(Object.hasOwn(hit, 'refreshTokenDisposition')).toBe(false);
+    assert.equal(Object.hasOwn(hit, 'refreshToken'), true);
+    assert.equal(hit.refreshToken, undefined);
+    assert.equal(Object.hasOwn(hit, 'refreshTokenDisposition'), false);
   });
 
   // A cache hit names its grant through readGrant, like
@@ -787,27 +816,29 @@ describe('a refused refresh token is discarded explicitly', () => {
     for (let i = 0; i < 2; i += 1) {
       const thrown = await rejectionOf(p.getTokens());
       expectFailure(thrown);
-      expect((thrown as AuthProviderFailure).error).toMatchObject({
+      matchObject((thrown as AuthProviderFailure).error, {
         kind: 'unknown',
         facts: { operation: 'token-request' },
       });
     }
-    expect(calls).toBe(1);
+    assert.equal(calls, 1);
   });
 
   it('after a refused refresh and a login without one, the result and the cache hit carry no refresh token, and null was written', async () => {
     const p = new TestProvider();
     await p.getTokens(); // T1 / R1
     p.expire();
-    p.refresh.mockRejectedValue(new Error('refused'));
-    p.login.mockResolvedValue(result('T3'));
+    p.refresh.mock.mockImplementation(async () => {
+      throw new Error('refused');
+    });
+    p.login.mock.mockImplementation(async () => result('T3'));
     const relogged = await p.getTokens();
-    expect(Object.hasOwn(relogged, 'refreshToken')).toBe(true);
-    expect(relogged.refreshToken).toBeUndefined();
+    assert.equal(Object.hasOwn(relogged, 'refreshToken'), true);
+    assert.equal(relogged.refreshToken, undefined);
     const cached = await p.getTokens();
-    expect(cached.authorizationToken).toBe('T3');
-    expect(cached.refreshToken).toBeUndefined();
-    expect(p.dispositions()).toEqual(['replace', 'clear', 'clear']);
+    assert.equal(cached.authorizationToken, 'T3');
+    assert.equal(cached.refreshToken, undefined);
+    assert.deepEqual(p.dispositions(), ['replace', 'clear', 'clear']);
   });
 
   it('a refresh token refused by the server (a 400 invalid_grant) clears it, then logs in', async () => {
@@ -834,10 +865,10 @@ describe('a refused refresh token is discarded explicitly', () => {
       refreshToken: 'R1',
       persistence,
     });
-    await expect(provider.getTokens()).resolves.toMatchObject({
+    matchObject(await provider.getTokens(), {
       authorizationToken: 'NEW',
     });
-    expect(seen).toEqual([
+    assert.deepEqual(seen, [
       ['OLD', undefined, 'clear'],
       ['NEW', undefined, 'clear'],
     ]);
@@ -846,7 +877,7 @@ describe('a refused refresh token is discarded explicitly', () => {
 
 // ---- Rule 8's remembered refusal, on kinds (CLAUDE.md rule 8).
 
-const dir = join(__dirname, '..', 'fixtures', 'certificates');
+const dir = CERTIFICATES;
 const readFixture = (name: string) => readFileSync(join(dir, name));
 const A: ICertificateMaterial = {
   cert: readFixture('client.crt'),
@@ -919,13 +950,13 @@ describe('rule 8 on kinds: the remembered refusal', () => {
     const provider = rotating({ refreshToken: 'R1' });
     const t = recordingTargets();
     const first = refusalOf(await provider.authorize(t.requestTarget));
-    expect(first.kind).toBe('token-binding');
-    expect(first.facts).toEqual({ problem: 'renewed-bound-elsewhere' });
+    assert.equal(first.kind, 'token-binding');
+    assert.deepEqual(first.facts, { problem: 'renewed-bound-elsewhere' });
     const again = refusalOf(await provider.authorize(t.requestTarget));
     // The same minted error, not a copy.
-    expect(again).toBe(first);
-    expect(isMinted(again)).toBe(true);
-    expect(grants).toEqual(['refresh_token']);
+    assert.equal(again, first);
+    assert.equal(isMinted(again), true);
+    assert.deepEqual(grants, ['refresh_token']);
   });
 
   it('a renewal that throws while the token is held: remembered with its own refusal — the very error getTokens() threw', async () => {
@@ -936,25 +967,25 @@ describe('rule 8 on kinds: the remembered refusal', () => {
     const thrown = await rejectionOf(provider.getTokens());
     expectFailure(thrown);
     const produced = (thrown as AuthProviderFailure).error;
-    expect(produced.kind).toBe('request-failed');
-    expect(produced.facts).toMatchObject({
+    assert.equal(produced.kind, 'request-failed');
+    matchObject(produced.facts, {
       status: 400,
       oauthError: 'invalid_grant',
     });
-    expect(grants).toEqual(['refresh_token', 'password']);
+    assert.deepEqual(grants, ['refresh_token', 'password']);
     // authorize() answers that very object, minted, not a copy.
     for (let i = 0; i < 2; i += 1) {
       const refusal = refusalOf(await provider.authorize(t.requestTarget));
-      expect(refusal).toBe(produced);
-      expect(isMinted(refusal)).toBe(true);
+      assert.equal(refusal, produced);
+      assert.equal(isMinted(refusal), true);
     }
     // getTokens() throws the remembered error without renewing again: it
     // reaches the strategy as lastRenewal, and refreshThenLogin() stops
     // with it — the very object.
     const again = await rejectionOf(provider.getTokens());
-    expect((again as AuthProviderFailure).error).toBe(produced);
-    expect(grants).toEqual(['refresh_token', 'password']);
-    expect(t.request.headers).toEqual({});
+    assert.equal((again as AuthProviderFailure).error, produced);
+    assert.deepEqual(grants, ['refresh_token', 'password']);
+    assert.deepEqual(t.request.headers, {});
   });
 
   it('a renewal that throws a foreign value while the token is held: remembered with its classified error — the very one getTokens() threw', async () => {
@@ -982,10 +1013,11 @@ describe('rule 8 on kinds: the remembered refusal', () => {
     const thrown = await rejectionOf(provider.getTokens());
     expectFailure(thrown, original);
     const produced = (thrown as AuthProviderFailure).error;
-    expect(produced.kind).toBe('unknown');
+    assert.equal(produced.kind, 'unknown');
     // Classified once, in the renewal: authorize() answers that very object.
     for (let i = 0; i < 2; i += 1) {
-      expect(refusalOf(await provider.authorize(t.requestTarget))).toBe(
+      assert.equal(
+        refusalOf(await provider.authorize(t.requestTarget)),
         produced,
       );
     }
@@ -1002,11 +1034,11 @@ describe('rule 8 on kinds: the remembered refusal', () => {
       status: 401,
       error: undefined,
     });
-    expect(grants.length).toBe(before + 1);
+    assert.equal(grants.length, before + 1);
     const refusal = refusalOf(outcome);
-    expect(refusal.kind).toBe('request-failed');
-    expect(refusalOf(await provider.authorize(t.requestTarget))).toBe(refusal);
-    expect(grants.length).toBe(before + 1);
+    assert.equal(refusal.kind, 'request-failed');
+    assert.equal(refusalOf(await provider.authorize(t.requestTarget)), refusal);
+    assert.equal(grants.length, before + 1);
   });
 
   it('prepare() renews a remembered token once more (moment prepare); its refusal is then the remembered one', async () => {
@@ -1016,9 +1048,12 @@ describe('rule 8 on kinds: the remembered refusal', () => {
     await provider.authorize(t.requestTarget);
     const before = grants.length;
     const prepared = refusalOf(await provider.prepare());
-    expect(grants.length).toBe(before + 1);
-    expect(refusalOf(await provider.authorize(t.requestTarget))).toBe(prepared);
-    expect(grants.length).toBe(before + 1);
+    assert.equal(grants.length, before + 1);
+    assert.equal(
+      refusalOf(await provider.authorize(t.requestTarget)),
+      prepared,
+    );
+    assert.equal(grants.length, before + 1);
   });
 
   it('a new token held clears the mark', async () => {
@@ -1030,7 +1065,7 @@ describe('rule 8 on kinds: the remembered refusal', () => {
     (
       provider as unknown as { authorizationToken?: string }
     ).authorizationToken = fresh;
-    await expect(provider.authorize(t.requestTarget)).resolves.toEqual({
+    assert.deepEqual(await provider.authorize(t.requestTarget), {
       ok: true,
     });
   });
@@ -1042,27 +1077,28 @@ describe('rule 8 on kinds: the remembered refusal', () => {
     });
     const t = recordingTargets();
     await provider.establish(t.logonTarget);
-    const now = jest.spyOn(Date, 'now').mockReturnValue(Date.UTC(2127, 0, 1));
+    const now = mock.method(Date, 'now', () => Date.UTC(2127, 0, 1));
     try {
       const thrown = await rejectionOf(provider.getTokens());
       expectFailure(thrown);
       const produced = (thrown as AuthProviderFailure).error;
-      expect(produced.kind).toBe('client-certificate');
-      expect(produced.facts).toEqual({ problem: 'expired' });
+      assert.equal(produced.kind, 'client-certificate');
+      assert.deepEqual(produced.facts, { problem: 'expired' });
       // Pinned material is checked before the strategy is asked, so each
       // renewal refuses it afresh: the same error, minted again, and still
       // nothing sent.
       for (let i = 0; i < 2; i += 1) {
-        expect(
+        assert.deepEqual(
           refusalOf(await provider.authorize(t.requestTarget)),
-        ).toStrictEqual(produced);
+          produced,
+        );
       }
     } finally {
-      now.mockRestore();
+      now.mock.restore();
     }
-    expect(grants).toHaveLength(0);
-    expect(mockedAxios).not.toHaveBeenCalled();
-    expect(mockedAxios.post).not.toHaveBeenCalled();
+    assert.equal(grants.length, 0);
+    assert.equal(mockedAxios.mock.callCount(), 0);
+    assert.equal(mockedAxios.post.mock.callCount(), 0);
   });
 });
 
@@ -1114,37 +1150,42 @@ describe('every throw is an AuthProviderFailure, the former classes gone', () =>
         missingFields: ['uaaUrl', 'refreshToken'],
       });
       const p = new TestProvider();
-      p.login.mockRejectedValue(original);
+      p.login.mock.mockImplementation(async () => {
+        throw original;
+      });
       const thrown = await rejectionOf(p.getTokens());
       expectFailure(thrown, original);
-      expect((thrown as AuthProviderFailure).error).toEqual(
-        expect.objectContaining({
-          kind: 'unknown',
-          facts: { operation: 'token-request', grant: 'client_credentials' },
-        }),
-      );
-    }
-  });
-
-  it.each(lookAlikes)('%s: unknown, wrapped', async (_name, make) => {
-    const original = make();
-    const p = new TestProvider();
-    p.login.mockRejectedValue(original);
-    for (const thrown of [
-      await rejectionOf(p.getTokens()),
-      await rejectionOf(p.refreshTokens()),
-    ]) {
-      expectFailure(thrown, original);
-      expect((thrown as AuthProviderFailure).error).toMatchObject({
+      matchObject((thrown as AuthProviderFailure).error, {
         kind: 'unknown',
         facts: { operation: 'token-request', grant: 'client_credentials' },
       });
     }
   });
+
+  for (const [caseIndex, caseRow] of lookAlikes.entries()) {
+    const [_name, make] = caseRow;
+    it(caseTitle('%s: unknown, wrapped', caseRow, caseIndex), async () => {
+      const original = make();
+      const p = new TestProvider();
+      p.login.mock.mockImplementation(async () => {
+        throw original;
+      });
+      for (const thrown of [
+        await rejectionOf(p.getTokens()),
+        await rejectionOf(p.refreshTokens()),
+      ]) {
+        expectFailure(thrown, original);
+        matchObject((thrown as AuthProviderFailure).error, {
+          kind: 'unknown',
+          facts: { operation: 'token-request', grant: 'client_credentials' },
+        });
+      }
+    });
+  }
 });
 
 describe('a refused token request through a moment', () => {
-  it.each([
+  for (const [caseIndex, caseRow] of cases([
     [
       'with a registered error',
       {
@@ -1166,34 +1207,41 @@ describe('a refused token request through a moment', () => {
       'no-response',
       'the client credentials request failed (the token endpoint gave no reason)',
     ],
-  ])(
-    '%s: authorize() answers request-failed, verbatim',
-    async (_name, response, problem, reason) => {
-      answer(async () => {
-        throw Object.assign(new Error(MARKER), {
-          isAxiosError: true,
-          ...(response === undefined ? {} : { response }),
+  ]).entries()) {
+    const [_name, response, problem, reason] = caseRow;
+    it(
+      caseTitle(
+        '%s: authorize() answers request-failed, verbatim',
+        caseRow,
+        caseIndex,
+      ),
+      async () => {
+        answer(async () => {
+          throw Object.assign(new Error(MARKER), {
+            isAxiosError: true,
+            ...(response === undefined ? {} : { response }),
+          });
         });
-      });
-      const provider = new ClientCredentialsProvider({
-        renewal: refreshThenLogin(),
-        uaaUrl: 'https://uaa.example',
-        clientId: 'cid',
-        clientSecret: 's',
-      });
-      const { requestTarget, request } = recordingTargets();
-      const outcome = await provider.authorize(requestTarget);
-      const refusal = mintedRefusal(outcome);
-      expect(refusal.kind).toBe('request-failed');
-      expect(refusal.facts).toMatchObject({
-        operation: 'client-credentials',
-        problem,
-      });
-      expect(refusal.reason).toBe(reason);
-      expect(request.headers).toEqual({});
-      expect(JSON.stringify(outcome)).not.toContain(MARKER);
-    },
-  );
+        const provider = new ClientCredentialsProvider({
+          renewal: refreshThenLogin(),
+          uaaUrl: 'https://uaa.example',
+          clientId: 'cid',
+          clientSecret: 's',
+        });
+        const { requestTarget, request } = recordingTargets();
+        const outcome = await provider.authorize(requestTarget);
+        const refusal = mintedRefusal(outcome);
+        assert.equal(refusal.kind, 'request-failed');
+        matchObject(refusal.facts, {
+          operation: 'client-credentials',
+          problem,
+        });
+        assert.equal(refusal.reason, reason);
+        assert.deepEqual(request.headers, {});
+        notContains(JSON.stringify(outcome), MARKER);
+      },
+    );
+  }
 });
 
 describe('the grant a failure names is read once, guarded', () => {
@@ -1204,10 +1252,12 @@ describe('the grant a failure names is read once, guarded', () => {
       }
     }
     const p = new Throwing();
-    p.login.mockRejectedValue(new Error('down'));
+    p.login.mock.mockImplementation(async () => {
+      throw new Error('down');
+    });
     const thrown = await rejectionOf(p.getTokens());
     expectFailure(thrown);
-    expect((thrown as AuthProviderFailure).error.facts).toEqual({
+    assert.deepEqual((thrown as AuthProviderFailure).error.facts, {
       operation: 'token-request',
     });
   });
@@ -1215,7 +1265,7 @@ describe('the grant a failure names is read once, guarded', () => {
 
 describe('RefreshError is no longer constructed', () => {
   it('no file in src constructs it, and no provider throws a bare Error for a missing refresh token', () => {
-    const root = join(__dirname, '..', '..');
+    const root = SRC;
     const files: string[] = [];
     const walk = (at: string): void => {
       for (const name of readdirSync(at)) {
@@ -1226,11 +1276,11 @@ describe('RefreshError is no longer constructed', () => {
       }
     };
     walk(root);
-    expect(files.length).toBeGreaterThan(20);
+    assert.ok(files.length > 20, `${files.length} > ${20}`);
     for (const file of files) {
       const text = readFileSync(file, 'utf8');
-      expect(text.includes('new RefreshError(')).toBe(false);
-      expect(text.includes('Refresh token is required')).toBe(false);
+      assert.equal(text.includes('new RefreshError('), false);
+      assert.equal(text.includes('Refresh token is required'), false);
     }
   });
 });
@@ -1258,15 +1308,17 @@ const withLogger = <T>(provider: T, logger: unknown): T => {
 describe('a throwing logger changes nothing on the token paths (guarded)', () => {
   it('a refused refresh with a throwing logger still clears, logs in, and holds no refused refresh token', async () => {
     const p = withLogger(new TestProvider(), throwingLogger());
-    p.login.mockResolvedValueOnce(result('T1', 'R0'));
+    once(p.login, async () => result('T1', 'R0'));
     await p.getTokens();
     p.expire();
-    p.refresh.mockRejectedValue(new Error('refused'));
-    p.login.mockResolvedValue(result('T3'));
-    await expect(p.getTokens()).resolves.toMatchObject({
+    p.refresh.mock.mockImplementation(async () => {
+      throw new Error('refused');
+    });
+    p.login.mock.mockImplementation(async () => result('T3'));
+    matchObject(await p.getTokens(), {
       authorizationToken: 'T3',
     });
-    expect(p.steps()).toEqual([
+    assert.deepEqual(p.steps(), [
       'login',
       'write:replace',
       'refresh',
@@ -1274,9 +1326,10 @@ describe('a throwing logger changes nothing on the token paths (guarded)', () =>
       'login',
       'write:clear',
     ]);
-    expect(
+    assert.equal(
       (p as unknown as { refreshToken?: string }).refreshToken,
-    ).toBeUndefined();
+      undefined,
+    );
   });
 
   it('a failing clearing write and throwing loggers: the login still runs', async () => {
@@ -1293,12 +1346,14 @@ describe('a throwing logger changes nothing on the token paths (guarded)', () =>
     );
     await p.getTokens();
     p.expire();
-    p.refresh.mockRejectedValue(new Error('refused'));
-    p.login.mockResolvedValue(result('T3', 'R3'));
-    await expect(p.getTokens()).resolves.toMatchObject({
+    p.refresh.mock.mockImplementation(async () => {
+      throw new Error('refused');
+    });
+    p.login.mock.mockImplementation(async () => result('T3', 'R3'));
+    matchObject(await p.getTokens(), {
       authorizationToken: 'T3',
     });
-    expect(p.dispositions()).toEqual(['replace', 'clear', 'replace']);
+    assert.deepEqual(p.dispositions(), ['replace', 'clear', 'replace']);
   });
 
   it('a failing write after a login and throwing loggers: the token stands', async () => {
@@ -1311,88 +1366,114 @@ describe('a throwing logger changes nothing on the token paths (guarded)', () =>
       }),
       throwingLogger(),
     );
-    await expect(p.getTokens()).resolves.toMatchObject({
+    matchObject(await p.getTokens(), {
       authorizationToken: 'T1',
     });
   });
 
-  it.each(['debug', 'info', 'warn', 'error'])(
-    'a logger whose %s throws: login, cache hit, refresh, refused refresh all answer as with a working one',
-    async (level) => {
-      const p = withLogger(new TestProvider(), throwingLogger([level]));
-      await expect(p.getTokens()).resolves.toMatchObject({
-        authorizationToken: 'T1',
-      });
-      await expect(p.getTokens()).resolves.toMatchObject({
-        authorizationToken: 'T1',
-      });
-      p.expire();
-      await expect(p.getTokens()).resolves.toMatchObject({
-        authorizationToken: 'T2',
-      });
-      p.expire();
-      p.refresh.mockRejectedValue(new Error('refused'));
-      p.login.mockResolvedValue(result('T3', 'R3'));
-      await expect(p.getTokens()).resolves.toMatchObject({
-        authorizationToken: 'T3',
-      });
-      expect(p.steps()).toEqual([
-        'login',
-        'write:replace',
-        'refresh',
-        'write:replace',
-        'refresh',
-        'write:clear',
-        'login',
-        'write:replace',
-      ]);
-      await expect(p.validateToken('opaque')).resolves.toBe(true);
-    },
-  );
+  for (const [caseIndex, caseRow] of [
+    'debug',
+    'info',
+    'warn',
+    'error',
+  ].entries()) {
+    const level = caseRow;
+    it(
+      caseTitle(
+        'a logger whose %s throws: login, cache hit, refresh, refused refresh all answer as with a working one',
+        caseRow,
+        caseIndex,
+      ),
+      async () => {
+        const p = withLogger(new TestProvider(), throwingLogger([level]));
+        matchObject(await p.getTokens(), {
+          authorizationToken: 'T1',
+        });
+        matchObject(await p.getTokens(), {
+          authorizationToken: 'T1',
+        });
+        p.expire();
+        matchObject(await p.getTokens(), {
+          authorizationToken: 'T2',
+        });
+        p.expire();
+        p.refresh.mock.mockImplementation(async () => {
+          throw new Error('refused');
+        });
+        p.login.mock.mockImplementation(async () => result('T3', 'R3'));
+        matchObject(await p.getTokens(), {
+          authorizationToken: 'T3',
+        });
+        assert.deepEqual(p.steps(), [
+          'login',
+          'write:replace',
+          'refresh',
+          'write:replace',
+          'refresh',
+          'write:clear',
+          'login',
+          'write:replace',
+        ]);
+        assert.equal(await p.validateToken('opaque'), true);
+      },
+    );
+  }
 
-  it.each(['debug', 'info', 'warn', 'error'])(
-    'a logger whose %s throws, through real sites: password grant, refresh, discovery',
-    async (level) => {
-      let n = 0;
-      answer(async (url, grant) => {
-        n += 1;
-        if (url.endsWith('/.well-known/openid-configuration')) {
+  for (const [caseIndex, caseRow] of [
+    'debug',
+    'info',
+    'warn',
+    'error',
+  ].entries()) {
+    const level = caseRow;
+    it(
+      caseTitle(
+        'a logger whose %s throws, through real sites: password grant, refresh, discovery',
+        caseRow,
+        caseIndex,
+      ),
+      async () => {
+        let n = 0;
+        answer(async (url, grant) => {
+          n += 1;
+          if (url.endsWith('/.well-known/openid-configuration')) {
+            return {
+              status: 200,
+              data: { token_endpoint: 'https://idp.example/token' },
+            };
+          }
           return {
             status: 200,
-            data: { token_endpoint: 'https://idp.example/token' },
+            data: {
+              access_token: `A${n}-${String(grant)}`,
+              refresh_token: `R${n}`,
+              expires_in: 3600,
+            },
           };
-        }
-        return {
+        });
+        mockedAxios.get.mock.mockImplementation(async () => ({
           status: 200,
-          data: {
-            access_token: `A${n}-${String(grant)}`,
-            refresh_token: `R${n}`,
-            expires_in: 3600,
-          },
-        };
-      });
-      mockedAxios.get.mockImplementation(async () => ({
-        status: 200,
-        data: { token_endpoint: 'https://idp.example/token' },
-      }));
-      const provider = withLogger(
-        new OidcPasswordProvider({
-          renewal: refreshThenLogin(),
-          clientId: 'cid',
-          issuerUrl: 'https://idp.example',
-          username: 'u',
-          password: 'p',
-        }),
-        throwingLogger([level]),
-      );
-      await expect(provider.getTokens()).resolves.toMatchObject({
-        authorizationToken: expect.stringContaining('password'),
-      });
-      await expect(provider.refreshTokens()).resolves.toMatchObject({
-        authorizationToken: expect.stringContaining('refresh_token'),
-      });
-    },
-  );
+          data: { token_endpoint: 'https://idp.example/token' },
+        }));
+        const provider = withLogger(
+          new OidcPasswordProvider({
+            renewal: refreshThenLogin(),
+            clientId: 'cid',
+            issuerUrl: 'https://idp.example',
+            username: 'u',
+            password: 'p',
+          }),
+          throwingLogger([level]),
+        );
+        matchObject(await provider.getTokens(), {
+          authorizationToken: stringContaining('password'),
+        });
+        matchObject(await provider.refreshTokens(), {
+          authorizationToken: stringContaining('refresh_token'),
+        });
+      },
+    );
+  }
 
   it('a logger that throws everywhere: AuthorizationCodeProvider constructs, logs in and refreshes', async () => {
     answer(async (_url, grant) => ({
@@ -1418,7 +1499,7 @@ describe('a throwing logger changes nothing on the token paths (guarded)', () =>
         }),
       },
     });
-    await expect(provider.refreshTokens()).resolves.toMatchObject({
+    matchObject(await provider.refreshTokens(), {
       authorizationToken: 'A-refresh_token',
     });
   });
@@ -1447,7 +1528,7 @@ describe('a throwing logger changes nothing on the token paths (guarded)', () =>
     });
     const thrown = await rejectionOf(provider.getTokens());
     expectFailure(thrown);
-    expect((thrown as AuthProviderFailure).error).toMatchObject({
+    matchObject((thrown as AuthProviderFailure).error, {
       kind: 'interactive-login',
       facts: { outcome: 'device-code-not-shown' },
     });
@@ -1459,12 +1540,14 @@ describe('the logical refresh state returns to held', () => {
     const p = new TestProvider();
     await p.getTokens();
     p.expire();
-    p.refresh.mockRejectedValueOnce(new Error('refused'));
-    p.login.mockResolvedValue(result('T3', 'R3'));
+    once(p.refresh, async () => {
+      throw new Error('refused');
+    });
+    p.login.mock.mockImplementation(async () => result('T3', 'R3'));
     await p.getTokens();
     p.expire();
-    p.refresh.mockResolvedValue(result('T4'));
+    p.refresh.mock.mockImplementation(async () => result('T4'));
     await p.getTokens();
-    expect(p.dispositions()).toEqual(['replace', 'clear', 'replace', 'keep']);
+    assert.deepEqual(p.dispositions(), ['replace', 'clear', 'replace', 'keep']);
   });
 });

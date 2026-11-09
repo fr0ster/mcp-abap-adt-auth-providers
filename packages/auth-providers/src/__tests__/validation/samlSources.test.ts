@@ -11,11 +11,12 @@
  *   `xsd:dateTime` and the certificate armour are read as plain characters.
  */
 
+import assert from 'node:assert/strict';
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, relative } from 'node:path';
-import { describe, expect, it } from '@jest/globals';
-
-const SRC = join(__dirname, '..', '..');
+import { describe, it } from 'node:test';
+import { caseTitle } from '../helpers/expectations';
+import { SRC } from '../helpers/packagePaths';
 
 function sourceFiles(dir: string): string[] {
   return readdirSync(dir).flatMap((name) => {
@@ -39,11 +40,11 @@ function linesWith(needle: string): string[] {
 
 describe('the SAML refusals are minted, never the old class', () => {
   it('AssertionValidationError is constructed nowhere in src', () => {
-    expect(linesWith('new AssertionValidationError(')).toEqual([]);
+    assert.deepEqual(linesWith('new AssertionValidationError('), []);
   });
 
   it('quoteUntrusted is gone', () => {
-    expect(linesWith('quoteUntrusted')).toEqual([]);
+    assert.deepEqual(linesWith('quoteUntrusted'), []);
   });
 });
 
@@ -79,10 +80,16 @@ const REGEX_MARKS = [
 ];
 
 describe('no regular expression on the SAML path', () => {
-  it.each(SAML_PATH)('%s', (file) => {
-    const text = readFileSync(join(SRC, file), 'utf8');
-    for (const mark of REGEX_MARKS) {
-      expect([file, mark, text.includes(mark)]).toEqual([file, mark, false]);
-    }
-  });
+  for (const [caseIndex, caseRow] of SAML_PATH.entries()) {
+    const file = caseRow;
+    it(caseTitle('%s', caseRow, caseIndex), () => {
+      const text = readFileSync(join(SRC, file), 'utf8');
+      for (const mark of REGEX_MARKS) {
+        assert.deepEqual(
+          [file, mark, text.includes(mark)],
+          [file, mark, false],
+        );
+      }
+    });
+  }
 });

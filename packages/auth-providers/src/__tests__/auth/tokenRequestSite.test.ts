@@ -13,15 +13,10 @@
  * secret in every form; the sites' own cases are in `tokenSites.test.ts`.
  */
 
+import '../helpers/axiosModuleMock';
+import assert from 'node:assert/strict';
+import { afterEach, beforeEach, describe, it } from 'node:test';
 import { inspect } from 'node:util';
-import {
-  afterEach,
-  beforeEach,
-  describe,
-  expect,
-  it,
-  jest,
-} from '@jest/globals';
 import {
   isAuthProviderFailure,
   logFields,
@@ -39,64 +34,74 @@ import {
   type TokenRequestSite,
   type TokenResponseSnapshot,
 } from '../../auth/tokenRequest';
+import { mockedAxios } from '../helpers/axiosModuleMock';
+import { cases, caseTitle, notContains } from '../helpers/expectations';
+import { once, resetMock } from '../helpers/mockOnce';
 import {
   codeExchangeMissingTokenLine542,
   logRefusedRequest542,
 } from '../helpers/v542';
 
 // Automocked, with axios's own error classes: the prepared path calls axios.
-jest.mock('axios', () => {
-  const mocked = jest.createMockFromModule<Record<string, unknown>>('axios');
-  const actual = jest.requireActual<Record<string, unknown>>('axios');
-  mocked.AxiosError = actual.AxiosError;
-  mocked.CanceledError = actual.CanceledError;
-  return mocked;
-});
-type Mock = jest.Mock<(...args: any[]) => Promise<unknown>>;
-const mockedAxios = axios as unknown as Mock;
 
 // ------------------------------------------------------------------ prepareSecret
 
 describe('prepareSecret', () => {
-  it.each([
+  for (const [caseIndex, caseRow] of cases([
     ['', '<redacted, 0 chars>'],
     ['a', '<redacted, 1 chars>'],
     ['abcdefghijklmno', '<redacted, 15 chars>'],
     ['abcdefghijklwxyz', 'abcd…wxyz <redacted, 16 chars>'],
     ['abcdefghijklmwxyz', 'abcd…wxyz <redacted, 17 chars>'],
-  ])('authDebug: %j → %j', (value, prepared) => {
-    expect(prepareSecret(value, true)).toBe(prepared);
-  });
+  ]).entries()) {
+    const [value, prepared] = caseRow;
+    it(caseTitle('authDebug: %j → %j', caseRow, caseIndex), () => {
+      assert.equal(prepareSecret(value, true), prepared);
+    });
+  }
 
-  it.each([
+  for (const [caseIndex, caseRow] of [
     '',
     'a',
     'abcdefghijklwxyz',
     'a-much-longer-secret-value-0123456789',
-  ])('without authDebug %j is its length only', (value) => {
-    expect(prepareSecret(value, false)).toBe(
-      `<redacted, ${[...value].length} chars>`,
+  ].entries()) {
+    const value = caseRow;
+    it(
+      caseTitle('without authDebug %j is its length only', caseRow, caseIndex),
+      () => {
+        assert.equal(
+          prepareSecret(value, false),
+          `<redacted, ${[...value].length} chars>`,
+        );
+      },
     );
-  });
+  }
 
   it("anything but `true` is off: 'true', 1", () => {
-    expect(
+    assert.equal(
       prepareSecret('abcdefghijklwxyz', 'true' as unknown as boolean),
-    ).toBe('<redacted, 16 chars>');
-    expect(prepareSecret('abcdefghijklwxyz', 1 as unknown as boolean)).toBe(
+      '<redacted, 16 chars>',
+    );
+    assert.equal(
+      prepareSecret('abcdefghijklwxyz', 1 as unknown as boolean),
       '<redacted, 16 chars>',
     );
   });
 
   it('whole characters: an astral character at each edge, counted once', () => {
     const value = `😀bcd${'x'.repeat(10)}wxy😀`;
-    expect(prepareSecret(value, true)).toBe('😀bcd…wxy😀 <redacted, 18 chars>');
-    expect(prepareSecret('😀'.repeat(15), true)).toBe('<redacted, 15 chars>');
+    assert.equal(
+      prepareSecret(value, true),
+      '😀bcd…wxy😀 <redacted, 18 chars>',
+    );
+    assert.equal(prepareSecret('😀'.repeat(15), true), '<redacted, 15 chars>');
   });
 
   it('a long JWT: 4 + 4 characters and its length', () => {
     const jwt = `eyJhbGciOiJSUzI1NiJ9.${'eyJzdWIiOiJ1c2VyIn0'.repeat(4)}.c2lnbmF0dXJl`;
-    expect(prepareSecret(jwt, true)).toBe(
+    assert.equal(
+      prepareSecret(jwt, true),
       `eyJh…dXJl <redacted, ${jwt.length} chars>`,
     );
   });
@@ -225,7 +230,7 @@ function expectedSent(
       }
     }
   }
-  expect(Object.keys(out).sort()).toEqual(Object.keys(all).sort());
+  assert.deepEqual(Object.keys(out).sort(), Object.keys(all).sort());
   return out;
 }
 
@@ -301,10 +306,10 @@ function renderingsOf(failure: unknown): string {
 
 /** No server text and no whole echoed form of any secret. */
 function expectNothingOfTheServerOrAnEcho(text: string): void {
-  expect(text).not.toContain(SERVER_TEXT);
-  expect(text).not.toContain('SERVER-URI-PATH');
-  expect(text).not.toContain(JWT_ECHO);
-  for (const form of WHOLE_FORMS) expect(text).not.toContain(form);
+  notContains(text, SERVER_TEXT);
+  notContains(text, 'SERVER-URI-PATH');
+  notContains(text, JWT_ECHO);
+  for (const form of WHOLE_FORMS) notContains(text, form);
 }
 
 const send = (
@@ -312,7 +317,10 @@ const send = (
   failure: unknown,
   prepared?: PreparedTokenRequest,
 ): Promise<unknown> => {
-  if (prepared) mockedAxios.mockRejectedValueOnce(failure as never);
+  if (prepared)
+    once(mockedAxios, async () => {
+      throw failure as never;
+    });
   return sendTokenRequest(
     prepared,
     () => Promise.reject(failure) as Promise<AxiosResponse<unknown>>,
@@ -358,7 +366,7 @@ async function through(
 }
 
 beforeEach(() => {
-  mockedAxios.mockReset();
+  resetMock(mockedAxios);
 });
 
 // ------------------------------------------------------------------ the rule
@@ -397,116 +405,143 @@ describe('a server echoing every secret in every form', () => {
     ['with a strategy', PREPARED],
   ];
 
-  describe.each(OFF)('authDebug %s', (_name, make) => {
-    describe.each(STATUSES)('a %i', (status) => {
-      it.each(PATHS)(
-        '%s: exactly the safe-facts line — no secret, no server text',
-        async (_path, prepared) => {
-          const { logger, lines } = recordingLogger();
-          const failure = await through(
-            { ...make(), logger },
-            status,
-            prepared,
-          );
-          expect(lines).toEqual([
-            status === 200
-              ? {
-                  level: 'debug',
-                  message:
-                    'the token refresh failed: status 200, error: "invalid_grant"',
-                  meta: undefined,
-                  args: 1,
-                }
-              : {
-                  level: 'debug',
-                  message:
-                    'the token refresh: the token endpoint refused the request',
-                  meta: { status, error: 'invalid_grant' },
-                  args: 2,
-                },
-          ]);
-          expectNothingOfTheServerOrAnEcho(lines.map(rendered).join('\n'));
-          expect(isAuthProviderFailure(failure)).toBe(true);
-          expect(readFailure(failure, 'unfamiliar-error').facts).toEqual(
-            status === 200
-              ? {
-                  operation: 'token-refresh',
-                  grant: 'authorization_code',
-                  problem: 'no-access-token',
-                  status: 200,
-                }
-              : {
-                  operation: 'token-refresh',
-                  grant: 'authorization_code',
-                  problem: 'refused',
+  for (const [caseIndex, caseRow] of OFF.entries()) {
+    const [_name, make] = caseRow;
+    describe(caseTitle('authDebug %s', caseRow, caseIndex), () => {
+      for (const [caseIndex, caseRow] of STATUSES.entries()) {
+        const [status] = caseRow;
+        describe(caseTitle('a %i', caseRow, caseIndex), () => {
+          for (const [caseIndex, caseRow] of PATHS.entries()) {
+            const [_path, prepared] = caseRow;
+            it(
+              caseTitle(
+                '%s: exactly the safe-facts line — no secret, no server text',
+                caseRow,
+                caseIndex,
+              ),
+              async () => {
+                const { logger, lines } = recordingLogger();
+                const failure = await through(
+                  { ...make(), logger },
                   status,
-                  oauthError: 'invalid_grant',
-                },
-          );
-          expectNothingOfTheServerOrAnEcho(renderingsOf(failure));
-        },
-      );
+                  prepared,
+                );
+                assert.deepEqual(lines, [
+                  status === 200
+                    ? {
+                        level: 'debug',
+                        message:
+                          'the token refresh failed: status 200, error: "invalid_grant"',
+                        meta: undefined,
+                        args: 1,
+                      }
+                    : {
+                        level: 'debug',
+                        message:
+                          'the token refresh: the token endpoint refused the request',
+                        meta: { status, error: 'invalid_grant' },
+                        args: 2,
+                      },
+                ]);
+                expectNothingOfTheServerOrAnEcho(
+                  lines.map(rendered).join('\n'),
+                );
+                assert.equal(isAuthProviderFailure(failure), true);
+                assert.deepEqual(
+                  readFailure(failure, 'unfamiliar-error').facts,
+                  status === 200
+                    ? {
+                        operation: 'token-refresh',
+                        grant: 'authorization_code',
+                        problem: 'no-access-token',
+                        status: 200,
+                      }
+                    : {
+                        operation: 'token-refresh',
+                        grant: 'authorization_code',
+                        problem: 'refused',
+                        status,
+                        oauthError: 'invalid_grant',
+                      },
+                );
+                expectNothingOfTheServerOrAnEcho(renderingsOf(failure));
+              },
+            );
+          }
+        });
+      }
     });
-  });
+  }
 
   describe('authDebug: true', () => {
-    describe.each(STATUSES)('a %i', (status) => {
-      it.each(PATHS)(
-        '%s: the safe facts plus `sent` only — no server text, no echoed form',
-        async (_path, prepared) => {
-          const { logger, lines } = recordingLogger();
-          const failure = await through(
-            site({ authDebug: true, logger }),
-            status,
-            prepared,
+    for (const [caseIndex, caseRow] of STATUSES.entries()) {
+      const [status] = caseRow;
+      describe(caseTitle('a %i', caseRow, caseIndex), () => {
+        for (const [caseIndex, caseRow] of PATHS.entries()) {
+          const [_path, prepared] = caseRow;
+          it(
+            caseTitle(
+              '%s: the safe facts plus `sent` only — no server text, no echoed form',
+              caseRow,
+              caseIndex,
+            ),
+            async () => {
+              const { logger, lines } = recordingLogger();
+              const failure = await through(
+                site({ authDebug: true, logger }),
+                status,
+                prepared,
+              );
+              assert.equal(lines.length, 1);
+              const [line] = lines;
+              assert.deepEqual(
+                line,
+                status === 200
+                  ? {
+                      level: 'debug',
+                      message:
+                        'the token refresh failed: status 200, error: "invalid_grant"',
+                      meta: {
+                        status: 200,
+                        error: 'invalid_grant',
+                        sent: expectedSent(true, prepared),
+                      },
+                      args: 2,
+                    }
+                  : {
+                      level: 'debug',
+                      message: '[token-refresh] token endpoint said',
+                      meta: {
+                        status,
+                        error: 'invalid_grant',
+                        sent: expectedSent(true, prepared),
+                      },
+                      args: 2,
+                    },
+              );
+              expectNothingOfTheServerOrAnEcho(rendered(line as Line));
+              expectNothingOfTheServerOrAnEcho(renderingsOf(failure));
+            },
           );
-          expect(lines).toHaveLength(1);
-          const [line] = lines;
-          expect(line).toEqual(
-            status === 200
-              ? {
-                  level: 'debug',
-                  message:
-                    'the token refresh failed: status 200, error: "invalid_grant"',
-                  meta: {
-                    status: 200,
-                    error: 'invalid_grant',
-                    sent: expectedSent(true, prepared),
-                  },
-                  args: 2,
-                }
-              : {
-                  level: 'debug',
-                  message: '[token-refresh] token endpoint said',
-                  meta: {
-                    status,
-                    error: 'invalid_grant',
-                    sent: expectedSent(true, prepared),
-                  },
-                  args: 2,
-                },
-          );
-          expectNothingOfTheServerOrAnEcho(rendered(line as Line));
-          expectNothingOfTheServerOrAnEcho(renderingsOf(failure));
-        },
-      );
-    });
+        }
+      });
+    }
 
     it('the boundaries: a 15-character secret its length only, a 16-character one abcd…wxyz', async () => {
       const { logger, lines } = recordingLogger();
       await through(site({ authDebug: true, logger }), 400, undefined);
-      expect(lines).toHaveLength(1);
+      assert.equal(lines.length, 1);
       const sent = (
         lines[0] as Line & { meta: { sent: Record<string, string> } }
       ).meta.sent;
-      expect(sent.code).toBe('<redacted, 15 chars>');
-      expect(sent.code_verifier).toBe('abcd…wxyz <redacted, 16 chars>');
-      expect(sent.password).toBe('<redacted, 4 chars>');
+      assert.equal(sent.code, '<redacted, 15 chars>');
+      assert.equal(sent.code_verifier, 'abcd…wxyz <redacted, 16 chars>');
+      assert.equal(sent.password, '<redacted, 4 chars>');
     });
 
     it('no logger: no line, the same failure', async () => {
       const failure = await through(site({ authDebug: true }), 400, PREPARED);
-      expect(readFailure(failure, 'unfamiliar-error').facts).toEqual({
+      assert.deepEqual(readFailure(failure, 'unfamiliar-error').facts, {
         operation: 'token-refresh',
         grant: 'authorization_code',
         problem: 'refused',
@@ -516,29 +551,36 @@ describe('a server echoing every secret in every form', () => {
     });
   });
 
-  it.each([[false], [true]])(
-    'a logger whose methods throw (authDebug %s): the same failure',
-    async (authDebug) => {
-      const broken = (): never => {
-        throw new Error(`logger broke: ${SERVER_TEXT}`);
-      };
-      const logger: ILogger = {
-        debug: broken,
-        info: broken,
-        warn: broken,
-        error: broken,
-      };
-      for (const status of [400, 200] as const) {
-        const failure = await through(
-          site({ authDebug, logger }),
-          status,
-          PREPARED,
-        );
-        expect(isAuthProviderFailure(failure)).toBe(true);
-        expectNothingOfTheServerOrAnEcho(renderingsOf(failure));
-      }
-    },
-  );
+  for (const [caseIndex, caseRow] of cases([[false], [true]]).entries()) {
+    const [authDebug] = caseRow;
+    it(
+      caseTitle(
+        'a logger whose methods throw (authDebug %s): the same failure',
+        caseRow,
+        caseIndex,
+      ),
+      async () => {
+        const broken = (): never => {
+          throw new Error(`logger broke: ${SERVER_TEXT}`);
+        };
+        const logger: ILogger = {
+          debug: broken,
+          info: broken,
+          warn: broken,
+          error: broken,
+        };
+        for (const status of [400, 200] as const) {
+          const failure = await through(
+            site({ authDebug, logger }),
+            status,
+            PREPARED,
+          );
+          assert.equal(isAuthProviderFailure(failure), true);
+          expectNothingOfTheServerOrAnEcho(renderingsOf(failure));
+        }
+      },
+    );
+  }
 
   it('the server text is never read, in either mode: getters counting reads stay at zero', async () => {
     for (const authDebug of [false, true]) {
@@ -558,49 +600,70 @@ describe('a server echoing every secret in every form', () => {
       const s = site({ authDebug, logger });
       await failureOf(send(s, rejection(400, body)));
       missing(s, await answered(s, body), 'debug');
-      expect(reads).toBe(0);
+      assert.equal(reads, 0);
     }
   });
 
-  it.each([['authorization_pending'], ['slow_down']])(
-    '%s: no line in either mode, and the failure carries the code',
-    async (code) => {
-      for (const authDebug of [false, true]) {
-        const { logger, lines } = recordingLogger();
-        const failure = await failureOf(
-          send(
-            site({
-              operation: 'device-poll',
-              grant: undefined,
-              authDebug,
-              logger,
-            }),
-            rejection(400, echoingBody(code)),
-          ),
-        );
-        expect(lines).toEqual([]);
-        expect(readFailure(failure, 'unfamiliar-error').facts).toEqual({
-          operation: 'device-poll',
-          problem: 'refused',
-          status: 400,
-          oauthError: code,
-        });
-      }
-    },
-  );
+  for (const [caseIndex, caseRow] of cases([
+    ['authorization_pending'],
+    ['slow_down'],
+  ]).entries()) {
+    const [code] = caseRow;
+    it(
+      caseTitle(
+        '%s: no line in either mode, and the failure carries the code',
+        caseRow,
+        caseIndex,
+      ),
+      async () => {
+        for (const authDebug of [false, true]) {
+          const { logger, lines } = recordingLogger();
+          const failure = await failureOf(
+            send(
+              site({
+                operation: 'device-poll',
+                grant: undefined,
+                authDebug,
+                logger,
+              }),
+              rejection(400, echoingBody(code)),
+            ),
+          );
+          assert.deepEqual(lines, []);
+          assert.deepEqual(readFailure(failure, 'unfamiliar-error').facts, {
+            operation: 'device-poll',
+            problem: 'refused',
+            status: 400,
+            oauthError: code,
+          });
+        }
+      },
+    );
+  }
 
-  it.each([['authorization_pending'], ['slow_down']])(
-    '%s at another site than the device poll is a refusal: its safe-facts line',
-    async (code) => {
-      const { logger, lines } = recordingLogger();
-      await failureOf(
-        send(site({ logger }), rejection(400, echoingBody(code))),
-      );
-      expect(lines.map((line) => line.meta)).toEqual([
-        { status: 400, error: code },
-      ]);
-    },
-  );
+  for (const [caseIndex, caseRow] of cases([
+    ['authorization_pending'],
+    ['slow_down'],
+  ]).entries()) {
+    const [code] = caseRow;
+    it(
+      caseTitle(
+        '%s at another site than the device poll is a refusal: its safe-facts line',
+        caseRow,
+        caseIndex,
+      ),
+      async () => {
+        const { logger, lines } = recordingLogger();
+        await failureOf(
+          send(site({ logger }), rejection(400, echoingBody(code))),
+        );
+        assert.deepEqual(
+          lines.map((line) => line.meta),
+          [{ status: 400, error: code }],
+        );
+      },
+    );
+  }
 });
 
 describe('a failure without a response', () => {
@@ -612,7 +675,7 @@ describe('a failure without a response', () => {
         message: SERVER_TEXT,
       }),
     );
-    expect(lines).toEqual([
+    assert.deepEqual(lines, [
       {
         level: 'debug',
         message: 'the token refresh: the token endpoint refused the request',
@@ -621,8 +684,8 @@ describe('a failure without a response', () => {
       },
     ]);
     const error = readFailure(failure, 'unfamiliar-error');
-    expect(error.kind).toBe('tls');
-    expect(error.facts).toEqual({
+    assert.equal(error.kind, 'tls');
+    assert.deepEqual(error.facts, {
       operation: 'token-refresh',
       grant: 'authorization_code',
       code: 'CERT_HAS_EXPIRED',
@@ -634,8 +697,11 @@ describe('a failure without a response', () => {
     const failure = await failureOf(
       send(site({ logger }), { code: 'ECONNREFUSED', message: SERVER_TEXT }),
     );
-    expect(lines[0]?.meta).toEqual({ status: undefined, code: 'ECONNREFUSED' });
-    expect(readFailure(failure, 'unfamiliar-error').facts).toEqual({
+    assert.deepEqual(lines[0]?.meta, {
+      status: undefined,
+      code: 'ECONNREFUSED',
+    });
+    assert.deepEqual(readFailure(failure, 'unfamiliar-error').facts, {
       operation: 'token-refresh',
       grant: 'authorization_code',
       problem: 'no-response',
@@ -644,27 +710,34 @@ describe('a failure without a response', () => {
   });
 
   // A status that is not an HTTP status is no response.
-  it.each([
+  for (const [caseIndex, caseRow] of cases([
     ['status 0', rejection(0, echoingBody())],
     ['status 999', rejection(999, echoingBody())],
     [
       'a response without status',
       { response: { data: echoingBody() }, message: SERVER_TEXT },
     ],
-  ])(
-    '%s: `no-response`, no status key, the line still written',
-    async (_name, thrown) => {
-      const { logger, lines } = recordingLogger();
-      const failure = await failureOf(send(site({ logger }), thrown));
-      expect(isAuthProviderFailure(failure)).toBe(true);
-      expect(readFailure(failure, 'unfamiliar-error').facts).toEqual({
-        operation: 'token-refresh',
-        grant: 'authorization_code',
-        problem: 'no-response',
-      });
-      expect(lines).toHaveLength(1);
-    },
-  );
+  ]).entries()) {
+    const [_name, thrown] = caseRow;
+    it(
+      caseTitle(
+        '%s: `no-response`, no status key, the line still written',
+        caseRow,
+        caseIndex,
+      ),
+      async () => {
+        const { logger, lines } = recordingLogger();
+        const failure = await failureOf(send(site({ logger }), thrown));
+        assert.equal(isAuthProviderFailure(failure), true);
+        assert.deepEqual(readFailure(failure, 'unfamiliar-error').facts, {
+          operation: 'token-refresh',
+          grant: 'authorization_code',
+          problem: 'no-response',
+        });
+        assert.equal(lines.length, 1);
+      },
+    );
+  }
 });
 
 /**
@@ -673,7 +746,7 @@ describe('a failure without a response', () => {
  * every key and value it writes, the only extra key `code`.
  */
 describe("the line against 5.4.2's", () => {
-  it.each([
+  for (const [caseIndex, caseRow] of cases([
     ['a 400 with a registered error', () => rejection(400, echoingBody()), []],
     [
       'a TLS failure',
@@ -685,26 +758,32 @@ describe("the line against 5.4.2's", () => {
       () => ({ code: 'ECONNREFUSED', message: SERVER_TEXT }),
       ['code'],
     ],
-  ])('%s', async (_name, thrown, extra) => {
-    const legacy = recordingLogger();
-    const input = thrown() as {
-      response?: { status?: unknown; data?: unknown };
-    };
-    logRefusedRequest542(
-      { logger: legacy.logger, label: 'Token refresh failed' },
-      input.response?.status,
-      input.response?.data,
-    );
-    const current = recordingLogger();
-    await failureOf(send(site({ logger: current.logger }), thrown()));
-    const before = legacy.lines[0]?.meta as Record<string, unknown>;
-    const after = current.lines[0]?.meta as Record<string, unknown>;
-    expect(before).toBeDefined();
-    for (const key of Object.keys(before))
-      expect(after[key]).toEqual(before[key]);
-    expect(Object.keys(after).filter((key) => !(key in before))).toEqual(extra);
-    expect(current.lines[0]?.level).toBe(legacy.lines[0]?.level);
-  });
+  ]).entries()) {
+    const [_name, thrown, extra] = caseRow;
+    it(caseTitle('%s', caseRow, caseIndex), async () => {
+      const legacy = recordingLogger();
+      const input = thrown() as {
+        response?: { status?: unknown; data?: unknown };
+      };
+      logRefusedRequest542(
+        { logger: legacy.logger, label: 'Token refresh failed' },
+        input.response?.status,
+        input.response?.data,
+      );
+      const current = recordingLogger();
+      await failureOf(send(site({ logger: current.logger }), thrown()));
+      const before = legacy.lines[0]?.meta as Record<string, unknown>;
+      const after = current.lines[0]?.meta as Record<string, unknown>;
+      assert.notEqual(before, undefined);
+      for (const key of Object.keys(before))
+        assert.deepEqual(after[key], before[key]);
+      assert.deepEqual(
+        Object.keys(after).filter((key) => !(key in before)),
+        extra,
+      );
+      assert.equal(current.lines[0]?.level, legacy.lines[0]?.level);
+    });
+  }
 });
 
 describe('a 200 without access_token (rejectMissingToken)', () => {
@@ -712,62 +791,80 @@ describe('a 200 without access_token (rejectMissingToken)', () => {
    * At the UAA code exchange the default line is 5.4.2's own, verbatim: 5.4.2's
    * formatting, copied as the oracle (`helpers/v542.ts`), on the same answer.
    */
-  it.each([
+  for (const [caseIndex, caseRow] of cases([
     [
       'with a registered error',
       { error: 'invalid_grant', error_description: SERVER_TEXT },
     ],
     ['without one', { error_description: SERVER_TEXT }],
-  ])(
-    "the code exchange's line is 5.4.2's verbatim (%s)",
-    async (_name, body) => {
-      const current = recordingLogger();
-      const s = site({
-        operation: 'code-exchange',
-        grant: 'authorization_code',
-        logger: current.logger,
-      });
-      missing(s, await answered(s, body), 'error');
-      expect(current.lines).toEqual([
-        {
-          level: 'error',
-          message: codeExchangeMissingTokenLine542({ status: 200, data: body }),
-          meta: undefined,
-          // 5.4.2 passed the message alone.
-          args: 1,
-        },
-      ]);
-    },
-  );
+  ]).entries()) {
+    const [_name, body] = caseRow;
+    it(
+      caseTitle(
+        "the code exchange's line is 5.4.2's verbatim (%s)",
+        caseRow,
+        caseIndex,
+      ),
+      async () => {
+        const current = recordingLogger();
+        const s = site({
+          operation: 'code-exchange',
+          grant: 'authorization_code',
+          logger: current.logger,
+        });
+        missing(s, await answered(s, body), 'error');
+        assert.deepEqual(current.lines, [
+          {
+            level: 'error',
+            message: codeExchangeMissingTokenLine542({
+              status: 200,
+              data: body,
+            }),
+            meta: undefined,
+            // 5.4.2 passed the message alone.
+            args: 1,
+          },
+        ]);
+      },
+    );
+  }
 
-  it.each([[false], [true]])(
-    'a hostile answer (authDebug %s) reads as absent: an empty snapshot',
-    async (authDebug) => {
-      const hostile = new Proxy(
-        {},
-        {
-          get() {
+  for (const [caseIndex, caseRow] of cases([[false], [true]]).entries()) {
+    const [authDebug] = caseRow;
+    it(
+      caseTitle(
+        'a hostile answer (authDebug %s) reads as absent: an empty snapshot',
+        caseRow,
+        caseIndex,
+      ),
+      async () => {
+        const hostile = new Proxy(
+          {},
+          {
+            get() {
+              throw new Error(SERVER_TEXT);
+            },
+            getOwnPropertyDescriptor() {
+              throw new Error(SERVER_TEXT);
+            },
+          },
+        );
+        const unreadable = {
+          get status(): unknown {
             throw new Error(SERVER_TEXT);
           },
-          getOwnPropertyDescriptor() {
-            throw new Error(SERVER_TEXT);
-          },
-        },
-      );
-      const unreadable = {
-        get status(): unknown {
-          throw new Error(SERVER_TEXT);
-        },
-        data: hostile,
-      };
-      const snapshot = await sendTokenRequest(
-        undefined,
-        () => Promise.resolve(unreadable as unknown as AxiosResponse<unknown>),
-        site({ authDebug }),
-      );
-      expect(snapshot).toEqual({ status: undefined, data: {} });
-    },
-  );
+          data: hostile,
+        };
+        const snapshot = await sendTokenRequest(
+          undefined,
+          () =>
+            Promise.resolve(unreadable as unknown as AxiosResponse<unknown>),
+          site({ authDebug }),
+        );
+        assert.deepEqual(snapshot, { status: undefined, data: {} });
+      },
+    );
+  }
 });
 
 /**
@@ -775,37 +872,48 @@ describe('a 200 without access_token (rejectMissingToken)', () => {
  * words fails here instead of falling back to `the token request`.
  */
 describe("each token site's phrase", () => {
-  it.each([
-    ['code-exchange', undefined, 'the code exchange'],
-    ['token-refresh', undefined, 'the token refresh'],
-    ['client-credentials', undefined, 'the client credentials request'],
-    ['passcode-exchange', undefined, 'the passcode exchange'],
-    ['saml-token-exchange', undefined, 'the SAML token exchange'],
-    ['saml-token-refresh', undefined, 'the SAML token refresh'],
-    ['oidc-token-request', undefined, 'the OIDC token request'],
-    ['device-authorization', undefined, 'the OIDC device authorization'],
-    ['device-poll', undefined, 'the device poll'],
-    ['password-grant', undefined, 'the OIDC password grant'],
-    ['token-request', 'authorization_code', 'authorization_code token request'],
-  ] as const)('%s (grant %s): %s', async (operation, grant, phrase) => {
-    const { logger, lines } = recordingLogger();
-    await failureOf(
-      send(site({ operation, grant, logger }), rejection(400, {})),
-    );
-    expect(lines[0]?.message).toBe(
-      `${phrase}: the token endpoint refused the request`,
-    );
-    const quiet = recordingLogger();
-    const s = site({ operation, grant, logger: quiet.logger });
-    missing(s, await answered(s, {}), 'debug');
-    const lead =
-      operation === 'code-exchange'
-        ? 'Token exchange failed'
-        : `${phrase} failed`;
-    expect(quiet.lines[0]?.message).toBe(
-      `${lead}: status 200, error: no error given`,
-    );
-  });
+  for (const [caseIndex, caseRow] of (
+    [
+      ['code-exchange', undefined, 'the code exchange'],
+      ['token-refresh', undefined, 'the token refresh'],
+      ['client-credentials', undefined, 'the client credentials request'],
+      ['passcode-exchange', undefined, 'the passcode exchange'],
+      ['saml-token-exchange', undefined, 'the SAML token exchange'],
+      ['saml-token-refresh', undefined, 'the SAML token refresh'],
+      ['oidc-token-request', undefined, 'the OIDC token request'],
+      ['device-authorization', undefined, 'the OIDC device authorization'],
+      ['device-poll', undefined, 'the device poll'],
+      ['password-grant', undefined, 'the OIDC password grant'],
+      [
+        'token-request',
+        'authorization_code',
+        'authorization_code token request',
+      ],
+    ] as const
+  ).entries()) {
+    const [operation, grant, phrase] = caseRow;
+    it(caseTitle('%s (grant %s): %s', caseRow, caseIndex), async () => {
+      const { logger, lines } = recordingLogger();
+      await failureOf(
+        send(site({ operation, grant, logger }), rejection(400, {})),
+      );
+      assert.equal(
+        lines[0]?.message,
+        `${phrase}: the token endpoint refused the request`,
+      );
+      const quiet = recordingLogger();
+      const s = site({ operation, grant, logger: quiet.logger });
+      missing(s, await answered(s, {}), 'debug');
+      const lead =
+        operation === 'code-exchange'
+          ? 'Token exchange failed'
+          : `${phrase} failed`;
+      assert.equal(
+        quiet.lines[0]?.message,
+        `${lead}: status 200, error: no error given`,
+      );
+    });
+  }
 });
 
 /**
@@ -827,7 +935,7 @@ describe("a strategy's Basic header, read without a regex", () => {
       { strategy: { authenticate: async () => ({ headers }) } },
     );
 
-  it.each([
+  for (const [caseIndex, caseRow] of [
     `Basic ${credential}`,
     `basic  ${credential}`,
     `BASIC\t${credential}`,
@@ -843,21 +951,25 @@ describe("a strategy's Basic header, read without a regex", () => {
     'Basic',
     `xBasic ${credential}`,
     `Bearer ${credential}`,
-  ])('%j: as the regex read it', async (value) => {
-    const expected = ORACLE.exec(value)?.[1];
-    const prepared = await preparedWith({ Authorization: value });
-    if (expected === undefined) {
-      expect(prepared.secrets).toEqual({});
-    } else {
-      const decoded = Buffer.from(expected, 'base64').toString();
-      const colon = decoded.indexOf(':');
-      expect(prepared.secrets).toEqual(
-        colon >= 0 && colon < decoded.length - 1
-          ? { basic: expected, basic_secret: decoded.slice(colon + 1) }
-          : { basic: expected },
-      );
-    }
-  });
+  ].entries()) {
+    const value = caseRow;
+    it(caseTitle('%j: as the regex read it', caseRow, caseIndex), async () => {
+      const expected = ORACLE.exec(value)?.[1];
+      const prepared = await preparedWith({ Authorization: value });
+      if (expected === undefined) {
+        assert.deepEqual(prepared.secrets, {});
+      } else {
+        const decoded = Buffer.from(expected, 'base64').toString();
+        const colon = decoded.indexOf(':');
+        assert.deepEqual(
+          prepared.secrets,
+          colon >= 0 && colon < decoded.length - 1
+            ? { basic: expected, basic_secret: decoded.slice(colon + 1) }
+            : { basic: expected },
+        );
+      }
+    });
+  }
 
   it('every Authorization header, in any casing of the name, is named', async () => {
     const other = Buffer.from('id2:other-secret').toString('base64');
@@ -865,7 +977,7 @@ describe("a strategy's Basic header, read without a regex", () => {
       Authorization: `Basic ${credential}`,
       authorization: `Basic ${other}`,
     });
-    expect(prepared.secrets).toEqual({
+    assert.deepEqual(prepared.secrets, {
       basic: credential,
       basic_secret: 'the-secret',
       basic_2: other,

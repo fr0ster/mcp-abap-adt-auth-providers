@@ -6,8 +6,9 @@
  * field its type requires has no row: what it does with a value that breaks
  * its type is not stated.
  */
+import assert from 'node:assert/strict';
+import { describe, it } from 'node:test';
 import { inspect } from 'node:util';
-import { describe, expect, it } from '@jest/globals';
 import { isAuthProviderFailure } from '@mcp-abap-adt/auth-errors';
 import { composeAuthorization } from '../../authorization/compose';
 import {
@@ -41,6 +42,7 @@ import {
 } from '../../strategies/callbackStrategies';
 import { staticCodeStrategy } from '../../strategies/codeStrategies';
 import { manualPasscodeStrategy } from '../../strategies/manualStrategies';
+import { notContains } from '../helpers/expectations';
 
 const SECRET = 'HOSTILE-OPTION-SECRET-41';
 
@@ -113,11 +115,12 @@ function thrownBy(make: () => unknown): unknown {
 
 function expectConfigurationOrNothing(thrown: unknown): void {
   if (thrown === undefined) return;
-  expect(isAuthProviderFailure(thrown)).toBe(true);
-  expect((thrown as { error: { kind: string } }).error.kind).toBe(
+  assert.equal(isAuthProviderFailure(thrown), true);
+  assert.equal(
+    (thrown as { error: { kind: string } }).error.kind,
     'configuration',
   );
-  expect(inspect(thrown, { showHidden: true, depth: 8 })).not.toContain(SECRET);
+  notContains(inspect(thrown, { showHidden: true, depth: 8 }), SECRET);
 }
 
 describe('an empty options object is a configuration failure or nothing', () => {

@@ -1,6 +1,7 @@
+import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { describe, expect, it, jest } from '@jest/globals';
+import { describe, it, mock } from 'node:test';
 import type { ITokenRefresher } from '@mcp-abap-adt/interfaces-auth';
 import type { ISapConfig } from '@mcp-abap-adt/interfaces-auth-sap';
 import { BasicAuthProvider } from '../../credentials/BasicAuthProvider';
@@ -8,12 +9,13 @@ import { CertificateAuthProvider } from '../../credentials/CertificateAuthProvid
 import { FileCertificateMaterialLoader } from '../../credentials/FileCertificateMaterialLoader';
 import { SamlAuthProvider } from '../../credentials/SamlAuthProvider';
 import { TokenAuthProvider } from '../../credentials/TokenAuthProvider';
+import { matchObject, notContains } from '../helpers/expectations';
 import { configurationOf, thrownFrom, wordsOf } from '../helpers/minted';
+import { CERTIFICATES } from '../helpers/packagePaths';
 import { recordingTargets } from '../helpers/targets';
 
 const refusal = { at: 'request' as const, status: 401, error: {} };
-const fixture = (name: string) =>
-  readFileSync(join(__dirname, '..', 'fixtures', 'certificates', name));
+const fixture = (name: string) => readFileSync(join(CERTIFICATES, name));
 const broken = () => recordingTargets({ throws: true });
 
 describe('BasicAuthProvider', () => {
@@ -21,10 +23,11 @@ describe('BasicAuthProvider', () => {
 
   it('writes the header and offers user/passwd to the logon', async () => {
     const t = recordingTargets();
-    await expect(p.establish(t.logonTarget)).resolves.toEqual({ ok: true });
-    await expect(p.authorize(t.requestTarget)).resolves.toEqual({ ok: true });
-    expect(t.logon.params).toEqual([{ user: 'USER', passwd: 'S3CRET-PW' }]);
-    expect(t.request.headers.Authorization).toBe(
+    assert.deepEqual(await p.establish(t.logonTarget), { ok: true });
+    assert.deepEqual(await p.authorize(t.requestTarget), { ok: true });
+    assert.deepEqual(t.logon.params, [{ user: 'USER', passwd: 'S3CRET-PW' }]);
+    assert.equal(
+      t.request.headers.Authorization,
       `Basic ${Buffer.from('USER:S3CRET-PW').toString('base64')}`,
     );
   });
@@ -35,17 +38,19 @@ describe('BasicAuthProvider', () => {
       undefined as never,
       undefined as never,
     ).authorize(t.requestTarget);
-    expect(t.request.headers.Authorization).toBe(
+    assert.equal(
+      t.request.headers.Authorization,
       `Basic ${Buffer.from(':').toString('base64')}`,
     );
   });
 
   it('goes on when the wire takes no logon parameters (HTTP)', async () => {
-    await expect(
-      p.establish(
+    assert.deepEqual(
+      await p.establish(
         recordingTargets({ acceptsLogonParameters: false }).logonTarget,
       ),
-    ).resolves.toEqual({ ok: true });
+      { ok: true },
+    );
   });
 
   it('a throwing target is an Oops without the password', async () => {
@@ -53,18 +58,21 @@ describe('BasicAuthProvider', () => {
       await p.establish(broken().logonTarget),
       await p.authorize(broken().requestTarget),
     ]) {
-      expect(outcome).toMatchObject({ ok: false });
-      expect(JSON.stringify(outcome)).not.toMatch(/S3CRET-PW|SECRET-IN-TARGET/);
+      matchObject(outcome, { ok: false });
+      assert.doesNotMatch(
+        JSON.stringify(outcome),
+        /S3CRET-PW|SECRET-IN-TARGET/,
+      );
     }
   });
 
   it('rejected is an Oops without the password', async () => {
     const outcome = await p.rejected(refusal);
-    expect(outcome).toMatchObject({
+    matchObject(outcome, {
       ok: false,
       refusal: { reason: 'the user or password was refused' },
     });
-    expect(JSON.stringify(outcome)).not.toMatch(/S3CRET-PW/);
+    assert.doesNotMatch(JSON.stringify(outcome), /S3CRET-PW/);
   });
 });
 
@@ -74,7 +82,7 @@ describe('SamlAuthProvider', () => {
   it('writes the cookies', async () => {
     const t = recordingTargets();
     await p.authorize(t.requestTarget);
-    expect(t.request.cookies).toEqual(['MYSAPSSO2=SECRET-COOKIE']);
+    assert.deepEqual(t.request.cookies, ['MYSAPSSO2=SECRET-COOKIE']);
   });
 
   it('a throwing target and rejected are Oops without the cookie', async () => {
@@ -82,8 +90,8 @@ describe('SamlAuthProvider', () => {
       await p.authorize(broken().requestTarget),
       await p.rejected(refusal),
     ]) {
-      expect(outcome.ok).toBe(false);
-      expect(JSON.stringify(outcome)).not.toMatch(/SECRET-COOKIE/);
+      assert.equal(outcome.ok, false);
+      assert.doesNotMatch(JSON.stringify(outcome), /SECRET-COOKIE/);
     }
   });
 });
@@ -93,25 +101,24 @@ describe('TokenAuthProvider', () => {
     const p = TokenAuthProvider.fixed('SECRET-T');
     const t = recordingTargets();
     await p.authorize(t.requestTarget);
-    expect(t.request.headers.Authorization).toBe('Bearer SECRET-T');
+    assert.equal(t.request.headers.Authorization, 'Bearer SECRET-T');
     const outcome = await p.rejected(refusal);
-    expect(outcome).toMatchObject({
+    matchObject(outcome, {
       ok: false,
       refusal: { hint: 'obtain a new token' },
     });
-    expect(JSON.stringify(outcome)).not.toMatch(/SECRET-T/);
+    assert.doesNotMatch(JSON.stringify(outcome), /SECRET-T/);
   });
 
   it('from(refresher): getToken per attempt, refreshToken once, Ok on a new token', async () => {
-    const refresher: ITokenRefresher = {
-      getToken: jest.fn(async () => 'A'),
-      refreshToken: jest.fn(async () => 'B'),
-    };
+    const getToken = mock.fn(async () => 'A');
+    const refreshToken = mock.fn(async () => 'B');
+    const refresher: ITokenRefresher = { getToken, refreshToken };
     const p = TokenAuthProvider.from(refresher);
     await p.authorize(recordingTargets().requestTarget);
-    await expect(p.rejected(refusal)).resolves.toEqual({ ok: true });
-    expect(refresher.getToken).toHaveBeenCalledTimes(1);
-    expect(refresher.refreshToken).toHaveBeenCalledTimes(1);
+    assert.deepEqual(await p.rejected(refusal), { ok: true });
+    assert.equal(getToken.mock.callCount(), 1);
+    assert.equal(refreshToken.mock.callCount(), 1);
   });
 
   it('from(refresher): a renewal returning the refused token is an Oops', async () => {
@@ -120,7 +127,7 @@ describe('TokenAuthProvider', () => {
       refreshToken: async () => 'unchanged',
     });
     await p.authorize(recordingTargets().requestTarget);
-    await expect(p.rejected(refusal)).resolves.toMatchObject({
+    matchObject(await p.rejected(refusal), {
       ok: false,
       refusal: {
         reason: 'the renewal returned the credential that was refused',
@@ -141,11 +148,11 @@ describe('TokenAuthProvider', () => {
       await p.authorize(recordingTargets().requestTarget),
       await p.rejected(refusal),
     ]) {
-      expect(outcome).toMatchObject({
+      matchObject(outcome, {
         ok: false,
         refusal: { reason: 'the token source failed (unknown error)' },
       });
-      expect(JSON.stringify(outcome)).not.toMatch(/SECRET/);
+      assert.doesNotMatch(JSON.stringify(outcome), /SECRET/);
     }
   });
 });
@@ -160,10 +167,10 @@ describe('CertificateAuthProvider', () => {
       { load: async () => ({ cert, key }) },
       config,
     );
-    await expect(p.prepare()).resolves.toEqual({ ok: true });
+    assert.deepEqual(await p.prepare(), { ok: true });
     const t = recordingTargets();
-    await expect(p.establish(t.logonTarget)).resolves.toEqual({ ok: true });
-    expect(t.logon.tls).toEqual([{ cert, key }]);
+    assert.deepEqual(await p.establish(t.logonTarget), { ok: true });
+    assert.deepEqual(t.logon.tls, [{ cert, key }]);
   });
 
   it("the loader's configuration failure is the refusal; a foreign one gives its code only", async () => {
@@ -174,7 +181,7 @@ describe('CertificateAuthProvider', () => {
     // The loader's configuration case, once a ValidationError
     // answered with the moment's fallback.
     const refused = await own.prepare();
-    expect(wordsOf(refused)).toEqual({
+    assert.deepEqual(wordsOf(refused), {
       ok: false,
       refusal: {
         reason:
@@ -182,7 +189,7 @@ describe('CertificateAuthProvider', () => {
         hint: 'check the provider configuration',
       },
     });
-    expect(JSON.stringify(refused)).not.toContain('SECRET');
+    notContains(JSON.stringify(refused), 'SECRET');
     const fsError = Object.assign(
       new Error("ENOENT: no such file 'C:\\\\SECRET\\\\key.pem'"),
       { code: 'ENOENT' },
@@ -196,7 +203,7 @@ describe('CertificateAuthProvider', () => {
       config,
     );
     const outcome = await foreign.prepare();
-    expect(wordsOf(outcome)).toEqual({
+    assert.deepEqual(wordsOf(outcome), {
       ok: false,
       refusal: {
         reason: 'loading the certificate failed (unknown error, ENOENT)',
@@ -215,22 +222,23 @@ describe('CertificateAuthProvider', () => {
       config,
     );
     await p.prepare();
-    await expect(
-      p.establish(recordingTargets({ acceptsTls: false }).logonTarget),
-    ).resolves.toMatchObject({
-      ok: false,
-      refusal: { reason: 'this wire carries no TLS material (RFC)' },
-    });
+    matchObject(
+      await p.establish(recordingTargets({ acceptsTls: false }).logonTarget),
+      {
+        ok: false,
+        refusal: { reason: 'this wire carries no TLS material (RFC)' },
+      },
+    );
     const outcome = await p.establish(broken().logonTarget);
-    expect(outcome.ok).toBe(false);
-    expect(JSON.stringify(outcome)).not.toMatch(/test-passphrase/);
+    assert.equal(outcome.ok, false);
+    assert.doesNotMatch(JSON.stringify(outcome), /test-passphrase/);
   });
 
   it('establish before prepare is an Oops, not a throw', async () => {
     const p = new CertificateAuthProvider({ load: async () => ({}) }, config);
-    await expect(
-      p.establish(recordingTargets().logonTarget),
-    ).resolves.toMatchObject({ ok: false });
+    matchObject(await p.establish(recordingTargets().logonTarget), {
+      ok: false,
+    });
   });
 });
 
@@ -240,8 +248,9 @@ describe('CertificateAuthProvider.fromFiles', () => {
       url: 'https://h',
       authType: 'certificate',
     } as ISapConfig);
-    expect((p as unknown as { loader: unknown }).loader).toBeInstanceOf(
-      FileCertificateMaterialLoader,
+    assert.ok(
+      (p as unknown as { loader: unknown }).loader instanceof
+        FileCertificateMaterialLoader,
     );
   });
 });
@@ -250,7 +259,7 @@ describe('FileCertificateMaterialLoader', () => {
   // Configuration failures, no longer ValidationError.
   it('configuration errors are configuration failures', async () => {
     const loader = new FileCertificateMaterialLoader();
-    expect(
+    assert.equal(
       configurationOf(
         await thrownFrom(() =>
           loader.load({
@@ -261,13 +270,15 @@ describe('FileCertificateMaterialLoader', () => {
           } as ISapConfig),
         ),
       ).case,
-    ).toBe('certificate-pem-and-pfx');
-    expect(
+      'certificate-pem-and-pfx',
+    );
+    assert.equal(
       configurationOf(
         await thrownFrom(() =>
           loader.load({ url: 'h', authType: 'certificate' } as ISapConfig),
         ),
       ).case,
-    ).toBe('certificate-files-missing');
+      'certificate-files-missing',
+    );
   });
 });

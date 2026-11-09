@@ -4,8 +4,9 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { ICertificateMaterial } from '@mcp-abap-adt/interfaces-auth';
 import { certificateThumbprint } from '../../auth/certificateMaterial';
+import { CERTIFICATES } from './packagePaths';
 
-const dir = join(__dirname, '..', 'fixtures', 'certificates');
+const dir = CERTIFICATES;
 const read = (name: string) => readFileSync(join(dir, name));
 
 /** `client.crt` / `client.key`. */

@@ -6,11 +6,13 @@
  * `UaaPasscodeProvider`'s base URL.
  */
 
-import { describe, expect, it } from '@jest/globals';
+import assert from 'node:assert/strict';
+import { describe, it } from 'node:test';
 import { ClientCredentialsProvider } from '../../providers/ClientCredentialsProvider';
 import { UaaPasscodeProvider } from '../../providers/UaaPasscodeProvider';
 import { refreshThenLogin } from '../../renewal';
 import { staticCodeStrategy } from '../../strategies';
+import { cases, caseTitle } from '../helpers/expectations';
 
 /** The pre-6.0.0 parser, verbatim but for its name: the oracle. */
 function parseWithRegex(token: string): number | undefined {
@@ -46,7 +48,7 @@ describe('parseExpirationFromJWT without a regex', () => {
     clientId: 'cid',
     clientSecret: 'secret',
   });
-  it.each([
+  for (const [caseIndex, caseRow] of cases([
     // '-' and '_' in the payload: `>?` and `??~` encode to them.
     ['url-safe characters', jwtOf({ exp: 1_700_000_000, note: '>>>???~~~' })],
     ['padding of 1', jwtOf({ exp: 1 })],
@@ -59,13 +61,16 @@ describe('parseExpirationFromJWT without a regex', () => {
     ['garbage payload', 'a.!!!.c'],
     ['raw - and _', 'a.-_-_.c'],
     ['empty', ''],
-  ])('%s: the same as the regex', (_name, token) => {
-    expect(probe.parse(token)).toBe(parseWithRegex(token));
-  });
+  ]).entries()) {
+    const [_name, token] = caseRow;
+    it(caseTitle('%s: the same as the regex', caseRow, caseIndex), () => {
+      assert.equal(probe.parse(token), parseWithRegex(token));
+    });
+  }
 });
 
 describe("UaaPasscodeProvider's base URL without a regex", () => {
-  it.each([
+  for (const [caseIndex, caseRow] of [
     'https://uaa',
     'https://uaa/',
     'https://uaa///',
@@ -73,15 +78,19 @@ describe("UaaPasscodeProvider's base URL without a regex", () => {
     'https://uaa/a//b//',
     '/',
     '',
-  ])('%p: the same as the regex', (uaaUrl) => {
-    const provider = new UaaPasscodeProvider({
-      renewal: refreshThenLogin(),
-      uaaUrl,
-      clientId: 'cf',
-      authorization: staticCodeStrategy({ payload: 'p' }),
+  ].entries()) {
+    const uaaUrl = caseRow;
+    it(caseTitle('%p: the same as the regex', caseRow, caseIndex), () => {
+      const provider = new UaaPasscodeProvider({
+        renewal: refreshThenLogin(),
+        uaaUrl,
+        clientId: 'cf',
+        authorization: staticCodeStrategy({ payload: 'p' }),
+      });
+      assert.equal(
+        (provider as unknown as { baseUrl: string }).baseUrl,
+        uaaUrl.replace(/\/+$/, ''),
+      );
     });
-    expect((provider as unknown as { baseUrl: string }).baseUrl).toBe(
-      uaaUrl.replace(/\/+$/, ''),
-    );
-  });
+  }
 });

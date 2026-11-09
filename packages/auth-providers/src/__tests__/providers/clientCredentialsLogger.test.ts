@@ -4,10 +4,12 @@
  * `logger`, and the base class logged to nothing.
  */
 
-import { describe, expect, it, jest } from '@jest/globals';
+import assert from 'node:assert/strict';
+import { describe, it, mock } from 'node:test';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
 import { ClientCredentialsProvider } from '../../providers/ClientCredentialsProvider';
 import { refreshThenLogin } from '../../renewal';
+import { notContains } from '../helpers/expectations';
 
 const recording = () => {
   const lines: string[] = [];
@@ -18,10 +20,10 @@ const recording = () => {
       lines.push(`${level} ${message} ${JSON.stringify(meta ?? null)}`);
     };
   const logger: ILogger = {
-    debug: jest.fn(at('debug')),
-    info: jest.fn(at('info')),
-    warn: jest.fn(at('warn')),
-    error: jest.fn(at('error')),
+    debug: mock.fn(at('debug')),
+    info: mock.fn(at('info')),
+    warn: mock.fn(at('warn')),
+    error: mock.fn(at('error')),
   };
   return { logger, lines };
 };
@@ -46,7 +48,10 @@ describe('ClientCredentialsProvider logger', () => {
 
     await provider.getTokens();
 
-    expect(lines.some((l) => l.includes('[BaseTokenProvider]'))).toBe(true);
-    expect(lines.join('\n')).not.toContain('cached-token');
+    assert.equal(
+      lines.some((l) => l.includes('[BaseTokenProvider]')),
+      true,
+    );
+    notContains(lines.join('\n'), 'cached-token');
   });
 });

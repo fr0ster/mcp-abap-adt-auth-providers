@@ -6,12 +6,14 @@
  * Runs on POSIX only (a `/bin/sh` script stands in for reg.exe); skipped on
  * Windows, where the stand-in would have to be a real executable.
  */
+import assert from 'node:assert/strict';
 import { chmodSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { describe, expect, it } from '@jest/globals';
+import { describe, it } from 'node:test';
 import { isAuthProviderFailure, readFailure } from '@mcp-abap-adt/auth-errors';
 import { queryRegistry } from '../../snc/SncSystem';
+import { matchObject } from '../helpers/expectations';
 import { allowExecutable } from '../helpers/noRealBrowser';
 
 const posix = process.platform !== 'win32';
@@ -59,15 +61,15 @@ describePosix('queryRegistry with a real child process', () => {
       }
     });
     const pid = Number(readFileSync(pidFile, 'utf8').trim());
-    expect(alive(pid)).toBe(true);
+    assert.equal(alive(pid), true);
     controller.abort();
     const thrown = await settled;
-    expect(isAuthProviderFailure(thrown)).toBe(true);
-    expect(readFailure(thrown, 'resolving-snc-library')).toMatchObject({
+    assert.equal(isAuthProviderFailure(thrown), true);
+    matchObject(readFailure(thrown, 'resolving-snc-library'), {
       kind: 'interactive-login',
       facts: { outcome: 'aborted' },
     });
     await until(() => !alive(pid));
-    expect(alive(pid)).toBe(false);
+    assert.equal(alive(pid), false);
   });
 });

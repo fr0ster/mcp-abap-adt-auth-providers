@@ -8,10 +8,12 @@
  * 3. Service key + expired cached token - should get new token via client_credentials
  */
 
+import assert from 'node:assert/strict';
 import * as dns from 'node:dns/promises';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { describe, it } from 'node:test';
 import { AbapServiceKeyStore } from '@mcp-abap-adt/auth-stores';
 import { AUTH_TYPE_CLIENT_CREDENTIALS } from '@mcp-abap-adt/interfaces-auth';
 import { ClientCredentialsProvider } from '../../providers/ClientCredentialsProvider';
@@ -99,10 +101,10 @@ describe('ClientCredentialsProvider', () => {
 
       // Provider should get token via client_credentials
       const tokens = await provider.getTokens();
-      expect(tokens.authorizationToken).toBeDefined();
-      expect(tokens.authType).toBe(AUTH_TYPE_CLIENT_CREDENTIALS);
-      expect(tokens.refreshToken).toBeUndefined(); // client_credentials doesn't provide refresh token
-    }, 30000);
+      assert.notEqual(tokens.authorizationToken, undefined);
+      assert.equal(tokens.authType, AUTH_TYPE_CLIENT_CREDENTIALS);
+      assert.equal(tokens.refreshToken, undefined); // client_credentials doesn't provide refresh token
+    });
   });
 
   describe('Scenario 2: Service key + cached valid token', () => {
@@ -144,9 +146,9 @@ describe('ClientCredentialsProvider', () => {
 
       // Provider should return cached token
       const tokens = await provider.getTokens();
-      expect(tokens.authorizationToken).toBe(validToken);
-      expect(tokens.authType).toBe(AUTH_TYPE_CLIENT_CREDENTIALS);
-    }, 30000);
+      assert.equal(tokens.authorizationToken, validToken);
+      assert.equal(tokens.authType, AUTH_TYPE_CLIENT_CREDENTIALS);
+    });
   });
 
   describe('Scenario 3: Service key + expired cached token', () => {
@@ -188,11 +190,11 @@ describe('ClientCredentialsProvider', () => {
 
       // Provider should get new token via client_credentials
       const tokens = await provider.getTokens();
-      expect(tokens.authorizationToken).toBeDefined();
-      expect(tokens.authorizationToken).not.toBe(expiredToken); // Should be new token
-      expect(tokens.authType).toBe(AUTH_TYPE_CLIENT_CREDENTIALS);
-      expect(tokens.refreshToken).toBeUndefined(); // client_credentials doesn't provide refresh token
-    }, 30000);
+      assert.notEqual(tokens.authorizationToken, undefined);
+      assert.notEqual(tokens.authorizationToken, expiredToken); // Should be new token
+      assert.equal(tokens.authType, AUTH_TYPE_CLIENT_CREDENTIALS);
+      assert.equal(tokens.refreshToken, undefined); // client_credentials doesn't provide refresh token
+    });
   });
 
   describe('Token caching', () => {
@@ -228,15 +230,16 @@ describe('ClientCredentialsProvider', () => {
 
       // First call - should get token
       const firstTokens = await provider.getTokens();
-      expect(firstTokens.authorizationToken).toBeDefined();
+      assert.notEqual(firstTokens.authorizationToken, undefined);
 
       // Second call - should return cached token (same token)
       const secondTokens = await provider.getTokens();
-      expect(secondTokens.authorizationToken).toBe(
+      assert.equal(
+        secondTokens.authorizationToken,
         firstTokens.authorizationToken,
       );
-      expect(secondTokens.authType).toBe(AUTH_TYPE_CLIENT_CREDENTIALS);
-    }, 30000);
+      assert.equal(secondTokens.authType, AUTH_TYPE_CLIENT_CREDENTIALS);
+    });
   });
 
   describe('Token validation', () => {
@@ -269,12 +272,12 @@ describe('ClientCredentialsProvider', () => {
       // Test validation of expired token
       const expiredToken = createExpiredJWT();
       const isValidExpired = await provider.validateToken?.(expiredToken);
-      expect(isValidExpired).toBe(false);
+      assert.equal(isValidExpired, false);
 
       // Test validation of valid token
       const validToken = createValidJWT();
       const isValidValid = await provider.validateToken?.(validToken);
-      expect(isValidValid).toBe(true);
-    }, 30000);
+      assert.equal(isValidValid, true);
+    });
   });
 });

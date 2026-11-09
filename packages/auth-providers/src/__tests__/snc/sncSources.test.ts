@@ -6,11 +6,12 @@
  * - no built-in timeout: no timer and no `timeout` option anywhere in `src`
  *   but the server's device-poll interval (`src/auth/attempt.ts`).
  */
+
+import assert from 'node:assert/strict';
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, relative } from 'node:path';
-import { describe, expect, it } from '@jest/globals';
-
-const SRC = join(__dirname, '..', '..');
+import { describe, it } from 'node:test';
+import { SRC } from '../helpers/packagePaths';
 
 function sourceFiles(dir: string): string[] {
   return readdirSync(dir).flatMap((name) => {
@@ -42,7 +43,7 @@ function withoutLineNumber(entry: string): string {
 
 describe('src/snc reads untrusted text without regular expressions', () => {
   it('no RegExp, no regex literal method', () => {
-    expect(
+    assert.deepEqual(
       linesWith(sourceFiles(join(SRC, 'snc')), [
         'RegExp',
         '.test(',
@@ -54,13 +55,14 @@ describe('src/snc reads untrusted text without regular expressions', () => {
         'replaceAll(/',
         'split(/',
       ]),
-    ).toEqual([]);
+      [],
+    );
   });
 });
 
 describe('src/snc has no timer and no timeout of its own', () => {
   it('no timeout option (shorthand included), timers module or timer call', () => {
-    expect(
+    assert.deepEqual(
       linesWith(sourceFiles(join(SRC, 'snc')), [
         '{ timeout',
         'timeout }',
@@ -73,7 +75,8 @@ describe('src/snc has no timer and no timeout of its own', () => {
         'setInterval',
         'setImmediate',
       ]),
-    ).toEqual([]);
+      [],
+    );
   });
 });
 
@@ -82,19 +85,20 @@ describe('no package timer', () => {
     // Pinned by file and text, not line number: an edit above it moves the
     // line, but a second timer anywhere — or this one elsewhere — still fails.
     const found = linesWith(sourceFiles(SRC), ['setTimeout(', 'setInterval(']);
-    expect(found.map(withoutLineNumber)).toEqual([
+    assert.deepEqual(found.map(withoutLineNumber), [
       'auth/attempt.ts: const timer = setTimeout(() => {',
     ]);
     // The one timer is intervalWait's, the server's poll interval.
     const source = readFileSync(join(SRC, 'auth', 'attempt.ts'), 'utf8');
     const wait = source.indexOf('export function intervalWait(');
     const timer = source.indexOf('const timer = setTimeout(');
-    expect(wait).toBeGreaterThan(-1);
-    expect(timer).toBeGreaterThan(wait);
-    expect(source.indexOf('export function', wait + 1)).toBe(-1);
+    assert.ok(wait > -1, `${wait} > ${-1}`);
+    assert.ok(timer > wait, `${timer} > ${wait}`);
+    assert.equal(source.indexOf('export function', wait + 1), -1);
   });
   it('no timeout option', () => {
-    expect(linesWith(sourceFiles(SRC), ['timeout:', 'REG_TIMEOUT_MS'])).toEqual(
+    assert.deepEqual(
+      linesWith(sourceFiles(SRC), ['timeout:', 'REG_TIMEOUT_MS']),
       [],
     );
   });

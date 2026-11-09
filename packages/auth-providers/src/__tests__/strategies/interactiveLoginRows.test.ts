@@ -6,9 +6,10 @@
  * noLoginTimeout.typecheck.ts.
  */
 
+import assert from 'node:assert/strict';
 import http from 'node:http';
 import net from 'node:net';
-import { afterEach, describe, expect, it, jest } from '@jest/globals';
+import { afterEach, describe, it, mock } from 'node:test';
 import { isAuthProviderFailure, readFailure } from '@mcp-abap-adt/auth-errors';
 import type {
   AnswerTransportOptions,
@@ -34,6 +35,12 @@ import {
 } from '../../strategies';
 import { readFromTerminal } from '../../strategies/manualStrategies';
 import { startTokenServer, type TokenServer } from '../helpers/attemptHarness';
+import {
+  cases,
+  caseTitle,
+  matchObject,
+  notContains,
+} from '../helpers/expectations';
 import { recordingBrowser } from '../helpers/recordingBrowser';
 
 const PORT = 7877;
@@ -43,7 +50,7 @@ const REGISTERED = 'http://localhost:61001/callback';
 
 /** The row a thrown value is: its kind, facts and words. */
 function rowOf(thrown: unknown) {
-  expect(isAuthProviderFailure(thrown)).toBe(true);
+  assert.equal(isAuthProviderFailure(thrown), true);
   const error = readFailure(thrown, 'browser-login');
   return {
     kind: error.kind,
@@ -117,7 +124,7 @@ const visiting = (query: string): IBrowser =>
   });
 
 afterEach(async () => {
-  expect(await portIsFree(PORT)).toBe(true);
+  assert.equal(await portIsFree(PORT), true);
 });
 
 describe('A.3 — browser login rows', () => {
@@ -128,7 +135,7 @@ describe('A.3 — browser login rows', () => {
       const thrown = await rejection(
         browserCallbackStrategy({ port: PORT }).authorize(request()),
       );
-      expect(rowOf(thrown)).toEqual({
+      assert.deepEqual(rowOf(thrown), {
         kind: 'interactive-login',
         facts: { outcome: 'port-in-use', port: PORT },
         reason: `Port ${PORT} is already in use. Please specify a different port or free the port.`,
@@ -142,7 +149,7 @@ describe('A.3 — browser login rows', () => {
   it('a disposed strategy → disposed, strategy browser', async () => {
     const strategy = browserCallbackStrategy({ port: PORT });
     await strategy.dispose?.();
-    expect(rowOf(await rejection(strategy.authorize(request())))).toEqual({
+    assert.deepEqual(rowOf(await rejection(strategy.authorize(request()))), {
       kind: 'interactive-login',
       facts: { outcome: 'disposed', strategy: 'browser' },
       reason: 'the browser authorization strategy was disposed',
@@ -158,7 +165,7 @@ describe('A.3 — browser login rows', () => {
       browser: recordingBrowser(),
     });
     const first = rejection(strategy.authorize(request()));
-    expect(rowOf(await rejection(strategy.authorize(request())))).toEqual({
+    assert.deepEqual(rowOf(await rejection(strategy.authorize(request()))), {
       kind: 'interactive-login',
       facts: { outcome: 'busy' },
       reason: 'an authorization is already in progress with this strategy',
@@ -183,7 +190,7 @@ describe('A.3 — browser login rows', () => {
           signal: AbortSignal.abort(),
         }).authorize(request()),
       );
-      expect(rowOf(thrown)).toEqual(aborted);
+      assert.deepEqual(rowOf(thrown), aborted);
     });
 
     it('the listener given an aborted signal never binds', async () => {
@@ -201,8 +208,8 @@ describe('A.3 — browser login rows', () => {
           },
         ),
       );
-      expect(rowOf(thrown)).toEqual(aborted);
-      expect(ran).toBe(false);
+      assert.deepEqual(rowOf(thrown), aborted);
+      assert.equal(ran, false);
     });
 
     it('while waiting, with the ignored-callback tally', async () => {
@@ -220,7 +227,7 @@ describe('A.3 — browser login rows', () => {
           }),
         }).authorize(request()),
       );
-      expect(rowOf(thrown)).toEqual({
+      assert.deepEqual(rowOf(thrown), {
         kind: 'interactive-login',
         facts: { outcome: 'aborted', strategy: 'browser', ignoredCallbacks: 2 },
         reason:
@@ -241,7 +248,7 @@ describe('A.3 — browser login rows', () => {
           }),
         }).authorize({ ...request(), signal: attempt.signal } as never),
       );
-      expect(rowOf(thrown)).toEqual(aborted);
+      assert.deepEqual(rowOf(thrown), aborted);
     });
   });
 
@@ -263,12 +270,10 @@ describe('A.3 — browser login rows', () => {
       },
     };
     const err: string[] = [];
-    const stderr = jest
-      .spyOn(process.stderr, 'write')
-      .mockImplementation((chunk: unknown) => {
-        err.push(String(chunk));
-        return true;
-      });
+    const stderr = mock.method(process.stderr, 'write', (chunk: unknown) => {
+      err.push(String(chunk));
+      return true;
+    });
     let thrown: unknown;
     try {
       thrown = await endedByAbort((signal) =>
@@ -286,42 +291,38 @@ describe('A.3 — browser login rows', () => {
         }).authorize({ ...request(), logger, signal } as AuthorizationRequest),
       );
     } finally {
-      stderr.mockRestore();
+      stderr.mock.restore();
     }
     // Not the presentation's failure: the signal ended it.
-    expect(readFailure(thrown, 'browser-login').facts).toEqual({
+    assert.deepEqual(readFailure(thrown, 'browser-login').facts, {
       outcome: 'aborted',
       strategy: 'browser',
     });
-    expect((thrown as Error).message).not.toContain('idp.example');
-    expect(lines.map((line) => line[0])).toEqual([
-      'Failed to present the authorization URL: presenting the authorization URL failed (unknown error, ENOENT)',
-    ]);
+    notContains((thrown as Error).message, 'idp.example');
+    assert.deepEqual(
+      lines.map((line) => line[0]),
+      [
+        'Failed to present the authorization URL: presenting the authorization URL failed (unknown error, ENOENT)',
+      ],
+    );
     for (const surface of [
       JSON.stringify(lines),
       JSON.stringify(prompts),
       err.join(''),
     ]) {
-      expect(surface).not.toContain('idp.example');
-      expect(surface).not.toContain('SECRET-PATH');
+      notContains(surface, 'idp.example');
+      notContains(surface, 'SECRET-PATH');
     }
   });
 
-  it('without a logger, showing the URL: stderr only, nothing on stdout', async () => {
+  // That nothing in src writes to stdout is checked statically
+  // (noStdoutSources.test.ts).
+  it('without a logger, showing the URL: on stderr', async () => {
     const err: string[] = [];
-    const out: string[] = [];
-    const stderr = jest
-      .spyOn(process.stderr, 'write')
-      .mockImplementation((chunk: unknown) => {
-        err.push(String(chunk));
-        return true;
-      });
-    const stdout = jest
-      .spyOn(process.stdout, 'write')
-      .mockImplementation((chunk: unknown) => {
-        out.push(String(chunk));
-        return true;
-      });
+    const stderr = mock.method(process.stderr, 'write', (chunk: unknown) => {
+      err.push(String(chunk));
+      return true;
+    });
     try {
       await endedByAbort((signal) =>
         browserCallbackStrategy({ port: PORT }).authorize({
@@ -333,15 +334,13 @@ describe('A.3 — browser login rows', () => {
         } as AuthorizationRequest),
       );
     } finally {
-      stderr.mockRestore();
-      stdout.mockRestore();
+      stderr.mock.restore();
     }
-    expect(err.slice(0, 3)).toEqual([
+    assert.deepEqual(err.slice(0, 3), [
       '🔗 Open this URL in your browser to authenticate:\n',
       `   https://idp.example/authorize?r=http://localhost:${PORT}/callback&state=${STATE}\n`,
       `Waiting for callback on http://localhost:${PORT}/callback ...\n`,
     ]);
-    expect(out).toEqual([]);
   });
 
   it('a URL that is not promptable is named in fixed words, never shown', async () => {
@@ -355,12 +354,10 @@ describe('A.3 — browser login rows', () => {
       error: () => undefined,
     };
     const err: string[] = [];
-    const stderr = jest
-      .spyOn(process.stderr, 'write')
-      .mockImplementation((chunk: unknown) => {
-        err.push(String(chunk));
-        return true;
-      });
+    const stderr = mock.method(process.stderr, 'write', (chunk: unknown) => {
+      err.push(String(chunk));
+      return true;
+    });
     try {
       // SAML: its URL carries no state to bind by.
       await endedByAbort((signal) =>
@@ -371,13 +368,13 @@ describe('A.3 — browser login rows', () => {
         } as AuthorizationRequest),
       );
     } finally {
-      stderr.mockRestore();
+      stderr.mock.restore();
     }
-    expect(prompts.slice(0, 2)).toEqual([
+    assert.deepEqual(prompts.slice(0, 2), [
       ['The authorization URL is not an http(s) URL that can be shown.'],
       [`Waiting for callback on http://localhost:${PORT}/callback ...`],
     ]);
-    expect(`${JSON.stringify(prompts)}${err.join('')}`).not.toContain('SECRET');
+    notContains(`${JSON.stringify(prompts)}${err.join('')}`, 'SECRET');
   });
 
   const listenerOptions: AnswerTransportOptions = {
@@ -395,7 +392,7 @@ describe('A.3 — browser login rows', () => {
       verdict: 'refuse',
       reason: 'no-payload',
     }));
-    expect(rowOf(await rejection(armed.answer()))).toEqual({
+    assert.deepEqual(rowOf(await rejection(armed.answer())), {
       kind: 'interactive-login',
       facts: { outcome: 'callback-closed' },
       reason: 'the callback server closed before a result arrived',
@@ -411,38 +408,47 @@ describe('A.3 — browser login rows', () => {
         .answer();
       return 'returned without awaiting';
     });
-    expect(rowOf(await rejection(dangling as Promise<void>)).facts).toEqual({
+    assert.deepEqual(rowOf(await rejection(dangling as Promise<void>)).facts, {
       outcome: 'callback-closed',
     });
   });
 
-  it.each([
-    ['UAA', browserCallbackStrategy],
-    ['OIDC', oidcCallbackStrategy],
-  ] as const)(
-    '%s: the IdP refuses with a registered code → identity-provider-refused',
-    async (_name, make) => {
-      const DESCRIPTION = 'REVIEW_TEST_IDP_TEXT_7a31';
-      const strategy = (make as typeof browserCallbackStrategy)({
-        port: PORT,
-        browser: visiting(
-          `error=access_denied&error_description=${DESCRIPTION}&error_uri=https%3A%2F%2F${DESCRIPTION}`,
-        ),
-      });
-      const thrown = await rejection(strategy.authorize(request()));
-      expect(rowOf(thrown)).toEqual({
-        kind: 'interactive-login',
-        facts: {
-          outcome: 'identity-provider-refused',
-          oauthError: 'access_denied',
-        },
-        reason: 'the identity provider refused the login (access_denied)',
-        hint: 'check the identity provider: the user, the client and the scopes it allows',
-      });
-      expect(JSON.stringify(thrown)).not.toContain(DESCRIPTION);
-      expect((thrown as Error).message).not.toContain(DESCRIPTION);
-    },
-  );
+  for (const [caseIndex, caseRow] of (
+    [
+      ['UAA', browserCallbackStrategy],
+      ['OIDC', oidcCallbackStrategy],
+    ] as const
+  ).entries()) {
+    const [_name, make] = caseRow;
+    it(
+      caseTitle(
+        '%s: the IdP refuses with a registered code → identity-provider-refused',
+        caseRow,
+        caseIndex,
+      ),
+      async () => {
+        const DESCRIPTION = 'REVIEW_TEST_IDP_TEXT_7a31';
+        const strategy = (make as typeof browserCallbackStrategy)({
+          port: PORT,
+          browser: visiting(
+            `error=access_denied&error_description=${DESCRIPTION}&error_uri=https%3A%2F%2F${DESCRIPTION}`,
+          ),
+        });
+        const thrown = await rejection(strategy.authorize(request()));
+        assert.deepEqual(rowOf(thrown), {
+          kind: 'interactive-login',
+          facts: {
+            outcome: 'identity-provider-refused',
+            oauthError: 'access_denied',
+          },
+          reason: 'the identity provider refused the login (access_denied)',
+          hint: 'check the identity provider: the user, the client and the scopes it allows',
+        });
+        notContains(JSON.stringify(thrown), DESCRIPTION);
+        notContains((thrown as Error).message, DESCRIPTION);
+      },
+    );
+  }
 
   it('an unregistered code → no oauthError, its own words', async () => {
     const thrown = await rejection(
@@ -451,14 +457,14 @@ describe('A.3 — browser login rows', () => {
         browser: visiting('error=REVIEW_TEST_NOT_A_CODE'),
       }).authorize(request()),
     );
-    expect(rowOf(thrown)).toEqual({
+    assert.deepEqual(rowOf(thrown), {
       kind: 'interactive-login',
       facts: { outcome: 'identity-provider-refused' },
       reason:
         'the identity provider refused the login (an unregistered error code)',
       hint: 'check the identity provider: the user, the client and the scopes it allows',
     });
-    expect((thrown as Error).message).not.toContain('REVIEW_TEST_NOT_A_CODE');
+    notContains((thrown as Error).message, 'REVIEW_TEST_NOT_A_CODE');
   });
 
   describe('anything else → failed', () => {
@@ -487,22 +493,20 @@ describe('A.3 — browser login rows', () => {
           }),
         ).authorize(request()),
       );
-      expect(rowOf(thrown)).toEqual({
+      assert.deepEqual(rowOf(thrown), {
         kind: 'interactive-login',
         facts: { outcome: 'failed', status: 400, oauthError: 'invalid_grant' },
         reason: 'the browser login failed (HTTP 400, invalid_grant)',
         hint: 'complete the login, or abort it',
       });
-      expect((thrown as Error).message).not.toContain(
-        'REVIEW_TEST_SERVER_TEXT',
-      );
+      notContains((thrown as Error).message, 'REVIEW_TEST_SERVER_TEXT');
     });
 
     it('with nothing safe to name → unknown error', async () => {
       const thrown = await rejection(
         throwing(new Error('REVIEW_TEST_SERVER_TEXT')).authorize(request()),
       );
-      expect(rowOf(thrown)).toEqual({
+      assert.deepEqual(rowOf(thrown), {
         kind: 'interactive-login',
         facts: { outcome: 'failed' },
         reason: 'the browser login failed (unknown error)',
@@ -514,14 +518,15 @@ describe('A.3 — browser login rows', () => {
 
 describe('A.3 — manual and code strategy rows', () => {
   it('the terminal reader given an aborted signal → input-abandoned', async () => {
-    expect(
+    assert.deepEqual(
       rowOf(await rejection(readFromTerminal('p', AbortSignal.abort()))),
-    ).toEqual({
-      kind: 'interactive-login',
-      facts: { outcome: 'input-abandoned' },
-      reason: 'the manual input was abandoned before it began',
-      hint: undefined,
-    });
+      {
+        kind: 'interactive-login',
+        facts: { outcome: 'input-abandoned' },
+        reason: 'the manual input was abandoned before it began',
+        hint: undefined,
+      },
+    );
   });
 
   it('no terminal → no-terminal', async () => {
@@ -531,13 +536,11 @@ describe('A.3 — manual and code strategy rows', () => {
       configurable: true,
     });
     try {
-      const write = jest
-        .spyOn(process.stderr, 'write')
-        .mockImplementation(() => true);
+      const write = mock.method(process.stderr, 'write', () => true);
       const thrown = await rejection(
         manualPasteStrategy({ redirectUri: REGISTERED }).authorize(request()),
-      ).finally(() => write.mockRestore());
-      expect(rowOf(thrown)).toEqual({
+      ).finally(() => write.mock.restore());
+      assert.deepEqual(rowOf(thrown), {
         kind: 'interactive-login',
         facts: { outcome: 'no-terminal' },
         reason:
@@ -552,7 +555,7 @@ describe('A.3 — manual and code strategy rows', () => {
     }
   });
 
-  it.each([
+  for (const [caseIndex, caseRow] of cases([
     [
       'manualSamlResponseStrategy',
       () =>
@@ -569,21 +572,28 @@ describe('A.3 — manual and code strategy rows', () => {
           provide: async () => '',
         }),
     ],
-  ])('K14 (%s): an empty value → no-input', async (_name, make) => {
-    const write = jest
-      .spyOn(process.stderr, 'write')
-      .mockImplementation(() => true);
-    try {
-      expect(rowOf(await rejection(make().authorize(request())))).toEqual({
-        kind: 'interactive-login',
-        facts: { outcome: 'no-input' },
-        reason: 'no input was received',
-        hint: undefined,
-      });
-    } finally {
-      write.mockRestore();
-    }
-  });
+  ]).entries()) {
+    const [_name, make] = caseRow;
+    it(
+      caseTitle('K14 (%s): an empty value → no-input', caseRow, caseIndex),
+      async () => {
+        const write = mock.method(process.stderr, 'write', () => true);
+        try {
+          assert.deepEqual(
+            rowOf(await rejection(make().authorize(request()))),
+            {
+              kind: 'interactive-login',
+              facts: { outcome: 'no-input' },
+              reason: 'no input was received',
+              hint: undefined,
+            },
+          );
+        } finally {
+          write.mock.restore();
+        }
+      },
+    );
+  }
 
   it('a disposed manual strategy → disposed, strategy manual', async () => {
     const strategy = manualPasteStrategy({
@@ -591,7 +601,7 @@ describe('A.3 — manual and code strategy rows', () => {
       read: async () => 'code',
     });
     await strategy.dispose?.();
-    expect(rowOf(await rejection(strategy.authorize(request())))).toEqual({
+    assert.deepEqual(rowOf(await rejection(strategy.authorize(request()))), {
       kind: 'interactive-login',
       facts: { outcome: 'disposed', strategy: 'manual' },
       reason: 'the manual strategy was disposed',
@@ -609,21 +619,19 @@ describe('A.3 — manual and code strategy rows', () => {
           signal.addEventListener('abort', () => reject(new Error('x')));
         }),
     });
-    const write = jest
-      .spyOn(process.stderr, 'write')
-      .mockImplementation(() => true);
+    const write = mock.method(process.stderr, 'write', () => true);
     try {
       const pending = rejection(strategy.authorize(request()));
       await new Promise((resolve) => setImmediate(resolve));
       consumer.abort();
-      expect(rowOf(await pending)).toEqual({
+      assert.deepEqual(rowOf(await pending), {
         kind: 'interactive-login',
         facts: { outcome: 'aborted', strategy: 'manual' },
         reason: 'the manual login was aborted',
         hint: undefined,
       });
     } finally {
-      write.mockRestore();
+      write.mock.restore();
     }
   });
 
@@ -637,7 +645,7 @@ describe('A.3 — manual and code strategy rows', () => {
     const pending = rejection(strategy.authorize(request()));
     await new Promise((resolve) => setImmediate(resolve));
     consumer.abort();
-    expect(rowOf(await pending)).toEqual({
+    assert.deepEqual(rowOf(await pending), {
       kind: 'interactive-login',
       facts: { outcome: 'aborted', strategy: 'consumer' },
       reason: 'the login was aborted',
@@ -646,24 +654,20 @@ describe('A.3 — manual and code strategy rows', () => {
   });
 
   it('a pasted URL of this login is not a malformed escape: it takes its code as the parser reads it, no URIError', async () => {
-    const write = jest
-      .spyOn(process.stderr, 'write')
-      .mockImplementation(() => true);
+    const write = mock.method(process.stderr, 'write', () => true);
     try {
       const outcome = await manualPasteStrategy({
         redirectUri: REGISTERED,
         read: async () => `https://x/cb?code=%ZZ&state=${STATE}`,
       }).authorize(request());
-      expect(outcome.payload).toBe('%ZZ');
+      assert.equal(outcome.payload, '%ZZ');
     } finally {
-      write.mockRestore();
+      write.mock.restore();
     }
   });
 
   it('an unreadable paste → unreadable-input', async () => {
-    const write = jest
-      .spyOn(process.stderr, 'write')
-      .mockImplementation(() => true);
+    const write = mock.method(process.stderr, 'write', () => true);
     try {
       const thrown = await rejection(
         manualPasteStrategy({
@@ -671,14 +675,14 @@ describe('A.3 — manual and code strategy rows', () => {
           read: async () => 'no code here',
         }).authorize(request()),
       );
-      expect(rowOf(thrown)).toEqual({
+      assert.deepEqual(rowOf(thrown), {
         kind: 'interactive-login',
         facts: { outcome: 'unreadable-input' },
         reason: 'Could not read an authorization code from that input',
         hint: undefined,
       });
     } finally {
-      write.mockRestore();
+      write.mock.restore();
     }
   });
 });
@@ -720,7 +724,7 @@ describe('A.3 — the device code', () => {
       },
     });
     const thrown = await rejection(provider.getTokens());
-    expect(rowOf(thrown)).toEqual({
+    assert.deepEqual(rowOf(thrown), {
       kind: 'interactive-login',
       facts: { outcome: 'device-code-not-shown' },
       reason: 'showing the device code failed',
@@ -729,7 +733,7 @@ describe('A.3 — the device code', () => {
     const line = warnings.find((w) =>
       String(w[0]).includes('presenter failed'),
     );
-    expect(line?.[1]).toMatchObject({ kind: 'unknown' });
-    expect(JSON.stringify(warnings)).not.toContain('REVIEW_TEST_PRESENTER_UC');
+    matchObject(line?.[1], { kind: 'unknown' });
+    notContains(JSON.stringify(warnings), 'REVIEW_TEST_PRESENTER_UC');
   });
 });

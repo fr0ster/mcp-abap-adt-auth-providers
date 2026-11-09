@@ -5,8 +5,9 @@
  * failure here.
  */
 
-import { beforeEach, describe, expect, it, jest } from '@jest/globals';
-import axios from 'axios';
+import '../helpers/axiosModuleMock';
+import assert from 'node:assert/strict';
+import { beforeEach, describe, it } from 'node:test';
 import {
   exchangeCodeForToken,
   getJwtAuthorizationUrl,
@@ -26,16 +27,10 @@ import {
   refreshSamlBearerToken,
 } from '../../auth/saml2TokenExchange';
 import { refreshJwtToken } from '../../auth/tokenRefresher';
+import { mockedAxios, resetAxiosMock } from '../helpers/axiosModuleMock';
+import { once } from '../helpers/mockOnce';
 
 // Automocked, but with axios's own error class: the sites throw it.
-jest.mock('axios', () => {
-  const mocked = jest.createMockFromModule<Record<string, unknown>>('axios');
-  mocked.AxiosError =
-    jest.requireActual<Record<string, unknown>>('axios').AxiosError;
-  return mocked;
-});
-type Mock = jest.Mock<(...args: any[]) => Promise<unknown>>;
-const mockedAxios = axios as unknown as Mock & { post: Mock };
 
 const FORM = 'application/x-www-form-urlencoded';
 const tokenReply = {
@@ -52,15 +47,17 @@ interface Sent {
 
 /** The request of `axios.post(url, body, config)`. */
 function sentByPost(): Sent {
-  expect(mockedAxios.post).toHaveBeenCalledTimes(1);
-  const [url, body, config] = mockedAxios.post.mock.calls[0] as [
+  assert.equal(mockedAxios.post.mock.callCount(), 1);
+  const [url, body, config] = mockedAxios.post.mock.calls.map(
+    (call) => call.arguments,
+  )[0] as [
     string,
     string,
     { headers: Record<string, string>; maxRedirects: number },
   ];
   // Today's third argument is exactly `{ headers, maxRedirects: 0 }`: any added key fails here.
-  expect(Object.keys(config)).toEqual(['headers', 'maxRedirects']);
-  expect(config.maxRedirects).toBe(0);
+  assert.deepEqual(Object.keys(config), ['headers', 'maxRedirects']);
+  assert.equal(config.maxRedirects, 0);
   return {
     url,
     method: 'post',
@@ -71,8 +68,10 @@ function sentByPost(): Sent {
 
 /** The request of `axios(config)`. */
 function sentByConfig(): Sent {
-  expect(mockedAxios).toHaveBeenCalledTimes(1);
-  const config = mockedAxios.mock.calls[0]![0] as {
+  assert.equal(mockedAxios.mock.callCount(), 1);
+  const config = mockedAxios.mock.calls.map(
+    (call) => call.arguments,
+  )[0]![0] as {
     url: string;
     method: string;
     data: string;
@@ -81,14 +80,14 @@ function sentByConfig(): Sent {
   };
   // The whole config object: any added key (httpsAgent, a timeout, ...)
   // fails — no request carries a timeout of this package's choosing.
-  expect(Object.keys(config).sort()).toEqual([
+  assert.deepEqual(Object.keys(config).sort(), [
     'data',
     'headers',
     'maxRedirects',
     'method',
     'url',
   ]);
-  expect(config.maxRedirects).toBe(0);
+  assert.equal(config.maxRedirects, 0);
   return {
     url: config.url,
     method: config.method,
@@ -99,24 +98,25 @@ function sentByConfig(): Sent {
 
 describe('token request shapes, as sent today', () => {
   beforeEach(() => {
-    jest.resetAllMocks();
-    mockedAxios.mockResolvedValue(tokenReply);
-    mockedAxios.post.mockResolvedValue(tokenReply);
+    resetAxiosMock();
+    mockedAxios.mock.mockImplementation(async () => tokenReply);
+    mockedAxios.post.mock.mockImplementation(async () => tokenReply);
   });
 
   describe('clientCredentialsAuth', () => {
     it('with a secret: client_id and client_secret in the body, no Authorization', async () => {
       await getTokenWithClientCredentials('https://uaa', 'cid', 'sec');
       const sent = sentByConfig();
-      expect(sent.url).toBe('https://uaa/oauth/token');
-      expect(sent.method).toBe('post');
-      expect(sent.body).toEqual({
+      assert.equal(sent.url, 'https://uaa/oauth/token');
+      assert.equal(sent.method, 'post');
+      assert.deepEqual(sent.body, {
         grant_type: 'client_credentials',
         client_id: 'cid',
         client_secret: 'sec',
       });
-      expect(sent.headers).toEqual({ 'Content-Type': FORM });
-      expect(sent.headers.Authorization).toBeUndefined();
+      // Read before deepEqual, which narrows the type to what it compared.
+      assert.equal(sent.headers.Authorization, undefined);
+      assert.deepEqual(sent.headers, { 'Content-Type': FORM });
     });
   });
 
@@ -124,13 +124,13 @@ describe('token request shapes, as sent today', () => {
     it('with a secret: Basic header, refresh_token only in the body', async () => {
       await refreshJwtToken('old-rt', 'https://uaa', 'cid', 'sec');
       const sent = sentByConfig();
-      expect(sent.url).toBe('https://uaa/oauth/token');
-      expect(sent.method).toBe('post');
-      expect(sent.body).toEqual({
+      assert.equal(sent.url, 'https://uaa/oauth/token');
+      assert.equal(sent.method, 'post');
+      assert.deepEqual(sent.body, {
         grant_type: 'refresh_token',
         refresh_token: 'old-rt',
       });
-      expect(sent.headers).toEqual({
+      assert.deepEqual(sent.headers, {
         Authorization: basic('cid:sec'),
         'Content-Type': FORM,
       });
@@ -144,11 +144,11 @@ describe('token request shapes, as sent today', () => {
         undefined as unknown as string,
       );
       const sent = sentByConfig();
-      expect(sent.body).toEqual({
+      assert.deepEqual(sent.body, {
         grant_type: 'refresh_token',
         refresh_token: 'old-rt',
       });
-      expect(sent.headers).toEqual({
+      assert.deepEqual(sent.headers, {
         Authorization: basic('cid:undefined'),
         'Content-Type': FORM,
       });
@@ -167,14 +167,14 @@ describe('token request shapes, as sent today', () => {
         'http://localhost:61001/callback',
       );
       const sent = sentByConfig();
-      expect(sent.url).toBe('https://uaa/oauth/token');
-      expect(sent.method).toBe('post');
-      expect(sent.body).toEqual({
+      assert.equal(sent.url, 'https://uaa/oauth/token');
+      assert.equal(sent.method, 'post');
+      assert.deepEqual(sent.body, {
         grant_type: 'authorization_code',
         code: 'the-code',
         redirect_uri: 'http://localhost:61001/callback',
       });
-      expect(sent.headers).toEqual({
+      assert.deepEqual(sent.headers, {
         Authorization: basic('cid:sec'),
         'Content-Type': FORM,
       });
@@ -189,12 +189,12 @@ describe('token request shapes, as sent today', () => {
         'http://localhost:61001/callback',
       );
       const sent = sentByConfig();
-      expect(sent.body).toEqual({
+      assert.deepEqual(sent.body, {
         grant_type: 'authorization_code',
         code: 'the-code',
         redirect_uri: 'http://localhost:61001/callback',
       });
-      expect(sent.headers).toEqual({
+      assert.deepEqual(sent.headers, {
         Authorization: basic('cid:undefined'),
         'Content-Type': FORM,
       });
@@ -213,10 +213,11 @@ describe('token request shapes, as sent today', () => {
           { state: 'the-state', codeChallenge: 'the-challenge' },
         ),
       );
-      expect(`${url.origin}${url.pathname}`).toBe(
+      assert.equal(
+        `${url.origin}${url.pathname}`,
         'https://uaa/oauth/authorize',
       );
-      expect(Object.fromEntries(url.searchParams)).toEqual({
+      assert.deepEqual(Object.fromEntries(url.searchParams), {
         client_id: 'cid',
         redirect_uri: 'http://localhost:61001/callback',
         response_type: 'code',
@@ -241,14 +242,14 @@ describe('token request shapes, as sent today', () => {
         'the-verifier',
       );
       const sent = sentByConfig();
-      expect(sent.url).toBe('https://uaa/oauth/token');
-      expect(sent.body).toEqual({
+      assert.equal(sent.url, 'https://uaa/oauth/token');
+      assert.deepEqual(sent.body, {
         grant_type: 'authorization_code',
         code: 'the-code',
         redirect_uri: 'http://localhost:61001/callback',
         code_verifier: 'the-verifier',
       });
-      expect(sent.headers).toEqual({
+      assert.deepEqual(sent.headers, {
         Authorization: basic('cid:sec'),
         'Content-Type': FORM,
       });
@@ -259,9 +260,9 @@ describe('token request shapes, as sent today', () => {
     it('with a secret: Basic id:secret, JSON accepted', async () => {
       await exchangePasscode('https://uaa/', 'cf', 'sec', 'CODE');
       const sent = sentByPost();
-      expect(sent.url).toBe('https://uaa/oauth/token');
-      expect(sent.body).toEqual({ grant_type: 'password', passcode: 'CODE' });
-      expect(sent.headers).toEqual({
+      assert.equal(sent.url, 'https://uaa/oauth/token');
+      assert.deepEqual(sent.body, { grant_type: 'password', passcode: 'CODE' });
+      assert.deepEqual(sent.headers, {
         'Content-Type': FORM,
         Accept: 'application/json',
         Authorization: basic('cf:sec'),
@@ -271,9 +272,9 @@ describe('token request shapes, as sent today', () => {
     it('without a secret: Basic id: with an empty secret', async () => {
       await exchangePasscode('https://uaa', 'cf', undefined, 'CODE');
       const sent = sentByPost();
-      expect(sent.url).toBe('https://uaa/oauth/token');
-      expect(sent.body).toEqual({ grant_type: 'password', passcode: 'CODE' });
-      expect(sent.headers).toEqual({
+      assert.equal(sent.url, 'https://uaa/oauth/token');
+      assert.deepEqual(sent.body, { grant_type: 'password', passcode: 'CODE' });
+      assert.deepEqual(sent.headers, {
         'Content-Type': FORM,
         Accept: 'application/json',
         Authorization: basic('cf:'),
@@ -285,13 +286,13 @@ describe('token request shapes, as sent today', () => {
     it('exchange with a secret: client_id in the body and Basic', async () => {
       await exchangeSamlAssertion('ASSERTION', 'https://t/token', 'cid', 'sec');
       const sent = sentByPost();
-      expect(sent.url).toBe('https://t/token');
-      expect(sent.body).toEqual({
+      assert.equal(sent.url, 'https://t/token');
+      assert.deepEqual(sent.body, {
         grant_type: 'urn:ietf:params:oauth:grant-type:saml2-bearer',
         assertion: 'ASSERTION',
         client_id: 'cid',
       });
-      expect(sent.headers).toEqual({
+      assert.deepEqual(sent.headers, {
         'Content-Type': FORM,
         Authorization: basic('cid:sec'),
       });
@@ -305,25 +306,25 @@ describe('token request shapes, as sent today', () => {
         undefined,
       );
       const sent = sentByPost();
-      expect(sent.url).toBe('https://t/token');
-      expect(sent.body).toEqual({
+      assert.equal(sent.url, 'https://t/token');
+      assert.deepEqual(sent.body, {
         grant_type: 'urn:ietf:params:oauth:grant-type:saml2-bearer',
         assertion: 'ASSERTION',
         client_id: 'cid',
       });
-      expect(sent.headers).toEqual({ 'Content-Type': FORM });
+      assert.deepEqual(sent.headers, { 'Content-Type': FORM });
     });
 
     it('refresh with a secret: client_id in the body and Basic', async () => {
       await refreshSamlBearerToken('old-rt', 'https://t/token', 'cid', 'sec');
       const sent = sentByPost();
-      expect(sent.url).toBe('https://t/token');
-      expect(sent.body).toEqual({
+      assert.equal(sent.url, 'https://t/token');
+      assert.deepEqual(sent.body, {
         grant_type: 'refresh_token',
         refresh_token: 'old-rt',
         client_id: 'cid',
       });
-      expect(sent.headers).toEqual({
+      assert.deepEqual(sent.headers, {
         'Content-Type': FORM,
         Authorization: basic('cid:sec'),
       });
@@ -332,35 +333,35 @@ describe('token request shapes, as sent today', () => {
     it('refresh without a secret: client_id in the body, no Authorization', async () => {
       await refreshSamlBearerToken('old-rt', 'https://t/token', 'cid');
       const sent = sentByPost();
-      expect(sent.url).toBe('https://t/token');
-      expect(sent.body).toEqual({
+      assert.equal(sent.url, 'https://t/token');
+      assert.deepEqual(sent.body, {
         grant_type: 'refresh_token',
         refresh_token: 'old-rt',
         client_id: 'cid',
       });
-      expect(sent.headers).toEqual({ 'Content-Type': FORM });
+      assert.deepEqual(sent.headers, { 'Content-Type': FORM });
     });
 
     it('exchange with an empty secret: client_id in the body, no Authorization', async () => {
       await exchangeSamlAssertion('ASSERTION', 'https://t/token', 'cid', '');
       const sent = sentByPost();
-      expect(sent.body).toEqual({
+      assert.deepEqual(sent.body, {
         grant_type: 'urn:ietf:params:oauth:grant-type:saml2-bearer',
         assertion: 'ASSERTION',
         client_id: 'cid',
       });
-      expect(sent.headers).toEqual({ 'Content-Type': FORM });
+      assert.deepEqual(sent.headers, { 'Content-Type': FORM });
     });
 
     it('refresh with an empty secret: client_id in the body, no Authorization', async () => {
       await refreshSamlBearerToken('old-rt', 'https://t/token', 'cid', '');
       const sent = sentByPost();
-      expect(sent.body).toEqual({
+      assert.deepEqual(sent.body, {
         grant_type: 'refresh_token',
         refresh_token: 'old-rt',
         client_id: 'cid',
       });
-      expect(sent.headers).toEqual({ 'Content-Type': FORM });
+      assert.deepEqual(sent.headers, { 'Content-Type': FORM });
     });
 
     it('exchange without a clientId: no client_id, no Authorization', async () => {
@@ -371,12 +372,12 @@ describe('token request shapes, as sent today', () => {
         'sec',
       );
       const sent = sentByPost();
-      expect(sent.url).toBe('https://t/token');
-      expect(sent.body).toEqual({
+      assert.equal(sent.url, 'https://t/token');
+      assert.deepEqual(sent.body, {
         grant_type: 'urn:ietf:params:oauth:grant-type:saml2-bearer',
         assertion: 'ASSERTION',
       });
-      expect(sent.headers).toEqual({ 'Content-Type': FORM });
+      assert.deepEqual(sent.headers, { 'Content-Type': FORM });
     });
 
     it('refresh without a clientId: no client_id, no Authorization', async () => {
@@ -387,12 +388,12 @@ describe('token request shapes, as sent today', () => {
         'sec',
       );
       const sent = sentByPost();
-      expect(sent.url).toBe('https://t/token');
-      expect(sent.body).toEqual({
+      assert.equal(sent.url, 'https://t/token');
+      assert.deepEqual(sent.body, {
         grant_type: 'refresh_token',
         refresh_token: 'old-rt',
       });
-      expect(sent.headers).toEqual({ 'Content-Type': FORM });
+      assert.deepEqual(sent.headers, { 'Content-Type': FORM });
     });
   });
 
@@ -418,9 +419,9 @@ describe('token request shapes, as sent today', () => {
           'verifier',
         );
         const sent = sentByPost();
-        expect(sent.url).toBe(endpoint);
-        expect(sent.body).toEqual(expectedBody);
-        expect(sent.headers).toEqual({
+        assert.equal(sent.url, endpoint);
+        assert.deepEqual(sent.body, expectedBody);
+        assert.deepEqual(sent.headers, {
           'Content-Type': FORM,
           Authorization: basic('cid:sec'),
         });
@@ -436,9 +437,9 @@ describe('token request shapes, as sent today', () => {
           'verifier',
         );
         const sent = sentByPost();
-        expect(sent.url).toBe(endpoint);
-        expect(sent.body).toEqual(expectedBody);
-        expect(sent.headers).toEqual({ 'Content-Type': FORM });
+        assert.equal(sent.url, endpoint);
+        assert.deepEqual(sent.body, expectedBody);
+        assert.deepEqual(sent.headers, { 'Content-Type': FORM });
       });
 
       it('with an empty secret: Basic "cid:" (the check is !== undefined)', async () => {
@@ -451,9 +452,9 @@ describe('token request shapes, as sent today', () => {
           'verifier',
         );
         const sent = sentByPost();
-        expect(sent.url).toBe(endpoint);
-        expect(sent.body).toEqual(expectedBody);
-        expect(sent.headers).toEqual({
+        assert.equal(sent.url, endpoint);
+        assert.deepEqual(sent.body, expectedBody);
+        assert.deepEqual(sent.headers, {
           'Content-Type': FORM,
           Authorization: basic('cid:'),
         });
@@ -471,7 +472,7 @@ describe('token request shapes, as sent today', () => {
           undefined,
         );
         const sent = sentByPost();
-        expect(sent.body).toEqual({
+        assert.deepEqual(sent.body, {
           grant_type: 'authorization_code',
           code: 'the-code',
           redirect_uri: 'http://localhost:61001/callback',
@@ -490,9 +491,9 @@ describe('token request shapes, as sent today', () => {
       it('with a secret: client_id in the body and Basic', async () => {
         await refreshOidcToken(endpoint, 'cid', 'sec', 'old-rt');
         const sent = sentByPost();
-        expect(sent.url).toBe(endpoint);
-        expect(sent.body).toEqual(expectedBody);
-        expect(sent.headers).toEqual({
+        assert.equal(sent.url, endpoint);
+        assert.deepEqual(sent.body, expectedBody);
+        assert.deepEqual(sent.headers, {
           'Content-Type': FORM,
           Authorization: basic('cid:sec'),
         });
@@ -501,9 +502,9 @@ describe('token request shapes, as sent today', () => {
       it('without a secret: client_id in the body, no Authorization', async () => {
         await refreshOidcToken(endpoint, 'cid', undefined, 'old-rt');
         const sent = sentByPost();
-        expect(sent.url).toBe(endpoint);
-        expect(sent.body).toEqual(expectedBody);
-        expect(sent.headers).toEqual({ 'Content-Type': FORM });
+        assert.equal(sent.url, endpoint);
+        assert.deepEqual(sent.body, expectedBody);
+        assert.deepEqual(sent.headers, { 'Content-Type': FORM });
       });
     });
 
@@ -517,9 +518,9 @@ describe('token request shapes, as sent today', () => {
       it('with a secret: client_id in the body and Basic', async () => {
         await pollDeviceTokens(endpoint, 'cid', 'sec', 'dc', 1);
         const sent = sentByPost();
-        expect(sent.url).toBe(endpoint);
-        expect(sent.body).toEqual(expectedBody);
-        expect(sent.headers).toEqual({
+        assert.equal(sent.url, endpoint);
+        assert.deepEqual(sent.body, expectedBody);
+        assert.deepEqual(sent.headers, {
           'Content-Type': FORM,
           Authorization: basic('cid:sec'),
         });
@@ -528,30 +529,34 @@ describe('token request shapes, as sent today', () => {
       it('without a secret: client_id in the body, no Authorization', async () => {
         await pollDeviceTokens(endpoint, 'cid', undefined, 'dc', 1);
         const sent = sentByPost();
-        expect(sent.url).toBe(endpoint);
-        expect(sent.body).toEqual(expectedBody);
-        expect(sent.headers).toEqual({ 'Content-Type': FORM });
+        assert.equal(sent.url, endpoint);
+        assert.deepEqual(sent.body, expectedBody);
+        assert.deepEqual(sent.headers, { 'Content-Type': FORM });
       });
 
       it('after authorization_pending: the second request is the same as the first', async () => {
-        mockedAxios.post
-          .mockRejectedValueOnce({
+        once(mockedAxios.post, async () => {
+          throw {
             response: { status: 400, data: { error: 'authorization_pending' } },
-          })
-          .mockResolvedValueOnce(tokenReply);
+          };
+        });
+        once(mockedAxios.post, async () => tokenReply);
         await pollDeviceTokens(endpoint, 'cid', 'sec', 'dc', 0);
-        expect(mockedAxios.post).toHaveBeenCalledTimes(2);
-        for (const call of mockedAxios.post.mock.calls) {
+        assert.equal(mockedAxios.post.mock.callCount(), 2);
+        for (const call of mockedAxios.post.mock.calls.map(
+          (call) => call.arguments,
+        )) {
           const [url, body, config] = call as [
             string,
             string,
             Record<string, unknown>,
           ];
-          expect(url).toBe(endpoint);
-          expect(Object.fromEntries(new URLSearchParams(body))).toEqual(
+          assert.equal(url, endpoint);
+          assert.deepEqual(
+            Object.fromEntries(new URLSearchParams(body)),
             expectedBody,
           );
-          expect(config).toEqual({
+          assert.deepEqual(config, {
             headers: {
               'Content-Type': FORM,
               Authorization: basic('cid:sec'),
@@ -566,15 +571,15 @@ describe('token request shapes, as sent today', () => {
       it('with a secret and a scope: client_id, scope in the body and Basic', async () => {
         await passwordGrant(endpoint, 'cid', 'sec', 'user', 'pw', 'openid');
         const sent = sentByPost();
-        expect(sent.url).toBe(endpoint);
-        expect(sent.body).toEqual({
+        assert.equal(sent.url, endpoint);
+        assert.deepEqual(sent.body, {
           grant_type: 'password',
           username: 'user',
           password: 'pw',
           client_id: 'cid',
           scope: 'openid',
         });
-        expect(sent.headers).toEqual({
+        assert.deepEqual(sent.headers, {
           'Content-Type': FORM,
           Authorization: basic('cid:sec'),
         });
@@ -590,14 +595,14 @@ describe('token request shapes, as sent today', () => {
           undefined,
         );
         const sent = sentByPost();
-        expect(sent.url).toBe(endpoint);
-        expect(sent.body).toEqual({
+        assert.equal(sent.url, endpoint);
+        assert.deepEqual(sent.body, {
           grant_type: 'password',
           username: 'user',
           password: 'pw',
           client_id: 'cid',
         });
-        expect(sent.headers).toEqual({ 'Content-Type': FORM });
+        assert.deepEqual(sent.headers, { 'Content-Type': FORM });
       });
     });
 
@@ -615,8 +620,8 @@ describe('token request shapes, as sent today', () => {
           'urn:ietf:params:oauth:token-type:jwt',
         );
         const sent = sentByPost();
-        expect(sent.url).toBe(endpoint);
-        expect(sent.body).toEqual({
+        assert.equal(sent.url, endpoint);
+        assert.deepEqual(sent.body, {
           grant_type: 'urn:ietf:params:oauth:grant-type:token-exchange',
           subject_token: 'subj',
           subject_token_type: 'urn:ietf:params:oauth:token-type:access_token',
@@ -626,7 +631,7 @@ describe('token request shapes, as sent today', () => {
           actor_token: 'actor',
           actor_token_type: 'urn:ietf:params:oauth:token-type:jwt',
         });
-        expect(sent.headers).toEqual({
+        assert.deepEqual(sent.headers, {
           'Content-Type': FORM,
           Authorization: basic('cid:sec'),
         });
@@ -643,14 +648,14 @@ describe('token request shapes, as sent today', () => {
           undefined,
         );
         const sent = sentByPost();
-        expect(sent.url).toBe(endpoint);
-        expect(sent.body).toEqual({
+        assert.equal(sent.url, endpoint);
+        assert.deepEqual(sent.body, {
           grant_type: 'urn:ietf:params:oauth:grant-type:token-exchange',
           subject_token: 'subj',
           subject_token_type: 'urn:ietf:params:oauth:token-type:access_token',
           client_id: 'cid',
         });
-        expect(sent.headers).toEqual({ 'Content-Type': FORM });
+        assert.deepEqual(sent.headers, { 'Content-Type': FORM });
       });
     });
 
@@ -664,28 +669,28 @@ describe('token request shapes, as sent today', () => {
       };
 
       it('client_id in the body, never Authorization', async () => {
-        mockedAxios.post.mockResolvedValue(reply);
+        mockedAxios.post.mock.mockImplementation(async () => reply);
         await initiateDeviceAuthorization(
           'https://idp/device-auth',
           'cid',
           'openid',
         );
         const sent = sentByPost();
-        expect(sent.url).toBe('https://idp/device-auth');
-        expect(sent.body).toEqual({ client_id: 'cid', scope: 'openid' });
-        expect(sent.headers).toEqual({ 'Content-Type': FORM });
+        assert.equal(sent.url, 'https://idp/device-auth');
+        assert.deepEqual(sent.body, { client_id: 'cid', scope: 'openid' });
+        assert.deepEqual(sent.headers, { 'Content-Type': FORM });
       });
 
       it('without a scope: client_id only', async () => {
-        mockedAxios.post.mockResolvedValue(reply);
+        mockedAxios.post.mock.mockImplementation(async () => reply);
         await initiateDeviceAuthorization(
           'https://idp/device-auth',
           'cid',
           undefined,
         );
         const sent = sentByPost();
-        expect(sent.body).toEqual({ client_id: 'cid' });
-        expect(sent.headers).toEqual({ 'Content-Type': FORM });
+        assert.deepEqual(sent.body, { client_id: 'cid' });
+        assert.deepEqual(sent.headers, { 'Content-Type': FORM });
       });
     });
   });

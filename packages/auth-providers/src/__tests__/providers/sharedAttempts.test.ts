@@ -12,16 +12,10 @@
  * inside `abort()` — so a check right after it sees everything it ever will.
  */
 
+import assert from 'node:assert/strict';
 import { getEventListeners } from 'node:events';
 import * as net from 'node:net';
-import {
-  afterEach,
-  beforeEach,
-  describe,
-  expect,
-  it,
-  jest,
-} from '@jest/globals';
+import { afterEach, beforeEach, describe, it, mock } from 'node:test';
 import { readFailure } from '@mcp-abap-adt/auth-errors';
 import type {
   AuthorizationOutcome,
@@ -44,6 +38,7 @@ import {
   waitingStrategy,
 } from '../helpers/attemptHarness';
 import { certificate } from '../helpers/certificates';
+import { anyOf, matchObject } from '../helpers/expectations';
 import { getAvailablePort } from '../helpers/netHelpers';
 import { recordingBrowser } from '../helpers/recordingBrowser';
 
@@ -154,16 +149,16 @@ describe('two getTokens callers with separate signals share one login', () => {
     const call = await strategy.nth(1);
 
     first.abort();
-    expect(isAborted(await one)).toBe(true);
-    expect(call.signal?.aborted).toBe(false);
+    assert.equal(isAborted(await one), true);
+    assert.equal(call.signal?.aborted, false);
 
     call.answer('code-1');
     const tokens = await two;
-    expect(tokens.refreshToken).toBe('R-1');
-    expect(strategy.calls).toHaveLength(1);
-    expect(server.requests).toHaveLength(1);
-    expect(server.requests[0]?.params.get('code')).toBe('code-1');
-    expect(call.signal?.aborted).toBe(false);
+    assert.equal(tokens.refreshToken, 'R-1');
+    assert.equal(strategy.calls.length, 1);
+    assert.equal(server.requests.length, 1);
+    assert.equal(server.requests[0]?.params.get('code'), 'code-1');
+    assert.equal(call.signal?.aborted, false);
   });
 
   it('the same through refreshTokens', async () => {
@@ -174,10 +169,10 @@ describe('two getTokens callers with separate signals share one login', () => {
     const two = p.refreshTokens({ signal: new AbortController().signal });
     const call = await strategy.nth(1);
     first.abort();
-    expect(isAborted(await one)).toBe(true);
+    assert.equal(isAborted(await one), true);
     call.answer('code-1');
-    await expect(two).resolves.toMatchObject({ refreshToken: 'R-1' });
-    expect(strategy.calls).toHaveLength(1);
+    matchObject(await two, { refreshToken: 'R-1' });
+    assert.equal(strategy.calls.length, 1);
   });
 
   it('both abort: the strategy signal aborts and the callback port is free afterwards', async () => {
@@ -189,17 +184,17 @@ describe('two getTokens callers with separate signals share one login', () => {
     const one = rejectionOf(p.getTokens({ signal: first.signal }));
     const two = rejectionOf(p.getTokens({ signal: second.signal }));
     await bound;
-    expect(await canBind(port)).toBe(false);
+    assert.equal(await canBind(port), false);
 
     first.abort();
-    expect(isAborted(await one)).toBe(true);
-    expect(signals[0]?.aborted).toBe(false);
+    assert.equal(isAborted(await one), true);
+    assert.equal(signals[0]?.aborted, false);
     second.abort();
-    expect(isAborted(await two)).toBe(true);
-    expect(signals[0]?.aborted).toBe(true);
+    assert.equal(isAborted(await two), true);
+    assert.equal(signals[0]?.aborted, true);
     await settledCalls[0];
-    expect(await canBind(port)).toBe(true);
-    expect(server.requests).toHaveLength(0);
+    assert.equal(await canBind(port), true);
+    assert.equal(server.requests.length, 0);
   });
 
   it('an aborted attempt is not reused: the next getTokens starts a new login', async () => {
@@ -209,17 +204,18 @@ describe('two getTokens callers with separate signals share one login', () => {
     const aborted = rejectionOf(p.getTokens({ signal: only.signal }));
     const first = await strategy.nth(1);
     only.abort();
-    expect(isAborted(await aborted)).toBe(true);
-    expect(first.signal?.aborted).toBe(true);
+    assert.equal(isAborted(await aborted), true);
+    assert.equal(first.signal?.aborted, true);
 
     const next = p.getTokens();
     const second = await strategy.nth(2);
-    expect(second.signal?.aborted).toBe(false);
+    assert.equal(second.signal?.aborted, false);
     second.answer('code-2');
-    await expect(next).resolves.toMatchObject({ refreshToken: 'R-1' });
-    expect(server.requests.map((r) => r.params.get('code'))).toEqual([
-      'code-2',
-    ]);
+    matchObject(await next, { refreshToken: 'R-1' });
+    assert.deepEqual(
+      server.requests.map((r) => r.params.get('code')),
+      ['code-2'],
+    );
   });
 
   it('a caller without a signal beside one that aborts: the login continues', async () => {
@@ -230,10 +226,10 @@ describe('two getTokens callers with separate signals share one login', () => {
     const unsignalled = p.getTokens();
     const call = await strategy.nth(1);
     signalled.abort();
-    expect(isAborted(await one)).toBe(true);
-    expect(call.signal?.aborted).toBe(false);
+    assert.equal(isAborted(await one), true);
+    assert.equal(call.signal?.aborted, false);
     call.answer('code-1');
-    await expect(unsignalled).resolves.toMatchObject({ refreshToken: 'R-1' });
+    matchObject(await unsignalled, { refreshToken: 'R-1' });
   });
 });
 
@@ -247,11 +243,11 @@ describe('a login a moment starts waits on the attached parties', () => {
     await bound;
     session.abort();
     const answered = await outcome;
-    expect(answered.ok).toBe(false);
-    expect(isAborted(answered.ok ? undefined : answered.refusal)).toBe(true);
-    expect(signals[0]?.aborted).toBe(true);
+    assert.equal(answered.ok, false);
+    assert.equal(isAborted(answered.ok ? undefined : answered.refusal), true);
+    assert.equal(signals[0]?.aborted, true);
     await settledCalls[0];
-    expect(await canBind(port)).toBe(true);
+    assert.equal(await canBind(port), true);
   });
 
   it('two attached parties: one aborts, the login continues; then the other, it is aborted', async () => {
@@ -264,12 +260,12 @@ describe('a login a moment starts waits on the attached parties', () => {
     const outcome = p.rejected(refused);
     const call = await strategy.nth(1);
     a.abort();
-    expect(call.signal?.aborted).toBe(false);
+    assert.equal(call.signal?.aborted, false);
     b.abort();
     const answered = await outcome;
-    expect(answered.ok).toBe(false);
-    expect(isAborted(answered.ok ? undefined : answered.refusal)).toBe(true);
-    expect(call.signal?.aborted).toBe(true);
+    assert.equal(answered.ok, false);
+    assert.equal(isAborted(answered.ok ? undefined : answered.refusal), true);
+    assert.equal(call.signal?.aborted, true);
   });
 
   it('two attached parties, one aborts: the login runs to its token', async () => {
@@ -283,8 +279,8 @@ describe('a login a moment starts waits on the attached parties', () => {
     const call = await strategy.nth(1);
     a.abort();
     call.answer('code-1');
-    await expect(outcome).resolves.toEqual({ ok: true });
-    expect(call.signal?.aborted).toBe(false);
+    assert.deepEqual(await outcome, { ok: true });
+    assert.equal(call.signal?.aborted, false);
   });
 
   it('a party attached with an already-aborted signal is not added: the login runs unbounded', async () => {
@@ -293,9 +289,9 @@ describe('a login a moment starts waits on the attached parties', () => {
     p.attach(AbortSignal.abort());
     const outcome = p.rejected(refused);
     const call = await strategy.nth(1);
-    expect(call.signal?.aborted).toBe(false);
+    assert.equal(call.signal?.aborted, false);
     call.answer('code-1');
-    await expect(outcome).resolves.toEqual({ ok: true });
+    assert.deepEqual(await outcome, { ok: true });
   });
 
   it('after every attached party has been released, a later rejected() login runs unbounded and gets a token', async () => {
@@ -308,10 +304,10 @@ describe('a login a moment starts waits on the attached parties', () => {
     detach();
     const outcome = p.rejected(refused);
     const call = await strategy.nth(1);
-    expect(call.signal?.aborted).toBe(false);
+    assert.equal(call.signal?.aborted, false);
     call.answer('code-1');
-    await expect(outcome).resolves.toEqual({ ok: true });
-    expect(call.signal?.aborted).toBe(false);
+    assert.deepEqual(await outcome, { ok: true });
+    assert.equal(call.signal?.aborted, false);
   });
 
   it('a never-attached provider: its rejected() login runs as today', async () => {
@@ -319,9 +315,9 @@ describe('a login a moment starts waits on the attached parties', () => {
     const p = provider(strategy);
     const outcome = p.rejected(refused);
     const call = await strategy.nth(1);
-    expect(call.signal?.aborted).toBe(false);
+    assert.equal(call.signal?.aborted, false);
     call.answer('code-1');
-    await expect(outcome).resolves.toEqual({ ok: true });
+    assert.deepEqual(await outcome, { ok: true });
   });
 
   describe('mixed consumers: a signalled party and an unsignalled consumer', () => {
@@ -333,9 +329,9 @@ describe('a login a moment starts waits on the attached parties', () => {
       session.abort();
       const outcome = p.rejected(refused);
       const call = await strategy.nth(1);
-      expect(call.signal?.aborted).toBe(false);
+      assert.equal(call.signal?.aborted, false);
       call.answer('code-1');
-      await expect(outcome).resolves.toEqual({ ok: true });
+      assert.deepEqual(await outcome, { ok: true });
     });
 
     it('it closes while a login it bounds runs: that login aborts; the next moment logs in afresh and gets a token', async () => {
@@ -347,14 +343,14 @@ describe('a login a moment starts waits on the attached parties', () => {
       const first = await strategy.nth(1);
       session.abort();
       const answered = await bounded;
-      expect(isAborted(answered.ok ? undefined : answered.refusal)).toBe(true);
-      expect(first.signal?.aborted).toBe(true);
+      assert.equal(isAborted(answered.ok ? undefined : answered.refusal), true);
+      assert.equal(first.signal?.aborted, true);
 
       const next = p.rejected(refused);
       const second = await strategy.nth(2);
-      expect(second.signal?.aborted).toBe(false);
+      assert.equal(second.signal?.aborted, false);
       second.answer('code-2');
-      await expect(next).resolves.toEqual({ ok: true });
+      assert.deepEqual(await next, { ok: true });
     });
   });
 
@@ -362,39 +358,41 @@ describe('a login a moment starts waits on the attached parties', () => {
     const strategy = waitingStrategy();
     const detached = new AbortController();
     const aborting = new AbortController();
-    const removedFromDetached = jest.spyOn(
+    const removedFromDetached = mock.method(
       detached.signal,
       'removeEventListener',
     );
-    const removedFromAborting = jest.spyOn(
+    const removedFromAborting = mock.method(
       aborting.signal,
       'removeEventListener',
     );
     const p = provider(strategy);
     const detach = p.attach(detached.signal);
     p.attach(aborting.signal);
-    expect(getEventListeners(detached.signal, 'abort')).toHaveLength(1);
-    expect(getEventListeners(aborting.signal, 'abort')).toHaveLength(1);
+    assert.equal(getEventListeners(detached.signal, 'abort').length, 1);
+    assert.equal(getEventListeners(aborting.signal, 'abort').length, 1);
 
     detach();
     aborting.abort();
-    expect(removedFromDetached).toHaveBeenCalledWith(
-      'abort',
-      expect.any(Function),
-    );
-    expect(removedFromAborting).toHaveBeenCalledWith(
-      'abort',
-      expect.any(Function),
-    );
-    expect(getEventListeners(detached.signal, 'abort')).toHaveLength(0);
-    expect(getEventListeners(aborting.signal, 'abort')).toHaveLength(0);
+    for (const removed of [removedFromDetached, removedFromAborting]) {
+      assert.ok(
+        removed.mock.calls.some(
+          (call) =>
+            call.arguments[0] === 'abort' &&
+            typeof call.arguments[1] === 'function',
+        ),
+        'removeEventListener("abort", <function>)',
+      );
+    }
+    assert.equal(getEventListeners(detached.signal, 'abort').length, 0);
+    assert.equal(getEventListeners(aborting.signal, 'abort').length, 0);
 
     // Neither bounds a later moment: its login runs unbounded.
     const outcome = p.rejected(refused);
     const call = await strategy.nth(1);
-    expect(call.signal?.aborted).toBe(false);
+    assert.equal(call.signal?.aborted, false);
     call.answer('code-1');
-    await expect(outcome).resolves.toEqual({ ok: true });
+    assert.deepEqual(await outcome, { ok: true });
   });
 
   it("a detached party no longer holds a moment open: the remaining party's abort aborts it", async () => {
@@ -409,17 +407,17 @@ describe('a login a moment starts waits on the attached parties', () => {
     const call = await strategy.nth(1);
     b.abort();
     const answered = await outcome;
-    expect(isAborted(answered.ok ? undefined : answered.refusal)).toBe(true);
-    expect(call.signal?.aborted).toBe(true);
+    assert.equal(isAborted(answered.ok ? undefined : answered.refusal), true);
+    assert.equal(call.signal?.aborted, true);
   });
 
   it('attach of an aborted signal adds no listener', () => {
     const p = provider(waitingStrategy());
     const aborted = AbortSignal.abort();
-    const added = jest.spyOn(aborted, 'addEventListener');
+    const added = mock.method(aborted, 'addEventListener');
     p.attach(aborted);
-    expect(getEventListeners(aborted, 'abort')).toHaveLength(0);
-    added.mockRestore();
+    assert.equal(getEventListeners(aborted, 'abort').length, 0);
+    added.mock.restore();
   });
 
   it("the parties' listener count returns to its baseline after every moment", async () => {
@@ -428,13 +426,13 @@ describe('a login a moment starts waits on the attached parties', () => {
     const p = provider(strategy);
     p.attach(party.signal);
     const baseline = getEventListeners(party.signal, 'abort').length;
-    expect(baseline).toBe(1);
+    assert.equal(baseline, 1);
     const outcome = p.rejected(refused);
     const call = await strategy.nth(1);
     call.answer('code-1');
-    await expect(outcome).resolves.toEqual({ ok: true });
-    await expect(p.prepare()).resolves.toEqual({ ok: true });
-    expect(getEventListeners(party.signal, 'abort')).toHaveLength(baseline);
+    assert.deepEqual(await outcome, { ok: true });
+    assert.deepEqual(await p.prepare(), { ok: true });
+    assert.equal(getEventListeners(party.signal, 'abort').length, baseline);
   });
 
   it('RF6: a rejected() login of parties A and B, joined by getTokens({ signal: C })', async () => {
@@ -451,24 +449,24 @@ describe('a login a moment starts waits on the attached parties', () => {
     const caller = rejectionOf(p.getTokens({ signal: c.signal }));
 
     a.abort();
-    expect(signals[0]?.aborted).toBe(false);
+    assert.equal(signals[0]?.aborted, false);
     c.abort();
-    expect(isAborted(await caller)).toBe(true);
-    expect(signals[0]?.aborted).toBe(false);
+    assert.equal(isAborted(await caller), true);
+    assert.equal(signals[0]?.aborted, false);
     b.abort();
     const answered = await moment;
-    expect(isAborted(answered.ok ? undefined : answered.refusal)).toBe(true);
-    expect(signals[0]?.aborted).toBe(true);
+    assert.equal(isAborted(answered.ok ? undefined : answered.refusal), true);
+    assert.equal(signals[0]?.aborted, true);
     await settledCalls[0];
-    expect(await canBind(port)).toBe(true);
-    expect(signals).toHaveLength(1);
+    assert.equal(await canBind(port), true);
+    assert.equal(signals.length, 1);
   });
 });
 
 describe('the pin attempt is shared the same way', () => {
   it('two callers, one aborts: only it rejects; the other gets the pinned material', async () => {
     const material = deferred<ICertificateMaterial>();
-    const reads = jest.fn(() => material.promise);
+    const reads = mock.fn(() => material.promise);
     const clientAuthentication: IClientAuthentication = {
       authenticate: async () => ({}),
       tlsMaterial: reads,
@@ -490,11 +488,9 @@ describe('the pin attempt is shared the same way', () => {
     const one = rejectionOf(pin(leaving.signal));
     const two = pin(new AbortController().signal);
     leaving.abort();
-    expect(isAborted(await one)).toBe(true);
+    assert.equal(isAborted(await one), true);
     material.resolve(certificate());
-    await expect(two).resolves.toMatchObject({
-      thumbprint: expect.any(String),
-    });
-    expect(reads).toHaveBeenCalledTimes(1);
+    matchObject(await two, { thumbprint: anyOf(String) });
+    assert.equal(reads.mock.callCount(), 1);
   });
 });

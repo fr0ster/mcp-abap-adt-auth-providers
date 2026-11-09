@@ -6,8 +6,11 @@
  * each test asks `Object.hasOwn`.
  */
 
+import { CERTIFICATES } from '../helpers/packagePaths';
+import '../helpers/axiosModuleMock';
+import assert from 'node:assert/strict';
 import { join } from 'node:path';
-import { beforeEach, describe, expect, it, jest } from '@jest/globals';
+import { beforeEach, describe, it } from 'node:test';
 import type {
   AnswerTransportOptions,
   AssertionContext,
@@ -17,7 +20,6 @@ import type {
   ITokenResult,
 } from '@mcp-abap-adt/interfaces-auth';
 import type { ISapConfig } from '@mcp-abap-adt/interfaces-auth-sap';
-import axios from 'axios';
 import { composeAuthorization } from '../../authorization/compose';
 import { passcode } from '../../authorization/protocol';
 import { FileCertificateMaterialLoader } from '../../credentials/FileCertificateMaterialLoader';
@@ -31,16 +33,10 @@ import { Saml2BearerProvider } from '../../providers/Saml2BearerProvider';
 import { Saml2PureProvider } from '../../providers/Saml2PureProvider';
 import { UaaPasscodeProvider } from '../../providers/UaaPasscodeProvider';
 import { refreshThenLogin } from '../../renewal';
+import { mockedAxios, resetAxiosMock } from '../helpers/axiosModuleMock';
+import { cases, caseTitle, thrown } from '../helpers/expectations';
 
 // Automocked, but with axios's own error class: the sites throw it.
-jest.mock('axios', () => {
-  const mocked = jest.createMockFromModule<Record<string, unknown>>('axios');
-  mocked.AxiosError =
-    jest.requireActual<Record<string, unknown>>('axios').AxiosError;
-  return mocked;
-});
-type Mock = jest.Mock<(...args: any[]) => Promise<unknown>>;
-const mockedAxios = axios as unknown as Mock & { post: Mock };
 
 /** A JWT valid for an hour, so the second getTokens() answers the cache. */
 function jwt(): string {
@@ -62,14 +58,14 @@ function answerWithoutRefreshToken(): void {
           },
         }
       : { data: { access_token: jwt(), expires_in: 3600 } };
-  mockedAxios.mockImplementation(async (config: { url?: unknown }) =>
+  mockedAxios.mock.mockImplementation(async (config: { url?: unknown }) =>
     reply(config.url),
   );
-  mockedAxios.post.mockImplementation(async (url: unknown) => reply(url));
+  mockedAxios.post.mock.mockImplementation(async (url: unknown) => reply(url));
 }
 
 beforeEach(() => {
-  jest.resetAllMocks();
+  resetAxiosMock();
   answerWithoutRefreshToken();
 });
 
@@ -280,25 +276,25 @@ const providers: [
   ],
 ];
 
-describe.each(providers)(
-  '%s result',
-  (_name, build, loginKeys, refreshKeys) => {
+for (const [caseIndex, caseRow] of providers.entries()) {
+  const [_name, build, loginKeys, refreshKeys] = caseRow;
+  describe(caseTitle('%s result', caseRow, caseIndex), () => {
     it('login: the keys of 5.4.0, an absent value present as undefined', async () => {
       const result = await moments(build(false)).performLogin();
-      expect(sorted(Object.keys(result))).toEqual(loginKeys);
+      assert.deepEqual(sorted(Object.keys(result)), loginKeys);
     });
 
     if (refreshKeys) {
       it('refresh: the keys of 5.4.0', async () => {
         const result = await moments(build(true)).performRefresh();
-        expect(sorted(Object.keys(result))).toEqual(refreshKeys);
+        assert.deepEqual(sorted(Object.keys(result)), refreshKeys);
       });
     }
-  },
-);
+  });
+}
 
-describe.each(
-  providers.filter(([name]) =>
+for (const [caseIndex, caseRow] of providers
+  .filter(([name]) =>
     [
       'AuthorizationCodeProvider',
       'OidcBrowserProvider',
@@ -306,18 +302,24 @@ describe.each(
       'Saml2PureProvider',
       'UaaPasscodeProvider',
     ].includes(name),
-  ),
-)('%s: the request its strategy gets', (_name, build) => {
-  it('carries logger as an own key, undefined, without a logger', async () => {
-    const seen: AuthorizationRequest[] = [];
-    await moments(build(false, seen)).performLogin();
-    expect(seen).toHaveLength(1);
-    expect(Object.hasOwn(seen[0]!, 'logger')).toBe(true);
-    expect(seen[0]!.logger).toBeUndefined();
-  });
-});
+  )
+  .entries()) {
+  const [_name, build] = caseRow;
+  describe(
+    caseTitle('%s: the request its strategy gets', caseRow, caseIndex),
+    () => {
+      it('carries logger as an own key, undefined, without a logger', async () => {
+        const seen: AuthorizationRequest[] = [];
+        await moments(build(false, seen)).performLogin();
+        assert.equal(seen.length, 1);
+        assert.equal(Object.hasOwn(seen[0]!, 'logger'), true);
+        assert.equal(seen[0]!.logger, undefined);
+      });
+    },
+  );
+}
 
-describe.each([
+for (const [caseIndex, caseRow] of cases([
   [
     'Saml2BearerProvider',
     (validator: IAssertionValidator) =>
@@ -345,26 +347,29 @@ describe.each([
         cookieProvider: async () => 'SAP_SESSIONID=x',
       }),
   ],
-])('%s: the assertion context', (_name, build) => {
-  it('IdP-initiated, no idpEntityId, no logger: each an own key, undefined', async () => {
-    const contexts: AssertionContext[] = [];
-    await moments(build(recordingValidator(contexts))).performLogin();
-    expect(contexts).toHaveLength(1);
-    const [context] = contexts;
-    for (const key of ['expectedInResponseTo', 'expectedIssuer', 'logger']) {
-      expect(Object.hasOwn(context!, key)).toBe(true);
-    }
-    expect(context!.expectedInResponseTo).toBeUndefined();
-    expect(context!.expectedIssuer).toBeUndefined();
-    expect(context!.logger).toBeUndefined();
+]).entries()) {
+  const [_name, build] = caseRow;
+  describe(caseTitle('%s: the assertion context', caseRow, caseIndex), () => {
+    it('IdP-initiated, no idpEntityId, no logger: each an own key, undefined', async () => {
+      const contexts: AssertionContext[] = [];
+      await moments(build(recordingValidator(contexts))).performLogin();
+      assert.equal(contexts.length, 1);
+      const [context] = contexts;
+      for (const key of ['expectedInResponseTo', 'expectedIssuer', 'logger']) {
+        assert.equal(Object.hasOwn(context!, key), true);
+      }
+      assert.equal(context!.expectedInResponseTo, undefined);
+      assert.equal(context!.expectedIssuer, undefined);
+      assert.equal(context!.logger, undefined);
+    });
   });
-});
+}
 
 describe('token result, through getTokens()', () => {
   it('carries refreshToken as an own key, undefined, when the grant gives none — login and cache alike', async () => {
     const reply = { data: { access_token: jwt(), expires_in: 3600 } };
-    mockedAxios.mockResolvedValue(reply);
-    mockedAxios.post.mockResolvedValue(reply);
+    mockedAxios.mock.mockImplementation(async () => reply);
+    mockedAxios.post.mock.mockImplementation(async () => reply);
     const provider = new ClientCredentialsProvider({
       renewal: refreshThenLogin(),
       uaaUrl: 'https://uaa.example',
@@ -373,25 +378,29 @@ describe('token result, through getTokens()', () => {
     });
 
     const fresh = await provider.getTokens();
-    expect(Object.hasOwn(fresh, 'refreshToken')).toBe(true);
-    expect(fresh.refreshToken).toBeUndefined();
+    assert.equal(Object.hasOwn(fresh, 'refreshToken'), true);
+    assert.equal(fresh.refreshToken, undefined);
 
     const cached = await provider.getTokens();
-    expect(cached.authorizationToken).toBe(fresh.authorizationToken);
-    expect(Object.hasOwn(cached, 'refreshToken')).toBe(true);
-    expect(cached.refreshToken).toBeUndefined();
+    assert.equal(cached.authorizationToken, fresh.authorizationToken);
+    assert.equal(Object.hasOwn(cached, 'refreshToken'), true);
+    assert.equal(cached.refreshToken, undefined);
 
     // The held refresh token or none, nothing more — no
     // refresh-token disposition on any result.
-    expect(Object.hasOwn(fresh, 'refreshTokenDisposition')).toBe(false);
-    expect(Object.hasOwn(cached, 'refreshTokenDisposition')).toBe(false);
+    assert.equal(Object.hasOwn(fresh, 'refreshTokenDisposition'), false);
+    assert.equal(Object.hasOwn(cached, 'refreshTokenDisposition'), false);
   });
 });
 
 describe('the request a strategy gets, through getTokens()', () => {
   it('carries logger as an own key, undefined, when the provider has none', async () => {
-    mockedAxios.mockResolvedValue({ data: { access_token: jwt() } });
-    mockedAxios.post.mockResolvedValue({ data: { access_token: jwt() } });
+    mockedAxios.mock.mockImplementation(async () => ({
+      data: { access_token: jwt() },
+    }));
+    mockedAxios.post.mock.mockImplementation(async () => ({
+      data: { access_token: jwt() },
+    }));
     const seen: AuthorizationRequest[] = [];
     const strategy: IAuthorizationStrategy<string> = {
       authorize: async (request) => {
@@ -408,9 +417,9 @@ describe('the request a strategy gets, through getTokens()', () => {
     });
 
     await provider.getTokens();
-    expect(seen).toHaveLength(1);
-    expect(Object.hasOwn(seen[0]!, 'logger')).toBe(true);
-    expect(seen[0]!.logger).toBeUndefined();
+    assert.equal(seen.length, 1);
+    assert.equal(Object.hasOwn(seen[0]!, 'logger'), true);
+    assert.equal(seen[0]!.logger, undefined);
   });
 });
 
@@ -430,38 +439,39 @@ describe('the answer transport options', () => {
       endpoint: '/callback',
     });
 
-    await expect(
+    await assert.rejects(
       strategy.authorize({ buildAuthorizationUrl: async () => 'https://x' }),
-    ).rejects.toThrow();
-    expect(seen).toHaveLength(1);
-    expect(Object.hasOwn(seen[0]!, 'logger')).toBe(true);
-    expect(seen[0]!.logger).toBeUndefined();
-    expect(Object.hasOwn(seen[0]!, 'paste')).toBe(true);
-    expect(seen[0]!.paste).toBeUndefined();
+      thrown(),
+    );
+    assert.equal(seen.length, 1);
+    assert.equal(Object.hasOwn(seen[0]!, 'logger'), true);
+    assert.equal(seen[0]!.logger, undefined);
+    assert.equal(Object.hasOwn(seen[0]!, 'paste'), true);
+    assert.equal(seen[0]!.paste, undefined);
   });
 });
 
 describe('FileCertificateMaterialLoader', () => {
   it('returns passphrase as an own key, undefined, when none is configured', async () => {
-    const dir = join(__dirname, '..', 'fixtures', 'certificates');
+    const dir = CERTIFICATES;
     const material = await new FileCertificateMaterialLoader().load({
       url: 'https://h',
       authType: 'certificate',
       certPath: join(dir, 'client.crt'),
       certKeyPath: join(dir, 'client.key'),
     } as ISapConfig);
-    expect(Object.hasOwn(material, 'passphrase')).toBe(true);
-    expect(material.passphrase).toBeUndefined();
+    assert.equal(Object.hasOwn(material, 'passphrase'), true);
+    assert.equal(material.passphrase, undefined);
   });
 
   it('returns a PFX with passphrase as an own key, undefined, when none is configured', async () => {
-    const dir = join(__dirname, '..', 'fixtures', 'certificates');
+    const dir = CERTIFICATES;
     const material = await new FileCertificateMaterialLoader().load({
       url: 'https://h',
       authType: 'certificate',
       certPfxPath: join(dir, 'client.pfx'),
     } as ISapConfig);
-    expect(sorted(Object.keys(material))).toEqual(['passphrase', 'pfx']);
-    expect(material.passphrase).toBeUndefined();
+    assert.deepEqual(sorted(Object.keys(material)), ['passphrase', 'pfx']);
+    assert.equal(material.passphrase, undefined);
   });
 });

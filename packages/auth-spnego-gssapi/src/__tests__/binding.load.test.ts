@@ -11,11 +11,13 @@
 // Windows: the runner is joined to no domain; what SSPI answers there is To
 // measure — the test requires only that the binding loaded and that the
 // answer is one of the contract's, and prints it.
+import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { describe, expect, it } from '@jest/globals';
+import { describe, it } from 'node:test';
+import { caseTitle, contains } from './helpers/expectations';
 
 const BUILT = process.env.KERBEROS_BINDING === 'built';
 const PROBLEMS = [
@@ -48,10 +50,10 @@ gssapiTokenSource({ mechanism: ${JSON.stringify(mechanism)} })
     env,
     encoding: 'utf8',
   });
-  expect(run.status).toBe(0);
-  expect(run.stdout).toBe('');
+  assert.equal(run.status, 0);
+  assert.equal(run.stdout, '');
   const line = run.stderr.split('\n').find((l) => l.startsWith('ANSWER '));
-  expect(line).toBeDefined();
+  assert.notEqual(line, undefined);
   return JSON.parse((line ?? '').slice('ANSWER '.length));
 }
 
@@ -104,68 +106,77 @@ function classifyToken(token: string): 'ntlm' | 'kerberos' | 'other' {
 }
 
 describeBuilt(where, () => {
-  it.each(['spnego', 'kerberos'] as const)(
-    '%s: with no ticket, the answer measured on this platform',
-    (mechanism) => {
-      if (process.platform === 'win32') {
-        const answer = askChild(mechanism, { ...process.env }) as {
-          ok: boolean;
-          problem?: string;
-          token?: string;
-        };
-        process.stderr.write(
-          `Windows, ${mechanism}: ${answer.ok ? `ok, a token of ${answer.token?.length} chars` : `problem ${answer.problem}`}\n`,
-        );
-        if (answer.ok) {
-          expect(typeof answer.token).toBe('string');
-          const kind = classifyToken(answer.token ?? '');
+  for (const [caseIndex, caseRow] of (
+    ['spnego', 'kerberos'] as const
+  ).entries()) {
+    const mechanism = caseRow;
+    it(
+      caseTitle(
+        '%s: with no ticket, the answer measured on this platform',
+        caseRow,
+        caseIndex,
+      ),
+      () => {
+        if (process.platform === 'win32') {
+          const answer = askChild(mechanism, { ...process.env }) as {
+            ok: boolean;
+            problem?: string;
+            token?: string;
+          };
           process.stderr.write(
-            `Windows, ${mechanism}: the token is ${kind} (first bytes ${Buffer.from(
-              answer.token ?? '',
-              'base64',
-            )
-              .subarray(0, 12)
-              .toString('hex')})\n`,
+            `Windows, ${mechanism}: ${answer.ok ? `ok, a token of ${answer.token?.length} chars` : `problem ${answer.problem}`}\n`,
           );
-          // Measured 2026-10-25 (Windows GitHub runner, no domain): a token
-          // whose bytes are an NTLM message.
-          expect(mechanism).toBe('spnego');
-          expect(kind).toBe('ntlm');
+          if (answer.ok) {
+            assert.equal(typeof answer.token, 'string');
+            const kind = classifyToken(answer.token ?? '');
+            process.stderr.write(
+              `Windows, ${mechanism}: the token is ${kind} (first bytes ${Buffer.from(
+                answer.token ?? '',
+                'base64',
+              )
+                .subarray(0, 12)
+                .toString('hex')})\n`,
+            );
+            // Measured 2026-10-25 (Windows GitHub runner, no domain): a token
+            // whose bytes are an NTLM message.
+            assert.equal(mechanism, 'spnego');
+            assert.equal(kind, 'ntlm');
+            return;
+          } else {
+            contains(PROBLEMS, answer.problem);
+            assert.notEqual(answer.problem, 'binding-unavailable');
+            // Measured 2026-10-25: only `kerberos` fails, as no-credential.
+            assert.equal(mechanism, 'kerberos');
+            assert.equal(answer.problem, 'no-credential');
+            process.stderr.write(
+              `Windows, ${mechanism}, no ticket: ${rawBindingMessage(mechanism, { ...process.env })}\n`,
+            );
+          }
           return;
-        } else {
-          expect(PROBLEMS).toContain(answer.problem);
-          expect(answer.problem).not.toBe('binding-unavailable');
-          // Measured 2026-10-25: only `kerberos` fails, as no-credential.
-          expect(mechanism).toBe('kerberos');
-          expect(answer.problem).toBe('no-credential');
-          process.stderr.write(
-            `Windows, ${mechanism}, no ticket: ${rawBindingMessage(mechanism, { ...process.env })}\n`,
-          );
         }
-        return;
-      }
-      const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gssapi-no-ticket-'));
-      try {
-        const env = {
-          ...process.env,
-          KRB5CCNAME: `FILE:${path.join(dir, 'cc')}`,
-        };
-        const answer = askChild(mechanism, env);
-        // macOS (GSS.framework) answers spnego with no ticket by
-        // " An unsupported mechanism was requested: unknown mech-code 0 for
-        // mech unknown" (measured 2026-10-25).
-        const expected =
-          process.platform === 'darwin' && mechanism === 'spnego'
-            ? { ok: false, problem: 'mechanism-unsupported' }
-            : { ok: false, problem: 'no-credential' };
-        if (JSON.stringify(answer) !== JSON.stringify(expected))
-          process.stderr.write(
-            `${process.platform}, ${mechanism}, no ticket: answer ${JSON.stringify(answer)}; binding ${rawBindingMessage(mechanism, env)}\n`,
-          );
-        expect(answer).toEqual(expected);
-      } finally {
-        fs.rmSync(dir, { recursive: true, force: true });
-      }
-    },
-  );
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gssapi-no-ticket-'));
+        try {
+          const env = {
+            ...process.env,
+            KRB5CCNAME: `FILE:${path.join(dir, 'cc')}`,
+          };
+          const answer = askChild(mechanism, env);
+          // macOS (GSS.framework) answers spnego with no ticket by
+          // " An unsupported mechanism was requested: unknown mech-code 0 for
+          // mech unknown" (measured 2026-10-25).
+          const expected =
+            process.platform === 'darwin' && mechanism === 'spnego'
+              ? { ok: false, problem: 'mechanism-unsupported' }
+              : { ok: false, problem: 'no-credential' };
+          if (JSON.stringify(answer) !== JSON.stringify(expected))
+            process.stderr.write(
+              `${process.platform}, ${mechanism}, no ticket: answer ${JSON.stringify(answer)}; binding ${rawBindingMessage(mechanism, env)}\n`,
+            );
+          assert.deepEqual(answer, expected);
+        } finally {
+          fs.rmSync(dir, { recursive: true, force: true });
+        }
+      },
+    );
+  }
 });

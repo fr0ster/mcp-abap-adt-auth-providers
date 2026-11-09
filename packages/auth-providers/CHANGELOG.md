@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [8.0.1] - 2026-11-09
+
+The tests run on Node's own runner, `node:test`, with `node:assert/strict`. No published contract
+changes: the package's code, its exports and its runtime dependencies are as in 8.0.0.
+
+### Changed
+- Tests: `npm test` compiles them with the package's own `tsc` (`tsconfig.test.json`, into
+  `.test-build/`) and runs every compiled file in a process of its own, one at a time, with no
+  timeout, through `tools/run-tests.mjs`; `npm run test:file -- <compiled path>` runs a file or a
+  directory. The child-process guard is preloaded in every file's process. `test:shape` and
+  `docs:tables` run their compiled files. The stand and XSUAA scripts run their directories
+  through `test:file`.
+- Tests: that nothing in `src` writes to `process.stdout` is checked statically, over the
+  TypeScript AST, instead of by capturing stdout at run time.
+- The repository's lockfile resolves follow-redirects 1.16.3 under axios
+  (GHSA-mrwp-f3q8-3g9p, 1.16.0-1.16.1), superseding #87. The lockfile is not published: a
+  consumer resolves the fixed version through axios's own range on a fresh install.
+
+### Removed
+- `jest`, `ts-jest`, `jest-util`, `@jest/globals` and `@types/jest` from devDependencies, and
+  `jest.config.js`. The audit is no longer held red by the test runner's dependencies.
+
 ## [8.0.0] - 2026-10-26
 
 Static types first: a value is checked at runtime only when it comes from outside the type

@@ -14,9 +14,11 @@
  * throws.
  */
 
+import '../helpers/axiosModuleMock';
+import assert from 'node:assert/strict';
 import { getEventListeners } from 'node:events';
+import { describe, it } from 'node:test';
 import { inspect } from 'node:util';
-import { describe, expect, it, jest } from '@jest/globals';
 import { readFailure } from '@mcp-abap-adt/auth-errors';
 import type {
   AnswerJudge,
@@ -33,7 +35,6 @@ import type {
   PresentationContext,
 } from '@mcp-abap-adt/interfaces-auth';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
-import axios from 'axios';
 import { composeAuthorization } from '../../authorization/compose';
 import {
   consumerAnswer,
@@ -46,22 +47,17 @@ import { AuthorizationCodeProvider } from '../../providers/AuthorizationCodeProv
 import { refreshThenLogin } from '../../renewal';
 import { SncLogonProvider } from '../../snc/SncLogonProvider';
 import { SpnegoAuthProvider } from '../../spnego/SpnegoAuthProvider';
+import { mockedAxios } from '../helpers/axiosModuleMock';
 import {
   recordingPresentation,
   scriptedTransport,
 } from '../helpers/composedParts';
+import { matchObject, notContains } from '../helpers/expectations';
 import { bindable, send } from '../helpers/listenerHttp';
 import { mintedRefusal } from '../helpers/minted';
+import { resetMock } from '../helpers/mockOnce';
 
 // Automocked: a token request is recorded, never sent.
-jest.mock('axios', () => {
-  const mocked = jest.createMockFromModule<Record<string, unknown>>('axios');
-  mocked.AxiosError =
-    jest.requireActual<Record<string, unknown>>('axios').AxiosError;
-  return mocked;
-});
-type Mock = jest.Mock<(...args: unknown[]) => Promise<unknown>>;
-const mockedAxios = axios as unknown as Mock & { post: Mock; get: Mock };
 
 const SECRET = 'SECRET';
 
@@ -83,9 +79,9 @@ const throwingJudge: AnswerJudge<unknown> = () => {
 
 /** Every rendering of a value a consumer might log. */
 function expectNoSecret(value: unknown): void {
-  expect(String(value)).not.toContain(SECRET);
-  expect(JSON.stringify(value) ?? '').not.toContain(SECRET);
-  expect(inspect(value, { depth: 10, showHidden: true })).not.toContain(SECRET);
+  notContains(String(value), SECRET);
+  notContains(JSON.stringify(value) ?? '', SECRET);
+  notContains(inspect(value, { depth: 10, showHidden: true }), SECRET);
 }
 
 /** The kind and the outcome of a thrown failure. */
@@ -199,17 +195,20 @@ describe('transport level: a verdict whose field throws', () => {
     it('ends as a throwing judge does; no SECRET in any body; the port is free', async () => {
       const baseline = await run(throwingJudge);
       const hostile = await run(hostileJudge);
-      expect(failureOf(baseline.opened)).toEqual({
+      assert.deepEqual(failureOf(baseline.opened), {
         kind: 'interactive-login',
         outcome: 'failed',
       });
-      expect(failureOf(hostile.answered)).toEqual(failureOf(baseline.answered));
-      expect(failureOf(hostile.opened)).toEqual(failureOf(baseline.opened));
+      assert.deepEqual(
+        failureOf(hostile.answered),
+        failureOf(baseline.answered),
+      );
+      assert.deepEqual(failureOf(hostile.opened), failureOf(baseline.opened));
       expectNoSecret(hostile.answered);
       expectNoSecret(hostile.opened);
-      expect(hostile.bodies).toHaveLength(1);
-      for (const body of hostile.bodies) expect(body).not.toContain(SECRET);
-      expect(await bindable(hostile.port)).toBe(true);
+      assert.equal(hostile.bodies.length, 1);
+      for (const body of hostile.bodies) notContains(body, SECRET);
+      assert.equal(await bindable(hostile.port), true);
     });
   });
 
@@ -246,16 +245,19 @@ describe('transport level: a verdict whose field throws', () => {
     it('ends as a throwing judge does, SECRET nowhere; the reader released before open settled', async () => {
       const baseline = await run(throwingJudge);
       const hostile = await run(hostileJudge);
-      expect(failureOf(baseline.opened)).toEqual({
+      assert.deepEqual(failureOf(baseline.opened), {
         kind: 'interactive-login',
         outcome: 'failed',
       });
-      expect(failureOf(hostile.answered)).toEqual(failureOf(baseline.answered));
-      expect(failureOf(hostile.opened)).toEqual(failureOf(baseline.opened));
+      assert.deepEqual(
+        failureOf(hostile.answered),
+        failureOf(baseline.answered),
+      );
+      assert.deepEqual(failureOf(hostile.opened), failureOf(baseline.opened));
       expectNoSecret(hostile.answered);
       expectNoSecret(hostile.opened);
-      expect(hostile.reads).toHaveLength(1);
-      expect(hostile.abortedBeforeSettle).toBe(true);
+      assert.equal(hostile.reads.length, 1);
+      assert.equal(hostile.abortedBeforeSettle, true);
     });
   });
 
@@ -270,12 +272,15 @@ describe('transport level: a verdict whose field throws', () => {
     it('ends as a throwing judge does, SECRET nowhere', async () => {
       const baseline = await run(throwingJudge);
       const hostile = await run(hostileJudge);
-      expect(failureOf(baseline.opened)).toEqual({
+      assert.deepEqual(failureOf(baseline.opened), {
         kind: 'interactive-login',
         outcome: 'failed',
       });
-      expect(failureOf(hostile.answered)).toEqual(failureOf(baseline.answered));
-      expect(failureOf(hostile.opened)).toEqual(failureOf(baseline.opened));
+      assert.deepEqual(
+        failureOf(hostile.answered),
+        failureOf(baseline.answered),
+      );
+      assert.deepEqual(failureOf(hostile.opened), failureOf(baseline.opened));
       expectNoSecret(hostile.answered);
       expectNoSecret(hostile.opened);
     });
@@ -305,18 +310,21 @@ describe('transport level: a verdict whose field throws', () => {
     it('ends as a throwing judge does, SECRET nowhere; the scope is cleared', async () => {
       const baseline = await run(throwingJudge);
       const hostile = await run(hostileJudge);
-      expect(failureOf(baseline.opened)).toEqual({
+      assert.deepEqual(failureOf(baseline.opened), {
         kind: 'interactive-login',
         outcome: 'failed',
       });
-      expect(failureOf(hostile.answered)).toEqual(failureOf(baseline.answered));
-      expect(failureOf(hostile.opened)).toEqual(failureOf(baseline.opened));
+      assert.deepEqual(
+        failureOf(hostile.answered),
+        failureOf(baseline.answered),
+      );
+      assert.deepEqual(failureOf(hostile.opened), failureOf(baseline.opened));
       expectNoSecret(hostile.answered);
       expectNoSecret(hostile.opened);
-      expect(hostile.provided()).toBe(1);
+      assert.equal(hostile.provided(), 1);
       // After `open` settled: no open in progress, so `provide` is not asked.
       hostile.presentation.present(URL_SHOWN, context());
-      expect(hostile.provided()).toBe(1);
+      assert.equal(hostile.provided(), 1);
     });
   });
 });
@@ -358,26 +366,30 @@ describe('composer level: a protocol whose verdict throws', () => {
     open.answer.reject(seen);
     const thrown = await within(first);
 
-    expect(failureOf(thrown)).toEqual({
+    assert.deepEqual(failureOf(thrown), {
       kind: 'interactive-login',
       outcome: 'failed',
     });
     expectNoSecret(thrown);
-    expect(failureOf(seen)).toEqual({
+    assert.deepEqual(failureOf(seen), {
       kind: 'interactive-login',
       outcome: 'failed',
     });
     expectNoSecret(seen);
-    expect(events.indexOf('released')).toBeGreaterThanOrEqual(0);
-    expect(events.indexOf('released')).toBeLessThan(
-      events.indexOf('authorize settled'),
+    assert.ok(
+      events.indexOf('released') >= 0,
+      `${events.indexOf('released')} >= ${0}`,
+    );
+    assert.ok(
+      events.indexOf('released') < events.indexOf('authorize settled'),
+      `${events.indexOf('released')} < ${events.indexOf('authorize settled')}`,
     );
 
     // The next login opens again: the composer is not busy.
     const second = caught(strategy.authorize(request));
     await within(scripted.armed(2));
     await strategy.dispose();
-    expect(failureOf(await second).outcome).toBe('disposed');
+    assert.equal(failureOf(await second).outcome, 'disposed');
   });
 });
 
@@ -407,15 +419,15 @@ describe('composer level: a request whose field throws', () => {
       },
     };
     const thrown = await caught(strategy.authorize(request));
-    expect(thrown).not.toBe('resolved');
-    expect(getEventListeners(option.signal, 'abort')).toHaveLength(0);
+    assert.notEqual(thrown, 'resolved');
+    assert.equal(getEventListeners(option.signal, 'abort').length, 0);
   });
 });
 
 describe('provider level: an answer whose field throws', () => {
   it('regression of the outer boundary — a strategy outcome whose payload throws: getTokens() throws a classified failure, no token request', async () => {
-    mockedAxios.mockReset();
-    mockedAxios.post.mockReset();
+    resetMock(mockedAxios);
+    resetMock(mockedAxios.post);
     const strategy: IAuthorizationStrategy<string> = {
       authorize: async (): Promise<AuthorizationOutcome<string>> => ({
         get payload(): string {
@@ -433,10 +445,10 @@ describe('provider level: an answer whose field throws', () => {
     });
     const thrown = await caught(provider.getTokens());
     const failure = readFailure(thrown, 'token-request');
-    expect(failure.kind).toBe('unknown');
+    assert.equal(failure.kind, 'unknown');
     expectNoSecret(thrown);
-    expect(mockedAxios).not.toHaveBeenCalled();
-    expect(mockedAxios.post).not.toHaveBeenCalled();
+    assert.equal(mockedAxios.mock.callCount(), 0);
+    assert.equal(mockedAxios.post.mock.callCount(), 0);
   });
 
   it('a SPNego source answer whose ok throws: unknown obtaining-negotiate-token, through the source-failure path', async () => {
@@ -466,14 +478,14 @@ describe('provider level: an answer whose field throws', () => {
       logger,
     });
     const outcome = await provider.prepare();
-    expect(mintedRefusal(outcome)).toMatchObject({
+    matchObject(mintedRefusal(outcome), {
       kind: 'unknown',
       facts: { operation: 'obtaining-negotiate-token' },
     });
     expectNoSecret(outcome);
     // The source's failure path: its fixed debug line, as for a source
     // that throws.
-    expect(lines).toEqual([['debug', 'no SPNego token to present']]);
+    assert.deepEqual(lines, [['debug', 'no SPNego token to present']]);
   });
 
   it('an SNC locator answer whose path throws: its fixed SNC refusal', async () => {
@@ -490,7 +502,7 @@ describe('provider level: an answer whose field throws', () => {
       probes: [],
     });
     const outcome = await provider.prepare();
-    expect(mintedRefusal(outcome)).toMatchObject({
+    matchObject(mintedRefusal(outcome), {
       kind: 'snc',
       facts: { problem: 'library-not-found' },
     });

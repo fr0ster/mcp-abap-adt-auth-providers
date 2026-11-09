@@ -3,42 +3,27 @@
  * `announcer` writes to the logger's `info`, and to stderr — never stdout —
  * when there is no logger, when `info` throws, or when `info` answers a native
  * promise that rejects. A logger that took the prompt gets no stderr copy, and
- * a foreign thenable's code is never run.
+ * a foreign thenable's code is never run. That nothing in src writes to
+ * stdout is checked statically (`noStdoutSources.test.ts`).
  */
 
-import {
-  afterEach,
-  beforeEach,
-  describe,
-  expect,
-  it,
-  jest,
-} from '@jest/globals';
+import assert from 'node:assert/strict';
+import { afterEach, beforeEach, describe, it, mock } from 'node:test';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
 import { announcer } from '../../auth/announce';
 
 const PROMPT = 'Enter code: UC-42';
 
 let stderr: string[];
-let stdout: string[];
 let restore: Array<() => void>;
 
 beforeEach(() => {
   stderr = [];
-  stdout = [];
-  const e = jest
-    .spyOn(process.stderr, 'write')
-    .mockImplementation((c: unknown) => {
-      stderr.push(String(c));
-      return true;
-    });
-  const o = jest
-    .spyOn(process.stdout, 'write')
-    .mockImplementation((c: unknown) => {
-      stdout.push(String(c));
-      return true;
-    });
-  restore = [() => e.mockRestore(), () => o.mockRestore()];
+  const e = mock.method(process.stderr, 'write', (c: unknown) => {
+    stderr.push(String(c));
+    return true;
+  });
+  restore = [() => e.mock.restore()];
 });
 
 afterEach(() => {
@@ -58,8 +43,7 @@ const loggerWith = (info: (msg: string) => unknown): ILogger =>
 describe('announcer', () => {
   it('without a logger: stderr', () => {
     announcer()(PROMPT);
-    expect(stderr).toEqual([`${PROMPT}\n`]);
-    expect(stdout).toEqual([]);
+    assert.deepEqual(stderr, [`${PROMPT}\n`]);
   });
 
   it('a logger that takes it: no stderr copy', async () => {
@@ -67,8 +51,8 @@ describe('announcer', () => {
     announcer(loggerWith((m) => seen.push(m)))(PROMPT);
     announcer(loggerWith(async (m) => seen.push(m)))(PROMPT);
     await turn();
-    expect(seen).toEqual([PROMPT, PROMPT]);
-    expect(stderr).toEqual([]);
+    assert.deepEqual(seen, [PROMPT, PROMPT]);
+    assert.deepEqual(stderr, []);
   });
 
   it('a logger whose info throws: stderr', () => {
@@ -77,6 +61,6 @@ describe('announcer', () => {
         throw new Error('info threw');
       }),
     )(PROMPT);
-    expect(stderr).toEqual([`${PROMPT}\n`]);
+    assert.deepEqual(stderr, [`${PROMPT}\n`]);
   });
 });

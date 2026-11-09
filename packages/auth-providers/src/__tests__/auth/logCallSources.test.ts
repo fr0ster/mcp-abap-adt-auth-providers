@@ -11,11 +11,12 @@
  * package's own source; no regular expression.
  */
 
+import assert from 'node:assert/strict';
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, relative } from 'node:path';
-import { describe, expect, it } from '@jest/globals';
-
-const SRC = join(__dirname, '..', '..');
+import { describe, it } from 'node:test';
+import { contains } from '../helpers/expectations';
+import { SRC } from '../helpers/packagePaths';
 
 /** Names a URL, an endpoint or a consumer's or server's free text goes by. */
 const FREE_NAMES = [
@@ -190,7 +191,7 @@ describe('log calls in src', () => {
   const calls = sourceFiles(SRC).flatMap(logCalls);
 
   it('finds the log calls (the scan is not empty)', () => {
-    expect(calls.length).toBeGreaterThan(60);
+    assert.ok(calls.length > 60, `${calls.length} > ${60}`);
   });
 
   it('no log call takes a URL, an endpoint or another free value', () => {
@@ -198,13 +199,13 @@ describe('log calls in src', () => {
       .map((call) => ({ ...call, name: freeNameIn(call.code) }))
       .filter((call) => call.name !== undefined)
       .map((call) => `${call.where}: ${call.name}`);
-    expect(offending).toEqual([]);
+    assert.deepEqual(offending, []);
   });
 
   it('scans src/spnego too', () => {
     const scanned = sourceFiles(SRC).map((file) => relative(SRC, file));
-    expect(scanned).toContain(join('spnego', 'SpnegoAuthProvider.ts'));
-    expect(scanned).toContain(join('spnego', 'negotiateToken.ts'));
+    contains(scanned, join('spnego', 'SpnegoAuthProvider.ts'));
+    contains(scanned, join('spnego', 'negotiateToken.ts'));
   });
 
   it('every announcer is bound to a name before a prompt goes through it', () => {
@@ -224,25 +225,33 @@ describe('log calls in src', () => {
       }
       return found;
     });
-    expect(unbound).toEqual([]);
+    assert.deepEqual(unbound, []);
   });
 
   it('the scan catches a free value (the check is load-bearing)', () => {
     // A template's `${` written apart, so the samples are plain strings.
     const open$ = '$' + '{';
     const sample = `logger?.info(\`Exchanging code: ${open$}prepared?.config.url ?? tokenUrl}\`, { tokenEndpoint });`;
-    expect(freeNameIn(argumentCode(sample, sample.indexOf('(')))).toBe('url');
+    assert.equal(freeNameIn(argumentCode(sample, sample.indexOf('('))), 'url');
     const words = "logger?.info('[OIDC] Fetching the url', { wait });";
-    expect(freeNameIn(argumentCode(words, words.indexOf('(')))).toBeUndefined();
+    assert.equal(
+      freeNameIn(argumentCode(words, words.indexOf('('))),
+      undefined,
+    );
     const shown = `announce(\`   ${open$}shownUrl}\`);`;
-    expect(freeNameIn(argumentCode(shown, shown.indexOf('(')))).toBeUndefined();
+    assert.equal(
+      freeNameIn(argumentCode(shown, shown.indexOf('('))),
+      undefined,
+    );
     const raw = `announce(\`   ${open$}authorizationUrl}\`);`;
-    expect(freeNameIn(argumentCode(raw, raw.indexOf('(')))).toBe(
+    assert.equal(
+      freeNameIn(argumentCode(raw, raw.indexOf('('))),
       'authorizationUrl',
     );
     const spn =
       "this.logger?.debug('token for', { spn: this.servicePrincipal });";
-    expect(freeNameIn(argumentCode(spn, spn.indexOf('(')))).toBe(
+    assert.equal(
+      freeNameIn(argumentCode(spn, spn.indexOf('('))),
       'servicePrincipal',
     );
   });

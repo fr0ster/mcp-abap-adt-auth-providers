@@ -3,21 +3,17 @@
  * the request asks for JSON, so that header is part of the contract.
  */
 
-import { beforeEach, describe, expect, it, jest } from '@jest/globals';
-import axios from 'axios';
+import '../helpers/axiosModuleMock';
+import assert from 'node:assert/strict';
+import { beforeEach, describe, it, mock } from 'node:test';
 import { exchangePasscode } from '../../auth/passcodeAuth';
+import { clearAxiosMockCalls, mockedAxios } from '../helpers/axiosModuleMock';
+import { calledWith, thrown } from '../helpers/expectations';
 
 // Automocked, but with axios's own error class: the sites throw it.
-jest.mock('axios', () => {
-  const mocked = jest.createMockFromModule<Record<string, unknown>>('axios');
-  mocked.AxiosError =
-    jest.requireActual<Record<string, unknown>>('axios').AxiosError;
-  return mocked;
-});
-const mockedAxios = axios as jest.Mocked<typeof axios>;
 
 const call = () =>
-  mockedAxios.post.mock.calls[0] as [
+  mockedAxios.post.mock.calls.map((call) => call.arguments)[0] as [
     string,
     string,
     { headers: Record<string, string> },
@@ -25,10 +21,10 @@ const call = () =>
 
 describe('exchangePasscode', () => {
   beforeEach(() => {
-    jest.clearAllMocks();
-    mockedAxios.post.mockResolvedValue({
+    clearAxiosMockCalls();
+    mockedAxios.post.mock.mockImplementation(async () => ({
       data: { access_token: 'a', refresh_token: 'r', expires_in: 60 },
-    });
+    }));
   });
 
   it('sends the password grant with the passcode and asks for JSON', async () => {
@@ -40,16 +36,17 @@ describe('exchangePasscode', () => {
     );
 
     const [url, body, options] = call();
-    expect(url).toBe('https://uaa/oauth/token');
+    assert.equal(url, 'https://uaa/oauth/token');
     const params = new URLSearchParams(body);
-    expect(params.get('grant_type')).toBe('password');
-    expect(params.get('passcode')).toBe('CODE');
-    expect(params.has('username')).toBe(false);
-    expect(options.headers.Accept).toBe('application/json');
-    expect(options.headers.Authorization).toBe(
+    assert.equal(params.get('grant_type'), 'password');
+    assert.equal(params.get('passcode'), 'CODE');
+    assert.equal(params.has('username'), false);
+    assert.equal(options.headers.Accept, 'application/json');
+    assert.equal(
+      options.headers.Authorization,
       `Basic ${Buffer.from('client:secret').toString('base64')}`,
     );
-    expect(tokens).toEqual({
+    assert.deepEqual(tokens, {
       accessToken: 'a',
       refreshToken: 'r',
       expiresIn: 60,
@@ -60,8 +57,9 @@ describe('exchangePasscode', () => {
     await exchangePasscode('https://uaa/', 'cf', undefined, 'CODE');
 
     const [url, , options] = call();
-    expect(url).toBe('https://uaa/oauth/token');
-    expect(options.headers.Authorization).toBe(
+    assert.equal(url, 'https://uaa/oauth/token');
+    assert.equal(
+      options.headers.Authorization,
       `Basic ${Buffer.from('cf:').toString('base64')}`,
     );
   });
@@ -80,20 +78,21 @@ describe('exchangePasscode', () => {
         },
       },
     );
-    mockedAxios.post.mockRejectedValue(refused);
-    mockedAxios.isAxiosError.mockReturnValue(true);
+    mockedAxios.post.mock.mockImplementation(async () => {
+      throw refused;
+    });
 
     // The message names the status and a registered code only:
     // `unauthorized` is UAA's own, and the description is the server's free
     // text — it reaches no message and no log line.
-    const debug = jest.fn();
+    const debug = mock.fn();
     const logger = {
       debug,
-      info: jest.fn(),
-      warn: jest.fn(),
-      error: jest.fn(),
+      info: mock.fn(),
+      warn: mock.fn(),
+      error: mock.fn(),
     };
-    const failed = expect(
+    const failed = assert.rejects(
       exchangePasscode(
         'https://uaa',
         'c',
@@ -101,22 +100,22 @@ describe('exchangePasscode', () => {
         'SPENT',
         logger,
       ),
-    ).rejects.toThrow(
-      // The operation's words and the status.
-      /^the passcode exchange failed \(HTTP 401\)$/,
+      thrown(/^the passcode exchange failed \(HTTP 401\)$/),
     );
     await failed;
     // 5.4.2's keys and values; the message leads with the operation's phrase.
-    expect(debug).toHaveBeenCalledWith(
+    calledWith(
+      debug,
       'the passcode exchange: the token endpoint refused the request',
       { status: 401 },
     );
   });
 
   it('refuses a response without an access token', async () => {
-    mockedAxios.post.mockResolvedValue({ data: {} });
-    await expect(
+    mockedAxios.post.mock.mockImplementation(async () => ({ data: {} }));
+    await assert.rejects(
       exchangePasscode('https://uaa', 'c', 's', 'CODE'),
-    ).rejects.toThrow('the passcode exchange returned no access_token');
+      thrown('the passcode exchange returned no access_token'),
+    );
   });
 });

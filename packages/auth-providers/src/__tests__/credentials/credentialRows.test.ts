@@ -3,9 +3,11 @@
  * own refusals — kind, facts and the verbatim 5.4.2 words — and the
  * operation each credential's moments name.
  */
+
+import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { describe, expect, it } from '@jest/globals';
+import { describe, it } from 'node:test';
 import type {
   AuthOutcome,
   ICertificateMaterial,
@@ -23,7 +25,14 @@ import {
   TokenAuthProvider,
 } from '../../index';
 import { refreshThenLogin } from '../../renewal';
+import {
+  cases,
+  caseTitle,
+  matchObject,
+  notContains,
+} from '../helpers/expectations';
 import { mintedRefusal } from '../helpers/minted';
+import { CERTIFICATES } from '../helpers/packagePaths';
 import { recordingTargets } from '../helpers/targets';
 
 const MARKER = 'SECRET-MARKER';
@@ -41,7 +50,7 @@ const throwingRequest: IRequestTarget = {
   },
 };
 
-const dir = join(__dirname, '..', 'fixtures', 'certificates');
+const dir = CERTIFICATES;
 const read = (name: string) => readFileSync(join(dir, name));
 const A: ICertificateMaterial = {
   cert: read('client.crt'),
@@ -54,60 +63,67 @@ const B: ICertificateMaterial = {
 
 /** The minted refusal of `outcome`, with no marker anywhere. */
 function refusal(outcome: AuthOutcome) {
-  expect(JSON.stringify(outcome)).not.toContain(MARKER);
+  notContains(JSON.stringify(outcome), MARKER);
   return mintedRefusal(outcome);
 }
 
 describe('A.2 — the credentials’ own refusals', () => {
   it('Basic, a refused credential → credential-refused user-password, verbatim', async () => {
     const error = refusal(await new BasicAuthProvider('u', 'p').rejected(r401));
-    expect(error.kind).toBe('credential-refused');
-    expect(error.facts).toEqual({ credential: 'user-password', at: 'request' });
-    expect(error.reason).toBe('the user or password was refused');
-    expect(error.hint).toBe('check the user and password');
+    assert.equal(error.kind, 'credential-refused');
+    assert.deepEqual(error.facts, {
+      credential: 'user-password',
+      at: 'request',
+    });
+    assert.equal(error.reason, 'the user or password was refused');
+    assert.equal(error.hint, 'check the user and password');
     const logon = refusal(
       await new BasicAuthProvider('u', 'p').rejected(logonRefused),
     );
-    expect(logon.facts).toEqual({ credential: 'user-password', at: 'logon' });
+    assert.deepEqual(logon.facts, { credential: 'user-password', at: 'logon' });
   });
 
   it('Certificate, establish before prepare → not-prepared certificate, verbatim', async () => {
     const p = new CertificateAuthProvider({ load: async () => A }, {} as never);
     const error = refusal(await p.establish(recordingTargets().logonTarget));
-    expect(error.kind).toBe('not-prepared');
-    expect(error.facts).toEqual({ provider: 'certificate' });
-    expect(error.reason).toBe('the certificate is not loaded');
-    expect(error.hint).toBe('connect() prepares it first');
+    assert.equal(error.kind, 'not-prepared');
+    assert.deepEqual(error.facts, { provider: 'certificate' });
+    assert.equal(error.reason, 'the certificate is not loaded');
+    assert.equal(error.hint, 'connect() prepares it first');
   });
 
   it('Certificate, a refused credential → credential-refused client-certificate, verbatim', async () => {
     const p = new CertificateAuthProvider({ load: async () => A }, {} as never);
     const error = refusal(await p.rejected(logonRefused));
-    expect(error.kind).toBe('credential-refused');
-    expect(error.facts).toEqual({
+    assert.equal(error.kind, 'credential-refused');
+    assert.deepEqual(error.facts, {
       credential: 'client-certificate',
       at: 'logon',
     });
-    expect(error.reason).toBe('the client certificate was refused');
-    expect(error.hint).toBe(
+    assert.equal(error.reason, 'the client certificate was refused');
+    assert.equal(
+      error.hint,
       'check that it is mapped to a user (CERTRULE / USREXTID)',
     );
   });
 
   it('SAML cookies, a refused credential → credential-refused saml-session, verbatim', async () => {
     const error = refusal(await new SamlAuthProvider('S=x').rejected(r401));
-    expect(error.kind).toBe('credential-refused');
-    expect(error.facts).toEqual({ credential: 'saml-session', at: 'request' });
-    expect(error.reason).toBe('the SAML session was refused or has expired');
-    expect(error.hint).toBe('obtain a new SAML session');
+    assert.equal(error.kind, 'credential-refused');
+    assert.deepEqual(error.facts, {
+      credential: 'saml-session',
+      at: 'request',
+    });
+    assert.equal(error.reason, 'the SAML session was refused or has expired');
+    assert.equal(error.hint, 'obtain a new SAML session');
   });
 
   it('a fixed token, a refused credential → credential-refused token, verbatim', async () => {
     const error = refusal(await TokenAuthProvider.fixed('t').rejected(r401));
-    expect(error.kind).toBe('credential-refused');
-    expect(error.facts).toEqual({ credential: 'token', at: 'request' });
-    expect(error.reason).toBe('the token was refused');
-    expect(error.hint).toBe('obtain a new token');
+    assert.equal(error.kind, 'credential-refused');
+    assert.deepEqual(error.facts, { credential: 'token', at: 'request' });
+    assert.equal(error.reason, 'the token was refused');
+    assert.equal(error.hint, 'obtain a new token');
   });
 
   it('a token source renewing to the refused token → renewal-unchanged token-source, verbatim', async () => {
@@ -117,12 +133,13 @@ describe('A.2 — the credentials’ own refusals', () => {
     });
     await p.authorize(recordingTargets().requestTarget);
     const error = refusal(await p.rejected(r401));
-    expect(error.kind).toBe('renewal-unchanged');
-    expect(error.facts).toEqual({ source: 'token-source' });
-    expect(error.reason).toBe(
+    assert.equal(error.kind, 'renewal-unchanged');
+    assert.deepEqual(error.facts, { source: 'token-source' });
+    assert.equal(
+      error.reason,
       'the renewal returned the credential that was refused',
     );
-    expect(error.hint).toBe('the token source must issue a new token');
+    assert.equal(error.hint, 'the token source must issue a new token');
   });
 
   it('a token provider renewing to the refused token → renewal-unchanged token-provider, verbatim', async () => {
@@ -144,18 +161,20 @@ describe('A.2 — the credentials’ own refusals', () => {
     const p = new Same({ renewal: refreshThenLogin() });
     await p.authorize(recordingTargets().requestTarget);
     const error = refusal(await p.rejected(r401));
-    expect(error.kind).toBe('renewal-unchanged');
-    expect(error.facts).toEqual({ source: 'token-provider' });
-    expect(error.reason).toBe(
+    assert.equal(error.kind, 'renewal-unchanged');
+    assert.deepEqual(error.facts, { source: 'token-provider' });
+    assert.equal(
+      error.reason,
       'the renewal returned the credential that was refused',
     );
-    expect(error.hint).toBe(
+    assert.equal(
+      error.hint,
       'the token source must issue a new token; log in again',
     );
   });
 
   describe('the operation each credential moment names, verbatim words', () => {
-    it.each([
+    for (const [caseIndex, caseRow] of cases([
       [
         'Basic authorize',
         () => new BasicAuthProvider('u', 'p').authorize(throwingRequest),
@@ -236,12 +255,15 @@ describe('A.2 — the credentials’ own refusals', () => {
         'token-source',
         'the token source failed (unknown error)',
       ],
-    ])('%s → %s', async (_name, run, operation, reason) => {
-      const error = refusal(await run());
-      expect(error.kind).toBe('unknown');
-      expect(error.facts).toMatchObject({ operation });
-      expect(error.reason).toBe(reason);
-    });
+    ]).entries()) {
+      const [_name, run, operation, reason] = caseRow;
+      it(caseTitle('%s → %s', caseRow, caseIndex), async () => {
+        const error = refusal(await run());
+        assert.equal(error.kind, 'unknown');
+        matchObject(error.facts, { operation });
+        assert.equal(error.reason, reason);
+      });
+    }
   });
 });
 
@@ -282,12 +304,14 @@ describe('A.1 — the token binding refusals', () => {
   it('a bound token, nothing pinned → token-binding bound-to-unpinned, verbatim', async () => {
     const p = new Issuing(boundTo(A));
     const error = refusal(await p.authorize(recordingTargets().requestTarget));
-    expect(error.kind).toBe('token-binding');
-    expect(error.facts).toEqual({ problem: 'bound-to-unpinned' });
-    expect(error.reason).toBe(
+    assert.equal(error.kind, 'token-binding');
+    assert.deepEqual(error.facts, { problem: 'bound-to-unpinned' });
+    assert.equal(
+      error.reason,
       'the token is bound to a client certificate this provider does not present',
     );
-    expect(error.hint).toBe(
+    assert.equal(
+      error.hint,
       'give the provider a clientAuthentication that presents the certificate the token was issued for',
     );
   });
@@ -300,15 +324,17 @@ describe('A.1 — the token binding refusals', () => {
     const p = new Issuing(boundTo(B), strategy);
     const t = recordingTargets();
     const error = refusal(await p.authorize(t.requestTarget));
-    expect(error.kind).toBe('token-binding');
-    expect(error.facts).toEqual({ problem: 'renewed-bound-elsewhere' });
-    expect(error.reason).toBe(
+    assert.equal(error.kind, 'token-binding');
+    assert.deepEqual(error.facts, { problem: 'renewed-bound-elsewhere' });
+    assert.equal(
+      error.reason,
       'the new token is bound to a client certificate this provider does not present',
     );
-    expect(error.hint).toBe(
+    assert.equal(
+      error.hint,
       'the authorization server bound the new token to another certificate: check the certificate registered for this client',
     );
-    expect(t.request.headers).toEqual({});
+    assert.deepEqual(t.request.headers, {});
   });
 
   it('the remembered refusal is answered itself — the same minted object every time', async () => {
@@ -319,7 +345,7 @@ describe('A.1 — the token binding refusals', () => {
     const p = new Issuing(boundTo(B), strategy);
     const first = refusal(await p.authorize(recordingTargets().requestTarget));
     const second = refusal(await p.authorize(recordingTargets().requestTarget));
-    expect(second).toBe(first);
-    expect(second.facts).toEqual({ problem: 'renewed-bound-elsewhere' });
+    assert.equal(second, first);
+    assert.deepEqual(second.facts, { problem: 'renewed-bound-elsewhere' });
   });
 });

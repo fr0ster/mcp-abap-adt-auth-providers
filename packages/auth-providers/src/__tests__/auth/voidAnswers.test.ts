@@ -6,10 +6,11 @@
  * it would be without it. A throw is still handled.
  */
 
+import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
+import { describe, it } from 'node:test';
 import { inspect } from 'node:util';
-import { describe, expect, it } from '@jest/globals';
 import { readFailure } from '@mcp-abap-adt/auth-errors';
 import type {
   IRenewalStrategy,
@@ -26,6 +27,7 @@ import { Saml2PureProvider } from '../../providers/Saml2PureProvider';
 import { refreshThenLogin } from '../../renewal';
 import { SpnegoAuthProvider } from '../../spnego/SpnegoAuthProvider';
 import { jwt, quiet, rejectionOf } from '../helpers/attemptHarness';
+import { matchObject, notContains } from '../helpers/expectations';
 import { ScriptedProvider } from '../helpers/scriptedProvider';
 import { b64, gssKerberos, OID_KRB5 } from '../spnego/fixtures/derParts';
 
@@ -48,10 +50,10 @@ describe('a request target answering a thenable', () => {
       header: () => answer,
       cookies: () => undefined,
     } as unknown as IRequestTarget;
-    expect(await new BasicAuthProvider('u', 'p').authorize(target)).toEqual({
+    assert.deepEqual(await new BasicAuthProvider('u', 'p').authorize(target), {
       ok: true,
     });
-    expect(state.thenCalls).toBe(0);
+    assert.equal(state.thenCalls, 0);
   });
 
   it('header() of a fixed token: ok, then never called', async () => {
@@ -60,10 +62,11 @@ describe('a request target answering a thenable', () => {
       header: () => answer,
       cookies: () => undefined,
     } as unknown as IRequestTarget;
-    expect(
+    assert.deepEqual(
       await TokenAuthProvider.fixed(jwt('held', 3600)).authorize(target),
-    ).toEqual({ ok: true });
-    expect(state.thenCalls).toBe(0);
+      { ok: true },
+    );
+    assert.equal(state.thenCalls, 0);
   });
 
   it('cookies() of a SAML session: ok, then never called', async () => {
@@ -72,10 +75,11 @@ describe('a request target answering a thenable', () => {
       header: () => undefined,
       cookies: () => answer,
     } as unknown as IRequestTarget;
-    expect(await new SamlAuthProvider('MYSAPSSO2=x').authorize(target)).toEqual(
+    assert.deepEqual(
+      await new SamlAuthProvider('MYSAPSSO2=x').authorize(target),
       { ok: true },
     );
-    expect(state.thenCalls).toBe(0);
+    assert.equal(state.thenCalls, 0);
   });
 
   it('header() of SPNego: ok, then never called', async () => {
@@ -91,8 +95,8 @@ describe('a request target answering a thenable', () => {
         token: async () => ({ ok: true, token: kerberos }),
       } as never,
     });
-    expect(await provider.authorize(target)).toEqual({ ok: true });
-    expect(state.thenCalls).toBe(0);
+    assert.deepEqual(await provider.authorize(target), { ok: true });
+    assert.equal(state.thenCalls, 0);
   });
 
   it('header() of a token provider (Bearer): ok, then never called', async () => {
@@ -106,8 +110,8 @@ describe('a request target answering a thenable', () => {
       accessToken: jwt('held', 3600),
       refreshToken: 'R',
     });
-    expect(await provider.authorize(target)).toEqual({ ok: true });
-    expect(state.thenCalls).toBe(0);
+    assert.deepEqual(await provider.authorize(target), { ok: true });
+    assert.equal(state.thenCalls, 0);
   });
 
   it('cookies() of Saml2PureProvider.applyToken: then never called', async () => {
@@ -123,7 +127,7 @@ describe('a request target answering a thenable', () => {
     ).applyToken;
     apply.call({}, target, { authorizationToken: 'cookie=1' });
     await quiet();
-    expect(state.thenCalls).toBe(0);
+    assert.equal(state.thenCalls, 0);
   });
 
   it('a target whose header() throws is still answered Oops', async () => {
@@ -134,7 +138,7 @@ describe('a request target answering a thenable', () => {
       cookies: () => undefined,
     } as unknown as IRequestTarget;
     const outcome = await new BasicAuthProvider('u', 'p').authorize(target);
-    expect(outcome.ok).toBe(false);
+    assert.equal(outcome.ok, false);
   });
 });
 
@@ -155,9 +159,9 @@ describe('a renewal strategy whose aborted() answers a thenable', () => {
     await provider.refreshes.nth(1);
     only.abort();
     const failure = readFailure(await cut, 'unfamiliar-error');
-    expect(failure.facts).toMatchObject({ outcome: 'aborted' });
+    matchObject(failure.facts, { outcome: 'aborted' });
     await quiet();
-    expect(state.thenCalls).toBe(0);
+    assert.equal(state.thenCalls, 0);
   });
 });
 
@@ -167,7 +171,7 @@ describe('a logger answering a thenable', () => {
     const logger = { info: () => answer } as unknown as ILogger;
     logQuietly(() => logger.info('line'));
     await quiet();
-    expect(state.thenCalls).toBe(0);
+    assert.equal(state.thenCalls, 0);
   });
 
   it('announcer: the prompt is not copied to stderr and then is never called', async () => {
@@ -184,8 +188,8 @@ describe('a logger answering a thenable', () => {
     } finally {
       process.stderr.write = realWrite;
     }
-    expect(state.thenCalls).toBe(0);
-    expect(written).toEqual([]);
+    assert.equal(state.thenCalls, 0);
+    assert.deepEqual(written, []);
   });
 
   it('a throwing logger on a token-site failure: the site throws its own failure', async () => {
@@ -226,10 +230,8 @@ describe('a logger answering a thenable', () => {
           (error: unknown) => error,
         );
         const failure = readFailure(thrown, 'unfamiliar-error');
-        expect(failure.kind).toBe('request-failed');
-        expect(inspect(failure, { showHidden: true, depth: 8 })).not.toContain(
-          'SECRET',
-        );
+        assert.equal(failure.kind, 'request-failed');
+        notContains(inspect(failure, { showHidden: true, depth: 8 }), 'SECRET');
       }
     } finally {
       await new Promise((resolve) => server.close(resolve));

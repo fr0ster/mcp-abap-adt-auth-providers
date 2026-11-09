@@ -10,11 +10,12 @@
  * `src`: the second and third blocks keep it so.
  */
 
+import assert from 'node:assert/strict';
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, relative } from 'node:path';
-import { describe, expect, it } from '@jest/globals';
-
-const SRC = join(__dirname, '..', '..');
+import { describe, it } from 'node:test';
+import { caseTitle } from '../helpers/expectations';
+import { SRC } from '../helpers/packagePaths';
 
 function sourceFiles(dir: string): string[] {
   return readdirSync(dir).flatMap((name) => {
@@ -57,20 +58,23 @@ const CLASSES = [
 
 describe('nothing in src throws an unminted error', () => {
   it('no new Error(', () => {
-    expect(linesWith('new Error(')).toEqual([]);
+    assert.deepEqual(linesWith('new Error('), []);
   });
 
-  it.each(CLASSES)('%s is constructed nowhere', (className) => {
-    expect(linesWith(`new ${className}(`)).toEqual([]);
-  });
+  for (const [caseIndex, caseRow] of CLASSES.entries()) {
+    const className = caseRow;
+    it(caseTitle('%s is constructed nowhere', caseRow, caseIndex), () => {
+      assert.deepEqual(linesWith(`new ${className}(`), []);
+    });
+  }
 
   it('no refusal of free words: no oops(', () => {
-    expect(linesWith('oops(')).toEqual([]);
+    assert.deepEqual(linesWith('oops('), []);
   });
 });
 
 describe('no transition piece is left in src', () => {
-  it.each([
+  for (const [caseIndex, caseRow] of [
     'contractTransition',
     'toLegacyRefusal',
     'toLegacyOutcome',
@@ -103,12 +107,15 @@ describe('no transition piece is left in src', () => {
     'TokenEndpointError',
     'SncLibraryNotFoundError',
     'tokenEndpointError',
-  ])('%s is named nowhere in src', (needle) => {
-    const found = sourceFiles(SRC)
-      .filter((file) => readFileSync(file, 'utf8').includes(needle))
-      .map((file) => relative(SRC, file));
-    expect(found).toEqual([]);
-  });
+  ].entries()) {
+    const needle = caseRow;
+    it(caseTitle('%s is named nowhere in src', caseRow, caseIndex), () => {
+      const found = sourceFiles(SRC)
+        .filter((file) => readFileSync(file, 'utf8').includes(needle))
+        .map((file) => relative(SRC, file));
+      assert.deepEqual(found, []);
+    });
+  }
 
   it('the deleted modules are gone', () => {
     const names = new Set(sourceFiles(SRC).map((file) => relative(SRC, file)));
@@ -123,8 +130,8 @@ describe('no transition piece is left in src', () => {
       'errors/ClientAuthenticationError.ts',
       'errors/TokenEndpointError.ts',
     ]) {
-      expect([gone, names.has(gone)]).toEqual([gone, false]);
+      assert.deepEqual([gone, names.has(gone)], [gone, false]);
     }
-    expect(names.size).toBeGreaterThan(10);
+    assert.ok(names.size > 10, `${names.size} > ${10}`);
   });
 });

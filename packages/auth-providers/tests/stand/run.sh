@@ -126,7 +126,7 @@ UAA_URL="http://localhost:$PORT/uaa" \
   KEYCLOAK_URL="http://localhost:$KC_PORT/realms/test" \
   KEYCLOAK_HTTPS_URL="https://localhost:$KC_HTTPS_PORT/realms/test" \
   NODE_EXTRA_CA_CERTS="$HERE/keycloak/tls/ca.crt" \
-  npm test -- src/__tests__/integration/stand "$@" || host_status=$?
+  npm run test:file -- .test-build/__tests__/integration/stand "$@" || host_status=$?
 
 # The SPNego suite, inside the stand's network: the container copies the
 # packages from the read-only repository, installs and builds them there, and

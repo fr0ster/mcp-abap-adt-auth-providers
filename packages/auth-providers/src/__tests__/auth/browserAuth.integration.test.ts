@@ -4,7 +4,9 @@
  * Real tests using service keys and actual OAuth flow
  */
 
+import assert from 'node:assert/strict';
 import * as dns from 'node:dns/promises';
+import { describe, it } from 'node:test';
 import { AbapServiceKeyStore } from '@mcp-abap-adt/auth-stores';
 import type { IAuthorizationConfig } from '@mcp-abap-adt/interfaces-auth-sap';
 import {
@@ -103,16 +105,22 @@ describe('browserAuth Integration', () => {
       logger,
     );
 
-    expect(result).toBeDefined();
-    expect(result.accessToken).toBeDefined();
-    expect(result.accessToken.length).toBeGreaterThan(0);
+    assert.notEqual(result, undefined);
+    assert.notEqual(result.accessToken, undefined);
+    assert.ok(
+      result.accessToken.length > 0,
+      `${result.accessToken.length} > ${0}`,
+    );
 
     logger.info(
       `Authentication successful: accessToken(${result.accessToken.length} chars), refreshToken(${result.refreshToken?.length || 0} chars)`,
     );
 
     if (result.refreshToken) {
-      expect(result.refreshToken.length).toBeGreaterThan(0);
+      assert.ok(
+        result.refreshToken.length > 0,
+        `${result.refreshToken.length} > ${0}`,
+      );
     }
-  }, 300000); // 5 minute timeout for browser auth
+  }); // 5 minute timeout for browser auth
 });

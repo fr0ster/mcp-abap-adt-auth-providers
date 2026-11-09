@@ -23,4 +23,4 @@ trap finish EXIT
 
 "$HERE/setup.sh"
 cd "$ROOT"
-XSUAA_LOCAL="$LOCAL" npm test -- src/__tests__/integration/xsuaa "$@"
+XSUAA_LOCAL="$LOCAL" npm run test:file -- .test-build/__tests__/integration/xsuaa "$@"

@@ -8,12 +8,15 @@
  * bounded only by this test's own timeout.
  */
 
+import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { join } from 'node:path';
-import { describe, expect, it } from '@jest/globals';
+import { describe, it } from 'node:test';
+import { PACKAGE_ROOT } from '../helpers/packagePaths';
+
 import { compiledSources } from '../helpers/plainNode';
 
-const root = join(__dirname, '..', '..', '..');
+const root = PACKAGE_ROOT;
 
 /** `client` is what the scenario does on its own socket once armed. */
 const scenario = (out: string, client: string) => `
@@ -85,8 +88,8 @@ function run(client: string) {
       killSignal: 'SIGKILL',
     },
   );
-  expect(child.signal).toBeNull();
-  expect(child.status).toBe(0);
+  assert.equal(child.signal, null);
+  assert.equal(child.status, 0);
   return JSON.parse(child.stdout) as {
     outcome: string;
     free: boolean;
@@ -102,8 +105,8 @@ describe('the composed listener lets go of its connections at the abort', () => 
           'Content-Type: application/x-www-form-urlencoded\\r\\n' +
           'Content-Length: 1000\\r\\n\\r\\nSAMLResponse=abc',
         );`);
-    expect(report).toEqual({ outcome: 'aborted', free: true, closed: true });
-  }, 60_000);
+    assert.deepEqual(report, { outcome: 'aborted', free: true, closed: true });
+  });
 
   it('an idle keep-alive connection after a refused request: ended; the process exits', () => {
     const report = run(`
@@ -111,15 +114,15 @@ describe('the composed listener lets go of its connections at the abort', () => 
           'GET /callback?RelayState=x HTTP/1.1\\r\\nHost: 127.0.0.1:' + port + '\\r\\n' +
           'Connection: keep-alive\\r\\n\\r\\n',
         );`);
-    expect(report).toEqual({ outcome: 'aborted', free: true, closed: true });
-  }, 60_000);
+    assert.deepEqual(report, { outcome: 'aborted', free: true, closed: true });
+  });
 
   it('a lingering client with half a request (headers unfinished): ended and let go; the process exits', () => {
     // Not idle to Node's own close(): only the listener's release ends it.
     const report = run(`
         socket.write('GET / HTTP/1.1\\r\\nHost: 127.0.0.1:' + port + '\\r\\n');`);
-    expect(report).toEqual({ outcome: 'aborted', free: true, closed: true });
-  }, 60_000);
+    assert.deepEqual(report, { outcome: 'aborted', free: true, closed: true });
+  });
 
   it('a paused client pipelining 10000 requests: its pending answers hold nothing; the process exits', () => {
     // A pending write ignores unref(): only closing or destroying the
@@ -129,9 +132,9 @@ describe('the composed listener lets go of its connections at the abort', () => 
         socket.pause();
         const one = 'GET / HTTP/1.1\\r\\nHost: 127.0.0.1:' + port + '\\r\\n\\r\\n';
         socket.write(one.repeat(10000));`);
-    expect(report.outcome).toBe('aborted');
-    expect(report.free).toBe(true);
-  }, 60_000);
+    assert.equal(report.outcome, 'aborted');
+    assert.equal(report.free, true);
+  });
 });
 
 /**
@@ -176,8 +179,8 @@ describe('the tracker destroys a connection still answering at release', () => {
         killSignal: 'SIGKILL',
       },
     );
-    expect(child.signal).toBeNull();
-    expect(child.status).toBe(0);
-    expect(child.stdout).toBe('released');
-  }, 60_000);
+    assert.equal(child.signal, null);
+    assert.equal(child.status, 0);
+    assert.equal(child.stdout, 'released');
+  });
 });

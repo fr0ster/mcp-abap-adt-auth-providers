@@ -17,11 +17,13 @@
  * each block's title says why it is skipped otherwise.
  */
 
-import { describe, expect, it } from '@jest/globals';
+import assert from 'node:assert/strict';
+import { describe, it } from 'node:test';
 import { clientSecretBasic } from '../../../clientAuthentication';
 import { ClientCredentialsProvider } from '../../../providers/ClientCredentialsProvider';
 import { OidcPasswordProvider } from '../../../providers/OidcPasswordProvider';
 import { refreshThenLogin } from '../../../renewal';
+import { thrown } from '../../helpers/expectations';
 import { wordsOf } from '../../helpers/minted';
 
 const UAA_URL = process.env.UAA_URL?.replace(/\/+$/, '');
@@ -57,24 +59,27 @@ describeUaa(
 
     it("form: a secret holding '+' and '%' gets a token", async () => {
       const tokens = await provider('basic_reserved', 'form').getTokens();
-      expect(claims(tokens.authorizationToken).client_id).toBe(
+      assert.equal(
+        claims(tokens.authorizationToken).client_id,
         'basic_reserved',
       );
     });
 
     it('raw: the same secret is refused by UAA with a 401', async () => {
-      await expect(
+      await assert.rejects(
         provider('basic_reserved', 'raw').getTokens(),
-      ).rejects.toThrow('the client credentials request failed (HTTP 401');
+        thrown('the client credentials request failed (HTTP 401'),
+      );
     });
 
     it("form: a client id holding ':' gets a token", async () => {
       const tokens = await provider('basic:colon', 'form').getTokens();
-      expect(claims(tokens.authorizationToken).client_id).toBe('basic:colon');
+      assert.equal(claims(tokens.authorizationToken).client_id, 'basic:colon');
     });
 
     it("raw: a client id holding ':' is refused before anything is sent", async () => {
-      expect(wordsOf(await provider('basic:colon', 'raw').prepare())).toEqual(
+      assert.deepEqual(
+        wordsOf(await provider('basic:colon', 'raw').prepare()),
         COLON_REFUSAL,
       );
     });
@@ -96,22 +101,24 @@ describeKeycloak(
 
     it("form: a secret holding '+' and '%' gets a token", async () => {
       const tokens = await provider('basic-reserved', 'form').getTokens();
-      expect(claims(tokens.authorizationToken).azp).toBe('basic-reserved');
+      assert.equal(claims(tokens.authorizationToken).azp, 'basic-reserved');
     });
 
     it('raw: the same secret is refused by Keycloak with a 401', async () => {
-      await expect(
+      await assert.rejects(
         provider('basic-reserved', 'raw').getTokens(),
-      ).rejects.toThrow('the OIDC password grant failed (HTTP 401');
+        thrown('the OIDC password grant failed (HTTP 401'),
+      );
     });
 
     it("form: a client id holding ':' gets a token", async () => {
       const tokens = await provider('basic:colon', 'form').getTokens();
-      expect(claims(tokens.authorizationToken).azp).toBe('basic:colon');
+      assert.equal(claims(tokens.authorizationToken).azp, 'basic:colon');
     });
 
     it("raw: a client id holding ':' is refused before anything is sent", async () => {
-      expect(wordsOf(await provider('basic:colon', 'raw').prepare())).toEqual(
+      assert.deepEqual(
+        wordsOf(await provider('basic:colon', 'raw').prepare()),
         COLON_REFUSAL,
       );
     });

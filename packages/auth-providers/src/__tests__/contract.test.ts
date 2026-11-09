@@ -1,4 +1,5 @@
-import { describe, expect, it } from '@jest/globals';
+import assert from 'node:assert/strict';
+import { describe, it } from 'node:test';
 import type {
   IAuthorizationStrategy,
   IAuthProvider,
@@ -7,6 +8,7 @@ import type {
 } from '@mcp-abap-adt/interfaces-auth';
 import * as surface from '../index';
 import { refreshThenLogin } from '../renewal';
+import { caseTitle } from './helpers/expectations';
 import { recordingTargets } from './helpers/targets';
 import { fakeSystem, peLibrary } from './snc/fakeSystem';
 
@@ -106,40 +108,49 @@ const isOutcome = (o: unknown) =>
       typeof (o as { refusal: { reason: unknown } }).refusal?.reason ===
         'string'));
 
-describe.each(providers)('%s answers the whole contract', (_, provider) => {
-  it('has a kind', () => {
-    expect(typeof provider.kind).toBe('string');
-    expect(provider.kind.length).toBeGreaterThan(0);
-  });
-  it('every moment resolves to an AuthOutcome with no secret — working and throwing targets', async () => {
-    for (const t of [recordingTargets(), recordingTargets({ throws: true })]) {
-      for (const answer of [
-        await provider.prepare(),
-        await provider.establish(t.logonTarget),
-        await provider.authorize(t.requestTarget),
-        await provider.rejected({
-          at: 'request',
-          status: 401,
-          error: new Error('401 SECRET-HTTP'),
-        }),
-        await provider.rejected({
-          at: 'logon',
-          error: 'refused SECRET-STRING',
-        }),
-        await provider.rejected({
-          at: 'logon',
-          error: {
-            key: 'SECRET_KEY',
-            code: 'ESECRET',
-            name: 'SECRETError',
-            missingFields: ['SECRET'],
-            message: 'SECRET-SDK',
-          },
-        }),
-      ]) {
-        expect(isOutcome(answer)).toBe(true);
-        expect(JSON.stringify(answer)).not.toMatch(/SECRET/);
-      }
-    }
-  });
-});
+for (const [caseIndex, caseRow] of providers.entries()) {
+  const [_, provider] = caseRow;
+  describe(
+    caseTitle('%s answers the whole contract', caseRow, caseIndex),
+    () => {
+      it('has a kind', () => {
+        assert.equal(typeof provider.kind, 'string');
+        assert.ok(provider.kind.length > 0, `${provider.kind.length} > ${0}`);
+      });
+      it('every moment resolves to an AuthOutcome with no secret — working and throwing targets', async () => {
+        for (const t of [
+          recordingTargets(),
+          recordingTargets({ throws: true }),
+        ]) {
+          for (const answer of [
+            await provider.prepare(),
+            await provider.establish(t.logonTarget),
+            await provider.authorize(t.requestTarget),
+            await provider.rejected({
+              at: 'request',
+              status: 401,
+              error: new Error('401 SECRET-HTTP'),
+            }),
+            await provider.rejected({
+              at: 'logon',
+              error: 'refused SECRET-STRING',
+            }),
+            await provider.rejected({
+              at: 'logon',
+              error: {
+                key: 'SECRET_KEY',
+                code: 'ESECRET',
+                name: 'SECRETError',
+                missingFields: ['SECRET'],
+                message: 'SECRET-SDK',
+              },
+            }),
+          ]) {
+            assert.equal(isOutcome(answer), true);
+            assert.doesNotMatch(JSON.stringify(answer), /SECRET/);
+          }
+        }
+      });
+    },
+  );
+}

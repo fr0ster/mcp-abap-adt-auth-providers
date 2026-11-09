@@ -7,17 +7,11 @@
  * response data or a log line. Real socket, axios unmocked, both paths.
  */
 
+import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
+import { after, afterEach, before, describe, it } from 'node:test';
 import { inspect } from 'node:util';
-import {
-  afterAll,
-  afterEach,
-  beforeAll,
-  describe,
-  expect,
-  it,
-} from '@jest/globals';
 import { isAuthProviderFailure, readFailure } from '@mcp-abap-adt/auth-errors';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
 import axios, { type AxiosResponse } from 'axios';
@@ -40,6 +34,7 @@ import {
 import { refreshJwtToken } from '../../auth/tokenRefresher';
 import type { TokenRequestAuth } from '../../auth/tokenRequest';
 import { clientSecretPost } from '../../clientAuthentication';
+import { cases, caseTitle, notContains } from '../helpers/expectations';
 
 const MARKER = 'SERVER-TEXT-7f3c91e2';
 
@@ -59,14 +54,14 @@ const server = createServer((req, res) => {
   });
 });
 let base = '';
-beforeAll(async () => {
+before(async () => {
   base = `http://127.0.0.1:${await new Promise<number>((resolve) =>
     server.listen(0, '127.0.0.1', () =>
       resolve((server.address() as AddressInfo).port),
     ),
   )}`;
 });
-afterAll(() => new Promise<void>((resolve) => server.close(() => resolve())));
+after(() => new Promise<void>((resolve) => server.close(() => resolve())));
 
 /** A consumer's global interceptor, on success and on failure alike. */
 const INTERCEPTORS: [string, (data: unknown) => unknown][] = [
@@ -297,31 +292,51 @@ const PATHS: [string, () => TokenRequestAuth | undefined][] = [
   ['with clientSecretPost', () => ({ strategy: clientSecretPost('secret') })],
 ];
 
-describe.each([200, 400])('a %i', (code) => {
-  describe.each(INTERCEPTORS)(
-    'a global response interceptor that %s',
-    (_label, make) => {
-      describe.each(PATHS)('%s', (_path, auth) => {
-        it.each(SITES)('%s: none of it comes back out', async (_site, run) => {
-          status = code;
-          intercept(make);
-          const { logger, text } = recordingLogger();
-          let thrown: unknown;
-          const failed = expect(
-            run(auth(), logger).catch((error: unknown) => {
-              thrown = error;
-              throw error;
-            }),
-          ).rejects.toBeDefined();
-          await failed;
-          expect(thrown).toBeDefined();
-          expect(renderings(thrown)).not.toContain(MARKER);
-          expect(text()).not.toContain(MARKER);
-        });
-      });
-    },
-  );
-});
+for (const [caseIndex, caseRow] of [200, 400].entries()) {
+  const code = caseRow;
+  describe(caseTitle('a %i', caseRow, caseIndex), () => {
+    for (const [caseIndex, caseRow] of INTERCEPTORS.entries()) {
+      const [_label, make] = caseRow;
+      describe(
+        caseTitle('a global response interceptor that %s', caseRow, caseIndex),
+        () => {
+          for (const [caseIndex, caseRow] of PATHS.entries()) {
+            const [_path, auth] = caseRow;
+            describe(caseTitle('%s', caseRow, caseIndex), () => {
+              for (const [caseIndex, caseRow] of SITES.entries()) {
+                const [_site, run] = caseRow;
+                it(
+                  caseTitle(
+                    '%s: none of it comes back out',
+                    caseRow,
+                    caseIndex,
+                  ),
+                  async () => {
+                    status = code;
+                    intercept(make);
+                    const { logger, text } = recordingLogger();
+                    let thrown: unknown;
+                    const failed = assert.rejects(
+                      run(auth(), logger).catch((error: unknown) => {
+                        thrown = error;
+                        throw error;
+                      }),
+                      (error) => error !== undefined,
+                    );
+                    await failed;
+                    assert.notEqual(thrown, undefined);
+                    notContains(renderings(thrown), MARKER);
+                    notContains(text(), MARKER);
+                  },
+                );
+              }
+            });
+          }
+        },
+      );
+    }
+  });
+}
 
 describe('a consumer logger that throws while a site reports the failure', () => {
   const throwing = {
@@ -341,66 +356,77 @@ describe('a consumer logger that throws while a site reports the failure', () =>
     error: () => {},
   } as ILogger;
 
-  describe.each(PATHS)('%s', (_path, auth) => {
-    it.each([
-      [
-        'SAML bearer exchange',
-        'saml-token-exchange',
-        (logger: ILogger) =>
-          exchangeSamlAssertion(
-            'A',
-            `${base}/token`,
-            'cid',
-            auth() ? undefined : 'secret',
-            logger,
-            auth(),
+  for (const [caseIndex, caseRow] of PATHS.entries()) {
+    const [_path, auth] = caseRow;
+    describe(caseTitle('%s', caseRow, caseIndex), () => {
+      for (const [caseIndex, caseRow] of cases([
+        [
+          'SAML bearer exchange',
+          'saml-token-exchange',
+          (logger: ILogger) =>
+            exchangeSamlAssertion(
+              'A',
+              `${base}/token`,
+              'cid',
+              auth() ? undefined : 'secret',
+              logger,
+              auth(),
+            ),
+        ],
+        [
+          'SAML bearer refresh',
+          'saml-token-refresh',
+          (logger: ILogger) =>
+            refreshSamlBearerToken(
+              'rt',
+              `${base}/token`,
+              'cid',
+              auth() ? undefined : 'secret',
+              logger,
+              auth(),
+            ),
+        ],
+      ]).entries()) {
+        const [_site, operation, run] = caseRow;
+        it(
+          caseTitle(
+            '%s: the same failure as with a working logger, not what the logger threw',
+            caseRow,
+            caseIndex,
           ),
-      ],
-      [
-        'SAML bearer refresh',
-        'saml-token-refresh',
-        (logger: ILogger) =>
-          refreshSamlBearerToken(
-            'rt',
-            `${base}/token`,
-            'cid',
-            auth() ? undefined : 'secret',
-            logger,
-            auth(),
-          ),
-      ],
-    ])(
-      '%s: the same failure as with a working logger, not what the logger threw',
-      async (_site, operation, run) => {
-        status = 400;
-        const working = await run(quiet).catch((error: unknown) => error);
-        let thrown: unknown;
-        const failed = expect(
-          run(throwing).catch((error: unknown) => {
-            thrown = error;
-            throw error;
-          }),
-        ).rejects.toBeDefined();
-        await failed;
-        // Guarded failure-path logging: an
-        // AuthProviderFailure of the site's operation, equal in kind and
-        // facts to the one a working logger sees.
-        expect(isAuthProviderFailure(thrown)).toBe(true);
-        const failure = readFailure(thrown, 'unfamiliar-error');
-        expect(failure.kind).toBe('request-failed');
-        expect(failure.facts).toEqual({
-          operation,
-          problem: 'refused',
-          status: 400,
-          oauthError: 'invalid_grant',
-        });
-        const expected = readFailure(working, 'unfamiliar-error');
-        expect(failure.kind).toBe(expected.kind);
-        expect(failure.facts).toEqual(expected.facts);
-        expect(renderings(thrown)).not.toContain(MARKER);
-      },
-    );
-  });
+          async () => {
+            status = 400;
+            const working = await run(quiet).catch((error: unknown) => error);
+            let thrown: unknown;
+            const failed = assert.rejects(
+              run(throwing).catch((error: unknown) => {
+                thrown = error;
+                throw error;
+              }),
+              (error) => error !== undefined,
+            );
+            await failed;
+            // Guarded failure-path logging: an
+            // AuthProviderFailure of the site's operation, equal in kind and
+            // facts to the one a working logger sees.
+            assert.equal(isAuthProviderFailure(thrown), true);
+            const failure = readFailure(thrown, 'unfamiliar-error');
+            assert.equal(failure.kind, 'request-failed');
+            assert.deepEqual(failure.facts, {
+              operation,
+              problem: 'refused',
+              status: 400,
+              oauthError: 'invalid_grant',
+            });
+            const expected = readFailure(working, 'unfamiliar-error');
+            assert.equal(failure.kind, expected.kind);
+            assert.deepEqual(failure.facts, expected.facts);
+            notContains(renderings(thrown), MARKER);
+          },
+        );
+      }
+    });
+  }
 });
 
 /**
@@ -460,30 +486,43 @@ const HOSTILE_DATA: [string, (data: unknown) => unknown][] = [
   ],
 ];
 
-describe.each(HOSTILE_DATA)(
-  'a fulfilled interceptor returning %s',
-  (_label, make) => {
-    describe.each(PATHS)('%s', (_path, auth) => {
-      it.each(SITES)('%s: none of it comes back out', async (_site, run) => {
-        status = 200;
-        installed = axios.interceptors.response.use(
-          (response: AxiosResponse) => ({
-            ...response,
-            data: make(response.data),
-          }),
-        );
-        const { logger, text } = recordingLogger();
-        let thrown: unknown;
-        const failed = expect(
-          run(auth(), logger).catch((error: unknown) => {
-            thrown = error;
-            throw error;
-          }),
-        ).rejects.toBeDefined();
-        await failed;
-        expect(renderings(thrown)).not.toContain(MARKER);
-        expect(text()).not.toContain(MARKER);
-      });
-    });
-  },
-);
+for (const [caseIndex, caseRow] of HOSTILE_DATA.entries()) {
+  const [_label, make] = caseRow;
+  describe(
+    caseTitle('a fulfilled interceptor returning %s', caseRow, caseIndex),
+    () => {
+      for (const [caseIndex, caseRow] of PATHS.entries()) {
+        const [_path, auth] = caseRow;
+        describe(caseTitle('%s', caseRow, caseIndex), () => {
+          for (const [caseIndex, caseRow] of SITES.entries()) {
+            const [_site, run] = caseRow;
+            it(
+              caseTitle('%s: none of it comes back out', caseRow, caseIndex),
+              async () => {
+                status = 200;
+                installed = axios.interceptors.response.use(
+                  (response: AxiosResponse) => ({
+                    ...response,
+                    data: make(response.data),
+                  }),
+                );
+                const { logger, text } = recordingLogger();
+                let thrown: unknown;
+                const failed = assert.rejects(
+                  run(auth(), logger).catch((error: unknown) => {
+                    thrown = error;
+                    throw error;
+                  }),
+                  (error) => error !== undefined,
+                );
+                await failed;
+                notContains(renderings(thrown), MARKER);
+                notContains(text(), MARKER);
+              },
+            );
+          }
+        });
+      }
+    },
+  );
+}

@@ -1,4 +1,4 @@
-import { expect } from '@jest/globals';
+import assert from 'node:assert/strict';
 import {
   classify,
   isAuthProviderFailure,
@@ -35,7 +35,7 @@ export function mintedRefusal(outcome: AuthOutcome): IAuthProviderError {
 
 /** A refusal as the error auth-errors minted, else the test fails. */
 export function minted(refusal: IAuthRefusal | undefined): IAuthProviderError {
-  expect(isMinted(refusal)).toBe(true);
+  assert.equal(isMinted(refusal), true);
   if (!isMinted(refusal)) throw new Error('not minted');
   return refusal;
 }
@@ -60,15 +60,17 @@ const REFUSAL_KEYS: readonly string[] = [
 export function wordsOf(
   outcome: AuthOutcome,
 ): { ok: true } | { ok: false; refusal: { reason: string; hint?: string } } {
-  expect(
+  assert.deepEqual(
     Object.keys(outcome).filter(
       (key) => key !== 'ok' && (outcome.ok || key !== 'refusal'),
     ),
-  ).toEqual([]);
+    [],
+  );
   if (outcome.ok) return { ok: true };
-  expect(
+  assert.deepEqual(
     Object.keys(outcome.refusal).filter((key) => !REFUSAL_KEYS.includes(key)),
-  ).toEqual([]);
+    [],
+  );
   const { reason, hint } = outcome.refusal;
   return {
     ok: false,
@@ -86,9 +88,9 @@ export function configurationOf(thrown: unknown): {
   readonly fields: readonly string[];
   readonly reason: string;
 } {
-  expect(isAuthProviderFailure(thrown)).toBe(true);
+  assert.equal(isAuthProviderFailure(thrown), true);
   const error = readFailure(thrown, 'unfamiliar-error');
-  expect(isMinted(error)).toBe(true);
+  assert.equal(isMinted(error), true);
   if (error.kind !== 'configuration') {
     throw new Error(`expected a configuration error, got ${error.kind}`);
   }

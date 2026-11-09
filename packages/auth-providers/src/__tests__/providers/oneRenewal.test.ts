@@ -5,7 +5,8 @@
  * Concurrent renewals share one flight.
  */
 
-import { describe, expect, it, jest } from '@jest/globals';
+import assert from 'node:assert/strict';
+import { describe, it, mock } from 'node:test';
 import { AuthProviderFailure, authError } from '@mcp-abap-adt/auth-errors';
 import type {
   IAuthorizationStrategy,
@@ -15,29 +16,30 @@ import type {
 import { AuthorizationCodeProvider } from '../../providers/AuthorizationCodeProvider';
 import { BaseTokenProvider } from '../../providers/BaseTokenProvider';
 import { OidcTokenExchangeProvider } from '../../providers/OidcTokenExchangeProvider';
+import { refreshThenLogin } from '../../renewal';
+import { matchObject } from '../helpers/expectations';
+import { wordsOf } from '../helpers/minted';
+import { clearMock } from '../helpers/mockOnce';
 import { recordingTargets } from '../helpers/targets';
 
-jest.mock('../../auth/tokenRefresher', () => ({
-  refreshJwtToken: jest.fn(async () => {
-    throw new Error('invalid_grant');
-  }),
-}));
+import oidcToken = require('../../auth/oidcToken');
+import tokenRefresher = require('../../auth/tokenRefresher');
 
-jest.mock('../../auth/oidcToken', () => ({
-  tokenExchange: jest.fn(async () => {
-    throw new Error('exchange refused');
-  }),
-}));
-
-import { tokenExchange } from '../../auth/oidcToken';
-import { refreshThenLogin } from '../../renewal';
-import { wordsOf } from '../helpers/minted';
+// The two sites replaced on their module objects for the whole file (what
+// were jest.mock factories): the providers read them off the module at
+// each call.
+mock.method(tokenRefresher, 'refreshJwtToken', async () => {
+  throw new Error('invalid_grant');
+});
+const exchange = mock.method(oidcToken, 'tokenExchange', async () => {
+  throw new Error('exchange refused');
+});
 
 const refused = { at: 'request' as const, status: 401, error: {} };
 
 describe('AuthorizationCodeProvider: one renewal, one login', () => {
   it('a refused refresh and a failed login call the strategy exactly once', async () => {
-    const authorize = jest.fn(async () => {
+    const authorize = mock.fn(async () => {
       // What a shipped strategy throws when the login fails.
       throw new AuthProviderFailure(
         authError['interactive-login']({ outcome: 'failed' }),
@@ -56,18 +58,17 @@ describe('AuthorizationCodeProvider: one renewal, one login', () => {
 
     const outcome = await provider.rejected(refused);
 
-    expect(wordsOf(outcome)).toMatchObject({
+    matchObject(wordsOf(outcome), {
       ok: false,
       refusal: { reason: 'the browser login failed (unknown error)' },
     });
-    expect(authorize).toHaveBeenCalledTimes(1);
+    assert.equal(authorize.mock.callCount(), 1);
   });
 });
 
 describe('a provider with no refresh grant', () => {
   it('one rejected() is exactly one login, even holding a refresh token', async () => {
-    const exchange = tokenExchange as jest.MockedFunction<typeof tokenExchange>;
-    exchange.mockClear();
+    clearMock(exchange);
     const provider = new OidcTokenExchangeProvider({
       renewal: refreshThenLogin(),
       tokenEndpoint: 'https://issuer.example/token',
@@ -80,8 +81,8 @@ describe('a provider with no refresh grant', () => {
 
     const outcome = await provider.rejected(refused);
 
-    expect(outcome).toMatchObject({ ok: false });
-    expect(exchange).toHaveBeenCalledTimes(1);
+    matchObject(outcome, { ok: false });
+    assert.equal(exchange.mock.callCount(), 1);
   });
 });
 
@@ -153,21 +154,21 @@ describe('concurrent renewals share one flight', () => {
       p.rejected(refused),
     ]);
 
-    expect(a).toEqual({ ok: true });
-    expect(b).toEqual({ ok: true });
-    expect(p.refreshes).toBe(1);
-    expect(p.logins).toBe(0);
-    expect(p.storedRefreshToken).toBe('R2');
+    assert.deepEqual(a, { ok: true });
+    assert.deepEqual(b, { ok: true });
+    assert.equal(p.refreshes, 1);
+    assert.equal(p.logins, 0);
+    assert.equal(p.storedRefreshToken, 'R2');
   });
 
   it('a rejected() whose token is already superseded answers Ok without renewing', async () => {
     const p = new RotatingProvider();
     await p.authorize(recordingTargets().requestTarget); // presents T1
-    await expect(p.rejected(refused)).resolves.toEqual({ ok: true });
+    assert.deepEqual(await p.rejected(refused), { ok: true });
     // A second request that carried T1 comes back 401 after the renewal.
-    await expect(p.rejected(refused)).resolves.toEqual({ ok: true });
-    expect(p.refreshes).toBe(1);
-    expect(p.logins).toBe(0);
+    assert.deepEqual(await p.rejected(refused), { ok: true });
+    assert.equal(p.refreshes, 1);
+    assert.equal(p.logins, 0);
   });
 
   it('after the new token is presented and refused, the next rejected() renews again', async () => {
@@ -176,9 +177,9 @@ describe('concurrent renewals share one flight', () => {
     await p.rejected(refused);
     const t = recordingTargets();
     await p.authorize(t.requestTarget); // presents T2
-    expect(t.request.headers.Authorization).toBe('Bearer T2');
-    await expect(p.rejected(refused)).resolves.toEqual({ ok: true });
-    expect(p.refreshes).toBe(2);
+    assert.equal(t.request.headers.Authorization, 'Bearer T2');
+    assert.deepEqual(await p.rejected(refused), { ok: true });
+    assert.equal(p.refreshes, 2);
   });
 
   it('an authorize() during a renewal waits for it and presents the new token', async () => {
@@ -188,8 +189,8 @@ describe('concurrent renewals share one flight', () => {
     const t = recordingTargets();
     await p.authorize(t.requestTarget);
     await renewing;
-    expect(t.request.headers.Authorization).toBe('Bearer T2');
-    expect(p.refreshes).toBe(1);
+    assert.equal(t.request.headers.Authorization, 'Bearer T2');
+    assert.equal(p.refreshes, 1);
   });
 
   it('concurrent expired authorize() calls share one refresh', async () => {
@@ -200,9 +201,9 @@ describe('concurrent renewals share one flight', () => {
       p.authorize(x.requestTarget),
       p.authorize(y.requestTarget),
     ]);
-    expect(p.refreshes).toBe(1);
-    expect(p.logins).toBe(0);
-    expect(x.request.headers.Authorization).toBe('Bearer T2');
-    expect(y.request.headers.Authorization).toBe('Bearer T2');
+    assert.equal(p.refreshes, 1);
+    assert.equal(p.logins, 0);
+    assert.equal(x.request.headers.Authorization, 'Bearer T2');
+    assert.equal(y.request.headers.Authorization, 'Bearer T2');
   });
 });

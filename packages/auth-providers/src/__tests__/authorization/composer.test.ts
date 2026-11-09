@@ -7,8 +7,9 @@
  * loopback listeners where a port is ("assert on the port").
  */
 
+import assert from 'node:assert/strict';
 import net from 'node:net';
-import { describe, expect, it } from '@jest/globals';
+import { describe, it } from 'node:test';
 import {
   AuthProviderFailure,
   authError,
@@ -35,6 +36,12 @@ import {
   recordingPresentation,
   scriptedTransport,
 } from '../helpers/composedParts';
+import {
+  caseTitle,
+  contains,
+  matchObject,
+  notContains,
+} from '../helpers/expectations';
 import { bindable, capturingLogger, send } from '../helpers/listenerHttp';
 import { getAvailablePort } from '../helpers/netHelpers';
 
@@ -90,7 +97,7 @@ const rightCode = (code: string) => ({
 });
 
 describe('construction', () => {
-  it.each([
+  for (const [caseIndex, caseRow] of [
     '/auth/%2e%2e/finish',
     '/auth\\finish',
     '/auth path',
@@ -100,26 +107,33 @@ describe('construction', () => {
     '/',
     '/submit',
     'callback',
-  ])(
-    'an endpoint URL parsing would change, or the listener’s own (%j), is invalid-value endpoint',
-    (endpoint) => {
-      let thrown: unknown;
-      try {
-        composeAuthorization({
-          presentation: showUrl(),
-          transport: scriptedTransport({ redirectUri: REDIRECT }).transport,
-          protocol: oauthCode(),
-          endpoint,
+  ].entries()) {
+    const endpoint = caseRow;
+    it(
+      caseTitle(
+        'an endpoint URL parsing would change, or the listener’s own (%j), is invalid-value endpoint',
+        caseRow,
+        caseIndex,
+      ),
+      () => {
+        let thrown: unknown;
+        try {
+          composeAuthorization({
+            presentation: showUrl(),
+            transport: scriptedTransport({ redirectUri: REDIRECT }).transport,
+            protocol: oauthCode(),
+            endpoint,
+          });
+        } catch (error) {
+          thrown = error;
+        }
+        assert.deepEqual(factsOf(thrown), {
+          case: 'invalid-value',
+          fields: ['endpoint'],
         });
-      } catch (error) {
-        thrown = error;
-      }
-      expect(factsOf(thrown)).toEqual({
-        case: 'invalid-value',
-        fields: ['endpoint'],
-      });
-    },
-  );
+      },
+    );
+  }
 });
 
 describe('the order: build, begin, arm, present, wait', () => {
@@ -136,20 +150,20 @@ describe('the order: build, begin, arm, present, wait', () => {
     const login = strategy.authorize(request({}, events));
     const open = await scripted.armed(1);
     await quiet();
-    expect(events).toEqual(['open', 'build', 'begin', 'arm', 'present']);
-    expect(shown.calls[0]?.url).toBe(urlFor(REDIRECT));
-    expect(shown.calls[0]?.context.redirectUri).toBe(REDIRECT);
-    expect(open.options.endpoint).toBe('/callback');
-    expect(open.deliver(rightCode('C1'))).toEqual({
+    assert.deepEqual(events, ['open', 'build', 'begin', 'arm', 'present']);
+    assert.equal(shown.calls[0]?.url, urlFor(REDIRECT));
+    assert.equal(shown.calls[0]?.context.redirectUri, REDIRECT);
+    assert.equal(open.options.endpoint, '/callback');
+    assert.deepEqual(open.deliver(rightCode('C1')), {
       verdict: 'accept',
       payload: 'C1',
     });
     open.answer.resolve(undefined);
-    await expect(login).resolves.toEqual({
+    assert.deepEqual(await login, {
       payload: 'C1',
       redirectUri: REDIRECT,
     });
-    expect(events.at(-1)).toBe('released');
+    assert.equal(events.at(-1), 'released');
   });
 
   it('hands a consumer transport the composition’s endpoint, the protocol’s paste words and methods', async () => {
@@ -163,11 +177,11 @@ describe('the order: build, begin, arm, present, wait', () => {
     });
     const login = caught(strategy.authorize(request()));
     const open = await scripted.armed(1);
-    expect(open.options.endpoint).toBe('/auth/finish');
-    expect(open.options.paste).toEqual(protocol.paste);
-    expect(open.options.callbackMethods).toEqual(['GET']);
+    assert.equal(open.options.endpoint, '/auth/finish');
+    assert.deepEqual(open.options.paste, protocol.paste);
+    assert.deepEqual(open.options.callbackMethods, ['GET']);
     await strategy.dispose();
-    expect(factsOf(await login).outcome).toBe('disposed');
+    assert.equal(factsOf(await login).outcome, 'disposed');
   });
 
   it('a redirect protocol over a channel with no redirect: required-fields-missing redirectUri, before the URL is built', async () => {
@@ -181,12 +195,12 @@ describe('the order: build, begin, arm, present, wait', () => {
       endpoint: '/callback',
     });
     const thrown = await caught(strategy.authorize(request({}, events)));
-    expect(factsOf(thrown)).toEqual({
+    assert.deepEqual(factsOf(thrown), {
       case: 'required-fields-missing',
       fields: ['redirectUri'],
     });
-    expect(events).toEqual(['open', 'released']);
-    expect(shown.calls).toHaveLength(0);
+    assert.deepEqual(events, ['open', 'released']);
+    assert.equal(shown.calls.length, 0);
   });
 
   it('a builder’s minted failure passes as it is; a foreign throw is failed, nothing of it kept; nothing presented', async () => {
@@ -197,13 +211,13 @@ describe('the order: build, begin, arm, present, wait', () => {
     });
     const minted = new AuthProviderFailure(configuration);
     for (const [thrownByBuilder, check] of [
-      [minted, (e: unknown) => expect(e).toBe(minted)],
+      [minted, (e: unknown) => assert.equal(e, minted)],
       [
         new Error('redirect_uri SECRET mismatch'),
         (e: unknown) => {
-          expect(factsOf(e)).toEqual({ outcome: 'failed' });
-          expect(String((e as Error).message)).not.toContain('SECRET');
-          expect((e as { cause?: unknown }).cause).toBeUndefined();
+          assert.deepEqual(factsOf(e), { outcome: 'failed' });
+          notContains(String((e as Error).message), 'SECRET');
+          assert.equal((e as { cause?: unknown }).cause, undefined);
         },
       ],
     ] as const) {
@@ -225,8 +239,8 @@ describe('the order: build, begin, arm, present, wait', () => {
         ),
       );
       check(thrown);
-      expect(shown.calls).toHaveLength(0);
-      expect(scripted.opens[0]?.judge).toBeUndefined();
+      assert.equal(shown.calls.length, 0);
+      assert.equal(scripted.opens[0]?.judge, undefined);
     }
   });
 
@@ -252,12 +266,12 @@ describe('the order: build, begin, arm, present, wait', () => {
     await quiet();
     controller.abort();
     built.resolve(urlFor(REDIRECT));
-    expect(factsOf(await login)).toEqual({
+    assert.deepEqual(factsOf(await login), {
       outcome: 'aborted',
       strategy: 'consumer',
     });
-    expect(shown.calls).toHaveLength(0);
-    expect(scripted.opens[0]?.judge).toBeUndefined();
+    assert.equal(shown.calls.length, 0);
+    assert.equal(scripted.opens[0]?.judge, undefined);
   });
 });
 
@@ -275,8 +289,8 @@ describe('only what the protocol accepted is returned', () => {
     // A transport claiming a payload of its own: the composer never takes it.
     open.answer.resolve('FORGED-CODE');
     const thrown = await login;
-    expect(factsOf(thrown)).toEqual({ outcome: 'failed' });
-    expect(JSON.stringify(thrown)).not.toContain('FORGED');
+    assert.deepEqual(factsOf(thrown), { outcome: 'failed' });
+    notContains(JSON.stringify(thrown), 'FORGED');
   });
 
   it('one that calls the judge with a wrong state and resolves → failed', async () => {
@@ -289,15 +303,16 @@ describe('only what the protocol accepted is returned', () => {
     });
     const login = caught(strategy.authorize(request()));
     const open = await scripted.armed(1);
-    expect(
+    assert.deepEqual(
       open.deliver({
         via: 'redirect',
         method: 'GET',
         params: new URLSearchParams({ code: 'EVIL', state: 'other' }),
       }),
-    ).toEqual({ verdict: 'refuse', reason: 'state' });
+      { verdict: 'refuse', reason: 'state' },
+    );
     open.answer.resolve(undefined);
-    expect(factsOf(await login)).toEqual({ outcome: 'failed' });
+    assert.deepEqual(factsOf(await login), { outcome: 'failed' });
   });
 
   it('a second accept is refused already-answered; the first payload is returned', async () => {
@@ -310,13 +325,13 @@ describe('only what the protocol accepted is returned', () => {
     });
     const login = strategy.authorize(request());
     const open = await scripted.armed(1);
-    expect(open.deliver(rightCode('FIRST')).verdict).toBe('accept');
-    expect(open.deliver(rightCode('SECOND'))).toEqual({
+    assert.equal(open.deliver(rightCode('FIRST')).verdict, 'accept');
+    assert.deepEqual(open.deliver(rightCode('SECOND')), {
       verdict: 'refuse',
       reason: 'already-answered',
     });
     open.answer.resolve(undefined);
-    await expect(login).resolves.toEqual({
+    assert.deepEqual(await login, {
       payload: 'FIRST',
       redirectUri: REDIRECT,
     });
@@ -338,15 +353,15 @@ describe('only what the protocol accepted is returned', () => {
       method: 'GET',
       params: new URLSearchParams({ error: 'access_denied', state: STATE }),
     }) as Extract<AnswerVerdict<unknown>, { verdict: 'end' }>;
-    expect(ended.verdict).toBe('end');
+    assert.equal(ended.verdict, 'end');
     // A forged accept arrives next and would flush first.
-    expect(open.deliver(rightCode('LATE'))).toEqual({
+    assert.deepEqual(open.deliver(rightCode('LATE')), {
       verdict: 'refuse',
       reason: 'already-answered',
     });
     // The transport settles its wait as if the later answer had won.
     open.answer.resolve(undefined);
-    expect(factsOf(await login)).toEqual({
+    assert.deepEqual(factsOf(await login), {
       outcome: 'identity-provider-refused',
       oauthError: 'access_denied',
     });
@@ -371,14 +386,14 @@ describe('only what the protocol accepted is returned', () => {
     const login = caught(strategy.authorize(request({ logger })));
     await quiet();
     const reply = await waitFor(() => send(port, '/callback?code=X'));
-    expect(reply.status).toBe(500);
-    expect(reply.body).not.toContain('JUDGE-SECRET');
+    assert.equal(reply.status, 500);
+    notContains(reply.body, 'JUDGE-SECRET');
     const thrown = await login;
-    expect(factsOf(thrown)).toEqual({ outcome: 'failed' });
-    expect(JSON.stringify(thrown)).not.toContain('JUDGE-SECRET');
-    expect(String((thrown as Error).message)).not.toContain('JUDGE-SECRET');
-    expect(text()).not.toContain('JUDGE-SECRET');
-    expect(await bindable(port)).toBe(true);
+    assert.deepEqual(factsOf(thrown), { outcome: 'failed' });
+    notContains(JSON.stringify(thrown), 'JUDGE-SECRET');
+    notContains(String((thrown as Error).message), 'JUDGE-SECRET');
+    notContains(text(), 'JUDGE-SECRET');
+    assert.equal(await bindable(port), true);
   });
 });
 
@@ -420,27 +435,34 @@ describe('overlap, dispose, abort', () => {
     ],
   ];
 
-  it.each(compositions)(
-    '%s: an overlapping authorize is busy and opens nothing',
-    async (_name, make) => {
-      const port = await getAvailablePort();
-      const counted = heldRelease(make(port));
-      const strategy = composeAuthorization({
-        presentation: recordingPresentation().presentation,
-        transport: counted.transport,
-        protocol: oauthCode(),
-        endpoint: '/callback',
-      });
-      const first = caught(strategy.authorize(request()));
-      await quiet();
-      const second = await caught(strategy.authorize(request()));
-      expect(factsOf(second)).toEqual({ outcome: 'busy' });
-      expect(counted.opened()).toBe(1);
-      counted.gates[0]?.resolve();
-      await strategy.dispose();
-      expect(factsOf(await first).outcome).toBe('disposed');
-    },
-  );
+  for (const [caseIndex, caseRow] of compositions.entries()) {
+    const [_name, make] = caseRow;
+    it(
+      caseTitle(
+        '%s: an overlapping authorize is busy and opens nothing',
+        caseRow,
+        caseIndex,
+      ),
+      async () => {
+        const port = await getAvailablePort();
+        const counted = heldRelease(make(port));
+        const strategy = composeAuthorization({
+          presentation: recordingPresentation().presentation,
+          transport: counted.transport,
+          protocol: oauthCode(),
+          endpoint: '/callback',
+        });
+        const first = caught(strategy.authorize(request()));
+        await quiet();
+        const second = await caught(strategy.authorize(request()));
+        assert.deepEqual(factsOf(second), { outcome: 'busy' });
+        assert.equal(counted.opened(), 1);
+        counted.gates[0]?.resolve();
+        await strategy.dispose();
+        assert.equal(factsOf(await first).outcome, 'disposed');
+      },
+    );
+  }
 
   it('dispose during authorize → disposed, the port free; idempotent; the next authorize is disposed', async () => {
     const port = await getAvailablePort();
@@ -454,12 +476,12 @@ describe('overlap, dispose, abort', () => {
     await waitFor(() => send(port, '/nothing'));
     await strategy.dispose();
     await strategy.dispose();
-    expect(factsOf(await login)).toEqual({
+    assert.deepEqual(factsOf(await login), {
       outcome: 'disposed',
       strategy: 'browser',
     });
-    expect(await bindable(port)).toBe(true);
-    expect(factsOf(await caught(strategy.authorize(request())))).toEqual({
+    assert.equal(await bindable(port), true);
+    assert.deepEqual(factsOf(await caught(strategy.authorize(request()))), {
       outcome: 'disposed',
       strategy: 'browser',
     });
@@ -475,7 +497,7 @@ describe('overlap, dispose, abort', () => {
     });
     const login = caught(strategy.authorize(request()));
     await strategy.dispose();
-    expect(factsOf(await login)).toEqual({
+    assert.deepEqual(factsOf(await login), {
       outcome: 'disposed',
       strategy: 'consumer',
     });
@@ -494,18 +516,19 @@ describe('overlap, dispose, abort', () => {
     const login = caught(strategy.authorize(request()));
     await quiet();
     // Two forged callbacks: refused, counted, ignored.
-    expect(
+    assert.equal(
       (await waitFor(() => send(port, '/callback?code=EVIL&state=wrong')))
         .status,
-    ).toBe(400);
-    expect((await send(port, '/callback?code=EVIL')).status).toBe(400);
+      400,
+    );
+    assert.equal((await send(port, '/callback?code=EVIL')).status, 400);
     controller.abort();
-    expect(factsOf(await login)).toEqual({
+    assert.deepEqual(factsOf(await login), {
       outcome: 'aborted',
       strategy: 'browser',
       ignoredCallbacks: 2,
     });
-    expect(await bindable(port)).toBe(true);
+    assert.equal(await bindable(port), true);
     // Aborted, not disposed: the strategy stays usable for the next login.
     const next = composeAuthorization({
       presentation: recordingPresentation().presentation,
@@ -515,11 +538,12 @@ describe('overlap, dispose, abort', () => {
     });
     const nextLogin = next.authorize(request());
     await quiet();
-    expect(
+    assert.equal(
       (await waitFor(() => send(port, `/callback?code=C2&state=${STATE}`)))
         .status,
-    ).toBe(200);
-    await expect(nextLogin).resolves.toMatchObject({ payload: 'C2' });
+      200,
+    );
+    matchObject(await nextLogin, { payload: 'C2' });
   });
 
   it('the request’s signal aborts too; an already-aborted one opens nothing', async () => {
@@ -533,11 +557,11 @@ describe('overlap, dispose, abort', () => {
     const thrown = await caught(
       strategy.authorize(request({ signal: AbortSignal.abort() })),
     );
-    expect(factsOf(thrown)).toEqual({
+    assert.deepEqual(factsOf(thrown), {
       outcome: 'aborted',
       strategy: 'consumer',
     });
-    expect(scripted.opens).toHaveLength(0);
+    assert.equal(scripted.opens.length, 0);
     const optionAborted = composeAuthorization({
       presentation: recordingPresentation().presentation,
       transport: scripted.transport,
@@ -545,10 +569,11 @@ describe('overlap, dispose, abort', () => {
       endpoint: '/callback',
       signal: AbortSignal.abort(),
     });
-    expect(
+    assert.equal(
       factsOf(await caught(optionAborted.authorize(request()))).outcome,
-    ).toBe('aborted');
-    expect(scripted.opens).toHaveLength(0);
+      'aborted',
+    );
+    assert.equal(scripted.opens.length, 0);
   });
 });
 
@@ -574,22 +599,23 @@ describe('authorize settles only once the transport is released', () => {
     // The listener itself has released; its open's settlement is held.
     await held.innerSettled(1);
     await quiet();
-    expect(settled).toBe(false);
+    assert.equal(settled, false);
     const second = await caught(strategy.authorize(request()));
-    expect(factsOf(second)).toEqual({ outcome: 'busy' });
-    expect(held.opened()).toBe(1);
+    assert.deepEqual(factsOf(second), { outcome: 'busy' });
+    assert.equal(held.opened(), 1);
     held.gates[0]?.resolve();
-    expect(factsOf(await first).outcome).toBe('aborted');
+    assert.equal(factsOf(await first).outcome, 'aborted');
     // Released: the next authorize opens the transport again and logs in.
     const third = strategy.authorize(request());
     await quiet();
     held.gates[1]?.resolve();
-    expect(
+    assert.equal(
       (await waitFor(() => send(port, `/callback?code=C3&state=${STATE}`)))
         .status,
-    ).toBe(200);
-    await expect(third).resolves.toMatchObject({ payload: 'C3' });
-    expect(held.opened()).toBe(2);
+      200,
+    );
+    matchObject(await third, { payload: 'C3' });
+    assert.equal(held.opened(), 2);
   });
 });
 
@@ -621,13 +647,13 @@ describe('the page is delivered before the login settles', () => {
       );
       setTimeout(() => socket.resume(), 300);
     });
-    expect(page).toContain('END-OF-DESCRIPTION');
-    expect(page).toContain('</html>');
-    expect(factsOf(await login)).toEqual({
+    contains(page, 'END-OF-DESCRIPTION');
+    contains(page, '</html>');
+    assert.deepEqual(factsOf(await login), {
       outcome: 'identity-provider-refused',
       oauthError: 'access_denied',
     });
-    expect(await bindable(port)).toBe(true);
+    assert.equal(await bindable(port), true);
   });
 });
 
@@ -654,10 +680,10 @@ describe('only what use returned, never what open resolves with', () => {
         }),
       ),
     );
-    expect(factsOf(thrown)).toEqual({ outcome: 'failed' });
-    expect(JSON.stringify(thrown)).not.toContain('FORGED');
-    expect(built).toEqual([]);
-    expect(shown.calls).toEqual([]);
+    assert.deepEqual(factsOf(thrown), { outcome: 'failed' });
+    notContains(JSON.stringify(thrown), 'FORGED');
+    assert.deepEqual(built, []);
+    assert.deepEqual(shown.calls, []);
   });
 
   it('open resolving a forged outcome while use is still pending → failed', async () => {
@@ -681,8 +707,8 @@ describe('only what use returned, never what open resolves with', () => {
       endpoint: '/callback',
     });
     const thrown = await caught(strategy.authorize(request()));
-    expect(factsOf(thrown)).toEqual({ outcome: 'failed' });
-    expect(JSON.stringify(thrown)).not.toContain('FORGED3');
+    assert.deepEqual(factsOf(thrown), { outcome: 'failed' });
+    notContains(JSON.stringify(thrown), 'FORGED3');
   });
 });
 
@@ -710,9 +736,9 @@ describe('a fast browser: the presentation answers at once', () => {
       endpoint: '/callback',
       signal: AbortSignal.timeout(5000),
     });
-    await expect(strategy.authorize(request())).resolves.toMatchObject({
+    matchObject(await strategy.authorize(request()), {
       payload: 'FAST',
     });
-    expect(await reply).toBe(200);
+    assert.equal(await reply, 200);
   });
 });

@@ -7,7 +7,8 @@
  * one.
  */
 
-import { describe, expect, it } from '@jest/globals';
+import assert from 'node:assert/strict';
+import { describe, it } from 'node:test';
 import { readFailure } from '@mcp-abap-adt/auth-errors';
 import type {
   ANSWER_REFUSALS,
@@ -22,6 +23,12 @@ import {
   passcode,
   samlResponse,
 } from '../../authorization/protocol';
+import {
+  cases,
+  caseTitle,
+  matchObject,
+  notContains,
+} from '../helpers/expectations';
 import { configurationOf, thrownFrom } from '../helpers/minted';
 
 const STATE = 'the-expected-state-AbCdEf0123456789_-xyzXYZ';
@@ -47,10 +54,10 @@ const SECRETS = [STATE, OTHER, CODE, 'PHNhbWw+', 'PASSCODE-77', 'desc-text'];
 
 /** The error of an `end` verdict, checked to carry nothing of the input. */
 function endError<T>(verdict: AnswerVerdict<T>) {
-  expect(verdict.verdict).toBe('end');
+  assert.equal(verdict.verdict, 'end');
   if (verdict.verdict !== 'end') throw new Error('not an end');
   const rendered = JSON.stringify(verdict.error) + String(verdict.error.reason);
-  for (const secret of SECRETS) expect(rendered).not.toContain(secret);
+  for (const secret of SECRETS) notContains(rendered, secret);
   return verdict.error;
 }
 
@@ -78,279 +85,363 @@ const CODE_PROTOCOLS: ReadonlyArray<
   ],
 ];
 
-describe.each(CODE_PROTOCOLS)('%s', (_name, make, payloadOf) => {
-  const judge = (): AnswerJudge<unknown> => make().begin(URL_WITH_STATE);
+for (const [caseIndex, caseRow] of CODE_PROTOCOLS.entries()) {
+  const [_name, make, payloadOf] = caseRow;
+  describe(caseTitle('%s', caseRow, caseIndex), () => {
+    const judge = (): AnswerJudge<unknown> => make().begin(URL_WITH_STATE);
 
-  it('takes a redirect by GET and has paste words', () => {
-    const protocol = make();
-    expect(protocol.redirect).toBe('required');
-    expect(protocol.callbackMethods).toEqual(['GET']);
-    expect(protocol.paste?.prompt).toEqual(expect.any(String));
-    expect(protocol.paste?.instructions).toEqual(expect.any(String));
-  });
-
-  describe('begin: the URL must carry exactly one state', () => {
-    it.each([
-      ['a URL that does not parse', 'not a url'],
-      ['a URL without state', 'https://uaa.example/oauth/authorize?a=1'],
-      [
-        'a URL with two states',
-        `https://uaa.example/authorize?state=${STATE}&state=${STATE}`,
-      ],
-      ['a URL with an empty state', 'https://uaa.example/authorize?state='],
-    ])('%s → configuration invalid-value authorizationUrl', async (_c, url) => {
-      const thrown = await thrownFrom(() => make().begin(url));
-      expect(configurationOf(thrown)).toMatchObject({
-        case: 'invalid-value',
-        fields: ['authorizationUrl'],
-      });
-      const rendered = JSON.stringify(readFailure(thrown, 'unfamiliar-error'));
-      expect(rendered).not.toContain(STATE);
-      expect(rendered).not.toContain('uaa.example');
-    });
-  });
-
-  describe('redirect: the binding first', () => {
-    it.each([
-      ['no state', `code=${CODE}`],
-      [
-        'two states, both the expected one',
-        `state=${STATE}&state=${STATE}&code=${CODE}`,
-      ],
-      ['a wrong state', `state=${OTHER}&code=${CODE}`],
-      ['an empty state', `state=&code=${CODE}`],
-      [
-        'a forged error with a wrong state',
-        `state=${OTHER}&error=access_denied`,
-      ],
-      ['a forged error with no state', 'error=access_denied'],
-    ])('%s → refuse state', (_c, query) => {
-      expect(judge()(redirect(query))).toEqual(refused('state'));
+    it('takes a redirect by GET and has paste words', () => {
+      const protocol = make();
+      assert.equal(protocol.redirect, 'required');
+      assert.deepEqual(protocol.callbackMethods, ['GET']);
+      assert.equal(typeof protocol.paste?.prompt, 'string');
+      assert.equal(typeof protocol.paste?.instructions, 'string');
     });
 
-    it('none, two, a wrong and then the right state: refused thrice, then accepted', () => {
-      const once = judge();
-      expect(once(redirect(`code=${CODE}`))).toEqual(refused('state'));
-      expect(
-        once(redirect(`state=${STATE}&state=${OTHER}&code=${CODE}`)),
-      ).toEqual(refused('state'));
-      expect(once(redirect(`state=${OTHER}&code=${CODE}`))).toEqual(
-        refused('state'),
-      );
-      expect(once(redirect(`state=${STATE}&code=${CODE}`))).toEqual({
-        verdict: 'accept',
-        payload: payloadOf(CODE, 'redirect'),
-      });
+    describe('begin: the URL must carry exactly one state', () => {
+      for (const [caseIndex, caseRow] of cases([
+        ['a URL that does not parse', 'not a url'],
+        ['a URL without state', 'https://uaa.example/oauth/authorize?a=1'],
+        [
+          'a URL with two states',
+          `https://uaa.example/authorize?state=${STATE}&state=${STATE}`,
+        ],
+        ['a URL with an empty state', 'https://uaa.example/authorize?state='],
+      ]).entries()) {
+        const [_c, url] = caseRow;
+        it(
+          caseTitle(
+            '%s → configuration invalid-value authorizationUrl',
+            caseRow,
+            caseIndex,
+          ),
+          async () => {
+            const thrown = await thrownFrom(() => make().begin(url));
+            matchObject(configurationOf(thrown), {
+              case: 'invalid-value',
+              fields: ['authorizationUrl'],
+            });
+            const rendered = JSON.stringify(
+              readFailure(thrown, 'unfamiliar-error'),
+            );
+            notContains(rendered, STATE);
+            notContains(rendered, 'uaa.example');
+          },
+        );
+      }
     });
 
-    it.each(['GET', 'POST'] as const)(
-      'the right state and one code by %s → accept',
-      (method) => {
-        expect(
-          judge()(redirect(`state=${STATE}&code=${CODE}`, method)),
-        ).toEqual({
+    describe('redirect: the binding first', () => {
+      for (const [caseIndex, caseRow] of cases([
+        ['no state', `code=${CODE}`],
+        [
+          'two states, both the expected one',
+          `state=${STATE}&state=${STATE}&code=${CODE}`,
+        ],
+        ['a wrong state', `state=${OTHER}&code=${CODE}`],
+        ['an empty state', `state=&code=${CODE}`],
+        [
+          'a forged error with a wrong state',
+          `state=${OTHER}&error=access_denied`,
+        ],
+        ['a forged error with no state', 'error=access_denied'],
+      ]).entries()) {
+        const [_c, query] = caseRow;
+        it(caseTitle('%s → refuse state', caseRow, caseIndex), () => {
+          assert.deepEqual(judge()(redirect(query)), refused('state'));
+        });
+      }
+
+      it('none, two, a wrong and then the right state: refused thrice, then accepted', () => {
+        const once = judge();
+        assert.deepEqual(once(redirect(`code=${CODE}`)), refused('state'));
+        assert.deepEqual(
+          once(redirect(`state=${STATE}&state=${OTHER}&code=${CODE}`)),
+          refused('state'),
+        );
+        assert.deepEqual(
+          once(redirect(`state=${OTHER}&code=${CODE}`)),
+          refused('state'),
+        );
+        assert.deepEqual(once(redirect(`state=${STATE}&code=${CODE}`)), {
           verdict: 'accept',
           payload: payloadOf(CODE, 'redirect'),
         });
-      },
-    );
-
-    it.each([
-      ['no code', `state=${STATE}`],
-      ['two codes', `state=${STATE}&code=${CODE}&code=${CODE}`],
-      ['an empty code', `state=${STATE}&code=`],
-    ])('the right state and %s → refuse no-payload', (_c, query) => {
-      expect(judge()(redirect(query))).toEqual(refused('no-payload'));
-    });
-
-    it('the right state and a registered error → end identity-provider-refused, shown for the page only', () => {
-      const verdict = judge()(
-        redirect(
-          `state=${STATE}&error=access_denied&error_description=desc-text&code=${CODE}`,
-        ),
-      );
-      const error = endError(verdict);
-      expect(error).toMatchObject({
-        kind: 'interactive-login',
-        facts: {
-          outcome: 'identity-provider-refused',
-          oauthError: 'access_denied',
-        },
       });
-      expect(verdict).toMatchObject({ shown: 'access_denied: desc-text' });
-    });
 
-    it('an unregistered error is kept out of the facts, and shown alone without a description', () => {
-      const verdict = judge()(redirect(`state=${STATE}&error=made_up_code`));
-      const error = endError(verdict);
-      expect(error.kind).toBe('interactive-login');
-      expect(error.facts).toEqual({ outcome: 'identity-provider-refused' });
-      expect(verdict).toMatchObject({ shown: 'made_up_code' });
-      expect(JSON.stringify(error)).not.toContain('made_up_code');
-    });
-
-    it('two errors are no error: the code decides', () => {
-      expect(
-        judge()(
-          redirect(`state=${STATE}&error=access_denied&error=access_denied`),
-        ),
-      ).toEqual(refused('no-payload'));
-    });
-  });
-
-  describe.each(['form', 'terminal'] as const)('a pasted text (%s)', (via) => {
-    /** What an unreadable paste is on this channel. */
-    const unreadable = (verdict: AnswerVerdict<unknown>) => {
-      if (via === 'form') {
-        expect(verdict).toEqual(refused('unreadable'));
-        return;
+      for (const [caseIndex, caseRow] of (['GET', 'POST'] as const).entries()) {
+        const method = caseRow;
+        it(
+          caseTitle(
+            'the right state and one code by %s → accept',
+            caseRow,
+            caseIndex,
+          ),
+          () => {
+            assert.deepEqual(
+              judge()(redirect(`state=${STATE}&code=${CODE}`, method)),
+              {
+                verdict: 'accept',
+                payload: payloadOf(CODE, 'redirect'),
+              },
+            );
+          },
+        );
       }
-      expect(endError(verdict)).toMatchObject({
-        kind: 'interactive-login',
-        facts: { outcome: 'unreadable-input' },
-      });
-    };
 
-    it.each([
-      ['a bare code', CODE],
-      ['a bare code with spaces around it', `  ${CODE}\n`],
-      [
-        'the whole redirected URL with the right state',
-        `http://localhost:61001/callback?code=${CODE}&state=${STATE}`,
-      ],
-      ['a relative redirect', `/callback?state=${STATE}&code=${CODE}`],
-    ])('%s → accept', (_c, pasted) => {
-      expect(judge()(text(via, pasted))).toEqual({
-        verdict: 'accept',
-        payload: payloadOf(CODE, via),
+      for (const [caseIndex, caseRow] of cases([
+        ['no code', `state=${STATE}`],
+        ['two codes', `state=${STATE}&code=${CODE}&code=${CODE}`],
+        ['an empty code', `state=${STATE}&code=`],
+      ]).entries()) {
+        const [_c, query] = caseRow;
+        it(
+          caseTitle(
+            'the right state and %s → refuse no-payload',
+            caseRow,
+            caseIndex,
+          ),
+          () => {
+            assert.deepEqual(judge()(redirect(query)), refused('no-payload'));
+          },
+        );
+      }
+
+      it('the right state and a registered error → end identity-provider-refused, shown for the page only', () => {
+        const verdict = judge()(
+          redirect(
+            `state=${STATE}&error=access_denied&error_description=desc-text&code=${CODE}`,
+          ),
+        );
+        const error = endError(verdict);
+        matchObject(error, {
+          kind: 'interactive-login',
+          facts: {
+            outcome: 'identity-provider-refused',
+            oauthError: 'access_denied',
+          },
+        });
+        matchObject(verdict, { shown: 'access_denied: desc-text' });
+      });
+
+      it('an unregistered error is kept out of the facts, and shown alone without a description', () => {
+        const verdict = judge()(redirect(`state=${STATE}&error=made_up_code`));
+        const error = endError(verdict);
+        assert.equal(error.kind, 'interactive-login');
+        assert.deepEqual(error.facts, { outcome: 'identity-provider-refused' });
+        matchObject(verdict, { shown: 'made_up_code' });
+        notContains(JSON.stringify(error), 'made_up_code');
+      });
+
+      it('two errors are no error: the code decides', () => {
+        assert.deepEqual(
+          judge()(
+            redirect(`state=${STATE}&error=access_denied&error=access_denied`),
+          ),
+          refused('no-payload'),
+        );
       });
     });
 
-    it.each([
-      [
-        'a URL with a wrong state',
-        `http://localhost:61001/callback?code=${CODE}&state=${OTHER}`,
-      ],
-      ['a URL without state', `http://localhost:61001/callback?code=${CODE}`],
-      [
-        'a URL with two states',
-        `http://localhost:61001/callback?code=${CODE}&state=${STATE}&state=${STATE}`,
-      ],
-      [
-        '…/callback&code=X (not bare: no query, so no state)',
-        `http://localhost:61001/callback&code=${CODE}`,
-      ],
-      ['code=X (not bare)', `code=${CODE}`],
-      ['a code with a slash', `${CODE}/x`],
-      [
-        'the state in a fragment only',
-        `http://localhost/callback?code=${CODE}#state=${STATE}`,
-      ],
-    ])('%s → refuse pasted-state', (_c, pasted) => {
-      expect(judge()(text(via, pasted))).toEqual(refused('pasted-state'));
-    });
+    for (const [caseIndex, caseRow] of (
+      ['form', 'terminal'] as const
+    ).entries()) {
+      const via = caseRow;
+      describe(caseTitle('a pasted text (%s)', caseRow, caseIndex), () => {
+        /** What an unreadable paste is on this channel. */
+        const unreadable = (verdict: AnswerVerdict<unknown>) => {
+          if (via === 'form') {
+            assert.deepEqual(verdict, refused('unreadable'));
+            return;
+          }
+          matchObject(endError(verdict), {
+            kind: 'interactive-login',
+            facts: { outcome: 'unreadable-input' },
+          });
+        };
 
-    it.each([
-      ['nothing', ''],
-      ['blanks', '   '],
-      ['two words', `${CODE} ${CODE}`],
-      [
-        'a URL with the right state and no code',
-        `http://localhost/callback?state=${STATE}`,
-      ],
-      [
-        'a URL with the right state and two codes',
-        `http://localhost/callback?state=${STATE}&code=${CODE}&code=${CODE}`,
-      ],
-      [
-        'a URL whose code is only in the fragment',
-        `http://localhost/callback?state=${STATE}#code=${CODE}`,
-      ],
-    ])('%s → unreadable', (_c, pasted) => {
-      unreadable(judge()(text(via, pasted)));
+        for (const [caseIndex, caseRow] of cases([
+          ['a bare code', CODE],
+          ['a bare code with spaces around it', `  ${CODE}\n`],
+          [
+            'the whole redirected URL with the right state',
+            `http://localhost:61001/callback?code=${CODE}&state=${STATE}`,
+          ],
+          ['a relative redirect', `/callback?state=${STATE}&code=${CODE}`],
+        ]).entries()) {
+          const [_c, pasted] = caseRow;
+          it(caseTitle('%s → accept', caseRow, caseIndex), () => {
+            assert.deepEqual(judge()(text(via, pasted)), {
+              verdict: 'accept',
+              payload: payloadOf(CODE, via),
+            });
+          });
+        }
+
+        for (const [caseIndex, caseRow] of cases([
+          [
+            'a URL with a wrong state',
+            `http://localhost:61001/callback?code=${CODE}&state=${OTHER}`,
+          ],
+          [
+            'a URL without state',
+            `http://localhost:61001/callback?code=${CODE}`,
+          ],
+          [
+            'a URL with two states',
+            `http://localhost:61001/callback?code=${CODE}&state=${STATE}&state=${STATE}`,
+          ],
+          [
+            '…/callback&code=X (not bare: no query, so no state)',
+            `http://localhost:61001/callback&code=${CODE}`,
+          ],
+          ['code=X (not bare)', `code=${CODE}`],
+          ['a code with a slash', `${CODE}/x`],
+          [
+            'the state in a fragment only',
+            `http://localhost/callback?code=${CODE}#state=${STATE}`,
+          ],
+        ]).entries()) {
+          const [_c, pasted] = caseRow;
+          it(caseTitle('%s → refuse pasted-state', caseRow, caseIndex), () => {
+            assert.deepEqual(
+              judge()(text(via, pasted)),
+              refused('pasted-state'),
+            );
+          });
+        }
+
+        for (const [caseIndex, caseRow] of cases([
+          ['nothing', ''],
+          ['blanks', '   '],
+          ['two words', `${CODE} ${CODE}`],
+          [
+            'a URL with the right state and no code',
+            `http://localhost/callback?state=${STATE}`,
+          ],
+          [
+            'a URL with the right state and two codes',
+            `http://localhost/callback?state=${STATE}&code=${CODE}&code=${CODE}`,
+          ],
+          [
+            'a URL whose code is only in the fragment',
+            `http://localhost/callback?state=${STATE}#code=${CODE}`,
+          ],
+        ]).entries()) {
+          const [_c, pasted] = caseRow;
+          it(caseTitle('%s → unreadable', caseRow, caseIndex), () => {
+            unreadable(judge()(text(via, pasted)));
+          });
+        }
+      });
+    }
+
+    describe('a consumer text', () => {
+      it('is the code, verbatim', () => {
+        assert.deepEqual(judge()(text('consumer', ` ${CODE} `)), {
+          verdict: 'accept',
+          payload: payloadOf(` ${CODE} `, 'consumer'),
+        });
+      });
+
+      it('empty → end no-input', () => {
+        matchObject(endError(judge()(text('consumer', ''))), {
+          kind: 'interactive-login',
+          facts: { outcome: 'no-input' },
+        });
+      });
     });
   });
-
-  describe('a consumer text', () => {
-    it('is the code, verbatim', () => {
-      expect(judge()(text('consumer', ` ${CODE} `))).toEqual({
-        verdict: 'accept',
-        payload: payloadOf(` ${CODE} `, 'consumer'),
-      });
-    });
-
-    it('empty → end no-input', () => {
-      expect(endError(judge()(text('consumer', '')))).toMatchObject({
-        kind: 'interactive-login',
-        facts: { outcome: 'no-input' },
-      });
-    });
-  });
-});
+}
 
 /** The two text protocols. */
-describe.each([
-  ['samlResponse', samlResponse, 'PHNhbWw+', 'SAMLResponse'],
-  ['passcode', passcode, 'PASSCODE-77', 'code'],
-] as const)('%s', (name, make, value, parameter) => {
-  const judge = (): AnswerJudge<string> => make().begin('not even a URL');
+for (const [caseIndex, caseRow] of (
+  [
+    ['samlResponse', samlResponse, 'PHNhbWw+', 'SAMLResponse'],
+    ['passcode', passcode, 'PASSCODE-77', 'code'],
+  ] as const
+).entries()) {
+  const [name, make, value, parameter] = caseRow;
+  describe(caseTitle('%s', caseRow, caseIndex), () => {
+    const judge = (): AnswerJudge<string> => make().begin('not even a URL');
 
-  it('declares its redirect, its methods and its paste words', () => {
-    const protocol = make();
-    if (name === 'samlResponse') {
-      expect(protocol.redirect).toBe('required');
-      expect(protocol.callbackMethods).toEqual(['GET', 'POST']);
-    } else {
-      expect(protocol.redirect).toBe('unused');
-      expect(protocol.callbackMethods).toEqual([]);
+    it('declares its redirect, its methods and its paste words', () => {
+      const protocol = make();
+      if (name === 'samlResponse') {
+        assert.equal(protocol.redirect, 'required');
+        assert.deepEqual(protocol.callbackMethods, ['GET', 'POST']);
+      } else {
+        assert.equal(protocol.redirect, 'unused');
+        assert.deepEqual(protocol.callbackMethods, []);
+      }
+      assert.equal(typeof protocol.paste?.prompt, 'string');
+      assert.equal(typeof protocol.paste?.instructions, 'string');
+    });
+
+    for (const [caseIndex, caseRow] of (['GET', 'POST'] as const).entries()) {
+      const method = caseRow;
+      it(caseTitle('a redirect by %s', caseRow, caseIndex), () => {
+        const verdict = judge()(
+          redirect(
+            `${parameter}=${encodeURIComponent(value)}&state=${OTHER}`,
+            method,
+          ),
+        );
+        assert.deepEqual(
+          verdict,
+          name === 'samlResponse'
+            ? { verdict: 'accept', payload: value }
+            : refused('no-payload'),
+        );
+      });
     }
-    expect(protocol.paste?.prompt).toEqual(expect.any(String));
-    expect(protocol.paste?.instructions).toEqual(expect.any(String));
-  });
 
-  it.each(['GET', 'POST'] as const)('a redirect by %s', (method) => {
-    const verdict = judge()(
-      redirect(
-        `${parameter}=${encodeURIComponent(value)}&state=${OTHER}`,
-        method,
-      ),
-    );
-    expect(verdict).toEqual(
-      name === 'samlResponse'
-        ? { verdict: 'accept', payload: value }
-        : refused('no-payload'),
-    );
-  });
+    for (const [caseIndex, caseRow] of cases([
+      ['none', 'RelayState=x'],
+      ['an empty one', `${parameter}=`],
+      ['two', `${parameter}=${value}&${parameter}=${value}`],
+    ]).entries()) {
+      const [_c, query] = caseRow;
+      it(
+        caseTitle('a redirect with %s → refuse no-payload', caseRow, caseIndex),
+        () => {
+          assert.deepEqual(
+            judge()(redirect(query, 'POST')),
+            refused('no-payload'),
+          );
+        },
+      );
+    }
 
-  it.each([
-    ['none', 'RelayState=x'],
-    ['an empty one', `${parameter}=`],
-    ['two', `${parameter}=${value}&${parameter}=${value}`],
-  ])('a redirect with %s → refuse no-payload', (_c, query) => {
-    expect(judge()(redirect(query, 'POST'))).toEqual(refused('no-payload'));
-  });
-
-  it.each(['form', 'terminal', 'consumer'] as const)(
-    'a %s text, trimmed → accept',
-    (via) => {
-      expect(judge()(text(via, `  ${value}\n`))).toEqual({
-        verdict: 'accept',
-        payload: value,
+    for (const [caseIndex, caseRow] of (
+      ['form', 'terminal', 'consumer'] as const
+    ).entries()) {
+      const via = caseRow;
+      it(caseTitle('a %s text, trimmed → accept', caseRow, caseIndex), () => {
+        assert.deepEqual(judge()(text(via, `  ${value}\n`)), {
+          verdict: 'accept',
+          payload: value,
+        });
       });
-    },
-  );
+    }
 
-  it('an empty form text → refuse no-payload', () => {
-    expect(judge()(text('form', '  '))).toEqual(refused('no-payload'));
+    it('an empty form text → refuse no-payload', () => {
+      assert.deepEqual(judge()(text('form', '  ')), refused('no-payload'));
+    });
+
+    for (const [caseIndex, caseRow] of (
+      ['terminal', 'consumer'] as const
+    ).entries()) {
+      const via = caseRow;
+      it(
+        caseTitle('an empty %s text → end no-input', caseRow, caseIndex),
+        () => {
+          matchObject(endError(judge()(text(via, ' \n'))), {
+            kind: 'interactive-login',
+            facts: { outcome: 'no-input' },
+          });
+        },
+      );
+    }
   });
-
-  it.each(['terminal', 'consumer'] as const)(
-    'an empty %s text → end no-input',
-    (via) => {
-      expect(endError(judge()(text(via, ' \n')))).toMatchObject({
-        kind: 'interactive-login',
-        facts: { outcome: 'no-input' },
-      });
-    },
-  );
-});
+}

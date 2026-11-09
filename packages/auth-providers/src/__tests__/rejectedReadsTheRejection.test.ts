@@ -1,4 +1,5 @@
-import { describe, expect, it, jest } from '@jest/globals';
+import assert from 'node:assert/strict';
+import { describe, it, mock } from 'node:test';
 import { blamesCredential } from '@mcp-abap-adt/auth-errors';
 import type {
   IAuthProvider,
@@ -8,6 +9,13 @@ import type {
 } from '@mcp-abap-adt/interfaces-auth';
 import * as surface from '../index';
 import { refreshThenLogin } from '../renewal';
+import {
+  cases,
+  caseTitle,
+  contains,
+  matchObject,
+  matchText,
+} from './helpers/expectations';
 import { minted } from './helpers/minted';
 import { recordingTargets } from './helpers/targets';
 import { fakeSystem, peLibrary } from './snc/fakeSystem';
@@ -28,66 +36,84 @@ const unknownLogon: IAuthRejection = { at: 'logon', error: new Error('?') };
 
 const refusal = async (p: IAuthProvider, r: IAuthRejection) => {
   const outcome = await p.rejected(r);
-  expect(outcome.ok).toBe(false);
+  assert.equal(outcome.ok, false);
   return outcome.ok ? undefined : outcome.refusal;
 };
 
-describe.each([
+for (const [caseIndex, caseRow] of (
   [
-    'basic',
-    () => new surface.BasicAuthProvider('u', 'p'),
-    'the user or password was refused',
-  ],
-  [
-    'certificate',
-    () =>
-      new surface.CertificateAuthProvider(
-        { load: async () => ({ cert: 'C', key: 'K' }) },
-        { url: 'https://h', authType: 'certificate' },
-      ),
-    'the client certificate was refused',
-  ],
-  [
-    'saml cookies',
-    () => new surface.SamlAuthProvider('MYSAPSSO2=x'),
-    'the SAML session was refused or has expired',
-  ],
-  [
-    'token fixed',
-    () => surface.TokenAuthProvider.fixed('t'),
-    'the token was refused',
-  ],
-] as const)(
-  '%s blames its credential only when it was refused',
-  (_, make, blame) => {
-    it.each([
-      ['401', r401],
-      ['RFC_LOGON_FAILURE', logonRefused],
-    ])('%s → its own refusal', async (_, r) => {
-      expect((await refusal(make(), r))?.reason).toBe(blame);
-    });
+    [
+      'basic',
+      () => new surface.BasicAuthProvider('u', 'p'),
+      'the user or password was refused',
+    ],
+    [
+      'certificate',
+      () =>
+        new surface.CertificateAuthProvider(
+          { load: async () => ({ cert: 'C', key: 'K' }) },
+          { url: 'https://h', authType: 'certificate' },
+        ),
+      'the client certificate was refused',
+    ],
+    [
+      'saml cookies',
+      () => new surface.SamlAuthProvider('MYSAPSSO2=x'),
+      'the SAML session was refused or has expired',
+    ],
+    [
+      'token fixed',
+      () => surface.TokenAuthProvider.fixed('t'),
+      'the token was refused',
+    ],
+  ] as const
+).entries()) {
+  const [_, make, blame] = caseRow;
+  describe(
+    caseTitle(
+      '%s blames its credential only when it was refused',
+      caseRow,
+      caseIndex,
+    ),
+    () => {
+      for (const [caseIndex, caseRow] of cases([
+        ['401', r401],
+        ['RFC_LOGON_FAILURE', logonRefused],
+      ]).entries()) {
+        const [_, r] = caseRow;
+        it(caseTitle('%s → its own refusal', caseRow, caseIndex), async () => {
+          assert.equal((await refusal(make(), r))?.reason, blame);
+        });
+      }
 
-    it.each([
-      ['403', r403, /not authorized \(403\)/],
-      ['302', r302, /redirected .* \(302\)/],
-      ['503', r503, /failed \(503\), not the credential/],
-      ['a network failure', network, /RFC_COMMUNICATION_FAILURE/],
-      [
-        'an unknown logon failure',
-        unknownLogon,
-        /^the logon failed \(unknown error\)$/,
-      ],
-    ])('%s → a neutral refusal', async (_, r, reason) => {
-      const got = await refusal(make(), r);
-      expect(got?.reason).toMatch(reason);
-      expect(got?.reason).not.toBe(blame);
-    });
-  },
-);
+      for (const [caseIndex, caseRow] of cases([
+        ['403', r403, /not authorized \(403\)/],
+        ['302', r302, /redirected .* \(302\)/],
+        ['503', r503, /failed \(503\), not the credential/],
+        ['a network failure', network, /RFC_COMMUNICATION_FAILURE/],
+        [
+          'an unknown logon failure',
+          unknownLogon,
+          /^the logon failed \(unknown error\)$/,
+        ],
+      ]).entries()) {
+        const [_, r, reason] = caseRow;
+        it(
+          caseTitle('%s → a neutral refusal', caseRow, caseIndex),
+          async () => {
+            const got = await refusal(make(), r);
+            matchText(got?.reason, reason);
+            assert.notEqual(got?.reason, blame);
+          },
+        );
+      }
+    },
+  );
+}
 
 describe('TokenAuthProvider.from renews only a refused credential', () => {
   const make = () => {
-    const refreshToken = jest.fn(async () => 'NEW');
+    const refreshToken = mock.fn(async () => 'NEW');
     const p = surface.TokenAuthProvider.from({
       getToken: async () => 'OLD',
       refreshToken,
@@ -95,43 +121,52 @@ describe('TokenAuthProvider.from renews only a refused credential', () => {
     return { p, refreshToken };
   };
 
-  it.each([
+  for (const [caseIndex, caseRow] of cases([
     ['401', r401],
     ['RFC_LOGON_FAILURE', logonRefused],
     ['an unknown logon failure', unknownLogon],
-  ])('%s → renews → Ok', async (_, r) => {
-    const { p, refreshToken } = make();
-    await p.authorize(recordingTargets().requestTarget);
-    await expect(p.rejected(r)).resolves.toEqual({ ok: true });
-    expect(refreshToken).toHaveBeenCalledTimes(1);
-  });
+  ]).entries()) {
+    const [_, r] = caseRow;
+    it(caseTitle('%s → renews → Ok', caseRow, caseIndex), async () => {
+      const { p, refreshToken } = make();
+      await p.authorize(recordingTargets().requestTarget);
+      assert.deepEqual(await p.rejected(r), { ok: true });
+      assert.equal(refreshToken.mock.callCount(), 1);
+    });
+  }
 
-  it.each([
+  for (const [caseIndex, caseRow] of cases([
     ['403', r403],
     ['302', r302],
     ['503', r503],
     ['a network failure', network],
-  ])('%s → no renewal, a neutral refusal', async (_, r) => {
-    const { p, refreshToken } = make();
-    await p.authorize(recordingTargets().requestTarget);
-    expect((await p.rejected(r)).ok).toBe(false);
-    expect(refreshToken).not.toHaveBeenCalled();
-  });
+  ]).entries()) {
+    const [_, r] = caseRow;
+    it(
+      caseTitle('%s → no renewal, a neutral refusal', caseRow, caseIndex),
+      async () => {
+        const { p, refreshToken } = make();
+        await p.authorize(recordingTargets().requestTarget);
+        assert.equal((await p.rejected(r)).ok, false);
+        assert.equal(refreshToken.mock.callCount(), 0);
+      },
+    );
+  }
 });
 
 class CountingTokenProvider extends surface.BaseTokenProvider {
-  login = jest.fn(
+  login = mock.fn(
     async (): Promise<ITokenResult> => ({
-      authorizationToken: `T${this.login.mock.calls.length}`,
+      authorizationToken: `T${this.login.mock.calls.map((call) => call.arguments).length}`,
       refreshToken: 'R',
       authType: 'client_credentials',
       tokenType: 'opaque',
       expiresAt: Date.now() + 3600_000,
     }),
   );
-  refresh = jest.fn(
+  refresh = mock.fn(
     async (): Promise<ITokenResult> => ({
-      authorizationToken: `F${this.refresh.mock.calls.length}`,
+      authorizationToken: `F${this.refresh.mock.calls.map((call) => call.arguments).length}`,
       refreshToken: 'R',
       authType: 'client_credentials',
       tokenType: 'opaque',
@@ -156,30 +191,39 @@ class CountingTokenProvider extends surface.BaseTokenProvider {
 }
 
 describe('BaseTokenProvider renews only a refused credential', () => {
-  it.each([
+  for (const [caseIndex, caseRow] of cases([
     ['401', r401],
     ['RFC_LOGON_FAILURE', logonRefused],
     ['an unknown logon failure', unknownLogon],
-  ])('%s → one renewal → Ok', async (_, r) => {
-    const p = new CountingTokenProvider({ renewal: refreshThenLogin() });
-    await p.authorize(recordingTargets().requestTarget);
-    await expect(p.rejected(r)).resolves.toEqual({ ok: true });
-    expect(p.refresh).toHaveBeenCalledTimes(1);
-  });
+  ]).entries()) {
+    const [_, r] = caseRow;
+    it(caseTitle('%s → one renewal → Ok', caseRow, caseIndex), async () => {
+      const p = new CountingTokenProvider({ renewal: refreshThenLogin() });
+      await p.authorize(recordingTargets().requestTarget);
+      assert.deepEqual(await p.rejected(r), { ok: true });
+      assert.equal(p.refresh.mock.callCount(), 1);
+    });
+  }
 
-  it.each([
+  for (const [caseIndex, caseRow] of cases([
     ['403', r403, /not authorized \(403\)/],
     ['302', r302, /redirected/],
     ['503', r503, /failed \(503\)/],
     ['a network failure', network, /RFC_COMMUNICATION_FAILURE/],
-  ])('%s → no renewal, a neutral refusal', async (_, r, reason) => {
-    const p = new CountingTokenProvider({ renewal: refreshThenLogin() });
-    await p.authorize(recordingTargets().requestTarget);
-    const outcome = await p.rejected(r);
-    expect(outcome.ok === false && outcome.refusal.reason).toMatch(reason);
-    expect(p.refresh).not.toHaveBeenCalled();
-    expect(p.login).toHaveBeenCalledTimes(1); // only the authorize
-  });
+  ]).entries()) {
+    const [_, r, reason] = caseRow;
+    it(
+      caseTitle('%s → no renewal, a neutral refusal', caseRow, caseIndex),
+      async () => {
+        const p = new CountingTokenProvider({ renewal: refreshThenLogin() });
+        await p.authorize(recordingTargets().requestTarget);
+        const outcome = await p.rejected(r);
+        matchText(outcome.ok === false && outcome.refusal.reason, reason);
+        assert.equal(p.refresh.mock.callCount(), 0);
+        assert.equal(p.login.mock.callCount(), 1); // only the authorize
+      },
+    );
+  }
 });
 
 describe('SncLogonProvider leaves a status that is not about the logon to the neutral words', () => {
@@ -201,7 +245,7 @@ describe('SncLogonProvider leaves a status that is not about the logon to the ne
 
   it('403 on a call → the neutral refusal, not an SNC one', async () => {
     const got = await refusal(make(), r403);
-    expect(got?.reason).toMatch(/not authorized \(403\)/);
+    matchText(got?.reason, /not authorized \(403\)/);
   });
 
   it('a GSS code in a communication failure is still explained', async () => {
@@ -213,7 +257,8 @@ describe('SncLogonProvider leaves a status that is not about the logon to the ne
           'GSS-API(min): A2200019:Operation aborted by user or application',
       },
     });
-    expect(got?.reason).toBe(
+    assert.equal(
+      got?.reason,
       'the SNC library has no credential to present (A2200019)',
     );
   });
@@ -230,8 +275,8 @@ describe('a neutral refusal is system-refused and never blames the credential', 
     ],
   ];
 
-  it.each(
-    providers.flatMap(([name, make]) =>
+  for (const [caseIndex, caseRow] of providers
+    .flatMap(([name, make]) =>
       (
         [
           ['403', r403, 'not-authorized'],
@@ -240,27 +285,39 @@ describe('a neutral refusal is system-refused and never blames the credential', 
           ['a network failure', network, 'rfc-failure'],
         ] as const
       ).map(([what, r, verdict]) => [name, what, make, r, verdict] as const),
-    ),
-  )('%s, %s → system-refused %s', async (_n, _w, make, r, verdict) => {
-    const p = make();
-    await p.authorize(recordingTargets().requestTarget);
-    const error = minted(await refusal(p, r));
-    expect(error.kind).toBe('system-refused');
-    expect(error.facts).toMatchObject({ verdict, at: r.at });
-    expect(blamesCredential(error)).toBe(false);
-  });
+    )
+    .entries()) {
+    const [_n, _w, make, r, verdict] = caseRow;
+    it(
+      caseTitle('%s, %s → system-refused %s', caseRow, caseIndex),
+      async () => {
+        const p = make();
+        await p.authorize(recordingTargets().requestTarget);
+        const error = minted(await refusal(p, r));
+        assert.equal(error.kind, 'system-refused');
+        matchObject(error.facts, { verdict, at: r.at });
+        assert.equal(blamesCredential(error), false);
+      },
+    );
+  }
 
-  it.each(
-    providers
-      .filter(([name]) => name !== 'token provider')
-      .map(([name, make]) => [name, make] as const),
-  )(
-    '%s, an unknown logon failure → system-refused unknown',
-    async (_, make) => {
-      const error = minted(await refusal(make(), unknownLogon));
-      expect(error.kind).toBe('system-refused');
-      expect(error.facts).toEqual({ verdict: 'unknown', at: 'logon' });
-      expect(blamesCredential(error)).toBe(false);
-    },
-  );
+  for (const [caseIndex, caseRow] of providers
+    .filter(([name]) => name !== 'token provider')
+    .map(([name, make]) => [name, make] as const)
+    .entries()) {
+    const [_, make] = caseRow;
+    it(
+      caseTitle(
+        '%s, an unknown logon failure → system-refused unknown',
+        caseRow,
+        caseIndex,
+      ),
+      async () => {
+        const error = minted(await refusal(make(), unknownLogon));
+        assert.equal(error.kind, 'system-refused');
+        assert.deepEqual(error.facts, { verdict: 'unknown', at: 'logon' });
+        assert.equal(blamesCredential(error), false);
+      },
+    );
+  }
 });

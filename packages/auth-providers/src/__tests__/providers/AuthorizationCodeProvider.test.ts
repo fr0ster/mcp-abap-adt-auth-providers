@@ -8,13 +8,14 @@
  * 3. Service key + expired session + expired refresh token - should login via browser
  */
 
+import assert from 'node:assert/strict';
 import * as dns from 'node:dns/promises';
 import * as fs from 'node:fs';
 import httpModule from 'node:http';
 import netModule from 'node:net';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { jest } from '@jest/globals';
+import { describe, it, mock } from 'node:test';
 import { AuthProviderFailure } from '@mcp-abap-adt/auth-errors';
 import {
   AbapServiceKeyStore,
@@ -36,6 +37,7 @@ import {
   interactiveLoginEnabled,
   loadTestConfig,
 } from '../helpers/configHelpers';
+import { matchObject, thrown } from '../helpers/expectations';
 import { configurationOf } from '../helpers/minted';
 import { canListenOnLocalhost, getAvailablePort } from '../helpers/netHelpers';
 import { recordingBrowser } from '../helpers/recordingBrowser';
@@ -123,179 +125,48 @@ describe('AuthorizationCodeProvider', () => {
    * Both interactive cases below build a strategy for a login a *person*
    * completes — typing a username, a password and a second factor — and five
    * minutes is the number chosen for that, not up for negotiation downward.
-   *
-   * `INTERACTIVE_JEST_TIMEOUT_MS` is derived from it rather than written as
-   * its own magic number, so the invariant this is protecting stays visible
-   * instead of depending on two constants that happen to agree today: the
-   * test's own bound — an `AbortSignal.timeout` it hands the strategy, as a
-   * consumer composes one (no login has a bound of the package's
-   * choosing) — must expire strictly before Jest's. If Jest's timeout fired
-   * first, the case would fail with "Exceeded timeout of Xms" — which says
-   * nothing about authentication — instead of the login's own, legible
-   * "the browser login was aborted". The
-   * margin on top covers everything a login itself does not: loading the
-   * service key, DNS, Scenario 3's deliberately-failed refresh, launching the
-   * browser, the token exchange, assertions and cleanup.
+   * It is the test's own bound, an `AbortSignal.timeout` it hands the
+   * strategy as a consumer composes one (no login has a bound of the
+   * package's choosing, and the runner has none): a login left too long ends
+   * with its own, legible "the browser login was aborted".
    */
   const HUMAN_LOGIN_TIMEOUT_MS = 5 * 60 * 1000;
-  const INTERACTIVE_JEST_MARGIN_MS = 60 * 1000;
-  const INTERACTIVE_JEST_TIMEOUT_MS =
-    HUMAN_LOGIN_TIMEOUT_MS + INTERACTIVE_JEST_MARGIN_MS;
 
   describe('Scenario 1 & 2: Token lifecycle', () => {
-    it(
-      'should login via browser and reuse token from Scenario 1',
-      async () => {
-        if (!hasRealConfigValue) {
-          console.warn('⚠️  Skipping integration test - no real config');
-          return;
-        }
-        if (!interactive) {
-          console.warn(
-            '⚠️  Skipping browser login - set interactive_login: true in tests/test-config.yaml, or MCP_ABAP_ADT_INTERACTIVE=1',
-          );
-          return;
-        }
-
-        if (!destination || !serviceKeysDir) {
-          console.warn(
-            '⚠️  Skipping integration test - missing required config',
-          );
-          return;
-        }
-
-        // Use temporary session directory to avoid affecting real sessions
-        const tempSessionsDir = path.join(
-          os.tmpdir(),
-          `test-sessions-${Date.now()}`,
+    it('should login via browser and reuse token from Scenario 1', async () => {
+      if (!hasRealConfigValue) {
+        console.warn('⚠️  Skipping integration test - no real config');
+        return;
+      }
+      if (!interactive) {
+        console.warn(
+          '⚠️  Skipping browser login - set interactive_login: true in tests/test-config.yaml, or MCP_ABAP_ADT_INTERACTIVE=1',
         );
-        fs.mkdirSync(tempSessionsDir, { recursive: true });
+        return;
+      }
 
-        try {
-          const serviceKeyStore = new AbapServiceKeyStore(serviceKeysDir);
-          const sessionStore = new AbapSessionStore(tempSessionsDir);
+      if (!destination || !serviceKeysDir) {
+        console.warn('⚠️  Skipping integration test - missing required config');
+        return;
+      }
 
-          // Ensure no session exists
-          try {
-            await sessionStore.deleteSession(destination);
-          } catch {
-            // Session doesn't exist, that's fine
-          }
+      // Use temporary session directory to avoid affecting real sessions
+      const tempSessionsDir = path.join(
+        os.tmpdir(),
+        `test-sessions-${Date.now()}`,
+      );
+      fs.mkdirSync(tempSessionsDir, { recursive: true });
 
-          const authConfig =
-            await serviceKeyStore.getAuthorizationConfig(destination);
-          if (!authConfig) {
-            throw new Error(
-              'Failed to load authorization config from service key',
-            );
-          }
-          if (!(await canResolveHost(authConfig.uaaUrl!))) {
-            console.warn(
-              '⚠️  Skipping integration test - UAA host not resolvable',
-            );
-            return;
-          }
-          if (!(await canListenOnLocalhost())) {
-            console.warn(
-              '⚠️  Skipping integration test - cannot bind to localhost',
-            );
-            return;
-          }
-
-          // Create provider with only service key (no session tokens)
-          // Use unique port for this test to avoid conflicts
-          const logger = createTestLogger();
-          const port1 = await getAvailablePort();
-          const port2 = await getAvailablePort();
-          const provider = new AuthorizationCodeProvider({
-            renewal: refreshThenLogin(),
-            uaaUrl: authConfig.uaaUrl!,
-            clientId: authConfig.uaaClientId!,
-            clientSecret: authConfig.uaaClientSecret!,
-            // No browser is launched by a test: the URL is shown on
-            // stderr for the person running the interactive case.
-            authorization: browserCallbackStrategy({
-              port: port1,
-              signal: AbortSignal.timeout(HUMAN_LOGIN_TIMEOUT_MS),
-            }),
-            logger,
-          });
-
-          // Provider should attempt login via browser
-          const tokens1 = await provider.getTokens();
-          expect(tokens1.authorizationToken).toBeDefined();
-          expect(tokens1.authType).toBe(AUTH_TYPE_AUTHORIZATION_CODE);
-
-          // Validate that new token is valid and not expired
-          const isValid1 = validateTokenExpiration(tokens1.authorizationToken);
-          expect(isValid1).toBe(true);
-
-          // Wait a bit for server to fully close and port to be freed
-          await new Promise((resolve) => setTimeout(resolve, 500));
-
-          // Scenario 2: Use token from Scenario 1 - should use cached token
-          const provider2 = new AuthorizationCodeProvider({
-            renewal: refreshThenLogin(),
-            uaaUrl: authConfig.uaaUrl!,
-            clientId: authConfig.uaaClientId!,
-            clientSecret: authConfig.uaaClientSecret!,
-            refreshToken: tokens1.refreshToken,
-            accessToken: tokens1.authorizationToken, // Use token from Scenario 1
-            // This provider exists to prove the Scenario 1 token is reused from
-            // cache — it must never need to log in. A 30 s bound of the
-            // test's own (not the human budget) turns "it tried to open a
-            // browser anyway" into a fast, enforced failure instead of a
-            // five-minute wait.
-            authorization: browserCallbackStrategy({
-              port: port2,
-              signal: AbortSignal.timeout(30_000),
-            }),
-            logger,
-          });
-
-          const tokens2 = await provider2.getTokens();
-          expect(tokens2.authorizationToken).toBeDefined();
-          expect(tokens2.authType).toBe(AUTH_TYPE_AUTHORIZATION_CODE);
-          // Should use cached token from Scenario 1
-          expect(tokens2.authorizationToken).toBe(tokens1.authorizationToken);
-          const isValid2 = validateTokenExpiration(tokens2.authorizationToken);
-          expect(isValid2).toBe(true);
-        } finally {
-          // Cleanup
-          try {
-            fs.rmSync(tempSessionsDir, { recursive: true, force: true });
-          } catch {
-            // Ignore cleanup errors
-          }
-        }
-      },
-      INTERACTIVE_JEST_TIMEOUT_MS,
-    );
-  });
-
-  describe('Scenario 3: Service key + expired session + expired refresh token', () => {
-    it(
-      'should login via browser when refresh token is also expired',
-      async () => {
-        if (!hasRealConfigValue) {
-          console.warn('⚠️  Skipping integration test - no real config');
-          return;
-        }
-        if (!interactive) {
-          console.warn(
-            '⚠️  Skipping browser login - set interactive_login: true in tests/test-config.yaml, or MCP_ABAP_ADT_INTERACTIVE=1',
-          );
-          return;
-        }
-
-        if (!destination || !serviceKeysDir) {
-          console.warn(
-            '⚠️  Skipping integration test - missing required config',
-          );
-          return;
-        }
-
+      try {
         const serviceKeyStore = new AbapServiceKeyStore(serviceKeysDir);
+        const sessionStore = new AbapSessionStore(tempSessionsDir);
+
+        // Ensure no session exists
+        try {
+          await sessionStore.deleteSession(destination);
+        } catch {
+          // Session doesn't exist, that's fine
+        }
 
         const authConfig =
           await serviceKeyStore.getAuthorizationConfig(destination);
@@ -317,37 +188,138 @@ describe('AuthorizationCodeProvider', () => {
           return;
         }
 
-        // Create provider with expired token and invalid refresh token
+        // Create provider with only service key (no session tokens)
+        // Use unique port for this test to avoid conflicts
         const logger = createTestLogger();
-        const expiredToken = createExpiredJWT();
-        const redirectPort = await getAvailablePort();
+        const port1 = await getAvailablePort();
+        const port2 = await getAvailablePort();
         const provider = new AuthorizationCodeProvider({
           renewal: refreshThenLogin(),
           uaaUrl: authConfig.uaaUrl!,
           clientId: authConfig.uaaClientId!,
           clientSecret: authConfig.uaaClientSecret!,
-          refreshToken: 'invalid-expired-refresh-token', // Invalid refresh token
-          accessToken: expiredToken, // Expired token
           // No browser is launched by a test: the URL is shown on
           // stderr for the person running the interactive case.
           authorization: browserCallbackStrategy({
-            port: redirectPort,
+            port: port1,
             signal: AbortSignal.timeout(HUMAN_LOGIN_TIMEOUT_MS),
           }),
           logger,
         });
 
-        // Provider should attempt refresh, fail, then attempt login via browser
-        const tokens = await provider.getTokens();
-        expect(tokens.authorizationToken).toBeDefined();
-        expect(tokens.authType).toBe(AUTH_TYPE_AUTHORIZATION_CODE);
+        // Provider should attempt login via browser
+        const tokens1 = await provider.getTokens();
+        assert.notEqual(tokens1.authorizationToken, undefined);
+        assert.equal(tokens1.authType, AUTH_TYPE_AUTHORIZATION_CODE);
 
         // Validate that new token is valid and not expired
-        const isValid = validateTokenExpiration(tokens.authorizationToken);
-        expect(isValid).toBe(true);
-      },
-      INTERACTIVE_JEST_TIMEOUT_MS,
-    );
+        const isValid1 = validateTokenExpiration(tokens1.authorizationToken);
+        assert.equal(isValid1, true);
+
+        // Wait a bit for server to fully close and port to be freed
+        await new Promise((resolve) => setTimeout(resolve, 500));
+
+        // Scenario 2: Use token from Scenario 1 - should use cached token
+        const provider2 = new AuthorizationCodeProvider({
+          renewal: refreshThenLogin(),
+          uaaUrl: authConfig.uaaUrl!,
+          clientId: authConfig.uaaClientId!,
+          clientSecret: authConfig.uaaClientSecret!,
+          refreshToken: tokens1.refreshToken,
+          accessToken: tokens1.authorizationToken, // Use token from Scenario 1
+          // This provider exists to prove the Scenario 1 token is reused from
+          // cache — it must never need to log in. A 30 s bound of the
+          // test's own (not the human budget) turns "it tried to open a
+          // browser anyway" into a fast, enforced failure instead of a
+          // five-minute wait.
+          authorization: browserCallbackStrategy({
+            port: port2,
+            signal: AbortSignal.timeout(30_000),
+          }),
+          logger,
+        });
+
+        const tokens2 = await provider2.getTokens();
+        assert.notEqual(tokens2.authorizationToken, undefined);
+        assert.equal(tokens2.authType, AUTH_TYPE_AUTHORIZATION_CODE);
+        // Should use cached token from Scenario 1
+        assert.equal(tokens2.authorizationToken, tokens1.authorizationToken);
+        const isValid2 = validateTokenExpiration(tokens2.authorizationToken);
+        assert.equal(isValid2, true);
+      } finally {
+        // Cleanup
+        try {
+          fs.rmSync(tempSessionsDir, { recursive: true, force: true });
+        } catch {
+          // Ignore cleanup errors
+        }
+      }
+    });
+  });
+
+  describe('Scenario 3: Service key + expired session + expired refresh token', () => {
+    it('should login via browser when refresh token is also expired', async () => {
+      if (!hasRealConfigValue) {
+        console.warn('⚠️  Skipping integration test - no real config');
+        return;
+      }
+      if (!interactive) {
+        console.warn(
+          '⚠️  Skipping browser login - set interactive_login: true in tests/test-config.yaml, or MCP_ABAP_ADT_INTERACTIVE=1',
+        );
+        return;
+      }
+
+      if (!destination || !serviceKeysDir) {
+        console.warn('⚠️  Skipping integration test - missing required config');
+        return;
+      }
+
+      const serviceKeyStore = new AbapServiceKeyStore(serviceKeysDir);
+
+      const authConfig =
+        await serviceKeyStore.getAuthorizationConfig(destination);
+      if (!authConfig) {
+        throw new Error('Failed to load authorization config from service key');
+      }
+      if (!(await canResolveHost(authConfig.uaaUrl!))) {
+        console.warn('⚠️  Skipping integration test - UAA host not resolvable');
+        return;
+      }
+      if (!(await canListenOnLocalhost())) {
+        console.warn('⚠️  Skipping integration test - cannot bind to localhost');
+        return;
+      }
+
+      // Create provider with expired token and invalid refresh token
+      const logger = createTestLogger();
+      const expiredToken = createExpiredJWT();
+      const redirectPort = await getAvailablePort();
+      const provider = new AuthorizationCodeProvider({
+        renewal: refreshThenLogin(),
+        uaaUrl: authConfig.uaaUrl!,
+        clientId: authConfig.uaaClientId!,
+        clientSecret: authConfig.uaaClientSecret!,
+        refreshToken: 'invalid-expired-refresh-token', // Invalid refresh token
+        accessToken: expiredToken, // Expired token
+        // No browser is launched by a test: the URL is shown on
+        // stderr for the person running the interactive case.
+        authorization: browserCallbackStrategy({
+          port: redirectPort,
+          signal: AbortSignal.timeout(HUMAN_LOGIN_TIMEOUT_MS),
+        }),
+        logger,
+      });
+
+      // Provider should attempt refresh, fail, then attempt login via browser
+      const tokens = await provider.getTokens();
+      assert.notEqual(tokens.authorizationToken, undefined);
+      assert.equal(tokens.authType, AUTH_TYPE_AUTHORIZATION_CODE);
+
+      // Validate that new token is valid and not expired
+      const isValid = validateTokenExpiration(tokens.authorizationToken);
+      assert.equal(isValid, true);
+    });
   });
 
   /**
@@ -430,8 +402,8 @@ describe('AuthorizationCodeProvider', () => {
         logger: createTestLogger(),
       });
       const tokens = await provider.getTokens();
-      expect(tokens.authorizationToken).toBe(token);
-      expect(tokens.authType).toBe(AUTH_TYPE_AUTHORIZATION_CODE);
+      assert.equal(tokens.authorizationToken, token);
+      assert.equal(tokens.authType, AUTH_TYPE_AUTHORIZATION_CODE);
     });
 
     it('refreshes through the session refresh token without logging in', async () => {
@@ -455,8 +427,8 @@ describe('AuthorizationCodeProvider', () => {
         logger: createTestLogger(),
       });
       const tokens = await provider.getTokens();
-      expect(tokens.authorizationToken).not.toBe(expired);
-      expect(validateTokenExpiration(tokens.authorizationToken)).toBe(true);
+      assert.notEqual(tokens.authorizationToken, expired);
+      assert.equal(validateTokenExpiration(tokens.authorizationToken), true);
     });
   });
 
@@ -493,13 +465,13 @@ describe('AuthorizationCodeProvider', () => {
       // Test validation of expired token
       const expiredToken = createExpiredJWT();
       const isValidExpired = await provider.validateToken?.(expiredToken);
-      expect(isValidExpired).toBe(false);
+      assert.equal(isValidExpired, false);
 
       // Test validation of valid token
       const validToken = createValidJWT();
       const isValidValid = await provider.validateToken?.(validToken);
-      expect(isValidValid).toBe(true);
-    }, 30000);
+      assert.equal(isValidValid, true);
+    });
   });
 });
 
@@ -540,15 +512,18 @@ describe('AuthorizationCodeProvider with strategies', () => {
       }),
     });
 
-    await expect(provider.getTokens()).rejects.toMatchObject({
-      name: 'AuthProviderFailure',
-      error: {
-        kind: 'interactive-login',
-        facts: { outcome: 'aborted', strategy: 'browser' },
-      },
+    await assert.rejects(provider.getTokens(), (error) => {
+      matchObject(error, {
+        name: 'AuthProviderFailure',
+        error: {
+          kind: 'interactive-login',
+          facts: { outcome: 'aborted', strategy: 'browser' },
+        },
+      });
+      return true;
     });
-    expect(await portIsFree(PORT)).toBe(true);
-  }, 30000);
+    assert.equal(await portIsFree(PORT), true);
+  });
 
   it('rejects a pre-built URL whose redirect does not match, before opening a browser', async () => {
     const browser = recordingBrowser();
@@ -568,16 +543,16 @@ describe('AuthorizationCodeProvider with strategies', () => {
     const started = Date.now();
     // The configuration case; the URIs are diagnostics.
     const thrown = await provider.getTokens().catch((error: unknown) => error);
-    expect(configurationOf(thrown)).toMatchObject({
+    matchObject(configurationOf(thrown), {
       case: 'redirect-mismatch',
       fields: ['authorizationUrl'],
     });
     // Not "eventually" — the point of building-time validation is that it does
     // not wait for a callback that can never arrive.
-    expect(Date.now() - started).toBeLessThan(5000);
-    expect(browser.calls).toEqual([]);
-    expect(await portIsFree(PORT)).toBe(true);
-  }, 30000);
+    assert.ok(Date.now() - started < 5000, `${Date.now() - started} < ${5000}`);
+    assert.deepEqual(browser.calls, []);
+    assert.equal(await portIsFree(PORT), true);
+  });
 
   it('catches the mismatch even from a strategy that never builds a URL', async () => {
     const provider = new AuthorizationCodeProvider({
@@ -598,11 +573,11 @@ describe('AuthorizationCodeProvider with strategies', () => {
 
     // The second net, the same case.
     const thrown = await provider.getTokens().catch((error: unknown) => error);
-    expect(configurationOf(thrown)).toMatchObject({
+    matchObject(configurationOf(thrown), {
       case: 'redirect-mismatch',
       fields: ['authorizationUrl'],
     });
-  }, 30000);
+  });
 });
 
 /**
@@ -648,7 +623,7 @@ describe('AuthorizationCodeProvider strategy lifecycle', () => {
       access_token: createValidJWT(),
       refresh_token: 'refresh-from-stub',
     });
-    const dispose = jest.fn(async () => undefined);
+    const dispose = mock.fn(async () => undefined);
     const redirectUri = 'http://localhost:61001/callback';
     const supplied: IAuthorizationStrategy<string> = {
       authorize: async (request) => {
@@ -668,16 +643,16 @@ describe('AuthorizationCodeProvider strategy lifecycle', () => {
       });
 
       const tokens = await provider.getTokens();
-      expect(tokens.authorizationToken).toBeDefined();
+      assert.notEqual(tokens.authorizationToken, undefined);
       // A receiver the consumer owns must survive the login it served.
-      expect(dispose).not.toHaveBeenCalled();
+      assert.equal(dispose.mock.callCount(), 0);
     } finally {
       await uaa.close();
     }
-  }, 30000);
+  });
 
   it('leaves a supplied strategy alone when the login fails too', async () => {
-    const dispose = jest.fn(async () => undefined);
+    const dispose = mock.fn(async () => undefined);
     const supplied: IAuthorizationStrategy<string> = {
       authorize: async () => {
         throw new Error('consumer flow cancelled');
@@ -695,8 +670,12 @@ describe('AuthorizationCodeProvider strategy lifecycle', () => {
     // The consumer's own error never comes back — an
     // AuthProviderFailure holding the classified error, without its message.
     const failed = provider.getTokens();
-    await expect(failed).rejects.toBeInstanceOf(AuthProviderFailure);
-    await expect(failed).rejects.not.toThrow(/consumer flow cancelled/);
-    expect(dispose).not.toHaveBeenCalled();
-  }, 30000);
+    await assert.rejects(failed, thrown(AuthProviderFailure));
+    await assert.rejects(failed, (error) => {
+      assert.ok(error instanceof Error);
+      assert.doesNotMatch(error.message, /consumer flow cancelled/);
+      return true;
+    });
+    assert.equal(dispose.mock.callCount(), 0);
+  });
 });
