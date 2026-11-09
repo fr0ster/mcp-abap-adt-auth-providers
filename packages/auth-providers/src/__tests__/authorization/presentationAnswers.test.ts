@@ -9,7 +9,9 @@
  * plain node in a child process, bounded by the test.
  */
 
-import { describe, expect, it } from '@jest/globals';
+import assert from 'node:assert/strict';
+import { describe, it } from 'node:test';
+import { caseTitle, notContains } from '../helpers/expectations';
 import { runPlainNode } from '../helpers/plainNode';
 
 /** A transport whose answer arrives through the judge after 200 ms. */
@@ -65,55 +67,63 @@ const PROXY_TRAP_THROWS = `() => new Proxy({}, { get() { seen.thenCalls += 1; th
 const THEN_THROWS = `() => ({ then() { seen.thenCalls += 1; throw new Error('then: SECRET'); } })`;
 
 describe('a presentation’s answer is adopted, whatever promise it is', () => {
-  it.each([
+  for (const [caseIndex, caseRow] of (
     [
-      'a rejecting presentation',
-      REJECTING,
-      { outcome: 'payload:code', thenCalls: 0, lines: 1 },
-    ],
-    [
-      'a presentation answering a thenable that never settles',
-      NEVER,
-      { outcome: 'payload:code', thenCalls: 1, lines: 0 },
-    ],
-    [
-      'a presentation answering a rejecting Promises/A+ thenable',
-      APLUS_REJECTING,
-      { outcome: 'payload:code', thenCalls: 1, lines: 1 },
-    ],
-    [
-      'a presentation answering a thenable whose then throws',
-      THEN_THROWS,
-      { outcome: 'payload:code', thenCalls: 1, lines: 1 },
-    ],
-    [
-      'a presentation answering a thenable whose then getter throws',
-      THEN_GETTER_THROWS,
-      { outcome: 'payload:code', thenCalls: 1, lines: 1 },
-    ],
-    [
-      'a presentation answering a Proxy whose trap throws',
-      PROXY_TRAP_THROWS,
-      { outcome: 'payload:code', thenCalls: 1, lines: 1 },
-    ],
-    [
-      'a presentation throwing synchronously',
-      `() => { throw new Error('sync: SECRET'); }`,
-      { outcome: 'payload:code', thenCalls: 0, lines: 1 },
-    ],
-  ] as const)(
-    '%s: no unhandled rejection, one failure line at most, the login waits for its answer',
-    (_name, present, expected) => {
-      const run = runPlainNode<Record<string, unknown>>(scenario(present), {
-        boundMs: 30_000,
-      });
-      expect(run.timedOut).toBe(false);
-      expect(run.result).toEqual(expected);
-      expect(run.unhandled).toEqual([]);
-      expect(run.stderr).not.toContain('SECRET');
-    },
-    60_000,
-  );
+      [
+        'a rejecting presentation',
+        REJECTING,
+        { outcome: 'payload:code', thenCalls: 0, lines: 1 },
+      ],
+      [
+        'a presentation answering a thenable that never settles',
+        NEVER,
+        { outcome: 'payload:code', thenCalls: 1, lines: 0 },
+      ],
+      [
+        'a presentation answering a rejecting Promises/A+ thenable',
+        APLUS_REJECTING,
+        { outcome: 'payload:code', thenCalls: 1, lines: 1 },
+      ],
+      [
+        'a presentation answering a thenable whose then throws',
+        THEN_THROWS,
+        { outcome: 'payload:code', thenCalls: 1, lines: 1 },
+      ],
+      [
+        'a presentation answering a thenable whose then getter throws',
+        THEN_GETTER_THROWS,
+        { outcome: 'payload:code', thenCalls: 1, lines: 1 },
+      ],
+      [
+        'a presentation answering a Proxy whose trap throws',
+        PROXY_TRAP_THROWS,
+        { outcome: 'payload:code', thenCalls: 1, lines: 1 },
+      ],
+      [
+        'a presentation throwing synchronously',
+        `() => { throw new Error('sync: SECRET'); }`,
+        { outcome: 'payload:code', thenCalls: 0, lines: 1 },
+      ],
+    ] as const
+  ).entries()) {
+    const [_name, present, expected] = caseRow;
+    it(
+      caseTitle(
+        '%s: no unhandled rejection, one failure line at most, the login waits for its answer',
+        caseRow,
+        caseIndex,
+      ),
+      () => {
+        const run = runPlainNode<Record<string, unknown>>(scenario(present), {
+          boundMs: 30_000,
+        });
+        assert.equal(run.timedOut, false);
+        assert.deepEqual(run.result, expected);
+        assert.deepEqual(run.unhandled, []);
+        notContains(run.stderr, 'SECRET');
+      },
+    );
+  }
 });
 
 describe('a logger that throws on the failure line is contained by logQuietly', () => {
@@ -125,15 +135,15 @@ describe('a logger that throws on the failure line is contained by logQuietly', 
       ),
       { boundMs: 30_000 },
     );
-    expect(run.timedOut).toBe(false);
-    expect(run.result).toEqual({
+    assert.equal(run.timedOut, false);
+    assert.deepEqual(run.result, {
       outcome: 'payload:code',
       thenCalls: 0,
       lines: 1,
     });
-    expect(run.unhandled).toEqual([]);
-    expect(run.stderr).not.toContain('SECRET');
-  }, 60_000);
+    assert.deepEqual(run.unhandled, []);
+    notContains(run.stderr, 'SECRET');
+  });
 });
 
 const early = `
@@ -171,8 +181,8 @@ report({ kind });
 describe('a transport whose answer rejects early', () => {
   it('a presentation throwing synchronously: no unhandled rejection, nothing printed, the login failed', () => {
     const run = runPlainNode<{ kind: string }>(early);
-    expect(run.result).toEqual({ kind: 'interactive-login' });
-    expect(run.unhandled).toEqual([]);
-    expect(run.stderr).toBe('');
+    assert.deepEqual(run.result, { kind: 'interactive-login' });
+    assert.deepEqual(run.unhandled, []);
+    assert.equal(run.stderr, '');
   });
 });

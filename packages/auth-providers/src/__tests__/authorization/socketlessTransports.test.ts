@@ -6,7 +6,8 @@
  * protocols' judges.
  */
 
-import { describe, expect, it } from '@jest/globals';
+import assert from 'node:assert/strict';
+import { describe, it } from 'node:test';
 import { readFailure } from '@mcp-abap-adt/auth-errors';
 import type {
   AnswerJudge,
@@ -27,6 +28,12 @@ import {
   consumerHandoff,
   terminalPaste,
 } from '../../authorization/transport';
+import {
+  cases,
+  caseTitle,
+  matchObject,
+  notContains,
+} from '../helpers/expectations';
 
 const STATE = 'Xy9-state-of-this-login_0123456789abcdef';
 const REDIRECT = 'http://localhost:61001/callback';
@@ -100,7 +107,7 @@ describe('terminalPaste', () => {
       read: scripted(['c']).read,
     });
     const none = terminalPaste({ read: scripted(['c']).read });
-    expect(given.label).toBe('manual');
+    assert.equal(given.label, 'manual');
     let channels: (string | undefined)[] = [];
     await answered(given, oauthCode() as Protocol, undefined, (c) => {
       channels = [...channels, c.redirectUri];
@@ -108,28 +115,39 @@ describe('terminalPaste', () => {
     await answered(none, passcode(), undefined, (c) => {
       channels = [...channels, c.redirectUri];
     });
-    expect(channels).toEqual([REDIRECT, undefined]);
+    assert.deepEqual(channels, [REDIRECT, undefined]);
   });
 
-  it.each([
+  for (const [caseIndex, caseRow] of cases([
     ['not a URL', 'localhost:61001/callback'],
     ['not http(s)', 'ftp://localhost/callback'],
     ['relative', '/callback'],
-  ])('a redirectUri %s is refused at construction', (_why, redirectUri) => {
-    expect(
-      configurationOf(() => terminalPaste({ redirectUri } as never)),
-    ).toMatchObject({
-      kind: 'configuration',
-      facts: { case: 'invalid-value', fields: ['redirectUri'] },
-    });
-  });
+  ]).entries()) {
+    const [_why, redirectUri] = caseRow;
+    it(
+      caseTitle(
+        'a redirectUri %s is refused at construction',
+        caseRow,
+        caseIndex,
+      ),
+      () => {
+        matchObject(
+          configurationOf(() => terminalPaste({ redirectUri } as never)),
+          {
+            kind: 'configuration',
+            facts: { case: 'invalid-value', fields: ['redirectUri'] },
+          },
+        );
+      },
+    );
+  }
 
   it('reads nothing before it is armed', async () => {
     const { read, prompts } = scripted(['c']);
     await terminalPaste({ read }).open(optionsFor(passcode()), async () => {
       await new Promise((resolve) => setImmediate(resolve));
     });
-    expect(prompts).toEqual([]);
+    assert.deepEqual(prompts, []);
   });
 
   it('oauthCode: a pasted URL from another login → the reason’s words, then the prompt again; a bare code logs in', async () => {
@@ -138,9 +156,9 @@ describe('terminalPaste', () => {
       'the-code',
     ]);
     const payload = await answered(terminalPaste({ read }), oauthCode());
-    expect(payload).toBe('the-code');
+    assert.equal(payload, 'the-code');
     const prompt = oauthCode().paste?.prompt as string;
-    expect(prompts).toEqual([
+    assert.deepEqual(prompts, [
       prompt,
       `${ANSWER_WORDS['pasted-state']} ${prompt}`,
     ]);
@@ -150,12 +168,13 @@ describe('terminalPaste', () => {
     const { read } = scripted([
       `http://localhost/callback?code=the-code&state=${STATE}`,
     ]);
-    expect(
+    assert.deepEqual(
       await answered(terminalPaste({ read }), oidcCode() as Protocol),
-    ).toEqual({
-      code: 'the-code',
-      state: undefined,
-    });
+      {
+        code: 'the-code',
+        state: undefined,
+      },
+    );
   });
 
   it('oauthCode: an unreadable paste ends unreadable-input (a terminal is not asked twice)', async () => {
@@ -165,29 +184,39 @@ describe('terminalPaste', () => {
     const thrown = await answered(terminalPaste({ read }), oauthCode()).catch(
       (error: unknown) => error,
     );
-    expect(failureOf(thrown).facts).toEqual({ outcome: 'unreadable-input' });
-    expect(prompts).toHaveLength(1);
+    assert.deepEqual(failureOf(thrown).facts, { outcome: 'unreadable-input' });
+    assert.equal(prompts.length, 1);
   });
 
-  it.each([
-    ['samlResponse', samlResponse],
-    ['passcode', passcode],
-  ] as const)(
-    '%s: a text, trimmed, logs in; an empty one ends no-input',
-    async (_name, make) => {
-      expect(
-        await answered(
-          terminalPaste({ read: scripted(['  text  ']).read }),
+  for (const [caseIndex, caseRow] of (
+    [
+      ['samlResponse', samlResponse],
+      ['passcode', passcode],
+    ] as const
+  ).entries()) {
+    const [_name, make] = caseRow;
+    it(
+      caseTitle(
+        '%s: a text, trimmed, logs in; an empty one ends no-input',
+        caseRow,
+        caseIndex,
+      ),
+      async () => {
+        assert.equal(
+          await answered(
+            terminalPaste({ read: scripted(['  text  ']).read }),
+            make(),
+          ),
+          'text',
+        );
+        const thrown = await answered(
+          terminalPaste({ read: scripted(['   ']).read }),
           make(),
-        ),
-      ).toBe('text');
-      const thrown = await answered(
-        terminalPaste({ read: scripted(['   ']).read }),
-        make(),
-      ).catch((error: unknown) => error);
-      expect(failureOf(thrown).facts).toEqual({ outcome: 'no-input' });
-    },
-  );
+        ).catch((error: unknown) => error);
+        assert.deepEqual(failureOf(thrown).facts, { outcome: 'no-input' });
+      },
+    );
+  }
 
   it('a protocol without paste words cannot be used with a terminal', async () => {
     const bare: Protocol = { ...oauthCode(), paste: undefined };
@@ -197,8 +226,8 @@ describe('terminalPaste', () => {
         entered = true;
       })
       .catch((error: unknown) => error);
-    expect(entered).toBe(false);
-    expect(failureOf(thrown)).toMatchObject({
+    assert.equal(entered, false);
+    matchObject(failureOf(thrown), {
       kind: 'configuration',
       facts: { case: 'invalid-value', fields: ['protocol'] },
     });
@@ -212,7 +241,7 @@ describe('terminalPaste', () => {
     const thrown = await answered(terminalPaste({ read }), passcode()).catch(
       (error: unknown) => error,
     );
-    expect(failureOf(thrown).facts).toEqual({ outcome: 'no-terminal' });
+    assert.deepEqual(failureOf(thrown).facts, { outcome: 'no-terminal' });
   });
 
   it('an abort ends it aborted (manual) — and only once the read in flight has settled', async () => {
@@ -239,11 +268,11 @@ describe('terminalPaste', () => {
       order.push('open settled');
       return error;
     });
-    expect(failureOf(thrown).facts).toEqual({
+    assert.deepEqual(failureOf(thrown).facts, {
       outcome: 'aborted',
       strategy: 'manual',
     });
-    expect(order).toEqual(['reader closed', 'open settled']);
+    assert.deepEqual(order, ['reader closed', 'open settled']);
   });
 
   it('an already-aborted signal reads nothing and enters nothing', async () => {
@@ -256,12 +285,12 @@ describe('terminalPaste', () => {
         entered = true;
       })
       .catch((error: unknown) => error);
-    expect(failureOf(thrown).facts).toEqual({
+    assert.deepEqual(failureOf(thrown).facts, {
       outcome: 'aborted',
       strategy: 'manual',
     });
-    expect(entered).toBe(false);
-    expect(prompts).toEqual([]);
+    assert.equal(entered, false);
+    assert.deepEqual(prompts, []);
   });
 
   it('use ending while a read is in flight stops the read before open settles', async () => {
@@ -287,8 +316,8 @@ describe('terminalPaste', () => {
       },
     );
     order.push('open settled');
-    expect(result).toBe('done');
-    expect(order).toEqual(['reader closed', 'open settled']);
+    assert.equal(result, 'done');
+    assert.deepEqual(order, ['reader closed', 'open settled']);
   });
 });
 
@@ -298,14 +327,15 @@ describe('consumerAnswer', () => {
       redirectUri: REDIRECT,
       receive: async () => 'the-code',
     });
-    expect(transport.label).toBe('consumer');
+    assert.equal(transport.label, 'consumer');
     let redirect: string | undefined;
-    expect(
+    assert.equal(
       await answered(transport, oauthCode(), undefined, (c) => {
         redirect = c.redirectUri;
       }),
-    ).toBe('the-code');
-    expect(redirect).toBe(REDIRECT);
+      'the-code',
+    );
+    assert.equal(redirect, REDIRECT);
   });
 
   it('receive gets the composition’s signal', async () => {
@@ -321,9 +351,9 @@ describe('consumerAnswer', () => {
       oauthCode(),
       controller.signal,
     );
-    expect(given?.aborted).toBe(false);
+    assert.equal(given?.aborted, false);
     controller.abort();
-    expect(given?.aborted).toBe(true);
+    assert.equal(given?.aborted, true);
   });
 
   it('a refusal ends unreadable-input (it cannot ask again); an end ends with its error', async () => {
@@ -335,12 +365,12 @@ describe('consumerAnswer', () => {
       consumerAnswer({ receive: async () => 'x' }),
       refusing,
     ).catch((error: unknown) => error);
-    expect(failureOf(refused).facts).toEqual({ outcome: 'unreadable-input' });
+    assert.deepEqual(failureOf(refused).facts, { outcome: 'unreadable-input' });
     const empty = await answered(
       consumerAnswer({ receive: async () => '' }),
       oauthCode(),
     ).catch((error: unknown) => error);
-    expect(failureOf(empty).facts).toEqual({ outcome: 'no-input' });
+    assert.deepEqual(failureOf(empty).facts, { outcome: 'no-input' });
   });
 
   it('a receive that rejects passes its rejection on', async () => {
@@ -353,7 +383,7 @@ describe('consumerAnswer', () => {
       }),
       oauthCode(),
     ).catch((error: unknown) => error);
-    expect(rejected).toBe(own);
+    assert.equal(rejected, own);
   });
 
   it('an abort settles at the abort itself (consumer), a receive that never settles notwithstanding', async () => {
@@ -368,7 +398,7 @@ describe('consumerAnswer', () => {
       oauthCode(),
       controller.signal,
     ).catch((error: unknown) => error);
-    expect(failureOf(thrown).facts).toEqual({
+    assert.deepEqual(failureOf(thrown).facts, {
       outcome: 'aborted',
       strategy: 'consumer',
     });
@@ -386,12 +416,12 @@ describe('consumerHandoff', () => {
         return 'the-code';
       },
     });
-    expect(transport.label).toBe('consumer');
+    assert.equal(transport.label, 'consumer');
     const protocol = oauthCode();
     const payload = await transport.open(
       optionsFor(protocol, controller.signal),
       async (channel) => {
-        expect(channel.redirectUri).toBe(REDIRECT);
+        assert.equal(channel.redirectUri, REDIRECT);
         let kept: unknown;
         const judge = protocol.begin(URL_SHOWN);
         const armed = channel.arm((answer) => {
@@ -407,10 +437,10 @@ describe('consumerHandoff', () => {
         return kept;
       },
     );
-    expect(payload).toBe('the-code');
-    expect(calls).toHaveLength(1);
-    expect(calls[0]?.[0]).toBe(URL_SHOWN);
-    expect(calls[0]?.[1]).toBe(controller.signal);
+    assert.equal(payload, 'the-code');
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0]?.[0], URL_SHOWN);
+    assert.equal(calls[0]?.[1], controller.signal);
   });
 
   it('provide failing ends the wait with its failure; the presentation itself does not fail', async () => {
@@ -426,16 +456,16 @@ describe('consumerHandoff', () => {
         const armed = channel.arm(
           oauthCode().begin(URL_SHOWN) as AnswerJudge<unknown>,
         );
-        expect(() =>
+        assert.doesNotThrow(() =>
           presentation.present(URL_SHOWN, {
             redirectUri: undefined,
             signal: controller.signal,
           }),
-        ).not.toThrow();
+        );
         await armed.answer();
       })
       .catch((error: unknown) => error);
-    expect(thrown).toBe(own);
+    assert.equal(thrown, own);
   });
 
   it('an abort settles at the abort itself (consumer)', async () => {
@@ -456,7 +486,7 @@ describe('consumerHandoff', () => {
         await armed.answer();
       })
       .catch((error: unknown) => error);
-    expect(failureOf(thrown).facts).toEqual({
+    assert.deepEqual(failureOf(thrown).facts, {
       outcome: 'aborted',
       strategy: 'consumer',
     });
@@ -474,17 +504,26 @@ describe('a judge that throws (review m3)', () => {
       })
       .catch((error: unknown) => error);
 
-  it.each([
-    ['terminalPaste', () => terminalPaste({ read: scripted(['x']).read })],
-    ['consumerAnswer', () => consumerAnswer({ receive: async () => 'x' })],
-  ] as const)(
-    '%s: failed, nothing of the throw anywhere',
-    async (_name, make) => {
-      const thrown = await run(make());
-      expect(failureOf(thrown).facts).toEqual({ outcome: 'failed' });
-      expect(String(thrown)).not.toContain('judge secret text');
-      expect(JSON.stringify(thrown)).not.toContain('judge secret text');
-      expect((thrown as { cause?: unknown }).cause).toBeUndefined();
-    },
-  );
+  for (const [caseIndex, caseRow] of (
+    [
+      ['terminalPaste', () => terminalPaste({ read: scripted(['x']).read })],
+      ['consumerAnswer', () => consumerAnswer({ receive: async () => 'x' })],
+    ] as const
+  ).entries()) {
+    const [_name, make] = caseRow;
+    it(
+      caseTitle(
+        '%s: failed, nothing of the throw anywhere',
+        caseRow,
+        caseIndex,
+      ),
+      async () => {
+        const thrown = await run(make());
+        assert.deepEqual(failureOf(thrown).facts, { outcome: 'failed' });
+        notContains(String(thrown), 'judge secret text');
+        notContains(JSON.stringify(thrown), 'judge secret text');
+        assert.equal((thrown as { cause?: unknown }).cause, undefined);
+      },
+    );
+  }
 });

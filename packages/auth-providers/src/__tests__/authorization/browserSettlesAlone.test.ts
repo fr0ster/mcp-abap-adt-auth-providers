@@ -14,6 +14,7 @@
  * fakes are `#!` scripts.
  */
 
+import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import {
   chmodSync,
@@ -24,14 +25,16 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterAll, describe, expect, it } from '@jest/globals';
+import { after, describe, it } from 'node:test';
+import { PACKAGE_ROOT } from '../helpers/packagePaths';
+
 import { compiledSources } from '../helpers/plainNode';
 
-const root = join(__dirname, '..', '..', '..');
+const root = PACKAGE_ROOT;
 const onPosix = process.platform === 'win32' ? describe.skip : describe;
 
 const dir = mkdtempSync(join(tmpdir(), 'browser-alone-'));
-afterAll(() => rmSync(dir, { recursive: true, force: true }));
+after(() => rmSync(dir, { recursive: true, force: true }));
 
 /** A `#!node` script at `name` in `dir` that runs `body`. */
 function fake(name: string, body: string): string {
@@ -74,7 +77,7 @@ b.${factory}.open('https://idp.example/authorize?state=s', new AbortController()
 onPosix('a shipped browser awaited alone', () => {
   it('linuxDefaultBrowser: the process waits for the launcher to exit, and open() resolves', () => {
     fake('xdg-open', 'setTimeout(() => process.exit(0), 300);');
-    expect(openAlone('linuxDefaultBrowser()')).toEqual({
+    assert.deepEqual(openAlone('linuxDefaultBrowser()'), {
       stdout: 'resolved',
       status: 0,
     });
@@ -86,16 +89,16 @@ onPosix('a shipped browser awaited alone', () => {
       'fake-browser',
       `setTimeout(() => require('fs').writeFileSync(${JSON.stringify(done)}, ''), 3000);`,
     );
-    expect(openAlone(`linuxBrowser(${JSON.stringify(browser)})`)).toEqual({
+    assert.deepEqual(openAlone(`linuxBrowser(${JSON.stringify(browser)})`), {
       stdout: 'resolved',
       status: 0,
     });
     // The child exited while the browser still ran.
-    expect(existsSync(done)).toBe(false);
+    assert.equal(existsSync(done), false);
     // Nothing left running: wait for the fake browser to end.
     for (let i = 0; i < 100 && !existsSync(done); i += 1) {
       await new Promise((resolve) => setTimeout(resolve, 50));
     }
-    expect(existsSync(done)).toBe(true);
+    assert.equal(existsSync(done), true);
   });
 });

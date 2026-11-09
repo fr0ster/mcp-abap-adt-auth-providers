@@ -7,8 +7,9 @@
  * protocols' judges (the composer is tested apart).
  */
 
+import assert from 'node:assert/strict';
 import net from 'node:net';
-import { afterEach, describe, expect, it, jest } from '@jest/globals';
+import { afterEach, describe, it, mock } from 'node:test';
 import { readFailure } from '@mcp-abap-adt/auth-errors';
 import type {
   AnswerJudge,
@@ -28,6 +29,14 @@ import {
   samlResponse,
 } from '../../authorization/protocol';
 import { loopback, loopback4, loopback6 } from '../../authorization/transport';
+import {
+  cases,
+  caseTitle,
+  contains,
+  matchObject,
+  notContains,
+  thrown,
+} from '../helpers/expectations';
 import {
   bindable,
   capturingLogger,
@@ -165,7 +174,7 @@ let lastPort: number | undefined;
 afterEach(async () => {
   if (lastPort !== undefined) {
     // Assert on the port: a settled open means it is free.
-    expect(await bindable(lastPort)).toBe(true);
+    assert.equal(await bindable(lastPort), true);
     lastPort = undefined;
   }
 });
@@ -177,9 +186,10 @@ describe('bind and advertise', () => {
   async function listenHosts(run: () => Promise<unknown>): Promise<string[]> {
     const hosts: string[] = [];
     const listen = net.Server.prototype.listen;
-    const spy = jest
-      .spyOn(net.Server.prototype, 'listen')
-      .mockImplementation(function (this: net.Server, ...args: unknown[]) {
+    const spy = mock.method(
+      net.Server.prototype,
+      'listen',
+      function (this: net.Server, ...args: unknown[]) {
         const first = args[0];
         // The listeners bind with an options object; a probe of the test's
         // own (`listen(0, '::1')`) is not theirs.
@@ -187,11 +197,12 @@ describe('bind and advertise', () => {
           hosts.push(String((first as { host?: unknown }).host));
         }
         return listen.apply(this, args as never);
-      });
+      },
+    );
     try {
       await run();
     } finally {
-      spy.mockRestore();
+      spy.mock.restore();
     }
     return hosts;
   }
@@ -204,16 +215,16 @@ describe('bind and advertise', () => {
         oauthCode(),
         async ({ port, channel, arm }) => {
           seen = { redirect: channel.redirectUri, port };
-          expect(await connects('127.0.0.1', port)).toBe(true);
-          if (await v6()) expect(await connects('::1', port)).toBe(false);
-          if (EXTERNAL) expect(await connects(EXTERNAL, port)).toBe(false);
+          assert.equal(await connects('127.0.0.1', port), true);
+          if (await v6()) assert.equal(await connects('::1', port), false);
+          if (EXTERNAL) assert.equal(await connects(EXTERNAL, port), false);
           arm();
           await send(port, `/callback${RIGHT.oauthCode?.redirect}`);
         },
       ),
     );
-    expect(hosts).toEqual(['127.0.0.1']);
-    expect(seen?.redirect).toBe(`http://127.0.0.1:${seen?.port}/callback`);
+    assert.deepEqual(hosts, ['127.0.0.1']);
+    assert.equal(seen?.redirect, `http://127.0.0.1:${seen?.port}/callback`);
     lastPort = seen?.port;
   });
 
@@ -226,8 +237,8 @@ describe('bind and advertise', () => {
         oauthCode(),
         async ({ port, channel, arm }) => {
           seen = { redirect: channel.redirectUri, port };
-          expect(await connects('::1', port)).toBe(true);
-          expect(await connects('127.0.0.1', port)).toBe(false);
+          assert.equal(await connects('::1', port), true);
+          assert.equal(await connects('127.0.0.1', port), false);
           arm();
           await send(port, `/callback${RIGHT.oauthCode?.redirect}`, {
             address: '::1',
@@ -235,9 +246,9 @@ describe('bind and advertise', () => {
         },
       ),
     );
-    expect(hosts).toEqual(['::1']);
-    expect(seen?.redirect).toBe(`http://[::1]:${seen?.port}/callback`);
-    expect(await bindable(seen?.port ?? 0, '::1')).toBe(true);
+    assert.deepEqual(hosts, ['::1']);
+    assert.equal(seen?.redirect, `http://[::1]:${seen?.port}/callback`);
+    assert.equal(await bindable(seen?.port ?? 0, '::1'), true);
   });
 
   it('loopback binds 127.0.0.1, then ::1 on the same port, and advertises http://localhost:<port>/callback', async () => {
@@ -249,16 +260,16 @@ describe('bind and advertise', () => {
         oauthCode(),
         async ({ port, channel, arm }) => {
           seen = { redirect: channel.redirectUri, port };
-          expect(await connects('127.0.0.1', port)).toBe(true);
-          if (both) expect(await connects('::1', port)).toBe(true);
-          if (EXTERNAL) expect(await connects(EXTERNAL, port)).toBe(false);
+          assert.equal(await connects('127.0.0.1', port), true);
+          if (both) assert.equal(await connects('::1', port), true);
+          if (EXTERNAL) assert.equal(await connects(EXTERNAL, port), false);
           arm();
           await send(port, `/callback${RIGHT.oauthCode?.redirect}`);
         },
       ),
     );
-    expect(hosts).toEqual(['127.0.0.1', '::1']);
-    expect(seen?.redirect).toBe(`http://localhost:${seen?.port}/callback`);
+    assert.deepEqual(hosts, ['127.0.0.1', '::1']);
+    assert.equal(seen?.redirect, `http://localhost:${seen?.port}/callback`);
     lastPort = seen?.port;
   });
 
@@ -281,10 +292,13 @@ describe('bind and advertise', () => {
           },
         )
         .catch((error: unknown) => error);
-      expect(failureOf(thrown).facts).toEqual({ outcome: 'port-in-use', port });
-      expect(entered).toBe(false);
+      assert.deepEqual(failureOf(thrown).facts, {
+        outcome: 'port-in-use',
+        port,
+      });
+      assert.equal(entered, false);
       // Never 127.0.0.1 alone: that half was released.
-      expect(await bindable(port, '127.0.0.1')).toBe(true);
+      assert.equal(await bindable(port, '127.0.0.1'), true);
     } finally {
       await new Promise<void>((resolve) => squatter.close(() => resolve()));
     }
@@ -294,9 +308,10 @@ describe('bind and advertise', () => {
     if (!(await v6())) return;
     const squatter = net.createServer();
     const listen = net.Server.prototype.listen;
-    const spy = jest
-      .spyOn(net.Server.prototype, 'listen')
-      .mockImplementation(function (this: net.Server, ...args: unknown[]) {
+    const spy = mock.method(
+      net.Server.prototype,
+      'listen',
+      function (this: net.Server, ...args: unknown[]) {
         const first = args[0] as { port?: number; host?: string };
         if (first?.host === '::1' && !squatter.listening && this !== squatter) {
           listen.call(squatter, { port: first.port, host: '::1' }, () => {
@@ -305,7 +320,8 @@ describe('bind and advertise', () => {
           return this;
         }
         return listen.apply(this, args as never);
-      });
+      },
+    );
     let entered = false;
     try {
       const thrown = await loopback({ port: 0 })
@@ -321,23 +337,24 @@ describe('bind and advertise', () => {
         )
         .catch((error: unknown) => error);
       const squatted = (squatter.address() as net.AddressInfo).port;
-      expect(failureOf(thrown).facts).toEqual({
+      assert.deepEqual(failureOf(thrown).facts, {
         outcome: 'port-in-use',
         port: squatted,
       });
-      expect(entered).toBe(false);
-      expect(await bindable(squatted, '127.0.0.1')).toBe(true);
+      assert.equal(entered, false);
+      assert.equal(await bindable(squatted, '127.0.0.1'), true);
     } finally {
-      spy.mockRestore();
+      spy.mock.restore();
       await new Promise<void>((resolve) => squatter.close(() => resolve()));
     }
   });
 
   it('loopback on a machine without ::1 (EADDRNOTAVAIL) listens on 127.0.0.1 alone and still logs in', async () => {
     const listen = net.Server.prototype.listen;
-    const spy = jest
-      .spyOn(net.Server.prototype, 'listen')
-      .mockImplementation(function (this: net.Server, ...args: unknown[]) {
+    const spy = mock.method(
+      net.Server.prototype,
+      'listen',
+      function (this: net.Server, ...args: unknown[]) {
         const first = args[0] as { host?: string };
         if (first?.host === '::1') {
           const error = Object.assign(new Error('unavailable'), {
@@ -347,79 +364,110 @@ describe('bind and advertise', () => {
           return this;
         }
         return listen.apply(this, args as never);
-      });
+      },
+    );
     try {
       const driven = await drive(
         loopback({ port: 0 }),
         oauthCode(),
         async ({ port, channel, arm }) => {
-          expect(channel.redirectUri).toBe(`http://localhost:${port}/callback`);
+          assert.equal(
+            channel.redirectUri,
+            `http://localhost:${port}/callback`,
+          );
           arm();
           await send(port, `/callback${RIGHT.oauthCode?.redirect}`);
         },
       );
-      expect(driven.payload).toBe('the-code');
+      assert.equal(driven.payload, 'the-code');
       lastPort = driven.port;
     } finally {
-      spy.mockRestore();
+      spy.mock.restore();
     }
   });
 
-  it.each([
+  for (const [caseIndex, caseRow] of cases([
     ['loopback4', '127.0.0.1'],
     ['loopback6', '::1'],
     ['loopback', '127.0.0.1'],
-  ])('%s with its port held on %s fails port-in-use', async (name, address) => {
-    if (address === '::1' && !(await v6())) return;
-    const squatter = net.createServer();
-    await new Promise<void>((resolve) => squatter.listen(0, address, resolve));
-    const port = (squatter.address() as net.AddressInfo).port;
-    const factory = LISTENERS.find(([n]) => n === name)?.[1];
-    try {
-      const thrown = await factory?.(port)
-        .open(
-          {
-            signal: new AbortController().signal,
-            callbackMethods: ['GET'],
-            endpoint: '/callback',
-          },
-          async () => undefined,
-        )
-        .catch((error: unknown) => error);
-      expect(failureOf(thrown).facts).toEqual({ outcome: 'port-in-use', port });
-    } finally {
-      await new Promise<void>((resolve) => squatter.close(() => resolve()));
-    }
-  });
-
-  it.each([-1, 65536, 1.5, '61001', undefined, null, Number.NaN])(
-    'a port of %p is refused at construction',
-    (port) => {
-      for (const factory of [loopback, loopback4, loopback6]) {
-        let thrown: unknown;
+  ]).entries()) {
+    const [name, address] = caseRow;
+    it(
+      caseTitle(
+        '%s with its port held on %s fails port-in-use',
+        caseRow,
+        caseIndex,
+      ),
+      async () => {
+        if (address === '::1' && !(await v6())) return;
+        const squatter = net.createServer();
+        await new Promise<void>((resolve) =>
+          squatter.listen(0, address, resolve),
+        );
+        const port = (squatter.address() as net.AddressInfo).port;
+        const factory = LISTENERS.find(([n]) => n === name)?.[1];
         try {
-          factory({ port } as never);
-        } catch (error) {
-          thrown = error;
+          const thrown = await factory?.(port)
+            .open(
+              {
+                signal: new AbortController().signal,
+                callbackMethods: ['GET'],
+                endpoint: '/callback',
+              },
+              async () => undefined,
+            )
+            .catch((error: unknown) => error);
+          assert.deepEqual(failureOf(thrown).facts, {
+            outcome: 'port-in-use',
+            port,
+          });
+        } finally {
+          await new Promise<void>((resolve) => squatter.close(() => resolve()));
         }
-        expect(readFailure(thrown, 'browser-login')).toMatchObject({
-          kind: 'configuration',
-          facts: { case: 'callback-port-invalid', fields: ['port'] },
-        });
-      }
-    },
-  );
+      },
+    );
+  }
+
+  for (const [caseIndex, caseRow] of [
+    -1,
+    65536,
+    1.5,
+    '61001',
+    undefined,
+    null,
+    Number.NaN,
+  ].entries()) {
+    const port = caseRow;
+    it(
+      caseTitle('a port of %p is refused at construction', caseRow, caseIndex),
+      () => {
+        for (const factory of [loopback, loopback4, loopback6]) {
+          let thrown: unknown;
+          try {
+            factory({ port } as never);
+          } catch (error) {
+            thrown = error;
+          }
+          matchObject(readFailure(thrown, 'browser-login'), {
+            kind: 'configuration',
+            facts: { case: 'callback-port-invalid', fields: ['port'] },
+          });
+        }
+      },
+    );
+  }
 
   it('names where it waits and, with paste words, the SSH tunnel to its own address', async () => {
     for (const [name, factory, address, host] of LISTENERS) {
       if (address === '::1' && !(await v6())) continue;
       await drive(factory(0), oauthCode(), async ({ port, channel, arm }) => {
-        expect(channel.waitingOn).toBe(`http://${host}:${port}/callback`);
+        assert.equal(channel.waitingOn, `http://${host}:${port}/callback`);
         const tunnelTo = name === 'loopback' ? 'localhost' : host;
-        expect(channel.routeHint).toContain(
+        contains(
+          channel.routeHint,
           `ssh -L ${port}:${tunnelTo}:${port} <this machine>`,
         );
-        expect(channel.routeHint).toContain(`http://${host}:${port}/`);
+        contains(channel.routeHint, `http://${host}:${port}/`);
         arm();
         await send(port, `/callback${RIGHT.oauthCode?.redirect}`, { address });
       });
@@ -434,11 +482,11 @@ describe('bind and advertise', () => {
       loopback4({ port: 0 }),
       bare,
       async ({ port, channel, arm }) => {
-        expect(channel.routeHint).toBeUndefined();
+        assert.equal(channel.routeHint, undefined);
         arm();
         // No paste page: `/` and `/submit` are not this listener's.
-        expect((await send(port, '/')).status).toBe(404);
-        expect((await send(port, '/submit', { form: {} })).status).toBe(404);
+        assert.equal((await send(port, '/')).status, 404);
+        assert.equal((await send(port, '/submit', { form: {} })).status, 404);
         await send(port, '/callback?x=1');
       },
     );
@@ -460,9 +508,10 @@ describe('the matrix: every protocol over every listener', () => {
             protocol,
             async ({ port, arm }) => {
               arm();
-              expect(
+              assert.equal(
                 (await send(port, '/callback?code=x', { address })).status,
-              ).toBe(404);
+                404,
+              );
               const page = await send(port, '/', { address });
               await send(port, '/submit', {
                 address,
@@ -474,7 +523,7 @@ describe('the matrix: every protocol over every listener', () => {
             },
             { logger },
           );
-          expect(driven.payload).toEqual(right?.pastePayload);
+          assert.deepEqual(driven.payload, right?.pastePayload);
           return;
         }
         const driven = await drive(
@@ -487,18 +536,18 @@ describe('the matrix: every protocol over every listener', () => {
                 ? '?RelayState=x'
                 : `?state=${STATE}`;
             const refused = await send(port, `/callback${wrong}`, { address });
-            expect(refused.status).toBe(400);
-            expect(refused.body).toBe(ANSWER_WORDS['no-payload']);
+            assert.equal(refused.status, 400);
+            assert.equal(refused.body, ANSWER_WORDS['no-payload']);
             const accepted = await send(port, `/callback${right.redirect}`, {
               address,
             });
-            expect(accepted.status).toBe(200);
-            expect(accepted.body).toContain('Authentication Successful');
+            assert.equal(accepted.status, 200);
+            contains(accepted.body, 'Authentication Successful');
           },
           { logger },
         );
-        expect(driven.payload).toEqual(right.payload);
-        expect(reasons()).toEqual(['no-payload']);
+        assert.deepEqual(driven.payload, right.payload);
+        assert.deepEqual(reasons(), ['no-payload']);
       });
 
       it(`${protocolName} over ${name}'s paste page: the right paste logs in, the wrong one gets the form again`, async () => {
@@ -509,9 +558,9 @@ describe('the matrix: every protocol over every listener', () => {
           async ({ port, arm }) => {
             arm();
             const page = await send(port, '/', { address });
-            expect(page.status).toBe(200);
+            assert.equal(page.status, 200);
             const token = formTokenIn(page.body) ?? '';
-            expect(token).not.toBe('');
+            assert.notEqual(token, '');
             const wrongText =
               protocolName === 'oauthCode' || protocolName === 'oidcCode'
                 ? `http://localhost/callback?code=c&state=another-login`
@@ -524,19 +573,19 @@ describe('the matrix: every protocol over every listener', () => {
               address,
               form: { form_token: token, input: wrongText },
             });
-            expect(again.status).toBe(400);
-            expect(again.body).toContain(ANSWER_WORDS[wrongReason]);
+            assert.equal(again.status, 400);
+            contains(again.body, ANSWER_WORDS[wrongReason]);
             // The form again, with the same token.
-            expect(formTokenIn(again.body)).toBe(token);
+            assert.equal(formTokenIn(again.body), token);
             const done = await send(port, '/submit', {
               address,
               form: { form_token: token, input: right?.paste ?? '' },
             });
-            expect(done.status).toBe(200);
-            expect(done.body).toContain('Authentication Successful');
+            assert.equal(done.status, 200);
+            contains(done.body, 'Authentication Successful');
           },
         );
-        expect(driven.payload).toEqual(right?.pastePayload);
+        assert.deepEqual(driven.payload, right?.pastePayload);
       });
     }
   }
@@ -550,10 +599,10 @@ describe('the matrix: every protocol over every listener', () => {
         const reply = await send(port, '/callback', {
           form: { SAMLResponse: 'PHNhbWw+', RelayState: 'r' },
         });
-        expect(reply.status).toBe(200);
+        assert.equal(reply.status, 200);
       },
     );
-    expect(driven.payload).toBe('PHNhbWw+');
+    assert.equal(driven.payload, 'PHNhbWw+');
     lastPort = driven.port;
   });
 
@@ -566,8 +615,8 @@ describe('the matrix: every protocol over every listener', () => {
         const reply = await send(port, '/callback', {
           form: { code: 'c', state: STATE },
         });
-        expect(reply.status).toBe(404);
-        expect(judged()).toBe(0);
+        assert.equal(reply.status, 404);
+        assert.equal(judged(), 0);
         await send(port, `/callback${RIGHT.oauthCode?.redirect}`);
       },
     );
@@ -584,56 +633,64 @@ describe('the matrix: every protocol over every listener', () => {
           body: JSON.stringify({ SAMLResponse: 'PHNhbWw+' }),
           contentType: 'application/json',
         });
-        expect(json.status).toBe(400);
-        expect(json.body).toBe(ANSWER_WORDS['no-payload']);
+        assert.equal(json.status, 400);
+        assert.equal(json.body, ANSWER_WORDS['no-payload']);
         const big = await send(port, '/callback', {
           body: `SAMLResponse=${'A'.repeat(5 * 1024 * 1024 + 1)}`,
         });
-        expect(big.status).toBe(413);
-        expect(judged()).toBe(1);
+        assert.equal(big.status, 413);
+        assert.equal(judged(), 1);
         await send(port, '/callback?SAMLResponse=PHNhbWw%2B');
       },
     );
-    expect(driven.payload).toBe('PHNhbWw+');
+    assert.equal(driven.payload, 'PHNhbWw+');
     lastPort = driven.port;
   });
 });
 
 describe('the endpoint: literal dispatch', () => {
-  it.each(LISTENERS)(
-    "%s's redirect is its origin plus the endpoint it was given, which alone receives it",
-    async (_name, factory, address, host) => {
-      if (address === '::1' && !(await v6())) return;
-      const driven = await drive(
-        factory(0),
-        oauthCode(),
-        async ({ port, channel, arm }) => {
-          expect(channel.redirectUri).toBe(
-            `http://${host}:${port}/auth/finish`,
-          );
-          arm();
-          const old = await send(
-            port,
-            `/callback${RIGHT.oauthCode?.redirect}`,
-            {
-              address,
-            },
-          );
-          expect(old.status).toBe(404);
-          const reply = await send(
-            port,
-            `/auth/finish${RIGHT.oauthCode?.redirect}`,
-            {
-              address,
-            },
-          );
-          expect(reply.status).toBe(200);
-        },
-        { endpoint: '/auth/finish' },
-      );
-      expect(driven.payload).toBe('the-code');
-    },
-  );
+  for (const [caseIndex, caseRow] of LISTENERS.entries()) {
+    const [_name, factory, address, host] = caseRow;
+    it(
+      caseTitle(
+        "%s's redirect is its origin plus the endpoint it was given, which alone receives it",
+        caseRow,
+        caseIndex,
+      ),
+      async () => {
+        if (address === '::1' && !(await v6())) return;
+        const driven = await drive(
+          factory(0),
+          oauthCode(),
+          async ({ port, channel, arm }) => {
+            assert.equal(
+              channel.redirectUri,
+              `http://${host}:${port}/auth/finish`,
+            );
+            arm();
+            const old = await send(
+              port,
+              `/callback${RIGHT.oauthCode?.redirect}`,
+              {
+                address,
+              },
+            );
+            assert.equal(old.status, 404);
+            const reply = await send(
+              port,
+              `/auth/finish${RIGHT.oauthCode?.redirect}`,
+              {
+                address,
+              },
+            );
+            assert.equal(reply.status, 200);
+          },
+          { endpoint: '/auth/finish' },
+        );
+        assert.equal(driven.payload, 'the-code');
+      },
+    );
+  }
 
   it('/callback/ and /CALLBACK answer 404 for the endpoint /callback, reaching no judge', async () => {
     const driven = await drive(
@@ -655,53 +712,64 @@ describe('the endpoint: literal dispatch', () => {
           '/x/%2E%2E/callback',
         ]) {
           const reply = await send(port, `${path}${RIGHT.oauthCode?.redirect}`);
-          expect([path, reply.status]).toEqual([path, 404]);
-          expect(reply.body).toBe('Not found');
+          assert.deepEqual([path, reply.status], [path, 404]);
+          assert.equal(reply.body, 'Not found');
         }
-        expect(judged()).toBe(0);
+        assert.equal(judged(), 0);
         await send(port, `/callback${RIGHT.oauthCode?.redirect}`);
       },
     );
     lastPort = driven.port;
   });
 
-  it.each(['/SUBMIT', '/submit/', '/:answer'])(
-    'the endpoint %s never shares a handler with /submit, and is reached only at its own path',
-    async (endpoint) => {
-      const driven = await drive(
-        loopback4({ port: 0 }),
-        oauthCode(),
-        async ({ port, arm, judged }) => {
-          arm();
-          // `/submit` still requires its form token: refused before any judge.
-          const forged = await send(port, '/submit', {
-            form: { input: 'forged-code' },
-          });
-          expect(forged.status).toBe(400);
-          expect(forged.body).toBe(ANSWER_WORDS['form-token']);
-          for (const path of ['/submit', '/x', '/answer', '/submit/x']) {
-            if (path === endpoint) continue;
+  for (const [caseIndex, caseRow] of [
+    '/SUBMIT',
+    '/submit/',
+    '/:answer',
+  ].entries()) {
+    const endpoint = caseRow;
+    it(
+      caseTitle(
+        'the endpoint %s never shares a handler with /submit, and is reached only at its own path',
+        caseRow,
+        caseIndex,
+      ),
+      async () => {
+        const driven = await drive(
+          loopback4({ port: 0 }),
+          oauthCode(),
+          async ({ port, arm, judged }) => {
+            arm();
+            // `/submit` still requires its form token: refused before any judge.
+            const forged = await send(port, '/submit', {
+              form: { input: 'forged-code' },
+            });
+            assert.equal(forged.status, 400);
+            assert.equal(forged.body, ANSWER_WORDS['form-token']);
+            for (const path of ['/submit', '/x', '/answer', '/submit/x']) {
+              if (path === endpoint) continue;
+              const reply = await send(
+                port,
+                `${path}${RIGHT.oauthCode?.redirect}`,
+              );
+              assert.deepEqual([path, reply.status], [path, 404]);
+            }
+            assert.equal(judged(), 0);
             const reply = await send(
               port,
-              `${path}${RIGHT.oauthCode?.redirect}`,
+              `${endpoint}${RIGHT.oauthCode?.redirect}`,
             );
-            expect([path, reply.status]).toEqual([path, 404]);
-          }
-          expect(judged()).toBe(0);
-          const reply = await send(
-            port,
-            `${endpoint}${RIGHT.oauthCode?.redirect}`,
-          );
-          expect(reply.status).toBe(200);
-        },
-        { endpoint },
-      );
-      expect(driven.payload).toBe('the-code');
-      lastPort = driven.port;
-    },
-  );
+            assert.equal(reply.status, 200);
+          },
+          { endpoint },
+        );
+        assert.equal(driven.payload, 'the-code');
+        lastPort = driven.port;
+      },
+    );
+  }
 
-  it.each([
+  for (const [caseIndex, caseRow] of cases([
     ['/auth/%2e%2e/finish'],
     ['/auth/../finish'],
     ['/auth\\finish'],
@@ -718,97 +786,118 @@ describe('the endpoint: literal dispatch', () => {
     ['http://localhost/callback'],
     [undefined],
     [42],
-  ])(
-    'an endpoint URL parsing would change, or a listener route (%p), is refused before anything binds',
-    async (endpoint) => {
-      let entered = false;
-      const thrown = await loopback4({ port: 0 })
-        .open(
-          {
-            signal: new AbortController().signal,
-            paste: oauthCode().paste,
-            callbackMethods: ['GET'],
-            endpoint: endpoint as string,
-          },
-          async () => {
-            entered = true;
-          },
-        )
-        .catch((error: unknown) => error);
-      expect(entered).toBe(false);
-      expect(failureOf(thrown)).toMatchObject({
-        kind: 'configuration',
-        facts: { case: 'invalid-value', fields: ['endpoint'] },
-      });
-    },
-  );
+  ]).entries()) {
+    const [endpoint] = caseRow;
+    it(
+      caseTitle(
+        'an endpoint URL parsing would change, or a listener route (%p), is refused before anything binds',
+        caseRow,
+        caseIndex,
+      ),
+      async () => {
+        let entered = false;
+        const thrown = await loopback4({ port: 0 })
+          .open(
+            {
+              signal: new AbortController().signal,
+              paste: oauthCode().paste,
+              callbackMethods: ['GET'],
+              endpoint: endpoint as string,
+            },
+            async () => {
+              entered = true;
+            },
+          )
+          .catch((error: unknown) => error);
+        assert.equal(entered, false);
+        matchObject(failureOf(thrown), {
+          kind: 'configuration',
+          facts: { case: 'invalid-value', fields: ['endpoint'] },
+        });
+      },
+    );
+  }
 });
 
 describe('closed until armed', () => {
-  it.each(PROTOCOLS)(
-    '%s: a forged code, a forged ?error=, GET / and POST /submit before arming are 400, counted, ignored; then the login completes',
-    async (protocolName, make) => {
-      const { logger, reasons } = capturingLogger();
-      const protocol = make();
-      const right = RIGHT[protocolName];
-      const takesRedirect = protocol.callbackMethods.length > 0;
-      const driven = await drive(
-        loopback4({ port: 0 }),
-        protocol,
-        async ({ port, arm, judged }) => {
-          const replies: Reply[] = [];
-          if (takesRedirect) {
+  for (const [caseIndex, caseRow] of PROTOCOLS.entries()) {
+    const [protocolName, make] = caseRow;
+    it(
+      caseTitle(
+        '%s: a forged code, a forged ?error=, GET / and POST /submit before arming are 400, counted, ignored; then the login completes',
+        caseRow,
+        caseIndex,
+      ),
+      async () => {
+        const { logger, reasons } = capturingLogger();
+        const protocol = make();
+        const right = RIGHT[protocolName];
+        const takesRedirect = protocol.callbackMethods.length > 0;
+        const driven = await drive(
+          loopback4({ port: 0 }),
+          protocol,
+          async ({ port, arm, judged }) => {
+            const replies: Reply[] = [];
+            if (takesRedirect) {
+              replies.push(
+                await send(port, `/callback?code=forged&state=${STATE}`),
+              );
+              replies.push(
+                await send(
+                  port,
+                  `/callback?error=access_denied&state=${STATE}`,
+                ),
+              );
+              replies.push(await send(port, '/callback?SAMLResponse=forged'));
+            }
+            if (protocol.callbackMethods.includes('POST')) {
+              replies.push(
+                await send(port, '/callback', {
+                  form: { SAMLResponse: 'forged' },
+                }),
+              );
+            }
+            const page = await send(port, '/');
+            replies.push(page);
+            // No form, so no token, exists yet.
+            assert.equal(formTokenIn(page.body), undefined);
             replies.push(
-              await send(port, `/callback?code=forged&state=${STATE}`),
-            );
-            replies.push(
-              await send(port, `/callback?error=access_denied&state=${STATE}`),
-            );
-            replies.push(await send(port, '/callback?SAMLResponse=forged'));
-          }
-          if (protocol.callbackMethods.includes('POST')) {
-            replies.push(
-              await send(port, '/callback', {
-                form: { SAMLResponse: 'forged' },
+              await send(port, '/submit', {
+                form: { form_token: 'guess', input: 'forged' },
               }),
             );
-          }
-          const page = await send(port, '/');
-          replies.push(page);
-          // No form, so no token, exists yet.
-          expect(formTokenIn(page.body)).toBeUndefined();
-          replies.push(
-            await send(port, '/submit', {
-              form: { form_token: 'guess', input: 'forged' },
-            }),
-          );
-          for (const reply of replies) {
-            expect(reply.status).toBe(400);
-            expect(reply.body).toBe(ANSWER_WORDS['not-armed']);
-          }
-          expect(judged()).toBe(0);
-          expect(reasons()).toEqual(replies.map(() => 'not-armed'));
-          arm();
-          if (right?.redirect !== undefined) {
-            await send(port, `/callback${right.redirect}`);
-          } else {
-            const form = await send(port, '/');
-            await send(port, '/submit', {
-              form: {
-                form_token: formTokenIn(form.body) ?? '',
-                input: right?.paste ?? '',
-              },
-            });
-          }
-        },
-        { logger },
-      );
-      expect(driven.payload).toEqual(
-        right?.redirect !== undefined ? right.payload : right?.pastePayload,
-      );
-      lastPort = driven.port;
-    },
-  );
+            for (const reply of replies) {
+              assert.equal(reply.status, 400);
+              assert.equal(reply.body, ANSWER_WORDS['not-armed']);
+            }
+            assert.equal(judged(), 0);
+            assert.deepEqual(
+              reasons(),
+              replies.map(() => 'not-armed'),
+            );
+            arm();
+            if (right?.redirect !== undefined) {
+              await send(port, `/callback${right.redirect}`);
+            } else {
+              const form = await send(port, '/');
+              await send(port, '/submit', {
+                form: {
+                  form_token: formTokenIn(form.body) ?? '',
+                  input: right?.paste ?? '',
+                },
+              });
+            }
+          },
+          { logger },
+        );
+        assert.deepEqual(
+          driven.payload,
+          right?.redirect !== undefined ? right.payload : right?.pastePayload,
+        );
+        lastPort = driven.port;
+      },
+    );
+  }
 
   it('arms once: a second arm is refused', async () => {
     const driven = await drive(
@@ -816,51 +905,62 @@ describe('closed until armed', () => {
       oauthCode(),
       async ({ port, channel, arm }) => {
         arm();
-        expect(() =>
-          channel.arm(() => ({ verdict: 'accept', payload: 'other' })),
-        ).toThrow();
+        assert.throws(
+          () => channel.arm(() => ({ verdict: 'accept', payload: 'other' })),
+          thrown(),
+        );
         await send(port, `/callback${RIGHT.oauthCode?.redirect}`);
       },
     );
-    expect(driven.payload).toBe('the-code');
+    assert.equal(driven.payload, 'the-code');
     lastPort = driven.port;
   });
 });
 
 describe('the state binds a redirect (through the listener)', () => {
-  it.each([
-    ['oauthCode', oauthCode],
-    ['oidcCode', oidcCode],
-  ] as const)(
-    '%s: none, two, a wrong and then the right state — the first three 400, counted, ignored',
-    async (_name, make) => {
-      const { logger, reasons } = capturingLogger();
-      const driven = await drive(
-        loopback4({ port: 0 }),
-        make() as Protocol,
-        async ({ port, arm }) => {
-          arm();
-          for (const query of [
-            '?code=c',
-            `?code=c&state=${STATE}&state=${STATE}`,
-            '?code=c&state=another',
-            '?error=access_denied&state=another',
-          ]) {
-            const reply = await send(port, `/callback${query}`);
-            expect(reply.status).toBe(400);
-            expect(reply.body).toBe(ANSWER_WORDS.state);
-          }
-          await send(port, `/callback?code=c&state=${STATE}`);
-        },
-        { logger },
-      );
-      expect(reasons()).toEqual(['state', 'state', 'state', 'state']);
-      expect(driven.payload).toEqual(
-        _name === 'oauthCode' ? 'c' : { code: 'c', state: STATE },
-      );
-      lastPort = driven.port;
-    },
-  );
+  for (const [caseIndex, caseRow] of (
+    [
+      ['oauthCode', oauthCode],
+      ['oidcCode', oidcCode],
+    ] as const
+  ).entries()) {
+    const [_name, make] = caseRow;
+    it(
+      caseTitle(
+        '%s: none, two, a wrong and then the right state — the first three 400, counted, ignored',
+        caseRow,
+        caseIndex,
+      ),
+      async () => {
+        const { logger, reasons } = capturingLogger();
+        const driven = await drive(
+          loopback4({ port: 0 }),
+          make() as Protocol,
+          async ({ port, arm }) => {
+            arm();
+            for (const query of [
+              '?code=c',
+              `?code=c&state=${STATE}&state=${STATE}`,
+              '?code=c&state=another',
+              '?error=access_denied&state=another',
+            ]) {
+              const reply = await send(port, `/callback${query}`);
+              assert.equal(reply.status, 400);
+              assert.equal(reply.body, ANSWER_WORDS.state);
+            }
+            await send(port, `/callback?code=c&state=${STATE}`);
+          },
+          { logger },
+        );
+        assert.deepEqual(reasons(), ['state', 'state', 'state', 'state']);
+        assert.deepEqual(
+          driven.payload,
+          _name === 'oauthCode' ? 'c' : { code: 'c', state: STATE },
+        );
+        lastPort = driven.port;
+      },
+    );
+  }
 });
 
 describe('the form token', () => {
@@ -873,7 +973,7 @@ describe('the form token', () => {
         arm();
         const page = await send(port, '/');
         const token = formTokenIn(page.body) ?? '';
-        expect(token.length).toBeGreaterThanOrEqual(43);
+        assert.ok(token.length >= 43, `${token.length} >= ${43}`);
         for (const form of [
           { input: 'forged' },
           { form_token: 'not-the-token', input: 'forged' },
@@ -881,28 +981,28 @@ describe('the form token', () => {
           { form_token: '', input: 'forged' },
         ]) {
           const reply = await send(port, '/submit', { form });
-          expect(reply.status).toBe(400);
-          expect(reply.body).toBe(ANSWER_WORDS['form-token']);
+          assert.equal(reply.status, 400);
+          assert.equal(reply.body, ANSWER_WORDS['form-token']);
           // Refused in fixed words: no fresh form, so no token.
-          expect(formTokenIn(reply.body)).toBeUndefined();
+          assert.equal(formTokenIn(reply.body), undefined);
         }
-        expect(judged()).toBe(0);
+        assert.equal(judged(), 0);
         // `/submit` is a POST.
         const get = await send(
           port,
           `/submit?form_token=${encodeURIComponent(token)}&input=forged`,
         );
-        expect(get.status).toBe(404);
-        expect(judged()).toBe(0);
+        assert.equal(get.status, 404);
+        assert.equal(judged(), 0);
         const done = await send(port, '/submit', {
           form: { form_token: token, input: 'bare-code' },
         });
-        expect(done.status).toBe(200);
+        assert.equal(done.status, 200);
       },
       { logger },
     );
-    expect(driven.payload).toBe('bare-code');
-    expect(reasons()).toEqual([
+    assert.equal(driven.payload, 'bare-code');
+    assert.deepEqual(reasons(), [
       'form-token',
       'form-token',
       'form-token',
@@ -928,7 +1028,7 @@ describe('the form token', () => {
       );
       lastPort = driven.port;
     }
-    expect(tokens[0]).not.toBe(tokens[1]);
+    assert.notEqual(tokens[0], tokens[1]);
   });
 
   it('the page carries the protocol’s words, escaped, and posts to /submit', async () => {
@@ -942,11 +1042,11 @@ describe('the form token', () => {
       async ({ port, arm }) => {
         arm();
         const page = await send(port, '/');
-        expect(page.headers['content-type']).toBe('text/html; charset=utf-8');
-        expect(page.body).toContain('Paste &lt;b&gt;it&lt;/b&gt;:');
-        expect(page.body).toContain('Go &amp; &quot;find&quot; it');
-        expect(page.body).not.toContain('<b>it</b>');
-        expect(page.body).toContain('<form action="/submit" method="post">');
+        assert.equal(page.headers['content-type'], 'text/html; charset=utf-8');
+        contains(page.body, 'Paste &lt;b&gt;it&lt;/b&gt;:');
+        contains(page.body, 'Go &amp; &quot;find&quot; it');
+        notContains(page.body, '<b>it</b>');
+        contains(page.body, '<form action="/submit" method="post">');
         await send(port, `/callback${RIGHT.oauthCode?.redirect}`);
       },
     );
@@ -980,21 +1080,22 @@ describe('the Host check, before any route', () => {
               host,
               ...(form === undefined ? {} : { form }),
             });
-            expect([host, path, reply.status]).toEqual([host, path, 400]);
-            expect(reply.body).toBe(ANSWER_WORDS.host);
-            expect(formTokenIn(reply.body)).toBeUndefined();
+            assert.deepEqual([host, path, reply.status], [host, path, 400]);
+            assert.equal(reply.body, ANSWER_WORDS.host);
+            assert.equal(formTokenIn(reply.body), undefined);
             refused += 1;
           }
         }
-        expect(judged()).toBe(0);
-        expect(reasons()).toEqual(
+        assert.equal(judged(), 0);
+        assert.deepEqual(
+          reasons(),
           Array.from({ length: refused }, () => 'host'),
         );
         await send(port, `/callback${RIGHT.oauthCode?.redirect}`);
       },
       { logger },
     );
-    expect(driven.payload).toBe('the-code');
+    assert.equal(driven.payload, 'the-code');
     lastPort = driven.port;
   });
 
@@ -1013,7 +1114,7 @@ describe('the Host check, before any route', () => {
           `[::ffff:127.0.0.1]:${port}`,
         ]) {
           const page = await send(port, '/', { host });
-          expect([host, page.status]).toEqual([host, 200]);
+          assert.deepEqual([host, page.status], [host, 200]);
         }
         await send(port, `/callback${RIGHT.oauthCode?.redirect}`);
       },
@@ -1036,21 +1137,21 @@ describe('the Host check, before any route', () => {
               host,
               localAddress: EXTERNAL as string,
             });
-            expect(page.status).toBe(400);
-            expect(formTokenIn(page.body)).toBeUndefined();
+            assert.equal(page.status, 400);
+            assert.equal(formTokenIn(page.body), undefined);
             const forged = await send(
               port,
               `/callback?code=forged&state=${STATE}`,
               { host, localAddress: EXTERNAL as string },
             );
-            expect(forged.status).toBe(400);
+            assert.equal(forged.status, 400);
           }
           await send(port, `/callback${RIGHT.oauthCode?.redirect}`);
         },
         { logger },
       );
-      expect(reasons()).toEqual(['host', 'host', 'host', 'host']);
-      expect(driven.payload).toBe('the-code');
+      assert.deepEqual(reasons(), ['host', 'host', 'host', 'host']);
+      assert.equal(driven.payload, 'the-code');
       lastPort = driven.port;
     },
   );
@@ -1070,13 +1171,15 @@ describe('the Host check, before any route', () => {
         replies.push(await send(port, '/', { host: 'evil.example' }));
         replies.push(await send(port, `/callback${RIGHT.oauthCode?.redirect}`));
         for (const reply of replies) {
-          expect(reply.headers['x-content-type-options']).toBe('nosniff');
+          assert.equal(reply.headers['x-content-type-options'], 'nosniff');
           // One answer per connection: nothing pipelined queues behind it.
-          expect(reply.headers.connection).toBe('close');
-          expect(reply.headers['content-security-policy']).toContain(
+          assert.equal(reply.headers.connection, 'close');
+          contains(
+            reply.headers['content-security-policy'],
             "default-src 'none'",
           );
-          expect(reply.headers['content-security-policy']).toContain(
+          contains(
+            reply.headers['content-security-policy'],
             "form-action 'self'",
           );
         }
@@ -1099,58 +1202,63 @@ describe('what an end, a throwing judge and an abort answer', () => {
           driving.port,
           `/callback?state=${STATE}&error=access_denied&error_description=${encodeURIComponent('<script>x</script>')}`,
         );
-        expect(reply.status).toBe(400);
-        expect(reply.body).toContain(
-          'access_denied: &lt;script&gt;x&lt;/script&gt;',
-        );
-        expect(reply.body).not.toContain('<script>');
+        assert.equal(reply.status, 400);
+        contains(reply.body, 'access_denied: &lt;script&gt;x&lt;/script&gt;');
+        notContains(reply.body, '<script>');
       },
     ).catch((error: unknown) => error);
-    expect(failureOf(thrown).facts).toEqual({
+    assert.deepEqual(failureOf(thrown).facts, {
       outcome: 'identity-provider-refused',
       oauthError: 'access_denied',
     });
-    expect(await bindable(port)).toBe(true);
+    assert.equal(await bindable(port), true);
   });
 
-  it.each([
+  for (const [caseIndex, caseRow] of cases([
     [
       'throws',
       (() => {
         throw new Error('judge secret text');
       }) as AnswerJudge<unknown>,
     ],
-  ])(
-    'a judge that %s: a fixed 500 page, the login fails, no text of it anywhere',
-    async (_how, judge) => {
-      const { logger, text } = capturingLogger();
-      let port = 0;
-      const thrown = await loopback4({ port: 0 })
-        .open(
-          {
-            signal: new AbortController().signal,
-            logger,
-            paste: undefined,
-            callbackMethods: ['GET'],
-            endpoint: '/callback',
-          },
-          async (channel) => {
-            port = Number(new URL(channel.redirectUri as string).port);
-            const waiting = channel.arm(judge).answer();
-            void waiting.catch(() => undefined);
-            const reply = await send(port, '/callback?x=1');
-            expect(reply.status).toBe(500);
-            expect(reply.body).not.toContain('judge secret text');
-            await waiting;
-          },
-        )
-        .catch((error: unknown) => error);
-      expect(failureOf(thrown).facts).toEqual({ outcome: 'failed' });
-      expect(String(thrown)).not.toContain('judge secret text');
-      expect(text()).not.toContain('judge secret text');
-      expect(await bindable(port)).toBe(true);
-    },
-  );
+  ]).entries()) {
+    const [_how, judge] = caseRow;
+    it(
+      caseTitle(
+        'a judge that %s: a fixed 500 page, the login fails, no text of it anywhere',
+        caseRow,
+        caseIndex,
+      ),
+      async () => {
+        const { logger, text } = capturingLogger();
+        let port = 0;
+        const thrown = await loopback4({ port: 0 })
+          .open(
+            {
+              signal: new AbortController().signal,
+              logger,
+              paste: undefined,
+              callbackMethods: ['GET'],
+              endpoint: '/callback',
+            },
+            async (channel) => {
+              port = Number(new URL(channel.redirectUri as string).port);
+              const waiting = channel.arm(judge).answer();
+              void waiting.catch(() => undefined);
+              const reply = await send(port, '/callback?x=1');
+              assert.equal(reply.status, 500);
+              notContains(reply.body, 'judge secret text');
+              await waiting;
+            },
+          )
+          .catch((error: unknown) => error);
+        assert.deepEqual(failureOf(thrown).facts, { outcome: 'failed' });
+        notContains(String(thrown), 'judge secret text');
+        notContains(text(), 'judge secret text');
+        assert.equal(await bindable(port), true);
+      },
+    );
+  }
 
   it('an abort ends the login aborted (browser) with the refused-request count; the port is free', async () => {
     const controller = new AbortController();
@@ -1167,12 +1275,12 @@ describe('what an end, a throwing judge and an abort answer', () => {
       },
       { signal: controller.signal },
     ).catch((error: unknown) => error);
-    expect(failureOf(thrown).facts).toEqual({
+    assert.deepEqual(failureOf(thrown).facts, {
       outcome: 'aborted',
       strategy: 'browser',
       ignoredCallbacks: 2,
     });
-    expect(await bindable(port)).toBe(true);
+    assert.equal(await bindable(port), true);
   });
 
   it('an abort ends an open whose use never returns: settled, released, its late settlement discarded', async () => {
@@ -1195,15 +1303,15 @@ describe('what an end, a throwing judge and an abort answer', () => {
       },
     );
     const thrown = await opened.catch((error: unknown) => error);
-    expect(failureOf(thrown).facts).toMatchObject({ outcome: 'aborted' });
-    expect(await bindable(port)).toBe(true);
+    matchObject(failureOf(thrown).facts, { outcome: 'aborted' });
+    assert.equal(await bindable(port), true);
     finish?.();
   });
 
   it('an already-aborted signal binds nothing', async () => {
     const controller = new AbortController();
     controller.abort();
-    const listen = jest.spyOn(net.Server.prototype, 'listen');
+    const listen = mock.method(net.Server.prototype, 'listen');
     try {
       const thrown = await loopback4({ port: 0 })
         .open(
@@ -1215,13 +1323,13 @@ describe('what an end, a throwing judge and an abort answer', () => {
           async () => 'never',
         )
         .catch((error: unknown) => error);
-      expect(failureOf(thrown).facts).toEqual({
+      assert.deepEqual(failureOf(thrown).facts, {
         outcome: 'aborted',
         strategy: 'browser',
       });
-      expect(listen).not.toHaveBeenCalled();
+      assert.equal(listen.mock.callCount(), 0);
     } finally {
-      listen.mockRestore();
+      listen.mock.restore();
     }
   });
 
@@ -1237,7 +1345,7 @@ describe('what an end, a throwing judge and an abort answer', () => {
         });
       });
       // No turn of the loop in between.
-      expect(await bindable(port, address)).toBe(true);
+      assert.equal(await bindable(port, address), true);
     }
   });
 
@@ -1255,14 +1363,14 @@ describe('what an end, a throwing judge and an abort answer', () => {
         port = Number(new URL(channel.redirectUri as string).port);
       },
     );
-    expect(await bindable(port)).toBe(true);
+    assert.equal(await bindable(port), true);
     const late = kept
       ?.arm(
         () => ({ verdict: 'accept', payload: 'x' }) as AnswerVerdict<unknown>,
       )
       .answer();
     const thrown = await late?.catch((error: unknown) => error);
-    expect(failureOf(thrown).facts).toEqual({ outcome: 'callback-closed' });
+    assert.deepEqual(failureOf(thrown).facts, { outcome: 'callback-closed' });
   });
 });
 
@@ -1305,12 +1413,12 @@ describe('nothing of an answer reaches a log line', () => {
       },
       { logger },
     ).catch((error: unknown) => error);
-    expect(failureOf(thrown).facts).toMatchObject({
+    matchObject(failureOf(thrown).facts, {
       outcome: 'identity-provider-refused',
     });
-    expect(lines.length).toBeGreaterThan(0);
+    assert.ok(lines.length > 0, `${lines.length} > ${0}`);
     for (const secret of [...secrets, token]) {
-      expect(text()).not.toContain(secret);
+      notContains(text(), secret);
     }
   });
 });

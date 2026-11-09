@@ -14,14 +14,8 @@
  * compile (`compositions.typecheck.ts`).
  */
 
-import {
-  afterEach,
-  beforeEach,
-  describe,
-  expect,
-  it,
-  jest,
-} from '@jest/globals';
+import assert from 'node:assert/strict';
+import { afterEach, beforeEach, describe, it, mock } from 'node:test';
 import { readFailure } from '@mcp-abap-adt/auth-errors';
 import type {
   AuthorizationRequest,
@@ -31,9 +25,16 @@ import { composeAuthorization } from '../../authorization/compose';
 import { openInBrowser } from '../../authorization/presentation';
 import { oauthCode } from '../../authorization/protocol';
 import { loopback4 } from '../../authorization/transport';
+import {
+  caseTitle,
+  contains,
+  matchObject,
+  notContains,
+} from '../helpers/expectations';
 import { bindable, capturingLogger, send } from '../helpers/listenerHttp';
 import { getAvailablePort } from '../helpers/netHelpers';
 import { recordingBrowser } from '../helpers/recordingBrowser';
+import { watchStdout } from '../helpers/stdoutWrites';
 
 const STATE = 'browser-state_abcdefghijklmnopqrstuvwxyz0123';
 const urlFor = (redirectUri: string) =>
@@ -44,18 +45,17 @@ let stdout: string[];
 beforeEach(() => {
   stderr = [];
   stdout = [];
-  jest.spyOn(process.stderr, 'write').mockImplementation((chunk: unknown) => {
+  mock.method(process.stderr, 'write', (chunk: unknown) => {
     stderr.push(String(chunk));
     return true;
   });
-  jest.spyOn(process.stdout, 'write').mockImplementation((chunk: unknown) => {
-    stdout.push(String(chunk));
-    return true;
+  watchStdout((text) => {
+    stdout.push(text);
   });
 });
 afterEach(() => {
-  jest.restoreAllMocks();
-  expect(stdout).toEqual([]);
+  mock.restoreAll();
+  assert.deepEqual(stdout, []);
 });
 
 const request = (
@@ -112,100 +112,114 @@ describe('a consumer IBrowser is used as given', () => {
     }).authorize(
       request({ buildAuthorizationUrl: async (redirect) => raw(redirect) }),
     );
-    expect(await stillWaiting(login)).toBe(true);
+    assert.equal(await stillWaiting(login), true);
     const redirect = `http://127.0.0.1:${port}/callback`;
-    expect(calls).toHaveLength(1);
-    expect(calls[0]?.self).toBe(browser);
-    expect(calls[0]?.url).toBe(raw(redirect));
-    expect(calls[0]?.signal).toBeInstanceOf(AbortSignal);
-    expect(calls[0]?.signal.aborted).toBe(false);
-    expect(stderr.join('')).toBe('');
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0]?.self, browser);
+    assert.equal(calls[0]?.url, raw(redirect));
+    assert.ok(calls[0]?.signal instanceof AbortSignal);
+    assert.equal(calls[0]?.signal.aborted, false);
+    assert.equal(stderr.join(''), '');
     await send(port, `/callback?code=C1&state=${STATE}`);
-    await expect(login).resolves.toMatchObject({ payload: 'C1' });
+    matchObject(await login, { payload: 'C1' });
     // The signal tells the browser the login has ended.
-    expect(calls[0]?.signal.aborted).toBe(true);
+    assert.equal(calls[0]?.signal.aborted, true);
   });
 });
 
 describe('a browser that fails is a presentation failure', () => {
-  it.each([
-    ['rejects', failing()],
+  for (const [caseIndex, caseRow] of (
     [
-      'throws synchronously',
-      {
-        open: () => {
-          throw Object.assign(new Error(`SECRET-PATH ${STATE}`), {
-            code: 'ENOENT',
-          });
-        },
-      } as IBrowser,
-    ],
-    [
-      'answers a thenable whose then getter throws',
-      {
-        open: () => ({
-          // biome-ignore lint/suspicious/noThenProperty: the hostile answer under test
-          get then(): never {
+      ['rejects', failing()],
+      [
+        'throws synchronously',
+        {
+          open: () => {
             throw Object.assign(new Error(`SECRET-PATH ${STATE}`), {
               code: 'ENOENT',
             });
           },
-        }),
-      } as unknown as IBrowser,
-    ],
-    [
-      'answers a Proxy whose trap throws',
-      {
-        open: () =>
-          new Proxy(
-            {},
-            {
-              get: () => {
-                throw Object.assign(new Error(`SECRET-PATH ${STATE}`), {
-                  code: 'ENOENT',
-                });
-              },
+        } as IBrowser,
+      ],
+      [
+        'answers a thenable whose then getter throws',
+        {
+          open: () => ({
+            // biome-ignore lint/suspicious/noThenProperty: the hostile answer under test
+            get then(): never {
+              throw Object.assign(new Error(`SECRET-PATH ${STATE}`), {
+                code: 'ENOENT',
+              });
             },
-          ),
-      } as unknown as IBrowser,
-    ],
-  ] as const)(
-    'a browser that %s: the URL prompted once on stderr, one failure line, the login waiting; a callback finishes it',
-    async (_name, browser) => {
-      const port = await getAvailablePort();
-      const { logger, lines, text } = capturingLogger();
-      const login = composeAuthorization({
-        presentation: openInBrowser({ browser }),
-        transport: loopback4({ port }),
-        protocol: oauthCode(),
-        endpoint: '/callback',
-      }).authorize(request({ logger }));
-      expect(await stillWaiting(login)).toBe(true);
-      const redirect = `http://127.0.0.1:${port}/callback`;
-      expect(occurrences(stderr.join(''), urlFor(redirect))).toBe(1);
-      const failures = lines.filter(
-        (line) => line.level === 'error' || line.level === 'warn',
-      );
-      expect(failures.map((line) => [line.level, line.message])).toEqual([
-        [
-          'error',
-          'Failed to present the authorization URL: presenting the authorization URL failed (unknown error, ENOENT)',
-        ],
-      ]);
-      expect(lines.map((line) => line.message)).toContain(
-        'the authorization URL was shown',
-      );
-      expect(text()).not.toContain('idp.example');
-      expect(text()).not.toContain(STATE);
-      expect(text()).not.toContain('SECRET-PATH');
-      expect(stderr.join('')).not.toContain('SECRET-PATH');
-      expect(
-        (await send(port, `/callback?code=C3&state=${STATE}`)).status,
-      ).toBe(200);
-      await expect(login).resolves.toMatchObject({ payload: 'C3' });
-      expect(await bindable(port)).toBe(true);
-    },
-  );
+          }),
+        } as unknown as IBrowser,
+      ],
+      [
+        'answers a Proxy whose trap throws',
+        {
+          open: () =>
+            new Proxy(
+              {},
+              {
+                get: () => {
+                  throw Object.assign(new Error(`SECRET-PATH ${STATE}`), {
+                    code: 'ENOENT',
+                  });
+                },
+              },
+            ),
+        } as unknown as IBrowser,
+      ],
+    ] as const
+  ).entries()) {
+    const [_name, browser] = caseRow;
+    it(
+      caseTitle(
+        'a browser that %s: the URL prompted once on stderr, one failure line, the login waiting; a callback finishes it',
+        caseRow,
+        caseIndex,
+      ),
+      async () => {
+        const port = await getAvailablePort();
+        const { logger, lines, text } = capturingLogger();
+        const login = composeAuthorization({
+          presentation: openInBrowser({ browser }),
+          transport: loopback4({ port }),
+          protocol: oauthCode(),
+          endpoint: '/callback',
+        }).authorize(request({ logger }));
+        assert.equal(await stillWaiting(login), true);
+        const redirect = `http://127.0.0.1:${port}/callback`;
+        assert.equal(occurrences(stderr.join(''), urlFor(redirect)), 1);
+        const failures = lines.filter(
+          (line) => line.level === 'error' || line.level === 'warn',
+        );
+        assert.deepEqual(
+          failures.map((line) => [line.level, line.message]),
+          [
+            [
+              'error',
+              'Failed to present the authorization URL: presenting the authorization URL failed (unknown error, ENOENT)',
+            ],
+          ],
+        );
+        contains(
+          lines.map((line) => line.message),
+          'the authorization URL was shown',
+        );
+        notContains(text(), 'idp.example');
+        notContains(text(), STATE);
+        notContains(text(), 'SECRET-PATH');
+        notContains(stderr.join(''), 'SECRET-PATH');
+        assert.equal(
+          (await send(port, `/callback?code=C3&state=${STATE}`)).status,
+          200,
+        );
+        matchObject(await login, { payload: 'C3' });
+        assert.equal(await bindable(port), true);
+      },
+    );
+  }
 
   it('the signal then ends it aborted and the port is free; the IdP’s ?error= ends it refused', async () => {
     const port = await getAvailablePort();
@@ -219,18 +233,18 @@ describe('a browser that fails is a presentation failure', () => {
     const first = strategy
       .authorize(request({ signal: controller.signal }))
       .catch((e: unknown) => e);
-    expect(await stillWaiting(first)).toBe(true);
+    assert.equal(await stillWaiting(first), true);
     controller.abort();
-    expect(factsOf(await first)).toEqual({
+    assert.deepEqual(factsOf(await first), {
       outcome: 'aborted',
       strategy: 'browser',
     });
-    expect(await bindable(port)).toBe(true);
+    assert.equal(await bindable(port), true);
 
     const second = strategy.authorize(request()).catch((e: unknown) => e);
-    expect(await stillWaiting(second)).toBe(true);
+    assert.equal(await stillWaiting(second), true);
     await send(port, `/callback?error=access_denied&state=${STATE}`);
-    expect(factsOf(await second)).toEqual({
+    assert.deepEqual(factsOf(await second), {
       outcome: 'identity-provider-refused',
       oauthError: 'access_denied',
     });
@@ -252,14 +266,15 @@ describe('a browser that fails is a presentation failure', () => {
       protocol: oauthCode(),
       endpoint: '/callback',
     }).authorize(request({ logger }));
-    expect(await stillWaiting(login)).toBe(true);
+    assert.equal(await stillWaiting(login), true);
     await send(port, `/callback?code=C4&state=${STATE}`);
     await login;
     rejectOpen(Object.assign(new Error('late'), { code: 'ENOENT' }));
     await new Promise((resolve) => setTimeout(resolve, 50));
-    expect(stderr.join('')).not.toContain('idp.example');
-    expect(
+    notContains(stderr.join(''), 'idp.example');
+    assert.deepEqual(
       lines.filter((line) => line.level === 'error' || line.level === 'warn'),
-    ).toEqual([]);
+      [],
+    );
   });
 });
