@@ -5,7 +5,7 @@
 
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { thrown } from './expectations';
+import { lacksProperty, notMatchObject, thrown } from './expectations';
 
 const WORDS = 'the code exchange returned no access_token';
 
@@ -41,5 +41,32 @@ describe('thrown', () => {
       thrown(RangeError),
     );
     await assert.rejects(Promise.reject('anything'), thrown());
+  });
+});
+
+describe('the negative assertions need their subject', () => {
+  it('lacksProperty: a value without the property passes; a missing value fails', () => {
+    lacksProperty({ other: 1 }, 'code_verifier');
+    // Jest's not.toHaveProperty failed on undefined and null; so does this.
+    for (const missing of [undefined, null]) {
+      assert.throws(
+        () => lacksProperty(missing, 'code_verifier'),
+        assert.AssertionError,
+      );
+    }
+    assert.throws(
+      () => lacksProperty({ code_verifier: 'v' }, 'code_verifier'),
+      assert.AssertionError,
+    );
+  });
+
+  it('notMatchObject: an object that does not match passes; a value that is no object fails', () => {
+    notMatchObject({ next: 'stop' }, { next: 'login' });
+    for (const missing of [undefined, null, 'login']) {
+      assert.throws(
+        () => notMatchObject(missing, { next: 'login' }),
+        assert.AssertionError,
+      );
+    }
   });
 });

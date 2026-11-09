@@ -21,7 +21,12 @@ import {
 } from '../../auth/AuthProviderBase';
 import { BaseTokenProvider } from '../../index';
 import { refreshThenLogin } from '../../renewal';
-import { caseTitle, hasProperty, notContains } from '../helpers/expectations';
+import {
+  caseTitle,
+  hasProperty,
+  lacksProperty,
+  notContains,
+} from '../helpers/expectations';
 import { recordingTargets } from '../helpers/targets';
 
 const MARKER = 'SECRET-MARKER';
@@ -99,7 +104,7 @@ describe('AuthProviderBase', () => {
     }
     const got = await everyMoment(new ThrowingGrant());
     for (const outcome of Object.values(got)) {
-      assert.equal(hasProperty(factsOf(outcome), 'grant'), false);
+      lacksProperty(factsOf(outcome), 'grant');
     }
     assert.deepEqual(factsOf(got.prepare), {
       operation: 'loading-certificate',
@@ -243,7 +248,7 @@ describe('the grant is read once per moment, inside the boundary', () => {
         assert.equal(calls, 4);
         for (const outcome of outcomes) {
           // A throwing grant() refuses the moment, whatever the body does.
-          assert.equal(hasProperty(factsOf(outcome), 'grant'), false);
+          lacksProperty(factsOf(outcome), 'grant');
         }
       },
     );

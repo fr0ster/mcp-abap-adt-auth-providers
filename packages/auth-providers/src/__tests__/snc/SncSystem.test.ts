@@ -4,7 +4,12 @@ import assert from 'node:assert/strict';
 import { afterEach, describe, it, mock } from 'node:test';
 import { isAuthProviderFailure, readFailure } from '@mcp-abap-adt/auth-errors';
 import { nodeSncSystem, parseRegQuery } from '../../snc/SncSystem';
-import { hasProperty, matchObject, notContains } from '../helpers/expectations';
+import {
+  hasProperty,
+  lacksProperty,
+  matchObject,
+  notContains,
+} from '../helpers/expectations';
 import { clearMock } from '../helpers/mockOnce';
 import { execFileMock } from '../helpers/sncExecFileMock';
 
@@ -104,7 +109,7 @@ describe('nodeSncSystem reading the registry', () => {
     // The user's rule: no built-in timeout. Without a signal the query
     // waits for reg.exe; bounding it is the consumer's decision.
     assert.deepEqual(options, { windowsHide: true });
-    assert.equal(hasProperty(options, 'timeout'), false);
+    lacksProperty(options, 'timeout');
   });
 
   it('passes the signal to execFile, so an abort kills reg.exe', async () => {
@@ -113,7 +118,7 @@ describe('nodeSncSystem reading the registry', () => {
     await nodeSncSystem().readRegistryValue('HKLM\\X', 'Y', controller.signal);
     const [, , options] = calls()[0]!;
     assert.equal(options.signal, controller.signal);
-    assert.equal(hasProperty(options, 'timeout'), false);
+    lacksProperty(options, 'timeout');
   });
 
   it('an aborted query rejects aborted — never the child’s text', async () => {

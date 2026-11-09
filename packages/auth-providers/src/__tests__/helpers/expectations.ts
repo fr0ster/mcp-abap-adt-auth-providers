@@ -54,12 +54,21 @@ export function matchObject(
   }
 }
 
-/** `actual` does not hold every field `expected` names. */
+/**
+ * `actual` is an object that does not hold every field `expected` names.
+ * As Jest's `not.toMatchObject`, a value that is no object fails: nothing
+ * absent passes a negative assertion.
+ */
 export function notMatchObject(
   actual: unknown,
   expected: unknown,
   message?: string,
 ): void {
+  if (typeof actual !== 'object' || actual === null) {
+    assert.fail(
+      message ?? `expected an object not to match, got ${format('%o', actual)}`,
+    );
+  }
   if (matches(actual, expected)) {
     assert.fail(
       message ??
@@ -137,6 +146,23 @@ export function hasProperty(value: unknown, path: string): boolean {
     current = Reflect.get(Object(current), key);
   }
   return true;
+}
+
+/**
+ * `value` is there (neither `undefined` nor `null`) and has no property
+ * `path`: Jest's `not.toHaveProperty`, which failed on a missing value
+ * rather than pass it.
+ */
+export function lacksProperty(
+  value: unknown,
+  path: string,
+  message?: string,
+): void {
+  assert.ok(
+    value !== undefined && value !== null,
+    message ?? `expected a value without ${path}, got ${format('%o', value)}`,
+  );
+  assert.equal(hasProperty(value, path), false, message ?? `has ${path}`);
 }
 
 /** What a thrown value must be, as Jest's `toThrow(expected)` read it. */

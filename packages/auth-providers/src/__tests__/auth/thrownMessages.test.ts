@@ -48,6 +48,7 @@ import {
   caseTitle,
   contains,
   hasProperty,
+  lacksProperty,
   matchObject,
   notContains,
 } from '../helpers/expectations';
@@ -230,13 +231,7 @@ describe('a token-endpoint failure keeps its safe facts', () => {
       refreshJwtToken('rt', 'https://uaa', 'cid', 'secret'),
     );
     // An unregistered code is no fact.
-    assert.equal(
-      hasProperty(
-        readFailure(error, 'unfamiliar-error').facts as Record<string, unknown>,
-        'oauthError',
-      ),
-      false,
-    );
+    lacksProperty(readFailure(error, 'unfamiliar-error').facts, 'oauthError');
     const words = logFields(classify(error, 'refresh')).error;
     contains(words, 'HTTP 400');
     notContains(words, UNREGISTERED);

@@ -54,12 +54,21 @@ export function matchObject(
   }
 }
 
-/** `actual` does not hold every field `expected` names. */
+/**
+ * `actual` is an object that does not hold every field `expected` names.
+ * As Jest's `not.toMatchObject`, a value that is no object fails: nothing
+ * absent passes a negative assertion.
+ */
 export function notMatchObject(
   actual: unknown,
   expected: unknown,
   message?: string,
 ): void {
+  if (typeof actual !== 'object' || actual === null) {
+    assert.fail(
+      message ?? `expected an object not to match, got ${format('%o', actual)}`,
+    );
+  }
   if (matches(actual, expected)) {
     assert.fail(
       message ??
@@ -70,14 +79,14 @@ export function notMatchObject(
 
 /** A string holds the fragment, or an array the item (`===`, as Jest's `toContain`). */
 export function contains(
-  haystack: string | readonly unknown[] | undefined,
+  haystack: unknown,
   needle: unknown,
   message?: string,
 ): void {
-  if (haystack === undefined) {
+  if (typeof haystack !== 'string' && !Array.isArray(haystack)) {
     assert.fail(
       message ??
-        `expected a string or an array to contain ${format('%o', needle)}, got undefined`,
+        `expected a string or an array to contain ${format('%o', needle)}, got ${format('%o', haystack)}`,
     );
   }
   const found =
@@ -94,14 +103,14 @@ export function contains(
 
 /** A string does not hold the fragment, nor an array the item. */
 export function notContains(
-  haystack: string | readonly unknown[] | undefined,
+  haystack: unknown,
   needle: unknown,
   message?: string,
 ): void {
-  if (haystack === undefined) {
+  if (typeof haystack !== 'string' && !Array.isArray(haystack)) {
     assert.fail(
       message ??
-        `expected a string or an array not to contain ${format('%o', needle)}, got undefined`,
+        `expected a string or an array not to contain ${format('%o', needle)}, got ${format('%o', haystack)}`,
     );
   }
   const found =
@@ -137,6 +146,23 @@ export function hasProperty(value: unknown, path: string): boolean {
     current = Reflect.get(Object(current), key);
   }
   return true;
+}
+
+/**
+ * `value` is there (neither `undefined` nor `null`) and has no property
+ * `path`: Jest's `not.toHaveProperty`, which failed on a missing value
+ * rather than pass it.
+ */
+export function lacksProperty(
+  value: unknown,
+  path: string,
+  message?: string,
+): void {
+  assert.ok(
+    value !== undefined && value !== null,
+    message ?? `expected a value without ${path}, got ${format('%o', value)}`,
+  );
+  assert.equal(hasProperty(value, path), false, message ?? `has ${path}`);
 }
 
 /** What a thrown value must be, as Jest's `toThrow(expected)` read it. */
@@ -367,6 +393,34 @@ export function deepEqualWith(
     assert.fail(
       message ??
         `expected ${format('%o', actual)} to equal ${format('%o', expected)}`,
+    );
+  }
+}
+
+/** A placeholder for a string holding the fragment, as Jest's `expect.stringContaining`. */
+export function stringContaining(fragment: string): Placeholder {
+  return new Placeholder(
+    `a string containing ${format('%o', fragment)}`,
+    (value) => typeof value === 'string' && value.includes(fragment),
+  );
+}
+
+/**
+ * Some call of the mock had these arguments, its placeholders accepting what
+ * they check: Jest's `toHaveBeenCalledWith`.
+ */
+export function calledWith(
+  fn: {
+    readonly mock: {
+      readonly calls: readonly { readonly arguments: readonly unknown[] }[];
+    };
+  },
+  ...expected: unknown[]
+): void {
+  const calls = fn.mock.calls.map((call) => call.arguments);
+  if (!calls.some((args) => equalWith(args, expected))) {
+    assert.fail(
+      `expected a call with ${format('%o', expected)}, got ${format('%o', calls)}`,
     );
   }
 }

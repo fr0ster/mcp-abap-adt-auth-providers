@@ -31,6 +31,7 @@ import {
   caseTitle,
   contains,
   hasProperty,
+  lacksProperty,
   matchObject,
   notContains,
 } from '../helpers/expectations';
@@ -159,7 +160,7 @@ describe('A2200019: no credential to present', () => {
       error.hint,
       'make sure the SNC product behind the SNC library is logged on',
     );
-    assert.equal(hasProperty(error, 'diagnostics'), false);
+    lacksProperty(error, 'diagnostics');
   });
   it('found in a string and in an Error, never copied', async () => {
     const p = snc(machine());
@@ -201,7 +202,7 @@ describe('SNCERR_INIT: the library could not be initialised', () => {
             'the RFC SDK could not initialise the SNC library (x64) as its SNC library (SNCERR_INIT)',
           diagnostics: { library: SLC },
         });
-        assert.equal(hasProperty(error, 'hint'), false);
+        lacksProperty(error, 'hint');
       },
     );
   }
@@ -390,7 +391,7 @@ describe('what the shipped locator tried', () => {
       candidates: [],
       processArch: 'x64',
     });
-    assert.equal(hasProperty(error, 'diagnostics'), false);
+    lacksProperty(error, 'diagnostics');
   });
   it('docs/passwordless-sso.md quotes the A2200019 reason as it is', () => {
     const doc = readFileSync(
@@ -849,7 +850,7 @@ describe('cancelling prepare() (the user’s rule: no built-in timeout)', () => 
       }),
     ).prepare();
     assert.ok(reads.length > 0, `${reads.length} > ${0}`);
-    for (const read of reads) assert.equal(hasProperty(read, 'signal'), false);
+    for (const read of reads) lacksProperty(read, 'signal');
   });
   it('a probe gets the moment’s signal too; an abort during the probe ends prepare() aborted', async () => {
     const controller = new AbortController();

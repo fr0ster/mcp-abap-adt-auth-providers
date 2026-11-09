@@ -36,6 +36,7 @@ import {
   caseTitle,
   contains,
   hasProperty,
+  lacksProperty,
   matchObject,
   matchText,
   notContains,
@@ -174,7 +175,7 @@ describe('AuthorizationCodeProvider: state and PKCE for the URL it builds', () =
     }
     // Minted anew for every URL built.
     assert.notEqual(stateOf(urls[0] as string), stateOf(urls[1] as string));
-    assert.equal(hasProperty(forms[0], 'code_verifier'), false);
+    lacksProperty(forms[0], 'code_verifier');
   });
 
   for (const [caseIndex, caseRow] of cases([
