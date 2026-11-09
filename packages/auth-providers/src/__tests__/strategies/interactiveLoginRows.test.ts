@@ -42,7 +42,6 @@ import {
   notContains,
 } from '../helpers/expectations';
 import { recordingBrowser } from '../helpers/recordingBrowser';
-import { watchStdout } from '../helpers/stdoutWrites';
 
 const PORT = 7877;
 /** The state every URL here carries: the code protocols bind by it. */
@@ -316,15 +315,13 @@ describe('A.3 — browser login rows', () => {
     }
   });
 
-  it('without a logger, showing the URL: stderr only, nothing on stdout', async () => {
+  // That nothing in src writes to stdout is checked statically
+  // (noStdoutSources.test.ts).
+  it('without a logger, showing the URL: on stderr', async () => {
     const err: string[] = [];
-    const out: string[] = [];
     const stderr = mock.method(process.stderr, 'write', (chunk: unknown) => {
       err.push(String(chunk));
       return true;
-    });
-    const stdout = watchStdout((text) => {
-      out.push(text);
     });
     try {
       await endedByAbort((signal) =>
@@ -338,14 +335,12 @@ describe('A.3 — browser login rows', () => {
       );
     } finally {
       stderr.mock.restore();
-      stdout.mock.restore();
     }
     assert.deepEqual(err.slice(0, 3), [
       '🔗 Open this URL in your browser to authenticate:\n',
       `   https://idp.example/authorize?r=http://localhost:${PORT}/callback&state=${STATE}\n`,
       `Waiting for callback on http://localhost:${PORT}/callback ...\n`,
     ]);
-    assert.deepEqual(out, []);
   });
 
   it('a URL that is not promptable is named in fixed words, never shown', async () => {

@@ -3,7 +3,6 @@ import { describe, it, mock } from 'node:test';
 import { consoleDeviceCodePresenter } from '../../deviceCode/DeviceCodePresenter';
 import { OidcDeviceFlowProvider } from '../../providers/OidcDeviceFlowProvider';
 import { refreshThenLogin } from '../../renewal';
-import { watchStdout } from '../helpers/stdoutWrites';
 
 const prompt = {
   verificationUri: 'https://idp/device',
@@ -13,12 +12,10 @@ const prompt = {
 };
 
 describe('device-code presenter', () => {
-  it('console presenter: to the logger when there is one, never stdout', async () => {
+  // That nothing in src writes to stdout is checked statically
+  // (noStdoutSources.test.ts); here, where each prompt goes.
+  it('console presenter: to the logger when there is one', async () => {
     const info = mock.fn();
-    const out: string[] = [];
-    const stdout = watchStdout((text) => {
-      out.push(text);
-    });
     await consoleDeviceCodePresenter({
       info,
       debug: mock.fn(),
@@ -29,8 +26,6 @@ describe('device-code presenter', () => {
       info.mock.calls.flatMap((call) => call.arguments).join('\n'),
       /https:\/\/idp\/device[\s\S]*AB-CD/,
     );
-    assert.deepEqual(out, []);
-    stdout.mock.restore();
   });
 
   it('console presenter: to stderr without a logger', async () => {

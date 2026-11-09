@@ -34,7 +34,6 @@ import {
 } from '../helpers/listenerHttp';
 import { getAvailablePort } from '../helpers/netHelpers';
 import { recordingBrowser } from '../helpers/recordingBrowser';
-import { watchStdout } from '../helpers/stdoutWrites';
 
 const STATE = 'presentation-state_abcdefghijklmnopqrstuvwxyz';
 const urlFor = (redirectUri: string) =>
@@ -44,21 +43,15 @@ const factsOf = (error: unknown) =>
   readFailure(error, 'browser-login').facts as Record<string, unknown>;
 
 let stderr: string[];
-let stdout: string[];
 beforeEach(() => {
   stderr = [];
-  stdout = [];
   mock.method(process.stderr, 'write', (chunk: unknown) => {
     stderr.push(String(chunk));
     return true;
   });
-  watchStdout((text) => {
-    stdout.push(text);
-  });
 });
 afterEach(() => {
   mock.restoreAll();
-  assert.deepEqual(stdout, []);
 });
 
 const request = (

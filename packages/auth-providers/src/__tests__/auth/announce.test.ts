@@ -3,32 +3,27 @@
  * `announcer` writes to the logger's `info`, and to stderr — never stdout —
  * when there is no logger, when `info` throws, or when `info` answers a native
  * promise that rejects. A logger that took the prompt gets no stderr copy, and
- * a foreign thenable's code is never run.
+ * a foreign thenable's code is never run. That nothing in src writes to
+ * stdout is checked statically (`noStdoutSources.test.ts`).
  */
 
 import assert from 'node:assert/strict';
 import { afterEach, beforeEach, describe, it, mock } from 'node:test';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
 import { announcer } from '../../auth/announce';
-import { watchStdout } from '../helpers/stdoutWrites';
 
 const PROMPT = 'Enter code: UC-42';
 
 let stderr: string[];
-let stdout: string[];
 let restore: Array<() => void>;
 
 beforeEach(() => {
   stderr = [];
-  stdout = [];
   const e = mock.method(process.stderr, 'write', (c: unknown) => {
     stderr.push(String(c));
     return true;
   });
-  const o = watchStdout((text) => {
-    stdout.push(text);
-  });
-  restore = [() => e.mock.restore(), () => o.mock.restore()];
+  restore = [() => e.mock.restore()];
 });
 
 afterEach(() => {
@@ -49,7 +44,6 @@ describe('announcer', () => {
   it('without a logger: stderr', () => {
     announcer()(PROMPT);
     assert.deepEqual(stderr, [`${PROMPT}\n`]);
-    assert.deepEqual(stdout, []);
   });
 
   it('a logger that takes it: no stderr copy', async () => {

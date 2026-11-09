@@ -34,28 +34,21 @@ import {
 import { bindable, capturingLogger, send } from '../helpers/listenerHttp';
 import { getAvailablePort } from '../helpers/netHelpers';
 import { recordingBrowser } from '../helpers/recordingBrowser';
-import { watchStdout } from '../helpers/stdoutWrites';
 
 const STATE = 'browser-state_abcdefghijklmnopqrstuvwxyz0123';
 const urlFor = (redirectUri: string) =>
   `https://idp.example/oauth/authorize?redirect_uri=${encodeURIComponent(redirectUri)}&state=${STATE}`;
 
 let stderr: string[];
-let stdout: string[];
 beforeEach(() => {
   stderr = [];
-  stdout = [];
   mock.method(process.stderr, 'write', (chunk: unknown) => {
     stderr.push(String(chunk));
     return true;
   });
-  watchStdout((text) => {
-    stdout.push(text);
-  });
 });
 afterEach(() => {
   mock.restoreAll();
-  assert.deepEqual(stdout, []);
 });
 
 const request = (

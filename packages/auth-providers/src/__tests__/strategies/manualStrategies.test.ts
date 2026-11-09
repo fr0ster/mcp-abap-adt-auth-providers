@@ -1,8 +1,9 @@
 /**
  * The non-browser strategies.
  *
- * The stdout assertion is the load-bearing one: under an MCP stdio transport a
- * stray prompt on stdout corrupts the protocol stream.
+ * Under an MCP stdio transport a stray prompt on stdout corrupts the
+ * protocol stream: that nothing in src writes to stdout is checked
+ * statically (noStdoutSources.test.ts); here, that the prompt reaches stderr.
  */
 
 import assert from 'node:assert/strict';
@@ -16,13 +17,13 @@ import {
   manualSamlResponseStrategy,
 } from '../../strategies/manualStrategies';
 import { contains } from '../helpers/expectations';
-import { watchStdout } from '../helpers/stdoutWrites';
 
 describe('manual strategies', () => {
-  it('prompts without writing a byte to stdout', async () => {
+  it('prompts on stderr', async () => {
     const written: string[] = [];
-    const spy = watchStdout((text) => {
-      written.push(text);
+    const spy = mock.method(process.stderr, 'write', (chunk: unknown) => {
+      written.push(String(chunk));
+      return true;
     });
     try {
       const strategy = manualPasteStrategy({
@@ -37,7 +38,7 @@ describe('manual strategies', () => {
     } finally {
       spy.mock.restore();
     }
-    assert.deepEqual(written, []);
+    contains(written.join(''), 'https://idp.example/authorize?state=x');
   });
 
   it('accepts a full redirected URL as well as a bare code', async () => {

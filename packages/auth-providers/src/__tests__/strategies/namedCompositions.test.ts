@@ -35,7 +35,6 @@ import {
 import { bindable, capturingLogger, send } from '../helpers/listenerHttp';
 import { getAvailablePort } from '../helpers/netHelpers';
 import { recordingBrowser } from '../helpers/recordingBrowser';
-import { watchStdout } from '../helpers/stdoutWrites';
 
 const STATE = 'named-state_abcdefghijklmnopqrstuvwxyz012345';
 const REGISTERED = 'https://app.example/registered/callback';
@@ -49,9 +48,6 @@ beforeEach(() => {
   mock.method(process.stderr, 'write', (chunk: unknown) => {
     stderr.push(String(chunk));
     return true;
-  });
-  watchStdout(() => {
-    throw new Error('nothing writes to stdout');
   });
 });
 afterEach(() => {
