@@ -4322,10 +4322,13 @@ The package includes both unit tests (with mocks) and integration tests (with re
 ### Unit Tests
 
 ```bash
-npm test
+npm test                                                       # every test
+npm run test:file -- .test-build/__tests__/auth/announce.test.js   # one compiled file, or a directory
 ```
 
-`npm test` also runs both shipped assertion validators end to end, through
+The tests run on Node's own runner, `node:test`: `npm test` compiles them
+with the package's `tsc` into `.test-build/` and runs each file in a process
+of its own. `npm test` also runs both shipped assertion validators end to end, through
 `Saml2PureProvider` and a real callback, against responses produced by a
 separately published mock identity provider, `@mcp-abap-adt/auth-mocks`. Every
 corruption variant it ships is refused at the check it targets — except
@@ -4660,8 +4663,8 @@ switched on by environment variables — this is for running the tests, not
 the package:
 
 ```bash
-DEBUG_AUTH_PROVIDERS=true npm test   # or DEBUG_PROVIDER, DEBUG_BROWSER_AUTH, DEBUG=true, DEBUG=auth-providers
-AUTH_LOG_LEVEL=debug npm test        # debug, info, warn, error
+npm run test:file -- --env DEBUG_AUTH_PROVIDERS=true .test-build   # or DEBUG_PROVIDER, DEBUG_BROWSER_AUTH, DEBUG=true, DEBUG=auth-providers
+npm run test:file -- --env AUTH_LOG_LEVEL=debug .test-build        # debug, info, warn, error
 ```
 
 **Logging guarantees**:
