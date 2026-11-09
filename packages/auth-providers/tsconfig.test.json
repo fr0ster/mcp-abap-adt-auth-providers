@@ -87,6 +87,7 @@
     "src/__tests__/providers/seeding.test.ts",
     "src/__tests__/providers/sharedAttempts.test.ts",
     "src/__tests__/providers/tokenProviderContract.test.ts",
+    "src/__tests__/renewal/defaults.test.ts",
     "src/__tests__/runner/guardPreload.test.ts",
     "src/__tests__/runner/runTests.test.ts"
   ]

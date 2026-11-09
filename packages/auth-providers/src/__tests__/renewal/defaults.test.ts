@@ -6,7 +6,8 @@
  * with `login` replaced by `stop`. Both are stateless.
  */
 
-import { describe, expect, it } from '@jest/globals';
+import assert from 'node:assert/strict';
+import { describe, it } from 'node:test';
 import { authError, httpStatus } from '@mcp-abap-adt/auth-errors';
 import type {
   RenewalCause,
@@ -15,6 +16,7 @@ import type {
   RenewalStepOutcome,
 } from '@mcp-abap-adt/interfaces-auth';
 import { refreshOnly, refreshThenLogin } from '../../renewal';
+import { caseTitle, notMatchObject } from '../helpers/expectations';
 
 const refused = authError['credential-refused']({
   credential: 'refresh-token',
@@ -154,19 +156,32 @@ const ROWS: ReadonlyArray<{
 ];
 
 describe('refreshThenLogin(): the table of defaults, row by row', () => {
-  it.each(ROWS.map((r) => [r.row, r] as const))('%s', (_row, r) => {
-    expect(refreshThenLogin().next(r.situation)).toEqual(r.refreshThenLogin);
-  });
+  for (const [caseIndex, caseRow] of ROWS.map(
+    (r) => [r.row, r] as const,
+  ).entries()) {
+    const [_row, r] = caseRow;
+    it(caseTitle('%s', caseRow, caseIndex), () => {
+      assert.deepEqual(
+        refreshThenLogin().next(r.situation),
+        r.refreshThenLogin,
+      );
+    });
+  }
 });
 
 describe('refreshOnly(): the same rows, login replaced by stop', () => {
-  it.each(ROWS.map((r) => [r.row, r] as const))('%s', (_row, r) => {
-    expect(refreshOnly().next(r.situation)).toEqual(r.refreshOnly);
-  });
+  for (const [caseIndex, caseRow] of ROWS.map(
+    (r) => [r.row, r] as const,
+  ).entries()) {
+    const [_row, r] = caseRow;
+    it(caseTitle('%s', caseRow, caseIndex), () => {
+      assert.deepEqual(refreshOnly().next(r.situation), r.refreshOnly);
+    });
+  }
 
   it('never answers login, in any row', () => {
     for (const r of ROWS) {
-      expect(refreshOnly().next(r.situation)).not.toMatchObject({
+      notMatchObject(refreshOnly().next(r.situation), {
         next: 'login',
       });
     }
@@ -174,28 +189,46 @@ describe('refreshOnly(): the same rows, login replaced by stop', () => {
 });
 
 describe('both are stateless', () => {
-  it.each([
-    ['refreshThenLogin', refreshThenLogin],
-    ['refreshOnly', refreshOnly],
-  ] as const)(
-    '%s: one instance answers every row as a fresh one does',
-    (_name, make) => {
-      const shared = make();
-      for (const r of [...ROWS, ...ROWS]) {
-        expect(shared.next(r.situation)).toEqual(make().next(r.situation));
-      }
-    },
-  );
+  for (const [caseIndex, caseRow] of (
+    [
+      ['refreshThenLogin', refreshThenLogin],
+      ['refreshOnly', refreshOnly],
+    ] as const
+  ).entries()) {
+    const [_name, make] = caseRow;
+    it(
+      caseTitle(
+        '%s: one instance answers every row as a fresh one does',
+        caseRow,
+        caseIndex,
+      ),
+      () => {
+        const shared = make();
+        for (const r of [...ROWS, ...ROWS]) {
+          assert.deepEqual(shared.next(r.situation), make().next(r.situation));
+        }
+      },
+    );
+  }
 
-  it.each([
-    ['refreshThenLogin', refreshThenLogin],
-    ['refreshOnly', refreshOnly],
-  ] as const)(
-    '%s: answers synchronously, with no `aborted` of its own',
-    (_name, make) => {
-      const strategy = make();
-      expect(strategy.next(situation())).not.toBeInstanceOf(Promise);
-      expect(strategy.aborted).toBeUndefined();
-    },
-  );
+  for (const [caseIndex, caseRow] of (
+    [
+      ['refreshThenLogin', refreshThenLogin],
+      ['refreshOnly', refreshOnly],
+    ] as const
+  ).entries()) {
+    const [_name, make] = caseRow;
+    it(
+      caseTitle(
+        '%s: answers synchronously, with no `aborted` of its own',
+        caseRow,
+        caseIndex,
+      ),
+      () => {
+        const strategy = make();
+        assert.ok(!(strategy.next(situation()) instanceof Promise));
+        assert.equal(strategy.aborted, undefined);
+      },
+    );
+  }
 });
