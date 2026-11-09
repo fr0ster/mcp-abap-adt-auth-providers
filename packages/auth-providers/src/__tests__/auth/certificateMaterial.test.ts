@@ -1,15 +1,18 @@
+import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { describe, expect, it } from '@jest/globals';
+import { describe, it } from 'node:test';
 import { isAuthProviderFailure, readFailure } from '@mcp-abap-adt/auth-errors';
 import {
   assertCertificateMaterial,
   certificateThumbprint,
   checkCertificateMaterial,
 } from '../../auth/certificateMaterial';
+import { matchObject, notContains } from '../helpers/expectations';
 import { refusedWith, wordsOf } from '../helpers/minted';
+import { CERTIFICATES } from '../helpers/packagePaths';
 
-const dir = join(__dirname, '..', 'fixtures', 'certificates');
+const dir = CERTIFICATES;
 const read = (name: string) => readFileSync(join(dir, name));
 const PASSPHRASE = 'test-passphrase';
 const FIXTURE_THUMBPRINT = 'Hxfr0QUzsXiurYY1W5T4th39ZFrzAnaXsecrqFmlKiQ';
@@ -26,18 +29,20 @@ const thrown = (fn: () => unknown): unknown => {
 
 describe('checkCertificateMaterial', () => {
   it('is Ok for a PEM pair and for a PFX', () => {
-    expect(
+    assert.deepEqual(
       checkCertificateMaterial({
         cert: read('client.crt'),
         key: read('client.key'),
       }),
-    ).toEqual({ ok: true });
-    expect(
+      { ok: true },
+    );
+    assert.deepEqual(
       checkCertificateMaterial({
         pfx: read('client.pfx'),
         passphrase: PASSPHRASE,
       }),
-    ).toEqual({ ok: true });
+      { ok: true },
+    );
   });
 
   it('refuses incomplete material in fixed words', () => {
@@ -46,7 +51,7 @@ describe('checkCertificateMaterial', () => {
       { cert: read('client.crt') },
       { key: read('client.key') },
     ])
-      expect(wordsOf(checkCertificateMaterial(m))).toEqual({
+      assert.deepEqual(wordsOf(checkCertificateMaterial(m)), {
         ok: false,
         refusal: {
           reason: 'the client certificate is incomplete',
@@ -56,20 +61,21 @@ describe('checkCertificateMaterial', () => {
   });
 
   it('refuses material a TLS context cannot be built from', () => {
-    expect(
+    assert.deepEqual(
       wordsOf(
         checkCertificateMaterial({
           pfx: read('client.pfx'),
           passphrase: 'wrong',
         }),
       ),
-    ).toEqual({
-      ok: false,
-      refusal: {
-        reason: 'the client certificate could not be used',
-        hint: 'check the certificate, the key and the passphrase, and that a PFX uses current encryption (not legacy RC2)',
+      {
+        ok: false,
+        refusal: {
+          reason: 'the client certificate could not be used',
+          hint: 'check the certificate, the key and the passphrase, and that a PFX uses current encryption (not legacy RC2)',
+        },
       },
-    });
+    );
   });
 });
 
@@ -83,14 +89,15 @@ describe('an expired client certificate', () => {
   };
 
   it('is refused in fixed words (fixture: valid 2020-01-01 to 2021-01-01)', () => {
-    expect(
+    assert.deepEqual(
       wordsOf(
         checkCertificateMaterial({
           cert: read('expired.crt'),
           key: read('client.key'),
         }),
       ),
-    ).toEqual(EXPIRED);
+      EXPIRED,
+    );
   });
 
   it('throws a client-certificate failure, read by classify into the same words', () => {
@@ -101,17 +108,18 @@ describe('an expired client certificate', () => {
       }),
     );
     // A client-certificate failure, no longer the class.
-    expect(isAuthProviderFailure(e)).toBe(true);
-    expect(wordsOf(refusedWith(e))).toEqual(EXPIRED);
+    assert.equal(isAuthProviderFailure(e), true);
+    assert.deepEqual(wordsOf(refusedWith(e)), EXPIRED);
   });
 
   it('a certificate still valid is not refused', () => {
-    expect(
+    assert.deepEqual(
       checkCertificateMaterial({
         cert: read('client.crt'),
         key: read('client.key'),
       }),
-    ).toEqual({ ok: true });
+      { ok: true },
+    );
   });
 });
 
@@ -120,8 +128,8 @@ describe('certificateThumbprint', () => {
   const pfx = { pfx: read('client.pfx'), passphrase: PASSPHRASE };
 
   it('is the known value for the fixture, from PEM and from PFX alike', () => {
-    expect(certificateThumbprint(pem)).toBe(FIXTURE_THUMBPRINT);
-    expect(certificateThumbprint(pfx)).toBe(FIXTURE_THUMBPRINT);
+    assert.equal(certificateThumbprint(pem), FIXTURE_THUMBPRINT);
+    assert.equal(certificateThumbprint(pfx), FIXTURE_THUMBPRINT);
   });
 
   it('is the leaf of a chain: the first certificate', () => {
@@ -130,28 +138,31 @@ describe('certificateThumbprint', () => {
       Buffer.from('\n'),
       otherCert,
     ]);
-    expect(
+    assert.equal(
       certificateThumbprint({ cert: chain, key: read('client.key') }),
-    ).toBe(FIXTURE_THUMBPRINT);
-    expect(
+      FIXTURE_THUMBPRINT,
+    );
+    assert.notEqual(
       certificateThumbprint({ cert: otherCert, key: read('client.key') }),
-    ).not.toBe(FIXTURE_THUMBPRINT);
+      FIXTURE_THUMBPRINT,
+    );
   });
 
   it('is the leaf of a PFX that carries a chain', () => {
-    expect(
+    assert.equal(
       certificateThumbprint({
         pfx: read('client-chain.pfx'),
         passphrase: PASSPHRASE,
       }),
-    ).toBe(FIXTURE_THUMBPRINT);
+      FIXTURE_THUMBPRINT,
+    );
   });
 
   it('throws a client-certificate failure for incomplete material, with its words', () => {
     const e = thrown(() => certificateThumbprint({ cert: read('client.crt') }));
     // A client-certificate failure, no longer the class.
-    expect(isAuthProviderFailure(e)).toBe(true);
-    expect(wordsOf(refusedWith(e))).toEqual({
+    assert.equal(isAuthProviderFailure(e), true);
+    assert.deepEqual(wordsOf(refusedWith(e)), {
       ok: false,
       refusal: {
         reason: 'the client certificate is incomplete',
@@ -168,16 +179,16 @@ describe('certificateThumbprint', () => {
       }),
     );
     // A client-certificate failure, no longer the class.
-    expect(isAuthProviderFailure(e)).toBe(true);
+    assert.equal(isAuthProviderFailure(e), true);
     const out = refusedWith(e);
-    expect(wordsOf(out)).toEqual({
+    assert.deepEqual(wordsOf(out), {
       ok: false,
       refusal: {
         reason: 'the client certificate could not be used',
         hint: 'check the certificate, the key and the passphrase, and that a PFX uses current encryption (not legacy RC2)',
       },
     });
-    expect(JSON.stringify(out)).not.toMatch(/sEcReT|mac verify/);
+    assert.doesNotMatch(JSON.stringify(out), /sEcReT|mac verify/);
     const garbage = thrown(() =>
       certificateThumbprint({
         cert: Buffer.from('not a cert'),
@@ -185,7 +196,7 @@ describe('certificateThumbprint', () => {
       }),
     );
     // A client-certificate failure, no longer the class.
-    expect(readFailure(garbage, 'unfamiliar-error')).toMatchObject({
+    matchObject(readFailure(garbage, 'unfamiliar-error'), {
       kind: 'client-certificate',
       facts: { problem: 'unusable' },
     });
@@ -213,18 +224,18 @@ describe('checkCertificateMaterial and a material getter throwing a look-alike',
     const outcome = checkCertificateMaterial(
       forgedMaterial({ get: () => ({ reason: 'MARK', hint: 'MARK' }) }),
     );
-    expect(wordsOf(outcome)).toEqual({
+    assert.deepEqual(wordsOf(outcome), {
       ok: false,
       refusal: {
         reason: 'the client certificate could not be used',
         hint: 'check the certificate, the key and the passphrase, and that a PFX uses current encryption (not legacy RC2)',
       },
     });
-    expect(JSON.stringify(outcome)).not.toContain('MARK');
+    notContains(JSON.stringify(outcome), 'MARK');
   });
 
   it('a throwing `words` getter → fixed words, no throw', () => {
-    expect(() =>
+    assert.doesNotThrow(() =>
       checkCertificateMaterial(
         forgedMaterial({
           get: () => {
@@ -232,6 +243,6 @@ describe('checkCertificateMaterial and a material getter throwing a look-alike',
           },
         }),
       ),
-    ).not.toThrow();
+    );
   });
 });

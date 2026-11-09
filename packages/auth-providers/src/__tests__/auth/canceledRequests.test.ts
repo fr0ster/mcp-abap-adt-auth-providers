@@ -11,14 +11,21 @@
  * `axios.defaults.signal`.
  */
 
+import assert from 'node:assert/strict';
+import { afterEach, beforeEach, describe, it } from 'node:test';
 import { inspect } from 'node:util';
-import { afterEach, beforeEach, describe, expect, it } from '@jest/globals';
 import { isAuthProviderFailure, readFailure } from '@mcp-abap-adt/auth-errors';
 import axios from 'axios';
 import { discoverOidc } from '../../auth/oidcDiscovery';
 import { refreshOidcToken } from '../../auth/oidcToken';
 import { refreshJwtToken } from '../../auth/tokenRefresher';
 import { clientSecretPost } from '../../clientAuthentication';
+import {
+  cases,
+  caseTitle,
+  matchObject,
+  notContains,
+} from '../helpers/expectations';
 
 const NOWHERE = 'http://127.0.0.1:9';
 
@@ -33,7 +40,7 @@ describe('an aborted request', () => {
     else axios.defaults.signal = previous;
   });
 
-  it.each([
+  for (const [caseIndex, caseRow] of cases([
     [
       'OIDC discovery',
       () => discoverOidc(`${NOWHERE}/issuer-${Math.random()}`),
@@ -56,45 +63,54 @@ describe('an aborted request', () => {
           },
         ),
     ],
-  ])(
-    '%s: an AuthProviderFailure, nothing of the original',
-    async (_label, run) => {
-      let thrown: unknown;
-      const failed = expect(
-        run().catch((error: unknown) => {
-          thrown = error;
-          throw error;
-        }),
-      ).rejects.toBeDefined();
-      await failed;
-      expect(isAuthProviderFailure(thrown)).toBe(true);
-      expect(axios.isAxiosError(thrown)).toBe(false);
-      const failure = readFailure(thrown, 'unfamiliar-error');
-      expect(failure.kind).toBe('request-failed');
-      expect(failure.facts).toMatchObject({ problem: 'no-response' });
-      const error = thrown as Error & { config?: unknown; cause?: unknown };
-      expect(error.config).toBeUndefined();
-      expect(error.cause).toBeUndefined();
-      expect(inspect(error, { depth: null })).not.toContain(NOWHERE);
-    },
-  );
+  ]).entries()) {
+    const [_label, run] = caseRow;
+    it(
+      caseTitle(
+        '%s: an AuthProviderFailure, nothing of the original',
+        caseRow,
+        caseIndex,
+      ),
+      async () => {
+        let thrown: unknown;
+        const failed = assert.rejects(
+          run().catch((error: unknown) => {
+            thrown = error;
+            throw error;
+          }),
+          (error) => error !== undefined,
+        );
+        await failed;
+        assert.equal(isAuthProviderFailure(thrown), true);
+        assert.equal(axios.isAxiosError(thrown), false);
+        const failure = readFailure(thrown, 'unfamiliar-error');
+        assert.equal(failure.kind, 'request-failed');
+        matchObject(failure.facts, { problem: 'no-response' });
+        const error = thrown as Error & { config?: unknown; cause?: unknown };
+        assert.equal(error.config, undefined);
+        assert.equal(error.cause, undefined);
+        notContains(inspect(error, { depth: null }), NOWHERE);
+      },
+    );
+  }
 
   it('a site that wrapped its errors: the same, no cause', async () => {
     let thrown: unknown;
-    const failed = expect(
+    const failed = assert.rejects(
       refreshJwtToken('rt', NOWHERE, 'cid', 'secret').catch(
         (error: unknown) => {
           thrown = error;
           throw error;
         },
       ),
-    ).rejects.toBeDefined();
+      (error) => error !== undefined,
+    );
     await failed;
-    expect(readFailure(thrown, 'unfamiliar-error').facts).toEqual({
+    assert.deepEqual(readFailure(thrown, 'unfamiliar-error').facts, {
       operation: 'token-refresh',
       problem: 'no-response',
     });
-    expect((thrown as { cause?: unknown }).cause).toBeUndefined();
-    expect(inspect(thrown, { depth: null })).not.toContain(NOWHERE);
+    assert.equal((thrown as { cause?: unknown }).cause, undefined);
+    notContains(inspect(thrown, { depth: null }), NOWHERE);
   });
 });

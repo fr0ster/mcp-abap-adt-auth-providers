@@ -6,7 +6,9 @@
  * where an unhandled rejection is recorded rather than hidden by Jest.
  */
 
-import { describe, expect, it } from '@jest/globals';
+import assert from 'node:assert/strict';
+import { describe, it } from 'node:test';
+import { contains, notContains } from '../helpers/expectations';
 import { runPlainNode } from '../helpers/plainNode';
 
 const scenario = (logger: string) => `
@@ -45,8 +47,8 @@ describe('an async logger on a token site', () => {
         error: () => undefined,
       }`),
     );
-    expect(run.result).toEqual(['request-failed', 'request-failed']);
-    expect(run.unhandled).toEqual([]);
+    assert.deepEqual(run.result, ['request-failed', 'request-failed']);
+    assert.deepEqual(run.unhandled, []);
   });
 });
 
@@ -94,11 +96,11 @@ describe('the UAA code exchange with a consumer logger', () => {
         'refused-port',
       ),
     );
-    expect(run.result).toEqual({
+    assert.deepEqual(run.result, {
       kind: 'request-failed',
       problem: 'no-response',
     });
-    expect(run.unhandled).toEqual([]);
+    assert.deepEqual(run.unhandled, []);
   });
 });
 
@@ -172,13 +174,11 @@ describe('the interactive login with a consumer logger', () => {
       }`),
       { boundMs: BOUND_MS },
     );
-    expect(run.timedOut).toBe(false);
-    expect(run.result).toEqual(expected);
-    expect(run.unhandled).toEqual([]);
-    expect(run.stderr).toContain(
-      'Open this URL in your browser to authenticate',
-    );
-    expect(run.stderr).toContain('Enter code: UC-1');
-    expect(run.stderr).not.toContain('threw');
-  }, 60_000);
+    assert.equal(run.timedOut, false);
+    assert.deepEqual(run.result, expected);
+    assert.deepEqual(run.unhandled, []);
+    contains(run.stderr, 'Open this URL in your browser to authenticate');
+    contains(run.stderr, 'Enter code: UC-1');
+    notContains(run.stderr, 'threw');
+  });
 });

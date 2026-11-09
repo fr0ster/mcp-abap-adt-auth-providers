@@ -3,10 +3,17 @@
  * Assertion, base64url-encoded.
  */
 
-import { describe, expect, it, jest } from '@jest/globals';
+import assert from 'node:assert/strict';
+import { describe, it, mock } from 'node:test';
 import { DOMParser } from '@xmldom/xmldom';
 import { toBearerAssertion } from '../../auth/samlBearerAssertion';
 import { parseStrictXml } from '../../auth/strictXml';
+import {
+  cases,
+  caseTitle,
+  contains,
+  notContains,
+} from '../helpers/expectations';
 import { expectSamlRefusal, thrownBy } from '../helpers/samlRefusal';
 
 const ASSERTION_NS = 'urn:oasis:names:tc:SAML:2.0:assertion';
@@ -30,7 +37,7 @@ const b64url = (xml: string) => Buffer.from(xml, 'utf8').toString('base64url');
 
 /** Decode the result and parse it, so assertions are about XML, not bytes. */
 const decoded = (value: string) => {
-  expect(value).toMatch(/^[A-Za-z0-9_-]+$/); // base64url: no +, / or padding
+  assert.match(value, /^[A-Za-z0-9_-]+$/); // base64url: no +, / or padding
   const xml = Buffer.from(value, 'base64url').toString('utf8');
   return new DOMParser().parseFromString(xml, 'text/xml').documentElement;
 };
@@ -39,9 +46,9 @@ describe('toBearerAssertion', () => {
   it('takes the Assertion out of a base64 SAMLResponse', () => {
     const root = decoded(toBearerAssertion(b64(response(assertion()))));
 
-    expect(root?.localName).toBe('Assertion');
-    expect(root?.namespaceURI).toBe(ASSERTION_NS);
-    expect(root?.getAttribute('ID')).toBe('_a1');
+    assert.equal(root?.localName, 'Assertion');
+    assert.equal(root?.namespaceURI, ASSERTION_NS);
+    assert.equal(root?.getAttribute('ID'), '_a1');
   });
 
   it('keeps the Assertion’s signature', () => {
@@ -51,14 +58,17 @@ describe('toBearerAssertion', () => {
       'http://www.w3.org/2000/09/xmldsig#',
       'Signature',
     );
-    expect(signatures?.length).toBe(1);
+    assert.equal(signatures?.length, 1);
   });
 
   it('declares a namespace the Assertion only inherited from the Response', () => {
     const root = decoded(toBearerAssertion(b64(response(assertion(false)))));
 
-    expect(root?.namespaceURI).toBe(ASSERTION_NS);
-    expect(root?.getElementsByTagNameNS(ASSERTION_NS, 'NameID').length).toBe(1);
+    assert.equal(root?.namespaceURI, ASSERTION_NS);
+    assert.equal(
+      root?.getElementsByTagNameNS(ASSERTION_NS, 'NameID').length,
+      1,
+    );
   });
 
   it('declares a namespace used only inside an attribute value (xsi:type QName)', () => {
@@ -74,12 +84,12 @@ describe('toBearerAssertion', () => {
 
     // A serializer carries prefixes used in names; `types` is used only in a
     // value, so it has to be declared on purpose.
-    expect(root?.lookupNamespaceURI('types')).toBe('urn:example:types');
+    assert.equal(root?.lookupNamespaceURI('types'), 'urn:example:types');
     const value = root?.getElementsByTagNameNS(
       ASSERTION_NS,
       'AttributeValue',
     )[0];
-    expect(value?.getAttribute('xsi:type')).toBe('types:Role');
+    assert.equal(value?.getAttribute('xsi:type'), 'types:Role');
   });
 
   it('keeps a declaration the Assertion makes itself over an ancestor’s', () => {
@@ -90,17 +100,17 @@ describe('toBearerAssertion', () => {
 
     const root = decoded(toBearerAssertion(b64(xml)));
 
-    expect(root?.lookupNamespaceURI('t')).toBe('urn:inner');
+    assert.equal(root?.lookupNamespaceURI('t'), 'urn:inner');
   });
 
   it('re-encodes a bare Assertion sent in standard base64', () => {
     const xml = assertion();
-    expect(toBearerAssertion(b64(xml))).toBe(b64url(xml));
+    assert.equal(toBearerAssertion(b64(xml)), b64url(xml));
   });
 
   it('passes a bare Assertion already in base64url through unchanged', () => {
     const value = b64url(assertion());
-    expect(toBearerAssertion(value)).toBe(value);
+    assert.equal(toBearerAssertion(value), value);
   });
 
   it('refuses a Response carrying no Assertion', () => {
@@ -119,7 +129,8 @@ describe('toBearerAssertion', () => {
       'several-assertions',
       { facts: { count: 2 } },
     );
-    expect(error.reason).toContain(
+    contains(
+      error.reason,
       'SAML Response carries 2 Assertions; a bearer grant takes one',
     );
   });
@@ -132,7 +143,7 @@ describe('toBearerAssertion', () => {
       thrownBy(() => toBearerAssertion(b64(encrypted))),
       'only-encrypted-assertion',
     );
-    expect(error.reason).toContain('encrypted Assertions are not supported');
+    contains(error.reason, 'encrypted Assertions are not supported');
   });
 
   it('refuses a document that is neither a Response nor an Assertion', () => {
@@ -158,7 +169,7 @@ describe('toBearerAssertion', () => {
   // parser never writes to the console on its own.
   it('refuses XML the parser would recover from, and writes nothing to the console', () => {
     const spies = (['error', 'warn', 'log'] as const).map((level) =>
-      jest.spyOn(console, level).mockImplementation(() => undefined),
+      mock.method(console, level, () => undefined),
     );
     try {
       const recoverable = `<saml:Assertion xmlns:saml="${ASSERTION_NS}" ID="_a">&bogus;</saml:Assertion>`;
@@ -170,9 +181,9 @@ describe('toBearerAssertion', () => {
         ),
         'payload-not-well-formed',
       );
-      for (const spy of spies) expect(spy).not.toHaveBeenCalled();
+      for (const spy of spies) assert.equal(spy.mock.callCount(), 0);
     } finally {
-      for (const spy of spies) spy.mockRestore();
+      for (const spy of spies) spy.mock.restore();
     }
   });
 
@@ -187,26 +198,37 @@ describe('toBearerAssertion', () => {
       ),
     );
     const error = expectSamlRefusal(thrown, 'payload-not-well-formed');
-    expect(error.reason).toBe(
+    assert.equal(
+      error.reason,
       'the SAML assertion was refused (document): SAML bearer payload is not well-formed XML',
     );
-    expect(JSON.stringify(thrown)).not.toContain('xxxx');
-    expect(String(thrown)).not.toContain('xxxx');
+    notContains(JSON.stringify(thrown), 'xxxx');
+    notContains(String(thrown), 'xxxx');
   });
 });
 
 /** The strict parser's own refusal, with no parser text. */
 describe('parseStrictXml', () => {
-  it.each([
+  for (const [caseIndex, caseRow] of cases([
     ['an unterminated document', '<a'],
     ['an undeclared entity the parser would repair', '<a>&secret-entity;</a>'],
     ['a tag mismatch', '<abc></xyz>'],
     ['no root element', 'not xml'],
     ['a redefined attribute', '<a secret="1" secret="2"/>'],
-  ])('refuses %s with not-xml, naming nothing of it', (_name, xml) => {
-    const thrown = thrownBy(() => parseStrictXml(xml));
-    expectSamlRefusal(thrown, 'not-xml');
-    expect(JSON.stringify(thrown)).not.toMatch(/secret|xyz|abc|entity/);
-    expect(String(thrown)).not.toMatch(/secret|xyz|abc|entity/);
-  });
+  ]).entries()) {
+    const [_name, xml] = caseRow;
+    it(
+      caseTitle(
+        'refuses %s with not-xml, naming nothing of it',
+        caseRow,
+        caseIndex,
+      ),
+      () => {
+        const thrown = thrownBy(() => parseStrictXml(xml));
+        expectSamlRefusal(thrown, 'not-xml');
+        assert.doesNotMatch(JSON.stringify(thrown), /secret|xyz|abc|entity/);
+        assert.doesNotMatch(String(thrown), /secret|xyz|abc|entity/);
+      },
+    );
+  }
 });

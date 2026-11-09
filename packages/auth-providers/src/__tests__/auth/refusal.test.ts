@@ -5,7 +5,8 @@
  * moved to the row tests of the producers and sites.
  */
 
-import { describe, expect, it } from '@jest/globals';
+import assert from 'node:assert/strict';
+import { describe, it } from 'node:test';
 import { classify, OK } from '@mcp-abap-adt/auth-errors';
 import { wordsOf } from '../helpers/minted';
 
@@ -20,8 +21,8 @@ const refused = (
 
 describe('refusal', () => {
   it('OK is the one success outcome, frozen', () => {
-    expect(OK).toEqual({ ok: true });
-    expect(Object.isFrozen(OK)).toBe(true);
+    assert.deepEqual(OK, { ok: true });
+    assert.equal(Object.isFrozen(OK), true);
   });
 
   it('a foreign error: "unknown error", plus an allowlisted code only', () => {
@@ -30,7 +31,7 @@ describe('refusal', () => {
       code: 'ECONNREFUSED',
       response: { data: 'SECRET' },
     });
-    expect(wordsOf(refused(axios, 'token-request'))).toEqual({
+    assert.deepEqual(wordsOf(refused(axios, 'token-request')), {
       ok: false,
       refusal: {
         reason: 'the token request failed (unknown error, ECONNREFUSED)',
@@ -40,25 +41,24 @@ describe('refusal', () => {
       name: 'SECRETError',
       code: 'ESECRET',
     });
-    expect(wordsOf(refused(forged, 'token-request'))).toEqual({
+    assert.deepEqual(wordsOf(refused(forged, 'token-request')), {
       ok: false,
       refusal: { reason: 'the token request failed (unknown error)' },
     });
   });
 
   it('a thrown string or object lends nothing', () => {
-    expect(wordsOf(refused('SECRET-STRING', 'token-source'))).toEqual({
+    assert.deepEqual(wordsOf(refused('SECRET-STRING', 'token-source')), {
       ok: false,
       refusal: { reason: 'the token source failed (unknown error)' },
     });
-    expect(
+    assert.equal(
       text(
         refused(
           { message: 'SECRET', key: 'SECRET_KEY', code: 'ENOENT' },
           'loading-certificate',
         ),
       ),
-    ).toBe(
       text({
         ok: false,
         refusal: {
@@ -77,7 +77,7 @@ describe('refusal', () => {
       check: 'SECRET_CHECK',
     });
     const outcome = refused(lookAlike, 'token-request');
-    expect(outcome.refusal.kind).toBe('unknown');
-    expect(text(outcome)).not.toMatch(/SECRET/);
+    assert.equal(outcome.refusal.kind, 'unknown');
+    assert.doesNotMatch(text(outcome), /SECRET/);
   });
 });

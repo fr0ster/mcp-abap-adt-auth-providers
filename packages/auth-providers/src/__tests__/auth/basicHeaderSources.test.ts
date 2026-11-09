@@ -7,11 +7,11 @@
  * encode no secret of the client.
  */
 
+import assert from 'node:assert/strict';
 import { readdirSync, readFileSync } from 'node:fs';
 import { join, relative, sep } from 'node:path';
-import { describe, expect, it } from '@jest/globals';
-
-const SRC = join(__dirname, '..', '..');
+import { describe, it } from 'node:test';
+import { SRC } from '../helpers/packagePaths';
 
 function sources(dir: string): string[] {
   return readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
@@ -56,12 +56,12 @@ describe('a Basic header is built only where its secrets are known', () => {
   it('legacyBasic and clientSecretBasic build one (the scan is not vacuous)', () => {
     const tokenRequest = files.find((f) => f.name === 'auth/tokenRequest.ts');
     const body = tokenRequest?.text.match(LEGACY_BASIC)?.[0] ?? '';
-    expect(BASIC_HEADER.test(body)).toBe(true);
-    expect(BASE64.test(body)).toBe(true);
+    assert.equal(BASIC_HEADER.test(body), true);
+    assert.equal(BASE64.test(body), true);
     const clientSecret = files.find(
       (f) => f.name === 'clientAuthentication/clientSecret.ts',
     );
-    expect(BASIC_HEADER.test(clientSecret?.text ?? '')).toBe(true);
+    assert.equal(BASIC_HEADER.test(clientSecret?.text ?? ''), true);
   });
 
   it('no other file writes a Basic header or base64-encodes a value', () => {
@@ -77,7 +77,7 @@ describe('a Basic header is built only where its secrets are known', () => {
           : []),
       ];
     });
-    expect(offenders).toEqual([]);
+    assert.deepEqual(offenders, []);
   });
 });
 
@@ -101,15 +101,16 @@ describe('shape rule 8 in src/auth and src/providers', () => {
   it('the scan sees legacyBasic encode the client secret (not vacuous)', () => {
     const tokenRequest = scoped.find((f) => f.name === 'auth/tokenRequest.ts');
     const body = tokenRequest?.text.match(LEGACY_BASIC)?.[0] ?? '';
-    expect(BASIC_VALUE.test(body)).toBe(true);
+    assert.equal(BASIC_VALUE.test(body), true);
     const encoded = [...body.matchAll(SECRET_ENCODED)].map((m) => m[1] ?? '');
-    expect(encoded.some((argument) => NAMES_A_SECRET.test(argument))).toBe(
+    assert.equal(
+      encoded.some((argument) => NAMES_A_SECRET.test(argument)),
       true,
     );
   });
 
   it('no other place writes a Basic header or base64-encodes a secret', () => {
-    expect(scoped.length).toBeGreaterThan(10);
+    assert.ok(scoped.length > 10, `${scoped.length} > ${10}`);
     const offenders = scoped.flatMap(({ name, text }) => {
       const rest =
         name === 'auth/tokenRequest.ts' ? text.replace(LEGACY_BASIC, '') : text;
@@ -121,7 +122,7 @@ describe('shape rule 8 in src/auth and src/providers', () => {
         ...encodedSecrets.map((argument) => `${name}: base64 of ${argument}`),
       ];
     });
-    expect(offenders).toEqual([]);
+    assert.deepEqual(offenders, []);
   });
 });
 
@@ -134,8 +135,8 @@ describe('TokenEndpointError', () => {
     const naming = files
       .filter(({ text }) => text.includes('TokenEndpointError'))
       .map(({ name }) => name);
-    expect(naming).toEqual([]);
+    assert.deepEqual(naming, []);
     // Not vacuous: the scan reads src.
-    expect(files.length).toBeGreaterThan(10);
+    assert.ok(files.length > 10, `${files.length} > ${10}`);
   });
 });

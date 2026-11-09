@@ -5,10 +5,11 @@
  * assertion and the client certificate to wherever it points.
  */
 
+import assert from 'node:assert/strict';
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
+import { after, before, describe, it } from 'node:test';
 import { inspect } from 'node:util';
-import { afterAll, beforeAll, describe, expect, it } from '@jest/globals';
 import { isAuthProviderFailure, readFailure } from '@mcp-abap-adt/auth-errors';
 import axios from 'axios';
 import { exchangeCodeForToken } from '../../auth/browserAuth';
@@ -28,6 +29,13 @@ import {
 } from '../../auth/saml2TokenExchange';
 import { refreshJwtToken } from '../../auth/tokenRefresher';
 import { clientSecretPost } from '../../clientAuthentication';
+import {
+  cases,
+  caseTitle,
+  contains,
+  matchObject,
+  notContains,
+} from '../helpers/expectations';
 
 function listen(server: Server): Promise<number> {
   return new Promise((resolve) => {
@@ -56,15 +64,15 @@ describe('a 307 from the token endpoint', () => {
   });
   let base = '';
 
-  beforeAll(async () => {
+  before(async () => {
     elsewherePort = await listen(elsewhere);
     base = `http://127.0.0.1:${await listen(redirecting)}`;
   });
-  afterAll(async () => {
+  after(async () => {
     await Promise.all([close(elsewhere), close(redirecting)]);
   });
 
-  it.each([
+  for (const [caseIndex, caseRow] of cases([
     [
       'client credentials',
       () =>
@@ -79,17 +87,24 @@ describe('a 307 from the token endpoint', () => {
           strategy: clientSecretPost('client-secret-value'),
         }),
     ],
-  ])(
-    '%s with a strategy: fails, and the other host sees no request',
-    async (_label, run) => {
-      elsewhereHits = 0;
-      const failed = expect(run()).rejects.toBeDefined();
-      await failed;
-      expect(elsewhereHits).toBe(0);
-    },
-  );
+  ]).entries()) {
+    const [_label, run] = caseRow;
+    it(
+      caseTitle(
+        '%s with a strategy: fails, and the other host sees no request',
+        caseRow,
+        caseIndex,
+      ),
+      async () => {
+        elsewhereHits = 0;
+        const failed = assert.rejects(run(), (error) => error !== undefined);
+        await failed;
+        assert.equal(elsewhereHits, 0);
+      },
+    );
+  }
 
-  it.each([
+  for (const [caseIndex, caseRow] of cases([
     [
       'client credentials',
       () => getTokenWithClientCredentials(base, 'cid', 'client-secret-value'),
@@ -192,15 +207,22 @@ describe('a 307 from the token endpoint', () => {
           undefined,
         ),
     ],
-  ])(
-    '%s without a strategy: fails, and the other host sees no request',
-    async (_label, run) => {
-      elsewhereHits = 0;
-      const failed = expect(run()).rejects.toBeDefined();
-      await failed;
-      expect(elsewhereHits).toBe(0);
-    },
-  );
+  ]).entries()) {
+    const [_label, run] = caseRow;
+    it(
+      caseTitle(
+        '%s without a strategy: fails, and the other host sees no request',
+        caseRow,
+        caseIndex,
+      ),
+      async () => {
+        elsewhereHits = 0;
+        const failed = assert.rejects(run(), (error) => error !== undefined);
+        await failed;
+        assert.equal(elsewhereHits, 0);
+      },
+    );
+  }
 });
 
 describe('a 400 from the token endpoint that echoes the request', () => {
@@ -228,10 +250,10 @@ describe('a 400 from the token endpoint that echoes the request', () => {
     });
   });
   let base = '';
-  beforeAll(async () => {
+  before(async () => {
     base = `http://127.0.0.1:${await listen(echoing)}`;
   });
-  afterAll(() => close(echoing));
+  after(() => close(echoing));
 
   const windows = (secret: string) => {
     const out: string[] = [];
@@ -240,7 +262,7 @@ describe('a 400 from the token endpoint that echoes the request', () => {
     return out;
   };
 
-  it.each([
+  for (const [caseIndex, caseRow] of cases([
     [
       'OIDC refresh without a strategy',
       () => refreshOidcToken(`${base}/token`, 'cid', SECRET, REFRESH),
@@ -276,42 +298,57 @@ describe('a 400 from the token endpoint that echoes the request', () => {
           'http://localhost:61001/callback',
         ),
     ],
-  ])(
-    '%s: an AuthProviderFailure without the request, whose JSON and string hold no secret',
-    async (_label, run) => {
-      let thrown: unknown;
-      try {
-        await run();
-      } catch (error) {
-        thrown = error;
-      }
-      // The server did receive, and echo, a secret of the grant.
-      expect(lastBody.includes(REFRESH) || lastBody.includes(DEVICE)).toBe(
-        true,
-      );
-      // No longer the reduced AxiosError — the failure of the
-      // site's operation, its facts the status and the registered code.
-      expect(isAuthProviderFailure(thrown)).toBe(true);
-      expect(axios.isAxiosError(thrown)).toBe(false);
-      const error = thrown as Error;
-      expect(readFailure(thrown, 'unfamiliar-error').facts).toMatchObject({
-        problem: 'refused',
-        status: 400,
-        oauthError: 'invalid_grant',
-      });
-      expect(Object.keys(error).sort()).toEqual(['error', 'message', 'name']);
-      expect(error.cause).toBeUndefined();
-      const text = `${JSON.stringify(error)}\n${inspect(error, { depth: null })}\n${String(error)}\n${error.stack}`;
-      const basic = Buffer.from(`cid:${SECRET}`).toString('base64');
-      const needles = [
-        ...windows(SECRET),
-        ...windows(REFRESH),
-        ...windows(DEVICE),
-        ...windows(basic),
-      ];
-      expect(needles.filter((needle) => text.includes(needle))).toEqual([]);
-    },
-  );
+  ]).entries()) {
+    const [_label, run] = caseRow;
+    it(
+      caseTitle(
+        '%s: an AuthProviderFailure without the request, whose JSON and string hold no secret',
+        caseRow,
+        caseIndex,
+      ),
+      async () => {
+        let thrown: unknown;
+        try {
+          await run();
+        } catch (error) {
+          thrown = error;
+        }
+        // The server did receive, and echo, a secret of the grant.
+        assert.equal(
+          lastBody.includes(REFRESH) || lastBody.includes(DEVICE),
+          true,
+        );
+        // No longer the reduced AxiosError — the failure of the
+        // site's operation, its facts the status and the registered code.
+        assert.equal(isAuthProviderFailure(thrown), true);
+        assert.equal(axios.isAxiosError(thrown), false);
+        const error = thrown as Error;
+        matchObject(readFailure(thrown, 'unfamiliar-error').facts, {
+          problem: 'refused',
+          status: 400,
+          oauthError: 'invalid_grant',
+        });
+        assert.deepEqual(Object.keys(error).sort(), [
+          'error',
+          'message',
+          'name',
+        ]);
+        assert.equal(error.cause, undefined);
+        const text = `${JSON.stringify(error)}\n${inspect(error, { depth: null })}\n${String(error)}\n${error.stack}`;
+        const basic = Buffer.from(`cid:${SECRET}`).toString('base64');
+        const needles = [
+          ...windows(SECRET),
+          ...windows(REFRESH),
+          ...windows(DEVICE),
+          ...windows(basic),
+        ];
+        assert.deepEqual(
+          needles.filter((needle) => text.includes(needle)),
+          [],
+        );
+      },
+    );
+  }
 });
 
 describe('a reason phrase that holds a secret', () => {
@@ -326,10 +363,10 @@ describe('a reason phrase that holds a secret', () => {
     });
   });
   let base = '';
-  beforeAll(async () => {
+  before(async () => {
     base = `http://127.0.0.1:${await listen(replying)}`;
   });
-  afterAll(() => close(replying));
+  after(() => close(replying));
 
   const auth = () => ({ strategy: clientSecretPost('client-secret-value') });
   /** Every site; `withAuth` picks the path with a strategy. */
@@ -499,28 +536,43 @@ describe('a reason phrase that holds a secret', () => {
     return parts.join('\n');
   };
 
-  describe.each([
-    ['without a strategy', false],
-    ['with a strategy', true],
-  ] as const)('%s', (_path, withAuth) => {
-    it.each(sites(withAuth).map(([name], i) => [name, i] as const))(
-      '%s: the thrown error carries no window of the reason phrase',
-      async (_name, index) => {
-        let thrown: unknown;
-        try {
-          await sites(withAuth)[index]![1]();
-        } catch (error) {
-          thrown = error;
-        }
-        expect(thrown).toBeDefined();
-        const text = rendered(thrown);
-        // Not vacuous: the failure is the server's 401.
-        expect(text).toContain('401');
-        expect(windows(PHRASE_SECRET).filter((w) => text.includes(w))).toEqual(
-          [],
+  for (const [caseIndex, caseRow] of (
+    [
+      ['without a strategy', false],
+      ['with a strategy', true],
+    ] as const
+  ).entries()) {
+    const [_path, withAuth] = caseRow;
+    describe(caseTitle('%s', caseRow, caseIndex), () => {
+      for (const [caseIndex, caseRow] of sites(withAuth)
+        .map(([name], i) => [name, i] as const)
+        .entries()) {
+        const [_name, index] = caseRow;
+        it(
+          caseTitle(
+            '%s: the thrown error carries no window of the reason phrase',
+            caseRow,
+            caseIndex,
+          ),
+          async () => {
+            let thrown: unknown;
+            try {
+              await sites(withAuth)[index]![1]();
+            } catch (error) {
+              thrown = error;
+            }
+            assert.notEqual(thrown, undefined);
+            const text = rendered(thrown);
+            // Not vacuous: the failure is the server's 401.
+            contains(text, '401');
+            assert.deepEqual(
+              windows(PHRASE_SECRET).filter((w) => text.includes(w)),
+              [],
+            );
+            notContains(text, 'echo ');
+          },
         );
-        expect(text).not.toContain('echo ');
-      },
-    );
-  });
+      }
+    });
+  }
 });

@@ -5,7 +5,9 @@
  * the constructor are typed, so every moment answers an
  * outcome (a minted refusal on failure) and never rejects.
  */
-import { describe, expect, it } from '@jest/globals';
+
+import assert from 'node:assert/strict';
+import { describe, it } from 'node:test';
 import { isMinted, OK } from '@mcp-abap-adt/auth-errors';
 import type {
   AuthOutcome,
@@ -19,6 +21,7 @@ import {
 } from '../../auth/AuthProviderBase';
 import { BaseTokenProvider } from '../../index';
 import { refreshThenLogin } from '../../renewal';
+import { caseTitle, hasProperty, notContains } from '../helpers/expectations';
 import { recordingTargets } from '../helpers/targets';
 
 const MARKER = 'SECRET-MARKER';
@@ -66,24 +69,26 @@ async function everyMoment(p: IAuthProvider) {
 
 /** The refusal's facts, after checking it is minted and leaks nothing. */
 function factsOf(outcome: AuthOutcome) {
-  expect(outcome.ok).toBe(false);
+  assert.equal(outcome.ok, false);
   if (outcome.ok) throw new Error('unreachable');
-  expect(isMinted(outcome.refusal)).toBe(true);
-  expect(JSON.stringify(outcome)).not.toContain(MARKER);
+  assert.equal(isMinted(outcome.refusal), true);
+  notContains(JSON.stringify(outcome), MARKER);
   return (outcome.refusal as unknown as { kind: string; facts: object }).facts;
 }
 
 describe('AuthProviderBase', () => {
   it('a body that throws → unknown with the moment its operation names', async () => {
     const got = await everyMoment(new Throwing());
-    expect(factsOf(got.prepare)).toEqual({ operation: 'loading-certificate' });
-    expect(factsOf(got.establish)).toEqual({
+    assert.deepEqual(factsOf(got.prepare), {
+      operation: 'loading-certificate',
+    });
+    assert.deepEqual(factsOf(got.establish), {
       operation: 'presenting-certificate',
     });
-    expect(factsOf(got.authorize)).toEqual({
+    assert.deepEqual(factsOf(got.authorize), {
       operation: 'writing-authorization-header',
     });
-    expect(factsOf(got.rejected)).toEqual({ operation: 'reading-rejection' });
+    assert.deepEqual(factsOf(got.rejected), { operation: 'reading-rejection' });
   });
 
   it('a throwing grant() → a minted refusal without a grant, every moment, never a rejection', async () => {
@@ -94,9 +99,11 @@ describe('AuthProviderBase', () => {
     }
     const got = await everyMoment(new ThrowingGrant());
     for (const outcome of Object.values(got)) {
-      expect(factsOf(outcome)).not.toHaveProperty('grant');
+      assert.equal(hasProperty(factsOf(outcome), 'grant'), false);
     }
-    expect(factsOf(got.prepare)).toEqual({ operation: 'loading-certificate' });
+    assert.deepEqual(factsOf(got.prepare), {
+      operation: 'loading-certificate',
+    });
   });
 
   it('a grant() that answers is named in the refusal', async () => {
@@ -106,7 +113,7 @@ describe('AuthProviderBase', () => {
       }
     }
     const got = await everyMoment(new Granted());
-    expect(factsOf(got.prepare)).toEqual({
+    assert.deepEqual(factsOf(got.prepare), {
       operation: 'loading-certificate',
       grant: 'password',
     });
@@ -128,7 +135,7 @@ describe('AuthProviderBase', () => {
       new ThrowingAuthType({ renewal: refreshThenLogin() }),
     );
     for (const outcome of [got.prepare, got.authorize, got.rejected]) {
-      expect(factsOf(outcome)).toEqual({ operation: 'token-request' });
+      assert.deepEqual(factsOf(outcome), { operation: 'token-request' });
     }
   });
 
@@ -139,15 +146,17 @@ describe('AuthProviderBase', () => {
       }
     }
     const got = await everyMoment(new Shadowing());
-    expect(factsOf(got.prepare)).toEqual({ operation: 'loading-certificate' });
-    expect(factsOf(got.rejected)).toEqual({ operation: 'reading-rejection' });
+    assert.deepEqual(factsOf(got.prepare), {
+      operation: 'loading-certificate',
+    });
+    assert.deepEqual(factsOf(got.rejected), { operation: 'reading-rejection' });
   });
 
   it('the operations are captured at construction: changing the object later changes nothing', async () => {
     const moments = { ...OPERATIONS };
     const p = new Throwing(moments);
     moments.prepare = 'refresh';
-    expect(factsOf(await p.prepare())).toEqual({
+    assert.deepEqual(factsOf(await p.prepare()), {
       operation: 'loading-certificate',
     });
   });
@@ -158,7 +167,7 @@ describe('AuthProviderBase', () => {
         return OK;
       }
     }
-    await expect(new Fine().prepare()).resolves.toEqual({ ok: true });
+    assert.deepEqual(await new Fine().prepare(), { ok: true });
   });
 });
 
@@ -185,53 +194,60 @@ describe('the grant is read once per moment, inside the boundary', () => {
       },
     ],
   ];
-  it.each(
-    grantAnswers.flatMap(([name, answer]) =>
+  for (const [caseIndex, caseRow] of grantAnswers
+    .flatMap(([name, answer]) =>
       (['throws', 'answers Ok'] as const).map(
         (body) => [name, body, answer] as const,
       ),
-    ),
-  )(
-    'grant() answering %s, a body that %s: no unhandled rejection, one call per moment',
-    async (_name, body, answer) => {
-      let calls = 0;
-      class Granting extends Throwing {
-        protected override grant(): OAuth2GrantType | undefined {
-          calls += 1;
-          return answer() as never;
+    )
+    .entries()) {
+    const [_name, body, answer] = caseRow;
+    it(
+      caseTitle(
+        'grant() answering %s, a body that %s: no unhandled rejection, one call per moment',
+        caseRow,
+        caseIndex,
+      ),
+      async () => {
+        let calls = 0;
+        class Granting extends Throwing {
+          protected override grant(): OAuth2GrantType | undefined {
+            calls += 1;
+            return answer() as never;
+          }
+          protected override onPrepare(): AuthOutcome {
+            return body === 'throws' ? boom() : OK;
+          }
+          protected override onEstablish(): AuthOutcome {
+            return body === 'throws' ? boom() : OK;
+          }
+          protected override onAuthorize(): AuthOutcome {
+            return body === 'throws' ? boom() : OK;
+          }
+          protected override onRejected(): AuthOutcome {
+            return body === 'throws' ? boom() : OK;
+          }
         }
-        protected override onPrepare(): AuthOutcome {
-          return body === 'throws' ? boom() : OK;
+        const p = new Granting();
+        const outcomes: AuthOutcome[] = [];
+        const seen = await unhandledDuring(async () => {
+          const t = recordingTargets();
+          outcomes.push(await p.prepare());
+          outcomes.push(await p.establish(t.logonTarget));
+          outcomes.push(await p.authorize(t.requestTarget));
+          outcomes.push(
+            await p.rejected({ at: 'request', status: 401, error: {} }),
+          );
+        });
+        assert.deepEqual(seen, []);
+        assert.equal(calls, 4);
+        for (const outcome of outcomes) {
+          // A throwing grant() refuses the moment, whatever the body does.
+          assert.equal(hasProperty(factsOf(outcome), 'grant'), false);
         }
-        protected override onEstablish(): AuthOutcome {
-          return body === 'throws' ? boom() : OK;
-        }
-        protected override onAuthorize(): AuthOutcome {
-          return body === 'throws' ? boom() : OK;
-        }
-        protected override onRejected(): AuthOutcome {
-          return body === 'throws' ? boom() : OK;
-        }
-      }
-      const p = new Granting();
-      const outcomes: AuthOutcome[] = [];
-      const seen = await unhandledDuring(async () => {
-        const t = recordingTargets();
-        outcomes.push(await p.prepare());
-        outcomes.push(await p.establish(t.logonTarget));
-        outcomes.push(await p.authorize(t.requestTarget));
-        outcomes.push(
-          await p.rejected({ at: 'request', status: 401, error: {} }),
-        );
-      });
-      expect(seen).toEqual([]);
-      expect(calls).toBe(4);
-      for (const outcome of outcomes) {
-        // A throwing grant() refuses the moment, whatever the body does.
-        expect(factsOf(outcome)).not.toHaveProperty('grant');
-      }
-    },
-  );
+      },
+    );
+  }
 
   // The ladder is gone; auth-errors' guard reads the grant once and
   // classify names it beside the thrown value's allowlisted facts.
@@ -246,12 +262,12 @@ describe('the grant is read once per moment, inside the boundary', () => {
         throw Object.assign(new Error(MARKER), { code: 'ECONNRESET' });
       }
     }
-    expect(factsOf(await new Ladder().prepare())).toEqual({
+    assert.deepEqual(factsOf(await new Ladder().prepare()), {
       operation: 'loading-certificate',
       grant: 'password',
       code: 'ECONNRESET',
     });
-    expect(calls).toBe(1);
+    assert.equal(calls, 1);
   });
 
   it('getAuthType() answering a rejecting promise (BaseTokenProvider): no unhandled rejection, one call per moment', async () => {
@@ -273,9 +289,9 @@ describe('the grant is read once per moment, inside the boundary', () => {
     const seen = await unhandledDuring(async () => {
       outcome = await p.prepare();
     });
-    expect(seen).toEqual([]);
-    expect(calls).toBe(1);
+    assert.deepEqual(seen, []);
+    assert.equal(calls, 1);
     if (!outcome) throw new Error('unreachable');
-    expect(factsOf(outcome)).toEqual({ operation: 'token-request' });
+    assert.deepEqual(factsOf(outcome), { operation: 'token-request' });
   });
 });

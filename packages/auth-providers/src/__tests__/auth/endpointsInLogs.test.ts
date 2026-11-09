@@ -9,9 +9,10 @@
  * console device presenter refuses a server's prompt it cannot show.
  */
 
+import assert from 'node:assert/strict';
 import { createServer, type IncomingMessage, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { afterAll, beforeAll, describe, expect, it, jest } from '@jest/globals';
+import { after, before, describe, it, mock } from 'node:test';
 import { readFailure } from '@mcp-abap-adt/auth-errors';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
 import { promptableText, promptableUrl } from '../../auth/announce';
@@ -36,6 +37,7 @@ import {
   manualPasscodeStrategy,
   manualPasteStrategy,
 } from '../../strategies/manualStrategies';
+import { contains, notContains } from '../helpers/expectations';
 
 const MARKER = 'ENDPOINT-SECRET-7f3a';
 /** What a hostile server or configuration puts in a URL. */
@@ -105,8 +107,8 @@ function recorder(): Recorder {
 function expectClean(lines: unknown[][]): void {
   for (const line of lines) {
     for (const text of stringsOf(line)) {
-      expect(text).not.toContain(MARKER);
-      expect(forbiddenCharacter(text)).toBeUndefined();
+      notContains(text, MARKER);
+      assert.equal(forbiddenCharacter(text), undefined);
     }
   }
 }
@@ -168,13 +170,13 @@ const server: Server = createServer((req: IncomingMessage, res) => {
   });
 });
 
-beforeAll(async () => {
+before(async () => {
   await new Promise<void>((resolve) =>
     server.listen(0, '127.0.0.1', () => resolve()),
   );
   base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
 });
-afterAll(() => new Promise<void>((resolve) => server.close(() => resolve())));
+after(() => new Promise<void>((resolve) => server.close(() => resolve())));
 
 /** A fresh issuer per provider: the discovery cache is keyed by URL. */
 const issuer = () => {
@@ -339,7 +341,7 @@ describe('no endpoint and no control character in any log line', () => {
           const provider = build(logger, authDebug);
           await provider.getTokens().catch(() => undefined);
           await provider.refreshTokens?.().catch(() => undefined);
-          expect(lines.length).toBeGreaterThan(0);
+          assert.ok(lines.length > 0, `${lines.length} > ${0}`);
           expectClean(lines);
         });
       }
@@ -351,7 +353,7 @@ describe('no endpoint and no control character in any log line', () => {
     await discoverOidc(`${base}/disc-${HOSTILE}`, logger).catch(
       () => undefined,
     );
-    expect(lines.length).toBeGreaterThan(0);
+    assert.ok(lines.length > 0, `${lines.length} > ${0}`);
     expectClean(lines);
   });
 
@@ -379,7 +381,7 @@ describe('no endpoint and no control character in any log line', () => {
           undefined,
           options,
         ).catch(() => undefined);
-        expect(lines.length).toBeGreaterThan(0);
+        assert.ok(lines.length > 0, `${lines.length} > ${0}`);
         expectClean(lines);
       }
     });
@@ -387,12 +389,10 @@ describe('no endpoint and no control character in any log line', () => {
 
   it('showUrl prompts no hostile URL: the URL on stderr as admitted, the logger fixed words', async () => {
     const written: string[] = [];
-    const spy = jest
-      .spyOn(process.stderr, 'write')
-      .mockImplementation((chunk: unknown) => {
-        written.push(String(chunk));
-        return true;
-      });
+    const spy = mock.method(process.stderr, 'write', (chunk: unknown) => {
+      written.push(String(chunk));
+      return true;
+    });
     try {
       const { logger, lines } = recorder();
       showUrl().present(`${base}/authorize?x=${CONTROLS}`, {
@@ -408,8 +408,8 @@ describe('no endpoint and no control character in any log line', () => {
       );
       expectClean([shownLines, ...lines]);
       // The admitted serialisation still reaches the user, on stderr only.
-      expect(written.join('')).toContain(`${base}/authorize?x=`);
-      expect(JSON.stringify(lines)).not.toContain('/authorize');
+      contains(written.join(''), `${base}/authorize?x=`);
+      notContains(JSON.stringify(lines), '/authorize');
       // A URL whose host the serialiser keeps hostile is not shown at all.
       written.length = 0;
       const second = recorder();
@@ -419,34 +419,35 @@ describe('no endpoint and no control character in any log line', () => {
         logger: second.logger,
       });
       const all = `${written.join('')}${JSON.stringify(second.lines)}`;
-      expect(all).not.toContain('javascript');
-      expect(all).toContain('is not an http(s) URL');
+      notContains(all, 'javascript');
+      contains(all, 'is not an http(s) URL');
     } finally {
-      spy.mockRestore();
+      spy.mock.restore();
     }
   });
 });
 
 describe('promptableUrl / promptableText', () => {
   it('admit only http(s) URLs serialised to printable ASCII', () => {
-    expect(promptableUrl('https://idp.example/a?b=c')).toBe(
+    assert.equal(
+      promptableUrl('https://idp.example/a?b=c'),
       'https://idp.example/a?b=c',
     );
     const shown = promptableUrl(`https://idp.example/a?b=${HOSTILE}`);
-    expect(shown).toBeDefined();
-    expect(forbiddenCharacter(shown ?? '')).toBeUndefined();
-    expect(promptableUrl('file:///etc/passwd')).toBeUndefined();
-    expect(promptableUrl('not a url')).toBeUndefined();
-    expect(promptableUrl(42)).toBeUndefined();
+    assert.notEqual(shown, undefined);
+    assert.equal(forbiddenCharacter(shown ?? ''), undefined);
+    assert.equal(promptableUrl('file:///etc/passwd'), undefined);
+    assert.equal(promptableUrl('not a url'), undefined);
+    assert.equal(promptableUrl(42), undefined);
   });
 
   it('admit only printable ASCII text', () => {
-    expect(promptableText(' AB-CD ')).toBe('AB-CD');
-    expect(promptableText('AB CD')).toBe('AB CD');
-    expect(promptableText('AB\nCD')).toBeUndefined();
-    expect(promptableText('AB\u202ECD')).toBeUndefined();
-    expect(promptableText('')).toBeUndefined();
-    expect(promptableText(7)).toBeUndefined();
+    assert.equal(promptableText(' AB-CD '), 'AB-CD');
+    assert.equal(promptableText('AB CD'), 'AB CD');
+    assert.equal(promptableText('AB\nCD'), undefined);
+    assert.equal(promptableText('AB\u202ECD'), undefined);
+    assert.equal(promptableText(''), undefined);
+    assert.equal(promptableText(7), undefined);
   });
 });
 
@@ -462,10 +463,11 @@ describe('the console device presenter shows only what it can show', () => {
         () => undefined,
         (error: unknown) => error,
       );
-    expect(readFailure(thrown, 'presenting-device-code').kind).toBe(
+    assert.equal(
+      readFailure(thrown, 'presenting-device-code').kind,
       'interactive-login',
     );
-    expect(lines).toEqual([]);
+    assert.deepEqual(lines, []);
   });
 
   it('a verification URI that is no http(s) URL: nothing shown', async () => {
@@ -476,10 +478,10 @@ describe('the console device presenter shows only what it can show', () => {
         () => undefined,
         (error: unknown) => error,
       );
-    expect(readFailure(thrown, 'presenting-device-code').facts).toEqual({
+    assert.deepEqual(readFailure(thrown, 'presenting-device-code').facts, {
       outcome: 'device-code-not-shown',
     });
-    expect(lines).toEqual([]);
+    assert.deepEqual(lines, []);
   });
 
   it('a hostile complete URI is left out; the rest is shown, escaped', async () => {
@@ -491,7 +493,7 @@ describe('the console device presenter shows only what it can show', () => {
     });
     expectClean(lines);
     const text = stringsOf(lines).join('\n');
-    expect(text).toContain('Enter code: AB-CD');
-    expect(text).not.toContain('Or use');
+    contains(text, 'Enter code: AB-CD');
+    notContains(text, 'Or use');
   });
 });

@@ -12,10 +12,11 @@
  * any rendering of it, in the response data it keeps, or in any log line.
  */
 
+import assert from 'node:assert/strict';
 import { createServer, type IncomingMessage, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
+import { after, before, describe, it } from 'node:test';
 import { inspect } from 'node:util';
-import { afterAll, beforeAll, describe, expect, it } from '@jest/globals';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
 import { exchangeCodeForToken } from '../../auth/browserAuth';
 import { getTokenWithClientCredentials } from '../../auth/clientCredentialsAuth';
@@ -34,6 +35,7 @@ import {
 } from '../../auth/saml2TokenExchange';
 import { refreshJwtToken } from '../../auth/tokenRefresher';
 import { legacyBasic } from '../../auth/tokenRequest';
+import { caseTitle, thrown } from '../helpers/expectations';
 
 function listen(server: Server): Promise<number> {
   return new Promise((resolve) => {
@@ -88,10 +90,10 @@ const echoing = createServer((req: IncomingMessage, res) => {
   });
 });
 let base = '';
-beforeAll(async () => {
+before(async () => {
   base = `http://127.0.0.1:${await listen(echoing)}`;
 });
-afterAll(() => close(echoing));
+after(() => close(echoing));
 
 function recordingLogger(): { logger: ILogger; text: () => string } {
   const lines: string[] = [];
@@ -280,16 +282,19 @@ function expectNoFreeText(
   says: boolean,
 ): void {
   for (const [where, text] of Object.entries({ ...rendered, logs })) {
-    expect({ where, free: /refused:|idp\.example/.test(text) }).toEqual({
-      where,
-      free: false,
-    });
+    assert.deepEqual(
+      { where, free: /refused:|idp\.example/.test(text) },
+      {
+        where,
+        free: false,
+      },
+    );
   }
   const noted = logs
     .split('\n')
     .filter((l) => l.includes('the token endpoint refused the request'));
-  expect(noted).toHaveLength(says ? 1 : 0);
-  for (const line of noted) expect(line).toMatch(/^debug /);
+  assert.equal(noted.length, says ? 1 : 0);
+  for (const line of noted) assert.match(line, /^debug /);
 }
 
 async function expectNoCredential(
@@ -301,64 +306,96 @@ async function expectNoCredential(
   received = undefined;
   const { logger, text } = recordingLogger();
   let thrown: unknown;
-  const failed = expect(
+  const failed = assert.rejects(
     run(c, logger).catch((error: unknown) => {
       thrown = error;
       throw error;
     }),
-  ).rejects.toBeDefined();
+    (error) => error !== undefined,
+  );
   await failed;
 
   if (basic) {
     // Not vacuous: the request carried the credential the server echoed.
-    expect(received).toBe(
+    assert.equal(
+      received,
       `Basic ${Buffer.from(`${c.id}:${c.secret}`).toString('base64')}`,
     );
   } else {
-    expect(received).toBeUndefined();
+    assert.equal(received, undefined);
   }
   expectNoFreeText(renderings(thrown), text(), says);
   const surfaces = { ...renderings(thrown), logs: text() };
   for (const form of forbidden(c, received)) {
     for (const [where, rendered] of Object.entries(surfaces)) {
-      expect({ where, form, found: rendered.includes(form) }).toEqual({
-        where,
-        form,
-        found: false,
-      });
+      assert.deepEqual(
+        { where, form, found: rendered.includes(form) },
+        {
+          where,
+          form,
+          found: false,
+        },
+      );
     }
   }
 }
 
-describe.each(CREDENTIALS)('a server echoing the Basic header, $label', (c) => {
-  describe('in a 400', () => {
-    it.each(BASIC_SITES)(
-      '%s without a strategy: no form of the credential comes back out',
-      async (_label, run) => {
-        status = 400;
-        await expectNoCredential(run, c, true, true);
-      },
-    );
-  });
+for (const [caseIndex, caseRow] of CREDENTIALS.entries()) {
+  const c = caseRow;
+  describe(
+    caseTitle('a server echoing the Basic header, $label', caseRow, caseIndex),
+    () => {
+      describe('in a 400', () => {
+        for (const [caseIndex, caseRow] of BASIC_SITES.entries()) {
+          const [_label, run] = caseRow;
+          it(
+            caseTitle(
+              '%s without a strategy: no form of the credential comes back out',
+              caseRow,
+              caseIndex,
+            ),
+            async () => {
+              status = 400;
+              await expectNoCredential(run, c, true, true);
+            },
+          );
+        }
+      });
 
-  describe('in a 200 without access_token', () => {
-    it.each(BASIC_SITES)(
-      '%s without a strategy: no form of the credential comes back out',
-      async (_label, run) => {
-        status = 200;
-        // A 200 is no refused request: no debug line.
-        await expectNoCredential(run, c, true, false);
-      },
-    );
-    it.each(NON_BASIC_SITES)(
-      '%s without a strategy sends no Basic header, and nothing comes back out',
-      async (_label, run) => {
-        status = 200;
-        await expectNoCredential(run, c, false);
-      },
-    );
-  });
-});
+      describe('in a 200 without access_token', () => {
+        for (const [caseIndex, caseRow] of BASIC_SITES.entries()) {
+          const [_label, run] = caseRow;
+          it(
+            caseTitle(
+              '%s without a strategy: no form of the credential comes back out',
+              caseRow,
+              caseIndex,
+            ),
+            async () => {
+              status = 200;
+              // A 200 is no refused request: no debug line.
+              await expectNoCredential(run, c, true, false);
+            },
+          );
+        }
+        for (const [caseIndex, caseRow] of NON_BASIC_SITES.entries()) {
+          const [_label, run] = caseRow;
+          it(
+            caseTitle(
+              '%s without a strategy sends no Basic header, and nothing comes back out',
+              caseRow,
+              caseIndex,
+            ),
+            async () => {
+              status = 200;
+              await expectNoCredential(run, c, false);
+            },
+          );
+        }
+      });
+    },
+  );
+}
 
 describe('the UAA code exchange logging a 200 without access_token', () => {
   it('a logger that throws does not replace the failure', async () => {
@@ -371,7 +408,7 @@ describe('the UAA code exchange logging a 200 without access_token', () => {
         throw new Error('logger down');
       },
     } as ILogger;
-    const failed = expect(
+    const failed = assert.rejects(
       exchangeCodeForToken(
         {
           uaaUrl: base,
@@ -382,8 +419,8 @@ describe('the UAA code exchange logging a 200 without access_token', () => {
         'http://localhost:61001/callback',
         throwing,
       ),
-      // `request-failed` `no-access-token` of the code exchange.
-    ).rejects.toThrow('the code exchange returned no access_token');
+      thrown('the code exchange returned no access_token'),
+    );
     await failed;
   });
 });
@@ -391,15 +428,21 @@ describe('the UAA code exchange logging a 200 without access_token', () => {
 describe('legacyBasic carries its own secrets', () => {
   // They feed the authDebug line's `sent`, by name, each through
   // prepareSecret: the base64 credential and the secret after its first colon.
-  it.each(CREDENTIALS)('$label: `basic` and `basic_secret`', (c) => {
-    const basic = legacyBasic(c.id, c.secret);
-    const credential = basic.header.slice('Basic '.length);
-    const decoded = Buffer.from(credential, 'base64').toString();
-    expect(basic.secrets).toEqual({
-      basic: credential,
-      basic_secret: decoded.slice(decoded.indexOf(':') + 1),
-    });
-  });
+  for (const [caseIndex, caseRow] of CREDENTIALS.entries()) {
+    const c = caseRow;
+    it(
+      caseTitle('$label: `basic` and `basic_secret`', caseRow, caseIndex),
+      () => {
+        const basic = legacyBasic(c.id, c.secret);
+        const credential = basic.header.slice('Basic '.length);
+        const decoded = Buffer.from(credential, 'base64').toString();
+        assert.deepEqual(basic.secrets, {
+          basic: credential,
+          basic_secret: decoded.slice(decoded.indexOf(':') + 1),
+        });
+      },
+    );
+  }
 });
 
 describe('the debug line never replaces the failure', () => {
@@ -413,17 +456,14 @@ describe('the debug line never replaces the failure', () => {
         throw new Error('logger down');
       },
     } as ILogger;
-    const withThrowing = expect(
+    const withThrowing = assert.rejects(
       refreshJwtToken('rt', base, 'cid', 'secret', undefined, throwing),
-      // The operation's words, the status and the registered code.
-    ).rejects.toThrow(
-      /^the token refresh failed \(HTTP 400, invalid_client\)$/,
+      thrown(/^the token refresh failed \(HTTP 400, invalid_client\)$/),
     );
     await withThrowing;
-    const withNone = expect(
+    const withNone = assert.rejects(
       refreshJwtToken('rt', base, 'cid', 'secret'),
-    ).rejects.toThrow(
-      /^the token refresh failed \(HTTP 400, invalid_client\)$/,
+      thrown(/^the token refresh failed \(HTTP 400, invalid_client\)$/),
     );
     await withNone;
   });

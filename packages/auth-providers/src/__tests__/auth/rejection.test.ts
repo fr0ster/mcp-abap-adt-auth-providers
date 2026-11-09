@@ -1,6 +1,8 @@
-import { describe, expect, it } from '@jest/globals';
+import assert from 'node:assert/strict';
+import { describe, it } from 'node:test';
 import type { IAuthRejection } from '@mcp-abap-adt/interfaces-auth';
 import { readRejection } from '../../auth/rejection';
+import { cases, caseTitle, contains, matchText } from '../helpers/expectations';
 
 const at = (
   status: number | undefined,
@@ -11,16 +13,17 @@ const at = (
 
 describe('readRejection — only a refused credential is the credential', () => {
   it('401 is the credential', () => {
-    expect(readRejection(at(401))).toEqual({ verdict: 'credential' });
+    assert.deepEqual(readRejection(at(401)), { verdict: 'credential' });
   });
 
   it('RFC_LOGON_FAILURE is the credential', () => {
-    expect(
+    assert.deepEqual(
       readRejection({ at: 'logon', error: { key: 'RFC_LOGON_FAILURE' } }),
-    ).toEqual({ verdict: 'credential' });
+      { verdict: 'credential' },
+    );
   });
 
-  it.each([
+  for (const [caseIndex, caseRow] of cases([
     [403, /accepted, but the user is not authorized \(403\)/, /authorizations/],
     [
       302,
@@ -33,21 +36,24 @@ describe('readRejection — only a refused credential is the credential', () => 
       /the system answered 404, which is not a credential refusal/,
       undefined,
     ],
-  ])('%i is not the credential', (status, reason, hint) => {
-    const read = readRejection(at(status));
-    expect(read.verdict).toBe('not-credential');
-    if (read.verdict !== 'not-credential') return;
-    expect(read.refusal.reason).toMatch(reason);
-    if (hint) expect(read.refusal.hint).toMatch(hint);
-    else expect(read.refusal.hint).toBeUndefined();
-  });
+  ]).entries()) {
+    const [status, reason, hint] = caseRow;
+    it(caseTitle('%i is not the credential', caseRow, caseIndex), () => {
+      const read = readRejection(at(status));
+      assert.equal(read.verdict, 'not-credential');
+      if (read.verdict !== 'not-credential') return;
+      matchText(read.refusal.reason, reason);
+      if (hint) matchText(read.refusal.hint, hint);
+      else assert.equal(read.refusal.hint, undefined);
+    });
+  }
 
   it('another allowlisted RFC key is not the credential, and is named', () => {
     const read = readRejection({
       at: 'logon',
       error: { key: 'RFC_COMMUNICATION_FAILURE', message: 'SECRET' },
     });
-    expect(read).toEqual({
+    assert.deepEqual(read, {
       verdict: 'not-credential',
       refusal: {
         kind: 'system-refused',
@@ -67,26 +73,30 @@ describe('readRejection — only a refused credential is the credential', () => 
       at: 'request',
       error: { key: 'RFC_ABAP_RUNTIME_FAILURE' },
     });
-    expect(read.verdict === 'not-credential' && read.refusal.reason).toBe(
+    assert.equal(
+      read.verdict === 'not-credential' && read.refusal.reason,
       'the RFC call failed (RFC_ABAP_RUNTIME_FAILURE), not as a credential refusal',
     );
   });
 
-  it.each([
+  for (const [caseIndex, caseRow] of cases([
     ['no status, no key', at(undefined)],
     ['a key off the allowlist', { at: 'logon', error: { key: 'SECRET_KEY' } }],
     ['a status that is not an HTTP status', at(99)],
     ['a fractional status', at(401.5)],
     ['no rejection at all', undefined],
-  ])('%s cannot be told', (_, rejection) => {
-    expect(readRejection(rejection as IAuthRejection)).toEqual({
-      verdict: 'unknown',
+  ]).entries()) {
+    const [_, rejection] = caseRow;
+    it(caseTitle('%s cannot be told', caseRow, caseIndex), () => {
+      assert.deepEqual(readRejection(rejection as IAuthRejection), {
+        verdict: 'unknown',
+      });
     });
-  });
+  }
 
   it('nothing from the error reaches a refusal', () => {
     for (const status of [302, 403, 404, 503]) {
-      expect(JSON.stringify(readRejection(at(status)))).not.toMatch(/SECRET/);
+      assert.doesNotMatch(JSON.stringify(readRejection(at(status))), /SECRET/);
     }
   });
 });

@@ -13,10 +13,11 @@
  * request carried.
  */
 
+import assert from 'node:assert/strict';
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
+import { after, before, describe, it } from 'node:test';
 import { inspect } from 'node:util';
-import { afterAll, beforeAll, describe, expect, it } from '@jest/globals';
 import type { IClientAuthentication } from '@mcp-abap-adt/interfaces-auth';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
 import { exchangeCodeForToken } from '../../auth/browserAuth';
@@ -40,6 +41,7 @@ import {
   clientSecretBasic,
   clientSecretPost,
 } from '../../clientAuthentication';
+import { caseTitle } from '../helpers/expectations';
 
 // ---------------------------------------------------------------- the oracle
 
@@ -117,14 +119,19 @@ const recoverable = (text: string, secret: string): boolean =>
 describe('the oracle', () => {
   it('reads back a secret in any equivalent form (it is not blind)', () => {
     const b64 = Buffer.from('id:se cr/t?').toString('base64');
-    expect(recoverable(`x ${b64.replace(/=+$/, '')} y`, 'se cr/t?')).toBe(true);
-    expect(recoverable(`x${b64.replace(/\+/g, '-')}`, 'se cr/t?')).toBe(true);
-    expect(recoverable('a se%20cr%2ft%3F b', 'se cr/t?')).toBe(true);
-    expect(recoverable('se+cr%2Ft%3f', 'se cr/t?')).toBe(true);
-    expect(
+    assert.equal(
+      recoverable(`x ${b64.replace(/=+$/, '')} y`, 'se cr/t?'),
+      true,
+    );
+    assert.equal(recoverable(`x${b64.replace(/\+/g, '-')}`, 'se cr/t?'), true);
+    assert.equal(recoverable('a se%20cr%2ft%3F b', 'se cr/t?'), true);
+    assert.equal(recoverable('se+cr%2Ft%3f', 'se cr/t?'), true);
+    assert.equal(
       recoverable('%73%45%20%63%72%2f%74%3F', 'se cr/t?'.replace('e', 'E')),
-    ).toBe(true);
-    expect(recoverable('nothing <redacted, 8 chars> here', 'se cr/t?')).toBe(
+      true,
+    );
+    assert.equal(
+      recoverable('nothing <redacted, 8 chars> here', 'se cr/t?'),
       false,
     );
   });
@@ -259,14 +266,14 @@ const echoing = createServer((req, res) => {
   });
 });
 let base = '';
-beforeAll(async () => {
+before(async () => {
   base = `http://127.0.0.1:${await new Promise<number>((resolve) => {
     echoing.listen(0, '127.0.0.1', () =>
       resolve((echoing.address() as AddressInfo).port),
     );
   })}`;
 });
-afterAll(
+after(
   () =>
     new Promise<void>((resolve) => (echoing as Server).close(() => resolve())),
 );
@@ -514,39 +521,56 @@ const CASES = PATHS.flatMap((path) =>
   ),
 );
 
-describe.each([400, 500, 200])(
-  'a %i echoing every secret in equivalent forms',
-  (code) => {
-    it.each(CASES)('%s: nothing recoverable', async (_label, run, path, c) => {
-      status = code;
-      const strategy = path.auth(c);
-      const auth = strategy ? { strategy } : undefined;
-      const { logger, text } = recordingLogger();
-      let thrown: unknown;
-      const failed = expect(
-        run(c, auth, logger).catch((error: unknown) => {
-          thrown = error;
-          throw error;
-        }),
-      ).rejects.toBeDefined();
-      await failed;
-      // No free text of the server anywhere: not on the error, not in a log.
-      const free = /refused:|idp\.example/;
-      for (const [where, rendered] of Object.entries(
-        surfaces(thrown, text()),
-      )) {
-        expect({ where, free: free.test(rendered) }).toEqual({
-          where,
-          free: false,
-        });
+for (const [caseIndex, caseRow] of [400, 500, 200].entries()) {
+  const code = caseRow;
+  describe(
+    caseTitle(
+      'a %i echoing every secret in equivalent forms',
+      caseRow,
+      caseIndex,
+    ),
+    () => {
+      for (const [caseIndex, caseRow] of CASES.entries()) {
+        const [_label, run, path, c] = caseRow;
+        it(
+          caseTitle('%s: nothing recoverable', caseRow, caseIndex),
+          async () => {
+            status = code;
+            const strategy = path.auth(c);
+            const auth = strategy ? { strategy } : undefined;
+            const { logger, text } = recordingLogger();
+            let thrown: unknown;
+            const failed = assert.rejects(
+              run(c, auth, logger).catch((error: unknown) => {
+                thrown = error;
+                throw error;
+              }),
+              (error) => error !== undefined,
+            );
+            await failed;
+            // No free text of the server anywhere: not on the error, not in a log.
+            const free = /refused:|idp\.example/;
+            for (const [where, rendered] of Object.entries(
+              surfaces(thrown, text()),
+            )) {
+              assert.deepEqual(
+                { where, free: free.test(rendered) },
+                {
+                  where,
+                  free: false,
+                },
+              );
+            }
+            const secrets = [c.secret, ...Object.values(GRANT)];
+            for (const [where, rendered] of Object.entries(
+              surfaces(thrown, text()),
+            )) {
+              const found = recovered(rendered, secrets);
+              assert.deepEqual({ where, found }, { where, found: [] });
+            }
+          },
+        );
       }
-      const secrets = [c.secret, ...Object.values(GRANT)];
-      for (const [where, rendered] of Object.entries(
-        surfaces(thrown, text()),
-      )) {
-        const found = recovered(rendered, secrets);
-        expect({ where, found }).toEqual({ where, found: [] });
-      }
-    });
-  },
-);
+    },
+  );
+}
