@@ -67,6 +67,7 @@
     "src/__tests__/helpers/noRealBrowser.test.ts",
     "src/__tests__/helpers/sessionFile.test.ts",
     "src/__tests__/helpers/wordsOf.test.ts",
+    "src/__tests__/persistence/refreshStatePersistence.test.ts",
     "src/__tests__/runner/guardPreload.test.ts",
     "src/__tests__/runner/runTests.test.ts"
   ]

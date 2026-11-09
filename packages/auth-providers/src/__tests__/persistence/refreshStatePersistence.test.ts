@@ -5,7 +5,8 @@
  * built by hand; no provider runs here.
  */
 
-import { describe, expect, it } from '@jest/globals';
+import assert from 'node:assert/strict';
+import { describe, it } from 'node:test';
 import type {
   PersistenceReport,
   ReportedCredential,
@@ -16,6 +17,7 @@ import {
   refreshStatePersistence,
 } from '../../persistence';
 import { deferred, quiet, rejectionOf } from '../helpers/attemptHarness';
+import { matchObject, notContains } from '../helpers/expectations';
 
 const credential = (access: string): ReportedCredential => ({
   authorizationToken: access,
@@ -90,20 +92,20 @@ describe('refreshStatePersistence — the logical state', () => {
     await p.report(none('T2'));
     await p.report(discarded('T2'));
     await p.report(none('T3'));
-    expect(refreshOf(s.writes)).toEqual(['R1', undefined, null, null]);
+    assert.deepEqual(refreshOf(s.writes), ['R1', undefined, null, null]);
     // A store falling back to its stored refresh token never restores R1.
-    expect(s.stored.refreshToken).toBeUndefined();
+    assert.equal(s.stored.refreshToken, undefined);
     // A new refresh token moves the state back to held.
     await p.report(fresh('T4', 'R4'));
     await p.report(none('T5'));
-    expect(refreshOf(s.writes).slice(4)).toEqual(['R4', undefined]);
+    assert.deepEqual(refreshOf(s.writes).slice(4), ['R4', undefined]);
   });
 
   it('writes the reported credential with the refresh token decided', async () => {
     const s = store();
     const p = refreshStatePersistence(s.write, { onWriteFailure: 'fail' });
     await p.report(fresh('T1', 'R1'));
-    expect(s.writes).toEqual([
+    assert.deepEqual(s.writes, [
       {
         authorizationToken: 'T1',
         tokenType: 'jwt',
@@ -119,7 +121,7 @@ describe('refreshStatePersistence — the logical state', () => {
     s.stored.refreshToken = 'SEEDED';
     const p = refreshStatePersistence(s.write, { onWriteFailure: 'fail' });
     await p.report(discarded(''));
-    expect(s.writes).toEqual([
+    assert.deepEqual(s.writes, [
       {
         authorizationToken: '',
         tokenType: 'jwt',
@@ -130,7 +132,7 @@ describe('refreshStatePersistence — the logical state', () => {
     ]);
     // The login that follows fails: no credential report — the stored
     // refresh token stays cleared.
-    expect(s.stored.refreshToken).toBeUndefined();
+    assert.equal(s.stored.refreshToken, undefined);
   });
 });
 
@@ -145,7 +147,7 @@ describe('refreshStatePersistence — pending delivery', () => {
     const p = refreshStatePersistence(s.write, { onWriteFailure: 'continue' });
     await p.report(discarded('T1'));
     await p.report(none('T2'));
-    expect(refreshOf(s.writes)).toEqual([null, null]);
+    assert.deepEqual(refreshOf(s.writes), [null, null]);
   });
 
   it('a failed new token is written again with that token by the next none report', async () => {
@@ -156,8 +158,8 @@ describe('refreshStatePersistence — pending delivery', () => {
     await p.report(none('T2'));
     await p.report(none('T3'));
     // Delivered by the second report; the third has nothing pending.
-    expect(refreshOf(s.writes)).toEqual(['R1', 'R1', undefined]);
-    expect(s.stored.refreshToken).toBe('R1');
+    assert.deepEqual(refreshOf(s.writes), ['R1', 'R1', undefined]);
+    assert.equal(s.stored.refreshToken, 'R1');
   });
 
   it('stays pending until one write succeeds', async () => {
@@ -168,7 +170,7 @@ describe('refreshStatePersistence — pending delivery', () => {
     await p.report(none('T2'));
     await p.report(none('T3'));
     await p.report(none('T4'));
-    expect(refreshOf(s.writes)).toEqual(['R1', 'R1', 'R1', undefined]);
+    assert.deepEqual(refreshOf(s.writes), ['R1', 'R1', 'R1', undefined]);
   });
 
   it('a newer new supersedes a pending one', async () => {
@@ -178,7 +180,7 @@ describe('refreshStatePersistence — pending delivery', () => {
     await p.report(fresh('T1', 'R1'));
     await p.report(fresh('T2', 'R2'));
     await p.report(none('T3'));
-    expect(refreshOf(s.writes)).toEqual(['R1', 'R2', undefined]);
+    assert.deepEqual(refreshOf(s.writes), ['R1', 'R2', undefined]);
   });
 
   it('a discard supersedes a pending one', async () => {
@@ -188,7 +190,7 @@ describe('refreshStatePersistence — pending delivery', () => {
     await p.report(fresh('T1', 'R1'));
     await p.report(discarded('T1'));
     await p.report(none('T2'));
-    expect(refreshOf(s.writes)).toEqual(['R1', null, null]);
+    assert.deepEqual(refreshOf(s.writes), ['R1', null, null]);
   });
 });
 
@@ -200,32 +202,31 @@ describe('refreshStatePersistence — onWriteFailure', () => {
     const thrown = await rejectionOf(
       Promise.resolve(p.report(fresh('T1', 'R1'))),
     );
-    expect(thrown).toBeInstanceOf(Error);
-    expect((thrown as Error).message).toBe('disk full: SECRET-WRITE-TEXT');
+    assert.ok(thrown instanceof Error);
+    assert.equal((thrown as Error).message, 'disk full: SECRET-WRITE-TEXT');
     await p.report(none('T2'));
-    expect(refreshOf(s.writes)).toEqual(['R1', 'R1']);
+    assert.deepEqual(refreshOf(s.writes), ['R1', 'R1']);
   });
 
   it("'fail': a detached report never throws, and its write is pending", async () => {
     let failures = 1;
     const s = store(() => failures-- > 0);
     const p = refreshStatePersistence(s.write, { onWriteFailure: 'fail' });
-    await expect(
-      Promise.resolve(p.report(fresh('T1', 'R1', false))),
-    ).resolves.toBeUndefined();
+    assert.equal(
+      await Promise.resolve(p.report(fresh('T1', 'R1', false))),
+      undefined,
+    );
     await p.report(none('T2'));
-    expect(refreshOf(s.writes)).toEqual(['R1', 'R1']);
+    assert.deepEqual(refreshOf(s.writes), ['R1', 'R1']);
   });
 
   it("'continue': an awaited report never throws, and its write is pending", async () => {
     let failures = 1;
     const s = store(() => failures-- > 0);
     const p = refreshStatePersistence(s.write, { onWriteFailure: 'continue' });
-    await expect(
-      Promise.resolve(p.report(fresh('T1', 'R1'))),
-    ).resolves.toBeUndefined();
+    assert.equal(await Promise.resolve(p.report(fresh('T1', 'R1'))), undefined);
     await p.report(none('T2'));
-    expect(refreshOf(s.writes)).toEqual(['R1', 'R1']);
+    assert.deepEqual(refreshOf(s.writes), ['R1', 'R1']);
   });
 
   it('a write that throws synchronously is a failed write like any other', async () => {
@@ -236,7 +237,7 @@ describe('refreshStatePersistence — onWriteFailure', () => {
     const thrown = await rejectionOf(
       Promise.resolve(p.report(fresh('T1', 'R1'))),
     );
-    expect((thrown as Error).message).toBe('sync: SECRET');
+    assert.equal((thrown as Error).message, 'sync: SECRET');
   });
 
   it('a failed write is logged once in fixed words — no token, no message', async () => {
@@ -247,8 +248,8 @@ describe('refreshStatePersistence — onWriteFailure', () => {
       logger,
     });
     await p.report(fresh('ACCESS-TOKEN-VALUE', 'REFRESH-TOKEN-VALUE'));
-    expect(lines).toHaveLength(1);
-    expect(lines[0]).toMatchObject({
+    assert.equal(lines.length, 1);
+    matchObject(lines[0], {
       level: 'warn',
       message: '[refreshStatePersistence] Writing the tokens failed',
       meta: {
@@ -262,7 +263,7 @@ describe('refreshStatePersistence — onWriteFailure', () => {
       'REFRESH-TOKEN-VALUE',
       'SECRET-WRITE-TEXT',
     ]) {
-      expect(text).not.toContain(secret);
+      notContains(text, secret);
     }
   });
 
@@ -284,7 +285,7 @@ describe('refreshStatePersistence — onWriteFailure', () => {
     const thrown = await rejectionOf(
       Promise.resolve(p.report(fresh('T1', 'R1'))),
     );
-    expect((thrown as Error).message).toBe('disk full: SECRET-WRITE-TEXT');
+    assert.equal((thrown as Error).message, 'disk full: SECRET-WRITE-TEXT');
   });
 });
 
@@ -315,17 +316,17 @@ describe('refreshStatePersistence — one write at a time, in report order', () 
       newerSettled = true;
     });
     await quiet();
-    expect(started).toEqual([null]);
-    expect(newerSettled).toBe(false);
+    assert.deepEqual(started, [null]);
+    assert.equal(newerSettled, false);
     held.resolve();
     await newer;
-    expect(started).toEqual([null, 'R2']);
-    expect(most).toBe(1);
-    expect(stored.refreshToken).toBe('R2');
+    assert.deepEqual(started, [null, 'R2']);
+    assert.equal(most, 1);
+    assert.equal(stored.refreshToken, 'R2');
     // The newer report's state: held, nothing pending — a none report
     // writes undefined, not null.
     await p.report(none('T3'));
-    expect(started).toEqual([null, 'R2', undefined]);
+    assert.deepEqual(started, [null, 'R2', undefined]);
   });
 
   it('a held failing write, then a none report: the none report sees the failure as pending', async () => {
@@ -342,10 +343,10 @@ describe('refreshStatePersistence — one write at a time, in report order', () 
     void p.report(fresh('T1', 'R1', false));
     const second = Promise.resolve(p.report(none('T2')));
     await quiet();
-    expect(started).toEqual(['R1']);
+    assert.deepEqual(started, ['R1']);
     held.resolve();
     await second;
-    expect(started).toEqual(['R1', 'R1']);
+    assert.deepEqual(started, ['R1', 'R1']);
   });
 
   it('an awaited report settles when its own turn ends, not before', async () => {
@@ -364,10 +365,10 @@ describe('refreshStatePersistence — one write at a time, in report order', () 
     first.resolve();
     await a;
     await quiet();
-    expect(done).toEqual(['a']);
+    assert.deepEqual(done, ['a']);
     second.resolve();
     await b;
-    expect(done).toEqual(['a', 'b']);
+    assert.deepEqual(done, ['a', 'b']);
   });
 });
 
@@ -385,6 +386,6 @@ describe('refreshStatePersistence — construction', () => {
       enumerable: true,
     });
     refreshStatePersistence(write, options as never);
-    expect(reads).toBe(1);
+    assert.equal(reads, 1);
   });
 });
