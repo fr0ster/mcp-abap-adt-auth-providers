@@ -40,12 +40,14 @@
   },
   "scripts": {
     "clean": "node -e \"for (const p of ['dist', 'tsconfig.tsbuildinfo', 'tsconfig.build.tsbuildinfo']) require('node:fs').rmSync(p, { recursive: true, force: true })\"",
-    "lint": "biome check --write src",
-    "lint:check": "biome check --error-on-warnings src",
+    "lint": "biome check --write src tools/remove.mjs tools/run-tests.mjs",
+    "lint:check": "biome check --error-on-warnings src tools/remove.mjs tools/run-tests.mjs",
     "format": "biome format --write src",
     "build": "npm run --silent clean && biome check src --diagnostic-level=error && tsc -p tsconfig.build.json",
     "build:fast": "tsc -p tsconfig.build.json",
-    "test": "jest",
+    "test": "npm run --silent test:build && node tools/run-tests.mjs && jest",
+    "test:build": "node tools/remove.mjs .test-build && tsc -p tsconfig.test.json",
+    "test:file": "npm run --silent test:build && node tools/run-tests.mjs",
     "test:check": "tsc --noEmit",
     "prepublishOnly": "npm run build"
   },
