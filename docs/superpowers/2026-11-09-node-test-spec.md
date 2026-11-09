@@ -2,7 +2,7 @@
 
 The goal is `2026-11-09-node-test-goal.md`; it binds this spec. Every fact below is tagged
 **Measured** (run here), **Code** (read in this repository or a named one) or **Inference**.
-Decisions the owner has not yet taken are in §9, each with options and a recommendation.
+The owner's decisions are in §9.
 
 ## 1. Where the repository stands
 
@@ -98,7 +98,7 @@ Decisions the owner has not yet taken are in §9, each with options and a recomm
 
 ## 5. Module mocks
 
-No `jest.mock` survives. What replaces each depends on §9 question 1. The facts:
+No `jest.mock` survives. What replaces each is §9 decision 1. The facts:
 
 - Production code reaches axios as a property of the module object at every call
   (`axios.post`, `axios.get`, `axios(…)` compiled to `(0, axios_1.default)(…)`), and the
@@ -116,7 +116,7 @@ No `jest.mock` survives. What replaces each depends on §9 question 1. The facts
 Three files use Jest's fake timers, ten of their calls `advanceTimersByTimeAsync`
 (Code). `node:test`'s `mock.timers` advances with `tick(ms)`, synchronously; whether a
 promise chain between timers settles as it does under `advanceTimersByTimeAsync` is
-unproven (Inference). See §9 question 2.
+unproven (Inference). See §9 decision 2.
 
 ## 7. The live runs
 
@@ -144,20 +144,10 @@ unproven (Inference). See §9 question 2.
   changes), the package docs that name Jest. `CLAUDE.md`'s Testing and Build sections
   name Jest throughout; their new text goes to the owner for approval before it is applied.
 
-## 9. Questions for the owner
+## 9. Decisions
 
-1. **What replaces a module mock?**
-   - **(a) `mock.method` on the module object (recommended).** No production change, no
-     experimental flag; the same mock lifecycle as the spies. Con: it depends on the
-     CommonJS emit reading the property at each call — the plan measures it first, and
-     a test pins it for each mocked module.
-   - (b) `mock.module` with `--experimental-test-module-mocks`. Closest to today's tests.
-     Con: an experimental flag in every run, on three Node lines.
-   - (c) An injection point in production code (an HTTP client seam). Con: changes the
-     package's code and possibly its contract, outside the goal unless you add it.
-2. **What replaces Jest's fake timers in the three files?**
-   - **(a) `mock.timers` where it proves the same thing, measured per file (recommended)**;
-     a case `tick` cannot express is reported to you with its options before it is
-     changed.
-   - (b) Rewrite the three files on real timers with short real delays. Con: slower, and a
-     delay is a timing assumption the goal's "a test ends on its result" dislikes.
+1. **A module mock is replaced by `mock.method` on the module object.** No production
+   change and no experimental flag. The plan's first step measures it on one axios site
+   and one internal module before any file moves; a test pins it for each mocked module.
+2. **Jest's fake timers are replaced by `node:test`'s `mock.timers`**, measured per file.
+   A case `tick` cannot express goes to the owner with its options before it is changed.
