@@ -8,16 +8,19 @@
  * and a refusal carries fixed words only.
  */
 
+import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { describe, expect, it, jest } from '@jest/globals';
+import { describe, it, mock } from 'node:test';
 import type { ICertificateMaterial } from '@mcp-abap-adt/interfaces-auth';
 import type { ISapConfig } from '@mcp-abap-adt/interfaces-auth-sap';
 import { CertificateAuthProvider } from '../../credentials/CertificateAuthProvider';
+import { cases, caseTitle, matchObject } from '../helpers/expectations';
 import { wordsOf } from '../helpers/minted';
+import { CERTIFICATES } from '../helpers/packagePaths';
 import { recordingTargets } from '../helpers/targets';
 
-const dir = join(__dirname, '..', 'fixtures', 'certificates');
+const dir = CERTIFICATES;
 const read = (name: string) => readFileSync(join(dir, name));
 const config = { url: 'https://h', authType: 'certificate' } as ISapConfig;
 const PASSPHRASE = 'test-passphrase';
@@ -47,15 +50,15 @@ describe('CertificateAuthProvider: the material is checked in prepare()', () => 
       cert: read('client.crt'),
       key: read('client.key'),
     });
-    await expect(p.prepare()).resolves.toEqual({ ok: true });
+    assert.deepEqual(await p.prepare(), { ok: true });
     const t = recordingTargets();
-    await expect(p.establish(t.logonTarget)).resolves.toEqual({ ok: true });
-    expect(t.logon.tls).toHaveLength(1);
+    assert.deepEqual(await p.establish(t.logonTarget), { ok: true });
+    assert.equal(t.logon.tls.length, 1);
   });
 
   it('a PFX with its passphrase is Ok', async () => {
     const p = withMaterial({ pfx: read('client.pfx'), passphrase: PASSPHRASE });
-    await expect(p.prepare()).resolves.toEqual({ ok: true });
+    assert.deepEqual(await p.prepare(), { ok: true });
   });
 
   it('a PFX with the wrong passphrase is refused in prepare(), naming nothing it read', async () => {
@@ -64,8 +67,8 @@ describe('CertificateAuthProvider: the material is checked in prepare()', () => 
       passphrase: 'SECRET-WRONG-PP',
     });
     const outcome = await p.prepare();
-    expect(wordsOf(outcome)).toEqual(UNUSABLE);
-    expect(JSON.stringify(outcome)).not.toMatch(/SECRET-WRONG-PP|mac verify/);
+    assert.deepEqual(wordsOf(outcome), UNUSABLE);
+    assert.doesNotMatch(JSON.stringify(outcome), /SECRET-WRONG-PP|mac verify/);
   });
 
   it('a key that is not the certificate is refused in prepare()', async () => {
@@ -74,8 +77,8 @@ describe('CertificateAuthProvider: the material is checked in prepare()', () => 
       key: read('other.key'),
     });
     const outcome = await p.prepare();
-    expect(wordsOf(outcome)).toEqual(UNUSABLE);
-    expect(JSON.stringify(outcome)).not.toMatch(/MISMATCH|x509/i);
+    assert.deepEqual(wordsOf(outcome), UNUSABLE);
+    assert.doesNotMatch(JSON.stringify(outcome), /MISMATCH|x509/i);
   });
 
   it('a damaged file is refused in prepare()', async () => {
@@ -83,17 +86,17 @@ describe('CertificateAuthProvider: the material is checked in prepare()', () => 
       cert: Buffer.from('not a certificate'),
       key: read('client.key'),
     });
-    expect(wordsOf(await p.prepare())).toEqual(UNUSABLE);
+    assert.deepEqual(wordsOf(await p.prepare()), UNUSABLE);
   });
 
   it('a refused material is not presented: establish answers Oops, nothing reaches the logon', async () => {
     const p = withMaterial({ pfx: read('client.pfx'), passphrase: 'wrong' });
     await p.prepare();
     const t = recordingTargets();
-    await expect(p.establish(t.logonTarget)).resolves.toMatchObject({
+    matchObject(await p.establish(t.logonTarget), {
       ok: false,
     });
-    expect(t.logon.tls).toHaveLength(0);
+    assert.equal(t.logon.tls.length, 0);
   });
 });
 
@@ -104,7 +107,7 @@ describe('CertificateAuthProvider: what a material must hold', () => {
       key: read('client-encrypted.key'),
       passphrase: PASSPHRASE,
     });
-    await expect(p.prepare()).resolves.toEqual({ ok: true });
+    assert.deepEqual(await p.prepare(), { ok: true });
   });
 
   it('an encrypted PEM key without its passphrase is refused', async () => {
@@ -112,34 +115,41 @@ describe('CertificateAuthProvider: what a material must hold', () => {
       cert: read('client.crt'),
       key: read('client-encrypted.key'),
     });
-    expect(wordsOf(await p.prepare())).toEqual(UNUSABLE);
+    assert.deepEqual(wordsOf(await p.prepare()), UNUSABLE);
   });
 
-  it.each([
+  for (const [caseIndex, caseRow] of cases([
     ['nothing', {}],
     ['a certificate alone', { cert: read('client.crt') }],
     ['a key alone', { key: read('client.key') }],
-  ])(
-    '%s is refused — a logon would go out with no client certificate',
-    async (_label, material) => {
-      const p = withMaterial(material as ICertificateMaterial);
-      expect(wordsOf(await p.prepare())).toEqual(INCOMPLETE);
-    },
-  );
+  ]).entries()) {
+    const [_label, material] = caseRow;
+    it(
+      caseTitle(
+        '%s is refused — a logon would go out with no client certificate',
+        caseRow,
+        caseIndex,
+      ),
+      async () => {
+        const p = withMaterial(material as ICertificateMaterial);
+        assert.deepEqual(wordsOf(await p.prepare()), INCOMPLETE);
+      },
+    );
+  }
 
   it('a prepare() that fails after one that succeeded leaves nothing to present', async () => {
     const good = { cert: read('client.crt'), key: read('client.key') };
     const bad = { pfx: read('client.pfx'), passphrase: 'wrong' };
     let next: ICertificateMaterial = good;
     const p = new CertificateAuthProvider({ load: async () => next }, config);
-    await expect(p.prepare()).resolves.toEqual({ ok: true });
+    assert.deepEqual(await p.prepare(), { ok: true });
     next = bad;
-    expect(wordsOf(await p.prepare())).toEqual(UNUSABLE);
+    assert.deepEqual(wordsOf(await p.prepare()), UNUSABLE);
     const t = recordingTargets();
-    await expect(p.establish(t.logonTarget)).resolves.toMatchObject({
+    matchObject(await p.establish(t.logonTarget), {
       ok: false,
     });
-    expect(t.logon.tls).toHaveLength(0);
+    assert.equal(t.logon.tls.length, 0);
   });
 });
 
@@ -157,10 +167,10 @@ describe('CertificateAuthProvider: an expired certificate', () => {
       cert: read('expired.crt'),
       key: read('client.key'),
     });
-    expect(wordsOf(await p.prepare())).toEqual(EXPIRED);
+    assert.deepEqual(wordsOf(await p.prepare()), EXPIRED);
     const t = recordingTargets();
     await p.establish(t.logonTarget);
-    expect(t.logon.tls).toHaveLength(0);
+    assert.equal(t.logon.tls.length, 0);
   });
 
   it('is refused at the logon once it expires after prepare(), nothing presented', async () => {
@@ -168,15 +178,15 @@ describe('CertificateAuthProvider: an expired certificate', () => {
       cert: read('client.crt'),
       key: read('client.key'),
     });
-    await expect(p.prepare()).resolves.toEqual({ ok: true });
+    assert.deepEqual(await p.prepare(), { ok: true });
     // client.crt is valid until 2126: the clock is moved past it, not crypto.
-    const now = jest.spyOn(Date, 'now').mockReturnValue(Date.UTC(2127, 0, 1));
+    const now = mock.method(Date, 'now', () => Date.UTC(2127, 0, 1));
     try {
       const t = recordingTargets();
-      expect(wordsOf(await p.establish(t.logonTarget))).toEqual(EXPIRED);
-      expect(t.logon.tls).toHaveLength(0);
+      assert.deepEqual(wordsOf(await p.establish(t.logonTarget)), EXPIRED);
+      assert.equal(t.logon.tls.length, 0);
     } finally {
-      now.mockRestore();
+      now.mock.restore();
     }
   });
 });
