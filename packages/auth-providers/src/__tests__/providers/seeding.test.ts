@@ -4,7 +4,8 @@
  * opaque token do not, so the consumer states it beside them (`expiresAt`).
  */
 
-import { describe, expect, it, jest } from '@jest/globals';
+import assert from 'node:assert/strict';
+import { describe, it, mock } from 'node:test';
 import type {
   IAssertionValidator,
   IAuthorizationStrategy,
@@ -22,6 +23,7 @@ import { Saml2BearerProvider } from '../../providers/Saml2BearerProvider';
 import { Saml2PureProvider } from '../../providers/Saml2PureProvider';
 import { UaaPasscodeProvider } from '../../providers/UaaPasscodeProvider';
 import { refreshThenLogin } from '../../renewal';
+import { cases, caseTitle, matchObject } from '../helpers/expectations';
 import { recordingTargets } from '../helpers/targets';
 
 const HOUR = 3600_000;
@@ -46,18 +48,18 @@ function samlPure(
   seed: { accessToken?: string; expiresAt?: number },
   loginCookies = NEW_COOKIES,
 ) {
-  const authorize = jest.fn<IAuthorizationStrategy<string>['authorize']>(
+  const authorize = mock.fn<IAuthorizationStrategy<string>['authorize']>(
     async () => ({
       payload: 'PHNhbWxwOlJlc3BvbnNlLz4=',
       redirectUri: 'https://sp/acs',
     }),
   );
   const loginExpiresAt = Date.now() + 2 * HOUR;
-  const validate = jest.fn(async () => ({
+  const validate = mock.fn(async () => ({
     expiresAt: new Date(loginExpiresAt),
   }));
-  const cookieProvider = jest.fn(async () => loginCookies);
-  const report = jest.fn(async (_report: PersistenceReport) => {});
+  const cookieProvider = mock.fn(async () => loginCookies);
+  const report = mock.fn(async (_report: PersistenceReport) => {});
   const provider = new Saml2PureProvider({
     renewal: refreshThenLogin(),
     idpSsoUrl: 'https://idp/sso',
@@ -81,20 +83,20 @@ describe('Saml2PureProvider seeded with stored cookies', () => {
     });
 
     const tokens = await provider.getTokens();
-    expect(tokens).toMatchObject({
+    matchObject(tokens, {
       authorizationToken: STORED_COOKIES,
       tokenType: 'saml',
       expiresAt,
     });
 
     const t = recordingTargets();
-    await expect(provider.authorize(t.requestTarget)).resolves.toEqual({
+    assert.deepEqual(await provider.authorize(t.requestTarget), {
       ok: true,
     });
-    expect(t.request.cookies).toEqual([STORED_COOKIES]);
-    expect(t.request.headers).toEqual({});
-    expect(authorize).not.toHaveBeenCalled();
-    expect(cookieProvider).not.toHaveBeenCalled();
+    assert.deepEqual(t.request.cookies, [STORED_COOKIES]);
+    assert.deepEqual(t.request.headers, {});
+    assert.equal(authorize.mock.callCount(), 0);
+    assert.equal(cookieProvider.mock.callCount(), 0);
   });
 
   it('a 401 on the stored cookies before expiresAt: rejected() logs in once and the new cookies are presented', async () => {
@@ -104,13 +106,13 @@ describe('Saml2PureProvider seeded with stored cookies', () => {
     });
     const first = recordingTargets();
     await provider.authorize(first.requestTarget);
-    expect(first.request.cookies).toEqual([STORED_COOKIES]);
+    assert.deepEqual(first.request.cookies, [STORED_COOKIES]);
 
-    await expect(provider.rejected(R401)).resolves.toEqual({ ok: true });
-    expect(authorize).toHaveBeenCalledTimes(1);
+    assert.deepEqual(await provider.rejected(R401), { ok: true });
+    assert.equal(authorize.mock.callCount(), 1);
     const second = recordingTargets();
     await provider.authorize(second.requestTarget);
-    expect(second.request.cookies).toEqual([NEW_COOKIES]);
+    assert.deepEqual(second.request.cookies, [NEW_COOKIES]);
   });
 
   it('a 401 on the stored cookies, and a login that yields them again: rejected() refuses', async () => {
@@ -120,26 +122,37 @@ describe('Saml2PureProvider seeded with stored cookies', () => {
     );
     await provider.authorize(recordingTargets().requestTarget);
     const outcome = await provider.rejected(R401);
-    expect(outcome.ok).toBe(false);
-    expect(outcome.ok === false && outcome.refusal.reason).toBe(
+    assert.equal(outcome.ok, false);
+    assert.equal(
+      outcome.ok === false && outcome.refusal.reason,
       'the renewal returned the credential that was refused',
     );
   });
 
-  it.each([
+  for (const [caseIndex, caseRow] of cases([
     ['Infinity', Number.POSITIVE_INFINITY],
     ['NaN', Number.NaN],
     ['a numeric string', '9999999999999' as unknown as number],
-  ])('expiresAt as %s is not an expiry: it logs in', async (_l, expiresAt) => {
-    const { provider, authorize } = samlPure({
-      accessToken: STORED_COOKIES,
-      expiresAt,
-    });
-    const t = recordingTargets();
-    await provider.authorize(t.requestTarget);
-    expect(authorize).toHaveBeenCalledTimes(1);
-    expect(t.request.cookies).toEqual([NEW_COOKIES]);
-  });
+  ]).entries()) {
+    const [_l, expiresAt] = caseRow;
+    it(
+      caseTitle(
+        'expiresAt as %s is not an expiry: it logs in',
+        caseRow,
+        caseIndex,
+      ),
+      async () => {
+        const { provider, authorize } = samlPure({
+          accessToken: STORED_COOKIES,
+          expiresAt,
+        });
+        const t = recordingTargets();
+        await provider.authorize(t.requestTarget);
+        assert.equal(authorize.mock.callCount(), 1);
+        assert.deepEqual(t.request.cookies, [NEW_COOKIES]);
+      },
+    );
+  }
 
   it('past expiresAt: logs in once through the strategy and presents the new cookies', async () => {
     const { provider, authorize } = samlPure({
@@ -147,11 +160,11 @@ describe('Saml2PureProvider seeded with stored cookies', () => {
       expiresAt: Date.now() - 1,
     });
     const t = recordingTargets();
-    await expect(provider.authorize(t.requestTarget)).resolves.toEqual({
+    assert.deepEqual(await provider.authorize(t.requestTarget), {
       ok: true,
     });
-    expect(authorize).toHaveBeenCalledTimes(1);
-    expect(t.request.cookies).toEqual([NEW_COOKIES]);
+    assert.equal(authorize.mock.callCount(), 1);
+    assert.deepEqual(t.request.cookies, [NEW_COOKIES]);
   });
 
   it('within the one-minute buffer before expiresAt: logs in', async () => {
@@ -160,14 +173,14 @@ describe('Saml2PureProvider seeded with stored cookies', () => {
       expiresAt: Date.now() + 30_000,
     });
     await provider.getTokens();
-    expect(authorize).toHaveBeenCalledTimes(1);
+    assert.equal(authorize.mock.callCount(), 1);
   });
 
   it('without expiresAt: the stored cookies are taken as expired, and it logs in', async () => {
     const { provider, authorize } = samlPure({ accessToken: STORED_COOKIES });
     const tokens = await provider.getTokens();
-    expect(authorize).toHaveBeenCalledTimes(1);
-    expect(tokens.authorizationToken).toBe(NEW_COOKIES);
+    assert.equal(authorize.mock.callCount(), 1);
+    assert.equal(tokens.authorizationToken, NEW_COOKIES);
   });
 
   it('the report after the login carries the new cookies and their expiresAt', async () => {
@@ -176,8 +189,8 @@ describe('Saml2PureProvider seeded with stored cookies', () => {
       expiresAt: Date.now() - 1,
     });
     await provider.getTokens();
-    expect(report).toHaveBeenCalledTimes(1);
-    expect(report.mock.calls[0]![0]).toMatchObject({
+    assert.equal(report.mock.callCount(), 1);
+    matchObject(report.mock.calls.map((call) => call.arguments)[0]![0], {
       event: 'credential',
       credential: {
         authorizationToken: NEW_COOKIES,
@@ -194,7 +207,7 @@ describe('Saml2PureProvider seeded with stored cookies', () => {
       expiresAt: Date.now() + HOUR,
     });
     await provider.getTokens();
-    expect(report).not.toHaveBeenCalled();
+    assert.equal(report.mock.callCount(), 0);
   });
 });
 
@@ -328,98 +341,110 @@ function seeded(make: (seed: Seed) => BaseTokenProvider, seed: Seed) {
     performLogin: () => Promise<ITokenResult>;
     performRefresh: () => Promise<ITokenResult>;
   };
-  const login = jest
-    .spyOn(internals, 'performLogin')
-    .mockResolvedValue(renewed);
-  const refresh = jest
-    .spyOn(internals, 'performRefresh')
-    .mockResolvedValue(renewed);
+  const login = mock.method(internals, 'performLogin', async () => renewed);
+  const refresh = mock.method(internals, 'performRefresh', async () => renewed);
   return { provider, login, refresh };
 }
 
-describe.each(jwtProviders)('%s seeded with a stored token', (_name, make) => {
-  it('a token with no exp and a future expiresAt is reused until it', async () => {
-    const expiresAt = Date.now() + HOUR;
-    const { provider, login, refresh } = seeded(make, {
-      accessToken: OPAQUE,
-      expiresAt,
-    });
-    const tokens = await provider.getTokens();
-    expect(tokens.authorizationToken).toBe(OPAQUE);
-    expect(tokens.expiresAt).toBe(expiresAt);
-    expect(login).not.toHaveBeenCalled();
-    expect(refresh).not.toHaveBeenCalled();
-  });
+for (const [caseIndex, caseRow] of jwtProviders.entries()) {
+  const [_name, make] = caseRow;
+  describe(
+    caseTitle('%s seeded with a stored token', caseRow, caseIndex),
+    () => {
+      it('a token with no exp and a future expiresAt is reused until it', async () => {
+        const expiresAt = Date.now() + HOUR;
+        const { provider, login, refresh } = seeded(make, {
+          accessToken: OPAQUE,
+          expiresAt,
+        });
+        const tokens = await provider.getTokens();
+        assert.equal(tokens.authorizationToken, OPAQUE);
+        assert.equal(tokens.expiresAt, expiresAt);
+        assert.equal(login.mock.callCount(), 0);
+        assert.equal(refresh.mock.callCount(), 0);
+      });
 
-  it('a token with no exp and a past expiresAt is renewed', async () => {
-    const { provider, login } = seeded(make, {
-      accessToken: OPAQUE,
-      expiresAt: Date.now() - 1,
-    });
-    const tokens = await provider.getTokens();
-    expect(tokens.authorizationToken).toBe(RENEWED);
-    expect(login).toHaveBeenCalledTimes(1);
-  });
+      it('a token with no exp and a past expiresAt is renewed', async () => {
+        const { provider, login } = seeded(make, {
+          accessToken: OPAQUE,
+          expiresAt: Date.now() - 1,
+        });
+        const tokens = await provider.getTokens();
+        assert.equal(tokens.authorizationToken, RENEWED);
+        assert.equal(login.mock.callCount(), 1);
+      });
 
-  it("a JWT's own exp wins over a later expiresAt: expired by exp, it is renewed", async () => {
-    const { provider, login } = seeded(make, {
-      accessToken: jwt(Date.now() - HOUR),
-      expiresAt: Date.now() + HOUR,
-    });
-    const tokens = await provider.getTokens();
-    expect(tokens.authorizationToken).toBe(RENEWED);
-    expect(login).toHaveBeenCalledTimes(1);
-  });
+      it("a JWT's own exp wins over a later expiresAt: expired by exp, it is renewed", async () => {
+        const { provider, login } = seeded(make, {
+          accessToken: jwt(Date.now() - HOUR),
+          expiresAt: Date.now() + HOUR,
+        });
+        const tokens = await provider.getTokens();
+        assert.equal(tokens.authorizationToken, RENEWED);
+        assert.equal(login.mock.callCount(), 1);
+      });
 
-  it("a JWT's own exp wins over an earlier expiresAt: valid by exp, it is reused", async () => {
-    const exp = Date.now() + HOUR;
-    const token = jwt(exp);
-    const { provider, login } = seeded(make, {
-      accessToken: token,
-      expiresAt: Date.now() - HOUR,
-    });
-    const tokens = await provider.getTokens();
-    expect(tokens.authorizationToken).toBe(token);
-    expect(tokens.expiresAt).toBe(Math.floor(exp / 1000) * 1000);
-    expect(login).not.toHaveBeenCalled();
-  });
+      it("a JWT's own exp wins over an earlier expiresAt: valid by exp, it is reused", async () => {
+        const exp = Date.now() + HOUR;
+        const token = jwt(exp);
+        const { provider, login } = seeded(make, {
+          accessToken: token,
+          expiresAt: Date.now() - HOUR,
+        });
+        const tokens = await provider.getTokens();
+        assert.equal(tokens.authorizationToken, token);
+        assert.equal(tokens.expiresAt, Math.floor(exp / 1000) * 1000);
+        assert.equal(login.mock.callCount(), 0);
+      });
 
-  it('a JWT whose exp is 0 is expired by it, whatever expiresAt says', async () => {
-    const { provider, login } = seeded(make, {
-      accessToken: jwt(0),
-      expiresAt: Date.now() + HOUR,
-    });
-    const tokens = await provider.getTokens();
-    expect(tokens.authorizationToken).toBe(RENEWED);
-    expect(login).toHaveBeenCalledTimes(1);
-  });
+      it('a JWT whose exp is 0 is expired by it, whatever expiresAt says', async () => {
+        const { provider, login } = seeded(make, {
+          accessToken: jwt(0),
+          expiresAt: Date.now() + HOUR,
+        });
+        const tokens = await provider.getTokens();
+        assert.equal(tokens.authorizationToken, RENEWED);
+        assert.equal(login.mock.callCount(), 1);
+      });
 
-  it.each([
-    ['Infinity', Number.POSITIVE_INFINITY],
-    ['NaN', Number.NaN],
-    ['a numeric string', '9999999999999' as unknown as number],
-  ])(
-    'expiresAt as %s is not an expiry: the opaque token is renewed',
-    async (_l, expiresAt) => {
-      const { provider } = seeded(make, { accessToken: OPAQUE, expiresAt });
-      const tokens = await provider.getTokens();
-      expect(tokens.authorizationToken).toBe(RENEWED);
+      for (const [caseIndex, caseRow] of cases([
+        ['Infinity', Number.POSITIVE_INFINITY],
+        ['NaN', Number.NaN],
+        ['a numeric string', '9999999999999' as unknown as number],
+      ]).entries()) {
+        const [_l, expiresAt] = caseRow;
+        it(
+          caseTitle(
+            'expiresAt as %s is not an expiry: the opaque token is renewed',
+            caseRow,
+            caseIndex,
+          ),
+          async () => {
+            const { provider } = seeded(make, {
+              accessToken: OPAQUE,
+              expiresAt,
+            });
+            const tokens = await provider.getTokens();
+            assert.equal(tokens.authorizationToken, RENEWED);
+          },
+        );
+      }
+
+      it('a token with neither exp nor expiresAt is renewed', async () => {
+        const { provider, login } = seeded(make, { accessToken: OPAQUE });
+        const tokens = await provider.getTokens();
+        assert.equal(tokens.authorizationToken, RENEWED);
+        assert.equal(login.mock.callCount(), 1);
+      });
+
+      it('expiresAt without a token seeds nothing', async () => {
+        const { provider, login } = seeded(make, {
+          expiresAt: Date.now() + HOUR,
+        });
+        const tokens = await provider.getTokens();
+        assert.equal(tokens.authorizationToken, RENEWED);
+        assert.equal(login.mock.callCount(), 1);
+      });
     },
   );
-
-  it('a token with neither exp nor expiresAt is renewed', async () => {
-    const { provider, login } = seeded(make, { accessToken: OPAQUE });
-    const tokens = await provider.getTokens();
-    expect(tokens.authorizationToken).toBe(RENEWED);
-    expect(login).toHaveBeenCalledTimes(1);
-  });
-
-  it('expiresAt without a token seeds nothing', async () => {
-    const { provider, login } = seeded(make, {
-      expiresAt: Date.now() + HOUR,
-    });
-    const tokens = await provider.getTokens();
-    expect(tokens.authorizationToken).toBe(RENEWED);
-    expect(login).toHaveBeenCalledTimes(1);
-  });
-});
+}

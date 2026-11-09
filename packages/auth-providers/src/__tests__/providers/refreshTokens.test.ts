@@ -6,6 +6,8 @@
  * the base class's lifecycle on a provider whose login and refresh only count
  * their calls, so what is asserted is the order of the steps, not a flow.
  */
+import assert from 'node:assert/strict';
+import { describe, it } from 'node:test';
 import type {
   IRefreshableTokenProvider,
   ITokenResult,
@@ -69,7 +71,7 @@ class CountingProvider extends BaseTokenProvider {
 describe('refreshTokens', () => {
   it('is what a base provider offers: the refreshable contract', () => {
     const provider: IRefreshableTokenProvider = new CountingProvider();
-    expect(typeof provider.refreshTokens).toBe('function');
+    assert.equal(typeof provider.refreshTokens, 'function');
   });
 
   it('refreshes even while the cached token is still valid', async () => {
@@ -80,14 +82,14 @@ describe('refreshTokens', () => {
     });
 
     // The cache answers getTokens: nothing is requested.
-    expect((await provider.getTokens()).authorizationToken).toBe(cached);
-    expect(provider.refreshes + provider.logins).toBe(0);
+    assert.equal((await provider.getTokens()).authorizationToken, cached);
+    assert.equal(provider.refreshes + provider.logins, 0);
 
     const fresh = await provider.refreshTokens();
 
-    expect(provider.refreshes).toBe(1);
-    expect(provider.logins).toBe(0);
-    expect(fresh.authorizationToken).not.toBe(cached);
+    assert.equal(provider.refreshes, 1);
+    assert.equal(provider.logins, 0);
+    assert.notEqual(fresh.authorizationToken, cached);
   });
 
   it('replaces the cache with what it obtained', async () => {
@@ -99,9 +101,9 @@ describe('refreshTokens', () => {
     const fresh = await provider.refreshTokens();
     const after = await provider.getTokens();
 
-    expect(after.authorizationToken).toBe(fresh.authorizationToken);
-    expect(after.refreshToken).toBe('refresh-from-refresh-1');
-    expect(provider.refreshes).toBe(1);
+    assert.equal(after.authorizationToken, fresh.authorizationToken);
+    assert.equal(after.refreshToken, 'refresh-from-refresh-1');
+    assert.equal(provider.refreshes, 1);
   });
 
   it('logs in when there is no refresh token', async () => {
@@ -109,8 +111,8 @@ describe('refreshTokens', () => {
 
     await provider.refreshTokens();
 
-    expect(provider.refreshes).toBe(0);
-    expect(provider.logins).toBe(1);
+    assert.equal(provider.refreshes, 0);
+    assert.equal(provider.logins, 1);
   });
 
   it('logs in when the refresh is refused, and drops the spent refresh token', async () => {
@@ -122,9 +124,9 @@ describe('refreshTokens', () => {
 
     const fresh = await provider.refreshTokens();
 
-    expect(provider.refreshes).toBe(1);
-    expect(provider.logins).toBe(1);
-    expect(fresh.refreshToken).toBe('refresh-from-login-1');
+    assert.equal(provider.refreshes, 1);
+    assert.equal(provider.logins, 1);
+    assert.equal(fresh.refreshToken, 'refresh-from-login-1');
   });
 });
 
@@ -135,7 +137,7 @@ describe('getTokens, unchanged', () => {
       refreshToken: 'held',
     });
     await provider.getTokens();
-    expect(provider.refreshes + provider.logins).toBe(0);
+    assert.equal(provider.refreshes + provider.logins, 0);
   });
 
   it('refreshes an expired token, then logs in only if that is refused', async () => {
@@ -145,7 +147,7 @@ describe('getTokens, unchanged', () => {
     });
 
     await provider.getTokens();
-    expect([provider.refreshes, provider.logins]).toEqual([1, 0]);
+    assert.deepEqual([provider.refreshes, provider.logins], [1, 0]);
   });
 });
 
@@ -165,6 +167,6 @@ describe('SsoProviderFactory', () => {
         password: 'secret',
       },
     });
-    expect(typeof provider.refreshTokens).toBe('function');
+    assert.equal(typeof provider.refreshTokens, 'function');
   });
 });

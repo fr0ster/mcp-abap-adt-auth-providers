@@ -10,8 +10,9 @@
  * (`port-in-use`).
  */
 
+import assert from 'node:assert/strict';
 import * as http from 'node:http';
-import { afterEach, beforeEach, describe, expect, it } from '@jest/globals';
+import { afterEach, beforeEach, describe, it } from 'node:test';
 import { readFailure } from '@mcp-abap-adt/auth-errors';
 import type {
   AnswerJudge,
@@ -36,6 +37,7 @@ import {
   startTokenServer,
   type TokenServer,
 } from '../helpers/attemptHarness';
+import { matchObject, notContains } from '../helpers/expectations';
 import { getAvailablePort } from '../helpers/netHelpers';
 
 const silent: ILogger = {
@@ -168,8 +170,8 @@ async function setup() {
 function noBusyNoPortInUse(failures: unknown[]): void {
   for (const failure of failures) {
     const message = String((failure as Error).message);
-    expect(message).not.toContain('already authorizing');
-    expect(message).not.toContain('already in use');
+    notContains(message, 'already authorizing');
+    notContains(message, 'already in use');
   }
 }
 
@@ -180,21 +182,22 @@ describe('drain handoff', () => {
     const first = rejectionOf(provider.getTokens({ signal: a.signal }));
     const old = await scopes.nth(1);
     a.abort();
-    expect(isAborted(await first)).toBe(true);
+    assert.equal(isAborted(await first), true);
 
     const next = provider.getTokens();
     // The strategy must NOT be called again yet: no event exists for that.
     await quiet();
-    expect(calls()).toBe(1);
+    assert.equal(calls(), 1);
     old.gate.resolve();
     const fresh = await scopes.nth(2);
-    expect(calls()).toBe(2);
+    assert.equal(calls(), 2);
     fresh.deliver('code-2');
     fresh.gate.resolve();
-    await expect(next).resolves.toMatchObject({ refreshToken: 'R-1' });
-    expect(server.requests.map((r) => r.params.get('code'))).toEqual([
-      'code-2',
-    ]);
+    matchObject(await next, { refreshToken: 'R-1' });
+    assert.deepEqual(
+      server.requests.map((r) => r.params.get('code')),
+      ['code-2'],
+    );
     noBusyNoPortInUse(failures);
   });
 
@@ -209,12 +212,12 @@ describe('drain handoff', () => {
     const outcome = provider.rejected(refused);
     // The strategy must NOT be called again yet: no event exists for that.
     await quiet();
-    expect(calls()).toBe(1);
+    assert.equal(calls(), 1);
     old.gate.resolve();
     const fresh = await scopes.nth(2);
     fresh.deliver('code-2');
     fresh.gate.resolve();
-    await expect(outcome).resolves.toEqual({ ok: true });
+    assert.deepEqual(await outcome, { ok: true });
     noBusyNoPortInUse(failures);
   });
 
@@ -232,13 +235,13 @@ describe('drain handoff', () => {
     // event a test can await.
     await quiet();
     b.abort();
-    expect(isAborted(await waiting)).toBe(true);
+    assert.equal(isAborted(await waiting), true);
     old.gate.resolve();
     await old.closed;
     // The strategy must NOT be called again yet: no event exists for that.
     await quiet();
-    expect(calls()).toBe(1);
-    expect(scopes.items).toHaveLength(1);
+    assert.equal(calls(), 1);
+    assert.equal(scopes.items.length, 1);
   });
 
   it('three attempts aborted in a row: each waits on the whole chain', async () => {
@@ -256,19 +259,19 @@ describe('drain handoff', () => {
       // event a test can await.
       await quiet();
       c.abort();
-      expect(isAborted(await waiting)).toBe(true);
+      assert.equal(isAborted(await waiting), true);
     }
     // The fourth waits on all three: the first one's socket still holds.
     const last = provider.getTokens();
     // The strategy must NOT be called again yet: no event exists for that.
     await quiet();
-    expect(calls()).toBe(1);
+    assert.equal(calls(), 1);
     old.gate.resolve();
     const fresh = await scopes.nth(2);
     fresh.deliver('code-4');
     fresh.gate.resolve();
-    await expect(last).resolves.toMatchObject({ refreshToken: 'R-1' });
-    expect(calls()).toBe(2);
+    matchObject(await last, { refreshToken: 'R-1' });
+    assert.equal(calls(), 2);
     noBusyNoPortInUse(failures);
   });
 });

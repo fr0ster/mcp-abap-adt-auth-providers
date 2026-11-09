@@ -8,7 +8,8 @@
  * unhandled-rejection recorder, is in `raceScenarios.test.ts`.
  */
 
-import { describe, expect, it } from '@jest/globals';
+import assert from 'node:assert/strict';
+import { describe, it } from 'node:test';
 import {
   AuthProviderFailure,
   authError,
@@ -22,6 +23,14 @@ import type {
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
 import { refreshThenLogin } from '../../renewal';
 import { deferred, jwt, quiet, rejectionOf } from '../helpers/attemptHarness';
+import {
+  anyOf,
+  cases,
+  caseTitle,
+  deepEqualWith,
+  matchObject,
+  notContains,
+} from '../helpers/expectations';
 import { reportRecorder } from '../helpers/persistence';
 import { ScriptedProvider, tokens } from '../helpers/scriptedProvider';
 
@@ -29,7 +38,7 @@ const errorOf = (thrown: unknown): IAuthProviderError =>
   readFailure(thrown, 'unfamiliar-error');
 
 function expectPersistingFailure(thrown: unknown): void {
-  expect(errorOf(thrown)).toMatchObject({
+  matchObject(errorOf(thrown), {
     kind: 'unknown',
     facts: { operation: 'persisting-tokens', grant: 'authorization_code' },
   });
@@ -96,14 +105,14 @@ describe('one report per change, in commit order', () => {
     const second = provider.getTokens();
     (await provider.refreshes.nth(2)).result.resolve(tokens(T2));
     await second;
-    expect(reports).toEqual([
+    deepEqualWith(reports, [
       {
         event: 'credential',
         credential: {
           authorizationToken: T1,
           tokenType: 'jwt',
           authType: 'authorization_code',
-          expiresAt: expect.any(Number),
+          expiresAt: anyOf(Number),
         },
         refreshToken: { change: 'new', value: 'R1' },
         awaited: true,
@@ -114,7 +123,7 @@ describe('one report per change, in commit order', () => {
           authorizationToken: T2,
           tokenType: 'jwt',
           authType: 'authorization_code',
-          expiresAt: expect.any(Number),
+          expiresAt: anyOf(Number),
         },
         refreshToken: { change: 'none' },
         awaited: true,
@@ -130,7 +139,7 @@ describe('one report per change, in commit order', () => {
     await first;
     await provider.getTokens();
     await provider.getTokens();
-    expect(reports).toHaveLength(1);
+    assert.equal(reports.length, 1);
   });
 
   it('a commit discarded by the watermark reports nothing', async () => {
@@ -157,8 +166,8 @@ describe('one report per change, in commit order', () => {
     // The older attempt's late answer is older than what was committed.
     late.result.resolve(tokens(jwt('late'), 'LATE'));
     await quiet();
-    expect(shapes(reports)).toEqual([['credential', T2, 'R2', true]]);
-    expect(provider.held()).toMatchObject({ access: T2, refresh: 'R2' });
+    assert.deepEqual(shapes(reports), [['credential', T2, 'R2', true]]);
+    matchObject(provider.held(), { access: T2, refresh: 'R2' });
   });
 
   it("a sentRefreshToken 'discard' reports refresh-token-discarded with the credential held, awaited, before the login's report", async () => {
@@ -169,17 +178,17 @@ describe('one report per change, in commit order', () => {
     const T1 = jwt('login');
     (await provider.logins.nth(1)).result.resolve(tokens(T1, 'S'));
     await renewed;
-    expect(reports[0]).toEqual({
+    deepEqualWith(reports[0], {
       event: 'refresh-token-discarded',
       credential: {
         authorizationToken: provider.seededToken,
         tokenType: 'jwt',
         authType: 'authorization_code',
-        expiresAt: expect.any(Number),
+        expiresAt: anyOf(Number),
       },
       awaited: true,
     });
-    expect(shapes(reports).slice(1)).toEqual([['credential', T1, 'S', true]]);
+    assert.deepEqual(shapes(reports).slice(1), [['credential', T1, 'S', true]]);
   });
 
   it('a discard before any token is held reports the credential as an empty access token', async () => {
@@ -193,7 +202,7 @@ describe('one report per change, in commit order', () => {
     (await provider.refreshes.nth(1)).result.reject(refused());
     (await provider.logins.nth(1)).result.reject(new Error('login failed'));
     await renewed;
-    expect(reports).toEqual([
+    assert.deepEqual(reports, [
       {
         event: 'refresh-token-discarded',
         credential: {
@@ -211,7 +220,7 @@ describe('one report per change, in commit order', () => {
     const provider = seeded();
     const renewed = provider.getTokens();
     (await provider.refreshes.nth(1)).result.resolve(tokens(jwt('one'), 'R1'));
-    await expect(renewed).resolves.toMatchObject({ refreshToken: 'R1' });
+    matchObject(await renewed, { refreshToken: 'R1' });
   });
 });
 
@@ -225,7 +234,7 @@ describe('awaited or detached, decided when the report starts', () => {
     only.abort();
     await cut;
     await quiet();
-    expect(shapes(reports)).toEqual([
+    assert.deepEqual(shapes(reports), [
       ['refresh-token-discarded', provider.seededToken, false],
     ]);
   });
@@ -247,7 +256,7 @@ describe('awaited or detached, decided when the report starts', () => {
     const T2 = jwt('late');
     late.result.resolve(tokens(T2, 'R2'));
     await quiet();
-    expect(shapes(reports)).toEqual([['credential', T2, 'R2', false]]);
+    assert.deepEqual(shapes(reports), [['credential', T2, 'R2', false]]);
   });
 
   it('a report whose waiters all aborted while an earlier report held the queue is detached', async () => {
@@ -262,7 +271,7 @@ describe('awaited or detached, decided when the report starts', () => {
     const T1 = jwt('one', -3600);
     (await provider.refreshes.nth(1)).result.resolve(tokens(T1, 'R1'));
     await quiet();
-    expect(reports).toHaveLength(1);
+    assert.equal(reports.length, 1);
     a.abort();
     await first;
     // Attempt B: its refresh answers while A's report still holds the
@@ -271,14 +280,14 @@ describe('awaited or detached, decided when the report starts', () => {
     const second = rejectionOf(provider.refreshTokens({ signal: b.signal }));
     const T2 = jwt('two');
     const refreshB = await provider.refreshes.nth(2);
-    expect(refreshB.refreshToken).toBe('R1');
+    assert.equal(refreshB.refreshToken, 'R1');
     refreshB.result.resolve(tokens(T2, 'R2'));
     await quiet();
     b.abort();
     await second;
     gate.resolve();
     await quiet();
-    expect(shapes(reports)).toEqual([
+    assert.deepEqual(shapes(reports), [
       ['credential', T1, 'R1', true],
       ['credential', T2, 'R2', false],
     ]);
@@ -286,7 +295,7 @@ describe('awaited or detached, decided when the report starts', () => {
 });
 
 describe('an awaited failure is the renewal’s', () => {
-  it.each([
+  for (const [caseIndex, caseRow] of cases([
     [
       'a throw',
       () => {
@@ -294,32 +303,39 @@ describe('an awaited failure is the renewal’s', () => {
       },
     ],
     ['a rejection', () => Promise.reject(new Error('SECRET-PERSIST-TEXT'))],
-  ])(
-    '%s: both waiters get persisting-tokens, the token stays cached, nothing is logged in to',
-    async (_name, fail) => {
-      const { reports, persistence } = reportRecorder(fail);
-      const provider = seeded({ persistence });
-      const one = rejectionOf(provider.getTokens());
-      const two = rejectionOf(provider.getTokens());
-      const T2 = jwt('rotated');
-      (await provider.refreshes.nth(1)).result.resolve(tokens(T2, 'R2'));
-      const [a, b] = [await one, await two];
-      expectPersistingFailure(a);
-      expectPersistingFailure(b);
-      expect(errorOf(a)).toBe(errorOf(b));
-      expect(JSON.stringify(errorOf(a))).not.toContain('SECRET');
-      await quiet();
-      expect(provider.logins.items).toHaveLength(0);
-      // The committed credentials are the server's state: the cache answers.
-      await expect(provider.getTokens()).resolves.toMatchObject({
-        authorizationToken: T2,
-        refreshToken: 'R2',
-      });
-      expect(provider.refreshes.items).toHaveLength(1);
-      // No repetition: the failed report was made once.
-      expect(reports).toHaveLength(1);
-    },
-  );
+  ]).entries()) {
+    const [_name, fail] = caseRow;
+    it(
+      caseTitle(
+        '%s: both waiters get persisting-tokens, the token stays cached, nothing is logged in to',
+        caseRow,
+        caseIndex,
+      ),
+      async () => {
+        const { reports, persistence } = reportRecorder(fail);
+        const provider = seeded({ persistence });
+        const one = rejectionOf(provider.getTokens());
+        const two = rejectionOf(provider.getTokens());
+        const T2 = jwt('rotated');
+        (await provider.refreshes.nth(1)).result.resolve(tokens(T2, 'R2'));
+        const [a, b] = [await one, await two];
+        expectPersistingFailure(a);
+        expectPersistingFailure(b);
+        assert.equal(errorOf(a), errorOf(b));
+        notContains(JSON.stringify(errorOf(a)), 'SECRET');
+        await quiet();
+        assert.equal(provider.logins.items.length, 0);
+        // The committed credentials are the server's state: the cache answers.
+        matchObject(await provider.getTokens(), {
+          authorizationToken: T2,
+          refreshToken: 'R2',
+        });
+        assert.equal(provider.refreshes.items.length, 1);
+        // No repetition: the failed report was made once.
+        assert.equal(reports.length, 1);
+      },
+    );
+  }
 
   it('after a login: the renewal fails, nothing more', async () => {
     const { persistence } = reportRecorder(() => {
@@ -334,8 +350,8 @@ describe('an awaited failure is the renewal’s', () => {
     (await provider.logins.nth(1)).result.resolve(tokens(T1, 'S'));
     expectPersistingFailure(await thrown);
     await quiet();
-    expect(provider.logins.items).toHaveLength(1);
-    expect(provider.held()).toMatchObject({ access: T1, refresh: 'S' });
+    assert.equal(provider.logins.items.length, 1);
+    matchObject(provider.held(), { access: T1, refresh: 'S' });
   });
 
   it("a sentRefreshToken 'discard' whose report fails ends the renewal before the login", async () => {
@@ -347,9 +363,9 @@ describe('an awaited failure is the renewal’s', () => {
     (await provider.refreshes.nth(1)).result.reject(refused());
     expectPersistingFailure(await thrown);
     await quiet();
-    expect(provider.logins.items).toHaveLength(0);
-    expect(provider.held().refresh).toBeUndefined();
-    expect(reports).toHaveLength(1);
+    assert.equal(provider.logins.items.length, 0);
+    assert.equal(provider.held().refresh, undefined);
+    assert.equal(reports.length, 1);
   });
 
   it('a minted failure thrown by the strategy is not relayed as itself', async () => {
@@ -374,7 +390,7 @@ describe('an awaited failure is the renewal’s', () => {
 });
 
 describe('a detached failure is logged and attributed to nothing', () => {
-  it.each([
+  for (const [caseIndex, caseRow] of cases([
     [
       'a throw',
       () => {
@@ -382,45 +398,53 @@ describe('a detached failure is logged and attributed to nothing', () => {
       },
     ],
     ['a rejection', () => Promise.reject(new Error('SECRET-PERSIST-TEXT'))],
-  ])(
-    '%s: one log line, the next report still made, no later call fails',
-    async (_name, fail) => {
-      const { lines, logger } = recordingLogger();
-      const { reports, persistence } = reportRecorder((r) =>
-        r.awaited ? undefined : fail(),
-      );
-      const provider = seeded({ persistence, logger });
-      const only = new AbortController();
-      const cut = rejectionOf(provider.getTokens({ signal: only.signal }));
-      await provider.refreshes.nth(1);
-      only.abort();
-      await cut;
-      await quiet();
-      const failures = lines.filter(
-        (l) => l.message === '[BaseTokenProvider] Persisting the tokens failed',
-      );
-      expect(failures).toEqual([
-        {
-          level: 'warn',
-          message: '[BaseTokenProvider] Persisting the tokens failed',
-          meta: {
-            error: 'persisting the tokens failed (unknown error)',
-            kind: 'unknown',
+  ]).entries()) {
+    const [_name, fail] = caseRow;
+    it(
+      caseTitle(
+        '%s: one log line, the next report still made, no later call fails',
+        caseRow,
+        caseIndex,
+      ),
+      async () => {
+        const { lines, logger } = recordingLogger();
+        const { reports, persistence } = reportRecorder((r) =>
+          r.awaited ? undefined : fail(),
+        );
+        const provider = seeded({ persistence, logger });
+        const only = new AbortController();
+        const cut = rejectionOf(provider.getTokens({ signal: only.signal }));
+        await provider.refreshes.nth(1);
+        only.abort();
+        await cut;
+        await quiet();
+        const failures = lines.filter(
+          (l) =>
+            l.message === '[BaseTokenProvider] Persisting the tokens failed',
+        );
+        assert.deepEqual(failures, [
+          {
+            level: 'warn',
+            message: '[BaseTokenProvider] Persisting the tokens failed',
+            meta: {
+              error: 'persisting the tokens failed (unknown error)',
+              kind: 'unknown',
+            },
           },
-        },
-      ]);
-      expect(JSON.stringify(lines)).not.toContain('SECRET');
-      // The next renewal: a login (R was discarded), reported, and it succeeds.
-      const T1 = jwt('login');
-      const renewed = provider.getTokens();
-      (await provider.logins.nth(1)).result.resolve(tokens(T1, 'S'));
-      await expect(renewed).resolves.toMatchObject({ authorizationToken: T1 });
-      expect(shapes(reports)).toEqual([
-        ['refresh-token-discarded', provider.seededToken, false],
-        ['credential', T1, 'S', true],
-      ]);
-    },
-  );
+        ]);
+        notContains(JSON.stringify(lines), 'SECRET');
+        // The next renewal: a login (R was discarded), reported, and it succeeds.
+        const T1 = jwt('login');
+        const renewed = provider.getTokens();
+        (await provider.logins.nth(1)).result.resolve(tokens(T1, 'S'));
+        matchObject(await renewed, { authorizationToken: T1 });
+        assert.deepEqual(shapes(reports), [
+          ['refresh-token-discarded', provider.seededToken, false],
+          ['credential', T1, 'S', true],
+        ]);
+      },
+    );
+  }
 });
 
 describe('an awaited report whose every waiter left while it ran', () => {
@@ -443,7 +467,7 @@ describe('an awaited report whose every waiter left while it ran', () => {
     const failures = lines.filter(
       (l) => l.message === '[BaseTokenProvider] Persisting the tokens failed',
     );
-    expect(failures).toEqual([
+    assert.deepEqual(failures, [
       {
         level: 'warn',
         message: '[BaseTokenProvider] Persisting the tokens failed',
@@ -453,7 +477,7 @@ describe('an awaited report whose every waiter left while it ran', () => {
         },
       },
     ]);
-    expect(JSON.stringify(lines)).not.toContain('SECRET');
+    notContains(JSON.stringify(lines), 'SECRET');
   });
 
   it('a waiter still there gets the failure, and nothing is logged as detached', async () => {
@@ -465,11 +489,12 @@ describe('an awaited report whose every waiter left while it ran', () => {
     const thrown = rejectionOf(provider.getTokens());
     (await provider.refreshes.nth(1)).result.resolve(tokens(jwt('one'), 'R1'));
     expectPersistingFailure(await thrown);
-    expect(
+    assert.deepEqual(
       lines.filter(
         (l) => l.message === '[BaseTokenProvider] Persisting the tokens failed',
       ),
-    ).toEqual([]);
+      [],
+    );
   });
 });
 
@@ -490,7 +515,7 @@ describe('no repetition', () => {
     const second = provider.getTokens();
     (await provider.refreshes.nth(2)).result.resolve(tokens(T2));
     await second;
-    expect(shapes(reports)).toEqual([
+    assert.deepEqual(shapes(reports), [
       ['credential', T1, 'R1', true],
       ['credential', T2, 'none', true],
     ]);
@@ -513,11 +538,11 @@ describe('the report is a fresh object', () => {
     const T1 = jwt('one');
     const renewed = provider.getTokens();
     (await provider.refreshes.nth(1)).result.resolve(tokens(T1, 'R1'));
-    await expect(renewed).resolves.toMatchObject({
+    matchObject(await renewed, {
       authorizationToken: T1,
       refreshToken: 'R1',
     });
-    expect(provider.held()).toMatchObject({ access: T1, refresh: 'R1' });
+    matchObject(provider.held(), { access: T1, refresh: 'R1' });
   });
 });
 
@@ -527,11 +552,11 @@ describe('what the provider returns', () => {
     const first = provider.getTokens();
     (await provider.refreshes.nth(1)).result.resolve(tokens(jwt('one')));
     const renewed = await first;
-    expect(renewed.refreshToken).toBe('R');
-    expect('refreshTokenDisposition' in renewed).toBe(false);
+    assert.equal(renewed.refreshToken, 'R');
+    assert.equal('refreshTokenDisposition' in renewed, false);
     const cached = await provider.getTokens();
-    expect(cached.refreshToken).toBe('R');
-    expect('refreshTokenDisposition' in cached).toBe(false);
+    assert.equal(cached.refreshToken, 'R');
+    assert.equal('refreshTokenDisposition' in cached, false);
   });
 });
 

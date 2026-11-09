@@ -5,7 +5,8 @@
  * received.
  */
 
-import { afterEach, beforeEach, describe, expect, it } from '@jest/globals';
+import assert from 'node:assert/strict';
+import { afterEach, beforeEach, describe, it } from 'node:test';
 import { readFailure } from '@mcp-abap-adt/auth-errors';
 import type {
   IRenewalStrategy,
@@ -27,6 +28,11 @@ import {
   type TokenServer,
   waitingStrategy,
 } from '../helpers/attemptHarness';
+import {
+  deepEqualWith,
+  matchObject,
+  objectContaining,
+} from '../helpers/expectations';
 import { stateRecorder } from '../helpers/persistence';
 
 const silent: ILogger = {
@@ -38,8 +44,8 @@ const silent: ILogger = {
 
 function expectAborted(thrown: unknown): void {
   const error = readFailure(thrown, 'unfamiliar-error');
-  expect(error.kind).toBe('interactive-login');
-  expect(error.facts).toMatchObject({ outcome: 'aborted' });
+  assert.equal(error.kind, 'interactive-login');
+  matchObject(error.facts, { outcome: 'aborted' });
 }
 
 /** `inner`'s decisions, with every observation recorded. */
@@ -104,9 +110,9 @@ describe('a refresh cut before dispatch (OIDC, discovery held open)', () => {
     expectAborted(await cut);
     await quiet();
     // No token request, no clearing notification, R untouched.
-    expect(server.requests.filter((r) => r.path === '/token')).toHaveLength(0);
-    expect(seen).toEqual([]);
-    expect(observed).toEqual([
+    assert.equal(server.requests.filter((r) => r.path === '/token').length, 0);
+    assert.deepEqual(seen, []);
+    assert.deepEqual(observed, [
       {
         cause: { trigger: 'expired' },
         moment: 'get-tokens',
@@ -120,11 +126,13 @@ describe('a refresh cut before dispatch (OIDC, discovery held open)', () => {
       issuer: server.url,
       token_endpoint: `${server.url}/token`,
     });
-    await expect(next).resolves.toMatchObject({ refreshToken: 'R2' });
-    expect(submitted()).toEqual(['R']);
-    expect(
-      server.requests.filter((r) => r.params.get('grant_type') === 'password'),
-    ).toHaveLength(0);
+    matchObject(await next, { refreshToken: 'R2' });
+    assert.deepEqual(submitted(), ['R']);
+    assert.equal(
+      server.requests.filter((r) => r.params.get('grant_type') === 'password')
+        .length,
+      0,
+    );
   });
 });
 
@@ -194,8 +202,8 @@ describe('the server answers the token endpoint', () => {
     only.abort();
     expectAborted(await cut);
     await quiet();
-    expect(observed).toEqual([
-      expect.objectContaining({
+    deepEqualWith(observed, [
+      objectContaining({
         step: 'refresh',
         sent: true,
         refreshToken: 'kept',
@@ -204,15 +212,15 @@ describe('the server answers the token endpoint', () => {
 
     const replacement = p.getTokens();
     const second = await refreshes.nth(2);
-    expect(submitted()).toEqual(['R', 'R']);
+    assert.deepEqual(submitted(), ['R', 'R']);
     // The late answer of the cut refresh: nothing newer committed yet.
     const T2 = jwt('late');
     late.answer(200, { access_token: T2, refresh_token: 'R2' });
     await quiet();
-    expect(seen).toEqual([[T2, 'R2', 'replace']]);
+    assert.deepEqual(seen, [[T2, 'R2', 'replace']]);
     const T3 = jwt('replacement');
     second.answer(200, { access_token: T3, refresh_token: 'R3' });
-    await expect(replacement).resolves.toMatchObject({
+    matchObject(await replacement, {
       authorizationToken: T3,
       refreshToken: 'R3',
     });
@@ -240,13 +248,13 @@ describe('the server answers the token endpoint', () => {
       const { p, strategy } = codeProvider(keepThenLogin, { persistence });
       const first = p.getTokens();
       (await strategy.nth(1)).answer('code-1');
-      await expect(first).resolves.toMatchObject({ refreshToken: 'R' });
-      expect(seen).toEqual([[LOGIN, undefined, 'keep']]);
+      matchObject(await first, { refreshToken: 'R' });
+      assert.deepEqual(seen, [[LOGIN, undefined, 'keep']]);
 
       // The login's token is expired: the next renewal refreshes R again.
       await p.getTokens();
-      expect(submitted()).toEqual(['R', 'R']);
-      expect(strategy.calls).toHaveLength(1);
+      assert.deepEqual(submitted(), ['R', 'R']);
+      assert.equal(strategy.calls.length, 1);
     });
 
     it('a strategy that logs in directly while R is held: R still held after a login without one, and the next refresh sends R', async () => {
@@ -264,10 +272,10 @@ describe('the server answers the token endpoint', () => {
       const { p, strategy } = codeProvider(loginFirst);
       const loggedIn = p.refreshTokens();
       (await strategy.nth(1)).answer('code-1');
-      await expect(loggedIn).resolves.toMatchObject({ refreshToken: 'R' });
-      expect(submitted()).toEqual([]);
+      matchObject(await loggedIn, { refreshToken: 'R' });
+      assert.deepEqual(submitted(), []);
       await p.getTokens();
-      expect(submitted()).toEqual(['R']);
+      assert.deepEqual(submitted(), ['R']);
     });
   });
 
@@ -276,13 +284,13 @@ describe('the server answers the token endpoint', () => {
       request.answer(400, { error: 'invalid_grant' });
     const { p, strategy } = codeProvider(refreshOnly());
     const thrown = await rejectionOf(p.getTokens());
-    expect(readFailure(thrown, 'unfamiliar-error')).toMatchObject({
+    matchObject(readFailure(thrown, 'unfamiliar-error'), {
       kind: 'request-failed',
       facts: { status: 400, oauthError: 'invalid_grant' },
     });
     await quiet();
-    expect(strategy.calls).toHaveLength(0);
-    expect(submitted()).toEqual(['R']);
+    assert.equal(strategy.calls.length, 0);
+    assert.deepEqual(submitted(), ['R']);
   });
 
   describe('rule 5 as a reading', () => {
@@ -293,12 +301,12 @@ describe('the server answers the token endpoint', () => {
         status: 403,
         error: undefined,
       });
-      expect(outcome).toMatchObject({
+      matchObject(outcome, {
         ok: false,
         refusal: { kind: 'system-refused', facts: { status: 403 } },
       });
-      expect(server.requests).toHaveLength(0);
-      expect(strategy.calls).toHaveLength(0);
+      assert.equal(server.requests.length, 0);
+      assert.equal(strategy.calls.length, 0);
     });
 
     it('a strategy that renews on not-credential: one refresh sent', async () => {
@@ -311,10 +319,11 @@ describe('the server answers the token endpoint', () => {
             : { next: 'stop' },
       };
       const { p } = codeProvider(renewOn403);
-      await expect(
-        p.rejected({ at: 'request', status: 403, error: undefined }),
-      ).resolves.toEqual({ ok: true });
-      expect(submitted()).toEqual(['R']);
+      assert.deepEqual(
+        await p.rejected({ at: 'request', status: 403, error: undefined }),
+        { ok: true },
+      );
+      assert.deepEqual(submitted(), ['R']);
     });
   });
 
@@ -349,7 +358,7 @@ describe('the server answers the token endpoint', () => {
       only.abort();
       expectAborted(await cut);
       await quiet();
-      expect(observed).toEqual([
+      assert.deepEqual(observed, [
         {
           cause: { trigger: 'no-token' },
           moment: 'get-tokens',
@@ -366,8 +375,8 @@ describe('the server answers the token endpoint', () => {
       (await authorization.nth(1)).answer('code-1');
       (await codes.nth(1)).answer(400, { error: 'invalid_grant' });
       await thrown;
-      expect(situations[1]?.steps).toEqual([
-        expect.objectContaining({
+      deepEqualWith(situations[1]?.steps, [
+        objectContaining({
           step: 'login',
           outcome: 'failed',
           sent: true,

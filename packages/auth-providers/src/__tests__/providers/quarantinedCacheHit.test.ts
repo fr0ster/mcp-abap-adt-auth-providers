@@ -14,7 +14,8 @@
  *   4. `getTokens()` hits the cache (T1 is valid).
  */
 
-import { describe, expect, it } from '@jest/globals';
+import assert from 'node:assert/strict';
+import { describe, it } from 'node:test';
 import type {
   ITokenResult,
   OAuth2GrantType,
@@ -89,23 +90,23 @@ describe('a cache hit while the held refresh token is quarantined', () => {
     const a = p.refreshTokens({ signal: first.signal }).catch(() => 'aborted');
     await turns(10);
     first.abort();
-    expect(await a).toBe('aborted');
+    assert.equal(await a, 'aborted');
     const second = new AbortController();
     const b = p.refreshTokens({ signal: second.signal }).catch(() => 'aborted');
     await turns(10);
     second.abort();
-    expect(await b).toBe('aborted');
+    assert.equal(await b, 'aborted');
 
     const hit = await p.getTokens();
-    expect(Object.hasOwn(hit, 'refreshToken')).toBe(true);
-    expect(hit.refreshToken).toBeUndefined();
+    assert.equal(Object.hasOwn(hit, 'refreshToken'), true);
+    assert.equal(hit.refreshToken, undefined);
     // Not yet reported: the clearing step waits behind the stalled report.
-    expect(p.told).toEqual(['R0', 'R1']);
+    assert.deepEqual(p.told, ['R0', 'R1']);
 
     p.release?.();
     await turns(10);
     const drained = await p.getTokens();
-    expect(drained.refreshToken).toBeUndefined();
-    expect(p.told).toEqual(['R0', 'R1', 'null']);
+    assert.equal(drained.refreshToken, undefined);
+    assert.deepEqual(p.told, ['R0', 'R1', 'null']);
   });
 });

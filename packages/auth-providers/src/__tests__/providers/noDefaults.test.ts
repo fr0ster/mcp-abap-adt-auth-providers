@@ -1,4 +1,5 @@
-import { describe, expect, it } from '@jest/globals';
+import assert from 'node:assert/strict';
+import { describe, it } from 'node:test';
 import { generateKeyMaterial } from '@mcp-abap-adt/auth-mocks';
 import { AuthorizationCodeProvider } from '../../providers/AuthorizationCodeProvider';
 import { OidcBrowserProvider } from '../../providers/OidcBrowserProvider';
@@ -37,16 +38,23 @@ const CERT = generateKeyMaterial().certificatePem;
 
 describe('no implicit defaults', () => {
   it('constructors require the collaborator (compile-time)', () => {
-    // @ts-expect-error authorization is required
-    expect(() => new AuthorizationCodeProvider({ ...uaa })).toBeDefined();
-    // @ts-expect-error authorization is required
-    expect(() => new OidcBrowserProvider({ clientId: 'c' })).toBeDefined();
+    // Compile-time checks (`npm run test:check`): each config requires its
+    // collaborator. They were `expect(() => …).toBeDefined()` (and
+    // `expect(uaaPasscode).toBeDefined()`), which held for any function and
+    // proved nothing at run time.
+    const authorizationCode = () =>
+      // @ts-expect-error authorization is required
+      new AuthorizationCodeProvider({ ...uaa });
+    const oidcBrowser = () =>
+      // @ts-expect-error authorization is required
+      new OidcBrowserProvider({ clientId: 'c' });
     const uaaPasscode = () =>
       // @ts-expect-error authorization is required
       new UaaPasscodeProvider({ uaaUrl: 'https://uaa', clientId: 'c' });
-    expect(uaaPasscode).toBeDefined();
-    // @ts-expect-error authorization and assertionValidator are required
-    expect(() => new Saml2PureProvider({ ...saml })).toBeDefined();
+    const saml2Pure = () =>
+      // @ts-expect-error authorization and assertionValidator are required
+      new Saml2PureProvider({ ...saml });
+    void [authorizationCode, oidcBrowser, uaaPasscode, saml2Pure];
   });
 
   it('every token provider and static factory requires the renewal strategy (compile-time, rule 7)', () => {
@@ -60,27 +68,28 @@ describe('no implicit defaults', () => {
         ...withoutRenewal,
         authorization: strategy,
       });
-    expect(build).toBeDefined();
+    assert.notEqual(build, undefined);
     const factory = () =>
       // @ts-expect-error renewal is required
       AuthorizationCodeProvider.inBrowser(withoutRenewal);
-    expect(factory).toBeDefined();
+    assert.notEqual(factory, undefined);
     const oidc = () =>
       // @ts-expect-error renewal is required
       new OidcBrowserProvider({
         clientId: 'c',
         authorization: strategy as never,
       });
-    expect(oidc).toBeDefined();
+    assert.notEqual(oidc, undefined);
   });
 
   it('inBrowser assembles a browser callback strategy', () => {
-    expect(
+    assert.equal(
       composed(
         configOf(AuthorizationCodeProvider.inBrowser(uaa)).authorization,
       ),
-    ).toBe(true);
-    expect(
+      true,
+    );
+    assert.equal(
       composed(
         configOf(
           OidcBrowserProvider.inBrowser({
@@ -89,7 +98,8 @@ describe('no implicit defaults', () => {
           }),
         ).authorization,
       ),
-    ).toBe(true);
+      true,
+    );
   });
 
   it('fromTerminal assembles a manual strategy with dispose()', () => {
@@ -100,7 +110,7 @@ describe('no implicit defaults', () => {
         clientId: 'c',
       }),
     ).authorization as { dispose?: unknown };
-    expect(typeof strategy.dispose).toBe('function');
+    assert.equal(typeof strategy.dispose, 'function');
   });
 
   it('the SAML recipes assemble a callback strategy and a shipped validator', () => {
@@ -116,8 +126,9 @@ describe('no implicit defaults', () => {
         { idpCertificates: [CERT] },
       ),
     ]) {
-      expect(composed(configOf(p).authorization)).toBe(true);
-      expect(isShippedValidator(configOf(p).assertionValidator as never)).toBe(
+      assert.equal(composed(configOf(p).authorization), true);
+      assert.equal(
+        isShippedValidator(configOf(p).assertionValidator as never),
         true,
       );
     }

@@ -6,7 +6,8 @@
  * observed; every one must leave no unhandled rejection behind.
  */
 
-import { describe, expect, it } from '@jest/globals';
+import assert from 'node:assert/strict';
+import { describe, it } from 'node:test';
 import { runPlainNode } from '../helpers/plainNode';
 
 /** Plain-JS helpers every scenario gets. */
@@ -71,14 +72,14 @@ p.logins[0].d.resolve(result('T1', 'R1'));
 await settled();
 report({ doomedOutcome, fresh: freshOutcome.value.authorizationToken, held: p.held(), seen });
 `);
-    expect(run.stderr).toBe('');
-    expect(run.result).toEqual({
+    assert.equal(run.stderr, '');
+    assert.deepEqual(run.result, {
       doomedOutcome: { kind: 'interactive-login', outcome: 'aborted' },
       fresh: 'T2',
       held: { access: 'T2', refresh: 'R2' },
       seen: [['T2', 'R2', 'replace']],
     });
-    expect(run.unhandled).toEqual([]);
+    assert.deepEqual(run.unhandled, []);
   });
 
   it('the doomed join, the late login failing: no unhandled rejection', () => {
@@ -93,8 +94,8 @@ p.logins[0].d.reject(new Error('late failure'));
 await settled();
 report({ held: p.held() });
 `);
-    expect(run.result).toEqual({ held: {} });
-    expect(run.unhandled).toEqual([]);
+    assert.deepEqual(run.result, { held: {} });
+    assert.deepEqual(run.unhandled, []);
   });
 
   it('a refresh cut after dispatch, on a real socket: R submitted once, the late R2 adopted', () => {
@@ -139,8 +140,8 @@ const after = await p.getTokens();
 server.close();
 report({ cutOutcome, stillOpen, submitted, seen, adopted: after.refreshToken === 'R2' && after.authorizationToken === T2 });
 `);
-    expect(run.stderr).toBe('');
-    expect(run.result).toEqual({
+    assert.equal(run.stderr, '');
+    assert.deepEqual(run.result, {
       cutOutcome: { kind: 'interactive-login', outcome: 'aborted' },
       stillOpen: true,
       submitted: ['R'],
@@ -150,7 +151,7 @@ report({ cutOutcome, stillOpen, submitted, seen, adopted: after.refreshToken ===
       ],
       adopted: true,
     });
-    expect(run.unhandled).toEqual([]);
+    assert.deepEqual(run.unhandled, []);
   });
 
   it('the drain chain: three aborted attempts, the fourth starts only after the first released its socket', () => {
@@ -224,15 +225,15 @@ const lastOutcome = await last;
 token.close();
 report({ outcomes: outcomes.map((o) => o.outcome), callsBeforeRelease, calls, refresh: lastOutcome.value && lastOutcome.value.refreshToken, busy: failures.filter((f) => f.includes('already')) });
 `);
-    expect(run.stderr).toBe('');
-    expect(run.result).toEqual({
+    assert.equal(run.stderr, '');
+    assert.deepEqual(run.result, {
       outcomes: ['aborted', 'aborted', 'aborted'],
       callsBeforeRelease: 1,
       calls: 2,
       refresh: 'R',
       busy: [],
     });
-    expect(run.unhandled).toEqual([]);
+    assert.deepEqual(run.unhandled, []);
   });
 
   it('the commit order: one commit at a time, in order, the newest persisted last', () => {
@@ -266,8 +267,8 @@ hooks[1].done.resolve();
 const latest = await newer;
 report({ olderOutcome, beforeRelease, order: hooks.map((h) => h.access), most, latest: latest.authorizationToken, held: p.held() });
 `);
-    expect(run.stderr).toBe('');
-    expect(run.result).toEqual({
+    assert.equal(run.stderr, '');
+    assert.deepEqual(run.result, {
       olderOutcome: { kind: 'interactive-login', outcome: 'aborted' },
       beforeRelease: ['T1'],
       order: ['T1', 'T2'],
@@ -275,7 +276,7 @@ report({ olderOutcome, beforeRelease, order: hooks.map((h) => h.access), most, l
       latest: 'T2',
       held: { access: 'T2', refresh: 'R2' },
     });
-    expect(run.unhandled).toEqual([]);
+    assert.deepEqual(run.unhandled, []);
   });
 
   it('a detached report that fails — a throw, a rejecting promise, a then getter or a Proxy trap that throws — leaves no unhandled rejection, one log line, and fails no later call', () => {
@@ -323,7 +324,7 @@ for (const mode of ['throw', 'reject', 'getter', 'proxy']) {
 }
 report(outcomes);
 `);
-    expect(run.stderr).toBe('');
+    assert.equal(run.stderr, '');
     const expected = {
       cutOutcome: { kind: 'interactive-login', outcome: 'aborted' },
       reports: [
@@ -339,13 +340,13 @@ report(outcomes);
       secret: false,
       next: 'S',
     };
-    expect(run.result).toEqual({
+    assert.deepEqual(run.result, {
       throw: expected,
       reject: expected,
       getter: expected,
       proxy: expected,
     });
-    expect(run.unhandled).toEqual([]);
+    assert.deepEqual(run.unhandled, []);
   });
 
   it('a detached report failing while the logger throws: contained by logQuietly, no unhandled rejection', () => {
@@ -371,7 +372,7 @@ await cut;
 await settled(20);
 report({ warned });
 `);
-    expect(run.result).toEqual({ warned: 1 });
-    expect(run.unhandled).toEqual([]);
+    assert.deepEqual(run.result, { warned: 1 });
+    assert.deepEqual(run.unhandled, []);
   });
 });

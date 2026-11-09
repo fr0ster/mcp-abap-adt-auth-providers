@@ -6,7 +6,8 @@
  * never opt in. Threaded to the token sites.
  */
 
-import { afterEach, describe, expect, it } from '@jest/globals';
+import assert from 'node:assert/strict';
+import { afterEach, describe, it } from 'node:test';
 import type {
   AuthorizationCodeProviderConfig,
   ClientCredentialsProviderConfig,
@@ -21,6 +22,7 @@ import type {
 } from '../../index';
 import { ClientCredentialsProvider } from '../../providers';
 import { refreshThenLogin } from '../../renewal';
+import { cases, caseTitle } from '../helpers/expectations';
 
 /** A provider showing what its base read. */
 class Probe extends ClientCredentialsProvider {
@@ -46,22 +48,25 @@ describe('authDebug', () => {
   });
 
   it('true opts in', () => {
-    expect(make(true).debugging).toBe(true);
+    assert.equal(make(true).debugging, true);
   });
 
-  it.each([
+  for (const [caseIndex, caseRow] of cases([
     ['absent', 'absent'],
     ['undefined', undefined],
     ['false', false],
     ["the string 'true'", 'true'],
     ['1', 1],
-  ])('%s does not', (_name, value) => {
-    expect(make(value).debugging).toBe(false);
-  });
+  ]).entries()) {
+    const [_name, value] = caseRow;
+    it(caseTitle('%s does not', caseRow, caseIndex), () => {
+      assert.equal(make(value).debugging, false);
+    });
+  }
 
   it('DEBUG_AUTH_PROVIDERS=true in the environment does not', () => {
     process.env.DEBUG_AUTH_PROVIDERS = 'true';
-    expect(make('absent').debugging).toBe(false);
+    assert.equal(make('absent').debugging, false);
   });
 
   it('is read once, at construction', () => {
@@ -74,7 +79,7 @@ describe('authDebug', () => {
     };
     const probe = new Probe(config);
     (config as { authDebug?: boolean }).authDebug = true;
-    expect(probe.debugging).toBe(false);
+    assert.equal(probe.debugging, false);
   });
 
   it('every token provider config accepts it (type check)', () => {
@@ -90,6 +95,6 @@ describe('authDebug', () => {
       | Pick<Saml2PureProviderConfig, 'authDebug'>
       | Pick<UaaPasscodeProviderConfig, 'authDebug'>
     > = [debug, { authDebug: undefined }];
-    expect(accepts).toHaveLength(2);
+    assert.equal(accepts.length, 2);
   });
 });
