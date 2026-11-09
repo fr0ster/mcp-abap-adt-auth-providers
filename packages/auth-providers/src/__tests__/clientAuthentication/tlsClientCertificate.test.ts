@@ -1,12 +1,15 @@
+import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { describe, expect, it, jest } from '@jest/globals';
+import { describe, it, mock } from 'node:test';
 import { readFailure } from '@mcp-abap-adt/auth-errors';
 import type { ICertificateMaterial } from '@mcp-abap-adt/interfaces-auth';
 import { tlsClientCertificate } from '../../clientAuthentication';
+import { matchObject, thrown } from '../helpers/expectations';
 import { refusedWith, wordsOf } from '../helpers/minted';
+import { CERTIFICATES } from '../helpers/packagePaths';
 
-const dir = join(__dirname, '..', 'fixtures', 'certificates');
+const dir = CERTIFICATES;
 const pem: ICertificateMaterial = {
   cert: readFileSync(join(dir, 'client.crt')),
   key: readFileSync(join(dir, 'client.key')),
@@ -29,7 +32,7 @@ describe('tlsClientCertificate — what it sends and where', () => {
       material: pem,
       endpoint: 'https://certurl.example/oauth/token',
     }).authenticate(withAlias);
-    expect(sent).toEqual({
+    assert.deepEqual(sent, {
       endpoint: 'https://certurl.example/oauth/token',
       parameters: { client_id: 'my-client' },
     });
@@ -38,30 +41,30 @@ describe('tlsClientCertificate — what it sends and where', () => {
     const sent = await tlsClientCertificate({ material: pem }).authenticate(
       withAlias,
     );
-    expect(sent.endpoint).toBe('https://mtls.uaa.example/token');
+    assert.equal(sent.endpoint, 'https://mtls.uaa.example/token');
   });
   it('else to the draft endpoint', async () => {
     const sent = await tlsClientCertificate({ material: pem }).authenticate(
       base,
     );
-    expect(sent.endpoint).toBe(base.endpoint);
+    assert.equal(sent.endpoint, base.endpoint);
   });
   it('sends no header and no secret', async () => {
     const sent = await tlsClientCertificate({ material: pem }).authenticate(
       base,
     );
-    expect(sent.headers).toBeUndefined();
-    expect(Object.keys(sent.parameters ?? {})).toEqual(['client_id']);
+    assert.equal(sent.headers, undefined);
+    assert.deepEqual(Object.keys(sent.parameters ?? {}), ['client_id']);
   });
 });
 
 describe('tlsClientCertificate — the material', () => {
   it('returns the checked material from tlsMaterial()', async () => {
     const auth = tlsClientCertificate({ material: pfx });
-    expect(await auth.tlsMaterial?.()).toBe(pfx);
+    assert.equal(await auth.tlsMaterial?.(), pfx);
   });
   it('reads a loader once across concurrent and later calls', async () => {
-    const loader = jest.fn(async () => pem);
+    const loader = mock.fn(async () => pem);
     const auth = tlsClientCertificate({ material: loader });
     await Promise.all([
       auth.authenticate(base),
@@ -69,22 +72,22 @@ describe('tlsClientCertificate — the material', () => {
       auth.tlsMaterial?.(),
     ]);
     await auth.authenticate(base);
-    expect(loader).toHaveBeenCalledTimes(1);
+    assert.equal(loader.mock.callCount(), 1);
   });
   it('does not read the loader before first use', () => {
-    const loader = jest.fn(async () => pem);
+    const loader = mock.fn(async () => pem);
     tlsClientCertificate({ material: loader });
-    expect(loader).not.toHaveBeenCalled();
+    assert.equal(loader.mock.callCount(), 0);
   });
   it('refuses incomplete material as incomplete, in the 5.2.3 words', async () => {
     const auth = tlsClientCertificate({ material: { cert: pem.cert! } });
     const e = await auth.authenticate(base).catch((x) => x);
     // A client-certificate failure, no longer the class.
-    expect(readFailure(e, 'unfamiliar-error')).toMatchObject({
+    matchObject(readFailure(e, 'unfamiliar-error'), {
       kind: 'client-certificate',
       facts: { problem: 'incomplete' },
     });
-    expect(wordsOf(refusedWith(e))).toEqual({
+    assert.deepEqual(wordsOf(refusedWith(e)), {
       ok: false,
       refusal: {
         reason: 'the client certificate is incomplete',
@@ -98,28 +101,30 @@ describe('tlsClientCertificate — the material', () => {
     });
     const e = await auth.tlsMaterial?.().catch((x) => x);
     // A client-certificate failure, no longer the class.
-    expect(readFailure(e, 'unfamiliar-error')).toMatchObject({
+    matchObject(readFailure(e, 'unfamiliar-error'), {
       kind: 'client-certificate',
       facts: { problem: 'unusable' },
     });
-    expect(refusedWith(e)).toMatchObject({
+    matchObject(refusedWith(e), {
       refusal: { reason: 'the client certificate could not be used' },
     });
   });
   it('retries after a failed load; a success stays memoized', async () => {
-    const loader = jest
-      .fn<() => Promise<ICertificateMaterial>>()
-      .mockRejectedValueOnce(new Error('mid-rotation'))
-      .mockResolvedValue(pem);
+    const loader = mock.fn<() => Promise<ICertificateMaterial>>(
+      async () => pem,
+    );
+    loader.mock.mockImplementationOnce(async () => {
+      throw new Error('mid-rotation');
+    }, 0);
     const auth = tlsClientCertificate({ material: loader });
-    await expect(auth.authenticate(base)).rejects.toThrow('mid-rotation');
-    await expect(auth.authenticate(base)).resolves.toBeDefined();
+    await assert.rejects(auth.authenticate(base), thrown('mid-rotation'));
+    assert.notEqual(await auth.authenticate(base), undefined);
     await auth.authenticate(base);
-    expect(loader).toHaveBeenCalledTimes(2);
+    assert.equal(loader.mock.callCount(), 2);
   });
   it('shares one failing load among concurrent callers', async () => {
     const boom = new Error('timeout');
-    const loader = jest.fn(async (): Promise<ICertificateMaterial> => {
+    const loader = mock.fn(async (): Promise<ICertificateMaterial> => {
       throw boom;
     });
     const auth = tlsClientCertificate({ material: loader });
@@ -128,23 +133,26 @@ describe('tlsClientCertificate — the material', () => {
       auth.authenticate(base),
       auth.tlsMaterial?.(),
     ]);
-    expect(loader).toHaveBeenCalledTimes(1);
+    assert.equal(loader.mock.callCount(), 1);
     for (const r of results) {
-      expect(r.status).toBe('rejected');
-      expect((r as PromiseRejectedResult).reason).toBe(boom);
+      assert.equal(r.status, 'rejected');
+      assert.equal((r as PromiseRejectedResult).reason, boom);
     }
   });
   it('retries after unusable material too', async () => {
-    const loader = jest
-      .fn<() => Promise<ICertificateMaterial>>()
-      .mockResolvedValueOnce({ cert: pem.cert! })
-      .mockResolvedValue(pem);
+    const loader = mock.fn<() => Promise<ICertificateMaterial>>(
+      async () => pem,
+    );
+    loader.mock.mockImplementationOnce(async () => ({ cert: pem.cert! }), 0);
     const auth = tlsClientCertificate({ material: loader });
     // A client-certificate failure, no longer the class.
-    await expect(auth.authenticate(base)).rejects.toMatchObject({
-      error: { kind: 'client-certificate', facts: { problem: 'incomplete' } },
+    await assert.rejects(auth.authenticate(base), (error) => {
+      matchObject(error, {
+        error: { kind: 'client-certificate', facts: { problem: 'incomplete' } },
+      });
+      return true;
     });
-    await expect(auth.authenticate(base)).resolves.toBeDefined();
+    assert.notEqual(await auth.authenticate(base), undefined);
   });
 });
 
@@ -157,7 +165,7 @@ describe('tlsClientCertificate — its configuration is read once, as a typed co
     const auth = tlsClientCertificate(config);
     config.material = { cert: pem.cert! };
     config.endpoint = 'https://second.example/token';
-    await expect(auth.authenticate(base)).resolves.toEqual({
+    assert.deepEqual(await auth.authenticate(base), {
       endpoint: 'https://first.example/token',
       parameters: { client_id: 'my-client' },
     });
@@ -169,9 +177,10 @@ describe('tlsClientCertificate — its configuration is read once, as a typed co
         return this.pem;
       },
     };
-    await expect(
-      tlsClientCertificate(config).authenticate(base),
-    ).resolves.toBeDefined();
+    assert.notEqual(
+      await tlsClientCertificate(config).authenticate(base),
+      undefined,
+    );
   });
   it('runs an endpoint getter once, at creation', async () => {
     let reads = 0;
@@ -183,10 +192,10 @@ describe('tlsClientCertificate — its configuration is read once, as a typed co
       },
     };
     const auth = tlsClientCertificate(config);
-    expect(reads).toBe(1);
+    assert.equal(reads, 1);
     const sent = await auth.authenticate(withAlias);
-    expect(reads).toBe(1);
-    expect(sent.endpoint).toBe('https://getter.example/token');
+    assert.equal(reads, 1);
+    assert.equal(sent.endpoint, 'https://getter.example/token');
   });
   it('runs a material getter once, at creation', async () => {
     let reads = 0;
@@ -197,9 +206,9 @@ describe('tlsClientCertificate — its configuration is read once, as a typed co
       },
     };
     const auth = tlsClientCertificate(config);
-    expect(reads).toBe(1);
+    assert.equal(reads, 1);
     await auth.authenticate(base);
     await auth.authenticate(base);
-    expect(reads).toBe(1);
+    assert.equal(reads, 1);
   });
 });

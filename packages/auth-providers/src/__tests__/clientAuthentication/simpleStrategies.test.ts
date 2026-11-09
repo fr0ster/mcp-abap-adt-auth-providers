@@ -1,10 +1,12 @@
-import { describe, expect, it } from '@jest/globals';
+import assert from 'node:assert/strict';
+import { describe, it } from 'node:test';
 import { isAuthProviderFailure } from '@mcp-abap-adt/auth-errors';
 import {
   clientSecretBasic,
   clientSecretPost,
   noClientAuthentication,
 } from '../../clientAuthentication';
+import { notContains } from '../helpers/expectations';
 import { refusedWith, wordsOf } from '../helpers/minted';
 
 const draft = {
@@ -16,10 +18,10 @@ const draft = {
 describe('noClientAuthentication', () => {
   it('sends client_id in the body and nothing else', async () => {
     const sent = await noClientAuthentication().authenticate(draft);
-    expect(sent).toEqual({ parameters: { client_id: 'my-client' } });
+    assert.deepEqual(sent, { parameters: { client_id: 'my-client' } });
   });
   it('presents no TLS material', () => {
-    expect(noClientAuthentication().tlsMaterial).toBeUndefined();
+    assert.equal(noClientAuthentication().tlsMaterial, undefined);
   });
 });
 
@@ -31,7 +33,7 @@ describe('clientSecretBasic', () => {
     const sent = await clientSecretBasic('s3+cr%2F:et', {
       encoding: 'raw',
     }).authenticate(draft);
-    expect(sent).toEqual({
+    assert.deepEqual(sent, {
       headers: { Authorization: basic('my-client:s3+cr%2F:et') },
     });
   });
@@ -40,7 +42,7 @@ describe('clientSecretBasic', () => {
     const sent = await clientSecretBasic('a b+%/:', {
       encoding: 'form',
     }).authenticate({ ...draft, clientId: 'my client+:x' });
-    expect(sent).toEqual({
+    assert.deepEqual(sent, {
       headers: { Authorization: basic('my+client%2B%3Ax:a+b%2B%25%2F%3A') },
     });
   });
@@ -54,9 +56,9 @@ describe('clientSecretBasic', () => {
         (error: unknown) => error,
       );
     // An AuthProviderFailure, no longer BasicClientIdError.
-    expect(isAuthProviderFailure(failure)).toBe(true);
-    expect(String((failure as Error).message)).not.toContain('my:client');
-    expect(wordsOf(refusedWith(failure, 'token-request'))).toEqual({
+    assert.equal(isAuthProviderFailure(failure), true);
+    notContains(String((failure as Error).message), 'my:client');
+    assert.deepEqual(wordsOf(refusedWith(failure, 'token-request')), {
       ok: false,
       refusal: {
         reason: "the client id contains ':', which raw Basic cannot carry",
@@ -66,20 +68,21 @@ describe('clientSecretBasic', () => {
   });
 
   it('presents no TLS material', () => {
-    expect(
+    assert.equal(
       clientSecretBasic('x', { encoding: 'raw' }).tlsMaterial,
-    ).toBeUndefined();
+      undefined,
+    );
   });
 });
 
 describe('clientSecretPost', () => {
   it('sends client_id and client_secret in the body and no header', async () => {
     const sent = await clientSecretPost('s3cret').authenticate(draft);
-    expect(sent).toEqual({
+    assert.deepEqual(sent, {
       parameters: { client_id: 'my-client', client_secret: 's3cret' },
     });
   });
   it('presents no TLS material', () => {
-    expect(clientSecretPost('x').tlsMaterial).toBeUndefined();
+    assert.equal(clientSecretPost('x').tlsMaterial, undefined);
   });
 });
