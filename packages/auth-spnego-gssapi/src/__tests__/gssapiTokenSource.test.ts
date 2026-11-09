@@ -1,36 +1,57 @@
-// The source over a replaced binding: `kerberos` is mocked at its import
-// boundary (jest.doMock before the source module is loaded), so nothing native
-// runs. The real binding is loaded only by binding.load.test.ts.
+// The source over a replaced binding: a fake `kerberos` is put in
+// `require.cache` and the source module is loaded afresh after it (each case
+// gets its own copy, so its once-loaded binding starts empty), so nothing
+// native runs. The real binding is loaded only by binding.load.test.ts.
+
+import assert from 'node:assert/strict';
+import { Module } from 'node:module';
 import {
   afterEach,
   beforeEach,
   describe,
-  expect,
   it,
-  jest,
-} from '@jest/globals';
+  type Mock,
+  mock,
+} from 'node:test';
 import type { INegotiateTokenSource } from '@mcp-abap-adt/interfaces-auth';
+import {
+  cases,
+  caseTitle,
+  contains,
+  containsEqual,
+  notContains,
+  thrown,
+} from './helpers/expectations';
 
 const SPNEGO_OID = 6;
 const KRB5_OID = 9;
 const SECRET_TEXT = 'SECRET-CACHE /tmp/krb5cc_secret user@REALM';
 
+type Step = (challenge: string) => Promise<unknown>;
+
 interface FakeBinding {
   GSS_MECH_OID_SPNEGO: number;
   GSS_MECH_OID_KRB5: number;
-  initializeClient: jest.Mock<(...args: any[]) => any>;
-  clients: Array<{ step: jest.Mock<(...args: any[]) => any> }>;
+  initializeClient: Mock<
+    (
+      service: string,
+      options: { mechOID: number },
+    ) => Promise<{ step: Mock<Step> }>
+  >;
+  clients: Array<{ step: Mock<Step> }>;
 }
 
 function fakeBinding(
   step: (challenge: string) => Promise<unknown> = async () => 'YIIBtoken',
 ): FakeBinding {
   const clients: FakeBinding['clients'] = [];
-  const initializeClient = jest.fn<(...args: any[]) => any>(async () => {
-    const client = { step: jest.fn<(...args: any[]) => any>(step) };
-    clients.push(client);
-    return client;
-  });
+  const initializeClient: FakeBinding['initializeClient'] = mock.fn(
+    async () => {
+      const client = { step: mock.fn<Step>(step) };
+      clients.push(client);
+      return client;
+    },
+  );
   return {
     GSS_MECH_OID_SPNEGO: SPNEGO_OID,
     GSS_MECH_OID_KRB5: KRB5_OID,
@@ -41,13 +62,29 @@ function fakeBinding(
 
 type Factory = (options: unknown) => INegotiateTokenSource;
 
+const KERBEROS = require.resolve('kerberos');
+const SOURCE = require.resolve('../gssapiTokenSource');
+
+/**
+ * A fresh copy of the source over `binding`: the fake stands in the cache
+ * for `kerberos` (a function stands for a binding whose load throws), and
+ * the source is dropped from the cache so it loads, and binds, anew.
+ */
 function loadWith(binding: FakeBinding | (() => never)): Factory {
-  jest.resetModules();
-  jest.doMock('kerberos', () =>
-    typeof binding === 'function' ? binding() : binding,
-  );
-  const mod = require('../gssapiTokenSource') as { gssapiTokenSource: Factory };
-  return mod.gssapiTokenSource;
+  const fake = new Module(KERBEROS);
+  fake.filename = KERBEROS;
+  fake.loaded = true;
+  if (typeof binding === 'function') {
+    Object.defineProperty(fake, 'exports', { get: binding });
+  } else {
+    fake.exports = binding;
+  }
+  require.cache[KERBEROS] = fake;
+  delete require.cache[SOURCE];
+  const mod: typeof import('../gssapiTokenSource') = require(SOURCE);
+  // The cases hand it what its type refuses, on purpose: called as it is.
+  return (options) =>
+    Reflect.apply(mod.gssapiTokenSource, undefined, [options]);
 }
 
 /** Runs `fn` with `process.platform` reading `platform`, restored after. */
@@ -65,7 +102,8 @@ async function onPlatform<T>(
 }
 
 afterEach(() => {
-  jest.dontMock('kerberos');
+  delete require.cache[KERBEROS];
+  delete require.cache[SOURCE];
 });
 
 describe('gssapiTokenSource options', () => {
@@ -74,49 +112,70 @@ describe('gssapiTokenSource options', () => {
     factory = loadWith(fakeBinding());
   });
 
-  it.each([
+  for (const [caseIndex, caseRow] of cases([
     [undefined],
     [{}],
     [{ mechanism: undefined }],
     [{ mechanism: 'ntlm' }],
     [{ mechanism: 'SPNEGO' }],
     [{ mechanism: 6 }],
-  ])(
-    'refuses a missing or unknown mechanism (%p), naming only the option',
-    (options) => {
-      let thrown: unknown;
-      try {
-        factory(options);
-      } catch (e) {
-        thrown = e;
-      }
-      expect(thrown).toBeInstanceOf(RangeError);
-      const message = (thrown as RangeError).message;
-      expect(message).toContain('mechanism');
-      expect(message).not.toContain('ntlm');
-      expect(message).not.toContain('SPNEGO');
-    },
-  );
+  ]).entries()) {
+    const [options] = caseRow;
+    it(
+      caseTitle(
+        'refuses a missing or unknown mechanism (%p), naming only the option',
+        caseRow,
+        caseIndex,
+      ),
+      () => {
+        let thrown: unknown;
+        try {
+          factory(options);
+        } catch (e) {
+          thrown = e;
+        }
+        assert.ok(thrown instanceof RangeError);
+        const message = (thrown as RangeError).message;
+        contains(message, 'mechanism');
+        notContains(message, 'ntlm');
+        notContains(message, 'SPNEGO');
+      },
+    );
+  }
 
   it('refuses a mechanism behind an accessor without running it', () => {
-    const getter = jest.fn(() => 'spnego');
+    const getter = mock.fn(() => 'spnego');
     const options = Object.defineProperty({}, 'mechanism', {
       get: getter,
       enumerable: true,
     });
-    expect(() => factory(options)).toThrow(RangeError);
-    expect(getter).not.toHaveBeenCalled();
+    assert.throws(() => factory(options), thrown(RangeError));
+    assert.equal(getter.mock.callCount(), 0);
   });
 
-  it.each(['principal', 'flags', 'mechOID', 'user', 'pass', 'cache'])(
-    'refuses the unknown option %s, naming it',
-    (key) => {
-      expect(() => factory({ mechanism: 'spnego', [key]: 'x' })).toThrow(
-        RangeError,
-      );
-      expect(() => factory({ mechanism: 'spnego', [key]: 'x' })).toThrow(key);
-    },
-  );
+  for (const [caseIndex, caseRow] of [
+    'principal',
+    'flags',
+    'mechOID',
+    'user',
+    'pass',
+    'cache',
+  ].entries()) {
+    const key = caseRow;
+    it(
+      caseTitle('refuses the unknown option %s, naming it', caseRow, caseIndex),
+      () => {
+        assert.throws(
+          () => factory({ mechanism: 'spnego', [key]: 'x' }),
+          thrown(RangeError),
+        );
+        assert.throws(
+          () => factory({ mechanism: 'spnego', [key]: 'x' }),
+          thrown(key),
+        );
+      },
+    );
+  }
 
   it('refuses options it cannot read (a throwing Proxy)', () => {
     const hostile = new Proxy(
@@ -133,77 +192,95 @@ describe('gssapiTokenSource options', () => {
     } catch (e) {
       thrown = e;
     }
-    expect(thrown).toBeInstanceOf(RangeError);
-    expect(String((thrown as Error).message)).not.toContain('SECRET');
+    assert.ok(thrown instanceof RangeError);
+    notContains(String((thrown as Error).message), 'SECRET');
   });
 
-  it.each(['ownKeys', 'getOwnPropertyDescriptor', 'get', 'has'] as const)(
-    'a RangeError carrying a secret from the %s trap is not passed on',
-    (trap) => {
-      const secret = new RangeError(SECRET_TEXT);
-      const hostile = new Proxy(
-        { mechanism: 'spnego' },
-        {
-          [trap]() {
-            throw secret;
+  for (const [caseIndex, caseRow] of (
+    ['ownKeys', 'getOwnPropertyDescriptor', 'get', 'has'] as const
+  ).entries()) {
+    const trap = caseRow;
+    it(
+      caseTitle(
+        'a RangeError carrying a secret from the %s trap is not passed on',
+        caseRow,
+        caseIndex,
+      ),
+      () => {
+        const secret = new RangeError(SECRET_TEXT);
+        const hostile = new Proxy(
+          { mechanism: 'spnego' },
+          {
+            [trap]() {
+              throw secret;
+            },
           },
-        },
-      );
-      let thrown: unknown;
-      try {
-        factory(hostile);
-      } catch (e) {
-        thrown = e;
-      }
-      // A trap the factory never calls throws nothing; one it calls must not
-      // surface the consumer's error or its text.
-      if (thrown !== undefined) {
-        expect(thrown).not.toBe(secret);
-        expect(thrown).toBeInstanceOf(RangeError);
-        expect(String((thrown as Error).message)).not.toContain('SECRET');
-      }
-      if (trap === 'ownKeys' || trap === 'getOwnPropertyDescriptor')
-        expect(thrown).toBeInstanceOf(RangeError);
-    },
-  );
+        );
+        let thrown: unknown;
+        try {
+          factory(hostile);
+        } catch (e) {
+          thrown = e;
+        }
+        // A trap the factory never calls throws nothing; one it calls must not
+        // surface the consumer's error or its text.
+        if (thrown !== undefined) {
+          assert.notEqual(thrown, secret);
+          assert.ok(thrown instanceof RangeError);
+          notContains(String((thrown as Error).message), 'SECRET');
+        }
+        if (trap === 'ownKeys' || trap === 'getOwnPropertyDescriptor')
+          assert.ok(thrown instanceof RangeError);
+      },
+    );
+  }
 
   it('accepts each mechanism', () => {
-    expect(typeof factory({ mechanism: 'spnego' }).token).toBe('function');
-    expect(typeof factory({ mechanism: 'kerberos' }).token).toBe('function');
+    assert.equal(typeof factory({ mechanism: 'spnego' }).token, 'function');
+    assert.equal(typeof factory({ mechanism: 'kerberos' }).token, 'function');
   });
 });
 
 describe('gssapiTokenSource token()', () => {
-  it.each([
+  for (const [caseIndex, caseRow] of cases([
     ['spnego', SPNEGO_OID],
     ['kerberos', KRB5_OID],
-  ])(
-    '%s: initializeClient(principal, { mechOID }), one step(""), the token',
-    async (mechanism, oid) => {
-      const binding = fakeBinding();
-      const source = loadWith(binding)({ mechanism });
-      // The GSS-API form, as on Linux and macOS, whatever OS runs the test.
-      const answer = await onPlatform('linux', () =>
-        source.token('HTTP@sap.example.com', {}),
-      );
-      expect(answer).toEqual({ ok: true, token: 'YIIBtoken' });
-      expect(binding.initializeClient).toHaveBeenCalledTimes(1);
-      expect(binding.initializeClient).toHaveBeenCalledWith(
-        'HTTP@sap.example.com',
-        {
-          mechOID: oid,
-        },
-      );
-      expect(binding.clients[0]?.step).toHaveBeenCalledTimes(1);
-      expect(binding.clients[0]?.step).toHaveBeenCalledWith('');
-    },
-  );
+  ]).entries()) {
+    const [mechanism, oid] = caseRow;
+    it(
+      caseTitle(
+        '%s: initializeClient(principal, { mechOID }), one step(""), the token',
+        caseRow,
+        caseIndex,
+      ),
+      async () => {
+        const binding = fakeBinding();
+        const source = loadWith(binding)({ mechanism });
+        // The GSS-API form, as on Linux and macOS, whatever OS runs the test.
+        const answer = await onPlatform('linux', () =>
+          source.token('HTTP@sap.example.com', {}),
+        );
+        assert.deepEqual(answer, { ok: true, token: 'YIIBtoken' });
+        assert.equal(binding.initializeClient.mock.callCount(), 1);
+        containsEqual(
+          binding.initializeClient.mock.calls.map((call) => call.arguments),
+          ['HTTP@sap.example.com', { mechOID: oid }],
+        );
+        assert.equal(binding.clients[0]?.step.mock.callCount(), 1);
+        containsEqual(
+          binding.clients[0]?.step.mock.calls.map((call) => call.arguments) ??
+            [],
+          [''],
+        );
+      },
+    );
+  }
 
-  it('returns a plain native promise', () => {
+  it('returns a plain native promise', async () => {
     const source = loadWith(fakeBinding())({ mechanism: 'spnego' });
     const answer = source.token('HTTP@sap.example.com', {});
-    expect(Object.getPrototypeOf(answer)).toBe(Promise.prototype);
-    return answer;
+    assert.equal(Object.getPrototypeOf(answer), Promise.prototype);
+    await answer;
   });
 
   it('builds a new client for every call and keeps no token', async () => {
@@ -212,12 +289,12 @@ describe('gssapiTokenSource token()', () => {
     const source = loadWith(binding)({ mechanism: 'spnego' });
     const first = await source.token('HTTP@sap.example.com', {});
     const second = await source.token('HTTP@sap.example.com', {});
-    expect(first).toEqual({ ok: true, token: 'token-1' });
-    expect(second).toEqual({ ok: true, token: 'token-2' });
-    expect(binding.initializeClient).toHaveBeenCalledTimes(2);
-    expect(binding.clients).toHaveLength(2);
-    expect(binding.clients[0]?.step).toHaveBeenCalledTimes(1);
-    expect(binding.clients[1]?.step).toHaveBeenCalledTimes(1);
+    assert.deepEqual(first, { ok: true, token: 'token-1' });
+    assert.deepEqual(second, { ok: true, token: 'token-2' });
+    assert.equal(binding.initializeClient.mock.callCount(), 2);
+    assert.equal(binding.clients.length, 2);
+    assert.equal(binding.clients[0]?.step.mock.callCount(), 1);
+    assert.equal(binding.clients[1]?.step.mock.callCount(), 1);
   });
 
   it('on Windows hands SSPI its form of the name, service/host', async () => {
@@ -227,11 +304,9 @@ describe('gssapiTokenSource token()', () => {
       const binding = fakeBinding();
       const source = loadWith(binding)({ mechanism: 'kerberos' });
       await source.token('HTTP@sap.example.com', {});
-      expect(binding.initializeClient).toHaveBeenCalledWith(
-        'HTTP/sap.example.com',
-        {
-          mechOID: KRB5_OID,
-        },
+      containsEqual(
+        binding.initializeClient.mock.calls.map((call) => call.arguments),
+        ['HTTP/sap.example.com', { mechOID: KRB5_OID }],
       );
     } finally {
       if (platform) Object.defineProperty(process, 'platform', platform);
@@ -245,8 +320,8 @@ describe('gssapiTokenSource token()', () => {
       );
     })({ mechanism: 'spnego' });
     const answer = await source.token('HTTP@sap.example.com', {});
-    expect(answer).toEqual({ ok: false, problem: 'binding-unavailable' });
-    expect(JSON.stringify(answer)).not.toContain('SECRET');
+    assert.deepEqual(answer, { ok: false, problem: 'binding-unavailable' });
+    notContains(JSON.stringify(answer), 'SECRET');
   });
 
   it('answers binding-unavailable when the module carries no initializeClient', async () => {
@@ -255,7 +330,7 @@ describe('gssapiTokenSource token()', () => {
     } as unknown as FakeBinding)({
       mechanism: 'spnego',
     });
-    expect(await source.token('HTTP@sap.example.com', {})).toEqual({
+    assert.deepEqual(await source.token('HTTP@sap.example.com', {}), {
       ok: false,
       problem: 'binding-unavailable',
     });
@@ -266,7 +341,7 @@ describe('gssapiTokenSource token()', () => {
       throw new Error(SECRET_TEXT);
     });
     const source = loadWith(binding)({ mechanism: 'spnego' });
-    expect(await source.token('HTTP@sap.example.com', {})).toEqual({
+    assert.deepEqual(await source.token('HTTP@sap.example.com', {}), {
       ok: false,
       problem: 'source-failed',
     });
@@ -274,11 +349,11 @@ describe('gssapiTokenSource token()', () => {
 
   it('answers source-failed when initializeClient throws synchronously', async () => {
     const binding = fakeBinding();
-    binding.initializeClient.mockImplementation(() => {
+    binding.initializeClient.mock.mockImplementation(() => {
       throw new TypeError(SECRET_TEXT);
     });
     const source = loadWith(binding)({ mechanism: 'spnego' });
-    expect(await source.token('HTTP@sap.example.com', {})).toEqual({
+    assert.deepEqual(await source.token('HTTP@sap.example.com', {}), {
       ok: false,
       problem: 'source-failed',
     });
@@ -288,7 +363,7 @@ describe('gssapiTokenSource token()', () => {
     const source = loadWith(fakeBinding(async () => undefined))({
       mechanism: 'spnego',
     });
-    expect(await source.token('HTTP@sap.example.com', {})).toEqual({
+    assert.deepEqual(await source.token('HTTP@sap.example.com', {}), {
       ok: false,
       problem: 'source-failed',
     });
@@ -298,11 +373,11 @@ describe('gssapiTokenSource token()', () => {
     const binding = fakeBinding();
     const source = loadWith(binding)({ mechanism: 'spnego' });
     const signal = AbortSignal.abort();
-    expect(await source.token('HTTP@sap.example.com', { signal })).toEqual({
+    assert.deepEqual(await source.token('HTTP@sap.example.com', { signal }), {
       ok: false,
       problem: 'source-failed',
     });
-    expect(binding.initializeClient).not.toHaveBeenCalled();
+    assert.equal(binding.initializeClient.mock.callCount(), 0);
   });
 
   it('answers source-failed, the token dropped, when the signal aborts during the call', async () => {
@@ -315,18 +390,18 @@ describe('gssapiTokenSource token()', () => {
     const answer = await source.token('HTTP@sap.example.com', {
       signal: controller.signal,
     });
-    expect(answer).toEqual({ ok: false, problem: 'source-failed' });
-    expect(JSON.stringify(answer)).not.toContain('late-token');
+    assert.deepEqual(answer, { ok: false, problem: 'source-failed' });
+    notContains(JSON.stringify(answer), 'late-token');
   });
 
   it('answers source-failed for a principal that is not a string', async () => {
     const binding = fakeBinding();
     const source = loadWith(binding)({ mechanism: 'spnego' });
-    expect(await source.token(42 as unknown as string, {})).toEqual({
+    assert.deepEqual(await source.token(42 as unknown as string, {}), {
       ok: false,
       problem: 'source-failed',
     });
-    expect(binding.initializeClient).not.toHaveBeenCalled();
+    assert.equal(binding.initializeClient.mock.callCount(), 0);
   });
 
   it('answers source-failed for options it cannot read', async () => {
@@ -337,13 +412,13 @@ describe('gssapiTokenSource token()', () => {
         throw new Error(SECRET_TEXT);
       },
     });
-    expect(await source.token('HTTP@sap.example.com', options)).toEqual({
+    assert.deepEqual(await source.token('HTTP@sap.example.com', options), {
       ok: false,
       problem: 'source-failed',
     });
   });
 
-  it.each([
+  for (const [caseIndex, caseRow] of cases([
     [
       'No credentials were supplied, or the credentials were unavailable or inaccessible: No Kerberos credentials available (default cache: FILE:/tmp/krb5cc_1000)',
       'no-credential',
@@ -360,16 +435,23 @@ describe('gssapiTokenSource token()', () => {
       'Unspecified GSS failure.  Minor code may provide more information: Clock skew too great',
       'clock-skew',
     ],
-  ])(
-    'maps the binding failure "%s" to %s, its text in no answer',
-    async (message, problem) => {
-      const binding = fakeBinding(async () => {
-        throw new Error(message);
-      });
-      const source = loadWith(binding)({ mechanism: 'spnego' });
-      const answer = await source.token('HTTP@sap.example.com', {});
-      expect(answer).toEqual({ ok: false, problem });
-      expect(Object.keys(answer).sort()).toEqual(['ok', 'problem']);
-    },
-  );
+  ]).entries()) {
+    const [message, problem] = caseRow;
+    it(
+      caseTitle(
+        'maps the binding failure "%s" to %s, its text in no answer',
+        caseRow,
+        caseIndex,
+      ),
+      async () => {
+        const binding = fakeBinding(async () => {
+          throw new Error(message);
+        });
+        const source = loadWith(binding)({ mechanism: 'spnego' });
+        const answer = await source.token('HTTP@sap.example.com', {});
+        assert.deepEqual(answer, { ok: false, problem });
+        assert.deepEqual(Object.keys(answer).sort(), ['ok', 'problem']);
+      },
+    );
+  }
 });

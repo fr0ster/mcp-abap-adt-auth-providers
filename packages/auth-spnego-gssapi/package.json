@@ -45,7 +45,7 @@
     "format": "biome format --write src",
     "build": "npm run --silent clean && biome check src --diagnostic-level=error && tsc -p tsconfig.build.json",
     "build:fast": "tsc -p tsconfig.build.json",
-    "test": "npm run --silent test:build && node tools/run-tests.mjs && jest",
+    "test": "npm run --silent test:build && node tools/run-tests.mjs",
     "test:build": "node tools/remove.mjs .test-build && tsc -p tsconfig.test.json",
     "test:file": "npm run --silent test:build && node tools/run-tests.mjs",
     "test:check": "tsc --noEmit",
@@ -60,12 +60,7 @@
   },
   "devDependencies": {
     "@biomejs/biome": "^2.6.3",
-    "@jest/globals": "^30.5.2",
-    "@types/jest": "^30.0.0",
     "@types/node": "^25.9.9",
-    "jest": "^30.5.2",
-    "jest-util": "^30.5.1",
-    "ts-jest": "^29.4.14",
     "typescript": "^5.9.3"
   },
   "allowScripts": {

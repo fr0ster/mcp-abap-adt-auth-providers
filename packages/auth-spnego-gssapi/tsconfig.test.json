@@ -14,10 +14,6 @@
   ],
   "exclude": [
     "node_modules",
-    "dist",
-    "src/**/*.test.ts"
-  ],
-  "files": [
-    "src/__tests__/runner/runTests.test.ts"
+    "dist"
   ]
 }
