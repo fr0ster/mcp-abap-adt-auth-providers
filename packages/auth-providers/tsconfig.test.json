@@ -9,7 +9,9 @@
     "declarationMap": false,
     "noEmitOnError": true
   },
-  "include": ["src/**/*"],
+  "include": [
+    "src/**/*"
+  ],
   "exclude": [
     "node_modules",
     "dist",
@@ -18,6 +20,8 @@
   ],
   "files": [
     "src/__tests__/helpers/noRealBrowser.test.ts",
+    "src/__tests__/helpers/sessionFile.test.ts",
+    "src/__tests__/helpers/wordsOf.test.ts",
     "src/__tests__/runner/guardPreload.test.ts",
     "src/__tests__/runner/runTests.test.ts"
   ]

@@ -57,6 +57,7 @@ import {
   createSignedResponseValidator,
 } from '../../validation/assertionValidator';
 import { createInMemoryReplayStore } from '../../validation/inMemoryReplayStore';
+import { anyOf, stringMatching } from '../helpers/expectations';
 import { getAvailablePort } from '../helpers/netHelpers';
 import { recordingBrowser } from '../helpers/recordingBrowser';
 import {
@@ -307,7 +308,7 @@ const REFUSED_BY_BOTH: Array<[SamlVariant, AssertionRule, SamlExpectation]> = [
   [
     'wrongIssuer',
     'untrusted-issuer',
-    { diagnostics: { issuer: expect.any(String) } },
+    { diagnostics: { issuer: anyOf(String) } },
   ],
   ['notYetValid', 'not-yet-valid', {}],
   ['expired', 'expired', {}],
@@ -333,16 +334,14 @@ const RESPONSE_LEVEL: Array<[SamlVariant, AssertionRule, SamlExpectation]> = [
     'declined',
     {
       facts: {
-        statusCode: expect.stringMatching(
-          /^urn:oasis:names:tc:SAML:2\.0:status:/,
-        ),
+        statusCode: stringMatching(/^urn:oasis:names:tc:SAML:2\.0:status:/),
       },
     },
   ],
   [
     'wrongDestination',
     'destination-not-us',
-    { diagnostics: { destination: expect.any(String) } },
+    { diagnostics: { destination: anyOf(String) } },
   ],
 ];
 

@@ -20,7 +20,7 @@ export interface FakeReader {
 }
 
 export interface FakeTerminal {
-  /** What `jest.doMock('node:readline', …)` should return. */
+  /** The `createInterface` a test puts on `node:readline` with `mock.method`. */
   readonly module: { createInterface: () => unknown };
   /** Every reader created, in order. */
   readonly readers: FakeReader[];
