@@ -57,11 +57,17 @@ gate.
    `require.cache`, per file. A test that proves nothing is fixed and listed for the PR.
 
 6. **auth-providers: the module-mock files** (spec §5, decision 1). The 28 `jest.mock`
-   calls become `mock.method` on the module object. For each mocked module (`axios`,
-   `node:child_process`, `oidcToken`, `oidcDiscovery`, `tokenRefresher`,
-   `saml2TokenExchange`), a pin test proves that the mock replaces what production calls.
-   Mutation: production reads the module through a destructured import, and the pin goes
-   red.
+   calls go:
+   - `axios` becomes `mock.module`, through one helper that works on 22, 24 and 26. The
+     runner passes `--experimental-test-module-mocks` to every test process, and the
+     module under test loads after the mock.
+   - The internal modules and `node:child_process` become `mock.method` on the module
+     object.
+   - `SncSystem`'s `execFile` becomes a plain `mock.fn` assigned before the module loads.
+
+   Each mocked module gets a pin test proving that the mock replaces what production
+   calls. Mutation: the mock installed after the module under test loads (axios), or
+   production reading through a destructured import (`mock.method`); the pin goes red.
 
 7. **auth-providers: the fake-timer files** (spec §6, decision 2). `attemptSignals`,
    `devicePoll` and `noLoginTimeout` move to `mock.timers`, one file per commit. Any case

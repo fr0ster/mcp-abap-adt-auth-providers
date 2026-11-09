@@ -98,16 +98,21 @@ The owner's decisions are in §9.
 
 ## 5. Module mocks
 
-No `jest.mock` survives. What replaces each is §9 decision 1. The facts:
+No `jest.mock` survives. What replaces each is §9 decision 1. The facts (Measured on Node
+22, 24 and 26, plan step 1, unless tagged otherwise):
 
-- Production code reaches axios as a property of the module object at every call
-  (`axios.post`, `axios.get`, `axios(…)` compiled to `(0, axios_1.default)(…)`), and the
-  four internal modules are reached the same way (`oidcToken_1.fn(…)`) (Code: CommonJS
-  emit of `tsc`). A `mock.method` on that module object therefore replaces what production
-  calls, with no production change (Inference; the plan's first step measures it on one
-  axios site and one internal module).
-- `node:test`'s `mock.module` needs `--experimental-test-module-mocks` and is experimental
-  on every supported Node line (Inference).
+- `mock.method` on a module object replaces what production calls where production reads
+  a property of that object at the call: `axios.post` / `axios.get`, and the internal
+  modules (`oidcToken_1.fn(…)`).
+- It does not reach the four `axios(config)` sites (`tokenRequest.ts`, `browserAuth.ts`,
+  `tokenRefresher.ts`, `clientCredentialsAuth.ts`). axios's CommonJS export has no
+  `__esModule`, so `__importDefault` gives each importer its own `{ default: axios }`
+  wrapper and the call goes to the function itself (Code; Measured).
+- `mock.module` with `--experimental-test-module-mocks` replaces axios on every line. Its
+  `defaultExport` option is deprecated on 24 and 26, so the call differs between lines.
+- `SncSystem` captures `promisify(execFile)` when it loads, so neither `mock.method` on
+  `node:child_process` nor on `execFile[promisify.custom]` reaches it. A plain `mock.fn`
+  assigned to `childProcess.execFile` before `SncSystem` loads does.
 - Several suites already prove the wire on a real socket (`refreshAfterDispatch`,
   `tokenRequestRedirect`, `basicCredentialEcho`) (Code).
 
@@ -146,8 +151,19 @@ unproven (Inference). See §9 decision 2.
 
 ## 9. Decisions
 
-1. **A module mock is replaced by `mock.method` on the module object.** No production
-   change and no experimental flag. The plan's first step measures it on one axios site
-   and one internal module before any file moves; a test pins it for each mocked module.
+1. **Module mocks.**
+   - **axios is mocked with `node:test`'s `mock.module`**, under
+     `--experimental-test-module-mocks`, in every file that mocks it. The runner gives
+     the flag to every test process. One test helper makes the call work
+     the same on 22, 24 and 26. The module under test is loaded after the mock is in
+     place. No production change.
+   - **The internal modules and `node:child_process`** are mocked with `mock.method` on
+     the module object, restored in the file's hooks.
+   - **`SncSystem`'s `execFile`** gets a plain `mock.fn`, assigned to
+     `childProcess.execFile` before `SncSystem` loads and restored in `after`.
+   - A pin test for each mocked module proves that the mock replaces what production
+     calls.
 2. **Jest's fake timers are replaced by `node:test`'s `mock.timers`**, measured per file.
    A case `tick` cannot express goes to the owner with its options before it is changed.
+   Measured on one `devicePoll` case: it holds when the test yields one real
+   `setImmediate` before each `tick` (only `setTimeout` mocked).
