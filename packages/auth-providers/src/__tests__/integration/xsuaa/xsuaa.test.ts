@@ -17,10 +17,11 @@
  *   fetched from <xsuaa>/passcode: it is exchanged, and refreshed.
  */
 
+import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { beforeAll, describe, expect, it, jest } from '@jest/globals';
+import { before, describe, it, mock } from 'node:test';
 import { signXml } from '@mcp-abap-adt/auth-mocks';
 import type { IAuthorizationStrategy } from '@mcp-abap-adt/interfaces-auth';
 import { Saml2BearerProvider } from '../../../providers/Saml2BearerProvider';
@@ -29,6 +30,7 @@ import { refreshThenLogin } from '../../../renewal';
 import { staticCodeStrategy } from '../../../strategies';
 import { createSignedAssertionValidator } from '../../../validation/assertionValidator';
 import { defaultReplayStore } from '../../../validation/inMemoryReplayStore';
+import { contains, notContains } from '../../helpers/expectations';
 import { expectSamlRejection } from '../../helpers/samlRefusal';
 
 const LOCAL = process.env.XSUAA_LOCAL;
@@ -67,7 +69,7 @@ const recordingLogger = () => {
 const EXCHANGE_STARTED = '[SAML] Exchanging assertion for token';
 
 const refuseStrategy = () => {
-  const authorize = jest.fn(async () => {
+  const authorize = mock.fn(async () => {
     throw new Error('a refresh must not reach the authorization strategy');
   });
   return {
@@ -83,7 +85,7 @@ describeXsuaa('Providers against a real XSUAA', () => {
   let entityId = '';
   let bearerAcs = '';
 
-  beforeAll(async () => {
+  before(async () => {
     const key = JSON.parse(read('bearer-key.json'));
     credentials = key.credentials ?? key;
     // XSUAA's service provider identity, from its own SAML metadata.
@@ -95,7 +97,7 @@ describeXsuaa('Providers against a real XSUAA', () => {
       /AssertionConsumerService[^>]*bindings:URI"[^>]*Location="([^"]+)"/.exec(
         metadata,
       )?.[1] ?? '';
-    expect(bearerAcs).toMatch(/\/oauth\/token\/alias\//);
+    assert.match(bearerAcs, /\/oauth\/token\/alias\//);
   });
 
   /** A signed Assertion from the test IdP, as XSUAA's trust expects it. */
@@ -152,14 +154,15 @@ describeXsuaa('Providers against a real XSUAA', () => {
     ).getTokens();
 
     // The control for the InResponseTo case: an exchange that happens is seen.
-    expect(messages).toContain(EXCHANGE_STARTED);
+    contains(messages, EXCHANGE_STARTED);
 
     const token = claims(tokens.authorizationToken);
-    expect(token.origin).toBe(ORIGIN);
-    expect(token.grant_type).toBe(
+    assert.equal(token.origin, ORIGIN);
+    assert.equal(
+      token.grant_type,
       'urn:ietf:params:oauth:grant-type:saml2-bearer',
     );
-    expect(tokens.refreshToken).toEqual(expect.any(String));
+    assert.equal(typeof tokens.refreshToken, 'string');
   });
 
   it('Saml2BearerProvider: a whole SAMLResponse is converted and accepted', async () => {
@@ -173,7 +176,7 @@ describeXsuaa('Providers against a real XSUAA', () => {
       Buffer.from(response).toString('base64'),
     ).getTokens();
 
-    expect(claims(tokens.authorizationToken).origin).toBe(ORIGIN);
+    assert.equal(claims(tokens.authorizationToken).origin, ORIGIN);
   });
 
   it('Saml2BearerProvider: a refresh never reaches the strategy', async () => {
@@ -188,8 +191,8 @@ describeXsuaa('Providers against a real XSUAA', () => {
       authorization: strategy,
     }).getTokens();
 
-    expect(authorize).not.toHaveBeenCalled();
-    expect(refreshed.authorizationToken).not.toBe(first.authorizationToken);
+    assert.equal(authorize.mock.callCount(), 0);
+    assert.notEqual(refreshed.authorizationToken, first.authorizationToken);
   });
 
   // Option B: with no request ID expected, an InResponseTo is refused by the
@@ -207,8 +210,8 @@ describeXsuaa('Providers against a real XSUAA', () => {
       { facts: { candidates: [{ reason: 'in-response-to-unexpected' }] } },
     );
 
-    expect(messages).not.toContain(EXCHANGE_STARTED);
-    expect(failures).toEqual([]);
+    notContains(messages, EXCHANGE_STARTED);
+    assert.deepEqual(failures, []);
   });
 
   itWithPasscode(
@@ -221,8 +224,8 @@ describeXsuaa('Providers against a real XSUAA', () => {
         clientSecret: credentials.clientsecret,
         authorization: staticCodeStrategy({ payload: PASSCODE as string }),
       }).getTokens();
-      expect(claims(first.authorizationToken).grant_type).toBe('password');
-      expect(first.refreshToken).toEqual(expect.any(String));
+      assert.equal(claims(first.authorizationToken).grant_type, 'password');
+      assert.equal(typeof first.refreshToken, 'string');
 
       const { authorize, strategy } = refuseStrategy();
       const refreshed = await new UaaPasscodeProvider({
@@ -234,8 +237,8 @@ describeXsuaa('Providers against a real XSUAA', () => {
         refreshToken: first.refreshToken,
         authorization: strategy,
       }).getTokens();
-      expect(authorize).not.toHaveBeenCalled();
-      expect(refreshed.authorizationToken).not.toBe(first.authorizationToken);
+      assert.equal(authorize.mock.callCount(), 0);
+      assert.notEqual(refreshed.authorizationToken, first.authorizationToken);
     },
   );
 });

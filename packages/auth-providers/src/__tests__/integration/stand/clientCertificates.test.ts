@@ -15,12 +15,13 @@
  * by the rule under test — not by the handshake.
  */
 
+import assert from 'node:assert/strict';
 import { createHash, X509Certificate } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { Agent, request } from 'node:https';
 import { join } from 'node:path';
+import { before, describe, it } from 'node:test';
 import { inspect } from 'node:util';
-import { beforeAll, describe, expect, it } from '@jest/globals';
 import type { ICertificateMaterial } from '@mcp-abap-adt/interfaces-auth';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
 import {
@@ -32,7 +33,15 @@ import { ClientCredentialsProvider } from '../../../providers/ClientCredentialsP
 import { OidcDeviceFlowProvider } from '../../../providers/OidcDeviceFlowProvider';
 import { OidcPasswordProvider } from '../../../providers/OidcPasswordProvider';
 import { refreshThenLogin } from '../../../renewal';
+import {
+  cases,
+  caseTitle,
+  contains,
+  matchText,
+  notContains,
+} from '../../helpers/expectations';
 import { wordsOf } from '../../helpers/minted';
+import { PACKAGE_ROOT } from '../../helpers/packagePaths';
 import { recordingTargets } from '../../helpers/targets';
 import { approveDevice } from './formLogin';
 
@@ -43,7 +52,7 @@ const describeUaa = UAA_URL ? describe : describe.skip;
 const unlessSet = (name: string, value: string | undefined): string =>
   value ? '' : ` — skipped: ${name} is not set (npm run test:stand sets it)`;
 
-const TLS = join(__dirname, '../../../../tests/stand/keycloak/tls');
+const TLS = join(PACKAGE_ROOT, 'tests/stand/keycloak/tls');
 const fixture = (name: string): Buffer => readFileSync(join(TLS, name));
 const CLIENT_A: ICertificateMaterial = {
   cert: fixture('client-a.crt'),
@@ -149,7 +158,7 @@ describeKeycloak(
     let userinfoEndpoint = '';
     let deviceEndpoint = '';
 
-    beforeAll(async () => {
+    before(async () => {
       const discovery = (await (
         await fetch(`${issuer}/.well-known/openid-configuration`)
       ).json()) as Record<string, string>;
@@ -159,7 +168,7 @@ describeKeycloak(
     });
 
     it('the stand’s two client certificates differ, so a thumbprint names one', () => {
-      expect(thumbprint(CLIENT_A)).not.toBe(thumbprint(CLIENT_B));
+      assert.notEqual(thumbprint(CLIENT_A), thumbprint(CLIENT_B));
     });
 
     describe('tls_client_auth (client `mtls`, subject CN=client-a,O=stand)', () => {
@@ -177,9 +186,9 @@ describeKeycloak(
         }).getTokens();
 
         const token = claims(tokens.authorizationToken);
-        expect(token.iss).toBe(issuer);
-        expect(token.azp).toBe('mtls');
-        expect(boundTo(tokens.authorizationToken)).toBe(thumbprint(CLIENT_A));
+        assert.equal(token.iss, issuer);
+        assert.equal(token.azp, 'mtls');
+        assert.equal(boundTo(tokens.authorizationToken), thumbprint(CLIENT_A));
       });
 
       it('a token request presenting client-b is refused, in the fixed words', async () => {
@@ -205,12 +214,13 @@ describeKeycloak(
           (error: unknown) => error as Error,
         );
         // The status and the registered code are the failure's facts.
-        expect(thrown?.message).toMatch(/\(HTTP 401, invalid_client\)$/);
-        expect(inspect(thrown, { depth: null })).not.toContain(
+        matchText(thrown?.message, /\(HTTP 401, invalid_client\)$/);
+        notContains(
+          inspect(thrown, { depth: null }),
           'Invalid client or Invalid client credentials',
         );
         // The client credentials request's own words.
-        expect(wordsOf(await provider.prepare())).toEqual({
+        assert.deepEqual(wordsOf(await provider.prepare()), {
           ok: false,
           refusal: {
             reason:
@@ -224,7 +234,7 @@ describeKeycloak(
         let presented: ICertificateMaterial | undefined;
         let authorization = '';
 
-        beforeAll(async () => {
+        before(async () => {
           // A user token with `openid`: userinfo answers 403 to a token
           // without that scope before it looks at the binding.
           const provider = new OidcPasswordProvider({
@@ -238,10 +248,10 @@ describeKeycloak(
           token = (await provider.getTokens()).authorizationToken;
 
           const targets = recordingTargets();
-          expect(await provider.establish(targets.logonTarget)).toEqual({
+          assert.deepEqual(await provider.establish(targets.logonTarget), {
             ok: true,
           });
-          expect(await provider.authorize(targets.requestTarget)).toEqual({
+          assert.deepEqual(await provider.authorize(targets.requestTarget), {
             ok: true,
           });
           [presented] = targets.logon.tls;
@@ -249,12 +259,13 @@ describeKeycloak(
         });
 
         it('establish() hands the logon client-a’s certificate, the one the token is bound to', () => {
-          expect(boundTo(token)).toBe(thumbprint(CLIENT_A));
-          expect(presented).toBeDefined();
-          expect(thumbprint(presented as ICertificateMaterial)).toBe(
+          assert.equal(boundTo(token), thumbprint(CLIENT_A));
+          assert.notEqual(presented, undefined);
+          assert.equal(
+            thumbprint(presented as ICertificateMaterial),
             thumbprint(CLIENT_A),
           );
-          expect(authorization).toBe(`Bearer ${token}`);
+          assert.equal(authorization, `Bearer ${token}`);
         });
 
         it('with that certificate userinfo answers 200 for the token’s user', async () => {
@@ -263,27 +274,35 @@ describeKeycloak(
             headers: { Authorization: authorization },
           });
 
-          expect(answer.status).toBe(200);
-          expect(JSON.parse(answer.body).preferred_username).toBe('tester');
+          assert.equal(answer.status, 200);
+          assert.equal(JSON.parse(answer.body).preferred_username, 'tester');
         });
 
-        it.each([
+        for (const [caseIndex, caseRow] of cases([
           ['no certificate', undefined],
           ['client-b', CLIENT_B],
-        ])(
-          'with %s userinfo refuses the same token as not bound to it',
-          async (_label, material) => {
-            const answer = await send(userinfoEndpoint, {
-              material,
-              headers: { Authorization: authorization },
-            });
+        ]).entries()) {
+          const [_label, material] = caseRow;
+          it(
+            caseTitle(
+              'with %s userinfo refuses the same token as not bound to it',
+              caseRow,
+              caseIndex,
+            ),
+            async () => {
+              const answer = await send(userinfoEndpoint, {
+                material,
+                headers: { Authorization: authorization },
+              });
 
-            expect(answer.status).toBe(401);
-            expect(answer.headers['www-authenticate']).toContain(
-              'Client certificate missing, or its thumbprint and one in the token did NOT match',
-            );
-          },
-        );
+              assert.equal(answer.status, 401);
+              contains(
+                answer.headers['www-authenticate'],
+                'Client certificate missing, or its thumbprint and one in the token did NOT match',
+              );
+            },
+          );
+        }
       });
 
       it('OidcPasswordProvider refreshes over mTLS, and the new token is bound to the same certificate', async () => {
@@ -295,7 +314,7 @@ describeKeycloak(
           scopes: ['openid'],
           clientAuthentication: tlsClientCertificate({ material: CLIENT_A }),
         }).getTokens();
-        expect(boundTo(first.authorizationToken)).toBe(thumbprint(CLIENT_A));
+        assert.equal(boundTo(first.authorizationToken), thumbprint(CLIENT_A));
 
         // A wrong password: a fall back to the password grant would fail, so
         // only a refresh can produce a token here.
@@ -311,11 +330,13 @@ describeKeycloak(
           clientAuthentication: tlsClientCertificate({ material: CLIENT_A }),
         }).getTokens();
 
-        expect(claims(refreshed.authorizationToken).jti).not.toBe(
+        assert.notEqual(
+          claims(refreshed.authorizationToken).jti,
           claims(first.authorizationToken).jti,
         );
-        expect(claims(refreshed.authorizationToken).azp).toBe('mtls');
-        expect(boundTo(refreshed.authorizationToken)).toBe(
+        assert.equal(claims(refreshed.authorizationToken).azp, 'mtls');
+        assert.equal(
+          boundTo(refreshed.authorizationToken),
           thumbprint(CLIENT_A),
         );
       });
@@ -336,9 +357,9 @@ describeKeycloak(
         }).getTokens();
 
         const token = claims(tokens.authorizationToken);
-        expect(token.azp).toBe('jwt');
-        expect(token.preferred_username).toBe('tester');
-        expect(token.cnf).toBeUndefined();
+        assert.equal(token.azp, 'jwt');
+        assert.equal(token.preferred_username, 'tester');
+        assert.equal(token.cnf, undefined);
       });
 
       // Measured 2026-10-04 on Keycloak 26.7.4: the device authorization
@@ -346,7 +367,7 @@ describeKeycloak(
       // This is why the default audience is the draft's tokenEndpoint (5.3.0),
       // not the endpoint the request goes to; `audience` still overrides it.
       it('Keycloak refuses an assertion whose audience is the device endpoint', async () => {
-        expect(deviceEndpoint).toMatch(/^https:/);
+        assert.match(deviceEndpoint, /^https:/);
         const provider = OidcDeviceFlowProvider.toConsole({
           renewal: refreshThenLogin(),
           issuerUrl: issuer,
@@ -367,12 +388,11 @@ describeKeycloak(
           () => undefined,
           (error: unknown) => error as Error,
         );
-        expect(thrown?.message).toBe(
+        assert.equal(
+          thrown?.message,
           'the OIDC device authorization failed (HTTP 400, invalid_client)',
         );
-        expect(inspect(thrown, { depth: null })).not.toContain(
-          'Invalid token audience',
-        );
+        notContains(inspect(thrown, { depth: null }), 'Invalid token audience');
       });
 
       it('the device flow completes with the default audience — the token endpoint, no `audience` given', async () => {
@@ -397,12 +417,13 @@ describeKeycloak(
         }).getTokens();
 
         await approval;
-        expect(approval).toBeDefined();
-        expect(claims(tokens.authorizationToken).azp).toBe('jwt');
-        expect(claims(tokens.authorizationToken).preferred_username).toBe(
+        assert.notEqual(approval, undefined);
+        assert.equal(claims(tokens.authorizationToken).azp, 'jwt');
+        assert.equal(
+          claims(tokens.authorizationToken).preferred_username,
           'tester',
         );
-      }, 60_000);
+      });
     });
 
     describe('X.509 user logon — the CERTRULE analogue (client `x509-login`)', () => {
@@ -423,19 +444,19 @@ describeKeycloak(
           certPath: join(TLS, 'client-a.crt'),
           certKeyPath: join(TLS, 'client-a.key'),
         });
-        expect(await provider.prepare()).toEqual({ ok: true });
+        assert.deepEqual(await provider.prepare(), { ok: true });
         const targets = recordingTargets();
-        expect(await provider.establish(targets.logonTarget)).toEqual({
+        assert.deepEqual(await provider.establish(targets.logonTarget), {
           ok: true,
         });
-        expect(targets.logon.tls).toHaveLength(1);
+        assert.equal(targets.logon.tls.length, 1);
 
         const answer = await logon(targets.logon.tls[0]);
 
-        expect(answer.status).toBe(200);
+        assert.equal(answer.status, 200);
         const token = claims(JSON.parse(answer.body).access_token);
-        expect(token.azp).toBe('x509-login');
-        expect(token.preferred_username).toBe('client-a');
+        assert.equal(token.azp, 'x509-login');
+        assert.equal(token.preferred_username, 'client-a');
       });
 
       it('client-b, mapped to no user, is refused', async () => {
@@ -445,16 +466,16 @@ describeKeycloak(
           certPath: join(TLS, 'client-b.crt'),
           certKeyPath: join(TLS, 'client-b.key'),
         });
-        expect(await provider.prepare()).toEqual({ ok: true });
+        assert.deepEqual(await provider.prepare(), { ok: true });
         const targets = recordingTargets();
-        expect(await provider.establish(targets.logonTarget)).toEqual({
+        assert.deepEqual(await provider.establish(targets.logonTarget), {
           ok: true,
         });
 
         const answer = await logon(targets.logon.tls[0]);
 
-        expect(answer.status).toBe(400);
-        expect(JSON.parse(answer.body)).toEqual({
+        assert.equal(answer.status, 400);
+        assert.deepEqual(JSON.parse(answer.body), {
           error: 'invalid_grant',
           error_description: 'Invalid user credentials',
         });
@@ -463,8 +484,8 @@ describeKeycloak(
       it('no certificate is refused as missing', async () => {
         const answer = await logon(undefined);
 
-        expect(answer.status).toBe(401);
-        expect(JSON.parse(answer.body)).toEqual({
+        assert.equal(answer.status, 401);
+        assert.deepEqual(JSON.parse(answer.body), {
           error: 'invalid_request',
           error_description: 'X509 client certificate is missing.',
         });
@@ -482,7 +503,7 @@ describeUaa(
      * committed configuration names.
      */
     let uaaIssuer = '';
-    beforeAll(async () => {
+    before(async () => {
       const discovery = await fetch(
         `${UAA_URL}/.well-known/openid-configuration`,
       );
@@ -502,9 +523,9 @@ describeUaa(
       }).getTokens();
 
       const token = claims(tokens.authorizationToken);
-      expect(token.iss).toBe(uaaIssuer);
-      expect(token.grant_type).toBe('client_credentials');
-      expect(token.client_id).toBe('jwt_client');
+      assert.equal(token.iss, uaaIssuer);
+      assert.equal(token.grant_type, 'client_credentials');
+      assert.equal(token.client_id, 'jwt_client');
     });
   },
 );

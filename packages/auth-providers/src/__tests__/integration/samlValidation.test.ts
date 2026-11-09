@@ -21,17 +21,10 @@
  *   re-signing.
  */
 
+import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
-import {
-  afterAll,
-  afterEach,
-  beforeAll,
-  beforeEach,
-  describe,
-  expect,
-  it,
-  jest,
-} from '@jest/globals';
+import { after, afterEach, before, beforeEach, describe, it } from 'node:test';
+
 import {
   generateKeyMaterial,
   type KeyMaterial,
@@ -64,8 +57,6 @@ import {
   expectSamlRejection,
   type SamlExpectation,
 } from '../helpers/samlRefusal';
-
-jest.setTimeout(30_000);
 
 /** Which element is signed — by the IdP, and required by the validator. */
 type Signed = 'response' | 'assertion';
@@ -103,7 +94,7 @@ interface Stand {
  */
 const stands = {} as Record<Signed, Stand>;
 
-beforeAll(async () => {
+before(async () => {
   for (const signWhat of ['response', 'assertion'] as const) {
     const port = await getAvailablePort();
     const idp = await startMockSamlIdp({
@@ -117,7 +108,7 @@ beforeAll(async () => {
   }
 });
 
-afterAll(async () => {
+after(async () => {
   for (const stand of Object.values(stands)) await stand.idp.close();
 });
 
@@ -369,7 +360,7 @@ describe('SAML validation end to end against auth-mocks', () => {
           rule,
           expected,
         );
-        await expect(loginWith('assertion', variant)).resolves.toBeDefined();
+        assert.notEqual(await loginWith('assertion', variant), undefined);
       });
     }
   });
@@ -384,27 +375,30 @@ describe('SAML validation end to end against auth-mocks', () => {
           onValidated: (v) => validated.push(v),
         });
 
-        expect(tokens.authorizationToken).toBe(COOKIE);
-        expect(received).toHaveLength(1);
+        assert.equal(tokens.authorizationToken, COOKIE);
+        assert.equal(received.length, 1);
         const xml = decode(received[0]!);
-        expect(firstAttribute(xml, 'Assertion', 'ID')).toBe(
+        assert.equal(
+          firstAttribute(xml, 'Assertion', 'ID'),
           stand.idp.lastAssertionId(),
         );
         // The mock gives Conditions and the bearer confirmation one lifetime;
         // expiresAt is the earlier of the two, so it is that one.
         const conditionsEnd = firstAttribute(xml, 'Conditions', 'NotOnOrAfter');
-        expect(
+        assert.equal(
           firstAttribute(xml, 'SubjectConfirmationData', 'NotOnOrAfter'),
-        ).toBe(conditionsEnd);
-        expect(tokens.expiresAt).toBe(Date.parse(conditionsEnd));
+          conditionsEnd,
+        );
+        assert.equal(tokens.expiresAt, Date.parse(conditionsEnd));
 
         // Which element the signature covered, as the validator reported it.
-        expect(validated).toHaveLength(1);
+        assert.equal(validated.length, 1);
         const signedRoot = new DOMParser().parseFromString(
           validated[0]!.signedXml,
           'text/xml',
         ).documentElement;
-        expect(signedRoot?.localName).toBe(
+        assert.equal(
+          signedRoot?.localName,
           signWhat === 'response' ? 'Response' : 'Assertion',
         );
       });
@@ -435,12 +429,13 @@ describe('SAML validation end to end against auth-mocks', () => {
     it('accepts the re-signed document untouched, in both modes — so a refusal below is the corruption', async () => {
       for (const signWhat of ['response', 'assertion'] as const) {
         const stand = standFor(signWhat, 'unsigned');
-        await expect(
-          login(stand, signWhat, {
+        assert.notEqual(
+          await login(stand, signWhat, {
             certificates: [key.certificatePem],
             browser: tamperingBrowser((xml) => resign(xml, key, signWhat)),
           }),
-        ).resolves.toBeDefined();
+          undefined,
+        );
       }
     });
 
@@ -467,7 +462,7 @@ describe('SAML validation end to end against auth-mocks', () => {
           ),
         },
       );
-      await expect(byAssertion).resolves.toBeDefined();
+      assert.notEqual(await byAssertion, undefined);
     });
   });
 
@@ -481,7 +476,7 @@ describe('SAML validation end to end against auth-mocks', () => {
         stand.idp.repeatLastAssertion();
         await expectSamlRejection(login(stand, signWhat), 'replayed');
         // The mock really did send the same ID again.
-        expect(stand.idp.lastAssertionId()).toBe(first);
+        assert.equal(stand.idp.lastAssertionId(), first);
       });
     }
   });
@@ -537,13 +532,14 @@ describe('SAML validation end to end against auth-mocks', () => {
         const stand = standFor(signWhat);
         await login(stand, signWhat);
         const assertionId = stand.idp.lastAssertionId();
-        expect(assertionId).toBeDefined();
-        await expect(
-          replayStore.recordIfUnseen(
+        assert.notEqual(assertionId, undefined);
+        assert.equal(
+          await replayStore.recordIfUnseen(
             { issuer: ISSUER, assertionId: assertionId as string },
             new Date(Date.now() + 60_000),
           ),
-        ).resolves.toBe(false);
+          false,
+        );
       });
     }
 
@@ -552,15 +548,17 @@ describe('SAML validation end to end against auth-mocks', () => {
     // that proves a store per test.
     const probe = { issuer: 'urn:isolation', assertionId: '_probe' };
     it('leaves a record behind (1 of 2)', async () => {
-      await expect(
-        replayStore.recordIfUnseen(probe, new Date(Date.now() + 60_000)),
-      ).resolves.toBe(true);
+      assert.equal(
+        await replayStore.recordIfUnseen(probe, new Date(Date.now() + 60_000)),
+        true,
+      );
     });
 
     it('does not see the record the previous test left (2 of 2)', async () => {
-      await expect(
-        replayStore.recordIfUnseen(probe, new Date(Date.now() + 60_000)),
-      ).resolves.toBe(true);
+      assert.equal(
+        await replayStore.recordIfUnseen(probe, new Date(Date.now() + 60_000)),
+        true,
+      );
     });
   });
 });

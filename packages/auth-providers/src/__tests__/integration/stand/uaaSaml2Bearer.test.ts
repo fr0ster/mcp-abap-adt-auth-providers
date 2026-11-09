@@ -15,10 +15,11 @@
  * bearer endpoint as the ACS, since that is the Recipient the assertion names.
  */
 
+import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { beforeAll, describe, expect, it, jest } from '@jest/globals';
+import { before, describe, it, mock } from 'node:test';
 import { signXml } from '@mcp-abap-adt/auth-mocks';
 import type { IAuthorizationStrategy } from '@mcp-abap-adt/interfaces-auth';
 import { Saml2BearerProvider } from '../../../providers/Saml2BearerProvider';
@@ -26,6 +27,7 @@ import { refreshThenLogin } from '../../../renewal';
 import { staticCodeStrategy } from '../../../strategies';
 import { createSignedAssertionValidator } from '../../../validation/assertionValidator';
 import { defaultReplayStore } from '../../../validation/inMemoryReplayStore';
+import { PACKAGE_ROOT } from '../../helpers/packagePaths';
 
 const UAA_URL = process.env.UAA_URL?.replace(/\/+$/, '');
 const describeUaa = UAA_URL ? describe : describe.skip;
@@ -42,7 +44,7 @@ let uaaIssuer = '';
  * there, not from the address it happened to reach UAA on.
  */
 let bearerAcs = '';
-beforeAll(async () => {
+before(async () => {
   if (!UAA_URL) return;
   const discovery = await fetch(`${UAA_URL}/.well-known/openid-configuration`);
   uaaIssuer = ((await discovery.json()) as { issuer: string }).issuer;
@@ -51,11 +53,11 @@ beforeAll(async () => {
     /AssertionConsumerService[^>]*bindings:URI"[^>]*Location="([^"]+)"/.exec(
       metadata,
     )?.[1] ?? '';
-  expect(bearerAcs).toMatch(/\/oauth\/token\/alias\//);
+  assert.match(bearerAcs, /\/oauth\/token\/alias\//);
 });
 
 // The test IdP's key: a committed fixture, trusted only by the stand's UAA.
-const IDP = join(__dirname, '../../../../tests/stand/uaa/idp');
+const IDP = join(PACKAGE_ROOT, 'tests/stand/uaa/idp');
 
 /**
  * A bearer assertion as RFC 7522 §2.1 wants it: one signed Assertion,
@@ -161,8 +163,8 @@ describeUaa('Saml2BearerProvider against Cloud Foundry UAA', () => {
       authorization: delivered(bearerAssertion()),
     }).getTokens();
 
-    expect(issuerOf(tokens.authorizationToken)).toBe(uaaIssuer);
-    expect(tokens.refreshToken).toEqual(expect.any(String));
+    assert.equal(issuerOf(tokens.authorizationToken), uaaIssuer);
+    assert.equal(typeof tokens.refreshToken, 'string');
   });
 
   it('spends that refresh token without running the authorization strategy', async () => {
@@ -172,7 +174,7 @@ describeUaa('Saml2BearerProvider against Cloud Foundry UAA', () => {
       authorization: delivered(bearerAssertion()),
     }).getTokens();
 
-    const authorize = jest.fn(async () => {
+    const authorize = mock.fn(async () => {
       throw new Error('the refresh must not reach the authorization strategy');
     });
     const refreshed = await new Saml2BearerProvider({
@@ -183,10 +185,10 @@ describeUaa('Saml2BearerProvider against Cloud Foundry UAA', () => {
       authorization: { authorize } as unknown as IAuthorizationStrategy<string>,
     }).getTokens();
 
-    expect(authorize).not.toHaveBeenCalled();
-    expect(issuerOf(refreshed.authorizationToken)).toBe(uaaIssuer);
-    expect(refreshed.authorizationToken).not.toBe(first.authorizationToken);
-    expect(refreshed.refreshToken).toEqual(expect.any(String));
+    assert.equal(authorize.mock.callCount(), 0);
+    assert.equal(issuerOf(refreshed.authorizationToken), uaaIssuer);
+    assert.notEqual(refreshed.authorizationToken, first.authorizationToken);
+    assert.equal(typeof refreshed.refreshToken, 'string');
   });
 
   // #37: RFC 7522 wants one base64url Assertion. UAA refuses a Response in
@@ -198,8 +200,8 @@ describeUaa('Saml2BearerProvider against Cloud Foundry UAA', () => {
       authorization: delivered(samlResponse()),
     }).getTokens();
 
-    expect(issuerOf(tokens.authorizationToken)).toBe(uaaIssuer);
-    expect(tokens.refreshToken).toEqual(expect.any(String));
+    assert.equal(issuerOf(tokens.authorizationToken), uaaIssuer);
+    assert.equal(typeof tokens.refreshToken, 'string');
   });
 
   it('receives no refresh token when the client may not hold one', async () => {
@@ -209,7 +211,7 @@ describeUaa('Saml2BearerProvider against Cloud Foundry UAA', () => {
       authorization: delivered(bearerAssertion()),
     }).getTokens();
 
-    expect(issuerOf(tokens.authorizationToken)).toBe(uaaIssuer);
-    expect(tokens.refreshToken).toBeUndefined();
+    assert.equal(issuerOf(tokens.authorizationToken), uaaIssuer);
+    assert.equal(tokens.refreshToken, undefined);
   });
 });

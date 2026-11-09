@@ -15,9 +15,11 @@
  * reads a service key.
  */
 
+import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { beforeAll, describe, expect, it } from '@jest/globals';
+import { before, describe, it } from 'node:test';
+
 import { tlsClientCertificate } from '../../../clientAuthentication';
 import {
   ClientCredentialsProvider,
@@ -54,7 +56,7 @@ interface X509Key {
 describeXsuaa(`An x509 service key against a real XSUAA${unlessSet}`, () => {
   let x509: X509Key;
 
-  beforeAll(() => {
+  before(() => {
     // A parse error quotes part of its input — here, part of a private key.
     let key: { credentials?: X509Key } & X509Key;
     try {
@@ -71,16 +73,18 @@ describeXsuaa(`An x509 service key against a real XSUAA${unlessSet}`, () => {
   // the key's material or on a token is made on a boolean projection of it,
   // so a failure never echoes a private key, a certificate or a token.
   it('the key holds a certificate, its key and the mTLS host — and no secret', () => {
-    expect(
+    assert.equal(
       typeof x509.certificate === 'string' &&
         x509.certificate.includes('-----BEGIN CERTIFICATE-----'),
-    ).toBe(true);
-    expect(
+      true,
+    );
+    assert.equal(
       typeof x509.key === 'string' && x509.key.includes('PRIVATE KEY-----'),
-    ).toBe(true);
-    expect(x509.certurl).toMatch(/^https:\/\//);
-    expect(typeof x509.clientid).toBe('string');
-    expect('clientsecret' in x509).toBe(false);
+      true,
+    );
+    assert.match(x509.certurl, /^https:\/\//);
+    assert.equal(typeof x509.clientid, 'string');
+    assert.equal('clientsecret' in x509, false);
   });
 
   it('ClientCredentialsProvider gets a client token over mTLS at certurl, with no secret anywhere', async () => {
@@ -96,15 +100,15 @@ describeXsuaa(`An x509 service key against a real XSUAA${unlessSet}`, () => {
       }),
     };
     // The client authenticates with its certificate: no secret is given.
-    expect('clientSecret' in config).toBe(false);
+    assert.equal('clientSecret' in config, false);
 
     const provider = new ClientCredentialsProvider(config);
-    expect(await provider.prepare()).toEqual({ ok: true });
+    assert.deepEqual(await provider.prepare(), { ok: true });
 
     // prepare() obtained the token; getTokens() hands back the one it holds.
     // Only the claims are read and compared — never the token itself.
     const token = claims((await provider.getTokens()).authorizationToken);
-    expect(token.client_id ?? token.cid).toBe(x509.clientid);
-    expect(token.grant_type).toBe('client_credentials');
+    assert.equal(token.client_id ?? token.cid, x509.clientid);
+    assert.equal(token.grant_type, 'client_credentials');
   });
 });

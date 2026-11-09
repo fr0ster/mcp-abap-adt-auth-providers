@@ -6,7 +6,8 @@
  * login goes through UAA's own login form, played by formLogin.ts.
  */
 
-import { beforeAll, describe, expect, it, jest } from '@jest/globals';
+import assert from 'node:assert/strict';
+import { before, describe, it, mock } from 'node:test';
 import { readFailure } from '@mcp-abap-adt/auth-errors';
 import type { IAuthorizationStrategy } from '@mcp-abap-adt/interfaces-auth';
 import {
@@ -22,6 +23,7 @@ import { AuthorizationCodeProvider } from '../../../providers/AuthorizationCodeP
 import { ClientCredentialsProvider } from '../../../providers/ClientCredentialsProvider';
 import { refreshThenLogin } from '../../../renewal';
 import { externalCodeStrategy } from '../../../strategies';
+import { matchObject } from '../../helpers/expectations';
 import { authorizeByForm } from './formLogin';
 
 const UAA_URL = process.env.UAA_URL?.replace(/\/+$/, '');
@@ -33,7 +35,7 @@ const describeUaa = UAA_URL ? describe : describe.skip;
  * configuration names.
  */
 let uaaIssuer = '';
-beforeAll(async () => {
+before(async () => {
   if (!UAA_URL) return;
   const discovery = await fetch(`${UAA_URL}/.well-known/openid-configuration`);
   uaaIssuer = ((await discovery.json()) as { issuer: string }).issuer;
@@ -62,9 +64,9 @@ describeUaa('UAA providers against Cloud Foundry UAA', () => {
     }).getTokens();
 
     const token = claims(tokens.authorizationToken);
-    expect(token.iss).toBe(uaaIssuer);
-    expect(token.grant_type).toBe('client_credentials');
-    expect(token.client_id).toBe('cc_client');
+    assert.equal(token.iss, uaaIssuer);
+    assert.equal(token.grant_type, 'client_credentials');
+    assert.equal(token.client_id, 'cc_client');
   });
 
   describe('AuthorizationCodeProvider', () => {
@@ -90,9 +92,13 @@ describeUaa('UAA providers against Cloud Foundry UAA', () => {
           redirectUri: CALLBACK,
           provide: async (url) => {
             const sent = new URL(url);
-            expect(sent.searchParams.get('code_challenge_method')).toBe('S256');
-            expect(sent.searchParams.get('code_challenge')).toEqual(
-              expect.any(String),
+            assert.equal(
+              sent.searchParams.get('code_challenge_method'),
+              'S256',
+            );
+            assert.equal(
+              typeof sent.searchParams.get('code_challenge'),
+              'string',
             );
             const back = await authorizeByForm(url, CALLBACK, USER);
             states.push({
@@ -103,15 +109,15 @@ describeUaa('UAA providers against Cloud Foundry UAA', () => {
           },
         }),
       }).getTokens();
-      expect(states).toHaveLength(1);
-      expect(states[0]?.sent).toEqual(expect.any(String));
-      expect(states[0]?.back).toBe(states[0]?.sent);
+      assert.equal(states.length, 1);
+      assert.equal(typeof states[0]?.sent, 'string');
+      assert.equal(states[0]?.back, states[0]?.sent);
 
       const token = claims(tokens.authorizationToken);
-      expect(token.iss).toBe(uaaIssuer);
-      expect(token.grant_type).toBe('authorization_code');
-      expect(token.user_name).toBe('tester');
-      expect(tokens.refreshToken).toEqual(expect.any(String));
+      assert.equal(token.iss, uaaIssuer);
+      assert.equal(token.grant_type, 'authorization_code');
+      assert.equal(token.user_name, 'tester');
+      assert.equal(typeof tokens.refreshToken, 'string');
     });
 
     describe('PKCE', () => {
@@ -143,7 +149,7 @@ describeUaa('UAA providers against Cloud Foundry UAA', () => {
           undefined,
           verifier,
         );
-        expect(claims(tokens.accessToken).user_name).toBe('tester');
+        assert.equal(claims(tokens.accessToken).user_name, 'tester');
       });
 
       // Through the provider, as a login runs: the strategy builds two URLs
@@ -169,7 +175,7 @@ describeUaa('UAA providers against Cloud Foundry UAA', () => {
         })
           .getTokens()
           .catch((e: unknown) => e);
-        expect(readFailure(thrown, 'code-exchange')).toMatchObject({
+        matchObject(readFailure(thrown, 'code-exchange'), {
           kind: 'request-failed',
           facts: { problem: 'refused' },
         });
@@ -182,7 +188,7 @@ describeUaa('UAA providers against Cloud Foundry UAA', () => {
           code,
           CALLBACK,
         ).catch((e: unknown) => e);
-        expect(readFailure(thrown, 'code-exchange')).toMatchObject({
+        matchObject(readFailure(thrown, 'code-exchange'), {
           kind: 'request-failed',
           facts: { problem: 'refused' },
         });
@@ -198,7 +204,7 @@ describeUaa('UAA providers against Cloud Foundry UAA', () => {
         authorization: loginThroughUaa(),
       }).getTokens();
 
-      const authorize = jest.fn(async () => {
+      const authorize = mock.fn(async () => {
         throw new Error(
           'the refresh must not reach the authorization strategy',
         );
@@ -215,14 +221,15 @@ describeUaa('UAA providers against Cloud Foundry UAA', () => {
         } as unknown as IAuthorizationStrategy<string>,
       }).getTokens();
 
-      expect(authorize).not.toHaveBeenCalled();
+      assert.equal(authorize.mock.callCount(), 0);
       // UAA keeps the original grant_type in a refreshed token, so the new
       // token is told apart by being new, not by its grant type.
-      expect(refreshed.authorizationToken).not.toBe(first.authorizationToken);
-      expect(claims(refreshed.authorizationToken).jti).not.toBe(
+      assert.notEqual(refreshed.authorizationToken, first.authorizationToken);
+      assert.notEqual(
+        claims(refreshed.authorizationToken).jti,
         claims(first.authorizationToken).jti,
       );
-      expect(claims(refreshed.authorizationToken).user_name).toBe('tester');
+      assert.equal(claims(refreshed.authorizationToken).user_name, 'tester');
     });
   });
 });
