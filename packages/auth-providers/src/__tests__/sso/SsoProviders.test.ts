@@ -503,9 +503,10 @@ describe('SSO Providers', () => {
    * The device code and verification URI are prompts, not log lines — a user
    * who cannot see them cannot complete the flow. They must reach the logger
    * when one is supplied and stderr otherwise, and never stdout, which
-   * carries protocol traffic under an MCP or LSP stdio transport.
+   * carries protocol traffic under an MCP or LSP stdio transport (checked
+   * statically: noStdoutSources.test.ts).
    */
-  it('OidcDeviceFlowProvider prompts on stderr and writes nothing to stdout', async () => {
+  it('OidcDeviceFlowProvider prompts on stderr', async () => {
     mockInitiateDevice.mock.mockImplementation(async () => ({
       deviceCode: 'dev-code',
       userCode: 'USER-CODE-FIXTURE',
@@ -518,12 +519,7 @@ describe('SSO Providers', () => {
       expiresIn: 1200,
     }));
 
-    const out: string[] = [];
     const err: string[] = [];
-    const outSpy = mock.method(process.stdout, 'write', (chunk: unknown) => {
-      out.push(String(chunk));
-      return true;
-    });
     const errSpy = mock.method(process.stderr, 'write', (chunk: unknown) => {
       err.push(String(chunk));
       return true;
@@ -538,10 +534,8 @@ describe('SSO Providers', () => {
       });
       await provider.getTokens();
     } finally {
-      outSpy.mock.restore();
       errSpy.mock.restore();
     }
-    assert.deepEqual(out, []);
     contains(err.join(''), 'USER-CODE-FIXTURE');
     contains(err.join(''), 'https://verify.example');
   });
