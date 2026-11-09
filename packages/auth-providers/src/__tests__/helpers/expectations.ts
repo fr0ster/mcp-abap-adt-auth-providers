@@ -70,14 +70,14 @@ export function notMatchObject(
 
 /** A string holds the fragment, or an array the item (`===`, as Jest's `toContain`). */
 export function contains(
-  haystack: string | readonly unknown[] | undefined,
+  haystack: unknown,
   needle: unknown,
   message?: string,
 ): void {
-  if (haystack === undefined) {
+  if (typeof haystack !== 'string' && !Array.isArray(haystack)) {
     assert.fail(
       message ??
-        `expected a string or an array to contain ${format('%o', needle)}, got undefined`,
+        `expected a string or an array to contain ${format('%o', needle)}, got ${format('%o', haystack)}`,
     );
   }
   const found =
@@ -94,14 +94,14 @@ export function contains(
 
 /** A string does not hold the fragment, nor an array the item. */
 export function notContains(
-  haystack: string | readonly unknown[] | undefined,
+  haystack: unknown,
   needle: unknown,
   message?: string,
 ): void {
-  if (haystack === undefined) {
+  if (typeof haystack !== 'string' && !Array.isArray(haystack)) {
     assert.fail(
       message ??
-        `expected a string or an array not to contain ${format('%o', needle)}, got undefined`,
+        `expected a string or an array not to contain ${format('%o', needle)}, got ${format('%o', haystack)}`,
     );
   }
   const found =
@@ -360,6 +360,34 @@ export function deepEqualWith(
     assert.fail(
       message ??
         `expected ${format('%o', actual)} to equal ${format('%o', expected)}`,
+    );
+  }
+}
+
+/** A placeholder for a string holding the fragment, as Jest's `expect.stringContaining`. */
+export function stringContaining(fragment: string): Placeholder {
+  return new Placeholder(
+    `a string containing ${format('%o', fragment)}`,
+    (value) => typeof value === 'string' && value.includes(fragment),
+  );
+}
+
+/**
+ * Some call of the mock had these arguments, its placeholders accepting what
+ * they check: Jest's `toHaveBeenCalledWith`.
+ */
+export function calledWith(
+  fn: {
+    readonly mock: {
+      readonly calls: readonly { readonly arguments: readonly unknown[] }[];
+    };
+  },
+  ...expected: unknown[]
+): void {
+  const calls = fn.mock.calls.map((call) => call.arguments);
+  if (!calls.some((args) => equalWith(args, expected))) {
+    assert.fail(
+      `expected a call with ${format('%o', expected)}, got ${format('%o', calls)}`,
     );
   }
 }
