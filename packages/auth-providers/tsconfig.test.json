@@ -53,6 +53,8 @@
     "src/__tests__/clientAuthentication/privateKeyJwt.test.ts",
     "src/__tests__/clientAuthentication/simpleStrategies.test.ts",
     "src/__tests__/clientAuthentication/tlsClientCertificate.test.ts",
+    "src/__tests__/contract/collaboratorThenables.test.ts",
+    "src/__tests__/contract/rule1.test.ts",
     "src/__tests__/helpers/noRealBrowser.test.ts",
     "src/__tests__/helpers/sessionFile.test.ts",
     "src/__tests__/helpers/wordsOf.test.ts",
