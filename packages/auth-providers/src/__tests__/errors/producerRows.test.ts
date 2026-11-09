@@ -7,9 +7,10 @@
  * `token endpoint said` line.
  */
 
+import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { describe, expect, it } from '@jest/globals';
+import { describe, it } from 'node:test';
 import {
   isAuthProviderFailure,
   isMinted,
@@ -36,9 +37,16 @@ import { ClientCredentialsProvider } from '../../providers/ClientCredentialsProv
 import { refreshThenLogin } from '../../renewal';
 import { createSignedResponseValidator } from '../../validation/assertionValidator';
 import { createInMemoryReplayStore } from '../../validation/inMemoryReplayStore';
+import {
+  cases,
+  caseTitle,
+  matchObject,
+  notContains,
+} from '../helpers/expectations';
 import { mintedRefusal } from '../helpers/minted';
+import { CERTIFICATES } from '../helpers/packagePaths';
 
-const FIXTURES = join(__dirname, '..', 'fixtures', 'certificates');
+const FIXTURES = CERTIFICATES;
 const read = (name: string) => readFileSync(join(FIXTURES, name));
 const MARKER = 'PRODUCER-MARKER';
 
@@ -53,11 +61,11 @@ async function thrownBy(run: () => unknown): Promise<unknown> {
 
 /** A failure of this copy, its minted error, and no class of this package. */
 function failureError(thrown: unknown): IAuthProviderError {
-  expect(isAuthProviderFailure(thrown)).toBe(true);
-  expect((thrown as Error).constructor.name).toBe('AuthProviderFailure');
+  assert.equal(isAuthProviderFailure(thrown), true);
+  assert.equal((thrown as Error).constructor.name, 'AuthProviderFailure');
   const error = readFailure(thrown, 'unfamiliar-error');
-  expect(isMinted(error)).toBe(true);
-  expect(JSON.stringify(error)).not.toContain(MARKER);
+  assert.equal(isMinted(error), true);
+  notContains(JSON.stringify(error), MARKER);
   return error;
 }
 
@@ -86,7 +94,7 @@ describe('the SAML refusal', () => {
         } as never),
       ),
     );
-    expect(error).toMatchObject({
+    matchObject(error, {
       kind: 'saml-assertion',
       facts: { rule: 'doctype', check: 'document' },
       reason:
@@ -122,28 +130,34 @@ describe('client-certificate', () => {
     ['expired', () => ({ cert: read('expired.crt'), key: read('client.key') })],
   ];
 
-  it.each(cases)(
-    '%s — assertCertificateMaterial throws the failure, checkCertificateMaterial answers it',
-    async (problem, material) => {
-      const thrown = failureError(
-        await thrownBy(() => assertCertificateMaterial(material())),
-      );
-      const expected = {
-        kind: 'client-certificate',
-        facts: { problem },
-        ...CERTIFICATE_WORDS[problem],
-      };
-      expect(thrown).toMatchObject(expected);
-      expect(mintedRefusal(checkCertificateMaterial(material()))).toMatchObject(
-        expected,
-      );
-    },
-  );
+  for (const [caseIndex, caseRow] of cases.entries()) {
+    const [problem, material] = caseRow;
+    it(
+      caseTitle(
+        '%s — assertCertificateMaterial throws the failure, checkCertificateMaterial answers it',
+        caseRow,
+        caseIndex,
+      ),
+      async () => {
+        const thrown = failureError(
+          await thrownBy(() => assertCertificateMaterial(material())),
+        );
+        const expected = {
+          kind: 'client-certificate',
+          facts: { problem },
+          ...CERTIFICATE_WORDS[problem],
+        };
+        matchObject(thrown, expected);
+        matchObject(
+          mintedRefusal(checkCertificateMaterial(material())),
+          expected,
+        );
+      },
+    );
+  }
 
   it('certificateThumbprint of incomplete material', async () => {
-    expect(
-      failureError(await thrownBy(() => certificateThumbprint({}))),
-    ).toMatchObject({
+    matchObject(failureError(await thrownBy(() => certificateThumbprint({}))), {
       kind: 'client-certificate',
       facts: { problem: 'incomplete' },
     });
@@ -159,9 +173,7 @@ describe('client-certificate', () => {
         tlsMaterial: async () => undefined as never,
       },
     });
-    expect(
-      failureError(await thrownBy(() => provider.getTokens())),
-    ).toMatchObject({
+    matchObject(failureError(await thrownBy(() => provider.getTokens())), {
       kind: 'client-certificate',
       facts: { problem: 'incomplete' },
       ...CERTIFICATE_WORDS.incomplete,
@@ -185,7 +197,7 @@ describe('client-authentication', () => {
         ),
       ),
     );
-    expect(error).toMatchObject({
+    matchObject(error, {
       kind: 'client-authentication',
       facts: { problem: 'result-unsendable' },
       reason:
@@ -194,23 +206,26 @@ describe('client-authentication', () => {
     });
   });
 
-  it.each([
+  for (const [caseIndex, caseRow] of cases([
     ['not a key', () => privateKeyJwt({ key: MARKER, algorithm: 'RS256' })],
     [
       'a key of another algorithm',
       () => privateKeyJwt({ key: read('client.key'), algorithm: 'ES256' }),
     ],
-  ])('A6: privateKeyJwt with %s', async (_name, make) => {
-    const error = failureError(
-      await thrownBy(() => make().authenticate(DRAFT as never)),
-    );
-    expect(error).toMatchObject({
-      kind: 'client-authentication',
-      facts: { problem: 'signing-key-unusable' },
-      reason: 'the client signing key could not be used',
-      hint: 'check the private key and that it matches the algorithm',
+  ]).entries()) {
+    const [_name, make] = caseRow;
+    it(caseTitle('A6: privateKeyJwt with %s', caseRow, caseIndex), async () => {
+      const error = failureError(
+        await thrownBy(() => make().authenticate(DRAFT as never)),
+      );
+      matchObject(error, {
+        kind: 'client-authentication',
+        facts: { problem: 'signing-key-unusable' },
+        reason: 'the client signing key could not be used',
+        hint: 'check the private key and that it matches the algorithm',
+      });
     });
-  });
+  }
 
   it('raw clientSecretBasic with a client id containing a colon', async () => {
     const error = failureError(
@@ -221,7 +236,7 @@ describe('client-authentication', () => {
         } as never),
       ),
     );
-    expect(error).toMatchObject({
+    matchObject(error, {
       kind: 'client-authentication',
       facts: { problem: 'basic-client-id-colon' },
       reason: "the client id contains ':', which raw Basic cannot carry",
@@ -279,18 +294,18 @@ describe('the debug line of a refused token request', () => {
     const thrown = await thrownBy(() =>
       sendTokenRequest(undefined, refused, site(logger, false)),
     );
-    expect(failureError(thrown)).toMatchObject({
+    matchObject(failureError(thrown), {
       kind: 'request-failed',
       facts: { operation: 'token-refresh', problem: 'refused', status: 400 },
     });
-    expect(lines).toEqual([
+    assert.deepEqual(lines, [
       [
         'debug',
         'the token refresh: the token endpoint refused the request',
         { status: 400, error: 'invalid_grant' },
       ],
     ]);
-    expect(JSON.stringify(lines)).not.toContain(SECRET.slice(4, -4));
+    notContains(JSON.stringify(lines), SECRET.slice(4, -4));
   });
 
   it('with authDebug, the token endpoint said line and the prepared secrets', async () => {
@@ -298,7 +313,7 @@ describe('the debug line of a refused token request', () => {
     await thrownBy(() =>
       sendTokenRequest(undefined, refused, site(logger, true)),
     );
-    expect(lines).toEqual([
+    assert.deepEqual(lines, [
       [
         'debug',
         '[token-refresh] token endpoint said',
@@ -309,6 +324,6 @@ describe('the debug line of a refused token request', () => {
         },
       ],
     ]);
-    expect(JSON.stringify(lines)).not.toContain(MARKER);
+    notContains(JSON.stringify(lines), MARKER);
   });
 });

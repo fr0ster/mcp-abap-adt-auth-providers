@@ -8,8 +8,9 @@
  * validators' brand is read guarded, so a throwing Proxy is not a shipped one.
  */
 
+import assert from 'node:assert/strict';
+import { describe, it } from 'node:test';
 import { inspect } from 'node:util';
-import { describe, expect, it } from '@jest/globals';
 import { isAuthProviderFailure } from '@mcp-abap-adt/auth-errors';
 import { composeAuthorization } from '../../authorization/compose';
 import {
@@ -37,6 +38,7 @@ import { SpnegoAuthProvider } from '../../spnego/SpnegoAuthProvider';
 import { browserCallbackStrategy } from '../../strategies/callbackStrategies';
 import { externalCodeStrategy } from '../../strategies/codeStrategies';
 import { manualPasteStrategy } from '../../strategies/manualStrategies';
+import { notContains } from '../helpers/expectations';
 
 const SECRET = 'HOSTILE-OPTION-SECRET-41';
 const boom = () => {
@@ -58,11 +60,12 @@ function thrownBy(make: () => unknown): unknown {
 
 function expectConfigurationOrNothing(thrown: unknown): void {
   if (thrown === undefined) return;
-  expect(isAuthProviderFailure(thrown)).toBe(true);
-  expect((thrown as { error: { kind: string } }).error.kind).toBe(
+  assert.equal(isAuthProviderFailure(thrown), true);
+  assert.equal(
+    (thrown as { error: { kind: string } }).error.kind,
     'configuration',
   );
-  expect(inspect(thrown, { showHidden: true, depth: 8 })).not.toContain(SECRET);
+  notContains(inspect(thrown, { showHidden: true, depth: 8 }), SECRET);
 }
 
 /**

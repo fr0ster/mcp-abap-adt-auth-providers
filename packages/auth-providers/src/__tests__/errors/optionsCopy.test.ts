@@ -5,8 +5,10 @@
  * data that never ran a getter read it as absent: the count was 0.)
  */
 
+import assert from 'node:assert/strict';
 import { generateKeyPairSync } from 'node:crypto';
-import { describe, expect, it } from '@jest/globals';
+import { describe, it } from 'node:test';
+
 import type { INegotiateTokenSource } from '@mcp-abap-adt/interfaces-auth';
 import { composeAuthorization } from '../../authorization/compose';
 import { oauthCode } from '../../authorization/protocol';
@@ -48,7 +50,7 @@ describe('options getter runs once, at creation', () => {
       'clientId',
     );
     const provider = new ClientCredentialsProvider(options);
-    expect(reads()).toBe(1);
+    assert.equal(reads(), 1);
     // A moment: a logon decides on the token held and obtains nothing.
     await provider.establish({
       header: () => ({ ok: true }),
@@ -56,7 +58,7 @@ describe('options getter runs once, at creation', () => {
       logonParameters: () => ({ ok: true }),
       tlsMaterial: () => ({ ok: true }),
     } as never);
-    expect(reads()).toBe(1);
+    assert.equal(reads(), 1);
   });
 
   it('composeAuthorization', async () => {
@@ -74,7 +76,7 @@ describe('options getter runs once, at creation', () => {
       'endpoint',
     );
     const strategy = composeAuthorization(options);
-    expect(reads()).toBe(1);
+    assert.equal(reads(), 1);
     const aborted = AbortSignal.abort();
     await strategy
       .authorize({
@@ -83,7 +85,7 @@ describe('options getter runs once, at creation', () => {
         signal: aborted,
       } as never)
       .catch(() => undefined);
-    expect(reads()).toBe(1);
+    assert.equal(reads(), 1);
   });
 
   it('privateKeyJwt', async () => {
@@ -93,13 +95,13 @@ describe('options getter runs once, at creation', () => {
       'algorithm',
     );
     const authentication = privateKeyJwt(options);
-    expect(reads()).toBe(1);
+    assert.equal(reads(), 1);
     await authentication.authenticate({
       endpoint: 'https://uaa.example/oauth/token',
       clientId: 'c',
       grantType: 'client_credentials',
     } as never);
-    expect(reads()).toBe(1);
+    assert.equal(reads(), 1);
   });
 
   it('SpnegoAuthProvider', async () => {
@@ -111,8 +113,8 @@ describe('options getter runs once, at creation', () => {
       'servicePrincipal',
     );
     const provider = new SpnegoAuthProvider(options);
-    expect(reads()).toBe(1);
+    assert.equal(reads(), 1);
     await provider.prepare();
-    expect(reads()).toBe(1);
+    assert.equal(reads(), 1);
   });
 });
