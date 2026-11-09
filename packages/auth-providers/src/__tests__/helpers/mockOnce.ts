@@ -22,42 +22,61 @@ export function once<F extends (...args: never[]) => unknown>(
   queued.set(fn, next + 1);
 }
 
+/** An answer that does nothing: what a dropped one-time answer is replaced by. */
+const nothing = (): undefined => undefined;
+
+/**
+ * Drops every one-time answer queued on `fn` that no call took, and answers
+ * how many there were. node keeps such an answer keyed by its call number,
+ * and nothing removes it: after `resetCalls()` it would answer a later call.
+ * So each one is first replaced by an answer that does nothing (a one-time
+ * answer for the same call number), and then taken by a call — the mock's
+ * calls are forgotten right after, by the caller.
+ */
+function dropPending<F extends (...args: never[]) => unknown>(
+  fn: Mock<F>,
+): number {
+  const from = fn.mock.callCount();
+  const to = queued.get(fn) ?? 0;
+  queued.delete(fn);
+  for (let call = from; call < to; call += 1) {
+    Reflect.apply(fn.mock.mockImplementationOnce, fn.mock, [nothing, call]);
+  }
+  for (let call = from; call < to; call += 1) Reflect.apply(fn, undefined, []);
+  return Math.max(0, to - from);
+}
+
 /**
  * Forgets a mock's calls and its implementation: Jest's `mockReset`. The
- * mock answers as when it was made.
- *
- * node keeps a one-time answer no call took, keyed by its call number, past
- * `resetCalls()`, and nothing removes it: after the reset it would answer a
- * later call. Jest dropped it. So a reset with a one-time answer still
- * queued fails, naming the mock's state, instead of letting it answer.
+ * mock answers as when it was made. A one-time answer no call took is
+ * dropped first, then reported: the reset fails, naming how many, but the
+ * mock is clean either way, so the next test's reset does not fail on it.
  */
 export function resetMock<F extends (...args: never[]) => unknown>(
   fn: Mock<F>,
 ): void {
-  const pending = (queued.get(fn) ?? 0) - fn.mock.callCount();
-  assert.ok(
-    pending <= 0,
-    `a reset with ${pending} one-time answer(s) no call took`,
-  );
+  const pending = dropPending(fn);
   fn.mock.resetCalls();
   fn.mock.restore();
-  queued.delete(fn);
+  assert.equal(
+    pending,
+    0,
+    `a reset with ${pending} one-time answer(s) no call took`,
+  );
 }
 
 /**
  * Forgets a mock's calls, its implementation kept: Jest's `mockClear`. A
- * one-time answer still queued fails it, as in `resetMock`: node keys it by
- * call number, so after the calls are forgotten it would answer a later
- * call than the one it was queued for.
+ * one-time answer no call took is dropped and reported, as in `resetMock`.
  */
 export function clearMock<F extends (...args: never[]) => unknown>(
   fn: Mock<F>,
 ): void {
-  const pending = (queued.get(fn) ?? 0) - fn.mock.callCount();
-  assert.ok(
-    pending <= 0,
+  const pending = dropPending(fn);
+  fn.mock.resetCalls();
+  assert.equal(
+    pending,
+    0,
     `a clear with ${pending} one-time answer(s) no call took`,
   );
-  fn.mock.resetCalls();
-  queued.delete(fn);
 }
