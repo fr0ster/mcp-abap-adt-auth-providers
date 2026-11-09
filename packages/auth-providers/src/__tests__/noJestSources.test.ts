@@ -1,7 +1,7 @@
 /**
- * The tests run on node:test: no file in src (tests included) imports a
- * Jest package or uses Jest's API, and neither package's manifest names one
- * nor keeps a Jest configuration. Checked over the TypeScript AST, so a
+ * The tests run on node:test: no file in either package's src (tests
+ * included) imports a Jest package or uses Jest's API, and neither package's
+ * manifest names one nor keeps a Jest configuration. Checked over the TypeScript AST, so a
  * word in a comment is no finding and a use is one however it is written.
  */
 
@@ -81,6 +81,8 @@ function jestUses(fileName: string, source: string): string[] {
       JEST_GLOBALS.has(node.text) &&
       ((ts.isPropertyAccessExpression(node.parent) &&
         node.parent.expression === node) ||
+        (ts.isElementAccessExpression(node.parent) &&
+          node.parent.expression === node) ||
         (ts.isCallExpression(node.parent) && node.parent.expression === node))
     ) {
       report(node.parent);
@@ -101,16 +103,24 @@ function jestUses(fileName: string, source: string): string[] {
 }
 
 describe('no Jest', () => {
-  it('no file in src imports Jest or uses its API', () => {
-    const files = sourceFiles(SRC);
-    assert.ok(files.length > 200, `${files.length} files`);
-    const found = files.flatMap((path) =>
-      jestUses(path, readFileSync(path, 'utf8')).map(
-        (line) => `${relative(SRC, path)}:${line}`,
-      ),
-    );
-    assert.deepEqual(found, []);
-  });
+  // Both packages' sources: the sibling's is found by its path in this
+  // repository (a file read, no link between the packages).
+  const SIBLING_SRC = join(PACKAGE_ROOT, '..', 'auth-spnego-gssapi', 'src');
+  for (const [name, root, least] of [
+    ['auth-providers', SRC, 200],
+    ['auth-spnego-gssapi', SIBLING_SRC, 8],
+  ] as const) {
+    it(`no file in ${name}'s src imports Jest or uses its API`, () => {
+      const files = sourceFiles(root);
+      assert.ok(files.length >= least, `${files.length} files`);
+      const found = files.flatMap((path) =>
+        jestUses(path, readFileSync(path, 'utf8')).map(
+          (line) => `${relative(root, path)}:${line}`,
+        ),
+      );
+      assert.deepEqual(found, []);
+    });
+  }
 
   it('the scan sees each form of a Jest use (not blind)', () => {
     const source = [
@@ -118,6 +128,7 @@ describe('no Jest', () => {
       "import type { Config } from 'jest';",
       "const t = require('ts-jest');",
       'jest.fn();',
+      "jest['fn']();",
       'expect(1).toBe(1);',
       'let m: jest.Mock;',
       // Not Jest: words in a comment, and a name that only holds one.
@@ -126,7 +137,7 @@ describe('no Jest', () => {
     ].join('\n');
     assert.deepEqual(
       jestUses('probe.ts', source).map((line) => line.split(':')[0]),
-      ['1', '2', '3', '4', '5', '6'],
+      ['1', '2', '3', '4', '5', '6', '7'],
     );
   });
 
