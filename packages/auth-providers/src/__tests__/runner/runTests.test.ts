@@ -17,6 +17,7 @@ import {
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { afterEach, beforeEach, describe, it } from 'node:test';
+import { nodeTestArguments } from '../../../tools/node-test-arguments.mjs';
 
 // .test-build/__tests__/runner → the package.
 const RUNNER = join(__dirname, '..', '..', '..', 'tools', 'run-tests.mjs');
@@ -189,29 +190,44 @@ it('records', () => {
     assert.equal(pids.length, 3);
     assert.equal(new Set(pids).size, 3);
   });
-
-  it('one file at a time: no file starts while another runs', () => {
-    // Each file marks its start, lets the others start if they would, and
-    // checks that no other file is running before it marks its end.
-    const source = `const fs = require('node:fs');
-const { join } = require('node:path');
-require('node:test').it('runs alone', async () => {
-  const dir = process.env.RUN_TESTS_RECORD + '.d';
-  fs.mkdirSync(dir, { recursive: true });
-  fs.writeFileSync(join(dir, process.pid + '.start'), '');
-  await new Promise((resolve) => setTimeout(resolve, 300));
-  const names = fs.readdirSync(dir);
-  const running = names.filter(
-    (n) => n.endsWith('.start') && !names.includes(n.replace('.start', '.end')),
-  );
-  require('node:assert/strict').deepEqual(running, [process.pid + '.start']);
-  fs.writeFileSync(join(dir, process.pid + '.end'), '');
 });
-`;
-    fixture('a.test.js', source);
-    fixture('b.test.js', source);
-    fixture('c.test.js', source);
-    const { status, output } = run();
-    assert.equal(status, 0, output);
+
+describe('the arguments the runner gives node', () => {
+  const args = nodeTestArguments({
+    guard: '/the/guard.js',
+    options: ['--test-name-pattern', 'x'],
+    files: ['a.test.js', 'b.test.js'],
+  });
+
+  it('module mocks on, the guard first, one file at a time; the options, then the files', () => {
+    assert.deepEqual(args, [
+      '--experimental-test-module-mocks',
+      '--require',
+      '/the/guard.js',
+      '--test',
+      '--test-concurrency=1',
+      '--test-name-pattern',
+      'x',
+      'a.test.js',
+      'b.test.js',
+    ]);
+  });
+
+  it('no timeout: no --test-timeout', () => {
+    for (const arg of args) {
+      assert.equal(arg.startsWith('--test-timeout'), false, arg);
+    }
+  });
+
+  it('the runner starts node with exactly these arguments, in one spawn', () => {
+    // The source without its layout: the formatter may wrap the call.
+    const source = [...readFileSync(RUNNER, 'utf8')]
+      .filter((c) => c !== ' ' && c !== '\n' && c !== '\r')
+      .join('');
+    assert.ok(
+      source.includes('spawnSync(process.execPath,nodeTestArguments({'),
+      'run-tests.mjs spawns node with nodeTestArguments(…)',
+    );
+    assert.equal(source.split('spawnSync(').length, 2, 'one spawn');
   });
 });

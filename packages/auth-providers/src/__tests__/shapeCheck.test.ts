@@ -256,7 +256,7 @@ describe('the shape check', () => {
 
     it('lint:check is Biome alone: it runs no checking script', () => {
       expect(scripts['lint:check']).toBe(
-        'biome check --error-on-warnings src tools/remove.mjs tools/run-tests.mjs',
+        'biome check --error-on-warnings src tools/remove.mjs tools/run-tests.mjs tools/node-test-arguments.mjs tools/node-test-arguments.d.mts',
       );
     });
   });

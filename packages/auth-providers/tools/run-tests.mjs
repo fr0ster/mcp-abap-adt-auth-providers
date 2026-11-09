@@ -10,6 +10,7 @@
 // - Options go to `node --test` before the files: after a file, `node --test` ignores them.
 // - `--env NAME=VALUE` sets a variable for the run; a shell prefix (`NAME=1 npm …`) does not
 //   work on Windows.
+// - The arguments given to node are `nodeTestArguments`'s (tools/node-test-arguments.mjs).
 // - Every file runs in a process of its own (`node --test`'s process isolation), one file at
 //   a time, with no timeout: a file ends on its result.
 // - Every file's process loads the child-process guard before any test module
@@ -21,6 +22,7 @@ import { spawnSync } from 'node:child_process';
 import { existsSync, readdirSync, statSync } from 'node:fs';
 import { join, normalize, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { nodeTestArguments } from './node-test-arguments.mjs';
 
 const ROOT = '.test-build';
 const GUARD = fileURLToPath(
@@ -102,15 +104,7 @@ if (!existsSync(GUARD)) {
 
 const run = spawnSync(
   process.execPath,
-  [
-    '--experimental-test-module-mocks',
-    '--require',
-    GUARD,
-    '--test',
-    '--test-concurrency=1',
-    ...options,
-    ...files,
-  ],
+  nodeTestArguments({ guard: GUARD, options, files }),
   { stdio: 'inherit', env },
 );
 process.exit(run.status ?? 1);

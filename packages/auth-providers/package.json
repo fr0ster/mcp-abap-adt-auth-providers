@@ -40,8 +40,8 @@
   "scripts": {
     "chrono": "./tools/version-stats.sh",
     "clean": "rm -rf dist tsconfig.tsbuildinfo tsconfig.build.tsbuildinfo",
-    "lint": "biome check --write src tools/remove.mjs tools/run-tests.mjs",
-    "lint:check": "biome check --error-on-warnings src tools/remove.mjs tools/run-tests.mjs",
+    "lint": "biome check --write src tools/remove.mjs tools/run-tests.mjs tools/node-test-arguments.mjs tools/node-test-arguments.d.mts",
+    "lint:check": "biome check --error-on-warnings src tools/remove.mjs tools/run-tests.mjs tools/node-test-arguments.mjs tools/node-test-arguments.d.mts",
     "format": "biome format --write src",
     "build": "npm run --silent clean && biome check src --diagnostic-level=error && tsc -p tsconfig.build.json",
     "build:fast": "tsc -p tsconfig.build.json",
